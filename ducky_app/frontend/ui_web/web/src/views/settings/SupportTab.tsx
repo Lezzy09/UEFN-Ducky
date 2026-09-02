@@ -32,6 +32,16 @@ export function SupportTab() {
           want to chip in,  is the best way to keep this going.
         </p>
 
+        <div className="support-tab-warn" role="note">
+          <p className="support-tab-warn-title">No official token — contributors are not founders</p>
+          <p className="support-tab-body">
+            There is no official UEFN Ducky or DuckyOS . The GitHub Contributors list
+            is a commit list only. Contributors are not founders and are not authorized to claim
+             /  fees. We do not endorse, operate, or receive those coins.
+            Support the project on  only.
+          </p>
+        </div>
+
         <button type="button" className="support-tab-cta" onClick={handleOpen}>
           <Icons. />
           <span>Support on </span>
