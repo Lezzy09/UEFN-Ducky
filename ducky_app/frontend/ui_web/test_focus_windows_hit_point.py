@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import frontend.ui_web.panel_api  # noqa: F401 — the mixins import it; load it first like the app does
 from frontend.ui_web import focus_windows
 from frontend.ui_web.focus_windows import drop_hit_points
 
@@ -47,3 +48,22 @@ def test_close_this_window_closes_the_caller_even_when_another_window_is_active(
 
     assert destroyed == [caller]
     assert [g.wid for g in focus_windows._focus_groups] == ["focus-active"]
+
+
+def test_model_change_does_not_ask_main_to_open_the_chat(monkeypatch):
+    """Main opening + claiming the chat closed the focus window that held it."""
+    from types import SimpleNamespace
+
+    import frontend.ui_web.panel_api as pa
+    from frontend.ui_web.panel_api_settings import PanelApiSettingsMixin
+
+    conv = SimpleNamespace(id="c1", title="T", folder_id="", coding_agent="", model="", provider="")
+    calls: list[dict] = []
+    monkeypatch.setattr(pa, "load_conversation", lambda _cid: conv)
+    monkeypatch.setattr(pa, "save_conversation", lambda _c: None)
+    monkeypatch.setattr(pa, "notify_chats_changed", lambda *a, **k: calls.append(k))
+
+    api = PanelApiSettingsMixin()
+    api._push = lambda _e: None  # type: ignore[attr-defined]
+    assert api.set_conversation_coding_agent("c1", "codex", "gpt-6-astra")["ok"]
+    assert calls and calls[0].get("open_tab") is False

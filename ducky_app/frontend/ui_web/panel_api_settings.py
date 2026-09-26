@@ -705,7 +705,7 @@ class PanelApiSettingsMixin:
         elif conv.coding_agent != "ducky":
             conv.provider = ""
         _pa.save_conversation(conv)
-        _pa.notify_chats_changed(conv.id, conv.title, conv.folder_id, push=self._push)
+        _pa.notify_chats_changed(conv.id, conv.title, conv.folder_id, push=self._push, open_tab=False)
         return {
             "ok": True,
             "coding_agent": conv.coding_agent,
