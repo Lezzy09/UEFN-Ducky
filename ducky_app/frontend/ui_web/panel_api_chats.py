@@ -693,7 +693,7 @@ class PanelApiChatsMixin:
                     continue
                 conv.ducky_name = name
                 _pa.save_conversation(conv, touch_updated=False)
-                _pa.notify_chats_changed(conv.id, conv.title, conv.folder_id)
+                _pa.notify_chats_changed(conv.id, conv.title, conv.folder_id, open_tab=False)
         except Exception:
             _pa.logging.getLogger(__name__).exception("sync chats for profile %s failed", pid)
 
@@ -1008,7 +1008,9 @@ class PanelApiChatsMixin:
             if not had_path:
                 after = _pa.load_conversation(conv_id)
                 if after and after.file_path:
-                    _pa.notify_chats_changed(after.id, after.title, after.folder_id, push=self._push)
+                    _pa.notify_chats_changed(
+                        after.id, after.title, after.folder_id, push=self._push, open_tab=False
+                    )
         # Composer model updates this conversation only — never global settings
         # or any Ducky profile favorite_models.
         turn_model = (model or "").strip()

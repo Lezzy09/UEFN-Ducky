@@ -990,7 +990,10 @@ function ChatViewBody({ layoutMode, sidebarRefresh, projectSlug, projectPath }: 
         if (conv.folder_id) expandFolder(conv.folder_id);
         return;
       }
-      openTab({ id: chatTabId(conv.id), kind: "chat", name: conv.title, chatId: conv.id });
+      // Registry-checked: a chat living in a focus window must not be re-opened
+      // (and claimed) here — that closed the focus window on every model change.
+      const id = chatTabId(conv.id);
+      void openOrFocusTab(id, () => openTab({ id, kind: "chat", name: conv.title, chatId: conv.id }));
       if (conv.folder_id) expandFolder(conv.folder_id);
     },
     [openTab, expandFolder, allChats, archiveChats],
