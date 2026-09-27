@@ -2,7 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearLlmsShortcutJump,
+  consumeDefaultModelHighlight,
   llmsJumpRecordAction,
+  openDefaultModelSettings,
   openLlmsProviderSettings,
   peekLlmsShortcutJump,
   registerSettingsTabConsumer,
@@ -24,6 +26,7 @@ describe("requestOpenSettings debounce", () => {
     vi.useRealTimers();
     clearLlmsShortcutJump();
     takePendingLlmsProvider();
+    consumeDefaultModelHighlight();
   });
 
   it("drops identical tab+slug repeats within 500ms", () => {
@@ -50,6 +53,21 @@ describe("requestOpenSettings debounce", () => {
     requestOpenSettings("Store", { storeSlug: "meshy" });
     requestOpenSettings("Store", { storeSlug: "blender" });
     expect(fn).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it("openDefaultModelSettings opens LLMs and highlights Default Model", async () => {
+    const fn = vi.fn();
+    const stop = registerSettingsTabConsumer(fn);
+    const highlight = vi.fn();
+    window.addEventListener("ducky:highlight-default-model", highlight);
+    openDefaultModelSettings();
+    expect(fn).toHaveBeenCalledWith("LLMs");
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+    expect(highlight).toHaveBeenCalledTimes(1);
+    expect(consumeDefaultModelHighlight()).toBe(true);
+    window.removeEventListener("ducky:highlight-default-model", highlight);
     stop();
   });
 

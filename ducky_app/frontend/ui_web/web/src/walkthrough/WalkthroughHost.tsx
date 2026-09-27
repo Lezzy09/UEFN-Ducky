@@ -2,7 +2,7 @@
  * Mounts the product walkthrough overlay, registers builtin + plugin tours,
  * hydrates completion flags, and auto-starts `app.shell` when a project is open.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePluginContributions } from "../hooks/usePluginContributions";
 import { installAgentEventBus, subscribeAgentEvents } from "../hooks/useAgentEventBus";
 import { registerBuiltinTours } from "./builtinTours";
@@ -12,21 +12,17 @@ import {
   parsePluginWalkthroughs,
   pluginManifestToTour,
 } from "./pluginWalkthroughs";
-import { autoStartPending, isCompleted, registerTour, startTour, unregisterTour } from "./WalkthroughService";
+import { isCompleted, registerTour, startAppShellIfNeeded, unregisterTour } from "./WalkthroughService";
 import { WalkthroughOverlay } from "./WalkthroughOverlay";
 import { openCodingAgentLoginUi } from "./openCodingAgentLogin";
 import { newlyEnabledForWalkthrough, rememberEnabledPlugin } from "./firstEnable";
-import {
-  ensureStarterLlmGateways,
-  peekStarterLlmOnboard,
-  setSuppressStarterPluginTours,
-} from "./starterLlmGateways";
 
 const registeredPluginTourIds = new Set<string>();
 
-export function WalkthroughHost({ hasProject }: { hasProject: boolean }) {
+export function WalkthroughHost() {
   const contrib = usePluginContributions();
   const shellArmed = useRef(false);
+  const [tourAttempt, setTourAttempt] = useState(0);
 
   useEffect(() => {
     registerBuiltinTours(registerTour);
@@ -72,14 +68,10 @@ export function WalkthroughHost({ hasProject }: { hasProject: boolean }) {
     newlyEnabledForWalkthrough(contrib.enabled_ids);
   }, [contrib]);
 
-  // Auto-start app.shell only after completion flags are loaded from disk.
+  // First open starts Welcome even with no island. A failed start stays
+  // unarmed so the next attempt can retry.
   useEffect(() => {
-    if (!hasProject) {
-      shellArmed.current = false;
-      return;
-    }
     if (shellArmed.current) return;
-    shellArmed.current = true;
     let cancelled = false;
     void (async () => {
       await whenWalkthroughHydrated();
@@ -87,22 +79,26 @@ export function WalkthroughHost({ hasProject }: { hasProject: boolean }) {
       // Small delay so shell targets (header/docks) finish mounting.
       await new Promise((r) => window.setTimeout(r, 400));
       if (cancelled) return;
-      const onboard = await peekStarterLlmOnboard();
-      if (cancelled) return;
-      if (onboard.pending) {
-        setSuppressStarterPluginTours(true);
-        void ensureStarterLlmGateways();
-        if (!isCompleted("app.shell")) {
-          await startTour("app.shell");
-          return;
-        }
+      if (isCompleted("app.shell")) {
+        shellArmed.current = true;
+        return;
       }
-      autoStartPending();
+      const started = await startAppShellIfNeeded();
+      if (cancelled) return;
+      if (started) {
+        shellArmed.current = true;
+        return;
+      }
+      if (tourAttempt < 3) {
+        window.setTimeout(() => {
+          if (!cancelled) setTourAttempt((n) => n + 1);
+        }, 500);
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [hasProject]);
+  }, [tourAttempt]);
 
   return <WalkthroughOverlay />;
 }

@@ -212,6 +212,21 @@ def default_model_selection(settings: Any) -> str:
     return str(getattr(settings, "default_model", "") or "").strip()
 
 
+def allow_create_without_model(result: ResolveResult) -> ResolveResult:
+    """Create paths may open with no model. A bad explicit pick still errors.
+
+    Sending a message is what asks the user to set Settings → LLMs → Default Model.
+    """
+    if isinstance(result, ResolveErr) and result.code == "model_required":
+        return ResolveOk(
+            coding_agent="ducky",
+            model="",
+            provider="",
+            selection=FavoriteSelection(backend="", model_id=""),
+        )
+    return result
+
+
 def resolve_model_strict(favorite_models: Any, settings: Any) -> ResolveResult:
     """Resolve the model for a Ducky/chat.
 

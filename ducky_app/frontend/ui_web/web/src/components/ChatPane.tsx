@@ -67,7 +67,7 @@ import { isModelsCatalogReady, getCachedModels, subscribeModelsCatalog } from ".
 import { getCachedCodingAgents, subscribeCodingAgents } from "../hooks/codingAgentsCache";
 import { hasUsableModels } from "./ducky/duckyPickerIssue";
 import { parseFavoriteSelection } from "../hooks/favoriteModelsCatalog";
-import { requestOpenSettings } from "../navigation/openSettingsTab";
+import { openDefaultModelSettings } from "../navigation/openSettingsTab";
 import { useMergedRef, useUiTarget } from "../ui-targets/registry";
 import {
   getWalkthroughState,
@@ -828,6 +828,10 @@ export function ChatPane({
   // API key. Distinct from noModelsAvailable, which single-chat canCompose
   // still uses as-is.
   const modelsUnavailable = noModelsAvailable && !(chat.isGroup && groupUsesExternalOnly);
+  // No model on this chat — send opens Default Model instead of starting a turn.
+  const promptForDefaultModel =
+    !chat.isGroup && !externalAgent && catalogReady && !(selectedModel || "").trim();
+  const showDefaultModelCta = promptForDefaultModel || modelsUnavailable;
   const canSend = canCompose && !agentRunning;
   const canQueue = canCompose && agentRunning;
   const isEmpty = messages.length === 0 && !streamBuffer && !agentRunning;
@@ -843,8 +847,8 @@ export function ChatPane({
 
   const paneFlex = flexGrow != null ? `${flexGrow} 1 0%` : "1 1 0%";
 
-  const sendBtnTitle = modelsUnavailable
-    ? "Open Settings → LLMs to add an API key and configure models"
+  const sendBtnTitle = showDefaultModelCta
+    ? "Set a Default Model in Settings → LLMs"
     : canQueue
       ? "Queue follow-up (runs when this turn finishes)"
       : canSend
@@ -853,7 +857,7 @@ export function ChatPane({
           : "Send"
         : "Add API key, model, and message or attachments";
 
-  const sendBtnClass = modelsUnavailable
+  const sendBtnClass = showDefaultModelCta
     ? "chat-pane-send-btn chat-pane-send-btn--settings-cta"
     : hasContent
       ? canSend || canQueue
@@ -972,8 +976,8 @@ export function ChatPane({
       return;
     }
 
-    if (!chat.isGroup && noModelsAvailable) {
-      requestOpenSettings("LLMs");
+    if (showDefaultModelCta) {
+      openDefaultModelSettings();
       return;
     }
     const apiAttachments = overrideText ? [] : toApiAttachments();
@@ -1373,10 +1377,10 @@ export function ChatPane({
           </div>
 
           <div className="chat-pane-composer-pane chat-pane-composer-pane--type">
-            {(modelsUnavailable || visionBlocked || attachmentError) && (
+            {(showDefaultModelCta || visionBlocked || attachmentError) && (
               <div className={`composer-attach-warning${visionBlocked ? " is-vision-blocked" : ""}`}>
-                {modelsUnavailable
-                  ? "No models available — open Settings → LLMs to add an API key and configure a provider."
+                {showDefaultModelCta
+                  ? "This ducky has no model. Set a Default Model."
                   : visionBlocked
                     ? `${displayModelLabel} cannot use images — switch to a vision model or remove images.`
                     : attachmentError}
@@ -1409,7 +1413,6 @@ export function ChatPane({
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
               onKeyDown={(e) => {
-                if (!chat.isGroup && noModelsAvailable) return;
                 if (slashMenuOpen) {
                   const count = slashMatches.length;
                   if (e.key === "ArrowDown") {
@@ -1452,7 +1455,6 @@ export function ChatPane({
                 modelLabel: displayModelLabel,
               })}
               className="chat-pane-textarea"
-              disabled={!chat.isGroup && noModelsAvailable}
               style={
                 textareaHeight != null
                   ? {
@@ -1569,11 +1571,11 @@ export function ChatPane({
                   <button
                     type="button"
                     onClick={() => handleSend()}
-                    disabled={!modelsUnavailable && !canSend}
+                    disabled={!showDefaultModelCta && !canSend}
                     title={sendBtnTitle}
                     className={sendBtnClass}
                   >
-                    {modelsUnavailable ? <Icons.Settings /> : <Icons.Send />}
+                    {showDefaultModelCta ? <Icons.Settings /> : <Icons.Send />}
                   </button>
                 )}
               </span>

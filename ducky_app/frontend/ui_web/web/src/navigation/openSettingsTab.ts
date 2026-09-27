@@ -212,6 +212,30 @@ let pendingLlmsProviderId: string | null = null;
 /** Stays set until the destination provider slide is recorded (not consumed on the list). */
 let llmsShortcutJumpId: string | null = null;
 
+export const HIGHLIGHT_DEFAULT_MODEL_EVENT = "ducky:highlight-default-model";
+
+let pendingHighlightDefaultModel = false;
+
+/** True once when Settings → LLMs opens from the chat "set a Default Model" button. */
+export function consumeDefaultModelHighlight(): boolean {
+  const pending = pendingHighlightDefaultModel;
+  pendingHighlightDefaultModel = false;
+  return pending;
+}
+
+/** Settings → LLMs, list view, with the Default Model card pulsed. */
+export function openDefaultModelSettings(): void {
+  pendingHighlightDefaultModel = true;
+  requestOpenSettings("LLMs");
+  queueMicrotask(() => {
+    window.dispatchEvent(
+      new CustomEvent("ducky:settings-section", { detail: { tab: "LLMs", section: "llms" } }),
+    );
+    window.dispatchEvent(new CustomEvent("ducky:llms-select-provider", { detail: { id: null } }));
+    window.dispatchEvent(new CustomEvent(HIGHLIGHT_DEFAULT_MODEL_EVENT));
+  });
+}
+
 /** Settings → LLMs → that provider slide. Opens Settings if needed; navigates if already open. */
 export function openLlmsProviderSettings(providerId?: string): void {
   const id = (providerId || "").trim().toLowerCase();

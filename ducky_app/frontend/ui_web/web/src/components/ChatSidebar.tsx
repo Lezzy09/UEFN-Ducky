@@ -732,8 +732,26 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
 
   const { menu: filesHeaderMenu, open: openFilesHeaderMenu, close: closeFilesHeaderMenu } =
     useContextMenuState<void>();
-  const { menu: duckiesHeaderMenu, open: openDuckiesHeaderMenu, close: closeDuckiesHeaderMenu } =
+  const { menu: duckiesHeaderMenu, open: openDuckiesHeaderMenu, openAt: openDuckiesHeaderMenuAt, close: closeDuckiesHeaderMenu } =
     useContextMenuState<void>();
+
+  useEffect(() => {
+    const openMenu = () => {
+      const nodes = document.querySelectorAll<HTMLElement>("[data-duckies-header]");
+      let header: HTMLElement | null = null;
+      for (const node of nodes) {
+        const rect = node.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          header = node;
+          break;
+        }
+      }
+      const rect = header?.getBoundingClientRect();
+      openDuckiesHeaderMenuAt(rect ? rect.left + 12 : 24, rect ? rect.bottom + 4 : 72, undefined as void);
+    };
+    window.addEventListener("ducky:open-duckies-menu", openMenu);
+    return () => window.removeEventListener("ducky:open-duckies-menu", openMenu);
+  }, [openDuckiesHeaderMenuAt]);
 
   const handleVerseTemplateSelect = useCallback((template: VerseTemplate) => {
     setVerseTemplatePickerOpen(false);
@@ -1357,6 +1375,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
             y={duckiesHeaderMenu.y}
             onClose={closeDuckiesHeaderMenu}
             items={duckiesSectionMenuItems}
+            tourTarget="shell.duckies.menu"
           />
         ) : null}
         {duckiesScroll}
@@ -1393,6 +1412,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
                 y={duckiesHeaderMenu.y}
                 onClose={closeDuckiesHeaderMenu}
                 items={duckiesSectionMenuItems}
+                tourTarget="shell.duckies.menu"
               />
             ) : null}
             <SidebarSectionHeader
@@ -1439,6 +1459,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
           y={duckiesHeaderMenu.y}
           onClose={closeDuckiesHeaderMenu}
           items={duckiesSectionMenuItems}
+          tourTarget="shell.duckies.menu"
         />
       ) : null}
       {filesHeaderMenu ? (
@@ -1520,6 +1541,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
                 y={duckiesHeaderMenu.y}
                 onClose={closeDuckiesHeaderMenu}
                 items={duckiesSectionMenuItems}
+                tourTarget="shell.duckies.menu"
               />
             ) : null}
             <SidebarSectionHeader
@@ -1563,6 +1585,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
           y={duckiesHeaderMenu.y}
           onClose={closeDuckiesHeaderMenu}
           items={duckiesSectionMenuItems}
+          tourTarget="shell.duckies.menu"
         />
       ) : null}
       {filesHeaderMenu ? (

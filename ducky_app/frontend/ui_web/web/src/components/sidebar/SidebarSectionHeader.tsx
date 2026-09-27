@@ -1,4 +1,5 @@
 import type { MouseEvent, PointerEvent, ReactNode } from "react";
+import { useUiTarget } from "../../ui-targets/registry";
 
 export function SidebarSectionHeader({
   title,
@@ -22,8 +23,16 @@ export function SidebarSectionHeader({
   onHeaderPointerDown?: (e: PointerEvent<HTMLDivElement>) => void;
   draggable?: boolean;
 }) {
+  const duckiesHeader = title === "Duckies";
+  const tourRef = useUiTarget(duckiesHeader ? "shell.duckies.header" : "", {
+    kind: "button",
+    label: "Duckies",
+    route: "chat",
+  });
   return (
     <div
+      ref={tourRef}
+      data-duckies-header={duckiesHeader ? "" : undefined}
       className={`sidebar-section-header${onContextMenu ? " sidebar-section-header--context" : ""}${draggable ? " sidebar-section-header--draggable" : ""}${headerClassName ? ` ${headerClassName}` : ""}${busy ? " is-busy" : ""}`}
       onContextMenu={
         onContextMenu

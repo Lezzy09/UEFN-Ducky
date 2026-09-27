@@ -9,6 +9,7 @@ import pytest
 from frontend.favorite_models import (
     ResolveErr,
     ResolveOk,
+    allow_create_without_model,
     first_favorite,
     is_legacy_agent_only,
     parse_selection,
@@ -224,6 +225,59 @@ def test_legacy_bare_api_id_unique_match(monkeypatch):
     assert isinstance(ok, ResolveOk)
     assert ok.provider == "openai"
     assert ok.model == "gpt-4o-mini"
+
+
+def test_create_conversation_without_default_model(monkeypatch):
+    """Empty favorites and no Default Model still create. A bad pick still errors."""
+    import frontend.ui_web.panel_api as pa
+    from frontend.ui_web.panel_api_chats import PanelApiChatsMixin
+
+    monkeypatch.setattr(pa, "PanelSettings", SimpleNamespace(load=lambda: SimpleNamespace(default_model="")))
+    monkeypatch.setattr(pa, "default_bundled_style", lambda: "artist")
+    monkeypatch.setattr(pa, "notify_chats_changed", lambda *_a, **_k: None)
+    captured: dict = {}
+
+    def _fake_create(_settings, _folder_id, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            id="c1",
+            title=kwargs.get("title") or "New",
+            ducky_style=kwargs.get("ducky_style") or "artist",
+            ducky_name=kwargs.get("ducky_name") or "",
+            profile_id=kwargs.get("profile_id") or "",
+            ducky_personality=kwargs.get("ducky_personality") or "",
+            file_path="",
+            model=kwargs.get("model") or "",
+            provider=kwargs.get("provider") or "",
+            coding_agent=kwargs.get("coding_agent") or "ducky",
+            tts_voice="",
+            tts_speed=0,
+            thinking_effort="",
+        )
+
+    monkeypatch.setattr(pa, "create_conversation", _fake_create)
+    api = PanelApiChatsMixin()
+    created = api.create_conversation("", "artist", None, {"favorite_models": [], "ducky_name": "Ada"})
+    assert created["id"] == "c1"
+    assert created["model"] == ""
+    assert captured["coding_agent"] == "ducky"
+    assert captured["model"] == ""
+
+    monkeypatch.setattr(
+        "frontend.favorite_models._available_agent_models",
+        lambda _s: {"cursor": {"composer-2.5"}},
+    )
+    with pytest.raises(ValueError, match="not-a-model"):
+        api.create_conversation("", "artist", None, {"favorite_models": ["cursor:not-a-model"]})
+
+
+def test_allow_create_without_model_keeps_bad_picks():
+    err = ResolveErr(code="model_unavailable", message="missing")
+    assert allow_create_without_model(err) is err
+    empty = allow_create_without_model(ResolveErr(code="model_required", message="none"))
+    assert isinstance(empty, ResolveOk)
+    assert empty.model == ""
+    assert empty.coding_agent == "ducky"
 
 
 def test_resolve_api_model_when_catalog_still_warming(monkeypatch):

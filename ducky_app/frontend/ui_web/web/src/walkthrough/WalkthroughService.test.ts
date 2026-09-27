@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   _resetWalkthroughServiceForTests,
   autoStartPending,
+  startAppShellIfNeeded,
   completeTour,
   getActiveSteps,
   getCompletedMap,
@@ -110,7 +111,7 @@ describe("WalkthroughService", () => {
     expect(isCompleted("settings.store")).toBe(false);
   });
 
-  it("autoStartPending is a no-op; first-run starts from starter LLM onboard", () => {
+  it("autoStartPending is a no-op; first-run starts from startAppShellIfNeeded", () => {
     registerTour({
       id: "app.shell",
       steps: [{ target: "a", title: "A", body: "a", advance: "next" }],
@@ -118,6 +119,30 @@ describe("WalkthroughService", () => {
     });
     autoStartPending();
     expect(isCompleted("app.shell")).toBe(false);
+    expect(getWalkthroughState().active).toBe(false);
+  });
+
+  it("startAppShellIfNeeded starts step 1 even when starter gateways are not pending", async () => {
+    registerTour({
+      id: "app.shell",
+      steps: [{ target: "shell.header", title: "Top bar", body: "Header", advance: "next" }],
+      autoStart: "first_incomplete",
+    });
+    setCompletedMap({});
+    const started = await startAppShellIfNeeded();
+    expect(started).toBe(true);
+    expect(getWalkthroughState().tourId).toBe("app.shell");
+    expect(getWalkthroughState().stepIndex).toBe(0);
+  });
+
+  it("startAppShellIfNeeded does not restart a finished tour", async () => {
+    registerTour({
+      id: "app.shell",
+      steps: [{ target: "shell.header", title: "Top bar", body: "Header", advance: "next" }],
+    });
+    setCompletedMap({ "app.shell": true });
+    const started = await startAppShellIfNeeded();
+    expect(started).toBe(false);
     expect(getWalkthroughState().active).toBe(false);
   });
 

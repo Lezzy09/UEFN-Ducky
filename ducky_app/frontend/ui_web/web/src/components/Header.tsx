@@ -13,7 +13,6 @@ import { useRightRailOpen } from "../hooks/useRightRailOpen";
 import { useNarrowLayout } from "../hooks/useNarrowLayout";
 import { useOverlayRailSession } from "../hooks/useOverlayRailSession";
 import { toggleOverlayRail } from "../workspace/overlayRailSession";
-import { useAppearance } from "../theme/AppearanceContext";
 import { QuickOpenBar } from "./quick-open/QuickOpenBar";
 import { useQuickOpenBridge } from "../contexts/QuickOpenBridge";
 import type { ChatLayoutMode, ListenerStatus, ProjectInfo, ViewId } from "../types/panel";
@@ -272,7 +271,6 @@ function PluginHeaderMenu({ buttons }: { buttons: PluginHeaderButton[] }) {
 export function Header({
   variant = "main",
   currentView = "chat",
-  setView,
   isOnline,
   isWedged = false,
   statusText,
@@ -294,19 +292,9 @@ export function Header({
   const isFocus = variant === "focus";
   // Full-page settings overlay only when no project (welcome). With a project, Settings is an editor tab.
   const isSettingsOverlay = !isFocus && !hasProject && currentView === "settings";
-  const { guardUnsavedChanges } = useAppearance();
 
-  const handleSettingsToggle = async () => {
-    if (hasProject) {
-      requestOpenSettings();
-      return;
-    }
-    if (!setView) return;
-    if (isSettingsOverlay) {
-      if (await guardUnsavedChanges()) setView("chat");
-      return;
-    }
-    setView("settings");
+  const handleSettingsToggle = () => {
+    requestOpenSettings();
   };
 
   const handleClose = () => {
@@ -388,7 +376,7 @@ export function Header({
   };
   const nav = useNavigationHistoryOptional();
   const showNav = !isFocus && !!nav;
-  const sidebarEnabled = (isFocus || !isSettingsOverlay) && hasProject;
+  const sidebarEnabled = isFocus || !isSettingsOverlay;
   const headerActions = useAppHeaderActions();
   const { leftRailOpen, rightRailOpen, hasRightPanels, toggleRightRail, leftRailEnabled, rightRailEnabled } =
     useRightRailOpen();

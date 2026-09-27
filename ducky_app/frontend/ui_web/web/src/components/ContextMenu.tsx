@@ -1,8 +1,9 @@
 import { createPortal } from "react-dom";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ScopedCss, useScopedClass } from "../utils/scopedCss";
+import { useMergedRef, useUiTarget } from "../ui-targets/registry";
 
 export interface ContextMenuItem {
   id: string;
@@ -23,11 +24,19 @@ interface ContextMenuProps {
   y: number;
   items: ContextMenuItem[];
   onClose: () => void;
+  /** Spotlight id while this menu is the Duckies header menu. */
+  tourTarget?: string;
 }
 
-export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
+export function ContextMenu({ x, y, items, onClose, tourTarget }: ContextMenuProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const scopeClass = useScopedClass("context-menu");
+  const tourRef = useUiTarget(tourTarget || "", {
+    kind: "button",
+    label: "Duckies menu",
+    route: "chat",
+  });
+  const setPanelRef = useMergedRef(panelRef, tourRef);
 
   useEffect(() => {
     const handlePointerDown = (e: PointerEvent) => {
@@ -62,7 +71,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
           "--context-menu-min-width": `${panelW}px`,
         }}
       />
-      <div ref={panelRef} className={`context-menu is-positioned ${scopeClass}`} role="menu">
+      <div ref={setPanelRef} className={`context-menu is-positioned ${scopeClass}`} role="menu">
         {items.map((item) =>
           item.separator ? (
             <div key={item.id} className="context-menu-separator" role="separator" />
@@ -112,7 +121,11 @@ export function useContextMenuState<T>() {
     setMenu({ x: e.clientX, y: e.clientY, data });
   };
 
+  const openAt = useCallback((x: number, y: number, data: T) => {
+    setMenu({ x, y, data });
+  }, []);
+
   const close = () => setMenu(null);
 
-  return { menu, open, close };
+  return { menu, open, openAt, close };
 }

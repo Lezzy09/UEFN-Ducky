@@ -2,9 +2,12 @@ const DUCKIES_ALL_PROJECTS_KEY = "uefn-panel-duckies-all-projects";
 
 export function readDuckiesAllProjects(): boolean {
   try {
-    return localStorage.getItem(DUCKIES_ALL_PROJECTS_KEY) === "1";
+    const raw = localStorage.getItem(DUCKIES_ALL_PROJECTS_KEY);
+    // First launch: show every island, including duckies made with no project open.
+    if (raw === null) return true;
+    return raw === "1";
   } catch {
-    return false;
+    return true;
   }
 }
 
