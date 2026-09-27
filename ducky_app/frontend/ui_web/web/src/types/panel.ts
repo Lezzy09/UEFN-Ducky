@@ -147,6 +147,8 @@ export interface ChatTab {
   contextTokens?: number;
   /** Home project slug when the Duckies tree is showing all projects. */
   projectSlug?: string;
+  /** Home project name for the archive list. */
+  projectName?: string;
 }
 
 export type EditorTabKind =
@@ -2305,8 +2307,8 @@ export interface PanelApi {
   apply_sidebar_layout(patch: SidebarLayoutPatch): Promise<void>;
   create_folder(name: string, parent_id?: string): Promise<{ id: string; name: string }>;
   rename_folder(folder_id: string, name: string): Promise<void>;
-  /** Resolves to the group hub chat ids deleted along with the folder. */
-  delete_folder(folder_id: string): Promise<string[]>;
+  /** Resolves to the group hub chat ids moved to Archive. archiveMembers also archives duckies. */
+  delete_folder(folder_id: string, archiveMembers?: boolean): Promise<string[]>;
   create_conversation(
     folder_id: string,
     ducky_style?: string,

@@ -6,6 +6,24 @@ import type { FolderItem } from "../../types/panel";
 import { duckyNameMatches } from "../../utils/duckyTreeFilter";
 import { TruncatedText } from "../TruncatedText";
 
+type ArchiveChat = FolderItem["chats"][number];
+
+/** Archive rows grouped under the project they came from. */
+export function groupArchiveByProject(chats: ArchiveChat[]): { project: string; chats: ArchiveChat[] }[] {
+  const order: string[] = [];
+  const buckets = new Map<string, ArchiveChat[]>();
+  for (const chat of chats) {
+    const project = (chat.projectName || chat.projectSlug || "This project").trim() || "This project";
+    const bucket = buckets.get(project);
+    if (bucket) bucket.push(chat);
+    else {
+      buckets.set(project, [chat]);
+      order.push(project);
+    }
+  }
+  return order.map((project) => ({ project, chats: buckets.get(project) ?? [] }));
+}
+
 // The archive dropdown sits just below the modal layer (modal-backdrop is 100001)
 // so a confirm dialog raised from here — "Delete permanently?" — draws on top of it
 // instead of behind. (DropdownPanel defaults to 100010, above modals.)
@@ -78,8 +96,11 @@ export function DuckyArchiveDropdown({
               {filtering ? "No archived duckies match" : "No archived duckies"}
             </div>
           ) : (
+            groupArchiveByProject(visibleChats).map((section) => (
+            <div key={section.project}>
+              <div className="sidebar-archive-dropdown-project">{section.project}</div>
             <ul className="sidebar-archive-dropdown-list">
-              {visibleChats.map((chat) => {
+              {section.chats.map((chat) => {
                 const isActive = activeChats.includes(chat.id);
                 const isRunning = runningChatIds.has(chat.id);
                 const hasCompletionAlert = completionAlertChatIds?.has(chat.id) ?? false;
@@ -143,6 +164,8 @@ export function DuckyArchiveDropdown({
                 );
               })}
             </ul>
+            </div>
+            ))
           )}
         </div>
       </DropdownPanel>

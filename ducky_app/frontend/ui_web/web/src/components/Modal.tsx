@@ -118,7 +118,9 @@ export function Modal({
 interface ModalActionsProps {
   onCancel: () => void;
   onConfirm: () => void;
+  onExtra?: () => void;
   confirmLabel?: string;
+  extraLabel?: string;
   cancelLabel?: string;
   confirmDisabled?: boolean;
   danger?: boolean;
@@ -130,7 +132,9 @@ interface ModalActionsProps {
 export function ModalActions({
   onCancel,
   onConfirm,
+  onExtra,
   confirmLabel = "Create",
+  extraLabel = "",
   cancelLabel = "Cancel",
   confirmDisabled = false,
   danger = false,
@@ -142,6 +146,11 @@ export function ModalActions({
       {!hideCancel ? (
         <button type="button" className="settings-btn" onClick={onCancel}>
           {cancelLabel}
+        </button>
+      ) : null}
+      {extraLabel && onExtra ? (
+        <button type="button" className={`settings-btn${danger ? " is-danger" : ""}`} onClick={onExtra}>
+          {extraLabel}
         </button>
       ) : null}
       <button

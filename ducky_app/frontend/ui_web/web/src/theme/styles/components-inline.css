@@ -543,6 +543,7 @@ html.window-maximized .window-resize-grip {
 .modal-actions-row {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -850,9 +851,11 @@ html.window-maximized .window-resize-grip {
   transition: opacity 0.15s ease;
 }
 
-.editor-tab-icon svg {
+.editor-tab-icon svg,
+.editor-tab-icon img.plugin-contrib-icon {
   width: calc(16px * var(--tab-scale, 1));
   height: calc(16px * var(--tab-scale, 1));
+  object-fit: contain;
 }
 
 .editor-tab:hover .editor-tab-icon,

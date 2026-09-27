@@ -14,7 +14,12 @@ it("waits for the native API and loads saved duckies when it becomes ready", asy
   window.pywebview = { api: {} } as typeof window.pywebview;
   const { result } = renderHook(() => useChatFolders(0));
   expect(result.current.foldersLoaded).toBe(false);
-  const list = vi.fn().mockResolvedValue([{ id: "saved", title: "My saved ducky" }]);
+  const list = vi.fn().mockImplementation(async (allProjects?: boolean) => {
+    if (allProjects) {
+      return [{ id: "old", title: "From another island", folder_id: "archive", project_name: "Other Island" }];
+    }
+    return [{ id: "saved", title: "My saved ducky" }];
+  });
   await act(async () => {
     window.pywebview = { api: {
       get_listener_status: vi.fn(), list_folders: vi.fn().mockResolvedValue([]),
@@ -24,7 +29,9 @@ it("waits for the native API and loads saved duckies when it becomes ready", asy
   });
   await waitFor(() => expect(result.current.foldersLoaded).toBe(true));
   expect(result.current.rootChats.map((chat) => chat.id)).toEqual(["saved"]);
-  expect(list).toHaveBeenCalledOnce();
+  expect(result.current.archiveChats.map((chat) => chat.projectName)).toEqual(["Other Island"]);
+  expect(list).toHaveBeenCalledTimes(2);
+  expect(list).toHaveBeenNthCalledWith(2, true);
 });
 
 it("cancels the readiness subscription when the sidebar unmounts", async () => {

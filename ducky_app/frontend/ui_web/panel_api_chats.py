@@ -167,19 +167,25 @@ class PanelApiChatsMixin:
     def rename_folder(self, folder_id: str, name: str) -> None:
         _pa.rename_folder(folder_id, name)
 
-    def delete_folder(self, folder_id: str) -> list[str]:
-        """Delete a folder. Returns the group hub chat ids it took with it."""
-        # Deleting a group takes its nested groups too, so stop every runner in
-        # the subtree first (same as Archive).
-        hub_ids = _pa.group_hub_ids_in(_pa.folder_subtree_ids(folder_id))
+    def delete_folder(self, folder_id: str, archive_members: bool = False) -> list[str]:
+        """Delete a folder. Returns group hub ids moved to Archive.
+
+        archive_members also archives duckies in the group. Otherwise they stay.
+        """
+        # Stop runners that are about to leave the active tree.
+        scope = _pa.folder_subtree_ids(folder_id) if archive_members else [folder_id]
+        hub_ids = _pa.group_hub_ids_in(scope)
         if hub_ids:
             from frontend.ui_web.agent_modes import cancel_agent, is_agent_running
 
             for hub_id in hub_ids:
-                for target_id in [hub_id, *_pa.conversation_descendant_ids(hub_id)]:
+                targets = [hub_id]
+                if archive_members:
+                    targets.extend(_pa.conversation_descendant_ids(hub_id))
+                for target_id in targets:
                     if is_agent_running(target_id):
                         _pa.cancel_agent(target_id)
-        return _pa.delete_folder(folder_id)
+        return _pa.delete_folder(folder_id, archive_members=bool(archive_members))
 
     def create_conversation(
         self,

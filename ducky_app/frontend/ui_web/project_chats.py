@@ -499,8 +499,18 @@ def group_hub_ids_in(folder_ids: list[str], project_root: str | None = None) -> 
     return out
 
 
-def delete_folder(folder_id: str, project_root: str | None = None) -> list[str]:
-    """Delete a folder. Returns the hub conversation ids that went away with it."""
+def delete_folder(
+    folder_id: str,
+    project_root: str | None = None,
+    *,
+    archive_members: bool = False,
+) -> list[str]:
+    """Delete a folder. Returns group hub ids that moved to Archive.
+
+    A group itself always goes to Archive. ``archive_members`` also sends its
+    duckies (and nested groups) to Archive; otherwise those duckies stay active
+    and nested groups move up to the deleted group's parent.
+    """
     assert_not_archive_folder(folder_id, action="delete")
     folders = load_folders(project_root)
     target = next((f for f in folders if f.id == folder_id), None)
@@ -522,13 +532,45 @@ def delete_folder(folder_id: str, project_root: str | None = None) -> list[str]:
             save_conversation(conv, project_root)
         return []
 
-    # A group folder *is* the group, so deleting it takes the whole subtree with
-    # it — nested groups used to survive by being re-parented to the root.
+    all_convs = _load_all_conversations(project_root, include_messages=not _use_db())
+    parent_id = (target.parent_id or "").strip()
+
+    def _archive_hub(conv: Conversation) -> None:
+        # Stay a group row in Archive. ensure_group_folder_hubs skips Archive,
+        # so this does not come back as a sidebar folder until Return to active.
+        conv.folder_id = ARCHIVE_FOLDER_ID
+        conv.parent_conv_id = ""
+        conv.leader_conv_id = ""
+        save_conversation(conv, project_root)
+
+    if not archive_members:
+        hub_id = (getattr(target, "group_hub_id", None) or "").strip()
+        for folder in folders:
+            if folder.parent_id == folder_id:
+                folder.parent_id = parent_id
+        save_folders([f for f in folders if f.id != folder_id], project_root)
+        for conv in all_convs:
+            if hub_id and conv.id == hub_id:
+                _archive_hub(conv)
+                continue
+            linked = bool(hub_id) and (conv.parent_conv_id or "").strip() == hub_id
+            if conv.folder_id == folder_id:
+                conv.folder_id = parent_id
+                if linked:
+                    conv.parent_conv_id = ""
+                    conv.leader_conv_id = ""
+                save_conversation(conv, project_root)
+            elif linked:
+                conv.parent_conv_id = ""
+                conv.leader_conv_id = ""
+                save_conversation(conv, project_root)
+        return [hub_id] if hub_id else []
+
+    # Whole subtree: nested groups and their duckies go to Archive with this one.
     doomed_ids = set(folder_subtree_ids(folder_id, project_root))
     hub_ids = set(group_hub_ids_in(sorted(doomed_ids), project_root))
     save_folders([f for f in folders if f.id not in doomed_ids], project_root)
 
-    all_convs = _load_all_conversations(project_root, include_messages=not _use_db())
     by_parent: dict[str, list[Conversation]] = {}
     for conv in all_convs:
         by_parent.setdefault((conv.parent_conv_id or "").strip(), []).append(conv)
@@ -549,8 +591,6 @@ def delete_folder(folder_id: str, project_root: str | None = None) -> list[str]:
         members.append(conv)
         queue.extend(by_parent.get(conv.id, []))
 
-    # Members outlive their group as plain archived duckies. Unlink them from the
-    # hub first: delete_conversation() follows parent_conv_id and would wipe them.
     for conv in members:
         if (conv.parent_conv_id or "").strip() in hub_ids:
             conv.parent_conv_id = ""
@@ -558,10 +598,9 @@ def delete_folder(folder_id: str, project_root: str | None = None) -> list[str]:
         conv.folder_id = ARCHIVE_FOLDER_ID
         save_conversation(conv, project_root)
 
-    # The hub is the group itself, not a ducky — archiving it only left a ghost
-    # "Group1" row sitting in Archive forever.
-    for hub_id in hub_ids:
-        delete_conversation(hub_id, project_root)
+    for conv in all_convs:
+        if conv.id in hub_ids:
+            _archive_hub(conv)
     return sorted(hub_ids)
 
 
