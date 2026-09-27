@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FolderItem } from "../types/panel";
-import { dragId, flattenLayout, nestDropId, resolveDragOverId, unwrapProjectFoldersForLayout, wrapProjectsAsFolders } from "./sidebarTree";
+import { dragId, flattenLayout, foldersToAutoExpand, nestDropId, resolveDragOverId, crossProjectDropTarget, unwrapProjectFoldersForLayout, wrapProjectsAsFolders } from "./sidebarTree";
 
 function folder(id: string, name: string, children: FolderItem[] = []): FolderItem {
   return {
@@ -30,6 +30,13 @@ describe("resolveDragOverId", () => {
     const active = dragId("folder", "f2");
     const overChat = dragId("chat", "c1");
     expect(resolveDragOverId(roots, rootChats, overChat, "before", active)).toBe(dragId("folder", "g1"));
+  });
+});
+
+describe("foldersToAutoExpand", () => {
+  it("does not force a project accordion back open", () => {
+    expect(foldersToAutoExpand(["project:here", "f0"])).toEqual(["f0"]);
+    expect(foldersToAutoExpand(["project:here"])).toEqual([]);
   });
 });
 
@@ -75,5 +82,28 @@ describe("all-projects folder wraps", () => {
     const patch = flattenLayout([leaked, folder("f0", "Code")], [{ id: "c1", name: "A" }]);
     expect(patch.folders.map((f) => f.id)).toEqual(["f0"]);
     expect(patch.chats.map((c) => c.id)).toEqual(["c1"]);
+  });
+
+  it("a drop on another project is not part of the current layout patch", () => {
+    const wrapped = wrapProjectsAsFolders(
+      [
+        { slug: "here", name: "Here", folders: [], rootChats: [{ id: "c1", name: "A" }] },
+        { slug: "other", name: "Other", folders: [folder("f1", "Art")], rootChats: [] },
+      ],
+      "here",
+      new Map(),
+    );
+    expect(crossProjectDropTarget(nestDropId("project:other"), wrapped, [])).toEqual({
+      slug: "other",
+      folderId: "",
+    });
+    expect(crossProjectDropTarget(nestDropId("f1"), wrapped, [])).toEqual({
+      slug: "other",
+      folderId: "f1",
+    });
+    const unwrapped = unwrapProjectFoldersForLayout(wrapped, [], "here");
+    const patch = flattenLayout(unwrapped.folders, unwrapped.rootChats);
+    expect(patch.chats.map((c) => c.id)).toEqual(["c1"]);
+    expect(patch.chats.some((c) => c.id === "c2")).toBe(false);
   });
 });

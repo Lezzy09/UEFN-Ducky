@@ -169,6 +169,15 @@ export function useChatFolders(refreshToken: number, currentProjectSlug = "") {
       if (!slug) continue;
       ensure(slug, String((conv as { project_name?: string }).project_name || "").trim()).convs.push(conv);
     }
+    const recents = api.list_recent_projects
+      ? await api.list_recent_projects().catch(() => [])
+      : [];
+    for (const recent of recents) {
+      const slug = String(recent.slug || "").trim();
+      if (!slug) continue;
+      ensure(slug, String(recent.name || "").trim());
+    }
+    if (currentProjectSlug) ensure(currentProjectSlug, "");
 
     const projects: Array<{
       slug: string;
@@ -179,9 +188,7 @@ export function useChatFolders(refreshToken: number, currentProjectSlug = "") {
       archiveChats: FolderItem["chats"];
     }> = [];
     for (const [slug, group] of bySlug) {
-      if (group.convs.length === 0) continue;
       const one = assembleOneProject(group.folderRows, group.convs, expandedById);
-      if (one.rootChats.length === 0 && one.folders.length === 0) continue;
       projects.push({ slug, name: group.name, ...one });
     }
 

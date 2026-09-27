@@ -256,6 +256,17 @@ class PanelApiChatsMixin:
             if forced != "ducky":
                 coding_agent = forced
 
+        project_root = None
+        target_slug = str(cfg.get("project_slug") or "").strip()
+        if target_slug:
+            from frontend.ui_web.project_chats import project_root_for_slug, project_slug
+
+            current_root = (settings.uefn_project_root or "").strip()
+            if not current_root or project_slug(current_root) != target_slug:
+                project_root = project_root_for_slug(target_slug)
+                if not project_root:
+                    raise ValueError(f"Unknown project: {target_slug}")
+
         conv = _pa.create_conversation(
             settings,
             folder_id,
@@ -274,6 +285,7 @@ class PanelApiChatsMixin:
             model=resolved_model,
             provider=resolved_provider,
             coding_agent=coding_agent,
+            project_root=project_root,
         )
         _pa.notify_chats_changed(conv.id, conv.title, folder_id)
         return {
@@ -961,6 +973,23 @@ class PanelApiChatsMixin:
         if conv:
             conv.title = title.strip() or conv.title
             _pa.save_conversation(conv)
+
+    def move_chats_to_project(
+        self,
+        conv_ids: list[str],
+        folder_ids: list[str],
+        target_slug: str,
+        folder_id: str = "",
+    ) -> None:
+        from frontend.ui_web.project_chats import move_chats_to_project
+
+        move_chats_to_project(
+            [str(cid) for cid in (conv_ids or [])],
+            [str(fid) for fid in (folder_ids or [])],
+            str(target_slug or ""),
+            str(folder_id or ""),
+        )
+        _pa.notify_chats_changed(open_tab=False)
 
     def move_conversation(self, conv_id: str, folder_id: str) -> None:
         if _pa.is_archive_folder_id(folder_id):

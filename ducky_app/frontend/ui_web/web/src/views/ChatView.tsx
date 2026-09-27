@@ -1301,9 +1301,15 @@ function ChatViewBody({ layoutMode, sidebarRefresh, projectSlug, projectPath }: 
   }, [allChats, openChatTab, handleCreateChat]);
 
   const handleRequestCreateDucky = useCallback(
-    (ctx: { folderId: string }) => {
+    (ctx: { folderId: string; projectSlug?: string }) => {
       pendingAskPayloadRef.current = null;
-      setDuckyModal({ mode: "create", folderId: ctx.folderId, folders, rootChats });
+      setDuckyModal({
+        mode: "create",
+        folderId: ctx.folderId,
+        projectSlug: ctx.projectSlug,
+        folders,
+        rootChats,
+      });
     },
     [folders, rootChats],
   );
@@ -1508,7 +1514,7 @@ interface ChatViewEditorChromeProps {
   handleFileMoved: (from: string, to: string) => void;
   handleChatDeleted: (chatId: string) => void;
   handleChatRenamed: (chatId: string, name: string) => void;
-  handleRequestCreateDucky: (ctx: { folderId: string }) => void;
+  handleRequestCreateDucky: (ctx: { folderId: string; projectSlug?: string }) => void;
   handleDuckyCreated: (chat: ChatTab) => void;
   handleCloseDuckyModal: () => void;
   duckyModal: DuckyProfileModalMode | null;

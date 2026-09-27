@@ -2368,6 +2368,12 @@ export interface PanelApi {
   delete_custom_verse_template(template_id: string): Promise<{ ok: boolean }>;
   rename_conversation(conv_id: string, title: string): Promise<void>;
   move_conversation(conv_id: string, folder_id: string): Promise<void>;
+  move_chats_to_project?(
+    conv_ids: string[],
+    folder_ids: string[],
+    target_slug: string,
+    folder_id?: string,
+  ): Promise<void>;
   delete_conversation(conv_id: string): Promise<void>;
   load_messages(conv_id: string): Promise<ChatMessage[]>;
   get_settings(): Promise<PanelSettingsDto>;
@@ -3506,6 +3512,8 @@ export interface DuckyConfigDto {
   thinking_effort?: string;
   /** External coding agent when the selected model is Claude Code / Codex / Cursor. */
   coding_agent?: string;
+  /** Create the ducky on this island instead of the one that is open. */
+  project_slug?: string;
 }
 
 export interface AgentProfileEditorCatalogDto {

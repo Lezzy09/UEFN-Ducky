@@ -1451,6 +1451,213 @@ def rename_conversation(conv_id: str, title: str, project_root: str | None = Non
     save_conversation(conv, project_root)
 
 
+def project_root_for_slug(slug: str) -> str | None:
+    """Island path for a sidebar project row. Recents and the open island only."""
+    wanted = (slug or "").strip()
+    if not wanted:
+        return None
+    current = (PanelSettings.load().uefn_project_root or "").strip()
+    if current and project_slug(current) == wanted:
+        return current
+    from frontend.ui_web.recent_projects import load_recent_projects
+
+    for path in load_recent_projects():
+        if project_slug(path) == wanted:
+            return path
+    return None
+
+
+def _conversation_disk_dir(slug: str, conv_id: str) -> Path:
+    return _chats_root() / slug / "conversations" / conv_id
+
+
+def _folder_subtree(folders: list[ChatFolder], root_ids: list[str]) -> list[ChatFolder]:
+    by_id = {folder.id: folder for folder in folders}
+    by_parent: dict[str, list[ChatFolder]] = {}
+    for folder in folders:
+        by_parent.setdefault(folder.parent_id or "", []).append(folder)
+    out: list[ChatFolder] = []
+    seen: set[str] = set()
+    queue = [fid for fid in root_ids if fid in by_id and not is_archive_folder_id(fid)]
+    while queue:
+        fid = queue.pop(0)
+        if fid in seen or fid not in by_id:
+            continue
+        seen.add(fid)
+        folder = by_id[fid]
+        out.append(folder)
+        queue.extend(child.id for child in by_parent.get(fid, []))
+    return out
+
+
+def move_chats_to_project(
+    conv_ids: list[str],
+    folder_ids: list[str],
+    target_slug: str,
+    folder_id: str = "",
+) -> None:
+    """Move duckies and group folders onto another island. Validates before any write."""
+    target = (target_slug or "").strip()
+    if not target:
+        raise ValueError("target project is required")
+    dest_folder = (folder_id or "").strip()
+    if is_archive_folder_id(dest_folder):
+        raise ValueError("Cannot move into Archive")
+
+    folders_by_slug = {slug: list(rows) for slug, rows in iter_folders_by_project()}
+    wanted_folders = [fid for fid in folder_ids if (fid or "").strip() and not is_archive_folder_id(fid)]
+    moved_folders: list[tuple[str, ChatFolder]] = []
+    seen_folder_ids: set[str] = set()
+    for fid in wanted_folders:
+        home = next((slug for slug, rows in folders_by_slug.items() if any(row.id == fid for row in rows)), "")
+        if not home:
+            raise ValueError(f"Unknown folder: {fid}")
+        for folder in _folder_subtree(folders_by_slug[home], [fid]):
+            if folder.id in seen_folder_ids:
+                continue
+            seen_folder_ids.add(folder.id)
+            moved_folders.append((home, folder))
+
+    moved_folder_ids = {folder.id for _, folder in moved_folders}
+    if dest_folder and dest_folder in moved_folder_ids:
+        raise ValueError("Cannot move a folder into itself")
+    target_folder_ids = {row.id for row in folders_by_slug.get(target, [])}
+    if dest_folder and dest_folder not in target_folder_ids:
+        raise ValueError(f"Unknown folder: {dest_folder}")
+    clash = moved_folder_ids & target_folder_ids
+    if clash:
+        raise ValueError(f"Target already has folder: {next(iter(clash))}")
+
+    conv_home: dict[str, str] = {}
+    convs_by_slug: dict[str, list[Conversation]] = {}
+    for slug, conv in iter_conversations_by_project():
+        conv_home[conv.id] = slug
+        convs_by_slug.setdefault(slug, []).append(conv)
+
+    wanted_convs = [cid for cid in conv_ids if (cid or "").strip()]
+    for cid in wanted_convs:
+        if cid not in conv_home:
+            raise ValueError(f"Unknown conversation: {cid}")
+
+    move_conv_ids: list[str] = []
+    seen_convs: set[str] = set()
+
+    def _add_conv(cid: str) -> None:
+        if not cid or cid in seen_convs or cid not in conv_home:
+            return
+        seen_convs.add(cid)
+        move_conv_ids.append(cid)
+        for child_id in conversation_descendant_ids(cid):
+            _add_conv(child_id)
+
+    for _, folder in moved_folders:
+        hub = (folder.group_hub_id or "").strip()
+        if hub:
+            _add_conv(hub)
+    for slug, rows in convs_by_slug.items():
+        del slug
+        for conv in rows:
+            if (conv.folder_id or "") in moved_folder_ids:
+                _add_conv(conv.id)
+    for cid in wanted_convs:
+        _add_conv(cid)
+
+    # Chats already on the target stay put. A folder already there is not moved again.
+    move_conv_ids = [cid for cid in move_conv_ids if conv_home[cid] != target]
+    moved_folders = [(slug, folder) for slug, folder in moved_folders if slug != target]
+    if not move_conv_ids and not moved_folders:
+        return
+
+    for slug, folder in moved_folders:
+        parent = folder.parent_id or ""
+        if parent not in moved_folder_ids:
+            folder.parent_id = dest_folder
+
+    def _dest_folder_for(cid: str) -> str:
+        current = _stored_folder_id(cid, convs_by_slug, conv_home)
+        if current in moved_folder_ids:
+            return current
+        return dest_folder
+
+    relocated: list[tuple[Path, Path]] = []
+    try:
+        for cid in move_conv_ids:
+            src = _conversation_disk_dir(conv_home[cid], cid)
+            dest = _conversation_disk_dir(target, cid)
+            if not src.exists():
+                continue
+            if dest.exists():
+                raise ValueError(f"Conversation directory already exists: {cid}")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest))
+            relocated.append((dest, src))
+        _commit_project_move(target, moved_folders, move_conv_ids, _dest_folder_for)
+    except Exception:
+        for dest, src in reversed(relocated):
+            if dest.exists() and not src.exists():
+                src.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(dest), str(src))
+        raise
+
+
+def _stored_folder_id(cid: str, convs_by_slug: dict[str, list[Conversation]], conv_home: dict[str, str]) -> str:
+    slug = conv_home.get(cid) or ""
+    for conv in convs_by_slug.get(slug, []):
+        if conv.id == cid:
+            return conv.folder_id or ""
+    return ""
+
+
+def _commit_project_move(
+    target: str,
+    moved_folders: list[tuple[str, ChatFolder]],
+    move_conv_ids: list[str],
+    dest_folder_for,
+) -> None:
+    if _use_db():
+        from backend.store import db
+
+        conn = db.connect()
+        with db.write_txn(conn):
+            for source, folder in moved_folders:
+                conn.execute(
+                    "UPDATE folders SET project_id=?, parent_id=? WHERE project_id=? AND id=?",
+                    (target, folder.parent_id or "", source, folder.id),
+                )
+            for cid in move_conv_ids:
+                conn.execute(
+                    "UPDATE conversations SET project_id=?, folder_id=? WHERE id=?",
+                    (target, dest_folder_for(cid), cid),
+                )
+        return
+
+    for cid in move_conv_ids:
+        path = _conversation_disk_dir(target, cid) / "conversation.json"
+        if not path.is_file():
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            data["folder_id"] = dest_folder_for(cid)
+            write_json_atomic(path, data)
+    by_source: dict[str, list[ChatFolder]] = {}
+    for source, folder in moved_folders:
+        by_source.setdefault(source, []).append(folder)
+    for source, leaving in by_source.items():
+        leaving_ids = {folder.id for folder in leaving}
+        remain = [folder for folder in _load_folders_for_slug(source) if folder.id not in leaving_ids]
+        _write_folders_slug(source, remain)
+    if moved_folders:
+        target_rows, _added = ensure_archive_folder(_load_folders_for_slug(target))
+        target_rows.extend(folder for _, folder in moved_folders)
+        _write_folders_slug(target, target_rows)
+
+
+def _write_folders_slug(slug: str, folders: list[ChatFolder]) -> None:
+    path = _chats_root() / slug / "folders.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(path, {"folders": [folder.to_dict() for folder in folders]})
+
+
 def move_conversation(conv_id: str, folder_id: str, project_root: str | None = None) -> None:
     conv = load_conversation(conv_id, project_root)
     if conv is None:

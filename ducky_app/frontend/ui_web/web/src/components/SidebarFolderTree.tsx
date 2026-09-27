@@ -18,6 +18,7 @@ import { DuckyAvatar, DUCKY_AVATAR_SIZES } from "./ducky/DuckyAvatars";
 import { Icons } from "../icons/Icons";
 import type { FolderItem } from "../types/panel";
 import { getApi } from "../hooks/usePanelApi";
+import { isArchiveFolderId } from "../utils/archiveFolder";
 import type { EditorTabHoverCardPlacement } from "../hooks/useEditorTabHoverCard";
 import {
   pluginContributesSettingsTab,
@@ -42,16 +43,18 @@ import {
 import {
   applySidebarDrag,
   appendArchiveChatsToLayout,
+  crossProjectDropTarget,
   dragId,
   expandFoldersById,
   findFolderById,
   flattenLayout,
   folderIdForCreate,
-  isForeignSidebarId,
   isProjectFolderId,
   nestDropId,
   parseDragId,
+  PROJECT_FOLDER_PREFIX,
   resolveDragOverId,
+  sidebarItemProjectSlug,
   unwrapProjectFoldersForLayout,
   type DropPosition,
 } from "../utils/sidebarTree";
@@ -203,18 +206,13 @@ const ChatRow = memo(function ChatRow({
 }) {
   const hoverPlacement = useContext(ChatTreeHoverPlacementContext);
   const compact = useContext(DuckiesCompactContext);
-  const currentProjectSlug = useContext(DuckiesCurrentProjectContext);
   const id = dragId("chat", chat.id);
   const rowSelection = useContext(RowSelectionContext);
   const deleteCount = useRowDeleteCount(id);
   const deleteLabel =
     deleteCount > 1 ? "Delete ALL" : archived ? "Delete permanently" : "Archive";
-  const dragDisabled = Boolean(
-    chat.projectSlug && currentProjectSlug && chat.projectSlug !== currentProjectSlug,
-  );
   const { attributes, listeners, setNodeRef, isDragging } = useSortable({
     id,
-    disabled: dragDisabled,
     ...SORTABLE_STATIC,
   });
   const rowRef = useRef<HTMLDivElement | null>(null);
@@ -375,8 +373,8 @@ const ChatRow = memo(function ChatRow({
         mergeRowRef={mergeRowRef}
         dataAttr="data-sidebar-id"
         dataId={id}
-        attributes={dragDisabled ? undefined : attributes}
-        listeners={dragDisabled ? undefined : listeners}
+        attributes={attributes}
+        listeners={listeners}
         onClick={(e) => {
           if (isEditing) return;
           if (onModSelect && (e.ctrlKey || e.metaKey || e.shiftKey)) {
@@ -535,11 +533,8 @@ function FolderHeader({
   dropHint: DropHint | null;
 }) {
   const id = dragId("folder", folder.id);
-  const currentProjectSlug = useContext(DuckiesCurrentProjectContext);
   const isProjectWrap = isProjectFolderId(folder.id);
-  const dragDisabled =
-    isProjectWrap ||
-    Boolean(folder.projectSlug && currentProjectSlug && folder.projectSlug !== currentProjectSlug);
+  const dragDisabled = isProjectWrap;
   const rowSelection = useContext(RowSelectionContext);
   const deleteLabel = useRowDeleteCount(id) > 1 ? "Delete ALL" : "Delete";
   const { attributes, listeners, setNodeRef, isDragging } = useSortable({
@@ -607,7 +602,19 @@ function FolderHeader({
           <input {...renameInputProps(editing, setEditing, editInputRef, onCommitRename, onCancelRename)} />
         }
         actions={
-          isProjectWrap ? undefined : (
+          isProjectWrap ? (
+            <button
+              type="button"
+              className="sidebar-action-btn sidebar-project-add"
+              title="Add a ducky"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCreateDucky();
+              }}
+            >
+              <Icons.Plus />
+            </button>
+          ) : (
             <SidebarHoverActions onRename={onRename} onDelete={onDelete} deleteTitle={deleteLabel} />
           )
         }
@@ -761,6 +768,8 @@ const FolderGroup = memo(function FolderGroupImpl({
   const chatIds = childChats.map((c) => dragId("chat", c.id));
   // Match root: duckies above folders inside every folder.
   const childSortableIds = [...chatIds, ...childFolderIds];
+  const projectEmpty =
+    isProjectFolderId(folder.id) && !filtering && childChats.length === 0 && childFolders.length === 0;
 
   const { setNodeRef: setNestRef } = useDroppable({ id: nestDropId(folder.id) });
 
@@ -791,6 +800,11 @@ const FolderGroup = memo(function FolderGroupImpl({
       />
 
       <SidebarTreeChildren nestRef={setNestRef}>
+        {projectEmpty ? (
+          <button type="button" className="sidebar-project-empty" onClick={() => onCreateDuckyIn(folder.id)}>
+            No duckies — add one
+          </button>
+        ) : null}
         <SortableContext items={childSortableIds} strategy={verticalListSortingStrategy}>
           {childChats.map((chat) =>
             filtering ? (
@@ -936,8 +950,10 @@ interface SidebarFolderTreeProps {
   onSelectionCountChange?: (count: number) => void;
   /** Dense rows: hide chat meta line and shrink duck/group height. */
   compact?: boolean;
-  /** Active island slug — foreign duckies stay listed but are not reordered here. */
+  /** Active island slug — foreign duckies can be dragged onto another project. */
   currentProjectSlug?: string;
+  /** + on another island's project row. The open island uses onCreateDucky. */
+  onCreateInProject?: (projectSlug: string) => void;
 }
 
 export function SidebarFolderTree({
@@ -977,6 +993,7 @@ export function SidebarFolderTree({
   onSelectionCountChange,
   compact = false,
   currentProjectSlug = "",
+  onCreateInProject,
 }: SidebarFolderTreeProps) {
   const hoverPlacement: EditorTabHoverCardPlacement = dockSide === "right" ? "left" : "right";
   const [selection, setSelection] = useState<ExplorerSelection>(emptySelection);
@@ -1052,11 +1069,21 @@ export function SidebarFolderTree({
 
   const createDuckyIn = useCallback(
     (folderId: string) => {
+      if (isProjectFolderId(folderId)) {
+        const slug = folderId.slice(PROJECT_FOLDER_PREFIX.length);
+        onSelectChatFolder("");
+        if (slug && slug !== currentProjectSlug && onCreateInProject) {
+          onCreateInProject(slug);
+          return;
+        }
+        void onCreateDucky();
+        return;
+      }
       const target = folderIdForCreate(folderId, currentProjectSlug, folders);
       onSelectChatFolder(target);
       void onCreateDucky();
     },
-    [currentProjectSlug, folders, onCreateDucky, onSelectChatFolder],
+    [currentProjectSlug, folders, onCreateDucky, onCreateInProject, onSelectChatFolder],
   );
 
   const createGroupIn = useCallback(
@@ -1327,13 +1354,31 @@ export function SidebarFolderTree({
     const sel = selectionRef.current.selected;
     // If the dragged row is part of a multi-selection, move the whole set.
     const sources = sel.has(activeId) && sel.size > 1 ? [...sel] : [activeId];
-    if (
-      currentProjectSlug &&
-      (isForeignSidebarId(activeId, folders, rootChats, currentProjectSlug) ||
-        isForeignSidebarId(overId, folders, rootChats, currentProjectSlug) ||
-        sources.some((src) => isForeignSidebarId(src, folders, rootChats, currentProjectSlug)))
-    ) {
-      return;
+    const sourceSlugs = sources
+      .map((src) => sidebarItemProjectSlug(src, folders, rootChats))
+      .filter(Boolean);
+    const target = crossProjectDropTarget(overId, folders, rootChats);
+    if (sourceSlugs.length) {
+      const crosses = Boolean(target && sourceSlugs.some((slug) => slug !== target.slug));
+      if (crosses && target && !isArchiveFolderId(target.folderId)) {
+        const convIds: string[] = [];
+        const folderIds: string[] = [];
+        for (const src of sources) {
+          const parsed = parseDragId(src);
+          if (!parsed || isProjectFolderId(parsed.id)) continue;
+          if (parsed.kind === "chat") convIds.push(parsed.id);
+          else folderIds.push(parsed.id);
+        }
+        if (convIds.length || folderIds.length) {
+          void getApi()
+            ?.move_chats_to_project?.(convIds, folderIds, target.slug, target.folderId)
+            ?.finally(() => load());
+        }
+        return;
+      }
+      const leavesCurrent = sourceSlugs.some((slug) => slug !== currentProjectSlug);
+      const staysForeign = Boolean(target && target.slug !== currentProjectSlug);
+      if (leavesCurrent || staysForeign) return;
     }
     let nextFolders = folders;
     let nextRoot = rootChats;
