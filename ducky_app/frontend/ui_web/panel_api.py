@@ -130,6 +130,7 @@ _model_cache: dict[str, list[Any]] = {}
 _MODELS_CACHE_FILE = "models_cache.json"
 _models_refresh_lock = threading.Lock()
 _models_refresh_inflight = False
+_models_refresh_again = False
 _models_updated_hook: Any = None
 
 
@@ -187,23 +188,69 @@ def cached_api_model_ids() -> dict[str, set[str]]:
 
 
 def kick_model_refresh() -> None:
-    """Fetch provider catalogs on a worker. Safe to call from the pywebview thread."""
-    global _models_refresh_inflight
+    """Fetch provider catalogs on a worker. Safe to call from the pywebview thread.
+
+    A kick that arrives while a warm is already running is kept and run once
+    after it. Boot warms before plugins register; the enable/key-save kick
+    must not be dropped.
+    """
+    global _models_refresh_inflight, _models_refresh_again
     with _models_refresh_lock:
         if _models_refresh_inflight:
+            _models_refresh_again = True
             return
         _models_refresh_inflight = True
+        _models_refresh_again = False
 
     def _run() -> None:
-        global _models_refresh_inflight
+        global _models_refresh_inflight, _models_refresh_again
         try:
-            _warm_model_cache()
-        finally:
+            while True:
+                try:
+                    _warm_model_cache()
+                except Exception:
+                    pass
+                _notify_models_updated()
+                with _models_refresh_lock:
+                    if not _models_refresh_again:
+                        _models_refresh_inflight = False
+                        break
+                    _models_refresh_again = False
+        except Exception:
             with _models_refresh_lock:
                 _models_refresh_inflight = False
-            _notify_models_updated()
+                _models_refresh_again = False
 
     threading.Thread(target=_run, daemon=True, name="refresh-models").start()
+
+
+def _seed_empty_model_caches_from_disk() -> None:
+    """Fill empty gateway lists from a plugin disk cache. No Node, no network."""
+    from backend.agent.model_fetch import _cache_provider_models
+    from backend.uefn_plugins.host import get_llm_provider_registration
+
+    try:
+        providers = _catalog_keep_providers()
+    except Exception:
+        return
+    for prov in providers:
+        if _model_cache.get(prov):
+            continue
+        reg = get_llm_provider_registration(prov) or {}
+        read = reg.get("read_cached_models")
+        if not callable(read):
+            continue
+        try:
+            models = [m for m in (read() or []) if getattr(m, "id", None)]
+        except Exception:
+            continue
+        if not models:
+            continue
+        _model_cache[prov] = list(models)
+        try:
+            _cache_provider_models(prov, models)
+        except Exception:
+            pass
 
 
 def _models_cache_use_db() -> bool:

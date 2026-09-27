@@ -44,6 +44,7 @@ import { UpdateLockOverlay } from "./components/UpdateLockOverlay";
 import {
   NavigationHistoryProvider,
   useNavigationHistoryOptional,
+  viewForHistory,
 } from "./navigation/NavigationHistoryContext";
 import { UndoHistoryProvider, useUndoHistoryOptional } from "./navigation/UndoHistoryContext";
 import { useNavigationShortcuts } from "./navigation/useNavigationShortcuts";
@@ -95,15 +96,21 @@ function PluginTrustBridge() {
   return null;
 }
 
-function AppShortcutsBridge({ setView }: { setView: (v: ViewId) => void }) {
+function AppShortcutsBridge({
+  setView,
+  hasProject,
+}: {
+  setView: (v: ViewId) => void;
+  hasProject: boolean;
+}) {
   const nav = useNavigationHistoryOptional();
   const undo = useUndoHistoryOptional();
   useNavigationShortcuts(nav?.back ?? NOOP, nav?.forward ?? NOOP);
   useUndoShortcuts(undo?.undo ?? NOOP, undo?.redo ?? NOOP);
   useEffect(() => {
-    nav?.registerViewApplier(setView);
+    nav?.registerViewApplier((view) => setView(viewForHistory(view, hasProject)));
     return () => nav?.registerViewApplier(null);
-  }, [nav, setView]);
+  }, [nav, setView, hasProject]);
   return null;
 }
 
@@ -147,10 +154,10 @@ export default function App() {
   }, [layoutMode, setLayoutMode]);
 
   useEffect(() => {
-    if (!hasProject) return;
-    // Leaving welcome overlay: Settings becomes an editor tab under ChatView.
-    setCurrentView((view) => (view === "settings" ? "chat" : view));
-  }, [hasProject]);
+    if (!hasProject || currentView !== "settings") return;
+    // A project keeps Settings as an editor tab. A full settings page unmounts both rails.
+    setCurrentView("chat");
+  }, [hasProject, currentView]);
 
   useEffect(() => {
     return registerOpenSettingsView(() => {
@@ -225,7 +232,7 @@ export default function App() {
       <WindowDrag />
       <NavigationHistoryProvider>
       <UndoHistoryProvider>
-      <AppShortcutsBridge setView={setCurrentView} />
+      <AppShortcutsBridge setView={setCurrentView} hasProject={hasProject} />
       <PluginTrustBridge />
       <PluginPrefsHydrate />
       <PluginShellBootBridge />

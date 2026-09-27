@@ -35,6 +35,11 @@ export type NavLocation =
   | { kind: "view"; view: Extract<ViewId, "settings"> }
   | SettingsNavLocation;
 
+/** With a project open, history stays on the chat workspace so the side rails stay mounted. */
+export function viewForHistory(view: ViewId, hasProject: boolean): ViewId {
+  return hasProject ? "chat" : view;
+}
+
 export function sameLocation(a: NavLocation, b: NavLocation): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "file" && b.kind === "file") return a.path === b.path;

@@ -151,9 +151,98 @@ def test_kick_model_refresh_returns_before_fetch(monkeypatch):
     monkeypatch.setattr(pa, "_warm_model_cache", _slow_warm)
     with pa._models_refresh_lock:
         pa._models_refresh_inflight = False
+        pa._models_refresh_again = False
     t0 = time.perf_counter()
     pa.kick_model_refresh()
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     assert elapsed_ms < 200.0, f"kick_model_refresh blocked: {elapsed_ms:.0f}ms"
     assert started.wait(timeout=1.0)
     release.set()
+
+
+def test_kick_during_warm_runs_once_more(monkeypatch):
+    calls: list[int] = []
+    release = threading.Event()
+    second = threading.Event()
+
+    def _warm() -> None:
+        n = len(calls)
+        calls.append(n)
+        if n == 0:
+            release.wait(timeout=2)
+        else:
+            second.set()
+
+    monkeypatch.setattr(pa, "_warm_model_cache", _warm)
+    monkeypatch.setattr(pa, "_notify_models_updated", lambda: None)
+    with pa._models_refresh_lock:
+        pa._models_refresh_inflight = False
+        pa._models_refresh_again = False
+    pa.kick_model_refresh()
+    for _ in range(50):
+        if calls:
+            break
+        time.sleep(0.02)
+    assert calls == [0]
+    pa.kick_model_refresh()
+    release.set()
+    assert second.wait(timeout=2)
+    assert calls == [0, 1]
+
+
+def test_catalog_seeds_disk_cache_without_fetch(monkeypatch):
+    from frontend.ui_web.panel_api_settings import PanelApiSettingsMixin
+
+    monkeypatch.setattr(pa, "_model_cache", {})
+    monkeypatch.setattr(pa, "_catalog_keep_providers", lambda: {"cursor"})
+    info = ModelInfo(id="composer-2.5", display_name="Composer 2.5", supports_tools=True)
+
+    def _read():
+        return [info]
+
+    monkeypatch.setattr(
+        "backend.uefn_plugins.host.get_llm_provider_registration",
+        lambda prov: {"read_cached_models": _read} if prov == "cursor" else {},
+    )
+
+    def _boom(*_a, **_k):
+        raise AssertionError("fetch_models ran on the RPC thread")
+
+    monkeypatch.setattr("backend.agent.model_fetch.fetch_models", _boom)
+    catalog = PanelApiSettingsMixin().get_models_catalog(False)
+    assert any(row["id"] == "composer-2.5" for row in catalog["models"])
+    assert pa._model_cache["cursor"][0].id == "composer-2.5"
+
+
+def test_custom_test_key_kicks_refresh(monkeypatch):
+    from frontend.ui_web.panel_api_settings import PanelApiSettingsMixin
+
+    kicks: list[str] = []
+    detects: list[str] = []
+    saved: list[str] = []
+
+    class Api(PanelApiSettingsMixin):
+        def _push_panel(self, event):
+            saved.append(str(event.get("type")))
+
+    monkeypatch.setattr(pa, "kick_model_refresh", lambda: kicks.append("models"))
+    monkeypatch.setattr(
+        "backend.uefn_plugins.host.get_contributions",
+        lambda: {"llm_providers": [{"id": "cursor"}]},
+    )
+    monkeypatch.setattr("backend.uefn_plugins.host.get_llm_provider_registration", lambda _p: None)
+    monkeypatch.setattr(
+        "backend.uefn_plugins.host.get_coding_agent_registration",
+        lambda _p: {"test_key": lambda _key: {"ok": True, "detail": "OK"}},
+    )
+    monkeypatch.setattr("backend.agent.secrets.get_key", lambda _p: "")
+    monkeypatch.setattr("backend.agent.secrets.set_key", lambda _p, key: saved.append(key))
+    monkeypatch.setattr("backend.agent.coding_agents.base.invalidate_detect_cache", lambda: None)
+    monkeypatch.setattr(
+        "backend.agent.coding_agents.base.kick_detect_refresh",
+        lambda: detects.append("detect"),
+    )
+    result = Api().test_key("cursor", "crsr_test_key_value")
+    assert result["ok"] is True
+    assert kicks == ["models"]
+    assert detects == ["detect"]
