@@ -14,6 +14,7 @@ const FALLBACK_BY_PLUGIN: Record<string, { kind: string; label: string }> = {
   cursor: { kind: "cursor", label: "Cursor" },
   anthropic: { kind: "claude", label: "Claude" },
   google: { kind: "antigravity", label: "Antigravity" },
+  openai: { kind: "codex", label: "Codex" },
 };
 
 function LaptopCodeIcon() {

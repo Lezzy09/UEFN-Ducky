@@ -134,7 +134,7 @@ standalone AppData skill pack or owned by another plugin.
 | `llm.providers` | Rows under Settings → LLMs → Providers; click opens a detail slide (key, coding agent, plugin options). Effort slider is `ModelInfo.thinking_menu` from `fetch_models`. Usage sliders are `fetch_usage` on `api.register_llm_provider` — not this contribute. |
 | `llm.coding_agents` | Coding-agent block inside that provider’s detail slide (Claude Code, Codex, Cursor, Gemini CLI) |
 | `settings.sections` with `tab: "LLMs"` | Extra toggles in that provider’s detail slide (e.g. Anthropic/OpenAI prompt-cache markers) |
-| `api.register_ide_hookup(kind)` | Own IDE MCP+skills Apply (cursor / claude / antigravity); auto-applies on register; UI in that provider’s LLMs detail |
+| `api.register_ide_hookup(kind)` | Own IDE MCP+skills Apply (cursor / claude / antigravity / codex); auto-applies on register; UI in that provider’s LLMs detail |
 | `walkthrough` | First-enable product tour (`plugin.<id>`). Host spotlights `target` ui-ids with Next / require_click. Gateway plugins must spotlight `settings.llms.provider.<id>` (the table row), then key / Test & Save / coding agent — never only the LLMs tab. |
 
 ### `contributes.walkthrough`

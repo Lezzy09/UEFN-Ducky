@@ -1,4 +1,4 @@
-"""Apply the UEFN MCP bridge block into IDE configs (Cursor / Claude / Antigravity).
+"""Apply the UEFN MCP bridge block into IDE configs (Cursor / Claude / Antigravity / Codex).
 
 Owned by Store gateway plugins via ``api.register_ide_hookup``. Host still writes
 the bridge + skills; plugins decide *which* IDEs are active. Used from Settings →
@@ -16,7 +16,7 @@ from frontend.merge import merge_uefn_into_config
 from frontend.settings import PANEL_LISTENER_PORT, PanelSettings
 from frontend.skill_deploy import sync_skill_for_ide
 
-ALL_IDES = (IdeKind.CURSOR, IdeKind.CLAUDE, IdeKind.ANTIGRAVITY)
+ALL_IDES = (IdeKind.CURSOR, IdeKind.CLAUDE, IdeKind.ANTIGRAVITY, IdeKind.CODEX)
 
 
 def _active_ide_kinds() -> tuple[IdeKind, ...]:
@@ -51,6 +51,16 @@ def apply_ide_bridge(kind: IdeKind, settings: Optional[PanelSettings] = None) ->
     s = settings or replace(PanelSettings.load(), port=PANEL_LISTENER_PORT)
     block = build_uefn_server_block(s)
     path = path_for_ide(kind, s.antigravity_config_path)
+    if kind == IdeKind.CODEX:
+        from frontend.codex_mcp import codex_block_matches, merge_codex_config
+
+        ok, _detail = codex_block_matches(path, block)
+        if ok:
+            return str(path)
+        merge_codex_config(path, block)
+        for _ln in sync_skill_for_ide(path):
+            pass
+        return str(path)
     ok, _detail = uefn_block_matches(path, block)
     if ok:
         # Already pointed at this exe — do not touch mcp.json (Cursor reconnect).
@@ -84,6 +94,11 @@ def verify_ide_bridge(kind: IdeKind, settings: Optional[PanelSettings] = None) -
     s = settings or replace(PanelSettings.load(), port=PANEL_LISTENER_PORT)
     expected = build_uefn_server_block(s)
     path = path_for_ide(kind, s.antigravity_config_path)
+    if kind == IdeKind.CODEX:
+        from frontend.codex_mcp import codex_block_matches
+
+        ok, detail = codex_block_matches(path, expected)
+        return {"ok": ok, "detail": detail}
     ok, detail = uefn_block_matches(path, expected)
     return {"ok": ok, "detail": detail}
 
