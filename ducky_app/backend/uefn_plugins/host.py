@@ -556,6 +556,7 @@ def register_llm_provider_factory(
     - key_optional: True for URL gateways (Ollama)
     - normalize_secret: ``(raw) -> str`` before test/fetch
     - fetch_usage: ``(api_key, *, model=\"\") -> {windows, notice?}`` live quota sliders
+    - read_cached_models: ``() -> list[ModelInfo]`` disk only, no Node or network
     """
     from backend.uefn_plugins.store import normalize_plugin_id
 
@@ -1245,6 +1246,23 @@ def wait_plugin_toggles(timeout: float = 30.0) -> None:
         alive[0].join(timeout=min(0.05, remaining))
 
 
+def _kick_gateway_models() -> None:
+    """Re-probe agents and refresh catalogs after register(). Safe if the UI is mid-warm."""
+    try:
+        from backend.agent.coding_agents.base import invalidate_detect_cache, kick_detect_refresh
+
+        invalidate_detect_cache()
+        kick_detect_refresh()
+    except Exception:
+        pass
+    try:
+        from frontend.ui_web.panel_api import kick_model_refresh
+
+        kick_model_refresh()
+    except Exception:
+        pass
+
+
 def apply_plugin_enabled_change(plugin_id: str, *, enabled: bool) -> None:
     """Fast Store enable/disable: touch only this plugin (no full reload).
 
@@ -1312,12 +1330,7 @@ def apply_plugin_enabled_change(plugin_id: str, *, enabled: bool) -> None:
                 overlay_plugin_listeners_to_appdata(reload=True)
             except Exception:
                 _log.debug("Plugin %s listener overlay on enable failed", pid, exc_info=True)
-            try:
-                from backend.agent.coding_agents.base import invalidate_detect_cache
-
-                invalidate_detect_cache()
-            except Exception:
-                pass
+            _kick_gateway_models()
         finally:
             # Enable raced with disable — drop whatever register() just attached.
             if not is_plugin_enabled(pid):
@@ -1384,12 +1397,7 @@ def reload_single_plugin(plugin_id: str) -> None:
                 overlay_plugin_listeners_to_appdata(reload=True)
             except Exception:
                 _log.debug("Plugin %s listener overlay on reload failed", pid, exc_info=True)
-            try:
-                from backend.agent.coding_agents.base import invalidate_detect_cache
-
-                invalidate_detect_cache()
-            except Exception:
-                pass
+            _kick_gateway_models()
         finally:
             if not is_plugin_enabled(pid):
                 try:

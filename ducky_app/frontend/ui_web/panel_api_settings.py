@@ -1479,6 +1479,10 @@ class PanelApiSettingsMixin:
             if result.get("ok") and api_key:
                 set_key(prov, str(api_key).strip())
                 invalidate_detect_cache()
+                from backend.agent.coding_agents.base import kick_detect_refresh
+
+                kick_detect_refresh()
+                _pa.kick_model_refresh()
             self._push_panel({"type": "key_test_done", "provider": prov, **result})
             return result
 
@@ -1614,6 +1618,7 @@ class PanelApiSettingsMixin:
 
     def get_models_catalog(self, refresh: bool = False) -> dict[str, Any]:
         """One-shot cache read for the picker. Network stays on a worker."""
+        _pa._seed_empty_model_caches_from_disk()
         if refresh:
             _pa.kick_model_refresh()
         settings = _pa.PanelSettings.load()
