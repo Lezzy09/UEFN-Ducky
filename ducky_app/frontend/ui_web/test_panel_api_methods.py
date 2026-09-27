@@ -267,6 +267,7 @@ _PUBLIC_METHODS = frozenset({
     'load_messages',
     'load_verse_diagnostics_cache',
     'minimize_window',
+    'move_chats_to_project',
     'move_conversation',
     'move_project_entry',
     'notify_focus_tab_active',

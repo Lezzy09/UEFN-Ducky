@@ -47,7 +47,7 @@ type CreateStep = "pick" | "edit";
 export type { DuckyEditTarget } from "./duckyProfileTypes";
 
 export type DuckyProfileModalMode =
-  | { mode: "create"; folderId?: string; filePath?: string; folders: FolderItem[]; rootChats: FolderItem["chats"] }
+  | { mode: "create"; folderId?: string; projectSlug?: string; filePath?: string; folders: FolderItem[]; rootChats: FolderItem["chats"] }
   | { mode: "edit"; chat: DuckyEditTarget };
 
 interface DuckyProfileModalProps {
@@ -296,6 +296,7 @@ export function DuckyProfileModal({
     const rawPid = (profileId || selectedProfileId || "").trim();
     const pid = rawPid && rawPid !== blankProfileId && rawPid !== BLANK_PROFILE_ID ? rawPid : "";
     const config = formToConfig(formState, chatTitle, pid || undefined);
+    if (state.projectSlug) config.project_slug = state.projectSlug;
     const normFile = state.filePath?.replace(/\\/g, "/");
     const conv = await api.create_conversation(state.folderId ?? "", formState.duckyStyle, normFile, config);
     const formModel = formState.model.trim();

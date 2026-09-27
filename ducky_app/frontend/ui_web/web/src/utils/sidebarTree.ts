@@ -41,6 +41,11 @@ export function findChatAncestorFolderIds(
   return walk(folders, []) ?? [];
 }
 
+/** Ancestors the open chat may force open. Project rows stay where the user left them. */
+export function foldersToAutoExpand(ancestorIds: readonly string[]): string[] {
+  return ancestorIds.filter((id) => !isProjectFolderId(id));
+}
+
 export function folderIdForCreate(
   folderId: string,
   currentSlug: string,
@@ -270,6 +275,63 @@ export function parseNestDropId(raw: string): string | null {
   if (!raw.startsWith("nest:")) return null;
   const id = raw.slice(5);
   return id === "root" ? "" : id;
+}
+
+function projectSlugFromFolderId(id: string): string {
+  return isProjectFolderId(id) ? id.slice(PROJECT_FOLDER_PREFIX.length) : "";
+}
+
+/** Home project of a sidebar row. Empty when the tree is a single island. */
+export function sidebarItemProjectSlug(
+  rawId: string,
+  folders: FolderItem[],
+  rootChats: FolderItem["chats"],
+): string {
+  const nest = parseNestDropId(rawId);
+  if (nest !== null) {
+    if (!nest) return "";
+    const fromProject = projectSlugFromFolderId(nest);
+    if (fromProject) return fromProject;
+    return findFolderById(folders, nest)?.projectSlug || "";
+  }
+  const parsed = parseDragId(rawId);
+  if (!parsed) return "";
+  if (parsed.kind === "folder") {
+    const fromProject = projectSlugFromFolderId(parsed.id);
+    if (fromProject) return fromProject;
+    return findFolderById(folders, parsed.id)?.projectSlug || "";
+  }
+  return findChatInTree(folders, rootChats, parsed.id)?.projectSlug || "";
+}
+
+/** Where a drop lands when the tree is split by project. Null for archive and single-island rows. */
+export function crossProjectDropTarget(
+  overRaw: string,
+  folders: FolderItem[],
+  rootChats: FolderItem["chats"],
+): { slug: string; folderId: string } | null {
+  if (isArchiveFolderId(overRaw)) return null;
+  const nest = parseNestDropId(overRaw);
+  if (nest !== null) {
+    if (!nest || isArchiveFolderId(nest)) return null;
+    const slug = projectSlugFromFolderId(nest) || findFolderById(folders, nest)?.projectSlug || "";
+    if (!slug) return null;
+    return { slug, folderId: isProjectFolderId(nest) ? "" : nest };
+  }
+  const parsed = parseDragId(overRaw);
+  if (!parsed) return null;
+  if (parsed.kind === "folder") {
+    if (isArchiveFolderId(parsed.id)) return null;
+    const slug = projectSlugFromFolderId(parsed.id) || findFolderById(folders, parsed.id)?.projectSlug || "";
+    if (!slug) return null;
+    return { slug, folderId: isProjectFolderId(parsed.id) ? "" : parsed.id };
+  }
+  const ancestors = findChatAncestorFolderIds(folders, rootChats, parsed.id);
+  const parent = ancestors[ancestors.length - 1] || "";
+  if (isArchiveFolderId(parent)) return null;
+  const slug = projectSlugFromFolderId(parent) || findChatInTree(folders, rootChats, parsed.id)?.projectSlug || "";
+  if (!slug) return null;
+  return { slug, folderId: isProjectFolderId(parent) ? "" : parent };
 }
 
 export function buildFolderTree(

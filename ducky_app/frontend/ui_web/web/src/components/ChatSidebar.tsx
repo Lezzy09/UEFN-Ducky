@@ -64,6 +64,7 @@ import {
   findChatAncestorFolderIds,
   findFolderById,
   folderIdForCreate,
+  foldersToAutoExpand,
   insertChatFolder,
   maxExpandedFolderDepth,
   toggleChatFolderLevels,
@@ -144,7 +145,7 @@ export interface ChatSidebarProps {
   onChatDeleted?: (chatId: string) => void;
   onChatRenamed?: (chatId: string, name: string) => void;
   onEditDucky?: (chat: { id: string; name: string; duckyStyle?: string; duckyPersonality?: string }) => void;
-  onRequestCreateDucky?: (ctx: { folderId: string }) => void;
+  onRequestCreateDucky?: (ctx: { folderId: string; projectSlug?: string }) => void;
   filesRefresh?: number;
   onDetachChatAt?: (chat: { id: string; name: string }, at: { screenX: number; screenY: number }) => void;
   onDetachFileAt?: (path: string, name: string, at: { screenX: number; screenY: number }) => void;
@@ -444,7 +445,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
     if (activeChats.length === 0) return;
     const folderIds = new Set<string>();
     for (const chatId of activeChats) {
-      for (const folderId of findChatAncestorFolderIds(folders, rootChats, chatId)) {
+      for (const folderId of foldersToAutoExpand(findChatAncestorFolderIds(folders, rootChats, chatId))) {
         folderIds.add(folderId);
       }
     }
@@ -1146,6 +1147,16 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
             onSelectChatFolder={handleSelectChatFolder}
             onCreateDucky={createChatFlow}
             onCreateGroup={createGroupFlow}
+            onCreateInProject={(slug) => {
+              if (onRequestCreateDucky) {
+                onRequestCreateDucky({
+                  folderId: "",
+                  projectSlug: slug && slug !== projectSlug ? slug : undefined,
+                });
+                return;
+              }
+              void createChatFlow();
+            }}
             filterQuery={debouncedDuckyTreeFilterQuery}
             onOpenChatInEditor={onOpenChatInEditor ?? handleChatSelect}
             onDetachChatAt={onDetachChatAt}
