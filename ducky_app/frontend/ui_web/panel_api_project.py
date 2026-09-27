@@ -679,7 +679,12 @@ class PanelApiProjectMixin:
         s = _pa.replace(_pa.PanelSettings.load(), port=_pa.PANEL_LISTENER_PORT)
         block = _pa.build_uefn_server_block(s)
         path = _pa.path_for_ide(ide, s.antigravity_config_path)
-        _pa.merge_uefn_into_config(path, block, dry_run=False)
+        if ide == _pa.IdeKind.CODEX:
+            from frontend.codex_mcp import merge_codex_config
+
+            merge_codex_config(path, block)
+        else:
+            _pa.merge_uefn_into_config(path, block, dry_run=False)
         for ln in _pa.sync_skill_for_ide(path):
             _pa._log(ln)
         _pa._log(f"Applied → {path}")
@@ -702,7 +707,7 @@ class PanelApiProjectMixin:
         return verify_all_ide_bridges()
 
     def apply_all_ides(self) -> list[str]:
-        """Apply MCP+skills for every host IDE (Cursor / Claude / Antigravity)."""
+        """Apply MCP+skills for every host IDE (Cursor / Claude / Antigravity / Codex)."""
         from frontend.ide_apply import ALL_IDES
 
         out: list[str] = []

@@ -11,6 +11,7 @@ class IdeKind(str, Enum):
     CURSOR = "cursor"
     CLAUDE = "claude"
     ANTIGRAVITY = "antigravity"
+    CODEX = "codex"
 
 
 def cursor_mcp_path() -> Path:
@@ -31,9 +32,16 @@ def antigravity_mcp_path(override: str = "") -> Path:
     return Path(os.environ.get("USERPROFILE", str(Path.home()))) / ".gemini" / "antigravity" / "mcp_config.json"
 
 
+def codex_config_path() -> Path:
+    """Codex CLI / Codex app global config (TOML, not mcp.json)."""
+    return Path(os.environ.get("USERPROFILE", str(Path.home()))) / ".codex" / "config.toml"
+
+
 def path_for_ide(kind: IdeKind, antigravity_override: str = "") -> Path:
     if kind == IdeKind.CURSOR:
         return cursor_mcp_path()
     if kind == IdeKind.CLAUDE:
         return claude_desktop_config_path()
+    if kind == IdeKind.CODEX:
+        return codex_config_path()
     return antigravity_mcp_path(antigravity_override)
