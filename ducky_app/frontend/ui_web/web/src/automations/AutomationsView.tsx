@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AutomationTemplatePicker } from "./AutomationTemplatePicker";
+import { ProjectField } from "./ProjectField";
+import { AgentField } from "./AgentField";
 import type {
   AutomationDto,
   AutomationFieldDto,
   AutomationGraphDto,
-  AutomationGraphEdgeDto,
   AutomationGraphNodeDto,
   AutomationNodeDto,
   AutomationRunDto,
@@ -17,12 +18,12 @@ import { Icons } from "../icons/Icons";
 import { copyText } from "../utils/copyText";
 import { formatRunLog, runLogHasContent } from "./runLog";
 
-const NODE_W = 200;
-const NODE_H = 76;
+import { isEndNode, nodeLabel, NodeIcon, useNodeFaces } from "./NodeVisuals";
+import { arrangeGraph, nodeWidth, portPoint, zoomAt, OVERVIEW_ZOOM } from "./graphGeometry";
 const LOG_H_MIN = 140;
 const LOG_H_MAX = 560;
 const LOG_H_DEFAULT = 220;
-const GROUP_ORDER = ["Starting", "Triggers", "Agents", "Duckies", "Tools", "Logic", "Finish"];
+const GROUP_ORDER = ["Starting", "Triggers", "Agents", "Duckies", "Tools", "Logic", "End"];
 
 export function clampLogHeight(h: number, boardH = 0): number {
   const cap = boardH > 0 ? Math.max(LOG_H_MIN, boardH - 24) : LOG_H_MAX;
@@ -62,6 +63,9 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
   const [draft, setDraft] = useState<AutomationDto | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [expandedId, setExpandedId] = useState("");
+  const [selectedEdge, setSelectedEdge] = useState<number | null>(null);
+  const [groupsCollapsed, setGroupsCollapsed] = useState(false);
+  const resizeRef = useRef<{ id: string; startX: number; width: number } | null>(null);
   const [pan, setPan] = useState({ x: 40, y: 40 });
   const [zoom, setZoom] = useState(1);
   const [wireFrom, setWireFrom] = useState<string | null>(null);
@@ -83,7 +87,10 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
   const [pickerOpen, setPickerOpen] = useState(false);
   const boardRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
-  const panRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const panRef = useRef<{ x: number; y: number; px: number; py: number; button: number; moved: boolean } | null>(null);
+  const touches = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<{ distance: number; center: { x: number; y: number }; pan: { x: number; y: number }; zoom: number } | null>(null);
+  const suppressMenuUntil = useRef(0);
   const wireRef = useRef<{
     sourceId: string;
     dir: "in" | "out";
@@ -131,6 +138,7 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
       setDraft(row);
       setSelectedId(id);
       setSelectedNodeId("");
+      setSelectedEdge(null);
       setExpandedId("");
       setLog((row.runs || []).slice(-1)[0] || null);
     }
@@ -191,11 +199,15 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
   );
 
   const graph = draft?.graph || emptyGraph();
+  const overview = zoom < OVERVIEW_ZOOM;
+  const nodesById = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph.nodes]);
+  const incomingIds = useMemo(() => new Set(graph.edges.map((edge) => edge.target)), [graph.edges]);
+  const faces = useNodeFaces(graph.nodes.some((node) => node.type === "pipeline.agent"));
+  const isExpanded = (id: string) => !overview && expandedId === id;
 
   const patchGraph = (fn: (g: AutomationGraphDto) => AutomationGraphDto) => {
     if (!draft) return;
-    const next = { ...draft, graph: fn(graph) };
-    setDraft(next);
+    setDraft((current) => current ? { ...current, graph: fn(current.graph) } : current);
   };
 
   const addNodeAt = (entry: AutomationNodeDto, worldX: number, worldY: number) => {
@@ -204,7 +216,7 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
       type: entry.type,
       x: worldX,
       y: worldY,
-      config: {},
+      config: entry.type === "pipeline.agent" ? { ducky: "__new__" } : {},
       label: entry.label,
       description: entry.description || "",
     };
@@ -248,9 +260,11 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
   };
 
   const onBoardWheel = (e: React.WheelEvent) => {
-    if (e.target instanceof Element && e.target.closest(".aw-log-dock, .aw-log-fab")) return;
+    if (e.target instanceof Element && e.target.closest(".aw-node-props, .aw-log-dock, .aw-log-fab")) return;
     e.preventDefault();
-    const next = Math.min(4, Math.max(0.2, zoom * (e.deltaY < 0 ? 1.08 : 0.92)));
+    const next = Math.min(4, Math.max(0.25, zoom * (e.deltaY < 0 ? 1.08 : 0.92)));
+    const box = boardRef.current?.getBoundingClientRect();
+    if (box) setPan(zoomAt(pan, zoom, next, { x: e.clientX - box.left, y: e.clientY - box.top }));
     setZoom(next);
   };
 
@@ -287,24 +301,59 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
   };
 
   const onBoardPointerDown = (e: React.PointerEvent) => {
-    if (e.target instanceof Element && e.target.closest(".aw-log-dock, .aw-log-fab")) return;
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
-      panRef.current = { x: pan.x, y: pan.y, px: e.clientX, py: e.clientY };
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } else if (e.button === 0 && e.target === e.currentTarget) {
+    if (pinch.current || (e.target instanceof Element && e.target.closest("button, input, textarea, select, .aw-node-props, .aw-wire"))) return;
+    if ([0, 1, 2].includes(e.button)) {
+      e.preventDefault();
+      panRef.current = { x: pan.x, y: pan.y, px: e.clientX, py: e.clientY, button: e.button, moved: false };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+    if (e.button === 0) {
       setSelectedNodeId("");
       setWireFrom(null);
+      setSelectedEdge(null);
       setSpawn(null);
     }
   };
 
+  const onBoardPointerCapture = (e: React.PointerEvent) => {
+    if (e.pointerType !== "touch" || (e.target instanceof Element && e.target.closest(".aw-node-props, .aw-log-dock, input, textarea, select"))) return;
+    touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.current.size !== 2) return;
+    const [a, b] = [...touches.current.values()];
+    const box = boardRef.current!.getBoundingClientRect();
+    pinch.current = { distance: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)), center: { x: (a.x + b.x) / 2 - box.left, y: (a.y + b.y) / 2 - box.top }, pan, zoom };
+    dragRef.current = null; resizeRef.current = null; panRef.current = null; wireRef.current = null;
+    setWireFrom(null); setDraftWire(null);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.stopPropagation();
+  };
+
   const onBoardPointerMove = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    if (touches.current.has(e.pointerId)) touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch.current && touches.current.size >= 2) {
+      const [a, b] = [...touches.current.values()];
+      const box = boardRef.current!.getBoundingClientRect();
+      const start = pinch.current;
+      const next = Math.max(0.25, Math.min(4, start.zoom * Math.hypot(b.x - a.x, b.y - a.y) / start.distance));
+      const anchored = zoomAt(start.pan, start.zoom, next, start.center);
+      setZoom(next);
+      setPan({ x: anchored.x + (a.x + b.x) / 2 - box.left - start.center.x, y: anchored.y + (a.y + b.y) / 2 - box.top - start.center.y });
+      return;
+    }
+    const resize = resizeRef.current;
+    if (resize) {
+      const width = Math.min(720, Math.max(280, resize.width + (e.clientX - resize.startX) / zoom));
+      patchGraph((g) => ({ ...g, nodes: g.nodes.map((n) => n.id === resize.id ? { ...n, width } : n) }));
+      return;
+    }
     if (wireRef.current) {
       const w = worldFromClient(e.clientX, e.clientY);
       setDraftWire((d) => (d ? { ...d, toX: w.x, toY: w.y } : d));
       return;
     }
     if (panRef.current) {
+      if (Math.hypot(e.clientX - panRef.current.px, e.clientY - panRef.current.py) > 5) panRef.current.moved = true;
       setPan({
         x: panRef.current.x + (e.clientX - panRef.current.px),
         y: panRef.current.y + (e.clientY - panRef.current.py),
@@ -324,7 +373,9 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
   };
 
   const connectNodes = (sourceId: string, targetId: string) => {
-    if (!sourceId || !targetId || sourceId === targetId) return;
+    if (!sourceId || !targetId || sourceId === targetId || byType.get(nodesById.get(targetId)?.type || "")?.role === "starter") return;
+    const source = nodesById.get(sourceId);
+    if (source && isEndNode(source)) return;
     patchGraph((g) => {
       const exists = g.edges.some((x) => x.source === sourceId && x.target === targetId);
       return exists ? g : { ...g, edges: [...g.edges, { source: sourceId, target: targetId, kind: "main" }] };
@@ -341,6 +392,8 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
     let tid = "";
     for (const el of stack) {
       if (!(el instanceof Element)) continue;
+      const port = el.closest("[data-aw-port]");
+      if (port && port.getAttribute("data-aw-port") === w.dir) return;
       const nodeEl = el.closest("[data-aw-node]");
       const id = nodeEl?.getAttribute("data-aw-node") || "";
       if (id && id !== w.sourceId) {
@@ -354,7 +407,19 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
   };
 
   const endPointer = (e: React.PointerEvent) => {
-    if (wireRef.current) finishWire(e.clientX, e.clientY);
+    e.stopPropagation();
+    if (e.type === "pointercancel") { touches.current.clear(); pinch.current = null; }
+    touches.current.delete(e.pointerId);
+    if (pinch.current) {
+      pinch.current = null;
+      const remaining = [...touches.current.values()][0];
+      panRef.current = remaining ? { x: pan.x, y: pan.y, px: remaining.x, py: remaining.y, button: 0, moved: true } : null;
+      return;
+    }
+    if (panRef.current?.button === 2 && panRef.current.moved) suppressMenuUntil.current = Date.now() + 500;
+    if (wireRef.current && e.type !== "pointercancel") finishWire(e.clientX, e.clientY);
+    else { wireRef.current = null; setWireFrom(null); setDraftWire(null); }
+    resizeRef.current = null;
     dragRef.current = null;
     panRef.current = null;
   };
@@ -363,8 +428,7 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
     if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
-    const fromX = dir === "out" ? node.x + NODE_W : node.x;
-    const fromY = node.y + NODE_H / 2;
+    const { x: fromX, y: fromY } = portPoint(node, dir, isExpanded(node.id));
     wireRef.current = { sourceId: node.id, dir, fromX, fromY };
     setWireFrom(node.id);
     setDraftWire({ sourceId: node.id, fromX, fromY, toX: fromX, toY: fromY });
@@ -374,14 +438,12 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
   const onBoardContextMenu = (e: React.MouseEvent) => {
     const t = e.target as HTMLElement;
     if (t.closest(".aw-log-dock") || t.closest(".aw-log-fab")) return;
-    if (t.closest(".aw-node") || t.closest(".aw-port") || t.closest(".aw-wire")) {
-      e.preventDefault();
-      return;
-    }
+    if (t.closest("input, textarea, select")) return;
     e.preventDefault();
+    if (Date.now() < suppressMenuUntil.current || (panRef.current?.button === 2 && panRef.current.moved)) return;
     if (!draft) return;
     const world = worldFromClient(e.clientX, e.clientY);
-    setSpawn({ x: e.clientX, y: e.clientY, worldX: world.x, worldY: world.y });
+    setSpawn({ x: Math.max(8, Math.min(e.clientX, window.innerWidth - 328)), y: Math.max(8, Math.min(e.clientY, window.innerHeight - 520)), worldX: world.x, worldY: world.y });
     setSpawnFilter("");
   };
 
@@ -396,6 +458,29 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
       dy: (e.clientY - board.top - pan.y) / zoom - node.y,
     };
     setSelectedNodeId(node.id);
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  useEffect(() => {
+    const cancel = () => {
+      touches.current.clear(); pinch.current = null; panRef.current = null;
+      dragRef.current = null; resizeRef.current = null; wireRef.current = null;
+      setWireFrom(null); setDraftWire(null);
+    };
+    window.addEventListener("blur", cancel);
+    return () => window.removeEventListener("blur", cancel);
+  }, []);
+
+  const fitGraph = () => {
+    const box = boardRef.current;
+    if (!box || !graph.nodes.length) return;
+    const left = Math.min(...graph.nodes.map((n) => n.x));
+    const top = Math.min(...graph.nodes.map((n) => n.y));
+    const right = Math.max(...graph.nodes.map((n) => n.x + nodeWidth(n, isExpanded(n.id))));
+    const bottom = Math.max(...graph.nodes.map((n) => n.y + (isExpanded(n.id) ? 440 : 76)));
+    const next = Math.min(1, Math.max(0.25, Math.min((box.clientWidth - 96) / (right - left), (box.clientHeight - 96) / (bottom - top))));
+    setZoom(next);
+    setPan({ x: 48 - left * next, y: 48 - top * next });
   };
 
   const logCount = log?.steps?.length || (runLogHasContent(log) ? 1 : 0);
@@ -492,16 +577,17 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
           ) : (
             <span className="aw-empty-hint">
               {isPipeline
-                ? "Create a pipeline — Chat start, Agent, plugin nodes, Finish. Right-click the canvas to add nodes."
+                ? "Start with any node. Chat input passes your request in; Return to user sends results back. Use + Nodes or right-click to add steps."
                 : "Create a workflow or pick a template — right-click the canvas to add nodes."}
             </span>
           )}
         </div>
         <div
           ref={boardRef}
-          className="aw-board"
+          className={`aw-board${overview ? " is-overview" : ""}`}
           onWheel={onBoardWheel}
           onPointerDown={onBoardPointerDown}
+          onPointerDownCapture={onBoardPointerCapture}
           onPointerMove={onBoardPointerMove}
           onPointerUp={endPointer}
           onPointerCancel={endPointer}
@@ -510,25 +596,20 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
           <div className="aw-world" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
             <svg className="aw-wires" width={8000} height={8000}>
               {graph.edges.map((e, i) => {
-                const a = graph.nodes.find((n) => n.id === e.source);
-                const b = graph.nodes.find((n) => n.id === e.target);
+                const a = nodesById.get(e.source);
+                const b = nodesById.get(e.target);
                 if (!a || !b) return null;
-                const x1 = a.x + NODE_W;
-                const y1 = a.y + NODE_H / 2;
-                const x2 = b.x;
-                const y2 = b.y + NODE_H / 2;
+                const { x: x1, y: y1 } = portPoint(a, "out", isExpanded(a.id));
+                const { x: x2, y: y2 } = portPoint(b, "in", isExpanded(b.id));
                 const c = Math.max(40, (x2 - x1) / 2);
                 return (
                   <path
                     key={`${e.source}-${e.target}-${e.kind}-${i}`}
                     d={`M ${x1} ${y1} C ${x1 + c} ${y1}, ${x2 - c} ${y2}, ${x2} ${y2}`}
-                    className={`aw-wire aw-wire--${e.kind}${selectedNodeId === e.source || selectedNodeId === e.target ? " is-hot" : ""}`}
+                    className={`aw-wire aw-wire--${e.kind}${selectedEdge === i || selectedNodeId === e.source || selectedNodeId === e.target ? " is-hot" : ""}`}
                     onClick={(ev) => {
                       ev.stopPropagation();
-                      patchGraph((g) => ({
-                        ...g,
-                        edges: g.edges.filter((x) => !(x.source === e.source && x.target === e.target && x.kind === e.kind)),
-                      }));
+                      setSelectedEdge(i);
                     }}
                   />
                 );
@@ -542,30 +623,41 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
             </svg>
             {graph.nodes.map((node) => {
               const meta = byType.get(node.type);
-              const expanded = expandedId === node.id;
+              const expanded = isExpanded(node.id);
+              const role = isEndNode(node) ? "end" : meta?.role === "starter" || !incomingIds.has(node.id) ? "starter" : node.type === "pipeline.agent" ? "agent" : "action";
+              const label = nodeLabel(node, meta);
               return (
                 <div
                   key={node.id}
                   data-aw-node={node.id}
-                  className={`aw-node aw-node--${meta?.role || "action"}${selectedNodeId === node.id ? " is-selected" : ""}${wireFrom === node.id ? " is-wiring" : ""}${expanded ? " is-expanded" : ""}`}
-                  style={{ left: node.x, top: node.y }}
+                  className={`aw-node aw-node--${role}${selectedNodeId === node.id ? " is-selected" : ""}${wireFrom === node.id ? " is-wiring" : ""}${expanded ? " is-expanded" : ""}`}
+                  style={{ left: node.x, top: node.y, width: nodeWidth(node, expanded) }}
                 >
-                  <button
+                  {meta?.role !== "starter" ? <button
                     type="button"
+                    aria-label={`Connect to ${label}`}
+                    data-aw-port="in"
                     className="aw-port aw-port--in"
                     data-aw-node={node.id}
                     onPointerDown={(e) => startWire(e, node, "in")}
                     onPointerMove={onBoardPointerMove}
                     onPointerUp={endPointer}
                     onPointerCancel={endPointer}
-                  />
+                  /> : null}
                   <div className="aw-node-card">
-                    <div className="aw-node-body" onPointerDown={(e) => startNodeDrag(e, node)}>
-                      <strong>{node.label || meta?.label || node.type}</strong>
-                      <small>{node.description || meta?.description || node.type}</small>
+                    <div className="aw-node-body" onPointerDown={(e) => startNodeDrag(e, node)}
+                      onDoubleClick={() => { setExpandedId(expandedId === node.id ? "" : node.id); if (overview) setZoom(1); }}
+                      title={label}>
+                      <NodeIcon meta={meta} node={node} faces={faces} />
+                      <div className="aw-node-heading">
+                        <strong>{label}</strong>
+                        {!overview ? <small>{node.description || meta?.description || ""}</small> : null}
+                      </div>
                     </div>
-                    <button
+                    {!overview ? <button
                       type="button"
+                      title={expanded ? "Collapse node" : "Edit node"}
+                      aria-label={expanded ? "Collapse node" : "Edit node"}
                       className="aw-node-expand-toggle"
                       aria-expanded={expanded}
                       onPointerDown={(e) => e.stopPropagation()}
@@ -575,26 +667,17 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
                         setExpandedId(expanded ? "" : node.id);
                       }}
                     >
-                      {expanded ? "Close" : "Expand"}
-                    </button>
+                      {expanded ? <Icons.ChevronDown /> : <Icons.Sliders />}
+                    </button> : null}
                     {expanded ? (
                       <div className="aw-node-props aw-node-props--open" onPointerDown={(e) => e.stopPropagation()}>
                         <NodeInspector
                           node={node}
                           meta={meta}
-                          edges={graph.edges.filter((e) => e.source === node.id)}
                           onChange={(next) =>
                             patchGraph((g) => ({
                               ...g,
                               nodes: g.nodes.map((n) => (n.id === next.id ? next : n)),
-                            }))
-                          }
-                          onEdgeKind={(target, kind) =>
-                            patchGraph((g) => ({
-                              ...g,
-                              edges: g.edges.map((e) =>
-                                e.source === node.id && e.target === target ? { ...e, kind } : e,
-                              ),
                             }))
                           }
                           onDelete={() => {
@@ -609,20 +692,46 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
                       </div>
                     ) : null}
                   </div>
-                  <button
+                  {expanded ? <button type="button" className="aw-node-resize" aria-label="Resize node" title="Drag to make wider"
+                    onPointerDown={(e) => {
+                      if (e.button !== 0) return;
+                      e.preventDefault(); e.stopPropagation();
+                      resizeRef.current = { id: node.id, startX: e.clientX, width: nodeWidth(node, true) };
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                    }}
+                    onKeyDown={(e) => { if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); const width = Math.min(720, Math.max(280, nodeWidth(node, true) + (e.key === "ArrowRight" ? 20 : -20))); patchGraph((g) => ({ ...g, nodes: g.nodes.map((n) => n.id === node.id ? { ...n, width } : n) })); } }}
+                  /> : null}
+                  {!isEndNode(node) && <button
                     type="button"
+                    aria-label={`Connect from ${label}`}
+                    data-aw-port="out"
                     className="aw-port aw-port--out"
                     data-aw-node={node.id}
                     onPointerDown={(e) => startWire(e, node, "out")}
                     onPointerMove={onBoardPointerMove}
                     onPointerUp={endPointer}
                     onPointerCancel={endPointer}
-                  />
+                  />}
                 </div>
               );
             })}
           </div>
         </div>
+        <div className="aw-canvas-controls">
+          <button type="button" onClick={() => { const box = boardRef.current?.getBoundingClientRect(); if (!box) return; const world = worldFromClient(box.left + box.width / 2, box.top + box.height / 2); setSpawn({ x: Math.max(8, Math.min(box.left + 12, window.innerWidth - 328)), y: Math.max(8, Math.min(box.top + 12, window.innerHeight - 520)), worldX: world.x, worldY: world.y }); setSpawnFilter(""); }} disabled={!draft}>+ Nodes</button>
+          <button type="button" title="Zoom out" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.25, z / 1.2))}>−</button>
+          <span>{Math.round(zoom * 100)}%</span>
+          <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(4, z * 1.2))}><Icons.Plus /></button>
+          <button type="button" onClick={fitGraph}>Fit</button>
+        </div>
+        {selectedEdge !== null && graph.edges[selectedEdge] ? <div className="aw-connection-tools">
+          <span>Connection</span>
+          <select aria-label="Connection route" value={graph.edges[selectedEdge].kind} onChange={(e) => patchGraph((g) => ({ ...g, edges: g.edges.map((edge, i) => i === selectedEdge ? { ...edge, kind: e.target.value } : edge) }))}>
+            <option value="main">Next</option><option value="true">True</option><option value="false">False</option><option value="each">Each item</option><option value="done">Done</option>
+          </select>
+          <button type="button" onClick={() => { patchGraph((g) => ({ ...g, edges: g.edges.filter((_, i) => i !== selectedEdge) })); setSelectedEdge(null); }}>Disconnect</button>
+          <button type="button" aria-label="Close connection controls" onClick={() => setSelectedEdge(null)}><Icons.Close /></button>
+        </div> : null}
         <button
           type="button"
           className={`aw-log-fab${logOpen ? " is-open" : ""}`}
@@ -684,7 +793,7 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
               ) : (
                 <p>
                   {isPipeline
-                    ? "Test a pipeline to see steps here. Finish posts back to the calling chat."
+                    ? "Test a pipeline to see steps here. Return to user sends results back to your chat."
                     : "Test a graph to see steps here. Timers only fire while the panel is running."}
                 </p>
               )}
@@ -698,22 +807,26 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
             className="aw-spawn-menu"
             role="dialog"
             aria-label="Add node"
-            style={{ left: spawn.x, top: spawn.y }}
+            style={{ left: spawn.x, top: spawn.y, maxHeight: `min(512px, calc(100dvh - ${spawn.y + 8}px))` }}
             onMouseDown={(e) => e.stopPropagation()}
           >
+            <div className="aw-menu-actions">
+              <button type="button" onClick={() => setExpandedId("")}><span aria-hidden>📦</span>Collapse all nodes</button>
+              <button type="button" onClick={() => { patchGraph((g) => arrangeGraph(g, overview ? "" : expandedId)); setSpawn(null); }}><span aria-hidden>🧹</span>Arrange nodes</button>
+              <button type="button" onClick={() => { fitGraph(); setSpawn(null); }}><span aria-hidden>🔍</span>Fit graph</button>
+            </div>
             <input
               className="aw-spawn-search"
-              autoFocus
               placeholder="Filter nodes"
               value={spawnFilter}
               onChange={(e) => setSpawnFilter(e.target.value)}
             />
-            <p className="aw-spawn-hint">Right-click the canvas to add a node.</p>
+            <div className="aw-spawn-section"><span>Add a node</span><button type="button" onClick={() => setGroupsCollapsed((v) => !v)}>{groupsCollapsed ? "Expand groups" : "Collapse groups"}</button></div>
             <div className="aw-spawn-scroll">
               {spawnGroups.length ? (
                 spawnGroups.map(([name, tiles]) => (
-                  <details key={name} className="aw-acc" open>
-                    <summary>{name}</summary>
+                  <details key={`${name}-${groupsCollapsed}-${!!spawnFilter}`} className="aw-acc" open={!groupsCollapsed || !!spawnFilter}>
+                    <summary><NodeIcon meta={tiles[0]} /><span>{name}</span><small>{tiles.length}</small></summary>
                     {tiles.map((t) => (
                       <button
                         key={t.type}
@@ -721,8 +834,8 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
                         className="aw-tile"
                         onClick={() => addNodeAt(t, spawn.worldX, spawn.worldY)}
                       >
-                        <span>{t.label}</span>
-                        <small>{t.description}</small>
+                        <NodeIcon meta={t} />
+                        <span className="aw-tile-text"><strong>{t.label}</strong><small>{t.description}</small></span>
                       </button>
                     ))}
                   </details>
@@ -777,6 +890,12 @@ function FieldInput({
     };
   }, [field.type, provider]);
 
+  if (field.type === "project") {
+    return <ProjectField value={value} onChange={set} />;
+  }
+  if (field.type === "ducky") {
+    return <AgentField value={String(node.config[field.id] ?? node.config.profile_id ?? "")} onChange={set} />;
+  }
   if (field.type === "textarea") {
     return (
       <textarea rows={4} value={value} onChange={(e) => set(e.target.value)} />
@@ -811,21 +930,17 @@ function FieldInput({
 function NodeInspector({
   node,
   meta,
-  edges,
   onChange,
-  onEdgeKind,
   onDelete,
 }: {
   node: AutomationGraphNodeDto;
   meta?: AutomationNodeDto;
-  edges: AutomationGraphEdgeDto[];
   onChange: (n: AutomationGraphNodeDto) => void;
-  onEdgeKind: (target: string, kind: string) => void;
   onDelete: () => void;
 }) {
   const fields = meta?.config_fields || [];
-  return (
-    <div className="aw-insp-form">
+  const appearance = (
+    <>
       <label>
         Label
         <input value={node.label || ""} onChange={(e) => onChange({ ...node, label: e.target.value })} />
@@ -838,29 +953,19 @@ function NodeInspector({
           rows={3}
         />
       </label>
+    </>
+  );
+  return (
+    <div className="aw-insp-form">
+      {!["pipeline.agent", "start.chat", "pipeline.finish", "flow.end"].includes(node.type) && appearance}
+      {node.type === "start.chat" && <p>Reference this pipeline in chat, then type your request. Your text and files flow into the connected steps.</p>}
       {fields.map((f) => (
         <label key={f.id}>
           {f.label || f.id}
           <FieldInput field={f} node={node} pluginId={meta?.plugin_id} onChange={onChange} />
         </label>
       ))}
-      {edges.length > 0 ? (
-        <div className="aw-insp-edges">
-          <span>Wires</span>
-          {edges.map((e) => (
-            <label key={`${e.target}-${e.kind}`}>
-              → {e.target}
-              <select value={e.kind} onChange={(ev) => onEdgeKind(e.target, ev.target.value)}>
-                <option value="main">main</option>
-                <option value="true">true</option>
-                <option value="false">false</option>
-                <option value="each">each</option>
-                <option value="done">done</option>
-              </select>
-            </label>
-          ))}
-        </div>
-      ) : null}
+      {["pipeline.agent", "start.chat", "pipeline.finish", "flow.end"].includes(node.type) && <details><summary>Node appearance</summary>{appearance}</details>}
       <button type="button" className="aw-danger" onClick={onDelete}>
         Delete node
       </button>

@@ -18,3 +18,24 @@ export function rememberDuckiesAllProjects(allProjects: boolean): void {
     /* ignore */
   }
 }
+
+const DUCKIES_GLOBAL_AGENTS_KEY = "uefn-panel-duckies-global-agents";
+
+export function readDuckiesGlobalAgents(): boolean {
+  try {
+    // First launch: the library duckies are visible until someone hides them.
+    const raw = localStorage.getItem(DUCKIES_GLOBAL_AGENTS_KEY);
+    if (raw === null) return true;
+    return raw === "1";
+  } catch {
+    return true;
+  }
+}
+
+export function rememberDuckiesGlobalAgents(show: boolean): void {
+  try {
+    localStorage.setItem(DUCKIES_GLOBAL_AGENTS_KEY, show ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}

@@ -32,6 +32,7 @@ import * as api from "./api/skillPackStudioApi";
 import type { SkillPackDraft } from "./api/skillPackStudioApi";
 import { fileToBase64, pickSkillPackZipFile } from "./utils/fileTransfer";
 import { targetRef } from "../ui-targets/registry";
+import { takePendingSkillPack } from "../navigation/openChatReference";
 import { fileBasename } from "./utils/fileDisplay";
 import { packCatalogSource, packOriginBadge } from "./utils/packOrigin";
 import "./skill-pack-studio.css";
@@ -171,6 +172,35 @@ export function SkillPackStudio({ sectionTab = "skills" }: SkillPackStudioProps)
     if (!selectedKey || contentLoadedRef.current[selectedKey]) return;
     void ensurePackContent(selectedKey);
   }, [selectedKey, ensurePackContent]);
+
+  const [wantedSkill, setWantedSkill] = useState<{ packId: string; subId: string } | null>(
+    () => takePendingSkillPack(),
+  );
+  useEffect(() => {
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{ packId?: string; subId?: string }>).detail;
+      const packId = String(detail?.packId || "").trim();
+      if (!packId) return;
+      setWantedSkill({ packId, subId: String(detail?.subId || "") });
+    };
+    window.addEventListener("ducky:open-skill-pack", onOpen);
+    return () => window.removeEventListener("ducky:open-skill-pack", onOpen);
+  }, []);
+  useEffect(() => {
+    if (!wantedSkill) return;
+    const pack = packs.find((row) => row.id === wantedSkill.packId);
+    if (!pack) return;
+    if (wantedSkill.subId && !contentLoadedRef.current[pack.id]) {
+      if (selectedKey !== pack.id) setSelectedKey(pack.id);
+      return;
+    }
+    setSelectedKey(pack.id);
+    const file = wantedSkill.subId
+      ? pack.files.find((row) => row.id === wantedSkill.subId || row.file.includes(wantedSkill.subId))
+      : undefined;
+    setFocusId(file?.id ?? null);
+    setWantedSkill(null);
+  }, [wantedSkill, packs, selectedKey, setFocusId, setSelectedKey]);
 
   const patchFile = useCallback((packId: string, fileId: string, patch: Partial<SkillFile>) => {
     setPacks((prev) =>

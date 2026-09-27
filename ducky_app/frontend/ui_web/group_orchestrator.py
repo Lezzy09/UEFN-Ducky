@@ -967,6 +967,33 @@ def cancel_group_run(group_id: str) -> None:
         ev.set()
 
 
+def _persist_group_attachments(
+    group_id: str,
+    ts: float,
+    attachments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Store composer files on the hub message. Member runs still get the raw dicts."""
+    if not attachments:
+        return []
+    from backend.agent.attachments import parse_attachment_dicts
+    from frontend.settings import PanelSettings
+    from frontend.ui_web.conversation_attachments import persist_message_attachments
+    from frontend.ui_web.project_chats import get_conversations_dir
+
+    parsed = parse_attachment_dicts(attachments)
+    if not parsed:
+        return []
+    settings = PanelSettings.load()
+    root = settings.uefn_project_root
+    return persist_message_attachments(
+        group_id,
+        ts,
+        parsed,
+        get_conversations_dir(root),
+        root,
+    )
+
+
 def run_group_turn(
     group_id: str,
     user_text: str,
@@ -975,6 +1002,7 @@ def run_group_turn(
     model: str = "",
     push: PushFn | None = None,
     timeout_sec: float = 180.0,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> str:
     """Start a group orchestrator thread. Returns run_id (empty on immediate failure)."""
     from frontend.ui_web.agent_modes import get_panel_push, is_agent_running
@@ -1002,9 +1030,12 @@ def run_group_turn(
         return ""
 
     text = (user_text or "").strip()
-    if not text:
+    raw_attachments = [a for a in (attachments or []) if isinstance(a, dict)]
+    if not text and not raw_attachments:
         push_fn({"type": "error", "text": "Empty message", "conv_id": group_id})
         return ""
+    # Router and member prompt need words; the hub row keeps the user's text.
+    spoken = text or "See the attachment."
 
     run_id = str(uuid.uuid4())
     cancel = threading.Event()
@@ -1012,26 +1043,29 @@ def run_group_turn(
         _group_sessions[group_id] = cancel
 
     # Persist the user turn on the group transcript immediately.
-    append_message(
-        conv,
-        {"role": "user", "content": text, "text": text, "ts": time.time()},
-    )
+    ts = time.time()
+    user_msg: dict[str, Any] = {"role": "user", "content": text, "text": text, "ts": ts}
+    stored = _persist_group_attachments(group_id, ts, raw_attachments)
+    if stored:
+        user_msg["attachments"] = stored
+    append_message(conv, user_msg)
     if sum(1 for m in conv.messages if m.get("role") == "user") == 1:
         from backend.agent.chat_title import start_auto_title
 
-        start_auto_title(conv, text, push=push_fn)
+        start_auto_title(conv, spoken, push=push_fn)
 
     def worker() -> None:
         try:
             _run_group_turn_body(
                 group_id=group_id,
-                user_text=text,
+                user_text=spoken,
                 mode=mode,
                 model=model,
                 push=push_fn,
                 run_id=run_id,
                 cancel=cancel,
                 timeout_sec=timeout_sec,
+                attachments=raw_attachments,
             )
         finally:
             with _group_lock:
@@ -1149,6 +1183,7 @@ def _run_member_turn(
     run_id: str = "",
     publish_lock: threading.Lock | None = None,
     publish_as: dict[str, Any] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], str, str]:
     """Run one member in the background. Returns (publish_speaker, reply, error)."""
     from frontend.ui_web.agent_modes import run_message_and_wait
@@ -1206,6 +1241,7 @@ def _run_member_turn(
             push=member_push,
             cancel_on_timeout=True,
             parent="",
+            attachments=attachments or None,
         )
     finally:
         unregister_member_hub(member_id)
@@ -1263,6 +1299,7 @@ def _run_group_turn_body(
     run_id: str,
     cancel: threading.Event,
     timeout_sec: float,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> None:
     from frontend.agent_profiles import list_agent_profiles_available
 
@@ -1329,6 +1366,7 @@ def _run_group_turn_body(
                     run_id=run_id,
                     publish_lock=publish_lock,
                     publish_as=pub_as,
+                    attachments=attachments or None,
                 )
                 for run_as, pub_as in prepared
             ]
@@ -1412,6 +1450,7 @@ def _run_group_turn_body(
             run_id=run_id,
             publish_lock=publish_lock,
             publish_as=pub_as,
+            attachments=attachments if hops == 0 else None,
         )
         if cancel.is_set():
             return

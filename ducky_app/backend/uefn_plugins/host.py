@@ -76,6 +76,7 @@ _CONTRIBUTIONS: dict[str, Any] = {
     "editor_kinds": [],
     "header_buttons": [],
     "ui_panels": [],
+    "chat_references": [],  # {trigger, id, label, group, href, plugin_id}
     "shell_boots": [],  # {plugin_id, entry}
     "appearance_profiles": [],  # {id, name, plugin_id, foundation?, overrides?, status_overrides?}
     "appearance_css": [],  # {plugin_id, entry}
@@ -188,6 +189,34 @@ def _merged_ide_hookups(enabled_set: set[str]) -> list[dict[str, Any]]:
     return sorted(by_kind.values(), key=lambda p: str(p.get("kind") or ""))
 
 
+def normalize_chat_reference(row: Mapping[str, Any], plugin_id: str) -> dict[str, Any] | None:
+    """Drop a composer reference whose href is not one of the tab schemes."""
+    if not isinstance(row, Mapping):
+        return None
+    trigger = str(row.get("trigger") or "").strip()
+    if trigger not in ("@", "/"):
+        return None
+    ref_id = str(row.get("id") or "").strip()
+    label = str(row.get("label") or "").strip()
+    href = str(row.get("href") or "").strip()
+    if not ref_id or not label or not re.fullmatch(
+        r"(ducky|profile|skill|subskill|mcp|plugin):[A-Za-z0-9_./:-]+", href
+    ):
+        return None
+    out: dict[str, Any] = {
+        "trigger": trigger,
+        "id": ref_id,
+        "label": label,
+        "group": str(row.get("group") or "Plugins").strip() or "Plugins",
+        "href": href,
+        "plugin_id": plugin_id,
+    }
+    description = str(row.get("description") or "").strip()
+    if description:
+        out["description"] = description
+    return out
+
+
 def _dedupe_contrib_rows(
     rows: list[Any], *, key_fields: tuple[str, ...] = ("id",)
 ) -> list[Any]:
@@ -239,6 +268,9 @@ def get_ui_contributions() -> dict[str, Any]:
             ),
             "header_buttons": _dedupe_contrib_rows(_CONTRIBUTIONS["header_buttons"]),
             "ui_panels": _dedupe_contrib_rows(_CONTRIBUTIONS["ui_panels"]),
+            "chat_references": _dedupe_contrib_rows(
+                _CONTRIBUTIONS["chat_references"], key_fields=("trigger", "id")
+            ),
             "shell_boots": _dedupe_contrib_rows(
                 _CONTRIBUTIONS["shell_boots"], key_fields=("entry",)
             ),
@@ -2104,6 +2136,16 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
                 entry.pop("icon", None)
             _CONTRIBUTIONS["header_buttons"].append(entry)
 
+    chat = contributes.get("chat") if isinstance(contributes.get("chat"), dict) else {}
+    ref_rows = chat.get("references") if isinstance(chat.get("references"), list) else None
+    if ref_rows is None:
+        raw_refs = contributes.get("chat_references")
+        ref_rows = raw_refs if isinstance(raw_refs, list) else []
+    for row in ref_rows:
+        entry = normalize_chat_reference(row, pid) if isinstance(row, dict) else None
+        if entry:
+            _CONTRIBUTIONS["chat_references"].append(entry)
+
     wt = contributes.get("walkthrough")
     if isinstance(wt, dict) and isinstance(wt.get("steps"), list) and wt.get("steps"):
         entry = dict(wt)
@@ -2658,6 +2700,34 @@ class _PluginApi:
         from backend.util.http import resolve_image as _resolve_image
 
         return _resolve_image(image)
+
+    def chat_reference(
+        self,
+        *,
+        trigger: str,
+        id: str,
+        label: str,
+        href: str,
+        group: str = "",
+        description: str = "",
+    ) -> bool:
+        """Add one @ or / row. A bad href is dropped. Same idea as ``tool()``."""
+        entry = normalize_chat_reference(
+            {
+                "trigger": trigger,
+                "id": id,
+                "label": label,
+                "href": href,
+                "group": group,
+                "description": description,
+            },
+            self.plugin_id,
+        )
+        if not entry:
+            return False
+        with _LOCK:
+            _CONTRIBUTIONS["chat_references"].append(entry)
+        return True
 
     def tool(
         self,

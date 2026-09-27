@@ -49,6 +49,7 @@ import { SoundsSection } from "../../sfx/SoundsSection";
 import { MATRIX_EFFECT_ID } from "../../theme/matrixFx";
 import { pluginEffectId } from "../../theme/appearancePluginIds";
 import { isBuiltInProfile } from "../../theme/defaultProfile";
+import { getApi } from "../../hooks/usePanelApi";
 
 const DETAILS_CHEVRON = (
   <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" strokeWidth="2">
@@ -62,6 +63,57 @@ const RESET_ICON = (
     <path d="M3 3v5h5" />
   </svg>
 );
+
+function ChatReferenceToggles() {
+  const [mentions, setMentions] = useState(true);
+  const [slashRefs, setSlashRefs] = useState(true);
+  useEffect(() => {
+    void getApi()
+      ?.get_settings()
+      .then((settings) => {
+        if (typeof settings.chat_mentions_enabled === "boolean") {
+          setMentions(settings.chat_mentions_enabled);
+        }
+        if (typeof settings.chat_slash_references_enabled === "boolean") {
+          setSlashRefs(settings.chat_slash_references_enabled);
+        }
+      })
+      .catch(() => {});
+  }, []);
+  const publish = (nextMentions: boolean, nextSlash: boolean) => {
+    window.dispatchEvent(
+      new CustomEvent("ducky:chat-ref-toggles", {
+        detail: { mentions: nextMentions, slashRefs: nextSlash },
+      }),
+    );
+  };
+  return (
+    <div className="general-tab-toggle-card">
+      <SettingsToggleRow
+        id="toggle-chat-mentions"
+        label="@ mentions"
+        description="Type @ to mention a ducky in this project or a global agent."
+        checked={mentions}
+        onChange={(checked) => {
+          setMentions(checked);
+          publish(checked, slashRefs);
+          void getApi()?.save_agent_settings({ chat_mentions_enabled: checked });
+        }}
+      />
+      <SettingsToggleRow
+        id="toggle-chat-slash-references"
+        label="/ references"
+        description="Type / to insert a skill, MCP, or plugin. Commands such as /model stay."
+        checked={slashRefs}
+        onChange={(checked) => {
+          setSlashRefs(checked);
+          publish(mentions, checked);
+          void getApi()?.save_agent_settings({ chat_slash_references_enabled: checked });
+        }}
+      />
+    </div>
+  );
+}
 
 function AppearanceDetailsSection({
   title,
@@ -648,6 +700,7 @@ function AppearanceUiSectionBlock({ section }: { section: AppearanceUiSection })
     >
       {section.id === "chat" ? (
         <AppearanceAccordionSplit preview={<ChatResponsePreview />}>
+          <ChatReferenceToggles />
           {section.fontToken ? <SectionFontPicker fontToken={section.fontToken} /> : null}
           <AppearanceChatTokens />
         </AppearanceAccordionSplit>

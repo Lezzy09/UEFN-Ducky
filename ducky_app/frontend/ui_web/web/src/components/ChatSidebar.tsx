@@ -47,6 +47,7 @@ import { SidebarPanelTabs } from "./sidebar/SidebarPanelTabs";
 import type { DockDropTarget } from "../utils/dockPanelDrag";
 import { insertIndexForTabDrop } from "../workspace/dockTabInsertIndex";
 import { DuckyArchiveDropdown } from "./sidebar/DuckyArchiveDropdown";
+import { GlobalAgentsSection } from "./sidebar/GlobalAgentsSection";
 import { ContextMenu, useContextMenuState } from "./ContextMenu";
 import { formatSelectionBadge } from "../utils/fileTreeSelection";
 import { numberedEntryName } from "../utils/numberedEntryName";
@@ -54,6 +55,7 @@ import {
   contextMenuSeparator,
   fileTreeCreateItems,
   duckyTreeAllProjectsItem,
+  duckyTreeGlobalAgentsItem,
   duckyTreeCompactItem,
   duckyTreeCreateItems,
   showHiddenProjectFilesItem,
@@ -71,7 +73,9 @@ import {
 } from "../utils/sidebarTree";
 import {
   readDuckiesAllProjects,
+  readDuckiesGlobalAgents,
   rememberDuckiesAllProjects,
+  rememberDuckiesGlobalAgents,
 } from "../utils/duckiesTreePrefs";
 import {
   readContentAllProjects,
@@ -388,6 +392,11 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
     },
     [load],
   );
+  const [duckiesGlobalAgents, setDuckiesGlobalAgents] = useState(readDuckiesGlobalAgents);
+  const toggleDuckiesGlobalAgents = useCallback((value: boolean) => {
+    setDuckiesGlobalAgents(value);
+    rememberDuckiesGlobalAgents(value);
+  }, []);
   const [contentAllProjects, setContentAllProjects] = useState(readContentAllProjects);
   const toggleContentAllProjects = useCallback((value: boolean) => {
     setContentAllProjects(value);
@@ -720,14 +729,17 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       contextMenuSeparator("duckies-sep-compact"),
       duckyTreeCompactItem(duckiesCompact, toggleDuckiesCompact),
       duckyTreeAllProjectsItem(duckiesAllProjects, toggleDuckiesAllProjects),
+      duckyTreeGlobalAgentsItem(duckiesGlobalAgents, toggleDuckiesGlobalAgents),
     ],
     [
       createChatFlow,
       createGroupFlow,
       duckiesAllProjects,
       duckiesCompact,
+      duckiesGlobalAgents,
       toggleDuckiesAllProjects,
       toggleDuckiesCompact,
+      toggleDuckiesGlobalAgents,
     ],
   );
 
@@ -1144,6 +1156,19 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
         {duckySearchMode === "text" && duckyTreeSearchOpen ? (
           <SidebarTextSearchResults search={duckyTextSearch} showFileResults={false} />
         ) : (
+          <>
+          {duckiesGlobalAgents ? (
+            <GlobalAgentsSection
+              folders={folders}
+              rootChats={rootChats}
+              projectSlug={projectSlug}
+              compact={duckiesCompact}
+              filterQuery={debouncedDuckyTreeFilterQuery}
+              activeChats={activeChats}
+              onOpenChat={handleChatSelect}
+              onCreated={() => void load()}
+            />
+          ) : null}
           <SidebarFolderTree
             folders={folders}
             setFolders={setFolders}
@@ -1192,6 +1217,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
             compact={duckiesCompact}
             currentProjectSlug={projectSlug}
           />
+          </>
         )}
       </div>
     </>

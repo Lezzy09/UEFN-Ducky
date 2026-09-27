@@ -32,11 +32,11 @@ BUILTIN_NODES: list[dict[str, Any]] = [
     },
     {
         "type": "start.chat",
-        "label": "Chat",
+        "label": "Chat input",
         "group": "Starting",
         "role": "starter",
         "systems": [KIND_PIPELINE],
-        "description": "Run from a ducky chat (run_pipeline) or the Pipelines Test button.",
+        "description": "Pass the text and files sent with this pipeline reference into the next step. Optional: any unconnected input can start a pipeline.",
         "config_fields": [],
     },
     {
@@ -74,26 +74,31 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "group": "Agents",
         "role": "action",
         "systems": [KIND_PIPELINE],
-        "description": "Spawn a worker from an agent profile, wait, pass files downstream.",
+        "description": "Assign a ducky or create one when this workflow runs. Wait for its result and pass files to the next step.",
         "config_fields": [
-            {"id": "ducky", "label": "Ducky / profile id", "type": "string"},
-            {"id": "prompt", "label": "Prompt", "type": "textarea"},
-            {"id": "title", "label": "Title", "type": "string"},
-            {"id": "timeout_sec", "label": "Timeout (seconds)", "type": "number"},
-            {"id": "mode", "label": "Mode", "type": "string"},
-            {"id": "model", "label": "Model", "type": "string"},
+            {"id": "ducky", "label": "Assign ducky", "type": "ducky"},
+            {"id": "prompt", "label": "Instructions (optional; uses the workflow request)", "type": "textarea"},
         ],
     },
     {
         "type": "pipeline.finish",
-        "label": "Finish",
-        "group": "Finish",
-        "role": "action",
-        "systems": [KIND_PIPELINE],
-        "description": "Return text and file paths to the calling chat.",
+        "label": "Return to user",
+        "group": "End",
+        "role": "end",
+        "systems": list(_BOTH),
+        "description": "End this path and send its result and files back to the user. In a test run, show the result in the run log.",
         "config_fields": [
             {"id": "message", "label": "Message (optional)", "type": "textarea"},
         ],
+    },
+    {
+        "type": "flow.end",
+        "label": "End workflow",
+        "group": "End",
+        "role": "end",
+        "systems": list(_BOTH),
+        "description": "End this path without posting a reply.",
+        "config_fields": [],
     },
     {
         "type": "flow.wait",
@@ -126,7 +131,7 @@ BUILTIN_NODES: list[dict[str, Any]] = [
             {"id": "op", "label": "Op (equals/contains/exists)", "type": "string"},
             {"id": "equals", "label": "Equals (optional)", "type": "string"},
             {"id": "contains", "label": "Contains (optional)", "type": "string"},
-            {"id": "ducky", "label": "Judge ducky (agent mode)", "type": "string"},
+            {"id": "ducky", "label": "Judge ducky (agent mode)", "type": "ducky"},
             {"id": "prompt", "label": "Judge prompt (agent mode)", "type": "textarea"},
         ],
     },
@@ -140,6 +145,29 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "config_fields": [
             {"id": "name", "label": "Tool name", "type": "string"},
             {"id": "arguments_json", "label": "Arguments JSON", "type": "textarea"},
+        ],
+    },
+    {
+        "type": "uefn.open_project",
+        "label": "Open UEFN project",
+        "group": "UEFN",
+        "role": "action",
+        "systems": list(_BOTH),
+        "description": "Start UEFN if closed, select this workspace and wait for the chosen island before continuing.",
+        "config_fields": [
+            {"id": "project", "label": "UEFN project", "type": "project"},
+            {"id": "timeout", "label": "Ready timeout (seconds, max 300)", "type": "number"},
+        ],
+    },
+    {
+        "type": "uefn.launch",
+        "label": "Launch UEFN",
+        "group": "UEFN",
+        "role": "action",
+        "systems": list(_BOTH),
+        "description": "Start UEFN from closed and select this workspace. Follow with Wait for UEFN before editor actions.",
+        "config_fields": [
+            {"id": "project", "label": "UEFN project", "type": "project"},
         ],
     },
     {
@@ -159,7 +187,7 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "systems": list(_BOTH),
         "description": "Close UEFN, reopen the project, wait until the listener matches.",
         "config_fields": [
-            {"id": "project", "label": "Project path (blank = current)", "type": "string"},
+            {"id": "project", "label": "UEFN project", "type": "project"},
             {"id": "timeout", "label": "Wait timeout (seconds)", "type": "number"},
         ],
     },
@@ -171,7 +199,7 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "systems": list(_BOTH),
         "description": "Poll until the listener is online and the open island matches (max 300s).",
         "config_fields": [
-            {"id": "project", "label": "Project path (blank = current)", "type": "string"},
+            {"id": "project", "label": "UEFN project", "type": "project"},
             {"id": "timeout", "label": "Timeout (seconds)", "type": "number"},
         ],
     },
@@ -227,6 +255,20 @@ def list_nodes(system: str = KIND_AUTOMATION) -> list[dict[str, Any]]:
         parsed = _plugin_node(row, enabled, role="action", default_group="")
         if parsed and node_in_system(parsed, system):
             out.append(parsed)
+    # Read each plugin's own artwork once, even when it contributes many nodes.
+    icons: dict[str, str] = {}
+    for node in out:
+        pid = str(node.get("plugin_id") or "")
+        if not pid:
+            continue
+        if pid not in icons:
+            try:
+                from backend.uefn_plugins.store import plugin_icon_data_url
+
+                icons[pid] = plugin_icon_data_url(pid) or ""
+            except Exception:
+                icons[pid] = ""
+        node["icon"] = icons[pid] or node.get("icon") or ""
     return out
 
 
@@ -256,6 +298,7 @@ def _plugin_node(
         "role": role,
         "description": str(row.get("description") or ""),
         "plugin_id": pid,
+        "icon": str(row.get("icon") or ""),
         "systems": normalize_systems(row.get("systems")),
         "config_fields": _fields(row.get("config_fields") or row.get("fields")),
     }

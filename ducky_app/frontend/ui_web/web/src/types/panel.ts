@@ -236,6 +236,7 @@ export function pipelinesTabId(): string {
 }
 
 export interface AutomationGraphNodeDto {
+  width?: number;
   id: string;
   type: string;
   x: number;
@@ -323,6 +324,7 @@ export interface AutomationTemplateDto {
 }
 
 export interface AutomationNodeDto {
+  icon?: string;
   type: string;
   label: string;
   group: string;
@@ -970,6 +972,10 @@ export interface PanelSettingsDto {
   memory_summary_model?: string;
   /** Rename a new ducky after the role its first message asks for. */
   chat_auto_title?: boolean;
+  /** Composer @ menu. Missing key stays on. */
+  chat_mentions_enabled?: boolean;
+  /** Composer / reference rows under the command list. Missing key stays on. */
+  chat_slash_references_enabled?: boolean;
   /** Cheap model that refines the auto role title (empty = keyword names only). */
   chat_title_model?: string;
   /** Public web lookup: off, ask once per chat, or on. */
@@ -1247,6 +1253,15 @@ export interface UefnPluginContributionsDto {
     entry: string;
     plugin_id?: string;
     version?: number | string;
+  }>;
+  chat_references?: Array<{
+    trigger: "@" | "/" | string;
+    id: string;
+    label: string;
+    group?: string;
+    description?: string;
+    href: string;
+    plugin_id?: string;
   }>;
   shell_boots?: Array<{ plugin_id: string; entry: string }>;
   appearance_profiles?: Array<{

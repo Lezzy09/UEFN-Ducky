@@ -85,6 +85,23 @@ _MEMORY_PROMPT = (
 
 BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     {
+        "id": "builtin:open-uefn-project",
+        "name": "Open UEFN project",
+        "label": "Open UEFN project",
+        "description": "Launch UEFN from closed and wait for your island. Choose a saved project on the Open UEFN project node.",
+        "icon": "📂",
+        "kind": "builtin",
+        "systems": ["pipeline"],
+        "graph": {
+            "nodes": [
+                {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
+                {"id": "o", "type": "uefn.open_project", "x": 280, "y": 0, "config": {"project": "", "timeout": 180}},
+                {"id": "f", "type": "pipeline.finish", "x": 560, "y": 0, "config": {}},
+            ],
+            "edges": [{"source": "s", "target": "o", "kind": "main"}, {"source": "o", "target": "f", "kind": "main"}],
+        },
+    },
+    {
         "id": "builtin:restart-uefn",
         "name": "Restart UEFN into project",
         "label": "Restart UEFN into project",

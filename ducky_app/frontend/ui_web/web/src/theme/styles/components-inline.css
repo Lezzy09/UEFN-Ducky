@@ -2950,35 +2950,35 @@ html.window-maximized .window-resize-grip {
   line-height: 1.45;
 }
 
-.generated-images-btn-wrap { position: relative; }
-.generated-images-flyout {
+.attach-menu-wrap { position: relative; }
+.attach-menu-flyout {
   position: absolute;
   bottom: 42px;
   right: 0;
   z-index: 20;
-  width: 240px;
-  max-height: 280px;
-  overflow: auto;
+  width: 220px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 24px #0006;
+  padding: 6px;
 }
-.generated-images-empty { padding: 10px 12px; color: var(--muted); font-size: 12px; }
-.generated-images-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.attach-menu-item {
+  display: block;
   width: 100%;
-  padding: 6px 8px;
+  padding: 8px 10px;
   border: 0;
+  border-radius: 6px;
   background: transparent;
   color: inherit;
   text-align: left;
+  font-size: 13px;
   cursor: pointer;
 }
-.generated-images-row:hover { background: var(--hover); }
-.generated-images-row img { width: 36px; height: 36px; object-fit: cover; border-radius: 4px; }
+.attach-menu-item:hover { background: var(--hover); }
+.attach-menu-error { padding: 8px 10px; color: var(--amber, var(--muted)); font-size: 12px; }
+.attach-menu-preview { display: block; width: 100%; border-radius: 6px; margin-bottom: 6px; background: #000; }
+.attach-menu-file { display: none; }
 
 /* ── ComposerAttachMenu ── */
 .composer-attach-menu {

@@ -83,10 +83,21 @@ import { isEnglishLang } from "../views/settings/translationLanguages";
 import { VoiceControls, type LiveVoiceUiHandlers } from "../voice/VoiceControls";
 import { VoiceOverlay } from "../voice/VoiceOverlay";
 import { SnipButton } from "./SnipButton";
-import { GeneratedImagesButton } from "./GeneratedImagesButton";
+import { AttachMenuButton } from "./AttachMenuButton";
 import { ChatChangesButton, ChatChangesSlide, useLedgerOpen } from "./ChatChangesDrawer";
 import { captureSnipFile } from "./snipCapture";
+import { ComposerDraft, composerCaret, composerSetCaret } from "./ComposerDraft";
 import { SlashCommandMenu } from "./SlashCommandMenu";
+import {
+  filterChatRefs,
+  insertChatRef,
+  instantInnerRefs,
+  mergeInnerRefs,
+  readCaretToken,
+  type ChatRef,
+} from "./chatReferences";
+import { useChatReferenceCatalog } from "./useChatReferenceCatalog";
+import { useInnerRefSearch } from "./useInnerRefSearch";
 import {
   commandsForScope,
   composerPlaceholder,
@@ -212,6 +223,9 @@ export function ChatPane({
   const [isDragOver, setIsDragOver] = useState(false);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
+  const [caret, setCaret] = useState(0);
+  const [mentionsOn, setMentionsOn] = useState(true);
+  const [slashRefsOn, setSlashRefsOn] = useState(true);
   const [slashStatus, setSlashStatus] = useState("");
   const [modelPickerSignal, setModelPickerSignal] = useState(0);
   const [chatPlan, setChatPlan] = useState<ChatPlan | null>(null);
@@ -227,7 +241,7 @@ export function ChatPane({
   const listRef = useRef<VirtualChatMessageListHandle>(null);
   const [paneHost, setPaneHost] = useState<HTMLDivElement | null>(null);
   const inputBoxRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = useRef<HTMLDivElement>(null);
   const composerTargetRef = useUiTarget("chat.composer", {
     kind: "chat",
     label: "Chat composer",
@@ -814,9 +828,9 @@ export function ChatPane({
     });
 
   const hasText = !!inputText.trim();
-  // Group chats ignore attachments — members only get the text prompt.
-  const hasContent = hasText || (!chat.isGroup && attachments.length > 0);
-  const visionBlocked = hasImages && !modelSupportsVision && !externalAgent;
+  const hasContent = hasText || attachments.length > 0;
+  // Group hubs have no model of their own — the answering member decides vision.
+  const visionBlocked = !chat.isGroup && hasImages && !modelSupportsVision && !externalAgent;
   const canCompose =
     (chat.isGroup
       ? groupMembers.length > 0 && (groupUsesExternalOnly || (hasApiKey && !noModelsAvailable))
@@ -908,12 +922,58 @@ export function ChatPane({
     () => (slashQuery === null ? [] : filterCommands(availableCommands, slashQuery)),
     [availableCommands, slashQuery],
   );
-  const slashMenuOpen = !slashDismissed && slashMatches.length > 0;
+  const caretToken = readCaretToken(inputText, caret);
+  const { mentions, slashRefs, files } = useChatReferenceCatalog(true, chat.id);
+  const showMentions = mentionsOn && caretToken?.trigger === "@";
+  const showSlashRefs = slashRefsOn && caretToken?.trigger === "/";
+  const showSearch = (mentionsOn || slashRefsOn) && caretToken?.trigger === "~";
+  const searchQuery = showSearch ? caretToken?.query ?? "" : "";
+  const searchHits = useInnerRefSearch(searchQuery, showSearch, files, slashRefs);
+  const refMatches = useMemo(() => {
+    if (showSearch) return mergeInnerRefs(instantInnerRefs(searchQuery, mentions, slashRefs, files), searchHits);
+    const pool = showMentions ? mentions : showSlashRefs ? slashRefs : [];
+    const named = filterChatRefs(pool, caretToken?.query ?? "");
+    if (!showSlashRefs || !(caretToken?.query ?? "").trim()) return named;
+    return [...named, ...filterChatRefs(files, caretToken?.query ?? "").slice(0, 12)];
+  }, [showSearch, searchQuery, searchHits, showMentions, showSlashRefs, mentions, slashRefs, files, caretToken?.query]);
+  const pickerCommands = slashQuery === null ? [] : slashMatches;
+  const pickerCount = pickerCommands.length + refMatches.length;
+  const slashMenuOpen = !slashDismissed && pickerCount > 0;
+  const pickerKind = caretToken?.trigger ?? "";
+
+  useEffect(() => {
+    setSlashDismissed(false);
+  }, [pickerKind]);
 
   useEffect(() => {
     setSlashActiveIndex(0);
-    if (slashQuery === null) setSlashDismissed(false);
-  }, [slashQuery]);
+  }, [pickerKind, slashQuery, caretToken?.query]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getApi()
+      ?.get_settings()
+      .then((settings) => {
+        if (cancelled || !settings) return;
+        if (typeof settings.chat_mentions_enabled === "boolean") {
+          setMentionsOn(settings.chat_mentions_enabled);
+        }
+        if (typeof settings.chat_slash_references_enabled === "boolean") {
+          setSlashRefsOn(settings.chat_slash_references_enabled);
+        }
+      })
+      .catch(() => {});
+    const onToggle = (event: Event) => {
+      const detail = (event as CustomEvent<{ mentions?: boolean; slashRefs?: boolean }>).detail;
+      if (typeof detail?.mentions === "boolean") setMentionsOn(detail.mentions);
+      if (typeof detail?.slashRefs === "boolean") setSlashRefsOn(detail.slashRefs);
+    };
+    window.addEventListener("ducky:chat-ref-toggles", onToggle);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("ducky:chat-ref-toggles", onToggle);
+    };
+  }, []);
 
   useEffect(() => {
     if (!slashStatus) return;
@@ -944,6 +1004,24 @@ export function ChatPane({
       });
     },
     [chat.id, addFiles],
+  );
+
+  const insertChatReference = useCallback(
+    (ref: ChatRef) => {
+      const el = textareaRef.current;
+      const caretNow = el && document.activeElement === el ? composerCaret(el) : caret;
+      const token = readCaretToken(inputText, caretNow);
+      if (!token || token.trigger !== ref.trigger) return;
+      const next = insertChatRef(inputText, token, ref.label, ref.href);
+      setInputText(next.text);
+      setCaret(next.caret);
+      requestAnimationFrame(() => {
+        const node = textareaRef.current;
+        node?.focus();
+        composerSetCaret(node, next.caret);
+      });
+    },
+    [inputText, caret],
   );
 
   /** Menu pick: commands taking an argument only get completed, not run. */
@@ -1324,26 +1402,29 @@ export function ChatPane({
         <div className="chat-pane-composer-host">
           {slashMenuOpen ? (
             <SlashCommandMenu
-              commands={slashMatches}
+              commands={pickerCommands}
+              refs={refMatches}
               activeIndex={slashActiveIndex}
               onHover={setSlashActiveIndex}
               onSelect={completeSlashCommand}
+              onSelectRef={insertChatReference}
             />
           ) : null}
         <div
           ref={inputBoxMergedRef}
-          className={`no-drag chat-pane-input-box${isFocused ? " chat-pane-input-box--focused" : ""}${isDragOver ? " chat-pane-input-box--drag-over" : ""}${liveVoice ? " chat-pane-input-box--voice" : ""}${changesOpen ? " chat-pane-input-box--ledger" : ""}`}
+          className={`no-drag chat-pane-input-box${isFocused ? " chat-pane-input-box--focused" : ""}${isDragOver ? " chat-pane-input-box--drag-over" : ""}${liveVoice ? " chat-pane-input-box--voice" : ""}${changesOpen && !chat.isGroup ? " chat-pane-input-box--ledger" : ""}`}
         >
-          <ChatChangesSlide
-            open={changesOpen}
-            convId={chat.id}
-            isGroup={Boolean(chat.isGroup)}
-            allChats={allChats}
-            onOpenFile={handleOpenFile}
-            onOpenChat={onOpenChat}
-            host={paneHost}
-            onClose={() => setChangesOpen(false)}
-          />
+          {!chat.isGroup ? (
+            <ChatChangesSlide
+              open={changesOpen}
+              convId={chat.id}
+              allChats={allChats}
+              onOpenFile={handleOpenFile}
+              onOpenChat={onOpenChat}
+              host={paneHost}
+              onClose={() => setChangesOpen(false)}
+            />
+          ) : null}
           <div className={`voice-panel-wrapper${liveVoice ? " is-open" : ""}`}>
             <div className="voice-panel-inner">
               {liveVoice && liveVoiceHandlers ? (
@@ -1406,15 +1487,20 @@ export function ChatPane({
               onDragEnd={onInputResizeEnd}
               onTap={onInputResizeTap}
             />
-            <textarea
-              ref={textareaMergedRef}
+            <ComposerDraft
+              inputRef={textareaMergedRef}
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
+              caret={caret}
+              onChange={(value, nextCaret) => {
+                setInputText(value);
+                setCaret(nextCaret);
+              }}
+              onCaret={setCaret}
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
               onKeyDown={(e) => {
                 if (slashMenuOpen) {
-                  const count = slashMatches.length;
+                  const count = pickerCount;
                   if (e.key === "ArrowDown") {
                     e.preventDefault();
                     setSlashActiveIndex((i) => (i + 1) % count);
@@ -1430,10 +1516,15 @@ export function ChatPane({
                     setSlashDismissed(true);
                     return;
                   }
-                  const picked = slashMatches[slashActiveIndex];
-                  if (picked && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey))) {
+                  if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
                     e.preventDefault();
-                    completeSlashCommand(picked);
+                    if (slashActiveIndex < pickerCommands.length) {
+                      const picked = pickerCommands[slashActiveIndex];
+                      if (picked) completeSlashCommand(picked);
+                    } else {
+                      const picked = refMatches[slashActiveIndex - pickerCommands.length];
+                      if (picked) insertChatReference(picked);
+                    }
                     return;
                   }
                 }
@@ -1453,6 +1544,7 @@ export function ChatPane({
                 agentRunning,
                 noModelsAvailable,
                 modelLabel: displayModelLabel,
+                mentionsEnabled: mentionsOn,
               })}
               className="chat-pane-textarea"
               style={
@@ -1478,29 +1570,30 @@ export function ChatPane({
                   uiTarget="chat.composer.mode"
                 />
               ) : null}
-              <ContextMeter
-                usedTokens={contextUsage.used_tokens}
-                contextLimit={contextUsage.context_limit}
-                inputTokens={contextUsage.input_tokens}
-                outputTokens={contextUsage.output_tokens}
-                usage={contextUsage}
-                sessionFiles={sessionFiles}
-                isGroup={Boolean(chat.isGroup)}
-                convId={chat.id}
-                omitted={contextUsage.omitted}
-                agentMode={agentMode}
-                model={selectedModel}
-                agentRunning={agentRunning}
-                panelOpen={contextPanelOpen}
-                onTogglePanel={handleToggleContextPanel}
-                onClosePanel={() => setContextPanelOpen(false)}
-                onOpenFile={handleOpenFile}
-                onContextChanged={handleContextChanged}
-                onClearDraft={() => {
-                  setInputText("");
-                  clearAttachments();
-                }}
-              />
+              {!chat.isGroup ? (
+                <ContextMeter
+                  usedTokens={contextUsage.used_tokens}
+                  contextLimit={contextUsage.context_limit}
+                  inputTokens={contextUsage.input_tokens}
+                  outputTokens={contextUsage.output_tokens}
+                  usage={contextUsage}
+                  sessionFiles={sessionFiles}
+                  convId={chat.id}
+                  omitted={contextUsage.omitted}
+                  agentMode={agentMode}
+                  model={selectedModel}
+                  agentRunning={agentRunning}
+                  panelOpen={contextPanelOpen}
+                  onTogglePanel={handleToggleContextPanel}
+                  onClosePanel={() => setContextPanelOpen(false)}
+                  onOpenFile={handleOpenFile}
+                  onContextChanged={handleContextChanged}
+                  onClearDraft={() => {
+                    setInputText("");
+                    clearAttachments();
+                  }}
+                />
+              ) : null}
               {!chat.isGroup ? (
                 <>
                   <div className="chat-pane-toolbar-divider" />
@@ -1521,7 +1614,9 @@ export function ChatPane({
                   </div>
                 </>
               ) : null}
-              <ChatChangesButton open={changesOpen} onClick={() => setChangesOpen((v) => !v)} />
+              {!chat.isGroup ? (
+                <ChatChangesButton open={changesOpen} onClick={() => setChangesOpen((v) => !v)} />
+              ) : null}
             </div>
 
             <div className="chat-pane-input-toolbar-right">
@@ -1535,9 +1630,9 @@ export function ChatPane({
                   })
                 }
               />
-              <GeneratedImagesButton
-                disabled={modelsUnavailable || Boolean(chat.isGroup)}
-                onPick={(att) => restoreAttachments([att])}
+              <AttachMenuButton
+                disabled={modelsUnavailable}
+                onAddFiles={(files) => void addFiles(files)}
               />
               <VoiceControls
                 chatId={chat.id}

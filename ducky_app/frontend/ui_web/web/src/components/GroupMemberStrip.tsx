@@ -490,7 +490,7 @@ export function GroupMemberStrip({
             return (
               <div
                 key={m.member_conv_id}
-                className="group-member-chip-wrap"
+                className={`group-member-chip-wrap${nestedGroup ? " group-member-chip-wrap--nested" : ""}`}
                 ref={editing ? modelEditWrapRef : laneEditing ? laneEditWrapRef : undefined}
               >
                 <EditorTabHoverCardShell
@@ -647,6 +647,11 @@ export function GroupMemberStrip({
                         {shortLaneLabel(m.write_allowed)}
                       </button>
                     ) : null}
+                    {!nestedGroup ? (
+                      <span className="group-member-chip-tokens" title="Context">
+                        {fmtCompactTokens(contextTokens)}
+                      </span>
+                    ) : null}
                     {conflictCount > 0 ? (
                       <span
                         className="group-member-chip-conflict"
@@ -664,6 +669,18 @@ export function GroupMemberStrip({
                     </button>
                   </span>
                 </EditorTabHoverCardShell>
+                {nestedGroup ? (
+                  <div className="group-member-nested-roster" aria-label={`${duckyName} agents`}>
+                    {nestedRoster.map((row) => (
+                      <span key={row.id} className="group-member-nested-roster-row">
+                        <span className="group-member-nested-roster-name">{row.name}</span>
+                        <span className="group-member-nested-roster-tokens" title="Context">
+                          {fmtCompactTokens(row.contextTokens)}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 {editing ? (
                   <div className="group-member-model-popover">
                     <div className="group-member-model-popover-label">Model for {duckyName}</div>

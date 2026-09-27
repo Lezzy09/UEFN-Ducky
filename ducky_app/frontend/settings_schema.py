@@ -153,6 +153,18 @@ FIELD_META: dict[str, FieldMeta] = {
         settable=True,
         description="Rename a new ducky after the role its first message asks for.",
     ),
+    "chat_mentions_enabled": FieldMeta(
+        "Chat @ mentions",
+        "Appearance",
+        settable=True,
+        description="Show the @ menu in the composer.",
+    ),
+    "chat_slash_references_enabled": FieldMeta(
+        "Chat / references",
+        "Appearance",
+        settable=True,
+        description="Show skills, MCPs, and plugins under the / command menu.",
+    ),
     "chat_title_model": FieldMeta(
         "Chat title model",
         "LLMs",
