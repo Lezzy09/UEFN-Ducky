@@ -30,7 +30,14 @@ const SEARCH_TOOLS = new Set([
 const SCREENSHOT_TOOLS = new Set([
   "take_high_res_screenshot",
   "preview_asset",
+  "uefn_window_capture",
+  "ducky_publish_private_version",
+  "blender_get_viewport_screenshot",
 ]);
+
+function isCaptureTool(name: string): boolean {
+  return SCREENSHOT_TOOLS.has(name) || nameIncludes(name, "screenshot");
+}
 
 const SKILL_TOOLS = new Set(["uefn_skill", "skill_read_subskill", "Skill"]);
 
@@ -99,13 +106,14 @@ function isFileWriteTool(name: string): boolean {
 }
 
 /**
- * Only file writes (inline diff) and ask-user stay as standalone rows.
+ * File writes, captures, ask-user, and web lookup stay as standalone rows.
  * Reads / search / bash / verse diagnostics fold into the "N tools" accordion
  * so they don't sit between chat bubbles.
  */
 export function isStandaloneToolCard(toolName: string): boolean {
   return (
     isFileWriteTool(toolName) ||
+    isCaptureTool(toolName) ||
     toolName === "ducky_ask_user" ||
     toolName === "web_search" ||
     toolName === "web_fetch"
@@ -157,7 +165,7 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     id: "screenshot",
     icon: () => <Icons.Camera />,
     label: (name) => humanToolLabel(name),
-    match: (name) => SCREENSHOT_TOOLS.has(name) || nameIncludes(name, "screenshot"),
+    match: isCaptureTool,
     Body: ScreenshotBody,
   },
   {

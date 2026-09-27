@@ -75,6 +75,8 @@ def capture_uefn_window(*, hwnd: int = 0, title_regex: str = "") -> dict[str, An
     from frontend.ui_web.tool_captures import save_capture_for_agents
 
     saved = save_capture_for_agents(buf.getvalue(), prefix="uefn_window")
+    if not saved.get("ok"):
+        return {"ok": False, "error": str(saved.get("error") or "Screenshot was not saved: no active chat.")}
     return {
         "ok": True,
         "hwnd": win.get("hwnd"),

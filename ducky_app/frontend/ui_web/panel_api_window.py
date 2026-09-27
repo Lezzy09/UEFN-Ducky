@@ -636,12 +636,11 @@ class PanelApiWindowMixin:
 
         schedule_desktop_confetti(self._tk_root, screen_x, screen_y)
 
-    def snip_screen(self) -> dict[str, Any]:
+    def snip_screen(self, conv_id: str = "") -> dict[str, Any]:
         """Open the Windows region snipper and attach the result to the chat.
 
-        Accepted snips are saved under AppData only (tool_captures / snips) —
-        never into the UEFN project folder (``.ducky/**`` is the only allowed
-        project-side Ducky storage).
+        Accepted snips are saved in that chat's AppData attachments folder.
+        Never Temp, tool_captures, or the UEFN project.
         """
         if _pa.sys.platform != "win32":
             return {"ok": False, "reason": "unsupported"}
@@ -653,17 +652,17 @@ class PanelApiWindowMixin:
                 import base64 as _b64
                 from datetime import datetime
 
-                from frontend.ui_web.tool_captures import copy_png_to_ducky_captures
+                from frontend.ui_web.conversation_attachments import save_chat_screenshot
 
                 raw = _b64.b64decode(str(result["data_base64"]))
                 name = f"snip-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')[:-3]}.png"
                 result["name"] = name
-
-                # AppData tool_captures only — never mkdir chats/projects stubs.
-                capture_path = copy_png_to_ducky_captures(raw, prefix="snip", filename=name)
-                if capture_path:
-                    result["path"] = capture_path
-                    result["capture_path"] = capture_path
+                saved = save_chat_screenshot(raw, prefix="snip", conv_id=str(conv_id or ""))
+                if saved.get("ok") and saved.get("path"):
+                    result["name"] = str(saved.get("filename") or name)
+                    result["path"] = str(saved["path"])
+                    result["capture_path"] = str(saved.get("capture_path") or saved["path"])
+                    result["media_url"] = str(saved.get("media_url") or "")
             except Exception:
                 pass  # disk copy is best-effort; the composer attachment still works
         return result

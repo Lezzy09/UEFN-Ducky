@@ -4,10 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
-import tempfile
-import time
-import uuid
 from typing import Any
 
 import unreal
@@ -25,13 +21,6 @@ def _editor_world():
 #: and it completes on the calling frame.
 _CAPTURE_TOOLSET = "EditorToolset.EditorAppToolset"
 _CAPTURE_TOOL = "CaptureViewport"
-
-
-def _captures_dir() -> str:
-    """OS temp — never the UEFN project folder. The host copies into AppData."""
-    root = os.path.join(tempfile.gettempdir(), "ducky_captures")
-    os.makedirs(root, exist_ok=True)
-    return root
 
 
 def _capture_viewport_png() -> bytes:
@@ -61,14 +50,6 @@ def _capture_viewport_png() -> bytes:
     return base64.b64decode(data)
 
 
-def _capture_filename(filename: str) -> str:
-    """Unique PNG name, seeded from the caller's name when it gave one."""
-    raw = os.path.basename((filename or "").strip())
-    stem = raw[:-4] if raw.lower().endswith(".png") and raw.lower() != ".png" else ""
-    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in stem)[:48] or "uefn_ducky"
-    return f"{safe}_{int(time.time())}_{uuid.uuid4().hex[:8]}.png"
-
-
 def exec_console_command(command: str) -> dict:
     """Run an editor console command (e.g. 'stat fps', 'r.ScreenPercentage 100')."""
     if not command.strip():
@@ -96,26 +77,21 @@ def take_high_res_screenshot(width: int = 1280, height: int = 720, filename: str
     the editor, which is how captures used to "start" and never produce a PNG.
 
     Goes through Epic's ``EditorAppToolset.CaptureViewport``, which reads the
-    viewport back on the calling frame and returns the PNG inline. The file is
-    written to OS temp and the host copies it into AppData ``tool_captures``.
+    viewport back on the calling frame and returns the PNG inline. This process
+    does not write a file — the host saves the bytes in the active chat folder.
     ``width``/``height`` are recorded as the requested size only — the PNG
-    matches the viewport.
+    matches the viewport. ``filename`` is unused (kept so older callers still match).
     """
+    del filename  # host names the chat-folder file
     raw = _capture_viewport_png()
-    name = _capture_filename(filename)
-    path = os.path.join(_captures_dir(), name)
-    with open(path, "wb") as handle:
-        handle.write(raw)
-    out: dict[str, Any] = {
+    return {
         "width": int(width),
         "height": int(height),
-        "filename": name,
-        "path": path,
+        "png_base64": base64.b64encode(raw).decode("ascii"),
         "bytes": len(raw),
         "method": _CAPTURE_TOOL,
         "viewport_capture": True,
     }
-    return out
 
 
 def play_in_editor() -> dict:

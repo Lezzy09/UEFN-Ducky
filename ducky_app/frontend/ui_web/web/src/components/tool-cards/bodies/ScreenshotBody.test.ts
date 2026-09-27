@@ -4,6 +4,7 @@ import {
   pickScreenshotBase64,
   pickScreenshotMediaUrl,
   pickScreenshotPath,
+  screenshotSrcFromPath,
 } from "./ScreenshotBody";
 
 const TINY_PNG_B64 =
@@ -41,6 +42,13 @@ describe("ScreenshotBody result parsing", () => {
     const data = parseScreenshotResult(raw);
     expect(pickScreenshotBase64(data)).toBe(TINY_PNG_B64);
     expect(pickScreenshotPath(data, {})).toContain("blender_screenshot_1.png");
+  });
+
+  it("builds a chat-attachment url from the saved path", () => {
+    const path =
+      "C:/Users/x/AppData/Local/UEFN-Ducky/chats/projects/island/conversations/chat-1/attachments/uefn_viewport_1.png";
+    expect(screenshotSrcFromPath(path)).toBe("/chat-attachments/chat-1/uefn_viewport_1.png");
+    expect(screenshotSrcFromPath("C:/Temp/ducky_captures/shot.png")).toBe("");
   });
 
   it("does not invent Saved/Screenshots path when nothing was returned", () => {

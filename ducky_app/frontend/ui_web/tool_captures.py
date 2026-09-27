@@ -145,9 +145,8 @@ def save_tool_capture_png(raw: bytes, *, prefix: str = "capture") -> dict[str, o
     }
 
 
-def save_capture_for_agents(raw: bytes, *, prefix: str = "capture") -> dict[str, object]:
-    """AppData-only capture. Never mirrors into the UEFN project folder."""
-    saved = save_tool_capture_png(raw, prefix=prefix)
-    out = dict(saved)
-    out["capture_path"] = str(saved.get("path") or "")
-    return out
+def save_capture_for_agents(raw: bytes, *, prefix: str = "capture", conv_id: str = "") -> dict[str, object]:
+    """Save a Ducky screenshot in the active chat folder. Never Temp, tool_captures, or the project."""
+    from frontend.ui_web.conversation_attachments import save_chat_screenshot
+
+    return save_chat_screenshot(raw, prefix=prefix, conv_id=conv_id)

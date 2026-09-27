@@ -37,10 +37,12 @@ describe("resolveToolCategory", () => {
     expect(resolveToolCategory("web_search").Body).toBeTruthy();
     expect(isStandaloneToolCard("web_search")).toBe(true);
     expect(isStandaloneToolCard("web_fetch")).toBe(true);
+    expect(isStandaloneToolCard("take_high_res_screenshot")).toBe(true);
+    expect(isStandaloneToolCard("uefn_window_capture")).toBe(true);
     expect(resolveToolCategory("search_assets").id).toBe("search");
   });
 
-  it("only file writes, ask-user, and web lookup stay standalone (reads/bash fold into accordion)", () => {
+  it("file writes, captures, ask-user, and web lookup stay standalone", () => {
     expect(isStandaloneToolCard("workspace_write_file")).toBe(true);
     expect(isStandaloneToolCard("Write")).toBe(true);
     expect(isStandaloneToolCard("Edit")).toBe(true);
@@ -56,6 +58,8 @@ describe("resolveToolCategory", () => {
   it("maps screenshot tools", () => {
     expect(resolveToolCategory("take_high_res_screenshot").id).toBe("screenshot");
     expect(resolveToolCategory("preview_asset").id).toBe("screenshot");
+    expect(resolveToolCategory("uefn_window_capture").id).toBe("screenshot");
+    expect(resolveToolCategory("ducky_publish_private_version").id).toBe("screenshot");
   });
 
   it("maps python tools", () => {

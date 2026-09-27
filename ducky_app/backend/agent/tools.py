@@ -785,17 +785,78 @@ async def execute_tool(
     return result
 
 
+_INVENTED_TOOL_HINT = (
+    "Call ducky_call_tool with the flat name (blender_* or prefix__tool). "
+    "Do not invent mcp__, computer, or computer_use. "
+    "Find the name with ducky_find_tools."
+)
+
+
+def resolve_invented_tool_name(name: str, known: set[str]) -> str | None:
+    """Map one invented MCP name onto the single registered tool it means.
+
+    ``mcp__uefn__<tool>`` is this app, so the tool is ``<tool>``.
+    ``mcp__<prefix>__<tool>`` is ``<prefix>__<tool>``.
+    A hyphenated ``mcp-…-<tail>`` matches only when one registered name is
+    ``<tail>`` or ends with ``_<tail>``. Several matches is no match.
+    """
+    raw = (name or "").strip()
+    if not raw or raw in known:
+        return None
+    found: list[str] = []
+    if raw.startswith("mcp__"):
+        rest = raw[len("mcp__") :]
+        if rest.startswith("uefn__"):
+            rest = rest[len("uefn__") :]
+        if rest in known:
+            found.append(rest)
+    if raw.startswith("mcp-") and "-" in raw:
+        tail = raw.rsplit("-", 1)[-1].strip()
+        if tail and tail != raw:
+            hits = [item for item in known if item == tail or item.endswith("_" + tail)]
+            if len(hits) == 1 and hits[0] not in found:
+                found.append(hits[0])
+    if len(found) == 1:
+        return found[0]
+    return None
+
+
+def _unknown_tool_message(name: str) -> str:
+    return f"Unknown tool: {name}. {_INVENTED_TOOL_HINT}"
+
+
 async def _execute_tool_inner(
     name: str,
     arguments: dict[str, Any] | None = None,
     *,
     cancel_event: Any | None = None,
+    _alias_tried: bool = False,
 ) -> ToolCallResult:
     args = arguments or {}
     t0 = time.time()
     if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
         ms = int((time.time() - t0) * 1000)
         return ToolCallResult(ok=False, tool=name, error="Cancelled", duration_ms=ms)
+
+    if not _alias_tried and (name.startswith("mcp__") or name.startswith("mcp-")):
+        try:
+            known = {str(getattr(t, "name", "") or "") for t in await list_mcp_tools()}
+        except Exception:
+            known = set()
+        if name not in known:
+            rewritten = resolve_invented_tool_name(name, known)
+            if rewritten:
+                return await _execute_tool_inner(
+                    rewritten, arguments, cancel_event=cancel_event, _alias_tried=True
+                )
+            ms = int((time.time() - t0) * 1000)
+            return ToolCallResult(
+                ok=False,
+                tool=name,
+                error=_unknown_tool_message(name),
+                hint=_INVENTED_TOOL_HINT,
+                duration_ms=ms,
+            )
 
     try:
         from frontend.duckyos_account import tool_blocked_by_caps
@@ -918,6 +979,23 @@ async def _execute_tool_inner(
         text = _content_to_text(raw)
         ms = int((time.time() - t0) * 1000)
         if _looks_like_tool_failure(name, text):
+            if not _alias_tried and "Unknown tool:" in text:
+                try:
+                    known = {str(getattr(t, "name", "") or "") for t in await list_mcp_tools()}
+                except Exception:
+                    known = set()
+                rewritten = resolve_invented_tool_name(name, known)
+                if rewritten:
+                    return await _execute_tool_inner(
+                        rewritten, arguments, cancel_event=cancel_event, _alias_tried=True
+                    )
+                return ToolCallResult(
+                    ok=False,
+                    tool=name,
+                    error=_unknown_tool_message(name),
+                    hint=_INVENTED_TOOL_HINT,
+                    duration_ms=ms,
+                )
             hint = _hint_for_error(name, text)
             _record_plugin_sidecar(name, args, text, ok=False)
             return ToolCallResult(ok=False, tool=name, error=text[:8000], hint=hint, duration_ms=ms)
@@ -934,6 +1012,23 @@ async def _execute_tool_inner(
     except Exception as e:
         ms = int((time.time() - t0) * 1000)
         msg = str(e)
+        if not _alias_tried and "Unknown tool:" in msg:
+            try:
+                known = {str(getattr(t, "name", "") or "") for t in await list_mcp_tools()}
+            except Exception:
+                known = set()
+            rewritten = resolve_invented_tool_name(name, known)
+            if rewritten:
+                return await _execute_tool_inner(
+                    rewritten, arguments, cancel_event=cancel_event, _alias_tried=True
+                )
+            return ToolCallResult(
+                ok=False,
+                tool=name,
+                error=_unknown_tool_message(name),
+                hint=_INVENTED_TOOL_HINT,
+                duration_ms=ms,
+            )
         return ToolCallResult(
             ok=False,
             tool=name,

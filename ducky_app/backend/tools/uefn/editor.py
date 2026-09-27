@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -16,9 +18,43 @@ _SCREENSHOT_FILE_WAIT_SEC = 8.0
 _SCREENSHOT_BRIDGE_TIMEOUT_SEC = 45.0
 
 
+def _drop_temp_capture(path: str) -> None:
+    """Remove a listener leftover under %TEMP%/ducky_captures. Leave every other file."""
+    src = Path(path)
+    try:
+        src.resolve().relative_to((Path(tempfile.gettempdir()) / "ducky_captures").resolve())
+    except (ValueError, OSError):
+        return
+    try:
+        src.unlink()
+    except OSError:
+        pass
+
+
+def _png_bytes(result: dict[str, Any]) -> bytes:
+    path = str(result.get("path") or "").strip()
+    raw = b""
+    b64 = str(result.get("png_base64") or "").strip()
+    if b64:
+        try:
+            raw = base64.b64decode(b64)
+        except Exception:
+            raw = b""
+    elif path and Path(path).is_file():
+        try:
+            raw = Path(path).read_bytes()
+        except OSError:
+            raw = b""
+    if path:
+        _drop_temp_capture(path)
+    return raw
+
+
 def _wait_for_screenshot_file(result: dict[str, Any]) -> dict[str, Any]:
     """Poll for the PNG on the host after a non-blocking viewport capture."""
     if not isinstance(result, dict):
+        return result
+    if str(result.get("png_base64") or "").strip():
         return result
     path = str(result.get("path") or "").strip()
     if not path:
@@ -56,45 +92,41 @@ def _wait_for_screenshot_file(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _enrich_screenshot(result: dict[str, Any]) -> dict[str, Any]:
-    """Attach media_url + AppData tool_captures copy; keep base64 out of results.
+    """Save the PNG in the active chat folder and keep base64 out of the result.
 
-    HARD: never write captures into the UEFN project folder (``.ducky/**`` only).
-    ``path`` / ``capture_path`` live under ``%LOCALAPPDATA%/UEFN-Ducky/tool_captures``.
+    The only file is ``chats/projects/…/conversations/<chat>/attachments``.
     """
     if not isinstance(result, dict):
         return result
-    if result.get("error") and not Path(str(result.get("path") or "")).is_file():
-        return result
-    path = (result.get("path") or "").strip()
-    if not path:
-        return result
-    src = Path(path)
-    if not src.is_file():
-        return result
+    raw = _png_bytes(result)
+    out = {k: v for k, v in result.items() if k != "png_base64"}
+    if result.get("error") and not raw:
+        return out
+    if not raw:
+        return out
     try:
         from frontend.ui_web.tool_captures import save_capture_for_agents
 
-        raw = src.read_bytes()
         saved = save_capture_for_agents(raw, prefix="uefn_viewport")
-        out = {**result}
-        appdata_path = str(saved.get("path") or "")
-        if appdata_path and Path(appdata_path).is_file():
-            out["path"] = appdata_path
-            out["ue_screenshot_path"] = path
-        else:
-            out["path"] = path
+        if not saved.get("ok") or not Path(str(saved.get("path") or "")).is_file():
+            out["error"] = str(saved.get("error") or "Screenshot was not saved: no active chat.")
+            out.pop("path", None)
+            return out
+        out["path"] = str(saved.get("path") or "")
         out["capture_path"] = str(saved.get("capture_path") or saved.get("path") or "")
         out["media_url"] = saved.get("media_url") or ""
         out["capture_filename"] = saved.get("filename") or ""
+        out["conv_id"] = saved.get("conv_id") or ""
         out["bytes"] = saved.get("bytes")
         out["hint"] = (
-            "Capture is AppData tool_captures (never the UEFN project folder). "
+            "Capture is in this chat's AppData attachments folder. "
             "Image is also returned as MCP image content when available."
         )
         out.pop("await_path", None)
+        out.pop("error", None)
         return out
     except Exception as exc:
-        return {**result, "capture_error": str(exc)[:200]}
+        return {**out, "capture_error": str(exc)[:200]}
 
 
 def _screenshot_mcp_payload(result: dict[str, Any], *, pretty: bool) -> Any:
@@ -131,8 +163,8 @@ def take_high_res_screenshot(
 
     Uses a fast viewport-buffer capture on the listener (not Unreal's high-res
     offscreen path, which stalls the editor on dense levels). Returns ``path``
-    under ``%LOCALAPPDATA%/UEFN-Ducky/tool_captures`` (never the UEFN project
-    folder) + ``media_url`` for panel preview, and an MCP image content block.
+    under this chat's AppData attachments folder (never Temp, tool_captures, or
+    the UEFN project) + ``media_url`` for the chat card, and an MCP image block.
     Never Bash-find for screenshot PNGs. ``width``/``height`` are advisory;
     the PNG matches the current viewport.
     """
@@ -142,10 +174,13 @@ def take_high_res_screenshot(
         timeout=_SCREENSHOT_BRIDGE_TIMEOUT_SEC,
     )
     if isinstance(result, dict):
-        if result.get("error") and not result.get("path"):
+        if result.get("error") and not result.get("path") and not result.get("png_base64"):
             return tool_json(result, pretty=pretty)
         result = _wait_for_screenshot_file(result)
-        if result.get("error") and not Path(str(result.get("path") or "")).is_file():
+        has_bytes = bool(str(result.get("png_base64") or "").strip()) or Path(
+            str(result.get("path") or "")
+        ).is_file()
+        if result.get("error") and not has_bytes:
             return tool_json(result, pretty=pretty)
         result = _enrich_screenshot(result)
         return _screenshot_mcp_payload(result, pretty=pretty)
