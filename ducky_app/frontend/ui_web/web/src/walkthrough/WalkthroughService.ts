@@ -293,11 +293,21 @@ export async function redoAppWalkthrough(): Promise<boolean> {
 }
 
 /**
+ * Start Welcome (`app.shell`) at step 1 when it has not been finished or skipped.
+ * Gateway seeding does not decide whether the tour exists.
+ * Returns false when the tour is already done or could not start (caller may retry).
+ */
+export async function startAppShellIfNeeded(): Promise<boolean> {
+  if (isCompleted("app.shell")) return false;
+  return startTour("app.shell");
+}
+
+/**
  * Auto-start the first registered tour with autoStart=first_incomplete that is not done.
  * Marks it completed immediately so force-quit / update cannot re-offer on every launch.
  *
  * Disabled 2026-07-20: WalkthroughOverlay rAF + setState hit React #185 and bricked
- * app open (1.0.565). Manual replay via Settings → Add to UEFN still works.
+ * app open (1.0.565). First-run uses startAppShellIfNeeded instead.
  */
 export function autoStartPending(): void {
   // ponytail: re-enable after WalkthroughOverlay is proven crash-free in production.

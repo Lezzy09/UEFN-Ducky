@@ -75,6 +75,18 @@ describe("first-run Store → LLM setup", () => {
     expect(APP_SHELL_TOUR.onCompleteStart).toBe("settings.store");
     expect(HOST_TOUR_CATALOG_IDS).toContain("chat.composer");
     expect(HOST_TOUR_CATALOG_IDS).not.toContain("settings.core");
+    const targets = APP_SHELL_TOUR.steps.map((s) => s.target);
+    expect(targets).toContain("shell.duckies.header");
+    expect(targets).toContain("shell.duckies.menu");
+    const bodies = APP_SHELL_TOUR.steps.map((s) => s.body).join(" ");
+    expect(bodies).toMatch(/Plugin Store/);
+    expect(bodies).toMatch(/Gateways/);
+    expect(bodies).toMatch(/Skills/);
+    expect(bodies).toMatch(/MCP/);
+    expect(bodies).toMatch(/All projects/);
+    expect(APP_SHELL_TOUR.steps.find((s) => s.target === "shell.duckies.menu")?.onEnter).toBeTypeOf(
+      "function",
+    );
   });
 
   it("Store tour installs starter gateways then chains to LLM keys", () => {

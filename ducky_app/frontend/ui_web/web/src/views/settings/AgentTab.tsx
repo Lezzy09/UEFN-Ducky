@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { getApi } from "../../hooks/usePanelApi";
 import { onApiReady } from "../../hooks/onApiReady";
 import { Icons } from "../../icons/Icons";
@@ -18,6 +18,7 @@ import { GeneralSectionHeader } from "./GeneralSectionHeader";
 import { PluginSettingsSections } from "./PluginSettingsSections";
 import { SettingsToggleRow } from "./SettingsToggleRow";
 import { DuckyModelPicker } from "../../components/ducky/DuckyModelPicker";
+import { unsetDefaultGatewayIcons, type GatewayIcon } from "./defaultModelGateways";
 import {
   usePluginContributions,
   type PluginLlmProvider,
@@ -25,6 +26,8 @@ import {
 import { refreshModelsCatalog } from "../../hooks/modelsCatalogCache";
 import {
   clearLlmsShortcutJump,
+  consumeDefaultModelHighlight,
+  HIGHLIGHT_DEFAULT_MODEL_EVENT,
   llmsJumpRecordAction,
   peekLlmsShortcutJump,
   requestOpenSettings,
@@ -125,6 +128,10 @@ function DefaultModelSection() {
   const [loaded, setLoaded] = useState(false);
   const [defaultModel, setDefaultModel] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [highlight, setHighlight] = useState(false);
+  const [gatewayIcons, setGatewayIcons] = useState<GatewayIcon[]>([]);
+  const [busySlug, setBusySlug] = useState<string | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     return onApiReady((api) => {
@@ -134,6 +141,66 @@ function DefaultModelSection() {
       });
     });
   }, []);
+
+  useEffect(() => {
+    let timer = 0;
+    const pulse = () => {
+      setHighlight(true);
+      cardRef.current?.scrollIntoView({ block: "center", inline: "nearest" });
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setHighlight(false), 2600);
+    };
+    if (consumeDefaultModelHighlight()) pulse();
+    const onHighlight = () => {
+      consumeDefaultModelHighlight();
+      pulse();
+    };
+    window.addEventListener(HIGHLIGHT_DEFAULT_MODEL_EVENT, onHighlight);
+    return () => {
+      window.removeEventListener(HIGHLIGHT_DEFAULT_MODEL_EVENT, onHighlight);
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  const loadGatewayIcons = useCallback(async () => {
+    const api = getApi();
+    if (!api?.duckyos_store_catalog) return;
+    try {
+      const catalog = await api.duckyos_store_catalog();
+      setGatewayIcons(unsetDefaultGatewayIcons(catalog.items || []));
+    } catch {
+      /* catalog can be offline — the picker still works */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!loaded || defaultModel.trim()) return;
+    void loadGatewayIcons();
+  }, [loaded, defaultModel, loadGatewayIcons]);
+
+  useEffect(() => {
+    return subscribePanelPush((event) => {
+      if (event.type === "uefn_plugins_changed") void loadGatewayIcons();
+    });
+  }, [loadGatewayIcons]);
+
+  const installGateway = async (slug: string) => {
+    if (busySlug) return;
+    setBusySlug(slug);
+    try {
+      const { runBridgeJob } = await import("../../hooks/bridgeJobAsync");
+      const result = await runBridgeJob<{ ok?: boolean }>(
+        "duckyos_store_download",
+        [slug, "", false],
+        180_000,
+      );
+      if (result?.ok) setGatewayIcons((rows) => rows.filter((row) => row.slug !== slug));
+    } catch {
+      /* leave the icon so they can retry */
+    } finally {
+      setBusySlug(null);
+    }
+  };
 
   const save = async (next: string) => {
     const api = getApi();
@@ -149,8 +216,13 @@ function DefaultModelSection() {
     }
   };
 
+  const showGatewayIcons = loaded && !defaultModel.trim() && gatewayIcons.length > 0;
+
   return (
-    <div className="llms-default-model-card">
+    <div
+      ref={cardRef}
+      className={`llms-default-model-card${highlight ? " is-highlight" : ""}`}
+    >
       <div className="llms-default-model-row">
         <h3 className="llms-default-model-title">
           <span className="general-tab-section-icon" aria-hidden>
@@ -180,6 +252,22 @@ function DefaultModelSection() {
               ? " Could not save."
               : ""}
       </p>
+      {showGatewayIcons ? (
+        <div className="llms-default-model-gateways" role="group" aria-label="Install a gateway">
+          {gatewayIcons.map((row) => (
+            <button
+              key={row.slug}
+              type="button"
+              className="llms-default-model-gateway"
+              aria-label={`Install ${row.slug}`}
+              disabled={busySlug !== null}
+              onClick={() => void installGateway(row.slug)}
+            >
+              <img src={row.icon} alt="" draggable={false} />
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

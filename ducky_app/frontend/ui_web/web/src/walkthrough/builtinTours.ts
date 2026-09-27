@@ -404,52 +404,72 @@ function settingsChromeTabSteps(
   ];
 }
 
+function openDuckiesMenu(): Promise<void> {
+  window.dispatchEvent(new Event("ducky:open-duckies-menu"));
+  return wait(120);
+}
+
 export const APP_SHELL_TOUR: WalkthroughDef = {
   id: "app.shell",
   title: "Welcome",
-  description: "Top bar, docks, chat history, and opening Settings.",
+  description: "Top bar, docks, duckies, plugins, and opening the Plugin Store.",
   autoStart: "first_incomplete",
   onCompleteStart: "settings.store",
   steps: [
     {
       target: "shell.header",
-      title: "Top bar",
-      body: "Project picker, connection status, layout toggles, and quick open live up here.",
+      title: "UEFN Ducky",
+      body: "This is the desktop app for your Fortnite islands. The top bar picks an island, shows whether UEFN is connected, and opens Settings.",
       advance: "next",
       mode: "rect",
     },
     {
       target: "shell.left",
-      title: "Left side",
-      body: "Your workspace dock — chats, project files, and plugin panels you pin here.",
+      title: "Left dock",
+      body: "The left side holds Duckies (your chats), the island's files, and any panels a plugin pins here.",
       advance: "next",
       mode: "rect",
     },
     {
       target: "shell.chat_history",
-      title: "Chat history",
-      body: "Conversation list and Duckies. Open a chat or create a new one from here.",
+      title: "Duckies",
+      body: "A ducky is a chat. You can make one before an island is open. Those chats are kept outside any project and stay with you when you add one later.",
       advance: "next",
       mode: "rect",
     },
     {
+      target: "shell.duckies.header",
+      title: "Duckies menu",
+      body: "Right-click the Duckies header. That menu makes a New Ducky or a New Group Chat, and it holds Compact and All projects.",
+      advance: "next",
+      mode: "rect",
+    },
+    {
+      target: "shell.duckies.menu",
+      title: "All projects",
+      body: "All projects is on, so every island is listed. Duckies made with no island open sit under No project and still show in each island when you turn All projects off. Compact tightens the list.",
+      advance: "next",
+      mode: "rect",
+      onEnter: openDuckiesMenu,
+    },
+    {
       target: "shell.main",
       title: "Main area",
-      body: "Editors, chat panes, plans, and plugin tabs open in the center.",
+      body: "The center is where the chat, editors, and plans open.",
       advance: "next",
       mode: "rect",
     },
     {
       target: "shell.right",
-      title: "Right side",
-      body: "Outline, file history, tester, and other dock panels when pinned on the right.",
+      title: "Right dock",
+      body: "The right side holds outline, file history, the tester, and plugin panels you pin there.",
       advance: "next",
       mode: "rect",
     },
     {
       target: "header.settings",
-      title: "Open Settings",
-      body: "Press the Ducky / Settings button to open Settings — required to continue.",
+      title: "Plugins and Settings",
+      body: "A plugin adds something to the app. Skills tell a ducky how to do a job. Custom tools are actions it can run. MCP connections let it talk to other apps. Plugins can also add themes, dock panels, and automations. Gateways are the plugins that connect a model: OpenAI, Cursor, Anthropic, and Ollama. Press Settings. Next, open the Plugin Store and install from there.",
       advance: "require_click",
       mode: "circle",
     },
@@ -547,23 +567,25 @@ export const SETTINGS_STORE_TOUR: WalkthroughDef = {
   autoStart: "never",
   onCompleteStart: "llms.setup",
   steps: [
-    {
-      target: "settings.content",
-      title: "Ducky Store",
-      body: "Browse plugins, themes, and tools. Sign in with your DuckyOS account to install.",
-      advance: "next",
-      mode: "rect",
-      onEnter: async () => {
-        requestOpenSettings("Store");
-        await wait(300);
+    clickStep(
+      settingsTabTargetId("Store"),
+      "Plugin Store",
+      "Press Store. Install plugins here: skills, custom tools, MCP connections, themes, dock panels, and gateways for OpenAI, Cursor, Anthropic, and Ollama. Sign in with your DuckyOS account to install.",
+      async () => {
+        requestOpenSettings();
+        await wait(200);
       },
-    },
+    ),
     {
       target: "settings.store.catalog",
       title: "Catalog",
       body: "Cards and rows show what you can install. Open a card for details, install, or updates.",
       advance: "next",
       mode: "rect",
+      onEnter: async () => {
+        requestOpenSettings("Store");
+        await wait(200);
+      },
     },
     {
       target: "settings.store.catalog",

@@ -2403,6 +2403,51 @@ def _plugin_contributes_summary(plug: dict[str, Any]) -> list[str]:
     return deduped
 
 
+def _stripe_product_key_for_slug(slug: str) -> str:
+    """Catalog product key, or ``uds:{slug}`` when the item has none."""
+    fallback = f"uds:{slug}"
+    try:
+        catalog = store_catalog()
+    except Exception:
+        return fallback
+    items = catalog.get("items") if isinstance(catalog, dict) else None
+    if not isinstance(items, list):
+        return fallback
+    for item in items:
+        if not isinstance(item, dict) or str(item.get("slug") or "") != slug:
+            continue
+        key = str(item.get("stripe_product_key") or "").strip()
+        return key or fallback
+    return fallback
+
+
+def _wait_store_owned(slug: str, *, attempts: int = 16) -> bool:
+    """Poll the catalog until the Stripe webhook has recorded this purchase."""
+    import time
+
+    slug = (slug or "").strip()
+    if not slug:
+        return False
+    for i in range(max(1, attempts)):
+        if i:
+            time.sleep(0.5)
+        try:
+            catalog = store_catalog()
+        except Exception:
+            continue
+        items = catalog.get("items") if isinstance(catalog, dict) else None
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if (
+                isinstance(item, dict)
+                and str(item.get("slug") or "") == slug
+                and item.get("owned")
+            ):
+                return True
+    return False
+
+
 def store_checkout(
     slug: str,
     *,
@@ -2411,8 +2456,8 @@ def store_checkout(
 ) -> dict[str, Any]:
     """Start Stripe Checkout for a paid Store item (requires DuckyOS sign-in).
 
-    Spawns a short-lived localhost callback so Stripe can return the session id
-    and we can ``grant`` ownership without relying solely on the site webhook.
+    The Stripe plugin creates the session. Ownership is written when its webhook
+    fires; the localhost return page waits for that row instead of granting itself.
     """
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -2442,8 +2487,9 @@ def store_checkout(
             err = ""
             if session_id:
                 try:
-                    store_grant_purchase(session_id, slug=slug)
-                    ok = True
+                    ok = _wait_store_owned(slug)
+                    if not ok:
+                        err = "Payment received. Ownership will show up in a moment."
                 except Exception as exc:
                     err = str(exc)
             html = (
@@ -2490,14 +2536,19 @@ def store_checkout(
 
         threading.Thread(target=_timeout_shutdown, daemon=True).start()
 
-    payload = _store_collect(
+    payload = _plugin_collect(
+        "stripe",
         "checkout",
         {
-            "slug": slug,
+            "productKey": _stripe_product_key_for_slug(slug),
+            "udsSlug": slug,
             "successUrl": success,
             "cancelUrl": cancel,
-            "siteBaseUrl": base,
+            "mode": "payment",
         },
+        unavailable_code="store_unavailable",
+        unavailable_msg="Stripe checkout is not active on this tenant yet.",
+        error_code="store_checkout",
         allow_anonymous=False,
         timeout=30.0,
     )
@@ -2508,19 +2559,24 @@ def store_checkout(
 
 
 def store_grant_purchase(session_id: str, *, slug: str | None = None) -> dict[str, Any]:
-    """Confirm a paid Checkout session and record Store ownership."""
-    session_id = (session_id or "").strip()
-    if not session_id:
-        raise DuckyOSAccountError("sessionId required", code="bad_request")
-    body: dict[str, Any] = {"sessionId": session_id}
-    if slug:
-        body["slug"] = str(slug).strip()
-    payload = _store_collect("grant", body, allow_anonymous=False, timeout=30.0)
+    """Wait until the Stripe webhook has recorded ownership for ``slug``.
+
+    ``session_id`` is the Checkout return id. The Store no longer verifies it;
+    the signed Stripe webhook is the only writer.
+    """
+    slug = (slug or "").strip()
+    if not slug:
+        raise DuckyOSAccountError("slug required", code="bad_request")
+    if not _wait_store_owned(slug):
+        raise DuckyOSAccountError(
+            "Payment received. Ownership will show up in a moment.",
+            code="purchase_pending",
+        )
     return {
         "ok": True,
-        "slug": payload.get("slug"),
-        "userId": payload.get("userId"),
-        "alreadyOwned": bool(payload.get("alreadyOwned")),
+        "slug": slug,
+        "sessionId": (session_id or "").strip() or None,
+        "alreadyOwned": True,
     }
 
 

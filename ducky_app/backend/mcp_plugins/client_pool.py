@@ -458,11 +458,35 @@ class PluginClientPool:
 
             return save_modal_watchdog(f"{plugin_id}:{original_name}")
 
+        async def _invoke(session_obj):
+            from backend.mcp_plugins.epic import EPIC_MCP_PREFIX
+            from backend.mcp_plugins.epic_array_set import expand_epic_call
+
+            sequence = (
+                expand_epic_call(original_name, args)
+                if plugin_id == EPIC_MCP_PREFIX
+                else [args]
+            )
+            last = None
+            for index, step in enumerate(sequence):
+                last = await asyncio.wait_for(
+                    session_obj.call_tool(original_name, step),
+                    timeout=_TOOL_TIMEOUT_SEC,
+                )
+                if index == len(sequence) - 1:
+                    break
+                text = _content_to_text(getattr(last, "content", last))
+                if (
+                    getattr(last, "isError", False)
+                    or "could not be set" in text
+                    or "ArrayAdd" in text
+                ):
+                    break
+            return last
+
         try:
             with _watchdog():
-                raw = await asyncio.wait_for(
-                    session.call_tool(original_name, args), timeout=_TOOL_TIMEOUT_SEC
-                )
+                raw = await _invoke(session)
         except asyncio.TimeoutError:
             raise RuntimeError(
                 f"Nested MCP '{plugin_id}' tool '{original_name}' timed out after "
@@ -478,9 +502,7 @@ class PluginClientPool:
                 await self._close_connection(conn)
                 session = await self._ensure_session(conn)
                 with _watchdog():
-                    raw = await asyncio.wait_for(
-                        session.call_tool(original_name, args), timeout=_TOOL_TIMEOUT_SEC
-                    )
+                    raw = await _invoke(session)
                 self.invalidate_tools_cache()  # server restart may have changed tools
             except asyncio.TimeoutError:
                 raise RuntimeError(

@@ -30,7 +30,6 @@ import { WindowResize } from "./components/WindowResize";
 import { ChatView } from "./views/ChatView";
 import { FocusView } from "./views/FocusView";
 import { SettingsView } from "./views/SettingsView";
-import { WelcomeView } from "./views/WelcomeView";
 import { useListenerStatus } from "./hooks/useListenerStatus";
 import { useConnectionIcon } from "./hooks/useConnectionIcon";
 import { useProject } from "./hooks/useProject";
@@ -193,12 +192,8 @@ export default function App() {
 
   const settingsView = <SettingsView version={listener.version} />;
 
-  const mainContent = !hasProject ? (
-    currentView === "settings" ? (
-      settingsView
-    ) : (
-      <WelcomeView listener={listener} project={project} onProjectChanged={bumpSidebar} />
-    )
+  const mainContent = currentView === "settings" ? (
+    settingsView
   ) : (
     <ChatView
       layoutMode={layoutMode}
@@ -236,7 +231,7 @@ export default function App() {
       <PluginShellBootBridge />
       <UiRpcBridge />
       <AskUserHost />
-      <WalkthroughHost hasProject={hasProject} />
+      <WalkthroughHost />
       <div className="app-container">
         <div id="ducky-skin-frame" className="ducky-skin-slot ducky-skin-slot--frame" aria-hidden="true" />
         <PluginCrashBanner />

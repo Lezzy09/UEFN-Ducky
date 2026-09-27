@@ -27,10 +27,25 @@ class PanelApiChatsMixin:
             row["project_name"] = project_name or project_slug
         return row
 
+    def _on_outside_project(self) -> bool:
+        from frontend.ui_web.project_chats import project_slug
+
+        root = getattr(_pa.PanelSettings.load(), "uefn_project_root", "") or ""
+        return project_slug(root) == "_no_project"
+
     def list_folders(self, all_projects: bool = False) -> list[dict[str, str | float]]:
         _pa.ensure_group_folder_hubs()
         if not all_projects:
-            return [self._folder_sidebar_row(f) for f in _pa.load_folders()]
+            rows = [self._folder_sidebar_row(f) for f in _pa.load_folders()]
+            # Duckies made with no island stay visible on every island.
+            if self._on_outside_project():
+                return rows
+            seen = {str(row.get("id") or "") for row in rows}
+            for folder in _pa.load_folders(""):
+                if folder.id in seen:
+                    continue
+                rows.append(self._folder_sidebar_row(folder))
+            return rows
         rows: list[dict[str, str | float]] = []
         for slug, folders in _pa.iter_folders_by_project():
             name = _pa.project_slug_display_name(slug)
@@ -49,7 +64,12 @@ class PanelApiChatsMixin:
     def list_all_conversations(self, all_projects: bool = False) -> list[dict[str, str | float | int | bool]]:
         """All project chats in one call (metadata only) for sidebar grouping."""
         if not all_projects:
-            convs = _pa.list_all_conversation_metadata()
+            convs = list(_pa.list_all_conversation_metadata())
+            if not self._on_outside_project():
+                seen = {c.id for c in convs}
+                for conv in _pa.list_all_conversation_metadata(""):
+                    if conv.id not in seen:
+                        convs.append(conv)
             group_ids = {c.id for c in convs if getattr(c, "is_group", False)}
             return [self._conversation_sidebar_row(c, group_ids=group_ids) for c in convs]
         tagged = list(_pa.iter_conversations_by_project())
@@ -185,7 +205,7 @@ class PanelApiChatsMixin:
             style = str(cfg.get("ducky_style")).strip()
 
         from backend.agent.coding_agents.base import normalize_coding_agent
-        from frontend.favorite_models import ResolveErr, ResolveOk
+        from frontend.favorite_models import ResolveErr, ResolveOk, allow_create_without_model
 
         coding_agent = "ducky"
         resolved_model = ""
@@ -193,7 +213,10 @@ class PanelApiChatsMixin:
 
         if "favorite_models" in cfg:
             # Profile-driven create: the profile's model, else the global default.
-            result = _pa.resolve_model_selection(cfg.get("favorite_models"), settings)
+            # No model at all still creates — the composer prompts on send.
+            result = allow_create_without_model(
+                _pa.resolve_model_selection(cfg.get("favorite_models"), settings)
+            )
             if isinstance(result, ResolveErr):
                 raise ValueError(result.message)
             coding_agent = result.coding_agent
@@ -339,7 +362,7 @@ class PanelApiChatsMixin:
         """
         from frontend.agent_profiles import get_agent_profile
         from frontend.ducky_assets import ducky_style_label, normalize_ducky_style
-        from frontend.favorite_models import ResolveErr
+        from frontend.favorite_models import ResolveErr, allow_create_without_model
         from frontend.ui_web.group_orchestrator import group_members, member_color_for_index, normalize_member
 
         group = _pa.load_conversation(group_id)
@@ -355,7 +378,9 @@ class PanelApiChatsMixin:
         settings = _pa.PanelSettings.load()
         override = (model or "").strip()
         favorites = [override] if override else profile.get("favorite_models")
-        result = _pa.resolve_model_selection(favorites, settings)
+        result = allow_create_without_model(
+            _pa.resolve_model_selection(favorites, settings)
+        )
         if isinstance(result, ResolveErr):
             return {"ok": False, "error": result.message}
         disabled_packs = profile.get("disabled_packs")
@@ -389,7 +414,7 @@ class PanelApiChatsMixin:
                 "name": ducky_name,
                 "ducky_name": ducky_name,
                 "ducky_style": style,
-                "model": result.selection.qualified,
+                "model": result.selection.qualified if result.model else "",
                 "coding_agent": result.coding_agent,
                 "tts_voice": str(getattr(member, "tts_voice", None) or profile.get("tts_voice") or ""),
                 "tts_speed": float(getattr(member, "tts_speed", None) or profile.get("tts_speed") or 0.0),

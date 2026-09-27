@@ -163,6 +163,8 @@ def test_hard_rules_epic_mcp_nested():
     assert "unreal__" in AGENT_HARD_RULES
     assert "epic_mcp_setup_steps" in AGENT_HARD_RULES
     assert "XYZ" in AGENT_HARD_RULES
+    assert "perInstanceSMData" in AGENT_HARD_RULES
+    assert "ArrayAdd" in AGENT_HARD_RULES
 
 
 def test_hard_rules_save_modal_host_dismiss():

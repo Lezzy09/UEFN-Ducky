@@ -1126,14 +1126,16 @@ def _profile_spawn_kwargs(profile: dict[str, Any]) -> dict[str, Any]:
     """Persona kwargs for create_conversation from a resolved ducky profile.
 
     Uses the profile's own model, else the global Default Model from
-    Settings → LLMs. Raises ValueError when neither is set or the selection
-    is unavailable — never silently substitutes another model.
+    Settings → LLMs. A missing model still spawns (empty model). A bad
+    explicit pick raises — never silently substitutes another model.
     """
     from frontend.ui_web.panel_api import resolve_model_selection
-    from frontend.favorite_models import ResolveErr
+    from frontend.favorite_models import ResolveErr, allow_create_without_model
 
     settings = PanelSettings.load()
-    result = resolve_model_selection(profile.get("favorite_models"), settings)
+    result = allow_create_without_model(
+        resolve_model_selection(profile.get("favorite_models"), settings)
+    )
     if isinstance(result, ResolveErr):
         raise ValueError(result.message)
     disabled_packs = profile.get("disabled_packs")

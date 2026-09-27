@@ -72,13 +72,16 @@ export function wrapProjectsAsFolders(
   expandedById: Map<string, boolean>,
 ): FolderItem[] {
   const ordered = [...projects].sort((a, b) => {
-    if (a.slug === currentSlug) return -1;
-    if (b.slug === currentSlug) return 1;
+    const rank = (slug: string) => (slug === currentSlug ? 0 : slug === "_no_project" ? 1 : 2);
+    const byRank = rank(a.slug) - rank(b.slug);
+    if (byRank) return byRank;
     return a.name.localeCompare(b.name) || a.slug.localeCompare(b.slug);
   });
   return ordered.map((project, index) => {
     const id = projectFolderId(project.slug);
-    const expanded = expandedById.has(id) ? expandedById.get(id)! : project.slug === currentSlug;
+    const expanded = expandedById.has(id)
+      ? expandedById.get(id)!
+      : project.slug === currentSlug || project.slug === "_no_project";
     return {
       id,
       name: project.name,
