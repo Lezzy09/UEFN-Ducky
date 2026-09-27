@@ -162,6 +162,16 @@ export type PluginContributions = {
   editor_kinds: PluginEditorKind[];
   header_buttons: PluginHeaderButton[];
   ui_panels: PluginUiPanel[];
+  /** Rows from contributes.chat.references and api.chat_reference(). */
+  chat_references: Array<{
+    trigger: "@" | "/" | string;
+    id: string;
+    label: string;
+    group?: string;
+    description?: string;
+    href: string;
+    plugin_id?: string;
+  }>;
   shell_boots: PluginShellBoot[];
   appearance_profiles: PluginAppearanceProfile[];
   appearance_css: PluginAppearanceCss[];
@@ -213,6 +223,7 @@ const EMPTY: PluginContributions = {
   editor_kinds: [],
   header_buttons: [],
   ui_panels: [],
+  chat_references: [],
   shell_boots: [],
   appearance_profiles: [],
   appearance_css: [],
@@ -320,6 +331,16 @@ async function refresh() {
               typeof p.id === "string" &&
               typeof p.entry === "string" &&
               typeof p.plugin_id === "string",
+          )
+        : [],
+      chat_references: Array.isArray(next.chat_references)
+        ? next.chat_references.filter(
+            (row) =>
+              !!row &&
+              (row.trigger === "@" || row.trigger === "/") &&
+              typeof row.id === "string" &&
+              typeof row.label === "string" &&
+              typeof row.href === "string",
           )
         : [],
       shell_boots: Array.isArray((next as { shell_boots?: unknown }).shell_boots)

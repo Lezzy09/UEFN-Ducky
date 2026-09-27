@@ -11,6 +11,7 @@ import { useDuckyCatalog } from "../components/ducky/DuckyCatalogContext";
 import { requestOpenDuckyEditor } from "../navigation/openDuckyEditor";
 import { onDuckyProfileChanged } from "../navigation/duckyProfileChanged";
 import { registerOpenDuckyProfileTab } from "../navigation/openDuckyProfileTab";
+import { registerOpenChatReference, registerOpenProjectFile } from "../navigation/openChatReference";
 import { SplitEditorLayout } from "../components/SplitEditorLayout";
 import { UnsavedChangesModal } from "../components/UnsavedChangesModal";
 import { useChatFolders } from "../hooks/useChatFolders";
@@ -350,6 +351,11 @@ function ChatViewBody({ layoutMode, sidebarRefresh, projectSlug, projectPath }: 
   );
 
   useEffect(() => registerOpenDuckyProfileTab(openDuckyProfileTab), [openDuckyProfileTab]);
+  useEffect(
+    () => registerOpenChatReference((chat) => openChatTab(chat)),
+    [openChatTab],
+  );
+  useEffect(() => registerOpenProjectFile((path, name) => openFileTab(path, name)), [openFileTab]);
 
   // Keep pop-out ducky-profile tabs titled / closed when the library changes.
   useEffect(() => {

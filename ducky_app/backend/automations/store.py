@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import uuid
 from pathlib import Path
@@ -53,6 +54,12 @@ def normalize_graph(raw: Any) -> dict[str, Any]:
                 "description": str(n.get("description") or ""),
             }
         )
+        if "width" in n:
+            try:
+                width = float(n["width"])
+            except (TypeError, ValueError):
+                width = 320.0
+            nodes[-1]["width"] = min(720.0, max(280.0, width)) if math.isfinite(width) else 320.0
     ids = {n["id"] for n in nodes}
     edges: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()

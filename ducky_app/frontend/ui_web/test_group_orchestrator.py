@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from frontend.settings import PanelSettings
 from frontend.ui_web.group_orchestrator import (
@@ -19,6 +20,7 @@ from frontend.ui_web.group_orchestrator import (
     normalize_member,
     pick_member_for_question,
     resolve_nested_representative,
+    run_group_turn,
     author_payload,
     sync_group_members_from_folder,
     wants_all_speakers,
@@ -544,3 +546,57 @@ def test_sidebar_layout_drag_into_and_out_of_group_updates_roster():
         assert ui.id not in ids
         ui = load_conversation(ui.id, project_root=root)
         assert ui is not None and (ui.parent_conv_id or "") == ""
+
+
+def test_group_turn_keeps_image_attachment(monkeypatch):
+    import frontend.ui_web.group_orchestrator as go
+
+    hub = SimpleNamespace(
+        id="hub",
+        is_group=True,
+        messages=[],
+        group_members=[{"member_conv_id": "m1", "name": "Painter", "profile_id": "p"}],
+        title="Group",
+        model="",
+        folder_id="",
+    )
+    shot = {"kind": "image", "name": "shot.png", "mime": "image/png", "data_base64": "aGk="}
+    captured: dict = {}
+
+    def fake_load(conv_id, project_root=None):
+        return hub if conv_id == "hub" else None
+
+    def fake_append(conv, message, project_root=None):
+        conv.messages.append(message)
+
+    def fake_run(*args, **kwargs):
+        captured["text"] = args[1] if len(args) > 1 else ""
+        captured["attachments"] = kwargs.get("attachments")
+        return {"assistant_text": "got it"}
+
+    class _InlineThread:
+        def __init__(self, target=None, name="", daemon=False):
+            self._target = target
+
+        def start(self):
+            if self._target:
+                self._target()
+
+    monkeypatch.setattr(go, "load_conversation", fake_load)
+    monkeypatch.setattr(go, "append_message", fake_append)
+    monkeypatch.setattr(go, "sync_group_members_from_folder", lambda group, project_root=None: go.group_members(group))
+    monkeypatch.setattr(go, "is_group_running", lambda _gid: False)
+    monkeypatch.setattr(go, "_persist_group_attachments", lambda *_a, **_k: [{"kind": "image", "name": "shot.png", "path": "attachments/shot.png"}])
+    monkeypatch.setattr(go.threading, "Thread", _InlineThread)
+    monkeypatch.setattr("frontend.ui_web.agent_modes.is_agent_running", lambda _gid: False)
+    monkeypatch.setattr("frontend.ui_web.agent_modes.run_message_and_wait", fake_run)
+    monkeypatch.setattr("frontend.agent_profiles.list_agent_profiles_available", lambda: [])
+    monkeypatch.setattr("backend.agent.chat_title.start_auto_title", lambda *a, **k: None)
+
+    run_id = run_group_turn("hub", "", attachments=[shot], push=lambda _e: None)
+    assert run_id
+    user = next(m for m in hub.messages if m.get("role") == "user")
+    assert user["text"] == ""
+    assert user["attachments"][0]["name"] == "shot.png"
+    assert captured["attachments"] == [shot]
+    assert "See the attachment." in captured["text"]

@@ -1,6 +1,7 @@
 import { Children, isValidElement } from "react";
 import type { ReactNode } from "react";
 import { defaultUrlTransform } from "react-markdown";
+import { parseChatRefHref } from "../chatReferences";
 
 export const RICH_TEXT_COLORS = ["blue", "purple", "green", "amber", "yellow", "red"] as const;
 export type RichTextColor = typeof RICH_TEXT_COLORS[number];
@@ -12,7 +13,12 @@ export function richColorFromHref(href: string): RichTextColor | undefined {
 }
 
 export function richUrlTransform(url: string, key: string): string {
-  if (key === "href" && (richColorFromHref(url) || /^plan-node:[\w-]+$/.test(url))) return url;
+  if (
+    key === "href" &&
+    (richColorFromHref(url) || parseChatRefHref(url) || /^plan-node:[\w-]+$/.test(url))
+  ) {
+    return url;
+  }
   if (key === "href" && /^ducky:\/\/settings\.llms\/[a-z0-9_-]+#login$/i.test(url)) return url;
   return defaultUrlTransform(url);
 }

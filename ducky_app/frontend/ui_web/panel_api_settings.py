@@ -50,6 +50,8 @@ class PanelApiSettingsMixin:
             "memory_index_max_chars": int(s.memory_index_max_chars or 2_500),
             "memory_summary_model": s.memory_summary_model or "",
             "chat_auto_title": bool(getattr(s, "chat_auto_title", True)),
+            "chat_mentions_enabled": bool(getattr(s, "chat_mentions_enabled", True)),
+            "chat_slash_references_enabled": bool(getattr(s, "chat_slash_references_enabled", True)),
             "chat_title_model": getattr(s, "chat_title_model", "") or "",
             "web_access": (
                 s.web_access if getattr(s, "web_access", "ask") in ("off", "ask", "on") else "ask"
@@ -582,6 +584,10 @@ class PanelApiSettingsMixin:
             s.memory_summary_model = str(patch.get("memory_summary_model") or "").strip()
         if "chat_auto_title" in patch:
             s.chat_auto_title = bool(patch.get("chat_auto_title"))
+        if "chat_mentions_enabled" in patch:
+            s.chat_mentions_enabled = bool(patch.get("chat_mentions_enabled"))
+        if "chat_slash_references_enabled" in patch:
+            s.chat_slash_references_enabled = bool(patch.get("chat_slash_references_enabled"))
         if "chat_title_model" in patch:
             s.chat_title_model = str(patch.get("chat_title_model") or "").strip()
         if "web_access" in patch:

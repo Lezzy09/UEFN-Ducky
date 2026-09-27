@@ -156,7 +156,10 @@ if _appearance_builtin_profiles.is_file():
 _bundled_agent_profiles = FRONTEND / "bundled_agent_profiles.json"
 if _bundled_agent_profiles.is_file():
     _datas.append((str(_bundled_agent_profiles), "frontend"))
-_web_dist = FRONTEND / "ui_web" / "web" / "dist"
+# Snapshot from build_exes. A later npm rebuild rewrites hashed filenames in the
+# live dist; packaging that moving tree ships index.html without its JS.
+_panel_snap = os.environ.get("UEFN_DUCKY_PANEL_DIST", "").strip()
+_web_dist = Path(_panel_snap) if _panel_snap else FRONTEND / "ui_web" / "web" / "dist"
 if (_web_dist / "index.html").is_file():
     _index_text = (_web_dist / "index.html").read_text(encoding="utf-8")
     for _m in re.finditer(r"""(?:src|href)=["'](\./[^"']+)["']""", _index_text):

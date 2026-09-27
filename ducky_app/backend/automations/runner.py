@@ -57,6 +57,9 @@ _ACTION_TYPES = frozenset(
         "tool.call",
         "pipeline.agent",
         "pipeline.finish",
+        "flow.end",
+        "uefn.open_project",
+        "uefn.launch",
         "uefn.close",
         "uefn.restart",
         "uefn.wait_ready",
@@ -78,9 +81,9 @@ def run_automation(
     graph = wf.get("graph") or {}
     nodes = {str(n.get("id")): n for n in (graph.get("nodes") or []) if isinstance(n, dict) and n.get("id")}
     edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
-    starts = _start_ids(nodes, trigger_id=trigger_id, starter_id=starter_id, payload=payload or {})
+    starts = _start_ids(nodes, edges=edges, trigger_id=trigger_id, starter_id=starter_id, payload=payload or {})
     if not starts:
-        return {"ok": False, "error": "no starter node", "steps": [], "id": wf["id"]}
+        return {"ok": False, "error": "No start found. Leave an input unconnected or choose a start node.", "steps": [], "id": wf["id"]}
     ctx: dict[str, Any] = dict(payload or {})
     _prepare_run_ctx(ctx, wf)
     ident_token = _bind_hub_identity(ctx)
@@ -150,7 +153,7 @@ def run_pipeline(
     if files is not None:
         body["files"] = files
     body["caller_conv_id"] = caller
-    return run_automation(pipeline_id, trigger_id="start.chat", payload=body)
+    return run_automation(pipeline_id, payload=body)
 
 
 def emit_automation(trigger_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -191,6 +194,7 @@ def _start_ids(
     trigger_id: str,
     starter_id: str,
     payload: dict[str, Any] | None = None,
+    edges: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     if starter_id and starter_id in nodes:
         return [starter_id]
@@ -199,11 +203,10 @@ def _start_ids(
         hits = [nid for nid, n in nodes.items() if _node_matches_trigger(n, trigger_id, payload)]
         if hits:
             return hits
-    manuals = [nid for nid, n in nodes.items() if n.get("type") == "start.manual"]
-    if manuals:
-        return manuals
-    any_start = [nid for nid, n in nodes.items() if n.get("type") in starters]
-    return any_start
+        return []
+    incoming = {str(e.get("target")) for e in edges or [] if str(e.get("source")) in nodes}
+    explicit = [nid for nid, node in nodes.items() if node.get("type") in starters]
+    return explicit or [nid for nid in nodes if nid not in incoming]
 
 
 def _next_ids(source: str, edges: list[dict[str, Any]], kind: str) -> list[str]:
@@ -305,6 +308,8 @@ def _walk(
             break
         if step.get("result") and isinstance(step["result"], dict):
             ctx.update({k: v for k, v in step["result"].items() if k not in ("ok",)})
+        if ntype in ("pipeline.finish", "flow.end"):
+            continue
         kind = "true" if step.get("branch") else "false" if "branch" in step else "main"
         queue.extend(_next_ids(nid, edges, kind))
     if seen >= _MAX_STEPS and queue:
@@ -315,10 +320,14 @@ def _walk(
 def _uefn_node(node: dict[str, Any], ntype: str, label: str, cfg: dict[str, Any]) -> dict[str, Any]:
     timeout = float(cfg.get("timeout") or 180)
     project = str(cfg.get("project") or "").strip() or None
-    if ntype == "uefn.close":
+    if ntype in ("uefn.open_project", "uefn.launch"):
+        from backend.automations.uefn import open_project
+
+        result: dict[str, Any] = open_project(project, timeout=timeout, wait=ntype == "uefn.open_project")
+    elif ntype == "uefn.close":
         from frontend.window_view import close_uefn
 
-        result: dict[str, Any] = close_uefn()
+        result = close_uefn()
     elif ntype == "uefn.restart":
         from frontend.window_view import restart_uefn_project
 
@@ -348,6 +357,10 @@ def _exec_node(node: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     ntype = str(node.get("type") or "")
     cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
     label = str(node.get("label") or ntype)
+    if ntype == "pipeline.finish" and label in ("Finish", ntype):
+        label = "Return to user"
+    elif ntype == "start.chat" and label in ("Chat", ntype):
+        label = "Chat input"
     try:
         if ntype == "ducky.prompt":
             return {**_prompt_ducky(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
@@ -375,7 +388,9 @@ def _exec_node(node: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
             return {**_pipeline_agent(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "pipeline.finish":
             return {**_pipeline_finish(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
-        if ntype in ("uefn.close", "uefn.restart", "uefn.wait_ready", "uefn.wait_window"):
+        if ntype == "flow.end":
+            return {"ok": True, "id": node.get("id"), "type": ntype, "label": label, "result": {"ended": True}}
+        if ntype in ("uefn.open_project", "uefn.launch", "uefn.close", "uefn.restart", "uefn.wait_ready", "uefn.wait_window"):
             return _uefn_node(node, ntype, label, cfg)
         handler = plugin.get_handler(ntype)
         if handler is None:
@@ -593,13 +608,18 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
     from backend.automations.artifacts import chat_dir, copy_files_into, list_files
 
     ducky = str(cfg.get("ducky") or cfg.get("profile_id") or payload.get("ducky") or "").strip()
-    if not ducky:
-        return {"ok": False, "error": "ducky profile required"}
-    profile = _resolve_profile(ducky)
-    if profile is None:
-        return {"ok": False, "error": f"unknown ducky: {ducky}"}
-    kwargs = _agent_spawn_kwargs(profile)
-    seat = _seat_agent_cluster(cfg, payload, profile, kwargs)
+    kwargs: dict[str, Any] = {}
+    existing = ducky.startswith("chat:")
+    if existing:
+        seat = _existing_pipeline_ducky(ducky[5:], payload)
+    elif ducky in ("", "__new__", "__blank__"):
+        seat = _create_pipeline_ducky(cfg, payload)
+    else:
+        profile = _resolve_profile(ducky)
+        if profile is None:
+            return {"ok": False, "error": f"Assigned ducky is unavailable: {ducky}. Choose another in the Agent node."}
+        kwargs = _agent_spawn_kwargs(profile)
+        seat = _seat_agent_cluster(cfg, payload, profile, kwargs)
     if not seat.get("ok"):
         return seat
     conv_id = str(seat.get("conv_id") or "")
@@ -617,7 +637,7 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
         str(cfg.get("mode") or "agent"),
         str(cfg.get("model") or kwargs.get("model") or ""),
         timeout_sec=timeout,
-        parent=caller,
+        parent="" if existing else caller,
         attachments=_files_as_attachments(incoming),
     )
     if str(wait.get("status") or "") != "done":
@@ -646,6 +666,46 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
     }
 
 
+def _existing_pipeline_ducky(conv_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from frontend.ui_web.agent_modes import is_agent_running
+    from frontend.ui_web.project_chats import load_conversation
+
+    conv = load_conversation(conv_id)
+    if conv is None or getattr(conv, "is_group", False):
+        return {"ok": False, "error": "Assigned ducky is unavailable. Choose another in the Agent node."}
+    if conv_id == str(payload.get("caller_conv_id") or ""):
+        return {"ok": False, "error": "This ducky is running the workflow. Assign another ducky or choose Create new when workflow runs."}
+    if is_agent_running(conv_id):
+        return {"ok": False, "error": "Assigned ducky is busy. Try again when it finishes or choose Create new when workflow runs."}
+    return {"ok": True, "conv_id": conv_id}
+
+
+def _create_pipeline_ducky(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    from frontend.favorite_models import ResolveErr
+    from frontend.settings import PanelSettings
+    from frontend.ui_web.agent_modes import notify_chats_changed
+    from frontend.ui_web.panel_api import resolve_model_selection
+    from frontend.ui_web.project_chats import create_conversation
+
+    settings = PanelSettings.load()
+    model = str(cfg.get("model") or "").strip()
+    resolved = resolve_model_selection([model] if model else None, settings)
+    if isinstance(resolved, ResolveErr):
+        return {"ok": False, "error": resolved.message}
+    conv = create_conversation(
+        settings,
+        str(payload.get("group_folder_id") or ""),
+        title=str(cfg.get("title") or "Workflow ducky"),
+        ducky_name="Ducky",
+        model=resolved.model,
+        provider=resolved.provider or None,
+        coding_agent=resolved.coding_agent,
+        parent_conv_id=str(payload.get("group_id") or ""),
+    )
+    notify_chats_changed(conv.id, conv.title, conv.folder_id, open_tab=False)
+    return {"ok": True, "conv_id": conv.id, "group_id": payload.get("group_id") or "", "group_folder_id": conv.folder_id}
+
+
 def _seat_agent_cluster(
     cfg: dict[str, Any],
     payload: dict[str, Any],
@@ -666,7 +726,7 @@ def _seat_agent_cluster(
     nest_id = str(created.get("id") or "").strip()
     pid = str(profile.get("id") or "").strip()
     try:
-        invited = api.group_invite(nest_id, pid, model=str(cfg.get("model") or kwargs.get("model") or ""))
+        invited = api.group_invite(nest_id, pid, model=str(cfg.get("model") or ""))
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
     if not invited.get("ok"):
@@ -710,15 +770,15 @@ def _files_as_attachments(files: Any) -> list[dict[str, Any]]:
 
 def _pipeline_finish(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     caller = str(cfg.get("caller_conv_id") or payload.get("caller_conv_id") or "").strip()
+    text = str(cfg.get("message") or payload.get("text") or payload.get("assistant_text") or "Workflow complete.")
+    files = payload.get("files") or []
     if not caller:
-        return {"ok": True, "result": {"posted": False, "reason": "no caller"}}
+        return {"ok": True, "result": {"posted": False, "text": text, "files": files}}
     from frontend.ui_web.project_chats import append_message, load_conversation
 
     conv = load_conversation(caller)
     if conv is None:
         return {"ok": False, "error": f"caller chat not found: {caller}"}
-    text = str(cfg.get("message") or payload.get("text") or payload.get("assistant_text") or "Pipeline finished.")
-    files = payload.get("files") or []
     attachments = _files_as_attachments(files)
     msg: dict[str, Any] = {"role": "assistant", "content": text, "text": text, "ts": time.time()}
     if attachments:

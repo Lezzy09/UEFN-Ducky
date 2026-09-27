@@ -7,6 +7,9 @@ import { isWorkspaceFilePath, normalizeWorkspacePath } from "./isWorkspacePath";
 import { RichCodeBlock } from "./RichCodeBlock";
 import { RichEmphasis } from "./RichEmphasis";
 import { richColorFromHref, richUrlTransform } from "./richTextColors";
+import { parseChatRefHref } from "../chatReferences";
+import { requestOpenChatReference } from "../../navigation/openChatReference";
+import { ChatRefChip } from "../ChatRefChip";
 import { openCodingAgentLoginUi, parseCodingAgentLoginHref } from "../../walkthrough/openCodingAgentLogin";
 import { isRemote } from "../../hooks/usePanelApi";
 import { openHttpsOnThisDevice } from "../../remote/openHttps";
@@ -18,6 +21,22 @@ export function RichLink({ href = "", children, onOpenFile }: {
 }) {
   const color = richColorFromHref(href);
   if (color) return <span className={`rich-text-accent rich-tone--${color}`}>{children}</span>;
+  if (parseChatRefHref(href)) {
+    const label = (Array.isArray(children) ? children : [children])
+      .map((child) => (typeof child === "string" || typeof child === "number" ? String(child) : ""))
+      .join("");
+    return (
+      <ChatRefChip
+        href={href}
+        label={label}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          requestOpenChatReference(href, label);
+        }}
+      />
+    );
+  }
   if (href.startsWith("plan-node:")) {
     const id = href.slice("plan-node:".length).trim();
     return id ? <span className="plan-md-anchor" data-plan-node-id={id} title="Linked plan step">{children}</span> : null;

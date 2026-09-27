@@ -278,6 +278,15 @@ def main() -> int:
     _validate_listener_source(root / "ducky_app" / "uefn_listener")  # spec bundles plaintext uefn_listener/ → bundle/uefn_listener
 
     _build_react_panel(root)
+    # Freeze the panel before PyInstaller. npm rebuilds during Analysis replace
+    # hashed assets, and PyInstaller then skips the missing files.
+    panel_live = root / "ducky_app" / "frontend" / "ui_web" / "web" / "dist"
+    panel_snap = Path(tempfile.gettempdir()) / "uefn-ducky-panel-dist"
+    if panel_snap.exists():
+        shutil.rmtree(panel_snap)
+    shutil.copytree(panel_live, panel_snap)
+    os.environ["UEFN_DUCKY_PANEL_DIST"] = str(panel_snap)
+    print(f"Froze panel dist -> {panel_snap}")
 
     # Single output: dist/UEFN-Ducky.exe (version is inside the binary, not the filename).
     if args.no_bump:
@@ -414,6 +423,16 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    packaged_panel = wrote / "_internal" / "frontend" / "ui_web" / "web" / "dist"
+    try:
+        from frontend.ui_web.panel_httpd import verify_panel_dist
+
+        verify_panel_dist(packaged_panel)
+    except FileNotFoundError as exc:
+        print(f"ERROR: packaged panel is incomplete: {exc}", file=sys.stderr)
+        return 1
+    print(f"Verified packaged panel: {packaged_panel}")
 
     smoke_exe = wrote / f"{exe_stem}.exe"
     if _run_runtime_smoke(smoke_exe) != 0:

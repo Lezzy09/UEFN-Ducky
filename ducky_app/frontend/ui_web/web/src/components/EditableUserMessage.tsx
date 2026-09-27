@@ -5,6 +5,7 @@ import { AttachmentPreviewModal } from "./AttachmentPreviewModal";
 import { ModeSelector } from "./ModeSelector";
 import { ModelSelector } from "./ModelSelector";
 import { InlineStopButton } from "./InlineStopButton";
+import { ChatRefText } from "./ChatRefText";
 
 // The editor opens at ~3 lines and auto-grows to fit its content up to a cap.
 const MIN_EDIT_HEIGHT = 66;
@@ -284,7 +285,14 @@ export const EditableUserMessage = memo(function EditableUserMessage({
       <div className="message-bubble-user-row">
         <div
           className={contentClass}
-          onClick={interactive ? onBubbleActivate : undefined}
+          onClick={
+            interactive
+              ? (event) => {
+                  if ((event.target as HTMLElement).closest?.(".chat-ref-chip")) return;
+                  onBubbleActivate();
+                }
+              : undefined
+          }
           role={interactive ? "button" : undefined}
           tabIndex={interactive ? 0 : undefined}
           aria-expanded={!editable && text ? expanded : undefined}
@@ -325,7 +333,7 @@ export const EditableUserMessage = memo(function EditableUserMessage({
               ref={textRef}
               className={`message-bubble-user-text${faded ? " is-faded" : ""}`}
             >
-              {text}
+              <ChatRefText text={text} />
             </div>
           ) : null}
         </div>

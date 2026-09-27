@@ -130,6 +130,13 @@ export interface ComposerPlaceholderInput {
   agentRunning: boolean;
   noModelsAvailable: boolean;
   modelLabel: string;
+  /** Default on. Off drops the @ hint; `/` commands stay discoverable. */
+  mentionsEnabled?: boolean;
+}
+
+function commandHint(mentionsEnabled?: boolean): string {
+  if (mentionsEnabled === false) return "  ·  / for commands · ~ to search inside";
+  return "  ·  @ to mention a ducky · / for commands · ~ to search inside";
 }
 
 /** Idle composers mention `/` so the command palette is discoverable. */
@@ -138,13 +145,13 @@ export function composerPlaceholder(p: ComposerPlaceholderInput): string {
   if (p.isGroup) {
     if (p.groupEmpty) return "Invite a ducky above to start the roundtable…";
     if (p.agentRunning) return "Add a follow-up… (Shift+Enter for newline)";
-    return "Message the group… (Shift+Enter for newline)  ·  / for commands";
+    return `Message the group… (Shift+Enter for newline)${commandHint(p.mentionsEnabled)}`;
   }
   if (p.noModelsAvailable) {
     return "No models available — use the button below to open Settings → LLMs";
   }
   if (p.agentRunning) return "Add a follow-up… (Shift+Enter for newline)";
-  return `Ask ${p.modelLabel}... (Shift+Enter for newline)  ·  / for commands`;
+  return `Ask ${p.modelLabel}... (Shift+Enter for newline)${commandHint(p.mentionsEnabled)}`;
 }
 
 /**

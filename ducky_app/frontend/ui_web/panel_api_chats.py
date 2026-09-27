@@ -1093,13 +1093,13 @@ class PanelApiChatsMixin:
         conv = _pa.load_conversation(conv_id)
         # Subagents retired — every non-group chat is composable (group members included).
         if conv is not None and is_group_conversation(conv):
-            # Group chats ignore attachments for now — members get a text prompt.
             run_id = run_group_turn(
                 conv_id,
                 text,
                 mode=mode,
                 model=model,
                 push=self._push,
+                attachments=attachments or [],
             )
             return {"run_id": run_id}
         run_id = _pa.run_message(conv_id, text, mode, model, push=self._push, attachments=attachments or [])

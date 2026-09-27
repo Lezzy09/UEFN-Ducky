@@ -379,6 +379,7 @@ class PanelApiStoreMixin:
             "editor_kinds": [],
             "header_buttons": [],
             "ui_panels": [],
+            "chat_references": [],
             "sounds": [],
             "hooks": [],
             "automations_nodes": [],

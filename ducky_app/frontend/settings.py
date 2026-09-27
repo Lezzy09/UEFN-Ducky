@@ -184,6 +184,12 @@ class PanelSettings:
     chat_auto_title: bool = True
     """Rename a new ducky after the role its first message asks for."""
 
+    chat_mentions_enabled: bool = True
+    """Composer @ menu. Missing on an existing install stays on."""
+
+    chat_slash_references_enabled: bool = True
+    """Composer / reference rows under the command list. Missing stays on."""
+
     chat_title_model: str = ""
     """Cheap API model that refines the auto role title (empty = keyword names only)."""
 
@@ -435,6 +441,8 @@ class PanelSettings:
             or self.memory_index_max_chars != 2_500
             or self.memory_summary_model.strip()
             or not self.chat_auto_title
+            or not self.chat_mentions_enabled
+            or not self.chat_slash_references_enabled
             or self.chat_title_model.strip()
             or self.web_access != "ask"
             or not self.prompt_caching_enabled

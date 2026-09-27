@@ -3581,6 +3581,12 @@ button.sidebar-chat-nest-toggle {
 .ducky-tree {
   --sidebar-tree-leading: 36px;
 }
+.sidebar-global-agents {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  margin-bottom: 2px;
+}
 .file-tree .sidebar-tree-branch,
 .ducky-tree .sidebar-tree-branch { margin-bottom: 0; }
 .file-tree .sidebar-tree-row,
