@@ -20,6 +20,7 @@ export const BLOB_PREFIXES = [
   "/plugin-ui/",
   "/user-sounds/",
   "/tool-captures/",
+  "/chat-attachments/",
   "/generated-images/",
   "/duckies/custom/",
   "/model-files/",

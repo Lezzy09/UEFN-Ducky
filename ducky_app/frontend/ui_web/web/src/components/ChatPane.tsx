@@ -930,7 +930,7 @@ export function ChatPane({
         openModelPicker: () => setModelPickerSignal((n) => n + 1),
         captureSnip: () => {
           void (async () => {
-            const snip = await captureSnipFile();
+            const snip = await captureSnipFile(chat.id);
             if (!snip) {
               setSlashStatus("Snip cancelled — nothing captured.");
               return;
@@ -1526,6 +1526,7 @@ export function ChatPane({
 
             <div className="chat-pane-input-toolbar-right">
               <SnipButton
+                chatId={chat.id}
                 disabled={modelsUnavailable}
                 onCaptured={(file, meta) =>
                   void addFiles([file], {

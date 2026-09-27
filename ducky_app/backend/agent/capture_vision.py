@@ -13,6 +13,8 @@ _CAPTURE_TOOLS = frozenset(
     {
         "take_high_res_screenshot",
         "blender_get_viewport_screenshot",
+        "uefn_window_capture",
+        "ducky_publish_private_version",
     }
 )
 _MAX_VISION_BYTES = 8 * 1024 * 1024

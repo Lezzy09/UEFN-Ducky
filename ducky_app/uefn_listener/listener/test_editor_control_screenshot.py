@@ -110,17 +110,17 @@ def _load(monkeypatch, tmp_path, *, registry: FakeRegistry | None) -> tuple[Any,
     return module, console
 
 
-def test_viewport_capture_writes_a_png_and_returns_its_path(monkeypatch, tmp_path):
+def test_viewport_capture_returns_png_bytes_and_writes_no_file(monkeypatch, tmp_path):
     registry = FakeRegistry(image_b64=base64.b64encode(PNG_BYTES).decode("ascii"))
     module, console = _load(monkeypatch, tmp_path, registry=registry)
 
     out = module.take_high_res_screenshot(width=1280, height=720, filename="corner.png")
 
-    path = Path(str(out.get("path") or ""))
-    assert path.is_file(), f"no PNG on disk: {out}"
-    assert path.read_bytes() == PNG_BYTES
+    assert base64.b64decode(str(out.get("png_base64") or "")) == PNG_BYTES
+    assert not out.get("path")
     assert not out.get("error")
-    assert not out.get("await_path"), "a written file must not be reported as pending"
+    assert not out.get("await_path")
+    assert list(tmp_path.rglob("*.png")) == []
 
 
 def test_viewport_capture_never_falls_back_to_the_shot_console_command(monkeypatch, tmp_path):
@@ -142,9 +142,8 @@ def test_capture_never_writes_into_the_uefn_project_folder(monkeypatch, tmp_path
 
     out = module.take_high_res_screenshot()
 
-    project = (tmp_path / "project").resolve()
-    written = Path(str(out["path"])).resolve()
-    assert project not in written.parents
+    assert not out.get("path")
+    assert not list((tmp_path / "project").rglob("*.png"))
 
 
 def test_missing_registry_reports_an_error_instead_of_a_silent_no_op(monkeypatch, tmp_path):

@@ -8,7 +8,6 @@ import pytest
 
 from frontend.ui_web.tool_captures import (
     build_tool_capture_url,
-    copy_png_to_ducky_captures,
     resolve_tool_capture_path,
     save_capture_for_agents,
     save_tool_capture_png,
@@ -52,12 +51,12 @@ def test_resolve_tool_capture_rejects_path_escape(tmp_path, monkeypatch):
         resolve_tool_capture_path("not-a-png.txt")
 
 
-def test_save_capture_for_agents_stays_in_appdata(tmp_path, monkeypatch):
-    """Never write captures into the UEFN project folder."""
+def test_save_capture_for_agents_writes_the_chat_folder_only(tmp_path, monkeypatch):
+    """Screenshots land in the chat attachments folder, never the project or tool_captures."""
+    from backend.workspace.identity import RunContext, bind, reset
+
     project = tmp_path / "island"
     project.mkdir()
-    appdata = tmp_path / "appdata"
-    appdata.mkdir()
 
     class _Settings:
         uefn_project_root = str(project)
@@ -67,17 +66,23 @@ def test_save_capture_for_agents_stays_in_appdata(tmp_path, monkeypatch):
         staticmethod(lambda: _Settings()),
     )
     monkeypatch.setattr(
-        "frontend.ui_web.tool_captures.resolve_app_data_dir",
-        lambda for_write=False: appdata,
+        "frontend.ui_web.project_chats._chats_root",
+        lambda: tmp_path / "chats" / "projects",
     )
-    saved = save_capture_for_agents(_PNG, prefix="uefn_viewport")
+    token = bind(RunContext(conv_id="chat-1"))
+    try:
+        saved = save_capture_for_agents(_PNG, prefix="uefn_viewport")
+    finally:
+        reset(token)
+    assert saved["ok"] is True
     path = Path(str(saved["path"]))
     assert path.is_file()
     assert path.read_bytes() == _PNG
-    assert "tool_captures" in str(path).replace("\\", "/")
+    assert "/conversations/chat-1/attachments/" in str(path).replace("\\", "/")
+    assert "tool_captures" not in str(path).replace("\\", "/")
     assert "DuckyCaptures" not in str(path)
     assert not (project / "Saved").exists()
-    assert copy_png_to_ducky_captures(_PNG, prefix="snip", filename="snip-x.png").endswith(
-        "snip-x.png"
-    )
     assert not list(project.rglob("*.png"))
+    refused = save_capture_for_agents(_PNG, prefix="uefn_viewport")
+    assert refused["ok"] is False
+    assert "no active chat" in str(refused["error"])

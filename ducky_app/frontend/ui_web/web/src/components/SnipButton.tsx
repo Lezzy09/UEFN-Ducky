@@ -4,13 +4,14 @@ import { useUiTarget } from "../ui-targets/registry";
 import { canSnip, captureSnipFile } from "./snipCapture";
 
 interface SnipButtonProps {
+  chatId?: string;
   disabled?: boolean;
   onCaptured: (file: File, meta?: { projectPath?: string }) => void;
 }
 
 /** Opens the Windows region snipper (Win+Shift+S) and drops the result into
  * the composer as an image attachment. */
-export function SnipButton({ disabled, onCaptured }: SnipButtonProps) {
+export function SnipButton({ chatId = "", disabled, onCaptured }: SnipButtonProps) {
   const [busy, setBusy] = useState(false);
   const uiTargetRef = useUiTarget("chat.composer.snip", {
     kind: "button",
@@ -23,7 +24,7 @@ export function SnipButton({ disabled, onCaptured }: SnipButtonProps) {
     if (busy) return;
     setBusy(true);
     try {
-      const snip = await captureSnipFile();
+      const snip = await captureSnipFile(chatId);
       if (snip) onCaptured(snip.file, { projectPath: snip.projectPath });
     } finally {
       setBusy(false);

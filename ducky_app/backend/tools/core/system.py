@@ -69,7 +69,7 @@ def uefn_window_list(title_regex: str = "", pretty: bool = False) -> str:
 
 @mcp.tool()
 def uefn_window_capture(hwnd: int = 0, title_regex: str = "", pretty: bool = False) -> Any:
-    """Screenshot one UEFN window into AppData tool_captures and return the image.
+    """Screenshot one UEFN window into this chat's AppData attachments folder.
 
     Pass ``hwnd`` from uefn_window_list, or a ``title_regex``.
     """

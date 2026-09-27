@@ -164,9 +164,10 @@ AGENT_HARD_RULES = (
     '`skill_read_subskill("uefn", "verse_build_lifecycle")`.\n'
     "\n"
     "### Files and storage\n"
-    "- Screenshots / snips: returned ``path`` under `%LOCALAPPDATA%/UEFN-Ducky/tool_captures/` "
+    "- Screenshots / snips: returned ``path`` under "
+    "`%LOCALAPPDATA%/UEFN-Ducky/chats/projects/<project>/conversations/<chat>/attachments/` "
     "only. Capture tools also return MCP image content / auto-attach vision. Never write "
-    "captures into the UEFN project folder.\n"
+    "captures into Temp, `tool_captures`, or the UEFN project folder.\n"
     "- **Project folder storage (HARD):** never create Ducky side-files inside the UEFN "
     "project except ``.ducky/**``. Caches, temps, captures → `%LOCALAPPDATA%/UEFN-Ducky/` "
     "or OS temp — **never** `Saved/DuckyCaptures`, `.uefn-ducky`. Game content is fine — "

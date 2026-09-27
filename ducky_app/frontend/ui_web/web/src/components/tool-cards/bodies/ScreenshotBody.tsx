@@ -19,6 +19,20 @@ export function parseScreenshotResult(raw: string): Record<string, unknown> | nu
         parsed = JSON.parse(inner);
         continue;
       }
+      if (Array.isArray(parsed)) {
+        let text = "";
+        for (const block of parsed) {
+          const row = asScreenshotRecord(block);
+          const candidate = row && row.type === "text" && typeof row.text === "string" ? row.text.trim() : "";
+          if (candidate.startsWith("{") || candidate.startsWith("[")) {
+            text = candidate;
+            break;
+          }
+        }
+        if (!text) return null;
+        parsed = text;
+        continue;
+      }
       const obj = asScreenshotRecord(parsed);
       if (!obj) break;
       if (obj.data !== undefined) {
@@ -68,9 +82,19 @@ export function pickScreenshotMediaUrl(data: Record<string, unknown> | null): st
   if (!data) return "";
   for (const key of ["media_url", "preview_url", "url"] as const) {
     const v = data[key];
-    if (typeof v === "string" && /^https?:\/\//i.test(v.trim())) return v.trim();
+    if (typeof v !== "string") continue;
+    const url = v.trim();
+    if (/^https?:\/\//i.test(url) || /\/chat-attachments\//i.test(url)) return url;
   }
   return "";
+}
+
+/** Chat-folder PNG path → panel URL the card can load. */
+export function screenshotSrcFromPath(path: string): string {
+  const norm = path.replace(/\\/g, "/");
+  const match = /\/conversations\/([^/]+)\/attachments\/([^/]+\.(?:png|jpe?g|webp))$/i.exec(norm);
+  if (!match) return "";
+  return `/chat-attachments/${match[1]}/${match[2]}`;
 }
 
 export function pickScreenshotPath(
@@ -116,15 +140,21 @@ export function ScreenshotBody({
   const mediaUrl = showResult ? pickScreenshotMediaUrl(data) : "";
   const base64 = showResult && !mediaUrl ? pickScreenshotBase64(data) : "";
   const path = pickScreenshotPath(data, args);
+  const fromPath = showResult && !mediaUrl && !base64 ? screenshotSrcFromPath(path) : "";
+  const captureError =
+    showResult && typeof data?.error === "string" && data.error.trim() && !mediaUrl && !fromPath
+      ? data.error.trim()
+      : "";
   const mime = pickMime(data);
   const src = useMemo(() => {
     if (mediaUrl) return mediaUrl;
+    if (fromPath) return fromPath;
     if (base64) return `data:${mime};base64,${base64}`;
     return "";
-  }, [mediaUrl, base64, mime]);
+  }, [mediaUrl, fromPath, base64, mime]);
   const [imgFailed, setImgFailed] = useState(false);
 
-  const showImage = !!src && !imgFailed && !isError;
+  const showImage = !!src && !imgFailed && !isError && !captureError;
 
   return (
     <div className="tool-card-screenshot-body">
@@ -146,7 +176,7 @@ export function ScreenshotBody({
           <Icons.Camera />
           <div className="tool-card-screenshot-badge">
             <span className="tool-card-screenshot-badge-dot" />
-            {isError || imgFailed ? "Failed" : showResult ? "No image" : "Capture"}
+            {isError || imgFailed || captureError ? "Failed" : showResult ? "No image" : "Capture"}
           </div>
         </div>
       )}
@@ -163,6 +193,7 @@ export function ScreenshotBody({
           Screenshot succeeded but no image preview was returned.
         </div>
       ) : null}
+      {captureError ? <div className="tool-execution-card-hint">{captureError}</div> : null}
       {imgFailed ? (
         <div className="tool-execution-card-hint">
           Could not load screenshot preview. Path is still listed below if available.

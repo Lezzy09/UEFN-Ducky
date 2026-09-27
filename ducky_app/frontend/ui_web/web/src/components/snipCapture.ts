@@ -11,10 +11,10 @@ export function canSnip(): boolean {
 }
 
 /** Runs the Windows region snipper and turns the reply into a PNG File. */
-export async function captureSnipFile(): Promise<SnipResult | null> {
+export async function captureSnipFile(convId = ""): Promise<SnipResult | null> {
   const api = getApi();
   if (!canSnip() || !api?.snip_screen) return null;
-  const res = await api.snip_screen();
+  const res = await api.snip_screen(convId);
   if (!res?.ok || !res.data_base64) return null;
   const bin = atob(res.data_base64);
   const bytes = new Uint8Array(bin.length);

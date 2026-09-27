@@ -105,7 +105,8 @@ def test_hard_rules_python_is_last_not_exhausted_fallback():
 
 
 def test_hard_rules_captures_use_appdata_not_project():
-    assert "tool_captures" in AGENT_HARD_RULES
+    assert "attachments" in AGENT_HARD_RULES
+    assert "conversations" in AGENT_HARD_RULES
     assert "LOCALAPPDATA" in AGENT_HARD_RULES or "AppData" in AGENT_HARD_RULES
     assert "MCP image" in AGENT_HARD_RULES or "vision" in AGENT_HARD_RULES
     assert ".ducky" in AGENT_HARD_RULES
@@ -462,13 +463,26 @@ def test_enrich_screenshot_uses_appdata_not_project(tmp_path, monkeypatch):
         "frontend.ui_web.tool_captures.resolve_app_data_dir",
         lambda for_write=False: appdata,
     )
-    out = editor_mod._enrich_screenshot({"path": str(project_png), "width": 1, "height": 1})
-    assert "tool_captures" in out["path"].replace("\\", "/")
-    assert "DuckyCaptures" not in out["path"]
+    from backend.workspace.identity import RunContext, bind, reset
+
+    monkeypatch.setattr(
+        "frontend.ui_web.project_chats._chats_root",
+        lambda: tmp_path / "chats" / "projects",
+    )
+    token = bind(RunContext(conv_id="chat-shot"))
+    try:
+        out = editor_mod._enrich_screenshot({"path": str(project_png), "width": 1, "height": 1})
+    finally:
+        reset(token)
+    saved = out["path"].replace("\\", "/")
+    assert "/conversations/chat-shot/attachments/" in saved
+    assert "tool_captures" not in saved
+    assert "DuckyCaptures" not in saved
     assert Path(out["path"]).is_file()
-    assert out["ue_screenshot_path"] == str(project_png)
-    assert out["media_url"].startswith("http://")
+    assert Path(out["path"]).read_bytes() == project_png.read_bytes()
+    assert "/chat-attachments/chat-shot/" in out["media_url"]
     assert not (project_root / "Saved" / "DuckyCaptures").exists()
+    assert not (appdata / "tool_captures").exists()
 
 
 def test_wait_for_screenshot_file_polls_until_ready(tmp_path, monkeypatch):

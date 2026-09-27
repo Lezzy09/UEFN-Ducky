@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import base64
 import re
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 from backend.agent.message_attachment import MessageAttachment
 
 _UNSAFE_CHARS = re.compile(r"[^\w.\-]+")
+_CONV_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+_CHAT_FILE_RE = re.compile(r"^[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)$", re.IGNORECASE)
+NO_CHAT_CAPTURE_ERROR = "Screenshot was not saved: no active chat."
 
 
 def _safe_attachment_filename(name: str) -> str:
@@ -92,6 +97,81 @@ def hydrate_attachment_dict(
     if kind == "file":
         return {**raw, "text": full.read_text(encoding="utf-8")}
     return raw
+
+
+def active_chat_id() -> str:
+    """Conversation bound on this tool call, or empty."""
+    try:
+        from backend.workspace.identity import current
+
+        ctx = current()
+    except Exception:
+        return ""
+    return str(getattr(ctx, "conv_id", "") or "").strip()
+
+
+def chat_attachments_dir(conv_id: str, *, create: bool = False) -> Path | None:
+    """`…/chats/projects/<project>/conversations/<chat>/attachments`, or None."""
+    cid = (conv_id or "").strip()
+    if not _CONV_ID_RE.fullmatch(cid):
+        return None
+    from frontend.ui_web.project_chats import get_conversations_dir
+
+    path = get_conversations_dir(create=create) / cid / "attachments"
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def build_chat_attachment_url(conv_id: str, filename: str) -> str:
+    from frontend.settings import PANEL_LISTENER_PORT
+
+    name = Path(filename).name
+    port = PANEL_LISTENER_PORT - 1
+    return f"http://127.0.0.1:{port}/chat-attachments/{conv_id}/{name}"
+
+
+def resolve_chat_attachment_path(conv_id: str, filename: str) -> Path:
+    cid = Path(conv_id or "").name
+    name = Path(filename or "").name
+    if cid != (conv_id or "") or not _CONV_ID_RE.fullmatch(cid) or not _CHAT_FILE_RE.fullmatch(name):
+        raise ValueError("Invalid attachment")
+    root = chat_attachments_dir(cid)
+    if root is None:
+        raise ValueError("Invalid attachment")
+    target = (root / name).resolve()
+    root_resolved = root.resolve()
+    try:
+        target.relative_to(root_resolved)
+    except ValueError as exc:
+        raise ValueError("Path escapes chat attachments") from exc
+    if not target.is_file():
+        raise ValueError("Not a file")
+    return target
+
+
+def save_chat_screenshot(raw: bytes, *, prefix: str = "capture", conv_id: str = "") -> dict[str, Any]:
+    """Write one PNG under the active chat's attachments folder. Nowhere else."""
+    if not raw:
+        return {"ok": False, "error": "Screenshot was empty."}
+    cid = (conv_id or active_chat_id()).strip()
+    dest_dir = chat_attachments_dir(cid, create=True) if cid else None
+    if dest_dir is None:
+        return {"ok": False, "error": NO_CHAT_CAPTURE_ERROR}
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", (prefix or "capture").strip())[:40] or "capture"
+    name = f"{safe}_{int(time.time())}_{uuid.uuid4().hex[:8]}.png"
+    path = dest_dir / name
+    path.write_bytes(raw)
+    return {
+        "ok": True,
+        "path": str(path),
+        "filename": name,
+        "conv_id": cid,
+        "media_url": build_chat_attachment_url(cid, name),
+        "bytes": len(raw),
+        "format": "png",
+        "capture_path": str(path),
+    }
 
 
 def hydrate_attachment_dicts(

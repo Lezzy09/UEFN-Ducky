@@ -39,6 +39,7 @@ export default defineConfig(({ mode }) => ({
       "/__panel_events": "http://127.0.0.1:4199",
       "/model-files": "http://127.0.0.1:4199",
       "/tool-captures": "http://127.0.0.1:4199",
+      "/chat-attachments": "http://127.0.0.1:4199",
       "/duckies/custom": "http://127.0.0.1:4199",
       "/__panel_event": "http://127.0.0.1:4199",
       "/__panel_run": "http://127.0.0.1:4199",

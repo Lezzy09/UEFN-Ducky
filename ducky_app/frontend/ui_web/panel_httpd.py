@@ -59,6 +59,10 @@ _event_seq = 0
 _event_backlog: deque[tuple[int, dict[str, object]]] = deque(maxlen=4000)
 _CUSTOM_DUCKY_RE = re.compile(r"^duckies/custom/([a-z0-9][a-z0-9_-]{0,63})\.png$", re.IGNORECASE)
 _TOOL_CAPTURE_RE = re.compile(r"^tool-captures/([A-Za-z0-9._-]+\.(?:png|jpe?g|webp))$", re.IGNORECASE)
+_CHAT_ATTACHMENT_RE = re.compile(
+    r"^chat-attachments/([A-Za-z0-9._-]{1,80})/([A-Za-z0-9._-]+\.(?:png|jpe?g|webp))$",
+    re.IGNORECASE,
+)
 _GENERATED_IMAGE_RE = re.compile(r"^generated-images/([A-Za-z0-9._-]+\.(?:png|jpe?g|webp))$", re.IGNORECASE)
 _auth_lock = threading.Lock()
 _one_time: dict[str, float] = {}
@@ -843,6 +847,29 @@ def start_panel_ui_server(dist_root: Path) -> str:
 
                     try:
                         file_path = resolve_generated_image_path(gen_match.group(1))
+                    except ValueError:
+                        self.send_error(404)
+                        return
+                    try:
+                        data = file_path.read_bytes()
+                    except OSError:
+                        self.send_error(404)
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", media_content_type(file_path))
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "private, max-age=3600")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+
+                chat_att = _CHAT_ATTACHMENT_RE.match(rel)
+                if chat_att:
+                    from frontend.ui_web.conversation_attachments import resolve_chat_attachment_path
+                    from frontend.ui_web.project_media import media_content_type
+
+                    try:
+                        file_path = resolve_chat_attachment_path(chat_att.group(1), chat_att.group(2))
                     except ValueError:
                         self.send_error(404)
                         return
