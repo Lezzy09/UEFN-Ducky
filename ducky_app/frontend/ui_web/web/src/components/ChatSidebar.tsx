@@ -930,13 +930,27 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
   const deleteFolder = async (folderId: string, folderName: string) => {
     const folder = findFolderById(foldersRef.current, folderId);
     const hubId = (folder?.groupHubId || "").trim();
-    const message = hubId
-      ? `Delete group "${folderName}" and any groups nested inside it? Member duckies move to Archive; the group chats are deleted for good.`
-      : `Delete folder "${folderName}"? Duckies inside will move to the root.`;
-    if (!(await confirm({ message, confirmLabel: "Delete", danger: true }))) return;
+    let archiveMembers = false;
+    if (hubId) {
+      const choice = await confirm({
+        title: "Delete group",
+        message: `Delete group "${folderName}"? The group goes to Archive. Its duckies can stay active, or go to Archive too.`,
+        confirmLabel: "Group only",
+        extraLabel: "Group and duckies",
+        danger: true,
+      });
+      if (choice === false) return;
+      archiveMembers = choice === "extra";
+    } else if (!(await confirm({
+      message: `Delete folder "${folderName}"? Duckies inside will move to the root.`,
+      confirmLabel: "Delete",
+      danger: true,
+    }))) {
+      return;
+    }
     const api = getApi();
     if (!api) return;
-    const deletedHubIds = await api.delete_folder(folderId);
+    const deletedHubIds = await api.delete_folder(folderId, archiveMembers);
     for (const id of deletedHubIds ?? []) onChatDeleted?.(id);
     void load();
   };
@@ -949,14 +963,26 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       groups.length ? `${groups.length} group${groups.length === 1 ? "" : "s"}` : "",
       chats.length ? `${chats.length} ducky${chats.length === 1 ? "" : "s"}` : "",
     ].filter(Boolean);
-    if (
+    let archiveMembers = false;
+    if (groups.length) {
+      const choice = await confirm({
+        title: "Delete selection",
+        message: `Delete ${targets.length} selected items (${parts.join(" and ")})? Groups go to Archive. Duckies you selected go to Archive. Duckies inside a group can stay active, or go to Archive too.`,
+        confirmLabel: "Group only",
+        extraLabel: "Group and duckies",
+        danger: true,
+      });
+      if (choice === false) return false;
+      archiveMembers = choice === "extra";
+    } else if (
       !(await confirm({
-        message: `Delete all ${targets.length} selected items (${parts.join(" and ")})? Duckies move to Archive; groups and anything nested inside them are deleted for good.`,
+        message: `Delete all ${targets.length} selected items (${parts.join(" and ")})? Duckies move to Archive.`,
         confirmLabel: "Delete ALL",
         danger: true,
       }))
-    )
+    ) {
       return false;
+    }
     const api = getApi();
     if (!api) return false;
     for (const chat of chats) {
@@ -973,9 +999,10 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       return false;
     };
     for (const group of groups) {
-      // Nested groups already went away with their parent's delete.
-      if (!findFolderById(foldersRef.current, group.id) || hasSelectedAncestor(group.id)) continue;
-      const deletedHubIds = await api.delete_folder(group.id);
+      if (!findFolderById(foldersRef.current, group.id)) continue;
+      // "Group and duckies" removes the nested groups with their parent.
+      if (archiveMembers && hasSelectedAncestor(group.id)) continue;
+      const deletedHubIds = await api.delete_folder(group.id, archiveMembers);
       for (const id of deletedHubIds ?? []) onChatDeleted?.(id);
     }
     void load();

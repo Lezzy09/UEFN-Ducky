@@ -6,9 +6,13 @@ export interface ConfirmOptions {
   title?: string;
   message: string;
   confirmLabel?: string;
+  /** Second action, beside confirm. Resolves the promise to "extra". */
+  extraLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
 }
+
+export type ConfirmResult = boolean | "extra";
 
 export interface AlertOptions {
   title?: string;
@@ -17,11 +21,11 @@ export interface AlertOptions {
 }
 
 type DialogState =
-  | { type: "confirm"; options: ConfirmOptions; resolve: (confirmed: boolean) => void }
+  | { type: "confirm"; options: ConfirmOptions; resolve: (result: ConfirmResult) => void }
   | { type: "alert"; options: AlertOptions; resolve: () => void };
 
 interface ConfirmModalContextValue {
-  confirm: (options: ConfirmOptions | string) => Promise<boolean>;
+  confirm: (options: ConfirmOptions | string) => Promise<ConfirmResult>;
   alert: (options: AlertOptions | string) => Promise<void>;
 }
 
@@ -43,7 +47,7 @@ function confirmShortcutKey(label: string): string | null {
 export function ConfirmModalProvider({ children }: { children: ReactNode }) {
   const [dialog, setDialog] = useState<DialogState | null>(null);
 
-  const confirm = useCallback((options: ConfirmOptions | string): Promise<boolean> => {
+  const confirm = useCallback((options: ConfirmOptions | string): Promise<ConfirmResult> => {
     const opts = normalizeConfirm(options);
     return new Promise((resolve) => {
       setDialog({ type: "confirm", options: opts, resolve });
@@ -57,9 +61,9 @@ export function ConfirmModalProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const dismissConfirm = (confirmed: boolean) => {
+  const dismissConfirm = (result: ConfirmResult) => {
     if (dialog?.type !== "confirm") return;
-    dialog.resolve(confirmed);
+    dialog.resolve(result);
     setDialog(null);
   };
 
@@ -122,6 +126,7 @@ export function ConfirmModalProvider({ children }: { children: ReactNode }) {
             dialog.type === "confirm" ? (
               <ModalActions
                 cancelLabel={`${dialog.options.cancelLabel ?? "Cancel"} (C)`}
+                extraLabel={dialog.options.extraLabel}
                 confirmLabel={
                   confirmKey
                     ? `${confirmLabel} (${confirmKey.toUpperCase()})`
@@ -129,6 +134,7 @@ export function ConfirmModalProvider({ children }: { children: ReactNode }) {
                 }
                 danger={dialog.options.danger}
                 onCancel={() => dismissConfirm(false)}
+                onExtra={() => dismissConfirm("extra")}
                 onConfirm={() => dismissConfirm(true)}
               />
             ) : (

@@ -72,7 +72,39 @@ def _make_group(settings, name: str, parent_id: str, root: str):
     return folder, hub
 
 
-def test_delete_group_archives_members_and_deletes_hub():
+def test_delete_group_keeps_duckies_and_archives_the_group():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = str(Path(tmp))
+        settings = PanelSettings.load()
+        folder, hub = _make_group(settings, "Squad", "", root)
+        member = create_conversation(
+            settings,
+            folder.id,
+            title="Verse Coder",
+            parent_conv_id=hub.id,
+            project_root=root,
+        )
+        nested, nested_hub = _make_group(settings, "Inner", folder.id, root)
+
+        assert delete_folder(folder.id, root) == [hub.id]
+
+        archived_hub = load_conversation(hub.id, project_root=root)
+        assert archived_hub is not None
+        assert archived_hub.folder_id == ARCHIVE_FOLDER_ID
+        assert archived_hub.is_group
+        kept = load_conversation(member.id, project_root=root)
+        assert kept is not None
+        assert kept.folder_id == ""
+        assert kept.parent_conv_id == ""
+        folders = load_folders(root)
+        assert all(f.id != folder.id for f in folders)
+        moved = next(f for f in folders if f.id == nested.id)
+        assert moved.parent_id == ""
+        assert load_conversation(nested_hub.id, project_root=root) is not None
+        assert ensure_group_folder_hubs(root) == 0
+
+
+def test_delete_group_can_archive_duckies_too():
     with tempfile.TemporaryDirectory() as tmp:
         root = str(Path(tmp))
         settings = PanelSettings.load()
@@ -85,31 +117,34 @@ def test_delete_group_archives_members_and_deletes_hub():
             project_root=root,
         )
 
-        assert delete_folder(folder.id, root) == [hub.id]
+        assert delete_folder(folder.id, root, archive_members=True) == [hub.id]
 
-        assert load_conversation(hub.id, project_root=root) is None
+        archived_hub = load_conversation(hub.id, project_root=root)
+        assert archived_hub is not None
+        assert archived_hub.folder_id == ARCHIVE_FOLDER_ID
         archived_member = load_conversation(member.id, project_root=root)
         assert archived_member is not None
         assert archived_member.folder_id == ARCHIVE_FOLDER_ID
-        # Unlinked from the dead hub, otherwise deleting it would cascade-wipe them.
         assert archived_member.parent_conv_id == ""
         assert all(f.id != folder.id for f in load_folders(root))
-        assert {c.id for c in list_conversations(project_root=root)} == {member.id}
 
 
-def test_delete_group_cascades_to_nested_groups():
+def test_delete_group_and_duckies_archives_nested_groups():
     with tempfile.TemporaryDirectory() as tmp:
         root = str(Path(tmp))
         settings = PanelSettings.load()
         outer, outer_hub = _make_group(settings, "Outer", "", root)
-        inner, inner_hub = _make_group(settings, "Inner", outer.id, root)
+        _inner, inner_hub = _make_group(settings, "Inner", outer.id, root)
 
-        assert delete_folder(outer.id, root) == sorted([outer_hub.id, inner_hub.id])
+        assert delete_folder(outer.id, root, archive_members=True) == sorted(
+            [outer_hub.id, inner_hub.id]
+        )
 
-        # Nested groups used to survive by being re-parented to the root.
-        assert all(f.id not in {outer.id, inner.id} for f in load_folders(root))
-        assert load_conversation(outer_hub.id, project_root=root) is None
-        assert load_conversation(inner_hub.id, project_root=root) is None
+        assert all(f.id not in {outer.id, _inner.id} for f in load_folders(root))
+        for hub_id in (outer_hub.id, inner_hub.id):
+            archived = load_conversation(hub_id, project_root=root)
+            assert archived is not None
+            assert archived.folder_id == ARCHIVE_FOLDER_ID
         assert ensure_group_folder_hubs(root) == 0
 
 

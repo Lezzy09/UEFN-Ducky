@@ -2117,7 +2117,13 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
 
     ver_raw = manifest.get("version")
     ver = plugin_version_rank(ver_raw) if ver_raw is not None else None
-    _CONTRIBUTIONS["ui_panels"].extend(merge_ui_panels(contributes, pid, root, version=ver))
+    for row in merge_ui_panels(contributes, pid, root, version=ver):
+        # Default panel icon is the word "duck", which the tab bar drew as a ducky.
+        # Prefer this plugin's own assets/icon when the panel didn't set one.
+        resolved = _resolve_contrib_icon(row.get("icon"), root)
+        if resolved:
+            row["icon"] = resolved
+        _CONTRIBUTIONS["ui_panels"].append(row)
 
     for boot in contributes.get("shell.boot") or contributes.get("shell_boot") or []:
         if not isinstance(boot, dict):

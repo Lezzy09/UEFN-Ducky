@@ -21,6 +21,7 @@ function mapConversations(convs: ConvRow[]): FolderItem["chats"] {
     const leaderConvId = String((c as { leader_conv_id?: string }).leader_conv_id || "").trim() || undefined;
     const isLeader = Boolean(parentId && leaderByHub.get(parentId) === c.id);
     const projectSlug = String((c as { project_slug?: string }).project_slug || "").trim() || undefined;
+    const projectName = String((c as { project_name?: string }).project_name || "").trim() || undefined;
     return {
       id: c.id,
       name: c.title,
@@ -48,6 +49,7 @@ function mapConversations(convs: ConvRow[]): FolderItem["chats"] {
       fileCount: Number(c.file_count) || 0,
       contextTokens: Number(c.context_tokens) || 0,
       projectSlug,
+      projectName,
     };
   });
 }
@@ -136,9 +138,18 @@ export function useChatFolders(refreshToken: number, currentProjectSlug = "") {
     const expandedById = new Map<string, boolean>();
     collectExpanded(foldersRef.current, expandedById);
 
+    const archiveSource = allProjects
+      ? allConvs
+      : await api.list_all_conversations(true).then((rows) => (Array.isArray(rows) ? rows : [])).catch(() => [] as ConvRow[]);
+    const archivedRows = archiveSource.filter((c) => {
+      const storedFid = (c.folder_id || "").trim();
+      return isArchiveFolderId(storedFid) || storedFid === ARCHIVE_FOLDER_ID;
+    });
+    const everyArchive = mapConversations(archivedRows);
+
     if (!allProjects) {
       const one = assembleOneProject(folderRows, allConvs, expandedById);
-      setArchiveChats(one.archiveChats);
+      setArchiveChats(everyArchive);
       setHubChats(one.hubChats);
       setRootChats(one.rootChats);
       setFolders(one.folders);
@@ -193,7 +204,7 @@ export function useChatFolders(refreshToken: number, currentProjectSlug = "") {
     }
 
     setHubChats(projects.flatMap((p) => p.hubChats));
-    setArchiveChats(projects.find((p) => p.slug === currentProjectSlug)?.archiveChats ?? []);
+    setArchiveChats(everyArchive);
     setRootChats([]);
     setFolders(wrapProjectsAsFolders(projects, currentProjectSlug, expandedById));
     setFoldersLoaded(true);

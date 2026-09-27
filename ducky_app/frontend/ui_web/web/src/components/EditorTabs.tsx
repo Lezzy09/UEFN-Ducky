@@ -34,7 +34,10 @@ import { isEnglishLang } from "../views/settings/translationLanguages";
 import {
   pluginContributesSettingsTab,
   usePluginContributions,
+  type PluginContributions,
 } from "../hooks/usePluginContributions";
+import { parsePluginUiTabId } from "../plugin-ui/types";
+import { resolvePluginHeaderIcon } from "../hooks/pluginHeaderActions";
 import { contextMenuSeparator } from "../utils/sidebarContextMenuItems";
 
 import { LiveChatDot } from "../voice/LiveChatMark";
@@ -93,6 +96,18 @@ interface EditorTabsProps {
   variant?: "default" | "focus";
   groupLocked?: boolean;
   onToggleGroupLock?: () => void;
+}
+
+function pluginTabIcon(tab: EditorTab, contrib: PluginContributions) {
+  const parsed = parsePluginUiTabId(tab.id);
+  const panel = parsed
+    ? contrib.ui_panels.find(
+        (row) =>
+          (row.plugin_id || "").toLowerCase() === parsed.pluginId &&
+          (row.id || "").toLowerCase() === parsed.panelId,
+      )
+    : undefined;
+  return resolvePluginHeaderIcon(panel?.icon);
 }
 
 export function EditorTabs({
@@ -434,6 +449,8 @@ export function EditorTabs({
                   <Icons.GitBranch />
                 ) : tab.kind === "verse-translated" ? (
                   <Icons.Globe />
+                ) : tab.kind === "plugin" ? (
+                  pluginTabIcon(tab, pluginContrib)
                 ) : (
                   <DuckyAvatar styleId={tab.duckyStyle} size={DUCKY_AVATAR_SIZES.tab} />
                 )}
