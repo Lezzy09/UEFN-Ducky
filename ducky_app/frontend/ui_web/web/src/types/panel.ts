@@ -1328,6 +1328,8 @@ export interface UefnPluginContributionsDto {
     default_url?: string;
     order?: number;
     plugin_id: string;
+    icon_data_url?: string;
+    chat?: boolean;
   }>;
   /** Gateway coding agents (e.g. Codex via OpenAI plugin). */
   llm_coding_agents?: Array<{

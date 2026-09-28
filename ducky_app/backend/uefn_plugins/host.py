@@ -2413,6 +2413,8 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
             "order": order,
             "plugin_id": pid,
             "key_optional": bool(prov.get("key_optional")),
+            # Missing chat stays a chat gateway. Explicit false is a key-only row (TypeSafe).
+            "chat": prov.get("chat") is not False,
         }
         if "shows_thinking_effort" in prov:
             entry["shows_thinking_effort"] = bool(prov.get("shows_thinking_effort"))

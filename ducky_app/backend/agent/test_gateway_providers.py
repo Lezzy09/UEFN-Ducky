@@ -68,6 +68,26 @@ def test_gemini_gateway_when_contributed_and_registered():
         assert "gemini" in all_providers()
 
 
+def test_chat_false_provider_stays_out_of_the_picker():
+    from backend.agent.providers import gateway_providers
+
+    fake = [
+        {"id": "typesafe", "label": "TypeSafe", "plugin_id": "typesafe", "chat": False},
+        {"id": "openai", "label": "OpenAI", "plugin_id": "openai"},
+    ]
+    with (
+        patch(
+            "backend.uefn_plugins.host.get_contributions",
+            return_value={"llm_providers": fake},
+        ),
+        patch(
+            "backend.uefn_plugins.host.get_llm_provider_registration",
+            return_value={"factory": lambda *a, **k: None},
+        ),
+    ):
+        assert gateway_providers() == ("openai",)
+
+
 def test_make_provider_gemini_requires_gateway():
     from backend.agent.providers import make_provider
 

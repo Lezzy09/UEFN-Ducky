@@ -89,20 +89,46 @@ def _load_blob() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def account_key(blob: dict[str, Any] | None = None) -> str:
+    """Who this PC is signed in as (``""`` signed out). Keys account-scoped caches."""
+    b = _load_blob() if blob is None else blob
+    if not (b.get("device_key") or b.get("session_value")):
+        return ""
+    who = str(b.get("email") or b.get("user_id") or "").strip().lower()
+    return f"{str(b.get('base_url') or '').rstrip('/')}|{who}"
+
+
+def _note_account_change(before: str, after: str) -> None:
+    # Login / logout / expiry all land here: the panel drops account-scoped
+    # caches (Store catalog) so one account never sees another's team items.
+    if before == after:
+        return
+    try:
+        from frontend.ui_web.agent_modes import push_ui_event
+
+        push_ui_event({"type": "duckyos_account_changed"})
+    except Exception:
+        pass
+
+
 def _save_blob(data: dict[str, Any]) -> None:
     from backend.agent.secrets import clear_key, set_key
 
+    before = account_key()
     cleaned = {k: v for k, v in data.items() if v not in (None, "", [], {})}
     if cleaned:
         set_key(_CREDENTIALS_KEY, json.dumps(cleaned, separators=(",", ":")))
     else:
         clear_key(_CREDENTIALS_KEY)
+    _note_account_change(before, account_key(cleaned))
 
 
 def _clear_blob() -> None:
     from backend.agent.secrets import clear_key
 
+    before = account_key()
     clear_key(_CREDENTIALS_KEY)
+    _note_account_change(before, "")
 
 
 def pkce_pair() -> tuple[str, str]:
@@ -2014,33 +2040,22 @@ def _local_plugin_icon_fields(plug: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _store_commerce_fields(raw: dict[str, Any]) -> dict[str, Any]:
-    try:
-        price_cents = int(raw.get("price_cents") or 0)
-    except (TypeError, ValueError):
-        price_cents = 0
-    currency = str(raw.get("currency") or "usd").strip().lower() or "usd"
-    paid = bool(raw.get("paid")) if "paid" in raw else price_cents > 0
-    owned_raw = raw.get("owned")
-    owned: bool | None
-    if owned_raw is None:
-        owned = None
-    else:
-        owned = bool(owned_raw)
+def _store_team_fields(raw: dict[str, Any]) -> dict[str, Any]:
+    """Owning team for the library's Team category. Missing fields = not my team."""
     return {
-        "price_cents": price_cents,
-        "currency": currency,
-        "paid": paid,
-        "owned": owned,
-        "stripe_product_key": str(raw.get("stripe_product_key") or "") or None,
+        "visibility": "private" if raw.get("visibility") == "private" else "public",
+        "owner_team_id": str(raw.get("owner_team_id") or "") or None,
+        "owner_team_name": str(raw.get("owner_team_name") or ""),
+        "my_team": raw.get("my_team") is True,
     }
 
 
 def store_catalog() -> dict[str, Any]:
     """Published store items + local install/update state for skills and UEFN plugins.
 
-    Anonymous-friendly: the catalog lists only published items server-side.
-    When signed in, paid items include ``owned``.
+    Fetched as the signed-in account when there is one (``api_request`` attaches
+    its credentials even with ``allow_anonymous``), so members get their teams'
+    private items; signed out it is the anonymous public catalog.
     """
     try:
         payload = _store_collect("catalog", {}, allow_anonymous=True, timeout=20.0)
@@ -2129,7 +2144,7 @@ def store_catalog() -> dict[str, Any]:
         remote_display = format_plugin_version(latest or raw.get("pack_version") or 0)
 
         icon_fields = _store_icon_fields_from_remote(raw)
-        commerce = _store_commerce_fields(raw)
+        team = _store_team_fields(raw)
         local_rank = None
         local_display = None
         enabled = None
@@ -2172,7 +2187,7 @@ def store_catalog() -> dict[str, Any]:
                             "source": source,
                             "state": state,
                             "contributes_summary": _plugin_contributes_summary(plug),
-                            **commerce,
+                            **team,
                             **icon_fields,
                         }
                     )
@@ -2231,7 +2246,7 @@ def store_catalog() -> dict[str, Any]:
                 "source": source,
                 "state": state,
                 "contributes_summary": contrib_summary,
-                **commerce,
+                **team,
                 **icon_fields,
             }
         )
@@ -2261,10 +2276,6 @@ def store_catalog() -> dict[str, Any]:
                 "enabled": bool(plug.get("enabled")),
                 "source": str(plug.get("source") or "local"),
                 "state": "installed",
-                "price_cents": 0,
-                "currency": "usd",
-                "paid": False,
-                "owned": True,
                 "contributes_summary": _plugin_contributes_summary(plug),
                 **_local_plugin_icon_fields(plug),
             }
@@ -2403,183 +2414,6 @@ def _plugin_contributes_summary(plug: dict[str, Any]) -> list[str]:
     return deduped
 
 
-def _stripe_product_key_for_slug(slug: str) -> str:
-    """Catalog product key, or ``uds:{slug}`` when the item has none."""
-    fallback = f"uds:{slug}"
-    try:
-        catalog = store_catalog()
-    except Exception:
-        return fallback
-    items = catalog.get("items") if isinstance(catalog, dict) else None
-    if not isinstance(items, list):
-        return fallback
-    for item in items:
-        if not isinstance(item, dict) or str(item.get("slug") or "") != slug:
-            continue
-        key = str(item.get("stripe_product_key") or "").strip()
-        return key or fallback
-    return fallback
-
-
-def _wait_store_owned(slug: str, *, attempts: int = 16) -> bool:
-    """Poll the catalog until the Stripe webhook has recorded this purchase."""
-    import time
-
-    slug = (slug or "").strip()
-    if not slug:
-        return False
-    for i in range(max(1, attempts)):
-        if i:
-            time.sleep(0.5)
-        try:
-            catalog = store_catalog()
-        except Exception:
-            continue
-        items = catalog.get("items") if isinstance(catalog, dict) else None
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            if (
-                isinstance(item, dict)
-                and str(item.get("slug") or "") == slug
-                and item.get("owned")
-            ):
-                return True
-    return False
-
-
-def store_checkout(
-    slug: str,
-    *,
-    success_url: str | None = None,
-    cancel_url: str | None = None,
-) -> dict[str, Any]:
-    """Start Stripe Checkout for a paid Store item (requires DuckyOS sign-in).
-
-    The Stripe plugin creates the session. Ownership is written when its webhook
-    fires; the localhost return page waits for that row instead of granting itself.
-    """
-    import threading
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-    from urllib.parse import parse_qs, urlparse as _urlparse
-
-    slug = (slug or "").strip()
-    if not slug:
-        raise DuckyOSAccountError("slug required", code="bad_request")
-    base = resolve_base_url().rstrip("/")
-    cancel = (cancel_url or "").strip() or f"{base}/"
-
-    httpd_box: dict[str, Any] = {"httpd": None}
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
-            return
-
-        def do_GET(self) -> None:  # noqa: N802
-            parsed = _urlparse(self.path)
-            if parsed.path.rstrip("/") != "/store-purchase":
-                self.send_response(404)
-                self.end_headers()
-                return
-            qs = parse_qs(parsed.query)
-            session_id = (qs.get("session_id") or qs.get("sessionId") or [""])[0]
-            ok = False
-            err = ""
-            if session_id:
-                try:
-                    ok = _wait_store_owned(slug)
-                    if not ok:
-                        err = "Payment received. Ownership will show up in a moment."
-                except Exception as exc:
-                    err = str(exc)
-            html = (
-                "<!doctype html><html><body style='font-family:system-ui;padding:2rem'>"
-                + (
-                    "<h1>Purchase complete</h1><p>You can close this tab and return to UEFN Ducky.</p>"
-                    if ok
-                    else f"<h1>Purchase pending</h1><p>{err or 'Waiting for payment confirmation.'}</p>"
-                )
-                + "</body></html>"
-            )
-            raw = html.encode("utf-8")
-            self.send_response(200 if ok else 202)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
-            try:
-                threading.Thread(
-                    target=lambda: (httpd_box["httpd"] and httpd_box["httpd"].shutdown()),
-                    daemon=True,
-                ).start()
-            except Exception:
-                pass
-
-    success = (success_url or "").strip()
-    if not success:
-        httpd = HTTPServer(("127.0.0.1", 0), Handler)
-        httpd_box["httpd"] = httpd
-        port = int(httpd.server_address[1])
-        success = f"http://127.0.0.1:{port}/store-purchase?session_id={{CHECKOUT_SESSION_ID}}"
-        threading.Thread(
-            target=httpd.serve_forever,
-            kwargs={"poll_interval": 0.25},
-            daemon=True,
-        ).start()
-        # Auto-stop the listener after 15 minutes.
-        def _timeout_shutdown() -> None:
-            __import__("time").sleep(900)
-            try:
-                httpd.shutdown()
-            except Exception:
-                pass
-
-        threading.Thread(target=_timeout_shutdown, daemon=True).start()
-
-    payload = _plugin_collect(
-        "stripe",
-        "checkout",
-        {
-            "productKey": _stripe_product_key_for_slug(slug),
-            "udsSlug": slug,
-            "successUrl": success,
-            "cancelUrl": cancel,
-            "mode": "payment",
-        },
-        unavailable_code="store_unavailable",
-        unavailable_msg="Stripe checkout is not active on this tenant yet.",
-        error_code="store_checkout",
-        allow_anonymous=False,
-        timeout=30.0,
-    )
-    url = str(payload.get("url") or "").strip()
-    if not url:
-        raise DuckyOSAccountError("Checkout returned no URL", code="store_checkout")
-    return {"ok": True, "url": url, "slug": slug}
-
-
-def store_grant_purchase(session_id: str, *, slug: str | None = None) -> dict[str, Any]:
-    """Wait until the Stripe webhook has recorded ownership for ``slug``.
-
-    ``session_id`` is the Checkout return id. The Store no longer verifies it;
-    the signed Stripe webhook is the only writer.
-    """
-    slug = (slug or "").strip()
-    if not slug:
-        raise DuckyOSAccountError("slug required", code="bad_request")
-    if not _wait_store_owned(slug):
-        raise DuckyOSAccountError(
-            "Payment received. Ownership will show up in a moment.",
-            code="purchase_pending",
-        )
-    return {
-        "ok": True,
-        "slug": slug,
-        "sessionId": (session_id or "").strip() or None,
-        "alreadyOwned": True,
-    }
-
-
 # Concurrent Store installs each call reload_plugins() — that freezes the panel UI.
 # Serialize end-to-end so Update All stays responsive (JS also queues; this is the belt).
 _STORE_INSTALL_LOCK = __import__("threading").Lock()
@@ -2590,13 +2424,12 @@ def store_download_and_install(
     *,
     version: str | None = None,
     replace: bool = True,
-    paid: bool | None = None,
     is_update: bool = False,
 ) -> dict[str, Any]:
     """Download a published skill or plugin zip and install into AppData.
 
-    Free items stay anonymous. Paid items require a signed-in DuckyOS account
-    with a recorded purchase (server-enforced).
+    Sent as the signed-in account when there is one (private team items are
+    members-only, server-enforced); anonymous otherwise.
 
     Pass ``is_update=True`` when the pack is already installed locally so the
     Store does not increment ``install_count``.
@@ -2606,7 +2439,6 @@ def store_download_and_install(
             slug,
             version=version,
             replace=replace,
-            paid=paid,
             is_update=is_update,
         )
 
@@ -2616,7 +2448,6 @@ def _store_download_and_install_unlocked(
     *,
     version: str | None = None,
     replace: bool = True,
-    paid: bool | None = None,
     is_update: bool = False,
 ) -> dict[str, Any]:
     import base64
@@ -2630,25 +2461,8 @@ def _store_download_and_install_unlocked(
     body: dict[str, Any] = {"slug": slug, "isUpdate": bool(is_update)}
     if version:
         body["version"] = str(version).strip()
-    # Prefer authenticated download when logged in (needed for paid; fine for free).
-    blob = _load_blob()
-    logged_in = bool(blob.get("device_key") or blob.get("session_value"))
-    allow_anon = not logged_in and not paid
-    try:
-        payload = _store_collect(
-            "download",
-            body,
-            allow_anonymous=allow_anon,
-            timeout=120.0,
-        )
-    except DuckyOSAccountError as exc:
-        msg = (exc.message or "").lower()
-        if "purchase_required" in msg or exc.code in ("store_error", "forbidden"):
-            raise DuckyOSAccountError(
-                exc.message or "Purchase required",
-                code="purchase_required",
-            ) from exc
-        raise
+    # Signed in → sent as the account (api_request attaches it); signed out → anonymous.
+    payload = _store_collect("download", body, allow_anonymous=True, timeout=120.0)
     zip_b64 = str(payload.get("zipB64") or "")
     if not zip_b64:
         raise DuckyOSAccountError("Store download returned no zip", code="store_empty")
@@ -2714,7 +2528,7 @@ def auto_apply_store_updates(*, force: bool = False) -> dict[str, Any]:
     """Quietly install newer Store versions of already-installed plugins/skills.
 
     End users never open Settings → Store for a published fix. Local/AI
-    sources and unpaid paid items are skipped. ponytail: one catalog pass
+    sources are skipped. ponytail: one catalog pass
     per process; ceiling is offline/catalog-down until the next panel start.
     """
     global _auto_apply_ran
@@ -2739,8 +2553,6 @@ def auto_apply_store_updates(*, force: bool = False) -> dict[str, Any]:
             if item.get("kind") not in ("plugin", "skill"):
                 continue
             if item.get("source") in ("local", "ai"):
-                continue
-            if item.get("paid") and not item.get("owned"):
                 continue
             slug = str(item.get("slug") or "").strip()
             if not slug:

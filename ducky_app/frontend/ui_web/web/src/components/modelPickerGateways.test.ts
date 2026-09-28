@@ -74,6 +74,25 @@ describe("buildPickerGateways", () => {
     expect(anthropic.nestedAgents.map((a) => a.id)).toEqual(["claude_code"]);
   });
 
+    it("keeps a judge key off the chat picker", () => {
+      const gws = buildPickerGateways(
+        [
+          ...providers,
+          {
+            id: "typesafe",
+            label: "TypeSafe",
+            kind: "secret",
+            secret_key: "typesafe",
+            order: 90,
+            plugin_id: "typesafe",
+            chat: false,
+          },
+        ],
+        agents,
+      );
+      expect(gws.map((g) => g.id)).toEqual(["cursor", "anthropic", "openai"]);
+    });
+
     it("hides thinking effort when the gateway says so", () => {
       const gws = buildPickerGateways(
         [{ ...providers[0], id: "uefn_ducky", label: "UEFN Ducky", plugin_id: "account", secret_key: "uefn_ducky", order: 0, shows_thinking_effort: false }],

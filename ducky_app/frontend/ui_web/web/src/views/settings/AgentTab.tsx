@@ -790,6 +790,14 @@ export function AgentTab() {
                         ) : (
                           <span className="llms-provider-dot" title="Not connected — no key saved, no coding agent logged in" />
                         )}
+                        {row.icon_data_url ? (
+                          <img
+                            className="llms-provider-logo"
+                            src={row.icon_data_url}
+                            alt=""
+                            draggable={false}
+                          />
+                        ) : null}
                         <span className="llms-provider-nav-name">{row.label}</span>
                       </span>
                       <span className="llms-provider-nav-chevron" aria-hidden>

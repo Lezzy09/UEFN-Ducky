@@ -71,7 +71,7 @@ def test_logout_clears_account_even_if_browser_cleanup_fails() -> None:
     clear.assert_called_once()
 
 
-def test_auto_apply_store_updates_skips_local_and_unpaid() -> None:
+def test_auto_apply_store_updates_skips_local() -> None:
     from unittest.mock import patch
 
     from frontend import duckyos_account as acc
@@ -81,14 +81,6 @@ def test_auto_apply_store_updates_skips_local_and_unpaid() -> None:
         "items": [
             {"slug": "openai", "kind": "plugin", "state": "update", "source": "store"},
             {"slug": "mine", "kind": "plugin", "state": "update", "source": "local"},
-            {
-                "slug": "paid-pack",
-                "kind": "plugin",
-                "state": "update",
-                "source": "store",
-                "paid": True,
-                "owned": False,
-            },
             {"slug": "fresh", "kind": "plugin", "state": "available", "source": "store"},
         ],
     }
@@ -106,64 +98,6 @@ def test_auto_apply_store_updates_skips_local_and_unpaid() -> None:
     assert out["ok"] is True
     assert out["updated"] == ["openai"]
     assert calls == ["openai"]
-
-
-def test_store_checkout_posts_to_stripe_plugin() -> None:
-    from unittest.mock import patch
-
-    from frontend import duckyos_account as acc
-
-    calls: list[tuple] = []
-
-    def _collect(plugin_id: str, event: str, body=None, **_kw: object) -> dict:
-        calls.append((plugin_id, event, body))
-        return {"url": "https://checkout.stripe.com/c/pay/cs_test"}
-
-    with (
-        patch.object(acc, "resolve_base_url", return_value="https://example.test"),
-        patch.object(acc, "store_catalog", return_value={
-            "ok": True,
-            "items": [{"slug": "galaxy", "stripe_product_key": "uds:galaxy"}],
-        }),
-        patch.object(acc, "_plugin_collect", side_effect=_collect),
-    ):
-        out = acc.store_checkout(
-            "galaxy",
-            success_url="https://example.test/ok",
-            cancel_url="https://example.test/no",
-        )
-    assert out["ok"] is True
-    assert out["url"].startswith("https://checkout.stripe.com/")
-    plugin_id, event, body = calls[0]
-    assert plugin_id == "stripe"
-    assert event == "checkout"
-    assert body["productKey"] == "uds:galaxy"
-    assert body["udsSlug"] == "galaxy"
-
-
-def test_store_grant_purchase_waits_until_owned() -> None:
-    from unittest.mock import patch
-
-    from frontend import duckyos_account as acc
-
-    seen = {"n": 0}
-
-    def _catalog() -> dict:
-        seen["n"] += 1
-        return {"ok": True, "items": [{"slug": "galaxy", "owned": seen["n"] >= 2}]}
-
-    with (
-        patch.object(acc, "store_catalog", side_effect=_catalog),
-        patch("time.sleep", return_value=None),
-    ):
-        out = acc.store_grant_purchase("cs_test", slug="galaxy")
-    assert out == {
-        "ok": True,
-        "slug": "galaxy",
-        "sessionId": "cs_test",
-        "alreadyOwned": True,
-    }
-    assert seen["n"] == 2
 
 
 def test_store_item_versions_strips_empty_and_keeps_changelog() -> None:

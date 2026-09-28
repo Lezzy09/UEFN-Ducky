@@ -3558,6 +3558,14 @@
   align-items: center;
 }
 
+.llms-provider-logo {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  flex-shrink: 0;
+  border-radius: 4px;
+}
+
 .llms-provider-nav-name {
   font-weight: 600;
   color: var(--text);
