@@ -307,3 +307,117 @@
   border: 0;
   border-radius: 0;
 }
+
+/* Host scope bar (team plans §8): whose data the panel shows. Team = accent,
+   Personal = neutral, paused = warning; the pill text always says which. */
+.plugin-scope-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--text-muted, #a0a0a0);
+  background: var(--card, #252525);
+  border-bottom: 1px solid var(--border, #3a3a3a);
+}
+.plugin-scope-bar__pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--fg, #e6e6e6);
+  background: color-mix(in srgb, var(--fg, #e6e6e6) 12%, transparent);
+}
+.plugin-scope-bar--team .plugin-scope-bar__pill {
+  color: var(--accent, #d4a017);
+  background: color-mix(in srgb, var(--accent, #d4a017) 16%, transparent);
+}
+.plugin-scope-bar--paused {
+  background: color-mix(in srgb, var(--warning, #d97706) 14%, var(--card, #252525));
+}
+.plugin-scope-bar--paused .plugin-scope-bar__pill {
+  color: var(--warning, #d97706);
+  background: color-mix(in srgb, var(--warning, #d97706) 18%, transparent);
+}
+.plugin-scope-bar__text--error {
+  color: var(--danger, #e55);
+}
+.plugin-scope-bar__storage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.plugin-scope-bar__meter {
+  width: 72px;
+  height: 6px;
+  appearance: none;
+  border: 0;
+  border-radius: 3px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--fg, #e6e6e6) 14%, transparent);
+}
+.plugin-scope-bar__meter::-webkit-progress-bar {
+  background: transparent;
+}
+.plugin-scope-bar__meter::-webkit-progress-value {
+  background: var(--accent, #d4a017);
+}
+.plugin-scope-bar__storage--warn .plugin-scope-bar__meter::-webkit-progress-value {
+  background: var(--warning, #d97706);
+}
+.plugin-scope-bar__storage--full .plugin-scope-bar__meter::-webkit-progress-value {
+  background: var(--danger, #e55);
+}
+.plugin-scope-bar__storage strong {
+  color: var(--fg, #e6e6e6);
+}
+.plugin-scope-bar__change {
+  position: relative;
+  margin-left: auto;
+}
+.plugin-scope-bar__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent, #d4a017);
+  font: inherit;
+  cursor: pointer;
+}
+.plugin-scope-bar__link:focus-visible,
+.plugin-scope-bar__menu-item:focus-visible {
+  outline: 2px solid var(--accent, #d4a017);
+  outline-offset: 2px;
+}
+.plugin-scope-bar__menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: 8px;
+  background: var(--card, #252525);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.plugin-scope-bar__menu-item {
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg, #e6e6e6);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.plugin-scope-bar__menu-item:hover,
+.plugin-scope-bar__menu-item[aria-checked="true"] {
+  background: color-mix(in srgb, var(--accent, #d4a017) 14%, transparent);
+}
+.plugin-scope-bar__menu-note {
+  padding: 6px 8px;
+}

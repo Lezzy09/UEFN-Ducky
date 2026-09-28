@@ -794,6 +794,60 @@ class PanelApiStoreMixin:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    # --- host data service (team plans P3): panels' data.* / files.* / scope.get
+
+    def plugin_data(self, plugin_id: str, op: str, params: dict | None = None) -> dict[str, Any]:
+        from backend.uefn_plugins.scopes import ReadOnlyScope, panel_call
+
+        try:
+            return panel_call(str(plugin_id or ""), str(op or ""), dict(params or {}))
+        except ReadOnlyScope as exc:
+            return {"ok": False, "error": str(exc), "code": "read_only"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def plugin_scope_status(self) -> dict[str, Any]:
+        from backend.uefn_plugins.team_sync import scope_status
+
+        try:
+            return scope_status()
+        except Exception as exc:
+            return {"ok": False, "visible": False, "error": str(exc)}
+
+    def plugin_scope_choices(self) -> dict[str, Any]:
+        """Change ▾ only: calls the Store hub (never on a timer)."""
+        from backend.uefn_plugins.team_sync import scope_choices
+
+        try:
+            return scope_choices()
+        except Exception as exc:
+            return {"ok": False, "choices": [], "error": str(exc)}
+
+    def plugin_scope_set(self, scope_id: str) -> dict[str, Any]:
+        from backend.uefn_plugins.team_sync import link_scope, sync_active
+
+        try:
+            out = link_scope(str(scope_id or ""))
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        self._push_panel({"type": "plugin_scope_changed", "plugins": []})
+        sync_active(force=True, on_done=self._scope_synced)
+        return out
+
+    def plugin_scope_sync(self, force: bool = False) -> dict[str, Any]:
+        """Scope bar asks on plugin open, focus and each minute; the engine rate-limits."""
+        from backend.uefn_plugins.team_sync import sync_active
+
+        try:
+            return sync_active(force=bool(force), on_done=self._scope_synced)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def _scope_synced(self, result: dict[str, Any]) -> None:
+        self._push_panel(
+            {"type": "plugin_scope_changed", "plugins": list(result.get("changed") or []), "synced": True}
+        )
+
     def plugin_prefs_get_all(self) -> dict[str, Any]:
         """Disk-backed plugin UI prefs (survives WebView localStorage wipes)."""
         from frontend.ui_web.plugin_host_api import prefs_all_get

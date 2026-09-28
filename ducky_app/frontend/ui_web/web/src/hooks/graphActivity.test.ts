@@ -3,8 +3,10 @@ import {
   _peekBackgroundJobsForTests,
   _resetBackgroundActivityForTests,
 } from "./backgroundActivity";
+import { registerOpenPipelinesTab } from "../navigation/openPipelinesTab";
 import {
   applyBackgroundJobPush,
+  applyGraphFocusPush,
   graphJobId,
   requestFocusGraph,
   takePendingGraphFocus,
@@ -55,6 +57,23 @@ describe("graphActivity", () => {
   it("parses workflow id from live and finished job ids", () => {
     expect(workflowIdFromJobId(graphJobId("abc"))).toBe("abc");
     expect(workflowIdFromJobId("graph-run:abc:171000")).toBe("abc");
+  });
+
+  it("opens the pipelines editor when chat saves a graph", () => {
+    let opened = 0;
+    const stop = registerOpenPipelinesTab(() => {
+      opened += 1;
+    });
+    applyGraphFocusPush({ type: "graph_focus", kind: "pipeline", id: "p1", action: "saved" });
+    expect(opened).toBe(1);
+    expect(takePendingGraphFocus("pipeline")).toBe("p1");
+    stop();
+  });
+
+  it("drops a queued focus when chat deletes that graph", () => {
+    applyGraphFocusPush({ type: "graph_focus", kind: "automation", id: "a1", action: "saved" });
+    applyGraphFocusPush({ type: "graph_focus", kind: "automation", id: "a1", action: "deleted" });
+    expect(takePendingGraphFocus("automation")).toBe("");
   });
 
   it("queues a graph focus for the editor", () => {

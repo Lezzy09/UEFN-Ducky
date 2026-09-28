@@ -37,6 +37,7 @@ import { useVersionCheck } from "./hooks/useVersionCheck";
 import { useChatLayoutMode } from "./hooks/useChatLayoutMode";
 import { useOsFileDropGuard } from "./hooks/useOsFileDropGuard";
 import { installAgentEventBus } from "./hooks/useAgentEventBus";
+import { applyGraphFocusPush } from "./hooks/graphActivity";
 import { installPanelPushBus, subscribePanelPush } from "./hooks/usePanelPushBus";
 import { queuePluginTrustRequest } from "./hooks/pluginTrustRequest";
 import { UpdateAvailableModal } from "./components/UpdateAvailableModal";
@@ -75,6 +76,18 @@ function PluginPrefsHydrate() {
 }
 /** App-level wiring for history + undo gestures and view apply on back/forward. */
 /** Agent enable of AI/local plugin → open Store + queue user trust confirm. */
+/** Chat save/delete of a pipeline or automation opens that editor immediately. */
+function GraphFocusBridge() {
+  useEffect(() => {
+    installAgentEventBus();
+    installPanelPushBus();
+    return subscribePanelPush((event) => {
+      if (event.type === "graph_focus") applyGraphFocusPush(event);
+    });
+  }, []);
+  return null;
+}
+
 function PluginTrustBridge() {
   useEffect(() => {
     // HTTP poll must run even before ChatView mounts — Store enable/uninstall
@@ -234,6 +247,7 @@ export default function App() {
       <UndoHistoryProvider>
       <AppShortcutsBridge setView={setCurrentView} hasProject={hasProject} />
       <PluginTrustBridge />
+      <GraphFocusBridge />
       <PluginPrefsHydrate />
       <PluginShellBootBridge />
       <UiRpcBridge />

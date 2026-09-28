@@ -25,7 +25,10 @@ TABLES: dict[str, tuple[str, str, str, bool]] = {
     "secrets": ("Secrets", "settings", "API keys and tokens, DPAPI-encrypted per row.", False),
     "projects": ("Projects", "settings", "Recent projects and their slugs.", False),
     "workspace_state": ("Workspace state", "settings", "Window bounds, dock layout, open editor tabs.", False),
-    "plugin_kv": ("Plugin data", "settings", "Per-plugin key/value data; sensitive rows are encrypted.", False),
+    "plugin_kv": ("Plugin cache", "settings", "Per-plugin cache and prefs per account; sensitive rows are encrypted.", False),
+    "plugin_data": ("Plugin data", "settings", "Plugin docs and file metadata, per account.", False),
+    "scope_sync": ("Sync state", "settings", "Cursor and status per synced scope.", False),
+    "project_scopes": ("Project scopes", "settings", "Which data scope each project uses, per account.", False),
     "mcp_servers": ("MCP servers", "settings", "Nested MCP server blocks (mcp.json is an export).", False),
     "meta": ("Store metadata", "settings", "Import flags, clean-boot counter, integrity history.", False),
     "runs": ("Change runs", "changes", "Agent write runs the Changes tab can revert.", False),
@@ -206,7 +209,9 @@ def _mask_row(table: str, row: dict[str, Any]) -> dict[str, Any]:
         if table == "secrets" and col != "name":
             out[col] = "••••••••" if val else val
             continue
-        if table == "plugin_kv" and col == "value" and row.get("encrypted"):
+        if col == "value" and (
+            (table == "plugin_kv" and row.get("encrypted")) or (table == "plugin_data" and row.get("sensitive"))
+        ):
             out[col] = "•••••••• (encrypted)" if val else val
             continue
         if table == "settings" and col == "value" and _SENSITIVE_KEY.search(str(row.get("key") or "")):

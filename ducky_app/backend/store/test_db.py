@@ -112,14 +112,14 @@ def test_upgrade_from_previous_schema_does_not_deadlock(tmp_path: Path) -> None:
     upgraded panel at boot. A schema-(head-1) database must open on a worker
     thread within seconds and leave a pre-migrate snapshot behind."""
     conn = db.connect()
-    # Leave a 0007-shaped table so 0008 (kind + description) can ALTER.
-    conn.execute("DROP TABLE automations")
+    # Leave a 0008-shaped database so 0009 (plugin scopes) can run.
+    for table in ("plugin_data", "scope_sync", "project_scopes", "plugin_kv"):
+        conn.execute(f"DROP TABLE {table}")
     conn.execute(
-        "CREATE TABLE automations ("
-        "id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, "
-        "graph TEXT NOT NULL DEFAULT '{\"nodes\":[],\"edges\":[]}', runs TEXT NOT NULL DEFAULT '[]', "
-        "updated REAL NOT NULL DEFAULT 0, last_run REAL NOT NULL DEFAULT 0)"
+        "CREATE TABLE plugin_kv (plugin_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, "
+        "encrypted INTEGER NOT NULL DEFAULT 0, updated REAL NOT NULL, PRIMARY KEY (plugin_id, key))"
     )
+    conn.execute("INSERT INTO plugin_kv VALUES ('demo', 'es', '{}', 0, 0)")
     conn.execute(f"PRAGMA user_version={db.head_version() - 1}")
     db.reset_for_tests()
 
@@ -129,6 +129,9 @@ def test_upgrade_from_previous_schema_does_not_deadlock(tmp_path: Path) -> None:
     t.join(timeout=20)
     assert done == [db.head_version()], "connect() deadlocked while migrating"
     assert any("pre-migrate" in p.name for p in db.snapshot_dir().glob("ducky-*.db"))
+    # 0009 kept the row and parked it unclaimed until an account opens plugin data.
+    row = db.connect().execute("SELECT account_id, scope_id FROM plugin_kv WHERE key='es'").fetchone()
+    assert tuple(row) == ("", "personal")
 
 
 def test_split_statements_keeps_triggers_whole() -> None:

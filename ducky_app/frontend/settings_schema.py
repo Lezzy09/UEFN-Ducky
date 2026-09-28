@@ -94,6 +94,7 @@ FIELD_META: dict[str, FieldMeta] = {
     "agent_profiles": FieldMeta("Ducky profiles", "Duckies"),
     "agent_profile_overrides": FieldMeta("Bundled profile overrides", "Duckies"),
     "hidden_bundled_agent_profile_ids": FieldMeta("Hidden bundled profiles", "Duckies"),
+    "agent_profile_visibility_explicit": FieldMeta("Explicit profile visibility", "internal"),
     "default_enabled_skills": FieldMeta("Legacy enabled skills", "internal"),
     "default_enabled_packs": FieldMeta("Default skill packs", "Skills & MCP"),
     "default_disabled_packs": FieldMeta("Disabled skill packs", "Skills & MCP"),

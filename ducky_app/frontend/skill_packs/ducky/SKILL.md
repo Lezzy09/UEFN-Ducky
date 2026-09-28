@@ -199,7 +199,10 @@ Load `skill_read_subskill("ducky", "ai_plugins")` then follow it. Legal I/O is
 6. **Always** automations/pipeline nodes + a template wrapping the same
    functions (themes too), bundled `skills/<id>/SKILL.md`, and changeset on
    mutators. Tab toggles use `settings.sections`; first-enable gets a
-   walkthrough.
+   walkthrough. `save_pipeline` / `save_automation` open that editor and
+   refresh the canvas; `delete_pipeline` / `delete_automation` and
+   `save_custom_automation_template` / `delete_custom_automation_template`
+   match the panel. Do not tell the user to open the tab.
 
 Never git-clone a Store plugin, never edit the EXE, never `ducky_skills_create_pack`
 unless they asked for a skill pack.

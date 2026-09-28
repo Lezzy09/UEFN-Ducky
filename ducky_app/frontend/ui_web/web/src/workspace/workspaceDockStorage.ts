@@ -9,6 +9,7 @@ import {
   SIDEBAR_WIDTH_MIN,
 } from "../hooks/useSidebarWidth";
 import { getApi } from "../hooks/usePanelApi";
+import { pluginPrefsKey } from "../hooks/pluginPrefsStorage";
 
 /** Builtin rails plus plugin `dock.panels` ids (`groupchat`, `ollama-live`, …). */
 export type DockPanelId = string;
@@ -481,7 +482,7 @@ function uniqueDockPanelIds(raw: unknown[]): DockPanelId[] {
 
 function readDiscordSidebarPrefs(): { left: boolean; right: boolean } {
   try {
-    const raw = localStorage.getItem("uefn-plugin-ui-prefs");
+    const raw = localStorage.getItem(pluginPrefsKey());
     const all = raw ? (JSON.parse(raw) as Record<string, Record<string, unknown>>) : {};
     const discord = all.discord && typeof all.discord === "object" ? all.discord : {};
     return {

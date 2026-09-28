@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { onApiReady } from "./onApiReady";
 import { getApi } from "./usePanelApi";
+import { installPanelPushBus, subscribePanelPush } from "./usePanelPushBus";
+import { pluginPrefsKey, setPluginPrefsAccount } from "./pluginPrefsStorage";
 
-const STORAGE_KEY = "uefn-plugin-ui-prefs";
-/** Legacy Discord-only key — migrated once into STORAGE_KEY.discord. */
+/** Legacy Discord-only key — migrated once into the prefs bag's discord slot. */
 const LEGACY_DISCORD_KEY = "uefn-discord-ui-prefs";
 
 export type PluginUiPrefValue = boolean | string | number;
@@ -27,7 +28,7 @@ function migrateLegacyDiscord(all: AllPrefs): AllPrefs {
     }
     if (!Object.keys(discord).length) return all;
     const next = { ...all, discord };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    localStorage.setItem(pluginPrefsKey(), JSON.stringify(next));
     localStorage.removeItem(LEGACY_DISCORD_KEY);
     return next;
   } catch {
@@ -37,7 +38,7 @@ function migrateLegacyDiscord(all: AllPrefs): AllPrefs {
 
 function readAll(): AllPrefs {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(pluginPrefsKey());
     const parsed = raw ? (JSON.parse(raw) as AllPrefs) : {};
     const base = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
     return migrateLegacyDiscord(base);
@@ -60,7 +61,7 @@ function persistPluginSlot(pluginId: string, slot: PluginUiPrefsMap): void {
 function writeAll(next: AllPrefs, pluginId?: string): void {
   cached = next;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    localStorage.setItem(pluginPrefsKey(), JSON.stringify(next));
   } catch {
     /* ignore quota */
   }
@@ -95,7 +96,7 @@ function applyDiskPrefs(disk: AllPrefs): void {
   }
   cached = merged;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+    localStorage.setItem(pluginPrefsKey(), JSON.stringify(merged));
   } catch {
     /* ignore */
   }
@@ -105,14 +106,45 @@ function applyDiskPrefs(disk: AllPrefs): void {
   }
 }
 
+/** Prefs belong to one account: point the bag at `account` and repaint from it. */
+function switchPrefsAccount(account: string): void {
+  if (!setPluginPrefsAccount(account)) return;
+  const before = Object.keys(cached);
+  cached = readAll();
+  for (const fn of [...listeners]) fn();
+  for (const pid of new Set([...before, ...Object.keys(cached)])) {
+    window.dispatchEvent(new CustomEvent("uefn-plugin-prefs", { detail: { pluginId: pid } }));
+  }
+}
+
+let accountWatch = false;
+
+/** Account switch in the app: drop the other account's bag, reload this account's. */
+function watchAccountSwitches(): void {
+  if (accountWatch) return;
+  accountWatch = true;
+  installPanelPushBus();
+  subscribePanelPush((event) => {
+    if (event.type !== "duckyos_account_changed") return;
+    if (typeof event.account === "string") switchPrefsAccount(event.account);
+    hydratedFromDisk = false;
+    hydratePluginUiPrefsFromDisk();
+  });
+}
+
 /** Load AppData prefs into localStorage once the panel API is up. */
 export function hydratePluginUiPrefsFromDisk(): void {
   if (hydratedFromDisk) return;
   const api = getApi();
   if (!api?.plugin_prefs_get_all) return;
   hydratedFromDisk = true;
-  void api
-    .plugin_prefs_get_all()
+  watchAccountSwitches();
+  void Promise.resolve(api.duckyos_get_status?.())
+    .then((status) => {
+      if (typeof status?.account === "string") switchPrefsAccount(status.account);
+    })
+    .catch(() => undefined)
+    .then(() => api.plugin_prefs_get_all!())
     .then((res) => {
       if (!res?.ok || !res.prefs || typeof res.prefs !== "object") {
         window.dispatchEvent(new CustomEvent("uefn-plugin-prefs-hydrated"));

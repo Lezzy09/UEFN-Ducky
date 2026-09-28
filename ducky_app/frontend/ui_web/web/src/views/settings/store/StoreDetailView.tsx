@@ -4,14 +4,7 @@ import { asLabelList, itemCategories } from "../storeFilters";
 import { StoreActions, type StoreItemHandlers } from "./StoreActions";
 import { StoreInstallOverlay } from "./StoreInstallOverlay";
 import { StorePatchNotes } from "./StorePatchNotes";
-import {
-  authorLabelFor,
-  formatInstalls,
-  formatPrice,
-  itemInitials,
-  needsPurchase,
-  type CardBusy,
-} from "./storeData";
+import { authorLabelFor, formatInstalls, itemInitials, type CardBusy } from "./storeData";
 
 type Props = {
   item: DuckyOSStoreItemDto | null;
@@ -53,8 +46,7 @@ export function StoreDetailView({ item, pendingSlug, catalogReady, jobs, actionB
   const tags = asLabelList(item.tags);
   const includes = item.contributes_summary || [];
   const state = item.state || "available";
-  const showUpdateBadge =
-    state === "update" && !installBusy && !needsPurchase(item) && !busy;
+  const showUpdateBadge = state === "update" && !installBusy && !busy;
 
   return (
     <div className="ds-detail">
@@ -128,14 +120,6 @@ export function StoreDetailView({ item, pendingSlug, catalogReady, jobs, actionB
                 <Icons.Store /> Source
               </span>
               <span className="ds-stat-value">{authorLabelFor(item)}</span>
-            </div>
-            <div className="ds-stat">
-              <span className="ds-stat-label ds-stat-label--price">
-                <Icons.Zap /> Price
-              </span>
-              <span className="ds-stat-value ds-stat-value--price">
-                {item.owned ? "Owned" : formatPrice(item)}
-              </span>
             </div>
           </div>
 

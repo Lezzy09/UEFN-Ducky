@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ChoiceDropdown, type ChoiceOption } from "../components/ChoiceDropdown";
 import { getApi } from "../hooks/usePanelApi";
 import type { RecentProject } from "../types/panel";
 
 /** Select a workflow target without changing the panel's active project. */
-export function ProjectField({ value, onChange }: { value: string; onChange: (path: string) => void }) {
+export function ProjectField({ value, onChange, label = "UEFN project", id }: { value: string; onChange: (path: string) => void; label?: string; id?: string }) {
   const [projects, setProjects] = useState<RecentProject[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const request = useRef(0);
@@ -25,21 +26,10 @@ export function ProjectField({ value, onChange }: { value: string; onChange: (pa
     return () => { request.current++; };
   }, [refresh]);
 
-  return (
-    <>
-      <select value={value} onChange={(event) => onChange(event.target.value)} onFocus={() => void refresh()} title={value || "Use the active project when this workflow runs"}>
-        <option value="">Current project (at run time)</option>
-        {projects.map((project) => (
-          <option key={project.path} value={project.path} title={project.path}>
-            {project.name || project.path}{project.active ? " (current)" : ""}
-            {projects.some((other) => other.path !== project.path && other.name === project.name) ? ` — ${project.path}` : ""}
-          </option>
-        ))}
-        {value && !projects.some((project) => project.path === value) ? <option value={value}>Saved project — {value}</option> : null}
-        {status === "loading" ? <option disabled>Loading projects…</option> : null}
-        {status === "error" ? <option disabled>Could not load projects — reopen to retry</option> : null}
-        {status === "ready" && !projects.length ? <option disabled>No saved projects — add one in Ducky’s project menu</option> : null}
-      </select>
-    </>
-  );
+  const options: ChoiceOption[] = [
+    { value: "", label: "Current project (at run time)" },
+    ...projects.map((project) => ({ value: project.path, label: (project.name || project.path) + (project.active ? " (current)" : ""), hint: project.path })),
+  ];
+  if (value && !projects.some((project) => project.path === value)) options.push({ value, label: "Saved project — " + value });
+  return <ChoiceDropdown id={id} aria-label={label} value={value} options={options} onChange={onChange} onOpen={() => void refresh()} searchable searchPlaceholder="Search projects" showSelectedHint={false} size="compact" footer={status === "loading" ? "Loading projects…" : status === "error" ? "Could not load projects — reopen to retry" : !projects.length ? "No saved projects — add one in Ducky’s project menu" : undefined} />;
 }

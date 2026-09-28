@@ -3,14 +3,7 @@ import { Icons } from "../../../icons/Icons";
 import type { DuckyOSStoreItemDto } from "../../../types/panel";
 import { StoreActions, type StoreItemHandlers } from "./StoreActions";
 import { StoreInstallOverlay } from "./StoreInstallOverlay";
-import {
-  authorLabelFor,
-  formatInstalls,
-  formatPrice,
-  itemInitials,
-  needsPurchase,
-  type CardBusy,
-} from "./storeData";
+import { authorLabelFor, formatInstalls, itemInitials, teamBadge, type CardBusy } from "./storeData";
 
 type Props = {
   item: DuckyOSStoreItemDto;
@@ -25,8 +18,9 @@ export function StoreCard({ item, busy, actionBusy, handlers, onOpen }: Props) {
   const state = item.state || "available";
   const working = busy?.phase === "working";
   const done = busy?.phase === "done";
-  // Badge only while Update is the pressable action — hide during install overlay / buy-gate.
-  const showUpdateBadge = state === "update" && !busy && !needsPurchase(item) && !actionBusy;
+  // Badge only while Update is the pressable action — hide during install overlay.
+  const showUpdateBadge = state === "update" && !busy && !actionBusy;
+  const team = teamBadge(item);
 
   const open = () => onOpen(item);
   const onKeyDown = (e: KeyboardEvent) => {
@@ -70,13 +64,18 @@ export function StoreCard({ item, busy, actionBusy, handlers, onOpen }: Props) {
             <span className="ds-card-icon-fallback">{itemInitials(item)}</span>
           )}
         </div>
-        <span className={`ds-price-chip${item.owned ? " ds-price-chip--owned" : ""}`}>
-          {item.owned ? "Owned" : formatPrice(item)}
-        </span>
       </div>
       <div className="ds-card-body">
         <h4 className="ds-card-title">{item.name || slug}</h4>
         <p className="ds-card-author">{authorLabelFor(item)}</p>
+        {team ? (
+          <span
+            className={`ds-team-chip${item.visibility === "private" ? " ds-team-chip--private" : ""}`}
+            title={team}
+          >
+            {team}
+          </span>
+        ) : null}
         <div className="ds-card-stats">
           <span className="ds-card-stat">
             <Icons.Box />

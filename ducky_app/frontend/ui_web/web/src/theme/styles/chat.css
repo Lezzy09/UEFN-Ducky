@@ -2055,6 +2055,8 @@
 }
 
 .virtual-chat-window-spacer {
+  /* Anchor real messages, never a placeholder that is about to be replaced. */
+  overflow-anchor: none;
   width: 100%;
   flex-shrink: 0;
   pointer-events: none;

@@ -48,7 +48,6 @@ import {
   pluginUiTabId,
   settingsTabId,
   automationsTabId,
-  pipelinesTabId,
   changesTabId,
   usageTabId,
 } from "../types/panel";
@@ -312,7 +311,7 @@ function ChatViewBody({ layoutMode, sidebarRefresh, projectSlug, projectPath }: 
   const openAutomationsTab = useCallback(() => {
     const id = automationsTabId();
     void openOrFocusTab(id, () =>
-      openTab({ id, kind: "automations", name: "Automations" }, { activate: true }),
+      openTab({ id, kind: "automations", name: "Workflows" }, { activate: true }),
     );
   }, [openTab]);
 
@@ -320,16 +319,9 @@ function ChatViewBody({ layoutMode, sidebarRefresh, projectSlug, projectPath }: 
     return registerOpenAutomationsTab(openAutomationsTab);
   }, [openAutomationsTab]);
 
-  const openPipelinesTab = useCallback(() => {
-    const id = pipelinesTabId();
-    void openOrFocusTab(id, () =>
-      openTab({ id, kind: "pipelines", name: "Pipelines" }, { activate: true }),
-    );
-  }, [openTab]);
-
   useEffect(() => {
-    return registerOpenPipelinesTab(openPipelinesTab);
-  }, [openPipelinesTab]);
+    return registerOpenPipelinesTab(openAutomationsTab);
+  }, [openAutomationsTab]);
 
   const openDuckyProfileTab = useCallback(
     (req: { profileId: string; name: string; duckyStyle?: string }) => {

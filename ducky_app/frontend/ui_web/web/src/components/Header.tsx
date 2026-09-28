@@ -21,7 +21,6 @@ import { isNativeWindowChrome } from "../utils/nativeWindowChrome";
 import { requestOpenSettings } from "../navigation/openSettingsTab";
 import { requestOpenChangesTab } from "../navigation/openChangesTab";
 import { requestOpenAutomationsTab } from "../navigation/openAutomationsTab";
-import { requestOpenPipelinesTab } from "../navigation/openPipelinesTab";
 import { usePluginContributions } from "../hooks/usePluginContributions";
 import { useHeaderVisibility } from "../hooks/useHeaderVisibility";
 import { useStoreUpdateBadge } from "../hooks/useStoreUpdateBadge";
@@ -152,7 +151,6 @@ function HeaderToolsMenu({
   onTerminal,
   onLedger,
   onAutomations,
-  onPipelines,
   showSearch,
 }: {
   canBack: boolean;
@@ -178,7 +176,6 @@ function HeaderToolsMenu({
   onTerminal?: () => void;
   onLedger?: () => void;
   onAutomations?: () => void;
-  onPipelines?: () => void;
   showSearch?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -225,8 +222,7 @@ function HeaderToolsMenu({
           {showWorkflow && canPush ? item("Push Verse", onPush, compileBusy) : null}
           {item("Problems", onProblems)}
           {item("Terminal", onTerminal)}
-          {item("Automations", onAutomations)}
-          {item("Pipelines", onPipelines)}
+          {item("Workflows", onAutomations)}
           {item("Ledger", onLedger)}
         </div>
       </DropdownPanel>
@@ -587,7 +583,6 @@ export function Header({
               }
               onLedger={showChanges ? () => requestOpenChangesTab() : undefined}
               onAutomations={() => requestOpenAutomationsTab()}
-              onPipelines={() => requestOpenPipelinesTab()}
               showSearch={showSearch}
               onSearch={showSearch ? () => openPalette("file") : undefined}
             />

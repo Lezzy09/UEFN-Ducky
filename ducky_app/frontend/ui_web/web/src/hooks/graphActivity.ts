@@ -1,4 +1,6 @@
 import type { AutomationSummaryDto, PanelPushEvent } from "../types/panel";
+import { requestOpenAutomationsTab } from "../navigation/openAutomationsTab";
+import { requestOpenPipelinesTab } from "../navigation/openPipelinesTab";
 import {
   dismissBackgroundJob,
   upsertBackgroundJob,
@@ -33,6 +35,24 @@ export function requestFocusGraph(kind: GraphKind, id: string): void {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("ducky:focus-graph", { detail: pendingFocus }));
   }
+}
+
+/** Chat saved or deleted a graph — open that editor and show the change. */
+export function applyGraphFocusPush(event: PanelPushEvent): void {
+  if (event.type !== "graph_focus") return;
+  const kind: GraphKind = event.kind === "pipeline" ? "pipeline" : "automation";
+  const id = String(event.id || "").trim();
+  if (!id) return;
+  if (kind === "pipeline") requestOpenPipelinesTab();
+  else requestOpenAutomationsTab();
+  if (event.action === "deleted") {
+    if (pendingFocus?.kind === kind && pendingFocus.id === id) pendingFocus = null;
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("ducky:graph-deleted", { detail: { kind, id } }));
+    }
+    return;
+  }
+  requestFocusGraph(kind, id);
 }
 
 export function takePendingGraphFocus(kind: GraphKind): string {

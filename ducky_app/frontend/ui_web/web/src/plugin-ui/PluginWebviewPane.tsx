@@ -21,6 +21,7 @@ import type { ChatTab } from "../types/panel";
 import { DucktactoeChatPopup } from "./DucktactoeChatPopup";
 import { isDucktactoeBoardTab } from "./ducktactoeBoardChat";
 import { PluginSurfaceBoundary } from "./PluginSurfaceBoundary";
+import { PluginScopeBar } from "./PluginScopeBar";
 import { isRemote } from "../hooks/usePanelApi";
 
 export type PluginChatOverlayProps = {
@@ -167,6 +168,15 @@ export function PluginWebviewPane({ tabId, chatOverlay }: Props) {
   return (
     <PluginSurfaceBoundary pluginId={parsed.pluginId} surface={`ui.panel:${parsed.panelId}`}>
       <div className="plugin-ui-pane">
+        <PluginScopeBar
+          pluginId={parsed.pluginId}
+          onScopeChanged={(status) =>
+            iframeRef.current?.contentWindow?.postMessage(
+              { channel: BRIDGE_CHANNEL, event: { type: "plugin_scope_changed", scope: status.scope } },
+              "*",
+            )
+          }
+        />
         <iframe
           ref={iframeRef}
           className="plugin-ui-iframe"

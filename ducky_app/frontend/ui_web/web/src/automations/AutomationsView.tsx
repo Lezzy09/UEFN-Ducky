@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { AutomationTemplatePicker } from "./AutomationTemplatePicker";
-import { ProjectField } from "./ProjectField";
-import { AgentField } from "./AgentField";
+import { NodeSettings, hasNodeSettings } from "./NodeSettings";
+import { InlineNodeText } from "./InlineNodeText";
+import { ChoiceDropdown } from "../components/ChoiceDropdown";
 import type {
   AutomationDto,
-  AutomationFieldDto,
   AutomationGraphDto,
   AutomationGraphNodeDto,
   AutomationNodeDto,
@@ -56,8 +56,17 @@ function groupCatalog(catalog: AutomationNodeDto[], query: string) {
   return keys.map((k) => [k, map.get(k) || []] as const);
 }
 
-export function AutomationsView({ kind = "automation" }: { kind?: "automation" | "pipeline" }) {
-  const [rows, setRows] = useState<AutomationSummaryDto[]>([]);
+type WorkflowKind = "automation" | "pipeline";
+const WORKFLOW_SECTIONS = [{ kind: "pipeline", label: "Pipelines" }, { kind: "automation", label: "Automations" }] as const;
+
+export function AutomationsView({ kind: initialKind = "automation" }: { kind?: WorkflowKind }) {
+  const sectionId = useId();
+  const [kind, setKind] = useState<WorkflowKind>(initialKind);
+  const [rows, setRows] = useState<Record<WorkflowKind, AutomationSummaryDto[]>>({ pipeline: [], automation: [] });
+  const [sectionsOpen, setSectionsOpen] = useState({ pipeline: true, automation: true });
+  const [pickerKind, setPickerKind] = useState<WorkflowKind>(initialKind);
+  const listRef = useRef<HTMLElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const [catalog, setCatalog] = useState<AutomationNodeDto[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [draft, setDraft] = useState<AutomationDto | null>(null);
@@ -66,7 +75,7 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
   const [selectedEdge, setSelectedEdge] = useState<number | null>(null);
   const [groupsCollapsed, setGroupsCollapsed] = useState(false);
   const resizeRef = useRef<{ id: string; startX: number; width: number } | null>(null);
-  const [pan, setPan] = useState({ x: 40, y: 40 });
+  const [pan, setPan] = useState({ x: 280, y: 160 });
   const [zoom, setZoom] = useState(1);
   const [wireFrom, setWireFrom] = useState<string | null>(null);
   const [draftWire, setDraftWire] = useState<{
@@ -84,6 +93,7 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
   const [busy, setBusy] = useState(false);
   const [spawn, setSpawn] = useState<{ x: number; y: number; worldX: number; worldY: number } | null>(null);
   const [spawnFilter, setSpawnFilter] = useState("");
+  const spawnSearchRef = useRef<HTMLInputElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const boardRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
@@ -108,21 +118,27 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
 
   const refreshList = useCallback(async () => {
     const api = getApi();
-    const [list, nodes] = await Promise.all(
-      isPipeline
-        ? [api?.list_pipelines?.(), api?.list_pipeline_nodes?.()]
-        : [api?.list_automations?.(), api?.list_automation_nodes?.()],
-    );
-    setRows((isPipeline ? list?.pipelines : list?.automations) || []);
-    setCatalog(nodes?.nodes || []);
+    const [pipelines, automations] = await Promise.all([api?.list_pipelines?.(), api?.list_automations?.()]);
+    setRows({ pipeline: pipelines?.pipelines || [], automation: automations?.automations || [] });
+  }, []);
+
+  useEffect(() => { void refreshList(); }, [refreshList]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCatalog([]);
+    const load = async () => {
+      const api = getApi();
+      const result = isPipeline ? await api?.list_pipeline_nodes?.() : await api?.list_automation_nodes?.();
+      if (!cancelled) setCatalog(result?.nodes || []);
+    };
+    void load();
+    return () => { cancelled = true; };
   }, [isPipeline]);
 
   useEffect(() => {
-    void refreshList();
-  }, [refreshList]);
-
-  useEffect(() => {
     if (!spawn) return;
+    spawnSearchRef.current?.focus({ preventScroll: true });
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setSpawn(null);
     };
@@ -130,72 +146,109 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
     return () => window.removeEventListener("keydown", onKey);
   }, [spawn]);
 
-  const loadOne = useCallback(async (id: string) => {
+  const loadGen = useRef(0);
+  const loadOne = useCallback(async (id: string, targetKind: WorkflowKind) => {
+    const gen = ++loadGen.current;
     const api = getApi();
-    const res = isPipeline ? await api?.get_pipeline?.(id) : await api?.get_automation?.(id);
+    const res = targetKind === "pipeline" ? await api?.get_pipeline?.(id) : await api?.get_automation?.(id);
+    if (gen !== loadGen.current) return;
     const row = res?.automation || res?.pipeline;
     if (row) {
-      setDraft(row);
+      setKind(targetKind);
+      setDraft({ ...row, kind: targetKind });
+      setSectionsOpen((current) => ({ ...current, [targetKind]: true }));
       setSelectedId(id);
+      setSpawn(null);
       setSelectedNodeId("");
       setSelectedEdge(null);
       setExpandedId("");
       setLog((row.runs || []).slice(-1)[0] || null);
     }
-  }, [isPipeline]);
+  }, []);
 
   useEffect(() => {
-    const open = (id: string) => {
+    const open = (id: string, targetKind: WorkflowKind) => {
       if (!id) return;
-      void loadOne(id);
+      void refreshList();
+      void loadOne(id, targetKind);
       setLogOpen(true);
     };
-    const queued = takePendingGraphFocus(kind);
-    if (queued) open(queued);
+    for (const section of WORKFLOW_SECTIONS) {
+      const queued = takePendingGraphFocus(section.kind);
+      if (queued) open(queued, section.kind);
+    }
     const onFocus = (ev: Event) => {
-      const detail = (ev as CustomEvent<{ kind?: string; id?: string }>).detail;
-      if (detail?.kind !== kind || !detail.id) return;
-      takePendingGraphFocus(kind);
-      open(detail.id);
+      const detail = (ev as CustomEvent<{ kind?: WorkflowKind; id?: string }>).detail;
+      if (!detail?.id || (detail.kind !== "pipeline" && detail.kind !== "automation")) return;
+      takePendingGraphFocus(detail.kind);
+      open(detail.id, detail.kind);
+    };
+    const onDeleted = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ kind?: WorkflowKind; id?: string }>).detail;
+      if (!detail?.id) return;
+      loadGen.current += 1;
+      void refreshList();
+      setDraft((cur) => (cur?.id === detail.id && cur?.kind === detail.kind ? null : cur));
     };
     window.addEventListener("ducky:focus-graph", onFocus);
-    return () => window.removeEventListener("ducky:focus-graph", onFocus);
-  }, [kind, loadOne]);
+    window.addEventListener("ducky:graph-deleted", onDeleted);
+    return () => {
+      window.removeEventListener("ducky:focus-graph", onFocus);
+      window.removeEventListener("ducky:graph-deleted", onDeleted);
+    };
+  }, [loadOne, refreshList]);
 
-  const persist = useCallback(async (next: AutomationDto) => {
+  const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const [textSaveError, setTextSaveError] = useState(false);
+  const persist = useCallback((next: AutomationDto) => {
     const api = getApi();
-    const payload = { ...next, kind };
-    const res = isPipeline ? await api?.save_pipeline?.(payload) : await api?.save_automation?.(payload);
+    const targetKind: WorkflowKind = next.kind === "pipeline" ? "pipeline" : "automation";
+    const gen = loadGen.current;
+    const operation = saveQueue.current.then(async () => {
+    const payload = { ...next, kind: targetKind };
+    const res = targetKind === "pipeline" ? await api?.save_pipeline?.(payload) : await api?.save_automation?.(payload);
     const row = res?.automation || res?.pipeline;
     if (row) {
-      setDraft(row);
-      setSelectedId(row.id);
+      if (gen === loadGen.current) {
+        setKind(targetKind);
+        setDraft((current) => !next.id || current === next ? { ...row, kind: targetKind } : current);
+        setSelectedId(row.id);
+        setSectionsOpen((current) => ({ ...current, [targetKind]: true }));
+      }
       await refreshList();
       return row;
     }
     return next;
-  }, [isPipeline, kind, refreshList]);
+    });
+    saveQueue.current = operation.catch(() => undefined);
+    return operation;
+  }, [refreshList]);
 
-  const createNew = useCallback(async () => {
+  const createNew = (targetKind: WorkflowKind) => {
+    setPickerKind(targetKind);
     setPickerOpen(true);
-  }, []);
+  };
 
   const createFromTemplate = useCallback(
     async (template: AutomationTemplateDto | null) => {
+      const gen = ++loadGen.current;
       const created = await persist({
         id: "",
         name: template?.name || "Untitled",
         description: template?.description || "",
         enabled: true,
-        kind,
+        kind: pickerKind,
         graph: template?.graph || emptyGraph(),
       } as AutomationDto);
+      if (gen !== loadGen.current) return;
       setSelectedNodeId("");
+      setSelectedEdge(null);
+      setSpawn(null);
       setExpandedId("");
       setLog(null);
       if (created.id) setSelectedId(created.id);
     },
-    [persist],
+    [persist, pickerKind],
   );
 
   const graph = draft?.graph || emptyGraph();
@@ -203,11 +256,25 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
   const nodesById = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph.nodes]);
   const incomingIds = useMemo(() => new Set(graph.edges.map((edge) => edge.target)), [graph.edges]);
   const faces = useNodeFaces(graph.nodes.some((node) => node.type === "pipeline.agent"));
-  const isExpanded = (id: string) => !overview && expandedId === id;
+  const isExpanded = (id: string) => { const node = nodesById.get(id); return !overview && expandedId === id && !!node && hasNodeSettings(node, byType.get(node.type)); };
 
   const patchGraph = (fn: (g: AutomationGraphDto) => AutomationGraphDto) => {
     if (!draft) return;
     setDraft((current) => current ? { ...current, graph: fn(current.graph) } : current);
+  };
+
+  const updateNodeText = (id: string, patch: { label?: string; description?: string }) => {
+    if (!draft) return;
+    const next = { ...draft, graph: { ...draft.graph, nodes: draft.graph.nodes.map((node) => node.id === id ? { ...node, ...patch } : node) } };
+    setDraft(next);
+    setTextSaveError(false);
+    void persist(next).catch(() => setTextSaveError(true));
+  };
+
+  const deleteNode = (id: string) => {
+    patchGraph((graph) => ({ nodes: graph.nodes.filter((node) => node.id !== id), edges: graph.edges.filter((edge) => edge.source !== id && edge.target !== id) }));
+    setSelectedNodeId("");
+    setExpandedId("");
   };
 
   const addNodeAt = (entry: AutomationNodeDto, worldX: number, worldY: number) => {
@@ -228,18 +295,19 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
   };
 
   const saveDraft = () => {
-    if (draft) void persist(draft);
+    if (draft) void persist(draft).then(() => setTextSaveError(false)).catch(() => setTextSaveError(true));
   };
 
   const runTest = async () => {
     if (!draft?.id) return;
-    await persist(draft);
+    const gen = loadGen.current;
     setBusy(true);
     try {
+      await persist(draft);
       const res = isPipeline
         ? await getApi()?.run_pipeline?.(draft.id)
         : await getApi()?.run_automation?.(draft.id);
-      if (res) {
+      if (res && gen === loadGen.current) {
         setLog(res);
         setLogOpen(true);
       }
@@ -316,7 +384,7 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
   };
 
   const onBoardPointerCapture = (e: React.PointerEvent) => {
-    if (e.pointerType !== "touch" || (e.target instanceof Element && e.target.closest(".aw-node-props, .aw-log-dock, input, textarea, select"))) return;
+    if (e.pointerType !== "touch" || (e.target instanceof Element && e.target.closest(".aw-node-props, .aw-log-dock, .aw-inline-edit, .choice-dropdown-menu, input, textarea, select"))) return;
     touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touches.current.size !== 2) return;
     const [a, b] = [...touches.current.values()];
@@ -478,76 +546,79 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
     const top = Math.min(...graph.nodes.map((n) => n.y));
     const right = Math.max(...graph.nodes.map((n) => n.x + nodeWidth(n, isExpanded(n.id))));
     const bottom = Math.max(...graph.nodes.map((n) => n.y + (isExpanded(n.id) ? 440 : 76)));
-    const next = Math.min(1, Math.max(0.25, Math.min((box.clientWidth - 96) / (right - left), (box.clientHeight - 96) / (bottom - top))));
+    const board = box.getBoundingClientRect();
+    const sidebar = listRef.current?.getBoundingClientRect();
+    const toolbar = toolbarRef.current?.getBoundingClientRect();
+    const compact = box.clientWidth <= 680;
+    const insetX = compact ? 24 : Math.max(24, (sidebar?.right || board.left) - board.left + 24);
+    const insetY = Math.max(24, (toolbar?.bottom || board.top) - board.top + 24, compact ? (sidebar?.bottom || board.top) - board.top + 24 : 0);
+    const width = Math.max(80, box.clientWidth - insetX - 24);
+    const height = Math.max(80, box.clientHeight - insetY - (logOpen ? logHeight + 24 : 64));
+    const next = Math.min(1, Math.max(0.25, Math.min(width / (right - left), height / (bottom - top))));
     setZoom(next);
-    setPan({ x: 48 - left * next, y: 48 - top * next });
+    setPan({ x: insetX + (width - (right - left) * next) / 2 - left * next, y: insetY + (height - (bottom - top) * next) / 2 - top * next });
   };
 
   const logCount = log?.steps?.length || (runLogHasContent(log) ? 1 : 0);
 
   return (
     <div className="aw-root">
-      <aside className="aw-list">
-        <div className="aw-list-head">
-          <strong>{isPipeline ? "Pipelines" : "Automations"}</strong>
-          <button type="button" className="icon-btn" title="New workflow" onClick={() => void createNew()}>
-            +
-          </button>
-        </div>
-        <ul className="aw-list-ul">
-          {rows.map((row) => (
-            <li key={row.id}>
-              <button
-                type="button"
-                className={`aw-list-row${row.id === selectedId ? " is-active" : ""}`}
-                onClick={() => void loadOne(row.id)}
-              >
-                <span>{row.name || "Untitled"}</span>
-                <span className="aw-list-meta">{row.enabled ? "on" : "off"}</span>
-              </button>
-            </li>
+      <aside className="aw-list" ref={listRef} aria-label="Workflows">
+        <div className="aw-list-head"><strong>Workflows</strong></div>
+        <div className="aw-list-sections">
+          {WORKFLOW_SECTIONS.map((section) => (
+            <section className="aw-workflow-section" key={section.kind}>
+              <div className="aw-section-head">
+                <button type="button" className="aw-section-toggle" aria-label={section.label} aria-expanded={sectionsOpen[section.kind]} aria-controls={sectionId + "-" + section.kind} onClick={() => setSectionsOpen((current) => ({ ...current, [section.kind]: !current[section.kind] }))}>
+                  <span className="aw-section-chevron" aria-hidden="true">{sectionsOpen[section.kind] ? "▾" : "▸"}</span>
+                  <strong>{section.label}</strong><small>{rows[section.kind].length}</small>
+                </button>
+                <button type="button" className="aw-icon-button" title={"New " + section.kind} aria-label={"New " + section.kind} onClick={() => createNew(section.kind)}><span aria-hidden="true">➕</span></button>
+              </div>
+              <ul className="aw-list-ul" id={sectionId + "-" + section.kind} hidden={!sectionsOpen[section.kind]}>
+                {rows[section.kind].map((row) => (
+                  <li key={row.id}>
+                    <button type="button" className={"aw-list-row" + (draft && kind === section.kind && row.id === selectedId ? " is-active" : "")} aria-current={draft && kind === section.kind && row.id === selectedId ? "true" : undefined} onClick={() => void loadOne(row.id, section.kind)}>
+                      <span>{row.name || "Untitled"}</span>
+                      <span className="aw-list-meta" title={row.enabled ? "Enabled" : "Disabled"}>{row.enabled ? "on" : "off"}</span>
+                    </button>
+                  </li>
+                ))}
+                {!rows[section.kind].length && <li className="aw-section-empty">No {section.label.toLowerCase()} yet</li>}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
       </aside>
       <div className="aw-main">
-        <div className="aw-toolbar">
+        <div className="aw-toolbar" ref={toolbarRef} role="toolbar" aria-label="Workflow actions">
           {draft ? (
             <>
+              <div className="aw-toolbar-fields">
               <input
                 className="aw-name"
+                aria-label="Workflow name"
                 value={draft.name}
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                 onBlur={saveDraft}
               />
               {isPipeline ? (
                 <input
-                  className="aw-name"
+                  className="aw-name aw-description"
+                  aria-label="Workflow description"
                   placeholder="Description (so a ducky can pick this recipe)"
                   value={draft.description || ""}
                   onChange={(e) => setDraft({ ...draft, description: e.target.value })}
                   onBlur={saveDraft}
                 />
               ) : null}
-              <label className="aw-enable">
-                <input
-                  type="checkbox"
-                  checked={draft.enabled}
-                  onChange={(e) => {
-                    const next = { ...draft, enabled: e.target.checked };
-                    setDraft(next);
-                    void persist(next);
-                  }}
-                />
-                Enabled
-              </label>
-              <button type="button" onClick={saveDraft}>
-                Save
-              </button>
-              <button type="button" onClick={() => void runTest()} disabled={busy || !draft.id}>
-                {busy ? "Running…" : "Test"}
-              </button>
+              </div>
+              <div className="aw-toolbar-actions">
+              <button type="button" aria-label="Enabled" title={draft.enabled ? "Disable workflow" : "Enable workflow"} aria-pressed={draft.enabled} onClick={() => { const next = { ...draft, enabled: !draft.enabled }; setDraft(next); void persist(next); }}><span aria-hidden="true">{draft.enabled ? "✅" : "⏸️"}</span></button>
+              <button type="button" title="Save" aria-label="Save" onClick={saveDraft}><span aria-hidden="true">💾</span></button>
+              <button type="button" title={busy ? "Running…" : "Test"} aria-label={busy ? "Running…" : "Test"} onClick={() => void runTest()} disabled={busy || !draft.id}><span aria-hidden="true">{busy ? "⏳" : "▶️"}</span></button>
               <button
-                type="button"
+                type="button" title="Duplicate" aria-label="Duplicate"
                 onClick={async () => {
                   if (!draft.id) return;
                   const copy = {
@@ -558,27 +629,26 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
                   await persist(copy);
                 }}
               >
-                Duplicate
+                <span aria-hidden="true">📋</span>
               </button>
               <button
-                type="button"
+                type="button" title="Delete" aria-label="Delete"
                 onClick={async () => {
                   if (!draft.id) return;
+                  const gen = ++loadGen.current;
                   if (isPipeline) await getApi()?.delete_pipeline?.(draft.id);
                   else await getApi()?.delete_automation?.(draft.id);
-                  setDraft(null);
-                  setSelectedId("");
+                  if (gen === loadGen.current) { setDraft(null); setSelectedId(""); }
                   await refreshList();
                 }}
               >
-                Delete
+                <span aria-hidden="true">🗑️</span>
               </button>
+              </div>
             </>
           ) : (
             <span className="aw-empty-hint">
-              {isPipeline
-                ? "Start with any node. Chat input passes your request in; Return to user sends results back. Use + Nodes or right-click to add steps."
-                : "Create a workflow or pick a template — right-click the canvas to add nodes."}
+              Select a pipeline or automation, or use ➕ to create a workflow.
             </span>
           )}
         </div>
@@ -624,6 +694,7 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
             {graph.nodes.map((node) => {
               const meta = byType.get(node.type);
               const expanded = isExpanded(node.id);
+              const configurable = hasNodeSettings(node, meta);
               const role = isEndNode(node) ? "end" : meta?.role === "starter" || !incomingIds.has(node.id) ? "starter" : node.type === "pipeline.agent" ? "agent" : "action";
               const label = nodeLabel(node, meta);
               return (
@@ -646,15 +717,16 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
                   /> : null}
                   <div className="aw-node-card">
                     <div className="aw-node-body" onPointerDown={(e) => startNodeDrag(e, node)}
-                      onDoubleClick={() => { setExpandedId(expandedId === node.id ? "" : node.id); if (overview) setZoom(1); }}
+                      onDoubleClick={() => { if (configurable) { setExpandedId(expandedId === node.id ? "" : node.id); if (overview) setZoom(1); } }}
                       title={label}>
                       <NodeIcon meta={meta} node={node} faces={faces} />
                       <div className="aw-node-heading">
-                        <strong>{label}</strong>
-                        {!overview ? <small>{node.description || meta?.description || ""}</small> : null}
+                        <InlineNodeText key={selectedId + node.id + "-label"} value={label} label="Node name" onCommit={(value) => updateNodeText(node.id, { label: value })} />
+                        {!overview ? <InlineNodeText key={selectedId + node.id + "-description"} value={node.description ?? meta?.description ?? ""} label="Node description" placeholder="Add description" multiline onCommit={(value) => updateNodeText(node.id, { description: value })} /> : null}
                       </div>
                     </div>
-                    {!overview ? <button
+                    <div className="aw-node-actions">
+                    {!overview && configurable ? <button
                       type="button"
                       title={expanded ? "Collapse node" : "Edit node"}
                       aria-label={expanded ? "Collapse node" : "Edit node"}
@@ -669,9 +741,11 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
                     >
                       {expanded ? <Icons.ChevronDown /> : <Icons.Sliders />}
                     </button> : null}
+                    <button type="button" className="aw-node-delete" title="Delete node" aria-label={"Delete " + label} onPointerDown={(event) => event.stopPropagation()} onClick={() => deleteNode(node.id)}>🗑️</button>
+                    </div>
                     {expanded ? (
-                      <div className="aw-node-props aw-node-props--open" onPointerDown={(e) => e.stopPropagation()}>
-                        <NodeInspector
+                      <div className="aw-node-props aw-node-props--open" onPointerDown={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
+                        <NodeSettings
                           node={node}
                           meta={meta}
                           onChange={(next) =>
@@ -680,14 +754,6 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
                               nodes: g.nodes.map((n) => (n.id === next.id ? next : n)),
                             }))
                           }
-                          onDelete={() => {
-                            patchGraph((g) => ({
-                              nodes: g.nodes.filter((n) => n.id !== node.id),
-                              edges: g.edges.filter((e) => e.source !== node.id && e.target !== node.id),
-                            }));
-                            setSelectedNodeId("");
-                            setExpandedId("");
-                          }}
                         />
                       </div>
                     ) : null}
@@ -717,18 +783,17 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
             })}
           </div>
         </div>
+        {textSaveError ? <p className="aw-text-save-error" role="alert">Could not save changes. Use Save to retry.</p> : null}
         <div className="aw-canvas-controls">
-          <button type="button" onClick={() => { const box = boardRef.current?.getBoundingClientRect(); if (!box) return; const world = worldFromClient(box.left + box.width / 2, box.top + box.height / 2); setSpawn({ x: Math.max(8, Math.min(box.left + 12, window.innerWidth - 328)), y: Math.max(8, Math.min(box.top + 12, window.innerHeight - 520)), worldX: world.x, worldY: world.y }); setSpawnFilter(""); }} disabled={!draft}>+ Nodes</button>
-          <button type="button" title="Zoom out" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.25, z / 1.2))}>−</button>
+          <button type="button" title="Add nodes" aria-label="Add nodes" onClick={() => { const box = boardRef.current?.getBoundingClientRect(); if (!box) return; const world = worldFromClient(box.left + box.width / 2, box.top + box.height / 2); setSpawn({ x: Math.max(8, Math.min(box.left + 12, window.innerWidth - 328)), y: Math.max(8, Math.min(box.top + 12, window.innerHeight - 520)), worldX: world.x, worldY: world.y }); setSpawnFilter(""); }} disabled={!draft}>➕</button>
+          <button type="button" title="Zoom out" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.25, z / 1.2))}>➖</button>
           <span>{Math.round(zoom * 100)}%</span>
-          <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(4, z * 1.2))}><Icons.Plus /></button>
-          <button type="button" onClick={fitGraph}>Fit</button>
+          <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(4, z * 1.2))}>➕</button>
+          <button type="button" title="Fit graph" aria-label="Fit graph" onClick={fitGraph}>🔍</button>
         </div>
         {selectedEdge !== null && graph.edges[selectedEdge] ? <div className="aw-connection-tools">
           <span>Connection</span>
-          <select aria-label="Connection route" value={graph.edges[selectedEdge].kind} onChange={(e) => patchGraph((g) => ({ ...g, edges: g.edges.map((edge, i) => i === selectedEdge ? { ...edge, kind: e.target.value } : edge) }))}>
-            <option value="main">Next</option><option value="true">True</option><option value="false">False</option><option value="each">Each item</option><option value="done">Done</option>
-          </select>
+          <ChoiceDropdown aria-label="Connection route" value={graph.edges[selectedEdge].kind} options={[{ value: "main", label: "Next" }, { value: "true", label: "True" }, { value: "false", label: "False" }, { value: "each", label: "Each item" }, { value: "done", label: "Done" }]} onChange={(value) => patchGraph((g) => ({ ...g, edges: g.edges.map((edge, i) => i === selectedEdge ? { ...edge, kind: value } : edge) }))} size="compact" />
           <button type="button" onClick={() => { patchGraph((g) => ({ ...g, edges: g.edges.filter((_, i) => i !== selectedEdge) })); setSelectedEdge(null); }}>Disconnect</button>
           <button type="button" aria-label="Close connection controls" onClick={() => setSelectedEdge(null)}><Icons.Close /></button>
         </div> : null}
@@ -810,13 +875,15 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
             style={{ left: spawn.x, top: spawn.y, maxHeight: `min(512px, calc(100dvh - ${spawn.y + 8}px))` }}
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <div className="aw-menu-actions">
-              <button type="button" onClick={() => setExpandedId("")}><span aria-hidden>📦</span>Collapse all nodes</button>
-              <button type="button" onClick={() => { patchGraph((g) => arrangeGraph(g, overview ? "" : expandedId)); setSpawn(null); }}><span aria-hidden>🧹</span>Arrange nodes</button>
-              <button type="button" onClick={() => { fitGraph(); setSpawn(null); }}><span aria-hidden>🔍</span>Fit graph</button>
+            <div className="aw-menu-actions" role="toolbar" aria-label="Node actions">
+              <button type="button" title="Collapse all nodes" aria-label="Collapse all nodes" onClick={() => setExpandedId("")}><span aria-hidden="true">📦</span></button>
+              <button type="button" title="Arrange nodes" aria-label="Arrange nodes" onClick={() => { patchGraph((g) => arrangeGraph(g, overview ? "" : expandedId)); setSpawn(null); }}><span aria-hidden="true">🧹</span></button>
+              <button type="button" title="Fit graph" aria-label="Fit graph" onClick={() => { fitGraph(); setSpawn(null); }}><span aria-hidden="true">🔍</span></button>
             </div>
             <input
+              ref={spawnSearchRef}
               className="aw-spawn-search"
+              aria-label="Filter nodes"
               placeholder="Filter nodes"
               value={spawnFilter}
               onChange={(e) => setSpawnFilter(e.target.value)}
@@ -851,124 +918,9 @@ export function AutomationsView({ kind = "automation" }: { kind?: "automation" |
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
         onSelect={(t) => void createFromTemplate(t)}
-        currentGraph={draft?.graph || null}
-        system={kind}
+        currentGraph={draft?.kind === pickerKind ? draft.graph : null}
+        system={pickerKind}
       />
-    </div>
-  );
-}
-
-function FieldInput({
-  field,
-  node,
-  pluginId,
-  onChange,
-}: {
-  field: AutomationFieldDto;
-  node: AutomationGraphNodeDto;
-  pluginId?: string;
-  onChange: (n: AutomationGraphNodeDto) => void;
-}) {
-  const value = String(node.config[field.id] ?? "");
-  const set = (next: string | number) =>
-    onChange({ ...node, config: { ...node.config, [field.id]: next } });
-  const [models, setModels] = useState<Array<{ id: string; name?: string }>>([]);
-  const provider =
-    field.provider || (pluginId === "google" ? "gemini" : pluginId) || "";
-
-  useEffect(() => {
-    if (field.type !== "model" || !provider) return;
-    let cancelled = false;
-    void getApi()
-      ?.get_models(provider)
-      ?.then((rows) => {
-        if (!cancelled && Array.isArray(rows)) setModels(rows);
-      })
-      ?.catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [field.type, provider]);
-
-  if (field.type === "project") {
-    return <ProjectField value={value} onChange={set} />;
-  }
-  if (field.type === "ducky") {
-    return <AgentField value={String(node.config[field.id] ?? node.config.profile_id ?? "")} onChange={set} />;
-  }
-  if (field.type === "textarea") {
-    return (
-      <textarea rows={4} value={value} onChange={(e) => set(e.target.value)} />
-    );
-  }
-  if (field.type === "select" || field.type === "model") {
-    const opts =
-      field.type === "model"
-        ? models.map((m) => ({ id: m.id, label: m.name || m.id }))
-        : field.options || [];
-    return (
-      <select value={value} onChange={(e) => set(e.target.value)}>
-        <option value="">(default)</option>
-        {opts.map((o) => (
-          <option key={o.id} value={o.id}>
-            {o.label || o.id}
-          </option>
-        ))}
-        {value && !opts.some((o) => o.id === value) ? <option value={value}>{value}</option> : null}
-      </select>
-    );
-  }
-  return (
-    <input
-      type={field.type === "number" ? "number" : "text"}
-      value={value}
-      onChange={(e) => set(field.type === "number" ? Number(e.target.value) : e.target.value)}
-    />
-  );
-}
-
-function NodeInspector({
-  node,
-  meta,
-  onChange,
-  onDelete,
-}: {
-  node: AutomationGraphNodeDto;
-  meta?: AutomationNodeDto;
-  onChange: (n: AutomationGraphNodeDto) => void;
-  onDelete: () => void;
-}) {
-  const fields = meta?.config_fields || [];
-  const appearance = (
-    <>
-      <label>
-        Label
-        <input value={node.label || ""} onChange={(e) => onChange({ ...node, label: e.target.value })} />
-      </label>
-      <label>
-        Description
-        <textarea
-          value={node.description || ""}
-          onChange={(e) => onChange({ ...node, description: e.target.value })}
-          rows={3}
-        />
-      </label>
-    </>
-  );
-  return (
-    <div className="aw-insp-form">
-      {!["pipeline.agent", "start.chat", "pipeline.finish", "flow.end"].includes(node.type) && appearance}
-      {node.type === "start.chat" && <p>Reference this pipeline in chat, then type your request. Your text and files flow into the connected steps.</p>}
-      {fields.map((f) => (
-        <label key={f.id}>
-          {f.label || f.id}
-          <FieldInput field={f} node={node} pluginId={meta?.plugin_id} onChange={onChange} />
-        </label>
-      ))}
-      {["pipeline.agent", "start.chat", "pipeline.finish", "flow.end"].includes(node.type) && <details><summary>Node appearance</summary>{appearance}</details>}
-      <button type="button" className="aw-danger" onClick={onDelete}>
-        Delete node
-      </button>
     </div>
   );
 }

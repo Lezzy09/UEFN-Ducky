@@ -20,6 +20,8 @@ const PANEL_PUSH_TYPES = new Set<string>([
   "browser_pane_new_window",
   "background_job",
   "graphs_changed",
+  "graph_focus",
+  "templates_changed",
 ]);
 
 type AgentEventListener = (event: AgentEvent) => void;

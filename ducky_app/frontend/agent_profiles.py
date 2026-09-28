@@ -160,6 +160,9 @@ def _is_empty_or_poison(
 
 
 def _heal_hidden_if_poisoned(settings: PanelSettings, *, persist: bool = True) -> PanelSettings:
+    # A deliberate removal can look identical to the old hide-all bug.
+    if settings.agent_profile_visibility_explicit:
+        return settings
     raw = settings.hidden_bundled_agent_profile_ids
     if not isinstance(raw, list) or not raw:
         return settings
@@ -288,7 +291,7 @@ def save_agent_profile_override(bundled_id: str, patch: dict[str, Any]) -> dict[
     bundled = next((p for p in _load_bundled_raw() if p["id"] == bid), None)
     if not bundled:
         raise ValueError(f"Bundled profile not found: {bundled_id}")
-    s = PanelSettings.load()
+    s = _heal_hidden_if_poisoned(PanelSettings.load(), persist=False)
     overrides = dict(s.agent_profile_overrides or {})
     existing = overrides.get(bid) if isinstance(overrides.get(bid), dict) else {}
     merged_patch = {**existing, **{k: v for k, v in patch.items() if k in PROFILE_FIELDS}}
@@ -302,6 +305,7 @@ def save_agent_profile_override(bundled_id: str, patch: dict[str, Any]) -> dict[
     if bid in hidden:
         hidden = [x for x in hidden if x != bid]
     s.hidden_bundled_agent_profile_ids = hidden
+    s.agent_profile_visibility_explicit = True
     s.agent_profile_overrides = overrides
     s.validate()
     s.save()
@@ -315,10 +319,12 @@ def delete_agent_profile(profile_id: str) -> None:
     bundled_ids = bundled_profile_ids()
     s = PanelSettings.load()
     if pid in bundled_ids:
+        _heal_hidden_if_poisoned(s, persist=False)
         hidden = _stored_hidden_list(s)
         if pid not in hidden:
             hidden.append(pid)
         s.hidden_bundled_agent_profile_ids = hidden
+        s.agent_profile_visibility_explicit = True
         overrides = dict(s.agent_profile_overrides or {})
         overrides.pop(pid, None)
         s.agent_profile_overrides = overrides

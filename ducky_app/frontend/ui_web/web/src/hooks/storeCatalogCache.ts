@@ -11,6 +11,9 @@ function forDisk(catalog: DuckyOSStoreCatalog): DuckyOSStoreCatalog {
     ok: catalog.ok,
     error: catalog.error,
     code: catalog.code,
+    account: catalog.account,
+    teams: catalog.teams,
+    teamsInfo: catalog.teamsInfo,
     items: (catalog.items || []).map((item) => {
       const { icon_data_url: _drop, ...rest } = item;
       return rest;
@@ -49,9 +52,23 @@ export function peekStoreCatalogCache(): DuckyOSStoreCatalog | null {
   return memory;
 }
 
-/** Remember a successful (or still-usable) catalog fetch. */
+/**
+ * Remember a catalog fetch. A failed empty refresh keeps the last good copy, but
+ * only for the same account: another account's copy (private team items) is replaced.
+ */
 export function rememberStoreCatalog(catalog: DuckyOSStoreCatalog): void {
-  if (catalog.ok === false && !(catalog.items || []).length) return;
+  const sameAccount = (catalog.account ?? "") === (peekStoreCatalogCache()?.account ?? "");
+  if (sameAccount && catalog.ok === false && !(catalog.items || []).length) return;
   memory = catalog;
   writeDisk(catalog);
+}
+
+/** Account switched (login / logout / expiry): drop every copy, the Store refetches. */
+export function clearStoreCatalogCache(): void {
+  memory = null;
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* private mode */
+  }
 }

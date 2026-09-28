@@ -504,17 +504,40 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
     );
     const [padTick, setPadTick] = useState(0);
 
-    const distanceFromBottom = useCallback(() => {
-      const el = scrollerElRef.current;
-      if (!el) return 0;
-      return el.scrollHeight - el.scrollTop - el.clientHeight;
+    const inputDirectionRef = useRef(0);
+    const inputHeightRef = useRef(0);
+    const scrollPositionRef = useRef({ top: 0, height: 0, viewport: 0 });
+    const followFrameRef = useRef(0);
+
+    const setFollowing = useCallback((following: boolean) => {
+      if (!following && followFrameRef.current) {
+        cancelAnimationFrame(followFrameRef.current);
+        followFrameRef.current = 0;
+      }
+      if (followingRef.current === following) return;
+      followingRef.current = following;
+      onAtBottomChange(following);
+    }, [onAtBottomChange]);
+
+    const scrollToBottom = useCallback(() => {
+      const scroller = scrollerElRef.current;
+      if (!scroller || !followingRef.current || scroller.clientHeight <= 0 || dockLayoutBusy()) return;
+      const height = scroller.scrollHeight;
+      scroller.scrollTo({ top: height, behavior: "auto" });
+      // Our own scroll (including a clamp after content shrinks) is not user input.
+      scrollPositionRef.current = { top: scroller.scrollTop, height, viewport: scroller.clientHeight };
     }, []);
 
-    const scrollToBottom = useCallback((behavior: "auto" | "smooth" = "auto") => {
-      const scroller = scrollerElRef.current;
-      if (!scroller) return;
-      scroller.scrollTo({ top: scroller.scrollHeight, behavior });
-    }, []);
+    const followLatest = useCallback(() => {
+      inputDirectionRef.current = 0;
+      setFollowing(true);
+      if (followFrameRef.current) cancelAnimationFrame(followFrameRef.current);
+      followFrameRef.current = requestAnimationFrame(() => {
+        followFrameRef.current = 0;
+        scrollToBottom();
+        applyWindowRef.current();
+      });
+    }, [setFollowing, scrollToBottom]);
 
     const setScrollerRef = useCallback((node: HTMLDivElement | null) => {
       if (scrollerElRef.current === node) return;
@@ -522,12 +545,9 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
       if (node) setScrollerReady((n) => n + 1);
     }, []);
 
-    useImperativeHandle(ref, () => ({
-      scrollToLatest: () => {
-        followingRef.current = true;
-        requestAnimationFrame(() => scrollToBottom("auto"));
-      },
-    }));
+    useImperativeHandle(ref, () => ({ scrollToLatest: followLatest }), [followLatest]);
+    useEffect(() => { onAtBottomChange(followingRef.current); }, [scrollerReady, onAtBottomChange]);
+    useEffect(() => () => { if (followFrameRef.current) cancelAnimationFrame(followFrameRef.current); }, []);
 
     // Play-audio only on the latest assistant text bubble — not every mid-turn status line.
     const lastSpeakRowId = useMemo(() => {
@@ -550,34 +570,92 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
       return null;
     }, [rows]);
 
-    // Release / re-engage the tail purely from the user's scroll position, so one
-    // small scroll up is enough to break free and streaming can't fight it back.
-    // Coalesced to one scrollHeight read per frame — the raw scroll event fires
-    // many times per frame and each read forces layout.
+    // Release following before the browser scrolls or measures lazy content.
+    // Only deliberate downward input can re-engage it; layout/anchoring scroll
+    // events must never reinterpret a reader's position as permission to follow.
     useEffect(() => {
       const scroller = scrollerElRef.current;
       if (!scroller) return;
       let frame = 0;
-      let lastAtBottom: boolean | null = null;
+      let touchY: number | null = null;
+      let draggingScrollbar = false;
+      const intent = (direction: number) => {
+        inputDirectionRef.current = direction;
+        inputHeightRef.current = scroller.scrollHeight;
+        if (direction < 0) setFollowing(false);
+        else if (direction > 0 && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 1) setFollowing(true);
+      };
+      const onWheel = (event: WheelEvent) => {
+        if (!event.ctrlKey && event.deltaY) intent(Math.sign(event.deltaY));
+      };
+      const onTouchStart = (event: TouchEvent) => { touchY = event.touches.length === 1 ? event.touches[0].clientY : null; };
+      const onTouchMove = (event: TouchEvent) => {
+        if (touchY === null || event.touches.length !== 1) return;
+        const nextY = event.touches[0].clientY;
+        if (nextY !== touchY) intent(Math.sign(touchY - nextY));
+        touchY = nextY;
+      };
+      const onTouchEnd = () => { touchY = null; };
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (event.defaultPrevented || event.altKey || event.metaKey) return;
+        if (event.target instanceof Element && event.target.closest('input, textarea, select, button, [contenteditable="true"], [role="textbox"]')) return;
+        if (["ArrowUp", "PageUp", "Home"].includes(event.key) || (event.key === " " && event.shiftKey)) intent(-1);
+        else if (["ArrowDown", "PageDown", "End", " "].includes(event.key)) intent(1);
+      };
+      const onPointerDown = (event: PointerEvent) => {
+        if (event.target !== scroller || event.button !== 0) return;
+        const bounds = scroller.getBoundingClientRect();
+        if (event.clientX < bounds.right - Math.max(12, bounds.width - scroller.clientWidth)) return;
+        draggingScrollbar = true;
+        setFollowing(false);
+        inputDirectionRef.current = 0;
+        inputHeightRef.current = scroller.scrollHeight;
+      };
+      const onPointerUp = () => { draggingScrollbar = false; };
       const onScroll = () => {
+        const top = scroller.scrollTop;
+        const previous = scrollPositionRef.current;
+        if (draggingScrollbar && top !== previous.top) intent(Math.sign(top - previous.top));
+        // Scrollbar/assistive scrolling can arrive without wheel or key events.
+        // Detect moving up synchronously, but exclude native layout clamping.
+        if (followingRef.current && top < previous.top - 0.5 && scroller.scrollHeight === previous.height && scroller.clientHeight === previous.viewport && previous.height - top - previous.viewport > AT_BOTTOM_THRESHOLD_PX) {
+          inputDirectionRef.current = -1;
+          setFollowing(false);
+        }
+        scrollPositionRef.current = { ...previous, top };
         if (frame) return;
         frame = window.requestAnimationFrame(() => {
           frame = 0;
-          const atBottom = distanceFromBottom() <= AT_BOTTOM_THRESHOLD_PX;
-          followingRef.current = atBottom;
-          if (atBottom !== lastAtBottom) {
-            lastAtBottom = atBottom;
-            onAtBottomChange(atBottom);
-          }
+          const height = scroller.scrollHeight;
+          if (!followingRef.current && inputDirectionRef.current > 0 && height === inputHeightRef.current && height - scroller.scrollTop - scroller.clientHeight <= AT_BOTTOM_THRESHOLD_PX) setFollowing(true);
+          scrollPositionRef.current = { top: scroller.scrollTop, height, viewport: scroller.clientHeight };
           applyWindowRef.current();
         });
       };
+      scroller.addEventListener("wheel", onWheel, { passive: true });
+      scroller.addEventListener("touchstart", onTouchStart, { passive: true });
+      scroller.addEventListener("touchmove", onTouchMove, { passive: true });
+      scroller.addEventListener("touchend", onTouchEnd, { passive: true });
+      scroller.addEventListener("touchcancel", onTouchEnd, { passive: true });
+      scroller.addEventListener("keydown", onKeyDown);
+      scroller.addEventListener("pointerdown", onPointerDown, { passive: true });
+      window.addEventListener("pointerup", onPointerUp, { passive: true });
+      window.addEventListener("pointercancel", onPointerUp, { passive: true });
       scroller.addEventListener("scroll", onScroll, { passive: true });
       return () => {
+        scroller.removeEventListener("wheel", onWheel);
+        scroller.removeEventListener("touchstart", onTouchStart);
+        scroller.removeEventListener("touchmove", onTouchMove);
+        scroller.removeEventListener("touchend", onTouchEnd);
+        scroller.removeEventListener("touchcancel", onTouchEnd);
+        scroller.removeEventListener("keydown", onKeyDown);
+        scroller.removeEventListener("pointerdown", onPointerDown);
+        window.removeEventListener("pointerup", onPointerUp);
+        window.removeEventListener("pointercancel", onPointerUp);
         scroller.removeEventListener("scroll", onScroll);
         if (frame) window.cancelAnimationFrame(frame);
       };
-    }, [scrollerReady, distanceFromBottom, onAtBottomChange]);
+    }, [scrollerReady, setFollowing]);
 
     // Auto-follow on real tail growth: a ResizeObserver on the content (and the
     // scroller, for pane resizes) fires once per actual height change, after
@@ -588,7 +666,11 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
       if (!scroller || !content || typeof ResizeObserver === "undefined") return;
       const observer = new ResizeObserver(() => {
         if (dockLayoutBusy()) return;
-        if (followingRef.current) scrollToBottom("auto");
+        if (followingRef.current) scrollToBottom();
+        else {
+          inputDirectionRef.current = 0;
+          scrollPositionRef.current = { top: scroller.scrollTop, height: scroller.scrollHeight, viewport: scroller.clientHeight };
+        }
         applyWindowRef.current();
       });
       observer.observe(content);
@@ -597,19 +679,19 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
     }, [scrollerReady, scrollToBottom]);
 
     const handleJumpToLatestClick = useCallback(() => {
-      followingRef.current = true;
+      followLatest();
       onJumpToLatest();
-    }, [onJumpToLatest]);
+    }, [followLatest, onJumpToLatest]);
 
     const jumpPeek = useCallback(
       (top: number) => {
         const scroller = scrollerElRef.current;
         if (!scroller) return;
-        followingRef.current = false;
-        onAtBottomChange(false);
+        inputDirectionRef.current = 0;
+        setFollowing(false);
         scroller.scrollTo({ top, behavior: "auto" });
       },
-      [onAtBottomChange],
+      [setFollowing],
     );
 
     // Turn objects keep their identity across frames unless a row inside them
@@ -664,14 +746,9 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
         if (dockLayoutBusy()) return;
         const h = heightsRef.current;
         if (index >= h.length || h[index] === height || height <= 0) return;
-        const delta = height - h[index];
-        let startY = 0;
-        for (let i = 0; i < index; i++) startY += h[i];
         h[index] = height;
-        const scroller = scrollerElRef.current;
-        if (scroller && !followingRef.current && startY + height - delta <= scroller.scrollTop) {
-          scroller.scrollTop += delta;
-        }
+        // Native anchoring owns corrections above the reader. Adjusting
+        // scrollTop here as well double-applies lazy height changes.
         setPadTick((t) => t + 1);
         applyWindow();
       },
@@ -692,7 +769,7 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
           });
         }
         setPadTick((t) => t + 1);
-        if (followingRef.current) scrollToBottom("auto");
+        if (followingRef.current) scrollToBottom();
         applyWindowRef.current();
       };
       window.addEventListener(DOCK_LAYOUT_IDLE_EVENT, flush);
@@ -707,7 +784,7 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
 
     useLayoutEffect(() => {
       ensureHeights(chunks.length);
-      if (followingRef.current) scrollToBottom("auto");
+      if (followingRef.current) scrollToBottom();
       applyWindow();
     }, [chunks.length, scrollerReady, ensureHeights, applyWindow, scrollToBottom]);
 
@@ -800,6 +877,9 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
         >
           <div
             ref={setScrollerRef}
+            tabIndex={0}
+            role="region"
+            aria-label="Conversation messages"
             className="virtual-chat-message-list-scroller"
             data-chat-window={`${win.start}-${win.end}`}
           >

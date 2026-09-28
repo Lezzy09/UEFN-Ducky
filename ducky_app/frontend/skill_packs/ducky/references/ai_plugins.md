@@ -40,6 +40,10 @@ across chats. Tools write the files; you never open those folders.
    Omit `systems` so the tile is on **both** palettes. Theme-only: one node that
    applies/lists the profile. Handler `ctx = {config, payload, node, kind, files,
    artifact_dir}` → `{ok, files?}`.
+   Place graphs with `save_pipeline` / `save_automation` — each save opens that
+   editor and refreshes the canvas. Delete with `delete_pipeline` /
+   `delete_automation`. Reusable starters: `save_custom_automation_template` /
+   `delete_custom_automation_template`. Do not tell the user to open the tab.
 7. **Bundled skill** `skills/<id>/SKILL.md` inside the draft (not
    `ducky_skills_*`) so later chats know the new tools.
 8. **Mutators record changeset** (`_ducky` or `api.changeset.record`, slot
@@ -169,23 +173,36 @@ Toggles (native Settings, not a custom form):
 }]
 ```
 
-**`backend/__init__.py`** — one store, MCP tools + panel RPC + pipeline node:
+**`backend/__init__.py`** — one store, MCP tools + panel RPC + pipeline node.
+
+Data lives in `api.data`, never in a folder you pick (no `%LOCALAPPDATA%` paths,
+no `db.json`): **one JSON doc per record** (`data.put("item.<id>", {...})`,
+`data.get`, `data.items("item.")`, `data.delete`) and files through
+`data.put_file(path, bytes)` / `data.file_path(path)` / `data.delete_file`. Keys are
+`[a-z0-9._-]`, file paths `[a-z0-9._/-]`. The host keeps the data per account and
+scope; a scope can be read-only, so let write errors surface as tool errors.
 
 ```python
 from __future__ import annotations
 
 def register(api) -> None:
+    data = api.data
+
     def _list(kind: str = "") -> dict:
-        return {"ok": True, "items": []}
+        rows = data.items("item.").values()
+        return {"ok": True, "items": [r for r in rows if not kind or r.get("kind") == kind]}
 
     def _upsert(item: dict) -> dict:
+        item_id = str(item.get("id") or "")
+        data.put(f"item.{item_id}", item)
         api.changeset.record(
-            command="upsert", kind="item", ident=str(item.get("id") or ""),
-            facet="record", slot=f"{api.plugin_id}://item/{item.get('id') or ''}/record",
+            command="upsert", kind="item", ident=item_id,
+            facet="record", slot=f"{api.plugin_id}://item/{item_id}/record",
         )
         return {"ok": True, "item": item}
 
     def _delete(item_id: str) -> dict:
+        data.delete(f"item.{item_id}")
         api.changeset.record(
             command="delete", kind="item", ident=item_id, facet="record",
             slot=f"{api.plugin_id}://item/{item_id}/record",

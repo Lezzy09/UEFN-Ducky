@@ -1033,6 +1033,8 @@ export interface ChatContextMemoryDto {
 export interface DuckyOSAccountStatus {
   ok?: boolean;
   logged_in?: boolean;
+  /** Host account key ("" signed out): keys per-account caches such as plugin prefs. */
+  account?: string;
   needs_code?: boolean;
   browser_pending?: boolean;
   user_code?: string;
@@ -1167,19 +1169,33 @@ export interface DuckyOSStoreItemDto {
   has_icon?: boolean;
   icon_mime?: string | null;
   icon_data_url?: string | null;
-  price_cents?: number;
-  currency?: string;
-  paid?: boolean;
-  owned?: boolean | null;
-  stripe_product_key?: string | null;
+  /** Private items are listed only to members of the owning team. */
+  visibility?: "public" | "private";
+  owner_team_id?: string | null;
+  owner_team_name?: string;
+  /** Owned by one of the signed-in account's teams (Team category). */
+  my_team?: boolean;
   /** Content summary when a plugin bundles skills/themes/etc. */
   contributes_summary?: string[];
+}
+
+export interface DuckyOSStoreTeamInfo {
+  teamId: string;
+  name: string;
+  privateActive?: boolean;
+  hiddenPrivate?: number;
 }
 
 export interface DuckyOSStoreCatalog {
   ok?: boolean;
   error?: string;
   code?: string;
+  /** Account this catalog was fetched as ("" signed out) — caches are keyed by it. */
+  account?: string;
+  /** Account has the teams beta (uefn-ducky-store.teams); missing = false. */
+  teams?: boolean;
+  /** Per team (only with `teams`): hiddenPrivate > 0 while Team Private is paused. */
+  teamsInfo?: DuckyOSStoreTeamInfo[];
   items?: DuckyOSStoreItemDto[];
 }
 
@@ -1647,13 +1663,17 @@ export interface PanelPushEvent {
     | "project_changed"
     | "discord_changed"
     | "uefn_plugins_changed"
+    | "duckyos_account_changed"
+    | "plugin_scope_changed"
     | "models_updated"
     | "coding_agents_updated"
     | "uefn_plugin_trust_request"
     | "browser_pane_state"
     | "browser_pane_new_window"
     | "background_job"
-    | "graphs_changed";
+    | "graphs_changed"
+    | "graph_focus"
+    | "templates_changed";
   provider?: string;
   id?: string;
   phase?: "working" | "ready" | "done" | "error";
@@ -1665,7 +1685,16 @@ export interface PanelPushEvent {
   project?: ProjectInfo;
   /** uefn_plugin_trust_request — AI/local plugin awaiting user confirm. */
   plugin_id?: string;
+  /** plugin_scope_changed — plugins whose data a sync changed (empty = scope switched). */
+  plugins?: string[];
+  /** plugin_scope_changed from a sync round (status refresh even when nothing changed). */
+  synced?: boolean;
+  /** duckyos_account_changed — the new account key ("" signed out). */
+  account?: string;
   source?: string;
+  /** graph_focus: which editor to open, and saved vs deleted. */
+  kind?: string;
+  action?: string;
   /** browser_pane_state fields (native WebView2 pane navigation state). */
   pane_id?: string;
   url?: string;
@@ -1675,6 +1704,45 @@ export interface PanelPushEvent {
   loading?: boolean;
   ready?: boolean;
   failed?: string;
+}
+
+/** Whose plugin data a panel shows (host scope bar; team plans P3). */
+export interface PluginScopeView {
+  kind: "personal" | "team";
+  label: string;
+  teamId: string;
+  readOnly: boolean;
+}
+
+export interface PluginScopeUsage {
+  usedBytes?: number;
+  limitBytes?: number;
+  docsBytes?: number;
+  assetsBytes?: number;
+  packagesBytes?: number;
+}
+
+export interface PluginScopeStatus {
+  ok?: boolean;
+  /** False for accounts without the Teams beta: no bar at all. */
+  visible?: boolean;
+  scope?: PluginScopeView;
+  email?: string;
+  canChange?: boolean;
+  members?: number;
+  /** ok | paused | offline | error | unavailable */
+  state?: string;
+  error?: string;
+  syncedAt?: number | null;
+  pending?: number;
+  usage?: PluginScopeUsage;
+}
+
+export interface PluginScopeChoice {
+  id: string;
+  kind: "personal" | "team";
+  label: string;
+  members?: number;
 }
 
 export interface ContextBreakdownSubItem {
@@ -2212,8 +2280,6 @@ export interface PanelApi {
     errors?: Array<{ slug: string; error: string; code: string }>;
     error?: string;
   }>;
-  duckyos_store_checkout?(slug: string): Promise<{ ok?: boolean; error?: string; code?: string; url?: string; slug?: string }>;
-  duckyos_store_grant?(sessionId: string, slug?: string): Promise<{ ok?: boolean; error?: string; code?: string; slug?: string; alreadyOwned?: boolean }>;
   list_uefn_plugins?(): Promise<{ ok?: boolean; error?: string; plugins?: UefnPluginDto[] }>;
   list_automation_nodes?(): Promise<{ ok?: boolean; nodes?: AutomationNodeDto[] }>;
   list_pipeline_nodes?(): Promise<{ ok?: boolean; nodes?: AutomationNodeDto[] }>;
@@ -3172,6 +3238,17 @@ export interface PanelApi {
     plugin_id: string,
     key?: string,
   ): Promise<{ ok: boolean; cleared?: string[]; error?: string }>;
+  /** Host data service for panels: data.* / files.* / scope.get in the active scope. */
+  plugin_data?(
+    plugin_id: string,
+    op: string,
+    params?: Record<string, unknown>,
+  ): Promise<Record<string, unknown> & { ok?: boolean; error?: string; code?: string }>;
+  plugin_scope_status?(): Promise<PluginScopeStatus>;
+  /** Calls the Store hub — only when the user opens Change ▾. */
+  plugin_scope_choices?(): Promise<{ ok?: boolean; choices?: PluginScopeChoice[]; error?: string }>;
+  plugin_scope_set?(scope_id: string): Promise<PluginScopeStatus>;
+  plugin_scope_sync?(force?: boolean): Promise<{ ok?: boolean; started?: boolean; error?: string }>;
   plugin_prefs_get_all?(): Promise<{
     ok: boolean;
     prefs?: Record<string, Record<string, unknown>>;

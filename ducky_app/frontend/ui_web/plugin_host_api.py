@@ -1,4 +1,8 @@
-"""Generic plugin host helpers: LLM complete + JSON cache (not feature-specific)."""
+"""Generic plugin host helpers: LLM complete + JSON cache (not feature-specific).
+
+Cache and prefs belong to the signed-in account (Personal, never synced). Data a
+team shares goes through the host data service (``backend.uefn_plugins.scopes``).
+"""
 
 from __future__ import annotations
 
@@ -52,6 +56,17 @@ def _repo():
     return repo
 
 
+def _mine() -> dict[str, str]:
+    """Plugin cache + prefs rows are the signed-in account's Personal ones (never synced).
+
+    ponytail: the ``DUCKY_STORE_BACKEND=files`` rollback path below stays global
+    (one folder for every account); it is an emergency lever, not a mode.
+    """
+    from backend.uefn_plugins.scopes import PERSONAL, account_id
+
+    return {"account": account_id(), "scope": PERSONAL}
+
+
 def _protect_json(data: dict[str, Any]) -> str:
     import base64
 
@@ -82,7 +97,7 @@ def cache_get(plugin_id: str, key: str) -> dict[str, Any]:
     data: dict[str, Any] = {}
     if _use_db():
         try:
-            value, encrypted = _repo().get(pid, k)
+            value, encrypted = _repo().get(pid, k, **_mine())
             if encrypted and isinstance(value, str):
                 try:
                     data = _unprotect_json(value)
@@ -118,9 +133,9 @@ def cache_set(plugin_id: str, key: str, data: dict[str, Any], *, sensitive: bool
     if _use_db():
         try:
             if sensitive:
-                _repo().set(pid, k, None, encrypted_b64=_protect_json(payload))
+                _repo().set(pid, k, None, encrypted_b64=_protect_json(payload), **_mine())
             else:
-                _repo().set(pid, k, payload)
+                _repo().set(pid, k, payload, **_mine())
             with _CACHE_LOCK:
                 _CACHE[mem_key] = dict(payload)
             return
@@ -154,22 +169,23 @@ def cache_clear(plugin_id: str, key: str = "") -> dict[str, Any]:
     if _use_db():
         try:
             repo = _repo()
+            mine = _mine()
             with _CACHE_LOCK:
                 if not raw:
-                    cleared = repo.delete_prefix(pid, "")
+                    cleared = repo.delete_prefix(pid, "", **mine)
                     for mk in [m for m in _CACHE if m.startswith(f"{pid}:")]:
                         del _CACHE[mk]
                 elif raw.endswith("*"):
                     pre = re.sub(r"[^\w.\-]+", "_", raw[:-1].strip(), flags=re.UNICODE).strip("._-")
                     if not pre:
                         raise ValueError("prefix required")
-                    cleared = repo.delete_prefix(pid, pre)
+                    cleared = repo.delete_prefix(pid, pre, **mine)
                     for mk in [m for m in _CACHE if m.startswith(f"{pid}:{pre}")]:
                         del _CACHE[mk]
                 else:
                     k = _safe_key(raw)
                     _CACHE.pop(f"{pid}:{k}", None)
-                    if repo.delete(pid, k):
+                    if repo.delete(pid, k, **mine):
                         cleared.append(k)
             return {"ok": True, "cleared": cleared}
         except (OSError, RuntimeError):
@@ -223,7 +239,7 @@ def prefs_all_get() -> dict[str, Any]:
     if _use_db():
         try:
             out: dict[str, Any] = {}
-            for pid, slot in _repo().all_prefs().items():
+            for pid, slot in _repo().all_prefs(**_mine()).items():
                 out[pid] = {
                     str(k): v
                     for k, v in slot.items()
@@ -276,10 +292,11 @@ def prefs_all_set(all_prefs: dict[str, Any]) -> dict[str, Any]:
         if _use_db():
             try:
                 repo = _repo()
+                mine = _mine()
                 for clean in src:
                     if isinstance(clean, str) and clean in bag:
                         try:
-                            repo.set_prefs(_safe_plugin_id(clean), bag[_safe_plugin_id(clean)])
+                            repo.set_prefs(_safe_plugin_id(clean), bag[_safe_plugin_id(clean)], **mine)
                         except ValueError:
                             continue
                 return {"ok": True, "prefs": bag}

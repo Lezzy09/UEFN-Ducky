@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { assetUrl } from "../remote/assetBase";
 import { getApi } from "../hooks/usePanelApi";
 import { patchPluginUiPrefs } from "../hooks/usePluginUiPrefs";
+import { pluginPrefsKey } from "../hooks/pluginPrefsStorage";
 import { usePluginContributions, type PluginShellBoot } from "../hooks/usePluginContributions";
 import { PLUGIN_UI_ROUTE_PREFIX } from "../plugin-ui/constants";
 import { scrubPluginShellInterference, setBrowserUiCover } from "./bridge";
@@ -21,14 +22,13 @@ if (typeof window !== "undefined") {
   window.__duckySetBrowserUiCover = setBrowserUiCover;
 }
 
-const PREFS_KEY = "uefn-plugin-ui-prefs";
 const HOST_KEY = "__duckyPluginHost";
 
 type PrefsBag = Record<string, Record<string, unknown>>;
 
 function readAllPrefs(): PrefsBag {
   try {
-    const raw = localStorage.getItem(PREFS_KEY);
+    const raw = localStorage.getItem(pluginPrefsKey());
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === "object" ? (parsed as PrefsBag) : {};
@@ -40,7 +40,7 @@ function readAllPrefs(): PrefsBag {
 function writePluginPrefs(pluginId: string, slot: Record<string, unknown>): void {
   const all = readAllPrefs();
   all[pluginId] = slot;
-  localStorage.setItem(PREFS_KEY, JSON.stringify(all));
+  localStorage.setItem(pluginPrefsKey(), JSON.stringify(all));
   const api = getApi();
   if (api?.plugin_prefs_set) {
     void api.plugin_prefs_set(pluginId, slot).catch(() => undefined);
@@ -59,7 +59,7 @@ async function hydratePluginPrefsFromDisk(): Promise<void> {
       if (!pid || !slot || typeof slot !== "object") continue;
       merged[pid] = { ...(merged[pid] || {}), ...(slot as Record<string, unknown>) };
     }
-    localStorage.setItem(PREFS_KEY, JSON.stringify(merged));
+    localStorage.setItem(pluginPrefsKey(), JSON.stringify(merged));
   } catch {
     /* ignore */
   }

@@ -5459,3 +5459,11 @@ html.window-maximized .window-resize-grip {
   font-size: 12.5px;
   line-height: 1.5;
 }
+
+/* Search and keyboard focus shared by every ChoiceDropdown. */
+.choice-dropdown-search { position: sticky; top: 0; z-index: 1; padding: 8px; background: var(--dropdown-bg); border-bottom: 1px solid var(--border); }
+.choice-dropdown-search input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--fg); font: inherit; }
+.choice-dropdown-search input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+.choice-dropdown-option:has(input:focus-visible), .choice-dropdown-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.choice-dropdown-option-label { overflow-wrap: anywhere; }
+.choice-dropdown-option-hint { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

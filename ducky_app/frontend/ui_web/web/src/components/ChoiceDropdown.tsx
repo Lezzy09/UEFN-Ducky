@@ -4,7 +4,7 @@
  * mode="checkbox" → multi choice with checkmarks (stays open until outside click)
  */
 
-import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Icons } from "../icons/Icons";
 import { DropdownPanel } from "./DropdownPanel";
@@ -46,6 +46,11 @@ type CommonProps = {
   hideChevron?: boolean;
   /** Keep the selected value in the menu; show this on the trigger instead. */
   fixedLabel?: string;
+  /** Search the same reusable radio/checkbox menu. */
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  onOpen?: () => void;
+  showSelectedHint?: boolean;
 };
 
 /** Icon + open-state light for header menus (Tools / Plugins / View / Controls). */
@@ -109,12 +114,26 @@ export function ChoiceDropdown(props: ChoiceDropdownProps) {
     icon,
     hideChevron,
     fixedLabel,
+    searchable = false,
+    searchPlaceholder = "Search options",
+    onOpen,
+    showSelectedHint = true,
   } = props;
   const ariaLabel = props["aria-label"];
   const checkbox = isCheckbox(props);
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLButtonElement>(null);
   const listId = useId();
+  const [query, setQuery] = useState("");
+  const menuRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const openMenu = () => { setQuery(""); setOpen(true); onOpen?.(); };
+  const closeMenu = () => { setOpen(false); anchorRef.current?.focus({ preventScroll: true }); };
+  useLayoutEffect(() => {
+    if (!open) return;
+    if (searchable) searchRef.current?.focus({ preventScroll: true });
+    else (menuRef.current?.querySelector('input:checked:not(:disabled), input:not(:disabled)') as HTMLInputElement | null)?.focus({ preventScroll: true });
+  }, [open, searchable]);
 
   const selectedLabel = useMemo(() => {
     if (checkbox) {
@@ -135,7 +154,11 @@ export function ChoiceDropdown(props: ChoiceDropdownProps) {
     return options.find((o) => o.value === props.value)?.hint;
   }, [checkbox, options, props]);
 
-  const groups = useMemo(() => groupOptions(options), [options]);
+  const filtered = useMemo(() => {
+    const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    return options.filter((option) => terms.every((term) => [option.label, option.value, option.hint, option.group].join(" ").toLowerCase().includes(term)));
+  }, [options, query]);
+  const groups = useMemo(() => groupOptions(filtered), [filtered]);
 
   const toggleCheckbox = (value: string) => {
     if (!checkbox) return;
@@ -156,13 +179,17 @@ export function ChoiceDropdown(props: ChoiceDropdownProps) {
         type="button"
         className={`choice-dropdown-trigger${open ? " is-open" : ""}${triggerClassName ? ` ${triggerClassName}` : ""}`}
         disabled={disabled}
-        aria-haspopup={checkbox ? "true" : "listbox"}
+        aria-haspopup="dialog"
         aria-expanded={open}
-        aria-controls={open ? listId : undefined}
+        aria-controls={open ? listId + "-dialog" : undefined}
         aria-label={ariaLabel}
         title={ariaLabel || selectedLabel}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" && !open) { event.preventDefault(); openMenu(); }
+          if (event.key === "Escape" && open) { event.preventDefault(); event.stopPropagation(); closeMenu(); }
+        }}
         onClick={() => {
-          if (!disabled) setOpen((v) => !v);
+          if (!disabled) { if (open) setOpen(false); else openMenu(); }
         }}
       >
         {icon ? (
@@ -172,7 +199,7 @@ export function ChoiceDropdown(props: ChoiceDropdownProps) {
         ) : (
           <span className="choice-dropdown-trigger-copy">
             <span className="choice-dropdown-trigger-label">{fixedLabel ?? selectedLabel}</span>
-            {selectedHint ? <span className="choice-dropdown-trigger-hint">{selectedHint}</span> : null}
+            {showSelectedHint && selectedHint ? <span className="choice-dropdown-trigger-hint">{selectedHint}</span> : null}
           </span>
         )}
         {hideChevron || trigger || icon ? null : (
@@ -191,14 +218,29 @@ export function ChoiceDropdown(props: ChoiceDropdownProps) {
         zIndex={100020}
       >
         <div
+          ref={menuRef}
+          id={listId + "-dialog"}
+          role="dialog"
+          aria-label={ariaLabel || "Options"}
+          onPointerDown={(event) => event.stopPropagation()}
+          onWheel={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Escape") { event.preventDefault(); closeMenu(); }
+          }}
+        >
+          {searchable ? <div className="choice-dropdown-search"><input ref={searchRef} type="search" aria-label={searchPlaceholder} placeholder={searchPlaceholder} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
+            if (event.key === "ArrowDown") { event.preventDefault(); (menuRef.current?.querySelector('input[type="radio"]:not(:disabled), input[type="checkbox"]:not(:disabled)') as HTMLInputElement | null)?.focus(); }
+          }} /></div> : null}
+        <div
           id={listId}
           className="choice-dropdown-menu"
           role={checkbox ? "group" : "radiogroup"}
           aria-label={ariaLabel || "Options"}
         >
           {header ? <div className="choice-dropdown-header">{header}</div> : null}
-          {options.length === 0 ? (
-            <div className="choice-dropdown-empty">{emptyLabel}</div>
+          {filtered.length === 0 ? (
+            <div className="choice-dropdown-empty">{query ? "No matching options" : emptyLabel}</div>
           ) : (
             groups.map(({ group, items }) => {
               const body = items.map((opt) => {
@@ -254,7 +296,7 @@ export function ChoiceDropdown(props: ChoiceDropdownProps) {
                           return;
                         }
                         props.onChange(opt.value);
-                        setOpen(false);
+                        closeMenu();
                       }}
                     />
                     {checkbox ? (
@@ -295,6 +337,7 @@ export function ChoiceDropdown(props: ChoiceDropdownProps) {
             })
           )}
           {footer ? <div className="choice-dropdown-footer">{footer}</div> : null}
+        </div>
         </div>
       </DropdownPanel>
     </div>

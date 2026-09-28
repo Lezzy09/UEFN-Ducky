@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ChoiceDropdown, type ChoiceOption } from "../components/ChoiceDropdown";
 import { getApi } from "../hooks/usePanelApi";
 import type { AgentProfileDto, PanelApi } from "../types/panel";
 
 const NEW_DUCKY = "__new__";
 type Chat = Awaited<ReturnType<PanelApi["list_all_conversations"]>>[number];
 
-export function AgentField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+export function AgentField({ value, onChange, label = "Assign ducky", id }: { value: string; onChange: (value: string) => void; label?: string; id?: string }) {
   const [profiles, setProfiles] = useState<AgentProfileDto[]>([]);
   const [templates, setTemplates] = useState<AgentProfileDto[]>([]);
   const [chats, setChats] = useState<Chat[]>([]);
@@ -43,23 +44,12 @@ export function AgentField({ value, onChange }: { value: string; onChange: (valu
     : matches.length === 1 ? matches[0].id : value;
   const known = selected === NEW_DUCKY || available.some((profile) => profile.id === selected) || chats.some((chat) => `chat:${chat.id}` === selected);
 
-  return (
-    <select value={selected} onChange={(event) => onChange(event.target.value)} onFocus={() => void refresh()}>
-      <option value={NEW_DUCKY}>Create new when workflow runs</option>
-      {chats.length > 0 && <optgroup label="Existing duckies">
-        {chats.map((chat) => <option key={chat.id} value={`chat:${chat.id}`}>
-          {chat.ducky_name || chat.title || "Ducky"}{chat.ducky_name && chat.title && chat.title !== chat.ducky_name ? ` — ${chat.title}` : ""}{chat.project_name ? ` (${chat.project_name})` : ""}
-        </option>)}
-      </optgroup>}
-      {profiles.length > 0 && <optgroup label="Saved duckies">
-        {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
-      </optgroup>}
-      {templates.length > 0 && <optgroup label="Ducky templates">
-        {templates.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
-      </optgroup>}
-      {!known && <option value={selected}>Saved assignment — {value}</option>}
-      {status === "loading" && <option disabled>Loading duckies…</option>}
-      {status === "error" && <option disabled>Some duckies could not be loaded — reopen to retry</option>}
-    </select>
-  );
+  const options: ChoiceOption[] = [
+    { value: NEW_DUCKY, label: "Create new when workflow runs" },
+    ...chats.map((chat) => ({ value: 'chat:' + chat.id, label: (chat.ducky_name || chat.title || "Ducky") + (chat.ducky_name && chat.title && chat.title !== chat.ducky_name ? ' — ' + chat.title : '') + (chat.project_name ? ' (' + chat.project_name + ')' : ''), group: "Existing duckies" })),
+    ...profiles.map((profile) => ({ value: profile.id, label: profile.name, group: "Saved duckies" })),
+    ...templates.map((profile) => ({ value: profile.id, label: profile.name, group: "Ducky templates" })),
+  ];
+  if (!known) options.push({ value: selected, label: "Saved assignment — " + value });
+  return <ChoiceDropdown id={id} aria-label={label} value={selected} options={options} onChange={onChange} onOpen={() => void refresh()} searchable searchPlaceholder="Search duckies" size="compact" footer={status === "loading" ? "Loading duckies…" : status === "error" ? "Some duckies could not be loaded — reopen to retry" : undefined} />;
 }

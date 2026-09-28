@@ -1,4 +1,5 @@
 import { getApi } from "../hooks/usePanelApi";
+import { pluginPrefsKey } from "../hooks/pluginPrefsStorage";
 
 export const HEADER_VISIBILITY_KEY = "uefn-header-visibility";
 export const HEADER_VISIBILITY_EVENT = "uefn-header-visibility";
@@ -42,7 +43,7 @@ function uniqueIds(raw: unknown): string[] {
 
 function readDiscordShowInHeader(): boolean {
   try {
-    const raw = localStorage.getItem("uefn-plugin-ui-prefs");
+    const raw = localStorage.getItem(pluginPrefsKey());
     const all = raw ? (JSON.parse(raw) as Record<string, Record<string, unknown>>) : {};
     const discord = all.discord && typeof all.discord === "object" ? all.discord : {};
     return discord.showInHeader === true;

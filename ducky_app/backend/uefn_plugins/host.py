@@ -124,6 +124,8 @@ _API_INTENT_PATTERNS: dict[str, str] = {}
 _PLUGIN_TOOL_OWNER: dict[str, str] = {}
 # api.tool(listener=False) — host-cache / non-editor tools (skip UEFN listener gate).
 _PLUGIN_HOST_ONLY_TOOLS: set[str] = set()
+# Plugins that touched api.data: their tool results name the scope ("team Alpha Studio").
+_DATA_PLUGINS: set[str] = set()
 # secret_key → {plugin_id, test_fn} — Settings "Test" for plugin API keys (e.g. Meshy).
 _SECRET_TESTERS: dict[str, dict[str, Any]] = {}
 # plugin_id → {method_name → callable} — PanelApi.plugin_call / bridge plugin.call
@@ -2651,6 +2653,16 @@ class _PluginApi:
         """Record a mutation in the Changes ledger so Revert can unwind it."""
         return _ChangesetApi(self)
 
+    @property
+    def data(self) -> Any:
+        """Host data service: docs (one JSON doc per entity) and files in the active
+        scope. Never pick your own folder: rows and files are per account and scope,
+        and team scopes sync. See ``backend.uefn_plugins.scopes.PluginData``."""
+        from backend.uefn_plugins.scopes import PluginData
+
+        _DATA_PLUGINS.add(self.plugin_id)
+        return PluginData(self.plugin_id)
+
     def http_json(
         self,
         method: str,
@@ -2779,7 +2791,14 @@ class _PluginApi:
                     raise ValueError(
                         f"Plugin '{pid}' tools are disabled — enable it in Settings → Store"
                     )
-                return func(*args, **kwargs)
+                result = func(*args, **kwargs)
+                # Plugins on the host data service: say which copy the tool read or changed.
+                # ponytail: dict results only; string results would need parsing.
+                if pid in _DATA_PLUGINS and isinstance(result, dict) and "scope" not in result:
+                    from backend.uefn_plugins.scopes import scope_name
+
+                    result = {**result, "scope": scope_name()}
+                return result
 
             mcp.tool(name=tool_name)(wrapper)
             _record_plugin_api_tool(pid, tool_name, intent=intent, listener=listener)

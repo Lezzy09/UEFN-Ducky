@@ -60,6 +60,30 @@ await call("prefs.get", { id: "highScore" });
 | `theme.get` | — | `{ vars }` — Appearance CSS vars (keys without `--`) |
 | `prefs.get` | optional `{ id }` | `{ prefs }` or `{ id, value }` |
 | `prefs.set` | `{ id, value }` (bool/string/number/null) | `{ ok: true }` |
+| `scope.get` | — | `{ scope: { kind, label, teamId, readOnly } }` — whose data this panel shows |
+| `data.get` | `{ key }` | `{ key, value }` (`null` when missing) |
+| `data.put` | `{ key, value }` (any JSON, ≤ 1 MB) | `{ ok, changed }` |
+| `data.list` | `{ prefix?, values? }` | `{ keys }`, or `{ items: { key: value } }` with `values: true` |
+| `data.delete` | `{ key }` | `{ ok, deleted }` |
+| `files.put` | `{ path, b64 }` (≤ 100 MB) | `{ ok, changed, size }` |
+| `files.get` | `{ path }` | `{ ok, b64 }` |
+| `files.list` | `{ prefix? }` | `{ files: [{ path, size, sha256 }] }` |
+| `files.delete` | `{ path }` | `{ ok, deleted }` |
+
+### Plugin data (host data service)
+
+Store plugin data through `data.*` / `files.*` (panels) or `api.data` (Python
+backends) — never a folder you pick yourself. The host keeps it per signed-in
+account and per scope (the user's own data, or the shared scope the open project
+is linked to) and syncs shared scopes.
+
+- **One doc per entity** (`card.pip`, `pack.starter`), never one big `db.json`:
+  two people editing different cards must not overwrite each other.
+- Doc keys `[a-z0-9._-]` ≤ 128; file paths `[a-z0-9._/-]` ≤ 256, no `..`, no
+  leading dots.
+- A shared scope can be read-only; writes then fail with a clear error.
+- When the scope changes or a sync brings new data, the host pushes
+  `{ channel, event: { type: "plugin_scope_changed", scope } }`: re-read your docs.
 
 The host also pushes `{ channel, event: { type: "appearance_theme", vars } }` on iframe
 load and whenever Appearance changes. Prefer `var(--bg)`, `var(--fg)`, `var(--accent)`,
