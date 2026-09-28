@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -244,11 +244,173 @@ describe("VirtualChatMessageList streaming isolation", () => {
     expect(changedCounts(afterMount, after, ["user:q49"])).toEqual([]);
   });
 
+  it("synchronizes a remounted tail with cached bottom state", () => {
+    const onAtBottomChange = vi.fn();
+    render(<VirtualChatMessageList {...listProps(buildHistory(3))} isAtBottom={false} onAtBottomChange={onAtBottomChange} />);
+    expect(onAtBottomChange).toHaveBeenLastCalledWith(true);
+  });
+
   it("exposes scrollToLatest through the handle", () => {
     const history = buildHistory(3);
     const ref = createRef<VirtualChatMessageListHandle>();
     render(<VirtualChatMessageList ref={ref} {...listProps(history)} />);
     expect(typeof ref.current?.scrollToLatest).toBe("function");
     expect(() => ref.current?.scrollToLatest()).not.toThrow();
+  });
+});
+
+describe("chat scroll intent during layout changes", () => {
+  let observers: Set<{ targets: Set<Element>; callback: ResizeObserverCallback }>;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    observers = new Set();
+    vi.stubGlobal("ResizeObserver", class {
+      targets = new Set<Element>();
+      constructor(public callback: ResizeObserverCallback) { observers.add(this); }
+      observe(element: Element) { this.targets.add(element); }
+      unobserve(element: Element) { this.targets.delete(element); }
+      disconnect() { observers.delete(this); }
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", { value: noop, configurable: true });
+  });
+  afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  function setup() {
+    const ref = createRef<VirtualChatMessageListHandle>();
+    const props = { ...listProps(buildHistory(300)), onAtBottomChange: vi.fn() };
+    const rendered = render(<VirtualChatMessageList ref={ref} {...props} />);
+    const scroller = document.querySelector<HTMLElement>(".virtual-chat-message-list-scroller")!;
+    const content = document.querySelector<HTMLElement>(".virtual-chat-message-list-content")!;
+    let height = 240024;
+    Object.defineProperties(scroller, {
+      scrollHeight: { get: () => height, configurable: true },
+      clientHeight: { value: 600, configurable: true },
+      scrollTop: { value: height - 600, writable: true, configurable: true },
+    });
+    const scrollTo = vi.fn(({ top }: ScrollToOptions) => { scroller.scrollTop = Math.max(0, Math.min(top || 0, height - 600)); });
+    Object.defineProperty(scroller, "scrollTo", { value: scrollTo, configurable: true });
+    const resize = (nextHeight = height) => {
+      height = nextHeight;
+      act(() => { for (const observer of [...observers]) if (observer.targets.has(content)) observer.callback([], observer as unknown as ResizeObserver); });
+    };
+    resize();
+    scrollTo.mockClear();
+    props.onAtBottomChange.mockClear();
+    const scroll = (top: number) => { scroller.scrollTop = top; fireEvent.scroll(scroller); };
+    const frame = () => act(() => { vi.advanceTimersByTime(20); });
+    return { ref, rendered, props, scroller, scrollTo, resize, scroll, frame, onAtBottomChange: props.onAtBottomChange };
+  }
+
+  it("releases follow on a tiny upward wheel before resize or scroll callbacks run", () => {
+    const view = setup();
+    fireEvent.wheel(view.scroller, { deltaY: -4 });
+    view.resize(241024);
+    expect(view.scrollTo).not.toHaveBeenCalled();
+    expect(view.onAtBottomChange).toHaveBeenCalledWith(false);
+  });
+  it("releases an upward scrollbar move synchronously before a resize callback", () => {
+    const view = setup();
+    view.scroll(238000);
+    view.resize(241024);
+    expect(view.scrollTo).not.toHaveBeenCalled();
+  });
+  it("does not mistake content shrinking to the viewport for returning to the bottom", () => {
+    const view = setup();
+    fireEvent.wheel(view.scroller, { deltaY: -300 });
+    view.scroll(238000);
+    view.frame();
+    view.resize(238600);
+    view.scroll(238000);
+    view.frame();
+    view.scrollTo.mockClear();
+    view.resize(245000);
+    expect(view.scrollTo).not.toHaveBeenCalled();
+    expect(view.scroller.scrollTop).toBe(238000);
+  });
+  it("cancels a queued jump when the user starts reading older messages", () => {
+    const view = setup();
+    act(() => view.ref.current?.scrollToLatest());
+    fireEvent.wheel(view.scroller, { deltaY: -200 });
+    view.scroll(238000);
+    view.frame();
+    expect(view.scrollTo).not.toHaveBeenCalled();
+    expect(view.scroller.scrollTop).toBe(238000);
+  });
+  it.each(["ArrowUp", "PageUp", "Home"])("releases immediately on %s", (key) => {
+    const view = setup();
+    fireEvent.keyDown(view.scroller, { key });
+    view.resize(241024);
+    expect(view.scrollTo).not.toHaveBeenCalled();
+  });
+  it("releases immediately when swiping toward older messages", () => {
+    const view = setup();
+    fireEvent.touchStart(view.scroller, { touches: [{ clientY: 100 }] });
+    fireEvent.touchMove(view.scroller, { touches: [{ clientY: 140 }] });
+    view.resize(241024);
+    expect(view.scrollTo).not.toHaveBeenCalled();
+  });
+  it("resumes after deliberately scrolling down to the bottom", () => {
+    const view = setup();
+    fireEvent.wheel(view.scroller, { deltaY: -300 });
+    view.scroll(238000);
+    view.frame();
+    fireEvent.wheel(view.scroller, { deltaY: 1500 });
+    view.scroll(239424);
+    view.frame();
+    view.scrollTo.mockClear();
+    view.resize(241024);
+    expect(view.scrollTo).toHaveBeenCalled();
+    expect(view.onAtBottomChange).toHaveBeenLastCalledWith(true);
+  });
+  it("ignores fractional layout rounding at the bottom", () => {
+    const view = setup();
+    view.scroll(239423);
+    view.frame();
+    expect(view.onAtBottomChange).not.toHaveBeenCalledWith(false);
+    view.resize(241024);
+    expect(view.scrollTo).toHaveBeenCalled();
+  });
+  it("does not treat arrow keys inside a message editor as chat scrolling", () => {
+    const view = setup();
+    const editor = document.createElement("textarea");
+    view.scroller.appendChild(editor);
+    fireEvent.keyDown(editor, { key: "ArrowUp" });
+    view.resize(241024);
+    expect(view.scrollTo).toHaveBeenCalled();
+    editor.remove();
+  });
+  it("can explicitly jump back and follow, and cancels pending work on unmount", () => {
+    const view = setup();
+    fireEvent.wheel(view.scroller, { deltaY: -300 });
+    view.scroll(238000);
+    view.frame();
+    act(() => view.ref.current?.scrollToLatest());
+    view.frame();
+    expect(view.scroller.scrollTop).toBe(239424);
+    expect(view.onAtBottomChange).toHaveBeenLastCalledWith(true);
+    view.scrollTo.mockClear();
+    act(() => view.ref.current?.scrollToLatest());
+    view.rendered.unmount();
+    view.frame();
+    expect(view.scrollTo).not.toHaveBeenCalled();
+  });
+  it("does not render older messages again when the offscreen answer streams", () => {
+    const view = setup();
+    fireEvent.wheel(view.scroller, { deltaY: -1000 });
+    view.scroll(100000);
+    view.frame();
+    const before = snapshotCounts();
+    expect(document.querySelectorAll(".virtual-chat-chunk").length).toBeLessThanOrEqual(4);
+    for (let i = 1; i <= 30; i++) {
+      const rows = coalesceActivityRows(appendStreamRow(view.props.rows, "Streamed text ".repeat(i), true));
+      view.rendered.rerender(<VirtualChatMessageList ref={view.ref} {...view.props} rows={rows} />);
+    }
+    expect(changedCounts(before, snapshotCounts(), [])).toEqual([]);
+    expect(view.scroller.scrollTop).toBe(100000);
+  });
+  it("keeps following content growth until the user scrolls away", () => {
+    const view = setup();
+    view.resize(245000);
+    expect(view.scrollTo).toHaveBeenCalledWith({ top: 245000, behavior: "auto" });
   });
 });

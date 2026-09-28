@@ -41,8 +41,8 @@ def test_preview_masks_secrets_settings_and_encrypted_plugin_rows(monkeypatch) -
     sec.set_key("anthropic", "sk-ant-secret-value")
     kv.set_doc("settings", "openai_api_key", "sk-plain")
     kv.set_doc("settings", "theme", "dark")
-    plugin_kv.set("demo", "token", None, encrypted_b64="ZW5j")
-    plugin_kv.set("demo", "plain", {"v": 1})
+    plugin_kv.set("demo", "token", None, encrypted_b64="ZW5j", account="_local", scope="personal")
+    plugin_kv.set("demo", "plain", {"v": 1}, account="_local", scope="personal")
     secrets = store_admin.table_preview("secrets")
     assert secrets["total"] == 1
     assert all("secret-value" not in json.dumps(r) for r in secrets["rows"])

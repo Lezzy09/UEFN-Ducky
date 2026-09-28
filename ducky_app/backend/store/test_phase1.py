@@ -259,7 +259,8 @@ def test_plugin_cache_and_prefs_rows_and_import(tmp_path: Path) -> None:
     pha.prefs_plugin_set("demo", {"language": "bg"})
     assert pha.prefs_all_get() == {"demo": {"language": "bg"}, "other": {"showInHeader": True}}
     assert pha.cache_clear("demo")["ok"] and pha.cache_get("demo", "vf_bg_c") == {}
-    assert plugin_repo.all_prefs()["demo"] == {"language": "bg"}  # prefs survive a cache wipe
+    # Signed out: the legacy rows were claimed by _local. Prefs survive a cache wipe.
+    assert plugin_repo.all_prefs(account="_local", scope="personal")["demo"] == {"language": "bg"}
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="DPAPI")
@@ -268,7 +269,7 @@ def test_sensitive_plugin_data_is_encrypted_at_rest(tmp_path: Path) -> None:
 
     pha.cache_set("discord", "token", {"bot_token": "very-secret-token"}, sensitive=True)
     assert pha.cache_get("discord", "token") == {"bot_token": "very-secret-token"}
-    value, encrypted = plugin_repo.get("discord", "token")
+    value, encrypted = plugin_repo.get("discord", "token", account="_local", scope="personal")
     assert encrypted and "very-secret-token" not in value
     raw = db.db_path().read_bytes() + (db.db_path().parent / "ducky.db-wal").read_bytes()
     assert b"very-secret-token" not in raw

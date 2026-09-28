@@ -83,18 +83,10 @@ function validateSnapshot(
         kind: "changes",
         name: tab.name || "Ledger",
       });
-    } else if (tab.kind === "automations") {
-      openTabs.push({
-        id: automationsTabId(),
-        kind: "automations",
-        name: tab.name || "Automations",
-      });
-    } else if (tab.kind === "pipelines") {
-      openTabs.push({
-        id: pipelinesTabId(),
-        kind: "pipelines",
-        name: tab.name || "Pipelines",
-      });
+    } else if (tab.kind === "automations" || tab.kind === "pipelines") {
+      if (!openTabs.some((item) => item.id === automationsTabId())) {
+        openTabs.push({ id: automationsTabId(), kind: "automations", name: "Workflows" });
+      }
     } else if (tab.kind === "ducky-profile" && tab.path) {
       openTabs.push({
         id: `ducky-profile:${tab.path}`,
@@ -115,12 +107,15 @@ function validateSnapshot(
     layout = openTabs.length > 0 ? createDefaultLayout(openTabs.map((t) => t.id)) : createDefaultLayout([]);
   } else {
     const groups: EditorLayoutState["groups"] = {};
+    const assignedTabs = new Set<string>();
     for (const [gid, group] of Object.entries(layout.groups)) {
-      const filteredTabIds = group.tabIds.filter((id) => tabIds.has(id));
+      const filteredTabIds = [...new Set(group.tabIds.map((id) => id === pipelinesTabId() ? automationsTabId() : id))].filter((id) => tabIds.has(id) && !assignedTabs.has(id));
+      filteredTabIds.forEach((id) => assignedTabs.add(id));
       if (filteredTabIds.length === 0) continue;
+      const previousActive = group.activeTabId === pipelinesTabId() ? automationsTabId() : group.activeTabId;
       const activeTabId =
-        group.activeTabId && filteredTabIds.includes(group.activeTabId)
-          ? group.activeTabId
+        previousActive && filteredTabIds.includes(previousActive)
+          ? previousActive
           : filteredTabIds[filteredTabIds.length - 1] ?? null;
       groups[gid] = { ...group, tabIds: filteredTabIds, activeTabId };
     }

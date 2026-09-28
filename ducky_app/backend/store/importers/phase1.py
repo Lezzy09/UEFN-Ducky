@@ -208,14 +208,15 @@ def import_plugin_kv(root: Path) -> dict[str, Any]:
             for file in sorted(plugin_dir.glob("*.json")):
                 doc = _read_json(file)
                 if isinstance(doc, dict):
-                    repo.set(plugin_dir.name, file.stem, doc)
+                    # Legacy files have no account: the first account to open plugin data claims them.
+                    repo.set(plugin_dir.name, file.stem, doc, account=repo.UNCLAIMED, scope="personal")
                     report["cache_docs"] += 1
         _move_to_legacy(root, cache_root, "plugin_kv")
     prefs = _read_json(root / "uefn_plugin_prefs" / "all.json")
     if isinstance(prefs, dict):
         for pid, slot in prefs.items():
             if isinstance(pid, str) and isinstance(slot, dict):
-                repo.set_prefs(pid, slot)
+                repo.set_prefs(pid, slot, account=repo.UNCLAIMED, scope="personal")
                 report["prefs"] += 1
         _move_to_legacy(root, root / "uefn_plugin_prefs", "plugin_kv")
     return report

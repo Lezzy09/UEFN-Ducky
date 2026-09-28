@@ -2676,7 +2676,8 @@ button.sidebar-chat-nest-toggle {
   z-index: 1;
   transition: opacity 0.15s ease, max-width 0.15s ease;
 }
-.sidebar-tree-row:hover .sidebar-hover-actions {
+.sidebar-tree-row:hover .sidebar-hover-actions,
+.sidebar-tree-row:focus-within .sidebar-hover-actions {
   opacity: 1;
   max-width: 64px;
   pointer-events: auto;

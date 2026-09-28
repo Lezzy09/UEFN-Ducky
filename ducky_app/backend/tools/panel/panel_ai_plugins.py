@@ -137,16 +137,31 @@ def _minimal_manifest(pid: str, label: str, description: str) -> dict[str, Any]:
 def _register_stub(plugin_id: str) -> str:
     fn = plugin_id.replace("-", "_")
     return (
-        '"""AI-made UEFN desktop plugin — MCP tools required."""\n'
+        '"""AI-made UEFN desktop plugin — MCP tools required.\n'
+        "\n"
+        "Data goes through api.data (never a folder you pick): one JSON doc per record,\n"
+        "files via api.data.put_file. The host keeps it per account and scope.\n"
+        '"""\n'
         "\n"
         "from __future__ import annotations\n"
         "\n"
         "\n"
         "def register(api) -> None:\n"
+        "    data = api.data\n"
+        "\n"
         f'    @api.tool(intent=r"\\b{plugin_id}\\b")\n'
         f"    def {fn}_list(kind: str = \"\") -> dict:\n"
-        '        """List records this plugin manages. Add get/upsert/delete for the domain."""\n'
-        "        return {\"ok\": True, \"items\": []}\n"
+        '        """List records this plugin manages (one doc per record: key "item.<id>")."""\n'
+        "        items = data.items(\"item.\")\n"
+        "        rows = [v for v in items.values() if not kind or v.get(\"kind\") == kind]\n"
+        "        return {\"ok\": True, \"items\": rows}\n"
+        "\n"
+        f'    @api.tool(intent=r"\\b{plugin_id}\\b")\n'
+        f"    def {fn}_upsert(item_id: str, fields: dict) -> dict:\n"
+        '        """Create or update one record. Add get/delete for the domain."""\n'
+        "        doc = {**(data.get(f\"item.{item_id}\") or {}), **(fields or {}), \"id\": item_id}\n"
+        "        data.put(f\"item.{item_id}\", doc)\n"
+        "        return {\"ok\": True, \"item\": doc}\n"
         "\n"
         f'    @api.register_pipeline_node("{plugin_id}.run")\n'
         f"    def {fn}_run(ctx: dict) -> dict:\n"

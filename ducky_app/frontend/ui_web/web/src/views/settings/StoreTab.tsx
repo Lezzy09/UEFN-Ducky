@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChoiceDropdown } from "../../components/ChoiceDropdown";
 import { Modal } from "../../components/Modal";
 import { useConfirmModal } from "../../contexts/ConfirmModalContext";
@@ -45,17 +45,19 @@ import {
   useRecordStoreSettingsLocation,
   useStoreSettingsLayerBack,
 } from "../../navigation/useSettingsHistory";
-import type { DuckyOSAccountStatus, DuckyOSStoreCatalog, DuckyOSStoreItemDto } from "../../types/panel";
+import type { DuckyOSStoreCatalog, DuckyOSStoreItemDto } from "../../types/panel";
 import {
+  catalogItems,
   categoryLabel,
   CORE_STORE_CATEGORIES,
   filterStoreItems,
+  groupByTeam,
   HIDDEN_BROWSE_CATEGORIES,
   AI_MADE_CATEGORY,
   INSTALLED_CATEGORY,
   itemCategories,
   itemKind,
-  OWNED_CATEGORY,
+  TEAM_CATEGORY,
 } from "./storeFilters";
 import { StoreCard } from "./store/StoreCard";
 import { StoreDetailView } from "./store/StoreDetailView";
@@ -64,13 +66,12 @@ import { StoreJobStack } from "./store/StoreJobStack";
 import { StoreRow } from "./store/StoreRow";
 import { StoreSectionView } from "./store/StoreSectionView";
 import type { StoreItemHandlers } from "./store/StoreActions";
+import { deriveHeroSlides, deriveSections, patchItemFromLocalPlugin } from "./store/storeData";
 import {
-  deriveHeroSlides,
-  deriveSections,
-  needsPurchase,
-  patchItemFromLocalPlugin,
-} from "./store/storeData";
-import { peekStoreCatalogCache, rememberStoreCatalog } from "../../hooks/storeCatalogCache";
+  clearStoreCatalogCache,
+  peekStoreCatalogCache,
+  rememberStoreCatalog,
+} from "../../hooks/storeCatalogCache";
 import { StoreHeroSkeleton, StoreSkeletonRows } from "./store/StoreSkeleton";
 import { useUiTarget } from "../../ui-targets/registry";
 import { maybeStartPluginWalkthrough } from "../../walkthrough";
@@ -115,13 +116,12 @@ export function StoreTab() {
     label: "Store catalog",
     route: "settings.store",
   });
-  const [status, setStatus] = useState<DuckyOSAccountStatus | null>(null);
   const [catalog, setCatalog] = useState<DuckyOSStoreCatalog | null>(() => peekStoreCatalogCache());
   const [catalogLoading, setCatalogLoading] = useState(() => !peekStoreCatalogCache()?.items?.length);
   const [staggerCards, setStaggerCards] = useState(false);
   /** Concurrent install/update jobs — module-owned so Store tab remount keeps progress. */
   const { jobs, hiddenToasts } = useStoreInstallJobs();
-  /** Enable / buy / uninstall / local-file busy flags (not install pipeline). */
+  /** Enable / uninstall / local-file busy flags (not install pipeline). */
   const [actionBusy, setActionBusy] = useState<Record<string, true>>({});
   const [error, setError] = useState("");
   const [detailItem, setDetailItem] = useState<DuckyOSStoreItemDto | null>(null);
@@ -185,8 +185,10 @@ export function StoreTab() {
     if (!peekStoreCatalogCache()?.items?.length) setCatalogLoading(true);
     try {
       const next = await api.duckyos_store_catalog();
-      // Never wipe a good catalog with a failed empty refresh (e.g. transient "forbidden").
+      // Never wipe a good catalog with a failed empty refresh (e.g. transient "forbidden"),
+      // unless it belongs to another account: remember() is keyed and drops that copy.
       if (next.ok === false && !(next.items || []).length) {
+        rememberStoreCatalog(next);
         const kept = peekStoreCatalogCache();
         if (kept?.items?.length) {
           setCatalog(kept);
@@ -316,17 +318,8 @@ export function StoreTab() {
   }, [refreshCatalogShared]);
 
   useEffect(() => {
-    return onApiReady((api) => {
+    return onApiReady(() => {
       void refreshCatalog();
-      void (async () => {
-        try {
-          if (typeof api.duckyos_get_status === "function") {
-            setStatus(await api.duckyos_get_status());
-          }
-        } catch {
-          /* ignore */
-        }
-      })();
     });
   }, [refreshCatalog]);
 
@@ -342,20 +335,12 @@ export function StoreTab() {
     return () => window.clearTimeout(t);
   }, [catalogLoading, catalog?.items?.length, query, categoryFilter]);
 
-  // Re-fetch ownership when login state flips; keep showing cached catalog meanwhile.
-  const loggedInPrev = useRef<boolean | null>(null);
+  // Teams beta off (or lost on an account switch): no Team category at all.
+  const teamsOn = catalog?.teams === true;
   useEffect(() => {
-    const loggedIn = Boolean(status?.logged_in);
-    if (loggedInPrev.current === null) {
-      loggedInPrev.current = loggedIn;
-      return;
-    }
-    if (HIDDEN_BROWSE_CATEGORIES.has(categoryFilter)) setCategoryFilter("");
-    if (loggedInPrev.current === loggedIn) return;
-    loggedInPrev.current = loggedIn;
-    if (!loggedIn && categoryFilter === OWNED_CATEGORY) setCategoryFilter("");
-    void refreshCatalog();
-  }, [status?.logged_in, refreshCatalog, categoryFilter]);
+    const noTeams = categoryFilter === TEAM_CATEGORY && catalog && !teamsOn;
+    if (HIDDEN_BROWSE_CATEGORIES.has(categoryFilter) || noTeams) setCategoryFilter("");
+  }, [categoryFilter, catalog, teamsOn]);
 
   useEffect(() => {
     if (!detailItem || !catalog?.items) return;
@@ -382,7 +367,6 @@ export function StoreTab() {
     if (
       req.autoInstall &&
       (item.state === "available" || item.state === "update") &&
-      !needsPurchase(item) &&
       !isStoreInstallBusy(item.slug || "")
     ) {
       void install(item);
@@ -418,6 +402,15 @@ export function StoreTab() {
     installPanelPushBus();
     let timer: number | undefined;
     const unsubscribe = subscribePanelPush((event) => {
+      if (event.type === "duckyos_account_changed") {
+        // Never show the previous account's team items: drop them, refetch as the new one.
+        clearStoreCatalogCache();
+        setCatalog(null);
+        setDetailItem(null);
+        setActiveSection(null);
+        void refreshCatalog();
+        return;
+      }
       if (event.type !== "uefn_plugins_changed") return;
       if (timer !== undefined) window.clearTimeout(timer);
       timer = window.setTimeout(() => {
@@ -432,7 +425,7 @@ export function StoreTab() {
       if (timer !== undefined) window.clearTimeout(timer);
       unsubscribe();
     };
-  }, [patchLocalPluginState, refreshCatalogShared]);
+  }, [patchLocalPluginState, refreshCatalog, refreshCatalogShared]);
 
   // Tell the Settings sidebar which plugin row to highlight on the Plugins page.
   useEffect(() => {
@@ -461,16 +454,6 @@ export function StoreTab() {
     if (!api || (!api.duckyos_store_download && !api.bridge_job_start) || !slug) return;
     // Already downloading this slug — leave the existing job alone (survives remount).
     if (!beginStoreInstall(slug)) return;
-    if (needsPurchase(item)) {
-      endStoreInstall(slug);
-      if (!status?.logged_in) {
-        setError("Sign in with your DuckyOS account to buy paid Store items.");
-        requestOpenSettings("Account");
-        return;
-      }
-      setError("Purchase this item before installing.");
-      return;
-    }
     setError("");
     const base = { slug, name } as const;
     revealStoreJobToast(slug);
@@ -566,14 +549,6 @@ export function StoreTab() {
               ? `Updated${ver ? ` to v${ver}` : ""}`
               : `Installed${ver ? ` v${ver}` : ""}`,
           });
-        } else if (result.code === "purchase_required") {
-          clearStoreJobLater(slug, {
-            ...base,
-            phase: "error",
-            step: "download",
-            label: result.error || "Purchase required",
-          });
-          setError(result.error || "Purchase required");
         } else {
           clearStoreJobLater(slug, {
             ...base,
@@ -593,38 +568,6 @@ export function StoreTab() {
       });
     } finally {
       endStoreInstall(slug);
-    }
-  };
-
-  const buy = async (item: DuckyOSStoreItemDto) => {
-    const api = getApi();
-    const slug = item.slug || "";
-    if (!api || typeof api.duckyos_store_checkout !== "function" || !slug) return;
-    if (!status?.logged_in) {
-      setError("Sign in with your DuckyOS account to buy paid Store items.");
-      requestOpenSettings("Account");
-      return;
-    }
-    setActionBusySlug(slug, true);
-    setError("");
-    try {
-      const result = await api.duckyos_store_checkout(slug);
-      if (result.ok && result.url) {
-        // Poll ownership a few times after the user returns.
-        for (let i = 0; i < 8; i++) {
-          await new Promise((r) => setTimeout(r, 2500));
-          const ok = await refreshCatalog();
-          if (!ok) continue;
-          const next = (await api.duckyos_store_catalog?.())?.items?.find((x) => x.slug === slug);
-          if (next?.owned) break;
-        }
-      } else {
-        setError(result.error || "Checkout failed");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setActionBusySlug(slug, false);
     }
   };
 
@@ -865,7 +808,7 @@ export function StoreTab() {
     })();
   };
 
-  const allItems = useMemo(() => catalog?.items || [], [catalog]);
+  const allItems = useMemo(() => catalogItems(catalog), [catalog]);
   allItemsRef.current = allItems;
   const sections = useMemo(() => deriveSections(allItems), [allItems]);
   const slides = useMemo(() => deriveHeroSlides(allItems), [allItems]);
@@ -883,14 +826,22 @@ export function StoreTab() {
           (c) =>
             c !== INSTALLED_CATEGORY &&
             c !== AI_MADE_CATEGORY &&
-            c !== OWNED_CATEGORY &&
+            c !== TEAM_CATEGORY &&
             !HIDDEN_BROWSE_CATEGORIES.has(c),
         )
         .sort(),
     [allItems],
   );
   const sectionData = activeSection ? sections.find((s) => s.key === activeSection) : undefined;
-  const loggedIn = Boolean(status?.logged_in);
+  // Team category: one heading per team when the viewer is in several, plus the
+  // "Team Private paused" note for teams whose private plugins are hidden.
+  const gridGroups = useMemo(
+    () =>
+      categoryFilter === TEAM_CATEGORY
+        ? groupByTeam(filteredItems, teamsOn ? catalog?.teamsInfo : [])
+        : [{ key: "", team: "", items: filteredItems, note: "" }],
+    [categoryFilter, filteredItems, teamsOn, catalog?.teamsInfo],
+  );
   const view = detailItem || pendingDetailSlug ? "detail" : activeSection ? "section" : "main";
   const showSkeleton = catalogLoading && allItems.length === 0;
 
@@ -1011,7 +962,6 @@ export function StoreTab() {
 
   const handlers: StoreItemHandlers = {
     onInstall: (item) => void install(item),
-    onBuy: (item) => void buy(item),
     onToggle: (item) => void setEnabled(item, !item.enabled),
     onUninstall: (item) => void openUninstall(item),
   };
@@ -1021,7 +971,6 @@ export function StoreTab() {
       allItems.filter(
         (item) =>
           (item.state || "") === "update" &&
-          !needsPurchase(item) &&
           Boolean(item.slug) &&
           !isStoreInstallBusy(item.slug || "") &&
           jobs[item.slug || ""]?.phase !== "working",
@@ -1184,7 +1133,7 @@ export function StoreTab() {
                 value={categoryFilter}
                 options={[
                   { value: "", label: "All Categories" },
-                  ...(loggedIn ? [{ value: OWNED_CATEGORY, label: "Owned" }] : []),
+                  ...(teamsOn ? [{ value: TEAM_CATEGORY, label: "Team" }] : []),
                   { value: INSTALLED_CATEGORY, label: "Installed" },
                   { value: AI_MADE_CATEGORY, label: "AI-made" },
                   ...categoryOptions.map((c) => ({ value: c, label: categoryLabel(c) })),
@@ -1264,11 +1213,37 @@ export function StoreTab() {
             ) : null}
 
             {filtering ? (
-              filteredItems.length > 0 ? (
-                <div className="ds-grid">
-                  {filteredItems.map((item, i) => (
-                    <div key={item.slug || item.name || ""}>{renderCard(item, i)}</div>
-                  ))}
+              gridGroups.some((group) => group.items.length || group.note) ? (
+                gridGroups.map((group) => (
+                  <Fragment key={group.key}>
+                    {gridGroups.length > 1 ? (
+                      <h3 className="ds-section-title">{group.team || "Team"}</h3>
+                    ) : null}
+                    {group.note ? <p className="ds-team-note">{group.note}</p> : null}
+                    {group.items.length ? (
+                      <div className="ds-grid">
+                        {group.items.map((item, i) => (
+                          <div key={item.slug || item.name || ""}>{renderCard(item, i)}</div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </Fragment>
+                ))
+              ) : categoryFilter === TEAM_CATEGORY && teamsOn && !query.trim() ? (
+                // ponytail: no team items reads as "no team" — telling "in a team with
+                // nothing shared yet" apart needs the Teams hub call; add it with the Teams tab.
+                <div className="ds-empty">
+                  <span className="ds-empty-icon" aria-hidden>
+                    <Icons.Box />
+                  </span>
+                  <p>Join or create a team to share private plugins.</p>
+                  <button
+                    type="button"
+                    className="ds-link"
+                    onClick={() => void getApi()?.duckyos_open_teams_site?.("/profile")}
+                  >
+                    Open Teams
+                  </button>
                 </div>
               ) : (
                 <div className="ds-empty">

@@ -223,6 +223,41 @@ def get_key(provider: str) -> str | None:
     return load_keys().get(provider)
 
 
+_FRESH: dict[str, tuple[bytes, str]] = {}
+
+
+def get_key_fresh(provider: str) -> str | None:
+    """One key as stored now, not as this process cached it at start.
+
+    The MCP bridge is its own process: after the app signs in as another DuckyOS
+    account, the bridge's next call must act as the new account (plan rule 0.6).
+    One row read per call; DPAPI decrypts only when the stored blob changed.
+    ponytail: the files backend / non-Windows keep the process cache.
+    """
+    if not (_dpapi_available() and _use_db()):
+        return get_key(provider)
+    try:
+        from backend.store.importers import phase1
+        from backend.store.repos import secrets as repo
+
+        phase1.ensure("secrets")
+        blob = repo.get_blob(provider)
+    except (OSError, RuntimeError):
+        return get_key(provider)
+    if blob is None:
+        _FRESH.pop(provider, None)
+        return None
+    hit = _FRESH.get(provider)
+    if hit and hit[0] == blob:
+        return hit[1]
+    try:
+        value = unprotect_text(blob)
+    except (OSError, ValueError):
+        return None
+    _FRESH[provider] = (blob, value)
+    return value
+
+
 def has_key(provider: str) -> bool:
     return bool(get_key(provider))
 

@@ -1,9 +1,10 @@
 import type { DuckyOSStoreItemDto, UefnPluginDto } from "../../../types/panel";
 import {
   categoryLabel,
+  groupByTeam,
   HIDDEN_BROWSE_CATEGORIES,
   isInstalledItem,
-  isOwnedPurchase,
+  isTeamItem,
   itemCategories,
   itemKind,
 } from "../storeFilters";
@@ -135,15 +136,10 @@ export function patchItemFromLocalPlugin(
   };
 }
 
-/** Paid cloud purchase for the signed-in account (excludes local unpaid installs). */
-export function isOwned(item: DuckyOSStoreItemDto): boolean {
-  return isOwnedPurchase(item);
-}
-
 /**
  * Derive the landing rows from the raw catalog:
  * Gateways first (everything is a plugin — no Plugins row), then
- * Trending → Owned → Installed → other browse categories.
+ * Trending → one row per team of mine → Installed → other browse categories.
  */
 export function deriveSections(items: DuckyOSStoreItemDto[]): StoreSection[] {
   const sections: StoreSection[] = [];
@@ -169,8 +165,9 @@ export function deriveSections(items: DuckyOSStoreItemDto[]): StoreSection[] {
     .slice(0, 10);
   if (trending.length) sections.push({ key: "trending", title: "Trending", items: trending });
 
-  const owned = items.filter(isOwned);
-  if (owned.length) sections.push({ key: "owned", title: "Owned", items: owned });
+  for (const group of groupByTeam(items.filter(isTeamItem))) {
+    sections.push({ key: `team:${group.key}`, title: `Team · ${group.team || "Team"}`, items: group.items });
+  }
 
   const installed = items.filter(isInstalled);
   if (installed.length) sections.push({ key: "installed", title: "Installed", items: installed });
@@ -258,26 +255,14 @@ export function authorLabelFor(item: DuckyOSStoreItemDto): string {
   if (source === "ai") return "AI-made";
   if (source === "bundled") return "Bundled";
   // Catalog hit with no local source stamp yet (or older panel) — still Store.
-  if (item.stripe_product_key || item.latest_version) return "DuckyOS Store";
+  if (item.latest_version) return "DuckyOS Store";
   return itemKind(item) === "plugin" ? "Plugin" : "Skill pack";
 }
 
-export function formatPrice(item: DuckyOSStoreItemDto): string {
-  const cents = Number(item.price_cents || 0);
-  if (!item.paid && cents <= 0) return "Free";
-  const currency = (item.currency || "usd").toUpperCase();
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency,
-    }).format(cents / 100);
-  } catch {
-    return `${(cents / 100).toFixed(2)} ${currency}`;
-  }
-}
-
-export function needsPurchase(item: DuckyOSStoreItemDto): boolean {
-  return Boolean(item.paid) && item.owned !== true;
+/** "Private · Alpha Studio" / "Public · Alpha Studio" on my teams' items; "" otherwise. */
+export function teamBadge(item: DuckyOSStoreItemDto): string {
+  if (!isTeamItem(item)) return "";
+  return `${item.visibility === "private" ? "Private" : "Public"} · ${item.owner_team_name || "Team"}`;
 }
 
 /** Older notes shown per page once the Patch notes accordion is open. */

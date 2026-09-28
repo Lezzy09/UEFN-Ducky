@@ -136,6 +136,9 @@ class PanelSettings:
     hidden_bundled_agent_profile_ids: list[str] | None = None
     """Bundled profile ids hidden from the settings library. None = hide all built-ins (default)."""
 
+    agent_profile_visibility_explicit: bool = False
+    """Visibility edited by current code; legacy repair must respect these choices."""
+
     default_enabled_skills: list[str] = field(default_factory=list)
     """Legacy flat skill list — ignored (all packs available by default)."""
 
@@ -414,6 +417,7 @@ class PanelSettings:
             or self.appearance_profile_patches
             or self.agent_profiles
             or self.agent_profile_overrides
+            or self.agent_profile_visibility_explicit
             or self._hidden_bundled_counts_as_override()
             or not self.verse_diagnostics_cache_enabled
             or not self.verse_diagnostics_auto_check

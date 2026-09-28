@@ -49,10 +49,6 @@ function item(partial: Partial<DuckyOSStoreItemDto> & { slug: string }): DuckyOS
     source: null,
     install_count: 0,
     icon_data_url: null,
-    price_cents: 0,
-    currency: "usd",
-    paid: false,
-    owned: null,
     contributes_summary: [],
     ...partial,
   } as DuckyOSStoreItemDto;
@@ -153,8 +149,10 @@ let catalog: DuckyOSStoreItemDto[] = [
     categories: ["themes"],
     latest_version: "2",
     install_count: 56,
-    paid: true,
-    price_cents: 500,
+    my_team: true,
+    visibility: "private",
+    owner_team_id: "team-alpha",
+    owner_team_name: "Alpha Studio",
   }),
   item({
     slug: "ducktactoe",
@@ -222,7 +220,7 @@ let jobSeq = 0;
 const mockApi = {
   get_listener_status: async () => ({ ok: true }),
   duckyos_get_status: async () => ({ ok: true, logged_in: false, email: "" }),
-  duckyos_store_catalog: async () => ({ ok: true, items: catalog.map((i) => ({ ...i })) }),
+  duckyos_store_catalog: async () => ({ ok: true, teams: true, items: catalog.map((i) => ({ ...i })) }),
   duckyos_store_versions: async (slug: string, _latestVersion?: string) => {
     const count = slug === "discord" ? 12 : 2;
     return {
@@ -238,7 +236,6 @@ const mockApi = {
       })),
     };
   },
-  duckyos_store_checkout: async () => ({ ok: false, error: "Checkout is mocked in the harness" }),
   bridge_job_start: async (method: string, args: unknown[]) => {
     const id = `job-${++jobSeq}`;
     jobs.set(id, { done: false, result: null, started: Date.now() });

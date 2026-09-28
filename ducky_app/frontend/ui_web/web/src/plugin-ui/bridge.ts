@@ -6,6 +6,7 @@
 
 import { BRIDGE_CHANNEL } from "./constants";
 import { getApi, isRemote } from "../hooks/usePanelApi";
+import { pluginPrefsKey } from "../hooks/pluginPrefsStorage";
 import { getPluginThemeVars } from "./pluginTheme";
 import { pluginUiTabId, type BridgeRequest, type BridgeResponse } from "./types";
 
@@ -26,12 +27,10 @@ type BridgeHandler = (
   params: Record<string, unknown>,
 ) => unknown | Promise<unknown>;
 
-/** Prefer reading prefs through the same localStorage key as usePluginUiPrefs. */
-const PREFS_STORAGE_KEY = "uefn-plugin-ui-prefs";
-
+/** Same per-account localStorage bag as usePluginUiPrefs. */
 function readPluginPrefs(pluginId: string): Record<string, unknown> {
   try {
-    const raw = localStorage.getItem(PREFS_STORAGE_KEY);
+    const raw = localStorage.getItem(pluginPrefsKey());
     if (!raw) return {};
     const all = JSON.parse(raw) as Record<string, Record<string, unknown>>;
     const slot = all[pluginId];
@@ -43,7 +42,8 @@ function readPluginPrefs(pluginId: string): Record<string, unknown> {
 
 function writePluginPref(pluginId: string, id: string, value: unknown): void {
   try {
-    const raw = localStorage.getItem(PREFS_STORAGE_KEY);
+    const key = pluginPrefsKey();
+    const raw = localStorage.getItem(key);
     const all = raw ? (JSON.parse(raw) as Record<string, Record<string, unknown>>) : {};
     const base = all && typeof all === "object" && !Array.isArray(all) ? all : {};
     const slot = { ...(base[pluginId] ?? {}) };
@@ -59,7 +59,7 @@ function writePluginPref(pluginId: string, id: string, value: unknown): void {
       throw new Error("prefs.set value must be boolean | string | number | null");
     }
     const next = { ...base, [pluginId]: slot };
-    localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(next));
+    localStorage.setItem(key, JSON.stringify(next));
     const api = getApi();
     if (api?.plugin_prefs_set) {
       void api.plugin_prefs_set(pluginId, slot).catch(() => undefined);
@@ -322,6 +322,32 @@ export function shouldForwardPluginPush(
 }
 
 /**
+ * Host data service (docs + files in the active scope, Personal or the project's
+ * team). One panel API dispatcher; the host always uses the iframe's own plugin id.
+ */
+export const HOST_DATA_OPS = [
+  "scope.get",
+  "data.get",
+  "data.put",
+  "data.list",
+  "data.delete",
+  "files.put",
+  "files.get",
+  "files.list",
+  "files.delete",
+] as const;
+
+function hostDataHandler(op: string): BridgeHandler {
+  return async (ctx, params) => {
+    const api = getApi();
+    if (!api?.plugin_data) throw new Error("plugin data unavailable");
+    const out = await api.plugin_data(ctx.pluginId, op, params);
+    if (out?.ok === false && out.error) throw new Error(String(out.error));
+    return out;
+  };
+}
+
+/**
  * Allowlisted bridge methods. Add new capabilities here only.
  * Keys are what the plugin calls via `postMessage({ method: "…" })`.
  */
@@ -460,6 +486,7 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
     const key = typeof params.key === "string" ? params.key : "";
     return await api.plugin_cache_clear(ctx.pluginId, key);
   },
+  ...Object.fromEntries(HOST_DATA_OPS.map((op) => [op, hostDataHandler(op)])),
   /** Call a panel RPC registered by the plugin via ``api.register_panel_rpc``. */
   "plugin.call": async (ctx, params) => {
     const api = getApi();

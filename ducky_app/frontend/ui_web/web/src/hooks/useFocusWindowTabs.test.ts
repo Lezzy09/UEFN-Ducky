@@ -67,7 +67,7 @@ describe("parseFocusId / focusIdToEditorTab", () => {
     expect(focusIdToEditorTab("automations:main", "Automations")).toEqual({
       id: "automations:main",
       kind: "automations",
-      name: "Automations",
+      name: "Workflows",
     });
   });
 
@@ -76,7 +76,7 @@ describe("parseFocusId / focusIdToEditorTab", () => {
     expect(focusIdToEditorTab("pipelines:main", "Pipelines")).toEqual({
       id: "pipelines:main",
       kind: "pipelines",
-      name: "Pipelines",
+      name: "Workflows",
     });
   });
 

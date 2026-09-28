@@ -6,6 +6,7 @@
  */
 
 import type { PluginUiPrefValue } from "../hooks/usePluginUiPrefs";
+import { pluginPrefsKey } from "../hooks/pluginPrefsStorage";
 import {
   isBinaryProjectFile,
   isImageFilePath,
@@ -13,13 +14,12 @@ import {
 } from "../verse-editor/utils/isVerseFile";
 
 const PLUGIN_ID = "translation";
-const STORAGE_KEY = "uefn-plugin-ui-prefs";
 
 type SetPref = (key: string, value: PluginUiPrefValue) => void;
 
 function readSlot(): Record<string, unknown> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(pluginPrefsKey());
     const all = raw ? (JSON.parse(raw) as Record<string, Record<string, unknown>>) : {};
     const slot = all[PLUGIN_ID];
     return slot && typeof slot === "object" ? slot : {};

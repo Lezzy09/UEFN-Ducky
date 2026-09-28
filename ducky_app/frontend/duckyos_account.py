@@ -77,9 +77,10 @@ def resolve_base_url(override: str | None = None) -> str:
 
 
 def _load_blob() -> dict[str, Any]:
-    from backend.agent.secrets import get_key
+    # Fresh per call: the MCP bridge process must follow an account switch made in the app.
+    from backend.agent.secrets import get_key_fresh
 
-    raw = get_key(_CREDENTIALS_KEY)
+    raw = get_key_fresh(_CREDENTIALS_KEY)
     if not raw:
         return {}
     try:
@@ -106,7 +107,7 @@ def _note_account_change(before: str, after: str) -> None:
     try:
         from frontend.ui_web.agent_modes import push_ui_event
 
-        push_ui_event({"type": "duckyos_account_changed"})
+        push_ui_event({"type": "duckyos_account_changed", "account": after})
     except Exception:
         pass
 
@@ -697,6 +698,8 @@ def get_status() -> dict[str, Any]:
         "email": str(blob.get("email") or "") if logged_in else "",
         "display_name": str(blob.get("display_name") or "") if logged_in else "",
         "user_id": str(blob.get("user_id") or "") if logged_in else "",
+        # Same key the Store catalog cache and plugin data use ("" signed out).
+        "account": account_key(blob),
         "roles": list(blob.get("roles") or []) if logged_in else [],
         "permissions": list(blob.get("permissions") or []) if logged_in else [],
         "device_key_active": device_active if logged_in else False,
@@ -1715,6 +1718,9 @@ def teams_snapshot(*, stale_seconds: int = 120) -> dict[str, Any]:
                     "manage_roles": _role_has(roles, my_role, "manage_roles"),
                     "manage_plugins": _role_has(roles, my_role, "manage_plugins"),
                 },
+                # Team Private status + storage: the plugin scope picker lists only active teams.
+                "private_plan": (entry.get("plans") or {}).get("private") if isinstance(entry.get("plans"), dict) else None,
+                "storage": entry.get("storage") if isinstance(entry.get("storage"), dict) else None,
             }
         )
 
@@ -2280,7 +2286,28 @@ def store_catalog() -> dict[str, Any]:
                 **_local_plugin_icon_fields(plug),
             }
         )
-    return {"ok": True, "items": items_out}
+    # Teams are a gated beta (uefn-ducky-store.teams): only then does the library show them.
+    teams = payload.get("teams") is True
+    return {"ok": True, "items": items_out, "teams": teams, "teamsInfo": _teams_info(payload) if teams else []}
+
+
+def _teams_info(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Per-team library notes (Team Private paused → N private plugins hidden)."""
+    out: list[dict[str, Any]] = []
+    for row in payload.get("teamsInfo") if isinstance(payload.get("teamsInfo"), list) else []:
+        if not isinstance(row, dict) or not str(row.get("teamId") or ""):
+            continue
+        try:
+            hidden = max(0, int(row.get("hiddenPrivate") or 0))
+        except (TypeError, ValueError):
+            hidden = 0
+        out.append({
+            "teamId": str(row.get("teamId")),
+            "name": str(row.get("name") or ""),
+            "privateActive": row.get("privateActive") is True,
+            "hiddenPrivate": hidden,
+        })
+    return out
 
 
 def store_item_versions(slug: str, latest_version: str | None = None) -> dict[str, Any]:

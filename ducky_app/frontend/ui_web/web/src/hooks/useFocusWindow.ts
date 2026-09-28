@@ -184,10 +184,10 @@ export function focusIdToEditorTab(focusId: string, title: string): EditorTab | 
     return { id: changesTabId(), kind: "changes", name: title || "Ledger" };
   }
   if (parsed.kind === "automations") {
-    return { id: automationsTabId(), kind: "automations", name: title || "Automations" };
+    return { id: automationsTabId(), kind: "automations", name: "Workflows" };
   }
   if (parsed.kind === "pipelines") {
-    return { id: pipelinesTabId(), kind: "pipelines", name: title || "Pipelines" };
+    return { id: pipelinesTabId(), kind: "pipelines", name: "Workflows" };
   }
   if (parsed.kind === "ducky-profile") {
     return {

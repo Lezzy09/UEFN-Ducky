@@ -1,5 +1,7 @@
 .aw-root {
   display: flex;
+  container-type: inline-size;
+  overflow: hidden;
   height: 100%;
   min-height: 0;
   background: var(--bg);
@@ -11,12 +13,19 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  width: 180px;
-  border-right: 1px solid var(--border);
+  position: absolute;
+  z-index: 5;
+  top: 12px;
+  left: 12px;
+  width: 220px;
+  max-height: calc(100% - 84px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 16px;
   background: var(--panel-header);
+  box-shadow: var(--shadow-md);
 }
 .aw-list-head,
-.aw-toolbar,
 .aw-log-dock-head {
   display: flex;
   align-items: center;
@@ -38,10 +47,24 @@
   color: var(--text-muted);
   cursor: default;
 }
-.aw-list-ul { list-style: none; margin: 0; padding: 6px; overflow: auto; }
+.aw-list-sections { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 4px; }
+.aw-workflow-section + .aw-workflow-section { border-top: 1px solid var(--border); }
+.aw-section-head { display: flex; align-items: center; gap: 4px; padding: 4px; }
+.aw-section-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 8px; padding: 8px 4px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.aw-section-toggle small { margin-left: auto; color: var(--text-muted); }
+.aw-section-chevron { color: var(--text-muted); }
+.aw-section-toggle:hover, .aw-list-row:hover { background: var(--bg-hover); }
+.aw-section-empty { padding: 8px; color: var(--text-muted); }
+.aw-list-ul { list-style: none; margin: 0; padding: 0 4px 8px; }
+.aw-list-ul[hidden] { display: none; }
+.aw-list-row > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aw-list-meta { flex-shrink: 0; }
+.aw-icon-button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px; color: inherit; background: transparent; cursor: pointer; }
+.aw-icon-button:hover { background: var(--bg-hover); }
 .aw-list-row {
   display: flex;
   justify-content: space-between;
+  gap: 8px;
   width: 100%;
   text-align: left;
   padding: 6px 8px;
@@ -83,14 +106,24 @@
   min-height: 0;
   position: relative;
 }
-.aw-name { flex: 1; min-width: 80px; background: transparent; border: 0; color: inherit; font-weight: 600; }
-.aw-enable { display: flex; align-items: center; gap: 4px; }
+.aw-toolbar { position: absolute; z-index: 5; top: 12px; left: 244px; right: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel-header); box-shadow: var(--shadow-md); }
+.aw-toolbar-fields { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.aw-name { width: 100%; min-width: 0; box-sizing: border-box; background: transparent; border: 0; padding: 4px; color: inherit; font: inherit; font-weight: 600; text-overflow: ellipsis; }
+.aw-name.aw-description { color: var(--text-muted); font-size: 11px; font-weight: 400; }
+.aw-toolbar-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.aw-toolbar button:disabled { opacity: 0.5; cursor: default; }
+.aw-toolbar button[aria-pressed="true"] { background: var(--blue-dim); }
+.aw-toolbar button:focus-visible, .aw-list button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .aw-toolbar button {
   border: 1px solid var(--border);
   background: var(--card);
   color: inherit;
   border-radius: 6px;
-  padding: 4px 8px;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  padding: 0;
+  font-size: 16px;
   cursor: pointer;
 }
 .aw-toolbar button:hover { background: var(--bg-hover); }
@@ -156,9 +189,9 @@
   text-overflow: ellipsis;
 }
 .aw-node-expand-toggle {
-  position: absolute;
-  top: 25px;
-  right: 10px;
+  position: static;
+  top: auto;
+  right: auto;
   display: grid;
   place-items: center;
   width: 24px;
@@ -347,8 +380,9 @@
 .aw-canvas-controls button, .aw-connection-tools button, .aw-connection-tools select { display: inline-flex; align-items: center; justify-content: center; min-height: 28px; border: 0; border-radius: 6px; background: var(--panel-header); color: var(--text); cursor: pointer; padding: 4px 8px; }
 .aw-canvas-controls span { min-width: 38px; text-align: center; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .aw-connection-tools { bottom: 62px; }
-.aw-menu-actions { display: grid; gap: 3px; padding: 8px; border-bottom: 1px solid var(--border); }
-.aw-menu-actions button { display: flex; align-items: center; gap: 10px; border: 0; border-radius: 6px; padding: 8px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.aw-menu-actions { display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--border); }
+.aw-menu-actions button { display: grid; place-items: center; flex: 0 0 40px; height: 40px; border: 1px solid var(--border); border-radius: 8px; padding: 0; background: var(--panel-header); color: var(--text); font-size: 18px; cursor: pointer; }
+.aw-menu-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .aw-menu-actions button:hover, .aw-canvas-controls button:hover, .aw-connection-tools button:hover { background: var(--bg-hover); }
 .aw-spawn-section { display: flex; align-items: center; justify-content: space-between; margin: 4px 12px 8px; color: var(--text-muted); font-size: 11px; }
 .aw-spawn-section button { border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; }
@@ -362,14 +396,13 @@
 .aw-log-dock-body { overflow-wrap: anywhere; }
 .aw-insp-form p { margin: 0; color: var(--text-muted); line-height: 1.5; }
 .aw-insp-form summary { cursor: pointer; padding: 6px 0; }
-@media (max-width: 680px) {
-  .aw-root { flex-direction: column; }
-  .aw-list { width: 100%; max-height: 108px; flex-shrink: 0; border-right: 0; }
-  .aw-list-head { padding: 4px 10px; }
-  .aw-list-ul { display: flex; gap: 6px; padding: 4px 8px; overflow-x: auto; }
-  .aw-list-row { min-width: 130px; min-height: 40px; gap: 8px; }
-  .aw-toolbar { flex-wrap: wrap; gap: 6px; }
-  .aw-toolbar .aw-name { flex-basis: 100%; }
+@container (max-width: 680px) {
+  .aw-list { top: 148px; width: 180px; max-height: calc(45% - 24px); }
+  .aw-list-head { padding: 8px 10px; }
+  .aw-list-row { min-height: 36px; }
+  .aw-toolbar { left: 12px; gap: 6px; }
+  .aw-toolbar-fields { flex-basis: 100%; }
+  .aw-name { font-size: 16px; }
   .aw-toolbar button, .aw-canvas-controls button, .aw-connection-tools button { min-height: 40px; }
   .aw-canvas-controls { gap: 3px; right: 8px; bottom: 8px; padding: 4px; }
   .aw-canvas-controls button { min-width: 40px; }
@@ -378,9 +411,46 @@
   .aw-connection-tools { max-width: calc(100% - 24px); flex-wrap: wrap; }
 }
 @media (pointer: coarse) {
-  .aw-node-expand-toggle { width: 40px; height: 40px; top: 18px; right: 4px; }
-  .aw-node-body { padding-right: 46px; }
+  .aw-menu-actions button { flex-basis: 44px; }
+  .aw-node-body { padding-right: 82px; }
   .aw-menu-actions button, .aw-tile, .aw-acc summary { min-height: 44px; }
   .aw-node-resize { width: 24px; right: -10px; }
-  .aw-insp-form input, .aw-insp-form textarea, .aw-insp-form select { font-size: 16px; }
 }
+
+/* Card text edits in place; the panel holds only functional settings. */
+.aw-node-actions { position: absolute; right: 6px; top: 8px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.aw-node-delete { display: grid; place-items: center; width: 24px; height: 26px; border: 0; border-radius: 5px; padding: 0; background: transparent; color: var(--text-muted); cursor: pointer; opacity: 0; }
+.aw-node:hover .aw-node-delete, .aw-node.is-selected .aw-node-delete, .aw-node:focus-within .aw-node-delete { opacity: 1; }
+.aw-node-delete:hover { background: var(--red-dim); }
+.aw-node-actions button:focus-visible { opacity: 1; outline: 2px solid var(--accent); }
+.aw-inline-edit { min-width: 0; cursor: text; }
+.aw-inline-text { display: block; width: 100%; min-width: 0; margin: 0; padding: 1px 2px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: text; }
+.aw-inline-text--name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 16px; font-weight: 700; line-height: 1.2; overflow: hidden; }
+.aw-inline-text--description { color: var(--text-muted); font-size: 11px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aw-inline-text--description.is-empty { opacity: 0; }
+.aw-node:hover .aw-inline-text.is-empty, .aw-inline-text.is-empty:focus-visible { opacity: 0.7; }
+.aw-inline-text:hover { background: var(--bg-hover); }
+.aw-inline-input { display: block; white-space: nowrap; box-sizing: border-box; outline: 1px solid var(--accent); background: var(--bg); user-select: text; resize: none; }
+.aw-inline-input.aw-inline-text--description { white-space: pre-wrap; }
+.is-overview .aw-inline-text--name { font-size: 23px; }
+.aw-field { display: flex; flex-direction: column; min-width: 0; gap: 6px; }
+.aw-insp-form .aw-field-label { display: block; font-size: 11px; font-weight: 600; color: var(--text-muted); }
+.aw-insp-form { gap: 14px; padding: 12px; }
+.aw-insp-form input, .aw-insp-form textarea, .aw-insp-form .choice-dropdown-trigger { width: 100%; min-height: 34px; padding: 8px 10px; border-radius: 8px; background: var(--bg); font: inherit; }
+.aw-insp-form input:focus, .aw-insp-form textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+.aw-insp-form textarea { line-height: 1.5; }
+.aw-insp-form .choice-dropdown-trigger-label { font-size: 12px; }
+.aw-field-hint { color: var(--text-muted); font-size: 11px; line-height: 1.4; }
+.aw-field-error, .aw-required { color: var(--amber); }
+.aw-advanced { border-top: 1px solid var(--border); padding-top: 8px; }
+.aw-advanced summary { font-size: 11px; color: var(--text-muted); cursor: pointer; margin-bottom: 6px; }
+.aw-insp-form .aw-json-input { font-family: var(--font-mono); }
+.aw-connection-tools .choice-dropdown { width: 140px; }
+@media (pointer: coarse) {
+  .aw-node-actions { top: 14px; right: 4px; flex-direction: row; }
+  .aw-node-expand-toggle, .aw-node-delete { width: 36px; height: 40px; }
+  .aw-insp-form input, .aw-insp-form textarea, .aw-insp-form .choice-dropdown-trigger-label { font-size: 16px; }
+}
+
+.aw-insp-form .choice-dropdown { max-width: none; }
+.aw-text-save-error { position: absolute; bottom: 60px; left: 12px; padding: 8px 12px; border-radius: 8px; background: var(--card); color: var(--danger); z-index: 5; }

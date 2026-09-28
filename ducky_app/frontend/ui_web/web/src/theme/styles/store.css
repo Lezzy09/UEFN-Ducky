@@ -828,15 +828,14 @@
   border-color: color-mix(in srgb, var(--ds-accent) 40%, transparent);
 }
 
-/* Keep icon + price chip readable above the install overlay. */
+/* Keep the icon readable above the install overlay. */
 .ds-card--busy > .ds-card-head {
   position: relative;
   z-index: 5;
 }
 
 .ds-card--busy > .ds-card-head .ds-card-icon,
-.ds-card--busy > .ds-card-head .ds-card-icon img,
-.ds-card--busy > .ds-card-head .ds-price-chip {
+.ds-card--busy > .ds-card-head .ds-card-icon img {
   opacity: 1;
 }
 
@@ -913,21 +912,32 @@
   font-weight: 700;
 }
 
-.ds-price-chip {
-  padding: 4px 8px;
+/* "Private · Alpha Studio" — a team name, so no uppercase; long names ellipsize (title has it all). */
+.ds-team-chip {
+  align-self: flex-start;
+  max-width: 100%;
+  margin: -4px 0 10px;
+  padding: 3px 8px;
   border-radius: 999px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 600;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--ds-accent-hi);
   background: color-mix(in srgb, var(--ds-accent) 10%, transparent);
 }
 
-.ds-price-chip--owned {
+.ds-team-chip--private {
   color: #93c5fd;
   background: color-mix(in srgb, var(--ds-blue) 12%, transparent);
+}
+
+/* "Team Private paused: N private plugins hidden…" under a team in the Team category. */
+.ds-team-note {
+  margin: 4px 8px 12px;
+  font-size: 12.5px;
+  color: var(--ds-text-mute);
 }
 
 .ds-card-body {
@@ -1760,10 +1770,6 @@
   flex: none;
 }
 
-.ds-stat-label--price svg {
-  color: var(--ds-accent);
-}
-
 .ds-stat-value {
   font-size: 13px;
   font-weight: 600;
@@ -1771,10 +1777,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.ds-stat-value--price {
-  color: var(--ds-accent-hi);
 }
 
 .ds-panel {

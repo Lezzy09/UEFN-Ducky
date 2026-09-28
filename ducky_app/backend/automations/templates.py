@@ -15,6 +15,15 @@ CUSTOM_PREFIX = "custom:"
 _ID_RE = re.compile(r"^custom:[a-z0-9]{8,32}$")
 
 
+def _announce_templates_changed() -> None:
+    try:
+        from frontend.ui_web.agent_modes import push_ui_event
+
+        push_ui_event({"type": "templates_changed"})
+    except Exception:
+        pass
+
+
 def list_custom() -> list[dict[str, Any]]:
     folder = _dir()
     if not folder.is_dir():
@@ -55,6 +64,7 @@ def save_custom(
     }
     dest = _dir(for_write=True) / f"{tid.split(':', 1)[-1]}.json"
     dest.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8")
+    _announce_templates_changed()
     return row
 
 
@@ -66,6 +76,7 @@ def delete_custom(template_id: str) -> bool:
     if not path.is_file():
         return False
     path.unlink()
+    _announce_templates_changed()
     return True
 
 

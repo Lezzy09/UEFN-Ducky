@@ -4,6 +4,7 @@ import { Modal } from "../components/Modal";
 import { Icons } from "../icons/Icons";
 import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { getApi } from "../hooks/usePanelApi";
+import { subscribePanelPush } from "../hooks/usePanelPushBus";
 import { handleDeepLink } from "../navigation/deepLinks";
 import type { AutomationGraphDto, AutomationTemplateDto } from "../types/panel";
 
@@ -53,6 +54,13 @@ export function AutomationTemplatePicker({
       setLoading(false);
     }
   }, [system]);
+
+  useEffect(() => {
+    if (!open) return;
+    return subscribePanelPush((event) => {
+      if (event.type === "templates_changed") void refresh();
+    });
+  }, [open, refresh]);
 
   useEffect(() => {
     if (!open) {

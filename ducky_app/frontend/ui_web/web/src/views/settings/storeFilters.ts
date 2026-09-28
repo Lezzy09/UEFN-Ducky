@@ -1,4 +1,4 @@
-import type { DuckyOSStoreItemDto } from "../../types/panel";
+import type { DuckyOSStoreCatalog, DuckyOSStoreItemDto, DuckyOSStoreTeamInfo } from "../../types/panel";
 
 /** Browse filter seeds (not install package types). Everything is a plugin — omit that bucket. */
 export const CORE_STORE_CATEGORIES = ["gateways", "skills", "themes", "games"] as const;
@@ -12,8 +12,8 @@ export const INSTALLED_CATEGORY = "installed";
 /** Virtual category: desktop plugins authored by duckies (`source=ai`). */
 export const AI_MADE_CATEGORY = "ai-made";
 
-/** Virtual category: paid cloud purchases for the signed-in Ducky account. */
-export const OWNED_CATEGORY = "owned";
+/** Virtual category: items owned by the signed-in account's teams (public or private). */
+export const TEAM_CATEGORY = "team";
 
 const CATEGORY_LABELS: Record<string, string> = {
   skills: "Skills",
@@ -23,7 +23,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   mcps: "MCPs",
   "3d": "3D",
   trending: "Trending",
-  owned: "Owned",
+  team: "Team",
   installed: "Installed",
   "ai-made": "AI-made",
 };
@@ -42,9 +42,50 @@ export function categoryLabel(raw: string): string {
     .join(" ");
 }
 
-/** Paid purchase entitlement (not local-only free installs). */
-export function isOwnedPurchase(item: DuckyOSStoreItemDto): boolean {
-  return item.owned === true && item.paid === true;
+/**
+ * Catalog items with the teams beta applied: unless the catalog says `teams: true`,
+ * nothing is a team item (no Team category, rows or badges).
+ */
+export function catalogItems(catalog: DuckyOSStoreCatalog | null): DuckyOSStoreItemDto[] {
+  const items = catalog?.items || [];
+  if (catalog?.teams === true) return items;
+  return items.map((item) => (item.my_team ? { ...item, my_team: false } : item));
+}
+
+/** Owned by one of the viewer's teams. The server only sets this for members. */
+export function isTeamItem(item: DuckyOSStoreItemDto): boolean {
+  return item.my_team === true;
+}
+
+export type TeamGroup = { key: string; team: string; items: DuckyOSStoreItemDto[]; note: string };
+
+/** Same words as the web Store. */
+export function pausedNote(hidden: number): string {
+  return `Team Private paused: ${hidden} private plugin${hidden === 1 ? "" : "s"} hidden until the owner renews.`;
+}
+
+/**
+ * Team items grouped per owning team (by id, labelled by name), teams sorted by
+ * name. With `teamsInfo`, a team whose Team Private is paused gets its note, even
+ * when every item it has is hidden.
+ */
+export function groupByTeam(items: DuckyOSStoreItemDto[], teamsInfo: DuckyOSStoreTeamInfo[] = []): TeamGroup[] {
+  const groups = new Map<string, TeamGroup>();
+  for (const item of items) {
+    const team = (item.owner_team_name || "").trim();
+    const key = item.owner_team_id || team;
+    const group = groups.get(key);
+    if (group) group.items.push(item);
+    else groups.set(key, { key, team, items: [item], note: "" });
+  }
+  for (const info of teamsInfo) {
+    const hidden = info.hiddenPrivate ?? 0;
+    if (!info.teamId || hidden <= 0) continue;
+    const group = groups.get(info.teamId) ?? { key: info.teamId, team: info.name, items: [], note: "" };
+    group.note = pausedNote(hidden);
+    groups.set(info.teamId, group);
+  }
+  return [...groups.values()].sort((a, b) => a.team.localeCompare(b.team));
 }
 
 /**
@@ -91,8 +132,8 @@ export function filterStoreItems(
       if (!isInstalledItem(item)) return false;
     } else if (category === AI_MADE_CATEGORY) {
       if ((item.source || "").toLowerCase() !== "ai") return false;
-    } else if (category === OWNED_CATEGORY) {
-      if (!isOwnedPurchase(item)) return false;
+    } else if (category === TEAM_CATEGORY) {
+      if (!isTeamItem(item)) return false;
     } else if (category && !cats.includes(category)) return false;
     if (!q) return true;
     const hay = [

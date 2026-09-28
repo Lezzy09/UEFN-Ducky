@@ -65,3 +65,70 @@ def test_deleting_one_bundled_hides_only_that_one(monkeypatch) -> None:
     assert "verse-coder" not in ids
     assert "niagara-vfx" in ids
     assert "level-designer" in ids
+
+
+def test_deleting_every_bundled_stays_deleted_after_reloading(monkeypatch) -> None:
+    """Explicit removals must never be mistaken for the legacy hide-all bug."""
+    stored = PanelSettings(hidden_bundled_agent_profile_ids=[]).to_json_dict()
+
+    def save(settings):
+        stored.clear()
+        stored.update(settings.to_json_dict())
+
+    monkeypatch.setattr(PanelSettings, "load", classmethod(lambda cls: cls._finish_load(stored)))
+    monkeypatch.setattr(PanelSettings, "save", save)
+    removed = set()
+    for pid in sorted(bundled_profile_ids()):
+        delete_agent_profile(pid)
+        removed.add(pid)
+        visible = {profile["id"] for profile in list_agent_profiles()}
+        assert not removed & visible
+    reloaded = PanelSettings.load()
+    assert reloaded.agent_profile_visibility_explicit
+    assert reloaded._has_overrides()  # The files backend must retain the last removal.
+    assert list_agent_profiles() == []
+
+
+def test_deleting_siblings_of_renamed_profile_stays_deleted(monkeypatch) -> None:
+    s = PanelSettings(hidden_bundled_agent_profile_ids=[])
+    monkeypatch.setattr(PanelSettings, "load", classmethod(lambda cls: s))
+    monkeypatch.setattr(s, "save", lambda: None)
+    save_agent_profile_override("niagara-vfx", {"name": "My VFX"})
+    for pid in bundled_profile_ids() - {"niagara-vfx"}:
+        delete_agent_profile(pid)
+    profiles = list_agent_profiles(s)
+    assert [(p["id"], p["name"]) for p in profiles] == [("niagara-vfx", "My VFX")]
+
+
+def test_restoring_one_deleted_template_does_not_restore_siblings(monkeypatch) -> None:
+    s = PanelSettings(
+        hidden_bundled_agent_profile_ids=sorted(bundled_profile_ids()),
+        agent_profile_visibility_explicit=True,
+    )
+    monkeypatch.setattr(PanelSettings, "load", classmethod(lambda cls: s))
+    monkeypatch.setattr(s, "save", lambda: None)
+    save_agent_profile_override("verse-coder", {"name": "My Coder"})
+    assert [(p["id"], p["name"]) for p in list_agent_profiles(s)] == [("verse-coder", "My Coder")]
+
+
+def test_deleting_from_legacy_poisoned_library_repairs_then_removes(monkeypatch) -> None:
+    s = PanelSettings(hidden_bundled_agent_profile_ids=sorted(bundled_profile_ids()))
+    monkeypatch.setattr(PanelSettings, "load", classmethod(lambda cls: s))
+    monkeypatch.setattr(s, "save", lambda: None)
+    delete_agent_profile("verse-coder")
+    assert {p["id"] for p in list_agent_profiles(s)} == bundled_profile_ids() - {"verse-coder"}
+
+
+def test_rename_and_delete_custom_profile_preserve_other_agents(monkeypatch) -> None:
+    from frontend.agent_profiles import save_agent_profile
+
+    s = PanelSettings(hidden_bundled_agent_profile_ids=[])
+    monkeypatch.setattr(PanelSettings, "load", classmethod(lambda cls: s))
+    monkeypatch.setattr(s, "save", lambda: None)
+    profile = save_agent_profile({"id": "my-agent", "name": "My Agent", "ducky_personality": "Be helpful"})
+    renamed = save_agent_profile({**profile, "name": "My Helper"})
+    assert renamed["id"] == profile["id"]
+    assert renamed["ducky_personality"] == profile["ducky_personality"]
+    assert "My Helper" in {p["name"] for p in list_agent_profiles(s)}
+    delete_agent_profile(profile["id"])
+    assert {p["id"] for p in list_agent_profiles(s)} == bundled_profile_ids()

@@ -2,7 +2,8 @@ import { useEffect, useSyncExternalStore } from "react";
 import { setVisibleInterval } from "../utils/visibleInterval";
 import { onApiReady } from "./onApiReady";
 import { getApi } from "./usePanelApi";
-import { rememberStoreCatalog } from "./storeCatalogCache";
+import { installPanelPushBus, subscribePanelPush } from "./usePanelPushBus";
+import { clearStoreCatalogCache, rememberStoreCatalog } from "./storeCatalogCache";
 
 /** Shared Store-catalog update badge (Header + Settings + StoreTab). */
 
@@ -78,6 +79,13 @@ function getServerSnapshot(): Snapshot {
 function ensurePolling(): void {
   if (pollStarted) return;
   pollStarted = true;
+  // Header is always mounted, so this hears account switches even when the Store is closed.
+  installPanelPushBus();
+  subscribePanelPush((event) => {
+    if (event.type !== "duckyos_account_changed") return;
+    clearStoreCatalogCache();
+    void fetchUpdateCount();
+  });
   onApiReady(() => {
     void fetchUpdateCount();
     setVisibleInterval(() => void fetchUpdateCount(), POLL_MS);

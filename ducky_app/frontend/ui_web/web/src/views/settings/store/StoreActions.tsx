@@ -1,7 +1,6 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import type { DuckyOSStoreItemDto } from "../../../types/panel";
 import { itemKind } from "../storeFilters";
-import { formatPrice, needsPurchase } from "./storeData";
 import {
   loadPluginContributes,
   openInstalledPluginSettings,
@@ -12,7 +11,6 @@ import {
 
 export type StoreItemHandlers = {
   onInstall: (item: DuckyOSStoreItemDto) => void;
-  onBuy: (item: DuckyOSStoreItemDto) => void;
   onToggle: (item: DuckyOSStoreItemDto) => void;
   onUninstall: (item: DuckyOSStoreItemDto) => void;
 };
@@ -28,8 +26,7 @@ type Props = {
 export function StoreActions({ item, handlers, busy, size }: Props) {
   const state = item.state || "available";
   const isPlugin = itemKind(item) === "plugin";
-  const mustBuy = needsPurchase(item);
-  const canAct = (state === "available" || state === "update") && !mustBuy;
+  const canAct = state === "available" || state === "update";
   const installed = state === "installed" || state === "update";
   const stop = (e: MouseEvent) => e.stopPropagation();
   const cls = (variant: string) => `ds-btn ds-btn--${variant} ds-btn--${size}`;
@@ -56,16 +53,6 @@ export function StoreActions({ item, handlers, busy, size }: Props) {
 
   return (
     <div className={`ds-actions ds-actions--${size}`} onClick={stop}>
-      {mustBuy && (state === "available" || state === "update") ? (
-        <button
-          type="button"
-          className={cls("install")}
-          disabled={busy}
-          onClick={() => handlers.onBuy(item)}
-        >
-          {busy ? "Working…" : `Buy ${formatPrice(item)}`}
-        </button>
-      ) : null}
       {canAct ? (
         <button
           type="button"

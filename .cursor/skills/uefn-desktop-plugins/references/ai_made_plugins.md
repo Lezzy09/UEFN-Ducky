@@ -36,7 +36,10 @@ AppData folders.
    + `@api.register_pipeline_node` that calls the **same** functions as
    `@api.tool()`. Ship `automations.templates` with graph `start.chat` →
    `pipeline.agent` → your node → `pipeline.finish`. Omit `systems` so the tile
-   is on both palettes.
+   is on both palettes. Place graphs with `save_pipeline` / `save_automation`
+   (each save opens that editor). Delete with `delete_pipeline` /
+   `delete_automation`. Templates: `save_custom_automation_template` /
+   `delete_custom_automation_template`.
 7. **Bundled skill** `skills/<id>/SKILL.md` inside the draft (not
    `ducky_skills_*`).
 8. **Mutators record changeset** (`api.changeset.record`, slot
@@ -44,6 +47,11 @@ AppData folders.
 9. **Tab UX (if they asked for a tab):** #5 plus `prefs.get` / `prefs.set`;
    empty + error states; `var(--border-focus)` on focus-visible. Any toggle →
    `settings.tabs` + `settings.sections`. First-enable → `contributes.walkthrough`.
+10. **Data through `api.data` only** — never a folder you pick (`%LOCALAPPDATA%`
+   paths, `db.json`). One JSON doc per record (`data.put("item.<id>", …)`,
+   `data.items("item.")`), files via `data.put_file` / `data.file_path`. Panels
+   use the `data.*` / `files.*` bridge methods. The host keeps it per account
+   and scope and syncs shared scopes; writes to a read-only scope raise.
 
 ## Path (no forks)
 

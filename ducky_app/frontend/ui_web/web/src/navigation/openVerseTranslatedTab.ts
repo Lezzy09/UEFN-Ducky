@@ -1,5 +1,7 @@
 /** Open a read-only visual translation of a Verse file (Translation plugin). */
 
+import { pluginPrefsKey } from "../hooks/pluginPrefsStorage";
+
 let openHandler: ((relativePath: string) => void) | null = null;
 
 export function registerOpenVerseTranslatedTab(fn: (relativePath: string) => void): () => void {
@@ -23,7 +25,7 @@ export function verseTranslatedTabId(relativePath: string, lang: string): string
 
 export function readTranslationUiLang(): string {
   try {
-    const raw = localStorage.getItem("uefn-plugin-ui-prefs");
+    const raw = localStorage.getItem(pluginPrefsKey());
     const all = raw ? (JSON.parse(raw) as Record<string, Record<string, unknown>>) : {};
     const lang = all.translation?.language;
     return typeof lang === "string" ? lang.trim() : "en";
@@ -34,7 +36,7 @@ export function readTranslationUiLang(): string {
 
 export function readTranslationModel(): string {
   try {
-    const raw = localStorage.getItem("uefn-plugin-ui-prefs");
+    const raw = localStorage.getItem(pluginPrefsKey());
     const all = raw ? (JSON.parse(raw) as Record<string, Record<string, unknown>>) : {};
     const model = all.translation?.model;
     return typeof model === "string" ? model.trim() : "";

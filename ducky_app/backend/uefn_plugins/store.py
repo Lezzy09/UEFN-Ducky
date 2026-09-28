@@ -661,6 +661,13 @@ def uninstall_uefn_plugin(plugin_id: str, *, erase_data: bool = False) -> dict[s
             cache_clear(pid)
         except Exception:
             pass
+        # Host data service docs + files on this PC (a team's server copy stays the team's).
+        try:
+            from backend.uefn_plugins.scopes import erase_plugin
+
+            erase_plugin(pid)
+        except Exception:
+            pass
     # Persist disabled before deleting files so a restart mid-teardown still shows off.
     set_uefn_plugin_enabled(pid, False)
     # Drop imported modules (bounded unload) *before* rmtree — Windows locks .py files

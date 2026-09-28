@@ -6,7 +6,6 @@ import type { StoreItemHandlers } from "./StoreActions";
 
 const handlers: StoreItemHandlers = {
   onInstall: vi.fn(),
-  onBuy: vi.fn(),
   onToggle: vi.fn(),
   onUninstall: vi.fn(),
 };

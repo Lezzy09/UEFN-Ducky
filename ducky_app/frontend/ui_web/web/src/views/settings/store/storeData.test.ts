@@ -6,10 +6,8 @@ import {
   deriveSections,
   formatInstalls,
   formatPatchDate,
-  formatPrice,
   installProgressPct,
   isInstalled,
-  needsPurchase,
   pageCount,
   pageSlice,
   parsePageSizeChoice,
@@ -82,41 +80,6 @@ describe("deriveSections", () => {
   it("collects installed items regardless of state", () => {
     const installed = deriveSections(items).find((s) => s.key === "installed")!;
     expect(installed.items.map((i) => i.slug)).toEqual(["translation", "verse-tips"]);
-  });
-
-  it("inserts owned between trending and installed for paid purchases only", () => {
-    const withOwned: DuckyOSStoreItemDto[] = [
-      ...items,
-      {
-        slug: "pro-pack",
-        kind: "plugin",
-        categories: ["plugins"],
-        name: "Pro Pack",
-        paid: true,
-        owned: true,
-        price_cents: 500,
-        state: "available",
-      },
-      {
-        slug: "local-free",
-        kind: "plugin",
-        categories: ["plugins"],
-        name: "Local Free",
-        paid: false,
-        owned: true,
-        installed_version: 1,
-        state: "installed",
-      },
-    ];
-    const keys = deriveSections(withOwned).map((s) => s.key);
-    expect(keys.indexOf("owned")).toBeGreaterThan(keys.indexOf("trending"));
-    expect(keys.indexOf("owned")).toBeLessThan(keys.indexOf("installed"));
-    const owned = deriveSections(withOwned).find((s) => s.key === "owned")!;
-    expect(owned.items.map((i) => i.slug)).toEqual(["pro-pack"]);
-  });
-
-  it("omits owned section when there are no paid purchases", () => {
-    expect(deriveSections(items).find((s) => s.key === "owned")).toBeUndefined();
   });
 
   it("appends unknown categories title-cased after the fixed rows", () => {
@@ -232,14 +195,6 @@ describe("labels", () => {
     expect(
       authorLabelFor({ slug: "physics", kind: "skill", latest_version: "1" }),
     ).toBe("DuckyOS Store");
-  });
-
-  it("prices free vs paid", () => {
-    expect(formatPrice({ slug: "x" })).toBe("Free");
-    expect(formatPrice({ slug: "y", paid: true, price_cents: 500, currency: "usd" })).toContain("5");
-    expect(needsPurchase({ slug: "y", paid: true })).toBe(true);
-    expect(needsPurchase({ slug: "y", paid: true, owned: true })).toBe(false);
-    expect(needsPurchase({ slug: "z" })).toBe(false);
   });
 });
 

@@ -82,7 +82,6 @@ import {
   rememberContentAllProjects,
 } from "../utils/contentTreePrefs";
 import { requestOpenAutomationsTab } from "../navigation/openAutomationsTab";
-import { requestOpenPipelinesTab } from "../navigation/openPipelinesTab";
 import { useUiTarget } from "../ui-targets/registry";
 
 function shouldBlockSidebarHotkey(target: EventTarget | null): boolean {
@@ -1060,18 +1059,11 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
         <Icons.Search />
       </SectionIconButton>
       <SectionIconButton
-        buttonRef={(el) => automationsTargetRef(el)}
-        title="Automations"
+        buttonRef={(el) => { automationsTargetRef(el); pipelinesTargetRef(el); }}
+        title="Workflows"
         onClick={() => requestOpenAutomationsTab()}
       >
-        <Icons.Clock />
-      </SectionIconButton>
-      <SectionIconButton
-        buttonRef={(el) => pipelinesTargetRef(el)}
-        title="Pipelines"
-        onClick={() => requestOpenPipelinesTab()}
-      >
-        <Icons.GitBranch />
+        <span aria-hidden="true">🔀</span>
       </SectionIconButton>
       <DuckyArchiveDropdown
         archiveChats={archiveChats}

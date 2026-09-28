@@ -131,3 +131,13 @@ it("stops queuing old file checks after a restore is cancelled", async () => {
   expect(api.stat_project_file).toHaveBeenCalledTimes(4);
   expect(initLayoutState).not.toHaveBeenCalled();
 });
+
+it("restores the old separate graph tabs as one Workflows tab", async () => {
+  const tabs: EditorTab[] = [{ id: "pipelines:main", kind: "pipelines", name: "Pipelines" }, { id: "automations:main", kind: "automations", name: "Automations" }];
+  api.get_editor_workspace.mockResolvedValue({ version: 1, openTabs: tabs, layout: createDefaultLayout(tabs.map((tab) => tab.id)) });
+  const { initLayoutState } = render("workflows-" + Math.random(), true);
+  await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+  expect(initLayoutState).toHaveBeenCalledWith([{ id: "automations:main", kind: "automations", name: "Workflows" }], expect.anything());
+  const layout = initLayoutState.mock.calls[0][1];
+  expect(Object.values(layout.groups).flatMap((group: any) => group.tabIds)).toEqual(["automations:main"]);
+});
