@@ -153,6 +153,8 @@ export type PluginLlmProvider = {
   shows_thinking_effort?: boolean;
   key_optional?: boolean;
   icon_data_url?: string;
+  /** False keeps the row on Settings → LLMs and out of the chat model picker. */
+  chat?: boolean;
 };
 
 export type PluginContributions = {

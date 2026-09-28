@@ -7,10 +7,15 @@ from typing import Any
 import frontend.ui_web.panel_api as _pa
 
 
-def _cache_store_catalog(result: dict[str, Any]) -> dict[str, Any]:
+def _cache_store_catalog(result: dict[str, Any], account: str = "") -> dict[str, Any]:
     """ADR 0003 phase 6: keep the last good catalog in ducky.db so the Store tab
     opens offline and after a WebView profile wipe (localStorage used to hold a
-    copy without icons)."""
+    copy without icons).
+
+    Keyed by ``account``: the catalog carries the signed-in account's private
+    team items, so another account's copy is dropped, never served.
+    """
+    result["account"] = account
     try:
         from backend.store.repos import kv
         from backend.store.switch import use_db
@@ -22,6 +27,9 @@ def _cache_store_catalog(result: dict[str, Any]) -> dict[str, Any]:
             return result
         cached = kv.get_doc("cache_docs", "store_catalog")
         if isinstance(cached, dict) and isinstance(cached.get("catalog"), dict):
+            if cached["catalog"].get("account") != account:
+                kv.delete_doc("cache_docs", "store_catalog")
+                return result
             stale = dict(cached["catalog"])
             stale["stale"] = True
             stale["stale_error"] = str(result.get("error") or "")
@@ -271,15 +279,20 @@ class PanelApiStoreMixin:
 
     def duckyos_store_catalog(self) -> dict[str, Any]:
         # Store is core — never gated by the Account plugin.
-        from frontend.duckyos_account import DuckyOSAccountError, store_catalog
+        from frontend.duckyos_account import DuckyOSAccountError, account_key, store_catalog
 
+        account = account_key()
         try:
             result = store_catalog()
         except DuckyOSAccountError as exc:
             result = {"ok": False, "error": exc.message, "code": exc.code, "items": []}
         except Exception as exc:
             result = {"ok": False, "error": str(exc), "code": "error", "items": []}
-        return _cache_store_catalog(result)
+        if account_key() != account:
+            # Signed in/out mid-fetch: this copy belongs to the previous account.
+            account = account_key()
+            result = {"ok": False, "error": "Account changed", "code": "account_changed", "items": []}
+        return _cache_store_catalog(result, account)
 
     def duckyos_store_versions(self, slug: str, latest_version: str = "") -> dict[str, Any]:
         from frontend.duckyos_account import DuckyOSAccountError, store_item_versions
@@ -337,31 +350,6 @@ class PanelApiStoreMixin:
                 "skipped": [],
                 "errors": [],
             }
-
-    def duckyos_store_checkout(self, slug: str) -> dict[str, Any]:
-        from frontend.duckyos_account import DuckyOSAccountError, store_checkout
-        import webbrowser
-
-        try:
-            result = store_checkout(str(slug or ""))
-            url = str(result.get("url") or "")
-            if url:
-                webbrowser.open(url)
-            return result
-        except DuckyOSAccountError as exc:
-            return {"ok": False, "error": exc.message, "code": exc.code}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc), "code": "error"}
-
-    def duckyos_store_grant(self, session_id: str, slug: str = "") -> dict[str, Any]:
-        from frontend.duckyos_account import DuckyOSAccountError, store_grant_purchase
-
-        try:
-            return store_grant_purchase(str(session_id or ""), slug=str(slug or "").strip() or None)
-        except DuckyOSAccountError as exc:
-            return {"ok": False, "error": exc.message, "code": exc.code}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc), "code": "error"}
 
     def list_uefn_plugins(self) -> dict[str, Any]:
         try:

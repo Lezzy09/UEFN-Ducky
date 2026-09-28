@@ -62,6 +62,7 @@ export function buildPickerGateways(
 
   const out: PickerGateway[] = [];
   for (const p of providers) {
+    if (p.chat === false) continue;
     const providerKey = norm(p.id || p.secret_key || "");
     const pluginId = norm(p.plugin_id || "");
     if (!providerKey || !pluginId) continue;

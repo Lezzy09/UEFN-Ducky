@@ -51,6 +51,8 @@ def gateway_providers() -> tuple[str, ...]:
             pid = str(row.get("id") or "").strip().lower()
             if not pid or pid in seen:
                 continue
+            if row.get("chat") is False:
+                continue
             if get_llm_provider_registration(pid) is None:
                 continue
             seen.add(pid)
