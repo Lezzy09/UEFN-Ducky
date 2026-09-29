@@ -333,11 +333,24 @@ class PanelApiStoreMixin:
         except Exception as exc:
             return {"ok": False, "pending": False, "error": str(exc)}
 
-    def ensure_starter_llm_gateways(self) -> dict[str, Any]:
-        from frontend.starter_llm_gateways import ensure_starter_llm_gateways
+    def starter_setup_status(self) -> dict[str, Any]:
+        from frontend.starter_llm_gateways import starter_setup_status
 
         try:
-            result = ensure_starter_llm_gateways()
+            return starter_setup_status()
+        except Exception as exc:
+            return {"ok": False, "pending_first_run": False, "gateway_ids": [], "error": str(exc)}
+
+    def ensure_starter_llm_gateways(self, force: bool = False) -> dict[str, Any]:
+        from frontend.starter_llm_gateways import ensure_popular_plugins
+
+        def _progress(payload: dict[str, Any]) -> None:
+            self._push_panel(payload)
+            if payload.get("setup_phase") in ("installed", "skipped"):
+                self._push_panel({"type": "uefn_plugins_changed"})
+
+        try:
+            result = ensure_popular_plugins(force=bool(force), on_progress=_progress)
             if result.get("installed"):
                 self._push_panel({"type": "uefn_plugins_changed"})
             return result

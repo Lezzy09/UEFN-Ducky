@@ -403,6 +403,7 @@ _PUBLIC_METHODS = frozenset({
     'snip_screen',
     'start_verse_lsp',
     'starter_llm_onboard_pending',
+    'starter_setup_status',
     'stat_project_file',
     'stop_verse_diagnostics_scan',
     'stop_verse_lsp',

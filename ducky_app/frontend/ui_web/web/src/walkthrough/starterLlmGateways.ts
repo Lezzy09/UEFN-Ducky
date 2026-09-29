@@ -37,16 +37,42 @@ export async function peekStarterLlmOnboard(): Promise<{ pending: boolean }> {
   }
 }
 
+let popularInflight: Promise<void> | null = null;
+
+async function whenPanelApiReady(): Promise<void> {
+  const { getApi } = await import("../hooks/usePanelApi");
+  if (getApi()) return;
+  const { onApiReady } = await import("../hooks/onApiReady");
+  await new Promise<void>((resolve, reject) => {
+    let stop = () => {};
+    const timer = window.setTimeout(() => {
+      stop();
+      reject(new Error("Panel API unavailable"));
+    }, 8000);
+    stop = onApiReady(() => {
+      window.clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+/** One bundle job. A second call waits for the job already running. */
+export function ensurePopularPlugins(force = false): Promise<void> {
+  if (popularInflight) return popularInflight;
+  popularInflight = (async () => {
+    await whenPanelApiReady();
+    const { runBridgeJob } = await import("../hooks/bridgeJobAsync");
+    await runBridgeJob("ensure_starter_llm_gateways", [force], 1_200_000);
+  })().finally(() => {
+    popularInflight = null;
+  });
+  return popularInflight;
+}
+
 export async function ensureStarterLlmGateways(): Promise<void> {
   try {
-    sessionStorage.setItem("uefn-store-category", "gateways");
+    await ensurePopularPlugins(false);
   } catch {
-    /* ignore */
-  }
-  const { runBridgeJob } = await import("../hooks/bridgeJobAsync");
-  try {
-    await runBridgeJob("ensure_starter_llm_gateways", [], 240_000);
-  } catch {
-    /* Store step still continues — user can install manually */
+    /* Caller can install from the setup card */
   }
 }

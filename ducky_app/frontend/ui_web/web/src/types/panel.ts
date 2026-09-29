@@ -1680,7 +1680,8 @@ export interface PanelPushEvent {
     | "background_job"
     | "graphs_changed"
     | "graph_focus"
-    | "templates_changed";
+    | "templates_changed"
+    | "starter_plugins_progress";
   provider?: string;
   id?: string;
   phase?: "working" | "ready" | "done" | "error";
@@ -1711,6 +1712,12 @@ export interface PanelPushEvent {
   loading?: boolean;
   ready?: boolean;
   failed?: string;
+  /** starter_plugins_progress — one slug in the popular bundle. */
+  slug?: string;
+  label?: string;
+  index?: number;
+  total?: number;
+  setup_phase?: "installing" | "installed" | "skipped" | "error";
 }
 
 /** Whose plugin data a panel shows (host scope bar; team plans P3). */
@@ -2277,7 +2284,13 @@ export interface PanelApi {
     grandfathered?: boolean;
     error?: string;
   }>;
-  ensure_starter_llm_gateways?(): Promise<{
+  starter_setup_status?(): Promise<{
+    ok?: boolean;
+    pending_first_run?: boolean;
+    gateway_ids?: string[];
+    error?: string;
+  }>;
+  ensure_starter_llm_gateways?(force?: boolean): Promise<{
     ok?: boolean;
     first_run?: boolean;
     grandfathered?: boolean;
