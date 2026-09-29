@@ -19,9 +19,9 @@ def test_empty_hidden_list_stays_empty() -> None:
     assert _stored_hidden_list(s) == []
 
 
-def test_none_hidden_list_means_hide_all() -> None:
+def test_unset_hide_list_shows_every_builtin() -> None:
     s = PanelSettings(hidden_bundled_agent_profile_ids=None)
-    assert set(_stored_hidden_list(s)) == set(bundled_profile_ids())
+    assert _stored_hidden_list(s) == []
 
 
 def test_poison_matches_save_one_then_hide_siblings() -> None:
@@ -67,9 +67,10 @@ def test_deleting_one_bundled_hides_only_that_one(monkeypatch) -> None:
     assert "level-designer" in ids
 
 
-def test_deleting_every_bundled_stays_deleted_after_reloading(monkeypatch) -> None:
-    """Explicit removals must never be mistaken for the legacy hide-all bug."""
+def test_hiding_one_sticks_but_hiding_every_template_with_nothing_custom_is_repaired(monkeypatch) -> None:
+    """A partial removal stays removed. Hiding every template and nothing else is the wipe bug."""
     stored = PanelSettings(hidden_bundled_agent_profile_ids=[]).to_json_dict()
+    bundled = sorted(bundled_profile_ids())
 
     def save(settings):
         stored.clear()
@@ -78,15 +79,13 @@ def test_deleting_every_bundled_stays_deleted_after_reloading(monkeypatch) -> No
     monkeypatch.setattr(PanelSettings, "load", classmethod(lambda cls: cls._finish_load(stored)))
     monkeypatch.setattr(PanelSettings, "save", save)
     removed = set()
-    for pid in sorted(bundled_profile_ids()):
+    for pid in bundled[:-1]:
         delete_agent_profile(pid)
         removed.add(pid)
         visible = {profile["id"] for profile in list_agent_profiles()}
         assert not removed & visible
-    reloaded = PanelSettings.load()
-    assert reloaded.agent_profile_visibility_explicit
-    assert reloaded._has_overrides()  # The files backend must retain the last removal.
-    assert list_agent_profiles() == []
+    delete_agent_profile(bundled[-1])
+    assert {profile["id"] for profile in list_agent_profiles()} == bundled_profile_ids()
 
 
 def test_deleting_siblings_of_renamed_profile_stays_deleted(monkeypatch) -> None:
@@ -100,15 +99,23 @@ def test_deleting_siblings_of_renamed_profile_stays_deleted(monkeypatch) -> None
     assert [(p["id"], p["name"]) for p in profiles] == [("niagara-vfx", "My VFX")]
 
 
-def test_restoring_one_deleted_template_does_not_restore_siblings(monkeypatch) -> None:
-    s = PanelSettings(
+def test_wiped_library_comes_back_and_a_partial_hide_stays_hidden(monkeypatch) -> None:
+    wiped = PanelSettings(
         hidden_bundled_agent_profile_ids=sorted(bundled_profile_ids()),
         agent_profile_visibility_explicit=True,
     )
-    monkeypatch.setattr(PanelSettings, "load", classmethod(lambda cls: s))
-    monkeypatch.setattr(s, "save", lambda: None)
+    monkeypatch.setattr(PanelSettings, "load", classmethod(lambda cls: wiped))
+    monkeypatch.setattr(wiped, "save", lambda: None)
     save_agent_profile_override("verse-coder", {"name": "My Coder"})
-    assert [(p["id"], p["name"]) for p in list_agent_profiles(s)] == [("verse-coder", "My Coder")]
+    names = {p["id"]: p["name"] for p in list_agent_profiles(wiped)}
+    assert names["verse-coder"] == "My Coder"
+    assert set(names) == bundled_profile_ids()
+
+    partial = PanelSettings(
+        hidden_bundled_agent_profile_ids=["verse-coder", "tester"],
+        agent_profile_visibility_explicit=True,
+    )
+    assert {p["id"] for p in list_agent_profiles(partial)} == bundled_profile_ids() - {"verse-coder", "tester"}
 
 
 def test_deleting_from_legacy_poisoned_library_repairs_then_removes(monkeypatch) -> None:
