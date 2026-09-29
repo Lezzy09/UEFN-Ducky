@@ -210,7 +210,7 @@ def _mask_row(table: str, row: dict[str, Any]) -> dict[str, Any]:
             out[col] = "••••••••" if val else val
             continue
         if col == "value" and (
-            (table == "plugin_kv" and row.get("encrypted")) or (table == "plugin_data" and row.get("sensitive"))
+            (table == "plugin_kv" and row.get("encrypted")) or table == "plugin_data"
         ):
             out[col] = "•••••••• (encrypted)" if val else val
             continue

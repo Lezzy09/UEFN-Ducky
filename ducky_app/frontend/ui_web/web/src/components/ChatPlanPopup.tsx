@@ -1,8 +1,8 @@
-import { memo, useEffect, useMemo, useState, type MouseEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { ChatPlan, PlanProgress } from "../types/panel";
 import type { OpenFileHandler } from "../types/richContent";
 import { PlanTodoCard } from "./PlanTodoCard";
-import { MarkdownContent } from "./rich-content/MarkdownContent";
+import { RichContentRenderer } from "./rich-content/RichContentRenderer";
 
 interface ChatPlanPopupProps {
   plan: ChatPlan;
@@ -30,9 +30,49 @@ export const ChatPlanPopup = memo(function ChatPlanPopup({
   onOpenChange,
 }: ChatPlanPopupProps) {
   const [open, setOpen] = useState(false);
+  // `present` keeps the body mounted through the close animation. `expanded` flips a frame later so height can transition.
+  const [present, setPresent] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const popupRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     onOpenChange?.(open);
   }, [open, onOpenChange]);
+  useLayoutEffect(() => {
+    if (open) {
+      setPresent(true);
+      return;
+    }
+    setExpanded(false);
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const timer = window.setTimeout(() => setPresent(false), reduce ? 0 : 260);
+    return () => window.clearTimeout(timer);
+  }, [open]);
+  useLayoutEffect(() => {
+    if (!open || !present) return;
+    const frame = requestAnimationFrame(() => setExpanded(true));
+    return () => cancelAnimationFrame(frame);
+  }, [open, present]);
+  // Keep the open card's top inside the chat pane so the bar stays on screen and the body can scroll.
+  useLayoutEffect(() => {
+    const popup = popupRef.current;
+    if (!present || !popup) return;
+    const dock = popup.closest(".chat-pane-plan-dock");
+    const pane = popup.closest(".chat-pane-root");
+    if (!(dock instanceof HTMLElement) || !(pane instanceof HTMLElement)) return;
+    const input = popup.closest(".chat-pane-input-area");
+    const fit = () => {
+      const room = dock.getBoundingClientRect().bottom - pane.getBoundingClientRect().top - 8;
+      popup.style.setProperty("--plan-open-max", `${Math.max(96, Math.floor(room))}px`);
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(pane);
+    if (input instanceof HTMLElement) ro.observe(input);
+    return () => {
+      ro.disconnect();
+      popup.style.removeProperty("--plan-open-max");
+    };
+  }, [present]);
   const [stopping, setStopping] = useState(false);
   const { done, total } = useMemo(() => count(plan, progress), [plan, progress]);
   const allDone = total > 0 && done >= total;
@@ -49,7 +89,7 @@ export const ChatPlanPopup = memo(function ChatPlanPopup({
   };
 
   return (
-    <div className={`chat-plan-popup${open ? " is-open" : ""}`}>
+    <div ref={popupRef} className={`chat-plan-popup${expanded ? " is-open" : ""}${present ? " is-present" : ""}`}>
       <div className="chat-plan-popup-bar">
         <button
           type="button"
@@ -63,7 +103,7 @@ export const ChatPlanPopup = memo(function ChatPlanPopup({
           <span className="chat-plan-popup-bar-count">
             {allDone ? "Finished" : total ? `${done}/${total}` : "No steps"}
           </span>
-          <span className={`chat-plan-popup-chevron${open ? " is-open" : ""}`} aria-hidden>
+          <span className={`chat-plan-popup-chevron${expanded ? " is-open" : ""}`} aria-hidden>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M6 9l6 6 6-6" />
             </svg>
@@ -99,14 +139,18 @@ export const ChatPlanPopup = memo(function ChatPlanPopup({
           </button>
         ) : null}
       </div>
-      {open ? (
-        <div className="chat-plan-popup-panel">
-          <PlanTodoCard plan={plan} progress={progress} onOpenPlan={onOpenPlan} />
-          {plan.body_markdown ? (
-            <div className="chat-plan-popup-md">
-              <MarkdownContent text={plan.body_markdown} onOpenFile={onOpenFile} />
+      {present ? (
+        <div className="chat-plan-popup-reveal">
+          <div className="chat-plan-popup-clip">
+            <div className="chat-plan-popup-panel">
+              <PlanTodoCard plan={plan} progress={progress} embedded />
+              {plan.body_markdown ? (
+                <div className="chat-plan-popup-md">
+                  <RichContentRenderer text={plan.body_markdown} onOpenFile={onOpenFile} />
+                </div>
+              ) : null}
             </div>
-          ) : null}
+          </div>
         </div>
       ) : null}
     </div>

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from copy import deepcopy
 import math
 import time
 import uuid
@@ -12,6 +14,7 @@ from typing import Any
 from backend.store.switch import use_db
 from frontend.app_paths import resolve_app_data_dir
 
+_SAVE_LOCK = threading.RLock()
 _RUN_CAP = 20
 KIND_AUTOMATION = "automation"
 KIND_PIPELINE = "pipeline"
@@ -73,7 +76,29 @@ def normalize_graph(raw: Any) -> dict[str, Any]:
         if source in ids and target in ids and source != target and key not in seen:
             seen.add(key)
             edges.append({"source": source, "target": target, "kind": kind})
-    return {"nodes": nodes, "edges": edges}
+    out = {"nodes": nodes, "edges": edges}
+    if "groups" in src:
+        groups: list[dict[str, Any]] = []
+        group_ids: set[str] = set()
+        grouped_nodes: set[str] = set()
+        raw_groups = src.get("groups")
+        for group in raw_groups if isinstance(raw_groups, list) else []:
+            if not isinstance(group, dict):
+                continue
+            gid = str(group.get("id") or "").strip()
+            members = group.get("node_ids")
+            if not gid or gid in group_ids or not isinstance(members, list):
+                continue
+            kept: list[str] = []
+            for member in members:
+                if isinstance(member, str) and member in ids and member not in grouped_nodes:
+                    kept.append(member)
+                    grouped_nodes.add(member)
+            if kept:
+                group_ids.add(gid)
+                groups.append({"id": gid, "name": str(group.get("name") or "Group").strip() or "Group", "node_ids": kept})
+        out["groups"] = groups
+    return out
 
 
 def empty_workflow(*, name: str = "Untitled", kind: str = KIND_AUTOMATION) -> dict[str, Any]:
@@ -107,10 +132,15 @@ def get_automation(workflow_id: str) -> dict[str, Any] | None:
 
 
 def save_automation(doc: dict[str, Any]) -> dict[str, Any]:
+    with _SAVE_LOCK:
+        return _save_automation(doc)
+
+
+def _save_automation(doc: dict[str, Any]) -> dict[str, Any]:
     now = time.time()
     existing = _get(str(doc.get("id") or "").strip()) if doc.get("id") else None
     seed_kind = doc.get("kind") if existing is None else existing.get("kind")
-    out = existing or empty_workflow(
+    out = deepcopy(existing) if existing else empty_workflow(
         name=str(doc.get("name") or "Untitled"),
         kind=str(seed_kind or KIND_AUTOMATION),
     )
@@ -131,7 +161,15 @@ def save_automation(doc: dict[str, Any]) -> dict[str, Any]:
     out["updated"] = now
     if "last_run" in doc:
         out["last_run"] = float(doc.get("last_run") or 0.0)
-    _put(out)
+    if use_db("automations"):
+        from backend.store.repos import automations as repo
+        repo.put(out, versioned=True)
+    else:
+        from backend.automations.versions import archive_file, directory
+        if existing and not any(directory(out["id"]).glob("*.json")):
+            archive_file(existing)
+        archive_file(out)
+        _put(out)
     _announce_graphs_changed()
     return out
 
@@ -199,7 +237,9 @@ def _put(doc: dict[str, Any]) -> None:
         repo.put(doc)
         return
     path = _files_dir() / f"{doc['id']}.json"
-    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_suffix(f".{uuid.uuid4()}.tmp")
+    temporary.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
 
 
 def _delete(workflow_id: str) -> bool:

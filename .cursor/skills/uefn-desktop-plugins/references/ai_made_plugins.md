@@ -49,9 +49,10 @@ AppData folders.
    `settings.tabs` + `settings.sections`. First-enable → `contributes.walkthrough`.
 10. **Data through `api.data` only** — never a folder you pick (`%LOCALAPPDATA%`
    paths, `db.json`). One JSON doc per record (`data.put("item.<id>", …)`,
-   `data.items("item.")`), files via `data.put_file` / `data.file_path`. Panels
-   use the `data.*` / `files.*` bridge methods. The host keeps it per account
-   and scope and syncs shared scopes; writes to a read-only scope raise.
+   `data.items("item.")`), files via `data.put_file` / `data.get_file` (encrypted
+   on disk, no path). Panels use the `data.*` / `files.*` bridge methods. The host
+   keeps it per account and scope, encrypted for the signed-in account, and syncs
+   shared scopes; writes to a read-only scope raise.
 
 ## Path (no forks)
 

@@ -196,12 +196,58 @@
   margin-bottom: 0;
 }
 
-/* Expand upward over the transcript so the input box stays put. */
-.chat-pane-plan-dock .chat-plan-popup-panel {
-  top: auto;
-  bottom: calc(100% - 2px);
-  border-radius: 12px 12px 0 0;
+.chat-pane-plan-dock .chat-plan-popup-bar {
+  min-height: 36px;
+}
+
+/* Open card leaves flow and grows upward. Keep the closed-bar slot so the composer stays put. */
+.chat-pane-plan-dock:has(.chat-plan-popup.is-present) {
+  min-height: 36px;
+}
+
+.chat-pane-plan-dock .chat-plan-popup.is-present {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 14;
+  display: flex;
+  flex-direction: column;
+  /* --plan-open-max is the space from the chat pane top to this bar, set while open. */
+  max-height: var(--plan-open-max, min(70vh, 560px));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card);
   box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.chat-pane-plan-dock .chat-plan-popup.is-present .chat-plan-popup-bar {
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+}
+
+.chat-pane-plan-dock .chat-plan-popup.is-present .chat-plan-popup-reveal {
+  position: static;
+  top: auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.chat-pane-plan-dock .chat-plan-popup.is-present .chat-plan-popup-panel {
+  position: static;
+  top: auto;
+  bottom: auto;
+  min-height: 0;
+  max-height: calc(var(--plan-open-max, min(70vh, 560px)) - 36px);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  backdrop-filter: none;
 }
 
 .prompt-queue {
@@ -6007,10 +6053,10 @@
 }
 
 .plan-pane-markdown {
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: var(--chat-text-size, 14px);
+  line-height: 1.55;
   margin: 0;
-  color: var(--text-secondary, #bbb);
+  color: var(--fg);
 }
 
 .plan-pane-empty,
@@ -6040,15 +6086,15 @@
   width: 100%;
   display: flex;
   align-items: center;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
-  border-radius: 10px;
-  background: var(--bg-elevated, rgba(30, 30, 30, 0.95));
-  color: var(--text-primary, #ddd);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card);
+  color: var(--fg);
   padding-right: 4px;
 }
 
 .chat-plan-popup-bar:hover {
-  border-color: var(--amber, #d4a017);
+  border-color: var(--border-light);
 }
 
 .chat-plan-popup-bar-main {
@@ -6140,32 +6186,70 @@
   font-weight: 400 !important;
 }
 
-/* Expanded plan floats below the bar so it doesn't push the transcript. */
-.chat-plan-popup-panel {
+/* Height animates 0fr → 1fr. History floats under the bar; the dock overrides this to grow upward. */
+.chat-plan-popup-reveal {
+  display: grid;
+  grid-template-rows: 0fr;
   position: absolute;
   left: 0;
   right: 0;
   top: calc(100% - 2px);
+  z-index: 14;
+  max-height: min(55vh, 460px);
+  opacity: 0;
+  transition: grid-template-rows 0.26s ease, opacity 0.2s ease;
+}
+
+.chat-plan-popup.is-open .chat-plan-popup-reveal {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.chat-plan-popup-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Expanded plan floats below the bar so it doesn't push the transcript. */
+.chat-plan-popup-panel {
   max-height: min(55vh, 460px);
   overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 12px;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
-  border-radius: 0 0 12px 12px;
-  background: color-mix(in srgb, var(--bg-panel, #1a1a1a) 96%, transparent);
-  backdrop-filter: var(--blur-md, blur(8px));
+  border: 1px solid var(--border);
+  border-radius: 0 0 16px 16px;
+  background: var(--card);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  z-index: 14;
 }
 
 .chat-plan-popup-md {
-  font-size: 12.5px;
-  line-height: 1.45;
-  color: var(--text-secondary, #bbb);
-  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  font-size: var(--chat-text-size, 14px);
+  line-height: 1.55;
+  color: var(--fg);
+  border-top: 1px solid var(--border);
   padding-top: 10px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-plan-popup-reveal {
+    transition: none;
+  }
+}
+
+/* Popup owns the one scroll. Steps stay open; no nested 220px scroller. */
+.chat-plan-popup-panel .plan-todo-card {
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.chat-plan-popup-panel .plan-todo-card-body {
+  max-height: none;
+  overflow: visible;
+  padding: 0;
 }
 
 /* ---------------------------------------------------------------------------

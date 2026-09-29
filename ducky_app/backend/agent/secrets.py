@@ -26,7 +26,7 @@ def _dpapi_available() -> bool:
     return sys.platform == "win32"
 
 
-def _protect(plaintext: bytes) -> bytes:
+def _protect(plaintext: bytes, entropy: bytes = b"") -> bytes:
     if not _dpapi_available():
         raise OSError("Credential persist requires Windows DPAPI")
     import ctypes
@@ -46,7 +46,7 @@ def _protect(plaintext: bytes) -> bytes:
         return blob
 
     in_blob = _bytes_to_blob(plaintext)
-    ent_blob = _bytes_to_blob(_ENTROPY)
+    ent_blob = _bytes_to_blob(_ENTROPY + entropy)
     out_blob = DATA_BLOB()
     if not ctypes.windll.crypt32.CryptProtectData(
         ctypes.byref(in_blob),
@@ -61,7 +61,7 @@ def _protect(plaintext: bytes) -> bytes:
     return bytes(ctypes.string_at(out_blob.pbData, out_blob.cbData))
 
 
-def _unprotect(ciphertext: bytes) -> bytes:
+def _unprotect(ciphertext: bytes, entropy: bytes = b"") -> bytes:
     if not _dpapi_available():
         raise OSError("Credential persist requires Windows DPAPI")
     import ctypes
@@ -81,7 +81,7 @@ def _unprotect(ciphertext: bytes) -> bytes:
         return blob
 
     in_blob = _bytes_to_blob(ciphertext)
-    ent_blob = _bytes_to_blob(_ENTROPY)
+    ent_blob = _bytes_to_blob(_ENTROPY + entropy)
     out_blob = DATA_BLOB()
     if not ctypes.windll.crypt32.CryptUnprotectData(
         ctypes.byref(in_blob),
@@ -105,6 +105,17 @@ def unprotect_text(blob: bytes) -> str:
     if len(blob) < 5 or blob[:4] != _MAGIC or blob[4] != _VERSION:
         raise ValueError("Invalid secret blob")
     return _unprotect(blob[5:]).decode("utf-8")
+
+
+def protect_bytes(data: bytes, entropy: bytes) -> bytes:
+    """DPAPI for this Windows user, plus ``entropy`` as a second secret (e.g. an
+    account data key): both are needed to decrypt."""
+    return _protect(data, entropy)
+
+
+def unprotect_bytes(blob: bytes, entropy: bytes) -> bytes:
+    """Inverse of :func:`protect_bytes`; raises ``OSError`` on the wrong entropy."""
+    return _unprotect(blob, entropy)
 
 
 def _use_db() -> bool:

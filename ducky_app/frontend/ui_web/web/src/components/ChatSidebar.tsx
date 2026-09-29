@@ -81,9 +81,6 @@ import {
   readContentAllProjects,
   rememberContentAllProjects,
 } from "../utils/contentTreePrefs";
-import { requestOpenAutomationsTab } from "../navigation/openAutomationsTab";
-import { requestOpenPipelinesTab } from "../navigation/openPipelinesTab";
-import { useUiTarget } from "../ui-targets/registry";
 
 function shouldBlockSidebarHotkey(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -367,16 +364,6 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
   });
   const { confirm } = useConfirmModal();
   const undoHistory = useUndoHistoryOptional();
-  const automationsTargetRef = useUiTarget("header.automations", {
-    kind: "button",
-    label: "Automations",
-    route: "automations",
-  });
-  const pipelinesTargetRef = useUiTarget("header.pipelines", {
-    kind: "button",
-    label: "Pipelines",
-    route: "pipelines",
-  });
   const { treeRefreshToken, showHiddenFiles, setShowHiddenFiles } = useProjectFilesSettings();
   const [duckiesCompact, setDuckiesCompact] = useState(readDuckiesCompact);
   const toggleDuckiesCompact = useCallback((value: boolean) => {
@@ -1058,20 +1045,6 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
         }}
       >
         <Icons.Search />
-      </SectionIconButton>
-      <SectionIconButton
-        buttonRef={(el) => automationsTargetRef(el)}
-        title="Automations"
-        onClick={() => requestOpenAutomationsTab()}
-      >
-        <Icons.Clock />
-      </SectionIconButton>
-      <SectionIconButton
-        buttonRef={(el) => pipelinesTargetRef(el)}
-        title="Pipelines"
-        onClick={() => requestOpenPipelinesTab()}
-      >
-        <Icons.GitBranch />
       </SectionIconButton>
       <DuckyArchiveDropdown
         archiveChats={archiveChats}

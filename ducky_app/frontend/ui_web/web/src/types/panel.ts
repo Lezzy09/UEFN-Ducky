@@ -252,7 +252,14 @@ export interface AutomationGraphEdgeDto {
   kind: string;
 }
 
+export interface AutomationGraphGroupDto {
+  id: string;
+  name: string;
+  node_ids: string[];
+}
+
 export interface AutomationGraphDto {
+  groups?: AutomationGraphGroupDto[];
   nodes: AutomationGraphNodeDto[];
   edges: AutomationGraphEdgeDto[];
 }
@@ -2302,6 +2309,8 @@ export interface PanelApi {
     template_id?: string,
   ): Promise<{ ok?: boolean; error?: string; template?: AutomationTemplateDto }>;
   delete_custom_automation_template?(template_id: string): Promise<{ ok?: boolean; error?: string }>;
+  list_workflow_versions?(workflowId: string): Promise<{ ok?: boolean; versions?: { id: string; name: string; saved_at: number; node_count: number }[]; error?: string }>;
+  get_workflow_version?(workflowId: string, versionId: string): Promise<{ ok?: boolean; workflow?: AutomationDto; error?: string }>;
   list_automations?(): Promise<{ ok?: boolean; automations?: AutomationSummaryDto[]; pipelines?: AutomationSummaryDto[] }>;
   list_pipelines?(): Promise<{ ok?: boolean; pipelines?: AutomationSummaryDto[]; automations?: AutomationSummaryDto[] }>;
   get_automation?(workflow_id: string): Promise<{

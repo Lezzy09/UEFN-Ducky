@@ -10,6 +10,9 @@ import { storageLine, switchMessage, syncText } from "./scopeBarText";
  * The host also caps it at one call per team per minute. */
 const SYNC_EVERY_MS = 60_000;
 
+/** Help text (plan §13, same words as the web). */
+const DATA_AT_REST ="Plugin data on each PC is encrypted for the signed-in account.";
+
 type Props = {
   pluginId: string;
   /** The plugin's data or scope changed: the pane tells the iframe to re-read. */
@@ -117,15 +120,21 @@ export function PluginScopeBar({ pluginId, onScopeChanged }: Props) {
   };
 
   const waiting = team && status.state === "waiting";
-  const variant = team ? (scope.readOnly && !waiting ? "paused" : "team") : "personal";
+  const locked = status.state === "locked";
+  const variant = team ? (scope.readOnly && !waiting && !locked ? "paused" : "team") : "personal";
   return (
     <div
       className={`plugin-scope-bar plugin-scope-bar--${variant}`}
       role="status"
       aria-label={team ? `Plugin data: team ${scope.label}` : "Plugin data: personal"}
+      title={DATA_AT_REST}
     >
       <span className="plugin-scope-bar__pill">{team ? `TEAM · ${scope.label}` : "PERSONAL"}</span>
-      {waiting ? (
+      {locked ? (
+        <span className="plugin-scope-bar__text">
+          Waiting for your account&apos;s data key. Read-only until you&apos;re back online.
+        </span>
+      ) : waiting ? (
         <span className="plugin-scope-bar__text">Waiting for team data. Read-only until it arrives.</span>
       ) : team && scope.readOnly ? (
         <>
@@ -163,7 +172,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged }: Props) {
               ) : null}
             </>
           ) : (
-            <span className="plugin-scope-bar__text">only on this PC</span>
+            <span className="plugin-scope-bar__text">only on this PC · {DATA_AT_REST}</span>
           )}
         </>
       )}

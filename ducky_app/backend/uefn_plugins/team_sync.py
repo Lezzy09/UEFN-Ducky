@@ -93,10 +93,13 @@ def _item(d: dict[str, Any]) -> tuple[str, str, str] | None:
 
 
 def _local_bytes(scope: dict[str, Any], row: dict[str, Any]) -> bytes | None:
+    """The plaintext the server gets (sealed on this PC only, plan §13)."""
+    from backend.uefn_plugins.data_crypto import open_bytes, open_text
+
     if row["kind"] == "doc":
-        return None if row["value"] is None else row["value"].encode("utf-8")
+        return None if row["value"] is None else open_text(row["value"], scope["account"]).encode("utf-8")
     path = scopes.asset_file(scope, row["plugin_id"], row["key"])
-    return path.read_bytes() if path.is_file() else None
+    return open_bytes(path.read_bytes(), scope["account"]) if path.is_file() else None
 
 
 def _drop_local(scope: dict[str, Any], kind: str, pid: str, key: str) -> None:
@@ -106,14 +109,16 @@ def _drop_local(scope: dict[str, Any], kind: str, pid: str, key: str) -> None:
 
 
 def _store(scope: dict[str, Any], kind: str, pid: str, key: str, data: bytes, rev: int) -> None:
+    from backend.uefn_plugins.data_crypto import seal_bytes, seal_text
+
     sha = hashlib.sha256(data).hexdigest()
     if kind == "asset":
-        scopes.write_asset_bytes(scopes.asset_file(scope, pid, key), data)
+        scopes.write_asset_bytes(scopes.asset_file(scope, pid, key), seal_bytes(data, scope["account"]))
         repo.put(scope["account"], scope["id"], pid, kind, key, value=None, size=len(data), sha256=sha,
                  dirty=False, rev=rev)
     else:
-        repo.put(scope["account"], scope["id"], pid, kind, key, value=data.decode("utf-8"), size=len(data),
-                 sha256=sha, dirty=False, rev=rev)
+        repo.put(scope["account"], scope["id"], pid, kind, key, value=seal_text(data.decode("utf-8"), scope["account"]),
+                 size=len(data), sha256=sha, dirty=False, rev=rev)
 
 
 def _download(t: Transport, item: dict[str, Any]) -> bytes:
@@ -228,6 +233,11 @@ def first_pull(account: str, team: str, *, timeout: float = FIRST_PULL_WAIT_S) -
 
 
 def _round(account: str, team: str, cursor: int, t: Transport, now: Callable[[], float]) -> dict[str, Any]:
+    from backend.uefn_plugins.data_crypto import available
+
+    if not available(account):
+        # Without the account's data key nothing can be sealed or opened: wait, touch nothing.
+        return {"state": "locked", "changed": [], "error": ""}
     scope = {"account": account, "id": team, "kind": "team"}
     changed: set[str] = set()
     errors: list[str] = []
@@ -357,6 +367,7 @@ def scope_status() -> dict[str, Any]:
         "scope": scopes.scope_view(scope),
         "email": str(get_status().get("email") or ""),
         "canChange": account != scopes.LOCAL and bool(scopes.current_project()),
+        "state": scope["state"],
     }
     if scope["kind"] == "team":
         st = repo.sync_get(account, scope["id"])

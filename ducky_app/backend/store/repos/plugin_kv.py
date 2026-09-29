@@ -83,24 +83,18 @@ def delete_prefix(plugin_id: str, prefix: str, *, account: str, scope: str) -> l
     return cleared
 
 
-def all_prefs(*, account: str, scope: str) -> dict[str, dict[str, Any]]:
+def all_prefs(*, account: str, scope: str) -> dict[str, tuple[str, bool]]:
+    """``{plugin_id: (stored value, encrypted)}`` of every prefs row; the caller unseals."""
     rows = db.connect().execute(
-        "SELECT plugin_id, value FROM plugin_kv WHERE account_id=? AND scope_id=? AND key=? ORDER BY plugin_id",
+        "SELECT plugin_id, value, encrypted FROM plugin_kv WHERE account_id=? AND scope_id=? AND key=? "
+        "ORDER BY plugin_id",
         (account, scope, PREFS_KEY),
     ).fetchall()
-    out: dict[str, dict[str, Any]] = {}
-    for pid, value in rows:
-        try:
-            slot = json.loads(value)
-        except ValueError:
-            continue
-        if isinstance(slot, dict):
-            out[str(pid)] = slot
-    return out
+    return {str(pid): (str(value), bool(encrypted)) for pid, value, encrypted in rows}
 
 
-def set_prefs(plugin_id: str, slot: dict[str, Any], *, account: str, scope: str) -> None:
-    set(plugin_id, PREFS_KEY, slot, account=account, scope=scope)
+def set_prefs(plugin_id: str, sealed: str, *, account: str, scope: str) -> None:
+    set(plugin_id, PREFS_KEY, None, encrypted_b64=sealed, account=account, scope=scope)
 
 
 def has_rows() -> bool:
@@ -119,6 +113,27 @@ def claim_unclaimed(account: str) -> int:
         cur = conn.execute("UPDATE OR IGNORE plugin_kv SET account_id=? WHERE account_id=?", (account, UNCLAIMED))
         conn.execute("DELETE FROM plugin_kv WHERE account_id=?", (UNCLAIMED,))
     return max(cur.rowcount, 0)
+
+
+def unsealed_rows(account: str, prefix: str) -> list[tuple[str, str, str, str, int]]:
+    """``(plugin_id, scope, key, value, encrypted)`` of the account's rows not yet sealed."""
+    rows = db.connect().execute(
+        "SELECT plugin_id, scope_id, key, value, encrypted FROM plugin_kv WHERE account_id=? AND value NOT LIKE ?",
+        (account, prefix + "%"),
+    ).fetchall()
+    return [(str(r[0]), str(r[1]), str(r[2]), str(r[3]), int(r[4])) for r in rows]
+
+
+def replace_value(plugin_id: str, key: str, value: str, *, account: str, scope: str, old: str) -> bool:
+    """Swap one row's value for its sealed form, only if nobody changed it meanwhile."""
+    conn = db.connect()
+    with db.write_txn(conn):
+        cur = conn.execute(
+            "UPDATE plugin_kv SET value=?, encrypted=1 WHERE account_id=? AND scope_id=? AND plugin_id=? AND key=? "
+            "AND value=?",
+            (value, account, scope, plugin_id, key, old),
+        )
+    return cur.rowcount > 0
 
 
 def delete_scope(account: str, scope: str) -> None:

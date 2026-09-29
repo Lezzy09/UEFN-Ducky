@@ -478,6 +478,11 @@ export function Header({
     label: "Settings",
     route: "settings",
   });
+  const workflowsTargetRef = useUiTarget("header.automations", {
+    kind: "button",
+    label: "Workflows",
+    route: "automations",
+  });
   const changesTargetRef = useUiTarget("header.changes", {
     kind: "button",
     label: "Ledger",
@@ -622,7 +627,7 @@ export function Header({
       ) : null}
 
       <div className={`app-header-trailing${isSettingsOverlay ? " app-header-trailing--settings" : ""}`}>
-        {showWorkflow || terminalAction || problemsAction || showChanges ? (
+        {showEditorActions ? (
           <span className="app-header-editor-actions">
             {showWorkflow && workflowAction ? (
               <div
@@ -661,6 +666,16 @@ export function Header({
                 <TerminalHeaderDropdown {...terminalAction} />
               </span>
             ) : null}
+            <button
+                ref={workflowsTargetRef}
+                type="button"
+                className="icon-btn no-drag"
+                title="Workflows"
+                aria-label="Open Workflows"
+                onClick={() => requestOpenAutomationsTab()}
+              >
+                <Icons.GitBranch />
+            </button>
             {showChanges ? (
               <button
                 ref={changesTargetRef}

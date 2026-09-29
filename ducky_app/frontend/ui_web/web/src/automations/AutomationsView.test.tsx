@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { AutomationsView } from "./AutomationsView";
 import type { AutomationDto } from "../types/panel";
 
-const api = vi.hoisted(() => ({ list_automations: vi.fn(), list_automation_nodes: vi.fn(), get_automation: vi.fn(), save_automation: vi.fn(), run_automation: vi.fn(), delete_automation: vi.fn(), list_pipelines: vi.fn(), list_pipeline_nodes: vi.fn(), get_pipeline: vi.fn(), save_pipeline: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn() }));
+const api = vi.hoisted(() => ({ list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_automations: vi.fn(), list_automation_nodes: vi.fn(), get_automation: vi.fn(), save_automation: vi.fn(), run_automation: vi.fn(), delete_automation: vi.fn(), list_pipelines: vi.fn(), list_pipeline_nodes: vi.fn(), get_pipeline: vi.fn(), save_pipeline: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
 vi.mock("./AutomationTemplatePicker", () => ({ AutomationTemplatePicker: ({ open, system, onSelect }: { open: boolean; system: string; onSelect: (template: null) => void }) => open ? <button onClick={() => onSelect(null)}>Create {system}</button> : null }));
 
@@ -25,6 +25,8 @@ beforeEach(() => {
       { id: "b", type: "flow.wait", label: "Continue", x: 560, y: 0, config: {} },
     ], edges: [{ source: "s", target: "a", kind: "main" }],
   } };
+  api.list_workflow_versions.mockResolvedValue({ ok: true, versions: [] });
+  api.get_workflow_version.mockResolvedValue({ ok: false });
   api.get_mcp_tools_catalog.mockResolvedValue({ tools: [] });
   api.list_automations.mockResolvedValue({ automations: [{ id: "p", name: "Daily check", enabled: true }] });
   api.list_automation_nodes.mockResolvedValue({ nodes: [{ type: "start.cron", label: "Schedule", role: "starter", group: "Triggers" }] });
@@ -317,6 +319,30 @@ describe("pipeline editor interactions", () => {
 });
 
 describe("combined Workflows editor", () => {
+  it("hides the workflow toolbar until a workflow is selected and after it is removed", async () => {
+    render(<AutomationsView kind="pipeline" />);
+    await screen.findByText("Example");
+    expect(screen.queryByRole("toolbar", { name: "Workflow actions" })).toBeNull();
+    fireEvent.click(screen.getByText("Daily check"));
+    await screen.findByDisplayValue("Daily check");
+    expect(screen.getByRole("toolbar", { name: "Workflow actions" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Delete", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Workflow actions" })).toBeNull());
+  });
+  it("collapses the entire list without losing the graph or individual section states", async () => {
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: "Automations", exact: true }));
+    const toggle = screen.getByRole("button", { name: "Workflows", exact: true });
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: "Pipelines", exact: true })).toBeNull();
+    expect(screen.getByDisplayValue("Example")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Connect from Pause" })).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: "Pipelines", exact: true }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: "Automations", exact: true }).getAttribute("aria-expanded")).toBe("false");
+  });
   it("collapses each section independently and switches catalogs without mixing matching IDs", async () => {
     await open();
     const pipelines = screen.getByRole("button", { name: "Pipelines", exact: true });
@@ -433,5 +459,204 @@ describe("inline node editing", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     expect(saved.graph.nodes[1].label).toBe("Wait for UEFN");
+  });
+});
+
+describe("workflow multi-selection and groups", () => {
+  const canvas = () => document.querySelector('.aw-board')!;
+  const node = (id: string) => document.querySelector(`.aw-node[data-aw-node="${id}"]`)!;
+  const selected = () => [...document.querySelectorAll('.aw-node.is-selected')].map((el) => el.getAttribute('data-aw-node'));
+  const ctrlClick = (id: string) => {
+    fireEvent.pointerDown(node(id), { button: 0, ctrlKey: true, pointerId: 7 });
+    fireEvent.pointerUp(canvas(), { button: 0, ctrlKey: true, pointerId: 7 });
+  };
+  const shortcut = (shiftKey = false) => fireEvent.keyDown(canvas(), { key: 'g', ctrlKey: true, shiftKey });
+  async function makeGroup() {
+    await open();
+    ctrlClick('s'); ctrlClick('a'); shortcut();
+    await waitFor(() => expect(saved.graph.groups?.[0].node_ids).toEqual(['s', 'a']));
+  }
+
+  it("toggles Ctrl-click selection, including on editable node titles without editing", async () => {
+    await open();
+    ctrlClick('s'); ctrlClick('a');
+    expect(selected()).toEqual(['s', 'a']);
+    ctrlClick('s');
+    expect(selected()).toEqual(['a']);
+    const title = node('b').querySelector('.aw-inline-text')!;
+    fireEvent.pointerDown(title, { button: 0, ctrlKey: true });
+    fireEvent.click(title, { ctrlKey: true });
+    expect(selected()).toEqual(['a', 'b']);
+    expect(screen.queryByRole('textbox', { name: 'Node name' })).toBeNull();
+    expect(api.save_pipeline).not.toHaveBeenCalled();
+  });
+
+  it("box-selects backwards at non-default zoom without panning or moving nodes", async () => {
+    await open();
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }));
+    const transform = (document.querySelector('.aw-world') as HTMLElement).style.transform;
+    const zoom = 1 / 1.2;
+    const start = { button: 0, ctrlKey: true, shiftKey: true, pointerId: 4, clientX: 280 + 520 * zoom, clientY: 160 + 100 * zoom };
+    const end = { ...start, clientX: 280 - 20 * zoom, clientY: 160 - 20 * zoom };
+    fireEvent.pointerDown(canvas(), start);
+    fireEvent.pointerMove(canvas(), end);
+    expect(document.querySelector('.aw-selection-box')).toBeTruthy();
+    expect(selected()).toEqual(['s', 'a']);
+    fireEvent.pointerUp(canvas(), end);
+    expect(document.querySelector('.aw-selection-box')).toBeNull();
+    expect((document.querySelector('.aw-world') as HTMLElement).style.transform).toBe(transform);
+    shortcut();
+    await waitFor(() => expect(saved.graph.groups?.[0].node_ids).toEqual(['s', 'a']));
+    expect(saved.graph.nodes.map(({ x, y }) => [x, y])).toEqual([[0, 0], [280, 0], [560, 0]]);
+  });
+
+  it.each(['pointercancel', 'Escape', 'blur'])("cancels box selection on %s and restores the prior selection", async (end) => {
+    await open(); ctrlClick('b');
+    fireEvent.pointerDown(canvas(), { button: 0, ctrlKey: true, shiftKey: true, pointerId: 4, clientX: 260, clientY: 140 });
+    fireEvent.pointerMove(canvas(), { pointerId: 4, clientX: 810, clientY: 260 });
+    expect(selected()).toEqual(['s', 'a', 'b']);
+    if (end === 'pointercancel') fireEvent.pointerCancel(canvas(), { pointerId: 4 });
+    else if (end === 'blur') fireEvent.blur(window);
+    else fireEvent.keyDown(canvas(), { key: 'Escape' });
+    expect(selected()).toEqual(['b']);
+    expect(document.querySelector('.aw-selection-box')).toBeNull();
+  });
+
+  it("drags all selected nodes together while leaving unselected nodes alone", async () => {
+    await open(); ctrlClick('s'); ctrlClick('a');
+    fireEvent.pointerDown(node('a').querySelector('.aw-node-body')!, { button: 0, pointerId: 3, clientX: 580, clientY: 180 });
+    fireEvent.pointerMove(canvas(), { pointerId: 3, clientX: 660, clientY: 220 });
+    fireEvent.pointerUp(canvas(), { pointerId: 3, clientX: 660, clientY: 220 });
+    expect(selected()).toEqual(['s', 'a']);
+    await save();
+    expect(saved.graph.nodes.map(({ x, y }) => [x, y])).toEqual([[80, 40], [360, 40], [560, 0]]);
+  });
+
+  it("persists a group, edits its outside name, and retains it on reload", async () => {
+    await makeGroup();
+    expect(document.querySelector('.aw-group-title .aw-inline-text')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit group name' }));
+    const input = screen.getByRole('textbox', { name: 'Group name' });
+    fireEvent.change(input, { target: { value: 'Island setup' } });
+    fireEvent.keyDown(input, { key: 'g', ctrlKey: true, shiftKey: true });
+    expect(saved.graph.groups).toHaveLength(1);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(saved.graph.groups?.[0].name).toBe('Island setup'));
+    fireEvent.click(screen.getByText('Example'));
+    await screen.findByRole('button', { name: 'Select group Island setup' });
+    expect(selected()).toEqual([]);
+  });
+
+  it("removes only a selected member, shrinks the box, then removes an empty group", async () => {
+    await makeGroup();
+    expect((document.querySelector('.aw-group') as HTMLElement).style.width).toBe('528px');
+    fireEvent.pointerDown(node('a').querySelector('.aw-node-body')!, { button: 0, pointerId: 3 });
+    fireEvent.pointerUp(canvas(), { button: 0, pointerId: 3 });
+    expect(selected()).toEqual(['a']);
+    shortcut(true);
+    await waitFor(() => expect(saved.graph.groups?.[0].node_ids).toEqual(['s']));
+    expect((document.querySelector('.aw-group') as HTMLElement).style.width).toBe('248px');
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Select group Group' }), { button: 0, pointerId: 5 });
+    fireEvent.pointerUp(canvas(), { pointerId: 5 });
+    shortcut(true);
+    await waitFor(() => expect(saved.graph.groups).toEqual([]));
+    expect(document.querySelector('.aw-group')).toBeNull();
+    expect(saved.graph.nodes).toHaveLength(3);
+    expect(saved.graph.edges).toHaveLength(1);
+  });
+
+  it("moves a group as a unit, updates its box, and ungroups all members", async () => {
+    await makeGroup();
+    const group = screen.getByRole('button', { name: 'Select group Group' });
+    fireEvent.pointerDown(group, { button: 0, pointerId: 5, clientX: 260, clientY: 140 });
+    fireEvent.pointerMove(canvas(), { pointerId: 5, clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(canvas(), { pointerId: 5, clientX: 300, clientY: 200 });
+    expect((group as HTMLElement).style.left).toBe('16px');
+    expect((group as HTMLElement).style.top).toBe('36px');
+    shortcut(true);
+    await waitFor(() => expect(saved.graph.groups).toEqual([]));
+    expect(saved.graph.nodes.map(({ x, y }) => [x, y])).toEqual([[40, 60], [320, 60], [560, 0]]);
+  });
+
+  it("keeps names readable as zoom decreases and cleans membership when a node is deleted", async () => {
+    await makeGroup();
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }));
+    expect((document.querySelector('.aw-group-title') as HTMLElement).style.transform).toBe('scale(1.2)');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Pause' }));
+    await save();
+    expect(saved.graph.groups?.[0].node_ids).toEqual(['s']);
+    expect((document.querySelector('.aw-group') as HTMLElement).style.width).toBe('248px');
+  });
+
+  it("reports group save failures and keeps the group for a retry", async () => {
+    await open();
+    api.save_pipeline.mockRejectedValueOnce(new Error('offline'));
+    ctrlClick('s'); ctrlClick('a'); shortcut();
+    await screen.findByRole('alert');
+    expect(document.querySelector('.aw-group')).toBeTruthy();
+    await save();
+    await waitFor(() => expect(saved.graph.groups?.[0].node_ids).toEqual(['s', 'a']));
+  });
+});
+
+
+describe("workflow history controls", () => {
+  it("shows only the workflow name and supports keyboard undo/redo after saving", async () => {
+    await open();
+    expect(screen.queryByLabelText("Workflow description")).toBeNull();
+    expect(screen.getByRole("button", { name: "Undo", exact: true }).hasAttribute("disabled")).toBe(true);
+    const name = screen.getByRole("textbox", { name: "Workflow name" });
+    fireEvent.focus(name);
+    fireEvent.change(name, { target: { value: "Ren" } });
+    fireEvent.change(name, { target: { value: "Renamed" } });
+    fireEvent.blur(name);
+    await waitFor(() => expect(saved.name).toBe("Renamed"));
+    const board = document.querySelector(".aw-board")!;
+    fireEvent.keyDown(board, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(saved.name).toBe("Example"));
+    fireEvent.keyDown(board, { key: "y", ctrlKey: true });
+    await waitFor(() => expect(saved.name).toBe("Renamed"));
+    fireEvent.keyDown(name, { key: "z", ctrlKey: true });
+    expect((name as HTMLInputElement).value).toBe("Renamed");
+  });
+
+  it("undoes an entire drag once and invalidates redo after a new edit", async () => {
+    await open();
+    const node = document.querySelector('[data-aw-node="a"] .aw-node-body')!;
+    const board = document.querySelector(".aw-board")!;
+    fireEvent.pointerDown(node, { button: 0, pointerId: 1, clientX: 600, clientY: 200 });
+    fireEvent.pointerMove(board, { pointerId: 1, clientX: 620, clientY: 200 });
+    fireEvent.pointerMove(board, { pointerId: 1, clientX: 640, clientY: 200 });
+    fireEvent.pointerUp(board, { pointerId: 1, clientX: 640, clientY: 200 });
+    fireEvent.keyDown(board, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(api.save_pipeline).toHaveBeenCalled());
+    expect(saved.graph.nodes[1].x).toBe(280);
+    expect(screen.getByRole("button", { name: "Undo", exact: true }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Enabled", exact: true }));
+    expect(screen.getByRole("button", { name: "Redo", exact: true }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("restores saved versions as undoable new saves, retaining run history", async () => {
+    saved.runs = [{ ok: true, steps: [] }];
+    const old = { ...structuredClone(saved), name: "Earlier", graph: { ...saved.graph, groups: [{ id: "g", name: "Setup", node_ids: ["a", "b"] }] } };
+    api.list_workflow_versions.mockResolvedValue({ ok: true, versions: [{ id: "v1", name: "Earlier", saved_at: 100, node_count: 3 }] });
+    api.get_workflow_version.mockResolvedValue({ ok: true, workflow: old });
+    await open();
+    dropdown("History");
+    fireEvent.click(await screen.findByRole("radio", { name: /Version 1 · Earlier/ }));
+    await waitFor(() => expect(saved.name).toBe("Earlier"));
+    expect(saved.graph.groups?.[0].name).toBe("Setup");
+    expect(saved.runs).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Undo", exact: true }));
+    await waitFor(() => expect(saved.name).toBe("Example"));
+    expect(saved.graph.groups).toBeUndefined();
+  });
+
+  it("does not mix histories between pipeline and automation with the same id", async () => {
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: "Enabled", exact: true }));
+    fireEvent.click(screen.getByText("Daily check"));
+    await screen.findByDisplayValue("Daily check");
+    expect(screen.getByRole("button", { name: "Undo", exact: true }).hasAttribute("disabled")).toBe(true);
   });
 });
