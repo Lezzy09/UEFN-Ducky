@@ -178,9 +178,11 @@ Toggles (native Settings, not a custom form):
 Data lives in `api.data`, never in a folder you pick (no `%LOCALAPPDATA%` paths,
 no `db.json`): **one JSON doc per record** (`data.put("item.<id>", {...})`,
 `data.get`, `data.items("item.")`, `data.delete`) and files through
-`data.put_file(path, bytes)` / `data.file_path(path)` / `data.delete_file`. Keys are
-`[a-z0-9._-]`, file paths `[a-z0-9._/-]`. The host keeps the data per account and
-scope; a scope can be read-only, so let write errors surface as tool errors.
+`data.put_file(path, bytes)` / `data.get_file(path)` / `data.has_file(path)` /
+`data.delete_file` (files are encrypted on disk, so there is no path to read).
+Keys are `[a-z0-9._-]`, file paths `[a-z0-9._/-]`. The host keeps the data per
+account and scope, encrypted for the signed-in account; a scope can be read-only,
+so let write errors surface as tool errors.
 
 ```python
 from __future__ import annotations

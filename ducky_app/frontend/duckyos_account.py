@@ -99,15 +99,28 @@ def account_key(blob: dict[str, Any] | None = None) -> str:
     return f"{str(b.get('base_url') or '').rstrip('/')}|{who}"
 
 
-def _note_account_change(before: str, after: str) -> None:
-    # Login / logout / expiry all land here: the panel drops account-scoped
-    # caches (Store catalog) so one account never sees another's team items.
-    if before == after:
+def _note_login_change(before: dict[str, Any], after: dict[str, Any]) -> None:
+    """Login / logout / expiry / unpair all land here (the one login funnel).
+
+    The account data key cache (wrapped with the old device token) goes with the
+    old login (plan §13); a new sign-in fetches the new account's key in the
+    background. The panel drops account-scoped caches (Store catalog, prefs) so one
+    account never sees another's."""
+    signed_in = account_key(after) and account_key(after) != account_key(before)
+    try:
+        from backend.uefn_plugins.data_crypto import on_login_change, prefetch
+
+        on_login_change(before, after)
+        if signed_in:
+            prefetch()
+    except Exception:
+        pass
+    if account_key(before) == account_key(after):
         return
     try:
         from frontend.ui_web.agent_modes import push_ui_event
 
-        push_ui_event({"type": "duckyos_account_changed", "account": after})
+        push_ui_event({"type": "duckyos_account_changed", "account": account_key(after)})
     except Exception:
         pass
 
@@ -115,21 +128,21 @@ def _note_account_change(before: str, after: str) -> None:
 def _save_blob(data: dict[str, Any]) -> None:
     from backend.agent.secrets import clear_key, set_key
 
-    before = account_key()
+    before = _load_blob()
     cleaned = {k: v for k, v in data.items() if v not in (None, "", [], {})}
     if cleaned:
         set_key(_CREDENTIALS_KEY, json.dumps(cleaned, separators=(",", ":")))
     else:
         clear_key(_CREDENTIALS_KEY)
-    _note_account_change(before, account_key(cleaned))
+    _note_login_change(before, cleaned)
 
 
 def _clear_blob() -> None:
     from backend.agent.secrets import clear_key
 
-    before = account_key()
+    before = _load_blob()
     clear_key(_CREDENTIALS_KEY)
-    _note_account_change(before, "")
+    _note_login_change(before, {})
 
 
 def pkce_pair() -> tuple[str, str]:

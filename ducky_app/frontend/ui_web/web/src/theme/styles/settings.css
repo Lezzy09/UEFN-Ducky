@@ -5938,9 +5938,9 @@
 
 .plans-tab-detail-md {
   margin-top: 20px;
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--text-secondary, #bbb);
+  font-size: var(--chat-text-size, 14px);
+  line-height: 1.55;
+  color: var(--fg);
 }
 
 .plans-tab-detail-scroll {

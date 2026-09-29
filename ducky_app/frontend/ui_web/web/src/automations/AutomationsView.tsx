@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useWorkflowHistory, editableWorkflow } from "./useWorkflowHistory";
 import { AutomationTemplatePicker } from "./AutomationTemplatePicker";
 import { NodeSettings, hasNodeSettings } from "./NodeSettings";
 import { InlineNodeText } from "./InlineNodeText";
@@ -19,6 +20,7 @@ import { copyText } from "../utils/copyText";
 import { formatRunLog, runLogHasContent } from "./runLog";
 
 import { isEndNode, nodeLabel, NodeIcon, useNodeFaces } from "./NodeVisuals";
+import { cleanGroups, groupBounds, groupNodes, intersects, selectionRect, ungroupNodes, type GraphRect } from "./workflowGroups";
 import { arrangeGraph, nodeWidth, portPoint, zoomAt, OVERVIEW_ZOOM } from "./graphGeometry";
 const LOG_H_MIN = 140;
 const LOG_H_MAX = 560;
@@ -61,6 +63,7 @@ const WORKFLOW_SECTIONS = [{ kind: "pipeline", label: "Pipelines" }, { kind: "au
 
 export function AutomationsView({ kind: initialKind = "automation" }: { kind?: WorkflowKind }) {
   const sectionId = useId();
+  const [listCollapsed, setListCollapsed] = useState(false);
   const [kind, setKind] = useState<WorkflowKind>(initialKind);
   const [rows, setRows] = useState<Record<WorkflowKind, AutomationSummaryDto[]>>({ pipeline: [], automation: [] });
   const [sectionsOpen, setSectionsOpen] = useState({ pipeline: true, automation: true });
@@ -69,8 +72,14 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [catalog, setCatalog] = useState<AutomationNodeDto[]>([]);
   const [selectedId, setSelectedId] = useState("");
-  const [draft, setDraft] = useState<AutomationDto | null>(null);
-  const [selectedNodeId, setSelectedNodeId] = useState("");
+  const history = useWorkflowHistory();
+  const { draft, setDraft, replace: acknowledgeDraft, reset: resetDraft, begin: beginEdit, end: endEdit } = history;
+  const [versions, setVersions] = useState<{ id: string; name: string; saved_at: number; node_count: number }[]>([]);
+  const [historyStatus, setHistoryStatus] = useState("");
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+  const [nodeHeights, setNodeHeights] = useState<Record<string, number>>({});
+  const [marquee, setMarquee] = useState<GraphRect | null>(null);
+  const marqueeRef = useRef<{ pointerId: number; start: { x: number; y: number }; base: string[] } | null>(null);
   const [expandedId, setExpandedId] = useState("");
   const [selectedEdge, setSelectedEdge] = useState<number | null>(null);
   const [groupsCollapsed, setGroupsCollapsed] = useState(false);
@@ -96,7 +105,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
   const spawnSearchRef = useRef<HTMLInputElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const boardRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  const dragRef = useRef<{ start: { x: number; y: number }; origins: { id: string; x: number; y: number }[]; clickIds: string[]; moved: boolean } | null>(null);
   const panRef = useRef<{ x: number; y: number; px: number; py: number; button: number; moved: boolean } | null>(null);
   const touches = useRef(new Map<number, { x: number; y: number }>());
   const pinch = useRef<{ distance: number; center: { x: number; y: number }; pan: { x: number; y: number }; zoom: number } | null>(null);
@@ -155,16 +164,18 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
     const row = res?.automation || res?.pipeline;
     if (row) {
       setKind(targetKind);
-      setDraft({ ...row, kind: targetKind });
+      resetDraft({ ...row, kind: targetKind });
+      setVersions([]);
+      setHistoryStatus("");
       setSectionsOpen((current) => ({ ...current, [targetKind]: true }));
       setSelectedId(id);
       setSpawn(null);
-      setSelectedNodeId("");
+      setSelectedNodeIds([]);
       setSelectedEdge(null);
       setExpandedId("");
       setLog((row.runs || []).slice(-1)[0] || null);
     }
-  }, []);
+  }, [resetDraft]);
 
   useEffect(() => {
     const open = (id: string, targetKind: WorkflowKind) => {
@@ -196,7 +207,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
       window.removeEventListener("ducky:focus-graph", onFocus);
       window.removeEventListener("ducky:graph-deleted", onDeleted);
     };
-  }, [loadOne, refreshList]);
+  }, [loadOne, refreshList, setDraft]);
 
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const [textSaveError, setTextSaveError] = useState(false);
@@ -211,18 +222,18 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
     if (row) {
       if (gen === loadGen.current) {
         setKind(targetKind);
-        setDraft((current) => !next.id || current === next ? { ...row, kind: targetKind } : current);
+        acknowledgeDraft((current) => !next.id || current === next ? { ...row, kind: targetKind } : current);
         setSelectedId(row.id);
         setSectionsOpen((current) => ({ ...current, [targetKind]: true }));
       }
       await refreshList();
       return row;
     }
-    return next;
+    throw new Error(res?.error || "Could not save workflow");
     });
     saveQueue.current = operation.catch(() => undefined);
     return operation;
-  }, [refreshList]);
+  }, [refreshList, acknowledgeDraft]);
 
   const createNew = (targetKind: WorkflowKind) => {
     setPickerKind(targetKind);
@@ -241,7 +252,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
         graph: template?.graph || emptyGraph(),
       } as AutomationDto);
       if (gen !== loadGen.current) return;
-      setSelectedNodeId("");
+      setSelectedNodeIds([]);
       setSelectedEdge(null);
       setSpawn(null);
       setExpandedId("");
@@ -260,7 +271,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
 
   const patchGraph = (fn: (g: AutomationGraphDto) => AutomationGraphDto) => {
     if (!draft) return;
-    setDraft((current) => current ? { ...current, graph: fn(current.graph) } : current);
+    setDraft((current) => current ? { ...current, graph: cleanGroups(fn(current.graph)) } : current);
   };
 
   const updateNodeText = (id: string, patch: { label?: string; description?: string }) => {
@@ -272,8 +283,8 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
   };
 
   const deleteNode = (id: string) => {
-    patchGraph((graph) => ({ nodes: graph.nodes.filter((node) => node.id !== id), edges: graph.edges.filter((edge) => edge.source !== id && edge.target !== id) }));
-    setSelectedNodeId("");
+    patchGraph((graph) => ({ ...graph, nodes: graph.nodes.filter((node) => node.id !== id), edges: graph.edges.filter((edge) => edge.source !== id && edge.target !== id) }));
+    setSelectedNodeIds([]);
     setExpandedId("");
   };
 
@@ -288,7 +299,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
       description: entry.description || "",
     };
     patchGraph((g) => ({ ...g, nodes: [...g.nodes, node] }));
-    setSelectedNodeId(node.id);
+    setSelectedNodeIds([node.id]);
     setExpandedId("");
     setSpawn(null);
     setSpawnFilter("");
@@ -325,6 +336,133 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
       x: (clientX - board.left - pan.x) / zoom,
       y: (clientY - board.top - pan.y) / zoom,
     };
+  };
+
+  const nodeSize = (node: AutomationGraphNodeDto) => ({
+    width: nodeWidth(node, isExpanded(node.id)),
+    height: nodeHeights[node.id] || (isExpanded(node.id) ? 440 : 76),
+  });
+  const groupBoxes = (graph.groups || []).map((group) => ({ group, bounds: groupBounds(group, graph.nodes, nodeSize) })).filter((entry) => entry.bounds !== null);
+
+  // Measure real settings panels so boxes also follow expanding/resizing node cards.
+  const nodeIdsKey = graph.nodes.map((node) => node.id).join("\n");
+  useEffect(() => {
+    const cards = [...(boardRef.current?.querySelectorAll<HTMLElement>(".aw-node-card") || [])];
+    const measure = () => {
+      const heights: Record<string, number> = {};
+      for (const card of cards) {
+        const id = card.closest("[data-aw-node]")?.getAttribute("data-aw-node");
+        if (id && card.offsetHeight) heights[id] = card.offsetHeight;
+      }
+      setNodeHeights((previous) => Object.keys(previous).length === Object.keys(heights).length && Object.keys(heights).every((id) => heights[id] === previous[id]) ? previous : heights);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    cards.forEach((card) => observer.observe(card));
+    return () => observer.disconnect();
+  }, [nodeIdsKey, selectedId, kind, expandedId, overview]);
+
+  const saveGraphChange = (fn: (current: AutomationGraphDto) => AutomationGraphDto) => {
+    if (!draft) return;
+    const nextGraph = fn(draft.graph);
+    if (nextGraph === draft.graph) return;
+    const next = { ...draft, graph: nextGraph };
+    setDraft(next);
+    setTextSaveError(false);
+    void persist(next).catch(() => setTextSaveError(true));
+  };
+
+  const goToEdit = (index: number) => {
+    const next = history.go(index);
+    if (!next) return;
+    setSelectedNodeIds([]); setSelectedEdge(null); setSpawn(null);
+    void persist(next).then(() => setTextSaveError(false)).catch(() => setTextSaveError(true));
+  };
+
+  const loadVersions = async () => {
+    if (!draft?.id) return;
+    const gen = loadGen.current;
+    setVersions([]); setHistoryStatus("Loading saved versions…");
+    try {
+      await saveQueue.current;
+      const result = await getApi()?.list_workflow_versions?.(draft.id);
+      if (gen !== loadGen.current) return;
+      if (!result || result.ok === false) throw new Error("Could not load versions");
+      setVersions(result.versions || []); setHistoryStatus("");
+    } catch { if (gen === loadGen.current) setHistoryStatus("Could not load saved versions. Reopen History to retry."); }
+  };
+
+  const restoreVersion = async (versionId: string) => {
+    const current = history.current.current;
+    if (!current) return;
+    const gen = loadGen.current;
+    try {
+      const result = await getApi()?.get_workflow_version?.(current.id, versionId);
+      if (gen !== loadGen.current) return;
+      if (!result?.workflow || result.ok === false) throw new Error("Version not found");
+      // Keep any in-flight edits in the journal and retain the current identity and run log.
+      const next = { ...history.current.current!, ...editableWorkflow(result.workflow) };
+      endEdit(); setDraft(next, "Restore saved version");
+      setSelectedNodeIds([]); setSelectedEdge(null); setExpandedId("");
+      await persist(next); setTextSaveError(false); setHistoryStatus("");
+    } catch { if (gen === loadGen.current) { setTextSaveError(true); setHistoryStatus("Could not restore version."); } }
+  };
+
+  const onGraphKeyDown = (event: React.KeyboardEvent) => {
+    if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable='true']")) return;
+    const key = event.key.toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && (key === "z" || key === "y") && draft) {
+      event.preventDefault(); event.stopPropagation();
+      goToEdit(history.index + (key === "y" || event.shiftKey ? 1 : -1));
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && key === "g" && draft) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat) return;
+      saveGraphChange((current) => event.shiftKey ? ungroupNodes(current, selectedNodeIds) : groupNodes(current, selectedNodeIds, nid()));
+    } else if (event.key === "Escape") {
+      endEdit();
+      if (marqueeRef.current) setSelectedNodeIds(marqueeRef.current.base);
+      else setSelectedNodeIds([]);
+      marqueeRef.current = null;
+      setMarquee(null);
+      dragRef.current = null;
+    }
+  };
+
+  const toggleNodeSelection = (event: React.PointerEvent, id: string) => {
+    if (event.button !== 0 || !(event.ctrlKey || event.metaKey) || event.shiftKey) return;
+    if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable='true']")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    boardRef.current?.focus({ preventScroll: true });
+    setSelectedEdge(null);
+    setSelectedNodeIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  };
+
+  const startSelectionDrag = (event: React.PointerEvent, ids: string[], clickIds = ids) => {
+    event.preventDefault();
+    event.stopPropagation();
+    boardRef.current?.focus({ preventScroll: true });
+    setSelectedEdge(null);
+    setSelectedNodeIds(ids);
+    beginEdit();
+    dragRef.current = {
+      start: worldFromClient(event.clientX, event.clientY),
+      origins: graph.nodes.filter((node) => ids.includes(node.id)).map(({ id, x, y }) => ({ id, x, y })),
+      clickIds, moved: false,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const updateMarquee = (clientX: number, clientY: number) => {
+    const selection = marqueeRef.current;
+    if (!selection) return;
+    const bounds = selectionRect(selection.start, worldFromClient(clientX, clientY));
+    setMarquee(bounds);
+    setSelectedNodeIds([...new Set([...selection.base, ...graph.nodes.filter((node) => intersects(bounds, { x: node.x, y: node.y, ...nodeSize(node) })).map((node) => node.id)])]);
   };
 
   const onBoardWheel = (e: React.WheelEvent) => {
@@ -369,14 +507,14 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
   };
 
   const onBoardPointerDown = (e: React.PointerEvent) => {
-    if (pinch.current || (e.target instanceof Element && e.target.closest("button, input, textarea, select, .aw-node-props, .aw-wire"))) return;
+    if (marqueeRef.current || pinch.current || (e.target instanceof Element && e.target.closest("button, input, textarea, select, .aw-node-props, .aw-wire"))) return;
     if ([0, 1, 2].includes(e.button)) {
       e.preventDefault();
       panRef.current = { x: pan.x, y: pan.y, px: e.clientX, py: e.clientY, button: e.button, moved: false };
       e.currentTarget.setPointerCapture(e.pointerId);
     }
     if (e.button === 0) {
-      setSelectedNodeId("");
+      setSelectedNodeIds([]);
       setWireFrom(null);
       setSelectedEdge(null);
       setSpawn(null);
@@ -384,6 +522,16 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
   };
 
   const onBoardPointerCapture = (e: React.PointerEvent) => {
+    if (draft && e.button === 0 && (e.ctrlKey || e.metaKey) && e.shiftKey && !(e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable='true']"))) {
+      e.preventDefault(); e.stopPropagation();
+      boardRef.current?.focus({ preventScroll: true });
+      marqueeRef.current = { pointerId: e.pointerId, start: worldFromClient(e.clientX, e.clientY), base: selectedNodeIds };
+      dragRef.current = null; panRef.current = null; resizeRef.current = null;
+      setSelectedEdge(null); setSpawn(null);
+      setMarquee({ ...marqueeRef.current.start, width: 0, height: 0 });
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
     if (e.pointerType !== "touch" || (e.target instanceof Element && e.target.closest(".aw-node-props, .aw-log-dock, .aw-inline-edit, .choice-dropdown-menu, input, textarea, select"))) return;
     touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (touches.current.size !== 2) return;
@@ -398,6 +546,10 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
 
   const onBoardPointerMove = (e: React.PointerEvent) => {
     e.stopPropagation();
+    if (marqueeRef.current) {
+      if (e.pointerId === marqueeRef.current.pointerId) updateMarquee(e.clientX, e.clientY);
+      return;
+    }
     if (touches.current.has(e.pointerId)) touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pinch.current && touches.current.size >= 2) {
       const [a, b] = [...touches.current.values()];
@@ -430,14 +582,15 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
     }
     const drag = dragRef.current;
     if (!drag || !draft) return;
-    const board = boardRef.current?.getBoundingClientRect();
-    if (!board) return;
-    const x = (e.clientX - board.left - pan.x) / zoom - drag.dx;
-    const y = (e.clientY - board.top - pan.y) / zoom - drag.dy;
-    patchGraph((g) => ({
-      ...g,
-      nodes: g.nodes.map((n) => (n.id === drag.id ? { ...n, x, y } : n)),
-    }));
+    const point = worldFromClient(e.clientX, e.clientY);
+    const dx = point.x - drag.start.x, dy = point.y - drag.start.y;
+    if (Math.hypot(dx, dy) * zoom > 3) drag.moved = true;
+    if (!drag.moved) return;
+    const origins = new Map(drag.origins.map((node) => [node.id, node]));
+    patchGraph((g) => ({ ...g, nodes: g.nodes.map((node) => {
+      const origin = origins.get(node.id);
+      return origin ? { ...node, x: origin.x + dx, y: origin.y + dy } : node;
+    }) }));
   };
 
   const connectNodes = (sourceId: string, targetId: string) => {
@@ -476,6 +629,15 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
 
   const endPointer = (e: React.PointerEvent) => {
     e.stopPropagation();
+    endEdit();
+    if (marqueeRef.current) {
+      if (e.pointerId !== marqueeRef.current.pointerId) return;
+      if (e.type === "pointercancel") setSelectedNodeIds(marqueeRef.current.base);
+      else updateMarquee(e.clientX, e.clientY);
+      marqueeRef.current = null; setMarquee(null);
+      return;
+    }
+    if (dragRef.current && !dragRef.current.moved && e.type !== "pointercancel") setSelectedNodeIds(dragRef.current.clickIds);
     if (e.type === "pointercancel") { touches.current.clear(); pinch.current = null; }
     touches.current.delete(e.pointerId);
     if (pinch.current) {
@@ -517,41 +679,34 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
 
   const startNodeDrag = (e: React.PointerEvent, node: AutomationGraphNodeDto) => {
     if (e.button !== 0) return;
-    e.stopPropagation();
-    const board = boardRef.current?.getBoundingClientRect();
-    if (!board) return;
-    dragRef.current = {
-      id: node.id,
-      dx: (e.clientX - board.left - pan.x) / zoom - node.x,
-      dy: (e.clientY - board.top - pan.y) / zoom - node.y,
-    };
-    setSelectedNodeId(node.id);
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    startSelectionDrag(e, selectedNodeIds.includes(node.id) ? selectedNodeIds : [node.id], [node.id]);
   };
 
   useEffect(() => {
     const cancel = () => {
+      endEdit();
+      if (marqueeRef.current) setSelectedNodeIds(marqueeRef.current.base);
+      marqueeRef.current = null; setMarquee(null);
       touches.current.clear(); pinch.current = null; panRef.current = null;
       dragRef.current = null; resizeRef.current = null; wireRef.current = null;
       setWireFrom(null); setDraftWire(null);
     };
     window.addEventListener("blur", cancel);
     return () => window.removeEventListener("blur", cancel);
-  }, []);
+  }, [endEdit]);
 
   const fitGraph = () => {
     const box = boardRef.current;
     if (!box || !graph.nodes.length) return;
-    const left = Math.min(...graph.nodes.map((n) => n.x));
-    const top = Math.min(...graph.nodes.map((n) => n.y));
-    const right = Math.max(...graph.nodes.map((n) => n.x + nodeWidth(n, isExpanded(n.id))));
-    const bottom = Math.max(...graph.nodes.map((n) => n.y + (isExpanded(n.id) ? 440 : 76)));
+    const left = Math.min(...graph.nodes.map((n) => n.x), ...groupBoxes.map(({ bounds }) => bounds!.x));
+    const top = Math.min(...graph.nodes.map((n) => n.y), ...groupBoxes.map(({ bounds }) => bounds!.y - 44 / zoom));
+    const right = Math.max(...graph.nodes.map((n) => n.x + nodeWidth(n, isExpanded(n.id))), ...groupBoxes.map(({ bounds }) => bounds!.x + bounds!.width));
+    const bottom = Math.max(...graph.nodes.map((n) => n.y + nodeSize(n).height), ...groupBoxes.map(({ bounds }) => bounds!.y + bounds!.height));
     const board = box.getBoundingClientRect();
     const sidebar = listRef.current?.getBoundingClientRect();
     const toolbar = toolbarRef.current?.getBoundingClientRect();
-    const compact = box.clientWidth <= 680;
-    const insetX = compact ? 24 : Math.max(24, (sidebar?.right || board.left) - board.left + 24);
-    const insetY = Math.max(24, (toolbar?.bottom || board.top) - board.top + 24, compact ? (sidebar?.bottom || board.top) - board.top + 24 : 0);
+    const insetX = listCollapsed ? 24 : Math.max(24, (sidebar?.right || board.left) - board.left + 24);
+    const insetY = Math.max(24, (toolbar?.bottom || board.top) - board.top + 24, listCollapsed ? (sidebar?.bottom || board.top) - board.top + 24 : 0);
     const width = Math.max(80, box.clientWidth - insetX - 24);
     const height = Math.max(80, box.clientHeight - insetY - (logOpen ? logHeight + 24 : 64));
     const next = Math.min(1, Math.max(0.25, Math.min(width / (right - left), height / (bottom - top))));
@@ -562,15 +717,19 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
   const logCount = log?.steps?.length || (runLogHasContent(log) ? 1 : 0);
 
   return (
-    <div className="aw-root">
+    <div className={`aw-root${listCollapsed ? " is-list-collapsed" : ""}${draft ? " has-workflow" : ""}`} onKeyDown={onGraphKeyDown}
+      onFocusCapture={(event) => { if (event.target.matches("input:not(.aw-spawn-search), textarea")) beginEdit(); }}
+      onBlurCapture={(event) => { if (event.target.matches("input, textarea")) endEdit(); }}>
       <aside className="aw-list" ref={listRef} aria-label="Workflows">
-        <div className="aw-list-head"><strong>Workflows</strong></div>
-        <div className="aw-list-sections">
+        <button type="button" className="aw-list-head aw-list-toggle" title={listCollapsed ? "Expand Workflows" : "Collapse Workflows"} aria-expanded={!listCollapsed} aria-controls={sectionId + "-list"} onClick={() => setListCollapsed((collapsed) => !collapsed)}>
+          <strong>Workflows</strong><span className="aw-accordion-chevron" aria-hidden="true"><Icons.ChevronDown /></span>
+        </button>
+        <div className="aw-list-sections" id={sectionId + "-list"} hidden={listCollapsed}>
           {WORKFLOW_SECTIONS.map((section) => (
             <section className="aw-workflow-section" key={section.kind}>
               <div className="aw-section-head">
                 <button type="button" className="aw-section-toggle" aria-label={section.label} aria-expanded={sectionsOpen[section.kind]} aria-controls={sectionId + "-" + section.kind} onClick={() => setSectionsOpen((current) => ({ ...current, [section.kind]: !current[section.kind] }))}>
-                  <span className="aw-section-chevron" aria-hidden="true">{sectionsOpen[section.kind] ? "▾" : "▸"}</span>
+                  <span className="aw-accordion-chevron" aria-hidden="true"><Icons.ChevronDown /></span>
                   <strong>{section.label}</strong><small>{rows[section.kind].length}</small>
                 </button>
                 <button type="button" className="aw-icon-button" title={"New " + section.kind} aria-label={"New " + section.kind} onClick={() => createNew(section.kind)}><span aria-hidden="true">➕</span></button>
@@ -591,9 +750,8 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
         </div>
       </aside>
       <div className="aw-main">
-        <div className="aw-toolbar" ref={toolbarRef} role="toolbar" aria-label="Workflow actions">
-          {draft ? (
-            <>
+        {draft ? (
+          <div className="aw-toolbar" ref={toolbarRef} role="toolbar" aria-label="Workflow actions">
               <div className="aw-toolbar-fields">
               <input
                 className="aw-name"
@@ -602,18 +760,19 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                 onBlur={saveDraft}
               />
-              {isPipeline ? (
-                <input
-                  className="aw-name aw-description"
-                  aria-label="Workflow description"
-                  placeholder="Description (so a ducky can pick this recipe)"
-                  value={draft.description || ""}
-                  onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-                  onBlur={saveDraft}
-                />
-              ) : null}
+
               </div>
               <div className="aw-toolbar-actions">
+              <button type="button" aria-label="Undo" title="Undo (Ctrl+Z)" disabled={history.index <= 0} onClick={() => goToEdit(history.index - 1)}>↩️</button>
+              <button type="button" aria-label="Redo" title="Redo (Ctrl+Y)" disabled={history.index >= history.entries.length - 1} onClick={() => goToEdit(history.index + 1)}>↪️</button>
+              <ChoiceDropdown aria-label="History" trigger={<span aria-hidden="true">🕘</span>} hideChevron minWidth={300}
+                value={"edit:" + history.index} onOpen={() => void loadVersions()}
+                header={<strong>History</strong>} footer={<small>{historyStatus || "Choose an edit to revisit it, or restore a saved version."}</small>}
+                options={[
+                  ...history.entries.map((entry, index) => ({ value: "edit:" + index, label: entry.label, hint: index === history.index ? "Current edit" : "Edit " + index, group: "This session" })).reverse(),
+                  ...versions.map((version, index) => ({ value: "version:" + version.id, label: "Version " + (versions.length - index) + " · " + version.name, hint: new Date(version.saved_at * 1000).toLocaleString() + " · " + version.node_count + " nodes", group: "Saved versions" })),
+                ]}
+                onChange={(value) => { if (value.startsWith("edit:")) goToEdit(Number(value.slice(5))); else void restoreVersion(value.slice(8)); }} />
               <button type="button" aria-label="Enabled" title={draft.enabled ? "Disable workflow" : "Enable workflow"} aria-pressed={draft.enabled} onClick={() => { const next = { ...draft, enabled: !draft.enabled }; setDraft(next); void persist(next); }}><span aria-hidden="true">{draft.enabled ? "✅" : "⏸️"}</span></button>
               <button type="button" title="Save" aria-label="Save" onClick={saveDraft}><span aria-hidden="true">💾</span></button>
               <button type="button" title={busy ? "Running…" : "Test"} aria-label={busy ? "Running…" : "Test"} onClick={() => void runTest()} disabled={busy || !draft.id}><span aria-hidden="true">{busy ? "⏳" : "▶️"}</span></button>
@@ -645,15 +804,12 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
                 <span aria-hidden="true">🗑️</span>
               </button>
               </div>
-            </>
-          ) : (
-            <span className="aw-empty-hint">
-              Select a pipeline or automation, or use ➕ to create a workflow.
-            </span>
-          )}
-        </div>
+          </div>
+        ) : null}
         <div
           ref={boardRef}
+          tabIndex={-1}
+          aria-label="Workflow canvas"
           className={`aw-board${overview ? " is-overview" : ""}`}
           onWheel={onBoardWheel}
           onPointerDown={onBoardPointerDown}
@@ -664,6 +820,25 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
           onContextMenu={onBoardContextMenu}
         >
           <div className="aw-world" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
+            {groupBoxes.map(({ group, bounds }) => bounds ? (
+              <div key={group.id} data-aw-group={group.id} className={`aw-group${group.node_ids.every((id) => selectedNodeIds.includes(id)) ? " is-selected" : ""}`}
+                style={{ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height }}
+                role="button" tabIndex={0} aria-label={`Select group ${group.name}`}
+                onPointerDown={(event) => {
+                  if (event.button !== 0 || (event.target instanceof Element && event.target.closest(".aw-inline-edit"))) return;
+                  if (event.ctrlKey || event.metaKey) {
+                    event.preventDefault(); event.stopPropagation(); boardRef.current?.focus({ preventScroll: true });
+                    setSelectedEdge(null);
+                    setSelectedNodeIds((current) => group.node_ids.every((id) => current.includes(id)) ? current.filter((id) => !group.node_ids.includes(id)) : [...new Set([...current, ...group.node_ids])]);
+                  } else startSelectionDrag(event, group.node_ids);
+                }}
+                onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setSelectedNodeIds(group.node_ids); setSelectedEdge(null); } }}
+              >
+                <div className="aw-group-title" style={{ transform: `scale(${1 / zoom})` }}>
+                  <InlineNodeText value={group.name} label="Group name" onCommit={(name) => saveGraphChange((current) => ({ ...current, groups: current.groups?.map((item) => item.id === group.id ? { ...item, name } : item) }))} />
+                </div>
+              </div>
+            ) : null)}
             <svg className="aw-wires" width={8000} height={8000}>
               {graph.edges.map((e, i) => {
                 const a = nodesById.get(e.source);
@@ -676,7 +851,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
                   <path
                     key={`${e.source}-${e.target}-${e.kind}-${i}`}
                     d={`M ${x1} ${y1} C ${x1 + c} ${y1}, ${x2 - c} ${y2}, ${x2} ${y2}`}
-                    className={`aw-wire aw-wire--${e.kind}${selectedEdge === i || selectedNodeId === e.source || selectedNodeId === e.target ? " is-hot" : ""}`}
+                    className={`aw-wire aw-wire--${e.kind}${selectedEdge === i || selectedNodeIds.includes(e.source) || selectedNodeIds.includes(e.target) ? " is-hot" : ""}`}
                     onClick={(ev) => {
                       ev.stopPropagation();
                       setSelectedEdge(i);
@@ -701,7 +876,9 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
                 <div
                   key={node.id}
                   data-aw-node={node.id}
-                  className={`aw-node aw-node--${role}${selectedNodeId === node.id ? " is-selected" : ""}${wireFrom === node.id ? " is-wiring" : ""}${expanded ? " is-expanded" : ""}`}
+                  onPointerDownCapture={(event) => toggleNodeSelection(event, node.id)}
+                  onClickCapture={(event) => { if ((event.ctrlKey || event.metaKey) && !(event.target instanceof Element && event.target.closest("input, textarea, select"))) { event.preventDefault(); event.stopPropagation(); } }}
+                  className={`aw-node aw-node--${role}${selectedNodeIds.includes(node.id) ? " is-selected" : ""}${wireFrom === node.id ? " is-wiring" : ""}${expanded ? " is-expanded" : ""}`}
                   style={{ left: node.x, top: node.y, width: nodeWidth(node, expanded) }}
                 >
                   {meta?.role !== "starter" ? <button
@@ -735,7 +912,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
                       onPointerDown={(e) => e.stopPropagation()}
                       onClick={(e) => {
                         e.stopPropagation();
-                        setSelectedNodeId(node.id);
+                        setSelectedNodeIds([node.id]);
                         setExpandedId(expanded ? "" : node.id);
                       }}
                     >
@@ -762,6 +939,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
                     onPointerDown={(e) => {
                       if (e.button !== 0) return;
                       e.preventDefault(); e.stopPropagation();
+                      beginEdit();
                       resizeRef.current = { id: node.id, startX: e.clientX, width: nodeWidth(node, true) };
                       e.currentTarget.setPointerCapture(e.pointerId);
                     }}
@@ -781,6 +959,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
                 </div>
               );
             })}
+            {marquee ? <div className="aw-selection-box" aria-hidden="true" style={{ left: marquee.x, top: marquee.y, width: marquee.width, height: marquee.height }} /> : null}
           </div>
         </div>
         {textSaveError ? <p className="aw-text-save-error" role="alert">Could not save changes. Use Save to retry.</p> : null}
@@ -893,7 +1072,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
               {spawnGroups.length ? (
                 spawnGroups.map(([name, tiles]) => (
                   <details key={`${name}-${groupsCollapsed}-${!!spawnFilter}`} className="aw-acc" open={!groupsCollapsed || !!spawnFilter}>
-                    <summary><NodeIcon meta={tiles[0]} /><span>{name}</span><small>{tiles.length}</small></summary>
+                    <summary><span className="aw-accordion-chevron" aria-hidden="true"><Icons.ChevronDown /></span><NodeIcon meta={tiles[0]} /><span>{name}</span><small>{tiles.length}</small></summary>
                     {tiles.map((t) => (
                       <button
                         key={t.type}

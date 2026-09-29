@@ -216,7 +216,8 @@ def import_plugin_kv(root: Path) -> dict[str, Any]:
     if isinstance(prefs, dict):
         for pid, slot in prefs.items():
             if isinstance(pid, str) and isinstance(slot, dict):
-                repo.set_prefs(pid, slot, account=repo.UNCLAIMED, scope="personal")
+                # Plain until the claiming account's first unlock seals it (plan §13).
+                repo.set(pid, repo.PREFS_KEY, slot, account=repo.UNCLAIMED, scope="personal")
                 report["prefs"] += 1
         _move_to_legacy(root, root / "uefn_plugin_prefs", "plugin_kv")
     return report

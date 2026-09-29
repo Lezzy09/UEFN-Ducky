@@ -44,6 +44,15 @@ class PanelApiAutomationsMixin:
             return {"ok": False, "error": "pipeline not found"}
         return {"ok": True, "pipeline": wf, "automation": wf}
 
+    def list_workflow_versions(self, workflow_id: str) -> dict[str, Any]:
+        from backend.automations.versions import list_versions
+        return {"ok": True, "versions": list_versions(workflow_id)}
+
+    def get_workflow_version(self, workflow_id: str, version_id: str) -> dict[str, Any]:
+        from backend.automations.versions import get_version
+        doc = get_version(workflow_id, version_id)
+        return {"ok": True, "workflow": doc} if doc else {"ok": False, "error": "Version not found"}
+
     def save_automation(self, doc: dict[str, Any] | None = None, **extra: Any) -> dict[str, Any]:
         from backend.automations.store import save_automation
 

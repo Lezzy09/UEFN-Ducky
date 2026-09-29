@@ -4,7 +4,7 @@ import { AppNotice } from "../../components/AppNotice";
 import { MdBlockEditor } from "../../components/md-block-editor";
 import { PlanDetailSplit } from "../../components/PlanDetailSplit";
 import { PlanTodoCard } from "../../components/PlanTodoCard";
-import { MarkdownContent } from "../../components/rich-content/MarkdownContent";
+import { RichContentRenderer } from "../../components/rich-content/RichContentRenderer";
 import { useConfirmModal } from "../../contexts/ConfirmModalContext";
 import { onApiReady } from "../../hooks/onApiReady";
 import { useTimedMessage } from "../../hooks/useTimedMessage";
@@ -849,7 +849,7 @@ function WorkingPlansPanel() {
                       <div className="plan-node-body plans-tab-detail-md plan-pane-markdown">
                         <span className="plan-node-body-label">Subplan details</span>
                         {focusedNode.body_markdown ? (
-                          <MarkdownContent text={focusedNode.body_markdown} />
+                          <RichContentRenderer text={focusedNode.body_markdown} />
                         ) : (
                           <p className="plans-tab-modal-desc">
                             {planLocked
@@ -1046,7 +1046,7 @@ function WorkingPlansPanel() {
                     />
                   ) : fullPlan.body_markdown ? (
                     <div className="plans-tab-detail-md plan-pane-markdown">
-                      <MarkdownContent text={fullPlan.body_markdown} />
+                      <RichContentRenderer text={fullPlan.body_markdown} />
                     </div>
                   ) : null}
                 </>
@@ -1792,7 +1792,7 @@ function TemplatesPanel() {
                       <div className="plan-node-body plans-tab-detail-md plan-pane-markdown">
                         <span className="plan-node-body-label">Subplan details</span>
                         {focusedNode.body_markdown ? (
-                          <MarkdownContent text={focusedNode.body_markdown} />
+                          <RichContentRenderer text={focusedNode.body_markdown} />
                         ) : (
                           <p className="plans-tab-modal-desc">
                             No details yet — press Edit to write them.
@@ -1935,7 +1935,7 @@ function TemplatesPanel() {
                     />
                   ) : fullPlan.body_markdown ? (
                     <div className="plans-tab-detail-md plan-pane-markdown">
-                      <MarkdownContent text={fullPlan.body_markdown} />
+                      <RichContentRenderer text={fullPlan.body_markdown} />
                     </div>
                   ) : null}
                 </>

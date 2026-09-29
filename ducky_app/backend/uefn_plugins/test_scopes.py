@@ -1,10 +1,14 @@
-"""P3/P4 checks: plugin data scopes on one PC + team sync against a fake Store.
+"""P3/P4 + §13 checks: plugin data scopes on one PC, sealed per account, and team
+sync against a fake Store.
 
 Plan P3: two accounts never see each other's rows or folders; switching project
 switches data; signed-out ``_local`` is separate; ``sensitive`` docs never reach a
 sync request; BrainrotTCG cards sync between two members and never to a third
 team; paused = read-only; access lost deletes the team scope; the inclusive
 cursor is deduped; a stale push adopts the server copy.
+§13: another account can't read the DB or files; the owner reads them again after
+signing back in; old plaintext is sealed once; an offline restart works; no key
+yet = read-only, never plaintext.
 """
 
 from __future__ import annotations
@@ -15,6 +19,9 @@ import sys
 from typing import Any
 
 import pytest
+
+# Every seal/open is DPAPI (plan §13): these checks need Windows.
+pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="DPAPI")
 
 from backend.store.repos import plugin_data as repo
 from backend.uefn_plugins import scopes, team_sync
@@ -138,6 +145,29 @@ def store(monkeypatch: pytest.MonkeyPatch) -> FakeStore:
     return fake
 
 
+ADK_ONLINE = {"on": True}
+
+
+def _fake_adk() -> bytes:
+    """The server's account data key: stable per account, only while "online"."""
+    from frontend import duckyos_account
+
+    if not ADK_ONLINE["on"]:
+        raise OSError("offline")
+    return hashlib.sha256(b"adk/" + duckyos_account.account_key().encode()).digest()
+
+
+@pytest.fixture(autouse=True)
+def account_keys(monkeypatch: pytest.MonkeyPatch):
+    from backend.uefn_plugins import data_crypto
+
+    data_crypto.reset_for_tests()
+    ADK_ONLINE["on"] = True
+    monkeypatch.setattr(data_crypto, "_fetch_adk", _fake_adk)
+    yield
+    data_crypto.reset_for_tests()
+
+
 def _sync(store: FakeStore) -> dict[str, Any]:
     s = scopes.active_scope()
     return team_sync.sync_team(s["account"], s["id"], force=True, transport=store.transport(s["account"]))
@@ -161,12 +191,14 @@ def test_accounts_projects_and_local_never_share_rows_or_folders(who: _Who, stor
     cards.put("card.pip", {"name": "Pip"})
     cards.put_file("assets/pip.png", b"PNG-ana")
     pha.cache_set("brainrot-tcg", "ui", {"tab": "cards"})
-    ana_dir = cards.folder()
+    ana_dir = scopes.plugin_dir(scopes.active_scope(), "brainrot-tcg")
+    assert ana_dir.is_dir()
 
     bo = who.be("bo@x.org")
     assert bo != ana and cards.get("card.pip") is None and cards.keys() == [] and cards.files() == []
     assert pha.cache_get("brainrot-tcg", "ui") == {}
-    assert cards.folder() != ana_dir and ana not in str(cards.folder())
+    bo_dir = scopes.plugin_dir(scopes.active_scope(), "brainrot-tcg")
+    assert bo_dir != ana_dir and ana not in str(bo_dir)
 
     local = who.be("")
     assert local == scopes.LOCAL and cards.get("card.pip") is None
@@ -365,6 +397,127 @@ def test_a_bridge_process_follows_an_account_switch_made_in_the_app(monkeypatch)
     assert bo != ana
     assert repo.get(bo, "personal", "brainrot-tcg", "doc", "card.b") is not None
     assert repo.get(ana, "personal", "brainrot-tcg", "doc", "card.b") is None
+
+
+# --------------------------------------------------------------------------- §13 sealed per account
+
+
+def _raw_doc(account: str, key: str) -> str:
+    row = repo.get(account, "personal", "brainrot-tcg", "doc", key)
+    return str(row["value"]) if row else ""
+
+
+def test_another_account_cant_read_the_db_or_files_and_the_owner_can_again(who: _Who) -> None:
+    from backend.store.repos import plugin_kv
+    from backend.uefn_plugins import data_crypto
+    from frontend.ui_web import plugin_host_api as pha
+
+    cards = PluginData("brainrot-tcg")
+    ana = who.be("ana@x.org", project="")
+    cards.put("card.pip", {"name": "Pip the secret"})
+    cards.put_file("assets/pip.png", b"PNG pip secret")
+    pha.cache_set("brainrot-tcg", "ui", {"tab": "secret-tab"})
+
+    # On disk: ciphertext only, in the DB and in the file.
+    doc = _raw_doc(ana, "card.pip")
+    kv_value, _ = plugin_kv.get("brainrot-tcg", "ui", account=ana, scope="personal")
+    file_bytes = scopes.asset_file(scopes.personal_scope(ana), "brainrot-tcg", "assets/pip.png").read_bytes()
+    assert doc.startswith(data_crypto.PREFIX) and "secret" not in doc
+    assert str(kv_value).startswith(data_crypto.PREFIX) and "secret" not in str(kv_value)
+    assert file_bytes.startswith(data_crypto.FILE_MAGIC) and b"secret" not in file_bytes
+
+    # Bo signs in on the same Windows user: his key doesn't open Ana's rows, and hers isn't here.
+    bo = who.be("bo@x.org", project="")
+    with pytest.raises(OSError):
+        data_crypto._open(doc, b"adk:" + _fake_adk())
+    with pytest.raises(data_crypto.Locked):
+        data_crypto.open_text(doc, ana)
+    with pytest.raises(data_crypto.Locked):
+        data_crypto.open_bytes(file_bytes, ana)
+    assert bo != ana and cards.get("card.pip") is None
+
+    # Ana back in: everything opens.
+    who.be("ana@x.org", project="")
+    assert cards.get("card.pip") == {"name": "Pip the secret"}
+    assert cards.get_file("assets/pip.png") == b"PNG pip secret"
+    assert pha.cache_get("brainrot-tcg", "ui") == {"tab": "secret-tab"}
+
+
+def test_old_plaintext_rows_are_sealed_once_and_verified(who: _Who, monkeypatch) -> None:
+    import base64
+    import json
+
+    from backend.agent.secrets import protect_text
+    from backend.store.repos import plugin_kv
+    from backend.uefn_plugins import data_crypto
+    from frontend.ui_web import plugin_host_api as pha
+
+    # Rows as the app wrote them before §13: plain JSON, and a sensitive DPAPI-only row.
+    plugin_kv.set("translation", "es", {"Hello": "Hola"}, account=plugin_kv.UNCLAIMED, scope="personal")
+    legacy = base64.b64encode(protect_text(json.dumps({"bot_token": "tok"}))).decode("ascii")
+    plugin_kv.set("discord", "token", None, encrypted_b64=legacy, account=plugin_kv.UNCLAIMED, scope="personal")
+
+    ana = who.be("ana@x.org", project="")
+    assert pha.cache_get("translation", "es") == {"Hello": "Hola"}
+    assert pha.cache_get("discord", "token") == {"bot_token": "tok"}
+    assert plugin_kv.unsealed_rows(ana, data_crypto.PREFIX) == []
+    sealed = plugin_kv.get("translation", "es", account=ana, scope="personal")[0]
+    assert str(sealed).startswith(data_crypto.PREFIX)
+
+    # A second pass (next start) finds nothing to do and leaves the rows alone.
+    data_crypto.reset_for_tests()
+    replaced = []
+    monkeypatch.setattr(plugin_kv, "replace_value", lambda *a, **k: replaced.append(a) or True)
+    assert pha.cache_get("translation", "es") == {"Hello": "Hola"}
+    assert replaced == []
+
+
+def test_offline_restart_uses_the_device_wrapped_key_and_sign_out_drops_it(monkeypatch) -> None:
+    import json
+
+    from backend.agent import secrets as sec
+    from backend.uefn_plugins import data_crypto
+    from frontend import duckyos_account
+    from frontend.ui_web import agent_modes
+
+    monkeypatch.setattr(scopes, "current_project", lambda: "")
+    monkeypatch.setattr(agent_modes, "push_ui_event", lambda event: None)
+    duckyos_account._save_blob({"base_url": "https://uefnducky.org", "email": "ana@x.org", "device_key": "dky_v1_ana"})
+    cards = PluginData("brainrot-tcg")
+    cards.put("card.pip", {"v": 1})
+    ana = scopes.account_id()
+    assert data_crypto._cache_path().is_file()
+
+    # Restart offline: memory is gone, the server can't be reached, the disk cache opens the data.
+    data_crypto.reset_for_tests()
+    ADK_ONLINE["on"] = False
+    assert cards.get("card.pip") == {"v": 1}
+
+    # Sign-out drops the cached key; the next account on this Windows user can't open Ana's rows.
+    duckyos_account._clear_blob()
+    assert not data_crypto._cache_path().exists()
+    ADK_ONLINE["on"] = True
+    sec.set_key("duckyos_account", json.dumps({"base_url": "https://uefnducky.org", "email": "bo@x.org",
+                                              "device_key": "dky_v1_bo"}))
+    assert scopes.account_id() != ana
+    with pytest.raises(data_crypto.Locked):
+        data_crypto.open_text(_raw_doc(ana, "card.pip"), ana)
+
+
+def test_no_key_yet_is_read_only_and_never_writes_plaintext(who: _Who) -> None:
+    from backend.store.repos import plugin_kv
+    from backend.uefn_plugins import data_crypto
+    from frontend.ui_web import plugin_host_api as pha
+
+    ADK_ONLINE["on"] = False  # first sign-in, offline
+    cy = who.be("cy@x.org", project="")
+    assert scopes.active_scope()["state"] == "locked" and scopes.active_scope()["readOnly"]
+    with pytest.raises(scopes.ReadOnlyScope, match="data key"):
+        PluginData("brainrot-tcg").put("card.pip", {"v": 1})
+    with pytest.raises(data_crypto.Locked):
+        pha.cache_set("brainrot-tcg", "ui", {"tab": "cards"})
+    assert repo.rows(cy, "personal", "brainrot-tcg", "doc") == []
+    assert plugin_kv.get("brainrot-tcg", "ui", account=cy, scope="personal") == (None, False)
 
 
 def test_ids_and_paths_cannot_climb() -> None:

@@ -62,25 +62,40 @@ def _mine() -> dict[str, str]:
     ponytail: the ``DUCKY_STORE_BACKEND=files`` rollback path below stays global
     (one folder for every account); it is an emergency lever, not a mode.
     """
+    from backend.uefn_plugins.data_crypto import migrate_if_ready
     from backend.uefn_plugins.scopes import PERSONAL, account_id
 
-    return {"account": account_id(), "scope": PERSONAL}
+    _repo()  # legacy file import first, so the claim below includes it
+    account = account_id()
+    migrate_if_ready(account)  # rows from before §13 are sealed on the account's first unlock
+    return {"account": account, "scope": PERSONAL}
 
 
-def _protect_json(data: dict[str, Any]) -> str:
-    import base64
+def _seal(data: dict[str, Any], account: str) -> str:
+    """Every row is sealed for the account (plan §13). Raises ``Locked`` without its key:
+    never write plaintext."""
+    from backend.uefn_plugins.data_crypto import seal_text
 
-    from backend.agent.secrets import protect_text
-
-    return base64.b64encode(protect_text(json.dumps(data, ensure_ascii=False))).decode("ascii")
+    return seal_text(json.dumps(data, ensure_ascii=False), account)
 
 
-def _unprotect_json(b64: str) -> dict[str, Any]:
+def _unseal(value: Any, encrypted: bool, account: str) -> dict[str, Any]:
+    """A stored row as a dict: sealed, legacy DPAPI (sensitive, pre-§13) or legacy plain
+    (pre-§13, sealed on the account's first unlock). Unreadable (locked) → ``{}``."""
     import base64
 
     from backend.agent.secrets import unprotect_text
+    from backend.uefn_plugins.data_crypto import Locked, is_sealed, open_text
 
-    raw = json.loads(unprotect_text(base64.b64decode(b64)))
+    try:
+        if is_sealed(value):
+            raw = json.loads(open_text(value, account))
+        elif encrypted and isinstance(value, str):
+            raw = json.loads(unprotect_text(base64.b64decode(value)))
+        else:
+            raw = value
+    except (Locked, OSError, ValueError):
+        return {}
     return raw if isinstance(raw, dict) else {}
 
 
@@ -97,14 +112,9 @@ def cache_get(plugin_id: str, key: str) -> dict[str, Any]:
     data: dict[str, Any] = {}
     if _use_db():
         try:
-            value, encrypted = _repo().get(pid, k, **_mine())
-            if encrypted and isinstance(value, str):
-                try:
-                    data = _unprotect_json(value)
-                except (OSError, ValueError):
-                    data = {}
-            elif isinstance(value, dict):
-                data = value
+            mine = _mine()
+            value, encrypted = _repo().get(pid, k, **mine)
+            data = _unseal(value, encrypted, mine["account"])
             with _CACHE_LOCK:
                 _CACHE[mem_key] = data
             return dict(data)
@@ -124,24 +134,19 @@ def cache_get(plugin_id: str, key: str) -> dict[str, Any]:
 
 
 def cache_set(plugin_id: str, key: str, data: dict[str, Any], *, sensitive: bool = False) -> None:
-    """Store a plugin document. ``sensitive=True`` DPAPI-encrypts it at rest (same
-    protection as API keys); the file backend has no encrypted form and refuses."""
+    """Store a plugin document, sealed for the signed-in account (plan §13; every row,
+    so ``sensitive`` no longer changes how it is stored). Raises while the account's
+    data key is missing; the file backend has no encrypted form and refuses sensitive."""
     pid = _safe_plugin_id(plugin_id)
     k = _safe_key(key)
     payload = data if isinstance(data, dict) else {}
     mem_key = f"{pid}:{k}"
     if _use_db():
-        try:
-            if sensitive:
-                _repo().set(pid, k, None, encrypted_b64=_protect_json(payload), **_mine())
-            else:
-                _repo().set(pid, k, payload, **_mine())
-            with _CACHE_LOCK:
-                _CACHE[mem_key] = dict(payload)
-            return
-        except (OSError, RuntimeError):
-            if sensitive:
-                raise
+        mine = _mine()
+        _repo().set(pid, k, None, encrypted_b64=_seal(payload, mine["account"]), **mine)
+        with _CACHE_LOCK:
+            _CACHE[mem_key] = dict(payload)
+        return
     if sensitive:
         raise RuntimeError("sensitive plugin data needs the database backend")
     path = cache_dir(pid)
@@ -239,7 +244,15 @@ def prefs_all_get() -> dict[str, Any]:
     if _use_db():
         try:
             out: dict[str, Any] = {}
-            for pid, slot in _repo().all_prefs(**_mine()).items():
+            mine = _mine()
+            for pid, (value, encrypted) in _repo().all_prefs(**mine).items():
+                stored: Any = value
+                if not encrypted:
+                    try:
+                        stored = json.loads(value)  # pre-§13 plain row
+                    except ValueError:
+                        continue
+                slot = _unseal(stored, encrypted, mine["account"])
                 out[pid] = {
                     str(k): v
                     for k, v in slot.items()
@@ -290,18 +303,17 @@ def prefs_all_set(all_prefs: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(k, str) and isinstance(v, (bool, int, float, str))
             }
         if _use_db():
-            try:
-                repo = _repo()
-                mine = _mine()
-                for clean in src:
-                    if isinstance(clean, str) and clean in bag:
-                        try:
-                            repo.set_prefs(_safe_plugin_id(clean), bag[_safe_plugin_id(clean)], **mine)
-                        except ValueError:
-                            continue
-                return {"ok": True, "prefs": bag}
-            except (OSError, RuntimeError):
-                pass
+            repo = _repo()
+            mine = _mine()
+            for clean in src:
+                if isinstance(clean, str) and clean in bag:
+                    try:
+                        pid = _safe_plugin_id(clean)
+                    except ValueError:
+                        continue
+                    # Sealed for the account; raises while its data key is missing (never plaintext).
+                    repo.set_prefs(pid, _seal(bag[pid], mine["account"]), **mine)
+            return {"ok": True, "prefs": bag}
         root = prefs_dir()
         root.mkdir(parents=True, exist_ok=True)
         target = prefs_all_path()

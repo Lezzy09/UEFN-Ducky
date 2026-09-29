@@ -9,9 +9,10 @@ A scope is ``(account, personal | team_id)``:
 
 Plugins never pick their own folder or rows: docs (one JSON doc per entity) and
 files go through :class:`PluginData`, which writes the active scope only. Rows
-and folders are keyed by account, so another account on this PC never sees them.
-Team scopes sync through :mod:`backend.uefn_plugins.team_sync`; Personal and
-``sensitive`` data never leave the PC.
+and folders are keyed by account and sealed for it (:mod:`data_crypto`), so
+another account on this PC can't read them. Team scopes sync through
+:mod:`backend.uefn_plugins.team_sync`; Personal and ``sensitive`` data never leave
+the PC.
 """
 
 from __future__ import annotations
@@ -72,17 +73,18 @@ def _need(ok: bool, what: str) -> None:
 # --------------------------------------------------------------------------- scope
 
 
+def account_id_for(key: str) -> str:
+    """Row/folder id of an account key (``site|email``); ``_local`` when signed out."""
+    return LOCAL if not key else "a_" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
 def account_id() -> str:
     """Stable per-account id for rows and folders; ``_local`` when signed out.
-
-    ponytail: the secrets store caches the login per process, so an MCP bridge
-    process started before an account switch keeps writing as the old account
-    (into that account's own scope, never another's) until it restarts.
-    """
+    Read fresh per call (the login row, not a process cache), so the MCP bridge
+    follows an account switch made in the app."""
     from frontend.duckyos_account import account_key
 
-    key = account_key()
-    aid = LOCAL if not key else "a_" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+    aid = account_id_for(account_key())
     _claim_legacy(aid)
     return aid
 
@@ -107,23 +109,34 @@ def current_project() -> str:
     return project_slug(root)
 
 
+def _locked(account: str) -> bool:
+    """Signed in, but this account's data key isn't on the PC yet (offline first sign-in)."""
+    from backend.uefn_plugins.data_crypto import available
+
+    return not available(account)
+
+
 def personal_scope(account: str | None = None) -> dict[str, Any]:
-    return {"account": account or account_id(), "id": PERSONAL, "kind": "personal", "label": "Personal",
-            "teamId": "", "readOnly": False, "state": "ok"}
+    account = account or account_id()
+    locked = _locked(account)
+    return {"account": account, "id": PERSONAL, "kind": "personal", "label": "Personal",
+            "teamId": "", "readOnly": locked, "state": "locked" if locked else "ok"}
 
 
 def team_scope(account: str, team: str) -> dict[str, Any]:
     """A team scope. ``waiting``: never pulled on this PC for this account, so it is
     read-only until the first pull lands — a plugin must not seed its empty-state
-    defaults over the team's data."""
+    defaults over the team's data. ``locked``: the account's data key is missing."""
     from backend.store.repos import plugin_data as repo
 
     sync = repo.sync_get(account, team)
     state = sync["state"]
-    if not sync["synced_at"] and state not in ("paused", "unavailable"):
+    if state != "unavailable" and _locked(account):
+        state = "locked"
+    elif not sync["synced_at"] and state not in ("paused", "unavailable"):
         state = "waiting"
     return {"account": account, "id": team, "kind": "team", "label": sync["label"] or "Team", "teamId": team,
-            "readOnly": state in ("paused", "waiting"), "state": state}
+            "readOnly": state in ("paused", "waiting", "locked"), "state": state}
 
 
 def active_scope() -> dict[str, Any]:
@@ -266,44 +279,39 @@ class PluginData:
     def scope(self) -> dict[str, Any]:
         return scope_view(self._scope())
 
-    def folder(self) -> Path:
-        """This plugin's local folder in the active scope (scratch, exports). Not synced:
-        shared content goes through ``put`` / ``put_file``."""
-        path = plugin_dir(self._scope(), self.plugin_id)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def _writable(self) -> dict[str, Any]:
-        s = self._scope()
+    def _writable(self, scope: dict[str, Any] | None = None) -> dict[str, Any]:
+        s = scope or self._scope()
+        if s["state"] == "locked":
+            raise ReadOnlyScope("Waiting for this account's data key. Plugin data opens once you're online.")
         if s["state"] == "waiting":
             raise ReadOnlyScope(f"Waiting for team data from {s['label']}. Read-only until it arrives.")
         if s["readOnly"]:
             raise ReadOnlyScope(f"Team Private is paused for {s['label']}. Read-only.")
         return s
 
-    # -- docs
+    # -- docs (sealed for the account at rest, plan §13; sha256/size are of the plaintext)
 
     def get(self, key: str, default: Any = None, *, sensitive: bool = False) -> Any:
         from backend.store.repos import plugin_data as repo
+        from backend.uefn_plugins.data_crypto import Locked, open_text
 
         _need(valid_doc_key(key), "doc key")
         s = personal_scope() if sensitive else self._scope()
         row = repo.get(s["account"], s["id"], self.plugin_id, "doc", key)
         if not row or row["deleted"] or row["value"] is None:
             return default
-        raw = row["value"]
-        if row["sensitive"]:
-            from backend.agent.secrets import unprotect_text
-
-            raw = unprotect_text(base64.b64decode(raw))
-        return json.loads(raw)
+        try:
+            return json.loads(open_text(row["value"], s["account"]))
+        except Locked:
+            return default
 
     def put(self, key: str, value: Any, *, sensitive: bool = False) -> dict[str, Any]:
-        """Write one doc. ``sensitive=True`` keeps it encrypted in Personal, never synced."""
+        """Write one doc. ``sensitive=True`` keeps it in Personal, never synced."""
         from backend.store.repos import plugin_data as repo
+        from backend.uefn_plugins.data_crypto import seal_text
 
         _need(valid_doc_key(key), "doc key")
-        s = personal_scope() if sensitive else self._writable()
+        s = self._writable(personal_scope() if sensitive else None)
         raw = encode_doc(value)
         if len(raw) > DOC_MAX_BYTES:
             raise ValueError(f"doc {key!r} is over 1 MB; split it into one doc per entity")
@@ -311,13 +319,8 @@ class PluginData:
         old = repo.get(s["account"], s["id"], self.plugin_id, "doc", key)
         if old and not old["deleted"] and old["sha256"] == sha:
             return {"ok": True, "key": key, "changed": False}
-        stored = raw.decode("utf-8")
-        if sensitive:
-            from backend.agent.secrets import protect_text
-
-            stored = base64.b64encode(protect_text(stored)).decode("ascii")
-        repo.put(s["account"], s["id"], self.plugin_id, "doc", key, value=stored, size=len(raw), sha256=sha,
-                 dirty=s["kind"] == "team" and not sensitive, sensitive=sensitive)
+        repo.put(s["account"], s["id"], self.plugin_id, "doc", key, value=seal_text(raw.decode("utf-8"), s["account"]),
+                 size=len(raw), sha256=sha, dirty=s["kind"] == "team" and not sensitive, sensitive=sensitive)
         return {"ok": True, "key": key, "changed": True}
 
     def keys(self, prefix: str = "") -> list[str]:
@@ -330,11 +333,16 @@ class PluginData:
         """All docs under ``prefix`` in one read: ``{key: value}``."""
         from backend.store.repos import plugin_data as repo
 
+        from backend.uefn_plugins.data_crypto import Locked, open_text
+
         s = self._scope()
         out: dict[str, Any] = {}
-        for r in repo.rows(s["account"], s["id"], self.plugin_id, "doc", prefix):
-            if not r["sensitive"] and r["value"] is not None:
-                out[r["key"]] = json.loads(r["value"])
+        try:
+            for r in repo.rows(s["account"], s["id"], self.plugin_id, "doc", prefix):
+                if not r["sensitive"] and r["value"] is not None:
+                    out[r["key"]] = json.loads(open_text(r["value"], s["account"]))
+        except Locked:
+            return {}
         return out
 
     def delete(self, key: str) -> bool:
@@ -352,6 +360,7 @@ class PluginData:
 
     def put_file(self, path: str, data: bytes) -> dict[str, Any]:
         from backend.store.repos import plugin_data as repo
+        from backend.uefn_plugins.data_crypto import seal_bytes
 
         s = self._writable()
         target = asset_file(s, self.plugin_id, path)
@@ -361,23 +370,29 @@ class PluginData:
         old = repo.get(s["account"], s["id"], self.plugin_id, "asset", path)
         if old and not old["deleted"] and old["sha256"] == sha and target.is_file():
             return {"ok": True, "path": path, "changed": False}
-        write_asset_bytes(target, data)
+        write_asset_bytes(target, seal_bytes(data, s["account"]))
         repo.put(s["account"], s["id"], self.plugin_id, "asset", path, value=None, size=len(data), sha256=sha,
                  dirty=s["kind"] == "team")
         return {"ok": True, "path": path, "changed": True, "size": len(data)}
 
-    def file_path(self, path: str) -> Path | None:
-        """Local path of a stored file, for reading (serving, previews). Write with ``put_file``."""
+    def has_file(self, path: str) -> bool:
         from backend.store.repos import plugin_data as repo
 
         s = self._scope()
         row = repo.get(s["account"], s["id"], self.plugin_id, "asset", path)
-        target = asset_file(s, self.plugin_id, path)
-        return target if row and not row["deleted"] and target.is_file() else None
+        return bool(row and not row["deleted"] and asset_file(s, self.plugin_id, path).is_file())
 
     def get_file(self, path: str) -> bytes | None:
-        p = self.file_path(path)
-        return p.read_bytes() if p else None
+        """A stored file's bytes (sealed on disk, so there is no path to hand out)."""
+        from backend.uefn_plugins.data_crypto import Locked, open_bytes
+
+        s = self._scope()
+        if not self.has_file(path):
+            return None
+        try:
+            return open_bytes(asset_file(s, self.plugin_id, path).read_bytes(), s["account"])
+        except Locked:
+            return None
 
     def files(self, prefix: str = "") -> list[dict[str, Any]]:
         from backend.store.repos import plugin_data as repo

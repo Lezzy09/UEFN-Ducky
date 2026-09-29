@@ -76,7 +76,9 @@ export function ChatPaneEmptyState({
         (isGroup || ((selectedModel || modelManagedByAgent) && !modelsLoading && !noModelsAvailable)) ? (
           <p className="chat-pane-empty-state-hint">
             <Icons.Send />
-            Press Enter to send · Shift+Enter for a new line
+            {typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches
+              ? "Enter for a new line · use the send button"
+              : "Press Enter to send · Shift+Enter for a new line"}
           </p>
         ) : null}
       </div>

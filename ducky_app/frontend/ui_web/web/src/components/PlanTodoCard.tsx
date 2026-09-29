@@ -11,6 +11,8 @@ export interface PlanTodoCardProps {
   hideProgress?: boolean;
   /** Hide the title row when the parent already shows the plan title. */
   hideTitlebar?: boolean;
+  /** Chat popup: parent owns open/close. No title row and no step-list collapse. */
+  embedded?: boolean;
   /** Click an outline row — drill into subplan or scroll to that step. */
   onSelectNode?: (node: PlanNode) => void;
   /** Highlight this node id briefly / as selected. */
@@ -137,6 +139,7 @@ export function PlanTodoCard({
   compact = false,
   hideProgress = false,
   hideTitlebar = false,
+  embedded = false,
   onSelectNode,
   highlightNodeId = null,
 }: PlanTodoCardProps) {
@@ -150,35 +153,37 @@ export function PlanTodoCard({
     <div
       className={`plan-todo-card${compact ? " plan-todo-card--compact" : ""}${
         hideTitlebar ? " plan-todo-card--aside" : ""
-      }`}
+      }${embedded ? " plan-todo-card--embedded" : ""}`}
     >
-      {!hideTitlebar ? (
+      {!hideTitlebar && !embedded ? (
         <div className="plan-todo-card-titlebar">
           <button type="button" className="plan-todo-card-title-btn" onClick={onOpenPlan} title="Open plan tab">
             {plan.title || "Plan"}
           </button>
         </div>
       ) : null}
-      <button
-        type="button"
-        className="plan-todo-card-header"
-        onClick={() => setExpanded((v) => !v)}
-        aria-expanded={expanded}
-      >
-        <span className="plan-todo-card-header-label">
-          {isTemplate
-            ? `${total} steps`
-            : allDone
-              ? `${done} of ${total} steps completed`
-              : `${done} of ${total} steps`}
-        </span>
-        <span className={`plan-todo-card-chevron${expanded ? " is-expanded" : ""}`} aria-hidden>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M6 9l6 6 6-6" />
-          </svg>
-        </span>
-      </button>
-      {expanded ? (
+      {embedded ? null : (
+        <button
+          type="button"
+          className="plan-todo-card-header"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+        >
+          <span className="plan-todo-card-header-label">
+            {isTemplate
+              ? `${total} steps`
+              : allDone
+                ? `${done} of ${total} steps completed`
+                : `${done} of ${total} steps`}
+          </span>
+          <span className={`plan-todo-card-chevron${expanded ? " is-expanded" : ""}`} aria-hidden>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </span>
+        </button>
+      )}
+      {embedded || expanded ? (
         <div className="plan-todo-card-body">
           {outline.map(({ label, node, depth }) => (
             <TodoRow

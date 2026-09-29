@@ -253,6 +253,11 @@ interface ComposerDraftProps {
   onBlur?: () => void;
 }
 
+/** Phones: Return starts a new line. Send stays on the button. Desktop Enter still sends. */
+export function enterInsertsNewline(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
+}
+
 /** The composer text. Stored mentions stay markdown; the box shows icon chips. */
 export function ComposerDraft({
   value,
@@ -353,17 +358,24 @@ export function ComposerDraft({
             }
           }
         }
-        if (event.key === "Enter" && event.shiftKey) {
-          event.preventDefault();
+        const newline = () => {
           const root = ref.current;
           if (!root) return;
           const pos = composerCaret(root);
           const current = readComposer(root);
           painted.current = null;
           onChange(`${current.slice(0, pos)}\n${current.slice(pos)}`, pos + 1);
+        };
+        if (event.key === "Enter" && event.shiftKey) {
+          event.preventDefault();
+          newline();
           return;
         }
         onKeyDown?.(event);
+        if (event.key === "Enter" && !event.shiftKey && !event.defaultPrevented && enterInsertsNewline()) {
+          event.preventDefault();
+          newline();
+        }
       }}
       onFocus={onFocus}
       onBlur={onBlur}

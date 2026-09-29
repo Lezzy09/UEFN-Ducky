@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 from backend.store import db
@@ -23,12 +24,17 @@ def get(workflow_id: str) -> dict[str, Any] | None:
     return None if row is None else _row(row)
 
 
-def put(doc: dict[str, Any]) -> None:
+def put(doc: dict[str, Any], *, versioned: bool = False) -> None:
     conn = db.connect()
     kind = str(doc.get("kind") or "automation").strip().lower() or "automation"
     if kind not in ("automation", "pipeline"):
         kind = "automation"
     with db.write_txn(conn):
+        if versioned:
+            previous = get(str(doc["id"]))
+            if previous and not conn.execute("SELECT 1 FROM workflow_versions WHERE workflow_id=? LIMIT 1", (str(doc["id"]),)).fetchone():
+                _archive(conn, previous)
+            _archive(conn, doc)
         conn.execute(
             "INSERT INTO automations(id, name, enabled, graph, runs, updated, last_run, kind, description) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
@@ -91,3 +97,20 @@ def _row(row: Any) -> dict[str, Any]:
         "kind": kind,
         "description": description,
     }
+
+
+def _archive(conn: Any, doc: dict[str, Any]) -> None:
+    from backend.automations.versions import snapshot
+    conn.execute("INSERT INTO workflow_versions(id, workflow_id, saved_at, snapshot) VALUES (?, ?, ?, ?)",
+                 (str(uuid.uuid4()), str(doc["id"]), float(doc.get("updated") or 0), _dumps(snapshot(doc))))
+
+
+def list_versions(workflow_id: str) -> list[dict[str, Any]]:
+    from backend.automations.versions import summary
+    rows = db.connect().execute("SELECT id, snapshot FROM workflow_versions WHERE workflow_id=? ORDER BY sequence DESC", (workflow_id,)).fetchall()
+    return [summary(row[0], json.loads(row[1])) for row in rows]
+
+
+def get_version(workflow_id: str, version_id: str) -> dict[str, Any] | None:
+    row = db.connect().execute("SELECT snapshot FROM workflow_versions WHERE workflow_id=? AND id=?", (workflow_id, version_id)).fetchone()
+    return json.loads(row[0]) if row else None

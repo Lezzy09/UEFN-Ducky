@@ -109,10 +109,11 @@ def test_migration_files_are_contiguous_and_apply_from_zero(tmp_path: Path) -> N
 
 def test_upgrade_from_previous_schema_does_not_deadlock(tmp_path: Path) -> None:
     """1.2.90: migrate() → snapshot() → connect() re-entered _guard and hung every
-    upgraded panel at boot. A schema-(head-1) database must open on a worker
+    upgraded panel at boot. An older database must open on a worker
     thread within seconds and leave a pre-migrate snapshot behind."""
     conn = db.connect()
-    # Leave a 0008-shaped database so 0009 (plugin scopes) can run.
+    # Leave a 0008-shaped database so plugin scopes and workflow versions can upgrade.
+    conn.execute("DROP TABLE workflow_versions")
     for table in ("plugin_data", "scope_sync", "project_scopes", "plugin_kv"):
         conn.execute(f"DROP TABLE {table}")
     conn.execute(
@@ -120,7 +121,7 @@ def test_upgrade_from_previous_schema_does_not_deadlock(tmp_path: Path) -> None:
         "encrypted INTEGER NOT NULL DEFAULT 0, updated REAL NOT NULL, PRIMARY KEY (plugin_id, key))"
     )
     conn.execute("INSERT INTO plugin_kv VALUES ('demo', 'es', '{}', 0, 0)")
-    conn.execute(f"PRAGMA user_version={db.head_version() - 1}")
+    conn.execute("PRAGMA user_version=8")
     db.reset_for_tests()
 
     done: list[int] = []

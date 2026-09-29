@@ -75,7 +75,9 @@ await call("prefs.get", { id: "highScore" });
 Store plugin data through `data.*` / `files.*` (panels) or `api.data` (Python
 backends) — never a folder you pick yourself. The host keeps it per signed-in
 account and per scope (the user's own data, or the shared scope the open project
-is linked to) and syncs shared scopes.
+is linked to) and syncs shared scopes. Plugin data on each PC is encrypted for
+the signed-in account (docs, files, cache and prefs), so files have no readable
+path: read them with `files.get`.
 
 - **One doc per entity** (`card.pip`, `pack.starter`), never one big `db.json`:
   two people editing different cards must not overwrite each other.

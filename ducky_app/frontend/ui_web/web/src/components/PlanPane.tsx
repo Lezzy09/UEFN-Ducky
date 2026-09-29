@@ -22,7 +22,7 @@ import {
 } from "../utils/planOutlineNav";
 import { PlanDetailSplit } from "./PlanDetailSplit";
 import { PlanTodoCard } from "./PlanTodoCard";
-import { MarkdownContent } from "./rich-content/MarkdownContent";
+import { RichContentRenderer } from "./rich-content/RichContentRenderer";
 import { MdBlockEditor } from "./md-block-editor";
 import { DuckyProfileModal, type DuckyProfileModalMode } from "./ducky/DuckyProfileModal";
 import { DuckyAvatar, DUCKY_AVATAR_SIZES } from "./ducky/DuckyAvatars";
@@ -710,7 +710,9 @@ export function PlanPane({
                     <span className="plan-node-body-label">Subplan details</span>
                     <h3 className="plan-pane-title">{focusPath[focusPath.length - 1]!.content}</h3>
                     {focusPath[focusPath.length - 1]!.body_markdown ? (
-                      <MarkdownContent text={focusPath[focusPath.length - 1]!.body_markdown || ""} />
+                      <div className="plan-pane-markdown">
+                        <RichContentRenderer text={focusPath[focusPath.length - 1]!.body_markdown || ""} />
+                      </div>
                     ) : (
                       <p className="plans-tab-modal-desc">No details for this subplan yet.</p>
                     )}
@@ -728,7 +730,7 @@ export function PlanPane({
             main={
               plan.body_markdown ? (
                 <div className="plan-pane-markdown">
-                  <MarkdownContent text={plan.body_markdown} />
+                  <RichContentRenderer text={plan.body_markdown} />
                 </div>
               ) : null
             }

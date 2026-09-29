@@ -86,7 +86,7 @@ import { SnipButton } from "./SnipButton";
 import { AttachMenuButton } from "./AttachMenuButton";
 import { ChatChangesButton, ChatChangesSlide, useLedgerOpen } from "./ChatChangesDrawer";
 import { captureSnipFile } from "./snipCapture";
-import { ComposerDraft, composerCaret, composerSetCaret } from "./ComposerDraft";
+import { ComposerDraft, composerCaret, composerSetCaret, enterInsertsNewline } from "./ComposerDraft";
 import { SlashCommandMenu } from "./SlashCommandMenu";
 import {
   filterChatRefs,
@@ -1533,6 +1533,7 @@ export function ChatPane({
                   return;
                 }
                 if (e.key === "Enter" && !e.shiftKey) {
+                  if (enterInsertsNewline()) return;
                   e.preventDefault();
                   handleSend();
                 }
