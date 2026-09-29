@@ -20,7 +20,7 @@ import { getApi, isRemote } from "../hooks/usePanelApi";
 import { isNativeWindowChrome } from "../utils/nativeWindowChrome";
 import { requestOpenSettings } from "../navigation/openSettingsTab";
 import { requestOpenChangesTab } from "../navigation/openChangesTab";
-import { requestOpenAutomationsTab } from "../navigation/openAutomationsTab";
+import { requestOpenWorkflowsTab } from "../navigation/openWorkflowsTab";
 import { usePluginContributions } from "../hooks/usePluginContributions";
 import { useHeaderVisibility } from "../hooks/useHeaderVisibility";
 import { useStoreUpdateBadge } from "../hooks/useStoreUpdateBadge";
@@ -481,7 +481,7 @@ export function Header({
   const workflowsTargetRef = useUiTarget("header.automations", {
     kind: "button",
     label: "Workflows",
-    route: "automations",
+    route: "workflows",
   });
   const changesTargetRef = useUiTarget("header.changes", {
     kind: "button",
@@ -587,7 +587,7 @@ export function Header({
                   : undefined
               }
               onLedger={showChanges ? () => requestOpenChangesTab() : undefined}
-              onAutomations={() => requestOpenAutomationsTab()}
+              onAutomations={() => requestOpenWorkflowsTab()}
               showSearch={showSearch}
               onSearch={showSearch ? () => openPalette("file") : undefined}
             />
@@ -672,7 +672,7 @@ export function Header({
                 className="icon-btn no-drag"
                 title="Workflows"
                 aria-label="Open Workflows"
-                onClick={() => requestOpenAutomationsTab()}
+                onClick={() => requestOpenWorkflowsTab()}
               >
                 <Icons.GitBranch />
             </button>

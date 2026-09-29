@@ -74,8 +74,9 @@ await call("prefs.get", { id: "highScore" });
 
 Store plugin data through `data.*` / `files.*` (panels) or `api.data` (Python
 backends) — never a folder you pick yourself. The host keeps it per signed-in
-account and per scope (the user's own data, or the shared scope the open project
-is linked to) and syncs shared scopes. Plugin data on each PC is encrypted for
+account and per scope: Local, or the one team the user picked for this plugin in
+Plugins → the plugin → Data (the plugin has no say). Team copies sync; teams never
+share data with each other. Plugin data on each PC is encrypted for
 the signed-in account (docs, files, cache and prefs), so files have no readable
 path: read them with `files.get`.
 

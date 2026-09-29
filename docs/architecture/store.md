@@ -42,7 +42,7 @@ backend/store/
 
 | table | key columns | replaces |
 |---|---|---|
-| `projects` | id (slug), path, name, last_opened | recent_projects.json, five slug helpers |
+| `projects` | id (slug), path, name, last_opened, kind (`uefn` island / `folder`, 0011; older rows default to `uefn`) | recent_projects.json, five slug helpers |
 | `settings` | key PK, value JSON, updated | panel_settings.json (one row per field; absence = default) |
 | `secrets` | name PK, dpapi_blob | credentials.dat |
 | `conversations` | id, project_id, folder_id, title, sort_order, updated, profile_id, model, coding_agent, is_group, leader_conv_id, parent_conv_id, file_path, tool_call_count, file_count, state JSON | conversation.json minus messages |
@@ -62,6 +62,10 @@ backend/store/
 | `perf_events`, `perf_reports` | | perf/*.jsonl, latest-report.json |
 | `verse_diagnostics` | (project_id, path), mtime_ns, size, items JSON | .ducky_verse_scan.json |
 | `plugins`, `skill_manifest_cache`, `model_cache`, `cache_docs`, `plugin_kv`, `verse_templates`, `workspace_state`, `captures` | | the remaining small stores |
+| workflows: `plugin_data` rows, plugin id `ducky.automations`, key = workflow id | (account, `personal` = Local or team id) | the shared `automations` table (0007/0008); its rows are claimed once into the first account's Local folder, sealed |
+| `workflow_runtime` | (account_id, workflow_id), runs (sealed), last_run, run_here | per-PC run log and "Run on this PC" (0012; never synced) |
+| `workflow_versions` | sequence, id, workflow_id, snapshot (sealed for the account that saved it) | saved copies per PC (0010) |
+| `team_perms` | (account_id, team_id), manage_automations | Manage automations from the last hub snapshot (0012) |
 
 Tri-state list fields (`null` = inherit, `[]` = explicitly none) stay JSON and
 are never flattened to `NOT NULL DEFAULT '[]'`.

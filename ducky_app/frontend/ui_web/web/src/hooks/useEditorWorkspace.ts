@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { ChatTab, EditorTab, EditorLayoutState, EditorWorkspaceSnapshot, FocusWindowSnapshot } from "../types/panel";
-import { automationsTabId, changesTabId, pipelinesTabId } from "../types/panel";
+import { changesTabId, isLegacyWorkflowsTabId, workflowsTabId } from "../types/panel";
 import { getApi } from "./usePanelApi";
 import { collectTabIds, createDefaultLayout, repairLayout } from "../utils/editorLayoutOps";
 
@@ -83,9 +83,10 @@ function validateSnapshot(
         kind: "changes",
         name: tab.name || "Ledger",
       });
-    } else if (tab.kind === "automations" || tab.kind === "pipelines") {
-      if (!openTabs.some((item) => item.id === automationsTabId())) {
-        openTabs.push({ id: automationsTabId(), kind: "automations", name: "Workflows" });
+    } else if (tab.kind === "workflows" || isLegacyWorkflowsTabId(tab.id)) {
+      // Older builds saved separate Automations and Pipelines tabs: both become Workflows.
+      if (!openTabs.some((item) => item.id === workflowsTabId())) {
+        openTabs.push({ id: workflowsTabId(), kind: "workflows", name: "Workflows" });
       }
     } else if (tab.kind === "ducky-profile" && tab.path) {
       openTabs.push({
@@ -109,10 +110,10 @@ function validateSnapshot(
     const groups: EditorLayoutState["groups"] = {};
     const assignedTabs = new Set<string>();
     for (const [gid, group] of Object.entries(layout.groups)) {
-      const filteredTabIds = [...new Set(group.tabIds.map((id) => id === pipelinesTabId() ? automationsTabId() : id))].filter((id) => tabIds.has(id) && !assignedTabs.has(id));
+      const filteredTabIds = [...new Set(group.tabIds.map((id) => isLegacyWorkflowsTabId(id) ? workflowsTabId() : id))].filter((id) => tabIds.has(id) && !assignedTabs.has(id));
       filteredTabIds.forEach((id) => assignedTabs.add(id));
       if (filteredTabIds.length === 0) continue;
-      const previousActive = group.activeTabId === pipelinesTabId() ? automationsTabId() : group.activeTabId;
+      const previousActive = group.activeTabId && isLegacyWorkflowsTabId(group.activeTabId) ? workflowsTabId() : group.activeTabId;
       const activeTabId =
         previousActive && filteredTabIds.includes(previousActive)
           ? previousActive

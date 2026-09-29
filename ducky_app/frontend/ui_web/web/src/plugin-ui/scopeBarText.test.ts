@@ -18,8 +18,8 @@ describe("scope bar text", () => {
   it("says when it synced, what is queued, and the switch warning", () => {
     expect(syncText({ syncedAt: 100, pending: 0, state: "ok" }, 105_000)).toBe("Synced 5 s ago");
     expect(syncText({ syncedAt: 100, pending: 3, state: "offline" }, 105_000)).toBe("Offline · 3 changes waiting");
-    expect(switchMessage("Personal", { kind: "team", label: "Alpha Studio" })).toBe(
-      "You'll see Alpha Studio's copy. Your Personal copy stays separate.",
+    expect(switchMessage("Local", { kind: "team", label: "Alpha Studio" })).toBe(
+      "You'll see Alpha Studio's copy. Your Local copy stays separate.",
     );
   });
 });

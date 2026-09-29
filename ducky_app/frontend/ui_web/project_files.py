@@ -1,4 +1,9 @@
-"""List and open files under the active UEFN project root."""
+"""List and open files under the active project root.
+
+A UEFN island's Content pane is its ``Content/`` folder; a folder project's is the folder
+itself (``project_kind``). Tree paths stay project-relative either way: ``Content/Verse/x``
+on an island, ``src/app.py`` in a folder project, whose root dir is ``.``.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ import time
 import uuid
 from pathlib import Path
 
-from frontend.deploy import resolve_uefn_project_root
+from frontend.project_kind import FOLDER, FOLDER_CONTENT_ROOT, project_kind, project_root_path
 from frontend.settings import PanelSettings
 from frontend.ui_web.file_kinds import (
     BINARY_FILE_SUFFIXES,
@@ -59,6 +64,28 @@ _LOCKED_RELATIVE_PATHS = frozenset(
         "content/python/init_unreal.py",
     }
 )
+
+# Folder projects (plain repos/folders): never list VCS internals; hide the usual
+# tool/cache folders until "Show hidden project files" is on. None of the UEFN
+# rules (.umap, *_Default*, Saved/, Binaries/, dist/) apply to them.
+_FOLDER_NEVER_LIST = frozenset({".git", ".svn", ".hg"})
+_FOLDER_HIDDEN_DIR_NAMES = frozenset(
+    {
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".vite",
+        ".next",
+        ".turbo",
+        ".gradle",
+    }
+)
+# Quick Open / @-mention index for a folder project. A large repo must not stall the panel.
+_FOLDER_INDEX_MAX_FILES = 50_000
 
 _BINARY_PREVIEW_MAX_BYTES = 256 * 1024
 
@@ -113,7 +140,31 @@ def _project_root() -> Path:
     raw = PanelSettings.load().uefn_project_root.strip()
     if not raw:
         raise ValueError("No project selected.")
-    return resolve_uefn_project_root(Path(raw))
+    return project_root_path(raw)
+
+
+def _is_folder_root(root: Path) -> bool:
+    return project_kind(root) == FOLDER
+
+
+def _active_is_folder() -> bool:
+    """Active project is a plain folder (not a UEFN island). False when none is selected."""
+    try:
+        return _is_folder_root(_project_root())
+    except (ValueError, OSError):
+        return False
+
+
+def content_root_rel() -> str:
+    """Tree path of the Content pane root: ``Content`` on an island, ``.`` for a folder."""
+    return FOLDER_CONTENT_ROOT if _active_is_folder() else CONTENT_DIR
+
+
+def _is_content_root_rel(rel: str) -> bool:
+    norm = (rel or "").strip().replace("\\", "/").strip("/")
+    if _active_is_folder():
+        return norm in {"", "."}
+    return norm.lower() == CONTENT_DIR.lower()
 
 
 def invalidate_workspace_folders_cache() -> None:
@@ -145,6 +196,10 @@ def _ensure_content_workspace_folder(folders: list[dict[str, str]], root: Path) 
 
 def _workspace_folders() -> list[dict[str, str]]:
     root = _project_root().resolve()
+    if _is_folder_root(root):
+        # No Verse workspace, digests or vproject: the folder is the one writable root,
+        # so the UEFN Core pane has nothing to show and stays hidden.
+        return [{"name": root.name, "path": str(root)}]
     key = str(root)
     if key in _workspace_folders_cache:
         return _workspace_folders_cache[key]
@@ -170,7 +225,8 @@ def _workspace_folders() -> list[dict[str, str]]:
 
 
 def _other_project_content_folders() -> list[dict[str, str]]:
-    """Recent islands' Content dirs, excluding the active project (All projects tree)."""
+    """Other recent projects' Content roots (All projects tree): an island's ``Content/``,
+    a folder project's own folder. The active project is excluded."""
     try:
         current = _project_root().resolve()
     except ValueError:
@@ -188,7 +244,8 @@ def _other_project_content_folders() -> list[dict[str, str]]:
             continue
         if path == current:
             continue
-        content = path / CONTENT_DIR
+        kind = str(item.get("kind") or "") or project_kind(path)
+        content = path if kind == FOLDER else path / CONTENT_DIR
         if not content.is_dir():
             continue
         try:
@@ -196,7 +253,7 @@ def _other_project_content_folders() -> list[dict[str, str]]:
         except OSError:
             continue
         name = str(item.get("name") or "").strip() or path.name
-        out.append({"name": name, "path": resolved})
+        out.append({"name": name, "path": resolved, "kind": kind})
     out.sort(key=lambda row: row["name"].lower())
     return out
 
@@ -224,7 +281,10 @@ def _is_content_folder_path(folder_path: Path) -> bool:
 
 
 def _is_workspace_locked_path(relative_path: str) -> bool:
-    """True for abs: paths and any path outside Content/."""
+    """True for abs:/ws: paths and, on an island, any path outside Content/.
+
+    In a folder project every project-relative path (``.`` is the root) is writable.
+    """
     rel = (relative_path or "").strip().replace("\\", "/")
     if rel.lower().startswith(ABS_PATH_PREFIX.lower()):
         return True
@@ -232,6 +292,8 @@ def _is_workspace_locked_path(relative_path: str) -> bool:
         return True
     if rel.lower() in {"", WORKSPACE_ROOTS_PATH.lower()}:
         return True
+    if _active_is_folder():
+        return False
     return not rel.lower().startswith(f"{CONTENT_DIR.lower()}/") and rel.lower() != CONTENT_DIR.lower()
 
 
@@ -419,6 +481,8 @@ def _resolve_relative(relative_path: str) -> Path:
 
 def _content_dir() -> Path:
     root = _project_root()
+    if _is_folder_root(root):
+        return root.resolve()
     content = (root / CONTENT_DIR).resolve()
     if not content.is_dir():
         raise ValueError("Project has no Content folder.")
@@ -445,9 +509,11 @@ def _validate_entry_name(name: str) -> str:
 
 
 def _join_content_path(parent_relative: str, name: str) -> str:
-    parent = (parent_relative or CONTENT_DIR).strip().replace("\\", "/").strip("/")
+    parent = (parent_relative or content_root_rel()).strip().replace("\\", "/").strip("/")
     safe_name = _validate_entry_name(name)
-    return f"{parent}/{safe_name}" if parent else safe_name
+    if parent in {"", "."}:
+        return safe_name
+    return f"{parent}/{safe_name}"
 
 
 def _norm_relative_path(relative_path: str) -> str:
@@ -459,7 +525,10 @@ def _show_hidden_project_files() -> bool:
 
 
 def is_locked_project_file(relative_path: str) -> bool:
-    return _norm_relative_path(relative_path) in _LOCKED_RELATIVE_PATHS
+    """Ducky's island listener bootstrap. A folder project has no locked files."""
+    if _norm_relative_path(relative_path) not in _LOCKED_RELATIVE_PATHS:
+        return False
+    return not _active_is_folder()
 
 
 def _require_not_locked(relative_path: str) -> None:
@@ -475,6 +544,8 @@ def _require_not_digest(relative_path: str) -> None:
 
 
 def _require_writable_mutation(relative_path: str) -> None:
+    if _is_content_root_rel(relative_path):
+        raise ValueError("Cannot change the project's Content root itself.")
     _require_writable_content_path(relative_path)
     _require_not_locked(relative_path)
     _require_not_digest(relative_path)
@@ -534,6 +605,30 @@ def _should_skip(name: str, is_dir: bool, show_hidden: bool) -> bool:
     return False
 
 
+def _folder_should_skip(name: str, is_dir: bool, show_hidden: bool) -> bool:
+    """Folder-project tree rule: VCS internals never, tool/cache folders until Show hidden."""
+    if name in _FOLDER_NEVER_LIST:
+        return True
+    if show_hidden:
+        return False
+    if name.startswith(".") and not should_show_dot_entry(name, is_dir, show_hidden=False):
+        return True
+    return is_dir and name in _FOLDER_HIDDEN_DIR_NAMES
+
+
+def _content_tree_filter(show_hidden: bool | None = None, folder: bool | None = None):
+    """``(name, is_dir) -> bool`` for one listing; settings and kind are read once."""
+    if show_hidden is None:
+        show_hidden = _show_hidden_project_files()
+    if folder is None:
+        folder = _active_is_folder()
+    if folder:
+        return lambda name, is_dir: not _folder_should_skip(name, is_dir, show_hidden)
+    return lambda name, is_dir: not _should_skip(name, is_dir, show_hidden) and not _is_hidden_tree_entry(
+        name, is_dir, show_hidden
+    )
+
+
 def _include_in_content_tree(name: str, is_dir: bool, show_hidden: bool | None = None) -> bool:
     """Whether *name* belongs in the sidebar's Content tree.
 
@@ -543,11 +638,7 @@ def _include_in_content_tree(name: str, is_dir: bool, show_hidden: bool | None =
     re-read the settings store thousands of times a second. Callers that loop
     read it once and pass it in.
     """
-    if show_hidden is None:
-        show_hidden = _show_hidden_project_files()
-    if _should_skip(name, is_dir, show_hidden):
-        return False
-    return not _is_hidden_tree_entry(name, is_dir, show_hidden)
+    return _content_tree_filter(show_hidden)(name, is_dir)
 
 
 def _is_binary_file_name(name: str) -> bool:
@@ -604,12 +695,21 @@ def is_editable_text_file(relative_path: str) -> bool:
 
 def include_in_workspace_search(name: str, is_dir: bool) -> bool:
     """Search walks the same folders as the sidebar but skips binary/image assets."""
-    if not _include_in_content_tree(name, is_dir):
-        return False
-    if is_dir:
-        return True
-    info = classify_project_file(name)
-    return info["kind"] == "text"
+    return workspace_search_filter()(name, is_dir)
+
+
+def workspace_search_filter():
+    """``include_in_workspace_search`` with settings and project kind read once per walk."""
+    tree = _content_tree_filter()
+
+    def include(name: str, is_dir: bool) -> bool:
+        if not tree(name, is_dir):
+            return False
+        if is_dir:
+            return True
+        return classify_project_file(name)["kind"] == "text"
+
+    return include
 
 
 _file_paths_cache: dict[str, list[dict[str, str]]] = {}
@@ -622,15 +722,22 @@ def _invalidate_file_paths_cache() -> None:
 
 def _list_directory_entries(target: Path, *, content_tree: bool) -> list[dict[str, str | bool]]:
     entries: list[dict[str, str | bool]] = []
-    include = _include_in_content_tree if content_tree else _include_in_workspace_tree_entry
     show_hidden = _show_hidden_project_files()
     # The caller already authorized this directory. Resolve settings / Content
     # once per listing, rather than repeating DB reads and root discovery for
     # every child (particularly expensive for large asset folders).
     root = _project_root().resolve()
     target = target.resolve()
-    content = (root / CONTENT_DIR).resolve()
+    active_folder = _is_folder_root(root)
+    content = root if active_folder else (root / CONTENT_DIR).resolve()
     active_content = _is_path_under(target, content)
+    if not content_tree:
+        def include(name: str, is_dir: bool) -> bool:
+            return _include_in_workspace_tree_entry(name, is_dir, show_hidden)
+    elif active_content:
+        include = _content_tree_filter(show_hidden, active_folder)
+    else:
+        include = _content_tree_filter(show_hidden, _listed_project_is_folder(target))
     try:
         with os.scandir(target) as scan:
             children = sorted(scan, key=lambda entry: entry.name.lower())
@@ -640,7 +747,7 @@ def _list_directory_entries(target: Path, *, content_tree: bool) -> list[dict[st
         name = child.name
         full = target / name
         is_dir = child.is_dir()
-        if not include(name, is_dir, show_hidden):
+        if not include(name, is_dir):
             continue
         resolved = full.resolve()
         if resolved.parent != target:
@@ -652,6 +759,17 @@ def _list_directory_entries(target: Path, *, content_tree: bool) -> list[dict[st
             entry_rel = f"{ABS_PATH_PREFIX}{resolved.as_posix()}"
         entries.append({"name": name, "path": entry_rel, "is_dir": is_dir})
     return entries
+
+
+def _listed_project_is_folder(target: Path) -> bool:
+    """Kind of the other (All projects) project whose Content root holds *target*."""
+    for folder in _other_project_content_folders():
+        try:
+            if _is_path_under(target, Path(folder["path"])):
+                return folder.get("kind") == FOLDER
+        except OSError:
+            continue
+    return False
 
 
 def _include_in_workspace_tree_entry(name: str, is_dir: bool, show_hidden: bool | None = None) -> bool:
@@ -676,17 +794,23 @@ def list_project_file_paths() -> list[dict[str, str]]:
 
     out: list[dict[str, str]] = []
     content = _content_dir()
+    folder = _is_folder_root(root)
+    include = _content_tree_filter(show_hidden, folder)
+    limit = _FOLDER_INDEX_MAX_FILES if folder else None
     for dirpath, dirnames, filenames in os.walk(content):
         dirnames[:] = sorted(
-            (d for d in dirnames if _include_in_content_tree(d, True, show_hidden)),
+            (d for d in dirnames if include(d, True)),
             key=lambda s: s.lower(),
         )
         for name in sorted(filenames, key=lambda s: s.lower()):
-            if not _include_in_content_tree(name, False, show_hidden):
+            if not include(name, False):
                 continue
             full = Path(dirpath) / name
             rel = str(full.relative_to(root)).replace("\\", "/")
             out.append({"path": rel, "name": name})
+        if limit is not None and len(out) >= limit:
+            del out[limit:]
+            break
 
     for folder in _workspace_folders():
         folder_path = Path(folder["path"])
@@ -801,10 +925,11 @@ def _dir_fingerprint(target: Path, show_hidden: bool) -> str:
     """
     names: list[str] = []
     max_mtime_ns = 0
+    include = _content_tree_filter(show_hidden)
     with os.scandir(target) as it:
         for entry in it:
             is_dir = entry.is_dir()
-            if not _include_in_content_tree(entry.name, is_dir, show_hidden):
+            if not include(entry.name, is_dir):
                 continue
             names.append(entry.name)
             try:
@@ -1007,16 +1132,16 @@ def move_project_entry(source_relative: str, dest_parent_relative: str) -> dict[
     _require_writable_mutation(source_relative)
     _require_writable_content_path(dest_parent_relative)
     source_rel = source_relative.strip().replace("\\", "/").strip("/")
-    if source_rel == CONTENT_DIR:
+    if _is_content_root_rel(source_rel):
         raise ValueError("Cannot move Content root.")
     source = _resolve_relative(source_rel)
     _require_under_content(source, source_rel)
     if not source.exists():
         raise ValueError(f"Not found: {source_relative}")
 
-    parent_rel = (dest_parent_relative or CONTENT_DIR).strip().replace("\\", "/").strip("/")
+    parent_rel = (dest_parent_relative or content_root_rel()).strip().replace("\\", "/").strip("/")
     if not parent_rel:
-        parent_rel = CONTENT_DIR
+        parent_rel = content_root_rel()
     dest_parent = _resolve_relative(parent_rel)
     _require_under_content(dest_parent, parent_rel)
     if not dest_parent.is_dir():
@@ -1061,14 +1186,14 @@ def copy_project_entry(source_relative: str, dest_parent_relative: str) -> dict[
     _require_writable_mutation(source_relative)
     _require_writable_content_path(dest_parent_relative)
     source_rel = source_relative.strip().replace("\\", "/").strip("/")
-    if source_rel == CONTENT_DIR:
+    if _is_content_root_rel(source_rel):
         raise ValueError("Cannot copy Content root.")
     source = _resolve_relative(source_rel)
     _require_under_content(source, source_rel)
     if not source.exists():
         raise ValueError(f"Not found: {source_relative}")
 
-    parent_rel = (dest_parent_relative or CONTENT_DIR).strip().replace("\\", "/").strip("/") or CONTENT_DIR
+    parent_rel = (dest_parent_relative or content_root_rel()).strip().replace("\\", "/").strip("/") or content_root_rel()
     dest_parent = _resolve_relative(parent_rel)
     _require_under_content(dest_parent, parent_rel)
     if not dest_parent.is_dir():
@@ -1105,7 +1230,7 @@ def import_external_entries(
     failing the whole drop.
     """
     _require_writable_content_path(dest_parent_relative)
-    parent_rel = (dest_parent_relative or CONTENT_DIR).strip().replace("\\", "/").strip("/") or CONTENT_DIR
+    parent_rel = (dest_parent_relative or content_root_rel()).strip().replace("\\", "/").strip("/") or content_root_rel()
     dest_parent = _resolve_relative(parent_rel)
     _require_under_content(dest_parent, parent_rel)
     if not dest_parent.is_dir():
@@ -1187,6 +1312,8 @@ def content_package_rel(relative_path: str) -> str:
 
 def content_entry_needs_uefn_delete(relative_path: str) -> bool:
     """True when deleting this entry requires EditorAssetLibrary (not disk-only trash)."""
+    if _active_is_folder():
+        return False
     try:
         target = _resolve_relative(relative_path.strip().replace("\\", "/").strip("/"))
         _require_under_content(target, relative_path)
@@ -1213,8 +1340,19 @@ def content_entry_exists(relative_path: str) -> bool:
     return target.exists()
 
 
+def _trash_root(root: Path) -> Path:
+    """Island: hidden sibling of Content. Folder project: AppData, so a repo's
+    ``git status`` never shows Ducky's undo slots."""
+    if _is_folder_root(root):
+        from frontend.settings import default_app_data_dir
+        from frontend.ui_web.project_chats import project_slug
+
+        return default_app_data_dir() / "tmp" / "undo-trash" / project_slug(str(root))
+    return root / TRASH_DIR_NAME
+
+
 def _trash_dir() -> Path:
-    d = _project_root().resolve() / TRASH_DIR_NAME
+    d = _trash_root(_project_root().resolve())
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -1227,7 +1365,7 @@ def purge_undo_trash() -> None:
         root = _project_root().resolve()
     except (ValueError, OSError):
         return
-    trash = root / TRASH_DIR_NAME
+    trash = _trash_root(root)
     if trash.is_dir():
         shutil.rmtree(trash, ignore_errors=True)
 
@@ -1236,7 +1374,7 @@ def delete_project_entry(relative_path: str) -> dict[str, str]:
     """Move a file or folder under Content to the undo-trash (restorable via Ctrl+Z)."""
     _require_writable_mutation(relative_path)
     rel = relative_path.strip().replace("\\", "/").strip("/")
-    if not rel or rel == CONTENT_DIR:
+    if not rel or _is_content_root_rel(rel):
         raise ValueError("Cannot delete Content root.")
     target = _resolve_relative(rel)
     _require_under_content(target, rel)
@@ -1302,7 +1440,7 @@ def rename_project_entry(source_relative: str, new_name: str) -> dict[str, str]:
     safe_name = _validate_entry_name(new_name)
     _require_not_digest(safe_name)
     source_rel = source_relative.strip().replace("\\", "/").strip("/")
-    if not source_rel or source_rel == CONTENT_DIR:
+    if not source_rel or _is_content_root_rel(source_rel):
         raise ValueError("Cannot rename Content root.")
     source = _resolve_relative(source_rel)
     _require_under_content(source, source_rel)
@@ -1346,12 +1484,12 @@ def create_project_verse_file(parent_relative: str, name: str, content: str = ""
 
 
 def create_project_file(parent_relative: str, name: str, content: str = "") -> dict[str, str]:
-    """Create a new text file under Content (any editable extension except .py)."""
+    """Create a new text file under Content (any editable extension; no .py on an island)."""
     _require_writable_content_path(parent_relative)
     safe_name = _validate_entry_name(name)
     if not Path(safe_name).suffix:
         safe_name = f"{safe_name}.txt"
-    if Path(safe_name).suffix.lower() in {".py", ".pyc"}:
+    if Path(safe_name).suffix.lower() in {".py", ".pyc"} and not _active_is_folder():
         raise ValueError(
             "Never create .py in a UEFN project — Epic rejects the upload "
             "(ContainsPythonData). Scratch → %LOCALAPPDATA%/UEFN-Ducky/."

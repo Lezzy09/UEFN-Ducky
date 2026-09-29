@@ -80,6 +80,7 @@ def test_enable_uefn_project_python_flips_flag(tmp_path: Path) -> None:
 def test_deploy_listener_writes_init_and_keeps_it(tmp_path, monkeypatch) -> None:
     project = tmp_path / "Island"
     (project / "Content" / "Verse").mkdir(parents=True)
+    (project / "Island.uefnproject").write_text("{}", encoding="utf-8")
     (project / "_junk.py").write_text("x\n", encoding="utf-8")
     monkeypatch.setattr(deploy, "quarantine_python_root", lambda: tmp_path / "q")
     monkeypatch.setattr(deploy, "enable_uefn_project_python", lambda _p: None)
@@ -106,6 +107,7 @@ def test_enable_uefn_project_python_skips_missing_file(tmp_path: Path) -> None:
 def _island_with_python(tmp_path: Path) -> Path:
     project = tmp_path / "Island"
     (project / "Content" / "Python").mkdir(parents=True)
+    (project / "Island.uefnproject").write_text("{}", encoding="utf-8")
     (project / "Content" / "Verse").mkdir(parents=True)
     (project / "Saved").mkdir()
     (project / "_probe_errs.py").write_text("print(1)\n", encoding="utf-8")
@@ -157,6 +159,7 @@ def test_ensure_project_init_replaces_stale(tmp_path: Path) -> None:
     project = tmp_path / "Island"
     dest = project / "Content" / "Python"
     dest.mkdir(parents=True)
+    (project / "Island.uefnproject").write_text("{}", encoding="utf-8")
     (dest / "init_unreal.py").write_text("# old stub\n", encoding="utf-8")
     cache = dest / "__pycache__"
     cache.mkdir()
@@ -173,6 +176,7 @@ def test_ensure_project_init_replaces_old_bootstrap_stub(tmp_path: Path) -> None
     project = tmp_path / "Island"
     dest = project / "Content" / "Python"
     dest.mkdir(parents=True)
+    (project / "Island.uefnproject").write_text("{}", encoding="utf-8")
     (dest / "init_unreal.py").write_text(
         "from listener.bootstrap import run\nrun()\n", encoding="utf-8"
     )
@@ -221,6 +225,7 @@ def test_remove_project_init_deletes_ducky_file(tmp_path: Path) -> None:
     project = tmp_path / "Island"
     dest = project / "Content" / "Python"
     dest.mkdir(parents=True)
+    (project / "Island.uefnproject").write_text("{}", encoding="utf-8")
     (dest / "init_unreal.py").write_text(
         f"# {deploy._DUCKY_INIT_MARKER}\nfrom listener.bootstrap import run\n",
         encoding="utf-8",
@@ -241,6 +246,7 @@ def test_remove_project_init_leaves_foreign_file(tmp_path: Path) -> None:
     project = tmp_path / "Island"
     dest = project / "Content" / "Python"
     dest.mkdir(parents=True)
+    (project / "Island.uefnproject").write_text("{}", encoding="utf-8")
     init = dest / "init_unreal.py"
     init.write_text("# my own python\nprint('hi')\n", encoding="utf-8")
     deploy.remove_project_init(project)

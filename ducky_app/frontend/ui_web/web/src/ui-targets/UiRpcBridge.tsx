@@ -11,8 +11,7 @@ import { installAgentEventBus, subscribeAgentEvents } from "../hooks/useAgentEve
 import { getApi } from "../hooks/usePanelApi";
 import { openLlmsProviderSettings, requestOpenSettings } from "../navigation/openSettingsTab";
 import { requestOpenChangesTab } from "../navigation/openChangesTab";
-import { requestOpenAutomationsTab } from "../navigation/openAutomationsTab";
-import { requestOpenPipelinesTab } from "../navigation/openPipelinesTab";
+import { requestOpenWorkflowsTab } from "../navigation/openWorkflowsTab";
 import { listTargets } from "./registry";
 import { runAskUser } from "../ask-user";
 import { runAgentWalkthrough } from "../walkthrough/agentWalkthrough";
@@ -74,12 +73,8 @@ function handleNavigate(params: Record<string, unknown>): RpcResult {
     requestOpenChangesTab();
     return { ok: true, route };
   }
-  if (route === "automations") {
-    requestOpenAutomationsTab();
-    return { ok: true, route };
-  }
-  if (route === "pipelines") {
-    requestOpenPipelinesTab();
+  if (route === "workflows") {
+    requestOpenWorkflowsTab();
     return { ok: true, route };
   }
   window.dispatchEvent(new CustomEvent("ducky:navigate", { detail: { route, item_id: itemId } }));

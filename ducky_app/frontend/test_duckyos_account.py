@@ -552,6 +552,54 @@ def test_revoke_account_pc_clears_this_device() -> None:
     assert "device_key_id" not in saved[-1]
 
 
+def test_session_route_401_keeps_the_paired_pc() -> None:
+    """Profile and Store 401s want a website cookie. They must not unpair the PC."""
+    import io
+    import urllib.error
+    from unittest.mock import patch
+
+    from frontend import duckyos_account as acc
+
+    blob = {
+        "device_key": "dky_v1_x",
+        "device_key_id": "k1",
+        "base_url": "https://uefnducky.org",
+        "email": "a@b.co",
+    }
+    unpaired: list[str] = []
+
+    def _401(url: str):
+        return urllib.error.HTTPError(url, 401, "unauthorized", hdrs=None, fp=io.BytesIO(b"{}"))
+
+    with (
+        patch.object(acc, "_load_blob", return_value=dict(blob)),
+        patch.object(acc, "_unpair_this_pc", side_effect=lambda: unpaired.append("unpair")),
+        patch.object(acc, "_clear_expired_auth", side_effect=lambda: unpaired.append("clear")),
+        patch.object(acc, "_drop_website_session"),
+        patch("urllib.request.urlopen", side_effect=_401("https://uefnducky.org/api/v1/auth/me")),
+    ):
+        try:
+            acc.api_request("GET", "/api/v1/auth/me", prefer_bearer=False)
+            raised = None
+        except acc.DuckyOSAccountError as exc:
+            raised = exc
+    assert raised is not None and raised.code == "session_required"
+    assert unpaired == []
+
+    with (
+        patch.object(acc, "_load_blob", return_value=dict(blob)),
+        patch.object(acc, "_unpair_this_pc", side_effect=lambda: unpaired.append("unpair")),
+        patch("urllib.request.urlopen", side_effect=_401("https://uefnducky.org/api/v1/plugins/uefn-ducky/collect/desktop-devices")),
+    ):
+        try:
+            acc.api_request("POST", "/api/v1/plugins/uefn-ducky/collect/desktop-devices", {})
+            raised = None
+        except acc.DuckyOSAccountError as exc:
+            raised = exc
+    assert raised is not None and raised.code == "device_unpaired"
+    assert unpaired == ["unpair"]
+
+
 def test_unpair_this_pc_keeps_session() -> None:
     from unittest.mock import patch
 
@@ -618,6 +666,7 @@ if __name__ == "__main__":
     test_plugin_collect_posts_v1_only()
     test_list_account_pcs_marks_mine()
     test_revoke_account_pc_clears_this_device()
+    test_session_route_401_keeps_the_paired_pc()
     test_unpair_this_pc_keeps_session()
     test_revoke_device_key_also_collects()
     print("ok")

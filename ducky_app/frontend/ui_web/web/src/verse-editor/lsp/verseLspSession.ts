@@ -16,7 +16,7 @@ import {
   type LspDiagnostic,
 } from "./verseLspClient";
 import { verseLspLog, verseLspLogError, verseLspWarn } from "./verseLspDebug";
-import { isDigestFile } from "../utils/isVerseFile";
+import { isDigestFile, isFolderProject } from "../utils/isVerseFile";
 
 export type LspDiagnosticsStats = {
   received: number;
@@ -268,6 +268,10 @@ export async function acquireVerseLspSession(
   navigateToFile: NavigateToFile,
 ): Promise<Session> {
   navigateToFileRef.current = navigateToFile;
+  if (isFolderProject()) {
+    // No .uefnproject, no digests: a folder project never starts verse-lsp.
+    throw new Error("Verse tools are off for folder projects");
+  }
 
   if (session && session.projectRoot === projectRoot) {
     const status = await getLspStatus();

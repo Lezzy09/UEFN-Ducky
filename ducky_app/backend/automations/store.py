@@ -1,13 +1,19 @@
-"""Persist automation graphs (db or AppData JSON files)."""
+"""Persist workflow graphs.
+
+A workflow is one graph; what starts it comes from its nodes (Chat input, a
+schedule, a plugin trigger, or Run). Each workflow is owned by **Local** (this PC
+only) or a **team** (synced to every member): see :mod:`backend.automations.owned`.
+``DUCKY_STORE_BACKEND=files`` keeps the old JSON folder, Local only.
+"""
 
 from __future__ import annotations
 
 import json
-import threading
-from copy import deepcopy
 import math
+import threading
 import time
 import uuid
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +22,9 @@ from frontend.app_paths import resolve_app_data_dir
 
 _SAVE_LOCK = threading.RLock()
 _RUN_CAP = 20
-KIND_AUTOMATION = "automation"
-KIND_PIPELINE = "pipeline"
-_KINDS = frozenset({KIND_AUTOMATION, KIND_PIPELINE})
+LOCAL = "local"
+_LOCAL_OWNER = {"id": LOCAL, "kind": LOCAL, "label": "Local", "state": "ok", "readOnly": False, "reason": ""}
+_BUILTIN_STARTERS = {"start.manual", "start.chat", "start.cron"}
 
 
 def _announce_graphs_changed() -> None:
@@ -28,11 +34,6 @@ def _announce_graphs_changed() -> None:
         push_ui_event({"type": "graphs_changed"})
     except Exception:
         pass
-
-
-def normalize_kind(raw: Any) -> str:
-    key = str(raw or "").strip().lower()
-    return key if key in _KINDS else KIND_AUTOMATION
 
 
 def normalize_graph(raw: Any) -> dict[str, Any]:
@@ -101,118 +102,295 @@ def normalize_graph(raw: Any) -> dict[str, Any]:
     return out
 
 
-def empty_workflow(*, name: str = "Untitled", kind: str = KIND_AUTOMATION) -> dict[str, Any]:
-    now = time.time()
+def empty_workflow(*, name: str = "Untitled") -> dict[str, Any]:
     return {
         "id": str(uuid.uuid4()),
         "name": (name or "Untitled").strip() or "Untitled",
-        "kind": normalize_kind(kind),
         "description": "",
         "enabled": True,
         "graph": {"nodes": [], "edges": []},
-        "runs": [],
-        "updated": now,
-        "last_run": 0.0,
+        "updated": time.time(),
     }
 
 
-def list_automations(kind: str = KIND_AUTOMATION) -> list[dict[str, Any]]:
-    want = normalize_kind(kind) if kind else ""
-    rows = _all()
-    if want:
-        rows = [w for w in rows if normalize_kind(w.get("kind")) == want]
-    return [_summary(w) for w in rows]
+# --------------------------------------------------------------------------- public API
 
 
-def get_automation(workflow_id: str) -> dict[str, Any] | None:
+def list_workflows() -> list[dict[str, Any]]:
+    """Summaries of every workflow this account can see, Local first, then teams."""
+    return [_summary(wf) for wf in all_workflows()]
+
+
+def all_workflows() -> list[dict[str, Any]]:
+    """Full workflows (graph, owner, per-PC state) for the list, scheduler and triggers."""
+    if not use_db("automations"):
+        return [_files_view(w) for w in _files_all()]
+    from backend.automations import owned
+
+    out: list[dict[str, Any]] = []
+    for scope in owned.owner_scopes():
+        owner = owned.owner_view(scope)
+        rows = [_view(doc, owner, owned.state(scope["account"], str(doc["id"])), []) for doc in owned.docs(scope)]
+        rows.sort(key=lambda w: (-float(w.get("updated") or 0.0), str(w.get("name") or "")))
+        out.extend(rows)
+    return out
+
+
+def get_workflow(workflow_id: str) -> dict[str, Any] | None:
     wid = (workflow_id or "").strip()
     if not wid:
         return None
-    return _get(wid)
+    if not use_db("automations"):
+        row = _read_file(_files_dir() / f"{wid}.json") if _safe_file_id(wid) else None
+        return _files_view(row) if row else None
+    from backend.automations import owned
+
+    found = owned.find(wid)
+    if found is None:
+        return None
+    scope, doc = found
+    aid = scope["account"]
+    return _view(doc, owned.owner_view(scope), owned.state(aid, wid), owned.runs(aid, wid))
 
 
-def save_automation(doc: dict[str, Any]) -> dict[str, Any]:
+def save_workflow(doc: dict[str, Any], *, owner: str = "") -> dict[str, Any]:
+    """Create or update a workflow. A new one lands in ``owner`` (default Local); an
+    existing one stays with its owner (:func:`copy_workflow` moves it). Raises
+    ``PermissionError`` when that owner is read-only here."""
     with _SAVE_LOCK:
-        return _save_automation(doc)
+        out = _files_save(doc) if not use_db("automations") else _db_save(doc, owner)
+    _announce_graphs_changed()
+    return out
 
 
-def _save_automation(doc: dict[str, Any]) -> dict[str, Any]:
-    now = time.time()
-    existing = _get(str(doc.get("id") or "").strip()) if doc.get("id") else None
-    seed_kind = doc.get("kind") if existing is None else existing.get("kind")
-    out = deepcopy(existing) if existing else empty_workflow(
-        name=str(doc.get("name") or "Untitled"),
-        kind=str(seed_kind or KIND_AUTOMATION),
-    )
-    if str(doc.get("id") or "").strip():
-        out["id"] = str(doc["id"]).strip()
+def delete_workflow(workflow_id: str) -> bool:
+    wid = (workflow_id or "").strip()
+    if not wid:
+        return False
+    if not use_db("automations"):
+        ok = _safe_file_id(wid) and _files_delete(wid)
+    else:
+        from backend.automations import owned
+
+        found = owned.find(wid)
+        ok = False
+        if found is not None:
+            scope = owned.writable(found[0])
+            ok = owned.remove(scope, wid)
+            owned.forget(scope["account"], [wid])
+    if ok:
+        _announce_graphs_changed()
+    return ok
+
+
+def copy_workflow(workflow_id: str, owner: str, *, move: bool = False) -> dict[str, Any]:
+    """Copy (new id) or move (same id) a workflow to Local or a team."""
+    if not use_db("automations"):
+        raise ValueError("Sharing with a team needs the database store")
+    from backend.automations import owned
+
+    with _SAVE_LOCK:
+        found = owned.find(workflow_id)
+        if found is None:
+            raise KeyError("workflow not found")
+        src, doc = found
+        dst = owned.writable(owned.scope_for(owner, src["account"]))
+        if move:
+            owned.writable(src)
+            if src["id"] == dst["id"]:
+                return get_workflow(workflow_id) or {}
+        out = {**doc, "id": doc["id"] if move else str(uuid.uuid4()), "updated": time.time()}
+        owned.write(dst, out, versions=(out,))
+        if move:
+            owned.remove(src, str(doc["id"]))
+        if dst["kind"] == "team":
+            owned.set_run_here(dst["account"], str(out["id"]), True)
+    _announce_graphs_changed()
+    return get_workflow(str(out["id"])) or {}
+
+
+def set_run_here(workflow_id: str, on: bool) -> dict[str, Any] | None:
+    """Team workflows: whether this PC runs its schedule and triggers."""
+    if not use_db("automations"):
+        return get_workflow(workflow_id)
+    from backend.automations import owned
+
+    found = owned.find(workflow_id)
+    if found is None:
+        return None
+    owned.set_run_here(found[0]["account"], str(found[1]["id"]), on)
+    _announce_graphs_changed()
+    return get_workflow(workflow_id)
+
+
+def runs_here(wf: dict[str, Any]) -> bool:
+    """Local workflows run where they live; a team one only where a member said so,
+    so a team schedule never fires once per member."""
+    owner = wf.get("owner") or {}
+    return owner.get("kind", LOCAL) == LOCAL or bool(wf.get("run_here"))
+
+
+def append_run(workflow_id: str, run: dict[str, Any]) -> None:
+    """Per-PC run log; never touches the (synced) workflow doc."""
+    at = float(run.get("ended") or run.get("started") or time.time())
+    if not use_db("automations"):
+        wf = _read_file(_files_dir() / f"{workflow_id}.json") if _safe_file_id(workflow_id) else None
+        if wf is None:
+            return
+        wf["runs"] = (list(wf.get("runs") or []) + [run])[-_RUN_CAP:]
+        wf["last_run"] = at
+        _files_put(wf)
+        return
+    from backend.automations import owned
+
+    found = owned.find(workflow_id)
+    if found is not None:
+        owned.append_run(found[0]["account"], str(found[1]["id"]), run, at)
+
+
+# --------------------------------------------------------------------------- views
+
+
+def _view(doc: dict[str, Any], owner: dict[str, Any], state: dict[str, Any], runs: list[Any]) -> dict[str, Any]:
+    return {
+        "id": str(doc["id"]),
+        "name": str(doc.get("name") or ""),
+        "description": str(doc.get("description") or ""),
+        "enabled": bool(doc.get("enabled", True)),
+        "graph": normalize_graph(doc.get("graph")),
+        "updated": float(doc.get("updated") or 0.0),
+        "runs": list(runs),
+        "last_run": float(state.get("last_run") or 0.0),
+        "run_here": bool(state.get("run_here")),
+        "owner": dict(owner),
+    }
+
+
+def _summary(wf: dict[str, Any]) -> dict[str, Any]:
+    nodes = (wf.get("graph") or {}).get("nodes") or []
+    return {
+        "id": wf["id"],
+        "name": wf.get("name") or "",
+        "description": str(wf.get("description") or ""),
+        "enabled": bool(wf.get("enabled")),
+        "updated": float(wf.get("updated") or 0.0),
+        "last_run": float(wf.get("last_run") or 0.0),
+        "node_count": len(nodes),
+        "owner": wf.get("owner") or dict(_LOCAL_OWNER),
+        "run_here": bool(wf.get("run_here")),
+        "trigger": trigger_of(nodes),
+    }
+
+
+def trigger_of(nodes: list[dict[str, Any]]) -> dict[str, str]:
+    """What starts it, for the list badge: schedule > event > chat > manual."""
+    cron = next((n for n in nodes if n.get("type") == "start.cron"), None)
+    if cron is not None:
+        cfg = cron.get("config") or {}
+        try:
+            every = float(cfg.get("interval_seconds") or 0)
+        except (TypeError, ValueError):
+            every = 0.0
+        return {"kind": "schedule", "label": _every(every) if every > 0 else str(cfg.get("cron") or "Schedule")}
+    types = {str(n.get("type") or "") for n in nodes}
+    if (types - _BUILTIN_STARTERS) & _trigger_types():
+        return {"kind": "event", "label": "Event"}
+    if "start.chat" in types:
+        return {"kind": "chat", "label": "Chat"}
+    return {"kind": "manual", "label": "Manual"}
+
+
+def _every(seconds: float) -> str:
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size and seconds % size == 0:
+            return f"Every {int(seconds // size)}{unit}"
+    return f"Every {int(seconds)}s"
+
+
+def _trigger_types() -> set[str]:
+    try:
+        from backend.automations.catalog import trigger_types
+
+        return trigger_types()
+    except Exception:
+        return set()
+
+
+# --------------------------------------------------------------------------- database mode
+
+
+def _db_save(doc: dict[str, Any], owner: str) -> dict[str, Any]:
+    from backend.automations import owned
+    from backend.store.repos import automations as versions_repo
+    from backend.uefn_plugins.scopes import valid_doc_key
+
+    wid = str(doc.get("id") or "").strip()
+    found = owned.find(wid) if wid else None
+    if found is not None:
+        scope, existing = found
+    else:
+        scope, existing = owned.scope_for(owner or LOCAL), None
+        if wid and not valid_doc_key(wid):
+            raise ValueError("Workflow ids use lowercase letters, digits, '.', '_' and '-'.")
+    owned.writable(scope)
+    out = deepcopy(existing) if existing else empty_workflow(name=str(doc.get("name") or "Untitled"))
+    if wid:
+        out["id"] = wid
+    _merge(out, doc)
+    out["updated"] = time.time()
+    aid = scope["account"]
+    first = (existing,) if existing and not versions_repo.has_versions(wid) else ()
+    owned.write(scope, out, versions=(*first, out))
+    wid = str(out["id"])
+    if existing is None and scope["kind"] == "team":
+        owned.set_run_here(aid, wid, True)  # on for the member who made it
+    return _view(out, owned.owner_view(scope), owned.state(aid, wid), owned.runs(aid, wid))
+
+
+def _merge(out: dict[str, Any], doc: dict[str, Any]) -> None:
     if "name" in doc:
         out["name"] = str(doc.get("name") or "").strip() or out["name"]
-    if "kind" in doc:
-        out["kind"] = normalize_kind(doc.get("kind"))
     if "description" in doc:
         out["description"] = str(doc.get("description") or "")
     if "enabled" in doc:
         out["enabled"] = bool(doc.get("enabled"))
     if "graph" in doc:
         out["graph"] = normalize_graph(doc.get("graph"))
-    if "runs" in doc and isinstance(doc.get("runs"), list):
-        out["runs"] = list(doc["runs"])[-_RUN_CAP:]
-    out["updated"] = now
-    if "last_run" in doc:
-        out["last_run"] = float(doc.get("last_run") or 0.0)
-    if use_db("automations"):
-        from backend.store.repos import automations as repo
-        repo.put(out, versioned=True)
-    else:
-        from backend.automations.versions import archive_file, directory
-        if existing and not any(directory(out["id"]).glob("*.json")):
-            archive_file(existing)
-        archive_file(out)
-        _put(out)
-    _announce_graphs_changed()
-    return out
 
 
-def delete_automation(workflow_id: str) -> bool:
-    wid = (workflow_id or "").strip()
-    ok = bool(wid) and _delete(wid)
-    if ok:
-        _announce_graphs_changed()
-    return ok
+# --------------------------------------------------------------------------- files mode (Local only)
 
 
-def append_run(workflow_id: str, run: dict[str, Any]) -> dict[str, Any] | None:
-    wf = _get(workflow_id)
-    if wf is None:
-        return None
-    runs = list(wf.get("runs") or [])
-    runs.append(run)
-    wf["runs"] = runs[-_RUN_CAP:]
-    wf["last_run"] = float(run.get("ended") or run.get("started") or time.time())
-    wf["updated"] = time.time()
-    _put(wf)
-    return wf
+def _files_view(row: dict[str, Any]) -> dict[str, Any]:
+    return _view(row, _LOCAL_OWNER, {"last_run": row.get("last_run"), "run_here": False}, list(row.get("runs") or []))
 
 
-def _summary(wf: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": wf["id"],
-        "name": wf.get("name") or "",
-        "kind": normalize_kind(wf.get("kind")),
-        "description": str(wf.get("description") or ""),
-        "enabled": bool(wf.get("enabled")),
-        "updated": float(wf.get("updated") or 0.0),
-        "last_run": float(wf.get("last_run") or 0.0),
-        "node_count": len((wf.get("graph") or {}).get("nodes") or []),
-    }
+def _files_save(doc: dict[str, Any]) -> dict[str, Any]:
+    from backend.automations.versions import archive_file, directory
+
+    wid = str(doc.get("id") or "").strip()
+    if wid and not _safe_file_id(wid):
+        raise ValueError("invalid workflow id")
+    existing = _read_file(_files_dir() / f"{wid}.json") if wid else None
+    out = deepcopy(existing) if existing else {**empty_workflow(name=str(doc.get("name") or "Untitled")),
+                                                "runs": [], "last_run": 0.0}
+    if wid:
+        out["id"] = wid
+    _merge(out, doc)
+    out["updated"] = time.time()
+    if existing and not any(directory(out["id"]).glob("*.json")):
+        archive_file(existing)
+    archive_file(out)
+    _files_put(out)
+    return _files_view(out)
 
 
-def _all() -> list[dict[str, Any]]:
-    if use_db("automations"):
-        from backend.store.repos import automations as repo
+def _safe_file_id(workflow_id: str) -> bool:
+    """File names come from ids: never a path separator or a dot-dot."""
+    return bool(workflow_id) and all(c.isalnum() or c in "-_." for c in workflow_id) and ".." not in workflow_id
 
-        return repo.list_all()
+
+def _files_all() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for path in sorted(_files_dir().glob("*.json")):
         row = _read_file(path)
@@ -222,31 +400,14 @@ def _all() -> list[dict[str, Any]]:
     return out
 
 
-def _get(workflow_id: str) -> dict[str, Any] | None:
-    if use_db("automations"):
-        from backend.store.repos import automations as repo
-
-        return repo.get(workflow_id)
-    return _read_file(_files_dir() / f"{workflow_id}.json")
-
-
-def _put(doc: dict[str, Any]) -> None:
-    if use_db("automations"):
-        from backend.store.repos import automations as repo
-
-        repo.put(doc)
-        return
+def _files_put(doc: dict[str, Any]) -> None:
     path = _files_dir() / f"{doc['id']}.json"
     temporary = path.with_suffix(f".{uuid.uuid4()}.tmp")
     temporary.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
     temporary.replace(path)
 
 
-def _delete(workflow_id: str) -> bool:
-    if use_db("automations"):
-        from backend.store.repos import automations as repo
-
-        return repo.delete(workflow_id)
+def _files_delete(workflow_id: str) -> bool:
     path = _files_dir() / f"{workflow_id}.json"
     if not path.is_file():
         return False
@@ -272,6 +433,6 @@ def _read_file(path: Path) -> dict[str, Any] | None:
     data["graph"] = normalize_graph(data.get("graph"))
     if not isinstance(data.get("runs"), list):
         data["runs"] = []
-    data["kind"] = normalize_kind(data.get("kind"))
+    data.pop("kind", None)
     data["description"] = str(data.get("description") or "")
     return data

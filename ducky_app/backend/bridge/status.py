@@ -43,9 +43,9 @@ def _normalize_project_path(path: str) -> str:
     if not raw:
         return ""
     try:
-        from frontend.deploy import resolve_uefn_project_root
+        from frontend.project_kind import project_root_path
 
-        return str(resolve_uefn_project_root(Path(raw)))
+        return str(project_root_path(raw))
     except (OSError, ValueError):
         try:
             return str(Path(raw).resolve())
@@ -88,8 +88,12 @@ def _project_from_health(
     project_match = True
     selected = _normalize_project_path(selected_project_root)
     if uefn_project_name and selected:
-        selected_name = project_display_name(selected)
-        project_match = uefn_project_name.casefold() == selected_name.casefold()
+        from frontend.project_kind import is_folder_project
+
+        # A folder project is not an island, so UEFN having one open is no mismatch.
+        if not is_folder_project(selected):
+            selected_name = project_display_name(selected)
+            project_match = uefn_project_name.casefold() == selected_name.casefold()
     return uefn_project_dir, uefn_project_name, project_match
 
 
@@ -268,8 +272,11 @@ def fetch_listener_status(
                 refresh_inits,
                 resolve_uefn_project_root,
             )
+            from frontend.project_kind import has_uefnproject
 
             root = resolve_uefn_project_root(Path(selected_project_root))
+            if not has_uefnproject(root):
+                raise ValueError("folder project: no island sweep")
             moved = quarantine_project_python(root, deep=False)
             if moved:
                 st.python_quarantined = moved

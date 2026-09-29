@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { DropdownPanel } from "./DropdownPanel";
 import { Icons } from "../icons/Icons";
 import { TruncatedText } from "./TruncatedText";
-import type { ProjectInfo, RecentProject } from "../types/panel";
+import type { ProjectFolderInspection, ProjectInfo, RecentProject } from "../types/panel";
 import { getApi, isRemote } from "../hooks/usePanelApi";
 import { useOptionalEditorWorkspaceFlush } from "../contexts/EditorWorkspaceBridge";
 import { useConfirmModal } from "../contexts/ConfirmModalContext";
@@ -25,6 +25,54 @@ function sameProjectName(a: string | undefined, b: string | undefined): boolean 
   return !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
+type ConfirmFn = ReturnType<typeof useConfirmModal>["confirm"];
+type AlertFn = ReturnType<typeof useConfirmModal>["alert"];
+
+/** Any folder can be a project. When the pick is a plain folder that holds islands
+ * (e.g. "Fortnite Projects"), ask whether an island inside was meant. Returns the path
+ * to open, or null to cancel. */
+export async function resolvePickedFolder(
+  api: { inspect_project_folder?: (path: string) => Promise<ProjectFolderInspection> },
+  picked: string,
+  confirm: ConfirmFn,
+  alert: AlertFn,
+): Promise<string | null> {
+  if (typeof api.inspect_project_folder !== "function") return picked;
+  let info: ProjectFolderInspection;
+  try {
+    info = await api.inspect_project_folder(picked);
+  } catch {
+    return picked;
+  }
+  if (!info.ok) {
+    await alert({ title: "Can't open that folder", message: info.error || "Pick a different folder." });
+    return null;
+  }
+  const path = info.path || picked;
+  const islands = info.kind === "folder" ? info.islands ?? [] : [];
+  if (islands.length === 1) {
+    const island = islands[0]!;
+    const choice = await confirm({
+      title: "Open the island inside?",
+      message: `"${info.name}" isn't a UEFN island, but it holds one: ${island.name}.\n\nOpen ${island.name}, or open the whole folder as a normal project?`,
+      confirmLabel: `Open ${island.name}`,
+      extraLabel: "Open the folder",
+    });
+    if (choice === true) return island.path;
+    return choice === "extra" ? path : null;
+  }
+  if (islands.length > 1) {
+    const names = islands.map((row) => row.name).join(", ");
+    const ok = await confirm({
+      title: "Open as a normal folder?",
+      message: `"${info.name}" isn't a UEFN island, but it holds ${islands.length}: ${names}.\n\nTo work on one island, choose Add project again and pick that island's folder.`,
+      confirmLabel: "Open the folder",
+    });
+    return ok === true ? path : null;
+  }
+  return path;
+}
+
 export function ProjectSelector({
   project,
   onProjectChanged,
@@ -34,7 +82,7 @@ export function ProjectSelector({
   embedded = false,
 }: ProjectSelectorProps) {
   const flushFromBridge = useOptionalEditorWorkspaceFlush();
-  const { confirm } = useConfirmModal();
+  const { confirm, alert } = useConfirmModal();
   const [isOpen, setIsOpen] = useState(false);
   const [recent, setRecent] = useState<RecentProject[]>([]);
   const anchorRef = useRef<HTMLButtonElement>(null);
@@ -111,7 +159,9 @@ export function ProjectSelector({
     try {
       const api = getApi();
       if (!api) return;
-      const path = await api.pick_project_path();
+      const picked = await api.pick_project_path();
+      if (!picked) return;
+      const path = await resolvePickedFolder(api, picked, confirm, alert);
       if (path) await selectProject(path);
     } finally {
       pickingRef.current = false;
@@ -119,7 +169,7 @@ export function ProjectSelector({
         ignoreAnchorRef.current = false;
       }, 600);
     }
-  }, [close, selectProject]);
+  }, [alert, close, confirm, selectProject]);
 
   useEffect(() => {
     if (!isOpen && !embedded) return;
@@ -131,8 +181,11 @@ export function ProjectSelector({
   const uefnName = (uefnProjectName || "").trim();
   const hasLiveProject = !!listenerOnline && uefnName.length > 0;
   // The panel is editing one project while UEFN has a different one open — file/workspace
-  // edits and the live map would target different projects.
-  const mismatch = hasLiveProject && projectMatch === false && !sameProjectName(project.name, uefnName);
+  // edits and the live map would target different projects. A folder project is not an
+  // island, so UEFN having any island open is never a mismatch.
+  const isFolderProject = project.kind === "folder";
+  const mismatch =
+    hasLiveProject && !isFolderProject && projectMatch === false && !sameProjectName(project.name, uefnName);
   const matchedRecent = mismatch ? recent.find((r) => sameProjectName(r.name, uefnName)) : undefined;
 
   const onAnchorPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
@@ -198,7 +251,12 @@ export function ProjectSelector({
                     onClick={() => void selectProject(item.path)}
                     className={`project-selector-item-btn${isActive ? " is-active" : ""}`}
                   >
-                    <Icons.Folder />
+                    <span
+                      className="project-selector-kind-icon"
+                      title={item.kind === "folder" ? "Folder project" : "UEFN island"}
+                    >
+                      {item.kind === "folder" ? <Icons.Folder /> : <Icons.Verse />}
+                    </span>
                     <TruncatedText
                       className="ui-flex-1-min-block"
                       title={item.path}
@@ -248,7 +306,8 @@ export function ProjectSelector({
           Add project…
         </button>
         <div className="project-selector-mismatch-hint project-selector-add-hint">
-          Select the parent project folder that holds your UEFN game — not the Content folder.
+          Pick your UEFN project folder (not its Content folder), or any other folder to work on
+          it as a normal project.
         </div>
         </>
         )}

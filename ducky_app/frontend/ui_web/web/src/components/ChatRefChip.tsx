@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { DuckyAvatar } from "./ducky/DuckyAvatars";
 import { chatRefDisplayName, parseChatRefHref, type ChatRefKind } from "./chatReferences";
 import { useChatRefFace, type ChatRefFace } from "./chatRefFaces";
+import { Icons } from "../icons/Icons";
 
 function isImageIcon(value: string): boolean {
   return (
@@ -13,7 +14,7 @@ function isImageIcon(value: string): boolean {
 }
 
 function refTip(kind: ChatRefKind | undefined): { kind: string; hint: string } {
-  if (kind === "pipeline") return { kind: "Pipeline", hint: "Open this pipeline. Type your request after the reference to run it." };
+  if (kind === "workflow" || kind === "pipeline") return { kind: "Workflow", hint: "Open this workflow. Type your request after the reference to run it." };
   if (kind === "ducky") return { kind: "Chat", hint: "Open that chat" };
   if (kind === "profile") return { kind: "Ducky", hint: "Open this ducky" };
   if (kind === "subskill") return { kind: "Subskill", hint: "Open in Skills" };
@@ -24,7 +25,9 @@ function refTip(kind: ChatRefKind | undefined): { kind: string; hint: string } {
 }
 
 function KindMark({ kind }: { kind: ChatRefKind | undefined }) {
-  if (kind === "pipeline") return <span aria-hidden>🔗</span>;
+  if (kind === "workflow" || kind === "pipeline") {
+    return <span className="chat-ref-kind chat-ref-kind--workflow" aria-hidden><Icons.Workflow /></span>;
+  }
   if (kind === "ducky" || kind === "profile") {
     return <span className="chat-ref-kind chat-ref-kind--mention" aria-hidden>@</span>;
   }

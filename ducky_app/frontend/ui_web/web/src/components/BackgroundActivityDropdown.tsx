@@ -16,8 +16,7 @@ import {
   workflowIdFromJobId,
 } from "../hooks/graphActivity";
 import { subscribePanelPush } from "../hooks/usePanelPushBus";
-import { requestOpenAutomationsTab } from "../navigation/openAutomationsTab";
-import { requestOpenPipelinesTab } from "../navigation/openPipelinesTab";
+import { requestOpenWorkflowsTab } from "../navigation/openWorkflowsTab";
 import { DropdownPanel } from "./DropdownPanel";
 
 function phaseClass(phase: string): string {
@@ -29,10 +28,8 @@ function phaseClass(phase: string): string {
 function openGraphJob(job: BackgroundJob): void {
   const wid = workflowIdFromJobId(job.id);
   if (!wid) return;
-  const kind = job.source === "pipeline" ? "pipeline" : "automation";
-  if (kind === "pipeline") requestOpenPipelinesTab();
-  else requestOpenAutomationsTab();
-  requestFocusGraph(kind, wid);
+  requestOpenWorkflowsTab();
+  requestFocusGraph(wid);
 }
 
 export function BackgroundActivityDropdown() {

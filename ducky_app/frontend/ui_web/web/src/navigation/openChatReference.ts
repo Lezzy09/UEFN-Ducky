@@ -6,7 +6,7 @@ import { getApi } from "../hooks/usePanelApi";
 import { formToConfig, profileToForm } from "../components/ducky/duckyProfileForm";
 import { pickAgentChatForProfile } from "../utils/globalAgents";
 import { requestFocusGraph } from "../hooks/graphActivity";
-import { requestOpenPipelinesTab } from "./openPipelinesTab";
+import { requestOpenWorkflowsTab } from "./openWorkflowsTab";
 
 type ChatTabOpener = (chat: { id: string; name: string }) => void;
 
@@ -80,9 +80,9 @@ export function requestOpenChatReference(href: string, label = ""): void {
   const parsed = parseChatRefHref(href);
   if (!parsed) return;
   const name = label.replace(/^[@/]/, "").trim() || parsed.id;
-  if (parsed.kind === "pipeline") {
-    requestFocusGraph("pipeline", parsed.id);
-    requestOpenPipelinesTab();
+  if (parsed.kind === "workflow" || parsed.kind === "pipeline") {
+    requestFocusGraph(parsed.id);
+    requestOpenWorkflowsTab();
     return;
   }
   if (parsed.kind === "ducky") {

@@ -47,10 +47,30 @@
   color: var(--text-muted);
   cursor: default;
 }
-.aw-list-toggle { width: 100%; justify-content: space-between; flex-shrink: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; border: 0; border-bottom: 1px solid var(--border); }
+.aw-list-head { flex-shrink: 0; gap: 4px; padding: 4px; }
+.aw-list-toggle { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .aw-list-toggle:hover { background: var(--bg-hover); }
 .aw-root.is-list-collapsed .aw-list { bottom: auto; }
-.aw-root.is-list-collapsed .aw-list-toggle { border-bottom: 0; }
+.aw-root.is-list-collapsed .aw-list-head { border-bottom: 0; }
+/* Folders by owner: Local (this PC only), then each team. */
+.aw-folder-icon { display: inline-flex; color: var(--text-muted); }
+.aw-folder--team .aw-folder-icon { color: var(--blue); }
+.aw-folder-lock { display: grid; place-items: center; width: 30px; height: 30px; color: var(--text-muted); }
+.aw-folder-status { margin: -6px 8px 4px 48px; overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.aw-folder-status.is-error { color: var(--amber); }
+.aw-list-name { flex: 1; min-width: 0; }
+.aw-trigger { flex-shrink: 0; padding: 1px 6px; border-radius: 999px; background: var(--bg-hover); color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+.aw-trigger--schedule { background: var(--green-dim); color: var(--green); }
+.aw-trigger--event { background: var(--purple-dim); color: var(--purple); }
+.aw-trigger--chat { background: var(--blue-dim); color: var(--blue); }
+.aw-trigger.is-elsewhere { opacity: 0.55; }
+.aw-import-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; padding: 6px 8px; border: 1px dashed var(--border); border-radius: 8px; color: var(--text-muted); }
+.aw-import-row button { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+.aw-list-hint { margin: 8px; color: var(--text-muted); font-size: 11px; }
+.aw-owner-chip { flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px; background: var(--bg-hover); color: var(--text-muted); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; }
+.aw-owner-chip svg { width: 12px; height: 12px; }
+.aw-owner-chip--team { background: var(--blue-dim); color: var(--blue); }
+.aw-readonly-note { position: absolute; z-index: 5; bottom: 60px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; max-width: calc(100% - 48px); margin: 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--text-muted); }
 .aw-list-sections { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 4px 4px 48px; }
 .aw-list-sections[hidden] { display: none; }
 .aw-workflow-section + .aw-workflow-section { border-top: 1px solid var(--border); }
@@ -68,6 +88,7 @@
 .aw-icon-button:hover { background: var(--bg-hover); }
 .aw-list-row {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
   width: 100%;
@@ -112,7 +133,7 @@
   position: relative;
 }
 .aw-toolbar { position: absolute; z-index: 5; top: 12px; left: 244px; right: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel-header); box-shadow: var(--shadow-md); }
-.aw-toolbar-fields { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.aw-toolbar-fields { flex: 1 1 180px; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .aw-name { width: 100%; min-width: 0; box-sizing: border-box; background: transparent; border: 0; padding: 4px; color: inherit; font: inherit; font-weight: 600; text-overflow: ellipsis; }
 .aw-name.aw-description { color: var(--text-muted); font-size: 11px; font-weight: 400; }
 .aw-toolbar-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
@@ -128,10 +149,13 @@
   height: 34px;
   flex-shrink: 0;
   padding: 0;
-  font-size: 16px;
+  display: inline-grid;
+  place-items: center;
   cursor: pointer;
 }
 .aw-toolbar button:hover { background: var(--bg-hover); }
+.aw-toolbar button svg { width: 16px; height: 16px; }
+.aw-spin { display: inline-grid; animation: spin-slow 0.8s linear infinite; }
 .aw-board {
   touch-action: none;
   cursor: grab;
@@ -382,11 +406,13 @@
 .aw-node-resize:hover::after, .aw-node-resize:focus-visible::after { background: var(--accent); }
 .aw-canvas-controls, .aw-connection-tools { position: absolute; bottom: 12px; right: 12px; display: flex; align-items: center; gap: 6px; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); box-shadow: var(--shadow-md); z-index: 4; }
 .aw-canvas-controls button, .aw-connection-tools button, .aw-connection-tools select { display: inline-flex; align-items: center; justify-content: center; min-height: 28px; border: 0; border-radius: 6px; background: var(--panel-header); color: var(--text); cursor: pointer; padding: 4px 8px; }
+.aw-canvas-controls button svg { width: 16px; height: 16px; }
 .aw-canvas-controls span { min-width: 38px; text-align: center; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .aw-connection-tools { bottom: 62px; }
 .aw-menu-actions { display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--border); }
 .aw-menu-actions button { display: grid; place-items: center; flex: 0 0 40px; height: 40px; border: 1px solid var(--border); border-radius: 8px; padding: 0; background: var(--panel-header); color: var(--text); font-size: 18px; cursor: pointer; }
 .aw-menu-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.aw-menu-actions button svg { width: 18px; height: 18px; }
 .aw-menu-actions button:hover, .aw-canvas-controls button:hover, .aw-connection-tools button:hover { background: var(--bg-hover); }
 .aw-spawn-section { display: flex; align-items: center; justify-content: space-between; margin: 4px 12px 8px; color: var(--text-muted); font-size: 11px; }
 .aw-spawn-section button { border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; }

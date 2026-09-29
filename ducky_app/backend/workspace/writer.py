@@ -34,11 +34,32 @@ from backend.workspace.paths import (
     normalize_rel,
     rel_from_root,
     require_not_digest_path,
+    require_writable_folder_path,
     require_writable_project_path,
 )
 from backend.workspace.policy import Decision, WritePolicy, WriteRequest, evaluate
 
 log = logging.getLogger(__name__)
+
+
+def _is_folder_project_root(root: str) -> bool:
+    """True only for a folder project the user added (never an island or an unknown root).
+
+    Any failure answers False, which keeps the stricter island rules.
+    """
+    try:
+        from frontend.project_kind import is_saved_folder_project
+
+        return is_saved_folder_project(root)
+    except Exception:
+        return False
+
+
+def _require_writable(full: str, root: str) -> None:
+    if _is_folder_project_root(root):
+        require_writable_folder_path(full, root)
+    else:
+        require_writable_project_path(full)
 
 # Same cap the panel uses for opening text; larger files are never read for a
 # restore point (they are not something an agent edits as text anyway).
@@ -404,7 +425,7 @@ class ProjectWriter:
         require_not_digest_path(rel)
         full = self._path_resolver(rel)
         require_not_digest_path(full)
-        require_writable_project_path(full)
+        _require_writable(full, root)
         canonical = rel_from_root(full, root)
         if not canonical:
             raise ValueError(f"Path is outside the active project: {rel_in!r}")

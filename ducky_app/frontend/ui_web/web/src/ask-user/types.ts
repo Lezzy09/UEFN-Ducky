@@ -11,6 +11,10 @@ export type AskUserQuestion = {
   allow_multiple: boolean;
   allow_free_text: boolean;
   required: boolean;
+  /** Verbatim text shown in a code block (an approval card's command or path). */
+  detail?: string;
+  /** Caution line above the options (e.g. "Pushes commits to a remote."). */
+  warning?: string;
 };
 
 export type AskUserAnswer = {
@@ -80,6 +84,8 @@ export function parseAskUserQuestions(raw: unknown): AskUserQuestion[] {
         description: String(o.description || "").trim(),
       });
     }
+    const detail = typeof q.detail === "string" ? q.detail.trimEnd() : "";
+    const warning = typeof q.warning === "string" ? q.warning.trim() : "";
     out.push({
       id,
       prompt,
@@ -87,6 +93,8 @@ export function parseAskUserQuestions(raw: unknown): AskUserQuestion[] {
       allow_multiple: Boolean(q.allow_multiple),
       allow_free_text: q.allow_free_text !== false,
       required: q.required !== false,
+      ...(detail ? { detail } : {}),
+      ...(warning ? { warning } : {}),
     });
   }
   return out;

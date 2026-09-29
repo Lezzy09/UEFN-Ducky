@@ -26,6 +26,7 @@ def test_large_directory_loads_project_settings_once(tmp_path: Path, monkeypatch
 def test_empty_workspace_is_not_cached(tmp_path: Path, monkeypatch):
     project = tmp_path / "Isle"
     project.mkdir()
+    (project / "Isle.uefnproject").write_text("{}", encoding="utf-8")  # an island, not a plain folder
     monkeypatch.setattr(pf, "_project_root", lambda: project)
     monkeypatch.setattr(pf, "discover_verse_workspace", lambda _root, **_kwargs: {"workspace_folders": []})
     pf._workspace_folders_cache.clear()

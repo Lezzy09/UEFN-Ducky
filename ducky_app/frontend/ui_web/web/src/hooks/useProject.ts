@@ -4,6 +4,7 @@ import { onApiReady } from "./onApiReady";
 import { subscribePanelPush } from "./usePanelPushBus";
 import { observeProjectRoot } from "./projectSwitchController";
 import type { ProjectInfo } from "../types/panel";
+import { setProjectContentRoot } from "../verse-editor/utils/isVerseFile";
 
 const EMPTY: ProjectInfo = { path: "", name: "No project", slug: "_no_project" };
 export const PROJECT_SELECTED_EVENT = "ducky:project-selected";
@@ -12,6 +13,8 @@ export const PROJECT_SELECTED_EVENT = "ducky:project-selected";
  * root change fires the centralized per-project resets exactly once at the earliest signal. */
 function applyProjectInfo(setProject: (p: ProjectInfo) => void, info: ProjectInfo): void {
   observeProjectRoot(info.path ?? "");
+  // Before the tree re-renders: a folder project's Content pane is the folder itself.
+  setProjectContentRoot(info.content_root);
   setProject(info);
 }
 

@@ -24,6 +24,7 @@ from backend.store.repos import plugin_data as repo
 from backend.uefn_plugins import scopes
 
 MIN_INTERVAL_S = 60.0
+WORKFLOW_DOCS = "ducky.automations"
 MAX_PUSHES = 100
 # ponytail: pages per round are capped so one round stays bounded; the next round
 # continues from the saved cursor.
@@ -158,6 +159,11 @@ def _adopt(scope: dict[str, Any], t: Transport, it: tuple[str, str, str], server
         repo.set_rev(scope["account"], scope["id"], pid, kind, key, 0)
         return None
     changed.add(pid)
+    if kind == "doc" and pid == WORKFLOW_DOCS:
+        # A team workflow edited here and elsewhere: keep this PC's edit in History.
+        from backend.automations.owned import archive_before_adopt
+
+        archive_before_adopt(scope, key)
     if server.get("deleted"):
         _drop_local(scope, kind, pid, key)
         return None
@@ -339,9 +345,10 @@ def _failed(account: str, team: str, exc: SyncError, changed: set[str]) -> dict[
 # --------------------------------------------------------------------------- host glue
 
 
-def sync_active(*, force: bool = False, on_done: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
-    """Start a round for the active team scope on a worker thread (no-op for Personal)."""
-    scope = scopes.active_scope()
+def sync_active(plugin: str, *, force: bool = False,
+                on_done: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+    """Start a round for the team ``plugin``'s data lives in, on a worker thread (no-op for Local)."""
+    scope = scopes.active_scope(plugin)
     if scope["kind"] != "team":
         return {"ok": True, "started": False}
 
@@ -354,21 +361,27 @@ def sync_active(*, force: bool = False, on_done: Callable[[dict[str, Any]], None
     return {"ok": True, "started": True}
 
 
-def scope_status() -> dict[str, Any]:
-    """What the host scope bar shows. ``visible`` is false for accounts without the
-    Teams beta (rule 13: normal members see no change)."""
+def scope_status(plugin: str) -> dict[str, Any]:
+    """Where ``plugin``'s data lives: the host scope bar and the Plugins page. ``visible``
+    is false for accounts without the Teams beta (rule 13: normal members see no change).
+    ``local`` / ``current`` are the Local and the shown copy's counts and bytes."""
+    from backend.store.repos import workflows
     from frontend.duckyos_account import get_status
 
-    scope = scopes.active_scope()
+    scope = scopes.active_scope(plugin)
     account = scope["account"]
     out: dict[str, Any] = {
         "ok": True,
         "visible": scope["kind"] == "team" or teams_enabled(),
         "scope": scopes.scope_view(scope),
         "email": str(get_status().get("email") or ""),
-        "canChange": account != scopes.LOCAL and bool(scopes.current_project()),
+        "canChange": account != scopes.LOCAL,
         "state": scope["state"],
+        "local": repo.totals(account, scopes.PERSONAL, plugin),
+        "current": repo.totals(account, scope["id"], plugin),
     }
+    if scope["kind"] == "team":
+        out["teamSlug"] = workflows.team_slug(account, scope["id"])
     if scope["kind"] == "team":
         st = repo.sync_get(account, scope["id"])
         out.update(
@@ -394,31 +407,36 @@ def teams_enabled() -> bool:
 
 
 def scope_choices() -> dict[str, Any]:
-    """Personal + the account's teams with Team Private active. Calls the Store hub
-    (which also claims pending invites), so only on Change ▾ open, never on a timer."""
+    """Local + the account's teams with Team Private active. Calls the Store hub
+    (which also claims pending invites), so only when a picker opens, never on a timer."""
     from frontend.duckyos_account import teams_snapshot
 
     account = scopes.account_id()
-    choices = [{"id": scopes.PERSONAL, "kind": "personal", "label": "Personal"}]
+    choices = [{"id": scopes.PERSONAL, "kind": "personal", "label": "Local"}]
     if account == scopes.LOCAL or not teams_enabled():
         return {"ok": True, "choices": choices}
     try:
         snap = teams_snapshot()
     except Exception:
         snap = {}
+    from backend.store.repos import workflows
+
     for team in snap.get("teams") or []:
         plan = team.get("private_plan") or {}
         team_id = str(team.get("id") or "")
         if plan.get("status") not in ("active", "comped") or not scopes.valid_team_id(team_id):
             continue
+        perms = team.get("perms") if isinstance(team.get("perms"), dict) else {}
+        slug = str(team.get("slug") or "")
+        workflows.perms_put(account, team_id, manage_automations=bool(perms.get("manage_automations")), slug=slug)
         members = len(team.get("members") or [])
         label = str(team.get("name") or "Team")
         repo.sync_put(account, team_id, label=label, members=members)
-        choices.append({"id": team_id, "kind": "team", "label": label, "members": members})
+        choices.append({"id": team_id, "kind": "team", "label": label, "members": members, "slug": slug})
     return {"ok": True, "choices": choices}
 
 
-def link_scope(scope_id: str) -> dict[str, Any]:
-    """Change ▾: point the open project at Personal or a team (the web confirmed first)."""
-    scopes.link_project(scope_id)
-    return scope_status()
+def link_scope(plugin: str, scope_id: str) -> dict[str, Any]:
+    """Keep ``plugin``'s data in Local or one team (the UI confirmed first)."""
+    scopes.link_plugin(plugin, scope_id)
+    return scope_status(plugin)

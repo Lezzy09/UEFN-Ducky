@@ -2,6 +2,7 @@ import { Icons } from "../../../icons/Icons";
 import type { DuckyOSStoreItemDto } from "../../../types/panel";
 import { asLabelList, itemCategories } from "../storeFilters";
 import { StoreActions, type StoreItemHandlers } from "./StoreActions";
+import { PluginDataPanel } from "./PluginDataPanel";
 import { StoreInstallOverlay } from "./StoreInstallOverlay";
 import { StorePatchNotes } from "./StorePatchNotes";
 import { authorLabelFor, formatInstalls, itemInitials, type CardBusy } from "./storeData";
@@ -129,6 +130,10 @@ export function StoreDetailView({ item, pendingSlug, catalogReady, jobs, actionB
             </h3>
             <p className="ds-panel-desc">{item.description || "No description."}</p>
           </div>
+
+          {item.kind !== "skill" && (state === "installed" || state === "update") ? (
+            <PluginDataPanel pluginId={slug} name={item.name || slug} />
+          ) : null}
 
           <div className="ds-panel">
             <h3 className="ds-panel-title">Tags &amp; categories</h3>

@@ -8,9 +8,9 @@ from frontend.ui_web.project_chats import _use_db, create_conversation, load_con
 
 
 def test_save_graph_roundtrip():
-    from backend.automations.store import get_automation, save_automation
+    from backend.automations.store import get_workflow, save_workflow
 
-    wf = save_automation(
+    wf = save_workflow(
         {
             "name": "Nightly",
             "enabled": True,
@@ -23,7 +23,7 @@ def test_save_graph_roundtrip():
             },
         }
     )
-    got = get_automation(wf["id"])
+    got = get_workflow(wf["id"])
     assert got is not None
     assert got["name"] == "Nightly"
     assert len(got["graph"]["nodes"]) == 2
@@ -32,10 +32,10 @@ def test_save_graph_roundtrip():
 
 def test_emit_runs_matching_workflows(monkeypatch):
     from backend.automations import runner
-    from backend.automations.store import get_automation, save_automation
+    from backend.automations.store import get_workflow, save_workflow
 
     monkeypatch.setattr(runner, "_run_message", lambda *a, **k: "run")
-    save_automation(
+    save_workflow(
         {
             "name": "Mail",
             "enabled": True,
@@ -48,18 +48,18 @@ def test_emit_runs_matching_workflows(monkeypatch):
             },
         }
     )
-    out = runner.emit_automation("email.received", {"subject": "hi"})
+    out = runner.emit_trigger("email.received", {"subject": "hi"})
     assert out["ok"] is True
     assert out["runs"]
     assert out["runs"][0]["ok"] is True
     assert any(s.get("type") == "flow.wait" for s in out["runs"][0]["steps"])
-    logged = get_automation(out["runs"][0]["id"])
+    logged = get_workflow(out["runs"][0]["id"])
     assert logged and logged["runs"]
 
 
 def test_spawn_stays_on_current_island(tmp_path, monkeypatch):
     from backend.automations import runner
-    from backend.automations.store import save_automation
+    from backend.automations.store import save_workflow
 
     home = tmp_path / "HomeIsland"
     other = tmp_path / "OtherIsland"
@@ -69,7 +69,7 @@ def test_spawn_stays_on_current_island(tmp_path, monkeypatch):
     s.uefn_project_root = str(home)
     s.save()
     monkeypatch.setattr(runner, "_run_message", lambda *a, **k: "run")
-    wf = save_automation(
+    wf = save_workflow(
         {
             "name": "Spawn",
             "enabled": True,
@@ -89,7 +89,7 @@ def test_spawn_stays_on_current_island(tmp_path, monkeypatch):
         }
     )
     before = s.uefn_project_root
-    result = runner.run_automation(wf["id"])
+    result = runner.run_workflow(wf["id"])
     assert result["ok"] is True
     conv_id = result.get("conv_id") or ""
     assert conv_id
@@ -107,7 +107,7 @@ def test_spawn_stays_on_current_island(tmp_path, monkeypatch):
 def test_cron_does_not_steal_project(tmp_path, monkeypatch):
     from backend.automations import runner
     from backend.automations.scheduler import cron_due, interval_due
-    from backend.automations.store import save_automation
+    from backend.automations.store import save_workflow
 
     home = tmp_path / "IslandA"
     home.mkdir()
@@ -115,7 +115,7 @@ def test_cron_does_not_steal_project(tmp_path, monkeypatch):
     s.uefn_project_root = str(home)
     s.save()
     monkeypatch.setattr(runner, "_run_message", lambda *a, **k: "run")
-    wf = save_automation(
+    wf = save_workflow(
         {
             "name": "Tick",
             "enabled": True,
@@ -129,7 +129,7 @@ def test_cron_does_not_steal_project(tmp_path, monkeypatch):
         }
     )
     root_before = PanelSettings.load().uefn_project_root
-    result = runner.run_automation(wf["id"], starter_id="c")
+    result = runner.run_workflow(wf["id"], starter_id="c")
     assert result["ok"] is True
     assert PanelSettings.load().uefn_project_root == root_before
     assert interval_due(60, 0, 10) is True
@@ -159,10 +159,10 @@ def test_catalog_has_builtin_ducky_nodes():
 
 def test_emit_skips_when_trigger_config_channel_differs(monkeypatch):
     from backend.automations import runner
-    from backend.automations.store import save_automation
+    from backend.automations.store import save_workflow
 
     monkeypatch.setattr(runner, "_run_message", lambda *a, **k: "run")
-    save_automation(
+    save_workflow(
         {
             "name": "Chan",
             "enabled": True,
@@ -181,45 +181,38 @@ def test_emit_skips_when_trigger_config_channel_differs(monkeypatch):
             },
         }
     )
-    miss = runner.emit_automation("discord.message", {"channel_id": "other", "content": "nope"})
+    miss = runner.emit_trigger("discord.message", {"channel_id": "other", "content": "nope"})
     assert miss["ok"] is True
     assert miss["runs"] == []
-    hit = runner.emit_automation("discord.message", {"channel_id": "want", "content": "yes"})
+    hit = runner.emit_trigger("discord.message", {"channel_id": "want", "content": "yes"})
     assert hit["runs"]
     assert hit["runs"][0]["ok"] is True
     assert any(s.get("type") == "flow.wait" for s in hit["runs"][0]["steps"])
 
 
-def test_kind_filter_hides_pipelines():
-    from backend.automations.store import KIND_PIPELINE, get_automation, list_automations, save_automation
+def test_one_list_holds_every_workflow_with_what_starts_it():
+    from backend.automations.store import get_workflow, list_workflows, save_workflow
 
-    auto = save_automation({"name": "AutoOne", "graph": {"nodes": [], "edges": []}})
-    pipe = save_automation(
-        {"name": "PipeOne", "kind": KIND_PIPELINE, "description": "draw then cut", "graph": {"nodes": [], "edges": []}}
-    )
-    got = get_automation(pipe["id"])
-    assert got is not None
-    assert got["kind"] == KIND_PIPELINE
+    timer = save_workflow({"name": "Timer", "graph": {"nodes": [
+        {"id": "c", "type": "start.cron", "x": 0, "y": 0, "config": {"interval_seconds": 300}}], "edges": []}})
+    chat = save_workflow({"name": "Chat", "description": "draw then cut", "graph": {"nodes": [
+        {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}}], "edges": []}})
+    got = get_workflow(chat["id"])
+    assert got is not None and "kind" not in got
     assert got["description"] == "draw then cut"
-    autos = {r["id"] for r in list_automations()}
-    pipes = {r["id"] for r in list_automations(kind=KIND_PIPELINE)}
-    assert auto["id"] in autos
-    assert pipe["id"] not in autos
-    assert pipe["id"] in pipes
-    assert auto["id"] not in pipes
+    rows = {r["id"]: r for r in list_workflows()}
+    assert rows[timer["id"]]["trigger"] == {"kind": "schedule", "label": "Every 5m"}
+    assert rows[chat["id"]]["trigger"] == {"kind": "chat", "label": "Chat"}
+    assert rows[chat["id"]]["owner"]["kind"] == "local"
 
 
-def test_pipeline_catalog_nodes():
+def test_one_catalog_for_every_workflow():
     from backend.automations.catalog import list_nodes
 
-    auto = {n["type"] for n in list_nodes("automation")}
-    pipe = {n["type"] for n in list_nodes("pipeline")}
-    assert "start.chat" in pipe
-    assert "pipeline.agent" in pipe
-    assert "pipeline.finish" in pipe
-    assert "ducky.spawn" not in pipe
-    assert "start.chat" not in auto
-    assert "tool.call" in auto and "tool.call" in pipe
+    nodes = list_nodes()
+    types = {n["type"] for n in nodes}
+    assert {"start.chat", "start.cron", "start.manual", "pipeline.agent", "pipeline.finish", "ducky.spawn", "tool.call"} <= types
+    assert all("systems" not in n for n in nodes)
 
 
 def test_catalog_keeps_select_options(monkeypatch):
@@ -249,14 +242,14 @@ def test_catalog_keeps_select_options(monkeypatch):
         },
     )
     monkeypatch.setattr(pstore, "get_enabled_plugin_ids", lambda: ["openai"])
-    node = next(n for n in catalog.list_nodes("pipeline") if n["type"] == "openai.complete")
+    node = next(n for n in catalog.list_nodes() if n["type"] == "openai.complete")
     model = next(f for f in node["config_fields"] if f["id"] == "model")
     size = next(f for f in node["config_fields"] if f["id"] == "size")
     assert model["type"] == "model" and model["provider"] == "openai"
     assert size["options"][0]["id"] == "1024x1024"
 
 
-def test_plugin_node_systems_filter(monkeypatch):
+def test_plugin_node_systems_are_ignored(monkeypatch):
     from backend.automations import catalog
     from backend.uefn_plugins import host, store as pstore
 
@@ -276,23 +269,20 @@ def test_plugin_node_systems_filter(monkeypatch):
         },
     )
     monkeypatch.setattr(pstore, "get_enabled_plugin_ids", lambda: ["cut"])
-    auto = {n["type"] for n in catalog.list_nodes("automation")}
-    pipe = {n["type"] for n in catalog.list_nodes("pipeline")}
-    assert "image.rembg" not in auto
-    assert "image.rembg" in pipe
+    # A tile once limited to Pipelines is on the one Workflows palette.
+    assert "image.rembg" in {n["type"] for n in catalog.list_nodes()}
 
 
-def test_run_pipeline_stamps_caller_and_finish_posts(monkeypatch):
+def test_chat_run_stamps_caller_and_finish_posts(monkeypatch):
     from backend.automations import runner
-    from backend.automations.store import KIND_PIPELINE, save_automation
+    from backend.automations.store import save_workflow
     from backend.workspace import identity
     from backend.workspace.identity import RunContext
 
     caller = create_conversation(PanelSettings.load(), "", title="Caller")
-    wf = save_automation(
+    wf = save_workflow(
         {
             "name": "Return",
-            "kind": KIND_PIPELINE,
             "graph": {
                 "nodes": [
                     {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
@@ -309,7 +299,7 @@ def test_run_pipeline_stamps_caller_and_finish_posts(monkeypatch):
     )
     token = identity.bind(RunContext(run_id="r1", conv_id=caller.id))
     try:
-        out = runner.run_pipeline(wf["id"], prompt="hi")
+        out = runner.run_workflow(wf["id"], prompt="hi")
     finally:
         identity.reset(token)
     assert out["ok"] is True
@@ -322,7 +312,7 @@ def test_run_pipeline_stamps_caller_and_finish_posts(monkeypatch):
 def test_pipeline_agent_waits_and_keeps_files(monkeypatch):
     from backend.automations import runner
     from backend.automations.artifacts import chat_dir
-    from backend.automations.store import KIND_PIPELINE, save_automation
+    from backend.automations.store import save_workflow
 
     monkeypatch.setattr(
         runner,
@@ -355,10 +345,9 @@ def test_pipeline_agent_waits_and_keeps_files(monkeypatch):
     )
     monkeypatch.setattr(runner, "_ensure_pipeline_group", lambda ctx, wf: ctx.update({"group_id": "hub-1", "group_folder_id": "hub-folder", "conv_id": "hub-1"}))
     caller = create_conversation(PanelSettings.load(), "", title="Art caller")
-    wf = save_automation(
+    wf = save_workflow(
         {
             "name": "Draw",
-            "kind": KIND_PIPELINE,
             "graph": {
                 "nodes": [
                     {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
@@ -374,7 +363,7 @@ def test_pipeline_agent_waits_and_keeps_files(monkeypatch):
             },
         }
     )
-    out = runner.run_pipeline(wf["id"], prompt="a duck", caller_conv_id=caller.id)
+    out = runner.run_workflow(wf["id"], prompt="a duck", caller_conv_id=caller.id)
     assert out["ok"] is True
     files = out.get("files") or []
     assert files
@@ -383,23 +372,23 @@ def test_pipeline_agent_waits_and_keeps_files(monkeypatch):
     assert worker and worker != caller.id
 
 
-def test_scheduler_skips_pipelines(monkeypatch):
+def test_scheduler_runs_every_local_workflow_with_a_schedule(monkeypatch):
     from backend.automations import scheduler
-    from backend.automations.store import KIND_PIPELINE, save_automation
+    from backend.automations.store import save_workflow
 
     hits: list[str] = []
     monkeypatch.setattr(
         scheduler,
-        "run_automation",
+        "run_workflow",
         lambda wid, **k: hits.append(wid) or {"ok": True},
     )
-    save_automation(
+    wf = save_workflow(
         {
-            "name": "NoTick",
-            "kind": KIND_PIPELINE,
+            "name": "Tick",
             "enabled": True,
             "graph": {
                 "nodes": [
+                    {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
                     {"id": "c", "type": "start.cron", "x": 0, "y": 0, "config": {"interval_seconds": 1}},
                 ],
                 "edges": [],
@@ -407,7 +396,7 @@ def test_scheduler_skips_pipelines(monkeypatch):
         }
     )
     scheduler._tick()
-    assert hits == []
+    assert hits == [wf["id"]]
 
 
 def test_custom_automation_template_roundtrip():
@@ -453,15 +442,14 @@ class _FakeGroups:
 
 def test_wait_pipeline_skips_group(monkeypatch):
     from backend.automations import runner
-    from backend.automations.store import KIND_PIPELINE, save_automation
+    from backend.automations.store import save_workflow
 
     fake = _FakeGroups()
     monkeypatch.setattr("backend.tools.panel.ducky_panel._panel_api", lambda: fake)
     caller = create_conversation(PanelSettings.load(), "", title="Solo")
-    wf = save_automation(
+    wf = save_workflow(
         {
             "name": "No swarm",
-            "kind": KIND_PIPELINE,
             "graph": {
                 "nodes": [
                     {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
@@ -471,7 +459,7 @@ def test_wait_pipeline_skips_group(monkeypatch):
             },
         }
     )
-    out = runner.run_pipeline(wf["id"], prompt="go", caller_conv_id=caller.id)
+    out = runner.run_workflow(wf["id"], prompt="go", caller_conv_id=caller.id)
     assert out["ok"] is True
     assert fake.created == []
     assert fake.added == []
@@ -479,7 +467,7 @@ def test_wait_pipeline_skips_group(monkeypatch):
 
 def test_pipeline_group_seats_solo_caller(monkeypatch):
     from backend.automations import runner
-    from backend.automations.store import KIND_PIPELINE, save_automation
+    from backend.automations.store import save_workflow
     from frontend.ui_web.project_chats import load_conversation, save_conversation
 
     fake = _FakeGroups()
@@ -487,10 +475,9 @@ def test_pipeline_group_seats_solo_caller(monkeypatch):
     caller = create_conversation(PanelSettings.load(), "", title="Solo")
     caller.parent_conv_id = ""
     save_conversation(caller)
-    wf = save_automation(
+    wf = save_workflow(
         {
             "name": "Clustered",
-            "kind": KIND_PIPELINE,
             "graph": {
                 "nodes": [
                     {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
@@ -501,7 +488,7 @@ def test_pipeline_group_seats_solo_caller(monkeypatch):
             },
         }
     )
-    out = runner.run_pipeline(wf["id"], prompt="go", caller_conv_id=caller.id)
+    out = runner.run_workflow(wf["id"], prompt="go", caller_conv_id=caller.id)
     assert out["ok"] is True
     assert fake.created and fake.created[0].get("open_tab") is False
     assert fake.added == []
@@ -512,7 +499,7 @@ def test_pipeline_group_seats_solo_caller(monkeypatch):
 
 def test_pipeline_group_does_not_move_grouped_caller(monkeypatch):
     from backend.automations import runner
-    from backend.automations.store import KIND_PIPELINE, save_automation
+    from backend.automations.store import save_workflow
     from frontend.ui_web.project_chats import load_conversation, save_conversation
 
     fake = _FakeGroups()
@@ -522,10 +509,9 @@ def test_pipeline_group_does_not_move_grouped_caller(monkeypatch):
     save_conversation(hub)
     caller = create_conversation(PanelSettings.load(), "", title="Member", parent_conv_id=hub.id)
     save_conversation(caller)
-    wf = save_automation(
+    wf = save_workflow(
         {
             "name": "Nested",
-            "kind": KIND_PIPELINE,
             "graph": {
                 "nodes": [
                     {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
@@ -536,7 +522,7 @@ def test_pipeline_group_does_not_move_grouped_caller(monkeypatch):
             },
         }
     )
-    out = runner.run_pipeline(wf["id"], caller_conv_id=caller.id)
+    out = runner.run_workflow(wf["id"], caller_conv_id=caller.id)
     assert out["ok"] is True
     assert fake.created and fake.created[0].get("open_tab") is False
     assert fake.added == []
@@ -547,7 +533,7 @@ def test_pipeline_group_does_not_move_grouped_caller(monkeypatch):
 
 def test_pipeline_agent_forwards_image_attachments(monkeypatch, tmp_path):
     from backend.automations import runner
-    from backend.automations.store import KIND_PIPELINE, save_automation
+    from backend.automations.store import save_workflow
 
     seen = {}
 
@@ -567,10 +553,9 @@ def test_pipeline_agent_forwards_image_attachments(monkeypatch, tmp_path):
     img = tmp_path / "duck.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n")
     caller = create_conversation(PanelSettings.load(), "", title="Img")
-    wf = save_automation(
+    wf = save_workflow(
         {
             "name": "See",
-            "kind": KIND_PIPELINE,
             "graph": {
                 "nodes": [
                     {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
@@ -580,7 +565,7 @@ def test_pipeline_agent_forwards_image_attachments(monkeypatch, tmp_path):
             },
         }
     )
-    out = runner.run_pipeline(wf["id"], caller_conv_id=caller.id, files=[{"path": str(img), "name": "duck.png"}])
+    out = runner.run_workflow(wf["id"], caller_conv_id=caller.id, files=[{"path": str(img), "name": "duck.png"}])
     assert out["ok"] is True
     atts = seen.get("attachments") or []
     assert atts and atts[0]["kind"] == "image"
@@ -600,7 +585,7 @@ def test_flow_branch_contains_and_exists():
 
 def test_flow_branch_agent_mode(monkeypatch):
     from backend.automations import runner
-    from backend.automations.store import KIND_PIPELINE, save_automation
+    from backend.automations.store import save_workflow
 
     monkeypatch.setattr(runner, "_ensure_pipeline_group", lambda ctx, wf: None)
     monkeypatch.setattr(
@@ -608,10 +593,9 @@ def test_flow_branch_agent_mode(monkeypatch):
         "_pipeline_agent",
         lambda cfg, payload: {"ok": True, "result": {"text": "yes, approve this"}},
     )
-    wf = save_automation(
+    wf = save_workflow(
         {
             "name": "Judge",
-            "kind": KIND_PIPELINE,
             "graph": {
                 "nodes": [
                     {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
@@ -631,7 +615,7 @@ def test_flow_branch_agent_mode(monkeypatch):
             },
         }
     )
-    out = runner.run_pipeline(wf["id"])
+    out = runner.run_workflow(wf["id"])
     assert out["ok"] is True
     assert any(s.get("type") == "flow.wait" for s in out["steps"])
 
@@ -640,7 +624,7 @@ def test_flow_branch_agent_mode(monkeypatch):
         "_pipeline_agent",
         lambda cfg, payload: {"ok": True, "result": {"text": "no reject"}},
     )
-    out2 = runner.run_pipeline(wf["id"])
+    out2 = runner.run_workflow(wf["id"])
     assert out2["ok"] is True
     assert not any(s.get("type") == "flow.wait" for s in out2["steps"])
 
@@ -672,7 +656,7 @@ def test_list_templates_stamps_missing_plugins(monkeypatch):
         },
     )
     monkeypatch.setattr(pstore, "get_enabled_plugin_ids", lambda: ["account"])
-    rows = templates.list_templates(system="pipeline")
+    rows = templates.list_templates()
     row = next(t for t in rows if t["id"].endswith("image-to-island"))
     assert row["ready"] is False
     assert "meshy" in row["missing_plugins"]
@@ -681,9 +665,9 @@ def test_list_templates_stamps_missing_plugins(monkeypatch):
 
 def test_foreach_runs_body_per_item():
     from backend.automations import runner
-    from backend.automations.store import save_automation
+    from backend.automations.store import save_workflow
 
-    wf = save_automation(
+    wf = save_workflow(
         {
             "name": "Each",
             "enabled": True,
@@ -702,12 +686,12 @@ def test_foreach_runs_body_per_item():
             },
         }
     )
-    out = runner.run_automation(wf["id"], payload={"cards": [{"id": "a", "name": "A"}, {"id": "b", "name": "B"}]})
+    out = runner.run_workflow(wf["id"], payload={"cards": [{"id": "a", "name": "A"}, {"id": "b", "name": "B"}]})
     assert out["ok"] is True
     waits = [s for s in out["steps"] if s.get("type") == "flow.wait"]
     assert sum(1 for s in waits if s.get("id") == "w") == 2
     assert sum(1 for s in waits if s.get("id") == "d") == 1
-    empty = runner.run_automation(wf["id"], payload={"cards": []})
+    empty = runner.run_workflow(wf["id"], payload={"cards": []})
     assert empty["ok"] is True
     empty_waits = [s for s in empty["steps"] if s.get("type") == "flow.wait"]
     assert sum(1 for s in empty_waits if s.get("id") == "w") == 0
@@ -716,7 +700,7 @@ def test_foreach_runs_body_per_item():
 
 def test_pipeline_finish_attaches_png(tmp_path, monkeypatch):
     from backend.automations import runner
-    from backend.automations.store import KIND_PIPELINE, save_automation
+    from backend.automations.store import save_workflow
     from backend.workspace import identity
     from backend.workspace.identity import RunContext
 
@@ -727,10 +711,9 @@ def test_pipeline_finish_attaches_png(tmp_path, monkeypatch):
         b"\xdd\x8d\xb4\x1c\x00\x00\x00\x00IEND\xaeB`\x82"
     )
     caller = create_conversation(PanelSettings.load(), "", title="CallerImg")
-    wf = save_automation(
+    wf = save_workflow(
         {
             "name": "Img",
-            "kind": KIND_PIPELINE,
             "graph": {
                 "nodes": [
                     {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
@@ -747,7 +730,7 @@ def test_pipeline_finish_attaches_png(tmp_path, monkeypatch):
     )
     token = identity.bind(RunContext(run_id="rimg", conv_id=caller.id))
     try:
-        out = runner.run_pipeline(wf["id"], prompt="hi", files=[{"path": str(png), "name": "card.png"}])
+        out = runner.run_workflow(wf["id"], prompt="hi", files=[{"path": str(png), "name": "card.png"}])
     finally:
         identity.reset(token)
     assert out["ok"] is True
@@ -761,12 +744,12 @@ def test_pipeline_finish_attaches_png(tmp_path, monkeypatch):
 
 def test_run_announces_header_jobs(monkeypatch):
     from backend.automations import runner
-    from backend.automations.store import save_automation
+    from backend.automations.store import save_workflow
 
     events: list[dict] = []
     monkeypatch.setattr(runner, "_run_message", lambda *a, **k: "run")
     monkeypatch.setattr("frontend.ui_web.agent_modes.push_ui_event", events.append)
-    wf = save_automation(
+    wf = save_workflow(
         {
             "name": "Tray",
             "enabled": True,
@@ -776,7 +759,7 @@ def test_run_announces_header_jobs(monkeypatch):
             },
         }
     )
-    out = runner.run_automation(wf["id"])
+    out = runner.run_workflow(wf["id"])
     assert out["ok"] is True
     jobs = [e for e in events if e.get("type") == "background_job"]
     phases = [e.get("phase") for e in jobs]
@@ -805,14 +788,8 @@ def test_uefn_wait_ready_node_reports_timeout(monkeypatch):
 def test_builtin_uefn_templates_listed():
     from backend.automations.templates import list_templates
 
-    autos = {row["id"] for row in list_templates("automation")}
-    pipes = {row["id"] for row in list_templates("pipeline")}
-    assert "builtin:restart-uefn" in autos
-    assert "builtin:restart-uefn" not in pipes
-    assert "builtin:publish-private" in pipes
-    assert "builtin:publish-private" not in autos
-    assert "builtin:memory-calculation" in pipes
-    assert "builtin:memory-calculation" not in autos
+    ids = {row["id"] for row in list_templates()}
+    assert {"builtin:restart-uefn", "builtin:publish-private", "builtin:memory-calculation"} <= ids
     from backend.automations.templates import _MEMORY_PROMPT, _PRIVATE_PROMPT
 
     for prompt in (_PRIVATE_PROMPT, _MEMORY_PROMPT):

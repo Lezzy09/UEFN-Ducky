@@ -819,16 +819,17 @@ class PanelApiStoreMixin:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    def plugin_scope_status(self) -> dict[str, Any]:
+    def plugin_scope_status(self, plugin_id: str) -> dict[str, Any]:
+        """Where one plugin's data lives (scope bar, Plugins page)."""
         from backend.uefn_plugins.team_sync import scope_status
 
         try:
-            return scope_status()
+            return scope_status(str(plugin_id or ""))
         except Exception as exc:
             return {"ok": False, "visible": False, "error": str(exc)}
 
     def plugin_scope_choices(self) -> dict[str, Any]:
-        """Change ▾ only: calls the Store hub (never on a timer)."""
+        """Pickers only: calls the Store hub (never on a timer)."""
         from backend.uefn_plugins.team_sync import scope_choices
 
         try:
@@ -836,25 +837,54 @@ class PanelApiStoreMixin:
         except Exception as exc:
             return {"ok": False, "choices": [], "error": str(exc)}
 
-    def plugin_scope_set(self, scope_id: str) -> dict[str, Any]:
+    def plugin_scope_set(self, plugin_id: str, scope_id: str) -> dict[str, Any]:
+        """Keep a plugin's data in Local or one team. Nothing moves; the plugin shows that copy."""
         from backend.uefn_plugins.team_sync import link_scope, sync_active
 
+        pid = str(plugin_id or "")
         try:
-            out = link_scope(str(scope_id or ""))
+            out = link_scope(pid, str(scope_id or ""))
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
-        self._push_panel({"type": "plugin_scope_changed", "plugins": []})
-        sync_active(force=True, on_done=self._scope_synced)
+        self._push_panel({"type": "plugin_scope_changed", "plugins": [pid]})
+        sync_active(pid, force=True, on_done=self._scope_synced)
         return out
 
-    def plugin_scope_sync(self, force: bool = False) -> dict[str, Any]:
+    def plugin_scope_sync(self, plugin_id: str, force: bool = False) -> dict[str, Any]:
         """Scope bar asks on plugin open, focus and each minute; the engine rate-limits."""
         from backend.uefn_plugins.team_sync import sync_active
 
         try:
-            return sync_active(force=bool(force), on_done=self._scope_synced)
+            return sync_active(str(plugin_id or ""), force=bool(force), on_done=self._scope_synced)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def plugin_data_copy_to_team(self, plugin_id: str, team_id: str) -> dict[str, Any]:
+        """One way, on request: a plugin's Local data into one team's copy (theirs is kept)."""
+        from backend.uefn_plugins.scopes import ReadOnlyScope, copy_local_into
+        from backend.uefn_plugins.team_sync import sync_active
+
+        pid = str(plugin_id or "")
+        try:
+            out = copy_local_into(pid, str(team_id or ""))
+        except (ReadOnlyScope, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+        self._push_panel({"type": "plugin_scope_changed", "plugins": [pid]})
+        sync_active(pid, force=True, on_done=self._scope_synced)
+        return out
+
+    def plugin_data_open_web(self, plugin_id: str) -> dict[str, Any]:
+        """The team's copy of this plugin's data on the website (team → Plugins)."""
+        from urllib.parse import quote
+
+        from backend.uefn_plugins.team_sync import scope_status
+        from frontend.duckyos_account import open_site_path
+
+        pid = str(plugin_id or "")
+        slug = str(scope_status(pid).get("teamSlug") or "")
+        if not slug:
+            return {"ok": False, "error": "This plugin's data isn't shared with a team."}
+        return open_site_path(f"/profile/teams/{quote(slug)}?tab=plugins&plugin={quote(pid)}")
 
     def _scope_synced(self, result: dict[str, Any]) -> None:
         self._push_panel(

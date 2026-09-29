@@ -9,8 +9,8 @@ import {
   duckyProfileTabId,
   usageTabId,
   planTabId,
-  automationsTabId,
-  pipelinesTabId,
+  isLegacyWorkflowsTabId,
+  workflowsTabId,
   changesTabId,
   type EditorTab,
 } from "../types/panel";
@@ -82,8 +82,7 @@ export type ParsedFocusId =
   | { kind: "terminal"; sessionId: string }
   | { kind: "settings" }
   | { kind: "changes" }
-  | { kind: "automations" }
-  | { kind: "pipelines" }
+  | { kind: "workflows" }
   | { kind: "usage"; providerId: string }
   | { kind: "plan"; chatId: string }
   | { kind: "plugin"; tabId: string; pluginId: string; panelId: string }
@@ -112,11 +111,8 @@ export function parseFocusId(focusId: string): ParsedFocusId | null {
   if (id === changesTabId() || id.startsWith("changes:")) {
     return { kind: "changes" };
   }
-  if (id === automationsTabId() || id.startsWith("automations:")) {
-    return { kind: "automations" };
-  }
-  if (id === pipelinesTabId() || id.startsWith("pipelines:")) {
-    return { kind: "pipelines" };
+  if (id === workflowsTabId() || id.startsWith("workflows:") || isLegacyWorkflowsTabId(id)) {
+    return { kind: "workflows" };
   }
   if (id === discordTabId() || id.startsWith("discord:")) {
     // Legacy host Discord tabs → plugin chat panel.
@@ -183,11 +179,8 @@ export function focusIdToEditorTab(focusId: string, title: string): EditorTab | 
   if (parsed.kind === "changes") {
     return { id: changesTabId(), kind: "changes", name: title || "Ledger" };
   }
-  if (parsed.kind === "automations") {
-    return { id: automationsTabId(), kind: "automations", name: "Workflows" };
-  }
-  if (parsed.kind === "pipelines") {
-    return { id: pipelinesTabId(), kind: "pipelines", name: "Workflows" };
+  if (parsed.kind === "workflows") {
+    return { id: workflowsTabId(), kind: "workflows", name: "Workflows" };
   }
   if (parsed.kind === "ducky-profile") {
     return {

@@ -25,7 +25,7 @@ const bar = () =>
 
 describe("plugin scope bar", () => {
   it("renders nothing for accounts without the Teams beta", async () => {
-    api.plugin_scope_status.mockResolvedValue({ ok: true, visible: false, scope: { kind: "personal", label: "Personal", teamId: "", readOnly: false } });
+    api.plugin_scope_status.mockResolvedValue({ ok: true, visible: false, scope: { kind: "personal", label: "Local", teamId: "", readOnly: false } });
     const { container } = bar();
     await waitFor(() => expect(api.plugin_scope_status).toHaveBeenCalled());
     expect(container.textContent).toBe("");
@@ -39,7 +39,7 @@ describe("plugin scope bar", () => {
       scope: { kind: "team", label: "Alpha Studio", teamId: "t1", readOnly: false },
     });
     api.plugin_scope_choices.mockResolvedValue({ ok: true, choices: [
-      { id: "personal", kind: "personal", label: "Personal" },
+      { id: "personal", kind: "personal", label: "Local" },
       { id: "t1", kind: "team", label: "Alpha Studio", members: 4 },
     ] });
     api.plugin_scope_set.mockResolvedValue({ ok: true });
@@ -47,13 +47,14 @@ describe("plugin scope bar", () => {
     expect(await screen.findByText("TEAM · Alpha Studio")).toBeTruthy();
     expect(screen.getByText("shared with 4 members")).toBeTruthy();
     expect(screen.getByText("34 MB of 5 GB")).toBeTruthy();
-    await waitFor(() => expect(api.plugin_scope_sync).toHaveBeenCalledWith(false));
+    await waitFor(() => expect(api.plugin_scope_sync).toHaveBeenCalledWith("brainrot-tcg", false));
+    expect(api.plugin_scope_status).toHaveBeenCalledWith("brainrot-tcg");
 
     fireEvent.click(screen.getByRole("button", { name: "Change ▾" }));
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Personal" }));
-    expect(await screen.findByText("You'll see your Personal copy. Alpha Studio's copy stays separate.")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Local" }));
+    expect(await screen.findByText("You'll see your Local copy. Alpha Studio's copy stays separate.")).toBeTruthy();
     expect(api.plugin_scope_set).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /^Switch/ }));
-    await waitFor(() => expect(api.plugin_scope_set).toHaveBeenCalledWith("personal"));
+    await waitFor(() => expect(api.plugin_scope_set).toHaveBeenCalledWith("brainrot-tcg", "personal"));
   });
 });

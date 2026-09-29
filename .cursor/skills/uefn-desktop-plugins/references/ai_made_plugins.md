@@ -32,14 +32,13 @@ AppData folders.
    or named theme colors. Exception: they specified a design/colors — use those
    tokens only, keep Ducky vars for the rest. **Always mention** the Appearance
    default when you start the UI or when you depart from it.
-6. **Always pipeline + automation** (themes too). `contributes.automations.nodes`
+6. **Always a workflow node** (themes too). `contributes.automations.nodes`
    + `@api.register_pipeline_node` that calls the **same** functions as
    `@api.tool()`. Ship `automations.templates` with graph `start.chat` →
-   `pipeline.agent` → your node → `pipeline.finish`. Omit `systems` so the tile
-   is on both palettes. Place graphs with `save_pipeline` / `save_automation`
-   (each save opens that editor). Delete with `delete_pipeline` /
-   `delete_automation`. Templates: `save_custom_automation_template` /
-   `delete_custom_automation_template`.
+   `pipeline.agent` → your node → `pipeline.finish`. Every workflow has one
+   palette (`systems` is ignored). Place graphs with `save_workflow` (each save
+   opens the Workflows editor). Delete with `delete_workflow`. Templates:
+   `save_workflow_template` / `delete_workflow_template`.
 7. **Bundled skill** `skills/<id>/SKILL.md` inside the draft (not
    `ducky_skills_*`).
 8. **Mutators record changeset** (`api.changeset.record`, slot

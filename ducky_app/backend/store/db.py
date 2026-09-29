@@ -244,6 +244,12 @@ def close_thread_connections() -> None:
     cache: dict[str, sqlite3.Connection] = getattr(_thread_local, "conns", None) or {}
     for conn in cache.values():
         try:
+            # Drop the WAL while we still own it. Closing alone leaves ducky.db-wal
+            # locked on Windows long enough for the next unlink/replace to fail.
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:
+            pass
+        try:
             conn.close()
         except Exception:
             pass

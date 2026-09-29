@@ -1949,6 +1949,13 @@ html.window-maximized .window-resize-grip {
   color: var(--blue);
 }
 
+.project-selector-kind-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 14px;
+  justify-content: center;
+}
+
 .project-selector-item-btn:not(.is-active) {
   color: var(--fg-dim);
 }

@@ -2,13 +2,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AutomationsView } from "./AutomationsView";
-import type { AutomationDto } from "../types/panel";
+import { ConfirmModalProvider } from "../contexts/ConfirmModalContext";
+import type { AutomationDto, WorkflowOwnerDto, WorkflowOwnersDto } from "../types/panel";
 
-const api = vi.hoisted(() => ({ list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_automations: vi.fn(), list_automation_nodes: vi.fn(), get_automation: vi.fn(), save_automation: vi.fn(), run_automation: vi.fn(), delete_automation: vi.fn(), list_pipelines: vi.fn(), list_pipeline_nodes: vi.fn(), get_pipeline: vi.fn(), save_pipeline: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn() }));
+const api = vi.hoisted(() => ({ list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_workflows: vi.fn(), list_workflow_nodes: vi.fn(), get_workflow: vi.fn(), save_workflow: vi.fn(), run_workflow: vi.fn(), delete_workflow: vi.fn(), workflow_owners: vi.fn(), workflow_sync: vi.fn(), copy_workflow: vi.fn(), set_workflow_run_here: vi.fn(), import_local_workflows: vi.fn(), workflow_open_web: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
-vi.mock("./AutomationTemplatePicker", () => ({ AutomationTemplatePicker: ({ open, system, onSelect }: { open: boolean; system: string; onSelect: (template: null) => void }) => open ? <button onClick={() => onSelect(null)}>Create {system}</button> : null }));
+vi.mock("./AutomationTemplatePicker", () => ({ AutomationTemplatePicker: ({ open, ownerLabel, onSelect }: { open: boolean; ownerLabel: string; onSelect: (template: null) => void }) => open ? <button onClick={() => onSelect(null)}>Create in {ownerLabel}</button> : null }));
 
+const LOCAL: WorkflowOwnerDto = { id: "local", kind: "local", label: "Local", state: "ok", readOnly: false, reason: "" };
+let TEAM: WorkflowOwnerDto;
+let owners: WorkflowOwnersDto;
 let saved: AutomationDto;
+let daily: AutomationDto;
 beforeEach(() => {
   class TestPointerEvent extends MouseEvent {
     pointerId: number;
@@ -18,42 +23,58 @@ beforeEach(() => {
   vi.stubGlobal("PointerEvent", TestPointerEvent);
   HTMLElement.prototype.setPointerCapture = vi.fn();
   document.elementsFromPoint = vi.fn(() => []);
-  saved = { id: "p", name: "Example", enabled: true, kind: "pipeline", graph: {
+  TEAM = { id: "teamT", kind: "team", label: "Alpha Studio", state: "ok", readOnly: false, reason: "", slug: "alpha", sync: { state: "ok", pending: 0, syncedAt: null, members: 3 } };
+  owners = { ok: true, owners: [LOCAL, TEAM], signedIn: true, teamsEnabled: true, localImport: 0 };
+  saved = { id: "p", name: "Example", enabled: true, owner: LOCAL, graph: {
     nodes: [
       { id: "s", type: "start.chat", label: "Chat", x: 0, y: 0, config: {} },
       { id: "a", type: "flow.wait", label: "Pause", description: "Pause description", x: 280, y: 0, config: {} },
       { id: "b", type: "flow.wait", label: "Continue", x: 560, y: 0, config: {} },
     ], edges: [{ source: "s", target: "a", kind: "main" }],
   } };
+  daily = { id: "d", name: "Daily check", enabled: true, owner: TEAM, run_here: false, graph: { nodes: [{ id: "timer", type: "start.cron", x: 0, y: 0, config: {} }], edges: [] } };
   api.list_workflow_versions.mockResolvedValue({ ok: true, versions: [] });
   api.get_workflow_version.mockResolvedValue({ ok: false });
   api.get_mcp_tools_catalog.mockResolvedValue({ tools: [] });
-  api.list_automations.mockResolvedValue({ automations: [{ id: "p", name: "Daily check", enabled: true }] });
-  api.list_automation_nodes.mockResolvedValue({ nodes: [{ type: "start.cron", label: "Schedule", role: "starter", group: "Triggers" }] });
-  api.get_automation.mockResolvedValue({ automation: { id: "p", name: "Daily check", enabled: true, kind: "automation", graph: { nodes: [{ id: "timer", type: "start.cron", x: 0, y: 0, config: {} }], edges: [] } } });
-  api.save_automation.mockImplementation(async (doc: AutomationDto) => ({ automation: { ...structuredClone(doc), id: doc.id || "new-automation" } }));
-  api.run_automation.mockResolvedValue({ ok: true, steps: [] });
-  api.delete_automation.mockResolvedValue({ ok: true });
-  api.list_pipelines.mockResolvedValue({ pipelines: [{ id: "p", name: "Example", enabled: true }] });
-  api.list_pipeline_nodes.mockResolvedValue({ nodes: [{ type: "start.chat", label: "Chat", role: "starter", group: "Starting" }, { type: "flow.wait", label: "Wait", group: "Logic", config_fields: [{ id: "seconds", label: "Seconds", type: "number" }] }] });
-  api.get_pipeline.mockImplementation(async () => ({ pipeline: structuredClone(saved) }));
+  api.list_workflows.mockImplementation(async () => ({ workflows: [
+    { id: "p", name: "Example", enabled: true, owner: saved.owner, trigger: { kind: "chat", label: "Chat" } },
+    { id: "d", name: "Daily check", enabled: true, owner: daily.owner, run_here: daily.run_here, trigger: { kind: "schedule", label: "Every 5m" } },
+  ] }));
+  api.workflow_owners.mockImplementation(async () => structuredClone(owners));
+  api.workflow_sync.mockResolvedValue({ ok: true, started: true });
+  api.list_workflow_nodes.mockResolvedValue({ nodes: [{ type: "start.chat", label: "Chat", role: "starter", group: "Starting" }, { type: "start.cron", label: "Schedule", role: "starter", group: "Starting" }, { type: "flow.wait", label: "Wait", group: "Logic", config_fields: [{ id: "seconds", label: "Seconds", type: "number" }] }] });
+  api.get_workflow.mockImplementation(async (id: string) => ({ workflow: structuredClone(id === "d" ? daily : saved) }));
+  api.save_workflow.mockImplementation(async (doc: AutomationDto, owner?: string) => {
+    if (!doc.id) return { workflow: { ...structuredClone(doc), id: "new-workflow", owner: owner === "teamT" ? TEAM : LOCAL } };
+    if (doc.id === "d") { daily = structuredClone(doc); return { workflow: daily }; }
+    saved = structuredClone(doc);
+    return { workflow: saved };
+  });
+  api.run_workflow.mockResolvedValue({ ok: true, steps: [] });
+  api.delete_workflow.mockResolvedValue({ ok: true });
+  api.copy_workflow.mockImplementation(async (id: string, owner: string) => ({ workflow: { ...structuredClone(id === "d" ? daily : saved), owner: owner === "teamT" ? TEAM : LOCAL } }));
+  api.set_workflow_run_here.mockImplementation(async (_id: string, on: boolean) => ({ workflow: { ...structuredClone(daily), run_here: on } }));
+  api.import_local_workflows.mockResolvedValue({ ok: true, moved: 2 });
   api.list_agent_profiles.mockResolvedValue({ profiles: [{ id: "artist", name: "My Artist", ducky_style: "artist" }], template_profiles: [{ id: "artist", name: "Original Artist" }, { id: "coder", name: "Verse Coder", ducky_style: "hacker" }], blank_profile_id: "__blank__" });
   api.list_all_conversations.mockResolvedValue([{ id: "existing", title: "Build my island", ducky_name: "Level Designer", project_name: "Island Two" }, { id: "hub", title: "Group hub", is_group: true }]);
   api.list_recent_projects.mockResolvedValue([
     { path: "C:/Projects/FirstIsland", name: "First Island", slug: "first", active: true },
     { path: "C:/Projects/SecondIsland", name: "Second Island", slug: "second", active: false },
   ]);
-  api.save_pipeline.mockImplementation(async (doc: AutomationDto) => { saved = structuredClone(doc); return { pipeline: saved }; });
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
-async function open() {
-  const view = render(<AutomationsView kind="pipeline" />);
-  fireEvent.click(await screen.findByText("Example"));
-  await screen.findByRole("button", { name: "Connect from Pause" });
+function renderView() {
+  return render(<ConfirmModalProvider><AutomationsView /></ConfirmModalProvider>);
+}
+async function open(name = "Example") {
+  const view = renderView();
+  fireEvent.click(await screen.findByText(name));
+  if (name === "Example") await screen.findByRole("button", { name: "Connect from Pause" });
+  else await screen.findByDisplayValue(name);
   return view;
 }
-async function save() { fireEvent.click(screen.getByRole("button", { name: "Save", exact: true })); await waitFor(() => expect(api.save_pipeline).toHaveBeenCalled()); }
+async function save() { fireEvent.click(screen.getByRole("button", { name: "Save", exact: true })); await waitFor(() => expect(api.save_workflow).toHaveBeenCalled()); }
 function editNode(id = "a") { fireEvent.click(document.querySelector(`[data-aw-node="${id}"] .aw-node-expand-toggle`)!); }
 function dropdown(name: string) { fireEvent.click(screen.getByRole("button", { name, exact: true })); }
 function wire(from: string, to: string, cancel = false) {
@@ -65,11 +86,11 @@ function wire(from: string, to: string, cancel = false) {
   else fireEvent.pointerUp(source, { pointerId: 1, clientX: 600, clientY: 80 });
 }
 
-describe("pipeline editor interactions", () => {
+describe("workflow editor interactions", () => {
   async function openAgentNode(config: Record<string, unknown> = {}) {
     saved.graph.nodes[1].type = "pipeline.agent";
     saved.graph.nodes[1].config = config;
-    api.list_pipeline_nodes.mockResolvedValue({ nodes: [
+    api.list_workflow_nodes.mockResolvedValue({ nodes: [
       { type: "start.chat", label: "Chat", role: "starter", group: "Starting" },
       { type: "pipeline.agent", label: "Agent", group: "Agents", config_fields: [{ id: "ducky", label: "Assign ducky", type: "ducky" }] },
     ] });
@@ -136,7 +157,7 @@ describe("pipeline editor interactions", () => {
   async function openProjectNode(project = "") {
     saved.graph.nodes[1].type = "uefn.open_project";
     saved.graph.nodes[1].config = { project, timeout: 180 };
-    api.list_pipeline_nodes.mockResolvedValue({ nodes: [
+    api.list_workflow_nodes.mockResolvedValue({ nodes: [
       { type: "start.chat", label: "Chat", role: "starter", group: "Starting" },
       { type: "uefn.open_project", label: "Open UEFN project", group: "UEFN", config_fields: [{ id: "project", label: "UEFN project", type: "project" }] },
     ] });
@@ -237,7 +258,7 @@ describe("pipeline editor interactions", () => {
     fireEvent.click(screen.getByRole("radio", { name: "False", exact: true }));
     await save();
     expect(saved.graph.edges).toEqual([{ source: "s", target: "a", kind: "false" }]);
-    api.save_pipeline.mockClear();
+    api.save_workflow.mockClear();
     fireEvent.click(screen.getByText("Disconnect"));
     await save();
     expect(saved.graph.edges).toEqual([]);
@@ -301,15 +322,15 @@ describe("pipeline editor interactions", () => {
     expect(saved.graph.edges).toHaveLength(1);
   });
   it("reloads the canvas when chat saves the graph", async () => {
-    render(<AutomationsView kind="pipeline" />);
-    window.dispatchEvent(new CustomEvent("ducky:focus-graph", { detail: { kind: "pipeline", id: "p" } }));
-    await waitFor(() => expect(api.get_pipeline).toHaveBeenCalledWith("p"));
+    renderView();
+    window.dispatchEvent(new CustomEvent("ducky:focus-graph", { detail: { id: "p" } }));
+    await waitFor(() => expect(api.get_workflow).toHaveBeenCalledWith("p"));
     expect(await screen.findByDisplayValue("Example")).toBeTruthy();
   });
   it("clears the open graph when chat deletes it", async () => {
     await open();
     expect(screen.getByDisplayValue("Example")).toBeTruthy();
-    window.dispatchEvent(new CustomEvent("ducky:graph-deleted", { detail: { kind: "pipeline", id: "p" } }));
+    window.dispatchEvent(new CustomEvent("ducky:graph-deleted", { detail: { id: "p" } }));
     await waitFor(() => expect(screen.queryByDisplayValue("Example")).toBeNull());
   });
   it("shows the assigned ducky's real artwork", async () => {
@@ -318,78 +339,150 @@ describe("pipeline editor interactions", () => {
   });
 });
 
-describe("combined Workflows editor", () => {
+describe("Workflows folders by owner", () => {
   it("hides the workflow toolbar until a workflow is selected and after it is removed", async () => {
-    render(<AutomationsView kind="pipeline" />);
+    renderView();
     await screen.findByText("Example");
     expect(screen.queryByRole("toolbar", { name: "Workflow actions" })).toBeNull();
-    fireEvent.click(screen.getByText("Daily check"));
-    await screen.findByDisplayValue("Daily check");
+    fireEvent.click(screen.getByText("Example"));
+    await screen.findByDisplayValue("Example");
     expect(screen.getByRole("toolbar", { name: "Workflow actions" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Delete", exact: true }));
+    await waitFor(() => expect(api.delete_workflow).toHaveBeenCalledWith("p"));
     await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Workflow actions" })).toBeNull());
   });
-  it("collapses the entire list without losing the graph or individual section states", async () => {
+  it("lists each workflow in its owner's folder with what starts it, and labels the open one", async () => {
+    renderView();
+    const local = await screen.findByRole("region", { name: "Local" });
+    const team = screen.getByRole("region", { name: "Team · Alpha Studio" });
+    expect(local.textContent).toContain("Example");
+    expect(local.textContent).toContain("Chat");
+    expect(local.textContent).toContain("Only on this PC");
+    expect(team.textContent).toContain("Daily check");
+    expect(team.textContent).toContain("Every 5m");
+    expect(team.textContent).toContain("Not synced yet");
+    expect(team.querySelector(".aw-trigger")?.getAttribute("title")).toContain("not on this PC");
+    fireEvent.click(screen.getByText("Daily check"));
+    await screen.findByDisplayValue("Daily check");
+    expect(document.querySelector(".aw-owner-chip")?.textContent).toBe("TEAM · Alpha Studio");
+    fireEvent.click(screen.getByText("Example"));
+    await screen.findByDisplayValue("Example");
+    expect(document.querySelector(".aw-owner-chip")?.textContent).toBe("LOCAL");
+    expect(document.querySelectorAll(".aw-list-row.is-active")).toHaveLength(1);
+  });
+  it("collapses the entire list without losing the graph or folder states", async () => {
     await open();
-    fireEvent.click(screen.getByRole("button", { name: "Automations", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Team · Alpha Studio", exact: true }));
     const toggle = screen.getByRole("button", { name: "Workflows", exact: true });
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByRole("button", { name: "Pipelines", exact: true })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Local", exact: true })).toBeNull();
     expect(screen.getByDisplayValue("Example")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Connect from Pause" })).toBeTruthy();
     fireEvent.click(toggle);
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByRole("button", { name: "Pipelines", exact: true }).getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByRole("button", { name: "Automations", exact: true }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("button", { name: "Local", exact: true }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: "Team · Alpha Studio", exact: true }).getAttribute("aria-expanded")).toBe("false");
   });
-  it("collapses each section independently and switches catalogs without mixing matching IDs", async () => {
+  it("creates a workflow in the folder whose + was used", async () => {
     await open();
-    const pipelines = screen.getByRole("button", { name: "Pipelines", exact: true });
-    fireEvent.click(pipelines);
-    expect(screen.queryByRole("button", { name: "Exampleon" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Daily checkon" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New workflow in Team · Alpha Studio" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create in Team · Alpha Studio" }));
+    await waitFor(() => expect(api.save_workflow).toHaveBeenCalledWith(expect.objectContaining({ id: "", name: "Untitled" }), "teamT"));
+    await screen.findByDisplayValue("Untitled");
+    expect(document.querySelector(".aw-owner-chip")?.textContent).toBe("TEAM · Alpha Studio");
+    fireEvent.click(screen.getByRole("button", { name: "New workflow", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Create in Local" }));
+    await waitFor(() => expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "" }), "local"));
+  });
+  it("runs and duplicates a read-only team workflow but never edits or pushes it", async () => {
+    TEAM.readOnly = true;
+    TEAM.reason = "Only members with Manage automations can change team workflows.";
+    daily.owner = TEAM;
+    await open("Daily check");
+    expect(screen.getByRole("note").textContent).toContain("Manage automations");
+    for (const name of ["Save", "Delete", "Enabled", "Undo"]) {
+      expect(screen.getByRole("button", { name, exact: true }).hasAttribute("disabled")).toBe(true);
+    }
+    expect(screen.queryByRole("button", { name: "New workflow in Team · Alpha Studio" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Test", exact: true }));
+    await waitFor(() => expect(api.run_workflow).toHaveBeenCalledWith("d"));
+    expect(api.save_workflow).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate", exact: true }));
+    await waitFor(() => expect(api.save_workflow).toHaveBeenCalledWith(expect.objectContaining({ id: "", name: "Daily check copy" }), "local"));
+  });
+  it("moves a Local workflow to a team, and asks before moving one out of a team", async () => {
+    await open();
+    dropdown("Move or copy");
+    fireEvent.click(await screen.findByRole("radio", { name: "Move to Team · Alpha Studio" }));
+    await waitFor(() => expect(api.copy_workflow).toHaveBeenCalledWith("p", "teamT", true));
     fireEvent.click(screen.getByText("Daily check"));
     await screen.findByDisplayValue("Daily check");
-    expect(document.querySelectorAll('.aw-list-row.is-active')).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Add nodes" }));
-    expect(await screen.findByRole("button", { name: "Schedule", exact: true })).toBeTruthy();
-    expect(screen.queryByText("Wait")).toBeNull();
-    fireEvent.keyDown(window, { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
-    await waitFor(() => expect(api.save_automation).toHaveBeenCalledWith(expect.objectContaining({ id: "p", kind: "automation" })));
-    expect(api.save_pipeline).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Test", exact: true }));
-    await waitFor(() => expect(api.run_automation).toHaveBeenCalledWith("p"));
+    dropdown("Move or copy");
+    fireEvent.click(await screen.findByRole("radio", { name: "Move to Local" }));
+    await screen.findByText("Move out of Alpha Studio?");
+    expect(api.copy_workflow).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: /^Move \(/ }));
+    await waitFor(() => expect(api.copy_workflow).toHaveBeenLastCalledWith("d", "local", true));
+  });
+  it("asks before deleting a team workflow for everyone", async () => {
+    await open("Daily check");
     fireEvent.click(screen.getByRole("button", { name: "Delete", exact: true }));
-    await waitFor(() => expect(api.delete_automation).toHaveBeenCalledWith("p"));
-    await waitFor(() => expect(screen.queryByDisplayValue("Daily check")).toBeNull());
+    await screen.findByText("Delete for everyone in Alpha Studio?");
+    expect(api.delete_workflow).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /^Delete \(/ }));
+    await waitFor(() => expect(api.delete_workflow).toHaveBeenCalledWith("d"));
   });
-  it("uses the selected section's template type while another kind is on the board", async () => {
-    await open();
-    fireEvent.click(screen.getByRole("button", { name: "New automation" }));
-    fireEvent.click(screen.getByRole("button", { name: "Create automation" }));
-    await waitFor(() => expect(api.save_automation).toHaveBeenCalledWith(expect.objectContaining({ id: "", kind: "automation" })));
-    expect(api.save_pipeline).not.toHaveBeenCalled();
-    await screen.findByDisplayValue("Untitled");
+  it("switches Run on this PC for a scheduled team workflow", async () => {
+    await open("Daily check");
+    const toggle = screen.getByRole("button", { name: "Run on this PC" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(api.set_workflow_run_here).toHaveBeenCalledWith("d", true));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run on this PC" }).getAttribute("aria-pressed")).toBe("true"));
+    fireEvent.click(screen.getByText("Example"));
+    await screen.findByDisplayValue("Example");
+    expect(screen.queryByRole("button", { name: "Run on this PC" })).toBeNull();
   });
-  it("opens a chat-linked graph of either kind and expands its section", async () => {
+  it("opens a team folder's workflows on the web", async () => {
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Open Team · Alpha Studio on the web" }));
+    expect(api.workflow_open_web).toHaveBeenCalledWith("teamT");
+    expect(screen.queryByRole("button", { name: "Open Local on the web" })).toBeNull();
+  });
+  it("asks the Store for teams once when opened and syncs them while open", async () => {
+    renderView();
+    await screen.findByText("Example");
+    await waitFor(() => expect(api.workflow_owners).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(api.workflow_sync).toHaveBeenCalledWith(false));
+    expect(api.workflow_owners.mock.calls.filter((call) => call[0] === true)).toHaveLength(1);
+  });
+  it("offers signed-out workflows to the account and says how to share", async () => {
+    owners.localImport = 2;
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: /Bring in/ }));
+    await waitFor(() => expect(api.import_local_workflows).toHaveBeenCalled());
+    cleanup();
+    api.workflow_sync.mockClear();
+    owners = { ok: true, owners: [LOCAL], signedIn: false, teamsEnabled: false, localImport: 0 };
+    renderView();
+    expect(await screen.findByText("Sign in to share workflows with a team.")).toBeTruthy();
+    expect(api.workflow_sync).not.toHaveBeenCalled();
+  });
+  it("opens a chat-linked workflow and ignores deletes of other workflows", async () => {
     await open();
-    fireEvent.click(screen.getByRole("button", { name: "Automations", exact: true }));
-    await act(async () => { window.dispatchEvent(new CustomEvent("ducky:focus-graph", { detail: { kind: "automation", id: "p" } })); });
+    await act(async () => { window.dispatchEvent(new CustomEvent("ducky:focus-graph", { detail: { id: "d" } })); });
     await screen.findByDisplayValue("Daily check");
-    expect(screen.getByRole("button", { name: "Automations", exact: true }).getAttribute("aria-expanded")).toBe("true");
-    await act(async () => { window.dispatchEvent(new CustomEvent("ducky:graph-deleted", { detail: { kind: "pipeline", id: "p" } })); });
+    await act(async () => { window.dispatchEvent(new CustomEvent("ducky:graph-deleted", { detail: { id: "p" } })); });
     expect(screen.getByDisplayValue("Daily check")).toBeTruthy();
   });
-  it("keeps a delayed save from replacing the other section's newly selected graph", async () => {
+  it("keeps a delayed save from replacing the newly selected workflow", async () => {
     await open();
-    let finish!: (value: { pipeline: AutomationDto }) => void;
-    api.save_pipeline.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    let finish!: (value: { workflow: AutomationDto }) => void;
+    api.save_workflow.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
     fireEvent.click(screen.getByText("Daily check"));
     await screen.findByDisplayValue("Daily check");
-    await act(async () => { finish({ pipeline: saved }); });
+    await act(async () => { finish({ workflow: saved }); });
     expect(screen.getByDisplayValue("Daily check")).toBeTruthy();
   });
 });
@@ -420,12 +513,12 @@ describe("inline node editing", () => {
     fireEvent.click(node.querySelector('[aria-label="Edit node name"]')!);
     fireEvent.change(screen.getByRole("textbox", { name: "Node name" }), { target: { value: "Changed" } });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Node name" }), { key: "Escape" });
-    expect(api.save_pipeline).not.toHaveBeenCalled();
+    expect(api.save_workflow).not.toHaveBeenCalled();
     expect(screen.getByText("Pause")).toBeTruthy();
     fireEvent.click(node.querySelector('[aria-label="Edit node name"]')!);
     fireEvent.change(screen.getByRole("textbox", { name: "Node name" }), { target: { value: " " } });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Node name" }), { key: "Enter" });
-    expect(api.save_pipeline).not.toHaveBeenCalled();
+    expect(api.save_workflow).not.toHaveBeenCalled();
     fireEvent.click(node.querySelector('[aria-label="Edit node description"]')!);
     fireEvent.change(screen.getByRole("textbox", { name: "Node description" }), { target: { value: "" } });
     fireEvent.blur(screen.getByRole("textbox", { name: "Node description" }));
@@ -433,25 +526,25 @@ describe("inline node editing", () => {
   });
   it("keeps newer settings edits when an inline save completes late", async () => {
     await open();
-    let finish!: (result: { pipeline: AutomationDto }) => void;
-    api.save_pipeline.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    let finish!: (result: { workflow: AutomationDto }) => void;
+    api.save_workflow.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     fireEvent.click(document.querySelector('[data-aw-node="a"] [aria-label="Edit node name"]')!);
     fireEvent.change(screen.getByRole("textbox", { name: "Node name" }), { target: { value: "Wait for UEFN" } });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Node name" }), { key: "Enter" });
-    await waitFor(() => expect(api.save_pipeline).toHaveBeenCalledTimes(1));
-    const submitted = structuredClone(api.save_pipeline.mock.calls[0][0]);
+    await waitFor(() => expect(api.save_workflow).toHaveBeenCalledTimes(1));
+    const submitted = structuredClone(api.save_workflow.mock.calls[0][0]);
     editNode();
     fireEvent.change(screen.getByRole("spinbutton", { name: "Seconds" }), { target: { value: "5" } });
-    await act(async () => { finish({ pipeline: submitted }); });
+    await act(async () => { finish({ workflow: submitted }); });
     expect((screen.getByRole("spinbutton", { name: "Seconds" }) as HTMLInputElement).value).toBe("5");
-    api.save_pipeline.mockClear();
+    api.save_workflow.mockClear();
     await save();
     expect(saved.graph.nodes[1].config.seconds).toBe(5);
     expect(saved.graph.nodes[1].label).toBe("Wait for UEFN");
   });
   it("shows failed inline saves and allows retrying without losing edits", async () => {
     await open();
-    api.save_pipeline.mockRejectedValueOnce(new Error("offline"));
+    api.save_workflow.mockRejectedValueOnce(new Error("offline"));
     fireEvent.click(document.querySelector('[data-aw-node="a"] [aria-label="Edit node name"]')!);
     fireEvent.change(screen.getByRole("textbox", { name: "Node name" }), { target: { value: "Wait for UEFN" } });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Node name" }), { key: "Enter" });
@@ -488,7 +581,7 @@ describe("workflow multi-selection and groups", () => {
     fireEvent.click(title, { ctrlKey: true });
     expect(selected()).toEqual(['a', 'b']);
     expect(screen.queryByRole('textbox', { name: 'Node name' })).toBeNull();
-    expect(api.save_pipeline).not.toHaveBeenCalled();
+    expect(api.save_workflow).not.toHaveBeenCalled();
   });
 
   it("box-selects backwards at non-default zoom without panning or moving nodes", async () => {
@@ -590,7 +683,7 @@ describe("workflow multi-selection and groups", () => {
 
   it("reports group save failures and keeps the group for a retry", async () => {
     await open();
-    api.save_pipeline.mockRejectedValueOnce(new Error('offline'));
+    api.save_workflow.mockRejectedValueOnce(new Error('offline'));
     ctrlClick('s'); ctrlClick('a'); shortcut();
     await screen.findByRole('alert');
     expect(document.querySelector('.aw-group')).toBeTruthy();
@@ -629,7 +722,7 @@ describe("workflow history controls", () => {
     fireEvent.pointerMove(board, { pointerId: 1, clientX: 640, clientY: 200 });
     fireEvent.pointerUp(board, { pointerId: 1, clientX: 640, clientY: 200 });
     fireEvent.keyDown(board, { key: "z", ctrlKey: true });
-    await waitFor(() => expect(api.save_pipeline).toHaveBeenCalled());
+    await waitFor(() => expect(api.save_workflow).toHaveBeenCalled());
     expect(saved.graph.nodes[1].x).toBe(280);
     expect(screen.getByRole("button", { name: "Undo", exact: true }).hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Enabled", exact: true }));
@@ -652,7 +745,7 @@ describe("workflow history controls", () => {
     expect(saved.graph.groups).toBeUndefined();
   });
 
-  it("does not mix histories between pipeline and automation with the same id", async () => {
+  it("starts a fresh history for another workflow", async () => {
     await open();
     fireEvent.click(screen.getByRole("button", { name: "Enabled", exact: true }));
     fireEvent.click(screen.getByText("Daily check"));

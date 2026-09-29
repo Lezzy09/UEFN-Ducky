@@ -62,22 +62,11 @@ describe("parseFocusId / focusIdToEditorTab", () => {
     });
   });
 
-  it("parses the Automations singleton tab", () => {
-    expect(parseFocusId("automations:main")).toEqual({ kind: "automations" });
-    expect(focusIdToEditorTab("automations:main", "Automations")).toEqual({
-      id: "automations:main",
-      kind: "automations",
-      name: "Workflows",
-    });
-  });
-
-  it("parses the Pipelines singleton tab", () => {
-    expect(parseFocusId("pipelines:main")).toEqual({ kind: "pipelines" });
-    expect(focusIdToEditorTab("pipelines:main", "Pipelines")).toEqual({
-      id: "pipelines:main",
-      kind: "pipelines",
-      name: "Workflows",
-    });
+  it("parses the Workflows singleton tab, and the old Automations and Pipelines ids as it", () => {
+    for (const id of ["workflows:main", "automations:main", "pipelines:main"]) {
+      expect(parseFocusId(id)).toEqual({ kind: "workflows" });
+      expect(focusIdToEditorTab(id, "Old name")).toEqual({ id: "workflows:main", kind: "workflows", name: "Workflows" });
+    }
   });
 
   it("parses ducky-profile pop-out tabs", () => {

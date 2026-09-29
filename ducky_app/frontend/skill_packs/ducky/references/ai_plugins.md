@@ -33,17 +33,17 @@ across chats. Tools write the files; you never open those folders.
    or named theme colors. Exception: they specified a design/colors — use those
    tokens only, keep Ducky vars for the rest. **Always mention** the Appearance
    default when you start the UI or when you depart from it.
-6. **Always pipeline + automation** (themes too). `contributes.automations.nodes`
+6. **Always a workflow node** (themes too). `contributes.automations.nodes`
    + `@api.register_pipeline_node` (alias of `register_automation_node`) that
    calls the **same** functions as `@api.tool()`. Ship `automations.templates`
    with graph `start.chat` → `pipeline.agent` → your node → `pipeline.finish`.
-   Omit `systems` so the tile is on **both** palettes. Theme-only: one node that
+   Every workflow has one palette (`systems` is ignored). Theme-only: one node that
    applies/lists the profile. Handler `ctx = {config, payload, node, kind, files,
-   artifact_dir}` → `{ok, files?}`.
-   Place graphs with `save_pipeline` / `save_automation` — each save opens that
-   editor and refreshes the canvas. Delete with `delete_pipeline` /
-   `delete_automation`. Reusable starters: `save_custom_automation_template` /
-   `delete_custom_automation_template`. Do not tell the user to open the tab.
+   artifact_dir}` → `{ok, files?}` (`kind` is `"pipeline"` when run from a chat).
+   Place graphs with `save_workflow` — each save opens the Workflows editor and
+   refreshes the canvas. Delete with `delete_workflow`. Reusable starters:
+   `save_workflow_template` / `delete_workflow_template`. Do not tell the user
+   to open the tab.
 7. **Bundled skill** `skills/<id>/SKILL.md` inside the draft (not
    `ducky_skills_*`) so later chats know the new tools.
 8. **Mutators record changeset** (`_ducky` or `api.changeset.record`, slot
@@ -92,7 +92,7 @@ nodes/template · bundled skill · changeset on writes · CSS vars if HTML.
 `reference.md` — do not invent a provider.
 
 `api` helpers: `listener`, `http_json`, `poll`, `changeset`, `connection`,
-`register_secret_test`, `emit_automation` (automations only — not pipelines),
+`register_secret_test`, `emit_automation` (runs the workflows on this PC whose trigger matches),
 `is_enabled()`, `log()`, `plugin_id`.
 
 ### Required files
@@ -161,7 +161,7 @@ nodes/template · bundled skill · changeset on writes · CSS vars if HTML.
 ```
 
 Theme-only plugins use `appearance.*` instead of `ui.panels` — still `@api.tool()`
-and still a pipeline node that applies/lists the profile.
+and still a workflow node that applies/lists the profile.
 
 Toggles (native Settings, not a custom form):
 
@@ -173,7 +173,7 @@ Toggles (native Settings, not a custom form):
 }]
 ```
 
-**`backend/__init__.py`** — one store, MCP tools + panel RPC + pipeline node.
+**`backend/__init__.py`** — one store, MCP tools + panel RPC + workflow node.
 
 Data lives in `api.data`, never in a folder you pick (no `%LOCALAPPDATA%` paths,
 no `db.json`): **one JSON doc per record** (`data.put("item.<id>", {...})`,
@@ -181,8 +181,10 @@ no `db.json`): **one JSON doc per record** (`data.put("item.<id>", {...})`,
 `data.put_file(path, bytes)` / `data.get_file(path)` / `data.has_file(path)` /
 `data.delete_file` (files are encrypted on disk, so there is no path to read).
 Keys are `[a-z0-9._-]`, file paths `[a-z0-9._/-]`. The host keeps the data per
-account and scope, encrypted for the signed-in account; a scope can be read-only,
-so let write errors surface as tool errors.
+account and scope, encrypted for the signed-in account. The user picks per plugin
+whether it stays Local or is shared with one team (Plugins → the plugin → Data);
+the plugin never decides and needs no code for it. A scope can be read-only, so
+let write errors surface as tool errors.
 
 ```python
 from __future__ import annotations

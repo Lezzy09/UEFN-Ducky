@@ -23,6 +23,26 @@ tool / panel / external-agent observer
  8 notify    WriteObserver fan-out: file history, editor sync, UI events
 ```
 
+## Project kinds and the step 1 guard
+
+A project is a UEFN island (`<Name>.uefnproject` at its root) or a folder project
+(any other folder, such as a code repo). `frontend.project_kind` decides, and the
+kind is saved on the `projects` row when the project is added.
+
+| Kind | Writable | Guard |
+|---|---|---|
+| Island | `Content/**` and `.ducky/**`, never `.py` | `paths.require_writable_project_path` |
+| Folder project | anything under the root, `.py` included, never `.git/` (or `.svn/`, `.hg/`) | `paths.require_writable_folder_path` |
+
+The writer uses the folder rule only for a root the user saved as a folder project
+(`project_kind.is_saved_folder_project`). An island, an island's `Content/` handed in
+as the root, or a root Ducky never recorded keeps the island rule.
+
+Island machinery never runs against a folder project: listener init
+(`Content/Python/init_unreal.py`), the Python quarantine, the `.uefnproject` Python
+flag, startup deploys and the bridge's periodic sweep all check for a real
+`*.uefnproject` on disk first, not the stored kind.
+
 ## Protocols
 
 | Protocol | Who implements it | Registered where |

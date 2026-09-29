@@ -77,6 +77,34 @@ export const ABS_PATH_PREFIX = "abs:";
  * Like abs: but ungated — treated as read-only everywhere abs: is. */
 export const EXT_PATH_PREFIX = "ext:";
 
+/** Content pane root as a project-relative tree path. A UEFN island's pane is its
+ * `Content` folder (paths like `Content/Verse/x.verse`); a folder project (any other
+ * folder, e.g. a code repo) shows the folder itself, root `.`, with plain root-relative
+ * paths (`src/app.ts`). Set from project info before the tree renders (`useProject`). */
+export const UEFN_CONTENT_ROOT = "Content";
+export const FOLDER_CONTENT_ROOT = ".";
+let activeContentRoot: string = UEFN_CONTENT_ROOT;
+let contentRootKnown = false;
+
+export function setProjectContentRoot(root: string | null | undefined): void {
+  activeContentRoot = root === FOLDER_CONTENT_ROOT ? FOLDER_CONTENT_ROOT : UEFN_CONTENT_ROOT;
+  contentRootKnown = true;
+}
+
+/** False until project info has arrived once (the tree waits for it on first load). */
+export function isContentRootKnown(): boolean {
+  return contentRootKnown;
+}
+
+export function contentRootPath(): string {
+  return activeContentRoot;
+}
+
+/** Active project is a plain folder, not a UEFN island: no Content/ prefix, no Verse tools. */
+export function isFolderProject(): boolean {
+  return activeContentRoot === FOLDER_CONTENT_ROOT;
+}
+
 export function isVerseFile(relativePath: string): boolean {
   const lower = relativePath.toLowerCase();
   return VERSE_EXTENSIONS.some((ext) => lower.endsWith(ext));
@@ -202,7 +230,8 @@ export function isDigestFile(relativePath: string): boolean {
   return lower.includes(".digest.verse") || lower.endsWith(".digest.verse");
 }
 
-/** Any path outside Content/ — locked in Ducky (digest, Assets, vproject, etc.). */
+/** Any path outside Content/ — locked in Ducky (digest, Assets, vproject, etc.).
+ * In a folder project every project-relative path is writable. */
 export function isWorkspaceLockedFile(relativePath: string): boolean {
   const lower = normPath(relativePath).replace(/^\/+/, "");
   if (lower === WORKSPACE_ROOTS_PATH) return true;
@@ -210,11 +239,13 @@ export function isWorkspaceLockedFile(relativePath: string): boolean {
   if (lower.startsWith(ABS_PATH_PREFIX)) return true;
   // ext: = a dragged-in external file opened for editing in place — NOT locked.
   if (lower.startsWith(EXT_PATH_PREFIX)) return false;
+  if (isFolderProject()) return lower === "";
   return !lower.startsWith("content/") && lower !== "content";
 }
 
-/** Deployed listener bootstrap — visible but never editable in-panel. */
+/** Deployed listener bootstrap — visible but never editable in-panel (islands only). */
 export function isLockedProjectFile(relativePath: string): boolean {
+  if (isFolderProject()) return false;
   const norm = normPath(relativePath).replace(/^\/+/, "").toLowerCase();
   return norm === "content/python/init_unreal.py";
 }
@@ -260,6 +291,8 @@ export function registryKey(path: string): string {
   ) {
     return p;
   }
+  // A folder project's paths are already canonical: root-relative, no Content/ prefix.
+  if (isFolderProject()) return p.replace(/^\.\//, "");
   if (!p.startsWith("content/")) {
     return `content/${p}`;
   }
@@ -278,6 +311,7 @@ export function projectRelativePath(path: string): string {
   ) {
     return p;
   }
+  if (isFolderProject()) return p.replace(/^\.\//, "");
   if (!lower.startsWith("content/")) {
     p = `Content/${p}`;
   }
@@ -294,6 +328,7 @@ export function registryLookupKeys(path: string): string[] {
   ) {
     return [canonical];
   }
+  if (isFolderProject()) return [canonical];
   const stripped = canonical.startsWith("content/") ? canonical.slice("content/".length) : canonical;
   if (stripped === canonical) return [canonical];
   return [canonical, stripped];

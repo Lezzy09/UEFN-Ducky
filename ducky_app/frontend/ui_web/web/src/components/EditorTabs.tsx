@@ -443,10 +443,8 @@ export function EditorTabs({
                   <Icons.Settings />
                 ) : tab.kind === "changes" ? (
                   <Icons.Diff />
-                ) : tab.kind === "automations" ? (
-                  <Icons.Clock />
-                ) : tab.kind === "pipelines" ? (
-                  <Icons.GitBranch />
+                ) : tab.kind === "workflows" ? (
+                  <Icons.Workflow />
                 ) : tab.kind === "verse-translated" ? (
                   <Icons.Globe />
                 ) : tab.kind === "plugin" ? (

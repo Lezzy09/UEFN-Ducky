@@ -15,7 +15,8 @@ interface AutomationTemplatePickerProps {
   onClose: () => void;
   onSelect: (template: AutomationTemplateDto | null) => void;
   currentGraph?: AutomationGraphDto | null;
-  system?: "automation" | "pipeline";
+  /** Where the new workflow will live ("Local", "Team · Alpha Studio"). */
+  ownerLabel?: string;
 }
 
 export function AutomationTemplatePicker({
@@ -23,7 +24,7 @@ export function AutomationTemplatePicker({
   onClose,
   onSelect,
   currentGraph,
-  system = "automation",
+  ownerLabel = "Local",
 }: AutomationTemplatePickerProps) {
   const { confirm } = useConfirmModal();
   const [view, setView] = useState<"picker" | "creator">("picker");
@@ -40,20 +41,20 @@ export function AutomationTemplatePicker({
 
   const refresh = useCallback(async () => {
     const api = getApi();
-    if (!api?.list_automation_templates) {
+    if (!api?.list_workflow_templates) {
       setTemplates([]);
       return;
     }
     setLoading(true);
     try {
-      const res = await api.list_automation_templates(system);
+      const res = await api.list_workflow_templates();
       setTemplates(res?.templates || []);
     } catch {
       setTemplates([]);
     } finally {
       setLoading(false);
     }
-  }, [system]);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -132,7 +133,7 @@ export function AutomationTemplatePicker({
       ) {
         return;
       }
-      const ok = await getApi()?.delete_custom_automation_template?.(template.id);
+      const ok = await getApi()?.delete_workflow_template?.(template.id);
       if (ok?.ok) {
         setTemplates((prev) => prev.filter((t) => t.id !== template.id));
         if (selectedId === template.id) setSelectedId(BLANK_ID);
@@ -151,7 +152,7 @@ export function AutomationTemplatePicker({
     setFormError("");
     try {
       const graph = editing?.graph || currentGraph || { nodes: [], edges: [] };
-      const res = await getApi()?.save_custom_automation_template?.(
+      const res = await getApi()?.save_workflow_template?.(
         name,
         formDesc,
         editing?.icon || "⚡",
@@ -183,7 +184,7 @@ export function AutomationTemplatePicker({
     <Modal
       open={open}
       onClose={handleClose}
-      title={view === "creator" ? "Save Template" : "Create Automation"}
+      title={view === "creator" ? "Save Template" : "New workflow"}
       width={768}
       hideHeader
       hideClose
@@ -193,7 +194,7 @@ export function AutomationTemplatePicker({
       <div className="vtm">
         <div className={`vtm-view${view === "picker" ? " vtm-view--active" : " vtm-view--hidden"}`}>
           <div className="vtm-header">
-            <h2 className="vtm-title">Create Automation</h2>
+            <h2 className="vtm-title">New workflow <small className="vtm-owner">in {ownerLabel}</small></h2>
             <button type="button" className="vtm-icon-btn" onClick={handleClose} aria-label="Close">
               <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="18" y1="6" x2="6" y2="18" />
@@ -218,7 +219,7 @@ export function AutomationTemplatePicker({
               />
             </div>
           </div>
-          <div className="vtm-body vtm-picker-body" role="listbox" aria-label="Automation templates">
+          <div className="vtm-body vtm-picker-body" role="listbox" aria-label="Workflow templates">
             {loading ? <div className="vtm-status">Loading templates…</div> : null}
             <div className="vtm-grid">
               {blankMatches ? (
@@ -382,7 +383,7 @@ export function AutomationTemplatePicker({
                   Processing...
                 </>
               ) : (
-                "Create Automation"
+                "Create workflow"
               )}
             </button>
           </div>

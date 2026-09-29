@@ -76,12 +76,11 @@ def test_node_width_survives_storage_safely(width, expected):
     assert graph["nodes"][0]["width"] == expected
 
 
-def test_project_nodes_available_in_both_catalogs():
+def test_project_nodes_are_in_the_catalog():
     from backend.automations.catalog import list_nodes
 
-    for system in ("automation", "pipeline"):
-        types = {n["type"] for n in list_nodes(system)}
-        assert {"uefn.open_project", "uefn.launch", "uefn.wait_ready"} <= types
+    types = {n["type"] for n in list_nodes()}
+    assert {"uefn.open_project", "uefn.launch", "uefn.wait_ready"} <= types
 
 
 def test_uefn_project_fields_use_saved_project_selector():
@@ -102,6 +101,6 @@ def test_plugin_icons_are_forwarded_once_per_plugin(monkeypatch):
         {"id": "example.a", "plugin_id": "example"}, {"id": "example.b", "plugin_id": "example"}]})
     calls = []
     monkeypatch.setattr(store, "plugin_icon_data_url", lambda pid: calls.append(pid) or "data:image/png;base64,icon")
-    nodes = [n for n in list_nodes("pipeline") if n.get("plugin_id") == "example"]
+    nodes = [n for n in list_nodes() if n.get("plugin_id") == "example"]
     assert calls == ["example"]
     assert all(n["icon"] == "data:image/png;base64,icon" for n in nodes)

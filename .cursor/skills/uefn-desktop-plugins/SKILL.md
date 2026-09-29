@@ -128,7 +128,7 @@ standalone AppData skill pack or owned by another plugin.
 | `appearance.skin` | Full chrome swap into host portals (frame/header/left/right) |
 | `sounds` | Audio files listed in Appearance → Sounds (`plugin:<id>:<soundId>`) |
 | `hooks` | Extra hookable events for Appearance → Sounds; emit via `ducky:hook` |
-| `automations.nodes` / `automations.triggers` | Palette tiles in Automations **and** Pipelines (omit `systems` = both; `"systems": ["pipeline"]` = Pipelines only). `register()`: `api.register_automation_node` / `api.register_pipeline_node` (same table) and `api.emit_automation`. Disabled plugin → tiles and handlers gone. Leave `hooks` alone (sounds). |
+| `automations.nodes` / `automations.triggers` | Palette tiles in the Workflows editor (one palette; `systems` is ignored). `register()`: `api.register_automation_node` / `api.register_pipeline_node` (same table) and `api.emit_automation` (runs this PC's workflows whose trigger matches; a team workflow only where "Run on this PC" is on). Disabled plugin → tiles and handlers gone. Leave `hooks` alone (sounds). |
 | `verse.templates` | New-file Verse scaffolds (`file`/`content` or multi-file `folder`+`files[]`) |
 | `agent.tools` | Category / intent for MCP tools registered via `api.tool()` (tool names auto-tracked). Chat AI-made plugins **must** `@api.tool()` every user-facing action. |
 | `llm.providers` | Rows under Settings → LLMs → Providers; click opens a detail slide (key, coding agent, plugin options). Effort slider is `ModelInfo.thinking_menu` from `fetch_models`. Usage sliders are `fetch_usage` on `api.register_llm_provider` — not this contribute. |

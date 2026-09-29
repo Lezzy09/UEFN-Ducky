@@ -47,5 +47,5 @@ export function syncText(status: PluginScopeStatus, nowMs: number): string {
 export function switchMessage(fromLabel: string, to: { kind: string; label: string }): string {
   return to.kind === "team"
     ? `You'll see ${to.label}'s copy. Your ${fromLabel} copy stays separate.`
-    : `You'll see your Personal copy. ${fromLabel}'s copy stays separate.`;
+    : `You'll see your Local copy. ${fromLabel}'s copy stays separate.`;
 }

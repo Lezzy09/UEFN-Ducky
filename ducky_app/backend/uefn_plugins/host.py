@@ -2795,9 +2795,9 @@ class _PluginApi:
                 # Plugins on the host data service: say which copy the tool read or changed.
                 # ponytail: dict results only; string results would need parsing.
                 if pid in _DATA_PLUGINS and isinstance(result, dict) and "scope" not in result:
-                    from backend.uefn_plugins.scopes import scope_name
+                    from backend.uefn_plugins.scopes import active_scope, scope_name
 
-                    result = {**result, "scope": scope_name()}
+                    result = {**result, "scope": scope_name(active_scope(pid))}
                 return result
 
             mcp.tool(name=tool_name)(wrapper)
@@ -2850,10 +2850,11 @@ class _PluginApi:
         return self.register_automation_node(node_type, handler)
 
     def emit_automation(self, trigger_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Fire enabled workflows whose starter matches ``trigger_id``."""
-        from backend.automations.runner import emit_automation as _emit
+        """Fire enabled workflows on this PC whose trigger matches ``trigger_id``
+        (plugin API name kept from before Workflows)."""
+        from backend.automations.runner import emit_trigger
 
-        return _emit(trigger_id, payload or {})
+        return emit_trigger(trigger_id, payload or {})
 
     def register_panel_rpc(self, name: str, fn: Any) -> None:
         """Register a PanelApi / bridge method: ``plugin_call(plugin_id, name, params)``.

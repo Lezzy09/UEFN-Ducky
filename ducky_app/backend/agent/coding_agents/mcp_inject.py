@@ -188,6 +188,28 @@ def deployed_skill_packs(agent_id: str) -> tuple[str, list[str]]:
     return str(root), names
 
 
+CODING_AGENT_FOLDER_NOTE = (
+    "Project kind: folder project (a plain folder or code repo, not a UEFN island). Every "
+    "file under the project root is editable, .py included, except .git/ internals; the "
+    "island rules about Content/, Verse/, digests and never writing Python do not apply. "
+    "Use your own shell tool for git, builds and tests: any command that needs approval "
+    "shows an Allow/Deny card in this chat, so wait for it. Never push, publish or deploy "
+    "unless the user asks.\n"
+)
+
+
+def _folder_project_note(project_root: str) -> str:
+    root = (project_root or "").strip()
+    if not root:
+        return ""
+    try:
+        from frontend.project_kind import is_folder_project
+
+        return CODING_AGENT_FOLDER_NOTE if is_folder_project(root) else ""
+    except Exception:
+        return ""
+
+
 def bootstrap_system_prompt(
     *,
     project_root: str,
@@ -236,6 +258,7 @@ def bootstrap_system_prompt(
     return (
         "You are running as a coding agent inside UEFN-Ducky.\n"
         f"Project root: {root}\n"
+        f"{_folder_project_note(project_root)}"
         f"UEFN listener: {online}\n"
         f"Your agent/chat id: {conv_id}\n"
         f"{persona}"

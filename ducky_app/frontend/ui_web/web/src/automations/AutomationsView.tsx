@@ -12,8 +12,13 @@ import type {
   AutomationRunDto,
   AutomationSummaryDto,
   AutomationTemplateDto,
+  WorkflowOwnersDto,
 } from "../types/panel";
 import { getApi } from "../hooks/usePanelApi";
+import { useConfirmModal } from "../contexts/ConfirmModalContext";
+import { installPanelPushBus, subscribePanelPush } from "../hooks/usePanelPushBus";
+import { setVisibleInterval } from "../utils/visibleInterval";
+import { LOCAL_OWNER, OwnerIcon, WorkflowList, ownerHelp, ownerName } from "./WorkflowList";
 import { takePendingGraphFocus } from "../hooks/graphActivity";
 import { Icons } from "../icons/Icons";
 import { copyText } from "../utils/copyText";
@@ -58,23 +63,26 @@ function groupCatalog(catalog: AutomationNodeDto[], query: string) {
   return keys.map((k) => [k, map.get(k) || []] as const);
 }
 
-type WorkflowKind = "automation" | "pipeline";
-const WORKFLOW_SECTIONS = [{ kind: "pipeline", label: "Pipelines" }, { kind: "automation", label: "Automations" }] as const;
+/** Team rounds while this view is open (on open, on focus, each minute); the host caps
+ * one per team per minute. */
+const SYNC_EVERY_MS = 60_000;
 
-export function AutomationsView({ kind: initialKind = "automation" }: { kind?: WorkflowKind }) {
+export function AutomationsView() {
   const sectionId = useId();
+  const { confirm } = useConfirmModal();
   const [listCollapsed, setListCollapsed] = useState(false);
-  const [kind, setKind] = useState<WorkflowKind>(initialKind);
-  const [rows, setRows] = useState<Record<WorkflowKind, AutomationSummaryDto[]>>({ pipeline: [], automation: [] });
-  const [sectionsOpen, setSectionsOpen] = useState({ pipeline: true, automation: true });
-  const [pickerKind, setPickerKind] = useState<WorkflowKind>(initialKind);
+  const [rows, setRows] = useState<AutomationSummaryDto[]>([]);
+  const [owners, setOwners] = useState<WorkflowOwnersDto>({ owners: [LOCAL_OWNER] });
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [pickerOwner, setPickerOwner] = useState(LOCAL_OWNER.id);
+  const [actionError, setActionError] = useState("");
   const listRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [catalog, setCatalog] = useState<AutomationNodeDto[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const history = useWorkflowHistory();
   const { draft, setDraft, replace: acknowledgeDraft, reset: resetDraft, begin: beginEdit, end: endEdit } = history;
-  const [versions, setVersions] = useState<{ id: string; name: string; saved_at: number; node_count: number }[]>([]);
+  const [versions, setVersions] = useState<{ id: string; name: string; saved_at: number; node_count: number; note?: string }[]>([]);
   const [historyStatus, setHistoryStatus] = useState("");
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [nodeHeights, setNodeHeights] = useState<Record<string, number>>({});
@@ -123,27 +131,51 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
     return m;
   }, [catalog]);
 
-  const isPipeline = kind === "pipeline";
-
   const refreshList = useCallback(async () => {
     const api = getApi();
-    const [pipelines, automations] = await Promise.all([api?.list_pipelines?.(), api?.list_automations?.()]);
-    setRows({ pipeline: pipelines?.pipelines || [], automation: automations?.automations || [] });
+    const [listed, folders] = await Promise.all([api?.list_workflows?.(), api?.workflow_owners?.()]);
+    setRows(listed?.workflows || []);
+    if (folders?.owners?.length) setOwners(folders);
+    setNowMs(Date.now());
   }, []);
 
   useEffect(() => { void refreshList(); }, [refreshList]);
 
   useEffect(() => {
     let cancelled = false;
-    setCatalog([]);
-    const load = async () => {
-      const api = getApi();
-      const result = isPipeline ? await api?.list_pipeline_nodes?.() : await api?.list_automation_nodes?.();
+    void (async () => {
+      const result = await getApi()?.list_workflow_nodes?.();
       if (!cancelled) setCatalog(result?.nodes || []);
-    };
-    void load();
+    })();
     return () => { cancelled = true; };
-  }, [isPipeline]);
+  }, []);
+
+  // Teams: ask the Store which teams this account has once per open, then sync each
+  // visible team while the view is open. Another chat's edits and finished rounds
+  // arrive as graphs_changed.
+  const hasTeams = !!owners.owners?.some((owner) => owner.kind === "team");
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const folders = await getApi()?.workflow_owners?.(true);
+      if (!cancelled && folders?.owners?.length) setOwners(folders);
+    })();
+    installPanelPushBus();
+    const stop = subscribePanelPush((event) => {
+      // A team round started elsewhere (a plugin's scope bar) can bring workflow changes too.
+      const workflowsSynced = event.type === "plugin_scope_changed" && !!event.plugins?.includes("ducky.automations");
+      if (event.type === "graphs_changed" || event.type === "duckyos_account_changed" || workflowsSynced) void refreshList();
+    });
+    return () => { cancelled = true; stop(); };
+  }, [refreshList]);
+  useEffect(() => {
+    if (!hasTeams) return;
+    const sync = () => void getApi()?.workflow_sync?.(false);
+    sync();
+    window.addEventListener("focus", sync);
+    const stop = setVisibleInterval(() => { sync(); void refreshList(); }, SYNC_EVERY_MS);
+    return () => { window.removeEventListener("focus", sync); stop(); };
+  }, [hasTeams, refreshList]);
 
   useEffect(() => {
     if (!spawn) return;
@@ -156,18 +188,16 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
   }, [spawn]);
 
   const loadGen = useRef(0);
-  const loadOne = useCallback(async (id: string, targetKind: WorkflowKind) => {
+  const loadOne = useCallback(async (id: string) => {
     const gen = ++loadGen.current;
-    const api = getApi();
-    const res = targetKind === "pipeline" ? await api?.get_pipeline?.(id) : await api?.get_automation?.(id);
+    const res = await getApi()?.get_workflow?.(id);
     if (gen !== loadGen.current) return;
-    const row = res?.automation || res?.pipeline;
+    const row = res?.workflow;
     if (row) {
-      setKind(targetKind);
-      resetDraft({ ...row, kind: targetKind });
+      resetDraft(row);
       setVersions([]);
       setHistoryStatus("");
-      setSectionsOpen((current) => ({ ...current, [targetKind]: true }));
+      setActionError("");
       setSelectedId(id);
       setSpawn(null);
       setSelectedNodeIds([]);
@@ -178,28 +208,25 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
   }, [resetDraft]);
 
   useEffect(() => {
-    const open = (id: string, targetKind: WorkflowKind) => {
+    const open = (id: string) => {
       if (!id) return;
       void refreshList();
-      void loadOne(id, targetKind);
+      void loadOne(id);
       setLogOpen(true);
     };
-    for (const section of WORKFLOW_SECTIONS) {
-      const queued = takePendingGraphFocus(section.kind);
-      if (queued) open(queued, section.kind);
-    }
+    open(takePendingGraphFocus());
     const onFocus = (ev: Event) => {
-      const detail = (ev as CustomEvent<{ kind?: WorkflowKind; id?: string }>).detail;
-      if (!detail?.id || (detail.kind !== "pipeline" && detail.kind !== "automation")) return;
-      takePendingGraphFocus(detail.kind);
-      open(detail.id, detail.kind);
+      const detail = (ev as CustomEvent<{ id?: string }>).detail;
+      if (!detail?.id) return;
+      takePendingGraphFocus();
+      open(detail.id);
     };
     const onDeleted = (ev: Event) => {
-      const detail = (ev as CustomEvent<{ kind?: WorkflowKind; id?: string }>).detail;
+      const detail = (ev as CustomEvent<{ id?: string }>).detail;
       if (!detail?.id) return;
       loadGen.current += 1;
       void refreshList();
-      setDraft((cur) => (cur?.id === detail.id && cur?.kind === detail.kind ? null : cur));
+      setDraft((cur) => (cur?.id === detail.id ? null : cur));
     };
     window.addEventListener("ducky:focus-graph", onFocus);
     window.addEventListener("ducky:graph-deleted", onDeleted);
@@ -211,20 +238,18 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
 
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const [textSaveError, setTextSaveError] = useState(false);
-  const persist = useCallback((next: AutomationDto) => {
+  const readOnly = !!draft?.owner?.readOnly;
+  const persist = useCallback((next: AutomationDto, owner = "") => {
     const api = getApi();
-    const targetKind: WorkflowKind = next.kind === "pipeline" ? "pipeline" : "automation";
     const gen = loadGen.current;
     const operation = saveQueue.current.then(async () => {
-    const payload = { ...next, kind: targetKind };
-    const res = targetKind === "pipeline" ? await api?.save_pipeline?.(payload) : await api?.save_automation?.(payload);
-    const row = res?.automation || res?.pipeline;
+    if (next.id && next.owner?.readOnly) return next;  // someone else's team workflow: never pushed from here
+    const res = await api?.save_workflow?.(next, owner || undefined);
+    const row = res?.workflow;
     if (row) {
       if (gen === loadGen.current) {
-        setKind(targetKind);
-        acknowledgeDraft((current) => !next.id || current === next ? { ...row, kind: targetKind } : current);
+        acknowledgeDraft((current) => !next.id || current === next ? row : current);
         setSelectedId(row.id);
-        setSectionsOpen((current) => ({ ...current, [targetKind]: true }));
       }
       await refreshList();
       return row;
@@ -235,32 +260,56 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
     return operation;
   }, [refreshList, acknowledgeDraft]);
 
-  const createNew = (targetKind: WorkflowKind) => {
-    setPickerKind(targetKind);
+  const createNew = (ownerId: string) => {
+    setPickerOwner(ownerId);
     setPickerOpen(true);
   };
 
   const createFromTemplate = useCallback(
     async (template: AutomationTemplateDto | null) => {
       const gen = ++loadGen.current;
-      const created = await persist({
-        id: "",
-        name: template?.name || "Untitled",
-        description: template?.description || "",
-        enabled: true,
-        kind: pickerKind,
-        graph: template?.graph || emptyGraph(),
-      } as AutomationDto);
+      let created: AutomationDto;
+      try {
+        created = await persist({
+          id: "",
+          name: template?.name || "Untitled",
+          description: template?.description || "",
+          enabled: true,
+          graph: template?.graph || emptyGraph(),
+        } as AutomationDto, pickerOwner);
+      } catch (error) {
+        setActionError(error instanceof Error ? error.message : "Could not create workflow");
+        return;
+      }
       if (gen !== loadGen.current) return;
       setSelectedNodeIds([]);
       setSelectedEdge(null);
       setSpawn(null);
       setExpandedId("");
       setLog(null);
+      setActionError("");
       if (created.id) setSelectedId(created.id);
     },
-    [persist, pickerKind],
+    [persist, pickerOwner],
   );
+
+  /** Copy (new id) or move a workflow to Local or a team. */
+  const sendTo = async (value: string) => {
+    if (!draft?.id) return;
+    const [action, target] = [value.slice(0, 4), value.slice(5)];
+    const from = draft.owner || LOCAL_OWNER;
+    const to = owners.owners?.find((owner) => owner.id === target) || LOCAL_OWNER;
+    if (action === "move" && from.kind === "team") {
+      const ok = await confirm({ title: `Move out of ${from.label}?`, message: `Members of ${from.label} will lose this workflow. It moves to ${ownerName(to)}.`, confirmLabel: "Move" });
+      if (ok !== true) return;
+    }
+    await saveQueue.current;
+    const res = await getApi()?.copy_workflow?.(draft.id, target, action === "move");
+    if (!res?.workflow) { setActionError(res?.error || "Could not copy workflow"); return; }
+    setActionError("");
+    await refreshList();
+    await loadOne(res.workflow.id);
+  };
 
   const graph = draft?.graph || emptyGraph();
   const overview = zoom < OVERVIEW_ZOOM;
@@ -270,12 +319,12 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
   const isExpanded = (id: string) => { const node = nodesById.get(id); return !overview && expandedId === id && !!node && hasNodeSettings(node, byType.get(node.type)); };
 
   const patchGraph = (fn: (g: AutomationGraphDto) => AutomationGraphDto) => {
-    if (!draft) return;
+    if (!draft || readOnly) return;
     setDraft((current) => current ? { ...current, graph: cleanGroups(fn(current.graph)) } : current);
   };
 
   const updateNodeText = (id: string, patch: { label?: string; description?: string }) => {
-    if (!draft) return;
+    if (!draft || readOnly) return;
     const next = { ...draft, graph: { ...draft.graph, nodes: draft.graph.nodes.map((node) => node.id === id ? { ...node, ...patch } : node) } };
     setDraft(next);
     setTextSaveError(false);
@@ -315,9 +364,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
     setBusy(true);
     try {
       await persist(draft);
-      const res = isPipeline
-        ? await getApi()?.run_pipeline?.(draft.id)
-        : await getApi()?.run_automation?.(draft.id);
+      const res = await getApi()?.run_workflow?.(draft.id);
       if (res && gen === loadGen.current) {
         setLog(res);
         setLogOpen(true);
@@ -361,10 +408,10 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
     const observer = new ResizeObserver(measure);
     cards.forEach((card) => observer.observe(card));
     return () => observer.disconnect();
-  }, [nodeIdsKey, selectedId, kind, expandedId, overview]);
+  }, [nodeIdsKey, selectedId, expandedId, overview]);
 
   const saveGraphChange = (fn: (current: AutomationGraphDto) => AutomationGraphDto) => {
-    if (!draft) return;
+    if (!draft || readOnly) return;
     const nextGraph = fn(draft.graph);
     if (nextGraph === draft.graph) return;
     const next = { ...draft, graph: nextGraph };
@@ -374,6 +421,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
   };
 
   const goToEdit = (index: number) => {
+    if (readOnly) return;
     const next = history.go(index);
     if (!next) return;
     setSelectedNodeIds([]); setSelectedEdge(null); setSpawn(null);
@@ -720,62 +768,57 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
     <div className={`aw-root${listCollapsed ? " is-list-collapsed" : ""}${draft ? " has-workflow" : ""}`} onKeyDown={onGraphKeyDown}
       onFocusCapture={(event) => { if (event.target.matches("input:not(.aw-spawn-search), textarea")) beginEdit(); }}
       onBlurCapture={(event) => { if (event.target.matches("input, textarea")) endEdit(); }}>
-      <aside className="aw-list" ref={listRef} aria-label="Workflows">
-        <button type="button" className="aw-list-head aw-list-toggle" title={listCollapsed ? "Expand Workflows" : "Collapse Workflows"} aria-expanded={!listCollapsed} aria-controls={sectionId + "-list"} onClick={() => setListCollapsed((collapsed) => !collapsed)}>
-          <strong>Workflows</strong><span className="aw-accordion-chevron" aria-hidden="true"><Icons.ChevronDown /></span>
-        </button>
-        <div className="aw-list-sections" id={sectionId + "-list"} hidden={listCollapsed}>
-          {WORKFLOW_SECTIONS.map((section) => (
-            <section className="aw-workflow-section" key={section.kind}>
-              <div className="aw-section-head">
-                <button type="button" className="aw-section-toggle" aria-label={section.label} aria-expanded={sectionsOpen[section.kind]} aria-controls={sectionId + "-" + section.kind} onClick={() => setSectionsOpen((current) => ({ ...current, [section.kind]: !current[section.kind] }))}>
-                  <span className="aw-accordion-chevron" aria-hidden="true"><Icons.ChevronDown /></span>
-                  <strong>{section.label}</strong><small>{rows[section.kind].length}</small>
-                </button>
-                <button type="button" className="aw-icon-button" title={"New " + section.kind} aria-label={"New " + section.kind} onClick={() => createNew(section.kind)}><span aria-hidden="true">➕</span></button>
-              </div>
-              <ul className="aw-list-ul" id={sectionId + "-" + section.kind} hidden={!sectionsOpen[section.kind]}>
-                {rows[section.kind].map((row) => (
-                  <li key={row.id}>
-                    <button type="button" className={"aw-list-row" + (draft && kind === section.kind && row.id === selectedId ? " is-active" : "")} aria-current={draft && kind === section.kind && row.id === selectedId ? "true" : undefined} onClick={() => void loadOne(row.id, section.kind)}>
-                      <span>{row.name || "Untitled"}</span>
-                      <span className="aw-list-meta" title={row.enabled ? "Enabled" : "Disabled"}>{row.enabled ? "on" : "off"}</span>
-                    </button>
-                  </li>
-                ))}
-                {!rows[section.kind].length && <li className="aw-section-empty">No {section.label.toLowerCase()} yet</li>}
-              </ul>
-            </section>
-          ))}
-        </div>
-      </aside>
+      <WorkflowList listId={sectionId + "-list"} listRef={listRef} owners={owners} rows={rows} activeId={draft ? selectedId : ""}
+        collapsed={listCollapsed} nowMs={nowMs} onToggleCollapsed={() => setListCollapsed((collapsed) => !collapsed)}
+        onOpen={(id) => void loadOne(id)} onCreate={createNew}
+        onImportLocal={() => void getApi()?.import_local_workflows?.().then(() => refreshList())} />
       <div className="aw-main">
         {draft ? (
           <div className="aw-toolbar" ref={toolbarRef} role="toolbar" aria-label="Workflow actions">
               <div className="aw-toolbar-fields">
+              <span className={`aw-owner-chip aw-owner-chip--${draft.owner?.kind || "local"}`} title={ownerHelp(draft.owner)}>
+                <OwnerIcon owner={draft.owner} /><span>{draft.owner?.kind === "team" ? `TEAM · ${draft.owner.label}` : "LOCAL"}</span>
+                {readOnly ? <Icons.Lock /> : null}
+              </span>
               <input
                 className="aw-name"
                 aria-label="Workflow name"
                 value={draft.name}
+                readOnly={readOnly}
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                 onBlur={saveDraft}
               />
 
               </div>
               <div className="aw-toolbar-actions">
-              <button type="button" aria-label="Undo" title="Undo (Ctrl+Z)" disabled={history.index <= 0} onClick={() => goToEdit(history.index - 1)}>↩️</button>
-              <button type="button" aria-label="Redo" title="Redo (Ctrl+Y)" disabled={history.index >= history.entries.length - 1} onClick={() => goToEdit(history.index + 1)}>↪️</button>
-              <ChoiceDropdown aria-label="History" trigger={<span aria-hidden="true">🕘</span>} hideChevron minWidth={300}
+              <button type="button" aria-label="Undo" title="Undo (Ctrl+Z)" disabled={readOnly || history.index <= 0} onClick={() => goToEdit(history.index - 1)}><Icons.Undo /></button>
+              <button type="button" aria-label="Redo" title="Redo (Ctrl+Y)" disabled={readOnly || history.index >= history.entries.length - 1} onClick={() => goToEdit(history.index + 1)}><Icons.Redo /></button>
+              <ChoiceDropdown aria-label="History" trigger={<Icons.Clock />} hideChevron minWidth={300}
                 value={"edit:" + history.index} onOpen={() => void loadVersions()}
                 header={<strong>History</strong>} footer={<small>{historyStatus || "Choose an edit to revisit it, or restore a saved version."}</small>}
                 options={[
                   ...history.entries.map((entry, index) => ({ value: "edit:" + index, label: entry.label, hint: index === history.index ? "Current edit" : "Edit " + index, group: "This session" })).reverse(),
-                  ...versions.map((version, index) => ({ value: "version:" + version.id, label: "Version " + (versions.length - index) + " · " + version.name, hint: new Date(version.saved_at * 1000).toLocaleString() + " · " + version.node_count + " nodes", group: "Saved versions" })),
+                  ...versions.map((version, index) => ({ value: "version:" + version.id, label: "Version " + (versions.length - index) + " · " + version.name + (version.note ? " · " + version.note : ""), hint: new Date(version.saved_at * 1000).toLocaleString() + " · " + version.node_count + " nodes", group: "Saved versions" })),
                 ]}
                 onChange={(value) => { if (value.startsWith("edit:")) goToEdit(Number(value.slice(5))); else void restoreVersion(value.slice(8)); }} />
-              <button type="button" aria-label="Enabled" title={draft.enabled ? "Disable workflow" : "Enable workflow"} aria-pressed={draft.enabled} onClick={() => { const next = { ...draft, enabled: !draft.enabled }; setDraft(next); void persist(next); }}><span aria-hidden="true">{draft.enabled ? "✅" : "⏸️"}</span></button>
-              <button type="button" title="Save" aria-label="Save" onClick={saveDraft}><span aria-hidden="true">💾</span></button>
-              <button type="button" title={busy ? "Running…" : "Test"} aria-label={busy ? "Running…" : "Test"} onClick={() => void runTest()} disabled={busy || !draft.id}><span aria-hidden="true">{busy ? "⏳" : "▶️"}</span></button>
+              <button type="button" aria-label="Enabled" title={draft.enabled ? "Disable workflow" : "Enable workflow"} aria-pressed={draft.enabled} disabled={readOnly} onClick={() => { const next = { ...draft, enabled: !draft.enabled }; setDraft(next); void persist(next); }}>{draft.enabled ? <Icons.Check /> : <Icons.Pause />}</button>
+              {draft.owner?.kind === "team" && ["start.cron", ...catalog.filter((n) => n.role === "starter" && n.plugin_id).map((n) => n.type)].some((type) => draft.graph.nodes.some((node) => node.type === type)) ? (
+                <button type="button" aria-label="Run on this PC" aria-pressed={!!draft.run_here}
+                  title={draft.run_here ? "This PC runs its schedule and triggers. Click to stop." : "Its schedule and triggers run on other members' PCs only. Click to run them here too."}
+                  onClick={async () => { const res = await getApi()?.set_workflow_run_here?.(draft.id, !draft.run_here); if (res?.workflow) { acknowledgeDraft((current) => current && current.id === draft.id ? { ...current, run_here: !!res.workflow?.run_here } : current); await refreshList(); } }}>
+                  <Icons.Monitor />
+                </button>
+              ) : null}
+              <ChoiceDropdown aria-label="Move or copy" trigger={<Icons.Share />} hideChevron minWidth={240} value=""
+                header={<strong>Move or copy</strong>} footer={<small>Moving keeps its history on this PC. A copy gets a new id.</small>}
+                options={(owners.owners || [LOCAL_OWNER]).filter((owner) => owner.id !== (draft.owner?.id || LOCAL_OWNER.id) && !owner.readOnly).flatMap((owner) => [
+                  { value: "copy:" + owner.id, label: "Copy to " + ownerName(owner), group: ownerName(owner) },
+                  { value: "move:" + owner.id, label: "Move to " + ownerName(owner), group: ownerName(owner), disabled: readOnly },
+                ])}
+                emptyLabel="Nowhere else to put it"
+                onChange={(value) => void sendTo(value)} />
+              <button type="button" title="Save" aria-label="Save" disabled={readOnly} onClick={saveDraft}><Icons.Save /></button>
+              <button type="button" title={busy ? "Running…" : "Test"} aria-label={busy ? "Running…" : "Test"} onClick={() => void runTest()} disabled={busy || !draft.id}>{busy ? <span className="aw-spin"><Icons.Spinner /></span> : <Icons.Play />}</button>
               <button
                 type="button" title="Duplicate" aria-label="Duplicate"
                 onClick={async () => {
@@ -784,24 +827,30 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
                     ...draft,
                     id: "",
                     name: `${draft.name} copy`,
+                    owner: undefined,
                   };
-                  await persist(copy);
+                  // Next to the original, or in Local when this one is read-only here.
+                  await persist(copy, readOnly ? LOCAL_OWNER.id : draft.owner?.id || LOCAL_OWNER.id).catch((error: Error) => setActionError(error.message));
                 }}
               >
-                <span aria-hidden="true">📋</span>
+                <Icons.Copy />
               </button>
               <button
-                type="button" title="Delete" aria-label="Delete"
+                type="button" title="Delete" aria-label="Delete" disabled={readOnly}
                 onClick={async () => {
                   if (!draft.id) return;
+                  if (draft.owner?.kind === "team") {
+                    const ok = await confirm({ title: `Delete for everyone in ${draft.owner.label}?`, message: "Every member loses this workflow.", confirmLabel: "Delete" });
+                    if (ok !== true) return;
+                  }
                   const gen = ++loadGen.current;
-                  if (isPipeline) await getApi()?.delete_pipeline?.(draft.id);
-                  else await getApi()?.delete_automation?.(draft.id);
+                  const res = await getApi()?.delete_workflow?.(draft.id);
+                  if (res?.ok === false) { setActionError(res.error || "Could not delete workflow"); return; }
                   if (gen === loadGen.current) { setDraft(null); setSelectedId(""); }
                   await refreshList();
                 }}
               >
-                <span aria-hidden="true">🗑️</span>
+                <Icons.Trash />
               </button>
               </div>
           </div>
@@ -918,7 +967,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
                     >
                       {expanded ? <Icons.ChevronDown /> : <Icons.Sliders />}
                     </button> : null}
-                    <button type="button" className="aw-node-delete" title="Delete node" aria-label={"Delete " + label} onPointerDown={(event) => event.stopPropagation()} onClick={() => deleteNode(node.id)}>🗑️</button>
+                    <button type="button" className="aw-node-delete" title="Delete node" aria-label={"Delete " + label} onPointerDown={(event) => event.stopPropagation()} onClick={() => deleteNode(node.id)}><Icons.Trash /></button>
                     </div>
                     {expanded ? (
                       <div className="aw-node-props aw-node-props--open" onPointerDown={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
@@ -963,12 +1012,14 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
           </div>
         </div>
         {textSaveError ? <p className="aw-text-save-error" role="alert">Could not save changes. Use Save to retry.</p> : null}
+        {actionError ? <p className="aw-text-save-error" role="alert">{actionError}</p> : null}
+        {draft && readOnly ? <p className="aw-readonly-note" role="note"><Icons.Lock /> {draft.owner?.reason || "Read-only here."} Duplicate it to change a Local copy.</p> : null}
         <div className="aw-canvas-controls">
-          <button type="button" title="Add nodes" aria-label="Add nodes" onClick={() => { const box = boardRef.current?.getBoundingClientRect(); if (!box) return; const world = worldFromClient(box.left + box.width / 2, box.top + box.height / 2); setSpawn({ x: Math.max(8, Math.min(box.left + 12, window.innerWidth - 328)), y: Math.max(8, Math.min(box.top + 12, window.innerHeight - 520)), worldX: world.x, worldY: world.y }); setSpawnFilter(""); }} disabled={!draft}>➕</button>
-          <button type="button" title="Zoom out" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.25, z / 1.2))}>➖</button>
+          <button type="button" title="Add nodes" aria-label="Add nodes" onClick={() => { const box = boardRef.current?.getBoundingClientRect(); if (!box) return; const world = worldFromClient(box.left + box.width / 2, box.top + box.height / 2); setSpawn({ x: Math.max(8, Math.min(box.left + 12, window.innerWidth - 328)), y: Math.max(8, Math.min(box.top + 12, window.innerHeight - 520)), worldX: world.x, worldY: world.y }); setSpawnFilter(""); }} disabled={!draft}><Icons.Plus /></button>
+          <button type="button" title="Zoom out" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.25, z / 1.2))}><Icons.ZoomOut /></button>
           <span>{Math.round(zoom * 100)}%</span>
-          <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(4, z * 1.2))}>➕</button>
-          <button type="button" title="Fit graph" aria-label="Fit graph" onClick={fitGraph}>🔍</button>
+          <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(4, z * 1.2))}><Icons.ZoomIn /></button>
+          <button type="button" title="Fit graph" aria-label="Fit graph" onClick={fitGraph}><Icons.FitView /></button>
         </div>
         {selectedEdge !== null && graph.edges[selectedEdge] ? <div className="aw-connection-tools">
           <span>Connection</span>
@@ -1020,8 +1071,8 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
               >
                 {logCopied ? "Copied" : "Copy log"}
               </button>
-              <button type="button" className="icon-btn" title="Hide" onClick={() => setLogOpen(false)}>
-                ×
+              <button type="button" className="icon-btn" title="Hide" aria-label="Hide run log" onClick={() => setLogOpen(false)}>
+                <Icons.Close />
               </button>
             </div>
             <div className="aw-log-dock-body selectable-text">
@@ -1036,9 +1087,7 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
                 </ol>
               ) : (
                 <p>
-                  {isPipeline
-                    ? "Test a pipeline to see steps here. Return to user sends results back to your chat."
-                    : "Test a graph to see steps here. Timers only fire while the panel is running."}
+                  Test a workflow to see steps here. Return to user sends results back to your chat. Schedules only fire while the panel is running.
                 </p>
               )}
             </div>
@@ -1055,9 +1104,9 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
             onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="aw-menu-actions" role="toolbar" aria-label="Node actions">
-              <button type="button" title="Collapse all nodes" aria-label="Collapse all nodes" onClick={() => setExpandedId("")}><span aria-hidden="true">📦</span></button>
-              <button type="button" title="Arrange nodes" aria-label="Arrange nodes" onClick={() => { patchGraph((g) => arrangeGraph(g, overview ? "" : expandedId)); setSpawn(null); }}><span aria-hidden="true">🧹</span></button>
-              <button type="button" title="Fit graph" aria-label="Fit graph" onClick={() => { fitGraph(); setSpawn(null); }}><span aria-hidden="true">🔍</span></button>
+              <button type="button" title="Collapse all nodes" aria-label="Collapse all nodes" onClick={() => setExpandedId("")}><Icons.CollapseAll /></button>
+              <button type="button" title="Arrange nodes" aria-label="Arrange nodes" onClick={() => { patchGraph((g) => arrangeGraph(g, overview ? "" : expandedId)); setSpawn(null); }}><Icons.Arrange /></button>
+              <button type="button" title="Fit graph" aria-label="Fit graph" onClick={() => { fitGraph(); setSpawn(null); }}><Icons.FitView /></button>
             </div>
             <input
               ref={spawnSearchRef}
@@ -1097,8 +1146,8 @@ export function AutomationsView({ kind: initialKind = "automation" }: { kind?: W
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
         onSelect={(t) => void createFromTemplate(t)}
-        currentGraph={draft?.kind === pickerKind ? draft.graph : null}
-        system={pickerKind}
+        currentGraph={draft?.graph || null}
+        ownerLabel={ownerName((owners.owners || []).find((owner) => owner.id === pickerOwner) || LOCAL_OWNER)}
       />
     </div>
   );

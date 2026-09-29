@@ -40,6 +40,21 @@ _DEFAULT_LSP_CLIENT = "default"
 _VERSE_EDITOR: VerseEditorApi | None = None
 
 
+FOLDER_PROJECT_VERSE_OFF = "Verse tools are off for folder projects (no .uefnproject)."
+
+
+def _is_folder_project(root: str) -> bool:
+    """Verse LSP, diagnostics and digests only make sense on a UEFN island."""
+    if not root:
+        return False
+    try:
+        from frontend.project_kind import is_folder_project
+
+        return is_folder_project(root)
+    except Exception:
+        return False
+
+
 def refresh_editor_lsp_after_build() -> None:
     """Drop cached workspace folders and kill editor verse-lsp so it re-inits with digests.
 
@@ -120,6 +135,8 @@ class VerseEditorApi:
         bridge = self._lsp_for(client_id)
         if not root:
             return {**bridge.get_status(), "error": "No project root set"}
+        if _is_folder_project(root):
+            return {**bridge.get_status(), "error": FOLDER_PROJECT_VERSE_OFF, "folder_project": True}
         # Do NOT abort scans here: editor binds/reconnects happen constantly (WS
         # auto-reconnect, extra windows) and used to kill every scan mid-flight.
         # A project-root switch aborts inside scan_project_verse_diagnostics.
@@ -147,7 +164,7 @@ class VerseEditorApi:
     def load_verse_diagnostics_cache(self, project_root: str | None = None) -> dict[str, Any]:
         raw = (project_root or "").strip() or PanelSettings.load().uefn_project_root.strip()
         root = normalize_verse_lsp_project_root(raw)
-        if not root:
+        if not root or _is_folder_project(root):
             return {"files": [], "stale_count": 0, "from_cache": False}
         return load_for_ui(root)
 
@@ -194,6 +211,8 @@ class VerseEditorApi:
         root = normalize_verse_lsp_project_root(raw)
         if not root:
             return {"error": "No project root set", "files": [], "scanned": 0}
+        if _is_folder_project(root):
+            return {"ok": True, "pending": False, "files": [], "scanned": 0, "folder_project": True}
 
         use_fast = fast or push_ui
 

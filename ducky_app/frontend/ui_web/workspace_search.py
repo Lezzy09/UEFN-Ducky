@@ -1,4 +1,4 @@
-"""Full-text search across Content .verse files and project duckies."""
+"""Full-text search across the Content pane's text files and project duckies."""
 
 from __future__ import annotations
 
@@ -9,9 +9,10 @@ from typing import Any, Literal
 
 from frontend.ui_web.project_chats import list_conversations
 from frontend.ui_web.project_files import (
+    _active_is_folder,
     _content_dir,
     _project_root,
-    include_in_workspace_search,
+    workspace_search_filter,
 )
 
 SearchScope = Literal["files", "chats", "both"]
@@ -98,6 +99,7 @@ def _search_plain_text(
 
 def _walk_verse_files(content: Path, root: Path) -> list[tuple[str, Path]]:
     found: list[tuple[str, Path]] = []
+    include = workspace_search_filter()
 
     def walk(dir_path: Path) -> None:
         try:
@@ -107,7 +109,7 @@ def _walk_verse_files(content: Path, root: Path) -> list[tuple[str, Path]]:
         for name in names:
             full = dir_path / name
             is_dir = full.is_dir()
-            if not include_in_workspace_search(name, is_dir):
+            if not include(name, is_dir):
                 continue
             if is_dir:
                 walk(full)
@@ -434,16 +436,17 @@ def search_workspace(
 
 
 def _replace_files(matcher: re.Pattern[str], replacement: str) -> tuple[int, int]:
-    """Write replacements into Content .verse files only."""
+    """Write replacements into Content .verse files (any text file in a folder project)."""
     from frontend.ui_web.verse_editor.io import write_file
 
     root = _project_root().resolve()
     content = _content_dir()
+    verse_only = not _active_is_folder()
     file_count = 0
     match_count = 0
 
     for rel_path, full_path in _walk_verse_files(content, root):
-        if full_path.suffix.lower() != ".verse":
+        if verse_only and full_path.suffix.lower() != ".verse":
             continue
         try:
             text = full_path.read_text(encoding="utf-8", errors="replace")

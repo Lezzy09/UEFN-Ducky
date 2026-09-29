@@ -1,4 +1,7 @@
-"""Panel-process cron/interval loop. No-ops when the panel is not running."""
+"""Panel-process cron/interval loop for workflows. No-ops when the panel is not running.
+
+A team workflow fires only on PCs where a member switched on "Run on this PC".
+"""
 
 from __future__ import annotations
 
@@ -6,10 +9,10 @@ import logging
 import threading
 import time
 from datetime import datetime
-from typing import Any
 
-from backend.automations.runner import run_automation
-from backend.automations.store import KIND_AUTOMATION, _all, normalize_kind
+from backend.automations import team
+from backend.automations.runner import run_workflow
+from backend.automations.store import all_workflows, runs_here
 
 _log = logging.getLogger("automations")
 _LOCK = threading.Lock()
@@ -24,7 +27,7 @@ def start_scheduler() -> None:
         if _THREAD is not None and _THREAD.is_alive():
             return
         _STOP.clear()
-        _THREAD = threading.Thread(target=_loop, daemon=True, name="automations-scheduler")
+        _THREAD = threading.Thread(target=_loop, daemon=True, name="workflow-scheduler")
         _THREAD.start()
 
 
@@ -62,16 +65,16 @@ def _loop() -> None:
         try:
             _tick()
         except Exception:
-            _log.exception("automations scheduler tick failed")
+            _log.exception("workflow scheduler tick failed")
 
 
 def _tick() -> None:
     now = time.time()
     now_dt = datetime.now()
-    for wf in _all():
-        if not wf.get("enabled"):
-            continue
-        if normalize_kind(wf.get("kind")) != KIND_AUTOMATION:
+    workflows = all_workflows()
+    team.background(workflows, now)
+    for wf in workflows:
+        if not wf.get("enabled") or not runs_here(wf):
             continue
         last = float(wf.get("last_run") or 0.0)
         for node in (wf.get("graph") or {}).get("nodes") or []:
@@ -86,7 +89,7 @@ def _tick() -> None:
             elif cron:
                 due = cron_due(cron, now_dt, last)
             if due:
-                run_automation(str(wf["id"]), starter_id=str(node.get("id") or ""))
+                run_workflow(str(wf["id"]), starter_id=str(node.get("id") or ""))
                 break
 
 

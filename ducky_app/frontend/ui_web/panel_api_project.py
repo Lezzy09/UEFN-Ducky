@@ -14,6 +14,22 @@ class PanelApiProjectMixin:
     def list_recent_projects(self) -> list[dict[str, str | bool]]:
         return _pa.list_panel_projects()
 
+    def inspect_project_folder(self, path: str) -> dict[str, Any]:
+        """What Add project would open: root, kind, and any islands one level down."""
+        from frontend.project_kind import FOLDER, islands_inside, resolve_project_root
+
+        try:
+            root, kind = resolve_project_root(path)
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+        return {
+            "ok": True,
+            "path": str(root),
+            "name": root.name,
+            "kind": kind,
+            "islands": islands_inside(root) if kind == FOLDER else [],
+        }
+
     def set_project_root(self, path: str) -> dict[str, str]:
         self._listener_project_cache = None
         self._ping_fail_streak = 0
@@ -644,6 +660,16 @@ class PanelApiProjectMixin:
                     "or Agent settings, then try again."
                 ]
             path = picked
+        from frontend.project_kind import has_uefnproject, project_root_path
+
+        try:
+            if not has_uefnproject(project_root_path(path)):
+                return [
+                    f"{_pa.Path(path).name} is a folder project. The UEFN listener only "
+                    "deploys to islands (folders with a .uefnproject file)."
+                ]
+        except (OSError, ValueError):
+            pass
         try:
             root = _pa.resolve_uefn_project_root(_pa.Path(path))
         except ValueError as e:
@@ -655,7 +681,7 @@ class PanelApiProjectMixin:
             lines = _pa.deploy_listener(root, _pa.PANEL_LISTENER_PORT)
             from frontend.ui_web.recent_projects import add_recent_project
 
-            add_recent_project(str(root))
+            add_recent_project(str(root), kind="uefn")
             for ln in lines:
                 _pa._log(ln)
             return lines

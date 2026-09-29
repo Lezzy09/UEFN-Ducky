@@ -1,5 +1,5 @@
 """Host data service tables (migration 0009): ``plugin_data`` docs + asset metadata,
-``scope_sync`` per-team sync state, ``project_scopes`` project → scope links.
+``scope_sync`` per-team sync state, ``plugin_scopes`` where each plugin's data lives.
 
 Every call names its ``(account, scope)``; nothing here reads across accounts.
 """
@@ -47,15 +47,35 @@ def put(
     """Upsert a live row. ``rev=None`` keeps the stored rev (a local write)."""
     conn = db.connect()
     with db.write_txn(conn):
-        conn.execute(
-            "INSERT INTO plugin_data(account_id, scope_id, plugin_id, kind, key, value, size, sha256, rev, dirty, "
-            "deleted, sensitive, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?) "
-            "ON CONFLICT(account_id, scope_id, plugin_id, kind, key) DO UPDATE SET value=excluded.value, "
-            "size=excluded.size, sha256=excluded.sha256, rev=COALESCE(?, plugin_data.rev), dirty=excluded.dirty, "
-            "deleted=0, sensitive=excluded.sensitive, updated=excluded.updated",
-            (account, scope, plugin, kind, key, value, size, sha256, rev or 0, 1 if dirty else 0,
-             1 if sensitive else 0, time.time(), rev),
-        )
+        upsert(conn, account, scope, plugin, kind, key, value=value, size=size, sha256=sha256, dirty=dirty, rev=rev,
+               sensitive=sensitive)
+
+
+def upsert(
+    conn: Any,
+    account: str,
+    scope: str,
+    plugin: str,
+    kind: str,
+    key: str,
+    *,
+    value: str | None,
+    size: int,
+    sha256: str,
+    dirty: bool,
+    rev: int | None = None,
+    sensitive: bool = False,
+) -> None:
+    """:func:`put` inside a transaction the caller holds (writes that must land together)."""
+    conn.execute(
+        "INSERT INTO plugin_data(account_id, scope_id, plugin_id, kind, key, value, size, sha256, rev, dirty, "
+        "deleted, sensitive, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?) "
+        "ON CONFLICT(account_id, scope_id, plugin_id, kind, key) DO UPDATE SET value=excluded.value, "
+        "size=excluded.size, sha256=excluded.sha256, rev=COALESCE(?, plugin_data.rev), dirty=excluded.dirty, "
+        "deleted=0, sensitive=excluded.sensitive, updated=excluded.updated",
+        (account, scope, plugin, kind, key, value, size, sha256, rev or 0, 1 if dirty else 0,
+         1 if sensitive else 0, time.time(), rev),
+    )
 
 
 def remove(account: str, scope: str, plugin: str, kind: str, key: str, *, tombstone: bool) -> None:
@@ -143,7 +163,7 @@ def delete_scope(account: str, scope: str) -> None:
     with db.write_txn(conn):
         conn.execute("DELETE FROM plugin_data WHERE account_id=? AND scope_id=?", (account, scope))
         conn.execute("DELETE FROM scope_sync WHERE account_id=? AND team_id=?", (account, scope))
-        conn.execute("DELETE FROM project_scopes WHERE account_id=? AND scope_id=?", (account, scope))
+        conn.execute("DELETE FROM plugin_scopes WHERE account_id=? AND scope_id=?", (account, scope))
 
 
 # --------------------------------------------------------------------------- sync state
@@ -180,23 +200,46 @@ def sync_put(account: str, team: str, **fields: Any) -> None:
         )
 
 
-# --------------------------------------------------------------------------- project links
+# --------------------------------------------------------------------------- plugin links
 
 
-def link_get(account: str, project: str) -> str:
+def link_get(account: str, plugin: str) -> str:
+    """Where this plugin's data lives for the account: ``personal`` (Local) or a team id."""
     r = db.connect().execute(
-        "SELECT scope_id FROM project_scopes WHERE account_id=? AND project_id=?", (account, project)
+        "SELECT scope_id FROM plugin_scopes WHERE account_id=? AND plugin_id=?", (account, plugin)
     ).fetchone()
     return str(r[0]) if r else "personal"
 
 
-def link_set(account: str, project: str, scope: str) -> None:
+def link_set(account: str, plugin: str, scope: str) -> None:
     conn = db.connect()
     with db.write_txn(conn):
         if scope == "personal":
-            conn.execute("DELETE FROM project_scopes WHERE account_id=? AND project_id=?", (account, project))
+            conn.execute("DELETE FROM plugin_scopes WHERE account_id=? AND plugin_id=?", (account, plugin))
         else:
             conn.execute(
-                "INSERT OR REPLACE INTO project_scopes(account_id, project_id, scope_id, updated) VALUES (?, ?, ?, ?)",
-                (account, project, scope, time.time()),
+                "INSERT OR REPLACE INTO plugin_scopes(account_id, plugin_id, scope_id, updated) VALUES (?, ?, ?, ?)",
+                (account, plugin, scope, time.time()),
             )
+
+
+def links(account: str) -> dict[str, str]:
+    """Every plugin of the account whose data lives in a team: ``{plugin_id: team_id}``."""
+    rows = db.connect().execute(
+        "SELECT plugin_id, scope_id FROM plugin_scopes WHERE account_id=?", (account,)
+    ).fetchall()
+    return {str(r[0]): str(r[1]) for r in rows}
+
+
+def totals(account: str, scope: str, plugin: str) -> dict[str, int]:
+    """Live docs and files of one plugin in one scope: counts and plaintext bytes."""
+    rows = db.connect().execute(
+        "SELECT kind, COUNT(*), COALESCE(SUM(size), 0) FROM plugin_data WHERE account_id=? AND scope_id=? "
+        "AND plugin_id=? AND deleted=0 AND sensitive=0 GROUP BY kind",
+        (account, scope, plugin),
+    ).fetchall()
+    out = {"docs": 0, "files": 0, "docsBytes": 0, "filesBytes": 0}
+    for kind, count, size in rows:
+        name = "docs" if kind == "doc" else "files"
+        out[name], out[name + "Bytes"] = int(count), int(size)
+    return out

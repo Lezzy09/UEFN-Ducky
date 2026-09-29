@@ -1,48 +1,67 @@
-"""PanelApi surface for Automations and Pipelines (graphs, catalog, test run)."""
+"""PanelApi surface for Workflows (graphs, owners, catalog, test run)."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from backend.automations.store import KIND_AUTOMATION, KIND_PIPELINE, normalize_kind
+
+def _refused(exc: Exception) -> dict[str, Any]:
+    return {"ok": False, "error": str(exc) or "Not allowed"}
 
 
 class PanelApiAutomationsMixin:
-    def list_automation_nodes(self) -> dict[str, Any]:
+    def list_workflow_nodes(self) -> dict[str, Any]:
         from backend.automations.catalog import list_nodes
 
-        return {"ok": True, "nodes": list_nodes(system=KIND_AUTOMATION)}
+        return {"ok": True, "nodes": list_nodes()}
 
-    def list_pipeline_nodes(self) -> dict[str, Any]:
-        from backend.automations.catalog import list_nodes
+    def list_workflows(self) -> dict[str, Any]:
+        from backend.automations.store import list_workflows
 
-        return {"ok": True, "nodes": list_nodes(system=KIND_PIPELINE)}
+        return {"ok": True, "workflows": list_workflows()}
 
-    def list_automations(self) -> dict[str, Any]:
-        from backend.automations.store import list_automations
+    def workflow_owners(self, refresh: bool = False) -> dict[str, Any]:
+        """Folders for the list. ``refresh`` asks the Store for the account's teams
+        (one hub call, when the view opens)."""
+        from backend.automations import team
 
-        return {"ok": True, "automations": list_automations(kind=KIND_AUTOMATION)}
+        try:
+            return team.refresh_teams() if refresh else team.owners()
+        except Exception as exc:
+            return _refused(exc)
 
-    def list_pipelines(self) -> dict[str, Any]:
-        from backend.automations.store import list_automations
+    def workflow_sync(self, force: bool = False) -> dict[str, Any]:
+        """Team rounds while the Workflows view is open; the engine rate-limits."""
+        from backend.automations import team
 
-        return {"ok": True, "pipelines": list_automations(kind=KIND_PIPELINE)}
+        try:
+            return team.sync(force=bool(force))
+        except Exception as exc:
+            return _refused(exc)
 
-    def get_automation(self, workflow_id: str) -> dict[str, Any]:
-        from backend.automations.store import get_automation
+    def workflow_open_web(self, team_id: str) -> dict[str, Any]:
+        from backend.automations import team
 
-        wf = get_automation(workflow_id)
+        try:
+            return team.open_web(str(team_id or ""))
+        except Exception as exc:
+            return _refused(exc)
+
+    def import_local_workflows(self) -> dict[str, Any]:
+        from backend.automations import team
+
+        try:
+            return team.import_local()
+        except (PermissionError, ValueError) as exc:
+            return _refused(exc)
+
+    def get_workflow(self, workflow_id: str) -> dict[str, Any]:
+        from backend.automations.store import get_workflow
+
+        wf = get_workflow(workflow_id)
         if wf is None:
-            return {"ok": False, "error": "automation not found"}
-        return {"ok": True, "automation": wf}
-
-    def get_pipeline(self, pipeline_id: str) -> dict[str, Any]:
-        from backend.automations.store import get_automation
-
-        wf = get_automation(pipeline_id)
-        if wf is None or normalize_kind(wf.get("kind")) != KIND_PIPELINE:
-            return {"ok": False, "error": "pipeline not found"}
-        return {"ok": True, "pipeline": wf, "automation": wf}
+            return {"ok": False, "error": "workflow not found"}
+        return {"ok": True, "workflow": wf}
 
     def list_workflow_versions(self, workflow_id: str) -> dict[str, Any]:
         from backend.automations.versions import list_versions
@@ -53,83 +72,74 @@ class PanelApiAutomationsMixin:
         doc = get_version(workflow_id, version_id)
         return {"ok": True, "workflow": doc} if doc else {"ok": False, "error": "Version not found"}
 
-    def save_automation(self, doc: dict[str, Any] | None = None, **extra: Any) -> dict[str, Any]:
-        from backend.automations.store import save_automation
+    def save_workflow(self, doc: dict[str, Any] | None = None, owner: str = "", **extra: Any) -> dict[str, Any]:
+        from backend.automations.store import save_workflow
 
         payload = dict(doc or {})
         payload.update(extra)
-        payload.setdefault("kind", KIND_AUTOMATION)
-        return {"ok": True, "automation": save_automation(payload)}
+        try:
+            return {"ok": True, "workflow": save_workflow(payload, owner=owner)}
+        except (PermissionError, ValueError) as exc:
+            return _refused(exc)
 
-    def save_pipeline(self, doc: dict[str, Any] | None = None, **extra: Any) -> dict[str, Any]:
-        from backend.automations.store import save_automation
+    def copy_workflow(self, workflow_id: str, owner: str, move: bool = False) -> dict[str, Any]:
+        from backend.automations.store import copy_workflow
 
-        payload = dict(doc or {})
-        payload.update(extra)
-        payload["kind"] = KIND_PIPELINE
-        saved = save_automation(payload)
-        return {"ok": True, "pipeline": saved, "automation": saved}
+        try:
+            return {"ok": True, "workflow": copy_workflow(workflow_id, owner, move=bool(move))}
+        except KeyError:
+            return {"ok": False, "error": "workflow not found"}
+        except (PermissionError, ValueError) as exc:
+            return _refused(exc)
 
-    def delete_automation(self, workflow_id: str) -> dict[str, Any]:
-        from backend.automations.store import delete_automation
+    def set_workflow_run_here(self, workflow_id: str, on: bool) -> dict[str, Any]:
+        from backend.automations.store import set_run_here
 
-        if not delete_automation(workflow_id):
-            return {"ok": False, "error": "automation not found"}
-        return {"ok": True}
+        wf = set_run_here(workflow_id, bool(on))
+        return {"ok": True, "workflow": wf} if wf else {"ok": False, "error": "workflow not found"}
 
-    def delete_pipeline(self, pipeline_id: str) -> dict[str, Any]:
-        return self.delete_automation(pipeline_id)
+    def delete_workflow(self, workflow_id: str) -> dict[str, Any]:
+        from backend.automations.store import delete_workflow
 
-    def run_automation(
+        try:
+            ok = delete_workflow(workflow_id)
+        except PermissionError as exc:
+            return _refused(exc)
+        return {"ok": True} if ok else {"ok": False, "error": "workflow not found"}
+
+    def run_workflow(
         self,
         workflow_id: str,
-        trigger_id: str = "",
-        payload: dict[str, Any] | None = None,
-        starter_id: str = "",
-    ) -> dict[str, Any]:
-        from backend.automations.runner import run_automation
-
-        return run_automation(
-            workflow_id,
-            trigger_id=trigger_id,
-            payload=payload or {},
-            starter_id=starter_id,
-        )
-
-    def run_pipeline(
-        self,
-        pipeline_id: str,
         prompt: str = "",
         files: list[Any] | None = None,
         caller_conv_id: str = "",
         payload: dict[str, Any] | None = None,
+        trigger_id: str = "",
+        starter_id: str = "",
     ) -> dict[str, Any]:
-        from backend.automations.runner import run_pipeline
+        from backend.automations.runner import run_workflow
 
-        return run_pipeline(
-            pipeline_id,
+        return run_workflow(
+            workflow_id,
+            trigger_id=trigger_id,
+            payload=payload or {},
+            starter_id=starter_id,
             prompt=prompt,
             files=files,
             caller_conv_id=caller_conv_id,
-            payload=payload or {},
         )
 
-    def emit_automation(self, trigger_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        from backend.automations.runner import emit_automation
+    def emit_workflow_trigger(self, trigger_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from backend.automations.runner import emit_trigger
 
-        return emit_automation(trigger_id, payload or {})
+        return emit_trigger(trigger_id, payload or {})
 
-    def list_automation_templates(self, system: str = KIND_AUTOMATION) -> dict[str, Any]:
+    def list_workflow_templates(self) -> dict[str, Any]:
         from backend.automations.templates import list_templates
 
-        return {"ok": True, "templates": list_templates(system=system)}
+        return {"ok": True, "templates": list_templates()}
 
-    def list_pipeline_templates(self) -> dict[str, Any]:
-        from backend.automations.templates import list_templates
-
-        return {"ok": True, "templates": list_templates(system=KIND_PIPELINE)}
-
-    def save_custom_automation_template(
+    def save_workflow_template(
         self,
         name: str,
         description: str = "",
@@ -160,7 +170,7 @@ class PanelApiAutomationsMixin:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "template": row}
 
-    def delete_custom_automation_template(self, template_id: str) -> dict[str, Any]:
+    def delete_workflow_template(self, template_id: str) -> dict[str, Any]:
         from backend.automations.templates import delete_custom
 
         if not delete_custom(template_id):

@@ -2,7 +2,8 @@
 
 export type ChatRefTrigger = "@" | "/" | "~";
 
-export type ChatRefKind = "ducky" | "profile" | "skill" | "subskill" | "mcp" | "plugin" | "file" | "pipeline";
+/** ``pipeline`` is how chats before Workflows linked a workflow; it still opens one. */
+export type ChatRefKind = "ducky" | "profile" | "skill" | "subskill" | "mcp" | "plugin" | "file" | "workflow" | "pipeline";
 
 export interface ChatRef {
   trigger: ChatRefTrigger;
@@ -17,7 +18,7 @@ export interface ChatRef {
   iconUrl?: string;
 }
 
-const HREF_RE = /^(ducky|profile|skill|subskill|mcp|plugin|file|pipeline):([A-Za-z0-9_./:-]+)$/;
+const HREF_RE = /^(ducky|profile|skill|subskill|mcp|plugin|file|workflow|pipeline):([A-Za-z0-9_./:-]+)$/;
 
 export function parseChatRefHref(href: string): { kind: ChatRefKind; id: string } | null {
   const match = HREF_RE.exec((href || "").trim());
@@ -109,7 +110,7 @@ export function dedupeChatRefs(refs: ChatRef[]): ChatRef[] {
 }
 
 const TOKEN_RE =
-  /\[(@|\/)([^\]]+)\]\((ducky|profile|skill|subskill|mcp|plugin|file|pipeline):([A-Za-z0-9_./:-]+)\)/g;
+  /\[(@|\/)([^\]]+)\]\((ducky|profile|skill|subskill|mcp|plugin|file|workflow|pipeline):([A-Za-z0-9_./:-]+)\)/g;
 
 export interface ChatRefToken {
   label: string;

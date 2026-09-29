@@ -154,12 +154,27 @@ def pkce_pair() -> tuple[str, str]:
 
 
 def _clear_expired_auth() -> None:
-    """Device key 401 — drop local credentials so the UI asks for sign-in."""
+    """Website session 401 with no device key — drop local credentials."""
     try:
         stop_presence_heartbeat()
     except Exception:
         pass
     _clear_blob()
+
+
+def _drop_website_session() -> None:
+    """Cookie 401 while this PC is still paired. Keep the device key."""
+    blob = _load_blob()
+    for key in (
+        "session_value",
+        "session_name",
+        "csrf_name",
+        "csrf_value",
+        "challenge_name",
+        "challenge_value",
+    ):
+        blob.pop(key, None)
+    _save_blob(blob)
 
 
 def _unpair_this_pc() -> None:
@@ -450,6 +465,21 @@ def fetch_permissions(blob: dict[str, Any] | None = None) -> dict[str, Any]:
     return blob
 
 
+def _enable_remote_access() -> None:
+    """Browser access on, before the first presence ping after a code login."""
+    try:
+        from frontend.settings import PanelSettings
+        from frontend.ui_web.panel_api import _save_panel_settings
+
+        settings = PanelSettings.load()
+        if getattr(settings, "remote_access", False):
+            return
+        settings.remote_access = True
+        _save_panel_settings(settings)
+    except Exception:
+        pass
+
+
 def _persist_base_url(base: str) -> None:
     try:
         from frontend.settings import PanelSettings
@@ -567,6 +597,10 @@ def start_browser_login(base_url: str = "", *, timeout_secs: float = 600.0) -> d
             "device_key_error": "",
         }
         _save_blob(blob)
+        # The presence thread stamps the website card from remote_access.
+        # Turn it on before the first ping, or the card goes yellow
+        # ("Disabled from UEFN Ducky side") and stays that way.
+        _enable_remote_access()
         start_presence_heartbeat()
         start_rpc_waiter()
 
@@ -1068,11 +1102,26 @@ def api_request(
                 parsed = None
         if int(exc.code) == 401 and (blob.get("device_key") or blob.get("session_value")):
             used_bearer = bool(extra_headers.get("Authorization"))
+            # A paired PC's device key is only valid on the desktop plugin.
+            # /auth/me, Store, and Stripe answer 401 because they want a
+            # website cookie. That is not "this PC was disconnected".
             if used_bearer and blob.get("device_key"):
-                _unpair_this_pc()
-                raise DuckyOSAccountError("This PC was disconnected", code="device_unpaired") from exc
-            _clear_expired_auth()
-            raise DuckyOSAccountError("Session expired — log in again", code="session_expired") from exc
+                if "/api/v1/plugins/uefn-ducky/collect/" in path:
+                    _unpair_this_pc()
+                    raise DuckyOSAccountError(
+                        "This PC was disconnected", code="device_unpaired"
+                    ) from exc
+                raise DuckyOSAccountError(
+                    "That page needs a website sign-in. This PC stays connected.",
+                    code="session_required",
+                ) from exc
+            if blob.get("device_key"):
+                _drop_website_session()
+            else:
+                _clear_expired_auth()
+            raise DuckyOSAccountError(
+                "Session expired — log in again", code="session_expired"
+            ) from exc
         return int(exc.code), parsed, raw
     except (OSError, urllib.error.URLError, ValueError) as exc:
         raise DuckyOSAccountError(f"Network error: {exc}", code="network") from exc
@@ -1124,6 +1173,7 @@ REMOTE_DENY = frozenset(
         "begin_native_window_resize",
         "uses_native_window_chrome",
         "pick_project_path",
+        "inspect_project_folder",
         "open_focus_window",
         "open_focus_window_group",
         "open_focus_window_at_point",
@@ -1701,6 +1751,7 @@ def teams_snapshot(*, stale_seconds: int = 120) -> dict[str, Any]:
                 }
         roles = _team_roles(team)
         my_role = str(entry.get("myRole") or "member")
+        can = entry.get("can") if isinstance(entry.get("can"), dict) else {}
         pending = []
         for inv in entry.get("pendingInvites") or []:
             if not isinstance(inv, dict):
@@ -1730,6 +1781,8 @@ def teams_snapshot(*, stale_seconds: int = 120) -> dict[str, Any]:
                     "edit_team": _role_has(roles, my_role, "edit_team"),
                     "manage_roles": _role_has(roles, my_role, "manage_roles"),
                     "manage_plugins": _role_has(roles, my_role, "manage_plugins"),
+                    # The Store refuses team workflow pushes without it: trust its own flag first.
+                    "manage_automations": bool(can.get("manage_automations", _role_has(roles, my_role, "manage_automations"))),
                 },
                 # Team Private status + storage: the plugin scope picker lists only active teams.
                 "private_plan": (entry.get("plans") or {}).get("private") if isinstance(entry.get("plans"), dict) else None,

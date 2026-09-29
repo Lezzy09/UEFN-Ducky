@@ -407,6 +407,33 @@ export const Icons = {
       <path d="M21 21l-4.35-4.35" />
     </svg>
   ),
+  ZoomIn: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="11" cy="11" r="7" />
+      <path d="M21 21l-4.35-4.35M11 8v6M8 11h6" />
+    </svg>
+  ),
+  ZoomOut: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="11" cy="11" r="7" />
+      <path d="M21 21l-4.35-4.35M8 11h6" />
+    </svg>
+  ),
+  /** Fit the view to its content (frame corners). */
+  FitView: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M4 9V5a1 1 0 011-1h4M15 4h4a1 1 0 011 1v4M20 15v4a1 1 0 01-1 1h-4M9 20H5a1 1 0 01-1-1v-4" />
+    </svg>
+  ),
+  /** Auto-layout nodes on a canvas. */
+  Arrange: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="3" y="4" width="7" height="6" rx="1" />
+      <rect x="14" y="4" width="7" height="6" rx="1" />
+      <rect x="8.5" y="14" width="7" height="6" rx="1" />
+      <path d="M6.5 10v2h11v-2M12 12v2" />
+    </svg>
+  ),
   Camera: () => (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" />
@@ -511,6 +538,21 @@ export const Icons = {
       <circle cx="12" cy="12" r="10" />
       <path d="M2 12h20" />
       <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" />
+    </svg>
+  ),
+  /** Workflows: nodes joined by wires. */
+  Workflow: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="2" y="3" width="7" height="6" rx="1.5" />
+      <rect x="15" y="15" width="7" height="6" rx="1.5" />
+      <path d="M9 6h3a2 2 0 012 2v8a2 2 0 002 2" />
+    </svg>
+  ),
+  /** Move or copy something somewhere else (Local ↔ team). */
+  Share: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M4 12v7a2 2 0 002 2h12a2 2 0 002-2v-7" />
+      <path d="M16 6l-4-4-4 4M12 2v13" />
     </svg>
   ),
   GitBranch: () => (

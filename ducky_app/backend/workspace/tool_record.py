@@ -15,7 +15,8 @@ from backend.workspace.editor_ops import slot_path
 from backend.workspace.editor_record import record, record_sidecar_text
 from backend.workspace.identity import current_writer
 
-_SKIP = frozenset({"ducky_call_tool"})
+# ducky_permission_prompt only answers an approval card; the approved call records itself.
+_SKIP = frozenset({"ducky_call_tool", "ducky_permission_prompt"})
 _EPIC_CREATE = frozenset({"PlaceDevice", "SpawnActor", "CreateEntity", "InstantiatePrefab"})
 _READ_PREFIXES = ("Get", "List", "Describe", "Find", "Query", "Is", "Has", "Can")
 # Plan-mode allowlists these so agents can tick a plan; they still mutate Ducky.
