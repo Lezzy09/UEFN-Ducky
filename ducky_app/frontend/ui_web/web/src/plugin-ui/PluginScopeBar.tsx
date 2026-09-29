@@ -43,7 +43,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged }: Props) {
     const api = getApi();
     if (!api?.plugin_scope_status) return;
     try {
-      const next = await api.plugin_scope_status();
+      const next = await api.plugin_scope_status(pluginId);
       const moved = last.current !== null && scopeKey(next) !== scopeKey(last.current);
       last.current = next;
       setStatus(next);
@@ -52,7 +52,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged }: Props) {
     } catch {
       /* keep the last bar */
     }
-  }, []);
+  }, [pluginId]);
 
   useEffect(() => {
     void refresh();
@@ -62,7 +62,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged }: Props) {
         // A sync round with no changes for this plugin only refreshes the bar.
         const plugins = event.plugins ?? [];
         void refresh(plugins.includes(pluginId) || (!event.synced && plugins.length === 0));
-      } else if (event.type === "project_changed" || event.type === "duckyos_account_changed") {
+      } else if (event.type === "duckyos_account_changed") {
         void refresh();
       }
     });
@@ -71,7 +71,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged }: Props) {
   const teamId = status?.visible && status.scope?.kind === "team" ? status.scope.teamId : "";
   useEffect(() => {
     if (!teamId) return;
-    const sync = () => void getApi()?.plugin_scope_sync?.(false);
+    const sync = () => void getApi()?.plugin_scope_sync?.(pluginId, false);
     sync();
     window.addEventListener("focus", sync);
     const stop = setVisibleInterval(() => {
@@ -82,7 +82,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged }: Props) {
       window.removeEventListener("focus", sync);
       stop();
     };
-  }, [teamId]);
+  }, [teamId, pluginId]);
 
   if (!status?.visible || !status.scope) return null;
   const scope = status.scope;
@@ -106,12 +106,12 @@ export function PluginScopeBar({ pluginId, onScopeChanged }: Props) {
     setMenuOpen(false);
     if (choice.id === current) return;
     const ok = await confirm({
-      title: `Show ${choice.kind === "team" ? choice.label : "Personal"} data?`,
+      title: `Show ${choice.kind === "team" ? choice.label : "Local"} data?`,
       message: switchMessage(scope.label, choice),
       confirmLabel: "Switch",
     });
     if (ok !== true) return;
-    const next = await getApi()?.plugin_scope_set?.(choice.id);
+    const next = await getApi()?.plugin_scope_set?.(pluginId, choice.id);
     if (next?.ok === false && next.error) {
       setStatus({ ...status, error: next.error });
       return;
@@ -126,10 +126,10 @@ export function PluginScopeBar({ pluginId, onScopeChanged }: Props) {
     <div
       className={`plugin-scope-bar plugin-scope-bar--${variant}`}
       role="status"
-      aria-label={team ? `Plugin data: team ${scope.label}` : "Plugin data: personal"}
+      aria-label={team ? `Plugin data: team ${scope.label}` : "Plugin data: local"}
       title={DATA_AT_REST}
     >
-      <span className="plugin-scope-bar__pill">{team ? `TEAM · ${scope.label}` : "PERSONAL"}</span>
+      <span className="plugin-scope-bar__pill">{team ? `TEAM · ${scope.label}` : "LOCAL"}</span>
       {locked ? (
         <span className="plugin-scope-bar__text">
           Waiting for your account&apos;s data key. Read-only until you&apos;re back online.
@@ -205,7 +205,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged }: Props) {
                   className="plugin-scope-bar__menu-item"
                   onClick={() => void choose(choice)}
                 >
-                  {choice.kind === "team" ? `Team · ${choice.label}` : "Personal"}
+                  {choice.kind === "team" ? `Team · ${choice.label}` : "Local"}
                 </button>
               ))
             )}

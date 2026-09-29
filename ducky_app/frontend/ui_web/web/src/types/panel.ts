@@ -163,8 +163,7 @@ export type EditorTabKind =
   | "verse-translated"
   | "ducky-profile"
   | "changes"
-  | "automations"
-  | "pipelines";
+  | "workflows";
 
 export interface EditorTab {
   id: string;
@@ -225,14 +224,14 @@ export function changesTabId(): string {
   return "changes:main";
 }
 
-/** Singleton Automations editor tab. */
-export function automationsTabId(): string {
-  return "automations:main";
+/** Singleton Workflows editor tab. */
+export function workflowsTabId(): string {
+  return "workflows:main";
 }
 
-/** Singleton Pipelines editor tab. */
-export function pipelinesTabId(): string {
-  return "pipelines:main";
+/** Tab ids saved by older builds (separate Automations and Pipelines tabs). */
+export function isLegacyWorkflowsTabId(id: string): boolean {
+  return id === "automations:main" || id === "pipelines:main" || id.startsWith("automations:") || id.startsWith("pipelines:");
 }
 
 export interface AutomationGraphNodeDto {
@@ -285,27 +284,67 @@ export interface AutomationRunDto {
   trigger_id?: string;
 }
 
+/** Who owns a workflow: Local (this PC only) or a team (synced to every member). */
+export interface WorkflowOwnerDto {
+  id: string;
+  kind: "local" | "team";
+  label: string;
+  state?: string;
+  readOnly?: boolean;
+  /** Why it is read-only here (no Manage automations, waiting for team data, …). */
+  reason?: string;
+  sync?: {
+    state?: string;
+    error?: string;
+    syncedAt?: number | null;
+    pending?: number;
+    members?: number;
+  };
+  /** Team's web slug (team folders), for "Open on the web". */
+  slug?: string;
+}
+
+export interface WorkflowOwnersDto {
+  ok?: boolean;
+  error?: string;
+  owners?: WorkflowOwnerDto[];
+  signedIn?: boolean;
+  teamsEnabled?: boolean;
+  /** Workflows made while signed out on this PC, offered to the signed-in account. */
+  localImport?: number;
+}
+
+/** What starts a workflow, for the list badge. */
+export interface WorkflowTriggerDto {
+  kind: "schedule" | "event" | "chat" | "manual";
+  label: string;
+}
+
 export interface AutomationDto {
   id: string;
   name: string;
   enabled: boolean;
-  kind?: "automation" | "pipeline";
   description?: string;
   graph: AutomationGraphDto;
   runs?: AutomationRunDto[];
   updated?: number;
   last_run?: number;
+  owner?: WorkflowOwnerDto;
+  /** Team workflows: this PC runs its schedule and triggers. */
+  run_here?: boolean;
 }
 
 export interface AutomationSummaryDto {
   id: string;
   name: string;
-  kind?: "automation" | "pipeline";
   description?: string;
   enabled: boolean;
   updated?: number;
   last_run?: number;
   node_count?: number;
+  owner?: WorkflowOwnerDto;
+  run_here?: boolean;
+  trigger?: WorkflowTriggerDto;
 }
 
 export interface AutomationFieldDto {
@@ -338,7 +377,6 @@ export interface AutomationNodeDto {
   role?: string;
   description?: string;
   plugin_id?: string;
-  systems?: string[];
   config_fields?: AutomationFieldDto[];
 }
 
@@ -620,10 +658,26 @@ export interface PluginConnectionRow {
   detail: string;
 }
 
+/** "uefn": an island (<Name>.uefnproject). "folder": any other folder, e.g. a code repo. */
+export type ProjectKind = "uefn" | "folder";
+
 export interface ProjectInfo {
   path: string;
   name: string;
   slug: string;
+  kind?: ProjectKind;
+  /** Content pane root: "Content" on an island, "." for a folder project. */
+  content_root?: string;
+}
+
+export interface ProjectFolderInspection {
+  ok: boolean;
+  error?: string;
+  path?: string;
+  name?: string;
+  kind?: ProjectKind;
+  /** Islands one level down (someone picked the folder that holds their islands). */
+  islands?: { name: string; path: string }[];
 }
 
 export interface ProjectFileEntry {
@@ -1700,8 +1754,8 @@ export interface PanelPushEvent {
   /** duckyos_account_changed — the new account key ("" signed out). */
   account?: string;
   source?: string;
-  /** graph_focus: which editor to open, and saved vs deleted. */
   kind?: string;
+  /** graph_focus: saved vs deleted. */
   action?: string;
   /** browser_pane_state fields (native WebView2 pane navigation state). */
   pane_id?: string;
@@ -1750,6 +1804,18 @@ export interface PluginScopeStatus {
   syncedAt?: number | null;
   pending?: number;
   usage?: PluginScopeUsage;
+  /** This plugin's Local copy, and the copy it shows now (the same when Local). */
+  local?: PluginDataTotals;
+  current?: PluginDataTotals;
+  /** The team's web slug, for "View on the web" (team copy only). */
+  teamSlug?: string;
+}
+
+export interface PluginDataTotals {
+  docs: number;
+  files: number;
+  docsBytes: number;
+  filesBytes: number;
 }
 
 export interface PluginScopeChoice {
@@ -1757,6 +1823,7 @@ export interface PluginScopeChoice {
   kind: "personal" | "team";
   label: string;
   members?: number;
+  slug?: string;
 }
 
 export interface ContextBreakdownSubItem {
@@ -2301,10 +2368,7 @@ export interface PanelApi {
     error?: string;
   }>;
   list_uefn_plugins?(): Promise<{ ok?: boolean; error?: string; plugins?: UefnPluginDto[] }>;
-  list_automation_nodes?(): Promise<{ ok?: boolean; nodes?: AutomationNodeDto[] }>;
-  list_pipeline_nodes?(): Promise<{ ok?: boolean; nodes?: AutomationNodeDto[] }>;
-  list_automation_templates?(system?: string): Promise<{ ok?: boolean; templates?: AutomationTemplateDto[] }>;
-  list_pipeline_templates?(): Promise<{ ok?: boolean; templates?: AutomationTemplateDto[] }>;
+  list_workflow_nodes?(): Promise<{ ok?: boolean; nodes?: AutomationNodeDto[] }>;
   list_generated_images?(): Promise<{
     ok?: boolean;
     images?: Array<{ name: string; media_url?: string; prompt?: string; gateway?: string; model?: string }>;
@@ -2314,58 +2378,42 @@ export interface PanelApi {
     error?: string;
     attachment?: MessageAttachmentDto;
   }>;
-  save_custom_automation_template?(
+  list_workflow_templates?(): Promise<{ ok?: boolean; templates?: AutomationTemplateDto[] }>;
+  save_workflow_template?(
     name: string,
     description?: string,
     icon?: string,
     graph_json?: string,
     template_id?: string,
   ): Promise<{ ok?: boolean; error?: string; template?: AutomationTemplateDto }>;
-  delete_custom_automation_template?(template_id: string): Promise<{ ok?: boolean; error?: string }>;
-  list_workflow_versions?(workflowId: string): Promise<{ ok?: boolean; versions?: { id: string; name: string; saved_at: number; node_count: number }[]; error?: string }>;
+  delete_workflow_template?(template_id: string): Promise<{ ok?: boolean; error?: string }>;
+  list_workflow_versions?(workflowId: string): Promise<{ ok?: boolean; versions?: { id: string; name: string; saved_at: number; node_count: number; note?: string }[]; error?: string }>;
   get_workflow_version?(workflowId: string, versionId: string): Promise<{ ok?: boolean; workflow?: AutomationDto; error?: string }>;
-  list_automations?(): Promise<{ ok?: boolean; automations?: AutomationSummaryDto[]; pipelines?: AutomationSummaryDto[] }>;
-  list_pipelines?(): Promise<{ ok?: boolean; pipelines?: AutomationSummaryDto[]; automations?: AutomationSummaryDto[] }>;
-  get_automation?(workflow_id: string): Promise<{
+  list_workflows?(): Promise<{ ok?: boolean; workflows?: AutomationSummaryDto[] }>;
+  workflow_owners?(refresh?: boolean): Promise<WorkflowOwnersDto>;
+  workflow_sync?(force?: boolean): Promise<{ ok?: boolean; started?: boolean; error?: string }>;
+  import_local_workflows?(): Promise<{ ok?: boolean; moved?: number; error?: string }>;
+  /** Opens the team's Workflows tab on the website. */
+  workflow_open_web?(team_id: string): Promise<{ ok?: boolean; url?: string; error?: string }>;
+  get_workflow?(workflow_id: string): Promise<{ ok?: boolean; error?: string; workflow?: AutomationDto }>;
+  save_workflow?(doc: Partial<AutomationDto> & { graph?: AutomationGraphDto }, owner?: string): Promise<{
     ok?: boolean;
     error?: string;
-    automation?: AutomationDto;
-    pipeline?: AutomationDto;
+    workflow?: AutomationDto;
   }>;
-  get_pipeline?(pipeline_id: string): Promise<{
-    ok?: boolean;
-    error?: string;
-    pipeline?: AutomationDto;
-    automation?: AutomationDto;
-  }>;
-  save_automation?(doc: Partial<AutomationDto> & { graph?: AutomationGraphDto }): Promise<{
-    ok?: boolean;
-    error?: string;
-    automation?: AutomationDto;
-    pipeline?: AutomationDto;
-  }>;
-  save_pipeline?(doc: Partial<AutomationDto> & { graph?: AutomationGraphDto }): Promise<{
-    ok?: boolean;
-    error?: string;
-    pipeline?: AutomationDto;
-    automation?: AutomationDto;
-  }>;
-  delete_automation?(workflow_id: string): Promise<{ ok?: boolean; error?: string }>;
-  delete_pipeline?(pipeline_id: string): Promise<{ ok?: boolean; error?: string }>;
-  run_automation?(
+  copy_workflow?(workflow_id: string, owner: string, move?: boolean): Promise<{ ok?: boolean; error?: string; workflow?: AutomationDto }>;
+  set_workflow_run_here?(workflow_id: string, on: boolean): Promise<{ ok?: boolean; error?: string; workflow?: AutomationDto }>;
+  delete_workflow?(workflow_id: string): Promise<{ ok?: boolean; error?: string }>;
+  run_workflow?(
     workflow_id: string,
-    trigger_id?: string,
-    payload?: Record<string, unknown>,
-    starter_id?: string,
-  ): Promise<AutomationRunDto>;
-  run_pipeline?(
-    pipeline_id: string,
     prompt?: string,
     files?: unknown[],
     caller_conv_id?: string,
     payload?: Record<string, unknown>,
+    trigger_id?: string,
+    starter_id?: string,
   ): Promise<AutomationRunDto>;
-  emit_automation?(
+  emit_workflow_trigger?(
     trigger_id: string,
     payload?: Record<string, unknown>,
   ): Promise<{ ok?: boolean; error?: string; trigger_id?: string; runs?: AutomationRunDto[] }>;
@@ -2637,6 +2685,7 @@ export interface PanelApi {
     relative_path: string,
   ): Promise<{ ok: boolean; error?: string; asset_path?: string; opened?: boolean | null }>;
   list_recent_projects(): Promise<RecentProject[]>;
+  inspect_project_folder(path: string): Promise<ProjectFolderInspection>;
   set_project_root(path: string): Promise<ProjectInfo>;
   delete_recent_project(path: string): Promise<ProjectInfo>;
   get_key_status(): Promise<Record<string, boolean>>;
@@ -3266,11 +3315,16 @@ export interface PanelApi {
     op: string,
     params?: Record<string, unknown>,
   ): Promise<Record<string, unknown> & { ok?: boolean; error?: string; code?: string }>;
-  plugin_scope_status?(): Promise<PluginScopeStatus>;
-  /** Calls the Store hub — only when the user opens Change ▾. */
+  /** Where one plugin's data lives: Local or one team (picked per plugin). */
+  plugin_scope_status?(plugin_id: string): Promise<PluginScopeStatus>;
+  /** Calls the Store hub — only when a picker opens. */
   plugin_scope_choices?(): Promise<{ ok?: boolean; choices?: PluginScopeChoice[]; error?: string }>;
-  plugin_scope_set?(scope_id: string): Promise<PluginScopeStatus>;
-  plugin_scope_sync?(force?: boolean): Promise<{ ok?: boolean; started?: boolean; error?: string }>;
+  plugin_scope_set?(plugin_id: string, scope_id: string): Promise<PluginScopeStatus>;
+  plugin_scope_sync?(plugin_id: string, force?: boolean): Promise<{ ok?: boolean; started?: boolean; error?: string }>;
+  /** One way, on request: the plugin's Local data into one team's copy (the team's items are kept). */
+  plugin_data_copy_to_team?(plugin_id: string, team_id: string): Promise<{ ok?: boolean; copied?: number; kept?: number; error?: string }>;
+  /** Opens the team's copy of this plugin's data on the website. */
+  plugin_data_open_web?(plugin_id: string): Promise<{ ok?: boolean; url?: string; error?: string }>;
   plugin_prefs_get_all?(): Promise<{
     ok: boolean;
     prefs?: Record<string, Record<string, unknown>>;

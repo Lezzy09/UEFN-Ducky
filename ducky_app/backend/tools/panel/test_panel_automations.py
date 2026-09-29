@@ -1,4 +1,4 @@
-"""MCP graph tools open the editor and can delete graphs and templates."""
+"""Workflow MCP tools open the editor, refuse unknown owners, and manage templates."""
 
 from __future__ import annotations
 
@@ -11,56 +11,53 @@ def _events(monkeypatch) -> list[dict]:
     return events
 
 
-def test_save_pipeline_opens_editor(monkeypatch):
-    from backend.automations.store import delete_automation
-    from backend.tools.panel.panel_automations import save_pipeline
+def test_save_workflow_opens_editor_in_local(monkeypatch):
+    from backend.automations.store import delete_workflow
+    from backend.tools.panel.panel_automations import save_workflow
 
     events = _events(monkeypatch)
-    raw = save_pipeline(
+    raw = save_workflow(
         name="Live",
         graph={"nodes": [{"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}}], "edges": []},
     )
     doc = json.loads(raw)
-    wid = doc["pipeline"]["id"]
+    wid = doc["workflow"]["id"]
     try:
         assert doc["ok"] is True
-        assert {"type": "graph_focus", "kind": "pipeline", "id": wid, "action": "saved"} in events
+        assert doc["workflow"]["owner"]["kind"] == "local"
+        assert {"type": "graph_focus", "id": wid, "action": "saved"} in events
     finally:
-        delete_automation(wid)
+        delete_workflow(wid)
 
 
-def test_delete_pipeline_opens_editor(monkeypatch):
-    from backend.tools.panel.panel_automations import delete_pipeline, save_pipeline
+def test_delete_workflow_opens_editor(monkeypatch):
+    from backend.tools.panel.panel_automations import delete_workflow, save_workflow
 
     events = _events(monkeypatch)
-    wid = json.loads(save_pipeline(name="Gone", graph={"nodes": [], "edges": []}))["pipeline"]["id"]
+    wid = json.loads(save_workflow(name="Gone", graph={"nodes": [], "edges": []}))["workflow"]["id"]
     events.clear()
-    out = json.loads(delete_pipeline(wid))
+    out = json.loads(delete_workflow(wid))
     assert out == {"ok": True, "id": wid}
-    assert {"type": "graph_focus", "kind": "pipeline", "id": wid, "action": "deleted"} in events
-    assert json.loads(delete_pipeline(wid))["ok"] is False
+    assert {"type": "graph_focus", "id": wid, "action": "deleted"} in events
+    assert json.loads(delete_workflow(wid))["ok"] is False
 
 
-def test_delete_automation_refuses_pipeline(monkeypatch):
-    from backend.automations.store import delete_automation as wipe
-    from backend.tools.panel.panel_automations import delete_automation, save_pipeline
+def test_save_workflow_refuses_an_unknown_team(monkeypatch):
+    from backend.tools.panel.panel_automations import list_workflows, save_workflow
 
     _events(monkeypatch)
-    wid = json.loads(save_pipeline(name="Pipe", graph={"nodes": [], "edges": []}))["pipeline"]["id"]
-    try:
-        assert json.loads(delete_automation(wid))["ok"] is False
-    finally:
-        wipe(wid)
+    out = json.loads(save_workflow(name="Shared", graph={"nodes": [], "edges": []}, owner="team_nobody"))
+    assert out["ok"] is False and "unknown workflow owner" in out["error"]
+    listed = json.loads(list_workflows())
+    assert [o["kind"] for o in listed["owners"]] == ["local"]  # signed out: Local only
+    assert all(w["name"] != "Shared" for w in listed["workflows"])
 
 
 def test_custom_template_roundtrip(monkeypatch):
-    from backend.tools.panel.panel_automations import (
-        delete_custom_automation_template,
-        save_custom_automation_template,
-    )
+    from backend.tools.panel.panel_automations import delete_workflow_template, save_workflow_template
 
     events = _events(monkeypatch)
-    raw = save_custom_automation_template(
+    raw = save_workflow_template(
         name="Starter",
         graph={"nodes": [{"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}}], "edges": []},
     )
@@ -69,6 +66,6 @@ def test_custom_template_roundtrip(monkeypatch):
     try:
         assert doc["ok"] is True
         assert any(e.get("type") == "templates_changed" for e in events)
-        assert json.loads(delete_custom_automation_template(tid))["ok"] is True
+        assert json.loads(delete_workflow_template(tid))["ok"] is True
     finally:
-        delete_custom_automation_template(tid)
+        delete_workflow_template(tid)

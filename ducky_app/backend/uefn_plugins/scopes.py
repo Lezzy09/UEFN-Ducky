@@ -4,8 +4,11 @@ A scope is ``(account, personal | team_id)``:
 
 - the account is the signed-in DuckyOS user (a stable hash of site + email), or
   ``_local`` when signed out;
-- the active scope is the current project's link (``project_scopes``). No project,
-  no link, or team storage unavailable for this account → Personal.
+- where a plugin's data lives is picked per plugin (``plugin_scopes``, plan §15.1):
+  Local (scope ``personal``) or exactly one team. No pick, or team storage
+  unavailable for this account → Local. Teams never share rows: switching shows
+  that scope's own copy, and the only way data moves is an explicit copy of the
+  Local copy into one team (:func:`copy_local_into`).
 
 Plugins never pick their own folder or rows: docs (one JSON doc per entity) and
 files go through :class:`PluginData`, which writes the active scope only. Rows
@@ -97,18 +100,6 @@ def _claim_legacy(aid: str) -> None:
         plugin_kv.claim_unclaimed(aid)
 
 
-def current_project() -> str:
-    """Project slug of the open project, or ``""``."""
-    from frontend.settings import PanelSettings
-
-    root = (PanelSettings.load().uefn_project_root or "").strip()
-    if not root:
-        return ""
-    from frontend.ui_web.project_chats import project_slug
-
-    return project_slug(root)
-
-
 def _locked(account: str) -> bool:
     """Signed in, but this account's data key isn't on the PC yet (offline first sign-in)."""
     from backend.uefn_plugins.data_crypto import available
@@ -119,7 +110,8 @@ def _locked(account: str) -> bool:
 def personal_scope(account: str | None = None) -> dict[str, Any]:
     account = account or account_id()
     locked = _locked(account)
-    return {"account": account, "id": PERSONAL, "kind": "personal", "label": "Personal",
+    # Shown as "Local": it never leaves this PC (the id stays "personal").
+    return {"account": account, "id": PERSONAL, "kind": "personal", "label": "Local",
             "teamId": "", "readOnly": locked, "state": "locked" if locked else "ok"}
 
 
@@ -139,52 +131,94 @@ def team_scope(account: str, team: str) -> dict[str, Any]:
             "readOnly": state in ("paused", "waiting", "locked"), "state": state}
 
 
-def active_scope() -> dict[str, Any]:
-    """The scope plugin data reads and writes right now."""
+def active_scope(plugin: str) -> dict[str, Any]:
+    """The scope ``plugin``'s data reads and writes right now."""
     from backend.store.repos import plugin_data as repo
 
     account = account_id()
-    project = current_project()
-    if account == LOCAL or not project:
+    if account == LOCAL:
         return personal_scope(account)
-    team = repo.link_get(account, project)
+    team = repo.link_get(account, plugin)
     if team == PERSONAL or not valid_team_id(team):
         return personal_scope(account)
     scope = team_scope(account, team)
-    # Teams beta or team storage gone for this account: Personal only, no teaser.
+    # Teams beta or team storage gone for this account: Local only, no teaser.
     return personal_scope(account) if scope["state"] == "unavailable" else scope
 
 
-def scope_view(scope: dict[str, Any] | None = None) -> dict[str, Any]:
+def scope_view(scope: dict[str, Any]) -> dict[str, Any]:
     """What panels and tool results see: label, kind, read-only (no account id)."""
-    s = scope or active_scope()
-    return {"kind": s["kind"], "label": s["label"], "teamId": s["teamId"], "readOnly": s["readOnly"]}
+    return {"kind": scope["kind"], "label": scope["label"], "teamId": scope["teamId"], "readOnly": scope["readOnly"]}
 
 
-def scope_name(scope: dict[str, Any] | None = None) -> str:
-    """``team Alpha Studio`` / ``personal`` — how tool results name the copy they changed."""
-    s = scope or active_scope()
-    return f"team {s['label']}" if s["kind"] == "team" else "personal"
+def scope_name(scope: dict[str, Any]) -> str:
+    """``team Alpha Studio`` / ``local`` — how tool results name the copy they changed."""
+    return f"team {scope['label']}" if scope["kind"] == "team" else "local"
 
 
-def link_project(scope_id: str, *, label: str = "", members: int = 0) -> dict[str, Any]:
-    """Point the open project at Personal or one of the account's teams."""
+def link_plugin(plugin: str, scope_id: str, *, label: str = "", members: int = 0) -> dict[str, Any]:
+    """Keep ``plugin``'s data in Local or in one of the account's teams. Nothing moves:
+    the plugin shows that scope's own copy from now on."""
     from backend.store.repos import plugin_data as repo
 
+    _need(valid_plugin_id(plugin), "plugin id")
     account = account_id()
-    project = current_project()
     if account == LOCAL:
-        raise ValueError("Sign in to link a project to a team")
-    if not project:
-        raise ValueError("Open a project first")
+        raise ValueError("Sign in to share a plugin's data with a team")
     if scope_id != PERSONAL:
         _need(valid_team_id(scope_id), "team id")
         old = repo.sync_get(account, scope_id)
         # A fresh link tries again even if an earlier round found the team unavailable.
         repo.sync_put(account, scope_id, label=label or old["label"], members=int(members or old["members"]),
                       state="ok" if old["state"] == "unavailable" else old["state"], error="")
-    repo.link_set(account, project, scope_id)
-    return active_scope()
+    repo.link_set(account, plugin, scope_id)
+    return active_scope(plugin)
+
+
+def copy_local_into(plugin: str, team: str) -> dict[str, Any]:
+    """One way, on request: the plugin's Local docs and files go into ``team``'s copy
+    (queued to sync). A team item with the same key is kept as it is. Sensitive docs
+    stay Local. Team → team never happens."""
+    from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins.data_crypto import open_bytes, open_text, seal_bytes, seal_text
+
+    _need(valid_plugin_id(plugin), "plugin id")
+    _need(valid_team_id(team), "team id")
+    account = account_id()
+    if account == LOCAL:
+        raise ValueError("Sign in to share a plugin's data with a team")
+    src = personal_scope(account)
+    target = team_scope(account, team)
+    if target["state"] == "waiting":
+        # Never pulled on this PC: get the team's copy first, so "keep theirs" is true.
+        from backend.uefn_plugins.team_sync import first_pull
+
+        first_pull(account, team)
+        target = team_scope(account, team)
+    dst = PluginData(plugin)._writable(target)
+    copied = kept = 0
+    for kind in ("doc", "asset"):
+        for row in repo.rows(account, PERSONAL, plugin, kind):
+            if row["sensitive"]:
+                continue
+            old = repo.get(account, team, plugin, kind, row["key"])
+            if old and not old["deleted"]:
+                kept += 1
+                continue
+            if kind == "doc":
+                if row["value"] is None:
+                    continue
+                value = seal_text(open_text(row["value"], account), account)
+            else:
+                source = asset_file(src, plugin, row["key"])
+                if not source.is_file():
+                    continue
+                write_asset_bytes(asset_file(dst, plugin, row["key"]), seal_bytes(open_bytes(source.read_bytes(), account), account))
+                value = None
+            repo.put(account, team, plugin, kind, row["key"], value=value, size=int(row["size"]), sha256=row["sha256"],
+                     dirty=True)
+            copied += 1
+    return {"ok": True, "copied": copied, "kept": kept}
 
 
 def scopes_root(account: str) -> Path:
@@ -206,6 +240,10 @@ def purge_team(account: str, team: str) -> None:
 
     if not valid_team_id(team):
         return
+    from backend.store.repos import workflows
+
+    team_workflows = [r["key"] for r in repo.rows(account, team, "ducky.automations", "doc")]
+    workflows.runtime_delete(account, team_workflows)
     repo.delete_scope(account, team)
     plugin_kv.delete_scope(account, team)
     shutil.rmtree(scopes_root(account) / team, ignore_errors=True)
@@ -267,13 +305,13 @@ class PluginData:
     def _scope(self) -> dict[str, Any]:
         if self._personal:
             return personal_scope()
-        s = active_scope()
+        s = active_scope(self.plugin_id)
         if s["state"] == "waiting":
             # First use of a team scope on this PC: pull before the plugin sees it (bounded).
             from backend.uefn_plugins.team_sync import first_pull
 
             if first_pull(s["account"], s["id"]):
-                s = active_scope()
+                s = active_scope(self.plugin_id)
         return s
 
     def scope(self) -> dict[str, Any]:

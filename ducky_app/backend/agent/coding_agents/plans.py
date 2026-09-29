@@ -871,6 +871,8 @@ _PLAN_TICK_SKIP = PLAN_CRUD_TOOLS | frozenset(
         "ducky_find_tools",
         "ducky_get_status",
         "ducky_ask_user",
+        # Claude Code's approval hook: the gated tool itself is checked when it runs.
+        "ducky_permission_prompt",
     }
 )
 

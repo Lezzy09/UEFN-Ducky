@@ -19,6 +19,7 @@ from backend.tools.panel import panel_skills  # noqa: F401
 from backend.tools.panel import panel_store  # noqa: F401
 from backend.tools.panel import panel_ui  # noqa: F401
 from backend.tools.panel import panel_verse_templates  # noqa: F401
+from backend.tools.panel import permission_prompt  # noqa: F401
 # Host-disk Verse: register even when the verse Store plugin is off / MCP is down.
 # Aliased: an unaliased `import verse` would bind the name `verse` in this package's
 # namespace, shadowing the `backend.tools.verse` subpackage itself — after which

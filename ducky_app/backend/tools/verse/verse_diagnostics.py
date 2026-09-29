@@ -68,6 +68,14 @@ def workspace_list_verse_errors(pretty: bool = False, full: bool = False, rescan
     if not verse_editor_enabled():
         raise ValueError("Verse editor is disabled")
     root = _project_root()
+    from frontend.project_kind import is_folder_project
+
+    if root and is_folder_project(root):
+        # No verse-lsp run over a whole repo: Verse only exists on UEFN islands.
+        return tool_json(
+            {"ok": True, "folder_project": True, "files": [], "note": "Folder project: no Verse to check."},
+            pretty=pretty,
+        )
     if not root:
         raise ValueError("No UEFN project root configured in panel settings")
     from frontend.ui_web.verse_editor.lsp.diagnostics_cache import load_for_ui, stale_keys

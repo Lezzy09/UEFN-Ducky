@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObjec
 import type { ProjectFileEntry, WorkspaceRootEntry } from "../types/panel";
 import { isProjectContentRoot } from "../utils/contentTreeProjects";
 import { isBrowsableTreeDir } from "../utils/fileTreeDrag";
-import { WORKSPACE_ROOTS_PATH } from "../verse-editor/utils/isVerseFile";
+import { WORKSPACE_ROOTS_PATH, contentRootPath, isContentRootKnown, setProjectContentRoot } from "../verse-editor/utils/isVerseFile";
 import { getApi } from "./usePanelApi";
 import { onApiReady } from "./onApiReady";
 
@@ -59,23 +59,36 @@ export function useWorkspaceTreeData(
     if (!api || !session.active) return Promise.resolve();
     setError(null);
     const run = async () => {
+      if (!isContentRootKnown()) {
+        // First load can beat useProject: learn the project kind before choosing a root,
+        // or a folder project would briefly ask for a Content/ it doesn't have.
+        try {
+          const info = await api.get_project_info();
+          if (info && !isContentRootKnown()) setProjectContentRoot(info.content_root);
+        } catch {
+          // Keep the island default; the next project push corrects it.
+        }
+        if (!session.active) return;
+      }
+      // "Content" on an island, "." (the folder itself) for a folder project.
+      const root = contentRootPath();
       let contentEntries: ProjectFileEntry[] | undefined;
       let roots: ProjectFileEntry[] = [];
       const publishContent = () => {
         if (!session.active || !contentEntries) return;
         const contentRoot = roots.find((entry) => entry.read_only === false);
         setCache((prev) => {
-          const next = new Map(prev).set("Content", contentEntries!);
+          const next = new Map(prev).set(root, contentEntries!);
           if (contentRoot) next.set(contentRoot.path, contentEntries!);
           return next;
         });
         setLoadingRoot(false);
       };
       // Start Content independently: Verse metadata and other islands cannot gate it.
-      const content = loadDir("Content").then((entries) => {
+      const content = loadDir(root).then((entries) => {
         contentEntries = entries;
         if (!session.active) return;
-        if (!roots.length) setRootEntries((prev) => prev.length ? prev : [{ name: "Content", path: "Content", is_dir: true, read_only: false, kind: "content" }]);
+        if (!roots.length) setRootEntries((prev) => prev.length ? prev : [{ name: "Content", path: root, is_dir: true, read_only: false, kind: "content" }]);
         publishContent();
       }).catch((reason: unknown) => {
         if (session.active) {
@@ -94,7 +107,7 @@ export function useWorkspaceTreeData(
         const paths = [...new Set([
           ...entries.filter((entry) => entry.read_only && !isProjectContentRoot(entry)).map((entry) => entry.path),
           ...expandedPathsRef.current,
-        ])].filter((path) => path !== "Content" && path !== contentPath && path !== WORKSPACE_ROOTS_PATH && isBrowsableTreeDir(path));
+        ])].filter((path) => path !== root && path !== contentPath && path !== WORKSPACE_ROOTS_PATH && isBrowsableTreeDir(path));
         setLoadingPaths(new Set(paths));
         // Bound bridge/disk pressure when restoring a tree with many expanded folders.
         let index = 0;

@@ -1,3 +1,5 @@
+import { isFolderProject } from "../../verse-editor/utils/isVerseFile";
+
 const WORKSPACE_PATH_RE =
   /^(?:content\/)?(?:verse|textures|materials|blueprints|audio|meshes|ui|plugins)[/\\]/i;
 
@@ -15,6 +17,7 @@ export function isWorkspaceFilePath(href: string): boolean {
 export function normalizeWorkspacePath(path: string): string {
   let p = path.replace(/\\/g, "/").trim();
   if (p.startsWith("/")) return p;
+  if (isFolderProject()) return p.replace(/^\.\//, "");
   if (/^[^/]+\.verse$/i.test(p)) p = `Verse/${p}`;
   if (!p.toLowerCase().startsWith("content/")) {
     p = `Content/${p.replace(/^\/+/, "")}`;

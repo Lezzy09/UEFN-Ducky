@@ -340,22 +340,31 @@ def ducky_get_status(pretty: bool = False) -> str:
 
 @mcp.tool()
 def ducky_get_local_project(pretty: bool = False) -> str:
-    """UEFN-Ducky panel project path and display name (from settings, not the live editor)."""
+    """UEFN-Ducky panel project: path, name, and kind ('uefn' island or plain 'folder').
+
+    From settings, not the live editor. A folder project is any folder (a code repo,
+    say): its whole root is editable and UEFN/Verse tools do not apply to it.
+    """
     return tool_json(get_panel_project_info(), pretty=pretty)
 
 
 @mcp.tool()
 def ducky_list_projects(pretty: bool = False) -> str:
-    """Recent UEFN projects in the panel header dropdown (path, name, active flag)."""
+    """Recent projects in the panel header dropdown (path, name, active flag, kind).
+
+    kind is 'uefn' for an island (<Name>.uefnproject) or 'folder' for any other folder.
+    """
     return tool_json({"projects": list_panel_projects()}, pretty=pretty)
 
 
 @mcp.tool()
 def ducky_set_project(path: str = "", name: str = "", pretty: bool = False) -> str:
-    """Switch the panel's active UEFN project — same as picking one in the header dropdown.
+    """Switch the panel's active project — same as picking one in the header dropdown.
 
     Provide `path` (full folder) or `name` (display name from ducky_list_projects, e.g. MCPTest).
-    Use when workspace tools target the wrong project or UEFN has a different map open.
+    Any folder works: a UEFN island, or a plain folder such as a code repo (a folder project
+    gets no listener init and keeps every file it has). Use when workspace tools target the
+    wrong project or UEFN has a different map open.
     """
     from frontend.ui_web.project_switch import switch_panel_project
 

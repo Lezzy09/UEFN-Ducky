@@ -1838,6 +1838,30 @@
   transform: rotate(90deg);
 }
 
+/* Plugins page → Data: where a plugin's data lives (Local or one team). */
+.ds-data-where { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; }
+.ds-data-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: color-mix(in srgb, var(--ds-border) 45%, transparent); color: var(--ds-text-2); font-size: 12px; font-weight: 700; }
+.ds-data-pill svg { width: 13px; height: 13px; }
+.ds-data-pill--team { background: color-mix(in srgb, var(--ds-accent) 18%, transparent); color: var(--ds-accent-hi); }
+.ds-data-help { margin: 8px 0 0; color: var(--ds-text-mute); font-size: 12px; line-height: 1.5; }
+.ds-data-where .ds-data-help { margin: 0; }
+.ds-data-totals { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0 0 12px; font-size: 13px; }
+.ds-data-totals dt { color: var(--ds-text-dim); font-weight: 600; }
+.ds-data-totals dd { margin: 0; color: var(--ds-text-2); }
+.ds-data-sync { display: block; color: var(--ds-text-mute); font-size: 12px; }
+.ds-data-note { display: flex; align-items: center; gap: 6px; margin: 0 0 12px; color: var(--ds-text-2); font-size: 12px; }
+.ds-data-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.ds-data-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 8px; border-color: var(--ds-border); background: var(--ds-card); color: var(--ds-text-2); font-size: 12px; }
+.ds-data-btn:hover:not(:disabled) { border-color: var(--ds-accent); }
+.ds-data-btn--primary { background: var(--ds-accent); color: var(--ds-accent-ink); border-color: transparent; }
+.ds-data-btn--primary:hover:not(:disabled) { background: var(--ds-accent-hi); }
+.ds-data-choices { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.ds-data-choice { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--ds-border); border-radius: 8px; background: transparent; color: var(--ds-text-2); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.ds-data-choice small { margin-left: auto; color: var(--ds-text-mute); }
+.ds-data-choice[aria-checked="true"] { border-color: var(--ds-accent); color: var(--ds-text); cursor: default; }
+.ds-data-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid var(--ds-border); border-radius: 10px; }
+.ds-data-confirm p { flex-basis: 100%; margin: 0; color: var(--ds-text-2); font-size: 13px; line-height: 1.5; }
+
 .ds-panel-desc {
   margin: 0;
   font-size: 13.5px;

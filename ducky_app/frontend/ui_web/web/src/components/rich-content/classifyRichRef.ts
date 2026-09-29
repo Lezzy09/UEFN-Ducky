@@ -1,3 +1,5 @@
+import { isFolderProject } from "../../verse-editor/utils/isVerseFile";
+
 export type RichRefKind =
   | "verse"
   | "file"
@@ -48,6 +50,8 @@ function toolFamily(name: string): RichRefKind {
 
 function fileOpen(text: string): RichRefOpen {
   const p = text.replace(/\\/g, "/").replace(/^\.\//, "");
+  // A folder project's paths are plain root-relative; there is no Content/ to add.
+  if (isFolderProject()) return { type: "file", path: p.replace(/^\//, "") };
   if (/^[^/]+\.verse$/i.test(p)) return { type: "file", path: `Content/Verse/${p}` };
   if (/^verse\//i.test(p)) return { type: "file", path: p.toLowerCase().startsWith("content/") ? p : `Content/${p}` };
   if (p.toLowerCase().startsWith("content/")) return { type: "file", path: p };

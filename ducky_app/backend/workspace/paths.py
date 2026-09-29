@@ -33,7 +33,13 @@ DIGEST_WRITE_FORBIDDEN = (
     "under Content/Verse/ only."
 )
 
+WRITE_OUTSIDE_FOLDER_FORBIDDEN = (
+    "This is a folder project (not a UEFN island): writes must stay inside the project "
+    "folder and never touch .git/ internals. Use git commands for repository changes."
+)
+
 _WRITE_BLOCKED_ANCESTORS = frozenset({"Saved", "Intermediate", "DerivedDataCache"})
+_FOLDER_BLOCKED_NAMES = frozenset({".git", ".svn", ".hg"})
 _WRITE_ALLOWED_ANCESTORS = frozenset({"Content", ".ducky"})
 _WRITE_BLOCKED_SUFFIXES = (".py", ".pyc")
 
@@ -129,3 +135,13 @@ def require_writable_project_path(file_path: str) -> None:
         if name in _WRITE_ALLOWED_ANCESTORS and i < len(names) - 1:
             return
     raise ValueError(WRITE_OUTSIDE_CONTENT_FORBIDDEN)
+
+
+def require_writable_folder_path(file_path: str, root: str) -> None:
+    """Folder-project rule: anywhere under *root* (``.py`` included) except VCS internals."""
+    rel = rel_from_root(file_path, root)
+    if rel is None or rel in ("", "."):
+        raise ValueError(WRITE_OUTSIDE_FOLDER_FORBIDDEN)
+    parts = [p for p in rel.split("/") if p and p != "."]
+    if not parts or parts[0] == ".." or any(p.lower() in _FOLDER_BLOCKED_NAMES for p in parts):
+        raise ValueError(WRITE_OUTSIDE_FOLDER_FORBIDDEN)

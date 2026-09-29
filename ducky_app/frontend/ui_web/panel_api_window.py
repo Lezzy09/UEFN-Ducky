@@ -691,7 +691,7 @@ class PanelApiWindowMixin:
         try:
             picked = win.create_file_dialog(folder_type)
             if picked:
-                return str(_pa.resolve_uefn_project_root(_pa.Path(picked[0])))
+                return _picked_project_root(str(picked[0]))
         except Exception:
             return None
         return None
@@ -699,9 +699,9 @@ class PanelApiWindowMixin:
     def _pick_project_path_dialog(self, root: Any) -> str | None:
         from tkinter import filedialog
 
-        d = filedialog.askdirectory(title="UEFN project folder", parent=root)
+        d = filedialog.askdirectory(title="Project folder", parent=root)
         if d:
-            return str(_pa.resolve_uefn_project_root(_pa.Path(d)))
+            return _picked_project_root(d)
         return None
 
     def _pick_project_path_standalone(self) -> str | None:
@@ -943,3 +943,17 @@ class PanelApiWindowMixin:
             holder = {}
         abort_and_quit(api=self, tk_root=self._tk_root, window_holder=holder)
         return True
+
+
+def _picked_project_root(picked: str) -> str:
+    """Any folder is a project: an island (``*.uefnproject``) or a plain folder.
+
+    A pick Ducky can't open (a whole drive, say) comes back as-is so
+    ``inspect_project_folder`` / ``set_project_root`` can say why.
+    """
+    from frontend.project_kind import project_root_path
+
+    try:
+        return str(project_root_path(picked))
+    except (OSError, ValueError):
+        return picked

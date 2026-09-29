@@ -355,19 +355,22 @@ def sync_listener_to_appdata(*, force: bool = False) -> Path | None:
 
 
 def resolve_uefn_project_root(user_selection: Path) -> Path:
+    """Island root for UEFN-only code. Project pickers use ``project_kind.resolve_project_root``."""
+    from frontend.project_kind import has_uefnproject
+
     p = user_selection.resolve()
     if p.is_file() and p.suffix.lower() == ".uefnproject":
         return p.parent
     if p.is_dir():
-        if (p / ".uefnproject").is_file():
-            return p
-        if (p / "Content").is_dir():
+        if has_uefnproject(p):
             return p
         # Picked Content/ instead of the project root.
-        if p.name.lower() == "content":
-            parent = p.parent
-            if (parent / ".uefnproject").is_file() or (parent / "Content").is_dir():
-                return parent
+        if p.name.lower() == "content" and has_uefnproject(p.parent):
+            return p.parent
+        if (p / "Content").is_dir():
+            return p
+        if p.name.lower() == "content" and (p.parent / "Content").is_dir():
+            return p.parent
     raise ValueError(
         "Select your UEFN project folder (should contain .uefnproject or a Content folder), "
         "or pick the .uefnproject file."
@@ -382,6 +385,14 @@ _KEEP_ISLAND_PYTHON = frozenset({"content/python/init_unreal.py"})
 
 def content_python_dir(project_root: Path) -> Path:
     return project_root / "Content" / "Python"
+
+
+def _is_island(project_root: Path) -> bool:
+    """Disk proof (``*.uefnproject``) gating every step that writes into or moves out of a
+    project. Never the stored kind: a wrong row must not touch a folder project's files."""
+    from frontend.project_kind import has_uefnproject
+
+    return has_uefnproject(project_root)
 
 
 def _is_kept_island_python(project_root: Path, path: Path) -> bool:
@@ -466,12 +477,14 @@ def quarantine_project_python(project_root: Path, *, deep: bool) -> list[str]:
 
     Leaves Ducky's managed ``Content/Python/init_unreal.py`` in place. Extra
     ``.py`` / ``.pyc`` / ``__pycache__`` (agent scratch) is moved, never deleted.
+    Does nothing unless the folder holds a ``*.uefnproject``: a folder project (a repo)
+    keeps every Python file it has.
     """
     try:
         root = Path(project_root).resolve()
     except OSError:
         return []
-    if not root.is_dir():
+    if not root.is_dir() or not _is_island(root):
         return []
     dest_root = quarantine_python_root() / _project_slug_for_quarantine(root)
     logs: list[str] = []
@@ -673,9 +686,12 @@ def install_user_init_unreal() -> str | None:
 
 
 def ensure_project_init(project_root: Path) -> list[str]:
-    """Install/replace the island ``Content/Python/init_unreal.py`` listener stub."""
+    """Install/replace the island ``Content/Python/init_unreal.py`` listener stub.
+
+    Islands only: a folder project never gets a ``Content/Python`` created in it.
+    """
     root = Path(project_root)
-    if not root.is_dir():
+    if not root.is_dir() or not _is_island(root):
         return []
     dest_py = content_python_dir(root)
     dest_py.mkdir(parents=True, exist_ok=True)
@@ -690,7 +706,9 @@ def ensure_project_init(project_root: Path) -> list[str]:
 
 
 def remove_project_init(project_root: Path) -> list[str]:
-    """Delete Ducky's island init when the project is removed from the panel."""
+    """Delete Ducky's island init when the project is removed from the panel (islands only)."""
+    if not _is_island(Path(project_root)):
+        return []
     dest_py = content_python_dir(project_root)
     dest_init = dest_py / "init_unreal.py"
     logs: list[str] = []
@@ -776,6 +794,9 @@ def deploy_listener(project_root: Path, listener_port: int, *, shared: bool = Tr
     ``shared=False`` skips the once-per-process work (all-project init refresh,
     listener hint, skill sync). Startup can call this from both project-switch
     and ``deploy_all_recent_projects``; only the first shared call runs that block.
+
+    The island steps (init, quarantine, ``.uefnproject`` Python flag) each check for a
+    real ``*.uefnproject`` themselves, so a folder project passes through untouched.
     """
     global _shared_deploy_done
     do_shared = False

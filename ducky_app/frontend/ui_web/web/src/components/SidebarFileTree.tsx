@@ -32,7 +32,7 @@ import {
 } from "react";
 import { Icons } from "../icons/Icons";
 import { FileTypeIcon } from "../verse-editor/components/FileTypeIcon";
-import { isVerseFile, isPanelReadOnlyFile, isWritableContentPath, isSystemWorkspaceRootName, registryKey, UEFN_CORE_SECTION_PATH, WORKSPACE_ROOTS_PATH, workspaceRootDisplayName, ABS_PATH_PREFIX } from "../verse-editor/utils/isVerseFile";
+import { contentRootPath, isVerseFile, isPanelReadOnlyFile, isWritableContentPath, isSystemWorkspaceRootName, registryKey, UEFN_CORE_SECTION_PATH, WORKSPACE_ROOTS_PATH, workspaceRootDisplayName, ABS_PATH_PREFIX } from "../verse-editor/utils/isVerseFile";
 import { useVerseEditorOptional } from "../verse-editor/VerseEditorProvider";
 import { getApi } from "../hooks/usePanelApi";
 import { useWorkspaceTreeData } from "../hooks/useWorkspaceTreeData";
@@ -49,7 +49,6 @@ import {
   showHiddenProjectFilesItem,
 } from "../utils/sidebarContextMenuItems";
 import {
-  CONTENT_ROOT_PATH,
   collapseExpandedPathsOneLevel,
   expandExpandedPathsOneLevel,
   fileDragId,
@@ -99,7 +98,6 @@ import { FileTabHoverCard } from "./editor/FileTabHoverCard";
 import type { EditorTabHoverCardPlacement } from "../hooks/useEditorTabHoverCard";
 import type { DockSide } from "../workspace/workspaceDockStorage";
 
-export const CONTENT_ROOT = CONTENT_ROOT_PATH;
 export const WORKSPACE_TREE_ROOT = WORKSPACE_ROOTS_PATH;
 
 /** Sidebar hover cards open away from the rail (right dock → left of the row). */
@@ -132,7 +130,7 @@ function persistFileTreeSplitRatio(ratio: number) {
 
 function mutationParentPath(treePath: string, readOnly?: boolean): string {
   if (readOnly || !isWritableContentPath(treePath)) return treePath;
-  if (treePath.toLowerCase().startsWith("ws:")) return CONTENT_ROOT;
+  if (treePath.toLowerCase().startsWith("ws:")) return contentRootPath();
   return treePath;
 }
 
@@ -213,10 +211,10 @@ function externalDragHasFiles(dt: DataTransfer | null): boolean {
 function resolveExternalDropDir(target: EventTarget | null): string | null {
   const el = target instanceof HTMLElement ? target : null;
   const row = el?.closest<HTMLElement>("[data-file-id]") ?? null;
-  if (!row) return CONTENT_ROOT_PATH;
+  if (!row) return contentRootPath();
   const parsed = parseFileDragId(row.getAttribute("data-file-id") || "");
-  if (!parsed) return CONTENT_ROOT_PATH;
-  const dir = parsed.kind === "dir" ? parsed.path : parentDirPath(parsed.path) ?? CONTENT_ROOT_PATH;
+  if (!parsed) return contentRootPath();
+  const dir = parsed.kind === "dir" ? parsed.path : parentDirPath(parsed.path) ?? contentRootPath();
   return isWritableContentPath(dir) ? dir : null;
 }
 
@@ -385,7 +383,7 @@ const FileRow = memo(function FileRow({
 
   const contextItems = useMemo(() => {
     const canMutate = isWritableContentPath(entry.path) && entry.read_only !== true;
-    const pasteTarget = isDir ? entry.path : parentDirPath(entry.path) ?? CONTENT_ROOT;
+    const pasteTarget = isDir ? entry.path : parentDirPath(entry.path) ?? contentRootPath();
     const canPasteHere = clipboardHasItems && isWritableContentPath(pasteTarget);
     const items = canMutate
       ? [
@@ -938,7 +936,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
           ? entry.path
           : entry.path.includes("/")
             ? entry.path.replace(/\/[^/]+$/, "")
-            : CONTENT_ROOT;
+            : contentRootPath();
         onParentPathChange(mutationParentPath(target, entry.read_only));
       },
       [onParentPathChange],
@@ -953,24 +951,24 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
     useEffect(() => {
       setExpandedPaths(new Set());
       setSelection(emptySelection());
-      onParentPathChange(CONTENT_ROOT);
+      onParentPathChange(contentRootPath());
     }, [projectSlug, onParentPathChange]);
-    const contentRootPath = contentRootEntry?.path;
+    const contentRootEntryPath = contentRootEntry?.path;
     useEffect(() => {
-      if (!allProjects || !contentRootPath) return;
+      if (!allProjects || !contentRootEntryPath) return;
       setExpandedPaths((prev) => {
-        if (prev.has(contentRootPath)) return prev;
+        if (prev.has(contentRootEntryPath)) return prev;
         const next = new Set(prev);
-        next.add(contentRootPath);
+        next.add(contentRootEntryPath);
         return next;
       });
-    }, [allProjects, contentRootPath]);
+    }, [allProjects, contentRootEntryPath]);
 
     // Auto-refresh the tree when watched folders change on disk (UEFN compile, Explorer,
     // git, …). Watches the Content root + every expanded writable folder; "" fingerprints
     // (workspace roots / abs: dirs) are ignored by the backend.
     const watchedTreeDirs = useMemo(() => {
-      const dirs = new Set<string>([CONTENT_ROOT]);
+      const dirs = new Set<string>([contentRootPath()]);
       for (const p of expandedPaths) {
         if (isWritableContentPath(p) && isBrowsableTreeDir(p) && !p.toLowerCase().startsWith("ws:")) {
           dirs.add(p);
@@ -1138,7 +1136,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
         const errors = detail?.errors ?? [];
         setError(errors.length ? errors.join("; ") : null);
         const first = paths[0];
-        const destDir = first ? parentDirPath(first) ?? CONTENT_ROOT : CONTENT_ROOT;
+        const destDir = first ? parentDirPath(first) ?? contentRootPath() : contentRootPath();
         void (async () => {
           await refreshAfterMutation(destDir);
           if (first) {
@@ -1203,7 +1201,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
     const syncParentFromFocus = useCallback(
       (entry: ProjectFileEntry) => {
         lastClickedPathRef.current = normTreePath(entry.path);
-        const parent = entry.is_dir ? entry.path : parentDirPath(entry.path) ?? CONTENT_ROOT;
+        const parent = entry.is_dir ? entry.path : parentDirPath(entry.path) ?? contentRootPath();
         onParentPathChange(mutationParentPath(parent, entry.read_only));
       },
       [onParentPathChange],
@@ -1231,7 +1229,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
 
     const clearSelection = useCallback(() => {
       setSelection(emptySelection());
-      onParentPathChange(CONTENT_ROOT);
+      onParentPathChange(contentRootPath());
     }, [onParentPathChange]);
 
     const selectedMutablePaths = useCallback(
@@ -1283,7 +1281,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
       async (destParentRaw: string) => {
         const clip = clipboardRef.current;
         if (!clip || !clip.paths.length) return;
-        const destParent = mutationParentPath(destParentRaw || CONTENT_ROOT);
+        const destParent = mutationParentPath(destParentRaw || contentRootPath());
         if (!isWritableContentPath(destParent)) return;
         const api = getApi();
         if (!api) return;
@@ -1295,7 +1293,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
             if (isDescendantDir(src, destParent)) continue; // into itself / a descendant
             if (isCut) {
               if (!api.move_project_entry) continue;
-              if ((parentDirPath(src) ?? CONTENT_ROOT) === destParent) continue; // no-op move
+              if ((parentDirPath(src) ?? contentRootPath()) === destParent) continue; // no-op move
               const r = await api.move_project_entry(src, destParent);
               lastPath = r.path;
               onFileMoved?.(src, r.path);
@@ -1317,7 +1315,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
 
     const pasteIntoEntry = useCallback(
       (entry: ProjectFileEntry) => {
-        void pasteInto(entry.is_dir ? entry.path : parentDirPath(entry.path) ?? CONTENT_ROOT);
+        void pasteInto(entry.is_dir ? entry.path : parentDirPath(entry.path) ?? contentRootPath());
       },
       [pasteInto],
     );
@@ -1326,10 +1324,10 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
       const clip = clipboardRef.current;
       if (!clip || !clip.paths.length) return false;
       const focus = selectionRef.current.focus;
-      let target = mutationParentPath(parentPathRef.current || CONTENT_ROOT);
+      let target = mutationParentPath(parentPathRef.current || contentRootPath());
       if (focus) {
         const cached = lookupCachedEntry(cacheRef.current, focus);
-        target = cached?.is_dir ? focus : parentDirPath(focus) ?? CONTENT_ROOT;
+        target = cached?.is_dir ? focus : parentDirPath(focus) ?? contentRootPath();
       }
       void pasteInto(target);
       return true;
@@ -1464,7 +1462,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
     const createFolder = useCallback(async () => {
       const api = getApi();
       if (!api) return;
-      const targetParent = mutationParentPath(parentPathRef.current || CONTENT_ROOT);
+      const targetParent = mutationParentPath(parentPathRef.current || contentRootPath());
       if (!isWritableContentPath(targetParent)) return;
       try {
         const siblings = await listSiblingNames(targetParent);
@@ -1480,7 +1478,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
     const createVerseFile = useCallback(async (content?: string) => {
       const api = getApi();
       if (!api) return;
-      const targetParent = mutationParentPath(parentPathRef.current || CONTENT_ROOT);
+      const targetParent = mutationParentPath(parentPathRef.current || contentRootPath());
       if (!isWritableContentPath(targetParent)) return;
       try {
         const siblings = await listSiblingNames(targetParent);
@@ -1503,7 +1501,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
           (f) => f && typeof f.path === "string" && typeof f.content === "string" && f.path.trim(),
         );
         if (!files.length) return;
-        const targetParent = mutationParentPath(parentPathRef.current || CONTENT_ROOT);
+        const targetParent = mutationParentPath(parentPathRef.current || contentRootPath());
         if (!isWritableContentPath(targetParent)) return;
         try {
           let packRoot = targetParent;
@@ -1558,7 +1556,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
     const createTextFile = useCallback(async () => {
       const api = getApi();
       if (!api) return;
-      const targetParent = mutationParentPath(parentPathRef.current || CONTENT_ROOT);
+      const targetParent = mutationParentPath(parentPathRef.current || contentRootPath());
       if (!isWritableContentPath(targetParent)) return;
       try {
         const siblings = await listSiblingNames(targetParent);
@@ -1582,7 +1580,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
     }, [createVerseFile, onNewVerseClass]);
 
     const treeContextItems = useMemo(() => {
-      const parent = mutationParentPath(parentPathRef.current || CONTENT_ROOT);
+      const parent = mutationParentPath(parentPathRef.current || contentRootPath());
       const canMutate = isWritableContentPath(parent);
       const items = canMutate
         ? [
@@ -1600,7 +1598,8 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
         );
       }
       return items;
-    }, [createFolder, createTextFile, handleNewVerseClass, onToggleHiddenFiles, showHiddenFiles]);
+      // projectSlug: the create items depend on the project kind (no Verse class in a folder).
+    }, [createFolder, createTextFile, handleNewVerseClass, onToggleHiddenFiles, showHiddenFiles, projectSlug]);
 
     const rootEntriesRef = useRef(rootEntries);
     rootEntriesRef.current = rootEntries;
@@ -1693,7 +1692,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
           // Root nest lights the whole tree; nested nests light the folder row.
           const isRootNest =
             nestDirPath === WORKSPACE_ROOTS_PATH ||
-            nestDirPath === CONTENT_ROOT ||
+            nestDirPath === contentRootPath() ||
             nestDirPath === (contentRootEntry?.path ?? "");
           setDropHint({ overId: isRootNest ? nestId : targetId, position: "inside" });
           scheduleAutoExpand(isRootNest ? null : nestDirPath);
@@ -1804,7 +1803,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
           const cached = lookupCachedEntry(cache, src);
           const srcIsDir = cached?.is_dir ?? (src === activeParsed.path && activeParsed.kind === "dir");
           if (srcIsDir && (destParent === src || isDescendantDir(src, destParent))) continue;
-          if ((parentDirPath(src) ?? CONTENT_ROOT) === destParent) continue; // no-op move
+          if ((parentDirPath(src) ?? contentRootPath()) === destParent) continue; // no-op move
           const result = await api.move_project_entry(src, destParent);
           lastPath = result.path;
           onFileMoved?.(src, result.path);
@@ -1826,7 +1825,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
         setExternalRootActive(false);
         return;
       }
-      if (normTreePath(dir) === normTreePath(CONTENT_ROOT)) {
+      if (normTreePath(dir) === normTreePath(contentRootPath())) {
         setDropHint(null);
         setExternalRootActive(true);
       } else {
@@ -1942,7 +1941,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
           <div
             className="ui-status-sidebar-muted file-tree-empty"
             onContextMenu={(e) => {
-              onParentPathChange(CONTENT_ROOT);
+              onParentPathChange(contentRootPath());
               openTreeMenu(e, undefined);
             }}
           >
@@ -2111,7 +2110,7 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
             }}
             onContextMenu={(e) => {
               if ((e.target as HTMLElement).closest("[data-file-id]")) return;
-              onParentPathChange(parentPathRef.current || CONTENT_ROOT);
+              onParentPathChange(parentPathRef.current || contentRootPath());
               openTreeMenu(e, undefined);
             }}
           >

@@ -144,6 +144,32 @@
   color: var(--text);
 }
 
+/* Approval cards: the exact command or path, and why it always asks. */
+.ask-user-detail {
+  margin: 0;
+  padding: 9px 11px;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ask-user-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--amber);
+  font-size: 12px;
+}
+
 .ask-user-options {
   display: flex;
   flex-direction: column;

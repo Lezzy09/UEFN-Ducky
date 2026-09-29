@@ -10,6 +10,7 @@ import {
   type AskUserResult,
 } from "./types";
 import type { MessageAuthorDto } from "../types/panel";
+import { Icons } from "../icons/Icons";
 
 type Props = {
   questions: AskUserQuestion[];
@@ -280,6 +281,13 @@ export const AskUserForm = memo(function AskUserForm({
       ) : null}
 
       <h2 className="ask-user-prompt">{question.prompt}</h2>
+      {question.warning ? (
+        <p className="ask-user-warning" role="note">
+          <Icons.AlertTriangle />
+          <span>{question.warning}</span>
+        </p>
+      ) : null}
+      {question.detail ? <pre className="ask-user-detail">{question.detail}</pre> : null}
       <div
         className="ask-user-options"
         role={multiple ? "group" : "radiogroup"}

@@ -1,6 +1,5 @@
 import type { AutomationSummaryDto, PanelPushEvent } from "../types/panel";
-import { requestOpenAutomationsTab } from "../navigation/openAutomationsTab";
-import { requestOpenPipelinesTab } from "../navigation/openPipelinesTab";
+import { requestOpenWorkflowsTab } from "../navigation/openWorkflowsTab";
 import {
   dismissBackgroundJob,
   upsertBackgroundJob,
@@ -25,39 +24,35 @@ export function workflowIdFromJobId(jobId: string): string {
   return "";
 }
 
-type GraphKind = "automation" | "pipeline";
-let pendingFocus: { kind: GraphKind; id: string } | null = null;
+let pendingFocus: string | null = null;
 
-export function requestFocusGraph(kind: GraphKind, id: string): void {
+export function requestFocusGraph(id: string): void {
   const wid = id.trim();
   if (!wid) return;
-  pendingFocus = { kind, id: wid };
+  pendingFocus = wid;
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("ducky:focus-graph", { detail: pendingFocus }));
+    window.dispatchEvent(new CustomEvent("ducky:focus-graph", { detail: { id: wid } }));
   }
 }
 
-/** Chat saved or deleted a graph — open that editor and show the change. */
+/** Chat saved or deleted a workflow — open the editor and show the change. */
 export function applyGraphFocusPush(event: PanelPushEvent): void {
   if (event.type !== "graph_focus") return;
-  const kind: GraphKind = event.kind === "pipeline" ? "pipeline" : "automation";
   const id = String(event.id || "").trim();
   if (!id) return;
-  if (kind === "pipeline") requestOpenPipelinesTab();
-  else requestOpenAutomationsTab();
+  requestOpenWorkflowsTab();
   if (event.action === "deleted") {
-    if (pendingFocus?.kind === kind && pendingFocus.id === id) pendingFocus = null;
+    if (pendingFocus === id) pendingFocus = null;
     if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("ducky:graph-deleted", { detail: { kind, id } }));
+      window.dispatchEvent(new CustomEvent("ducky:graph-deleted", { detail: { id } }));
     }
     return;
   }
-  requestFocusGraph(kind, id);
+  requestFocusGraph(id);
 }
 
-export function takePendingGraphFocus(kind: GraphKind): string {
-  if (pendingFocus?.kind !== kind) return "";
-  const id = pendingFocus.id;
+export function takePendingGraphFocus(): string {
+  const id = pendingFocus || "";
   pendingFocus = null;
   return id;
 }
@@ -77,7 +72,7 @@ export function applyBackgroundJobPush(event: PanelPushEvent | (Partial<Backgrou
 }
 
 export function syncReadyGraphJobs(
-  _rows: Array<Pick<AutomationSummaryDto, "id" | "name" | "kind" | "enabled" | "node_count">>,
+  _rows: Array<Pick<AutomationSummaryDto, "id" | "name" | "enabled" | "node_count">>,
   current: BackgroundJob[],
 ): void {
   for (const job of current) {

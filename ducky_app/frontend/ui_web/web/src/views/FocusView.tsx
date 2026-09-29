@@ -45,6 +45,7 @@ import { DEFAULT_TERMINAL_SHELL, type TerminalShell } from "../terminal/types";
 import { getTerminalsEnabled } from "../contexts/TerminalsSettingsContext";
 import { useDuckyCatalog } from "../components/ducky/DuckyCatalogContext";
 import { DuckyProfileModal, type DuckyProfileModalMode } from "../components/ducky/DuckyProfileModal";
+import { setProjectContentRoot } from "../verse-editor/utils/isVerseFile";
 
 interface FocusViewProps {
   focusId: string;
@@ -102,6 +103,7 @@ function FocusViewContent({ focusId }: FocusViewProps) {
   useEffect(() => {
     return onApiReady((api) => {
       void api.get_project_info().then((info) => {
+        setProjectContentRoot(info.content_root);
         setProjectPath(info.path || "");
         setProject({ name: info.name || "", path: info.path || "", slug: info.slug || "" });
       });

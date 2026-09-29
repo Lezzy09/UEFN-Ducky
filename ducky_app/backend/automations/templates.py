@@ -1,4 +1,4 @@
-"""Custom automation templates (AppData JSON). Plugin templates live in plugin.json."""
+"""Workflow templates: builtin, plugin (plugin.json), and custom (AppData JSON)."""
 
 from __future__ import annotations
 
@@ -102,7 +102,6 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "description": "Launch UEFN from closed and wait for your island. Choose a saved project on the Open UEFN project node.",
         "icon": "📂",
         "kind": "builtin",
-        "systems": ["pipeline"],
         "graph": {
             "nodes": [
                 {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
@@ -119,7 +118,6 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "description": "Close UEFN and reopen the current project, then wait until connected.",
         "icon": "↻",
         "kind": "builtin",
-        "systems": ["automation"],
         "graph": {
             "nodes": [
                 {"id": "s", "type": "start.manual", "x": 0, "y": 0, "config": {}},
@@ -135,7 +133,6 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "description": "Project > Upload to Private Version, press Copy, press OK, post the code.",
         "icon": "↑",
         "kind": "builtin",
-        "systems": ["pipeline"],
         "graph": {
             "nodes": [
                 {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
@@ -170,7 +167,6 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         ),
         "icon": "▦",
         "kind": "builtin",
-        "systems": ["pipeline"],
         "graph": {
             "nodes": [
                 {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
@@ -198,14 +194,10 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
 ]
 
 
-def list_templates(system: str = "") -> list[dict[str, Any]]:
+def list_templates() -> list[dict[str, Any]]:
     """Builtin templates, then plugin contrib (enabled only), then user custom."""
-    from backend.automations.catalog import node_in_system
-
     out: list[dict[str, Any]] = []
     for row in BUILTIN_TEMPLATES:
-        if not node_in_system(row, system):
-            continue
         name = str(row.get("label") or row.get("name") or row.get("id"))
         out.append(
             {
@@ -215,7 +207,6 @@ def list_templates(system: str = "") -> list[dict[str, Any]]:
                 "description": str(row.get("description") or ""),
                 "icon": str(row.get("icon") or "⚡"),
                 "kind": "builtin",
-                "systems": row.get("systems"),
                 "graph": normalize_graph(row.get("graph")),
                 "requires_plugins": [],
                 "missing_plugins": [],
@@ -239,8 +230,6 @@ def list_templates(system: str = "") -> list[dict[str, Any]]:
         tid = str(row.get("id") or "").strip()
         if not tid:
             continue
-        if not node_in_system(row, system):
-            continue
         name = str(row.get("label") or row.get("name") or tid)
         graph = normalize_graph(row.get("graph"))
         required = _template_requires(row, graph)
@@ -254,7 +243,6 @@ def list_templates(system: str = "") -> list[dict[str, Any]]:
                 "icon": str(row.get("icon") or "⚡"),
                 "kind": "plugin",
                 "plugin_id": pid,
-                "systems": row.get("systems"),
                 "graph": graph,
                 "requires_plugins": required,
                 "missing_plugins": missing,

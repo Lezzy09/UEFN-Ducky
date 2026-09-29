@@ -4,6 +4,7 @@ import { usePluginContributions } from "../hooks/usePluginContributions";
 import { chatMentionGroup, dedupeChatRefs, orderChatMentions, type ChatRef } from "./chatReferences";
 import { noteChatRefFaces } from "./chatRefFaces";
 import { resolvePluginIconContent } from "../hooks/pluginHeaderActions";
+import { isAbsEncodedPath, isFolderProject } from "../verse-editor/utils/isVerseFile";
 
 interface ConvRow {
   id: string;
@@ -48,14 +49,14 @@ export function useChatReferenceCatalog(
     void (async () => {
       const api = getApi();
       if (!api) return;
-      const [convs, profiles, skills, mcp, recents, paths, pipelines] = await Promise.all([
+      const [convs, profiles, skills, mcp, recents, paths, workflows] = await Promise.all([
         api.list_all_conversations(true).catch(() => []),
         api.list_agent_profiles().catch(() => null),
         api.get_skill_info().catch(() => null),
         api.list_mcp_servers?.().catch(() => null) ?? null,
         api.list_recent_projects().catch(() => []),
         api.list_project_file_paths().catch(() => []),
-        api.list_pipelines?.().catch(() => null) ?? null,
+        api.list_workflows?.().catch(() => null) ?? null,
       ]);
       if (cancelled) return;
       const openSlug = String(
@@ -95,8 +96,10 @@ export function useChatReferenceCatalog(
       ]);
 
       const slash: ChatRef[] = [];
-      for (const pipeline of pipelines?.pipelines || []) {
-        slash.push(chatRef("/", `pipeline:${pipeline.id}`, pipeline.name || "Untitled pipeline", "Pipelines", `pipeline:${pipeline.id}`, pipeline.description || "Run this pipeline with the request you type after it", { iconUrl: "🔗" }));
+      for (const workflow of workflows?.workflows || []) {
+        const owner = workflow.owner?.kind === "team" ? `Team ${workflow.owner.label}` : "Local";
+        const about = workflow.description || "Run this workflow with the request you type after it";
+        slash.push(chatRef("/", `workflow:${workflow.id}`, workflow.name || "Untitled workflow", "Workflows", `workflow:${workflow.id}`, `${owner} · ${about}`));
       }
       for (const pack of skills?.packs ?? []) {
         const id = String(pack.id || "").trim();
@@ -147,7 +150,8 @@ export function useChatReferenceCatalog(
       for (const row of paths || []) {
         const path = String(row.path || "").replace(/\\/g, "/");
         const name = String(row.name || "").trim();
-        if (!name || !path.startsWith("Content/") || !CONTENT_TEXT.test(name)) continue;
+        const inContent = isFolderProject() ? !isAbsEncodedPath(path) : path.startsWith("Content/");
+        if (!name || !inContent || !CONTENT_TEXT.test(name)) continue;
         if (path.includes(".digest.verse")) continue;
         files.push(chatRef("/", `file:${path}`, name, "Content", `file:${path}`, path));
       }

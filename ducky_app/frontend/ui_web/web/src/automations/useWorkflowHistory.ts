@@ -6,6 +6,10 @@ type Entry = { doc: AutomationDto; label: string };
 export function editableWorkflow(doc: AutomationDto) {
   return { name: doc.name, description: doc.description, enabled: doc.enabled, graph: doc.graph };
 }
+/** Same workflow in the same folder: a move to another owner starts a fresh history. */
+function sameWorkflow(a: AutomationDto | null, b: AutomationDto | null): boolean {
+  return !!a && !!b && a.id === b.id && (a.owner?.id || "local") === (b.owner?.id || "local");
+}
 function changeLabel(before: AutomationDto, after: AutomationDto): string {
   if (before.name !== after.name) return "Rename workflow";
   if (before.enabled !== after.enabled) return after.enabled ? "Enable workflow" : "Disable workflow";
@@ -30,14 +34,14 @@ export function useWorkflowHistory() {
   }, []);
   const replace = useCallback((update: Update) => {
     const next = typeof update === "function" ? update(current.current) : update;
-    if (!next || next.id !== current.current?.id || next.kind !== current.current?.kind) { reset(next); return; }
+    if (!sameWorkflow(next, current.current)) { reset(next); return; }
     current.current = next;
     render(next);
   }, [reset]);
   const setDraft = useCallback((update: Update, label?: string) => {
     const before = current.current;
     const next = typeof update === "function" ? update(before) : update;
-    if (!before || !next || before.id !== next.id || before.kind !== next.kind) { reset(next); return; }
+    if (!before || !next || !sameWorkflow(before, next)) { reset(next); return; }
     if (JSON.stringify(editableWorkflow(before)) === JSON.stringify(editableWorkflow(next))) return;
     const state = journal.current;
     const entry = { doc: next, label: label || changeLabel(before, next) };

@@ -134,7 +134,8 @@ PLUGIN_UI_HTML_CSP = (
     "img-src 'self' data: blob: https:; "
     "connect-src 'self' https://unpkg.com https://cdn.jsdelivr.net "
     "https://cdnjs.cloudflare.com https://esm.sh data: blob:; "
-    "font-src 'self' data:; media-src 'self' data: blob:; "
+    # https media like https images: team data players (short presigned storage links).
+    "font-src 'self' data:; media-src 'self' data: blob: https:; "
     "object-src 'none'; base-uri 'self'"
 )
 

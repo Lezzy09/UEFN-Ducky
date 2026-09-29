@@ -605,6 +605,16 @@ def apply_workspace_env(project_root: str) -> None:
         return
     import json as _json
 
+    from frontend.project_kind import is_folder_project
+
+    if is_folder_project(root):
+        # A folder project is its own single workspace root: no Verse workspace
+        # discovery (a repo's *.code-workspace or content/ dir must not reroute
+        # writes), and the island listener's config.json keeps the last island.
+        os.environ["UEFN_VSCODE_WORKSPACE_FOLDERS"] = _json.dumps([root])
+        os.environ["UEFN_DUCKY_PROJECT_ROOT"] = root
+        return
+
     from frontend.ui_web.verse_editor.lsp.verse_workspace import discover_verse_workspace
 
     ws = discover_verse_workspace(root, include_watch_files=False)

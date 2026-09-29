@@ -4,12 +4,16 @@ import {
   UEFN_CORE_SECTION_PATH,
   WORKSPACE_ROOTS_PATH,
   WS_PATH_PREFIX,
+  contentRootPath,
   isAbsEncodedPath,
+  isFolderProject,
   isPanelReadOnlyFile,
   isWsEncodedPath,
 } from "../verse-editor/utils/isVerseFile";
 import type { DropPosition } from "./sidebarTree";
 
+/** An island's Content pane root. Runtime code uses `contentRootPath()`, which is `.` for
+ * a folder project. */
 export const CONTENT_ROOT_PATH = "Content";
 
 let workspaceFolderAbsPathsLower: string[] = [];
@@ -56,9 +60,11 @@ export function parentDirPath(path: string): string | null {
     const parent = `${ABS_PATH_PREFIX}${parentAbs}`;
     return parent === norm ? null : parent;
   }
-  if (lower === CONTENT_ROOT_PATH.toLowerCase()) return WORKSPACE_ROOTS_PATH;
+  const root = contentRootPath();
+  if (lower === root.toLowerCase()) return WORKSPACE_ROOTS_PATH;
   const idx = norm.lastIndexOf("/");
-  if (idx <= 0) return WORKSPACE_ROOTS_PATH;
+  // Folder project: a top-level entry ("src") sits directly under the root (".").
+  if (idx <= 0) return isFolderProject() ? root : WORKSPACE_ROOTS_PATH;
   return norm.slice(0, idx);
 }
 
@@ -87,8 +93,10 @@ export function treePathDepth(path: string): number {
     const segments = norm.slice(ABS_PATH_PREFIX.length).split("/").filter(Boolean);
     return 1 + Math.max(0, segments.length - 1);
   }
-  if (norm === CONTENT_ROOT_PATH) return 1;
-  const prefix = `${CONTENT_ROOT_PATH}/`;
+  const root = contentRootPath();
+  if (norm === root) return 1;
+  if (isFolderProject()) return 1 + norm.split("/").filter(Boolean).length;
+  const prefix = `${root}/`;
   if (!norm.startsWith(prefix)) {
     const segments = norm.split("/").filter(Boolean);
     return Math.max(1, segments.length);
@@ -212,7 +220,7 @@ export function resolveFileMoveTarget(
   const nestTarget = parseFileNestDropId(overRaw);
   if (nestTarget !== null) {
     if (isPanelReadOnlyFile(nestTarget)) return null;
-    const destParent = nestTarget || CONTENT_ROOT_PATH;
+    const destParent = nestTarget || contentRootPath();
     if (sourceIsDir && (destParent === sourcePath || isDescendantDir(sourcePath, destParent))) return null;
     if (parentPath(sourcePath) === destParent) return null;
     return destParent;

@@ -1,4 +1,4 @@
-"""Walk an automation graph from a starter and execute builtin / plugin nodes."""
+"""Walk a workflow graph from a starter and execute builtin / plugin nodes."""
 
 from __future__ import annotations
 
@@ -9,12 +9,7 @@ import uuid
 from typing import Any
 
 from backend.automations import catalog, plugin
-from backend.automations.store import (
-    KIND_PIPELINE,
-    append_run,
-    get_automation,
-    normalize_kind,
-)
+from backend.automations.store import all_workflows, append_run, get_workflow, runs_here
 
 _log = logging.getLogger("automations")
 _MAX_STEPS = 256
@@ -27,12 +22,11 @@ def _announce_run(wf: dict[str, Any], *, phase: str, detail: str = "", run_id: s
     wid = str(wf.get("id") or "").strip()
     if not wid:
         return
-    kind = normalize_kind(wf.get("kind"))
     title = str(wf.get("name") or wid)
     payload = {
         "type": "background_job",
         "id": f"graph:{wid}",
-        "source": kind,
+        "source": "workflow",
         "title": title,
         "detail": detail,
         "phase": phase,
@@ -68,16 +62,22 @@ _ACTION_TYPES = frozenset(
 )
 
 
-def run_automation(
+def run_workflow(
     workflow_id: str,
     *,
     trigger_id: str = "",
     payload: dict[str, Any] | None = None,
     starter_id: str = "",
+    prompt: str = "",
+    files: list[Any] | None = None,
+    caller_conv_id: str = "",
 ) -> dict[str, Any]:
-    wf = get_automation(workflow_id)
+    """Run one workflow. From a chat (a reference, or a ducky calling the tool) the
+    caller chat gets the files and the Return to user result; ``prompt`` and
+    ``files`` are what the Chat input node passes on."""
+    wf = get_workflow(workflow_id)
     if wf is None:
-        return {"ok": False, "error": "automation not found", "steps": []}
+        return {"ok": False, "error": "workflow not found", "steps": []}
     graph = wf.get("graph") or {}
     nodes = {str(n.get("id")): n for n in (graph.get("nodes") or []) if isinstance(n, dict) and n.get("id")}
     edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
@@ -85,6 +85,11 @@ def run_automation(
     if not starts:
         return {"ok": False, "error": "No start found. Leave an input unconnected or choose a start node.", "steps": [], "id": wf["id"]}
     ctx: dict[str, Any] = dict(payload or {})
+    if prompt:
+        ctx["prompt"] = prompt
+    if files is not None:
+        ctx["files"] = files
+    ctx["caller_conv_id"] = _caller(caller_conv_id or str(ctx.get("caller_conv_id") or ""))
     _prepare_run_ctx(ctx, wf)
     ident_token = _bind_hub_identity(ctx)
     started = time.time()
@@ -126,51 +131,32 @@ def run_automation(
     }
 
 
-def run_pipeline(
-    pipeline_id: str,
-    *,
-    prompt: str = "",
-    files: list[Any] | None = None,
-    caller_conv_id: str = "",
-    payload: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    wf = get_automation(pipeline_id)
-    if wf is None or normalize_kind(wf.get("kind")) != KIND_PIPELINE:
-        return {"ok": False, "error": "pipeline not found", "steps": []}
-    body = dict(payload or {})
-    caller = (caller_conv_id or str(body.get("caller_conv_id") or "")).strip()
-    if not caller:
-        try:
-            from backend.workspace.identity import current
+def _caller(explicit: str) -> str:
+    """The chat this run reports to: given, or the chat whose ducky called the tool."""
+    caller = (explicit or "").strip()
+    if caller:
+        return caller
+    try:
+        from backend.workspace.identity import current
 
-            bound = current()
-        except Exception:
-            bound = None
-        if bound and bound.conv_id:
-            caller = bound.conv_id
-    if prompt:
-        body["prompt"] = prompt
-    if files is not None:
-        body["files"] = files
-    body["caller_conv_id"] = caller
-    return run_automation(pipeline_id, payload=body)
+        bound = current()
+    except Exception:
+        bound = None
+    return str(bound.conv_id) if bound and bound.conv_id else ""
 
 
-def emit_automation(trigger_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def emit_trigger(trigger_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Run every enabled workflow on this PC whose trigger node matches ``trigger_id``."""
     tid = (trigger_id or "").strip()
     if not tid:
         return {"ok": False, "error": "trigger_id required", "runs": []}
-    from backend.automations.store import _all
-
     runs: list[dict[str, Any]] = []
-    for wf in _all():
-        if not wf.get("enabled"):
-            continue
-        if normalize_kind(wf.get("kind")) == KIND_PIPELINE:
+    for wf in all_workflows():
+        if not wf.get("enabled") or not runs_here(wf):
             continue
         nodes = (wf.get("graph") or {}).get("nodes") or []
         if any(_node_matches_trigger(n, tid, payload) for n in nodes if isinstance(n, dict)):
-            runs.append(run_automation(str(wf["id"]), trigger_id=tid, payload=payload or {}))
+            runs.append(run_workflow(str(wf["id"]), trigger_id=tid, payload=payload or {}))
     return {"ok": True, "trigger_id": tid, "runs": runs}
 
 
@@ -468,10 +454,6 @@ def _run_message_and_wait(
 
 
 def _prepare_run_ctx(ctx: dict[str, Any], wf: dict[str, Any]) -> None:
-    kind = normalize_kind(wf.get("kind"))
-    ctx.setdefault("_workflow_kind", kind)
-    if kind != KIND_PIPELINE:
-        return
     caller = str(ctx.get("caller_conv_id") or "").strip()
     if caller and not ctx.get("artifact_dir"):
         from backend.automations.artifacts import caller_run_dir
@@ -480,7 +462,7 @@ def _prepare_run_ctx(ctx: dict[str, Any], wf: dict[str, Any]) -> None:
         ctx["pipeline_run_id"] = run_id
         ctx["artifact_dir"] = str(caller_run_dir(caller, run_id))
     ctx.setdefault("files", [])
-    if _pipeline_needs_group(wf):
+    if _needs_group(wf, caller):
         _ensure_pipeline_group(ctx, wf)
 
 
@@ -521,10 +503,12 @@ def _caller_group_home(caller: str) -> tuple[str, bool]:
     return folder, False
 
 
-def _pipeline_needs_group(wf: dict[str, Any]) -> bool:
-    """Only swarm tiles need a hub. Image/device graphs must not kidnap the chat."""
+def _needs_group(wf: dict[str, Any], caller: str) -> bool:
+    """Only swarm tiles need a hub: Agent nodes always, Spawn ducky only when run
+    from a chat (a scheduled spawn must not open a group every tick). Image/device
+    graphs must not kidnap the chat."""
     types = {str(n.get("type") or "") for n in (wf.get("graph") or {}).get("nodes") or [] if isinstance(n, dict)}
-    return bool(types & {"pipeline.agent", "ducky.spawn"})
+    return "pipeline.agent" in types or (bool(caller) and "ducky.spawn" in types)
 
 
 def _ensure_pipeline_group(ctx: dict[str, Any], wf: dict[str, Any]) -> None:
@@ -538,15 +522,15 @@ def _ensure_pipeline_group(ctx: dict[str, Any], wf: dict[str, Any]) -> None:
         from backend.tools.panel.ducky_panel import _panel_api
 
         created = _panel_api().group_create(
-            name=str(wf.get("name") or "Pipeline"),
+            name=str(wf.get("name") or "Workflow"),
             folder_id=parent_folder,
             open_tab=False,
         )
     except Exception as exc:
-        _log.warning("pipeline group_create failed: %s", exc)
+        _log.warning("workflow group_create failed: %s", exc)
         return
     if not created.get("ok"):
-        _log.warning("pipeline group_create failed: %s", created.get("error"))
+        _log.warning("workflow group_create failed: %s", created.get("error"))
         return
     hub_id = str(created.get("id") or "").strip()
     ctx["group_id"] = hub_id
@@ -566,7 +550,8 @@ def _plugin_ctx(cfg: dict[str, Any], payload: dict[str, Any], node: dict[str, An
         "config": cfg,
         "payload": payload,
         "node": node,
-        "kind": str(payload.get("_workflow_kind") or "automation"),
+        # Plugin API field from before workflows: "pipeline" = run from a chat.
+        "kind": "pipeline" if payload.get("caller_conv_id") else "automation",
         "files": payload.get("files") or [],
         "artifact_dir": str(payload.get("artifact_dir") or ""),
     }

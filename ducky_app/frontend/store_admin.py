@@ -28,7 +28,7 @@ TABLES: dict[str, tuple[str, str, str, bool]] = {
     "plugin_kv": ("Plugin cache", "settings", "Per-plugin cache and prefs per account; sensitive rows are encrypted.", False),
     "plugin_data": ("Plugin data", "settings", "Plugin docs and file metadata, per account.", False),
     "scope_sync": ("Sync state", "settings", "Cursor and status per synced scope.", False),
-    "project_scopes": ("Project scopes", "settings", "Which data scope each project uses, per account.", False),
+    "plugin_scopes": ("Plugin data scopes", "settings", "Where each plugin's data lives (Local or one team), per account.", False),
     "mcp_servers": ("MCP servers", "settings", "Nested MCP server blocks (mcp.json is an export).", False),
     "meta": ("Store metadata", "settings", "Import flags, clean-boot counter, integrity history.", False),
     "runs": ("Change runs", "changes", "Agent write runs the Changes tab can revert.", False),

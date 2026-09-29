@@ -17,15 +17,15 @@ def test_group_save_reload_and_ungroup(kind, monkeypatch, tmp_path):
     monkeypatch.setattr(store, "use_db", lambda *_: False)
     monkeypatch.setattr(store, "_files_dir", lambda: tmp_path)
     monkeypatch.setattr(store, "_announce_graphs_changed", lambda: None)
-    saved = store.save_automation({"name": "Grouped", "kind": kind, "graph": graph()})
-    loaded = store.get_automation(saved["id"])
+    saved = store.save_workflow({"name": "Grouped", "kind": kind, "graph": graph()})
+    loaded = store.get_workflow(saved["id"])
     assert loaded["graph"]["groups"] == graph()["groups"]
     loaded["graph"]["groups"][0]["node_ids"] = ["b"]
-    store.save_automation(loaded)
-    assert store.get_automation(saved["id"])["graph"]["groups"][0]["node_ids"] == ["b"]
+    store.save_workflow(loaded)
+    assert store.get_workflow(saved["id"])["graph"]["groups"][0]["node_ids"] == ["b"]
     loaded["graph"]["groups"] = []
-    store.save_automation(loaded)
-    final = store.get_automation(saved["id"])["graph"]
+    store.save_workflow(loaded)
+    final = store.get_workflow(saved["id"])["graph"]
     assert final["groups"] == []
     assert final["nodes"] == loaded["graph"]["nodes"]
     assert final["edges"] == graph()["edges"]

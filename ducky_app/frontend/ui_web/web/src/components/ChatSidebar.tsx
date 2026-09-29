@@ -704,6 +704,8 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       showHiddenFiles,
       setShowHiddenFiles,
       toggleContentAllProjects,
+      // The create items depend on the project kind (no Verse class in a folder project).
+      projectSlug,
     ],
   );
 

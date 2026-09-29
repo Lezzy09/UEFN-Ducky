@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -114,18 +115,26 @@ def test_upgrade_from_previous_schema_does_not_deadlock(tmp_path: Path) -> None:
     conn = db.connect()
     # Leave a 0008-shaped database so plugin scopes and workflow versions can upgrade.
     conn.execute("DROP TABLE workflow_versions")
-    for table in ("plugin_data", "scope_sync", "project_scopes", "plugin_kv"):
+    for table in ("plugin_data", "scope_sync", "plugin_kv"):
         conn.execute(f"DROP TABLE {table}")
     conn.execute(
         "CREATE TABLE plugin_kv (plugin_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, "
         "encrypted INTEGER NOT NULL DEFAULT 0, updated REAL NOT NULL, PRIMARY KEY (plugin_id, key))"
     )
     conn.execute("INSERT INTO plugin_kv VALUES ('demo', 'es', '{}', 0, 0)")
+    conn.execute("ALTER TABLE projects DROP COLUMN kind")  # 0011 re-adds it
     conn.execute("PRAGMA user_version=8")
     db.reset_for_tests()
 
     done: list[int] = []
-    t = threading.Thread(target=lambda: done.append(db.user_version(db.connect())), daemon=True)
+
+    def _migrate() -> None:
+        try:
+            done.append(db.user_version(db.connect()))
+        finally:
+            db.close_thread_connections()
+
+    t = threading.Thread(target=_migrate, daemon=True)
     t.start()
     t.join(timeout=20)
     assert done == [db.head_version()], "connect() deadlocked while migrating"
@@ -155,6 +164,20 @@ def test_integrity_ok_and_snapshot_keeps_newest_three(tmp_path: Path) -> None:
     assert db.newest_snapshot() is not None
 
 
+def _remove_sidecars(path: Path) -> None:
+    """WAL can stay locked for a moment after close when the machine is busy."""
+    for side in db.SIDECAR_NAMES:
+        sidecar = path.parent / side
+        for _ in range(40):
+            try:
+                sidecar.unlink(missing_ok=True)
+                break
+            except PermissionError:
+                time.sleep(0.05)
+        else:
+            sidecar.unlink(missing_ok=True)
+
+
 def test_corrupt_database_is_restored_from_snapshot(tmp_path: Path) -> None:
     conn = db.connect()
     with db.write_txn(conn):
@@ -165,8 +188,7 @@ def test_corrupt_database_is_restored_from_snapshot(tmp_path: Path) -> None:
     data = bytearray(path.read_bytes())
     data[:100] = b"\0" * 100
     path.write_bytes(bytes(data))
-    for side in db.SIDECAR_NAMES:
-        (path.parent / side).unlink(missing_ok=True)
+    _remove_sidecars(path)
     conn = db.open_checked()
     assert conn.execute("SELECT value FROM settings WHERE key='keep'").fetchone()[0] == "1"
     assert (path.parent / (db.DB_NAME + ".corrupt")).exists()
@@ -179,8 +201,7 @@ def test_corrupt_database_without_snapshot_is_loud(tmp_path: Path) -> None:
     db.reset_for_tests()
     path = db.db_path()
     path.write_bytes(b"not a database at all")
-    for side in db.SIDECAR_NAMES:
-        (path.parent / side).unlink(missing_ok=True)
+    _remove_sidecars(path)
     with pytest.raises(db.StoreError):
         db.open_checked()
 

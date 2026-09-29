@@ -1,12 +1,9 @@
-"""Builtin + enabled-plugin automation / pipeline node catalog."""
+"""Builtin + enabled-plugin workflow node catalog (one palette for every workflow)."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from backend.automations.store import KIND_AUTOMATION, KIND_PIPELINE, normalize_kind
-
-_BOTH = [KIND_AUTOMATION, KIND_PIPELINE]
 
 BUILTIN_NODES: list[dict[str, Any]] = [
     {
@@ -14,8 +11,7 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Manual",
         "group": "Starting",
         "role": "starter",
-        "systems": [KIND_AUTOMATION],
-        "description": "Run from the editor Test button or run_automation.",
+        "description": "Run from the editor Test button or run_workflow.",
         "config_fields": [],
     },
     {
@@ -23,7 +19,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Cron / interval",
         "group": "Starting",
         "role": "starter",
-        "systems": [KIND_AUTOMATION],
         "description": "Fires while the panel is running. interval_seconds or 5-field cron.",
         "config_fields": [
             {"id": "interval_seconds", "label": "Interval (seconds)", "type": "number"},
@@ -35,8 +30,7 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Chat input",
         "group": "Starting",
         "role": "starter",
-        "systems": [KIND_PIPELINE],
-        "description": "Pass the text and files sent with this pipeline reference into the next step. Optional: any unconnected input can start a pipeline.",
+        "description": "Pass the text and files sent with this workflow's chat reference into the next step. Optional: any unconnected input can start a workflow.",
         "config_fields": [],
     },
     {
@@ -44,7 +38,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Prompt existing ducky",
         "group": "Duckies",
         "role": "action",
-        "systems": [KIND_AUTOMATION],
         "description": "Send a prompt to a chat id. Does not switch island.",
         "config_fields": [
             {"id": "conv_id", "label": "Chat id", "type": "string"},
@@ -58,7 +51,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Spawn ducky",
         "group": "Duckies",
         "role": "action",
-        "systems": [KIND_AUTOMATION],
         "description": "Create a chat on the current island and send a prompt.",
         "config_fields": [
             {"id": "title", "label": "Title", "type": "string"},
@@ -73,7 +65,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Agent",
         "group": "Agents",
         "role": "action",
-        "systems": [KIND_PIPELINE],
         "description": "Assign a ducky or create one when this workflow runs. Wait for its result and pass files to the next step.",
         "config_fields": [
             {"id": "ducky", "label": "Assign ducky", "type": "ducky"},
@@ -85,7 +76,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Return to user",
         "group": "End",
         "role": "end",
-        "systems": list(_BOTH),
         "description": "End this path and send its result and files back to the user. In a test run, show the result in the run log.",
         "config_fields": [
             {"id": "message", "label": "Message (optional)", "type": "textarea"},
@@ -96,7 +86,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "End workflow",
         "group": "End",
         "role": "end",
-        "systems": list(_BOTH),
         "description": "End this path without posting a reply.",
         "config_fields": [],
     },
@@ -105,7 +94,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Wait",
         "group": "Logic",
         "role": "action",
-        "systems": list(_BOTH),
         "description": "Pause this run (capped at 120s).",
         "config_fields": [{"id": "seconds", "label": "Seconds", "type": "number"}],
     },
@@ -114,7 +102,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "For each",
         "group": "Logic",
         "role": "action",
-        "systems": list(_BOTH),
         "description": "Run the each-wire once per item in a payload list, then follow done.",
         "config_fields": [{"id": "field", "label": "List field", "type": "string"}],
     },
@@ -123,7 +110,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Branch",
         "group": "Logic",
         "role": "action",
-        "systems": list(_BOTH),
         "description": "True/false edges. Data: field equals / contains / exists. Agent: assigned profile decides.",
         "config_fields": [
             {"id": "mode", "label": "Mode (data or agent)", "type": "string"},
@@ -140,7 +126,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Call tool",
         "group": "Tools",
         "role": "action",
-        "systems": list(_BOTH),
         "description": "Call a named host or plugin MCP tool.",
         "config_fields": [
             {"id": "name", "label": "Tool name", "type": "string"},
@@ -152,7 +137,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Open UEFN project",
         "group": "UEFN",
         "role": "action",
-        "systems": list(_BOTH),
         "description": "Start UEFN if closed, select this workspace and wait for the chosen island before continuing.",
         "config_fields": [
             {"id": "project", "label": "UEFN project", "type": "project"},
@@ -164,7 +148,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Launch UEFN",
         "group": "UEFN",
         "role": "action",
-        "systems": list(_BOTH),
         "description": "Start UEFN from closed and select this workspace. Follow with Wait for UEFN before editor actions.",
         "config_fields": [
             {"id": "project", "label": "UEFN project", "type": "project"},
@@ -175,7 +158,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Close UEFN",
         "group": "UEFN",
         "role": "action",
-        "systems": list(_BOTH),
         "description": "WM_CLOSE, press Save, taskkill only if UEFN is still up.",
         "config_fields": [],
     },
@@ -184,7 +166,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Restart UEFN",
         "group": "UEFN",
         "role": "action",
-        "systems": list(_BOTH),
         "description": "Close UEFN, reopen the project, wait until the listener matches.",
         "config_fields": [
             {"id": "project", "label": "UEFN project", "type": "project"},
@@ -196,7 +177,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Wait for UEFN",
         "group": "UEFN",
         "role": "action",
-        "systems": list(_BOTH),
         "description": "Poll until the listener is online and the open island matches (max 300s).",
         "config_fields": [
             {"id": "project", "label": "UEFN project", "type": "project"},
@@ -208,7 +188,6 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Wait for UEFN window",
         "group": "UEFN",
         "role": "action",
-        "systems": list(_BOTH),
         "description": "Wait until a UEFN window title matches (max 300s).",
         "config_fields": [
             {"id": "title_regex", "label": "Title regex", "type": "string"},
@@ -218,42 +197,26 @@ BUILTIN_NODES: list[dict[str, Any]] = [
 ]
 
 
-def normalize_systems(raw: Any) -> list[str]:
-    if raw in (None, "", []):
-        return list(_BOTH)
-    items = [raw] if isinstance(raw, str) else list(raw) if isinstance(raw, list) else []
-    out: list[str] = []
-    for item in items:
-        key = normalize_kind(item)
-        if key not in out:
-            out.append(key)
-    return out or list(_BOTH)
-
-
-def node_in_system(node: dict[str, Any], system: str) -> bool:
-    want = (system or "").strip().lower()
-    if not want:
-        return True
-    return want in normalize_systems(node.get("systems"))
-
-
-def list_nodes(system: str = KIND_AUTOMATION) -> list[dict[str, Any]]:
-    out = [dict(n) for n in BUILTIN_NODES if node_in_system(n, system)]
+def _contributions() -> tuple[dict[str, Any], set[str]]:
     try:
         from backend.uefn_plugins.host import get_ui_contributions
         from backend.uefn_plugins.store import get_enabled_plugin_ids
 
-        enabled = set(get_enabled_plugin_ids())
-        contrib = get_ui_contributions()
+        return get_ui_contributions(), set(get_enabled_plugin_ids())
     except Exception:
-        return out
+        return {}, set()
+
+
+def list_nodes() -> list[dict[str, Any]]:
+    out = [dict(n) for n in BUILTIN_NODES]
+    contrib, enabled = _contributions()
     for row in contrib.get("automations_triggers") or []:
         parsed = _plugin_node(row, enabled, role="starter", default_group="Triggers")
-        if parsed and node_in_system(parsed, system):
+        if parsed:
             out.append(parsed)
     for row in contrib.get("automations_nodes") or []:
         parsed = _plugin_node(row, enabled, role="action", default_group="")
-        if parsed and node_in_system(parsed, system):
+        if parsed:
             out.append(parsed)
     # Read each plugin's own artwork once, even when it contributes many nodes.
     icons: dict[str, str] = {}
@@ -273,7 +236,14 @@ def list_nodes(system: str = KIND_AUTOMATION) -> list[dict[str, Any]]:
 
 
 def starter_types() -> set[str]:
-    return {n["type"] for n in list_nodes(system="") if n.get("role") == "starter"}
+    return {n["type"] for n in BUILTIN_NODES if n.get("role") == "starter"} | trigger_types()
+
+
+def trigger_types() -> set[str]:
+    """Node types of enabled plugin triggers (no icons read: the list badge uses this)."""
+    contrib, enabled = _contributions()
+    return {parsed["type"] for row in contrib.get("automations_triggers") or []
+            if (parsed := _plugin_node(row, enabled, role="starter", default_group="Triggers"))}
 
 
 def _plugin_node(
@@ -299,7 +269,6 @@ def _plugin_node(
         "description": str(row.get("description") or ""),
         "plugin_id": pid,
         "icon": str(row.get("icon") or ""),
-        "systems": normalize_systems(row.get("systems")),
         "config_fields": _fields(row.get("config_fields") or row.get("fields")),
     }
 

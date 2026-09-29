@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from frontend.deploy import resolve_uefn_project_root
+from frontend.project_kind import project_root_path
 
 
 def normalize_verse_lsp_project_root(project_root: str) -> str:
@@ -13,6 +13,6 @@ def normalize_verse_lsp_project_root(project_root: str) -> str:
     if not raw:
         return ""
     try:
-        return str(resolve_uefn_project_root(Path(raw)))
+        return str(project_root_path(raw))
     except (OSError, ValueError):
         return str(Path(raw).resolve())

@@ -3,7 +3,7 @@ import {
   _peekBackgroundJobsForTests,
   _resetBackgroundActivityForTests,
 } from "./backgroundActivity";
-import { registerOpenPipelinesTab } from "../navigation/openPipelinesTab";
+import { registerOpenWorkflowsTab } from "../navigation/openWorkflowsTab";
 import {
   applyBackgroundJobPush,
   applyGraphFocusPush,
@@ -15,8 +15,7 @@ import {
 } from "./graphActivity";
 
 afterEach(() => {
-  takePendingGraphFocus("pipeline");
-  takePendingGraphFocus("automation");
+  takePendingGraphFocus();
   _resetBackgroundActivityForTests();
 });
 
@@ -31,8 +30,8 @@ describe("graphActivity", () => {
     });
     syncReadyGraphJobs(
       [
-        { id: "idle", name: "Image to island", kind: "pipeline", enabled: true, node_count: 3 },
-        { id: "a", name: "Nightly", kind: "automation", enabled: true, node_count: 2 },
+        { id: "idle", name: "Image to island", enabled: true, node_count: 3 },
+        { id: "a", name: "Nightly", enabled: true, node_count: 2 },
       ],
       _peekBackgroundJobsForTests(),
     );
@@ -48,7 +47,7 @@ describe("graphActivity", () => {
       detail: "Running",
     });
     syncReadyGraphJobs(
-      [{ id: "a", name: "Nightly", kind: "automation", enabled: true, node_count: 2 }],
+      [{ id: "a", name: "Nightly", enabled: true, node_count: 2 }],
       _peekBackgroundJobsForTests(),
     );
     expect(_peekBackgroundJobsForTests()[0]?.phase).toBe("working");
@@ -59,27 +58,26 @@ describe("graphActivity", () => {
     expect(workflowIdFromJobId("graph-run:abc:171000")).toBe("abc");
   });
 
-  it("opens the pipelines editor when chat saves a graph", () => {
+  it("opens the Workflows editor when chat saves a workflow", () => {
     let opened = 0;
-    const stop = registerOpenPipelinesTab(() => {
+    const stop = registerOpenWorkflowsTab(() => {
       opened += 1;
     });
-    applyGraphFocusPush({ type: "graph_focus", kind: "pipeline", id: "p1", action: "saved" });
+    applyGraphFocusPush({ type: "graph_focus", id: "p1", action: "saved" });
     expect(opened).toBe(1);
-    expect(takePendingGraphFocus("pipeline")).toBe("p1");
+    expect(takePendingGraphFocus()).toBe("p1");
     stop();
   });
 
-  it("drops a queued focus when chat deletes that graph", () => {
-    applyGraphFocusPush({ type: "graph_focus", kind: "automation", id: "a1", action: "saved" });
-    applyGraphFocusPush({ type: "graph_focus", kind: "automation", id: "a1", action: "deleted" });
-    expect(takePendingGraphFocus("automation")).toBe("");
+  it("drops a queued focus when chat deletes that workflow", () => {
+    applyGraphFocusPush({ type: "graph_focus", id: "a1", action: "saved" });
+    applyGraphFocusPush({ type: "graph_focus", id: "a1", action: "deleted" });
+    expect(takePendingGraphFocus()).toBe("");
   });
 
   it("queues a graph focus for the editor", () => {
-    requestFocusGraph("pipeline", "play");
-    expect(takePendingGraphFocus("automation")).toBe("");
-    expect(takePendingGraphFocus("pipeline")).toBe("play");
-    expect(takePendingGraphFocus("pipeline")).toBe("");
+    requestFocusGraph("play");
+    expect(takePendingGraphFocus()).toBe("play");
+    expect(takePendingGraphFocus()).toBe("");
   });
 });

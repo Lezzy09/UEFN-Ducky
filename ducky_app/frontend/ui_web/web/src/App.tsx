@@ -77,7 +77,7 @@ function PluginPrefsHydrate() {
 }
 /** App-level wiring for history + undo gestures and view apply on back/forward. */
 /** Agent enable of AI/local plugin → open Store + queue user trust confirm. */
-/** Chat save/delete of a pipeline or automation opens that editor immediately. */
+/** Chat save/delete of a workflow opens the Workflows editor immediately. */
 function GraphFocusBridge() {
   useEffect(() => {
     installAgentEventBus();

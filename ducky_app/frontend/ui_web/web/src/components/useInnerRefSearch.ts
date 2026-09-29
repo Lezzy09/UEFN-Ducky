@@ -3,6 +3,7 @@ import { getApi } from "../hooks/usePanelApi";
 import type { SkillPackFilesDto } from "../types/panel";
 import { innerTextHit, type ChatRef } from "./chatReferences";
 import { noteChatRefFaces } from "./chatRefFaces";
+import { isAbsEncodedPath, isFolderProject } from "../verse-editor/utils/isVerseFile";
 
 interface SkillBody {
   id: string;
@@ -104,7 +105,8 @@ export function useInnerRefSearch(query: string, enabled: boolean, files: ChatRe
         const content: ChatRef[] = [];
         const pushFile = (path: string, preview: string) => {
           const clean = path.replace(/\\/g, "/");
-          if (!clean.startsWith("Content/") || clean.includes(".digest.verse")) return;
+          const inContent = isFolderProject() ? !isAbsEncodedPath(clean) : clean.startsWith("Content/");
+          if (!inContent || clean.includes(".digest.verse")) return;
           const href = `file:${clean}`;
           if (seen.has(href)) return;
           seen.add(href);

@@ -12,7 +12,14 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from frontend.deploy import resolve_uefn_project_root
+from frontend.project_kind import (
+    content_root_for,
+    forget_cached_kind,
+    has_uefnproject,
+    project_kind,
+    project_root_path,
+    resolve_project_root,
+)
 from frontend.settings import PanelSettings, apply_workspace_env
 from frontend.ui_web.project_chats import project_display_name, project_slug
 from frontend.ui_web.recent_projects import (
@@ -32,7 +39,7 @@ def normalize_project_path(path: str) -> str:
     if not raw:
         return ""
     try:
-        return str(resolve_uefn_project_root(Path(raw)))
+        return str(project_root_path(raw))
     except (OSError, ValueError):
         try:
             return str(Path(raw).resolve())
@@ -42,10 +49,14 @@ def normalize_project_path(path: str) -> str:
 
 def get_panel_project_info() -> dict[str, str]:
     root = normalize_project_path(PanelSettings.load().uefn_project_root.strip())
+    kind = project_kind(root)
     return {
         "path": root,
         "name": project_display_name(root),
         "slug": project_slug(root),
+        # 'uefn' island or plain 'folder'; content_root is the Content pane's tree root.
+        "kind": kind,
+        "content_root": content_root_for(kind),
     }
 
 
@@ -64,6 +75,7 @@ def list_panel_projects() -> list[dict[str, str | bool]]:
                 "name": project_display_name(norm),
                 "slug": project_slug(norm),
                 "active": norm == current,
+                "kind": project_kind(norm),
             }
         )
     if current and current not in seen:
@@ -74,6 +86,7 @@ def list_panel_projects() -> list[dict[str, str | bool]]:
                 "name": project_display_name(current),
                 "slug": project_slug(current),
                 "active": True,
+                "kind": project_kind(current),
             },
         )
     return out
@@ -89,15 +102,22 @@ def _push_project_changed(info: dict[str, str]) -> None:
 
 
 def set_panel_project_root(path: str, *, push_ui: bool = True) -> dict[str, str]:
-    """Switch the panel's active UEFN project (same as the header project dropdown)."""
+    """Switch the panel's active project, island or folder (same as the header dropdown)."""
     s = PanelSettings.load()
     raw = (path or "").strip()
+    kind = ""
     if raw:
-        s.uefn_project_root = str(resolve_uefn_project_root(Path(raw)))
+        root, kind = resolve_project_root(raw)
+        s.uefn_project_root = str(root)
     else:
         s.uefn_project_root = ""
     s.validate()
     s.save()
+    # Save the kind before anything asks for it: a new repo with a content/ folder must
+    # never be read as an island by the fallback rule.
+    if s.uefn_project_root:
+        add_recent_project(s.uefn_project_root, kind=kind)
+    forget_cached_kind()
     apply_workspace_env(s.uefn_project_root)
     try:
         from frontend.ui_web.project_files import _invalidate_file_paths_cache
@@ -111,8 +131,6 @@ def set_panel_project_root(path: str, *, push_ui: bool = True) -> dict[str, str]
         clear_diag_cache(s.uefn_project_root or None)
     except Exception:
         pass
-    if s.uefn_project_root:
-        add_recent_project(s.uefn_project_root)
     info = get_panel_project_info()
     if push_ui:
         _push_project_changed(info)
@@ -139,6 +157,8 @@ def _run_project_deploy(root: str, on_log: Callable[[str], None] | None = None) 
 def _deploy_project_once(
     root: str, *, background: bool, on_log: Callable[[str], None] | None = None
 ) -> None:
+    if not has_uefnproject(root):
+        return  # folder projects get no listener init or Python quarantine
     with _deploy_lock:
         if root in _deployed_roots:
             return
@@ -209,7 +229,11 @@ def resolve_panel_project_ref(*, path: str = "", name: str = "") -> str:
 
 
 def delete_panel_project(path: str, *, push_ui: bool = True) -> dict[str, str]:
-    """Remove a project from recents, AppData, and the Ducky init script (not the project folder)."""
+    """Remove a project from recents, AppData, and the Ducky init script (not the project folder).
+
+    Folder projects only leave the list: the island cleanup below checks for a real
+    ``*.uefnproject`` and does nothing to a plain folder.
+    """
     norm = normalize_project_path(path)
     if not norm:
         raise ValueError("Invalid project path")

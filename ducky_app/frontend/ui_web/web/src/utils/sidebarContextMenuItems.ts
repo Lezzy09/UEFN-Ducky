@@ -1,4 +1,5 @@
 import type { ContextMenuItem } from "../components/ContextMenu";
+import { isFolderProject } from "../verse-editor/utils/isVerseFile";
 
 export function contextMenuSeparator(id: string): ContextMenuItem {
   return { id, label: "", separator: true };
@@ -24,7 +25,8 @@ export function fileTreeCreateItems(
 ): ContextMenuItem[] {
   return [
     { id: "new-folder", label: "New Folder", onClick: onNewFolder },
-    { id: "new-verse", label: "New Verse class", onClick: onNewVerse },
+    // Verse classes belong to UEFN islands; a folder project gets folders and files.
+    ...(isFolderProject() ? [] : [{ id: "new-verse", label: "New Verse class", onClick: onNewVerse }]),
     { id: "new-file", label: "New File", onClick: onNewFile },
   ];
 }

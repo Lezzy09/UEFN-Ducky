@@ -484,7 +484,9 @@ class PanelApiSettingsMixin:
         if "uefn_project_root" in patch:
             raw = str(patch.get("uefn_project_root") or "").strip()
             if raw:
-                s.uefn_project_root = str(_pa.resolve_uefn_project_root(_pa.Path(raw)))
+                from frontend.project_kind import resolve_project_root
+
+                s.uefn_project_root = str(resolve_project_root(raw)[0])
             else:
                 s.uefn_project_root = ""
         if "verse_diagnostics_cache_enabled" in patch:

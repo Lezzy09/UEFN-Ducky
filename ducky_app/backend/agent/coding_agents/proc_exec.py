@@ -22,6 +22,77 @@ _STDERR_TAIL_CHARS = 8000
 _STDOUT_TAIL_CHARS = 4000
 
 
+def _kill_windows_tree(pid: int) -> None:
+    """Terminate ``pid`` and its descendants.
+
+    ``taskkill /F /T`` deadlocks here: the CLI's stdout is a pipe, taskkill waits
+    for the parent to exit, and the parent cannot exit while a child still holds
+    the inherited pipe. A 5s timeout then falls through to ``proc.kill()``, which
+    leaves MCP children alive.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    kernel.Process32FirstW.restype = wintypes.BOOL
+    kernel.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    kernel.Process32NextW.restype = wintypes.BOOL
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel.TerminateProcess.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    snap = kernel.CreateToolhelp32Snapshot(0x00000002, 0)
+    if not snap or snap == wintypes.HANDLE(-1).value:
+        return
+    kids: dict[int, list[int]] = {}
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        ok = kernel.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            kids.setdefault(int(entry.th32ParentProcessID), []).append(int(entry.th32ProcessID))
+            ok = kernel.Process32NextW(snap, ctypes.byref(entry))
+    finally:
+        kernel.CloseHandle(snap)
+
+    order: list[int] = []
+    stack = [int(pid)]
+    seen: set[int] = set()
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        stack.extend(kids.get(cur, []))
+        order.append(cur)
+    for target in reversed(order):
+        handle = kernel.OpenProcess(0x0001, False, target)
+        if not handle:
+            continue
+        kernel.TerminateProcess(handle, 1)
+        kernel.CloseHandle(handle)
+
+
 def _terminate_process_tree(proc: subprocess.Popen) -> None:
     """Cancel this owned CLI tree before killing its parent on Windows.
 
@@ -32,18 +103,7 @@ def _terminate_process_tree(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
     if os.name == "nt":
-        taskkill = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
-        try:
-            subprocess.run(
-                [taskkill, "/F", "/T", "/PID", str(proc.pid)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                timeout=5,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+        _kill_windows_tree(int(proc.pid))
     if proc.poll() is None:
         proc.kill()
 

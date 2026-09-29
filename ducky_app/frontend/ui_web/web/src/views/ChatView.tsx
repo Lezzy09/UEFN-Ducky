@@ -47,15 +47,14 @@ import {
   planTabId,
   pluginUiTabId,
   settingsTabId,
-  automationsTabId,
+  workflowsTabId,
   changesTabId,
   usageTabId,
 } from "../types/panel";
 import { registerShowChatComposer } from "../navigation/openChatComposer";
 import { registerOpenSettingsEditorTab } from "../navigation/openSettingsTab";
 import { registerOpenChangesTab } from "../navigation/openChangesTab";
-import { registerOpenAutomationsTab } from "../navigation/openAutomationsTab";
-import { registerOpenPipelinesTab } from "../navigation/openPipelinesTab";
+import { registerOpenWorkflowsTab } from "../navigation/openWorkflowsTab";
 import { emitAppHook } from "../sfx/appHooks";
 import { registerOpenDiscordTab, setDiscordTabOpen } from "../navigation/openDiscordTab";
 import { registerOpenPlanTab, type OpenPlanRequest } from "../navigation/openPlanTab";
@@ -308,20 +307,16 @@ function ChatViewBody({ layoutMode, sidebarRefresh, projectSlug, projectPath }: 
     return registerOpenChangesTab(openChangesTab);
   }, [openChangesTab]);
 
-  const openAutomationsTab = useCallback(() => {
-    const id = automationsTabId();
+  const openWorkflowsTab = useCallback(() => {
+    const id = workflowsTabId();
     void openOrFocusTab(id, () =>
-      openTab({ id, kind: "automations", name: "Workflows" }, { activate: true }),
+      openTab({ id, kind: "workflows", name: "Workflows" }, { activate: true }),
     );
   }, [openTab]);
 
   useEffect(() => {
-    return registerOpenAutomationsTab(openAutomationsTab);
-  }, [openAutomationsTab]);
-
-  useEffect(() => {
-    return registerOpenPipelinesTab(openAutomationsTab);
-  }, [openAutomationsTab]);
+    return registerOpenWorkflowsTab(openWorkflowsTab);
+  }, [openWorkflowsTab]);
 
   const openDuckyProfileTab = useCallback(
     (req: { profileId: string; name: string; duckyStyle?: string }) => {

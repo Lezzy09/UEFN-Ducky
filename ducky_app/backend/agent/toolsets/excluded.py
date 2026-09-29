@@ -6,6 +6,8 @@ from __future__ import annotations
 EXCLUDED_TOOLS = frozenset(
     {
         "shutdown",
+        # Claude Code's --permission-prompt-tool hook, not an agent tool.
+        "ducky_permission_prompt",
         "ai_scene_command",
         "ai_generate_python",
         "listener_command",

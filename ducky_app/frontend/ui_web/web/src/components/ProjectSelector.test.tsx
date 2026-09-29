@@ -48,3 +48,35 @@ it("serializes rapid selections and skips superseded queued projects", async () 
   expect(mocks.api.set_project_root.mock.calls).toEqual([["C:/B"], ["C:/D"]]);
   expect(changed).toHaveBeenCalledOnce();
 });
+
+it("marks each recent project as an island or a folder", async () => {
+  mocks.api.list_recent_projects.mockResolvedValue([
+    { name: "Tycoony", path: "C:/Tycoony", slug: "t", active: false, kind: "uefn" },
+    { name: "UEFN-Ducky-Release", path: "C:/repo", slug: "r", active: true, kind: "folder" },
+  ]);
+  render(<ProjectSelector embedded project={{ path: "C:/repo", name: "UEFN-Ducky-Release", slug: "r", kind: "folder" }} />);
+  await act(async () => {});
+  expect(screen.getByTitle("UEFN island")).toBeTruthy();
+  expect(screen.getByTitle("Folder project")).toBeTruthy();
+});
+
+it("never warns about a UEFN mismatch while a folder project is open", async () => {
+  const folder = { path: "C:/repo", name: "repo", slug: "r", kind: "folder" as const };
+  const { unmount } = render(
+    <ProjectSelector embedded project={folder} uefnProjectName="Tycoony" projectMatch={false} listenerOnline />,
+  );
+  await act(async () => {});
+  expect(screen.queryByText(/has/)).toBeNull();
+  unmount();
+  render(
+    <ProjectSelector
+      embedded
+      project={{ path: "C:/A", name: "A", slug: "A", kind: "uefn" }}
+      uefnProjectName="Tycoony"
+      projectMatch={false}
+      listenerOnline
+    />,
+  );
+  await act(async () => {});
+  expect(screen.getByText("Tycoony", { selector: "strong" })).toBeTruthy();
+});

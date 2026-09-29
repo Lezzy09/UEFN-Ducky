@@ -158,6 +158,10 @@ class Conversation:
     web_access_denied: bool = False
     """This chat refused web search."""
 
+    agent_allow_rules: list[str] = field(default_factory=list)
+    """Coding-agent actions the user chose "always allow in this chat" for on an approval
+    card (``backend.tools.panel.permission_prompt``), e.g. ``Bash:git status``."""
+
     web_fetch_urls: list[str] = field(default_factory=list)
     """Canonical URLs from the latest web_search. The only fetch allowlist."""
 
@@ -208,6 +212,7 @@ class Conversation:
             "file_count": int(self.file_count or 0),
             "web_access_allowed": bool(self.web_access_allowed),
             "web_access_denied": bool(self.web_access_denied),
+            "agent_allow_rules": [str(r) for r in (self.agent_allow_rules or []) if str(r).strip()],
             "web_fetch_urls": [str(u) for u in (self.web_fetch_urls or [])],
         }
 
@@ -302,6 +307,11 @@ class Conversation:
             file_count=int(d.get("file_count", 0) or 0),
             web_access_allowed=bool(d.get("web_access_allowed", False)),
             web_access_denied=bool(d.get("web_access_denied", False)),
+            agent_allow_rules=(
+                [str(r) for r in d["agent_allow_rules"] if str(r).strip()]
+                if isinstance(d.get("agent_allow_rules"), list)
+                else []
+            ),
             web_fetch_urls=(
                 [str(u) for u in d["web_fetch_urls"] if str(u).strip()]
                 if isinstance(d.get("web_fetch_urls"), list)

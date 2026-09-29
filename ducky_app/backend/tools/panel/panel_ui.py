@@ -37,8 +37,7 @@ _ROUTES = (
     "settings.log_errors",
     "chat",
     "changes",
-    "automations",
-    "pipelines",
+    "workflows",
     "skills_studio",
     "terminals",
     "plans",
@@ -51,6 +50,7 @@ _MAX_WALKTHROUGH_WAIT_S = 300.0
 # panel close). A timed-out ask left the questionnaire on screen while the
 # agent "proceeded anyway" and the eventual answer resolved into nothing.
 _MAX_ASK_USER_WAIT_S = float("inf")
+_MAX_ASK_USER_DETAIL_CHARS = 4000
 _MAX_ASK_USER_QUESTIONS = 8
 
 
@@ -141,16 +141,23 @@ def _normalize_ask_user_questions(
                     "description": str(opt.get("description") or "").strip(),
                 }
             )
-        cleaned.append(
-            {
-                "id": qid,
-                "prompt": prompt,
-                "options": options,
-                "allow_multiple": bool(question.get("allow_multiple")),
-                "allow_free_text": bool(question.get("allow_free_text", True)),
-                "required": bool(question.get("required", True)),
-            }
-        )
+        row: dict[str, Any] = {
+            "id": qid,
+            "prompt": prompt,
+            "options": options,
+            "allow_multiple": bool(question.get("allow_multiple")),
+            "allow_free_text": bool(question.get("allow_free_text", True)),
+            "required": bool(question.get("required", True)),
+        }
+        # Optional: verbatim text shown in a code block (an approval card's command)
+        # and a caution line above the options.
+        detail = str(question.get("detail") or "").rstrip()
+        if detail:
+            row["detail"] = detail[:_MAX_ASK_USER_DETAIL_CHARS]
+        warning = str(question.get("warning") or "").strip()
+        if warning:
+            row["warning"] = warning[:500]
+        cleaned.append(row)
     return cleaned
 
 
@@ -161,8 +168,8 @@ def ducky_ui_navigate(route: str, item_id: str = "", pretty: bool = False) -> st
     route: one of settings, settings.general, settings.llms, settings.mcp_plugins,
     settings.skills, settings.appearance, settings.duckies, settings.plans,
     settings.memory, settings.languages, settings.log_errors, chat, changes,
-    automations, skills_studio, terminals, plans, project_picker. `changes` opens the
-    project-wide ledger. `automations` opens the workflow editor.
+    workflows, skills_studio, terminals, plans, project_picker. `changes` opens the
+    project-wide ledger. `workflows` opens the Workflows editor.
     `item_id` targets a row (e.g. a chat/conv id).
     Returns {ok, route}. Needs an open panel; UEFN may be offline.
     Example: ducky_ui_navigate("settings.mcp_plugins").

@@ -29,18 +29,16 @@ from backend.uefn_plugins.scopes import PluginData
 
 
 class _Who:
-    """Which account is signed in and which project is open (both read at call time)."""
+    """Which account is signed in (read at call time)."""
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from frontend import duckyos_account
 
-        self.account, self.project = "", ""
+        self.account = ""
         monkeypatch.setattr(duckyos_account, "account_key", lambda blob=None: self.account)
-        monkeypatch.setattr(scopes, "current_project", lambda: self.project)
 
-    def be(self, email: str, project: str = "proj") -> str:
+    def be(self, email: str) -> str:
         self.account = f"https://uefnducky.org|{email}" if email else ""
-        self.project = project
         return scopes.account_id()
 
 
@@ -168,57 +166,105 @@ def account_keys(monkeypatch: pytest.MonkeyPatch):
     data_crypto.reset_for_tests()
 
 
-def _sync(store: FakeStore) -> dict[str, Any]:
-    s = scopes.active_scope()
+def _sync(store: FakeStore, plugin: str = "brainrot-tcg") -> dict[str, Any]:
+    s = scopes.active_scope(plugin)
     return team_sync.sync_team(s["account"], s["id"], force=True, transport=store.transport(s["account"]))
 
 
-def _join(store: FakeStore, who: _Who, email: str, team: str, label: str) -> str:
+def _join(store: FakeStore, who: _Who, email: str, team: str, label: str, plugin: str = "brainrot-tcg") -> str:
     aid = who.be(email)
     store.members.setdefault(team, set()).add(aid)
-    scopes.link_project(team, label=label, members=2)
+    scopes.link_plugin(plugin, team, label=label, members=2)
     return aid
 
 
 # --------------------------------------------------------------------------- scopes on one PC
 
 
-def test_accounts_projects_and_local_never_share_rows_or_folders(who: _Who, store: FakeStore) -> None:
+def test_accounts_plugins_and_local_never_share_rows_or_folders(who: _Who, store: FakeStore) -> None:
     from frontend.ui_web import plugin_host_api as pha
 
     cards = PluginData("brainrot-tcg")
+    scenes = PluginData("forge")
     ana = who.be("ana@x.org")
     cards.put("card.pip", {"name": "Pip"})
     cards.put_file("assets/pip.png", b"PNG-ana")
     pha.cache_set("brainrot-tcg", "ui", {"tab": "cards"})
-    ana_dir = scopes.plugin_dir(scopes.active_scope(), "brainrot-tcg")
+    ana_dir = scopes.plugin_dir(scopes.active_scope("brainrot-tcg"), "brainrot-tcg")
     assert ana_dir.is_dir()
 
     bo = who.be("bo@x.org")
     assert bo != ana and cards.get("card.pip") is None and cards.keys() == [] and cards.files() == []
     assert pha.cache_get("brainrot-tcg", "ui") == {}
-    bo_dir = scopes.plugin_dir(scopes.active_scope(), "brainrot-tcg")
+    bo_dir = scopes.plugin_dir(scopes.active_scope("brainrot-tcg"), "brainrot-tcg")
     assert bo_dir != ana_dir and ana not in str(bo_dir)
 
     local = who.be("")
     assert local == scopes.LOCAL and cards.get("card.pip") is None
     cards.put("card.pip", {"name": "Local Pip"})
 
-    who.be("ana@x.org", project="other")
-    assert cards.get("card.pip") == {"name": "Pip"}  # Personal follows the account, any project
-    assert cards.get_file("assets/pip.png") == b"PNG-ana"
-
-    # Switching project switches data: this project → team T, the other stays Personal.
-    store.members["teamT"] = {who.be("ana@x.org", project="game")}
-    scopes.link_project("teamT", label="Alpha Studio")
-    assert scopes.active_scope()["label"] == "Alpha Studio" and cards.keys() == []
+    # The pick is per plugin: BrainrotTCG → team T shows the team's copy, Forge stays Local.
+    store.members["teamT"] = {who.be("ana@x.org")}
+    scenes.put("scene.a", {"by": "ana"})
+    scopes.link_plugin("brainrot-tcg", "teamT", label="Alpha Studio")
+    assert scopes.active_scope("brainrot-tcg")["label"] == "Alpha Studio" and cards.keys() == []
+    assert scopes.active_scope("forge")["kind"] == "personal" and scenes.get("scene.a") == {"by": "ana"}
     cards.put("card.pip", {"name": "Team Pip"})
-    who.be("ana@x.org", project="other")
-    assert cards.get("card.pip") == {"name": "Pip"}
-    who.be("ana@x.org", project="game")
+    scopes.link_plugin("brainrot-tcg", scopes.PERSONAL)
+    assert cards.get("card.pip") == {"name": "Pip"}  # nothing moved on either switch
+    assert cards.get_file("assets/pip.png") == b"PNG-ana"
+    scopes.link_plugin("brainrot-tcg", "teamT")
     assert cards.get("card.pip") == {"name": "Team Pip"}
     who.be("")
     assert cards.get("card.pip") == {"name": "Local Pip"}
+    with pytest.raises(ValueError, match="Sign in"):
+        scopes.link_plugin("brainrot-tcg", "teamT")
+
+
+def test_two_teams_of_one_account_never_share_a_plugins_data(who: _Who, store: FakeStore) -> None:
+    cards = PluginData("brainrot-tcg")
+    ana = _join(store, who, "ana@x.org", "teamT", "Alpha Studio")
+    _join(store, who, "ana@x.org", "teamU", "Beta Crew", plugin="forge")
+    _sync(store)
+    _sync(store, "forge")
+    cards.put("card.pip", {"team": "T"})
+    _sync(store)
+    # Switching BrainrotTCG to team U shows U's own (empty) copy: T's card never arrives there.
+    scopes.link_plugin("brainrot-tcg", "teamU")
+    assert cards.keys() == []
+    cards.put("card.mo", {"team": "U"})
+    _sync(store)
+    pushed = {(r["teamId"], p["key"]) for r in store.requests for p in r.get("pushes") or []}
+    assert pushed == {("teamT", "card.pip"), ("teamU", "card.mo")}
+    scopes.link_plugin("brainrot-tcg", "teamT")
+    assert cards.items() == {"card.pip": {"team": "T"}}
+    assert repo.links(ana) == {"brainrot-tcg": "teamT", "forge": "teamU"}
+
+
+def test_copy_local_into_a_team_is_one_way_and_keeps_the_teams_items(who: _Who, store: FakeStore) -> None:
+    cards = PluginData("brainrot-tcg")
+    ana = who.be("ana@x.org")
+    cards.put("card.pip", {"v": "local"})
+    cards.put("card.mo", {"v": "local"})
+    cards.put("token", {"secret": 1}, sensitive=True)
+    cards.put_file("assets/pip.png", b"PNG local")
+    store.members["teamT"] = {ana}
+    scopes.link_plugin("brainrot-tcg", "teamT", label="Alpha Studio")
+    _sync(store)
+    cards.put("card.pip", {"v": "team"})
+    status = team_sync.scope_status("brainrot-tcg")
+    assert status["local"] == {"docs": 2, "files": 1, "docsBytes": status["local"]["docsBytes"], "filesBytes": 9}
+    assert status["current"]["docs"] == 1
+
+    assert scopes.copy_local_into("brainrot-tcg", "teamT") == {"ok": True, "copied": 2, "kept": 1}
+    assert cards.items() == {"card.mo": {"v": "local"}, "card.pip": {"v": "team"}}
+    assert cards.get_file("assets/pip.png") == b"PNG local"
+    assert _sync(store)["state"] == "ok"
+    pushed = sorted(p["key"] for r in store.requests for p in r.get("pushes") or [])
+    assert pushed == ["assets/pip.png", "card.mo", "card.pip"] and "secret" not in repr(store.requests)
+    # The Local copy is untouched.
+    scopes.link_plugin("brainrot-tcg", scopes.PERSONAL)
+    assert cards.items() == {"card.mo": {"v": "local"}, "card.pip": {"v": "local"}}
 
 
 def test_sensitive_docs_stay_personal_and_never_reach_a_sync_request(who: _Who, store: FakeStore, monkeypatch) -> None:
@@ -226,13 +272,13 @@ def test_sensitive_docs_stay_personal_and_never_reach_a_sync_request(who: _Who, 
 
     monkeypatch.setattr(sec, "protect_text", lambda s: b"blob-" + s.encode())
     monkeypatch.setattr(sec, "unprotect_text", lambda b: b[5:].decode())
-    _join(store, who, "ana@x.org", "teamT", "Alpha Studio")
+    _join(store, who, "ana@x.org", "teamT", "Alpha Studio", plugin="discord")
     data = PluginData("discord")
     data.put("token", {"bot": "very-secret"}, sensitive=True)
     data.put("channel", {"id": 7})
     assert data.get("token", sensitive=True) == {"bot": "very-secret"}
     assert "token" not in data.keys()
-    assert _sync(store)["state"] == "ok"
+    assert _sync(store, "discord")["state"] == "ok"
     pushed = [p["key"] for r in store.requests for p in r.get("pushes") or []]
     assert pushed == ["channel"] and "very-secret" not in repr(store.requests)
 
@@ -302,16 +348,17 @@ def test_paused_is_read_only_and_access_lost_deletes_the_team_scope(who: _Who, s
 
     store.paused.add("teamT")
     assert _sync(store)["state"] == "paused"
-    assert scopes.active_scope()["readOnly"] and cards.get("card.pip") == {"v": 1}
+    assert scopes.active_scope("brainrot-tcg")["readOnly"] and cards.get("card.pip") == {"v": 1}
     with pytest.raises(scopes.ReadOnlyScope):
         cards.put("card.pip", {"v": 2})
     store.paused.clear()
-    assert _sync(store)["state"] == "ok" and not scopes.active_scope()["readOnly"]
+    assert _sync(store)["state"] == "ok" and not scopes.active_scope("brainrot-tcg")["readOnly"]
 
     store.members["teamT"].discard(ana)
     assert _sync(store)["state"] == "removed"
     assert not team_dir.exists() and repo.rows(ana, "teamT", "brainrot-tcg", "doc") == []
-    assert scopes.active_scope()["kind"] == "personal"  # the project link went with it
+    assert scopes.active_scope("brainrot-tcg")["kind"] == "personal"  # the plugin's link went with it
+    assert repo.links(ana) == {}
 
 
 def test_scope_picker_lists_only_active_team_private_and_hides_without_beta(who: _Who, monkeypatch) -> None:
@@ -326,11 +373,11 @@ def test_scope_picker_lists_only_active_team_private_and_hides_without_beta(who:
     monkeypatch.setattr(duckyos_account, "teams_snapshot", lambda **_: {"ok": True, "teams": teams})
     monkeypatch.setattr(team_sync, "teams_enabled", lambda: False)
     assert [c["id"] for c in team_sync.scope_choices()["choices"]] == ["personal"]
-    assert team_sync.scope_status()["visible"] is False  # rule 13: no bar, no teaser
+    assert team_sync.scope_status("brainrot-tcg")["visible"] is False  # rule 13: no bar, no teaser
     monkeypatch.setattr(team_sync, "teams_enabled", lambda: True)
     choices = team_sync.scope_choices()["choices"]
     assert [(c["id"], c.get("members")) for c in choices] == [("personal", None), ("teamT", 3)]
-    status = team_sync.link_scope("teamT")
+    status = team_sync.link_scope("brainrot-tcg", "teamT")
     # Fresh link: read-only "waiting" until the first pull lands.
     assert status["scope"] == {"kind": "team", "label": "Alpha Studio", "teamId": "teamT", "readOnly": True}
     assert status["visible"] and status["state"] == "waiting" and status["members"] == 3 and status["pending"] == 0
@@ -366,11 +413,11 @@ def test_first_use_of_a_team_pulls_before_a_plugin_can_seed_defaults(who: _Who, 
     monkeypatch.setattr(team_sync, "Transport", _Offline)
     with pytest.raises(scopes.ReadOnlyScope, match="Waiting for team data"):
         load_or_seed(cards)
-    assert scopes.active_scope()["state"] == "waiting"
+    assert scopes.active_scope("brainrot-tcg")["state"] == "waiting"
     # Back online, the minute sync brings the team's copy and the scope opens.
     assert team_sync.sync_team(cy, "teamT", force=True, transport=store.transport(cy))["state"] == "ok"
     assert load_or_seed(cards)["card.pip"] == {"name": "Pip"}
-    assert not scopes.active_scope()["readOnly"]
+    assert not scopes.active_scope("brainrot-tcg")["readOnly"]
     assert not any(k[3] == "card.default" for k in store.rows)
 
 
@@ -383,7 +430,6 @@ def test_a_bridge_process_follows_an_account_switch_made_in_the_app(monkeypatch)
     from backend.agent import secrets as sec
     from backend.store.repos import secrets as secrets_repo
 
-    monkeypatch.setattr(scopes, "current_project", lambda: "")
     login = lambda email: json.dumps({"base_url": "https://uefnducky.org", "email": email, "device_key": "dky_v1_x"})  # noqa: E731
     sec.set_key("duckyos_account", login("ana@x.org"))
     cards = PluginData("brainrot-tcg")
@@ -413,7 +459,7 @@ def test_another_account_cant_read_the_db_or_files_and_the_owner_can_again(who: 
     from frontend.ui_web import plugin_host_api as pha
 
     cards = PluginData("brainrot-tcg")
-    ana = who.be("ana@x.org", project="")
+    ana = who.be("ana@x.org")
     cards.put("card.pip", {"name": "Pip the secret"})
     cards.put_file("assets/pip.png", b"PNG pip secret")
     pha.cache_set("brainrot-tcg", "ui", {"tab": "secret-tab"})
@@ -427,7 +473,7 @@ def test_another_account_cant_read_the_db_or_files_and_the_owner_can_again(who: 
     assert file_bytes.startswith(data_crypto.FILE_MAGIC) and b"secret" not in file_bytes
 
     # Bo signs in on the same Windows user: his key doesn't open Ana's rows, and hers isn't here.
-    bo = who.be("bo@x.org", project="")
+    bo = who.be("bo@x.org")
     with pytest.raises(OSError):
         data_crypto._open(doc, b"adk:" + _fake_adk())
     with pytest.raises(data_crypto.Locked):
@@ -437,7 +483,7 @@ def test_another_account_cant_read_the_db_or_files_and_the_owner_can_again(who: 
     assert bo != ana and cards.get("card.pip") is None
 
     # Ana back in: everything opens.
-    who.be("ana@x.org", project="")
+    who.be("ana@x.org")
     assert cards.get("card.pip") == {"name": "Pip the secret"}
     assert cards.get_file("assets/pip.png") == b"PNG pip secret"
     assert pha.cache_get("brainrot-tcg", "ui") == {"tab": "secret-tab"}
@@ -457,7 +503,7 @@ def test_old_plaintext_rows_are_sealed_once_and_verified(who: _Who, monkeypatch)
     legacy = base64.b64encode(protect_text(json.dumps({"bot_token": "tok"}))).decode("ascii")
     plugin_kv.set("discord", "token", None, encrypted_b64=legacy, account=plugin_kv.UNCLAIMED, scope="personal")
 
-    ana = who.be("ana@x.org", project="")
+    ana = who.be("ana@x.org")
     assert pha.cache_get("translation", "es") == {"Hello": "Hola"}
     assert pha.cache_get("discord", "token") == {"bot_token": "tok"}
     assert plugin_kv.unsealed_rows(ana, data_crypto.PREFIX) == []
@@ -480,7 +526,6 @@ def test_offline_restart_uses_the_device_wrapped_key_and_sign_out_drops_it(monke
     from frontend import duckyos_account
     from frontend.ui_web import agent_modes
 
-    monkeypatch.setattr(scopes, "current_project", lambda: "")
     monkeypatch.setattr(agent_modes, "push_ui_event", lambda event: None)
     duckyos_account._save_blob({"base_url": "https://uefnducky.org", "email": "ana@x.org", "device_key": "dky_v1_ana"})
     cards = PluginData("brainrot-tcg")
@@ -510,8 +555,8 @@ def test_no_key_yet_is_read_only_and_never_writes_plaintext(who: _Who) -> None:
     from frontend.ui_web import plugin_host_api as pha
 
     ADK_ONLINE["on"] = False  # first sign-in, offline
-    cy = who.be("cy@x.org", project="")
-    assert scopes.active_scope()["state"] == "locked" and scopes.active_scope()["readOnly"]
+    cy = who.be("cy@x.org")
+    assert scopes.active_scope("brainrot-tcg")["state"] == "locked" and scopes.active_scope("brainrot-tcg")["readOnly"]
     with pytest.raises(scopes.ReadOnlyScope, match="data key"):
         PluginData("brainrot-tcg").put("card.pip", {"v": 1})
     with pytest.raises(data_crypto.Locked):

@@ -33,13 +33,12 @@ def test_large_output_is_delivered_but_only_bounded_diagnostics_are_retained(tmp
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows process tree cleanup")
 def test_tree_kill_targets_only_the_owned_pid_and_falls_back(monkeypatch):
-    calls = []
+    killed_pids = []
     killed = []
     proc = SimpleNamespace(pid=123, poll=lambda: None, kill=lambda: killed.append(True))
-    monkeypatch.setattr(proc_exec.subprocess, "run", lambda argv, **kw: calls.append((argv, kw)))
+    monkeypatch.setattr(proc_exec, "_kill_windows_tree", lambda pid: killed_pids.append(pid))
     proc_exec._terminate_process_tree(proc)
-    assert calls[0][0][1:] == ["/F", "/T", "/PID", "123"]
-    assert calls[0][1]["timeout"] == 5
+    assert killed_pids == [123]
     assert killed == [True]
 
 
