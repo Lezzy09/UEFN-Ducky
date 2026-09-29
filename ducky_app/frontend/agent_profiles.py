@@ -121,25 +121,23 @@ def _patch_profile(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any
 
 
 def _stored_hidden_list(settings: PanelSettings) -> list[str]:
-    """Hide-list as stored. [] means show every built-in. None means hide all.
+    """Hide-list as stored. [] and an unset list both show every built-in.
 
+    Never treat a missing list as every bundled id. One delete used to persist
+    that expansion and, with the explicit flag, hide the whole library.
     Never use ``hidden or bundled_ids()`` — an empty list is meaningful
-    (show all) and is falsy in Python, so that form hides every sibling.
+    (show all) and is falsy in Python.
     """
     raw = settings.hidden_bundled_agent_profile_ids
-    if raw is None or not isinstance(raw, list):
-        return list(bundled_profile_ids())
+    if not isinstance(raw, list):
+        return []
     return [str(x).strip() for x in raw if str(x).strip()]
 
 
 def _hidden_bundled_ids(settings: PanelSettings) -> frozenset[str]:
     raw = settings.hidden_bundled_agent_profile_ids
-    if raw is None:
-        return bundled_profile_ids()
-    if not isinstance(raw, list):
-        return bundled_profile_ids()
-    if len(raw) == 0:
-        # Legacy installs (pre opt-out default) keep built-ins visible.
+    if not isinstance(raw, list) or len(raw) == 0:
+        # Unset or empty keeps built-ins visible.
         return frozenset()
     return frozenset(str(x).strip() for x in raw if str(x).strip())
 
@@ -159,10 +157,16 @@ def _is_empty_or_poison(
     return bool(override_ids) and hidden == (bundled - override_ids)
 
 
+def _custom_profile_ids(settings: PanelSettings) -> frozenset[str]:
+    custom = settings.agent_profiles if isinstance(settings.agent_profiles, list) else []
+    return frozenset(
+        str(item.get("id") or "").strip()
+        for item in custom
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    )
+
+
 def _heal_hidden_if_poisoned(settings: PanelSettings, *, persist: bool = True) -> PanelSettings:
-    # A deliberate removal can look identical to the old hide-all bug.
-    if settings.agent_profile_visibility_explicit:
-        return settings
     raw = settings.hidden_bundled_agent_profile_ids
     if not isinstance(raw, list) or not raw:
         return settings
@@ -170,7 +174,12 @@ def _heal_hidden_if_poisoned(settings: PanelSettings, *, persist: bool = True) -
     hidden = frozenset(str(x).strip() for x in raw if str(x).strip())
     overrides = settings.agent_profile_overrides if isinstance(settings.agent_profile_overrides, dict) else {}
     override_ids = frozenset(str(k).strip() for k in overrides if str(k).strip())
-    if not _is_empty_or_poison(hidden, override_ids, bundled):
+    # Hiding every template, with no rename and no custom ducky, is the
+    # unset-list bug. A shorter hide-list is a real removal and stays removed.
+    accidental_hide_all = hidden == bundled and not override_ids and not _custom_profile_ids(settings)
+    if settings.agent_profile_visibility_explicit and not accidental_hide_all:
+        return settings
+    if not accidental_hide_all and not _is_empty_or_poison(hidden, override_ids, bundled):
         return settings
     settings.hidden_bundled_agent_profile_ids = []
     if persist:
