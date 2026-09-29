@@ -63,6 +63,7 @@ import { installModelsCatalogAutoRefresh } from "./hooks/modelsCatalogCache";
 import { AskUserHost } from "./ask-user";
 import { UiRpcBridge } from "./ui-targets/UiRpcBridge";
 import { WalkthroughHost } from "./walkthrough";
+import { GatewaySetupNotice } from "./components/GatewaySetupNotice";
 // App-level ErrorBoundary lives in main.tsx.
 
 import { decodeFocusParam } from "./hooks/useFocusWindow";
@@ -253,6 +254,7 @@ export default function App() {
       <UiRpcBridge />
       <AskUserHost />
       <WalkthroughHost />
+      <GatewaySetupNotice />
       <div className="app-container">
         <div id="ducky-skin-frame" className="ducky-skin-slot ducky-skin-slot--frame" aria-hidden="true" />
         <PluginCrashBanner />

@@ -1,0 +1,100 @@
+.gateway-setup {
+  position: fixed;
+  z-index: 2147483200;
+  pointer-events: none;
+}
+
+.gateway-setup--corner {
+  top: 16px;
+  right: 16px;
+  width: min(360px, calc(100vw - 32px));
+}
+
+.gateway-setup-modal,
+.gateway-setup-card,
+.gateway-setup-pill {
+  pointer-events: auto;
+}
+
+.gateway-setup-modal {
+  position: fixed;
+  top: 72px;
+  left: 50%;
+  width: min(440px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  padding: 16px 16px 14px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--card) 94%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  box-shadow: var(--shadow-md);
+  color: var(--fg);
+}
+
+.gateway-setup-card {
+  padding: 14px 14px 12px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--card) 94%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  box-shadow: var(--shadow-md);
+  color: var(--fg);
+}
+
+.gateway-setup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.gateway-setup-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.gateway-setup-min {
+  border: 0;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+.gateway-setup-min:hover {
+  color: var(--fg);
+}
+
+.gateway-setup-modal p,
+.gateway-setup-card p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg);
+}
+
+.gateway-setup-note,
+.gateway-setup-progress {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.gateway-setup-go {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.gateway-setup-pill {
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--card) 94%, var(--bg));
+  color: var(--fg);
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 12px;
+}

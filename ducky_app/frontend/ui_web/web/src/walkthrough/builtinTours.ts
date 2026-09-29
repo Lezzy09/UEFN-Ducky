@@ -3,7 +3,6 @@ import { requestOpenSettings } from "../navigation/openSettingsTab";
 import { getTargetElement, settingsTabTargetId } from "../ui-targets/registry";
 import { listEnabledGatewayTours } from "./pluginWalkthroughs";
 import {
-  ensureStarterLlmGateways,
   markStarterPluginToursCompleted,
   selectLlmsProvider,
   setSuppressStarterPluginTours,
@@ -589,14 +588,13 @@ export const SETTINGS_STORE_TOUR: WalkthroughDef = {
     },
     {
       target: "settings.store.catalog",
-      title: "Starter gateways",
-      body: "First launch only — downloading Anthropic, Cursor, and OpenAI from the Store so you can pick a model.",
+      title: "Gateways and editor plugins",
+      body: "OpenAI, Anthropic, Cursor, and the UEFN editor plugins are offered when you first open the app. Install anything else from this catalog.",
       advance: "next",
       mode: "rect",
       onEnter: async () => {
         requestOpenSettings("Store");
-        await ensureStarterLlmGateways();
-        await wait(400);
+        await wait(200);
       },
     },
     {
