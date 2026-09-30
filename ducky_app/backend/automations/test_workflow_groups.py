@@ -54,3 +54,24 @@ def test_legacy_graphs_and_invalid_group_containers():
     assert "groups" not in store.normalize_graph(raw)
     raw["groups"] = {"bad": True}
     assert store.normalize_graph(raw)["groups"] == []
+
+
+def test_nested_groups_keep_parents_and_drop_loops_and_empty_boxes():
+    raw = graph()
+    raw["groups"] = [
+        {"id": "outer", "name": "Outer", "node_ids": []},
+        {"id": "inner", "name": "Inner", "node_ids": ["a"], "parent_id": "outer"},
+        {"id": "side", "name": "Side", "node_ids": ["b"], "parent_id": "missing"},
+        {"id": "loop1", "name": "L1", "node_ids": ["c"], "parent_id": "loop2"},
+        {"id": "loop2", "name": "L2", "node_ids": [], "parent_id": "loop1"},
+        {"id": "hollow", "name": "Only an empty child", "node_ids": []},
+        {"id": "empty", "name": "Empty", "node_ids": [], "parent_id": "hollow"},
+    ]
+    groups = store.normalize_graph(raw)["groups"]
+    assert {"id": "outer", "name": "Outer", "node_ids": []} in groups  # holds a group, no nodes of its own
+    assert {"id": "inner", "name": "Inner", "node_ids": ["a"], "parent_id": "outer"} in groups
+    assert {"id": "side", "name": "Side", "node_ids": ["b"]} in groups
+    assert {"id": "loop1", "name": "L1", "node_ids": ["c"]} in groups  # the loop is broken at its first box
+    assert [g["id"] for g in groups] == ["outer", "inner", "side", "loop1"]  # loop2, hollow, empty had nothing inside
+    raw["nodes"] = [n for n in raw["nodes"] if n["id"] != "a"]
+    assert [g["id"] for g in store.normalize_graph(raw)["groups"]] == ["side", "loop1"]

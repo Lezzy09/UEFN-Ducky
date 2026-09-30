@@ -201,8 +201,11 @@ Load `skill_read_subskill("ducky", "ai_plugins")` then follow it. Legal I/O is
    mutators. Tab toggles use `settings.sections`; first-enable gets a
    walkthrough. `save_workflow` opens the Workflows editor and refreshes the
    canvas (`owner` = `local` or a team id from `list_workflows`);
-   `copy_workflow`, `delete_workflow`, `save_workflow_template` /
-   `delete_workflow_template` match the panel. Do not tell the user to open the tab.
+   `copy_workflow`, `delete_workflow`, `set_workflow_folder` (list folders),
+   `save_workflow_template` / `delete_workflow_template` match the panel.
+   Repeated steps belong in a reusable workflow (`flow.input` → … →
+   `flow.output`) that others run with a `workflow.call` node; see
+   `save_workflow`. Do not tell the user to open the tab.
 
 Never git-clone a Store plugin, never edit the EXE, never `ducky_skills_create_pack`
 unless they asked for a skill pack.

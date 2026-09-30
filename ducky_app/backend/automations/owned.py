@@ -29,7 +29,7 @@ LOCAL = "local"
 RUN_CAP = 20
 BEFORE_SYNC_NOTE = "Your copy before sync"
 NO_PERMISSION = "Only members with Manage automations can change team workflows."
-_DOC_FIELDS = ("id", "name", "description", "enabled", "graph", "updated")
+_DOC_FIELDS = ("id", "name", "description", "enabled", "folder", "graph", "updated")
 
 _CLAIMED: set[tuple[str, str]] = set()  # (database file, account) checked this process
 _CLAIM_LOCK = threading.Lock()

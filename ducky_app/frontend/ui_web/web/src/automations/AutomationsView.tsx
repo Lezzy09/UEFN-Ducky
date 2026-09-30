@@ -10,6 +10,7 @@ import type {
   AutomationGraphNodeDto,
   AutomationNodeDto,
   AutomationRunDto,
+  AutomationRunStepDto,
   AutomationSummaryDto,
   AutomationTemplateDto,
   WorkflowOwnersDto,
@@ -25,12 +26,20 @@ import { copyText } from "../utils/copyText";
 import { formatRunLog, runLogHasContent } from "./runLog";
 
 import { isEndNode, nodeLabel, NodeIcon, useNodeFaces } from "./NodeVisuals";
-import { cleanGroups, groupBounds, groupNodes, intersects, selectionRect, ungroupNodes, type GraphRect } from "./workflowGroups";
+import { cleanGroups, groupBounds, groupDepth, groupMembers, groupNodes, intersects, selectionRect, ungroupNodes, type GraphRect } from "./workflowGroups";
+import { buildFolderTree, folderPaths, loadEmptyFolders, movedPath, normalizeFolder, saveEmptyFolders } from "./workflowFolders";
+import { describeSignature } from "./FunctionSettings";
+import { planGroupExtraction } from "./extractGroup";
 import { arrangeGraph, nodeWidth, portPoint, zoomAt, OVERVIEW_ZOOM } from "./graphGeometry";
 const LOG_H_MIN = 140;
 const LOG_H_MAX = 560;
 const LOG_H_DEFAULT = 220;
-const GROUP_ORDER = ["Starting", "Triggers", "Agents", "Duckies", "Tools", "Logic", "End"];
+const GROUP_ORDER = ["Starting", "Triggers", "Functions", "Agents", "Duckies", "Tools", "Logic", "End"];
+/** Screen px a group's title takes above its box; nested boxes leave this room. */
+const GROUP_TITLE_PX = 44;
+
+/** A palette tile; function tiles add a Run workflow node already pointed at a workflow. */
+type PaletteTile = AutomationNodeDto & { workflowId?: string };
 
 export function clampLogHeight(h: number, boardH = 0): number {
   const cap = boardH > 0 ? Math.max(LOG_H_MIN, boardH - 24) : LOG_H_MAX;
@@ -45,9 +54,9 @@ function nid(): string {
   return `n${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function groupCatalog(catalog: AutomationNodeDto[], query: string) {
+function groupCatalog(catalog: PaletteTile[], query: string) {
   const q = query.trim().toLowerCase();
-  const map = new Map<string, AutomationNodeDto[]>();
+  const map = new Map<string, PaletteTile[]>();
   for (const n of catalog) {
     if (q && !`${n.label} ${n.type} ${n.group} ${n.description || ""}`.toLowerCase().includes(q)) continue;
     const g = n.group || "Nodes";
@@ -67,6 +76,15 @@ function groupCatalog(catalog: AutomationNodeDto[], query: string) {
  * one per team per minute. */
 const SYNC_EVERY_MS = 60_000;
 
+function RunSteps({ steps }: { steps: AutomationRunStepDto[] }) {
+  return <>{steps.map((s, i) => (
+    <li key={i} className={s.ok === false ? "is-err" : ""}>
+      {s.label || s.type} {s.ok === false ? `— ${s.error}` : s.stop ? "ok · no Return reached, this path stopped" : "ok"}
+      {s.substeps?.length ? <ol className="aw-log-substeps"><RunSteps steps={s.substeps} /></ol> : null}
+    </li>
+  ))}</>;
+}
+
 export function AutomationsView() {
   const sectionId = useId();
   const { confirm } = useConfirmModal();
@@ -75,6 +93,9 @@ export function AutomationsView() {
   const [owners, setOwners] = useState<WorkflowOwnersDto>({ owners: [LOCAL_OWNER] });
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pickerOwner, setPickerOwner] = useState(LOCAL_OWNER.id);
+  const [pickerFolder, setPickerFolder] = useState("");
+  const [emptyFolders, setEmptyFolders] = useState<Record<string, string[]>>(loadEmptyFolders);
+  useEffect(() => saveEmptyFolders(emptyFolders), [emptyFolders]);
   const [actionError, setActionError] = useState("");
   const listRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -244,7 +265,9 @@ export function AutomationsView() {
     const gen = loadGen.current;
     const operation = saveQueue.current.then(async () => {
     if (next.id && next.owner?.readOnly) return next;  // someone else's team workflow: never pushed from here
-    const res = await api?.save_workflow?.(next, owner || undefined);
+    // The list files workflows (set_workflow_folder); an open canvas must not undo that.
+    const { folder, ...body } = next;
+    const res = await api?.save_workflow?.(next.id ? body : { ...body, folder: folder || "" }, owner || undefined);
     const row = res?.workflow;
     if (row) {
       if (gen === loadGen.current) {
@@ -260,9 +283,42 @@ export function AutomationsView() {
     return operation;
   }, [refreshList, acknowledgeDraft]);
 
-  const createNew = (ownerId: string) => {
+  const createNew = (ownerId: string, folder = "") => {
     setPickerOwner(ownerId);
+    setPickerFolder(folder);
     setPickerOpen(true);
+  };
+
+  const rememberFolder = (ownerId: string, path: string) => {
+    const clean = normalizeFolder(path);
+    if (clean) setEmptyFolders((current) => (current[ownerId] || []).includes(clean) ? current : { ...current, [ownerId]: [...(current[ownerId] || []), clean] });
+  };
+
+  /** Drag in the list (or Move to folder): file one workflow. Its old folder stays put. */
+  const moveWorkflow = async (id: string, ownerId: string, folder: string) => {
+    const from = rows.find((row) => row.id === id)?.folder || "";
+    await saveQueue.current;
+    const res = await getApi()?.set_workflow_folder?.(id, folder);
+    if (!res?.workflow) { setActionError(res?.error || "Could not move workflow"); return; }
+    setActionError("");
+    rememberFolder(ownerId, from);
+    acknowledgeDraft((current) => current && current.id === id ? { ...current, folder: res.workflow?.folder ?? folder } : current);
+    await refreshList();
+  };
+
+  /** Rename, move or remove (move into its parent) a folder with everything in it. */
+  const moveFolder = async (ownerId: string, path: string, newPath: string) => {
+    await saveQueue.current;
+    const res = await getApi()?.move_workflow_folder?.(ownerId, path, newPath);
+    if (!res || res.ok === false) { setActionError(res?.error || "Could not move folder"); return; }
+    setActionError("");
+    setEmptyFolders((current) => ({ ...current, [ownerId]: [...new Set((current[ownerId] || []).map((item) => movedPath(item, path, newPath) ?? item).filter(Boolean))] }));
+    acknowledgeDraft((current) => {
+      if (!current || (current.owner?.id || LOCAL_OWNER.id) !== ownerId) return current;
+      const moved = movedPath(current.folder || "", path, newPath);
+      return moved === null ? current : { ...current, folder: moved };
+    });
+    await refreshList();
   };
 
   const createFromTemplate = useCallback(
@@ -275,6 +331,7 @@ export function AutomationsView() {
           name: template?.name || "Untitled",
           description: template?.description || "",
           enabled: true,
+          folder: pickerFolder,
           graph: template?.graph || emptyGraph(),
         } as AutomationDto, pickerOwner);
       } catch (error) {
@@ -290,13 +347,14 @@ export function AutomationsView() {
       setActionError("");
       if (created.id) setSelectedId(created.id);
     },
-    [persist, pickerOwner],
+    [persist, pickerOwner, pickerFolder],
   );
 
   /** Copy (new id) or move a workflow to Local or a team. */
   const sendTo = async (value: string) => {
     if (!draft?.id) return;
     const [action, target] = [value.slice(0, 4), value.slice(5)];
+    if (action === "fold") { await moveWorkflow(draft.id, draft.owner?.id || LOCAL_OWNER.id, target); return; }
     const from = draft.owner || LOCAL_OWNER;
     const to = owners.owners?.find((owner) => owner.id === target) || LOCAL_OWNER;
     if (action === "move" && from.kind === "team") {
@@ -337,13 +395,13 @@ export function AutomationsView() {
     setExpandedId("");
   };
 
-  const addNodeAt = (entry: AutomationNodeDto, worldX: number, worldY: number) => {
+  const addNodeAt = (entry: PaletteTile, worldX: number, worldY: number) => {
     const node: AutomationGraphNodeDto = {
       id: nid(),
       type: entry.type,
       x: worldX,
       y: worldY,
-      config: entry.type === "pipeline.agent" ? { ducky: "__new__" } : {},
+      config: entry.type === "pipeline.agent" ? { ducky: "__new__" } : entry.workflowId ? { workflow_id: entry.workflowId, args: {} } : {},
       label: entry.label,
       description: entry.description || "",
     };
@@ -374,7 +432,12 @@ export function AutomationsView() {
     }
   };
 
-  const spawnGroups = useMemo(() => groupCatalog(catalog, spawnFilter), [catalog, spawnFilter]);
+  // Reusable workflows are nodes too: one tile per workflow with an Inputs node.
+  const functionTiles = useMemo<PaletteTile[]>(() => rows.filter((row) => row.trigger?.kind === "function" && row.id !== draft?.id).map((row) => ({
+    type: "workflow.call", label: row.name || "Untitled", group: "Functions", role: "action", workflowId: row.id,
+    description: row.signature ? describeSignature(row.signature) : "",
+  })), [rows, draft?.id]);
+  const spawnGroups = useMemo(() => groupCatalog([...catalog, ...functionTiles], spawnFilter), [catalog, functionTiles, spawnFilter]);
 
   const worldFromClient = (clientX: number, clientY: number) => {
     const board = boardRef.current?.getBoundingClientRect();
@@ -389,7 +452,41 @@ export function AutomationsView() {
     width: nodeWidth(node, isExpanded(node.id)),
     height: nodeHeights[node.id] || (isExpanded(node.id) ? 440 : 76),
   });
-  const groupBoxes = (graph.groups || []).map((group) => ({ group, bounds: groupBounds(group, graph.nodes, nodeSize) })).filter((entry) => entry.bounds !== null);
+  const groups = graph.groups || [];
+  const groupBoxes = groups.map((group) => ({ group, depth: groupDepth(groups, group.id), members: groupMembers(groups, group.id), bounds: groupBounds(group, graph.nodes, nodeSize, groups, GROUP_TITLE_PX / zoom) }))
+    .filter((entry) => entry.bounds !== null).sort((a, b) => a.depth - b.depth);  // inner boxes paint (and click) above outer ones
+  const selectionGroupable = !!draft && !readOnly && selectedNodeIds.length >= 2 && groupNodes(graph, selectedNodeIds, "probe") !== graph;
+  const selectionGrouped = !!draft && !readOnly && ungroupNodes(graph, selectedNodeIds) !== graph;
+  // The outermost group whose nodes are exactly the selection (clicking a box selects this).
+  const selectedGroup = !draft || readOnly || !selectedNodeIds.length ? undefined : groupBoxes.find(({ members }) => members.length === selectedNodeIds.length && members.every((id) => selectedNodeIds.includes(id)))?.group;
+  const isStarterNode = (node: AutomationGraphNodeDto) => byType.get(node.type)?.role === "starter" || node.type.startsWith("start.") || node.type === "flow.input";
+
+  /** Move a group's nodes into a new reusable workflow and run it from where the group was. */
+  const makeReusable = async (groupId: string) => {
+    if (!draft || readOnly) return;
+    const group = draft.graph.groups?.find((item) => item.id === groupId);
+    const plan = planGroupExtraction(draft.graph, groupId, isStarterNode);
+    if (!group || !plan.ok) { setActionError(plan.ok ? "That group no longer exists." : plan.error); return; }
+    const gen = loadGen.current;
+    const name = /^Group( \d+)?$/.test(group.name) ? `${draft.name} · ${group.name}` : group.name;
+    await saveQueue.current;
+    const res = await getApi()?.save_workflow?.({
+      id: "", name, description: `Made from a group in ${draft.name}.`, enabled: true,
+      folder: rows.find((row) => row.id === draft.id)?.folder ?? draft.folder ?? "", graph: plan.child,
+    }, draft.owner?.id || LOCAL_OWNER.id);
+    const created = res?.workflow;
+    if (!created) { setActionError(res?.error || "Could not make the workflow"); return; }
+    if (gen !== loadGen.current) return;
+    const callId = nid();
+    saveGraphChange((current) => {
+      const again = planGroupExtraction(current, groupId, isStarterNode);
+      return again.ok ? again.parent(created.id, callId, created.name || name) : current;
+    });
+    setSelectedNodeIds([callId]);
+    setExpandedId("");
+    setActionError("");
+    await refreshList();
+  };
 
   // Measure real settings panels so boxes also follow expanding/resizing node cards.
   const nodeIdsKey = graph.nodes.map((node) => node.id).join("\n");
@@ -771,7 +868,10 @@ export function AutomationsView() {
       <WorkflowList listId={sectionId + "-list"} listRef={listRef} owners={owners} rows={rows} activeId={draft ? selectedId : ""}
         collapsed={listCollapsed} nowMs={nowMs} onToggleCollapsed={() => setListCollapsed((collapsed) => !collapsed)}
         onOpen={(id) => void loadOne(id)} onCreate={createNew}
-        onImportLocal={() => void getApi()?.import_local_workflows?.().then(() => refreshList())} />
+        onImportLocal={() => void getApi()?.import_local_workflows?.().then(() => refreshList())}
+        emptyFolders={emptyFolders} onAddFolder={rememberFolder}
+        onMoveWorkflow={(id, ownerId, folder) => void moveWorkflow(id, ownerId, folder)}
+        onMoveFolder={(ownerId, path, newPath) => void moveFolder(ownerId, path, newPath)} />
       <div className="aw-main">
         {draft ? (
           <div className="aw-toolbar" ref={toolbarRef} role="toolbar" aria-label="Workflow actions">
@@ -811,10 +911,14 @@ export function AutomationsView() {
               ) : null}
               <ChoiceDropdown aria-label="Move or copy" trigger={<Icons.Share />} hideChevron minWidth={240} value=""
                 header={<strong>Move or copy</strong>} footer={<small>Moving keeps its history on this PC. A copy gets a new id.</small>}
-                options={(owners.owners || [LOCAL_OWNER]).filter((owner) => owner.id !== (draft.owner?.id || LOCAL_OWNER.id) && !owner.readOnly).flatMap((owner) => [
-                  { value: "copy:" + owner.id, label: "Copy to " + ownerName(owner), group: ownerName(owner) },
-                  { value: "move:" + owner.id, label: "Move to " + ownerName(owner), group: ownerName(owner), disabled: readOnly },
-                ])}
+                options={[
+                  ...(readOnly ? [] : ["", ...folderPaths(buildFolderTree(rows.filter((row) => (row.owner?.id || LOCAL_OWNER.id) === (draft.owner?.id || LOCAL_OWNER.id)), emptyFolders[draft.owner?.id || LOCAL_OWNER.id] || []))]
+                    .filter((path) => path !== normalizeFolder(rows.find((row) => row.id === draft.id)?.folder ?? draft.folder)).map((path) => ({ value: "fold:" + path, label: path ? "Move to " + path : "Move out of folders", group: "Folder" }))),
+                  ...(owners.owners || [LOCAL_OWNER]).filter((owner) => owner.id !== (draft.owner?.id || LOCAL_OWNER.id) && !owner.readOnly).flatMap((owner) => [
+                    { value: "copy:" + owner.id, label: "Copy to " + ownerName(owner), group: ownerName(owner) },
+                    { value: "move:" + owner.id, label: "Move to " + ownerName(owner), group: ownerName(owner), disabled: readOnly },
+                  ]),
+                ]}
                 emptyLabel="Nowhere else to put it"
                 onChange={(value) => void sendTo(value)} />
               <button type="button" title="Save" aria-label="Save" disabled={readOnly} onClick={saveDraft}><Icons.Save /></button>
@@ -867,8 +971,8 @@ export function AutomationsView() {
           onContextMenu={onBoardContextMenu}
         >
           <div className="aw-world" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
-            {groupBoxes.map(({ group, bounds }) => bounds ? (
-              <div key={group.id} data-aw-group={group.id} className={`aw-group${group.node_ids.every((id) => selectedNodeIds.includes(id)) ? " is-selected" : ""}`}
+            {groupBoxes.map(({ group, bounds, depth, members }) => bounds ? (
+              <div key={group.id} data-aw-group={group.id} className={`aw-group${depth ? " is-nested" : ""}${members.length && members.every((id) => selectedNodeIds.includes(id)) ? " is-selected" : ""}`}
                 style={{ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height }}
                 role="button" tabIndex={0} aria-label={`Select group ${group.name}`}
                 onPointerDown={(event) => {
@@ -876,10 +980,10 @@ export function AutomationsView() {
                   if (event.ctrlKey || event.metaKey) {
                     event.preventDefault(); event.stopPropagation(); boardRef.current?.focus({ preventScroll: true });
                     setSelectedEdge(null);
-                    setSelectedNodeIds((current) => group.node_ids.every((id) => current.includes(id)) ? current.filter((id) => !group.node_ids.includes(id)) : [...new Set([...current, ...group.node_ids])]);
-                  } else startSelectionDrag(event, group.node_ids);
+                    setSelectedNodeIds((current) => members.every((id) => current.includes(id)) ? current.filter((id) => !members.includes(id)) : [...new Set([...current, ...members])]);
+                  } else startSelectionDrag(event, members);
                 }}
-                onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setSelectedNodeIds(group.node_ids); setSelectedEdge(null); } }}
+                onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setSelectedNodeIds(members); setSelectedEdge(null); } }}
               >
                 <div className="aw-group-title" style={{ transform: `scale(${1 / zoom})` }}>
                   <InlineNodeText value={group.name} label="Group name" onCommit={(name) => saveGraphChange((current) => ({ ...current, groups: current.groups?.map((item) => item.id === group.id ? { ...item, name } : item) }))} />
@@ -965,6 +1069,8 @@ export function AutomationsView() {
                     >
                       {expanded ? <Icons.ChevronDown /> : <Icons.Sliders />}
                     </button> : null}
+                    {node.type === "workflow.call" && node.config.workflow_id && !overview ? <button type="button" className="aw-node-open" title="Open the workflow it runs" aria-label={"Open the workflow " + label + " runs"}
+                      onPointerDown={(event) => event.stopPropagation()} onClick={() => void loadOne(String(node.config.workflow_id))}><Icons.Workflow /></button> : null}
                     <button type="button" className="aw-node-delete" title="Delete node" aria-label={"Delete " + label} onPointerDown={(event) => event.stopPropagation()} onClick={() => deleteNode(node.id)}><Icons.Trash /></button>
                     </div>
                     {expanded ? (
@@ -972,6 +1078,9 @@ export function AutomationsView() {
                         <NodeSettings
                           node={node}
                           meta={meta}
+                          workflows={rows}
+                          currentId={draft?.id}
+                          onOpen={(id) => void loadOne(id)}
                           onChange={(next) =>
                             patchGraph((g) => ({
                               ...g,
@@ -1019,6 +1128,12 @@ export function AutomationsView() {
           <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(4, z * 1.2))}><Icons.ZoomIn /></button>
           <button type="button" title="Fit graph" aria-label="Fit graph" onClick={fitGraph}><Icons.FitView /></button>
         </div>
+        {selectedEdge === null && (selectionGroupable || selectionGrouped || selectedGroup) ? <div className="aw-connection-tools aw-selection-tools" role="toolbar" aria-label="Selection">
+          <span>{selectedNodeIds.length} selected</span>
+          {selectionGroupable ? <button type="button" title="Group (Ctrl+G). Select whole groups to put them in a group." onClick={() => saveGraphChange((current) => groupNodes(current, selectedNodeIds, nid()))}>Group</button> : null}
+          {selectionGrouped ? <button type="button" title="Ungroup (Ctrl+Shift+G). Opens the selected group one level." onClick={() => saveGraphChange((current) => ungroupNodes(current, selectedNodeIds))}>Ungroup</button> : null}
+          {selectedGroup ? <button type="button" title={`Move ${selectedGroup.name} into its own workflow and run it from here. Other workflows can run it too.`} onClick={() => void makeReusable(selectedGroup.id)}>Make reusable</button> : null}
+        </div> : null}
         {selectedEdge !== null && graph.edges[selectedEdge] ? <div className="aw-connection-tools">
           <span>Connection</span>
           <ChoiceDropdown aria-label="Connection route" value={graph.edges[selectedEdge].kind} options={[{ value: "main", label: "Next" }, { value: "true", label: "True" }, { value: "false", label: "False" }, { value: "each", label: "Each item" }, { value: "done", label: "Done" }]} onChange={(value) => patchGraph((g) => ({ ...g, edges: g.edges.map((edge, i) => i === selectedEdge ? { ...edge, kind: value } : edge) }))} size="compact" />
@@ -1074,16 +1189,13 @@ export function AutomationsView() {
               </button>
             </div>
             <div className="aw-log-dock-body selectable-text">
-              {runLogHasContent(log) ? (
+              {runLogHasContent(log) ? (<>
                 <ol>
                   {log?.ok === false && log.error ? <li className="is-err">{log.error}</li> : null}
-                  {(log?.steps || []).map((s, i) => (
-                    <li key={i} className={s.ok === false ? "is-err" : ""}>
-                      {s.label || s.type} {s.ok === false ? `— ${s.error}` : "ok"}
-                    </li>
-                  ))}
+                  <RunSteps steps={log?.steps || []} />
                 </ol>
-              ) : (
+                {log?.outputs && Object.keys(log.outputs).length ? <p className="aw-log-returned">Returned: {Object.entries(log.outputs).map(([key, value]) => `${key} = ${typeof value === "string" ? value : JSON.stringify(value)}`).join(", ")}</p> : null}
+              </>) : (
                 <p>
                   Test a workflow to see steps here. Return to user sends results back to your chat. Schedules only fire while the panel is running.
                 </p>
@@ -1122,7 +1234,7 @@ export function AutomationsView() {
                     <summary><span className="aw-accordion-chevron" aria-hidden="true"><Icons.ChevronDown /></span><NodeIcon meta={tiles[0]} /><span>{name}</span><small>{tiles.length}</small></summary>
                     {tiles.map((t) => (
                       <button
-                        key={t.type}
+                        key={t.type + (t.workflowId || "")}
                         type="button"
                         className="aw-tile"
                         onClick={() => addNodeAt(t, spawn.worldX, spawn.worldY)}

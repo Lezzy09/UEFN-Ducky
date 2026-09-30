@@ -99,6 +99,25 @@ class PanelApiAutomationsMixin:
         except (PermissionError, ValueError) as exc:
             return _refused(exc)
 
+    def set_workflow_folder(self, workflow_id: str, folder: str = "") -> dict[str, Any]:
+        """File a workflow in a folder of its owner (drag in the list)."""
+        from backend.automations.store import set_folder
+
+        try:
+            wf = set_folder(workflow_id, folder)
+        except (PermissionError, ValueError) as exc:
+            return _refused(exc)
+        return {"ok": True, "workflow": wf} if wf else {"ok": False, "error": "workflow not found"}
+
+    def move_workflow_folder(self, owner: str, path: str, new_path: str = "") -> dict[str, Any]:
+        """Rename or move a folder; ``new_path`` = its parent deletes it, keeping the workflows."""
+        from backend.automations.store import move_folder
+
+        try:
+            return {"ok": True, "moved": move_folder(owner, path, new_path)}
+        except (PermissionError, ValueError) as exc:
+            return _refused(exc)
+
     def set_workflow_run_here(self, workflow_id: str, on: bool) -> dict[str, Any]:
         from backend.automations.store import set_run_here
 

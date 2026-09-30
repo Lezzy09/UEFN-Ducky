@@ -1,8 +1,9 @@
 import { useEffect, useId, useState } from "react";
 import { ChoiceDropdown } from "../components/ChoiceDropdown";
 import { getApi } from "../hooks/usePanelApi";
-import type { AutomationFieldDto, AutomationGraphNodeDto, AutomationNodeDto } from "../types/panel";
+import type { AutomationFieldDto, AutomationGraphNodeDto, AutomationNodeDto, AutomationSummaryDto } from "../types/panel";
 import { AgentField } from "./AgentField";
+import { CallSettings, NamedValueList } from "./FunctionSettings";
 import { ProjectField } from "./ProjectField";
 import { ToolSettings } from "./ToolSettings";
 
@@ -10,13 +11,24 @@ export function hasNodeSettings(node: AutomationGraphNodeDto, meta?: AutomationN
   return node.type === "tool.call" || !!meta?.config_fields?.length;
 }
 
-export function NodeSettings({ node, meta, onChange }: { node: AutomationGraphNodeDto; meta?: AutomationNodeDto; onChange: (node: AutomationGraphNodeDto) => void }) {
+/** Run workflow nodes list the other workflows; `onOpen` jumps to the one it runs. */
+type WorkflowChoices = { workflows?: AutomationSummaryDto[]; currentId?: string; onOpen?: (id: string) => void };
+
+export function NodeSettings({ node, meta, onChange, workflows = [], currentId, onOpen }: { node: AutomationGraphNodeDto; meta?: AutomationNodeDto; onChange: (node: AutomationGraphNodeDto) => void } & WorkflowChoices) {
   return <div className="aw-insp-form">
-    {node.type === "tool.call" ? <ToolSettings node={node} onChange={onChange} /> : (meta?.config_fields || []).map((field) => <NodeField key={field.id} field={field} node={node} pluginId={meta?.plugin_id} onChange={onChange} />)}
+    {node.type === "tool.call" ? <ToolSettings node={node} onChange={onChange} />
+      : node.type === "workflow.call" ? <CallSettings node={node} workflows={workflows} currentId={currentId} onChange={onChange} onOpen={onOpen} />
+      : (meta?.config_fields || []).map((field) => <NodeField key={field.id} field={field} node={node} pluginId={meta?.plugin_id} onChange={onChange} />)}
   </div>;
 }
 
 function NodeField({ field, node, pluginId, onChange }: { field: AutomationFieldDto; node: AutomationGraphNodeDto; pluginId?: string; onChange: (node: AutomationGraphNodeDto) => void }) {
+  if (field.type === "params") return <NamedValueList node={node} field={field.id} valueKey="default" valueLabel="Default" valuePlaceholder="used by Test" addLabel="Add input" onChange={onChange} />;
+  if (field.type === "returns") return <NamedValueList node={node} field={field.id} valueKey="value" valueLabel="Value" valuePlaceholder="same-name field, text or {{field}}" addLabel="Add return value" onChange={onChange} />;
+  return <ConfigField field={field} node={node} pluginId={pluginId} onChange={onChange} />;
+}
+
+function ConfigField({ field, node, pluginId, onChange }: { field: AutomationFieldDto; node: AutomationGraphNodeDto; pluginId?: string; onChange: (node: AutomationGraphNodeDto) => void }) {
   const id = useId();
   const raw = node.config[field.id];
   const value = String(raw ?? "");

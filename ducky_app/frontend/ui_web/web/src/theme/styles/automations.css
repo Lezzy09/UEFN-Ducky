@@ -527,3 +527,47 @@
   .aw-spawn-search { font-size: 16px; }
   .aw-acc summary, .aw-tile { min-height: 44px; }
 }
+
+/* Reusable workflows: badge, Inputs / Return lists, Run workflow picker */
+.aw-trigger--function { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.aw-named-values { gap: 6px; }
+.aw-named-head, .aw-named-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) 30px; gap: 6px; align-items: center; }
+.aw-named-head span { font-size: 11px; font-weight: 600; color: var(--text-muted); }
+.aw-named-row input { min-width: 0; }
+.aw-named-add { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; border: 0; border-radius: 6px; padding: 4px 8px; background: transparent; color: var(--accent); font: inherit; cursor: pointer; }
+.aw-named-add:hover { background: var(--bg-hover); }
+.aw-call-pick { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.aw-call-pick .choice-dropdown { flex: 1; min-width: 0; }
+.aw-field-hint code { font-size: 11px; }
+.aw-node-open { display: grid; place-items: center; width: 24px; height: 26px; border: 0; border-radius: 5px; padding: 0; background: transparent; color: var(--text-muted); cursor: pointer; opacity: 0; }
+.aw-node:hover .aw-node-open, .aw-node.is-selected .aw-node-open, .aw-node:focus-within .aw-node-open { opacity: 1; }
+.aw-node-open:hover { background: var(--bg-hover); color: var(--text); }
+.aw-log-substeps { margin: 2px 0 2px; padding-left: 18px; color: var(--text-muted); }
+.aw-log-returned { margin: 6px 0 0; color: var(--text-muted); }
+
+/* Nested groups: each level reads as its own box */
+.aw-group.is-nested { border-style: dashed; background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.aw-group.is-nested.is-selected { border-style: solid; }
+.aw-selection-tools { bottom: 62px; }
+
+/* Folders in the Workflows list */
+.aw-tree-item { list-style: none; }
+.aw-tree-children { padding: 0; }
+.aw-tree-folder { display: flex; align-items: center; gap: 4px; min-height: 32px; padding-right: 2px; border-radius: 6px; }
+.aw-tree-folder:hover { background: var(--bg-hover); }
+.aw-tree-folder--editing { gap: 8px; padding-top: 2px; padding-bottom: 2px; }
+.aw-tree-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 6px; padding: 6px 4px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.aw-tree-toggle .aw-list-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aw-tree-toggle small { margin-left: auto; color: var(--text-muted); }
+.aw-tree-actions { display: flex; align-items: center; opacity: 0; }
+.aw-tree-actions .aw-icon-button { width: 24px; height: 24px; }
+.aw-tree-folder:hover .aw-tree-actions, .aw-tree-folder:focus-within .aw-tree-actions { opacity: 1; }
+.aw-tree-input { flex: 1; min-width: 0; height: 26px; }
+.aw-list-row[draggable="true"] { cursor: grab; }
+.aw-tree-folder.is-drop-target, .aw-section-head.is-drop-target { background: var(--blue-dim); outline: 1px dashed var(--accent); outline-offset: -1px; }
+@media (hover: none) {
+  .aw-tree-actions, .aw-node-open { opacity: 1; }
+}
+.aw-check { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.aw-check input { margin-top: 2px; }
+.aw-check small { display: block; }

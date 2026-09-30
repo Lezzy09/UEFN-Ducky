@@ -254,7 +254,10 @@ export interface AutomationGraphEdgeDto {
 export interface AutomationGraphGroupDto {
   id: string;
   name: string;
+  /** Nodes directly in this box; a node sits in its innermost group only. */
   node_ids: string[];
+  /** The group this box sits inside (nested groups). */
+  parent_id?: string;
 }
 
 export interface AutomationGraphDto {
@@ -271,6 +274,10 @@ export interface AutomationRunStepDto {
   error?: string;
   result?: unknown;
   branch?: boolean;
+  /** Run workflow nodes: the steps of the workflow it ran. */
+  substeps?: AutomationRunStepDto[];
+  /** Run workflow nodes: it has Return nodes and none was reached, so this path ended. */
+  stop?: boolean;
 }
 
 export interface AutomationRunDto {
@@ -282,6 +289,8 @@ export interface AutomationRunDto {
   started?: number;
   ended?: number;
   trigger_id?: string;
+  /** Values its Return nodes handed back. */
+  outputs?: Record<string, unknown>;
 }
 
 /** Who owns a workflow: Local (this PC only) or a team (synced to every member). */
@@ -316,7 +325,7 @@ export interface WorkflowOwnersDto {
 
 /** What starts a workflow, for the list badge. */
 export interface WorkflowTriggerDto {
-  kind: "schedule" | "event" | "chat" | "manual";
+  kind: "schedule" | "event" | "function" | "chat" | "manual";
   label: string;
 }
 
@@ -325,6 +334,8 @@ export interface AutomationDto {
   name: string;
   enabled: boolean;
   description?: string;
+  /** Folder path inside its owner ("Play tests/Tycoon"); "" = top level. */
+  folder?: string;
   graph: AutomationGraphDto;
   runs?: AutomationRunDto[];
   updated?: number;
@@ -345,6 +356,14 @@ export interface AutomationSummaryDto {
   owner?: WorkflowOwnerDto;
   run_here?: boolean;
   trigger?: WorkflowTriggerDto;
+  folder?: string;
+  /** Reusable workflows: what a Run workflow node passes in and gets back. */
+  signature?: WorkflowSignatureDto | null;
+}
+
+export interface WorkflowSignatureDto {
+  inputs: { name: string; default?: string }[];
+  outputs: string[];
 }
 
 export interface AutomationFieldDto {
@@ -2403,6 +2422,9 @@ export interface PanelApi {
   }>;
   copy_workflow?(workflow_id: string, owner: string, move?: boolean): Promise<{ ok?: boolean; error?: string; workflow?: AutomationDto }>;
   set_workflow_run_here?(workflow_id: string, on: boolean): Promise<{ ok?: boolean; error?: string; workflow?: AutomationDto }>;
+  set_workflow_folder?(workflow_id: string, folder: string): Promise<{ ok?: boolean; error?: string; workflow?: AutomationDto }>;
+  /** Rename or move a folder; its parent as new_path deletes it and keeps the workflows. */
+  move_workflow_folder?(owner: string, path: string, new_path: string): Promise<{ ok?: boolean; error?: string; moved?: number }>;
   delete_workflow?(workflow_id: string): Promise<{ ok?: boolean; error?: string }>;
   run_workflow?(
     workflow_id: string,

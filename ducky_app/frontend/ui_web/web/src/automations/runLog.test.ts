@@ -32,6 +32,9 @@ describe("formatRunLog", () => {
       ].join("\n"),
     );
     expect(runLogHasContent({ ok: false, error: "x" })).toBe(true);
+    expect(formatRunLog({ ok: true, outputs: { greeting: "Hi", n: 2 }, steps: [
+      { label: "Greeter", ok: true, substeps: [{ label: "Inputs", ok: true }, { label: "Tool", ok: false, error: "boom" }] },
+    ] })).toBe(["Finished", "1. Greeter ok", "1.1. Inputs ok", "1.2. Tool — boom", "Returned: greeting = Hi, n = 2"].join("\n"));
     expect(runLogHasContent({ steps: [] })).toBe(false);
   });
 });

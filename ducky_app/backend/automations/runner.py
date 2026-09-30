@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
+from contextvars import ContextVar
 from typing import Any
 
 from backend.automations import catalog, plugin
@@ -17,6 +19,18 @@ _FOREACH_CAP = 50
 # ponytail: wait sleeps the runner thread; 120s ceiling. Per-node async if graphs nest waits.
 _WAIT_CAP_S = 120.0
 _AGENT_WAIT_CAP_S = 900.0
+# Run workflow nodes: how deep one workflow may run another, and what a called
+# workflow inherits from its caller besides the inputs it is given.
+_CALL_DEPTH_CAP = 8
+_CALL_STACK: ContextVar[tuple[str, ...]] = ContextVar("workflow_call_stack", default=())
+_RUN_PLUMBING = ("caller_conv_id", "artifact_dir", "pipeline_run_id", "group_id", "group_folder_id", "files")
+_RETURN_KEY = "_returned"
+# Shared runs hand every field back except where this run reports and its own returns.
+_NOT_SHARED_BACK = frozenset({_RETURN_KEY, "caller_conv_id", "artifact_dir", "pipeline_run_id", "group_id", "group_folder_id"})
+_PLACEHOLDER = re.compile(r"\{\{\s*([\w.\-]+)\s*\}\}")
+_END_TYPES = frozenset({"pipeline.finish", "flow.end", "flow.output"})
+
+
 def _announce_run(wf: dict[str, Any], *, phase: str, detail: str = "", run_id: str = "") -> None:
     """Header activity tray — running/finished graphs. Never blocks the walk."""
     wid = str(wf.get("id") or "").strip()
@@ -52,6 +66,8 @@ _ACTION_TYPES = frozenset(
         "pipeline.agent",
         "pipeline.finish",
         "flow.end",
+        "flow.output",
+        "workflow.call",
         "uefn.open_project",
         "uefn.launch",
         "uefn.close",
@@ -85,6 +101,8 @@ def run_workflow(
     wf = get_workflow(workflow_id)
     if wf is None:
         return {"ok": False, "error": "workflow not found", "steps": []}
+    if str(wf["id"]) in _CALL_STACK.get():
+        return {"ok": False, "error": "A workflow can't run itself, directly or through another workflow.", "steps": [], "id": wf["id"]}
     graph = wf.get("graph") or {}
     nodes = {str(n.get("id")): n for n in (graph.get("nodes") or []) if isinstance(n, dict) and n.get("id")}
     edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
@@ -99,6 +117,7 @@ def run_workflow(
     ctx["caller_conv_id"] = _caller(caller_conv_id or str(ctx.get("caller_conv_id") or ""))
     _prepare_run_ctx(ctx, wf)
     ident_token = _bind_hub_identity(ctx)
+    stack_token = _CALL_STACK.set((*_CALL_STACK.get(), str(wf["id"])))
     started = time.time()
     ok = False
     error = ""
@@ -107,6 +126,7 @@ def run_workflow(
         _announce_run(wf, phase="working", detail="Running")
         steps, ok, error, _seen = _walk(nodes, edges, ctx, starts)
     finally:
+        _CALL_STACK.reset(stack_token)
         if ident_token is not None:
             from backend.workspace import identity
 
@@ -135,6 +155,7 @@ def run_workflow(
         "conv_id": ctx.get("conv_id"),
         "files": ctx.get("files") or [],
         "text": ctx.get("text") or ctx.get("assistant_text") or "",
+        "outputs": dict(ctx.get(_RETURN_KEY) or {}),
     }
 
 
@@ -301,7 +322,7 @@ def _walk(
             break
         if step.get("result") and isinstance(step["result"], dict):
             ctx.update({k: v for k, v in step["result"].items() if k not in ("ok",)})
-        if ntype in ("pipeline.finish", "flow.end"):
+        if ntype in _END_TYPES or step.get("stop"):
             continue
         kind = "true" if step.get("branch") else "false" if "branch" in step else "main"
         queue.extend(_next_ids(nid, edges, kind))
@@ -397,6 +418,12 @@ def _exec_node(node: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
             return {**_pipeline_finish(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "flow.end":
             return {"ok": True, "id": node.get("id"), "type": ntype, "label": label, "result": {"ended": True}}
+        if ntype == "flow.input":
+            return {**_input_node(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
+        if ntype == "flow.output":
+            return {**_output_node(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
+        if ntype == "workflow.call":
+            return {**_call_workflow(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
         if ntype in ("uefn.open_project", "uefn.launch", "uefn.close", "uefn.restart", "uefn.wait_ready", "uefn.wait_window"):
             return _uefn_node(node, ntype, label, cfg)
         if ntype in _PLAY_TYPES:
@@ -904,3 +931,107 @@ def _call_tool(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(parsed, dict):
             out["data"] = parsed
     return {"ok": True, "result": out}
+
+
+# --------------------------------------------------------------------------- reusable workflows
+
+
+def _template(value: Any, payload: dict[str, Any]) -> Any:
+    """``{{field.path}}`` reads an earlier step's value: alone it keeps the value's
+    type (a list stays a list), inside other text it becomes text."""
+    if not isinstance(value, str):
+        return value
+    whole = _PLACEHOLDER.fullmatch(value.strip())
+    if whole:
+        return _payload_get(payload, whole.group(1))
+    return _PLACEHOLDER.sub(lambda m: _as_text(_payload_get(payload, m.group(1))), value)
+
+
+def _as_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _named_rows(raw: Any) -> list[tuple[str, dict[str, Any]]]:
+    rows = raw if isinstance(raw, list) else []
+    return [(str(row.get("name") or "").strip(), row) for row in rows if isinstance(row, dict) and str(row.get("name") or "").strip()]
+
+
+def _input_node(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Each declared input: the value passed in, else its default (a Test run)."""
+    values: dict[str, Any] = {}
+    for name, row in _named_rows(cfg.get("inputs")):
+        passed = payload.get(name)
+        values[name] = passed if passed not in (None, "") else str(row.get("default") or "")
+    return {"ok": True, "result": values}
+
+
+def _output_node(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Collect the return values; a blank value returns the field of the same name."""
+    values: dict[str, Any] = {}
+    for name, row in _named_rows(cfg.get("outputs")):
+        raw = row.get("value")
+        values[name] = payload.get(name) if raw in (None, "") else _template(raw, payload)
+    earlier = payload.get(_RETURN_KEY) if isinstance(payload.get(_RETURN_KEY), dict) else {}
+    return {"ok": True, "result": {_RETURN_KEY: {**earlier, **values}}}
+
+
+def _call_workflow(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Run another workflow like a function and merge what it returns into this run.
+
+    ``share`` runs it on a copy of this run's fields and brings every field back, as
+    if its nodes sat here (a group turned into a workflow). If it has Return nodes and
+    none is reached, this path stops, like a path that ended inside the group."""
+    wid = str(cfg.get("workflow_id") or "").strip()
+    if not wid:
+        return {"ok": False, "error": "Choose the workflow to run."}
+    stack = _CALL_STACK.get()
+    if wid in stack:
+        return {"ok": False, "error": "A workflow can't run itself, directly or through another workflow."}
+    if len(stack) >= _CALL_DEPTH_CAP:
+        return {"ok": False, "error": f"Workflows can run other workflows at most {_CALL_DEPTH_CAP} deep."}
+    wf = get_workflow(wid)
+    if wf is None:
+        return {"ok": False, "error": "The workflow this node runs was deleted or isn't shared with you."}
+    name = str(wf.get("name") or wid)
+    graph = wf.get("graph") or {}
+    nodes = {str(n.get("id")): n for n in (graph.get("nodes") or []) if isinstance(n, dict) and n.get("id")}
+    edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
+    starts = [nid for nid, node in nodes.items() if node.get("type") == "flow.input"]
+    starts = starts or _start_ids(nodes, edges=edges, trigger_id="", starter_id="")
+    if not starts:
+        return {"ok": False, "error": f"{name} has no start."}
+    args = cfg.get("args") if isinstance(cfg.get("args"), dict) else {}
+    share = bool(cfg.get("share"))
+    if share:
+        ctx: dict[str, Any] = {key: value for key, value in payload.items() if key != _RETURN_KEY}
+    else:
+        ctx = {key: payload[key] for key in _RUN_PLUMBING if key in payload}
+    ctx.update({str(key).strip(): _template(value, payload) for key, value in args.items() if str(key).strip()})
+    _prepare_run_ctx(ctx, wf)
+    new_hub = ctx.get("group_id") and ctx.get("group_id") != payload.get("group_id")
+    ident_token = _bind_hub_identity(ctx) if new_hub else None
+    stack_token = _CALL_STACK.set((*stack, wid))
+    started = time.time()
+    try:
+        steps, ok, error, _seen = _walk(nodes, edges, ctx, starts)
+    finally:
+        _CALL_STACK.reset(stack_token)
+        if ident_token is not None:
+            from backend.workspace import identity
+
+            identity.reset(ident_token)
+    # The called workflow's own log shows this run, so it can be debugged on its own.
+    append_run(wid, {"started": started, "ended": time.time(), "ok": ok, "error": error,
+                     "trigger_id": "workflow.call", "steps": steps})
+    if not ok:
+        return {"ok": False, "error": f"{name}: {error}", "substeps": steps}
+    returned = dict(ctx.get(_RETURN_KEY) or {})
+    back = {key: value for key, value in ctx.items() if key not in _NOT_SHARED_BACK} if share else {}
+    out: dict[str, Any] = {"ok": True, "result": {**back, **returned, "returned": returned}, "substeps": steps}
+    if _RETURN_KEY not in ctx and any(node.get("type") == "flow.output" for node in nodes.values()):
+        out["stop"] = True  # no Return reached: the caller's path ends here too
+    return out

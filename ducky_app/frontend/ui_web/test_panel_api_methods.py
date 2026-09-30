@@ -238,6 +238,8 @@ _PUBLIC_METHODS = frozenset({
     'save_workflow',
     'save_workflow_template',
     'set_workflow_run_here',
+    'set_workflow_folder',
+    'move_workflow_folder',
     'workflow_open_web',
     'workflow_owners',
     'workflow_sync',

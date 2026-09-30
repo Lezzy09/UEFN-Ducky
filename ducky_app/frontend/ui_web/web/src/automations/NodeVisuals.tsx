@@ -6,7 +6,7 @@ import { useDuckyCatalogOptional } from "../components/ducky/DuckyCatalogContext
 import type { AutomationGraphNodeDto, AutomationNodeDto } from "../types/panel";
 
 export function isEndNode(node: AutomationGraphNodeDto) {
-  return node.type === "pipeline.finish" || node.type === "flow.end";
+  return node.type === "pipeline.finish" || node.type === "flow.end" || node.type === "flow.output";
 }
 
 export function nodeLabel(node: AutomationGraphNodeDto, meta?: AutomationNodeDto) {
@@ -45,6 +45,7 @@ const EMOJI: Record<string, string> = {
   "start.chat": "💬", "start.manual": "▶️", "start.cron": "⏰",
   "pipeline.finish": "📤", "flow.end": "🏁", "flow.wait": "⏳",
   "flow.branch": "🔀", "flow.foreach": "🔁", "tool.call": "🛠️",
+  "flow.input": "📥", "flow.output": "↩️", "workflow.call": "🧩",
   "uefn.open_project": "📂", "uefn.launch": "🚀", "uefn.close": "⏹️",
   "uefn.restart": "🔄", "uefn.wait_ready": "⏳", "uefn.wait_window": "🖥️",
   "uefn.check": "🩺", "uefn.game.start": "🎮", "uefn.game.stop": "⏹", "uefn.player.wait": "🧍", "uefn.log.expect": "🔎",

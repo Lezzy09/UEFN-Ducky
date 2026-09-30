@@ -5,7 +5,7 @@ import { AutomationsView } from "./AutomationsView";
 import { ConfirmModalProvider } from "../contexts/ConfirmModalContext";
 import type { AutomationDto, WorkflowOwnerDto, WorkflowOwnersDto } from "../types/panel";
 
-const api = vi.hoisted(() => ({ list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_workflows: vi.fn(), list_workflow_nodes: vi.fn(), get_workflow: vi.fn(), save_workflow: vi.fn(), run_workflow: vi.fn(), delete_workflow: vi.fn(), workflow_owners: vi.fn(), workflow_sync: vi.fn(), copy_workflow: vi.fn(), set_workflow_run_here: vi.fn(), import_local_workflows: vi.fn(), workflow_open_web: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn(), get_workflow_tools_catalog: vi.fn() }));
+const api = vi.hoisted(() => ({ list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_workflows: vi.fn(), list_workflow_nodes: vi.fn(), get_workflow: vi.fn(), save_workflow: vi.fn(), run_workflow: vi.fn(), delete_workflow: vi.fn(), workflow_owners: vi.fn(), workflow_sync: vi.fn(), copy_workflow: vi.fn(), set_workflow_run_here: vi.fn(), import_local_workflows: vi.fn(), workflow_open_web: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn(), get_workflow_tools_catalog: vi.fn(), set_workflow_folder: vi.fn(), move_workflow_folder: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
 vi.mock("./AutomationTemplatePicker", () => ({
   AutomationTemplatePicker: ({ open, owners, ownerId, onOwnerChange, onSelect }: {
@@ -776,5 +776,226 @@ describe("workflow history controls", () => {
     fireEvent.click(screen.getByText("Daily check"));
     await screen.findByDisplayValue("Daily check");
     expect(screen.getByRole("button", { name: "Undo", exact: true }).hasAttribute("disabled")).toBe(true);
+  });
+});
+
+describe("nested groups and the selection bar", () => {
+  const canvas = () => document.querySelector('.aw-board')!;
+  const node = (id: string) => document.querySelector(`.aw-node[data-aw-node="${id}"]`)!;
+  const ctrlClick = (id: string) => {
+    fireEvent.pointerDown(node(id), { button: 0, ctrlKey: true, pointerId: 7 });
+    fireEvent.pointerUp(canvas(), { button: 0, ctrlKey: true, pointerId: 7 });
+  };
+
+  it("groups a group with another node from the bar, draws it inside, then opens one level", async () => {
+    await open();
+    expect(screen.queryByRole("toolbar", { name: "Selection" })).toBeNull();
+    ctrlClick("s"); ctrlClick("a");
+    fireEvent.click(screen.getByRole("button", { name: "Group", exact: true }));
+    await waitFor(() => expect(saved.graph.groups).toEqual([expect.objectContaining({ name: "Group", node_ids: ["s", "a"] })]));
+    const inner = saved.graph.groups![0].id;
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Select group Group" }), { button: 0, pointerId: 5 });
+    fireEvent.pointerUp(canvas(), { pointerId: 5 });
+    ctrlClick("b");
+    fireEvent.click(screen.getByRole("button", { name: "Group", exact: true }));
+    await waitFor(() => expect(saved.graph.groups).toHaveLength(2));
+    const outer = saved.graph.groups!.find((group) => group.id !== inner)!;
+    expect(outer).toEqual(expect.objectContaining({ name: "Group 2", node_ids: ["b"] }));
+    expect(saved.graph.groups!.find((group) => group.id === inner)!.parent_id).toBe(outer.id);
+    const outerBox = document.querySelector(`[data-aw-group="${outer.id}"]`) as HTMLElement;
+    const innerBox = document.querySelector(`[data-aw-group="${inner}"]`) as HTMLElement;
+    expect(innerBox.classList.contains("is-nested")).toBe(true);
+    expect(parseFloat(outerBox.style.top)).toBeLessThanOrEqual(parseFloat(innerBox.style.top) - 44 - 24);  // room for the inner title
+    expect(outerBox.compareDocumentPosition(innerBox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();  // inner paints on top
+    fireEvent.click(screen.getByRole("button", { name: "Ungroup", exact: true }));
+    await waitFor(() => expect(saved.graph.groups).toEqual([{ id: inner, name: "Group", node_ids: ["s", "a"] }]));
+  });
+});
+
+describe("reusable workflows", () => {
+  const fn = { id: "fn", name: "Greeter", enabled: true, owner: LOCAL, trigger: { kind: "function" as const, label: "Function" },
+    signature: { inputs: [{ name: "who", default: "world" }], outputs: ["greeting"] } };
+  beforeEach(() => {
+    api.list_workflows.mockImplementation(async () => ({ workflows: [
+      { id: "p", name: "Example", enabled: true, owner: saved.owner, trigger: { kind: "chat", label: "Chat" } }, fn,
+    ] }));
+    api.list_workflow_nodes.mockResolvedValue({ nodes: [
+      { type: "start.chat", label: "Chat", role: "starter", group: "Starting" },
+      { type: "flow.input", label: "Inputs", role: "starter", group: "Functions", config_fields: [{ id: "inputs", label: "Inputs", type: "params" }] },
+      { type: "workflow.call", label: "Run workflow", group: "Functions", config_fields: [{ id: "workflow_id", label: "Workflow", type: "workflow" }] },
+      { type: "flow.wait", label: "Wait", group: "Logic" },
+    ] });
+  });
+
+  it("offers each reusable workflow as a node that runs it", async () => {
+    await open();
+    expect(screen.getByText("Function").getAttribute("title")).toContain("Run workflow");
+    fireEvent.click(screen.getByRole("button", { name: "Add nodes" }));
+    const menu = screen.getByRole("dialog", { name: "Add node" });
+    const tile = [...menu.querySelectorAll(".aw-tile")].find((el) => el.textContent?.includes("Greeter"))!;
+    expect(tile.textContent).toContain("Takes who · returns greeting");
+    fireEvent.click(tile);
+    await save();
+    const added = saved.graph.nodes.find((item) => item.type === "workflow.call")!;
+    expect(added).toEqual(expect.objectContaining({ label: "Greeter", config: { workflow_id: "fn", args: {} } }));
+  });
+
+  it("fills the called workflow's inputs, lists what it returns and opens it", async () => {
+    saved.graph.nodes[1] = { id: "a", type: "workflow.call", label: "Greeter", x: 280, y: 0, config: { workflow_id: "fn", args: {} } };
+    renderView();
+    fireEvent.click(await screen.findByText("Example"));
+    await screen.findByRole("button", { name: "Connect from Greeter" });
+    editNode();
+    const who = screen.getByRole("textbox", { name: "who" });
+    expect(who.getAttribute("placeholder")).toBe("Default: world");
+    fireEvent.change(who, { target: { value: "{{name}}" } });
+    expect(document.querySelector(".aw-node-props")?.textContent).toContain("Next steps can use greeting.");
+    await save();
+    expect(saved.graph.nodes[1].config).toEqual({ workflow_id: "fn", args: { who: "{{name}}" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open the workflow Greeter runs" }));
+    await waitFor(() => expect(api.get_workflow).toHaveBeenLastCalledWith("fn"));
+  });
+
+  it("edits an Inputs node's list", async () => {
+    saved.graph.nodes[0] = { id: "s", type: "flow.input", label: "Inputs", x: 0, y: 0, config: { inputs: [{ name: "who", default: "world" }] } };
+    await open();
+    editNode("s");
+    fireEvent.click(screen.getByRole("button", { name: "Add input" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Name 2" }), { target: { value: "score max" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Default 2" }), { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Remove who" }));
+    await save();
+    expect(saved.graph.nodes[0].config.inputs).toEqual([{ name: "score_max", default: "10" }]);
+  });
+
+  it("shows the called workflow's steps and the returned values in the run log", async () => {
+    api.run_workflow.mockResolvedValue({ ok: true, outputs: { greeting: "Hello" }, steps: [
+      { label: "Greeter", ok: true, substeps: [{ label: "Inputs", ok: true }, { label: "Return", ok: true }] },
+    ] });
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: "Test", exact: true }));
+    await screen.findByText("Returned: greeting = Hello");
+    expect([...document.querySelectorAll(".aw-log-substeps li")].map((li) => li.textContent)).toEqual(["Inputs ok", "Return ok"]);
+  });
+});
+
+describe("folders in the Workflows list", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    api.list_workflows.mockImplementation(async () => ({ workflows: [
+      { id: "p", name: "Example", enabled: true, owner: LOCAL, folder: "Tests/Smoke", trigger: { kind: "chat", label: "Chat" } },
+      { id: "d", name: "Daily check", enabled: true, owner: TEAM, run_here: false, trigger: { kind: "schedule", label: "Every 5m" } },
+    ] }));
+    api.set_workflow_folder.mockImplementation(async (id: string, folder: string) => ({ ok: true, workflow: { ...structuredClone(saved), id, folder } }));
+    api.move_workflow_folder.mockResolvedValue({ ok: true, moved: 1 });
+  });
+  const transfer = () => ({ setData: vi.fn(), getData: vi.fn(), effectAllowed: "", dropEffect: "", types: ["text/plain"] });
+  const folderRow = (name: string) => screen.getByRole("button", { name: `Folder ${name}` }).closest(".aw-tree-folder")!;
+
+  it("nests folders inside the owner and collapses them", async () => {
+    renderView();
+    const tests = await screen.findByRole("button", { name: "Folder Tests" });
+    expect(tests.textContent).toContain("1");
+    expect(screen.getByRole("button", { name: "Folder Smoke" })).toBeTruthy();
+    expect(document.getElementById(tests.getAttribute("aria-controls")!)!.contains(screen.getByText("Example"))).toBe(true);
+    fireEvent.click(tests);
+    expect(screen.getByText("Example").closest("[hidden]")).toBeTruthy();
+  });
+
+  it("makes an empty folder, keeps it on this PC, and files a workflow by dragging", async () => {
+    renderView();
+    await screen.findByText("Example");
+    fireEvent.click(screen.getByRole("button", { name: "New folder in Local" }));
+    const input = screen.getByRole("textbox", { name: "New folder name" });
+    fireEvent.change(input, { target: { value: " QA " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByRole("button", { name: "Folder QA" })).toBeTruthy();
+    expect(screen.getByText("Empty. Drag workflows here.")).toBeTruthy();
+    expect(JSON.parse(window.localStorage.getItem("ducky.workflows.emptyFolders.v1") || "{}")).toEqual({ local: ["QA"] });
+    const dataTransfer = transfer();
+    fireEvent.dragStart(screen.getByText("Example").closest("button")!, { dataTransfer });
+    fireEvent.dragOver(folderRow("QA"), { dataTransfer });
+    expect(folderRow("QA").classList.contains("is-drop-target")).toBe(true);
+    fireEvent.drop(folderRow("QA"), { dataTransfer });
+    await waitFor(() => expect(api.set_workflow_folder).toHaveBeenCalledWith("p", "QA"));
+    // Its old folder stays until removed; a team folder never takes a Local workflow.
+    expect(JSON.parse(window.localStorage.getItem("ducky.workflows.emptyFolders.v1") || "{}").local).toEqual(["QA", "Tests/Smoke"]);
+    fireEvent.dragStart(screen.getByText("Example").closest("button")!, { dataTransfer });
+    fireEvent.dragOver(screen.getByRole("button", { name: "Team · Alpha Studio" }).parentElement!, { dataTransfer });
+    fireEvent.drop(screen.getByRole("button", { name: "Team · Alpha Studio" }).parentElement!, { dataTransfer });
+    expect(api.set_workflow_folder).toHaveBeenCalledTimes(1);
+  });
+
+  it("renames, moves and removes folders with the workflows in them", async () => {
+    renderView();
+    await screen.findByText("Example");
+    fireEvent.click(screen.getByRole("button", { name: "Rename Tests" }));
+    const input = screen.getByRole("textbox", { name: "Folder name" });
+    fireEvent.change(input, { target: { value: "Checks" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(api.move_workflow_folder).toHaveBeenCalledWith("local", "Tests", "Checks"));
+    fireEvent.click(screen.getByRole("button", { name: "Remove folder Smoke" }));
+    await waitFor(() => expect(api.move_workflow_folder).toHaveBeenLastCalledWith("local", "Tests/Smoke", "Tests"));
+    const dataTransfer = transfer();
+    fireEvent.dragStart(folderRow("Smoke"), { dataTransfer });
+    fireEvent.dragOver(screen.getByRole("button", { name: "Local" }).parentElement!, { dataTransfer });
+    fireEvent.drop(screen.getByRole("button", { name: "Local" }).parentElement!, { dataTransfer });
+    await waitFor(() => expect(api.move_workflow_folder).toHaveBeenLastCalledWith("local", "Tests/Smoke", "Smoke"));
+  });
+
+  it("creates a workflow in a folder and moves the open one from the toolbar", async () => {
+    renderView();
+    await screen.findByText("Example");
+    fireEvent.click(screen.getByRole("button", { name: "New workflow in Smoke" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create workflow" }));
+    await waitFor(() => expect(api.save_workflow).toHaveBeenCalledWith(expect.objectContaining({ id: "", folder: "Tests/Smoke" }), "local"));
+    fireEvent.click(screen.getByText("Example"));
+    await screen.findByRole("button", { name: "Connect from Pause" });
+    dropdown("Move or copy");
+    expect(screen.queryByRole("radio", { name: "Move to Tests/Smoke" })).toBeNull();  // where it already is
+    fireEvent.click(await screen.findByRole("radio", { name: "Move to Tests" }));
+    await waitFor(() => expect(api.set_workflow_folder).toHaveBeenCalledWith("p", "Tests"));
+    await save();
+    expect(api.save_workflow.mock.calls.at(-1)![0]).not.toHaveProperty("folder");  // saving a graph never refiles it
+  });
+});
+
+describe("group to reusable workflow", () => {
+  const canvas = () => document.querySelector('.aw-board')!;
+  const node = (id: string) => document.querySelector(`.aw-node[data-aw-node="${id}"]`)!;
+  const ctrlClick = (id: string) => {
+    fireEvent.pointerDown(node(id), { button: 0, ctrlKey: true, pointerId: 7 });
+    fireEvent.pointerUp(canvas(), { button: 0, ctrlKey: true, pointerId: 7 });
+  };
+  async function groupAndSelect(ids: string[]) {
+    await open();
+    ids.forEach(ctrlClick);
+    fireEvent.click(screen.getByRole("button", { name: "Group", exact: true }));
+    await waitFor(() => expect(saved.graph.groups).toHaveLength(1));
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Select group Group" }), { button: 0, pointerId: 5 });
+    fireEvent.pointerUp(canvas(), { pointerId: 5 });
+  }
+
+  it("moves the group into a new workflow and runs it from where the group was", async () => {
+    saved.graph.edges.push({ source: "a", target: "b", kind: "main" });
+    await groupAndSelect(["a", "b"]);
+    fireEvent.click(screen.getByRole("button", { name: "Make reusable" }));
+    await waitFor(() => expect(saved.graph.nodes.some((item) => item.type === "workflow.call")).toBe(true));
+    const made = api.save_workflow.mock.calls.find(([doc]) => !doc.id)![0];
+    expect(made).toEqual(expect.objectContaining({ name: "Example · Group", folder: "" }));
+    expect(made.graph.nodes.map((item: { type: string }) => item.type)).toEqual(["flow.input", "flow.wait", "flow.wait"]);
+    expect(api.save_workflow.mock.calls.find(([doc]) => !doc.id)![1]).toBe("local");
+    const call = saved.graph.nodes.find((item) => item.type === "workflow.call")!;
+    expect(call.config).toEqual({ workflow_id: "new-workflow", args: {}, share: true });
+    expect(saved.graph.nodes.map((item) => item.id)).toEqual(["s", call.id]);
+    expect(saved.graph.edges).toEqual([{ source: "s", target: call.id, kind: "main" }]);
+    expect(saved.graph.groups).toEqual([]);
+  });
+
+  it("explains why a group with a start can't move", async () => {
+    await groupAndSelect(["s", "a"]);
+    fireEvent.click(screen.getByRole("button", { name: "Make reusable" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Starts");
+    expect(api.save_workflow.mock.calls.some(([doc]) => !doc.id)).toBe(false);
   });
 });

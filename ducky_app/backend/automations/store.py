@@ -24,7 +24,9 @@ _SAVE_LOCK = threading.RLock()
 _RUN_CAP = 20
 LOCAL = "local"
 _LOCAL_OWNER = {"id": LOCAL, "kind": LOCAL, "label": "Local", "state": "ok", "readOnly": False, "reason": ""}
-_BUILTIN_STARTERS = {"start.manual", "start.chat", "start.cron"}
+_BUILTIN_STARTERS = {"start.manual", "start.chat", "start.cron", "flow.input"}
+_FOLDER_NAME_MAX = 64
+_FOLDER_PATH_MAX = 512
 
 
 def _announce_graphs_changed() -> None:
@@ -79,27 +81,80 @@ def normalize_graph(raw: Any) -> dict[str, Any]:
             edges.append({"source": source, "target": target, "kind": kind})
     out = {"nodes": nodes, "edges": edges}
     if "groups" in src:
-        groups: list[dict[str, Any]] = []
-        group_ids: set[str] = set()
-        grouped_nodes: set[str] = set()
-        raw_groups = src.get("groups")
-        for group in raw_groups if isinstance(raw_groups, list) else []:
-            if not isinstance(group, dict):
-                continue
-            gid = str(group.get("id") or "").strip()
-            members = group.get("node_ids")
-            if not gid or gid in group_ids or not isinstance(members, list):
-                continue
-            kept: list[str] = []
-            for member in members:
-                if isinstance(member, str) and member in ids and member not in grouped_nodes:
-                    kept.append(member)
-                    grouped_nodes.add(member)
-            if kept:
-                group_ids.add(gid)
-                groups.append({"id": gid, "name": str(group.get("name") or "Group").strip() or "Group", "node_ids": kept})
-        out["groups"] = groups
+        out["groups"] = _normalize_groups(src.get("groups"), ids)
     return out
+
+
+def _normalize_groups(raw: Any, ids: set[str]) -> list[dict[str, Any]]:
+    """Visual boxes. A node sits in at most one group (its innermost); ``parent_id``
+    nests a group inside another. Missing parents and cycles become top level, and a
+    group with no nodes and no child groups is dropped."""
+    groups: list[dict[str, Any]] = []
+    parents: dict[str, str] = {}
+    grouped_nodes: set[str] = set()
+    for group in raw if isinstance(raw, list) else []:
+        if not isinstance(group, dict):
+            continue
+        gid = str(group.get("id") or "").strip()
+        members = group.get("node_ids")
+        if not gid or gid in parents or not isinstance(members, list):
+            continue
+        kept: list[str] = []
+        for member in members:
+            if isinstance(member, str) and member in ids and member not in grouped_nodes:
+                kept.append(member)
+                grouped_nodes.add(member)
+        parents[gid] = str(group.get("parent_id") or "").strip()
+        groups.append({"id": gid, "name": str(group.get("name") or "Group").strip() or "Group", "node_ids": kept})
+    for gid in parents:
+        seen = {gid}
+        at = parents[gid]
+        while at and at in parents and at not in seen:
+            seen.add(at)
+            at = parents[at]
+        if at:  # unknown parent, or a loop back into the chain
+            parents[gid] = ""
+    alive = {g["id"] for g in groups}
+    while True:
+        with_children = {parents[gid] for gid in alive if parents[gid]}
+        empty = {g["id"] for g in groups if g["id"] in alive and not g["node_ids"] and g["id"] not in with_children}
+        if not empty:
+            break
+        alive -= empty
+    out: list[dict[str, Any]] = []
+    for group in groups:
+        if group["id"] in alive:
+            if parents[group["id"]] in alive:
+                group["parent_id"] = parents[group["id"]]
+            out.append(group)
+    return out
+
+
+def normalize_folder(raw: Any) -> str:
+    """A workflow's folder inside its owner: ``"Play tests/Tycoon"``, ``""`` = top level."""
+    parts = [" ".join(str(part).split())[:_FOLDER_NAME_MAX] for part in str(raw or "").replace("\\", "/").split("/")]
+    return "/".join(part for part in parts if part)[:_FOLDER_PATH_MAX]
+
+
+def signature_of(nodes: list[dict[str, Any]]) -> dict[str, list[Any]] | None:
+    """What a reusable workflow takes (Inputs node) and gives back (Return nodes)."""
+    inputs = [n for n in nodes if n.get("type") == "flow.input"]
+    returns = [n for n in nodes if n.get("type") == "flow.output"]
+    if not inputs and not returns:
+        return None
+    params: list[dict[str, str]] = []
+    for node in inputs:
+        for row in (node.get("config") or {}).get("inputs") or []:
+            name = str(row.get("name") or "").strip() if isinstance(row, dict) else ""
+            if name and all(p["name"] != name for p in params):
+                params.append({"name": name, "default": str(row.get("default") or "")})
+    outputs: list[str] = []
+    for node in returns:
+        for row in (node.get("config") or {}).get("outputs") or []:
+            name = str(row.get("name") or "").strip() if isinstance(row, dict) else ""
+            if name and name not in outputs:
+                outputs.append(name)
+    return {"inputs": params, "outputs": outputs}
 
 
 def empty_workflow(*, name: str = "Untitled") -> dict[str, Any]:
@@ -108,6 +163,7 @@ def empty_workflow(*, name: str = "Untitled") -> dict[str, Any]:
         "name": (name or "Untitled").strip() or "Untitled",
         "description": "",
         "enabled": True,
+        "folder": "",
         "graph": {"nodes": [], "edges": []},
         "updated": time.time(),
     }
@@ -209,6 +265,47 @@ def copy_workflow(workflow_id: str, owner: str, *, move: bool = False) -> dict[s
     return get_workflow(str(out["id"])) or {}
 
 
+def set_folder(workflow_id: str, folder: str) -> dict[str, Any] | None:
+    """File one workflow in a folder of its owner (no saved version, keeps its place)."""
+    wid = (workflow_id or "").strip()
+    wf = get_workflow(wid)
+    if wf is None:
+        return None
+    doc = {"id": wid, "folder": normalize_folder(folder)}
+    with _SAVE_LOCK:
+        out = _files_save(doc, archive=False) if not use_db("automations") else _db_save(doc, LOCAL, archive=False)
+    _announce_graphs_changed()
+    return out
+
+
+def move_folder(owner: str, path: str, new_path: str) -> int:
+    """Rename or move a folder (and its subfolders) inside one owner. Deleting a folder
+    is moving it into its parent: the workflows stay. Returns how many moved."""
+    src, dst = normalize_folder(path), normalize_folder(new_path)
+    if not src:
+        raise ValueError("Choose a folder to move")
+    if dst == src or dst.startswith(src + "/"):
+        if dst != src:
+            raise ValueError("A folder can't move inside itself")
+        return 0
+    key = (owner or LOCAL).strip() or LOCAL
+    moved = 0
+    with _SAVE_LOCK:
+        for wf in all_workflows():
+            if ((wf.get("owner") or {}).get("id") or LOCAL) != key:
+                continue
+            folder = normalize_folder(wf.get("folder"))
+            if folder != src and not folder.startswith(src + "/"):
+                continue
+            doc = {"id": wf["id"], "folder": dst + folder[len(src):] if dst else folder[len(src):].lstrip("/")}
+            # A folder is filing, not an edit: no saved version for it.
+            _files_save(doc, archive=False) if not use_db("automations") else _db_save(doc, key, archive=False)
+            moved += 1
+    if moved:
+        _announce_graphs_changed()
+    return moved
+
+
 def set_run_here(workflow_id: str, on: bool) -> dict[str, Any] | None:
     """Team workflows: whether this PC runs its schedule and triggers."""
     if not use_db("automations"):
@@ -257,6 +354,7 @@ def _view(doc: dict[str, Any], owner: dict[str, Any], state: dict[str, Any], run
         "name": str(doc.get("name") or ""),
         "description": str(doc.get("description") or ""),
         "enabled": bool(doc.get("enabled", True)),
+        "folder": normalize_folder(doc.get("folder")),
         "graph": normalize_graph(doc.get("graph")),
         "updated": float(doc.get("updated") or 0.0),
         "runs": list(runs),
@@ -273,17 +371,19 @@ def _summary(wf: dict[str, Any]) -> dict[str, Any]:
         "name": wf.get("name") or "",
         "description": str(wf.get("description") or ""),
         "enabled": bool(wf.get("enabled")),
+        "folder": normalize_folder(wf.get("folder")),
         "updated": float(wf.get("updated") or 0.0),
         "last_run": float(wf.get("last_run") or 0.0),
         "node_count": len(nodes),
         "owner": wf.get("owner") or dict(_LOCAL_OWNER),
         "run_here": bool(wf.get("run_here")),
         "trigger": trigger_of(nodes),
+        "signature": signature_of(nodes),
     }
 
 
 def trigger_of(nodes: list[dict[str, Any]]) -> dict[str, str]:
-    """What starts it, for the list badge: schedule > event > chat > manual."""
+    """What starts it, for the list badge: schedule > event > function > chat > manual."""
     cron = next((n for n in nodes if n.get("type") == "start.cron"), None)
     if cron is not None:
         cfg = cron.get("config") or {}
@@ -295,6 +395,8 @@ def trigger_of(nodes: list[dict[str, Any]]) -> dict[str, str]:
     types = {str(n.get("type") or "") for n in nodes}
     if (types - _BUILTIN_STARTERS) & _trigger_types():
         return {"kind": "event", "label": "Event"}
+    if "flow.input" in types:
+        return {"kind": "function", "label": "Function"}
     if "start.chat" in types:
         return {"kind": "chat", "label": "Chat"}
     return {"kind": "manual", "label": "Manual"}
@@ -319,7 +421,7 @@ def _trigger_types() -> set[str]:
 # --------------------------------------------------------------------------- database mode
 
 
-def _db_save(doc: dict[str, Any], owner: str) -> dict[str, Any]:
+def _db_save(doc: dict[str, Any], owner: str, *, archive: bool = True) -> dict[str, Any]:
     from backend.automations import owned
     from backend.store.repos import automations as versions_repo
     from backend.uefn_plugins.scopes import valid_doc_key
@@ -337,10 +439,11 @@ def _db_save(doc: dict[str, Any], owner: str) -> dict[str, Any]:
     if wid:
         out["id"] = wid
     _merge(out, doc)
-    out["updated"] = time.time()
+    if archive:  # filing keeps its place in the list
+        out["updated"] = time.time()
     aid = scope["account"]
     first = (existing,) if existing and not versions_repo.has_versions(wid) else ()
-    owned.write(scope, out, versions=(*first, out))
+    owned.write(scope, out, versions=(*first, out) if archive else ())
     wid = str(out["id"])
     if existing is None and scope["kind"] == "team":
         owned.set_run_here(aid, wid, True)  # on for the member who made it
@@ -354,6 +457,8 @@ def _merge(out: dict[str, Any], doc: dict[str, Any]) -> None:
         out["description"] = str(doc.get("description") or "")
     if "enabled" in doc:
         out["enabled"] = bool(doc.get("enabled"))
+    if "folder" in doc:
+        out["folder"] = normalize_folder(doc.get("folder"))
     if "graph" in doc:
         out["graph"] = normalize_graph(doc.get("graph"))
 
@@ -365,7 +470,7 @@ def _files_view(row: dict[str, Any]) -> dict[str, Any]:
     return _view(row, _LOCAL_OWNER, {"last_run": row.get("last_run"), "run_here": False}, list(row.get("runs") or []))
 
 
-def _files_save(doc: dict[str, Any]) -> dict[str, Any]:
+def _files_save(doc: dict[str, Any], *, archive: bool = True) -> dict[str, Any]:
     from backend.automations.versions import archive_file, directory
 
     wid = str(doc.get("id") or "").strip()
@@ -377,10 +482,11 @@ def _files_save(doc: dict[str, Any]) -> dict[str, Any]:
     if wid:
         out["id"] = wid
     _merge(out, doc)
-    out["updated"] = time.time()
-    if existing and not any(directory(out["id"]).glob("*.json")):
-        archive_file(existing)
-    archive_file(out)
+    if archive:
+        out["updated"] = time.time()
+        if existing and not any(directory(out["id"]).glob("*.json")):
+            archive_file(existing)
+        archive_file(out)
     _files_put(out)
     return _files_view(out)
 

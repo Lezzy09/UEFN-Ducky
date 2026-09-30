@@ -12,7 +12,7 @@ from typing import Any
 
 
 def snapshot(doc: dict[str, Any]) -> dict[str, Any]:
-    return {key: doc.get(key) for key in ("id", "name", "description", "enabled", "graph", "updated")}
+    return {key: doc.get(key) for key in ("id", "name", "description", "enabled", "folder", "graph", "updated")}
 
 
 def summary(version_id: str, doc: dict[str, Any]) -> dict[str, Any]:

@@ -39,8 +39,9 @@ def list_workflow_templates(pretty: bool = False) -> str:
 
 @mcp.tool()
 def list_workflows(pretty: bool = False) -> str:
-    """Saved workflows (id, name, enabled, what starts them) and their owner:
-    Local (this PC only) or a team (synced to every member)."""
+    """Saved workflows (id, name, enabled, folder, what starts them) and their owner:
+    Local (this PC only) or a team (synced to every member). A reusable workflow
+    has a signature: the inputs a Run workflow node passes and the outputs it returns."""
     from backend.automations.store import list_workflows as _list
     from backend.automations.team import owners
 
@@ -66,15 +67,28 @@ def save_workflow(
     enabled: bool = True,
     workflow_id: str = "",
     owner: str = "local",
+    folder: str | None = None,
     pretty: bool = False,
 ) -> str:
     """Create or replace a workflow. Opens the Workflows editor on this graph.
 
-    graph = {nodes:[{id,type,x,y,config,label,description}], edges:[{source,target,kind}]}.
+    graph = {nodes:[{id,type,x,y,config,label,description}], edges:[{source,target,kind}],
+    groups:[{id,name,node_ids,parent_id?}]}. Groups are boxes on the canvas; a node is
+    in at most one group and parent_id nests a group inside another.
     Pass workflow_id to update the same graph; each save refreshes the open canvas.
     owner picks where a NEW workflow lives: "local" (default, this PC only) or a
     team id from list_workflows owners (shared with that team). An existing
-    workflow keeps its owner; use copy_workflow to move it.
+    workflow keeps its owner; use copy_workflow to move it. folder files it in the
+    list ("Play tests/Tycoon"; "" = top level); omit it to keep the current folder.
+
+    Reusable workflows (functions): a flow.input node (config inputs=[{name,default}])
+    is where a caller's values arrive; flow.output nodes (config outputs=[{name,value}])
+    end a path and hand values back (blank value = the field of that name; "{{field}}"
+    reads a step's value). Another workflow runs it with a workflow.call node:
+    config {workflow_id, args:{input_name: "literal or {{field}}"}, share?}; the returned
+    values become fields for the next steps (also under "returned"). share=true runs it
+    on a copy of this run's fields and brings every field back. If it has flow.output
+    nodes and none is reached, the caller's path stops there.
     """
     from backend.automations.store import save_workflow as _save
 
@@ -86,12 +100,29 @@ def save_workflow(
     }
     if (workflow_id or "").strip():
         doc["id"] = workflow_id.strip()
+    if folder is not None:
+        doc["folder"] = folder
     try:
         saved = _save(doc, owner=owner)
     except (PermissionError, ValueError) as exc:
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     _reveal_graph(str(saved.get("id") or ""), "saved")
     return tool_json({"ok": True, "workflow": saved}, pretty=pretty)
+
+
+@mcp.tool()
+def set_workflow_folder(workflow_id: str, folder: str = "", pretty: bool = False) -> str:
+    """File a workflow in a folder of the Workflows list without touching its graph.
+    folder is a path inside its owner ("Play tests/Tycoon"); "" = top level."""
+    from backend.automations.store import set_folder
+
+    try:
+        out = set_folder(workflow_id, folder)
+    except (PermissionError, ValueError) as exc:
+        return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
+    if out is None:
+        return tool_json({"ok": False, "error": "workflow not found"}, pretty=pretty)
+    return tool_json({"ok": True, "workflow": out}, pretty=pretty)
 
 
 @mcp.tool()
@@ -140,7 +171,8 @@ def run_workflow(
 
     From chat: pass the user's request after a workflow reference as prompt, and
     their files. caller_conv_id defaults to the chat running this tool, which gets
-    the files and the Return to user result.
+    the files and the Return to user result. A reusable workflow takes its inputs
+    in payload and gives its Return values back as outputs.
     """
     from backend.automations.runner import run_workflow as _run
 

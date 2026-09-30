@@ -162,6 +162,17 @@ def test_team_workflow_reaches_members_and_never_another_team(who: _Who, fake_st
     assert [o["id"] for o in team.owners()["owners"]] == ["local", "teamU"]
 
 
+def test_team_folders_reach_every_member(who: _Who, fake_store: FakeStore) -> None:
+    ana = join(fake_store, who, "ana@x.org")
+    wf = store.save_workflow({"name": "Nightly build", "folder": "Builds", "graph": CRON}, owner="teamT")
+    assert store.move_folder("teamT", "Builds", "CI/Builds") == 1
+    assert store.move_folder("local", "CI", "Other") == 0  # Local has no such folder
+    sync(fake_store, ana)
+    join(fake_store, who, "bo@x.org")
+    assert store.get_workflow(wf["id"])["folder"] == "CI/Builds"
+    assert [r["folder"] for r in store.list_workflows()] == ["CI/Builds"]
+
+
 def test_member_without_manage_automations_can_run_but_not_change(who: _Who, fake_store: FakeStore, monkeypatch) -> None:
     ana = join(fake_store, who, "ana@x.org")
     wf = store.save_workflow({"name": "Shared", "graph": {"nodes": [
