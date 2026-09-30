@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -36,11 +37,19 @@ def test_watch_discovery_walks_overlapping_roots_once_and_skips_asset_stores(tmp
     package.write_text("{}", encoding="utf-8")
     actors = content / "__ExternalActors__" / "ManyAssets"
     actors.mkdir(parents=True)
-    walk = Mock(wraps=ws.os.walk)
+    # os.walk is process-wide: count only this thread's calls, not a watcher or
+    # sweep another test left running (the full suite failed on those).
+    real_walk, here, walked = ws.os.walk, threading.get_ident(), []
+
+    def walk(top, *args, **kwargs):
+        if threading.get_ident() == here:
+            walked.append(top)
+        return real_walk(top, *args, **kwargs)
+
     monkeypatch.setattr(ws.os, "walk", walk)
     result = ws._collect_watch_files([str(content), str(nested)])
     assert result == [str(package.resolve())]
-    assert walk.call_count == 1
+    assert len(walked) == 1
 
 
 def _touch_digest(folder: Path, name: str) -> None:
