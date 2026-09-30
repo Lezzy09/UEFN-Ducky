@@ -56,6 +56,16 @@ describe("ScreenshotBody result parsing", () => {
     expect(pickScreenshotPath({ ok: true }, {})).toBe("");
   });
 
+  it("reads the JSON when Claude Code appends an [Image: source: …] line", () => {
+    const url = "http://127.0.0.1:4199/chat-attachments/chat-1/uefn_viewport_1.png";
+    const raw =
+      JSON.stringify({ ok: true, path: "C:\\x\\uefn_viewport_1.png", media_url: url }) +
+      "\n[Image: source: C:\\Users\\x\\.claude\\projects\\p\\tool-results\\mcp-uefn-blob-1.png]";
+    const data = parseScreenshotResult(raw);
+    expect(pickScreenshotMediaUrl(data)).toBe(url);
+    expect(pickScreenshotPath(data, {})).toContain("uefn_viewport_1.png");
+  });
+
   it("unwraps string data envelopes", () => {
     const inner = JSON.stringify({ base64: TINY_PNG_B64, path: "/tmp/a.png" });
     const data = parseScreenshotResult(JSON.stringify({ ok: true, data: inner }));

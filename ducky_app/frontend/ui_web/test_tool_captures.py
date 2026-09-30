@@ -83,6 +83,12 @@ def test_save_capture_for_agents_writes_the_chat_folder_only(tmp_path, monkeypat
     assert "DuckyCaptures" not in str(path)
     assert not (project / "Saved").exists()
     assert not list(project.rglob("*.png"))
+    monkeypatch.delenv("DUCKY_CONV_ID", raising=False)
     refused = save_capture_for_agents(_PNG, prefix="uefn_viewport")
     assert refused["ok"] is False
     assert "no active chat" in str(refused["error"])
+    # Dedicated bridge: nothing bound, chat id only in the process env.
+    monkeypatch.setenv("DUCKY_CONV_ID", "chat-env")
+    from_env = save_capture_for_agents(_PNG, prefix="uefn_viewport")
+    assert from_env["ok"] is True
+    assert "/conversations/chat-env/attachments/" in str(from_env["path"]).replace("\\", "/")
