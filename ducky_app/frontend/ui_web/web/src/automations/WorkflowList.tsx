@@ -16,14 +16,14 @@ export function OwnerIcon({ owner }: { owner: WorkflowOwnerDto | undefined }) {
 
 /** Who can see it, in words (tooltips on the folder and the toolbar chip). */
 export function ownerHelp(owner: WorkflowOwnerDto | undefined): string {
-  if (owner?.kind !== "team") return "Local: only on this PC, for your account. Not shared.";
+  if (owner?.kind !== "team") return "Local workflows stay with your account on this PC.";
   const who = `Team ${owner.label}: every member sees it and changes sync to the team.`;
   return owner.readOnly && owner.reason ? `${who} ${owner.reason}` : who;
 }
 
-/** The folder's second line: where a team copy stands, or that Local stays here. */
+/** The folder's second line. Local has none; a team line is where its copy stands. */
 export function folderStatus(owner: WorkflowOwnerDto, nowMs: number): string {
-  if (owner.kind !== "team") return "Only on this PC";
+  if (owner.kind !== "team") return "";
   if (owner.state === "waiting") return "Waiting for team data";
   if (owner.state === "locked") return "Waiting for your data key";
   if (owner.state === "paused") return "Team Private paused";
@@ -91,7 +91,9 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
                   <button type="button" className="aw-icon-button" title={`New workflow in ${ownerName(owner)}`} aria-label={`New workflow in ${ownerName(owner)}`} onClick={() => onCreate(owner.id)}><Icons.Plus /></button>
                 )}
               </div>
-              <p className={`aw-folder-status${owner.sync?.error ? " is-error" : ""}`} title={owner.sync?.error || ownerHelp(owner)}>{folderStatus(owner, nowMs)}</p>
+              {folderStatus(owner, nowMs) ? (
+                <p className={`aw-folder-status${owner.sync?.error ? " is-error" : ""}`} title={owner.sync?.error || ownerHelp(owner)}>{folderStatus(owner, nowMs)}</p>
+              ) : null}
               <ul className="aw-list-ul" id={bodyId} hidden={!open}>
                 {mine.map((row) => (
                   <li key={row.id}>

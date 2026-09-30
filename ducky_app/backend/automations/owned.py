@@ -53,12 +53,10 @@ def _can_automate(scope: dict[str, Any]) -> bool:
 
 
 def owner_scopes(aid: str | None = None) -> list[dict[str, Any]]:
-    """Local first, then every team this account syncs (Teams beta only)."""
-    from backend.uefn_plugins.team_sync import teams_enabled
-
+    """Local first, then every team this account belongs to."""
     aid = aid or account()
     out = [scopes.personal_scope(aid)]
-    if aid == scopes.LOCAL or not teams_enabled():
+    if aid == scopes.LOCAL:
         return out
     for team in runtime.synced_teams(aid):
         if scopes.valid_team_id(team):
@@ -74,8 +72,8 @@ def _reason(scope: dict[str, Any]) -> str:
         return "Waiting for your account's data key. Read-only until you're back online."
     if state == "waiting":
         return f"Waiting for team data from {scope['label']}. Read-only until it arrives."
-    if scope["readOnly"]:
-        return f"Team Private is paused for {scope['label']}. Read-only."
+    # Paused (Team Private off) still lists the team and still takes workflows.
+    # Sharing waits until the plan is active again.
     if not _can_automate(scope):
         return NO_PERMISSION
     return ""

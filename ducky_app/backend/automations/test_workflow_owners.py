@@ -189,6 +189,15 @@ def test_member_without_manage_automations_can_run_but_not_change(who: _Who, fak
     assert store.get_workflow(wf["id"])["name"] == "Shared"
 
 
+def test_paused_team_still_lists_and_takes_a_workflow(who: _Who, fake_store: FakeStore) -> None:
+    aid = join(fake_store, who, "ana@x.org")
+    repo.sync_put(aid, "teamT", state="paused")
+    owner = owners_by_kind()["teamT"]
+    assert owner["state"] == "paused" and owner["readOnly"] is False
+    wf = store.save_workflow({"name": "While paused", "graph": CRON}, owner="teamT")
+    assert wf["owner"]["id"] == "teamT" and wf["name"] == "While paused"
+
+
 def test_run_on_this_pc_gates_team_schedules(who: _Who, fake_store: FakeStore, monkeypatch) -> None:
     hits: list[tuple[str, str]] = []
     monkeypatch.setattr(scheduler, "run_workflow", lambda wid, **k: hits.append((who.account, wid)) or {"ok": True})
@@ -259,3 +268,20 @@ def test_leaving_a_team_drops_its_folder_and_state(who: _Who, fake_store: FakeSt
     assert store.get_workflow(wf["id"]) is None
     assert [o["id"] for o in team.owners()["owners"]] == ["local"]
     assert runtime.runtime_get(ana, wf["id"])["run_here"] is False
+
+
+def test_workflow_folders_list_every_team_even_without_team_private(who: _Who, monkeypatch: pytest.MonkeyPatch) -> None:
+    from frontend import duckyos_account
+
+    monkeypatch.setattr(team_sync, "teams_enabled", lambda: False)
+    who.be("ana@x.org")
+    monkeypatch.setattr(duckyos_account, "teams_snapshot", lambda **_: {
+        "ok": True,
+        "teams": [{
+            "id": "teamT", "name": "tst", "slug": "tst", "members": [{}],
+            "private_plan": None, "perms": {"manage_automations": True},
+        }],
+    })
+    labels = [o["label"] for o in team.refresh_teams()["owners"]]
+    assert labels == ["Local", "tst"]
+    assert [c["id"] for c in team_sync.scope_choices()["choices"]] == ["personal"]

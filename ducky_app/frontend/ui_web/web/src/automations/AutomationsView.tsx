@@ -819,22 +819,20 @@ export function AutomationsView() {
                 onChange={(value) => void sendTo(value)} />
               <button type="button" title="Save" aria-label="Save" disabled={readOnly} onClick={saveDraft}><Icons.Save /></button>
               <button type="button" title={busy ? "Running…" : "Test"} aria-label={busy ? "Running…" : "Test"} onClick={() => void runTest()} disabled={busy || !draft.id}>{busy ? <span className="aw-spin"><Icons.Spinner /></span> : <Icons.Play />}</button>
-              <button
-                type="button" title="Duplicate" aria-label="Duplicate"
-                onClick={async () => {
+              <ChoiceDropdown aria-label="Duplicate" trigger={<Icons.Copy />} hideChevron minWidth={220} value=""
+                header={<strong>Duplicate to</strong>}
+                options={(owners.owners || [LOCAL_OWNER]).map((owner) => ({
+                  value: owner.id,
+                  label: ownerName(owner),
+                  disabled: !!owner.readOnly,
+                  hint: owner.readOnly ? owner.reason || "Read-only" : undefined,
+                }))}
+                emptyLabel="Nowhere to put a copy"
+                onChange={async (ownerId) => {
                   if (!draft.id) return;
-                  const copy = {
-                    ...draft,
-                    id: "",
-                    name: `${draft.name} copy`,
-                    owner: undefined,
-                  };
-                  // Next to the original, or in Local when this one is read-only here.
-                  await persist(copy, readOnly ? LOCAL_OWNER.id : draft.owner?.id || LOCAL_OWNER.id).catch((error: Error) => setActionError(error.message));
-                }}
-              >
-                <Icons.Copy />
-              </button>
+                  const copy = { ...draft, id: "", name: `${draft.name} copy`, owner: undefined };
+                  await persist(copy, ownerId).catch((error: Error) => setActionError(error.message));
+                }} />
               <button
                 type="button" title="Delete" aria-label="Delete" disabled={readOnly}
                 onClick={async () => {
@@ -1148,6 +1146,9 @@ export function AutomationsView() {
         onSelect={(t) => void createFromTemplate(t)}
         currentGraph={draft?.graph || null}
         ownerLabel={ownerName((owners.owners || []).find((owner) => owner.id === pickerOwner) || LOCAL_OWNER)}
+        owners={owners.owners || [LOCAL_OWNER]}
+        ownerId={pickerOwner}
+        onOwnerChange={setPickerOwner}
       />
     </div>
   );

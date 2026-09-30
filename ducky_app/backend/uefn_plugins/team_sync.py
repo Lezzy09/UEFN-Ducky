@@ -406,14 +406,14 @@ def teams_enabled() -> bool:
     return bool(key) and isinstance(cat, dict) and cat.get("account") == key and cat.get("teams") is True
 
 
-def scope_choices() -> dict[str, Any]:
-    """Local + the account's teams with Team Private active. Calls the Store hub
-    (which also claims pending invites), so only when a picker opens, never on a timer."""
+def _memberships(*, private_only: bool) -> dict[str, Any]:
+    """Local, plus teams from the Store hub. ``private_only`` keeps plugin data on
+    teams whose Team Private is active. Workflows list every team you belong to."""
     from frontend.duckyos_account import teams_snapshot
 
     account = scopes.account_id()
     choices = [{"id": scopes.PERSONAL, "kind": "personal", "label": "Local"}]
-    if account == scopes.LOCAL or not teams_enabled():
+    if account == scopes.LOCAL or (private_only and not teams_enabled()):
         return {"ok": True, "choices": choices}
     try:
         snap = teams_snapshot()
@@ -424,7 +424,9 @@ def scope_choices() -> dict[str, Any]:
     for team in snap.get("teams") or []:
         plan = team.get("private_plan") or {}
         team_id = str(team.get("id") or "")
-        if plan.get("status") not in ("active", "comped") or not scopes.valid_team_id(team_id):
+        if not scopes.valid_team_id(team_id):
+            continue
+        if private_only and plan.get("status") not in ("active", "comped"):
             continue
         perms = team.get("perms") if isinstance(team.get("perms"), dict) else {}
         slug = str(team.get("slug") or "")
@@ -434,6 +436,16 @@ def scope_choices() -> dict[str, Any]:
         repo.sync_put(account, team_id, label=label, members=members)
         choices.append({"id": team_id, "kind": "team", "label": label, "members": members, "slug": slug})
     return {"ok": True, "choices": choices}
+
+
+def scope_choices() -> dict[str, Any]:
+    """Local + teams with Team Private active. The plugin data picker. One hub call."""
+    return _memberships(private_only=True)
+
+
+def remember_workflow_teams() -> dict[str, Any]:
+    """Remember every team this account belongs to, so Workflows can list them."""
+    return _memberships(private_only=False)
 
 
 def link_scope(plugin: str, scope_id: str) -> dict[str, Any]:

@@ -45,6 +45,7 @@ import {
   appendArchiveChatsToLayout,
   crossProjectDropTarget,
   dragId,
+  duckiesFoldersForDisplay,
   expandFoldersById,
   findFolderById,
   flattenLayout,
@@ -1013,10 +1014,12 @@ export function SidebarFolderTree({
     [filtering, rootChats, filterQuery, visibleChatIds],
   );
 
-  const filteredFolders = useMemo(
-    () => (filtering ? folders.filter((folder) => shouldShowFolder(folder, filterQuery, visibleChatIds, visibleFolderIds)) : folders),
-    [filtering, folders, filterQuery, visibleChatIds, visibleFolderIds],
-  );
+  const filteredFolders = useMemo(() => {
+    const shown = duckiesFoldersForDisplay(folders);
+    return filtering
+      ? shown.filter((folder) => shouldShowFolder(folder, filterQuery, visibleChatIds, visibleFolderIds))
+      : shown;
+  }, [filtering, folders, filterQuery, visibleChatIds, visibleFolderIds]);
 
   // Map each spawning chat → the sub-agents it spawned, so the sidebar can nest
   // children under their parent regardless of which folder they live in. Only
