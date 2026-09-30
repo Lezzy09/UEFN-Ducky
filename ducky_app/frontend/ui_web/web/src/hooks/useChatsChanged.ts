@@ -8,6 +8,13 @@ export interface RemoteConversation {
   folder_id?: string;
 }
 
+const RELOAD_DUCKIES_EVENT = "uefn-reload-duckies";
+
+/** Ask the Duckies tree to reload after a group roster change. */
+export function requestReloadDuckies(): void {
+  window.dispatchEvent(new Event(RELOAD_DUCKIES_EVENT));
+}
+
 /** Sidebar reload is always ok; opening a tab is not (pipeline hubs stay in the list). */
 export function shouldOpenCreatedChat(event: AgentEvent): boolean {
   return event.type === "chats_changed" && Boolean(event.conv_id) && event.open !== false;
@@ -31,6 +38,12 @@ export function useChatsChanged(
         });
       }
     };
-    return subscribeAgentEvents(handler);
+    const onReload = () => { void load(); };
+    window.addEventListener(RELOAD_DUCKIES_EVENT, onReload);
+    const unsubscribe = subscribeAgentEvents(handler);
+    return () => {
+      window.removeEventListener(RELOAD_DUCKIES_EVENT, onReload);
+      unsubscribe();
+    };
   }, [load, onCreated]);
 }

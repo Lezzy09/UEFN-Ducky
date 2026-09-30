@@ -152,6 +152,7 @@ export function DuckyProfileTabPane({ profileId, onCloseTab }: DuckyProfileTabPa
   useEffect(() => {
     return onDuckyProfileChanged((ev) => {
       if (ev.profileId !== profileId) return;
+      if (ev.type === "archived") return;
       if (ev.type === "deleted") {
         setGone(true);
         setProfile(null);

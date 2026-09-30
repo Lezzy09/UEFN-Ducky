@@ -30,15 +30,19 @@ from frontend.verse_template_assets import (
 )
 from frontend.agent_profiles import (
     BLANK_PROFILE_ID,
+    archive_agent_profile,
     delete_agent_profile,
     duplicate_agent_profile,
     list_agent_profiles,
+    list_archived_agent_profiles,
     list_bundled_agent_profile_templates,
     save_agent_profile,
     save_agent_profile_override,
+    unarchive_agent_profile,
 )
 from frontend.archive_folder import is_archive_folder_id
 from frontend.ui_web.project_chats import (
+    adopt_group_project,
     apply_ducky_config,
     apply_sidebar_layout,
     create_conversation,

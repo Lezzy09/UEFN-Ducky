@@ -2,7 +2,7 @@
 
 export type DuckyProfileChange =
   | { type: "saved" | "duplicated"; profileId: string; name?: string; duckyStyle?: string }
-  | { type: "deleted"; profileId: string };
+  | { type: "deleted" | "archived" | "restored"; profileId: string };
 
 type Listener = (ev: DuckyProfileChange) => void;
 

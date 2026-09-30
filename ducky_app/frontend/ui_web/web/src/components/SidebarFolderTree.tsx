@@ -1034,16 +1034,18 @@ export function SidebarFolderTree({
     };
     walk(folders);
     const ids = new Set(all.map((c) => c.id));
+    const byId = new Map(all.map((c) => [c.id, c]));
     const byParent = new Map<string, FolderItem["chats"]>();
     const kids = new Set<string>();
     for (const c of all) {
       const pid = c.parentConvId;
-      if (pid && pid !== c.id && ids.has(pid)) {
-        const bucket = byParent.get(pid) ?? [];
-        bucket.push(c);
-        byParent.set(pid, bucket);
-        kids.add(c.id);
-      }
+      if (!pid || pid === c.id || !ids.has(pid)) continue;
+      // Group members belong in the group folder, not tucked under the hub row.
+      if (byId.get(pid)?.isGroup) continue;
+      const bucket = byParent.get(pid) ?? [];
+      bucket.push(c);
+      byParent.set(pid, bucket);
+      kids.add(c.id);
     }
     return { childrenByParent: byParent, childIds: kids };
   }, [folders, rootChats]);

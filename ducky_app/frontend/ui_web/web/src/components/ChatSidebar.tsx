@@ -26,7 +26,7 @@ import { sidebarPanelZoomKey } from "../hooks/useCtrlWheelZoom";
 import { SplitResizeHandle } from "./SplitResizeHandle";
 import { VerseTemplatePicker } from "../verse-editor/components/VerseTemplatePicker";
 import type { VerseTemplate } from "../verse-editor/templates/types";
-import type { EditorDropZone, FolderItem, SidebarPanelTab } from "../types/panel";
+import type { AgentProfileDto, EditorDropZone, FolderItem, SidebarPanelTab } from "../types/panel";
 import type { DockPanelId, DockSide } from "../workspace/workspaceDockStorage";
 import { useWorkspaceDockOptional } from "../workspace/WorkspaceDockContext";
 import { ARCHIVE_FOLDER_ID } from "../utils/archiveFolder";
@@ -41,13 +41,15 @@ import { useSidebarPanelMode } from "../hooks/useSidebarPanelMode";
 import { useSidebarWidth } from "../hooks/useSidebarWidth";
 import { OPEN_SIDEBAR_PANEL_EVENT } from "../navigation/openSidebarPanel";
 import { getApi } from "../hooks/usePanelApi";
+import { onApiReady } from "../hooks/onApiReady";
+import { emitDuckyProfileChanged, onDuckyProfileChanged } from "../navigation/duckyProfileChanged";
 import { SidebarStackedPanels } from "./sidebar/SidebarStackedPanels";
 import type { StackedPanelResizeSnapshot } from "../utils/stackedPanelFlex";
 import { SidebarPanelTabs } from "./sidebar/SidebarPanelTabs";
 import type { DockDropTarget } from "../utils/dockPanelDrag";
 import { insertIndexForTabDrop } from "../workspace/dockTabInsertIndex";
 import { DuckyArchiveDropdown } from "./sidebar/DuckyArchiveDropdown";
-import { GlobalAgentsSection } from "./sidebar/GlobalAgentsSection";
+import { GlobalAgentsSection, openLibraryAgent } from "./sidebar/GlobalAgentsSection";
 import { ContextMenu, useContextMenuState } from "./ContextMenu";
 import { formatSelectionBadge } from "../utils/fileTreeSelection";
 import { numberedEntryName } from "../utils/numberedEntryName";
@@ -380,6 +382,19 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
     [load],
   );
   const [duckiesGlobalAgents, setDuckiesGlobalAgents] = useState(readDuckiesGlobalAgents);
+  const [archivedAgents, setArchivedAgents] = useState<AgentProfileDto[]>([]);
+  const reloadArchivedAgents = useCallback(async () => {
+    const api = getApi();
+    if (!api?.list_agent_profiles) return;
+    try {
+      const res = await api.list_agent_profiles();
+      setArchivedAgents(res.archived_profiles ?? []);
+    } catch {
+      /* the Global Agents folder reports its own load error */
+    }
+  }, []);
+  useEffect(() => onApiReady(() => { void reloadArchivedAgents(); }), [reloadArchivedAgents]);
+  useEffect(() => onDuckyProfileChanged(() => { void reloadArchivedAgents(); }), [reloadArchivedAgents]);
   const toggleDuckiesGlobalAgents = useCallback((value: boolean) => {
     setDuckiesGlobalAgents(value);
     rememberDuckiesGlobalAgents(value);
@@ -912,6 +927,41 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
     void load();
   };
 
+  const openArchivedAgent = async (profile: AgentProfileDto) => {
+    const chat = await openLibraryAgent(profile, folders, rootChats, projectSlug);
+    if (!chat) return;
+    onChatSelect(chat);
+    void load();
+  };
+
+  const returnArchivedAgent = async (profile: AgentProfileDto) => {
+    const api = getApi();
+    if (!api?.unarchive_agent_profile) return;
+    const result = await api.unarchive_agent_profile(profile.id);
+    if (!result?.ok) return;
+    emitDuckyProfileChanged({ type: "restored", profileId: profile.id });
+  };
+
+  const deleteArchivedAgent = async (profile: AgentProfileDto) => {
+    const bundled = profile.kind === "bundled";
+    if (
+      !(await confirm({
+        title: "Delete from Global Agents",
+        message: bundled
+          ? `Permanently delete "${profile.name}" from Global Agents? Existing chats will be kept, and this template will still be available when creating an agent.`
+          : `Permanently delete "${profile.name}"? This custom profile cannot be recovered. Existing chats will be kept.`,
+        confirmLabel: "Delete permanently",
+        danger: true,
+      }))
+    )
+      return;
+    const api = getApi();
+    if (!api) return;
+    const result = await api.delete_agent_profile(profile.id);
+    if (!result?.ok) return;
+    emitDuckyProfileChanged({ type: "deleted", profileId: profile.id });
+  };
+
   const deleteArchivedChat = async (chatId: string, chatName: string) => {
     if (
       !(await confirm({
@@ -1050,6 +1100,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       </SectionIconButton>
       <DuckyArchiveDropdown
         archiveChats={archiveChats}
+        archivedAgents={archivedAgents}
         activeChats={activeChats}
         runningChatIds={runningChatIds}
         completionAlertChatIds={completionAlertChatIds}
@@ -1057,6 +1108,9 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
         onChatSelect={handleChatSelect}
         onReturnToActive={(id) => void returnArchivedChatToActive(id)}
         onDeleteArchivedChat={(id, name) => void deleteArchivedChat(id, name)}
+        onOpenAgent={(profile) => void openArchivedAgent(profile)}
+        onReturnAgent={(profile) => void returnArchivedAgent(profile)}
+        onDeleteArchivedAgent={(profile) => void deleteArchivedAgent(profile)}
       />
       <SectionIconButton
         title={chatTreeHasExpansion ? "Collapse one level" : "Expand one level"}

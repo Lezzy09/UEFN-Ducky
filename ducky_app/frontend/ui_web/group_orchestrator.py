@@ -140,31 +140,59 @@ def evict_member_from_group(member_conv_id: str, project_root: str | None = None
 
 
 def _group_folder_id(group_id: str, project_root: str | None = None) -> str:
-    from frontend.ui_web.project_chats import load_folders
+    from frontend.ui_web.project_chats import island_for_conversation
 
     gid = (group_id or "").strip()
     if not gid:
         return ""
-    for folder in load_folders(project_root):
+    _convs, folders = island_for_conversation(gid, project_root)
+    for folder in folders:
         if (getattr(folder, "group_hub_id", None) or "").strip() == gid:
             return folder.id
     conv = load_conversation(gid, project_root=project_root)
     return (getattr(conv, "folder_id", None) or "").strip() if conv else ""
 
 
+def _rehome_group_roster(group: Any) -> bool:
+    """Put roster chats on the group's island. Returns whether any moved."""
+    from frontend.ui_web.project_chats import _repo, _use_db, adopt_group_project
+
+    if not _use_db() or not is_group_conversation(group):
+        return False
+    gid = str(group.id)
+    home = (_repo().conv_project_id(gid) or "").strip()
+    if not home:
+        return False
+    moved = False
+    for row in group_members(group):
+        cid = str(row.get("member_conv_id") or "").strip()
+        if not cid or cid == gid or row.get("is_group"):
+            continue
+        if (_repo().conv_project_id(cid) or "") == home:
+            continue
+        member = load_conversation(cid)
+        if member is None:
+            continue
+        adopt_group_project(member, gid)
+        moved = True
+    return moved
+
+
 def sync_group_members_from_folder(group: Any, project_root: str | None = None) -> list[dict[str, Any]]:
     """Rebuild group_members from chats + nested group folders inside the group folder."""
-    from frontend.ui_web.project_chats import list_conversations, load_folders
+    from frontend.ui_web.project_chats import island_for_conversation
 
     if not group or not is_group_conversation(group):
         return []
     group_id = str(group.id)
+    # Roster rows can point at chats filed on the open island. Move them home
+    # before the folder scan, or the scan drops them and the top strip desyncs.
+    _rehome_group_roster(group)
     folder_id = _group_folder_id(group_id, project_root)
     if not folder_id:
         return group_members(group)
 
-    folders = load_folders(project_root)
-    all_convs = list_conversations(project_root=project_root)
+    all_convs, folders = island_for_conversation(group_id, project_root)
     by_id = {c.id: c for c in all_convs}
     existing = {
         m["member_conv_id"]: m

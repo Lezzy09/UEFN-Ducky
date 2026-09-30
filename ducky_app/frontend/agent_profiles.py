@@ -166,19 +166,46 @@ def _custom_profile_ids(settings: PanelSettings) -> frozenset[str]:
     )
 
 
+def _stored_archived_ids(settings: PanelSettings) -> list[str]:
+    raw = getattr(settings, "archived_agent_profile_ids", None)
+    if not isinstance(raw, list):
+        return []
+    return [str(x).strip() for x in raw if str(x).strip()]
+
+
+def _drop_archived(settings: PanelSettings, profile_id: str) -> None:
+    archived = _stored_archived_ids(settings)
+    if profile_id in archived:
+        settings.archived_agent_profile_ids = [x for x in archived if x != profile_id]
+
+
+def _split_archived(
+    settings: PanelSettings, profiles: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    archived = set(_stored_archived_ids(settings))
+    visible: list[dict[str, Any]] = []
+    parked: list[dict[str, Any]] = []
+    for profile in profiles:
+        if str(profile.get("id") or "") in archived:
+            parked.append(profile)
+        else:
+            visible.append(profile)
+    return visible, parked
+
+
 def _heal_hidden_if_poisoned(settings: PanelSettings, *, persist: bool = True) -> PanelSettings:
     raw = settings.hidden_bundled_agent_profile_ids
     if not isinstance(raw, list) or not raw:
+        return settings
+    # Current delete sets this flag, including when every built-in is hidden.
+    # That choice stays hidden. Only a legacy full hide (flag still false) is repaired.
+    if settings.agent_profile_visibility_explicit:
         return settings
     bundled = bundled_profile_ids()
     hidden = frozenset(str(x).strip() for x in raw if str(x).strip())
     overrides = settings.agent_profile_overrides if isinstance(settings.agent_profile_overrides, dict) else {}
     override_ids = frozenset(str(k).strip() for k in overrides if str(k).strip())
-    # Hiding every template, with no rename and no custom ducky, is the
-    # unset-list bug. A shorter hide-list is a real removal and stays removed.
     accidental_hide_all = hidden == bundled and not override_ids and not _custom_profile_ids(settings)
-    if settings.agent_profile_visibility_explicit and not accidental_hide_all:
-        return settings
     if not accidental_hide_all and not _is_empty_or_poison(hidden, override_ids, bundled):
         return settings
     settings.hidden_bundled_agent_profile_ids = []
@@ -221,7 +248,15 @@ def list_bundled_agent_profile_templates() -> list[dict[str, Any]]:
 def list_agent_profiles(settings: PanelSettings | None = None) -> list[dict[str, Any]]:
     """Profiles shown in the settings library (built-ins hidden by default)."""
     s = _heal_hidden_if_poisoned(settings or PanelSettings.load())
-    return _merge_agent_profiles(s, apply_hidden=True)
+    visible, _parked = _split_archived(s, _merge_agent_profiles(s, apply_hidden=True))
+    return visible
+
+
+def list_archived_agent_profiles(settings: PanelSettings | None = None) -> list[dict[str, Any]]:
+    """Library profiles sitting in Archive. Permanently hidden built-ins stay out."""
+    s = _heal_hidden_if_poisoned(settings or PanelSettings.load())
+    _visible, parked = _split_archived(s, _merge_agent_profiles(s, apply_hidden=True))
+    return parked
 
 
 def list_agent_profiles_available(settings: PanelSettings | None = None) -> list[dict[str, Any]]:
@@ -321,6 +356,45 @@ def save_agent_profile_override(bundled_id: str, patch: dict[str, Any]) -> dict[
     return _patch_profile(bundled, merged_patch)
 
 
+def archive_agent_profile(profile_id: str) -> dict[str, Any]:
+    """Move a library profile into Archive. Existing chats stay where they are."""
+    pid = str(profile_id or "").strip()
+    if not pid or pid == BLANK_PROFILE_ID:
+        raise ValueError("profile_id is required")
+    s = _heal_hidden_if_poisoned(PanelSettings.load(), persist=False)
+    visible, parked = _split_archived(s, _merge_agent_profiles(s, apply_hidden=True))
+    match = next((p for p in visible if p["id"] == pid), None)
+    if match is None:
+        already = next((p for p in parked if p["id"] == pid), None)
+        if already is None:
+            raise ValueError(f"Profile not found: {profile_id}")
+        return already
+    archived = _stored_archived_ids(s)
+    if pid not in archived:
+        archived.append(pid)
+    s.archived_agent_profile_ids = archived
+    s.validate()
+    s.save()
+    return match
+
+
+def unarchive_agent_profile(profile_id: str) -> dict[str, Any]:
+    pid = str(profile_id or "").strip()
+    if not pid:
+        raise ValueError("profile_id is required")
+    s = PanelSettings.load()
+    archived = _stored_archived_ids(s)
+    if pid not in archived:
+        raise ValueError(f"Profile is not archived: {profile_id}")
+    s.archived_agent_profile_ids = [x for x in archived if x != pid]
+    s.validate()
+    s.save()
+    profile = get_agent_profile(pid, s)
+    if not profile:
+        raise ValueError(f"Profile not found: {profile_id}")
+    return profile
+
+
 def delete_agent_profile(profile_id: str) -> None:
     pid = str(profile_id or "").strip()
     if not pid:
@@ -337,6 +411,7 @@ def delete_agent_profile(profile_id: str) -> None:
         overrides = dict(s.agent_profile_overrides or {})
         overrides.pop(pid, None)
         s.agent_profile_overrides = overrides
+        _drop_archived(s, pid)
         s.validate()
         s.save()
         return
@@ -344,5 +419,6 @@ def delete_agent_profile(profile_id: str) -> None:
     if len(profiles) == len(s.agent_profiles or []):
         raise ValueError(f"Profile not found: {profile_id}")
     s.agent_profiles = profiles
+    _drop_archived(s, pid)
     s.validate()
     s.save()

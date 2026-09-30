@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { subscribeAgentEvents } from "../hooks/useAgentEventBus";
+import { requestReloadDuckies } from "../hooks/useChatsChanged";
 import { getApi } from "../hooks/usePanelApi";
 import { requestOpenSettings } from "../navigation/openSettingsTab";
 import type { AgentProfileDto, ChatTab, FolderItem, GroupMemberDto, LaneCheckResult } from "../types/panel";
@@ -35,6 +36,8 @@ export function laneTitle(lane: string[] | null | undefined): string {
 type Props = {
   groupId: string;
   members: GroupMemberDto[];
+  /** member_conv_id of the spokesperson. The same star the sidebar draws. */
+  leaderConvId?: string;
   /** Sidebar folder tree — nested group hovers list every agent + LLM + context. */
   folders?: FolderItem[];
   allChats?: ChatTab[];
@@ -101,6 +104,7 @@ function isOutsidePicker(target: EventTarget | null, root: HTMLElement | null): 
 export function GroupMemberStrip({
   groupId,
   members,
+  leaderConvId = "",
   folders = [],
   allChats = [],
   onMembersChange,
@@ -118,6 +122,8 @@ export function GroupMemberStrip({
   /** conv id → live file conflicts (running runs) for the red dot. */
   const [conflicts, setConflicts] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
+  const [leaderId, setLeaderId] = useState(leaderConvId);
+  useEffect(() => setLeaderId(leaderConvId), [leaderConvId]);
   const [error, setError] = useState("");
   /** Nested group hub id → its members (API fallback when folder tree is thin). */
   const [nestedMembers, setNestedMembers] = useState<Record<string, GroupMemberDto[]>>({});
@@ -273,7 +279,9 @@ export function GroupMemberStrip({
           return;
         }
         onMembersChange(res.group_members || []);
+        if (res.leader_conv_id) setLeaderId(res.leader_conv_id);
         setPickerOpen(false);
+        requestReloadDuckies();
       } finally {
         setBusy(false);
       }
@@ -294,7 +302,9 @@ export function GroupMemberStrip({
           return;
         }
         onMembersChange(res.group_members || []);
+        if (res.leader_conv_id) setLeaderId(res.leader_conv_id);
         setPickerOpen(false);
+        requestReloadDuckies();
       } finally {
         setBusy(false);
       }
@@ -325,6 +335,7 @@ export function GroupMemberStrip({
       const roster = api.group_members ? await api.group_members(groupId) : null;
       if (roster?.ok) onMembersChange(roster.members || []);
       setPickerOpen(false);
+      requestReloadDuckies();
       onOpenMember({
         id: res.id,
         name: (res.title || name).trim() || "Group",
@@ -398,8 +409,10 @@ export function GroupMemberStrip({
           return;
         }
         onMembersChange(res.group_members || []);
+        if (res.leader_conv_id !== undefined) setLeaderId(res.leader_conv_id || "");
         if (modelEditId === memberConvId) setModelEditId("");
         if (laneEditId === memberConvId) setLaneEditId("");
+        requestReloadDuckies();
       } finally {
         setBusy(false);
       }
@@ -611,6 +624,7 @@ export function GroupMemberStrip({
                       onClick={() => openMember(m)}
                       title={nestedGroup ? `Open group ${duckyName}` : `Open ${duckyName}'s work`}
                     >
+                      <span className="group-member-chip-avatar-wrap">
                       {nestedGroup ? (
                         <span className="group-member-chip-avatar group-member-chip-avatar--group" aria-hidden>
                           <Icons.Users />
@@ -623,6 +637,12 @@ export function GroupMemberStrip({
                           className="group-member-chip-avatar"
                         />
                       )}
+                      {!nestedGroup && leaderId && m.member_conv_id === leaderId ? (
+                        <span className="sidebar-leader-badge" title="Group leader" aria-label="Group leader">
+                          <Icons.Star />
+                        </span>
+                      ) : null}
+                      </span>
                       <span className="group-member-chip-name">{duckyName}</span>
                     </button>
                     {!nestedGroup ? (

@@ -439,14 +439,14 @@ export const APP_SHELL_TOUR: WalkthroughDef = {
     {
       target: "shell.duckies.header",
       title: "Duckies menu",
-      body: "Right-click the Duckies header. That menu makes a New Ducky or a New Group Chat, and it holds Compact, All projects, and Global agents.",
+      body: "Right-click the Duckies header. That menu makes a New Ducky or a New Group Chat, and it holds Compact, All projects, and Global Agents.",
       advance: "next",
       mode: "rect",
     },
     {
       target: "shell.duckies.menu",
       title: "All projects",
-      body: "All projects lists every island. Global agents lists the library duckies, such as Verse Coder, on whichever island is open. Compact tightens the list. Duckies made with no island open stay with Global agents.",
+      body: "All projects lists every island. Global Agents lists the library duckies, such as Verse Coder, on whichever island is open. Compact tightens the list. Duckies made with no island open stay with Global Agents.",
       advance: "next",
       mode: "rect",
       onEnter: openDuckiesMenu,

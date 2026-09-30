@@ -2,7 +2,7 @@ import { useRef, useState, type RefObject } from "react";
 import { DropdownPanel } from "../DropdownPanel";
 import { DuckyAvatar, DUCKY_AVATAR_SIZES } from "../ducky/DuckyAvatars";
 import { Icons } from "../../icons/Icons";
-import type { FolderItem } from "../../types/panel";
+import type { AgentProfileDto, FolderItem } from "../../types/panel";
 import { duckyNameMatches } from "../../utils/duckyTreeFilter";
 import { TruncatedText } from "../TruncatedText";
 
@@ -31,6 +31,7 @@ const ARCHIVE_DROPDOWN_Z_INDEX = 100000;
 
 interface DuckyArchiveDropdownProps {
   archiveChats: FolderItem["chats"];
+  archivedAgents?: AgentProfileDto[];
   activeChats: string[];
   runningChatIds: Set<string>;
   completionAlertChatIds?: ReadonlySet<string>;
@@ -39,11 +40,15 @@ interface DuckyArchiveDropdownProps {
   /** Un-archive: move the ducky back out of the Archive folder to the active root. */
   onReturnToActive: (id: string, name: string) => void;
   onDeleteArchivedChat: (id: string, name: string) => void;
+  onOpenAgent?: (profile: AgentProfileDto) => void;
+  onReturnAgent?: (profile: AgentProfileDto) => void;
+  onDeleteArchivedAgent?: (profile: AgentProfileDto) => void;
   buttonRef?: RefObject<HTMLButtonElement>;
 }
 
 export function DuckyArchiveDropdown({
   archiveChats,
+  archivedAgents = [],
   activeChats,
   runningChatIds,
   completionAlertChatIds,
@@ -51,6 +56,9 @@ export function DuckyArchiveDropdown({
   onChatSelect,
   onReturnToActive,
   onDeleteArchivedChat,
+  onOpenAgent,
+  onReturnAgent,
+  onDeleteArchivedAgent,
   buttonRef: buttonRefProp,
 }: DuckyArchiveDropdownProps) {
   const [open, setOpen] = useState(false);
@@ -60,7 +68,10 @@ export function DuckyArchiveDropdown({
   const visibleChats = filtering
     ? archiveChats.filter((chat) => duckyNameMatches(filterQuery, chat.name))
     : archiveChats;
-  const archiveCount = archiveChats.length;
+  const visibleAgents = filtering
+    ? archivedAgents.filter((profile) => duckyNameMatches(filterQuery, profile.name))
+    : archivedAgents;
+  const archiveCount = archiveChats.length + archivedAgents.length;
   const archiveBadge =
     archiveCount > 0 ? (archiveCount > 9 ? "9+" : String(archiveCount)) : null;
 
@@ -91,11 +102,12 @@ export function DuckyArchiveDropdown({
       >
         <div className="sidebar-archive-dropdown">
           <div className="sidebar-archive-dropdown-title">Archive</div>
-          {visibleChats.length === 0 ? (
+          {visibleChats.length === 0 && visibleAgents.length === 0 ? (
             <div className="ui-status-sidebar-muted sidebar-archive-dropdown-empty">
               {filtering ? "No archived duckies match" : "No archived duckies"}
             </div>
-          ) : (
+          ) : null}
+          {visibleChats.length > 0 ? (
             groupArchiveByProject(visibleChats).map((section) => (
             <div key={section.project}>
               <div className="sidebar-archive-dropdown-project">{section.project}</div>
@@ -166,7 +178,61 @@ export function DuckyArchiveDropdown({
             </ul>
             </div>
             ))
-          )}
+          ) : null}
+          {visibleAgents.length > 0 ? (
+            <div>
+              <div className="sidebar-archive-dropdown-project">Global Agents</div>
+              <ul className="sidebar-archive-dropdown-list">
+                {visibleAgents.map((profile) => (
+                  <li key={profile.id}>
+                    <button
+                      type="button"
+                      className="sidebar-archive-dropdown-item"
+                      onClick={() => {
+                        onOpenAgent?.(profile);
+                        close();
+                      }}
+                    >
+                      <span className="sidebar-archive-dropdown-item-icon">
+                        <DuckyAvatar
+                          styleId={profile.ducky_style}
+                          size={DUCKY_AVATAR_SIZES.sidebar}
+                          className="ducky-avatar--sidebar"
+                        />
+                      </span>
+                      <TruncatedText className="sidebar-archive-dropdown-item-label">{profile.name}</TruncatedText>
+                      <div className="sidebar-hover-actions">
+                        <button
+                          type="button"
+                          className="sidebar-action-btn"
+                          title="Return to active"
+                          aria-label="Return to active"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onReturnAgent?.(profile);
+                          }}
+                        >
+                          <Icons.Restore />
+                        </button>
+                        <button
+                          type="button"
+                          className="sidebar-action-btn sidebar-delete-btn"
+                          title="Delete permanently"
+                          aria-label="Delete permanently"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteArchivedAgent?.(profile);
+                          }}
+                        >
+                          <Icons.Trash />
+                        </button>
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       </DropdownPanel>
     </>

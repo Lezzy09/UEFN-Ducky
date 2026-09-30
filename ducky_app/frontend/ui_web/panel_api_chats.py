@@ -381,7 +381,12 @@ class PanelApiChatsMixin:
         from frontend.agent_profiles import get_agent_profile
         from frontend.ducky_assets import ducky_style_label, normalize_ducky_style
         from frontend.favorite_models import ResolveErr, allow_create_without_model
-        from frontend.ui_web.group_orchestrator import group_members, member_color_for_index, normalize_member
+        from frontend.ui_web.group_orchestrator import (
+            _group_folder_id,
+            group_members,
+            member_color_for_index,
+            normalize_member,
+        )
 
         group = _pa.load_conversation(group_id)
         if not group or not getattr(group, "is_group", False):
@@ -407,9 +412,12 @@ class PanelApiChatsMixin:
         style = normalize_ducky_style(str(profile.get("ducky_style") or ""))
         # Library profile name (Verse Coder) — not avatar style label (Artist).
         ducky_name = str(profile.get("name") or "").strip() or ducky_style_label(style)
+        folder_id = _group_folder_id(group_id) or (group.folder_id or "").strip()
+        if not folder_id:
+            return {"ok": False, "error": "Group has no folder"}
         member = _pa.create_conversation(
             settings,
-            group.folder_id or "",
+            folder_id,
             title=ducky_name,
             parent_conv_id=group_id,
             ducky_style=style,
@@ -425,6 +433,7 @@ class PanelApiChatsMixin:
             provider=result.provider or None,
             coding_agent=result.coding_agent,
         )
+        _pa.adopt_group_project(member, group_id)
         row = normalize_member(
             {
                 "member_conv_id": member.id,
@@ -489,7 +498,8 @@ class PanelApiChatsMixin:
             normalize_member,
             sync_group_members_from_folder,
         )
-        from frontend.ui_web.project_chats import move_conversation
+        from frontend.ui_web.group_orchestrator import _group_folder_id
+        from frontend.ui_web.project_chats import adopt_group_project, move_conversation
 
         group = _pa.load_conversation(group_id)
         if not group or not getattr(group, "is_group", False):
@@ -500,13 +510,15 @@ class PanelApiChatsMixin:
             return {"ok": False, "error": "Conversation not found"}
         if getattr(member, "is_group", False):
             return {"ok": False, "error": "Cannot add a group hub as a leaf member"}
-        folder_id = (group.folder_id or "").strip()
+        folder_id = _group_folder_id(group_id) or (group.folder_id or "").strip()
         if not folder_id:
             return {"ok": False, "error": "Group has no folder"}
         _pa.move_conversation(cid, folder_id)
         member = _pa.load_conversation(cid) or member
         member.parent_conv_id = group_id
+        member.folder_id = folder_id
         _pa.save_conversation(member)
+        adopt_group_project(member, group_id)
         sync_group_members_from_folder(group)
         group = _pa.load_conversation(group_id) or group
         existing = group_members(group)
@@ -673,6 +685,7 @@ class PanelApiChatsMixin:
 
     def group_members(self, group_id: str) -> dict[str, Any]:
         from frontend.ui_web.group_orchestrator import (
+            _rehome_group_roster,
             group_members,
             is_group_conversation,
             sync_group_members_from_folder,
@@ -682,8 +695,11 @@ class PanelApiChatsMixin:
         if not group:
             return {"ok": False, "error": "Conversation not found", "members": []}
         if is_group_conversation(group):
+            moved = _rehome_group_roster(group)
             sync_group_members_from_folder(group)
             group = _pa.load_conversation(group_id) or group
+            if moved:
+                _pa.notify_chats_changed(group.id, group.title, group.folder_id, open_tab=False)
         return {
             "ok": True,
             "is_group": is_group_conversation(group),
@@ -695,9 +711,18 @@ class PanelApiChatsMixin:
         profiles = _pa.list_agent_profiles()
         return {
             "profiles": profiles,
+            "archived_profiles": _pa.list_archived_agent_profiles(),
             "template_profiles": _pa.list_bundled_agent_profile_templates(),
             "blank_profile_id": _pa.BLANK_PROFILE_ID,
         }
+
+    def archive_agent_profile(self, profile_id: str) -> dict[str, Any]:
+        saved = _pa.archive_agent_profile(profile_id)
+        return {"ok": True, "profile": saved}
+
+    def unarchive_agent_profile(self, profile_id: str) -> dict[str, Any]:
+        saved = _pa.unarchive_agent_profile(profile_id)
+        return {"ok": True, "profile": saved}
 
     def save_agent_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(profile, dict):

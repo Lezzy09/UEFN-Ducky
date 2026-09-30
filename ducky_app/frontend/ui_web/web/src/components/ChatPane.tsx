@@ -331,6 +331,7 @@ export function ChatPane({
   const [groupMembers, setGroupMembers] = useState<GroupMemberDto[]>(
     () => chat.groupMembers || [],
   );
+  const [leaderConvId, setLeaderConvId] = useState(chat.leaderConvId || "");
   const [liveVoice, setLiveVoice] = useState(false);
   const [liveVoiceHandlers, setLiveVoiceHandlers] = useState<LiveVoiceUiHandlers | null>(null);
   const [promptQueue, setPromptQueueState] = useState<QueuedPrompt[]>(() => getPromptQueue(chat.id));
@@ -344,7 +345,8 @@ export function ChatPane({
   }, []);
   useEffect(() => {
     setGroupMembers(chat.isGroup ? chat.groupMembers || [] : []);
-  }, [chat.id, chat.isGroup]);
+    setLeaderConvId(chat.isGroup ? chat.leaderConvId || "" : "");
+  }, [chat.id, chat.isGroup, chat.leaderConvId]);
 
   useEffect(() => {
     if (!chat.isGroup) return;
@@ -355,6 +357,7 @@ export function ChatPane({
     void api.group_members(convId).then((res) => {
       if (cancelled || !res?.ok || !Array.isArray(res.members)) return;
       setGroupMembers(res.members);
+      setLeaderConvId(res.leader_conv_id || "");
     });
     return () => {
       cancelled = true;
@@ -595,7 +598,10 @@ export function ChatPane({
           const api = getApi();
           if (!chat.isGroup || !api?.group_members) return;
           void api.group_members(chat.id).then((res) => {
-            if (res?.ok && Array.isArray(res.members)) setGroupMembers(res.members);
+            if (res?.ok && Array.isArray(res.members)) {
+              setGroupMembers(res.members);
+              setLeaderConvId(res.leader_conv_id || "");
+            }
           });
           return;
         }
@@ -1287,6 +1293,7 @@ export function ChatPane({
             <GroupMemberStrip
               groupId={chat.id}
               members={groupMembers}
+              leaderConvId={leaderConvId}
               folders={folders}
               allChats={allChats}
               onMembersChange={setGroupMembers}

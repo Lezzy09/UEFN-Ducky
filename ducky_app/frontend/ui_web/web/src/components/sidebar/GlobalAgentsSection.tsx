@@ -27,6 +27,23 @@ interface GlobalAgentsSectionProps {
 
 type Rename = { profile: AgentProfileDto; value: string };
 
+/** Open the chat this library agent already has, or create one. */
+export async function openLibraryAgent(
+  profile: AgentProfileDto,
+  folders: FolderItem[],
+  rootChats: FolderItem["chats"],
+  projectSlug: string,
+): Promise<{ id: string; name: string } | null> {
+  const existing = pickChatForGlobalAgent(chatsInDuckiesTree(folders, rootChats), profile, projectSlug);
+  if (existing) return existing;
+  const api = getApi();
+  if (!api?.create_conversation) return null;
+  const config = formToConfig(profileToForm(profile), profile.name, profile.id);
+  const created = await api.create_conversation("", profile.ducky_style, undefined, config);
+  if (!created?.id) return null;
+  return { id: created.id, name: created.title || profile.name };
+}
+
 export function GlobalAgentsSection({
   folders,
   rootChats,
@@ -37,7 +54,7 @@ export function GlobalAgentsSection({
   onOpenChat,
   onCreated,
 }: GlobalAgentsSectionProps) {
-  const { confirm, alert } = useConfirmModal();
+  const { alert } = useConfirmModal();
   const [profiles, setProfiles] = useState<AgentProfileDto[]>([]);
   const [expanded, setExpanded] = useState(true);
   const [openingId, setOpeningId] = useState("");
@@ -61,7 +78,7 @@ export function GlobalAgentsSection({
       setProfiles((res.profiles ?? []).filter((profile) => profile.id && profile.id !== "__blank__"));
       setLoadError("");
     } catch {
-      if (version === loadVersion.current) setLoadError("Failed to refresh global agents.");
+      if (version === loadVersion.current) setLoadError("Failed to refresh Global Agents.");
     }
   }, []);
 
@@ -112,30 +129,20 @@ export function GlobalAgentsSection({
     }
   };
 
-  const deleteProfile = async (profile: AgentProfileDto) => {
+  const archiveProfile = async (profile: AgentProfileDto) => {
     if (mutatingRef.current) return;
     mutatingRef.current = true;
     setBusyId(profile.id);
     try {
-      const bundled = profile.kind === "bundled";
-      const accepted = await confirm({
-        title: "Delete global agent",
-        message: bundled
-          ? `Remove "${profile.name}" from Global agents? Existing chats will be kept, and this template will still be available when creating an agent.`
-          : `Delete "${profile.name}" from Global agents? This custom profile cannot be recovered. Existing chats will be kept.`,
-        confirmLabel: "Delete",
-        danger: true,
-      });
-      if (accepted !== true) return;
       const api = getApi();
-      if (!api) throw new Error("The app is still connecting. Please try again.");
-      const result = await api.delete_agent_profile(profile.id);
-      if (!result.ok) throw new Error("The agent could not be deleted. Please try again.");
+      if (!api?.archive_agent_profile) throw new Error("The app is still connecting. Please try again.");
+      const result = await api.archive_agent_profile(profile.id);
+      if (!result.ok) throw new Error("The agent could not be archived. Please try again.");
       ++loadVersion.current;
       setProfiles((items) => items.filter((item) => item.id !== profile.id));
-      emitDuckyProfileChanged({ type: "deleted", profileId: profile.id });
+      emitDuckyProfileChanged({ type: "archived", profileId: profile.id });
     } catch (error) {
-      await alert({ title: "Delete failed", message: error instanceof Error ? error.message : "The agent could not be deleted." });
+      await alert({ title: "Archive failed", message: error instanceof Error ? error.message : "The agent could not be archived." });
     } finally {
       mutatingRef.current = false;
       setBusyId("");
@@ -150,21 +157,13 @@ export function GlobalAgentsSection({
 
   const openProfile = async (profile: AgentProfileDto) => {
     if (openingId || editingRef.current || mutatingRef.current) return;
-    const existing = pickChatForGlobalAgent(chatsInDuckiesTree(folders, rootChats), profile, projectSlug);
-    if (existing) {
-      onOpenChat(existing);
-      return;
-    }
-    const api = getApi();
-    if (!api?.create_conversation) return;
     setOpeningId(profile.id);
     try {
-      const config = formToConfig(profileToForm(profile), profile.name, profile.id);
-      const created = await api.create_conversation("", profile.ducky_style, undefined, config);
-      if (created?.id) {
-        onOpenChat({ id: created.id, name: created.title || profile.name });
-        onCreated();
-      }
+      const opened = await openLibraryAgent(profile, folders, rootChats, projectSlug);
+      if (!opened) return;
+      const existed = Boolean(pickChatForGlobalAgent(chatsInDuckiesTree(folders, rootChats), profile, projectSlug));
+      onOpenChat(opened);
+      if (!existed) onCreated();
     } finally {
       setOpeningId("");
     }
@@ -194,7 +193,7 @@ export function GlobalAgentsSection({
             <span className="chevron-icon" aria-hidden><Icons.ChevronDown /></span>
             <span className="sidebar-tree-row-icon sidebar-tree-row-icon--folder" aria-hidden><Icons.Folder /></span>
           </span>
-          <span className="sidebar-tree-row-label">Global agents</span>
+          <span className="sidebar-tree-row-label">Global Agents</span>
         </div>
         <SidebarTreeChildren>
           {visible.map((profile) => {
@@ -224,7 +223,7 @@ export function GlobalAgentsSection({
                   } else if (event.key === "Delete") {
                     event.preventDefault();
                     event.stopPropagation();
-                    void deleteProfile(profile);
+                    void archiveProfile(profile);
                   }
                 }}
               >
@@ -255,7 +254,7 @@ export function GlobalAgentsSection({
                   <div className="sidebar-tree-row-text"><span className="sidebar-tree-row-label">{profile.name}</span></div>
                 )}
                 {!isEditing && !busyId ? (
-                  <SidebarHoverActions onRename={() => beginRename(profile)} onDelete={() => void deleteProfile(profile)} activeChat={active} />
+                  <SidebarHoverActions onRename={() => beginRename(profile)} onDelete={() => void archiveProfile(profile)} activeChat={active} deleteTitle="Archive" />
                 ) : null}
               </div>
             );
@@ -265,7 +264,7 @@ export function GlobalAgentsSection({
       {context.menu ? (
         <ContextMenu x={context.menu.x} y={context.menu.y} onClose={context.close} items={[
           { id: "rename", label: "Rename", onClick: () => beginRename(context.menu!.data) },
-          { id: "delete", label: "Delete", danger: true, onClick: () => void deleteProfile(context.menu!.data) },
+          { id: "archive", label: "Archive", onClick: () => void archiveProfile(context.menu!.data) },
         ]} />
       ) : null}
     </div>

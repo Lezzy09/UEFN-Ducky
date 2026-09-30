@@ -2500,6 +2500,8 @@ export interface PanelApi {
     as_leader?: boolean,
   ): Promise<{ ok?: boolean; leader_conv_id?: string; group_members?: GroupMemberDto[]; error?: string }>;
   list_agent_profiles(): Promise<AgentProfileListDto>;
+  archive_agent_profile?(profile_id: string): Promise<{ ok: boolean; profile?: AgentProfileDto }>;
+  unarchive_agent_profile?(profile_id: string): Promise<{ ok: boolean; profile?: AgentProfileDto }>;
   save_agent_profile(profile: AgentProfileDto): Promise<{ ok: boolean; profile: AgentProfileDto }>;
   save_agent_profile_override(bundled_id: string, patch: Partial<AgentProfileDto>): Promise<{ ok: boolean; profile: AgentProfileDto }>;
   delete_agent_profile(profile_id: string): Promise<{ ok: boolean }>;
@@ -3665,6 +3667,7 @@ export interface AgentProfileDto {
 
 export interface AgentProfileListDto {
   profiles: AgentProfileDto[];
+  archived_profiles?: AgentProfileDto[];
   template_profiles?: AgentProfileDto[];
   blank_profile_id: string;
 }

@@ -40,6 +40,12 @@ _UMG_CLASSES = (
     "BlueprintEditorLibrary",
     "ToolsetRegistry",
     "UMGToolSet",
+    "WidgetAnimation",
+    "WidgetAnimationToolset",
+    "VerseFieldsToolset",
+    "MVVMToolset",
+    "UIFrameworkTextBlock",
+    "UIFrameworkCustomButtonWidget",
 )
 
 _HARD_LIST_CAP = 200
@@ -271,9 +277,10 @@ def umg_capabilities() -> dict:
             "create_widget_blueprint uses WidgetBlueprintFactory (proven in UEFN).",
             "WidgetTree/RootWidget editor properties are PROTECTED — use GetWidgets via UMGToolSet.",
             "NEVER call get_all_toolset_json_schemas / get_toolset_json_schema — dumps crash UEFN (AV).",
-            "Tree scaffolding: add_widget_to_tree → open_asset_in_uefn for designer polish.",
-            "Verse fields (38.00+) and Verse field events (39.40+) are authored in the UMG Variables panel; "
-            "they appear in the Assets digest as the UW_* type members.",
+            "Full trees: build_widget_tree (slots + properties, one compile). "
+            "Animations: WidgetAnimationToolset. Verse fields: VerseFieldsToolset.AddVerseField. "
+            "Bindings: MVVMToolset.create_view_binding / create_view_event_binding.",
+            "Verse fields appear in the Assets digest as the UW_* type members after a Verse build.",
             "Compile with BlueprintEditorLibrary.compile_blueprint after tree edits.",
         ],
     }
@@ -375,6 +382,13 @@ def get_widget_blueprint_info(widget_path: str) -> dict:
             info["bindings"] = list_widget_bindings(widget_path).get("bindings", [])
         except Exception as exc:  # noqa: BLE001
             info["bindings_error"] = str(exc)[:200]
+
+    try:
+        from listener.registry.umg_author import enrich_widget_info
+
+        enrich_widget_info(wbp, info)
+    except Exception as exc:  # noqa: BLE001
+        info["author_enrich_error"] = str(exc)[:200]
 
     return info
 
@@ -633,9 +647,8 @@ def add_widget_binding(
             "view": _ref_path(view),
             "added": False,
             "note": (
-                "View exists. Pass source_path + destination_path once you know the "
-                "exact MVVM field paths (or finish the binding in the designer via "
-                "open_asset_in_uefn)."
+                "View exists. Pass source_path + destination_path, or call "
+                "bind_verse_field / bind_widget_event with the widget name."
             ),
         }
 
@@ -723,3 +736,6 @@ register("set_widget_property")(set_widget_property)
 register("list_widget_bindings")(list_widget_bindings)
 register("add_widget_binding")(add_widget_binding)
 register("remove_widget_binding")(remove_widget_binding)
+
+# Registers tree / animation / Verse-field commands.
+from listener.registry import umg_author as _umg_author  # noqa: E402,F401

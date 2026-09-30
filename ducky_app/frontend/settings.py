@@ -139,6 +139,9 @@ class PanelSettings:
     agent_profile_visibility_explicit: bool = False
     """Visibility edited by current code; legacy repair must respect these choices."""
 
+    archived_agent_profile_ids: list[str] = field(default_factory=list)
+    """Library profile ids moved to Archive. Empty = none archived."""
+
     default_enabled_skills: list[str] = field(default_factory=list)
     """Legacy flat skill list — ignored (all packs available by default)."""
 
@@ -418,6 +421,7 @@ class PanelSettings:
             or self.agent_profiles
             or self.agent_profile_overrides
             or self.agent_profile_visibility_explicit
+            or self.archived_agent_profile_ids
             or self._hidden_bundled_counts_as_override()
             or not self.verse_diagnostics_cache_enabled
             or not self.verse_diagnostics_auto_check

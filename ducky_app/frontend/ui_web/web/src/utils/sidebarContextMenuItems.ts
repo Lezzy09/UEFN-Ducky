@@ -88,7 +88,7 @@ export function duckyTreeGlobalAgentsItem(
 ): ContextMenuItem {
   return {
     id: "ducky-global-agents",
-    label: "Global agents",
+    label: "Global Agents",
     switch: true,
     checked: show,
     keepOpen: true,

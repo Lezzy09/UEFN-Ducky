@@ -6,10 +6,14 @@ from frontend.agent_profiles import (
     _heal_hidden_if_poisoned,
     _is_empty_or_poison,
     _stored_hidden_list,
+    archive_agent_profile,
     bundled_profile_ids,
     delete_agent_profile,
     list_agent_profiles,
+    list_archived_agent_profiles,
+    save_agent_profile,
     save_agent_profile_override,
+    unarchive_agent_profile,
 )
 from frontend.settings import PanelSettings
 
@@ -67,8 +71,8 @@ def test_deleting_one_bundled_hides_only_that_one(monkeypatch) -> None:
     assert "level-designer" in ids
 
 
-def test_hiding_one_sticks_but_hiding_every_template_with_nothing_custom_is_repaired(monkeypatch) -> None:
-    """A partial removal stays removed. Hiding every template and nothing else is the wipe bug."""
+def test_hiding_one_sticks_and_hiding_every_template_stays_hidden(monkeypatch) -> None:
+    """A partial removal stays removed. Deleting the last built-in stays deleted too."""
     stored = PanelSettings(hidden_bundled_agent_profile_ids=[]).to_json_dict()
     bundled = sorted(bundled_profile_ids())
 
@@ -79,13 +83,12 @@ def test_hiding_one_sticks_but_hiding_every_template_with_nothing_custom_is_repa
     monkeypatch.setattr(PanelSettings, "load", classmethod(lambda cls: cls._finish_load(stored)))
     monkeypatch.setattr(PanelSettings, "save", save)
     removed = set()
-    for pid in bundled[:-1]:
+    for pid in bundled:
         delete_agent_profile(pid)
         removed.add(pid)
         visible = {profile["id"] for profile in list_agent_profiles()}
         assert not removed & visible
-    delete_agent_profile(bundled[-1])
-    assert {profile["id"] for profile in list_agent_profiles()} == bundled_profile_ids()
+    assert not bundled_profile_ids() & {profile["id"] for profile in list_agent_profiles()}
 
 
 def test_deleting_siblings_of_renamed_profile_stays_deleted(monkeypatch) -> None:
@@ -99,7 +102,7 @@ def test_deleting_siblings_of_renamed_profile_stays_deleted(monkeypatch) -> None
     assert [(p["id"], p["name"]) for p in profiles] == [("niagara-vfx", "My VFX")]
 
 
-def test_wiped_library_comes_back_and_a_partial_hide_stays_hidden(monkeypatch) -> None:
+def test_explicit_hide_all_stays_hidden_except_the_profile_just_saved(monkeypatch) -> None:
     wiped = PanelSettings(
         hidden_bundled_agent_profile_ids=sorted(bundled_profile_ids()),
         agent_profile_visibility_explicit=True,
@@ -108,8 +111,7 @@ def test_wiped_library_comes_back_and_a_partial_hide_stays_hidden(monkeypatch) -
     monkeypatch.setattr(wiped, "save", lambda: None)
     save_agent_profile_override("verse-coder", {"name": "My Coder"})
     names = {p["id"]: p["name"] for p in list_agent_profiles(wiped)}
-    assert names["verse-coder"] == "My Coder"
-    assert set(names) == bundled_profile_ids()
+    assert names == {"verse-coder": "My Coder"}
 
     partial = PanelSettings(
         hidden_bundled_agent_profile_ids=["verse-coder", "tester"],
@@ -124,6 +126,29 @@ def test_deleting_from_legacy_poisoned_library_repairs_then_removes(monkeypatch)
     monkeypatch.setattr(s, "save", lambda: None)
     delete_agent_profile("verse-coder")
     assert {p["id"] for p in list_agent_profiles(s)} == bundled_profile_ids() - {"verse-coder"}
+
+
+def test_archive_restore_and_permanent_delete(monkeypatch) -> None:
+    s = PanelSettings(hidden_bundled_agent_profile_ids=[], archived_agent_profile_ids=[])
+    monkeypatch.setattr(PanelSettings, "load", classmethod(lambda cls: s))
+    monkeypatch.setattr(s, "save", lambda: None)
+    archive_agent_profile("verse-coder")
+    assert "verse-coder" not in {p["id"] for p in list_agent_profiles(s)}
+    assert "verse-coder" in {p["id"] for p in list_archived_agent_profiles(s)}
+    unarchive_agent_profile("verse-coder")
+    assert "verse-coder" in {p["id"] for p in list_agent_profiles(s)}
+    assert list_archived_agent_profiles(s) == []
+    archive_agent_profile("verse-coder")
+    delete_agent_profile("verse-coder")
+    assert "verse-coder" not in {p["id"] for p in list_agent_profiles(s)}
+    assert "verse-coder" not in {p["id"] for p in list_archived_agent_profiles(s)}
+    assert "verse-coder" in (s.hidden_bundled_agent_profile_ids or [])
+    custom = save_agent_profile({"id": "my-agent", "name": "My Agent", "ducky_personality": "Be helpful"})
+    archive_agent_profile(custom["id"])
+    assert custom["id"] not in {p["id"] for p in list_agent_profiles(s)}
+    delete_agent_profile(custom["id"])
+    assert custom["id"] not in {p["id"] for p in list_archived_agent_profiles(s)}
+    assert custom["id"] not in {p["id"] for p in list_agent_profiles(s)}
 
 
 def test_rename_and_delete_custom_profile_preserve_other_agents(monkeypatch) -> None:

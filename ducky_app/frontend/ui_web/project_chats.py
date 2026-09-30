@@ -604,6 +604,26 @@ def delete_folder(
     return sorted(hub_ids)
 
 
+def island_for_conversation(
+    conv_id: str, project_root: str | None = None
+) -> tuple[list[Conversation], list[ChatFolder]]:
+    """Chats and folders on the island that owns conv_id.
+
+    All-projects mode files a group folder on the group's island. Listing the
+    open island instead drops members that were invited from another project.
+    """
+    if _use_db():
+        slug = (_repo().conv_project_id(conv_id) or "").strip()
+        if slug:
+            convs = [
+                Conversation.from_dict(doc)
+                for doc in _repo().conv_list(slug, with_messages=False)
+            ]
+            folders = [ChatFolder.from_dict(row) for row in _repo().folders_get(slug)]
+            return convs, folders
+    return list_conversations(project_root=project_root), load_folders(project_root)
+
+
 def list_conversations(folder_id: str | None = None, project_root: str | None = None) -> list[Conversation]:
     _maybe_migrate_conversation_sort_orders(project_root)
     all_convs = _load_all_conversations(project_root, include_messages=False)
@@ -1697,12 +1717,37 @@ def _write_folders_slug(slug: str, folders: list[ChatFolder]) -> None:
     write_json_atomic(path, {"folders": [folder.to_dict() for folder in folders]})
 
 
+def adopt_group_project(conv: Conversation, group_id: str) -> None:
+    """Put a member on the group's island.
+
+    All-projects mode otherwise files the new chat under the open island, and
+    the group folder (which lives on the group's island) never lists it.
+    """
+    if not _use_db():
+        return
+    gid = (group_id or "").strip()
+    if not gid:
+        return
+    home = _repo().conv_project_id(gid)
+    if not home or home == _repo().conv_project_id(conv.id):
+        return
+    _repo().conv_save(home, conv.to_dict(), messages=None)
+
+
+def _folder_is_known(folder_id: str, project_root: str | None) -> bool:
+    if not folder_id or is_archive_folder_id(folder_id):
+        return True
+    if folder_id in {f.id for f in load_folders(project_root)}:
+        return True
+    # All-projects: the group folder can live on another island.
+    return any(folder.id == folder_id for _slug, folders in iter_folders_by_project() for folder in folders)
+
+
 def move_conversation(conv_id: str, folder_id: str, project_root: str | None = None) -> None:
     conv = load_conversation(conv_id, project_root)
     if conv is None:
         raise ValueError(f"Conversation not found: {conv_id!r}")
-    folders = load_folders(project_root)
-    if folder_id and folder_id not in {f.id for f in folders}:
+    if not _folder_is_known(folder_id, project_root):
         raise ValueError(f"Unknown folder: {folder_id!r}")
     target_folder = folder_id or ""
     # Archive/restore the complete owned sub-agent tree. Otherwise children become

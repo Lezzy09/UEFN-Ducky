@@ -354,6 +354,7 @@ function ChatViewBody({ layoutMode, sidebarRefresh, projectSlug, projectPath }: 
         }
         return;
       }
+      if (ev.type !== "saved" && ev.type !== "duplicated") return;
       if (!ev.name && !ev.duckyStyle) return;
       setOpenTabs((prev) =>
         prev.map((t) =>

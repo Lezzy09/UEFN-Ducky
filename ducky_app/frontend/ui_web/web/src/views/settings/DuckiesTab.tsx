@@ -214,7 +214,7 @@ export function DuckiesTab() {
     return onDuckyProfileChanged((ev) => {
       void (async () => {
         const listed = await refreshProfiles();
-        if (ev.type === "deleted") {
+        if (ev.type === "deleted" || ev.type === "archived") {
           if (selectedId === ev.profileId) closeDetail();
           return;
         }

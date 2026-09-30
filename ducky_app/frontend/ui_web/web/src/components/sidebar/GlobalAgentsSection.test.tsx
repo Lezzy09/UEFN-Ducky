@@ -9,6 +9,7 @@ import { GlobalAgentsSection } from "./GlobalAgentsSection";
 const api = vi.hoisted(() => ({
   list_agent_profiles: vi.fn(), save_agent_profile: vi.fn(),
   save_agent_profile_override: vi.fn(), delete_agent_profile: vi.fn(),
+  archive_agent_profile: vi.fn(),
   create_conversation: vi.fn(),
 }));
 vi.mock("../../hooks/usePanelApi", () => ({ getApi: () => api }));
@@ -49,6 +50,11 @@ beforeEach(() => {
   api.delete_agent_profile.mockImplementation(async (id) => {
     profiles = profiles.filter((item) => item.id !== id);
     return { ok: true };
+  });
+  api.archive_agent_profile.mockImplementation(async (id) => {
+    const saved = profiles.find((item) => item.id === id);
+    profiles = profiles.filter((item) => item.id !== id);
+    return { ok: true, profile: saved };
   });
 });
 afterEach(() => { cleanup(); vi.resetAllMocks(); });
@@ -100,11 +106,12 @@ describe("global agent sidebar actions", () => {
     expect(api.create_conversation).not.toHaveBeenCalled();
   });
 
-  it("offers rename and delete in the context menu and supports F2", async () => {
+  it("offers rename and archive in the context menu and supports F2", async () => {
     mount();
+    expect(await screen.findByRole("button", { name: "Global Agents" })).toBeTruthy();
     const agent = await screen.findByRole("button", { name: "Verse Coder", exact: true });
     fireEvent.contextMenu(agent, { clientX: 20, clientY: 20 });
-    expect(screen.getByRole("menuitem", { name: "Delete" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Archive" })).toBeTruthy();
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
     fireEvent.keyDown(agent, { key: "F2" });
@@ -122,36 +129,25 @@ describe("global agent sidebar actions", () => {
     expect(api.create_conversation).not.toHaveBeenCalled();
   });
 
-  it.each(["Verse Coder", "My Agent"])("confirms deletion of %s, refreshes the list, and persists on remount", async (name) => {
+  it.each(["Verse Coder", "My Agent"])("archives %s without a confirm, and it stays gone on remount", async (name) => {
     const changed = vi.fn();
     const off = onDuckyProfileChanged(changed);
     const view = mount();
     try {
       const agent = await screen.findByRole("button", { name, exact: true });
-      fireEvent.click(within(agent).getByTitle("Delete"));
-      expect(api.delete_agent_profile).not.toHaveBeenCalled();
-      expect(screen.getByText(/Existing chats will be kept/)).toBeTruthy();
-      fireEvent.click(screen.getByRole("button", { name: "Delete (D)" }));
+      fireEvent.click(within(agent).getByTitle("Archive"));
       await waitFor(() => expect(screen.queryByRole("button", { name, exact: true })).toBeNull());
+      expect(screen.queryByRole("dialog")).toBeNull();
       const id = name === "Verse Coder" ? bundled.id : custom.id;
-      expect(api.delete_agent_profile).toHaveBeenCalledExactlyOnceWith(id);
-      expect(changed).toHaveBeenCalledWith({ type: "deleted", profileId: id });
+      expect(api.archive_agent_profile).toHaveBeenCalledExactlyOnceWith(id);
+      expect(api.delete_agent_profile).not.toHaveBeenCalled();
+      expect(changed).toHaveBeenCalledWith({ type: "archived", profileId: id });
       expect(api.create_conversation).not.toHaveBeenCalled();
       view.unmount();
       mount();
       await screen.findByRole("button", { name: name === "Verse Coder" ? "My Agent" : "Verse Coder", exact: true });
       expect(screen.queryByRole("button", { name, exact: true })).toBeNull();
     } finally { off(); }
-  });
-
-  it("keeps an agent when deletion is cancelled", async () => {
-    mount();
-    const agent = await screen.findByRole("button", { name: "Verse Coder", exact: true });
-    fireEvent.keyDown(agent, { key: "Delete" });
-    fireEvent.click(screen.getByRole("button", { name: "Cancel (C)" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(row("Verse Coder")).toBeTruthy();
-    expect(api.delete_agent_profile).not.toHaveBeenCalled();
   });
 
   it("keeps the old name and reports a failed save", async () => {
@@ -165,12 +161,11 @@ describe("global agent sidebar actions", () => {
     expect(screen.queryByRole("button", { name: "New name", exact: true })).toBeNull();
   });
 
-  it("keeps the row and reports deletion refused by the backend", async () => {
-    api.delete_agent_profile.mockResolvedValueOnce({ ok: false });
+  it("keeps the row and reports an archive the backend refused", async () => {
+    api.archive_agent_profile.mockResolvedValueOnce({ ok: false });
     mount();
     fireEvent.keyDown(await screen.findByRole("button", { name: "Verse Coder", exact: true }), { key: "Delete" });
-    fireEvent.click(screen.getByRole("button", { name: "Delete (D)" }));
-    await screen.findByText("The agent could not be deleted. Please try again.");
+    await screen.findByText("The agent could not be archived. Please try again.");
     expect(row("Verse Coder")).toBeTruthy();
   });
 });

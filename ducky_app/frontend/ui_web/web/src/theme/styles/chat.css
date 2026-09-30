@@ -3414,8 +3414,13 @@
   cursor: default;
 }
 
-.group-member-chip-avatar {
-  flex-shrink: 0;
+.group-member-chip-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.group-member-chip-avatar {  flex-shrink: 0;
 }
 
 .group-member-chip-name {

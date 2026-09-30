@@ -187,18 +187,17 @@ HINTS_UMG = """
 UMG / Widget Blueprints (registry tools; capability-guarded)
 - ``umg_capabilities`` FIRST — never call ToolsetRegistry.get_all_toolset_json_schemas /
   get_toolset_json_schema from execute_python (dumps crash UEFN with ACCESS_VIOLATION).
-- Create: ``create_widget_blueprint(asset_name="UW_MyHud", folder="")`` (auto-pins
-  ``{content_root}UI`` — never invent ``/Game/UI``).
-- Inspect: ``list_widget_blueprints`` then ``get_widget_blueprint_info`` (member vars =
-  Verse fields once authored; tree via UMGToolSet.GetWidgets; MVVM bindings).
-- Scaffold tree: ``add_widget_to_tree`` / ``set_widget_property`` / ``remove_widget_from_tree``.
-  Property names vary — set_widget_property lists them first. Polish in the designer via
-  ``open_asset_in_uefn``.
-- Bindings: ``list_widget_bindings`` / ``add_widget_binding`` / ``remove_widget_binding``
-  (MVVMEditorSubsystem; complex binds finish in View Bindings panel).
-- Runtime Verse: after the UW_* type appears in Assets digest, ``var W : UW_X = UW_X{}`` then
-  ``GetPlayerUI[Player].AddWidget(W, player_ui_slot{…})``. Drive with Verse fields (38.00+)
-  and Verse field events (39.40+). Load skill_read_subskill("verse", "umg_widgets").
+  Never patch ``.uasset`` bytes.
+- ``list_widget_classes`` before any class name. ``build_widget_tree`` writes the nested
+  tree, slots, and widget props in one compile. ``set_widget_slot`` nudges anchors / ZOrder.
+- Animations: ``create_widget_animation`` → ``add_animation_keys`` (Opacity, Color, Transform).
+  Verse fields: ``add_verse_field`` (bool/int/float/string/message/color/texture/material;
+  ``logic`` maps to bool). ``event`` fields cannot be created here — ``bind_widget_event``
+  points OnClicked / OnButtonHighlight at a bool or int field.
+- Read back: ``get_widget_blueprint_info`` (slots, animation key counts, verse_fields,
+  view_bindings). Skill: ``umg_mcp_tools`` then ``umg_recipes``.
+- Runtime Verse: Assets digest name, one instance per player, SetFocus, InputMode.All for
+  menus. Verse cannot call PlayAnimation by name.
 - WidgetTree/RootWidget editor properties are PROTECTED — do not get_editor_property them.
 """
 
