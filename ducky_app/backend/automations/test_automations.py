@@ -800,3 +800,172 @@ def test_builtin_uefn_templates_listed():
     assert "Launch on this PC" in _MEMORY_PROMPT
     assert "Launch Memory Calculation" in _MEMORY_PROMPT
     assert "press OK" in _MEMORY_PROMPT
+
+
+def test_catalog_has_play_test_nodes():
+    from backend.automations.catalog import list_nodes
+
+    by_type = {n["type"]: n for n in list_nodes()}
+    assert {"uefn.check", "uefn.game.start", "uefn.game.stop", "uefn.player.wait", "uefn.log.expect"} <= set(by_type)
+    assert all(by_type[t]["group"] == "Play test" for t in ("uefn.check", "uefn.game.start", "uefn.game.stop"))
+    assert by_type["uefn.game.start"]["config_fields"][0]["id"] == "skip_if_playing"
+
+
+def test_builtin_templates_are_wired_to_known_nodes_and_ready():
+    from backend.automations.catalog import list_nodes
+    from backend.automations.templates import list_templates
+
+    known = {n["type"] for n in list_nodes()}
+    rows = {row["id"]: row for row in list_templates() if row["kind"] == "builtin"}
+    play = {
+        "builtin:playtest-start",
+        "builtin:stop-game",
+        "builtin:tycoon-first-purchase",
+        "builtin:tycoon-income-loop",
+        "builtin:tycoon-ducky-playtest",
+    }
+    assert play <= set(rows)
+    for row in rows.values():
+        assert row["ready"] and not row["missing_plugins"], row["id"]
+        ids = {n["id"] for n in row["graph"]["nodes"]}
+        for node in row["graph"]["nodes"]:
+            assert node["type"] in known, (row["id"], node["type"])
+        for edge in row["graph"]["edges"]:
+            assert edge["source"] in ids and edge["target"] in ids, (row["id"], edge)
+        if row["id"] not in play:
+            continue
+        # Every non-end play-test node leads somewhere — a dangling wire silently stops the run.
+        sources = {e["source"] for e in row["graph"]["edges"]}
+        for node in row["graph"]["nodes"]:
+            if node["type"] not in ("pipeline.finish", "flow.end"):
+                assert node["id"] in sources, (row["id"], node["id"])
+
+
+def test_play_templates_check_before_launching():
+    """Start game is reached from both the running and the closed path; Open UEFN
+    project only on the closed one; Start game never launches twice."""
+    from backend.automations.templates import list_templates
+
+    for row in list_templates():
+        if row["id"] not in ("builtin:playtest-start", "builtin:tycoon-income-loop"):
+            continue
+        graph = row["graph"]
+        kinds = {(e["source"], e["kind"]): e["target"] for e in graph["edges"]}
+        assert kinds[("b", "false")] == "o"  # closed → Open UEFN project
+        assert kinds[("b", "true")] == "w"  # running → just wait for the listener
+        start = next(n for n in graph["nodes"] if n["type"] == "uefn.game.start")
+        assert start["config"]["skip_if_playing"] is True
+        assert start["config"]["wait_player"] > 0
+
+
+def test_check_uefn_node_never_launches(monkeypatch):
+    import pytest
+
+    from backend.automations import play, runner
+
+    monkeypatch.setattr("frontend.window_view._uefn_running", lambda: False)
+    monkeypatch.setattr(play, "_uefn_online", lambda: {"uefn_online": False, "listener_online": False, "epic_mcp_online": False})
+    monkeypatch.setattr("frontend.window_view.launch_uefn_project", lambda *a, **k: pytest.fail("launched"))
+    step = runner._exec_node({"id": "c", "type": "uefn.check", "config": {}}, {})
+    assert step["ok"] is True
+    assert step["result"]["running"] is False and step["result"]["ready"] is False
+    assert runner._eval_branch({"field": "running", "op": "equals", "equals": "true"}, step["result"]) is False
+    assert runner._eval_branch({"field": "running", "op": "equals", "equals": "true"}, {"running": True}) is True
+
+
+def test_start_game_skips_when_already_playing(monkeypatch):
+    import pytest
+
+    from backend.automations import play, runner
+
+    monkeypatch.setattr(play, "_uefn_online", lambda: {"uefn_online": True})
+    monkeypatch.setattr(play, "_probe", lambda: {"ok": True, "playing": True, "has_player": True, "player_count": 1})
+    monkeypatch.setattr("backend.tools.tester.session_play.start_game", lambda: pytest.fail("started twice"))
+    step = runner._exec_node({"id": "g", "type": "uefn.game.start", "config": {"skip_if_playing": True}}, {})
+    assert step["ok"] is True
+    assert step["result"]["already_playing"] is True and step["result"]["playing"] is True
+
+
+def test_start_game_refuses_when_uefn_offline(monkeypatch):
+    from backend.automations import play, runner
+
+    monkeypatch.setattr(play, "_uefn_online", lambda: {"uefn_online": False})
+    step = runner._exec_node({"id": "g", "type": "uefn.game.start", "config": {}}, {})
+    assert step["ok"] is False
+    assert "Open UEFN project" in step["error"]
+
+
+def test_start_game_starts_then_waits_for_player(monkeypatch):
+    from backend.automations import play, runner
+
+    calls: list[str] = []
+    monkeypatch.setattr(play, "_uefn_online", lambda: {"uefn_online": True})
+    monkeypatch.setattr(play, "_probe", lambda: {"ok": True, "playing": False, "has_player": False, "player_count": 0})
+    monkeypatch.setattr(
+        "backend.tools.tester.session_play.start_game",
+        lambda: calls.append("start") or {"ok": True, "source": "listener"},
+    )
+    monkeypatch.setattr(
+        "backend.tools.tester.session_play.wait_for_player",
+        lambda timeout: calls.append(f"wait:{timeout}") or {"ok": True, "playing": True, "has_player": True, "player_count": 1},
+    )
+    step = runner._exec_node({"id": "g", "type": "uefn.game.start", "config": {"wait_player": 500}}, {})
+    assert step["ok"] is True
+    assert calls == ["start", "wait:120.0"]  # capped
+    assert step["result"]["has_player"] is True and step["result"]["started"] is True
+
+
+def test_stop_game_is_noop_when_nothing_plays(monkeypatch):
+    import pytest
+
+    from backend.automations import play, runner
+
+    monkeypatch.setattr(play, "_uefn_online", lambda: {"uefn_online": True})
+    monkeypatch.setattr(play, "_probe", lambda: {"ok": True, "playing": False})
+    monkeypatch.setattr("backend.bridge.send_command", lambda *a, **k: pytest.fail("stop_pie sent"))
+    step = runner._exec_node({"id": "x", "type": "uefn.game.stop", "config": {}}, {})
+    assert step["ok"] is True and step["result"]["already_stopped"] is True
+
+
+def test_expect_log_continues_from_previous_offset(monkeypatch):
+    from backend.automations import runner
+
+    seen: dict[str, object] = {}
+
+    def fake_expect(regex, timeout, since_offset):
+        seen.update(regex=regex, timeout=timeout, since=since_offset)
+        return {"ok": True, "log_matches": ["[Tycoon] purchase: dropper"], "count": 1, "log_offset": 940}
+
+    monkeypatch.setattr("backend.tools.tester.session_play.expect_log", fake_expect)
+    step = runner._exec_node(
+        {"id": "e", "type": "uefn.log.expect", "config": {"regex": r"\[Tycoon\].*purchase", "timeout": 999}},
+        {"log_offset": 512},
+    )
+    assert step["ok"] is True
+    assert seen == {"regex": r"\[Tycoon\].*purchase", "timeout": 120.0, "since": 512}
+    assert step["result"]["log_offset"] == 940
+    monkeypatch.setattr(
+        "backend.tools.tester.session_play.expect_log",
+        lambda *a: {"ok": False, "error": "log pattern not seen", "log_matches": [], "count": 0, "log_offset": 3},
+    )
+    failed = runner._exec_node({"id": "e", "type": "uefn.log.expect", "config": {"regex": "nope"}}, {})
+    assert failed["ok"] is False and "nope" in failed["error"]
+
+
+def test_tool_call_exposes_parsed_json_for_branches(monkeypatch):
+    import json
+
+    from backend.automations import runner
+    from backend.server import mcp
+
+    class FakeTool:
+        fn = staticmethod(lambda **kw: json.dumps({"compile": {"numErrors": 2}, "hints": [{"code": "3506"}]}))
+
+    monkeypatch.setattr(mcp._tool_manager, "get_tool", lambda name: FakeTool if name == "workspace_compile_verse" else None)
+    step = runner._exec_node({"id": "v", "type": "tool.call", "config": {"name": "workspace_compile_verse", "arguments": {}}}, {})
+    assert step["ok"] is True
+    assert step["result"]["data"]["compile"]["numErrors"] == 2
+    ctx: dict = {}
+    ctx.update({k: v for k, v in step["result"].items() if k != "ok"})
+    assert runner._eval_branch({"field": "data.hints", "op": "exists"}, ctx) is True
+    assert runner._eval_branch({"field": "data.hints", "op": "exists"}, {"data": {"compile": {}}}) is False

@@ -47,6 +47,7 @@ const EMOJI: Record<string, string> = {
   "flow.branch": "🔀", "flow.foreach": "🔁", "tool.call": "🛠️",
   "uefn.open_project": "📂", "uefn.launch": "🚀", "uefn.close": "⏹️",
   "uefn.restart": "🔄", "uefn.wait_ready": "⏳", "uefn.wait_window": "🖥️",
+  "uefn.check": "🩺", "uefn.game.start": "🎮", "uefn.game.stop": "⏹", "uefn.player.wait": "🧍", "uefn.log.expect": "🔎",
 };
 
 export function NodeIcon({ meta, node, faces = {} }: { meta?: AutomationNodeDto; node?: AutomationGraphNodeDto; faces?: Record<string, string> }) {

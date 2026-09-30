@@ -3399,6 +3399,8 @@ export interface PanelApi {
     replace?: boolean,
   ): Promise<SkillPackImportResultDto>;
   get_mcp_tools_catalog(): Promise<McpCatalogDto>;
+  /** Host tools a workflow Call tool node can run — no nested MCP connections. */
+  get_workflow_tools_catalog?: () => Promise<McpCatalogDto>;
   list_mcp_plugins(): Promise<McpPluginListDto>;
   list_mcp_servers?: () => Promise<McpPluginListDto>;
   set_mcp_plugin_enabled(

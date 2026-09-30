@@ -228,6 +228,7 @@ _PUBLIC_METHODS = frozenset({
     'delete_workflow_template',
     'emit_workflow_trigger',
     'get_workflow',
+    'get_workflow_tools_catalog',
     'import_local_workflows',
     'list_workflow_nodes',
     'list_workflow_templates',

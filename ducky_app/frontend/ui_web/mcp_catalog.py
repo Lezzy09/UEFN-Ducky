@@ -161,6 +161,89 @@ def build_mcp_catalog(*, apply_filters: bool = True) -> dict[str, Any]:
     }
 
 
+_WORKFLOW_CACHE: dict[str, Any] = {}
+
+
+def build_workflow_tool_catalog() -> dict[str, Any]:
+    """Tools a workflow "Call tool" node can run — host MCP tools only.
+
+    The runner calls ``mcp._tool_manager.get_tool(name)`` directly, so nested
+    MCP plugin tools (``blender__…``) are never callable from a node. Listing
+    them through ``build_mcp_catalog`` connected every enabled nested server
+    (45s timeout each, serial, no cache after one failure) and sync-waited on
+    desktop plugin load — the "Loading tools…" hang. This path touches neither.
+    """
+    import inspect
+
+    from backend.agent.tools import _ensure_mcp
+    from backend.uefn_plugins.host import plugins_ready
+
+    mcp = _ensure_mcp()
+    tools = list(mcp._tool_manager.list_tools())
+    ready = plugins_ready()
+    key = (len(tools), ready)
+    if _WORKFLOW_CACHE.get("key") == key:
+        return dict(_WORKFLOW_CACHE["rows"])
+
+    by_cat = _tool_category_map()
+    uefn_owner: dict[str, str] = {}
+    if ready:
+        # Already loaded → these return without blocking on plugin register().
+        try:
+            from backend.uefn_plugins.host import uefn_agent_tool_rows, uefn_plugin_tool_group_rows
+
+            for row in list(uefn_agent_tool_rows()) + list(uefn_plugin_tool_group_rows()):
+                label = str(row.get("label") or row.get("id") or "").strip()
+                for name in row.get("tool_names") or []:
+                    if isinstance(name, str) and name.strip() and label:
+                        uefn_owner[name.strip()] = label
+        except Exception:
+            pass
+
+    rows: list[dict[str, Any]] = []
+    categories: dict[str, dict[str, Any]] = {}
+    for tool in sorted(tools, key=lambda t: t.name):
+        fn = getattr(tool, "fn", None)
+        if getattr(tool, "is_async", False) or (fn is not None and inspect.iscoroutinefunction(fn)):
+            continue  # the runner refuses async tools
+        if tool.name in uefn_owner:
+            label = uefn_owner[tool.name]
+            cat_id, cat_label = f"uefn_plugin_{label.lower().replace(' ', '_')}", f"Desktop plugin: {label}"
+        else:
+            cat_id, cat_label = by_cat.get(tool.name, ("other", "Other MCP tools"))
+        schema = dict(getattr(tool, "parameters", None) or {"type": "object", "properties": {}})
+        row = {
+            "name": tool.name,
+            "description": (tool.description or tool.name).strip(),
+            "category_id": cat_id,
+            "category_label": cat_label,
+            "in_agent": tool.name in CORE_TOOLS and tool.name not in EXCLUDED_TOOLS,
+            "in_plan": False,  # plan-safety lookup sync-waits on plugin load; not needed here
+            "agent_excluded": tool.name in EXCLUDED_TOOLS,
+            "destructive": tool.name in DESTRUCTIVE_TOOLS,
+            "host_only": is_host_only_tool(tool.name),
+            "is_plugin": False,
+            "parameters": [p for p in _schema_parameters(schema) if p["name"] != "pretty"],
+        }
+        rows.append(row)
+        categories.setdefault(cat_id, {"id": cat_id, "label": cat_label, "tools": []})["tools"].append(row)
+
+    order = [cat_id for cat_id, _label, _tools in _CATEGORY_MODULES] + ["other"]
+    ordered = [categories[c] for c in order if c in categories]
+    ordered += sorted((b for c, b in categories.items() if c not in order), key=lambda c: c["label"])
+    out = {
+        "total": len(rows),
+        "agent_tools": sum(1 for r in rows if r["in_agent"]),
+        "plan_tools": sum(1 for r in rows if r["in_plan"]),
+        "categories": ordered,
+        "tools": rows,
+        "host_only_catalog": True,
+    }
+    _WORKFLOW_CACHE["key"] = key
+    _WORKFLOW_CACHE["rows"] = out
+    return dict(out)
+
+
 def _merge_installed_plugin_tools(full: dict[str, Any]) -> None:
     """Include Store-installed plugin tools even when the local toggle is off."""
     try:

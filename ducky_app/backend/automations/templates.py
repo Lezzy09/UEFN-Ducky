@@ -94,7 +94,211 @@ _MEMORY_PROMPT = (
 )
 
 
+_TYCOON_PLAYTEST_PROMPT = (
+    "A play session is already running with a player in it. You are play-testing a "
+    "tycoon island. Use the tester tools only (session_status, actor_state_snapshot, "
+    "actor_state_diff, get_editor_log, device_graph_snapshot, simulate_device_event, "
+    "verse_test_results) — never restart UEFN, stop the session, or edit Verse in this run. "
+    "Check in order: 1) the player spawned on a pad and the starting money / HUD value is "
+    "the expected one; 2) the first purchase (buy button or dropper pad) is affordable from "
+    "the start and fires — a '[Tycoon]' log line or a device trace; 3) income ticks up "
+    "while the player idles for 30 seconds; 4) dropped items reach the collector / cash-in "
+    "point; 5) a second tier or rebirth exists and is reachable. Reply with PASS or FAIL "
+    "per item, the evidence (log lines, snapshot diffs), and one fix suggestion per FAIL."
+)
+
+_TYCOON_LOG_HINT = (
+    "Your Verse must Print a '[Tycoon] …' line for the event: purchase lines mention "
+    "purchase, bought or buy; income lines mention income, earned or tick."
+)
+
+
+def _launch_prefix(starter: str = "start.manual") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Check UEFN → is it running? → Wait for UEFN (yes) / Open UEFN project (no).
+
+    Both wires must be joined to the template's next node (ids ``w`` and ``o``).
+    Nothing here launches an editor that is already up.
+    """
+    nodes: list[dict[str, Any]] = [
+        {"id": "s", "type": starter, "x": 0, "y": 120, "config": {}},
+        {"id": "c", "type": "uefn.check", "x": 240, "y": 120, "config": {}},
+        {
+            "id": "b",
+            "type": "flow.branch",
+            "x": 480,
+            "y": 120,
+            "label": "UEFN running?",
+            "config": {"mode": "data", "field": "running", "op": "equals", "equals": "true"},
+        },
+        {"id": "w", "type": "uefn.wait_ready", "x": 760, "y": 0, "config": {"timeout": 180}},
+        {"id": "o", "type": "uefn.open_project", "x": 760, "y": 240, "config": {"project": "", "timeout": 300}},
+    ]
+    edges: list[dict[str, Any]] = [
+        {"source": "s", "target": "c", "kind": "main"},
+        {"source": "c", "target": "b", "kind": "main"},
+        {"source": "b", "target": "w", "kind": "true"},
+        {"source": "b", "target": "o", "kind": "false"},
+    ]
+    return nodes, edges
+
+
+def _after_launch(
+    tail: list[dict[str, Any]],
+    tail_edges: list[dict[str, Any]],
+    *,
+    starter: str = "start.manual",
+) -> dict[str, Any]:
+    """Launch prefix + ``tail`` whose first node receives both prefix wires."""
+    nodes, edges = _launch_prefix(starter)
+    first = str(tail[0]["id"])
+    edges += [{"source": "w", "target": first, "kind": "main"}, {"source": "o", "target": first, "kind": "main"}]
+    return {"nodes": nodes + tail, "edges": edges + tail_edges}
+
+
+_START_GAME = {
+    "id": "g",
+    "type": "uefn.game.start",
+    "x": 1040,
+    "y": 120,
+    "config": {"skip_if_playing": True, "wait_player": 90},
+}
+
+
 BUILTIN_TEMPLATES: list[dict[str, Any]] = [
+    {
+        "id": "builtin:playtest-start",
+        "name": "Play test: open UEFN and start the game",
+        "label": "Play test: open UEFN and start the game",
+        "description": (
+            "Check UEFN first. Running: wait for the listener. Closed: open the project. "
+            "Then start the session (skipped when one is already playing) and wait for a player."
+        ),
+        "icon": "🎮",
+        "kind": "builtin",
+        "graph": _after_launch(
+            [
+                dict(_START_GAME),
+                {"id": "f", "type": "pipeline.finish", "x": 1300, "y": 120, "config": {"message": "Game session is running and a player is in."}},
+            ],
+            [{"source": "g", "target": "f", "kind": "main"}],
+        ),
+    },
+    {
+        "id": "builtin:stop-game",
+        "name": "Stop the game session",
+        "label": "Stop the game session",
+        "description": "End the play session. Does nothing when nothing is playing or UEFN is closed.",
+        "icon": "⏹",
+        "kind": "builtin",
+        "graph": {
+            "nodes": [
+                {"id": "s", "type": "start.manual", "x": 0, "y": 0, "config": {}},
+                {"id": "x", "type": "uefn.game.stop", "x": 240, "y": 0, "config": {}},
+                {"id": "f", "type": "pipeline.finish", "x": 480, "y": 0, "config": {"message": "Game session stopped."}},
+            ],
+            "edges": [{"source": "s", "target": "x", "kind": "main"}, {"source": "x", "target": "f", "kind": "main"}],
+        },
+    },
+    {
+        "id": "builtin:tycoon-first-purchase",
+        "name": "Tycoon test: compile, play, first purchase",
+        "label": "Tycoon test: compile, play, first purchase",
+        "description": (
+            "Open or reuse UEFN, compile Verse (stops on errors), start the game, wait for a "
+            "player, then wait for the first '[Tycoon] purchase' log line. " + _TYCOON_LOG_HINT
+        ),
+        "icon": "🏭",
+        "kind": "builtin",
+        "graph": _after_launch(
+            [
+                {"id": "v", "type": "tool.call", "x": 1040, "y": 120, "config": {"name": "workspace_compile_verse", "arguments": {}}},
+                {
+                    "id": "vb",
+                    "type": "flow.branch",
+                    "x": 1300,
+                    "y": 120,
+                    "label": "Verse errors?",
+                    "config": {"mode": "data", "field": "data.hints", "op": "exists"},
+                },
+                {"id": "fe", "type": "pipeline.finish", "x": 1580, "y": 0, "config": {"message": "Verse has compile errors — fix them before the play test."}},
+                {**_START_GAME, "x": 1580, "y": 240},
+                {
+                    "id": "e",
+                    "type": "uefn.log.expect",
+                    "x": 1840,
+                    "y": 240,
+                    "config": {"regex": r"\[Tycoon\].*(purchase|bought|buy)", "timeout": 120},
+                },
+                {"id": "f", "type": "pipeline.finish", "x": 2100, "y": 240, "config": {"message": "First purchase seen in the log."}},
+            ],
+            [
+                {"source": "v", "target": "vb", "kind": "main"},
+                {"source": "vb", "target": "fe", "kind": "true"},
+                {"source": "vb", "target": "g", "kind": "false"},
+                {"source": "g", "target": "e", "kind": "main"},
+                {"source": "e", "target": "f", "kind": "main"},
+            ],
+        ),
+    },
+    {
+        "id": "builtin:tycoon-income-loop",
+        "name": "Tycoon test: income keeps ticking",
+        "label": "Tycoon test: income keeps ticking",
+        "description": (
+            "Open or reuse UEFN, start the game, wait for a player, idle 30 seconds, then "
+            "expect a '[Tycoon] income' log line. " + _TYCOON_LOG_HINT
+        ),
+        "icon": "💰",
+        "kind": "builtin",
+        "graph": _after_launch(
+            [
+                dict(_START_GAME),
+                {"id": "i", "type": "flow.wait", "x": 1300, "y": 120, "config": {"seconds": 30}},
+                {
+                    "id": "e",
+                    "type": "uefn.log.expect",
+                    "x": 1560,
+                    "y": 120,
+                    "config": {"regex": r"\[Tycoon\].*(income|earned|tick)", "timeout": 60},
+                },
+                {"id": "f", "type": "pipeline.finish", "x": 1820, "y": 120, "config": {"message": "Income ticked while the player idled."}},
+            ],
+            [
+                {"source": "g", "target": "i", "kind": "main"},
+                {"source": "i", "target": "e", "kind": "main"},
+                {"source": "e", "target": "f", "kind": "main"},
+            ],
+        ),
+    },
+    {
+        "id": "builtin:tycoon-ducky-playtest",
+        "name": "Tycoon play test by a ducky",
+        "label": "Tycoon play test by a ducky",
+        "description": (
+            "Open or reuse UEFN, start the game, wait for a player, then a ducky checks the "
+            "tycoon loop (spawn, first purchase, income, collector, next tier) and reports PASS/FAIL."
+        ),
+        "icon": "🦆",
+        "kind": "builtin",
+        "graph": _after_launch(
+            [
+                dict(_START_GAME),
+                {
+                    "id": "a",
+                    "type": "pipeline.agent",
+                    "x": 1300,
+                    "y": 120,
+                    "config": {"ducky": "", "timeout_sec": 900, "prompt": _TYCOON_PLAYTEST_PROMPT},
+                },
+                {"id": "f", "type": "pipeline.finish", "x": 1560, "y": 120, "config": {}},
+            ],
+            [
+                {"source": "g", "target": "a", "kind": "main"},
+                {"source": "a", "target": "f", "kind": "main"},
+            ],
+            starter="start.chat",
+        ),
+    },
     {
         "id": "builtin:open-uefn-project",
         "name": "Open UEFN project",
@@ -256,10 +460,6 @@ def list_templates() -> list[dict[str, Any]]:
 _NODE_PLUGIN = {
     "discord.send": "discord",
     "discord.message": "discord",
-    "uefn.game.start": "tester",
-    "uefn.player.wait": "tester",
-    "uefn.player.teleport": "tester",
-    "uefn.log.expect": "tester",
 }
 
 

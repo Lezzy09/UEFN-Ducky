@@ -194,6 +194,55 @@ BUILTIN_NODES: list[dict[str, Any]] = [
             {"id": "timeout", "label": "Timeout (seconds)", "type": "number"},
         ],
     },
+    {
+        "type": "uefn.check",
+        "label": "Check UEFN",
+        "group": "Play test",
+        "role": "action",
+        "description": "Cheap status, never launches: running, listener_online, project_match, playing, has_player, ready. Branch on any of them.",
+        "config_fields": [
+            {"id": "project", "label": "UEFN project (optional)", "type": "project"},
+        ],
+    },
+    {
+        "type": "uefn.game.start",
+        "label": "Start game",
+        "group": "Play test",
+        "role": "action",
+        "description": "Start the play session (Epic StartGame, else the listener). Skips when a session is already playing. Needs UEFN online.",
+        "config_fields": [
+            {"id": "skip_if_playing", "label": "Skip if already playing", "type": "boolean"},
+            {"id": "wait_player", "label": "Then wait for a player (seconds, 0 = no wait, max 120)", "type": "number"},
+        ],
+    },
+    {
+        "type": "uefn.game.stop",
+        "label": "Stop game",
+        "group": "Play test",
+        "role": "action",
+        "description": "End the play session. No-op when nothing is playing or UEFN is closed.",
+        "config_fields": [],
+    },
+    {
+        "type": "uefn.player.wait",
+        "label": "Wait for player",
+        "group": "Play test",
+        "role": "action",
+        "description": "Poll the session until a player is in the game (max 120s).",
+        "config_fields": [{"id": "timeout", "label": "Timeout (seconds)", "type": "number"}],
+    },
+    {
+        "type": "uefn.log.expect",
+        "label": "Expect log line",
+        "group": "Play test",
+        "role": "action",
+        "description": "Wait for an editor log line matching a regex (max 120s). Continues from the previous Expect log line's offset.",
+        "config_fields": [
+            {"id": "regex", "label": "Regex", "type": "string"},
+            {"id": "timeout", "label": "Timeout (seconds)", "type": "number"},
+            {"id": "from_start", "label": "Search from the start of the log", "type": "boolean"},
+        ],
+    },
 ]
 
 

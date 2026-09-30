@@ -1,7 +1,40 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ChoiceDropdown, type ChoiceOption } from "../components/ChoiceDropdown";
 import { getApi } from "../hooks/usePanelApi";
-import type { AutomationGraphNodeDto, McpToolDto, McpToolParameterDto } from "../types/panel";
+import type { AutomationGraphNodeDto, McpCatalogDto, McpToolDto, McpToolParameterDto } from "../types/panel";
+
+/** One catalog for every Call tool node: the host tool list only changes when a
+ *  plugin is toggled, so reopening the dropdown must not refetch it. */
+const CATALOG_TTL_MS = 60_000;
+const catalogCache: { at: number; tools: McpToolDto[]; pending: Promise<McpToolDto[]> | null } = { at: 0, tools: [], pending: null };
+
+async function fetchWorkflowTools(): Promise<McpToolDto[]> {
+  const api = getApi() as (Record<string, unknown> & { get_mcp_tools_catalog?: () => Promise<McpCatalogDto> }) | null;
+  if (!api) throw new Error("Panel API unavailable");
+  let catalog: McpCatalogDto | null = null;
+  if (typeof api.get_workflow_tools_catalog === "function") {
+    // Worker thread + poll: the bridge stays free and the list arrives in ms.
+    const { runBridgeJob } = await import("../hooks/bridgeJobAsync");
+    catalog = await runBridgeJob<McpCatalogDto>("get_workflow_tools_catalog", [], 30_000);
+  } else if (api.get_mcp_tools_catalog) {
+    catalog = await api.get_mcp_tools_catalog(); // older app builds
+  }
+  if (!Array.isArray(catalog?.tools)) throw new Error("Tools unavailable");
+  return catalog.tools;
+}
+
+export function loadWorkflowTools(force = false): Promise<McpToolDto[]> {
+  const fresh = catalogCache.tools.length > 0 && Date.now() - catalogCache.at < CATALOG_TTL_MS;
+  if (fresh && !force) return Promise.resolve(catalogCache.tools);
+  if (catalogCache.pending) return catalogCache.pending;
+  const pending = fetchWorkflowTools()
+    .then((tools) => { catalogCache.tools = tools; catalogCache.at = Date.now(); return tools; })
+    .finally(() => { if (catalogCache.pending === pending) catalogCache.pending = null; });
+  catalogCache.pending = pending;
+  return pending;
+}
+
+export function resetWorkflowToolsCache() { catalogCache.at = 0; catalogCache.tools = []; catalogCache.pending = null; }
 
 function readArguments(node: AutomationGraphNodeDto): { values: Record<string, unknown>; valid: boolean; text: string } {
   const raw = node.config.arguments;
@@ -14,20 +47,21 @@ function readArguments(node: AutomationGraphNodeDto): { values: Record<string, u
 }
 
 export function ToolSettings({ node, onChange }: { node: AutomationGraphNodeDto; onChange: (node: AutomationGraphNodeDto) => void }) {
-  const [tools, setTools] = useState<McpToolDto[]>([]);
-  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [tools, setTools] = useState<McpToolDto[]>(() => catalogCache.tools);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">(() => (catalogCache.tools.length ? "ready" : "loading"));
   const request = useRef(0);
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (force = false) => {
     const revision = ++request.current;
     try {
-      const catalog = await getApi()?.get_mcp_tools_catalog?.();
+      const rows = await loadWorkflowTools(force);
       if (revision !== request.current) return;
-      if (!Array.isArray(catalog?.tools)) throw new Error("Tools unavailable");
-      setTools(catalog.tools);
+      setTools(rows);
       setStatus("ready");
     } catch { if (revision === request.current) setStatus("error"); }
   }, []);
   useEffect(() => { void refresh(); return () => { request.current++; }; }, [refresh]);
+  // Reopening only refetches after an error (cache is per TTL otherwise).
+  const onOpen = useCallback(() => { void refresh(status === "error"); }, [refresh, status]);
 
   const name = String(node.config.name || "");
   const tool = tools.find((item) => item.name === name);
@@ -49,7 +83,7 @@ export function ToolSettings({ node, onChange }: { node: AutomationGraphNodeDto;
   return <>
     <div className="aw-field">
       <span className="aw-field-label">Tool</span>
-      <ChoiceDropdown aria-label="Tool" value={name} options={options} onChange={(next) => onChange({ ...node, config: { ...node.config, name: next } })} placeholder="Choose a tool…" searchable searchPlaceholder="Search tools" showSelectedHint={false} onOpen={() => void refresh()} size="compact" minWidth={300} emptyLabel={status === "loading" ? "Loading tools…" : "No tools available"} footer={status === "error" ? "Could not load tools — reopen to retry" : undefined} />
+      <ChoiceDropdown aria-label="Tool" value={name} options={options} onChange={(next) => onChange({ ...node, config: { ...node.config, name: next } })} placeholder="Choose a tool…" searchable searchPlaceholder="Search tools" showSelectedHint={false} onOpen={onOpen} size="compact" minWidth={300} emptyLabel={status === "loading" ? "Loading tools…" : "No tools available"} footer={status === "error" ? "Could not load tools — reopen to retry" : undefined} />
     </div>
     {args.valid && simple.map((parameter) => <ToolArgument key={parameter.name} parameter={parameter} value={args.values[parameter.name]} onChange={(value) => setArgument(parameter.name, value)} />)}
     {tool && !parameters.length && !showAdvanced ? <p className="aw-field-hint">This tool needs no inputs.</p> : null}

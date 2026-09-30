@@ -5,7 +5,7 @@ import { AutomationsView } from "./AutomationsView";
 import { ConfirmModalProvider } from "../contexts/ConfirmModalContext";
 import type { AutomationDto, WorkflowOwnerDto, WorkflowOwnersDto } from "../types/panel";
 
-const api = vi.hoisted(() => ({ list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_workflows: vi.fn(), list_workflow_nodes: vi.fn(), get_workflow: vi.fn(), save_workflow: vi.fn(), run_workflow: vi.fn(), delete_workflow: vi.fn(), workflow_owners: vi.fn(), workflow_sync: vi.fn(), copy_workflow: vi.fn(), set_workflow_run_here: vi.fn(), import_local_workflows: vi.fn(), workflow_open_web: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn() }));
+const api = vi.hoisted(() => ({ list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_workflows: vi.fn(), list_workflow_nodes: vi.fn(), get_workflow: vi.fn(), save_workflow: vi.fn(), run_workflow: vi.fn(), delete_workflow: vi.fn(), workflow_owners: vi.fn(), workflow_sync: vi.fn(), copy_workflow: vi.fn(), set_workflow_run_here: vi.fn(), import_local_workflows: vi.fn(), workflow_open_web: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn(), get_workflow_tools_catalog: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
 vi.mock("./AutomationTemplatePicker", () => ({
   AutomationTemplatePicker: ({ open, owners, ownerId, onOwnerChange, onSelect }: {
@@ -53,6 +53,7 @@ beforeEach(() => {
   api.list_workflow_versions.mockResolvedValue({ ok: true, versions: [] });
   api.get_workflow_version.mockResolvedValue({ ok: false });
   api.get_mcp_tools_catalog.mockResolvedValue({ tools: [] });
+  api.get_workflow_tools_catalog.mockResolvedValue({ tools: [] });
   api.list_workflows.mockImplementation(async () => ({ workflows: [
     { id: "p", name: "Example", enabled: true, owner: saved.owner, trigger: { kind: "chat", label: "Chat" } },
     { id: "d", name: "Daily check", enabled: true, owner: daily.owner, run_here: daily.run_here, trigger: { kind: "schedule", label: "Every 5m" } },

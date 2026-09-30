@@ -15,6 +15,13 @@ class PanelApiAutomationsMixin:
 
         return {"ok": True, "nodes": list_nodes()}
 
+    def get_workflow_tools_catalog(self) -> dict[str, Any]:
+        """Host tools a Call tool node can run. Never connects nested MCP plugins
+        (that is the Settings catalog); run it as a bridge job all the same."""
+        from frontend.ui_web.mcp_catalog import build_workflow_tool_catalog
+
+        return build_workflow_tool_catalog()
+
     def list_workflows(self) -> dict[str, Any]:
         from backend.automations.store import list_workflows
 

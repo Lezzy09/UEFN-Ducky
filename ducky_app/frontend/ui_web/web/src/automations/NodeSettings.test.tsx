@@ -3,9 +3,11 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NodeSettings } from "./NodeSettings";
+import { resetWorkflowToolsCache } from "./ToolSettings";
 import type { AutomationGraphNodeDto, AutomationNodeDto } from "../types/panel";
 
-const api = vi.hoisted(() => ({ get_mcp_tools_catalog: vi.fn() }));
+// No bridge_job_start on this stub → runBridgeJob calls the method directly.
+const api = vi.hoisted(() => ({ get_workflow_tools_catalog: vi.fn(), get_mcp_tools_catalog: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
 let current: AutomationGraphNodeDto;
 function Editor({ config, meta }: { config: Record<string, unknown>; meta?: AutomationNodeDto }) {
@@ -14,7 +16,9 @@ function Editor({ config, meta }: { config: Record<string, unknown>; meta?: Auto
   return <NodeSettings node={node} meta={meta} onChange={setNode} />;
 }
 beforeEach(() => {
-  api.get_mcp_tools_catalog.mockResolvedValue({ tools: [
+  resetWorkflowToolsCache();
+  api.get_mcp_tools_catalog.mockRejectedValue(new Error("full catalog must not be used by workflow nodes"));
+  api.get_workflow_tools_catalog.mockResolvedValue({ tools: [
     { name: "blender_scene_info", description: "Inspect the scene", category_label: "Blender", parameters: [] },
     { name: "blender_add_object", description: "Add an object", category_label: "Blender", parameters: [
       { name: "object_name", type: "string", required: true, description: "Name in the scene" },
@@ -66,13 +70,27 @@ describe("node settings", () => {
     await waitFor(() => expect((screen.getByRole("textbox", { name: "object name" }) as HTMLInputElement).value).toBe("Repaired"));
   });
   it("retains a saved tool while its catalog is unavailable and retries on open", async () => {
-    api.get_mcp_tools_catalog.mockRejectedValueOnce(new Error("offline"));
+    api.get_workflow_tools_catalog.mockRejectedValueOnce(new Error("offline"));
     render(<Editor config={{ name: "custom_tool", arguments: { value: 42 } }} />);
-    await waitFor(() => expect(api.get_mcp_tools_catalog).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.get_workflow_tools_catalog).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: "Tool" }));
     await screen.findByRole("radio", { name: /blender_scene_info/ });
     expect((screen.getByRole("radio", { name: /custom_tool/ }) as HTMLInputElement).checked).toBe(true);
     expect(current.config).toEqual({ name: "custom_tool", arguments: { value: 42 } });
+    expect(api.get_mcp_tools_catalog).not.toHaveBeenCalled();
+  });
+  it("loads the host tool list once and reuses it when the dropdown reopens or another node mounts", async () => {
+    render(<Editor config={{ name: "blender_scene_info" }} />);
+    await screen.findByText("This tool needs no inputs.");
+    fireEvent.click(screen.getByRole("button", { name: "Tool" }));
+    await screen.findByRole("radio", { name: /meshy_generate/ });
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Tool" }));
+    await screen.findByRole("radio", { name: /meshy_generate/ });
+    cleanup();
+    render(<Editor config={{ name: "meshy_generate" }} />);
+    await screen.findByText("This tool needs no inputs.");
+    expect(api.get_workflow_tools_catalog).toHaveBeenCalledTimes(1);
   });
   it("uses a shared checkbox menu for multiple choices and retains saved unknown values", () => {
     render(<Editor config={{ targets: ["saved"] }} meta={{ type: "plugin.action", label: "Action", config_fields: [{ id: "targets", label: "Targets", type: "multiselect", options: [{ id: "one", label: "One" }, { id: "two", label: "Two" }] }] }} />);

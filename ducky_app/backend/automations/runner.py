@@ -58,8 +58,15 @@ _ACTION_TYPES = frozenset(
         "uefn.restart",
         "uefn.wait_ready",
         "uefn.wait_window",
+        "uefn.check",
+        "uefn.game.start",
+        "uefn.game.stop",
+        "uefn.player.wait",
+        "uefn.log.expect",
     }
 )
+
+_PLAY_TYPES = frozenset({"uefn.check", "uefn.game.start", "uefn.game.stop", "uefn.player.wait", "uefn.log.expect"})
 
 
 def run_workflow(
@@ -339,6 +346,20 @@ def _uefn_node(node: dict[str, Any], ntype: str, label: str, cfg: dict[str, Any]
     return step
 
 
+def _play_node(ntype: str, cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    from backend.automations import play
+
+    if ntype == "uefn.check":
+        return play.check_uefn(cfg)
+    if ntype == "uefn.game.start":
+        return play.start_game(cfg)
+    if ntype == "uefn.game.stop":
+        return play.stop_game(cfg)
+    if ntype == "uefn.player.wait":
+        return play.wait_player(cfg)
+    return play.expect_log(cfg, payload)
+
+
 def _exec_node(node: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     ntype = str(node.get("type") or "")
     cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
@@ -378,6 +399,8 @@ def _exec_node(node: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
             return {"ok": True, "id": node.get("id"), "type": ntype, "label": label, "result": {"ended": True}}
         if ntype in ("uefn.open_project", "uefn.launch", "uefn.close", "uefn.restart", "uefn.wait_ready", "uefn.wait_window"):
             return _uefn_node(node, ntype, label, cfg)
+        if ntype in _PLAY_TYPES:
+            return {**_play_node(ntype, cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
         handler = plugin.get_handler(ntype)
         if handler is None:
             # Starters / plugin triggers need no handler — just pass the payload on.
@@ -810,7 +833,8 @@ def _eval_branch(cfg: dict[str, Any], payload: dict[str, Any]) -> bool:
     if op == "contains" or cfg.get("contains"):
         return _value_contains(value, str(cfg.get("contains") or cfg.get("equals") or ""))
     if "equals" in cfg and str(cfg.get("equals") or "") != "":
-        return str(value) == str(cfg.get("equals"))
+        # Case-insensitive so a boolean result matches "true" as typed in the node.
+        return str(value).strip().lower() == str(cfg.get("equals")).strip().lower()
     return bool(value)
 
 
@@ -869,4 +893,14 @@ def _call_tool(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     result = fn(**raw)
     if inspect.isawaitable(result):
         return {"ok": False, "error": "async tool — register a sync plugin node instead"}
-    return {"ok": True, "result": {"tool": name, "output": result}}
+    out: dict[str, Any] = {"tool": name, "output": result}
+    if isinstance(result, str) and result.lstrip().startswith("{"):
+        # Most host tools return tool_json(...) text; expose it so a Branch can
+        # read e.g. data.compile.numErrors.
+        try:
+            parsed = json.loads(result)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            out["data"] = parsed
+    return {"ok": True, "result": out}
