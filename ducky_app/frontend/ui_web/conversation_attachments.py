@@ -100,11 +100,11 @@ def hydrate_attachment_dict(
 
 
 def active_chat_id() -> str:
-    """Conversation bound on this tool call, or empty."""
+    """Conversation bound on this tool call, else DUCKY_CONV_ID on a dedicated bridge, or empty."""
     try:
-        from backend.workspace.identity import current
+        from backend.workspace.identity import resolve_context
 
-        ctx = current()
+        ctx = resolve_context()
     except Exception:
         return ""
     return str(getattr(ctx, "conv_id", "") or "").strip()

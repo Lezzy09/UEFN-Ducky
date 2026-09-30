@@ -8,7 +8,8 @@ export function asScreenshotRecord(value: unknown): Record<string, unknown> | nu
 }
 
 export function parseScreenshotResult(raw: string): Record<string, unknown> | null {
-  const trimmed = raw.trim();
+  // Claude Code appends "[Image: source: …]" lines after the JSON text block.
+  const trimmed = raw.trim().replace(/(?:\s*\[Image: [^\]\n]*\])+$/, "").trim();
   if (!trimmed) return null;
   try {
     let parsed: unknown = JSON.parse(trimmed);
@@ -140,7 +141,8 @@ export function ScreenshotBody({
   const mediaUrl = showResult ? pickScreenshotMediaUrl(data) : "";
   const base64 = showResult && !mediaUrl ? pickScreenshotBase64(data) : "";
   const path = pickScreenshotPath(data, args);
-  const fromPath = showResult && !mediaUrl && !base64 ? screenshotSrcFromPath(path) : "";
+  // Only a path the tool returned — the filename argument is a request, not a saved file.
+  const fromPath = showResult && !mediaUrl && !base64 ? screenshotSrcFromPath(pickScreenshotPath(data, {})) : "";
   const captureError =
     showResult && typeof data?.error === "string" && data.error.trim() && !mediaUrl && !fromPath
       ? data.error.trim()
