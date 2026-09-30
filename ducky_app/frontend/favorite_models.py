@@ -158,8 +158,36 @@ def first_favorite(raw: Any) -> str:
     return ""
 
 
-def _available_agent_models(settings: Any) -> dict[str, set[str]]:
-    from backend.agent.coding_agents import detect_all
+# Cold-cache probe limit for the one agent being resolved. Plugin detect() runs
+# `<cli> --version`; on Windows a timed-out .cmd wrapper leaves node holding the
+# pipes and subprocess.run never returns — so never wait on it unbounded.
+_COLD_PROBE_TIMEOUT_S = 45.0
+
+
+def _probe_agent(settings: Any, agent_id: str) -> dict[str, Any] | None:
+    import threading
+
+    from backend.agent import coding_agents
+
+    adapter = coding_agents.get_adapter(agent_id)
+    if adapter is None:
+        return None
+    box: dict[str, Any] = {}
+
+    def _run() -> None:
+        try:
+            box["info"] = adapter.detect(settings).to_dict()
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_run, daemon=True, name=f"detect-{agent_id}")
+    t.start()
+    t.join(_COLD_PROBE_TIMEOUT_S)
+    return box.get("info")
+
+
+def _available_agent_models(settings: Any, backend: str = "") -> dict[str, set[str]]:
+    from backend.agent import coding_agents
 
     out: dict[str, set[str]] = {}
     agents = coding_agent_backends()
@@ -167,11 +195,16 @@ def _available_agent_models(settings: Any) -> dict[str, set[str]]:
         # The cached probe (TTL + async refresh). Passing ``settings`` here used to
         # force a fresh synchronous probe of every CLI (claude, gemini, codex,
         # cursor…) on each create-ducky — 3-4 s of "Creating…". Only before the
-        # first probe has ever landed (payload still "checking") do we pay for a
-        # direct probe, so a brand-new session still resolves correctly.
-        payload = detect_all()
+        # first probe has ever landed (payload still "checking", e.g. a fresh MCP
+        # bridge process) do we probe directly — just ``backend``, bounded, so a
+        # hung Gemini CLI cannot block spawning a Claude Code ducky.
+        payload = coding_agents.detect_all()
         if payload.get("checking"):
-            payload = detect_all(settings)
+            if backend:
+                info = _probe_agent(settings, backend)
+                payload = {"agents": [info] if info else []}
+            else:
+                payload = coding_agents.detect_all(settings)
     except Exception:
         return out
     for info in payload.get("agents") or []:
@@ -282,7 +315,7 @@ def resolve_model_strict(favorite_models: Any, settings: Any) -> ResolveResult:
             )
 
     if selection.is_coding_agent:
-        agent_models = _available_agent_models(settings)
+        agent_models = _available_agent_models(settings, backend=selection.backend)
         models = agent_models.get(selection.backend)
         if models is None:
             return ResolveErr(
