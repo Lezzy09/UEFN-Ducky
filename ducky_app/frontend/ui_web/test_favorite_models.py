@@ -88,7 +88,7 @@ def test_resolve_errors_without_model_or_default():
 
 def test_resolve_falls_back_to_settings_default(monkeypatch):
     settings = SimpleNamespace(default_model="anthropic:claude-sonnet-4-20250514")
-    monkeypatch.setattr("frontend.favorite_models._available_agent_models", lambda _s: {})
+    monkeypatch.setattr("frontend.favorite_models._available_agent_models", lambda _s, **_k: {})
     monkeypatch.setattr(
         "frontend.favorite_models._available_api_models",
         lambda: {"anthropic": {"claude-sonnet-4-20250514"}},
@@ -105,7 +105,7 @@ def test_profile_model_overrides_default(monkeypatch):
     settings = SimpleNamespace(default_model="anthropic:claude-sonnet-4-20250514")
     monkeypatch.setattr(
         "frontend.favorite_models._available_agent_models",
-        lambda _s: {"cursor": {"composer-2.5"}},
+        lambda _s, **_k: {"cursor": {"composer-2.5"}},
     )
     monkeypatch.setattr(
         "frontend.favorite_models._available_api_models",
@@ -122,7 +122,7 @@ def test_unavailable_profile_model_never_falls_back_to_default(monkeypatch):
     settings = SimpleNamespace(default_model="anthropic:claude-sonnet-4-20250514")
     monkeypatch.setattr(
         "frontend.favorite_models._available_agent_models",
-        lambda _s: {"cursor": {"composer-2.5"}},
+        lambda _s, **_k: {"cursor": {"composer-2.5"}},
     )
     monkeypatch.setattr(
         "frontend.favorite_models._available_api_models",
@@ -138,7 +138,7 @@ def test_resolve_default_can_be_coding_agent(monkeypatch):
     settings = SimpleNamespace(default_model="cursor:composer-2.5")
     monkeypatch.setattr(
         "frontend.favorite_models._available_agent_models",
-        lambda _s: {"cursor": {"composer-2.5"}},
+        lambda _s, **_k: {"cursor": {"composer-2.5"}},
     )
     monkeypatch.setattr("frontend.favorite_models._available_api_models", lambda: {})
 
@@ -160,7 +160,7 @@ def test_resolve_coding_agent_exact_model(monkeypatch):
     settings = SimpleNamespace(default_model="")
     monkeypatch.setattr(
         "frontend.favorite_models._available_agent_models",
-        lambda _s: {"cursor": {"composer-2.5", "auto"}},
+        lambda _s, **_k: {"cursor": {"composer-2.5", "auto"}},
     )
     monkeypatch.setattr("frontend.favorite_models._available_api_models", lambda: {})
 
@@ -175,7 +175,7 @@ def test_resolve_cursor_auto_model(monkeypatch):
     settings = SimpleNamespace(default_model="")
     monkeypatch.setattr(
         "frontend.favorite_models._available_agent_models",
-        lambda _s: {"cursor": {"auto", "composer-2.5"}},
+        lambda _s, **_k: {"cursor": {"auto", "composer-2.5"}},
     )
     monkeypatch.setattr("frontend.favorite_models._available_api_models", lambda: {})
 
@@ -190,7 +190,7 @@ def test_resolve_coding_agent_missing_model_errors(monkeypatch):
     settings = SimpleNamespace(default_model="")
     monkeypatch.setattr(
         "frontend.favorite_models._available_agent_models",
-        lambda _s: {"cursor": {"composer-2.5"}},
+        lambda _s, **_k: {"cursor": {"composer-2.5"}},
     )
     monkeypatch.setattr("frontend.favorite_models._available_api_models", lambda: {})
 
@@ -201,7 +201,7 @@ def test_resolve_coding_agent_missing_model_errors(monkeypatch):
 
 def test_resolve_api_model(monkeypatch):
     settings = SimpleNamespace(default_model="")
-    monkeypatch.setattr("frontend.favorite_models._available_agent_models", lambda _s: {})
+    monkeypatch.setattr("frontend.favorite_models._available_agent_models", lambda _s, **_k: {})
     monkeypatch.setattr(
         "frontend.favorite_models._available_api_models",
         lambda: {"anthropic": {"claude-sonnet-4-20250514"}},
@@ -216,7 +216,7 @@ def test_resolve_api_model(monkeypatch):
 
 def test_legacy_bare_api_id_unique_match(monkeypatch):
     settings = SimpleNamespace(default_model="")
-    monkeypatch.setattr("frontend.favorite_models._available_agent_models", lambda _s: {})
+    monkeypatch.setattr("frontend.favorite_models._available_agent_models", lambda _s, **_k: {})
     monkeypatch.setattr(
         "frontend.favorite_models._available_api_models",
         lambda: {"openai": {"gpt-4o-mini"}},
@@ -265,7 +265,7 @@ def test_create_conversation_without_default_model(monkeypatch):
 
     monkeypatch.setattr(
         "frontend.favorite_models._available_agent_models",
-        lambda _s: {"cursor": {"composer-2.5"}},
+        lambda _s, **_k: {"cursor": {"composer-2.5"}},
     )
     with pytest.raises(ValueError, match="not-a-model"):
         api.create_conversation("", "artist", None, {"favorite_models": ["cursor:not-a-model"]})
@@ -283,9 +283,76 @@ def test_allow_create_without_model_keeps_bad_picks():
 def test_resolve_api_model_when_catalog_still_warming(monkeypatch):
     """Empty cache must not block create-ducky on a live provider fetch."""
     settings = SimpleNamespace(default_model="")
-    monkeypatch.setattr("frontend.favorite_models._available_agent_models", lambda _s: {})
+    monkeypatch.setattr("frontend.favorite_models._available_agent_models", lambda _s, **_k: {})
     monkeypatch.setattr("frontend.favorite_models._available_api_models", lambda: {})
     ok = resolve_model_strict(["anthropic:claude-sonnet-4-20250514"], settings)
     assert isinstance(ok, ResolveOk)
     assert ok.model == "claude-sonnet-4-20250514"
     assert ok.provider == "anthropic"
+
+
+def _hang_forever_adapter(release):
+    class _Hang:
+        def detect(self, _settings):
+            release.wait(30)
+            raise RuntimeError("released")
+
+    return _Hang()
+
+
+def _claude_adapter():
+    class _Claude:
+        def detect(self, _settings):
+            return SimpleNamespace(
+                to_dict=lambda: {
+                    "id": "claude_code",
+                    "enabled": True,
+                    "available": True,
+                    "models": [{"id": "claude-sonnet-5-5"}],
+                }
+            )
+
+    return _Claude()
+
+
+def test_cold_cache_probes_only_the_requested_agent(monkeypatch):
+    """A hung `gemini --version` must not block spawning a Claude Code ducky."""
+    import threading
+    import time
+
+    from backend.agent import coding_agents
+    from frontend import favorite_models
+
+    release = threading.Event()
+    adapters = {"gemini_cli": _hang_forever_adapter(release), "claude_code": _claude_adapter()}
+    monkeypatch.setattr(favorite_models, "coding_agent_backends", lambda: _TEST_AGENTS)
+    monkeypatch.setattr(coding_agents, "detect_all", lambda *_a: {"agents": [], "checking": True})
+    monkeypatch.setattr(coding_agents, "get_adapter", adapters.get)
+    try:
+        t0 = time.monotonic()
+        out = favorite_models._available_agent_models(SimpleNamespace(), backend="claude_code")
+        assert time.monotonic() - t0 < 5
+        assert out == {"claude_code": {"claude-sonnet-5-5"}}
+    finally:
+        release.set()
+
+
+def test_cold_cache_probe_is_bounded(monkeypatch):
+    import threading
+    import time
+
+    from backend.agent import coding_agents
+    from frontend import favorite_models
+
+    release = threading.Event()
+    monkeypatch.setattr(favorite_models, "coding_agent_backends", lambda: _TEST_AGENTS)
+    monkeypatch.setattr(favorite_models, "_COLD_PROBE_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(coding_agents, "detect_all", lambda *_a: {"agents": [], "checking": True})
+    monkeypatch.setattr(coding_agents, "get_adapter", lambda _aid: _hang_forever_adapter(release))
+    try:
+        t0 = time.monotonic()
+        out = favorite_models._available_agent_models(SimpleNamespace(), backend="gemini_cli")
+        assert time.monotonic() - t0 < 5
+        assert out == {}
+    finally:
+        release.set()
