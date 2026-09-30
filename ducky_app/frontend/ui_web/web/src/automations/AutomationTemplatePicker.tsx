@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 
+import { ChoiceDropdown } from "../components/ChoiceDropdown";
 import { Modal } from "../components/Modal";
 import { Icons } from "../icons/Icons";
 import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { getApi } from "../hooks/usePanelApi";
 import { subscribePanelPush } from "../hooks/usePanelPushBus";
 import { handleDeepLink } from "../navigation/deepLinks";
-import type { AutomationGraphDto, AutomationTemplateDto } from "../types/panel";
+import type { AutomationGraphDto, AutomationTemplateDto, WorkflowOwnerDto } from "../types/panel";
+import { ownerName } from "./WorkflowList";
 
 const BLANK_ID = "__blank__";
 
@@ -17,6 +19,10 @@ interface AutomationTemplatePickerProps {
   currentGraph?: AutomationGraphDto | null;
   /** Where the new workflow will live ("Local", "Team · Alpha Studio"). */
   ownerLabel?: string;
+  /** Local and each team. The footer lets you pick before the workflow is created. */
+  owners?: WorkflowOwnerDto[];
+  ownerId?: string;
+  onOwnerChange?: (ownerId: string) => void;
 }
 
 export function AutomationTemplatePicker({
@@ -25,6 +31,9 @@ export function AutomationTemplatePicker({
   onSelect,
   currentGraph,
   ownerLabel = "Local",
+  owners = [],
+  ownerId = "",
+  onOwnerChange,
 }: AutomationTemplatePickerProps) {
   const { confirm } = useConfirmModal();
   const [view, setView] = useState<"picker" | "creator">("picker");
@@ -194,7 +203,26 @@ export function AutomationTemplatePicker({
       <div className="vtm">
         <div className={`vtm-view${view === "picker" ? " vtm-view--active" : " vtm-view--hidden"}`}>
           <div className="vtm-header">
-            <h2 className="vtm-title">New workflow <small className="vtm-owner">in {ownerLabel}</small></h2>
+            <div className="vtm-header-left">
+              <h2 className="vtm-title">New workflow</h2>
+              {owners.length > 1 && onOwnerChange ? (
+                <ChoiceDropdown
+                  aria-label="Save in"
+                  size="compact"
+                  value={ownerId}
+                  minWidth={220}
+                  options={owners.map((owner) => ({
+                    value: owner.id,
+                    label: ownerName(owner),
+                    disabled: !!owner.readOnly,
+                    hint: owner.readOnly ? owner.reason || "Read-only" : undefined,
+                  }))}
+                  onChange={onOwnerChange}
+                />
+              ) : (
+                <small className="vtm-owner">in {ownerLabel}</small>
+              )}
+            </div>
             <button type="button" className="vtm-icon-btn" onClick={handleClose} aria-label="Close">
               <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="18" y1="6" x2="6" y2="18" />

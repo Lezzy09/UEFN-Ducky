@@ -3,12 +3,24 @@ import { ARCHIVE_FOLDER_ID, isArchiveFolderId } from "./archiveFolder";
 
 export const PROJECT_FOLDER_PREFIX = "project:";
 
+/** Chats with no island open. The Duckies tree already shows these as global agents. */
+export const GLOBAL_PROJECT_SLUG = "_no_project";
+
 export function isProjectFolderId(id: string): boolean {
   return id.startsWith(PROJECT_FOLDER_PREFIX);
 }
 
 export function projectFolderId(slug: string): string {
   return `${PROJECT_FOLDER_PREFIX}${slug}`;
+}
+
+export function isGlobalProjectFolderId(id: string): boolean {
+  return id === projectFolderId(GLOBAL_PROJECT_SLUG);
+}
+
+/** All-projects mode wraps every island, including the no-island bucket. That bucket stays in the data so global agents can open their existing chats, and stays off the folder list. */
+export function duckiesFoldersForDisplay(folders: FolderItem[]): FolderItem[] {
+  return folders.filter((folder) => !isGlobalProjectFolderId(folder.id));
 }
 
 export function findFolderById(folders: FolderItem[], id: string): FolderItem | null {

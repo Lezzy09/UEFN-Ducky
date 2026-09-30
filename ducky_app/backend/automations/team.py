@@ -62,10 +62,10 @@ def refresh_teams() -> dict[str, Any]:
     """Ask the Store which teams this account has (one hub call, only when the view
     opens, never on a timer); it saves labels and Manage automations per team."""
     if store.use_db("automations"):
-        from backend.uefn_plugins.team_sync import scope_choices
+        from backend.uefn_plugins.team_sync import remember_workflow_teams
 
         try:
-            scope_choices()
+            remember_workflow_teams()
         except Exception:
             pass
     return owners()

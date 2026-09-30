@@ -7,7 +7,24 @@ import type { AutomationDto, WorkflowOwnerDto, WorkflowOwnersDto } from "../type
 
 const api = vi.hoisted(() => ({ list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_workflows: vi.fn(), list_workflow_nodes: vi.fn(), get_workflow: vi.fn(), save_workflow: vi.fn(), run_workflow: vi.fn(), delete_workflow: vi.fn(), workflow_owners: vi.fn(), workflow_sync: vi.fn(), copy_workflow: vi.fn(), set_workflow_run_here: vi.fn(), import_local_workflows: vi.fn(), workflow_open_web: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
-vi.mock("./AutomationTemplatePicker", () => ({ AutomationTemplatePicker: ({ open, ownerLabel, onSelect }: { open: boolean; ownerLabel: string; onSelect: (template: null) => void }) => open ? <button onClick={() => onSelect(null)}>Create in {ownerLabel}</button> : null }));
+vi.mock("./AutomationTemplatePicker", () => ({
+  AutomationTemplatePicker: ({ open, owners, ownerId, onOwnerChange, onSelect }: {
+    open: boolean;
+    owners?: { id: string; kind: string; label: string; readOnly?: boolean }[];
+    ownerId?: string;
+    onOwnerChange?: (id: string) => void;
+    onSelect: (template: null) => void;
+  }) => open ? (
+    <>
+      {(owners || []).map((owner) => (
+        <button key={owner.id} type="button" aria-pressed={owner.id === ownerId} disabled={!!owner.readOnly} onClick={() => onOwnerChange?.(owner.id)}>
+          {`Save in ${owner.kind === "team" ? `Team · ${owner.label}` : "Local"}`}
+        </button>
+      ))}
+      <button type="button" onClick={() => onSelect(null)}>Create workflow</button>
+    </>
+  ) : null,
+}));
 
 const LOCAL: WorkflowOwnerDto = { id: "local", kind: "local", label: "Local", state: "ok", readOnly: false, reason: "" };
 let TEAM: WorkflowOwnerDto;
@@ -357,7 +374,8 @@ describe("Workflows folders by owner", () => {
     const team = screen.getByRole("region", { name: "Team · Alpha Studio" });
     expect(local.textContent).toContain("Example");
     expect(local.textContent).toContain("Chat");
-    expect(local.textContent).toContain("Only on this PC");
+    expect(local.textContent).not.toContain("Only on this PC");
+    expect(local.querySelector(".aw-folder-status")).toBeNull();
     expect(team.textContent).toContain("Daily check");
     expect(team.textContent).toContain("Every 5m");
     expect(team.textContent).toContain("Not synced yet");
@@ -386,13 +404,18 @@ describe("Workflows folders by owner", () => {
   it("creates a workflow in the folder whose + was used", async () => {
     await open();
     fireEvent.click(screen.getByRole("button", { name: "New workflow in Team · Alpha Studio" }));
-    fireEvent.click(screen.getByRole("button", { name: "Create in Team · Alpha Studio" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create workflow" }));
     await waitFor(() => expect(api.save_workflow).toHaveBeenCalledWith(expect.objectContaining({ id: "", name: "Untitled" }), "teamT"));
     await screen.findByDisplayValue("Untitled");
     expect(document.querySelector(".aw-owner-chip")?.textContent).toBe("TEAM · Alpha Studio");
     fireEvent.click(screen.getByRole("button", { name: "New workflow", exact: true }));
-    fireEvent.click(screen.getByRole("button", { name: "Create in Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save in Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create workflow" }));
     await waitFor(() => expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "" }), "local"));
+    fireEvent.click(screen.getByRole("button", { name: "New workflow", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Save in Team · Alpha Studio" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create workflow" }));
+    await waitFor(() => expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "" }), "teamT"));
   });
   it("runs and duplicates a read-only team workflow but never edits or pushes it", async () => {
     TEAM.readOnly = true;
@@ -407,7 +430,8 @@ describe("Workflows folders by owner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Test", exact: true }));
     await waitFor(() => expect(api.run_workflow).toHaveBeenCalledWith("d"));
     expect(api.save_workflow).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Duplicate", exact: true }));
+    dropdown("Duplicate");
+    fireEvent.click(await screen.findByRole("radio", { name: "Local" }));
     await waitFor(() => expect(api.save_workflow).toHaveBeenCalledWith(expect.objectContaining({ id: "", name: "Daily check copy" }), "local"));
   });
   it("moves a Local workflow to a team, and asks before moving one out of a team", async () => {

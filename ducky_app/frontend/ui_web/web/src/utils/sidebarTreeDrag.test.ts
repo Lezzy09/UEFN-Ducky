@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FolderItem } from "../types/panel";
-import { dragId, flattenLayout, foldersToAutoExpand, nestDropId, resolveDragOverId, crossProjectDropTarget, unwrapProjectFoldersForLayout, wrapProjectsAsFolders } from "./sidebarTree";
+import { dragId, duckiesFoldersForDisplay, flattenLayout, foldersToAutoExpand, nestDropId, projectFolderId, resolveDragOverId, crossProjectDropTarget, unwrapProjectFoldersForLayout, wrapProjectsAsFolders } from "./sidebarTree";
 
 function folder(id: string, name: string, children: FolderItem[] = []): FolderItem {
   return {
@@ -82,6 +82,19 @@ describe("all-projects folder wraps", () => {
     const patch = flattenLayout([leaked, folder("f0", "Code")], [{ id: "c1", name: "A" }]);
     expect(patch.folders.map((f) => f.id)).toEqual(["f0"]);
     expect(patch.chats.map((c) => c.id)).toEqual(["c1"]);
+  });
+
+  it("keeps the no-island bucket in the data and off the folder list", () => {
+    const wrapped = wrapProjectsAsFolders(
+      [
+        { slug: "_no_project", name: "_no_project", folders: [], rootChats: [{ id: "g1", name: "Verse Coder" }] },
+        { slug: "here", name: "Roguelike", folders: [], rootChats: [] },
+      ],
+      "here",
+      new Map(),
+    );
+    expect(wrapped.map((f) => f.id)).toContain(projectFolderId("_no_project"));
+    expect(duckiesFoldersForDisplay(wrapped).map((f) => f.name)).toEqual(["Roguelike"]);
   });
 
   it("a drop on another project is not part of the current layout patch", () => {

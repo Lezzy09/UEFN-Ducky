@@ -24,6 +24,16 @@
   border-radius: 16px;
   background: var(--panel-header);
   box-shadow: var(--shadow-md);
+  transition: top 280ms ease, left 280ms ease, bottom 280ms ease, width 280ms ease, max-height 280ms ease, transform 280ms ease;
+}
+/* Nothing open: the list sits in the middle so it is the thing to pick. Selecting one slides it left. */
+.aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-list {
+  top: 50%;
+  left: 50%;
+  bottom: auto;
+  width: min(420px, calc(100% - 48px));
+  max-height: min(560px, calc(100% - 48px));
+  transform: translate(-50%, -50%);
 }
 .aw-list-head,
 .aw-log-dock-head {
@@ -52,7 +62,7 @@
 .aw-list-toggle:hover { background: var(--bg-hover); }
 .aw-root.is-list-collapsed .aw-list { bottom: auto; }
 .aw-root.is-list-collapsed .aw-list-head { border-bottom: 0; }
-/* Folders by owner: Local (this PC only), then each team. */
+/* Folders by owner: Local, then each team. */
 .aw-folder-icon { display: inline-flex; color: var(--text-muted); }
 .aw-folder--team .aw-folder-icon { color: var(--blue); }
 .aw-folder-lock { display: grid; place-items: center; width: 30px; height: 30px; color: var(--text-muted); }
@@ -132,7 +142,11 @@
   min-height: 0;
   position: relative;
 }
-.aw-toolbar { position: absolute; z-index: 5; top: 12px; left: 244px; right: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel-header); box-shadow: var(--shadow-md); }
+.aw-toolbar { position: absolute; z-index: 5; top: 12px; left: 244px; right: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel-header); box-shadow: var(--shadow-md); animation: aw-header-down 280ms ease; }
+@keyframes aw-header-down { from { opacity: 0; transform: translateY(-120%); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .aw-list, .aw-toolbar { transition: none; animation: none; }
+}
 .aw-toolbar-fields { flex: 1 1 180px; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .aw-name { width: 100%; min-width: 0; box-sizing: border-box; background: transparent; border: 0; padding: 4px; color: inherit; font: inherit; font-weight: 600; text-overflow: ellipsis; }
 .aw-name.aw-description { color: var(--text-muted); font-size: 11px; font-weight: 400; }
