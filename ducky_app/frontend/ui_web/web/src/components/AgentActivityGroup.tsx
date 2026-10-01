@@ -9,6 +9,9 @@ import { ToolExecutionCard } from "./ToolExecutionCard";
 import type { ActivityItem } from "../utils/chatMessageGroups";
 import type { ChatTab, LinkedAgent, MessageAuthorDto } from "../types/panel";
 import { InlineStopButton } from "./InlineStopButton";
+import { replayShowMe, showMeRequestFromTool } from "./tool-cards/bodies/ShowMeBody";
+import { unwrapCodingAgentTool } from "../utils/unwrapCodingAgentTool";
+import type { ShowMeRequest } from "../showme/ShowMeService";
 
 interface AgentActivityGroupProps {
   items: ActivityItem[];
@@ -50,6 +53,20 @@ function activityGroupLabel(items: ActivityItem[], live: boolean): string {
   if (toolCount === 1) parts.push("1 tool");
   else if (toolCount > 1) parts.push(`${toolCount} tools`);
   return parts.join(" · ") || "Activity";
+}
+
+/** Show me calls in the group that finished: each gets a button that stays visible folded. */
+function showMeButtons(items: ActivityItem[]): Array<{ id: string; request: ShowMeRequest }> {
+  const out: Array<{ id: string; request: ShowMeRequest }> = [];
+  for (const item of items) {
+    if (item.kind !== "tool" || toolRunning(item)) continue;
+    const tool = item.result?.tool ?? item.intent.tool;
+    const rawArgs = item.result?.tool?.arguments ?? item.intent.tool?.arguments ?? {};
+    const call = unwrapCodingAgentTool(tool?.name ?? "", rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? rawArgs as Record<string, unknown> : {});
+    const request = showMeRequestFromTool(call.name, call.arguments);
+    if (request) out.push({ id: item.id, request });
+  }
+  return out;
 }
 
 /** Nested hubs as a breadcrumb, leaf name last. Strips a "Group — " prefix already baked into name. */
@@ -96,6 +113,7 @@ export const AgentActivityGroup = memo(function AgentActivityGroup({
   const toolCount = items.reduce((n, i) => n + (i.kind === "tool" ? 1 : 0), 0);
   const label = activityGroupLabel(items, live);
   const speaker = speakerParts(author);
+  const shows = useMemo(() => showMeButtons(items), [items]);
 
   return (
     <div className={`agent-activity-group${live ? " agent-activity-group--live" : ""}`}>
@@ -133,6 +151,16 @@ export const AgentActivityGroup = memo(function AgentActivityGroup({
         </button>
         {live && onStop ? <InlineStopButton onClick={onStop} /> : null}
       </div>
+      {shows.length ? (
+        <div className="agent-activity-group-showme" role="group" aria-label="Show me">
+          {shows.map(({ id, request }) => (
+            <button key={id} type="button" className="tool-card-showme-button" title="Take me there and highlight it" onClick={() => void replayShowMe(request)}>
+              <Icons.Sparkles />
+              <span>Show me: {request.title}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
       {open ? (
         <div className="agent-activity-group-body">
           {items.map((item) =>

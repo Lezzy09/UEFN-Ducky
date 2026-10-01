@@ -4255,6 +4255,14 @@
   outline: none;
 }
 
+/* Show me buttons under a folded thought group: one click, no unfolding. */
+.agent-activity-group-showme {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 2px;
+}
+
 .tool-card-showme {
   display: flex;
   flex-wrap: wrap;

@@ -95,7 +95,14 @@
   font-size: 13px;
   line-height: 1.45;
   color: var(--text-dim, #c5ccd8);
-  white-space: pre-wrap;
+}
+
+.walkthrough-tooltip-body p {
+  margin: 0 0 6px;
+}
+
+.walkthrough-tooltip-body p:last-child {
+  margin-bottom: 0;
 }
 
 .walkthrough-tooltip-footer {

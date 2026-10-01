@@ -51,6 +51,7 @@ let persistCompleted: ((map: Record<string, boolean>) => void) | null = null;
 
 let activeTourId: string | null = null;
 let stepIndex = 0;
+let entered = false;
 let starting = false;
 let activeResolvedSteps: WalkthroughStep[] = [];
 
@@ -165,7 +166,21 @@ export function getActiveStep(): WalkthroughStep | null {
   return steps[stepIndex] ?? null;
 }
 
+/** Whether the active step's onEnter has finished (its view is open). */
+export function isStepEntered(): boolean {
+  return entered;
+}
+
 async function enterStep(index: number): Promise<void> {
+  entered = false;
+  try {
+    await runOnEnter(index);
+  } finally {
+    entered = true;
+  }
+}
+
+async function runOnEnter(index: number): Promise<void> {
   const steps = getActiveSteps();
   const step = steps[index];
   if (!step) return;
@@ -192,6 +207,7 @@ export async function startTour(tourId: string, opts?: { force?: boolean }): Pro
     if (!resolved.length) return false;
     activeTourId = tourId;
     stepIndex = 0;
+    entered = false;
     activeResolvedSteps = resolved;
     emit();
     await enterStep(0);
@@ -210,6 +226,7 @@ export async function nextStep(): Promise<void> {
     return;
   }
   stepIndex += 1;
+  entered = false;
   emit();
   await enterStep(stepIndex);
   emit();
@@ -218,6 +235,7 @@ export async function nextStep(): Promise<void> {
 export async function prevStep(): Promise<void> {
   if (!activeTourId || stepIndex <= 0) return;
   stepIndex -= 1;
+  entered = false;
   emit();
   await enterStep(stepIndex);
   emit();

@@ -28,6 +28,16 @@ describe("Show me card", () => {
     await waitFor(() => expect(playShowMe).toHaveBeenCalledWith(expect.objectContaining({ target: "workflows.toolbar.run", title: "Test" })));
   });
 
+  it("reads ducky_ui_show's plain arguments: a name with role, more ids, an action", () => {
+    expect(showMeRequestFromTool("ducky_ui_show", { target: "Save", role: "button", within: "workflows.details", title: "Save" })?.target)
+      .toEqual({ role: "button", name: "Save", within: "workflows.details" });
+    expect(showMeRequestFromTool("ducky_ui_show", { target: "Run log", role: "text", title: "Log" })?.target).toEqual({ text: "Run log" });
+    expect(showMeRequestFromTool("ducky_ui_show", { target: "workflows.node.a", also: ["workflows.node.b"], title: "Both" })?.target)
+      .toEqual(["workflows.node.a", "workflows.node.b"]);
+    expect(showMeRequestFromTool("ducky_ui_show", { target: "workflows.palette.flow.repeat", action: "workflows.add_menu", action_args: { query: "repeat" }, title: "Repeat" })?.action)
+      .toEqual({ id: "workflows.add_menu", args: { query: "repeat" } });
+  });
+
   it("turns show_workflow into a Show me on its nodes or group", () => {
     expect(showMeRequestFromTool("show_workflow", { workflow_id: "w", node_ids: ["a", "b"], title: "These two", body: "…" })).toMatchObject({
       target: ["workflows.node.a", "workflows.node.b"], workflow_id: "w", title: "These two",

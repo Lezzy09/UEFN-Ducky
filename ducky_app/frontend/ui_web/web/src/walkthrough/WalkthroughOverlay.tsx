@@ -6,10 +6,12 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { clipOutside, holeFor, placeCard } from "../ui-targets/geometry";
 import { resolveTarget, revealTarget, type TargetSpec } from "../ui-targets/resolve";
+import { MarkdownContent } from "../components/rich-content/MarkdownContent";
 import {
   getActiveStep,
   getActiveSteps,
   getWalkthroughState,
+  isStepEntered,
   nextStep,
   prevStep,
   skipTour,
@@ -104,12 +106,14 @@ export function WalkthroughOverlay() {
     return () => cancelAnimationFrame(raf);
   }, [active, stepTarget, stepAdvance, stepMode, epoch]);
 
-  // Bring the target into view when the step changes (a view's own reveal, else scroll).
+  // Bring the target into view once the step's own setup (open a view, select a node) is
+  // done — revealing earlier lost to the view restoring its own camera or scroll.
+  const entered = active && isStepEntered();
   useEffect(() => {
-    if (!active || !stepTarget) return;
+    if (!active || !stepTarget || !entered) return;
     if (!resolveTarget(stepTarget)) return;
     void revealTarget(stepTarget);
-  }, [active, stepTarget, state.stepIndex]);
+  }, [active, stepTarget, state.stepIndex, entered]);
 
   useEffect(() => {
     if (!active || !stepTarget || stepAdvance !== "require_click") return;
@@ -143,7 +147,7 @@ export function WalkthroughOverlay() {
           Skip
         </button>
         <h3 className="walkthrough-tooltip-title">{step.title}</h3>
-        <p className="walkthrough-tooltip-body">{step.body}</p>
+        <div className="walkthrough-tooltip-body"><MarkdownContent text={step.body} /></div>
         {missing ? (
           <p className="walkthrough-missing">Target not visible yet — open that area or press Next.</p>
         ) : null}

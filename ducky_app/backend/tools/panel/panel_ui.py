@@ -249,13 +249,17 @@ def ducky_ui_list_targets(route: str = "", query: str = "", visible_only: bool =
 
 @mcp.tool()
 def ducky_ui_show(
-    target: str | dict[str, Any] | list[Any],
+    target: str,
     title: str,
     body: str = "",
     workflow_id: str = "",
     navigate: str = "",
     item_id: str = "",
-    action: dict[str, Any] | None = None,
+    action: str = "",
+    action_args: dict[str, Any] | None = None,
+    also: list[str] | None = None,
+    role: str = "",
+    within: str = "",
     wait: bool = False,
     pretty: bool = False,
 ) -> str:
@@ -268,20 +272,32 @@ def ducky_ui_show(
     user where something is or what to click — don't only describe it.
 
     target: an id from ducky_ui_list_targets ("workflows.toolbar.run",
-      "workflows.node.<node_id>", "settings.tab.store"), or {"role": "button", "name":
-      "Save", "within": "workflows.details"} / {"text": "…"} for things with no id, or a
-      list of them shown as one highlight (several nodes).
+      "workflows.node.<node_id>", "settings.tab.store"). With `role` it is a name
+      instead: role="button", target="Save" (within="workflows.details" narrows where);
+      role="text" finds that text on screen.
+    also: more ids highlighted together with target (several workflow nodes).
     workflow_id: open this workflow first; "workflows.node.<id>" targets are selected.
-    navigate: a route first (same as ducky_ui_navigate); item_id: a chat id or file path.
-    action: a UI action first, {"id": "workflows.add_menu", "args": {...}} (see
-      ducky_ui_list_targets → actions).
+    navigate: a route first (same as ducky_ui_navigate); item_id: a Store slug, a
+      Settings tab, a chat id or a file path for that route.
+    action: a UI action first ("workflows.add_menu"), with action_args ({"query": "if"});
+      ducky_ui_list_targets lists a view's actions.
     wait: true returns only when the user closes the popup.
     Returns {ok, shown, missing, target}; missing=true means it wasn't found on screen.
     """
-    raw = target if isinstance(target, list) else [target]
-    targets = [t for t in (_clean_target(item) for item in raw[:_MAX_SHOW_TARGETS]) if t]
-    if not targets:
-        return tool_json({"error": "target must be an id, {role, name} / {text}, or a list of them"}, pretty=pretty)
+    name = (target or "").strip()
+    kind = (role or "").strip().lower()
+    first: str | dict[str, Any] | None
+    if kind == "text":
+        first = {"text": name}
+    elif kind:
+        first = {"role": kind, "name": name}
+    else:
+        first = name or None
+    if isinstance(first, dict) and (within or "").strip():
+        first["within"] = within.strip()
+    targets = [t for t in [first, *[_clean_target(x) for x in (also or [])[: _MAX_SHOW_TARGETS - 1]]] if t]
+    if not name or not targets:
+        return tool_json({"error": "target is required: an id from ducky_ui_list_targets, or a name with role"}, pretty=pretty)
     title_s, body_s = (title or "").strip(), (body or "").strip()
     if not title_s and not body_s:
         return tool_json({"error": "say what it is: title (and body) are required"}, pretty=pretty)
@@ -300,9 +316,8 @@ def ducky_ui_show(
         params["navigate"] = route
         if (item_id or "").strip():
             params["item_id"] = item_id.strip()
-    clean_action = _clean_action(action)
-    if clean_action:
-        params["action"] = clean_action
+    if (action or "").strip():
+        params["action"] = {"id": action.strip(), "args": action_args if isinstance(action_args, dict) else {}}
     out = panel_rpc("show", params, timeout=_SHOW_CLOSE_WAIT_S if wait else _SHOW_WAIT_S)
     if isinstance(out, dict) and not out.get("error"):
         out = {**out, "ok": out.get("ok", True)}

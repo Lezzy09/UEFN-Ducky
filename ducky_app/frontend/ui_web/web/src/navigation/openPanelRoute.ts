@@ -12,6 +12,7 @@ import { requestOpenChangesTab } from "./openChangesTab";
 import { requestOpenWorkflowsTab } from "./openWorkflowsTab";
 import { requestOpenChatTab, requestOpenProjectFile } from "./openChatReference";
 import { requestOpenSidebarPanel } from "./openSidebarPanel";
+import { handleDeepLink } from "./deepLinks";
 
 /** settings.* route → Settings tab label. */
 export const SETTINGS_TAB: Record<string, string> = {
@@ -57,7 +58,8 @@ export function openPanelRoute(route: string, itemId = ""): RouteResult {
     return { ok: true, route: r, tab: item };
   }
   if (r === "settings.store" && item) {
-    requestOpenSettings("Store", { storeSlug: item });
+    // The Store's own link opens that plugin's page (installing is a separate /install/ link).
+    handleDeepLink(`uefn-ducky://store/${item.toLowerCase()}`);
     return { ok: true, route: r, tab: "Store", item_id: item };
   }
   const tab = SETTINGS_TAB[r];

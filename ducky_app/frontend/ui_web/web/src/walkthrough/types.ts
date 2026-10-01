@@ -39,6 +39,8 @@ export interface WalkthroughRuntimeState {
   tourId: string | null;
   stepIndex: number;
   active: boolean;
+  /** The step's onEnter (open a view, select a node) has finished: safe to bring its target into view. */
+  entered?: boolean;
 }
 
 /** Declarative plugin.json `contributes.walkthrough` row (no functions). */

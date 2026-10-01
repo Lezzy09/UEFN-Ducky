@@ -33,15 +33,30 @@ describe("Tour this workflow", () => {
   it("walks the steps in run order, with what feeds them, routes, and the ends last", () => {
     const steps = buildWorkflowTour(graph, byType);
     expect(steps.map((step) => step.target)).toEqual([
-      "workflows.node.s", "workflows.node.i", "workflows.node.yes", "workflows.node.no", "workflows.node.p",
+      "workflows.node.s", "workflows.node.i", "workflows.node.yes", "workflows.node.no", "workflows.node.t", "workflows.node.p",
     ]);
     const check = steps[1];
     expect(check.title).toBe("Passed?");
     expect(check.body).toContain("Checks a condition.");
     expect(check.body).toContain("**Worked out first:** Score");
     expect(check.body).toContain("**Then:** True → Celebrate, False → Try again");
-    expect(steps[4].body).toContain("**Runs on its own**");
-    expect(steps[4].body).toContain("**Worked out first:** Caption");
+    expect(steps[4].body).toContain("**Then:** Show it");  // a pipeline is walked node by node
+    expect(steps[5].body).toContain("**Runs on its own**");
+  });
+
+  it("walks a pipeline of value nodes from its first input to its end", () => {
+    const pipe: AutomationGraphDto = {
+      nodes: [
+        { id: "p", type: "util.preview", x: 0, y: 0, config: {}, label: "End" },
+        { id: "b", type: "input.text", x: 0, y: 0, config: {}, label: "Middle" },
+        { id: "a", type: "input.text", x: 0, y: 0, config: {}, label: "Start" },
+      ],
+      edges: [
+        { source: "a", target: "b", kind: "data", source_pin: "text", target_pin: "value" },
+        { source: "b", target: "p", kind: "data", source_pin: "text", target_pin: "value" },
+      ],
+    };
+    expect(buildWorkflowTour(pipe, byType).map((step) => step.title)).toEqual(["Start", "Middle", "End"]);
   });
 
   it("maps the AI's steps and opens the workflow on the first one", () => {

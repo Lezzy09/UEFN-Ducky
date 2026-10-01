@@ -25,15 +25,17 @@ Keep your chat reply to a line or two: the popup says the rest.
 ### `ducky_ui_show`
 
 ```
-ducky_ui_show(target, title, body="", workflow_id="", navigate="", item_id="", action=None, wait=false)
+ducky_ui_show(target, title, body="", workflow_id="", navigate="", item_id="",
+              action="", action_args=None, also=None, role="", within="", wait=false)
 ```
 
-- **target**: an id (`settings.tab.audio`), or `{"role": "button", "name": "Save",
-  "within": "workflows.details"}` / `{"text": "…"}` for things with no id, or a list
-  shown as one highlight (a few nodes).
+- **target**: an id (`settings.tab.audio`). For things with no id, give **role** and
+  put the name in target: `role="button", target="Save", within="workflows.details"`;
+  `role="text"` finds that text on screen. **also**: more ids shown as one highlight
+  (a few nodes).
 - **navigate** (+ **item_id**) opens the view first; **workflow_id** opens a workflow
   and selects `workflows.node.<id>` targets; **action** runs a UI action first
-  (`{"id": "workflows.add_menu", "args": {"query": "repeat"}}`).
+  (`action="workflows.add_menu", action_args={"query": "repeat"}`).
 - Result `{ok, shown, missing}`. `missing: true` = not found on screen: check the id
   with `ducky_ui_list_targets` and try again. `deferred: true` = the user turned off
   "Let Ducky show me things"; the chat button is still there.
@@ -91,7 +93,7 @@ ducky_ui_show(target="workflows.node.servers", workflow_id="<id>",
 Something with no id (a button inside a panel):
 
 ```
-ducky_ui_show(target={"role": "button", "name": "Run this node only"}, title="Run just this node", body="Re-runs it with what came in last time.")
+ducky_ui_show(target="Run this node only", role="button", title="Run just this node", body="Re-runs it with what came in last time.")
 ```
 
 ### Rules

@@ -11,6 +11,7 @@ import { MarkdownContent } from "../components/rich-content/MarkdownContent";
 import { Icons } from "../icons/Icons";
 import { clipOutside, holeFor, modeFor, offscreenSide, placeCard, unionBox } from "../ui-targets/geometry";
 import { resolveTarget, revealTarget, type TargetSpec } from "../ui-targets/resolve";
+import { targetRef } from "../ui-targets/registry";
 import { closeShowMe, getShowMeState, subscribeShowMe, targetsOf } from "./ShowMeService";
 import "./showme.css";
 
@@ -127,11 +128,11 @@ export function ShowMeLayer() {
       />
       <div className="showme-hole" aria-hidden />
       <div className="showme-ring" aria-hidden />
-      <div ref={popupRef} className="showme-popup" role="dialog" aria-modal="false" aria-labelledby={titleId} data-side="center">
+      <div ref={(el) => { popupRef.current = el; targetRef("showme.popup", { label: "Show me popup" })(el); }} className="showme-popup" role="dialog" aria-modal="false" aria-labelledby={titleId} data-side="center">
         <div className="showme-popup-head">
           <span className="showme-popup-icon" aria-hidden><Icons.Sparkles /></span>
           <h3 id={titleId} className="showme-popup-title">{request.title}</h3>
-          <button ref={closeRef} type="button" className="showme-close" aria-label="Close" title="Close" onClick={close}>
+          <button ref={(el) => { closeRef.current = el; targetRef("showme.close", { label: "Close Show me" })(el); }} type="button" className="showme-close" aria-label="Close" title="Close" onClick={close}>
             <Icons.Close />
           </button>
         </div>

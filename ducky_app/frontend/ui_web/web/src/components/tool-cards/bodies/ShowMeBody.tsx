@@ -3,9 +3,27 @@ import { Icons } from "../../../icons/Icons";
 import { parseShowMeRequest, playShowMe, type ShowMeRequest } from "../../../showme/ShowMeService";
 import type { ToolCardBodyProps } from "../toolCardTypes";
 
+/** ducky_ui_show's plain arguments (target id, or role + name, also, action + action_args) as a request. */
+function fromShowArgs(args: Record<string, unknown>): ShowMeRequest | null {
+  const name = String(args.target ?? "").trim();
+  const role = String(args.role ?? "").trim().toLowerCase();
+  const within = String(args.within ?? "").trim();
+  let first: unknown = args.target;  // older cards: the target as an object or a list
+  if (typeof args.target === "string") {
+    first = role === "text" ? { text: name, ...(within ? { within } : {}) }
+      : role ? { role, name, ...(within ? { within } : {}) }
+      : name;
+  }
+  const also = Array.isArray(args.also) ? args.also.map(String).filter(Boolean) : [];
+  const action = typeof args.action === "string" && args.action.trim()
+    ? { id: args.action.trim(), args: (args.action_args as Record<string, unknown>) || {} }
+    : args.action;
+  return parseShowMeRequest({ ...args, target: also.length ? [first, ...also] : first, action });
+}
+
 /** The Show me a tool call stands for: ducky_ui_show's own arguments, or show_workflow's nodes. */
 export function showMeRequestFromTool(toolName: string, args: Record<string, unknown>): ShowMeRequest | null {
-  if (toolName === "ducky_ui_show") return parseShowMeRequest(args);
+  if (toolName === "ducky_ui_show") return fromShowArgs(args);
   if (toolName !== "show_workflow") return null;
   const workflowId = String(args.workflow_id || "").trim();
   if (!workflowId) return null;

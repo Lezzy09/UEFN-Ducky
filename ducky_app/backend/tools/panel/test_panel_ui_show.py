@@ -35,14 +35,19 @@ def test_show_me_sends_what_to_show_and_where(rpc):
     assert params == {"target": "settings.tab.audio", "title": "Audio settings", "body": "Mic and speakers.", "wait": False, "navigate": "settings.audio"}
 
     panel_ui.ducky_ui_show(
-        target=["workflows.node.a", {"role": "button", "name": " Save ", "within": {"id": "workflows.details"}, "bogus": 1}, {}],
-        title="", body="Both of these", workflow_id=" wf1 ", action={"id": "workflows.add_menu", "args": {"query": "if"}}, wait=True,
+        target="workflows.node.a", also=["workflows.node.b", " "], title="", body="Both of these", workflow_id=" wf1 ",
+        action=" workflows.add_menu ", action_args={"query": "if"}, wait=True,
     )
     method, params, timeout = rpc[-1]
-    assert params["target"] == ["workflows.node.a", {"role": "button", "name": "Save", "within": {"id": "workflows.details"}}]
+    assert params["target"] == ["workflows.node.a", "workflows.node.b"]
     assert params["title"] == "Both of these" and params["workflow_id"] == "wf1"
     assert params["action"] == {"id": "workflows.add_menu", "args": {"query": "if"}}
     assert params["wait"] is True and timeout == panel_ui._SHOW_CLOSE_WAIT_S
+
+    panel_ui.ducky_ui_show(target=" Save ", role="Button", within="workflows.details", title="Save")
+    assert rpc[-1][1]["target"] == {"role": "button", "name": "Save", "within": "workflows.details"}
+    panel_ui.ducky_ui_show(target="Run log", role="text", title="Log")
+    assert rpc[-1][1]["target"] == {"text": "Run log"}
 
     panel_ui.ducky_ui_show(target="settings.store.detail", title="Meshy", navigate="settings.store", item_id="meshy")
     assert rpc[-1][1]["item_id"] == "meshy"
@@ -50,7 +55,7 @@ def test_show_me_sends_what_to_show_and_where(rpc):
 
 def test_show_me_refuses_what_it_cant_show(rpc):
     assert "error" in json.loads(panel_ui.ducky_ui_show(target="", title="x"))
-    assert "error" in json.loads(panel_ui.ducky_ui_show(target={"nth": 2}, title="x"))
+    assert "error" in json.loads(panel_ui.ducky_ui_show(target=" ", role="button", title="x"))
     assert "say what it is" in json.loads(panel_ui.ducky_ui_show(target="a.b", title=" "))["error"]
     bad = json.loads(panel_ui.ducky_ui_show(target="a.b", title="x", navigate="settings.nowhere"))
     assert bad["error"].startswith("unknown route") and "settings.audio" in bad["routes"]

@@ -88,17 +88,30 @@ export function buildWorkflowTour(graph: AutomationGraphDto, byType: Map<string,
     }
     steps.push({ target: `workflows.node.${id}`, title: label(id), body: lines.filter(Boolean).join("\n\n") });
   }
-  // What nothing pulls (a Preview, Save file, a generator on its own) ends the run.
+  // What nothing pulls (a Preview, Save file, a generator on its own) ends the run. Walk
+  // each such chain node by node, in the order its values are worked out.
+  const chain: string[] = [];
+  const visit = (id: string) => {
+    if (chain.includes(id) || mentioned.has(id)) return;
+    for (const edge of dataEdges) {
+      if (edge.target === id && !isStep(nodes.get(edge.source)!)) visit(edge.source);
+    }
+    chain.push(id);
+  };
   for (const node of graph.nodes) {
-    if (isStep(node) || mentioned.has(node.id)) continue;
-    if (dataEdges.some((edge) => edge.source === node.id)) continue;
+    if (!isStep(node) && !dataEdges.some((edge) => edge.source === node.id)) visit(node.id);
+  }
+  for (const id of chain) {
+    mentioned.add(id);
+    const node = nodes.get(id)!;
     const meta = byType.get(node.type);
-    const fed = feeds(node.id).filter((v) => !mentioned.has(v));
-    fed.forEach((v) => mentioned.add(v));
-    mentioned.add(node.id);
-    const lines = [node.description || meta?.description || "", "**Runs on its own** at the end, with what is wired into it."];
-    if (fed.length) lines.push(`**Worked out first:** ${list(fed.map(label))}`);
-    steps.push({ target: `workflows.node.${node.id}`, title: label(node.id), body: lines.filter(Boolean).join("\n\n") });
+    const pins = nodePins(node, meta);
+    const into = dataEdges.filter((edge) => edge.source === id).map((edge) => label(edge.target));
+    const lines = [node.description || meta?.description || ""];
+    if (pins.inputs.length) lines.push(`**Takes:** ${list(pins.inputs.map((pin) => pin.label))}`);
+    if (pins.outputs.length) lines.push(`**Gives:** ${list(pins.outputs.map((pin) => pin.label))}`);
+    lines.push(into.length ? `**Then:** ${list([...new Set(into)])}` : "**Runs on its own** at the end, with what is wired into it.");
+    steps.push({ target: `workflows.node.${id}`, title: label(id), body: lines.filter(Boolean).join("\n\n") });
   }
   return steps.slice(0, MAX_STEPS);
 }

@@ -20,7 +20,7 @@ AGENT_HARD_RULES = (
     "with `ducky_ui_list_targets(route, query)`. Routes: `settings.audio`, "
     "`settings.appearance`, … ; `settings.store` + `item_id=<slug>` for a plugin's Store "
     "page; `settings.tab` + `item_id=<tab name>` for a plugin's own Settings tab; "
-    "`workflows` + `workflow_id` for nodes. No id → `{role, name}`. Several steps → "
+    "`workflows` + `workflow_id` for nodes. No id → `role` + the name as `target`. Several steps → "
     "`ducky_walkthrough_run`; a whole workflow → `tour_workflow`. Keep the reply to a line "
     "or two; the popup explains.\n"
     "\n"
