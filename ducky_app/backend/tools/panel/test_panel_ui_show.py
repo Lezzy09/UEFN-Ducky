@@ -29,7 +29,7 @@ def test_show_me_sends_what_to_show_and_where(rpc):
     out = json.loads(panel_ui.ducky_ui_show(
         target="settings.tab.audio", title="Audio settings", body="Mic and speakers.", navigate="settings.audio",
     ))
-    assert out == {"ok": True, "shown": True, "missing": False, "target": "x"}
+    assert out == {"ok": True, "shown": True, "missing": False, "target": "x", "steps": 1}
     method, params, timeout = rpc[-1]
     assert method == "show" and timeout == panel_ui._SHOW_WAIT_S
     assert params == {"target": "settings.tab.audio", "title": "Audio settings", "body": "Mic and speakers.", "wait": False, "navigate": "settings.audio"}
@@ -59,6 +59,42 @@ def test_show_me_refuses_what_it_cant_show(rpc):
     assert "say what it is" in json.loads(panel_ui.ducky_ui_show(target="a.b", title=" "))["error"]
     bad = json.loads(panel_ui.ducky_ui_show(target="a.b", title="x", navigate="settings.nowhere"))
     assert bad["error"].startswith("unknown route") and "settings.audio" in bad["routes"]
+    assert rpc == []
+
+
+def test_show_me_plays_several_steps(rpc):
+    out = json.loads(panel_ui.ducky_ui_show(steps=[
+        {"target": "settings.tab.store", "title": "The Store", "navigate": "settings.store"},
+        {"target": "Install", "role": "button", "within": "settings.store.detail", "body": "Press it", "click": True},
+        {"target": "workflows.node.a", "also": ["workflows.node.b"], "title": "Nodes", "workflow_id": "w1",
+         "action": "workflows.add_menu", "action_args": {"query": "if"}},
+    ]))
+    assert out["steps"] == 3 and out["ok"] is True
+    method, params, _ = rpc[-1]
+    assert method == "show"
+    assert set(params) == {"steps", "wait"}
+    steps = params["steps"]
+    assert steps[0]["target"] == "settings.tab.store" and steps[0]["navigate"] == "settings.store"
+    assert [s["title"] for s in steps] == ["The Store", "Press it", "Nodes"]
+    assert steps[1]["target"] == {"role": "button", "name": "Install", "within": "settings.store.detail"} and steps[1]["click"] is True
+    assert steps[2]["target"] == ["workflows.node.a", "workflows.node.b"] and steps[2]["workflow_id"] == "w1"
+    assert steps[2]["action"] == {"id": "workflows.add_menu", "args": {"query": "if"}}
+
+    # A top-level target is step 1, then the list.
+    panel_ui.ducky_ui_show(target="a.b", title="First", steps=[{"target": "c.d", "title": "Second"}])
+    assert [s["target"] for s in rpc[-1][1]["steps"]] == ["a.b", "c.d"]
+    # One step in the list: no steps key, just that step.
+    panel_ui.ducky_ui_show(steps=[{"target": "c.d", "title": "Only", "action": {"id": "files.reveal", "args": {"path": "x"}}}])
+    assert "steps" not in rpc[-1][1] and rpc[-1][1]["action"] == {"id": "files.reveal", "args": {"path": "x"}}
+
+
+def test_show_me_steps_say_which_one_is_wrong(rpc):
+    assert json.loads(panel_ui.ducky_ui_show(steps=[]))["error"].startswith("target is required")
+    bad = json.loads(panel_ui.ducky_ui_show(steps=[{"target": "a", "title": "x"}, {"target": "b"}]))
+    assert bad["error"].startswith("steps[1]: say what it is")
+    bad = json.loads(panel_ui.ducky_ui_show(steps=[{"target": "a", "title": "x", "navigate": "nope"}]))
+    assert bad["error"].startswith("steps[0]: unknown route") and "routes" in bad
+    assert "must be an object" in json.loads(panel_ui.ducky_ui_show(steps=["a"]))["error"]
     assert rpc == []
 
 

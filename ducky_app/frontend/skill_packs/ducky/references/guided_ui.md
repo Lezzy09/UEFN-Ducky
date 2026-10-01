@@ -14,8 +14,8 @@ them **what to click**, show it instead of only describing it.
 
 | Tool | Use it for |
 | --- | --- |
-| `ducky_ui_show` | One thing: takes the user there, highlights it, popup above it with your title and body. Only its close button closes it; the chat keeps a **Show me** button that plays it again. Returns at once. |
-| `ducky_walkthrough_run` | Several steps with Next / Back ("how do I set up…"). Blocks until they finish or skip. |
+| `ducky_ui_show` | One thing, or several in order (`steps`): takes the user there, highlights it, popup above it with your title and body (Back / Next for steps). Only its close button closes it; the chat keeps a **Show me** button that plays it again. Returns at once. |
+| `ducky_walkthrough_run` | A tutorial tour (Skip, required clicks) that blocks until they finish or skip. Prefer `ducky_ui_show(steps=…)` for "where / how do I". |
 | `show_workflow` | Workflow nodes; with `title` (+ `body`) it is a Show me on those nodes. |
 | `tour_workflow` | A whole workflow node by node; `auto=true` builds the tour from the graph. |
 | `ducky_ui_list_targets(route, query, visible_only)` | Find target ids and the view's UI actions. |
@@ -26,7 +26,8 @@ Keep your chat reply to a line or two: the popup says the rest.
 
 ```
 ducky_ui_show(target, title, body="", workflow_id="", navigate="", item_id="",
-              action="", action_args=None, also=None, role="", within="", wait=false)
+              action="", action_args=None, also=None, role="", within="",
+              steps=None, wait=false)
 ```
 
 - **target**: an id (`settings.tab.audio`). For things with no id, give **role** and
@@ -36,7 +37,13 @@ ducky_ui_show(target, title, body="", workflow_id="", navigate="", item_id="",
 - **navigate** (+ **item_id**) opens the view first; **workflow_id** opens a workflow
   and selects `workflows.node.<id>` targets; **action** runs a UI action first
   (`action="workflows.add_menu", action_args={"query": "repeat"}`).
-- Result `{ok, shown, missing}`. `missing: true` = not found on screen: check the id
+- **steps**: several things in order, one popup with **Back / Next** and a counter
+  ("2 / 4"); the last step has **Close**. Each step takes the same fields as the call
+  (`target`, `title`, `body`, `navigate`, `item_id`, `workflow_id`, `action`,
+  `action_args`, `also`, `role`, `within`) plus `click: true` = move on when the user
+  clicks the highlighted thing. Leave the top-level `target` empty when you pass steps.
+  Up to 12 steps.
+- Result `{ok, shown, missing, steps}`. `missing: true` = not found on screen: check the id
   with `ducky_ui_list_targets` and try again. `deferred: true` = the user turned off
   "Let Ducky show me things"; the chat button is still there.
 
@@ -90,6 +97,19 @@ ducky_ui_show(target="workflows.node.servers", workflow_id="<id>",
   title="Fortnite servers up?", body="Checks Epic's status page and waits while Fortnite is down.")
 ```
 
+"How do I install Meshy and set my API key?" (several steps):
+
+```
+ducky_ui_show(steps=[
+  {"target": "settings.store.detail.actions", "navigate": "settings.store", "item_id": "meshy",
+   "title": "1. Install Meshy", "body": "Press **Install**.", "click": true},
+  {"target": "settings.tab.meshy", "navigate": "settings.tab", "item_id": "Meshy",
+   "title": "2. Its settings", "body": "Meshy's own tab appears here once it's installed."},
+  {"target": "API key", "role": "text", "within": "settings.tab.meshy",
+   "title": "3. Paste your key", "body": "From meshy.ai → API. It stays on this PC."}
+])
+```
+
 Something with no id (a button inside a panel):
 
 ```
@@ -98,7 +118,8 @@ ducky_ui_show(target="Run this node only", role="button", title="Run just this n
 
 ### Rules
 
-- One Show me per thing; a new one replaces the one on screen.
+- One Show me call per answer: several things go in `steps`, not several calls (a new
+  one replaces the one on screen).
 - Not while a `ducky_ask_user` question is open.
 - `missing` → look the id up with `ducky_ui_list_targets(route, query)` before trying again.
 - Never use a Show me to click for the user: they click; you show.

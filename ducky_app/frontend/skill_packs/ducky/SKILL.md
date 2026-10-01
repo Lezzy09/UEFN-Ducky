@@ -4,7 +4,7 @@ description: "UEFN-Ducky control panel — setup, IDE hookup, Skills studio, cha
 license: Ducky Source-Available License v1.0
 metadata:
   label: UEFN Ducky
-  version: 38
+  version: 39
   managed_by: uefn-ducky
   author: UEFN-Ducky
   copyright: Copyright 2026 UEFN-Ducky
@@ -184,7 +184,8 @@ check off.
 When the user asks where something is or how to find or open it (a setting, a
 plugin, a button, a workflow node), or you tell them what to click: show it with
 `ducky_ui_show` (it takes them there, highlights it with a popup, and the chat
-keeps a Show me button). Load `skill_read_subskill("ducky", "guided_ui")` for the
+keeps a Show me button); several things in order go in one call's `steps` (Back /
+Next in one popup). Load `skill_read_subskill("ducky", "guided_ui")` for the
 routes and target ids (Settings tabs, Store plugins, Workflows, chat box).
 
 ## Workflows

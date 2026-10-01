@@ -1257,6 +1257,14 @@
 .aw-empty-pick-text > span { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .aw-empty-pick-text > small { color: var(--fg-dim); font-size: 11px; }
 .aw-section-empty .aw-link { padding: 0; font-size: inherit; }
+/* An empty section: a small card, words stacked over a full-width New workflow. */
+.aw-list-ul > .aw-section-empty--card { display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 4px 8px 10px; padding: 16px 14px 14px; border: 1px dashed var(--border-light); border-radius: 12px; background: color-mix(in srgb, var(--accent) 4%, transparent); text-align: center; }
+.aw-section-empty-icon { display: grid; place-items: center; width: 34px; height: 34px; margin-bottom: 4px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.aw-section-empty-icon svg { width: 17px; height: 17px; }
+.aw-section-empty--card > strong { color: var(--fg); font-size: 13.5px; font-weight: 600; }
+.aw-section-empty--card > small { color: var(--fg-dim); font-size: 12px; }
+.aw-section-empty--card > .aw-section-new { width: 100%; min-height: 38px; margin-top: 10px; font-size: 13.5px; }
+.aw-section-empty--card > .aw-section-new svg { width: 15px; height: 15px; }
 /* Nothing open: New workflow stays in view at the foot of the list. */
 .aw-list-foot { display: flex; justify-content: center; padding: 10px 12px 12px; border-top: 1px solid var(--border); }
 .aw-list-foot > .aw-new-button { width: 100%; }

@@ -12,7 +12,7 @@ import { Icons } from "../icons/Icons";
 import { clipOutside, holeFor, modeFor, offscreenSide, placeCard, unionBox } from "../ui-targets/geometry";
 import { resolveTarget, revealTarget, type TargetSpec } from "../ui-targets/resolve";
 import { targetRef } from "../ui-targets/registry";
-import { closeShowMe, getShowMeState, subscribeShowMe, targetsOf } from "./ShowMeService";
+import { backShowMe, closeShowMe, getShowMeState, nextShowMe, subscribeShowMe, targetsOf } from "./ShowMeService";
 import "./showme.css";
 
 const POPUP_W = 360;
@@ -27,8 +27,10 @@ export function ShowMeLayer() {
 
   useEffect(() => subscribeShowMe(() => setEpoch((n) => n + 1)), []);
 
-  const { request, phase, key } = getShowMeState();
+  const { request, phase, key, index, total } = getShowMeState();
   const active = !!request;
+  const many = total > 1;
+  const last = index >= total - 1;
 
   // Follow the target(s): re-find them now and then, measure every frame.
   useEffect(() => {
@@ -94,6 +96,20 @@ export function ShowMeLayer() {
     popup.dataset.side = "center";
   }, [request, phase, key]);
 
+  // A "click" step moves on when the user clicks the highlighted thing (after it reacts).
+  useEffect(() => {
+    if (!request?.click || phase !== "shown" || last) return;
+    const els = targetsOf(request).map((t) => resolveTarget(t)).filter((el): el is HTMLElement => !!el);
+    if (!els.length) return;
+    let timer = 0;
+    const onClick = () => { timer = window.setTimeout(() => nextShowMe(), 350); };
+    for (const el of els) el.addEventListener("click", onClick, { capture: true });
+    return () => {
+      window.clearTimeout(timer);
+      for (const el of els) el.removeEventListener("click", onClick, { capture: true });
+    };
+  }, [request, phase, key, last]);
+
   // Focus moves to the close button; back where it was after closing.
   useEffect(() => {
     if (!active) return;
@@ -145,6 +161,18 @@ export function ShowMeLayer() {
           <button type="button" className="showme-back" onClick={() => void revealTarget(first)}>
             Bring it back into view
           </button>
+        ) : null}
+        {many ? (
+          <div className="showme-steps">
+            <span className="showme-steps-count">{index + 1} / {total}</span>
+            {request.click && !last && phase === "shown" ? <span className="showme-steps-hint">Click the highlight to go on</span> : null}
+            <span className="showme-steps-actions">
+              {index > 0 ? <button type="button" className="showme-step-btn" onClick={backShowMe}>Back</button> : null}
+              {last
+                ? <button type="button" className="showme-step-btn showme-step-btn--primary" onClick={close}>Close</button>
+                : <button type="button" className="showme-step-btn showme-step-btn--primary" onClick={nextShowMe}>Next</button>}
+            </span>
+          </div>
         ) : null}
         <span className="showme-arrow" aria-hidden />
       </div>

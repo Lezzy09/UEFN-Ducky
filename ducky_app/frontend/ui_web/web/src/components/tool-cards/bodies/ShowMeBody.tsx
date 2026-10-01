@@ -3,8 +3,8 @@ import { Icons } from "../../../icons/Icons";
 import { parseShowMeRequest, playShowMe, type ShowMeRequest } from "../../../showme/ShowMeService";
 import type { ToolCardBodyProps } from "../toolCardTypes";
 
-/** ducky_ui_show's plain arguments (target id, or role + name, also, action + action_args) as a request. */
-function fromShowArgs(args: Record<string, unknown>): ShowMeRequest | null {
+/** One step of ducky_ui_show's plain arguments (target id, or role + name, also, action + action_args). */
+function flatStep(args: Record<string, unknown>): Record<string, unknown> {
   const name = String(args.target ?? "").trim();
   const role = String(args.role ?? "").trim().toLowerCase();
   const within = String(args.within ?? "").trim();
@@ -18,7 +18,22 @@ function fromShowArgs(args: Record<string, unknown>): ShowMeRequest | null {
   const action = typeof args.action === "string" && args.action.trim()
     ? { id: args.action.trim(), args: (args.action_args as Record<string, unknown>) || {} }
     : args.action;
-  return parseShowMeRequest({ ...args, target: also.length ? [first, ...also] : first, action });
+  return { ...args, target: also.length ? [first, ...also] : first, action };
+}
+
+/** ducky_ui_show's arguments as a request: the top-level step (if any), then `steps`. */
+function fromShowArgs(args: Record<string, unknown>): ShowMeRequest | null {
+  const steps = Array.isArray(args.steps)
+    ? args.steps.filter((s): s is Record<string, unknown> => !!s && typeof s === "object" && !Array.isArray(s)).map(flatStep)
+    : [];
+  const hasTop = typeof args.target === "string" ? !!args.target.trim() : !!args.target;
+  return parseShowMeRequest({ ...(hasTop ? flatStep(args) : {}), steps });
+}
+
+/** "Audio settings", or "Audio settings · 3 steps". */
+export function showMeLabel(request: ShowMeRequest): string {
+  const n = request.steps?.length ?? 1;
+  return n > 1 ? `${request.title} · ${n} steps` : request.title;
 }
 
 /** The Show me a tool call stands for: ducky_ui_show's own arguments, or show_workflow's nodes. */
@@ -68,7 +83,7 @@ export function ShowMeBody({ toolName, args, resultText, isError, showResult }: 
   return (
     <div className="tool-card-showme">
       <div className="tool-card-showme-copy">
-        <strong className="tool-card-showme-title">{request.title}</strong>
+        <strong className="tool-card-showme-title">{showMeLabel(request)}</strong>
         {request.body ? <span className="tool-card-showme-text">{request.body.length > 160 ? `${request.body.slice(0, 157)}…` : request.body}</span> : null}
       </div>
       <button type="button" className="tool-card-showme-button" onClick={(e) => void play(e)} title="Take me there and highlight it">

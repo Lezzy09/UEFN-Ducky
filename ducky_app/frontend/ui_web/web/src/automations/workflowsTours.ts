@@ -21,7 +21,7 @@ const on = (id: string) => {
 };
 /** The first of these that is on screen (else the first). */
 const firstShown = (...ids: string[]) => ids.find(on) || ids[0];
-const NEW_BUTTONS = ["workflows.empty.new", "workflows.list.new", "workflows.list.new.local"];
+const NEW_BUTTONS = ["workflows.empty.new", "workflows.list.new", "workflows.section.new.local", "workflows.list.new.local"];
 
 const next = (target: string, title: string, body: string, onEnter?: () => Promise<void> | void): WalkthroughStep => ({ target, title, body, advance: "next", onEnter });
 const click = (target: string, title: string, body: string, onEnter?: () => Promise<void> | void): WalkthroughStep => ({ target, title, body, advance: "require_click", onEnter });

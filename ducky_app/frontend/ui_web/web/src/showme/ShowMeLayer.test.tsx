@@ -107,6 +107,80 @@ describe("Show me", () => {
   });
 });
 
+describe("Show me with several steps", () => {
+  it("walks the steps with Back / Next and ends with Close", async () => {
+    render(<ShowMeLayer />);
+    target("demo.a", "A");
+    target("demo.b", "B");
+    let result: Awaited<ReturnType<typeof playShowMe>> | undefined;
+    const request = parseShowMeRequest({ steps: [
+      { target: "demo.a", title: "First", body: "One" },
+      { target: "demo.b", title: "Second", body: "Two" },
+    ] })!;
+    await act(async () => {
+      result = await playShowMe(request);
+    });
+    expect(result).toMatchObject({ shown: true, steps: 2 });
+    expect(screen.getByRole("dialog", { name: "First" })).toBeTruthy();
+    expect(screen.getByText("1 / 2")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(screen.getByRole("dialog", { name: "Second" })).toBeTruthy();
+    expect(screen.getByText("2 / 2")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Back" }));
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(screen.getByRole("dialog", { name: "First" })).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    const closed = whenShowMeClosed();
+    const stepClose = screen.getAllByRole("button", { name: "Close" }).find((b) => b.classList.contains("showme-step-btn"));
+    expect(stepClose).toBeTruthy();
+    act(() => fireEvent.click(stepClose!));
+    await closed;
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(getShowMeState().request).toBeNull();
+  });
+
+  it("moves on when the user clicks the highlight on a click step", async () => {
+    render(<ShowMeLayer />);
+    const a = target("demo.a", "A");
+    target("demo.b", "B");
+    await act(async () => {
+      await playShowMe(parseShowMeRequest({ steps: [
+        { target: "demo.a", title: "Press A", click: true },
+        { target: "demo.b", title: "Then B" },
+      ] })!);
+    });
+    expect(screen.getByText("Click the highlight to go on")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(a);
+      await new Promise((r) => setTimeout(r, 700));
+    });
+    expect(screen.getByRole("dialog", { name: "Then B" })).toBeTruthy();
+  });
+
+  it("reads steps, with the top-level fields as step 1", () => {
+    const only = parseShowMeRequest({ steps: [{ target: "a", title: "A" }, { target: "b", title: "B", click: true }, { title: "no target" }] });
+    expect(only?.title).toBe("A");
+    expect(only?.steps?.map((s) => s.title)).toEqual(["A", "B"]);
+    expect(only?.steps?.[1].click).toBe(true);
+    const top = parseShowMeRequest({ target: "z", title: "Z", steps: [{ target: "a", title: "A" }] });
+    expect(top?.steps?.map((s) => s.title)).toEqual(["Z", "A"]);
+    expect(parseShowMeRequest({ steps: [{ target: "a", title: "A" }] })?.steps).toBeUndefined();
+  });
+});
+
 describe("Show me requests", () => {
   it("reads the AI's arguments and refuses what can't be shown", () => {
     expect(parseShowMeRequest({ target: "a.b", title: "A" })).toMatchObject({ target: "a.b", title: "A", body: "" });

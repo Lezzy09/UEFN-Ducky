@@ -9,7 +9,7 @@ import { ToolExecutionCard } from "./ToolExecutionCard";
 import type { ActivityItem } from "../utils/chatMessageGroups";
 import type { ChatTab, LinkedAgent, MessageAuthorDto } from "../types/panel";
 import { InlineStopButton } from "./InlineStopButton";
-import { replayShowMe, showMeRequestFromTool } from "./tool-cards/bodies/ShowMeBody";
+import { replayShowMe, showMeLabel, showMeRequestFromTool } from "./tool-cards/bodies/ShowMeBody";
 import { unwrapCodingAgentTool } from "../utils/unwrapCodingAgentTool";
 import type { ShowMeRequest } from "../showme/ShowMeService";
 
@@ -156,7 +156,7 @@ export const AgentActivityGroup = memo(function AgentActivityGroup({
           {shows.map(({ id, request }) => (
             <button key={id} type="button" className="tool-card-showme-button" title="Take me there and highlight it" onClick={() => void replayShowMe(request)}>
               <Icons.Sparkles />
-              <span>Show me: {request.title}</span>
+              <span>Show me: {showMeLabel(request)}</span>
             </button>
           ))}
         </div>

@@ -7,7 +7,7 @@ import { LinkedAgentCard } from "./LinkedAgentCard";
 import { ToolFileEditDiff } from "./ToolFileEditDiff";
 import { DefaultBody } from "./tool-cards/bodies/DefaultBody";
 import { walkthroughStepsFromTool } from "./tool-cards/bodies/WalkthroughBody";
-import { replayShowMe, showMeRequestFromTool } from "./tool-cards/bodies/ShowMeBody";
+import { replayShowMe, showMeLabel, showMeRequestFromTool } from "./tool-cards/bodies/ShowMeBody";
 import { resolveToolCategory } from "./tool-cards/toolCategories";
 import { runAgentWalkthrough } from "../walkthrough/agentWalkthrough";
 import type { ChatMessage, ChatTab, LinkedAgent, ToolCallData } from "../types/panel";
@@ -286,7 +286,7 @@ export const ToolExecutionCard = memo(function ToolExecutionCard({
               role="button"
               tabIndex={0}
               title="Take me there and highlight it"
-              aria-label={`Show me: ${showMe.title}`}
+              aria-label={`Show me: ${showMeLabel(showMe)}`}
               onClick={playShowMeAgain}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {

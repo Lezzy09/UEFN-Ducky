@@ -111,6 +111,9 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
   const drag = useRef<Drag | null>(null);
   const { menu, open: openMenu, close: closeMenu } = useContextMenuState<MenuTarget>();
   const sections = owners.owners?.length ? owners.owners : [LOCAL_OWNER];
+  // No workflows anywhere: a "Make your first workflow" card that creates in the first writable section.
+  const heroOwner = sections.find((owner) => !owner.readOnly);
+  const heroShown = !rows.length && !!heroOwner;
   const canFile = !!onMoveWorkflow;
   // Several workflows picked with Ctrl + click (one more) or Shift + click (a run of them),
   // like the Duckies list: right-click, drag or Delete acts on all of them.
@@ -342,12 +345,12 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
         </button>
       </div>
       <div className="aw-list-sections" id={listId} hidden={collapsed}>
-        {!rows.length && sections.some((owner) => !owner.readOnly) ? (
+        {heroShown ? (
           <div ref={targetRef("workflows.empty.hero", { route: "workflows", label: "Make your first workflow" })} className="aw-empty-hero" role="region" aria-label="Make your first workflow">
             <span className="aw-empty-hero-icon" aria-hidden="true"><Icons.Workflow /></span>
             <strong>Make your first workflow</strong>
             <p>Start from a ready-made pipeline, or from a blank canvas.</p>
-            <button ref={targetRef("workflows.empty.new", { route: "workflows", label: "New workflow" })} type="button" className="aw-new-button" onClick={() => onCreate(sections.find((owner) => !owner.readOnly)!.id)}><Icons.Plus /> New workflow</button>
+            <button ref={targetRef("workflows.empty.new", { route: "workflows", label: "New workflow" })} type="button" className="aw-new-button" onClick={() => onCreate(heroOwner!.id)}><Icons.Plus /> New workflow</button>
             {featured.length && onCreateFrom ? (
               <div ref={targetRef("workflows.empty.picks", { route: "workflows", label: "Start from a template" })} className="aw-empty-picks" role="group" aria-label="Start from a template">
                 {featured.map((template) => (
@@ -388,9 +391,19 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
                 {newFolderRow(owner, "", 0)}
                 {tree.folders.map((folder) => renderFolder(owner, folder, 0, open && !collapsed))}
                 {renderRows(owner, tree.rows, 0, open && !collapsed)}
-                {!mine.length && !tree.folders.length && !(editing?.owner === owner.id) && <li className="aw-section-empty" style={{ "--aw-level": 1 } as CSSProperties}>
-                  No workflows yet{!owner.readOnly ? <> · <button type="button" className="aw-link" onClick={() => onCreate(owner.id)}>New workflow</button></> : null}
-                </li>}
+                {!mine.length && !tree.folders.length && !(editing?.owner === owner.id) ? (
+                  // The hero above already has the big New workflow for this section.
+                  owner.readOnly || (heroShown && owner.id === heroOwner?.id)
+                    ? <li className="aw-section-empty" style={{ "--aw-level": 1 } as CSSProperties}>No workflows yet</li>
+                    : (
+                      <li className="aw-section-empty aw-section-empty--card">
+                        <span className="aw-section-empty-icon" aria-hidden="true"><OwnerIcon owner={owner} /></span>
+                        <strong>No workflows yet</strong>
+                        <small>{owner.kind === "team" ? `Shared with everyone in ${owner.label}.` : "Saved on this PC."}</small>
+                        <button ref={targetRef(`workflows.section.new.${owner.id}`, { route: "workflows", label: `New workflow in ${ownerName(owner)}` })} type="button" className="aw-new-button aw-section-new" onClick={() => onCreate(owner.id)}><Icons.Plus /> New workflow</button>
+                      </li>
+                    )
+                ) : null}
                 {owner.kind === "local" && owners.localImport ? (
                   <li className="aw-import-row">
                     <span>{owners.localImport} from when you were signed out</span>

@@ -60,6 +60,7 @@ _SHOW_WAIT_S = 30.0
 # wait=true: until the user presses the popup's close button.
 _SHOW_CLOSE_WAIT_S = 900.0
 _MAX_SHOW_TARGETS = 8
+_MAX_SHOW_STEPS = 12
 _TARGET_KEYS = ("id", "role", "name", "text", "within", "nth")
 # Asks NEVER time out: the agent suspends until the user answers (or Stop /
 # panel close). A timed-out ask left the questionnaire on screen while the
@@ -247,10 +248,62 @@ def ducky_ui_list_targets(route: str = "", query: str = "", visible_only: bool =
     return tool_json(_list_targets((route or "").strip(), (query or "").strip(), bool(visible_only)), pretty=pretty)
 
 
+def _show_step(raw: dict[str, Any]) -> dict[str, Any] | str:
+    """One Show me step from flat fields (target/role/within/also/navigate/…), or an error."""
+    name = str(raw.get("target") or "").strip() if not isinstance(raw.get("target"), dict) else ""
+    kind = str(raw.get("role") or "").strip().lower()
+    first: str | dict[str, Any] | None
+    if isinstance(raw.get("target"), dict):
+        first = _clean_target(raw.get("target"))
+    elif kind == "text":
+        first = {"text": name} if name else None
+    elif kind:
+        first = {"role": kind, "name": name} if name else None
+    else:
+        first = name or None
+    within = str(raw.get("within") or "").strip()
+    if isinstance(first, dict) and within and "within" not in first:
+        first["within"] = within
+    also = raw.get("also") if isinstance(raw.get("also"), list) else []
+    targets = [t for t in [first, *[_clean_target(x) for x in also[: _MAX_SHOW_TARGETS - 1]]] if t]
+    if not first or not targets:
+        return "target is required: an id from ducky_ui_list_targets, or a name with role"
+    title_s, body_s = str(raw.get("title") or "").strip(), str(raw.get("body") or "").strip()
+    if not title_s and not body_s:
+        return "say what it is: title (and body) are required"
+    route = str(raw.get("navigate") or "").strip()
+    if route and route not in _ROUTES:
+        return f"unknown route: {route}"
+    step: dict[str, Any] = {
+        "target": targets[0] if len(targets) == 1 else targets,
+        "title": title_s or body_s[:60],
+        "body": body_s,
+    }
+    workflow_id = str(raw.get("workflow_id") or "").strip()
+    if workflow_id:
+        step["workflow_id"] = workflow_id
+    if route:
+        step["navigate"] = route
+        item_id = str(raw.get("item_id") or "").strip()
+        if item_id:
+            step["item_id"] = item_id
+    action = raw.get("action")
+    if isinstance(action, dict):
+        cleaned = _clean_action(action)
+        if cleaned:
+            step["action"] = cleaned
+    elif str(action or "").strip():
+        args = raw.get("action_args")
+        step["action"] = {"id": str(action).strip(), "args": args if isinstance(args, dict) else {}}
+    if raw.get("click") is True:
+        step["click"] = True
+    return step
+
+
 @mcp.tool()
 def ducky_ui_show(
-    target: str,
-    title: str,
+    target: str = "",
+    title: str = "",
     body: str = "",
     workflow_id: str = "",
     navigate: str = "",
@@ -260,6 +313,7 @@ def ducky_ui_show(
     also: list[str] | None = None,
     role: str = "",
     within: str = "",
+    steps: list[dict[str, Any]] | None = None,
     wait: bool = False,
     pretty: bool = False,
 ) -> str:
@@ -281,46 +335,39 @@ def ducky_ui_show(
       Settings tab, a chat id or a file path for that route.
     action: a UI action first ("workflows.add_menu"), with action_args ({"query": "if"});
       ducky_ui_list_targets lists a view's actions.
+    steps: several things in order, one popup with Back / Next (Close on the last). Each
+      step has the same fields: {"target", "title", "body", "navigate", "item_id",
+      "workflow_id", "action", "action_args", "also", "role", "within", "click"};
+      click=true moves on when the user clicks the highlight. Leave the top-level
+      target empty when you pass steps (if you set it, it is step 1).
     wait: true returns only when the user closes the popup.
-    Returns {ok, shown, missing, target}; missing=true means it wasn't found on screen.
+    Returns {ok, shown, missing, target, steps}; missing=true means the first step
+    wasn't found on screen.
     """
-    name = (target or "").strip()
-    kind = (role or "").strip().lower()
-    first: str | dict[str, Any] | None
-    if kind == "text":
-        first = {"text": name}
-    elif kind:
-        first = {"role": kind, "name": name}
-    else:
-        first = name or None
-    if isinstance(first, dict) and (within or "").strip():
-        first["within"] = within.strip()
-    targets = [t for t in [first, *[_clean_target(x) for x in (also or [])[: _MAX_SHOW_TARGETS - 1]]] if t]
-    if not name or not targets:
-        return tool_json({"error": "target is required: an id from ducky_ui_list_targets, or a name with role"}, pretty=pretty)
-    title_s, body_s = (title or "").strip(), (body or "").strip()
-    if not title_s and not body_s:
-        return tool_json({"error": "say what it is: title (and body) are required"}, pretty=pretty)
-    route = (navigate or "").strip()
-    if route and route not in _ROUTES:
-        return tool_json({"error": f"unknown route: {navigate}", "routes": list(_ROUTES)}, pretty=pretty)
-    params: dict[str, Any] = {
-        "target": targets[0] if len(targets) == 1 else targets,
-        "title": title_s or body_s[:60],
-        "body": body_s,
-        "wait": bool(wait),
-    }
-    if (workflow_id or "").strip():
-        params["workflow_id"] = workflow_id.strip()
-    if route:
-        params["navigate"] = route
-        if (item_id or "").strip():
-            params["item_id"] = item_id.strip()
-    if (action or "").strip():
-        params["action"] = {"id": action.strip(), "args": action_args if isinstance(action_args, dict) else {}}
+    plan: list[dict[str, Any]] = []
+    if (target or "").strip():
+        first = _show_step({
+            "target": target, "title": title, "body": body, "workflow_id": workflow_id,
+            "navigate": navigate, "item_id": item_id, "action": action,
+            "action_args": action_args, "also": also, "role": role, "within": within,
+        })
+        if isinstance(first, str):
+            return tool_json({"error": first, **({"routes": list(_ROUTES)} if first.startswith("unknown route") else {})}, pretty=pretty)
+        plan.append(first)
+    for i, raw in enumerate((steps or [])[: _MAX_SHOW_STEPS]):
+        if not isinstance(raw, dict):
+            return tool_json({"error": f"steps[{i}] must be an object"}, pretty=pretty)
+        step = _show_step(raw)
+        if isinstance(step, str):
+            return tool_json({"error": f"steps[{i}]: {step}", **({"routes": list(_ROUTES)} if step.startswith("unknown route") else {})}, pretty=pretty)
+        plan.append(step)
+    if not plan:
+        return tool_json({"error": "target is required (or steps): an id from ducky_ui_list_targets, or a name with role"}, pretty=pretty)
+    params: dict[str, Any] = {"steps": plan} if len(plan) > 1 else dict(plan[0])
+    params["wait"] = bool(wait)
     out = panel_rpc("show", params, timeout=_SHOW_CLOSE_WAIT_S if wait else _SHOW_WAIT_S)
     if isinstance(out, dict) and not out.get("error"):
-        out = {**out, "ok": out.get("ok", True)}
+        out = {**out, "ok": out.get("ok", True), "steps": len(plan)}
     return tool_json(out, pretty=pretty)
 
 

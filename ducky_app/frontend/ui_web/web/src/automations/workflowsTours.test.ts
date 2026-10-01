@@ -18,6 +18,7 @@ const PATTERNS: Array<[string, string]> = [
   ["workflows.template.", "`workflows.template.${"],
   ["workflows.details.field.", "data-aw-field"],
   ["workflows.list.new.", "`workflows.list.new.${"],
+  ["workflows.section.new.", "`workflows.section.new.${"],
 ];
 
 function registeredInCode(id: string): boolean {

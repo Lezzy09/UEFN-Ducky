@@ -38,6 +38,23 @@ describe("Show me card", () => {
       .toEqual({ id: "workflows.add_menu", args: { query: "repeat" } });
   });
 
+  it("reads several steps and labels the card with how many", () => {
+    const args = {
+      steps: [
+        { target: "settings.tab.store", title: "The Store", navigate: "settings.store" },
+        { target: "Install", role: "button", within: "settings.store.detail", title: "Install it", click: true },
+        { target: "workflows.node.a", also: ["workflows.node.b"], title: "Nodes", action: "workflows.add_menu", action_args: { query: "if" } },
+      ],
+    };
+    const request = showMeRequestFromTool("ducky_ui_show", args)!;
+    expect(request.steps?.length).toBe(3);
+    expect(request.steps?.[1].target).toEqual({ role: "button", name: "Install", within: "settings.store.detail" });
+    expect(request.steps?.[2].target).toEqual(["workflows.node.a", "workflows.node.b"]);
+    expect(request.steps?.[2].action).toEqual({ id: "workflows.add_menu", args: { query: "if" } });
+    render(<ShowMeBody toolName="ducky_ui_show" args={args} resultText='{"ok":true}' {...base} />);
+    expect(screen.getByText("The Store · 3 steps")).toBeTruthy();
+  });
+
   it("turns show_workflow into a Show me on its nodes or group", () => {
     expect(showMeRequestFromTool("show_workflow", { workflow_id: "w", node_ids: ["a", "b"], title: "These two", body: "…" })).toMatchObject({
       target: ["workflows.node.a", "workflows.node.b"], workflow_id: "w", title: "These two",
