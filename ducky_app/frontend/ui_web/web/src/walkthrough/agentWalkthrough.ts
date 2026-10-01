@@ -129,9 +129,17 @@ export async function runAgentWalkthrough(rawSteps: unknown): Promise<Record<str
     steps,
   });
 
+  // Another tour may be starting this moment (a view's first-open tour): try again shortly.
+  const start = async (): Promise<boolean> => {
+    for (let i = 0; i < 15; i++) {
+      if (await startTour(AGENT_TOUR_ID, { force: true })) return true;
+      await wait(200);
+    }
+    return false;
+  };
   return new Promise<Record<string, unknown>>((resolve) => {
     pendingResolve = (r) => resolve(r);
-    void startTour(AGENT_TOUR_ID, { force: true }).then((ok) => {
+    void start().then((ok) => {
       if (!ok) {
         pendingResolve = null;
         resolve({ error: "failed to start walkthrough" });

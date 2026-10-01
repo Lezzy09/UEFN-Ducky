@@ -19,6 +19,7 @@ import { parseShowMeRequest, playShowMe, whenShowMeClosed } from "../showme/Show
 import { listTargets } from "./registry";
 import { listUiActions, runUiAction, searchTargets, waitForUiAction } from "./resolve";
 import { installEditorLineTargets } from "./editorLineTarget";
+import { asGuidedUi } from "./guidedBusy";
 import { getCurrentWorkflow, aiTourSteps, buildWorkflowTour, withOpenStep } from "../automations/workflowTour";
 import { runAskUser } from "../ask-user";
 import { runAgentWalkthrough } from "../walkthrough/agentWalkthrough";
@@ -83,10 +84,10 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
   try {
     if (method === "navigate") return handleNavigate(params);
     if (method === "list_targets") return handleListTargets(params);
-    if (method === "show") return await handleShow(params);
-    if (method === "tour_workflow") return await handleTourWorkflow(params);
+    if (method === "show") return await asGuidedUi(() => handleShow(params));
+    if (method === "tour_workflow") return await asGuidedUi(() => handleTourWorkflow(params));
     if (method === "walkthrough_run") {
-      return await runAgentWalkthrough(params.steps);
+      return await asGuidedUi(() => runAgentWalkthrough(params.steps));
     }
     if (method === "ask_user") {
       const rawIds = params.group_ids;

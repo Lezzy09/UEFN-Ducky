@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("./persistence", () => ({ whenWalkthroughHydrated: () => Promise.resolve() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => ({ get_settings: async () => ({ first_open_tours: true }) }) }));
 
+import { asGuidedUi } from "../ui-targets/guidedBusy";
 import { _resetFirstOpenForTests, setFirstOpenToursAllowed, startFirstOpenTour } from "./firstOpen";
 import { _resetWalkthroughServiceForTests, getWalkthroughState, registerTour, setCompletedMap, skipTour } from "./WalkthroughService";
 
@@ -40,5 +41,12 @@ describe("first-open tours", () => {
     expect(await startFirstOpenTour("demo.view", 0)).toBe(false);  // Welcome first
     setCompletedMap({ "app.shell": true });
     expect(await startFirstOpenTour("demo.view", 0)).toBe(true);  // next time the view opens
+  });
+
+  it("wait while Ducky is showing something (it opened the view)", async () => {
+    await asGuidedUi(async () => {
+      expect(await startFirstOpenTour("demo.view", 0)).toBe(false);
+    });
+    expect(await startFirstOpenTour("demo.view", 0)).toBe(true);
   });
 });

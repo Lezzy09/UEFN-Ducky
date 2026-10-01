@@ -5,6 +5,7 @@
  */
 import { getApi } from "../hooks/usePanelApi";
 import { getShowMeState } from "../showme/ShowMeService";
+import { isGuidedUiBusy } from "../ui-targets/guidedBusy";
 import { whenWalkthroughHydrated } from "./persistence";
 import { getTour, getWalkthroughState, isCompleted, startTour } from "./WalkthroughService";
 
@@ -35,9 +36,9 @@ export async function startFirstOpenTour(tourId: string, delayMs = 700): Promise
   if (!getTour(tourId) || isCompleted(tourId) || !(await allowed())) return false;
   // Let the view mount what the tour points at.
   await new Promise((r) => globalThis.setTimeout(r, delayMs));
-  // Welcome comes first on a new install; a tour or Show me on screen now wins too.
-  // Try again the next time the view opens.
-  if (!isCompleted("app.shell") || getWalkthroughState().active || getShowMeState().request) {
+  // Welcome comes first on a new install; a tour or Show me on screen now (or Ducky
+  // opening this view to show something) wins too. Try again the next time it opens.
+  if (!isCompleted("app.shell") || getWalkthroughState().active || getShowMeState().request || isGuidedUiBusy()) {
     started.delete(tourId);
     return false;
   }

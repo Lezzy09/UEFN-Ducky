@@ -65,7 +65,7 @@ function introSteps(): WalkthroughStep[] {
   const node = firstNode();
   if (node) {
     steps.push(next(`workflows.node.${node}`, "A node",
-      "White pins on its sides run it in order. Colored pins take values in on the left and give values out on the right. Click a node to open its details."));
+      "Colored pins take values in on the left and give values out on the right. Steps also have white pins that run them in order. Click a node to open its details."));
   }
   if (open) {
     steps.push(
