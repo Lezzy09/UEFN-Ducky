@@ -1155,3 +1155,59 @@
 .aw-names input { flex: 1 1 90px; min-width: 90px; }
 .aw-insp-form .aw-expression { font-family: var(--font-mono); }
 .aw-model-field { min-width: 0; }
+
+/* Pictures on cards: what an image node made last run (an Input, its pick), up to four. */
+.aw-node-thumb { flex: 1 1 auto; display: grid; gap: 4px; min-height: 0; margin: 4px 10px 8px; padding: 4px; overflow: hidden; border-radius: 6px;
+  background: repeating-conic-gradient(color-mix(in srgb, var(--wf-node-text) 6%, transparent) 0% 25%, transparent 0% 50%) 0 0 / 12px 12px,
+    color-mix(in srgb, var(--wf-canvas) 65%, transparent); }
+.aw-node-thumb.is-2, .aw-node-thumb.is-3, .aw-node-thumb.is-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.aw-node-thumb img { width: 100%; height: 100%; min-height: 0; object-fit: contain; border-radius: 4px; pointer-events: none; }
+.aw-node-thumb.is-empty { display: flex; align-items: center; justify-content: center; color: var(--wf-node-muted); font-size: 11px; text-align: center; }
+.aw-node-thumb-name { align-self: center; overflow: hidden; color: var(--wf-node-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Details: the Spend credits switch on paid nodes, the folder picker, Run this node. */
+.aw-spend-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.aw-spend-toggle:hover { border-color: var(--border-light); }
+.aw-spend-toggle.is-on { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.aw-spend-toggle.is-on .aw-switch { background: var(--accent); box-shadow: none; }
+.aw-spend-toggle.is-on .aw-switch > span { transform: translateX(13px); background: var(--fg-inverse, white); }
+.aw-folder-field { display: flex; flex-wrap: wrap; gap: 6px; }
+.aw-folder-field > input { flex: 1 1 160px; min-width: 0; }
+.aw-folder-field > .aw-file-pick { align-self: stretch; }
+.aw-insp-head-actions > .aw-run-node { color: var(--wf-run); }
+.aw-insp-head-actions > .aw-run-node.is-running { background: color-mix(in srgb, var(--wf-run) 14%, transparent); }
+.aw-pin-out-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.aw-pin-out-file { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; max-width: 96px; padding: 4px; border-radius: 6px; background: var(--bg); color: var(--text); font-size: 11px; }
+.aw-pin-out-file img { width: 88px; height: 66px; object-fit: contain; border-radius: 4px; }
+.aw-pin-out-file > span { max-width: 88px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aw-pin-out-file > svg { width: 22px; height: 22px; color: var(--text-muted); }
+
+/* New workflow picker: shelves by category, cards with a description, never cut off. */
+.vtm--workflows .vtm-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 640px) { .vtm--workflows .vtm-grid { grid-template-columns: minmax(0, 1fr); } }
+.vtm--workflows .vtm-card { align-items: flex-start; min-width: 0; }
+.vtm--workflows .vtm-card-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 2px; color: var(--text-muted); font-size: 12px; line-height: 1.35; }
+.vtm--workflows .vtm-badge--warn { color: var(--accent); }
+.vtm-shelves { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.vtm-shelf { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; cursor: pointer; }
+.vtm-shelf:hover { border-color: var(--border-light); color: var(--text); }
+.vtm-shelf.is-active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text); }
+.vtm-shelf-count { color: var(--text-muted); font-size: 11px; }
+.vtm--workflows .vtm-section { margin-top: 18px; }
+.vtm-section-title { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; color: var(--text); font-size: 13px; font-weight: 600; }
+.vtm-section-title > span { color: var(--text-muted); font-size: 12px; font-weight: 500; }
+.vtm-footer-note { margin-right: auto; color: var(--text-muted); font-size: 12px; }
+/* Save as template: as tall as its fields, beside a preview of what gets saved. */
+.modal-panel.vtm-modal.vtm-modal--compact { height: auto; }
+.vtm--workflows .vtm-creator { height: auto; }
+.vtm--workflows .vtm-creator-body { display: grid; grid-template-columns: minmax(0, 220px) minmax(0, 1fr); gap: 20px; padding: 20px 24px; }
+@media (max-width: 640px) { .vtm--workflows .vtm-creator-body { grid-template-columns: minmax(0, 1fr); } }
+.vtm-creator-preview { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.vtm-creator-preview .aw-mini { width: 100%; height: 150px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.vtm-creator-preview small { color: var(--text-muted); font-size: 12px; line-height: 1.35; }
+.vtm-creator-fields { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.vtm-creator-row { display: flex; align-items: flex-end; gap: 10px; }
+.vtm-field--grow { flex: 1 1 auto; }
+.vtm-creator-icon { font-size: 22px; line-height: 1; }
+.vtm-textarea { min-height: 56px; resize: vertical; font-family: inherit; }
+.vtm-form-error { margin: 0; color: var(--red); font-size: 12px; }

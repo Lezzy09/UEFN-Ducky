@@ -34,6 +34,13 @@ describe("pins", () => {
     expect(nodePins(node("input.text"), { type: "input.text", label: "Text", exec: false, outputs: [{ id: "value", label: "Text", type: "text" }] }).exec).toBe(false);
   });
 
+  it("makes a pin per name: Make List inputs, Extract data outputs", () => {
+    expect(nodePins(node("list.make"), undefined).inputs.map((pin) => pin.id)).toEqual(["a", "b"]);
+    expect(nodePins(node("list.make", { names: ["x", "y", "z"] }), undefined).inputs.map((pin) => pin.id)).toEqual(["x", "y", "z"]);
+    const extract: AutomationNodeDto = { type: "llm.extract", label: "Extract data", outputs: [{ id: "data", label: "Data", type: "json" }] };
+    expect(nodePins(node("llm.extract", { names: ["name", "level", "data"] }), extract).outputs.map((pin) => pin.id)).toEqual(["data", "name", "level"]);
+  });
+
   it("grows a card a row per pin, and keeps thin cards one size", () => {
     const pins = { exec: true, inputs: [{ id: "a", label: "a", type: "text" as const }, { id: "b", label: "b", type: "text" as const }], outputs: [{ id: "r", label: "r", type: "any" as const }] };
     const full = nodeLayout(pins);

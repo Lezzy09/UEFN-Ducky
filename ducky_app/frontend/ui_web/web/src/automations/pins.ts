@@ -14,7 +14,10 @@ const NAMED_INPUTS: Record<string, { type: PinType; defaults: string[] }> = {
   "logic.if": { type: "any", defaults: ["value"] },
   "logic.expression": { type: "any", defaults: ["a", "b"] },
   "text.template": { type: "text", defaults: ["a", "b"] },
+  "list.make": { type: "any", defaults: ["a", "b"] },
 };
+/** Nodes whose `names` add one output each (Extract data: one per field). */
+const NAMED_OUTPUTS: Record<string, PinType> = { "llm.extract": "any" };
 
 export function cleanType(raw: unknown): PinType {
   const value = String(raw || "").trim().toLowerCase() as PinType;
@@ -65,6 +68,9 @@ export function nodePins(node: AutomationGraphNodeDto, meta: AutomationNodeDto |
   } else if (NAMED_INPUTS[node.type]) {
     const spec = NAMED_INPUTS[node.type];
     inputs = (names(config.names).length ? names(config.names) : spec.defaults).map((name) => ({ id: name, label: name, type: spec.type }));
+  } else if (NAMED_OUTPUTS[node.type]) {
+    const taken = new Set(outputs.map((pin) => pin.id));
+    outputs = [...outputs, ...names(config.names).filter((name) => !taken.has(name)).map((name) => ({ id: name, label: name, type: NAMED_OUTPUTS[node.type] }))];
   }
   return { exec: meta?.exec !== false, inputs, outputs };
 }

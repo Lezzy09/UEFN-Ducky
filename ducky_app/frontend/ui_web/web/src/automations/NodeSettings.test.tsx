@@ -7,7 +7,7 @@ import { resetWorkflowToolsCache } from "./ToolSettings";
 import type { AutomationGraphNodeDto, AutomationNodeDto } from "../types/panel";
 
 // No bridge_job_start on this stub → runBridgeJob calls the method directly.
-const api = vi.hoisted(() => ({ get_workflow_tools_catalog: vi.fn(), get_mcp_tools_catalog: vi.fn() }));
+const api = vi.hoisted(() => ({ get_workflow_tools_catalog: vi.fn(), get_mcp_tools_catalog: vi.fn(), pick_workflow_folder: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
 let current: AutomationGraphNodeDto;
 function Editor({ config, meta }: { config: Record<string, unknown>; meta?: AutomationNodeDto }) {
@@ -114,5 +114,43 @@ describe("node settings", () => {
     fireEvent.keyDown(screen.getByRole("checkbox", { name: "Two" }), { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Targets" }));
+  });
+});
+
+describe("image and 3D nodes", () => {
+  const meta: AutomationNodeDto = {
+    type: "mesh.generate", label: "Text to 3D", group: "3D", exec: false, paid: true,
+    config_fields: [{ id: "backend", label: "Backend", type: "backend" }, { id: "spend", label: "Spend credits", type: "boolean" }],
+    backends: [
+      { id: "meshy_text_to_3d", label: "Meshy", plugin: "Meshy", credits: 25, available: true },
+      { id: "tripo", label: "Tripo v3", plugin: "3D AI Studio", credits: 60, available: false, reason: "Turn on the 3D AI Studio plugin in the Store and add its API key." },
+    ],
+  };
+
+  it("picks a backend, says what it costs and only spends with the switch on", async () => {
+    render(<Editor config={{}} meta={meta} />);
+    const spend = screen.getByRole("switch", { name: "Spend credits" });
+    expect(spend.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText(/About 25 credits each run on Meshy/)).toBeTruthy();
+    expect(screen.getByText(/nothing is spent/)).toBeTruthy();
+    fireEvent.click(spend);
+    expect(current.config.spend).toBe(true);
+    expect(screen.getByRole("switch", { name: "Spend credits" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Backend" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /Tripo v3/ }));
+    expect(current.config.backend).toBe("tripo");
+    expect(screen.getByRole("status").textContent).toContain("3D AI Studio plugin");  // not set up here: it says why
+    expect(screen.getByText(/About 60 credits each run on Tripo v3/)).toBeTruthy();
+  });
+
+  it("chooses a folder for Save file", async () => {
+    api.pick_workflow_folder.mockResolvedValue({ ok: true, folder: "C:/Users/me/Pictures/Ducky" });
+    const saveMeta: AutomationNodeDto = { type: "util.save_file", label: "Save File", group: "Utility", exec: false,
+      config_fields: [{ id: "folder", label: "Folder", type: "folder" }] };
+    render(<Editor config={{}} meta={saveMeta} />);
+    fireEvent.click(screen.getByRole("button", { name: "Choose Folder" }));
+    await waitFor(() => expect(current.config.folder).toBe("C:/Users/me/Pictures/Ducky"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Folder" }), { target: { value: "D:/Out" } });
+    expect(current.config.folder).toBe("D:/Out");
   });
 });

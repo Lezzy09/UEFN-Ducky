@@ -85,65 +85,131 @@ graph = {
 ### Pins and data wires (Atlas / Blueprint style)
 
 Nodes can have several typed inputs on the left and outputs on the right; the
-card grows a row per pin and shows each value. Two kinds of node:
+card grows a row per pin, shows each value, and image nodes show their picture.
+Two kinds of node:
 
 - **Step nodes** (white run pins) run in order along `main`/`true`/`false` wires:
-  tools, agents, `logic.if`, `llm.ask`, `workflow.call`, `util.preview`, `uefn.*`.
-- **Value nodes** (no run pins, `exec: false` in `list_workflow_nodes`) run once
-  per run when a step needs their output: `input.*`, `logic.expression`,
-  `logic.compare`, `text.template`. A graph of only value nodes and a sink
-  (`util.preview`, `flow.output`) runs too.
+  starts, `tool.call`, `pipeline.*`, `logic.if`, `workflow.call`, `flow.*`, `uefn.*`.
+- **Value nodes** (no run pins, `exec: false` in `list_workflow_nodes`) run when
+  something needs what they make: every `input.*`, `logic.expression`,
+  `logic.compare`, `text.template`, `llm.*`, `util.*`, `image.*`, `mesh.*`,
+  `blender.*`, `uefn.import`, `list.*`, `pdf.*`. A value node nothing pulls from
+  (Preview, Send to UEFN, Save file) is an end: it runs on its own, pulling its
+  whole chain. So a pipeline needs no start node at all.
 
 A data edge: `{source, target, kind:"data", source_pin, target_pin}`. One wire
 per input pin (a new one replaces the old); an output can feed many. Types:
 `text number boolean json any image images audio video mesh pdf svg file`.
-`any` and `json` take anything; text takes numbers and yes/no; a file type takes
-only its own kind (`images` also takes one `image`). A wrong type or unknown pin
-makes `save_workflow` refuse with `wires: [...]` naming each problem.
+`any` and `json` take anything; text takes numbers and yes/no; `file` takes any
+file kind; `images` also takes one `image`. A wrong type or unknown pin makes
+`save_workflow` refuse with `wires: [...]` naming each problem. Pin ids are in
+`list_workflow_nodes` (`inputs` / `outputs`); use those exact ids.
 
 Unwired inputs use the value set in details: `config.inputs = {pin: value}`
-(`{{field}}` works). Each step's outputs are also fields for later steps
-(`{{nodes.<node_id>.<pin>}}`), and a run returns `node_outputs`.
+(`{{field}}` works). Files travel as refs `{kind, path, name}` (generators add
+`provider`, `task_id`, `remote`). Each step's outputs are also fields for later
+steps (`{{nodes.<node_id>.<pin>}}`), and a run returns `node_outputs`.
 
 | Node | Pins in → out | Settings |
 | --- | --- | --- |
-| `input.text / number / boolean / json` | → `value` | `value` |
-| `input.image / images / audio / video / mesh / pdf / svg / file` | → `file` (`files`) | file picked on this PC |
-| `logic.if` (step) | `names` → `result` (boolean); run wires `true` / `false` | `condition`, `names` (default `["value"]`) |
+| `input.text` / `input.number` | → `text` / `number` | `value` |
+| `input.boolean` / `input.json` | → `value` | `value` |
+| `input.image / audio / video / mesh / pdf / svg / file` | → `image` / `audio` / … / `file` | `value`: the file picked |
+| `input.images` | → `images` | `value`: files picked |
+| `logic.if` (step) | `names` → `result`; run wires `true` / `false` | `expression` (the condition), `names` (default `["value"]`) |
 | `logic.expression` | `names` (default `a`, `b`) → `result` | `expression` |
-| `logic.compare` | `a`, `b` → `result` (boolean) | `op`: `== != > >= < <= contains starts ends` |
-| `llm.ask` (step) | `prompt`, `context` → `text` | `model` (any model in the app's model picker; blank = default), `system` |
+| `logic.compare` | `a`, `b` → `result` | `op`: `equals not_equals greater less contains starts matches empty` |
+| `llm.ask` | `prompt`, `context` → `text` | `model` (any model in the app's picker; blank = default), `system` |
+| `llm.vision` Ask about an image | `image` (one or many), `prompt` → `text` | `model` (needs vision), `system` |
+| `llm.extract` Extract data | `text` → `data` + one output per field | `names` (the fields), `model`, `system` |
+| `llm.translate` | `text`, `language` → `text` | `language`, `model` |
+| `llm.pick` Find by description | `list`, `prompt` → `list`, `item`, `count` | `model` |
 | `text.template` | `names` → `text` | `template` with `{{name}}` |
-| `util.preview` (step) | `value` → | shows the value on the card |
+| `util.preview` | `value` → | shows text or the picture on the card |
+| `util.save_file` | `file` (one or a list), `folder` → `file`, `path` | `folder`, `name`, `overwrite` |
 | `workflow.call` (step) | its Inputs rows → its Return rows | `workflow_id`, `share` |
 | `tool.call` (step) | → `result` (json), `text` | `name`, `arguments` |
+| `pipeline.agent` (step) | → `text`, `files` | `ducky`, `prompt` |
 
-**Expressions** (`logic.if` condition, `logic.expression`): JavaScript-like and
-safe. Names are the node's input pins, then run fields. `+ - * / %`, `== != < <=
-> >=`, `&& || !`, `a ? b : c`, `a.b`, `a[0]`, `"text"`, `[1, 2]`, methods
-`.length .includes() .startsWith() .endsWith() .toLowerCase() .toUpperCase()
-.trim() .split() .slice() .replace() .indexOf() .join() .keys()`, functions
-`len number text bool round floor ceil abs min max contains matches json lower
-upper`. No assignments, loops or calls out. Example: `score >= 10 &&
-name.includes("duck")`.
+**Expressions** (`logic.if`, `logic.expression`, `list.filter`, `list.map`):
+JavaScript-like and safe. Names are the node's input pins (`item` / `index` in
+list nodes), then run fields. `+ - * / %`, `== != < <= > >=`, `&& || !`,
+`a ? b : c`, `a.b`, `a[0]`, `"text"`, `[1, 2]`, methods `.length .includes()
+.startsWith() .endsWith() .toLowerCase() .toUpperCase() .trim() .split()
+.slice() .replace() .indexOf() .join() .keys()`, functions `len number text
+bool round floor ceil abs min max contains matches json lower upper`. No
+assignments, loops or calls out. Example: `score >= 10 && name.includes("duck")`.
 
-Example: Text in → Ask a model → Preview, plus an If on its length:
+### Images, 3D, characters (paid backends)
+
+Generators call a plugin tool; pick it with `config.backend` (ids and costs are
+in `list_workflow_nodes` → `backends`, with `available` and why not). **They only
+spend with `config.spend: true`.** Never set `spend` yourself: first ask the user
+with `ducky_ask_user` (yes/no, naming each paid node and its ~credits). Without
+it the run stops at that node and says which switch to turn on. Templates ship
+with spend off.
+
+| Node | Pins in → out | Backends (credits, first = default) |
+| --- | --- | --- |
+| `image.generate` Text to Image | `prompt` → `image`, `files` | `gemini25flash` (5), `gemini31flash` (7), `gemini3pro` (10), `seedream` (10), `meshy_text_to_image` (5) |
+| `image.edit` | `image`, `prompt` → `image` | `meshy_image_to_image` (5) |
+| `image.remove_bg` / `image.upscale` | `image` → `image` | `studio3d` (5 / 20) |
+| `mesh.generate` Text to 3D | `prompt` → `mesh`, `files` | `meshy_text_to_3d` (25), `tripo` (60), `tencent_rapid` (35), `tencent_pro` (80), `tripo_p1` (100) |
+| `mesh.from_image` Image to 3D | `image`, `prompt` (texture hint) → `mesh` | `meshy_image_to_3d` (25), `trellis` (30), `tripo`, `tencent_rapid`, `tencent_pro`; `fallback: true` tries the next |
+| `mesh.multi_view` | `images` (2–4 views) → `mesh` | `meshy_multi_image_to_3d` (25) |
+| `mesh.retexture` | `mesh`, `prompt` and/or `style_image` → `mesh` | `meshy_retexture` (10) |
+| `mesh.remesh` Optimize | `mesh`, `polycount` → `mesh` | `meshy_remesh` (5), `studio3d_optimize` (10); `topology` |
+| `mesh.uv_unwrap` | `mesh` → `mesh` | `meshy_uv_unwrap` (5) |
+| `mesh.convert` | `mesh` → `mesh` in `format` | `meshy_convert` (1: fbx glb obj usdz stl), `studio3d_convert` (10: fbx obj stl ply) |
+| `mesh.repair` / `mesh.render` / `mesh.bake` (`high`, `low`) | → `mesh` / `image` / `mesh` | `studio3d` (75 / 15 / 5) |
+| `mesh.rig` Rig Humanoid | `mesh`, `height` (m) → `mesh` (walk and run included) | `meshy_rig` (5) |
+| `mesh.animate` | `mesh` (from Rig) , `actions` → `mesh`, `meshes` | `meshy_animate` (3 each); `actions` "11, 28, 59" (Idle 1, Big Wave Hello, Victory Cheer; `meshy_list_animations` lists ids; 1–10 of them) |
+
+Meshy edits reuse the Meshy task that made the model; 3D AI Studio tools need a
+model a generator made (it has a web link), not a file only on this PC.
+
+Free, on this PC: `image.resize` (`width`, `height`, `mode` fit/fill/stretch),
+`image.crop` (`x y width height`), `image.convert` (`format` png/jpg/webp),
+`image.split_alpha` → `color`, `alpha`; `image.combine_alpha`;
+`image.split_channels` → `red green blue alpha`; `image.combine_channels`;
+`image.concat` (`images` → `image`, `direction` row/column/grid);
+`image.text` (`text` → `image`). GLB only: `mesh.info` → `width height depth
+triangles info`; `mesh.fit_box` (`width height depth`, `stretch`);
+`mesh.set_origin` (`x y z`: min/center/max/mass/keep, Y is up);
+`mesh.origin_text` (`instruction`, a model picks the origin); `mesh.rotate`
+(`x y z` degrees); `mesh.textures_extract` → `base_color roughness metallic
+normal occlusion emissive`; `mesh.textures_apply` (those as inputs).
+Lists: `list.make` (`names`), `list.get` (`index`, -1 = last), `list.count`,
+`list.join` (`separator`), `list.filter` / `list.map` (`expression`).
+Documents: `pdf.text` (`pages` like "1-3, 5") → `text`, `page_texts`;
+`pdf.images` → `images`. Blender (plugin + its add-on open): `blender.open`,
+`blender.render` (`mesh` → `image`), `blender.export` (scene → `mesh`).
+`uefn.import` Send to UEFN: `file` (one or a list), `folder` → `asset`,
+`assets` (UEFN must be running).
+
+`run_workflow_node(workflow_id, node_id)` runs one node now, reusing what fed it
+last run (no paid repeats): use it to retry or tune one step.
+
+Example: a pipeline with no start node: Prompt → picture → cut-out → 3D → UEFN:
 
 ```json
 {"nodes": [
-  {"id": "q", "type": "input.text", "x": 0, "y": 0, "config": {"value": "Name a duck"}},
-  {"id": "s", "type": "start.manual", "x": 0, "y": 200, "config": {}},
-  {"id": "ask", "type": "llm.ask", "x": 300, "y": 200, "config": {"system": "One short answer."}},
-  {"id": "long", "type": "logic.if", "x": 600, "y": 200, "config": {"names": ["text"], "condition": "text.length > 20"}},
-  {"id": "show", "type": "util.preview", "x": 900, "y": 120, "config": {}}],
+  {"id": "q", "type": "input.text", "x": 0, "y": 0, "config": {"value": "A wooden barrel, stylized, plain background"}},
+  {"id": "gen", "type": "image.generate", "x": 300, "y": 0, "config": {"backend": "gemini25flash"}},
+  {"id": "cut", "type": "image.remove_bg", "x": 600, "y": 0, "config": {}},
+  {"id": "m", "type": "mesh.from_image", "x": 900, "y": 0, "config": {"backend": "meshy_image_to_3d", "fallback": true}},
+  {"id": "u", "type": "uefn.import", "x": 1200, "y": 0, "config": {"folder": "Ducky/Props"}}],
  "edges": [
-  {"source": "s", "target": "ask", "kind": "main"},
-  {"source": "ask", "target": "long", "kind": "main"},
-  {"source": "long", "target": "show", "kind": "true"},
-  {"source": "q", "target": "ask", "kind": "data", "source_pin": "value", "target_pin": "prompt"},
-  {"source": "ask", "target": "long", "kind": "data", "source_pin": "text", "target_pin": "text"},
-  {"source": "ask", "target": "show", "kind": "data", "source_pin": "text", "target_pin": "value"}]}
+  {"source": "q", "target": "gen", "kind": "data", "source_pin": "text", "target_pin": "prompt"},
+  {"source": "gen", "target": "cut", "kind": "data", "source_pin": "image", "target_pin": "image"},
+  {"source": "cut", "target": "m", "kind": "data", "source_pin": "image", "target_pin": "image"},
+  {"source": "m", "target": "u", "kind": "data", "source_pin": "mesh", "target_pin": "file"}]}
 ```
+
+Ready-made: `list_workflow_templates` (each has `category`, `requires_plugins`,
+`missing_plugins`). Shelves: Images, 3D, Characters (prompt / picture →
+character → rig → animations → UEFN), Text & AI, Documents, Play tests, UEFN.
+Start from one by copying its `graph` into `save_workflow`.
 
 ### Locks
 
@@ -163,6 +229,7 @@ names them; ask the user, and only after they agree pass
 | `save_workflow` | create, or update by `workflow_id` (left-out graph/name/description/enabled stay) |
 | `show_workflow` | point at nodes or a group with a caption; nothing saved |
 | `run_workflow` | run now (prompt, files, payload for a reusable one) |
+| `run_workflow_node` | run one node now, reusing what fed it last run |
 | `stop_workflow` | stop every run of it on this PC right away |
 | `set_workflow_folder` / `move_workflow_folder` | file a workflow / rename, move or remove a folder |
 | `copy_workflow` | copy or move to Local or a team |
@@ -170,7 +237,7 @@ names them; ask the user, and only after they agree pass
 | `list_workflow_versions` / `restore_workflow_version` | History: saved versions, bring one back |
 | `clear_workflow_runs` | Clear log |
 | `emit_workflow_trigger` | fire a plugin trigger to test listeners |
-| `list_workflow_templates` / `save_workflow_template` / `delete_workflow_template` | New workflow picker |
+| `list_workflow_templates` / `save_workflow_template` (with `category`) / `delete_workflow_template` | New workflow picker |
 
 ### Showing the user (they watch it happen)
 
@@ -202,7 +269,8 @@ names them; ask the user, and only after they agree pass
   (give the rows a `type`) and call it with `workflow.call`: its inputs and
   returns become that node's pins. Or have the user group them and press
   Make reusable.
-- **Pipeline of values:** `input.*` → value nodes → step nodes, wired by pins;
-  read `node_outputs` in the run result to check each pin.
+- **Pipeline of values:** `input.*` → value nodes → an end (Preview, Send to
+  UEFN, Save file), wired by pins; read `node_outputs` in the run result to check
+  each pin. Ask before turning on `spend` for paid nodes.
 - **Organize:** `set_workflow_folder(id, "Play tests/Tycoon")`; groups, colors
   and icons on nodes make big graphs readable.

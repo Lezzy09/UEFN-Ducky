@@ -114,8 +114,20 @@ export function PinsSection({ node, pins, graph, byType, outputs, frozen, onNode
   </>;
 }
 
+const PICTURE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
+
 function OutputValue({ value }: { value: unknown }) {
   if (value === undefined) return <small className="aw-field-hint">Nothing came out.</small>;
+  const refs = (Array.isArray(value) ? value : [value]).filter((item): item is FileRefDto => !!item && typeof item === "object" && "path" in (item as object));
+  if (refs.length) {
+    return <div className="aw-pin-out-files">
+      {refs.slice(0, 12).map((ref, index) => <span key={`${ref.path}-${index}`} className="aw-pin-out-file" title={ref.path}>
+        {ref.url && (ref.kind === "image" || PICTURE.test(ref.path)) ? <img src={ref.url} alt="" draggable={false} loading="lazy" /> : <Icons.File />}
+        <span>{ref.name}</span>
+      </span>)}
+      {refs.length > 12 ? <small className="aw-field-hint">and {refs.length - 12} more</small> : null}
+    </div>;
+  }
   if (typeof value === "string" && value.length > 40) return <pre className="aw-pin-out-text">{value}</pre>;
   if (value && typeof value === "object" && !Array.isArray(value) && !("path" in (value as object))) return <pre className="aw-pin-out-text">{JSON.stringify(value, null, 2)}</pre>;
   return <span className="aw-pin-out-value">{shortValue(value) || "(empty)"}</span>;

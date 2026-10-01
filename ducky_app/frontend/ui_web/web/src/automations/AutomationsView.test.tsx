@@ -5,7 +5,7 @@ import { AutomationsView } from "./AutomationsView";
 import { ConfirmModalProvider } from "../contexts/ConfirmModalContext";
 import type { AutomationDto, WorkflowOwnerDto, WorkflowOwnersDto } from "../types/panel";
 
-const api = vi.hoisted(() => ({ list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_workflows: vi.fn(), list_workflow_nodes: vi.fn(), get_workflow: vi.fn(), save_workflow: vi.fn(), run_workflow: vi.fn(), delete_workflow: vi.fn(), workflow_owners: vi.fn(), workflow_sync: vi.fn(), copy_workflow: vi.fn(), set_workflow_run_here: vi.fn(), import_local_workflows: vi.fn(), workflow_open_web: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn(), get_workflow_tools_catalog: vi.fn(), set_workflow_folder: vi.fn(), move_workflow_folder: vi.fn(), clear_workflow_runs: vi.fn() }));
+const api = vi.hoisted(() => ({ list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_workflows: vi.fn(), list_workflow_nodes: vi.fn(), get_workflow: vi.fn(), save_workflow: vi.fn(), run_workflow: vi.fn(), delete_workflow: vi.fn(), workflow_owners: vi.fn(), workflow_sync: vi.fn(), copy_workflow: vi.fn(), set_workflow_run_here: vi.fn(), import_local_workflows: vi.fn(), workflow_open_web: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn(), get_workflow_tools_catalog: vi.fn(), set_workflow_folder: vi.fn(), move_workflow_folder: vi.fn(), clear_workflow_runs: vi.fn(), run_workflow_node: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
 vi.mock("./AutomationTemplatePicker", () => ({
   AutomationTemplatePicker: ({ open, owners, ownerId, onOwnerChange, onSelect }: {
@@ -1737,5 +1737,62 @@ describe("group to reusable workflow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Make reusable" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Starts");
     expect(api.save_workflow.mock.calls.some(([doc]) => !doc.id)).toBe(false);
+  });
+});
+
+describe("image nodes", () => {
+  const url = "http://127.0.0.1:4199/workflow-media/sig/tok/duck.png";
+  beforeEach(() => {
+    saved.graph = {
+      nodes: [
+        { id: "q", type: "input.text", x: 0, y: 0, config: { value: "a duck" } },
+        { id: "gen", type: "image.generate", x: 300, y: 0, config: {} },
+        { id: "show", type: "util.preview", x: 600, y: 0, config: {} },
+      ],
+      edges: [
+        { source: "q", target: "gen", kind: "data", source_pin: "text", target_pin: "prompt" },
+        { source: "gen", target: "show", kind: "data", source_pin: "image", target_pin: "value" },
+      ],
+    };
+    api.list_workflow_nodes.mockResolvedValue({ nodes: [
+      { type: "input.text", label: "Input Text", group: "Inputs", role: "input", exec: false, outputs: [{ id: "text", label: "Text", type: "text" }] },
+      { type: "image.generate", label: "Text to Image", group: "Images", exec: false, paid: true,
+        inputs: [{ id: "prompt", label: "Prompt", type: "text", required: true }], outputs: [{ id: "image", label: "Image", type: "image" }],
+        config_fields: [{ id: "backend", label: "Backend", type: "backend" }, { id: "spend", label: "Spend credits", type: "boolean" }],
+        backends: [{ id: "gemini25flash", label: "Gemini 2.5 Flash Image", plugin: "3D AI Studio", credits: 5, available: true }] },
+      { type: "util.preview", label: "Preview", group: "Utility", role: "end", exec: false, inputs: [{ id: "value", label: "Value", type: "any" }] },
+    ] });
+  });
+  async function openPipe() {
+    renderView();
+    fireEvent.click(await screen.findByText("Example"));
+    await waitFor(() => expect(document.querySelector('[data-aw-node="gen"] .aw-node-thumb')).toBeTruthy());
+  }
+
+  it("shows the picture an image node made on its card and in Preview", async () => {
+    api.run_workflow.mockResolvedValue({ ok: true, steps: [], node_outputs: {
+      gen: { image: { kind: "image", path: "C:/runs/duck.png", name: "duck.png", url } },
+      show: { value: { kind: "image", path: "C:/runs/duck.png", name: "duck.png", url } },
+    } });
+    await openPipe();
+    expect(document.querySelector('[data-aw-node="gen"] .aw-node-thumb')?.textContent).toContain("after a run");
+    fireEvent.click(screen.getByRole("button", { name: "Test", exact: true }));
+    await waitFor(() => expect(document.querySelector('[data-aw-node="gen"] .aw-node-thumb img')?.getAttribute("src")).toBe(url));
+    expect(document.querySelector('[data-aw-node="show"] .aw-node-thumb img')?.getAttribute("src")).toBe(url);
+    const height = parseFloat((document.querySelector('[data-aw-node="gen"]') as HTMLElement).style.height);
+    expect(height).toBeGreaterThan(150);  // room for the picture under the pin rows
+  });
+
+  it("runs one node from its details and shows what it made", async () => {
+    api.run_workflow_node.mockResolvedValue({ ok: true, steps: [{ label: "Text to Image", ok: true }], node_outputs: {
+      gen: { image: { kind: "image", path: "C:/runs/again.png", name: "again.png", url: url.replace("duck", "again") } },
+    } });
+    await openPipe();
+    editNode("gen");
+    fireEvent.click(within(details()!).getByRole("button", { name: "Run this node" }));
+    await waitFor(() => expect(api.run_workflow_node).toHaveBeenCalledWith("p", "gen"));
+    expect(api.save_workflow).toHaveBeenCalled();  // saved first, so the node that runs is the one on screen
+    await waitFor(() => expect(document.querySelector('[data-aw-node="gen"] .aw-node-thumb img')?.getAttribute("src")).toContain("again.png"));
+    expect(within(details()!).getByText("again.png")).toBeTruthy();  // Last run shows the file
   });
 });

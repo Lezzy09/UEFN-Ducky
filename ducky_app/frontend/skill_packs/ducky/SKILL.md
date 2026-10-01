@@ -4,7 +4,7 @@ description: "UEFN-Ducky control panel — setup, IDE hookup, Skills studio, cha
 license: Ducky Source-Available License v1.0
 metadata:
   label: UEFN Ducky
-  version: 35
+  version: 36
   managed_by: uefn-ducky
   author: UEFN-Ducky
   copyright: Copyright 2026 UEFN-Ducky
@@ -187,6 +187,8 @@ graph shape, every workflow tool, locks (never change a locked node or group
 without the user's OK) and how to show the user on the canvas as you work
 (`save_workflow` frames what changed; `show_workflow` points at parts with a
 caption).
+Image, 3D and character pipelines (prompt to picture to 3D to rig to animations
+to UEFN) are workflow nodes too; their paid steps need the user's OK first.
 
 ## AI-made plugins (extend the app yourself)
 

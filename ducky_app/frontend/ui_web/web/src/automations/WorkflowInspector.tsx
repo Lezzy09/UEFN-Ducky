@@ -49,6 +49,10 @@ export type InspectorActions = {
   onGroupSelection?: () => void;
   /** Lock or unlock nodes and groups: locked ones can't be moved, wired or changed. */
   onLock: (targets: { nodes?: string[]; groups?: string[] }, locked: boolean) => void;
+  /** Run this node only (what feeds it reuses the last run). */
+  onRunNode?: (id: string) => void;
+  /** The node running on its own now, if any. */
+  runningNode?: string;
 };
 
 type Props = InspectorActions & {
@@ -237,6 +241,10 @@ export function WorkflowInspector(props: Props) {
       {head.lockedNote ? <span className="aw-insp-state" title={head.lockedNote}><Icons.Lock /> Locked</span> : null}
       <div className="aw-insp-head-actions">
         {props.onGroupSelection ? <button type="button" className="aw-icon-button" aria-label="Group selection" title="Put the selection in a group (Ctrl+G)" onClick={props.onGroupSelection}><Icons.Box /></button> : null}
+        {shown.length === 1 && active?.kind === "node" && props.onRunNode ? <button type="button" ref={targetRef("workflows.details.run", { route: "workflows", label: "Run this node only" })}
+          className={`aw-icon-button aw-run-node${props.runningNode === active.node.id ? " is-running" : ""}`} aria-label="Run this node"
+          disabled={!!props.runningNode} title="Run only this node now. What feeds it reuses the last run, so paid steps before it don't run again."
+          onClick={() => props.onRunNode?.(active.node.id)}>{props.runningNode === active.node.id ? <Icons.Spinner /> : <Icons.Play />}</button> : null}
         {editable ? <button type="button" ref={targetRef("workflows.details.edit", { route: "workflows", label: "Edit name, description, color and icon" })} className={`aw-icon-button aw-edit-toggle${editing ? " is-on" : ""}`}
           aria-label="Edit" aria-pressed={editing} title={editing ? "Stop editing (Esc)" : "Edit the name, description, color and icon"} onClick={() => editProps.onEditing(!editing)}>
           <Icons.Pencil />

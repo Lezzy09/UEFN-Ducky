@@ -8,9 +8,23 @@ import { getApi } from "../hooks/usePanelApi";
 import { subscribePanelPush } from "../hooks/usePanelPushBus";
 import { handleDeepLink } from "../navigation/deepLinks";
 import type { AutomationGraphDto, AutomationTemplateDto, WorkflowOwnerDto } from "../types/panel";
+import { IconPicker } from "./IconPicker";
+import { WorkflowMiniature } from "./WorkflowHoverCard";
 import { ownerName } from "./WorkflowList";
 
 const BLANK_ID = "__blank__";
+const ALL = "All";
+/** Shelves in this order; plugin and custom categories follow. */
+export const TEMPLATE_CATEGORIES = ["Images", "3D", "Characters", "Text & AI", "Documents", "Play tests", "UEFN", "Plugins", "Yours"];
+
+export function templateCategory(template: AutomationTemplateDto): string {
+  return template.category || (template.kind === "custom" ? "Yours" : template.kind === "plugin" ? "Plugins" : "UEFN");
+}
+
+function byShelf(a: string, b: string) {
+  const ia = TEMPLATE_CATEGORIES.indexOf(a), ib = TEMPLATE_CATEGORIES.indexOf(b);
+  return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+}
 
 interface AutomationTemplatePickerProps {
   open: boolean;
@@ -24,6 +38,21 @@ interface AutomationTemplatePickerProps {
   ownerId?: string;
   onOwnerChange?: (ownerId: string) => void;
 }
+
+const CloseIcon = () => (
+  <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);
+
+const Check = () => (
+  <span className="vtm-card-check" aria-hidden>
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 6L9 17l-5-5" />
+    </svg>
+  </span>
+);
 
 export function AutomationTemplatePicker({
   open,
@@ -41,10 +70,13 @@ export function AutomationTemplatePicker({
   const [loading, setLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(BLANK_ID);
   const [searchQuery, setSearchQuery] = useState("");
+  const [shelf, setShelf] = useState(ALL);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<AutomationTemplateDto | null>(null);
   const [formName, setFormName] = useState("");
   const [formDesc, setFormDesc] = useState("");
+  const [formCategory, setFormCategory] = useState("Yours");
+  const [formIcon, setFormIcon] = useState("⚡");
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -76,6 +108,7 @@ export function AutomationTemplatePicker({
     if (!open) {
       setView("picker");
       setSearchQuery("");
+      setShelf(ALL);
       setEditing(null);
       setCreating(false);
       setFormError("");
@@ -85,19 +118,28 @@ export function AutomationTemplatePicker({
     setSelectedId(BLANK_ID);
   }, [open, refresh]);
 
+  const shelves = useMemo(() => [...new Set(templates.map(templateCategory))].sort(byShelf), [templates]);
+
+  // Search matches every word across name, description, category and plugin.
   const filtered = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return templates;
-    return templates.filter((t) =>
-      `${t.name} ${t.label || ""} ${t.description || ""} ${t.plugin_id || ""}`.toLowerCase().includes(q),
-    );
-  }, [searchQuery, templates]);
+    const words = searchQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return templates.filter((t) => {
+      if (shelf !== ALL && templateCategory(t) !== shelf) return false;
+      const text = `${t.name} ${t.label || ""} ${t.description || ""} ${templateCategory(t)} ${t.plugin_id || ""}`.toLowerCase();
+      return words.every((word) => text.includes(word));
+    });
+  }, [searchQuery, shelf, templates]);
+
+  const sections = useMemo(() => {
+    const map = new Map<string, AutomationTemplateDto[]>();
+    for (const t of filtered) map.set(templateCategory(t), [...(map.get(templateCategory(t)) || []), t]);
+    return [...map.entries()].sort(([a], [b]) => byShelf(a, b));
+  }, [filtered]);
 
   const selected = selectedId === BLANK_ID ? null : templates.find((t) => t.id === selectedId) || null;
-  const blankMatches = (() => {
+  const blankMatches = shelf === ALL && (() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return true;
-    return "blank empty workflow".includes(q);
+    return !q || "blank empty workflow".includes(q);
   })();
 
   const locked = Boolean(selected && selected.ready === false);
@@ -126,9 +168,11 @@ export function AutomationTemplatePicker({
     setEditing(row);
     setFormName(row?.name || "");
     setFormDesc(row?.description || "");
+    setFormCategory(row ? templateCategory(row) : shelf !== ALL ? shelf : "Yours");
+    setFormIcon(row?.icon || "⚡");
     setFormError("");
     setView("creator");
-  }, []);
+  }, [shelf]);
 
   const handleDelete = useCallback(
     async (template: AutomationTemplateDto, e: MouseEvent) => {
@@ -151,22 +195,24 @@ export function AutomationTemplatePicker({
     [confirm, selectedId],
   );
 
+  const savedGraph = editing?.graph || currentGraph || { nodes: [], edges: [] };
+
   const handleSaveCustom = useCallback(async () => {
     const name = formName.trim();
     if (!name) {
-      setFormError("Name is required");
+      setFormError("It needs a name.");
       return;
     }
     setSaving(true);
     setFormError("");
     try {
-      const graph = editing?.graph || currentGraph || { nodes: [], edges: [] };
       const res = await getApi()?.save_workflow_template?.(
         name,
         formDesc,
-        editing?.icon || "⚡",
-        JSON.stringify(graph),
+        formIcon || "⚡",
+        JSON.stringify(savedGraph),
         editing?.kind === "custom" ? editing.id : "",
+        formCategory,
       );
       if (!res?.ok || !res.template) {
         setFormError(res?.error || "Could not save");
@@ -179,7 +225,7 @@ export function AutomationTemplatePicker({
     } finally {
       setSaving(false);
     }
-  }, [currentGraph, editing, formDesc, formName, refresh]);
+  }, [editing, formCategory, formDesc, formIcon, formName, refresh, savedGraph]);
 
   const handleClose = useCallback(() => {
     setView("picker");
@@ -188,19 +234,75 @@ export function AutomationTemplatePicker({
   }, [onClose]);
 
   const hasOpenGraph = (currentGraph?.nodes?.length || 0) > 0;
+  const categoryOptions = [...new Set([...TEMPLATE_CATEGORIES.filter((c) => c !== "Plugins"), ...shelves.filter((c) => c !== "Plugins"), formCategory])]
+    .sort(byShelf).map((c) => ({ value: c, label: c }));
+
+  const card = (template: AutomationTemplateDto) => {
+    const isSelected = template.id === selectedId;
+    const isLocked = template.ready === false;
+    const need = template.missing_plugins || [];
+    const badge = isLocked ? `Needs ${need.join(", ")}` : template.kind === "plugin" ? `Plugin (${template.plugin_id || "store"})`
+      : template.kind === "custom" ? "Yours" : template.requires_plugins?.length ? `Uses ${template.requires_plugins.join(", ")}` : "Built in";
+    return (
+      <button
+        key={template.id}
+        type="button"
+        role="option"
+        aria-selected={isSelected}
+        className={`vtm-card${isSelected ? " is-selected" : ""}${isLocked ? " is-locked" : ""}`}
+        title={template.description || template.name}
+        onClick={() => setSelectedId(template.id)}
+        onDoubleClick={() => {
+          if (isLocked) {
+            if (need[0]) openStoreSlug(need[0]);
+            return;
+          }
+          onSelect(template);
+          onClose();
+        }}
+      >
+        <span className={`vtm-card-icon${isSelected ? " is-selected" : ""}`} aria-hidden>{template.icon || "⚡"}</span>
+        <span className="vtm-card-body">
+          <span className="vtm-card-name">{template.name}</span>
+          {template.description ? <span className="vtm-card-desc">{template.description}</span> : null}
+          <span className={`vtm-badge${template.kind === "plugin" ? " vtm-badge--system" : ""}${isLocked ? " vtm-badge--warn" : ""}`}>{badge}</span>
+          {isLocked
+            ? need.map((slug) => (
+                <span key={slug} role="link" className="vtm-chip" onClick={(e) => { e.stopPropagation(); openStoreSlug(slug); }}>
+                  Get {slug}
+                </span>
+              ))
+            : null}
+        </span>
+        {isSelected ? <Check /> : null}
+        {template.kind === "custom" ? (
+          <span className="vtm-card-actions">
+            <span role="button" tabIndex={0} className="vtm-card-action" aria-label={`Edit ${template.name}`} title={`Edit ${template.name}`}
+              onClick={(e) => { e.stopPropagation(); openCreateView(template); }}>
+              <Icons.Pencil />
+            </span>
+            <span role="button" tabIndex={0} className="vtm-card-action vtm-card-action--danger" aria-label={`Delete ${template.name}`} title={`Delete ${template.name}`}
+              onClick={(e) => void handleDelete(template, e)}>
+              <Icons.Trash />
+            </span>
+          </span>
+        ) : null}
+      </button>
+    );
+  };
 
   return (
     <Modal
       open={open}
       onClose={handleClose}
       title={view === "creator" ? "Save Template" : "New workflow"}
-      width={768}
+      width={820}
       hideHeader
       hideClose
-      className="vtm-modal"
+      className={`vtm-modal vtm-modal--workflows${view === "creator" ? " vtm-modal--compact" : ""}`}
       bodyClassName="vtm-modal-body"
     >
-      <div className="vtm">
+      <div className="vtm vtm--workflows">
         <div className={`vtm-view${view === "picker" ? " vtm-view--active" : " vtm-view--hidden"}`}>
           <div className="vtm-header">
             <div className="vtm-header-left">
@@ -223,12 +325,7 @@ export function AutomationTemplatePicker({
                 <small className="vtm-owner">in {ownerLabel}</small>
               )}
             </div>
-            <button type="button" className="vtm-icon-btn" onClick={handleClose} aria-label="Close">
-              <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
+            <button type="button" className="vtm-icon-btn" onClick={handleClose} aria-label="Close"><CloseIcon /></button>
           </div>
           <div className="vtm-search">
             <div className="vtm-search-wrap">
@@ -241,16 +338,29 @@ export function AutomationTemplatePicker({
                 type="text"
                 className="vtm-input vtm-search-input"
                 placeholder="Search templates..."
+                aria-label="Search templates"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 autoFocus={view === "picker"}
               />
             </div>
+            {shelves.length > 1 ? (
+              <div className="vtm-shelves" role="tablist" aria-label="Template categories">
+                {[ALL, ...shelves].map((name) => {
+                  const count = name === ALL ? templates.length : templates.filter((t) => templateCategory(t) === name).length;
+                  return (
+                    <button key={name} type="button" role="tab" aria-selected={shelf === name} className={`vtm-shelf${shelf === name ? " is-active" : ""}`} onClick={() => setShelf(name)}>
+                      {name}<span className="vtm-shelf-count">{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
           <div className="vtm-body vtm-picker-body" role="listbox" aria-label="Workflow templates">
             {loading ? <div className="vtm-status">Loading templates…</div> : null}
-            <div className="vtm-grid">
-              {blankMatches ? (
+            {blankMatches ? (
+              <div className="vtm-grid">
                 <button
                   type="button"
                   role="option"
@@ -262,133 +372,30 @@ export function AutomationTemplatePicker({
                     onClose();
                   }}
                 >
-                  <span className={`vtm-card-icon${selectedId === BLANK_ID ? " is-selected" : ""}`} aria-hidden>
-                    ∅
-                  </span>
+                  <span className={`vtm-card-icon${selectedId === BLANK_ID ? " is-selected" : ""}`} aria-hidden>∅</span>
                   <span className="vtm-card-body">
                     <span className="vtm-card-name">Blank workflow</span>
                     <span className="vtm-badge">Empty canvas</span>
                   </span>
-                  {selectedId === BLANK_ID ? (
-                    <span className="vtm-card-check" aria-hidden>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M20 6L9 17l-5-5" />
-                      </svg>
-                    </span>
-                  ) : null}
+                  {selectedId === BLANK_ID ? <Check /> : null}
                 </button>
-              ) : null}
-              {filtered.map((template) => {
-                const isSelected = template.id === selectedId;
-                const plugin = template.kind === "plugin";
-                const isLocked = template.ready === false;
-                const need = template.missing_plugins || [];
-                return (
-                  <button
-                    key={template.id}
-                    type="button"
-                    role="option"
-                    aria-selected={isSelected}
-                    className={`vtm-card${isSelected ? " is-selected" : ""}${isLocked ? " is-locked" : ""}`}
-                    onClick={() => {
-                      if (isLocked) {
-                        const slug = need[0] || "";
-                        if (slug) openStoreSlug(slug);
-                        return;
-                      }
-                      setSelectedId(template.id);
-                    }}
-                    onDoubleClick={() => {
-                      if (isLocked) {
-                        const slug = need[0] || "";
-                        if (slug) openStoreSlug(slug);
-                        return;
-                      }
-                      onSelect(template);
-                      onClose();
-                    }}
-                  >
-                    <span className={`vtm-card-icon${isSelected ? " is-selected" : ""}`} aria-hidden>
-                      {template.icon || "⚡"}
-                    </span>
-                    <span className="vtm-card-body">
-                      <span className="vtm-card-name">{template.name}</span>
-                      <span className={`vtm-badge${plugin ? " vtm-badge--system" : ""}`}>
-                        {isLocked
-                          ? `Needs ${need.join(", ")}`
-                          : plugin
-                            ? `Plugin (${template.plugin_id || "store"})`
-                            : "Yours"}
-                      </span>
-                      {isLocked
-                        ? need.map((slug) => (
-                            <span
-                              key={slug}
-                              role="link"
-                              className="vtm-chip"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openStoreSlug(slug);
-                              }}
-                            >
-                              {slug}
-                            </span>
-                          ))
-                        : null}
-                    </span>
-                    {isSelected ? (
-                      <span className="vtm-card-check" aria-hidden>
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M20 6L9 17l-5-5" />
-                        </svg>
-                      </span>
-                    ) : null}
-                    {template.kind === "custom" ? (
-                      <span className="vtm-card-actions">
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          className="vtm-card-action"
-                          aria-label={`Edit ${template.name}`}
-                          title={`Edit ${template.name}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openCreateView(template);
-                          }}
-                        >
-                          <Icons.Pencil />
-                        </span>
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          className="vtm-card-action vtm-card-action--danger"
-                          aria-label={`Delete ${template.name}`}
-                          title={`Delete ${template.name}`}
-                          onClick={(e) => void handleDelete(template, e)}
-                        >
-                          <Icons.Trash />
-                        </span>
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })}
-              {!loading && filtered.length === 0 && !blankMatches ? (
-                <div className="vtm-empty">
-                  <div className="vtm-empty-icon" aria-hidden>
-                    🔍
-                  </div>
-                  <p className="vtm-empty-text">No matching templates</p>
-                </div>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
+            {sections.map(([name, rows]) => (
+              <section key={name} className="vtm-section" aria-label={name}>
+                {shelf === ALL ? <h3 className="vtm-section-title">{name}<span>{rows.length}</span></h3> : null}
+                <div className="vtm-grid">{rows.map(card)}</div>
+              </section>
+            ))}
+            {!loading && filtered.length === 0 && !blankMatches ? (
+              <div className="vtm-empty">
+                <div className="vtm-empty-icon" aria-hidden>🔍</div>
+                <p className="vtm-empty-text">No matching templates</p>
+              </div>
+            ) : null}
             <div className="vtm-create-custom">
               <button type="button" className="vtm-create-custom-btn" onClick={() => openCreateView(null)}>
-                <span className="vtm-create-custom-icon" aria-hidden>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 5v14M5 12h14" />
-                  </svg>
-                </span>
+                <span className="vtm-create-custom-icon" aria-hidden><Icons.Plus /></span>
                 <span className="vtm-create-custom-body">
                   <span className="vtm-create-custom-name">Save as template</span>
                   <span className="vtm-create-custom-desc">
@@ -399,94 +406,63 @@ export function AutomationTemplatePicker({
             </div>
           </div>
           <div className="vtm-footer">
-            <button type="button" className="vtm-btn vtm-btn--ghost" onClick={handleClose}>
-              Cancel
-            </button>
-            <button type="button" className="vtm-btn vtm-btn--primary" disabled={loading || creating || locked} onClick={handleCreate}>
+            {selected?.ready === false ? <span className="vtm-footer-note">Needs {missing.join(", ")}: Get it opens the Store.</span> : null}
+            <button type="button" className="vtm-btn vtm-btn--ghost" onClick={handleClose}>Cancel</button>
+            <button type="button" className="vtm-btn vtm-btn--primary" disabled={loading || creating} onClick={handleCreate}>
               {creating ? (
                 <>
-                  <span className="vtm-spin" aria-hidden>
-                    <Icons.Spinner />
-                  </span>
+                  <span className="vtm-spin" aria-hidden><Icons.Spinner /></span>
                   Processing...
                 </>
-              ) : (
-                "Create workflow"
-              )}
+              ) : locked ? `Get ${missing[0] || "plugin"}` : "Create workflow"}
             </button>
           </div>
         </div>
 
         {view === "creator" ? (
-          <div className="vtm-view vtm-view--active">
+          <div className="vtm-view vtm-view--active vtm-creator">
             <div className="vtm-header">
               <div className="vtm-header-left">
-                <button
-                  type="button"
-                  className="vtm-icon-btn vtm-icon-btn--back"
-                  onClick={() => {
-                    setView("picker");
-                    setEditing(null);
-                  }}
-                  title="Back to Templates"
-                  aria-label="Back"
-                >
+                <button type="button" className="vtm-icon-btn vtm-icon-btn--back" onClick={() => { setView("picker"); setEditing(null); }} title="Back to Templates" aria-label="Back">
                   <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="15 18 9 12 15 6" />
                   </svg>
                 </button>
-                <h2 className="vtm-title">{editing ? "Edit Template" : "Save Template"}</h2>
+                <h2 className="vtm-title">{editing ? "Edit template" : "Save as template"}</h2>
               </div>
-              <button type="button" className="vtm-icon-btn" onClick={handleClose} aria-label="Close">
-                <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
+              <button type="button" className="vtm-icon-btn" onClick={handleClose} aria-label="Close"><CloseIcon /></button>
             </div>
-            <div className="vtm-body vtm-creator-body">
-              <div className="vtm-form-grid">
-                <label className="vtm-field">
-                  <span className="vtm-label">Template Name</span>
-                  <input
-                    className={`vtm-input vtm-input--solid${formError && !formName.trim() ? " is-invalid" : ""}`}
-                    value={formName}
-                    onChange={(e) => setFormName(e.target.value)}
-                    placeholder="Discord starts a ducky"
-                  />
-                </label>
+            <div className="vtm-creator-body">
+              <div className="vtm-creator-preview" aria-label="What gets saved">
+                {savedGraph.nodes.length ? <WorkflowMiniature graph={savedGraph} /> : <div className="aw-mini aw-mini--empty">Empty canvas</div>}
+                <small>{editing ? "The graph stays as saved." : hasOpenGraph ? `The open workflow: ${savedGraph.nodes.length} node${savedGraph.nodes.length === 1 ? "" : "s"}.` : "An empty graph: build it on the canvas, then save again."}</small>
+              </div>
+              <div className="vtm-creator-fields">
+                <div className="vtm-creator-row">
+                  <IconPicker icon={formIcon} shown={<span className="vtm-creator-icon">{formIcon || "⚡"}</span>} label="Template icon" onChange={(icon) => setFormIcon(icon || "⚡")} />
+                  <label className="vtm-field vtm-field--grow">
+                    <span className="vtm-label">Name</span>
+                    <input className={`vtm-input vtm-input--solid${formError && !formName.trim() ? " is-invalid" : ""}`} value={formName} aria-label="Template name"
+                      onChange={(e) => setFormName(e.target.value)} placeholder="Prompt to character in UEFN" autoFocus
+                      onKeyDown={(e) => { if (e.key === "Enter") void handleSaveCustom(); }} />
+                  </label>
+                </div>
+                <div className="vtm-field">
+                  <span className="vtm-label">Category</span>
+                  <ChoiceDropdown aria-label="Category" size="compact" value={formCategory} options={categoryOptions} onChange={setFormCategory} />
+                </div>
                 <label className="vtm-field">
                   <span className="vtm-label">Description</span>
-                  <input
-                    className="vtm-input vtm-input--solid"
-                    value={formDesc}
-                    onChange={(e) => setFormDesc(e.target.value)}
-                    placeholder="What this graph does"
-                  />
+                  <textarea className="vtm-input vtm-input--solid vtm-textarea" rows={2} value={formDesc} aria-label="Template description"
+                    onChange={(e) => setFormDesc(e.target.value)} placeholder="What it makes and what it needs" />
                 </label>
+                {formError ? <p className="vtm-form-error" role="alert">{formError}</p> : null}
               </div>
-              {formError ? <p className="vtm-empty-text">{formError}</p> : null}
-              <p className="vtm-create-custom-desc">
-                {editing
-                  ? "Rename only — graph stays as saved."
-                  : hasOpenGraph
-                    ? "Saves the workflow currently open on the canvas."
-                    : "Saves an empty graph. Build it on the canvas, then save again."}
-              </p>
             </div>
             <div className="vtm-footer">
-              <button
-                type="button"
-                className="vtm-btn vtm-btn--ghost"
-                onClick={() => {
-                  setView("picker");
-                  setEditing(null);
-                }}
-              >
-                Back
-              </button>
-              <button type="button" className="vtm-btn vtm-btn--save" disabled={saving} onClick={() => void handleSaveCustom()}>
-                {saving ? "Saving…" : "Save Template"}
+              <button type="button" className="vtm-btn vtm-btn--ghost" onClick={() => { setView("picker"); setEditing(null); }}>Back</button>
+              <button type="button" className="vtm-btn vtm-btn--primary" disabled={saving} onClick={() => void handleSaveCustom()}>
+                {saving ? "Saving…" : editing ? "Save changes" : "Save template"}
               </button>
             </div>
           </div>

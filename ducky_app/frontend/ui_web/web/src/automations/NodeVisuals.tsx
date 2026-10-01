@@ -18,6 +18,7 @@ export function nodeRole(node: AutomationGraphNodeDto, meta?: AutomationNodeDto)
   if (meta?.role === "input" || node.type.startsWith("input.")) return "input";
   if (meta?.role === "logic" || node.type.startsWith("logic.") || node.type === "text.template") return "logic";
   if (node.type === "llm.ask") return "agent";
+  if (meta?.role === "agent" || meta?.role === "function" || meta?.role === "end") return meta.role;
   if (meta?.role === "starter" || node.type.startsWith("start.") || node.type === "flow.input") return "starter";
   if (node.type === "pipeline.agent" || meta?.group === "Agents" || meta?.group === "Duckies") return "agent";
   if (node.type === "workflow.call") return "function";
@@ -75,6 +76,17 @@ const EMOJI: Record<string, string> = {
   "input.text": "🔤", "input.number": "🔢", "input.boolean": "✅", "input.json": "🧾", "input.image": "🖼️", "input.images": "🗂️",
   "input.audio": "🎵", "input.video": "🎬", "input.mesh": "🧊", "input.pdf": "📄", "input.svg": "✒️", "input.file": "📎",
   "logic.if": "❓", "logic.expression": "🧮", "logic.compare": "⚖️", "llm.ask": "🤖", "text.template": "📝", "util.preview": "👁️",
+  "llm.vision": "🧐", "llm.extract": "🧾", "llm.translate": "🌍", "llm.pick": "🔎",
+  "image.generate": "🎨", "image.edit": "🪄", "image.remove_bg": "✂️", "image.upscale": "🔍", "image.resize": "↔️", "image.crop": "🔲",
+  "image.convert": "🔄", "image.split_alpha": "🌗", "image.combine_alpha": "🌓", "image.split_channels": "🎛️", "image.combine_channels": "🎚️",
+  "image.concat": "🧩", "image.text": "🔤",
+  "mesh.generate": "🧊", "mesh.from_image": "📸", "mesh.multi_view": "🎞️", "mesh.retexture": "🖌️", "mesh.remesh": "🕸️", "mesh.uv_unwrap": "🗺️",
+  "mesh.convert": "🔁", "mesh.repair": "🩹", "mesh.bake": "🍞", "mesh.render": "📷", "mesh.rig": "🦴", "mesh.animate": "🕺",
+  "mesh.info": "📏", "mesh.fit_box": "📦", "mesh.set_origin": "📍", "mesh.origin_text": "🎯", "mesh.rotate": "🔃",
+  "mesh.textures_extract": "🗂️", "mesh.textures_apply": "🧵",
+  "blender.open": "🟠", "blender.render": "🎬", "blender.export": "📤", "uefn.import": "🚚",
+  "list.make": "📋", "list.get": "👉", "list.count": "🔢", "list.join": "🔗", "list.filter": "🧹", "list.map": "🔀",
+  "pdf.text": "📄", "pdf.images": "🖼️", "util.save_file": "💾",
 };
 
 export function NodeIcon({ meta, node, faces = {} }: { meta?: AutomationNodeDto; node?: AutomationGraphNodeDto; faces?: Record<string, string> }) {

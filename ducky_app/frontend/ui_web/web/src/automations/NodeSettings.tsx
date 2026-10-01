@@ -1,12 +1,13 @@
 import { useEffect, useId, useState } from "react";
 import { ChoiceDropdown } from "../components/ChoiceDropdown";
 import { getApi } from "../hooks/usePanelApi";
-import type { AutomationFieldDto, AutomationGraphNodeDto, AutomationNodeDto, AutomationSummaryDto } from "../types/panel";
+import type { AutomationBackendDto, AutomationFieldDto, AutomationGraphNodeDto, AutomationNodeDto, AutomationSummaryDto } from "../types/panel";
 import { AgentField } from "./AgentField";
 import { CallSettings, NamedValueList } from "./FunctionSettings";
 import { ProjectField } from "./ProjectField";
 import { ToolSettings } from "./ToolSettings";
 import { ModelSelector } from "../components/ModelSelector";
+import { Icons } from "../icons/Icons";
 import { ExpressionField, FilePicker, NamesField } from "./PinFields";
 import { nodePins } from "./pins";
 
@@ -21,14 +22,65 @@ export function NodeSettings({ node, meta, onChange, workflows = [], currentId, 
   return <div className="aw-insp-form">
     {node.type === "tool.call" ? <ToolSettings node={node} onChange={onChange} />
       : node.type === "workflow.call" ? <CallSettings node={node} workflows={workflows} currentId={currentId} onChange={onChange} onOpen={onOpen} />
-      : (meta?.config_fields || []).map((field) => <NodeField key={field.id} field={field} node={node} pluginId={meta?.plugin_id} onChange={onChange} />)}
+      : (meta?.config_fields || []).map((field) => <NodeField key={field.id} field={field} node={node} pluginId={meta?.plugin_id} backends={meta?.backends} onChange={onChange} />)}
   </div>;
 }
 
-function NodeField({ field, node, pluginId, onChange }: { field: AutomationFieldDto; node: AutomationGraphNodeDto; pluginId?: string; onChange: (node: AutomationGraphNodeDto) => void }) {
+type Backends = { backends?: AutomationBackendDto[] };
+
+function NodeField({ field, node, pluginId, backends, onChange }: { field: AutomationFieldDto; node: AutomationGraphNodeDto; pluginId?: string; onChange: (node: AutomationGraphNodeDto) => void } & Backends) {
   if (field.type === "params") return <NamedValueList node={node} field={field.id} valueKey="default" valueLabel="Default" valuePlaceholder="used by Test" addLabel="Add input" onChange={onChange} />;
   if (field.type === "returns") return <NamedValueList node={node} field={field.id} valueKey="value" valueLabel="Value" valuePlaceholder="same-name field, text or {{field}}" addLabel="Add return value" onChange={onChange} />;
+  if (field.type === "backend") return <BackendField node={node} backends={backends || []} onChange={onChange} />;
+  if (field.id === "spend" && backends?.length) return <SpendField node={node} backends={backends} onChange={onChange} />;
   return <ConfigField field={field} node={node} pluginId={pluginId} onChange={onChange} />;
+}
+
+/** The backend picked for this run (first = default); a plugin that isn't set up says why. */
+function pickedBackend(node: AutomationGraphNodeDto, backends: AutomationBackendDto[]) {
+  return backends.find((row) => row.id === String(node.config.backend || "")) || backends[0];
+}
+
+function BackendField({ node, backends, onChange }: { node: AutomationGraphNodeDto; backends: AutomationBackendDto[]; onChange: (node: AutomationGraphNodeDto) => void }) {
+  const id = useId();
+  const picked = pickedBackend(node, backends);
+  return <div className="aw-field">
+    <label className="aw-field-label" htmlFor={id}>Backend</label>
+    <ChoiceDropdown id={id} aria-label="Backend" size="compact" value={picked?.id || ""}
+      options={backends.map((row) => ({ value: row.id, label: row.label, hint: row.available ? `~${row.credits} credits · ${row.plugin}` : row.reason || `Needs ${row.plugin}` }))}
+      onChange={(value) => onChange({ ...node, config: { ...node.config, backend: value } })} />
+    {picked && !picked.available ? <small className="aw-field-error" role="status">{picked.reason || `Needs the ${picked.plugin} plugin.`}</small> : null}
+  </div>;
+}
+
+/** Paid steps only spend credits with this on; it says about how many each run. */
+function SpendField({ node, backends, onChange }: { node: AutomationGraphNodeDto; backends: AutomationBackendDto[]; onChange: (node: AutomationGraphNodeDto) => void }) {
+  const on = node.config.spend === true;
+  const picked = pickedBackend(node, backends);
+  return <div className="aw-field aw-spend">
+    <button type="button" role="switch" aria-checked={on} aria-label="Spend credits" className={`aw-spend-toggle${on ? " is-on" : ""}`}
+      onClick={() => onChange({ ...node, config: { ...node.config, spend: on ? undefined : true } })}>
+      <span>Spend credits</span><span className="aw-switch" aria-hidden="true"><span /></span>
+    </button>
+    <small className="aw-field-hint">{picked ? `About ${picked.credits} credits each run on ${picked.label} (${picked.plugin}).` : ""} {on ? "It runs when the workflow does." : "Off: the run stops here and says so, nothing is spent."}</small>
+  </div>;
+}
+
+/** Save file: a folder on this PC, typed or picked. */
+function FolderField({ id, label, value, onChange }: { id: string; label: string; value: string; onChange: (value: string) => void }) {
+  const [error, setError] = useState("");
+  const pick = async () => {
+    setError("");
+    const res = await getApi()?.pick_workflow_folder?.();
+    if (!res) { setError("The folder picker isn't available here."); return; }
+    if (res.ok === false) { setError(res.error || "Could not open the folder picker."); return; }
+    if (res.folder) onChange(res.folder);
+  };
+  return <div className="aw-folder-field">
+    <input id={id} aria-label={label} value={value} placeholder="A folder on this PC" spellCheck={false} onChange={(event) => onChange(event.target.value)} />
+    <button type="button" className="aw-file-pick" aria-label={`Choose ${label}`} onClick={() => void pick()}><Icons.Folder /> Choose</button>
+    {error ? <small className="aw-field-error" role="status">{error}</small> : null}
+  </div>;
 }
 
 function ConfigField({ field, node, pluginId, onChange }: { field: AutomationFieldDto; node: AutomationGraphNodeDto; pluginId?: string; onChange: (node: AutomationGraphNodeDto) => void }) {
@@ -58,7 +110,8 @@ function ConfigField({ field, node, pluginId, onChange }: { field: AutomationFie
   } else if (field.type === "model" && !provider) {
     // Any model from the app's list, like the chat composer's picker.
     input = <div className="aw-model-field"><ModelSelector selectedModel={value} setSelectedModel={set} preserveSelection menuPlacement="bottom" placeholder="The app's default model" /></div>;
-  } else if (field.type === "project") input = <ProjectField id={id} label={label} value={value} onChange={set} />;
+  } else if (field.type === "folder") input = <FolderField id={id} label={label} value={value} onChange={(next) => set(next || undefined)} />;
+  else if (field.type === "project") input = <ProjectField id={id} label={label} value={value} onChange={set} />;
   else if (field.type === "ducky") input = <AgentField id={id} label={label} value={String(raw ?? node.config.profile_id ?? "")} onChange={set} />;
   else if (["boolean", "bool", "checkbox"].includes(field.type || "")) input = <ChoiceDropdown id={id} aria-label={label} value={value} options={[{ value: "", label: "Default" }, { value: "true", label: "Yes" }, { value: "false", label: "No" }]} onChange={(next) => set(next === "" ? undefined : next === "true")} size="compact" />;
   else if (["select", "model", "multiselect"].includes(field.type || "")) {

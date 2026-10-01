@@ -690,3 +690,15 @@ def test_every_catalog_node_has_a_test():
     text += "".join(p.read_text(encoding="utf-8", errors="ignore") for p in (here.parent / "tools").rglob("test_*.py"))
     missing = sorted(t for t in catalog.node_specs() if f'"{t}"' not in text and f"'{t}'" not in text)
     assert missing == []
+
+
+def test_the_skill_docs_examples_use_real_nodes_and_pins():
+    """The workflows subskill teaches AIs with these graphs; they must save as written."""
+    doc = (Path(__file__).parents[2] / "frontend" / "skill_packs" / "ducky" / "references" / "workflows.md").read_text(encoding="utf-8")
+    examples = re.findall(r"```json\n(.*?)\n```", doc, re.S)
+    assert examples
+    specs = catalog.node_specs()
+    for example in examples:
+        graph = json.loads(example)
+        assert all(n["type"] in specs for n in graph["nodes"])
+        assert check_wires(graph, specs) == []

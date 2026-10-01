@@ -275,6 +275,24 @@ export interface FileRefDto {
   kind: string;
   path: string;
   name: string;
+  /** Loopback link the editor shows it through (thumbnails, Last run). */
+  url?: string;
+  /** Made by a generator: which one, its task (Meshy edits reuse it) and its web copy. */
+  provider?: string;
+  backend?: string;
+  task_id?: string;
+  stage?: string;
+  remote?: string;
+}
+
+/** One way an image / 3D node can run: a plugin tool, its cost, ready here or why not. */
+export interface AutomationBackendDto {
+  id: string;
+  label: string;
+  plugin: string;
+  credits: number;
+  available: boolean;
+  reason?: string;
 }
 
 export interface AutomationGraphGroupDto {
@@ -423,6 +441,8 @@ export interface AutomationTemplateDto {
   requires_plugins?: string[];
   missing_plugins?: string[];
   ready?: boolean;
+  /** Its shelf in the picker: Images, 3D, Characters, Text & AI, Documents, Play tests, UEFN, Yours… */
+  category?: string;
   graph: AutomationGraphDto;
 }
 
@@ -439,6 +459,10 @@ export interface AutomationNodeDto {
   exec?: boolean;
   inputs?: PinDto[];
   outputs?: PinDto[];
+  /** Image / 3D nodes: the backends its details offer. */
+  backends?: AutomationBackendDto[];
+  /** Spends credits on a plugin (needs its Spend credits switch on). */
+  paid?: boolean;
 }
 
 /** Discord editor tab id — one tab per bot (`discord:<botId>`). Legacy `discord:main` = default. */
@@ -2472,6 +2496,7 @@ export interface PanelApi {
     icon?: string,
     graph_json?: string,
     template_id?: string,
+    category?: string,
   ): Promise<{ ok?: boolean; error?: string; template?: AutomationTemplateDto }>;
   delete_workflow_template?(template_id: string): Promise<{ ok?: boolean; error?: string }>;
   list_workflow_versions?(workflowId: string): Promise<{ ok?: boolean; versions?: { id: string; name: string; saved_at: number; node_count: number; note?: string }[]; error?: string }>;
@@ -2502,6 +2527,10 @@ export interface PanelApi {
   set_workflow_editor_prefs?(prefs: Record<string, unknown>): Promise<{ ok?: boolean; prefs?: Record<string, unknown> }>;
   /** Input nodes: pick files on this PC (accept = image | audio | video | mesh | pdf | svg | any). */
   pick_workflow_files?(accept: string, multiple: boolean): Promise<{ ok?: boolean; files?: FileRefDto[]; error?: string }>;
+  /** Save file nodes: the Windows folder picker. */
+  pick_workflow_folder?(): Promise<{ ok?: boolean; folder?: string; error?: string }>;
+  /** Run one node now; what feeds it is reused from the last run. */
+  run_workflow_node?(workflowId: string, nodeId: string): Promise<AutomationRunDto>;
   /** '' when an If / Expression condition parses, else what is wrong. */
   check_workflow_expression?(expression: string): Promise<{ ok?: boolean; error?: string }>;
   run_workflow?(

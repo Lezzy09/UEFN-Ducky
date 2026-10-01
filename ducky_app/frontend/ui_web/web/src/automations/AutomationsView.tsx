@@ -15,6 +15,7 @@ import type {
   AutomationRunStepDto,
   AutomationSummaryDto,
   AutomationTemplateDto,
+  FileRefDto,
   PanelPushEvent,
   PinDto,
   PinType,
@@ -44,7 +45,8 @@ import { clampZoom, fitCamera, gridScale, groupTitleScale, portPoint, wirePath, 
 const LOG_H_MIN = 140;
 const LOG_H_MAX = 560;
 const LOG_H_DEFAULT = 220;
-const GROUP_ORDER = ["Starting", "Triggers", "Functions", "Agents", "Duckies", "Tools", "Logic", "End"];
+const GROUP_ORDER = ["Starting", "Triggers", "Inputs", "Functions", "Agents", "Duckies", "Text & AI", "Images", "Image tools", "3D", "3D tools", "Characters",
+  "Blender", "UEFN", "Play test", "Lists", "Documents", "Tools", "Logic", "Utility", "End"];
 /** Canvas units a group's title takes above its box at 100%; nested boxes leave this room.
  *  Zoomed out the title is drawn bigger (groupTitleScale) so it stays readable. */
 const GROUP_TITLE_PX = 44;
@@ -75,7 +77,41 @@ function writeView(patch: Partial<SavedView>) {
 
 const END_TYPES = new Set(["pipeline.finish", "flow.end", "flow.output"]);
 /** Room under a Preview node's pin for what it shows. */
-const PREVIEW_EXTRA = 64;
+/** Room under a card's pin rows: a Preview's value, or the picture an image node made. */
+const PREVIEW_EXTRA = 120;
+const THUMB_EXTRA = 120;
+const PICTURE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
+
+function cardExtra(node: AutomationGraphNodeDto, pins: NodePins): number {
+  if (node.type === "util.preview") return PREVIEW_EXTRA;
+  return pins.outputs.some((pin) => pin.type === "image" || pin.type === "images") ? THUMB_EXTRA : 0;
+}
+
+/** The pictures in a value (a file ref, a list of them), at most four. */
+function picturesIn(value: unknown): FileRefDto[] {
+  const list = Array.isArray(value) ? value : value ? [value] : [];
+  return list.filter((item): item is FileRefDto => !!item && typeof item === "object" && "path" in (item as object)
+    && ((item as FileRefDto).kind === "image" || PICTURE.test(String((item as FileRefDto).path)))).slice(0, 4);
+}
+
+/** Pictures a card shows: what its image outputs made last run (an Input its pick). */
+function cardPictures(node: AutomationGraphNodeDto, pins: NodePins, shown: Record<string, unknown>): FileRefDto[] {
+  for (const pin of pins.outputs) {
+    if (pin.type !== "image" && pin.type !== "images") continue;
+    const found = picturesIn(shown[pin.id] ?? (node.type.startsWith("input.") ? node.config.value : undefined));
+    if (found.length) return found;
+  }
+  return [];
+}
+
+function Thumbs({ pictures, empty }: { pictures: FileRefDto[]; empty: string }) {
+  if (!pictures.length) return <div className="aw-node-thumb is-empty">{empty}</div>;
+  return <div className={`aw-node-thumb is-${Math.min(pictures.length, 4)}`}>
+    {pictures.map((pic, index) => pic.url
+      ? <img key={`${pic.path}-${index}`} src={pic.url} alt={pic.name} title={pic.name} draggable={false} loading="lazy" />
+      : <span key={`${pic.path}-${index}`} className="aw-node-thumb-name" title={pic.path}>{pic.name}</span>)}
+  </div>;
+}
 /** The add-node menu: at the pointer (it grows out of it) or above the + button (it slides up). */
 /** A wire being drawn: white (exec) when it has no pin, else a data wire from that pin. */
 type WireStart = { sourceId: string; dir: "in" | "out"; pin?: string; pinType?: PinType };
@@ -843,7 +879,7 @@ export function AutomationsView() {
     };
     const pins = nodePins(draftNode, entry, rows);
     const fit = wire?.pin ? firstFit(wire.dir === "out" ? pins.inputs : pins.outputs, wire.pinType || "any", wire.dir === "out") : undefined;
-    const layout = nodeLayout(pins, overview, entry.type === "util.preview" ? PREVIEW_EXTRA : 0);
+    const layout = nodeLayout(pins, overview, cardExtra(draftNode, pins));
     const anchorY = fit ? (wire!.dir === "out" ? layout.inputY[fit.id] : layout.outputY[fit.id]) ?? layout.execY : layout.execY;
     const node = { ...draftNode, x: onGrid(wire?.dir === "in" ? worldX - NODE_WIDTH : worldX), y: onGrid(wire ? worldY - anchorY : worldY) };
     const newEdge: AutomationGraphEdgeDto | null = !wire ? null
@@ -883,6 +919,25 @@ export function AutomationsView() {
       setStopping(false);
     }
   };
+  const [runningNode, setRunningNode] = useState("");
+  const runNode = async (nodeId: string) => {
+    if (!draft?.id || busy || runningNode) return;
+    const gen = loadGen.current;
+    setRunningNode(nodeId);
+    setLogOpen(true);
+    try {
+      await persist(draft);
+      const res = await runBridgeJob<AutomationRunDto>("run_workflow_node", [draft.id, nodeId], RUN_TIMEOUT_MS);
+      if (res && gen === loadGen.current) {
+        setLog(res);
+        if (res.ok === false && res.error) setActionError(res.error);
+      }
+    } catch (error) {
+      if (gen === loadGen.current) setActionError(error instanceof Error ? error.message : "Could not run the node");
+    } finally {
+      setRunningNode("");
+    }
+  };
   const stopRun = async () => {
     if (!draft?.id) return;
     setStopping(true);
@@ -920,7 +975,7 @@ export function AutomationsView() {
   // Typed pins: a card grows a row per pin; zoomed far out it is only its title bar.
   const pinsById = useMemo(() => new Map(graph.nodes.map((node) => [node.id, nodePins(node, byType.get(node.type), rows)])), [graph.nodes, byType, rows]);
   const pinsOf = (node: AutomationGraphNodeDto): NodePins => pinsById.get(node.id) || nodePins(node, byType.get(node.type), rows);
-  const layoutOf = (node: AutomationGraphNodeDto, compact = overview): NodeLayout => nodeLayout(pinsOf(node), compact, node.type === "util.preview" ? PREVIEW_EXTRA : 0);
+  const layoutOf = (node: AutomationGraphNodeDto, compact = overview): NodeLayout => nodeLayout(pinsOf(node), compact, cardExtra(node, pinsOf(node)));
   const nodeSize = (node?: AutomationGraphNodeDto) => ({ width: NODE_WIDTH, height: node ? layoutOf(node).height : overview ? NODE_HEIGHT_COMPACT : NODE_HEIGHT });
   const lastOutputs = log?.node_outputs || {};
   const groups = graph.groups || [];
@@ -1812,7 +1867,9 @@ export function AutomationsView() {
                             <span className="aw-pin-label aw-pin-label--out">{output ? <>{outValue ? <small>{outValue}</small> : null}{output.label}</> : null}</span>
                           </div>;
                         })}
-                        {node.type === "util.preview" ? <div className="aw-node-preview">{previewText(shown.value)}</div> : null}
+                        {node.type === "util.preview"
+                          ? picturesIn(shown.value).length ? <Thumbs pictures={picturesIn(shown.value)} empty="" /> : <div className="aw-node-preview">{previewText(shown.value)}</div>
+                          : cardExtra(node, pins) ? <Thumbs pictures={cardPictures(node, pins, shown)} empty={node.type.startsWith("input.") ? "Pick a picture in the details" : "The picture shows here after a run"} /> : null}
                       </div>
                     ) : (
                       <div className="aw-node-body">{!overview && summary ? <span className="aw-node-sub">{summary}</span> : null}</div>
@@ -1892,6 +1949,8 @@ export function AutomationsView() {
           })}
           pinsOf={pinsOf}
           nodeOutputs={lastOutputs}
+          onRunNode={readOnly ? undefined : (id) => void runNode(id)}
+          runningNode={runningNode}
           onNodeText={updateNodeText}
           onNodeColor={setNodeColor}
           onNodeIcon={setNodeIcon}
