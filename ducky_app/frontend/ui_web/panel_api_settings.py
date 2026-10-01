@@ -69,6 +69,8 @@ class PanelApiSettingsMixin:
             "walkthrough_completed": {
                 str(k): bool(v) for k, v in (s.walkthrough_completed or {}).items() if v
             },
+            "first_open_tours": bool(getattr(s, "first_open_tours", True)),
+            "show_me_autoplay": bool(getattr(s, "show_me_autoplay", True)),
         }
 
     def get_appearance(self) -> dict[str, Any]:
@@ -606,6 +608,10 @@ class PanelApiSettingsMixin:
             s.follow_code_split_beside_chat = _pa._patch_bool(
                 patch.get("follow_code_split_beside_chat")
             )
+        if "first_open_tours" in patch:
+            s.first_open_tours = bool(patch.get("first_open_tours"))
+        if "show_me_autoplay" in patch:
+            s.show_me_autoplay = bool(patch.get("show_me_autoplay"))
         if "walkthrough_completed" in patch:
             raw = patch.get("walkthrough_completed")
             if isinstance(raw, dict):

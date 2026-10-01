@@ -279,6 +279,9 @@ TOOL_RESULT_MAX_OVERRIDES = {
 # anyway" and orphan the questionnaire so the eventual answer went nowhere.
 TOOL_TIMEOUT_OVERRIDES: dict[str, float] = {
     "ducky_walkthrough_run": 300.0,
+    "tour_workflow": 610.0,
+    # Show me answers once it is on screen; wait=true holds until the close button.
+    "ducky_ui_show": 930.0,
     "ducky_ask_user": float("inf"),
 }
 

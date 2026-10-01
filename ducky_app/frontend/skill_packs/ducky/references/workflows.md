@@ -250,10 +250,18 @@ names them; ask the user, and only after they agree pass
 - Every `save_workflow` opens the editor, glides to the nodes it added or
   changed and lights them up. Build in a few saves (start + first steps, then
   the rest) so they can follow along.
-- To explain or review a workflow, walk it with `show_workflow(workflow_id,
-  node_ids=[…] | group_id=…, note="what this part does")`, one call per step,
-  in the order it runs. `select=true` (default) opens those nodes' details.
-- For a Next/Back tour use `ducky_walkthrough_run` with
+- To point at one part, `show_workflow(workflow_id, node_ids=[…] | group_id=…,
+  title="Fortnite servers up?", body="what it does")`: the nodes are highlighted
+  with a popup above them (only its close button closes it) and the chat keeps a
+  **Show me** button. Without `title` it only glides there with `note` as a caption.
+- To walk a whole workflow: `tour_workflow(workflow_id, auto=true)` (built from the
+  graph in run order) or `tour_workflow(workflow_id, steps=[{node_ids, title,
+  body}, …])`. Next / Back; the chat keeps it with Replay.
+- Anything else on screen: `ducky_ui_show` (see `skill_read_subskill("ducky",
+  "guided_ui")`). Pins, wires and fields have ids too:
+  `workflows.pin.<node>.<in|out>.<pin>`, `workflows.wire.<from>><to>:<route>`,
+  `workflows.details.field.<setting id>`, `workflows.log.step.<node>`.
+- For a Next/Back tour of the editor itself use `ducky_walkthrough_run` with
   `navigate: "workflows"` and these targets (`ducky_ui_list_targets("workflows")`
   lists what is on screen): `workflows.node.<id>`, `workflows.group.<id>`,
   `workflows.list`, `workflows.list.row.<id>`,

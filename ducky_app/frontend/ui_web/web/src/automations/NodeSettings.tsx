@@ -128,5 +128,5 @@ function ConfigField({ field, node, pluginId, onChange }: { field: AutomationFie
     }
   } else if (field.type === "textarea") input = <textarea id={id} aria-label={label} rows={3} value={value} onChange={(event) => set(event.target.value)} />;
   else input = <input id={id} aria-label={label} type={field.type === "number" ? "number" : "text"} value={value} onChange={(event) => set(field.type === "number" && event.target.value !== "" ? Number(event.target.value) : event.target.value)} />;
-  return <div className="aw-field"><label className="aw-field-label" htmlFor={id}>{label}</label>{input}</div>;
+  return <div className="aw-field" data-aw-field={field.id}><label className="aw-field-label" htmlFor={id}>{label}</label>{input}</div>;
 }

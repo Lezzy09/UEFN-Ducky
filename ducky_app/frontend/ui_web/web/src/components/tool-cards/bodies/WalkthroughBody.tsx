@@ -3,8 +3,8 @@ import { Icons } from "../../../icons/Icons";
 import { runAgentWalkthrough } from "../../../walkthrough/agentWalkthrough";
 import type { ToolCardBodyProps } from "../toolCardTypes";
 
-function stepsFromArgs(args: Record<string, unknown>, resultText: string): unknown[] {
-  if (Array.isArray(args.steps)) return args.steps;
+function stepsFromArgs(args: Record<string, unknown>, resultText: string, resultFirst = false): unknown[] {
+  if (!resultFirst && Array.isArray(args.steps)) return args.steps;
   try {
     const parsed = JSON.parse(resultText) as { steps?: unknown };
     if (Array.isArray(parsed?.steps)) return parsed.steps;
@@ -24,8 +24,9 @@ function stepTitle(step: unknown, index: number): string {
   return String(s.target || `Step ${index + 1}`);
 }
 
-export function WalkthroughBody({ args, resultText, isSuccess, isError, showResult }: ToolCardBodyProps) {
-  const steps = useMemo(() => stepsFromArgs(args, resultText), [args, resultText]);
+export function WalkthroughBody({ toolName, args, resultText, isSuccess, isError, showResult }: ToolCardBodyProps) {
+  // tour_workflow: the steps the editor built (they open the workflow first) are in the result.
+  const steps = useMemo(() => stepsFromArgs(args, resultText, toolName === "tour_workflow"), [args, resultText, toolName]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
 
@@ -84,11 +85,12 @@ export function WalkthroughBody({ args, resultText, isSuccess, isError, showResu
 
 /** Extract steps from a tool card for header Replay (args first, then result). */
 export function walkthroughStepsFromTool(meta: {
+  name?: string;
   arguments?: Record<string, unknown>;
   result?: unknown;
 }): unknown[] | null {
   const args = meta.arguments || {};
-  if (Array.isArray(args.steps) && args.steps.length) return args.steps;
+  if (meta.name !== "tour_workflow" && Array.isArray(args.steps) && args.steps.length) return args.steps;
   const result = meta.result;
   if (result && typeof result === "object" && Array.isArray((result as { steps?: unknown }).steps)) {
     const steps = (result as { steps: unknown[] }).steps;

@@ -43,6 +43,8 @@ _LOCAL_BRIDGE_PATHS = frozenset(
 # Max seconds one /__panel_rpc leg blocks before replying {pending} so the
 # caller re-polls. Kept under the client's per-round timeout in backend.panel.rpc.
 _RPC_HANDLER_WAIT_S = 20.0
+# The active window acknowledges a Show me / tour within this, else any window may take it.
+_RPC_ACK_WAIT_S = 2.5
 
 class _PanelServer(ThreadingHTTPServer):
     # Default backlog is 5; cloudflared + a React mount burst overflows it
@@ -741,8 +743,14 @@ def start_panel_ui_server(dist_root: Path) -> str:
                         # No React panel in this process to answer the request.
                         self._send_json(200, {"result": {"error": "panel not open"}})
                         return
-                    request_id, event = ui_rpc.submit(method, params)
+                    window = ui_rpc.window_for(method)
+                    request_id, event = ui_rpc.submit(method, {**params, "_for_client": window} if window else params)
                     push(event)
+                    if window and not ui_rpc.wait_ack(request_id, _RPC_ACK_WAIT_S):
+                        # The window the user last used didn't take it (closed?): any window may.
+                        anyone = dict(event)
+                        anyone["params"] = {k: v for k, v in dict(event.get("params") or {}).items() if k != "_for_client"}
+                        push(anyone)
                     result = ui_rpc.wait(request_id, _RPC_HANDLER_WAIT_S)
                     if result is None:
                         self._send_json(200, {"pending": True, "request_id": request_id})

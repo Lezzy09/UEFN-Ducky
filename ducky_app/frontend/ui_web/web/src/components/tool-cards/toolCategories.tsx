@@ -8,6 +8,7 @@ import { SearchBody } from "./bodies/SearchBody";
 import { WebSearchBody } from "./bodies/WebSearchBody";
 import { AskUserBody } from "./bodies/AskUserBody";
 import { WalkthroughBody } from "./bodies/WalkthroughBody";
+import { ShowMeBody } from "./bodies/ShowMeBody";
 
 export type { ToolCardBodyProps, ToolCategory } from "./toolCardTypes";
 
@@ -136,10 +137,17 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     Body: AskUserBody,
   },
   {
+    id: "showme",
+    icon: () => <Icons.Sparkles />,
+    label: () => "Show me",
+    match: (name) => name === "ducky_ui_show" || name === "show_workflow",
+    Body: ShowMeBody,
+  },
+  {
     id: "walkthrough",
     icon: () => <Icons.Sparkles />,
-    label: () => "UI Tutorial",
-    match: (name) => name === "ducky_walkthrough_run",
+    label: (name) => (name === "tour_workflow" ? "Workflow tour" : "UI Tutorial"),
+    match: (name) => name === "ducky_walkthrough_run" || name === "tour_workflow",
     Body: WalkthroughBody,
   },
   {

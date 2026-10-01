@@ -1132,6 +1132,10 @@ export interface PanelSettingsDto {
   follow_code_split_beside_chat?: boolean;
   /** Product walkthrough completion flags keyed by tour id. */
   walkthrough_completed?: Record<string, boolean>;
+  /** Start a view's tour the first time it opens (Workflows…). Missing key stays on. */
+  first_open_tours?: boolean;
+  /** Ducky's Show me plays right away; off = only the chat button. Missing key stays on. */
+  show_me_autoplay?: boolean;
   coding_agents?: Record<
     string,
     {
@@ -3237,6 +3241,10 @@ export interface PanelApi {
   wait_for_agent_idle?(conv_id: string, timeout?: number): Promise<boolean>;
   report_ui_perf(entries: Array<Record<string, unknown>>): Promise<boolean>;
   ui_rpc_respond(request_id: string, payload: Record<string, unknown>): Promise<boolean>;
+  /** This window took a Show me / tour request meant for it. */
+  ui_rpc_ack?(request_id: string): Promise<boolean>;
+  /** This window is the one in use (clicked / typed in), or it is closing. */
+  ui_rpc_active?(client_id: string, active?: boolean): Promise<boolean>;
   list_running_agents(): Promise<string[]>;
   list_window_views?(): Promise<{ id: string; title: string; kind?: string }[]>;
   /** Launch UnrealEditorFortnite.exe with Epic hub extras — no island. */

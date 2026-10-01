@@ -1,90 +1,90 @@
 /**
  * Answers ui_rpc_request events from the guided-UI MCP tools.
  *
- * A tool posts a request to the panel (navigate / list_targets / walkthrough_run / ask_user);
- * the panel pushes it here as a `ui_rpc_request` event. We do the work and reply
- * via `PanelApi.ui_rpc_respond`, which unblocks the tool waiting over loopback.
+ * A tool posts a request to the panel (navigate / list_targets / show / walkthrough_run /
+ * tour_workflow / ask_user); the panel pushes it here as a `ui_rpc_request` event. We do
+ * the work and reply via `PanelApi.ui_rpc_respond`, which unblocks the tool waiting over
+ * loopback.
+ *
+ * With several windows open (popped-out windows, the phone panel), the one the user last
+ * clicked or typed in claims "active"; requests that show something carry `_for_client`
+ * and only that window takes them (and acknowledges, so the panel knows it's alive).
  */
 import { useEffect } from "react";
 import type { AgentEvent, MessageAuthorDto } from "../types/panel";
 import { installAgentEventBus, subscribeAgentEvents } from "../hooks/useAgentEventBus";
 import { getApi } from "../hooks/usePanelApi";
-import { openLlmsProviderSettings, requestOpenSettings } from "../navigation/openSettingsTab";
-import { requestOpenChangesTab } from "../navigation/openChangesTab";
-import { requestOpenWorkflowsTab } from "../navigation/openWorkflowsTab";
+import { openPanelRoute } from "../navigation/openPanelRoute";
+import { parseShowMeRequest, playShowMe, whenShowMeClosed } from "../showme/ShowMeService";
 import { listTargets } from "./registry";
+import { listUiActions, runUiAction, searchTargets, waitForUiAction } from "./resolve";
+import { installEditorLineTargets } from "./editorLineTarget";
+import { getCurrentWorkflow, aiTourSteps, buildWorkflowTour, withOpenStep } from "../automations/workflowTour";
 import { runAskUser } from "../ask-user";
 import { runAgentWalkthrough } from "../walkthrough/agentWalkthrough";
 
-/** settings.* route → Settings tab label. */
-const SETTINGS_TAB: Record<string, string> = {
-  settings: "General",
-  "settings.general": "General",
-  "settings.store": "Store",
-  "settings.llms": "LLMs",
-  "settings.mcp": "LLMs",
-  "settings.mcp_plugins": "LLMs",
-  "settings.skills": "LLMs",
-  "settings.appearance": "Appearance",
-  "settings.duckies": "Duckies",
-  "settings.plans": "Plans",
-  "settings.memory": "LLMs",
-  "settings.languages": "Languages",
-  "settings.log_errors": "General",
-  "settings.app_data": "General",
-  plans: "Plans",
-};
-
-/** Sub-section for tabs that have inner tabs (LLMs, General → Log & Errors). */
-const SETTINGS_SECTION: Record<string, string> = {
-  "settings.general": "general",
-  "settings.llms": "llms",
-  "settings.mcp": "mcps",
-  "settings.mcp_plugins": "mcps",
-  "settings.skills": "skills",
-  "settings.plans": "working",
-  plans: "working",
-  "settings.memory": "entries",
-  "settings.log_errors": "errors",
-  "settings.app_data": "app_data",
-};
-
 type RpcResult = Record<string, unknown>;
 
+/** This window, for requests meant for the window in use. */
+export const UI_CLIENT_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const WINDOW_METHODS = new Set(["show", "walkthrough_run", "tour_workflow", "navigate", "list_targets"]);
+
+/** Settings → "Let Ducky show me things": off = Ducky's Show me only leaves its chat button. */
+async function showMeAutoplay(): Promise<boolean> {
+  try {
+    const settings = (await getApi()?.get_settings?.()) as { show_me_autoplay?: boolean } | undefined;
+    return settings?.show_me_autoplay !== false;
+  } catch {
+    return true;
+  }
+}
+
 function handleNavigate(params: Record<string, unknown>): RpcResult {
-  const route = String(params.route ?? "").trim();
-  const itemId = String(params.item_id ?? "").trim();
-  const tab = SETTINGS_TAB[route];
-  if (tab) {
-    if (route === "settings.llms" && itemId) {
-      openLlmsProviderSettings(itemId);
-      return { ok: true, route, tab, item_id: itemId };
-    }
-    requestOpenSettings(tab);
-    const section = SETTINGS_SECTION[route];
-    if (section) {
-      window.dispatchEvent(
-        new CustomEvent("ducky:settings-section", { detail: { tab, section } }),
-      );
-    }
-    return { ok: true, route, tab };
+  return openPanelRoute(String(params.route ?? ""), String(params.item_id ?? ""));
+}
+
+async function handleShow(params: Record<string, unknown>): Promise<RpcResult> {
+  const request = parseShowMeRequest(params);
+  if (!request) return { error: "show needs a target and a title or body" };
+  if (!(await showMeAutoplay())) {
+    return { ok: true, shown: false, missing: false, deferred: true, note: "The user plays Show me from its chat button (Settings: Let Ducky show me things is off)." };
   }
-  if (route === "changes") {
-    requestOpenChangesTab();
-    return { ok: true, route };
-  }
-  if (route === "workflows") {
-    requestOpenWorkflowsTab();
-    return { ok: true, route };
-  }
-  window.dispatchEvent(new CustomEvent("ducky:navigate", { detail: { route, item_id: itemId } }));
-  return { ok: true, route, dispatched: true };
+  const result = await playShowMe(request);
+  // Not waiting, or replaced before it showed: answer now. Else wait for the close button.
+  if (!params.wait || (!result.shown && !result.missing)) return { ...result };
+  await whenShowMeClosed();
+  return { ...result, closed: true };
+}
+
+async function handleTourWorkflow(params: Record<string, unknown>): Promise<RpcResult> {
+  const workflowId = String(params.workflow_id ?? "").trim();
+  if (!workflowId) return { error: "workflow_id required" };
+  openPanelRoute("workflows");
+  if (!(await waitForUiAction("workflows.open"))) return { error: "the Workflows editor didn't open" };
+  const opened = await runUiAction("workflows.open", { id: workflowId });
+  const current = getCurrentWorkflow();
+  if (!opened.ok || current?.id !== workflowId) return { error: opened.error || "couldn't open that workflow" };
+  const steps = params.auto ? buildWorkflowTour(current.graph, current.byType) : aiTourSteps(params.steps);
+  if (!steps.length) return { error: "no steps to show" };
+  const tour = withOpenStep(steps, workflowId);
+  const out = await runAgentWalkthrough(tour);
+  return { ...out, steps: tour };
+}
+
+function handleListTargets(params: Record<string, unknown>): RpcResult {
+  const route = String(params.route ?? "");
+  const query = String(params.query ?? "");
+  const visibleOnly = params.visible_only === true;
+  const targets = query || visibleOnly ? searchTargets(route, query, visibleOnly) : listTargets(route);
+  return { targets, actions: listUiActions(route) };
 }
 
 async function dispatch(method: string, params: Record<string, unknown>): Promise<RpcResult> {
   try {
     if (method === "navigate") return handleNavigate(params);
-    if (method === "list_targets") return { targets: listTargets(String(params.route ?? "")) };
+    if (method === "list_targets") return handleListTargets(params);
+    if (method === "show") return await handleShow(params);
+    if (method === "tour_workflow") return await handleTourWorkflow(params);
     if (method === "walkthrough_run") {
       return await runAgentWalkthrough(params.steps);
     }
@@ -118,11 +118,42 @@ export function UiRpcBridge() {
       if (!requestId) return;
       const method = event.method ?? "";
       const params = (event.params ?? {}) as Record<string, unknown>;
+      if (WINDOW_METHODS.has(method)) {
+        const forClient = String(params._for_client ?? "");
+        if (forClient && forClient !== UI_CLIENT_ID) return;  // meant for the window in use
+        void getApi()?.ui_rpc_ack?.(requestId);
+      }
       void dispatch(method, params).then((result) => {
         void getApi()?.ui_rpc_respond(requestId, result);
       });
     };
     return subscribeAgentEvents(handler);
+  }, []);
+
+  // Lines of code can be shown too (editor.line.<path>:<n>).
+  useEffect(() => installEditorLineTargets(), []);
+
+  // Claim "active" when the user clicks or types in this window (at most every 3 s).
+  useEffect(() => {
+    let last = 0;
+    const claim = () => {
+      const now = Date.now();
+      if (now - last < 3000) return;
+      last = now;
+      void getApi()?.ui_rpc_active?.(UI_CLIENT_ID, true);
+    };
+    const leave = () => void getApi()?.ui_rpc_active?.(UI_CLIENT_ID, false);
+    if (typeof document !== "undefined" && document.hasFocus?.()) claim();
+    window.addEventListener("pointerdown", claim, true);
+    window.addEventListener("keydown", claim, true);
+    window.addEventListener("focus", claim);
+    window.addEventListener("pagehide", leave);
+    return () => {
+      window.removeEventListener("pointerdown", claim, true);
+      window.removeEventListener("keydown", claim, true);
+      window.removeEventListener("focus", claim);
+      window.removeEventListener("pagehide", leave);
+    };
   }, []);
   return null;
 }

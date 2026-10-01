@@ -1,5 +1,6 @@
 import type { KeyboardEvent } from "react";
 import { Icons } from "../../../icons/Icons";
+import { targetRef } from "../../../ui-targets/registry";
 import type { DuckyOSStoreItemDto } from "../../../types/panel";
 import { StoreActions, type StoreItemHandlers } from "./StoreActions";
 import { StoreInstallOverlay } from "./StoreInstallOverlay";
@@ -32,6 +33,7 @@ export function StoreCard({ item, busy, actionBusy, handlers, onOpen }: Props) {
 
   return (
     <article
+      ref={targetRef(`settings.store.item.${slug}`, { route: "settings.store", label: item.name || slug, kind: "plugin_row" })}
       className={[
         "ds-card",
         showUpdateBadge ? "ds-card--update" : "",

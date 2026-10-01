@@ -11,6 +11,7 @@ import type { AutomationGraphDto, AutomationTemplateDto, WorkflowOwnerDto } from
 import { IconPicker } from "./IconPicker";
 import { WorkflowMiniature } from "./WorkflowHoverCard";
 import { ownerName } from "./WorkflowList";
+import { targetRef } from "../ui-targets/registry";
 
 const BLANK_ID = "__blank__";
 const ALL = "All";
@@ -119,6 +120,17 @@ export function AutomationTemplatePicker({
   }, [open, refresh]);
 
   const shelves = useMemo(() => [...new Set(templates.map(templateCategory))].sort(byShelf), [templates]);
+
+  // A tour or Show me can open a shelf.
+  useEffect(() => {
+    if (!open) return;
+    const onShelf = (event: Event) => {
+      const want = String((event as CustomEvent<{ shelf?: string }>).detail?.shelf || "").toLowerCase();
+      if (want) setShelf((cur) => [ALL, ...shelves].find((name) => name.toLowerCase() === want) ?? cur);
+    };
+    window.addEventListener("ducky:templates-shelf", onShelf);
+    return () => window.removeEventListener("ducky:templates-shelf", onShelf);
+  }, [open, shelves]);
 
   // Search matches every word across name, description, category and plugin.
   const filtered = useMemo(() => {
@@ -246,6 +258,7 @@ export function AutomationTemplatePicker({
     return (
       <button
         key={template.id}
+        ref={targetRef(`workflows.template.${template.id}`, { route: "workflows", label: template.name })}
         type="button"
         role="option"
         aria-selected={isSelected}
@@ -337,6 +350,7 @@ export function AutomationTemplatePicker({
               <input
                 type="text"
                 className="vtm-input vtm-search-input"
+                ref={targetRef("workflows.templates.search", { route: "workflows", label: "Search templates", kind: "input" })}
                 placeholder="Search templates..."
                 aria-label="Search templates"
                 value={searchQuery}
@@ -349,7 +363,7 @@ export function AutomationTemplatePicker({
                 {[ALL, ...shelves].map((name) => {
                   const count = name === ALL ? templates.length : templates.filter((t) => templateCategory(t) === name).length;
                   return (
-                    <button key={name} type="button" role="tab" aria-selected={shelf === name} className={`vtm-shelf${shelf === name ? " is-active" : ""}`} onClick={() => setShelf(name)}>
+                    <button key={name} ref={targetRef(`workflows.templates.tab.${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, { route: "workflows", label: name, kind: "tab" })} type="button" role="tab" aria-selected={shelf === name} className={`vtm-shelf${shelf === name ? " is-active" : ""}`} onClick={() => setShelf(name)}>
                       {name}<span className="vtm-shelf-count">{count}</span>
                     </button>
                   );
@@ -362,6 +376,7 @@ export function AutomationTemplatePicker({
             {blankMatches ? (
               <div className="vtm-grid">
                 <button
+                  ref={targetRef("workflows.template.blank", { route: "workflows", label: "Blank workflow" })}
                   type="button"
                   role="option"
                   aria-selected={selectedId === BLANK_ID}
@@ -408,7 +423,7 @@ export function AutomationTemplatePicker({
           <div className="vtm-footer">
             {selected?.ready === false ? <span className="vtm-footer-note">Needs {missing.join(", ")}: Get it opens the Store.</span> : null}
             <button type="button" className="vtm-btn vtm-btn--ghost" onClick={handleClose}>Cancel</button>
-            <button type="button" className="vtm-btn vtm-btn--primary" disabled={loading || creating} onClick={handleCreate}>
+            <button ref={targetRef("workflows.templates.create", { route: "workflows", label: "Create workflow" })} type="button" className="vtm-btn vtm-btn--primary" disabled={loading || creating} onClick={handleCreate}>
               {creating ? (
                 <>
                   <span className="vtm-spin" aria-hidden><Icons.Spinner /></span>

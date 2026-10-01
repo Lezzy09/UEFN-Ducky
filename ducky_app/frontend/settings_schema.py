@@ -288,6 +288,14 @@ FIELD_META: dict[str, FieldMeta] = {
         "Walkthrough completions", "General",
         description="Per-tour completion map for the product walkthrough service.",
     ),
+    "first_open_tours": FieldMeta(
+        "Show a tour the first time I open something", "General", settable=True,
+        description="Workflows and other views start their tour once, the first time they open.",
+    ),
+    "show_me_autoplay": FieldMeta(
+        "Let Ducky show me things", "General", settable=True,
+        description="Ducky's Show me takes you there and highlights it right away. Off: it only leaves a Show me button in chat.",
+    ),
     "starter_llm_gateways_seeded": FieldMeta(
         "Starter LLM gateways seeded", "internal",
         description="First-run Store install of Anthropic, Cursor, and OpenAI already ran once.",

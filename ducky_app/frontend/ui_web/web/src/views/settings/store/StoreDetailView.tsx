@@ -1,4 +1,5 @@
 import { Icons } from "../../../icons/Icons";
+import { targetRef } from "../../../ui-targets/registry";
 import type { DuckyOSStoreItemDto } from "../../../types/panel";
 import { asLabelList, itemCategories } from "../storeFilters";
 import { StoreActions, type StoreItemHandlers } from "./StoreActions";
@@ -61,7 +62,7 @@ export function StoreDetailView({ item, pendingSlug, catalogReady, jobs, actionB
       </div>
 
       <div className="ds-detail-cols">
-        <aside className={`ds-detail-side${installBusy ? " ds-detail-side--busy" : ""}`}>
+        <aside ref={targetRef("settings.store.detail", { route: "settings.store", label: item.name || slug })} className={`ds-detail-side${installBusy ? " ds-detail-side--busy" : ""}`}>
           <div className="ds-detail-icon" aria-hidden>
             {item.icon_data_url ? (
               <img src={item.icon_data_url} alt="" draggable={false} />
@@ -71,7 +72,7 @@ export function StoreDetailView({ item, pendingSlug, catalogReady, jobs, actionB
           </div>
           <h2 className="ds-detail-name">{item.name || slug}</h2>
           <p className="ds-detail-author">{authorLabelFor(item)}</p>
-          <div className="ds-detail-side-actions">
+          <div ref={targetRef("settings.store.detail.actions", { route: "settings.store", label: "Install, update, turn on or off" })} className="ds-detail-side-actions">
             <StoreActions item={item} handlers={handlers} busy={busy} size="detail" />
             {item.repo_url ? (
               <a

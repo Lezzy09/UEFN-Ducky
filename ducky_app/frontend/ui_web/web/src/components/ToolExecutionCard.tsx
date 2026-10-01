@@ -7,6 +7,7 @@ import { LinkedAgentCard } from "./LinkedAgentCard";
 import { ToolFileEditDiff } from "./ToolFileEditDiff";
 import { DefaultBody } from "./tool-cards/bodies/DefaultBody";
 import { walkthroughStepsFromTool } from "./tool-cards/bodies/WalkthroughBody";
+import { replayShowMe, showMeRequestFromTool } from "./tool-cards/bodies/ShowMeBody";
 import { resolveToolCategory } from "./tool-cards/toolCategories";
 import { runAgentWalkthrough } from "../walkthrough/agentWalkthrough";
 import type { ChatMessage, ChatTab, LinkedAgent, ToolCallData } from "../types/panel";
@@ -154,9 +155,18 @@ export const ToolExecutionCard = memo(function ToolExecutionCard({
   // Any tool with fileEdit meta (workspace_write_file, Cursor Edit/Write/StrReplace, …).
   const showInlineDiff = Boolean(fileEdit);
   const hideArgsForFileEdit = showInlineDiff;
-  const walkthroughSteps = !isRunning && meta.name === "ducky_walkthrough_run"
+  const walkthroughSteps = !isRunning && (meta.name === "ducky_walkthrough_run" || meta.name === "tour_workflow")
     ? walkthroughStepsFromTool(meta)
     : null;
+  // Show me stays one click away on the card, even folded.
+  const showMe = useMemo(
+    () => (isRunning ? null : showMeRequestFromTool(meta.name, meta.arguments || {})),
+    [isRunning, meta.name, meta.arguments],
+  );
+  const playShowMeAgain = (e: MouseEvent | KeyboardEvent) => {
+    e.stopPropagation();
+    if (showMe) void replayShowMe(showMe);
+  };
   const [walkthroughBusy, setWalkthroughBusy] = useState(false);
 
   const collapseScope = useChatCollapseScope();
@@ -270,6 +280,25 @@ export const ToolExecutionCard = memo(function ToolExecutionCard({
                         : `error · ${durationLabel}${tokenSuffix}`}
             </span>
           </span>
+          {showMe ? (
+            <span
+              className="tool-execution-card-showme"
+              role="button"
+              tabIndex={0}
+              title="Take me there and highlight it"
+              aria-label={`Show me: ${showMe.title}`}
+              onClick={playShowMeAgain}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  playShowMeAgain(e);
+                }
+              }}
+            >
+              <Icons.Sparkles />
+              <span>Show me</span>
+            </span>
+          ) : null}
           {walkthroughSteps?.length ? (
             <span
               className="tool-execution-card-replay"

@@ -444,6 +444,8 @@ _PUBLIC_METHODS = frozenset({
     'tester_scaffold',
     'tester_simulate',
     'toggle_maximize',
+    'ui_rpc_ack',
+    'ui_rpc_active',
     'ui_rpc_respond',
     'unarchive_agent_profile',
     'uninstall_uefn_plugin',

@@ -165,6 +165,8 @@ def show_workflow(
     group_id: str = "",
     note: str = "",
     select: bool = True,
+    title: str = "",
+    body: str = "",
     pretty: bool = False,
 ) -> str:
     """Show the user part of a workflow in the editor while you explain it.
@@ -172,9 +174,10 @@ def show_workflow(
     Opens the Workflows editor on it, glides the camera to node_ids (or every node of
     group_id), lights them up and, with select=true, selects them so their details panel
     opens. note is a short caption over the canvas ("This Branch checks the score").
-    Nothing is saved. Walk someone through a workflow by calling this once per step;
-    ducky_walkthrough_run can also spotlight workflows.node.<id> / workflows.group.<id>
-    and the editor's buttons (ducky_ui_list_targets("workflows")) with Next / Back.
+    With title (and body, short markdown) it is a **Show me** instead: those nodes are
+    highlighted with a popup above them that only its close button closes, and the chat
+    keeps a Show me button that plays it again. Nothing is saved. For a full Next / Back
+    walk through a workflow use tour_workflow; for any other part of the app ducky_ui_show.
     """
     from backend.automations.store import get_workflow as _get
     from backend.automations.locks import group_members
@@ -193,8 +196,71 @@ def show_workflow(
         wanted += group_members(groups, group_id.strip())
     shown = [n for n in dict.fromkeys(wanted) if n in present]
     missing = [n for n in dict.fromkeys(wanted) if n not in present]
+    if (title or body).strip() and (shown or group_id.strip()):
+        from backend.panel.rpc import panel_rpc
+
+        target: Any = f"workflows.group.{group_id.strip()}" if group_id.strip() and not node_ids else [f"workflows.node.{n}" for n in shown]
+        played = panel_rpc("show", {
+            "target": target[0] if isinstance(target, list) and len(target) == 1 else target,
+            "workflow_id": wid,
+            "title": (title or body).strip()[:120],
+            "body": body.strip(),
+        }, timeout=30.0)
+        if isinstance(played, dict) and played.get("error"):
+            return tool_json({"ok": False, "error": played["error"], "shown": shown, "missing": missing}, pretty=pretty)
+        return tool_json({"ok": True, "shown": shown, "missing": missing, "show_me": True}, pretty=pretty)
     _reveal_graph(wid, "show", nodes=shown, select=bool(select) and bool(shown), note=note)
     return tool_json({"ok": True, "shown": shown, "missing": missing}, pretty=pretty)
+
+
+@mcp.tool()
+def tour_workflow(
+    workflow_id: str,
+    steps: list[dict[str, Any]] | None = None,
+    auto: bool = False,
+    pretty: bool = False,
+) -> str:
+    """Walk the user through one workflow with Next / Back, node by node, in the editor.
+
+    Opens the workflow, then each step highlights nodes with a card explaining them.
+    steps: [{"node_ids": ["test"], "title": "Play tester", "body": "A Tester ducky…"},
+            {"group_id": "g1", "title": "…", "body": "…"},
+            {"target": "workflows.toolbar.run", "title": "Test", "body": "Run it now."}]
+    auto=true (no steps): build the tour from the graph itself, in run order, with each
+    node's name, description and what goes in and out — the editor's Tour this workflow.
+    Blocks until the user finishes or skips (at most 10 minutes). The chat keeps the
+    tour with a Replay button. Returns {ok, completed, skipped, steps}.
+    """
+    from backend.automations.store import get_workflow as _get
+    from backend.panel.rpc import panel_rpc
+
+    wid = (workflow_id or "").strip()
+    wf = _get(wid) if wid else None
+    if wf is None:
+        return tool_json({"ok": False, "error": "workflow not found"}, pretty=pretty)
+    present = {str(n.get("id")) for n in (wf.get("graph") or {}).get("nodes") or []}
+    groups = {str(g.get("id")) for g in (wf.get("graph") or {}).get("groups") or []}
+    cleaned: list[dict[str, Any]] = []
+    for step in steps or []:
+        if not isinstance(step, dict):
+            return tool_json({"ok": False, "error": "each step must be an object"}, pretty=pretty)
+        title, body = str(step.get("title") or "").strip(), str(step.get("body") or "").strip()
+        nodes = [str(n) for n in step.get("node_ids") or [] if str(n) in present]
+        group = str(step.get("group_id") or "").strip()
+        target = step.get("target")
+        if nodes:
+            row: dict[str, Any] = {"node_ids": nodes}
+        elif group in groups:
+            row = {"group_id": group}
+        elif isinstance(target, (str, dict)) and target:
+            row = {"target": target}
+        else:
+            return tool_json({"ok": False, "error": f"step {len(cleaned) + 1}: name node_ids or group_id from this workflow, or a target"}, pretty=pretty)
+        cleaned.append({**row, "title": title or body[:48] or "Step", "body": body or title})
+    if not cleaned and not auto:
+        return tool_json({"ok": False, "error": "give steps, or auto=true to build them from the graph"}, pretty=pretty)
+    out = panel_rpc("tour_workflow", {"workflow_id": wid, "steps": cleaned, "auto": bool(auto) and not cleaned}, timeout=600.0)
+    return tool_json(out if isinstance(out, dict) else {"ok": False, "error": "no answer"}, pretty=pretty)
 
 
 @mcp.tool()

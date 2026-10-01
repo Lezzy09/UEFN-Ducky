@@ -11,6 +11,9 @@ import type { WalkthroughDef, WalkthroughRuntimeState, WalkthroughStep } from ".
 export const HOST_TOUR_CATALOG_IDS = [
   "app.shell",
   "chat.composer",
+  "workflows.intro",
+  "workflows.first_build",
+  "workflows.editor",
   "settings.general",
   "settings.duckies",
   "settings.plans",

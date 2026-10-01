@@ -378,6 +378,7 @@ _PANEL_UI_TOOLS = frozenset(
     {
         "ducky_ui_navigate",
         "ducky_ui_list_targets",
+        "ducky_ui_show",
         "ducky_walkthrough_run",
         "ducky_ask_user",
         "ducky_settings_schema",
@@ -568,6 +569,7 @@ INTENT_KEYWORDS: list[tuple[re.Pattern[str], frozenset[str]]] = [
     (
         re.compile(
             r"\b(settings?|preferences?|configure|config|navigate|spotlight|highlight|show\s+me\s+where"
+            r"|show\s+me|where\s+is|where'?s|where\s+do\s+i|point\s+(me\s+)?to|which\s+button"
             r"|walk\s+me\s+through|guide\s+me|walkthrough|tutorial|how\s+do\s+i|show\s+me\s+how"
             r"|mcp\s+plugin|mcp\s+server|enable\s+.*plugin|disable\s+.*plugin"
             r"|apply\s+to\s+(ide|cursor|claude)|skill\s+pack|appearance|theme|persona|ducky\s+style"

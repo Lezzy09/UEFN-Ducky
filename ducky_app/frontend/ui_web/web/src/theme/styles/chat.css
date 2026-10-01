@@ -4228,6 +4228,90 @@
   background: var(--card);
 }
 
+/* Show me: a labelled button on the card header, so it works folded too. */
+.tool-execution-card-showme {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent, #4c8dff) 55%, transparent);
+  background: color-mix(in srgb, var(--accent, #4c8dff) 16%, transparent);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tool-execution-card-showme svg {
+  width: 13px;
+  height: 13px;
+}
+
+.tool-execution-card-showme:hover,
+.tool-execution-card-showme:focus-visible {
+  background: color-mix(in srgb, var(--accent, #4c8dff) 28%, transparent);
+  outline: none;
+}
+
+.tool-card-showme {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.tool-card-showme-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.tool-card-showme-title {
+  font-size: 13px;
+}
+
+.tool-card-showme-text {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tool-card-showme-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent, #4c8dff) 60%, transparent);
+  background: color-mix(in srgb, var(--accent, #4c8dff) 20%, transparent);
+  color: var(--fg, #f0f2f6);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.tool-card-showme-button:hover {
+  background: color-mix(in srgb, var(--accent, #4c8dff) 32%, transparent);
+}
+
+.tool-card-showme-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.tool-card-showme-note,
+.tool-card-showme-empty {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tool-card-showme-note--error {
+  color: var(--error, #f87171);
+}
+
 .tool-card-walkthrough-body {
   display: flex;
   flex-direction: column;

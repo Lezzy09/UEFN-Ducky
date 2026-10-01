@@ -17,6 +17,12 @@ Flow (all inside the panel process, driven over loopback HTTP):
 
 The caller may be the stdio MCP bridge (a separate process) or an embedded
 agent in the panel process — both reach this broker the same way, over loopback.
+
+Several windows can be open (popped-out desktop windows, the phone panel). Requests
+that show something (Show me, tours, navigate) go to the window the user last clicked
+or typed in: it claims "active" through ``PanelApi.ui_rpc_active`` and acknowledges a
+request it takes with ``ui_rpc_ack``. When it doesn't acknowledge in time (closed, gone
+to sleep) the request is sent again for any window.
 """
 
 from __future__ import annotations
@@ -33,11 +39,16 @@ from typing import Any
 _MAX_TTL_S = 15 * 60.0
 
 
+# Methods that show something on screen: only the active window answers them.
+WINDOW_METHODS = frozenset({"show", "walkthrough_run", "tour_workflow", "navigate", "list_targets"})
+
+
 class _Pending:
-    __slots__ = ("event", "result", "created", "conv_id")
+    __slots__ = ("event", "acked", "result", "created", "conv_id")
 
     def __init__(self, conv_id: str = "") -> None:
         self.event = threading.Event()
+        self.acked = threading.Event()
         self.result: dict[str, Any] | None = None
         self.created = time.monotonic()
         self.conv_id = conv_id
@@ -45,6 +56,48 @@ class _Pending:
 
 _pending: dict[str, _Pending] = {}
 _lock = threading.Lock()
+_active_client = ""
+
+
+def mark_active(client_id: str, active: bool = True) -> None:
+    """A window says the user is using it (or, closing, that it is gone)."""
+    global _active_client
+    cid = (client_id or "").strip()
+    with _lock:
+        if active and cid:
+            _active_client = cid
+        elif not active and cid and _active_client == cid:
+            _active_client = ""
+
+
+def window_for(method: str) -> str:
+    """The window that should answer ``method`` ("" = any)."""
+    with _lock:
+        return _active_client if method in WINDOW_METHODS else ""
+
+
+def ack(request_id: str) -> bool:
+    """A window took the request (it will answer when done)."""
+    with _lock:
+        slot = _pending.get(request_id)
+    if slot is None:
+        return False
+    slot.acked.set()
+    return True
+
+
+def wait_ack(request_id: str, timeout: float) -> bool:
+    """True when a window took the request (or already answered) within ``timeout``."""
+    with _lock:
+        slot = _pending.get(request_id)
+    if slot is None:
+        return True  # answered and collected already
+    end = time.monotonic() + max(0.0, float(timeout))
+    while time.monotonic() < end:
+        if slot.acked.is_set() or slot.event.is_set():
+            return True
+        slot.acked.wait(0.05)
+    return slot.acked.is_set() or slot.event.is_set()
 
 
 def _sweep_locked() -> None:

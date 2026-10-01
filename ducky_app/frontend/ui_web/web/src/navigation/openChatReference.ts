@@ -75,6 +75,22 @@ function openSettingsSection(section: "skills" | "mcps"): void {
   });
 }
 
+/** Open a project file in an editor tab (any path, spaces included). False when nothing can open it yet. */
+export function requestOpenProjectFile(path: string): boolean {
+  const clean = (path || "").trim().replace(/\\/g, "/");
+  if (!clean || !fileOpener) return false;
+  fileOpener(clean, clean.split("/").pop() || clean);
+  return true;
+}
+
+/** Open a chat tab by id. False when nothing can open it yet. */
+export function requestOpenChatTab(id: string, name = ""): boolean {
+  const clean = (id || "").trim();
+  if (!clean || !chatOpener) return false;
+  chatOpener({ id: clean, name: name || clean });
+  return true;
+}
+
 /** Open the tab a composer reference points at. Old messages keep working when the menus are off. */
 export function requestOpenChatReference(href: string, label = ""): void {
   const parsed = parseChatRefHref(href);

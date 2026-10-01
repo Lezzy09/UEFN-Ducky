@@ -1,4 +1,5 @@
 /** Product walkthrough step — targets use ui-targets registry ids. */
+import type { TargetSpec } from "../ui-targets/resolve";
 
 export type WalkthroughAdvance = "next" | "require_click";
 
@@ -7,6 +8,8 @@ export type WalkthroughSpotlightMode = "circle" | "rect";
 export interface WalkthroughStep {
   /** Semantic ui-target id (e.g. `header.settings`, `settings.tab.store`). */
   target: string;
+  /** A role/name or text target when there's no id (`{role: "button", name: "Save"}`). */
+  spec?: TargetSpec;
   title: string;
   body: string;
   advance: WalkthroughAdvance;

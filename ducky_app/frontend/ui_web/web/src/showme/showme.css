@@ -1,0 +1,194 @@
+/* Show me: dimmed app, ring around the target, popup above it. Above tours and menus. */
+.showme-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483200;
+  pointer-events: none;
+}
+
+.showme-blocker {
+  position: fixed;
+  inset: 0;
+  pointer-events: auto;
+  background: transparent;
+  cursor: default;
+}
+
+/* No hole yet (going there / not found): the whole app is dimmed. */
+.showme-overlay:not([data-hole="1"]) .showme-blocker {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.showme-hole,
+.showme-ring {
+  position: fixed;
+  left: var(--sm-x, 0);
+  top: var(--sm-y, 0);
+  width: var(--sm-w, 0);
+  height: var(--sm-h, 0);
+  border-radius: var(--sm-r, 8px);
+  pointer-events: none;
+  transition: left 160ms ease, top 160ms ease, width 160ms ease, height 160ms ease;
+}
+
+.showme-hole {
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+}
+
+.showme-ring {
+  border: 2px solid var(--accent, #4c8dff);
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.22),
+    0 0 18px 4px color-mix(in srgb, var(--accent, #4c8dff) 55%, transparent);
+  animation: showme-pulse 1.8s ease-in-out infinite;
+}
+
+.showme-overlay:not([data-hole="1"]) .showme-hole,
+.showme-overlay:not([data-hole="1"]) .showme-ring,
+.showme-overlay[data-away]:not([data-away=""]) .showme-ring {
+  display: none;
+}
+
+@keyframes showme-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.22), 0 0 14px 3px color-mix(in srgb, var(--accent, #4c8dff) 45%, transparent); }
+  50% { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.3), 0 0 26px 7px color-mix(in srgb, var(--accent, #4c8dff) 65%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .showme-ring { animation: none; }
+  .showme-hole, .showme-ring { transition: none; }
+}
+
+.showme-popup {
+  position: fixed;
+  left: var(--sm-pop-x, 16px);
+  top: var(--sm-pop-y, 16px);
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(440px, calc(100vh - 24px));
+  overflow: visible;
+  padding: 12px 14px 12px;
+  border-radius: 12px;
+  background: var(--surface, #1c1f26);
+  color: var(--text, #f0f2f6);
+  border: 1px solid color-mix(in srgb, var(--accent, #4c8dff) 45%, var(--border, rgba(255, 255, 255, 0.14)));
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+
+.showme-popup-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.showme-popup-icon {
+  display: inline-flex;
+  color: var(--accent, #4c8dff);
+  margin-top: 2px;
+}
+
+.showme-popup-icon svg,
+.showme-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.showme-popup-title {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.showme-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: -4px -6px 0 0;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text, #f0f2f6);
+  cursor: pointer;
+}
+
+.showme-close:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.showme-close:focus-visible {
+  outline: 2px solid var(--accent, #4c8dff);
+  outline-offset: 2px;
+}
+
+.showme-popup-body {
+  max-height: min(340px, calc(100vh - 120px));
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim, #c5ccd8);
+}
+
+.showme-popup-body p {
+  margin: 0 0 8px;
+}
+
+.showme-popup-body p:last-child {
+  margin-bottom: 0;
+}
+
+.showme-going {
+  color: var(--text-dim, #9aa3b2);
+  font-style: italic;
+}
+
+.showme-missing {
+  color: #e8a87c;
+  font-size: 12px;
+}
+
+.showme-back {
+  display: none;
+  margin-top: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent, #4c8dff) 70%, transparent);
+  background: color-mix(in srgb, var(--accent, #4c8dff) 22%, transparent);
+  color: var(--text, #f0f2f6);
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.showme-overlay[data-away]:not([data-away=""]) .showme-back {
+  display: inline-block;
+}
+
+/* Arrow from the popup to the target. */
+.showme-arrow {
+  position: absolute;
+  left: calc(var(--sm-arrow-x, 50%) - 7px);
+  width: 14px;
+  height: 14px;
+  background: var(--surface, #1c1f26);
+  border: 1px solid color-mix(in srgb, var(--accent, #4c8dff) 45%, var(--border, rgba(255, 255, 255, 0.14)));
+  transform: rotate(45deg);
+  display: none;
+}
+
+.showme-popup[data-side="above"] .showme-arrow {
+  display: block;
+  bottom: -8px;
+  border-top: none;
+  border-left: none;
+}
+
+.showme-popup[data-side="below"] .showme-arrow {
+  display: block;
+  top: -8px;
+  border-bottom: none;
+  border-right: none;
+}

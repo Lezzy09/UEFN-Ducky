@@ -343,13 +343,13 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
       </div>
       <div className="aw-list-sections" id={listId} hidden={collapsed}>
         {!rows.length && sections.some((owner) => !owner.readOnly) ? (
-          <div className="aw-empty-hero" role="region" aria-label="Make your first workflow">
+          <div ref={targetRef("workflows.empty.hero", { route: "workflows", label: "Make your first workflow" })} className="aw-empty-hero" role="region" aria-label="Make your first workflow">
             <span className="aw-empty-hero-icon" aria-hidden="true"><Icons.Workflow /></span>
             <strong>Make your first workflow</strong>
             <p>Start from a ready-made pipeline, or from a blank canvas.</p>
-            <button type="button" className="aw-new-button" onClick={() => onCreate(sections.find((owner) => !owner.readOnly)!.id)}><Icons.Plus /> New workflow</button>
+            <button ref={targetRef("workflows.empty.new", { route: "workflows", label: "New workflow" })} type="button" className="aw-new-button" onClick={() => onCreate(sections.find((owner) => !owner.readOnly)!.id)}><Icons.Plus /> New workflow</button>
             {featured.length && onCreateFrom ? (
-              <div className="aw-empty-picks" role="group" aria-label="Start from a template">
+              <div ref={targetRef("workflows.empty.picks", { route: "workflows", label: "Start from a template" })} className="aw-empty-picks" role="group" aria-label="Start from a template">
                 {featured.map((template) => (
                   <button key={template.id} type="button" className="aw-empty-pick" title={template.description || template.name} onClick={() => onCreateFrom(template)}>
                     <span className="aw-empty-pick-icon" aria-hidden="true">{template.icon || "⚡"}</span>
@@ -381,7 +381,7 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
                 {(owner.kind === "team" && owner.slug) || !owner.readOnly ? <span className="aw-tree-actions aw-section-actions">
                   {owner.kind === "team" && owner.slug ? <button type="button" className="aw-icon-button" title={`Open ${ownerName(owner)} workflows on the web`} aria-label={`Open ${ownerName(owner)} on the web`} onClick={() => void getApi()?.workflow_open_web?.(owner.id)}><Icons.Globe /></button> : null}
                   {!owner.readOnly && onAddFolder ? <button type="button" className="aw-icon-button" title={`New folder in ${ownerName(owner)}`} aria-label={`New folder in ${ownerName(owner)}`} onClick={() => newFolderIn(owner, "")}><Icons.FolderPlus /></button> : null}
-                  {!owner.readOnly ? <button type="button" className="aw-icon-button" title={`New workflow in ${ownerName(owner)}`} aria-label={`New workflow in ${ownerName(owner)}`} onClick={() => onCreate(owner.id)}><Icons.Plus /></button> : null}
+                  {!owner.readOnly ? <button ref={targetRef(`workflows.list.new.${owner.id}`, { route: "workflows", label: `New workflow in ${ownerName(owner)}` })} type="button" className="aw-icon-button" title={`New workflow in ${ownerName(owner)}`} aria-label={`New workflow in ${ownerName(owner)}`} onClick={() => onCreate(owner.id)}><Icons.Plus /></button> : null}
                 </span> : null}
               </div>
               <ul className="aw-list-ul" id={bodyId} hidden={!open}>
@@ -405,7 +405,7 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
       </div>
       {showNew && rows.length && !collapsed && sections.some((owner) => !owner.readOnly) ? (
         <div className="aw-list-foot">
-          <button type="button" className="aw-new-button" onClick={() => onCreate(sections.find((owner) => !owner.readOnly)!.id)}><Icons.Plus /> New workflow</button>
+          <button ref={targetRef("workflows.list.new", { route: "workflows", label: "New workflow" })} type="button" className="aw-new-button" onClick={() => onCreate(sections.find((owner) => !owner.readOnly)!.id)}><Icons.Plus /> New workflow</button>
         </div>
       ) : null}
       {menu ? <ContextMenu x={menu.x} y={menu.y} onClose={closeMenu} items={menuItems(menu.data)} /> : null}

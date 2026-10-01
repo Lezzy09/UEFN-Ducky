@@ -767,7 +767,7 @@ describe("details panel", () => {
     await open();
     const controls = document.querySelector(".aw-canvas-controls")!;
     const buttons = [...controls.querySelectorAll("button")].map((button) => button.getAttribute("aria-label"));
-    expect(buttons).toEqual(["Select tool", "Hand tool", "Run log", "Add nodes", "Fit view", "Zoom", "Outline"]);  // the outline sits on the right
+    expect(buttons).toEqual(["Select tool", "Hand tool", "Run log", "Add nodes", "Fit view", "Zoom", "Outline", "Help"]);  // the outline, then the tours menu, on the right
     expect(screen.getByRole("button", { name: "Zoom" }).querySelector("svg")).toBeNull();  // just the percent
     const toggle = screen.getByRole("button", { name: "Run log" });
     expect(document.querySelector(".aw-log-dock")?.classList.contains("is-open")).toBe(false);

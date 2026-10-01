@@ -32,6 +32,8 @@ import {
 } from "react";
 import { Icons } from "../icons/Icons";
 import { FileTypeIcon } from "../verse-editor/components/FileTypeIcon";
+import { registerTargetResolver, cssEscape } from "../ui-targets/resolve";
+import { requestOpenSidebarPanel } from "../navigation/openSidebarPanel";
 import { contentRootPath, isVerseFile, isPanelReadOnlyFile, isWritableContentPath, isSystemWorkspaceRootName, registryKey, UEFN_CORE_SECTION_PATH, WORKSPACE_ROOTS_PATH, workspaceRootDisplayName, ABS_PATH_PREFIX } from "../verse-editor/utils/isVerseFile";
 import { useVerseEditorOptional } from "../verse-editor/VerseEditorProvider";
 import { getApi } from "../hooks/usePanelApi";
@@ -1100,6 +1102,29 @@ export const SidebarFileTree = forwardRef<SidebarFileTreeHandle, SidebarFileTree
 
     const revealPathInTreeRef = useRef(revealPathInTree);
     revealPathInTreeRef.current = revealPathInTree;
+
+    // Show me / tours: `files.item.<path>` is that file or folder's row; going there
+    // opens the Files panel and the folders above it.
+    useEffect(() => {
+      const rowFor = (path: string): HTMLElement | null => {
+        const want = path.replace(/\\/g, "/").toLowerCase();
+        for (const kind of ["file", "dir"]) {
+          const hit = document.querySelector<HTMLElement>(`[data-file-id="${cssEscape(`${kind}:${path.replace(/\\/g, "/")}`)}"]`)
+            ?? [...document.querySelectorAll<HTMLElement>("[data-file-id]")].find((n) => (n.getAttribute("data-file-id") || "").toLowerCase() === `${kind}:${want}`);
+          if (hit) return hit;
+        }
+        return null;
+      };
+      return registerTargetResolver("files.item.", {
+        find: (id) => rowFor(id.slice("files.item.".length)),
+        reveal: async (id) => {
+          const path = id.slice("files.item.".length);
+          requestOpenSidebarPanel("files");
+          const isDir = !knownFilePathsRef.current.has(path) && ![...knownFilePathsRef.current].some((p) => p.toLowerCase() === path.toLowerCase());
+          await revealPathInTreeRef.current(path, isDir);
+        },
+      });
+    }, []);
 
     useEffect(() => {
       if (!activeFilePath) return;

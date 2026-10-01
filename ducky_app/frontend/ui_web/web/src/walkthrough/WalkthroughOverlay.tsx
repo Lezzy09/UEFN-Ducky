@@ -4,7 +4,8 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { getTargetElement } from "../ui-targets/registry";
+import { clipOutside, holeFor, placeCard } from "../ui-targets/geometry";
+import { resolveTarget, revealTarget, type TargetSpec } from "../ui-targets/resolve";
 import {
   getActiveStep,
   getActiveSteps,
@@ -16,28 +17,10 @@ import {
 } from "./WalkthroughService";
 import "./walkthrough.css";
 
-const PAD = 8;
-const TIP_GAP = 12;
 const TIP_W = 340;
 
-function placeTooltip(
-  hole: DOMRect | null,
-  tipH: number,
-): { x: number; y: number } {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const maxW = Math.min(TIP_W, vw - 24);
-  if (!hole) {
-    return { x: Math.max(12, (vw - maxW) / 2), y: Math.max(12, vh * 0.3) };
-  }
-  let x = hole.left + hole.width / 2 - maxW / 2;
-  x = Math.max(12, Math.min(x, vw - maxW - 12));
-  let y = hole.bottom + TIP_GAP;
-  if (y + tipH > vh - 12) {
-    y = hole.top - tipH - TIP_GAP;
-  }
-  if (y < 12) y = 12;
-  return { x, y };
+function placeTooltip(hole: DOMRect | null, tipH: number): { x: number; y: number } {
+  return placeCard(hole, TIP_W, tipH, "below");
 }
 
 export function WalkthroughOverlay() {
@@ -58,7 +41,8 @@ export function WalkthroughOverlay() {
   const step = getActiveStep();
   const steps = getActiveSteps();
   const active = state.active && !!step;
-  const stepTarget = step?.target;
+  // A role/name spec when the step has one, else its id.
+  const stepTarget: TargetSpec | undefined = step?.spec ?? step?.target;
   const stepAdvance = step?.advance;
   const stepMode = step?.mode;
 
@@ -66,26 +50,18 @@ export function WalkthroughOverlay() {
     if (!active || !stepTarget) return;
     let raf = 0;
     const tick = () => {
-      const el = getTargetElement(stepTarget);
+      const el = resolveTarget(stepTarget);
       const root = rootRef.current;
-      const circle = (stepMode ?? "rect") === "circle";
       if (root) {
         if (el) {
           const rect = el.getBoundingClientRect();
-          const w = Math.max(24, rect.width + PAD * 2);
-          const h = Math.max(24, rect.height + PAD * 2);
-          const size = Math.max(w, h);
-          const cx = rect.left + rect.width / 2;
-          const cy = rect.top + rect.height / 2;
-          const left = circle ? cx - size / 2 : rect.left - PAD;
-          const top = circle ? cy - size / 2 : rect.top - PAD;
-          const rw = circle ? size : w;
-          const rh = circle ? size : h;
+          const hole = holeFor(rect, stepMode === "circle" ? "circle" : "rect");
+          const { left, top, width: rw, height: rh } = hole;
           root.style.setProperty("--wt-x", `${left}px`);
           root.style.setProperty("--wt-y", `${top}px`);
           root.style.setProperty("--wt-w", `${rw}px`);
           root.style.setProperty("--wt-h", `${rh}px`);
-          root.style.setProperty("--wt-r", circle ? "50%" : "8px");
+          root.style.setProperty("--wt-r", hole.radius);
           const tip = placeTooltip(
             new DOMRect(left, top, rw, rh),
             tipHRef.current,
@@ -101,11 +77,7 @@ export function WalkthroughOverlay() {
           const blocker = root.querySelector(".walkthrough-blocker") as HTMLElement | null;
           if (blocker) {
             if (stepAdvance === "require_click") {
-              const x = left;
-              const y = top;
-              const x2 = left + rw;
-              const y2 = top + rh;
-              blocker.style.clipPath = `polygon(evenodd, 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 0%, ${x}px ${y}px, ${x}px ${y2}px, ${x2}px ${y2}px, ${x2}px ${y}px, ${x}px ${y}px)`;
+              blocker.style.clipPath = clipOutside(hole);
             } else {
               blocker.style.clipPath = "none";
             }
@@ -132,25 +104,16 @@ export function WalkthroughOverlay() {
     return () => cancelAnimationFrame(raf);
   }, [active, stepTarget, stepAdvance, stepMode, epoch]);
 
-  // Bring the target into view when the step changes (settings content panes).
+  // Bring the target into view when the step changes (a view's own reveal, else scroll).
   useEffect(() => {
     if (!active || !stepTarget) return;
-    const el = getTargetElement(stepTarget);
-    if (!el) return;
-    // A view can bring its own targets into sight (the Workflows canvas glides to a node);
-    // scrolling there would shift the canvas instead.
-    const reveal = new CustomEvent("ducky:ui-target-reveal", { detail: { id: stepTarget }, cancelable: true });
-    if (!window.dispatchEvent(reveal)) return;
-    try {
-      el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
-    } catch {
-      /* ignore */
-    }
+    if (!resolveTarget(stepTarget)) return;
+    void revealTarget(stepTarget);
   }, [active, stepTarget, state.stepIndex]);
 
   useEffect(() => {
     if (!active || !stepTarget || stepAdvance !== "require_click") return;
-    const el = getTargetElement(stepTarget);
+    const el = resolveTarget(stepTarget);
     if (!el) return;
     const onClick = () => {
       void nextStep();

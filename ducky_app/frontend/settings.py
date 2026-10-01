@@ -285,6 +285,12 @@ class PanelSettings:
     walkthrough_completed: dict[str, bool] = field(default_factory=dict)
     """Product tour completion flags keyed by tour id (app.shell, settings.store, plugin.*)."""
 
+    first_open_tours: bool = True
+    """Show a tour the first time a view opens (Workflows, …). Off: never start one on its own."""
+
+    show_me_autoplay: bool = True
+    """Ducky's Show me plays right away. Off: it only leaves the Show me button in chat."""
+
     starter_llm_gateways_seeded: bool = False
     """First-run Store install of Anthropic / Cursor / OpenAI already attempted."""
 
@@ -450,6 +456,8 @@ class PanelSettings:
             or self.memory_index_max_chars != 2_500
             or self.memory_summary_model.strip()
             or not self.chat_auto_title
+            or not self.first_open_tours
+            or not self.show_me_autoplay
             or not self.chat_mentions_enabled
             or not self.chat_slash_references_enabled
             or self.chat_title_model.strip()

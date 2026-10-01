@@ -997,6 +997,19 @@ class PanelApi(
 
         return ui_rpc.respond(str(request_id or ""), payload or {})
 
+    def ui_rpc_ack(self, request_id: str) -> bool:
+        """The window the request was for took it (Show me, a tour); it answers when done."""
+        from frontend.ui_web import ui_rpc
+
+        return ui_rpc.ack(str(request_id or ""))
+
+    def ui_rpc_active(self, client_id: str, active: bool = True) -> bool:
+        """This window is the one the user is using (clicked or typed in), or it is closing."""
+        from frontend.ui_web import ui_rpc
+
+        ui_rpc.mark_active(str(client_id or ""), bool(active))
+        return True
+
     def get_listener_status(self) -> dict[str, Any]:
         if not self._listener_status_lock.acquire(blocking=False):
             if self._last_listener_status is not None:

@@ -8,6 +8,7 @@ import {
   setSuppressStarterPluginTours,
 } from "./starterLlmGateways";
 import type { WalkthroughDef, WalkthroughStep } from "./types";
+import { WORKFLOWS_TOURS } from "../automations/workflowsTours";
 
 function wait(ms: number): Promise<void> {
   return new Promise((r) => window.setTimeout(r, ms));
@@ -673,6 +674,7 @@ export const LLMS_SETUP_TOUR: WalkthroughDef = {
 };
 
 export function registerBuiltinTours(register: (def: WalkthroughDef) => void): void {
+  for (const tour of WORKFLOWS_TOURS) register(tour);
   register(APP_SHELL_TOUR);
   register(CHAT_COMPOSER_TOUR);
   register(SETTINGS_GENERAL_TOUR);

@@ -2,7 +2,8 @@
  * Ephemeral agent-authored tours — same coachmark UI as product walkthroughs,
  * not persisted to walkthrough_completed.
  */
-import { requestOpenSettings } from "../navigation/openSettingsTab";
+import { openPanelRoute } from "../navigation/openPanelRoute";
+import { isTargetSpec, runUiAction, targetKey, type TargetSpec } from "../ui-targets/resolve";
 import type { WalkthroughAdvance, WalkthroughSpotlightMode, WalkthroughStep } from "./types";
 import {
   getWalkthroughState,
@@ -23,7 +24,8 @@ function ensureFinishHook(): void {
 }
 
 export type AgentWalkthroughStepInput = {
-  target: string;
+  /** An id, or `{role, name, within}` / `{text}` for things with no id. */
+  target: TargetSpec;
   title?: string;
   body?: string;
   /** Alias for body. */
@@ -32,57 +34,13 @@ export type AgentWalkthroughStepInput = {
   mode?: WalkthroughSpotlightMode | string;
   /** Optional route to open before the step (same ids as ducky_ui_navigate). */
   navigate?: string;
-};
-
-const SETTINGS_TAB: Record<string, string> = {
-  settings: "General",
-  "settings.general": "General",
-  "settings.store": "Store",
-  "settings.llms": "LLMs",
-  "settings.mcp": "LLMs",
-  "settings.mcp_plugins": "LLMs",
-  "settings.skills": "LLMs",
-  "settings.appearance": "Appearance",
-  "settings.duckies": "Duckies",
-  "settings.plans": "Plans",
-  "settings.memory": "LLMs",
-  "settings.languages": "Languages",
-  "settings.log_errors": "General",
-  "settings.app_data": "General",
-  plans: "Plans",
-};
-
-const SETTINGS_SECTION: Record<string, string> = {
-  "settings.general": "general",
-  "settings.llms": "llms",
-  "settings.mcp": "mcps",
-  "settings.mcp_plugins": "mcps",
-  "settings.skills": "skills",
-  "settings.plans": "working",
-  plans: "working",
-  "settings.memory": "entries",
-  "settings.log_errors": "errors",
-  "settings.app_data": "app_data",
+  item_id?: string;
+  /** Optional UI action to run before the step (`workflows.open {id}`, `workflows.add_menu`). */
+  action?: { id: string; args?: Record<string, unknown> };
 };
 
 function wait(ms: number): Promise<void> {
   return new Promise((r) => globalThis.setTimeout(r, ms));
-}
-
-function openRoute(route: string): void {
-  const r = route.trim();
-  const tab = SETTINGS_TAB[r];
-  if (tab) {
-    requestOpenSettings(tab);
-    const section = SETTINGS_SECTION[r];
-    if (section) {
-      window.dispatchEvent(
-        new CustomEvent("ducky:settings-section", { detail: { tab, section } }),
-      );
-    }
-    return;
-  }
-  window.dispatchEvent(new CustomEvent("ducky:navigate", { detail: { route: r, item_id: "" } }));
 }
 
 type AgentFinish = { ok: true; completed: boolean; skipped: boolean; tour_id: string };
@@ -109,23 +67,34 @@ export function parseAgentWalkthroughSteps(raw: unknown): WalkthroughStep[] {
   for (const row of raw) {
     if (!row || typeof row !== "object") continue;
     const s = row as AgentWalkthroughStepInput & { spotlight?: string };
-    const target = String(s.target || s.spotlight || "").trim();
-    if (!target) continue;
+    const raw = s.target ?? s.spotlight;
+    if (!isTargetSpec(raw)) continue;
+    const spec = typeof raw === "string" ? undefined : raw;
+    const target = typeof raw === "string" ? raw.trim() : targetKey(raw);
     const body = String(s.body || s.label || "").trim();
     const title = String(s.title || "").trim() || body.slice(0, 48) || target;
     const advance: WalkthroughAdvance = s.advance === "require_click" ? "require_click" : "next";
     const mode: WalkthroughSpotlightMode = s.mode === "circle" ? "circle" : "rect";
     const navigate = String(s.navigate || "").trim();
+    const itemId = String(s.item_id || "").trim();
+    const action = s.action && typeof s.action === "object" && s.action.id ? { id: String(s.action.id), args: s.action.args || {} } : null;
     out.push({
       target,
+      ...(spec ? { spec } : {}),
       title,
       body: body || title,
       advance,
       mode,
-      onEnter: navigate
+      onEnter: navigate || action
         ? async () => {
-            openRoute(navigate);
-            await wait(300);
+            if (navigate) {
+              openPanelRoute(navigate, itemId);
+              await wait(300);
+            }
+            if (action) {
+              await runUiAction(action.id, action.args);
+              await wait(250);
+            }
           }
         : undefined,
     });

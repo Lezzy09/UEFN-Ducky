@@ -26,6 +26,13 @@ export const Icons = {
       <path d="M18 6L6 18M6 6l12 12" />
     </svg>
   ),
+  Help: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <circle cx="12" cy="12" r="9.5" />
+      <path d="M9.4 9.2a2.7 2.7 0 015.2 1c0 1.8-2.6 2.4-2.6 4" />
+      <path d="M12 17.4h.01" />
+    </svg>
+  ),
   Folder: () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />

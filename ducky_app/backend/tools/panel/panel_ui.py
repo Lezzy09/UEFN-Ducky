@@ -1,4 +1,8 @@
-"""Guided-UI tools: navigate the panel, run coachmark walkthroughs, ask the user.
+"""Guided-UI tools: navigate the panel, show one thing, run coachmark walkthroughs, ask the user.
+
+Agents point at one part of the app with :func:`ducky_ui_show`: it takes the user there,
+highlights it and explains it in a popup that only its close button closes, and the chat
+keeps a Show me button that plays it again.
 
 Agents teach the user with :func:`ducky_walkthrough_run` (Next / Back / Skip +
 require_click) — the same product walkthrough overlay as first-run tours.
@@ -30,11 +34,14 @@ _ROUTES = (
     "settings.mcp_plugins",
     "settings.skills",
     "settings.appearance",
+    "settings.audio",
     "settings.duckies",
     "settings.plans",
     "settings.memory",
     "settings.languages",
     "settings.log_errors",
+    "settings.app_data",
+    "settings.tab",
     "chat",
     "changes",
     "workflows",
@@ -42,10 +49,18 @@ _ROUTES = (
     "terminals",
     "plans",
     "project_picker",
+    "files",
+    "chats",
 )
 
 # User-paced UI budget (Skip / Got it / answers end earlier).
 _MAX_WALKTHROUGH_WAIT_S = 300.0
+# Show me answers once it is on screen (the view may need to open first).
+_SHOW_WAIT_S = 30.0
+# wait=true: until the user presses the popup's close button.
+_SHOW_CLOSE_WAIT_S = 900.0
+_MAX_SHOW_TARGETS = 8
+_TARGET_KEYS = ("id", "role", "name", "text", "within", "nth")
 # Asks NEVER time out: the agent suspends until the user answers (or Stop /
 # panel close). A timed-out ask left the questionnaire on screen while the
 # agent "proceeded anyway" and the eventual answer resolved into nothing.
@@ -58,8 +73,36 @@ def _navigate(route: str, item_id: str = "") -> dict[str, Any]:
     return panel_rpc("navigate", {"route": route, "item_id": item_id})
 
 
-def _list_targets(route: str = "") -> dict[str, Any]:
-    return panel_rpc("list_targets", {"route": route})
+def _list_targets(route: str = "", query: str = "", visible_only: bool = False) -> dict[str, Any]:
+    return panel_rpc("list_targets", {"route": route, "query": query, "visible_only": visible_only})
+
+
+def _clean_target(raw: Any) -> str | dict[str, Any] | None:
+    """An id, or {role, name, within, text, nth} for things with no id."""
+    if isinstance(raw, str):
+        return raw.strip() or None
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, Any] = {}
+    for key in _TARGET_KEYS:
+        value = raw.get(key)
+        if key == "within":
+            inner = _clean_target(value)
+            if inner:
+                out[key] = inner
+        elif key == "nth":
+            if isinstance(value, int) and value >= 0:
+                out[key] = value
+        elif isinstance(value, str) and value.strip():
+            out[key] = value.strip()
+    return out if any(out.get(k) for k in ("id", "role", "name", "text")) else None
+
+
+def _clean_action(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict) or not str(raw.get("id") or "").strip():
+        return None
+    args = raw.get("args")
+    return {"id": str(raw["id"]).strip(), "args": args if isinstance(args, dict) else {}}
 
 
 def _normalize_walkthrough_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]] | dict[str, Any]:
@@ -67,9 +110,10 @@ def _normalize_walkthrough_steps(steps: list[dict[str, Any]]) -> list[dict[str, 
     for step in steps:
         if not isinstance(step, dict):
             return {"error": "each step must be an object"}
-        tid = str(step.get("target") or "").strip()
-        if not tid:
+        target = _clean_target(step.get("target"))
+        if not target:
             return {"error": "each step needs target"}
+        tid = target if isinstance(target, str) else str(target.get("id") or target.get("name") or target.get("text") or "")
         title = str(step.get("title") or "").strip()
         body = str(step.get("body") or step.get("label") or "").strip()
         advance = (
@@ -81,7 +125,7 @@ def _normalize_walkthrough_steps(steps: list[dict[str, Any]]) -> list[dict[str, 
         if mode not in ("circle", "rect"):
             mode = "rect"
         row: dict[str, Any] = {
-            "target": tid,
+            "target": target,
             "title": title or body[:48] or tid,
             "body": body or title or tid,
             "advance": advance,
@@ -90,6 +134,12 @@ def _normalize_walkthrough_steps(steps: list[dict[str, Any]]) -> list[dict[str, 
         nav = str(step.get("navigate") or "").strip()
         if nav:
             row["navigate"] = nav
+            item = str(step.get("item_id") or "").strip()
+            if item:
+                row["item_id"] = item
+        action = _clean_action(step.get("action"))
+        if action:
+            row["action"] = action
         cleaned.append(row)
     if not cleaned:
         return {"error": "steps must be a non-empty list"}
@@ -165,12 +215,15 @@ def _normalize_ask_user_questions(
 def ducky_ui_navigate(route: str, item_id: str = "", pretty: bool = False) -> str:
     """Open a panel route so the user doesn't have to hunt for it.
 
-    route: one of settings, settings.general, settings.llms, settings.mcp_plugins,
-    settings.skills, settings.appearance, settings.duckies, settings.plans,
-    settings.memory, settings.languages, settings.log_errors, chat, changes,
+    route: one of settings, settings.general, settings.store, settings.llms,
+    settings.mcp_plugins, settings.skills, settings.appearance, settings.audio,
+    settings.duckies, settings.plans, settings.memory, settings.languages,
+    settings.log_errors, settings.app_data, settings.tab, chat, chats, files, changes,
     workflows, skills_studio, terminals, plans, project_picker. `changes` opens the
     project-wide ledger. `workflows` opens the Workflows editor.
-    `item_id` targets a row (e.g. a chat/conv id).
+    `item_id`: settings.store → a Store slug opens that plugin's page; settings.tab →
+    any Settings tab by name (a plugin's own tab like "Meshy", or "Audio");
+    settings.llms → a provider id; chat → a chat id; files → a project file path.
     Returns {ok, route}. Needs an open panel; UEFN may be offline.
     Example: ducky_ui_navigate("settings.mcp_plugins").
     """
@@ -181,15 +234,79 @@ def ducky_ui_navigate(route: str, item_id: str = "", pretty: bool = False) -> st
 
 
 @mcp.tool()
-def ducky_ui_list_targets(route: str = "", pretty: bool = False) -> str:
-    """List spotlightable panel controls with stable semantic ids.
+def ducky_ui_list_targets(route: str = "", query: str = "", visible_only: bool = False, pretty: bool = False) -> str:
+    """List spotlightable panel controls with stable semantic ids, and the view's UI actions.
 
-    Returns {targets:[{id,label,route,rect:{x,y,w,h},visible,enabled,kind}]}.
-    kind: tab | button | input | toggle | dropdown | chat | settings_field |
-    plugin_row | skill_row. Pass `route` to hint which view to enumerate.
-    Feed ids into ducky_walkthrough_run. Needs an open panel.
+    Returns {targets:[{id,label,route,rect:{x,y,w,h},visible,enabled,kind}],
+    actions:[{id,label,route}]}. kind: tab | button | input | toggle | dropdown | chat |
+    settings_field | plugin_row | skill_row. `route` narrows to a view ("workflows",
+    "settings"); `query` searches ids and labels ("test run"); visible_only=true keeps
+    what is on screen now. Feed ids into ducky_ui_show / ducky_walkthrough_run, and
+    actions into their `action`. Needs an open panel.
     """
-    return tool_json(_list_targets((route or "").strip()), pretty=pretty)
+    return tool_json(_list_targets((route or "").strip(), (query or "").strip(), bool(visible_only)), pretty=pretty)
+
+
+@mcp.tool()
+def ducky_ui_show(
+    target: str | dict[str, Any] | list[Any],
+    title: str,
+    body: str = "",
+    workflow_id: str = "",
+    navigate: str = "",
+    item_id: str = "",
+    action: dict[str, Any] | None = None,
+    wait: bool = False,
+    pretty: bool = False,
+) -> str:
+    """Show the user one part of the app: take them there, highlight it, explain it.
+
+    Opens the view it is in (navigate / workflow_id / action), brings it into sight,
+    dims everything else and puts a popup above it with `title` and `body` (short
+    markdown). Only the popup's close button closes it, so the user stays on that UI.
+    The chat keeps a **Show me** button that plays it again. Use it whenever you tell the
+    user where something is or what to click — don't only describe it.
+
+    target: an id from ducky_ui_list_targets ("workflows.toolbar.run",
+      "workflows.node.<node_id>", "settings.tab.store"), or {"role": "button", "name":
+      "Save", "within": "workflows.details"} / {"text": "…"} for things with no id, or a
+      list of them shown as one highlight (several nodes).
+    workflow_id: open this workflow first; "workflows.node.<id>" targets are selected.
+    navigate: a route first (same as ducky_ui_navigate); item_id: a chat id or file path.
+    action: a UI action first, {"id": "workflows.add_menu", "args": {...}} (see
+      ducky_ui_list_targets → actions).
+    wait: true returns only when the user closes the popup.
+    Returns {ok, shown, missing, target}; missing=true means it wasn't found on screen.
+    """
+    raw = target if isinstance(target, list) else [target]
+    targets = [t for t in (_clean_target(item) for item in raw[:_MAX_SHOW_TARGETS]) if t]
+    if not targets:
+        return tool_json({"error": "target must be an id, {role, name} / {text}, or a list of them"}, pretty=pretty)
+    title_s, body_s = (title or "").strip(), (body or "").strip()
+    if not title_s and not body_s:
+        return tool_json({"error": "say what it is: title (and body) are required"}, pretty=pretty)
+    route = (navigate or "").strip()
+    if route and route not in _ROUTES:
+        return tool_json({"error": f"unknown route: {navigate}", "routes": list(_ROUTES)}, pretty=pretty)
+    params: dict[str, Any] = {
+        "target": targets[0] if len(targets) == 1 else targets,
+        "title": title_s or body_s[:60],
+        "body": body_s,
+        "wait": bool(wait),
+    }
+    if (workflow_id or "").strip():
+        params["workflow_id"] = workflow_id.strip()
+    if route:
+        params["navigate"] = route
+        if (item_id or "").strip():
+            params["item_id"] = item_id.strip()
+    clean_action = _clean_action(action)
+    if clean_action:
+        params["action"] = clean_action
+    out = panel_rpc("show", params, timeout=_SHOW_CLOSE_WAIT_S if wait else _SHOW_WAIT_S)
+    if isinstance(out, dict) and not out.get("error"):
+        out = {**out, "ok": out.get("ok", True)}
+    return tool_json(out, pretty=pretty)
 
 
 @mcp.tool()

@@ -1,4 +1,7 @@
+import { useEffect, useState } from "react";
 import { getApi } from "../../hooks/usePanelApi";
+import { onApiReady } from "../../hooks/onApiReady";
+import { setFirstOpenToursAllowed } from "../../walkthrough/firstOpen";
 import { useProjectFilesSettings } from "../../contexts/ProjectFilesSettingsContext";
 import { useUiTarget } from "../../ui-targets/registry";
 import { requestShowChatComposer } from "../../navigation/openChatComposer";
@@ -45,6 +48,48 @@ function TourIcon() {
   );
 }
 
+/** Tours on first open, and Ducky's Show me playing by itself. Both on unless switched off. */
+function GuidanceSwitches() {
+  const [firstOpen, setFirstOpen] = useState(true);
+  const [showMe, setShowMe] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => onApiReady(() => {
+    void Promise.resolve(getApi()?.get_settings?.()).then((settings) => {
+      const s = (settings || {}) as { first_open_tours?: boolean; show_me_autoplay?: boolean };
+      setFirstOpen(s.first_open_tours !== false);
+      setShowMe(s.show_me_autoplay !== false);
+      setLoaded(true);
+    }).catch(() => setLoaded(true));
+  }), []);
+  return (
+    <div className="general-tab-toggle-card">
+      <SettingsToggleRow
+        id="toggle-first-open-tours"
+        label="Show a tour the first time I open something"
+        description="Workflows and other areas start their tour once, the first time they open."
+        checked={firstOpen}
+        disabled={!loaded}
+        onChange={(value) => {
+          setFirstOpen(value);
+          setFirstOpenToursAllowed(value);
+          void getApi()?.save_agent_settings({ first_open_tours: value });
+        }}
+      />
+      <SettingsToggleRow
+        id="toggle-show-me-autoplay"
+        label="Let Ducky show me things"
+        description="Ducky takes you to what it's talking about and highlights it. Off: it only leaves a Show me button in the chat."
+        checked={showMe}
+        disabled={!loaded}
+        onChange={(value) => {
+          setShowMe(value);
+          void getApi()?.save_agent_settings({ show_me_autoplay: value });
+        }}
+      />
+    </div>
+  );
+}
+
 export function AddToUefnTab() {
   const {
     showHiddenFiles,
@@ -85,8 +130,9 @@ export function AddToUefnTab() {
         <GeneralSectionHeader
           icon={<TourIcon />}
           title="Walkthrough"
-          description="Replay one tour at a time — Welcome, Chat, or a Settings tab."
+          description="Replay one tour at a time — Welcome, Chat, Workflows, or a Settings tab."
         />
+        <GuidanceSwitches />
         <div className="walkthrough-list">
           {listHostTours().map((tour) => (
             <div key={tour.id} className="walkthrough-list-row">

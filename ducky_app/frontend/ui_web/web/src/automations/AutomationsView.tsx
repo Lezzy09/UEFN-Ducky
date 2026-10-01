@@ -30,7 +30,14 @@ import { WorkflowOutline } from "./WorkflowOutline";
 import { LOCAL_OWNER, WorkflowList, ownerHelp, ownerName } from "./WorkflowList";
 import { PanelResizeHandle } from "./PanelResizeHandle";
 import { takePendingGraphFocusTarget, type GraphFocus } from "../hooks/graphActivity";
-import { registerTarget, targetRef, unregisterTarget } from "../ui-targets/registry";
+import { getTargetElement, registerTarget, targetRef, unregisterTarget } from "../ui-targets/registry";
+import { cssEscape, registerTargetResolver, registerUiAction } from "../ui-targets/resolve";
+import { requestOpenWorkflowsTab } from "../navigation/openWorkflowsTab";
+import { runAgentWalkthrough } from "../walkthrough/agentWalkthrough";
+import { redoTour } from "../walkthrough/WalkthroughService";
+import { buildWorkflowTour, setCurrentWorkflow, withOpenStep } from "./workflowTour";
+import { startFirstOpenTour } from "../walkthrough/firstOpen";
+import { WORKFLOWS_EDITOR_TOUR_ID, WORKFLOWS_FIRST_BUILD_TOUR_ID, WORKFLOWS_INTRO_TOUR_ID } from "./workflowsTours";
 import { Icons } from "../icons/Icons";
 import { copyText } from "../utils/copyText";
 import { formatRunLog, runLogHasContent } from "./runLog";
@@ -259,7 +266,7 @@ function previewText(value: unknown): string {
 
 function RunSteps({ steps }: { steps: AutomationRunStepDto[] }) {
   return <>{steps.map((s, i) => (
-    <li key={i} className={s.ok === false ? "is-err" : ""}>
+    <li key={i} className={s.ok === false ? "is-err" : ""} data-aw-log-node={s.id || undefined}>
       {s.label || s.type} {s.ok === false ? `— ${s.error}` : s.stop ? "ok · no Return reached, this path stopped" : "ok"}
       {s.substeps?.length ? <ol className="aw-log-substeps"><RunSteps steps={s.substeps} /></ol> : null}
     </li>
@@ -1619,7 +1626,8 @@ export function AutomationsView() {
       const id = String((event as CustomEvent<{ id?: string }>).detail?.id || "");
       if (!id.startsWith("workflows.")) return;
       event.preventDefault();  // never scrollIntoView inside the editor: it would shift the canvas
-      const node = id.startsWith("workflows.node.") ? id.slice("workflows.node.".length) : "";
+      const node = id.startsWith("workflows.node.") ? id.slice("workflows.node.".length)
+        : id.startsWith("workflows.pin.") ? id.slice("workflows.pin.".length).split(".")[0] : "";
       const group = id.startsWith("workflows.group.") ? id.slice("workflows.group.".length) : "";
       const ids = node ? [node] : group ? groupMembers(groups, group) : [];
       if (ids.length) fitView(ids);
@@ -1640,6 +1648,104 @@ export function AutomationsView() {
     for (const [id, el, label] of found) if (el instanceof HTMLElement) registerTarget(id, el, { route: "workflows", label, kind: "dropdown" });
     return () => { for (const [id] of found) unregisterTarget(id); };
   }, [draft?.id]);
+
+  // The open workflow, for Tour this workflow and the AI's tour_workflow.
+  useEffect(() => {
+    setCurrentWorkflow(draft ? { id: draft.id, name: draft.name, graph: draft.graph, byType } : null);
+  }, [draft, byType]);
+  useEffect(() => () => setCurrentWorkflow(null), []);
+
+  // The first time Workflows opens: its tour, once.
+  useEffect(() => { void startFirstOpenTour(WORKFLOWS_INTRO_TOUR_ID); }, []);
+
+  const startHelp = async (value: string) => {
+    if (value !== "this") { await redoTour(value); return; }
+    if (!draft) return;
+    const steps = buildWorkflowTour(draft.graph, byType);
+    if (steps.length) await runAgentWalkthrough(withOpenStep(steps, draft.id));
+  };
+
+  // Show me and tours: get the editor ready (open, select, menus) and find what only it can.
+  const tourApi = useRef({ loadOne, fitView, openAddMenu, createNew, groups, setSpawn, setSpawnFilter, setPickerOpen, setLogOpen, setSelectedNodeIds, setInspectorKey, setSelectedEdge, draftId: draft?.id || "", owners });
+  tourApi.current = { loadOne, fitView, openAddMenu, createNew, groups, setSpawn, setSpawnFilter, setPickerOpen, setLogOpen, setSelectedNodeIds, setInspectorKey, setSelectedEdge, draftId: draft?.id || "", owners };
+  useEffect(() => {
+    const api = () => tourApi.current;
+    const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
+    const waitOpen = async (id: string) => { for (let i = 0; i < 60 && api().draftId !== id; i++) await sleep(100); };
+    const open = async (id: string) => {
+      if (!id) return;
+      requestOpenWorkflowsTab();
+      if (api().draftId !== id) void api().loadOne(id);
+      await waitOpen(id);
+    };
+    const css = cssEscape;
+    const pinParts = (id: string) => {
+      const [node, dir, ...pin] = id.slice("workflows.pin.".length).split(".");
+      return { node, dir, pin: pin.join(".") };
+    };
+    const wireKey = (id: string) => id.slice("workflows.wire.".length);
+    const wireNodes = (key: string) => key.split(":")[0].split(">").map((end) => end.split(".")[0]);
+    const offs = [
+      registerUiAction("workflows.open", (args) => open(String(args.id || "")), { label: "Open a workflow: {id}", route: "workflows" }),
+      registerUiAction("workflows.select", async (args) => {
+        await open(String(args.id || ""));
+        const group = String(args.group_id || "");
+        const ids = group ? groupMembers(api().groups, group) : Array.isArray(args.node_ids) ? args.node_ids.map(String) : [];
+        if (!ids.length) return;
+        api().setSelectedEdge(null);
+        api().setSelectedNodeIds(ids);
+        api().setInspectorKey(group ? `group:${group}` : `node:${ids[0]}`);
+        api().fitView(ids, true);
+      }, { label: "Select nodes: {node_ids} or {group_id} (and {id} to open the workflow)", route: "workflows" }),
+      registerUiAction("workflows.add_menu", async (args) => {
+        const button = getTargetElement("workflows.add");
+        if (button) api().openAddMenu(button);
+        if (args.query) { await sleep(50); api().setSpawnFilter(String(args.query)); }
+      }, { label: "Open the add-node menu: {query}", route: "workflows" }),
+      registerUiAction("workflows.templates", async (args) => {
+        api().createNew((api().owners.owners || []).find((owner) => !owner.readOnly)?.id || LOCAL_OWNER.id);
+        if (args.shelf) { await sleep(80); window.dispatchEvent(new CustomEvent("ducky:templates-shelf", { detail: { shelf: String(args.shelf) } })); }
+      }, { label: "Open New workflow (templates): {shelf}", route: "workflows" }),
+      registerUiAction("workflows.close_overlays", () => { api().setSpawn(null); api().setPickerOpen(false); }, { label: "Close the add-node menu and the template picker", route: "workflows" }),
+      registerUiAction("workflows.log", (args) => api().setLogOpen(args.open !== false), { label: "Open the run log", route: "workflows" }),
+      registerTargetResolver("workflows.pin.", {
+        find: (id) => {
+          const { node, dir, pin } = pinParts(id);
+          return document.querySelector<HTMLElement>(`[data-aw-node="${css(node)}"][data-aw-pin="${css(dir)}"][data-aw-pin-id="${css(pin)}"]`);
+        },
+        reveal: (id) => api().fitView([pinParts(id).node]),
+      }),
+      registerTargetResolver("workflows.wire.", {
+        find: (id) => {
+          const key = wireKey(id);
+          const g = document.querySelector(`[data-aw-wire="${css(key)}"]`)
+            ?? Array.from(document.querySelectorAll("[data-aw-wire]")).find((el) => (el.getAttribute("data-aw-wire") || "").split(":")[0] === key.split(":")[0]);
+          return (g?.querySelector(".aw-wire") as unknown as HTMLElement | null) ?? null;
+        },
+        reveal: (id) => api().fitView(wireNodes(wireKey(id))),
+      }),
+      registerTargetResolver("workflows.details.field.", {
+        find: (id) => document.querySelector<HTMLElement>(`.aw-inspector [data-aw-field="${css(id.slice("workflows.details.field.".length))}"]`),
+      }),
+      registerTargetResolver("workflows.log.step.", {
+        find: (id) => document.querySelector<HTMLElement>(`.aw-log-dock [data-aw-log-node="${css(id.slice("workflows.log.step.".length))}"]`),
+        reveal: async (id) => {
+          api().setLogOpen(true);
+          await sleep(200);
+          document.querySelector(`.aw-log-dock [data-aw-log-node="${css(id.slice("workflows.log.step.".length))}"]`)?.scrollIntoView({ block: "nearest" });
+        },
+      }),
+    ];
+    return () => offs.forEach((off) => off());
+  }, []);
+
+  // The add-node search box, for tours.
+  useEffect(() => {
+    const el = spawnSearchRef.current;
+    if (!spawn || !el) return;
+    registerTarget("workflows.add.search", el, { route: "workflows", label: "Search nodes", kind: "input" });
+    return () => unregisterTarget("workflows.add.search");
+  }, [spawn]);
 
   const logCount = log?.steps?.length || (runLogHasContent(log) ? 1 : 0);
   const clearLog = async () => {
@@ -1802,7 +1908,7 @@ export function AutomationsView() {
                   const hot = selectedEdge === i || selectedNodeIds.includes(e.source) || selectedNodeIds.includes(e.target);
                   const flowing = !!live && (live.active === e.target || live.active === e.source);
                   return (
-                    <g key={`${e.source}-${e.source_pin}-${e.target}-${e.target_pin}`} className={`aw-edge aw-edge--data aw-pin-type--${cleanType(out.type)}${hot ? " is-hot" : ""}${flowing ? " is-live" : ""}`}
+                    <g key={`${e.source}-${e.source_pin}-${e.target}-${e.target_pin}`} data-aw-wire={`${e.source}.${e.source_pin}>${e.target}.${e.target_pin}`} className={`aw-edge aw-edge--data aw-pin-type--${cleanType(out.type)}${hot ? " is-hot" : ""}${flowing ? " is-live" : ""}`}
                       onClick={(ev) => { ev.stopPropagation(); boardRef.current?.focus({ preventScroll: true }); setSelectedNodeIds([]); setSelectedEdge(i); setInspectorKey(`edge:${i}`); }}>
                       <path className="aw-edge-glow" d={d} />
                       <path className="aw-edge-hit" d={d} />
@@ -1817,7 +1923,7 @@ export function AutomationsView() {
                 const wire = `${e.source}>${e.target}`;
                 const running = !!live && !!live.active && `${live.from}>${live.active}` === wire;
                 return (
-                  <g key={`${e.source}-${e.target}-${e.kind}-${i}`} className={`aw-edge aw-edge--${e.kind} aw-edge--from-${nodeRole(a, byType.get(a.type))}${a.color ? ` aw-tint--${a.color}` : ""}${hot ? " is-hot" : ""}${running ? " is-live" : live?.passed.includes(wire) ? " is-passed" : ""}`}
+                  <g key={`${e.source}-${e.target}-${e.kind}-${i}`} data-aw-wire={`${e.source}>${e.target}:${e.kind || "main"}`} className={`aw-edge aw-edge--${e.kind} aw-edge--from-${nodeRole(a, byType.get(a.type))}${a.color ? ` aw-tint--${a.color}` : ""}${hot ? " is-hot" : ""}${running ? " is-live" : live?.passed.includes(wire) ? " is-passed" : ""}`}
                     onClick={(ev) => { ev.stopPropagation(); boardRef.current?.focus({ preventScroll: true }); setSelectedNodeIds([]); setSelectedEdge(i); setInspectorKey(`edge:${i}`); }}>
                     <path className="aw-edge-glow" d={d} />
                     <path className="aw-edge-hit" d={d} />
@@ -1948,6 +2054,16 @@ export function AutomationsView() {
             ]} />
           <WorkflowOutline graph={graph} byType={byType} faces={faces} selectedIds={selectedNodeIds} buttonRef={targetRef("workflows.outline", { route: "workflows", label: "Outline" })}
             onPick={(ids, key) => { setSelectedEdge(null); setSelectedNodeIds(ids); setInspectorKey(key); fitView(ids, true); }} />
+          <CanvasMenu label="Help" title="Tours: learn Workflows, build your first one, or walk through this workflow" className="aw-help"
+            buttonRef={targetRef("workflows.help", { route: "workflows", label: "Help and tours" })}
+            trigger={<Icons.Help />}
+            onPick={(value) => void startHelp(value)}
+            items={[
+              { value: WORKFLOWS_INTRO_TOUR_ID, label: "Tour of Workflows" },
+              { value: WORKFLOWS_FIRST_BUILD_TOUR_ID, label: "Build your first workflow" },
+              { value: WORKFLOWS_EDITOR_TOUR_ID, label: "Editor basics" },
+              ...(draft?.graph.nodes.length ? [{ value: "this", label: "Tour this workflow", separatorBefore: true }] : []),
+            ]} />
         </div>
         {draft ? <WorkflowInspector
           tabs={inspectorTabs}
@@ -2095,6 +2211,7 @@ export function AutomationsView() {
                     {tiles.map((t) => (
                       <button
                         key={t.type + (t.workflowId || "")}
+                        ref={targetRef(`workflows.palette.${t.type}${t.workflowId ? `.${t.workflowId}` : ""}`, { route: "workflows", label: t.label })}
                         type="button"
                         className="aw-tile"
                         onClick={() => addNodeAt(t, spawn.worldX, spawn.worldY)}
