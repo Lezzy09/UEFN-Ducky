@@ -4,7 +4,7 @@ description: "UEFN-Ducky control panel — setup, IDE hookup, Skills studio, cha
 license: Ducky Source-Available License v1.0
 metadata:
   label: UEFN Ducky
-  version: 33
+  version: 35
   managed_by: uefn-ducky
   author: UEFN-Ducky
   copyright: Copyright 2026 UEFN-Ducky
@@ -178,6 +178,15 @@ Follow the app `PLAN_PROTOCOL` (Diagnose → Fix → Verify; tick
 `ducky_instantiate_plan_template` (try `verify-loop`). Settings → Plans has
 Templates | Project Plans. Plan mode: outline only. Agent mode: follow and
 check off.
+
+## Workflows
+
+Building, changing, explaining, running or organizing a workflow: load
+`skill_read_subskill("ducky", "workflows")` first. It covers the editor, the
+graph shape, every workflow tool, locks (never change a locked node or group
+without the user's OK) and how to show the user on the canvas as you work
+(`save_workflow` frames what changed; `show_workflow` points at parts with a
+caption).
 
 ## AI-made plugins (extend the app yourself)
 

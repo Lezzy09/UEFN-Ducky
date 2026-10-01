@@ -24,37 +24,46 @@ export function workflowIdFromJobId(jobId: string): string {
   return "";
 }
 
-let pendingFocus: string | null = null;
+/** Where to look once the workflow is open: nodes to bring into view (and select), a caption. */
+export type GraphFocusTarget = { nodes?: string[]; select?: boolean; note?: string };
+export type GraphFocus = GraphFocusTarget & { id: string };
 
-export function requestFocusGraph(id: string): void {
+let pendingFocus: GraphFocus | null = null;
+
+export function requestFocusGraph(id: string, target: GraphFocusTarget = {}): void {
   const wid = id.trim();
   if (!wid) return;
-  pendingFocus = wid;
+  pendingFocus = { id: wid, ...target };
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("ducky:focus-graph", { detail: { id: wid } }));
+    window.dispatchEvent(new CustomEvent("ducky:focus-graph", { detail: pendingFocus }));
   }
 }
 
-/** Chat saved or deleted a workflow — open the editor and show the change. */
+/** Chat saved, showed or deleted a workflow — open the editor and show the change. */
 export function applyGraphFocusPush(event: PanelPushEvent): void {
   if (event.type !== "graph_focus") return;
   const id = String(event.id || "").trim();
   if (!id) return;
   requestOpenWorkflowsTab();
   if (event.action === "deleted") {
-    if (pendingFocus === id) pendingFocus = null;
+    if (pendingFocus?.id === id) pendingFocus = null;
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("ducky:graph-deleted", { detail: { id } }));
     }
     return;
   }
-  requestFocusGraph(id);
+  const nodes = Array.isArray(event.nodes) ? event.nodes.map(String).filter(Boolean) : [];
+  requestFocusGraph(id, { ...(nodes.length ? { nodes } : {}), ...(event.select ? { select: true } : {}), ...(event.note ? { note: String(event.note) } : {}) });
 }
 
 export function takePendingGraphFocus(): string {
-  const id = pendingFocus || "";
+  return takePendingGraphFocusTarget()?.id || "";
+}
+
+export function takePendingGraphFocusTarget(): GraphFocus | null {
+  const focus = pendingFocus;
   pendingFocus = null;
-  return id;
+  return focus;
 }
 
 export function applyBackgroundJobPush(event: PanelPushEvent | (Partial<BackgroundJob> & { id?: string })): void {

@@ -89,6 +89,46 @@ export function cleanGroups(graph: AutomationGraphDto): AutomationGraphDto {
   return { ...graph, groups };
 }
 
+/** Locked: the group, or any box around it, can't be moved or changed. */
+export function groupLocked(groups: AutomationGraphGroupDto[], id: string): boolean {
+  const seen = new Set<string>();
+  for (let at: string | undefined = id; at && !seen.has(at); at = groups.find((group) => group.id === at)?.parent_id) {
+    seen.add(at);
+    if (groups.find((group) => group.id === at)?.locked) return true;
+  }
+  return false;
+}
+
+/** Locked: the node itself, or any group it sits in. */
+export function nodeLocked(graph: AutomationGraphDto, id: string): boolean {
+  if (graph.nodes.find((node) => node.id === id)?.locked) return true;
+  const groups = graph.groups || [];
+  const home = groups.find((group) => group.node_ids.includes(id));
+  return !!home && groupLocked(groups, home.id);
+}
+
+/** Box colours a group can take (the backend keeps the same list). */
+export const GROUP_COLORS = ["", "red", "amber", "green", "blue", "purple"] as const;
+
+/** Ungroup one box: its nodes and nested boxes move to the box around it. */
+export function removeGroup(graph: AutomationGraphDto, id: string): AutomationGraphDto {
+  const groups = graph.groups || [];
+  const group = groups.find((item) => item.id === id);
+  if (!group) return graph;
+  const next = groups.filter((item) => item.id !== id).map((item) => {
+    if (item.parent_id === id) return withParent(item, group.parent_id);
+    return item.id === group.parent_id ? { ...item, node_ids: [...item.node_ids, ...group.node_ids] } : item;
+  });
+  return cleanGroups({ ...graph, groups: next });
+}
+
+/** Remove nodes with their connections; groups left empty go too. */
+export function deleteNodes(graph: AutomationGraphDto, ids: string[]): AutomationGraphDto {
+  const gone = new Set(ids);
+  if (!graph.nodes.some((node) => gone.has(node.id))) return graph;
+  return cleanGroups({ ...graph, nodes: graph.nodes.filter((node) => !gone.has(node.id)), edges: graph.edges.filter((edge) => !gone.has(edge.source) && !gone.has(edge.target)) });
+}
+
 /** Ctrl+Shift+G. Groups whose every node is selected open up one level (their
  *  nodes and boxes move to the box around them); other selected nodes step out
  *  of their box into the one around it. */

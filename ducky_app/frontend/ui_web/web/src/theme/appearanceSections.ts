@@ -3,6 +3,7 @@
 import { LAYOUT_TOKENS, STATUS_COLORS } from "./tokenEngine";
 import { VERSE_COLOR_TOKENS } from "./verseSyntaxTokens";
 import { CHAT_APPEARANCE_TOKEN_IDS } from "./chatAppearanceTokens";
+import { WORKFLOW_APPEARANCE_TOKEN_IDS } from "./workflowAppearanceTokens";
 
 export type AppearanceSectionKind =
   | "effects"
@@ -116,6 +117,13 @@ export const APPEARANCE_UI_SECTIONS: AppearanceUiSection[] = [
       hint: "Chat message text. Defaults to the app UI font.",
     },
     tokenIds: CHAT_APPEARANCE_TOKEN_IDS,
+  },
+  {
+    id: "workflows",
+    title: "Workflows",
+    subtitle: "Canvas, grid, node and wire colors, wire thickness and text sizes.",
+    kind: "tokens",
+    tokenIds: WORKFLOW_APPEARANCE_TOKEN_IDS,
   },
   {
     id: "settings",

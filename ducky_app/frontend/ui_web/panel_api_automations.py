@@ -124,6 +124,12 @@ class PanelApiAutomationsMixin:
         wf = set_run_here(workflow_id, bool(on))
         return {"ok": True, "workflow": wf} if wf else {"ok": False, "error": "workflow not found"}
 
+    def clear_workflow_runs(self, workflow_id: str) -> dict[str, Any]:
+        """Run log → Clear log: forget this PC's past runs of one workflow."""
+        from backend.automations.store import clear_runs
+
+        return {"ok": True} if clear_runs(workflow_id) else {"ok": False, "error": "workflow not found"}
+
     def delete_workflow(self, workflow_id: str) -> dict[str, Any]:
         from backend.automations.store import delete_workflow
 
@@ -154,6 +160,52 @@ class PanelApiAutomationsMixin:
             files=files,
             caller_conv_id=caller_conv_id,
         )
+
+    def check_workflow_expression(self, expression: str = "") -> dict[str, Any]:
+        """If / Expression nodes: '' when the condition parses, else what is wrong."""
+        from backend.automations.expr import check
+
+        error = check(str(expression or ""))
+        return {"ok": not error, "error": error}
+
+    def pick_workflow_files(self, accept: str = "any", multiple: bool = False) -> dict[str, Any]:
+        """Input nodes: the Windows file picker, filtered to what the node takes."""
+        from backend.automations.files import FILE_FILTERS, file_ref
+
+        win = getattr(self, "_window", None)
+        if win is None:
+            return {"ok": False, "error": "No window to open the picker from", "files": []}
+        try:
+            import webview
+
+            try:
+                open_type = webview.FileDialog.OPEN
+            except AttributeError:
+                open_type = getattr(webview, "OPEN_DIALOG", 10)
+            picked = win.create_file_dialog(open_type, allow_multiple=bool(multiple), file_types=FILE_FILTERS.get(str(accept or "any"), FILE_FILTERS["any"]))
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "files": []}
+        return {"ok": True, "files": [file_ref(path, str(accept or "any")) for path in (picked or [])]}
+
+    def workflow_editor_prefs(self) -> dict[str, Any]:
+        """Grid, snap, tool, panel sizes and zoom of the Workflows editor on this PC."""
+        from backend.automations.editor_prefs import load
+
+        return {"ok": True, "prefs": load()}
+
+    def set_workflow_editor_prefs(self, prefs: dict[str, Any] | None = None) -> dict[str, Any]:
+        from backend.automations.editor_prefs import save
+
+        try:
+            return {"ok": True, "prefs": save(dict(prefs or {}))}
+        except ValueError as exc:
+            return _refused(exc)
+
+    def stop_workflow(self, workflow_id: str) -> dict[str, Any]:
+        """Stop button: end every run of this workflow on this PC now."""
+        from backend.automations.runner import stop_workflow
+
+        return {"ok": True, "stopped": stop_workflow(workflow_id)}
 
     def emit_workflow_trigger(self, trigger_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         from backend.automations.runner import emit_trigger

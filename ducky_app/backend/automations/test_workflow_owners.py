@@ -102,6 +102,9 @@ def test_local_workflows_are_per_account_and_sealed(who: _Who) -> None:
     who.be("ana@x.org")
     assert [w["name"] for w in store.list_workflows()] == ["Ana's chat flow"]
     assert store.get_workflow(wf["id"])["runs"][0]["steps"] == [{"label": "secret step"}]
+    assert store.clear_runs(wf["id"]) is True  # Run log -> Clear log
+    assert store.get_workflow(wf["id"])["runs"] == [] and store.get_workflow(wf["id"])["name"] == "Ana's chat flow"
+    assert store.clear_runs("missing") is False
 
 
 def test_signed_out_workflows_can_be_brought_into_the_account(who: _Who) -> None:

@@ -481,7 +481,7 @@ class PanelApiWindowMixin:
 
         report_state(relative_path, state)
 
-    def close_this_window(self, reason: str = "", wid: str = "") -> None:
+    def close_this_window(self, reason: str = "", wid: str = "", return_tabs: bool = False) -> None:
         from frontend.ui_web import focus_windows
 
         # The JS API is shared by every window, so "active window" is whichever
@@ -489,7 +489,7 @@ class PanelApiWindowMixin:
         w = focus_windows.window_for_wid(str(wid or "")) or self._resolve_window()
         if w is None or w is self._window:
             return
-        focus_windows.close_window(w, reason=str(reason or ""))
+        focus_windows.close_window(w, reason=str(reason or ""), return_tabs=bool(return_tabs))
 
     def is_focus_window(self) -> bool:
         from frontend.ui_web import focus_windows

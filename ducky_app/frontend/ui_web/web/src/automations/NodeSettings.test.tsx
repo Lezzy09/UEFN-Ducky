@@ -45,21 +45,33 @@ describe("node settings", () => {
     expect(current.config.name).toBe("blender_add_object");
     expect(screen.queryByRole("dialog")).toBeNull();
     fireEvent.change(screen.getByRole("textbox", { name: "object name" }), { target: { value: "Island" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "size" }), { target: { value: "3.5" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "size" }), { target: { value: "3." } });
+    expect((screen.getByRole("textbox", { name: "size" }) as HTMLInputElement).value).toBe("3.");  // half-typed stays as typed
+    fireEvent.change(screen.getByRole("textbox", { name: "size" }), { target: { value: "3.5" } });
     fireEvent.click(screen.getByRole("button", { name: "visible" }));
     fireEvent.click(screen.getByRole("radio", { name: "No", exact: true }));
     expect(current.config.arguments).toEqual({ object_name: "Island", size: 3.5, visible: false });
     expect(current.config.arguments_json).toBeUndefined();
   });
-  it("keeps unknown arguments and templates when a known argument is edited", async () => {
+  it("gives every input its own field, keeping values from earlier steps and inputs the tool doesn't list", async () => {
     const args = { extra: { keep: true }, size: "${payload.size}", visible: "${payload.visible}" };
     render(<Editor config={{ name: "blender_add_object", arguments_json: JSON.stringify(args) }} />);
     fireEvent.change(await screen.findByRole("textbox", { name: "object name" }), { target: { value: "Rock" } });
     expect(current.config.arguments).toEqual({ ...args, object_name: "Rock" });
-    expect(screen.queryByRole("spinbutton", { name: "size" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "visible" })).toBeNull();
-    fireEvent.click(screen.getByText("Advanced inputs"));
-    expect((screen.getByRole("textbox", { name: "Arguments JSON" }) as HTMLTextAreaElement).value).toContain("${payload.size}");
+    expect(screen.queryByText("Advanced inputs")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Arguments JSON" })).toBeNull();
+    expect((screen.getByRole("textbox", { name: "size" }) as HTMLInputElement).value).toBe("${payload.size}");
+    expect((screen.getByRole("textbox", { name: "visible" }) as HTMLInputElement).value).toBe("${payload.visible}");
+    expect(JSON.parse((screen.getByRole("textbox", { name: "extra" }) as HTMLTextAreaElement).value)).toEqual({ keep: true });
+    fireEvent.change(screen.getByRole("textbox", { name: "extra" }), { target: { value: "{ \"keep\": " } });
+    expect(screen.getByText("Not valid JSON yet.")).toBeTruthy();
+    expect(current.config.arguments).toMatchObject({ extra: { keep: true } });  // unchanged until it is valid
+    fireEvent.change(screen.getByRole("textbox", { name: "extra" }), { target: { value: "{ \"keep\": false }" } });
+    expect(current.config.arguments).toMatchObject({ extra: { keep: false } });
+    fireEvent.change(screen.getByRole("textbox", { name: "size" }), { target: { value: "{{score}}" } });
+    expect(current.config.arguments).toMatchObject({ size: "{{score}}" });
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(current.config.arguments).not.toHaveProperty("extra");
   });
   it("preserves invalid JSON for repair before allowing individual input changes", async () => {
     render(<Editor config={{ name: "blender_add_object", arguments_json: "{broken" }} />);

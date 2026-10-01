@@ -596,6 +596,7 @@ class PanelApiStoreMixin:
             "compile_verse_project",
             "get_mcp_tools_catalog",
             "get_workflow_tools_catalog",
+            "run_workflow",  # a test run can take minutes; Stop must still get through
             "test_mcp_plugin",
             "voice_transcribe_audio",
             "voice_create_realtime_token",

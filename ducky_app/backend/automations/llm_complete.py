@@ -1,17 +1,49 @@
-"""One-shot gateway completion for pipeline/automation {id}.complete nodes."""
+"""One-shot gateway completion for pipeline/automation {id}.complete nodes and the
+workflow model nodes (Ask a model, Ask about an image, Extract data, Translate)."""
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
+import mimetypes
+from pathlib import Path
 from typing import Any
 
+from backend.agent.message_attachment import MessageAttachment
 from backend.agent.providers.base import ProviderMessage, StreamEventKind
 
+_MAX_IMAGE_BYTES = 4 * 1024 * 1024
+_MAX_IMAGE_SIDE = 2048
 
-def complete_prompt(provider: str, prompt: str, model: str = "") -> dict[str, Any]:
+
+def image_attachment(path: str) -> MessageAttachment:
+    """A picture for a vision model; big ones are scaled down to 2048 px first."""
+    source = Path(path)
+    if not source.is_file():
+        raise ValueError(f"Image {source.name} isn't on this PC any more.")
+    data = source.read_bytes()
+    mime = mimetypes.guess_type(source.name)[0] or "image/png"
+    if len(data) > _MAX_IMAGE_BYTES or mime not in ("image/png", "image/jpeg", "image/webp", "image/gif"):
+        from PIL import Image
+
+        with Image.open(source) as img:
+            img.load()
+            img.thumbnail((_MAX_IMAGE_SIDE, _MAX_IMAGE_SIDE))
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, "JPEG", quality=88)
+        data, mime = buf.getvalue(), "image/jpeg"
+    return MessageAttachment(kind="image", name=source.name, mime=mime, data_base64=base64.b64encode(data).decode("ascii"))
+
+
+def complete_prompt(provider: str, prompt: str, model: str = "", *, system: str = "", images: list[str] | None = None) -> dict[str, Any]:
     text = (prompt or "").strip()
     if not text:
         return {"ok": False, "error": "prompt required"}
+    try:
+        attachments = [image_attachment(path) for path in images or []]
+    except (ValueError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
     from backend.agent.providers import make_provider
 
     try:
@@ -27,8 +59,8 @@ def complete_prompt(provider: str, prompt: str, model: str = "") -> dict[str, An
     async def _run() -> dict[str, Any]:
         chunks: list[str] = []
         async for ev in prov.stream_turn(
-            system="",
-            messages=[ProviderMessage(role="user", content=text)],
+            system=system,
+            messages=[ProviderMessage(role="user", content=text, attachments=attachments)],
             tools=[],
         ):
             if ev.kind == StreamEventKind.TEXT_DELTA and ev.text:

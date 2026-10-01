@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AutomationsView } from "./AutomationsView";
 import { ConfirmModalProvider } from "../contexts/ConfirmModalContext";
 import type { AutomationDto, WorkflowOwnerDto, WorkflowOwnersDto } from "../types/panel";
 
-const api = vi.hoisted(() => ({ list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_workflows: vi.fn(), list_workflow_nodes: vi.fn(), get_workflow: vi.fn(), save_workflow: vi.fn(), run_workflow: vi.fn(), delete_workflow: vi.fn(), workflow_owners: vi.fn(), workflow_sync: vi.fn(), copy_workflow: vi.fn(), set_workflow_run_here: vi.fn(), import_local_workflows: vi.fn(), workflow_open_web: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn(), get_workflow_tools_catalog: vi.fn(), set_workflow_folder: vi.fn(), move_workflow_folder: vi.fn() }));
+const api = vi.hoisted(() => ({ list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_workflows: vi.fn(), list_workflow_nodes: vi.fn(), get_workflow: vi.fn(), save_workflow: vi.fn(), run_workflow: vi.fn(), delete_workflow: vi.fn(), workflow_owners: vi.fn(), workflow_sync: vi.fn(), copy_workflow: vi.fn(), set_workflow_run_here: vi.fn(), import_local_workflows: vi.fn(), workflow_open_web: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn(), get_workflow_tools_catalog: vi.fn(), set_workflow_folder: vi.fn(), move_workflow_folder: vi.fn(), clear_workflow_runs: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
 vi.mock("./AutomationTemplatePicker", () => ({
   AutomationTemplatePicker: ({ open, owners, ownerId, onOwnerChange, onSelect }: {
@@ -39,6 +39,9 @@ beforeEach(() => {
   }
   vi.stubGlobal("PointerEvent", TestPointerEvent);
   HTMLElement.prototype.setPointerCapture = vi.fn();
+  window.localStorage.clear();  // where-you-were and panel widths are kept per PC
+  // Drags here check exact distances; snapping to the grid has its own test.
+  window.localStorage.setItem("ducky.workflows.view.v1", JSON.stringify({ snap: false }));
   document.elementsFromPoint = vi.fn(() => []);
   TEAM = { id: "teamT", kind: "team", label: "Alpha Studio", state: "ok", readOnly: false, reason: "", slug: "alpha", sync: { state: "ok", pending: 0, syncedAt: null, members: 3 } };
   owners = { ok: true, owners: [LOCAL, TEAM], signedIn: true, teamsEnabled: true, localImport: 0 };
@@ -93,8 +96,32 @@ async function open(name = "Example") {
   return view;
 }
 async function save() { fireEvent.click(screen.getByRole("button", { name: "Save", exact: true })); await waitFor(() => expect(api.save_workflow).toHaveBeenCalled()); }
-function editNode(id = "a") { fireEvent.click(document.querySelector(`[data-aw-node="${id}"] .aw-node-expand-toggle`)!); }
+/** Click a card: it becomes the selection and its details slide in on the right. */
+function editNode(id = "a") {
+  fireEvent.pointerDown(document.querySelector(`[data-aw-node="${id}"] .aw-node-card`)!, { button: 0, pointerId: 9 });
+  fireEvent.pointerUp(document.querySelector(".aw-board")!, { button: 0, pointerId: 9 });
+}
+const details = () => screen.queryByRole("complementary", { name: "Details" });
+/** Details header: Edit, type into the text itself, then Save (or leave it editing). */
+function editText(fields: { name?: string; description?: string }, save = true) {
+  const panel = details()!;
+  fireEvent.click(within(panel).getByRole("button", { name: "Edit" }));
+  if (fields.name !== undefined) within(panel).getByRole("textbox", { name: /name$/ }).textContent = fields.name;
+  if (fields.description !== undefined) within(panel).getByRole("textbox", { name: "Description" }).textContent = fields.description;
+  if (save) fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
+}
 function dropdown(name: string) { fireEvent.click(screen.getByRole("button", { name, exact: true })); }
+/** The app's confirm dialog: press its main button ("Delete (Enter)" and so on). */
+async function confirmIt(label: string) {
+  const name = new RegExp(`^${label} \\(`);
+  fireEvent.click(await screen.findByRole("button", { name }));
+  await waitFor(() => expect(screen.queryByRole("button", { name })).toBeNull());
+  await act(async () => {});  // what was confirmed runs right after the dialog closes
+}
+function zoomBy(label: "Zoom in" | "Zoom out" | "10%" | "25%") {
+  if (!screen.queryByRole("menu", { name: "Zoom" })) dropdown("Zoom");  // it stays open between picks
+  fireEvent.click(within(screen.getByRole("menu", { name: "Zoom" })).getByLabelText(label));
+}
 function wire(from: string, to: string, cancel = false) {
   const source = screen.getByRole("button", { name: from });
   const target = screen.getByRole("button", { name: to });
@@ -245,41 +272,74 @@ describe("workflow editor interactions", () => {
     expect(saved.graph.edges).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "Connect to Chat input" })).toBeNull();
   });
-  it("resizes an expanded node in graph coordinates and saves its width", async () => {
-    const { container } = await open();
-    editNode();
-    const handle = screen.getByRole("button", { name: "Resize node" });
-    fireEvent.pointerDown(handle, { button: 0, clientX: 500 });
-    fireEvent.pointerMove(container.querySelector(".aw-board")!, { clientX: 620 });
-    fireEvent.pointerUp(handle, { clientX: 620 });
-    await save();
-    expect(saved.graph.nodes[1].width).toBe(440);
-    expect(screen.queryByText("Wires")).toBeNull();
+  it("orders the top bar from Delete to Play, with a green or red light for on and off", async () => {
+    await open();
+    const bar = screen.getByRole("toolbar", { name: "Workflow actions" });
+    const labels = [...bar.querySelectorAll(".aw-toolbar-actions > button, .aw-toolbar-actions .choice-dropdown-trigger")].map((el) => el.getAttribute("aria-label"));
+    expect(labels).toEqual(["Delete", "Undo", "Redo", "History", "Move or copy", "Duplicate", "Save", "Enabled", "Test"]);
+    expect(bar.querySelector(".aw-light")?.classList.contains("is-on")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Enabled" }));
+    expect(bar.querySelector(".aw-light")?.classList.contains("is-on")).toBe(false);
   });
-  it("hides details at overview zoom, restores them, and collapses from the menu", async () => {
+  it("keeps the add-node menu to a search and the node groups, each with its count", async () => {
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: "Add nodes" }));
+    const menu = screen.getByRole("dialog", { name: "Add node" });
+    expect(within(menu).queryByRole("button", { name: "Arrange nodes" })).toBeNull();
+    expect(within(menu).queryByRole("button", { name: "Fit graph" })).toBeNull();
+    expect([...menu.querySelectorAll(".aw-acc summary")].map((el) => [el.querySelector(".aw-acc-name")?.textContent, el.querySelector(".aw-acc-count")?.textContent])).toEqual([["Starting", "2"], ["Logic", "1"]]);
+  });
+  it("keeps every card the same size with nothing to expand, resize or delete on it", async () => {
+    await open();
+    const card = document.querySelector('[data-aw-node="a"]')!;
+    expect(card.querySelectorAll("button")).toHaveLength(2);  // the two ports
+    expect(card.querySelector(".aw-node-title strong")?.textContent).toBe("Pause");
+    expect(card.querySelector(".aw-node-title .aw-node-icon")).toBeNull();
+    expect(card.querySelector(".aw-node-mark .aw-node-icon")).toBeTruthy();  // the icon is a big mark in the card's background
+    expect(card.querySelector(".aw-node-sub")?.textContent).toBe("Pause description");
+    expect(details()).toBeNull();
+  });
+  it("hides card descriptions at overview zoom and restores them", async () => {
     const { container } = await open();
-    editNode();
-    for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
-    expect(screen.queryByRole("button", { name: "Collapse node" })).toBeNull();
+    for (let i = 0; i < 3; i++) zoomBy("Zoom out");
+    expect(container.querySelector(".aw-board")?.classList.contains("is-overview")).toBe(false);  // 58%: still full cards
+    zoomBy("Zoom out");
+    expect(container.querySelector(".aw-board")?.classList.contains("is-overview")).toBe(true);
     expect(screen.queryByText("Pause description")).toBeNull();
-    for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-    expect(screen.getByRole("button", { name: "Collapse node" })).toBeTruthy();
+    for (let i = 0; i < 4; i++) zoomBy("Zoom in");
+    expect(screen.getByText("Pause description")).toBeTruthy();
     fireEvent.contextMenu(container.querySelector(".aw-board")!, { clientX: 200, clientY: 200 });
-    fireEvent.click(screen.getByRole("button", { name: "Collapse all nodes", exact: true }));
-    expect(screen.queryByRole("button", { name: "Collapse node" })).toBeNull();
     expect(screen.getByRole("dialog", { name: "Add node" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Collapse all nodes" })).toBeNull();
   });
-  it("selects a connection without deleting it and edits its branch route", async () => {
+  it("selects a connection without deleting it and edits its route in the details panel", async () => {
     const { container } = await open();
     fireEvent.click(container.querySelector(".aw-wire")!);
+    expect(details()?.textContent).toContain("Chat input → Pause");
     dropdown("Connection route");
     fireEvent.click(screen.getByRole("radio", { name: "False", exact: true }));
     await save();
     expect(saved.graph.edges).toEqual([{ source: "s", target: "a", kind: "false" }]);
     api.save_workflow.mockClear();
-    fireEvent.click(screen.getByText("Disconnect"));
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    await confirmIt("Remove");
     await save();
     expect(saved.graph.edges).toEqual([]);
+    expect(details()).toBeNull();
+  });
+  it("animates a pulse along every wire and moves the grid with the view", async () => {
+    const { container } = await open();
+    const wire = container.querySelector(".aw-edge .aw-wire")!;
+    const motion = container.querySelector(".aw-edge .aw-edge-arrow animateMotion")!;
+    expect(motion.getAttribute("path")).toBe(wire.getAttribute("d"));
+    expect(motion.getAttribute("repeatCount")).toBe("indefinite");
+    const board = container.querySelector(".aw-board") as HTMLElement;
+    expect(board.style.getPropertyValue("--aw-pan-x")).toBe("280px");
+    zoomBy("Zoom in");
+    expect(board.style.getPropertyValue("--aw-grid")).toBe("calc(var(--wf-grid-size) * 1.2)");
+    expect(container.querySelector(".aw-edge")?.classList.contains("aw-edge--from-starter")).toBe(true);  // colored by the node it leaves
+    expect(container.querySelector('[data-aw-node="a"] .aw-port--in')?.classList.contains("is-linked")).toBe(true);
+    expect(container.querySelector('[data-aw-node="a"] .aw-port--out')?.classList.contains("is-linked")).toBe(false);
   });
   it.each([0, 1, 2])("pans empty canvas with mouse button %s", async (button) => {
     const { container } = await open();
@@ -292,6 +352,126 @@ describe("workflow editor interactions", () => {
       fireEvent.contextMenu(board, { clientX: 180, clientY: 150 });
       expect(screen.queryByRole("dialog", { name: "Add node" })).toBeNull();
     }
+  });
+  it("keeps the selection and its details while the canvas is dragged, and clears them on a plain click", async () => {
+    const { container } = await open();
+    const board = container.querySelector(".aw-board")!;
+    const isSelected = () => document.querySelector('[data-aw-node="a"]')?.classList.contains("is-selected");
+    editNode();
+    fireEvent.pointerDown(board, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(board, { clientX: 180, clientY: 150 });
+    fireEvent.pointerUp(board, { button: 0, clientX: 180, clientY: 150 });
+    expect((container.querySelector(".aw-world") as HTMLElement).style.transform).toBe("translate(360px, 210px) scale(1)");
+    expect(isSelected()).toBe(true);
+    expect(details()).toBeTruthy();
+    fireEvent.pointerDown(board, { button: 0, clientX: 300, clientY: 300 });
+    fireEvent.pointerUp(board, { button: 0, clientX: 300, clientY: 300 });
+    expect(isSelected()).toBe(false);
+    expect(details()).toBeNull();
+    fireEvent.click(container.querySelector(".aw-wire")!);
+    fireEvent.pointerDown(board, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(board, { clientX: 140, clientY: 100 });
+    fireEvent.pointerUp(board, { button: 0, clientX: 140, clientY: 100 });
+    expect(details()?.textContent).toContain("Connection");
+  });
+  it("drops a wire on empty canvas to add a node that is already connected", async () => {
+    await open();
+    vi.mocked(document.elementsFromPoint).mockReturnValue([]);
+    const out = screen.getByRole("button", { name: "Connect from Continue" });
+    fireEvent.pointerDown(out, { button: 0, pointerId: 1 });
+    fireEvent.pointerUp(out, { pointerId: 1, clientX: 900, clientY: 300 });
+    const menu = screen.getByRole("dialog", { name: "Add node" });
+    expect(menu.textContent).toContain("Add a connected node");
+    expect([...menu.querySelectorAll(".aw-tile strong")].map((el) => el.textContent)).toEqual(["Wait"]);  // no starts after an output
+    fireEvent.click(menu.querySelector(".aw-tile")!);
+    await save();
+    const added = saved.graph.nodes.at(-1)!;
+    expect(added.type).toBe("flow.wait");
+    expect(saved.graph.edges.at(-1)).toEqual({ source: "b", target: added.id, kind: "main" });
+    expect([added.x, added.y]).toEqual([620, 140 - 52]);  // its input sits where the wire was dropped
+    fireEvent.pointerDown(out, { button: 0, pointerId: 2 });
+    fireEvent.pointerUp(out, { pointerId: 2, clientX: 1085, clientY: 212 });  // let go on the port itself
+    expect(screen.queryByRole("dialog", { name: "Add node" })).toBeNull();
+  });
+  it("tries the node list again when it could not load, instead of showing nothing", async () => {
+    const nodes = await api.list_workflow_nodes();
+    api.list_workflow_nodes.mockResolvedValueOnce(undefined);
+    await open();
+    await waitFor(() => expect(api.list_workflow_nodes).toHaveBeenCalledTimes(2));  // the first try came back empty
+    api.list_workflow_nodes.mockResolvedValue(nodes);
+    fireEvent.click(screen.getByRole("button", { name: "Add nodes" }));
+    const menu = screen.getByRole("dialog", { name: "Add node" });
+    await waitFor(() => expect(menu.textContent).toContain("Wait"));
+    expect(menu.textContent).not.toContain("No matching nodes");
+  });
+  it("comes back to the open workflow and where you were looking after the tab is hidden", async () => {
+    const { container, unmount } = await open();
+    const board = container.querySelector(".aw-board")!;
+    fireEvent.pointerDown(board, { button: 1, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(board, { clientX: 150, clientY: 130 });
+    fireEvent.pointerUp(board, { button: 1, clientX: 150, clientY: 130 });
+    fireEvent.click(screen.getByRole("button", { name: "Workflows", exact: true }));  // fold the list too
+    await waitFor(() => expect(JSON.parse(window.localStorage.getItem("ducky.workflows.view.v1") || "{}").cameras?.p).toEqual({ x: 330, y: 190, zoom: 1 }));
+    unmount();
+    renderView();
+    expect(await screen.findByDisplayValue("Example")).toBeTruthy();
+    await waitFor(() => expect((document.querySelector(".aw-world") as HTMLElement).style.transform).toBe("translate(330px, 190px) scale(1)"));
+    expect(document.querySelector(".aw-root")?.classList.contains("is-list-collapsed")).toBe(true);
+  });
+  it("colors a node from its panel, and its wires follow", async () => {
+    await open();
+    editNode("s");
+    expect(screen.queryByRole("radio", { name: "Purple" })).toBeNull();  // colors show only while editing
+    fireEvent.click(within(details()!).getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Purple" }));
+    await waitFor(() => expect(saved.graph.nodes[0].color).toBe("purple"));
+    expect(document.querySelector('[data-aw-node="s"]')?.classList.contains("aw-tint--purple")).toBe(true);
+    expect(document.querySelector(".aw-edge")?.classList.contains("aw-tint--purple")).toBe(true);
+    fireEvent.click(screen.getByRole("radio", { name: "By kind" }));
+    await waitFor(() => expect(saved.graph.nodes[0]).not.toHaveProperty("color"));
+  });
+  it("has a Select tool that boxes nodes and a Hand tool that moves around, both clicking nodes", async () => {
+    const { container } = await open();
+    const board = container.querySelector(".aw-board")!;
+    const world = () => (container.querySelector(".aw-world") as HTMLElement).style.transform;
+    const selected = () => [...document.querySelectorAll(".aw-node.is-selected")].map((el) => el.getAttribute("data-aw-node"));
+    expect(screen.getByRole("button", { name: "Hand tool" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Select tool" }));
+    fireEvent.pointerDown(board, { button: 0, pointerId: 3, clientX: 260, clientY: 140 });
+    fireEvent.pointerMove(board, { pointerId: 3, clientX: 810, clientY: 260 });
+    fireEvent.pointerUp(board, { pointerId: 3, clientX: 810, clientY: 260 });
+    expect(selected()).toEqual(["s", "a"]);
+    expect(world()).toBe("translate(280px, 160px) scale(1)");  // boxing never pans
+    editNode("b");  // cards still click and drag
+    expect(selected()).toEqual(["b"]);
+    fireEvent.keyDown(board, { key: "h" });
+    expect(screen.getByRole("button", { name: "Hand tool" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.pointerDown(board, { button: 0, pointerId: 4, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(board, { pointerId: 4, clientX: 140, clientY: 120 });
+    fireEvent.pointerUp(board, { pointerId: 4, clientX: 140, clientY: 120 });
+    expect(world()).toBe("translate(320px, 180px) scale(1)");
+    expect(selected()).toEqual(["b"]);
+    fireEvent.keyDown(board, { key: "v" });
+    fireEvent.keyDown(board, { key: " " });  // holding Space is Hand for a moment
+    expect(screen.getByRole("button", { name: "Hand tool" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.keyUp(window, { key: " " });
+    expect(screen.getByRole("button", { name: "Select tool" }).getAttribute("aria-pressed")).toBe("true");
+  });
+  it("opens the add-node menu out of where you held, and above + when + is pressed", async () => {
+    const { container } = await open();
+    const board = container.querySelector(".aw-board")!;
+    fireEvent.pointerDown(board, { button: 0, pointerId: 5, clientX: 300, clientY: 200 });
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    const held = await screen.findByRole("dialog", { name: "Add node" });
+    expect(held.style.getPropertyValue("--aw-spawn-origin")).toBe("0px 0px");
+    expect(held.style.top).toBe("200px");
+    fireEvent.pointerUp(board, { pointerId: 5, clientX: 300, clientY: 200 });
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Add nodes" }));
+    const above = screen.getByRole("dialog", { name: "Add node" });
+    expect(above.classList.contains("is-from-below")).toBe(true);
+    expect(above.style.bottom).not.toBe("");
+    expect(above.style.top).toBe("");
   });
   it("supports touch panning, pinch zoom and cancellation", async () => {
     const { container } = await open();
@@ -366,6 +546,9 @@ describe("Workflows folders by owner", () => {
     await screen.findByDisplayValue("Example");
     expect(screen.getByRole("toolbar", { name: "Workflow actions" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Delete", exact: true }));
+    await screen.findByText("Delete “Example”?");  // always asks first
+    expect(api.delete_workflow).not.toHaveBeenCalled();
+    await confirmIt("Delete");
     await waitFor(() => expect(api.delete_workflow).toHaveBeenCalledWith("p"));
     await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Workflow actions" })).toBeNull());
   });
@@ -374,19 +557,23 @@ describe("Workflows folders by owner", () => {
     const local = await screen.findByRole("region", { name: "Local" });
     const team = screen.getByRole("region", { name: "Team · Alpha Studio" });
     expect(local.textContent).toContain("Example");
-    expect(local.textContent).toContain("Chat");
+    expect(within(local).getByRole("img", { name: "Chat" }).textContent).toBe("");  // an icon, not the word
     expect(local.textContent).not.toContain("Only on this PC");
     expect(local.querySelector(".aw-folder-status")).toBeNull();
     expect(team.textContent).toContain("Daily check");
-    expect(team.textContent).toContain("Every 5m");
-    expect(team.textContent).toContain("Not synced yet");
+    expect(within(team).getByRole("img", { name: "Every 5m" })).toBeTruthy();
+    expect(team.textContent).not.toContain("Not synced yet");  // no sync line under the team…
+    expect(screen.getByRole("button", { name: "Team · Alpha Studio", exact: true }).getAttribute("title")).toContain("Not synced yet");  // …it is in the tooltip
+    expect(document.querySelector(".aw-folder-status")).toBeNull();
     expect(team.querySelector(".aw-trigger")?.getAttribute("title")).toContain("not on this PC");
     fireEvent.click(screen.getByText("Daily check"));
     await screen.findByDisplayValue("Daily check");
-    expect(document.querySelector(".aw-owner-chip")?.textContent).toBe("TEAM · Alpha Studio");
+    expect(document.querySelector(".aw-owner-chip")).toBeNull();  // only the name in the toolbar
+    expect(document.querySelector(".aw-name")?.getAttribute("title")).toContain("Team Alpha Studio");
     fireEvent.click(screen.getByText("Example"));
     await screen.findByDisplayValue("Example");
-    expect(document.querySelector(".aw-owner-chip")?.textContent).toBe("LOCAL");
+    expect(document.querySelector(".aw-name")?.getAttribute("title")).toContain("Local workflows");
+    expect(local.querySelector(".aw-list-state")?.getAttribute("aria-label")).toBe("On");  // a lit dot, not the word
     expect(document.querySelectorAll(".aw-list-row.is-active")).toHaveLength(1);
   });
   it("collapses the entire list without losing the graph or folder states", async () => {
@@ -395,10 +582,15 @@ describe("Workflows folders by owner", () => {
     const toggle = screen.getByRole("button", { name: "Workflows", exact: true });
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector(".aw-root")?.classList.contains("is-list-collapsed")).toBe(true);
+    expect(screen.queryByRole("button", { name: "New workflow in Local" })).toBeNull();
+    expect(screen.queryByRole("separator", { name: "Resize workflow list" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Local", exact: true })).toBeNull();
     expect(screen.getByDisplayValue("Example")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Connect from Pause" })).toBeTruthy();
     fireEvent.click(toggle);
+    expect(screen.queryByRole("button", { name: "New workflow", exact: true })).toBeNull();  // each section has its own +
+    expect(screen.getByRole("button", { name: "New workflow in Local" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Local", exact: true }).getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("button", { name: "Team · Alpha Studio", exact: true }).getAttribute("aria-expanded")).toBe("false");
   });
@@ -408,12 +600,12 @@ describe("Workflows folders by owner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create workflow" }));
     await waitFor(() => expect(api.save_workflow).toHaveBeenCalledWith(expect.objectContaining({ id: "", name: "Untitled" }), "teamT"));
     await screen.findByDisplayValue("Untitled");
-    expect(document.querySelector(".aw-owner-chip")?.textContent).toBe("TEAM · Alpha Studio");
-    fireEvent.click(screen.getByRole("button", { name: "New workflow", exact: true }));
+    expect(document.querySelector(".aw-name")?.getAttribute("title")).toContain("Team Alpha Studio");
+    fireEvent.click(screen.getByRole("button", { name: "New workflow in Local" }));
     fireEvent.click(screen.getByRole("button", { name: "Save in Local" }));
     fireEvent.click(screen.getByRole("button", { name: "Create workflow" }));
     await waitFor(() => expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "" }), "local"));
-    fireEvent.click(screen.getByRole("button", { name: "New workflow", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "New workflow in Local" }));
     fireEvent.click(screen.getByRole("button", { name: "Save in Team · Alpha Studio" }));
     fireEvent.click(screen.getByRole("button", { name: "Create workflow" }));
     await waitFor(() => expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "" }), "teamT"));
@@ -512,53 +704,160 @@ describe("Workflows folders by owner", () => {
   });
 });
 
-describe("inline node editing", () => {
-  it("saves names on Enter and descriptions on blur without redundant settings", async () => {
+describe("details panel", () => {
+  const canvas = () => document.querySelector('.aw-board')!;
+  const ctrlClick = (id: string) => {
+    fireEvent.pointerDown(document.querySelector(`.aw-node[data-aw-node="${id}"]`)!, { button: 0, ctrlKey: true, pointerId: 7 });
+    fireEvent.pointerUp(canvas(), { button: 0, ctrlKey: true, pointerId: 7 });
+  };
+
+  it("slides in with the clicked node's details and closes with the selection", async () => {
     await open();
-    const chat = document.querySelector('[data-aw-node="s"]')!;
-    expect(chat.querySelector('.aw-node-expand-toggle')).toBeNull();
-    fireEvent.doubleClick(chat.querySelector('.aw-node-body')!);
-    expect(chat.querySelector('.aw-node-props')).toBeNull();
-    fireEvent.click(chat.querySelector('[aria-label="Edit node name"]')!);
-    const name = screen.getByRole("textbox", { name: "Node name" });
-    expect(document.activeElement).toBe(name);
-    fireEvent.change(name, { target: { value: "Image input" } });
-    fireEvent.keyDown(name, { key: "Enter" });
-    await waitFor(() => expect(saved.graph.nodes[0].label).toBe("Image input"));
-    fireEvent.click(chat.querySelector('[aria-label="Edit node description"]')!);
-    const description = screen.getByRole("textbox", { name: "Node description" });
-    fireEvent.change(description, { target: { value: "Send your island concept" } });
-    fireEvent.blur(description);
-    await waitFor(() => expect(saved.graph.nodes[0].description).toBe("Send your island concept"));
+    editNode();
+    const panel = details()!;
+    expect(panel.querySelector(".aw-insp-name")?.textContent).toBe("Pause");
+    expect(panel.querySelector(".aw-insp-desc")?.textContent).toBe("Pause description");
+    expect(within(panel).queryByRole("textbox")).toBeNull();  // written out, not in boxes, until Edit
+    expect(within(panel).getByRole("button", { name: "Edit" })).toBeTruthy();
+    expect(screen.getByRole("spinbutton", { name: "Seconds" })).toBeTruthy();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Close details" }));
+    expect(details()).toBeNull();
+    editNode();
+    fireEvent.keyDown(canvas(), { key: "Escape" });
+    expect(details()).toBeNull();
+  });
+  it("shows a tab for each selected item and opens the last one picked", async () => {
+    await open();
+    ctrlClick("s"); ctrlClick("a");
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((tab) => tab.lastElementChild?.textContent)).toEqual(["Chat input", "Pause"]);
+    expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("2 selected")).toBeTruthy();
+    fireEvent.click(tabs[0]);
+    expect(details()?.querySelector(".aw-insp-name")?.textContent).toBe("Chat input");
+    fireEvent.keyDown(screen.getByRole("tablist"), { key: "ArrowRight" });
+    expect(details()?.querySelector(".aw-insp-name")?.textContent).toBe("Pause");
+  });
+  it("never scrolls the page to show a tab while the panel slides in", async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      await open();
+      ctrlClick("s"); ctrlClick("a"); ctrlClick("b");
+      fireEvent.click(screen.getAllByRole("tab")[0]);
+      fireEvent.keyDown(screen.getByRole("tablist"), { key: "ArrowLeft" });
+      expect(screen.getAllByRole("tab")[2].getAttribute("aria-selected")).toBe("true");
+      expect(scroll).not.toHaveBeenCalled();
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+  it("keeps the run log button with the canvas controls, next to +", async () => {
+    await open();
+    const controls = document.querySelector(".aw-canvas-controls")!;
+    const buttons = [...controls.querySelectorAll("button")].map((button) => button.getAttribute("aria-label"));
+    expect(buttons).toEqual(["Select tool", "Hand tool", "Run log", "Add nodes", "Fit view", "Zoom", "Outline"]);  // the outline sits on the right
+    expect(screen.getByRole("button", { name: "Zoom" }).querySelector("svg")).toBeNull();  // just the percent
+    const toggle = screen.getByRole("button", { name: "Run log" });
+    expect(document.querySelector(".aw-log-dock")?.classList.contains("is-open")).toBe(false);
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector(".aw-log-dock")?.classList.contains("is-open")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Hide run log" }));
+    expect(document.querySelector(".aw-log-dock")?.getAttribute("aria-hidden")).toBe("true");
+  });
+  it("clears the run log on screen and on this PC", async () => {
+    api.run_workflow.mockResolvedValue({ ok: true, steps: [{ label: "Pause", ok: true }] });
+    api.clear_workflow_runs.mockResolvedValue({ ok: true });
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: "Test", exact: true }));
+    await screen.findByText("Pause ok");
+    expect(screen.getByRole("button", { name: "Run log" }).textContent).toBe("1");
+    fireEvent.click(screen.getByRole("button", { name: "Clear log" }));
+    await waitFor(() => expect(api.clear_workflow_runs).toHaveBeenCalledWith("p"));
+    expect(screen.queryByText("Pause ok")).toBeNull();
+    expect(screen.getByRole("button", { name: "Run log" }).textContent).toBe("");
+    expect((screen.getByRole("button", { name: "Clear log" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+  it("resizes the list and the details panel by dragging their edges, and remembers it", async () => {
+    window.localStorage.removeItem("ducky.workflows.panelWidths.v1");
+    await open();
+    const root = document.querySelector(".aw-root") as HTMLElement;
+    const listEdge = screen.getByRole("separator", { name: "Resize workflow list" });
+    fireEvent.pointerDown(listEdge, { button: 0, clientX: 230 });
+    expect(root.classList.contains("is-resizing")).toBe(true);
+    fireEvent.pointerMove(listEdge, { clientX: 330 });
+    fireEvent.pointerUp(listEdge, { clientX: 330 });
+    expect(root.classList.contains("is-resizing")).toBe(false);
+    expect(root.style.getPropertyValue("--aw-list-w")).toBe("320px");
+    fireEvent.pointerDown(listEdge, { button: 0, clientX: 330 });
+    fireEvent.pointerMove(listEdge, { clientX: 2000 });
+    fireEvent.pointerUp(listEdge, { clientX: 2000 });
+    expect(root.style.getPropertyValue("--aw-list-w")).toBe("480px");  // capped
+    editNode();
+    const panelEdge = screen.getByRole("separator", { name: "Resize details panel" });
+    fireEvent.keyDown(panelEdge, { key: "ArrowLeft" });  // the panel is on the right: left widens it
+    expect(root.style.getPropertyValue("--aw-insp-w")).toBe("356px");
+    expect(JSON.parse(window.localStorage.getItem("ducky.workflows.panelWidths.v1") || "{}")).toEqual({ list: 480, inspector: 356 });
+    cleanup();
+    await open();
+    expect((document.querySelector(".aw-root") as HTMLElement).style.getPropertyValue("--aw-list-w")).toBe("480px");
+  });
+  it("deletes from the panel or with the Delete key, and Ctrl+Z brings it back", async () => {
+    await open();
+    editNode("b");
+    fireEvent.click(screen.getByRole("button", { name: "Delete node" }));
+    await screen.findByText("Delete “Continue”?");
+    expect(document.querySelector('[data-aw-node="b"]')).toBeTruthy();  // not until you say so
+    await confirmIt("Delete");
+    await waitFor(() => expect(document.querySelector('[data-aw-node="b"]')).toBeNull());
+    expect(details()).toBeNull();
+    ctrlClick("s"); ctrlClick("a");
+    fireEvent.keyDown(canvas(), { key: "Delete" });
+    expect(document.querySelectorAll(".aw-node")).toHaveLength(0);
+    fireEvent.keyDown(canvas(), { key: "z", ctrlKey: true });
+    await waitFor(() => expect(saved.graph.nodes.map((node) => node.id)).toEqual(["s", "a"]));
+    expect(saved.graph.edges).toEqual([{ source: "s", target: "a", kind: "main" }]);
+  });
+  it("edits the name and description where they are written and saves them together", async () => {
+    await open();
+    editNode("s");
+    expect(screen.queryByText("Settings")).toBeNull();  // Chat input has nothing else to set
+    editText({ name: "Image input", description: "Send your island concept" });
+    await waitFor(() => expect(saved.graph.nodes[0]).toEqual(expect.objectContaining({ label: "Image input", description: "Send your island concept" })));
+    expect(api.save_workflow).toHaveBeenCalledTimes(1);  // one save for both
+    expect(document.querySelector('[data-aw-node="s"] .aw-node-title strong')?.textContent).toBe("Image input");
+    expect(details()?.querySelector(".aw-insp-desc")?.textContent).toBe("Send your island concept");
+    fireEvent.click(within(details()!).getByRole("button", { name: "Edit" }));
+    const name = within(details()!).getByRole("textbox", { name: "Node name" });
+    name.textContent = "Image in";
+    fireEvent.keyDown(name, { key: "Enter" });  // Enter in the name saves too
+    await waitFor(() => expect(saved.graph.nodes[0].label).toBe("Image in"));
     expect(screen.queryByLabelText("Label")).toBeNull();
   });
   it("cancels with Escape and rejects empty names while allowing empty descriptions", async () => {
     await open();
-    const node = document.querySelector('[data-aw-node="a"]')!;
-    fireEvent.click(node.querySelector('[aria-label="Edit node name"]')!);
-    fireEvent.change(screen.getByRole("textbox", { name: "Node name" }), { target: { value: "Changed" } });
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "Node name" }), { key: "Escape" });
+    editNode();
+    editText({ name: "Changed" }, false);
+    fireEvent.keyDown(within(details()!).getByRole("textbox", { name: "Node name" }), { key: "Escape" });
+    expect(details()?.querySelector(".aw-insp-name")?.textContent).toBe("Pause");
+    expect(details()).toBeTruthy();  // Escape in the text only undoes the editing
+    editText({ name: " " });
+    expect(screen.getByRole("alert").textContent).toContain("needs a name");
     expect(api.save_workflow).not.toHaveBeenCalled();
-    expect(screen.getByText("Pause")).toBeTruthy();
-    fireEvent.click(node.querySelector('[aria-label="Edit node name"]')!);
-    fireEvent.change(screen.getByRole("textbox", { name: "Node name" }), { target: { value: " " } });
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "Node name" }), { key: "Enter" });
-    expect(api.save_workflow).not.toHaveBeenCalled();
-    fireEvent.click(node.querySelector('[aria-label="Edit node description"]')!);
-    fireEvent.change(screen.getByRole("textbox", { name: "Node description" }), { target: { value: "" } });
-    fireEvent.blur(screen.getByRole("textbox", { name: "Node description" }));
+    fireEvent.click(within(details()!).getByRole("button", { name: "Cancel" }));
+    editText({ description: "" });
     await waitFor(() => expect(saved.graph.nodes[1].description).toBe(""));
   });
-  it("keeps newer settings edits when an inline save completes late", async () => {
+  it("keeps newer settings edits when a name save completes late", async () => {
     await open();
     let finish!: (result: { workflow: AutomationDto }) => void;
     api.save_workflow.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-    fireEvent.click(document.querySelector('[data-aw-node="a"] [aria-label="Edit node name"]')!);
-    fireEvent.change(screen.getByRole("textbox", { name: "Node name" }), { target: { value: "Wait for UEFN" } });
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "Node name" }), { key: "Enter" });
+    editNode();
+    editText({ name: "Wait for UEFN" });
     await waitFor(() => expect(api.save_workflow).toHaveBeenCalledTimes(1));
     const submitted = structuredClone(api.save_workflow.mock.calls[0][0]);
-    editNode();
     fireEvent.change(screen.getByRole("spinbutton", { name: "Seconds" }), { target: { value: "5" } });
     await act(async () => { finish({ workflow: submitted }); });
     expect((screen.getByRole("spinbutton", { name: "Seconds" }) as HTMLInputElement).value).toBe("5");
@@ -567,12 +866,11 @@ describe("inline node editing", () => {
     expect(saved.graph.nodes[1].config.seconds).toBe(5);
     expect(saved.graph.nodes[1].label).toBe("Wait for UEFN");
   });
-  it("shows failed inline saves and allows retrying without losing edits", async () => {
+  it("shows failed name saves and allows retrying without losing edits", async () => {
     await open();
     api.save_workflow.mockRejectedValueOnce(new Error("offline"));
-    fireEvent.click(document.querySelector('[data-aw-node="a"] [aria-label="Edit node name"]')!);
-    fireEvent.change(screen.getByRole("textbox", { name: "Node name" }), { target: { value: "Wait for UEFN" } });
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "Node name" }), { key: "Enter" });
+    editNode();
+    editText({ name: "Wait for UEFN" });
     await screen.findByRole("alert");
     fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
@@ -595,23 +893,23 @@ describe("workflow multi-selection and groups", () => {
     await waitFor(() => expect(saved.graph.groups?.[0].node_ids).toEqual(['s', 'a']));
   }
 
-  it("toggles Ctrl-click selection, including on editable node titles without editing", async () => {
+  it("toggles Ctrl-click selection, including on node titles, without editing anything", async () => {
     await open();
     ctrlClick('s'); ctrlClick('a');
     expect(selected()).toEqual(['s', 'a']);
     ctrlClick('s');
     expect(selected()).toEqual(['a']);
-    const title = node('b').querySelector('.aw-inline-text')!;
+    const title = node('b').querySelector('.aw-node-title')!;
     fireEvent.pointerDown(title, { button: 0, ctrlKey: true });
     fireEvent.click(title, { ctrlKey: true });
     expect(selected()).toEqual(['a', 'b']);
-    expect(screen.queryByRole('textbox', { name: 'Node name' })).toBeNull();
+    expect(screen.getAllByRole('tab').map((tab) => tab.lastElementChild?.textContent)).toEqual(['Pause', 'Continue']);
     expect(api.save_workflow).not.toHaveBeenCalled();
   });
 
   it("box-selects backwards at non-default zoom without panning or moving nodes", async () => {
     await open();
-    fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }));
+    zoomBy("Zoom out");
     const transform = (document.querySelector('.aw-world') as HTMLElement).style.transform;
     const zoom = 1 / 1.2;
     const start = { button: 0, ctrlKey: true, shiftKey: true, pointerId: 4, clientX: 280 + 520 * zoom, clientY: 160 + 100 * zoom };
@@ -650,12 +948,14 @@ describe("workflow multi-selection and groups", () => {
     expect(saved.graph.nodes.map(({ x, y }) => [x, y])).toEqual([[80, 40], [360, 40], [560, 0]]);
   });
 
-  it("persists a group, edits its outside name, and retains it on reload", async () => {
+  it("persists a group, renames it in the panel, and retains it on reload", async () => {
     await makeGroup();
-    expect(document.querySelector('.aw-group-title .aw-inline-text')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit group name' }));
-    const input = screen.getByRole('textbox', { name: 'Group name' });
-    fireEvent.change(input, { target: { value: 'Island setup' } });
+    expect(document.querySelector('.aw-group-title')?.textContent).toBe('Group');
+    // The new group opens in the panel, ahead of its nodes.
+    expect(screen.getAllByRole('tab').map((tab) => tab.lastElementChild?.textContent)).toEqual(['Group', 'Chat input', 'Pause']);
+    fireEvent.click(within(details()!).getByRole('button', { name: 'Edit' }));
+    const input = within(details()!).getByRole('textbox', { name: 'Group name' });
+    input.textContent = 'Island setup';
     fireEvent.keyDown(input, { key: 'g', ctrlKey: true, shiftKey: true });
     expect(saved.graph.groups).toHaveLength(1);
     fireEvent.keyDown(input, { key: 'Enter' });
@@ -667,13 +967,13 @@ describe("workflow multi-selection and groups", () => {
 
   it("removes only a selected member, shrinks the box, then removes an empty group", async () => {
     await makeGroup();
-    expect((document.querySelector('.aw-group') as HTMLElement).style.width).toBe('528px');
+    expect((document.querySelector('.aw-group') as HTMLElement).style.width).toBe('568px');
     fireEvent.pointerDown(node('a').querySelector('.aw-node-body')!, { button: 0, pointerId: 3 });
     fireEvent.pointerUp(canvas(), { button: 0, pointerId: 3 });
     expect(selected()).toEqual(['a']);
     shortcut(true);
     await waitFor(() => expect(saved.graph.groups?.[0].node_ids).toEqual(['s']));
-    expect((document.querySelector('.aw-group') as HTMLElement).style.width).toBe('248px');
+    expect((document.querySelector('.aw-group') as HTMLElement).style.width).toBe('288px');
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Select group Group' }), { button: 0, pointerId: 5 });
     fireEvent.pointerUp(canvas(), { pointerId: 5 });
     shortcut(true);
@@ -696,14 +996,39 @@ describe("workflow multi-selection and groups", () => {
     expect(saved.graph.nodes.map(({ x, y }) => [x, y])).toEqual([[40, 60], [320, 60], [560, 0]]);
   });
 
-  it("keeps names readable as zoom decreases and cleans membership when a node is deleted", async () => {
+  it("shrinks group names with the canvas but keeps them readable, and cleans membership when a node is deleted", async () => {
     await makeGroup();
-    fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }));
-    expect((document.querySelector('.aw-group-title') as HTMLElement).style.transform).toBe('scale(1.2)');
-    fireEvent.click(screen.getByRole('button', { name: 'Delete Pause' }));
+    zoomBy("Zoom out");
+    expect((document.querySelector('.aw-group-title') as HTMLElement).style.transform).toBe('scale(1)');  // smaller with the canvas
+    editNode('a');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete node' }));
+    await confirmIt("Delete");
     await save();
     expect(saved.graph.groups?.[0].node_ids).toEqual(['s']);
-    expect((document.querySelector('.aw-group') as HTMLElement).style.width).toBe('248px');
+    expect((document.querySelector('.aw-group') as HTMLElement).style.width).toBe('288px');
+    zoomBy("10%");
+    expect((document.querySelector('.aw-group-title') as HTMLElement).style.transform).toBe('scale(6.25)');  // still ~10px on screen
+  });
+
+  it("colours, opens and deletes a group from its tab", async () => {
+    await makeGroup();
+    fireEvent.click(within(details()!).getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Gold' }));
+    await waitFor(() => expect(saved.graph.groups?.[0].color).toBe('amber'));
+    expect(document.querySelector('.aw-group')?.classList.contains('aw-group-color--amber')).toBe(true);
+    fireEvent.click(screen.getByRole('radio', { name: 'Plain' }));
+    await waitFor(() => expect(saved.graph.groups?.[0]).not.toHaveProperty('color'));
+    fireEvent.click(screen.getByRole('button', { name: 'Ungroup' }));
+    await waitFor(() => expect(saved.graph.groups).toEqual([]));
+    expect(saved.graph.nodes).toHaveLength(3);
+    fireEvent.keyDown(canvas(), { key: 'Escape' });
+    ctrlClick('s'); ctrlClick('a'); shortcut();
+    await waitFor(() => expect(saved.graph.groups).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 2 nodes' }));
+    await confirmIt("Delete");
+    await save();
+    expect(saved.graph.nodes.map((item) => item.id)).toEqual(['b']);
+    expect(saved.graph.groups).toEqual([]);
   });
 
   it("reports group save failures and keeps the group for a retry", async () => {
@@ -779,7 +1104,351 @@ describe("workflow history controls", () => {
   });
 });
 
-describe("nested groups and the selection bar", () => {
+describe("locked nodes and groups", () => {
+  const canvas = () => document.querySelector('.aw-board')!;
+  const node = (id: string) => document.querySelector(`.aw-node[data-aw-node="${id}"]`)!;
+  const drag = (el: Element, pointerId: number) => {
+    fireEvent.pointerDown(el, { button: 0, pointerId, clientX: 600, clientY: 200 });
+    fireEvent.pointerMove(canvas(), { pointerId, clientX: 680, clientY: 260 });
+    fireEvent.pointerUp(canvas(), { pointerId, clientX: 680, clientY: 260 });
+  };
+
+  it("locks a node from its details: it shows a padlock, won't move or change, and says why", async () => {
+    await open();
+    editNode("a");
+    expect(document.querySelector(".aw-lockbar")).toBeNull();  // the lock is an icon in the details header
+    fireEvent.click(screen.getByRole("button", { name: "Lock node" }));
+    await waitFor(() => expect(saved.graph.nodes[1].locked).toBe(true));
+    expect(node("a").classList.contains("is-locked")).toBe(true);
+    expect(node("a").querySelector('[aria-label="Locked"]')).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Unlock node" }).getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector(".aw-insp-state")?.getAttribute("title")).toContain("can't be moved or changed");
+    expect(within(details()!).queryByRole("button", { name: "Edit" })).toBeNull();  // nothing to edit while locked
+    expect(screen.getByRole("button", { name: "Delete node" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Node icon" })).toBeNull();  // its icon can't change either
+    drag(node("a").querySelector(".aw-node-card")!, 3);
+    expect(document.querySelector(".aw-toast")?.textContent).toContain("Pause is locked");
+    fireEvent.keyDown(canvas(), { key: "Delete" });
+    expect(node("a")).toBeTruthy();
+    wire("Connect from Pause", "Connect to Continue");
+    await save();
+    expect(saved.graph.nodes[1]).toEqual(expect.objectContaining({ x: 280, y: 0, locked: true }));
+    expect(saved.graph.edges).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Unlock node" }));
+    await waitFor(() => expect(saved.graph.nodes[1]).not.toHaveProperty("locked"));
+    drag(node("a").querySelector(".aw-node-card")!, 4);
+    await save();
+    expect(saved.graph.nodes[1]).toEqual(expect.objectContaining({ x: 360, y: 60 }));
+  });
+  it("locks a whole group: its nodes can't move and their details say which group to unlock", async () => {
+    await open();
+    fireEvent.pointerDown(node("s"), { button: 0, ctrlKey: true, pointerId: 7 });
+    fireEvent.pointerUp(canvas(), { button: 0, ctrlKey: true, pointerId: 7 });
+    fireEvent.pointerDown(node("a"), { button: 0, ctrlKey: true, pointerId: 7 });
+    fireEvent.pointerUp(canvas(), { button: 0, ctrlKey: true, pointerId: 7 });
+    fireEvent.keyDown(canvas(), { key: "g", ctrlKey: true });
+    await waitFor(() => expect(saved.graph.groups).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Lock all" }));
+    await waitFor(() => expect(saved.graph.groups?.[0].locked).toBe(true));
+    expect(saved.graph.nodes.some((item) => item.locked)).toBe(false);  // the group's lock covers its nodes
+    expect(screen.getByRole("button", { name: "Unlock all" }).getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector(".aw-group")?.classList.contains("is-locked")).toBe(true);
+    drag(screen.getByRole("button", { name: "Select group Group" }), 5);
+    expect(document.querySelector(".aw-toast")?.textContent).toContain("Group is locked");
+    editNode("s");
+    expect(document.querySelector(".aw-insp-state")?.getAttribute("title")).toContain("Group, which is locked");
+    expect(screen.getByRole("button", { name: "Unlock node" }).hasAttribute("disabled")).toBe(true);  // unlock the group instead
+    await save();
+    expect(saved.graph.nodes.map(({ x, y }) => [x, y])).toEqual([[0, 0], [280, 0], [560, 0]]);
+  });
+});
+
+describe("icons, fitting and agent focus", () => {
+  const canvas = () => document.querySelector('.aw-board')!;
+  const world = () => (document.querySelector('.aw-world') as HTMLElement).style.transform;
+  /** jsdom lays nothing out: give the board a real size so fitting has room. */
+  const size = () => {
+    Object.defineProperty(canvas(), "clientWidth", { configurable: true, value: 1400 });
+    Object.defineProperty(canvas(), "clientHeight", { configurable: true, value: 900 });
+  };
+
+  it("picks a node's own icon from its details and goes back to the default", async () => {
+    await open();
+    editNode("a");
+    expect(screen.queryByRole("button", { name: "Node icon" })).toBeNull();  // only while editing
+    fireEvent.click(within(details()!).getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Node icon" }));
+    fireEvent.click(screen.getByRole("button", { name: "Icon 🎯" }));
+    await waitFor(() => expect(saved.graph.nodes[1].icon).toBe("🎯"));
+    expect(document.querySelector('[data-aw-node="a"] .aw-node-icon')?.textContent).toBe("🎯");
+    fireEvent.click(screen.getByRole("button", { name: "Node icon" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Any emoji" }), { target: { value: "🦖" } });
+    fireEvent.click(screen.getByRole("button", { name: "Use" }));
+    await waitFor(() => expect(saved.graph.nodes[1].icon).toBe("🦖"));
+    fireEvent.click(screen.getByRole("button", { name: "Node icon" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back to the default icon" }));
+    await waitFor(() => expect(saved.graph.nodes[1]).not.toHaveProperty("icon"));
+  });
+
+  it("gives a group its own icon on its title", async () => {
+    await open();
+    for (const id of ["s", "a"]) {
+      fireEvent.pointerDown(document.querySelector(`.aw-node[data-aw-node="${id}"]`)!, { button: 0, ctrlKey: true, pointerId: 7 });
+      fireEvent.pointerUp(canvas(), { button: 0, ctrlKey: true, pointerId: 7 });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Group selection" }));
+    await waitFor(() => expect(saved.graph.groups).toHaveLength(1));
+    fireEvent.click(screen.getByRole("tab", { name: "Group" }));
+    fireEvent.click(within(details()!).getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Group icon" }));
+    fireEvent.click(screen.getByRole("button", { name: "Icon 🏆" }));
+    await waitFor(() => expect(saved.graph.groups?.[0].icon).toBe("🏆"));
+    expect(document.querySelector(".aw-group-title")?.textContent).toContain("🏆");
+  });
+
+  it("fits what is selected with F: one node zooms in on it, nothing selected fits everything", async () => {
+    await open();
+    size();
+    editNode("b");
+    fireEvent.keyDown(canvas(), { key: "f" });
+    expect(world()).toContain("scale(1.5)");  // one node: zoomed in on it
+    expect(screen.getByRole("button", { name: "Fit view" }).getAttribute("title")).toBe("Zoom to the selected node (F)");
+    fireEvent.keyDown(canvas(), { key: "Escape" });
+    fireEvent.keyDown(canvas(), { key: "f" });
+    expect(world()).not.toContain("scale(1.5)");
+    expect(screen.getByRole("button", { name: "Fit view" }).getAttribute("title")).toBe("Fit the whole workflow (F)");
+  });
+
+  it("zooms out past 25%, and thins the cards when far out", async () => {
+    await open();
+    zoomBy("10%");
+    expect(world()).toContain("scale(0.1)");
+    for (let i = 0; i < 40; i++) fireEvent.wheel(canvas(), { deltaY: 100, clientX: 400, clientY: 300 });
+    expect(world()).toContain("scale(0.05)");
+    expect(canvas().classList.contains("is-overview")).toBe(true);
+  });
+
+  it("opens details without moving the canvas controls", async () => {
+    await open();
+    expect(document.querySelector(".aw-root")?.classList.contains("has-inspector")).toBe(false);
+    editNode("a");
+    expect(document.querySelector(".aw-root")?.classList.contains("has-inspector")).toBe(true);
+    const css = (await import("node:fs")).readFileSync(`${process.cwd()}/src/theme/styles/automations.css`, "utf8");
+    expect(css).not.toMatch(/\.has-inspector\s*\{[^}]*--aw-right-edge/);  // the panel slides over; nothing is pushed
+  });
+
+  it("brings what an agent changed into view, selects it when asked and shows its caption", async () => {
+    await open();
+    size();
+    window.dispatchEvent(new CustomEvent("ducky:focus-graph", { detail: { id: "p", nodes: ["b"], select: true, note: "This waits before it continues" } }));
+    await waitFor(() => expect(details()).toBeTruthy());
+    expect(document.querySelector('[data-aw-node="b"]')?.classList.contains("is-selected")).toBe(true);
+    expect(document.querySelector('[data-aw-node="b"]')?.classList.contains("is-flash")).toBe(true);
+    expect(document.querySelector(".aw-toast--note")?.textContent).toContain("This waits before it continues");
+    expect(world()).toContain("scale(1.5)");
+  });
+});
+
+describe("snap, background and panel zoom", () => {
+  const canvas = () => document.querySelector('.aw-board')!;
+
+  it("snaps a dragged node to the grid, and can be turned off", async () => {
+    window.localStorage.clear();
+    await open();
+    dropdown("Zoom");
+    const snap = within(screen.getByRole("menu", { name: "Zoom" })).getByRole("menuitemcheckbox", { name: "Snap to grid" });
+    expect(snap.getAttribute("aria-checked")).toBe("true");  // on by default
+    fireEvent.keyDown(window, { key: "Escape" });
+    const drag = (dx: number, dy: number, pointerId: number) => {
+      fireEvent.pointerDown(document.querySelector('[data-aw-node="a"] .aw-node-card')!, { button: 0, pointerId, clientX: 600, clientY: 200 });
+      fireEvent.pointerMove(canvas(), { pointerId, clientX: 600 + dx, clientY: 200 + dy });
+      fireEvent.pointerUp(canvas(), { pointerId, clientX: 600 + dx, clientY: 200 + dy });
+    };
+    drag(37, 21, 3);
+    await save();
+    expect(saved.graph.nodes[1]).toEqual(expect.objectContaining({ x: 320, y: 16 }));  // 317, 21 → the 16px grid
+    dropdown("Zoom");
+    fireEvent.click(within(screen.getByRole("menu", { name: "Zoom" })).getByRole("menuitemcheckbox", { name: "Snap to grid" }));
+    const off = within(screen.getByRole("menu", { name: "Zoom" })).getByRole("menuitemcheckbox", { name: "Snap to grid" });  // the menu stays open
+    expect(off.getAttribute("aria-checked")).toBe("false");
+    fireEvent.keyDown(window, { key: "Escape" });
+    drag(5, 3, 4);
+    await save();
+    expect(saved.graph.nodes[1]).toEqual(expect.objectContaining({ x: 325, y: 19 }));
+    expect(JSON.parse(window.localStorage.getItem("ducky.workflows.view.v1")!).snap).toBe(false);
+  });
+
+  it("switches the canvas background between squares, dots and nothing", async () => {
+    await open();
+    expect(canvas().classList.contains("is-grid-squares")).toBe(true);
+    dropdown("Zoom");
+    const menu = screen.getByRole("menu", { name: "Zoom" });
+    expect(within(menu).getByLabelText("Squares").getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(within(menu).getByLabelText("Dots"));
+    expect(canvas().classList.contains("is-grid-dots")).toBe(true);
+    expect(screen.getByRole("menu", { name: "Zoom" })).toBe(menu);  // stays open while you pick
+    fireEvent.click(within(menu).getByLabelText("Nothing"));
+    expect(canvas().classList.contains("is-grid-none")).toBe(true);
+  });
+
+  it("zooms one panel with Ctrl + scroll and leaves the others alone", async () => {
+    await open();
+    const root = document.querySelector<HTMLElement>(".aw-root")!;
+    const list = screen.getByRole("complementary", { name: "Workflows" });
+    fireEvent.wheel(list.querySelector(".aw-list-row")!, { deltaY: -200, ctrlKey: true });
+    expect(root.style.getPropertyValue("--aw-z-list")).toBe("1.2");
+    expect(root.style.getPropertyValue("--aw-z-toolbar")).toBe("1");
+    expect(document.querySelector(".aw-panel-zoom")?.textContent).toBe("120%");
+    fireEvent.wheel(screen.getByRole("toolbar", { name: "Workflow actions" }), { deltaY: 100, ctrlKey: true });
+    expect(root.style.getPropertyValue("--aw-z-toolbar")).toBe("0.9");
+    fireEvent.wheel(list.querySelector(".aw-list-row")!, { deltaY: 100 });  // no Ctrl: a normal scroll
+    expect(root.style.getPropertyValue("--aw-z-list")).toBe("1.2");
+    expect(JSON.parse(window.localStorage.getItem("ducky.workflows.panelZoom.v1")!)).toMatchObject({ list: 1.2, toolbar: 0.9 });
+  });
+});
+
+describe("dragging and the list's hover card", () => {
+  const canvas = () => document.querySelector('.aw-board')!;
+
+  it("moves a node you drag without selecting it; a plain click selects it", async () => {
+    await open();
+    const card = () => document.querySelector('[data-aw-node="b"] .aw-node-card')!;
+    fireEvent.pointerDown(card(), { button: 0, pointerId: 3, clientX: 600, clientY: 200 });
+    fireEvent.pointerMove(canvas(), { pointerId: 3, clientX: 680, clientY: 260 });
+    fireEvent.pointerUp(canvas(), { pointerId: 3, clientX: 680, clientY: 260 });
+    await save();
+    expect(saved.graph.nodes[2]).toEqual(expect.objectContaining({ x: 640, y: 60 }));
+    expect(document.querySelector('[data-aw-node="b"]')?.classList.contains("is-selected")).toBe(false);
+    expect(details()).toBeNull();  // no details opened by a drag
+    fireEvent.pointerDown(card(), { button: 0, pointerId: 4, clientX: 600, clientY: 200 });
+    fireEvent.pointerUp(canvas(), { pointerId: 4, clientX: 600, clientY: 200 });
+    expect(document.querySelector('[data-aw-node="b"]')?.classList.contains("is-selected")).toBe(true);
+    expect(details()).toBeTruthy();
+  });
+
+  it("shows a card with the workflow in miniature when a row is hovered, and opens it from there", async () => {
+    renderView();
+    const row = (await screen.findByText("Example")).closest(".aw-list-row")!;
+    fireEvent.mouseEnter(row.parentElement!);
+    const card = await screen.findByRole("tooltip");
+    await waitFor(() => expect(card.querySelectorAll(".aw-mini-card")).toHaveLength(3));  // one per node
+    expect(card.textContent).toContain("Example");
+    expect(card.querySelectorAll(".aw-mini-wire")).toHaveLength(1);
+    fireEvent.click(within(card).getByRole("button", { name: /Example/ }));
+    await screen.findByDisplayValue("Example");
+  });
+});
+
+describe("node search", () => {
+  it("finds nodes by every word typed, in their names and descriptions", async () => {
+    api.list_workflow_nodes.mockResolvedValue({ nodes: [
+      { type: "start.cron", label: "Schedule", role: "starter", group: "Starting", description: "Fires on a timer while the panel runs." },
+      { type: "flow.wait", label: "Wait", group: "Logic", description: "Pause before the next step." },
+    ] });
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: "Add nodes" }));
+    const menu = screen.getByRole("dialog", { name: "Add node" });
+    const names = () => [...menu.querySelectorAll(".aw-tile strong")].map((el) => el.textContent);
+    await waitFor(() => expect(names()).toHaveLength(2));
+    const all = names();
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter nodes" }), { target: { value: "next pause" } });
+    expect(names()).toEqual(["Wait"]);  // words from the description, in any order
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter nodes" }), { target: { value: "timer schedule" } });
+    expect(names()).toEqual(["Schedule"]);  // the name and the description together
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter nodes" }), { target: { value: "zzz nothing" } });
+    expect(names()).toEqual([]);
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter nodes" }), { target: { value: "" } });
+    expect(names()).toEqual(all);
+  });
+});
+
+describe("several workflows, live runs, outline and team sync", () => {
+  it("picks several workflows with Ctrl and Shift + click and deletes them after one question", async () => {
+    api.list_workflows.mockImplementation(async () => ({ workflows: [
+      { id: "p", name: "Example", enabled: true, owner: LOCAL, trigger: { kind: "chat", label: "Chat" } },
+      { id: "q", name: "Second", enabled: false, owner: LOCAL, trigger: { kind: "manual", label: "Manual" } },
+      { id: "r", name: "Third", enabled: true, owner: LOCAL, trigger: { kind: "manual", label: "Manual" } },
+    ] }));
+    renderView();
+    fireEvent.click(await screen.findByText("Example"));
+    await screen.findByDisplayValue("Example");
+    const row = (name: string) => screen.getByText(name).closest(".aw-list-row")!;
+    fireEvent.click(row("Third"), { ctrlKey: true });
+    expect([...document.querySelectorAll(".aw-list-row.is-picked")].map((el) => el.textContent)).toEqual(["Example", "Third"]);
+    fireEvent.click(row("Second"), { shiftKey: true });
+    expect(document.querySelectorAll(".aw-list-row.is-picked")).toHaveLength(2);  // Third back to Second
+    fireEvent.click(row("Example"), { ctrlKey: true });
+    fireEvent.contextMenu(row("Second"));
+    const menu = screen.getByRole("menu");
+    expect([...menu.querySelectorAll('[role^="menuitem"]')].map((el) => el.textContent?.trim())).toEqual(["Duplicate 3", "Turn on 1", "Turn off 2", "Delete 3 workflows"]);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Delete 3 workflows" }));
+    await screen.findByText("Delete 3 workflows?");
+    await confirmIt("Delete");
+    await waitFor(() => expect(api.delete_workflow.mock.calls.map(([id]) => id).sort()).toEqual(["p", "q", "r"]));
+  });
+
+  it("lights up the running step and its wire, logs it live, and stops the run at once", async () => {
+    let finish: (value: unknown) => void = () => {};
+    api.run_workflow.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    api.stop_workflow = vi.fn(async () => ({ ok: true, stopped: true }));
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    await waitFor(() => expect(api.run_workflow).toHaveBeenCalledWith("p"));
+    const push = (event: Record<string, unknown>) => act(() => { window.__uefnPanelPush?.({ id: "p", run: "r1", ...event } as never); });
+    push({ type: "workflow_run", state: "started" });
+    push({ type: "workflow_step", node: "s", state: "running", label: "Chat input" });
+    push({ type: "workflow_step", node: "s", state: "ok" });
+    push({ type: "workflow_step", node: "a", state: "running", from: "s", label: "Pause" });
+    expect(document.querySelector('[data-aw-node="a"]')?.classList.contains("is-run-running")).toBe(true);
+    expect(document.querySelector('[data-aw-node="s"]')?.classList.contains("is-run-ok")).toBe(true);
+    expect(document.querySelector(".aw-edge")?.classList.contains("is-live")).toBe(true);  // the wire it is coming along
+    expect(document.querySelector(".aw-log-dock")?.textContent).toContain("Pause · running…");
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await waitFor(() => expect(api.stop_workflow).toHaveBeenCalledWith("p"));
+    push({ type: "workflow_step", node: "a", state: "stopped" });
+    push({ type: "workflow_run", state: "stopped" });
+    await act(async () => { finish({ ok: false, error: "Stopped", steps: [{ ok: false, label: "Pause", error: "Stopped" }] }); });
+    await screen.findByRole("button", { name: "Test" });
+    expect(document.querySelector('[data-aw-node="a"]')?.classList.contains("is-run-stopped")).toBe(true);
+  });
+
+  it("lists every group and node in the outline and brings the picked one into view", async () => {
+    saved.graph.groups = [{ id: "g", name: "Setup", node_ids: ["s", "a"] }];
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: "Outline" }));
+    const outline = screen.getByRole("dialog", { name: "Outline" });
+    expect([...outline.querySelectorAll(".aw-outline-name")].map((el) => el.textContent)).toEqual(["Setup", "Chat input", "Pause", "Continue"]);
+    fireEvent.click(within(outline).getByText("Setup"));
+    expect(screen.queryByRole("dialog", { name: "Outline" })).toBeNull();
+    expect(document.querySelector('[data-aw-node="s"]')?.classList.contains("is-selected")).toBe(true);
+    expect(details()).toBeTruthy();
+  });
+
+  it("syncs a team once when opened and then only after a save, never on a timer", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      saved = { ...structuredClone(daily) };
+      api.get_workflow.mockImplementation(async () => ({ ok: true, workflow: structuredClone(saved) }));
+      api.save_workflow.mockImplementation(async (doc: AutomationDto) => ({ ok: true, workflow: { ...structuredClone(doc), owner: TEAM } }));
+      renderView();
+      fireEvent.click(await screen.findByText("Daily check"));
+      await screen.findByDisplayValue("Daily check");
+      await waitFor(() => expect(api.workflow_sync).toHaveBeenCalledTimes(1));
+      await act(async () => { vi.advanceTimersByTime(5 * 60_000); });
+      expect(api.workflow_sync).toHaveBeenCalledTimes(1);  // no polling
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(api.save_workflow).toHaveBeenCalledTimes(2));
+      await act(async () => { vi.advanceTimersByTime(5000); });
+      expect(api.workflow_sync).toHaveBeenCalledTimes(2);  // both saves go up in one round
+      expect(api.workflow_sync).toHaveBeenLastCalledWith(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("nested groups from the details panel", () => {
   const canvas = () => document.querySelector('.aw-board')!;
   const node = (id: string) => document.querySelector(`.aw-node[data-aw-node="${id}"]`)!;
   const ctrlClick = (id: string) => {
@@ -787,17 +1456,17 @@ describe("nested groups and the selection bar", () => {
     fireEvent.pointerUp(canvas(), { button: 0, ctrlKey: true, pointerId: 7 });
   };
 
-  it("groups a group with another node from the bar, draws it inside, then opens one level", async () => {
+  it("groups a group with another node from the panel, draws it inside, then opens one level", async () => {
     await open();
-    expect(screen.queryByRole("toolbar", { name: "Selection" })).toBeNull();
+    expect(details()).toBeNull();
     ctrlClick("s"); ctrlClick("a");
-    fireEvent.click(screen.getByRole("button", { name: "Group", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Group selection" }));
     await waitFor(() => expect(saved.graph.groups).toEqual([expect.objectContaining({ name: "Group", node_ids: ["s", "a"] })]));
     const inner = saved.graph.groups![0].id;
     fireEvent.pointerDown(screen.getByRole("button", { name: "Select group Group" }), { button: 0, pointerId: 5 });
     fireEvent.pointerUp(canvas(), { pointerId: 5 });
     ctrlClick("b");
-    fireEvent.click(screen.getByRole("button", { name: "Group", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Group selection" }));
     await waitFor(() => expect(saved.graph.groups).toHaveLength(2));
     const outer = saved.graph.groups!.find((group) => group.id !== inner)!;
     expect(outer).toEqual(expect.objectContaining({ name: "Group 2", node_ids: ["b"] }));
@@ -829,7 +1498,7 @@ describe("reusable workflows", () => {
 
   it("offers each reusable workflow as a node that runs it", async () => {
     await open();
-    expect(screen.getByText("Function").getAttribute("title")).toContain("Run workflow");
+    expect(screen.getByRole("img", { name: "Function" }).getAttribute("title")).toContain("Run workflow");
     fireEvent.click(screen.getByRole("button", { name: "Add nodes" }));
     const menu = screen.getByRole("dialog", { name: "Add node" });
     const tile = [...menu.querySelectorAll(".aw-tile")].find((el) => el.textContent?.includes("Greeter"))!;
@@ -849,10 +1518,19 @@ describe("reusable workflows", () => {
     const who = screen.getByRole("textbox", { name: "who" });
     expect(who.getAttribute("placeholder")).toBe("Default: world");
     fireEvent.change(who, { target: { value: "{{name}}" } });
-    expect(document.querySelector(".aw-node-props")?.textContent).toContain("Next steps can use greeting.");
+    expect(details()?.textContent).toContain("Next steps can also use greeting as fields.");
     await save();
-    expect(saved.graph.nodes[1].config).toEqual({ workflow_id: "fn", args: { who: "{{name}}" } });
-    fireEvent.click(screen.getByRole("button", { name: "Open the workflow Greeter runs" }));
+    expect(saved.graph.nodes[1].config).toEqual({ workflow_id: "fn", args: {}, inputs: { who: "{{name}}" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open Greeter" }));
+    await waitFor(() => expect(api.get_workflow).toHaveBeenLastCalledWith("fn"));
+  });
+
+  it("opens the workflow a Run workflow node runs on double-click, like an Unreal function", async () => {
+    saved.graph.nodes[1] = { id: "a", type: "workflow.call", label: "Greeter", x: 280, y: 0, config: { workflow_id: "fn", args: {} } };
+    renderView();
+    fireEvent.click(await screen.findByText("Example"));
+    await screen.findByRole("button", { name: "Connect from Greeter" });
+    fireEvent.doubleClick(document.querySelector('[data-aw-node="a"] .aw-node-card')!);
     await waitFor(() => expect(api.get_workflow).toHaveBeenLastCalledWith("fn"));
   });
 
@@ -935,6 +1613,7 @@ describe("folders in the Workflows list", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(api.move_workflow_folder).toHaveBeenCalledWith("local", "Tests", "Checks"));
     fireEvent.click(screen.getByRole("button", { name: "Remove folder Smoke" }));
+    await confirmIt("Remove");
     await waitFor(() => expect(api.move_workflow_folder).toHaveBeenLastCalledWith("local", "Tests/Smoke", "Tests"));
     const dataTransfer = transfer();
     fireEvent.dragStart(folderRow("Smoke"), { dataTransfer });
@@ -960,6 +1639,67 @@ describe("folders in the Workflows list", () => {
   });
 });
 
+describe("right-click menus in the Workflows list", () => {
+  const items = () => [...screen.getByRole("menu").querySelectorAll('[role^="menuitem"]')].map((el) => el.textContent?.trim());
+
+  it("renames, switches off, duplicates and deletes a workflow from its menu", async () => {
+    renderView();
+    fireEvent.contextMenu(await screen.findByText("Example"));
+    expect(items()).toEqual(["Open", "Rename", "Duplicate", "On", "Delete"]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    const input = screen.getByRole("textbox", { name: "Rename workflow" });
+    fireEvent.change(input, { target: { value: "Renamed example" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(api.save_workflow).toHaveBeenCalledWith(expect.objectContaining({ id: "p", name: "Renamed example" })));
+    expect(api.save_workflow.mock.calls.at(-1)![0]).not.toHaveProperty("folder");  // renaming never refiles it
+    fireEvent.contextMenu(screen.getByText("Example"));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "On" }));
+    await waitFor(() => expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "p", enabled: false })));
+    fireEvent.contextMenu(screen.getByText("Example"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+    await waitFor(() => expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "", name: "Renamed example copy", folder: "" }), "local"));
+    fireEvent.contextMenu(screen.getByText("Example"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    await screen.findByText("Delete “Example”?");
+    expect(api.delete_workflow).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /^Delete \(/ }));
+    await waitFor(() => expect(api.delete_workflow).toHaveBeenCalledWith("p"));
+  });
+
+  it("renames the open workflow through the editor so the toolbar follows", async () => {
+    await open();
+    fireEvent.contextMenu(screen.getAllByText("Example").find((el) => el.closest(".aw-list-row"))!);
+    expect(items()).toEqual(["Rename", "Duplicate", "On", "Delete"]);  // it is already open
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Rename workflow" }), { target: { value: "Island check" } });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Rename workflow" }), { key: "Enter" });
+    await waitFor(() => expect(saved.name).toBe("Island check"));
+    expect(screen.getByDisplayValue("Island check")).toBeTruthy();
+  });
+
+  it("offers folder and owner actions, and draws a line for each folder level", async () => {
+    window.localStorage.clear();
+    api.list_workflows.mockImplementation(async () => ({ workflows: [
+      { id: "p", name: "Example", enabled: true, owner: LOCAL, folder: "Tests/Smoke", trigger: { kind: "chat", label: "Chat" } },
+    ] }));
+    api.set_workflow_folder.mockImplementation(async (id: string, folder: string) => ({ ok: true, workflow: { ...structuredClone(saved), id, folder } }));
+    renderView();
+    await screen.findByText("Example");
+    const levels = [...document.querySelectorAll<HTMLElement>(".aw-tree-children")].map((ul) => ul.style.getPropertyValue("--aw-level"));
+    expect(levels).toEqual(["1", "2"]);  // one step per level under Local
+    fireEvent.contextMenu(screen.getByText("Example"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move out of folder" }));
+    await waitFor(() => expect(api.set_workflow_folder).toHaveBeenCalledWith("p", "Tests"));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Folder Smoke" }));
+    expect(items()).toEqual(["New workflow here", "New folder inside", "Rename", "Remove folder (keeps its workflows)"]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    expect((screen.getByRole("textbox", { name: "Folder name" }) as HTMLInputElement).value).toBe("Smoke");
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Folder name" }), { key: "Escape" });
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local", exact: true }));
+    expect(items()).toEqual(["New workflow", "New folder"]);
+  });
+});
+
 describe("group to reusable workflow", () => {
   const canvas = () => document.querySelector('.aw-board')!;
   const node = (id: string) => document.querySelector(`.aw-node[data-aw-node="${id}"]`)!;
@@ -970,7 +1710,7 @@ describe("group to reusable workflow", () => {
   async function groupAndSelect(ids: string[]) {
     await open();
     ids.forEach(ctrlClick);
-    fireEvent.click(screen.getByRole("button", { name: "Group", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Group selection" }));
     await waitFor(() => expect(saved.graph.groups).toHaveLength(1));
     fireEvent.pointerDown(screen.getByRole("button", { name: "Select group Group" }), { button: 0, pointerId: 5 });
     fireEvent.pointerUp(canvas(), { pointerId: 5 });

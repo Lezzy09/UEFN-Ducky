@@ -137,6 +137,10 @@ export function WalkthroughOverlay() {
     if (!active || !stepTarget) return;
     const el = getTargetElement(stepTarget);
     if (!el) return;
+    // A view can bring its own targets into sight (the Workflows canvas glides to a node);
+    // scrolling there would shift the canvas instead.
+    const reveal = new CustomEvent("ducky:ui-target-reveal", { detail: { id: stepTarget }, cancelable: true });
+    if (!window.dispatchEvent(reveal)) return;
     try {
       el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
     } catch {

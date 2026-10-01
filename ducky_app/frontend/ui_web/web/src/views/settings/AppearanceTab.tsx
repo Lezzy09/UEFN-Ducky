@@ -20,6 +20,8 @@ import type { TokenDef } from "../../theme/tokenEngine";
 import type { VerseTokenDef } from "../../theme/verseSyntaxTokens";
 import { VerseSyntaxPreview } from "./VerseSyntaxPreview";
 import { ChatResponsePreview } from "./ChatResponsePreview";
+import { WorkflowAppearancePreview } from "./WorkflowAppearancePreview";
+import { WORKFLOW_COLOR_GROUPS, WORKFLOW_COLOR_TOKENS, WORKFLOW_NUMBER_TOKENS } from "../../theme/workflowAppearanceTokens";
 import {
   CHAT_COLOR_GROUPS,
   CHAT_COLOR_TOKENS,
@@ -704,6 +706,10 @@ function AppearanceUiSectionBlock({ section }: { section: AppearanceUiSection })
           {section.fontToken ? <SectionFontPicker fontToken={section.fontToken} /> : null}
           <AppearanceChatTokens />
         </AppearanceAccordionSplit>
+      ) : section.id === "workflows" ? (
+        <AppearanceAccordionSplit preview={<WorkflowAppearancePreview />}>
+          <AppearanceWorkflowTokens />
+        </AppearanceAccordionSplit>
       ) : (
         <>
           {section.fontToken ? <SectionFontPicker fontToken={section.fontToken} /> : null}
@@ -781,6 +787,29 @@ function AppearanceChatTokens() {
       <h4 className="appearance-category-title">Typography & spacing</h4>
       <div className="appearance-adv-grid">
         {CHAT_NUMBER_TOKENS.map((token) => (
+          <ChatNumberTokenItem key={token.id} token={token} />
+        ))}
+      </div>
+    </>
+  );
+}
+
+function AppearanceWorkflowTokens() {
+  return (
+    <>
+      {WORKFLOW_COLOR_GROUPS.map((group) => (
+        <div key={group.id}>
+          <h4 className="appearance-category-title">{group.name}</h4>
+          <div className="appearance-adv-grid">
+            {WORKFLOW_COLOR_TOKENS.filter((t) => t.group === group.id).map((token) => (
+              <ColorTokenItem key={token.id} tokenId={token.id} displayName={token.name} />
+            ))}
+          </div>
+        </div>
+      ))}
+      <h4 className="appearance-category-title">Sizes</h4>
+      <div className="appearance-adv-grid">
+        {WORKFLOW_NUMBER_TOKENS.map((token) => (
           <ChatNumberTokenItem key={token.id} token={token} />
         ))}
       </div>

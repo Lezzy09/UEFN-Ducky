@@ -221,6 +221,10 @@ def append_run(aid: str, workflow_id: str, run: dict[str, Any], at: float) -> No
     runtime.runtime_put(aid, workflow_id, runs=_seal(kept, aid), last_run=at)
 
 
+def clear_runs(aid: str, workflow_id: str) -> None:
+    runtime.runtime_put(aid, workflow_id, runs="")
+
+
 def set_run_here(aid: str, workflow_id: str, on: bool) -> None:
     runtime.runtime_put(aid, workflow_id, run_here=bool(on))
 

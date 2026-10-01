@@ -2,6 +2,9 @@ import { useId } from "react";
 import { ChoiceDropdown, type ChoiceOption } from "../components/ChoiceDropdown";
 import { Icons } from "../icons/Icons";
 import type { AutomationGraphNodeDto, AutomationSummaryDto } from "../types/panel";
+import { PIN_TYPE_LABELS, PIN_TYPES } from "./pins";
+
+const TYPE_OPTIONS: ChoiceOption[] = PIN_TYPES.map((type) => ({ value: type, label: PIN_TYPE_LABELS[type] }));
 
 type Row = { name: string; [key: string]: unknown };
 
@@ -24,12 +27,15 @@ export function NamedValueList({ node, field, valueKey, valueLabel, valuePlaceho
   const set = (next: Row[]) => onChange({ ...node, config: { ...node.config, [field]: next } });
   const patch = (index: number, change: Partial<Row>) => set(rows.map((row, i) => (i === index ? { ...row, ...change } : row)));
   return <div className="aw-field aw-named-values">
-    {rows.length ? <div className="aw-named-head" aria-hidden="true"><span>Name</span><span>{valueLabel}</span></div> : null}
+    {rows.length ? <div className="aw-named-head" aria-hidden="true"><span>Name</span><span>{valueLabel}</span><span>Type</span></div> : null}
     {rows.map((row, index) => <div className="aw-named-row" key={index}>
       <input id={`${id}-${index}`} aria-label={`Name ${index + 1}`} value={row.name} placeholder="name" spellCheck={false}
         onChange={(event) => patch(index, { name: event.target.value.replace(/[^\w.-]/g, "_") })} />
       <input aria-label={`${valueLabel} ${index + 1}`} value={String(row[valueKey] ?? "")} placeholder={valuePlaceholder} spellCheck={false}
         onChange={(event) => patch(index, { [valueKey]: event.target.value })} />
+      {/* The pin's type on this node and on every Run workflow node that runs it. */}
+      <ChoiceDropdown aria-label={`Type ${index + 1}`} value={String(row.type || "any")} options={TYPE_OPTIONS} size="compact" minWidth={150}
+        onChange={(type) => patch(index, { type: type === "any" ? undefined : type })} />
       <button type="button" className="aw-icon-button" aria-label={`Remove ${row.name || `row ${index + 1}`}`} title="Remove" onClick={() => set(rows.filter((_, i) => i !== index))}><Icons.Close /></button>
     </div>)}
     <button type="button" className="aw-named-add" onClick={() => set([...rows, { name: "", [valueKey]: "" }])}><Icons.Plus /> {addLabel}</button>
@@ -47,7 +53,6 @@ export function CallSettings({ node, workflows, currentId, onChange, onOpen }: {
   const id = useId();
   const target = String(node.config.workflow_id || "");
   const picked = workflows.find((row) => row.id === target);
-  const args = (node.config.args && typeof node.config.args === "object" && !Array.isArray(node.config.args) ? node.config.args : {}) as Record<string, unknown>;
   const options: ChoiceOption[] = workflows.filter((row) => row.id !== currentId).map((row) => ({
     value: row.id,
     label: row.name || "Untitled",
@@ -61,14 +66,7 @@ export function CallSettings({ node, workflows, currentId, onChange, onOpen }: {
     const label = !node.label || node.label === "Run workflow" || node.label === previous ? row?.name || node.label : node.label;
     onChange({ ...node, label, config: { ...node.config, workflow_id: next } });
   };
-  const setArg = (name: string, value: string) => {
-    const next = { ...args, [name]: value };
-    if (value === "") delete next[name];
-    onChange({ ...node, config: { ...node.config, args: next } });
-  };
   const share = node.config.share === true;
-  const inputs = picked?.signature?.inputs || [];
-  const extra = Object.keys(args).filter((name) => !inputs.some((input) => input.name === name));
   return <>
     <div className="aw-field">
       <label className="aw-field-label" htmlFor={id}>Workflow</label>
@@ -77,27 +75,17 @@ export function CallSettings({ node, workflows, currentId, onChange, onOpen }: {
         {picked && onOpen ? <button type="button" className="aw-icon-button" title={`Open ${picked.name}`} aria-label={`Open ${picked.name}`} onClick={() => onOpen(picked.id)}><Icons.Workflow /></button> : null}
       </div>
     </div>
-    {picked && !picked.signature?.inputs.length && !extra.length ? <p className="aw-field-hint">It takes no inputs. Add an Inputs node to it to pass values in.</p> : null}
-    {[...inputs.map((input) => ({ name: input.name, placeholder: input.default ? `Default: ${input.default}` : "Value or {{field}}" })), ...extra.map((name) => ({ name, placeholder: "Not an input anymore" }))].map((input) => (
-      <ArgField key={input.name} name={input.name} placeholder={input.placeholder} value={String(args[input.name] ?? "")} onChange={(value) => setArg(input.name, value)} />
-    ))}
+    {picked && !picked.signature?.inputs.length ? <p className="aw-field-hint">It takes no inputs. Add an Inputs node to it to pass values in.</p> : null}
     <label className="aw-check">
       <input type="checkbox" checked={share} onChange={(event) => onChange({ ...node, config: { ...node.config, share: event.target.checked || undefined } })} />
       <span>Share this run's data <small className="aw-field-hint">It sees every field from earlier steps, and every field it sets comes back.</small></span>
     </label>
     {picked ? <p className="aw-field-hint">
-      {picked.signature?.outputs.length ? <>Next steps can use {picked.signature.outputs.map((name, i) => <span key={name}>{i ? ", " : ""}<code>{name}</code></span>)}.</> : "It returns nothing yet. Add a Return node to it to give values back."}
-      {" "}Type <code>{"{{field}}"}</code> to pass a value from an earlier step. If it has Return nodes and none is reached, this path stops here.
+      Its inputs and return values are this node's pins: wire values in on the left and out on the right, or type an input under Inputs.
+      {picked.signature?.outputs.length ? <> Next steps can also use {picked.signature.outputs.map((name, i) => <span key={name}>{i ? ", " : ""}<code>{name}</code></span>)} as fields.</> : " It returns nothing yet. Add a Return node to it to give values back."}
+      {" "}If it has Return nodes and none is reached, this path stops here.
     </p> : null}
   </>;
-}
-
-function ArgField({ name, placeholder, value, onChange }: { name: string; placeholder: string; value: string; onChange: (value: string) => void }) {
-  const id = useId();
-  return <div className="aw-field">
-    <label className="aw-field-label" htmlFor={id}>{name}</label>
-    <input id={id} aria-label={name} value={value} placeholder={placeholder} spellCheck={false} onChange={(event) => onChange(event.target.value)} />
-  </div>;
 }
 
 export function describeSignature(signature: NonNullable<AutomationSummaryDto["signature"]>): string {

@@ -25,7 +25,8 @@ def test_save_workflow_opens_editor_in_local(monkeypatch):
     try:
         assert doc["ok"] is True
         assert doc["workflow"]["owner"]["kind"] == "local"
-        assert {"type": "graph_focus", "id": wid, "action": "saved"} in events
+        # The editor opens on it and frames what was added.
+        assert {"type": "graph_focus", "id": wid, "action": "saved", "nodes": ["s"]} in events
     finally:
         delete_workflow(wid)
 
@@ -69,3 +70,99 @@ def test_custom_template_roundtrip(monkeypatch):
         assert json.loads(delete_workflow_template(tid))["ok"] is True
     finally:
         delete_workflow_template(tid)
+
+
+def _graph():
+    return {
+        "nodes": [
+            {"id": "s", "type": "start.manual", "x": 0, "y": 0, "config": {}},
+            {"id": "a", "type": "flow.wait", "x": 280, "y": 0, "config": {"seconds": 1}, "label": "Pause", "locked": True},
+            {"id": "b", "type": "flow.wait", "x": 560, "y": 0, "config": {}},
+            {"id": "c", "type": "flow.wait", "x": 840, "y": 0, "config": {}},
+        ],
+        "edges": [{"source": "s", "target": "a", "kind": "main"}],
+        "groups": [{"id": "g", "name": "Tail", "node_ids": ["c"], "locked": True}],
+    }
+
+
+def test_save_workflow_keeps_what_an_update_leaves_out(monkeypatch):
+    from backend.automations.store import delete_workflow
+    from backend.tools.panel.panel_automations import save_workflow
+
+    _events(monkeypatch)
+    wid = json.loads(save_workflow(name="Keep", description="Checks the lobby", enabled=False, graph=_graph()))["workflow"]["id"]
+    try:
+        out = json.loads(save_workflow(workflow_id=wid, name="Renamed"))
+        assert out["ok"] is True
+        wf = out["workflow"]
+        assert wf["name"] == "Renamed" and wf["description"] == "Checks the lobby" and wf["enabled"] is False
+        assert [n["id"] for n in wf["graph"]["nodes"]] == ["s", "a", "b", "c"]  # the graph was not wiped
+    finally:
+        delete_workflow(wid)
+
+
+def test_save_workflow_holds_agents_to_the_users_locks(monkeypatch):
+    from backend.automations.store import delete_workflow
+    from backend.tools.panel.panel_automations import save_workflow
+
+    events = _events(monkeypatch)
+    wid = json.loads(save_workflow(name="Locked", graph=_graph()))["workflow"]["id"]
+    try:
+        moved = _graph()
+        moved["nodes"][1]["x"] = 999
+        moved["nodes"][3]["config"] = {"seconds": 5}
+        out = json.loads(save_workflow(workflow_id=wid, graph=moved))
+        assert out["ok"] is False and out["locked"] == ["Pause", "flow.wait"]
+        unlocked_ok = _graph()
+        unlocked_ok["nodes"][2]["x"] = 600
+        events.clear()
+        assert json.loads(save_workflow(workflow_id=wid, graph=unlocked_ok))["ok"] is True
+        assert events[-1] == {"type": "graph_focus", "id": wid, "action": "saved", "nodes": ["b"]}  # only what changed
+        assert json.loads(save_workflow(workflow_id=wid, graph=moved, allow_locked_changes=True))["ok"] is True
+    finally:
+        delete_workflow(wid)
+
+
+def test_show_workflow_points_the_editor_at_nodes_and_groups(monkeypatch):
+    from backend.automations.store import delete_workflow
+    from backend.tools.panel.panel_automations import save_workflow, show_workflow
+
+    events = _events(monkeypatch)
+    wid = json.loads(save_workflow(name="Tour", graph=_graph()))["workflow"]["id"]
+    try:
+        events.clear()
+        out = json.loads(show_workflow(wid, node_ids=["a", "zz"], note="This waits a second"))
+        assert out == {"ok": True, "shown": ["a"], "missing": ["zz"]}
+        assert events == [{"type": "graph_focus", "id": wid, "action": "show", "nodes": ["a"], "select": True, "note": "This waits a second"}]
+        assert json.loads(show_workflow(wid, group_id="g", select=False))["shown"] == ["c"]
+        assert json.loads(show_workflow(wid, group_id="nope"))["ok"] is False
+        assert json.loads(show_workflow("missing-id"))["ok"] is False
+    finally:
+        delete_workflow(wid)
+
+
+def test_save_workflow_refuses_data_wires_that_do_not_fit(monkeypatch):
+    from backend.automations.store import delete_workflow
+    from backend.tools.panel.panel_automations import save_workflow
+
+    _events(monkeypatch)
+    graph = {
+        "nodes": [
+            {"id": "n", "type": "input.number", "x": 0, "y": 0, "config": {"value": 3}},
+            {"id": "img", "type": "input.image", "x": 300, "y": 0, "config": {}},
+            {"id": "p", "type": "util.preview", "x": 600, "y": 0, "config": {}},
+            {"id": "c", "type": "logic.compare", "x": 600, "y": 200, "config": {}},
+        ],
+        "edges": [
+            {"source": "img", "target": "c", "kind": "data", "source_pin": "image", "target_pin": "nope"},
+            {"source": "n", "target": "p", "kind": "data", "source_pin": "number", "target_pin": "value"},
+        ],
+    }
+    out = json.loads(save_workflow(name="Wires", graph=graph))
+    assert out["ok"] is False and out["wires"] == ["Compare has no input 'nope'"]
+    graph["edges"][0]["target_pin"] = "a"
+    out = json.loads(save_workflow(name="Wires", graph=graph))
+    try:
+        assert out["ok"] is True
+    finally:
+        delete_workflow(out["workflow"]["id"])

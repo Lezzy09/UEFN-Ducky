@@ -499,6 +499,31 @@ export const Icons = {
       <circle cx="19" cy="12" r="1.75" />
     </svg>
   ),
+  /** Select tool (canvas pointer). */
+  Cursor: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round">
+      <path d="M5 3l14 7-6 2-2 6z" />
+    </svg>
+  ),
+  /** Hand tool (move around the canvas). */
+  Hand: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 13V5.5a1.5 1.5 0 013 0V12M11 11.5v-8a1.5 1.5 0 013 0V12M14 12V5a1.5 1.5 0 013 0v7M17 11.5V8a1.5 1.5 0 013 0v6a7 7 0 01-7 7h-1a7 7 0 01-5.6-2.8L3.7 14a1.6 1.6 0 012.5-2L8 14" />
+    </svg>
+  ),
+  /** Canvas background (grid). */
+  Grid: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 9h18M3 15h18M9 3v18M15 3v18" />
+    </svg>
+  ),
+  Unlock: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 017.5-2" />
+    </svg>
+  ),
   Lock: () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <rect x="5" y="11" width="14" height="10" rx="2" />

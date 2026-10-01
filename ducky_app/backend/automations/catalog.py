@@ -1,8 +1,123 @@
-"""Builtin + enabled-plugin workflow node catalog (one palette for every workflow)."""
+"""Builtin + enabled-plugin workflow node catalog (one palette for every workflow).
+
+Nodes declare typed ``inputs`` / ``outputs`` pins (see ``pins.py``); ``exec: False``
+marks a data node (no white pins: it runs when a value it makes is needed).
+"""
 
 from __future__ import annotations
 
 from typing import Any
+
+from backend.automations.pins import clean_pins
+
+
+def _file_input(ntype: str, label: str, pin_type: str, description: str, accept: str, *, many: bool = False) -> dict[str, Any]:
+    pin = "images" if pin_type == "images" else pin_type
+    return {
+        "type": ntype,
+        "label": label,
+        "group": "Inputs",
+        "role": "input",
+        "exec": False,
+        "description": description,
+        "outputs": [{"id": pin, "label": label.removeprefix("Input ").strip() or pin, "type": pin_type}],
+        "config_fields": [{"id": "value", "label": "Files" if many else "File", "type": "files" if many else "file", "accept": accept}],
+    }
+
+
+# Data nodes: inputs you type or pick, logic, text and models (plan P1).
+DATA_NODES: list[dict[str, Any]] = [
+    {
+        "type": "input.text", "label": "Input Text", "group": "Inputs", "role": "input", "exec": False,
+        "description": "Text you type here, passed to whatever it is wired to.",
+        "outputs": [{"id": "text", "label": "Text", "type": "text"}],
+        "config_fields": [{"id": "value", "label": "Text", "type": "textarea"}],
+    },
+    {
+        "type": "input.number", "label": "Input Number", "group": "Inputs", "role": "input", "exec": False,
+        "description": "A number you set here.",
+        "outputs": [{"id": "number", "label": "Number", "type": "number"}],
+        "config_fields": [{"id": "value", "label": "Number", "type": "number"}],
+    },
+    {
+        "type": "input.boolean", "label": "Input Yes/No", "group": "Inputs", "role": "input", "exec": False,
+        "description": "Yes or no, set here.",
+        "outputs": [{"id": "value", "label": "Yes/No", "type": "boolean"}],
+        "config_fields": [{"id": "value", "label": "Value", "type": "boolean"}],
+    },
+    {
+        "type": "input.json", "label": "Input JSON", "group": "Inputs", "role": "input", "exec": False,
+        "description": "Structured data (a JSON object or list) written here.",
+        "outputs": [{"id": "value", "label": "Data", "type": "json"}],
+        "config_fields": [{"id": "value", "label": "JSON", "type": "textarea"}],
+    },
+    _file_input("input.image", "Input Image", "image", "An image file you pick on this PC.", "image"),
+    _file_input("input.images", "Input Images", "images", "Several image files, passed on as a list.", "image", many=True),
+    _file_input("input.audio", "Input Audio", "audio", "An audio file you pick on this PC.", "audio"),
+    _file_input("input.video", "Input Video", "video", "A video file you pick on this PC.", "video"),
+    _file_input("input.mesh", "Input 3D Model", "mesh", "A 3D model (FBX, GLB, OBJ, USD…) you pick on this PC.", "mesh"),
+    _file_input("input.pdf", "Input PDF", "pdf", "A PDF document you pick on this PC.", "pdf"),
+    _file_input("input.svg", "Input SVG", "svg", "An SVG vector file you pick on this PC.", "svg"),
+    _file_input("input.file", "Input File", "file", "Any file you pick on this PC.", "any"),
+    {
+        "type": "logic.if", "label": "If", "group": "Logic", "role": "logic",
+        "description": "Checks a condition you write, like score > 10 && name.includes(\"duck\"), on the values wired in. True and False lead different ways.",
+        "outputs": [{"id": "result", "label": "Result", "type": "boolean"}],
+        "config_fields": [
+            {"id": "expression", "label": "Condition", "type": "expression"},
+            {"id": "names", "label": "Inputs", "type": "names"},
+        ],
+    },
+    {
+        "type": "logic.expression", "label": "Expression", "group": "Logic", "role": "logic", "exec": False,
+        "description": "Works out a value from the values wired in: maths, text, picking from lists. JS-like, e.g. a * 2 or name.toUpperCase().",
+        "outputs": [{"id": "result", "label": "Result", "type": "any"}],
+        "config_fields": [
+            {"id": "expression", "label": "Expression", "type": "expression"},
+            {"id": "names", "label": "Inputs", "type": "names"},
+        ],
+    },
+    {
+        "type": "logic.compare", "label": "Compare", "group": "Logic", "role": "logic", "exec": False,
+        "description": "Yes or no from comparing two values, without writing code.",
+        "inputs": [{"id": "a", "label": "A", "type": "any"}, {"id": "b", "label": "B", "type": "any"}],
+        "outputs": [{"id": "result", "label": "Result", "type": "boolean"}],
+        "config_fields": [{"id": "op", "label": "Compare", "type": "select", "options": [
+            {"id": "equals", "label": "A equals B"}, {"id": "not_equals", "label": "A is not B"},
+            {"id": "greater", "label": "A is greater than B"}, {"id": "less", "label": "A is less than B"},
+            {"id": "contains", "label": "A contains B"}, {"id": "starts", "label": "A starts with B"},
+            {"id": "matches", "label": "A matches the pattern B"}, {"id": "empty", "label": "A is empty"},
+        ]}],
+    },
+    {
+        "type": "llm.ask", "label": "Ask a model", "group": "Text & AI", "role": "agent", "exec": False,
+        "description": "Sends the prompt (and any context) to the model you pick and passes its answer on.",
+        "inputs": [
+            {"id": "prompt", "label": "Prompt", "type": "text", "required": True},
+            {"id": "context", "label": "Context", "type": "text"},
+        ],
+        "outputs": [{"id": "text", "label": "Answer", "type": "text"}],
+        "config_fields": [
+            {"id": "model", "label": "Model", "type": "model"},
+            {"id": "system", "label": "Instructions", "type": "textarea"},
+        ],
+    },
+    {
+        "type": "text.template", "label": "Text template", "group": "Text & AI", "role": "logic", "exec": False,
+        "description": "Joins the values wired in into one text: Hello {{a}}, you scored {{b}}.",
+        "outputs": [{"id": "text", "label": "Text", "type": "text"}],
+        "config_fields": [
+            {"id": "template", "label": "Template", "type": "textarea"},
+            {"id": "names", "label": "Inputs", "type": "names"},
+        ],
+    },
+    {
+        "type": "util.preview", "label": "Preview", "group": "Utility", "role": "end", "exec": False,
+        "description": "Shows whatever is wired in on its card after a run: text, numbers, images, files.",
+        "inputs": [{"id": "value", "label": "Value", "type": "any"}],
+        "config_fields": [],
+    },
+]
 
 
 BUILTIN_NODES: list[dict[str, Any]] = [
@@ -151,6 +266,7 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "group": "Tools",
         "role": "action",
         "description": "Call a named host or plugin MCP tool.",
+        "outputs": [{"id": "result", "label": "Result", "type": "json"}, {"id": "text", "label": "Text", "type": "text"}],
         "config_fields": [
             {"id": "name", "label": "Tool name", "type": "string"},
             {"id": "arguments_json", "label": "Arguments JSON", "type": "textarea"},
@@ -280,8 +396,20 @@ def _contributions() -> tuple[dict[str, Any], set[str]]:
         return {}, set()
 
 
+def node_specs() -> dict[str, dict[str, Any]]:
+    """Every node type the runner knows (no plugin artwork read): type → catalog row."""
+    out = {n["type"]: n for n in BUILTIN_NODES + DATA_NODES}
+    contrib, enabled = _contributions()
+    for key, role, group in (("automations_triggers", "starter", "Triggers"), ("automations_nodes", "action", "")):
+        for row in contrib.get(key) or []:
+            parsed = _plugin_node(row, enabled, role=role, default_group=group)
+            if parsed:
+                out.setdefault(parsed["type"], parsed)
+    return out
+
+
 def list_nodes() -> list[dict[str, Any]]:
-    out = [dict(n) for n in BUILTIN_NODES]
+    out = [dict(n) for n in BUILTIN_NODES + DATA_NODES]
     contrib, enabled = _contributions()
     for row in contrib.get("automations_triggers") or []:
         parsed = _plugin_node(row, enabled, role="starter", default_group="Triggers")
@@ -343,6 +471,9 @@ def _plugin_node(
         "plugin_id": pid,
         "icon": str(row.get("icon") or ""),
         "config_fields": _fields(row.get("config_fields") or row.get("fields")),
+        **({"exec": False} if row.get("exec") is False else {}),
+        **({"inputs": clean_pins(row.get("inputs"))} if row.get("inputs") else {}),
+        **({"outputs": clean_pins(row.get("outputs"))} if row.get("outputs") else {}),
     }
 
 
@@ -363,6 +494,8 @@ def _fields(raw: Any) -> list[dict[str, Any]]:
         }
         if f.get("provider"):
             row["provider"] = str(f.get("provider") or "")
+        if f.get("accept"):
+            row["accept"] = str(f.get("accept") or "")
         opts = f.get("options")
         if isinstance(opts, list):
             clean: list[dict[str, str]] = []

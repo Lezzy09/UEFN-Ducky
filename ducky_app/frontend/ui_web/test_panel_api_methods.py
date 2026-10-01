@@ -235,9 +235,15 @@ _PUBLIC_METHODS = frozenset({
     'list_workflow_templates',
     'list_workflows',
     'run_workflow',
+    'stop_workflow',
+    'workflow_editor_prefs',
+    'check_workflow_expression',
+    'pick_workflow_files',
+    'set_workflow_editor_prefs',
     'save_workflow',
     'save_workflow_template',
     'set_workflow_run_here',
+    'clear_workflow_runs',
     'set_workflow_folder',
     'move_workflow_folder',
     'workflow_open_web',
@@ -448,20 +454,20 @@ _PUBLIC_METHODS = frozenset({
     'uses_native_window_chrome',
     'verify_task',
     'voice_create_realtime_token',
+    'voice_open_windows_settings',
     'voice_summarize_reply',
     'voice_transcribe_audio',
-    'wait_for_agent_idle',
-    'window_box',
-    'window_input',
-    'write_project_file',
-    'voice_open_windows_settings',
-    'write_task_artifact'
-})
     'voice_win_stt_cancel',
     'voice_win_stt_poll',
     'voice_win_stt_prewarm',
     'voice_win_stt_start',
     'voice_win_stt_stop',
+    'wait_for_agent_idle',
+    'window_box',
+    'window_input',
+    'write_project_file',
+    'write_task_artifact'
+})
 
 
 def test_panel_api_public_methods() -> None:

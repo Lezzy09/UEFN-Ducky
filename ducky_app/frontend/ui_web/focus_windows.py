@@ -780,7 +780,9 @@ def close_all_focus_windows() -> None:
         _destroy_window(group.window)
 
 
-def close_window(window: Any, *, reason: str = "") -> None:
+def close_window(window: Any, *, reason: str = "", return_tabs: bool = False) -> None:
+    """Close a focus window. ``return_tabs`` (its own close button) hands its tabs back to
+    the main window like an OS close does; closes that follow a tab going away don't."""
     if window is _main_window:
         return
 
@@ -790,10 +792,12 @@ def close_window(window: Any, *, reason: str = "") -> None:
             return
         if group in _focus_groups:
             _focus_groups.remove(group)
-        tab_ids = list(group.tabs)
+        returning = dict(group.tabs)
         group.tabs.clear()
 
-    _log_close(group.wid, reason or "close_this_window", tab_ids)
+    _log_close(group.wid, reason or "close_this_window", list(returning))
+    if return_tabs:
+        _return_tabs_to_main(returning)
     _mark_closing(window)
     _drop_registry_window(group.wid)
     _destroy_window(window)

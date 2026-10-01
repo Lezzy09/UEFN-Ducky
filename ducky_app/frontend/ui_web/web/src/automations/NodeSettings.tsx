@@ -6,6 +6,9 @@ import { AgentField } from "./AgentField";
 import { CallSettings, NamedValueList } from "./FunctionSettings";
 import { ProjectField } from "./ProjectField";
 import { ToolSettings } from "./ToolSettings";
+import { ModelSelector } from "../components/ModelSelector";
+import { ExpressionField, FilePicker, NamesField } from "./PinFields";
+import { nodePins } from "./pins";
 
 export function hasNodeSettings(node: AutomationGraphNodeDto, meta?: AutomationNodeDto) {
   return node.type === "tool.call" || !!meta?.config_fields?.length;
@@ -44,7 +47,18 @@ function ConfigField({ field, node, pluginId, onChange }: { field: AutomationFie
   }, [field.type, provider]);
 
   let input;
-  if (field.type === "project") input = <ProjectField id={id} label={label} value={value} onChange={set} />;
+  if (field.type === "expression") {
+    const names = nodePins(node, undefined).inputs.map((pin) => pin.id);
+    input = <ExpressionField id={id} label={label} value={value} names={names} onChange={set} />;
+  } else if (field.type === "names") {
+    const fallback = nodePins({ ...node, config: { ...node.config, names: [] } }, undefined).inputs.map((pin) => pin.id);
+    input = <NamesField id={id} label={label} value={raw} fallback={fallback} onChange={set} />;
+  } else if (field.type === "file" || field.type === "files") {
+    input = <FilePicker id={id} label={label} value={raw} accept={field.accept || "any"} multiple={field.type === "files"} onChange={set} />;
+  } else if (field.type === "model" && !provider) {
+    // Any model from the app's list, like the chat composer's picker.
+    input = <div className="aw-model-field"><ModelSelector selectedModel={value} setSelectedModel={set} preserveSelection menuPlacement="bottom" placeholder="The app's default model" /></div>;
+  } else if (field.type === "project") input = <ProjectField id={id} label={label} value={value} onChange={set} />;
   else if (field.type === "ducky") input = <AgentField id={id} label={label} value={String(raw ?? node.config.profile_id ?? "")} onChange={set} />;
   else if (["boolean", "bool", "checkbox"].includes(field.type || "")) input = <ChoiceDropdown id={id} aria-label={label} value={value} options={[{ value: "", label: "Default" }, { value: "true", label: "Yes" }, { value: "false", label: "No" }]} onChange={(next) => set(next === "" ? undefined : next === "true")} size="compact" />;
   else if (["select", "model", "multiselect"].includes(field.type || "")) {

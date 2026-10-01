@@ -144,6 +144,7 @@ export function FocusHeaderBar({
 export function useFocusCloseWindow() {
   return useCallback(() => {
     const api = getApi();
-    if (api) void api.close_this_window("header close button", WINDOW_ID);
+    // Like closing the OS window: its tabs go back to the main window.
+    if (api) void api.close_this_window("header close button", WINDOW_ID, true);
   }, []);
 }

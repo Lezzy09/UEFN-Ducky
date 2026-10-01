@@ -236,6 +236,12 @@ export function isLegacyWorkflowsTabId(id: string): boolean {
 
 export interface AutomationGraphNodeDto {
   width?: number;
+  /** Its own title-bar (and wire) color: red, amber, green, blue or purple; none = by kind. */
+  color?: string;
+  /** Locked: it can't be moved, wired or changed until unlocked. */
+  locked?: boolean;
+  /** Its own icon (an emoji) picked in its details; none = the icon of its kind. */
+  icon?: string;
   id: string;
   type: string;
   x: number;
@@ -248,7 +254,27 @@ export interface AutomationGraphNodeDto {
 export interface AutomationGraphEdgeDto {
   source: string;
   target: string;
+  /** main | true | false | each | done (white wires) or data (a value from an output pin to an input pin). */
   kind: string;
+  source_pin?: string;
+  target_pin?: string;
+}
+
+/** What a pin carries; wires only join pins whose types fit (automations/pins.ts). */
+export type PinType = "text" | "number" | "boolean" | "json" | "any" | "image" | "images" | "audio" | "video" | "mesh" | "svg" | "pdf" | "file";
+export interface PinDto {
+  id: string;
+  label: string;
+  type: PinType;
+  required?: boolean;
+  default?: unknown;
+  description?: string;
+}
+/** A picked file as it travels on a wire. */
+export interface FileRefDto {
+  kind: string;
+  path: string;
+  name: string;
 }
 
 export interface AutomationGraphGroupDto {
@@ -258,6 +284,12 @@ export interface AutomationGraphGroupDto {
   node_ids: string[];
   /** The group this box sits inside (nested groups). */
   parent_id?: string;
+  /** Box colour: red, amber, green, blue or purple; none is the plain box. */
+  color?: string;
+  /** Locked: the box and everything in it can't be moved or changed until unlocked. */
+  locked?: boolean;
+  /** Its own icon (an emoji) for the title and details; none = a box. */
+  icon?: string;
 }
 
 export interface AutomationGraphDto {
@@ -291,6 +323,8 @@ export interface AutomationRunDto {
   trigger_id?: string;
   /** Values its Return nodes handed back. */
   outputs?: Record<string, unknown>;
+  /** Each node's output pin values from this run (long text cut, files as file refs). */
+  node_outputs?: Record<string, Record<string, unknown>>;
 }
 
 /** Who owns a workflow: Local (this PC only) or a team (synced to every member). */
@@ -362,8 +396,10 @@ export interface AutomationSummaryDto {
 }
 
 export interface WorkflowSignatureDto {
-  inputs: { name: string; default?: string }[];
+  inputs: { name: string; default?: string; type?: PinType }[];
   outputs: string[];
+  /** Pin types of the return values, when set. */
+  output_types?: Record<string, PinType>;
 }
 
 export interface AutomationFieldDto {
@@ -372,6 +408,8 @@ export interface AutomationFieldDto {
   type?: string;
   provider?: string;
   options?: Array<{ id: string; label?: string }>;
+  /** file / files fields: what can be picked (image, audio, video, mesh, pdf, svg, any). */
+  accept?: string;
 }
 
 export interface AutomationTemplateDto {
@@ -397,6 +435,10 @@ export interface AutomationNodeDto {
   description?: string;
   plugin_id?: string;
   config_fields?: AutomationFieldDto[];
+  /** false: a data node (no white pins), run when one of its values is needed. */
+  exec?: boolean;
+  inputs?: PinDto[];
+  outputs?: PinDto[];
 }
 
 /** Discord editor tab id — one tab per bot (`discord:<botId>`). Legacy `discord:main` = default. */
@@ -1753,6 +1795,8 @@ export interface PanelPushEvent {
     | "background_job"
     | "graphs_changed"
     | "graph_focus"
+    | "workflow_run"
+    | "workflow_step"
     | "templates_changed"
     | "starter_plugins_progress";
   provider?: string;
@@ -1774,8 +1818,21 @@ export interface PanelPushEvent {
   account?: string;
   source?: string;
   kind?: string;
-  /** graph_focus: saved vs deleted. */
+  /** graph_focus: saved, show or deleted. */
   action?: string;
+  /** graph_focus: the nodes to bring into view (an agent's change, or what it is showing). */
+  nodes?: string[];
+  /** graph_focus: select them too (opens their details). */
+  select?: boolean;
+  /** graph_focus: a short caption shown over the canvas. */
+  note?: string;
+  /** workflow_run / workflow_step: which run, the step (node id) and the step it came from. */
+  run?: string;
+  node?: string;
+  from?: string;
+  /** workflow_run: started | done | error | stopped; workflow_step: running | ok | error | stopped. */
+  state?: string;
+  error?: string;
   /** browser_pane_state fields (native WebView2 pane navigation state). */
   pane_id?: string;
   url?: string;
@@ -2148,6 +2205,16 @@ export interface AppDataActionResult {
   cleared?: string[];
 }
 
+/** One Windows dictation event from voice_win_stt_poll. */
+export interface WinSttEvent {
+  t: "started" | "interim" | "final" | "speech_started" | "speech_stopped" | "error" | "ended" | "exit";
+  sid?: string;
+  text?: string;
+  code?: string;
+  message?: string;
+  status?: string;
+}
+
 export interface PanelApi {
   get_listener_status(): Promise<ListenerStatus>;
   get_window_bounds(): Promise<{ x: number; y: number; width: number; height: number; scale?: number }>;
@@ -2205,16 +2272,6 @@ export interface PanelApi {
     isolation?: string;
     secure_profile?: boolean;
     https_only_nav?: boolean;
-/** One Windows dictation event from voice_win_stt_poll. */
-export interface WinSttEvent {
-  t: "started" | "interim" | "final" | "speech_started" | "speech_stopped" | "error" | "ended" | "exit";
-  sid?: string;
-  text?: string;
-  code?: string;
-  message?: string;
-  status?: string;
-}
-
     self_embed_blocked?: boolean;
     protections?: string[];
   }>;
@@ -2265,7 +2322,8 @@ export interface WinSttEvent {
   restore_focus_windows(groups?: FocusWindowSnapshot[]): Promise<void>;
   report_editor_state(relative_path: string, state: Record<string, unknown>): Promise<void>;
   /** `wid` = this window's registry id; without it the host closes the ACTIVE window. */
-  close_this_window(reason?: string, wid?: string): Promise<void>;
+  /** `returnTabs`: hand this window's tabs back to the main window (its close button). */
+  close_this_window(reason?: string, wid?: string, returnTabs?: boolean): Promise<void>;
   is_focus_window(): Promise<boolean>;
   toggle_maximize(): Promise<boolean>;
   is_window_maximized?(): Promise<boolean>;
@@ -2431,11 +2489,21 @@ export interface WinSttEvent {
     workflow?: AutomationDto;
   }>;
   copy_workflow?(workflow_id: string, owner: string, move?: boolean): Promise<{ ok?: boolean; error?: string; workflow?: AutomationDto }>;
+  clear_workflow_runs?(workflow_id: string): Promise<{ ok?: boolean; error?: string }>;
   set_workflow_run_here?(workflow_id: string, on: boolean): Promise<{ ok?: boolean; error?: string; workflow?: AutomationDto }>;
   set_workflow_folder?(workflow_id: string, folder: string): Promise<{ ok?: boolean; error?: string; workflow?: AutomationDto }>;
   /** Rename or move a folder; its parent as new_path deletes it and keeps the workflows. */
   move_workflow_folder?(owner: string, path: string, new_path: string): Promise<{ ok?: boolean; error?: string; moved?: number }>;
   delete_workflow?(workflow_id: string): Promise<{ ok?: boolean; error?: string }>;
+  /** Stop button: ends every run of this workflow on this PC now. */
+  stop_workflow?(workflow_id: string): Promise<{ ok?: boolean; stopped?: boolean }>;
+  /** The Workflows editor's grid, snap, tool, panel sizes and zoom, kept on disk. */
+  workflow_editor_prefs?(): Promise<{ ok?: boolean; prefs?: Record<string, unknown> }>;
+  set_workflow_editor_prefs?(prefs: Record<string, unknown>): Promise<{ ok?: boolean; prefs?: Record<string, unknown> }>;
+  /** Input nodes: pick files on this PC (accept = image | audio | video | mesh | pdf | svg | any). */
+  pick_workflow_files?(accept: string, multiple: boolean): Promise<{ ok?: boolean; files?: FileRefDto[]; error?: string }>;
+  /** '' when an If / Expression condition parses, else what is wrong. */
+  check_workflow_expression?(expression: string): Promise<{ ok?: boolean; error?: string }>;
   run_workflow?(
     workflow_id: string,
     prompt?: string,
@@ -3240,6 +3308,19 @@ export interface WinSttEvent {
     assistant_text: string,
     model?: string,
   ): Promise<{ ok: boolean; text?: string; error?: string; verbatim?: boolean }>;
+  /** Windows dictation (desktop only — denied for remote). */
+  voice_win_stt_prewarm?(): Promise<{ ok: boolean; error?: string; code?: string }>;
+  voice_win_stt_start?(
+    lang?: string,
+  ): Promise<{ ok: boolean; session?: string; cursor?: number; lang?: string; error?: string; code?: string }>;
+  voice_win_stt_poll?(
+    session: string,
+    cursor: number,
+    wait_ms?: number,
+  ): Promise<{ ok: boolean; events?: WinSttEvent[]; cursor?: number; active?: boolean }>;
+  voice_win_stt_stop?(session: string): Promise<{ ok: boolean; error?: string }>;
+  voice_win_stt_cancel?(session: string): Promise<{ ok: boolean; error?: string }>;
+  voice_open_windows_settings?(page: string): Promise<{ ok: boolean; error?: string }>;
   plugin_tts_start?(
     plugin_id: string,
     text?: string,
@@ -3308,19 +3389,6 @@ export interface WinSttEvent {
     plugin_id: string,
     system?: string,
     user?: string,
-  /** Windows dictation (desktop only — denied for remote). */
-  voice_win_stt_prewarm?(): Promise<{ ok: boolean; error?: string; code?: string }>;
-  voice_win_stt_start?(
-    lang?: string,
-  ): Promise<{ ok: boolean; session?: string; cursor?: number; lang?: string; error?: string; code?: string }>;
-  voice_win_stt_poll?(
-    session: string,
-    cursor: number,
-    wait_ms?: number,
-  ): Promise<{ ok: boolean; events?: WinSttEvent[]; cursor?: number; active?: boolean }>;
-  voice_win_stt_stop?(session: string): Promise<{ ok: boolean; error?: string }>;
-  voice_win_stt_cancel?(session: string): Promise<{ ok: boolean; error?: string }>;
-  voice_open_windows_settings?(page: string): Promise<{ ok: boolean; error?: string }>;
     model?: string,
   ): Promise<{ ok: boolean; text?: string; error?: string; provider?: string; model?: string }>;
   /** Same pipeline as MCP translate_ui_batch — start then poll. */

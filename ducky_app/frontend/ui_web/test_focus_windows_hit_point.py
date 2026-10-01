@@ -67,3 +67,27 @@ def test_model_change_does_not_ask_main_to_open_the_chat(monkeypatch):
     api._push = lambda _e: None  # type: ignore[attr-defined]
     assert api.set_conversation_coding_agent("c1", "codex", "gpt-6-astra")["ok"]
     assert calls and calls[0].get("open_tab") is False
+
+
+def test_header_close_hands_the_tabs_back_and_other_closes_do_not(monkeypatch):
+    """The focus window's own close button must not lose its tabs (an OS close never did)."""
+    from frontend.ui_web.panel_api_window import PanelApiWindowMixin
+
+    windows = [object(), object()]
+    monkeypatch.setattr(focus_windows, "_focus_groups", [
+        focus_windows._FocusGroup(window=windows[0], tabs={"workflows:main": "Workflows", "chat:c": "C"}, wid="focus-a"),
+        focus_windows._FocusGroup(window=windows[1], tabs={"file:a.verse": "a"}, wid="focus-b"),
+    ])
+    returned: list[dict[str, str]] = []
+    monkeypatch.setattr(focus_windows, "_return_tabs_to_main", returned.append)
+    monkeypatch.setattr(focus_windows, "_destroy_window", lambda _w: None)
+    monkeypatch.setattr(focus_windows, "_drop_registry_window", lambda _wid: None)
+    monkeypatch.setattr(focus_windows, "_log_close", lambda *_a: None)
+
+    api = PanelApiWindowMixin()
+    api._window = object()  # main
+    api.close_this_window("header close button", "focus-a", True)
+    api.close_this_window("last tab closed", "focus-b")
+
+    assert returned == [{"workflows:main": "Workflows", "chat:c": "C"}]
+    assert focus_windows._focus_groups == []

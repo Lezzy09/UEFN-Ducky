@@ -10,6 +10,7 @@ import {
   graphJobId,
   requestFocusGraph,
   takePendingGraphFocus,
+  takePendingGraphFocusTarget,
   workflowIdFromJobId,
   syncReadyGraphJobs,
 } from "./graphActivity";
@@ -79,5 +80,11 @@ describe("graphActivity", () => {
     requestFocusGraph("play");
     expect(takePendingGraphFocus()).toBe("play");
     expect(takePendingGraphFocus()).toBe("");
+  });
+
+  it("carries the nodes and caption an agent is showing", () => {
+    applyGraphFocusPush({ type: "graph_focus", id: "p1", action: "show", nodes: ["a", "b"], select: true, note: "This checks the score" });
+    expect(takePendingGraphFocusTarget()).toEqual({ id: "p1", nodes: ["a", "b"], select: true, note: "This checks the score" });
+    expect(takePendingGraphFocusTarget()).toBeNull();
   });
 });

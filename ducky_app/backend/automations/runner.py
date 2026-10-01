@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
+import math
 import re
+import threading
 import time
 import uuid
 from contextvars import ContextVar
 from typing import Any
 
-from backend.automations import catalog, plugin
-from backend.automations.store import all_workflows, append_run, get_workflow, runs_here
+from pathlib import Path
+
+from backend.automations import catalog, imageops, listops, media, plugin
+from backend.automations.expr import ExprError, as_number, as_text, evaluate, truthy
+from backend.automations.files import file_ref, is_file_ref, kind_of, run_folder, with_url
+from backend.automations.pins import DATA_KIND, node_pins
+from backend.automations.store import all_workflows, append_run, get_workflow, runs_here, signature_of
 
 _log = logging.getLogger("automations")
 _MAX_STEPS = 256
@@ -29,6 +37,269 @@ _RETURN_KEY = "_returned"
 _NOT_SHARED_BACK = frozenset({_RETURN_KEY, "caller_conv_id", "artifact_dir", "pipeline_run_id", "group_id", "group_folder_id"})
 _PLACEHOLDER = re.compile(r"\{\{\s*([\w.\-]+)\s*\}\}")
 _END_TYPES = frozenset({"pipeline.finish", "flow.end", "flow.output"})
+# Stop: every run of a workflow (and the workflows it calls) shares one event; the
+# walk checks it between steps and a step in progress is left to finish on its own.
+_CANCEL: ContextVar[threading.Event | None] = ContextVar("workflow_cancel", default=None)
+_ACTIVE: dict[str, set[threading.Event]] = {}
+_ACTIVE_LOCK = threading.Lock()
+# Live view: the editor lights up the step running now and the wire it came along.
+_LIVE: ContextVar[tuple[str, str] | None] = ContextVar("workflow_live", default=None)
+STOPPED = "Stopped"
+
+
+class _DataError(Exception):
+    """A value a step needed could not be made; the step fails with this message."""
+
+
+def _signature(workflow_id: str) -> dict[str, Any] | None:
+    wf = get_workflow(workflow_id) if workflow_id else None
+    return signature_of((wf.get("graph") or {}).get("nodes") or []) if wf else None
+
+
+class _Dataflow:
+    """Values on data wires for one run of one graph.
+
+    Step nodes (white pins) run in wire order; before one runs its inputs are pulled
+    from the wires into it. A data node (no white pins) runs the first time one of its
+    values is pulled, then its outputs are reused for the rest of the run."""
+
+    def __init__(self, nodes: dict[str, dict[str, Any]], edges: list[dict[str, Any]], specs: dict[str, dict[str, Any]]):
+        self.nodes = nodes
+        self.specs = specs
+        self.feeds: dict[str, dict[str, tuple[str, str]]] = {}
+        self.consumed: set[str] = set()
+        for e in edges:
+            if str(e.get("kind") or "") == DATA_KIND:
+                target, source = str(e.get("target")), str(e.get("source"))
+                self.feeds.setdefault(target, {})[str(e.get("target_pin"))] = (source, str(e.get("source_pin")))
+                self.consumed.add(source)
+        self.outputs: dict[str, dict[str, Any]] = {}
+        self.busy: set[str] = set()
+        self.steps: list[dict[str, Any]] = []
+        self.order: list[dict[str, Any]] = []  # every step of the run, in the order it ran
+        self.warnings: list[str] = []
+        self._pins: dict[str, dict[str, Any]] = {}
+        self._signatures: dict[str, dict[str, Any] | None] = {}
+
+    def pins(self, nid: str) -> dict[str, Any]:
+        if nid not in self._pins:
+            node = self.nodes.get(nid) or {}
+            self._pins[nid] = node_pins(node, self.specs.get(str(node.get("type") or "")), self.signature)
+        return self._pins[nid]
+
+    def signature(self, workflow_id: str) -> dict[str, Any] | None:
+        if workflow_id not in self._signatures:
+            self._signatures[workflow_id] = _signature(workflow_id)
+        return self._signatures[workflow_id]
+
+    def is_step(self, nid: str) -> bool:
+        return bool(self.pins(nid)["exec"])
+
+    @property
+    def data_nodes(self) -> list[str]:
+        return [nid for nid in self.nodes if not self.is_step(nid)]
+
+    def _name(self, nid: str) -> str:
+        node = self.nodes.get(nid) or {}
+        return str(node.get("label") or node.get("type") or nid)
+
+    def resolve(self, node: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+        """The node's input values: from its wires, else what is set in its details."""
+        nid = str(node.get("id"))
+        set_here = (node.get("config") or {}).get("inputs") if isinstance((node.get("config") or {}).get("inputs"), dict) else {}
+        values: dict[str, Any] = {}
+        for pin in self.pins(nid)["inputs"]:
+            wire = self.feeds.get(nid, {}).get(pin["id"])
+            if wire:
+                values[pin["id"]] = self.pull(wire[0], wire[1], ctx, for_node=nid)
+            elif pin["id"] in set_here:
+                values[pin["id"]] = _template(set_here[pin["id"]], ctx)
+            elif "default" in pin:
+                values[pin["id"]] = pin["default"]
+        return values
+
+    def pull(self, nid: str, pin: str, ctx: dict[str, Any], *, for_node: str = "") -> Any:
+        if nid in self.outputs:
+            return self.outputs[nid].get(pin)
+        if nid not in self.nodes:
+            return None
+        if self.is_step(nid):
+            self.warnings.append(f"{self._name(for_node)} used {self._name(nid)} before it ran, so it got nothing.")
+            return None
+        if nid in self.busy:
+            raise _DataError(f"{self._name(nid)} feeds itself through its wires.")
+        self.busy.add(nid)
+        try:
+            step = self.run_data(nid, ctx)
+        finally:
+            self.busy.discard(nid)
+        if not step.get("ok", True):
+            raise _DataError(f"{self._name(nid)}: {step.get('error') or 'failed'}")
+        return self.outputs.get(nid, {}).get(pin)
+
+    def run_data(self, nid: str, ctx: dict[str, Any]) -> dict[str, Any]:
+        node = self.nodes[nid]
+        _live_step(nid, "running", label=self._name(nid))
+        try:
+            inputs = self.resolve(node, ctx)
+        except _DataError as exc:
+            step = {"ok": False, "id": nid, "type": node.get("type"), "label": self._name(nid), "error": str(exc)}
+        else:
+            step = _exec_stoppable(node, ctx, inputs)
+        self.steps.append(step)
+        self.order.append(step)
+        self.record(nid, step, ctx)
+        _live_step(nid, "ok" if step.get("ok", True) else "stopped" if step.get("stopped") else "error", error=str(step.get("error") or ""))
+        return step
+
+    def record(self, nid: str, step: dict[str, Any], ctx: dict[str, Any]) -> None:
+        outputs = step.get("outputs")
+        if not isinstance(outputs, dict):
+            result = step.get("result") if isinstance(step.get("result"), dict) else {}
+            outputs = {pin["id"]: result.get(pin["id"]) for pin in self.pins(nid)["outputs"] if pin["id"] in result}
+        if step.get("ok", True):
+            self.outputs[nid] = outputs
+            ctx.setdefault("nodes", {})[nid] = outputs  # {{nodes.<id>.<pin>}} in templates
+
+    def run_sinks(self, ctx: dict[str, Any]) -> tuple[bool, str]:
+        """Data nodes whose values nobody pulled yet (Preview, a generator on its own)."""
+        for nid in self.data_nodes:
+            if nid in self.outputs or nid in self.consumed or _cancelled():
+                continue
+            step = self.run_data(nid, ctx)
+            if not step.get("ok", True):
+                return False, f"{self._name(nid)}: {step.get('error') or 'failed'}"
+        return (False, STOPPED) if _cancelled() else (True, "")
+
+    def summary(self) -> dict[str, dict[str, Any]]:
+        """Each node's outputs for the panel: long text cut, files as file refs."""
+        return {nid: {pin: _preview_value(value) for pin, value in outs.items()} for nid, outs in self.outputs.items()}
+
+
+def _preview_value(value: Any, depth: int = 0) -> Any:
+    if is_file_ref(value):
+        return with_url(value)
+    if isinstance(value, str):
+        return value if len(value) <= 4000 else value[:4000] + "…"
+    if isinstance(value, list):
+        return [_preview_value(item, depth + 1) for item in value[:50]]
+    if isinstance(value, dict):
+        if depth > 3:
+            return "…"
+        return {str(key): _preview_value(item, depth + 1) for key, item in list(value.items())[:50]}
+    return value
+
+
+def _last_outputs(wf: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """What each node made in its latest run on this PC (newest run first wins)."""
+    out: dict[str, dict[str, Any]] = {}
+    for run in reversed(list(wf.get("runs") or [])):
+        for nid, values in (run.get("node_outputs") or {}).items() if isinstance(run, dict) else ():
+            if isinstance(values, dict):
+                out.setdefault(str(nid), values)
+    return out
+
+
+def run_node(workflow_id: str, node_id: str) -> dict[str, Any]:
+    """Run one node now. Everything wired into it reuses what it made last run (so a
+    paid generator upstream doesn't run again); a value node never run before runs."""
+    wf = get_workflow(workflow_id)
+    if wf is None:
+        return {"ok": False, "error": "workflow not found", "steps": []}
+    graph = wf.get("graph") or {}
+    nodes = {str(n.get("id")): n for n in (graph.get("nodes") or []) if isinstance(n, dict) and n.get("id")}
+    node = nodes.get(str(node_id or ""))
+    if node is None:
+        return {"ok": False, "error": "That node isn't in the saved workflow; save first.", "steps": [], "id": wf["id"]}
+    edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
+    flow = _Dataflow(nodes, edges, catalog.node_specs())
+    nid = str(node["id"])
+    for other, values in _last_outputs(wf).items():
+        if other != nid and other in nodes:
+            flow.outputs[other] = values
+    ctx: dict[str, Any] = {"caller_conv_id": _caller("")}
+    _prepare_run_ctx(ctx, wf)
+    ctx["nodes"] = dict(flow.outputs)
+    wid = str(wf["id"])
+    run_id = uuid.uuid4().hex[:12]
+    cancel = threading.Event()
+    cancel_token, live_token = _CANCEL.set(cancel), _LIVE.set((wid, run_id))
+    stack_token = _CALL_STACK.set((*_CALL_STACK.get(), wid))
+    with _ACTIVE_LOCK:
+        _ACTIVE.setdefault(wid, set()).add(cancel)
+    started = time.time()
+    _push({"type": "workflow_run", "id": wid, "run": run_id, "state": "started"})
+    try:
+        if flow.is_step(nid):
+            _live_step(nid, "running", label=flow._name(nid))
+            try:
+                step = _exec_stoppable(node, ctx, flow.resolve(node, ctx))
+            except _DataError as exc:
+                step = {"ok": False, "id": nid, "type": node.get("type"), "label": flow._name(nid), "error": str(exc)}
+            flow.order.append(step)
+            flow.record(nid, step, ctx)
+            _live_step(nid, "ok" if step.get("ok", True) else "error", error=str(step.get("error") or ""))
+        else:
+            step = flow.run_data(nid, ctx)
+        ok = bool(step.get("ok", True))
+        error = "" if ok else f"{flow._name(nid)}: {step.get('error') or 'failed'}"
+    finally:
+        with _ACTIVE_LOCK:
+            running = _ACTIVE.get(wid, set())
+            running.discard(cancel)
+            if not running:
+                _ACTIVE.pop(wid, None)
+        _CALL_STACK.reset(stack_token)
+        _LIVE.reset(live_token)
+        _CANCEL.reset(cancel_token)
+    _push({"type": "workflow_run", "id": wid, "run": run_id, "state": "stopped" if cancel.is_set() else "done" if ok else "error", **({"error": error} if error else {})})
+    node_outputs = flow.summary()
+    steps = list(flow.order)
+    append_run(wid, {"started": started, "ended": time.time(), "ok": ok, "error": error, "trigger_id": f"node:{nid}", "steps": steps, "node_outputs": node_outputs})
+    return {"ok": ok, "error": error, "id": wid, "steps": steps, "node_outputs": node_outputs}
+
+
+def stop_workflow(workflow_id: str) -> bool:
+    """Stop every run of this workflow on this PC now. True when one was running."""
+    with _ACTIVE_LOCK:
+        events = list(_ACTIVE.get(str(workflow_id or "").strip(), ()))
+    for event in events:
+        event.set()
+    return bool(events)
+
+
+def is_running(workflow_id: str) -> bool:
+    with _ACTIVE_LOCK:
+        return bool(_ACTIVE.get(str(workflow_id or "").strip()))
+
+
+def _cancelled() -> bool:
+    event = _CANCEL.get()
+    return bool(event and event.is_set())
+
+
+def _push(event: dict[str, Any]) -> None:
+    try:
+        from frontend.ui_web.agent_modes import push_ui_event
+
+        push_ui_event(event)
+    except Exception:
+        pass
+
+
+def _live_step(node_id: str, state: str, *, came_from: str = "", label: str = "", error: str = "") -> None:
+    live = _LIVE.get()
+    if not live:
+        return
+    wid, run_id = live
+    event: dict[str, Any] = {"type": "workflow_step", "id": wid, "run": run_id, "node": node_id, "state": state}
+    if came_from:
+        event["from"] = came_from
+    if label:
+        event["label"] = label
+    if error:
+        event["error"] = error[:300]
+    _push(event)
 
 
 def _announce_run(wf: dict[str, Any], *, phase: str, detail: str = "", run_id: str = "") -> None:
@@ -106,8 +377,9 @@ def run_workflow(
     graph = wf.get("graph") or {}
     nodes = {str(n.get("id")): n for n in (graph.get("nodes") or []) if isinstance(n, dict) and n.get("id")}
     edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
-    starts = _start_ids(nodes, edges=edges, trigger_id=trigger_id, starter_id=starter_id, payload=payload or {})
-    if not starts:
+    flow = _Dataflow(nodes, edges, catalog.node_specs())
+    starts = _start_ids(nodes, edges=edges, trigger_id=trigger_id, starter_id=starter_id, payload=payload or {}, is_step=flow.is_step)
+    if not starts and (trigger_id or not flow.data_nodes):
         return {"ok": False, "error": "No start found. Leave an input unconnected or choose a start node.", "steps": [], "id": wf["id"]}
     ctx: dict[str, Any] = dict(payload or {})
     if prompt:
@@ -118,14 +390,36 @@ def run_workflow(
     _prepare_run_ctx(ctx, wf)
     ident_token = _bind_hub_identity(ctx)
     stack_token = _CALL_STACK.set((*_CALL_STACK.get(), str(wf["id"])))
+    cancel = _CANCEL.get() or threading.Event()
+    cancel_token = _CANCEL.set(cancel)
+    wid = str(wf["id"])
+    run_id = uuid.uuid4().hex[:12]
+    live_token = _LIVE.set((wid, run_id))
+    with _ACTIVE_LOCK:
+        _ACTIVE.setdefault(wid, set()).add(cancel)
     started = time.time()
     ok = False
     error = ""
     steps: list[Any] = []
     try:
         _announce_run(wf, phase="working", detail="Running")
-        steps, ok, error, _seen = _walk(nodes, edges, ctx, starts)
+        _push({"type": "workflow_run", "id": wid, "run": run_id, "state": "started"})
+        steps, ok, error, _seen = _walk(nodes, edges, ctx, starts, flow=flow) if starts else ([], True, "", 0)
+        if ok:
+            ok, error = flow.run_sinks(ctx)
+        steps = list(flow.order)
+        if flow.warnings:
+            steps.append({"ok": True, "label": "Note", "result": {"warnings": flow.warnings}, "warning": " ".join(flow.warnings)})
     finally:
+        with _ACTIVE_LOCK:
+            running = _ACTIVE.get(wid, set())
+            running.discard(cancel)
+            if not running:
+                _ACTIVE.pop(wid, None)
+        stopped = cancel.is_set()
+        _push({"type": "workflow_run", "id": wid, "run": run_id, "state": "stopped" if stopped else "done" if ok else "error", **({"error": error} if error else {})})
+        _LIVE.reset(live_token)
+        _CANCEL.reset(cancel_token)
         _CALL_STACK.reset(stack_token)
         if ident_token is not None:
             from backend.workspace import identity
@@ -138,6 +432,7 @@ def run_workflow(
             run_id=str(int(started)),
         )
     ended = time.time()
+    node_outputs = flow.summary()
     run = {
         "started": started,
         "ended": ended,
@@ -145,6 +440,7 @@ def run_workflow(
         "error": error,
         "trigger_id": trigger_id,
         "steps": steps,
+        "node_outputs": node_outputs,
     }
     append_run(wf["id"], run)
     return {
@@ -152,6 +448,7 @@ def run_workflow(
         "error": error,
         "id": wf["id"],
         "steps": steps,
+        "node_outputs": node_outputs,
         "conv_id": ctx.get("conv_id"),
         "files": ctx.get("files") or [],
         "text": ctx.get("text") or ctx.get("assistant_text") or "",
@@ -209,18 +506,20 @@ def _start_ids(
     starter_id: str,
     payload: dict[str, Any] | None = None,
     edges: list[dict[str, Any]] | None = None,
+    is_step: Any = None,
 ) -> list[str]:
     if starter_id and starter_id in nodes:
         return [starter_id]
+    step = is_step or (lambda _nid: True)
     starters = catalog.starter_types()
     if trigger_id:
         hits = [nid for nid, n in nodes.items() if _node_matches_trigger(n, trigger_id, payload)]
         if hits:
             return hits
         return []
-    incoming = {str(e.get("target")) for e in edges or [] if str(e.get("source")) in nodes}
+    incoming = {str(e.get("target")) for e in edges or [] if str(e.get("source")) in nodes and str(e.get("kind") or "") != DATA_KIND}
     explicit = [nid for nid, node in nodes.items() if node.get("type") in starters]
-    return explicit or [nid for nid in nodes if nid not in incoming]
+    return explicit or [nid for nid in nodes if nid not in incoming and step(nid)]
 
 
 def _next_ids(source: str, edges: list[dict[str, Any]], kind: str) -> list[str]:
@@ -274,13 +573,18 @@ def _walk(
     *,
     stop_at: str = "",
     seen: int = 0,
+    origin: str = "",
+    flow: _Dataflow | None = None,
 ) -> tuple[list[dict[str, Any]], bool, str, int]:
     steps: list[dict[str, Any]] = []
     queue = list(start_ids)
     visited: set[str] = set()
+    came_from: dict[str, str] = {sid: origin for sid in start_ids} if origin else {}
     ok = True
     error = ""
     while queue and seen < _MAX_STEPS:
+        if _cancelled():
+            return steps, False, STOPPED, seen
         nid = queue.pop(0)
         if not nid or nid == stop_at:
             continue
@@ -290,10 +594,12 @@ def _walk(
         visited.add(nid)
         seen += 1
         ntype = str(node.get("type") or "")
+        _live_step(nid, "running", came_from=came_from.get(nid, ""), label=str(node.get("label") or ntype))
         if ntype == "flow.foreach":
             cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
             field = str(cfg.get("field") or "cards")
             items = _foreach_items(ctx, field)
+            _live_step(nid, "ok")
             steps.append(
                 {
                     "ok": True,
@@ -303,19 +609,34 @@ def _walk(
                     "result": {"count": len(items), "field": field},
                 }
             )
+            if flow is not None:
+                flow.order.append(steps[-1])
             each_ids = _next_ids(nid, edges, "each")
             for item in items:
                 _apply_foreach_item(ctx, item)
                 nested, n_ok, n_err, seen = _walk(
-                    nodes, edges, ctx, each_ids, stop_at=nid, seen=seen
+                    nodes, edges, ctx, each_ids, stop_at=nid, seen=seen, origin=nid, flow=flow
                 )
                 steps.extend(nested)
                 if not n_ok:
                     return steps, False, n_err, seen
-            queue.extend(_next_ids(nid, edges, "done"))
+            for target in _next_ids(nid, edges, "done"):
+                came_from.setdefault(target, nid)
+                queue.append(target)
             continue
-        step = _exec_node(node, ctx)
+        if flow is not None and not flow.is_step(nid):
+            continue  # a data node runs when its value is pulled, never along white wires
+        try:
+            inputs = flow.resolve(node, ctx) if flow is not None else None
+        except _DataError as exc:
+            inputs, step = None, {"ok": False, "id": nid, "type": ntype, "label": str(node.get("label") or ntype), "error": str(exc)}
+        else:
+            step = _exec_stoppable(node, ctx, inputs)
+        if flow is not None:
+            flow.record(nid, step, ctx)
+            flow.order.append(step)
         steps.append(step)
+        _live_step(nid, "ok" if step.get("ok", True) else "stopped" if step.get("stopped") else "error", error=str(step.get("error") or ""))
         if not step.get("ok", True):
             ok = False
             error = str(step.get("error") or "step failed")
@@ -325,10 +646,37 @@ def _walk(
         if ntype in _END_TYPES or step.get("stop"):
             continue
         kind = "true" if step.get("branch") else "false" if "branch" in step else "main"
-        queue.extend(_next_ids(nid, edges, kind))
+        for target in _next_ids(nid, edges, kind):
+            came_from.setdefault(target, nid)
+            queue.append(target)
     if seen >= _MAX_STEPS and queue:
         return steps, False, "step budget exceeded", seen
     return steps, ok, error, seen
+
+
+def _exec_stoppable(node: dict[str, Any], payload: dict[str, Any], inputs: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Run one step on its own thread so Stop ends the run at once; a step that was
+    still working (a tool, UEFN, a ducky) finishes in the background, unused."""
+    cancel = _CANCEL.get()
+    if cancel is None:
+        return _exec_node(node, payload, inputs)
+    box: dict[str, Any] = {}
+    done = threading.Event()
+    step_ctx = contextvars.copy_context()
+
+    def work() -> None:
+        try:
+            box["step"] = step_ctx.run(_exec_node, node, payload, inputs)
+        except BaseException as exc:  # _exec_node already turns errors into failed steps
+            box["step"] = {"ok": False, "id": node.get("id"), "type": node.get("type"), "label": str(node.get("label") or node.get("type") or ""), "error": str(exc)}
+        finally:
+            done.set()
+
+    threading.Thread(target=work, name="workflow-step", daemon=True).start()
+    while not done.wait(0.05):
+        if cancel.is_set():
+            return {"ok": False, "stopped": True, "id": node.get("id"), "type": node.get("type"), "label": str(node.get("label") or node.get("type") or ""), "error": STOPPED}
+    return box["step"]
 
 
 def _uefn_node(node: dict[str, Any], ntype: str, label: str, cfg: dict[str, Any]) -> dict[str, Any]:
@@ -381,15 +729,22 @@ def _play_node(ntype: str, cfg: dict[str, Any], payload: dict[str, Any]) -> dict
     return play.expect_log(cfg, payload)
 
 
-def _exec_node(node: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _exec_node(node: dict[str, Any], payload: dict[str, Any], inputs: dict[str, Any] | None = None) -> dict[str, Any]:
     ntype = str(node.get("type") or "")
     cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
     label = str(node.get("label") or ntype)
+    values = dict(inputs or {})
     if ntype == "pipeline.finish" and label in ("Finish", ntype):
         label = "Return to user"
     elif ntype == "start.chat" and label in ("Chat", ntype):
         label = "Chat input"
     try:
+        if ntype in media.BACKENDS:
+            return {**media.run_media(ntype, cfg, values, _node_folder(node)), "id": node.get("id"), "type": ntype, "label": label}
+        if ntype in imageops.OPS:
+            return {**imageops.OPS[ntype](cfg, values, _node_folder(node)), "id": node.get("id"), "type": ntype, "label": label}
+        if ntype in _DATA_HANDLERS:
+            return {**_DATA_HANDLERS[ntype](cfg, values, payload), "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "ducky.prompt":
             return {**_prompt_ducky(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "ducky.spawn":
@@ -411,19 +766,28 @@ def _exec_node(node: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         if ntype == "flow.branch":
             return {**_branch_node(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "tool.call":
-            return {**_call_tool(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
+            called = _call_tool(cfg, payload)
+            result = called.get("result")
+            text = result.get("text") if isinstance(result, dict) and isinstance(result.get("text"), str) else _as_text(result)
+            return {**called, "outputs": {"result": result, "text": text}, "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "pipeline.agent":
-            return {**_pipeline_agent(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
+            step = _pipeline_agent(cfg, payload)
+            done = step.get("result") if isinstance(step.get("result"), dict) else {}
+            files = [with_url(file_ref(f["path"], kind_of(f["path"]))) for f in done.get("files") or [] if isinstance(f, dict) and f.get("path")]
+            return {**step, "outputs": {"text": str(done.get("text") or ""), "files": files}, "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "pipeline.finish":
             return {**_pipeline_finish(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "flow.end":
             return {"ok": True, "id": node.get("id"), "type": ntype, "label": label, "result": {"ended": True}}
         if ntype == "flow.input":
-            return {**_input_node(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
+            step = _input_node(cfg, payload)
+            return {**step, "outputs": dict(step.get("result") or {}), "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "flow.output":
-            return {**_output_node(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
+            return {**_output_node(cfg, payload, values), "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "workflow.call":
-            return {**_call_workflow(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
+            step = _call_workflow(cfg, payload, values)
+            returned = (step.get("result") or {}).get("returned") if step.get("ok") else None
+            return {**step, **({"outputs": dict(returned)} if isinstance(returned, dict) else {}), "id": node.get("id"), "type": ntype, "label": label}
         if ntype in ("uefn.open_project", "uefn.launch", "uefn.close", "uefn.restart", "uefn.wait_ready", "uefn.wait_window"):
             return _uefn_node(node, ntype, label, cfg)
         if ntype in _PLAY_TYPES:
@@ -438,9 +802,282 @@ def _exec_node(node: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(result, dict) and result.get("ok") is False:
             return {"ok": False, "id": node.get("id"), "type": ntype, "label": label, "error": result.get("error") or "plugin node failed", "result": result}
         return {"ok": True, "id": node.get("id"), "type": ntype, "label": label, "result": result}
+    except (ExprError, ValueError) as exc:  # what the user wrote or wired: say what is wrong, no traceback
+        return {"ok": False, "id": node.get("id"), "type": ntype, "label": label, "error": str(exc)}
     except Exception as exc:
         _log.exception("automation node %s failed", ntype)
         return {"ok": False, "id": node.get("id"), "type": ntype, "label": label, "error": str(exc)}
+
+
+def _file_refs(raw: Any, kind: str) -> list[dict[str, Any]]:
+    """Picked files as file refs: {kind, path, name}."""
+    out: list[dict[str, Any]] = []
+    for item in raw if isinstance(raw, list) else [raw] if raw else []:
+        path = item.get("path") if isinstance(item, dict) else item
+        if not path:
+            continue
+        text = str(path)
+        name = item.get("name") if isinstance(item, dict) and item.get("name") else text.replace("\\", "/").rsplit("/", 1)[-1]
+        out.append({"kind": kind, "path": text, "name": str(name)})
+    return out
+
+
+def _input_value(ntype: str, cfg: dict[str, Any]) -> dict[str, Any]:
+    raw = cfg.get("value")
+    if ntype == "input.text":
+        return {"text": "" if raw is None else str(raw)}
+    if ntype == "input.number":
+        number = as_number(raw)
+        return {"number": None if isinstance(number, float) and math.isnan(number) else number}
+    if ntype == "input.boolean":
+        return {"value": raw in (True, "true", "yes", "1", 1)}
+    if ntype == "input.json":
+        if isinstance(raw, str):
+            try:
+                return {"value": json.loads(raw) if raw.strip() else None}
+            except ValueError as exc:
+                raise ValueError(f"That isn't valid JSON: {exc}") from exc
+        return {"value": raw}
+    kind = ntype.split(".", 1)[1]
+    if kind == "images":
+        return {"images": _file_refs(raw, "image")}
+    refs = _file_refs(raw, kind)
+    return {kind: refs[0] if refs else None}
+
+
+def _input_node_value(cfg: dict[str, Any], _inputs: dict[str, Any], _payload: dict[str, Any], *, ntype: str) -> dict[str, Any]:
+    outputs = _input_value(ntype, cfg)
+    return {"ok": True, "outputs": outputs, "result": outputs}
+
+
+def _expression_scope(inputs: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    scope = {key: value for key, value in payload.items() if isinstance(key, str) and not key.startswith("_")}
+    scope.update(inputs)
+    return scope
+
+
+def _if_node(cfg: dict[str, Any], inputs: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    result = truthy(evaluate(str(cfg.get("expression") or ""), _expression_scope(inputs, payload)))
+    return {"ok": True, "branch": result, "outputs": {"result": result}, "result": {"result": result}}
+
+
+def _expression_node(cfg: dict[str, Any], inputs: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    value = evaluate(str(cfg.get("expression") or ""), _expression_scope(inputs, payload))
+    return {"ok": True, "outputs": {"result": value}}
+
+
+def _compare_node(cfg: dict[str, Any], inputs: dict[str, Any], _payload: dict[str, Any]) -> dict[str, Any]:
+    a, b = inputs.get("a"), inputs.get("b")
+    op = str(cfg.get("op") or "equals")
+    if op == "not_equals":
+        result = not _loose_equal(a, b)
+    elif op in ("greater", "less"):
+        left, right = (a, b) if isinstance(a, str) and isinstance(b, str) else (as_number(a), as_number(b))
+        result = left > right if op == "greater" else left < right
+    elif op == "contains":
+        result = _value_contains(a, as_text(b))
+    elif op == "starts":
+        result = as_text(a).startswith(as_text(b))
+    elif op == "matches":
+        try:
+            result = re.search(as_text(b), as_text(a)) is not None
+        except re.error as exc:
+            raise ValueError(f"B isn't a valid pattern: {exc}") from exc
+    elif op == "empty":
+        result = a in (None, "") or (isinstance(a, (list, dict)) and not a)
+    else:
+        result = _loose_equal(a, b)
+    return {"ok": True, "outputs": {"result": bool(result)}}
+
+
+def _loose_equal(a: Any, b: Any) -> bool:
+    return bool(evaluate("a == b", {"a": a, "b": b}))
+
+
+def _template_node(cfg: dict[str, Any], inputs: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    template = str(cfg.get("template") or "")
+    if not template.strip():
+        template = " ".join("{{" + name + "}}" for name in inputs)
+    return {"ok": True, "outputs": {"text": _as_text(_template(template, {**payload, **inputs}))}}
+
+
+def _preview_node(_cfg: dict[str, Any], inputs: dict[str, Any], _payload: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, "outputs": {"value": inputs.get("value")}}
+
+
+def _model_choice(cfg: dict[str, Any]) -> tuple[str, str]:
+    """(gateway, model) for Ask a model: the node's pick, else the app's default model."""
+    model = str(cfg.get("model") or "").strip()
+    if not model:
+        try:
+            from frontend.ui_web.panel_api import _first_available_api_model
+            from frontend.ui_web.panel_settings import PanelSettings
+
+            model = str(getattr(PanelSettings.load(), "default_model", "") or "").strip()
+            if not model:
+                first = _first_available_api_model()
+                if first:
+                    return first
+        except Exception:
+            model = ""
+    if not model:
+        raise ValueError("Pick a model in this node's details.")
+    from backend.agent.model_pricing import resolve_provider_for_model
+
+    provider = resolve_provider_for_model(model)
+    if ":" in model and model.split(":", 1)[0].lower() == provider:
+        model = model.split(":", 1)[1]
+    return provider, model
+
+
+def _ask_node(cfg: dict[str, Any], inputs: dict[str, Any], _payload: dict[str, Any]) -> dict[str, Any]:
+    from backend.automations.llm_complete import complete_prompt
+
+    prompt = _as_text(inputs.get("prompt")).strip()
+    if not prompt:
+        return {"ok": False, "error": "Nothing in Prompt: wire text in or type it in the details."}
+    parts = [str(cfg.get("system") or "").strip(), _as_text(inputs.get("context")).strip(), prompt]
+    provider, model = _model_choice(cfg)
+    out = complete_prompt(provider, "\n\n".join(part for part in parts if part), model)
+    if not out.get("ok"):
+        return {"ok": False, "error": str(out.get("error") or "The model didn't answer.")}
+    text = str(out.get("text") or "")
+    return {"ok": True, "outputs": {"text": text}, "result": {"model": model}}
+
+
+def _model_text(inputs: dict[str, Any], pin: str) -> str:
+    value = inputs.get(pin)
+    return (value if isinstance(value, str) else _as_text(value)).strip()
+
+
+def _vision_node(cfg: dict[str, Any], inputs: dict[str, Any], _payload: dict[str, Any]) -> dict[str, Any]:
+    """Ask about an image: the picture(s) and a question to a model that can see."""
+    from backend.agent.model_capabilities import model_in_cache, supports_vision
+    from backend.automations.llm_complete import complete_prompt
+
+    raw = inputs.get("image")
+    pictures = [media.path_of(item) for item in (raw if isinstance(raw, list) else [raw]) if media.path_of(item)]
+    if not pictures:
+        return {"ok": False, "error": "Nothing in Image: wire an image in or pick one in the details."}
+    question = _model_text(inputs, "prompt") or "Describe this image in detail."
+    provider, model = _model_choice(cfg)
+    if model_in_cache(provider, model) and not supports_vision(provider, model):
+        return {"ok": False, "error": f"{model} can't see images. Pick a model with vision in this node's details."}
+    out = complete_prompt(provider, question, model, system=str(cfg.get("system") or "").strip(), images=pictures)
+    if not out.get("ok"):
+        return {"ok": False, "error": str(out.get("error") or "The model didn't answer.")}
+    return {"ok": True, "outputs": {"text": str(out.get("text") or "")}, "result": {"model": model}}
+
+
+def _json_in(text: str) -> Any:
+    """The JSON object or list in a model's answer (it may wrap it in ``` or words)."""
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
+    for opener, closer in (("{", "}"), ("[", "]")):
+        start, end = cleaned.find(opener), cleaned.rfind(closer)
+        if start != -1 and end > start:
+            try:
+                return json.loads(cleaned[start:end + 1])
+            except ValueError:
+                continue
+    raise ValueError("The model's answer wasn't JSON. Try a stronger model or simpler fields.")
+
+
+def _extract_node(cfg: dict[str, Any], inputs: dict[str, Any], _payload: dict[str, Any]) -> dict[str, Any]:
+    """Extract data: the model reads the text and fills the fields named in the details."""
+    from backend.automations.llm_complete import complete_prompt
+
+    text = _model_text(inputs, "text")
+    if not text:
+        return {"ok": False, "error": "Nothing in Text: wire text in or type it in the details."}
+    fields = [str(name).strip() for name in cfg.get("names") or [] if str(name).strip()]
+    if not fields:
+        return {"ok": False, "error": "Name the fields to fill in this node's details."}
+    hint = str(cfg.get("system") or "").strip()
+    ask = (f"Read the text below and fill these fields: {', '.join(fields)}. "
+           "Answer with only one JSON object with exactly those keys; use null when the text doesn't say."
+           + (f"\n{hint}" if hint else "") + f"\n\nText:\n{text}")
+    provider, model = _model_choice(cfg)
+    out = complete_prompt(provider, ask, model)
+    if not out.get("ok"):
+        return {"ok": False, "error": str(out.get("error") or "The model didn't answer.")}
+    data = _json_in(str(out.get("text") or ""))
+    if not isinstance(data, dict):
+        data = {fields[0]: data}
+    filled = {name: data.get(name) for name in fields}
+    return {"ok": True, "outputs": {"data": filled, **filled}, "result": {"model": model}}
+
+
+def _translate_node(cfg: dict[str, Any], inputs: dict[str, Any], _payload: dict[str, Any]) -> dict[str, Any]:
+    from backend.automations.llm_complete import complete_prompt
+
+    text = _model_text(inputs, "text")
+    if not text:
+        return {"ok": False, "error": "Nothing in Text: wire text in or type it in the details."}
+    language = str(inputs.get("language") or cfg.get("language") or "").strip() or "English"
+    provider, model = _model_choice(cfg)
+    out = complete_prompt(provider, f"Translate this into {language}. Answer with only the translation, keeping its formatting.\n\n{text}", model)
+    if not out.get("ok"):
+        return {"ok": False, "error": str(out.get("error") or "The model didn't answer.")}
+    return {"ok": True, "outputs": {"text": str(out.get("text") or "").strip()}, "result": {"model": model, "language": language}}
+
+
+def _save_file_node(cfg: dict[str, Any], inputs: dict[str, Any], _payload: dict[str, Any]) -> dict[str, Any]:
+    """Save file: copy what is wired in into a folder picked in the details."""
+    import shutil
+
+    folder = str(inputs.get("folder") or cfg.get("folder") or "").strip()
+    if not folder:
+        return {"ok": False, "error": "Choose the folder to save into in this node's details."}
+    raw = inputs.get("file")
+    items = [item for item in (raw if isinstance(raw, list) else [raw]) if media.path_of(item)]
+    if not items:
+        return {"ok": False, "error": "Nothing in File: wire a file in."}
+    dest = Path(folder).expanduser()
+    dest.mkdir(parents=True, exist_ok=True)
+    name = str(cfg.get("name") or "").strip()
+    saved: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        source = Path(media.path_of(item))
+        if not source.is_file():
+            return {"ok": False, "error": f"{source.name} isn't on this PC any more."}
+        stem = (name if len(items) == 1 else f"{name}-{index + 1}") if name else source.stem
+        target = dest / f"{Path(stem).stem}{source.suffix}"
+        if cfg.get("overwrite") is not True:
+            n = 2
+            while target.exists() and target.resolve() != source.resolve():
+                target = dest / f"{Path(stem).stem} ({n}){source.suffix}"
+                n += 1
+        if target.resolve() != source.resolve():
+            shutil.copy2(source, target)
+        saved.append(with_url(file_ref(target, kind_of(target))))
+    return {"ok": True, "outputs": {"file": saved[0] if len(saved) == 1 else saved, "path": str(saved[0]["path"])}, "result": {"saved": [ref["path"] for ref in saved]}}
+
+
+def _node_folder(node: dict[str, Any]) -> Path:
+    """This run's folder for one node's files (AppData workflow_media)."""
+    live = _LIVE.get()
+    wid, run_id = live if live else ("adhoc", time.strftime("%Y%m%d-%H%M%S"))
+    return run_folder(wid, run_id, str(node.get("id") or "node"))
+
+
+_INPUT_TYPES = ("input.text", "input.number", "input.boolean", "input.json", "input.image", "input.images",
+                "input.audio", "input.video", "input.mesh", "input.pdf", "input.svg", "input.file")
+_DATA_HANDLERS: dict[str, Any] = {
+    **{ntype: (lambda cfg, inputs, payload, _t=ntype: _input_node_value(cfg, inputs, payload, ntype=_t)) for ntype in _INPUT_TYPES},
+    "logic.if": _if_node,
+    "logic.expression": _expression_node,
+    "logic.compare": _compare_node,
+    "llm.ask": _ask_node,
+    "text.template": _template_node,
+    "util.preview": _preview_node,
+    "llm.vision": _vision_node,
+    "llm.extract": _extract_node,
+    "llm.translate": _translate_node,
+    "util.save_file": _save_file_node,
+    "uefn.import": lambda cfg, inputs, _payload: media.send_to_uefn(cfg, inputs),
+    "blender.open": lambda cfg, inputs, _payload: media.open_in_blender(cfg, inputs),
+    **listops.HANDLERS,
+}
 
 
 def _prompt_ducky(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -969,17 +1606,21 @@ def _input_node(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "result": values}
 
 
-def _output_node(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    """Collect the return values; a blank value returns the field of the same name."""
+def _output_node(cfg: dict[str, Any], payload: dict[str, Any], wired: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Collect the return values: a wired pin first, else its value (a blank value
+    returns the field of the same name)."""
     values: dict[str, Any] = {}
     for name, row in _named_rows(cfg.get("outputs")):
         raw = row.get("value")
-        values[name] = payload.get(name) if raw in (None, "") else _template(raw, payload)
+        if wired and name in wired:
+            values[name] = wired[name]
+        else:
+            values[name] = payload.get(name) if raw in (None, "") else _template(raw, payload)
     earlier = payload.get(_RETURN_KEY) if isinstance(payload.get(_RETURN_KEY), dict) else {}
     return {"ok": True, "result": {_RETURN_KEY: {**earlier, **values}}}
 
 
-def _call_workflow(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _call_workflow(cfg: dict[str, Any], payload: dict[str, Any], wired: dict[str, Any] | None = None) -> dict[str, Any]:
     """Run another workflow like a function and merge what it returns into this run.
 
     ``share`` runs it on a copy of this run's fields and brings every field back, as
@@ -1000,9 +1641,10 @@ def _call_workflow(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
     graph = wf.get("graph") or {}
     nodes = {str(n.get("id")): n for n in (graph.get("nodes") or []) if isinstance(n, dict) and n.get("id")}
     edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
+    flow = _Dataflow(nodes, edges, catalog.node_specs())
     starts = [nid for nid, node in nodes.items() if node.get("type") == "flow.input"]
-    starts = starts or _start_ids(nodes, edges=edges, trigger_id="", starter_id="")
-    if not starts:
+    starts = starts or _start_ids(nodes, edges=edges, trigger_id="", starter_id="", is_step=flow.is_step)
+    if not starts and not flow.data_nodes:
         return {"ok": False, "error": f"{name} has no start."}
     args = cfg.get("args") if isinstance(cfg.get("args"), dict) else {}
     share = bool(cfg.get("share"))
@@ -1011,14 +1653,20 @@ def _call_workflow(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, An
     else:
         ctx = {key: payload[key] for key in _RUN_PLUMBING if key in payload}
     ctx.update({str(key).strip(): _template(value, payload) for key, value in args.items() if str(key).strip()})
+    ctx.update({str(key): value for key, value in (wired or {}).items()})  # wired pins win over typed values
     _prepare_run_ctx(ctx, wf)
     new_hub = ctx.get("group_id") and ctx.get("group_id") != payload.get("group_id")
     ident_token = _bind_hub_identity(ctx) if new_hub else None
     stack_token = _CALL_STACK.set((*stack, wid))
+    live_token = _LIVE.set((wid, uuid.uuid4().hex[:12]))  # its own steps light up in its own editor
     started = time.time()
     try:
-        steps, ok, error, _seen = _walk(nodes, edges, ctx, starts)
+        steps, ok, error, _seen = _walk(nodes, edges, ctx, starts, flow=flow) if starts else ([], True, "", 0)
+        if ok:
+            ok, error = flow.run_sinks(ctx)
+        steps = list(flow.order)
     finally:
+        _LIVE.reset(live_token)
         _CALL_STACK.reset(stack_token)
         if ident_token is not None:
             from backend.workspace import identity

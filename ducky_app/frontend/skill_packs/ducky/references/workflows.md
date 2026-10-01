@@ -1,0 +1,208 @@
+---
+description: "Workflows — build, change, explain and run them with the workflow tools, and show the user on the canvas as you go"
+metadata:
+  order: 6
+  label: "Workflows"
+  default_enabled: false
+  load_condition: "User asks about Workflows, or to build, change, explain, run, organize or lock a workflow"
+---
+
+## Workflows
+
+A workflow is a graph of nodes that runs on this PC: a start (Manual, Chat input,
+Cron, a plugin trigger, or Inputs for a reusable one), steps (tools, Duckies,
+agents, waits, branches, loops, UEFN play tests, other workflows) and an end.
+Each belongs to **Local** (this PC) or a **team** (synced to every member).
+Do the work with the tools below; never tell the user to open the tab — the
+tools open it and show them what you did.
+
+### The editor (what the user sees)
+
+- **Workflows list** (left): folders per owner, a green/red light for on/off and
+  an icon for what starts it (▶ Manual, 💬 Chat, clock = schedule, ⚡ trigger,
+  puzzle = reusable). Right-click a workflow: Open, Rename, Duplicate, On,
+  Move out of folder, Delete. Ctrl + click / Shift + click picks several: right-click
+  them for Duplicate, Turn on / off, Move out of their folders, Delete; drag them
+  into a folder; Delete key deletes. Right-click a folder: New workflow here, New
+  folder inside, Rename, Remove folder (keeps its workflows). Every delete asks first.
+  The header folds the list into a small pill; its edge drags to resize.
+- **Top bar**: the name on its own on the left; the buttons in a pill on the right,
+  right to left: Play (test run; Stop while it runs), the on/off light,
+  Run on this PC (team schedules), Save, Duplicate, Move or copy, History, Redo,
+  Undo, Delete. While a workflow runs the step running now glows, the wire it came
+  along runs thick and bright, and the run log fills in step by step.
+- **Canvas** (Unreal style): Select tool `V` boxes nodes, Hand `H` (or hold
+  Space) moves around; both click nodes and wires. Wheel zooms 5%–400%; far
+  out the cards thin to their title. `F` (or the Fit button) fits the selection:
+  one node zooms in on it, a group comes with its frame, nothing selected fits
+  everything. Right-click or press-and-hold the canvas, or `+`, to add a node;
+  dragging from a pin into empty space adds a node already wired. `Delete`
+  removes, `Ctrl+G` groups, `Ctrl+Shift+G` ungroups, `Ctrl+Z` / `Ctrl+Y`.
+  Bottom toolbar: Select, Hand, Run log, +, Fit, the zoom % menu (zoom, the grid:
+  squares, dots or nothing, and the Snap to grid switch) and Outline (every group
+  and node as a tree; pick one to jump to it). Dragging a node moves it without
+  selecting it; a plain click selects it. Hovering a workflow in the list shows a
+  card with the graph in miniature; click it to open. Ctrl + scroll over any panel
+  (list, top bar, details, bottom toolbar, run log) zooms just that panel.
+- **Details panel** (slides over the right side, nothing moves): one tab per
+  selected node or group. Header icons: group the selection, lock (lit while
+  locked), delete (red), close; the pen beside the lock edits: the name and
+  description become editable in place, and the color swatches and icon picker
+  show (click the big icon for another emoji). Then Settings: every tool input has its own field, and
+  `{{field}}` uses a value from an earlier step. Groups: Ungroup, Make reusable
+  (moves the group into its own workflow and calls it from here).
+- **Run log** (bottom bar): steps of the last run; Copy log, Clear log.
+- Settings → Appearance → Workflows: every canvas color and size.
+
+### Graph shape
+
+```
+graph = {
+  nodes:  [{id, type, x, y, config, label?, description?, color?, icon?, locked?}],
+  edges:  [{source, target, kind}                     # white run wire: what runs next
+           | {source, target, kind:"data", source_pin, target_pin}],  # value wire
+  groups: [{id, name, node_ids, parent_id?, color?, icon?, locked?}]
+}
+```
+
+- Cards are 240 wide at `x, y` (82 tall, plus 24 per pin row); keep ~300 between columns, ~120 between rows (the
+  editor snaps dragged nodes to its 16px grid).
+- `kind`: `main`; `true` / `false` after `flow.branch`; `each` / `done` after
+  `flow.foreach`. Starts have no inputs; ends have no outputs.
+- `color`: red | amber | green | blue | purple (none = by kind). `icon`: one emoji.
+- Groups are boxes; a node sits in at most one group (its innermost);
+  `parent_id` nests a group in another.
+- Node types and their settings: `list_workflow_nodes`. Common ones: `tool.call`
+  `{name, arguments:{…}}`, `flow.wait {seconds}`, `flow.branch {mode, field, op,
+  equals|contains}`, `flow.foreach {field}`, `pipeline.agent {ducky, prompt}`,
+  `pipeline.finish {message}`, `workflow.call {workflow_id, args, share?}`,
+  `flow.input {inputs:[{name, default}]}`, `flow.output {outputs:[{name, value}]}`,
+  `start.cron {interval_seconds | cron}`, `uefn.*` play-test steps.
+  Inputs/Return rows take `type` (a pin type, below) so the pins are typed.
+- Values: `"{{field.path}}"` alone keeps the value's type; inside text it
+  becomes text.
+
+### Pins and data wires (Atlas / Blueprint style)
+
+Nodes can have several typed inputs on the left and outputs on the right; the
+card grows a row per pin and shows each value. Two kinds of node:
+
+- **Step nodes** (white run pins) run in order along `main`/`true`/`false` wires:
+  tools, agents, `logic.if`, `llm.ask`, `workflow.call`, `util.preview`, `uefn.*`.
+- **Value nodes** (no run pins, `exec: false` in `list_workflow_nodes`) run once
+  per run when a step needs their output: `input.*`, `logic.expression`,
+  `logic.compare`, `text.template`. A graph of only value nodes and a sink
+  (`util.preview`, `flow.output`) runs too.
+
+A data edge: `{source, target, kind:"data", source_pin, target_pin}`. One wire
+per input pin (a new one replaces the old); an output can feed many. Types:
+`text number boolean json any image images audio video mesh pdf svg file`.
+`any` and `json` take anything; text takes numbers and yes/no; a file type takes
+only its own kind (`images` also takes one `image`). A wrong type or unknown pin
+makes `save_workflow` refuse with `wires: [...]` naming each problem.
+
+Unwired inputs use the value set in details: `config.inputs = {pin: value}`
+(`{{field}}` works). Each step's outputs are also fields for later steps
+(`{{nodes.<node_id>.<pin>}}`), and a run returns `node_outputs`.
+
+| Node | Pins in → out | Settings |
+| --- | --- | --- |
+| `input.text / number / boolean / json` | → `value` | `value` |
+| `input.image / images / audio / video / mesh / pdf / svg / file` | → `file` (`files`) | file picked on this PC |
+| `logic.if` (step) | `names` → `result` (boolean); run wires `true` / `false` | `condition`, `names` (default `["value"]`) |
+| `logic.expression` | `names` (default `a`, `b`) → `result` | `expression` |
+| `logic.compare` | `a`, `b` → `result` (boolean) | `op`: `== != > >= < <= contains starts ends` |
+| `llm.ask` (step) | `prompt`, `context` → `text` | `model` (any model in the app's model picker; blank = default), `system` |
+| `text.template` | `names` → `text` | `template` with `{{name}}` |
+| `util.preview` (step) | `value` → | shows the value on the card |
+| `workflow.call` (step) | its Inputs rows → its Return rows | `workflow_id`, `share` |
+| `tool.call` (step) | → `result` (json), `text` | `name`, `arguments` |
+
+**Expressions** (`logic.if` condition, `logic.expression`): JavaScript-like and
+safe. Names are the node's input pins, then run fields. `+ - * / %`, `== != < <=
+> >=`, `&& || !`, `a ? b : c`, `a.b`, `a[0]`, `"text"`, `[1, 2]`, methods
+`.length .includes() .startsWith() .endsWith() .toLowerCase() .toUpperCase()
+.trim() .split() .slice() .replace() .indexOf() .join() .keys()`, functions
+`len number text bool round floor ceil abs min max contains matches json lower
+upper`. No assignments, loops or calls out. Example: `score >= 10 &&
+name.includes("duck")`.
+
+Example: Text in → Ask a model → Preview, plus an If on its length:
+
+```json
+{"nodes": [
+  {"id": "q", "type": "input.text", "x": 0, "y": 0, "config": {"value": "Name a duck"}},
+  {"id": "s", "type": "start.manual", "x": 0, "y": 200, "config": {}},
+  {"id": "ask", "type": "llm.ask", "x": 300, "y": 200, "config": {"system": "One short answer."}},
+  {"id": "long", "type": "logic.if", "x": 600, "y": 200, "config": {"names": ["text"], "condition": "text.length > 20"}},
+  {"id": "show", "type": "util.preview", "x": 900, "y": 120, "config": {}}],
+ "edges": [
+  {"source": "s", "target": "ask", "kind": "main"},
+  {"source": "ask", "target": "long", "kind": "main"},
+  {"source": "long", "target": "show", "kind": "true"},
+  {"source": "q", "target": "ask", "kind": "data", "source_pin": "value", "target_pin": "prompt"},
+  {"source": "ask", "target": "long", "kind": "data", "source_pin": "text", "target_pin": "text"},
+  {"source": "ask", "target": "show", "kind": "data", "source_pin": "text", "target_pin": "value"}]}
+```
+
+### Locks
+
+`locked: true` on a node or group — or being inside a locked group — means the
+user froze it: no moving, rewiring, editing, regrouping or deleting. Keep locked
+items exactly as they are. `save_workflow` refuses a save that changes one and
+names them; ask the user, and only after they agree pass
+`allow_locked_changes=true` (or unlock it: drop `locked` with their OK).
+
+### Tools
+
+| Tool | Use |
+| --- | --- |
+| `list_workflows` | every workflow (id, name, on/off, folder, what starts it) + owners |
+| `get_workflow` | one workflow's graph, owner and last run log |
+| `list_workflow_nodes` | node types, their settings and plugin nodes |
+| `save_workflow` | create, or update by `workflow_id` (left-out graph/name/description/enabled stay) |
+| `show_workflow` | point at nodes or a group with a caption; nothing saved |
+| `run_workflow` | run now (prompt, files, payload for a reusable one) |
+| `stop_workflow` | stop every run of it on this PC right away |
+| `set_workflow_folder` / `move_workflow_folder` | file a workflow / rename, move or remove a folder |
+| `copy_workflow` | copy or move to Local or a team |
+| `delete_workflow` | delete (for everyone, if it is a team's) |
+| `list_workflow_versions` / `restore_workflow_version` | History: saved versions, bring one back |
+| `clear_workflow_runs` | Clear log |
+| `emit_workflow_trigger` | fire a plugin trigger to test listeners |
+| `list_workflow_templates` / `save_workflow_template` / `delete_workflow_template` | New workflow picker |
+
+### Showing the user (they watch it happen)
+
+- Every `save_workflow` opens the editor, glides to the nodes it added or
+  changed and lights them up. Build in a few saves (start + first steps, then
+  the rest) so they can follow along.
+- To explain or review a workflow, walk it with `show_workflow(workflow_id,
+  node_ids=[…] | group_id=…, note="what this part does")`, one call per step,
+  in the order it runs. `select=true` (default) opens those nodes' details.
+- For a Next/Back tour use `ducky_walkthrough_run` with
+  `navigate: "workflows"` and these targets (`ducky_ui_list_targets("workflows")`
+  lists what is on screen): `workflows.node.<id>`, `workflows.group.<id>`,
+  `workflows.list`, `workflows.list.row.<id>`,
+  `workflows.toolbar.{name,delete,undo,redo,history,move,duplicate,save,onoff,run}`,
+  `workflows.canvas`, `workflows.tool.{select,hand}`, `workflows.log`,
+  `workflows.add`, `workflows.fit`, `workflows.zoom`, `workflows.outline`,
+  `workflows.details`,
+  `workflows.details.{edit,lock,delete,close}`. A node or group target glides
+  into view by itself. Open the workflow first (`show_workflow`).
+
+### Recipes
+
+- **Build:** `list_workflow_nodes` → `save_workflow` (start → steps → end, wired
+  with `main`) → `run_workflow` → read the log in the result (or `get_workflow`)
+  → fix and save again with the same `workflow_id`.
+- **Change one part:** `get_workflow`, edit only those nodes in the graph you got
+  back, save it whole with `workflow_id`. Leave locked items alone.
+- **Reuse steps:** put them in their own workflow `flow.input → … → flow.output`
+  (give the rows a `type`) and call it with `workflow.call`: its inputs and
+  returns become that node's pins. Or have the user group them and press
+  Make reusable.
+- **Pipeline of values:** `input.*` → value nodes → step nodes, wired by pins;
+  read `node_outputs` in the run result to check each pin.
+- **Organize:** `set_workflow_folder(id, "Play tests/Tycoon")`; groups, colors
+  and icons on nodes make big graphs readable.

@@ -27,6 +27,17 @@ _LOCAL_OWNER = {"id": LOCAL, "kind": LOCAL, "label": "Local", "state": "ok", "re
 _BUILTIN_STARTERS = {"start.manual", "start.chat", "start.cron", "flow.input"}
 _FOLDER_NAME_MAX = 64
 _FOLDER_PATH_MAX = 512
+# Named colors a node or a group box can take (the editor maps them to theme colors).
+_COLORS = {"red", "amber", "green", "blue", "purple"}
+# A picked icon is one emoji (or a very short symbol); emoji sequences run up to ~8 code points.
+_ICON_MAX = 8
+
+
+def _icon(raw: Any) -> str:
+    icon = raw.strip() if isinstance(raw, str) else ""
+    if not icon or len(icon) > _ICON_MAX or any(ch.isspace() or ord(ch) < 32 for ch in icon):
+        return ""
+    return icon
 
 
 def _announce_graphs_changed() -> None:
@@ -66,17 +77,34 @@ def normalize_graph(raw: Any) -> dict[str, Any]:
             except (TypeError, ValueError):
                 width = 320.0
             nodes[-1]["width"] = min(720.0, max(280.0, width)) if math.isfinite(width) else 320.0
+        if n.get("color") in _COLORS:
+            nodes[-1]["color"] = n["color"]
+        if n.get("locked") is True:  # the editor won't move or change it until unlocked
+            nodes[-1]["locked"] = True
+        if _icon(n.get("icon")):
+            nodes[-1]["icon"] = _icon(n.get("icon"))
     ids = {n["id"] for n in nodes}
     edges: list[dict[str, str]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, ...]] = set()
+    fed: set[tuple[str, str]] = set()  # one data wire per input pin
     for e in src.get("edges") or []:
         if not isinstance(e, dict):
             continue
         source = str(e.get("source") or "").strip()
         target = str(e.get("target") or "").strip()
         kind = str(e.get("kind") or "main").strip() or "main"
+        if source not in ids or target not in ids or source == target:
+            continue
+        if kind == "data":
+            source_pin = str(e.get("source_pin") or "").strip()
+            target_pin = str(e.get("target_pin") or "").strip()
+            if not source_pin or not target_pin or (target, target_pin) in fed:
+                continue
+            fed.add((target, target_pin))
+            edges.append({"source": source, "target": target, "kind": kind, "source_pin": source_pin, "target_pin": target_pin})
+            continue
         key = (source, target, kind)
-        if source in ids and target in ids and source != target and key not in seen:
+        if key not in seen:
             seen.add(key)
             edges.append({"source": source, "target": target, "kind": kind})
     out = {"nodes": nodes, "edges": edges}
@@ -87,7 +115,7 @@ def normalize_graph(raw: Any) -> dict[str, Any]:
 
 def _normalize_groups(raw: Any, ids: set[str]) -> list[dict[str, Any]]:
     """Visual boxes. A node sits in at most one group (its innermost); ``parent_id``
-    nests a group inside another. Missing parents and cycles become top level, and a
+    nests a group inside another; ``color`` is one of ``_COLORS``. Missing parents and cycles become top level, and a
     group with no nodes and no child groups is dropped."""
     groups: list[dict[str, Any]] = []
     parents: dict[str, str] = {}
@@ -105,7 +133,14 @@ def _normalize_groups(raw: Any, ids: set[str]) -> list[dict[str, Any]]:
                 kept.append(member)
                 grouped_nodes.add(member)
         parents[gid] = str(group.get("parent_id") or "").strip()
-        groups.append({"id": gid, "name": str(group.get("name") or "Group").strip() or "Group", "node_ids": kept})
+        box: dict[str, Any] = {"id": gid, "name": str(group.get("name") or "Group").strip() or "Group", "node_ids": kept}
+        if group.get("color") in _COLORS:
+            box["color"] = group["color"]
+        if group.get("locked") is True:
+            box["locked"] = True
+        if _icon(group.get("icon")):
+            box["icon"] = _icon(group.get("icon"))
+        groups.append(box)
     for gid in parents:
         seen = {gid}
         at = parents[gid]
@@ -142,19 +177,30 @@ def signature_of(nodes: list[dict[str, Any]]) -> dict[str, list[Any]] | None:
     returns = [n for n in nodes if n.get("type") == "flow.output"]
     if not inputs and not returns:
         return None
+    from backend.automations.pins import clean_type
+
     params: list[dict[str, str]] = []
     for node in inputs:
         for row in (node.get("config") or {}).get("inputs") or []:
             name = str(row.get("name") or "").strip() if isinstance(row, dict) else ""
             if name and all(p["name"] != name for p in params):
-                params.append({"name": name, "default": str(row.get("default") or "")})
+                param = {"name": name, "default": str(row.get("default") or "")}
+                if row.get("type"):
+                    param["type"] = clean_type(row.get("type"))
+                params.append(param)
     outputs: list[str] = []
+    output_types: dict[str, str] = {}
     for node in returns:
         for row in (node.get("config") or {}).get("outputs") or []:
             name = str(row.get("name") or "").strip() if isinstance(row, dict) else ""
             if name and name not in outputs:
                 outputs.append(name)
-    return {"inputs": params, "outputs": outputs}
+                if row.get("type"):
+                    output_types[name] = clean_type(row.get("type"))
+    out: dict[str, Any] = {"inputs": params, "outputs": outputs}
+    if output_types:
+        out["output_types"] = output_types  # pin types on the Run workflow node
+    return out
 
 
 def empty_workflow(*, name: str = "Untitled") -> dict[str, Any]:
@@ -343,6 +389,24 @@ def append_run(workflow_id: str, run: dict[str, Any]) -> None:
     found = owned.find(workflow_id)
     if found is not None:
         owned.append_run(found[0]["account"], str(found[1]["id"]), run, at)
+
+
+def clear_runs(workflow_id: str) -> bool:
+    """Empty this PC's run log for one workflow (Clear log); the workflow is untouched."""
+    if not use_db("automations"):
+        wf = _read_file(_files_dir() / f"{workflow_id}.json") if _safe_file_id(workflow_id) else None
+        if wf is None:
+            return False
+        wf["runs"] = []
+        _files_put(wf)
+        return True
+    from backend.automations import owned
+
+    found = owned.find(workflow_id)
+    if found is None:
+        return False
+    owned.clear_runs(found[0]["account"], str(found[1]["id"]))
+    return True
 
 
 # --------------------------------------------------------------------------- views
