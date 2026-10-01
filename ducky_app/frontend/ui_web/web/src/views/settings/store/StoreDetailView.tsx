@@ -62,7 +62,7 @@ export function StoreDetailView({ item, pendingSlug, catalogReady, jobs, actionB
       </div>
 
       <div className="ds-detail-cols">
-        <aside ref={targetRef("settings.store.detail", { route: "settings.store", label: item.name || slug })} className={`ds-detail-side${installBusy ? " ds-detail-side--busy" : ""}`}>
+        <aside ref={targetRef("settings.store.detail", { route: "settings.store", label: item.name || slug })} className={`ds-detail-side${installBusy ? " ds-detail-side--busy" : ""}`} data-store-slug={slug}>
           <div className="ds-detail-icon" aria-hidden>
             {item.icon_data_url ? (
               <img src={item.icon_data_url} alt="" draggable={false} />

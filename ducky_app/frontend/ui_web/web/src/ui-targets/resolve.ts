@@ -106,6 +106,7 @@ export function accessibleName(el: Element): string {
 }
 
 export function isShown(el: Element): boolean {
+  if (el.closest("[inert]")) return false;
   const rect = el.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return false;
   const style = window.getComputedStyle(el);
@@ -156,8 +157,11 @@ export function resolveTarget(spec: TargetSpec): HTMLElement | null {
   const id = (q.id || "").trim();
   if (id) {
     const el = getTargetElement(id);
-    if (el && el.isConnected) return el;
-    return resolverFor(id)?.find?.(id) ?? null;
+    if (el && el.isConnected && isShown(el)) return el;
+    // Registered but out of sight (a layer slid away): the view may show it elsewhere.
+    const other = resolverFor(id)?.find?.(id) ?? null;
+    if (other) return other;
+    return el && el.isConnected ? el : null;
   }
   const scope = q.within ? resolveTarget(q.within) : document.body;
   if (!scope) return null;

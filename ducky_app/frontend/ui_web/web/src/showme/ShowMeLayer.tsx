@@ -167,10 +167,11 @@ export function ShowMeLayer() {
             <span className="showme-steps-count">{index + 1} / {total}</span>
             {request.click && !last && phase === "shown" ? <span className="showme-steps-hint">Click the highlight to go on</span> : null}
             <span className="showme-steps-actions">
-              {index > 0 ? <button type="button" className="showme-step-btn" onClick={backShowMe}>Back</button> : null}
+              {/* Off while a step is on its way, so a double-click on Next doesn't skip or close. */}
+              {index > 0 ? <button type="button" className="showme-step-btn" disabled={phase === "going"} onClick={backShowMe}>Back</button> : null}
               {last
-                ? <button type="button" className="showme-step-btn showme-step-btn--primary" onClick={close}>Close</button>
-                : <button type="button" className="showme-step-btn showme-step-btn--primary" onClick={nextShowMe}>Next</button>}
+                ? <button key="close" type="button" className="showme-step-btn showme-step-btn--primary" disabled={phase === "going"} onClick={close}>Close</button>
+                : <button key="next" type="button" className="showme-step-btn showme-step-btn--primary" disabled={phase === "going"} onClick={nextShowMe}>Next</button>}
             </span>
           </div>
         ) : null}

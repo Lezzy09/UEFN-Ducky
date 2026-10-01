@@ -5,6 +5,7 @@ import {
   accessibleName,
   findByRole,
   findByText,
+  isShown,
   isTargetSpec,
   listUiActions,
   registerTargetResolver,
@@ -67,6 +68,25 @@ describe("finding what to show", () => {
     offShort();
     expect(resolveTarget("demo.pin.a.in.x")).toBeNull();
     unregisterTarget("demo.button");
+  });
+
+  it("skips a registered element in a hidden (inert) layer for what the view shows instead", () => {
+    const layer = document.createElement("div");
+    layer.setAttribute("inert", "");
+    const card = sized(document.createElement("div"));
+    layer.append(card);
+    const page = sized(document.createElement("aside"));
+    document.body.append(layer, page);
+    registerTarget("demo.item.meshy", card);
+    expect(isShown(card)).toBe(false);
+    // No view resolver: still the registered element (callers decide what to do with it).
+    expect(resolveTarget("demo.item.meshy")).toBe(card);
+    const off = registerTargetResolver("demo.item.", { find: () => page });
+    expect(resolveTarget("demo.item.meshy")).toBe(page);
+    layer.removeAttribute("inert");
+    expect(resolveTarget("demo.item.meshy")).toBe(card);
+    off();
+    unregisterTarget("demo.item.meshy");
   });
 
   it("names targets and knows what counts as one", () => {

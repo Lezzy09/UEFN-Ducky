@@ -78,6 +78,20 @@ describe("Show me", () => {
     expect(getShowMeState().request).not.toBeNull();
   });
 
+  it("doesn't ring something mounted in a hidden layer: it says it can't find it", async () => {
+    render(<ShowMeLayer />);
+    const layer = document.createElement("div");
+    layer.setAttribute("inert", "");
+    document.body.append(layer);
+    layer.append(target("demo.hidden", "Hidden"));
+    let result: Awaited<ReturnType<typeof playShowMe>> | undefined;
+    await act(async () => {
+      result = await playShowMe({ target: "demo.hidden", title: "Hidden", body: "" });
+    });
+    expect(result).toMatchObject({ shown: false, missing: true });
+    expect(document.querySelector(".showme-overlay")?.getAttribute("data-phase")).toBe("missing");
+  });
+
   it("opens the workflow first and selects the nodes it points at", async () => {
     render(<ShowMeLayer />);
     target("workflows.node.servers", "Fortnite servers up?");
@@ -127,6 +141,11 @@ describe("Show me with several steps", () => {
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    });
+    // On its way: a second click lands on a Close that is off.
+    const early = screen.getAllByRole("button", { name: "Close" }).find((b) => b.classList.contains("showme-step-btn")) as HTMLButtonElement;
+    expect(early.disabled).toBe(true);
+    await act(async () => {
       await new Promise((r) => setTimeout(r, 300));
     });
     expect(screen.getByRole("dialog", { name: "Second" })).toBeTruthy();

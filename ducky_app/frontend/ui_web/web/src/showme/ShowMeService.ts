@@ -11,7 +11,7 @@
 import { requestFocusGraph } from "../hooks/graphActivity";
 import { openPanelRoute } from "../navigation/openPanelRoute";
 import { requestOpenWorkflowsTab } from "../navigation/openWorkflowsTab";
-import { isTargetSpec, revealTarget, runUiAction, targetKey, waitForTarget, type TargetSpec } from "../ui-targets/resolve";
+import { isShown, isTargetSpec, revealTarget, runUiAction, targetKey, waitForTarget, type TargetSpec } from "../ui-targets/resolve";
 
 export interface ShowMeStep {
   /** One target, or several shown as one highlight (a group of nodes). */
@@ -173,7 +173,8 @@ async function playStep(index: number): Promise<ShowMeResult> {
       if (!done.ok) console.warn("[show-me] action failed", done.error);
       await wait(150);
     }
-    const found = await Promise.all(targets.map((t) => waitForTarget(t, findTimeoutMs)));
+    // Found = on screen (or just scrolled away); something mounted in a hidden layer is not.
+    const found = (await Promise.all(targets.map((t) => waitForTarget(t, findTimeoutMs)))).map((el) => (el && isShown(el) ? el : null));
     if (state.key !== myKey) return { ok: true, shown: false, missing: false, target: key };
     if (found.some(Boolean)) {
       await revealTarget(targets[found.findIndex(Boolean)]);

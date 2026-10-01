@@ -45,6 +45,7 @@ export function getTargetElement(id: string): HTMLElement | null {
 }
 
 function isVisible(el: HTMLElement): boolean {
+  if (el.closest("[inert]")) return false;
   const rect = el.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return false;
   const style = window.getComputedStyle(el);

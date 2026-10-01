@@ -74,6 +74,7 @@ import {
 } from "../../hooks/storeCatalogCache";
 import { StoreHeroSkeleton, StoreSkeletonRows } from "./store/StoreSkeleton";
 import { useUiTarget } from "../../ui-targets/registry";
+import { cssEscape, registerTargetResolver } from "../../ui-targets/resolve";
 import { maybeStartPluginWalkthrough } from "../../walkthrough";
 import { useVersionCheck } from "../../hooks/useVersionCheck";
 import { startAppUpdate } from "../../update/appUpdate";
@@ -844,6 +845,26 @@ export function StoreTab() {
   );
   const view = detailItem || pendingDetailSlug ? "detail" : activeSection ? "section" : "main";
   const showSkeleton = catalogLoading && allItems.length === 0;
+
+  // Layers slid off to the side stay mounted: make them inert so Tab, screen readers and
+  // Show me / tours don't land on cards that aren't on screen.
+  useEffect(() => {
+    const host = (sectionLayerRef.current ?? detailLayerRef.current)?.parentElement;
+    if (!host) return;
+    for (const name of ["main", "section", "detail"] as const) {
+      const layer = host.querySelector<HTMLElement>(`:scope > .ds-layer--${name}`);
+      if (layer) layer.inert = view !== name;
+    }
+  }, [view]);
+
+  // With a plugin's page open, its catalog card (`settings.store.item.<slug>`) is that page.
+  useEffect(() => registerTargetResolver("settings.store.item.", {
+    find: (id) => {
+      const slug = id.slice("settings.store.item.".length);
+      const page = document.querySelector<HTMLElement>(`.ds-detail-side[data-store-slug="${cssEscape(slug)}"]`);
+      return page && !page.closest("[inert]") ? page : null;
+    },
+  }), []);
 
   // First paint of real cards: stagger reveal (skip when hydrating from cache).
   useEffect(() => {

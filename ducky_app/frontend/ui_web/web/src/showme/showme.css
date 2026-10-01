@@ -235,6 +235,11 @@
   background: rgba(255, 255, 255, 0.12);
 }
 
+.showme-step-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .showme-step-btn--primary {
   border-color: color-mix(in srgb, var(--accent, #4c8dff) 70%, transparent);
   background: color-mix(in srgb, var(--accent, #4c8dff) 30%, transparent);
