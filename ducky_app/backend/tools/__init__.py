@@ -28,6 +28,10 @@ from backend.tools.panel import permission_prompt  # noqa: F401
 from backend.tools.verse import skill_tool as _verse_skill_tool  # noqa: F401
 from backend.tools.verse import verse as _verse_tools  # noqa: F401
 from backend.tools.verse import verse_diagnostics as _verse_diagnostics  # noqa: F401
+# Typed UMG / Verse-field tools (gated on the verse plugin per call). Without this
+# import the frozen app exposes the listener's UMG commands as one-`params`-dict
+# passthroughs (bridge/dynamic_tools), and flat arguments are silently dropped.
+from backend.tools.verse import umg as _verse_umg  # noqa: F401
 # Domain editor tools (actors, niagara, …) still register via uefn-plugin-* only.
 # translation_tools / materials register via their plugins.
 # Discord tools live entirely in uefn-plugin-discord (api.tool).
