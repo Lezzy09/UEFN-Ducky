@@ -82,7 +82,7 @@ const EMOJI: Record<string, string> = {
   "image.concat": "🧩", "image.text": "🔤",
   "mesh.generate": "🧊", "mesh.from_image": "📸", "mesh.multi_view": "🎞️", "mesh.retexture": "🖌️", "mesh.remesh": "🕸️", "mesh.uv_unwrap": "🗺️",
   "mesh.convert": "🔁", "mesh.repair": "🩹", "mesh.bake": "🍞", "mesh.render": "📷", "mesh.rig": "🦴", "mesh.animate": "🕺",
-  "mesh.info": "📏", "mesh.fit_box": "📦", "mesh.set_origin": "📍", "mesh.origin_text": "🎯", "mesh.rotate": "🔃",
+  "mesh.info": "📏", "mesh.fit_box": "📦", "mesh.set_origin": "📍", "mesh.origin_text": "🎯", "mesh.auto_scale": "📐", "mesh.rotate": "🔃",
   "mesh.textures_extract": "🗂️", "mesh.textures_apply": "🧵",
   "blender.open": "🟠", "blender.render": "🎬", "blender.export": "📤", "uefn.import": "🚚",
   "list.make": "📋", "list.get": "👉", "list.count": "🔢", "list.join": "🔗", "list.filter": "🧹", "list.map": "🔀",

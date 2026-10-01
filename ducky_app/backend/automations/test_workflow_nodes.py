@@ -702,3 +702,14 @@ def test_the_skill_docs_examples_use_real_nodes_and_pins():
         graph = json.loads(example)
         assert all(n["type"] in specs for n in graph["nodes"])
         assert check_wires(graph, specs) == []
+
+
+def test_auto_transform_mesh_scales_to_real_size(model, tmp_path):
+    model["answers"].append('{"height_m": 2}')
+    step = run("mesh.auto_scale", {}, {"mesh": ref(make_glb(tmp_path / "barrel.glb", offset=(4, 4, 4)), "mesh"), "description": "a wooden barrel"})
+    assert step["ok"], step
+    lo, hi = _box(step)
+    assert round(hi[1] - lo[1], 6) == 2 and round(lo[1], 6) == 0  # 2 m tall, standing on the origin
+    assert "a wooden barrel" in model["seen"][0]["prompt"] and step["outputs"]["height"] == 2
+    model["answers"].append("tall")
+    assert "sensible height" in run("mesh.auto_scale", {}, {"mesh": ref(make_glb(tmp_path / "b2.glb"), "mesh")})["error"]

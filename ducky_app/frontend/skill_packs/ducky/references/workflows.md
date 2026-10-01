@@ -176,7 +176,8 @@ Free, on this PC: `image.resize` (`width`, `height`, `mode` fit/fill/stretch),
 `image.text` (`text` → `image`). GLB only: `mesh.info` → `width height depth
 triangles info`; `mesh.fit_box` (`width height depth`, `stretch`);
 `mesh.set_origin` (`x y z`: min/center/max/mass/keep, Y is up);
-`mesh.origin_text` (`instruction`, a model picks the origin); `mesh.rotate`
+`mesh.origin_text` (`instruction`, a model picks the origin); `mesh.auto_scale`
+(`description`: a model sets its real-world height, origin at the bottom); `mesh.rotate`
 (`x y z` degrees); `mesh.textures_extract` → `base_color roughness metallic
 normal occlusion emissive`; `mesh.textures_apply` (those as inputs).
 Lists: `list.make` (`names`), `list.get` (`index`, -1 = last), `list.count`,

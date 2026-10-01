@@ -1104,6 +1104,34 @@ def _origin_text_node(cfg: dict[str, Any], inputs: dict[str, Any], payload: dict
     return {**step, "result": {**step.get("result", {}), "model": model}}
 
 
+def _auto_scale_node(cfg: dict[str, Any], inputs: dict[str, Any], folder: Path) -> dict[str, Any]:
+    """Auto Transform Mesh: real-world height from what it is, scaled, origin at the bottom center."""
+    from backend.automations.llm_complete import complete_prompt
+
+    mesh = inputs.get("mesh")
+    gltf, binary, source = glbops._open({"mesh": mesh})
+    lo, hi = glbops.bounds(gltf, binary)
+    size = [round(hi[i] - lo[i], 4) for i in range(3)]
+    what = _model_text(inputs, "description") or source.stem.replace("_", " ").replace("-", " ")
+    ask = (f"A 3D model of: {what}. Its width : height : depth are {size[0]} : {size[1]} : {size[2]} (Y is up). "
+           "How tall is this object in the real world, in meters? Answer with only JSON like {\"height_m\": 1.2}.")
+    provider, model = _model_choice(cfg)
+    out = complete_prompt(provider, ask, model)
+    if not out.get("ok"):
+        return {"ok": False, "error": str(out.get("error") or "The model didn't answer.")}
+    try:
+        picked = _json_in(str(out.get("text") or ""))
+    except ValueError:
+        picked = None
+    height = picked.get("height_m") if isinstance(picked, dict) else None
+    if not isinstance(height, (int, float)) or not 0.001 <= float(height) <= 10000:
+        return {"ok": False, "error": "The model didn't give a sensible height; describe the object in What it is."}
+    fitted = glbops.fit_box({}, {"mesh": mesh, "height": float(height)}, folder / "fit")
+    placed = glbops.set_origin({"x": "center", "y": "min", "z": "center"}, {"mesh": fitted["outputs"]["mesh"]}, folder)
+    return {"ok": True, "outputs": {"mesh": placed["outputs"]["mesh"], "height": float(height)},
+            "result": {"model": model, "height_m": float(height), "object": what}}
+
+
 def _node_folder(node: dict[str, Any]) -> Path:
     """This run's folder for one node's files (AppData workflow_media)."""
     live = _LIVE.get()
@@ -1119,6 +1147,7 @@ _FOLDER_OPS: dict[str, Any] = {
     "blender.render": media.blender_render,
     "blender.export": media.blender_export,
     "mesh.origin_text": lambda cfg, inputs, folder: _origin_text_node(cfg, inputs, {}, folder),
+    "mesh.auto_scale": _auto_scale_node,
 }
 
 _INPUT_TYPES = ("input.text", "input.number", "input.boolean", "input.json", "input.image", "input.images",
