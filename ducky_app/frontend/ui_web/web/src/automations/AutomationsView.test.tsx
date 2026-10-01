@@ -1383,7 +1383,8 @@ describe("several workflows, live runs, outline and team sync", () => {
     expect([...menu.querySelectorAll('[role^="menuitem"]')].map((el) => el.textContent?.trim())).toEqual(["Duplicate 3", "Turn on 1", "Turn off 2", "Delete 3 workflows"]);
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Delete 3 workflows" }));
     await screen.findByText("Delete 3 workflows?");
-    await confirmIt("Delete");
+    expect(screen.getByText(/“Second”.*“Third”.*You can't undo this\./)).toBeTruthy();  // it names what goes
+    await confirmIt("Delete 3");
     await waitFor(() => expect(api.delete_workflow.mock.calls.map(([id]) => id).sort()).toEqual(["p", "q", "r"]));
   });
 
@@ -1794,5 +1795,33 @@ describe("image nodes", () => {
     expect(api.save_workflow).toHaveBeenCalled();  // saved first, so the node that runs is the one on screen
     await waitFor(() => expect(document.querySelector('[data-aw-node="gen"] .aw-node-thumb img')?.getAttribute("src")).toContain("again.png"));
     expect(within(details()!).getByText("again.png")).toBeTruthy();  // Last run shows the file
+  });
+});
+
+describe("no workflows yet", () => {
+  it("offers one obvious New workflow and a few ready-made pipelines", async () => {
+    api.list_workflows.mockResolvedValue({ workflows: [] });
+    const templates = [
+      { id: "builtin:pipe-prompt-image", name: "Prompt to picture", icon: "🖼️", category: "Images", kind: "builtin", ready: true, graph: { nodes: [{ id: "q", type: "input.text", x: 0, y: 0, config: {} }], edges: [] } },
+      { id: "builtin:pipe-prompt-3d-uefn", name: "Prompt to 3D model in UEFN", icon: "🧊", category: "3D", kind: "builtin", ready: false, missing_plugins: ["meshy"], graph: { nodes: [], edges: [] } },
+    ];
+    (api as unknown as { list_workflow_templates: ReturnType<typeof vi.fn> }).list_workflow_templates = vi.fn().mockResolvedValue({ ok: true, templates });
+    renderView();
+    const hero = await screen.findByRole("region", { name: "Make your first workflow" });
+    await within(hero).findByRole("button", { name: /Prompt to picture/ });
+    expect(within(hero).queryByRole("button", { name: /Prompt to 3D model/ })).toBeNull();  // needs a plugin that isn't set up
+    expect(screen.getAllByRole("button", { name: "New workflow" }).length).toBeGreaterThan(1);  // the hero and each empty section
+    fireEvent.click(within(hero).getByRole("button", { name: /Prompt to picture/ }));
+    await waitFor(() => expect(api.save_workflow).toHaveBeenCalledWith(expect.objectContaining({ name: "Prompt to picture", graph: templates[0].graph }), LOCAL.id));
+  });
+
+  it("keeps New workflow in view while nothing is open", async () => {
+    renderView();
+    await screen.findByText("Example");
+    const foot = document.querySelector(".aw-list-foot")!;
+    expect(within(foot as HTMLElement).getByRole("button", { name: "New workflow" })).toBeTruthy();
+    fireEvent.click(screen.getByText("Example"));
+    await screen.findByRole("button", { name: "Connect from Pause" });
+    expect(document.querySelector(".aw-list-foot")).toBeNull();  // a workflow is open: the canvas has the room
   });
 });

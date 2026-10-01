@@ -1239,3 +1239,24 @@
 .aw-list-row.is-active .aw-trigger, .aw-list-row.is-picked .aw-trigger { color: var(--blue); }
 .aw-tree-actions .aw-icon-button { width: 20px; height: 20px; }
 .aw-tree-actions { padding: 1px; }
+
+/* No workflows yet: one obvious way in, plus a few ready-made pipelines one click away. */
+.aw-empty-hero { display: flex; flex-direction: column; align-items: center; gap: 8px; margin: 10px 12px 14px; padding: 22px 16px 18px; border: 1px dashed var(--border-light); border-radius: 12px; text-align: center; }
+.aw-empty-hero-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.aw-empty-hero-icon svg { width: 22px; height: 22px; }
+.aw-empty-hero > strong { color: var(--fg); font-size: 15px; }
+.aw-empty-hero > p { margin: 0 0 4px; color: var(--fg-dim); font-size: 12px; }
+.aw-new-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--accent); color: var(--fg-inverse, white); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.aw-new-button:hover { background: var(--accent-hover, var(--accent)); }
+.aw-new-button svg { width: 14px; height: 14px; }
+.aw-empty-picks { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); gap: 6px; width: 100%; margin-top: 8px; }
+.aw-empty-pick { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.aw-empty-pick:hover { border-color: var(--border-light); background: var(--tab-hover); }
+.aw-empty-pick-icon { flex: 0 0 auto; font-size: 18px; line-height: 1; }
+.aw-empty-pick-text { display: flex; flex-direction: column; min-width: 0; }
+.aw-empty-pick-text > span { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.aw-empty-pick-text > small { color: var(--fg-dim); font-size: 11px; }
+.aw-section-empty .aw-link { padding: 0; font-size: inherit; }
+/* Nothing open: New workflow stays in view at the foot of the list. */
+.aw-list-foot { display: flex; justify-content: center; padding: 10px 12px 12px; border-top: 1px solid var(--border); }
+.aw-list-foot > .aw-new-button { width: 100%; }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent, type Ref } from "react";
 import { getApi } from "../hooks/usePanelApi";
-import type { AutomationSummaryDto, PluginScopeStatus, WorkflowOwnerDto, WorkflowOwnersDto } from "../types/panel";
+import type { AutomationSummaryDto, AutomationTemplateDto, PluginScopeStatus, WorkflowOwnerDto, WorkflowOwnersDto } from "../types/panel";
 import { Icons } from "../icons/Icons";
 import { syncText } from "../plugin-ui/scopeBarText";
 import { ContextMenu, useContextMenuState, type ContextMenuItem } from "../components/ContextMenu";
@@ -93,12 +93,17 @@ type Props = {
   onDeleteWorkflows?: (ids: string[]) => void;
   /** Remove a folder and keep its workflows (asks first). */
   onRemoveFolder?: (ownerId: string, path: string) => void;
+  /** No workflows yet: a few ready-made pipelines to start from in one click. */
+  featured?: AutomationTemplateDto[];
+  onCreateFrom?: (template: AutomationTemplateDto) => void;
+  /** Nothing open: keep a New workflow button in view (not only on hover). */
+  showNew?: boolean;
 };
 
 /** Workflows sidebar: one section per owner (Local, then each team), with folders
  *  inside. Drag a workflow or a folder onto a folder, or onto the owner, to file it;
  *  right-click anything for what you can do with it. */
-export function WorkflowList({ listId, listRef, owners, rows, activeId, collapsed, nowMs, emptyFolders = {}, onToggleCollapsed, onOpen, onCreate, onImportLocal, onAddFolder, onMoveWorkflow, onMoveFolder, onRenameWorkflow, onDuplicateWorkflow, onSetEnabled, onDeleteWorkflow, onDeleteWorkflows, onRemoveFolder }: Props) {
+export function WorkflowList({ listId, listRef, owners, rows, activeId, collapsed, nowMs, emptyFolders = {}, onToggleCollapsed, onOpen, onCreate, onImportLocal, onAddFolder, onMoveWorkflow, onMoveFolder, onRenameWorkflow, onDuplicateWorkflow, onSetEnabled, onDeleteWorkflow, onDeleteWorkflows, onRemoveFolder, featured = [], onCreateFrom, showNew }: Props) {
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const [editing, setEditing] = useState<Editing | null>(null);
   const [renamingId, setRenamingId] = useState("");
@@ -337,6 +342,24 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
         </button>
       </div>
       <div className="aw-list-sections" id={listId} hidden={collapsed}>
+        {!rows.length && sections.some((owner) => !owner.readOnly) ? (
+          <div className="aw-empty-hero" role="region" aria-label="Make your first workflow">
+            <span className="aw-empty-hero-icon" aria-hidden="true"><Icons.Workflow /></span>
+            <strong>Make your first workflow</strong>
+            <p>Start from a ready-made pipeline, or from a blank canvas.</p>
+            <button type="button" className="aw-new-button" onClick={() => onCreate(sections.find((owner) => !owner.readOnly)!.id)}><Icons.Plus /> New workflow</button>
+            {featured.length && onCreateFrom ? (
+              <div className="aw-empty-picks" role="group" aria-label="Start from a template">
+                {featured.map((template) => (
+                  <button key={template.id} type="button" className="aw-empty-pick" title={template.description || template.name} onClick={() => onCreateFrom(template)}>
+                    <span className="aw-empty-pick-icon" aria-hidden="true">{template.icon || "⚡"}</span>
+                    <span className="aw-empty-pick-text"><span>{template.name}</span><small>{template.category || "Template"}</small></span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {sections.map((owner) => {
           const mine = rows.filter((row) => (row.owner?.id || LOCAL_OWNER.id) === owner.id);
           const tree = buildFolderTree(mine, emptyFolders[owner.id] || []);
@@ -365,7 +388,9 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
                 {newFolderRow(owner, "", 0)}
                 {tree.folders.map((folder) => renderFolder(owner, folder, 0, open && !collapsed))}
                 {renderRows(owner, tree.rows, 0, open && !collapsed)}
-                {!mine.length && !tree.folders.length && !(editing?.owner === owner.id) && <li className="aw-section-empty" style={{ "--aw-level": 1 } as CSSProperties}>No workflows yet</li>}
+                {!mine.length && !tree.folders.length && !(editing?.owner === owner.id) && <li className="aw-section-empty" style={{ "--aw-level": 1 } as CSSProperties}>
+                  No workflows yet{!owner.readOnly ? <> · <button type="button" className="aw-link" onClick={() => onCreate(owner.id)}>New workflow</button></> : null}
+                </li>}
                 {owner.kind === "local" && owners.localImport ? (
                   <li className="aw-import-row">
                     <span>{owners.localImport} from when you were signed out</span>
@@ -378,6 +403,11 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
         })}
         {owners.signedIn === false ? <p className="aw-list-hint">Sign in to share workflows with a team.</p> : null}
       </div>
+      {showNew && rows.length && !collapsed && sections.some((owner) => !owner.readOnly) ? (
+        <div className="aw-list-foot">
+          <button type="button" className="aw-new-button" onClick={() => onCreate(sections.find((owner) => !owner.readOnly)!.id)}><Icons.Plus /> New workflow</button>
+        </div>
+      ) : null}
       {menu ? <ContextMenu x={menu.x} y={menu.y} onClose={closeMenu} items={menuItems(menu.data)} /> : null}
     </aside>
   );

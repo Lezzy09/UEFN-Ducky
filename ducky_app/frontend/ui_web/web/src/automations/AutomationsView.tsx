@@ -45,6 +45,9 @@ import { clampZoom, fitCamera, gridScale, groupTitleScale, portPoint, wirePath, 
 const LOG_H_MIN = 140;
 const LOG_H_MAX = 560;
 const LOG_H_DEFAULT = 220;
+/** What an empty list offers to start from (shown only when their plugins are set up). */
+const FEATURED_TEMPLATES = ["builtin:pipe-prompt-image", "builtin:pipe-prompt-3d-uefn", "builtin:pipe-character-full", "builtin:playtest-start", "builtin:pipe-title-card"];
+
 const GROUP_ORDER = ["Starting", "Triggers", "Inputs", "Functions", "Agents", "Duckies", "Text & AI", "Images", "Image tools", "3D", "3D tools", "Characters",
   "Blender", "UEFN", "Play test", "Lists", "Documents", "Tools", "Logic", "Utility", "End"];
 /** Canvas units a group's title takes above its box at 100%; nested boxes leave this room.
@@ -628,6 +631,19 @@ export function AutomationsView() {
     return operation;
   }, [refreshList, acknowledgeDraft]);
 
+  // No workflows yet: a few ready-made pipelines to start from in one click.
+  const [featured, setFeatured] = useState<AutomationTemplateDto[]>([]);
+  const noWorkflows = !rows.length;
+  useEffect(() => {
+    if (!noWorkflows || featured.length) return;
+    let alive = true;
+    void Promise.resolve(getApi()?.list_workflow_templates?.()).then((res) => {
+      const all = res?.templates || [];
+      if (alive) setFeatured(FEATURED_TEMPLATES.map((id) => all.find((row) => row.id === id && row.ready !== false)).filter((row): row is AutomationTemplateDto => !!row));
+    }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [noWorkflows, featured.length]);
+
   const createNew = (ownerId: string, folder = "") => {
     setPickerOwner(ownerId);
     setPickerFolder(folder);
@@ -717,11 +733,12 @@ export function AutomationsView() {
     const owner = (id: string) => draft?.id === id ? draft.owner : rows.find((item) => item.id === id)?.owner;
     const name = (id: string) => (draft?.id === id ? draft.name : rows.find((item) => item.id === id)?.name) || "this workflow";
     const teams = [...new Set(ids.map(owner).filter((item) => item?.kind === "team").map((item) => item!.label))];
+    const listed = ids.slice(0, 5).map((id) => `“${name(id)}”`).join(", ") + (ids.length > 5 ? ` and ${ids.length - 5} more` : "");
     const ok = await confirm(ids.length === 1 && teams.length
-      ? { title: `Delete for everyone in ${teams[0]}?`, message: `Every member loses “${name(ids[0])}”.`, confirmLabel: "Delete" }
+      ? { title: `Delete for everyone in ${teams[0]}?`, message: `Every member loses “${name(ids[0])}”. You can't undo this.`, confirmLabel: "Delete", danger: true }
       : ids.length === 1
-        ? { title: `Delete “${name(ids[0])}”?`, message: "You can't undo this.", confirmLabel: "Delete" }
-        : { title: `Delete ${ids.length} workflows?`, message: teams.length ? `Members of ${teams.join(", ")} lose theirs too. You can't undo this.` : "You can't undo this.", confirmLabel: "Delete" });
+        ? { title: `Delete “${name(ids[0])}”?`, message: "You can't undo this.", confirmLabel: "Delete", danger: true }
+        : { title: `Delete ${ids.length} workflows?`, message: `${listed}. ${teams.length ? `Members of ${teams.join(", ")} lose theirs too. ` : ""}You can't undo this.`, confirmLabel: `Delete ${ids.length}`, danger: true });
     if (ok !== true) return;
     for (const id of ids) {
       const open = draft?.id === id;
@@ -748,7 +765,7 @@ export function AutomationsView() {
   };
 
   const createFromTemplate = useCallback(
-    async (template: AutomationTemplateDto | null) => {
+    async (template: AutomationTemplateDto | null, at?: { owner: string; folder: string }) => {
       const gen = ++loadGen.current;
       let created: AutomationDto;
       try {
@@ -757,9 +774,9 @@ export function AutomationsView() {
           name: template?.name || "Untitled",
           description: template?.description || "",
           enabled: true,
-          folder: pickerFolder,
+          folder: at ? at.folder : pickerFolder,
           graph: template?.graph || emptyGraph(),
-        } as AutomationDto, pickerOwner);
+        } as AutomationDto, at ? at.owner : pickerOwner);
       } catch (error) {
         setActionError(error instanceof Error ? error.message : "Could not create workflow");
         return;
@@ -1648,7 +1665,9 @@ export function AutomationsView() {
         onDuplicateWorkflow={(id) => void duplicateWorkflow(id)}
         onDeleteWorkflow={(id) => void deleteWorkflow(id)}
         onDeleteWorkflows={(ids) => void deleteWorkflows(ids)}
-        onRemoveFolder={(ownerId, path) => void removeFolder(ownerId, path)} />
+        onRemoveFolder={(ownerId, path) => void removeFolder(ownerId, path)}
+        featured={rows.length ? [] : featured} showNew={!draft}
+        onCreateFrom={(template) => void createFromTemplate(template, { owner: (owners.owners || []).find((owner) => !owner.readOnly)?.id || LOCAL_OWNER.id, folder: "" })} />
       {draft && !listCollapsed ? <PanelResizeHandle label="Resize workflow list" className="aw-resize--list" value={panelWidths.list} min={LIST_W.min} max={LIST_W.max} edge="right"
         onResize={(list) => setPanelWidths((current) => ({ ...current, list }))} onActive={setResizingPanel} /> : null}
       <div className="aw-main">
