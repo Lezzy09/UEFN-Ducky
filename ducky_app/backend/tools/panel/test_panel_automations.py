@@ -31,16 +31,47 @@ def test_save_workflow_opens_editor_in_local(monkeypatch):
         delete_workflow(wid)
 
 
-def test_delete_workflow_opens_editor(monkeypatch):
+def test_delete_workflow_asks_the_user_first_then_opens_editor(monkeypatch):
+    from backend.automations.store import get_workflow
     from backend.tools.panel.panel_automations import delete_workflow, save_workflow
 
     events = _events(monkeypatch)
     wid = json.loads(save_workflow(name="Gone", graph={"nodes": [], "edges": []}))["workflow"]["id"]
     events.clear()
-    out = json.loads(delete_workflow(wid))
+    refused = json.loads(delete_workflow(wid))
+    assert refused["ok"] is False and refused["needs_confirmation"] is True
+    assert "ducky_ask_user" in refused["error"] and "“Gone”" in refused["error"]
+    assert get_workflow(wid) is not None and events == []  # nothing deleted without the user's yes
+    out = json.loads(delete_workflow(wid, confirmed=True))
     assert out == {"ok": True, "id": wid}
     assert {"type": "graph_focus", "id": wid, "action": "deleted"} in events
-    assert json.loads(delete_workflow(wid))["ok"] is False
+    assert json.loads(delete_workflow(wid, confirmed=True))["ok"] is False
+    assert json.loads(delete_workflow(wid))["error"] == "workflow not found"
+
+
+def test_find_workflows_then_make_one_from_a_template(monkeypatch):
+    from backend.automations.store import delete_workflow as _delete
+    from backend.tools.panel.panel_automations import create_workflow_from_template, find_workflows, save_workflow
+
+    events = _events(monkeypatch)
+    mine = json.loads(save_workflow(name="Chest prop to UEFN", description="Makes a 3D chest and imports it", graph={"nodes": [], "edges": []}))["workflow"]["id"]
+    try:
+        found = json.loads(find_workflows("make a 3D chest model for UEFN"))
+        assert found["ok"] and found["workflows"][0]["id"] == mine and "run_workflow" in found["hint"]
+        assert found["templates"][0]["id"] == "builtin:pipe-prompt-3d-uefn"
+        nothing = json.loads(find_workflows("zzz qqq"))
+        assert nothing["workflows"] == [] and nothing["templates"] == [] and "Nothing fits" in nothing["hint"]
+        made = json.loads(create_workflow_from_template("builtin:pipe-sprite-sheet", name="My sheet"))
+        assert made["ok"], made
+        wid = made["workflow"]["id"]
+        try:
+            assert made["workflow"]["name"] == "My sheet" and len(made["workflow"]["graph"]["nodes"]) == 3
+            assert any(e.get("type") == "graph_focus" and e.get("id") == wid for e in events)  # the editor opens on it
+        finally:
+            _delete(wid)
+        assert json.loads(create_workflow_from_template("builtin:nope"))["ok"] is False
+    finally:
+        _delete(mine)
 
 
 def test_save_workflow_refuses_an_unknown_team(monkeypatch):

@@ -285,11 +285,28 @@ def copy_workflow(workflow_id: str, owner: str, move: bool = False, pretty: bool
 
 
 @mcp.tool()
-def delete_workflow(workflow_id: str, pretty: bool = False) -> str:
-    """Delete one workflow (for every member, if it is a team's) and close it in the editor."""
+def delete_workflow(workflow_id: str, confirmed: bool = False, pretty: bool = False) -> str:
+    """Delete one workflow (for every member, if it is a team's) and close it in the editor.
+
+    It can't be undone, so first ask the user with ducky_ask_user (yes / no, naming the
+    workflow and, for a team's, that every member loses it). Only after they say yes call
+    again with confirmed=true. Never delete to "clean up" on your own."""
     from backend.automations.store import delete_workflow as _delete
+    from backend.automations.store import get_workflow as _get
 
     wid = (workflow_id or "").strip()
+    if confirmed is not True:
+        wf = _get(wid)
+        if wf is None:
+            return tool_json({"ok": False, "error": "workflow not found"}, pretty=pretty)
+        team = (wf.get("owner") or {}).get("kind") == "team"
+        return tool_json({
+            "ok": False,
+            "needs_confirmation": True,
+            "error": (f"Deleting “{wf.get('name') or wid}” can't be undone"
+                      + (f" and every member of {(wf.get('owner') or {}).get('label') or 'the team'} loses it" if team else "")
+                      + ". Ask the user with ducky_ask_user (yes / no) first; only after they say yes, call again with confirmed=true."),
+        }, pretty=pretty)
     try:
         ok = _delete(wid)
     except PermissionError as exc:
@@ -298,6 +315,61 @@ def delete_workflow(workflow_id: str, pretty: bool = False) -> str:
         return tool_json({"ok": False, "error": "workflow not found"}, pretty=pretty)
     _reveal_graph(wid, "deleted")
     return tool_json({"ok": True, "id": wid}, pretty=pretty)
+
+
+@mcp.tool()
+def find_workflows(task: str, limit: int = 6, pretty: bool = False) -> str:
+    """Workflows first (HARD): call this before doing a task tool by tool.
+
+    Searches the user's saved workflows and the ready-made templates (pictures, 3D,
+    characters, play tests, UEFN, documents…) for ones that fit ``task`` (plain words,
+    e.g. "prompt to 3D model in UEFN"), best first. A saved workflow that fits: run it
+    with run_workflow (or show it). A template that fits: create_workflow_from_template,
+    adjust its settings, then run it. Only when nothing fits, do the task by hand or
+    build a new workflow, and say so in one line."""
+    from backend.automations.finder import find
+    from backend.automations.store import list_workflows as _list
+    from backend.automations.templates import list_templates
+
+    found = find(task, _list(), list_templates(), limit=max(1, min(int(limit or 6), 20)))
+    if not found["workflows"] and not found["templates"]:
+        found["hint"] = "Nothing fits. Do it by hand, or build it as a workflow with save_workflow if the user will repeat it."
+    elif found["workflows"]:
+        found["hint"] = "Run the best saved workflow with run_workflow, or show it with show_workflow if the user wants to check it first."
+    else:
+        found["hint"] = "Create it from the best template with create_workflow_from_template, then set its inputs and run it."
+    return tool_json({"ok": True, **found}, pretty=pretty)
+
+
+@mcp.tool()
+def create_workflow_from_template(
+    template_id: str,
+    name: str = "",
+    owner: str = "local",
+    folder: str = "",
+    pretty: bool = False,
+) -> str:
+    """Make a new workflow from a template (ids from find_workflows or list_workflow_templates)
+    and open it in the editor. Paid image / 3D steps come with Spend credits off: ask the
+    user before turning spend on. Returns the new workflow (run it with run_workflow)."""
+    from backend.automations.store import save_workflow as _save
+    from backend.automations.templates import list_templates
+
+    row = next((t for t in list_templates() if t.get("id") == (template_id or "").strip()), None)
+    if row is None:
+        return tool_json({"ok": False, "error": "template not found; list them with list_workflow_templates"}, pretty=pretty)
+    if row.get("ready") is False:
+        return tool_json({"ok": False, "error": f"{row.get('name')} needs the {', '.join(row.get('missing_plugins') or [])} plugin(s); install them from the Store first."}, pretty=pretty)
+    doc: dict[str, Any] = {"name": (name or row.get("name") or "Untitled").strip(), "description": str(row.get("description") or ""),
+                           "enabled": True, "graph": row.get("graph") or {"nodes": [], "edges": []}}
+    if folder:
+        doc["folder"] = folder
+    try:
+        saved = _save(doc, owner=owner)
+    except (PermissionError, ValueError) as exc:
+        return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
+    _reveal_graph(str(saved.get("id") or ""), "saved", nodes=[str(n.get("id")) for n in (saved.get("graph") or {}).get("nodes") or []])
+    return tool_json({"ok": True, "workflow": saved, "from_template": row.get("id")}, pretty=pretty)
 
 
 @mcp.tool()
