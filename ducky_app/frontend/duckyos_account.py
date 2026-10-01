@@ -1547,6 +1547,12 @@ def start_rpc_waiter() -> None:
 
         def _loop() -> None:
             while not _RPC_STOP.is_set():
+                # The site offers Open only for a Live PC, and a PC is Live only
+                # with remote access on. Polling without it cost uefnducky.org a
+                # plugin call per second per signed-in PC for nothing.
+                if not _remote_access_on():
+                    _RPC_STOP.wait(5.0)
+                    continue
                 try:
                     if not _poll_desktop_rpc_once():
                         _RPC_STOP.wait(1.0)

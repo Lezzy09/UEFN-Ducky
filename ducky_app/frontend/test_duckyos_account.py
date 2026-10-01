@@ -395,6 +395,27 @@ def test_publish_device_presence_offline_when_remote_off() -> None:
     assert seen[2]["body"]["live"] is False
 
 
+def test_rpc_waiter_idle_while_remote_access_off() -> None:
+    from unittest.mock import patch
+
+    from frontend import duckyos_account as acc
+
+    acc.stop_rpc_waiter()
+    if acc._RPC_THREAD is not None:
+        acc._RPC_THREAD.join(timeout=10)
+    polls: list[int] = []
+    with (
+        patch.object(acc, "_load_blob", return_value={"device_key": "dky_v1_x"}),
+        patch.object(acc, "_remote_access_on", return_value=False),
+        patch.object(acc, "_poll_desktop_rpc_once", side_effect=lambda: polls.append(1)),
+    ):
+        acc.start_rpc_waiter()
+        acc._RPC_STOP.wait(0.3)
+        acc.stop_rpc_waiter()
+        acc._RPC_THREAD.join(timeout=10)
+    assert polls == []
+
+
 def test_name_allowed_matches_filter() -> None:
     from frontend.duckyos_account import _role_has, name_allowed
 
