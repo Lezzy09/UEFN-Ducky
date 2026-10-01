@@ -1211,3 +1211,31 @@
 .vtm-creator-icon { font-size: 22px; line-height: 1; }
 .vtm-textarea { min-height: 56px; resize: vertical; font-family: inherit; }
 .vtm-form-error { margin: 0; color: var(--red); font-size: 12px; }
+
+/* The Workflows list reads exactly like the Content and Duckies trees: full-width square
+   rows, the list text size in the dim text color, the trees' own hover and selected
+   colors (selected, Ctrl/Shift-picked and the open one alike), no side bar, no bigger
+   text when nothing is open. */
+.aw-list-sections { padding: 2px 0 48px; }
+.aw-list-ul { padding: 0 0 2px; }
+.aw-list-row, .aw-tree-folder, .aw-tree-toggle, .aw-section-toggle { border-radius: 0; }
+.aw-list-row,
+.aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-list-row {
+  min-height: 24px; padding-top: 1px; padding-bottom: 1px; padding-right: 9px;
+  color: var(--fg-dim); font-size: var(--wf-list-text-size); font-weight: 400; line-height: 22px;
+  transition: none;
+}
+.aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-list { font-size: var(--wf-list-text-size); }
+.aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-section-toggle strong { font-size: var(--wf-list-text-size); }
+.aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-trigger svg { width: 14px; height: 14px; }
+.aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-list-state { flex-basis: 8px; width: 8px; height: 8px; }
+.aw-tree-folder { min-height: 24px; color: var(--fg-dim); }
+.aw-tree-toggle { padding: 1px 4px; font-weight: 400; line-height: 22px; }
+.aw-section-toggle { min-height: 28px; padding: 3px 6px; }
+.aw-list-row:hover, .aw-tree-folder:hover, .aw-section-toggle:hover { background: var(--tab-hover); color: var(--fg); }
+.aw-list-row.is-active,
+.aw-list-row.is-picked,
+.aw-list-row.is-picked:hover { background: var(--tab-active); color: var(--fg); box-shadow: none; }
+.aw-list-row.is-active .aw-trigger, .aw-list-row.is-picked .aw-trigger { color: var(--blue); }
+.aw-tree-actions .aw-icon-button { width: 20px; height: 20px; }
+.aw-tree-actions { padding: 1px; }
