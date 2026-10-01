@@ -395,7 +395,8 @@ def test_scheduler_runs_every_local_workflow_with_a_schedule(monkeypatch):
             },
         }
     )
-    scheduler._tick()
+    for thread in scheduler._tick():
+        thread.join(5)
     assert hits == [wf["id"]]
 
 

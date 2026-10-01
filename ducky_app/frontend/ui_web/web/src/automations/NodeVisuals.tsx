@@ -68,7 +68,8 @@ export function useNodeFaces(enabled: boolean) {
 const EMOJI: Record<string, string> = {
   "start.chat": "💬", "start.manual": "▶️", "start.cron": "⏰",
   "pipeline.finish": "📤", "flow.end": "🏁", "flow.wait": "⏳",
-  "flow.branch": "🔀", "flow.foreach": "🔁", "tool.call": "🛠️",
+  "flow.branch": "🔀", "flow.foreach": "🔁", "flow.repeat": "🔂", "tool.call": "🛠️",
+  "fortnite.servers": "🛰️", "notify.message": "📨",
   "flow.input": "📥", "flow.output": "↩️", "workflow.call": "🧩",
   "uefn.open_project": "📂", "uefn.launch": "🚀", "uefn.close": "⏹️",
   "uefn.restart": "🔄", "uefn.wait_ready": "⏳", "uefn.wait_window": "🖥️",

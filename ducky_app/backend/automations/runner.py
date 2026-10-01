@@ -15,7 +15,7 @@ from typing import Any
 
 from pathlib import Path
 
-from backend.automations import catalog, glbops, imageops, listops, media, pdfops, plugin
+from backend.automations import catalog, glbops, imageops, listops, media, notify, pdfops, plugin, servers
 from backend.automations.expr import ExprError, as_number, as_text, evaluate, truthy
 from backend.automations.files import file_ref, is_file_ref, kind_of, run_folder, with_url
 from backend.automations.pins import DATA_KIND, node_pins
@@ -24,6 +24,7 @@ from backend.automations.store import all_workflows, append_run, get_workflow, r
 _log = logging.getLogger("automations")
 _MAX_STEPS = 256
 _FOREACH_CAP = 50
+_REPEAT_CAP = 10
 # ponytail: wait sleeps the runner thread; 120s ceiling. Per-node async if graphs nest waits.
 _WAIT_CAP_S = 120.0
 _AGENT_WAIT_CAP_S = 900.0
@@ -332,6 +333,7 @@ _ACTION_TYPES = frozenset(
         "ducky.spawn",
         "flow.wait",
         "flow.foreach",
+        "flow.repeat",
         "flow.branch",
         "tool.call",
         "pipeline.agent",
@@ -350,6 +352,8 @@ _ACTION_TYPES = frozenset(
         "uefn.game.stop",
         "uefn.player.wait",
         "uefn.log.expect",
+        "fortnite.servers",
+        "notify.message",
     }
 )
 
@@ -387,6 +391,7 @@ def run_workflow(
     if files is not None:
         ctx["files"] = files
     ctx["caller_conv_id"] = _caller(caller_conv_id or str(ctx.get("caller_conv_id") or ""))
+    ctx["workflow_name"] = str(wf.get("name") or "")
     _prepare_run_ctx(ctx, wf)
     ident_token = _bind_hub_identity(ctx)
     stack_token = _CALL_STACK.set((*_CALL_STACK.get(), str(wf["id"])))
@@ -407,6 +412,8 @@ def run_workflow(
         steps, ok, error, _seen = _walk(nodes, edges, ctx, starts, flow=flow) if starts else ([], True, "", 0)
         if ok:
             ok, error = flow.run_sinks(ctx)
+        if not ok and not cancel.is_set():
+            notify.on_failure(nodes, flow.outputs, flow.order, error, ctx)
         steps = list(flow.order)
         if flow.warnings:
             steps.append({"ok": True, "label": "Note", "result": {"warnings": flow.warnings}, "warning": " ".join(flow.warnings)})
@@ -624,6 +631,15 @@ def _walk(
                 came_from.setdefault(target, nid)
                 queue.append(target)
             continue
+        if ntype == "flow.repeat":
+            nested, r_ok, r_err, seen = _repeat(nid, node, nodes, edges, ctx, seen=seen, flow=flow)
+            steps.extend(nested)
+            if not r_ok:
+                return steps, False, r_err, seen
+            for target in _next_ids(nid, edges, "done"):
+                came_from.setdefault(target, nid)
+                queue.append(target)
+            continue
         if flow is not None and not flow.is_step(nid):
             continue  # a data node runs when its value is pulled, never along white wires
         try:
@@ -652,6 +668,96 @@ def _walk(
     if seen >= _MAX_STEPS and queue:
         return steps, False, "step budget exceeded", seen
     return steps, ok, error, seen
+
+
+def _repeat_tries(cfg: dict[str, Any]) -> int:
+    raw = cfg.get("max")
+    number = as_number(3 if raw in (None, "") else raw)
+    if isinstance(number, float) and not math.isfinite(number):
+        raise ValueError("Repeat until: Max tries must be a number.")
+    return min(max(int(number), 1), _REPEAT_CAP)
+
+
+def _repeat(
+    nid: str,
+    node: dict[str, Any],
+    nodes: dict[str, dict[str, Any]],
+    edges: list[dict[str, Any]],
+    ctx: dict[str, Any],
+    *,
+    seen: int,
+    flow: _Dataflow | None,
+) -> tuple[list[dict[str, Any]], bool, str, int]:
+    """Repeat until: run the each-wire, then check Until (a wired yes/no, else the
+    condition); go again until it says yes or the tries run out, then follow done.
+
+    Each pass starts fresh: what the steps in the loop made last pass is cleared, so
+    their values are worked out again ({{nodes.<id>.<pin>}} keeps the latest, for a
+    report after the loop). A pass whose step fails counts as not passed and the next
+    one starts (Stop still ends the run)."""
+    cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+    label = str(node.get("label") or "Repeat until")
+    steps: list[dict[str, Any]] = []
+
+    def fail(error: str) -> tuple[list[dict[str, Any]], bool, str, int]:
+        step = {"ok": False, "id": nid, "type": "flow.repeat", "label": label, "error": error}
+        steps.append(step)
+        if flow is not None:
+            flow.order.append(step)
+        _live_step(nid, "error", error=error)
+        return steps, False, error, seen
+
+    try:
+        tries = _repeat_tries(cfg)
+    except ValueError as exc:
+        return fail(str(exc))
+    each_ids = _next_ids(nid, edges, "each")
+    before = set(flow.outputs) if flow is not None else set()
+    attempt, passed, last_error = 0, False, ""
+    while attempt < tries:
+        attempt += 1
+        if flow is not None:
+            for key in [k for k in flow.outputs if k not in before and k != nid]:
+                flow.outputs.pop(key, None)
+            flow.outputs[nid] = {"attempt": attempt, "passed": False}
+        ctx["attempt"] = attempt
+        nested, n_ok, n_err, seen = _walk(nodes, edges, ctx, each_ids, stop_at=nid, seen=seen, origin=nid, flow=flow)
+        steps.extend(nested)
+        if n_err == STOPPED or _cancelled():
+            return steps, False, STOPPED, seen
+        if not n_ok and n_err == "step budget exceeded":
+            return steps, False, n_err, seen
+        last_error = "" if n_ok else n_err
+        if not n_ok:
+            continue
+        try:
+            passed = _repeat_done(nid, cfg, ctx, flow)
+        except (ExprError, ValueError, _DataError) as exc:
+            return fail(f"Until: {exc}")
+        if passed:
+            break
+    _live_step(nid, "ok")
+    result = {"attempts": attempt, "passed": passed, "max_tries": tries, **({"last_error": last_error} if last_error else {})}
+    step = {"ok": True, "id": nid, "type": "flow.repeat", "label": label, "outputs": {"attempt": attempt, "passed": passed}, "result": result}
+    steps.append(step)
+    if flow is not None:
+        flow.record(nid, step, ctx)
+        flow.order.append(step)
+    ctx.update(result)
+    return steps, True, "", seen
+
+
+def _repeat_done(nid: str, cfg: dict[str, Any], ctx: dict[str, Any], flow: _Dataflow | None) -> bool:
+    wire = flow.feeds.get(nid, {}).get("until") if flow is not None else None
+    if wire and flow is not None:
+        source, pin = wire
+        if flow.is_step(source) and source not in flow.outputs:
+            return False  # that step didn't run this pass (it went the other way)
+        return truthy(flow.pull(source, pin, ctx, for_node=nid))
+    expression = str(cfg.get("expression") or "").strip()
+    if expression:
+        return truthy(evaluate(expression, _expression_scope({}, ctx)))
+    return False  # nothing to check: every try runs (Repeat N times)
 
 
 def _exec_stoppable(node: dict[str, Any], payload: dict[str, Any], inputs: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -763,6 +869,8 @@ def _exec_node(node: dict[str, Any], payload: dict[str, Any], inputs: dict[str, 
                 "label": label,
                 "result": {"count": len(items), "field": str(cfg.get("field") or "cards")},
             }
+        if ntype == "flow.repeat":
+            return {"ok": True, "id": node.get("id"), "type": ntype, "label": label, "result": {"max_tries": _repeat_tries(cfg)}}
         if ntype == "flow.branch":
             return {**_branch_node(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "tool.call":
@@ -771,7 +879,8 @@ def _exec_node(node: dict[str, Any], payload: dict[str, Any], inputs: dict[str, 
             text = result.get("text") if isinstance(result, dict) and isinstance(result.get("text"), str) else _as_text(result)
             return {**called, "outputs": {"result": result, "text": text}, "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "pipeline.agent":
-            step = _pipeline_agent(cfg, payload)
+            # _seat: run again (a Repeat until pass), it is the same ducky. context: the wired text.
+            step = _pipeline_agent({**cfg, "_seat": str(node.get("id") or ""), "context": as_text(values.get("context"))}, payload)
             done = step.get("result") if isinstance(step.get("result"), dict) else {}
             files = [with_url(file_ref(f["path"], kind_of(f["path"]))) for f in done.get("files") or [] if isinstance(f, dict) and f.get("path")]
             return {**step, "outputs": {"text": str(done.get("text") or ""), "files": files}, "id": node.get("id"), "type": ntype, "label": label}
@@ -1167,6 +1276,8 @@ _DATA_HANDLERS: dict[str, Any] = {
     "llm.pick": _pick_node,
     "uefn.import": lambda cfg, inputs, _payload: media.send_to_uefn(cfg, inputs),
     "blender.open": lambda cfg, inputs, _payload: media.open_in_blender(cfg, inputs),
+    "fortnite.servers": lambda cfg, _inputs, _payload: servers.wait_for_servers(cfg, cancelled=_cancelled),
+    "notify.message": notify.message_me,
     **listops.HANDLERS,
 }
 
@@ -1370,10 +1481,16 @@ def _agent_spawn_kwargs(profile: dict[str, Any]) -> dict[str, Any]:
 def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     from backend.automations.artifacts import chat_dir, copy_files_into, list_files
 
+    node_id, context = str(cfg.get("_seat") or ""), str(cfg.get("context") or "")
+
     ducky = str(cfg.get("ducky") or cfg.get("profile_id") or payload.get("ducky") or "").strip()
     kwargs: dict[str, Any] = {}
     existing = ducky.startswith("chat:")
-    if existing:
+    # Run again in this run (a Repeat until pass): the same ducky, which remembers its last pass.
+    seats = payload.setdefault("_agent_seats", {}) if node_id else {}
+    if node_id and node_id in seats and not existing:
+        seat = dict(seats[node_id])
+    elif existing:
         seat = _existing_pipeline_ducky(ducky[5:], payload)
     elif ducky in ("", "__new__", "__blank__"):
         seat = _create_pipeline_ducky(cfg, payload)
@@ -1388,10 +1505,14 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
     conv_id = str(seat.get("conv_id") or "")
     if not conv_id:
         return {"ok": False, "error": "group_invite did not return a member"}
+    if node_id and not existing:
+        seats[node_id] = seat
     worker_dir = chat_dir(conv_id)
     incoming = payload.get("files") or []
     copy_files_into(incoming, worker_dir)
-    prompt = str(cfg.get("prompt") or payload.get("prompt") or "")
+    prompt = _as_text(_template(str(cfg.get("prompt") or payload.get("prompt") or ""), payload))
+    if context.strip():
+        prompt = f"{prompt}\n\n{context.strip()}" if prompt.strip() else context.strip()
     timeout = min(max(float(cfg.get("timeout_sec") or 180.0), 1.0), _AGENT_WAIT_CAP_S)
     caller = str(payload.get("caller_conv_id") or "").strip()
     wait = _run_message_and_wait(
@@ -1404,6 +1525,8 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
         attachments=_files_as_attachments(incoming),
     )
     if str(wait.get("status") or "") != "done":
+        if node_id:
+            seats.pop(node_id, None)  # it may still be busy: a next pass gets a fresh ducky
         return {
             "ok": False,
             "error": str(wait.get("error") or wait.get("status") or "agent failed"),

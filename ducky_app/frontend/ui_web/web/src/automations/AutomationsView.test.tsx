@@ -327,6 +327,16 @@ describe("workflow editor interactions", () => {
     expect(saved.graph.edges).toEqual([]);
     expect(details()).toBeNull();
   });
+  it("names a Repeat until's loop wire Each try", async () => {
+    saved.graph.nodes[0].type = "flow.repeat";
+    const { container } = await open();
+    fireEvent.click(container.querySelector(".aw-wire")!);
+    dropdown("Connection route");
+    expect(screen.queryByRole("radio", { name: "Each item", exact: true })).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "Each try", exact: true }));
+    await save();
+    expect(saved.graph.edges).toEqual([{ source: "s", target: "a", kind: "each" }]);
+  });
   it("animates a pulse along every wire and moves the grid with the view", async () => {
     const { container } = await open();
     const wire = container.querySelector(".aw-edge .aw-wire")!;

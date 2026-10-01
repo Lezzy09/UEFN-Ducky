@@ -212,6 +212,11 @@ def test_paused_team_still_lists_and_takes_a_workflow(who: _Who, fake_store: Fak
     assert wf["owner"]["id"] == "teamT" and wf["name"] == "While paused"
 
 
+def _tick() -> None:
+    for thread in scheduler._tick():  # each due workflow runs on its own thread
+        thread.join(5)
+
+
 def test_run_on_this_pc_gates_team_schedules(who: _Who, fake_store: FakeStore, monkeypatch) -> None:
     hits: list[tuple[str, str]] = []
     monkeypatch.setattr(scheduler, "run_workflow", lambda wid, **k: hits.append((who.account, wid)) or {"ok": True})
@@ -219,12 +224,12 @@ def test_run_on_this_pc_gates_team_schedules(who: _Who, fake_store: FakeStore, m
     ana = join(fake_store, who, "ana@x.org")
     wf = store.save_workflow({"name": "Every second", "graph": CRON}, owner="teamT")
     sync(fake_store, ana)
-    scheduler._tick()
+    _tick()
     join(fake_store, who, "bo@x.org")
-    scheduler._tick()
+    _tick()
     assert [h[1] for h in hits] == [wf["id"]]  # Ana's PC only
     store.set_run_here(wf["id"], True)
-    scheduler._tick()
+    _tick()
     assert len(hits) == 2 and "bo@x.org" in hits[1][0]
 
 

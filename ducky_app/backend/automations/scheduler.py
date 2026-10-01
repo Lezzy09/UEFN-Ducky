@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 
 from backend.automations import team
-from backend.automations.runner import run_workflow
+from backend.automations.runner import is_running, run_workflow
 from backend.automations.store import all_workflows, runs_here
 
 _log = logging.getLogger("automations")
@@ -19,6 +19,7 @@ _LOCK = threading.Lock()
 _THREAD: threading.Thread | None = None
 _STOP = threading.Event()
 _TICK_S = 15.0
+_RUNNING: dict[str, threading.Thread] = {}
 
 
 def start_scheduler() -> None:
@@ -68,7 +69,28 @@ def _loop() -> None:
             _log.exception("workflow scheduler tick failed")
 
 
-def _tick() -> None:
+def _start(wid: str, starter_id: str) -> threading.Thread | None:
+    """A due workflow runs on its own thread, so a long one (an hour-long daily play
+    test) never holds up the others; one that is still running isn't started again."""
+    alive = _RUNNING.get(wid)
+    if (alive is not None and alive.is_alive()) or is_running(wid):
+        return None
+    thread = threading.Thread(target=_run, args=(wid, starter_id), daemon=True, name=f"workflow-{wid[:12]}")
+    _RUNNING[wid] = thread
+    thread.start()
+    return thread
+
+
+def _run(wid: str, starter_id: str) -> None:
+    try:
+        run_workflow(wid, starter_id=starter_id)
+    except Exception:
+        _log.exception("scheduled workflow %s failed", wid)
+
+
+def _tick() -> list[threading.Thread]:
+    """Start every workflow whose schedule is due; returns the runs it started."""
+    started: list[threading.Thread] = []
     now = time.time()
     now_dt = datetime.now()
     workflows = all_workflows()
@@ -89,8 +111,11 @@ def _tick() -> None:
             elif cron:
                 due = cron_due(cron, now_dt, last)
             if due:
-                run_workflow(str(wf["id"]), starter_id=str(node.get("id") or ""))
+                thread = _start(str(wf["id"]), str(node.get("id") or ""))
+                if thread is not None:
+                    started.append(thread)
                 break
+    return started
 
 
 def _field_match(pat: str, value: int) -> bool:

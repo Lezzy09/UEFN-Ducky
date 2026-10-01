@@ -23,6 +23,8 @@ export type InspectorTab =
   | { key: string; kind: "edge"; index: number; edge: AutomationGraphEdgeDto };
 
 export const EDGE_ROUTES = [{ value: "main", label: "Next" }, { value: "true", label: "True" }, { value: "false", label: "False" }, { value: "each", label: "Each item" }, { value: "done", label: "Done" }];
+/** A Repeat until loops tries, not items. */
+const REPEAT_ROUTES = EDGE_ROUTES.map((route) => (route.value === "each" ? { ...route, label: "Each try" } : route));
 
 export type InspectorActions = {
   onActivate: (key: string) => void;
@@ -413,8 +415,8 @@ function EdgeDetails({ index, edge, graph, byType, readOnly, ...on }: Props & { 
     <fieldset className="aw-insp-section" disabled={frozen}>
       <div className="aw-field">
         <span className="aw-field-label">Route</span>
-        <ChoiceDropdown aria-label="Connection route" value={edge.kind} options={EDGE_ROUTES} onChange={(value) => on.onEdgeRoute(index, value)} size="compact" />
-        <span className="aw-field-hint">True and False follow a Branch. Each item and Done follow a For each.</span>
+        <ChoiceDropdown aria-label="Connection route" value={edge.kind} options={graph.nodes.find((node) => node.id === edge.source)?.type === "flow.repeat" ? REPEAT_ROUTES : EDGE_ROUTES} onChange={(value) => on.onEdgeRoute(index, value)} size="compact" />
+        <span className="aw-field-hint">True and False follow a Branch or an If. Each item and Done follow a For each; Each try and Done follow a Repeat until.</span>
       </div>
     </fieldset>
   </>;

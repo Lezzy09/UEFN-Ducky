@@ -205,7 +205,9 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Agent",
         "group": "Agents",
         "role": "action",
-        "description": "Assign a ducky or create one when this workflow runs. Wait for its result and pass files to the next step.",
+        "description": "Assign a ducky or create one when this workflow runs. Wait for its result and pass files to the next step. Run again in a loop, it is the same ducky, so it remembers the last pass.",
+        "inputs": [{"id": "context", "label": "Context", "type": "text", "description": "Text wired in (an earlier step's report) is added under the instructions."}],
+        "outputs": [{"id": "text", "label": "Reply", "type": "text"}, {"id": "files", "label": "Files", "type": "any"}],
         "config_fields": [
             {"id": "ducky", "label": "Assign ducky", "type": "ducky"},
             {"id": "prompt", "label": "Instructions (optional; uses the workflow request)", "type": "textarea"},
@@ -219,6 +221,22 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "description": "End this path and send its result and files back to the user. In a test run, show the result in the run log.",
         "config_fields": [
             {"id": "message", "label": "Message (optional)", "type": "textarea"},
+        ],
+    },
+    {
+        "type": "notify.message",
+        "label": "Message me",
+        "group": "Utility",
+        "role": "action",
+        "description": (
+            "Posts a message to you: into the chat that ran the workflow, else into the Workflow reports chat "
+            "(also on your phone). Wire a report in, or type it with {{placeholders}}."
+        ),
+        "inputs": [{"id": "message", "label": "Message", "type": "text", "required": True}],
+        "outputs": [{"id": "sent", "label": "Sent", "type": "boolean"}, {"id": "chat_id", "label": "Chat", "type": "text"}],
+        "config_fields": [
+            {"id": "on_fail", "label": "Also if the run fails before here (says which step and why)", "type": "boolean"},
+            {"id": "chat", "label": "Reports chat name (default Workflow reports)", "type": "string"},
         ],
     },
     {
@@ -244,6 +262,23 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "role": "action",
         "description": "Run the each-wire once per item in a payload list, then follow done.",
         "config_fields": [{"id": "field", "label": "List field", "type": "string"}],
+    },
+    {
+        "type": "flow.repeat",
+        "label": "Repeat until",
+        "group": "Logic",
+        "role": "action",
+        "description": (
+            "Runs the Each try wire, then checks Until (wire a yes/no in, or write a condition). "
+            "Goes again until it says yes or Max tries run out, then follows Done with Passed and the number of tries. "
+            "Steps in the loop start fresh each try; an Agent in it stays the same ducky."
+        ),
+        "inputs": [{"id": "until", "label": "Until", "type": "boolean", "description": "Yes ends the loop. Checked after each try."}],
+        "outputs": [{"id": "attempt", "label": "Try", "type": "number"}, {"id": "passed", "label": "Passed", "type": "boolean"}],
+        "config_fields": [
+            {"id": "max", "label": "Max tries (1-10)", "type": "number"},
+            {"id": "expression", "label": "Until condition (when Until isn't wired)", "type": "expression"},
+        ],
     },
     {
         "type": "flow.branch",
@@ -343,6 +378,21 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "description": "Cheap status, never launches: running, listener_online, project_match, playing, has_player, ready. Branch on any of them.",
         "config_fields": [
             {"id": "project", "label": "UEFN project (optional)", "type": "project"},
+        ],
+    },
+    {
+        "type": "fortnite.servers",
+        "label": "Fortnite servers up?",
+        "group": "Play test",
+        "role": "action",
+        "description": (
+            "Checks Epic's status page (Login, Game Services, Matchmaking). Down: checks again every minute "
+            "for up to the wait you set, then True (up) or False (still down) leads the way."
+        ),
+        "outputs": [{"id": "up", "label": "Up", "type": "boolean"}, {"id": "status", "label": "Status", "type": "text"}],
+        "config_fields": [
+            {"id": "wait_minutes", "label": "Wait while down (minutes, max 240)", "type": "number"},
+            {"id": "every_seconds", "label": "Check every (seconds)", "type": "number"},
         ],
     },
     {

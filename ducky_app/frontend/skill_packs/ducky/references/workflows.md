@@ -67,8 +67,9 @@ graph = {
 
 - Cards are 240 wide at `x, y` (82 tall, plus 24 per pin row); keep ~300 between columns, ~120 between rows (the
   editor snaps dragged nodes to its 16px grid).
-- `kind`: `main`; `true` / `false` after `flow.branch`; `each` / `done` after
-  `flow.foreach`. Starts have no inputs; ends have no outputs.
+- `kind`: `main`; `true` / `false` after `flow.branch`, `logic.if` and
+  `fortnite.servers`; `each` / `done` after `flow.foreach` and `flow.repeat`.
+  Starts have no inputs; ends have no outputs.
 - `color`: red | amber | green | blue | purple (none = by kind). `icon`: one emoji.
 - Groups are boxes; a node sits in at most one group (its innermost);
   `parent_id` nests a group in another.
@@ -77,7 +78,8 @@ graph = {
   equals|contains}`, `flow.foreach {field}`, `pipeline.agent {ducky, prompt}`,
   `pipeline.finish {message}`, `workflow.call {workflow_id, args, share?}`,
   `flow.input {inputs:[{name, default}]}`, `flow.output {outputs:[{name, value}]}`,
-  `start.cron {interval_seconds | cron}`, `uefn.*` play-test steps.
+  `start.cron {interval_seconds | cron}` (`cron` is 5-field local time, e.g.
+  `0 8 * * *` every day at 8 AM), `uefn.*` play-test steps.
   Inputs/Return rows take `type` (a pin type, below) so the pins are typed.
 - Values: `"{{field.path}}"` alone keeps the value's type; inside text it
   becomes text.
@@ -129,7 +131,10 @@ steps (`{{nodes.<node_id>.<pin>}}`), and a run returns `node_outputs`.
 | `util.save_file` | `file` (one or a list), `folder` → `file`, `path` | `folder`, `name`, `overwrite` |
 | `workflow.call` (step) | its Inputs rows → its Return rows | `workflow_id`, `share` |
 | `tool.call` (step) | → `result` (json), `text` | `name`, `arguments` |
-| `pipeline.agent` (step) | → `text`, `files` | `ducky`, `prompt` |
+| `pipeline.agent` (step) | `context` → `text`, `files` | `ducky`, `prompt` (`{{field}}` works); wired `context` is added under the prompt |
+| `flow.repeat` Repeat until (step) | `until` → `attempt`, `passed`; run wires `each` / `done` | `max` (1-10, default 3), `expression` (when `until` isn't wired) |
+| `fortnite.servers` (step) | → `up`, `status`; run wires `true` (up) / `false` | `wait_minutes` (keep checking while down, max 240), `every_seconds` |
+| `notify.message` Message me (step) | `message` → `sent`, `chat_id` | `on_fail` (also message if the run fails before here), `chat` |
 
 **Expressions** (`logic.if`, `logic.expression`, `list.filter`, `list.map`):
 JavaScript-like and safe. Names are the node's input pins (`item` / `index` in
@@ -258,6 +263,31 @@ names them; ask the user, and only after they agree pass
   `workflows.details`,
   `workflows.details.{edit,lock,delete,close}`. A node or group target glides
   into view by itself. Open the workflow first (`show_workflow`).
+
+### Loops, schedules and reports
+
+- **Repeat until** runs its `each` wire, then checks `until` (wire a yes/no in,
+  e.g. an If's `result`) or its `expression`; again until yes or `max` tries,
+  then `done` with `passed` and `attempt` (the try count). Steps in the loop
+  start fresh each try; `{{attempt}}` is the try number; `{{nodes.<id>.<pin>}}`
+  keeps the latest value after the loop. A try whose step fails counts as not
+  passed and the next try starts; Stop ends the run. An Agent in a loop stays
+  the same ducky every try, so it remembers what it did.
+- **Test → fix → test again:** `flow.repeat` → `each` → tester `pipeline.agent`
+  (prompt ends "last line RESULT: PASS or RESULT: FAIL") → `logic.if`
+  `report.includes("RESULT: PASS")` with the tester's `text` wired into
+  `report` → `false` → fixer `pipeline.agent` (tester `text` → `context`) →
+  `uefn.game.stop` → `uefn.game.start`; wire the If's `result` → `until`.
+- **Message me** posts into the chat that ran the workflow, else into the
+  "Workflow reports" chat (the phone panel shows it too). Build the report with
+  `text.template` and wire its `text` → `message`; set `on_fail` on the last one
+  so a step that breaks is reported too.
+- **Scheduled runs** (`start.cron`) go in the background while UEFN Ducky is
+  open; one still running isn't started again. Templates start switched on.
+- **Daily island check** (UEFN plugin template, Play tests shelf): 8 AM →
+  `fortnite.servers` → open UEFN → start the session → test/fix loop (3 tries)
+  → private version + memory calculation → report. Make it with
+  `create_workflow_from_template("plugin:uefn:daily-island-check")`.
 
 ### Recipes
 

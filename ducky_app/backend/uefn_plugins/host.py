@@ -1541,6 +1541,7 @@ def _automation_template_row(row: Any, pid: str) -> dict[str, Any] | None:
         "name": name,
         "description": str(row.get("description") or ""),
         "icon": str(row.get("icon") or "⚡"),
+        "category": str(row.get("category") or "").strip(),
         "graph": normalize_graph(row.get("graph")),
         "plugin_id": pid,
         "systems": row.get("systems"),
