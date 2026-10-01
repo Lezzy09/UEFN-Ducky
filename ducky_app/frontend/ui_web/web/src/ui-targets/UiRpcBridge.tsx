@@ -8,7 +8,8 @@
  *
  * With several windows open (popped-out windows, the phone panel), the one the user last
  * clicked or typed in claims "active"; requests that show something carry `_for_client`
- * and only that window takes them (and acknowledges, so the panel knows it's alive).
+ * and only that window takes them (and acknowledges, so the panel knows it's alive). A
+ * request for no window in particular is claimed: the first window to claim it runs it.
  */
 import { useEffect } from "react";
 import type { AgentEvent, MessageAuthorDto } from "../types/panel";
@@ -113,7 +114,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
 export function UiRpcBridge() {
   useEffect(() => {
     installAgentEventBus();
-    const handler = (event: AgentEvent) => {
+    const handler = async (event: AgentEvent) => {
       if (event.type !== "ui_rpc_request") return;
       const requestId = event.request_id ?? "";
       if (!requestId) return;
@@ -122,13 +123,19 @@ export function UiRpcBridge() {
       if (WINDOW_METHODS.has(method)) {
         const forClient = String(params._for_client ?? "");
         if (forClient && forClient !== UI_CLIENT_ID) return;  // meant for the window in use
-        void getApi()?.ui_rpc_ack?.(requestId);
+        if (forClient) {
+          void getApi()?.ui_rpc_ack?.(requestId);
+        } else {
+          // Sent to every window: only the first to claim it plays it.
+          const claim = getApi()?.ui_rpc_claim;
+          if (claim && (await claim(requestId)) === false) return;
+        }
       }
       void dispatch(method, params).then((result) => {
         void getApi()?.ui_rpc_respond(requestId, result);
       });
     };
-    return subscribeAgentEvents(handler);
+    return subscribeAgentEvents((event) => void handler(event));
   }, []);
 
   // Lines of code can be shown too (editor.line.<path>:<n>).
@@ -143,7 +150,16 @@ export function UiRpcBridge() {
       last = now;
       void getApi()?.ui_rpc_active?.(UI_CLIENT_ID, true);
     };
-    const leave = () => void getApi()?.ui_rpc_active?.(UI_CLIENT_ID, false);
+    // Closing: tell the panel this window is gone (a beacon still goes out while the page unloads).
+    const leave = () => {
+      const body = JSON.stringify({ args: { client_id: UI_CLIENT_ID, active: false } });
+      try {
+        if (navigator.sendBeacon?.("/__panel_api/ui_rpc_active", new Blob([body], { type: "application/json" }))) return;
+      } catch {
+        /* fall back to the API */
+      }
+      void getApi()?.ui_rpc_active?.(UI_CLIENT_ID, false);
+    };
     if (typeof document !== "undefined" && document.hasFocus?.()) claim();
     window.addEventListener("pointerdown", claim, true);
     window.addEventListener("keydown", claim, true);

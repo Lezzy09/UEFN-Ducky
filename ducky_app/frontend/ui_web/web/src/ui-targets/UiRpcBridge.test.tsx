@@ -15,6 +15,7 @@ const api = {
   ui_rpc_respond: vi.fn(async () => true),
   ui_rpc_ack: vi.fn(async () => true),
   ui_rpc_active: vi.fn(async () => true),
+  ui_rpc_claim: vi.fn(async () => true),
   get_settings: vi.fn(async () => ({})),
 };
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
@@ -41,8 +42,14 @@ describe("which window answers", () => {
     await waitFor(() => expect(api.ui_rpc_respond).toHaveBeenCalledWith("r2", expect.objectContaining({ targets: expect.any(Array), actions: expect.any(Array) })));
     expect(api.ui_rpc_ack).toHaveBeenCalledWith("r2");
 
-    request("r3", "list_targets", { route: "workflows" });  // no window named: anyone answers
+    request("r3", "list_targets", { route: "workflows" });  // no window named: the first to claim it
     await waitFor(() => expect(api.ui_rpc_respond).toHaveBeenCalledWith("r3", expect.anything()));
+    expect(api.ui_rpc_claim).toHaveBeenCalledWith("r3");
+
+    api.ui_rpc_claim.mockResolvedValueOnce(false);  // another window claimed it first
+    request("r5", "list_targets", { route: "workflows" });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(api.ui_rpc_respond).not.toHaveBeenCalledWith("r5", expect.anything());
   });
 
   it("claims active when the user clicks or types here", () => {

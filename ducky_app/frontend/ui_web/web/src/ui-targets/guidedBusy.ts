@@ -14,6 +14,14 @@ export async function asGuidedUi<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
+/** Count as AI-guided for a moment (Ducky opened a view by pushing an event, not an RPC). */
+export function holdGuidedUi(ms = 4000): void {
+  busy += 1;
+  globalThis.setTimeout(() => {
+    busy = Math.max(0, busy - 1);
+  }, ms);
+}
+
 export function isGuidedUiBusy(): boolean {
   return busy > 0;
 }

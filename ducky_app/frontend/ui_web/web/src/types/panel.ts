@@ -3243,6 +3243,8 @@ export interface PanelApi {
   ui_rpc_respond(request_id: string, payload: Record<string, unknown>): Promise<boolean>;
   /** This window took a Show me / tour request meant for it. */
   ui_rpc_ack?(request_id: string): Promise<boolean>;
+  /** A request sent to every window: true for the first window to claim it. */
+  ui_rpc_claim?(request_id: string): Promise<boolean>;
   /** This window is the one in use (clicked / typed in), or it is closing. */
   ui_rpc_active?(client_id: string, active?: boolean): Promise<boolean>;
   list_running_agents(): Promise<string[]>;

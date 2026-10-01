@@ -22,7 +22,8 @@ Several windows can be open (popped-out desktop windows, the phone panel). Reque
 that show something (Show me, tours, navigate) go to the window the user last clicked
 or typed in: it claims "active" through ``PanelApi.ui_rpc_active`` and acknowledges a
 request it takes with ``ui_rpc_ack``. When it doesn't acknowledge in time (closed, gone
-to sleep) the request is sent again for any window.
+to sleep) — or no window is known yet — the request goes to every window and the first
+one to ``ui_rpc_claim`` it runs it; the others drop it, so nothing plays twice.
 """
 
 from __future__ import annotations
@@ -84,6 +85,16 @@ def ack(request_id: str) -> bool:
         return False
     slot.acked.set()
     return True
+
+
+def claim(request_id: str) -> bool:
+    """First window to claim a request sent to every window runs it (True); later ones get False."""
+    with _lock:
+        slot = _pending.get(request_id)
+        if slot is None or slot.acked.is_set() or slot.event.is_set():
+            return False
+        slot.acked.set()
+        return True
 
 
 def wait_ack(request_id: str, timeout: float) -> bool:

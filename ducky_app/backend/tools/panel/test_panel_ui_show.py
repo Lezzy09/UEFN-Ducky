@@ -152,6 +152,13 @@ def test_requests_go_to_the_window_in_use():
     assert ui_rpc.wait_ack(request_id, 0.05) is True  # answered and collected
     assert ui_rpc.ack("unknown") is False
 
+    # Sent to every window: the first to claim it runs it, the rest drop it.
+    request_id, _event = ui_rpc.submit("tour_workflow", {"workflow_id": "w"})
+    assert ui_rpc.claim(request_id) is True
+    assert ui_rpc.claim(request_id) is False
+    assert ui_rpc.wait_ack(request_id, 0.01) is True
+    assert ui_rpc.claim("unknown") is False
+
 
 def test_settings_switches_save_and_read_back():
     from frontend.ui_web.panel_api import PanelApi

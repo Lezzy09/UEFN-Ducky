@@ -1003,6 +1003,12 @@ class PanelApi(
 
         return ui_rpc.ack(str(request_id or ""))
 
+    def ui_rpc_claim(self, request_id: str) -> bool:
+        """A request sent to every window: True for the first window to claim it (it runs it)."""
+        from frontend.ui_web import ui_rpc
+
+        return ui_rpc.claim(str(request_id or ""))
+
     def ui_rpc_active(self, client_id: str, active: bool = True) -> bool:
         """This window is the one the user is using (clicked or typed in), or it is closing."""
         from frontend.ui_web import ui_rpc

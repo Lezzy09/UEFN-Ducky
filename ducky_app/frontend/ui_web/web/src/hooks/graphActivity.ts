@@ -1,5 +1,6 @@
 import type { AutomationSummaryDto, PanelPushEvent } from "../types/panel";
 import { requestOpenWorkflowsTab } from "../navigation/openWorkflowsTab";
+import { holdGuidedUi } from "../ui-targets/guidedBusy";
 import {
   dismissBackgroundJob,
   upsertBackgroundJob,
@@ -44,6 +45,8 @@ export function applyGraphFocusPush(event: PanelPushEvent): void {
   if (event.type !== "graph_focus") return;
   const id = String(event.id || "").trim();
   if (!id) return;
+  // Ducky is working in the editor: its first-open tour waits for another time.
+  holdGuidedUi();
   requestOpenWorkflowsTab();
   if (event.action === "deleted") {
     if (pendingFocus?.id === id) pendingFocus = null;
