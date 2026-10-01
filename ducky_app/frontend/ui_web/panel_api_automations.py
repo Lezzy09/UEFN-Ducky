@@ -65,10 +65,12 @@ class PanelApiAutomationsMixin:
     def get_workflow(self, workflow_id: str) -> dict[str, Any]:
         from backend.automations.store import get_workflow
 
+        from backend.automations.media import refresh_links
+
         wf = get_workflow(workflow_id)
         if wf is None:
             return {"ok": False, "error": "workflow not found"}
-        return {"ok": True, "workflow": wf}
+        return {"ok": True, "workflow": refresh_links(wf)}
 
     def list_workflow_versions(self, workflow_id: str) -> dict[str, Any]:
         from backend.automations.versions import list_versions
@@ -161,6 +163,30 @@ class PanelApiAutomationsMixin:
             caller_conv_id=caller_conv_id,
         )
 
+    def run_workflow_node(self, workflow_id: str, node_id: str) -> dict[str, Any]:
+        """Run this node only: what feeds it is reused from the last run (no paid repeats)."""
+        from backend.automations.runner import run_node
+
+        return run_node(workflow_id, node_id)
+
+    def pick_workflow_folder(self) -> dict[str, Any]:
+        """Save file nodes: the Windows folder picker."""
+        win = getattr(self, "_window", None)
+        if win is None:
+            return {"ok": False, "error": "No window to open the picker from", "folder": ""}
+        try:
+            import webview
+
+            try:
+                folder_type = webview.FileDialog.FOLDER
+            except AttributeError:
+                folder_type = getattr(webview, "FOLDER_DIALOG", 20)
+            picked = win.create_file_dialog(folder_type)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "folder": ""}
+        folder = picked[0] if isinstance(picked, (list, tuple)) and picked else picked or ""
+        return {"ok": True, "folder": str(folder or "")}
+
     def check_workflow_expression(self, expression: str = "") -> dict[str, Any]:
         """If / Expression nodes: '' when the condition parses, else what is wrong."""
         from backend.automations.expr import check
@@ -170,7 +196,7 @@ class PanelApiAutomationsMixin:
 
     def pick_workflow_files(self, accept: str = "any", multiple: bool = False) -> dict[str, Any]:
         """Input nodes: the Windows file picker, filtered to what the node takes."""
-        from backend.automations.files import FILE_FILTERS, file_ref
+        from backend.automations.files import FILE_FILTERS, file_ref, kind_of, with_url
 
         win = getattr(self, "_window", None)
         if win is None:
@@ -185,7 +211,8 @@ class PanelApiAutomationsMixin:
             picked = win.create_file_dialog(open_type, allow_multiple=bool(multiple), file_types=FILE_FILTERS.get(str(accept or "any"), FILE_FILTERS["any"]))
         except Exception as exc:
             return {"ok": False, "error": str(exc), "files": []}
-        return {"ok": True, "files": [file_ref(path, str(accept or "any")) for path in (picked or [])]}
+        kind = str(accept or "any")
+        return {"ok": True, "files": [with_url(file_ref(path, kind if kind != "any" else kind_of(path))) for path in (picked or [])]}
 
     def workflow_editor_prefs(self) -> dict[str, Any]:
         """Grid, snap, tool, panel sizes and zoom of the Workflows editor on this PC."""
@@ -224,6 +251,7 @@ class PanelApiAutomationsMixin:
         icon: str = "⚡",
         graph_json: str = "",
         template_id: str = "",
+        category: str = "",
     ) -> dict[str, Any]:
         from backend.automations.templates import save_custom
 
@@ -243,6 +271,7 @@ class PanelApiAutomationsMixin:
                 icon=icon,
                 graph=graph,
                 template_id=template_id,
+                category=category,
             )
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}

@@ -333,6 +333,21 @@ def run_workflow(
 
 
 @mcp.tool()
+def run_workflow_node(workflow_id: str, node_id: str, pretty: bool = False) -> str:
+    """Run one node of a saved workflow now (the details panel's Run this node).
+
+    Everything wired into it reuses what the last run made, so paid generators
+    upstream don't run again; a value node that never ran runs first. Returns the
+    node's outputs (node_outputs[node_id]) and its step in steps."""
+    from backend.automations.runner import run_node
+
+    out = run_node(workflow_id, node_id)
+    if out.get("ok"):
+        _reveal_graph(workflow_id, "saved", nodes=[node_id], select=False)
+    return tool_json(out, pretty=pretty)
+
+
+@mcp.tool()
 def stop_workflow(workflow_id: str, pretty: bool = False) -> str:
     """Stop every run of a workflow on this PC right away (the editor's Stop button).
     A step that was mid-way (a tool, UEFN, a ducky) finishes in the background, unused."""
@@ -360,11 +375,14 @@ def save_workflow_template(
     graph: dict[str, Any] | None = None,
     template_id: str = "",
     icon: str = "⚡",
+    category: str = "",
     pretty: bool = False,
 ) -> str:
     """Save a reusable custom workflow template (shown in the New workflow picker).
 
     Pass template_id (custom:…) to replace one. graph uses the same shape as save_workflow.
+    category is the picker shelf (Images, 3D, Characters, Text & AI, Documents, Play
+    tests, UEFN, or your own name); blank = Yours.
     """
     from backend.automations.templates import save_custom
 
@@ -375,6 +393,7 @@ def save_workflow_template(
             icon=icon,
             graph=graph,
             template_id=template_id,
+            category=category,
         )
     except ValueError as exc:
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)

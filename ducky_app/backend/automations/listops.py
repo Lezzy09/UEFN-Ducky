@@ -50,8 +50,14 @@ def get_item(cfg: dict[str, Any], inputs: dict[str, Any], _payload: dict[str, An
 
 
 def count(_cfg: dict[str, Any], inputs: dict[str, Any], _payload: dict[str, Any]) -> dict[str, Any]:
+    """Items in a list (JSON text of a list too), keys of an object, else letters of a text."""
     value = inputs.get("list")
-    size = len(value) if isinstance(value, (str, dict)) and not (isinstance(value, dict) and value.get("path")) else len(as_list(value))
+    if isinstance(value, str) and not value.strip().startswith("["):
+        size = len(value)
+    elif isinstance(value, dict) and not value.get("path"):
+        size = len(value)
+    else:
+        size = len(as_list(value))
     return {"ok": True, "outputs": {"count": size}}
 
 

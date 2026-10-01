@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.automations.node_library import LIBRARY
 from backend.automations.pins import clean_pins
 
 
@@ -398,7 +399,7 @@ def _contributions() -> tuple[dict[str, Any], set[str]]:
 
 def node_specs() -> dict[str, dict[str, Any]]:
     """Every node type the runner knows (no plugin artwork read): type → catalog row."""
-    out = {n["type"]: n for n in BUILTIN_NODES + DATA_NODES}
+    out = {n["type"]: n for n in BUILTIN_NODES + DATA_NODES + LIBRARY}
     contrib, enabled = _contributions()
     for key, role, group in (("automations_triggers", "starter", "Triggers"), ("automations_nodes", "action", "")):
         for row in contrib.get(key) or []:
@@ -409,7 +410,12 @@ def node_specs() -> dict[str, dict[str, Any]]:
 
 
 def list_nodes() -> list[dict[str, Any]]:
-    out = [dict(n) for n in BUILTIN_NODES + DATA_NODES]
+    from backend.automations.media import BACKENDS, backends_for
+
+    out = [dict(n) for n in BUILTIN_NODES + DATA_NODES + LIBRARY]
+    for node in out:
+        if node["type"] in BACKENDS:  # the details dropdown: each backend, its cost, ready or why not
+            node["backends"] = backends_for(node["type"])
     contrib, enabled = _contributions()
     for row in contrib.get("automations_triggers") or []:
         parsed = _plugin_node(row, enabled, role="starter", default_group="Triggers")

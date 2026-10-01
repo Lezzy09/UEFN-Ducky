@@ -13,8 +13,10 @@ FILE_TYPES = frozenset({"image", "audio", "video", "mesh", "svg", "pdf", "file"}
 DATA_KIND = "data"
 
 # Run workflow / Inputs / Return / If / Expression / Template build their pins from settings.
-_NAMED_INPUT_TYPES = {"logic.if": "any", "logic.expression": "any", "text.template": "text"}
-_NAMED_DEFAULTS = {"logic.if": ["value"], "logic.expression": ["a", "b"], "text.template": ["a", "b"]}
+_NAMED_INPUT_TYPES = {"logic.if": "any", "logic.expression": "any", "text.template": "text", "list.make": "any"}
+_NAMED_DEFAULTS = {"logic.if": ["value"], "logic.expression": ["a", "b"], "text.template": ["a", "b"], "list.make": ["a", "b"]}
+# Nodes whose `names` setting adds one output per name (Extract data: one per field).
+_NAMED_OUTPUT_TYPES = {"llm.extract": "any"}
 
 
 def clean_type(raw: Any) -> str:
@@ -95,6 +97,9 @@ def node_pins(
     elif ntype in _NAMED_INPUT_TYPES:
         names = _names(cfg.get("names")) or list(_NAMED_DEFAULTS[ntype])
         inputs = [{"id": name, "label": name, "type": _NAMED_INPUT_TYPES[ntype]} for name in names]
+    elif ntype in _NAMED_OUTPUT_TYPES:
+        taken = {pin["id"] for pin in outputs}
+        outputs = outputs + [{"id": name, "label": name, "type": _NAMED_OUTPUT_TYPES[ntype]} for name in _names(cfg.get("names")) if name not in taken]
     return {"exec": spec.get("exec", True) is not False, "inputs": inputs, "outputs": outputs}
 
 

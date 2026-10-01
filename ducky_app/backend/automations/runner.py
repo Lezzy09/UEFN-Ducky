@@ -15,7 +15,7 @@ from typing import Any
 
 from pathlib import Path
 
-from backend.automations import catalog, imageops, listops, media, plugin
+from backend.automations import catalog, glbops, imageops, listops, media, pdfops, plugin
 from backend.automations.expr import ExprError, as_number, as_text, evaluate, truthy
 from backend.automations.files import file_ref, is_file_ref, kind_of, run_folder, with_url
 from backend.automations.pins import DATA_KIND, node_pins
@@ -741,8 +741,8 @@ def _exec_node(node: dict[str, Any], payload: dict[str, Any], inputs: dict[str, 
     try:
         if ntype in media.BACKENDS:
             return {**media.run_media(ntype, cfg, values, _node_folder(node)), "id": node.get("id"), "type": ntype, "label": label}
-        if ntype in imageops.OPS:
-            return {**imageops.OPS[ntype](cfg, values, _node_folder(node)), "id": node.get("id"), "type": ntype, "label": label}
+        if ntype in _FOLDER_OPS:
+            return {**_FOLDER_OPS[ntype](cfg, values, _node_folder(node)), "id": node.get("id"), "type": ntype, "label": label}
         if ntype in _DATA_HANDLERS:
             return {**_DATA_HANDLERS[ntype](cfg, values, payload), "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "ducky.prompt":
@@ -1053,12 +1053,73 @@ def _save_file_node(cfg: dict[str, Any], inputs: dict[str, Any], _payload: dict[
     return {"ok": True, "outputs": {"file": saved[0] if len(saved) == 1 else saved, "path": str(saved[0]["path"])}, "result": {"saved": [ref["path"] for ref in saved]}}
 
 
+def _describe_item(item: Any) -> str:
+    if isinstance(item, dict) and item.get("path"):
+        return " · ".join(str(item.get(key)) for key in ("name", "description", "caption") if item.get(key))
+    return _as_text(item)[:300]
+
+
+def _pick_node(cfg: dict[str, Any], inputs: dict[str, Any], _payload: dict[str, Any]) -> dict[str, Any]:
+    """Find by description: the model keeps the items of a list that match what you ask."""
+    from backend.automations.llm_complete import complete_prompt
+
+    items = listops.as_list(inputs.get("list"))
+    if not items:
+        return {"ok": True, "outputs": {"list": [], "item": None, "count": 0}}
+    wanted = _model_text(inputs, "prompt")
+    if not wanted:
+        return {"ok": False, "error": "Nothing in Prompt: say what to look for."}
+    numbered = "\n".join(f"{n}. {_describe_item(item)}" for n, item in enumerate(items[:500]))
+    ask = (f"Which of these items match: {wanted}\nAnswer with only a JSON array of their numbers, best match first "
+           f"(an empty array if none match).\n\n{numbered}")
+    provider, model = _model_choice(cfg)
+    out = complete_prompt(provider, ask, model)
+    if not out.get("ok"):
+        return {"ok": False, "error": str(out.get("error") or "The model didn't answer.")}
+    picked = _json_in(str(out.get("text") or ""))
+    numbers = [int(n) for n in (picked if isinstance(picked, list) else []) if isinstance(n, (int, float)) and 0 <= int(n) < len(items)]
+    kept = [items[n] for n in dict.fromkeys(numbers)]
+    return {"ok": True, "outputs": {"list": kept, "item": kept[0] if kept else None, "count": len(kept)}, "result": {"model": model}}
+
+
+def _origin_text_node(cfg: dict[str, Any], inputs: dict[str, Any], payload: dict[str, Any], folder: Path) -> dict[str, Any]:
+    """Text to origin: the model turns "pivot at the bottom centre" into Set origin choices."""
+    from backend.automations.llm_complete import complete_prompt
+
+    wanted = _model_text(inputs, "instruction") or str(cfg.get("instruction") or "").strip()
+    if not wanted:
+        return {"ok": False, "error": "Say where the origin goes, like: bottom centre, or the back left corner."}
+    ask = ("A 3D model is Y-up: X is left (min) to right (max), Y is bottom (min) to top (max), Z is back (min) to front (max). "
+           f"Where should its origin go: {wanted}\nAnswer with only JSON like {{\"x\": \"center\", \"y\": \"min\", \"z\": \"center\"}}; "
+           "each one of min, center, max, mass, keep.")
+    provider, model = _model_choice(cfg)
+    out = complete_prompt(provider, ask, model)
+    if not out.get("ok"):
+        return {"ok": False, "error": str(out.get("error") or "The model didn't answer.")}
+    picks = _json_in(str(out.get("text") or ""))
+    if not isinstance(picks, dict):
+        return {"ok": False, "error": "The model's answer wasn't origin choices."}
+    choice = {axis: str(picks.get(axis) or "keep").lower() for axis in ("x", "y", "z")}
+    step = glbops.set_origin(choice, {"mesh": inputs.get("mesh")}, folder)
+    return {**step, "result": {**step.get("result", {}), "model": model}}
+
+
 def _node_folder(node: dict[str, Any]) -> Path:
     """This run's folder for one node's files (AppData workflow_media)."""
     live = _LIVE.get()
     wid, run_id = live if live else ("adhoc", time.strftime("%Y%m%d-%H%M%S"))
     return run_folder(wid, run_id, str(node.get("id") or "node"))
 
+
+# Nodes that write files into the run's folder: (config, inputs, folder) → step.
+_FOLDER_OPS: dict[str, Any] = {
+    **imageops.OPS,
+    **glbops.OPS,
+    **pdfops.OPS,
+    "blender.render": media.blender_render,
+    "blender.export": media.blender_export,
+    "mesh.origin_text": lambda cfg, inputs, folder: _origin_text_node(cfg, inputs, {}, folder),
+}
 
 _INPUT_TYPES = ("input.text", "input.number", "input.boolean", "input.json", "input.image", "input.images",
                 "input.audio", "input.video", "input.mesh", "input.pdf", "input.svg", "input.file")
@@ -1074,6 +1135,7 @@ _DATA_HANDLERS: dict[str, Any] = {
     "llm.extract": _extract_node,
     "llm.translate": _translate_node,
     "util.save_file": _save_file_node,
+    "llm.pick": _pick_node,
     "uefn.import": lambda cfg, inputs, _payload: media.send_to_uefn(cfg, inputs),
     "blender.open": lambda cfg, inputs, _payload: media.open_in_blender(cfg, inputs),
     **listops.HANDLERS,

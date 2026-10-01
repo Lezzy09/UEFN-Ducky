@@ -826,7 +826,10 @@ def test_builtin_templates_are_wired_to_known_nodes_and_ready():
     }
     assert play <= set(rows)
     for row in rows.values():
-        assert row["ready"] and not row["missing_plugins"], row["id"]
+        # Ready-made media pipelines need their plugins (3D AI Studio, Meshy, UEFN…); the rest are always ready.
+        assert set(row["missing_plugins"]) <= set(row["requires_plugins"]), row["id"]
+        if not row["requires_plugins"]:
+            assert row["ready"], row["id"]
         ids = {n["id"] for n in row["graph"]["nodes"]}
         for node in row["graph"]["nodes"]:
             assert node["type"] in known, (row["id"], node["type"])

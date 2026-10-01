@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from backend.automations.pipeline_templates import BUILTIN_CATEGORIES, CATEGORY_ORDER, PIPELINE_TEMPLATES
 from backend.automations.store import normalize_graph
 from frontend.app_paths import resolve_app_data_dir
 
@@ -43,6 +44,7 @@ def save_custom(
     icon: str = "⚡",
     graph: Any = None,
     template_id: str = "",
+    category: str = "",
 ) -> dict[str, Any]:
     cleaned = (name or "").strip()
     if not cleaned:
@@ -60,6 +62,7 @@ def save_custom(
         "description": str(description or "")[:240],
         "icon": (icon or "⚡").strip()[:16] or "⚡",
         "kind": "custom",
+        "category": _category(category, "Yours"),
         "graph": normalize_graph(graph),
     }
     dest = _dir(for_write=True) / f"{tid.split(':', 1)[-1]}.json"
@@ -398,11 +401,33 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
 ]
 
 
+def _category(raw: Any, fallback: str) -> str:
+    text = " ".join(str(raw or "").split())[:40]
+    return text or fallback
+
+
+def categories() -> list[str]:
+    """The picker's shelves, in order (custom categories people typed come after)."""
+    return list(CATEGORY_ORDER)
+
+
 def list_templates() -> list[dict[str, Any]]:
-    """Builtin templates, then plugin contrib (enabled only), then user custom."""
+    """Builtin templates and ready-made pipelines, then plugin contrib (enabled only),
+    then user custom. Each says its category and the plugins it needs."""
     out: list[dict[str, Any]] = []
-    for row in BUILTIN_TEMPLATES:
+    try:
+        from backend.uefn_plugins.host import get_ui_contributions
+        from backend.uefn_plugins.store import get_enabled_plugin_ids
+
+        enabled = set(get_enabled_plugin_ids())
+        contrib = get_ui_contributions()
+    except Exception:
+        contrib, enabled = {}, None
+    for row in [*PIPELINE_TEMPLATES, *BUILTIN_TEMPLATES]:
         name = str(row.get("label") or row.get("name") or row.get("id"))
+        graph = normalize_graph(row.get("graph"))
+        required = _template_requires(row, graph)
+        missing = [p for p in required if enabled is not None and p not in enabled]
         out.append(
             {
                 "id": str(row["id"]),
@@ -411,20 +436,14 @@ def list_templates() -> list[dict[str, Any]]:
                 "description": str(row.get("description") or ""),
                 "icon": str(row.get("icon") or "⚡"),
                 "kind": "builtin",
-                "graph": normalize_graph(row.get("graph")),
-                "requires_plugins": [],
-                "missing_plugins": [],
-                "ready": True,
+                "category": _category(row.get("category") or BUILTIN_CATEGORIES.get(str(row["id"])), "UEFN"),
+                "graph": graph,
+                "requires_plugins": required,
+                "missing_plugins": missing,
+                "ready": not missing,
             }
         )
-    try:
-        from backend.uefn_plugins.host import get_ui_contributions
-        from backend.uefn_plugins.store import get_enabled_plugin_ids
-
-        enabled = set(get_enabled_plugin_ids())
-        contrib = get_ui_contributions()
-    except Exception:
-        contrib, enabled = {}, set()
+    enabled = enabled or set()
     for row in contrib.get("automations_templates") or []:
         if not isinstance(row, dict):
             continue
@@ -447,6 +466,7 @@ def list_templates() -> list[dict[str, Any]]:
                 "icon": str(row.get("icon") or "⚡"),
                 "kind": "plugin",
                 "plugin_id": pid,
+                "category": _category(row.get("category"), "Plugins"),
                 "graph": graph,
                 "requires_plugins": required,
                 "missing_plugins": missing,
@@ -473,7 +493,7 @@ def _template_requires(row: dict[str, Any], graph: dict[str, Any]) -> list[str]:
         if not isinstance(node, dict):
             continue
         ntype = str(node.get("type") or "")
-        pid = _NODE_PLUGIN.get(ntype)
+        pid = _NODE_PLUGIN.get(ntype) or _media_plugin(node)
         if not pid and ntype == "tool.call":
             cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
             name = str(cfg.get("name") or "")
@@ -488,6 +508,24 @@ def _template_requires(row: dict[str, Any], graph: dict[str, Any]) -> list[str]:
         if pid and pid not in seen:
             seen.append(pid)
     return seen
+
+
+_PLUGIN_IDS = {"3D AI Studio": "studio3d", "Meshy": "meshy"}
+
+
+def _media_plugin(node: dict[str, Any]) -> str:
+    """The plugin an image / 3D / Blender / UEFN node runs on (its picked backend's)."""
+    ntype = str(node.get("type") or "")
+    if ntype.startswith("blender."):
+        return "blender"
+    if ntype == "uefn.import":
+        return "uefn"
+    from backend.automations.media import BACKENDS, pick_backend
+
+    if ntype not in BACKENDS:
+        return ""
+    cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+    return _PLUGIN_IDS.get(pick_backend(ntype, cfg.get("backend"))["plugin"], "")
 
 
 def _dir(*, for_write: bool = False) -> Path:
@@ -517,5 +555,6 @@ def _read(path: Path) -> dict[str, Any] | None:
         "description": str(data.get("description") or ""),
         "icon": str(data.get("icon") or "⚡"),
         "kind": "custom",
+        "category": _category(data.get("category"), "Yours"),
         "graph": normalize_graph(data.get("graph")),
     }
