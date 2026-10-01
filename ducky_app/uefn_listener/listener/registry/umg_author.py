@@ -12,7 +12,12 @@ from typing import Any, Dict, List, Optional
 import unreal
 
 from listener.dispatch import register
-from listener.registry.umg_spec import validate_widget_tree_spec
+from listener.registry.umg_spec import (
+    BINDING_MODES,
+    button_event_name,
+    verse_field_spec,
+    validate_widget_tree_spec,
+)
 
 _UMG = "UMGToolSet.UMGToolSet"
 _VERSE_FIELDS = "VerseFieldsToolset.VerseFieldsToolset"
@@ -47,19 +52,8 @@ _REJECTED_WIDGET_CLASSES = {
     "VerseFortniteUIFrameworkButton_Regular": _NO_PRESET_BUTTON,
 }
 
-# AddVerseField fieldType strings (live). `logic` is Verse's bool.
-_FIELD_TYPES = {
-    "bool": "bool",
-    "logic": "bool",
-    "int": "int",
-    "float": "float",
-    "string": "string",
-    "message": "message",
-    "color": "color",
-    "color_alpha": "color_alpha",
-    "texture": "texture",
-    "material": "material",
-}
+# Pre-42.30 AddVerseField took flat fieldType strings (no events).
+_LEGACY_FIELD_TYPES = ("bool", "int", "float", "string", "message", "color", "color_alpha", "texture", "material")
 
 _TRACKS = {
     "Opacity": ("MovieSceneFloatTrack", "RenderOpacity", "RenderOpacity"),
@@ -770,48 +764,120 @@ def list_widget_animations(widget_path: str) -> dict:
     return {"widget_path": _ref(wbp), "animations": rows}
 
 
+def _compile_checked(wbp) -> dict:
+    """UMGToolSet compile (reports binding errors), then save. Never raises on a compile error."""
+    try:
+        _execute(_UMG, "CompileWidgetBlueprint", {"widgetBlueprint": {"refPath": _ref(wbp)}})
+        compiled, error = True, ""
+    except ValueError as exc:
+        compiled, error = False, _err_head(str(exc))
+    try:
+        unreal.EditorAssetLibrary.save_loaded_asset(wbp, only_if_is_dirty=False)
+    except Exception:  # noqa: BLE001
+        pass
+    return {"compiled": compiled, **({"compile_error": error} if error else {})}
+
+
+def _field_names(widget_path: str) -> List[str]:
+    rows = list_verse_fields(widget_path).get("fields") or []
+    return [str(row.get("name") or row.get("fieldName") or "") for row in rows if isinstance(row, dict)]
+
+
 def add_verse_field(
     widget_path: str,
     field_name: str,
     field_type: str,
     default_value: str = "",
+    event_parameters: Optional[List[str]] = None,
+    mutable: bool = True,
+    visibility: str = "public",
 ) -> dict:
-    """Add a Verse field via VerseFieldsToolset.AddVerseField. No disk byte patch."""
+    """Add a Verse field via VerseFieldsToolset.AddVerseField (42.30 `spec`; flat payload before 42.30)."""
     if not field_name or not field_type:
         raise ValueError("field_name and field_type are required")
-    kind = field_type.strip()
-    if kind == "event":
-        raise ValueError(
-            "AddVerseField cannot create event fields "
-            "(they exist, but this API cannot create or retype them). "
-            "Supported: bool, int, float, string, color, color_alpha, texture, material, message. "
-            "Bind the click to a bool or int field with bind_widget_event."
-        )
-    mapped = _FIELD_TYPES.get(kind)
-    if mapped is None:
-        raise ValueError(
-            f"field_type {kind!r} is not supported. Use one of {sorted(set(_FIELD_TYPES.values()))}."
-        )
+    spec = verse_field_spec(field_type, default_value, event_parameters, mutable, visibility)
     wbp = _load_wbp(widget_path)
-    payload = {
-        "widgetBlueprint": {"refPath": _ref(wbp)},
-        "fieldName": field_name,
-        "fieldType": mapped,
-        "defaultValue": default_value if default_value is not None else "",
-        "visibility": "Public",
-        "bIsVar": True,
-    }
-    result = _execute(_VERSE_FIELDS, "AddVerseField", payload)
-    _compile(wbp)
-    listed = list_verse_fields(widget_path)
-    names = [row.get("name") or row.get("fieldName") for row in listed.get("fields") or []]
+    bp = {"refPath": _ref(wbp)}
+    try:
+        result = _execute(_VERSE_FIELDS, "AddVerseField", {"widgetBlueprint": bp, "fieldName": field_name, "spec": spec})
+    except ValueError as exc:
+        # Before 42.30 the tool wanted flat fieldType/defaultValue/visibility/bIsVar and had no events.
+        if "fieldType" not in str(exc):
+            raise
+        if spec["type"] not in _LEGACY_FIELD_TYPES:
+            raise ValueError("This UEFN build cannot create event fields (UEFN 42.30+ can).") from exc
+        result = _execute(_VERSE_FIELDS, "AddVerseField", {
+            "widgetBlueprint": bp, "fieldName": field_name, "fieldType": spec["type"],
+            "defaultValue": spec["defaultValue"], "visibility": spec["visibility"], "bIsVar": spec["bIsVar"],
+        })
+    compiled = _compile_checked(wbp)
     return {
         "widget_path": _ref(wbp),
         "field_name": field_name,
-        "field_type": mapped,
+        "field_type": spec["type"],
+        "event_parameters": spec["eventParameterTypes"],
         "result": result.get("result"),
-        "listed_names": names,
+        "listed_names": _field_names(widget_path),
+        **compiled,
     }
+
+
+def edit_verse_field(
+    widget_path: str,
+    field_name: str,
+    field_type: str = "",
+    default_value: Optional[str] = None,
+    event_parameters: Optional[List[str]] = None,
+    mutable: Optional[bool] = None,
+    visibility: str = "",
+    new_name: str = "",
+) -> dict:
+    """Retype / re-default / rename a field (EditVerseField, 42.30). Unset arguments keep their value."""
+    wbp = _load_wbp(widget_path)
+    rows = list_verse_fields(widget_path).get("fields") or []
+    current = next((r for r in rows if isinstance(r, dict) and (r.get("name") or r.get("fieldName")) == field_name), None)
+    if current is None:
+        raise ValueError(f"No Verse field named {field_name}. Fields: {_field_names(widget_path)}")
+    kind = field_type or str(current.get("type") or "")
+    spec = verse_field_spec(
+        kind,
+        default_value if default_value is not None else str(current.get("defaultValue") or ""),
+        event_parameters if event_parameters is not None else (list(current.get("eventParameterTypes") or []) if kind == "event" else None),
+        mutable if mutable is not None else bool(current.get("bIsVar", True)),
+        visibility or str(current.get("visibility") or "public"),
+    )
+    result = _execute(_VERSE_FIELDS, "EditVerseField", {
+        "widgetBlueprint": {"refPath": _ref(wbp)}, "fieldName": field_name, "spec": spec, "newName": new_name or "",
+    })
+    return {"widget_path": _ref(wbp), "field_name": new_name or field_name, "spec": spec,
+            "result": result.get("result"), "listed_names": _field_names(widget_path), **_compile_checked(wbp)}
+
+
+def remove_verse_field(widget_path: str, field_name: str) -> dict:
+    wbp = _load_wbp(widget_path)
+    result = _execute(_VERSE_FIELDS, "RemoveVerseField", {"widgetBlueprint": {"refPath": _ref(wbp)}, "fieldName": field_name})
+    return {"widget_path": _ref(wbp), "removed": field_name, "result": result.get("result"),
+            "listed_names": _field_names(widget_path), **_compile_checked(wbp)}
+
+
+def duplicate_verse_field(widget_path: str, field_name: str, new_name: str) -> dict:
+    if not new_name:
+        raise ValueError("new_name is required and must not be in use")
+    wbp = _load_wbp(widget_path)
+    result = _execute(_VERSE_FIELDS, "DuplicateVerseField", {
+        "widgetBlueprint": {"refPath": _ref(wbp)}, "fieldName": field_name, "newName": new_name,
+    })
+    return {"widget_path": _ref(wbp), "field_name": new_name, "result": result.get("result"),
+            "listed_names": _field_names(widget_path), **_compile_checked(wbp)}
+
+
+def list_verse_field_types() -> dict:
+    """Field and event-parameter types this UEFN build accepts (GetSupportedVerseFieldTypes)."""
+    result = _execute(_VERSE_FIELDS, "GetSupportedVerseFieldTypes", {})
+    payload = result.get("result")
+    if isinstance(payload, dict):
+        payload = payload.get("returnValue", payload)
+    return {"types": payload}
 
 
 def list_verse_fields(widget_path: str) -> dict:
@@ -841,25 +907,37 @@ def bind_verse_field(
     widget_name: str,
     destination_property: str,
     conversion_name: str = "",
+    mode: str = "OneWayToDestination",
 ) -> dict:
-    """One-way binding from a Verse field on the widget blueprint to a child property."""
+    """Drive a child widget property from a Verse field (BindWidgetPropertyToVerseField, 42.30)."""
+    if mode not in BINDING_MODES:
+        raise ValueError(f"mode must be one of {list(BINDING_MODES)}")
     wbp = _load_wbp(widget_path)
     widget_obj, _row = _widget_object(wbp, widget_name)
-    guid = _mvvm().create_view_binding(
-        wbp,
-        None,
-        source_field,
-        widget_obj,
-        destination_property,
-        conversion_name or "",
-    )
-    _compile(wbp)
+    try:
+        result = _execute(_VERSE_FIELDS, "BindWidgetPropertyToVerseField", {
+            "widgetBlueprint": {"refPath": _ref(wbp)},
+            "verseFieldName": source_field,
+            "targetWidget": {"refPath": _ref(widget_obj)},
+            "widgetPropertyPath": destination_property,
+            "mode": mode,
+            "conversionName": conversion_name or "None",
+        })
+        payload = result.get("result")
+        binding_id = payload.get("returnValue") if isinstance(payload, dict) else payload
+    except ValueError as exc:
+        # Before 42.30: MVVM view binding (one way only).
+        if "BindWidgetPropertyToVerseField" not in str(exc) and "execute_tool" not in str(exc):
+            raise
+        binding_id = _mvvm().create_view_binding(wbp, None, source_field, widget_obj, destination_property, conversion_name or "")
     return {
         "widget_path": _ref(wbp),
         "source_field": source_field,
         "widget_name": widget_name,
         "destination_property": destination_property,
-        "binding_id": str(guid),
+        "mode": mode,
+        "binding_id": str(binding_id),
+        **_compile_checked(wbp),
     }
 
 
@@ -869,23 +947,31 @@ def bind_widget_event(
     event_name: str,
     destination_field: str,
 ) -> dict:
-    """Bind a widget event (OnClicked, OnHighlight, …) to a Verse event field on the blueprint."""
+    """Bind a widget event to a Verse field: an `event` field (42.30) or a bool/int the device watches.
+
+    Custom Buttons compile only OnButtonClicked / OnButtonHighlight / OnButtonUnhighlight in 42.30;
+    OnClicked, OnPressed, OnHovered… are remapped. The compile result is returned, not hidden.
+    """
     wbp = _load_wbp(widget_path)
-    widget_obj, _row = _widget_object(wbp, widget_name)
-    event = _mvvm().create_view_event_binding(
-        wbp,
-        widget_obj,
-        event_name,
-        None,
-        destination_field,
-    )
-    _compile(wbp)
+    widget_obj, row = _widget_object(wbp, widget_name)
+    widget_class = _ref_of(row.get("widgetClassPath")) if isinstance(row, dict) else ""
+    used = button_event_name(event_name, widget_class)
+    if destination_field not in _field_names(widget_path):
+        raise ValueError(
+            f"No Verse field named {destination_field}. Add it first: add_verse_field(field_type='event') "
+            f"for a click, or bool/int. Fields: {_field_names(widget_path)}"
+        )
+    event = _mvvm().create_view_event_binding(wbp, widget_obj, used, None, destination_field)
     return {
         "widget_path": _ref(wbp),
         "widget_name": widget_name,
-        "event_name": event_name,
+        "event_name": used,
+        **({"event_name_requested": event_name} if used != event_name else {}),
         "destination_field": destination_field,
         "event": str(event)[:200],
+        "note": "Re-check after the editor reloads this widget: 42.30 can drop event bindings on reload "
+        "(compile warns 'The event could not be generated'); bind again if so.",
+        **_compile_checked(wbp),
     }
 
 
@@ -959,6 +1045,10 @@ register("bind_widget_animation")(bind_widget_animation)
 register("add_animation_keys")(add_animation_keys)
 register("list_widget_animations")(list_widget_animations)
 register("add_verse_field")(add_verse_field)
+register("edit_verse_field")(edit_verse_field)
+register("remove_verse_field")(remove_verse_field)
+register("duplicate_verse_field")(duplicate_verse_field)
+register("list_verse_field_types")(list_verse_field_types)
 register("list_verse_fields")(list_verse_fields)
 register("bind_verse_field")(bind_verse_field)
 register("bind_widget_event")(bind_widget_event)

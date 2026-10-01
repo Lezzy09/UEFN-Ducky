@@ -365,3 +365,48 @@ def test_l16_concrete_subtype_not_editable_is_silent() -> None:
         "    Items : []concrete_subtype(entity) = array{}\n"
     )
     assert not [f for f in lint_verse(src) if f["rule"] == "concrete_subtype_editable"]
+
+
+# --- 42.30: these two files compiled with 0 errors in UEFN 42.30 (Tycoony, Oct 1 2026).
+_TESTDATA = os.path.join(os.path.dirname(__file__), "testdata")
+
+
+@pytest.mark.parametrize("name", ["llm_npc_4230.verse", "abilities_4230.verse"])
+def test_42_30_compile_verified_samples_have_no_errors(name: str) -> None:
+    with open(os.path.join(_TESTDATA, name), encoding="utf-8") as fh:
+        findings = lint_verse(fh.read())
+    assert [f for f in findings if f["severity"] == "error"] == []
+
+
+def test_42_30_conversation_doc_drift_is_flagged() -> None:
+    code = (
+        "using { /UnrealEngine.com/Conversations }\n\n"
+        "Drift(Persona:persona_component):void =\n"
+        "    Persona.AppendToPersonality(\"x\")\n"
+        "    Session := Persona.GetAISession()\n"
+        "    Session.RegisterPromptBinding(Def, F)\n"
+        "    Def := prompt_binding_definition{Name := N, Description := N, ResponseType := int}\n"
+    )
+    messages = " ".join(f["message"] for f in lint_verse(code) if f["severity"] == "error")
+    assert "AppendToPersonality" in messages
+    assert "RegisterPromptBinding" in messages
+    assert "only `Name` and `Description`" in messages
+
+
+def test_42_30_ability_template_breakers_are_flagged() -> None:
+    code = (
+        "using { /Fortnite.com/Abilities }\n\n"
+        "x := class(fort_template_ability(ability_context, fort_template_ability_effect)):\n"
+        "Q():fort_wedge_ability_target_query = fort_wedge_ability_target_query{Target := fort_target_query_affiliation.Any}\n"
+    )
+    messages = " ".join(f["message"] for f in lint_verse(code) if f["severity"] == "error")
+    assert "no longer parametric" in messages
+    assert "`.Any` was removed" in messages or "Any` was removed" in messages
+    assert "`Targets` (an array)" in messages
+
+
+def test_42_30_conversation_types_need_their_usings() -> None:
+    code = "m := class(has_voice_member_info){}\nF(P:persona_component):void = {}\n"
+    missing = {f["message"] for f in lint_verse(code) if f["rule"] == "missing_using"}
+    assert any("/Verse.org/Chat" in m for m in missing)
+    assert any("/UnrealEngine.com/Conversations" in m for m in missing)

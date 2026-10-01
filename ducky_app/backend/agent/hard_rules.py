@@ -164,6 +164,16 @@ AGENT_HARD_RULES = (
     "`gameplay_camera_first_person_device`. Entitlements = "
     "`using { /UnrealEngine.com/Marketplace }`. Island Coins stay `economy`. "
     '`skill_read_subskill("verse", "sys_chat_channels")`.\n'
+    "- **42.30 (HARD):** LLM NPCs = `/UnrealEngine.com/Conversations` `persona_component` "
+    "(`SetPersonality[Msg]`, `PromptToTalk[Msg, Channel]`, `GetAISession().RegisterAction(Def, "
+    "Required, struct, Callback)` / `.Prompt(Msg, struct)`) — never `AppendToPersonality`, "
+    "`RegisterPromptBinding` or `ResponseType` (Epic's page shows them; the digest has none). "
+    '`skill_read_subskill("verse", "sys_conversations")`. `fort_template_ability` is not '
+    "parametric (`x := class(fort_template_ability):`); target queries take "
+    "`Targets := array{…}` (`Any` → `Neutral`). Held items = `held_item_template` "
+    '(`skill_read_subskill("scenegraph", "held_items")`). UMG `event` fields are creatable '
+    "(≤1 bool/int/float param); Custom Button binds `OnButtonClicked` — `OnClicked` no "
+    'longer compiles (`skill_read_subskill("verse", "umg_verse_field_events")`).\n'
     "- **Persistence `weak_map` (HARD):** never remove player keys once added. Replace "
     "values only via rebuild+`set`. Do not add/remove persistable fields without "
     '`skill_read_subskill("verse","persistence")` + `sys_persistence_migration`.\n'

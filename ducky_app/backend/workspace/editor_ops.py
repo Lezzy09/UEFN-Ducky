@@ -199,6 +199,9 @@ _MUTATIONS: tuple[OpSpec, ...] = (
     _op("bind_widget_animation", KIND_UMG, "animations"),
     _op("add_animation_keys", KIND_UMG, "animations"),
     _op("add_verse_field", KIND_UMG, "fields"),
+    _op("edit_verse_field", KIND_UMG, "fields"),
+    _op("remove_verse_field", KIND_UMG, "fields"),
+    _op("duplicate_verse_field", KIND_UMG, "fields"),
     _op("bind_verse_field", KIND_UMG, "bindings"),
     _op("bind_widget_event", KIND_UMG, "bindings"),
     # -- data tables -------------------------------------------------------------
@@ -286,7 +289,7 @@ READ_COMMANDS: frozenset[str] = frozenset(
         "list_uefn_material_expression_classes", "list_verse_devices", "list_verse_modules",
         "list_verse_property_hashes", "list_verse_reference_types", "list_verse_fields",
         "list_widget_animations", "list_widget_bindings", "list_widget_blueprints",
-        "list_widget_classes", "list_named_slots", "list_bindable_properties",
+        "list_widget_classes", "list_named_slots", "list_bindable_properties", "list_verse_field_types",
         "get_widget_class_info",
         "measure_distance", "niagara_capabilities", "pcg_get_graph_info",
         "ping", "scene_graph_capabilities", "search_assets", "search_unreal_api",

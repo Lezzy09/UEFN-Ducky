@@ -312,9 +312,18 @@ def add_verse_field(
     field_name: str,
     field_type: str,
     default_value: str = "",
+    event_parameters: list[str] | None = None,
+    mutable: bool = True,
+    visibility: str = "public",
     pretty: bool = False,
 ) -> str:
-    """Add a Verse field (logic, int, float, message, material, texture, color, event)."""
+    """Add a Verse field to a Widget Blueprint.
+
+    field_type: logic (bool), int, float, string, message, color, color_alpha, texture,
+    material, or event (UEFN 42.30+). An event takes at most one parameter:
+    event_parameters=["int"] (bool/int/float). Events have no default and are not var.
+    Bind a button click to an event with bind_widget_event. Returns compiled / compile_error.
+    """
     return tool_json(
         send_command(
             "add_verse_field",
@@ -323,6 +332,9 @@ def add_verse_field(
                 "field_name": field_name,
                 "field_type": field_type,
                 "default_value": default_value,
+                "event_parameters": list(event_parameters or []),
+                "mutable": bool(mutable),
+                "visibility": visibility,
             },
         ),
         pretty=pretty,
@@ -330,8 +342,53 @@ def add_verse_field(
 
 
 @plugin_mcp_tool("verse")
+def edit_verse_field(
+    widget_path: str,
+    field_name: str,
+    field_type: str = "",
+    default_value: str | None = None,
+    event_parameters: list[str] | None = None,
+    mutable: bool | None = None,
+    visibility: str = "",
+    new_name: str = "",
+    pretty: bool = False,
+) -> str:
+    """Retype, re-default, change access or rename a Verse field (UEFN 42.30+). Unset values stay."""
+    params: dict = {"widget_path": widget_path, "field_name": field_name, "field_type": field_type,
+                    "visibility": visibility, "new_name": new_name}
+    if default_value is not None:
+        params["default_value"] = default_value
+    if event_parameters is not None:
+        params["event_parameters"] = list(event_parameters)
+    if mutable is not None:
+        params["mutable"] = bool(mutable)
+    return tool_json(send_command("edit_verse_field", params), pretty=pretty)
+
+
+@plugin_mcp_tool("verse")
+def remove_verse_field(widget_path: str, field_name: str, pretty: bool = False) -> str:
+    """Remove a Verse field from a Widget Blueprint (UEFN 42.30+)."""
+    return tool_json(send_command("remove_verse_field", {"widget_path": widget_path, "field_name": field_name}), pretty=pretty)
+
+
+@plugin_mcp_tool("verse")
+def duplicate_verse_field(widget_path: str, field_name: str, new_name: str, pretty: bool = False) -> str:
+    """Copy a Verse field under a new, unused name (UEFN 42.30+)."""
+    return tool_json(
+        send_command("duplicate_verse_field", {"widget_path": widget_path, "field_name": field_name, "new_name": new_name}),
+        pretty=pretty,
+    )
+
+
+@plugin_mcp_tool("verse")
+def list_verse_field_types(pretty: bool = False) -> str:
+    """Field types and event parameter types this UEFN build accepts."""
+    return tool_json(send_command("list_verse_field_types", {}), pretty=pretty)
+
+
+@plugin_mcp_tool("verse")
 def list_verse_fields(widget_path: str, pretty: bool = False) -> str:
-    """List Verse fields on a Widget Blueprint."""
+    """List Verse fields on a Widget Blueprint (type, default, access, var, event parameters)."""
     return tool_json(send_command("list_verse_fields", {"widget_path": widget_path}), pretty=pretty)
 
 
@@ -342,9 +399,14 @@ def bind_verse_field(
     widget_name: str,
     destination_property: str,
     conversion_name: str = "",
+    mode: str = "OneWayToDestination",
     pretty: bool = False,
 ) -> str:
-    """Bind a Verse field on the widget blueprint to a child widget property."""
+    """Drive a child widget property from a Verse field on the widget blueprint.
+
+    mode: OneWayToDestination (field drives widget, default), TwoWay (editable write-back),
+    OneTimeToDestination, OneWayToSource, OneTimeToSource. Returns compiled / compile_error.
+    """
     return tool_json(
         send_command(
             "bind_verse_field",
@@ -354,6 +416,7 @@ def bind_verse_field(
                 "widget_name": widget_name,
                 "destination_property": destination_property,
                 "conversion_name": conversion_name,
+                "mode": mode,
             },
         ),
         pretty=pretty,
@@ -368,7 +431,11 @@ def bind_widget_event(
     destination_field: str,
     pretty: bool = False,
 ) -> str:
-    """Bind OnClicked / OnHighlight / OnUnhighlight to a Verse event field."""
+    """Bind a button event to a Verse field (an event field, or a bool/int the device watches).
+
+    Custom Buttons: OnButtonClicked, OnButtonHighlight, OnButtonUnhighlight (OnClicked /
+    OnHovered are remapped; they fail to compile in 42.30). Check `compiled` in the result.
+    """
     return tool_json(
         send_command(
             "bind_widget_event",

@@ -139,6 +139,17 @@ _USING_RULES: tuple[tuple[str, str, str], ...] = (
     (r"\bPointerZoom\b", "/Verse.org/Input/UI", "/Verse.org/Input/UI"),
     (r"\banimation_sequence\b", "/Verse.org/Assets", "/Verse.org/Assets"),
     (r"\bcolor\s*\{", "/Verse.org/Colors", "/Verse.org/Colors"),
+    # 42.30 conversations (LLM NPCs), abilities and held items.
+    (r"\bpersona_component\b", "/UnrealEngine.com/Conversations", "/UnrealEngine.com/Conversations"),
+    (r"\bprompt_binding_definition\b", "/UnrealEngine.com/Conversations", "/UnrealEngine.com/Conversations"),
+    (r"\bSetConversationTarget\b", "/UnrealEngine.com/Conversations", "/UnrealEngine.com/Conversations"),
+    (r"\bvoice_channel\b", "/Verse.org/Chat", "/Verse.org/Chat"),
+    (r"\bhas_voice_member_info\b", "/Verse.org/Chat", "/Verse.org/Chat"),
+    (r"\bagent_group\s*\(", "/Verse.org/AgentGroup", "/Verse.org/AgentGroup"),
+    (r"\bnpc_behavior\b", "/Fortnite.com/AI", "/Fortnite.com/AI"),
+    (r"\bfort_template_ability\b", "/Fortnite.com/Abilities", "/Fortnite.com/Abilities"),
+    (r"\bfort_target_query_affiliation\b", "/Fortnite.com/Abilities", "/Fortnite.com/Abilities"),
+    (r"\bheld_item_template\b", "/Fortnite.com/Armory", "/Fortnite.com/Armory"),
 )
 
 # (regex, message, fix, severity)
@@ -159,6 +170,44 @@ _BAD_API_RULES: tuple[tuple[str, str, str, str], ...] = (
         r"\bLog10\(",
         "`Log10` does not exist in Verse.",
         "Use `Log(X, ?Base := 10.0)`.",
+        "error",
+    ),
+    # 42.30 — Epic's conversations template page shows calls that are not in the digest (E3506).
+    (
+        r"\.AppendToPersonality\s*\(",
+        "`persona_component` has no `AppendToPersonality` (42.30 digest).",
+        "Build the whole personality as one `<localizes>` message first, then `if (Persona.SetPersonality[Msg]) {}`.",
+        "error",
+    ),
+    (
+        r"\.RegisterPromptBinding\s*\(",
+        "`ai_session` has no `RegisterPromptBinding` (42.30 digest).",
+        "Use `Session.RegisterAction(Definition, Required, response_struct, Callback)`; it returns a `cancelable`.",
+        "error",
+    ),
+    (
+        r"\bResponseType\s*:=",
+        "`prompt_binding_definition` has only `Name` and `Description`.",
+        "Pass the response struct as `RegisterAction`'s third argument instead.",
+        "error",
+    ),
+    # 42.30 ability template changes.
+    (
+        r"\bfort_template_ability\s*\(",
+        "`fort_template_ability` is no longer parametric (42.30).",
+        "Specialize it directly: `my_ability := class(fort_template_ability):`.",
+        "error",
+    ),
+    (
+        r"\bfort_target_query_affiliation\.Any\b",
+        "`fort_target_query_affiliation.Any` was removed in 42.30.",
+        "List what to hit: `Targets := array{fort_target_query_affiliation.Hostile, fort_target_query_affiliation.Neutral}`.",
+        "error",
+    ),
+    (
+        r"\bTarget\s*:=\s*fort_target_query_affiliation\b",
+        "Ability target queries take `Targets` (an array) since 42.30.",
+        "Use `Targets := array{fort_target_query_affiliation.Hostile}`.",
         "error",
     ),
 )
