@@ -1,10 +1,15 @@
-"""The typed UMG tools are registered (not listener passthroughs that take one `params` dict)."""
+"""Importing backend.tools.verse.umg registers typed UMG tools (flat arguments).
+
+The verse Store plugin imports this module in its register(); without it the frozen
+app exposes the listener's UMG commands as one-`params`-dict passthroughs
+(bridge/dynamic_tools) and flat arguments are silently dropped.
+"""
 
 from __future__ import annotations
 
 import asyncio
 
-import backend.tools  # noqa: F401  (registers every app tool)
+import backend.tools.verse.umg  # noqa: F401  (what the verse plugin's register() imports)
 from backend.server import mcp
 
 UMG_TOOLS = (
