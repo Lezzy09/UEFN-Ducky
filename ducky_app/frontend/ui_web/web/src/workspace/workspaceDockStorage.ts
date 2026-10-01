@@ -330,7 +330,11 @@ export function coerceDockBool(value: unknown): boolean | undefined {
 
 const RAIL_BOOL_KEYS = ["leftRailOpen", "rightRailOpen", "leftRailEnabled", "rightRailEnabled"] as const;
 
-/** AppData hydrate: disk wins when it named the flag; local keeps kill-switches disk predates. */
+const RAIL_KILL_SWITCHES = ["leftRailEnabled", "rightRailEnabled"] as const;
+
+/** AppData hydrate: disk wins when it named the flag; local keeps kill-switches disk predates.
+ *  A rail switched off in Appearance stays off: an older copy that still says "on" (on disk
+ *  or in this window) never turns it back on; only the Appearance switch does. */
 export function applyDiskDockSnapshot(raw: unknown, windowId: string): WorkspaceDockSnapshot {
   const disk = normalizeSnapshot(raw, windowId);
   if (!raw || typeof raw !== "object") return disk;
@@ -340,8 +344,19 @@ export function applyDiskDockSnapshot(raw: unknown, windowId: string): Workspace
   for (const key of RAIL_BOOL_KEYS) {
     if (coerceDockBool(data[key]) === undefined) next[key] = local[key];
   }
+  for (const key of RAIL_KILL_SWITCHES) {
+    if (local[key] === false) next[key] = false;
+  }
   if (!Array.isArray(data.hiddenPanels)) next.hiddenPanels = local.hiddenPanels;
   return next;
+}
+
+/** Keep this window's latest rail on/off switches (set in Appearance) in a snapshot the
+ *  dock is about to save, so a copy it held from before can't switch a rail back on. */
+export function withLatestRailSwitches(snapshot: WorkspaceDockSnapshot, windowId: string): WorkspaceDockSnapshot {
+  const latest = readDockSnapshot(windowId);
+  if (snapshot.leftRailEnabled === latest.leftRailEnabled && snapshot.rightRailEnabled === latest.rightRailEnabled) return snapshot;
+  return { ...snapshot, leftRailEnabled: latest.leftRailEnabled, rightRailEnabled: latest.rightRailEnabled };
 }
 
 export function readDockSnapshot(windowId = "main"): WorkspaceDockSnapshot {

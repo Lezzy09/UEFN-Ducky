@@ -14,6 +14,7 @@ import {
   readDockSnapshot,
   sidebarPanelCatalog,
   withPanelOnSide,
+  withLatestRailSwitches,
   withRailEnabled,
 } from "./workspaceDockStorage";
 
@@ -95,9 +96,20 @@ describe("workspace dock sidebar snapshot", () => {
     const hydrated = applyDiskDockSnapshot({ version: 1, leftWidth: 280 }, "main");
     expect(hydrated.leftRailEnabled).toBe(false);
     expect(hydrated.rightRailEnabled).toBe(false);
+    // A stale "on" saved earlier never switches a rail the user turned off back on.
     expect(applyDiskDockSnapshot({ leftRailEnabled: false, rightRailEnabled: true }, "main").rightRailEnabled).toBe(
-      true,
+      false,
     );
+    mem.set(dockStorageKey("main"), JSON.stringify(defaultDockSnapshot()));
+    expect(applyDiskDockSnapshot({ rightRailEnabled: false }, "main").rightRailEnabled).toBe(false);  // off on disk stays off
+  });
+
+  it("keeps the latest rail switches when the dock saves an older copy", () => {
+    mem.set(dockStorageKey("main"), JSON.stringify(withRailEnabled(defaultDockSnapshot(), "right", false)));
+    const stale = { ...defaultDockSnapshot(), rightWidth: 333 };  // the dock's copy from before Appearance
+    const saved = withLatestRailSwitches(stale, "main");
+    expect(saved.rightRailEnabled).toBe(false);
+    expect(saved.rightWidth).toBe(333);
   });
 
   it("does not write AppData defaults when localStorage is empty", () => {

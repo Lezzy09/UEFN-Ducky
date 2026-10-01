@@ -16,6 +16,7 @@ import {
   syncLocalDockSnapshot,
   movePanelInSnapshot,
   withPanelOnSide,
+  withLatestRailSwitches,
   withRailEnabled,
   DOCK_CHANGE_EVENT,
 } from "../workspace/workspaceDockStorage";
@@ -42,7 +43,13 @@ export function useWorkspaceDockLayout(windowId: string) {
       void api
         .get_workspace_dock(windowId)
         .then((raw) => {
-          if (localDockWriteIsNewerThan(hydrateStartedAt)) return;
+          // Appearance (or a header button) saved while AppData was loading: take that, and
+          // catch up with it — change events were skipped while loading.
+          if (localDockWriteIsNewerThan(hydrateStartedAt)) {
+            const latest = readDockSnapshot(windowId);
+            setSnapshot((prev) => (JSON.stringify(prev) === JSON.stringify(latest) ? prev : latest));
+            return;
+          }
           if (raw && typeof raw === "object" && Object.keys(raw).length > 0) {
             const next = applyDiskDockSnapshot(raw, windowId);
             setSnapshot((prev) =>
@@ -66,7 +73,7 @@ export function useWorkspaceDockLayout(windowId: string) {
   useEffect(() => {
     const flush = () => {
       if (hydratingRef.current) return;
-      persistDockSnapshot(snapshotRef.current, windowId);
+      persistDockSnapshot(withLatestRailSwitches(snapshotRef.current, windowId), windowId);
       flushDockSnapshotToDisk(windowId);
     };
     const onVisibility = () => {
@@ -110,7 +117,7 @@ export function useWorkspaceDockLayout(windowId: string) {
   const persistIfReady = useCallback(
     (next: WorkspaceDockSnapshot) => {
       if (hydratingRef.current) return;
-      persistDockSnapshot(next, windowId);
+      persistDockSnapshot(withLatestRailSwitches(next, windowId), windowId);
     },
     [windowId],
   );
@@ -272,6 +279,8 @@ export function useWorkspaceDockLayout(windowId: string) {
 
   const setRailEnabled = useCallback(
     (side: DockSide, enabled: boolean) => {
+      // The switch itself: saved first, so the commit below keeps it.
+      persistDockSnapshot(withRailEnabled(readDockSnapshot(windowId), side, enabled), windowId);
       commit((prev) => withRailEnabled(prev, side, enabled));
       flushDockSnapshotToDisk(windowId);
     },
