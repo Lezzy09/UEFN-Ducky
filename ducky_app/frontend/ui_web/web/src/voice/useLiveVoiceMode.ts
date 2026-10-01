@@ -9,6 +9,7 @@ import {
   updateLiveChatVoice,
 } from "./liveSpeakService";
 import {
+  getCurrentSpokenLine,
   getLiveSpeakTransport,
   liveSpeakQueueLength,
   speakNewest,
@@ -17,15 +18,34 @@ import {
   subscribeLiveSpeakTransport,
 } from "./liveSpeakQueue";
 import { appendLiveUtterance } from "./liveUtterance";
-import { shouldAcceptLiveFinal, shouldReturnToListeningAfterAnswer } from "./liveTurnGates";
+import { isLikelyEcho, shouldAcceptLiveFinal, shouldReturnToListeningAfterAnswer } from "./liveTurnGates";
+import { toSpeechError } from "./speechErrors";
 import {
   createStreamingTranscriptionSession,
+  prewarmSpeech,
   type TranscriptionSession,
 } from "./transcriptionSession";
 import { ttsEngine } from "./ttsEngine";
 import { getVoiceSettings, resolveSpeed, resolveVoiceId, subscribeVoiceSettings } from "./voiceSettings";
 
-export type LiveVoiceStatus = "off" | "listening" | "thinking" | "speaking" | "error" | "muted";
+export type LiveVoiceStatus = "off" | "connecting" | "listening" | "thinking" | "speaking" | "error" | "muted";
+
+/** Quiet time after the last confirmed words before a spoken turn counts as finished. */
+const TURN_END_MS = 900;
+/** Transient listen failures (network blips, helper restarts) retry this many times. */
+const MAX_RETRIES = 3;
+const RETRY_MS = 1200;
+
+function ttsBusy(): boolean {
+  return !shouldAcceptLiveFinal({ isSpeaking: ttsEngine.isSpeaking(), queueLength: liveSpeakQueueLength() });
+}
+
+function currentSpokenText(): string {
+  const line = getCurrentSpokenLine();
+  if (line?.resolvedText) return line.resolvedText;
+  if (typeof line?.text === "string") return line.text;
+  return ttsEngine.getProgress().spokenText;
+}
 
 /**
  * Mic + composer + transport for a mounted live chat.
@@ -36,12 +56,14 @@ export function useLiveVoiceMode(opts: {
   chatId: string;
   voiceId?: string;
   speed?: number;
-  manualSend?: boolean;
   /** Mic off — type only; replies still speak. */
   muted?: boolean;
+  /** Words of the phrase being spoken right now ("" clears). */
   onInterim: (text: string) => void;
-  /** Final speech → composer only. Never send. */
+  /** Confirmed words of the user's turn. */
   onTranscript: (text: string) => void;
+  /** The user stopped talking for a beat — their turn is complete. */
+  onTurnEnd?: () => void;
   agentRunning?: boolean;
   isGroup?: boolean;
 }) {
@@ -53,23 +75,23 @@ export function useLiveVoiceMode(opts: {
   const [pendingText, setPendingText] = useState("");
   const [transport, setTransport] = useState(() => getLiveSpeakTransport());
   const [sttProvider, setSttProvider] = useState(() => getVoiceSettings().sttProvider);
-  const bargeTimerRef = useRef<number | null>(null);
+  const turnTimerRef = useRef<number | null>(null);
+  const retryTimerRef = useRef<number | null>(null);
+  const retriesRef = useRef(0);
   const onInterimRef = useRef(opts.onInterim);
   const onTranscriptRef = useRef(opts.onTranscript);
+  const onTurnEndRef = useRef(opts.onTurnEnd);
   const voiceIdRef = useRef(opts.voiceId);
   const speedRef = useRef(opts.speed);
   const chatIdRef = useRef(opts.chatId);
-  const enabledRef = useRef(opts.enabled);
-  const manualSendRef = useRef(Boolean(opts.manualSend));
   const mutedRef = useRef(Boolean(opts.muted));
   const pendingTextRef = useRef("");
   onInterimRef.current = opts.onInterim;
   onTranscriptRef.current = opts.onTranscript;
+  onTurnEndRef.current = opts.onTurnEnd;
   voiceIdRef.current = opts.voiceId;
   speedRef.current = opts.speed;
   chatIdRef.current = opts.chatId;
-  enabledRef.current = opts.enabled;
-  manualSendRef.current = Boolean(opts.manualSend);
   mutedRef.current = Boolean(opts.muted);
 
   const publish = useCallback((patch: Parameters<typeof patchLiveVoiceState>[1]) => {
@@ -81,118 +103,164 @@ export function useLiveVoiceMode(opts: {
     setPendingText(text);
   }, []);
 
-  const clearBargeTimer = () => {
-    if (bargeTimerRef.current != null) {
-      window.clearTimeout(bargeTimerRef.current);
-      bargeTimerRef.current = null;
+  const clearTurnTimer = () => {
+    if (turnTimerRef.current != null) {
+      window.clearTimeout(turnTimerRef.current);
+      turnTimerRef.current = null;
     }
   };
 
-  const stopMic = useCallback(() => {
-    clearBargeTimer();
-    sessionRef.current?.abort();
+  const clearRetryTimer = () => {
+    if (retryTimerRef.current != null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  };
+
+  /** Clear the ref first: abort() reports "idle", which must not read as a crash. */
+  const dropSession = () => {
+    const running = sessionRef.current;
     sessionRef.current = null;
+    running?.abort();
+  };
+
+  const stopMic = useCallback(() => {
+    clearTurnTimer();
+    clearRetryTimer();
+    dropSession();
     releaseMic(chatIdRef.current);
+    onInterimRef.current("");
     setPending("");
   }, [setPending]);
+
+  const bargeIn = useCallback(() => {
+    interruptLiveSpeak();
+    publish({ status: "listening", speakerName: "", nextSpeaker: "" });
+    setStatus("listening");
+  }, [publish]);
+
+  const startMicRef = useRef<() => Promise<void>>(async () => undefined);
 
   const startMic = useCallback(async () => {
     if (mutedRef.current) return;
     if (!claimMic(chatIdRef.current)) return;
+    clearRetryTimer();
     setError("");
     setPending("");
-    publish({ error: "", userInterim: "" });
-    sessionRef.current?.abort();
+    publish({ error: "", errorAction: undefined, userInterim: "" });
+    dropSession();
     const session = createStreamingTranscriptionSession();
     sessionRef.current = session;
     const voice = resolveVoiceId(voiceIdRef.current);
     ttsEngine.setVoice(voice || getVoiceSettings().defaultVoice);
     ttsEngine.setRate(resolveSpeed(speedRef.current));
+    const mine = () => sessionRef.current === session;
 
+    const fail = (message: string, action?: Parameters<typeof publish>[0]["errorAction"]) => {
+      if (!mine()) return;
+      dropSession();
+      releaseMic(chatIdRef.current);
+      onInterimRef.current("");
+      // Fixable problems wait for the user; blips retry on their own.
+      if (!action && retriesRef.current < MAX_RETRIES) {
+        retriesRef.current += 1;
+        setStatus("connecting");
+        publish({ status: "connecting", error: "", notice: "Reconnecting the mic…" });
+        retryTimerRef.current = window.setTimeout(() => {
+          retryTimerRef.current = null;
+          void startMicRef.current();
+        }, RETRY_MS * retriesRef.current);
+        return;
+      }
+      setError(message);
+      setStatus("error");
+      publish({ status: "error", error: message, errorAction: action, userInterim: "" });
+    };
+
+    setStatus("connecting");
+    publish({ status: "connecting" });
     try {
       await session.start({
         onInterim: (text) => {
-          if (
-            !shouldAcceptLiveFinal({
-              isSpeaking: ttsEngine.isSpeaking(),
-              queueLength: liveSpeakQueueLength(),
-            })
-          ) {
-            return;
+          if (!mine()) return;
+          if (ttsBusy()) {
+            // Ducky's own voice leaks into the mic; only real new words interrupt it.
+            if (text && !isLikelyEcho(text, currentSpokenText())) bargeIn();
+            else return;
           }
+          if (text) clearTurnTimer();
           onInterimRef.current(text);
           publish({ userInterim: text, status: "listening" });
         },
         onFinal: (text) => {
+          if (!mine()) return;
           onInterimRef.current("");
           const trimmed = text.trim();
           if (!trimmed) {
             publish({ userInterim: "" });
             return;
           }
-          if (
-            !shouldAcceptLiveFinal({
-              isSpeaking: ttsEngine.isSpeaking(),
-              queueLength: liveSpeakQueueLength(),
-            })
-          ) {
-            return;
+          if (ttsBusy()) {
+            if (isLikelyEcho(trimmed, currentSpokenText())) {
+              publish({ userInterim: "" });
+              return;
+            }
+            bargeIn();
           }
+          retriesRef.current = 0;
           const next = appendLiveUtterance(pendingTextRef.current, trimmed);
           setPending(next);
-          publish({ userInterim: "", lastUserText: next, status: "listening" });
+          publish({ userInterim: "", lastUserText: next, status: "listening", notice: "" });
           setStatus("listening");
           onTranscriptRef.current(trimmed);
+          clearTurnTimer();
+          turnTimerRef.current = window.setTimeout(() => {
+            turnTimerRef.current = null;
+            if (!mine()) return;
+            setPending("");
+            onTurnEndRef.current?.();
+          }, TURN_END_MS);
         },
         onSpeechStarted: () => {
-          clearBargeTimer();
-          if (!ttsEngine.isSpeaking() && ttsEngine.getUtteranceQueueLength() === 0 && liveSpeakQueueLength() === 0) {
-            return;
-          }
-          bargeTimerRef.current = window.setTimeout(() => {
-            if (ttsEngine.isSpeaking() || liveSpeakQueueLength() > 0) {
-              interruptLiveSpeak();
-              publish({ status: "listening", speakerName: "", nextSpeaker: "" });
-              setStatus("listening");
-            }
-            bargeTimerRef.current = null;
-          }, 350);
+          if (mine()) clearTurnTimer();
         },
-        onSpeechStopped: () => {
-          clearBargeTimer();
-        },
-        onError: (msg) => {
-          setError(msg);
-          setStatus("error");
-          publish({ status: "error", error: msg });
+        onError: (err) => fail(err.message, err.action),
+        onNotice: (message) => {
+          if (mine()) publish({ notice: message });
         },
         onStateChange: (s) => {
+          if (!mine()) return;
           if (s === "listening") {
             if (mutedRef.current) return;
             setStatus("listening");
-            publish({ status: "listening", muted: false });
+            publish({ status: "listening", muted: false, error: "", errorAction: undefined });
           }
-          if (s === "error") setStatus("error");
+          if (s === "connecting") {
+            setStatus("connecting");
+            publish({ status: "connecting" });
+          }
+          if (s === "idle" && !mutedRef.current) {
+            // The engine ended on its own (service hiccup) — reopen it.
+            fail("The mic stopped listening.");
+          }
         },
       });
+      if (!mine()) return;
       if (mutedRef.current) {
-        session.abort();
-        sessionRef.current = null;
+        dropSession();
         releaseMic(chatIdRef.current);
         setStatus("muted");
         publish({ status: "muted", muted: true });
         return;
       }
       setStatus("listening");
-      publish({ status: "listening", muted: false });
+      publish({ status: "listening", muted: false, error: "", errorAction: undefined });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
-      setStatus("error");
-      publish({ status: "error", error: msg });
-      releaseMic(chatIdRef.current);
+      const e = toSpeechError(err);
+      fail(e.message, e.action);
     }
-  }, [publish, setPending]);
+  }, [bargeIn, publish, setPending]);
+  startMicRef.current = startMic;
 
   useEffect(() => subscribeVoiceSettings(() => setSttProvider(getVoiceSettings().sttProvider)), []);
 
@@ -213,9 +281,11 @@ export function useLiveVoiceMode(opts: {
     if (opts.muted) {
       stopMic();
       setStatus("muted");
-      publish({ status: "muted", muted: true, userInterim: "", error: "" });
+      publish({ status: "muted", muted: true, userInterim: "", error: "", errorAction: undefined });
       return;
     }
+    retriesRef.current = 0;
+    prewarmSpeech();
     void startMic();
     return () => {
       stopMic();
@@ -258,14 +328,20 @@ export function useLiveVoiceMode(opts: {
         }
       }
     });
-  }, [opts.enabled, opts.agentRunning]);
+  }, [opts.enabled, opts.agentRunning, publish]);
 
   useEffect(() => {
     return subscribeLiveSpeakTransport(() => setTransport(getLiveSpeakTransport()));
   }, []);
 
+  /** Retry after a fixable error (e.g. after turning Windows speech on). */
+  const retry = useCallback(() => {
+    retriesRef.current = 0;
+    stopMic();
+    void startMic();
+  }, [startMic, stopMic]);
+
   const interrupt = useCallback(() => {
-    clearBargeTimer();
     interruptLiveSpeak();
     if (mutedRef.current) {
       setStatus("muted");
@@ -294,24 +370,15 @@ export function useLiveVoiceMode(opts: {
     publish({ status: "speaking" });
   }, [publish]);
 
-  const replay = back;
-
-  const sendNow = useCallback(() => {
-    // Speech is already in the composer. User presses Send themselves.
-    return false;
-  }, []);
-
   return {
     status,
     error,
     pendingText,
-    canSend: Boolean(pendingText.trim()),
     interrupt,
+    retry,
     skip,
     back,
     newest,
-    replay,
-    sendNow,
     stopSession: stopMic,
     hasPrev: transport.hasPrev,
     hasNext: transport.hasNext,

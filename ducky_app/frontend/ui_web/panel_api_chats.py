@@ -1270,6 +1270,40 @@ class PanelApiChatsMixin:
 
         return create_realtime_token()
 
+    def voice_win_stt_prewarm(self) -> dict[str, Any]:
+        """Spawn the Windows speech helper early so the first mic press starts fast."""
+        from backend.voice.windows_speech import prewarm
+
+        return prewarm()
+
+    def voice_win_stt_start(self, lang: str = "") -> dict[str, Any]:
+        """Start Windows dictation (desktop mic, no key); returns session + poll cursor."""
+        from backend.voice.windows_speech import start_session
+
+        return start_session(str(lang or ""))
+
+    def voice_win_stt_poll(self, session: str, cursor: int = 0, wait_ms: int = 400) -> dict[str, Any]:
+        """Long-poll Windows dictation events (interim / final / ended)."""
+        from backend.voice.windows_speech import poll_session
+
+        return poll_session(str(session or ""), cursor, wait_ms)
+
+    def voice_win_stt_stop(self, session: str) -> dict[str, Any]:
+        from backend.voice.windows_speech import stop_session
+
+        return stop_session(str(session or ""))
+
+    def voice_win_stt_cancel(self, session: str) -> dict[str, Any]:
+        from backend.voice.windows_speech import cancel_session
+
+        return cancel_session(str(session or ""))
+
+    def voice_open_windows_settings(self, page: str) -> dict[str, Any]:
+        """Open Windows Settings → speech / microphone privacy so the user can turn it on."""
+        from backend.voice.windows_speech import open_windows_settings
+
+        return open_windows_settings(str(page or ""))
+
     def voice_summarize_reply(self, assistant_text: str, model: str = "") -> dict[str, Any]:
         """Short spoken summary via the cheap voice model (prefer via bridge_job_start)."""
         from backend.voice.summary import summarize_for_speech

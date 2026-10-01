@@ -454,8 +454,14 @@ _PUBLIC_METHODS = frozenset({
     'window_box',
     'window_input',
     'write_project_file',
+    'voice_open_windows_settings',
     'write_task_artifact'
 })
+    'voice_win_stt_cancel',
+    'voice_win_stt_poll',
+    'voice_win_stt_prewarm',
+    'voice_win_stt_start',
+    'voice_win_stt_stop',
 
 
 def test_panel_api_public_methods() -> None:

@@ -34,7 +34,7 @@ class PanelApiSettingsMixin:
             "voice_summary_model": s.voice_summary_model or "",
             "voice_default_voice": s.voice_default_voice or "",
             "voice_default_speed": float(getattr(s, "voice_default_speed", 1.0) or 1.0),
-            "voice_live_manual_send": bool(getattr(s, "voice_live_manual_send", False)),
+            "voice_live_auto_send": bool(getattr(s, "voice_live_auto_send", False)),
             "voice_process_talk": float(getattr(s, "voice_process_talk", 0.7) or 0.0),
             "voice_stt_provider": str(getattr(s, "voice_stt_provider", "") or "").strip(),
             "mic_permission": s.mic_permission if s.mic_permission in ("ask", "allow", "block") else "ask",
@@ -534,8 +534,8 @@ class PanelApiSettingsMixin:
                 s.voice_default_speed = max(0.25, min(4.0, float(patch.get("voice_default_speed"))))
             except (TypeError, ValueError):
                 s.voice_default_speed = 1.0
-        if "voice_live_manual_send" in patch:
-            s.voice_live_manual_send = bool(patch.get("voice_live_manual_send"))
+        if "voice_live_auto_send" in patch:
+            s.voice_live_auto_send = bool(patch.get("voice_live_auto_send"))
         if "voice_process_talk" in patch:
             try:
                 s.voice_process_talk = max(0.0, min(1.0, float(patch.get("voice_process_talk"))))

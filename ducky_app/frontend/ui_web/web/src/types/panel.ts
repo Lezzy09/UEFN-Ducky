@@ -1033,7 +1033,7 @@ export interface PanelSettingsDto {
   voice_summary_model?: string;
   voice_default_voice?: string;
   voice_default_speed?: number;
-  voice_live_manual_send?: boolean;
+  voice_live_auto_send?: boolean;
   /** 0–1: how much live voice narrates tools/thinking. */
   voice_process_talk?: number;
   /** empty = system/browser speech; openai = Whisper/Realtime. */
@@ -2205,6 +2205,16 @@ export interface PanelApi {
     isolation?: string;
     secure_profile?: boolean;
     https_only_nav?: boolean;
+/** One Windows dictation event from voice_win_stt_poll. */
+export interface WinSttEvent {
+  t: "started" | "interim" | "final" | "speech_started" | "speech_stopped" | "error" | "ended" | "exit";
+  sid?: string;
+  text?: string;
+  code?: string;
+  message?: string;
+  status?: string;
+}
+
     self_embed_blocked?: boolean;
     protections?: string[];
   }>;
@@ -3298,6 +3308,19 @@ export interface PanelApi {
     plugin_id: string,
     system?: string,
     user?: string,
+  /** Windows dictation (desktop only — denied for remote). */
+  voice_win_stt_prewarm?(): Promise<{ ok: boolean; error?: string; code?: string }>;
+  voice_win_stt_start?(
+    lang?: string,
+  ): Promise<{ ok: boolean; session?: string; cursor?: number; lang?: string; error?: string; code?: string }>;
+  voice_win_stt_poll?(
+    session: string,
+    cursor: number,
+    wait_ms?: number,
+  ): Promise<{ ok: boolean; events?: WinSttEvent[]; cursor?: number; active?: boolean }>;
+  voice_win_stt_stop?(session: string): Promise<{ ok: boolean; error?: string }>;
+  voice_win_stt_cancel?(session: string): Promise<{ ok: boolean; error?: string }>;
+  voice_open_windows_settings?(page: string): Promise<{ ok: boolean; error?: string }>;
     model?: string,
   ): Promise<{ ok: boolean; text?: string; error?: string; provider?: string; model?: string }>;
   /** Same pipeline as MCP translate_ui_batch — start then poll. */

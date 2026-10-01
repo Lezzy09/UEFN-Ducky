@@ -196,11 +196,11 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function synthesizePlugin(pluginId: string, voiceId: string, text: string): Promise<{ url: string; revoke: () => void } | null> {
+type Synth = { url: string; revoke: () => void } | null;
+
+async function synthesizePlugin(pluginId: string, voiceId: string, text: string, gen: number): Promise<Synth> {
   const api = getApi();
   if (!api?.plugin_tts_start || !api?.plugin_tts_poll) return null;
-  const gen = sessionGen;
-  setLoadingVoice(true);
   try {
     const started = await api.plugin_tts_start(pluginId, text, voiceId);
     if (!started?.ok || !started.job_id) return null;
@@ -223,9 +223,58 @@ async function synthesizePlugin(pluginId: string, voiceId: string, text: string)
       return { url, revoke: () => URL.revokeObjectURL(url) };
     }
     return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Next sentence's plugin audio, synthesized while the current one plays. */
+type Prefetch = { text: string; key: string; gen: number; done: boolean; promise: Promise<Synth> };
+let prefetched: Prefetch | null = null;
+
+function dropPrefetch() {
+  const p = prefetched;
+  prefetched = null;
+  void p?.promise.then((synth) => synth?.revoke());
+}
+
+function prefetchNext(gen: number) {
+  const nextText = utterQueue[0];
+  if (!nextText || gen !== sessionGen) return;
+  const parsed = parseVoiceId(pickVoiceForText(nextText, currentVoiceId));
+  if (parsed.kind !== "plugin" || !parsed.pluginId) return;
+  const key = `${parsed.pluginId}:${parsed.name}`;
+  if (prefetched && prefetched.text === nextText && prefetched.key === key && prefetched.gen === gen) return;
+  dropPrefetch();
+  const entry: Prefetch = {
+    text: nextText,
+    key,
+    gen,
+    done: false,
+    promise: synthesizePlugin(parsed.pluginId, parsed.name, nextText, gen),
+  };
+  void entry.promise.then(() => {
+    entry.done = true;
+  });
+  prefetched = entry;
+}
+
+/** Use the prefetched audio when it matches, otherwise synthesize now. Shows "loading" only while waiting. */
+async function takeSynth(pluginId: string, name: string, text: string, gen: number): Promise<Synth> {
+  const key = `${pluginId}:${name}`;
+  let entry = prefetched;
+  if (entry && (entry.text !== text || entry.key !== key || entry.gen !== gen)) {
+    dropPrefetch();
+    entry = null;
+  }
+  prefetched = null;
+  const promise = entry ? entry.promise : synthesizePlugin(pluginId, name, text, gen);
+  const wait = !entry?.done;
+  if (wait) setLoadingVoice(true);
+  try {
+    return await promise;
   } finally {
-    // Skip clear if cancel/restart already started a newer session.
-    if (gen === sessionGen) setLoadingVoice(false);
+    if (wait && gen === sessionGen) setLoadingVoice(false);
   }
 }
 
@@ -378,12 +427,15 @@ async function drain(): Promise<void> {
       // Per-chunk only — never writes defaultVoice / currentVoiceId.
       const parsed = parseVoiceId(pickVoiceForText(text, currentVoiceId));
       if (parsed.kind === "plugin" && parsed.pluginId) {
-        const synth = await synthesizePlugin(parsed.pluginId, parsed.name, text);
+        const synth = await takeSynth(parsed.pluginId, parsed.name, text, gen);
+        // Paused while the audio was downloading — hold it until resume.
+        if (gen === sessionGen) await waitIfPaused();
         if (gen !== sessionGen) {
           synth?.revoke();
           break;
         }
         if (synth) {
+          prefetchNext(gen);
           await playUrl(synth.url, text, offset, gen);
           synth.revoke();
           continue;
@@ -519,6 +571,7 @@ export const ttsEngine = {
         activeSourceText = "";
         activeSpokenText = "";
       }
+      if (playing && !prefetched) prefetchNext(sessionGen);
       void drain();
     }
   },
@@ -574,6 +627,7 @@ export const ttsEngine = {
     if (!utteranceDraining && !utteranceQueue.length && !this.isSpeaking()) return;
     // Cancel in-flight sentence playback without wiping the remaining queue.
     sessionGen += 1;
+    dropPrefetch();
     clearPauseGate();
     queue.clear();
     utterQueue = [];
@@ -652,6 +706,7 @@ export const ttsEngine = {
     sessionGen += 1;
     userPaused = false;
     stopSynthWatchdog();
+    dropPrefetch();
     clearPauseGate();
     if (typeof speechSynthesis !== "undefined") {
       try {
@@ -746,6 +801,7 @@ export const ttsEngine = {
     sessionGen += 1;
     userPaused = false;
     stopSynthWatchdog();
+    dropPrefetch();
     clearPauseGate();
     queue.clear();
     utterQueue = [];

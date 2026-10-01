@@ -25,3 +25,21 @@ export function shouldReturnToListeningAfterAnswer(opts: {
 }): boolean {
   return opts.speakingAfterAnswer && !opts.moreUtterancesQueued;
 }
+
+function words(text: string): string[] {
+  return (text || "").toLowerCase().match(/[\p{L}\p{N}']+/gu) || [];
+}
+
+/**
+ * True when what the mic heard is probably Ducky's own voice from the speakers
+ * (or too little to tell). Real interruptions are 2+ words that mostly are not
+ * in the line being spoken.
+ */
+export function isLikelyEcho(heard: string, spoken: string): boolean {
+  const heardWords = words(heard);
+  if (heardWords.length < 2) return true;
+  const spokenWords = new Set(words(spoken));
+  if (!spokenWords.size) return false;
+  const overlap = heardWords.filter((w) => spokenWords.has(w)).length;
+  return overlap / heardWords.length >= 0.6;
+}

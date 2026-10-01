@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChoiceDropdown, type ChoiceOption } from "../components/ChoiceDropdown";
 import { ModelSelector } from "../components/ModelSelector";
 import { Icons } from "../icons/Icons";
-import { isRemote } from "../hooks/usePanelApi";
+import { getApi, isRemote } from "../hooks/usePanelApi";
 import {
   getAudioSettings,
   loadAudioSettings,
@@ -14,7 +14,7 @@ import { listMicDevices, listOutputDevices } from "./micPermission";
 import { clampProcessTalk } from "./processNarration";
 import { useTtsVoiceOptions } from "./pluginVoices";
 import { SpeedDropdown } from "./SpeedDropdown";
-import { getSpeechRecognitionCtor } from "./transcriptionSession";
+import { browserSpeechUsable, windowsSpeechUsable } from "./transcriptionSession";
 import {
   getVoiceSettings,
   loadVoiceSettings,
@@ -59,7 +59,20 @@ export function LiveVoicePickers({
   const [outputDeviceId, setOutputDeviceId] = useState(() => getAudioSettings().outputDeviceId);
   const [micOptions, setMicOptions] = useState<ChoiceOption[]>([]);
   const [outputOptions, setOutputOptions] = useState<ChoiceOption[]>([]);
-  const speechOk = Boolean(getSpeechRecognitionCtor());
+  const systemListen = windowsSpeechUsable() ? "Windows speech" : browserSpeechUsable() ? "Browser speech" : "";
+  const [openaiKey, setOpenaiKey] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.resolve(getApi()?.get_key_status?.())
+      .then((status) => {
+        if (!cancelled) setOpenaiKey(Boolean(status && (status as { openai?: boolean }).openai));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     void loadVoiceSettings();
@@ -105,12 +118,17 @@ export function LiveVoicePickers({
     () => [
       {
         value: "",
-        label: "Listen: System default",
-        disabled: !speechOk,
+        label: systemListen ? `Listen: ${systemListen}` : "Listen: System (not available)",
+        hint: systemListen === "Windows speech" ? "Free, no key — uses Windows online speech" : undefined,
+        disabled: !systemListen,
       },
-      { value: "openai", label: "Listen: OpenAI" },
+      {
+        value: "openai",
+        label: openaiKey === false ? "Listen: OpenAI (no key)" : "Listen: OpenAI",
+        hint: openaiKey === false ? "Add an OpenAI key under Settings → LLMs" : "Fastest, most accurate live words",
+      },
     ],
-    [speechOk],
+    [systemListen, openaiKey],
   );
 
   const micValue = micOptions.some((o) => o.value === micDeviceId) ? micDeviceId : "";

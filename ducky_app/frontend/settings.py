@@ -257,14 +257,15 @@ class PanelSettings:
     voice_default_speed: float = 1.0
     """Default TTS voice id (builtin:<name> or plugin:<pid>:<id>). Empty = browser default."""
 
-    voice_live_manual_send: bool = False
-    """Live voice: accumulate speech until the user presses Send (no auto-send on pause)."""
+    voice_live_auto_send: bool = False
+    """Live voice: send each spoken turn when you pause. Off = speech fills the chat box; you press Send."""
 
     voice_process_talk: float = 0.7
     """How much live voice narrates tools/thinking (0 = mute process chatter, 1 = full)."""
 
     voice_stt_provider: str = ""
-    """Live/dictation listen backend: empty = system default (browser speech), openai = Whisper/Realtime."""
+    """Live/dictation listen backend: empty = system default (Windows speech in the app, browser speech
+    on a phone), openai = OpenAI Realtime when a key is saved."""
 
     mic_permission: str = "ask"
     """App-level mic consent: ask | allow | block (before getUserMedia)."""

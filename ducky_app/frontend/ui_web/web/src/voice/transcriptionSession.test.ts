@@ -31,28 +31,44 @@ describe("isTooShortRecording", () => {
 });
 
 describe("pickTranscriptionBackend", () => {
-  it("defaults to browser speech when it exists", () => {
-    expect(
-      pickTranscriptionBackend({ preference: "", speechAvailable: true, openaiReady: false }),
-    ).toBe("webspeech");
-    expect(
-      pickTranscriptionBackend({ preference: "", speechAvailable: true, openaiReady: true }),
-    ).toBe("webspeech");
+  const desktop = { windowsSpeech: true, browserSpeech: false };
+  const phone = { windowsSpeech: false, browserSpeech: true };
+
+  it("uses Windows speech in the desktop app — never the dead WebView2 browser speech", () => {
+    expect(pickTranscriptionBackend({ preference: "", ...desktop, openaiReady: false })).toEqual({
+      backend: "windows",
+      openaiMissingKey: false,
+    });
+    expect(pickTranscriptionBackend({ preference: "webspeech", ...desktop, openaiReady: true }).backend).toBe(
+      "windows",
+    );
   });
 
-  it("uses OpenAI only when asked or when browser speech is missing", () => {
-    expect(
-      pickTranscriptionBackend({ preference: "openai", speechAvailable: true, openaiReady: true }),
-    ).toBe("openai");
-    expect(
-      pickTranscriptionBackend({ preference: "", speechAvailable: false, openaiReady: true }),
-    ).toBe("openai");
+  it("uses browser speech on a phone", () => {
+    expect(pickTranscriptionBackend({ preference: "", ...phone, openaiReady: false }).backend).toBe("webspeech");
   });
 
-  it("falls back to browser speech when OpenAI is picked but has no key", () => {
+  it("uses OpenAI when picked and a key is saved", () => {
+    expect(pickTranscriptionBackend({ preference: "openai", ...desktop, openaiReady: true })).toEqual({
+      backend: "openai",
+      openaiMissingKey: false,
+    });
+  });
+
+  it("flags a missing OpenAI key instead of silently swapping engines", () => {
+    expect(pickTranscriptionBackend({ preference: "openai", ...desktop, openaiReady: false })).toEqual({
+      backend: "windows",
+      openaiMissingKey: true,
+    });
     expect(
-      pickTranscriptionBackend({ preference: "openai", speechAvailable: true, openaiReady: false }),
-    ).toBe("webspeech");
+      pickTranscriptionBackend({ preference: "openai", windowsSpeech: false, browserSpeech: false, openaiReady: false }),
+    ).toEqual({ backend: "none", openaiMissingKey: true });
+  });
+
+  it("falls back to OpenAI only when no system engine exists", () => {
+    const none = { windowsSpeech: false, browserSpeech: false };
+    expect(pickTranscriptionBackend({ preference: "", ...none, openaiReady: true }).backend).toBe("openai");
+    expect(pickTranscriptionBackend({ preference: "", ...none, openaiReady: false }).backend).toBe("none");
   });
 
   it("normalizes listen preference", () => {

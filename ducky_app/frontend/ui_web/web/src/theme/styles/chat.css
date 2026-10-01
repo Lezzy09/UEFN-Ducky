@@ -1067,6 +1067,7 @@
 
 /* Voice controls (self-contained in web/src/voice/) */
 .voice-controls {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1148,11 +1149,118 @@
   white-space: nowrap;
 }
 
-.voice-error {
+/* "Stop speaking" — shows by the mic whenever Ducky is talking outside live mode. */
+.voice-btn--stop-speaking {
+  color: var(--accent, #4ea1ff);
+  background: color-mix(in srgb, var(--accent, #4ea1ff) 12%, transparent);
+  animation: voice-pulse 1.6s ease-in-out infinite;
+}
+
+.voice-btn--stop-speaking:hover:not(:disabled) {
   color: var(--red);
-  font-weight: 700;
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  animation: none;
+}
+
+/* Mic errors / tips: floats above the composer toolbar, clears itself. */
+.voice-notice {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: min(420px, 80vw);
+  padding: 8px 8px 8px 10px;
+  border-radius: 10px;
   font-size: 12px;
-  margin-left: 2px;
+  line-height: 1.35;
+  color: var(--fg);
+  background: var(--dropdown-bg, var(--card));
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  animation: voice-notice-in 0.16s ease-out;
+}
+
+.voice-notice--error {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+}
+
+.voice-notice--inline {
+  position: static;
+  width: auto;
+  max-width: none;
+  margin: 8px 0 0;
+  box-shadow: none;
+  animation: none;
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.voice-notice-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.voice-notice--error .voice-notice-icon {
+  color: var(--red);
+}
+
+.voice-notice-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  word-break: break-word;
+}
+
+.voice-notice-action {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent, #4ea1ff) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent, #4ea1ff) 14%, transparent);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.voice-notice-action:hover {
+  background: color-mix(in srgb, var(--accent, #4ea1ff) 26%, transparent);
+}
+
+.voice-notice-close {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.voice-notice-close:hover {
+  color: var(--fg);
+  background: var(--surface-2, var(--surface));
+}
+
+@keyframes voice-notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @keyframes voice-pulse {
@@ -1381,6 +1489,18 @@
   margin-top: 2px;
 }
 
+/* What the mic is hearing right now. */
+.voice-overlay-heard {
+  font-size: 12px;
+  color: var(--fg);
+  opacity: 0.8;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 48ch;
+}
+
 .voice-overlay-error {
   font-size: 12px;
   color: var(--red, #ef4444);
@@ -1463,6 +1583,10 @@
 
 .voice-btn--paused {
   color: var(--amber, #d4a017);
+}
+
+.voice-speak-msg--stop:hover:not(:disabled) {
+  color: var(--red);
 }
 
 .tts-readalong {

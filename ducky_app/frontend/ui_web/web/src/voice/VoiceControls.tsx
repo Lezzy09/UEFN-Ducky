@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useUiTarget } from "../ui-targets/registry";
 
 import { Icons } from "../icons/Icons";
-import { startLiveChat, stopLiveChat } from "./liveSpeakService";
-import { useDictation } from "./useDictation";
+import { beginDraft, joinWords, renderDraft, type DictationDraft } from "./composerDraft";
+import { getLiveVoiceChatIds } from "./liveChats";
+import { interruptLiveSpeak, startLiveChat, stopLiveChat } from "./liveSpeakService";
+import { runSpeechErrorAction, speechErrorActionLabel } from "./speechErrors";
+import { userAwaitsReply } from "./spokenReplyGate";
+import { prewarmSpeech } from "./transcriptionSession";
+import { useDictation, type VoiceNotice } from "./useDictation";
 import { useIsLiveChat } from "./useLiveChatPresence";
 import { useLiveVoiceMode } from "./useLiveVoiceMode";
 import { VoiceOverlay } from "./VoiceOverlay";
@@ -23,13 +28,16 @@ export type LiveVoiceUiHandlers = {
   onBack: () => void;
   onForward: () => void;
   onNewest: () => void;
+  /** Stop Ducky talking now; listening continues. */
+  onStopSpeaking: () => void;
+  /** Try the mic again after fixing an error. */
+  onRetry: () => void;
   hasPrev: boolean;
   hasNext: boolean;
   hasNewer: boolean;
-  onSend: () => void;
-  canSend: boolean;
-  manualSend: boolean;
-  setManualSend: (value: boolean) => void;
+  /** Send each spoken turn on a pause (off = words go into the chat box). */
+  autoSend: boolean;
+  setAutoSend: (value: boolean) => void;
   muted: boolean;
   voiceId: string;
   speed: number;
@@ -45,6 +53,8 @@ export type VoiceControlsProps = {
   inputText: string;
   setInputText: (text: string | ((prev: string) => string)) => void;
   onSend: (text?: string) => void;
+  /** Dictation finished — the composer can focus and put the caret at the end. */
+  onDictationEnd?: (text: string) => void;
   streamText?: string;
   agentRunning?: boolean;
   /** Per-ducky voice override (tts_voice). */
@@ -57,15 +67,70 @@ export type VoiceControlsProps = {
   onLiveChange?: (live: boolean, handlers: LiveVoiceUiHandlers | null) => void;
 };
 
+/** Error / tip bubble with an optional one-click fix. Clears itself (see useVoiceNotice). */
+export function VoiceNoticeToast({
+  notice,
+  onDismiss,
+  inline = false,
+}: {
+  notice: VoiceNotice | null;
+  onDismiss: () => void;
+  inline?: boolean;
+}) {
+  if (!notice) return null;
+  const isError = notice.kind === "error";
+  return (
+    <div
+      className={`voice-notice voice-notice--${notice.kind}${inline ? " voice-notice--inline" : ""}`}
+      role={isError ? "alert" : "status"}
+    >
+      <span className="voice-notice-icon" aria-hidden>
+        {isError ? <Icons.AlertTriangle /> : <Icons.Mic />}
+      </span>
+      <span className="voice-notice-text">{notice.message}</span>
+      {notice.action ? (
+        <button
+          type="button"
+          className="voice-notice-action"
+          onClick={() => {
+            runSpeechErrorAction(notice.action!);
+            onDismiss();
+          }}
+        >
+          {speechErrorActionLabel(notice.action)}
+        </button>
+      ) : null}
+      <button type="button" className="voice-notice-close" aria-label="Dismiss" onClick={onDismiss}>
+        <Icons.Close />
+      </button>
+    </div>
+  );
+}
+
+function subscribeTtsState(onChange: () => void): () => void {
+  return ttsEngine.onStateChange(onChange);
+}
+
+function ttsBusyNow(): boolean {
+  return ttsEngine.getState() !== "idle";
+}
+
+/** Silence Ducky now — including a live chat still narrating from another tab. */
+function stopAllSpeech(): void {
+  if (getLiveVoiceChatIds().size) interruptLiveSpeak();
+  else ttsEngine.cancel();
+}
+
 /**
  * Mic + live-mode transport — the only ChatPane voice UI touch point.
  */
 export function VoiceControls({
   chatId,
   disabled,
-  inputText: _inputText,
+  inputText,
   setInputText,
   onSend,
+  onDictationEnd,
   streamText,
   agentRunning,
   duckyVoice,
@@ -85,18 +150,23 @@ export function VoiceControls({
   });
   const live = useIsLiveChat(chatId);
   const [voiceOn, setVoiceOn] = useState(() => getVoiceSettings().enabled);
-  const [manualSend, setManualSendState] = useState(() => getVoiceSettings().liveManualSend);
+  const [autoSend, setAutoSendState] = useState(() => getVoiceSettings().liveAutoSend);
   const [sessionVoice, setSessionVoice] = useState(() => resolveVoiceId(duckyVoice));
   const [sessionSpeed, setSessionSpeed] = useState(() => resolveSpeed(duckySpeed));
   const [processTalk, setProcessTalkState] = useState(() => getVoiceSettings().processTalk);
   const [muted, setMuted] = useState(false);
+  const ttsBusy = useSyncExternalStore(subscribeTtsState, ttsBusyNow, ttsBusyNow);
   const onLiveChangeRef = useRef(onLiveChange);
   onLiveChangeRef.current = onLiveChange;
+  const inputTextRef = useRef(inputText);
+  inputTextRef.current = inputText;
+  const onDictationEndRef = useRef(onDictationEnd);
+  onDictationEndRef.current = onDictationEnd;
 
   useEffect(() => {
     void loadVoiceSettings().then((s) => {
       setVoiceOn(s.enabled);
-      setManualSendState(s.liveManualSend);
+      setAutoSendState(s.liveAutoSend);
       setProcessTalkState(s.processTalk);
       if (!live) {
         setSessionVoice(resolveVoiceId(duckyVoice));
@@ -106,7 +176,7 @@ export function VoiceControls({
     return subscribeVoiceSettings(() => {
       const s = getVoiceSettings();
       setVoiceOn(s.enabled);
-      setManualSendState(s.liveManualSend);
+      setAutoSendState(s.liveAutoSend);
       setProcessTalkState(s.processTalk);
     });
   }, [live, duckyVoice, duckySpeed]);
@@ -117,60 +187,112 @@ export function VoiceControls({
     setSessionSpeed(resolveSpeed(duckySpeed));
   }, [live, duckyVoice, duckySpeed]);
 
-  const appendTranscript = useCallback(
+  // ── Spoken words → chat box (dictation, and live mode with auto-send off) ──
+  const draftRef = useRef<DictationDraft | null>(null);
+
+  const writeDraft = useCallback(() => {
+    const draft = draftRef.current;
+    if (!draft) return;
+    const next = renderDraft(draft, inputTextRef.current);
+    inputTextRef.current = next;
+    setInputText(next);
+  }, [setInputText]);
+
+  const beginComposerDraft = useCallback(() => {
+    draftRef.current = beginDraft(inputTextRef.current);
+  }, []);
+
+  const endComposerDraft = useCallback(() => {
+    const draft = draftRef.current;
+    if (!draft) return;
+    draft.interim = "";
+    writeDraft();
+    draftRef.current = null;
+    onDictationEndRef.current?.(inputTextRef.current);
+  }, [writeDraft]);
+
+  const draftInterim = useCallback(
     (text: string) => {
-      setInputText((prev) => {
-        const base = prev.trim();
-        return base ? `${base} ${text}` : text;
-      });
+      const draft = draftRef.current;
+      if (!draft || draft.interim === text) return;
+      draft.interim = text;
+      writeDraft();
     },
-    [setInputText],
+    [writeDraft],
+  );
+
+  const draftFinal = useCallback(
+    (text: string) => {
+      const draft = draftRef.current;
+      if (!draft) return;
+      draft.spoken = joinWords(draft.spoken, text);
+      draft.interim = "";
+      writeDraft();
+    },
+    [writeDraft],
   );
 
   const dictation = useDictation({
     disabled: disabled || live,
-    onTranscript: appendTranscript,
+    onInterim: draftInterim,
+    onFinal: draftFinal,
+    onSessionChange: (active) => (active ? beginComposerDraft() : endComposerDraft()),
   });
 
-  const onLiveTranscript = useCallback(
-    (text: string) => {
-      if (!manualSend) {
-        onSend(text);
-        return;
-      }
-      appendTranscript(text);
-    },
-    [appendTranscript, manualSend, onSend],
-  );
+  // ── Live voice: auto-send a finished turn, or write it into the chat box ──
+  const autoSendRef = useRef(autoSend);
+  autoSendRef.current = autoSend;
+  const turnRef = useRef("");
+
+  useEffect(() => {
+    if (!live) {
+      turnRef.current = "";
+      return;
+    }
+    if (autoSend) return;
+    beginComposerDraft();
+    return () => endComposerDraft();
+  }, [live, autoSend, beginComposerDraft, endComposerDraft]);
 
   const liveMode = useLiveVoiceMode({
     enabled: live,
     chatId,
     voiceId: sessionVoice,
     speed: sessionSpeed,
-    manualSend,
     muted,
     agentRunning,
     isGroup,
-    onInterim: () => {
-      // Interim stays in the live panel — never overwrite the typed draft.
+    onInterim: (text) => {
+      if (!autoSendRef.current) draftInterim(text);
     },
-    onTranscript: onLiveTranscript,
+    onTranscript: (text) => {
+      if (autoSendRef.current) {
+        turnRef.current = joinWords(turnRef.current, text);
+        return;
+      }
+      draftFinal(text);
+    },
+    onTurnEnd: () => {
+      if (!autoSendRef.current) return;
+      const text = turnRef.current.trim();
+      turnRef.current = "";
+      if (text) onSend(text);
+    },
   });
 
   useEffect(() => {
     if (!live) setMuted(false);
   }, [live]);
 
-  const { skip, back, newest, sendNow, canSend, hasPrev, hasNext, hasNewer } = liveMode;
+  const { skip, back, newest, interrupt, retry, hasPrev, hasNext, hasNewer } = liveMode;
 
   const exitLive = useCallback(() => {
     stopLiveChat(chatId);
   }, [chatId]);
 
-  const setManualSend = useCallback((value: boolean) => {
-    setManualSendState(value);
-    void saveVoiceSettings({ liveManualSend: value });
+  const setAutoSend = useCallback((value: boolean) => {
+    setAutoSendState(value);
+    void saveVoiceSettings({ liveAutoSend: value });
   }, []);
 
   const setVoiceId = useCallback((value: string) => {
@@ -199,15 +321,13 @@ export function VoiceControls({
         onBack: back,
         onForward: skip,
         onNewest: newest,
+        onStopSpeaking: interrupt,
+        onRetry: retry,
         hasPrev,
         hasNext,
         hasNewer,
-        onSend: () => {
-          sendNow();
-        },
-        canSend: canSend && !agentRunning,
-        manualSend,
-        setManualSend,
+        autoSend,
+        setAutoSend,
         muted,
         voiceId: sessionVoice,
         speed: sessionSpeed,
@@ -225,14 +345,13 @@ export function VoiceControls({
     skip,
     back,
     newest,
+    interrupt,
+    retry,
     hasPrev,
     hasNext,
     hasNewer,
-    sendNow,
-    canSend,
-    agentRunning,
-    manualSend,
-    setManualSend,
+    autoSend,
+    setAutoSend,
     muted,
     sessionVoice,
     sessionSpeed,
@@ -242,7 +361,7 @@ export function VoiceControls({
     setProcessTalk,
   ]);
 
-  // Speak-along outside live mode when style is speak_along (normal chat only).
+  // Speak-along outside live mode when style is speak_along — only for turns the user sent.
   const streamLenRef = useRef(0);
   useEffect(() => {
     if (live || !voiceOn) {
@@ -250,7 +369,7 @@ export function VoiceControls({
       return;
     }
     const settings = getVoiceSettings();
-    if (settings.spokenStyle !== "speak_along") {
+    if (settings.spokenStyle !== "speak_along" || !userAwaitsReply(chatId)) {
       streamLenRef.current = 0;
       return;
     }
@@ -273,7 +392,7 @@ export function VoiceControls({
       ttsEngine.setRate(resolveSpeed(duckySpeed));
       ttsEngine.enqueue(delta);
     }
-  }, [live, voiceOn, streamText, agentRunning, duckyVoice, duckySpeed]);
+  }, [chatId, live, voiceOn, streamText, agentRunning, duckyVoice, duckySpeed]);
 
   const toggleLive = () => {
     if (live) {
@@ -288,34 +407,53 @@ export function VoiceControls({
     startLiveChat(chatId, { voiceId: voice, speed: rate, isGroup });
   };
 
-  const micTitle = dictation.error
-    ? dictation.error
-    : live
-      ? muted
-        ? "Unmute mic — type-only right now"
-        : liveMode.error || "Mute mic — keep hearing replies"
+  const micTitle = live
+    ? muted
+      ? "Unmute mic — type-only right now"
+      : "Mute mic — keep hearing replies"
+    : dictation.status === "connecting"
+      ? "Starting the mic… (click to cancel)"
       : dictation.isRecording
-        ? "Stop recording"
+        ? "Stop — your words stay in the box, then press Send"
         : dictation.status === "transcribing"
-          ? "Transcribing…"
-          : "Dictate with microphone";
+          ? "Finishing the last words…"
+          : "Dictate — talk and your words appear in the box";
+
+  const micClass = `voice-btn${
+    live
+      ? muted
+        ? " voice-btn--muted"
+        : " voice-btn--recording"
+      : dictation.isRecording
+        ? " voice-btn--recording"
+        : ""
+  }${!live && dictation.isBusy ? " voice-btn--busy" : ""}`;
 
   return (
     <div className="voice-controls">
+      {!live && dictation.notice ? (
+        <VoiceNoticeToast notice={dictation.notice} onDismiss={dictation.dismissNotice} />
+      ) : null}
+      {ttsBusy && !live ? (
+        <button
+          type="button"
+          className="voice-btn voice-btn--stop-speaking"
+          title="Stop speaking"
+          aria-label="Stop speaking"
+          onClick={stopAllSpeech}
+        >
+          <Icons.Stop />
+        </button>
+      ) : null}
       <button
         ref={micTargetRef}
         type="button"
-        className={`voice-btn${
-          live
-            ? muted
-              ? " voice-btn--muted"
-              : " voice-btn--recording"
-            : dictation.isRecording
-              ? " voice-btn--recording"
-              : ""
-        }${dictation.status === "transcribing" ? " voice-btn--busy" : ""}`}
+        className={micClass}
         title={micTitle}
         disabled={!!disabled || (!live && dictation.status === "transcribing")}
+        onPointerEnter={() => {
+          if (!live && !disabled) prewarmSpeech();
+        }}
         onClick={() => {
           if (live) {
             setMuted((m) => !m);
@@ -323,26 +461,33 @@ export function VoiceControls({
           }
           void dictation.toggle();
         }}
-        aria-label={live ? (muted ? "Unmute microphone" : "Mute microphone") : "Dictate"}
+        aria-label={
+          live
+            ? muted
+              ? "Unmute microphone"
+              : "Mute microphone"
+            : dictation.isRecording
+              ? "Stop dictation"
+              : "Dictate"
+        }
+        aria-pressed={!live ? dictation.isRecording : undefined}
       >
-        {live && muted ? <Icons.MicOff /> : <Icons.Mic />}
+        {live && muted ? <Icons.MicOff /> : !live && dictation.isBusy ? <Icons.Spinner /> : <Icons.Mic />}
       </button>
       <button
         ref={liveTargetRef}
         type="button"
         className={`voice-btn${live ? " voice-btn--live" : ""}`}
-        title={live ? "Exit live voice mode" : "Live voice mode"}
+        title={live ? "Exit live voice mode" : "Live voice — talk back and forth with Ducky"}
         disabled={!!disabled}
+        onPointerEnter={() => {
+          if (!live && !disabled) prewarmSpeech();
+        }}
         onClick={toggleLive}
         aria-label="Live voice"
       >
         <Icons.Headphones />
       </button>
-      {dictation.error && !live ? (
-        <span className="voice-error" title={dictation.error}>
-          !
-        </span>
-      ) : null}
       {/* Overlay is rendered in the composer slot by ChatPane when onLiveChange is set. */}
       {!onLiveChange ? (
         <VoiceOverlay
@@ -352,9 +497,13 @@ export function VoiceControls({
           onBack={() => liveMode.back()}
           onForward={() => liveMode.skip()}
           onNewest={() => liveMode.newest()}
+          onStopSpeaking={interrupt}
+          onRetry={retry}
           hasPrev={hasPrev}
           hasNext={hasNext}
           hasNewer={hasNewer}
+          autoSend={autoSend}
+          setAutoSend={setAutoSend}
           voiceId={sessionVoice}
           speed={sessionSpeed}
           setVoiceId={setVoiceId}
@@ -368,7 +517,7 @@ export function VoiceControls({
   );
 }
 
-/** Speaker / pause / restart controls for an assistant message bubble. */
+/** Speak / pause / resume / stop controls for an assistant message bubble. */
 export function SpeakMessageButton({
   text,
   voiceId,
@@ -388,22 +537,21 @@ export function SpeakMessageButton({
     progress.state !== "idle" &&
     Boolean(mapReadAlong(text, progress.spokenText, progress.sourceText, progress.charIndex));
   const paused = active && progress.state === "paused";
-  const speaking = active && progress.state === "speaking";
-  const loading = active && progress.loading;
+  const loading = active && progress.loading && !paused;
 
   if (!active) {
     return (
       <button
         type="button"
         className="voice-btn voice-btn--tiny voice-speak-msg"
-        title="Speak this reply"
+        title="Read this reply aloud"
         // Defer so this click cannot land on the Pause control that replaces this button.
         onClick={() => {
           const voice = resolveVoiceId(voiceId);
           const rate = resolveSpeed(speed);
           window.setTimeout(() => ttsEngine.speak(text, voice, rate), 0);
         }}
-        aria-label="Speak reply"
+        aria-label="Read reply aloud"
       >
         <Icons.Speaker />
       </button>
@@ -411,24 +559,32 @@ export function SpeakMessageButton({
   }
 
   return (
-    <div className="voice-speak-msg-group">
+    <div className="voice-speak-msg-group" role="group" aria-label="Reading aloud">
       <button
         type="button"
-        className={`voice-btn voice-btn--tiny voice-speak-msg${speaking ? " voice-btn--speaking" : ""}${
-          paused ? " voice-btn--paused" : ""
-        }${loading ? " voice-btn--busy" : ""}`}
-        title={loading ? "Downloading voice…" : paused ? "Resume" : "Pause"}
+        className={`voice-btn voice-btn--tiny voice-speak-msg${paused ? " voice-btn--paused" : " voice-btn--speaking"}${
+          loading ? " voice-btn--busy" : ""
+        }`}
+        title={paused ? "Resume" : loading ? "Loading voice… (click to pause)" : "Pause"}
         onClick={() => (paused ? ttsEngine.resume() : ttsEngine.pause())}
-        aria-label={loading ? "Downloading voice" : paused ? "Resume" : "Pause"}
-        disabled={loading}
+        aria-label={paused ? "Resume" : "Pause"}
       >
-        {loading ? <Icons.Refresh /> : paused ? <Icons.Play /> : <Icons.Pause />}
+        {paused ? <Icons.Play /> : loading ? <Icons.Spinner /> : <Icons.Pause />}
+      </button>
+      <button
+        type="button"
+        className="voice-btn voice-btn--tiny voice-speak-msg voice-speak-msg--stop"
+        title="Stop reading"
+        onClick={() => ttsEngine.cancel()}
+        aria-label="Stop reading"
+      >
+        <Icons.Stop />
       </button>
       {paused ? (
         <button
           type="button"
           className="voice-btn voice-btn--tiny voice-speak-msg"
-          title="Restart from beginning"
+          title="Restart from the beginning"
           onClick={() => ttsEngine.restart(resolveVoiceId(voiceId), resolveSpeed(speed))}
           aria-label="Restart"
         >

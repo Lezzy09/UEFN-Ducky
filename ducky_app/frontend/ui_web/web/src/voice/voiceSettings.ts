@@ -2,7 +2,7 @@ import { getApi } from "../hooks/usePanelApi";
 import { clampProcessTalk } from "./processNarration";
 
 export type SpokenStyle = "summary" | "speak_along";
-/** empty = system/browser speech (default). */
+/** empty = system speech (Windows speech in the app, browser speech on a phone). */
 export type SttProvider = "" | "openai" | "webspeech";
 
 export function normalizeSttProvider(raw: unknown): SttProvider {
@@ -18,14 +18,14 @@ export type VoiceSettings = {
   defaultVoice: string;
   /** Global talking-speed multiplier (1 = normal). */
   defaultSpeed: number;
-  /** Live voice: accumulate until Send instead of auto-sending on pause. */
-  liveManualSend: boolean;
+  /** Live voice: send each spoken turn on a pause. Off = words go into the chat box. */
+  liveAutoSend: boolean;
   /**
    * How much live voice narrates tools/thinking while the agent works
    * (0 = mute process chatter, 1 = tools + thinking snippets). Final reply still speaks.
    */
   processTalk: number;
-  /** Listen backend. Empty uses browser speech; openai needs an OpenAI key. */
+  /** Listen backend. Empty = system speech; openai needs an OpenAI key. */
   sttProvider: SttProvider;
 };
 
@@ -35,7 +35,7 @@ const DEFAULTS: VoiceSettings = {
   summaryModel: "",
   defaultVoice: "",
   defaultSpeed: 1,
-  liveManualSend: false,
+  liveAutoSend: false,
   processTalk: 0.7,
   sttProvider: "",
 };
@@ -100,7 +100,7 @@ export async function loadVoiceSettings(): Promise<VoiceSettings> {
     summaryModel: String(s.voice_summary_model || ""),
     defaultVoice: String(s.voice_default_voice || ""),
     defaultSpeed: clampSpeed(s.voice_default_speed),
-    liveManualSend: Boolean(s.voice_live_manual_send),
+    liveAutoSend: Boolean(s.voice_live_auto_send),
     processTalk: clampProcessTalk(s.voice_process_talk ?? 0.7),
     sttProvider: normalizeSttProvider(s.voice_stt_provider),
   };
@@ -115,7 +115,7 @@ export async function saveVoiceSettings(patch: Partial<VoiceSettings>): Promise<
     summaryModel: patch.summaryModel ?? cache.summaryModel,
     defaultVoice: patch.defaultVoice ?? cache.defaultVoice,
     defaultSpeed: patch.defaultSpeed != null ? clampSpeed(patch.defaultSpeed) : cache.defaultSpeed,
-    liveManualSend: patch.liveManualSend ?? cache.liveManualSend,
+    liveAutoSend: patch.liveAutoSend ?? cache.liveAutoSend,
     processTalk: patch.processTalk != null ? clampProcessTalk(patch.processTalk) : cache.processTalk,
     sttProvider: patch.sttProvider != null ? normalizeSttProvider(patch.sttProvider) : cache.sttProvider,
   };
@@ -129,7 +129,7 @@ export async function saveVoiceSettings(patch: Partial<VoiceSettings>): Promise<
       voice_summary_model: next.summaryModel,
       voice_default_voice: next.defaultVoice,
       voice_default_speed: next.defaultSpeed,
-      voice_live_manual_send: next.liveManualSend,
+      voice_live_auto_send: next.liveAutoSend,
       voice_process_talk: next.processTalk,
       voice_stt_provider: next.sttProvider,
     });

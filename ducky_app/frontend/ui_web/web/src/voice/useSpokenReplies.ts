@@ -3,12 +3,14 @@ import { useEffect, useRef } from "react";
 import { installAgentEventBus, subscribeAgentEvents } from "../hooks/useAgentEventBus";
 import { getLiveVoiceChatIds } from "./liveChats";
 import { speakReply } from "./speakReply";
+import { userAwaitsReply } from "./spokenReplyGate";
 import { ttsEngine } from "./ttsEngine";
 import { getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings } from "./voiceSettings";
 
 /**
- * App-shell hook: on assistant_done, speak a short summary when voice is enabled
- * and the chat is not in live voice mode (live mode handles its own speak).
+ * App-shell hook: on assistant_done, speak a short summary when voice is enabled,
+ * the chat is not in live voice mode (live mode handles its own speak), and the
+ * user actually sent that turn (background replies stay quiet).
  */
 export function useSpokenReplies(opts?: {
   /** Optional per-chat voice override lookup. */
@@ -39,6 +41,7 @@ export function useSpokenReplies(opts?: {
       const settings = getVoiceSettings();
       if (!settings.enabled) return;
       if (getLiveVoiceChatIds().has(convId)) return;
+      if (!userAwaitsReply(convId)) return;
       if (settings.spokenStyle === "speak_along") {
         ttsEngine.flush();
         return;

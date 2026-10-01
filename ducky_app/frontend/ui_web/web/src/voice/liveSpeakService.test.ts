@@ -46,7 +46,7 @@ vi.mock("./voiceSettings", () => ({
     summaryModel: "",
     defaultVoice: "v",
     defaultSpeed: 1,
-    liveManualSend: false,
+    liveAutoSend: false,
     processTalk: 0.7,
   }),
 }));

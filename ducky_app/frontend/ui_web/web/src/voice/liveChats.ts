@@ -3,7 +3,16 @@
  * Spoken-summary skips chats that are currently live.
  */
 
-export type LiveVoiceUiStatus = "off" | "listening" | "thinking" | "speaking" | "error" | "muted";
+import type { SpeechErrorAction } from "./speechErrors";
+
+export type LiveVoiceUiStatus =
+  | "off"
+  | "connecting"
+  | "listening"
+  | "thinking"
+  | "speaking"
+  | "error"
+  | "muted";
 
 export type LiveVoiceState = {
   status: LiveVoiceUiStatus;
@@ -11,6 +20,10 @@ export type LiveVoiceState = {
   lastUserText: string;
   spokenText: string;
   error: string;
+  /** One-click fix for the error (Windows speech settings, OpenAI key, …). */
+  errorAction?: SpeechErrorAction;
+  /** Non-fatal heads-up, e.g. which engine is listening. */
+  notice: string;
   /** Mic off — type only; replies still speak. */
   muted: boolean;
   /** Current group-chat speaker name (empty for solo chats). */
@@ -25,6 +38,8 @@ const EMPTY: LiveVoiceState = {
   lastUserText: "",
   spokenText: "",
   error: "",
+  errorAction: undefined,
+  notice: "",
   muted: false,
   speakerName: "",
   nextSpeaker: "",

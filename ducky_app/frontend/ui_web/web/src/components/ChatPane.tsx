@@ -82,6 +82,7 @@ import { readTranslationUiLang } from "../navigation/openVerseTranslatedTab";
 import { isEnglishLang } from "../views/settings/translationLanguages";
 import { VoiceControls, type LiveVoiceUiHandlers } from "../voice/VoiceControls";
 import { VoiceOverlay } from "../voice/VoiceOverlay";
+import { noteUserTurn } from "../voice/spokenReplyGate";
 import { SnipButton } from "./SnipButton";
 import { AttachMenuButton } from "./AttachMenuButton";
 import { ChatChangesButton, ChatChangesSlide, useLedgerOpen } from "./ChatChangesDrawer";
@@ -889,6 +890,7 @@ export function ChatPane({
     (text: string, apiAttachments: MessageAttachmentDto[], mode: AgentMode, model: string) => {
       const api = getApi();
       if (!api || (!text.trim() && apiAttachments.length === 0)) return;
+      noteUserTurn(chat.id);
       appendUserMessage(text, apiAttachments);
       listRef.current?.scrollToLatest();
       onAtBottomChange(true);
@@ -1444,6 +1446,10 @@ export function ChatPane({
                   onBack={liveVoiceHandlers.onBack}
                   onForward={liveVoiceHandlers.onForward}
                   onNewest={liveVoiceHandlers.onNewest}
+                  onStopSpeaking={liveVoiceHandlers.onStopSpeaking}
+                  onRetry={liveVoiceHandlers.onRetry}
+                  autoSend={liveVoiceHandlers.autoSend}
+                  setAutoSend={liveVoiceHandlers.setAutoSend}
                   hasPrev={liveVoiceHandlers.hasPrev}
                   hasNext={liveVoiceHandlers.hasNext}
                   hasNewer={liveVoiceHandlers.hasNewer}
@@ -1651,6 +1657,10 @@ export function ChatPane({
                 inputText={inputText}
                 setInputText={setInputText}
                 onSend={(text) => handleSend(text)}
+                onDictationEnd={(text) => {
+                  setCaret(text.length);
+                  requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
+                }}
                 streamText={streamBuffer}
                 agentRunning={agentRunning}
                 duckyVoice={chat.ttsVoice}

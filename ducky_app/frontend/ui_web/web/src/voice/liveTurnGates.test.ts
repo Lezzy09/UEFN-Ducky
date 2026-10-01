@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isLikelyEcho,
   liveTtsBusy,
   shouldAcceptLiveFinal,
   shouldReturnToListeningAfterAnswer,
@@ -27,5 +28,19 @@ describe("liveTurnGates", () => {
     expect(
       shouldReturnToListeningAfterAnswer({ speakingAfterAnswer: false, moreUtterancesQueued: false }),
     ).toBe(false);
+  });
+});
+
+describe("isLikelyEcho", () => {
+  const spoken = "I placed three spawn pads near the castle gate.";
+
+  it("treats Ducky's own words coming back through the mic as echo", () => {
+    expect(isLikelyEcho("spawn pads near the castle", spoken)).toBe(true);
+    expect(isLikelyEcho("castle", spoken)).toBe(true);
+  });
+
+  it("lets a real interruption through", () => {
+    expect(isLikelyEcho("wait stop that's wrong", spoken)).toBe(false);
+    expect(isLikelyEcho("no use the north gate instead", spoken)).toBe(false);
   });
 });

@@ -8,6 +8,7 @@ import { SettingsToggleRow } from "../views/settings/SettingsToggleRow";
 import { SpeedDropdown } from "./SpeedDropdown";
 import { ttsEngine } from "./ttsEngine";
 import { useTtsVoiceOptions } from "./pluginVoices";
+import { windowsSpeechUsable } from "./transcriptionSession";
 import {
   getVoiceSettings,
   loadVoiceSettings,
@@ -31,7 +32,9 @@ export function VoiceSettingsSection() {
   const [speed, setSpeed] = useState(1);
   const [processTalk, setProcessTalk] = useState(0.7);
   const [sttProvider, setSttProvider] = useState<SttProvider>("");
+  const [autoSend, setAutoSend] = useState(false);
   const voices = useTtsVoiceOptions();
+  const systemListen = windowsSpeechUsable() ? "Windows speech" : "Browser speech";
 
   useEffect(() => {
     void loadVoiceSettings().then((s) => {
@@ -42,6 +45,7 @@ export function VoiceSettingsSection() {
       setSpeed(s.defaultSpeed);
       setProcessTalk(s.processTalk);
       setSttProvider(s.sttProvider);
+      setAutoSend(s.liveAutoSend);
     });
     return subscribeVoiceSettings(() => {
       const s = getVoiceSettings();
@@ -52,6 +56,7 @@ export function VoiceSettingsSection() {
       setSpeed(s.defaultSpeed);
       setProcessTalk(s.processTalk);
       setSttProvider(s.sttProvider);
+      setAutoSend(s.liveAutoSend);
     });
   }, []);
 
@@ -141,8 +146,11 @@ export function VoiceSettingsSection() {
         <GeneralSectionHeader icon={<Icons.Mic />} title="Live Voice" />
         <div className="general-tab-toggle-card">
           <p className="general-tab-section-desc">
-            Dictation fills the chat box until you press Send. Live voice sends each pause as a turn.
-            Listen defaults to system/browser speech so you do not need an OpenAI key.
+            The mic button writes what you say into the chat box — you press Send. Live voice talks
+            back; turn on Auto-send to send each pause as a turn. {systemListen} needs no key
+            {systemListen === "Windows speech"
+              ? " (Windows Settings → Privacy & security → Speech → Online speech recognition must be on)."
+              : "."}
           </p>
           <div className="voice-settings-row">
             <label className="voice-settings-label" htmlFor="voice-stt-provider">
@@ -154,8 +162,8 @@ export function VoiceSettingsSection() {
               mode="radio"
               value={sttProvider}
               options={[
-                { value: "", label: "System default", hint: "Browser speech — uses your default, no extra key" },
-                { value: "openai", label: "OpenAI", hint: "Whisper / Realtime — only if an OpenAI key is saved" },
+                { value: "", label: systemListen, hint: "Free, no extra key" },
+                { value: "openai", label: "OpenAI", hint: "Fastest live words — needs an OpenAI key" },
               ]}
               onChange={(next) => {
                 const value = normalizeSttProvider(next);
@@ -164,6 +172,16 @@ export function VoiceSettingsSection() {
               }}
             />
           </div>
+          <SettingsToggleRow
+            id="toggle-voice-live-auto-send"
+            label="Auto-send in live voice"
+            description="Send what you said when you pause. Off: your words go into the chat box and you press Send."
+            checked={autoSend}
+            onChange={(value) => {
+              setAutoSend(value);
+              void saveVoiceSettings({ liveAutoSend: value });
+            }}
+          />
           <div className="voice-settings-row">
             <label className="voice-settings-label" htmlFor="voice-process-talk">
               Process talk
@@ -201,7 +219,7 @@ export function VoiceSettingsSection() {
           <SettingsToggleRow
             id="toggle-voice-enable"
             label="Enable spoken replies"
-            description="Auto-speak after normal (typed) chat replies. Does not turn off live voice, dictation, or the defaults above."
+            description="Read Ducky's answer aloud after you send a message. Only replies to your own messages speak — never background chats or automations. Stop any time with the ■ button by the mic."
             checked={enabled}
             onChange={(value) => {
               setEnabled(value);

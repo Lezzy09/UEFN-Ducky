@@ -261,9 +261,9 @@ FIELD_META: dict[str, FieldMeta] = {
     ),
     "voice_default_voice": FieldMeta("Default TTS voice", "Audio", settable=True),
     "voice_default_speed": FieldMeta("Default TTS speed", "Audio", settable=True),
-    "voice_live_manual_send": FieldMeta(
-        "Live voice manual send", "Audio", settable=True,
-        description="In live voice, wait for Send instead of auto-sending when you pause.",
+    "voice_live_auto_send": FieldMeta(
+        "Live voice auto-send", "Audio", settable=True,
+        description="In live voice, send each spoken turn when you pause. Off = speech fills the chat box until you press Send.",
     ),
     "voice_process_talk": FieldMeta(
         "Process talk", "Audio", settable=True,
@@ -271,7 +271,7 @@ FIELD_META: dict[str, FieldMeta] = {
     ),
     "voice_stt_provider": FieldMeta(
         "Listen backend", "Audio", settable=True, enum=("", "openai", "webspeech"),
-        description="Empty = system/browser speech (default). openai = Whisper/Realtime when a key is saved.",
+        description="Empty = system speech (Windows speech in the app, browser speech on a phone). openai = OpenAI Realtime when a key is saved.",
     ),
     "mic_permission": FieldMeta(
         "Microphone permission", "Audio", settable=True, enum=("ask", "allow", "block"),
