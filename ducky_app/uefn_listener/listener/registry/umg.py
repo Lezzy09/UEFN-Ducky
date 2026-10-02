@@ -280,7 +280,9 @@ def umg_capabilities() -> dict:
             "Full trees: build_widget_tree (slots + properties, one compile). "
             "Animations: WidgetAnimationToolset. Verse fields: VerseFieldsToolset.AddVerseField. "
             "Bindings: MVVMToolset.create_view_binding / create_view_event_binding.",
-            "Verse fields appear in the Assets digest as the UW_* type members after a Verse build.",
+            "Verse fields reach the Assets digest (UW_* type members) only once the widget's asset editor "
+            "has been opened this session; the Verse-field tools do that themselves (verse_ready), then build Verse.",
+            "UMG event fields are Verse event(): Await them in a loop — they have no Subscribe.",
             "Compile with BlueprintEditorLibrary.compile_blueprint after tree edits.",
         ],
     }
@@ -406,6 +408,10 @@ def create_widget_blueprint(
     full = f"{folder.rstrip('/')}/{asset_name}"
     if unreal.EditorAssetLibrary.does_asset_exist(full):
         raise ValueError(f"Asset already exists: {full} (delete_asset first to replace)")
+    # A new widget at this path must have its editor opened again before Verse-field edits.
+    from listener.registry.umg_author import forget_verse_fields_live
+
+    forget_verse_fields_live(full)
 
     factory = factory_cls()
     # Optional parent class — best-effort; factory defaults to UserWidget.

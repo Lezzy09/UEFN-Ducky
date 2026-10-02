@@ -172,7 +172,8 @@ AGENT_HARD_RULES = (
     "parametric (`x := class(fort_template_ability):`); target queries take "
     "`Targets := array{…}` (`Any` → `Neutral`). Held items = `held_item_template` "
     '(`skill_read_subskill("scenegraph", "held_items")`). UMG `event` fields are creatable '
-    "(≤1 bool/int/float param); Custom Button binds `OnButtonClicked` — `OnClicked` no "
+    "(≤1 bool/int/float param) and reflect as `event(tuple())` — `Await` them in a loop, they "
+    "have no `Subscribe`; Custom Button binds `OnButtonClicked` — `OnClicked` no "
     'longer compiles (`skill_read_subskill("verse", "umg_verse_field_events")`).\n'
     "- **Persistence `weak_map` (HARD):** never remove player keys once added. Replace "
     "values only via rebuild+`set`. Do not add/remove persistable fields without "

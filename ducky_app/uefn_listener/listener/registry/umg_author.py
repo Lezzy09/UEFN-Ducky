@@ -783,6 +783,55 @@ def _field_names(widget_path: str) -> List[str]:
     return [str(row.get("name") or row.get("fieldName") or "") for row in rows if isinstance(row, dict)]
 
 
+# 42.30: a widget's Verse fields only become real once its asset editor has been opened in this
+# editor session. Until then the event field is a transient object, so the Assets digest lists the
+# widget with no members (Verse: E3506 "Unknown member") and a click binding is saved with no target
+# (after a reload: "Event '…' => Self.<None>()': The event could not be generated"). Opening and
+# closing the editor once fixes both — verified live in UEFN 42.30, Oct 2 2026. Remembered per
+# listener session; creating a widget at a path forgets it.
+_VERSE_FIELDS_READY: set = set()
+
+
+def _package(path: str) -> str:
+    return (path or "").split(".")[0]
+
+
+def _open_asset_packages() -> set:
+    try:
+        payload = _execute("EditorToolset.EditorAppToolset", "GetOpenAssets", {}).get("result")
+    except ValueError:
+        return set()
+    if isinstance(payload, dict):
+        payload = payload.get("returnValue")
+    return {_package(str(p)) for p in payload or []}
+
+
+def ensure_verse_fields_live(wbp) -> str:
+    """Open the widget's asset editor once (then close it) so its Verse fields are real.
+
+    Returns "opened", "already_open", "ready" (done earlier this session) or "failed: …".
+    """
+    key = _package(_ref(wbp))
+    if key in _VERSE_FIELDS_READY:
+        return "ready"
+    if key in _open_asset_packages():
+        _VERSE_FIELDS_READY.add(key)
+        return "already_open"
+    try:
+        editors = unreal.get_editor_subsystem(unreal.AssetEditorSubsystem)
+        editors.open_editor_for_assets([wbp])
+        editors.close_all_editors_for_asset(wbp)
+    except Exception as exc:  # noqa: BLE001
+        return f"failed: {exc}"[:200]
+    _VERSE_FIELDS_READY.add(key)
+    return "opened"
+
+
+def forget_verse_fields_live(asset_path: str) -> None:
+    """A widget was (re)created at this path: open its editor again before the next field change."""
+    _VERSE_FIELDS_READY.discard(_package(asset_path))
+
+
 def add_verse_field(
     widget_path: str,
     field_name: str,
@@ -797,6 +846,7 @@ def add_verse_field(
         raise ValueError("field_name and field_type are required")
     spec = verse_field_spec(field_type, default_value, event_parameters, mutable, visibility)
     wbp = _load_wbp(widget_path)
+    live = ensure_verse_fields_live(wbp)
     bp = {"refPath": _ref(wbp)}
     try:
         result = _execute(_VERSE_FIELDS, "AddVerseField", {"widgetBlueprint": bp, "fieldName": field_name, "spec": spec})
@@ -818,6 +868,7 @@ def add_verse_field(
         "event_parameters": spec["eventParameterTypes"],
         "result": result.get("result"),
         "listed_names": _field_names(widget_path),
+        "verse_ready": live,
         **compiled,
     }
 
@@ -834,6 +885,7 @@ def edit_verse_field(
 ) -> dict:
     """Retype / re-default / rename a field (EditVerseField, 42.30). Unset arguments keep their value."""
     wbp = _load_wbp(widget_path)
+    live = ensure_verse_fields_live(wbp)
     rows = list_verse_fields(widget_path).get("fields") or []
     current = next((r for r in rows if isinstance(r, dict) and (r.get("name") or r.get("fieldName")) == field_name), None)
     if current is None:
@@ -850,11 +902,13 @@ def edit_verse_field(
         "widgetBlueprint": {"refPath": _ref(wbp)}, "fieldName": field_name, "spec": spec, "newName": new_name or "",
     })
     return {"widget_path": _ref(wbp), "field_name": new_name or field_name, "spec": spec,
-            "result": result.get("result"), "listed_names": _field_names(widget_path), **_compile_checked(wbp)}
+            "result": result.get("result"), "listed_names": _field_names(widget_path), "verse_ready": live,
+            **_compile_checked(wbp)}
 
 
 def remove_verse_field(widget_path: str, field_name: str) -> dict:
     wbp = _load_wbp(widget_path)
+    ensure_verse_fields_live(wbp)
     result = _execute(_VERSE_FIELDS, "RemoveVerseField", {"widgetBlueprint": {"refPath": _ref(wbp)}, "fieldName": field_name})
     return {"widget_path": _ref(wbp), "removed": field_name, "result": result.get("result"),
             "listed_names": _field_names(widget_path), **_compile_checked(wbp)}
@@ -864,6 +918,7 @@ def duplicate_verse_field(widget_path: str, field_name: str, new_name: str) -> d
     if not new_name:
         raise ValueError("new_name is required and must not be in use")
     wbp = _load_wbp(widget_path)
+    ensure_verse_fields_live(wbp)
     result = _execute(_VERSE_FIELDS, "DuplicateVerseField", {
         "widgetBlueprint": {"refPath": _ref(wbp)}, "fieldName": field_name, "newName": new_name,
     })
@@ -913,6 +968,7 @@ def bind_verse_field(
     if mode not in BINDING_MODES:
         raise ValueError(f"mode must be one of {list(BINDING_MODES)}")
     wbp = _load_wbp(widget_path)
+    live = ensure_verse_fields_live(wbp)
     widget_obj, _row = _widget_object(wbp, widget_name)
     try:
         result = _execute(_VERSE_FIELDS, "BindWidgetPropertyToVerseField", {
@@ -937,6 +993,7 @@ def bind_verse_field(
         "destination_property": destination_property,
         "mode": mode,
         "binding_id": str(binding_id),
+        "verse_ready": live,
         **_compile_checked(wbp),
     }
 
@@ -951,8 +1008,11 @@ def bind_widget_event(
 
     Custom Buttons compile only OnButtonClicked / OnButtonHighlight / OnButtonUnhighlight in 42.30;
     OnClicked, OnPressed, OnHovered… are remapped. The compile result is returned, not hidden.
+    The widget's editor is opened once first (ensure_verse_fields_live): without that the binding
+    points at a transient object and is saved with no target.
     """
     wbp = _load_wbp(widget_path)
+    live = ensure_verse_fields_live(wbp)
     widget_obj, row = _widget_object(wbp, widget_name)
     widget_class = _ref_of(row.get("widgetClassPath")) if isinstance(row, dict) else ""
     used = button_event_name(event_name, widget_class)
@@ -969,8 +1029,7 @@ def bind_widget_event(
         **({"event_name_requested": event_name} if used != event_name else {}),
         "destination_field": destination_field,
         "event": str(event)[:200],
-        "note": "Re-check after the editor reloads this widget: 42.30 can drop event bindings on reload "
-        "(compile warns 'The event could not be generated'); bind again if so.",
+        "verse_ready": live,
         **_compile_checked(wbp),
     }
 
