@@ -459,6 +459,8 @@ _sessions: dict[str, AgentSession] = {}
 _sessions_lock = threading.Lock()
 _linked_parents: dict[str, str] = {}
 _child_waiters: dict[str, set[str]] = {}
+# Runs another chat started (sub-agents): the parent's finish is the one the phone hears about.
+_quiet_runs: set[str] = set()
 
 # #region agent log
 def _dbg_thread_state(message: str, **data: Any) -> None:
@@ -551,6 +553,27 @@ def close_changeset_run(run_id: str, reason: str) -> None:
         pass
 
 
+def _notify_phone(conv_id: str, reason: str) -> None:
+    """Push the phone that this chat finished (tap → Remote View on it). Off-thread:
+    loading the chat and the site call never hold up the agent's own thread."""
+
+    def _send() -> None:
+        try:
+            conv = load_conversation(conv_id)
+            # Group members report to their hub; the hub's own run is the one to announce.
+            if conv is None or str(getattr(conv, "parent_conv_id", "") or ""):
+                return
+            from frontend.duckyos_account import notify_desktop_agent_done
+
+            name = str(getattr(conv, "title", "") or "").strip() or "Your ducky"
+            body = "Finished. Tap to open it." if reason == "done" else "Stopped with an error. Tap to see why."
+            notify_desktop_agent_done(title=name, body=body, kind="chat", target_id=conv_id)
+        except Exception:
+            pass
+
+    threading.Thread(target=_send, daemon=True, name="phone-push").start()
+
+
 def _push_agent_stopped(
     push: PushFn, conv_id: str, run_id: str, reason: str, detail: str = ""
 ) -> None:
@@ -568,14 +591,14 @@ def _push_agent_stopped(
         event["detail"] = "Agent errored before finishing its reply"
     push(event)
     close_changeset_run(run_id, reason)
+    quiet = run_id in _quiet_runs
+    _quiet_runs.discard(run_id)
+    if reason in ("error", "timeout") and not quiet:
+        _notify_phone(conv_id, reason)
     if reason != "done":
         return
-    try:
-        from frontend.duckyos_account import notify_desktop_agent_done
-
-        notify_desktop_agent_done()
-    except Exception:
-        pass
+    if not quiet:
+        _notify_phone(conv_id, reason)
     # Private DM with a group member → short note on the group hub for everyone.
     try:
         from frontend.ui_web.group_orchestrator import announce_private_member_talk
@@ -1587,6 +1610,7 @@ def run_message(
     if active_parent and active_parent != conv_id:
         parent_conv_id = active_parent
         _linked_parents[conv_id] = parent_conv_id
+        _quiet_runs.add(run_id)
     child_title = conv.title or "Chat"
     # #region agent log
     _dbg_vis("N-A", "agent_modes.py:run_message", "parent link resolved",

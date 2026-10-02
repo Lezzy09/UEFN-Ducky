@@ -327,6 +327,21 @@ def _announce_run(wf: dict[str, Any], *, phase: str, detail: str = "", run_id: s
         pass
 
 
+def _notify_phone(wf: dict[str, Any], ok: bool) -> None:
+    """Push the phone (tap → Remote View on this workflow). Never blocks or raises."""
+    try:
+        from frontend.duckyos_account import notify_desktop_agent_done
+
+        notify_desktop_agent_done(
+            title=str(wf.get("name") or "Workflow")[:80],
+            body="Workflow finished. Tap to open it." if ok else "Workflow failed. Tap to see why.",
+            kind="workflow",
+            target_id=str(wf.get("id") or ""),
+        )
+    except Exception:
+        pass
+
+
 _ACTION_TYPES = frozenset(
     {
         "ducky.prompt",
@@ -444,6 +459,10 @@ def run_workflow(
             detail=(error or "Finished") if ok else (error or "Failed"),
             run_id=str(int(started)),
         )
+        # A run the person started (not a trigger, not a chat's tool call, not a
+        # nested workflow.call, not stopped by them): tell their phone.
+        if not stopped and not trigger_id and not ctx.get("caller_conv_id") and not _CALL_STACK.get():
+            _notify_phone(wf, ok)
     ended = time.time()
     node_outputs = flow.summary()
     run = {

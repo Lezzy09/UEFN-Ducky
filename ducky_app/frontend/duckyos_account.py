@@ -1580,20 +1580,37 @@ def notify_desktop_agent_done(
     *,
     title: str = "UEFN Ducky",
     body: str = "Your agent finished.",
+    kind: str = "",
+    target_id: str = "",
 ) -> None:
-    """Tell the site to FCM the user's Android/web tokens. Best-effort."""
-    try:
-        _plugin_collect(
-            "uefn-ducky",
-            "desktop-agent-done",
-            {"title": title, "body": body},
-            unavailable_code="push_unavailable",
-            unavailable_msg="Can't send mobile notification right now.",
-            error_code="push_error",
-            timeout=12.0,
-        )
-    except Exception:
-        return
+    """Tell the site to push the user's phone (FCM). Best-effort, on its own thread.
+
+    ``kind`` ("chat" | "workflow") + ``target_id`` make the tap open that chat or
+    workflow in Remote View. Only names and a status line leave the PC, never
+    the reply text (pushes travel through Google's FCM).
+    """
+    payload: dict[str, Any] = {"title": title[:80], "body": body[:160]}
+    if kind in ("chat", "workflow") and target_id:
+        payload["kind"] = kind
+        payload["id"] = target_id[:80]
+
+    def _send() -> None:
+        try:
+            _plugin_collect(
+                "uefn-ducky",
+                "desktop-agent-done",
+                payload,
+                unavailable_code="push_unavailable",
+                unavailable_msg="Can't send mobile notification right now.",
+                error_code="push_error",
+                timeout=12.0,
+            )
+        except Exception:
+            return
+
+    import threading
+
+    threading.Thread(target=_send, daemon=True, name="duckyos-push").start()
 
 
 def _plugin_collect(

@@ -52,6 +52,7 @@ import { useNavigationShortcuts } from "./navigation/useNavigationShortcuts";
 import { useUndoShortcuts } from "./navigation/useUndoShortcuts";
 import { registerOpenSettingsView, requestOpenSettings } from "./navigation/openSettingsTab";
 import { installDeepLinkListeners, peekStoreInstallRequest, requestOpenStore } from "./navigation/deepLinks";
+import { installOpenFromParent } from "./remote/openFromParent";
 import { nextChatLayoutMode, type ViewId } from "./types/panel";
 import { WINDOW_ID } from "./tabs/tabRegistryClient";
 import { persistDockSnapshot, readDockSnapshot } from "./workspace/workspaceDockStorage";
@@ -188,6 +189,11 @@ export default function App() {
   // uefn-ducky:// deep links (website Store "Install in app") — live + cold start.
   useEffect(() => {
     return installDeepLinkListeners();
+  }, []);
+
+  // Remote View on the phone: a tapped "agent finished" notification opens that chat or workflow.
+  useEffect(() => {
+    return installOpenFromParent();
   }, []);
 
   // Signed-out launch: Plugins library → Ducky Account details (do not auto-start pairing).
