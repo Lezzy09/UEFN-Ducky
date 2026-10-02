@@ -101,10 +101,34 @@ export function useChatMessages(chatId: string, visible: boolean, isAgentRunning
 
   // Fetch the conversation once on mount (even while hidden, so a background pane
   // is ready). A run in flight keeps its optimistic tail; loaded() merges.
+  //
+  // A pane restored from the cache as "running" was unmounted (closed, or another
+  // tab in front — EditorGroupPane only mounts the active tab), so it never heard
+  // how the run ended. Ask the backend first: a run that finished while the tab
+  // was away goes idle at once and reconcile's reload pulls the final copy,
+  // instead of showing the stale "Running tools…" until the 15 s reconcile grace.
   useEffect(() => {
-    void load();
-    return () => { loadSeqRef.current += 1; };
-  }, [load]);
+    let cancelled = false;
+    const restoredRunning = stateRef.current.status === "running";
+    void (async () => {
+      const api = getApi();
+      if (restoredRunning && api?.list_running_agents) {
+        try {
+          const live = (await api.list_running_agents()).includes(chatId);
+          if (cancelled) return;
+          dispatch({ type: "reconcile", running: live });
+          if (!live) return; // reconcile bumped reloadToken: that reload replaces the tail
+        } catch {
+          // Fall through to the normal load; the reconcile timer still covers it.
+        }
+      }
+      if (!cancelled) void load();
+    })();
+    return () => {
+      cancelled = true;
+      loadSeqRef.current += 1;
+    };
+  }, [chatId, load]);
 
   // Safety-net refresh when the pane (re)appears while idle and pinned to the
   // bottom — catches anything missed while hidden without yanking a scrolled-up
