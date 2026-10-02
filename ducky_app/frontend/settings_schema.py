@@ -91,11 +91,13 @@ FIELD_META: dict[str, FieldMeta] = {
     "appearance_skin_id": FieldMeta("Appearance skin", "Appearance"),
     "appearance_sounds": FieldMeta("Appearance sounds", "Appearance"),
     "appearance_profile_patches": FieldMeta("Appearance profile patches", "Appearance"),
-    "agent_profiles": FieldMeta("Ducky profiles", "Duckies"),
-    "agent_profile_overrides": FieldMeta("Bundled profile overrides", "Duckies"),
-    "hidden_bundled_agent_profile_ids": FieldMeta("Hidden bundled profiles", "Duckies"),
-    "agent_profile_visibility_explicit": FieldMeta("Explicit profile visibility", "internal"),
-    "archived_agent_profile_ids": FieldMeta("Archived agent profiles", "Duckies"),
+    # Pre-0014 copies of the duckies. Duckies live in their own table now (ducky_profile_* tools);
+    # these rows are kept for older builds and are never settable, so no settings write can touch duckies.
+    "agent_profiles": FieldMeta("Legacy ducky profiles", "internal"),
+    "agent_profile_overrides": FieldMeta("Legacy bundled profile overrides", "internal"),
+    "hidden_bundled_agent_profile_ids": FieldMeta("Legacy hidden bundled profiles", "internal"),
+    "agent_profile_visibility_explicit": FieldMeta("Legacy explicit profile visibility", "internal"),
+    "archived_agent_profile_ids": FieldMeta("Legacy archived agent profiles", "internal"),
     "default_enabled_skills": FieldMeta("Legacy enabled skills", "internal"),
     "default_enabled_packs": FieldMeta("Default skill packs", "Skills & MCP"),
     "default_disabled_packs": FieldMeta("Disabled skill packs", "Skills & MCP"),

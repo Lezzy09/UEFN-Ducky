@@ -48,9 +48,9 @@ function seedFromCache(profileId: string): {
 
 function deleteProfileConfirmMessage(profile: AgentProfileDto): string {
   if (profile.kind === "bundled") {
-    return `Remove "${profile.name}" from your library? You can still start from this template when creating a new profile.`;
+    return `Move "${profile.name}" to Archive? You can restore it from Archive any time.`;
   }
-  return `Delete "${profile.name}"? This is a custom ducky — it can't be recovered once deleted.`;
+  return `Delete "${profile.name}"? Existing chats are kept.`;
 }
 
 interface DuckyProfileTabPaneProps {
@@ -230,7 +230,7 @@ export function DuckyProfileTabPane({ profileId, onCloseTab }: DuckyProfileTabPa
     if (
       !(await confirm({
         message: deleteProfileConfirmMessage(profile),
-        confirmLabel: profile.kind === "bundled" ? "Remove" : "Delete",
+        confirmLabel: profile.kind === "bundled" ? "Move to Archive" : "Delete",
         danger: true,
       }))
     ) {

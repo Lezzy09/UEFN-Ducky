@@ -446,12 +446,12 @@ export function DuckyProfileModal({
     if (!selectedProfile) return;
     const message =
       selectedProfile.kind === "bundled"
-        ? `Remove "${selectedProfile.name}" from your library? You can still start from this template when creating a new profile.`
-        : `Delete profile "${selectedProfile.name}"?`;
+        ? `Move "${selectedProfile.name}" to Archive? You can restore it from Archive any time.`
+        : `Delete profile "${selectedProfile.name}"? Existing chats are kept.`;
     if (
       !(await confirm({
         message,
-        confirmLabel: selectedProfile.kind === "bundled" ? "Remove" : "Delete",
+        confirmLabel: selectedProfile.kind === "bundled" ? "Move to Archive" : "Delete",
         danger: true,
       }))
     )

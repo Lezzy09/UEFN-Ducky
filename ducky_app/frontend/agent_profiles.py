@@ -120,164 +120,89 @@ def _patch_profile(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any
     return _normalize_profile(merged, bundled=merged.get("kind") == "bundled")
 
 
-def _stored_hidden_list(settings: PanelSettings) -> list[str]:
-    """Hide-list as stored. [] and an unset list both show every built-in.
+# --------------------------------------------------------------------------- storage
+# Duckies live in their own table (backend.store.repos.duckies, migration 0014), not in
+# settings. Shipped duckies are always listed unless the user archived one, and nothing
+# deletes a row. In settings, a hide list could hide every shipped ducky at once and any
+# settings save holding an empty list wiped the custom ones.
 
-    Never treat a missing list as every bundled id. One delete used to persist
-    that expansion and, with the explicit flag, hide the whole library.
-    Never use ``hidden or bundled_ids()`` — an empty list is meaningful
-    (show all) and is falsy in Python.
-    """
-    raw = settings.hidden_bundled_agent_profile_ids
-    if not isinstance(raw, list):
-        return []
-    return [str(x).strip() for x in raw if str(x).strip()]
+_StoreUnavailable = (OSError, RuntimeError)
 
 
-def _hidden_bundled_ids(settings: PanelSettings) -> frozenset[str]:
-    raw = settings.hidden_bundled_agent_profile_ids
-    if not isinstance(raw, list) or len(raw) == 0:
-        # Unset or empty keeps built-ins visible.
-        return frozenset()
-    return frozenset(str(x).strip() for x in raw if str(x).strip())
+def _repo():
+    from backend.store.importers import duckies as importer
+    from backend.store.repos import duckies as repo
+
+    importer.ensure()
+    return repo
 
 
-def _is_empty_or_poison(
-    hidden: frozenset[str], override_ids: frozenset[str], bundled: frozenset[str]
-) -> bool:
-    """True when ``hidden = list([] or bundled_ids())`` ran, then one save/delete.
+def _load_rows() -> list[dict[str, Any]]:
+    try:
+        return _repo().list_all()
+    except _StoreUnavailable:
+        # Database can't open: read the old settings copy so the library is never empty.
+        from backend.store.importers.duckies import rows_from_settings
 
-    Save-one: hidden == all bundled except the override keys.
-    Delete-one: hidden == all bundled.
-    """
-    if not bundled or not hidden:
-        return False
-    if hidden == bundled:
-        return True
-    return bool(override_ids) and hidden == (bundled - override_ids)
-
-
-def _custom_profile_ids(settings: PanelSettings) -> frozenset[str]:
-    custom = settings.agent_profiles if isinstance(settings.agent_profiles, list) else []
-    return frozenset(
-        str(item.get("id") or "").strip()
-        for item in custom
-        if isinstance(item, dict) and str(item.get("id") or "").strip()
-    )
+        s = PanelSettings.load()
+        return rows_from_settings(
+            {
+                "agent_profiles": s.agent_profiles,
+                "agent_profile_overrides": s.agent_profile_overrides,
+                "archived_agent_profile_ids": s.archived_agent_profile_ids,
+            },
+            now=0.0,
+        )
 
 
-def _stored_archived_ids(settings: PanelSettings) -> list[str]:
-    raw = getattr(settings, "archived_agent_profile_ids", None)
-    if not isinstance(raw, list):
-        return []
-    return [str(x).strip() for x in raw if str(x).strip()]
-
-
-def _drop_archived(settings: PanelSettings, profile_id: str) -> None:
-    archived = _stored_archived_ids(settings)
-    if profile_id in archived:
-        settings.archived_agent_profile_ids = [x for x in archived if x != profile_id]
-
-
-def _split_archived(
-    settings: PanelSettings, profiles: list[dict[str, Any]]
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    archived = set(_stored_archived_ids(settings))
-    visible: list[dict[str, Any]] = []
-    parked: list[dict[str, Any]] = []
-    for profile in profiles:
-        if str(profile.get("id") or "") in archived:
-            parked.append(profile)
-        else:
-            visible.append(profile)
-    return visible, parked
-
-
-def _heal_hidden_if_poisoned(settings: PanelSettings, *, persist: bool = True) -> PanelSettings:
-    raw = settings.hidden_bundled_agent_profile_ids
-    if not isinstance(raw, list) or not raw:
-        return settings
-    # Current delete sets this flag, including when every built-in is hidden.
-    # That choice stays hidden. Only a legacy full hide (flag still false) is repaired.
-    if settings.agent_profile_visibility_explicit:
-        return settings
-    bundled = bundled_profile_ids()
-    hidden = frozenset(str(x).strip() for x in raw if str(x).strip())
-    overrides = settings.agent_profile_overrides if isinstance(settings.agent_profile_overrides, dict) else {}
-    override_ids = frozenset(str(k).strip() for k in overrides if str(k).strip())
-    accidental_hide_all = hidden == bundled and not override_ids and not _custom_profile_ids(settings)
-    if not accidental_hide_all and not _is_empty_or_poison(hidden, override_ids, bundled):
-        return settings
-    settings.hidden_bundled_agent_profile_ids = []
-    if persist:
-        try:
-            settings.validate()
-            settings.save()
-        except Exception:
-            pass
-    return settings
-
-
-def _merge_agent_profiles(
-    settings: PanelSettings,
-    *,
-    apply_hidden: bool,
-) -> list[dict[str, Any]]:
-    overrides = settings.agent_profile_overrides if isinstance(settings.agent_profile_overrides, dict) else {}
-    custom = settings.agent_profiles if isinstance(settings.agent_profiles, list) else []
-    hidden = _hidden_bundled_ids(settings) if apply_hidden else frozenset()
-    merged: list[dict[str, Any]] = []
-    for bundled in _load_bundled_raw():
-        bid = bundled["id"]
-        if bid in hidden:
-            continue
-        if bid in overrides and isinstance(overrides[bid], dict):
-            merged.append(_patch_profile(bundled, overrides[bid]))
-        else:
-            merged.append(bundled)
-    for item in custom:
-        if isinstance(item, dict) and str(item.get("id") or "").strip():
-            merged.append(_normalize_profile(item, bundled=False))
-    return merged
+def _library() -> list[tuple[dict[str, Any], bool]]:
+    """(profile, archived) for every shipped ducky, then custom duckies in the order made."""
+    rows = _load_rows()
+    by_id = {r["id"]: r for r in rows}
+    out: list[tuple[dict[str, Any], bool]] = []
+    bundled = _load_bundled_raw()
+    for template in bundled:
+        row = by_id.get(template["id"])
+        edits = row["data"] if row and row["kind"] == "bundled" else {}
+        out.append((_patch_profile(template, edits) if edits else template, bool(row and row["archived"])))
+    shipped = {t["id"] for t in bundled}
+    for row in rows:
+        if row["kind"] == "custom" and row["id"] not in shipped:
+            out.append((_normalize_profile({**row["data"], "id": row["id"]}, bundled=False), bool(row["archived"])))
+    return out
 
 
 def list_bundled_agent_profile_templates() -> list[dict[str, Any]]:
     return list(_load_bundled_raw())
 
 
-def list_agent_profiles(settings: PanelSettings | None = None) -> list[dict[str, Any]]:
-    """Profiles shown in the settings library (built-ins hidden by default)."""
-    s = _heal_hidden_if_poisoned(settings or PanelSettings.load())
-    visible, _parked = _split_archived(s, _merge_agent_profiles(s, apply_hidden=True))
-    return visible
+def list_agent_profiles() -> list[dict[str, Any]]:
+    """Duckies shown in the library: every one not in Archive."""
+    return [p for p, archived in _library() if not archived]
 
 
-def list_archived_agent_profiles(settings: PanelSettings | None = None) -> list[dict[str, Any]]:
-    """Library profiles sitting in Archive. Permanently hidden built-ins stay out."""
-    s = _heal_hidden_if_poisoned(settings or PanelSettings.load())
-    _visible, parked = _split_archived(s, _merge_agent_profiles(s, apply_hidden=True))
-    return parked
+def list_archived_agent_profiles() -> list[dict[str, Any]]:
+    return [p for p, archived in _library() if archived]
 
 
-def list_agent_profiles_available(settings: PanelSettings | None = None) -> list[dict[str, Any]]:
-    """All bundled + custom profiles for spawn, delegation, and template pickers."""
-    s = _heal_hidden_if_poisoned(settings or PanelSettings.load())
-    return _merge_agent_profiles(s, apply_hidden=False)
+def list_agent_profiles_available() -> list[dict[str, Any]]:
+    """All shipped + custom duckies (Archive included) for spawn, delegation, and template pickers."""
+    return [p for p, _archived in _library()]
 
 
-def get_agent_profile(profile_id: str, settings: PanelSettings | None = None) -> dict[str, Any] | None:
+def get_agent_profile(profile_id: str) -> dict[str, Any] | None:
     pid = str(profile_id or "").strip()
     if not pid or pid == BLANK_PROFILE_ID:
         return None
-    for profile in list_agent_profiles_available(settings):
+    for profile in list_agent_profiles_available():
         if profile.get("id") == pid:
             return profile
     return None
 
 
-def _dedupe_profile_name(base_name: str, settings: PanelSettings) -> str:
+def _dedupe_profile_name(base_name: str) -> str:
     """Avoid collisions with existing profile names ("X Copy", "X Copy 2", …)."""
-    existing = {str(p.get("name") or "").strip().lower() for p in list_agent_profiles(settings)}
+    existing = {str(p.get("name") or "").strip().lower() for p in list_agent_profiles()}
     candidate = base_name.strip() or "Untitled"
     if candidate.lower() not in existing:
         return candidate
@@ -287,73 +212,50 @@ def _dedupe_profile_name(base_name: str, settings: PanelSettings) -> str:
     return f"{candidate} {n}"
 
 
-def duplicate_agent_profile(profile_id: str, settings: PanelSettings | None = None) -> dict[str, Any]:
+def duplicate_agent_profile(profile_id: str) -> dict[str, Any]:
     """Clone any bundled or custom profile (with overrides applied) into a new custom profile."""
-    s = settings or PanelSettings.load()
-    source = get_agent_profile(profile_id, s)
+    source = get_agent_profile(profile_id)
     if not source:
         raise ValueError(f"Profile not found: {profile_id}")
     raw = {key: source.get(key) for key in PROFILE_FIELDS}
-    raw["name"] = _dedupe_profile_name(f"{source.get('name') or 'Untitled'} Copy", s)
+    raw["name"] = _dedupe_profile_name(f"{source.get('name') or 'Untitled'} Copy")
     raw["id"] = str(uuid.uuid4())
     raw["kind"] = "custom"
     return save_agent_profile(raw)
 
 
 def save_agent_profile(profile: dict[str, Any]) -> dict[str, Any]:
-    s = PanelSettings.load()
     raw = _normalize_profile(profile, bundled=False)
     pid = str(raw.get("id") or "").strip()
-    bundled_ids = bundled_profile_ids()
-    if pid in bundled_ids:
+    if pid in bundled_profile_ids():
         raise ValueError("Bundled profiles cannot be saved as custom — use save_agent_profile_override")
-    profiles = [p for p in (s.agent_profiles or []) if isinstance(p, dict)]
     if not pid:
         pid = str(uuid.uuid4())
         raw["id"] = pid
     raw["kind"] = "custom"
-    found = False
-    next_profiles: list[dict[str, Any]] = []
-    for item in profiles:
-        if str(item.get("id") or "") == pid:
-            next_profiles.append(raw)
-            found = True
-        else:
-            next_profiles.append(_normalize_profile(item, bundled=False))
-    if not found:
-        next_profiles.append(raw)
-    s.agent_profiles = next_profiles
-    s.validate()
-    s.save()
+    _repo().save(pid, "custom", raw)
     return raw
 
 
 def save_agent_profile_override(bundled_id: str, patch: dict[str, Any]) -> dict[str, Any]:
     bid = str(bundled_id or "").strip()
-    if bid not in bundled_profile_ids():
-        raise ValueError(f"Not a bundled profile: {bundled_id}")
     bundled = next((p for p in _load_bundled_raw() if p["id"] == bid), None)
     if not bundled:
-        raise ValueError(f"Bundled profile not found: {bundled_id}")
-    s = _heal_hidden_if_poisoned(PanelSettings.load(), persist=False)
-    overrides = dict(s.agent_profile_overrides or {})
-    existing = overrides.get(bid) if isinstance(overrides.get(bid), dict) else {}
+        raise ValueError(f"Not a bundled profile: {bundled_id}")
+    repo = _repo()
+    row = repo.get(bid)
+    existing = row["data"] if row and row["kind"] == "bundled" else {}
     merged_patch = {**existing, **{k: v for k, v in patch.items() if k in PROFILE_FIELDS}}
-    # De-dup list fields before storing so a bloated override (e.g. enabled_packs
-    # with "verse" repeated) heals itself on the next save instead of persisting.
+    # De-dup list fields before storing so a bloated edit heals itself on the next save.
     for _key in ("enabled_packs", "tool_ids", "favorite_models"):
         if isinstance(merged_patch.get(_key), list):
             merged_patch[_key] = _dedup_preserve_order([str(x) for x in merged_patch[_key]])
-    overrides[bid] = merged_patch
-    hidden = _stored_hidden_list(s)
-    if bid in hidden:
-        hidden = [x for x in hidden if x != bid]
-    s.hidden_bundled_agent_profile_ids = hidden
-    s.agent_profile_visibility_explicit = True
-    s.agent_profile_overrides = overrides
-    s.validate()
-    s.save()
+    repo.save(bid, "bundled", merged_patch)
     return _patch_profile(bundled, merged_patch)
+
+
+def _kind(profile_id: str) -> str:
+    return "bundled" if profile_id in bundled_profile_ids() else "custom"
 
 
 def archive_agent_profile(profile_id: str) -> dict[str, Any]:
@@ -361,64 +263,34 @@ def archive_agent_profile(profile_id: str) -> dict[str, Any]:
     pid = str(profile_id or "").strip()
     if not pid or pid == BLANK_PROFILE_ID:
         raise ValueError("profile_id is required")
-    s = _heal_hidden_if_poisoned(PanelSettings.load(), persist=False)
-    visible, parked = _split_archived(s, _merge_agent_profiles(s, apply_hidden=True))
-    match = next((p for p in visible if p["id"] == pid), None)
-    if match is None:
-        already = next((p for p in parked if p["id"] == pid), None)
-        if already is None:
-            raise ValueError(f"Profile not found: {profile_id}")
-        return already
-    archived = _stored_archived_ids(s)
-    if pid not in archived:
-        archived.append(pid)
-    s.archived_agent_profile_ids = archived
-    s.validate()
-    s.save()
-    return match
+    for profile, archived in _library():
+        if profile["id"] == pid:
+            if not archived:
+                _repo().set_archived(pid, _kind(pid), True)
+            return profile
+    raise ValueError(f"Profile not found: {profile_id}")
 
 
 def unarchive_agent_profile(profile_id: str) -> dict[str, Any]:
     pid = str(profile_id or "").strip()
     if not pid:
         raise ValueError("profile_id is required")
-    s = PanelSettings.load()
-    archived = _stored_archived_ids(s)
-    if pid not in archived:
+    if pid not in {p["id"] for p in list_archived_agent_profiles()}:
         raise ValueError(f"Profile is not archived: {profile_id}")
-    s.archived_agent_profile_ids = [x for x in archived if x != pid]
-    s.validate()
-    s.save()
-    profile = get_agent_profile(pid, s)
+    _repo().set_archived(pid, _kind(pid), False)
+    profile = get_agent_profile(pid)
     if not profile:
         raise ValueError(f"Profile not found: {profile_id}")
     return profile
 
 
 def delete_agent_profile(profile_id: str) -> None:
+    """Shipped duckies go to Archive (restorable); custom ones are marked deleted, row kept."""
     pid = str(profile_id or "").strip()
     if not pid:
         raise ValueError("profile_id is required")
-    bundled_ids = bundled_profile_ids()
-    s = PanelSettings.load()
-    if pid in bundled_ids:
-        _heal_hidden_if_poisoned(s, persist=False)
-        hidden = _stored_hidden_list(s)
-        if pid not in hidden:
-            hidden.append(pid)
-        s.hidden_bundled_agent_profile_ids = hidden
-        s.agent_profile_visibility_explicit = True
-        overrides = dict(s.agent_profile_overrides or {})
-        overrides.pop(pid, None)
-        s.agent_profile_overrides = overrides
-        _drop_archived(s, pid)
-        s.validate()
-        s.save()
+    if pid in bundled_profile_ids():
+        archive_agent_profile(pid)
         return
-    profiles = [p for p in (s.agent_profiles or []) if isinstance(p, dict) and str(p.get("id") or "") != pid]
-    if len(profiles) == len(s.agent_profiles or []):
+    if not _repo().set_deleted(pid, True):
         raise ValueError(f"Profile not found: {profile_id}")
-    s.agent_profiles = profiles
-    _drop_archived(s, pid)
-    s.validate()
-    s.save()
