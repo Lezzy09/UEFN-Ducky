@@ -67,3 +67,13 @@ def test_stop_ends_a_run_right_away(events):
     assert [e["state"] for e in events if e["type"] == "workflow_run"] == ["started", "stopped"]
     assert ("w", "stopped") in [(e.get("node"), e["state"]) for e in events if e["type"] == "workflow_step"]
     assert runner.stop_workflow(wid) is False  # nothing left running
+
+
+def test_the_start_tells_the_calling_chat_every_step(events):
+    """The chat that ran it shows a live card: workflow name and the steps in order."""
+    wid = _workflow(0)
+    runner.run_workflow(wid, caller_conv_id="chat-1")
+    started = next(e for e in events if e["type"] == "workflow_run" and e["state"] == "started")
+    assert started["conv"] == "chat-1"
+    assert started["name"] == "Live"
+    assert [(p["node"], p["label"]) for p in started["plan"]] == [("s", "start.manual"), ("w", "Pause"), ("e", "flow.end")]

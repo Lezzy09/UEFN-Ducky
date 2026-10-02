@@ -408,7 +408,12 @@ def run_workflow(
     steps: list[Any] = []
     try:
         _announce_run(wf, phase="working", detail="Running")
-        _push({"type": "workflow_run", "id": wid, "run": run_id, "state": "started"})
+        _push({
+            "type": "workflow_run", "id": wid, "run": run_id, "state": "started",
+            # The chat that started it shows a live card: its name, every step, which one is running.
+            "conv": str(ctx.get("caller_conv_id") or ""), "name": str(wf.get("name") or ""),
+            "plan": _plan_steps(edges, starts, flow),
+        })
         steps, ok, error, _seen = _walk(nodes, edges, ctx, starts, flow=flow) if starts else ([], True, "", 0)
         if ok:
             ok, error = flow.run_sinks(ctx)
@@ -461,6 +466,34 @@ def run_workflow(
         "text": ctx.get("text") or ctx.get("assistant_text") or "",
         "outputs": dict(ctx.get(_RETURN_KEY) or {}),
     }
+
+
+_PLAN_ORDER = {"main": 0, "each": 1, "true": 2, "done": 3}
+
+
+def _plan_steps(edges: list[dict[str, Any]], starts: list[str], flow: "_Dataflow", limit: int = 80) -> list[dict[str, str]]:
+    """The run's happy path, for the calling chat's live workflow card: depth-first from
+    the starts along main/each/true/done wires, End last. False branches (failure
+    reports) are left out; the card adds any step that actually runs."""
+    out: list[dict[str, str]] = []
+    ends: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def visit(nid: str) -> None:
+        if nid in seen or len(out) >= limit:
+            return
+        seen.add(nid)
+        if flow.is_step(nid):
+            node_type = str((flow.nodes.get(nid) or {}).get("type") or "")
+            step = {"node": nid, "label": flow._name(nid), "type": node_type}
+            (ends if node_type == "flow.end" else out).append(step)
+        wires = [e for e in edges if str(e.get("source")) == nid and str(e.get("kind") or "main") in _PLAN_ORDER]
+        for e in sorted(wires, key=lambda e: _PLAN_ORDER[str(e.get("kind") or "main")]):
+            visit(str(e.get("target") or ""))
+
+    for start in starts:
+        visit(start)
+    return (out + ends)[:limit]
 
 
 def _caller(explicit: str) -> str:

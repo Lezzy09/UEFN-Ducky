@@ -1861,6 +1861,10 @@ export interface PanelPushEvent {
   /** workflow_run: started | done | error | stopped; workflow_step: running | ok | error | stopped. */
   state?: string;
   error?: string;
+  /** workflow_run started: the chat that ran it, the workflow's name and its happy-path steps in order. */
+  conv?: string;
+  name?: string;
+  plan?: { node: string; label: string; type?: string }[];
   /** browser_pane_state fields (native WebView2 pane navigation state). */
   pane_id?: string;
   url?: string;

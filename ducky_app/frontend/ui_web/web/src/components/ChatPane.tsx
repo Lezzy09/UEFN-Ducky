@@ -54,6 +54,7 @@ import {
 import { basename } from "../verse-editor/utils/isVerseFile";
 import { ChatInputResizeHandle } from "./ChatInputResizeHandle";
 import { ChatPlanPopup } from "./ChatPlanPopup";
+import { ChatWorkflowRunCard } from "./ChatWorkflowRunCard";
 import {
   getAskUserSessionForConv,
   setFocusedChatForAsk,
@@ -1397,6 +1398,7 @@ export function ChatPane({
           }}
           onDelete={(id) => setPromptQueue(chat.id, removePrompt(promptQueue, id))}
         />
+        <ChatWorkflowRunCard chatId={chat.id} />
         {chatPlan != null && !planAllDone ? (
           <div className="chat-pane-plan-dock">
             <ChatPlanPopup
