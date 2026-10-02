@@ -702,14 +702,17 @@ def ducky_create_folder(name: str, parent_id: str = "", pretty: bool = False) ->
 
 @mcp.tool()
 def ducky_group_create(name: str, parent_folder_id: str = "", pretty: bool = False) -> str:
-    """Create a Group Chat hub (+ linked folder). Any agent can create/own groups.
+    """Find or create a Group Chat hub (+ linked folder) by name.
 
-    Nest groups inside groups by passing ``parent_folder_id`` of an outer group's
-    folder. After create, add yourself with ``ducky_group_add_member(..., as_leader=true)``
-    if you want to lead the swarm.
+    A live group with this name inside ``parent_folder_id`` is reused, so calling
+    this twice does not stack duplicate groups. Pass ``parent_folder_id`` to nest
+    inside another group's folder. After create, add yourself with
+    ``ducky_group_add_member(..., as_leader=true)`` if you want to lead the swarm.
     """
     api = _panel_api()
-    res = api.group_create(name=name.strip() or "Group", folder_id=parent_folder_id or "")
+    res = api.group_find_or_create(
+        name=name.strip() or "Group", folder_id=parent_folder_id or "", open_tab=True
+    )
     return tool_json(res, pretty=pretty)
 
 
@@ -1166,6 +1169,27 @@ def _profile_spawn_kwargs(profile: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _caller_own_group(caller: str) -> str:
+    """The group hub this chat already belongs to, or ''."""
+    if not (caller or "").strip():
+        return ""
+    from frontend.ui_web.group_orchestrator import is_group_conversation
+
+    root = _project_root()
+    conv = load_conversation(caller, project_root=root)
+    if conv is None:
+        return ""
+    if is_group_conversation(conv):
+        return caller
+    parent_id = (getattr(conv, "parent_conv_id", None) or "").strip()
+    if not parent_id:
+        return ""
+    parent = load_conversation(parent_id, project_root=root)
+    if parent is not None and is_group_conversation(parent):
+        return parent_id
+    return ""
+
+
 def _resolve_group_hub_id(group_id: str = "", folder_id: str = "") -> str:
     """Resolve a group hub id from an explicit hub id or a group folder id."""
     root = _project_root()
@@ -1213,16 +1237,12 @@ def ducky_spawn_chat(
     globs like ["Content/Verse/Shop/**"] — so parallel members never edit the same files.
     Partition lanes before spawning parallel work; overlaps are refused.
 
-    Subagents are retired. You MUST pass ``group_id`` (hub from ``ducky_group_create``)
-    or a group ``folder_id``. Prefer reuse: ``ducky_group_members`` → if the right
-    specialist is already seated, ``ducky_send_chat_message`` instead.
-
-    Swarm flow (any agent): ``ducky_group_create`` → ``ducky_group_add_member``
-    (yourself as leader) → nested ``ducky_group_create`` → ``ducky_spawn_chat`` /
-    ``ducky_group_invite`` into those groups.
-
-    ``folder_name`` creates a new nested group under the caller's folder when
-    ``group_id``/``folder_id`` are empty — then invites into it.
+    Pass ``group_id`` (or a group ``folder_id``) only to target a specific group.
+    With neither, the caller joins its own group: the group it belongs to, else a
+    group named after this chat. ``folder_name`` finds or creates that named group
+    inside the caller's folder. A ducky already seated and idle gets the message in
+    its existing chat; a busy one gets a numbered copy ("Verse Coder 2") in the
+    same group. Prefer ``ducky_send_chat_message`` when you already have the chat id.
     """
     text = _truncate_text(message.strip(), _MAX_MESSAGE_CHARS)
     if not text:
@@ -1250,30 +1270,48 @@ def ducky_spawn_chat(
             )
         raise ValueError("ducky is required")
 
+    root = _project_root()
+    caller_conv = load_conversation(caller, project_root=root) if caller else None
     hub_id = _resolve_group_hub_id(group_id=group_id, folder_id=folder_id)
     if not hub_id and folder_name.strip():
-        # Create a nested group beside the caller's current folder, then invite into it.
-        parent_folder = ""
-        if caller:
-            parent_conv = load_conversation(caller, project_root=_project_root())
-            if parent_conv is not None:
-                parent_folder = parent_conv.folder_id or ""
-        created = _panel_api().group_create(name=folder_name.strip(), folder_id=parent_folder)
+        parent_folder = (getattr(caller_conv, "folder_id", None) or "") if caller_conv else ""
+        created = _panel_api().group_find_or_create(
+            name=folder_name.strip(), folder_id=parent_folder, open_tab=False
+        )
         if not created.get("ok"):
             raise ValueError(str(created.get("error") or "group_create failed"))
         hub_id = str(created.get("id") or "").strip()
     if not hub_id:
-        raise ValueError(
-            "group_id is required (swarm seats only). "
-            "Call ducky_group_create first, put yourself in with ducky_group_add_member"
-            "(as_leader=true), then ducky_spawn_chat(group_id=…, ducky=…, message=…)."
+        hub_id = _caller_own_group(caller)
+    if not hub_id and caller_conv is not None:
+        # One group named after this chat. Leader is a pointer; the chat is not moved.
+        title = (getattr(caller_conv, "title", None) or "").strip() or "Group"
+        created = _panel_api().group_find_or_create(
+            name=title, folder_id=(caller_conv.folder_id or ""), open_tab=False
         )
+        if not created.get("ok"):
+            raise ValueError(str(created.get("error") or "group_create failed"))
+        hub_id = str(created.get("id") or "").strip()
+        hub = load_conversation(hub_id, project_root=root)
+        if hub is not None and not (getattr(hub, "leader_conv_id", None) or "").strip():
+            hub.leader_conv_id = caller
+            save_conversation(hub, root)
+    if not hub_id:
+        raise ValueError("No group to seat this ducky in.")
 
-    invite = ducky_group_invite(group_id=hub_id, ducky=ducky, write_allowed=write_allowed, pretty=False)
-    import json as _json
-
-    invite_data = _json.loads(invite) if isinstance(invite, str) else invite
-    member = invite_data.get("member") or {}
+    profile = _resolve_ducky_profile(ducky)
+    if profile is None:
+        raise ValueError(
+            f"No ducky named {ducky!r}. Call ducky_list_duckies to see available duckies."
+        )
+    if write_allowed is not None:
+        _require_lane_authority(hub_id)
+    seated = _panel_api().group_seat_profile(
+        hub_id, str(profile.get("id") or "").strip(), write_allowed=write_allowed
+    )
+    if not seated.get("ok"):
+        raise ValueError(str(seated.get("error") or "group_invite failed"))
+    member = seated.get("member") or {}
     conv_id = str(member.get("member_conv_id") or "").strip()
     if not conv_id:
         raise ValueError("group_invite did not return a member_conv_id")

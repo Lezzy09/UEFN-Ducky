@@ -117,11 +117,14 @@ def test_saved_profile_still_spawns_with_its_settings(monkeypatch):
 
 def test_profile_invite_resolves_its_own_model_without_bare_id_override(monkeypatch):
     api = Mock()
-    api.group_create.return_value = {"ok": True, "id": "nest", "folder_id": "folder"}
-    api.group_invite.return_value = {"ok": True, "member": {"member_conv_id": "worker"}}
+    api.group_seat_profile.return_value = {"ok": True, "member": {"member_conv_id": "worker"}}
     monkeypatch.setattr("backend.tools.panel.ducky_panel._panel_api", lambda: api)
 
-    out = runner._seat_agent_cluster({}, {}, {"id": "artist", "name": "Artist"}, {"model": "bare-model-id"})
+    out = runner._seat_agent_cluster(
+        {}, {"group_id": "run-group"}, {"id": "artist", "name": "Artist"}, {"model": "bare-model-id"}
+    )
 
     assert out["ok"] is True
-    api.group_invite.assert_called_once_with("nest", "artist", model="")
+    assert out["group_id"] == "run-group"
+    api.group_create.assert_not_called()
+    api.group_seat_profile.assert_called_once_with("run-group", "artist", model="")

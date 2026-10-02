@@ -1504,7 +1504,7 @@ def _ensure_pipeline_group(ctx: dict[str, Any], wf: dict[str, Any]) -> None:
     try:
         from backend.tools.panel.ducky_panel import _panel_api
 
-        created = _panel_api().group_create(
+        created = _panel_api().group_find_or_create(
             name=str(wf.get("name") or "Workflow"),
             folder_id=parent_folder,
             open_tab=False,
@@ -1521,9 +1521,10 @@ def _ensure_pipeline_group(ctx: dict[str, Any], wf: dict[str, Any]) -> None:
     if not hub_id:
         return
     # ponytail: leader pointer only — do not move the caller's chat into the hub.
+    # A reused group keeps the leader it already has.
     if caller:
         hub = load_conversation(hub_id)
-        if hub is not None:
+        if hub is not None and not (getattr(hub, "leader_conv_id", None) or "").strip():
             hub.leader_conv_id = caller
             save_conversation(hub)
 
@@ -1696,31 +1697,27 @@ def _seat_agent_cluster(
     profile: dict[str, Any],
     kwargs: dict[str, Any],
 ) -> dict[str, Any]:
-    title = str(cfg.get("title") or kwargs.get("ducky_name") or profile.get("name") or "Agent")
-    parent_folder = str(payload.get("group_folder_id") or "")
+    del kwargs  # the profile's own model; a node model override goes through group_seat_profile
+    if not str(payload.get("group_id") or "").strip():
+        _ensure_pipeline_group(payload, {"name": str(payload.get("workflow_name") or "Workflow")})
+    group_id = str(payload.get("group_id") or "").strip()
+    if not group_id:
+        return {"ok": False, "error": "workflow group_create failed"}
+    pid = str(profile.get("id") or "").strip()
     try:
         from backend.tools.panel.ducky_panel import _panel_api
 
-        api = _panel_api()
-        created = api.group_create(name=title, folder_id=parent_folder, open_tab=False)
+        seated = _panel_api().group_seat_profile(group_id, pid, model=str(cfg.get("model") or ""))
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
-    if not created.get("ok"):
-        return {"ok": False, "error": str(created.get("error") or "group_create failed")}
-    nest_id = str(created.get("id") or "").strip()
-    pid = str(profile.get("id") or "").strip()
-    try:
-        invited = api.group_invite(nest_id, pid, model=str(cfg.get("model") or ""))
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-    if not invited.get("ok"):
-        return {"ok": False, "error": str(invited.get("error") or "group_invite failed")}
-    member = invited.get("member") if isinstance(invited.get("member"), dict) else {}
+    if not seated.get("ok"):
+        return {"ok": False, "error": str(seated.get("error") or "group_invite failed")}
+    member = seated.get("member") if isinstance(seated.get("member"), dict) else {}
     return {
         "ok": True,
         "conv_id": str(member.get("member_conv_id") or ""),
-        "group_id": nest_id,
-        "group_folder_id": str(created.get("folder_id") or ""),
+        "group_id": group_id,
+        "group_folder_id": str(payload.get("group_folder_id") or ""),
     }
 
 

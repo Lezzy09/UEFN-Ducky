@@ -432,6 +432,9 @@ class _FakeGroups:
         self.created.append({"name": name, "folder_id": folder_id, "id": hid, "open_tab": open_tab})
         return {"ok": True, "id": hid, "folder_id": folder_id or f"folder-{self._n}"}
 
+    def group_find_or_create(self, name: str = "", folder_id: str = "", open_tab: bool = False):
+        return self.group_create(name=name, folder_id=folder_id, open_tab=open_tab)
+
     def group_add_member(self, group_id: str, conv_id: str, as_leader: bool = False):
         self.added.append((group_id, conv_id, as_leader))
         return {"ok": True, "leader_conv_id": conv_id if as_leader else ""}

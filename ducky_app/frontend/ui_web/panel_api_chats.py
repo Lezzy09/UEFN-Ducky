@@ -409,8 +409,112 @@ class PanelApiChatsMixin:
             "folder_id": hub_folder.id,
         }
 
+    def group_find_or_create(self, name: str = "", folder_id: str = "", open_tab: bool = False) -> dict[str, Any]:
+        """Reuse a live group of this name inside ``folder_id``, or create one.
+
+        Archived groups are skipped. The sidebar's own new-group button stays on
+        ``group_create``, so a person can still make a duplicate on purpose.
+        """
+        from frontend.archive_folder import is_archive_folder_id
+
+        title = (name or "").strip() or "Group"
+        parent = (folder_id or "").strip()
+        for folder in _pa.load_folders():
+            if (getattr(folder, "name", "") or "").strip() != title:
+                continue
+            if (getattr(folder, "parent_id", "") or "").strip() != parent:
+                continue
+            hub_id = (getattr(folder, "group_hub_id", None) or "").strip()
+            if not hub_id or is_archive_folder_id(folder.id) or is_archive_folder_id(parent):
+                continue
+            hub = _pa.load_conversation(hub_id)
+            if hub is None or not getattr(hub, "is_group", False):
+                continue
+            if is_archive_folder_id(getattr(hub, "folder_id", "") or ""):
+                continue
+            return {
+                "ok": True,
+                "id": hub.id,
+                "title": hub.title,
+                "is_group": True,
+                "leader_conv_id": (getattr(hub, "leader_conv_id", None) or "").strip(),
+                "group_members": getattr(hub, "group_members", None) or [],
+                "folder_id": folder.id,
+                "reused": True,
+            }
+        created = self.group_create(name=title, folder_id=parent, open_tab=open_tab)
+        if created.get("ok"):
+            created["reused"] = False
+        return created
+
+    def group_seat_profile(
+        self,
+        group_id: str,
+        profile_id: str,
+        model: str = "",
+        write_allowed: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Seat a ducky in a group, reusing its idle chat instead of a new group.
+
+        A busy copy (another node still running) gets the next name, "Verse Coder 2",
+        in the same group.
+        """
+        from frontend.agent_profiles import get_agent_profile
+        from frontend.ui_web.agent_modes import is_agent_running, wait_for_idle
+        from frontend.ui_web.group_orchestrator import group_members
+
+        group = _pa.load_conversation(group_id)
+        if not group or not getattr(group, "is_group", False):
+            return {"ok": False, "error": "Not a group chat"}
+        profile = get_agent_profile(profile_id)
+        if not profile:
+            return {"ok": False, "error": f"Unknown ducky profile: {profile_id}"}
+        pid = str(profile.get("id") or profile_id).strip()
+        members = group_members(group)
+        same = [m for m in members if m.get("profile_id") == pid and not m.get("is_group")]
+        for member in same:
+            cid = str(member.get("member_conv_id") or "").strip()
+            if not cid or _pa.load_conversation(cid) is None:
+                continue
+            # A finished turn's thread stays alive for a moment after the reply.
+            # That is not a parallel branch; wait it out before making a copy.
+            if is_agent_running(cid):
+                wait_for_idle(cid, 3.0)
+            if not is_agent_running(cid):
+                return {
+                    "ok": True,
+                    "member": member,
+                    "reused": True,
+                    "group_members": members,
+                    "leader_conv_id": (getattr(group, "leader_conv_id", None) or "").strip(),
+                }
+        base = str(profile.get("name") or "").strip() or "Ducky"
+        copy = ""
+        if same:
+            taken = {
+                str(m.get(key) or "").strip()
+                for m in members
+                for key in ("name", "ducky_name")
+            }
+            n = 2
+            copy = f"{base} {n}"
+            while copy in taken:
+                n += 1
+                copy = f"{base} {n}"
+        seated = self.group_invite(
+            group_id, pid, model=model, write_allowed=write_allowed, name=copy
+        )
+        if seated.get("ok"):
+            seated["reused"] = False
+        return seated
+
     def group_invite(
-        self, group_id: str, profile_id: str, model: str = "", write_allowed: list[str] | None = None
+        self,
+        group_id: str,
+        profile_id: str,
+        model: str = "",
+        write_allowed: list[str] | None = None,
+        name: str = "",
     ) -> dict[str, Any]:
         """Spawn an independent member chat from a ducky profile and add it to the group.
 
@@ -434,7 +538,9 @@ class PanelApiChatsMixin:
             return {"ok": False, "error": f"Unknown ducky profile: {profile_id}"}
         existing = group_members(group)
         pid = str(profile.get("id") or profile_id).strip()
-        if any(m.get("profile_id") == pid for m in existing):
+        # A copy name ("Verse Coder 2") is how a busy profile gets a second seat.
+        # The UI invite passes no name and still refuses a duplicate.
+        if not (name or "").strip() and any(m.get("profile_id") == pid for m in existing):
             return {"ok": False, "error": "That ducky is already in this group"}
         settings = _pa.PanelSettings.load()
         override = (model or "").strip()
@@ -449,7 +555,7 @@ class PanelApiChatsMixin:
         enabled_subs = profile.get("enabled_subskills")
         style = normalize_ducky_style(str(profile.get("ducky_style") or ""))
         # Library profile name (Verse Coder) — not avatar style label (Artist).
-        ducky_name = str(profile.get("name") or "").strip() or ducky_style_label(style)
+        ducky_name = (name or "").strip() or str(profile.get("name") or "").strip() or ducky_style_label(style)
         folder_id = _group_folder_id(group_id) or (group.folder_id or "").strip()
         if not folder_id:
             return {"ok": False, "error": "Group has no folder"}
