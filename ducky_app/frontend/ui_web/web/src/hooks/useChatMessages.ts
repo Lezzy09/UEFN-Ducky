@@ -11,6 +11,7 @@ import {
   isRunActive,
   type RunState,
 } from "./chatRun/chatRunReducer";
+import { installBackgroundRuns, markChatMounted, snapshotOf } from "./chatRun/backgroundRuns";
 import { markChatTurnIdle, markChatTurnRunning } from "./chatTurnTimer";
 import { prefixSpeaker } from "../utils/agentActivity";
 
@@ -41,6 +42,8 @@ const RECONCILE_GRACE_MS = 15000;
 function initFromCache(arg: { chatId: string; externalRunning: boolean }): RunState {
   const cached = getCachedChatMessages(arg.chatId);
   if (!cached) return { ...initialRunState, externalRunning: arg.externalRunning };
+  // Kept current by backgroundRuns while the tab was away.
+  if (cached.run) return { ...cached.run, externalRunning: arg.externalRunning };
   return {
     ...initialRunState,
     externalRunning: arg.externalRunning,
@@ -65,6 +68,13 @@ export function useChatMessages(chatId: string, visible: boolean, isAgentRunning
   stateRef.current = state;
 
   const loadSeqRef = useRef(0);
+
+  // While this pane is mounted it applies the chat's events itself; once it is
+  // gone backgroundRuns keeps the cached run state current (see backgroundRuns.ts).
+  useEffect(() => {
+    installBackgroundRuns();
+    return markChatMounted(chatId);
+  }, [chatId]);
 
   // The single load path: fetch the whole conversation, hand it to the reducer,
   // which decides merge-vs-replace based on whether a run is in flight.
@@ -187,27 +197,8 @@ export function useChatMessages(chatId: string, visible: boolean, isAgentRunning
   // Mirror the live view into the cache so a tab switch / hidden→visible pane
   // restores instantly (the backend file stays the source of truth).
   useEffect(() => {
-    setCachedChatMessages(chatId, {
-      messages: state.messages,
-      streamBuffer: state.stream,
-      streamThinking: state.thinking,
-      optimisticRunning: state.status !== "idle",
-      hasNewBelow: state.hasNewBelow,
-      isAtBottom: state.atBottom,
-      activeRunId: state.runId,
-      stoppedRun: state.stopped,
-    });
-  }, [
-    chatId,
-    state.messages,
-    state.stream,
-    state.thinking,
-    state.status,
-    state.hasNewBelow,
-    state.atBottom,
-    state.runId,
-    state.stopped,
-  ]);
+    setCachedChatMessages(chatId, snapshotOf(state));
+  }, [chatId, state]);
 
   // Single live path: every agent event for this chat becomes one reducer action.
   // dispatch is stable, so this subscription is installed once and never churns.

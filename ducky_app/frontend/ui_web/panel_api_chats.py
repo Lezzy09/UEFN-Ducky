@@ -1063,7 +1063,7 @@ class PanelApiChatsMixin:
         conv = _pa.load_conversation(conv_id)
         if not conv:
             return []
-        rows = _pa._messages_to_ui(conv)
+        rows = _pa._messages_to_ui(conv, live=conv_id in self.list_running_agents())
         if limit is None and before_id is None:
             return rows
         if before_id is not None:

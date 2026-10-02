@@ -463,7 +463,14 @@ def _tool_result_text(result: dict[str, Any] | None) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-def _messages_to_ui(conv, project_root: str | None = None) -> list[dict[str, Any]]:
+def _messages_to_ui(conv, project_root: str | None = None, *, live: bool = False) -> list[dict[str, Any]]:
+    """Stored conversation → flat UI rows.
+
+    ``live``: the conversation's run is still going. Its last assistant message is
+    then the crash-safe checkpoint (``incomplete``) of a turn in progress, not an
+    interrupted one: no "Interrupted" flag, and tool calls without a result yet stay
+    running instead of showing as failed ``· pending ·`` rows.
+    """
     from frontend.settings import PanelSettings
     from frontend.ui_web.conversation_attachments import hydrate_attachment_dicts
     from frontend.ui_web.project_chats import get_conversations_dir
@@ -472,7 +479,8 @@ def _messages_to_ui(conv, project_root: str | None = None) -> list[dict[str, Any
     conv_dir = get_conversations_dir(root)
     out: list[dict[str, Any]] = []
     i = 0
-    for m in conv.messages:
+    last_index = len(conv.messages) - 1
+    for index, m in enumerate(conv.messages):
         role = m.get("role", "user")
         if role == "user":
             row: dict[str, Any] = {"id": i, "role": "user", "text": m.get("text", m.get("content", ""))}
@@ -483,6 +491,12 @@ def _messages_to_ui(conv, project_root: str | None = None) -> list[dict[str, Any
             i += 1
             continue
         if role == "assistant":
+            in_flight = (
+                live
+                and index == last_index
+                and bool(m.get("incomplete"))
+                and not str(m.get("error") or "").strip()
+            )
             for block in m.get("blocks") or []:
                 btype = block.get("type")
                 if btype == "thinking":
@@ -521,6 +535,8 @@ def _messages_to_ui(conv, project_root: str | None = None) -> list[dict[str, Any
                 )
                 i += 1
                 status = block.get("status", "?")
+                if in_flight and status == "pending":
+                    continue  # still running: the tool row above shows it in progress
                 ms = int(block.get("duration_ms", 0) or 0)
                 done_role = "success" if status == "success" else "error"
                 block_result = block.get("result") if isinstance(block.get("result"), dict) else {}
@@ -572,13 +588,13 @@ def _messages_to_ui(conv, project_root: str | None = None) -> list[dict[str, Any
                         "color": str(author.get("color") or "").strip(),
                         "profile_id": str(author.get("profile_id") or "").strip(),
                     }
-                if m.get("incomplete"):
+                if m.get("incomplete") and not in_flight:
                     row_asst["incomplete"] = True
                     if isinstance(m.get("error"), str) and m["error"].strip():
                         row_asst["error"] = m["error"]
                 out.append(row_asst)
                 i += 1
-            elif m.get("incomplete"):
+            elif m.get("incomplete") and not in_flight:
                 # Crashed turn whose final step produced no answer/reasoning of
                 # its own (it's all in the interleaved blocks above) — still show
                 # the interruption so it never silently disappears.

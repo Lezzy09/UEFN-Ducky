@@ -80,3 +80,36 @@ def test_external_failed_turn_keeps_steps_and_interruption():
     # The interruption row survives with its error.
     assert rows[2]["incomplete"] is True
     assert rows[2]["error"] == "Cancelled"
+
+
+def _checkpoint() -> list[dict]:
+    """A coding agent mid-turn: the crash-safe checkpoint, one tool still running."""
+    return [
+        {"role": "user", "content": "Inspect Tycoony"},
+        {
+            "role": "assistant",
+            "content": "",
+            "run_id": "run-1",
+            "incomplete": True,
+            "blocks": [
+                {"type": "text", "text": "I'll open the file."},
+                {"type": "tool_call", "name": "workspace_list_verse_errors", "arguments": {"server": "uefn"},
+                 "status": "pending", "result": {"ok": False, "data": "", "hint": ""}},
+            ],
+        },
+    ]
+
+
+def test_live_turn_is_not_shown_as_interrupted():
+    # Reopening a tab while the agent works used to show "Interrupted before finishing"
+    # and "Interrupted: ⚙ … · pending · 0ms" for a run that was still going.
+    rows = _messages_to_ui(_conv(_checkpoint()), project_root="", live=True)
+    assert [r["role"] for r in rows] == ["user", "assistant", "tool"]
+    assert rows[2]["tool"]["status"] == "pending"
+    assert not any(r.get("incomplete") for r in rows)
+
+
+def test_dead_turn_still_shows_the_interruption():
+    rows = _messages_to_ui(_conv(_checkpoint()), project_root="", live=False)
+    assert rows[-1].get("incomplete") is True
+    assert any(r["role"] == "error" and "pending" in r["text"] for r in rows)

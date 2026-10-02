@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../types/panel";
+import type { RunState } from "./chatRun/chatRunReducer";
 
 /**
  * In-memory snapshot of a chat's live view, so switching tabs (or a hidden pane
@@ -14,6 +15,9 @@ export interface CachedChatMessagesState {
   isAtBottom: boolean;
   activeRunId: string | null;
   stoppedRun: boolean;
+  /** The pane's whole run state. While the tab is not mounted, backgroundRuns keeps
+   *  applying the chat's agent events to it, so reopening shows where the run is now. */
+  run?: RunState;
 }
 
 const MAX_CACHED_CHATS = 24;

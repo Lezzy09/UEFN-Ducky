@@ -104,28 +104,50 @@ function contentSig(m: ChatMessage): string {
   return `${m.role}\u0000${m.text ?? ""}\u0000${m.tool?.name ?? ""}\u0000${attach}`;
 }
 
-/** While a run is live, keep the optimistic tail on screen and only fold in
- *  committed rows we don't already have.
+function isOptimistic(m: ChatMessage): boolean {
+  return String(m.id).startsWith("opt-");
+}
+
+/** While a run is live, keep the live (optimistic) tail on screen and take
+ *  everything before it from the backend, in the backend's order.
  *
- *  Optimistic rows carry transient "opt-N" ids that never match the backend's
- *  numeric ids, so a mid-run reload (e.g. a `context_changed` fired right after
- *  send, once the backend has persisted the user message) would fold in a SECOND
- *  copy of a message already on screen — two identical user bubbles. Guard the
- *  id check with a content fingerprint of the optimistic rows so the canonical
- *  twin is recognised as already-present and skipped. The next idle reload
- *  replaces the whole tail with the canonical rows, retiring the opt ids. */
+ *  The live tail is the trailing run of "opt-N" rows this pane built from send()
+ *  and agent events. The backend's copy of the turn in flight (a coding agent's
+ *  crash-safe checkpoint) lags behind that tail and is skipped; the next idle
+ *  reload replaces everything with the canonical rows.
+ *
+ *  This used to prepend every backend row the pane didn't have. A tab that came
+ *  back mid-run then showed the agent's newer output ABOVE the user's message,
+ *  and each reload stacked another copy of the checkpoint, whose row ids shift as
+ *  it grows. */
 export function mergeCommitted(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
-  const seen = new Set(existing.map((m) => String(m.id)));
-  const optimisticSigs = new Set(
-    existing
-      .filter((m) => String(m.id).startsWith("opt-") && (m.text?.trim() || m.attachments?.length))
-      .map(contentSig),
-  );
-  const missing = incoming.filter(
-    (m) => !seen.has(String(m.id)) && !optimisticSigs.has(contentSig(m)),
-  );
-  if (missing.length === 0) return existing;
-  return [...missing, ...existing];
+  let tailStart = existing.length;
+  while (tailStart > 0 && isOptimistic(existing[tailStart - 1])) tailStart--;
+  const tail = existing.slice(tailStart);
+  if (tail.length === 0) return incoming.length ? incoming : existing;
+
+  let lastUser = -1;
+  for (let i = incoming.length - 1; i >= 0; i--) {
+    if (incoming[i].role === "user") {
+      lastUser = i;
+      break;
+    }
+  }
+  if (tail[0].role === "user") {
+    // This pane sent the turn. Once the backend has saved that message, use its
+    // copy and the live rows after it; until then the backend only has history.
+    // (A matching fingerprint stops a second copy of the same user bubble.)
+    if (lastUser >= 0 && contentSig(incoming[lastUser]) === contentSig(tail[0])) {
+      return [...incoming.slice(0, lastUser + 1), ...tail.slice(1)];
+    }
+    return [...incoming, ...tail];
+  }
+  // A run this pane didn't send (a group hub's prompt, or one started while the
+  // tab was in the background): the backend holds its prompt. Keep rows up to
+  // that prompt, plus any later rows already on screen, then the live tail.
+  const onScreen = new Set(existing.slice(0, tailStart).map((m) => String(m.id)));
+  const kept = incoming.filter((m, i) => i <= lastUser || onScreen.has(String(m.id)));
+  return [...kept, ...tail];
 }
 
 /** A late event belongs to the current run when: we haven't been stopped, and it
