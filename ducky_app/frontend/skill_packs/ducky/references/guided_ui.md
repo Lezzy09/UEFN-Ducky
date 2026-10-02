@@ -47,6 +47,33 @@ ducky_ui_show(target, title, body="", workflow_id="", navigate="", item_id="",
   with `ducky_ui_list_targets` and try again. `deferred: true` = the user turned off
   "Let Ducky show me things"; the chat button is still there.
 
+### Spotlight in UEFN or another program
+
+Same tool. Pass `window` and `box` instead of a panel target. It darkens every
+monitor, leaves a hole on that control, and blocks every other click until they
+press it, press Close, or press Esc.
+
+```
+ducky_ui_show(window="uefn", box={"x": 0.02, "y": 0.01, "w": 0.12, "h": 0.04},
+  title="Compile", body="Builds your Verse.", click=true)
+```
+
+1. Open the tab first. `open_asset_in_uefn` for a Blueprint, Widget or material.
+   `uefn_window_click` for a menu or a tab that is not an asset.
+2. `uefn_window_capture` and look at the image.
+3. `box` is `{x, y, w, h}` as fractions of that image (0 to 1), the same units as
+   `uefn_window_click`. `window` is `"uefn"`, a title pattern (`"Blender"`), or an hwnd.
+4. The result image has the box drawn on it. If it missed, call again with a better box.
+5. `click: true` hides Next. The step moves on only when they click the hole, and
+   that click reaches the real control. `steps` works the same way (all window steps,
+   or all in-app steps, not a mix). `wait: true` returns `reason` (`done`, `close`,
+   `esc`) and `step`.
+
+The hole follows the window onto another monitor. Resizing keeps the box pinned to
+the nearest corner. Plugins call `api.spotlight(...)` with the same fields. Workflows
+use the **Spotlight** node (`ui.spotlight`), and can start from **Spotlight step**
+(`spotlight.step`) or **Spotlight closed** (`spotlight.closed`).
+
 ### Where things are (routes and targets)
 
 | The user asks about | navigate | item_id | target |

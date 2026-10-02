@@ -743,6 +743,19 @@ def start_panel_ui_server(dist_root: Path) -> str:
                         # No React panel in this process to answer the request.
                         self._send_json(200, {"result": {"error": "panel not open"}})
                         return
+                    # Desktop spotlight is drawn by Tk, not React. Answer the same
+                    # pending slot so wait=true blocks until the user closes it.
+                    if method == "window_show":
+                        from frontend.ui_web.window_spotlight import begin_window_show
+
+                        request_id, _event = ui_rpc.submit(method, params)
+                        begin_window_show(request_id, params)
+                        result = ui_rpc.wait(request_id, _RPC_HANDLER_WAIT_S)
+                        if result is None:
+                            self._send_json(200, {"pending": True, "request_id": request_id})
+                        else:
+                            self._send_json(200, {"result": result})
+                        return
                     window = ui_rpc.window_for(method)
                     request_id, event = ui_rpc.submit(method, {**params, "_for_client": window} if window else params)
                     push(event)

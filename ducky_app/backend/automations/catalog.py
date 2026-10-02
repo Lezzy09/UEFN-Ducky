@@ -224,6 +224,58 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         ],
     },
     {
+        "type": "spotlight.step",
+        "label": "Spotlight step",
+        "group": "Starting",
+        "role": "starter",
+        "description": "Runs when a desktop spotlight reaches a step (Next, or a click in the hole). Payload: step, total, clicked, window.",
+        "config_fields": [
+            {"id": "window", "label": "Only this window title (optional, exact)", "type": "string"},
+        ],
+    },
+    {
+        "type": "spotlight.closed",
+        "label": "Spotlight closed",
+        "group": "Starting",
+        "role": "starter",
+        "description": "Runs when a desktop spotlight ends. Payload: reason (done, close, esc), step, total, window.",
+        "config_fields": [
+            {"id": "window", "label": "Only this window title (optional, exact)", "type": "string"},
+            {"id": "reason", "label": "Only this reason (done, close, esc)", "type": "string"},
+        ],
+    },
+    {
+        "type": "ui.spotlight",
+        "label": "Spotlight",
+        "group": "Utility",
+        "role": "action",
+        "description": (
+            "Darkens the desktop and highlights one control in UEFN or another program. "
+            "x, y, w, h are fractions of that window (0 to 1). Blocks every click except the hole. "
+            "Waits until they finish unless Wait is off."
+        ),
+        "inputs": [
+            {"id": "title", "label": "Title", "type": "text"},
+            {"id": "body", "label": "Explanation", "type": "text"},
+        ],
+        "outputs": [
+            {"id": "reason", "label": "Reason", "type": "text"},
+            {"id": "step", "label": "Step", "type": "number"},
+        ],
+        "config_fields": [
+            {"id": "window", "label": "Window (uefn, a title, or hwnd)", "type": "string"},
+            {"id": "x", "label": "X (0 to 1)", "type": "number"},
+            {"id": "y", "label": "Y (0 to 1)", "type": "number"},
+            {"id": "w", "label": "Width (0 to 1)", "type": "number"},
+            {"id": "h", "label": "Height (0 to 1)", "type": "number"},
+            {"id": "title", "label": "Title", "type": "string"},
+            {"id": "body", "label": "Explanation", "type": "textarea"},
+            {"id": "click", "label": "Continue only when they click the highlight", "type": "boolean"},
+            {"id": "wait", "label": "Wait until they close it", "type": "boolean"},
+            {"id": "steps", "label": "Steps JSON (optional; replaces x/y/w/h)", "type": "textarea"},
+        ],
+    },
+    {
         "type": "notify.message",
         "label": "Message me",
         "group": "Utility",

@@ -2,6 +2,12 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const windowReplay = vi.hoisted(() => vi.fn(async () => ({ ok: true, shown: true })));
+
+vi.mock("../../../hooks/usePanelApi", () => ({
+  getApi: () => ({ window_spotlight_replay: windowReplay }),
+}));
+
 vi.mock("../../../showme/ShowMeService", async (original) => ({
   ...(await original<typeof import("../../../showme/ShowMeService")>()),
   playShowMe: vi.fn(async () => ({ ok: true, shown: true, missing: false, target: "x" })),
@@ -26,6 +32,15 @@ describe("Show me card", () => {
     expect(screen.getByText("Runs the workflow now.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Show me/ }));
     await waitFor(() => expect(playShowMe).toHaveBeenCalledWith(expect.objectContaining({ target: "workflows.toolbar.run", title: "Test" })));
+  });
+
+  it("replays a window spotlight on the desktop, not inside the panel", async () => {
+    const args = { window: "uefn", box: { x: 0.1, y: 0.2, w: 0.3, h: 0.1 }, title: "Compile", body: "Builds Verse." };
+    render(<ShowMeBody toolName="ducky_ui_show" args={args} resultText='{"ok":true,"shown":true}' {...base} />);
+    expect(screen.getByText("Compile")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Show me/ }));
+    await waitFor(() => expect(windowReplay).toHaveBeenCalledWith(args));
+    expect(playShowMe).not.toHaveBeenCalled();
   });
 
   it("reads ducky_ui_show's plain arguments: a name with role, more ids, an action", () => {

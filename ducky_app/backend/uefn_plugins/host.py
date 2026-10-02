@@ -2857,6 +2857,30 @@ class _PluginApi:
 
         return emit_trigger(trigger_id, payload or {})
 
+    def spotlight(
+        self,
+        *,
+        window: str = "uefn",
+        box: dict[str, Any] | None = None,
+        title: str = "",
+        body: str = "",
+        steps: list[dict[str, Any]] | None = None,
+        click: bool = False,
+        wait: bool = False,
+    ) -> dict[str, Any]:
+        """Spotlight a control in UEFN or another program. Same call as ``ducky_ui_show``.
+
+        ``window`` is ``"uefn"``, a title pattern, or an hwnd. ``box`` is
+        ``{x, y, w, h}`` as fractions of that window (0 to 1). The desktop dims
+        and only the hole can be clicked. ``wait`` blocks until the user closes it
+        and returns ``reason`` (``done``, ``close``, or ``esc``) and ``step``.
+        """
+        from backend.tools.panel.panel_ui import show
+
+        return show(
+            window=window, box=box, title=title, body=body, steps=steps, click=click, wait=wait,
+        )
+
     def register_panel_rpc(self, name: str, fn: Any) -> None:
         """Register a PanelApi / bridge method: ``plugin_call(plugin_id, name, params)``.
 

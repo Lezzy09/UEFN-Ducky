@@ -1,7 +1,24 @@
 import { useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { getApi } from "../../../hooks/usePanelApi";
 import { Icons } from "../../../icons/Icons";
 import { parseShowMeRequest, playShowMe, type ShowMeRequest } from "../../../showme/ShowMeService";
 import type { ToolCardBodyProps } from "../toolCardTypes";
+
+function hasBox(row: unknown): row is Record<string, unknown> {
+  return !!row && typeof row === "object" && !Array.isArray(row) && !!(row as { box?: unknown }).box && typeof (row as { box?: unknown }).box === "object";
+}
+
+/** A Show me aimed at UEFN or another program (a fraction box, not a panel id). */
+function windowSpotlightRequest(args: Record<string, unknown>): ShowMeRequest | null {
+  const listed = Array.isArray(args.steps) ? args.steps.filter(hasBox) : [];
+  if (!hasBox(args) && !listed.length) return null;
+  const first = hasBox(args) ? args : listed[0];
+  const title = String(args.title || first.title || first.body || "In this window").trim();
+  const body = String((hasBox(args) ? args.body : first.body) || "").trim();
+  const count = (hasBox(args) ? 1 : 0) + (Array.isArray(args.steps) ? args.steps.length : 0);
+  const steps = count > 1 ? Array.from({ length: count }, () => ({ target: "window", title, body })) : undefined;
+  return { target: "window", title, body, ...(steps ? { steps } : {}), windowSpotlight: args };
+}
 
 /** One step of ducky_ui_show's plain arguments (target id, or role + name, also, action + action_args). */
 function flatStep(args: Record<string, unknown>): Record<string, unknown> {
@@ -38,7 +55,7 @@ export function showMeLabel(request: ShowMeRequest): string {
 
 /** The Show me a tool call stands for: ducky_ui_show's own arguments, or show_workflow's nodes. */
 export function showMeRequestFromTool(toolName: string, args: Record<string, unknown>): ShowMeRequest | null {
-  if (toolName === "ducky_ui_show") return fromShowArgs(args);
+  if (toolName === "ducky_ui_show") return windowSpotlightRequest(args) ?? fromShowArgs(args);
   if (toolName !== "show_workflow") return null;
   const workflowId = String(args.workflow_id || "").trim();
   if (!workflowId) return null;
@@ -57,6 +74,16 @@ export function showMeRequestFromTool(toolName: string, args: Record<string, unk
 
 /** Play it again from the chat (the window you pressed it in). */
 export async function replayShowMe(request: ShowMeRequest): Promise<string> {
+  if (request.windowSpotlight) {
+    const replay = getApi()?.window_spotlight_replay;
+    if (!replay) return "Show me needs the desktop app";
+    try {
+      const out = await replay(request.windowSpotlight);
+      return out?.error ? String(out.error) : "";
+    } catch (err) {
+      return err instanceof Error ? err.message : "Couldn't show it";
+    }
+  }
   const out = await playShowMe(request);
   if (out.error) return out.error;
   return out.missing ? "Can't find it on screen right now" : "";

@@ -469,6 +469,7 @@ _PUBLIC_METHODS = frozenset({
     'voice_win_stt_stop',
     'wait_for_agent_idle',
     'window_box',
+    'window_spotlight_replay',
     'window_input',
     'write_project_file',
     'write_task_artifact'

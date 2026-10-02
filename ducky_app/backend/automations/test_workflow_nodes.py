@@ -683,6 +683,28 @@ def test_paid_nodes_list_their_backends(tools):
     assert {f["id"] for f in rows["mesh.generate"]["config_fields"]} >= {"backend", "spend"}
 
 
+def test_ui_spotlight_calls_show_and_starters_filter(monkeypatch):
+    seen = {}
+
+    def fake_show(**kwargs):
+        seen.update(kwargs)
+        return {"ok": True, "reason": "esc", "step": 2}
+
+    monkeypatch.setattr("backend.tools.panel.panel_ui.show", fake_show)
+    out = runner._spotlight_node(
+        {"window": "uefn", "x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4, "title": "Hi", "body": "There", "wait": False},
+        {},
+        {},
+    )
+    assert out["outputs"] == {"reason": "esc", "step": 2}
+    assert seen["box"] == {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4} and seen["wait"] is False
+    assert "ui.spotlight" in runner._DATA_HANDLERS
+    assert runner._node_matches_trigger({"type": "spotlight.step", "config": {}}, "spotlight.step", {"window": "UEFN"})
+    assert runner._node_matches_trigger(
+        {"type": "spotlight.closed", "config": {"reason": "esc"}}, "spotlight.closed", {"reason": "close"}
+    ) is False
+
+
 def test_every_catalog_node_has_a_test():
     """A new node type must come with a test that names it."""
     here = Path(__file__).parent

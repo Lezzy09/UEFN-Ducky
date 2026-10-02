@@ -10,6 +10,27 @@ import frontend.ui_web.panel_api as _pa
 class PanelApiWindowMixin:
     def bind_tk_root(self, root: Any) -> None:
         self._tk_root = root
+        from frontend.ui_web.window_spotlight import bind_root
+
+        bind_root(root)
+
+    def window_spotlight_replay(self, args: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Play a window Show me again from the chat button. Does not wait for Close."""
+        from backend.tools.panel.panel_ui import show
+
+        raw = dict(args or {})
+        steps = raw.get("steps") if isinstance(raw.get("steps"), list) else None
+        box = raw.get("box") if isinstance(raw.get("box"), dict) else None
+        return show(
+            target=str(raw.get("target") or ""),
+            title=str(raw.get("title") or ""),
+            body=str(raw.get("body") or ""),
+            steps=steps,
+            window=str(raw.get("window") or ""),
+            box=box,
+            click=raw.get("click") is True,
+            wait=False,
+        )
 
     def bind_window(self, window: Any, *, on_hide: Any, on_exit: Any) -> None:
         self._window = window

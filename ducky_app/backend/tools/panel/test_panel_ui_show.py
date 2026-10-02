@@ -88,6 +88,51 @@ def test_show_me_plays_several_steps(rpc):
     assert "steps" not in rpc[-1][1] and rpc[-1][1]["action"] == {"id": "files.reveal", "args": {"path": "x"}}
 
 
+def test_show_me_on_a_window(rpc, monkeypatch):
+    def prep(steps, default_window):
+        assert default_window == "uefn"
+        assert steps[0]["box"] == {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.1}
+        return {
+            "rpc": {"hwnd": 5, "window": "UEFN", "steps": [{"title": step["title"], "hwnd": 5} for step in steps]},
+            "preview": {},
+        }
+
+    monkeypatch.setattr("frontend.ui_web.window_spotlight.prepare_window_show", prep)
+    out = json.loads(panel_ui.ducky_ui_show(
+        window="uefn", box={"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.1}, title="Compile", body="Builds Verse.",
+    ))
+    assert out["ok"] is True and out["steps"] == 1
+    method, params, timeout = rpc[-1]
+    assert method == "window_show" and timeout == panel_ui._SHOW_WAIT_S
+    assert params["hwnd"] == 5 and params["wait"] is False and params["steps"][0]["title"] == "Compile"
+
+    mixed = json.loads(panel_ui.ducky_ui_show(steps=[
+        {"target": "a.b", "title": "In the app"},
+        {"box": {"x": 0, "y": 0, "w": 0.1, "h": 0.1}, "title": "Outside"},
+    ]))
+    assert "not both" in mixed["error"]
+    assert len(rpc) == 1
+    bad = json.loads(panel_ui.ducky_ui_show(box={"x": 0}, title="Nope"))
+    assert bad["error"].startswith("box needs")
+
+
+def test_plugin_spotlight_uses_the_same_show(monkeypatch):
+    from backend.uefn_plugins.host import _PluginApi
+
+    seen: dict[str, Any] = {}
+
+    def fake_show(**kwargs):
+        seen.update(kwargs)
+        return {"ok": True, "shown": True}
+
+    monkeypatch.setattr(panel_ui, "show", fake_show)
+    out = _PluginApi("blender").spotlight(
+        window="Blender", box={"x": 0, "y": 0, "w": 0.2, "h": 0.2}, title="Add", body="A cube",
+    )
+    assert out["ok"] is True
+    assert seen["window"] == "Blender" and seen["title"] == "Add" and seen["box"]["w"] == 0.2
+
+
 def test_show_me_steps_say_which_one_is_wrong(rpc):
     assert json.loads(panel_ui.ducky_ui_show(steps=[]))["error"].startswith("target is required")
     bad = json.loads(panel_ui.ducky_ui_show(steps=[{"target": "a", "title": "x"}, {"target": "b"}]))

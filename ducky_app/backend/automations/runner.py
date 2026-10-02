@@ -354,6 +354,7 @@ _ACTION_TYPES = frozenset(
         "uefn.log.expect",
         "fortnite.servers",
         "notify.message",
+        "ui.spotlight",
     }
 )
 
@@ -1311,8 +1312,40 @@ _DATA_HANDLERS: dict[str, Any] = {
     "blender.open": lambda cfg, inputs, _payload: media.open_in_blender(cfg, inputs),
     "fortnite.servers": lambda cfg, _inputs, _payload: servers.wait_for_servers(cfg, cancelled=_cancelled),
     "notify.message": notify.message_me,
+    "ui.spotlight": lambda cfg, inputs, payload: _spotlight_node(cfg, inputs, payload),
     **listops.HANDLERS,
 }
+
+
+def _spotlight_node(cfg: dict[str, Any], inputs: dict[str, Any], _payload: dict[str, Any]) -> dict[str, Any]:
+    """Desktop spotlight. Same function as ducky_ui_show and api.spotlight."""
+    import json as _json
+
+    from backend.tools.panel.panel_ui import show
+
+    kwargs: dict[str, Any] = {
+        "window": str(inputs.get("window") or cfg.get("window") or "uefn"),
+        "title": str(inputs.get("title") or cfg.get("title") or ""),
+        "body": str(inputs.get("body") or cfg.get("body") or ""),
+        "click": bool(cfg.get("click")),
+        "wait": cfg.get("wait", True) not in (False, 0, "0", "false"),
+    }
+    raw_steps = str(cfg.get("steps") or "").strip()
+    if raw_steps:
+        parsed = _json.loads(raw_steps)
+        if not isinstance(parsed, list):
+            raise ValueError("steps must be a JSON list")
+        kwargs["steps"] = parsed
+    else:
+        kwargs["box"] = {"x": cfg.get("x"), "y": cfg.get("y"), "w": cfg.get("w"), "h": cfg.get("h")}
+    out = show(**kwargs)
+    if not isinstance(out, dict) or out.get("error"):
+        raise ValueError(str((out or {}).get("error") or "spotlight failed"))
+    return {
+        "ok": True,
+        "outputs": {"reason": str(out.get("reason") or ""), "step": out.get("step") or 1},
+        "result": out,
+    }
 
 
 def _prompt_ducky(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:

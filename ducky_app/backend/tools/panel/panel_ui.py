@@ -249,7 +249,27 @@ def ducky_ui_list_targets(route: str = "", query: str = "", visible_only: bool =
 
 
 def _show_step(raw: dict[str, Any]) -> dict[str, Any] | str:
-    """One Show me step from flat fields (target/role/within/also/navigate/…), or an error."""
+    """One Show me step from flat fields (target/role/within/also/navigate/…), or an error.
+
+    A ``box`` makes it a desktop spotlight on another program's window instead of
+    a control inside the panel.
+    """
+    if raw.get("box") is not None:
+        from frontend.ui_web.window_spotlight import clean_box
+
+        box = clean_box(raw.get("box"))
+        if not box:
+            return "box needs x, y, w, h as fractions of the window (0 to 1)"
+        title_s, body_s = str(raw.get("title") or "").strip(), str(raw.get("body") or "").strip()
+        if not title_s and not body_s:
+            return "say what it is: title (and body) are required"
+        step: dict[str, Any] = {"box": box, "title": title_s or body_s[:60], "body": body_s}
+        if raw.get("click") is True:
+            step["click"] = True
+        window = str(raw.get("window") or "").strip()
+        if window:
+            step["window"] = window
+        return step
     name = str(raw.get("target") or "").strip() if not isinstance(raw.get("target"), dict) else ""
     kind = str(raw.get("role") or "").strip().lower()
     first: str | dict[str, Any] | None
@@ -274,7 +294,7 @@ def _show_step(raw: dict[str, Any]) -> dict[str, Any] | str:
     route = str(raw.get("navigate") or "").strip()
     if route and route not in _ROUTES:
         return f"unknown route: {route}"
-    step: dict[str, Any] = {
+    step = {
         "target": targets[0] if len(targets) == 1 else targets,
         "title": title_s or body_s[:60],
         "body": body_s,
@@ -300,6 +320,123 @@ def _show_step(raw: dict[str, Any]) -> dict[str, Any] | str:
     return step
 
 
+def _show_fields(
+    *,
+    target: str,
+    title: str,
+    body: str,
+    workflow_id: str,
+    navigate: str,
+    item_id: str,
+    action: str,
+    action_args: dict[str, Any] | None,
+    also: list[str] | None,
+    role: str,
+    within: str,
+    window: str,
+    box: dict[str, Any] | None,
+    click: bool,
+) -> dict[str, Any]:
+    raw: dict[str, Any] = {
+        "target": target, "title": title, "body": body, "workflow_id": workflow_id,
+        "navigate": navigate, "item_id": item_id, "action": action,
+        "action_args": action_args, "also": also, "role": role, "within": within,
+    }
+    if box is not None:
+        raw["box"] = box
+        if window:
+            raw["window"] = window
+    if click:
+        raw["click"] = True
+    return raw
+
+
+def _finish_show(out: dict[str, Any], count: int) -> dict[str, Any]:
+    if not out.get("error"):
+        return {**out, "ok": out.get("ok", True), "steps": count}
+    return out
+
+
+def _show_on_window(plan: list[dict[str, Any]], window: str, wait: bool) -> dict[str, Any]:
+    """Desktop spotlight. ``plan`` steps all carry a fraction ``box``."""
+    from frontend.ui_web.window_spotlight import prepare_window_show
+
+    prepared = prepare_window_show(plan, (window or "uefn").strip() or "uefn")
+    if prepared.get("error"):
+        return {"error": str(prepared["error"])}
+    rpc = dict(prepared.get("rpc") or {})
+    rpc["wait"] = bool(wait)
+    out = panel_rpc("window_show", rpc, timeout=_SHOW_CLOSE_WAIT_S if wait else _SHOW_WAIT_S)
+    if not isinstance(out, dict):
+        return {"error": "spotlight failed"}
+    if out.get("error"):
+        return out
+    preview = prepared.get("preview") if isinstance(prepared.get("preview"), dict) else {}
+    return _finish_show({**preview, **out}, len(plan))
+
+
+def show(
+    *,
+    target: str = "",
+    title: str = "",
+    body: str = "",
+    workflow_id: str = "",
+    navigate: str = "",
+    item_id: str = "",
+    action: str = "",
+    action_args: dict[str, Any] | None = None,
+    also: list[str] | None = None,
+    role: str = "",
+    within: str = "",
+    steps: list[dict[str, Any]] | None = None,
+    wait: bool = False,
+    window: str = "",
+    box: dict[str, Any] | None = None,
+    click: bool = False,
+) -> dict[str, Any]:
+    """Show me, in the app or on another program's window. Returns a result dict.
+
+    The MCP tool, ``api.spotlight`` and the ``ui.spotlight`` workflow node all
+    call this, so they behave the same.
+    """
+    plan: list[dict[str, Any]] = []
+    if (target or "").strip() or box is not None or (role or "").strip():
+        first = _show_step(_show_fields(
+            target=target, title=title, body=body, workflow_id=workflow_id,
+            navigate=navigate, item_id=item_id, action=action, action_args=action_args,
+            also=also, role=role, within=within, window=window, box=box, click=click,
+        ))
+        if isinstance(first, str):
+            err: dict[str, Any] = {"error": first}
+            if first.startswith("unknown route"):
+                err["routes"] = list(_ROUTES)
+            return err
+        plan.append(first)
+    for i, raw in enumerate((steps or [])[:_MAX_SHOW_STEPS]):
+        if not isinstance(raw, dict):
+            return {"error": f"steps[{i}] must be an object"}
+        step = _show_step(raw)
+        if isinstance(step, str):
+            err = {"error": f"steps[{i}]: {step}"}
+            if step.startswith("unknown route"):
+                err["routes"] = list(_ROUTES)
+            return err
+        plan.append(step)
+    if not plan:
+        return {"error": "target is required (or steps, or a box): an id from ducky_ui_list_targets, a name with role, or box {x, y, w, h}"}
+    windowed = ["box" in step for step in plan]
+    if any(windowed) and not all(windowed):
+        return {"error": "a Show me is either inside the app or on a window, not both"}
+    if all(windowed):
+        return _show_on_window(plan, window, wait)
+    params: dict[str, Any] = {"steps": plan} if len(plan) > 1 else dict(plan[0])
+    params["wait"] = bool(wait)
+    out = panel_rpc("show", params, timeout=_SHOW_CLOSE_WAIT_S if wait else _SHOW_WAIT_S)
+    if not isinstance(out, dict):
+        return {"error": "show failed"}
+    return _finish_show(out, len(plan))
+
+
 @mcp.tool()
 def ducky_ui_show(
     target: str = "",
@@ -315,9 +452,12 @@ def ducky_ui_show(
     within: str = "",
     steps: list[dict[str, Any]] | None = None,
     wait: bool = False,
+    window: str = "",
+    box: dict[str, Any] | None = None,
+    click: bool = False,
     pretty: bool = False,
-) -> str:
-    """Show the user one part of the app: take them there, highlight it, explain it.
+) -> Any:
+    """Show the user one part of the app, or one control in UEFN or another program.
 
     Opens the view it is in (navigate / workflow_id / action), brings it into sight,
     dims everything else and puts a popup above it with `title` and `body` (short
@@ -340,35 +480,40 @@ def ducky_ui_show(
       "workflow_id", "action", "action_args", "also", "role", "within", "click"};
       click=true moves on when the user clicks the highlight. Leave the top-level
       target empty when you pass steps (if you set it, it is step 1).
-    wait: true returns only when the user closes the popup.
+    On another program's window (UEFN, Blender, a browser): pass ``window`` and
+    ``box``. ``window`` is ``"uefn"`` (the main editor), a title pattern, or an
+    hwnd. ``box`` is ``{x, y, w, h}`` as fractions of that window (0 to 1), the
+    same units as ``uefn_window_click``. Open the tab first (``open_asset_in_uefn``
+    for a Blueprint, Widget or material; ``uefn_window_click`` for a menu), then
+    ``uefn_window_capture``, then this. It darkens every monitor and blocks every
+    click except the hole. ``click: true`` continues only when they press the
+    hole. The result includes a screenshot with the box drawn — call again if it
+    missed. A call is all in-app steps or all window steps, not a mix.
+
+    wait: true returns only when the user closes the popup (window: also ``reason``
+    of done, close or esc, and ``step``).
     Returns {ok, shown, missing, target, steps}; missing=true means the first step
-    wasn't found on screen.
+    wasn't found on screen. A window show returns path (the annotated screenshot).
     """
-    plan: list[dict[str, Any]] = []
-    if (target or "").strip():
-        first = _show_step({
-            "target": target, "title": title, "body": body, "workflow_id": workflow_id,
-            "navigate": navigate, "item_id": item_id, "action": action,
-            "action_args": action_args, "also": also, "role": role, "within": within,
-        })
-        if isinstance(first, str):
-            return tool_json({"error": first, **({"routes": list(_ROUTES)} if first.startswith("unknown route") else {})}, pretty=pretty)
-        plan.append(first)
-    for i, raw in enumerate((steps or [])[: _MAX_SHOW_STEPS]):
-        if not isinstance(raw, dict):
-            return tool_json({"error": f"steps[{i}] must be an object"}, pretty=pretty)
-        step = _show_step(raw)
-        if isinstance(step, str):
-            return tool_json({"error": f"steps[{i}]: {step}", **({"routes": list(_ROUTES)} if step.startswith("unknown route") else {})}, pretty=pretty)
-        plan.append(step)
-    if not plan:
-        return tool_json({"error": "target is required (or steps): an id from ducky_ui_list_targets, or a name with role"}, pretty=pretty)
-    params: dict[str, Any] = {"steps": plan} if len(plan) > 1 else dict(plan[0])
-    params["wait"] = bool(wait)
-    out = panel_rpc("show", params, timeout=_SHOW_CLOSE_WAIT_S if wait else _SHOW_WAIT_S)
-    if isinstance(out, dict) and not out.get("error"):
-        out = {**out, "ok": out.get("ok", True), "steps": len(plan)}
-    return tool_json(out, pretty=pretty)
+    out = show(
+        target=target, title=title, body=body, workflow_id=workflow_id, navigate=navigate,
+        item_id=item_id, action=action, action_args=action_args, also=also, role=role,
+        within=within, steps=steps, wait=wait, window=window, box=box, click=click,
+    )
+    text = tool_json(out, pretty=pretty)
+    path = str(out.get("path") or "").strip()
+    if not path:
+        return text
+    import os
+
+    if not os.path.isfile(path):
+        return text
+    try:
+        from mcp.server.fastmcp import Image
+
+        return [text, Image(path=path)]
+    except Exception:
+        return text
 
 
 @mcp.tool()

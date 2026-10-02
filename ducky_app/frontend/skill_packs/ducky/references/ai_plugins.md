@@ -71,6 +71,14 @@ Delete draft only: `ducky_plugin_delete_draft(id, confirm=true)`.
 Id: `^[a-z][a-z0-9_-]{0,63}$`. Cannot overwrite a Store/local id (uninstall first).
 No secrets (`.dat` / `.env` / `.pem` / `.key`).
 
+### Spotlight another program
+
+`api.spotlight(window="uefn", box={"x", "y", "w", "h"}, title=, body=, click=, wait=)`
+highlights a control in UEFN, Blender, or any window. Same call as `ducky_ui_show`.
+`box` is fractions of the window (0 to 1). The desktop dims and only that hole can
+be clicked. Workflows can listen for `spotlight.step` and `spotlight.closed`, or use
+the built-in **Spotlight** node (`ui.spotlight`) — you do not register that node.
+
 ### Plug into Ducky
 
 **Always** (domain or theme): `agent.tools` + `@api.tool()` · automations

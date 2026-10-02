@@ -32,6 +32,8 @@ export interface ShowMeStep {
 /** One step, or several in `steps` (the top-level fields are then the first step). */
 export interface ShowMeRequest extends ShowMeStep {
   steps?: ShowMeStep[];
+  /** Original ducky_ui_show arguments when this highlights another program's window. */
+  windowSpotlight?: Record<string, unknown>;
 }
 
 export type ShowMePhase = "going" | "shown" | "missing";
