@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, Callable
 
 from pathlib import Path
 
@@ -1382,6 +1382,34 @@ def _run_message(conv_id: str, text: str, mode: str, model: str) -> str:
     return str(run_message(conv_id, text, mode, model) or "")
 
 
+def _cancel_agent_on_stop(conv_id: str) -> Callable[[], None]:
+    """Stop also stops the ducky an Agent step is waiting for.
+
+    _exec_stoppable only stops waiting: the ducky kept working, and on Oct 2 2026 a
+    stopped demo's launch ducky still started a Fortnite session minutes later.
+    Returns the call that ends the watch once the ducky has answered.
+    """
+    cancel = _CANCEL.get()
+    if cancel is None or not conv_id:
+        return lambda: None
+    finished = threading.Event()
+
+    def watch() -> None:
+        while not finished.is_set():
+            if cancel.wait(0.5):
+                if not finished.is_set():
+                    try:
+                        from frontend.ui_web.agent_modes import cancel_agent
+
+                        cancel_agent(conv_id)
+                    except Exception:
+                        pass
+                return
+
+    threading.Thread(target=watch, name="workflow-agent-stop", daemon=True).start()
+    return finished.set
+
+
 def _run_message_and_wait(
     conv_id: str,
     text: str,
@@ -1581,15 +1609,19 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
         prompt = f"{prompt}\n\n{context.strip()}" if prompt.strip() else context.strip()
     timeout = min(max(float(cfg.get("timeout_sec") or 180.0), 1.0), _AGENT_WAIT_CAP_S)
     caller = str(payload.get("caller_conv_id") or "").strip()
-    wait = _run_message_and_wait(
-        conv_id,
-        prompt,
-        str(cfg.get("mode") or "agent"),
-        str(cfg.get("model") or kwargs.get("model") or ""),
-        timeout_sec=timeout,
-        parent="" if existing else caller,
-        attachments=_files_as_attachments(incoming),
-    )
+    release = _cancel_agent_on_stop(conv_id)
+    try:
+        wait = _run_message_and_wait(
+            conv_id,
+            prompt,
+            str(cfg.get("mode") or "agent"),
+            str(cfg.get("model") or kwargs.get("model") or ""),
+            timeout_sec=timeout,
+            parent="" if existing else caller,
+            attachments=_files_as_attachments(incoming),
+        )
+    finally:
+        release()
     if str(wait.get("status") or "") != "done":
         if node_id:
             seats.pop(node_id, None)  # it may still be busy: a next pass gets a fresh ducky

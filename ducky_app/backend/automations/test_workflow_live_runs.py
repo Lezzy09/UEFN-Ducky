@@ -77,3 +77,35 @@ def test_the_start_tells_the_calling_chat_every_step(events):
     assert started["conv"] == "chat-1"
     assert started["name"] == "Live"
     assert [(p["node"], p["label"]) for p in started["plan"]] == [("s", "start.manual"), ("w", "Pause"), ("e", "flow.end")]
+
+
+def test_stop_also_stops_the_ducky_an_agent_step_waits_for(monkeypatch):
+    """A stopped workflow's launch ducky kept going and started a Fortnite session."""
+    stopped: list[str] = []
+    monkeypatch.setattr("frontend.ui_web.agent_modes.cancel_agent", lambda conv_id=None: stopped.append(conv_id))
+    cancel = threading.Event()
+    token = runner._CANCEL.set(cancel)
+    try:
+        release = runner._cancel_agent_on_stop("launch-ducky")
+        cancel.set()  # the user pressed Stop
+        deadline = time.time() + 3
+        while not stopped and time.time() < deadline:
+            time.sleep(0.05)
+        release()
+    finally:
+        runner._CANCEL.reset(token)
+    assert stopped == ["launch-ducky"]
+
+
+def test_a_ducky_that_answered_is_not_cancelled_later(monkeypatch):
+    stopped: list[str] = []
+    monkeypatch.setattr("frontend.ui_web.agent_modes.cancel_agent", lambda conv_id=None: stopped.append(conv_id))
+    cancel = threading.Event()
+    token = runner._CANCEL.set(cancel)
+    try:
+        runner._cancel_agent_on_stop("done-ducky")()  # answered, watch ended
+        cancel.set()
+        time.sleep(0.8)
+    finally:
+        runner._CANCEL.reset(token)
+    assert stopped == []

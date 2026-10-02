@@ -233,7 +233,7 @@ def _refuse_non_uefn(hwnd: int) -> dict[str, Any] | None:
     return {
         "ok": False,
         "error": f"window {hwnd} is not a UEFN editor window; uefn_window_click/key only drive UEFN. "
-        "Never send input to the Fortnite client while it loads; use the Fortnite Demo tools once it is in play.",
+        "Never send input to the Fortnite client while it loads; once it is in play use fortnite_client_capture / fortnite_client_move.",
     }
 
 

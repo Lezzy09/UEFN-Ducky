@@ -15,6 +15,8 @@ _CAPTURE_TOOLS = frozenset(
         "blender_get_viewport_screenshot",
         "uefn_window_capture",
         "uefn_popups",
+        "fortnite_client_capture",
+        "fortnite_client_move",
         "ducky_publish_private_version",
     }
 )
@@ -63,8 +65,8 @@ def vision_attachments_from_capture_result(
     obj = _parse_result_obj(data)
     if not obj:
         return []
-    # uefn_popups returns one numbered capture per popup.
-    nested = obj.get("popups") if isinstance(obj.get("popups"), list) else []
+    # uefn_popups: one numbered capture per popup; fortnite_client_move: before + after.
+    nested = [p for key in ("popups", "files") if isinstance(obj.get(key), list) for p in obj[key]]
     paths = [str(obj.get("path") or "").strip()] + [
         str(p.get("path") or "").strip() for p in nested if isinstance(p, dict)
     ]
