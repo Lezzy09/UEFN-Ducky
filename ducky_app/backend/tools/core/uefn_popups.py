@@ -156,19 +156,91 @@ def list_popups() -> list[dict[str, Any]]:
     from backend.tools.core.uefn_modal import _enum_uefn_windows
     from backend.tools.core.uefn_windows import _rect
 
+    import ctypes
+
+    windows = _enum_uefn_windows()
+    # A modal popup disables the main editor window: that is what "blocking" means.
+    # Floating tool windows (Message Log) leave it enabled.
+    main = [w for w in windows if str(w.get("title") or "").strip().lower() == _MAIN_TITLE]
+    blocked = bool(main) and not ctypes.windll.user32.IsWindowEnabled(int(main[0]["hwnd"]))
     out = []
-    for win in _enum_uefn_windows():
+    for win in windows:
         title = str(win.get("title") or "")
         if win.get("cls") != "UnrealWindow" or title.strip().lower() == _MAIN_TITLE:
             continue
         rect = _rect(int(win["hwnd"]))
         if rect.get("width", 0) <= 0 or rect.get("height", 0) <= 0:
             continue
-        out.append({"hwnd": int(win["hwnd"]), "title": title, "rect": rect})
+        out.append({"hwnd": int(win["hwnd"]), "title": title, "rect": rect, "blocking": blocked})
     return out
 
 
-def _grab(rect: dict[str, Any]) -> Any:
+def _print_window(hwnd: int, width: int, height: int) -> Any | None:
+    """The window's own pixels (PrintWindow, full content), even where another window
+    covers it. None when Windows returns nothing usable."""
+    import ctypes
+    from ctypes import wintypes
+
+    from PIL import Image
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+    user32.GetWindowDC.argtypes = [wintypes.HWND]
+    user32.GetWindowDC.restype = wintypes.HDC
+    user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+    user32.PrintWindow.restype = wintypes.BOOL
+    gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+    gdi32.CreateCompatibleDC.restype = wintypes.HDC
+    gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+    gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+    gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+    gdi32.SelectObject.restype = wintypes.HGDIOBJ
+    gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    gdi32.DeleteDC.argtypes = [wintypes.HDC]
+    gdi32.GetDIBits.argtypes = [wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT,
+                                ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT]
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG),
+                    ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                    ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
+                    ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+
+    src = user32.GetWindowDC(hwnd)
+    if not src:
+        return None
+    mem = gdi32.CreateCompatibleDC(src)
+    bmp = gdi32.CreateCompatibleBitmap(src, width, height)
+    old = gdi32.SelectObject(mem, bmp)
+    try:
+        PW_RENDERFULLCONTENT = 2
+        if not user32.PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT):
+            return None
+        header = BITMAPINFOHEADER(ctypes.sizeof(BITMAPINFOHEADER), width, -height, 1, 32, 0, 0, 0, 0, 0, 0)
+        buf = ctypes.create_string_buffer(width * height * 4)
+        if gdi32.GetDIBits(mem, bmp, 0, height, buf, ctypes.byref(header), 0) != height:
+            return None
+        img = Image.frombuffer("RGB", (width, height), buf.raw, "raw", "BGRX", 0, 1)
+    finally:
+        gdi32.SelectObject(mem, old)
+        gdi32.DeleteObject(bmp)
+        gdi32.DeleteDC(mem)
+        user32.ReleaseDC(hwnd, src)
+    lo, hi = img.convert("L").getextrema()
+    return img if hi - lo > 24 else None  # all one shade: nothing was drawn
+
+
+def _grab(rect: dict[str, Any], hwnd: int = 0) -> Any:
+    """A capture of the popup. Its own pixels first: Ducky's window (or any other) on
+    top of it hid the Continue button from a screen grab, live on Oct 2 2026."""
+    if hwnd and sys.platform == "win32":
+        try:
+            img = _print_window(int(hwnd), int(rect["width"]), int(rect["height"]))
+            if img is not None:
+                return img
+        except Exception:
+            pass
     from PIL import ImageGrab
 
     box = (int(rect["left"]), int(rect["top"]), int(rect["right"]), int(rect["bottom"]))
@@ -185,7 +257,7 @@ def _popup(hwnd: int) -> dict[str, Any] | None:
 def describe_popup(popup: dict[str, Any], *, save: bool = True) -> dict[str, Any]:
     """Capture one popup: its buttons, the known rule if any, and (save=True) the
     numbered capture in this chat's attachments."""
-    img = _grab(popup["rect"])
+    img = _grab(popup["rect"], popup["hwnd"])
     buttons = find_buttons(img)
     rule = known_rule(popup["title"], buttons)
     out: dict[str, Any] = {
@@ -213,7 +285,7 @@ def press_button(hwnd: int, n: int) -> dict[str, Any]:
     popup = _popup(hwnd)
     if popup is None:
         return {"ok": False, "error": f"no UEFN popup {hwnd} on screen (uefn_popups lists them)"}
-    buttons = find_buttons(_grab(popup["rect"]))
+    buttons = find_buttons(_grab(popup["rect"], popup["hwnd"]))
     if not 1 <= int(n) <= len(buttons):
         return {"ok": False, "error": f"button {n} not found; this popup shows {len(buttons)}", "title": popup["title"]}
     b = buttons[int(n) - 1]

@@ -66,7 +66,7 @@ def screen(monkeypatch, tmp_path):
         w, h = _img(name).size
         return [{"hwnd": 100 + len(stack), "title": title, "rect": {"left": 0, "top": 0, "right": w, "bottom": h, "width": w, "height": h}}]
 
-    def grab(rect):
+    def grab(rect, hwnd=0):
         return _img(stack[0][1])
 
     def inject_pointer(hwnd, kind, nx, ny, **_):
