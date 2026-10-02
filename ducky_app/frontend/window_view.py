@@ -21,6 +21,10 @@ from typing import Any
 _KIND_ORDER = {"desktop": 0, "monitor": 1, "uefn": 2, "blender": 3, "app": 4}
 _JUNK_TITLES = frozenset({"Program Manager", "DWM Notification Window", "Windows Input Experience"})
 _MIN_VIEW = 100
+_TEXT_CAP = 2000
+_KEYEVENTF_KEYUP = 0x0002
+_KEYEVENTF_UNICODE = 0x0004
+_GUI_CARETBLINKING = 0x00000001
 
 
 def window_fit_size(
@@ -672,6 +676,53 @@ def inject_key(hwnd: int, key: str, *, down: bool = True) -> None:
     _send_key(vk, down=down)
 
 
+def text_focus(hwnd: object) -> bool:
+    """True when this window's thread is showing a text caret.
+
+    ponytail: caret-only. Apps that draw their own caret (Slate) report
+    nothing here — upgrade is UI Automation GetFocusedElement control type Edit.
+    """
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    class _Rect(ctypes.Structure):
+        _fields_ = [
+            ("left", ctypes.c_long),
+            ("top", ctypes.c_long),
+            ("right", ctypes.c_long),
+            ("bottom", ctypes.c_long),
+        ]
+
+    class _Gui(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("flags", wintypes.DWORD),
+            ("hwndActive", wintypes.HWND),
+            ("hwndFocus", wintypes.HWND),
+            ("hwndCapture", wintypes.HWND),
+            ("hwndMenuOwner", wintypes.HWND),
+            ("hwndMoveSize", wintypes.HWND),
+            ("hwndCaret", wintypes.HWND),
+            ("rcCaret", _Rect),
+        ]
+
+    user32 = ctypes.windll.user32
+    info = _Gui()
+    info.cbSize = ctypes.sizeof(_Gui)
+    hid = _as_hwnd(hwnd)
+    tid = 0
+    if hid > 0:
+        pid = wintypes.DWORD()
+        tid = int(user32.GetWindowThreadProcessId(int(hid), ctypes.byref(pid)) or 0)
+        if not tid:
+            return False
+    if not user32.GetGUIThreadInfo(int(tid), ctypes.byref(info)):
+        return False
+    return bool(info.hwndCaret) or bool(int(info.flags) & _GUI_CARETBLINKING)
+
+
 def handle_stream_message(view: object, payload: bytes) -> None:
     try:
         event = json.loads(payload.decode("utf-8"))
@@ -709,6 +760,13 @@ def handle_stream_message(view: object, payload: bytes) -> None:
             _pointer_on_box(box, kind, nx, ny, button=button, delta=delta, dx=dx, dy=dy)
         else:
             inject_pointer(hid, kind, nx, ny, button=button, delta=delta, dx=dx, dy=dy, xy=has_xy)
+        return
+    if kind == "text":
+        # One raise, then the whole string. Newlines are dropped in _send_text
+        # so Enter on the phone commits text without submitting on the PC.
+        if not screen and hid:
+            bring_to_front(hid)
+        _send_text(str(event.get("text") or ""))
         return
     if kind in ("key", "keydown", "keyup"):
         key = str(event.get("key") or "")
@@ -1011,8 +1069,38 @@ def _send_key(vk: int, *, down: bool) -> None:
     ctypes, extra, _Mouse, Key, Input = _input_structs()
     inp = Input()
     inp.type = 1
-    inp.union.ki = Key(int(vk) & 0xFFFF, 0, 0 if down else 0x0002, 0, ctypes.pointer(extra))
+    inp.union.ki = Key(int(vk) & 0xFFFF, 0, 0 if down else _KEYEVENTF_KEYUP, 0, ctypes.pointer(extra))
     ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(Input))
+
+
+def _unicode_events(text: str) -> list[tuple[int, int]]:
+    """(wScan, dwFlags) pairs. Newlines stripped so a paste cannot press Enter."""
+    cleaned = text.replace("\r", "").replace("\n", "")[:_TEXT_CAP]
+    events: list[tuple[int, int]] = []
+    raw = cleaned.encode("utf-16-le")
+    for i in range(0, len(raw), 2):
+        unit = raw[i] | (raw[i + 1] << 8)
+        events.append((unit, _KEYEVENTF_UNICODE))
+        events.append((unit, _KEYEVENTF_UNICODE | _KEYEVENTF_KEYUP))
+    return events
+
+
+def _send_text(text: str) -> None:
+    if sys.platform != "win32":
+        return
+    events = _unicode_events(text)
+    if not events:
+        return
+    ctypes, _extra, _Mouse, Key, Input = _input_structs()
+    n = len(events)
+    arr = (Input * n)()
+    extras = []
+    for i, (scan, flags) in enumerate(events):
+        extra = ctypes.c_ulong(0)
+        extras.append(extra)
+        arr[i].type = 1
+        arr[i].union.ki = Key(0, int(scan) & 0xFFFF, int(flags), 0, ctypes.pointer(extra))
+    ctypes.windll.user32.SendInput(n, ctypes.byref(arr), ctypes.sizeof(Input))
 
 
 _NAMED_VK = {

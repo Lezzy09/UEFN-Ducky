@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
 import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { getApi, isRemote } from "../hooks/usePanelApi";
 import { ChoiceDropdown, ChoiceTriggerFace } from "./ChoiceDropdown";
@@ -619,6 +619,7 @@ function overlaySize(el: HTMLElement | null): { w: number; h: number } | null {
 }
 
 const HOLD_MS = 450;
+const TEXT_FOCUS_MS = 150;
 
 function spawnRipple(host: HTMLElement, clientX: number, clientY: number, kind: "hold" | "tap"): HTMLSpanElement {
   const r = host.getBoundingClientRect();
@@ -641,6 +642,7 @@ function attachInput(
   send: (payload: Record<string, unknown>) => void,
   viewport: HTMLElement,
   overlay: HTMLElement,
+  onTap?: () => void,
 ) {
   let pendingMove: { x: number; y: number; button: number } | null = null;
   let raf = 0;
@@ -673,6 +675,7 @@ function attachInput(
   let pinch: { dist: number; cx: number; cy: number } | null = null;
   let downAt = { x: 0, y: 0 };
   let downMapped = { x: 0.5, y: 0.5 };
+  let downPointer = "mouse";
   let lastTap: { x: number; y: number; at: number; mapped: { x: number; y: number } } | null = null;
 
   const capture = (id: number) => {
@@ -714,6 +717,7 @@ function attachInput(
     send({ type: "down", ...mapped, button: 0 });
     send({ type: "up", ...mapped, button: 0 });
     lastTap = { x: downAt.x, y: downAt.y, at: now, mapped };
+    if (downPointer !== "mouse") onTap?.();
   };
   const startDrag = () => {
     if (pendingId < 0 || dragId >= 0) return;
@@ -754,6 +758,7 @@ function attachInput(
     ev.preventDefault();
     if (ev.pointerType === "mouse" && ignoreMouseAfterTouch(lastOverlayTouchAt, performance.now())) return;
     video.focus({ preventScroll: true });
+    downPointer = ev.pointerType;
     pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
     const mouse = ev.pointerType === "mouse";
     if (mouse) {
@@ -1207,6 +1212,139 @@ function UefnStickOverlay({
   );
 }
 
+const TYPE_KEYS: { key: string; label: string }[] = [
+  { key: "Backspace", label: "Backspace" },
+  { key: "Enter", label: "Enter" },
+  { key: "Tab", label: "Tab" },
+  { key: "Escape", label: "Esc" },
+];
+
+type TypeBarHandle = { openFromTap: () => void; close: () => void };
+
+/**
+ * Local text field so a phone keyboard can type into the streamed PC.
+ * Enter commits the field into the remote text box and does not press Enter there.
+ */
+const RemoteTypeBar = forwardRef<TypeBarHandle, { send: SendFn }>(function RemoteTypeBar({ send }, ref) {
+  const barRef = useRef<HTMLFormElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [open, setOpen] = useState(false);
+  const [armed, setArmed] = useState(false);
+
+  const commit = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const text = el.value.slice(0, 2000);
+    el.value = "";
+    if (text) send({ type: "text", text });
+  }, [send]);
+
+  const close = useCallback(() => {
+    inputRef.current?.blur();
+    setArmed(false);
+    setOpen(false);
+  }, []);
+
+  const reveal = useCallback((fromTap: boolean) => {
+    barRef.current?.classList.remove("is-closed");
+    setArmed(fromTap);
+    setOpen(true);
+    inputRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  useImperativeHandle(ref, () => ({ openFromTap: () => reveal(true), close }), [reveal, close]);
+
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const sync = () => {
+      const el = barRef.current;
+      if (!el) return;
+      const gap = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+      el.style.bottom = `${gap}px`;
+    };
+    sync();
+    vv?.addEventListener("resize", sync);
+    vv?.addEventListener("scroll", sync);
+    window.addEventListener("resize", sync);
+    return () => {
+      vv?.removeEventListener("resize", sync);
+      vv?.removeEventListener("scroll", sync);
+      window.removeEventListener("resize", sync);
+    };
+  }, []);
+
+  return (
+    <>
+      {open ? null : (
+        <button
+          type="button"
+          className="remote-type-toggle"
+          aria-label="Keyboard"
+          onClick={(ev) => {
+            ev.stopPropagation();
+            reveal(false);
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+            <rect x="2" y="6" width="20" height="12" rx="2" />
+            <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8" />
+          </svg>
+        </button>
+      )}
+      <form
+        ref={barRef}
+        className={`remote-type-bar${open ? "" : " is-closed"}${armed ? " is-armed" : ""}`}
+        onSubmit={(ev) => {
+          ev.preventDefault();
+          commit();
+        }}
+        onPointerDown={(ev) => ev.stopPropagation()}
+      >
+        <input
+          ref={inputRef}
+          className="remote-type-input"
+          enterKeyHint="done"
+          aria-label="Type on the desktop"
+          autoComplete="off"
+          onPointerDown={() => setArmed(false)}
+          onKeyDown={(ev) => {
+            if (ev.key !== "Enter" || ev.shiftKey) return;
+            const native = ev.nativeEvent;
+            if (native.isComposing || ("keyCode" in native && native.keyCode === 229)) return;
+            ev.preventDefault();
+            commit();
+          }}
+        />
+        {TYPE_KEYS.map((cmd) => (
+          <button
+            key={cmd.key}
+            type="button"
+            className="remote-type-key"
+            onPointerDown={(ev) => {
+              ev.preventDefault();
+              ev.stopPropagation();
+              tapSend(send, cmd.key);
+            }}
+          >
+            {cmd.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="remote-type-key"
+          onPointerDown={(ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            close();
+          }}
+        >
+          Hide
+        </button>
+      </form>
+    </>
+  );
+});
+
 export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
@@ -1218,6 +1356,8 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [attempt, setAttempt] = useState(0);
   const attemptRef = useRef(0);
+  const typeBarRef = useRef<TypeBarHandle>(null);
+  const tapGen = useRef(0);
   const controls = useRemoteViewControls();
   const rows = useWindowViews(!!hwnd);
   const kind = rows.find((r) => r.id === hwnd)?.kind;
@@ -1244,10 +1384,26 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
     setAttempt(attemptRef.current);
   }, []);
 
+  const onStreamTap = useCallback(() => {
+    const gen = ++tapGen.current;
+    window.setTimeout(() => {
+      if (gen !== tapGen.current) return;
+      const probe = getApi()?.window_text_focus;
+      if (!probe) return;
+      void Promise.resolve(probe(hwnd))
+        .then((focused) => {
+          if (gen !== tapGen.current || !focused) return;
+          typeBarRef.current?.openFromTap();
+        })
+        .catch(() => {});
+    }, TEXT_FOCUS_MS);
+  }, [hwnd]);
+
   useEffect(() => {
     attemptRef.current = 0;
     setAttempt(0);
     resetRemoteViewPanZoom();
+    typeBarRef.current?.close();
   }, [hwnd]);
 
   useEffect(() => {
@@ -1483,8 +1639,8 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
     const view = viewRef.current;
     const overlay = overlayRef.current;
     if (!el || !view || !overlay || !hwnd || phase !== "live") return;
-    return attachInput(el, send, view, overlay);
-  }, [hwnd, phase, attempt, send]);
+    return attachInput(el, send, view, overlay, onStreamTap);
+  }, [hwnd, phase, attempt, send, onStreamTap]);
 
   useEffect(() => {
     bindRemoteSend(phase === "live" ? send : null);
@@ -1532,6 +1688,7 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
       {phase === "live" && stats ? (
         <span className="remote-window-stats">{statsLabel(stats)}</span>
       ) : null}
+      {phase === "live" ? <RemoteTypeBar ref={typeBarRef} send={send} /> : null}
       {phase === "live" && controls.overlay && watchingUefn ? (
         <UefnStickOverlay
           send={send}

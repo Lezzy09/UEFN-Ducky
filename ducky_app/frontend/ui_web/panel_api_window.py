@@ -321,6 +321,11 @@ class PanelApiWindowMixin:
 
         return window_box(hwnd)
 
+    def window_text_focus(self, hwnd: object) -> bool:
+        from frontend.window_view import text_focus
+
+        return bool(text_focus(hwnd))
+
     # ── Browser panes (native WebView2 pinned inside a window; plugin web panes) ──
 
     def browser_pane_open(self, pane_id: str, url: str = "", wid: str = "") -> dict[str, Any]:

@@ -112,6 +112,31 @@ def test_window_box_empty_for_bad_hwnd() -> None:
     assert window_box(0) == {}
 
 
+def test_stream_text_is_unicode_without_enter(monkeypatch) -> None:
+    import frontend.window_view as wv
+
+    raised: list[int] = []
+    sent: list[list[tuple[int, int]]] = []
+    keys: list[tuple[str, bool]] = []
+    monkeypatch.setattr(wv, "bring_to_front", lambda hwnd: raised.append(int(hwnd)) or True)
+    monkeypatch.setattr(wv, "inject_key", lambda hwnd, key, down=True: keys.append((key, down)))
+    monkeypatch.setattr(wv, "_send_text", lambda text: sent.append(wv._unicode_events(text)))
+    handle_stream_message(9, b'{"type":"text","text":"Hi!\\n"}')
+    assert raised == [9]
+    assert keys == []
+    events = sent[0]
+    assert [scan for scan, _flags in events] == [
+        ord("H"),
+        ord("H"),
+        ord("i"),
+        ord("i"),
+        ord("!"),
+        ord("!"),
+    ]
+    assert all(flags & 0x0004 for _scan, flags in events)
+    assert all(scan != 0x0D for scan, _flags in events)
+
+
 def test_look_move_sends_relative_dx(monkeypatch) -> None:
     import frontend.window_view as wv
 

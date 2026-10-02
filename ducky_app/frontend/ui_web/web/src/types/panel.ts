@@ -3276,6 +3276,8 @@ export interface PanelApi {
   direct_rtc_report?(payload: Record<string, unknown>): Promise<void>;
   window_input?(hwnd: string | number, event: Record<string, unknown>): Promise<void>;
   window_box?(hwnd: string | number): Promise<WindowBox>;
+  /** True when the watched window's thread is showing a text caret. */
+  window_text_focus?(hwnd: string | number): Promise<boolean>;
   pick_project_path(): Promise<string | null>;
   deploy(project_path?: string): Promise<string[]>;
   deploy_all_projects(): Promise<string[]>;

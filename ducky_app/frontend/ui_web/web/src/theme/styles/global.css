@@ -824,6 +824,76 @@ body.native-caption-input-ready .app-header .drag-region {
   font-size: 13px;
   cursor: pointer;
 }
+.remote-type-toggle {
+  display: none;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 22px;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  color: var(--fg);
+}
+@media (pointer: coarse) {
+  .remote-type-toggle {
+    display: flex;
+  }
+}
+.remote-type-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  background: var(--bg);
+  color: var(--fg);
+  border-top: 1px solid var(--accent);
+}
+.remote-type-bar.is-closed {
+  opacity: 0;
+  pointer-events: none;
+  height: 44px;
+  overflow: hidden;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.remote-type-bar.is-armed .remote-type-input {
+  outline: 2px solid var(--accent);
+}
+.remote-type-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 16px;
+  padding: 8px 10px;
+}
+.remote-type-key {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+}
 .remote-window-stats {
   position: absolute;
   right: 8px;
