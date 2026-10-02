@@ -3192,12 +3192,14 @@ export interface PanelApi {
     model: string,
     file_path?: string,
     attachments?: MessageAttachmentDto[],
+    coding_agent?: string,
   ): Promise<{ run_id: string }>;
   continue_interrupted(
     conv_id: string,
     mode: AgentMode,
     model: string,
     file_path?: string,
+    coding_agent?: string,
   ): Promise<{ run_id: string }>;
   resend_last_user_message(
     conv_id: string,
@@ -3206,6 +3208,7 @@ export interface PanelApi {
     model: string,
     file_path?: string,
     attachments?: MessageAttachmentDto[],
+    coding_agent?: string,
   ): Promise<{ run_id: string }>;
   get_context_usage(
     conv_id: string,

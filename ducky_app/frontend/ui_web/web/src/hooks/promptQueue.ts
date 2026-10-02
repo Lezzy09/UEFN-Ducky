@@ -6,6 +6,7 @@ export interface QueuedPrompt {
   attachments: MessageAttachmentDto[];
   mode: AgentMode;
   model: string;
+  codingAgent?: string;
 }
 
 /** Pure helpers — easy to unit-test without the store. */
@@ -53,6 +54,7 @@ export function makeQueuedPrompt(
     attachments?: MessageAttachmentDto[];
     mode: AgentMode;
     model: string;
+    codingAgent?: string;
     id?: string;
   },
 ): QueuedPrompt | null {
@@ -65,6 +67,7 @@ export function makeQueuedPrompt(
     attachments,
     mode: opts.mode,
     model: opts.model,
+    codingAgent: opts.codingAgent,
   };
 }
 

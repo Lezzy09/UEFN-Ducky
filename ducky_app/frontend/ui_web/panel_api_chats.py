@@ -7,6 +7,44 @@ from typing import Any
 import frontend.ui_web.panel_api as _pa
 
 
+def _sync_composer_selection(conv_id: str, model: str, coding_agent: str = "") -> None:
+    """Apply the composer's model + backend to the chat before a turn starts.
+
+    The picker's own save can lose to a still-running turn that saves its stale
+    copy of the chat, so the send is authoritative. Updates this conversation
+    only — never global settings or a Ducky profile's favorite_models.
+    """
+    from backend.agent.coding_agents.base import normalize_coding_agent
+    from backend.agent.model_pricing import resolve_provider_for_model
+
+    turn_model = (model or "").strip()
+    if turn_model.lower() == "default":
+        turn_model = ""
+    agent = normalize_coding_agent(coding_agent) if (coding_agent or "").strip() else ""
+    if not turn_model and not agent:
+        return
+    conv = _pa.load_conversation(conv_id)
+    if conv is None:
+        return
+    changed = False
+    current = normalize_coding_agent(getattr(conv, "coding_agent", None) or "ducky")
+    if agent and agent != current:
+        conv.coding_agent = current = agent
+        if agent != "ducky":
+            conv.provider = ""
+        changed = True
+    if turn_model and (conv.model or "").strip() != turn_model:
+        conv.model = turn_model
+        changed = True
+    if turn_model and current == "ducky":
+        resolved = resolve_provider_for_model(turn_model, conv.provider or "")
+        if resolved and resolved != (conv.provider or "").strip().lower():
+            conv.provider = resolved
+            changed = True
+    if changed:
+        _pa.save_conversation(conv)
+
+
 class PanelApiChatsMixin:
     @staticmethod
     def _folder_sidebar_row(
@@ -1080,6 +1118,7 @@ class PanelApiChatsMixin:
         model: str,
         file_path: str = "",
         attachments: list[dict[str, Any]] | None = None,
+        coding_agent: str = "",
     ) -> dict[str, str]:
         from frontend.ui_web.group_orchestrator import (
             is_group_conversation,
@@ -1096,25 +1135,7 @@ class PanelApiChatsMixin:
                     _pa.notify_chats_changed(
                         after.id, after.title, after.folder_id, push=self._push, open_tab=False
                     )
-        # Composer model updates this conversation only — never global settings
-        # or any Ducky profile favorite_models.
-        turn_model = (model or "").strip()
-        if turn_model and turn_model.lower() != "default":
-            conv = _pa.load_conversation(conv_id)
-            if conv is not None:
-                from backend.agent.coding_agents.base import normalize_coding_agent
-                from backend.agent.model_pricing import resolve_provider_for_model
-
-                model_changed = (conv.model or "").strip() != turn_model
-                if model_changed:
-                    conv.model = turn_model
-                if normalize_coding_agent(getattr(conv, "coding_agent", None) or "ducky") == "ducky":
-                    resolved = resolve_provider_for_model(turn_model, conv.provider or "")
-                    if resolved and resolved != (conv.provider or "").strip().lower():
-                        conv.provider = resolved
-                        model_changed = True
-                if model_changed:
-                    _pa.save_conversation(conv)
+        _sync_composer_selection(conv_id, model, coding_agent)
         conv = _pa.load_conversation(conv_id)
         # Subagents retired — every non-group chat is composable (group members included).
         if conv is not None and is_group_conversation(conv):
@@ -1136,18 +1157,14 @@ class PanelApiChatsMixin:
         mode: str,
         model: str,
         file_path: str = "",
+        coding_agent: str = "",
     ) -> dict[str, str]:
         """Resume the last interrupted turn without appending a user message."""
         from frontend.ui_web.group_orchestrator import is_group_conversation
 
         if file_path:
             _pa.ensure_conversation_file_path(conv_id, file_path)
-        turn_model = (model or "").strip()
-        if turn_model and turn_model.lower() != "default":
-            conv = _pa.load_conversation(conv_id)
-            if conv is not None and (conv.model or "").strip() != turn_model:
-                conv.model = turn_model
-                _pa.save_conversation(conv)
+        _sync_composer_selection(conv_id, model, coding_agent)
         conv = _pa.load_conversation(conv_id)
         if conv is None or (conv is not None and is_group_conversation(conv)):
             return {"run_id": ""}
@@ -1162,6 +1179,7 @@ class PanelApiChatsMixin:
         model: str,
         file_path: str = "",
         attachments: list[dict[str, Any]] | None = None,
+        coding_agent: str = "",
     ) -> dict[str, str]:
         """Cursor-style edit + resend: rewind to the last user turn and rerun.
 
@@ -1186,7 +1204,7 @@ class PanelApiChatsMixin:
         if last_user is not None:
             conv.messages = conv.messages[:last_user]
             _pa.save_conversation(conv)
-        return self.send_message(conv_id, text, mode, model, file_path, attachments)
+        return self.send_message(conv_id, text, mode, model, file_path, attachments, coding_agent)
 
     def get_context_usage(
         self,

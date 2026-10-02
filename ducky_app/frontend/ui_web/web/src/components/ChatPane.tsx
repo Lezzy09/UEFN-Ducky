@@ -888,7 +888,13 @@ export function ChatPane({
       : "chat-pane-send-btn";
 
   const dispatchSend = useCallback(
-    (text: string, apiAttachments: MessageAttachmentDto[], mode: AgentMode, model: string) => {
+    (
+      text: string,
+      apiAttachments: MessageAttachmentDto[],
+      mode: AgentMode,
+      model: string,
+      agent: string | undefined,
+    ) => {
       const api = getApi();
       if (!api || (!text.trim() && apiAttachments.length === 0)) return;
       noteUserTurn(chat.id);
@@ -903,7 +909,7 @@ export function ChatPane({
         } catch {
           /* ignore */
         }
-        const res = await api.send_message(chat.id, text, mode, model, contextFilePath, apiAttachments);
+        const res = await api.send_message(chat.id, text, mode, model, contextFilePath, apiAttachments, agent);
         if (res?.run_id) {
           setActiveRunId(res.run_id);
         } else {
@@ -1081,6 +1087,7 @@ export function ChatPane({
         attachments: apiAttachments,
         mode: agentMode,
         model: selectedModel,
+        codingAgent,
       });
       if (!item) return;
       enqueuePrompt(chat.id, item);
@@ -1092,7 +1099,7 @@ export function ChatPane({
     if (!overrideText && !canSend) return;
     setInputText("");
     if (!overrideText) clearAttachments();
-    dispatchSend(text, apiAttachments, agentMode, selectedModel);
+    dispatchSend(text, apiAttachments, agentMode, selectedModel, codingAgent);
   };
 
   // Drain queue one turn at a time when the agent goes idle.
@@ -1103,7 +1110,7 @@ export function ChatPane({
     }
     const next = takeNextPromptForDrain(chat.id);
     if (!next) return;
-    dispatchSend(next.text, next.attachments, next.mode, next.model);
+    dispatchSend(next.text, next.attachments, next.mode, next.model, next.codingAgent);
   }, [agentRunning, chat.id, promptQueue.length, dispatchSend]);
 
   const handleOpenPlanTab = useCallback(() => {
@@ -1151,7 +1158,7 @@ export function ChatPane({
       } catch {
         /* ignore */
       }
-      const res = await api.continue_interrupted?.(chat.id, agentMode, selectedModel, contextFilePath);
+      const res = await api.continue_interrupted?.(chat.id, agentMode, selectedModel, contextFilePath, codingAgent);
       if (res?.run_id) {
         setActiveRunId(res.run_id);
       } else {
@@ -1165,6 +1172,7 @@ export function ChatPane({
     onAtBottomChange,
     agentMode,
     selectedModel,
+    codingAgent,
     contextFilePath,
     setActiveRunId,
     stopOptimistic,
@@ -1197,6 +1205,7 @@ export function ChatPane({
           model,
           contextFilePath,
           atts,
+          codingAgent,
         );
         if (res?.run_id) {
           setActiveRunId(res.run_id);
@@ -1211,6 +1220,7 @@ export function ChatPane({
       rewindAndAppendUser,
       onAtBottomChange,
       chat.id,
+      codingAgent,
       contextFilePath,
       setActiveRunId,
       stopOptimistic,
@@ -1394,7 +1404,7 @@ export function ChatPane({
             // Idle: force-drain this prompt (clear a stuck lock if needed).
             releasePromptDrainLock(chat.id);
             const next = takeNextPromptForDrain(chat.id);
-            if (next) dispatchSend(next.text, next.attachments, next.mode, next.model);
+            if (next) dispatchSend(next.text, next.attachments, next.mode, next.model, next.codingAgent);
           }}
           onDelete={(id) => setPromptQueue(chat.id, removePrompt(promptQueue, id))}
         />
