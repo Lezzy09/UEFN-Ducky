@@ -102,6 +102,9 @@ def click_uefn_window(
     hid = int(hwnd or 0)
     if hid <= 0:
         return {"ok": False, "error": "hwnd required"}
+    refused = _refuse_non_uefn(hid)
+    if refused:
+        return refused
     kind = "dblclick" if dblclick else "down"
     inject_pointer(hid, kind, float(nx), float(ny), button=int(button))
     if not dblclick:
@@ -116,6 +119,9 @@ def key_uefn_window(hwnd: int, key: str) -> dict[str, Any]:
     name = (key or "").strip()
     if hid <= 0 or not name:
         return {"ok": False, "error": "hwnd and key required"}
+    refused = _refuse_non_uefn(hid)
+    if refused:
+        return refused
     inject_key(hid, name, down=True)
     inject_key(hid, name, down=False)
     return {"ok": True, "hwnd": hid, "key": name}
@@ -215,6 +221,19 @@ def _rect(hwnd: int) -> dict[str, int]:
         "bottom": bottom,
         "width": right - left,
         "height": bottom - top,
+    }
+
+
+def _refuse_non_uefn(hwnd: int) -> dict[str, Any] | None:
+    """Clicks and keys go to UEFN editor windows only. An Escape sent to the Fortnite
+    client while it loaded (Oct 2 2026) came just before its GPU hung and it closed."""
+    found = _resolve(hwnd, "")
+    if found.get("ok"):
+        return None
+    return {
+        "ok": False,
+        "error": f"window {hwnd} is not a UEFN editor window; uefn_window_click/key only drive UEFN. "
+        "Never send input to the Fortnite client while it loads; use the Fortnite Demo tools once it is in play.",
     }
 
 
