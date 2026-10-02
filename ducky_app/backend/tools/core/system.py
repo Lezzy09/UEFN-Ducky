@@ -108,6 +108,33 @@ def uefn_window_key(hwnd: int, key: str, pretty: bool = False) -> str:
 
 
 @mcp.tool()
+def uefn_popups(pretty: bool = False) -> str:
+    """UEFN popups on screen now (any window besides the main editor), each captured into
+    this chat with its buttons boxed and numbered 1, 2, 3… left to right.
+
+    Look at the capture, pick the button, then uefn_popup_press(hwnd, n). Known popups say
+    which button Ducky presses for them (``known``); the Verse-error popups UEFN shows when
+    a project opens are pressed automatically (Skip Rebuild → Skip Rebuild & Continue →
+    Continue). After that the level is not saved until Verse builds clean (Ducky reloads
+    the map then). A button outside the numbered row: uefn_window_click on the capture.
+    """
+    from backend.tools.core.uefn_popups import describe_popup, list_popups
+
+    popups = [describe_popup(p) for p in list_popups()]
+    return tool_json({"ok": True, "popups": popups, "count": len(popups)}, pretty=pretty)
+
+
+@mcp.tool()
+def uefn_popup_press(hwnd: int, button: int, pretty: bool = False) -> str:
+    """Press button ``button`` (1-based, left to right, as numbered by uefn_popups) on a
+    UEFN popup. Returns whether it closed and which popups are still open (a press can
+    open the next one, e.g. Skip Rebuild → Data Loss Warning)."""
+    from backend.tools.core.uefn_popups import press_button
+
+    return tool_json(press_button(int(hwnd), int(button)), pretty=pretty)
+
+
+@mcp.tool()
 def uefn_wait_window(title_regex: str, timeout: float = 120, pretty: bool = False) -> str:
     """Wait until a UEFN window title matches. Timeout is capped at 300s."""
     from backend.tools.core.uefn_windows import wait_uefn_window

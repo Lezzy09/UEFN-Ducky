@@ -209,6 +209,14 @@ def _run_panel(api_holder: dict[str, object]) -> None:
         ship_newest_everywhere_async(apply_ides=True, force_skills=False)
         start_appdata_maintenance_async()
         try:
+            # UEFN's Verse-error popups on project open get answered (Skip Rebuild → Continue),
+            # so an agent or workflow waiting for UEFN never sits behind them.
+            from backend.tools.core.uefn_popups import start_popup_guard
+
+            start_popup_guard()
+        except Exception:
+            pass
+        try:
             from frontend.perf_trace import ensure_started
 
             ensure_started()

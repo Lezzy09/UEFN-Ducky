@@ -236,6 +236,13 @@ def workspace_compile_verse(pretty: bool = False) -> str:
         except Exception:  # noqa: BLE001 — telemetry must never break the tool
             pass
     if not result.get("numErrors"):
+        from backend.tools.core.uefn_popups import reload_level_after_clean_build
+
+        reloaded = reload_level_after_clean_build()
+        if reloaded is not None:
+            # The level was opened past Verse errors (popups skipped): it is reloaded from
+            # disk now, so its Verse devices work again and saving is safe again.
+            payload["level_reloaded"] = reloaded
         payload["verse_classes"] = _spawnable_verse_classes()
         directory = verse_asset_directory(_project_mount_name())
         payload["verse_directory"] = directory

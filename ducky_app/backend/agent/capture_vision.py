@@ -14,6 +14,7 @@ _CAPTURE_TOOLS = frozenset(
         "take_high_res_screenshot",
         "blender_get_viewport_screenshot",
         "uefn_window_capture",
+        "uefn_popups",
         "ducky_publish_private_version",
     }
 )
@@ -62,24 +63,28 @@ def vision_attachments_from_capture_result(
     obj = _parse_result_obj(data)
     if not obj:
         return []
-    path = str(obj.get("path") or "").strip()
-    if not path:
-        return []
-    src = Path(path)
-    if not src.is_file():
-        return []
-    try:
-        raw = src.read_bytes()
-    except OSError:
-        return []
-    if not raw or len(raw) > _MAX_VISION_BYTES:
-        return []
-    name = src.name or "capture.png"
-    return [
-        MessageAttachment(
-            kind="image",
-            name=name,
-            mime="image/png",
-            data_base64=base64.b64encode(raw).decode("ascii"),
-        )
+    # uefn_popups returns one numbered capture per popup.
+    nested = obj.get("popups") if isinstance(obj.get("popups"), list) else []
+    paths = [str(obj.get("path") or "").strip()] + [
+        str(p.get("path") or "").strip() for p in nested if isinstance(p, dict)
     ]
+    out: list[MessageAttachment] = []
+    for path in paths:
+        src = Path(path) if path else None
+        if src is None or not src.is_file():
+            continue
+        try:
+            raw = src.read_bytes()
+        except OSError:
+            continue
+        if not raw or len(raw) > _MAX_VISION_BYTES:
+            continue
+        out.append(
+            MessageAttachment(
+                kind="image",
+                name=src.name or "capture.png",
+                mime="image/png",
+                data_base64=base64.b64encode(raw).decode("ascii"),
+            )
+        )
+    return out

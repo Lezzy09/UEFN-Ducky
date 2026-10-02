@@ -32,7 +32,10 @@ def _presave_dirty_packages() -> None:
     """
     try:
         from backend.bridge.client import configured_listener_port, listener_get_health, send_command
+        from backend.tools.core.uefn_popups import verse_skip_active
 
+        if verse_skip_active():
+            return  # the level was opened past Verse errors: saving it breaks its devices
         if listener_get_health(configured_listener_port(), timeout=0.5) is None:
             return
         send_command("save_all_dirty", {"content": True, "maps": True}, timeout=30.0)

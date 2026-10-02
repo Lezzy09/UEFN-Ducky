@@ -142,6 +142,13 @@ def auto_dismiss_save_modal() -> dict[str, Any] | None:
     on every poll: with no matching dialog it is one window enumeration.
     """
     global _last_auto_press_at
+    try:
+        from backend.tools.core.uefn_popups import verse_skip_active
+
+        if verse_skip_active():
+            return None  # saving the level opened past Verse errors would break its devices
+    except Exception:
+        pass
     with _auto_lock:
         if time.time() - _last_auto_press_at < _AUTO_COOLDOWN_SEC:
             return None

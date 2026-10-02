@@ -488,6 +488,14 @@ def send_command(command: str, params: Optional[dict] = None, timeout: float = R
     """
     global _discovered_port, _last_post_ok_at
 
+    from backend.tools.core.uefn_modal import SAVE_LISTENER_COMMANDS
+
+    if command in SAVE_LISTENER_COMMANDS:
+        from backend.tools.core.uefn_popups import SKIP_SAVE_ERROR, verse_skip_active
+
+        if verse_skip_active():
+            raise RuntimeError(SKIP_SAVE_ERROR)
+
     cache_ttl = _CACHEABLE_COMMANDS.get(command)
     key = _cache_key(command, params)
     if cache_ttl is not None:
