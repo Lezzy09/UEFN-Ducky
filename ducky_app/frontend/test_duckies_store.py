@@ -17,6 +17,7 @@ from frontend.agent_profiles import (
     bundled_profile_ids,
     delete_agent_profile,
     duplicate_agent_profile,
+    get_agent_profile,
     list_agent_profiles,
     list_agent_profiles_available,
     list_archived_agent_profiles,
@@ -144,3 +145,35 @@ def test_no_code_deletes_ducky_rows() -> None:
         if re.search(r"DELETE\s+FROM\s+duckies|DROP\s+TABLE\s+(IF\s+EXISTS\s+)?duckies", path.read_text(encoding="utf-8"), re.I):
             offenders.append(path.name)
     assert offenders == []
+
+
+def test_deleting_from_archive_removes_a_shipped_ducky_for_good_but_keeps_its_row() -> None:
+    delete_agent_profile("material-artist")  # first delete: Archive
+    assert _ids(list_archived_agent_profiles()) == {"material-artist"}
+    delete_agent_profile("material-artist")  # from Archive: permanent
+
+    assert "material-artist" not in _ids(list_agent_profiles())
+    assert "material-artist" not in _ids(list_archived_agent_profiles())
+    assert "material-artist" not in _ids(list_agent_profiles_available())
+    row = repo.get("material-artist")
+    assert row is not None and row["deleted"] > 0
+    # Chats that use it still resolve it, and the template stays available.
+    assert get_agent_profile("material-artist")["name"]
+    assert "material-artist" in {t["id"] for t in ap.list_bundled_agent_profile_templates()}
+
+
+def test_one_delete_call_per_ducky_never_takes_shipped_duckies_away() -> None:
+    # The Sep 30 wipe: one automated delete per shipped ducky, back to back.
+    for pid in sorted(bundled_profile_ids()):
+        delete_agent_profile(pid)
+    assert _ids(list_archived_agent_profiles()) == bundled_profile_ids()
+    for pid in sorted(bundled_profile_ids()):
+        unarchive_agent_profile(pid)
+    assert _ids(list_agent_profiles()) == bundled_profile_ids()
+
+
+def test_a_deleted_custom_ducky_still_resolves_for_its_chats() -> None:
+    mine = save_agent_profile({"name": "Helper"})
+    delete_agent_profile(mine["id"])
+    assert mine["id"] not in _ids(list_agent_profiles_available())
+    assert get_agent_profile(mine["id"])["name"] == "Helper"

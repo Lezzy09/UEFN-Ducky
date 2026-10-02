@@ -92,16 +92,27 @@ def set_archived(ducky_id: str, kind: str, archived: bool) -> None:
         )
 
 
-def set_deleted(ducky_id: str, deleted: bool) -> bool:
-    """Mark a custom ducky deleted (or bring it back). The row and its data stay."""
+def set_deleted(ducky_id: str, deleted: bool, *, kind: str = "custom") -> bool:
+    """Mark a ducky deleted (or bring it back). The row and its data stay.
+
+    A custom ducky must already have a row; a shipped one gets a row if it has none.
+    """
     now = time.time()
+    stamp = now if deleted else 0.0
     conn = db.connect()
     with db.write_txn(conn):
         _keep_previous(conn, ducky_id, now)
-        cur = conn.execute(
-            "UPDATE duckies SET deleted=?, updated=? WHERE id=? AND kind='custom'",
-            (now if deleted else 0.0, now, ducky_id),
-        )
+        if kind == "bundled":
+            cur = conn.execute(
+                "INSERT INTO duckies(id, kind, data, archived, deleted, created, updated) VALUES (?, 'bundled', '{}', 0, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET deleted=excluded.deleted, updated=excluded.updated",
+                (ducky_id, stamp, now, now),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE duckies SET deleted=?, updated=? WHERE id=? AND kind='custom'",
+                (stamp, now, ducky_id),
+            )
     return cur.rowcount > 0
 
 

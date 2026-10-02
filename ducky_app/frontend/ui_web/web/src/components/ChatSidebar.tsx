@@ -946,11 +946,11 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
     const bundled = profile.kind === "bundled";
     if (
       !(await confirm({
-        title: bundled ? "Move to Archive" : "Delete from Global Agents",
+        title: "Delete permanently",
         message: bundled
-          ? `Move "${profile.name}" to Archive? You can restore it from Archive any time. Existing chats will be kept.`
-          : `Delete "${profile.name}"? Existing chats will be kept.`,
-        confirmLabel: bundled ? "Move to Archive" : "Delete",
+          ? `Permanently delete "${profile.name}"? It leaves Global Agents and Archive. Existing chats will be kept, and you can still start a new agent from this template.`
+          : `Permanently delete "${profile.name}"? Existing chats will be kept.`,
+        confirmLabel: "Delete permanently",
         danger: true,
       }))
     )

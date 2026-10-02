@@ -138,8 +138,9 @@ def _repo():
 
 
 def _load_rows() -> list[dict[str, Any]]:
+    """Every ducky row, deleted ones included (a deleted shipped ducky must stay hidden)."""
     try:
-        return _repo().list_all()
+        return _repo().list_all(include_deleted=True)
     except _StoreUnavailable:
         # Database can't open: read the old settings copy so the library is never empty.
         from backend.store.importers.duckies import rows_from_settings
@@ -155,19 +156,24 @@ def _load_rows() -> list[dict[str, Any]]:
         )
 
 
-def _library() -> list[tuple[dict[str, Any], bool]]:
-    """(profile, archived) for every shipped ducky, then custom duckies in the order made."""
+def _library(*, with_deleted: bool = False) -> list[tuple[dict[str, Any], bool]]:
+    """(profile, archived) for every shipped ducky, then custom duckies in the order made.
+
+    Deleted duckies are left out unless *with_deleted* (chats that use one still resolve it).
+    """
     rows = _load_rows()
     by_id = {r["id"]: r for r in rows}
     out: list[tuple[dict[str, Any], bool]] = []
     bundled = _load_bundled_raw()
     for template in bundled:
         row = by_id.get(template["id"])
+        if row and row.get("deleted") and not with_deleted:
+            continue  # the user deleted it from Archive
         edits = row["data"] if row and row["kind"] == "bundled" else {}
         out.append((_patch_profile(template, edits) if edits else template, bool(row and row["archived"])))
     shipped = {t["id"] for t in bundled}
     for row in rows:
-        if row["kind"] == "custom" and row["id"] not in shipped:
+        if row["kind"] == "custom" and row["id"] not in shipped and (with_deleted or not row.get("deleted")):
             out.append((_normalize_profile({**row["data"], "id": row["id"]}, bundled=False), bool(row["archived"])))
     return out
 
@@ -194,7 +200,7 @@ def get_agent_profile(profile_id: str) -> dict[str, Any] | None:
     pid = str(profile_id or "").strip()
     if not pid or pid == BLANK_PROFILE_ID:
         return None
-    for profile in list_agent_profiles_available():
+    for profile, _archived in _library(with_deleted=True):
         if profile.get("id") == pid:
             return profile
     return None
@@ -285,12 +291,21 @@ def unarchive_agent_profile(profile_id: str) -> dict[str, Any]:
 
 
 def delete_agent_profile(profile_id: str) -> None:
-    """Shipped duckies go to Archive (restorable); custom ones are marked deleted, row kept."""
+    """Delete a ducky the way the user asked; the database row is always kept.
+
+    A shipped ducky goes to Archive first; deleting it again from Archive removes it
+    from the library and Archive. One call can never take a shipped ducky out of
+    reach (Sep 2026: an automated run of 13 deletes hid all of them). Custom duckies
+    are marked deleted.
+    """
     pid = str(profile_id or "").strip()
     if not pid:
         raise ValueError("profile_id is required")
     if pid in bundled_profile_ids():
-        archive_agent_profile(pid)
+        if pid in {p["id"] for p in list_archived_agent_profiles()}:
+            _repo().set_deleted(pid, True, kind="bundled")
+        else:
+            archive_agent_profile(pid)
         return
     if not _repo().set_deleted(pid, True):
         raise ValueError(f"Profile not found: {profile_id}")
