@@ -7,6 +7,7 @@ to the IDE and length-prefixed JSON frames to this process.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import os
 import secrets
@@ -151,6 +152,11 @@ def _ensure_loop() -> asyncio.AbstractEventLoop:
         if _loop.is_running():
             return _loop
     loop = asyncio.new_event_loop()
+    # Sync tools run on these threads (see _call_tool). Some wait minutes on an agent
+    # or on the user, so the pool is wider than asyncio's default.
+    loop.set_default_executor(
+        concurrent.futures.ThreadPoolExecutor(max_workers=64, thread_name_prefix="shared-mcp-tool")
+    )
 
     def _run() -> None:
         asyncio.set_event_loop(loop)
@@ -354,6 +360,12 @@ async def _async_list_tools(mcp: Any) -> list[Any]:
     return list(listed or [])
 
 
+def _is_sync_tool(mcp: Any, name: str) -> bool:
+    tools = getattr(getattr(mcp, "_tool_manager", None), "_tools", None) or {}
+    tool = tools.get(name)
+    return tool is not None and getattr(tool, "is_async", True) is False
+
+
 async def _call_tool(mcp: Any, name: str, arguments: dict[str, Any], ident: Any) -> dict[str, Any]:
     from backend.agent import hammer_guard
     from backend.workspace import identity
@@ -369,7 +381,15 @@ async def _call_tool(mcp: Any, name: str, arguments: dict[str, Any], ident: Any)
                 await asyncio.to_thread(wait_until_plugins_loaded, 45.0)
             except Exception:
                 pass
-        raw = await mcp.call_tool(name, arguments or {})
+        if _is_sync_tool(mcp, name):
+            # A sync tool runs on a worker thread. On this loop it held up every agent
+            # sharing the daemon, and one that waits on another agent (run_workflow,
+            # ducky_send_chat_message, ducky_ask_user, …) deadlocked as soon as that
+            # agent called a tool here: the Tycoony demo's preflight hung this way.
+            # Listener POSTs stay serialized by bridge.client._listener_lock.
+            raw = await asyncio.to_thread(asyncio.run, mcp.call_tool(name, arguments or {}))
+        else:
+            raw = await mcp.call_tool(name, arguments or {})
         return _call_result(raw)
     finally:
         hammer_guard.reset_conversation(hammer)

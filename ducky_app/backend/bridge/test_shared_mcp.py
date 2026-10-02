@@ -359,3 +359,50 @@ def test_gui_closed_daemon_lists_tools(monkeypatch, tmp_path) -> None:
     finally:
         shared_mcp.request_stop()
         thread.join(timeout=6)
+
+
+class WaitingMcp(FakeMcp):
+    """Two sync tools: one waits (on its thread) until another agent's call lands.
+
+    That is run_workflow waiting for a workflow agent which itself needs a tool from
+    the same daemon. On the daemon loop the first call blocked the second forever.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.answered = threading.Event()
+        for name in ("run_workflow", "workspace_list_verse_errors"):
+            self._tool_manager._tools[name] = SimpleNamespace(name=name, is_async=False)
+
+    async def call_tool(self, name, arguments):
+        from backend.workspace.identity import current
+
+        run_id = current().run_id
+        if name == "run_workflow":
+            # FastMCP calls a sync tool inline: this is that body.
+            assert self.answered.wait(5), "the workflow agent's tool call never ran"
+        else:
+            self.answered.set()
+        return [{"type": "text", "text": f"{name}:{run_id}"}]
+
+
+def test_a_sync_tool_waiting_on_another_agent_does_not_deadlock(monkeypatch, tmp_path) -> None:
+    mcp = WaitingMcp()
+    thread = _serve(mcp, monkeypatch, tmp_path)
+    try:
+        caller = _hello("run-caller")
+        agent = _hello("run-agent")
+        shared_mcp.write_frame(
+            caller,
+            {"op": "mcp", "id": 1, "method": "tools/call", "params": {"name": "run_workflow", "arguments": {}}},
+        )
+        time.sleep(0.2)  # run_workflow is now waiting
+        ra = _rpc(agent, "tools/call", {"name": "workspace_list_verse_errors", "arguments": {}}, 2)
+        assert (ra.get("content") or [{}])[0].get("text") == "workspace_list_verse_errors:run-agent"
+        rc = shared_mcp.read_frame(caller)
+        assert (rc.get("result", {}).get("content") or [{}])[0].get("text") == "run_workflow:run-caller"
+        shared_mcp.close_handle(caller)
+        shared_mcp.close_handle(agent)
+    finally:
+        shared_mcp.request_stop()
+        thread.join(timeout=6)
