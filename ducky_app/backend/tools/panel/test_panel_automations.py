@@ -3,6 +3,41 @@
 from __future__ import annotations
 
 import json
+import asyncio
+import contextvars
+import threading
+
+
+def test_workflow_runner_keeps_mcp_loop_responsive(monkeypatch):
+    from backend.tools.panel import panel_automations as panel
+
+    caller = contextvars.ContextVar("test_workflow_caller")
+    monkeypatch.setattr(panel, "_reveal_graph", lambda *args, **kwargs: None)
+
+    async def check():
+        loop = asyncio.get_running_loop()
+        loop_thread = threading.get_ident()
+        caller.set("calling-chat")
+
+        async def diagnostic():
+            return "diagnostics returned"
+
+        def runner(*args, **kwargs):
+            assert threading.get_ident() != loop_thread
+            assert caller.get() == "calling-chat"
+            # Reproduce the worker agent requesting tools from the same loop.
+            result = asyncio.run_coroutine_threadsafe(diagnostic(), loop).result(timeout=2)
+            return {"ok": True, "evidence": result}
+
+        monkeypatch.setattr("backend.automations.runner.run_workflow", runner)
+        monkeypatch.setattr("backend.automations.runner.run_node", runner)
+        for request in (panel.run_workflow("demo", caller_conv_id="calling-chat"),
+                        panel.run_workflow_node("demo", "build")):
+            result = json.loads(await request)
+            assert result["ok"] is True
+            assert result["evidence"] == "diagnostics returned"
+
+    asyncio.run(check())
 
 
 def _events(monkeypatch) -> list[dict]:

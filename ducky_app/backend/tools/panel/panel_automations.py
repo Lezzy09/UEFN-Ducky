@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from backend.server import mcp
@@ -439,7 +440,7 @@ def create_workflow_from_template(
 
 
 @mcp.tool()
-def run_workflow(
+async def run_workflow(
     workflow_id: str,
     prompt: str = "",
     files: list[Any] | None = None,
@@ -457,7 +458,11 @@ def run_workflow(
     """
     from backend.automations.runner import run_workflow as _run
 
-    out = _run(
+    # Agents inside the workflow call this MCP server themselves. Keep its
+    # event loop available while the synchronous runner waits for those agents.
+    # to_thread also preserves the caller's identity context variables.
+    out = await asyncio.to_thread(
+        _run,
         workflow_id,
         trigger_id=trigger_id,
         payload=payload or {},
@@ -471,7 +476,7 @@ def run_workflow(
 
 
 @mcp.tool()
-def run_workflow_node(workflow_id: str, node_id: str, pretty: bool = False) -> str:
+async def run_workflow_node(workflow_id: str, node_id: str, pretty: bool = False) -> str:
     """Run one node of a saved workflow now (the details panel's Run this node).
 
     Everything wired into it reuses what the last run made, so paid generators
@@ -479,7 +484,7 @@ def run_workflow_node(workflow_id: str, node_id: str, pretty: bool = False) -> s
     node's outputs (node_outputs[node_id]) and its step in steps."""
     from backend.automations.runner import run_node
 
-    out = run_node(workflow_id, node_id)
+    out = await asyncio.to_thread(run_node, workflow_id, node_id)
     if out.get("ok"):
         _reveal_graph(workflow_id, "saved", nodes=[node_id], select=False)
     return tool_json(out, pretty=pretty)
