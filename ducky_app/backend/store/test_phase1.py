@@ -262,7 +262,8 @@ def test_plugin_cache_and_prefs_rows_and_import(tmp_path: Path) -> None:
     # Signed out: the legacy rows were claimed by _local and sealed (plan §13). Prefs survive a cache wipe.
     assert pha.prefs_all_get()["demo"] == {"language": "bg"}
     value, encrypted = plugin_repo.all_prefs(account="_local", scope="personal")["demo"]
-    assert encrypted and value.startswith("enc1:") and "bg" not in value
+    # Look for the JSON-quoted value: base64 never contains a quote, so a bare "bg" would match ciphertext by chance.
+    assert encrypted and value.startswith("enc1:") and '"bg"' not in value
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="DPAPI")
