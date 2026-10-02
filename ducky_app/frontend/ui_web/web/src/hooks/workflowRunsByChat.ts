@@ -13,7 +13,8 @@ import { subscribePanelPush } from "./usePanelPushBus";
  * The events can reach either UI bus, so applying one twice changes nothing.
  */
 
-export type WorkflowStepState = "pending" | "running" | "ok" | "error" | "stopped";
+export type WorkflowStepState =
+  "pending" | "running" | "ok" | "error" | "stopped";
 
 export interface ChatWorkflowStep {
   node: string;
@@ -23,6 +24,9 @@ export interface ChatWorkflowStep {
   error?: string;
   /** Ran but is not on the happy path (a failure report, a fix step). */
   extra?: boolean;
+  /** When it last started / finished (ms), for the time a long step has taken. */
+  startedAt?: number;
+  endedAt?: number;
 }
 
 export interface ChatWorkflowRun {
@@ -34,9 +38,23 @@ export interface ChatWorkflowRun {
   steps: ChatWorkflowStep[];
   /** Node id of the step running now ("" when none). */
   current: string;
+  startedAt: number;
+  endedAt?: number;
 }
 
-type WorkflowEvent = Pick<PanelPushEvent, "type" | "id" | "run" | "node" | "state" | "error" | "conv" | "name" | "plan" | "label">;
+type WorkflowEvent = Pick<
+  PanelPushEvent,
+  | "type"
+  | "id"
+  | "run"
+  | "node"
+  | "state"
+  | "error"
+  | "conv"
+  | "name"
+  | "plan"
+  | "label"
+>;
 
 const byChat = new Map<string, ChatWorkflowRun>();
 const runToChat = new Map<string, string>();
@@ -63,8 +81,14 @@ export function applyWorkflowEvent(event: WorkflowEvent): void {
       run,
       name: String(event.name || "Workflow"),
       state: "running",
-      steps: (event.plan || []).map((p) => ({ node: p.node, label: p.label || p.node, type: p.type || "", state: "pending" })),
+      steps: (event.plan || []).map((p) => ({
+        node: p.node,
+        label: p.label || p.node,
+        type: p.type || "",
+        state: "pending",
+      })),
       current: "",
+      startedAt: Date.now(),
     });
     emit();
     return;
@@ -75,9 +99,30 @@ export function applyWorkflowEvent(event: WorkflowEvent): void {
 
   if (event.type === "workflow_run") {
     if (current.state !== "running") return;
-    const state = event.state === "stopped" ? "stopped" : event.state === "error" ? "error" : "done";
-    const steps = current.steps.map((s) => (s.state === "running" ? { ...s, state: state === "done" ? "ok" : state } as ChatWorkflowStep : s));
-    byChat.set(chat, { ...current, state, error: event.error || undefined, steps, current: "" });
+    const state =
+      event.state === "stopped"
+        ? "stopped"
+        : event.state === "error"
+          ? "error"
+          : "done";
+    const now = Date.now();
+    const steps = current.steps.map((s) =>
+      s.state === "running"
+        ? ({
+            ...s,
+            state: state === "done" ? "ok" : state,
+            endedAt: now,
+          } as ChatWorkflowStep)
+        : s,
+    );
+    byChat.set(chat, {
+      ...current,
+      state,
+      error: event.error || undefined,
+      steps,
+      current: "",
+      endedAt: now,
+    });
     emit();
     return;
   }
@@ -87,22 +132,49 @@ export function applyWorkflowEvent(event: WorkflowEvent): void {
   const state = stepState(event.state);
   const index = current.steps.findIndex((s) => s.node === node);
   const prev = index >= 0 ? current.steps[index] : undefined;
-  if (prev && prev.state === state && (prev.error || "") === (event.error || "")) return;
+  if (
+    prev &&
+    prev.state === state &&
+    (prev.error || "") === (event.error || "")
+  )
+    return;
+  const now = Date.now();
+  const times =
+    state === "running"
+      ? { startedAt: now, endedAt: undefined }
+      : { endedAt: now };
   const next: ChatWorkflowStep = prev
-    ? { ...prev, state, error: event.error || undefined }
-    : { node, label: event.label || node, type: "", state, error: event.error || undefined, extra: true };
-  const steps = index >= 0 ? current.steps.map((s, i) => (i === index ? next : s)) : [...current.steps, next];
+    ? { ...prev, state, error: event.error || undefined, ...times }
+    : {
+        node,
+        label: event.label || node,
+        type: "",
+        state,
+        error: event.error || undefined,
+        extra: true,
+        ...times,
+      };
+  const steps =
+    index >= 0
+      ? current.steps.map((s, i) => (i === index ? next : s))
+      : [...current.steps, next];
   byChat.set(chat, {
     ...current,
     steps,
-    current: state === "running" ? node : current.current === node ? "" : current.current,
+    current:
+      state === "running"
+        ? node
+        : current.current === node
+          ? ""
+          : current.current,
   });
   emit();
 }
 
 function onEvent(event: AgentEvent | PanelPushEvent): void {
   const type = String(event.type || "");
-  if (type === "workflow_run" || type === "workflow_step") applyWorkflowEvent(event as WorkflowEvent);
+  if (type === "workflow_run" || type === "workflow_step")
+    applyWorkflowEvent(event as WorkflowEvent);
 }
 
 function install(): void {

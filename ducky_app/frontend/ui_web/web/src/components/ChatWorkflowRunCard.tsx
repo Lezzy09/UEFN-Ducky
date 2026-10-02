@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { requestFocusGraph } from "../hooks/graphActivity";
 import { getApi } from "../hooks/usePanelApi";
@@ -15,44 +15,117 @@ function shownSteps(run: ChatWorkflowRun): ChatWorkflowStep[] {
   return run.steps.filter((s) => s.type !== "logic.if" || s.state === "error");
 }
 
-export function workflowRunSummary(run: ChatWorkflowRun): string {
+/** The step running now: the latest one started (a Repeat stays running around its steps). */
+function currentStep(run: ChatWorkflowRun): ChatWorkflowStep | undefined {
+  return run.steps
+    .filter((s) => s.state === "running")
+    .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0];
+}
+
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m >= 60
+    ? `${Math.floor(m / 60)}h ${m % 60}m`
+    : `${m}:${String(s).padStart(2, "0")}`;
+}
+
+export function workflowRunSummary(
+  run: ChatWorkflowRun,
+  now: number = Date.now(),
+): string {
   const steps = shownSteps(run);
-  const total = steps.filter((s) => !s.extra).length;
-  if (run.state === "done") return "Finished";
+  const main = steps.filter((s) => !s.extra);
+  if (run.state === "done")
+    return `Finished · ${formatElapsed((run.endedAt ?? now) - run.startedAt)}`;
   if (run.state === "stopped") return "Stopped";
   if (run.state === "error") {
     const failed = steps.find((s) => s.state === "error");
     return failed ? `Failed at ${failed.label}` : "Failed";
   }
-  const current = run.steps.find((s) => s.node === run.current);
-  const at = steps.findIndex((s) => s.node === run.current && !s.extra);
-  const label = current?.label ?? "Starting";
-  return at >= 0 && total ? `Step ${at + 1}/${total} · ${label}` : label;
+  const current = currentStep(run);
+  if (!current) return "Starting…";
+  const at = main.findIndex((s) => s.node === current.node);
+  const took = current.startedAt
+    ? ` · ${formatElapsed(now - current.startedAt)}`
+    : "";
+  return at >= 0
+    ? `Step ${at + 1}/${main.length} · ${current.label}${took}`
+    : `${current.label}${took}`;
 }
 
-const MARK: Record<ChatWorkflowStep["state"], string> = {
-  pending: "○",
-  running: "●",
-  ok: "✓",
-  error: "✕",
-  stopped: "■",
-};
+/** Re-render once a second while the run is live, for the elapsed times. */
+function useTick(live: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!live) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [live]);
+  return now;
+}
+
+function StateMark({ state }: { state: ChatWorkflowStep["state"] }) {
+  if (state === "ok") {
+    return (
+      <svg
+        width="11"
+        height="11"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        aria-hidden
+      >
+        <path d="M5 12.5l4.5 4.5L19 7.5" />
+      </svg>
+    );
+  }
+  if (state === "error") {
+    return (
+      <svg
+        width="10"
+        height="10"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        aria-hidden
+      >
+        <path d="M6 6l12 12M18 6L6 18" />
+      </svg>
+    );
+  }
+  return <span className="chat-workflow-run-dot" aria-hidden />;
+}
 
 /** The workflow this chat's ducky is running: name, every step, the one running now. */
 export function ChatWorkflowRunCard({ chatId }: { chatId: string }) {
   const run = useChatWorkflowRun(chatId);
   const [open, setOpen] = useState(false);
+  const running = run?.state === "running";
+  const now = useTick(running);
+  const currentRef = useRef<HTMLLIElement | null>(null);
+  const current = run ? currentStep(run) : undefined;
+
+  useEffect(() => {
+    if (open) currentRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [open, current?.node]);
+
   if (!run) return null;
   const steps = shownSteps(run);
   const main = steps.filter((s) => !s.extra);
   const done = main.filter((s) => s.state === "ok").length;
-  const running = run.state === "running";
+  const percent =
+    run.state === "done"
+      ? 100
+      : main.length
+        ? Math.round((done / main.length) * 100)
+        : 0;
   const openInEditor = () => {
     requestOpenWorkflowsTab();
-    requestFocusGraph(
-      run.workflowId,
-      run.current ? { nodes: [run.current] } : {},
-    );
+    requestFocusGraph(run.workflowId, current ? { nodes: [current.node] } : {});
   };
 
   return (
@@ -61,7 +134,7 @@ export function ChatWorkflowRunCard({ chatId }: { chatId: string }) {
         className={`chat-plan-popup chat-workflow-run is-${run.state}`}
         data-testid="chat-workflow-run"
       >
-        <div className="chat-plan-popup-bar">
+        <div className="chat-plan-popup-bar chat-workflow-run-bar">
           <button
             type="button"
             className="chat-plan-popup-bar-main"
@@ -69,12 +142,30 @@ export function ChatWorkflowRunCard({ chatId }: { chatId: string }) {
             aria-expanded={open}
             title={open ? "Hide steps" : "Show steps"}
           >
+            <span
+              className={`chat-workflow-run-live is-${run.state}`}
+              aria-hidden
+            >
+              {run.state === "running" ? (
+                <span className="chat-workflow-run-pulse" />
+              ) : (
+                <StateMark
+                  state={
+                    run.state === "done"
+                      ? "ok"
+                      : run.state === "stopped"
+                        ? "stopped"
+                        : "error"
+                  }
+                />
+              )}
+            </span>
             <span className="chat-plan-popup-bar-kicker chat-workflow-run-kicker">
               Workflow
             </span>
             <span className="chat-plan-popup-bar-title">{run.name}</span>
             <span className="chat-plan-popup-bar-count chat-workflow-run-status">
-              {workflowRunSummary(run)}
+              {workflowRunSummary(run, now)}
             </span>
             <span
               className={`chat-plan-popup-chevron${open ? " is-open" : ""}`}
@@ -150,25 +241,30 @@ export function ChatWorkflowRunCard({ chatId }: { chatId: string }) {
               </svg>
             </button>
           )}
-        </div>
-        <div className="chat-workflow-run-progress" aria-hidden>
-          <span
-            style={{
-              width: `${main.length ? Math.round((done / main.length) * 100) : 0}%`,
-            }}
-          />
+          <span className="chat-workflow-run-progress" aria-hidden>
+            <span style={{ width: `${percent}%` }} />
+          </span>
         </div>
         {open ? (
           <ol className="chat-workflow-run-steps">
             {steps.map((s) => (
               <li
                 key={s.node}
-                className={`chat-workflow-run-step is-${s.state}${s.extra ? " is-extra" : ""}`}
+                ref={s.node === current?.node ? currentRef : undefined}
+                className={`chat-workflow-run-step is-${s.state}${s.extra ? " is-extra" : ""}${s.node === current?.node ? " is-current" : ""}`}
               >
-                <span className="chat-workflow-run-mark" aria-hidden>
-                  {MARK[s.state]}
+                <span className="chat-workflow-run-mark">
+                  <StateMark state={s.state} />
                 </span>
                 <span className="chat-workflow-run-label">{s.label}</span>
+                {s.startedAt && (s.state === "running" || s.endedAt) ? (
+                  <span className="chat-workflow-run-time">
+                    {formatElapsed(
+                      (s.state === "running" ? now : (s.endedAt ?? now)) -
+                        s.startedAt,
+                    )}
+                  </span>
+                ) : null}
                 {s.error ? (
                   <span className="chat-workflow-run-error">{s.error}</span>
                 ) : null}
