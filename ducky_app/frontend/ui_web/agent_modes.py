@@ -461,6 +461,9 @@ _linked_parents: dict[str, str] = {}
 _child_waiters: dict[str, set[str]] = {}
 # Runs another chat started (sub-agents): the parent's finish is the one the phone hears about.
 _quiet_runs: set[str] = set()
+# A reply quicker than this was most likely watched as it happened: no phone push.
+PHONE_PUSH_MIN_SECONDS = 20.0
+_run_started: dict[str, float] = {}
 
 # #region agent log
 def _dbg_thread_state(message: str, **data: Any) -> None:
@@ -593,6 +596,9 @@ def _push_agent_stopped(
     close_changeset_run(run_id, reason)
     quiet = run_id in _quiet_runs
     _quiet_runs.discard(run_id)
+    started = _run_started.pop(run_id, None)
+    if started is not None and time.monotonic() - started < PHONE_PUSH_MIN_SECONDS:
+        quiet = True
     if reason in ("error", "timeout") and not quiet:
         _notify_phone(conv_id, reason)
     if reason != "done":
@@ -1464,6 +1470,7 @@ def run_message(
             return ""
 
     run_id = str(uuid.uuid4())
+    _run_started[run_id] = time.monotonic()
 
     settings = PanelSettings.load()
     apply_workspace_env(settings.uefn_project_root)

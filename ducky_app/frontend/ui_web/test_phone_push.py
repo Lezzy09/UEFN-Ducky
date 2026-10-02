@@ -60,6 +60,15 @@ def test_only_top_level_finishes_push(monkeypatch) -> None:
     agent_modes._push_agent_stopped(events.append, "c4", "run-4", "error")
     assert calls == [("c1", "done"), ("c4", "error")]
 
+    # A quick reply was watched as it happened; a long run is the one you walk away from.
+    agent_modes._run_started["run-5"] = agent_modes.time.monotonic()
+    agent_modes._push_agent_stopped(events.append, "c5", "run-5", "done")
+    assert calls[-1] == ("c4", "error")
+    agent_modes._run_started["run-6"] = agent_modes.time.monotonic() - agent_modes.PHONE_PUSH_MIN_SECONDS - 1
+    agent_modes._push_agent_stopped(events.append, "c6", "run-6", "done")
+    assert calls[-1] == ("c6", "done")
+    assert "run-5" not in agent_modes._run_started and "run-6" not in agent_modes._run_started
+
 
 def test_group_members_stay_quiet_and_reply_text_never_leaves(monkeypatch) -> None:
     sent: list[dict] = []
