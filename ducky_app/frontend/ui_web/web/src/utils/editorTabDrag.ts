@@ -5,6 +5,8 @@ export const EDITOR_TAB_DRAG_MIME = "application/x-ducky-editor-tab";
 export const EDITOR_TAB_GROUP_DRAG_MIME = "application/x-ducky-editor-tab-group";
 /** Settings → Plans nest drag — must not arm editor tab split overlays. */
 export const PLAN_NEST_DRAG_MIME = "application/x-ducky-plan-nest";
+/** Workflow list refiling. Must not look like a tab/window drag (text/plain alone does). */
+export const WORKFLOW_LIST_DRAG_MIME = "application/x-ducky-workflow-list";
 /** text/plain JSON marker — the ONLY payload WebView2 reliably carries BETWEEN windows. */
 const CROSS_WINDOW_KEY = "duckyTab";
 
@@ -25,6 +27,26 @@ type DragSession = {
 
 /** WebView2 often omits custom MIME types from dataTransfer.types during dragover. */
 let dragSession: DragSession | null = null;
+/** Set on workflow dragstart. types are unreliable until drop, so the flag is the signal. */
+let workflowListDrag = false;
+
+function clearWorkflowListDrag(): void {
+  workflowListDrag = false;
+  if (typeof window === "undefined") return;
+  window.removeEventListener("dragend", clearWorkflowListDrag, true);
+  window.removeEventListener("drop", clearWorkflowListDrag, true);
+}
+
+export function beginWorkflowListDrag(): void {
+  workflowListDrag = true;
+  if (typeof window === "undefined") return;
+  window.addEventListener("dragend", clearWorkflowListDrag, true);
+  window.addEventListener("drop", clearWorkflowListDrag, true);
+}
+
+export function endWorkflowListDrag(): void {
+  clearWorkflowListDrag();
+}
 
 export function beginEditorTabDrag(tabId: string, groupId: string): void {
   dragSession = {
@@ -123,11 +145,12 @@ export function getEditorTabGroupDragData(dataTransfer: DataTransfer): string {
 }
 
 export function isEditorTabDrag(e?: { dataTransfer?: DataTransfer }): boolean {
+  if (workflowListDrag) return false;
   if (dragSession) return true;
   if (!e?.dataTransfer) return false;
   const types = Array.from(e.dataTransfer.types);
   // Plan nest (and similar) also set text/plain — never treat those as tab splits.
-  if (types.includes(PLAN_NEST_DRAG_MIME)) return false;
+  if (types.includes(PLAN_NEST_DRAG_MIME) || types.includes(WORKFLOW_LIST_DRAG_MIME)) return false;
   if (types.includes(EDITOR_TAB_DRAG_MIME)) return true;
   // Cross-window tab drags surface only text/plain in WebView2.
   if (!types.includes("text/plain")) return false;

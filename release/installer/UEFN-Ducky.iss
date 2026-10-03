@@ -79,6 +79,9 @@ Source: "{#MyAppDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs c
 Source: "..\portable\THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "POST_INSTALL.txt"; DestDir: "{app}"; Flags: ignoreversion
+; CLI shim. ducky.cmd is a few lines that run ducky.ps1; it does not copy the app.
+Source: "ducky.cmd"; DestDir: "{app}"; Flags: ignoreversion
+Source: "ducky.ps1"; DestDir: "{app}"; Flags: ignoreversion
 ; Uninstall removes {app}; user data in %LOCALAPPDATA%\UEFN-Ducky is only deleted
 ; if the user answers Yes to the prompt in [Code] below.
 
@@ -120,6 +123,86 @@ Root: HKA; Subkey: "Software\Classes\*\shell\UEFNDucky\command"; ValueType: stri
 const
   // Same _is1 key frontend/install_info.py reads.
   UninstallRegKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{{#MyAppId}}_is1';
+  WM_SETTINGCHANGE = $001A;
+  SMTO_ABORTIFHUNG = $0002;
+
+function SendMessageTimeout(hWnd: Integer; Msg: Integer; wParam: Integer; lParam: String; fuFlags: Integer; uTimeout: Integer; var dwResult: Integer): Integer;
+  external 'SendMessageTimeoutW@user32.dll stdcall';
+
+function PathHasDir(const Path, Dir: string): Boolean;
+begin
+  Result := Pos(';' + Uppercase(Dir) + ';', ';' + Uppercase(Path) + ';') > 0;
+end;
+
+function RemovePathDir(const Path, Dir: string): string;
+var
+  Rest, Item, UpperDir: string;
+  P: Integer;
+begin
+  Rest := Path;
+  Result := '';
+  UpperDir := Uppercase(Dir);
+  while Rest <> '' do
+  begin
+    P := Pos(';', Rest);
+    if P = 0 then
+    begin
+      Item := Rest;
+      Rest := '';
+    end
+    else
+    begin
+      Item := Copy(Rest, 1, P - 1);
+      Rest := Copy(Rest, P + 1, MaxInt);
+    end;
+    if (Item <> '') and (Uppercase(Item) <> UpperDir) then
+    begin
+      if Result <> '' then
+        Result := Result + ';';
+      Result := Result + Item;
+    end;
+  end;
+end;
+
+procedure NotifyEnvironment();
+var
+  Res: Integer;
+begin
+  SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, 0, 'Environment', SMTO_ABORTIFHUNG, 5000, Res);
+end;
+
+procedure AddDuckyToUserPath();
+var
+  Path, App: string;
+begin
+  App := ExpandConstant('{app}');
+  if not RegQueryStringValue(HKCU, 'Environment', 'Path', Path) then
+    Path := '';
+  if PathHasDir(Path, App) then
+    Exit;
+  if Path = '' then
+    Path := App
+  else if Path[Length(Path)] = ';' then
+    Path := Path + App
+  else
+    Path := Path + ';' + App;
+  RegWriteStringValue(HKCU, 'Environment', 'Path', Path);
+  NotifyEnvironment();
+end;
+
+procedure RemoveDuckyFromUserPath();
+var
+  Path, App, Next: string;
+begin
+  App := ExpandConstant('{app}');
+  if not RegQueryStringValue(HKCU, 'Environment', 'Path', Path) then
+    Exit;
+  if not PathHasDir(Path, App) then
+    Exit;
+  Next := RemovePathDir(Path, App);
+  RegWriteStringValue(HKCU, 'Environment', 'Path', Next);
+  NotifyEnvironment();
+end;
 
 var
   // Custom "launch on finish" checkbox (replaces the built-in postinstall one so
@@ -212,7 +295,10 @@ begin
   if CurStep = ssInstall then
     WriteProgress(5, 'Copying files...');
   if CurStep = ssPostInstall then
+  begin
     WriteProgress(95, 'Creating shortcuts...');
+    AddDuckyToUserPath();
+  end;
   if CurStep = ssDone then
   begin
     WriteProgress(100, 'Done');
@@ -257,6 +343,7 @@ var
 begin
   if CurUninstallStep = usPostUninstall then
   begin
+    RemoveDuckyFromUserPath();
     DataDir := ExpandConstant('{localappdata}\UEFN-Ducky');
     if DirExists(DataDir) then
     begin

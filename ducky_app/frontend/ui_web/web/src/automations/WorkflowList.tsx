@@ -6,6 +6,7 @@ import { syncText } from "../plugin-ui/scopeBarText";
 import { ContextMenu, useContextMenuState, type ContextMenuItem } from "../components/ContextMenu";
 import { contextMenuSeparator } from "../utils/sidebarContextMenuItems";
 import { targetRef } from "../ui-targets/registry";
+import { beginWorkflowListDrag, endWorkflowListDrag, WORKFLOW_LIST_DRAG_MIME } from "../utils/editorTabDrag";
 import { WorkflowHoverCard } from "./WorkflowHoverCard";
 import { buildFolderTree, folderName, isInside, joinFolder, normalizeFolder, parentFolder, type FolderNode } from "./workflowFolders";
 
@@ -108,6 +109,7 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
   const [editing, setEditing] = useState<Editing | null>(null);
   const [renamingId, setRenamingId] = useState("");
   const [dropAt, setDropAt] = useState("");
+  const [dragging, setDragging] = useState(false);
   const drag = useRef<Drag | null>(null);
   const { menu, open: openMenu, close: closeMenu } = useContextMenuState<MenuTarget>();
   const sections = owners.owners?.length ? owners.owners : [LOCAL_OWNER];
@@ -193,10 +195,15 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
   };
   const startDrag = (event: DragEvent, value: Drag) => {
     drag.current = value;
+    setDragging(true);
+    beginWorkflowListDrag();
+    event.stopPropagation();
     event.dataTransfer.effectAllowed = "move";
+    // Own MIME so the editor does not treat this as dragging a tab into another window.
+    event.dataTransfer.setData(WORKFLOW_LIST_DRAG_MIME, value.kind);
     event.dataTransfer.setData("text/plain", value.kind === "workflow" ? value.items.map((item) => item.id).join("\n") : value.path);
   };
-  const endDrag = () => { drag.current = null; setDropAt(""); };
+  const endDrag = () => { drag.current = null; setDragging(false); endWorkflowListDrag(); setDropAt(""); };
 
   const commitName = (owner: WorkflowOwnerDto, name: string) => {
     const edit = editing;
@@ -276,7 +283,7 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
             onCancel={() => setRenamingId("")} />
         </div>
       ) : (
-        <WorkflowHoverCard row={row} icon={<TriggerIcon row={row} />} disabled={!!dropAt} onOpen={() => { setPicked([]); onOpen(row.id); }}>
+        <WorkflowHoverCard row={row} icon={<TriggerIcon row={row} />} disabled={dragging || !!dropAt} onOpen={() => { setPicked([]); onOpen(row.id); }}>
         <button type="button" ref={targetRef(`workflows.list.row.${row.id}`, { route: "workflows", label: row.name || "Untitled" })} data-aw-row={row.id}
           className={"aw-list-row" + (row.id === activeId ? " is-active" : "") + (picked.includes(row.id) ? " is-picked" : "")} aria-current={row.id === activeId ? "true" : undefined} aria-selected={picked.length ? picked.includes(row.id) : undefined}
           style={{ "--aw-level": depth + 1 } as CSSProperties} draggable={canFile && !owner.readOnly}
@@ -346,7 +353,7 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
   };
 
   return (
-    <aside className="aw-list" ref={listRef} aria-label="Workflows" data-aw-zoom="list" onKeyDown={onListKeyDown}>
+    <aside className="aw-list no-drag" ref={listRef} aria-label="Workflows" data-aw-zoom="list" onKeyDown={onListKeyDown}>
       <div className="aw-list-head">
         <button type="button" ref={targetRef("workflows.list.toggle", { route: "workflows", label: "Fold or unfold the Workflows list" })} className="aw-list-toggle" title={collapsed ? "Expand Workflows" : "Collapse Workflows"} aria-expanded={!collapsed} aria-controls={listId} onClick={onToggleCollapsed}>
           <span className="aw-list-title"><span className="aw-list-icon" aria-hidden="true"><Icons.Workflow /></span><strong>Workflows</strong></span>

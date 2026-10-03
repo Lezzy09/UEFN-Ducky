@@ -77,6 +77,12 @@ export function useEditorTabHoverCard(
   useEffect(() => () => clearTimers(), []);
 
   useEffect(() => {
+    if (!disabled) return;
+    clearTimers();
+    setOpen(false);
+  }, [disabled]);
+
+  useEffect(() => {
     if (!open) return;
     const onScroll = () => setOpen(false);
     window.addEventListener("scroll", onScroll, true);

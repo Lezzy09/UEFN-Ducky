@@ -1601,6 +1601,7 @@ describe("folders in the Workflows list", () => {
     expect(JSON.parse(window.localStorage.getItem("ducky.workflows.emptyFolders.v1") || "{}")).toEqual({ local: ["QA"] });
     const dataTransfer = transfer();
     fireEvent.dragStart(screen.getByText("Example").closest("button")!, { dataTransfer });
+    expect(dataTransfer.setData).toHaveBeenCalledWith("application/x-ducky-workflow-list", "workflow");
     fireEvent.dragOver(folderRow("QA"), { dataTransfer });
     expect(folderRow("QA").classList.contains("is-drop-target")).toBe(true);
     fireEvent.drop(folderRow("QA"), { dataTransfer });

@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   EDITOR_TAB_DRAG_MIME,
+  beginWorkflowListDrag,
+  endWorkflowListDrag,
   PLAN_NEST_DRAG_MIME,
+  WORKFLOW_LIST_DRAG_MIME,
   beginEditorTabDrag,
   endEditorTabDrag,
   getLastDragScreenPoint,
@@ -30,6 +33,22 @@ describe("isEditorTabDrag", () => {
         fakeEvent([PLAN_NEST_DRAG_MIME, "text/plain"], "C:/proj::chat-1"),
       ),
     ).toBe(false);
+  });
+
+  it("rejects a workflow-list drag even when dragover hides the text", () => {
+    expect(
+      isEditorTabDrag(fakeEvent([WORKFLOW_LIST_DRAG_MIME, "text/plain"], "")),
+    ).toBe(false);
+  });
+
+  it("rejects a workflow-list drag when WebView2 only reports empty text/plain", () => {
+    beginWorkflowListDrag();
+    try {
+      expect(isEditorTabDrag(fakeEvent(["text/plain"], ""))).toBe(false);
+    } finally {
+      endWorkflowListDrag();
+    }
+    expect(isEditorTabDrag(fakeEvent(["text/plain"], ""))).toBe(true);
   });
 
   it("rejects non-tab text/plain payloads when readable", () => {

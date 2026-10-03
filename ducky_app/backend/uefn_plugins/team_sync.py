@@ -59,7 +59,7 @@ class Transport:
             raise SyncError(exc.message, offline=True) from exc
         payload = parsed.get("payload") if isinstance(parsed, dict) else None
         payload = payload if isinstance(payload, dict) else (parsed or {})
-        if 200 <= int(status) < 300:
+        if 200 <= int(status) < 300 and not payload.get("error"):
             return payload
         err = str(payload.get("error") or (parsed or {}).get("error") or f"HTTP {status}")
         raise SyncError(err, offline=int(status) >= 500)
