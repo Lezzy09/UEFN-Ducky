@@ -1,8 +1,7 @@
 import type { AutomationGraphNodeDto, AutomationNodeDto, AutomationSummaryDto, PinDto, PinType } from "../types/panel";
 import { NODE_HEIGHT, NODE_HEIGHT_COMPACT, NODE_TITLE_HEIGHT, NODE_WIDTH, PORT_Y } from "./graphGeometry";
 
-/** Typed pins on the canvas. Mirrors backend/automations/pins.py; keep the two in step.
- *  Plan: docs/architecture/workflow-dataflow-nodes-plan-2026-10.md §2 and §4. */
+/** Typed pins on the canvas. Mirrors backend/automations/pins.py; keep the two in step. */
 
 export const PIN_TYPES: PinType[] = ["text", "number", "boolean", "json", "any", "image", "images", "audio", "video", "mesh", "svg", "pdf", "file"];
 const FILE_TYPES = new Set<PinType>(["image", "audio", "video", "mesh", "svg", "pdf", "file"]);

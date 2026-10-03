@@ -11,9 +11,12 @@ venv/
 # Machine-specific profiles, logs, and local investigation reports.
 /docs/diagnostics/
 
-# --- Local MCP / agent configs (may hold tokens — never commit) ---
+# --- Local MCP / agent configs, rules, skills, plans (personal — never commit) ---
 .mcp.json
-.claude/settings.local.json
+/.claude/
+/.cursor/
+/CLAUDE.md
+/AGENTS.md
 
 # --- Node ---
 **/node_modules/
@@ -45,11 +48,11 @@ ducky_app/frontend/ui_web/web/public/verse-workflow/
 # e2e artifact
 tests/e2e/remote_view/last-viewer.png
 
-# Cursor local plans — not product
-.cursor/plans/
-
-# Agent scratch / exports / generated images / profiling harnesses — never commit
+# Agent scratch / exports / generated images / profiling harnesses / nested clones — never commit
 /exports/
 /output/
 /undefined/
 /.profile-*/
+/build/account-store-plugin/
+/docs/**/*-plan-20*.md
+/docs/**/*-20[0-9][0-9]-[0-9][0-9].md

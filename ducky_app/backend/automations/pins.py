@@ -1,7 +1,6 @@
 """Typed pins: what a node takes in and gives out, and which wires fit.
 
-Plan: docs/architecture/workflow-dataflow-nodes-plan-2026-10.md §2. The panel mirrors
-these rules in ``automations/pins.ts``; keep the two in step.
+The panel mirrors these rules in ``automations/pins.ts``; keep the two in step.
 """
 
 from __future__ import annotations

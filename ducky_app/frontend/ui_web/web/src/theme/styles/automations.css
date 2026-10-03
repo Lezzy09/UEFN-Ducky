@@ -1090,7 +1090,7 @@
 .aw-hover-card-where { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-tab-hover-card:has(.aw-hover-card) { width: 300px; margin-left: 12px; }  /* clear of the list panel edge */
 
-/* Typed pins (plan: docs/architecture/workflow-dataflow-nodes-plan-2026-10.md §4). A card grows a
+/* Typed pins. A card grows a
    24-unit row per pin pair; inputs on the left, outputs on the right, coloured by what they carry. */
 .aw-node--input, .aw-edge--from-input, .aw-insp-tab--input, .aw-swatches--input { --aw-role-color: var(--wf-node-input); }
 .aw-pin-type--text { --aw-pin: var(--wf-pin-text); }
