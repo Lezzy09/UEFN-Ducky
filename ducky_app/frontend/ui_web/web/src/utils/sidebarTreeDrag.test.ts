@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FolderItem } from "../types/panel";
-import { dragId, duckiesFoldersForDisplay, flattenLayout, foldersToAutoExpand, nestDropId, projectFolderId, resolveDragOverId, crossProjectDropTarget, unwrapProjectFoldersForLayout, wrapProjectsAsFolders } from "./sidebarTree";
+import { dragId, duckiesFoldersForDisplay, flattenLayout, foldersToAutoExpand, globalProjectChats, nestDropId, projectFolderId, resolveDragOverId, crossProjectDropTarget, unwrapProjectFoldersForLayout, wrapProjectsAsFolders } from "./sidebarTree";
 
 function folder(id: string, name: string, children: FolderItem[] = []): FolderItem {
   return {
@@ -95,6 +95,11 @@ describe("all-projects folder wraps", () => {
     );
     expect(wrapped.map((f) => f.id)).toContain(projectFolderId("_no_project"));
     expect(duckiesFoldersForDisplay(wrapped).map((f) => f.name)).toEqual(["Roguelike"]);
+    expect(globalProjectChats(wrapped).map((chat) => chat.id)).toEqual(["g1"]);
+    expect(crossProjectDropTarget(nestDropId(projectFolderId("_no_project")), wrapped, [])).toEqual({
+      slug: "_no_project",
+      folderId: "",
+    });
   });
 
   it("a drop on another project is not part of the current layout patch", () => {

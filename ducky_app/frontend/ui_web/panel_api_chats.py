@@ -303,13 +303,9 @@ class PanelApiChatsMixin:
         project_root = None
         target_slug = str(cfg.get("project_slug") or "").strip()
         if target_slug:
-            from frontend.ui_web.project_chats import project_root_for_slug, project_slug
+            from frontend.ui_web.project_chats import create_project_root
 
-            current_root = (settings.uefn_project_root or "").strip()
-            if not current_root or project_slug(current_root) != target_slug:
-                project_root = project_root_for_slug(target_slug)
-                if not project_root:
-                    raise ValueError(f"Unknown project: {target_slug}")
+            project_root = create_project_root(target_slug, settings.uefn_project_root or "")
 
         conv = _pa.create_conversation(
             settings,

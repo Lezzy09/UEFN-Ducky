@@ -447,7 +447,7 @@ export const APP_SHELL_TOUR: WalkthroughDef = {
     {
       target: "shell.duckies.menu",
       title: "All projects",
-      body: "All projects lists every island. Global Agents lists the library duckies, such as Verse Coder, on whichever island is open. Compact tightens the list. Duckies made with no island open stay with Global Agents.",
+      body: "All projects lists every island. Global Agents lists duckies that are not on a project — drag one there, or add one with the plus. Verse Coder and the other built-ins are templates in the new-ducky picker. Compact tightens the list.",
       advance: "next",
       mode: "rect",
       onEnter: openDuckiesMenu,

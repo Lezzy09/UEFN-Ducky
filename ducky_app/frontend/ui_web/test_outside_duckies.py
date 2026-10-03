@@ -58,6 +58,21 @@ def test_project_list_includes_outside_duckies(monkeypatch):
     assert "" in roots
 
 
+def test_global_agents_create_has_no_island(monkeypatch):
+    from frontend.ui_web import project_chats
+
+    monkeypatch.setattr(project_chats, "project_root_for_slug", lambda slug: None)
+    island = r"C:\island"
+    assert project_chats.create_project_root("_no_project", island) == ""
+    assert project_chats.create_project_root(project_chats.project_slug(island), island) is None
+    try:
+        project_chats.create_project_root("missing", island)
+    except ValueError as exc:
+        assert "Unknown project" in str(exc)
+    else:
+        raise AssertionError("missing project should fail")
+
+
 def test_outside_project_does_not_duplicate(monkeypatch):
     roots: list[str | None] = []
 

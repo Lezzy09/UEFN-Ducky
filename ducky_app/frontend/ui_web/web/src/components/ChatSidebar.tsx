@@ -49,7 +49,7 @@ import { SidebarPanelTabs } from "./sidebar/SidebarPanelTabs";
 import type { DockDropTarget } from "../utils/dockPanelDrag";
 import { insertIndexForTabDrop } from "../workspace/dockTabInsertIndex";
 import { DuckyArchiveDropdown } from "./sidebar/DuckyArchiveDropdown";
-import { GlobalAgentsSection, openLibraryAgent } from "./sidebar/GlobalAgentsSection";
+import { openLibraryAgent } from "./sidebar/GlobalAgentsSection";
 import { ContextMenu, useContextMenuState } from "./ContextMenu";
 import { formatSelectionBadge } from "../utils/fileTreeSelection";
 import { numberedEntryName } from "../utils/numberedEntryName";
@@ -1186,18 +1186,6 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
           <SidebarTextSearchResults search={duckyTextSearch} showFileResults={false} />
         ) : (
           <>
-          {duckiesGlobalAgents ? (
-            <GlobalAgentsSection
-              folders={folders}
-              rootChats={rootChats}
-              projectSlug={projectSlug}
-              compact={duckiesCompact}
-              filterQuery={debouncedDuckyTreeFilterQuery}
-              activeChats={activeChats}
-              onOpenChat={handleChatSelect}
-              onCreated={() => void load()}
-            />
-          ) : null}
           <SidebarFolderTree
             folders={folders}
             setFolders={setFolders}
@@ -1245,6 +1233,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
             onSelectionCountChange={setDuckySelectionCount}
             compact={duckiesCompact}
             currentProjectSlug={projectSlug}
+            showGlobalAgents={duckiesGlobalAgents}
           />
           </>
         )}

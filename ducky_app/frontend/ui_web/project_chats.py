@@ -1510,6 +1510,19 @@ def rename_conversation(conv_id: str, title: str, project_root: str | None = Non
     save_conversation(conv, project_root)
 
 
+def create_project_root(target_slug: str, current_root: str) -> str | None:
+    """Where a new ducky is stored. None keeps the open island. '' is no island."""
+    target = (target_slug or "").strip()
+    if not target or project_slug(current_root) == target:
+        return None
+    if target == "_no_project":
+        return ""
+    root = project_root_for_slug(target)
+    if not root:
+        raise ValueError(f"Unknown project: {target}")
+    return root
+
+
 def project_root_for_slug(slug: str) -> str | None:
     """Island path for a sidebar project row. Recents and the open island only."""
     wanted = (slug or "").strip()

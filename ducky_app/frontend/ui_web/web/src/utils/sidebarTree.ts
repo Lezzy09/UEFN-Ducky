@@ -18,9 +18,19 @@ export function isGlobalProjectFolderId(id: string): boolean {
   return id === projectFolderId(GLOBAL_PROJECT_SLUG);
 }
 
-/** All-projects mode wraps every island, including the no-island bucket. That bucket stays in the data so global agents can open their existing chats, and stays off the folder list. */
+/** All-projects mode wraps every island, including the no-island bucket. That bucket stays in the data for Global Agents, and stays off the project list. */
 export function duckiesFoldersForDisplay(folders: FolderItem[]): FolderItem[] {
   return folders.filter((folder) => !isGlobalProjectFolderId(folder.id));
+}
+
+function chatsUnder(folder: FolderItem): FolderItem["chats"] {
+  return [...folder.chats, ...folder.children.flatMap(chatsUnder)];
+}
+
+/** Duckies with no island. These are the Global Agents rows. */
+export function globalProjectChats(folders: FolderItem[]): FolderItem["chats"] {
+  const bucket = findFolderById(folders, projectFolderId(GLOBAL_PROJECT_SLUG));
+  return bucket ? chatsUnder(bucket) : [];
 }
 
 export function findFolderById(folders: FolderItem[], id: string): FolderItem | null {

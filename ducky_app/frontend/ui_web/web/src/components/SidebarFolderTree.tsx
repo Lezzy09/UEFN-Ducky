@@ -40,6 +40,7 @@ import {
   contextMenuSeparator,
   duckyTreeCreateItems,
 } from "../utils/sidebarContextMenuItems";
+import { GlobalAgentsSection } from "./sidebar/GlobalAgentsSection";
 import {
   applySidebarDrag,
   appendArchiveChatsToLayout,
@@ -50,6 +51,8 @@ import {
   findFolderById,
   flattenLayout,
   folderIdForCreate,
+  GLOBAL_PROJECT_SLUG,
+  globalProjectChats,
   isProjectFolderId,
   nestDropId,
   parseDragId,
@@ -955,6 +958,8 @@ interface SidebarFolderTreeProps {
   currentProjectSlug?: string;
   /** + on another island's project row. The open island uses onCreateDucky. */
   onCreateInProject?: (projectSlug: string) => void;
+  /** Duckies with no island. Templates stay out of this list. */
+  showGlobalAgents?: boolean;
 }
 
 export function SidebarFolderTree({
@@ -995,6 +1000,7 @@ export function SidebarFolderTree({
   compact = false,
   currentProjectSlug = "",
   onCreateInProject,
+  showGlobalAgents = false,
 }: SidebarFolderTreeProps) {
   const hoverPlacement: EditorTabHoverCardPlacement = dockSide === "right" ? "left" : "right";
   const [selection, setSelection] = useState<ExplorerSelection>(emptySelection);
@@ -1454,7 +1460,9 @@ export function SidebarFolderTree({
     return () => window.cancelAnimationFrame(frame);
   }, [activeChats]);
 
-  if (filtering && filteredRootChats.length === 0 && filteredFolders.length === 0) {
+  const globalQuery = filterQuery.trim().toLowerCase();
+  const globalHits = showGlobalAgents && globalProjectChats(folders).some((chat) => !globalQuery || chat.name.toLowerCase().includes(globalQuery));
+  if (filtering && filteredRootChats.length === 0 && filteredFolders.length === 0 && !globalHits) {
     return (
       <>
         {treeMenu ? (
@@ -1497,6 +1505,18 @@ export function SidebarFolderTree({
         overIdRef.current = null;
       }}
     >
+      {showGlobalAgents ? (
+        <GlobalAgentsSection
+          folders={folders}
+          compact={compact}
+          filterQuery={filterQuery}
+          activeChats={activeChats}
+          onOpenChat={onChatSelect}
+          onDeleteChat={deleteChatRow}
+          onRenameChat={onRenameChat}
+          onCreate={() => onCreateInProject?.(GLOBAL_PROJECT_SLUG)}
+        />
+      ) : null}
       <div
         ref={setRootDropRef}
         className={[

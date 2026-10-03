@@ -265,9 +265,6 @@ export function teamBadge(item: DuckyOSStoreItemDto): string {
   return `${item.visibility === "private" ? "Private" : "Public"} · ${item.owner_team_name || "Team"}`;
 }
 
-/** Older notes shown per page once the Patch notes accordion is open. */
-export const PATCH_NOTES_PAGE_SIZE = 5;
-
 export function formatPatchDate(raw: string | null | undefined): string {
   const s = String(raw || "").trim();
   if (!s) return "";
