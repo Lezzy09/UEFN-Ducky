@@ -165,6 +165,24 @@ def test_team_workflow_reaches_members_and_never_another_team(who: _Who, fake_st
     assert [o["id"] for o in team.owners()["owners"]] == ["local", "teamU"]
 
 
+def test_update_online_pushes_a_workflow_that_was_not_queued(who: _Who, fake_store: FakeStore, monkeypatch) -> None:
+    ana = join(fake_store, who, "ana@x.org")
+    wf = store.save_workflow({"name": "Prompt to picture", "graph": CRON}, owner="teamT")
+    repo.clear_dirty(ana, "teamT", owned.DOC_PLUGIN, "doc", wf["id"])
+    assert repo.count_dirty(ana, "teamT") == 0
+
+    real = team_sync.sync_team
+
+    def through_fake(account: str, team_key: str, *, force: bool = False, transport=None, now=None) -> dict[str, Any]:
+        return real(account, team_key, force=True, transport=Guarded(fake_store.transport(account), True))
+
+    monkeypatch.setattr(team_sync, "sync_team", through_fake)
+    out = team.sync(force=True, team_id="teamT", upload=True)
+    assert out["ok"] is True and repo.count_dirty(ana, "teamT") == 0
+    join(fake_store, who, "bo@x.org")
+    assert store.get_workflow(wf["id"])["name"] == "Prompt to picture"
+
+
 def test_team_folders_reach_every_member(who: _Who, fake_store: FakeStore) -> None:
     ana = join(fake_store, who, "ana@x.org")
     wf = store.save_workflow({"name": "Nightly build", "folder": "Builds", "graph": CRON}, owner="teamT")

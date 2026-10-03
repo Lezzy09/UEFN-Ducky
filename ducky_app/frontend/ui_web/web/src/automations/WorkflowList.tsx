@@ -118,6 +118,15 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
   // Several workflows picked with Ctrl + click (one more) or Shift + click (a run of them),
   // like the Duckies list: right-click, drag or Delete acts on all of them.
   const [pickedIds, setPicked] = useState<string[]>([]);
+  const [syncing, setSyncing] = useState("");
+  const updateOnline = async (teamId: string) => {
+    setSyncing(teamId);
+    try {
+      await getApi()?.workflow_sync?.(true, teamId, true);
+    } finally {
+      setSyncing((current) => (current === teamId ? "" : current));
+    }
+  };
   const picked = pickedIds.filter((id) => rows.some((row) => row.id === id));
   const anchor = useRef("");
   const order: string[] = [];  // visible rows, top to bottom (filled while rendering)
@@ -247,7 +256,7 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
         { id: "new", label: "New workflow", onClick: () => onCreate(owner.id) },
         ...(onAddFolder ? [{ id: "new-folder", label: "New folder", onClick: () => newFolderIn(owner, "") }] : []),
       ] : [{ id: "none", label: "Read-only", disabled: true }]),
-      ...(owner.kind === "team" && owner.slug ? [contextMenuSeparator("sep-web"), { id: "web", label: "Open on the web", onClick: () => void getApi()?.workflow_open_web?.(owner.id) }] : []),
+      ...(owner.kind === "team" ? [contextMenuSeparator("sep-sync"), { id: "sync", label: "Update online", onClick: () => void updateOnline(owner.id) }] : []),
     ];
   };
   const contextFor = (target: MenuTarget) => (event: MouseEvent) => {
@@ -382,7 +391,7 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
                 {owner.readOnly ? <span className="aw-folder-lock" role="img" aria-label={`Read-only: ${owner.reason || ""}`} title={owner.reason}><Icons.Lock /></span> : null}
                 {/* Shown on hover, over the end of the row, like a folder's. */}
                 {(owner.kind === "team" && owner.slug) || !owner.readOnly ? <span className="aw-tree-actions aw-section-actions">
-                  {owner.kind === "team" && owner.slug ? <button type="button" className="aw-icon-button" title={`Open ${ownerName(owner)} workflows on the web`} aria-label={`Open ${ownerName(owner)} on the web`} onClick={() => void getApi()?.workflow_open_web?.(owner.id)}><Icons.Globe /></button> : null}
+                  {owner.kind === "team" ? <button type="button" className="aw-icon-button" title={`Update ${ownerName(owner)} online`} aria-label={`Update ${ownerName(owner)} online`} disabled={syncing === owner.id} onClick={() => void updateOnline(owner.id)}>{syncing === owner.id ? <Icons.Spinner /> : <Icons.Refresh />}</button> : null}
                   {!owner.readOnly && onAddFolder ? <button type="button" className="aw-icon-button" title={`New folder in ${ownerName(owner)}`} aria-label={`New folder in ${ownerName(owner)}`} onClick={() => newFolderIn(owner, "")}><Icons.FolderPlus /></button> : null}
                   {!owner.readOnly ? <button ref={targetRef(`workflows.list.new.${owner.id}`, { route: "workflows", label: `New workflow in ${ownerName(owner)}` })} type="button" className="aw-icon-button" title={`New workflow in ${ownerName(owner)}`} aria-label={`New workflow in ${ownerName(owner)}`} onClick={() => onCreate(owner.id)}><Icons.Plus /></button> : null}
                 </span> : null}

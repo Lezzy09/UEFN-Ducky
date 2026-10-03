@@ -922,7 +922,15 @@ export function AutomationsView() {
   };
 
   const saveDraft = () => {
-    if (draft) void persist(draft).then(() => setTextSaveError(false)).catch(() => setTextSaveError(true));
+    if (!draft) return;
+    const teamId = draft.owner?.kind === "team" ? draft.owner.id : "";
+    void persist(draft).then(async () => {
+      setTextSaveError(false);
+      if (!teamId) return;
+      window.clearTimeout(syncTimer.current);
+      syncTimer.current = 0;
+      await getApi()?.workflow_sync?.(true, teamId, true);
+    }).catch(() => setTextSaveError(true));
   };
 
   const [stopping, setStopping] = useState(false);
@@ -1835,7 +1843,7 @@ export function AutomationsView() {
                   const copy = { ...draft, id: "", name: `${draft.name} copy`, owner: undefined };
                   await persist(copy, ownerId).catch((error: Error) => setActionError(error.message));
                 }} />
-              <button type="button" ref={targetRef("workflows.toolbar.save", { route: "workflows", label: "Save" })} title="Save" aria-label="Save" disabled={readOnly} onClick={saveDraft}><Icons.Save /></button>
+              <button type="button" ref={targetRef("workflows.toolbar.save", { route: "workflows", label: "Save" })} title={draft.owner?.kind === "team" ? "Save and update online" : "Save"} aria-label="Save" disabled={readOnly} onClick={saveDraft}><Icons.Save /></button>
               {draft.owner?.kind === "team" && ["start.cron", ...catalog.filter((n) => n.role === "starter" && n.plugin_id).map((n) => n.type)].some((type) => draft.graph.nodes.some((node) => node.type === type)) ? (
                 <button type="button" aria-label="Run on this PC" aria-pressed={!!draft.run_here}
                   title={draft.run_here ? "This PC runs its schedule and triggers. Click to stop." : "Its schedule and triggers run on other members' PCs only. Click to run them here too."}

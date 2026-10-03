@@ -37,12 +37,13 @@ class PanelApiAutomationsMixin:
         except Exception as exc:
             return _refused(exc)
 
-    def workflow_sync(self, force: bool = False) -> dict[str, Any]:
-        """Team rounds while the Workflows view is open; the engine rate-limits."""
+    def workflow_sync(self, force: bool = False, team_id: str = "", upload: bool = False) -> dict[str, Any]:
+        """Team rounds while the Workflows view is open. A team id (Save, Update
+        online) pushes that team's workflows and waits for the round."""
         from backend.automations import team
 
         try:
-            return team.sync(force=bool(force))
+            return team.sync(force=bool(force), team_id=str(team_id or ""), upload=bool(upload))
         except Exception as exc:
             return _refused(exc)
 

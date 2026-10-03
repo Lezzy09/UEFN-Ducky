@@ -143,6 +143,16 @@ def set_rev(account: str, scope: str, plugin: str, kind: str, key: str, rev: int
         )
 
 
+def mark_plugin_dirty(account: str, scope: str, plugin: str) -> None:
+    """Queue every live doc of one plugin to push on the next team round."""
+    conn = db.connect()
+    with db.write_txn(conn):
+        conn.execute(
+            "UPDATE plugin_data SET dirty=1 WHERE account_id=? AND scope_id=? AND plugin_id=? AND deleted=0",
+            (account, scope, plugin),
+        )
+
+
 def clear_dirty(account: str, scope: str, plugin: str, kind: str, key: str) -> None:
     conn = db.connect()
     with db.write_txn(conn):

@@ -185,14 +185,21 @@ def sync_team(account: str, team: str, *, force: bool = False, transport: Transp
     if not scopes.valid_team_id(team):
         return {"state": "unavailable", "changed": [], "error": "invalid team"}
     lock = _lock(account, team)
-    if not lock.acquire(blocking=False):
+    # A Save or Update online waits. A background round never piles up behind one.
+    if not lock.acquire(blocking=force):
         return {"state": "busy", "changed": [], "error": ""}
     try:
         st = repo.sync_get(account, team)
         if not force and now() - float(st["called_at"]) < MIN_INTERVAL_S:
             return {"state": st["state"], "changed": [], "error": st["error"], "skipped": True}
         repo.sync_put(account, team, called_at=now())
-        return _round(account, team, int(st["cursor_rev"]), transport or Transport(), now)
+        t = transport or Transport()
+        out = _round(account, team, int(st["cursor_rev"]), t, now)
+        # A stale push rewinds to rev 0 and stays dirty: one more round sends it as new.
+        if force and out.get("state") == "ok" and repo.count_dirty(account, team):
+            st = repo.sync_get(account, team)
+            out = _round(account, team, int(st["cursor_rev"]), t, now)
+        return out
     finally:
         lock.release()
 

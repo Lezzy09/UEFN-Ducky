@@ -2510,7 +2510,7 @@ export interface PanelApi {
   get_workflow_version?(workflowId: string, versionId: string): Promise<{ ok?: boolean; workflow?: AutomationDto; error?: string }>;
   list_workflows?(): Promise<{ ok?: boolean; workflows?: AutomationSummaryDto[] }>;
   workflow_owners?(refresh?: boolean): Promise<WorkflowOwnersDto>;
-  workflow_sync?(force?: boolean): Promise<{ ok?: boolean; started?: boolean; error?: string }>;
+  workflow_sync?(force?: boolean, team_id?: string, upload?: boolean): Promise<{ ok?: boolean; started?: boolean; error?: string }>;
   import_local_workflows?(): Promise<{ ok?: boolean; moved?: number; error?: string }>;
   /** Opens the team's Workflows tab on the website. */
   workflow_open_web?(team_id: string): Promise<{ ok?: boolean; url?: string; error?: string }>;

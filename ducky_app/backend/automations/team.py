@@ -88,15 +88,41 @@ def _round(targets: list[tuple[str, str]], force: bool) -> None:
         _announce()
 
 
-def sync(*, force: bool = False) -> dict[str, Any]:
-    """One round per visible team, on a worker thread (the Workflows view asks)."""
+def sync(*, force: bool = False, team_id: str = "", upload: bool = False) -> dict[str, Any]:
+    """One round per visible team. A named team (Save, Update online) runs now and,
+    with ``upload``, queues that team's workflows first so a saved copy goes up
+    even when an earlier round had given up on it."""
     if not store.use_db("automations"):
         return {"ok": True, "started": False}
     targets = _team_ids()
+    want = (team_id or "").strip()
+    if want:
+        targets = [pair for pair in targets if pair[1] == want]
+        if not targets:
+            return {"ok": False, "started": False, "error": "That team isn't on this PC."}
     if not targets:
         return {"ok": True, "started": False}
+    if want or upload:
+        return _sync_now(targets, upload=upload or bool(want))
     threading.Thread(target=_round, args=(targets, force), name="workflow-team-sync", daemon=True).start()
     return {"ok": True, "started": True}
+
+
+def _sync_now(targets: list[tuple[str, str]], *, upload: bool) -> dict[str, Any]:
+    from backend.store.repos import plugin_data as data
+    from backend.uefn_plugins.team_sync import WORKFLOW_DOCS, sync_team
+
+    errors: list[str] = []
+    for account, team_key in targets:
+        if upload:
+            data.mark_plugin_dirty(account, team_key, WORKFLOW_DOCS)
+        out = sync_team(account, team_key, force=True)
+        err = str(out.get("error") or "")
+        if err:
+            errors.append(err)
+    _announce()
+    message = "; ".join(errors)
+    return {"ok": not message, "started": True, "error": message}
 
 
 def background(workflows: list[dict[str, Any]], now: float | None = None) -> list[str]:

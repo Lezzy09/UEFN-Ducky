@@ -670,11 +670,12 @@ describe("Workflows folders by owner", () => {
     await screen.findByDisplayValue("Example");
     expect(screen.queryByRole("button", { name: "Run on this PC" })).toBeNull();
   });
-  it("opens a team folder's workflows on the web", async () => {
+  it("updates a team online from its folder", async () => {
     renderView();
-    fireEvent.click(await screen.findByRole("button", { name: "Open Team · Alpha Studio on the web" }));
-    expect(api.workflow_open_web).toHaveBeenCalledWith("teamT");
-    expect(screen.queryByRole("button", { name: "Open Local on the web" })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Update Team · Alpha Studio online" }));
+    await waitFor(() => expect(api.workflow_sync).toHaveBeenCalledWith(true, "teamT", true));
+    expect(screen.queryByRole("button", { name: "Update Local online" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open Team · Alpha Studio on the web" })).toBeNull();
   });
   it("asks the Store for teams once when opened and syncs them while open", async () => {
     renderView();
@@ -1448,11 +1449,8 @@ describe("several workflows, live runs, outline and team sync", () => {
       await act(async () => { vi.advanceTimersByTime(5 * 60_000); });
       expect(api.workflow_sync).toHaveBeenCalledTimes(1);  // no polling
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
-      fireEvent.click(screen.getByRole("button", { name: "Save" }));
-      await waitFor(() => expect(api.save_workflow).toHaveBeenCalledTimes(2));
-      await act(async () => { vi.advanceTimersByTime(5000); });
-      expect(api.workflow_sync).toHaveBeenCalledTimes(2);  // both saves go up in one round
-      expect(api.workflow_sync).toHaveBeenLastCalledWith(true);
+      await waitFor(() => expect(api.workflow_sync).toHaveBeenLastCalledWith(true, "teamT", true));
+      expect(api.workflow_sync).toHaveBeenCalledTimes(2);  // open, then Save updates the team now
     } finally {
       vi.useRealTimers();
     }
