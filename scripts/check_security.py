@@ -1,7 +1,9 @@
 """Local Daily Security Check: secrets + dep CVEs for the EXE and org plugins.
 
-Mirrors .github/workflows/security.yml (gitleaks + pip-audit). Also npm-audits
-any package.json. Not a GitHub workflow — run it on this machine.
+Mirrors .github/workflows/security.yml (gitleaks + pip-audit + npm audit).
+``release/publish_app.py`` runs this with ``--app-only`` and refuses to
+bump or upload when it exits 1. npm audit includes devDependencies — the
+same set ``npm install`` prints.
 
   py -3 scripts/check_security.py
   py -3 scripts/check_security.py --app-only
@@ -141,16 +143,18 @@ def _npm_summary(raw: str) -> str:
 
 
 def _npm_audit(root: Path) -> tuple[str, bool]:
-    npm = shutil.which("npm")
-    if not npm:
-        return "skip (npm not on PATH)", True
     pkgs = sorted(p for p in root.rglob("package.json") if "node_modules" not in p.parts)
     if not pkgs:
         return "skip (no package.json)", True
+    npm = shutil.which("npm")
+    if not npm:
+        return "npm not on PATH", False
     failed: list[str] = []
     ok_n = 0
     for pkg in pkgs:
-        code, out = _run([npm, "audit", "--omit=dev", "--json"], cwd=pkg.parent)
+        # Full tree, including devDependencies. --omit=dev hid the critical
+        # vitest/vite findings npm install itself reports.
+        code, out = _run([npm, "audit", "--json"], cwd=pkg.parent)
         if code == 0:
             ok_n += 1
             continue

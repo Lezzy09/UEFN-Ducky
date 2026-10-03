@@ -562,6 +562,22 @@ def _self_check() -> None:
     print("publish_app self-check ok")
 
 
+def run_security_gate() -> None:
+    """Refuse to bump or upload when secrets or known dependency CVEs exist.
+
+    The panel ``npm install`` audit is one of these checks. A critical or
+    high finding stops publish before the version bump.
+    """
+    print("=== security gate (required before Store publish) ===")
+    script = ROOT / "scripts" / "check_security.py"
+    proc = subprocess.run([sys.executable, str(script), "--app-only"], cwd=str(ROOT))
+    if proc.returncode != 0:
+        raise SystemExit(
+            "Refusing publish: security check failed "
+            "(dependency vulnerabilities or secrets). Fix them, then publish again."
+        )
+
+
 def run_regression_tests() -> None:
     """Refuse to bump/upload unless pytest + panel vitest are green.
 
@@ -620,6 +636,7 @@ def main() -> None:
         print(read_version())
         return
 
+    run_security_gate()
     run_regression_tests()
 
     _load_dotenv()

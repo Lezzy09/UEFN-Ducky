@@ -1,5 +1,6 @@
 # Daily / PR secret+dep check for UEFN-Ducky (the EXE).
-# Does NOT run on Store publish. store-publish.yml is workflow_dispatch only.
+# Store publish runs the same checks (scripts/check_security.py --app-only)
+# and stops before the version bump if any fail.
 # Never upload artifacts, EXE builds, Store payloads, or credentials.
 name: Daily Security Check
 
@@ -64,3 +65,20 @@ jobs:
           print(out.read_text(encoding="utf-8"))
           PY
           pip-audit -r "${{ runner.temp }}/requirements-audit.txt"
+
+  npm-audit:
+    name: npm-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ducky_app/frontend/ui_web/web/package-lock.json
+      - name: Audit panel dependencies (production and dev)
+        working-directory: ducky_app/frontend/ui_web/web
+        run: |
+          set -euo pipefail
+          npm ci
+          npm audit
