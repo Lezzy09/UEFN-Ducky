@@ -47,3 +47,9 @@ tests/e2e/remote_view/last-viewer.png
 
 # Cursor local plans — not product
 .cursor/plans/
+
+# Agent scratch / exports / generated images / profiling harnesses — never commit
+/exports/
+/output/
+/undefined/
+/.profile-*/
