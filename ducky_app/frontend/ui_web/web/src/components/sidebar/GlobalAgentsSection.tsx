@@ -61,12 +61,12 @@ function GlobalChatRow({
     <div
       ref={setNodeRef}
       className={["sidebar-tree-row", active ? "is-active" : ""].filter(Boolean).join(" ")}
-      role="button"
-      tabIndex={0}
       aria-label={chat.name}
       data-sidebar-id={id}
       {...attributes}
       {...listeners}
+      role="button"
+      tabIndex={0}
       onClick={() => onOpen()}
       onContextMenu={(event) => context.open(event, undefined)}
       onKeyDown={(event) => {
