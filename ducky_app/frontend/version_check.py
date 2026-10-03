@@ -33,8 +33,6 @@ def update_base_url() -> str:
 
     return resolve_base_url().rstrip("/")
 
-_URL = "https://www..com/UEFNDucky"
-
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
 
 

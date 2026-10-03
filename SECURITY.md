@@ -12,13 +12,6 @@ auth bypasses.
 
 We aim to acknowledge reports within 72 hours.
 
-## Unofficial tokens
-
-There is no official UEFN Ducky or DuckyOS . Coins on ,
-, or similar that use our name, logo, GitHub, or contributor list are
-unofficial. This project did not launch them and does not claim creator rewards.
-A GitHub profile appearing on a coin is not affiliation.
-
 ## What we will not treat as a vulnerability
 
 - Client-side Store UI gates (`needsPurchase`) that the server already enforces
@@ -27,8 +20,3 @@ A GitHub profile appearing on a coin is not affiliation.
   download time, not DRM).
 - Open-sourcing this app. Secrets live on the server and in per-user DPAPI
   storage, not in the source.
-
-## Unofficial tokens
-
-There is no official UEFN Ducky or DuckyOS . The Contributors graph does not
-authorize fee claims. See [UNOFFICIAL_TOKENS.md](UNOFFICIAL_TOKENS.md).

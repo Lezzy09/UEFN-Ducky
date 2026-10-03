@@ -2373,7 +2373,6 @@ export interface PanelApi {
   cancel_update(): Promise<{ ok: boolean }>;
   launch_uninstall(): Promise<UpdaterResult>;
   open_download_page(): Promise<void>;
-  open__page(): Promise<void>;
   open_external_url(url: string): Promise<void>;
   /** Open WebView2 DevTools / Inspector (production-safe). */
   open_devtools?(): Promise<{ ok: boolean; error?: string }>;

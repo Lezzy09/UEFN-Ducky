@@ -672,7 +672,7 @@ export const SettingsView = memo(function SettingsView({ version }: SettingsView
                 onClick={handleSupportClick}
                 title={sidebarIconsOnly ? "Support" : undefined}
               >
-                <Icons. />
+                <Icons.Help />
                 <span>Support</span>
               </button>
               {visibleCoreTabs.map((tab) => {

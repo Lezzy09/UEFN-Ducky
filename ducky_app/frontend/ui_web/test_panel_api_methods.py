@@ -301,7 +301,6 @@ _PUBLIC_METHODS = frozenset({
     'open_focus_window_group',
     'open_mcp_plugins_folder',
     'open_path_in_explorer',
-    'open__page',
     'open_project_file',
     'open_project_path_in_explorer',
     'open_skill_pack_folder',

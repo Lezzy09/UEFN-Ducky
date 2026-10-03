@@ -14,9 +14,6 @@ UEFN workflows. Contributions of all sizes are welcome.
   permissive license (MIT, BSD, Apache-2.0, ISC, PSF). Add anything vendored to
   [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - **No secrets.** Don't commit API keys, tokens, or machine-specific absolute paths.
-- **No unofficial tokens.** There is no official UEFN Ducky / DuckyOS .
-  A merged PR does not make you a founder and does not authorize claiming creator fees
-  on , , or similar. Do not launch or promote coins in this project's name.
 
 ## Dev setup
 
@@ -72,9 +69,3 @@ plugin `register()` via paths like `backend.tools.uefn.actors`.
 By contributing, you grant Mindful Path Company, LLC a perpetual, worldwide,
 irrevocable license to use, modify, distribute, and relicense your contributions
 under the project's [Ducky Source-Available License v1.0](LICENSE).
-
-## Unofficial tokens
-
-There is no official UEFN Ducky / DuckyOS coin. The Contributors graph is not a founder list.
-A merged PR does not authorize anyone to claim  /  fees or speak for this
-project. See [UNOFFICIAL_TOKENS.md](UNOFFICIAL_TOKENS.md).

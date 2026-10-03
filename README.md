@@ -13,12 +13,6 @@ toolset you want.
 > "Fortnite" are trademarks of Epic Games, Inc. See [LICENSE](LICENSE) and
 > [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-> **No official  or token.** There is no official UEFN Ducky or DuckyOS coin.
-> Tokens on , , or similar that use our name, logo, GitHub, or contributor
-> list are unofficial. The Contributors graph is a commit list, **not founders**.
-> See [UNOFFICIAL_TOKENS.md](UNOFFICIAL_TOKENS.md). Official support is  and
-> [uefnducky.org](https://uefnducky.org) — not crypto.
-
 > **Platform:** Windows. macOS is not bundled yet.
 
 ---

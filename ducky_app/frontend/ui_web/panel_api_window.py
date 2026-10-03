@@ -628,13 +628,6 @@ class PanelApiWindowMixin:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
-    def open__page(self) -> None:
-        import webbrowser
-
-        from frontend.version_check import _URL
-
-        webbrowser.open(_URL)
-
     def open_external_url(self, url: str) -> None:
         """Open an https link in the user's default browser (settings help links)."""
         u = str(url or "").strip()
