@@ -53,7 +53,7 @@ def test_roots_are_just_the_folder(repo: Path) -> None:
 def test_root_listing_shows_the_repo_not_uefn_rules(repo: Path) -> None:
     listing = pf.list_project_files(".")
     names = _names(listing)
-    assert names == [".gitignore", "Content", "level.umap", "src"]
+    assert names == ["Content", "src", ".gitignore", "level.umap"]
     paths = {e["name"]: e["path"] for e in listing["entries"]}
     assert paths["src"] == "src"
     assert paths["Content"] == "Content"

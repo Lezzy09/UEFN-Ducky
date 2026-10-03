@@ -740,7 +740,8 @@ def _list_directory_entries(target: Path, *, content_tree: bool) -> list[dict[st
         include = _content_tree_filter(show_hidden, _listed_project_is_folder(target))
     try:
         with os.scandir(target) as scan:
-            children = sorted(scan, key=lambda entry: entry.name.lower())
+            # Folders first, then files — both case-insensitive, like Explorer.
+            children = sorted(scan, key=lambda entry: (not entry.is_dir(), entry.name.lower()))
     except OSError as exc:
         raise ValueError(str(exc)) from exc
     for child in children:
