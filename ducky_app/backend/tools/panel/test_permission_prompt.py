@@ -41,7 +41,7 @@ def test_plain_command_can_be_always_allowed(monkeypatch, conv) -> None:
     assert out == {"behavior": "allow", "updatedInput": {"command": "git status"}}
     question = asked[0]["questions"][0]
     assert question["detail"] == "git status"
-    assert [o["id"] for o in question["options"]] == ["once", "always", "deny"]
+    assert [o["id"] for o in question["options"]] == ["once", "always", "all", "deny"]
     assert conv.agent_allow_rules == ["Bash:git status"]
     # Remembered: the next git status runs without a card.
     asked.clear()
@@ -59,11 +59,10 @@ def test_plain_command_can_be_always_allowed(monkeypatch, conv) -> None:
         "rm -rf build",
         "py build/build_exes.py",
         "py scripts/release.py --publish",
-        "gh auth status 2>&1 | head -5",
-        "git add -A && git commit -m x",
+        "cd repo && git push",
     ],
 )
-def test_risky_or_chained_commands_never_offer_always(monkeypatch, conv, command: str) -> None:
+def test_risky_commands_never_offer_always(monkeypatch, conv, command: str) -> None:
     asked = _answer(monkeypatch, ["once"])
     assert pp.decide("Bash", {"command": command}, conv_id="c1")["behavior"] == "allow"
     ids = [o["id"] for o in asked[0]["questions"][0]["options"]]
@@ -71,12 +70,60 @@ def test_risky_or_chained_commands_never_offer_always(monkeypatch, conv, command
     assert conv.agent_allow_rules == []
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh auth status 2>&1 | head -5",
+        "git add -A && git commit -m x",
+        'py -3 -c "\nimport json\nprint(json.dumps({}))\n"',
+    ],
+)
+def test_chained_commands_offer_only_allow_everything(monkeypatch, conv, command: str) -> None:
+    asked = _answer(monkeypatch, ["once"])
+    assert pp.decide("Bash", {"command": command}, conv_id="c1")["behavior"] == "allow"
+    ids = [o["id"] for o in asked[0]["questions"][0]["options"]]
+    assert ids == ["once", "all", "deny"]
+    assert conv.agent_allow_rules == []
+
+
+def test_allow_everything_stops_asking_except_risky(monkeypatch, conv) -> None:
+    script = 'py -3 -c "\nimport json\nd=json.load(open(r\'C:/x.txt\'))\nprint(list(d.keys()))\n"'
+    asked = _answer(monkeypatch, ["all"])
+    assert pp.decide("Bash", {"command": script}, conv_id="c1")["behavior"] == "allow"
+    assert conv.agent_allow_rules == ["*"]
+    asked.clear()
+    for tool, payload in (
+        ("Bash", {"command": "npm run test && npm run lint"}),
+        ("PowerShell", {"command": "Get-ChildItem | Select-Object -First 5"}),
+        ("Write", {"file_path": r"D:\elsewhere\a.txt", "content": "x"}),
+        ("WebFetch", {"url": "https://example.com"}),
+    ):
+        assert pp.decide(tool, payload, conv_id="c1")["behavior"] == "allow"
+    assert asked == []
+    # Risky still asks.
+    _answer(monkeypatch, ["deny"])
+    assert pp.decide("Bash", {"command": "git push origin main"}, conv_id="c1")["behavior"] == "deny"
+
+
 def test_risky_command_is_never_auto_allowed_even_if_remembered(monkeypatch, conv) -> None:
-    conv.agent_allow_rules = ["Bash:git push"]
+    conv.agent_allow_rules = ["Bash:git push", "*"]
     asked = _answer(monkeypatch, ["deny"])
     out = pp.decide("Bash", {"command": "git push"}, conv_id="c1")
     assert out["behavior"] == "deny"
     assert asked, "a push must always show the card"
+
+
+@pytest.mark.parametrize("tool", ["Read", "Glob", "Grep", "LS"])
+def test_read_only_tools_never_ask(monkeypatch, conv, tool: str) -> None:
+    asked = _answer(monkeypatch, ["deny"])
+    payload = {"file_path": r"C:\Users\me\AppData\Local\UEFN-Ducky\brainrot_tcg\assets\a.png"}
+    assert pp.decide(tool, payload, conv_id="c1") == {"behavior": "allow", "updatedInput": payload}
+    assert asked == []
+
+
+def test_quoted_body_is_not_part_of_the_rule() -> None:
+    assert pp._command_key('git commit -m "fix the thing"') == "git commit"
+    assert pp._command_key('py -3 -c "print(1)"') == "py"
 
 
 def test_deny_passes_the_users_reason(monkeypatch, conv) -> None:

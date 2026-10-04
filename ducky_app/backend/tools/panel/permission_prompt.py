@@ -8,10 +8,11 @@ into an Allow/Deny card in the agent's chat (the ``ducky_ask_user`` path) and an
 Claude Code with ``{"behavior": "allow", "updatedInput": ...}`` or
 ``{"behavior": "deny", "message": ...}``.
 
-"Always allow in this chat" is remembered on the conversation (``agent_allow_rules``) for
-plain commands only. Pushes, force/reset/clean, deletes, PR/release actions and
-build/publish/deploy scripts ask every time, and a command chained with ``;``/``&&``/``|``
-is never remembered.
+Reads (Read/Glob/Grep/LS) never ask. "Always allow <command> in this chat" is remembered on
+the conversation (``agent_allow_rules``) for plain commands only; a command chained with
+``;``/``&&``/``|`` or spanning lines is never remembered on its own. "Allow everything in
+this chat" (rule ``*``) covers all of them. Pushes, force/reset/clean, deletes, PR/release
+actions and build/publish/deploy scripts ask every time, whatever was remembered.
 """
 
 from __future__ import annotations
@@ -26,11 +27,15 @@ from backend.server import mcp
 
 _ALLOW_ONCE = "once"
 _ALLOW_ALWAYS = "always"
+_ALLOW_ALL = "all"
 _DENY = "deny"
 _QUESTION_ID = "agent_permission"
+_ALL_RULE = "*"
 
 _SHELL_TOOLS = frozenset({"Bash", "PowerShell"})
 _FILE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+# Change nothing, so they never ask.
+_READ_ONLY_TOOLS = frozenset({"Read", "Glob", "Grep", "LS", "NotebookRead"})
 
 # Never remembered: each one asks, with the reason on the card.
 _RISKY: tuple[tuple[re.Pattern[str], str], ...] = tuple(
@@ -91,7 +96,13 @@ def _command_key(command: str) -> str:
         words = shlex.split(command, posix=False)
     except ValueError:
         words = command.split()
-    words = [w for w in words if w and not w.startswith("-")]
+    plain: list[str] = []
+    for word in words:
+        if word.startswith(("'", '"')):
+            break  # a quoted script or message body is not part of the rule
+        if word and not word.startswith("-"):
+            plain.append(word)
+    words = plain
     if not words:
         return ""
     head = os.path.basename(words[0]).lower().removesuffix(".exe")
@@ -122,6 +133,7 @@ def describe(tool_name: str, tool_input: dict[str, Any], *, project_root: str = 
             "prompt": f"Allow the agent to run this command?{f' ({desc})' if desc else ''}",
             "detail": command or "(empty command)",
             "warning": warning,
+            "risky": bool(reason) or not command,
             "rule": key,
             "rule_label": _command_key(command) if key else "",
         }
@@ -132,6 +144,7 @@ def describe(tool_name: str, tool_input: dict[str, Any], *, project_root: str = 
             "prompt": f"Allow the agent to {'create' if name == 'Write' else 'edit'} this file?",
             "detail": path or json.dumps(tool_input, ensure_ascii=False)[:2000],
             "warning": "Outside the project folder." if path and project_root and not _is_under(path, project_root) else "",
+            "risky": False,
             "rule": f"{name}:{folder.lower()}" if folder else "",
             "rule_label": f"edits in {folder}" if folder else "",
         }
@@ -140,6 +153,7 @@ def describe(tool_name: str, tool_input: dict[str, Any], *, project_root: str = 
         "prompt": f"Allow the agent to use {name}?",
         "detail": detail,
         "warning": "",
+        "risky": False,
         "rule": name,
         "rule_label": name,
     }
@@ -183,7 +197,7 @@ def _remember(conv_id: str, rule: str) -> None:
 
 
 def _ask(card: dict[str, Any], tool_name: str) -> tuple[str, str]:
-    """Show the card: (once / always / deny, or an error string; the user's typed note)."""
+    """Show the card: (once / always / all / deny, or an error string; the user's typed note)."""
     from backend.tools.panel.panel_ui import ducky_ask_user
 
     options = [{"id": _ALLOW_ONCE, "label": "Allow once", "description": "Run it this time. Ask again next time."}]
@@ -193,6 +207,14 @@ def _ask(card: dict[str, Any], tool_name: str) -> tuple[str, str]:
                 "id": _ALLOW_ALWAYS,
                 "label": f"Always allow {card['rule_label']} in this chat",
                 "description": "Don't ask again for this in this chat.",
+            }
+        )
+    if not card.get("risky"):
+        options.append(
+            {
+                "id": _ALLOW_ALL,
+                "label": "Allow everything in this chat",
+                "description": "Stop asking in this chat. Pushes, deletes, force, publish and deploy still ask.",
             }
         )
     options.append({"id": _DENY, "label": "Deny", "description": "Don't run it. The agent is told you said no."})
@@ -217,7 +239,7 @@ def _ask(card: dict[str, Any], tool_name: str) -> tuple[str, str]:
     row = (out.get("answers") or {}).get(_QUESTION_ID) or {}
     selected = {str(item) for item in (row.get("selected") or [])}
     note = str(row.get("text") or "").strip()
-    for choice in (_DENY, _ALLOW_ALWAYS, _ALLOW_ONCE):
+    for choice in (_DENY, _ALLOW_ALL, _ALLOW_ALWAYS, _ALLOW_ONCE):
         if choice in selected:
             return choice, note
     # Skipped, or typed a reply instead of picking: that is a "no" (with the reason, if any).
@@ -227,12 +249,18 @@ def _ask(card: dict[str, Any], tool_name: str) -> tuple[str, str]:
 def decide(tool_name: str, tool_input: dict[str, Any], *, conv_id: str = "", project_root: str = "") -> dict[str, Any]:
     """Claude Code permission result for one tool call (asks the user unless remembered)."""
     tool_input = dict(tool_input or {})
+    if (tool_name or "").strip() in _READ_ONLY_TOOLS:
+        return {"behavior": "allow", "updatedInput": tool_input}
     card = describe(tool_name, tool_input, project_root=project_root)
     rule = str(card.get("rule") or "")
     conv = _load_conv(conv_id)
-    if rule and conv is not None and rule in (getattr(conv, "agent_allow_rules", None) or []):
+    remembered = (getattr(conv, "agent_allow_rules", None) or []) if conv is not None else []
+    if not card.get("risky") and (_ALL_RULE in remembered or (rule and rule in remembered)):
         return {"behavior": "allow", "updatedInput": tool_input}
     answer, note = _ask(card, tool_name or "tool")
+    if answer == _ALLOW_ALL:
+        _remember(conv_id, _ALL_RULE)
+        return {"behavior": "allow", "updatedInput": tool_input}
     if answer == _ALLOW_ALWAYS:
         _remember(conv_id, rule)
         return {"behavior": "allow", "updatedInput": tool_input}
