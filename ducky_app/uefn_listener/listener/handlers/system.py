@@ -311,6 +311,18 @@ def cmd_execute_python(code: str) -> dict:
     }
 
 
+def _put_first_on_sys_path(path: str) -> None:
+    """Move ``path`` to the front of ``sys.path``.
+
+    Present is not enough: a dev checkout ahead of AppData (launch_listener.py
+    run from the repo) otherwise wins every re-import, the running stamp never
+    matches AppData, and the host auto-reloads forever.
+    """
+    want = os.path.normcase(os.path.abspath(path))
+    sys.path[:] = [p for p in sys.path if os.path.normcase(os.path.abspath(p)) != want]
+    sys.path.insert(0, path)
+
+
 @register("reload_listener")
 def cmd_reload_listener() -> dict:
     """Reload the listener from ``%LOCALAPPDATA%/UEFN-Ducky/listener`` and restart it (no UEFN restart).
@@ -364,8 +376,7 @@ def cmd_reload_listener() -> dict:
                 log_msg("reload_listener: deferred restart cancelled; listener stayed busy")
                 return
 
-            if str(listener_dir) not in sys.path:
-                sys.path.insert(0, str(listener_dir))
+            _put_first_on_sys_path(str(listener_dir))
 
             # AppData deployment uses a directory swap. A second Ducky/IDE
             # process may briefly be completing that swap, so retry the import
