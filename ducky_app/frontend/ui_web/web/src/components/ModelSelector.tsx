@@ -126,6 +126,8 @@ interface ModelSelectorProps {
   uiTarget?: string;
   thinkingEffort?: string;
   onEffortChange?: (effort: string) => void;
+  /** A full-width trigger that names the model and its gateway (forms), not just the logo. */
+  labeled?: boolean;
 }
 
 export function ModelSelector({
@@ -145,6 +147,7 @@ export function ModelSelector({
   uiTarget = "",
   thinkingEffort = "off",
   onEffortChange,
+  labeled = false,
 }: ModelSelectorProps) {
   const contrib = usePluginContributions();
   const [isOpen, setIsOpen] = useState(false);
@@ -944,12 +947,12 @@ export function ModelSelector({
       <button
         ref={triggerRef}
         type="button"
-        className={`no-drag model-selector-btn model-selector-btn--icon${isOpen ? " is-open" : ""}`}
+        className={`no-drag model-selector-btn ${labeled ? "model-selector-btn--labeled" : "model-selector-btn--icon"}${isOpen ? " is-open" : ""}`}
         style={{ ["--effort-glow" as string]: String(glow) }}
         onClick={() => (isOpen ? requestClose() : openDropdown())}
         disabled={!canOpen}
         title={triggerLabel}
-        aria-label={triggerLabel}
+        aria-label={labeled ? `Model: ${triggerLabel}` : triggerLabel}
       >
         {selectedGateway?.iconDataUrl ? (
           <img
@@ -961,6 +964,19 @@ export function ModelSelector({
         ) : (
           <Icons.Duck />
         )}
+        {labeled ? (
+          <>
+            <span className="model-selector-btn-text">
+              <span className="model-selector-btn-name">{selectedModel ? triggerLabel : placeholder}</span>
+              <span className="model-selector-btn-sub">
+                {selectedModel ? selectedGateway?.label || "Model" : "Click to pick a model"}
+              </span>
+            </span>
+            <span className="model-selector-btn-caret" aria-hidden="true">
+              <Icons.ChevronDown />
+            </span>
+          </>
+        ) : null}
       </button>
 
       <DropdownPanel

@@ -2124,6 +2124,60 @@ html.window-maximized .window-resize-grip {
   height: 16px;
 }
 
+/* Forms (workflow node details): the model and its gateway in words, like a select. */
+.model-selector-btn--labeled {
+  width: 100%;
+  min-height: 40px;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.model-selector-btn--labeled:hover:not(:disabled),
+.model-selector-btn--labeled.is-open {
+  border-color: var(--accent);
+}
+.model-selector-btn--labeled > svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+.model-selector-btn-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+.model-selector-btn-name {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-selector-btn-sub {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-selector-btn--labeled .model-selector-btn-caret {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--text-muted);
+}
+.model-selector-btn--labeled .model-selector-btn-caret svg {
+  width: 12px;
+  height: 12px;
+}
+
 .model-selector-btn-label {
   min-width: 0;
   overflow: hidden;
