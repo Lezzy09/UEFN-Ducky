@@ -1,8 +1,9 @@
 .aw-root {
   --aw-list-w: 220px;
   /* Ctrl + scroll zooms each panel on its own (--aw-z-list, --aw-z-toolbar, … set by the view). */
-  --aw-list-folded-w: calc(156px * var(--aw-z-list, 1));
   --aw-bar-h: calc(42px * var(--aw-z-toolbar, 1));
+  /* Folded, the Workflows list is one square icon button the height of the top bar. */
+  --aw-list-folded-w: var(--aw-bar-h);
   --aw-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   display: flex;
   container-type: inline-size;
@@ -36,9 +37,17 @@
 }
 .aw-root.is-list-collapsed .aw-list {
   width: var(--aw-list-folded-w);
-  height: calc(42px * var(--aw-z-list, 1));
+  height: var(--aw-bar-h);
+  border-radius: 14px;
+  --aw-pz: var(--aw-z-toolbar, 1);  /* its icon zooms with the top bar, not the open list */
   transition: height 220ms var(--aw-ease), width 220ms var(--aw-ease) 180ms, top 280ms ease, left 280ms ease, transform 280ms ease;
 }
+/* Just the icon (its name is in the tooltip), sized like the top bar's pills. */
+.aw-root.is-list-collapsed .aw-list-head { flex-basis: 100%; height: 100%; padding: 0; }
+.aw-root.is-list-collapsed .aw-list-toggle { justify-content: center; height: 100%; padding: 0; border-radius: 13px; }
+.aw-root.is-list-collapsed .aw-list-title strong,
+.aw-root.is-list-collapsed .aw-list-head .aw-accordion-chevron { display: none; }
+.aw-root.is-list-collapsed .aw-list-icon svg { width: 18px; height: 18px; }
 /* Nothing open: the list sits in the middle so it is the thing to pick. Selecting one slides it left. */
 .aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-list {
   top: 50%;
@@ -1372,13 +1381,7 @@
 
   /* The Workflows list: folded = one icon under the toolbar; open = a sheet over the canvas. */
   .aw-root.has-workflow:not(.is-list-collapsed) .aw-list { z-index: 8; top: calc(var(--aw-bar-h) + 26px); left: 12px; width: calc(100% - 24px); height: calc(100% - var(--aw-bar-h) - 38px); }
-  .aw-root.is-list-collapsed .aw-list { width: 44px; height: 44px; border-radius: 12px; }
   .aw-root.has-workflow.is-list-collapsed .aw-list { top: calc(var(--aw-bar-h) + 26px); }
-  .aw-root.is-list-collapsed .aw-list-head { flex-basis: 100%; height: 100%; padding: 0; }
-  .aw-root.is-list-collapsed .aw-list-toggle { justify-content: center; height: 100%; padding: 0; }
-  .aw-root.is-list-collapsed .aw-list-title strong,
-  .aw-root.is-list-collapsed .aw-list-head .aw-accordion-chevron { display: none; }
-  .aw-root.is-list-collapsed .aw-list-icon svg { width: 20px; height: 20px; }
 }
 
 /* Preview card: keep the picture on screen (run the steps that take it) or make another. */
