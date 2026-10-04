@@ -332,6 +332,15 @@ def test_text_to_image_lists_only_what_the_plugins_turned_on_declare(tools, monk
     assert none["ok"] is False and "An agent or model of yours" in none["error"]
 
 
+def test_a_picture_template_names_its_plugin_while_that_plugin_is_off(monkeypatch, image_generators):
+    from backend.automations.pipeline_templates import PIPELINE_TEMPLATES
+
+    image_generators.clear()  # 3D AI Studio off: its Gemini isn't in the list
+    monkeypatch.setattr(media, "gateway_image_nodes", lambda: [])
+    row = next(t for t in PIPELINE_TEMPLATES if t["id"] == "builtin:pipe-prompt-image")
+    assert templates._template_requires(row, row["graph"]) == ["studio3d"]
+
+
 def test_a_plugin_declares_its_image_generators(monkeypatch):
     from backend.uefn_plugins import host
 

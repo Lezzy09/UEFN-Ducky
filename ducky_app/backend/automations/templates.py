@@ -527,8 +527,8 @@ def _media_plugin(node: dict[str, Any]) -> str:
     wanted = str(cfg.get("backend") or "")
     if wanted == "agent":
         return ""  # any gateway or agent: no one plugin is required
-    row = next((r for r in rows if r["id"] == wanted), rows[0])
-    return str(row.get("plugin_id") or "")
+    row = next((r for r in rows if r["id"] == wanted), None if wanted else rows[0])
+    return str(row.get("plugin_id") or "") if row else ""  # a backend a plugin that is off declares: the template names it
 
 
 def _dir(*, for_write: bool = False) -> Path:

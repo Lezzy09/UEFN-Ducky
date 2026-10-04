@@ -23,8 +23,16 @@ def _w(source: str, source_pin: str, target: str, target_pin: str) -> dict[str, 
 
 
 def _t(tid: str, name: str, icon: str, category: str, description: str, nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"id": f"builtin:{tid}", "name": name, "label": name, "icon": icon, "category": category,
-            "description": description, "kind": "builtin", "graph": {"nodes": nodes, "edges": edges}}
+    row = {"id": f"builtin:{tid}", "name": name, "label": name, "icon": icon, "category": category,
+           "description": description, "kind": "builtin", "graph": {"nodes": nodes, "edges": edges}}
+    # Its Text to Image steps were made for 3D AI Studio's Gemini, a backend that plugin
+    # declares: with the plugin off it isn't in the list, so the template names it here.
+    if any(n["type"] == "image.generate" and n["config"].get("backend") in _STUDIO_IMAGES for n in nodes):
+        row["requires_plugins"] = ["studio3d"]
+    return row
+
+
+_STUDIO_IMAGES = {"gemini25flash", "gemini31flash", "gemini3pro", "seedream"}
 
 
 _COL = 300
