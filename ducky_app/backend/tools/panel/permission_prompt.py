@@ -8,8 +8,8 @@ into an Allow/Deny card in the agent's chat (the ``ducky_ask_user`` path) and an
 Claude Code with ``{"behavior": "allow", "updatedInput": ...}`` or
 ``{"behavior": "deny", "message": ...}``.
 
-Reads (Read/Glob/Grep/LS) never ask. "Always allow <command> in this chat" is remembered on
-the conversation (``agent_allow_rules``) for plain commands only; a command chained with
+Reads (Read/Glob/Grep/LS) never ask. "Always allow <command> in this chat" is remembered for
+the chat (its own ``workspace_state`` row, so saving the chat can't drop it) for plain commands only; a command chained with
 ``;``/``&&``/``|`` or spanning lines is never remembered on its own. "Allow everything in
 this chat" (rule ``*``) covers all of them. Pushes, force/reset/clean, deletes, PR/release
 actions and build/publish/deploy scripts ask every time, whatever was remembered.
@@ -179,15 +179,59 @@ def _load_conv(conv_id: str):
         return None
 
 
+# Remembered approvals live in their own row per chat, not on the chat record: the app
+# saves its in-memory chat during a turn, which would wipe a rule written here mid-turn.
+_RULES_TABLE = "workspace_state"
+
+
+def _rules_key(conv_id: str) -> str:
+    return f"agent_allow:{conv_id}"
+
+
+def _rules_in_db() -> bool:
+    try:
+        from backend.store.switch import use_db
+
+        return use_db(_RULES_TABLE)
+    except Exception:
+        return False
+
+
+def _rules(conv_id: str) -> list[str]:
+    """What this chat said to always allow ("*" = everything that isn't risky)."""
+    if not conv_id:
+        return []
+    if _rules_in_db():
+        try:
+            from backend.store.repos import kv
+
+            doc = kv.get_doc(_RULES_TABLE, _rules_key(conv_id))
+            return [str(r) for r in doc if str(r).strip()] if isinstance(doc, list) else []
+        except Exception:
+            return []
+    conv = _load_conv(conv_id)  # files store: on the chat itself
+    return list(getattr(conv, "agent_allow_rules", None) or []) if conv is not None else []
+
+
 def _remember(conv_id: str, rule: str) -> None:
-    conv = _load_conv(conv_id)
-    if conv is None or not rule:
+    if not conv_id or not rule:
         return
-    rules = list(getattr(conv, "agent_allow_rules", None) or [])
+    rules = _rules(conv_id)
     if rule in rules:
         return
-    rules.append(rule)
-    conv.agent_allow_rules = rules[-200:]
+    rules = (rules + [rule])[-200:]
+    if _rules_in_db():
+        try:
+            from backend.store.repos import kv
+
+            kv.set_doc(_RULES_TABLE, _rules_key(conv_id), rules)
+        except Exception:
+            pass
+        return
+    conv = _load_conv(conv_id)
+    if conv is None:
+        return
+    conv.agent_allow_rules = rules
     try:
         from frontend.chat_store import save_conversation
 
@@ -253,8 +297,7 @@ def decide(tool_name: str, tool_input: dict[str, Any], *, conv_id: str = "", pro
         return {"behavior": "allow", "updatedInput": tool_input}
     card = describe(tool_name, tool_input, project_root=project_root)
     rule = str(card.get("rule") or "")
-    conv = _load_conv(conv_id)
-    remembered = (getattr(conv, "agent_allow_rules", None) or []) if conv is not None else []
+    remembered = _rules(conv_id)
     if not card.get("risky") and (_ALL_RULE in remembered or (rule and rule in remembered)):
         return {"behavior": "allow", "updatedInput": tool_input}
     answer, note = _ask(card, tool_name or "tool")

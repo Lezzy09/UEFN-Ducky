@@ -42,7 +42,7 @@ def test_plain_command_can_be_always_allowed(monkeypatch, conv) -> None:
     question = asked[0]["questions"][0]
     assert question["detail"] == "git status"
     assert [o["id"] for o in question["options"]] == ["once", "always", "all", "deny"]
-    assert conv.agent_allow_rules == ["Bash:git status"]
+    assert pp._rules("c1") == ["Bash:git status"]
     # Remembered: the next git status runs without a card.
     asked.clear()
     assert pp.decide("Bash", {"command": "git status --short"}, conv_id="c1")["behavior"] == "allow"
@@ -67,7 +67,7 @@ def test_risky_commands_never_offer_always(monkeypatch, conv, command: str) -> N
     assert pp.decide("Bash", {"command": command}, conv_id="c1")["behavior"] == "allow"
     ids = [o["id"] for o in asked[0]["questions"][0]["options"]]
     assert ids == ["once", "deny"]
-    assert conv.agent_allow_rules == []
+    assert pp._rules("c1") == []
 
 
 @pytest.mark.parametrize(
@@ -83,14 +83,14 @@ def test_chained_commands_offer_only_allow_everything(monkeypatch, conv, command
     assert pp.decide("Bash", {"command": command}, conv_id="c1")["behavior"] == "allow"
     ids = [o["id"] for o in asked[0]["questions"][0]["options"]]
     assert ids == ["once", "all", "deny"]
-    assert conv.agent_allow_rules == []
+    assert pp._rules("c1") == []
 
 
 def test_allow_everything_stops_asking_except_risky(monkeypatch, conv) -> None:
     script = 'py -3 -c "\nimport json\nd=json.load(open(r\'C:/x.txt\'))\nprint(list(d.keys()))\n"'
     asked = _answer(monkeypatch, ["all"])
     assert pp.decide("Bash", {"command": script}, conv_id="c1")["behavior"] == "allow"
-    assert conv.agent_allow_rules == ["*"]
+    assert pp._rules("c1") == ["*"]
     asked.clear()
     for tool, payload in (
         ("Bash", {"command": "npm run test && npm run lint"}),
@@ -106,7 +106,8 @@ def test_allow_everything_stops_asking_except_risky(monkeypatch, conv) -> None:
 
 
 def test_risky_command_is_never_auto_allowed_even_if_remembered(monkeypatch, conv) -> None:
-    conv.agent_allow_rules = ["Bash:git push", "*"]
+    for rule in ("Bash:git push", "*"):
+        pp._remember("c1", rule)
     asked = _answer(monkeypatch, ["deny"])
     out = pp.decide("Bash", {"command": "git push"}, conv_id="c1")
     assert out["behavior"] == "deny"
@@ -166,3 +167,15 @@ def test_hook_is_hidden_from_the_embedded_agent() -> None:
     from backend.agent.toolsets.excluded import EXCLUDED_TOOLS
 
     assert "ducky_permission_prompt" in EXCLUDED_TOOLS
+
+
+def test_a_chat_save_cannot_drop_a_remembered_approval(monkeypatch, conv) -> None:
+    """The app saves its own copy of the chat during a turn; the rule is not on that record."""
+    asked = _answer(monkeypatch, ["all"])
+    assert pp.decide("Bash", {"command": "npm test"}, conv_id="c1")["behavior"] == "allow"
+    assert conv.saved == [] and conv.agent_allow_rules == []  # nothing written onto the chat
+    assert pp._rules("c1") == ["*"] and pp._rules("other") == []
+    asked.clear()
+    script = 'py -3 -c "\nprint(1)\n"'  # multi-line: covered by "allow everything"
+    assert pp.decide("Bash", {"command": script}, conv_id="c1")["behavior"] == "allow"
+    assert asked == []
