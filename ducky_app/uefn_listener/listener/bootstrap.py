@@ -38,9 +38,9 @@ def run(*, ensure_epic: bool | None = None) -> None:
         if unreal._mcp_server is not None:
             log_msg("Previous listener detected — replacing")
             try:
-                # shutdown() + join() (not just server_close()) so the old
-                # serve_forever thread and its socket actually release before
-                # we bind a new one — otherwise both leak on every hot-reload.
+                # stop_listener() shuts down serve_forever, joins its thread and
+                # closes the socket, so both release before we bind a new one —
+                # otherwise they leak on every hot-reload.
                 stop_listener()
             except Exception:
                 pass
