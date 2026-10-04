@@ -108,10 +108,20 @@ def stop_listener() -> None:
         log_msg("Listener is not running", "warning")
         return
 
+    server = unreal._mcp_server
     abort_pending_commands("Listener restarting — retry in a few seconds")
-    unreal._mcp_server.shutdown()
-    if unreal._mcp_server_thread is not None:
-        unreal._mcp_server_thread.join(timeout=3.0)
+    try:
+        server.shutdown()
+        if unreal._mcp_server_thread is not None:
+            unreal._mcp_server_thread.join(timeout=3.0)
+    finally:
+        # shutdown() only ends serve_forever; the listening socket stays bound until
+        # server_close(). On Windows, SO_REUSEADDR then lets the next start bind the
+        # same port beside the orphan, and connections that land on it hang.
+        try:
+            server.server_close()
+        except OSError:
+            pass
 
     unreal._mcp_server = None
     unreal._mcp_server_thread = None

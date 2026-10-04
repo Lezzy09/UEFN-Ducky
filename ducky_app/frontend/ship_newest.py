@@ -20,6 +20,24 @@ _MIN_SHIP_INTERVAL_SEC = 5.0
 # and each bridge used to redo the full listener/skills/IDE-config ship. Same
 # exe + version within this window → skip (stamp lives in AppData).
 _STAMP_FRESH_SEC = 10 * 60.0
+# A reload briefly takes the listener offline, and coming back online re-ships
+# (panel_api._maybe_ship_on_listener_online). If the reload could not pick up
+# AppData, the stamps still differ and that cycle reloads forever. Same
+# (running, deployed) pair as the last reload we sent → wait before retrying.
+_AUTO_RELOAD_RETRY_SEC = 10 * 60.0
+_last_auto_reload: tuple[str, str, float] | None = None
+
+
+def _should_auto_reload(running: str, disk: str, now: float) -> bool:
+    """True when the running listener is stale and this reload is not a repeat."""
+    global _last_auto_reload
+    if not disk or running == disk:
+        return False
+    last = _last_auto_reload
+    if last is not None and last[:2] == (running, disk) and now - last[2] < _AUTO_RELOAD_RETRY_SEC:
+        return False
+    _last_auto_reload = (running, disk, now)
+    return True
 
 
 def _stamp_path():
@@ -170,9 +188,14 @@ def ship_newest_everywhere(
             else:
                 disk = listener_tree_stamp(appdata_listener_dir())
                 running = str(send_command("ping", timeout=4.0).get("source_stamp") or "")
-                if disk and running != disk:
+                if _should_auto_reload(running, disk, time.time()):
                     send_command("reload_listener", timeout=6.0)
                     _log(f"listener auto-reload: running={running or 'unstamped'} deployed={disk}")
+                elif disk and running != disk:
+                    _log(
+                        f"listener auto-reload: skipped — still running={running or 'unstamped'} "
+                        f"after reloading for deployed={disk} (another listener tree is loaded)"
+                    )
         except Exception:
             pass  # listener offline — nothing to refresh
 
