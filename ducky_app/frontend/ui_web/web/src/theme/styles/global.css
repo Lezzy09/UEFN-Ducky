@@ -650,6 +650,94 @@ body.native-caption-input-ready .app-header .drag-region {
 .app-header--compact .quick-open-bar {
   height: 28px;
 }
+/* Phones: the editor tab row lives here as a dropdown (MobileTabSwitcher). */
+.app-header-tabs-slot {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.app-header-tabs-slot:empty {
+  display: none;
+}
+.mobile-tabs {
+  display: flex;
+  min-width: 0;
+}
+.mobile-tabs-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: min(46vw, 220px);
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mobile-tabs-trigger:hover,
+.mobile-tabs-trigger[aria-expanded="true"] {
+  background: var(--bg-hover);
+}
+.mobile-tabs-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mobile-tabs-caret {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.mobile-tabs-caret svg {
+  width: 12px;
+  height: 12px;
+}
+.mobile-tabs-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+}
+.mobile-tabs-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 8px;
+}
+.mobile-tabs-row.is-active {
+  background: var(--bg-hover);
+}
+.mobile-tabs-pick {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.mobile-tabs-pick:hover {
+  background: var(--bg-hover);
+}
+.mobile-tabs-close {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+}
 .app-header-main {
   flex: 1;
   height: 100%;
@@ -1086,7 +1174,9 @@ body.native-caption-input-ready .app-header .drag-region {
     gap: 4px;
   }
   .app-header-center {
-    flex: 0 0 auto;
+    /* May shrink: only the tab dropdown's name gives way (its buttons keep their size). */
+    flex: 0 1 auto;
+    min-width: 0;
     margin-left: auto;
   }
   .app-header-left {

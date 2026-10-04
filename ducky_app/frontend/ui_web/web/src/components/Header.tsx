@@ -33,6 +33,7 @@ import {
 import { useUiTarget } from "../ui-targets/registry";
 import { ChoiceTriggerFace } from "./ChoiceDropdown";
 import { DropdownPanel } from "./DropdownPanel";
+import { setHeaderTabsSlot } from "./MobileTabSwitcher";
 import { RemoteViewControls, RemoteWindowSelect } from "./RemoteWindowView";
 import type { PluginHeaderButton } from "../hooks/usePluginContributions";
 
@@ -556,6 +557,7 @@ export function Header({
         <div className="app-header-center drag-region app-drag-surface">
           {compactHeader ? (
             <>
+            <span className="app-header-tabs-slot no-drag" ref={setHeaderTabsSlot} />
             {showSearch ? <QuickOpenBar /> : null}
             <HeaderToolsMenu
               showNav={showNavButtons}

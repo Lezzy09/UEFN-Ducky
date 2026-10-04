@@ -110,6 +110,23 @@ function pluginTabIcon(tab: EditorTab, contrib: PluginContributions) {
   return resolvePluginHeaderIcon(panel?.icon);
 }
 
+/** The icon a tab shows for its kind (file type, chat ducky, terminal, plugin…). */
+export function EditorTabGlyph({ tab, diagnosticErrors = 0, diagnosticWarnings = 0 }: { tab: EditorTab; diagnosticErrors?: number; diagnosticWarnings?: number }) {
+  const pluginContrib = usePluginContributions();
+  if (tab.kind === "file") {
+    return <FileTypeIcon path={tab.path ?? ""} size={16} diagnosticErrors={diagnosticErrors} diagnosticWarnings={diagnosticWarnings} />;
+  }
+  if (tab.kind === "terminal") return <Icons.Terminal />;
+  if (tab.kind === "plan") return <Icons.Plan />;
+  if (tab.kind === "usage") return <Icons.Chart />;
+  if (tab.kind === "settings") return <Icons.Settings />;
+  if (tab.kind === "changes") return <Icons.Diff />;
+  if (tab.kind === "workflows") return <Icons.Workflow />;
+  if (tab.kind === "verse-translated") return <Icons.Globe />;
+  if (tab.kind === "plugin") return pluginTabIcon(tab, pluginContrib);
+  return <DuckyAvatar styleId={tab.duckyStyle} size={DUCKY_AVATAR_SIZES.tab} />;
+}
+
 export function EditorTabs({
   groupId,
   tabs,
@@ -426,32 +443,7 @@ export function EditorTabs({
                     : ""
                 }${tabLive ? " is-live-chat" : ""}`}
               >
-                {tab.kind === "file" ? (
-                  <FileTypeIcon
-                    path={tab.path ?? ""}
-                    size={16}
-                    diagnosticErrors={diagnosticErrors}
-                    diagnosticWarnings={diagnosticWarnings}
-                  />
-                ) : tab.kind === "terminal" ? (
-                  <Icons.Terminal />
-                ) : tab.kind === "plan" ? (
-                  <Icons.Plan />
-                ) : tab.kind === "usage" ? (
-                  <Icons.Chart />
-                ) : tab.kind === "settings" ? (
-                  <Icons.Settings />
-                ) : tab.kind === "changes" ? (
-                  <Icons.Diff />
-                ) : tab.kind === "workflows" ? (
-                  <Icons.Workflow />
-                ) : tab.kind === "verse-translated" ? (
-                  <Icons.Globe />
-                ) : tab.kind === "plugin" ? (
-                  pluginTabIcon(tab, pluginContrib)
-                ) : (
-                  <DuckyAvatar styleId={tab.duckyStyle} size={DUCKY_AVATAR_SIZES.tab} />
-                )}
+                <EditorTabGlyph tab={tab} diagnosticErrors={diagnosticErrors} diagnosticWarnings={diagnosticWarnings} />
                 {tabLive ? <LiveChatDot className="live-chat-dot--tab" /> : null}
               </div>
             );

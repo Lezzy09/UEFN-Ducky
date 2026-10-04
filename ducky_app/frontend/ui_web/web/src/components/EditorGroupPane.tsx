@@ -1,6 +1,9 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import type { EditorDropZone, EditorGroup, EditorTab } from "../types/panel";
 import { EditorTabs } from "./EditorTabs";
+import { MobileTabSwitcher, useHeaderTabsSlot } from "./MobileTabSwitcher";
+import { useNarrowLayout } from "../hooks/useNarrowLayout";
 import { FileEditorPane } from "./FileEditorPane";
 import { ChatPane } from "./ChatPane";
 import { PlanPane } from "./PlanPane";
@@ -153,6 +156,10 @@ export const EditorGroupPane = memo(function EditorGroupPane({
         .filter((t) => terminalsEnabled || t.kind !== "terminal"),
     [group.tabIds, openTabs, terminalsEnabled],
   );
+  // Phones: the focused group's tabs are a dropdown in the header, not a row here.
+  const narrow = useNarrowLayout();
+  const headerTabsSlot = useHeaderTabsSlot();
+  const tabsInHeader = narrow && isFocused && variant !== "focus" && !!headerTabsSlot && groupTabs.length > 0;
 
   const activeTab = group.activeTabId ? openTabs.find((t) => t.id === group.activeTabId) : undefined;
 
@@ -362,7 +369,11 @@ export const EditorGroupPane = memo(function EditorGroupPane({
       data-editor-group-id={group.id}
       onMouseDown={() => onFocusGroup(group.id)}
     >
-      {variant !== "focus" ? (
+      {tabsInHeader ? createPortal(
+        <MobileTabSwitcher tabs={groupTabs} activeTabId={group.activeTabId} onActivate={(tabId) => onActivateTab(group.id, tabId)} onClose={onCloseTab} />,
+        headerTabsSlot!,
+      ) : null}
+      {variant !== "focus" && !tabsInHeader ? (
         <div className="editor-tab-bar-row editor-group-tab-bar">
           <div className="editor-tab-bar-tabs">
             <EditorTabs
