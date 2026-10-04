@@ -137,10 +137,15 @@ describe("image and 3D nodes", () => {
     expect(current.config.spend).toBe(true);
     expect(screen.getByRole("switch", { name: "Spend credits" }).getAttribute("aria-checked")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Backend" }));
-    const tripo = await screen.findByRole("radio", { name: /Tripo v3/ });
-    expect((tripo as HTMLInputElement).disabled).toBe(true);  // its plugin isn't set up here: it can't be picked
-    fireEvent.click(tripo);
-    expect(current.config.backend).toBeUndefined();
+    await screen.findByRole("radio", { name: /Meshy/ });
+    expect(screen.queryByRole("radio", { name: /Tripo v3/ })).toBeNull();  // its plugin isn't set up here: not offered
+  });
+
+  it("offers any gateway or agent to make the picture, picked from the app's model list", async () => {
+    const withAgent = { ...meta, backends: [...(meta.backends || []), { id: "agent", label: "An agent or model of yours", plugin: "Your gateways and agents", credits: 0, cost: "Its own tools", available: true, agent: true }] };
+    render(<Editor config={{ backend: "agent" }} meta={withAgent} />);
+    expect(screen.getByRole("button", { name: /^Model:/ })).toBeTruthy();  // the full picker, as a labeled button
+    expect(screen.getByText(/the agent uses only free ways/)).toBeTruthy();
   });
 
   it("a saved backend whose plugin is off says why", () => {

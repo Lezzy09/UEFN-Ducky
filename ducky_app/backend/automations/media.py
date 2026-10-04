@@ -398,9 +398,15 @@ def cost_text(row: dict[str, Any]) -> str:
     return "Your own API key" if row.get("node") else f"~{row['credits']} credits"
 
 
+# Text to Image on any gateway model or agent you have (the runner starts a ducky on it).
+AGENT_BACKEND = "agent"
+AGENT_NODES = frozenset({"image.generate"})
+
+
 def backends_for(ntype: str) -> list[dict[str, Any]]:
     """The node's backends for its details dropdown: who makes it (the installed plugin's
-    name), what it costs, and whether it can run here (if not, why)."""
+    name), what it costs, and whether it can run here (if not, why). Text to Image also
+    offers "an agent or model of yours" (picked from the app's live model list)."""
     out: list[dict[str, Any]] = []
     for row in table(ntype):
         ready = is_ready(row)
@@ -409,6 +415,9 @@ def backends_for(ntype: str) -> list[dict[str, Any]]:
             "id": row["id"], "label": row["label"], "plugin": label, "credits": row["credits"], "cost": cost_text(row),
             "available": ready, **({} if ready else {"reason": why_not(row, label)}),
         })
+    if ntype in AGENT_NODES:
+        out.append({"id": AGENT_BACKEND, "label": "An agent or model of yours", "plugin": "Your gateways and agents",
+                    "credits": 0, "cost": "Its own tools", "available": True, "agent": True})
     return out
 
 

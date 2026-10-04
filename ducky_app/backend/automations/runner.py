@@ -203,10 +203,34 @@ def _last_outputs(wf: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return out
 
 
-def run_node(workflow_id: str, node_id: str) -> dict[str, Any]:
+def keep_preview(workflow_id: str, node_id: str) -> dict[str, Any]:
+    """A Preview's "Use this": run the steps that take what it shows (Save to card…), with
+    exactly the value on screen (the last run's), not a new one."""
+    wf = get_workflow(workflow_id)
+    if wf is None:
+        return {"ok": False, "error": "workflow not found", "steps": []}
+    graph = wf.get("graph") or {}
+    edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict) and str(e.get("kind") or "") == DATA_KIND]
+    sources = {str(e.get("source")) for e in edges if str(e.get("target")) == str(node_id)}
+    users = sorted({str(e.get("target")) for e in edges if str(e.get("source")) in sources and str(e.get("target")) != str(node_id)})
+    if not sources or not users:
+        return {"ok": False, "error": "Nothing takes this picture yet: wire it into a step (like Save to card).", "steps": [], "id": wf["id"]}
+    steps: list[dict[str, Any]] = []
+    out: dict[str, Any] = {"ok": True, "error": "", "id": wf["id"]}
+    for target in users:
+        step = run_node(workflow_id, target)
+        steps.extend(step.get("steps") or [])
+        out["node_outputs"] = step.get("node_outputs") or out.get("node_outputs") or {}
+        if not step.get("ok"):
+            return {**out, "ok": False, "error": step.get("error") or "failed", "steps": steps}
+    return {**out, "steps": steps}
+
+
+def run_node(workflow_id: str, node_id: str, *, approve_spend: bool = False) -> dict[str, Any]:
     """Run one node now. Everything wired into it reuses what it made last run (so a
     paid generator upstream doesn't run again); a node never run before runs, steps too.
-    A Preview is the exception: running it makes what it shows again (try again)."""
+    A Preview is the exception: running it makes what it shows again (try again).
+    approve_spend: a person pressed play, so paid steps this run needs may spend."""
     wf = get_workflow(workflow_id)
     if wf is None:
         return {"ok": False, "error": "workflow not found", "steps": []}
@@ -224,6 +248,8 @@ def run_node(workflow_id: str, node_id: str) -> dict[str, Any]:
         if other != nid and other in nodes and other not in remake:
             flow.outputs[other] = values
     ctx: dict[str, Any] = {"caller_conv_id": _caller("")}
+    if approve_spend:
+        ctx["_spend_approved"] = True
     _prepare_run_ctx(ctx, wf)
     ctx["nodes"] = dict(flow.outputs)
     wid = str(wf["id"])
@@ -903,6 +929,10 @@ def _exec_node(node: dict[str, Any], payload: dict[str, Any], inputs: dict[str, 
     elif ntype == "start.chat" and label in ("Chat", ntype):
         label = "Chat input"
     try:
+        if payload.get("_spend_approved") and (ntype in media.BACKENDS):
+            cfg = {**cfg, "spend": True}  # a person pressed play on this run: that is the approval
+        if ntype in media.AGENT_NODES and str(cfg.get("backend") or "") == media.AGENT_BACKEND:
+            return {**_agent_picture(node, cfg, values, payload), "id": node.get("id"), "type": ntype, "label": label}
         if ntype in media.BACKENDS:
             return {**media.run_media(ntype, cfg, values, _node_folder(node)), "id": node.get("id"), "type": ntype, "label": label}
         if ntype in _FOLDER_OPS:
@@ -1089,6 +1119,15 @@ def _model_choice(cfg: dict[str, Any]) -> tuple[str, str]:
             model = ""
     if not model:
         raise ValueError("Pick a model in this node's details.")
+    try:
+        # The full picker saves "backend:model": a gateway (openai, ollama…) or an agent (cursor, claude_code…).
+        from frontend.favorite_models import parse_selection
+
+        picked = parse_selection(model)
+    except Exception:
+        picked = None
+    if picked is not None:
+        return picked.backend, picked.model_id
     from backend.agent.model_pricing import resolve_provider_for_model
 
     provider = resolve_provider_for_model(model)
@@ -1672,6 +1711,50 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
             "agent_group_id": seat.get("group_id") or "",
             "agent_group_folder_id": seat.get("group_folder_id") or "",
         },
+    }
+
+
+_PICTURE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def _agent_picture(node: dict[str, Any], cfg: dict[str, Any], values: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Text to Image on "an agent or model of yours": a fresh ducky on that gateway model or
+    agent makes the picture with whatever it has here (an image tool, an image model,
+    Photoshop, Blender, code that draws) and saves it in this node's folder. Spend credits
+    off = it is told to use free ways only."""
+    prompt = _as_text(values.get("prompt")).strip()
+    if not prompt:
+        return {"ok": False, "gate": True, "error": "Nothing in Prompt: wire text in or type it in the details."}
+    folder = _node_folder(node)
+    folder.mkdir(parents=True, exist_ok=True)
+    before = {p.name for p in folder.iterdir()}
+    spend = cfg.get("spend") is True
+    model = str(cfg.get("agent_model") or "").strip()
+    instructions = (
+        "Make ONE picture for the prompt at the end, with whatever you have on this PC: an image tool, "
+        "an image model, Photoshop, Blender, or code that draws it.\n"
+        + ("You may spend credits on a paid image tool for this one picture.\n" if spend
+           else "Use only free ways: don't spend credits on paid tools.\n")
+        + f"Save the finished picture as a PNG or JPG in this folder:\n{folder}\n"
+        "Then reply with its file name. Don't ask questions; if nothing here can make a picture, say so in one line.\n\n"
+        f"Prompt:\n{prompt}"
+    )
+    step = _pipeline_agent({"ducky": "", "model": model, "prompt": instructions, "title": str(node.get("label") or "Picture"),
+                            "timeout_sec": _AGENT_WAIT_CAP_S}, payload)
+    if not step.get("ok"):
+        return {"ok": False, "error": str(step.get("error") or "The agent didn't finish.")}
+    done = step.get("result") if isinstance(step.get("result"), dict) else {}
+    reply = str(done.get("text") or "").strip()
+    made = [p for p in sorted(folder.iterdir(), key=lambda p: p.stat().st_mtime) if p.name not in before and p.suffix.lower() in _PICTURE_EXTS]
+    made += [Path(str(f["path"])) for f in done.get("files") or [] if isinstance(f, dict) and str(f.get("path") or "").lower().endswith(_PICTURE_EXTS)]
+    if not made:
+        return {"ok": False, "error": "The agent made no picture." + (f" It said: {reply[:300]}" if reply else "")}
+    main = str(made[-1])
+    image = {**file_ref(main, "image"), "provider": "agent", "backend": media.AGENT_BACKEND}
+    return {
+        "ok": True,
+        "outputs": {"image": with_url(image), "files": [with_url(file_ref(str(p), "image")) for p in made]},
+        "result": {"backend": f"Agent · {model or 'default model'}", "reply": reply[:2000], "conv_id": done.get("conv_id") or ""},
     }
 
 

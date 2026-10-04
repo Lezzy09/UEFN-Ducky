@@ -29,6 +29,8 @@ interface DuckyModelPickerProps {
   thinkingEffort?: string;
   onEffortChange?: (effort: string) => void;
   convId?: string;
+  /** A full-width button naming the model and its gateway (forms) instead of the logo. */
+  labeled?: boolean;
 }
 
 function normalizeAgentModelId(_agentId: string, modelId: string): string {
@@ -71,6 +73,7 @@ export function DuckyModelPicker({
   thinkingEffort,
   onEffortChange,
   convId,
+  labeled = false,
 }: DuckyModelPickerProps) {
   const value = (model || "").trim();
   const contrib = usePluginContributions();
@@ -131,6 +134,7 @@ export function DuckyModelPicker({
       thinkingEffort={thinkingEffort}
       onEffortChange={onEffortChange}
       convId={convId}
+      labeled={labeled}
     />
   );
 

@@ -164,11 +164,18 @@ class PanelApiAutomationsMixin:
             caller_conv_id=caller_conv_id,
         )
 
-    def run_workflow_node(self, workflow_id: str, node_id: str) -> dict[str, Any]:
-        """Run this node only: what feeds it is reused from the last run (no paid repeats)."""
+    def run_workflow_node(self, workflow_id: str, node_id: str, approve_spend: bool = False) -> dict[str, Any]:
+        """Run this node only: what feeds it is reused from the last run (no paid repeats).
+        approve_spend: the person pressed play, so paid steps this run needs may spend."""
         from backend.automations.runner import run_node
 
-        return run_node(workflow_id, node_id)
+        return run_node(workflow_id, node_id, approve_spend=bool(approve_spend))
+
+    def keep_workflow_preview(self, workflow_id: str, node_id: str) -> dict[str, Any]:
+        """A Preview's "Use this": run the steps that take what it shows, with that value."""
+        from backend.automations.runner import keep_preview
+
+        return keep_preview(workflow_id, node_id)
 
     def pick_workflow_folder(self) -> dict[str, Any]:
         """Save file nodes: the Windows folder picker."""

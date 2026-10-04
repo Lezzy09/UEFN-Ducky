@@ -297,6 +297,8 @@ export interface AutomationBackendDto {
   available: boolean;
   /** Why it can't run here: install, turn on, or add the key. */
   reason?: string;
+  /** Text to Image on any gateway model or agent (picked in config.agent_model). */
+  agent?: boolean;
 }
 
 export interface AutomationGraphGroupDto {
@@ -2541,7 +2543,10 @@ export interface PanelApi {
   /** Save file nodes: the Windows folder picker. */
   pick_workflow_folder?(): Promise<{ ok?: boolean; folder?: string; error?: string }>;
   /** Run one node now; what feeds it is reused from the last run. */
-  run_workflow_node?(workflowId: string, nodeId: string): Promise<AutomationRunDto>;
+  /** approveSpend: the person pressed play, so paid steps this run needs may spend. */
+  run_workflow_node?(workflowId: string, nodeId: string, approveSpend?: boolean): Promise<AutomationRunDto>;
+  /** A Preview's "Use this": run the steps that take what it shows, with that value. */
+  keep_workflow_preview?(workflowId: string, nodeId: string): Promise<AutomationRunDto>;
   /** '' when an If / Expression condition parses, else what is wrong. */
   check_workflow_expression?(expression: string): Promise<{ ok?: boolean; error?: string }>;
   run_workflow?(

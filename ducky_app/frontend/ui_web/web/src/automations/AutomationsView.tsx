@@ -977,14 +977,18 @@ export function AutomationsView() {
     }
   };
   const [runningNode, setRunningNode] = useState("");
-  const runNode = async (nodeId: string) => {
+  /** Play on one node (you pressing it is the approval for its paid steps), or a
+   *  Preview's "Use this" (the steps that take the picture on screen). */
+  const runNode = async (nodeId: string, how: "run" | "keep" = "run") => {
     if (!draft?.id || busy || runningNode) return;
     const gen = loadGen.current;
     setRunningNode(nodeId);
     setLogOpen(true);
     try {
       await persist(draft);
-      const res = await runBridgeJob<AutomationRunDto>("run_workflow_node", [draft.id, nodeId], RUN_TIMEOUT_MS);
+      const res = how === "keep"
+        ? await runBridgeJob<AutomationRunDto>("keep_workflow_preview", [draft.id, nodeId], RUN_TIMEOUT_MS)
+        : await runBridgeJob<AutomationRunDto>("run_workflow_node", [draft.id, nodeId, true], RUN_TIMEOUT_MS);
       if (res && gen === loadGen.current) {
         setLog(res);
         if (res.ok === false && res.error) setActionError(res.error);
@@ -2030,7 +2034,17 @@ export function AutomationsView() {
                           </div>;
                         })}
                         {node.type === "util.preview"
-                          ? picturesIn(shown.value).length ? <Thumbs pictures={picturesIn(shown.value)} empty="" /> : <div className="aw-node-preview">{previewText(shown.value)}</div>
+                          ? picturesIn(shown.value).length ? <>
+                            <Thumbs pictures={picturesIn(shown.value)} empty="" />
+                            {readOnly || !draft?.id ? null : <div className="aw-preview-actions" onPointerDown={(event) => event.stopPropagation()}>
+                              <button type="button" disabled={!!runningNode || busy} title="Make a new one from the same prompt" onClick={() => void runNode(node.id)}>
+                                {runningNode === node.id ? <Icons.Spinner /> : <Icons.Refresh />} Try again
+                              </button>
+                              <button type="button" className="is-primary" disabled={!!runningNode || busy} title="Keep this one: run the steps that take it (like Save to card)" onClick={() => void runNode(node.id, "keep")}>
+                                <Icons.Check /> Use this
+                              </button>
+                            </div>}
+                          </> : <div className="aw-node-preview">{previewText(shown.value)}</div>
                           : cardExtra(node, pins) ? <Thumbs pictures={cardPictures(node, pins, shown)} empty={node.type.startsWith("input.") ? "Pick a picture in the details" : "The picture shows here after a run"} /> : null}
                       </div>
                     ) : (

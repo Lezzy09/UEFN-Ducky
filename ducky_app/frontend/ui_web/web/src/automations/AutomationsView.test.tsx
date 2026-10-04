@@ -1800,10 +1800,29 @@ describe("image nodes", () => {
     await openPipe();
     editNode("gen");
     fireEvent.click(within(details()!).getByRole("button", { name: "Run this node" }));
-    await waitFor(() => expect(api.run_workflow_node).toHaveBeenCalledWith("p", "gen"));
+    await waitFor(() => expect(api.run_workflow_node).toHaveBeenCalledWith("p", "gen", true));  // pressing play is the approval
     expect(api.save_workflow).toHaveBeenCalled();  // saved first, so the node that runs is the one on screen
     await waitFor(() => expect(document.querySelector('[data-aw-node="gen"] .aw-node-thumb img')?.getAttribute("src")).toContain("again.png"));
     expect(within(details()!).getByText("again.png")).toBeTruthy();  // Last run shows the file
+  });
+
+  it("keeps the previewed picture or makes another from the Preview card", async () => {
+    const shown = { show: { value: { kind: "image", path: "C:/runs/duck.png", name: "duck.png", url } } };  // reused, still on screen
+    const keep = vi.fn().mockResolvedValue({ ok: true, steps: [{ label: "Save to card", ok: true }], node_outputs: shown });
+    (api as unknown as { keep_workflow_preview: typeof keep }).keep_workflow_preview = keep;
+    api.run_workflow.mockResolvedValue({ ok: true, steps: [], node_outputs: {
+      gen: { image: { kind: "image", path: "C:/runs/duck.png", name: "duck.png", url } },
+      show: { value: { kind: "image", path: "C:/runs/duck.png", name: "duck.png", url } },
+    } });
+    api.run_workflow_node.mockResolvedValue({ ok: true, steps: [], node_outputs: shown });
+    await openPipe();
+    expect(screen.queryByRole("button", { name: "Use this" })).toBeNull();  // nothing to keep yet
+    fireEvent.click(screen.getByRole("button", { name: "Test", exact: true }));
+    const card = await waitFor(() => { const el = document.querySelector('[data-aw-node="show"]') as HTMLElement; expect(within(el).getByRole("button", { name: /Use this/ })).toBeTruthy(); return el; });
+    fireEvent.click(within(card).getByRole("button", { name: /Use this/ }));
+    await waitFor(() => expect(keep).toHaveBeenCalledWith("p", "show"));
+    fireEvent.click(within(card).getByRole("button", { name: /Try again/ }));
+    await waitFor(() => expect(api.run_workflow_node).toHaveBeenCalledWith("p", "show", true));
   });
 });
 

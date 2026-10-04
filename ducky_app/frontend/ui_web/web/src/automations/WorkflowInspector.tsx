@@ -245,7 +245,7 @@ export function WorkflowInspector(props: Props) {
         {props.onGroupSelection ? <button type="button" className="aw-icon-button" aria-label="Group selection" title="Put the selection in a group (Ctrl+G)" onClick={props.onGroupSelection}><Icons.Box /></button> : null}
         {shown.length === 1 && active?.kind === "node" && props.onRunNode ? <button type="button" ref={targetRef("workflows.details.run", { route: "workflows", label: "Run this node only" })}
           className={`aw-icon-button aw-run-node${props.runningNode === active.node.id ? " is-running" : ""}`} aria-label="Run this node"
-          disabled={!!props.runningNode} title="Run only this node now. What feeds it reuses the last run, so paid steps before it don't run again."
+          disabled={!!props.runningNode} title="Run only this node now. What feeds it reuses the last run, so paid steps before it don't run again. Pressing it allows the paid steps this run needs."
           onClick={() => props.onRunNode?.(active.node.id)}>{props.runningNode === active.node.id ? <Icons.Spinner /> : <Icons.Play />}</button> : null}
         {editable ? <button type="button" ref={targetRef("workflows.details.edit", { route: "workflows", label: "Edit name, description, color and icon" })} className={`aw-icon-button aw-edit-toggle${editing ? " is-on" : ""}`}
           aria-label="Edit" aria-pressed={editing} title={editing ? "Stop editing (Esc)" : "Edit the name, description, color and icon"} onClick={() => editProps.onEditing(!editing)}>

@@ -6,7 +6,7 @@ import { AgentField } from "./AgentField";
 import { CallSettings, NamedValueList } from "./FunctionSettings";
 import { ProjectField } from "./ProjectField";
 import { ToolSettings } from "./ToolSettings";
-import { ModelSelector } from "../components/ModelSelector";
+import { DuckyModelPicker } from "../components/ducky/DuckyModelPicker";
 import { Icons } from "../icons/Icons";
 import { ExpressionField, FilePicker, NamesField } from "./PinFields";
 import { nodePins } from "./pins";
@@ -45,16 +45,25 @@ function costOf(row: AutomationBackendDto) {
   return row.cost || `~${row.credits} credits`;
 }
 
-/** Only backends whose plugin is installed, on (and keyed) can be picked; the rest say what to do. */
+/** Filled from what this PC has: installed, switched-on (and keyed) plugins, plus (Text to
+ *  Image) any gateway model or agent from the app's live list. A saved pick that is no longer
+ *  available stays listed so it can say what to do. */
 function BackendField({ node, backends, onChange }: { node: AutomationGraphNodeDto; backends: AutomationBackendDto[]; onChange: (node: AutomationGraphNodeDto) => void }) {
   const id = useId();
   const picked = pickedBackend(node, backends);
+  const shown = backends.filter((row) => row.available || row.id === picked?.id);
+  const setConfig = (patch: Record<string, unknown>) => onChange({ ...node, config: { ...node.config, ...patch } });
   return <div className="aw-field">
     <label className="aw-field-label" htmlFor={id}>Backend</label>
     <ChoiceDropdown id={id} aria-label="Backend" size="compact" value={picked?.id || ""}
-      options={backends.map((row) => ({ value: row.id, label: row.label, disabled: !row.available, hint: row.available ? `${costOf(row)} · ${row.plugin}` : `${row.plugin} · ${row.reason || "not set up"}` }))}
-      onChange={(value) => onChange({ ...node, config: { ...node.config, backend: value } })} />
+      options={shown.map((row) => ({ value: row.id, label: row.label, disabled: !row.available,
+        hint: row.agent ? "Any gateway or agent you have: it makes the picture with its own tools" : row.available ? `${costOf(row)} · ${row.plugin}` : `${row.plugin} · ${row.reason || "not set up"}` }))}
+      onChange={(value) => setConfig({ backend: value })} />
     {picked && !picked.available ? <small className="aw-field-error" role="status">{picked.reason || `Needs the ${picked.plugin} plugin.`}</small> : null}
+    {picked?.agent ? <div className="aw-model-field">
+      <DuckyModelPicker model={String(node.config.agent_model || "")} onChange={(model) => setConfig({ agent_model: model || undefined })}
+        label="" hint="" placeholder="The app's default model" menuPlacement="bottom" labeled />
+    </div> : null}
   </div>;
 }
 
@@ -67,7 +76,9 @@ function SpendField({ node, backends, onChange }: { node: AutomationGraphNodeDto
       onClick={() => onChange({ ...node, config: { ...node.config, spend: on ? undefined : true } })}>
       <span>Spend credits</span><span className="aw-switch" aria-hidden="true"><span /></span>
     </button>
-    <small className="aw-field-hint">{picked ? (picked.cost && !picked.credits ? `${picked.label} is billed to your ${picked.plugin} API key each run.` : `About ${picked.credits} credits each run on ${picked.label} (${picked.plugin}).`) : ""} {on ? "It runs when the workflow does." : "Off: the run stops here and says so, nothing is spent."}</small>
+    <small className="aw-field-hint">{picked?.agent
+      ? (on ? "The agent may spend credits on a paid image tool for each picture." : "Off: the agent uses only free ways to make the picture.")
+      : <>{picked ? (picked.cost && !picked.credits ? `${picked.label} is billed to your ${picked.plugin} API key each run.` : `About ${picked.credits} credits each run on ${picked.label} (${picked.plugin}).`) : ""} {on ? "It runs when the workflow does." : "Off: the run stops here and says so, nothing is spent."}</>}</small>
   </div>;
 }
 
@@ -113,8 +124,8 @@ function ConfigField({ field, node, pluginId, onChange }: { field: AutomationFie
   } else if (field.type === "file" || field.type === "files") {
     input = <FilePicker id={id} label={label} value={raw} accept={field.accept || "any"} multiple={field.type === "files"} onChange={set} />;
   } else if (field.type === "model" && !provider) {
-    // Any model from the app's list, like the chat composer's picker.
-    input = <div className="aw-model-field"><ModelSelector selectedModel={value} setSelectedModel={set} preserveSelection menuPlacement="bottom" placeholder="The app's default model" labeled /></div>;
+    // Every gateway and agent you have, like the chat composer's picker (saved as "backend:model").
+    input = <div className="aw-model-field"><DuckyModelPicker model={value} onChange={(model) => set(model || undefined)} label="" hint="" placeholder="The app's default model" menuPlacement="bottom" labeled /></div>;
   } else if (field.type === "folder") input = <FolderField id={id} label={label} value={value} onChange={(next) => set(next || undefined)} />;
   else if (field.type === "project") input = <ProjectField id={id} label={label} value={value} onChange={set} />;
   else if (field.type === "ducky") input = <AgentField id={id} label={label} value={String(raw ?? node.config.profile_id ?? "")} onChange={set} />;

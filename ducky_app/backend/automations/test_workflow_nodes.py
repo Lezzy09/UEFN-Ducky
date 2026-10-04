@@ -821,3 +821,58 @@ def test_auto_transform_mesh_scales_to_real_size(model, tmp_path):
     assert "a wooden barrel" in model["seen"][0]["prompt"] and step["outputs"]["height"] == 2
     model["answers"].append("tall")
     assert "sensible height" in run("mesh.auto_scale", {}, {"mesh": ref(make_glb(tmp_path / "b2.glb"), "mesh")})["error"]
+
+
+def test_text_to_image_on_an_agent_saves_what_it_made(monkeypatch, tmp_path):
+    asked: list[dict[str, Any]] = []
+
+    def fake_agent(cfg, payload):
+        asked.append(cfg)
+        folder = Path(re.search(r"in this folder:\n(.+)\n", cfg["prompt"]).group(1))
+        png(folder / "duck.png")
+        return {"ok": True, "result": {"text": "duck.png", "files": [], "conv_id": "c9"}}
+
+    monkeypatch.setattr(runner, "_pipeline_agent", fake_agent)
+    rows = {b["id"]: b for b in media.backends_for("image.generate")}
+    assert rows["agent"]["available"] and rows["agent"]["agent"] is True
+    step = run("image.generate", {"backend": "agent", "agent_model": "cursor:auto"}, {"prompt": "a happy duck"})
+    assert step["ok"], step
+    assert asked[0]["model"] == "cursor:auto" and asked[0]["ducky"] == ""
+    assert "a happy duck" in asked[0]["prompt"] and "only free ways" in asked[0]["prompt"]  # Spend credits off
+    assert step["outputs"]["image"]["path"].endswith("duck.png") and step["result"]["reply"] == "duck.png"
+    run("image.generate", {"backend": "agent", "spend": True}, {"prompt": "a happy duck"})
+    assert "may spend credits" in asked[1]["prompt"]
+
+
+def test_an_agent_that_makes_no_picture_says_what_it_said(monkeypatch):
+    monkeypatch.setattr(runner, "_pipeline_agent", lambda cfg, payload: {"ok": True, "result": {"text": "Nothing here can draw.", "files": []}})
+    step = run("image.generate", {"backend": "agent"}, {"prompt": "a duck"})
+    assert step["ok"] is False and "made no picture" in step["error"] and "Nothing here can draw." in step["error"]
+
+
+def test_ask_a_model_runs_on_the_picked_gateway_or_agent(monkeypatch):
+    monkeypatch.setattr("frontend.favorite_models.known_backends", lambda: {"cursor", "claude_code", "ollama", "openai"})
+    assert runner._model_choice({"model": "claude_code:claude-opus-5-5"}) == ("claude_code", "claude-opus-5-5")
+    assert runner._model_choice({"model": "ollama:qwen3.8:latest"}) == ("ollama", "qwen3.8:latest")
+
+
+def test_play_is_the_approval_and_use_this_sends_on_the_previewed_picture(tools):
+    graph = {"nodes": [{"id": "in", "type": "flow.input", "x": 0, "y": 0, "config": {"inputs": [{"name": "text", "default": "a duck"}]}},
+                       {"id": "gen", "type": "image.generate", "x": 300, "y": 0, "config": {}},  # Spend credits off
+                       {"id": "view", "type": "util.preview", "x": 600, "y": 0, "config": {}},
+                       {"id": "send", "type": "uefn.import", "x": 600, "y": 200, "config": {}}],
+             "edges": [{"source": "in", "target": "gen", "kind": "data", "source_pin": "text", "target_pin": "prompt"},
+                       {"source": "gen", "target": "view", "kind": "data", "source_pin": "image", "target_pin": "value"},
+                       {"source": "gen", "target": "send", "kind": "data", "source_pin": "image", "target_pin": "file"}]}
+    wid = _save(graph)
+    gated = runner.run_node(wid, "view")  # an AI or a schedule: the switch decides
+    assert gated["ok"] is False and "Spend credits" in gated["error"] and tools.calls == []
+    shown = runner.run_node(wid, "view", approve_spend=True)  # a person pressed play
+    assert shown["ok"], shown
+    picture = shown["node_outputs"]["gen"]["image"]["path"]
+    kept = runner.keep_preview(wid, "view")
+    assert kept["ok"], kept
+    assert [c[0] for c in tools.calls] == ["studio3d_image_gemini25flash", "import_asset"]  # no new picture
+    assert tools.calls[-1][1]["source_file"] == picture
+    lone = _save({"nodes": [graph["nodes"][1], graph["nodes"][2]], "edges": [graph["edges"][1]]}, "Lone")
+    assert "Nothing takes this picture" in runner.keep_preview(lone, "view")["error"]

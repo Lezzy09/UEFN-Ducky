@@ -525,6 +525,8 @@ def _media_plugin(node: dict[str, Any]) -> str:
         return ""
     cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
     wanted = str(cfg.get("backend") or "")
+    if wanted == "agent":
+        return ""  # any gateway or agent: no one plugin is required
     row = next((r for r in rows if r["id"] == wanted), rows[0])
     return str(row.get("plugin_id") or "")
 

@@ -1380,3 +1380,12 @@
   .aw-root.is-list-collapsed .aw-list-head .aw-accordion-chevron { display: none; }
   .aw-root.is-list-collapsed .aw-list-icon svg { width: 20px; height: 20px; }
 }
+
+/* Preview card: keep the picture on screen (run the steps that take it) or make another. */
+.aw-preview-actions { display: flex; gap: 6px; margin: 0 10px 10px; }
+.aw-preview-actions > button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 4px 8px; border: 1px solid color-mix(in srgb, var(--wf-node-text) 18%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--wf-node-text) 6%, transparent); color: var(--wf-node-text); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.aw-preview-actions > button:hover:not(:disabled) { background: color-mix(in srgb, var(--wf-node-text) 12%, transparent); }
+.aw-preview-actions > button.is-primary { border-color: transparent; background: var(--accent); color: var(--fg-inverse, white); }
+.aw-preview-actions > button:disabled { opacity: 0.5; cursor: default; }
+.aw-preview-actions svg { width: 13px; height: 13px; }
+@media (pointer: coarse) { .aw-preview-actions > button { min-height: 40px; } }
