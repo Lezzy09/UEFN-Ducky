@@ -349,8 +349,8 @@ function NodeDetails({ node, graph, byType, faces, readOnly, workflows, currentI
     {editing && !frozen ? <fieldset className="aw-insp-section aw-insp-look">
       <ColorField label="Color" value={node.color || ""} plainLabel="By kind" className={`aw-swatches--${nodeRole(node, meta)}`} onChange={(color) => on.onNodeColor(node.id, color)} />
     </fieldset> : null}
-    {pinsOf ? <PinsSection node={node} pins={pinsOf(node)} graph={graph} byType={byType} outputs={nodeOutputs?.[node.id]} frozen={frozen}
-      onNodeChange={on.onNodeChange} onDisconnect={on.onDisconnect} /> : null}
+    {pinsOf ? <PinsSection node={node} pins={pinsOf(node)} graph={graph} outputs={nodeOutputs?.[node.id]} frozen={frozen}
+      onNodeChange={on.onNodeChange} /> : null}
     {hasNodeSettings(node, meta) ? <fieldset className="aw-insp-section aw-insp-settings" disabled={frozen}>
       <legend>Settings</legend>
       <NodeSettings node={node} meta={meta} workflows={workflows} currentId={currentId} onOpen={on.onOpenWorkflow} onChange={on.onNodeChange} />

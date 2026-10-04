@@ -2091,7 +2091,7 @@ export function AutomationsView() {
           <span className="aw-controls-sep" aria-hidden="true" />
           <button type="button" ref={targetRef("workflows.log", { route: "workflows", label: "Run log" })} className={`aw-log-toggle${logOpen ? " is-open" : ""}`} title={logOpen ? "Hide run log" : "Run log"} aria-label="Run log" aria-expanded={logOpen} onClick={() => setLogOpen((v) => !v)}>
             <Icons.Sliders />
-            {logCount ? <span className="aw-log-badge">{logCount}</span> : null}
+            {busy || runningNode ? <span className="aw-log-badge is-live" aria-label="Running"><Icons.Spinner /></span> : logCount ? <span className="aw-log-badge">{logCount}</span> : null}
           </button>
           <button type="button" ref={targetRef("workflows.add", { route: "workflows", label: "Add nodes" })} title="Add nodes (or right-click the canvas)" aria-label="Add nodes" onClick={(event) => openAddMenu(event.currentTarget)} disabled={!draft}><Icons.Plus /></button>
           <span className="aw-controls-sep" aria-hidden="true" />
@@ -2210,11 +2210,13 @@ export function AutomationsView() {
               </button>
             </div>
             <div className="aw-log-dock-body selectable-text">
-              {busy && live?.lines.length ? (
-                <ol>
-                  {live.lines.map((line, index) => <li key={index} className={`aw-live-line is-${line.state}${line.state === "error" ? " is-err" : ""}`}>
+              {/* Live while anything runs: a test, one node, Try again or Use this. */}
+              {busy || runningNode ? (
+                <ol className="aw-live-steps" aria-live="polite">
+                  {live?.lines.length ? live.lines.map((line, index) => <li key={index} className={`aw-live-line is-${line.state}${line.state === "error" ? " is-err" : ""}`}>
+                    {line.state === "running" ? <span className="aw-live-spin" aria-hidden="true"><Icons.Spinner /></span> : null}
                     {line.label} {line.state === "running" ? "· running…" : line.state === "ok" ? "ok" : line.state === "stopped" ? "· stopped" : `— ${line.error || "failed"}`}
-                  </li>)}
+                  </li>) : <li className="aw-live-line is-running"><span className="aw-live-spin" aria-hidden="true"><Icons.Spinner /></span>Starting…</li>}
                 </ol>
               ) : runLogHasContent(log) ? (<>
                 <ol>

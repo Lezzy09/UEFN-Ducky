@@ -1806,6 +1806,24 @@ describe("image nodes", () => {
     expect(within(details()!).getByText("again.png")).toBeTruthy();  // Last run shows the file
   });
 
+  it("shows the run live while one node runs, lists only inputs you can type, and folds Last run", async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    api.run_workflow_node.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    await openPipe();
+    editNode("gen");
+    expect(within(details()!).queryByText("Inputs")).toBeNull();  // its Prompt is wired: the wire shows it
+    fireEvent.click(within(details()!).getByRole("button", { name: "Run this node" }));
+    await waitFor(() => expect(document.querySelector(".aw-log-dock-body")?.textContent).toContain("Starting…"));
+    expect(screen.getByLabelText("Running")).toBeTruthy();  // the Run log button says so too
+    finish({ ok: true, steps: [{ label: "Text to Image", ok: true }], node_outputs: {
+      gen: { image: { kind: "image", path: "C:/runs/again.png", name: "again.png", url } },
+    } });
+    await waitFor(() => expect(document.querySelector(".aw-log-dock-body")?.textContent).toContain("Text to Image ok"));
+    expect(screen.queryByLabelText("Running")).toBeNull();
+    const lastRun = document.querySelector(".aw-last-run") as HTMLDetailsElement;
+    expect(lastRun && lastRun.open).toBe(false);
+  });
+
   it("keeps the previewed picture or makes another from the Preview card", async () => {
     const shown = { show: { value: { kind: "image", path: "C:/runs/duck.png", name: "duck.png", url } } };  // reused, still on screen
     const keep = vi.fn().mockResolvedValue({ ok: true, steps: [{ label: "Save to card", ok: true }], node_outputs: shown });

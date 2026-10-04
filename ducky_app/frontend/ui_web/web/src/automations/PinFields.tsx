@@ -2,8 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ChoiceDropdown } from "../components/ChoiceDropdown";
 import { getApi } from "../hooks/usePanelApi";
 import { Icons } from "../icons/Icons";
-import type { AutomationGraphDto, AutomationGraphNodeDto, AutomationNodeDto, FileRefDto, PinDto, PinType } from "../types/panel";
-import { nodeLabel } from "./NodeVisuals";
+import type { AutomationGraphDto, AutomationGraphNodeDto, FileRefDto, PinDto, PinType } from "../types/panel";
 import { cleanType, PIN_TYPE_LABELS, shortValue, type NodePins } from "./pins";
 
 const FILE_ACCEPT: Partial<Record<PinType, string>> = { image: "image", images: "image", audio: "audio", video: "video", mesh: "mesh", pdf: "pdf", svg: "svg", file: "any" };
@@ -66,16 +65,15 @@ export function PinValueEditor({ pin, value, disabled, onChange }: { pin: PinDto
     onChange={(event) => onChange(event.target.value === "" ? undefined : event.target.value)} />;
 }
 
-/** Details panel: each input pin (wired → where from; unwired → its editor) and what came out last run. */
-export function PinsSection({ node, pins, graph, byType, outputs, frozen, onNodeChange, onDisconnect }: {
+/** Details panel: the inputs you can type (a wired one shows on the canvas, and its wire
+ *  can be clicked to disconnect it), and what came out last run, folded. */
+export function PinsSection({ node, pins, graph, outputs, frozen, onNodeChange }: {
   node: AutomationGraphNodeDto;
   pins: NodePins;
   graph: AutomationGraphDto;
-  byType: Map<string, AutomationNodeDto>;
   outputs?: Record<string, unknown>;
   frozen: boolean;
   onNodeChange: (node: AutomationGraphNodeDto) => void;
-  onDisconnect: (edgeIndex: number) => void;
 }) {
   const setHere = (node.config.inputs && typeof node.config.inputs === "object" ? node.config.inputs : {}) as Record<string, unknown>;
   // Run workflow nodes saved before pins kept their values in config.args.
@@ -87,30 +85,25 @@ export function PinsSection({ node, pins, graph, byType, outputs, frozen, onNode
     if (pin in legacy) { const args = { ...legacy }; delete args[pin]; config.args = args; }
     onNodeChange({ ...node, config });
   };
-  const sourceName = (id: string) => { const source = graph.nodes.find((item) => item.id === id); return source ? nodeLabel(source, byType.get(source.type)) : id; };
-  if (!pins.inputs.length && !(pins.outputs.length && outputs)) return null;
+  const isWired = (pin: string) => graph.edges.some((edge) => edge.kind === "data" && edge.target === node.id && edge.target_pin === pin);
+  const typed = pins.inputs.filter((pin) => !isWired(pin.id));
+  if (!typed.length && !(pins.outputs.length && outputs)) return null;
   return <>
-    {pins.inputs.length ? <fieldset className="aw-insp-section aw-pins-section" disabled={frozen}>
+    {typed.length ? <fieldset className="aw-insp-section aw-pins-section" disabled={frozen}>
       <legend>Inputs</legend>
-      {pins.inputs.map((pin) => {
-        const wired = graph.edges.findIndex((edge) => edge.kind === "data" && edge.target === node.id && edge.target_pin === pin.id);
-        const edge = graph.edges[wired];
-        return <div key={pin.id} className="aw-field aw-pin-field">
-          <span className="aw-pin-field-head"><span className={`aw-pin-dot aw-pin-type--${cleanType(pin.type)}`} aria-hidden="true" />{pin.label}{pin.required ? <span className="aw-required" title="Needed"> *</span> : null}<small>{PIN_TYPE_LABELS[cleanType(pin.type)]}</small></span>
-          {edge ? <span className="aw-pin-from">From <strong>{sourceName(edge.source)}</strong> · {edge.source_pin}
-            {frozen ? null : <button type="button" className="aw-link" onClick={() => onDisconnect(wired)}>Disconnect</button>}</span>
-            : <PinValueEditor pin={pin} value={setHere[pin.id] ?? legacy[pin.id]} disabled={frozen} onChange={(value) => setValue(pin.id, value)} />}
-          {pin.description ? <small className="aw-field-hint">{pin.description}</small> : null}
-        </div>;
-      })}
+      {typed.map((pin) => <div key={pin.id} className="aw-field aw-pin-field">
+        <span className="aw-pin-field-head"><span className={`aw-pin-dot aw-pin-type--${cleanType(pin.type)}`} aria-hidden="true" />{pin.label}{pin.required ? <span className="aw-required" title="Needed"> *</span> : null}<small>{PIN_TYPE_LABELS[cleanType(pin.type)]}</small></span>
+        <PinValueEditor pin={pin} value={setHere[pin.id] ?? legacy[pin.id]} disabled={frozen} onChange={(value) => setValue(pin.id, value)} />
+        {pin.description ? <small className="aw-field-hint">{pin.description}</small> : null}
+      </div>)}
     </fieldset> : null}
-    {pins.outputs.length && outputs ? <div className="aw-insp-section aw-pins-section">
-      <span className="aw-pins-title">Last run</span>
+    {pins.outputs.length && outputs ? <details className="aw-insp-section aw-pins-section aw-last-run">
+      <summary className="aw-pins-title">Last run</summary>
       {pins.outputs.map((pin) => <div key={pin.id} className="aw-pin-out">
         <span className="aw-pin-field-head"><span className={`aw-pin-dot aw-pin-type--${cleanType(pin.type)}`} aria-hidden="true" />{pin.label}</span>
         <OutputValue value={outputs[pin.id]} />
       </div>)}
-    </div> : null}
+    </details> : null}
   </>;
 }
 

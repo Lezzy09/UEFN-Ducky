@@ -1389,3 +1389,17 @@
 .aw-preview-actions > button:disabled { opacity: 0.5; cursor: default; }
 .aw-preview-actions svg { width: 13px; height: 13px; }
 @media (pointer: coarse) { .aw-preview-actions > button { min-height: 40px; } }
+
+/* Run log while something runs: a spinner on the step running now (and on the log button). */
+.aw-live-line { display: flex; align-items: center; gap: 6px; }
+.aw-live-spin { display: inline-grid; flex: none; animation: spin-slow 0.8s linear infinite; }
+.aw-live-spin svg { width: 12px; height: 12px; }
+.aw-log-badge.is-live { display: inline-grid; place-items: center; padding: 0; }
+.aw-log-badge.is-live svg { width: 9px; height: 9px; animation: spin-slow 0.8s linear infinite; }
+
+/* Details panel: Last run is folded; open it to see what each output made. */
+.aw-last-run > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; }
+.aw-last-run > summary::-webkit-details-marker { display: none; }
+.aw-last-run > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 140ms ease; }
+.aw-last-run[open] > summary::before { transform: rotate(45deg); }
+.aw-last-run[open] > summary { margin-bottom: 8px; }
