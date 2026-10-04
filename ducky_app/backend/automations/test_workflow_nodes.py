@@ -243,8 +243,70 @@ def test_text_to_image_calls_the_picked_backend(tools):
 
 def test_a_backend_whose_plugin_is_off_says_so(tools):
     tools.off.add("studio3d_image_gemini25flash")
-    step = run("image.generate", {"spend": True}, {"prompt": "a duck"})
+    step = run("image.generate", {"spend": True, "backend": "gemini25flash"}, {"prompt": "a duck"})
     assert step["ok"] is False and "3D AI Studio plugin" in step["error"]
+
+
+def test_with_none_picked_the_first_backend_that_can_run_is_used(tools):
+    tools.off.add("studio3d_image_gemini25flash")
+    step = run("image.generate", {"spend": True}, {"prompt": "a duck"})
+    assert step["ok"], step
+    assert tools.calls[0][0] == "studio3d_image_gemini31flash"
+
+
+@pytest.fixture
+def gateway(monkeypatch, tmp_path):
+    """The OpenAI plugin's own image node, on with a key; Google is off."""
+    seen: list[dict[str, Any]] = []
+    made = tmp_path / "generated" / "gen_1.png"
+
+    def openai_image(ctx):
+        seen.append(ctx)
+        png(made)
+        return {"ok": True, "path": str(made), "files": [{"path": str(made), "name": made.name}]}
+
+    monkeypatch.setattr(media, "node_fn", lambda node_type: {"openai.image": openai_image}.get(node_type))
+    monkeypatch.setattr(media, "_has_key", lambda provider: provider == "openai")
+    return seen
+
+
+def test_gateway_image_backend_runs_the_plugins_own_node(tools, gateway):
+    gated = run("image.generate", {"backend": "openai_image"}, {"prompt": "a duck"})
+    assert gated["ok"] is False and "billed to your OpenAI API key" in gated["error"] and gateway == []
+    step = run("image.generate", {"backend": "openai_image", "spend": True}, {"prompt": "a duck"})
+    assert step["ok"], step
+    assert gateway[0]["config"] == {"prompt": "a duck", "model": "gpt-image-1"}
+    image = step["outputs"]["image"]
+    assert image["provider"] == "OpenAI" and "workflow_media" in image["path"] and "/workflow-media/" in image["url"]
+    assert step["result"]["credits"] == 0 and tools.calls == []
+
+
+def test_backends_say_who_makes_them_and_what_is_missing(tools, gateway):
+    rows = {b["id"]: b for b in media.backends_for("image.generate")}
+    assert rows["seedream"]["plugin"] == "3D AI Studio" and rows["seedream"]["cost"] == "~10 credits"
+    assert rows["openai_image"]["available"] and rows["openai_image"]["cost"] == "Your own API key"
+    google = rows["google_imagen"]
+    assert google["available"] is False and "Google" in google["reason"]
+    step = run("image.generate", {"backend": "google_imagen", "spend": True}, {"prompt": "a duck"})
+    assert step["ok"] is False and "Google" in step["error"]
+
+
+def test_ask_a_model_on_a_coding_agent_gateway_uses_its_one_shot(monkeypatch):
+    from backend.automations import llm_complete
+    from backend.uefn_plugins import host
+
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(host, "is_plugin_enabled", lambda pid: pid == "cursor")
+    host.register_coding_agent_factory("cursor", "test_one_shot_agent", lambda: None,
+                                       complete_one_shot=lambda **kw: calls.append(kw) or "a story")
+    try:
+        out = llm_complete.complete_prompt("test_one_shot_agent", "write", "auto", system="be kind")
+        assert out == {"ok": True, "text": "a story", "prompt": "write"}
+        assert calls == [{"model": "auto", "system": "be kind", "user": "write"}]
+        assert "can't look at pictures" in llm_complete.complete_prompt("test_one_shot_agent", "look", "auto", images=["x.png"])["error"]
+        assert llm_complete._one_shot_for("openai") is None
+    finally:
+        host._CODING_AGENT_FACTORIES.pop("test_one_shot_agent", None)
 
 
 def test_the_tools_own_error_comes_through(tools):
@@ -661,6 +723,21 @@ def test_run_one_node_reuses_what_fed_it(tools):
     assert "cut" in again["node_outputs"] and runner.run_node(wid, "nope")["ok"] is False
 
 
+def test_preview_runs_what_it_needs_and_makes_a_new_one_each_time(tools):
+    graph = {"nodes": [{"id": "in", "type": "flow.input", "x": 0, "y": 0, "config": {"inputs": [{"name": "text", "default": "a duck"}]}},
+                       {"id": "gen", "type": "image.generate", "x": 300, "y": 0, "config": {"spend": True}},
+                       {"id": "view", "type": "util.preview", "x": 600, "y": 0, "config": {}}],
+             "edges": [{"source": "in", "target": "gen", "kind": "data", "source_pin": "text", "target_pin": "prompt"},
+                       {"source": "gen", "target": "view", "kind": "data", "source_pin": "image", "target_pin": "value"}]}
+    wid = _save(graph)
+    first = runner.run_node(wid, "view")  # nothing ran yet: the input step runs too
+    assert first["ok"], first
+    assert [c[0] for c in tools.calls] == ["studio3d_image_gemini25flash"] and tools.calls[0][1]["prompt"] == "a duck"
+    again = runner.run_node(wid, "view")  # try again: a new picture from the same prompt
+    assert again["ok"], again
+    assert [c[0] for c in tools.calls] == ["studio3d_image_gemini25flash"] * 2
+
+
 def test_every_template_is_wired_right():
     specs = catalog.node_specs()
     rows = templates.list_templates()
@@ -679,7 +756,7 @@ def test_paid_nodes_list_their_backends(tools):
     rows = {n["type"]: n for n in catalog.list_nodes()}
     tripo = next(b for b in rows["mesh.generate"]["backends"] if b["id"] == "tripo")
     assert tripo["available"] is False and "3D AI Studio" in tripo["reason"] and tripo["credits"] == 60
-    assert all(b["available"] for b in rows["image.generate"]["backends"])
+    assert all(b["available"] for b in rows["image.generate"]["backends"] if b["cost"] != "Your own API key")
     assert {f["id"] for f in rows["mesh.generate"]["config_fields"]} >= {"backend", "spend"}
 
 

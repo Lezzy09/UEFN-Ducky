@@ -1,15 +1,18 @@
 """Image and 3D nodes (plan §7): each node type has a table of backends — a tool an
-installed plugin registers (3D AI Studio, Meshy) or a core one — and the node calls
-the one picked in its details, waits for it, and turns the files it downloads into
-file refs on its output pins.
+installed plugin registers (3D AI Studio, Meshy), or an AI gateway plugin's own image
+node (Google, OpenAI) — and the node calls the one picked in its details, waits for
+it, and turns the files it downloads into file refs on its output pins. A backend whose
+plugin isn't installed, is off, or (gateways) has no key can't be picked or run.
 
-Paid backends keep the plugins' spend lock: a node only spends credits when its
-"Spend credits" switch is on (a person turns it on; an AI asks them first)."""
+Paid backends keep the plugins' spend lock: a node only spends credits (or, on a
+gateway, the person's own API key) when its "Spend credits" switch is on (a person
+turns it on; an AI asks them first)."""
 
 from __future__ import annotations
 
 import base64
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Callable
 
@@ -19,6 +22,10 @@ Args = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 
 STUDIO = "3D AI Studio"
 MESHY = "Meshy"
+GOOGLE = "Google"
+OPENAI = "OpenAI"
+# The installed plugin behind each backend: its manifest names it in the list.
+PLUGIN_IDS = {STUDIO: "studio3d", MESHY: "meshy", GOOGLE: "google", OPENAI: "openai"}
 _MAX_INLINE_MODEL = 25 * 1024 * 1024
 # Main file when a generator downloads several (a model in many formats, textures…).
 _PREFERRED = {
@@ -215,7 +222,14 @@ def _meshy(tool: str, label: str, credits: int, args: Args, bid: str = "", stage
     return {**row, "stage": stage} if stage else row
 
 
-# node type → backends, first = default. Credits are the plugins' own estimates.
+def _gateway(bid: str, label: str, plugin: str, node: str, key: str, model: str) -> dict[str, Any]:
+    """An AI gateway plugin's own image node, billed to the person's API key (no credits)."""
+    return {"id": bid, "label": label, "plugin": plugin, "node": node, "key": key, "model": model,
+            "credits": 0, "paid": True, "args": _prompt}
+
+
+# node type → backends, first = default (first that can run, when none is picked).
+# Credits are the plugins' own estimates (the amount each tool's spend gate names).
 BACKENDS: dict[str, list[dict[str, Any]]] = {
     "image.generate": [
         _studio("studio3d_image_gemini25flash", "Gemini 2.5 Flash Image", 5, _prompt),
@@ -223,6 +237,8 @@ BACKENDS: dict[str, list[dict[str, Any]]] = {
         _studio("studio3d_image_gemini3pro", "Gemini 3 Pro Image", 10, _prompt),
         _studio("studio3d_image_seedream", "SeeDream v5 Lite", 10, _prompt),
         _meshy("meshy_text_to_image", "Meshy · Nano Banana", 5, _meshy_image),
+        _gateway("google_imagen", "Imagen 4", GOOGLE, "google.image", "gemini", "imagen-4.0-generate-001"),
+        _gateway("openai_image", "GPT Image 1", OPENAI, "openai.image", "openai", "gpt-image-1"),
     ],
     "image.edit": [
         _meshy("meshy_image_to_image", "Meshy · Nano Banana", 5, lambda i, c: {**_image_and_prompt(i, c), "ai_model": "nano-banana"}),
@@ -295,23 +311,89 @@ def tool_fn(name: str) -> Callable[..., Any] | None:
     return getattr(tool, "fn", None) if tool is not None else None
 
 
+def node_fn(node_type: str) -> Callable[..., Any] | None:
+    """A gateway plugin's image node handler, or None when that plugin is off."""
+    try:
+        from backend.automations.plugin import get_handler
+
+        return get_handler(node_type)
+    except Exception:
+        return None
+
+
+def _has_key(provider: str) -> bool:
+    try:
+        from backend.agent.secrets import get_key
+
+        return bool((get_key(provider) or "").strip())
+    except Exception:
+        return False
+
+
+def is_ready(row: dict[str, Any]) -> bool:
+    """The plugin is installed, on and loaded (and a gateway has its key)."""
+    if row.get("node"):
+        return node_fn(row["node"]) is not None and _has_key(str(row.get("key") or ""))
+    return tool_fn(row["tool"]) is not None
+
+
+def plugin_label(plugin: str) -> str:
+    """The installed plugin's own name for itself, else the name the table uses."""
+    try:
+        from backend.uefn_plugins.store import load_plugin_manifest
+
+        manifest = load_plugin_manifest(PLUGIN_IDS.get(plugin, "")) or {}
+    except Exception:
+        manifest = {}
+    return str(manifest.get("label") or manifest.get("name") or plugin)
+
+
+def why_not(row: dict[str, Any], label: str = "") -> str:
+    """What to do so this backend can run: install, turn on, or add the key."""
+    name = label or row["plugin"]
+    pid = PLUGIN_IDS.get(row["plugin"], "")
+    try:
+        from backend.uefn_plugins.host import is_plugin_enabled
+        from backend.uefn_plugins.store import is_plugin_installed
+
+        if pid and not is_plugin_installed(pid):
+            return f"Install the {name} plugin from the Store."
+        if pid and not is_plugin_enabled(pid):
+            return f"Turn on the {name} plugin in Plugins."
+    except Exception:
+        pass
+    if row.get("node") and not _has_key(str(row.get("key") or "")):
+        return f"Add your {name} API key in Settings."
+    return f"Turn on the {name} plugin in the Store and add its API key."
+
+
+def cost_text(row: dict[str, Any]) -> str:
+    return "Your own API key" if row.get("node") else f"~{row['credits']} credits"
+
+
 def backends_for(ntype: str) -> list[dict[str, Any]]:
-    """The node's backends for its details dropdown: cost and whether each can run here."""
+    """The node's backends for its details dropdown: who makes it (the installed plugin's
+    name), what it costs, and whether it can run here (if not, why)."""
     out: list[dict[str, Any]] = []
     for row in BACKENDS.get(ntype, []):
-        ready = tool_fn(row["tool"]) is not None
+        ready = is_ready(row)
+        label = plugin_label(row["plugin"])
         out.append({
-            "id": row["id"], "label": row["label"], "plugin": row["plugin"], "credits": row["credits"], "available": ready,
-            **({} if ready else {"reason": f"Turn on the {row['plugin']} plugin in the Store and add its API key."}),
+            "id": row["id"], "label": row["label"], "plugin": label, "credits": row["credits"], "cost": cost_text(row),
+            "available": ready, **({} if ready else {"reason": why_not(row, label)}),
         })
     return out
 
 
 def pick_backend(ntype: str, wanted: Any) -> dict[str, Any]:
+    """The picked backend; with none picked, the first one that can run here."""
     table = BACKENDS.get(ntype) or []
     if not table:
         raise ValueError(f"No backends for {ntype}.")
-    return next((row for row in table if row["id"] == str(wanted or "")), table[0])
+    picked = next((row for row in table if row["id"] == str(wanted or "")), None)
+    if picked is not None:
+        return picked
+    return next((row for row in table if is_ready(row)), table[0])
 
 
 def _parse(raw: Any) -> dict[str, Any]:
@@ -364,7 +446,7 @@ def run_media(ntype: str, cfg: dict[str, Any], inputs: dict[str, Any], folder: P
     order = [first] + [row for row in BACKENDS.get(ntype, []) if row is not first]
     errors: list[str] = []
     for backend in order:
-        if backend is not first and tool_fn(backend["tool"]) is None:
+        if backend is not first and not is_ready(backend):
             continue
         step = _run_once(ntype, backend, cfg, inputs, folder)
         if step.get("ok"):
@@ -395,8 +477,42 @@ def _run_animations(cfg: dict[str, Any], inputs: dict[str, Any], folder: Path) -
             "result": {"backend": backend["label"], "animations": actions, "credits": int(backend["credits"]) * len(actions)}}
 
 
+def _run_gateway(ntype: str, backend: dict[str, Any], cfg: dict[str, Any], inputs: dict[str, Any], folder: Path) -> dict[str, Any]:
+    """Run a gateway plugin's own image node and keep the picture with this run."""
+    handler = node_fn(backend["node"])
+    if handler is None or not _has_key(str(backend.get("key") or "")):
+        return {"ok": False, "error": f"{backend['label']}: {why_not(backend, plugin_label(backend['plugin']))}"}
+    try:
+        args = backend["args"](inputs, cfg)
+    except (ValueError, OSError) as exc:
+        return {"ok": False, "gate": True, "error": str(exc)}
+    try:
+        data = handler({"config": {"prompt": args["prompt"], "model": backend["model"]}, "payload": {}})
+    except Exception as exc:  # noqa: BLE001 - a plugin's failure is this node's error
+        return {"ok": False, "error": f"{backend['label']}: {exc}"}
+    if not isinstance(data, dict) or not data.get("ok"):
+        reason = data.get("error") if isinstance(data, dict) else ""
+        return {"ok": False, "error": f"{backend['label']} failed: {reason or 'no picture came back'}"}
+    made = str(data.get("path") or next((f.get("path") for f in data.get("files") or [] if isinstance(f, dict)), "") or "")
+    if not made or not Path(made).is_file():
+        return {"ok": False, "error": f"{backend['label']} finished but sent no picture back."}
+    folder.mkdir(parents=True, exist_ok=True)
+    kept = str(shutil.copy2(made, folder / Path(made).name))
+    pin, kind = OUTPUT[ntype]
+    ref = {**file_ref(kept, kind), "provider": backend["plugin"], "backend": backend["id"]}
+    return {
+        "ok": True,
+        "outputs": {pin: with_url(ref), "files": [with_url(file_ref(kept, kind))]},
+        "result": {"backend": backend["label"], "credits": 0, "billed_to": f"{backend['plugin']} API key", "files": [kept]},
+    }
+
+
 def _run_once(ntype: str, backend: dict[str, Any], cfg: dict[str, Any], inputs: dict[str, Any], folder: Path, *, credits_for: int = 1) -> dict[str, Any]:
     credits = int(backend.get("credits") or 0)
+    if backend.get("node"):
+        if cfg.get("spend") is not True:
+            return {"ok": False, "gate": True, "error": f"{backend['label']} is billed to your {backend['plugin']} API key. Turn on Spend credits in this node's details to let it run."}
+        return _run_gateway(ntype, backend, cfg, inputs, folder)
     if credits > 0 and cfg.get("spend") is not True:
         return {"ok": False, "gate": True, "error": f"{backend['label']} costs about {credits * credits_for} credits a run. Turn on Spend credits in this node's details to let it run."}
     fn = tool_fn(backend["tool"])

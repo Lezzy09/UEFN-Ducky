@@ -137,10 +137,22 @@ describe("image and 3D nodes", () => {
     expect(current.config.spend).toBe(true);
     expect(screen.getByRole("switch", { name: "Spend credits" }).getAttribute("aria-checked")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Backend" }));
-    fireEvent.click(await screen.findByRole("radio", { name: /Tripo v3/ }));
-    expect(current.config.backend).toBe("tripo");
-    expect(screen.getByRole("status").textContent).toContain("3D AI Studio plugin");  // not set up here: it says why
+    const tripo = await screen.findByRole("radio", { name: /Tripo v3/ });
+    expect((tripo as HTMLInputElement).disabled).toBe(true);  // its plugin isn't set up here: it can't be picked
+    fireEvent.click(tripo);
+    expect(current.config.backend).toBeUndefined();
+  });
+
+  it("a saved backend whose plugin is off says why", () => {
+    render(<Editor config={{ backend: "tripo" }} meta={meta} />);
+    expect(screen.getByRole("status").textContent).toContain("3D AI Studio plugin");
     expect(screen.getByText(/About 60 credits each run on Tripo v3/)).toBeTruthy();
+  });
+
+  it("with none picked, the first backend that can run is the one shown", () => {
+    const offFirst = { ...meta, backends: [...(meta.backends || [])].reverse() };
+    render(<Editor config={{}} meta={offFirst} />);
+    expect(screen.getByText(/About 25 credits each run on Meshy/)).toBeTruthy();
   });
 
   it("chooses a folder for Save file", async () => {

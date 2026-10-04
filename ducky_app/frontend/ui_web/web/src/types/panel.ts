@@ -289,9 +289,13 @@ export interface FileRefDto {
 export interface AutomationBackendDto {
   id: string;
   label: string;
+  /** The installed plugin's own name for itself. */
   plugin: string;
   credits: number;
+  /** "~5 credits", or "Your own API key" on an AI gateway. */
+  cost?: string;
   available: boolean;
+  /** Why it can't run here: install, turn on, or add the key. */
   reason?: string;
 }
 

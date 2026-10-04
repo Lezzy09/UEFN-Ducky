@@ -79,6 +79,8 @@ class _Dataflow:
         self.steps: list[dict[str, Any]] = []
         self.order: list[dict[str, Any]] = []  # every step of the run, in the order it ran
         self.warnings: list[str] = []
+        # Run one node: a step it needs that never ran (a Card brief before a Preview) runs now.
+        self.run_missing_steps = False
         self._pins: dict[str, dict[str, Any]] = {}
         self._signatures: dict[str, dict[str, Any] | None] = {}
 
@@ -124,7 +126,7 @@ class _Dataflow:
             return self.outputs[nid].get(pin)
         if nid not in self.nodes:
             return None
-        if self.is_step(nid):
+        if self.is_step(nid) and not self.run_missing_steps:
             self.warnings.append(f"{self._name(for_node)} used {self._name(nid)} before it ran, so it got nothing.")
             return None
         if nid in self.busy:
@@ -203,7 +205,8 @@ def _last_outputs(wf: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def run_node(workflow_id: str, node_id: str) -> dict[str, Any]:
     """Run one node now. Everything wired into it reuses what it made last run (so a
-    paid generator upstream doesn't run again); a value node never run before runs."""
+    paid generator upstream doesn't run again); a node never run before runs, steps too.
+    A Preview is the exception: running it makes what it shows again (try again)."""
     wf = get_workflow(workflow_id)
     if wf is None:
         return {"ok": False, "error": "workflow not found", "steps": []}
@@ -214,9 +217,11 @@ def run_node(workflow_id: str, node_id: str) -> dict[str, Any]:
         return {"ok": False, "error": "That node isn't in the saved workflow; save first.", "steps": [], "id": wf["id"]}
     edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
     flow = _Dataflow(nodes, edges, catalog.node_specs())
+    flow.run_missing_steps = True
     nid = str(node["id"])
+    remake = {src for src, _pin in flow.feeds.get(nid, {}).values()} if node.get("type") == "util.preview" else set()
     for other, values in _last_outputs(wf).items():
-        if other != nid and other in nodes:
+        if other != nid and other in nodes and other not in remake:
             flow.outputs[other] = values
     ctx: dict[str, Any] = {"caller_conv_id": _caller("")}
     _prepare_run_ctx(ctx, wf)
