@@ -16,6 +16,9 @@ import {
   withPanelOnSide,
   withLatestRailSwitches,
   withRailEnabled,
+  withSavedRailSwitches,
+  saveRailSwitch,
+  RAIL_SWITCHES_WINDOW,
 } from "./workspaceDockStorage";
 
 const mem = new Map<string, string>();
@@ -148,5 +151,25 @@ describe("workspace dock sidebar snapshot", () => {
     snap = withPanelOnSide(snap, "ollama-live", "right");
     expect(panelsOnSide(snap, "right")).toContain("ollama-live");
     expect(panelsOnSide(snap, "left")).not.toContain("ollama-live");
+  });
+});
+
+describe("Appearance rail switches", () => {
+  it("are saved in their own record when switched", () => {
+    saveRailSwitch("right", false, "main");
+    expect(saveWorkspaceDock).toHaveBeenCalledWith({ window_id: RAIL_SWITCHES_WINDOW, snapshot: { leftRailEnabled: true, rightRailEnabled: false } });
+  });
+
+  it("win over any dock copy, including one that says on (a phone or a wiped window)", () => {
+    const copy = applyDiskDockSnapshot({ rightRailEnabled: true, leftRailEnabled: true }, "main");
+    expect(copy.rightRailEnabled).toBe(true);
+    const applied = withSavedRailSwitches(copy, { leftRailEnabled: true, rightRailEnabled: false });
+    expect(applied.rightRailEnabled).toBe(false);
+    expect(applied.leftRailEnabled).toBe(true);
+    // Switched back on in Appearance: that wins too.
+    expect(withSavedRailSwitches({ ...copy, rightRailEnabled: false }, { rightRailEnabled: true }).rightRailEnabled).toBe(true);
+    // No record yet (first start on this version): the copy stays as it was.
+    expect(withSavedRailSwitches(copy, null)).toBe(copy);
+    expect(withSavedRailSwitches(copy, {})).toBe(copy);
   });
 });

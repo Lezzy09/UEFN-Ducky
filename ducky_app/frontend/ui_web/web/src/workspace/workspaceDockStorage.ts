@@ -351,6 +351,38 @@ export function applyDiskDockSnapshot(raw: unknown, windowId: string): Workspace
   return next;
 }
 
+/** The Appearance on/off switches for the two side rails keep their own AppData record,
+ *  written only by that switch and read by every window on start. The dock record is
+ *  shared ("main" is also what the phone and a browser view use), so any window that
+ *  saves a copy made before the switch, or after its local storage was wiped (an app
+ *  update), would otherwise turn a rail you switched off back on. */
+export const RAIL_SWITCHES_WINDOW = "_rails";
+
+export function saveRailSwitch(side: DockSide, enabled: boolean, windowId = "main"): void {
+  const local = readDockSnapshot(windowId);
+  const switches = withRailEnabled(local, side, enabled);
+  try {
+    void getApi()?.save_workspace_dock?.({
+      window_id: RAIL_SWITCHES_WINDOW,
+      snapshot: { leftRailEnabled: switches.leftRailEnabled, rightRailEnabled: switches.rightRailEnabled },
+    });
+  } catch {
+    // ignore bridge errors
+  }
+}
+
+/** A snapshot with the saved Appearance switches applied (they win over any copy). */
+export function withSavedRailSwitches(snapshot: WorkspaceDockSnapshot, raw: unknown): WorkspaceDockSnapshot {
+  if (!raw || typeof raw !== "object") return snapshot;
+  const data = raw as Record<string, unknown>;
+  let next = snapshot;
+  for (const key of RAIL_KILL_SWITCHES) {
+    const saved = coerceDockBool(data[key]);
+    if (saved !== undefined && next[key] !== saved) next = { ...next, [key]: saved };
+  }
+  return next;
+}
+
 /** Keep this window's latest rail on/off switches (set in Appearance) in a snapshot the
  *  dock is about to save, so a copy it held from before can't switch a rail back on. */
 export function withLatestRailSwitches(snapshot: WorkspaceDockSnapshot, windowId: string): WorkspaceDockSnapshot {

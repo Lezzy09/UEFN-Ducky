@@ -18,6 +18,9 @@ import {
   withPanelOnSide,
   withLatestRailSwitches,
   withRailEnabled,
+  withSavedRailSwitches,
+  saveRailSwitch,
+  RAIL_SWITCHES_WINDOW,
   DOCK_CHANGE_EVENT,
 } from "../workspace/workspaceDockStorage";
 import { resizeStackedPanelSplit, type StackedPanelResizeSnapshot } from "../utils/stackedPanelFlex";
@@ -40,9 +43,12 @@ export function useWorkspaceDockLayout(windowId: string) {
       if (!api.get_workspace_dock) return;
       const hydrateStartedAt = Date.now();
       hydratingRef.current = true;
-      void api
-        .get_workspace_dock(windowId)
-        .then((raw) => {
+      void Promise.all([
+        api.get_workspace_dock(windowId),
+        // The Appearance rail switches: their own record, they win over any dock copy.
+        Promise.resolve(api.get_workspace_dock(RAIL_SWITCHES_WINDOW)).catch(() => null),
+      ])
+        .then(([raw, rails]) => {
           // Appearance (or a header button) saved while AppData was loading: take that, and
           // catch up with it — change events were skipped while loading.
           if (localDockWriteIsNewerThan(hydrateStartedAt)) {
@@ -51,7 +57,7 @@ export function useWorkspaceDockLayout(windowId: string) {
             return;
           }
           if (raw && typeof raw === "object" && Object.keys(raw).length > 0) {
-            const next = applyDiskDockSnapshot(raw, windowId);
+            const next = withSavedRailSwitches(applyDiskDockSnapshot(raw, windowId), rails);
             setSnapshot((prev) =>
               JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
             );
@@ -59,9 +65,14 @@ export function useWorkspaceDockLayout(windowId: string) {
             return;
           }
           // First run after upgrade: seed disk from whatever localStorage had.
+          const seeded = withSavedRailSwitches(snapshotRef.current, rails);
+          if (seeded !== snapshotRef.current) {
+            setSnapshot(seeded);
+            syncLocalDockSnapshot(seeded, windowId);
+          }
           void api.save_workspace_dock?.({
             window_id: windowId,
-            snapshot: snapshotRef.current as unknown as Record<string, unknown>,
+            snapshot: seeded as unknown as Record<string, unknown>,
           });
         })
         .finally(() => {
@@ -279,7 +290,8 @@ export function useWorkspaceDockLayout(windowId: string) {
 
   const setRailEnabled = useCallback(
     (side: DockSide, enabled: boolean) => {
-      // The switch itself: saved first, so the commit below keeps it.
+      // The switch itself: saved first (its own record, then this window's), so the commit below keeps it.
+      saveRailSwitch(side, enabled, windowId);
       persistDockSnapshot(withRailEnabled(readDockSnapshot(windowId), side, enabled), windowId);
       commit((prev) => withRailEnabled(prev, side, enabled));
       flushDockSnapshotToDisk(windowId);

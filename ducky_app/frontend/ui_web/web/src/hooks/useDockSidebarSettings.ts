@@ -6,6 +6,7 @@ import {
   flushDockSnapshotToDisk,
   persistDockSnapshot,
   readDockSnapshot,
+  saveRailSwitch,
   withPanelOnSide,
   withRailEnabled,
   type DockPanelId,
@@ -40,6 +41,7 @@ export function useDockSidebarSettings() {
   }, [storageKey]);
 
   const setRailEnabled = useCallback((side: DockSide, enabled: boolean) => {
+    saveRailSwitch(side, enabled, WINDOW_ID);
     persistDockSnapshot(withRailEnabled(readDockSnapshot(WINDOW_ID), side, enabled), WINDOW_ID);
     flushDockSnapshotToDisk(WINDOW_ID);
   }, []);
