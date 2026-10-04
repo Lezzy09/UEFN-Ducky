@@ -151,6 +151,25 @@ class Tools:
         return fn
 
 
+# What the 3D AI Studio and Meshy plugins declare under contributes.automations.image_generators.
+IMAGE_GENERATORS = [
+    {"id": "gemini25flash", "label": "Gemini 2.5 Flash Image", "tool": "studio3d_image_gemini25flash", "credits": 5, "plugin_id": "studio3d"},
+    {"id": "gemini31flash", "label": "Gemini 3.1 Flash Image", "tool": "studio3d_image_gemini31flash", "credits": 7, "plugin_id": "studio3d"},
+    {"id": "gemini3pro", "label": "Gemini 3 Pro Image", "tool": "studio3d_image_gemini3pro", "credits": 10, "plugin_id": "studio3d"},
+    {"id": "seedream", "label": "SeeDream v5 Lite", "tool": "studio3d_image_seedream", "credits": 10, "plugin_id": "studio3d"},
+    {"id": "meshy_text_to_image", "label": "Meshy · Nano Banana", "tool": "meshy_text_to_image", "credits": 5,
+     "args": {"ai_model": "nano-banana"}, "plugin_id": "meshy"},
+]
+
+
+@pytest.fixture(autouse=True)
+def image_generators(monkeypatch):
+    rows = [dict(row) for row in IMAGE_GENERATORS]
+    monkeypatch.setattr(media, "plugin_image_generators", lambda: rows)
+    monkeypatch.setattr(media, "_manifest_label", lambda pid: {"studio3d": "3D AI Studio", "meshy": "Meshy"}.get(pid, ""))
+    return rows
+
+
 @pytest.fixture
 def tools(monkeypatch, tmp_path):
     fake = Tools(tmp_path)
@@ -298,6 +317,33 @@ def test_only_installed_gateways_are_listed(tools, monkeypatch):
     monkeypatch.setattr(media, "gateway_image_nodes", lambda: [])
     ids = [b["id"] for b in media.backends_for("image.generate")]
     assert ids[0] == "gemini25flash" and not {"google_imagen", "openai_image"} & set(ids)
+
+
+def test_text_to_image_lists_only_what_the_plugins_turned_on_declare(tools, monkeypatch, image_generators):
+    monkeypatch.setattr(media, "gateway_image_nodes", lambda: [])
+    image_generators[:] = [row for row in image_generators if row["plugin_id"] == "meshy"]
+    assert [b["id"] for b in media.backends_for("image.generate")] == ["meshy_text_to_image", "agent"]
+    step = run("image.generate", {"spend": True}, {"prompt": "a duck"})
+    assert step["ok"], step
+    assert tools.calls[0] == ("meshy_text_to_image", {**tools.calls[0][1], "prompt": "a duck", "ai_model": "nano-banana"})
+    image_generators.clear()
+    assert [b["id"] for b in media.backends_for("image.generate")] == ["agent"]
+    none = run("image.generate", {"spend": True}, {"prompt": "a duck"})
+    assert none["ok"] is False and "An agent or model of yours" in none["error"]
+
+
+def test_a_plugin_declares_its_image_generators(monkeypatch):
+    from backend.uefn_plugins import host
+
+    parsed = host._image_generator_row({"id": "nb", "label": "Nano Banana", "tool": "x_image", "credits": "5",
+                                        "args": {"ai_model": "nano-banana"}, "prompt_arg": "text"}, "x")
+    assert parsed == {"id": "nb", "label": "Nano Banana", "tool": "x_image", "credits": 5, "args": {"ai_model": "nano-banana"},
+                      "prompt_arg": "text", "plugin_id": "x"}
+    assert host._image_generator_row({"id": "nb"}, "x") is None  # no tool, nothing to run
+    assert media._declared(parsed)["args"]({"prompt": "a duck"}, {}) == {"ai_model": "nano-banana", "text": "a duck"}
+    monkeypatch.setitem(host._CONTRIBUTIONS, "automations_image_generators", [parsed, {**parsed, "plugin_id": "off"}])
+    monkeypatch.setattr(host, "get_enabled_plugin_ids", lambda: ["x"])
+    assert [row["plugin_id"] for row in host.image_generators()] == ["x"]  # a plugin turned off lists nothing
 
 
 def test_ask_a_model_on_a_coding_agent_gateway_uses_its_one_shot(monkeypatch):
@@ -854,6 +900,30 @@ def test_ask_a_model_runs_on_the_picked_gateway_or_agent(monkeypatch):
     monkeypatch.setattr("frontend.favorite_models.known_backends", lambda: {"cursor", "claude_code", "ollama", "openai"})
     assert runner._model_choice({"model": "claude_code:claude-opus-5-5"}) == ("claude_code", "claude-opus-5-5")
     assert runner._model_choice({"model": "ollama:qwen3.8:latest"}) == ("ollama", "qwen3.8:latest")
+
+
+def test_the_card_that_made_the_picture_tries_again_keeps_it_then_starts_over(tools, model):
+    """No Preview node: play on the picture's own card, Try again, Use this, play = next one."""
+    model["answers"].extend(["a red duck", "a blue duck"])
+    graph = {"nodes": [{"id": "in", "type": "flow.input", "x": 0, "y": 0, "config": {"inputs": [{"name": "text", "default": "a duck"}]}},
+                       {"id": "ask", "type": "llm.ask", "x": 300, "y": 0, "config": {}},
+                       {"id": "gen", "type": "image.generate", "x": 600, "y": 0, "config": {}},
+                       {"id": "view", "type": "util.preview", "x": 900, "y": -200, "config": {}},
+                       {"id": "send", "type": "uefn.import", "x": 900, "y": 0, "config": {}}],
+             "edges": [{"source": "in", "target": "ask", "kind": "data", "source_pin": "text", "target_pin": "prompt"},
+                       {"source": "ask", "target": "gen", "kind": "data", "source_pin": "text", "target_pin": "prompt"},
+                       {"source": "gen", "target": "view", "kind": "data", "source_pin": "image", "target_pin": "value"},
+                       {"source": "gen", "target": "send", "kind": "data", "source_pin": "image", "target_pin": "file"}]}
+    wid = _save(graph)
+    assert runner.run_node(wid, "gen", approve_spend=True)["ok"]
+    again = runner.run_node(wid, "gen", approve_spend=True)  # Try again: the same prompt, a new picture
+    assert again["ok"] and [c[1]["prompt"] for c in tools.calls] == ["a red duck", "a red duck"]
+    kept = runner.keep_preview(wid, "gen")
+    assert kept["ok"], kept
+    assert [c[0] for c in tools.calls][-1] == "import_asset"  # the Preview isn't run (it would make a new one)
+    assert tools.calls[-1][1]["source_file"] == again["node_outputs"]["gen"]["image"]["path"]
+    fresh = runner.run_node(wid, "gen", approve_spend=True)  # kept: play starts over from the prompt
+    assert fresh["ok"] and tools.calls[-1][1]["prompt"] == "a blue duck" and len(model["seen"]) == 2
 
 
 def test_play_is_the_approval_and_use_this_sends_on_the_previewed_picture(tools):

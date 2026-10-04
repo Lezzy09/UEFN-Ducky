@@ -1,8 +1,10 @@
-"""Image and 3D nodes (plan §7): each node type has a table of backends — a tool an
-installed plugin registers (3D AI Studio, Meshy), or an AI gateway plugin's own image
-node (Google, OpenAI) — and the node calls the one picked in its details, waits for
-it, and turns the files it downloads into file refs on its output pins. A backend whose
-plugin isn't installed, is off, or (gateways) has no key can't be picked or run.
+"""Image and 3D nodes: each node type has a table of backends — a tool an installed
+plugin registers (3D AI Studio, Meshy), or an AI gateway plugin's own image node
+(Google, OpenAI) — and the node calls the one picked in its details, waits for it, and
+turns the files it downloads into file refs on its output pins. Text to Image lists only
+what the plugins turned on here declare (contributes.automations.image_generators) and
+the gateways' image nodes. A backend whose plugin is off, or (gateways) has no key,
+can't be picked or run.
 
 Paid backends keep the plugins' spend lock: a node only spends credits (or, on a
 gateway, the person's own API key) when its "Spend credits" switch is on (a person
@@ -102,10 +104,6 @@ def _image(inputs: dict[str, Any], _cfg: dict[str, Any]) -> dict[str, Any]:
 
 def _image_and_prompt(inputs: dict[str, Any], _cfg: dict[str, Any]) -> dict[str, Any]:
     return {"image": _need_file(inputs, "image", "Image"), "prompt": _need_text(inputs, "prompt", "Prompt")}
-
-
-def _meshy_image(inputs: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
-    return {"prompt": _need_text(inputs, "prompt", "Prompt"), "ai_model": "nano-banana"}
 
 
 def _meshy_from_image(inputs: dict[str, Any], _cfg: dict[str, Any]) -> dict[str, Any]:
@@ -244,25 +242,40 @@ def gateway_image_nodes() -> list[tuple[str, str]]:
         return []
 
 
+def plugin_image_generators() -> list[dict[str, Any]]:
+    """What the plugins turned on here declare under contributes.automations.image_generators."""
+    try:
+        from backend.uefn_plugins.host import image_generators
+
+        return image_generators()
+    except Exception:
+        return []
+
+
+def _declared(row: dict[str, Any]) -> dict[str, Any]:
+    """A plugin's own Text to Image tool: the prompt goes in its prompt_arg, next to its fixed args."""
+    prompt_arg = str(row.get("prompt_arg") or "prompt")
+    fixed = dict(row.get("args") or {})
+    pid = str(row.get("plugin_id") or "")
+    return {"id": row["id"], "label": row["label"], "plugin": _manifest_label(pid) or pid, "plugin_id": pid,
+            "tool": row["tool"], "credits": int(row.get("credits") or 0),
+            "args": lambda inputs, _cfg: {**fixed, prompt_arg: _need_text(inputs, "prompt", "Prompt")}}
+
+
 def table(ntype: str) -> list[dict[str, Any]]:
-    """The node's backends: the fixed generator table, plus (Text to Image) the image node
-    of every AI gateway plugin installed here."""
-    rows = list(BACKENDS.get(ntype) or [])
+    """The node's backends. Text to Image: every image tool a plugin turned on here
+    declares, plus the image node of every AI gateway plugin installed here."""
     if ntype == "image.generate":
+        rows = [_declared(row) for row in plugin_image_generators()]
         rows.extend(_gateway(pid, node) for node, pid in gateway_image_nodes())
-    return rows
+        return rows
+    return list(BACKENDS.get(ntype) or [])
 
 
 # node type → backends, first = default (first that can run, when none is picked).
 # Credits are the plugins' own estimates (the amount each tool's spend gate names).
 BACKENDS: dict[str, list[dict[str, Any]]] = {
-    "image.generate": [
-        _studio("studio3d_image_gemini25flash", "Gemini 2.5 Flash Image", 5, _prompt),
-        _studio("studio3d_image_gemini31flash", "Gemini 3.1 Flash Image", 7, _prompt),
-        _studio("studio3d_image_gemini3pro", "Gemini 3 Pro Image", 10, _prompt),
-        _studio("studio3d_image_seedream", "SeeDream v5 Lite", 10, _prompt),
-        _meshy("meshy_text_to_image", "Meshy · Nano Banana", 5, _meshy_image),
-    ],
+    "image.generate": [],  # what the plugins turned on here declare (table())
     "image.edit": [
         _meshy("meshy_image_to_image", "Meshy · Nano Banana", 5, lambda i, c: {**_image_and_prompt(i, c), "ai_model": "nano-banana"}),
     ],
@@ -425,6 +438,8 @@ def pick_backend(ntype: str, wanted: Any) -> dict[str, Any]:
     """The picked backend; with none picked, the first one that can run here."""
     rows = table(ntype)
     if not rows:
+        if ntype in AGENT_NODES:
+            raise ValueError("Nothing here makes pictures yet: pick An agent or model of yours in the details, or turn on an image plugin from the Store.")
         raise ValueError(f"No backends for {ntype}.")
     picked = next((row for row in rows if row["id"] == str(wanted or "")), None)
     if picked is not None:

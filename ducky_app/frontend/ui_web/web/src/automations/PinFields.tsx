@@ -97,7 +97,7 @@ export function PinsSection({ node, pins, graph, outputs, frozen, onNodeChange }
         {pin.description ? <small className="aw-field-hint">{pin.description}</small> : null}
       </div>)}
     </fieldset> : null}
-    {pins.outputs.length && outputs ? <details className="aw-insp-section aw-pins-section aw-last-run">
+    {pins.outputs.length && outputs ? <details className="aw-insp-section aw-pins-section aw-last-run aw-fold">
       <summary className="aw-pins-title">Last run</summary>
       {pins.outputs.map((pin) => <div key={pin.id} className="aw-pin-out">
         <span className="aw-pin-field-head"><span className={`aw-pin-dot aw-pin-type--${cleanType(pin.type)}`} aria-hidden="true" />{pin.label}</span>

@@ -86,15 +86,35 @@ function writeView(patch: Partial<SavedView>) {
 }
 
 const END_TYPES = new Set(["pipeline.finish", "flow.end", "flow.output"]);
-/** Room under a Preview node's pin for what it shows. */
-/** Room under a card's pin rows: a Preview's value, or the picture an image node made. */
+/** Room under a card's pin rows: a Preview's value, an Input's picked picture, or the
+ *  picture a node made with Try again / Use this under it. */
 const PREVIEW_EXTRA = 120;
 const THUMB_EXTRA = 120;
+const MADE_EXTRA = 210;
 const PICTURE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
+
+/** A node that makes pictures (Text to Image, Edit image, a render…), not an Input. */
+function makesPictures(node: AutomationGraphNodeDto, pins: NodePins): boolean {
+  return !node.type.startsWith("input.") && node.type !== "util.preview"
+    && pins.outputs.some((pin) => pin.type === "image" || pin.type === "images");
+}
 
 function cardExtra(node: AutomationGraphNodeDto, pins: NodePins): number {
   if (node.type === "util.preview") return PREVIEW_EXTRA;
+  if (makesPictures(node, pins)) return MADE_EXTRA;
   return pins.outputs.some((pin) => pin.type === "image" || pin.type === "images") ? THUMB_EXTRA : 0;
+}
+
+/** What each node made, the newest run winning: a card keeps its last picture after a
+ *  later run of it fails. */
+function madeByNode(runs: (AutomationRunDto | null | undefined)[]): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const run of runs) {
+    for (const [id, values] of Object.entries(run?.node_outputs || {})) {
+      if (values && typeof values === "object") out[id] = values as Record<string, unknown>;
+    }
+  }
+  return out;
 }
 
 /** The pictures in a value (a file ref, a list of them), at most four. */
@@ -120,6 +140,18 @@ function Thumbs({ pictures, empty }: { pictures: FileRefDto[]; empty: string }) 
     {pictures.map((pic, index) => pic.url
       ? <img key={`${pic.path}-${index}`} src={pic.url} alt={pic.name} title={pic.name} draggable={false} loading="lazy" />
       : <span key={`${pic.path}-${index}`} className="aw-node-thumb-name" title={pic.path}>{pic.name}</span>)}
+  </div>;
+}
+/** Under a picture on a card: make another from the same prompt, or keep this one (run
+ *  the steps that take it, like Save to card). */
+function PictureActions({ nodeId, running, busy, onRun }: { nodeId: string; running: string; busy: boolean; onRun: (id: string, how?: "run" | "keep") => void }) {
+  return <div className="aw-preview-actions" onPointerDown={(event) => event.stopPropagation()}>
+    <button type="button" disabled={!!running || busy} title="Make a new one from the same prompt" onClick={() => onRun(nodeId)}>
+      {running === nodeId ? <Icons.Spinner /> : <Icons.Refresh />} Try again
+    </button>
+    <button type="button" className="is-primary" disabled={!!running || busy} title="Keep this one: run the steps that take it (like Save to card)" onClick={() => onRun(nodeId, "keep")}>
+      <Icons.Check /> Use this
+    </button>
   </div>;
 }
 /** The add-node menu: at the pointer (it grows out of it) or above the + button (it slides up). */
@@ -426,6 +458,8 @@ export function AutomationsView() {
     toY: number;
   } | null>(null);
   const [log, setLog] = useState<AutomationRunDto | null>(null);
+  const [made, setMade] = useState<Record<string, Record<string, unknown>>>({});
+  useEffect(() => { if (log?.node_outputs) setMade((before) => ({ ...before, ...madeByNode([log]) })); }, [log]);
   // Phones (narrow editor): the toolbar actions and the canvas tools each fold into one
   // button that opens them as a labeled list. Wide, both are always shown (CSS).
   const [phoneMenu, setPhoneMenu] = useState<"" | "actions" | "canvas">("");
@@ -567,6 +601,7 @@ export function AutomationsView() {
     const row = res?.workflow;
     if (row) {
       resetDraft(row);
+      synced.current = row;
       setVersions([]);
       setHistoryStatus("");
       setActionError("");
@@ -575,6 +610,7 @@ export function AutomationsView() {
       setSelectedNodeIds([]);
       setSelectedEdge(null);
       setLog((row.runs || []).slice(-1)[0] || null);
+      setMade(madeByNode(row.runs || []));
       setLive(null);
       writeView({ open: id });
       const camera = readView().cameras?.[id];
@@ -637,11 +673,17 @@ export function AutomationsView() {
   }, [loadOne, refreshList, setDraft]);
 
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  /** The draft as the server last had it (opened or saved) and saves not answered yet: a
+   *  change made outside this canvas (an AI's save, another window) loads in only when
+   *  nothing here is unsaved, and play never sends an old copy over it. */
+  const synced = useRef<AutomationDto | null>(null);
+  const savesPending = useRef(0);
   const [textSaveError, setTextSaveError] = useState(false);
   const readOnly = !!draft?.owner?.readOnly;
   const persist = useCallback((next: AutomationDto, owner = "") => {
     const api = getApi();
     const gen = loadGen.current;
+    savesPending.current += 1;
     const operation = saveQueue.current.then(async () => {
     if (next.id && next.owner?.readOnly) return next;  // someone else's team workflow: never pushed from here
     // The list files workflows (set_workflow_folder); an open canvas must not undo that.
@@ -651,17 +693,38 @@ export function AutomationsView() {
     if (row) {
       if (row.owner?.kind === "team") queueTeamSync();
       if (gen === loadGen.current) {
-        acknowledgeDraft((current) => !next.id || current === next ? row : current);
+        acknowledgeDraft((current) => {
+          if (next.id && current !== next) return current;
+          synced.current = row;
+          return row;
+        });
         setSelectedId(row.id);
       }
       await refreshList();
       return row;
     }
     throw new Error(res?.error || "Could not save workflow");
-    });
+    }).finally(() => { savesPending.current -= 1; });
     saveQueue.current = operation.catch(() => undefined);
     return operation;
   }, [refreshList, acknowledgeDraft]);
+  /** Before a run: save what is only on this canvas, else just wait for saves on their way. */
+  const saveBeforeRun = (doc: AutomationDto) => history.current.current === synced.current ? saveQueue.current : persist(doc);
+  const listedUpdated = rows.find((row) => row.id === draft?.id)?.updated || 0;
+  useEffect(() => {
+    const seen = synced.current;
+    if (!seen?.id || seen.owner?.readOnly || listedUpdated <= (seen.updated || 0) || savesPending.current) return;
+    const gen = loadGen.current;
+    void getApi()?.get_workflow?.(seen.id).then((res) => {
+      const row = res?.workflow;
+      if (!row || gen !== loadGen.current || savesPending.current) return;
+      acknowledgeDraft((current) => {
+        if (current !== seen) return current;  // edited here meanwhile: that edit's save wins
+        synced.current = row;
+        return row;
+      });
+    }).catch(() => undefined);
+  }, [listedUpdated, acknowledgeDraft]);
 
   // No workflows yet: a few ready-made pipelines to start from in one click.
   const [featured, setFeatured] = useState<AutomationTemplateDto[]>([]);
@@ -818,6 +881,7 @@ export function AutomationsView() {
       setSelectedEdge(null);
       setSpawn(null);
       setLog(null);
+      setMade({});
       setActionError("");
       if (created.id) setSelectedId(created.id);
     },
@@ -966,7 +1030,7 @@ export function AutomationsView() {
     setStopping(false);
     setLogOpen(true);
     try {
-      await persist(draft);
+      await saveBeforeRun(draft);
       const res = await runBridgeJob<AutomationRunDto>("run_workflow", [draft.id], RUN_TIMEOUT_MS);
       if (res && gen === loadGen.current) setLog(res);
     } catch (error) {
@@ -977,15 +1041,15 @@ export function AutomationsView() {
     }
   };
   const [runningNode, setRunningNode] = useState("");
-  /** Play on one node (you pressing it is the approval for its paid steps), or a
-   *  Preview's "Use this" (the steps that take the picture on screen). */
+  /** Play on one node (you pressing it is the approval for its paid steps), or "Use
+   *  this" on a picture (the steps that take the picture on screen). */
   const runNode = async (nodeId: string, how: "run" | "keep" = "run") => {
     if (!draft?.id || busy || runningNode) return;
     const gen = loadGen.current;
     setRunningNode(nodeId);
     setLogOpen(true);
     try {
-      await persist(draft);
+      await saveBeforeRun(draft);
       const res = how === "keep"
         ? await runBridgeJob<AutomationRunDto>("keep_workflow_preview", [draft.id, nodeId], RUN_TIMEOUT_MS)
         : await runBridgeJob<AutomationRunDto>("run_workflow_node", [draft.id, nodeId, true], RUN_TIMEOUT_MS);
@@ -1788,6 +1852,7 @@ export function AutomationsView() {
   const clearLog = async () => {
     const id = draft?.id;
     setLog(null);
+    setMade({});
     if (id) await getApi()?.clear_workflow_runs?.(id);
   };
 
@@ -1993,7 +2058,7 @@ export function AutomationsView() {
               const locked = nodeLocked(graph, node.id);
               const pins = pinsOf(node);
               const layout = layoutOf(node);
-              const shown = lastOutputs[node.id] || {};
+              const shown = lastOutputs[node.id] || made[node.id] || {};
               const setHere = (node.config.inputs && typeof node.config.inputs === "object" ? node.config.inputs : {}) as Record<string, unknown>;
               const rowCount = overview ? 0 : layout.rows;
               return (
@@ -2036,16 +2101,14 @@ export function AutomationsView() {
                         {node.type === "util.preview"
                           ? picturesIn(shown.value).length ? <>
                             <Thumbs pictures={picturesIn(shown.value)} empty="" />
-                            {readOnly || !draft?.id ? null : <div className="aw-preview-actions" onPointerDown={(event) => event.stopPropagation()}>
-                              <button type="button" disabled={!!runningNode || busy} title="Make a new one from the same prompt" onClick={() => void runNode(node.id)}>
-                                {runningNode === node.id ? <Icons.Spinner /> : <Icons.Refresh />} Try again
-                              </button>
-                              <button type="button" className="is-primary" disabled={!!runningNode || busy} title="Keep this one: run the steps that take it (like Save to card)" onClick={() => void runNode(node.id, "keep")}>
-                                <Icons.Check /> Use this
-                              </button>
-                            </div>}
+                            {readOnly || !draft?.id ? null : <PictureActions nodeId={node.id} running={runningNode} busy={busy} onRun={runNode} />}
                           </> : <div className="aw-node-preview">{previewText(shown.value)}</div>
-                          : cardExtra(node, pins) ? <Thumbs pictures={cardPictures(node, pins, shown)} empty={node.type.startsWith("input.") ? "Pick a picture in the details" : "The picture shows here after a run"} /> : null}
+                          : makesPictures(node, pins) ? <>
+                            <Thumbs pictures={cardPictures(node, pins, shown)} empty={runningNode === node.id ? "Making it…" : "Press play to make one"} />
+                            {readOnly || !draft?.id || !cardPictures(node, pins, shown).length ? null
+                              : <PictureActions nodeId={node.id} running={runningNode} busy={busy} onRun={runNode} />}
+                          </>
+                          : cardExtra(node, pins) ? <Thumbs pictures={cardPictures(node, pins, shown)} empty="Pick a picture in the details" /> : null}
                       </div>
                     ) : (
                       <div className="aw-node-body">{!overview && summary ? <span className="aw-node-sub">{summary}</span> : null}</div>

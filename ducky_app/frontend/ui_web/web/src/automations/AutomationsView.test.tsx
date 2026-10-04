@@ -1785,7 +1785,7 @@ describe("image nodes", () => {
       show: { value: { kind: "image", path: "C:/runs/duck.png", name: "duck.png", url } },
     } });
     await openPipe();
-    expect(document.querySelector('[data-aw-node="gen"] .aw-node-thumb')?.textContent).toContain("after a run");
+    expect(document.querySelector('[data-aw-node="gen"] .aw-node-thumb')?.textContent).toContain("Press play to make one");
     fireEvent.click(screen.getByRole("button", { name: "Test", exact: true }));
     await waitFor(() => expect(document.querySelector('[data-aw-node="gen"] .aw-node-thumb img')?.getAttribute("src")).toBe(url));
     expect(document.querySelector('[data-aw-node="show"] .aw-node-thumb img')?.getAttribute("src")).toBe(url);
@@ -1801,7 +1801,7 @@ describe("image nodes", () => {
     editNode("gen");
     fireEvent.click(within(details()!).getByRole("button", { name: "Run this node" }));
     await waitFor(() => expect(api.run_workflow_node).toHaveBeenCalledWith("p", "gen", true));  // pressing play is the approval
-    expect(api.save_workflow).toHaveBeenCalled();  // saved first, so the node that runs is the one on screen
+    expect(api.save_workflow).not.toHaveBeenCalled();  // nothing unsaved here: a change made elsewhere isn't put back
     await waitFor(() => expect(document.querySelector('[data-aw-node="gen"] .aw-node-thumb img')?.getAttribute("src")).toContain("again.png"));
     expect(within(details()!).getByText("again.png")).toBeTruthy();  // Last run shows the file
   });
@@ -1822,6 +1822,57 @@ describe("image nodes", () => {
     expect(screen.queryByLabelText("Running")).toBeNull();
     const lastRun = document.querySelector(".aw-last-run") as HTMLDetailsElement;
     expect(lastRun && lastRun.open).toBe(false);
+  });
+
+  it("puts Try again and Use this on the card that made the picture", async () => {
+    const keep = vi.fn().mockResolvedValue({ ok: true, steps: [{ label: "Save to card", ok: true }], node_outputs: {} });
+    (api as unknown as { keep_workflow_preview: typeof keep }).keep_workflow_preview = keep;
+    api.run_workflow_node.mockResolvedValue({ ok: true, steps: [], node_outputs: {
+      gen: { image: { kind: "image", path: "C:/runs/duck.png", name: "duck.png", url } },
+    } });
+    await openPipe();
+    const card = document.querySelector('[data-aw-node="gen"]') as HTMLElement;
+    expect(within(card).queryByRole("button", { name: /Use this/ })).toBeNull();  // nothing made yet
+    editNode("gen");
+    fireEvent.click(within(details()!).getByRole("button", { name: "Run this node" }));
+    await waitFor(() => expect(within(card).getByRole("button", { name: /Use this/ })).toBeTruthy());
+    expect(card.querySelector(".aw-node-thumb img")?.getAttribute("src")).toBe(url);
+    fireEvent.click(within(card).getByRole("button", { name: /Use this/ }));
+    await waitFor(() => expect(keep).toHaveBeenCalledWith("p", "gen"));
+    fireEvent.click(within(card).getByRole("button", { name: /Try again/ }));
+    await waitFor(() => expect(api.run_workflow_node).toHaveBeenCalledTimes(2));
+    expect(api.run_workflow_node).toHaveBeenLastCalledWith("p", "gen", true);
+  });
+
+  it("folds a node's Settings, and folded stays folded", async () => {
+    await openPipe();
+    editNode("gen");
+    const fold = () => within(details()!).getByText("Settings").closest("details") as HTMLDetailsElement;
+    expect(fold().open).toBe(true);
+    fold().open = false;
+    fireEvent(fold(), new Event("toggle"));
+    expect(window.localStorage.getItem("ducky.workflows.settingsOpen")).toBe("0");
+  });
+
+  it("keeps showing a card's last picture after a later run of it failed", async () => {
+    saved.runs = [
+      { ok: true, steps: [], node_outputs: { gen: { image: { kind: "image", path: "C:/runs/duck.png", name: "duck.png", url } } } },
+      { ok: false, error: "Card picture: no key", steps: [], node_outputs: { q: { text: "a duck" } } },
+    ];
+    await openPipe();
+    expect(document.querySelector('[data-aw-node="gen"] .aw-node-thumb img')?.getAttribute("src")).toBe(url);
+  });
+
+  it("loads a change made outside into the open canvas and never sends the old one back", async () => {
+    saved.updated = 1;
+    api.list_workflows.mockImplementation(async () => ({ workflows: [{ id: "p", name: "Example", enabled: true, owner: saved.owner, updated: saved.updated, trigger: { kind: "chat", label: "Chat" } }] }));
+    await openPipe();
+    saved = { ...structuredClone(saved), updated: 2, graph: { ...saved.graph, nodes: saved.graph.nodes.filter((node) => node.id !== "show") } };
+    await act(async () => { window.__uefnPanelPush?.({ type: "graphs_changed" }); });
+    await waitFor(() => expect(document.querySelector('[data-aw-node="show"]')).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Test", exact: true }));
+    await waitFor(() => expect(api.run_workflow).toHaveBeenCalledWith("p"));
+    expect(api.save_workflow).not.toHaveBeenCalled();
   });
 
   it("keeps the previewed picture or makes another from the Preview card", async () => {

@@ -87,6 +87,8 @@ _CONTRIBUTIONS: dict[str, Any] = {
     "automations_nodes": [],  # contributes.automations.nodes (+ plugin_id)
     "automations_triggers": [],  # contributes.automations.triggers (+ plugin_id)
     "automations_templates": [],  # contributes.automations.templates (+ plugin_id, graph)
+    # Text to Image backends a plugin offers: {id, label, tool, credits, args?, prompt_arg?, plugin_id}
+    "automations_image_generators": [],
     # New-file Verse scaffolds for the template picker (content inlined at load).
     "verse_templates": [],  # {id, name, icon, description?, content, order?, file?, plugin_id}
     "tts_voices": [],  # {id, label, plugin_id}
@@ -256,6 +258,14 @@ def _provider_shows_thinking(row: dict[str, Any]) -> bool:
     return True
 
 
+def image_generators() -> list[dict[str, Any]]:
+    """Text to Image backends the loaded plugins declare (contributes.automations.image_generators)."""
+    enabled = set(get_enabled_plugin_ids())
+    with _LOCK:
+        rows = _dedupe_contrib_rows(_CONTRIBUTIONS["automations_image_generators"])
+    return [dict(row) for row in rows if row.get("plugin_id") in enabled]
+
+
 def get_ui_contributions() -> dict[str, Any]:
     """Snapshot contrib registry for Settings UI — does not wait on register()."""
     enabled = list(get_enabled_plugin_ids())
@@ -287,6 +297,7 @@ def get_ui_contributions() -> dict[str, Any]:
             "automations_nodes": _dedupe_contrib_rows(_CONTRIBUTIONS["automations_nodes"]),
             "automations_triggers": _dedupe_contrib_rows(_CONTRIBUTIONS["automations_triggers"]),
             "automations_templates": _dedupe_contrib_rows(_CONTRIBUTIONS["automations_templates"]),
+            "automations_image_generators": _dedupe_contrib_rows(_CONTRIBUTIONS["automations_image_generators"]),
             "verse_templates": sorted(
                 _dedupe_contrib_rows(_CONTRIBUTIONS["verse_templates"]),
                 key=lambda t: (int(t.get("order") or 100), str(t.get("name") or "")),
@@ -1481,6 +1492,7 @@ def reload_plugins() -> None:
             _CONTRIBUTIONS["automations_nodes"] = []
             _CONTRIBUTIONS["automations_triggers"] = []
             _CONTRIBUTIONS["automations_templates"] = []
+            _CONTRIBUTIONS["automations_image_generators"] = []
             try:
                 from backend.automations.plugin import clear_all as _clear_auto_handlers
 
@@ -1546,6 +1558,30 @@ def _automation_template_row(row: Any, pid: str) -> dict[str, Any] | None:
         "plugin_id": pid,
         "systems": row.get("systems"),
         "requires_plugins": req,
+    }
+
+
+def _image_generator_row(row: Any, pid: str) -> dict[str, Any] | None:
+    """One Text to Image backend: the plugin's own MCP tool, what it is called and what it costs."""
+    if not isinstance(row, dict):
+        return None
+    gid = str(row.get("id") or "").strip()
+    tool = str(row.get("tool") or "").strip()
+    if not gid or not tool:
+        return None
+    try:
+        credits = max(0, int(row.get("credits") or 0))
+    except (TypeError, ValueError):
+        credits = 0
+    args = row.get("args") if isinstance(row.get("args"), dict) else {}
+    return {
+        "id": gid,
+        "label": str(row.get("label") or gid).strip() or gid,
+        "tool": tool,
+        "credits": credits,
+        "args": dict(args),
+        "prompt_arg": str(row.get("prompt_arg") or "prompt").strip() or "prompt",
+        "plugin_id": pid,
     }
 
 
@@ -2382,6 +2418,10 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
         parsed = _automation_template_row(row, pid)
         if parsed:
             _CONTRIBUTIONS["automations_templates"].append(parsed)
+    for row in auto.get("image_generators") or []:
+        parsed = _image_generator_row(row, pid)
+        if parsed:
+            _CONTRIBUTIONS["automations_image_generators"].append(parsed)
 
     for voice in contributes.get("tts.voices") or contributes.get("tts_voices") or []:
         if not isinstance(voice, dict):

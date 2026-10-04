@@ -204,21 +204,27 @@ def _last_outputs(wf: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def keep_preview(workflow_id: str, node_id: str) -> dict[str, Any]:
-    """A Preview's "Use this": run the steps that take what it shows (Save to card…), with
-    exactly the value on screen (the last run's), not a new one."""
+    """"Use this" on a picture — on the card of the node that made it, or on a Preview: run
+    the steps that take it (Save to card…), with exactly the one on screen (the last
+    run's), not a new one."""
     wf = get_workflow(workflow_id)
     if wf is None:
         return {"ok": False, "error": "workflow not found", "steps": []}
     graph = wf.get("graph") or {}
+    types = {str(n.get("id")): str(n.get("type") or "") for n in (graph.get("nodes") or []) if isinstance(n, dict)}
     edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict) and str(e.get("kind") or "") == DATA_KIND]
-    sources = {str(e.get("source")) for e in edges if str(e.get("target")) == str(node_id)}
-    users = sorted({str(e.get("target")) for e in edges if str(e.get("source")) in sources and str(e.get("target")) != str(node_id)})
+    if types.get(str(node_id)) == "util.preview":
+        sources = {str(e.get("source")) for e in edges if str(e.get("target")) == str(node_id)}
+    else:
+        sources = {str(node_id)}
+    users = sorted({str(e.get("target")) for e in edges if str(e.get("source")) in sources
+                    and str(e.get("target")) != str(node_id) and types.get(str(e.get("target"))) != "util.preview"})
     if not sources or not users:
         return {"ok": False, "error": "Nothing takes this picture yet: wire it into a step (like Save to card).", "steps": [], "id": wf["id"]}
     steps: list[dict[str, Any]] = []
     out: dict[str, Any] = {"ok": True, "error": "", "id": wf["id"]}
     for target in users:
-        step = run_node(workflow_id, target)
+        step = run_node(workflow_id, target, kept_from=sorted(sources))
         steps.extend(step.get("steps") or [])
         out["node_outputs"] = step.get("node_outputs") or out.get("node_outputs") or {}
         if not step.get("ok"):
@@ -226,11 +232,38 @@ def keep_preview(workflow_id: str, node_id: str) -> dict[str, Any]:
     return {**out, "steps": steps}
 
 
-def run_node(workflow_id: str, node_id: str, *, approve_spend: bool = False) -> dict[str, Any]:
+def _used_up(wf: dict[str, Any], nid: str) -> bool:
+    """What this node made last was kept ("Use this") after it was made."""
+    for run in reversed(list(wf.get("runs") or [])):
+        if not isinstance(run, dict):
+            continue
+        if nid in (run.get("kept") or []):
+            return True
+        if any(isinstance(step, dict) and step.get("id") == nid and step.get("ok", True) for step in run.get("steps") or []):
+            return False
+    return False
+
+
+def _feeders(flow: _Dataflow, nid: str) -> set[str]:
+    """Every node wired into this one, all the way back."""
+    seen: set[str] = set()
+    todo = [nid]
+    while todo:
+        for src, _pin in flow.feeds.get(todo.pop(), {}).values():
+            if src not in seen:
+                seen.add(src)
+                todo.append(src)
+    return seen
+
+
+def run_node(workflow_id: str, node_id: str, *, approve_spend: bool = False, kept_from: list[str] | None = None) -> dict[str, Any]:
     """Run one node now. Everything wired into it reuses what it made last run (so a
     paid generator upstream doesn't run again); a node never run before runs, steps too.
-    A Preview is the exception: running it makes what it shows again (try again).
-    approve_spend: a person pressed play, so paid steps this run needs may spend."""
+    Once what it made was kept ("Use this"), it starts over: everything wired into it
+    runs again (the next card that needs a picture, its prompt…). A Preview makes what
+    it shows again (try again).
+    approve_spend: a person pressed play, so paid steps this run needs may spend.
+    kept_from: "Use this" — the nodes whose output this run takes and so uses up."""
     wf = get_workflow(workflow_id)
     if wf is None:
         return {"ok": False, "error": "workflow not found", "steps": []}
@@ -244,6 +277,9 @@ def run_node(workflow_id: str, node_id: str, *, approve_spend: bool = False) -> 
     flow.run_missing_steps = True
     nid = str(node["id"])
     remake = {src for src, _pin in flow.feeds.get(nid, {}).values()} if node.get("type") == "util.preview" else set()
+    for made in {nid} | remake:
+        if _used_up(wf, made):
+            remake |= _feeders(flow, made)
     for other, values in _last_outputs(wf).items():
         if other != nid and other in nodes and other not in remake:
             flow.outputs[other] = values
@@ -287,7 +323,10 @@ def run_node(workflow_id: str, node_id: str, *, approve_spend: bool = False) -> 
     _push({"type": "workflow_run", "id": wid, "run": run_id, "state": "stopped" if cancel.is_set() else "done" if ok else "error", **({"error": error} if error else {})})
     node_outputs = flow.summary()
     steps = list(flow.order)
-    append_run(wid, {"started": started, "ended": time.time(), "ok": ok, "error": error, "trigger_id": f"node:{nid}", "steps": steps, "node_outputs": node_outputs})
+    record: dict[str, Any] = {"started": started, "ended": time.time(), "ok": ok, "error": error, "trigger_id": f"node:{nid}", "steps": steps, "node_outputs": node_outputs}
+    if kept_from and ok:
+        record["kept"] = list(kept_from)
+    append_run(wid, record)
     return {"ok": ok, "error": error, "id": wid, "steps": steps, "node_outputs": node_outputs}
 
 
@@ -1473,6 +1512,18 @@ def _cancel_agent_on_stop(conv_id: str) -> Callable[[], None]:
     return finished.set
 
 
+def _bare_model(model: str) -> str:
+    """The model id a run passes on: the picker's "backend:model" ("codex:gpt-6-sol") is
+    for choosing the ducky's gateway / agent; the CLI or API only takes "gpt-6-sol"."""
+    try:
+        from frontend.favorite_models import parse_selection
+
+        picked = parse_selection(model)
+    except Exception:
+        picked = None
+    return picked.model_id if picked is not None else model
+
+
 def _run_message_and_wait(
     conv_id: str,
     text: str,
@@ -1679,7 +1730,7 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
             conv_id,
             prompt,
             str(cfg.get("mode") or "agent"),
-            str(cfg.get("model") or kwargs.get("model") or ""),
+            _bare_model(str(cfg.get("model") or kwargs.get("model") or "")),
             timeout_sec=timeout,
             parent="" if existing else caller,
             attachments=_files_as_attachments(incoming),

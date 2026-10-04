@@ -721,7 +721,7 @@
 .aw-insp-desc[contenteditable]:empty::before { content: attr(data-placeholder); color: var(--text-muted); font-style: italic; }
 .aw-insp-section { display: flex; flex-direction: column; gap: 12px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .aw-insp-settings { padding-top: 12px; border-top: 1px solid var(--border); }
-.aw-insp-settings > legend { padding: 0; margin: 0 0 2px; color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.aw-insp-fold { display: flex; flex-direction: column; gap: 12px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .aw-inspector .aw-insp-form { padding: 0; }
 .aw-insp-section .aw-field-label { display: block; font-size: 11px; font-weight: 600; color: var(--text-muted); }
 .aw-insp-section > .aw-field > input, .aw-insp-section > .aw-field > textarea {
@@ -1400,9 +1400,9 @@
 .aw-log-badge.is-live { display: inline-grid; place-items: center; padding: 0; }
 .aw-log-badge.is-live svg { width: 9px; height: 9px; animation: spin-slow 0.8s linear infinite; }
 
-/* Details panel: Last run is folded; open it to see what each output made. */
-.aw-last-run > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; }
-.aw-last-run > summary::-webkit-details-marker { display: none; }
-.aw-last-run > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 140ms ease; }
-.aw-last-run[open] > summary::before { transform: rotate(45deg); }
-.aw-last-run[open] > summary { margin-bottom: 8px; }
+/* Details panel folds: Settings (remembered) and Last run (folded; open it to see what each output made). */
+.aw-fold > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; }
+.aw-fold > summary::-webkit-details-marker { display: none; }
+.aw-fold > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 140ms ease; }
+.aw-fold[open] > summary::before { transform: rotate(45deg); }
+.aw-fold[open] > summary { margin-bottom: 8px; }

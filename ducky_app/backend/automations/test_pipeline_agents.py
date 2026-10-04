@@ -82,6 +82,19 @@ def test_create_at_runtime_uses_default_model_and_creates_fresh_ducky_each_run(m
     assert wait.call_args.args[1] == "Do the workflow task"
 
 
+@pytest.mark.parametrize("picked, sent", [("codex:gpt-6-sol", "gpt-6-sol"), ("claude_code:claude-opus-5-5", "claude-opus-5-5"),
+                                           ("its-model", "its-model")])
+def test_a_picked_model_reaches_the_run_without_its_gateway_prefix(monkeypatch, picked, sent):
+    """The picker's "codex:gpt-6-sol" picks the ducky's gateway; the CLI only takes "gpt-6-sol"."""
+    monkeypatch.setattr("frontend.favorite_models.known_backends", lambda: {"codex", "claude_code"})
+    monkeypatch.setattr(runner, "_create_pipeline_ducky", lambda cfg, payload: {"ok": True, "conv_id": "worker"})
+    wait = Mock(return_value={"status": "done", "assistant_text": "Done"})
+    monkeypatch.setattr(runner, "_run_message_and_wait", wait)
+
+    assert runner._pipeline_agent({"ducky": "", "model": picked, "prompt": "Draw"}, {})["ok"]
+    assert wait.call_args.args[3] == sent
+
+
 def test_create_at_runtime_reports_model_configuration_error(monkeypatch):
     from frontend.favorite_models import ResolveErr
 

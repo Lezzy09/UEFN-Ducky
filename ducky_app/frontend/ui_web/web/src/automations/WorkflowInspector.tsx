@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { ChoiceDropdown } from "../components/ChoiceDropdown";
 import { Icons } from "../icons/Icons";
 import type {
@@ -336,6 +336,23 @@ function headActions(shown: InspectorTab[], active: InspectorTab | undefined, gr
   return { lock, remove, lockedNote };
 }
 
+const SETTINGS_OPEN_KEY = "ducky.workflows.settingsOpen";
+
+/** A node's Settings fold open and shut; folded stays folded for every node on this PC. */
+function SettingsFold({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(() => {
+    try { return window.localStorage.getItem(SETTINGS_OPEN_KEY) !== "0"; } catch { return true; }
+  });
+  return <details className="aw-insp-section aw-insp-settings aw-fold" open={open} onToggle={(event) => {
+    const next = event.currentTarget.open;
+    setOpen(next);
+    try { window.localStorage.setItem(SETTINGS_OPEN_KEY, next ? "1" : "0"); } catch { /* private mode */ }
+  }}>
+    <summary className="aw-pins-title">Settings</summary>
+    {children}
+  </details>;
+}
+
 function NodeDetails({ node, graph, byType, faces, readOnly, workflows, currentId, editing, onEditing, pinsOf, nodeOutputs, ...on }: Props & EditProps & { node: AutomationGraphNodeDto }) {
   const meta = byType.get(node.type);
   const label = nodeLabel(node, meta);
@@ -351,10 +368,11 @@ function NodeDetails({ node, graph, byType, faces, readOnly, workflows, currentI
     </fieldset> : null}
     {pinsOf ? <PinsSection node={node} pins={pinsOf(node)} graph={graph} outputs={nodeOutputs?.[node.id]} frozen={frozen}
       onNodeChange={on.onNodeChange} /> : null}
-    {hasNodeSettings(node, meta) ? <fieldset className="aw-insp-section aw-insp-settings" disabled={frozen}>
-      <legend>Settings</legend>
-      <NodeSettings node={node} meta={meta} workflows={workflows} currentId={currentId} onOpen={on.onOpenWorkflow} onChange={on.onNodeChange} />
-    </fieldset> : null}
+    {hasNodeSettings(node, meta) ? <SettingsFold>
+      <fieldset className="aw-insp-fold" disabled={frozen}>
+        <NodeSettings node={node} meta={meta} workflows={workflows} currentId={currentId} onOpen={on.onOpenWorkflow} onChange={on.onNodeChange} />
+      </fieldset>
+    </SettingsFold> : null}
     {frozen || !group ? null : <div className="aw-insp-actions">
       <button type="button" title="Move it out of its group (Ctrl+Shift+G)" onClick={() => on.onTakeOut(node.id)}>Take out of {group.name}</button>
     </div>}
