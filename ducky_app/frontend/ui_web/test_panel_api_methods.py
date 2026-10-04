@@ -437,6 +437,8 @@ _PUBLIC_METHODS = frozenset({
     'test_key',
     'test_mcp_plugin',
     'test_mcp_server',
+    'get_mcp_server_connection',
+    'save_mcp_server_connection',
     'test_uefn_plugin_secret',
     'tester_create_chat',
     'tester_list_devices',

@@ -5130,6 +5130,137 @@
   border-color: color-mix(in srgb, var(--red) 30%, var(--border));
 }
 
+/* MCP server page: its connection (URL / command, headers or env with masked keys). */
+.mcp-conn {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg) 35%, var(--card));
+}
+.mcp-conn-title {
+  margin: 0;
+  font-size: 13px;
+}
+.mcp-conn-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.mcp-conn-field input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.mcp-conn-values {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mcp-conn-values-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.mcp-conn-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.6fr) minmax(0, 1.4fr) auto auto;
+  align-items: center;
+  gap: 6px;
+}
+.mcp-conn-row input {
+  min-width: 0;
+  box-sizing: border-box;
+}
+.mcp-conn-row > .mcp-conn-hint {
+  grid-column: 1 / -1;
+}
+.mcp-conn-show {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.mcp-conn-show:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.mcp-conn-hint,
+.mcp-conn-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.mcp-conn-add {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mcp-conn-add svg {
+  width: 12px;
+  height: 12px;
+}
+.mcp-conn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.mcp-conn-button {
+  min-height: 32px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mcp-conn-button.is-primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--fg-inverse, white);
+}
+.mcp-conn-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.mcp-conn-status {
+  font-size: 12px;
+}
+.mcp-conn-status.is-ok {
+  color: var(--green);
+}
+.mcp-conn-status.is-error {
+  color: var(--red);
+}
+@media (max-width: 560px) {
+  .mcp-conn-row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+  .mcp-conn-row > .mcp-conn-name {
+    grid-column: 1 / -1;
+  }
+}
+
 .general-tab-switch--compact .general-tab-switch-track {
   width: 36px;
   height: 20px;

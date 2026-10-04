@@ -686,14 +686,23 @@ def set_mcp_server_enabled(server_id: str, enabled: bool) -> dict[str, Any]:
     return {"ok": True, "plugin_id": pid, "server_id": pid, "enabled": enabled, "enabled_mcp_plugins": get_enabled_plugin_ids()}
 
 
-def _resolve_env_value(value: str) -> str:
-    m = _SECRET_REF_RE.match(value.strip())
-    if not m:
-        return value
+_SECRET_REF_ANY_RE = re.compile(r"\$\{SECRET:([A-Za-z0-9_]+)\}")
+
+
+def _secret_value(name: str) -> str:
     from backend.agent.secrets import get_key
 
-    secret = get_key(m.group(1)) or os.environ.get(m.group(1), "")
-    return secret
+    return get_key(name) or os.environ.get(name, "")
+
+
+def _resolve_env_value(value: str) -> str:
+    """A ${SECRET:NAME} ref (the whole value, or inside it: "Bearer ${SECRET:NAME}") → the secret."""
+    m = _SECRET_REF_RE.match(value.strip())
+    if m:
+        return _secret_value(m.group(1))
+    if "${SECRET:" not in value:
+        return value
+    return _SECRET_REF_ANY_RE.sub(lambda hit: _secret_value(hit.group(1)), value)
 
 
 _HTTP_TYPE_ALIASES = {
@@ -944,6 +953,114 @@ def update_mcp_server_manifest(server_id: str, manifest: dict[str, Any]) -> Path
         block.pop("disabled", None)
     servers[pid] = block
     return save_mcp_config(cfg)
+
+
+# --------------------------------------------------------------------------- connection editor
+
+
+def _mask(value: str) -> str:
+    """Enough to recognise a key, never the key: "Bearer ••••9f2c"."""
+    text = (value or "").strip()
+    if not text:
+        return ""
+    scheme, _, rest = text.partition(" ")
+    if rest and scheme.isalpha() and len(scheme) <= 10:
+        return f"{scheme} {_mask(rest)}"
+    return "••••" + text[-4:] if len(text) > 8 else "••••"
+
+
+def _secret_name_for(server_id: str, key: str) -> str:
+    raw = f"MCP_{server_id}_{key}".upper()
+    return re.sub(r"[^A-Z0-9_]+", "_", raw).strip("_")
+
+
+def connection_view(server_id: str) -> dict[str, Any]:
+    """A nested server's connection for the Settings editor. Header / env values are
+    never sent: each row says whether it has one, a masked hint, and the saved secret
+    it reads (${SECRET:NAME}) if any."""
+    pid = normalize_server_id(server_id)
+    manifest = load_plugin_manifest(pid)
+    if manifest is None or not isinstance(manifest.get("server"), dict):
+        return {"ok": False, "error": f"MCP server not found: {pid}"}
+    block = manifest["server"]
+    transport = normalize_transport(block.get("type"))
+    pairs = block.get("headers") if transport in ("http", "sse") else block.get("env")
+    rows = []
+    for key, raw in (pairs or {}).items() if isinstance(pairs, dict) else []:
+        text = str(raw)
+        ref = _SECRET_REF_ANY_RE.search(text)
+        resolved = _resolve_env_value(text)
+        rows.append({"name": str(key), "secret": ref.group(1) if ref else "", "has_value": bool(resolved.strip()), "masked": _mask(resolved)})
+    return {
+        "ok": True,
+        "server_id": pid,
+        "kind": str(manifest.get("kind") or "custom"),
+        "editable": str(manifest.get("kind") or "custom") != "catalog",
+        "transport": transport,
+        "url": str(block.get("url") or ""),
+        "command": str(block.get("command") or ""),
+        "args": [str(a) for a in block.get("args") or []] if isinstance(block.get("args"), list) else [],
+        "values": rows,
+        "values_label": "Headers" if transport in ("http", "sse") else "Environment",
+    }
+
+
+def update_connection(
+    server_id: str,
+    *,
+    transport: str,
+    url: str = "",
+    command: str = "",
+    args: list[str] | None = None,
+    values: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Save the Settings editor's connection. values: [{name, value?, keep?, from?}] —
+    keep=True keeps the stored value of row `from` (the editor never had it); a typed value
+    is saved as a secret and the header / env reads it via ${SECRET:NAME}; a row with
+    neither is dropped. A catalog server only takes new key values."""
+    pid = normalize_server_id(server_id)
+    manifest = load_plugin_manifest(pid)
+    if manifest is None or not isinstance(manifest.get("server"), dict):
+        return {"ok": False, "error": f"MCP server not found: {pid}"}
+    old = dict(manifest["server"])
+    old_type = normalize_transport(old.get("type"))
+    catalog = str(manifest.get("kind") or "custom") == "catalog"
+    new_type = old_type if catalog else normalize_transport(transport)
+    old_pairs = old.get("headers") if old_type in ("http", "sse") else old.get("env")
+    old_pairs = dict(old_pairs) if isinstance(old_pairs, dict) else {}
+    pairs: dict[str, str] = {}
+    from backend.agent.secrets import set_key
+
+    for row in values or []:
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        source = str(row.get("from") or name)
+        typed = str(row.get("value") or "")
+        if typed.strip():
+            prior = str(old_pairs.get(source) or "")
+            ref = _SECRET_REF_ANY_RE.search(prior)
+            secret = ref.group(1) if ref else _secret_name_for(pid, name)
+            set_key(secret, typed.strip())
+            pairs[name] = f"${{SECRET:{secret}}}"
+        elif row.get("keep") and source in old_pairs:
+            pairs[name] = str(old_pairs[source])
+    block = dict(old)
+    if catalog:
+        block["headers" if old_type in ("http", "sse") else "env"] = pairs
+    elif new_type in ("http", "sse"):
+        if not url.strip():
+            return {"ok": False, "error": "A URL is required for an HTTP / SSE server."}
+        block = {k: v for k, v in block.items() if k not in ("command", "args", "env", "cwd")}
+        block.update({"type": new_type, "url": url.strip(), "headers": pairs})
+    else:
+        if not command.strip():
+            return {"ok": False, "error": "A command is required for a stdio server."}
+        block = {k: v for k, v in block.items() if k not in ("url", "headers")}
+        block.update({"type": "stdio", "command": command.strip(), "args": [str(a) for a in args or [] if str(a).strip()], "env": pairs})
+    manifest["server"] = block
+    update_mcp_server_manifest(pid, manifest)
+    return connection_view(pid)
 
 
 def delete_mcp_plugin(plugin_id: str) -> bool:

@@ -389,3 +389,46 @@ def test_ai_plugin_json_is_not_an_mcp_server(monkeypatch) -> None:
     assert wr.get("ok"), wr
     assert "ai_hello" not in misc.mcp_servers_get()
     assert "ai_hello" not in store.load_mcp_config()["mcpServers"]
+
+
+def test_connection_editor_masks_keys_and_saves_new_ones_as_secrets(monkeypatch) -> None:
+    _no_catalog(monkeypatch)
+    secrets: dict[str, str] = {}
+    monkeypatch.setattr("backend.agent.secrets.set_key", lambda name, value: secrets.__setitem__(name, value))
+    monkeypatch.setattr("backend.agent.secrets.get_key", lambda name: secrets.get(name))
+    store.create_mcp_server("site", "Site", transport="http", url="https://old.example/mcp",
+                            headers={"Authorization": "Bearer sk-live-1234567890abcd", "X-Team": "ducks"})
+    view = store.connection_view("site")
+    assert view["ok"] and view["editable"] and view["transport"] == "http" and view["url"] == "https://old.example/mcp"
+    auth = next(r for r in view["values"] if r["name"] == "Authorization")
+    assert auth["masked"] == "Bearer ••••abcd" and auth["has_value"] and "sk-live" not in json.dumps(view)
+
+    saved = store.update_connection("site", transport="http", url="https://new.example/mcp", values=[
+        {"name": "Authorization", "value": "Bearer new-token-9999"},
+        {"name": "X-Team", "keep": True},
+    ])
+    assert saved["ok"] and saved["url"] == "https://new.example/mcp"
+    raw = store.load_plugin_manifest("site")["server"]["headers"]
+    assert raw == {"Authorization": "${SECRET:MCP_SITE_AUTHORIZATION}", "X-Team": "ducks"}  # no key in the config
+    assert secrets == {"MCP_SITE_AUTHORIZATION": "Bearer new-token-9999"}
+    resolved = store.resolve_server_block(store.load_plugin_manifest("site"))
+    assert resolved["headers"]["Authorization"] == "Bearer new-token-9999"
+
+    # A second change writes the same secret; a dropped row goes away.
+    store.update_connection("site", transport="http", url="https://new.example/mcp", values=[{"name": "Authorization", "value": "Bearer third"}])
+    assert secrets["MCP_SITE_AUTHORIZATION"] == "Bearer third"
+    assert store.load_plugin_manifest("site")["server"]["headers"] == {"Authorization": "${SECRET:MCP_SITE_AUTHORIZATION}"}
+    assert store.update_connection("site", transport="http", url=" ", values=[])["ok"] is False
+
+
+def test_secret_refs_resolve_inside_a_header_and_stdio_edits(monkeypatch) -> None:
+    _no_catalog(monkeypatch)
+    monkeypatch.setattr("backend.agent.secrets.get_key", lambda name: {"TOKEN": "abc"}.get(name))
+    assert store._resolve_env_value("Bearer ${SECRET:TOKEN}") == "Bearer abc"
+    assert store._resolve_env_value("${SECRET:TOKEN}") == "abc"
+    store.create_mcp_server("tool", "Tool", command="uvx", args=["tool-mcp"], env={"API_KEY": "${SECRET:TOKEN}"})
+    view = store.connection_view("tool")
+    assert view["values_label"] == "Environment" and view["values"][0]["secret"] == "TOKEN"
+    saved = store.update_connection("tool", transport="stdio", command="npx", args=["-y", "tool"], values=[{"name": "API_KEY", "keep": True}])
+    block = store.load_plugin_manifest("tool")["server"]
+    assert saved["ok"] and block["command"] == "npx" and block["args"] == ["-y", "tool"] and block["env"] == {"API_KEY": "${SECRET:TOKEN}"}

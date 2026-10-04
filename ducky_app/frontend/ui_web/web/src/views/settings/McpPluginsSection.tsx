@@ -25,6 +25,7 @@ import {
 import type { McpCatalogDto, McpPluginDto, McpPluginTestResultDto } from "../../types/panel";
 import { filterMcpCategories, mcpCatalogForPlugin } from "./mcpCatalogForPlugin";
 import { McpToolSplitView } from "./McpToolCatalogView";
+import { McpConnectionEditor } from "./McpConnectionEditor";
 import { targetRef } from "../../ui-targets/registry";
 
 const TRANSPORT_OPTIONS = [
@@ -718,6 +719,18 @@ export function McpPluginsSection() {
                   ? `Enable blocked: port ${selectedServer.http_bind} is already used by ${(selectedServer.port_conflict_with || []).join(", ")}. Disable that server first, or change a URL.`
                   : `Port conflict on ${selectedServer.http_bind} with ${(selectedServer.port_conflict_with || []).join(", ")}. Only one HTTP/SSE MCP may own a host:port.`}
               </p>
+            ) : null}
+
+            {selectedServer.kind !== "builtin" && selectedServer.kind !== "uefn_plugin" ? (
+              <McpConnectionEditor
+                serverId={selectedServer.id}
+                testing={busyId === selectedServer.id}
+                onTest={() => testServer(selectedServer)}
+                onSaved={() => {
+                  setTestResults((prev) => { const next = { ...prev }; delete next[selectedServer.id]; return next; });
+                  refreshPlugins();
+                }}
+              />
             ) : null}
 
             {selectedServer.setup_steps.length > 0 ? (

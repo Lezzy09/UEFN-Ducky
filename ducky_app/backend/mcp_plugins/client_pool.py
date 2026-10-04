@@ -286,6 +286,12 @@ class PluginClientPool:
         async with conn.lock:
             await self._close_connection_unlocked(conn)
 
+    def forget(self, plugin_id: str) -> None:
+        """Its settings changed: drop the connection and the "recently unreachable" wait,
+        so the next call (a Test) connects with the new URL / key."""
+        self._clear_http_fail(plugin_id)
+        self.close_plugin(plugin_id)
+
     def close_plugin(self, plugin_id: str) -> None:
         if self._closed:
             return

@@ -3600,6 +3600,8 @@ export interface PanelApi {
     needs_trust?: boolean;
   }>;
   test_mcp_plugin(plugin_id: string): Promise<McpPluginTestResultDto>;
+  get_mcp_server_connection?(serverId: string): Promise<McpServerConnectionDto>;
+  save_mcp_server_connection?(serverId: string, transport: string, url: string, command: string, args: string[], values: McpConnectionValueSave[]): Promise<McpServerConnectionDto>;
   test_mcp_server?: (server_id: string) => Promise<McpPluginTestResultDto>;
   create_mcp_plugin(
     plugin_id: string,
@@ -4036,6 +4038,39 @@ export interface McpPluginTestResultDto {
   tool_count?: number;
   stages?: { stage: string; ok: boolean; error?: string; tool_count?: number; tool?: string }[];
   tools?: string[];
+}
+
+/** One header (HTTP / SSE) or env var (stdio). The value itself never comes to the UI. */
+export interface McpConnectionValueDto {
+  name: string;
+  /** The saved secret it reads (${SECRET:NAME}), if any. */
+  secret: string;
+  has_value: boolean;
+  /** Enough to recognise it: "Bearer ••••9f2c". */
+  masked: string;
+}
+
+export interface McpServerConnectionDto {
+  ok: boolean;
+  error?: string;
+  server_id?: string;
+  kind?: string;
+  /** Catalog servers only take new key values; custom ones take everything. */
+  editable?: boolean;
+  transport?: string;
+  url?: string;
+  command?: string;
+  args?: string[];
+  values?: McpConnectionValueDto[];
+  values_label?: string;
+}
+
+/** A row the editor saves: a typed value replaces it; keep holds the stored one. */
+export interface McpConnectionValueSave {
+  name: string;
+  from?: string;
+  value?: string;
+  keep?: boolean;
 }
 
 export interface McpCategoryDto {

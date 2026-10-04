@@ -1284,6 +1284,40 @@ class PanelApiStoreMixin:
     def test_mcp_plugin(self, plugin_id: str) -> dict[str, Any]:
         return self.test_mcp_server(plugin_id)
 
+    def get_mcp_server_connection(self, server_id: str) -> dict[str, Any]:
+        """A nested server's URL / command and its headers or env, values masked."""
+        from backend.mcp_plugins.store import connection_view
+
+        try:
+            return connection_view(server_id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def save_mcp_server_connection(
+        self,
+        server_id: str,
+        transport: str,
+        url: str = "",
+        command: str = "",
+        args: list[str] | None = None,
+        values: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Save the editor's connection (new keys go into saved secrets), then drop the
+        old connection so the next Test uses it."""
+        from backend.mcp_plugins.client_pool import get_plugin_pool
+        from backend.mcp_plugins.store import update_connection
+
+        try:
+            out = update_connection(server_id, transport=transport, url=url, command=command, args=args, values=values)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if out.get("ok"):
+            try:
+                get_plugin_pool().forget(str(out.get("server_id") or server_id).strip().lower())
+            except Exception:
+                pass
+        return out
+
     def test_mcp_server(self, server_id: str) -> dict[str, Any]:
         from backend.agent.builtin_toolsets import count_builtin_group_tools, is_builtin_group
         from backend.mcp_plugins.client_pool import get_plugin_pool
