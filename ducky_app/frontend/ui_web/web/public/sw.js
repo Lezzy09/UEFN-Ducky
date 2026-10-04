@@ -12,7 +12,17 @@
  * worker strips the scope prefix again before asking the desktop, so the
  * desktop always sees the plain "/plugin-ui/…" path it serves.
  */
-const PREFIXES = ["plugin-ui/", "user-sounds/", "tool-captures/", "duckies/", "model-files/"];
+// Keep in sync with BLOB_PREFIXES in src/remote/protocol.ts.
+const PREFIXES = [
+  "plugin-ui/",
+  "user-sounds/",
+  "tool-captures/",
+  "chat-attachments/",
+  "generated-images/",
+  "duckies/",
+  "model-files/",
+  "workflow-media/",
+];
 const CACHE = "ud-blob-v3";
 const CORS = { "Access-Control-Allow-Origin": "*" };
 

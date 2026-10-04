@@ -461,7 +461,8 @@ export class DirectTransport {
       return;
     }
     if (typeof frame.seq === "number") this.lastEventSeq = frame.seq;
-    for (const fn of this.eventListeners) fn(frame.event as unknown as AgentEvent);
+    const event = rewriteLoopbackUrls(frame.event, LOOPBACK_ORIGINS, assetBase()) as unknown as AgentEvent;
+    for (const fn of this.eventListeners) fn(event);
   }
 
   // ── blob ─────────────────────────────────────────────────────────────────

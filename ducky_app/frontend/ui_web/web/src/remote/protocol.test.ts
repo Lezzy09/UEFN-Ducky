@@ -39,6 +39,7 @@ describe("blobPathAllowed", () => {
     expect(blobPathAllowed("/plugin-ui/foo/index.html")).toBe(true);
     expect(blobPathAllowed("/user-sounds/ding.mp3")).toBe(true);
     expect(blobPathAllowed("/model-files/abc/x.glb")).toBe(true);
+    expect(blobPathAllowed("/workflow-media/0123abcd/dG9r/duck.png")).toBe(true);
     expect(blobPathAllowed("/__panel_api/list_chats")).toBe(false);
     expect(blobPathAllowed("/plugin-ui/../__panel_api/x")).toBe(false);
     expect(blobPathAllowed("/etc/passwd")).toBe(false);

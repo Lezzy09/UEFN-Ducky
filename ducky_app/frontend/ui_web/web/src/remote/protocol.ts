@@ -24,6 +24,7 @@ export const BLOB_PREFIXES = [
   "/generated-images/",
   "/duckies/custom/",
   "/model-files/",
+  "/workflow-media/",
   "/duckies/",
 ] as const;
 
