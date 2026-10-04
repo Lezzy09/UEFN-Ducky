@@ -1268,3 +1268,115 @@
 /* Nothing open: New workflow stays in view at the foot of the list. */
 .aw-list-foot { display: flex; justify-content: center; padding: 10px 12px 12px; border-top: 1px solid var(--border); }
 .aw-list-foot > .aw-new-button { width: 100%; }
+
+/* Phones (narrow editor). The toolbar actions fold into "⋯" and the canvas tools into one
+   button at the bottom right; each opens as a labeled list that stays inside the editor.
+   The Workflows list folds to one icon under the toolbar, and opens as a sheet. */
+.aw-more-toggle, .aw-canvas-fab { display: none; }
+@container (max-width: 680px) {
+  .aw-toolbar { flex-wrap: nowrap; }
+  .aw-toolbar-fields { flex: 1 1 0; flex-basis: 0; }
+  /* Its own pill, like the name's (the bar between them lets taps through to the canvas). */
+  .aw-toolbar .aw-more-toggle {
+    pointer-events: auto;
+    flex-shrink: 0;
+    display: inline-grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    margin-left: auto;
+    padding: 0;
+    box-sizing: border-box;
+    border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    border-radius: 14px;
+    background: var(--wf-panel);
+    -webkit-backdrop-filter: blur(var(--wf-panel-blur)) saturate(140%);
+    backdrop-filter: blur(var(--wf-panel-blur)) saturate(140%);
+    box-shadow: var(--shadow-md);
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .aw-toolbar .aw-more-toggle[aria-expanded="true"] { background: var(--bg-hover); color: var(--text); }
+  .aw-toolbar .aw-toolbar-actions.is-open { pointer-events: auto; }
+  .aw-toolbar .aw-more-toggle svg { width: 20px; height: 20px; }
+
+  /* Labeled lists: each button shows its name next to its icon. */
+  .aw-toolbar-actions:not(.is-open), .aw-canvas-controls:not(.is-open) { display: none; }
+  .aw-toolbar .aw-toolbar-actions.is-open,
+  .aw-canvas-controls.is-open {
+    position: absolute;
+    z-index: 9;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 2px;
+    width: min(260px, calc(100cqw - 24px));
+    max-height: min(70dvh, 520px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    box-sizing: border-box;
+    padding: 6px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--panel-header);
+    box-shadow: var(--shadow-md);
+  }
+  .aw-toolbar .aw-toolbar-actions.is-open { top: calc(100% + 8px); right: 0; margin: 0; }
+  /* No blur here: a blurred box becomes the frame its fixed menus (Zoom, Help, Outline)
+     are placed and clipped in; without it they open over the list, on screen. */
+  .aw-canvas-controls.is-open { left: auto; right: 12px; bottom: 72px; transform: none; transition: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .aw-toolbar .aw-toolbar-actions.is-open > button,
+  .aw-toolbar .aw-toolbar-actions.is-open .choice-dropdown,
+  .aw-toolbar .aw-toolbar-actions.is-open .choice-dropdown .choice-dropdown-trigger,
+  .aw-canvas-controls.is-open > button,
+  .aw-canvas-controls.is-open > .aw-outline-button { width: 100%; min-width: 0; height: auto; min-height: 44px; }
+  .aw-toolbar .aw-toolbar-actions.is-open > button,
+  .aw-toolbar .aw-toolbar-actions.is-open .choice-dropdown .choice-dropdown-trigger,
+  .aw-canvas-controls.is-open > button {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 0 12px;
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+  }
+  .aw-toolbar .aw-toolbar-actions.is-open > button::after,
+  .aw-toolbar .aw-toolbar-actions.is-open .choice-dropdown-trigger::after,
+  .aw-canvas-controls.is-open > button::after { content: attr(aria-label); }
+  .aw-canvas-controls.is-open > .aw-zoom::after { content: "Zoom and grid"; }
+  .aw-canvas-controls.is-open .aw-controls-sep { flex: 0 0 1px; align-self: stretch; margin: 4px 6px; }
+  .aw-canvas-controls.is-open .aw-log-badge { position: static; order: 2; margin-left: auto; transform: none; }
+
+  .aw-canvas-fab {
+    position: absolute;
+    z-index: 7;
+    right: 12px;
+    bottom: 12px;
+    display: inline-grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--card);
+    color: var(--text);
+    box-shadow: var(--shadow-md);
+    cursor: pointer;
+  }
+  .aw-canvas-fab[aria-expanded="true"] { background: var(--bg-hover); }
+  .aw-canvas-fab svg { width: 20px; height: 20px; }
+  .aw-root.has-inspector .aw-canvas-fab { display: none; }  /* the details sheet covers the bottom */
+
+  /* The Workflows list: folded = one icon under the toolbar; open = a sheet over the canvas. */
+  .aw-root.has-workflow:not(.is-list-collapsed) .aw-list { z-index: 8; top: calc(var(--aw-bar-h) + 26px); left: 12px; width: calc(100% - 24px); height: calc(100% - var(--aw-bar-h) - 38px); }
+  .aw-root.is-list-collapsed .aw-list { width: 44px; height: 44px; border-radius: 12px; }
+  .aw-root.has-workflow.is-list-collapsed .aw-list { top: calc(var(--aw-bar-h) + 26px); }
+  .aw-root.is-list-collapsed .aw-list-head { flex-basis: 100%; height: 100%; padding: 0; }
+  .aw-root.is-list-collapsed .aw-list-toggle { justify-content: center; height: 100%; padding: 0; }
+  .aw-root.is-list-collapsed .aw-list-title strong,
+  .aw-root.is-list-collapsed .aw-list-head .aw-accordion-chevron { display: none; }
+  .aw-root.is-list-collapsed .aw-list-icon svg { width: 20px; height: 20px; }
+}

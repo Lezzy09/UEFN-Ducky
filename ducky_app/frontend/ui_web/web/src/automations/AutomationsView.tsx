@@ -155,6 +155,8 @@ const HOLD_MS = 550;
 /** Side panel widths (drag their inner edge), kept on this PC. */
 const PANEL_WIDTHS_KEY = "ducky.workflows.panelWidths.v1";
 const LIST_W = { min: 180, max: 480, initial: 220 };
+/** Editor width at or below which it uses the phone layout (matches @container 680px in the CSS). */
+const PHONE_EDITOR_W = 680;
 const INSPECTOR_W = { min: 280, max: 640, initial: 340 };
 type PanelWidths = { list: number; inspector: number };
 
@@ -424,6 +426,29 @@ export function AutomationsView() {
     toY: number;
   } | null>(null);
   const [log, setLog] = useState<AutomationRunDto | null>(null);
+  // Phones (narrow editor): the toolbar actions and the canvas tools each fold into one
+  // button that opens them as a labeled list. Wide, both are always shown (CSS).
+  const [phoneMenu, setPhoneMenu] = useState<"" | "actions" | "canvas">("");
+  useEffect(() => {
+    if (!phoneMenu) return;
+    const onDown = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      // Inside the editor but outside the open list: close. Outside the editor (a menu
+      // the list opened, portaled to the body) keeps it open.
+      if (!target || !rootRef.current?.contains(target)) return;
+      if (target.closest(".aw-toolbar-actions, .aw-more-toggle, .aw-canvas-controls, .aw-canvas-fab")) return;
+      setPhoneMenu("");
+    };
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setPhoneMenu(""); };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("pointerdown", onDown, true); document.removeEventListener("keydown", onKey); };
+  }, [phoneMenu]);
+  /** A pick in an open phone list (a plain action, or an item of a menu it opened) closes it. */
+  const closePhoneMenuAfterPick = (event: React.MouseEvent) => {
+    const target = event.target as Element;
+    if (target.closest("button:not([aria-haspopup]), input[type=radio], [role=option], [role=menuitem], [role=menuitemradio], [role=menuitemcheckbox]")) setPhoneMenu("");
+  };
   const [logOpen, setLogOpen] = useState(false);
   const [logCopied, setLogCopied] = useState(false);
   const [logHeight, setLogHeight] = useState(LOG_H_DEFAULT);
@@ -1769,7 +1794,7 @@ export function AutomationsView() {
       onBlurCapture={(event) => { if (event.target.matches("input, textarea")) endEdit(); }}>
       <WorkflowList listId={sectionId + "-list"} listRef={listRef} owners={owners} rows={rows} activeId={draft ? selectedId : ""}
         collapsed={listCollapsed} nowMs={nowMs} onToggleCollapsed={() => setListCollapsed((collapsed) => !collapsed)}
-        onOpen={(id) => void loadOne(id)} onCreate={createNew}
+        onOpen={(id) => { void loadOne(id); const width = rootRef.current?.clientWidth || 0; if (width > 0 && width <= PHONE_EDITOR_W) setListCollapsed(true); }} onCreate={createNew}
         onImportLocal={() => void getApi()?.import_local_workflows?.().then(() => refreshList())}
         emptyFolders={emptyFolders} onAddFolder={rememberFolder}
         onMoveWorkflow={(id, ownerId, folder) => void moveWorkflow(id, ownerId, folder)}
@@ -1800,7 +1825,11 @@ export function AutomationsView() {
               />
 
               </div>
-              <div className="aw-toolbar-actions">
+              <button type="button" className="aw-more-toggle" aria-label="Workflow actions" title="Workflow actions" aria-expanded={phoneMenu === "actions"}
+                onClick={() => setPhoneMenu((open) => (open === "actions" ? "" : "actions"))}>
+                <Icons.MoreHorizontal />
+              </button>
+              <div className={`aw-toolbar-actions${phoneMenu === "actions" ? " is-open" : ""}`} onClick={closePhoneMenuAfterPick}>
               <button
                 type="button" ref={targetRef("workflows.toolbar.delete", { route: "workflows", label: "Delete workflow" })} title="Delete" aria-label="Delete" disabled={readOnly}
                 onClick={() => { if (draft.id) void deleteWorkflow(draft.id); }}
@@ -2038,7 +2067,11 @@ export function AutomationsView() {
         {draft && readOnly ? <p className="aw-readonly-note" role="note"><Icons.Lock /> {draft.owner?.reason || "Read-only here."} Duplicate it to change a Local copy.</p> : null}
         {panelBadge ? createPortal(<div className="aw-panel-zoom" aria-live="polite" style={{ left: panelBadge.left, top: panelBadge.top }}>{Math.round(panelBadge.value * 100)}%</div>, document.body) : null}
         {notice ? <p key={notice.id} className={`aw-toast aw-toast--${notice.kind}`} role="status">{notice.kind === "note" ? <Icons.Sparkles /> : <Icons.Lock />} {notice.text}</p> : null}
-        <div className="aw-canvas-controls" role="toolbar" aria-label="Canvas" data-aw-zoom="controls">
+        <button type="button" className="aw-canvas-fab" aria-label="Canvas tools" title="Canvas tools" aria-expanded={phoneMenu === "canvas"}
+          onClick={() => setPhoneMenu((open) => (open === "canvas" ? "" : "canvas"))}>
+          {phoneMenu === "canvas" ? <Icons.Close /> : <Icons.Grid />}
+        </button>
+        <div className={`aw-canvas-controls${phoneMenu === "canvas" ? " is-open" : ""}`} role="toolbar" aria-label="Canvas" data-aw-zoom="controls" onClick={closePhoneMenuAfterPick}>
           <button type="button" ref={targetRef("workflows.tool.select", { route: "workflows", label: "Select tool" })} className="aw-tool" aria-label="Select tool" aria-pressed={activeTool === "select"} title="Select (V): drag on empty canvas to select a box of nodes" onClick={() => setTool("select")}><Icons.Cursor /></button>
           <button type="button" ref={targetRef("workflows.tool.hand", { route: "workflows", label: "Hand tool" })} className="aw-tool" aria-label="Hand tool" aria-pressed={activeTool === "hand"} title="Hand (H, or hold Space): drag the canvas to move around" onClick={() => setTool("hand")}><Icons.Hand /></button>
           <span className="aw-controls-sep" aria-hidden="true" />

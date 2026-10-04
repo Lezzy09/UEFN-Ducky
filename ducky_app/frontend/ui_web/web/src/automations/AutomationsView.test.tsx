@@ -1834,3 +1834,33 @@ describe("no workflows yet", () => {
     expect(document.querySelector(".aw-list-foot")).toBeNull();  // a workflow is open: the canvas has the room
   });
 });
+
+describe("phone layout", () => {
+  it("folds the toolbar actions into ⋯ and the canvas tools into one button, each closing after a pick", async () => {
+    await open();
+    const actions = document.querySelector(".aw-toolbar-actions")!;
+    const more = screen.getByRole("button", { name: "Workflow actions" });
+    expect(actions.classList.contains("is-open")).toBe(false);
+    fireEvent.click(more);
+    expect(more.getAttribute("aria-expanded")).toBe("true");
+    expect(actions.classList.contains("is-open")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "History" }));  // opens its own menu: the list stays
+    expect(actions.classList.contains("is-open")).toBe(true);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(actions.classList.contains("is-open")).toBe(false);
+    fireEvent.click(more);
+    await save();  // a plain action runs and closes the list
+    expect(actions.classList.contains("is-open")).toBe(false);
+
+    const controls = screen.getByRole("toolbar", { name: "Canvas" });
+    const fab = screen.getByRole("button", { name: "Canvas tools" });
+    fireEvent.click(fab);
+    expect(controls.classList.contains("is-open")).toBe(true);
+    fireEvent.pointerDown(document.querySelector(".aw-board")!);  // a tap on the canvas closes it
+    expect(controls.classList.contains("is-open")).toBe(false);
+    fireEvent.click(fab);
+    fireEvent.click(screen.getByRole("button", { name: "Select tool" }));
+    expect(controls.classList.contains("is-open")).toBe(false);
+    expect(screen.getByRole("button", { name: "Select tool" }).getAttribute("aria-pressed")).toBe("true");
+  });
+});
