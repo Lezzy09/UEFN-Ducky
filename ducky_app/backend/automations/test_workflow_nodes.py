@@ -265,6 +265,7 @@ def gateway(monkeypatch, tmp_path):
         png(made)
         return {"ok": True, "path": str(made), "files": [{"path": str(made), "name": made.name}]}
 
+    monkeypatch.setattr(media, "gateway_image_nodes", lambda: [("google.image", "google"), ("openai.image", "openai"), ("spacexai.image", "spacexai")])
     monkeypatch.setattr(media, "node_fn", lambda node_type: {"openai.image": openai_image}.get(node_type))
     monkeypatch.setattr(media, "_has_key", lambda provider: provider == "openai")
     return seen
@@ -289,6 +290,14 @@ def test_backends_say_who_makes_them_and_what_is_missing(tools, gateway):
     assert google["available"] is False and "Google" in google["reason"]
     step = run("image.generate", {"backend": "google_imagen", "spend": True}, {"prompt": "a duck"})
     assert step["ok"] is False and "Google" in step["error"]
+    # A gateway we don't know by name is still listed from its plugin's image node.
+    assert rows["spacexai_image"]["label"] == "Spacexai image" and rows["spacexai_image"]["cost"] == "Your own API key"
+
+
+def test_only_installed_gateways_are_listed(tools, monkeypatch):
+    monkeypatch.setattr(media, "gateway_image_nodes", lambda: [])
+    ids = [b["id"] for b in media.backends_for("image.generate")]
+    assert ids[0] == "gemini25flash" and not {"google_imagen", "openai_image"} & set(ids)
 
 
 def test_ask_a_model_on_a_coding_agent_gateway_uses_its_one_shot(monkeypatch):

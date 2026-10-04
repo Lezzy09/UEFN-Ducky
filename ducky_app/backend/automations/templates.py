@@ -510,22 +510,23 @@ def _template_requires(row: dict[str, Any], graph: dict[str, Any]) -> list[str]:
     return seen
 
 
-_PLUGIN_IDS = {"3D AI Studio": "studio3d", "Meshy": "meshy"}
-
-
 def _media_plugin(node: dict[str, Any]) -> str:
-    """The plugin an image / 3D / Blender / UEFN node runs on (its picked backend's)."""
+    """The plugin an image / 3D / Blender / UEFN node runs on: its picked backend's, else
+    the first one (the default it was designed with, not whatever is set up on this PC)."""
     ntype = str(node.get("type") or "")
     if ntype.startswith("blender."):
         return "blender"
     if ntype == "uefn.import":
         return "uefn"
-    from backend.automations.media import BACKENDS, pick_backend
+    from backend.automations.media import table
 
-    if ntype not in BACKENDS:
+    rows = table(ntype)
+    if not rows:
         return ""
     cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
-    return _PLUGIN_IDS.get(pick_backend(ntype, cfg.get("backend"))["plugin"], "")
+    wanted = str(cfg.get("backend") or "")
+    row = next((r for r in rows if r["id"] == wanted), rows[0])
+    return str(row.get("plugin_id") or "")
 
 
 def _dir(*, for_write: bool = False) -> Path:

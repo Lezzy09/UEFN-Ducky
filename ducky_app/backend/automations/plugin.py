@@ -44,3 +44,8 @@ def get_handler(node_type: str) -> Callable[..., Any] | None:
 def handler_plugin_id(node_type: str) -> str:
     row = _HANDLERS.get((node_type or "").strip())
     return row[0] if row else ""
+
+
+def node_types() -> list[tuple[str, str]]:
+    """(node type, plugin id) for every node an installed plugin registered (on or off)."""
+    return [(ntype, owner) for ntype, (owner, _fn) in sorted(_HANDLERS.items())]

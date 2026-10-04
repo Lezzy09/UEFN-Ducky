@@ -22,10 +22,12 @@ Args = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 
 STUDIO = "3D AI Studio"
 MESHY = "Meshy"
-GOOGLE = "Google"
-OPENAI = "OpenAI"
-# The installed plugin behind each backend: its manifest names it in the list.
-PLUGIN_IDS = {STUDIO: "studio3d", MESHY: "meshy", GOOGLE: "google", OPENAI: "openai"}
+# AI gateways whose image node we know by name: plugin id → (backend id, label, model, key, name).
+# Any other gateway plugin that registers "<id>.image" is listed too, on its own default model.
+GATEWAY_IMAGES = {
+    "google": ("google_imagen", "Imagen 4", "imagen-4.0-generate-001", "gemini", "Google"),
+    "openai": ("openai_image", "GPT Image 1", "gpt-image-1", "openai", "OpenAI"),
+}
 _MAX_INLINE_MODEL = 25 * 1024 * 1024
 # Main file when a generator downloads several (a model in many formats, textures…).
 _PREFERRED = {
@@ -214,18 +216,41 @@ def _bake(inputs: dict[str, Any], _cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def _studio(tool: str, label: str, credits: int, args: Args, bid: str = "") -> dict[str, Any]:
-    return {"id": bid or tool.removeprefix("studio3d_image_").removeprefix("studio3d_"), "label": label, "plugin": STUDIO, "tool": tool, "credits": credits, "args": args}
+    return {"id": bid or tool.removeprefix("studio3d_image_").removeprefix("studio3d_"), "label": label, "plugin": STUDIO,
+            "plugin_id": "studio3d", "tool": tool, "credits": credits, "args": args}
 
 
 def _meshy(tool: str, label: str, credits: int, args: Args, bid: str = "", stage: str = "") -> dict[str, Any]:
-    row = {"id": bid or tool, "label": label, "plugin": MESHY, "tool": tool, "credits": credits, "args": args}
+    row = {"id": bid or tool, "label": label, "plugin": MESHY, "plugin_id": "meshy", "tool": tool, "credits": credits, "args": args}
     return {**row, "stage": stage} if stage else row
 
 
-def _gateway(bid: str, label: str, plugin: str, node: str, key: str, model: str) -> dict[str, Any]:
+def _gateway(plugin_id: str, node: str) -> dict[str, Any]:
     """An AI gateway plugin's own image node, billed to the person's API key (no credits)."""
-    return {"id": bid, "label": label, "plugin": plugin, "node": node, "key": key, "model": model,
+    known = GATEWAY_IMAGES.get(plugin_id)
+    name = _manifest_label(plugin_id) or (known[4] if known else plugin_id.title())
+    bid, label, model, key, _name = known or (f"{plugin_id}_image", f"{name} image", "", plugin_id, name)
+    return {"id": bid, "label": label, "plugin": name, "plugin_id": plugin_id, "node": node, "key": key, "model": model,
             "credits": 0, "paid": True, "args": _prompt}
+
+
+def gateway_image_nodes() -> list[tuple[str, str]]:
+    """(node type, plugin id) of every installed plugin's "<id>.image" node."""
+    try:
+        from backend.automations.plugin import node_types
+
+        return [(ntype, pid) for ntype, pid in node_types() if ntype.endswith(".image") and pid]
+    except Exception:
+        return []
+
+
+def table(ntype: str) -> list[dict[str, Any]]:
+    """The node's backends: the fixed generator table, plus (Text to Image) the image node
+    of every AI gateway plugin installed here."""
+    rows = list(BACKENDS.get(ntype) or [])
+    if ntype == "image.generate":
+        rows.extend(_gateway(pid, node) for node, pid in gateway_image_nodes())
+    return rows
 
 
 # node type → backends, first = default (first that can run, when none is picked).
@@ -237,8 +262,6 @@ BACKENDS: dict[str, list[dict[str, Any]]] = {
         _studio("studio3d_image_gemini3pro", "Gemini 3 Pro Image", 10, _prompt),
         _studio("studio3d_image_seedream", "SeeDream v5 Lite", 10, _prompt),
         _meshy("meshy_text_to_image", "Meshy · Nano Banana", 5, _meshy_image),
-        _gateway("google_imagen", "Imagen 4", GOOGLE, "google.image", "gemini", "imagen-4.0-generate-001"),
-        _gateway("openai_image", "GPT Image 1", OPENAI, "openai.image", "openai", "gpt-image-1"),
     ],
     "image.edit": [
         _meshy("meshy_image_to_image", "Meshy · Nano Banana", 5, lambda i, c: {**_image_and_prompt(i, c), "ai_model": "nano-banana"}),
@@ -337,21 +360,25 @@ def is_ready(row: dict[str, Any]) -> bool:
     return tool_fn(row["tool"]) is not None
 
 
-def plugin_label(plugin: str) -> str:
-    """The installed plugin's own name for itself, else the name the table uses."""
+def _manifest_label(plugin_id: str) -> str:
     try:
         from backend.uefn_plugins.store import load_plugin_manifest
 
-        manifest = load_plugin_manifest(PLUGIN_IDS.get(plugin, "")) or {}
+        manifest = load_plugin_manifest(plugin_id) or {} if plugin_id else {}
     except Exception:
         manifest = {}
-    return str(manifest.get("label") or manifest.get("name") or plugin)
+    return str(manifest.get("label") or manifest.get("name") or "")
+
+
+def plugin_label(row: dict[str, Any]) -> str:
+    """The installed plugin's own name for itself, else the name the table uses."""
+    return _manifest_label(str(row.get("plugin_id") or "")) or row["plugin"]
 
 
 def why_not(row: dict[str, Any], label: str = "") -> str:
     """What to do so this backend can run: install, turn on, or add the key."""
     name = label or row["plugin"]
-    pid = PLUGIN_IDS.get(row["plugin"], "")
+    pid = str(row.get("plugin_id") or "")
     try:
         from backend.uefn_plugins.host import is_plugin_enabled
         from backend.uefn_plugins.store import is_plugin_installed
@@ -375,9 +402,9 @@ def backends_for(ntype: str) -> list[dict[str, Any]]:
     """The node's backends for its details dropdown: who makes it (the installed plugin's
     name), what it costs, and whether it can run here (if not, why)."""
     out: list[dict[str, Any]] = []
-    for row in BACKENDS.get(ntype, []):
+    for row in table(ntype):
         ready = is_ready(row)
-        label = plugin_label(row["plugin"])
+        label = plugin_label(row)
         out.append({
             "id": row["id"], "label": row["label"], "plugin": label, "credits": row["credits"], "cost": cost_text(row),
             "available": ready, **({} if ready else {"reason": why_not(row, label)}),
@@ -387,13 +414,13 @@ def backends_for(ntype: str) -> list[dict[str, Any]]:
 
 def pick_backend(ntype: str, wanted: Any) -> dict[str, Any]:
     """The picked backend; with none picked, the first one that can run here."""
-    table = BACKENDS.get(ntype) or []
-    if not table:
+    rows = table(ntype)
+    if not rows:
         raise ValueError(f"No backends for {ntype}.")
-    picked = next((row for row in table if row["id"] == str(wanted or "")), None)
+    picked = next((row for row in rows if row["id"] == str(wanted or "")), None)
     if picked is not None:
         return picked
-    return next((row for row in table if is_ready(row)), table[0])
+    return next((row for row in rows if is_ready(row)), rows[0])
 
 
 def _parse(raw: Any) -> dict[str, Any]:
@@ -443,7 +470,7 @@ def run_media(ntype: str, cfg: dict[str, Any], inputs: dict[str, Any], folder: P
         return _run_animations(cfg, inputs, folder)
     if cfg.get("fallback") is not True:
         return _run_once(ntype, first, cfg, inputs, folder)
-    order = [first] + [row for row in BACKENDS.get(ntype, []) if row is not first]
+    order = [first] + [row for row in table(ntype) if row["id"] != first["id"]]
     errors: list[str] = []
     for backend in order:
         if backend is not first and not is_ready(backend):
@@ -481,7 +508,7 @@ def _run_gateway(ntype: str, backend: dict[str, Any], cfg: dict[str, Any], input
     """Run a gateway plugin's own image node and keep the picture with this run."""
     handler = node_fn(backend["node"])
     if handler is None or not _has_key(str(backend.get("key") or "")):
-        return {"ok": False, "error": f"{backend['label']}: {why_not(backend, plugin_label(backend['plugin']))}"}
+        return {"ok": False, "error": f"{backend['label']}: {why_not(backend, plugin_label(backend))}"}
     try:
         args = backend["args"](inputs, cfg)
     except (ValueError, OSError) as exc:
