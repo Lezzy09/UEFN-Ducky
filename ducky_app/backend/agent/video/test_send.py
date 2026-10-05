@@ -217,3 +217,11 @@ def test_external_hint_includes_transcript(tmp_path):
     assert hint.startswith(f"Video file: {tmp_path / 'attachments/v.mp4'}")
     assert hint.splitlines()[1:] == ['Transcript of video:', 'say cheese']
     assert send.external_video_hint({"kind": "video", "path": "a.mp4"}, tmp_path) == f"Video file: {tmp_path / 'a.mp4'}"
+
+
+def test_row_with_not_ready_note_starts_no_transcription(tmp_path, monkeypatch):
+    conv_dir, row, _ = _setup(tmp_path, monkeypatch)
+    calls = _patch_tr(monkeypatch)
+    row["transcript_note"] = "Transcript not ready when sent"
+    send.prepare_video_frames([row], conv_dir=conv_dir, provider="anthropic", external=False)
+    assert calls == [] and row["transcript_note"] == "Transcript not ready when sent"

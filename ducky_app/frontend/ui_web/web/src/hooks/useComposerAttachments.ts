@@ -186,7 +186,7 @@ export function useComposerAttachments(
     return () => window.clearInterval(timer);
   }, [preparing]);
 
-  const hasPendingVideos = attachments.some((a) => a.kind === "video" && a.status !== "ready");
+  const hasPendingVideos = attachments.some((a) => a.kind === "video" && a.status !== "ready" && !(a.status === "preparing" && a.prep?.sendable));
 
   /** Revoke blob previews and forget the staged File of dropped video attachments. */
   const releaseVideos = useCallback((dropped: ComposerAttachment[]) => {

@@ -25,6 +25,7 @@ def _new_job(frames_total: int, transcribe: bool) -> dict[str, Any]:
         "transcript": "skipped",
         "transcript_note": "",
         "error": "",
+        "sendable": False,
         "transcribe": transcribe,
         "path": None,
     }
@@ -34,6 +35,7 @@ def _public(job: dict[str, Any]) -> dict[str, Any]:
     out = {k: job[k] for k in (
         "state", "frames_done", "frames_total", "transcript", "transcript_note", "error"
     )}
+    out["sendable"] = bool(job["sendable"]) or job["state"] in ("ready", "error")
     if job["state"] == "extracting" and job["path"] is not None:
         out["frames_done"] = sum(1 for p in frames.frame_paths(job["path"], job["frames_total"]) if p.is_file())
     return out
@@ -46,7 +48,7 @@ def prep_status(staged_id: str) -> dict[str, Any]:
             # Unknown (never started, or the app restarted): the send path prepares on demand.
             return {
                 "state": "ready", "frames_done": 0, "frames_total": 0,
-                "transcript": "skipped", "transcript_note": "", "error": "",
+                "transcript": "skipped", "transcript_note": "", "error": "", "sendable": True,
             }
         return _public(dict(job))
 
@@ -57,32 +59,42 @@ def _set(staged_id: str, **fields: Any) -> None:
 
 
 def _run(staged_id: str) -> None:
-    with _slots:
+    _slots.acquire()
+    released = threading.Event()
+
+    def release_slot() -> None:
+        # Exactly once: the transcription network call must not hold a prep slot.
+        if not released.is_set():
+            released.set()
+            _slots.release()
+
+    try:
+        with _lock:
+            job = _jobs[staged_id]
+            n, transcribe, path = job["frames_total"], job["transcribe"], job["path"]
+        _set(staged_id, state="preparing_ffmpeg")
         try:
-            with _lock:
-                job = _jobs[staged_id]
-                n, transcribe, path = job["frames_total"], job["transcribe"], job["path"]
-            _set(staged_id, state="preparing_ffmpeg")
-            try:
-                ensure_installed()
-            except FfmpegInstallError as exc:
-                raise VideoError(str(exc)) from exc
-            _set(staged_id, state="extracting")
-            got = frames.extract_frames(path, n)
-            _set(staged_id, frames_done=len(got), frames_total=len(got))
-            if transcribe:
-                _set(staged_id, state="transcribing")
-                res = audio.transcribe_video(path)
-                _set(
-                    staged_id,
-                    transcript="ok" if res.text else "none",
-                    transcript_note=res.note,
-                )
-            _set(staged_id, state="ready")
-        except VideoError as exc:
-            _set(staged_id, state="error", error=str(exc))
-        except Exception as exc:  # never leave the chip spinning
-            _set(staged_id, state="error", error=f"Could not prepare video: {exc}")
+            ensure_installed()
+        except FfmpegInstallError as exc:
+            raise VideoError(str(exc)) from exc
+        _set(staged_id, state="extracting")
+        got = frames.extract_frames(path, n)
+        _set(staged_id, frames_done=len(got), frames_total=len(got), sendable=True)
+        if transcribe:
+            _set(staged_id, state="transcribing")
+            res = audio.transcribe_video(path, on_extracted=release_slot)
+            _set(
+                staged_id,
+                transcript="ok" if res.text else "none",
+                transcript_note=res.note,
+            )
+        _set(staged_id, state="ready")
+    except VideoError as exc:
+        _set(staged_id, state="error", error=str(exc))
+    except Exception as exc:  # never leave the chip spinning
+        _set(staged_id, state="error", error=f"Could not prepare video: {exc}")
+    finally:
+        release_slot()
 
 
 def _launch(staged_id: str, frames_n: int, transcribe: bool) -> dict[str, Any]:

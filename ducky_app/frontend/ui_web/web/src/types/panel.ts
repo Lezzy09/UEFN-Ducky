@@ -737,6 +737,8 @@ export interface VideoPrepStatusDto {
   transcript: "ok" | "none" | "skipped";
   transcript_note: string;
   error: string;
+  /** Frames are ready, so the message can be sent even while the transcript is still running. */
+  sendable?: boolean;
 }
 
 export type VideoAttachmentStatus = "uploading" | "preparing" | "ready" | "error";

@@ -43,6 +43,8 @@ describe("video chips", () => {
     expect(screen.getByText("Extracting frames 7/20")).toBeTruthy();
     rerender(chip("preparing", { state: "transcribing" }));
     expect(screen.getByText("Transcribing audio…")).toBeTruthy();
+    rerender(chip("preparing", { state: "transcribing", sendable: true }));
+    expect(screen.getByText("Transcribing audio… (you can send)")).toBeTruthy();
     rerender(chip("ready", {}));
     expect(screen.getByText("Ready")).toBeTruthy();
     expect(screen.queryByTestId("chip-note")).toBeNull();

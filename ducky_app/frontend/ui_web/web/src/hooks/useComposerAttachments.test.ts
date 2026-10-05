@@ -120,7 +120,7 @@ describe("video attachments", () => {
     const sid = "b".repeat(32) + ".mp4";
     const prepStatus = vi.fn()
       .mockResolvedValueOnce({ ok: true, prep: { [sid]: { ...PREP_BASE, state: "extracting", frames_done: 7 } } })
-      .mockResolvedValueOnce({ ok: true, prep: { [sid]: { ...PREP_BASE, state: "transcribing", frames_done: 20 } } })
+      .mockResolvedValueOnce({ ok: true, prep: { [sid]: { ...PREP_BASE, state: "transcribing", frames_done: 20, sendable: true } } })
       .mockResolvedValue({ ok: true, prep: { [sid]: { ...PREP_BASE, state: "ready", frames_done: 20, transcript: "none", transcript_note: "No audio track" } } });
     mockApi({
       stage_video_attachment: vi.fn().mockResolvedValue(stageRes(sid)),
@@ -134,8 +134,12 @@ describe("video attachments", () => {
     await vi.waitFor(() => expect(result.current.attachments[0]).toMatchObject({ prep: { state: "extracting", frames_done: 7 } }));
     expect(prepStatus).toHaveBeenCalledWith([sid]);
     expect(result.current.hasPendingVideos).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(800); });
+    await vi.waitFor(() => expect(result.current.attachments[0]).toMatchObject({ status: "preparing", prep: { state: "transcribing" } }));
+    expect(result.current.hasPendingVideos).toBe(false); // sendable while the transcript runs
     await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
-    await vi.waitFor(() => expect(result.current.hasPendingVideos).toBe(false));
+    await vi.waitFor(() => expect(result.current.attachments[0]).toMatchObject({ status: "ready" }));
+    expect(result.current.hasPendingVideos).toBe(false);
     expect(result.current.attachments[0]).toMatchObject({ status: "ready", prep: { transcript_note: "No audio track" } });
   });
 

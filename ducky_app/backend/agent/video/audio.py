@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,8 +76,10 @@ def _write(path: Path, text: str) -> None:
         pass
 
 
-def transcribe_video(video: Path) -> TranscriptResult:
-    """Never raises: every failure becomes a note. Only deterministic outcomes are cached."""
+def transcribe_video(video: Path, on_extracted: Callable[[], None] | None = None) -> TranscriptResult:
+    """Never raises: every failure becomes a note. Only deterministic outcomes are cached.
+
+    ``on_extracted`` runs once the local ffmpeg work is done, before the network call."""
     text_p, note_p = transcript_paths(video)
     cached = _read(text_p)
     if cached:
@@ -105,6 +108,8 @@ def transcribe_video(video: Path) -> TranscriptResult:
             return TranscriptResult("", f"Transcription failed: {exc}")
     finally:
         mp3.unlink(missing_ok=True)
+        if on_extracted is not None:
+            on_extracted()
     try:
         res = transcribe_audio(b64, "audio/mpeg")
     except Exception as exc:  # best-effort: never break the send path

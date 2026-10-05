@@ -40,18 +40,20 @@ def conversation_meta_path(conv_id: str, conversations_dir: Path) -> Path:
     return conversations_dir / conv_id / "conversation.json"
 
 
-def _copy_prep_siblings(src: Path, dest: Path) -> None:
+def _copy_prep_siblings(src: Path, dest: Path) -> bool:
     """Carry cached frames/transcript files over (renamed to the persisted video's name).
 
-    Best-effort: they are only a cache; the send path re-extracts when they are missing."""
+    Best-effort: they are only a cache; the send path re-extracts when they are missing.
+    Returns True when the transcript is still being produced (the sender must not start a second one)."""
     from backend.agent.video import prep
 
-    if prep.prep_status(src.name)["state"] not in ("ready", "error"):
-        return  # prep still writing: the send path extracts for itself
+    st = prep.prep_status(src.name)
+    if not st.get("sendable") and st["state"] not in ("ready", "error"):
+        return False  # frames still being written: the send path extracts for itself
     try:
         siblings = list(src.parent.glob(glob_escape(src.name) + ".*"))
     except OSError:
-        return
+        return False
     for sib in siblings:
         suffix = sib.name[len(src.name):]
         if not suffix or suffix.endswith((".audio.mp3", ".part.jpg")):
@@ -60,6 +62,7 @@ def _copy_prep_siblings(src: Path, dest: Path) -> None:
             shutil.copyfile(sib, dest.with_name(dest.name + suffix))
         except OSError:
             pass
+    return st["state"] == "transcribing"
 
 
 def persist_message_attachments(
@@ -101,7 +104,7 @@ def persist_message_attachments(
                 shutil.copyfile(att.file_path, full)
             except OSError as exc:
                 raise ValueError(f"Could not save video {att.name!r}: {exc}") from exc
-            _copy_prep_siblings(Path(att.file_path), full)
+            transcribing = _copy_prep_siblings(Path(att.file_path), full)
             video_row: dict[str, Any] = {
                 "kind": "video",
                 "name": att.name,
@@ -111,6 +114,8 @@ def persist_message_attachments(
             }
             if att.transcript:
                 video_row["transcript"] = att.transcript
+            elif transcribing:
+                video_row["transcript_note"] = "Transcript not ready when sent"
             out.append(video_row)
         elif att.kind == "file":
             full.write_text(att.text or "", encoding="utf-8")

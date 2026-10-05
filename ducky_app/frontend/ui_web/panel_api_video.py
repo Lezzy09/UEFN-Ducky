@@ -97,7 +97,7 @@ class PanelApiVideoMixin:
 
 _READY_PREP: dict[str, Any] = {
     "state": "ready", "frames_done": 0, "frames_total": 0,
-    "transcript": "skipped", "transcript_note": "", "error": "",
+    "transcript": "skipped", "transcript_note": "", "error": "", "sendable": True,
 }
 
 
