@@ -12,6 +12,15 @@ def image_attachments(attachments: list[MessageAttachment]) -> list[MessageAttac
     return [a for a in attachments if a.kind == "image" and a.data_base64]
 
 
+def media_attachments(attachments: list[MessageAttachment]) -> list[MessageAttachment]:
+    """Images with pixels plus videos with a file on disk — what providers can see."""
+    return [
+        a
+        for a in attachments
+        if (a.kind == "image" and a.data_base64) or (a.kind == "video" and a.file_path)
+    ]
+
+
 def build_anthropic_user_content(text: str, attachments: list[MessageAttachment]) -> str | list[dict[str, Any]]:
     images = image_attachments(attachments)
     if not images:

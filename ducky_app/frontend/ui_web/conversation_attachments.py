@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import re
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -13,7 +14,7 @@ from backend.agent.message_attachment import MessageAttachment
 
 _UNSAFE_CHARS = re.compile(r"[^\w.\-]+")
 _CONV_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
-_CHAT_FILE_RE = re.compile(r"^[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)$", re.IGNORECASE)
+_CHAT_FILE_RE = re.compile(r"^[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|mp4|webm|mov|mkv)$", re.IGNORECASE)
 NO_CHAT_CAPTURE_ERROR = "Screenshot was not saved: no active chat."
 
 
@@ -62,6 +63,27 @@ def persist_message_attachments(
             except Exception:
                 continue
             out.append({"kind": "image", "name": att.name, "mime": att.mime or "image/png", "path": rel})
+        elif att.kind == "video" and att.file_path:
+            from backend.agent.video.staging import VIDEO_MIME_EXT
+
+            ext = VIDEO_MIME_EXT.get(att.mime, ".mp4")
+            if Path(filename).suffix.lower() not in VIDEO_MIME_EXT.values():
+                filename += ext
+                rel = f"attachments/{filename}"
+                full = conv_path / rel
+            try:
+                shutil.copyfile(att.file_path, full)
+            except OSError:
+                continue
+            out.append(
+                {
+                    "kind": "video",
+                    "name": att.name,
+                    "mime": att.mime,
+                    "path": rel,
+                    "size_bytes": att.size_bytes,
+                }
+            )
         elif att.kind == "file":
             full.write_text(att.text or "", encoding="utf-8")
             out.append(
@@ -96,6 +118,26 @@ def hydrate_attachment_dict(
         return {**raw, "data_base64": data}
     if kind == "file":
         return {**raw, "text": full.read_text(encoding="utf-8")}
+    if kind == "video":
+        conv_path = conversation_dir(conv_id, None, conversations_dir)
+        frames = []
+        for fr in raw.get("frames") or []:
+            if not isinstance(fr, dict) or not fr.get("path"):
+                continue
+            fp = conv_path / str(fr["path"])
+            frames.append(
+                {
+                    **fr,
+                    "abs_path": str(fp),
+                    "media_url": build_chat_attachment_url(conv_id, fp.name),
+                }
+            )
+        return {
+            **raw,
+            "abs_path": str(full),
+            "media_url": build_chat_attachment_url(conv_id, full.name),
+            "frames": frames,
+        }
     return raw
 
 

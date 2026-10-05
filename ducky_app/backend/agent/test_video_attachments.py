@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+import base64
+
+import pytest
+
+from backend.agent.attachments import parse_attachment_dict, parse_attachment_dicts
+from backend.agent.multimodal_content import media_attachments
+from backend.agent.video import staging
+from frontend.ui_web.conversation_attachments import (
+    hydrate_attachment_dict,
+    persist_message_attachments,
+)
+
+_PNG = base64.b64encode(b"\x89PNG\r\n").decode()
+
+
+def _staged(data: bytes = b"vid", name: str = "bug.mp4") -> dict:
+    out = staging.stage_video(name, "video/mp4", base64.b64encode(data).decode())
+    return {"kind": "video", "name": name, "mime": "video/mp4", "staged_id": out["staged_id"]}
+
+
+def test_parse_staged_video():
+    att = parse_attachment_dict(_staged())
+    assert att.kind == "video" and att.size_bytes == 3
+    assert att.file_path.endswith(".mp4")
+    assert media_attachments([att]) == [att]
+
+
+def test_parse_rejects_path_outside_app_data(tmp_path):
+    outside = tmp_path.parent / "secret.mp4"
+    outside.write_bytes(b"x")
+    assert parse_attachment_dict({"kind": "video", "name": "s.mp4", "abs_path": str(outside)}) is None
+
+
+def test_expired_stage_is_an_error():
+    with pytest.raises(ValueError, match="expired"):
+        parse_attachment_dict({"kind": "video", "name": "x.mp4", "staged_id": "f" * 32 + ".mp4"})
+
+
+def test_image_cap_comes_from_settings():
+    from frontend.settings import PanelSettings
+
+    s = PanelSettings.load()
+    s.max_images_per_message = 2
+    s.save()
+    imgs = [{"kind": "image", "name": f"{i}.png", "data_base64": _PNG} for i in range(3)]
+    with pytest.raises(ValueError, match="At most 2 images"):
+        parse_attachment_dicts(imgs)
+
+
+def test_persist_copies_video_and_hydrate_never_inlines_it(tmp_path):
+    att = parse_attachment_dict(_staged(b"0123456789", "my clip.mp4"))
+    rows = persist_message_attachments("conv1", 1.5, [att], tmp_path)
+    assert rows == [{
+        "kind": "video", "name": "my clip.mp4", "mime": "video/mp4",
+        "path": "attachments/1500_0_my_clip.mp4", "size_bytes": 10,
+    }]
+    stored = tmp_path / "conv1" / rows[0]["path"]
+    assert stored.read_bytes() == b"0123456789"
+    frame = stored.with_name(stored.name + ".f01-01.jpg")
+    frame.write_bytes(b"jpg")
+    row = {**rows[0], "frames": [{"path": f"attachments/{frame.name}", "t_s": 0.5}]}
+    hyd = hydrate_attachment_dict(row, "conv1", tmp_path)
+    assert "data_base64" not in hyd
+    assert hyd["abs_path"] == str(stored)
+    assert hyd["media_url"].endswith("/chat-attachments/conv1/1500_0_my_clip.mp4")
+    assert hyd["frames"][0]["abs_path"] == str(frame)
+    assert hyd["frames"][0]["media_url"].endswith(f"/chat-attachments/conv1/{frame.name}")
+
+
+def test_persist_adds_extension_when_name_has_none(tmp_path):
+    raw = _staged(b"x", "blob")
+    raw["name"] = "blob"
+    att = parse_attachment_dict(raw)
+    rows = persist_message_attachments("c", 1.0, [att], tmp_path)
+    assert rows[0]["path"].endswith("_blob.mp4")
