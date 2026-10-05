@@ -2,9 +2,10 @@
  * Settings → Videos — video attachment limits and the on-demand ffmpeg install.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getApi } from "../../hooks/usePanelApi";
 import type { FfmpegStatusDto, VideoSettingsDto } from "../../types/panel";
+import { AppNotice } from "../../components/AppNotice";
 import { Icons } from "../../icons/Icons";
 import { GeneralSectionHeader } from "./GeneralSectionHeader";
 
@@ -23,11 +24,18 @@ function ffmpegLabel(st: FfmpegStatusDto): string {
   return "Not installed";
 }
 
+function errMsg(prefix: string, err: unknown): string {
+  return `${prefix}: ${err instanceof Error ? err.message : String(err)}`;
+}
+
 export function VideosTab() {
   const [settings, setSettings] = useState<VideoSettingsDto | null>(null);
   const [draft, setDraft] = useState<Record<NumericKey, string>>({
     video_max_mb: "", video_frames_per_video: "", max_images_per_message: "",
   });
+
+  const [error, setError] = useState("");
+  const pollInFlight = useRef(false);
 
   const apply = useCallback((s: VideoSettingsDto) => {
     setSettings(s);
@@ -38,37 +46,88 @@ export function VideosTab() {
     });
   }, []);
 
-  useEffect(() => {
-    void getApi()?.get_video_settings?.().then((s) => s && apply(s));
+  const load = useCallback(async () => {
+    try {
+      const s = await getApi()?.get_video_settings?.();
+      if (s) {
+        apply(s);
+        setError("");
+      }
+    } catch (err) {
+      setError(errMsg("Failed to load video settings", err));
+    }
   }, [apply]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const installing = settings?.ffmpeg.state === "installing";
   useEffect(() => {
     if (!installing) return;
     const timer = window.setInterval(() => {
-      void getApi()?.get_ffmpeg_status?.().then((ffmpeg) => {
-        if (ffmpeg) setSettings((prev) => (prev ? { ...prev, ffmpeg } : prev));
-      });
+      if (pollInFlight.current) return;
+      pollInFlight.current = true;
+      void (async () => {
+        try {
+          const ffmpeg = await getApi()?.get_ffmpeg_status?.();
+          if (ffmpeg) setSettings((prev) => (prev ? { ...prev, ffmpeg } : prev));
+        } catch (err) {
+          setError(errMsg("Failed to read ffmpeg status", err));
+        } finally {
+          pollInFlight.current = false;
+        }
+      })();
     }, 500);
     return () => window.clearInterval(timer);
   }, [installing]);
 
   const save = useCallback(async (key: NumericKey) => {
-    const value = Number(draft[key]);
-    if (!Number.isFinite(value)) return;
-    const next = await getApi()?.set_video_settings?.({ [key]: value });
-    if (next) apply(next);
-  }, [draft, apply]);
+    if (!settings) return;
+    const raw = draft[key].trim();
+    const value = Number(raw);
+    if (raw === "" || !Number.isFinite(value)) {
+      setDraft((d) => ({ ...d, [key]: String(settings[key]) }));
+      return;
+    }
+    if (value === settings[key]) return;
+    try {
+      const next = await getApi()?.set_video_settings?.({ [key]: value });
+      if (next) {
+        apply(next);
+        setError("");
+      }
+    } catch (err) {
+      setError(errMsg("Failed to save video settings", err));
+    }
+  }, [draft, settings, apply]);
 
   const runFfmpeg = useCallback(async (action: "install" | "remove") => {
-    const api = getApi();
-    const ffmpeg = action === "install" ? await api?.install_ffmpeg?.() : await api?.remove_ffmpeg?.();
-    if (ffmpeg) setSettings((prev) => (prev ? { ...prev, ffmpeg } : prev));
+    try {
+      const api = getApi();
+      const ffmpeg = action === "install" ? await api?.install_ffmpeg?.() : await api?.remove_ffmpeg?.();
+      if (ffmpeg) setSettings((prev) => (prev ? { ...prev, ffmpeg } : prev));
+      setError("");
+    } catch (err) {
+      setError(errMsg(`Failed to ${action} ffmpeg`, err));
+    }
   }, []);
 
-  if (!settings) return null;
+  if (!settings) {
+    return error ? (
+      <div className="general-tab-shell videos-tab">
+        <AppNotice message={error} className="plans-tab-notice" />
+        <div className="videos-tab-actions">
+          <button type="button" onClick={() => void load()}>
+            Retry
+          </button>
+        </div>
+      </div>
+    ) : null;
+  }
   return (
     <div className="general-tab-shell videos-tab">
+      {error ? <AppNotice message={error} className="plans-tab-notice" /> : null}
       <GeneralSectionHeader icon={<Icons.Play />} title="Videos" />
       {FIELDS.map((f) => (
         <label key={f.key} className="memory-tab-field">

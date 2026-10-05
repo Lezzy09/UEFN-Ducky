@@ -33,4 +33,53 @@ describe("VideosTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Install now" }));
     await waitFor(() => expect(install).toHaveBeenCalled());
   });
+
+  function mockApi(over: Record<string, unknown> = {}) {
+    const api = {
+      get_video_settings: vi.fn().mockResolvedValue(settings),
+      set_video_settings: vi.fn().mockResolvedValue(settings),
+      install_ffmpeg: vi.fn().mockResolvedValue(settings.ffmpeg),
+      remove_ffmpeg: vi.fn().mockResolvedValue(settings.ffmpeg),
+      get_ffmpeg_status: vi.fn().mockResolvedValue(settings.ffmpeg),
+      ...over,
+    };
+    vi.mocked(getApi).mockReturnValue(api as never);
+    return api;
+  }
+
+  it("does not save an emptied field and restores the saved value", async () => {
+    const api = mockApi();
+    render(<VideosTab />);
+    const frames = await screen.findByLabelText("Frames per video");
+    fireEvent.change(frames, { target: { value: "" } });
+    fireEvent.blur(frames);
+    await waitFor(() => expect((frames as HTMLInputElement).value).toBe("20"));
+    expect(api.set_video_settings).not.toHaveBeenCalled();
+  });
+
+  it("does not save an unchanged field", async () => {
+    const api = mockApi();
+    render(<VideosTab />);
+    const frames = await screen.findByLabelText("Frames per video");
+    fireEvent.blur(frames);
+    expect(api.set_video_settings).not.toHaveBeenCalled();
+  });
+
+  it("shows a load error and retries", async () => {
+    const get = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValue(settings);
+    mockApi({ get_video_settings: get });
+    render(<VideosTab />);
+    expect(await screen.findByText(/boom/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByLabelText("Frames per video");
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows an error when install_ffmpeg rejects", async () => {
+    mockApi({ install_ffmpeg: vi.fn().mockRejectedValue(new Error("no network")) });
+    render(<VideosTab />);
+    await screen.findByLabelText("Frames per video");
+    fireEvent.click(screen.getByRole("button", { name: "Install now" }));
+    expect(await screen.findByText(/no network/)).toBeTruthy();
+  });
 });
