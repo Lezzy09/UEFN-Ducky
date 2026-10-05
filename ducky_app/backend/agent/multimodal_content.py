@@ -44,6 +44,10 @@ def _video_note(att: MessageAttachment) -> str:
     return f'[Video "{att.name}" attached but could not be analyzed]'
 
 
+def _omitted_note(att: MessageAttachment) -> str:
+    return f'[Video "{att.name}" sent earlier — not re-attached to keep the request small]'
+
+
 def build_anthropic_user_content(text: str, attachments: list[MessageAttachment]) -> str | list[dict[str, Any]]:
     media = media_attachments(attachments)
     if not media:
@@ -59,6 +63,9 @@ def build_anthropic_user_content(text: str, attachments: list[MessageAttachment]
                     "source": {"type": "base64", "media_type": att.mime or "image/png", "data": att.data_base64},
                 }
             )
+            continue
+        if att.omitted:
+            blocks.append({"type": "text", "text": _omitted_note(att)})
             continue
         frames = _video_frames(att)
         if not frames:
@@ -90,6 +97,9 @@ def build_openai_user_content(text: str, attachments: list[MessageAttachment]) -
             mime = att.mime or "image/png"
             parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{att.data_base64}"}})
             continue
+        if att.omitted:
+            parts.append({"type": "text", "text": _omitted_note(att)})
+            continue
         frames = _video_frames(att)
         if not frames:
             parts.append({"type": "text", "text": _video_note(att)})
@@ -113,7 +123,10 @@ def build_gemini_user_parts(text: str, attachments: list[MessageAttachment]) -> 
             raw = base64.b64decode(att.data_base64)
             parts.append(types.Part.from_bytes(data=raw, mime_type=att.mime or "image/png"))
             continue
-        native = gemini_inline_mime(att.mime, att.size_bytes)
+        if att.omitted:
+            parts.append(types.Part.from_text(text=_omitted_note(att)))
+            continue
+        native = gemini_inline_mime(att.mime, att.size_bytes) if att.inline_ok else None
         if native:
             try:
                 parts.append(types.Part.from_bytes(data=Path(att.file_path).read_bytes(), mime_type=native))

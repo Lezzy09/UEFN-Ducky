@@ -76,3 +76,28 @@ def test_gemini_big_video_falls_back_to_frames(tmp_path, monkeypatch):
     parts = build_gemini_user_parts("q", [_video(tmp_path, size=50 * 1024 * 1024)])
     assert parts[1].kw == {"text": 'Video "bug.mp4" — frame 1/2 at 00:00'}
     assert parts[2].kw == {"data": b"J0", "mime_type": "image/jpeg"}
+
+
+def test_gemini_not_inline_ok_uses_frames(tmp_path, monkeypatch):
+    _fake_genai(monkeypatch)
+    v = _video(tmp_path)
+    v.inline_ok = False
+    parts = build_gemini_user_parts("q", [v])
+    assert parts[1].kw == {"text": 'Video "bug.mp4" — frame 1/2 at 00:00'}
+
+
+_OMITTED = '[Video "bug.mp4" sent earlier — not re-attached to keep the request small]'
+
+
+def test_omitted_video_is_a_note_in_every_builder(tmp_path, monkeypatch):
+    _fake_genai(monkeypatch)
+    v = _video(tmp_path)
+    v.omitted = True
+    assert build_anthropic_user_content("q", [v]) == [
+        {"type": "text", "text": "q"}, {"type": "text", "text": _OMITTED},
+    ]
+    assert build_openai_user_content("q", [v]) == [
+        {"type": "text", "text": "q"}, {"type": "text", "text": _OMITTED},
+    ]
+    parts = build_gemini_user_parts("q", [v])
+    assert [p.kw for p in parts] == [{"text": "q"}, {"text": _OMITTED}]

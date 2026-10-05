@@ -573,6 +573,12 @@ class AgentRunner:
                     ),
                 )
             )
+        from backend.agent.video.budget import apply_media_budget
+
+        apply_media_budget(
+            [pm.attachments for pm in out if pm.role == "user" and pm.attachments],
+            provider=self.config.provider,
+        )
         return out
 
     async def run_turn(

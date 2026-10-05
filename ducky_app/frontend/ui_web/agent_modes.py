@@ -884,6 +884,12 @@ async def _run_ask_async(
         else:
             current_images = media_attachments(parse_attachment_dicts(user_attachments))
             messages.append(ProviderMessage(role="user", content=user_text, attachments=current_images))
+        from backend.agent.video.budget import apply_media_budget
+
+        apply_media_budget(
+            [pm.attachments for pm in messages if pm.role == "user" and pm.attachments],
+            provider=provider_name or "",
+        )
         if volatile_tail:
             messages.append(
                 ProviderMessage(

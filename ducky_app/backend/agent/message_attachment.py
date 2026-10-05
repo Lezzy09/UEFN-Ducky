@@ -16,3 +16,6 @@ class MessageAttachment:
     file_path: str = ""
     size_bytes: int = 0
     frames: list[tuple[str, float]] = field(default_factory=list)
+    # set by video.budget.apply_media_budget: send frames instead of native bytes / skip entirely
+    inline_ok: bool = True
+    omitted: bool = False
