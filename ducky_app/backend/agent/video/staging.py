@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import re
 import time
 import uuid
@@ -72,13 +73,24 @@ def resolve_staged(staged_id: str) -> Path:
     path = staging_dir() / sid
     if not _STAGED_RE.fullmatch(sid) or not path.is_file():
         raise VideoError("The video upload expired — attach the video again.")
+    try:
+        os.utime(path)
+    except OSError:
+        pass
     return path
 
 
-def is_inside_app_data(path: str | Path) -> Path | None:
+def safe_media_path(path: str | Path, *, suffixes: set[str] | frozenset[str]) -> Path | None:
+    """Resolve a client-supplied media path, or None unless it is a regular file with an
+    allowed suffix that sits directly in video_staging/ or in a chat's attachments/ folder."""
     try:
         target = Path(path).resolve()
-        target.relative_to(resolve_app_data_dir().resolve())
+        app = resolve_app_data_dir().resolve()
+        rel_parts = target.relative_to(app).parts
     except (OSError, ValueError):
         return None
-    return target
+    if target.suffix.lower() not in suffixes or not target.is_file():
+        return None
+    in_staging = len(rel_parts) == 2 and rel_parts[0] == "video_staging"
+    in_chat = len(rel_parts) >= 3 and rel_parts[0] == "chats" and target.parent.name == "attachments"
+    return target if (in_staging or in_chat) else None
