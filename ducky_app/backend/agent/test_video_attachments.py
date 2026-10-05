@@ -75,3 +75,46 @@ def test_persist_adds_extension_when_name_has_none(tmp_path):
     att = parse_attachment_dict(raw)
     rows = persist_message_attachments("c", 1.0, [att], tmp_path)
     assert rows[0]["path"].endswith("_blob.mp4")
+
+
+def _app_data():
+    from frontend.app_paths import resolve_app_data_dir
+
+    return resolve_app_data_dir(for_write=True)
+
+
+def test_parse_rejects_non_video_file_inside_app_data():
+    settings = _app_data() / "panel_settings.json"
+    settings.write_text("{}", encoding="utf-8")
+    assert parse_attachment_dict({"kind": "video", "name": "x.mp4", "abs_path": str(settings)}) is None
+
+
+def test_parse_rejects_mp4_in_unrelated_app_data_subdir():
+    other = _app_data() / "other"
+    other.mkdir(parents=True, exist_ok=True)
+    f = other / "x.mp4"
+    f.write_bytes(b"x")
+    assert parse_attachment_dict({"kind": "video", "name": "x.mp4", "abs_path": str(f)}) is None
+
+
+def test_parse_accepts_chat_attachment_and_filters_frames(tmp_path):
+    att_dir = _app_data() / "chats" / "projects" / "p" / "conversations" / "c1" / "attachments"
+    att_dir.mkdir(parents=True, exist_ok=True)
+    video = att_dir / "1_0_clip.mp4"
+    video.write_bytes(b"vid")
+    good = att_dir / "1_0_clip.mp4.f01-01.jpg"
+    good.write_bytes(b"jpg")
+    wrong_suffix = att_dir / "frame.png"
+    wrong_suffix.write_bytes(b"png")
+    outside = tmp_path / "out.jpg"
+    outside.write_bytes(b"jpg")
+    att = parse_attachment_dict({
+        "kind": "video", "name": "clip.mp4", "abs_path": str(video),
+        "frames": [
+            {"abs_path": str(good), "t_s": 0.5},
+            {"abs_path": str(wrong_suffix), "t_s": 1.0},
+            {"abs_path": str(outside), "t_s": 2.0},
+        ],
+    })
+    assert att is not None and att.file_path == str(video.resolve())
+    assert att.frames == [(str(good.resolve()), 0.5)]
