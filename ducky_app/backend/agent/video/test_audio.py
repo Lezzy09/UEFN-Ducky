@@ -32,6 +32,7 @@ def _setup(monkeypatch, tmp_path, *, has=True, ff_rc=0, mp3=b"mp3data", tr=None)
 
     monkeypatch.setattr(fr, "_runner", runner)
     monkeypatch.setattr("backend.voice.transcription.transcribe_audio", transcribe)
+    monkeypatch.setattr("backend.voice.transcription.openai_transcription_available", lambda: True)
     return video, calls, tcalls
 
 
@@ -65,19 +66,31 @@ def test_note_is_cached(monkeypatch, tmp_path):
     assert len(calls) == n
 
 
-def test_no_key(monkeypatch, tmp_path):
-    video, _, _ = _setup(monkeypatch, tmp_path, tr={"ok": False, "error": "No OpenAI API key configured"})
+def test_no_key_skips_all_ffmpeg_work(monkeypatch, tmp_path):
+    video, calls, tcalls = _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr("backend.voice.transcription.openai_transcription_available", lambda: False)
     assert audio.transcribe_video(video) == audio.TranscriptResult("", "No transcript — needs an OpenAI key")
+    assert calls == [] and tcalls == []
+    text_p, note_p = audio.transcript_paths(video)
+    assert not note_p.exists() and not text_p.exists()
 
 
-def test_gateway_error_is_key_note(monkeypatch, tmp_path):
-    video, _, _ = _setup(monkeypatch, tmp_path, tr={"ok": False, "error": "gateway unavailable"})
-    assert audio.transcribe_video(video).note == "No transcript — needs an OpenAI key"
+def test_gateway_error_is_failed_note(monkeypatch, tmp_path):
+    video, _, _ = _setup(monkeypatch, tmp_path, tr={"ok": False, "error": "OpenAI HTTP 502: Bad Gateway"})
+    assert audio.transcribe_video(video).note == "Transcription failed: OpenAI HTTP 502: Bad Gateway"
 
 
 def test_other_transcription_error(monkeypatch, tmp_path):
     video, _, _ = _setup(monkeypatch, tmp_path, tr={"ok": False, "error": "HTTP 500"})
     assert audio.transcribe_video(video).note == "Transcription failed: HTTP 500"
+
+
+def test_empty_transcript_is_cached(monkeypatch, tmp_path):
+    video, calls, tcalls = _setup(monkeypatch, tmp_path, tr={"ok": False, "error": "Empty transcript"})
+    assert audio.transcribe_video(video).note == "Transcription failed: Empty transcript"
+    n, t = len(calls), len(tcalls)
+    assert audio.transcribe_video(video).note == "Transcription failed: Empty transcript"
+    assert (len(calls), len(tcalls)) == (n, t)
 
 
 def test_too_long(monkeypatch, tmp_path):

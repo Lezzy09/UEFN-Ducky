@@ -84,6 +84,10 @@ def transcribe_video(video: Path) -> TranscriptResult:
     cached_note = _read(note_p)
     if cached_note:
         return TranscriptResult("", cached_note)
+    from backend.voice.transcription import openai_transcription_available, transcribe_audio
+
+    if not openai_transcription_available():
+        return TranscriptResult("", NOTE_NO_KEY)  # not cached: the user may add a key later
     mp3 = video.with_name(f"{video.name}.audio.mp3")
     try:
         try:
@@ -101,21 +105,16 @@ def transcribe_video(video: Path) -> TranscriptResult:
             return TranscriptResult("", f"Transcription failed: {exc}")
     finally:
         mp3.unlink(missing_ok=True)
-    from backend.voice.transcription import transcribe_audio
-
     try:
         res = transcribe_audio(b64, "audio/mpeg")
     except Exception as exc:  # best-effort: never break the send path
         return TranscriptResult("", f"Transcription failed: {exc}")
     if not res.get("ok"):
         err = str(res.get("error") or "unknown error")
-        low = err.lower()
-        if "key" in low or "gateway" in low:
-            return TranscriptResult("", NOTE_NO_KEY)
-        return TranscriptResult("", f"Transcription failed: {err}")
+        note = f"Transcription failed: {err}"
+        if err.strip().lower() == "empty transcript":
+            _write(note_p, note)  # deterministic: don't bill the same silent audio twice
+        return TranscriptResult("", note)
     text = str(res.get("text") or "").strip()
-    if not text:
-        _write(note_p, NOTE_NO_AUDIO)
-        return TranscriptResult("", NOTE_NO_AUDIO)
     _write(text_p, text)
     return TranscriptResult(text, "")

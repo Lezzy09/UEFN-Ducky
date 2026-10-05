@@ -167,6 +167,7 @@ def test_prep_files_satisfy_send_path_with_no_ffmpeg(monkeypatch, tmp_path):
 
     monkeypatch.setattr(frames, "_runner", runner)
     monkeypatch.setattr("backend.voice.transcription.transcribe_audio", lambda b, m: {"ok": True, "text": "hello"})
+    monkeypatch.setattr("backend.voice.transcription.openai_transcription_available", lambda: True)
     prep.start_prep(staged.name, frames=3, transcribe=True)
     assert _wait(staged.name)["state"] == "ready"
     calls.clear()
