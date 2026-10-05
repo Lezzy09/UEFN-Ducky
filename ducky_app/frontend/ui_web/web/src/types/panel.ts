@@ -703,19 +703,66 @@ export interface ChatMessage {
   author?: MessageAuthorDto;
 }
 
+export interface VideoFrameDto {
+  path?: string;
+  t_s: number;
+  abs_path?: string;
+  media_url?: string;
+}
+
 export interface MessageAttachmentDto {
-  kind: "image" | "file";
+  kind: "image" | "file" | "video";
   name: string;
   mime?: string;
   data_base64?: string;
   text?: string;
   /** Project Saved/DuckyCaptures path when the snip was mirrored there. */
   project_path?: string;
+  /** Video: composer upload id (staging dir). */
+  staged_id?: string;
+  /** Video: bytes on disk. */
+  size_bytes?: number;
+  /** Video: absolute file once persisted in a chat (resend). */
+  abs_path?: string;
+  /** Video: local playback URL (/chat-attachments/...). */
+  media_url?: string;
+  /** Video: frames the AI saw (non-Gemini recipients). */
+  frames?: VideoFrameDto[];
 }
+
+export type VideoAttachmentStatus = "uploading" | "preparing" | "ready" | "error";
 
 export type ComposerAttachment =
   | { id: string; kind: "image"; name: string; mime: string; dataUrl: string; projectPath?: string }
-  | { id: string; kind: "file"; name: string; mime: string; text: string };
+  | { id: string; kind: "file"; name: string; mime: string; text: string }
+  | {
+      id: string;
+      kind: "video";
+      name: string;
+      mime: string;
+      sizeBytes: number;
+      status: VideoAttachmentStatus;
+      progress?: number;
+      error?: string;
+      stagedId?: string;
+      absPath?: string;
+      previewUrl?: string;
+    };
+
+export interface FfmpegStatusDto {
+  state: "missing" | "installing" | "ready" | "error";
+  progress: number;
+  error: string;
+  version: string;
+}
+
+export interface VideoSettingsDto {
+  ok?: boolean;
+  video_max_mb: number;
+  video_frames_per_video: number;
+  max_images_per_message: number;
+  ffmpeg: FfmpegStatusDto;
+}
 
 export interface ListenerStatus {
   online: boolean;
@@ -2257,6 +2304,25 @@ export interface WinSttEvent {
 }
 
 export interface PanelApi {
+  stage_video_attachment?(
+    conv_id: string,
+    name: string,
+    mime: string,
+    data_base64: string,
+  ): Promise<{
+    ok: boolean;
+    error?: string;
+    staged_id?: string;
+    size_bytes?: number;
+    mime?: string;
+    needs_ffmpeg?: boolean;
+    ffmpeg?: FfmpegStatusDto;
+  }>;
+  get_video_settings?(): Promise<VideoSettingsDto>;
+  set_video_settings?(patch: Partial<Omit<VideoSettingsDto, "ffmpeg" | "ok">>): Promise<VideoSettingsDto>;
+  get_ffmpeg_status?(): Promise<FfmpegStatusDto>;
+  install_ffmpeg?(): Promise<FfmpegStatusDto>;
+  remove_ffmpeg?(): Promise<FfmpegStatusDto>;
   get_listener_status(): Promise<ListenerStatus>;
   get_window_bounds(): Promise<{ x: number; y: number; width: number; height: number; scale?: number }>;
   set_window_bounds(x: number, y: number, width: number, height: number): Promise<void>;
