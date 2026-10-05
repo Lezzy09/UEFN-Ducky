@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -70,10 +71,12 @@ def _read(path: Path) -> str | None:
 
 
 def _write(path: Path, text: str) -> None:
+    tmp = path.with_name(path.name + ".part")
     try:
-        path.write_text(text, encoding="utf-8")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
     except OSError:
-        pass
+        tmp.unlink(missing_ok=True)
 
 
 def transcribe_video(video: Path, on_extracted: Callable[[], None] | None = None) -> TranscriptResult:

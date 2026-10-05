@@ -97,6 +97,19 @@ def test_run_maps_oserror_to_video_error(monkeypatch):
         fr._run(["ffmpeg"], 5)
 
 
+def test_run_oserror_message_depends_on_bundled(monkeypatch):
+    def boom(*_a, **_k):
+        raise OSError("locked")
+
+    monkeypatch.setattr(fr.subprocess, "run", boom)
+    monkeypatch.setattr(fi, "status", lambda: {"bundled": True})
+    with pytest.raises(fr.VideoError, match="bundled ffmpeg — restart UEFN-Ducky, or reinstall it"):
+        fr._run(["ffmpeg"], 5)
+    monkeypatch.setattr(fi, "status", lambda: {"bundled": False})
+    with pytest.raises(fr.VideoError, match="Settings → Videos → Remove"):
+        fr._run(["ffmpeg"], 5)
+
+
 def test_run_is_non_interactive_and_tolerates_bad_bytes(monkeypatch):
     seen = {}
 

@@ -17,6 +17,7 @@ function videoStatusLabel(att: Extract<ComposerAttachment, { kind: "video" }>): 
   const prep = att.prep;
   if (prep?.state === "extracting") return `Extracting frames ${prep.frames_done}/${prep.frames_total}`;
   if (prep?.state === "transcribing") return prep.sendable ? "Transcribing audio… (you can send)" : "Transcribing audio…";
+  if (prep?.state === "queued") return "Waiting…";
   const pct = Math.round((att.progress ?? 0) * 100);
   return prep?.state === "preparing_ffmpeg" && pct > 0 && pct < 100 ? `Preparing ffmpeg… ${pct}%` : "Preparing ffmpeg…";
 }

@@ -60,12 +60,9 @@ def media_limits_for(provider: str, model: str) -> VideoLimits:
     mb = clamp(getattr(s, "video_max_mb", None), *VIDEO_MAX_MB_RANGE, DEFAULT_VIDEO_MAX_MB)
     frames = clamp_auto(getattr(s, "video_frames_per_video", None), *FRAMES_PER_VIDEO_RANGE, 0)
     images = clamp_auto(getattr(s, "max_images_per_message", None), *MAX_IMAGES_PER_MESSAGE_RANGE, 0)
-    if frames == 0 or images == 0:
-        rmax = request_image_max(provider, model)
-        if frames == 0:
-            frames = min(AUTO_FRAMES_CAP, rmax)
-        if images == 0:
-            images = rmax
+    rmax = request_image_max(provider, model)
+    frames = min(AUTO_FRAMES_CAP, rmax) if frames == 0 else min(frames, rmax)
+    images = rmax if images == 0 else min(images, rmax)
     return VideoLimits(max_bytes=mb * 1024 * 1024, frames_per_video=frames, max_images_per_message=images)
 
 

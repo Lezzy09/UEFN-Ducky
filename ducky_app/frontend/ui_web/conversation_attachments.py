@@ -56,7 +56,7 @@ def _copy_prep_siblings(src: Path, dest: Path) -> bool:
         return False
     for sib in siblings:
         suffix = sib.name[len(src.name):]
-        if not suffix or suffix.endswith((".audio.mp3", ".part.jpg")):
+        if not suffix or suffix.endswith((".audio.mp3", ".part.jpg", ".part")):
             continue
         try:
             shutil.copyfile(sib, dest.with_name(dest.name + suffix))

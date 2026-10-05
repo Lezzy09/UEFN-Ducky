@@ -15,7 +15,7 @@ describe("video chips", () => {
         onRetry={onRetry}
       />,
     );
-    expect(screen.getByText("Preparing ffmpeg…")).toBeTruthy();
+    expect(screen.getByText("Waiting…")).toBeTruthy();
     rerender(
       <ComposerAttachmentChips
         attachments={[{ id: "v1", kind: "video", name: "bug.mp4", mime: "video/mp4", sizeBytes: 5_000_000, status: "error", error: "offline" }]}

@@ -129,6 +129,21 @@ def test_install_error_never_raises(monkeypatch, tmp_path):
     assert audio.transcribe_video(video).note == "Transcription failed: offline"
 
 
+def test_write_is_atomic(monkeypatch, tmp_path):
+    target = tmp_path / "t.txt"
+
+    def boom(src, dst):
+        raise OSError("disk")
+
+    monkeypatch.setattr(audio.os, "replace", boom)
+    audio._write(target, "hello")
+    assert not target.exists()
+    assert list(tmp_path.glob("t.txt*")) == []
+    monkeypatch.undo()
+    audio._write(target, "hello")
+    assert target.read_text(encoding="utf-8") == "hello"
+
+
 @pytest.mark.skipif(not os.environ.get("DUCKY_FFMPEG_DIR"), reason="needs real ffmpeg")
 def test_real_ffmpeg_extracts_audio(tmp_path):
     d = Path(os.environ["DUCKY_FFMPEG_DIR"])

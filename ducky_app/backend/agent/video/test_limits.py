@@ -12,13 +12,14 @@ def test_defaults_when_unset():
     assert lim.max_images_per_message == 20  # Auto, provider-agnostic
 
 
-def test_values_are_read_from_settings_and_clamped():
+def test_values_are_read_from_settings_and_clamped(monkeypatch):
+    monkeypatch.setattr("backend.agent.model_fetch.get_model_info", lambda p, m: None)
     s = PanelSettings.load()
     s.video_max_mb = 999
     s.video_frames_per_video = 99
     s.max_images_per_message = 60
     s.save()
-    lim = video_limits()
+    lim = media_limits_for("openai", "m")
     assert lim.max_bytes == 200 * 1024 * 1024
     assert lim.frames_per_video == 40
     assert lim.max_images_per_message == 60
@@ -61,6 +62,16 @@ def test_media_limits_auto_follow_provider(monkeypatch):
     _info(monkeypatch, 8)
     lim = media_limits_for("openai", "m")
     assert (lim.frames_per_video, lim.max_images_per_message) == (8, 8)
+
+
+def test_media_limits_manual_is_clamped_to_the_model_max(monkeypatch):
+    monkeypatch.setattr("backend.agent.model_fetch.get_model_info", lambda p, m: None)
+    s = PanelSettings.load()
+    s.video_frames_per_video = 30
+    s.max_images_per_message = 90
+    s.save()
+    lim = media_limits_for("mistral", "m")
+    assert (lim.frames_per_video, lim.max_images_per_message) == (20, 20)
 
 
 def test_media_limits_manual_wins(monkeypatch):

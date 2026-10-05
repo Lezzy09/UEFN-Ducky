@@ -37,9 +37,13 @@ def _run(args: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
             creationflags=_NO_WINDOW,
         )
     except OSError as exc:
-        raise VideoError(
-            "Could not run ffmpeg — try Settings → Videos → Remove, then attach again."
-        ) from exc
+        from backend.agent.video import ffmpeg_install
+
+        if ffmpeg_install.status().get("bundled"):
+            msg = "Could not run the bundled ffmpeg — restart UEFN-Ducky, or reinstall it if this keeps happening."
+        else:
+            msg = "Could not run ffmpeg — try Settings → Videos → Remove, then attach again."
+        raise VideoError(msg) from exc
 
 
 _runner = _run
