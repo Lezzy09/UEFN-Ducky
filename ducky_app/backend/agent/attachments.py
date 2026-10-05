@@ -72,7 +72,7 @@ def _parse_video(raw: dict[str, Any], name: str, mime: str, *, current: bool = F
             return None
     size = path.stat().st_size
     limit = video_limits().max_bytes
-    if size > limit:
+    if current and size > limit:
         raise ValueError(f"Video {name!r} exceeds the {limit // (1024 * 1024)}MB video limit")
     frames: list[tuple[str, float]] = []
     for fr in raw.get("frames") or []:
@@ -108,7 +108,7 @@ def parse_attachment_dicts(raw_list: list[Any] | None, *, current: bool = False)
             continue
         if att.kind == "image":
             image_count += 1
-            if image_count > max_images:
+            if current and image_count > max_images:
                 raise ValueError(f"At most {max_images} images per message")
         out.append(att)
     return out

@@ -46,7 +46,7 @@ def test_image_cap_comes_from_settings():
     s.save()
     imgs = [{"kind": "image", "name": f"{i}.png", "data_base64": _PNG} for i in range(3)]
     with pytest.raises(ValueError, match="At most 2 images"):
-        parse_attachment_dicts(imgs)
+        parse_attachment_dicts(imgs, current=True)
 
 
 def test_persist_copies_video_and_hydrate_never_inlines_it(tmp_path):
@@ -149,3 +149,26 @@ def test_accented_filename_is_servable(tmp_path):
     assert _CHAT_FILE_RE.fullmatch(fname) and fname.endswith(".mp4")
     assert _CHAT_ATTACHMENT_RE.fullmatch(f"chat-attachments/conv1/{fname}")
     assert rows[0]["name"] == name
+
+
+def test_history_parsing_ignores_lowered_limits(tmp_path):
+    from backend.agent.attachments import attachments_from_message_dict
+    from frontend.settings import PanelSettings
+
+    s = PanelSettings.load()
+    s.max_images_per_message = 2
+    s.save()
+    msg = {"role": "user", "attachments": [{"kind": "image", "name": f"{i}.png", "data_base64": _PNG} for i in range(3)]}
+    assert len(attachments_from_message_dict(msg)) == 3
+    with pytest.raises(ValueError, match="At most 2 images"):
+        parse_attachment_dicts(msg["attachments"], current=True)
+
+
+def test_history_video_over_current_size_limit_still_parses(monkeypatch):
+    from backend.agent.video import limits
+
+    row = _staged(b"0123456789")
+    monkeypatch.setattr(limits, "video_limits", lambda: limits.VideoLimits(max_bytes=4, frames_per_video=20, max_images_per_message=40))
+    assert parse_attachment_dict(row).size_bytes == 10
+    with pytest.raises(ValueError, match="video limit"):
+        parse_attachment_dict(row, current=True)
