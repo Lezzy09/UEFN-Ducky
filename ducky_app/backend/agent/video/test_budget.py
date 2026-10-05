@@ -69,3 +69,14 @@ def test_model_image_max_limits_budget(monkeypatch):
     old, new = _vid("old.mp4", frames=4), _vid("new.mp4", frames=4)
     apply_media_budget([[old], [new]], provider="openai", model="small")
     assert not new.omitted and old.omitted
+
+
+def test_gemini_model_without_video_support_never_inlines(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "backend.agent.model_fetch.get_model_info", lambda p, m: SimpleNamespace(supports_video=False)
+    )
+    v = _vid("v.mp4", frames=4)
+    apply_media_budget([[v]], provider="gemini", model="gemini-x")
+    assert v.inline_ok is False and not v.omitted

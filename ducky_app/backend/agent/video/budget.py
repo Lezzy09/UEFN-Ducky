@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from backend.agent.message_attachment import MessageAttachment
 from backend.agent.video.limits import request_image_max
-from backend.agent.video.routing import GEMINI_PROVIDER, gemini_inline_mime
+from backend.agent.video.routing import GEMINI_PROVIDER, gemini_inline_mime, model_accepts_video
 
 GEMINI_INLINE_BUDGET = 14 * 1024 * 1024  # Gemini caps inline request payloads at ~20 MB total
 
@@ -15,7 +15,7 @@ def apply_media_budget(per_message: list[list[MessageAttachment]], *, provider: 
     ``per_message`` holds each user message's attachments, oldest first. Walking newest to
     oldest lets the message being sent claim budget first. Images are never altered.
     """
-    gemini = (provider or "").strip().lower() == GEMINI_PROVIDER
+    gemini = (provider or "").strip().lower() == GEMINI_PROVIDER and model_accepts_video(provider, model)
     image_budget = request_image_max(provider, model)
     images = 0
     inline_bytes = 0
