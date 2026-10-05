@@ -12,9 +12,12 @@ interface ComposerAttachmentChipsProps {
 
 function videoStatusLabel(att: Extract<ComposerAttachment, { kind: "video" }>): string {
   if (att.status === "uploading") return "Uploading…";
-  if (att.status === "preparing") return `Preparing… ${Math.round((att.progress ?? 0) * 100)}%`;
-  if (att.status === "error") return "Error";
-  return `${(att.sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (att.status === "error") return att.error || "Error";
+  if (att.status === "ready") return "Ready";
+  const prep = att.prep;
+  if (prep?.state === "extracting") return `Extracting frames ${prep.frames_done}/${prep.frames_total}`;
+  if (prep?.state === "transcribing") return "Transcribing audio…";
+  return "Preparing ffmpeg…";
 }
 
 export function ComposerAttachmentChips({ attachments, onRemove, onPreview, onRetry }: ComposerAttachmentChipsProps) {
@@ -56,6 +59,15 @@ export function ComposerAttachmentChips({ attachments, onRemove, onPreview, onRe
                 title={att.status === "error" ? att.error : undefined}
               >
                 {videoStatusLabel(att)}
+              </span>
+            ) : null}
+            {att.kind === "video" && att.status === "ready" && att.prep?.transcript_note ? (
+              <span
+                className="composer-attachment-chip-note"
+                data-testid="chip-note"
+                title={att.prep.transcript_note}
+              >
+                {att.prep.transcript_note}
               </span>
             ) : null}
           </button>

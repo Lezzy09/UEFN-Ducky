@@ -730,6 +730,15 @@ export interface MessageAttachmentDto {
   frames?: VideoFrameDto[];
 }
 
+export interface VideoPrepStatusDto {
+  state: "queued" | "extracting" | "transcribing" | "ready" | "error";
+  frames_done: number;
+  frames_total: number;
+  transcript: "ok" | "none" | "skipped";
+  transcript_note: string;
+  error: string;
+}
+
 export type VideoAttachmentStatus = "uploading" | "preparing" | "ready" | "error";
 
 export type ComposerAttachment =
@@ -747,6 +756,8 @@ export type ComposerAttachment =
       stagedId?: string;
       absPath?: string;
       previewUrl?: string;
+      /** Background frames/transcript preparation (set once staged). */
+      prep?: VideoPrepStatusDto;
     };
 
 export interface FfmpegStatusDto {
@@ -2319,7 +2330,10 @@ export interface PanelApi {
     mime?: string;
     needs_ffmpeg?: boolean;
     ffmpeg?: FfmpegStatusDto;
+    prep?: VideoPrepStatusDto;
   }>;
+  get_video_prep_status?(stagedIds?: string[]): Promise<{ ok: boolean; prep: Record<string, VideoPrepStatusDto> }>;
+  retry_video_prep?(stagedId: string): Promise<{ ok: boolean; prep: VideoPrepStatusDto }>;
   get_video_settings?(convId?: string): Promise<VideoSettingsDto>;
   set_video_settings?(patch: Partial<Omit<VideoSettingsDto, "ffmpeg" | "ok">>): Promise<VideoSettingsDto>;
   get_ffmpeg_status?(): Promise<FfmpegStatusDto>;

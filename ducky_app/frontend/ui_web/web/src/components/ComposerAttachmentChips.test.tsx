@@ -10,12 +10,12 @@ describe("video chips", () => {
     const onRetry = vi.fn();
     const { rerender } = render(
       <ComposerAttachmentChips
-        attachments={[{ id: "v1", kind: "video", name: "bug.mp4", mime: "video/mp4", sizeBytes: 5_000_000, status: "preparing", progress: 0.42 }]}
+        attachments={[{ id: "v1", kind: "video", name: "bug.mp4", mime: "video/mp4", sizeBytes: 5_000_000, status: "preparing", progress: 0.42, prep: { state: "queued", frames_done: 0, frames_total: 20, transcript: "skipped", transcript_note: "", error: "" } }]}
         onRemove={() => {}}
         onRetry={onRetry}
       />,
     );
-    expect(screen.getByText("Preparing… 42%")).toBeTruthy();
+    expect(screen.getByText("Preparing ffmpeg…")).toBeTruthy();
     rerender(
       <ComposerAttachmentChips
         attachments={[{ id: "v1", kind: "video", name: "bug.mp4", mime: "video/mp4", sizeBytes: 5_000_000, status: "error", error: "offline" }]}
@@ -23,8 +23,35 @@ describe("video chips", () => {
         onRetry={onRetry}
       />,
     );
-    expect(screen.getByTitle("offline")).toBeTruthy();
+    expect(screen.getByTitle("offline").textContent).toBe("offline");
     fireEvent.click(screen.getByRole("button", { name: "Retry bug.mp4" }));
     expect(onRetry).toHaveBeenCalledWith("v1");
+  });
+
+  const prep = (over: object) => ({
+    state: "ready", frames_done: 20, frames_total: 20, transcript: "ok", transcript_note: "", error: "", ...over,
+  });
+  const chip = (status: "preparing" | "ready", p: object) => (
+    <ComposerAttachmentChips
+      attachments={[{ id: "v1", kind: "video", name: "bug.mp4", mime: "video/mp4", sizeBytes: 5_000_000, status, prep: prep(p) as never }]}
+      onRemove={() => {}}
+    />
+  );
+
+  it("labels extraction, transcription and ready", () => {
+    const { rerender } = render(chip("preparing", { state: "extracting", frames_done: 7 }));
+    expect(screen.getByText("Extracting frames 7/20")).toBeTruthy();
+    rerender(chip("preparing", { state: "transcribing" }));
+    expect(screen.getByText("Transcribing audio…")).toBeTruthy();
+    rerender(chip("ready", {}));
+    expect(screen.getByText("Ready")).toBeTruthy();
+    expect(screen.queryByTestId("chip-note")).toBeNull();
+  });
+
+  it("shows the transcript note as a secondary line when ready", () => {
+    render(chip("ready", { transcript: "none", transcript_note: "No audio track" }));
+    const note = screen.getByTestId("chip-note");
+    expect(note.textContent).toBe("No audio track");
+    expect(note.getAttribute("title")).toBe("No audio track");
   });
 });

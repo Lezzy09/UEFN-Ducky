@@ -8,6 +8,7 @@ import shutil
 import time
 import unicodedata
 import uuid
+from glob import escape as glob_escape
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,24 @@ def conversation_attachments_dir(conv_id: str, project_root: str | None, convers
 
 def conversation_meta_path(conv_id: str, conversations_dir: Path) -> Path:
     return conversations_dir / conv_id / "conversation.json"
+
+
+def _copy_prep_siblings(src: Path, dest: Path) -> None:
+    """Carry cached frames/transcript files over (renamed to the persisted video's name).
+
+    Best-effort: they are only a cache; the send path re-extracts when they are missing."""
+    try:
+        siblings = list(src.parent.glob(glob_escape(src.name) + ".*"))
+    except OSError:
+        return
+    for sib in siblings:
+        suffix = sib.name[len(src.name):]
+        if not suffix or suffix.endswith(".audio.mp3"):
+            continue
+        try:
+            shutil.copyfile(sib, dest.with_name(dest.name + suffix))
+        except OSError:
+            pass
 
 
 def persist_message_attachments(
@@ -78,6 +97,7 @@ def persist_message_attachments(
                 shutil.copyfile(att.file_path, full)
             except OSError as exc:
                 raise ValueError(f"Could not save video {att.name!r}: {exc}") from exc
+            _copy_prep_siblings(Path(att.file_path), full)
             video_row: dict[str, Any] = {
                 "kind": "video",
                 "name": att.name,

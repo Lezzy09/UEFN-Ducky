@@ -100,6 +100,9 @@ export function useComposerAttachments(
     return () => { alive = false; };
   }, [hookOpts.convId]);
 
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+
   const patchVideo = useCallback((id: string, patch: Partial<Extract<ComposerAttachment, { kind: "video" }>>) => {
     setAttachments((prev) => prev.map((a) => (a.id === id && a.kind === "video" ? { ...a, ...patch } : a)));
   }, []);
@@ -120,15 +123,16 @@ export function useComposerAttachments(
         patchVideo(id, { status: "error", error: res?.error || "Video upload failed." });
         return;
       }
-      const ff = res.ffmpeg;
-      const status = !res.needs_ffmpeg || ff?.state === "ready" ? "ready" : ff?.state === "error" ? "error" : "preparing";
+      const prep = res.prep;
+      const status = !prep || prep.state === "ready" ? "ready" : prep.state === "error" ? "error" : "preparing";
       patchVideo(id, {
         stagedId: res.staged_id,
         mime: res.mime || file.type,
         sizeBytes: res.size_bytes ?? file.size,
         status,
-        progress: ff?.progress ?? 0,
-        error: status === "error" ? ff?.error : undefined,
+        progress: res.ffmpeg?.progress ?? 0,
+        prep,
+        error: status === "error" ? prep?.error : undefined,
       });
     } catch (e) {
       patchVideo(id, { status: "error", error: e instanceof Error ? e.message : "Video upload failed." });
@@ -139,37 +143,50 @@ export function useComposerAttachments(
     const att = attachments.find((a) => a.id === id);
     if (!att || att.kind !== "video") return;
     if (att.stagedId) {
-      patchVideo(id, { status: "preparing", error: undefined, progress: 0 });
-      void getApi()?.install_ffmpeg?.();
+      patchVideo(id, { status: "preparing", error: undefined, progress: 0, prep: undefined });
+      const api = getApi();
+      if (!api?.retry_video_prep) {
+        void api?.install_ffmpeg?.();
+        return;
+      }
+      void api.retry_video_prep(att.stagedId).then((r) => {
+        if (r?.prep) patchVideo(id, { prep: r.prep });
+      }).catch(() => undefined);
       return;
     }
     const file = filesRef.current.get(id);
     if (file) void stageVideo(id, file);
   }, [attachments, patchVideo, stageVideo]);
 
-  const preparing = attachments.some((a) => a.kind === "video" && a.status === "preparing");
+  const preparing = attachments.some((a) => a.kind === "video" && a.status === "preparing" && a.stagedId);
   useEffect(() => {
     if (!preparing) return;
     const timer = window.setInterval(() => {
-      void getApi()?.get_ffmpeg_status?.().then((st) => {
-        if (!st) return;
+      const api = getApi();
+      const ids = attachmentsRef.current
+        .flatMap((a) => (a.kind === "video" && a.status === "preparing" && a.stagedId ? [a.stagedId] : []));
+      if (ids.length === 0 || !api?.get_video_prep_status) return;
+      void api.get_video_prep_status(ids).then(async (res) => {
+        const map = res?.prep;
+        if (!map) return;
+        const queued = ids.some((sid) => !map[sid] || map[sid].state === "queued");
+        const ff = queued ? await api.get_ffmpeg_status?.().catch(() => undefined) : undefined;
         setAttachments((prev) => prev.map((a) => {
-          if (a.kind !== "video" || a.status !== "preparing") return a;
-          if (st.state === "ready") return { ...a, status: "ready", progress: 1 };
-          if (st.state === "error" || st.state === "missing") {
-            return { ...a, status: "error", error: st.error || "ffmpeg is not installed." };
+          if (a.kind !== "video" || a.status !== "preparing" || !a.stagedId) return a;
+          const prep = map[a.stagedId];
+          if (!prep) return a;
+          if (prep.state === "ready") return { ...a, status: "ready", prep, progress: 1 };
+          if (prep.state === "error") {
+            return { ...a, status: "error", prep, error: prep.error || "Could not prepare the video." };
           }
-          return { ...a, progress: st.progress };
+          return { ...a, prep, ...(prep.state === "queued" && ff ? { progress: ff.progress } : {}) };
         }));
       }).catch(() => undefined);
-    }, 500);
+    }, 700);
     return () => window.clearInterval(timer);
   }, [preparing]);
 
   const hasPendingVideos = attachments.some((a) => a.kind === "video" && a.status !== "ready");
-
-  const attachmentsRef = useRef(attachments);
-  attachmentsRef.current = attachments;
 
   /** Revoke blob previews and forget the staged File of dropped video attachments. */
   const releaseVideos = useCallback((dropped: ComposerAttachment[]) => {

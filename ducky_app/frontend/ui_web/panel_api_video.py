@@ -20,7 +20,26 @@ class PanelApiVideoMixin:
             return {"ok": False, "error": str(exc)}
         needs = _video_needs_ffmpeg(str(conv_id or "").strip(), staged)
         ff = ffmpeg_install.start_install() if needs else ffmpeg_install.status()
-        return {"ok": True, **staged, "needs_ffmpeg": needs, "ffmpeg": ff}
+        if needs:
+            from backend.agent.video import prep
+
+            prep_status = prep.start_prep(
+                staged["staged_id"], frames=_prep_frames(str(conv_id or "").strip()), transcribe=True
+            )
+        else:
+            prep_status = dict(_READY_PREP)
+        return {"ok": True, **staged, "needs_ffmpeg": needs, "ffmpeg": ff, "prep": prep_status}
+
+    def get_video_prep_status(self, staged_ids: list[str] | None = None) -> dict[str, Any]:
+        from backend.agent.video import prep
+
+        ids = [str(i) for i in (staged_ids or []) if str(i).strip()]
+        return {"ok": True, "prep": {sid: prep.prep_status(sid) for sid in ids}}
+
+    def retry_video_prep(self, staged_id: str = "") -> dict[str, Any]:
+        from backend.agent.video import prep
+
+        return {"ok": True, "prep": prep.retry_prep(str(staged_id or "").strip())}
 
     def get_video_settings(self, conv_id: str = "") -> dict[str, Any]:
         from backend.agent.video import ffmpeg_install
@@ -74,6 +93,25 @@ class PanelApiVideoMixin:
         from backend.agent.video import ffmpeg_install
 
         return ffmpeg_install.remove()
+
+
+_READY_PREP: dict[str, Any] = {
+    "state": "ready", "frames_done": 0, "frames_total": 0,
+    "transcript": "skipped", "transcript_note": "", "error": "",
+}
+
+
+def _prep_frames(conv_id: str) -> int:
+    """Frames per video for this chat's model (group/unknown chats: provider-agnostic)."""
+    from backend.agent.video.limits import media_limits_for
+    from frontend.ui_web import project_chats
+
+    provider = model = ""
+    conv = project_chats.load_conversation(conv_id) if conv_id else None
+    if conv is not None and not getattr(conv, "is_group", False):
+        provider = str(getattr(conv, "provider", "") or "")
+        model = str(getattr(conv, "model", "") or "")
+    return media_limits_for(provider, model).frames_per_video
 
 
 def _video_needs_ffmpeg(conv_id: str, staged: dict[str, Any]) -> bool:
