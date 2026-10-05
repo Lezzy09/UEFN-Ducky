@@ -16,7 +16,7 @@ from frontend.ui_web.project_chats import append_message, load_conversation, sav
 from frontend.ui_web.token_usage import record_api_call, token_usage_report
 from frontend.settings import PANEL_LISTENER_PORT, PanelSettings, apply_workspace_env
 from backend.agent.attachments import attachments_from_message_dict, parse_attachment_dicts
-from backend.agent.multimodal_content import image_attachments
+from backend.agent.multimodal_content import media_attachments
 from backend.agent.providers import make_provider
 from backend.agent.providers.base import ProviderMessage, StreamEventKind
 from backend.agent.runner import AgentRunner, RunConfig
@@ -871,7 +871,7 @@ async def _run_ask_async(
                     ProviderMessage(
                         role="user",
                         content=str(m.get("content", "")),
-                        attachments=image_attachments(
+                        attachments=media_attachments(
                             attachments_from_message_dict(m, conv_id=conv.id, project_root=project_root)
                         ),
                     )
@@ -882,7 +882,7 @@ async def _run_ask_async(
             if messages and messages[-1].role == "assistant":
                 messages.append(ProviderMessage(role="user", content="Continue."))
         else:
-            current_images = image_attachments(parse_attachment_dicts(user_attachments))
+            current_images = media_attachments(parse_attachment_dicts(user_attachments))
             messages.append(ProviderMessage(role="user", content=user_text, attachments=current_images))
         if volatile_tail:
             messages.append(
@@ -1597,13 +1597,36 @@ def run_message(
         from frontend.ui_web.conversation_attachments import persist_message_attachments
         from frontend.ui_web.project_chats import get_conversations_dir
 
+        conversations_dir = get_conversations_dir(settings.uefn_project_root)
         stored_attachments = persist_message_attachments(
             conv_id,
             ts,
             attachments_parsed,
-            get_conversations_dir(settings.uefn_project_root),
+            conversations_dir,
             settings.uefn_project_root,
         )
+        conv_dir_path = conversations_dir / conv_id
+        from backend.agent.video.send import prepare_video_frames, runtime_video_dict
+
+        if any(r.get("kind") == "video" for r in stored_attachments):
+            try:
+                prepare_video_frames(
+                    stored_attachments,
+                    conv_dir=conv_dir_path,
+                    provider=provider_name or "",
+                    external=external,
+                    push_status=lambda text: push({"type": "status", "text": text, "conv_id": conv_id}),
+                )
+            except ValueError as e:
+                push({"type": "error", "text": str(e), "conv_id": conv_id})
+                return ""
+            if external:
+                hints = [
+                    f"Video file: {conv_dir_path / r['path']}"
+                    for r in stored_attachments
+                    if r.get("kind") == "video"
+                ]
+                content = (content + "\n\n" if content else "") + "\n".join(hints)
         current_user_attachments = [
             {
                 "kind": a.kind,
@@ -1612,6 +1635,11 @@ def run_message(
                 **({"data_base64": a.data_base64} if a.kind == "image" else {"text": a.text}),
             }
             for a in attachments_parsed
+            if a.kind != "video"
+        ] + [
+            runtime_video_dict(r, conv_dir_path)
+            for r in stored_attachments
+            if r.get("kind") == "video"
         ]
 
         user_msg: dict[str, Any] = {"role": "user", "content": content, "text": user_text, "ts": ts}
