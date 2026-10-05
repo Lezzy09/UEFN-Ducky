@@ -107,4 +107,16 @@ describe("VideosTab", () => {
     fireEvent.blur(frames);
     await waitFor(() => expect(api.set_video_settings).toHaveBeenCalledWith({ video_frames_per_video: 1 }));
   });
+
+  it("shows an included label and no buttons when ffmpeg is bundled", async () => {
+    mockApi({
+      get_video_settings: vi.fn().mockResolvedValue({
+        ...settings, ffmpeg: { state: "ready", progress: 1, error: "", version: "n9.0.1", bundled: true },
+      }),
+    });
+    render(<VideosTab />);
+    expect(await screen.findByText("Included with UEFN-Ducky (n9.0.1)")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Install now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+  });
 });

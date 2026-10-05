@@ -1,4 +1,4 @@
-"""Download a pinned LGPL ffmpeg build into AppData on first need.
+"""Locate the pinned LGPL ffmpeg build: bundled with the app, else downloaded into AppData.
 
 The archive is checked against a pinned SHA-256 before anything is extracted;
 a mismatching or partial download is deleted and never executed. BtbN keeps
@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from frontend.app_paths import resolve_app_data_dir
+from frontend.bundle_root import packaged_data_root
 
 FFMPEG_RELEASE_TAG = "autobuild-2026-08-31-13-27"
 FFMPEG_VERSION = "n9.0.1-11-ge47273f4d9"
@@ -49,7 +50,21 @@ def install_dir() -> Path:
     return tools_root() / FFMPEG_VERSION
 
 
+def bundled_dir() -> Path | None:
+    """``<data root>/tools/ffmpeg`` when running packaged and both exes are present."""
+    root = packaged_data_root()
+    if root is None:
+        return None
+    d = root / "tools" / "ffmpeg"
+    if (d / "ffmpeg.exe").is_file() and (d / "ffprobe.exe").is_file():
+        return d
+    return None
+
+
 def binaries() -> tuple[Path, Path] | None:
+    b = bundled_dir()
+    if b is not None:
+        return b / "ffmpeg.exe", b / "ffprobe.exe"
     d = install_dir()
     ffmpeg, ffprobe = d / "ffmpeg.exe", d / "ffprobe.exe"
     if (d / _MARKER).is_file() and ffmpeg.is_file() and ffprobe.is_file():
@@ -64,12 +79,15 @@ def _set(**fields: Any) -> None:
 
 def status() -> dict[str, Any]:
     if binaries() is not None:
-        return {"state": "ready", "progress": 1.0, "error": "", "version": FFMPEG_VERSION}
+        return {
+            "state": "ready", "progress": 1.0, "error": "", "version": FFMPEG_VERSION,
+            "bundled": bundled_dir() is not None,
+        }
     with _lock:
         snap = dict(_state)
     if snap["state"] == "ready":  # removed from disk underneath us
         snap = {"state": "missing", "progress": 0.0, "error": ""}
-    return {**snap, "version": FFMPEG_VERSION}
+    return {**snap, "version": FFMPEG_VERSION, "bundled": False}
 
 
 def _wanted_member(name: str) -> str | None:
@@ -87,8 +105,17 @@ def _wanted_member(name: str) -> str | None:
     return None
 
 
-def _download(dest: Path) -> None:
-    req = urllib.request.Request(FFMPEG_URL, headers={"User-Agent": "UEFN-Ducky"})
+def sha256_of(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def download_verified(url: str, sha256: str, dest: Path, progress: Any = None) -> None:
+    """Stream ``url`` to ``dest`` and check SHA-256; a mismatch deletes ``dest`` and raises."""
+    req = urllib.request.Request(url, headers={"User-Agent": "UEFN-Ducky"})
     try:
         resp = _urlopen(req, timeout=60)
     except urllib.error.HTTPError as exc:
@@ -110,11 +137,29 @@ def _download(dest: Path) -> None:
             fh.write(chunk)
             sha.update(chunk)
             done += len(chunk)
-            if total:
-                _set(progress=min(0.99, done / total))
-    if sha.hexdigest() != FFMPEG_SHA256:
+            if total and progress is not None:
+                progress(min(0.99, done / total))
+    if sha.hexdigest() != sha256:
         dest.unlink(missing_ok=True)
         raise FfmpegInstallError("The ffmpeg download was corrupted (checksum mismatch).")
+
+
+def extract_members(zip_path: Path, dest: Path) -> None:
+    """Extract only the wanted members into ``dest`` (created) and write the version marker."""
+    dest.mkdir(parents=True, exist_ok=True)
+    found: set[str] = set()
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            for name in zf.namelist():
+                leaf = _wanted_member(name)
+                if leaf:
+                    (dest / leaf).write_bytes(zf.read(name))
+                    found.add(leaf.lower())
+    except zipfile.BadZipFile as exc:
+        raise FfmpegInstallError("The ffmpeg download was corrupted.") from exc
+    if not {"ffmpeg.exe", "ffprobe.exe"} <= found:
+        raise FfmpegInstallError("The ffmpeg archive is missing ffmpeg.exe or ffprobe.exe.")
+    (dest / _MARKER).write_text(FFMPEG_VERSION, encoding="utf-8")
 
 
 def _install_now() -> None:
@@ -123,22 +168,9 @@ def _install_now() -> None:
     part = root / f"{FFMPEG_VERSION}.zip.part"
     staging = root / f"{FFMPEG_VERSION}.tmp"
     try:
-        _download(part)
+        download_verified(FFMPEG_URL, FFMPEG_SHA256, part, lambda p: _set(progress=p))
         shutil.rmtree(staging, ignore_errors=True)
-        staging.mkdir()
-        found: set[str] = set()
-        try:
-            with zipfile.ZipFile(part) as zf:
-                for name in zf.namelist():
-                    leaf = _wanted_member(name)
-                    if leaf:
-                        (staging / leaf).write_bytes(zf.read(name))
-                        found.add(leaf.lower())
-        except zipfile.BadZipFile as exc:
-            raise FfmpegInstallError("The ffmpeg download was corrupted.") from exc
-        if not {"ffmpeg.exe", "ffprobe.exe"} <= found:
-            raise FfmpegInstallError("The ffmpeg archive is missing ffmpeg.exe or ffprobe.exe.")
-        (staging / _MARKER).write_text(FFMPEG_VERSION, encoding="utf-8")
+        extract_members(part, staging)
         final = install_dir()
         shutil.rmtree(final, ignore_errors=True)
         os.replace(staging, final)
@@ -194,6 +226,7 @@ def start_install() -> dict[str, Any]:
 
 
 def remove() -> dict[str, Any]:
+    """Clear the AppData install only; the bundled copy is never touched."""
     with _install_lock:
         shutil.rmtree(tools_root(), ignore_errors=True)
         _set(state="missing", progress=0.0, error="")

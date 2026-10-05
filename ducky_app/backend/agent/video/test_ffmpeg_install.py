@@ -116,3 +116,37 @@ def test_start_install_runs_in_background(monkeypatch):
     assert first["state"] in ("installing", "ready")
     fi._thread.join(timeout=10)
     assert fi.status()["state"] == "ready"
+
+
+def _bundle(root):
+    d = root / "tools" / "ffmpeg"
+    d.mkdir(parents=True)
+    (d / "ffmpeg.exe").write_bytes(b"x")
+    (d / "ffprobe.exe").write_bytes(b"x")
+    return d
+
+
+def test_binaries_prefer_bundled(monkeypatch, tmp_path):
+    d = _bundle(tmp_path)
+    monkeypatch.setattr(fi, "packaged_data_root", lambda: tmp_path)
+    assert fi.bundled_dir() == d
+    assert fi.binaries() == (d / "ffmpeg.exe", d / "ffprobe.exe")
+    st = fi.status()
+    assert st["state"] == "ready" and st["bundled"] is True and st["version"] == fi.FFMPEG_VERSION
+
+
+def test_bundled_dir_none_when_not_packaged_or_incomplete(monkeypatch, tmp_path):
+    monkeypatch.setattr(fi, "packaged_data_root", lambda: None)
+    assert fi.bundled_dir() is None
+    assert "bundled" not in fi.status() or fi.status()["bundled"] is False
+    (tmp_path / "tools" / "ffmpeg").mkdir(parents=True)
+    monkeypatch.setattr(fi, "packaged_data_root", lambda: tmp_path)
+    assert fi.bundled_dir() is None
+
+
+def test_remove_never_touches_bundled(monkeypatch, tmp_path):
+    d = _bundle(tmp_path)
+    monkeypatch.setattr(fi, "packaged_data_root", lambda: tmp_path)
+    fi.remove()
+    assert (d / "ffmpeg.exe").is_file()
+    assert fi.status()["bundled"] is True

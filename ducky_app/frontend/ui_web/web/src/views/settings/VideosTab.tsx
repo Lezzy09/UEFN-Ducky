@@ -18,6 +18,7 @@ const FIELDS: { key: NumericKey; label: string; min: number; max: number; hint: 
 ];
 
 function ffmpegLabel(st: FfmpegStatusDto): string {
+  if (st.state === "ready" && st.bundled) return `Included with UEFN-Ducky (${st.version})`;
   if (st.state === "ready") return `Installed (${st.version})`;
   if (st.state === "installing") return `Installing… ${Math.round(st.progress * 100)}%`;
   if (st.state === "error") return st.error || "Install failed";
@@ -182,10 +183,13 @@ export function VideosTab() {
       <div className="memory-tab-field">
         <span className="memory-tab-field-label">ffmpeg</span>
         <span>{ffmpegLabel(settings.ffmpeg)}</span>
+        {settings.ffmpeg.bundled ? null : (
         <span className="memory-tab-field-hint">
           Downloaded automatically (~67 MB, LGPL build) the first time a video needs frames. Gemini users with small
           videos never need it.
         </span>
+        )}
+        {settings.ffmpeg.bundled ? null : (
         <div className="videos-tab-actions">
           {settings.ffmpeg.state !== "ready" ? (
             <button type="button" disabled={installing} onClick={() => void runFfmpeg("install")}>
@@ -197,6 +201,7 @@ export function VideosTab() {
             </button>
           )}
         </div>
+        )}
       </div>
     </div>
   );

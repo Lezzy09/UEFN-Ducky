@@ -765,6 +765,7 @@ export interface FfmpegStatusDto {
   progress: number;
   error: string;
   version: string;
+  bundled?: boolean;
 }
 
 export interface VideoSettingsDto {
