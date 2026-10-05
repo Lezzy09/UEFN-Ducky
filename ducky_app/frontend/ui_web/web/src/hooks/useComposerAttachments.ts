@@ -52,7 +52,9 @@ export function composerAttachmentsFromDto(items: MessageAttachmentDto[]): Compo
         name: a.name,
         mime: a.mime || "video/mp4",
         sizeBytes: a.size_bytes ?? 0,
-        status: "ready",
+        ...(a.staged_id || a.abs_path
+          ? { status: "ready" as const }
+          : { status: "error" as const, error: "Upload interrupted — attach the video again." }),
         ...(a.staged_id ? { stagedId: a.staged_id } : {}),
         ...(a.abs_path ? { absPath: a.abs_path } : {}),
         ...(a.media_url ? { previewUrl: a.media_url } : {}),

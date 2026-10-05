@@ -73,8 +73,8 @@ def persist_message_attachments(
                 full = conv_path / rel
             try:
                 shutil.copyfile(att.file_path, full)
-            except OSError:
-                continue
+            except OSError as exc:
+                raise ValueError(f"Could not save video {att.name!r}: {exc}") from exc
             out.append(
                 {
                     "kind": "video",

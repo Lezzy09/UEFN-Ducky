@@ -1619,19 +1619,27 @@ def run_message(
             content = dedupe_exact_blocks(content)
             user_text = dedupe_exact_blocks(user_text)
 
-        attachments_parsed = parse_attachment_dicts(attachments)
+        try:
+            attachments_parsed = parse_attachment_dicts(attachments, current=True)
+        except ValueError as e:
+            push({"type": "error", "text": str(e), "conv_id": conv_id})
+            return ""
         ts = time.time()
         from frontend.ui_web.conversation_attachments import persist_message_attachments
         from frontend.ui_web.project_chats import get_conversations_dir
 
         conversations_dir = get_conversations_dir(settings.uefn_project_root)
-        stored_attachments = persist_message_attachments(
-            conv_id,
-            ts,
-            attachments_parsed,
-            conversations_dir,
-            settings.uefn_project_root,
-        )
+        try:
+            stored_attachments = persist_message_attachments(
+                conv_id,
+                ts,
+                attachments_parsed,
+                conversations_dir,
+                settings.uefn_project_root,
+            )
+        except ValueError as e:
+            push({"type": "error", "text": str(e), "conv_id": conv_id})
+            return ""
         conv_dir_path = conversations_dir / conv_id
         from backend.agent.video.send import prepare_video_frames, runtime_video_dict
 

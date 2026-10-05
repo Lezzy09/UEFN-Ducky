@@ -118,3 +118,21 @@ def test_parse_accepts_chat_attachment_and_filters_frames(tmp_path):
     })
     assert att is not None and att.file_path == str(video.resolve())
     assert att.frames == [(str(good.resolve()), 0.5)]
+
+
+def test_current_video_that_cannot_parse_raises():
+    row = {"kind": "video", "name": "clip.mp4", "mime": "video/mp4"}
+    assert parse_attachment_dicts([row]) == []
+    with pytest.raises(ValueError, match="no longer available"):
+        parse_attachment_dicts([row], current=True)
+
+
+def test_persist_video_copy_failure_raises(tmp_path, monkeypatch):
+    att = parse_attachment_dict(_staged(b"0123", "a.mp4"))
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("frontend.ui_web.conversation_attachments.shutil.copyfile", boom)
+    with pytest.raises(ValueError, match="Could not save video 'a.mp4'"):
+        persist_message_attachments("conv1", 1.5, [att], tmp_path)

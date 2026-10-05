@@ -19,7 +19,7 @@ def _strip_data_url_prefix(data: str) -> str:
     return _DATA_URL_RE.sub("", (data or "").strip())
 
 
-def parse_attachment_dict(raw: dict[str, Any]) -> MessageAttachment | None:
+def parse_attachment_dict(raw: dict[str, Any], *, current: bool = False) -> MessageAttachment | None:
     if not isinstance(raw, dict):
         return None
     kind = str(raw.get("kind") or "").strip().lower()
@@ -44,11 +44,11 @@ def parse_attachment_dict(raw: dict[str, Any]) -> MessageAttachment | None:
             raise ValueError(f"File {name!r} exceeds 256KB text limit")
         return MessageAttachment(kind="file", name=name, mime=mime, text=text)
     if kind == "video":
-        return _parse_video(raw, name, mime)
+        return _parse_video(raw, name, mime, current=current)
     return None
 
 
-def _parse_video(raw: dict[str, Any], name: str, mime: str) -> MessageAttachment | None:
+def _parse_video(raw: dict[str, Any], name: str, mime: str, *, current: bool = False) -> MessageAttachment | None:
     from backend.agent.video.limits import video_limits
     from backend.agent.video.staging import (
         VIDEO_MIME_EXT,
@@ -57,15 +57,18 @@ def _parse_video(raw: dict[str, Any], name: str, mime: str) -> MessageAttachment
         safe_media_path,
     )
 
+    gone = ValueError(f"Video {name!r} is no longer available — attach it again.")
     staged_id = str(raw.get("staged_id") or "").strip()
     if staged_id:
         path = resolve_staged(staged_id)
     else:
         abs_path = str(raw.get("abs_path") or "").strip()
-        if not abs_path:
-            return None
-        path = safe_media_path(abs_path, suffixes=frozenset(VIDEO_MIME_EXT.values()))
+        path = (
+            safe_media_path(abs_path, suffixes=frozenset(VIDEO_MIME_EXT.values())) if abs_path else None
+        )
         if path is None:
+            if current:
+                raise gone
             return None
     size = path.stat().st_size
     limit = video_limits().max_bytes
@@ -91,7 +94,7 @@ def _parse_video(raw: dict[str, Any], name: str, mime: str) -> MessageAttachment
     )
 
 
-def parse_attachment_dicts(raw_list: list[Any] | None) -> list[MessageAttachment]:
+def parse_attachment_dicts(raw_list: list[Any] | None, *, current: bool = False) -> list[MessageAttachment]:
     if not raw_list:
         return []
     from backend.agent.video.limits import video_limits
@@ -100,7 +103,7 @@ def parse_attachment_dicts(raw_list: list[Any] | None) -> list[MessageAttachment
     out: list[MessageAttachment] = []
     image_count = 0
     for raw in raw_list:
-        att = parse_attachment_dict(raw if isinstance(raw, dict) else {})
+        att = parse_attachment_dict(raw if isinstance(raw, dict) else {}, current=current)
         if not att:
             continue
         if att.kind == "image":
@@ -152,7 +155,7 @@ def prepare_outgoing_user_message(
     coding agent (Claude Code / Codex / Cursor) handles images itself, so the
     panel's own provider/model must not gate them.
     """
-    attachments = parse_attachment_dicts(attachments_raw)
+    attachments = parse_attachment_dicts(attachments_raw, current=True)
     images = media_attachments(attachments)
     if images and not external_agent:
         if not model_in_cache(provider, model):

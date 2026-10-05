@@ -7,7 +7,7 @@ vi.mock("./usePanelApi", () => ({
 }));
 
 import { getApi } from "./usePanelApi";
-import { useComposerAttachments } from "./useComposerAttachments";
+import { composerAttachmentsFromDto, useComposerAttachments } from "./useComposerAttachments";
 import type { MessageAttachmentDto } from "../types/panel";
 
 beforeEach(() => {
@@ -184,5 +184,23 @@ describe("video preview release", () => {
     act(() => result.current.removeAttachment(result.current.attachments[1].id));
     expect(revoke).toHaveBeenCalledTimes(1);
     expect(revoke).toHaveBeenCalledWith("blob:x-2");
+  });
+});
+
+describe("composerAttachmentsFromDto videos", () => {
+  it("marks a video with neither staged_id nor abs_path as an error", () => {
+    const [a] = composerAttachmentsFromDto([{ kind: "video", name: "a.mp4", mime: "video/mp4" }]);
+    expect(a).toMatchObject({
+      kind: "video",
+      status: "error",
+      error: "Upload interrupted — attach the video again.",
+    });
+  });
+
+  it("keeps a staged video ready", () => {
+    const [a] = composerAttachmentsFromDto([
+      { kind: "video", name: "a.mp4", mime: "video/mp4", staged_id: "x.mp4" },
+    ]);
+    expect(a).toMatchObject({ status: "ready", stagedId: "x.mp4" });
   });
 });
