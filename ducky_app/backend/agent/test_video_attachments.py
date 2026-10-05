@@ -136,3 +136,16 @@ def test_persist_video_copy_failure_raises(tmp_path, monkeypatch):
     monkeypatch.setattr("frontend.ui_web.conversation_attachments.shutil.copyfile", boom)
     with pytest.raises(ValueError, match="Could not save video 'a.mp4'"):
         persist_message_attachments("conv1", 1.5, [att], tmp_path)
+
+
+def test_accented_filename_is_servable(tmp_path):
+    from frontend.ui_web.conversation_attachments import _CHAT_FILE_RE
+    from frontend.ui_web.panel_httpd import _CHAT_ATTACHMENT_RE
+
+    name = "Enregistrement d’écran 2026-10-05 101112.mp4"
+    att = parse_attachment_dict(_staged(b"0123", name))
+    rows = persist_message_attachments("conv1", 1.5, [att], tmp_path)
+    fname = rows[0]["path"].split("/", 1)[1]
+    assert _CHAT_FILE_RE.fullmatch(fname) and fname.endswith(".mp4")
+    assert _CHAT_ATTACHMENT_RE.fullmatch(f"chat-attachments/conv1/{fname}")
+    assert rows[0]["name"] == name

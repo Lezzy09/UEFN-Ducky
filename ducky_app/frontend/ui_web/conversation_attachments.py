@@ -6,13 +6,14 @@ import base64
 import re
 import shutil
 import time
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Any
 
 from backend.agent.message_attachment import MessageAttachment
 
-_UNSAFE_CHARS = re.compile(r"[^\w.\-]+")
+_UNSAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 _CONV_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _CHAT_FILE_RE = re.compile(r"^[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|mp4|webm|mov|mkv)$", re.IGNORECASE)
 NO_CHAT_CAPTURE_ERROR = "Screenshot was not saved: no active chat."
@@ -20,6 +21,8 @@ NO_CHAT_CAPTURE_ERROR = "Screenshot was not saved: no active chat."
 
 def _safe_attachment_filename(name: str) -> str:
     base = Path(name).name or "attachment"
+    # Fold to ASCII so stored names always match the media-serving URL patterns.
+    base = unicodedata.normalize("NFKD", base).encode("ascii", "ignore").decode("ascii")
     safe = _UNSAFE_CHARS.sub("_", base).strip("._")
     return (safe or "attachment")[:120]
 
