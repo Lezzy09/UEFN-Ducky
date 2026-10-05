@@ -1203,6 +1203,20 @@ async def _run_agent_loop(
         discard_live_run_id(run_id)
 
 
+def _note_run_starter(conv_id: str, parent: str, started_by: str | None) -> None:
+    """Who started this run: "Allow everything" in that chat covers it. Set by the chat that
+    sent the work (parent) or by the caller (started_by, '' = nobody); a plain follow-up
+    keeps the link it had. Never the chat that merely happens to be open."""
+    if started_by is None and not (parent or "").strip():
+        return
+    try:
+        from backend.tools.panel.permission_prompt import note_started_by
+
+        note_started_by(conv_id, parent if started_by is None else started_by)
+    except Exception:
+        pass
+
+
 def run_message_and_wait(
     conv_id: str,
     text: str,
@@ -1214,9 +1228,13 @@ def run_message_and_wait(
     cancel_on_timeout: bool = True,
     parent: str = "",
     attachments: list[dict[str, Any]] | None = None,
+    started_by: str | None = None,
     _local: bool = False,
 ) -> dict[str, Any]:
-    """Send a message, run the target chat's agent, and block until done or timeout."""
+    """Send a message, run the target chat's agent, and block until done or timeout.
+
+    started_by: the chat whose "Allow everything" covers this run ('' = none). None keeps
+    what the chat had, unless ``parent`` names the chat that sent the work."""
     if not _local and _in_bridge_process():
         resp = _post_panel_run(
             {
@@ -1230,6 +1248,7 @@ def run_message_and_wait(
                 # Carry the spawning chat so the panel nests the child under it.
                 "parent_conv_id": parent,
                 "attachments": attachments or None,
+                **({} if started_by is None else {"started_by": started_by}),
             },
             http_timeout=(
                 None
@@ -1316,6 +1335,7 @@ def run_message_and_wait(
             push=collecting_push,
             force=True,
             parent=parent,
+            started_by=started_by,
             attachments=attachments,
         )
         # timeout_sec <= 0: wait until the agent finishes (no wall-clock interrupt).
@@ -1427,6 +1447,7 @@ def run_message(
     force: bool = False,
     parent: str = "",
     resume: bool = False,
+    started_by: str | None = None,
     _local: bool = False,
 ) -> str:
     if not _local and _in_bridge_process():
@@ -1443,6 +1464,7 @@ def run_message(
                 # Carry the spawning chat across the process hop so the delegated
                 # run in the panel nests the child under its parent (linked_agent).
                 "parent_conv_id": parent,
+                **({} if started_by is None else {"started_by": started_by}),
             },
             http_timeout=30.0,
         )
@@ -1458,15 +1480,6 @@ def run_message(
     if not conv:
         push({"type": "error", "text": "Conversation not found", "conv_id": conv_id})
         return ""
-    # Who started this run (only an explicit parent, never the chat that happens to be open):
-    # "Allow everything" in that chat covers this one.
-    try:
-        from backend.tools.panel.permission_prompt import note_started_by
-
-        note_started_by(conv_id, parent)
-    except Exception:
-        pass
-
     # Cursor-style Stop → follow-up: UI goes idle immediately while the old
     # thread is still unwinding. Cancel + join so the new turn can start with
     # full prior context (partial assistant reply already persisted on cancel).
@@ -1476,6 +1489,7 @@ def run_message(
         if is_agent_running(conv_id):
             push({"type": "error", "text": "Agent already running for this chat", "conv_id": conv_id})
             return ""
+    _note_run_starter(conv_id, parent, started_by)
 
     run_id = str(uuid.uuid4())
     _run_started[run_id] = time.monotonic()

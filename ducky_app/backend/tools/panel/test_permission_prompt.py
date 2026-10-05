@@ -142,6 +142,32 @@ def test_allow_everything_covers_the_runs_a_chat_starts(monkeypatch, conv) -> No
     assert not pp.allows_everything("sub") and not pp.allows_everything("member")
 
 
+def test_a_cd_into_a_local_only_plugin_then_push_is_refused(monkeypatch, conv) -> None:
+    pp._remember("c-cd", "*")
+    pp._SHELL_DIRS.pop("chat:c-cd", None)
+    repo = r"C:\GitHub\UEFN-Ducky-Release"
+    assert pp.decide("Bash", {"command": "cd C:/GitHub/uefn-plugins/uefn-plugin-anthropic"}, conv_id="c-cd", project_root=repo)["behavior"] == "allow"
+    out = pp.decide("Bash", {"command": "git push origin main"}, conv_id="c-cd", project_root=repo)
+    assert out["behavior"] == "deny" and "local-only AI plugin" in out["message"]
+    assert pp.decide("Bash", {"command": "cd C:/GitHub/UEFN-Ducky-Release"}, conv_id="c-cd", project_root=repo)["behavior"] == "allow"
+    assert pp.decide("Bash", {"command": "git push origin main"}, conv_id="c-cd", project_root=repo)["behavior"] == "allow"
+
+
+def test_who_started_a_run_is_kept_by_follow_ups(monkeypatch, conv) -> None:
+    from frontend.ui_web.agent_modes import _note_run_starter
+
+    monkeypatch.setattr(pp, "_chat_exists", lambda cid: True)
+    pp._remember("lead", "*")
+    _note_run_starter("member", "lead", None)  # the lead started it
+    assert pp.allows_everything("member")
+    _note_run_starter("member", "", None)  # a follow-up (send a message, a2a, a group round) keeps it
+    assert pp.allows_everything("member")
+    _note_run_starter("member", "hub", "lead")  # recycled twin: the hub nests it, the lead still covers it
+    assert pp.allows_everything("member")
+    _note_run_starter("member", "", "")  # a workflow run no chat started resets a reused seat
+    assert not pp.allows_everything("member")
+
+
 def test_allow_everything_turns_off_and_goes_with_its_chat(monkeypatch, conv) -> None:
     pp._remember("c1", "Bash:git status")
     pp.set_allow_everything("c1", True)
@@ -168,12 +194,21 @@ def test_the_local_only_refusal_knows_every_push_and_publish(tmp_path) -> None:
         ("py scripts/release.py --publish", r"C:\x\uefn-plugin-google"),
         ("npm publish", r"C:\x\uefn-plugin-ollama"),
         ("git push origin main", plugins),  # a folder of plugins: the shell may sit in a local-only one
+        ('bash -c "cd ../uefn-plugins/uefn-plugin-anthropic && git push"', repo),  # wrapped in a quoted shell call
+        ('cmd /c "git -C C:\\x\\uefn-plugin-anthropic push"', repo),
+        ('powershell -Command "Set-Location ../uefn-plugin-kimi; git push origin main"', repo),
+        ("gh api -X POST repos/UEFN-Ducky/uefn-plugin-anthropic/releases", repo),
+        ("gh workflow run release.yml -R UEFN-Ducky/uefn-plugin-openai", repo),
     ):
         assert pp._never_runs(command, where), command
+    # A bare push after an earlier `cd` into a local-only plugin.
+    assert pp._never_runs("git push", repo, "C:/x/uefn-plugins/uefn-plugin-anthropic")
     for command, where in (
         ("git -C uefn-plugin-meshy push", plugins),  # another plugin, named
         ("git push origin main", repo),
         ('git commit -am "no publish step"', r"C:\x\uefn-plugin-anthropic"),
+        ('git commit -m "then git push it"', r"C:\x\uefn-plugin-anthropic"),
+        ('git log --grep="git push"', r"C:\x\uefn-plugin-anthropic"),
         ("grep -rn publish backend/", r"C:\x\uefn-plugin-anthropic"),
         ("git log --oneline -3", r"C:\x\uefn-plugin-anthropic"),
     ):

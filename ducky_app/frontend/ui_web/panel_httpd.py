@@ -666,6 +666,7 @@ def start_panel_ui_server(dist_root: Path) -> str:
                                 cancel_on_timeout=bool(payload.get("cancel_on_timeout", True)),
                                 parent=str(payload.get("parent_conv_id") or ""),
                                 attachments=attachments,
+                                started_by=None if payload.get("started_by") is None else str(payload.get("started_by")),
                                 _local=True,
                             )
                             self._send_json(200, outcome)
@@ -679,6 +680,7 @@ def start_panel_ui_server(dist_root: Path) -> str:
                                 force=bool(payload.get("force")),
                                 parent=str(payload.get("parent_conv_id") or ""),
                                 resume=resume,
+                                started_by=None if payload.get("started_by") is None else str(payload.get("started_by")),
                                 _local=True,
                             )
                             self._send_json(200, {"status": "running", "conv_id": conv_id, "run_id": run_id})

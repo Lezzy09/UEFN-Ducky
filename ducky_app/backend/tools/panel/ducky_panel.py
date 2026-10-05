@@ -1416,6 +1416,10 @@ def ducky_recycle_member(
     )
 
     was_leader = (getattr(parent_conv, "leader_conv_id", None) or "").strip() == old_id
+    from backend.tools.panel.permission_prompt import approvals_of, restore_approvals
+
+    kept_approvals = approvals_of(old_id)  # "Allow everything" and who started it go to the twin
+    kept_starter = str(kept_approvals.get("started_by") or "")
     mode_norm = (mode or "agent").lower()
     handoff_timeout = max(30.0, min(float(timeout_sec), 600.0))
     handoff_outcome = run_message_and_wait(
@@ -1425,6 +1429,7 @@ def ducky_recycle_member(
         timeout_sec=handoff_timeout,
         cancel_on_timeout=False,
         parent=parent_id,
+        started_by=kept_starter,
     )
     handoff_text = str(handoff_outcome.get("assistant_text") or "").strip()
     if not handoff_text and handoff_outcome.get("status") == "timeout":
@@ -1442,9 +1447,6 @@ def ducky_recycle_member(
         )
     title = (old.title or str(persona.get("ducky_name") or "") or "Member").strip()[:120]
     old_title = old.title
-    from backend.tools.panel.permission_prompt import approvals_of, restore_approvals
-
-    kept_approvals = approvals_of(old_id)  # "Allow everything" goes to the twin
 
     delete_conversation(old_id, project_root=root)
 
@@ -1514,6 +1516,7 @@ def ducky_recycle_member(
             timeout_sec=0.0 if is_external else max(5.0, min(float(timeout_sec), 900.0)),
             cancel_on_timeout=False,
             parent=parent_id,
+            started_by=kept_starter,
         )
         return tool_json({**base, **outcome}, pretty=pretty)
 
@@ -1523,7 +1526,7 @@ def ducky_recycle_member(
         from backend.agent.a2a_broker import open_thread
 
         response_id = open_thread(caller, new_conv.id, deliver_result=True)
-    run_message(new_conv.id, spawn_text, mode_norm, "", parent=parent_id)
+    run_message(new_conv.id, spawn_text, mode_norm, "", parent=parent_id, started_by=kept_starter)
     return tool_json({**base, "status": "running", "response_id": response_id}, pretty=pretty)
 
 
@@ -1720,14 +1723,16 @@ def ducky_terminal_run(
     mgr = _terminal_manager()
     auto = False
     chat = _terminal_chat(conv_id)
-    from backend.tools.panel.permission_prompt import _never_runs, _project_root, allows_everything
+    from backend.tools.panel.permission_prompt import _never_runs, _project_root, allows_everything, note_shell_dir, shell_dir
 
+    shell = f"term:{session_id.strip()}"
     if chat and allows_everything(chat):
         session = mgr.get_session(session_id.strip())
-        refused = _never_runs(command, getattr(session, "cwd", "") or _project_root())
+        refused = _never_runs(command, getattr(session, "cwd", "") or _project_root(), shell_dir(shell))
         if refused:
             return tool_json({"ok": False, "error": refused}, pretty=pretty)
         auto = True
+    note_shell_dir(shell, command)
     result = mgr.run_agent_command(
         session_id.strip(),
         command,

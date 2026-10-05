@@ -161,10 +161,10 @@ def respond(request_id: str, payload: dict[str, Any]) -> bool:
     """Deliver the panel's answer. Returns ``False`` if the id is unknown/expired."""
     with _lock:
         slot = _pending.get(request_id)
-    if slot is None:
-        return False
-    slot.result = dict(payload or {})
-    slot.event.set()
+        if slot is None or slot.event.is_set():
+            return False  # first answer wins: another window's late close can't overwrite it
+        slot.result = dict(payload or {})
+        slot.event.set()
     return True
 
 

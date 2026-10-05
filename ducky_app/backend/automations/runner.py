@@ -1534,6 +1534,7 @@ def _run_message_and_wait(
     timeout_sec: float,
     parent: str = "",
     attachments: list[dict[str, Any]] | None = None,
+    started_by: str | None = None,
 ) -> dict[str, Any]:
     from frontend.ui_web.agent_modes import run_message_and_wait
 
@@ -1546,6 +1547,7 @@ def _run_message_and_wait(
             timeout_sec=timeout_sec,
             parent=parent,
             attachments=attachments,
+            started_by=started_by,
         )
         or {}
     )
@@ -1734,6 +1736,8 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
             _bare_model(str(cfg.get("model") or kwargs.get("model") or "")),
             timeout_sec=timeout,
             parent="" if existing else caller,
+            # A seat this run made or reused: covered by the chat that ran the workflow only.
+            started_by=None if existing else caller,
             attachments=_files_as_attachments(incoming),
         )
     finally:

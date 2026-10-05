@@ -74,10 +74,15 @@ _ANY_PLUGIN_RE = re.compile(r"uefn-plugin-[\w-]+", re.IGNORECASE)
 # Changes something remote: a push in any form, a GitHub repo / release / PR, a publish.
 _REMOTE_CHANGE_RE = re.compile(
     r"\bgit(?:\.exe)?\b[^;&|\n]*\spush\b|--push\b|\bgh\s+(?:repo\s+(?:create|edit|sync)|release|pr\s+(?:create|merge))\b"
-    r"|\b(?:npm|pnpm|yarn)\s+publish\b|\btwine\s+upload\b|--publish\b|\bpublish\w*\.py\b",
+    r"|\bgh\s+(?:api|workflow\s+run)\b|\b(?:npm|pnpm|yarn)\s+publish\b|\btwine\s+upload\b|--publish\b|\bpublish\w*\.py\b",
     re.IGNORECASE,
 )
-_QUOTED_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
+# A quoted commit message or search pattern is no action ("no publish step", --grep "push");
+# other quoted text is (bash -c "git push", powershell -Command "...").
+_MESSAGE_ARG_RE = re.compile(r"(?:\s-[a-z]*m|\s--message|\s--grep|\s--regexp|\s-e)(?:\s+|=)(?:\"[^\"]*\"|'[^']*')", re.IGNORECASE)
+# A folder change the shell keeps for the next command (cd, pushd, Set-Location).
+_CD_RE = re.compile(r"(?:^|[;&|(]\s*)(?:cd|chdir|pushd|set-location|sl)\s+(\"[^\"]+\"|'[^']+'|[^\s;&|)]+)", re.IGNORECASE)
+_SHELL_DIRS: dict[str, str] = {}
 _CHAIN_RE = re.compile(r"(;|&&|\|\||\||`|\$\(|>|<|\n)")
 
 
@@ -321,11 +326,25 @@ def _holds_local_only_plugin(root: str) -> bool:
         return False
 
 
-def _never_runs(command: str, project_root: str) -> str:
-    """Refused even under "allow everything": pushing or publishing a local-only AI plugin."""
-    if not _REMOTE_CHANGE_RE.search(_QUOTED_RE.sub(" ", command)):  # a quoted message or pattern is no action
+def note_shell_dir(shell: str, command: str) -> None:
+    """Remember where a shell's `cd` left it: the next command runs there."""
+    for match in _CD_RE.finditer(command or ""):
+        target = match.group(1).strip("\"'")
+        before = _SHELL_DIRS.get(shell, "")
+        absolute = os.path.isabs(target) or target.startswith(("/", "~")) or bool(re.match(r"^[a-z]:", target, re.I))
+        _SHELL_DIRS[shell] = target if absolute or not before else f"{before}/{target}"
+
+
+def shell_dir(shell: str) -> str:
+    return _SHELL_DIRS.get(shell, "")
+
+
+def _never_runs(command: str, project_root: str, shell_cwd: str = "") -> str:
+    """Refused even under "allow everything": pushing or publishing a local-only AI plugin.
+    shell_cwd: where an earlier `cd` left this shell (the push may name no folder)."""
+    if not _REMOTE_CHANGE_RE.search(_MESSAGE_ARG_RE.sub(" ", command)):
         return ""
-    if _LOCAL_ONLY_PLUGIN_RE.search(f"{command} {project_root}"):
+    if _LOCAL_ONLY_PLUGIN_RE.search(f"{command} {project_root} {shell_cwd}"):
         return "This is a local-only AI plugin: it is never pushed or published. Leave it on this PC."
     if project_root and not _ANY_PLUGIN_RE.search(command) and _holds_local_only_plugin(project_root):
         # A folder of plugins: an earlier `cd` may have left the shell inside a local-only one.
@@ -460,14 +479,22 @@ def decide(tool_name: str, tool_input: dict[str, Any], *, conv_id: str = "", pro
         return {"behavior": "allow", "updatedInput": tool_input}
     card = describe(tool_name, tool_input, project_root=project_root)
     rule = str(card.get("rule") or "")
+    shell = (tool_name or "").strip() in _SHELL_TOOLS
+    command = _command_of(tool_input) if shell else ""
     if allows_everything(conv_id):
-        refused = _never_runs(_command_of(tool_input), project_root) if (tool_name or "").strip() in _SHELL_TOOLS else ""
+        refused = _never_runs(command, project_root, shell_dir(f"chat:{conv_id}")) if shell else ""
         if refused:
             return {"behavior": "deny", "message": refused}
+        if shell:
+            note_shell_dir(f"chat:{conv_id}", command)
         return {"behavior": "allow", "updatedInput": tool_input}
     if not card.get("risky") and rule and rule in _rules(conv_id):
+        if shell:
+            note_shell_dir(f"chat:{conv_id}", command)
         return {"behavior": "allow", "updatedInput": tool_input}
     answer, note = _ask(card, tool_name or "tool")
+    if shell and answer in (_ALLOW_ALL, _ALLOW_ALWAYS, _ALLOW_ONCE):
+        note_shell_dir(f"chat:{conv_id}", command)
     if answer == _ALLOW_ALL:
         _remember(conv_id, _ALL_RULE)
         return {"behavior": "allow", "updatedInput": tool_input}
