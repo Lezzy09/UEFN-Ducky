@@ -209,6 +209,20 @@ def test_second_call_in_allowed_chat_skips_the_question(monkeypatch):
     assert conv.web_fetch_urls == ["https://example.com/ref"]
 
 
+def test_allow_everything_in_the_chat_covers_web_search(monkeypatch):
+    conv = _Conv()
+    conv.id = "c-all"
+    conv.web_access_allowed = False
+    monkeypatch.setattr("backend.tools.panel.permission_prompt.allows_everything", lambda cid: cid == "c-all")
+    assert web.permission_block(conv, "ask") is None
+    conv.web_access_denied = True  # an explicit "Don't search" in this chat still wins
+    assert web.permission_block(conv, "ask")["error"] == "Web search is off for this chat."
+    conv.web_access_denied = False
+    assert web.permission_block(conv, "off")["error"] == "Web search is turned off."
+    conv.id = "other"
+    assert web.permission_block(conv, "ask")["need_permission"] is True
+
+
 def test_web_search_asks_then_searches(monkeypatch):
     calls = {"n": 0}
 

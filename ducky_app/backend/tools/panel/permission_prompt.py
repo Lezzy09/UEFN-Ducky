@@ -10,9 +10,11 @@ Claude Code with ``{"behavior": "allow", "updatedInput": ...}`` or
 
 Reads (Read/Glob/Grep/LS) never ask. "Always allow <command> in this chat" is remembered for
 the chat (its own ``workspace_state`` row, so saving the chat can't drop it) for plain commands only; a command chained with
-``;``/``&&``/``|`` or spanning lines is never remembered on its own. "Allow everything in
-this chat" (rule ``*``) covers all of them. Pushes, force/reset/clean, deletes, PR/release
-actions and build/publish/deploy scripts ask every time, whatever was remembered.
+``;``/``&&``/``|`` or spanning lines is never remembered on its own, and pushes, force/reset/
+clean, deletes, PR/release actions and build/publish/deploy scripts are never remembered that
+way. "Allow everything in this chat" (rule ``*``) stops every card in that chat and in the
+chats it starts (sub-agents, group members, workflow duckies), those too. The one thing it
+never runs: a push or publish of a local-only AI plugin (the owner's rule), which is refused.
 """
 
 from __future__ import annotations
@@ -125,7 +127,8 @@ def describe(tool_name: str, tool_input: dict[str, Any], *, project_root: str = 
         reason = _risk(command)
         chained = bool(_CHAIN_RE.search(command))
         warning = reason
-        if _LOCAL_ONLY_PLUGIN_RE.search(f"{command} {project_root}") and re.search(r"\bgit\s+push\b|publish", command, re.IGNORECASE):
+        local_only = bool(_never_runs(command, project_root))
+        if local_only:
             warning = "This is a local-only AI plugin. It must never be pushed or published."
         key = "" if reason or chained or not command else f"{name}:{_command_key(command)}"
         desc = str(tool_input.get("description") or "").strip()
@@ -134,6 +137,7 @@ def describe(tool_name: str, tool_input: dict[str, Any], *, project_root: str = 
             "detail": command or "(empty command)",
             "warning": warning,
             "risky": bool(reason) or not command,
+            "local_only": local_only,
             "rule": key,
             "rule_label": _command_key(command) if key else "",
         }
@@ -213,6 +217,42 @@ def _rules(conv_id: str) -> list[str]:
     return list(getattr(conv, "agent_allow_rules", None) or []) if conv is not None else []
 
 
+def _started_by(conv_id: str) -> str:
+    """The chat that started this one: a sub-agent's parent, a group member's leader."""
+    doc: dict[str, Any] | None = None
+    try:
+        from backend.store.repos import chats
+
+        doc = chats.conv_get(conv_id, with_messages=False)
+    except Exception:
+        doc = None
+    if doc is None:
+        conv = _load_conv(conv_id)
+        if conv is None:
+            return ""
+        doc = {"parent_conv_id": getattr(conv, "parent_conv_id", ""), "leader_conv_id": getattr(conv, "leader_conv_id", "")}
+    return str(doc.get("parent_conv_id") or doc.get("leader_conv_id") or "").strip()
+
+
+def allows_everything(conv_id: str) -> bool:
+    """"Allow everything" was picked in this chat, or in a chat that started it."""
+    seen: list[str] = []
+    cid = (conv_id or "").strip()
+    while cid and cid not in seen and len(seen) < 8:
+        if _ALL_RULE in _rules(cid):
+            return True
+        seen.append(cid)
+        cid = _started_by(cid)
+    return False
+
+
+def _never_runs(command: str, project_root: str) -> str:
+    """Refused even under "allow everything": pushing or publishing a local-only AI plugin."""
+    if _LOCAL_ONLY_PLUGIN_RE.search(f"{command} {project_root}") and re.search(r"\bgit\s+push\b|publish", command, re.IGNORECASE):
+        return "This is a local-only AI plugin: it is never pushed or published. Leave it on this PC."
+    return ""
+
+
 def _remember(conv_id: str, rule: str) -> None:
     if not conv_id or not rule:
         return
@@ -253,12 +293,12 @@ def _ask(card: dict[str, Any], tool_name: str) -> tuple[str, str]:
                 "description": "Don't ask again for this in this chat.",
             }
         )
-    if not card.get("risky"):
+    if not card.get("local_only"):
         options.append(
             {
                 "id": _ALLOW_ALL,
                 "label": "Allow everything in this chat",
-                "description": "Stop asking in this chat. Pushes, deletes, force, publish and deploy still ask.",
+                "description": "Never ask again in this chat or the agents it starts: pushes, deletes and publishes run too.",
             }
         )
     options.append({"id": _DENY, "label": "Deny", "description": "Don't run it. The agent is told you said no."})
@@ -297,8 +337,12 @@ def decide(tool_name: str, tool_input: dict[str, Any], *, conv_id: str = "", pro
         return {"behavior": "allow", "updatedInput": tool_input}
     card = describe(tool_name, tool_input, project_root=project_root)
     rule = str(card.get("rule") or "")
-    remembered = _rules(conv_id)
-    if not card.get("risky") and (_ALL_RULE in remembered or (rule and rule in remembered)):
+    if allows_everything(conv_id):
+        refused = _never_runs(_command_of(tool_input), project_root) if (tool_name or "").strip() in _SHELL_TOOLS else ""
+        if refused:
+            return {"behavior": "deny", "message": refused}
+        return {"behavior": "allow", "updatedInput": tool_input}
+    if not card.get("risky") and rule and rule in _rules(conv_id):
         return {"behavior": "allow", "updatedInput": tool_input}
     answer, note = _ask(card, tool_name or "tool")
     if answer == _ALLOW_ALL:

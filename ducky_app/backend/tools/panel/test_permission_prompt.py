@@ -66,7 +66,7 @@ def test_risky_commands_never_offer_always(monkeypatch, conv, command: str) -> N
     asked = _answer(monkeypatch, ["once"])
     assert pp.decide("Bash", {"command": command}, conv_id="c1")["behavior"] == "allow"
     ids = [o["id"] for o in asked[0]["questions"][0]["options"]]
-    assert ids == ["once", "deny"]
+    assert ids == ["once", "all", "deny"]  # never "always <this>", but Allow everything is offered
     assert pp._rules("c1") == []
 
 
@@ -86,7 +86,7 @@ def test_chained_commands_offer_only_allow_everything(monkeypatch, conv, command
     assert pp._rules("c1") == []
 
 
-def test_allow_everything_stops_asking_except_risky(monkeypatch, conv) -> None:
+def test_allow_everything_never_asks_again(monkeypatch, conv) -> None:
     script = 'py -3 -c "\nimport json\nd=json.load(open(r\'C:/x.txt\'))\nprint(list(d.keys()))\n"'
     asked = _answer(monkeypatch, ["all"])
     assert pp.decide("Bash", {"command": script}, conv_id="c1")["behavior"] == "allow"
@@ -99,19 +99,39 @@ def test_allow_everything_stops_asking_except_risky(monkeypatch, conv) -> None:
         ("WebFetch", {"url": "https://example.com"}),
     ):
         assert pp.decide(tool, payload, conv_id="c1")["behavior"] == "allow"
+    # Pushes, deletes, publishes and deploys too: the person said everything.
+    for command in ("git push origin main", "rm -rf build", "py scripts/release.py --publish", "git reset --hard HEAD~1"):
+        assert pp.decide("Bash", {"command": command}, conv_id="c1")["behavior"] == "allow"
     assert asked == []
-    # Risky still asks.
-    _answer(monkeypatch, ["deny"])
-    assert pp.decide("Bash", {"command": "git push origin main"}, conv_id="c1")["behavior"] == "deny"
 
 
-def test_risky_command_is_never_auto_allowed_even_if_remembered(monkeypatch, conv) -> None:
-    for rule in ("Bash:git push", "*"):
-        pp._remember("c1", rule)
+def test_a_remembered_command_rule_never_covers_a_risky_command(monkeypatch, conv) -> None:
+    pp._remember("c1", "Bash:git push")
     asked = _answer(monkeypatch, ["deny"])
-    out = pp.decide("Bash", {"command": "git push"}, conv_id="c1")
-    assert out["behavior"] == "deny"
-    assert asked, "a push must always show the card"
+    assert pp.decide("Bash", {"command": "git push"}, conv_id="c1")["behavior"] == "deny"
+    assert asked, "only Allow everything stops the card for a push"
+
+
+def test_allow_everything_still_refuses_to_push_a_local_only_ai_plugin(monkeypatch, conv) -> None:
+    pp._remember("c1", "*")
+    asked = _answer(monkeypatch, ["once"])
+    out = pp.decide("Bash", {"command": "git push"}, conv_id="c1", project_root=r"C:\GitHub\uefn-plugins\uefn-plugin-anthropic")
+    assert out["behavior"] == "deny" and "local-only AI plugin" in out["message"]
+    assert asked == []
+    assert pp.decide("Bash", {"command": "git status"}, conv_id="c1",
+                     project_root=r"C:\GitHub\uefn-plugins\uefn-plugin-anthropic")["behavior"] == "allow"
+
+
+def test_allow_everything_covers_the_agents_a_chat_starts(monkeypatch, conv) -> None:
+    family = {"sub": {"parent_conv_id": "lead"}, "member": {"leader_conv_id": "sub"}, "loop-a": {"parent_conv_id": "loop-b"},
+              "loop-b": {"parent_conv_id": "loop-a"}}
+    monkeypatch.setattr("backend.store.repos.chats.conv_get", lambda cid, **_k: family.get(cid))
+    pp._remember("lead", "*")
+    assert pp.allows_everything("lead") and pp.allows_everything("sub") and pp.allows_everything("member")
+    assert not pp.allows_everything("loop-a") and not pp.allows_everything("stranger") and not pp.allows_everything("")
+    asked = _answer(monkeypatch, ["deny"])
+    assert pp.decide("Bash", {"command": "npm test && git push"}, conv_id="member")["behavior"] == "allow"
+    assert asked == []
 
 
 @pytest.mark.parametrize("tool", ["Read", "Glob", "Grep", "LS"])
@@ -137,6 +157,7 @@ def test_push_in_local_only_ai_plugin_warns(monkeypatch, conv) -> None:
     asked = _answer(monkeypatch, ["deny"])
     pp.decide("Bash", {"command": "git push"}, conv_id="c1", project_root=r"C:\GitHub\uefn-plugins\uefn-plugin-anthropic")
     assert "local-only AI plugin" in asked[0]["questions"][0]["warning"]
+    assert [o["id"] for o in asked[0]["questions"][0]["options"]] == ["once", "deny"]  # no Allow everything here
 
 
 def test_panel_unreachable_denies(monkeypatch, conv) -> None:

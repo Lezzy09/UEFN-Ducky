@@ -594,6 +594,16 @@ def _save_conv(conv: Any) -> None:
     save_conversation(conv)
 
 
+def _allows_everything(conv: Any) -> bool:
+    """"Allow everything in this chat" on an approval card covers web search too."""
+    try:
+        from backend.tools.panel.permission_prompt import allows_everything
+
+        return allows_everything(str(getattr(conv, "id", "") or ""))
+    except Exception:
+        return False
+
+
 def permission_block(conv: Any, mode: str, *, granted: bool = False) -> dict[str, Any] | None:
     if mode == "off":
         return {"ok": False, "error": "Web search is turned off."}
@@ -605,7 +615,7 @@ def permission_block(conv: Any, mode: str, *, granted: bool = False) -> dict[str
         return {"ok": False, "error": "No chat is open for web search."}
     if getattr(conv, "web_access_denied", False):
         return {"ok": False, "error": "Web search is off for this chat."}
-    if not getattr(conv, "web_access_allowed", False):
+    if not getattr(conv, "web_access_allowed", False) and not _allows_everything(conv):
         return {
             "ok": False,
             "need_permission": True,
