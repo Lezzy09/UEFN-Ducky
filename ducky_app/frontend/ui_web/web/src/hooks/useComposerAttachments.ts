@@ -166,14 +166,30 @@ export function useComposerAttachments(
 
   const hasPendingVideos = attachments.some((a) => a.kind === "video" && a.status !== "ready");
 
-  const removeAttachment = useCallback((id: string) => {
-    setAttachments((prev) => {
-      const gone = prev.find((a) => a.id === id);
-      if (gone?.kind === "video" && gone.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(gone.previewUrl);
-      return prev.filter((a) => a.id !== id);
-    });
-    filesRef.current.delete(id);
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+
+  /** Revoke blob previews and forget the staged File of dropped video attachments. */
+  const releaseVideos = useCallback((dropped: ComposerAttachment[]) => {
+    for (const a of dropped) {
+      if (a.kind !== "video") continue;
+      if (a.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(a.previewUrl);
+      filesRef.current.delete(a.id);
+    }
   }, []);
+
+  useEffect(() => {
+    const files = filesRef.current;
+    return () => {
+      releaseVideos(attachmentsRef.current);
+      files.clear();
+    };
+  }, [releaseVideos]);
+
+  const removeAttachment = useCallback((id: string) => {
+    releaseVideos(attachmentsRef.current.filter((a) => a.id === id));
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }, [releaseVideos]);
 
   /** Replace an image attachment's pixels (e.g. after drawing annotations on it). */
   const updateAttachmentImage = useCallback((id: string, dataUrl: string) => {
@@ -183,9 +199,10 @@ export function useComposerAttachments(
   }, []);
 
   const clearAttachments = useCallback(() => {
+    releaseVideos(attachmentsRef.current);
     setAttachments([]);
     setError("");
-  }, []);
+  }, [releaseVideos]);
 
   /** Restore queued payloads without re-reading files or losing the current draft. */
   const restoreAttachments = useCallback((items: MessageAttachmentDto[]) => {
@@ -196,9 +213,10 @@ export function useComposerAttachments(
 
   /** Tab restore: overwrite, do not append onto leftover chips. */
   const replaceAttachments = useCallback((items: MessageAttachmentDto[]) => {
+    releaseVideos(attachmentsRef.current);
     setAttachments(composerAttachmentsFromDto(items));
     setError("");
-  }, []);
+  }, [releaseVideos]);
 
   const addFiles = useCallback(
     async (

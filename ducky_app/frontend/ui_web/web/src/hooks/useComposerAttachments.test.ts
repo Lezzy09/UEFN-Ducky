@@ -134,3 +134,55 @@ describe("video attachments", () => {
     expect(result.current.toApiAttachments()).toEqual([dto]);
   });
 });
+
+describe("video preview release", () => {
+  let counter = 0;
+  let revoke: ReturnType<typeof vi.fn>;
+  const origCreate = URL.createObjectURL;
+  const origRevoke = URL.revokeObjectURL;
+
+  beforeEach(() => {
+    counter = 0;
+    revoke = vi.fn();
+    URL.createObjectURL = (() => `blob:x-${++counter}`) as never;
+    URL.revokeObjectURL = revoke as never;
+    vi.mocked(getApi).mockReturnValue({
+      stage_video_attachment: vi.fn().mockResolvedValue({ ok: true, staged_id: "s.mp4", size_bytes: 1, needs_ffmpeg: false }),
+    } as never);
+  });
+  afterEach(() => {
+    URL.createObjectURL = origCreate;
+    URL.revokeObjectURL = origRevoke;
+  });
+
+  const vid = (n: string) => new File([new Uint8Array([1])], n, { type: "video/mp4" });
+
+  it("revokes the blob URL on clearAttachments", async () => {
+    const { result } = renderHook(() => useComposerAttachments([], { convId: "c1" }));
+    await act(async () => { await result.current.addFiles([vid("a.mp4")]); });
+    act(() => result.current.clearAttachments());
+    expect(revoke).toHaveBeenCalledWith("blob:x-1");
+  });
+
+  it("revokes on replaceAttachments", async () => {
+    const { result } = renderHook(() => useComposerAttachments([], { convId: "c1" }));
+    await act(async () => { await result.current.addFiles([vid("a.mp4")]); });
+    act(() => result.current.replaceAttachments([]));
+    expect(revoke).toHaveBeenCalledWith("blob:x-1");
+  });
+
+  it("revokes remaining previews on unmount", async () => {
+    const { result, unmount } = renderHook(() => useComposerAttachments([], { convId: "c1" }));
+    await act(async () => { await result.current.addFiles([vid("a.mp4")]); });
+    unmount();
+    expect(revoke).toHaveBeenCalledWith("blob:x-1");
+  });
+
+  it("removing one of two videos revokes only that one", async () => {
+    const { result } = renderHook(() => useComposerAttachments([], { convId: "c1" }));
+    await act(async () => { await result.current.addFiles([vid("a.mp4"), vid("b.mp4")]); });
+    act(() => result.current.removeAttachment(result.current.attachments[1].id));
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(revoke).toHaveBeenCalledWith("blob:x-2");
+  });
+});
