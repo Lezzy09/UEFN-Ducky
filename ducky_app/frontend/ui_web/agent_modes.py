@@ -1225,6 +1225,8 @@ def _note_run_starter(conv_id: str, parent: str, started_by: str | None) -> None
 
 def _backfill_video_frames(conv: Any, conv_id: str, provider: str, external: bool, push: Any, project_root: Any) -> None:
     """Give earlier videos frames when the current recipient can't take them natively."""
+    if external:
+        return  # coding agents only ever get the latest message's files, never history frames
     if not any(
         isinstance(m, dict)
         and m.get("role") == "user"
