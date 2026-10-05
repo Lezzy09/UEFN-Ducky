@@ -325,7 +325,7 @@ def test_pipeline_agent_waits_and_keeps_files(monkeypatch):
         lambda p: {"ducky_style": "artist", "ducky_name": "Artist", "profile_id": "artist"},
     )
 
-    def fake_wait(conv_id, text, mode, model, *, timeout_sec, parent="", attachments=None):
+    def fake_wait(conv_id, text, mode, model, *, timeout_sec, parent="", attachments=None, started_by=None):
         dest = chat_dir(conv_id) / "out.png"
         dest.write_bytes(b"png")
         fake_wait.attachments = attachments
@@ -541,7 +541,7 @@ def test_pipeline_agent_forwards_image_attachments(monkeypatch, tmp_path):
 
     seen = {}
 
-    def fake_wait(conv_id, text, mode, model, *, timeout_sec, parent="", attachments=None):
+    def fake_wait(conv_id, text, mode, model, *, timeout_sec, parent="", attachments=None, started_by=None):
         seen["attachments"] = attachments
         return {"status": "done", "assistant_text": "saw it", "conv_id": conv_id}
 
