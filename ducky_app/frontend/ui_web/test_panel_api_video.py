@@ -48,3 +48,17 @@ def test_video_settings_accept_auto(monkeypatch):
     assert out["video_frames_per_video"] == 0 and out["max_images_per_message"] == 0
     assert out["auto"] == {"frames_per_video": 20, "max_images_per_message": 20}
     assert api.get_video_settings()["video_frames_per_video"] == 0
+
+
+def test_auto_limits_follow_the_conversation(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr("backend.agent.video.ffmpeg_install.status", lambda: {"state": "missing"})
+    monkeypatch.setattr("backend.agent.model_fetch.get_model_info", lambda p, m: None)
+    monkeypatch.setattr(
+        "frontend.ui_web.project_chats.load_conversation",
+        lambda cid, project_root=None: SimpleNamespace(is_group=False, provider="anthropic", model="claude-x"),
+    )
+    api = PanelApi()
+    assert api.get_video_settings("c1")["auto"] == {"frames_per_video": 20, "max_images_per_message": 100}
+    assert api.get_video_settings()["auto"] == {"frames_per_video": 20, "max_images_per_message": 20}

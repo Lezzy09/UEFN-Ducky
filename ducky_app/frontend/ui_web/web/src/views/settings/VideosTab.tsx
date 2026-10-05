@@ -85,11 +85,13 @@ export function VideosTab() {
   const save = useCallback(async (key: NumericKey) => {
     if (!settings) return;
     const raw = draft[key].trim();
-    const value = Number(raw);
-    if (raw === "" || !Number.isFinite(value)) {
+    const rawValue = Number(raw);
+    if (raw === "" || !Number.isFinite(rawValue)) {
       setDraft((d) => ({ ...d, [key]: String(settings[key]) }));
       return;
     }
+    const field = FIELDS.find((f) => f.key === key);
+    const value = field ? Math.max(field.min, rawValue) : rawValue;
     if (value === settings[key]) return;
     try {
       const next = await getApi()?.set_video_settings?.({ [key]: value });

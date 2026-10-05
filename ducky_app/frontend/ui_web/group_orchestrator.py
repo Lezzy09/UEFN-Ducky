@@ -1008,7 +1008,7 @@ def _persist_group_attachments(
     from frontend.ui_web.conversation_attachments import persist_message_attachments
     from frontend.ui_web.project_chats import get_conversations_dir
 
-    parsed = parse_attachment_dicts(attachments, current=True)
+    parsed = parse_attachment_dicts(attachments, current=True, enforce_image_cap=False)
     if not parsed:
         return []
     settings = PanelSettings.load()

@@ -95,7 +95,8 @@ def _parse_video(raw: dict[str, Any], name: str, mime: str, *, current: bool = F
 
 
 def parse_attachment_dicts(
-    raw_list: list[Any] | None, *, current: bool = False, provider: str = "", model: str = ""
+    raw_list: list[Any] | None, *, current: bool = False, provider: str = "", model: str = "",
+    enforce_image_cap: bool = True,
 ) -> list[MessageAttachment]:
     if not raw_list:
         return []
@@ -110,7 +111,7 @@ def parse_attachment_dicts(
             continue
         if att.kind == "image":
             image_count += 1
-            if current and image_count > max_images:
+            if current and enforce_image_cap and image_count > max_images:
                 raise ValueError(f"At most {max_images} images per message")
         out.append(att)
     return out

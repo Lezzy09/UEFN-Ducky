@@ -2320,7 +2320,7 @@ export interface PanelApi {
     needs_ffmpeg?: boolean;
     ffmpeg?: FfmpegStatusDto;
   }>;
-  get_video_settings?(): Promise<VideoSettingsDto>;
+  get_video_settings?(convId?: string): Promise<VideoSettingsDto>;
   set_video_settings?(patch: Partial<Omit<VideoSettingsDto, "ffmpeg" | "ok">>): Promise<VideoSettingsDto>;
   get_ffmpeg_status?(): Promise<FfmpegStatusDto>;
   install_ffmpeg?(): Promise<FfmpegStatusDto>;

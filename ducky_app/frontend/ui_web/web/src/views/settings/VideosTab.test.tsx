@@ -98,4 +98,13 @@ describe("VideosTab", () => {
     fireEvent.click(autoImages);
     await waitFor(() => expect(api.set_video_settings).toHaveBeenCalledWith({ max_images_per_message: 0 }));
   });
+
+  it("clamps a typed 0 to the field minimum instead of storing Auto", async () => {
+    const api = mockApi();
+    render(<VideosTab />);
+    const frames = await screen.findByLabelText("Frames per video");
+    fireEvent.change(frames, { target: { value: "0" } });
+    fireEvent.blur(frames);
+    await waitFor(() => expect(api.set_video_settings).toHaveBeenCalledWith({ video_frames_per_video: 1 }));
+  });
 });

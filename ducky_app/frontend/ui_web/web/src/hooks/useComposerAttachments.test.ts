@@ -203,4 +203,11 @@ describe("composerAttachmentsFromDto videos", () => {
     ]);
     expect(a).toMatchObject({ status: "ready", stagedId: "x.mp4" });
   });
+
+  it("asks for the settings of its own conversation", async () => {
+    const settings = vi.fn().mockResolvedValue({ video_max_mb: 100, video_frames_per_video: 0, max_images_per_message: 0, auto: { frames_per_video: 20, max_images_per_message: 100 } });
+    vi.mocked(getApi).mockReturnValue({ get_video_settings: settings } as never);
+    renderHook(() => useComposerAttachments([], { convId: "c9" }));
+    await vi.waitFor(() => expect(settings).toHaveBeenCalledWith("c9"));
+  });
 });

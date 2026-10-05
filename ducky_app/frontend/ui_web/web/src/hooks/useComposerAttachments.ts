@@ -94,11 +94,11 @@ export function useComposerAttachments(
 
   useEffect(() => {
     let alive = true;
-    void getApi()?.get_video_settings?.().then((s) => {
+    void getApi()?.get_video_settings?.(hookOpts.convId ?? "").then((s) => {
       if (alive && s) setLimits({ maxImages: s.max_images_per_message || s.auto?.max_images_per_message || DEFAULT_MAX_IMAGES, videoMaxMb: s.video_max_mb });
     }).catch(() => undefined);
     return () => { alive = false; };
-  }, []);
+  }, [hookOpts.convId]);
 
   const patchVideo = useCallback((id: string, patch: Partial<Extract<ComposerAttachment, { kind: "video" }>>) => {
     setAttachments((prev) => prev.map((a) => (a.id === id && a.kind === "video" ? { ...a, ...patch } : a)));

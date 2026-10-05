@@ -22,7 +22,7 @@ class PanelApiVideoMixin:
         ff = ffmpeg_install.start_install() if needs else ffmpeg_install.status()
         return {"ok": True, **staged, "needs_ffmpeg": needs, "ffmpeg": ff}
 
-    def get_video_settings(self) -> dict[str, Any]:
+    def get_video_settings(self, conv_id: str = "") -> dict[str, Any]:
         from backend.agent.video import ffmpeg_install
         from backend.agent.video import limits as L
         from backend.agent.video.limits import video_limits
@@ -38,10 +38,7 @@ class PanelApiVideoMixin:
             "max_images_per_message": L.clamp_auto(
                 getattr(s, "max_images_per_message", 0), *L.MAX_IMAGES_PER_MESSAGE_RANGE, 0
             ),
-            "auto": {
-                "frames_per_video": min(L.AUTO_FRAMES_CAP, L.DEFAULT_IMAGE_MAX),
-                "max_images_per_message": L.DEFAULT_IMAGE_MAX,
-            },
+            "auto": _auto_limits(str(conv_id or "").strip()),
             "ffmpeg": ffmpeg_install.status(),
         }
 
@@ -96,3 +93,17 @@ def _video_needs_ffmpeg(conv_id: str, staged: dict[str, Any]) -> bool:
         external=external,
         model=str(getattr(conv, "model", "") or ""),
     )
+
+
+def _auto_limits(conv_id: str) -> dict[str, int]:
+    """What Auto resolves to: the chat's provider/model when known, else provider-agnostic."""
+    from backend.agent.video.limits import AUTO_FRAMES_CAP, request_image_max
+    from frontend.ui_web import project_chats
+
+    provider = model = ""
+    conv = project_chats.load_conversation(conv_id) if conv_id else None
+    if conv is not None and not getattr(conv, "is_group", False):
+        provider = str(getattr(conv, "provider", "") or "")
+        model = str(getattr(conv, "model", "") or "")
+    rmax = request_image_max(provider, model)
+    return {"frames_per_video": min(AUTO_FRAMES_CAP, rmax), "max_images_per_message": rmax}
