@@ -91,6 +91,7 @@ def _parse_video(raw: dict[str, Any], name: str, mime: str, *, current: bool = F
         file_path=str(path),
         size_bytes=size,
         frames=frames,
+        transcript=str(raw.get("transcript") or "")[:200_000],
     )
 
 
@@ -211,7 +212,10 @@ def prepare_outgoing_user_message(
                 }
             )
         elif a.kind == "video":
-            stored.append({"kind": "video", "name": a.name, "mime": a.mime, "size_bytes": a.size_bytes})
+            row = {"kind": "video", "name": a.name, "mime": a.mime, "size_bytes": a.size_bytes}
+            if a.transcript:
+                row["transcript"] = a.transcript
+            stored.append(row)
     if path_hints:
         content = (content + "\n\n" if content else "") + "\n".join(path_hints)
     return content, stored

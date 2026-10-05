@@ -26,6 +26,9 @@ def _setup(tmp_path, monkeypatch):
         return out
 
     monkeypatch.setattr(send, "extract_frames", fake_extract)
+    from backend.agent.video.audio import TranscriptResult
+
+    monkeypatch.setattr(send, "transcribe_video", lambda path: TranscriptResult("", "No audio track"))
     row = {"kind": "video", "name": "bug.mp4", "mime": "video/mp4", "path": "attachments/1_0_bug.mp4", "size_bytes": 1}
     return conv_dir, row, calls
 
@@ -64,6 +67,7 @@ def test_runtime_dict_uses_absolute_paths(tmp_path, monkeypatch):
     assert out == {
         "kind": "video", "name": "bug.mp4", "mime": "video/mp4",
         "abs_path": str(conv_dir / "attachments/1_0_bug.mp4"),
+        "transcript": "",
         "frames": [{"abs_path": str(conv_dir / "attachments/f.jpg"), "t_s": 1.5}],
     }
 
@@ -108,6 +112,7 @@ def test_backfill_skips_gemini(tmp_path, monkeypatch):
 def test_backfill_skips_existing_frames(tmp_path, monkeypatch):
     conv_dir, row, calls = _setup(tmp_path, monkeypatch)
     row["frames"] = [{"path": "attachments/f.jpg", "t_s": 0.0}]
+    row["transcript_note"] = "No audio track"
     assert send.backfill_history_frames(_hist(row), conv_dir=conv_dir, provider="anthropic", external=False) is False
     assert calls == []
 
@@ -152,3 +157,63 @@ def test_needs_frames_gemini_without_video_support(monkeypatch):
         "backend.agent.model_fetch.get_model_info", lambda p, m: ModelInfo(id=m, supports_video=None)
     )
     assert not needs_frames("video/mp4", 1, provider="gemini", external=False, model="g")
+
+
+def _patch_tr(monkeypatch, result=None):
+    from backend.agent.video.audio import TranscriptResult
+
+    calls = []
+
+    def fake(path):
+        calls.append(path)
+        return result or TranscriptResult("hi there", "")
+
+    monkeypatch.setattr(send, "transcribe_video", fake)
+    return calls
+
+
+def test_prepare_sets_transcript_fields(tmp_path, monkeypatch):
+    conv_dir, row, _ = _setup(tmp_path, monkeypatch)
+    calls = _patch_tr(monkeypatch)
+    statuses = []
+    send.prepare_video_frames([row], conv_dir=conv_dir, provider="anthropic", external=False, push_status=statuses.append)
+    assert row["transcript"] == "hi there" and row["transcript_note"] == ""
+    assert any("Transcribing audio from bug.mp4" in s for s in statuses)
+    send.prepare_video_frames([row], conv_dir=conv_dir, provider="anthropic", external=False)
+    assert len(calls) == 1  # already has transcript_note
+
+
+def test_prepare_skips_transcript_for_gemini_native(tmp_path, monkeypatch):
+    conv_dir, row, _ = _setup(tmp_path, monkeypatch)
+    calls = _patch_tr(monkeypatch)
+    send.prepare_video_frames([row], conv_dir=conv_dir, provider="gemini", external=False)
+    assert calls == [] and "transcript" not in row
+
+
+def test_backfill_sets_transcript(tmp_path, monkeypatch):
+    conv_dir, row, _ = _setup(tmp_path, monkeypatch)
+    _patch_tr(monkeypatch)
+    assert send.backfill_history_frames(_hist(row), conv_dir=conv_dir, provider="anthropic", external=False)
+    assert row["transcript"] == "hi there"
+
+
+def test_backfill_adds_transcript_to_rows_that_already_have_frames(tmp_path, monkeypatch):
+    conv_dir, row, calls = _setup(tmp_path, monkeypatch)
+    row["frames"] = [{"path": "attachments/f.jpg", "t_s": 0.0}]
+    _patch_tr(monkeypatch)
+    assert send.backfill_history_frames(_hist(row), conv_dir=conv_dir, provider="anthropic", external=False) is True
+    assert row["transcript"] == "hi there" and calls == []
+
+
+def test_runtime_dict_carries_transcript(tmp_path, monkeypatch):
+    conv_dir, row, _ = _setup(tmp_path, monkeypatch)
+    row["transcript"] = "yo"
+    assert send.runtime_video_dict(row, conv_dir)["transcript"] == "yo"
+
+
+def test_external_hint_includes_transcript(tmp_path):
+    row = {"kind": "video", "path": "attachments/v.mp4", "transcript": "say cheese"}
+    hint = send.external_video_hint(row, tmp_path)
+    assert hint.startswith(f"Video file: {tmp_path / 'attachments/v.mp4'}")
+    assert hint.splitlines()[1:] == ['Transcript of video:', 'say cheese']
+    assert send.external_video_hint({"kind": "video", "path": "a.mp4"}, tmp_path) == f"Video file: {tmp_path / 'a.mp4'}"

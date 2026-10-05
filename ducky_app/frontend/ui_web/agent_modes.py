@@ -1657,7 +1657,11 @@ def run_message(
             push({"type": "error", "text": str(e), "conv_id": conv_id})
             return ""
         conv_dir_path = conversations_dir / conv_id
-        from backend.agent.video.send import prepare_video_frames, runtime_video_dict
+        from backend.agent.video.send import (
+            external_video_hint,
+            prepare_video_frames,
+            runtime_video_dict,
+        )
 
         if any(r.get("kind") == "video" for r in stored_attachments):
             try:
@@ -1674,7 +1678,7 @@ def run_message(
                 return ""
             if external:
                 hints = [
-                    f"Video file: {conv_dir_path / r['path']}"
+                    external_video_hint(r, conv_dir_path)
                     for r in stored_attachments
                     if r.get("kind") == "video"
                 ]

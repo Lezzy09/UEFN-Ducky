@@ -44,6 +44,10 @@ def _video_note(att: MessageAttachment) -> str:
     return f'[Video "{att.name}" attached but could not be analyzed]'
 
 
+def _transcript_text(att: MessageAttachment) -> str:
+    return f'Transcript of video "{att.name}":\n{att.transcript}'
+
+
 def _omitted_note(att: MessageAttachment) -> str:
     return f'[Video "{att.name}" sent earlier — not re-attached to keep the request small]'
 
@@ -68,6 +72,8 @@ def build_anthropic_user_content(text: str, attachments: list[MessageAttachment]
             blocks.append({"type": "text", "text": _omitted_note(att)})
             continue
         frames = _video_frames(att)
+        if att.transcript:
+            blocks.append({"type": "text", "text": _transcript_text(att)})
         if not frames:
             blocks.append({"type": "text", "text": _video_note(att)})
         for label, raw in frames:
@@ -101,6 +107,8 @@ def build_openai_user_content(text: str, attachments: list[MessageAttachment]) -
             parts.append({"type": "text", "text": _omitted_note(att)})
             continue
         frames = _video_frames(att)
+        if att.transcript:
+            parts.append({"type": "text", "text": _transcript_text(att)})
         if not frames:
             parts.append({"type": "text", "text": _video_note(att)})
         for label, raw in frames:
@@ -134,6 +142,8 @@ def build_gemini_user_parts(text: str, attachments: list[MessageAttachment]) -> 
             except OSError:
                 pass
         frames = _video_frames(att)
+        if att.transcript:
+            parts.append(types.Part.from_text(text=_transcript_text(att)))
         if not frames:
             parts.append(types.Part.from_text(text=_video_note(att)))
         for label, raw in frames:

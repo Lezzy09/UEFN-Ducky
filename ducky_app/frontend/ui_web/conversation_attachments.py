@@ -78,15 +78,16 @@ def persist_message_attachments(
                 shutil.copyfile(att.file_path, full)
             except OSError as exc:
                 raise ValueError(f"Could not save video {att.name!r}: {exc}") from exc
-            out.append(
-                {
-                    "kind": "video",
-                    "name": att.name,
-                    "mime": att.mime,
-                    "path": rel,
-                    "size_bytes": att.size_bytes,
-                }
-            )
+            video_row: dict[str, Any] = {
+                "kind": "video",
+                "name": att.name,
+                "mime": att.mime,
+                "path": rel,
+                "size_bytes": att.size_bytes,
+            }
+            if att.transcript:
+                video_row["transcript"] = att.transcript
+            out.append(video_row)
         elif att.kind == "file":
             full.write_text(att.text or "", encoding="utf-8")
             out.append(

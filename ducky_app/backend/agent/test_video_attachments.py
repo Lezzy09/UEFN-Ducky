@@ -187,3 +187,19 @@ def test_backfill_is_skipped_for_external_agents(monkeypatch):
     agent_modes._backfill_video_frames(conv, "c1", "anthropic", True, lambda _e: None, None)
     with pytest.raises(AssertionError):
         agent_modes._backfill_video_frames(conv, "c1", "anthropic", False, lambda _e: None, None)
+
+
+def test_transcript_round_trips_through_parse_persist_hydrate(tmp_path):
+    raw = dict(_staged(b"0123456789", "clip.mp4"), transcript="hello")
+    att = parse_attachment_dict(raw)
+    assert att.transcript == "hello"
+    rows = persist_message_attachments("conv1", 2.5, [att], tmp_path)
+    assert rows[0]["transcript"] == "hello"
+    row = {**rows[0], "transcript_note": ""}
+    hyd = hydrate_attachment_dict(row, "conv1", tmp_path)
+    assert hyd["transcript"] == "hello" and hyd["transcript_note"] == ""
+
+
+def test_transcript_capped_at_200k(tmp_path):
+    att = parse_attachment_dict(dict(_staged(b"0123456789", "clip.mp4"), transcript="x" * 300_000))
+    assert len(att.transcript) == 200_000

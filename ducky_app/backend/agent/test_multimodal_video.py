@@ -101,3 +101,34 @@ def test_omitted_video_is_a_note_in_every_builder(tmp_path, monkeypatch):
     ]
     parts = build_gemini_user_parts("q", [v])
     assert [p.kw for p in parts] == [{"text": "q"}, {"text": _OMITTED}]
+
+
+def _tv(tmp_path, transcript="said hi", **kw):
+    att = _video(tmp_path, **kw)
+    att.transcript = transcript
+    return att
+
+
+def test_transcript_block_precedes_frames_anthropic_and_openai(tmp_path):
+    expect = {"type": "text", "text": 'Transcript of video "bug.mp4":\nsaid hi'}
+    b = build_anthropic_user_content("q", [_tv(tmp_path)])
+    assert b[1] == expect and b[2]["text"].startswith('Video "bug.mp4" — frame 1/2')
+    o = build_openai_user_content("", [_tv(tmp_path)])
+    assert o[0] == expect and o[1]["text"].startswith('Video "bug.mp4" — frame 1/2')
+
+
+def test_no_transcript_block_when_empty_or_omitted(tmp_path):
+    b = build_openai_user_content("", [_tv(tmp_path, transcript="")])
+    assert not any("Transcript" in p.get("text", "") for p in b)
+    att = _tv(tmp_path)
+    att.omitted = True
+    b = build_openai_user_content("", [att])
+    assert not any("Transcript" in p.get("text", "") for p in b)
+
+
+def test_gemini_transcript_for_frames_not_native(tmp_path, monkeypatch):
+    _fake_genai(monkeypatch)
+    parts = build_gemini_user_parts("q", [_tv(tmp_path, size=10**9)])
+    assert parts[1].kw == {"text": 'Transcript of video "bug.mp4":\nsaid hi'}
+    native = build_gemini_user_parts("q", [_tv(tmp_path)])
+    assert not any("Transcript" in p.kw.get("text", "") for p in native)

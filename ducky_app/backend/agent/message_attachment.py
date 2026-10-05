@@ -19,3 +19,5 @@ class MessageAttachment:
     # set by video.budget.apply_media_budget: send frames instead of native bytes / skip entirely
     inline_ok: bool = True
     omitted: bool = False
+    # video only: audio transcript (frame-based recipients only); "" when unavailable
+    transcript: str = ""
