@@ -65,7 +65,7 @@ _TOOL_CAPTURE_RE = re.compile(r"^tool-captures/([A-Za-z0-9._-]+\.(?:png|jpe?g|we
 # backend/automations/files.py so only files the app linked are served.
 _WORKFLOW_MEDIA_RE = re.compile(r"^workflow-media/([0-9a-f]{32})/([A-Za-z0-9_-]+)/[^/]+$")
 _CHAT_ATTACHMENT_RE = re.compile(
-    r"^chat-attachments/([A-Za-z0-9._-]{1,80})/([A-Za-z0-9._-]+\.(?:png|jpe?g|webp))$",
+    r"^chat-attachments/([A-Za-z0-9._-]{1,80})/([A-Za-z0-9._-]+\.(?:png|jpe?g|webp|mp4|webm|mov|mkv))$",
     re.IGNORECASE,
 )
 _GENERATED_IMAGE_RE = re.compile(r"^generated-images/([A-Za-z0-9._-]+\.(?:png|jpe?g|webp))$", re.IGNORECASE)
@@ -444,6 +444,22 @@ def _parse_range_header(range_header: str | None, file_size: int) -> tuple[int, 
         raise ValueError("Unsatisfiable range")
     end = min(end, file_size - 1)
     return start, end
+
+
+def _read_file_range(file_path: Path, range_header: str | None) -> tuple[int, bytes, dict[str, str]]:
+    """Body + status for a file honoring a single ``Range`` (video seeking needs 206)."""
+    size = file_path.stat().st_size
+    try:
+        byte_range = _parse_range_header(range_header, size)
+    except ValueError:
+        return 416, b"", {"Content-Range": f"bytes */{size}"}
+    with file_path.open("rb") as fh:
+        if byte_range is None:
+            return 200, fh.read(), {"Accept-Ranges": "bytes"}
+        start, end = byte_range
+        fh.seek(start)
+        body = fh.read(end - start + 1)
+    return 206, body, {"Accept-Ranges": "bytes", "Content-Range": f"bytes {start}-{end}/{size}"}
 
 
 def verify_panel_dist(dist_root: Path) -> None:
@@ -900,13 +916,15 @@ def start_panel_ui_server(dist_root: Path) -> str:
                         self.send_error(404)
                         return
                     try:
-                        data = file_path.read_bytes()
+                        status, data, extra = _read_file_range(file_path, self.headers.get("Range"))
                     except OSError:
                         self.send_error(404)
                         return
-                    self.send_response(200)
+                    self.send_response(status)
                     self.send_header("Content-Type", media_content_type(file_path))
                     self.send_header("Content-Length", str(len(data)))
+                    for key, value in extra.items():
+                        self.send_header(key, value)
                     self.send_header("Cache-Control", "private, max-age=3600")
                     self.end_headers()
                     self.wfile.write(data)
