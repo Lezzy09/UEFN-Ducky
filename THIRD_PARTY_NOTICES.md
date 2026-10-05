@@ -33,6 +33,17 @@ not affiliated with or endorsed by Epic Games, Inc.
 
 ---
 
+## Downloaded at runtime — not bundled
+
+### FFmpeg
+- **License:** LGPL-2.1-or-later (BtbN `win64-lgpl-shared` build; no GPL components)
+- **Source:** https://github.com/BtbN/FFmpeg-Builds (release `autobuild-2026-08-31-13-27`), FFmpeg source at https://ffmpeg.org
+- **Use:** downloaded into `%LOCALAPPDATA%\UEFN-Ducky\tools\ffmpeg\` only when a chat video needs frames;
+  verified by SHA-256 and run as a separate process (`ffmpeg.exe`, `ffprobe.exe`). The archive's
+  `LICENSE.txt` is kept next to the binaries.
+
+---
+
 ## Bundled dependencies
 
 ### @lore-vcs/sdk
