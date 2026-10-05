@@ -44,13 +44,17 @@ def _copy_prep_siblings(src: Path, dest: Path) -> None:
     """Carry cached frames/transcript files over (renamed to the persisted video's name).
 
     Best-effort: they are only a cache; the send path re-extracts when they are missing."""
+    from backend.agent.video import prep
+
+    if prep.prep_status(src.name)["state"] not in ("ready", "error"):
+        return  # prep still writing: the send path extracts for itself
     try:
         siblings = list(src.parent.glob(glob_escape(src.name) + ".*"))
     except OSError:
         return
     for sib in siblings:
         suffix = sib.name[len(src.name):]
-        if not suffix or suffix.endswith(".audio.mp3"):
+        if not suffix or suffix.endswith((".audio.mp3", ".part.jpg")):
             continue
         try:
             shutil.copyfile(sib, dest.with_name(dest.name + suffix))

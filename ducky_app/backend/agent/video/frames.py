@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import subprocess
 import sys
 import time
@@ -94,18 +95,24 @@ def extract_frames(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise VideoError(too_slow)
+            tmp = path.with_name(path.name + ".part.jpg")  # never a cache hit; replaced on success
             args = [
                 str(ffmpeg), "-nostdin", "-v", "error", "-ss", f"{t:.3f}", "-i", str(video),
                 "-frames:v", "1", "-vf", f"scale='min({max_width},iw)':-2", "-q:v", "3",
-                "-y", str(path),
+                "-y", str(tmp),
             ]
             try:
                 proc = _runner(args, remaining)
             except subprocess.TimeoutExpired as exc:
-                path.unlink(missing_ok=True)
+                tmp.unlink(missing_ok=True)
                 raise VideoError(too_slow) from exc
-            if proc.returncode != 0 or not path.is_file():
-                path.unlink(missing_ok=True)
+            if proc.returncode != 0 or not tmp.is_file():
+                tmp.unlink(missing_ok=True)
                 raise VideoError(f"Cannot read video {video.name!r}.")
+            try:
+                os.replace(tmp, path)
+            except OSError as exc:
+                tmp.unlink(missing_ok=True)
+                raise VideoError(f"Cannot read video {video.name!r}.") from exc
         out.append(Frame(path=path, t_s=t))
     return out

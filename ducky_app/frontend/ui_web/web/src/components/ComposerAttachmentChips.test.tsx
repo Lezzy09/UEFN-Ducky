@@ -48,6 +48,19 @@ describe("video chips", () => {
     expect(screen.queryByTestId("chip-note")).toBeNull();
   });
 
+  it("shows ffmpeg download progress while preparing_ffmpeg", () => {
+    const att = (progress?: number) => (
+      <ComposerAttachmentChips
+        attachments={[{ id: "v1", kind: "video", name: "bug.mp4", mime: "video/mp4", sizeBytes: 1, status: "preparing", ...(progress === undefined ? {} : { progress }), prep: prep({ state: "preparing_ffmpeg", frames_done: 0 }) as never }]}
+        onRemove={() => {}}
+      />
+    );
+    const { rerender } = render(att(0.5));
+    expect(screen.getByText("Preparing ffmpeg… 50%")).toBeTruthy();
+    rerender(att(0));
+    expect(screen.getByText("Preparing ffmpeg…")).toBeTruthy();
+  });
+
   it("shows the transcript note as a secondary line when ready", () => {
     render(chip("ready", { transcript: "none", transcript_note: "No audio track" }));
     const note = screen.getByTestId("chip-note");

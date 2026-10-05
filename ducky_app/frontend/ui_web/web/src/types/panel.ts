@@ -731,7 +731,7 @@ export interface MessageAttachmentDto {
 }
 
 export interface VideoPrepStatusDto {
-  state: "queued" | "extracting" | "transcribing" | "ready" | "error";
+  state: "queued" | "preparing_ffmpeg" | "extracting" | "transcribing" | "ready" | "error";
   frames_done: number;
   frames_total: number;
   transcript: "ok" | "none" | "skipped";

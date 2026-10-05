@@ -6,6 +6,7 @@ import threading
 from typing import Any
 
 from backend.agent.video import audio, frames
+from backend.agent.video.ffmpeg_install import FfmpegInstallError, ensure_installed
 from backend.agent.video.frames import VideoError
 from backend.agent.video.staging import resolve_staged
 
@@ -61,6 +62,11 @@ def _run(staged_id: str) -> None:
             with _lock:
                 job = _jobs[staged_id]
                 n, transcribe, path = job["frames_total"], job["transcribe"], job["path"]
+            _set(staged_id, state="preparing_ffmpeg")
+            try:
+                ensure_installed()
+            except FfmpegInstallError as exc:
+                raise VideoError(str(exc)) from exc
             _set(staged_id, state="extracting")
             got = frames.extract_frames(path, n)
             _set(staged_id, frames_done=len(got), frames_total=len(got))
@@ -80,28 +86,31 @@ def _run(staged_id: str) -> None:
 
 
 def _launch(staged_id: str, frames_n: int, transcribe: bool) -> dict[str, Any]:
+    """Insert the job and claim the launch under one lock; concurrent callers get the existing status."""
     try:
         path = resolve_staged(staged_id)
+        err = ""
     except VideoError as exc:
-        job = _new_job(frames_n, transcribe)
-        job.update(state="error", error=str(exc))
-        with _lock:
-            _jobs[staged_id] = job
-            return _public(job)
+        path, err = None, str(exc)
     job = _new_job(frames_n, transcribe)
     job["path"] = path
+    if err:
+        job.update(state="error", error=err)
     with _lock:
+        cur = _jobs.get(staged_id)
+        if cur is not None and cur["state"] != "error":
+            return _public(dict(cur))
         _jobs[staged_id] = job
-    threading.Thread(target=_run, args=(staged_id,), name=f"video-prep-{staged_id[:8]}", daemon=True).start()
-    return prep_status(staged_id)
+        out = _public(dict(job))
+    if not err:
+        threading.Thread(
+            target=_run, args=(staged_id,), name=f"video-prep-{staged_id[:8]}", daemon=True
+        ).start()
+    return out
 
 
 def start_prep(staged_id: str, *, frames: int, transcribe: bool) -> dict[str, Any]:  # noqa: A002
     """Idempotent per staged_id: a job that is running or done is left alone."""
-    with _lock:
-        job = _jobs.get(staged_id)
-        if job is not None and job["state"] != "error":
-            return _public(dict(job))
     return _launch(staged_id, frames, transcribe)
 
 
@@ -109,8 +118,6 @@ def retry_prep(staged_id: str) -> dict[str, Any]:
     """Restart a failed (or unknown) job with the settings it was started with."""
     with _lock:
         job = _jobs.get(staged_id)
-        if job is not None and job["state"] != "error":
-            return _public(dict(job))
         n = job["frames_total"] if job else 0
         transcribe = job["transcribe"] if job else True
     if n <= 0:

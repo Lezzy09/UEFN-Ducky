@@ -17,7 +17,8 @@ function videoStatusLabel(att: Extract<ComposerAttachment, { kind: "video" }>): 
   const prep = att.prep;
   if (prep?.state === "extracting") return `Extracting frames ${prep.frames_done}/${prep.frames_total}`;
   if (prep?.state === "transcribing") return "Transcribing audio…";
-  return "Preparing ffmpeg…";
+  const pct = Math.round((att.progress ?? 0) * 100);
+  return prep?.state === "preparing_ffmpeg" && pct > 0 && pct < 100 ? `Preparing ffmpeg… ${pct}%` : "Preparing ffmpeg…";
 }
 
 export function ComposerAttachmentChips({ attachments, onRemove, onPreview, onRetry }: ComposerAttachmentChipsProps) {

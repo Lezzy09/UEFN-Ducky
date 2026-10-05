@@ -169,7 +169,7 @@ export function useComposerAttachments(
       void api.get_video_prep_status(ids).then(async (res) => {
         const map = res?.prep;
         if (!map) return;
-        const queued = ids.some((sid) => !map[sid] || map[sid].state === "queued");
+        const queued = ids.some((sid) => !map[sid] || map[sid].state === "queued" || map[sid].state === "preparing_ffmpeg");
         const ff = queued ? await api.get_ffmpeg_status?.().catch(() => undefined) : undefined;
         setAttachments((prev) => prev.map((a) => {
           if (a.kind !== "video" || a.status !== "preparing" || !a.stagedId) return a;
@@ -179,7 +179,7 @@ export function useComposerAttachments(
           if (prep.state === "error") {
             return { ...a, status: "error", prep, error: prep.error || "Could not prepare the video." };
           }
-          return { ...a, prep, ...(prep.state === "queued" && ff ? { progress: ff.progress } : {}) };
+          return { ...a, prep, ...((prep.state === "queued" || prep.state === "preparing_ffmpeg") && ff ? { progress: ff.progress } : {}) };
         }));
       }).catch(() => undefined);
     }, 700);

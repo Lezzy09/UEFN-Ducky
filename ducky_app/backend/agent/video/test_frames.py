@@ -145,3 +145,26 @@ def test_real_ffmpeg_extracts_frames(monkeypatch, tmp_path):
     out = fr.extract_frames(video, 4)
     assert [f.t_s for f in out] == [0.375, 1.125, 1.875, 2.625]
     assert all(f.path.stat().st_size > 0 for f in out)
+
+
+def test_ffmpeg_writes_to_part_file_and_final_appears_only_on_success(monkeypatch, tmp_path):
+    calls = _fake_tools(monkeypatch, tmp_path)
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"v")
+    out = fr.extract_frames(video, 1)
+    ff = [c for c in calls if Path(c[0]).name == "ffmpeg.exe"][0]
+    assert ff[-1].endswith(".f01-01.jpg.part.jpg")
+    assert out[0].path.is_file() and not Path(ff[-1]).exists()
+
+
+def test_leftover_part_file_is_not_a_cache_hit_and_failure_cleans_up(monkeypatch, tmp_path):
+    calls = _fake_tools(monkeypatch, tmp_path, ff_rc=1, write=True)
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"v")
+    final = fr.frame_paths(video, 1)[0]
+    part = final.with_name(final.name + ".part.jpg")
+    part.write_bytes(b"truncated")
+    with pytest.raises(fr.VideoError):
+        fr.extract_frames(video, 1)
+    assert [c for c in calls if Path(c[0]).name == "ffmpeg.exe"]  # re-extracted, not reused
+    assert not final.exists() and not part.exists()

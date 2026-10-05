@@ -14,6 +14,7 @@ from backend.agent.video import audio, frames, prep
 def _clean(monkeypatch, tmp_path):
     prep._jobs.clear()
     monkeypatch.setattr(prep, "resolve_staged", lambda sid: tmp_path / sid)
+    monkeypatch.setattr(prep, "ensure_installed", lambda: (tmp_path / "ffmpeg", tmp_path / "ffprobe"))
     yield
     prep._jobs.clear()
 
@@ -153,6 +154,7 @@ def test_prep_files_satisfy_send_path_with_no_ffmpeg(monkeypatch, tmp_path):
     ffmpeg, ffprobe = tmp_path / "ffmpeg.exe", tmp_path / "ffprobe.exe"
     monkeypatch.setattr(frames, "ensure_installed", lambda: (ffmpeg, ffprobe))
     monkeypatch.setattr(audio, "ensure_installed", lambda: (ffmpeg, ffprobe))
+    monkeypatch.setattr(prep, "ensure_installed", lambda: (ffmpeg, ffprobe))
     calls: list[list[str]] = []
 
     def runner(args, timeout):
@@ -177,3 +179,85 @@ def test_prep_files_satisfy_send_path_with_no_ffmpeg(monkeypatch, tmp_path):
     assert len(got) == 3
     assert audio.transcribe_video(persisted) == audio.TranscriptResult("hello", "")
     assert [c for c in calls if Path(c[0]) == ffmpeg] == []  # cheap ffprobe duration read only
+
+
+def test_preparing_ffmpeg_state_precedes_extracting(monkeypatch):
+    gate = threading.Event()
+    monkeypatch.setattr(prep, "ensure_installed", lambda: gate.wait(5) or ("a", "b"))
+    monkeypatch.setattr(frames, "extract_frames", lambda v, n, **k: [])
+    monkeypatch.setattr(audio, "transcribe_video", lambda v: audio.TranscriptResult("", ""))
+    prep.start_prep("f.mp4", frames=2, transcribe=True)
+    assert _wait("f.mp4", states=("preparing_ffmpeg",))["state"] == "preparing_ffmpeg"
+    gate.set()
+    assert _wait("f.mp4")["state"] == "ready"
+
+
+def test_ffmpeg_install_failure_is_an_error(monkeypatch):
+    from backend.agent.video.ffmpeg_install import FfmpegInstallError
+
+    def fail():
+        raise FfmpegInstallError("download failed")
+
+    monkeypatch.setattr(prep, "ensure_installed", fail)
+    monkeypatch.setattr(frames, "extract_frames", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
+    prep.start_prep("h.mp4", frames=2, transcribe=True)
+    st = _wait("h.mp4")
+    assert st["state"] == "error" and st["error"] == "download failed"
+
+
+def test_concurrent_start_spawns_one_worker(monkeypatch):
+    runs, gate = [], threading.Event()
+
+    def fake(v, n, **k):
+        runs.append(1)
+        gate.wait(5)
+        return []
+
+    monkeypatch.setattr(frames, "extract_frames", fake)
+    monkeypatch.setattr(audio, "transcribe_video", lambda v: audio.TranscriptResult("", ""))
+    barrier = threading.Barrier(8)
+
+    def go():
+        barrier.wait()
+        prep.start_prep("t.mp4", frames=2, transcribe=True)
+
+    threads = [threading.Thread(target=go) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    time.sleep(0.2)
+    gate.set()
+    _wait("t.mp4")
+    assert runs == [1]
+
+
+def test_persist_during_inflight_prep_copies_no_siblings(tmp_path):
+    from backend.agent.message_attachment import MessageAttachment
+    from frontend.ui_web.conversation_attachments import persist_message_attachments
+
+    staged = tmp_path / ("c" * 32 + ".mp4")
+    staged.write_bytes(b"v")
+    for suffix in (".f02-01.jpg", ".f02-02.jpg.part.jpg"):
+        staged.with_name(staged.name + suffix).write_bytes(b"half")
+    with prep._lock:
+        prep._jobs[staged.name] = {**prep._new_job(2, True), "state": "extracting", "path": staged}
+    att = MessageAttachment(kind="video", name="c.mp4", mime="video/mp4", file_path=str(staged), size_bytes=1)
+    rows = persist_message_attachments("conv2", 1.0, [att], tmp_path / "convs")
+    out = tmp_path / "convs" / "conv2" / "attachments"
+    assert [p.name for p in out.iterdir()] == [Path(rows[0]["path"]).name]
+
+
+def test_persist_skips_part_files_when_ready(tmp_path):
+    from backend.agent.message_attachment import MessageAttachment
+    from frontend.ui_web.conversation_attachments import persist_message_attachments
+
+    staged = tmp_path / ("d" * 32 + ".mp4")
+    staged.write_bytes(b"v")
+    staged.with_name(staged.name + ".f02-01.jpg").write_bytes(b"ok")
+    staged.with_name(staged.name + ".f02-02.jpg.part.jpg").write_bytes(b"half")
+    att = MessageAttachment(kind="video", name="d.mp4", mime="video/mp4", file_path=str(staged), size_bytes=1)
+    persist_message_attachments("conv3", 1.0, [att], tmp_path / "convs")
+    names = [p.name for p in (tmp_path / "convs" / "conv3" / "attachments").iterdir()]
+    assert any(n.endswith(".f02-01.jpg") for n in names)
+    assert not any(n.endswith(".part.jpg") for n in names)

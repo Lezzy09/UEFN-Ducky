@@ -158,6 +158,21 @@ describe("video attachments", () => {
     await vi.waitFor(() => expect(result.current.attachments[0]).toMatchObject({ status: "preparing" }));
   });
 
+  it("shows ffmpeg install progress while prep is preparing_ffmpeg", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const sid = "f".repeat(32) + ".mp4";
+    mockApi({
+      stage_video_attachment: vi.fn().mockResolvedValue(stageRes(sid)),
+      get_video_prep_status: vi.fn().mockResolvedValue({ ok: true, prep: { [sid]: { ...PREP_BASE, state: "preparing_ffmpeg" } } }),
+      get_ffmpeg_status: vi.fn().mockResolvedValue({ state: "installing", progress: 0.4, error: "", version: "v" }),
+      get_video_settings: settingsOk(),
+    });
+    const { result } = renderHook(() => useComposerAttachments([], { convId: "c1" }));
+    await act(async () => { await drop(result); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(800); });
+    await vi.waitFor(() => expect(result.current.attachments[0]).toMatchObject({ progress: 0.4, prep: { state: "preparing_ffmpeg" } }));
+  });
+
   it("shows ffmpeg install progress while prep is queued", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const sid = "e".repeat(32) + ".mp4";
