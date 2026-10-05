@@ -88,6 +88,48 @@ def test_install_failure_becomes_video_error(monkeypatch, tmp_path):
         fr.extract_frames(tmp_path / "x.mp4", 2)
 
 
+def test_run_maps_oserror_to_video_error(monkeypatch):
+    def boom(*_a, **_k):
+        raise OSError("locked")
+
+    monkeypatch.setattr(fr.subprocess, "run", boom)
+    with pytest.raises(fr.VideoError, match="Could not run ffmpeg"):
+        fr._run(["ffmpeg"], 5)
+
+
+def test_run_is_non_interactive_and_tolerates_bad_bytes(monkeypatch):
+    seen = {}
+
+    def fake(args, **kw):
+        seen.update(kw)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(fr.subprocess, "run", fake)
+    fr._run(["ffmpeg"], 5)
+    assert seen["errors"] == "replace" and seen["stdin"] == subprocess.DEVNULL
+
+
+def test_ffmpeg_gets_nostdin(monkeypatch, tmp_path):
+    calls = _fake_tools(monkeypatch, tmp_path)
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"v")
+    fr.extract_frames(video, 1)
+    ff = [c for c in calls if Path(c[0]).name == "ffmpeg.exe"][0]
+    assert "-nostdin" in ff
+    assert "-nostdin" not in [c for c in calls if Path(c[0]).name == "ffprobe.exe"][0]
+
+
+@pytest.mark.parametrize(
+    "out, expected",
+    [("N/A\n12.5\n", [6.25]), ("N/A\nN/A\n", [0.0]), ("inf\nnan\n-1\n", [0.0]), ("", [0.0])],
+)
+def test_probe_duration_tolerates_na(monkeypatch, tmp_path, out, expected):
+    _fake_tools(monkeypatch, tmp_path, probe_out=out)
+    video = tmp_path / "clip.webm"
+    video.write_bytes(b"v")
+    assert [f.t_s for f in fr.extract_frames(video, 1)] == expected
+
+
 _REAL = os.environ.get("DUCKY_FFMPEG_DIR", "")
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import subprocess
 import sys
 import time
@@ -24,9 +25,20 @@ class Frame:
 
 
 def _run(args: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        args, capture_output=True, text=True, timeout=timeout, creationflags=_NO_WINDOW
-    )
+    try:
+        return subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+            creationflags=_NO_WINDOW,
+        )
+    except OSError as exc:
+        raise VideoError(
+            "Could not run ffmpeg — try Settings → Videos → Remove, then attach again."
+        ) from exc
 
 
 _runner = _run
@@ -46,19 +58,24 @@ def frame_paths(video: Path, n: int) -> list[Path]:
 
 def probe_duration(ffprobe: Path, video: Path, timeout_s: float = 15) -> float:
     args = [
-        str(ffprobe), "-v", "error", "-show_entries", "format=duration",
+        str(ffprobe), "-v", "error", "-show_entries", "format=duration:stream=duration",
         "-of", "default=nw=1:nk=1", str(video),
     ]
     try:
         proc = _runner(args, timeout_s)
     except subprocess.TimeoutExpired as exc:
         raise VideoError(f"Cannot read video {video.name!r}.") from exc
-    try:
-        if proc.returncode != 0:
-            raise ValueError
-        return float((proc.stdout or "").strip())
-    except ValueError as exc:
-        raise VideoError(f"Cannot read video {video.name!r}.") from exc
+    if proc.returncode != 0:
+        raise VideoError(f"Cannot read video {video.name!r}.")
+    # Browser-recorded WebM often reports "N/A"; fall back to a single frame at 0 s.
+    for line in (proc.stdout or "").splitlines():
+        try:
+            value = float(line.strip())
+        except ValueError:
+            continue
+        if math.isfinite(value) and value > 0:
+            return value
+    return 0.0
 
 
 def extract_frames(
@@ -78,7 +95,7 @@ def extract_frames(
             if remaining <= 0:
                 raise VideoError(too_slow)
             args = [
-                str(ffmpeg), "-v", "error", "-ss", f"{t:.3f}", "-i", str(video),
+                str(ffmpeg), "-nostdin", "-v", "error", "-ss", f"{t:.3f}", "-i", str(video),
                 "-frames:v", "1", "-vf", f"scale='min({max_width},iw)':-2", "-q:v", "3",
                 "-y", str(path),
             ]
