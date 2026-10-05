@@ -74,3 +74,47 @@ def test_collect_image_paths_includes_video_frames(tmp_path, monkeypatch):
         {"kind": "video", "path": "attachments/v.mp4", "frames": [{"path": "attachments/f1.jpg", "t_s": 0.5}]},
     ]}])
     assert ca.collect_image_paths(conv) == [str((conv_dir / "attachments" / "f1.jpg").resolve())]
+
+
+def _hist(row):
+    return [
+        {"role": "assistant", "content": "x", "attachments": [dict(row)]},
+        {"role": "user", "content": "hi", "attachments": [row, {"kind": "image", "path": "attachments/x.png"}]},
+    ]
+
+
+def test_backfill_adds_frames_when_provider_switched(tmp_path, monkeypatch):
+    conv_dir, row, calls = _setup(tmp_path, monkeypatch)
+    msgs = _hist(row)
+    statuses = []
+    assert send.backfill_history_frames(msgs, conv_dir=conv_dir, provider="anthropic", external=False, push_status=statuses.append) is True
+    assert row["frames"] and len(calls) == 1
+    assert "frames" not in msgs[0]["attachments"][0]
+    assert msgs[1]["attachments"][1] == {"kind": "image", "path": "attachments/x.png"}
+    assert any("Extracting frames" in s for s in statuses)
+
+
+def test_backfill_skips_gemini(tmp_path, monkeypatch):
+    conv_dir, row, calls = _setup(tmp_path, monkeypatch)
+    assert send.backfill_history_frames(_hist(row), conv_dir=conv_dir, provider="gemini", external=False) is False
+    assert calls == [] and "frames" not in row
+
+
+def test_backfill_skips_existing_frames(tmp_path, monkeypatch):
+    conv_dir, row, calls = _setup(tmp_path, monkeypatch)
+    row["frames"] = [{"path": "attachments/f.jpg", "t_s": 0.0}]
+    assert send.backfill_history_frames(_hist(row), conv_dir=conv_dir, provider="anthropic", external=False) is False
+    assert calls == []
+
+
+def test_backfill_survives_video_error(tmp_path, monkeypatch):
+    conv_dir, row, _ = _setup(tmp_path, monkeypatch)
+
+    def boom(path, n):
+        raise VideoError("bad file")
+
+    monkeypatch.setattr(send, "extract_frames", boom)
+    statuses = []
+    assert send.backfill_history_frames(_hist(row), conv_dir=conv_dir, provider="anthropic", external=False, push_status=statuses.append) is False
+    assert "frames" not in row
+    assert any("Could not read" in s for s in statuses)

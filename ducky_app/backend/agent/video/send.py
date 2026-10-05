@@ -59,3 +59,44 @@ def runtime_video_dict(row: dict[str, Any], conv_dir: Path) -> dict[str, Any]:
             if isinstance(f, dict) and f.get("path")
         ],
     }
+
+
+def backfill_history_frames(
+    messages: list[dict[str, Any]],
+    *,
+    conv_dir: Path,
+    provider: str,
+    external: bool,
+    push_status: Callable[[str], None] | None = None,
+) -> bool:
+    """Extract frames for earlier user messages whose videos this recipient can't take natively.
+
+    Mutates rows in place; returns True when any row gained frames (caller saves the
+    conversation). A failure on an old video never blocks the new turn: the row stays
+    frameless and the provider builders send the "could not be analyzed" note instead.
+    """
+    changed = False
+    for m in messages:
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        for row in m.get("attachments") or []:
+            if not isinstance(row, dict) or row.get("kind") != "video" or not row.get("path"):
+                continue
+            if row.get("frames"):
+                continue
+            if not needs_frames(
+                str(row.get("mime") or ""), int(row.get("size_bytes") or 0), provider=provider, external=external
+            ):
+                continue
+            name = row.get("name") or "video"
+            if push_status:
+                push_status(f"Extracting frames from {name}…")
+            try:
+                frames = extract_frames(conv_dir / str(row["path"]), video_limits().frames_per_video)
+            except VideoError as e:
+                if push_status:
+                    push_status(f"Could not read {name}: {e}")
+                continue
+            row["frames"] = [{"path": f"attachments/{f.path.name}", "t_s": f.t_s} for f in frames]
+            changed = True
+    return changed

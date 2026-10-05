@@ -1217,6 +1217,32 @@ def _note_run_starter(conv_id: str, parent: str, started_by: str | None) -> None
         pass
 
 
+def _backfill_video_frames(conv: Any, conv_id: str, provider: str, external: bool, push: Any, project_root: Any) -> None:
+    """Give earlier videos frames when the current recipient can't take them natively."""
+    if not any(
+        isinstance(m, dict)
+        and m.get("role") == "user"
+        and any(isinstance(r, dict) and r.get("kind") == "video" for r in m.get("attachments") or [])
+        for m in conv.messages
+    ):
+        return
+    from backend.agent.video.send import backfill_history_frames
+    from frontend.ui_web.project_chats import get_conversations_dir
+
+    changed = backfill_history_frames(
+        conv.messages,
+        conv_dir=get_conversations_dir(project_root) / conv_id,
+        provider=provider,
+        external=external,
+        push_status=lambda text: push({"type": "status", "text": text, "conv_id": conv_id}),
+    )
+    if changed:
+        try:
+            save_conversation(conv)
+        except Exception:
+            pass
+
+
 def run_message_and_wait(
     conv_id: str,
     text: str,
@@ -1572,6 +1598,7 @@ def run_message(
             save_conversation(conv)
         except Exception:
             pass
+        _backfill_video_frames(conv, conv_id, provider_name or "", external, push, settings.uefn_project_root)
         history = list(conv.messages)
     else:
         try:
@@ -1650,6 +1677,7 @@ def run_message(
             from backend.agent.chat_title import start_auto_title
 
             start_auto_title(conv, user_text or content, push=push)
+        _backfill_video_frames(conv, conv_id, provider_name or "", external, push, settings.uefn_project_root)
         history = list(conv.messages[:-1])
 
     from frontend.ui_web.context_omit import context_omit_set
