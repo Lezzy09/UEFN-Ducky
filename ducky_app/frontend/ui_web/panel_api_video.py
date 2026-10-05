@@ -24,14 +24,24 @@ class PanelApiVideoMixin:
 
     def get_video_settings(self) -> dict[str, Any]:
         from backend.agent.video import ffmpeg_install
+        from backend.agent.video import limits as L
         from backend.agent.video.limits import video_limits
 
+        s = _pa.PanelSettings.load()
         lim = video_limits()
         return {
             "ok": True,
             "video_max_mb": lim.max_bytes // (1024 * 1024),
-            "video_frames_per_video": lim.frames_per_video,
-            "max_images_per_message": lim.max_images_per_message,
+            "video_frames_per_video": L.clamp_auto(
+                getattr(s, "video_frames_per_video", 0), *L.FRAMES_PER_VIDEO_RANGE, 0
+            ),
+            "max_images_per_message": L.clamp_auto(
+                getattr(s, "max_images_per_message", 0), *L.MAX_IMAGES_PER_MESSAGE_RANGE, 0
+            ),
+            "auto": {
+                "frames_per_video": min(L.AUTO_FRAMES_CAP, L.DEFAULT_IMAGE_MAX),
+                "max_images_per_message": L.DEFAULT_IMAGE_MAX,
+            },
             "ffmpeg": ffmpeg_install.status(),
         }
 
@@ -43,14 +53,12 @@ class PanelApiVideoMixin:
         if "video_max_mb" in data:
             s.video_max_mb = L.clamp(data["video_max_mb"], *L.VIDEO_MAX_MB_RANGE, L.DEFAULT_VIDEO_MAX_MB)
         if "video_frames_per_video" in data:
-            s.video_frames_per_video = L.clamp(
-                data["video_frames_per_video"], *L.FRAMES_PER_VIDEO_RANGE, L.DEFAULT_FRAMES_PER_VIDEO
+            s.video_frames_per_video = L.clamp_auto(
+                data["video_frames_per_video"], *L.FRAMES_PER_VIDEO_RANGE, 0
             )
         if "max_images_per_message" in data:
-            s.max_images_per_message = L.clamp(
-                data["max_images_per_message"],
-                *L.MAX_IMAGES_PER_MESSAGE_RANGE,
-                L.DEFAULT_MAX_IMAGES_PER_MESSAGE,
+            s.max_images_per_message = L.clamp_auto(
+                data["max_images_per_message"], *L.MAX_IMAGES_PER_MESSAGE_RANGE, 0
             )
         s.save()
         return self.get_video_settings()
@@ -86,4 +94,5 @@ def _video_needs_ffmpeg(conv_id: str, staged: dict[str, Any]) -> bool:
         int(staged["size_bytes"]),
         provider=str(getattr(conv, "provider", "") or ""),
         external=external,
+        model=str(getattr(conv, "model", "") or ""),
     )

@@ -11,10 +11,10 @@ import { GeneralSectionHeader } from "./GeneralSectionHeader";
 
 type NumericKey = "video_max_mb" | "video_frames_per_video" | "max_images_per_message";
 
-const FIELDS: { key: NumericKey; label: string; min: number; max: number; hint: string }[] = [
+const FIELDS: { key: NumericKey; label: string; min: number; max: number; hint: string; auto?: number }[] = [
   { key: "video_max_mb", label: "Max video size (MB)", min: 10, max: 200, hint: "Largest video one message can carry." },
-  { key: "video_frames_per_video", label: "Frames per video", min: 1, max: 40, hint: "Frames sent to models without native video (Claude, OpenAI, coding agents…)." },
-  { key: "max_images_per_message", label: "Max images per message", min: 1, max: 100, hint: "Images per message, video frames included." },
+  { key: "video_frames_per_video", label: "Frames per video", min: 1, max: 40, auto: 20, hint: "Frames sent to models without native video (Claude, OpenAI, coding agents…)." },
+  { key: "max_images_per_message", label: "Max images per message", min: 1, max: 100, auto: 40, hint: "Images per message, video frames included." },
 ];
 
 function ffmpegLabel(st: FfmpegStatusDto): string {
@@ -102,6 +102,25 @@ export function VideosTab() {
     }
   }, [draft, settings, apply]);
 
+  const lastManual = useRef<Partial<Record<NumericKey, number>>>({});
+
+  const toggleAuto = useCallback(async (key: NumericKey, defaultManual: number, on: boolean) => {
+    if (!settings) return;
+    if (on) {
+      if (settings[key] > 0) lastManual.current[key] = settings[key];
+    }
+    const value = on ? 0 : lastManual.current[key] ?? defaultManual;
+    try {
+      const next = await getApi()?.set_video_settings?.({ [key]: value });
+      if (next) {
+        apply(next);
+        setError("");
+      }
+    } catch (err) {
+      setError(errMsg("Failed to save video settings", err));
+    }
+  }, [settings, apply]);
+
   const runFfmpeg = useCallback(async (action: "install" | "remove") => {
     try {
       const api = getApi();
@@ -130,7 +149,7 @@ export function VideosTab() {
       {error ? <AppNotice message={error} className="plans-tab-notice" /> : null}
       <GeneralSectionHeader icon={<Icons.Play />} title="Videos" />
       {FIELDS.map((f) => (
-        <label key={f.key} className="memory-tab-field">
+        <div key={f.key} className="memory-tab-field">
           <span className="memory-tab-field-label">{f.label}</span>
           <input
             className="memory-tab-input"
@@ -138,12 +157,25 @@ export function VideosTab() {
             min={f.min}
             max={f.max}
             aria-label={f.label}
-            value={draft[f.key]}
+            value={f.auto !== undefined && settings[f.key] === 0 ? "" : draft[f.key]}
+            placeholder={f.auto !== undefined && settings[f.key] === 0 ? "Auto" : undefined}
+            disabled={f.auto !== undefined && settings[f.key] === 0}
             onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
             onBlur={() => void save(f.key)}
           />
+          {f.auto !== undefined ? (
+            <label className="memory-tab-field-hint">
+              <input
+                type="checkbox"
+                aria-label={`${f.label} Auto`}
+                checked={settings[f.key] === 0}
+                onChange={(e) => void toggleAuto(f.key, f.auto as number, e.target.checked)}
+              />{" "}
+              Auto
+            </label>
+          ) : null}
           <span className="memory-tab-field-hint">{f.hint}</span>
-        </label>
+        </div>
       ))}
       <div className="memory-tab-field">
         <span className="memory-tab-field-label">ffmpeg</span>

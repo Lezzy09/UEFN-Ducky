@@ -17,9 +17,14 @@ def gemini_inline_mime(mime: str, size_bytes: int) -> str | None:
     return _GEMINI_MIME.get((mime or "").strip().lower())
 
 
-def needs_frames(mime: str, size_bytes: int, *, provider: str, external: bool) -> bool:
+def needs_frames(mime: str, size_bytes: int, *, provider: str, external: bool, model: str = "") -> bool:
     if external:
         return True
     if (provider or "").strip().lower() != GEMINI_PROVIDER:
         return True
-    return gemini_inline_mime(mime, size_bytes) is None
+    if gemini_inline_mime(mime, size_bytes) is None:
+        return True
+    from backend.agent.model_fetch import get_model_info
+
+    info = get_model_info(provider, model)
+    return getattr(info, "supports_video", None) is False

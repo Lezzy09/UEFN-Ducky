@@ -889,6 +889,7 @@ async def _run_ask_async(
         apply_media_budget(
             [pm.attachments for pm in messages if pm.role == "user" and pm.attachments],
             provider=provider_name or "",
+            model=model or "",
         )
         if volatile_tail:
             messages.append(
@@ -1223,7 +1224,9 @@ def _note_run_starter(conv_id: str, parent: str, started_by: str | None) -> None
         pass
 
 
-def _backfill_video_frames(conv: Any, conv_id: str, provider: str, external: bool, push: Any, project_root: Any) -> None:
+def _backfill_video_frames(
+    conv: Any, conv_id: str, provider: str, external: bool, push: Any, project_root: Any, model: str = ""
+) -> None:
     """Give earlier videos frames when the current recipient can't take them natively."""
     if external:
         return  # coding agents only ever get the latest message's files, never history frames
@@ -1243,6 +1246,7 @@ def _backfill_video_frames(conv: Any, conv_id: str, provider: str, external: boo
         provider=provider,
         external=external,
         push_status=lambda text: push({"type": "status", "text": text, "conv_id": conv_id}),
+        model=model,
     )
     if changed:
         try:
@@ -1606,7 +1610,9 @@ def run_message(
             save_conversation(conv)
         except Exception:
             pass
-        _backfill_video_frames(conv, conv_id, provider_name or "", external, push, settings.uefn_project_root)
+        _backfill_video_frames(
+            conv, conv_id, provider_name or "", external, push, settings.uefn_project_root, turn_model
+        )
         history = list(conv.messages)
     else:
         try:
@@ -1628,7 +1634,9 @@ def run_message(
             user_text = dedupe_exact_blocks(user_text)
 
         try:
-            attachments_parsed = parse_attachment_dicts(attachments, current=True)
+            attachments_parsed = parse_attachment_dicts(
+                attachments, current=True, provider=provider_name or "", model=turn_model
+            )
         except ValueError as e:
             push({"type": "error", "text": str(e), "conv_id": conv_id})
             return ""
@@ -1659,6 +1667,7 @@ def run_message(
                     provider=provider_name or "",
                     external=external,
                     push_status=lambda text: push({"type": "status", "text": text, "conv_id": conv_id}),
+                    model=turn_model,
                 )
             except ValueError as e:
                 push({"type": "error", "text": str(e), "conv_id": conv_id})
@@ -1693,7 +1702,9 @@ def run_message(
             from backend.agent.chat_title import start_auto_title
 
             start_auto_title(conv, user_text or content, push=push)
-        _backfill_video_frames(conv, conv_id, provider_name or "", external, push, settings.uefn_project_root)
+        _backfill_video_frames(
+            conv, conv_id, provider_name or "", external, push, settings.uefn_project_root, turn_model
+        )
         history = list(conv.messages[:-1])
 
     from frontend.ui_web.context_omit import context_omit_set

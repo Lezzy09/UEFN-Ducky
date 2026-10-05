@@ -3,19 +3,20 @@
 from __future__ import annotations
 
 from backend.agent.message_attachment import MessageAttachment
+from backend.agent.video.limits import request_image_max
 from backend.agent.video.routing import GEMINI_PROVIDER, gemini_inline_mime
 
-REQUEST_IMAGE_BUDGET = 100  # Anthropic rejects requests with more than 100 images
 GEMINI_INLINE_BUDGET = 14 * 1024 * 1024  # Gemini caps inline request payloads at ~20 MB total
 
 
-def apply_media_budget(per_message: list[list[MessageAttachment]], *, provider: str) -> None:
+def apply_media_budget(per_message: list[list[MessageAttachment]], *, provider: str, model: str = "") -> None:
     """Mark older videos as frames-only (``inline_ok=False``) or ``omitted`` to fit the budget.
 
     ``per_message`` holds each user message's attachments, oldest first. Walking newest to
     oldest lets the message being sent claim budget first. Images are never altered.
     """
     gemini = (provider or "").strip().lower() == GEMINI_PROVIDER
+    image_budget = request_image_max(provider, model)
     images = 0
     inline_bytes = 0
     for atts in reversed(per_message):
@@ -34,7 +35,7 @@ def apply_media_budget(per_message: list[list[MessageAttachment]], *, provider: 
                 inline_bytes += att.size_bytes
                 continue
             att.inline_ok = False
-            if att.frames and images + len(att.frames) <= REQUEST_IMAGE_BUDGET:
+            if att.frames and images + len(att.frames) <= image_budget:
                 images += len(att.frames)
             else:
                 att.omitted = True

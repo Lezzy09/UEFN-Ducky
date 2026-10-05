@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from backend.agent.video.ffmpeg_install import binaries
 from backend.agent.video.frames import VideoError, extract_frames
-from backend.agent.video.limits import video_limits
+from backend.agent.video.limits import media_limits_for
 from backend.agent.video.routing import needs_frames
 
 
@@ -18,16 +18,18 @@ def prepare_video_frames(
     provider: str,
     external: bool,
     push_status: Callable[[str], None] | None = None,
+    model: str = "",
 ) -> None:
     videos = [r for r in stored if r.get("kind") == "video" and r.get("path")]
     if not videos:
         return
-    limits = video_limits()
+    limits = media_limits_for(provider, model)
     todo = [
         r
         for r in videos
         if needs_frames(
-            str(r.get("mime") or ""), int(r.get("size_bytes") or 0), provider=provider, external=external
+            str(r.get("mime") or ""), int(r.get("size_bytes") or 0), provider=provider, external=external,
+            model=model,
         )
     ]
     images = sum(1 for r in stored if r.get("kind") == "image")
@@ -68,6 +70,7 @@ def backfill_history_frames(
     provider: str,
     external: bool,
     push_status: Callable[[str], None] | None = None,
+    model: str = "",
 ) -> bool:
     """Extract frames for earlier user messages whose videos this recipient can't take natively.
 
@@ -76,6 +79,7 @@ def backfill_history_frames(
     frameless and the provider builders send the "could not be analyzed" note instead.
     """
     changed = False
+    frames_per_video = media_limits_for(provider, model).frames_per_video
     for m in messages:
         if not isinstance(m, dict) or m.get("role") != "user":
             continue
@@ -85,14 +89,15 @@ def backfill_history_frames(
             if row.get("frames"):
                 continue
             if not needs_frames(
-                str(row.get("mime") or ""), int(row.get("size_bytes") or 0), provider=provider, external=external
+                str(row.get("mime") or ""), int(row.get("size_bytes") or 0), provider=provider, external=external,
+                model=model,
             ):
                 continue
             name = row.get("name") or "video"
             if push_status:
                 push_status(f"Extracting frames from {name}…")
             try:
-                frames = extract_frames(conv_dir / str(row["path"]), video_limits().frames_per_video)
+                frames = extract_frames(conv_dir / str(row["path"]), frames_per_video)
             except VideoError as e:
                 if push_status:
                     push_status(f"Could not read {name}: {e}")

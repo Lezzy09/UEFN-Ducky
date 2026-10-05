@@ -3,7 +3,6 @@ from __future__ import annotations
 from backend.agent.message_attachment import MessageAttachment
 from backend.agent.video.budget import (
     GEMINI_INLINE_BUDGET,
-    REQUEST_IMAGE_BUDGET,
     apply_media_budget,
 )
 
@@ -36,14 +35,13 @@ def test_non_gemini_budget_keeps_newest_five_videos_of_twenty_frames():
     apply_media_budget([[v] for v in vids], provider="anthropic")
     assert [v.omitted for v in vids] == [True, False, False, False, False, False]
     assert all(not v.inline_ok for v in vids)
-    assert 5 * 20 <= REQUEST_IMAGE_BUDGET < 6 * 20
 
 
 def test_images_are_never_altered_but_count_toward_the_budget():
     img = MessageAttachment(kind="image", name="a.png", mime="image/png", data_base64="aGk=")
     vid = _vid("v.mp4", frames=20)
     imgs = [MessageAttachment(kind="image", name=f"{i}.png", data_base64="aGk=") for i in range(90)]
-    apply_media_budget([[vid], imgs, [img]], provider="openai")
+    apply_media_budget([[vid], imgs, [img]], provider="anthropic")
     assert vid.omitted
     assert all(i.inline_ok and not i.omitted for i in imgs + [img])
 
@@ -51,7 +49,7 @@ def test_images_are_never_altered_but_count_toward_the_budget():
 def test_current_message_claims_budget_first():
     history = [_vid(f"h{i}.mp4", frames=20) for i in range(5)]
     current = _vid("cur.mp4", frames=20)
-    apply_media_budget([[v] for v in history] + [[current]], provider="openai")
+    apply_media_budget([[v] for v in history] + [[current]], provider="anthropic")
     assert not current.omitted
     assert history[0].omitted and not history[1].omitted
 
@@ -60,3 +58,14 @@ def test_non_inlinable_gemini_video_uses_frames():
     mkv = _vid("a.mkv", mime="video/x-matroska", frames=4)
     apply_media_budget([[mkv]], provider="gemini")
     assert not mkv.inline_ok and not mkv.omitted
+
+
+def test_model_image_max_limits_budget(monkeypatch):
+    from backend.agent.model_fetch import ModelInfo
+
+    monkeypatch.setattr(
+        "backend.agent.model_fetch.get_model_info", lambda p, m: ModelInfo(id=m, max_images=5)
+    )
+    old, new = _vid("old.mp4", frames=4), _vid("new.mp4", frames=4)
+    apply_media_budget([[old], [new]], provider="openai", model="small")
+    assert not new.omitted and old.omitted

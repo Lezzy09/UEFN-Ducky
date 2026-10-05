@@ -82,4 +82,20 @@ describe("VideosTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Install now" }));
     expect(await screen.findByText(/no network/)).toBeTruthy();
   });
+
+  it("shows an Auto checkbox per field and toggles it", async () => {
+    const auto = { ...settings, video_frames_per_video: 0, max_images_per_message: 12, auto: { frames_per_video: 20, max_images_per_message: 20 } };
+    const api = mockApi({ get_video_settings: vi.fn().mockResolvedValue(auto) });
+    render(<VideosTab />);
+    const frames = (await screen.findByLabelText("Frames per video")) as HTMLInputElement;
+    const autoFrames = screen.getByLabelText("Frames per video Auto") as HTMLInputElement;
+    expect(autoFrames.checked).toBe(true);
+    expect(frames.disabled).toBe(true);
+    fireEvent.click(autoFrames);
+    await waitFor(() => expect(api.set_video_settings).toHaveBeenCalledWith({ video_frames_per_video: 20 }));
+    const autoImages = screen.getByLabelText("Max images per message Auto") as HTMLInputElement;
+    expect(autoImages.checked).toBe(false);
+    fireEvent.click(autoImages);
+    await waitFor(() => expect(api.set_video_settings).toHaveBeenCalledWith({ max_images_per_message: 0 }));
+  });
 });

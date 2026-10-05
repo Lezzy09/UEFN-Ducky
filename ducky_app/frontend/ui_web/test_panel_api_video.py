@@ -9,7 +9,7 @@ def test_video_settings_roundtrip_and_clamp(monkeypatch):
     monkeypatch.setattr("backend.agent.video.ffmpeg_install.status", lambda: {"state": "missing"})
     api = PanelApi()
     out = api.set_video_settings({"video_max_mb": 500, "video_frames_per_video": "12", "max_images_per_message": 0})
-    assert (out["video_max_mb"], out["video_frames_per_video"], out["max_images_per_message"]) == (200, 12, 1)
+    assert (out["video_max_mb"], out["video_frames_per_video"], out["max_images_per_message"]) == (200, 12, 0)
     assert api.get_video_settings()["video_frames_per_video"] == 12
     assert out["ffmpeg"] == {"state": "missing"}
 
@@ -38,3 +38,13 @@ def test_stage_gemini_conv_skips_ffmpeg(monkeypatch):
 def test_stage_error_is_returned_not_raised():
     res = PanelApi().stage_video_attachment("c", "a.avi", "video/avi", "eA==")
     assert res == {"ok": False, "error": "Unsupported video format for 'a.avi' — use MP4, WebM, MOV or MKV."}
+
+
+def test_video_settings_accept_auto(monkeypatch):
+    monkeypatch.setattr("backend.agent.video.ffmpeg_install.status", lambda: {"state": "missing"})
+    api = PanelApi()
+    api.set_video_settings({"video_frames_per_video": 12, "max_images_per_message": 60})
+    out = api.set_video_settings({"video_frames_per_video": 0, "max_images_per_message": 0})
+    assert out["video_frames_per_video"] == 0 and out["max_images_per_message"] == 0
+    assert out["auto"] == {"frames_per_video": 20, "max_images_per_message": 20}
+    assert api.get_video_settings()["video_frames_per_video"] == 0

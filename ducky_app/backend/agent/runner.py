@@ -578,6 +578,7 @@ class AgentRunner:
         apply_media_budget(
             [pm.attachments for pm in out if pm.role == "user" and pm.attachments],
             provider=self.config.provider,
+            model=self.config.model or "",
         )
         return out
 

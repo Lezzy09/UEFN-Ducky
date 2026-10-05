@@ -94,12 +94,14 @@ def _parse_video(raw: dict[str, Any], name: str, mime: str, *, current: bool = F
     )
 
 
-def parse_attachment_dicts(raw_list: list[Any] | None, *, current: bool = False) -> list[MessageAttachment]:
+def parse_attachment_dicts(
+    raw_list: list[Any] | None, *, current: bool = False, provider: str = "", model: str = ""
+) -> list[MessageAttachment]:
     if not raw_list:
         return []
-    from backend.agent.video.limits import video_limits
+    from backend.agent.video.limits import media_limits_for
 
-    max_images = video_limits().max_images_per_message
+    max_images = media_limits_for(provider, model).max_images_per_message
     out: list[MessageAttachment] = []
     image_count = 0
     for raw in raw_list:
@@ -155,7 +157,7 @@ def prepare_outgoing_user_message(
     coding agent (Claude Code / Codex / Cursor) handles images itself, so the
     panel's own provider/model must not gate them.
     """
-    attachments = parse_attachment_dicts(attachments_raw, current=True)
+    attachments = parse_attachment_dicts(attachments_raw, current=True, provider=provider, model=model)
     images = media_attachments(attachments)
     if images and not external_agent:
         if not model_in_cache(provider, model):

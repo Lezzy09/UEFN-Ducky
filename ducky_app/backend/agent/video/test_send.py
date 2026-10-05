@@ -47,6 +47,11 @@ def test_gemini_small_mp4_gets_no_frames(tmp_path, monkeypatch):
 
 def test_image_cap_counts_frames(tmp_path, monkeypatch):
     conv_dir, row, _ = _setup(tmp_path, monkeypatch)
+    from frontend.settings import PanelSettings
+
+    s = PanelSettings.load()
+    s.max_images_per_message = 40
+    s.save()
     images = [{"kind": "image", "path": "attachments/x.png"}] * 25
     with pytest.raises(VideoError, match="Too many images"):
         send.prepare_video_frames([row, *images], conv_dir=conv_dir, provider="openai", external=False)
@@ -118,3 +123,32 @@ def test_backfill_survives_video_error(tmp_path, monkeypatch):
     assert send.backfill_history_frames(_hist(row), conv_dir=conv_dir, provider="anthropic", external=False, push_status=statuses.append) is False
     assert "frames" not in row
     assert any("Could not read" in s for s in statuses)
+
+
+def test_frame_count_follows_model(tmp_path, monkeypatch):
+    from backend.agent.model_fetch import ModelInfo
+
+    conv_dir, row, calls = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr("backend.agent.model_fetch.get_model_info", lambda p, m: None)
+    send.prepare_video_frames([row], conv_dir=conv_dir, provider="openai", external=False, model="gpt")
+    assert calls[-1][1] == 20
+    row2 = dict(row)
+    monkeypatch.setattr(
+        "backend.agent.model_fetch.get_model_info", lambda p, m: ModelInfo(id=m, max_images=8)
+    )
+    send.prepare_video_frames([row2], conv_dir=conv_dir, provider="openai", external=False, model="tiny")
+    assert calls[-1][1] == 8
+
+
+def test_needs_frames_gemini_without_video_support(monkeypatch):
+    from backend.agent.model_fetch import ModelInfo
+    from backend.agent.video.routing import needs_frames
+
+    monkeypatch.setattr(
+        "backend.agent.model_fetch.get_model_info", lambda p, m: ModelInfo(id=m, supports_video=False)
+    )
+    assert needs_frames("video/mp4", 1, provider="gemini", external=False, model="g")
+    monkeypatch.setattr(
+        "backend.agent.model_fetch.get_model_info", lambda p, m: ModelInfo(id=m, supports_video=None)
+    )
+    assert not needs_frames("video/mp4", 1, provider="gemini", external=False, model="g")

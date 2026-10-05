@@ -761,6 +761,8 @@ export interface VideoSettingsDto {
   video_max_mb: number;
   video_frames_per_video: number;
   max_images_per_message: number;
+  /** Values 0 (= Auto) resolves to for a provider-agnostic caller. */
+  auto?: { frames_per_video: number; max_images_per_message: number };
   ffmpeg: FfmpegStatusDto;
 }
 
