@@ -351,6 +351,17 @@ def copy_workflow(workflow_id: str, owner: str, move: bool = False, pretty: bool
     return tool_json({"ok": True, "workflow": out}, pretty=pretty)
 
 
+def _chat_allows_everything() -> bool:
+    """The chat running this tool said "Allow everything": its yes is already given."""
+    try:
+        from backend.tools.panel.panel_ui import _resolve_ask_user_conv_id
+        from backend.tools.panel.permission_prompt import allows_everything
+
+        return allows_everything(_resolve_ask_user_conv_id())
+    except Exception:
+        return False
+
+
 @mcp.tool()
 def delete_workflow(workflow_id: str, confirmed: bool = False, pretty: bool = False) -> str:
     """Delete one workflow (for every member, if it is a team's) and close it in the editor.
@@ -362,7 +373,7 @@ def delete_workflow(workflow_id: str, confirmed: bool = False, pretty: bool = Fa
     from backend.automations.store import get_workflow as _get
 
     wid = (workflow_id or "").strip()
-    if confirmed is not True:
+    if confirmed is not True and not _chat_allows_everything():
         wf = _get(wid)
         if wf is None:
             return tool_json({"ok": False, "error": "workflow not found"}, pretty=pretty)

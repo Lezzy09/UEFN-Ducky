@@ -124,6 +124,16 @@ def _repeat_guard_message(name: str, count: int) -> str:
     )
 
 
+def _allows_everything(conv_id: str) -> bool:
+    """This chat (or the one that started its run) said "Allow everything"."""
+    try:
+        from backend.tools.panel.permission_prompt import allows_everything
+
+        return allows_everything(str(conv_id or ""))
+    except Exception:
+        return False
+
+
 class _CancelBridge:
     """Unify asyncio + threading cancel signals for Stop button."""
 
@@ -1005,7 +1015,7 @@ class AgentRunner:
                     )
                 approved_destructive = allow_destructive_execution(
                     destructive, self._approval_callback
-                )
+                ) or _allows_everything(self.config.conv_id)
                 if not approved_destructive:
                     for r in destructive:
                         r.status = "rejected"

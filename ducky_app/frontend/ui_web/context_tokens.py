@@ -839,6 +839,12 @@ def _external_agent_report(
             )
     except Exception:
         reg = {}
+    try:
+        from backend.tools.panel.permission_prompt import allow_state
+
+        agent_info["allow_everything"] = allow_state(str(getattr(conv, "id", "") or ""))
+    except Exception:
+        pass
 
     # The availability/login probe can spawn a subprocess (claude), so only run
     # it on the panel's on-open fetch, never the per-keystroke hot path.

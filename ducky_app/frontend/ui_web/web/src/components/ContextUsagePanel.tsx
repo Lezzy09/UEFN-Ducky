@@ -330,7 +330,7 @@ export function ContextUsagePanel({
         </button>
       </div>
 
-      {agentInfo ? <AgentInfoSection info={agentInfo} /> : null}
+      {agentInfo ? <AgentInfoSection info={agentInfo} convId={convId} /> : null}
 
       <AccordionSection
         expanded={usageExpanded}
@@ -505,7 +505,13 @@ export function ContextUsagePanel({
   );
 }
 
-function AgentInfoSection({ info }: { info: CodingAgentInfo }) {
+function AgentInfoSection({ info, convId }: { info: CodingAgentInfo; convId: string }) {
+  const [allowAll, setAllowAll] = useState(info.allow_everything);
+  useEffect(() => setAllowAll(info.allow_everything), [info.allow_everything]);
+  const turnOffAllowAll = async () => {
+    const res = await getApi()?.set_agent_allow_everything?.(convId, false);
+    if (res?.ok) setAllowAll({ on: res.on, own: res.own, from_title: res.from_title });
+  };
   const loginState =
     info.logged_in === true
       ? { label: "Ready", cls: "is-ok" }
@@ -545,6 +551,20 @@ function AgentInfoSection({ info }: { info: CodingAgentInfo }) {
           <div className="context-usage-panel-agent-row">
             <span className="context-usage-panel-agent-row-label">Permission mode</span>
             <span className="context-usage-panel-agent-row-value">{info.permission_mode}</span>
+          </div>
+        ) : null}
+        {allowAll?.on ? (
+          <div className="context-usage-panel-agent-row">
+            <span className="context-usage-panel-agent-row-label">Approvals</span>
+            <span className="context-usage-panel-agent-row-value">
+              {allowAll.own ? "Allow everything (never asks)" : `Allow everything, from ${allowAll.from_title || "the chat that started it"}`}
+              {allowAll.own ? (
+                <button type="button" className="context-usage-panel-agent-row-action" onClick={() => void turnOffAllowAll()}
+                  title="Ask again before commands, edits outside the project, pushes and deletes">
+                  Turn off
+                </button>
+              ) : null}
+            </span>
           </div>
         ) : null}
         {info.skills !== undefined ? (

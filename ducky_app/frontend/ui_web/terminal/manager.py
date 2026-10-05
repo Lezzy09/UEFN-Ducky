@@ -308,18 +308,24 @@ class TerminalManager:
         wait: bool = True,
         approval_timeout_s: float = _APPROVAL_TIMEOUT_S,
         command_timeout_s: float = 300.0,
+        auto_approve: bool = False,
     ) -> dict[str, Any]:
+        """auto_approve: the chat said "Allow everything", so no Allow/Deny pop-up."""
         req = self.request_command(
             session_id,
             command,
             source=source,
             conv_id=conv_id,
             background=background,
+            push_pending=not auto_approve,
         )
         if not req.get("ok"):
             return req
         request_id = str(req["request_id"])
-        approval = self.wait_for_approval(request_id, timeout_s=approval_timeout_s)
+        if auto_approve:
+            approval = self.approve_command(request_id)
+        else:
+            approval = self.wait_for_approval(request_id, timeout_s=approval_timeout_s)
         if not approval.get("ok"):
             return approval
         session = self.get_session(session_id)

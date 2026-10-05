@@ -1617,6 +1617,7 @@ export interface AgentEvent {
     | "plan_updated"
     | "discord_message"
     | "ui_rpc_request"
+    | "ui_rpc_settled"
     | "open_coding_agent_login"
     | "settings_changed"
     | "mcp_plugins_changed"
@@ -1983,6 +1984,8 @@ export interface CodingAgentInfo {
   context_tokens: number;
   has_run: boolean;
   permission_mode?: string;
+  /** "Allow everything in this chat" from an approval card: set here (own) or by the chat that started this run. */
+  allow_everything?: { on: boolean; own: boolean; from_title?: string };
   available?: boolean;
   status?: string;
   logged_in?: boolean;
@@ -2670,6 +2673,7 @@ export interface PanelApi {
   ): Promise<VerseTemplateDto>;
   delete_custom_verse_template(template_id: string): Promise<{ ok: boolean }>;
   rename_conversation(conv_id: string, title: string): Promise<void>;
+  set_agent_allow_everything?(conv_id: string, on: boolean): Promise<{ ok: boolean; on: boolean; own: boolean; from_title?: string }>;
   move_conversation(conv_id: string, folder_id: string): Promise<void>;
   move_chats_to_project?(
     conv_ids: string[],

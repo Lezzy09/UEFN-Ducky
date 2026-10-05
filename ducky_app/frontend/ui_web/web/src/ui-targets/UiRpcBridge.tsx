@@ -22,7 +22,7 @@ import { listUiActions, runUiAction, searchTargets, waitForUiAction } from "./re
 import { installEditorLineTargets } from "./editorLineTarget";
 import { asGuidedUi } from "./guidedBusy";
 import { getCurrentWorkflow, aiTourSteps, buildWorkflowTour, withOpenStep } from "../automations/workflowTour";
-import { runAskUser } from "../ask-user";
+import { dropAnsweredAskUser, runAskUser } from "../ask-user";
 import { runAgentWalkthrough } from "../walkthrough/agentWalkthrough";
 
 type RpcResult = Record<string, unknown>;
@@ -81,7 +81,7 @@ function handleListTargets(params: Record<string, unknown>): RpcResult {
   return { targets, actions: listUiActions(route) };
 }
 
-async function dispatch(method: string, params: Record<string, unknown>): Promise<RpcResult> {
+async function dispatch(method: string, params: Record<string, unknown>, requestId = ""): Promise<RpcResult> {
   try {
     if (method === "navigate") return handleNavigate(params);
     if (method === "list_targets") return handleListTargets(params);
@@ -102,7 +102,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
         params.questions,
         String(params.title ?? ""),
         String(params.conv_id ?? ""),
-        { groupIds, author },
+        { groupIds, author, requestId },
       );
     }
     return { error: `unknown method: ${method}` };
@@ -115,6 +115,11 @@ export function UiRpcBridge() {
   useEffect(() => {
     installAgentEventBus();
     const handler = async (event: AgentEvent) => {
+      // Answered in another window or on the phone: close it here too.
+      if (event.type === "ui_rpc_settled") {
+        dropAnsweredAskUser(String(event.request_id ?? ""));
+        return;
+      }
       if (event.type !== "ui_rpc_request") return;
       const requestId = event.request_id ?? "";
       if (!requestId) return;
@@ -131,7 +136,7 @@ export function UiRpcBridge() {
           if (claim && (await claim(requestId)) === false) return;
         }
       }
-      void dispatch(method, params).then((result) => {
+      void dispatch(method, params, requestId).then((result) => {
         void getApi()?.ui_rpc_respond(requestId, result);
       });
     };

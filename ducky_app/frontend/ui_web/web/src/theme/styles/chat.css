@@ -5296,6 +5296,22 @@
   word-break: break-word;
 }
 
+.context-usage-panel-agent-row-action {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.context-usage-panel-agent-row-action:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
 .context-usage-panel-agent-status {
   margin: 8px 0 0;
   font-size: 11px;

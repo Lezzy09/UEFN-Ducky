@@ -1139,6 +1139,13 @@ class PanelApiChatsMixin:
     def delete_custom_verse_template(self, template_id: str) -> dict[str, bool]:
         return {"ok": _pa.delete_custom_verse_template(template_id)}
 
+    def set_agent_allow_everything(self, conv_id: str, on: bool) -> dict[str, Any]:
+        """The chat's own "Allow everything" (approval cards) on or off."""
+        from backend.tools.panel.permission_prompt import allow_state, set_allow_everything
+
+        set_allow_everything(str(conv_id or ""), bool(on))
+        return {"ok": True, **allow_state(str(conv_id or ""))}
+
     def rename_conversation(self, conv_id: str, title: str) -> None:
         conv = _pa.load_conversation(conv_id)
         if conv:

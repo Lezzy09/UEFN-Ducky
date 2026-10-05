@@ -52,6 +52,15 @@ describe("which window answers", () => {
     expect(api.ui_rpc_respond).not.toHaveBeenCalledWith("r5", expect.anything());
   });
 
+  it("closes an approval card here when another window or the phone answered it", async () => {
+    const { countAskUserSessionsForConv } = await import("../ask-user");
+    request("r7", "ask_user", { conv_id: "c1", questions: [{ id: "agent_permission", prompt: "Allow?", options: [{ id: "once", label: "Allow once" }] }] });
+    await waitFor(() => expect(countAskUserSessionsForConv("c1")).toBe(1));
+    handler?.({ type: "ui_rpc_settled", request_id: "r7" } as unknown as AgentEvent);
+    await waitFor(() => expect(countAskUserSessionsForConv("c1")).toBe(0));
+    await waitFor(() => expect(api.ui_rpc_respond).toHaveBeenCalledWith("r7", { error: "answered in another window" }));
+  });
+
   it("claims active when the user clicks or types here", () => {
     api.ui_rpc_active.mockClear();
     fireEvent.pointerDown(document.body);

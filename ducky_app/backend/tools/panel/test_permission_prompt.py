@@ -122,16 +122,62 @@ def test_allow_everything_still_refuses_to_push_a_local_only_ai_plugin(monkeypat
                      project_root=r"C:\GitHub\uefn-plugins\uefn-plugin-anthropic")["behavior"] == "allow"
 
 
-def test_allow_everything_covers_the_agents_a_chat_starts(monkeypatch, conv) -> None:
-    family = {"sub": {"parent_conv_id": "lead"}, "member": {"leader_conv_id": "sub"}, "loop-a": {"parent_conv_id": "loop-b"},
-              "loop-b": {"parent_conv_id": "loop-a"}}
-    monkeypatch.setattr("backend.store.repos.chats.conv_get", lambda cid, **_k: family.get(cid))
+def test_allow_everything_covers_the_runs_a_chat_starts(monkeypatch, conv) -> None:
+    monkeypatch.setattr(pp, "_chat_exists", lambda cid: cid != "deleted")
     pp._remember("lead", "*")
+    pp.note_started_by("sub", "lead")  # lead sent it work (a sub-agent, a workflow ducky)
+    pp.note_started_by("member", "sub")
+    pp.note_started_by("loop-a", "loop-b")
+    pp.note_started_by("loop-b", "loop-a")
+    pp._remember("deleted", "*")
+    pp.note_started_by("orphan", "deleted")
     assert pp.allows_everything("lead") and pp.allows_everything("sub") and pp.allows_everything("member")
-    assert not pp.allows_everything("loop-a") and not pp.allows_everything("stranger") and not pp.allows_everything("")
+    for other in ("loop-a", "orphan", "stranger", ""):
+        assert not pp.allows_everything(other), other
     asked = _answer(monkeypatch, ["deny"])
     assert pp.decide("Bash", {"command": "npm test && git push"}, conv_id="member")["behavior"] == "allow"
     assert asked == []
+    assert pp.allow_state("member") == {"on": True, "own": False, "from_title": "the chat that started it"}
+    pp.note_started_by("sub", "")  # its next run came from its own chat, a schedule or the Workflows screen
+    assert not pp.allows_everything("sub") and not pp.allows_everything("member")
+
+
+def test_allow_everything_turns_off_and_goes_with_its_chat(monkeypatch, conv) -> None:
+    pp._remember("c1", "Bash:git status")
+    pp.set_allow_everything("c1", True)
+    assert pp.allow_state("c1") == {"on": True, "own": True, "from_title": ""}
+    pp.set_allow_everything("c1", False)
+    assert pp._rules("c1") == ["Bash:git status"] and not pp.allows_everything("c1")
+    pp.set_allow_everything("c1", True)
+    pp.note_started_by("c1", "lead")
+    kept = pp.approvals_of("c1")  # a recycled member's twin keeps it
+    pp.forget_chat("c1")  # deleting the chat drops its rows
+    assert pp._rules("c1") == [] and pp._started_by("c1") == ""
+    pp.restore_approvals("twin", kept)
+    assert pp.allows_everything("twin") and pp._started_by("twin") == "lead"
+
+
+def test_the_local_only_refusal_knows_every_push_and_publish(tmp_path) -> None:
+    (tmp_path / "uefn-plugin-anthropic").mkdir()
+    (tmp_path / "uefn-plugin-meshy").mkdir()
+    plugins, repo = str(tmp_path), r"C:\GitHub\UEFN-Ducky-Release"
+    for command, where in (
+        ("git -C C:/x/uefn-plugin-kimi push origin main", repo),
+        ("gh repo create me/uefn-plugin-anthropic --public --source . --push", repo),
+        ("cd C:/x/uefn-plugin-openai && gh release create v1.0.0", repo),
+        ("py scripts/release.py --publish", r"C:\x\uefn-plugin-google"),
+        ("npm publish", r"C:\x\uefn-plugin-ollama"),
+        ("git push origin main", plugins),  # a folder of plugins: the shell may sit in a local-only one
+    ):
+        assert pp._never_runs(command, where), command
+    for command, where in (
+        ("git -C uefn-plugin-meshy push", plugins),  # another plugin, named
+        ("git push origin main", repo),
+        ('git commit -am "no publish step"', r"C:\x\uefn-plugin-anthropic"),
+        ("grep -rn publish backend/", r"C:\x\uefn-plugin-anthropic"),
+        ("git log --oneline -3", r"C:\x\uefn-plugin-anthropic"),
+    ):
+        assert not pp._never_runs(command, where), command
 
 
 @pytest.mark.parametrize("tool", ["Read", "Glob", "Grep", "LS"])

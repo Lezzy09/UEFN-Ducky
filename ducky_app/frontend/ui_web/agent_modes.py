@@ -1458,6 +1458,14 @@ def run_message(
     if not conv:
         push({"type": "error", "text": "Conversation not found", "conv_id": conv_id})
         return ""
+    # Who started this run (only an explicit parent, never the chat that happens to be open):
+    # "Allow everything" in that chat covers this one.
+    try:
+        from backend.tools.panel.permission_prompt import note_started_by
+
+        note_started_by(conv_id, parent)
+    except Exception:
+        pass
 
     # Cursor-style Stop → follow-up: UI goes idle immediately while the old
     # thread is still unwinding. Cancel + join so the new turn can start with

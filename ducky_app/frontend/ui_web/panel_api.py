@@ -1011,7 +1011,20 @@ class PanelApi(
         """
         from frontend.ui_web import ui_rpc
 
-        return ui_rpc.respond(str(request_id or ""), payload or {})
+        rid = str(request_id or "")
+        answered = ui_rpc.respond(rid, payload or {})
+        if answered:
+            # Every window and the phone got the request: the others close it, so an
+            # answer there can't land after this one and be dropped.
+            try:
+                from frontend.ui_web.agent_modes import get_panel_push
+
+                push = get_panel_push()
+                if push is not None:
+                    push({"type": "ui_rpc_settled", "request_id": rid})
+            except Exception:
+                pass
+        return answered
 
     def ui_rpc_ack(self, request_id: str) -> bool:
         """The window the request was for took it (Show me, a tour); it answers when done."""

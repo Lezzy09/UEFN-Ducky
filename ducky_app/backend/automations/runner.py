@@ -1474,14 +1474,15 @@ def _spawn_ducky(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]
     prompt = str(cfg.get("prompt") or payload.get("prompt") or "")
     run_id = ""
     if prompt:
-        run_id = _run_message(conv.id, prompt, str(cfg.get("mode") or "agent"), str(cfg.get("model") or ""))
+        run_id = _run_message(conv.id, prompt, str(cfg.get("mode") or "agent"), str(cfg.get("model") or ""),
+                              parent=str(payload.get("caller_conv_id") or ""))
     return {"ok": True, "result": {"conv_id": conv.id, "run_id": run_id}}
 
 
-def _run_message(conv_id: str, text: str, mode: str, model: str) -> str:
+def _run_message(conv_id: str, text: str, mode: str, model: str, *, parent: str = "") -> str:
     from frontend.ui_web.agent_modes import run_message
 
-    return str(run_message(conv_id, text, mode, model) or "")
+    return str(run_message(conv_id, text, mode, model, parent=parent) or "")
 
 
 def _cancel_agent_on_stop(conv_id: str) -> Callable[[], None]:

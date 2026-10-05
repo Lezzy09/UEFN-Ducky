@@ -26,6 +26,8 @@ export type AskUserSession = {
 export type AskUserRunOpts = {
   groupIds?: string[];
   author?: MessageAuthorDto;
+  /** The ui_rpc request it answers: answered in another window, it closes here. */
+  requestId?: string;
 };
 
 type Pending = {
@@ -35,6 +37,7 @@ type Pending = {
   convId: string;
   groupIds: string[];
   author?: MessageAuthorDto;
+  requestId?: string;
   resolve: (result: AskUserResult | { error: string }) => void;
 };
 
@@ -148,6 +151,21 @@ export function settleAskUser(
   notify();
 }
 
+/** Another window (or the phone) answered this request: close it here. */
+export function dropAnsweredAskUser(requestId: string): void {
+  if (!requestId) return;
+  for (const [id, p] of [...sessions]) {
+    if (p.requestId === requestId) settleAskUser({ error: "answered in another window" }, id);
+  }
+  const before = orphanQueue.length;
+  orphanQueue = orphanQueue.filter((p) => {
+    if (p.requestId !== requestId) return true;
+    p.resolve({ error: "answered in another window" });
+    return false;
+  });
+  if (orphanQueue.length !== before) notify();
+}
+
 /**
  * Show ask-user UI. Resolves when the user finishes the batch (or errors).
  * With convId (or focused chat): docked above that chat's composer.
@@ -173,6 +191,7 @@ export function runAskUser(
       convId: cid,
       groupIds,
       author: opts?.author,
+      requestId: opts?.requestId,
       resolve,
     };
     if (cid) {

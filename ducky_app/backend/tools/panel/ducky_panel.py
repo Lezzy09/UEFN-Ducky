@@ -1442,6 +1442,9 @@ def ducky_recycle_member(
         )
     title = (old.title or str(persona.get("ducky_name") or "") or "Member").strip()[:120]
     old_title = old.title
+    from backend.tools.panel.permission_prompt import approvals_of, restore_approvals
+
+    kept_approvals = approvals_of(old_id)  # "Allow everything" goes to the twin
 
     delete_conversation(old_id, project_root=root)
 
@@ -1452,6 +1455,7 @@ def ducky_recycle_member(
         parent_conv_id=parent_id,
         **persona,
     )
+    restore_approvals(new_conv.id, kept_approvals)
 
     # Refresh hub roster: drop old id, add twin; restore leader if needed.
     group = load_conversation(parent_id, project_root=root) or parent_conv
@@ -1711,8 +1715,19 @@ def ducky_terminal_run(
     command_timeout_s: float = 300.0,
     pretty: bool = False,
 ) -> str:
-    """Run a shell command in a panel terminal after user approves it in the Allow/Deny popup."""
+    """Run a shell command in a panel terminal after user approves it in the Allow/Deny popup
+    (no popup when this chat said "Allow everything")."""
     mgr = _terminal_manager()
+    auto = False
+    chat = _terminal_chat(conv_id)
+    from backend.tools.panel.permission_prompt import _never_runs, _project_root, allows_everything
+
+    if chat and allows_everything(chat):
+        session = mgr.get_session(session_id.strip())
+        refused = _never_runs(command, getattr(session, "cwd", "") or _project_root())
+        if refused:
+            return tool_json({"ok": False, "error": refused}, pretty=pretty)
+        auto = True
     result = mgr.run_agent_command(
         session_id.strip(),
         command,
@@ -1722,8 +1737,23 @@ def ducky_terminal_run(
         wait=wait,
         approval_timeout_s=max(5.0, min(float(approval_timeout_s), 600.0)),
         command_timeout_s=max(5.0, min(float(command_timeout_s), 3600.0)),
+        auto_approve=auto,
     )
     return tool_json(result, pretty=pretty)
+
+
+def _terminal_chat(conv_id: str) -> str:
+    """The chat running this tool: the run's own (bound) chat, else the one it named."""
+    try:
+        from backend.workspace import identity as run_identity
+
+        ctx = run_identity.current()
+        bound = ((ctx.conv_id if ctx is not None else "") or "").strip()
+        if bound:
+            return bound
+    except Exception:
+        pass
+    return (conv_id or "").strip()
 
 
 @mcp.tool()

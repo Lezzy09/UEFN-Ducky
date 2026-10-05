@@ -13,8 +13,10 @@ the chat (its own ``workspace_state`` row, so saving the chat can't drop it) for
 ``;``/``&&``/``|`` or spanning lines is never remembered on its own, and pushes, force/reset/
 clean, deletes, PR/release actions and build/publish/deploy scripts are never remembered that
 way. "Allow everything in this chat" (rule ``*``) stops every card in that chat and in the
-chats it starts (sub-agents, group members, workflow duckies), those too. The one thing it
-never runs: a push or publish of a local-only AI plugin (the owner's rule), which is refused.
+runs it starts (a sub-agent, a group member, a workflow ducky it sent work to: each run saves
+who started it), those too. The one thing it never runs: a push or publish of a local-only
+AI plugin (the owner's rule), which is refused. The chat's context panel shows it and turns
+it off; deleting a chat drops its rows.
 """
 
 from __future__ import annotations
@@ -66,7 +68,16 @@ _RISKY: tuple[tuple[re.Pattern[str], str], ...] = tuple(
 )
 
 # Local-only AI provider plugins: never sent anywhere (user rule).
-_LOCAL_ONLY_PLUGIN_RE = re.compile(r"uefn-plugin-(ollama|anthropic|openai|kimi|spacexai|google)\b", re.IGNORECASE)
+_LOCAL_ONLY_NAMES = ("ollama", "anthropic", "openai", "kimi", "spacexai", "google")
+_LOCAL_ONLY_PLUGIN_RE = re.compile(rf"uefn-plugin-({'|'.join(_LOCAL_ONLY_NAMES)})\b", re.IGNORECASE)
+_ANY_PLUGIN_RE = re.compile(r"uefn-plugin-[\w-]+", re.IGNORECASE)
+# Changes something remote: a push in any form, a GitHub repo / release / PR, a publish.
+_REMOTE_CHANGE_RE = re.compile(
+    r"\bgit(?:\.exe)?\b[^;&|\n]*\spush\b|--push\b|\bgh\s+(?:repo\s+(?:create|edit|sync)|release|pr\s+(?:create|merge))\b"
+    r"|\b(?:npm|pnpm|yarn)\s+publish\b|\btwine\s+upload\b|--publish\b|\bpublish\w*\.py\b",
+    re.IGNORECASE,
+)
+_QUOTED_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
 _CHAIN_RE = re.compile(r"(;|&&|\|\||\||`|\$\(|>|<|\n)")
 
 
@@ -217,54 +228,121 @@ def _rules(conv_id: str) -> list[str]:
     return list(getattr(conv, "agent_allow_rules", None) or []) if conv is not None else []
 
 
-def _started_by(conv_id: str) -> str:
-    """The chat that started this one: a sub-agent's parent, a group member's leader."""
-    doc: dict[str, Any] | None = None
+def _started_key(conv_id: str) -> str:
+    return f"agent_started_by:{conv_id}"
+
+
+def note_started_by(conv_id: str, starter: str) -> None:
+    """Save who started this chat's run (or clear it: started from its own chat, a schedule,
+    the Workflows screen). "Allow everything" passes down this link only, never through a
+    group hub or to a run no chat started."""
+    conv_id, starter = (conv_id or "").strip(), (starter or "").strip()
+    if not conv_id or not _rules_in_db():
+        return
     try:
-        from backend.store.repos import chats
+        from backend.store.repos import kv
 
-        doc = chats.conv_get(conv_id, with_messages=False)
+        if starter and starter != conv_id:
+            kv.set_doc(_RULES_TABLE, _started_key(conv_id), starter)
+        else:
+            kv.delete_doc(_RULES_TABLE, _started_key(conv_id))
     except Exception:
-        doc = None
-    if doc is None:
-        conv = _load_conv(conv_id)
-        if conv is None:
-            return ""
-        doc = {"parent_conv_id": getattr(conv, "parent_conv_id", ""), "leader_conv_id": getattr(conv, "leader_conv_id", "")}
-    return str(doc.get("parent_conv_id") or doc.get("leader_conv_id") or "").strip()
+        pass
 
 
-def allows_everything(conv_id: str) -> bool:
-    """"Allow everything" was picked in this chat, or in a chat that started it."""
+def _started_by(conv_id: str) -> str:
+    if not conv_id or not _rules_in_db():
+        return ""
+    try:
+        from backend.store.repos import kv
+
+        doc = kv.get_doc(_RULES_TABLE, _started_key(conv_id))
+    except Exception:
+        return ""
+    return doc.strip() if isinstance(doc, str) else ""
+
+
+def _chat_exists(conv_id: str) -> bool:
+    """A deleted chat passes nothing down (store errors count as gone: the card shows)."""
+    try:
+        from backend.store.switch import use_db
+
+        if use_db("chats"):
+            from backend.store.repos import chats
+
+            return chats.conv_get(conv_id, with_messages=False) is not None
+    except Exception:
+        return False
+    return _load_conv(conv_id) is not None
+
+
+def allow_source(conv_id: str) -> str:
+    """The chat whose "Allow everything" covers this one: itself, or the chat that started
+    its run (and so on up); '' when none."""
     seen: list[str] = []
     cid = (conv_id or "").strip()
     while cid and cid not in seen and len(seen) < 8:
+        if seen and not _chat_exists(cid):
+            return ""
         if _ALL_RULE in _rules(cid):
-            return True
+            return cid
         seen.append(cid)
         cid = _started_by(cid)
-    return False
+    return ""
+
+
+def allow_state(conv_id: str) -> dict[str, Any]:
+    """For the chat's context panel: on, set here (can be turned off here) or from which chat."""
+    src = allow_source(conv_id)
+    out: dict[str, Any] = {"on": bool(src), "own": bool(src) and src == (conv_id or "").strip(), "from_title": ""}
+    if src and not out["own"]:
+        title = ""
+        try:
+            from backend.store.repos import chats
+
+            doc = chats.conv_get(src, with_messages=False)
+            title = str((doc or {}).get("title") or "")
+        except Exception:
+            conv = _load_conv(src)
+            title = str(getattr(conv, "title", "") or "") if conv is not None else ""
+        out["from_title"] = title or "the chat that started it"
+    return out
+
+
+def allows_everything(conv_id: str) -> bool:
+    """"Allow everything" was picked in this chat, or in the chat that started its run."""
+    return bool(allow_source(conv_id))
+
+
+def _holds_local_only_plugin(root: str) -> bool:
+    try:
+        return any(os.path.isdir(os.path.join(root, f"uefn-plugin-{name}")) for name in _LOCAL_ONLY_NAMES)
+    except (OSError, ValueError):
+        return False
 
 
 def _never_runs(command: str, project_root: str) -> str:
     """Refused even under "allow everything": pushing or publishing a local-only AI plugin."""
-    if _LOCAL_ONLY_PLUGIN_RE.search(f"{command} {project_root}") and re.search(r"\bgit\s+push\b|publish", command, re.IGNORECASE):
+    if not _REMOTE_CHANGE_RE.search(_QUOTED_RE.sub(" ", command)):  # a quoted message or pattern is no action
+        return ""
+    if _LOCAL_ONLY_PLUGIN_RE.search(f"{command} {project_root}"):
         return "This is a local-only AI plugin: it is never pushed or published. Leave it on this PC."
+    if project_root and not _ANY_PLUGIN_RE.search(command) and _holds_local_only_plugin(project_root):
+        # A folder of plugins: an earlier `cd` may have left the shell inside a local-only one.
+        return ("This folder holds local-only AI plugins, which are never pushed or published. "
+                "To push or publish another plugin, name its folder (git -C uefn-plugin-<name> push).")
     return ""
 
 
-def _remember(conv_id: str, rule: str) -> None:
-    if not conv_id or not rule:
-        return
-    rules = _rules(conv_id)
-    if rule in rules:
-        return
-    rules = (rules + [rule])[-200:]
+def _store_rules(conv_id: str, rules: list[str]) -> None:
     if _rules_in_db():
         try:
             from backend.store.repos import kv
 
-            kv.set_doc(_RULES_TABLE, _rules_key(conv_id), rules)
+            if rules:
+                kv.set_doc(_RULES_TABLE, _rules_key(conv_id), rules)
+            else:
+                kv.delete_doc(_RULES_TABLE, _rules_key(conv_id))
         except Exception:
             pass
         return
@@ -278,6 +356,50 @@ def _remember(conv_id: str, rule: str) -> None:
         save_conversation(conv)
     except Exception:
         pass
+
+
+def set_allow_everything(conv_id: str, on: bool) -> None:
+    """Turn this chat's own "Allow everything" on or off (its other remembered rules stay)."""
+    conv_id = (conv_id or "").strip()
+    if not conv_id:
+        return
+    if on:
+        _remember(conv_id, _ALL_RULE)
+    elif _ALL_RULE in _rules(conv_id):
+        _store_rules(conv_id, [r for r in _rules(conv_id) if r != _ALL_RULE])
+
+
+def forget_chat(conv_id: str) -> None:
+    """A deleted chat: drop its remembered approvals and who-started-it row."""
+    if not conv_id or not _rules_in_db():
+        return
+    try:
+        from backend.store.repos import kv
+
+        kv.delete_doc(_RULES_TABLE, _rules_key(conv_id))
+        kv.delete_doc(_RULES_TABLE, _started_key(conv_id))
+    except Exception:
+        pass
+
+
+def approvals_of(conv_id: str) -> dict[str, Any]:
+    """What to carry to a recycled chat's twin (read it before the old chat is deleted)."""
+    return {"rules": _rules(conv_id), "started_by": _started_by(conv_id)}
+
+
+def restore_approvals(conv_id: str, saved: dict[str, Any]) -> None:
+    for rule in saved.get("rules") or []:
+        _remember(conv_id, str(rule))
+    note_started_by(conv_id, str(saved.get("started_by") or ""))
+
+
+def _remember(conv_id: str, rule: str) -> None:
+    if not conv_id or not rule:
+        return
+    rules = _rules(conv_id)
+    if rule in rules:
+        return
+    _store_rules(conv_id, (rules + [rule])[-200:])
 
 
 def _ask(card: dict[str, Any], tool_name: str) -> tuple[str, str]:
@@ -298,7 +420,8 @@ def _ask(card: dict[str, Any], tool_name: str) -> tuple[str, str]:
             {
                 "id": _ALLOW_ALL,
                 "label": "Allow everything in this chat",
-                "description": "Never ask again in this chat or the agents it starts: pushes, deletes and publishes run too.",
+                "description": "Never ask again in this chat or the agents it starts: pushes, deletes and publishes run too. "
+                "Turn it off in the chat's context panel.",
             }
         )
     options.append({"id": _DENY, "label": "Deny", "description": "Don't run it. The agent is told you said no."})

@@ -84,6 +84,18 @@ def test_delete_workflow_asks_the_user_first_then_opens_editor(monkeypatch):
     assert json.loads(delete_workflow(wid))["error"] == "workflow not found"
 
 
+def test_delete_workflow_needs_no_second_yes_when_the_chat_allows_everything(monkeypatch):
+    from backend.automations.store import get_workflow
+    from backend.tools.panel import panel_automations
+    from backend.tools.panel.panel_automations import delete_workflow, save_workflow
+
+    _events(monkeypatch)
+    wid = json.loads(save_workflow(name="Gone too", graph={"nodes": [], "edges": []}))["workflow"]["id"]
+    monkeypatch.setattr(panel_automations, "_chat_allows_everything", lambda: True)
+    assert json.loads(delete_workflow(wid)) == {"ok": True, "id": wid}
+    assert get_workflow(wid) is None
+
+
 def test_find_workflows_then_make_one_from_a_template(monkeypatch):
     from backend.automations.store import delete_workflow as _delete
     from backend.tools.panel.panel_automations import create_workflow_from_template, find_workflows, save_workflow

@@ -3,6 +3,7 @@ export { AskUserForm } from "./AskUserForm";
 export { getFocusedChatForAsk, setFocusedChatForAsk } from "./focusedChatForAsk";
 export {
   runAskUser,
+  dropAnsweredAskUser,
   settleAskUser,
   getAskUserSession,
   getAskUserSessionForConv,

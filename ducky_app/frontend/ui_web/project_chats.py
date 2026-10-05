@@ -1278,9 +1278,15 @@ def delete_conversation(conv_id: str, project_root: str | None = None) -> None:
     # A spawned chat is owned by its parent. Permanently deleting the parent must
     # not leave orphaned sub-agent conversations behind.
     ids = [conv_id, *conversation_descendant_ids(conv_id, project_root)]
+    try:
+        from backend.tools.panel.permission_prompt import forget_chat
+    except Exception:
+        forget_chat = None
     for target_id in reversed(ids):
         if _use_db():
             _repo().conv_delete(target_id)
+        if forget_chat is not None:
+            forget_chat(target_id)  # its "Allow everything" must not outlive it
         conv_folder = conversation_dir(target_id, project_root, _conversations_dir(project_root))
         if not conv_folder.is_dir():
             meta = _find_conversation_meta(target_id, project_root)
