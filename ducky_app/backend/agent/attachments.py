@@ -145,19 +145,40 @@ def attachments_from_message_dict(
     return parse_attachment_dicts(raw_list)
 
 
+def reads_files_in_parts(provider: str, model: str, coding_agent: str = "") -> bool:
+    """True when the turn can call workspace_read_file, so a big file is read in parts.
+
+    Coding agents always have Ducky's read tools. A gateway model has them unless its API
+    says it takes no tools; the site's own Brain runs remotely and cannot read this PC.
+    """
+    agent = (coding_agent or "").strip().lower()
+    if agent and agent != "ducky":
+        return True
+    from backend.agent.model_capabilities import supports_tools
+    from backend.agent.model_pricing import infer_provider, resolve_provider_for_model
+
+    mid = (model or "").strip()
+    prov = (resolve_provider_for_model(mid, provider) or provider or "").strip().lower()
+    if prov == "uefn_ducky" or infer_provider(mid) == "uefn_ducky":
+        return False
+    return not model_in_cache(prov, mid) or supports_tools(prov, mid)
+
+
 def file_text_budget(provider: str, model: str, coding_agent: str = "") -> dict[str, int]:
     """How much attached text the model takes, from its context window as its API reports it.
 
-    ``context_tokens`` is the model's whole window and ``file_max_tokens`` the part files
-    may fill. Both are 0 when the model's API never reported a window: then nothing is
-    capped here and the API itself refuses what does not fit.
+    ``context_tokens`` is the model's whole window. ``file_inline_tokens`` is what one
+    message pastes whole; a bigger file is saved and read in parts. ``file_max_tokens`` is
+    the hard cap for models that cannot read in parts (0 = no cap). All are 0 when the
+    model's API never reported a window: then the API itself refuses what does not fit.
     """
+    from backend.agent.attached_files import inline_token_budget
     from frontend.ui_web.context_tokens import _coding_agent_context_limit, context_limit_for_model
 
     agent = (coding_agent or "").strip().lower()
     mid = (model or "").strip()
     if not mid:
-        return {"context_tokens": 0, "file_max_tokens": 0}
+        return {"context_tokens": 0, "file_max_tokens": 0, "file_inline_tokens": 0}
     try:
         if agent and agent != "ducky":
             ctx = _coding_agent_context_limit(agent, mid) or 0
@@ -167,13 +188,24 @@ def file_text_budget(provider: str, model: str, coding_agent: str = "") -> dict[
             ctx = context_limit_for_model(mid, resolve_provider_for_model(mid, provider)) or 0
     except Exception:
         ctx = 0
-    return {"context_tokens": int(ctx), "file_max_tokens": int(ctx * _FILE_SHARE_OF_CONTEXT)}
+    try:
+        in_parts = reads_files_in_parts(provider, mid, agent)
+    except Exception:
+        in_parts = False
+    return {
+        "context_tokens": int(ctx),
+        "file_max_tokens": 0 if in_parts else int(ctx * _FILE_SHARE_OF_CONTEXT),
+        "file_inline_tokens": inline_token_budget(int(ctx)) if in_parts else 0,
+    }
 
 
 def check_file_text_fits(
     attachments: list[MessageAttachment], *, provider: str, model: str, coding_agent: str = "",
 ) -> None:
-    """Refuse files that would not fit in the model's context window, naming its size."""
+    """Refuse files that would not fit in the model's context window, naming its size.
+
+    Only for models that cannot read a saved file in parts; the rest get big files by path.
+    """
     files = [a for a in attachments if a.kind == "file" and a.text]
     if not files:
         return
@@ -214,13 +246,15 @@ def prepare_outgoing_user_message(
     model: str,
     external_agent: bool = False,
     coding_agent: str = "",
+    inline_files: bool = True,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Validate attachments, inline file text, and return stored message fields.
 
     ``external_agent`` skips the embedded-model vision capability check: a BYOA
     coding agent (Claude Code / Codex / Cursor) handles images itself, so the
     panel's own provider/model must not gate them. ``coding_agent`` picks whose
-    model catalog sizes the file limit.
+    model catalog sizes the file limit. ``inline_files=False`` leaves file text out:
+    the caller adds it with ``add_file_blocks`` once the files are saved.
     """
     attachments = parse_attachment_dicts(attachments_raw, current=True, provider=provider, model=model)
     check_file_text_fits(attachments, provider=provider, model=model, coding_agent=coding_agent)
@@ -230,7 +264,7 @@ def prepare_outgoing_user_message(
             raise ValueError("Model capabilities unknown — reload models in settings.")
         if not supports_vision(provider, model):
             raise ValueError(f"Model {model!r} does not support images — pick a vision model or remove images.")
-    content = merge_file_text_into_content(text, attachments)
+    content = merge_file_text_into_content(text, attachments if inline_files else [])
     # Persist chat images under AppData tool_captures (never the UEFN project
     # folder — project-side Ducky storage is .ducky/** only).
     existing_paths: dict[str, str] = {}
@@ -283,3 +317,47 @@ def prepare_outgoing_user_message(
     if path_hints:
         content = (content + "\n\n" if content else "") + "\n".join(path_hints)
     return content, stored
+
+
+def add_file_blocks(
+    content: str,
+    attachments: list[MessageAttachment],
+    stored: list[dict[str, Any]],
+    conv_dir: Any,
+    *,
+    provider: str,
+    model: str,
+    coding_agent: str = "",
+) -> str:
+    """Append each attached text file to ``content``: whole when it fits, else by path.
+
+    ``stored`` are the rows ``persist_message_attachments`` wrote, in the same order as
+    the file attachments. Each row gets ``sent`` ("whole" / "parts") so the chat can say
+    how the model received it.
+    """
+    from pathlib import Path
+
+    from backend.agent.attached_files import file_block
+    from frontend.ui_web.context_tokens import count_tokens
+
+    files = [a for a in attachments if a.kind == "file"]
+    if not any(a.text for a in files):
+        return content
+    rows = [r for r in stored if r.get("kind") == "file"]
+    budget = file_text_budget(provider, model, coding_agent)["file_inline_tokens"]
+    base = Path(conv_dir) if conv_dir else None
+    blocks: list[str] = []
+    for i, att in enumerate(files):
+        if not att.text:
+            continue
+        row = rows[i] if i < len(rows) else {}
+        saved = str(base / row["path"]) if base and row.get("path") else ""
+        readable = str(base / row["readable_path"]) if base and row.get("readable_path") else ""
+        block, sent = file_block(
+            att.name, att.text, count_tokens=lambda t: count_tokens(t, model, provider),
+            budget=budget, saved_path=saved, readable_path=readable,
+        )
+        if row:
+            row["sent"] = sent
+        blocks.append(block)
+    return "\n\n".join([p for p in [(content or "").strip(), *blocks] if p])

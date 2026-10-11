@@ -134,15 +134,25 @@ def persist_message_attachments(
                 video_row["transcript_note"] = "Transcript not ready when sent"
             out.append(video_row)
         elif att.kind == "file":
-            full.write_text(att.text or "", encoding="utf-8")
-            out.append(
-                {
-                    "kind": "file",
-                    "name": att.name,
-                    "mime": att.mime or "text/plain",
-                    "path": rel,
-                }
-            )
+            from backend.agent.attached_files import readable_copy_needed, readable_copy_path, readable_text
+
+            text = att.text or ""
+            full.write_text(text, encoding="utf-8")
+            file_row: dict[str, Any] = {
+                "kind": "file",
+                "name": att.name,
+                "mime": att.mime or "text/plain",
+                "path": rel,
+                "size_bytes": len(text.encode("utf-8")),
+            }
+            # Bundles and minified files: a copy without embedded data, lines wrapped,
+            # that an agent can read in parts.
+            if readable_copy_needed(text):
+                readable = readable_copy_path(full)
+                policy.require(str(readable))
+                readable.write_text(readable_text(text), encoding="utf-8")
+                file_row["readable_path"] = f"attachments/{readable.name}"
+            out.append(file_row)
     return out
 
 

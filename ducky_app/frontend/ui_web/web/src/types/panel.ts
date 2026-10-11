@@ -961,6 +961,8 @@ export interface MessageAttachmentDto {
   media_url?: string;
   /** Video: frames the AI saw (non-Gemini recipients). */
   frames?: VideoFrameDto[];
+  /** File: how the model got it — pasted "whole", or saved for it to read in "parts". */
+  sent?: "whole" | "parts";
 }
 
 export interface VideoPrepStatusDto {
@@ -1016,6 +1018,8 @@ export interface VideoSettingsDto {
     context_tokens?: number;
     /** Tokens of attached file text one message may carry (0 = no cap; the API decides). */
     file_max_tokens?: number;
+    /** A file over this many tokens is saved and read in parts by the agent (0 = always pasted whole). */
+    file_inline_tokens?: number;
   };
   ffmpeg: FfmpegStatusDto;
 }

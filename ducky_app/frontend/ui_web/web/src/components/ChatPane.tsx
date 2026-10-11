@@ -336,6 +336,7 @@ export function ChatPane({
     error: attachmentError,
     hasImages,
     hasPendingVideos,
+    readInParts,
     retryVideo,
     addFiles,
     removeAttachment,
@@ -973,6 +974,7 @@ export function ChatPane({
     requestAnimationFrame(() => {
       listRef.current?.scrollToLatest();
       onAtBottomChange(true);
+      listRef.current?.flashActivity?.();
     });
   }), [chat.id, onAtBottomChange]);
 
@@ -1598,6 +1600,7 @@ export function ChatPane({
             {slashStatus ? <div className="slash-command-status">{slashStatus}</div> : null}
             <ComposerAttachmentChips
               attachments={attachments}
+              readInParts={readInParts}
               onRemove={removeAttachment}
               onPreview={(att) => setPreviewAttachmentId(att.id)}
               onRetry={retryVideo}

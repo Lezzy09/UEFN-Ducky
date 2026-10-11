@@ -54,7 +54,7 @@ def test_video_settings_accept_auto(monkeypatch):
     api.set_video_settings({"video_frames_per_video": 12, "max_images_per_message": 60})
     out = api.set_video_settings({"video_frames_per_video": 0, "max_images_per_message": 0})
     assert out["video_frames_per_video"] == 0 and out["max_images_per_message"] == 0
-    assert out["auto"] == {"frames_per_video": 20, "max_images_per_message": 20, "context_tokens": 0, "file_max_tokens": 0}
+    assert out["auto"] == {"frames_per_video": 20, "max_images_per_message": 20, "context_tokens": 0, "file_max_tokens": 0, "file_inline_tokens": 0}
     assert api.get_video_settings()["video_frames_per_video"] == 0
 
 
@@ -68,8 +68,8 @@ def test_auto_limits_follow_the_conversation(monkeypatch):
         lambda cid, project_root=None: SimpleNamespace(is_group=False, provider="anthropic", model="claude-x"),
     )
     api = PanelApi()
-    assert api.get_video_settings("c1")["auto"] == {"frames_per_video": 20, "max_images_per_message": 100, "context_tokens": 0, "file_max_tokens": 0}
-    assert api.get_video_settings()["auto"] == {"frames_per_video": 20, "max_images_per_message": 20, "context_tokens": 0, "file_max_tokens": 0}
+    assert api.get_video_settings("c1")["auto"] == {"frames_per_video": 20, "max_images_per_message": 100, "context_tokens": 0, "file_max_tokens": 0, "file_inline_tokens": 0}
+    assert api.get_video_settings()["auto"] == {"frames_per_video": 20, "max_images_per_message": 20, "context_tokens": 0, "file_max_tokens": 0, "file_inline_tokens": 0}
 
 
 def test_file_limit_follows_the_picked_model(monkeypatch):
@@ -77,12 +77,14 @@ def test_file_limit_follows_the_picked_model(monkeypatch):
 
     from backend.agent.model_fetch import ModelInfo
 
-    windows = {"claude-x": 200_000, "big-1": 1_000_000}
+    windows = {"claude-x": 200_000, "big-1": 1_000_000, "tools-1": 400_000}
+
+    def info(p, m):
+        return ModelInfo(id=m, context_limit=windows[m], supports_tools=m == "tools-1") if m in windows else None
+
     monkeypatch.setattr("backend.agent.video.ffmpeg_install.status", lambda: {"state": "missing"})
-    monkeypatch.setattr(
-        "backend.agent.model_fetch.get_model_info",
-        lambda p, m: ModelInfo(id=m, context_limit=windows[m]) if m in windows else None,
-    )
+    monkeypatch.setattr("backend.agent.model_fetch.get_model_info", info)
+    monkeypatch.setattr("backend.agent.model_capabilities.get_model_info", info)
     monkeypatch.setattr(
         "frontend.ui_web.project_chats.load_conversation",
         lambda cid, project_root=None: SimpleNamespace(is_group=False, provider="anthropic", model="claude-x"),
@@ -95,6 +97,11 @@ def test_file_limit_follows_the_picked_model(monkeypatch):
     assert (picked["context_tokens"], picked["file_max_tokens"]) == (1_000_000, 750_000)
     unknown = api.get_video_settings("c1", "mystery-model")["auto"]
     assert (unknown["context_tokens"], unknown["file_max_tokens"]) == (0, 0)
+    # A model that can call tools reads a big file in parts: no cap, only a paste-whole share.
+    tools = api.get_video_settings("c1", "tools-1")["auto"]
+    assert (tools["file_max_tokens"], tools["file_inline_tokens"]) == (0, 40_000)
+    coding = api.get_video_settings("c1", "big-1", "codex")["auto"]
+    assert coding["file_max_tokens"] == 0
 
 
 def test_stage_prep_uses_model_frames(monkeypatch):

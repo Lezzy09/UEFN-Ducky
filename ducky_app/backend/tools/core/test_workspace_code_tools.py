@@ -84,6 +84,33 @@ def test_read_without_range_stops_at_the_cap(project, monkeypatch) -> None:
     assert "start_line=5" in out["more"]
 
 
+def test_one_read_never_floods_the_model(project, monkeypatch) -> None:
+    root, _ = project
+    monkeypatch.setattr(wc, "READ_CHAR_CAP", 25)
+    (root / "lines.txt").write_text("".join(f"line {n}\n" for n in range(1, 11)), encoding="utf-8")
+    out = _call(system.workspace_read_file, "lines.txt")
+    assert out["content"].splitlines() == ["line 1", "line 2", "line 3"]
+    assert out["end_line"] == 3 and "start_line=4" in out["more"]
+    (root / "min.js").write_text("x" * 100 + "\nnext\n", encoding="utf-8")
+    one = _call(system.workspace_read_file, "min.js")
+    assert one["content"] == "x" * 25 and "Line 1 is longer" in one["more"] and "start_line=2" in one["more"]
+
+
+def test_reads_a_file_attached_to_a_chat(project, tmp_path, monkeypatch) -> None:
+    import frontend.settings as settings
+
+    monkeypatch.setattr(settings, "default_app_data_dir", lambda: tmp_path / "appdata")
+    att = tmp_path / "appdata" / "chats" / "projects" / "p" / "conversations" / "c1" / "attachments"
+    att.mkdir(parents=True)
+    kit = att / "1_0_Kit.html.readable.txt"
+    kit.write_text("a\nb\nc\n", encoding="utf-8")
+    out = _call(system.workspace_read_file, path=str(kit), start_line=2, end_line=3)
+    assert out["content"] == "b\nc"
+    outside = tmp_path / "elsewhere.txt"
+    outside.write_text("secret", encoding="utf-8")
+    assert wc.chat_file_path(str(outside)) == ""
+
+
 def test_read_files_reads_several_and_reports_missing(project) -> None:
     out = _call(wc.workspace_read_files, ["src/app.py", "nope.py", "README.md"], start_line=1, end_line=1)
     by_path = {f["path"]: f for f in out["files"]}

@@ -7,11 +7,16 @@ import {
   type ActivityLine,
 } from "../utils/agentActivity";
 import { ElapsedTimer } from "./ElapsedTimer";
+import { formatElapsedMs } from "../hooks/chatTurnTimer";
 
 const DRAG_THRESHOLD_PX = 4;
 const COLLAPSED_MAX_LINES = 5;
 const DUCKY_HOVER_PREVIEW_SIZE = 300;
 const DUCKY_HOVER_PREVIEW_GAP = 12;
+/** No new output for this long while writing or thinking reads as "working on the next step". */
+const QUIET_AFTER_MS = 15_000;
+const QUIET_HINT =
+  "The model shows its next step only once it has written it out. A long plan, file or edit can take minutes.";
 
 interface AgentActivityPanelProps {
   lines: ActivityLine[];
@@ -66,7 +71,25 @@ export const AgentActivityPanel = memo(function AgentActivityPanel({
     if (autoExpand) setExpanded(true);
   }, [autoExpand, lines.length]);
 
-  const liveTitle = activityPanelTitle(lines, isWaitingOnLinked, waitingCount, waitingTitle, statusText);
+  // When the stream stops (the model is composing a big tool call it shows only when done),
+  // "Writing…" would look stuck: say so, with how long it has been quiet.
+  const last = lines[lines.length - 1];
+  const signature = `${lines.length}:${last?.status ?? ""}:${last?.text.length ?? 0}:${statusText}`;
+  const [changedAt, setChangedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { setChangedAt(Date.now()); }, [signature]);
+  const live = !showIdleTimer && !isWaitingOnLinked;
+  useEffect(() => {
+    if (!live) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 5000);
+    return () => window.clearInterval(timer);
+  }, [live]);
+  const quietMs = live && !lines.some((line) => line.status === "pending") ? Math.max(0, now - changedAt) : 0;
+  const quiet = quietMs >= QUIET_AFTER_MS;
+
+  const liveTitle = quiet
+    ? "Working on the next step"
+    : activityPanelTitle(lines, isWaitingOnLinked, waitingCount, waitingTitle, statusText);
   const title = showIdleTimer ? "Done" : liveTitle;
   const showBody = !headerOnly && !showIdleTimer && lines.length > 0;
   const showThinkingDots =
@@ -137,10 +160,15 @@ export const AgentActivityPanel = memo(function AgentActivityPanel({
           </div>
           <span className="agent-activity-panel-title">
             {title}
-            {showThinkingDots ? (
+            {showThinkingDots || quiet ? (
               <span className="agent-activity-panel-thinking-dots" aria-hidden="true" />
             ) : null}
           </span>
+          {quiet ? (
+            <span className="agent-activity-panel-quiet" title={QUIET_HINT}>
+              no new output for {formatElapsedMs(quietMs)}
+            </span>
+          ) : null}
           {chatId ? (
             <ElapsedTimer
               chatId={chatId}

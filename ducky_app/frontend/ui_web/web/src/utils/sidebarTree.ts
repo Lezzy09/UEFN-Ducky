@@ -257,7 +257,11 @@ export function buildFolderTree(
   const sortFolderList = (list: FolderItem[]) => {
     list.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
     for (const item of list) {
-      item.chats.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name));
+      // A group's lead sits at the top of its group.
+      const leads = (c: FolderItem["chats"][number]) =>
+        item.groupHubId && c.isLeader && c.parentConvId === item.groupHubId ? 1 : 0;
+      item.chats.sort((a, b) => leads(b) - leads(a)
+        || (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name));
       sortFolderList(item.children);
     }
   };

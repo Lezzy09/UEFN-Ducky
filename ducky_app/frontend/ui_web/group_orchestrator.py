@@ -154,6 +154,33 @@ def _group_folder_id(group_id: str, project_root: str | None = None) -> str:
     return (getattr(conv, "folder_id", None) or "").strip() if conv else ""
 
 
+def stays_with_outer_group(
+    conv: Any, folder_id: str, folders: list[Any], by_id: dict[str, Any] | None = None
+) -> bool:
+    """True when ``conv`` leads the group whose folder it sits in, and ``folder_id`` is a
+    group nested inside that one. A lead that also leads (or joins) its subgroups stays at
+    the top of its own group instead of being pulled into each subgroup in turn."""
+    home = (getattr(conv, "folder_id", None) or "").strip()
+    target = (folder_id or "").strip()
+    if not home or not target or home == target:
+        return False
+    rows = {f.id: f for f in folders}
+    hub = (getattr(rows.get(home), "group_hub_id", None) or "").strip()
+    if not hub:
+        return False
+    hub_conv = (by_id or {}).get(hub) or load_conversation(hub)
+    if hub_conv is None or (getattr(hub_conv, "leader_conv_id", None) or "").strip() != conv.id:
+        return False
+    seen: set[str] = set()
+    cur = (getattr(rows.get(target), "parent_id", None) or "").strip()
+    while cur and cur not in seen:
+        if cur == home:
+            return True
+        seen.add(cur)
+        cur = (getattr(rows.get(cur), "parent_id", None) or "").strip()
+    return False
+
+
 def _rehome_group_roster(group: Any) -> bool:
     """Put roster chats on the group's island. Returns whether any moved."""
     from frontend.ui_web.project_chats import _repo, _use_db, adopt_group_project
@@ -265,6 +292,15 @@ def sync_group_members_from_folder(group: Any, project_root: str | None = None) 
             )
         )
 
+    # An outer group's lead on this roster is filed in its own group, not this folder.
+    present_ids = {str(r.get("member_conv_id") or "") for r in new_rows}
+    for mid, prev in existing.items():
+        conv = by_id.get(mid)
+        if mid in present_ids or conv is None or prev.get("is_group"):
+            continue
+        if stays_with_outer_group(conv, folder_id, folders, by_id):
+            new_rows.append(normalize_member(dict(prev), index=len(new_rows)))
+
     # Designated leader must stay on the IN THIS CHAT roster (people + groups).
     # Sync used to rebuild only from folder contents and could orphan leader_conv_id.
     leader_id = (getattr(group, "leader_conv_id", None) or "").strip()
@@ -298,12 +334,14 @@ def sync_group_members_from_folder(group: Any, project_root: str | None = None) 
                         ),
                     )
                 else:
-                    if (getattr(leader, "folder_id", None) or "") != folder_id:
-                        move_conversation(leader_id, folder_id, project_root)
-                        leader = load_conversation(leader_id, project_root=project_root) or leader
-                    if (getattr(leader, "parent_conv_id", None) or "").strip() != group_id:
-                        leader.parent_conv_id = group_id
-                        save_conversation(leader, project_root)
+                    # Never pull a lead out of the outer group it leads (see stays_with_outer_group).
+                    if not stays_with_outer_group(leader, folder_id, folders, by_id):
+                        if (getattr(leader, "folder_id", None) or "") != folder_id:
+                            move_conversation(leader_id, folder_id, project_root)
+                            leader = load_conversation(leader_id, project_root=project_root) or leader
+                        if (getattr(leader, "parent_conv_id", None) or "").strip() != group_id:
+                            leader.parent_conv_id = group_id
+                            save_conversation(leader, project_root)
                     name = (
                         str(prev.get("name") or "").strip()
                         or str(getattr(leader, "ducky_name", None) or "").strip()

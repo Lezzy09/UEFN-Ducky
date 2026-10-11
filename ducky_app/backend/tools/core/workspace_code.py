@@ -43,6 +43,27 @@ _LINE_CHARS = 300
 _GIT_OUTPUT_CHARS = 60_000
 #: A read without a range stops here; the rest is a start_line away.
 READ_LINE_CAP = 2000
+#: One read never returns more text than this (~50k tokens), whatever the line range: a
+#: minified bundle is a few lines of hundreds of KB each.
+READ_CHAR_CAP = 200_000
+
+
+def chat_file_path(raw: str) -> str:
+    """The absolute path when ``raw`` is a file saved in a chat (attachments, screenshots),
+    else "". Those live in Ducky's own data folder, outside every project; reads only."""
+    if not raw or not os.path.isabs(raw):
+        return ""
+    full = os.path.realpath(os.path.abspath(raw))
+    try:
+        from frontend.settings import default_app_data_dir
+
+        chats = os.path.realpath(str(default_app_data_dir() / "chats"))
+    except Exception:
+        return ""
+    if os.path.commonpath([os.path.normcase(full), os.path.normcase(chats)]) != os.path.normcase(chats):
+        return ""
+    require_ai_access(full)
+    return full
 
 
 def _project_root() -> str:
@@ -164,10 +185,25 @@ def read_lines(full: str, start_line: int = 0, end_line: int = 0, line_numbers: 
         body = text  # the whole file, byte for byte (line endings, final newline)
     else:
         body = "\n".join(chosen)
+    long_line = False
+    if len(body) > READ_CHAR_CAP:
+        # Stop at the last whole line that fits; a single huge line is cut inside it.
+        keep = body.rfind("\n", 0, READ_CHAR_CAP)
+        if keep > 0:
+            body = body[:keep]
+            last = first + body.count("\n")
+        else:
+            body = body[:READ_CHAR_CAP]
+            last = first
+            long_line = True
+        capped = True
     out: dict[str, Any] = {"content": body, "total_lines": total}
     if first > 1 or last < total:
         out["start_line"], out["end_line"] = first, last
-    if capped:
+    if long_line:
+        rest = f" Read on with start_line={last + 1}." if last < total else ""
+        out["more"] = f"Line {last} is longer than {READ_CHAR_CAP:,} characters and was cut.{rest}"
+    elif capped and last < total:
         out["more"] = f"Lines {last + 1}-{total} not shown: read them with start_line={last + 1}."
     out["_full_text"] = text
     return out
@@ -301,17 +337,7 @@ def _image_path(path: str) -> str:
         raise ValueError("path is required")
     if not raw.lower().endswith(_IMAGE_SUFFIXES):
         raise ValueError(f"Not a picture ({', '.join(_IMAGE_SUFFIXES)}): {raw!r}")
-    full = os.path.realpath(os.path.abspath(raw))
-    try:
-        from frontend.settings import default_app_data_dir
-
-        chats = os.path.realpath(str(default_app_data_dir() / "chats"))
-    except Exception:
-        chats = ""
-    if chats and os.path.isabs(raw) and os.path.commonpath([os.path.normcase(full), os.path.normcase(chats)]) == os.path.normcase(chats):
-        require_ai_access(full)
-    else:
-        full = resolve_workspace_path(raw)
+    full = chat_file_path(raw) or resolve_workspace_path(raw)
     if not os.path.isfile(full):
         raise ValueError(f"No such picture: {raw!r}")
     if os.path.getsize(full) > _MAX_IMAGE_BYTES:

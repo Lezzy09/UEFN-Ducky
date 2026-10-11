@@ -19,7 +19,7 @@ vi.mock("../terminal/terminalApprovals", () => {
 });
 import { applyAgentBackgroundEvent, openAgentBackgroundJob, subscribeAgentBackgroundActivity } from "./agentBackgroundActivity";
 import { _resetBackgroundActivityForTests, getBackgroundJobs, countWorkingBackgroundJobs, upsertBackgroundJob } from "./backgroundActivity";
-import { useToolActivityTarget, requestToolActivity } from "../navigation/toolActivity";
+import { requestToolActivity } from "../navigation/toolActivity";
 import { BackgroundActivityDropdown } from "../components/BackgroundActivityDropdown";
 import { AgentActivityGroup } from "../components/AgentActivityGroup";
 const start = (conv = "other", id = "call-1"): AgentEvent => ({ type: "tool", conv_id: conv, run_id: "run-1",
@@ -32,66 +32,73 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); _resetBackgroundActivityForTests(); vi.useRealTimers(); vi.clearAllMocks(); });
 
-it("subscribes globally, labels another chat's command and counts turns, tools and workflows", async () => {
+it("subscribes globally: one row per running chat, saying what it does now", async () => {
   render(<BackgroundActivityDropdown />);
   await act(async () => {});
   act(() => { mocks.listener!(start()); upsertBackgroundJob({ id: "workflow:test", title: "Workflow", phase: "working" }); });
-  expect(screen.getByText("3 running")).toBeTruthy();
+  expect(screen.getByText("2 running")).toBeTruthy();
   fireEvent.click(screen.getByLabelText("Background activity"));
   expect(screen.getByText("Coordinator is working")).toBeTruthy();
-  expect(screen.getByText("py -3 -m pytest")).toBeTruthy();
+  // The tool call itself stays in the chat; the tray names the step.
+  expect(screen.queryByText("py -3 -m pytest")).toBeNull();
   act(() => vi.advanceTimersByTime(65_000));
-  expect(screen.getAllByText(/Coordinator.*1m/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/Running tests.*1m/).length).toBeGreaterThan(0);
   act(() => mocks.listener!({ ...start(), type: "tool_done", success: false, tool: { ...start().tool!, status: "error", result: "Exit code: 2" } }));
   expect(screen.getByText("2 running")).toBeTruthy();
-  expect(screen.getByText(/Failed.*exit 2/)).toBeTruthy();
+  expect(screen.getAllByText(/^Working/).length).toBeGreaterThan(0);
   act(() => mocks.listener!({ type: "agent_stopped", conv_id: "other", run_id: "run-1", reason: "done" }));
   expect(screen.getByText("1 running")).toBeTruthy();
   fireEvent.click(screen.getByText("Clear finished"));
   expect(getBackgroundJobs()).toHaveLength(1);
 });
 
-it("upserts parallel calls by id, ignores late stops from another run, and closes leftovers", () => {
+it("keeps one row across parallel calls, ignores late stops from another run, and closes it", () => {
   applyAgentBackgroundEvent(start(), "Coordinator", 1000);
   applyAgentBackgroundEvent(start("other", "call-2"), "Coordinator", 1100);
   applyAgentBackgroundEvent(start(), "Coordinator", 1200);
-  expect(getBackgroundJobs().find((j) => j.toolId === "call-1")?.startedAt).toBe(1000);
-  expect(countWorkingBackgroundJobs(getBackgroundJobs())).toBe(3);
+  expect(getBackgroundJobs()).toHaveLength(1);
+  expect(getBackgroundJobs()[0].startedAt).toBe(1000);
+  expect(getBackgroundJobs().some((j) => j.toolId)).toBe(false);
   applyAgentBackgroundEvent({ type: "agent_stopped", conv_id: "other", run_id: "older", reason: "done" });
-  expect(countWorkingBackgroundJobs(getBackgroundJobs())).toBe(3);
+  expect(countWorkingBackgroundJobs(getBackgroundJobs())).toBe(1);
   applyAgentBackgroundEvent({ type: "agent_stopped", conv_id: "other", run_id: "run-1", reason: "cancelled" });
   expect(countWorkingBackgroundJobs(getBackgroundJobs())).toBe(0);
-  expect(getBackgroundJobs().every((j) => j.detail === "Stopped")).toBe(true);
+  expect(getBackgroundJobs()[0].detail).toBe("Stopped");
 });
 
-it("opens the requested chat and tool, including before that chat mounts", async () => {
+it("does not touch the store for every streamed word", () => {
+  applyAgentBackgroundEvent({ type: "text_delta", conv_id: "other", run_id: "run-1", text: "a" }, "Coordinator", 1000);
+  const first = getBackgroundJobs()[0];
+  applyAgentBackgroundEvent({ type: "text_delta", conv_id: "other", run_id: "run-1", text: "b" }, "Coordinator", 2000);
+  expect(getBackgroundJobs()[0]).toBe(first);
+  expect(first.detail).toBe("Writing response");
+});
+
+it("opens the chat of a row, including before that chat mounts", async () => {
   applyAgentBackgroundEvent(start(), "Coordinator");
-  await openAgentBackgroundJob(getBackgroundJobs().find((j) => j.toolId)!);
+  await openAgentBackgroundJob(getBackgroundJobs()[0]);
   expect(mocks.open).toHaveBeenCalledWith("other");
-  function Target() { return <span>{useToolActivityTarget("other")?.toolId}</span>; }
-  render(<Target />);
-  expect(screen.getByText("call-1")).toBeTruthy();
 });
 
-it("opens a Ducky terminal session instead of a chat", async () => {
-  mocks.api.terminal_list.mockResolvedValue({ sessions: [{ session_id: "term", ws_url: "ws://localhost/term", shell: "powershell", title: "Tests" }] });
-  applyAgentBackgroundEvent({ ...start(), tool: { id: "terminal-call", name: "ducky_terminal_run", arguments: { session_id: "term", command: "pytest" } } });
-  await openAgentBackgroundJob(getBackgroundJobs().find((j) => j.toolId)!);
-  expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({ type: "terminal_open", session_id: "term", activate: true }));
-  expect(mocks.open).not.toHaveBeenCalled();
-});
-
-it("recovers a running checkpoint without an open chat, and expires finished agent jobs", async () => {
+it("recovers a running turn without an open chat, and expires finished agent jobs", async () => {
   mocks.api.list_running_agents.mockResolvedValue(["other"]);
   mocks.api.load_messages.mockResolvedValue([{ id: 1, role: "tool", text: "", tool: start().tool }]);
   const stop = subscribeAgentBackgroundActivity();
   await act(async () => {});
-  expect(getBackgroundJobs().find((j) => j.toolId)?.title).toBe("py -3 -m pytest");
+  expect(getBackgroundJobs()).toHaveLength(1);
+  expect(getBackgroundJobs()[0].detail).toBe("Running tests");
   applyAgentBackgroundEvent({ type: "agent_stopped", conv_id: "other", reason: "done" });
   vi.advanceTimersByTime(65_000);
   expect(getBackgroundJobs()).toEqual([]);
   stop();
   expect(mocks.listener).toBeNull();
+});
+
+it("drops tool rows an older build left in the tray", () => {
+  upsertBackgroundJob({ id: "tool:other:call-1", source: "agent", convId: "other", toolId: "call-1", title: "uefn/workspace_find", phase: "done" });
+  const stop = subscribeAgentBackgroundActivity();
+  expect(getBackgroundJobs()).toEqual([]);
+  stop();
 });
 
 it("opens a folded tool group and card, updates elapsed time, and reveals finished output", () => {
@@ -108,23 +115,20 @@ it("opens a folded tool group and card, updates elapsed time, and reveals finish
 });
 
 
-it("pressing a running header row requests its chat and tool", async () => {
+it("pressing a running row opens its chat", async () => {
   render(<BackgroundActivityDropdown />);
   await act(async () => {});
   act(() => mocks.listener!(start("click-chat", "click-tool")));
   fireEvent.click(screen.getByLabelText("Background activity"));
-  fireEvent.click(screen.getByText("py -3 -m pytest"));
+  fireEvent.click(screen.getByText("click-chat is working"));
   expect(mocks.open).toHaveBeenCalledWith("click-chat");
-  function Target() { return <span>{useToolActivityTarget("click-chat")?.toolId}</span>; }
-  render(<Target />);
-  expect(screen.getByText("click-tool")).toBeTruthy();
 });
 
-it("does not evict a running command when many other jobs arrive", () => {
+it("does not evict a running turn when many other jobs arrive", () => {
   applyAgentBackgroundEvent(start(), "Coordinator");
   for (let i = 0; i < 80; i++) upsertBackgroundJob({ id: `history:${i}`, phase: "done" });
-  expect(getBackgroundJobs().find((j) => j.toolId === "call-1")?.phase).toBe("working");
-  expect(countWorkingBackgroundJobs(getBackgroundJobs())).toBe(2);
+  expect(getBackgroundJobs().find((j) => j.id === "agent:other")?.phase).toBe("working");
+  expect(countWorkingBackgroundJobs(getBackgroundJobs())).toBe(1);
 });
 
 it("closes a row the backend no longer runs, keeps one it does, and drops rows of deleted chats", async () => {
@@ -136,17 +140,17 @@ it("closes a row the backend no longer runs, keeps one it does, and drops rows o
     mocks.listener!({ type: "text_delta", conv_id: "team", text: "(Side chat) note" });
     mocks.listener!(start());
   });
-  expect(screen.getByText("3 running")).toBeTruthy();
+  expect(screen.getByText("2 running")).toBeTruthy();
   mocks.api.list_running_agents.mockResolvedValue(["other"]);
   await act(async () => { vi.advanceTimersByTime(15_000); });
   await act(async () => {});
   expect(getBackgroundJobs().find((j) => j.convId === "team")?.phase).toBe("done");
-  expect(screen.getByText("2 running")).toBeTruthy();
+  expect(screen.getByText("1 running")).toBeTruthy();
   mocks.api.list_all_conversations.mockResolvedValue([{ id: "other", title: "Coordinator" }]);
   await act(async () => { mocks.listener!({ type: "chats_changed" } as AgentEvent); });
   await act(async () => {});
   expect(getBackgroundJobs().some((j) => j.convId === "team")).toBe(false);
-  expect(getBackgroundJobs().filter((j) => j.convId === "other")).toHaveLength(2);
+  expect(getBackgroundJobs().filter((j) => j.convId === "other")).toHaveLength(1);
 });
 
 it("stops a chat's turn from the tray", async () => {

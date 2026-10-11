@@ -2921,6 +2921,25 @@
   font-weight: 400;
 }
 
+.agent-activity-panel-quiet {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.75;
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* Opened from the background tray: show where the live work is. */
+.agent-activity-panel.is-flash {
+  border-radius: 8px;
+  animation: agent-activity-flash 1.6s ease-out;
+}
+
+@keyframes agent-activity-flash {
+  0%, 30% { background: color-mix(in srgb, var(--accent, #7aa2f7) 22%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent, #7aa2f7) 55%, transparent); }
+  100% { background: transparent; box-shadow: 0 0 0 1px transparent; }
+}
+
 .elapsed-timer {
   font-variant-numeric: tabular-nums;
   font-size: 11px;

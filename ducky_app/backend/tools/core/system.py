@@ -266,8 +266,9 @@ def workspace_read_file(
     line_numbers: bool = False,
     pretty: bool = False,
 ) -> str:
-    """Read a text file: relative to the open project, or an absolute path in any of the
-    person's other Ducky projects. Use this instead of a shell cat / Get-Content.
+    """Read a text file: relative to the open project, an absolute path in any of the
+    person's other Ducky projects, or a file attached to a chat (the path the chat gives).
+    Use this instead of a shell cat / Get-Content.
 
     start_line / end_line (1-based, inclusive) read just those lines; without them the first
     2000 lines come back, with a note where the rest starts. line_numbers=true prefixes each
@@ -278,6 +279,15 @@ def workspace_read_file(
     if not rel_in:
         raise ValueError("relative_path is required (path= also accepted)")
     relative_path = rel_in
+    from backend.tools.core.workspace_code import chat_file_path, read_lines
+
+    attached = chat_file_path(relative_path)
+    if attached:
+        if not os.path.isfile(attached):
+            raise ValueError(f"Not a file: {attached}")
+        part = read_lines(attached, start_line, end_line, line_numbers)
+        part.pop("_full_text", None)
+        return tool_json({"path": attached, **part}, pretty=pretty)
     file_path = resolve_workspace_path(relative_path)
     from backend.workspace.ai_ignore import current_policy
 

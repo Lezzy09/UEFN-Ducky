@@ -1,51 +1,42 @@
 import type { AgentEvent } from "../types/panel";
 import { getBackgroundJobs, upsertBackgroundJob, dismissBackgroundJob, type BackgroundJob } from "./backgroundActivity";
-import { subscribeAgentEvents, pushLocalAgentEvent } from "./useAgentEventBus";
+import { subscribeAgentEvents } from "./useAgentEventBus";
 import { getApi } from "./usePanelApi";
 import { requestOpenChatTab } from "../navigation/openChatReference";
 import { requestLatestChatActivity } from "../navigation/latestChatActivity";
-import { requestToolActivity, toolActivityId } from "../navigation/toolActivity";
-import { toolExitCode } from "../utils/toolExitCode";
-import { unwrapCodingAgentTool } from "../utils/unwrapCodingAgentTool";
+import { agentStepText } from "../utils/agentActivity";
 
+const TURN_EVENTS = new Set(["agent_started", "text_delta", "thinking", "tool", "tool_done", "status"]);
+
+/** One tray row per running chat. Its detail line is what the turn is doing now; the
+ *  tool calls themselves stay in the chat's own tool list, never in the tray. */
 export function applyAgentBackgroundEvent(event: AgentEvent, title = event.title || event.conv_id || "Agent", now = Date.now()): void {
   const convId = event.conv_id;
   if (!convId) return;
   const turnId = `agent:${convId}`;
   const turn = getBackgroundJobs().find((j) => j.id === turnId);
   if (event.type === "agent_stopped" || event.type === "error") {
-    for (const job of getBackgroundJobs()) {
-      if (job.source !== "agent" || job.convId !== convId || job.phase !== "working") continue;
-      if (event.run_id && job.runId && job.runId !== event.run_id) continue;
-      upsertBackgroundJob({ id: job.id, title: job.toolId ? job.title : job.title.replace(/ is working$/, event.reason === "cancelled" ? " stopped" : " finished"), phase: event.type === "error" || event.reason === "error" ? "error" : "done",
-        detail: event.reason === "cancelled" ? "Stopped" : job.toolId ? "Ended with agent turn" : "Finished",
-        endedAt: now, ts: now });
-    }
+    if (!turn || turn.phase !== "working") return;
+    if (event.run_id && turn.runId && turn.runId !== event.run_id) return;
+    const stopped = event.reason === "cancelled";
+    const failed = event.type === "error" || event.reason === "error";
+    upsertBackgroundJob({ id: turnId, title: turn.title.replace(/ is working$/, stopped ? " stopped" : " finished"),
+      phase: failed ? "error" : "done", detail: stopped ? "Stopped" : failed ? "Ended with an error" : "Finished",
+      endedAt: now, ts: now });
     return;
   }
-  if (["agent_started", "text_delta", "thinking", "tool", "status"].includes(event.type)) {
-    if (!turn || turn.phase !== "working" || (event.run_id && turn.runId !== event.run_id)) {
-      upsertBackgroundJob({ id: turnId, source: "agent", title: `${title} is working`, detail: title,
-        convId, runId: event.run_id, phase: "working", startedAt: now, endedAt: 0, ts: now });
-    }
+  if (!TURN_EVENTS.has(event.type)) return;
+  const step = agentStepText(event) || "Working";
+  const newRun = Boolean(event.run_id && turn?.runId && turn.runId !== event.run_id);
+  if (!turn || turn.phase !== "working" || newRun) {
+    upsertBackgroundJob({ id: turnId, source: "agent", title: `${title} is working`, detail: step,
+      convId, runId: event.run_id, phase: "working", startedAt: now, endedAt: 0, ts: now });
+    return;
   }
-  if ((event.type !== "tool" && event.type !== "tool_done") || !event.tool) return;
-  const tool = event.tool;
-  const toolId = toolActivityId(tool);
-  const id = `tool:${convId}:${toolId}`;
-  const prev = getBackgroundJobs().find((j) => j.id === id);
-  if (prev?.runId && event.run_id && prev.runId !== event.run_id && event.type === "tool_done") return;
-  const call = unwrapCodingAgentTool(tool.name, tool.arguments || {});
-  const command = call.arguments.command ?? call.arguments.cmd ?? call.arguments.code ?? call.name;
-  const code = toolExitCode(tool);
-  const done = event.type === "tool_done";
-  const failed = done && (event.success === false || tool.status === "error" || (code !== undefined && code !== 0));
-  upsertBackgroundJob({ id, source: "agent", title: String(command).slice(0, 160),
-    detail: `${title}${done ? ` · ${failed ? "Failed" : "Finished"}${code === undefined ? "" : ` · exit ${code}`}` : ""}`,
-    convId, toolId, runId: event.run_id, terminalId: call.name === "ducky_terminal_run" ? String(call.arguments.session_id || "") : undefined,
-    phase: done ? failed ? "error" : "done" : "working",
-    startedAt: prev?.runId === event.run_id && prev?.startedAt ? prev.startedAt : tool.startedAt || now,
-    endedAt: done ? now : 0, ts: now });
+  // Text streams in hundreds of deltas: only a new step touches the store.
+  if (turn.detail !== step || (event.run_id && !turn.runId)) {
+    upsertBackgroundJob({ id: turnId, detail: step, ...(event.run_id ? { runId: event.run_id } : {}), ts: now });
+  }
 }
 
 // A turn whose stop event never came (a group's side-chat note streams text with no turn
@@ -55,8 +46,8 @@ const SETTLE_MS = 10_000;
 function endAgentJobs(convId: string, detail: string, now = Date.now()): void {
   for (const job of getBackgroundJobs()) {
     if (job.source !== "agent" || job.convId !== convId || job.phase !== "working") continue;
-    upsertBackgroundJob({ id: job.id, phase: "done", detail: job.toolId ? "Ended with agent turn" : detail,
-      title: job.toolId ? job.title : job.title.replace(/ is working$/, detail === "Stopped" ? " stopped" : " finished"),
+    upsertBackgroundJob({ id: job.id, phase: "done", detail,
+      title: job.title.replace(/ is working$/, detail === "Stopped" ? " stopped" : " finished"),
       endedAt: now, ts: now });
   }
 }
@@ -100,6 +91,10 @@ export function subscribeAgentBackgroundActivity(): () => void {
   let active = true;
   const touched = new Set<string>();
   const api = getApi();
+  // Rows from builds that listed every tool call (kept across reloads in sessionStorage).
+  for (const job of getBackgroundJobs()) {
+    if (job.source === "agent" && job.toolId) dismissBackgroundJob(job.id);
+  }
   let titleRefresh: Promise<void> | null = null;
   const refreshTitles = (): Promise<void> => {
     if (titleRefresh) return titleRefresh;
@@ -114,8 +109,8 @@ export function subscribeAgentBackgroundActivity(): () => void {
       for (const job of getBackgroundJobs()) {
         const title = titles.get(job.convId || "");
         if (job.source === "agent" && title) {
-          const detail = job.phase === "working" ? title : job.detail?.replace(job.convId!, title);
-          upsertBackgroundJob({ id: job.id, title: job.toolId ? job.title : `${title}${job.phase === "working" ? " is working" : " finished"}`, detail, ts: job.ts });
+          const verb = job.phase === "working" ? " is working" : / stopped$/.test(job.title) ? " stopped" : " finished";
+          upsertBackgroundJob({ id: job.id, title: `${title}${verb}`, ts: job.ts });
         }
       }
     })().finally(() => { titleRefresh = null; });
@@ -145,11 +140,12 @@ export function subscribeAgentBackgroundActivity(): () => void {
       const rows = await api?.load_messages?.(id).catch(() => []) || [];
       if (!active) return;
       if (touched.has(id)) continue;
-      // History exposes only genuinely live pending calls as tool rows without a result.
-      for (let i = 0; i < rows.length; i++) {
+      // A tool row without a result is the call still running: that is the turn's step.
+      for (let i = rows.length - 1; i >= 0; i--) {
         const row = rows[i];
         if (row.role !== "tool" || !row.tool || rows[i + 1]?.role === "success" || rows[i + 1]?.role === "error") continue;
         applyAgentBackgroundEvent({ type: "tool", conv_id: id, run_id: row.run_id, tool: row.tool }, titles.get(id));
+        break;
       }
     }
   })().catch(() => {});
@@ -168,18 +164,9 @@ export function subscribeAgentBackgroundActivity(): () => void {
   return () => { active = false; stop(); clearInterval(timer); };
 }
 
+/** Opens the chat, scrolled to its live activity, which flashes so it is easy to find. */
 export async function openAgentBackgroundJob(job: BackgroundJob): Promise<void> {
-  if (job.terminalId) {
-    const sessions = await getApi()?.terminal_list?.().catch(() => null);
-    const raw = sessions?.sessions.find((s) => String(s.session_id) === job.terminalId);
-    if (raw?.ws_url) {
-      pushLocalAgentEvent({ type: "terminal_open", session_id: job.terminalId, ws_url: String(raw.ws_url),
-        title: String(raw.title || job.title), shell: String(raw.shell || ""), cwd: String(raw.cwd || ""), activate: true });
-      return;
-    }
-  }
   if (!job.convId) return;
-  if (job.toolId) requestToolActivity(job.convId, job.toolId);
-  else requestLatestChatActivity(job.convId);
+  requestLatestChatActivity(job.convId);
   requestOpenChatTab(job.convId);
 }

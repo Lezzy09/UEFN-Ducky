@@ -3,6 +3,8 @@ import { Icons } from "../icons/Icons";
 
 interface ComposerAttachmentChipsProps {
   attachments: ComposerAttachment[];
+  /** Files too big to paste whole: saved, and the agent reads them in parts. */
+  readInParts?: ReadonlySet<string>;
   onRemove: (id: string) => void;
   /** Open a full-size preview (with drawing tools for images). */
   onPreview?: (att: ComposerAttachment) => void;
@@ -22,7 +24,7 @@ function videoStatusLabel(att: Extract<ComposerAttachment, { kind: "video" }>): 
   return prep?.state === "preparing_ffmpeg" && pct > 0 && pct < 100 ? `Preparing ffmpeg… ${pct}%` : "Preparing ffmpeg…";
 }
 
-export function ComposerAttachmentChips({ attachments, onRemove, onPreview, onRetry }: ComposerAttachmentChipsProps) {
+export function ComposerAttachmentChips({ attachments, readInParts, onRemove, onPreview, onRetry }: ComposerAttachmentChipsProps) {
   if (attachments.length === 0) return null;
 
   return (
@@ -61,6 +63,15 @@ export function ComposerAttachmentChips({ attachments, onRemove, onPreview, onRe
                 title={att.status === "error" ? att.error : undefined}
               >
                 {videoStatusLabel(att)}
+              </span>
+            ) : null}
+            {att.kind === "file" && readInParts?.has(att.id) ? (
+              <span
+                className="composer-attachment-chip-note"
+                data-testid="chip-parts"
+                title="Too big to paste whole for this model. Ducky saves it with a readable copy, and the agent reads it in parts."
+              >
+                Read in parts
               </span>
             ) : null}
             {att.kind === "video" && att.status === "ready" && att.prep?.transcript_note ? (

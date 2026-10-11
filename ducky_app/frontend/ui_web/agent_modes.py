@@ -1541,6 +1541,7 @@ def run_message(
                 model=turn_model,
                 external_agent=external,
                 coding_agent=coding_agent,
+                inline_files=False,
             )
         except ValueError as e:
             push({"type": "error", "text": str(e), "conv_id": conv_id})
@@ -1576,6 +1577,13 @@ def run_message(
             push({"type": "error", "text": str(e), "conv_id": conv_id})
             return ""
         conv_dir_path = conversations_dir / conv_id
+        from backend.agent.attachments import add_file_blocks
+
+        # Files go in after saving: a big one is sent by path for the agent to read in parts.
+        content = add_file_blocks(
+            content, attachments_parsed, stored_attachments, conv_dir_path,
+            provider=provider_name or "", model=turn_model, coding_agent=coding_agent,
+        )
         from backend.agent.video.send import (
             external_video_hint,
             prepare_video_frames,
@@ -1685,12 +1693,14 @@ def run_message(
 
                 # Reload conv so append_message in runner sees the user turn we just saved.
                 fresh = load_conversation(conv_id) or conv
+                # The whole message, not just the typed words: attached files, picture
+                # paths and video notes live in ``content``.
                 run_coding_agent_message(
                     fresh,
                     (
                         "Continue."
                         if resume
-                        else (user_text or (content if isinstance(content, str) else str(content)))
+                        else ((content if isinstance(content, str) else str(content)) or user_text)
                     ),
                     model=turn_model,
                     push=watched_push,

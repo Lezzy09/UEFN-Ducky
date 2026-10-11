@@ -1,4 +1,4 @@
-import type { ChatMessage } from "../types/panel";
+import type { AgentEvent, ChatMessage } from "../types/panel";
 import { unwrapCodingAgentTool } from "./unwrapCodingAgentTool";
 
 export interface ActivityLine {
@@ -249,4 +249,16 @@ export function activityPanelTitle(
   if (lines.some((line) => line.status === "streaming")) return "Writing…";
   const last = lines[lines.length - 1];
   return last?.text ?? "Thought briefly";
+}
+
+/** What a live turn is doing, in a few words, from one of its events (undefined: no change). */
+export function agentStepText(event: AgentEvent): string | undefined {
+  if (event.type === "status") return event.text || "Working";
+  if (event.type === "tool" && event.tool) {
+    return buildActivityLines([{ id: 0, role: "tool", text: "", tool: { ...event.tool, status: "pending" } }], "", "")[0]?.text || "Working";
+  }
+  if (event.type === "thinking") return "Thinking";
+  if (event.type === "text_delta") return "Writing response";
+  if (event.type === "tool_done") return "Working";
+  return undefined;
 }

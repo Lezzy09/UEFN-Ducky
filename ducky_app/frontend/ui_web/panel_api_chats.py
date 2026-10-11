@@ -697,10 +697,11 @@ class PanelApiChatsMixin:
             group_members,
             member_color_for_index,
             normalize_member,
+            stays_with_outer_group,
             sync_group_members_from_folder,
         )
         from frontend.ui_web.group_orchestrator import _group_folder_id
-        from frontend.ui_web.project_chats import adopt_group_project, move_conversation
+        from frontend.ui_web.project_chats import adopt_group_project, island_for_conversation
 
         group = _pa.load_conversation(group_id)
         if not group or not getattr(group, "is_group", False):
@@ -714,11 +715,15 @@ class PanelApiChatsMixin:
         folder_id = _group_folder_id(group_id) or (group.folder_id or "").strip()
         if not folder_id:
             return {"ok": False, "error": "Group has no folder"}
-        _pa.move_conversation(cid, folder_id)
-        member = _pa.load_conversation(cid) or member
-        member.parent_conv_id = group_id
-        member.folder_id = folder_id
-        _pa.save_conversation(member)
+        _convs, folders = island_for_conversation(group_id)
+        # The lead of an outer group joins its subgroups' rosters but stays filed on top of
+        # its own group; only other chats move into the group's folder.
+        if not stays_with_outer_group(member, folder_id, folders):
+            _pa.move_conversation(cid, folder_id)
+            member = _pa.load_conversation(cid) or member
+            member.parent_conv_id = group_id
+            member.folder_id = folder_id
+            _pa.save_conversation(member)
         adopt_group_project(member, group_id)
         sync_group_members_from_folder(group)
         group = _pa.load_conversation(group_id) or group

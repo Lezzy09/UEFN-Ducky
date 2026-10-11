@@ -180,7 +180,7 @@ export function BackgroundActivityDropdown() {
                     <button
                       type="button"
                       className="bg-activity-link"
-                      title={job.source === "agent" ? (job.toolId ? "Stops this chat's turn, and this command with it" : "Stops this chat's turn") : undefined}
+                      title={job.source === "agent" ? "Stops this chat's turn" : undefined}
                       onClick={(event) => { event.stopPropagation(); void cancel(job); }}
                     >
                       {job.source === "agent" || workflowIdFromJobId(job.id) ? "Stop" : "Cancel"}

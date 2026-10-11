@@ -5,7 +5,7 @@ import { subscribeAgentEvents } from "../hooks/useAgentEventBus";
 import { useRunningAgents } from "../hooks/useRunningAgents";
 import { getChatTurnTimer } from "../hooks/chatTurnTimer";
 import { getCachedChatMessages } from "../hooks/chatMessagesCache";
-import { buildActivityLines, activityPanelTitle, splitTurnMessages } from "../utils/agentActivity";
+import { agentStepText, buildActivityLines, activityPanelTitle, splitTurnMessages } from "../utils/agentActivity";
 import { requestOpenChatTab } from "../navigation/openChatReference";
 import { requestLatestChatActivity } from "../navigation/latestChatActivity";
 import { DuckyAvatar } from "./ducky/DuckyAvatars";
@@ -30,12 +30,7 @@ function members(id: string): Promise<GroupMemberDto[]> {
 
 export function ownerActivity(event: AgentEvent): string | undefined {
   if (event.type === "agent_stopped" || event.type === "error") return "Idle";
-  if (event.type === "status") return event.text || "Working";
-  if (event.type === "tool" && event.tool) return buildActivityLines([{ id: 0, role: "tool", text: "", tool: { ...event.tool, status: "pending" } }], "", "")[0]?.text || "Working";
-  if (event.type === "thinking") return "Thinking";
-  if (event.type === "text_delta") return "Writing response";
-  if (event.type === "tool_done") return "Working";
-  return undefined;
+  return agentStepText(event);
 }
 
 export function PlanOwnerChips({ ownerId, activeOnly = false, nodeId }: { ownerId: string; activeOnly?: boolean; nodeId?: string }) {

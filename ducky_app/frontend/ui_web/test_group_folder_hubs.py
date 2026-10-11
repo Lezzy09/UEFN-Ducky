@@ -243,3 +243,22 @@ def test_archiving_a_group_chat_archives_its_folder_and_everything_in_it():
         assert all(f.id != folder.id for f in load_folders(root))
         for conv_id in (hub.id, member.id):
             assert load_conversation(conv_id, project_root=root).folder_id == ARCHIVE_FOLDER_ID
+
+
+def test_a_lead_stays_on_top_of_its_own_group_when_it_leads_a_subgroup():
+    from types import SimpleNamespace as NS
+
+    from frontend.ui_web.group_orchestrator import stays_with_outer_group
+
+    folders = [
+        NS(id="main", parent_id="", group_hub_id="hub-main"),
+        NS(id="qa", parent_id="main", group_hub_id="hub-qa"),
+        NS(id="plain", parent_id="", group_hub_id=""),
+    ]
+    lead = NS(id="lead", folder_id="main")
+    by_id = {"hub-main": NS(id="hub-main", leader_conv_id="lead"), "hub-qa": NS(id="hub-qa", leader_conv_id="lead")}
+    assert stays_with_outer_group(lead, "qa", folders, by_id)
+    # Not the outer group's lead, filed in a plain folder, or the subgroup is not nested: it moves.
+    assert not stays_with_outer_group(NS(id="other", folder_id="main"), "qa", folders, by_id)
+    assert not stays_with_outer_group(NS(id="lead", folder_id="plain"), "qa", folders, by_id)
+    assert not stays_with_outer_group(NS(id="lead", folder_id="qa"), "main", folders, by_id)

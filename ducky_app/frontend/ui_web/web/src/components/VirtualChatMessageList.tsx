@@ -53,6 +53,8 @@ import type { AgentMode, ChatPlan, ChatTab, LinkedAgent, MessageAttachmentDto, P
 
 export interface VirtualChatMessageListHandle {
   scrollToLatest: () => void;
+  /** Briefly highlight the live activity row (opened from the background tray). */
+  flashActivity: () => void;
 }
 
 interface VirtualChatMessageListProps {
@@ -560,7 +562,16 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
       if (node) setScrollerReady((n) => n + 1);
     }, []);
 
-    useImperativeHandle(ref, () => ({ scrollToLatest: followLatest }), [followLatest]);
+    const footerRef = useRef<HTMLDivElement>(null);
+    const flashActivity = useCallback(() => {
+      const panel = footerRef.current?.querySelector<HTMLElement>(".agent-activity-panel");
+      if (!panel) return;
+      panel.classList.remove("is-flash");
+      void panel.offsetWidth; // restart the animation
+      panel.classList.add("is-flash");
+      window.setTimeout(() => panel.classList.remove("is-flash"), 1600);
+    }, []);
+    useImperativeHandle(ref, () => ({ scrollToLatest: followLatest, flashActivity }), [followLatest, flashActivity]);
     // "Waiting for your answer" marker or tray entry: show this chat's first unanswered card.
     useEffect(() => subscribePendingCard(convId, () => {
       followLatest();
@@ -988,7 +999,7 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
                 </div>
               ) : null}
               <ChatTerminalApprovals convId={convId} />
-              <div className="virtual-chat-message-list-footer">
+              <div className="virtual-chat-message-list-footer" ref={footerRef}>
                 {showActivityPanel ? (
                   <AgentActivityPanel
                     lines={activityLines}

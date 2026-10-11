@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComposerAttachment, MessageAttachmentDto } from "../types/panel";
 import { getApi } from "./usePanelApi";
 
@@ -103,6 +103,7 @@ export function useComposerAttachments(
   // File text is sized by the picked model's context window (0 = the model never said; no cap).
   const [limits, setLimits] = useState({
     maxImages: DEFAULT_MAX_IMAGES, videoMaxMb: DEFAULT_VIDEO_MAX_MB, contextTokens: 0, fileMaxTokens: 0,
+    fileInlineTokens: 0,
   });
   const modelLabel = hookOpts.modelLabel || hookOpts.model || "";
 
@@ -115,6 +116,7 @@ export function useComposerAttachments(
           videoMaxMb: s.video_max_mb,
           contextTokens: s.auto?.context_tokens ?? 0,
           fileMaxTokens: s.auto?.file_max_tokens ?? 0,
+          fileInlineTokens: s.auto?.file_inline_tokens ?? 0,
         });
       }
     }).catch(() => undefined);
@@ -366,6 +368,16 @@ export function useComposerAttachments(
 
   const hasImages = attachments.some((a) => a.kind === "image");
 
+  // Files over the model's paste-whole share go as a saved copy the agent reads in parts.
+  const readInParts = useMemo(() => {
+    const ids = new Set<string>();
+    if (limits.fileInlineTokens <= 0) return ids;
+    for (const a of attachments) {
+      if (a.kind === "file" && approxTokens(a.text) > limits.fileInlineTokens) ids.add(a.id);
+    }
+    return ids;
+  }, [attachments, limits.fileInlineTokens]);
+
   const toApiAttachments = useCallback((): MessageAttachmentDto[] => {
     return attachments.map((a) => {
       if (a.kind === "image") {
@@ -394,6 +406,7 @@ export function useComposerAttachments(
     error,
     hasImages,
     hasPendingVideos,
+    readInParts,
     retryVideo,
     addFiles,
     removeAttachment,
