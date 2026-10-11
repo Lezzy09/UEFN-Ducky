@@ -763,6 +763,16 @@ def _run_coding_agent_message(
         elif auth_result is not None:
             return {**auth_result, "requested_mode": mode, "effective_mode": effective_mode}
 
+    # A team chat whose session re-read millions of tokens per turn starts this one fresh.
+    fresh_handoff = ""
+    if adapter.capabilities.resume:
+        from backend.agent.coding_agents.session_refresh import fresh_session_handoff, start_fresh
+
+        fresh_handoff = fresh_session_handoff(conv)
+        if fresh_handoff:
+            start_fresh(conv)
+            push({"type": "status", "text": "Starting a fresh session: the last one got too big.",
+                  "conv_id": conv.id, "run_id": rid})
     session_id = (
         drop_dead_claude_session(conv, agent_id, project_root)
         if adapter.capabilities.resume
@@ -798,6 +808,8 @@ def _run_coding_agent_message(
         app_version=__version__,
         session_id=session_id,
     )
+    if fresh_handoff:
+        prompt_text = fresh_handoff + prompt_text
     from frontend.ui_web.workspace_bootstrap import build_journal, build_run_context, record_external_edits
 
     run_ctx = build_run_context(conv, run_id=rid, model=(model or conv.model or ''), coding_agent=agent_id)
