@@ -753,3 +753,34 @@ def test_a_leads_assignment_is_never_held(broker, fake_clock, monkeypatch):
     b.send(sender_conv_id="sender1", receiver_conv_id="recv1", body="build module C", expect_reply=False)
     _wait_sent(broker.modes)
     assert "build module C" in broker.modes.sent[0][1]
+
+
+def test_late_answer_to_a_request_closed_by_stop_is_delivered_once(broker):
+    # Oct 11 2026: the person stopped a builder; its answer to the lead's request was
+    # refused "response_id is not open", so every builder resent it and explained why.
+    rid = broker.mod.open_thread("sender1", "recv1")
+    broker.mod.on_agent_cancelled_by_user("recv1")
+    broker.mod.resume_by_user("recv1")
+    out = broker.mod.send(sender_conv_id="recv1", receiver_conv_id="sender1", body="late answer",
+                          expect_reply=False, response_id=rid)
+    assert out["closed_thread"] is False
+    assert "already closed" in out["note"]
+    with pytest.raises(ValueError, match="not open"):
+        broker.mod.send(sender_conv_id="recv1", receiver_conv_id="sender1", body="late answer",
+                        expect_reply=False, response_id=rid)
+
+
+def test_late_answer_to_an_aged_out_request_is_delivered(broker):
+    rid = broker.mod.open_thread("sender1", "recv1")
+    broker.mod._threads[rid].created_at -= 10 * 3600
+    assert broker.mod.sweep_quiet_threads() == 1
+    out = broker.mod.send(sender_conv_id="recv1", receiver_conv_id="sender1", body="late answer",
+                          expect_reply=False, response_id=rid)
+    assert "note" in out
+    # Only its own receiver may answer it.
+    rid2 = broker.mod.open_thread("sender1", "recv1")
+    broker.mod._threads[rid2].created_at -= 10 * 3600
+    broker.mod.sweep_quiet_threads()
+    with pytest.raises(ValueError, match="not open"):
+        broker.mod.send(sender_conv_id="sender1", receiver_conv_id="recv1", body="x",
+                        expect_reply=False, response_id=rid2)

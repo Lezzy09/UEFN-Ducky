@@ -77,6 +77,11 @@ class Thread:
 _inbox: dict[str, deque[Envelope]] = {}
 _ring: dict[str, list[Envelope]] = {}
 _threads: dict[str, Thread] = {}
+# Requests that closed before their receiver answered (it was stopped, or the request aged
+# out): response_id -> (sender, receiver, closed_at). The late answer is still delivered,
+# once, as a plain message; refusing it made every builder resend and explain why.
+_closed_unanswered: dict[str, tuple[str, str, float]] = {}
+_CLOSED_UNANSWERED_KEEP_S = 24 * 3600
 # Receivers currently running a broker-delivered turn (so their agent_stopped
 # drains the queue again but never fires a self-notice).
 _delivering: set[str] = set()
@@ -274,7 +279,9 @@ def sweep_quiet_threads(max_age_s: float = _QUIET_SWEEP_S) -> int:
                  and t.receiver_conv_id not in protected
                  and not cooldown_remaining(t.receiver_conv_id, now=now)]
         for rid in stale:
-            _threads.pop(rid, None)
+            dropped = _threads.pop(rid, None)
+            if dropped is not None:
+                _remember_unanswered(dropped)
             removed += 1
         live_convs = {t.sender_conv_id for t in _threads.values()} | {
             t.receiver_conv_id for t in _threads.values()
@@ -332,9 +339,20 @@ def open_thread(
         return rid
 
 
-def close_thread(response_id: str) -> Thread | None:
+def close_thread(response_id: str, *, unanswered: bool = False) -> Thread | None:
     with _lock:
-        return _threads.pop(response_id, None)
+        thread = _threads.pop(response_id, None)
+        if thread is not None and unanswered:
+            _remember_unanswered(thread)
+        return thread
+
+
+def _remember_unanswered(thread: Thread) -> None:
+    """Caller holds ``_lock``."""
+    now = time.time()
+    for rid in [r for r, row in _closed_unanswered.items() if now - row[2] > _CLOSED_UNANSWERED_KEEP_S]:
+        _closed_unanswered.pop(rid, None)
+    _closed_unanswered[thread.response_id] = (thread.sender_conv_id, thread.receiver_conv_id, now)
 
 
 def open_threads_for_receiver(receiver_conv_id: str) -> list[Thread]:
@@ -375,6 +393,7 @@ def send(
     needs_action = bool(response_id) and _answer_needs_action(sender_conv_id, receiver_conv_id)
     fyi = not expect_reply and not response_id and not leads_receiver(sender_conv_id, receiver_conv_id)
 
+    late = False
     with _lock:
         closing: Thread | None = None
         if response_id:
@@ -385,6 +404,15 @@ def send(
                 # the answer that report asks for: deliver it plainly and count it, or
                 # the report comes back every half minute forever.
                 response_id = ""
+            elif thread is None and _closed_unanswered.get(response_id, ("", ""))[:2] == (
+                receiver_conv_id,
+                sender_conv_id,
+            ):
+                # The request closed before this answer came. Deliver it as a plain
+                # message, once: a second answer on the same id is still refused.
+                _closed_unanswered.pop(response_id, None)
+                response_id = ""
+                late = True
             elif thread is None:
                 raise ValueError("response_id is not open; reply was not delivered")
             else:
@@ -409,11 +437,14 @@ def send(
         acknowledge_reports(sender_conv_id, receiver_conv_id)
     _kick_delivery(receiver_conv_id)
     _show_in_group_chat(sender_conv_id, receiver_conv_id, body)
-    return {
+    out: dict[str, Any] = {
         "response_id": rid,
         "closed_thread": bool(closing),
         "queued_for": receiver_conv_id,
     }
+    if late:
+        out["note"] = "That request had already closed; your answer was delivered as a plain message."
+    return out
 
 
 def _show_in_group_chat(sender_conv_id: str, receiver_conv_id: str, body: str) -> None:
@@ -947,7 +978,7 @@ def on_agent_cancelled_by_user(conv_id: str) -> None:
             report_timer.cancel()
     title, agent = _conv_meta(conv_id)
     for thread in open_threads_for_receiver(conv_id):
-        close_thread(thread.response_id)
+        close_thread(thread.response_id, unanswered=True)
         body = format_agent_notice(
             receiver_conv_id=conv_id,
             receiver_title=title,
