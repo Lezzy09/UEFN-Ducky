@@ -10,11 +10,13 @@ from frontend.settings import PanelSettings
 from frontend.ui_web.project_chats import (
     create_conversation,
     create_folder,
+    delete_conversation,
     delete_folder,
     ensure_group_folder_hubs,
     list_conversations,
     load_conversation,
     load_folders,
+    move_conversation,
     save_conversation,
     save_folders,
 )
@@ -125,7 +127,8 @@ def test_delete_group_can_archive_duckies_too():
         archived_member = load_conversation(member.id, project_root=root)
         assert archived_member is not None
         assert archived_member.folder_id == ARCHIVE_FOLDER_ID
-        assert archived_member.parent_conv_id == ""
+        # Still the group's ducky in Archive, so it shows and comes back with the group.
+        assert archived_member.parent_conv_id == hub.id
         assert all(f.id != folder.id for f in load_folders(root))
 
 
@@ -145,6 +148,9 @@ def test_delete_group_and_duckies_archives_nested_groups():
             archived = load_conversation(hub_id, project_root=root)
             assert archived is not None
             assert archived.folder_id == ARCHIVE_FOLDER_ID
+        # The nested group points at the group around it.
+        assert load_conversation(inner_hub.id, project_root=root).parent_conv_id == outer_hub.id
+        assert load_conversation(outer_hub.id, project_root=root).parent_conv_id == ""
         assert ensure_group_folder_hubs(root) == 0
 
 
@@ -160,3 +166,80 @@ def test_delete_plain_folder_still_moves_chats_to_root():
         moved = load_conversation(chat.id, project_root=root)
         assert moved is not None
         assert moved.folder_id == ""
+
+
+def _archived_squad(settings, root: str):
+    outer, outer_hub = _make_group(settings, "Squad", "", root)
+    member = create_conversation(settings, outer.id, title="Builder", parent_conv_id=outer_hub.id, project_root=root)
+    loose = create_conversation(settings, outer.id, title="Loose", project_root=root)
+    inner, inner_hub = _make_group(settings, "Inner", outer.id, root)
+    inner_member = create_conversation(settings, inner.id, title="Verifier", parent_conv_id=inner_hub.id, project_root=root)
+    delete_folder(outer.id, root, archive_members=True)
+    return outer_hub, member, loose, inner_hub, inner_member
+
+
+def test_a_ducky_in_the_group_folder_belongs_to_the_group_in_archive():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = str(Path(tmp))
+        outer_hub, _member, loose, _inner_hub, _inner_member = _archived_squad(PanelSettings.load(), root)
+        assert load_conversation(loose.id, project_root=root).parent_conv_id == outer_hub.id
+
+
+def test_return_to_active_brings_the_whole_group_back():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = str(Path(tmp))
+        outer_hub, member, loose, inner_hub, inner_member = _archived_squad(PanelSettings.load(), root)
+
+        move_conversation(outer_hub.id, "", root)
+
+        folders = {f.id: f for f in load_folders(root)}
+        outer_folder = next(f for f in folders.values() if f.group_hub_id == outer_hub.id)
+        inner_folder = next(f for f in folders.values() if f.group_hub_id == inner_hub.id)
+        assert outer_folder.parent_id == "" and inner_folder.parent_id == outer_folder.id
+        for conv_id, folder_id, parent in (
+            (outer_hub.id, outer_folder.id, ""),
+            (member.id, outer_folder.id, outer_hub.id),
+            (loose.id, outer_folder.id, outer_hub.id),
+            (inner_hub.id, inner_folder.id, ""),
+            (inner_member.id, inner_folder.id, inner_hub.id),
+        ):
+            conv = load_conversation(conv_id, project_root=root)
+            assert (conv.folder_id, conv.parent_conv_id) == (folder_id, parent)
+        assert ensure_group_folder_hubs(root) == 0
+
+
+def test_one_ducky_out_of_an_archived_group_comes_back_on_its_own():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = str(Path(tmp))
+        outer_hub, member, _loose, _inner_hub, _inner_member = _archived_squad(PanelSettings.load(), root)
+
+        move_conversation(member.id, "", root)
+
+        back = load_conversation(member.id, project_root=root)
+        assert (back.folder_id, back.parent_conv_id) == ("", "")
+        assert load_conversation(outer_hub.id, project_root=root).folder_id == ARCHIVE_FOLDER_ID
+
+
+def test_deleting_an_archived_group_for_good_takes_everything_in_it():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = str(Path(tmp))
+        outer_hub, member, loose, inner_hub, inner_member = _archived_squad(PanelSettings.load(), root)
+
+        delete_conversation(outer_hub.id, root)
+
+        for conv_id in (outer_hub.id, member.id, loose.id, inner_hub.id, inner_member.id):
+            assert load_conversation(conv_id, project_root=root) is None
+
+
+def test_archiving_a_group_chat_archives_its_folder_and_everything_in_it():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = str(Path(tmp))
+        settings = PanelSettings.load()
+        folder, hub = _make_group(settings, "Squad", "", root)
+        member = create_conversation(settings, folder.id, title="Builder", parent_conv_id=hub.id, project_root=root)
+
+        move_conversation(hub.id, ARCHIVE_FOLDER_ID, root)
+
+        assert all(f.id != folder.id for f in load_folders(root))
+        for conv_id in (hub.id, member.id):
+            assert load_conversation(conv_id, project_root=root).folder_id == ARCHIVE_FOLDER_ID

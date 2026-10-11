@@ -589,9 +589,28 @@ def delete_folder(
                 save_conversation(conv, project_root)
         return [hub_id] if hub_id else []
 
-    # Whole subtree: nested groups and their duckies go to Archive with this one.
+    # Whole subtree: nested groups and their duckies go to Archive with this one, and keep
+    # their shape there — members stay linked to their group, a nested group to the group
+    # around it — so Archive shows one group and Return to active / Delete permanently take
+    # all of it.
     doomed_ids = set(folder_subtree_ids(folder_id, project_root))
     hub_ids = set(group_hub_ids_in(sorted(doomed_ids), project_root))
+    folder_by_id = {f.id: f for f in folders}
+
+    def _container_hub(fid: str) -> str:
+        """The group a folder of this subtree belongs to: itself or its nearest group parent."""
+        while fid in doomed_ids:
+            hub = (getattr(folder_by_id.get(fid), "group_hub_id", None) or "").strip()
+            if hub:
+                return hub
+            fid = (getattr(folder_by_id.get(fid), "parent_id", "") or "").strip()
+        return ""
+
+    outer_hub_of = {
+        (getattr(f, "group_hub_id", None) or "").strip(): _container_hub((f.parent_id or "").strip())
+        for f in folders
+        if f.id in doomed_ids and (getattr(f, "group_hub_id", None) or "").strip()
+    }
     save_folders([f for f in folders if f.id not in doomed_ids], project_root)
 
     by_parent: dict[str, list[Conversation]] = {}
@@ -615,16 +634,70 @@ def delete_folder(
         queue.extend(by_parent.get(conv.id, []))
 
     for conv in members:
-        if (conv.parent_conv_id or "").strip() in hub_ids:
-            conv.parent_conv_id = ""
-        conv.leader_conv_id = ""
+        if not (conv.parent_conv_id or "").strip() and conv.folder_id in doomed_ids:
+            # A ducky that sat in the group's folder belongs to that group in Archive.
+            conv.parent_conv_id = _container_hub(conv.folder_id)
         conv.folder_id = ARCHIVE_FOLDER_ID
         save_conversation(conv, project_root)
 
     for conv in all_convs:
         if conv.id in hub_ids:
-            _archive_hub(conv)
+            # The leader stays, for Return to active; a nested group points at its outer group.
+            conv.folder_id = ARCHIVE_FOLDER_ID
+            conv.parent_conv_id = outer_hub_of.get(conv.id, "")
+            save_conversation(conv, project_root)
     return sorted(hub_ids)
+
+
+def restore_archived_group(hub_id: str, project_root: str | None = None, parent_folder_id: str = "") -> list[str]:
+    """Return an archived group to active with everything archived with it: the group gets
+    a folder again, its duckies go back in it and its nested groups come back inside it.
+    Returns the restored chat ids."""
+    convs = _load_all_conversations(project_root, include_messages=not _use_db())
+    by_id = {c.id: c for c in convs}
+    hub = by_id.get(hub_id)
+    if hub is None or not getattr(hub, "is_group", False):
+        raise ValueError(f"Not an archived group: {hub_id!r}")
+    archived_children: dict[str, list[Conversation]] = {}
+    for conv in convs:
+        if is_archive_folder_id(conv.folder_id) and conv.id != hub_id:
+            archived_children.setdefault((conv.parent_conv_id or "").strip(), []).append(conv)
+    restored: list[str] = []
+    seen: set[str] = set()
+
+    def _restore_chat(conv: Conversation, folder_id: str) -> None:
+        if conv.id in seen:
+            return
+        seen.add(conv.id)
+        conv.folder_id = folder_id
+        save_conversation(conv, project_root)
+        restored.append(conv.id)
+        for child in archived_children.get(conv.id, []):
+            _restore_chat(child, folder_id)  # its sub-agent chats come along
+
+    def _restore_group(group: Conversation, parent_id: str) -> None:
+        if group.id in seen:
+            return
+        seen.add(group.id)
+        folder = create_folder(group.title or "Group", parent_id, project_root)
+        rows = load_folders(project_root)
+        for row in rows:
+            if row.id == folder.id:
+                row.group_hub_id = group.id
+        save_folders(rows, project_root)
+        group.folder_id = folder.id
+        group.parent_conv_id = ""  # active nesting is the folder tree
+        save_conversation(group, project_root)
+        restored.append(group.id)
+        for child in archived_children.get(group.id, []):
+            if getattr(child, "is_group", False):
+                _restore_group(child, folder.id)
+            else:
+                _restore_chat(child, folder.id)
+
+    target = parent_folder_id if _folder_is_known(parent_folder_id, project_root) else ""
+    _restore_group(hub, "" if is_archive_folder_id(target) else target)
+    return restored
 
 
 def island_for_conversation(
@@ -1819,9 +1892,25 @@ def move_conversation(conv_id: str, folder_id: str, project_root: str | None = N
     if not _folder_is_known(folder_id, project_root):
         raise ValueError(f"Unknown folder: {folder_id!r}")
     target_folder = folder_id or ""
+    archiving = is_archive_folder_id(target_folder)
+    restoring = is_archive_folder_id(conv.folder_id) and not archiving
+    if getattr(conv, "is_group", False):
+        # A group goes to Archive and comes back whole, with its duckies and nested groups.
+        if restoring:
+            restore_archived_group(conv_id, project_root, target_folder)
+            return
+        if archiving:
+            own = next((f for f in load_folders(project_root) if (getattr(f, "group_hub_id", None) or "") == conv_id), None)
+            if own is not None:
+                delete_folder(own.id, project_root, archive_members=True)
+                return
+    if restoring and (conv.parent_conv_id or "").strip():
+        parent = load_conversation(conv.parent_conv_id.strip(), project_root)
+        if parent is not None and getattr(parent, "is_group", False) and is_archive_folder_id(parent.folder_id):
+            conv.parent_conv_id = ""  # out of an archived group: a ducky on its own
     # Archive/restore the complete owned sub-agent tree. Otherwise children become
     # orphaned top-level chats and archived agents remain addressable.
-    cascade = is_archive_folder_id(target_folder) or is_archive_folder_id(conv.folder_id)
+    cascade = archiving or restoring
     ids = [conv_id, *conversation_descendant_ids(conv_id, project_root)] if cascade else [conv_id]
     by_id = {c.id: c for c in _load_all_conversations(project_root, include_messages=not _use_db())}
     by_id[conv.id] = conv

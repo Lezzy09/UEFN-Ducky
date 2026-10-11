@@ -48,7 +48,7 @@ import type { StackedPanelResizeSnapshot } from "../utils/stackedPanelFlex";
 import { SidebarPanelTabs } from "./sidebar/SidebarPanelTabs";
 import type { DockDropTarget } from "../utils/dockPanelDrag";
 import { insertIndexForTabDrop } from "../workspace/dockTabInsertIndex";
-import { DuckyArchiveDropdown } from "./sidebar/DuckyArchiveDropdown";
+import { archivedInsideCount, DuckyArchiveDropdown } from "./sidebar/DuckyArchiveDropdown";
 import { openLibraryAgent } from "./sidebar/openLibraryAgent";
 import { ContextMenu, useContextMenuState } from "./ContextMenu";
 import { formatSelectionBadge } from "../utils/fileTreeSelection";
@@ -1011,9 +1011,13 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
   };
 
   const deleteArchivedChat = async (chatId: string, chatName: string) => {
+    // An archived group goes with everything archived with it.
+    const inside = archivedInsideCount(archiveChats, chatId);
     if (
       !(await confirm({
-        message: `Permanently delete "${chatName}"? This cannot be undone.`,
+        message: inside
+          ? `Permanently delete "${chatName}" and the ${inside} ${inside === 1 ? "chat" : "chats"} archived with it? This cannot be undone.`
+          : `Permanently delete "${chatName}"? This cannot be undone.`,
         confirmLabel: "Delete permanently",
         danger: true,
       }))
@@ -1029,17 +1033,16 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
   const deleteFolder = async (folderId: string, folderName: string) => {
     const folder = findFolderById(foldersRef.current, folderId);
     const hubId = (folder?.groupHubId || "").trim();
-    let archiveMembers = false;
+    // A group goes to Archive whole: its duckies and nested groups with it.
+    const archiveMembers = Boolean(hubId);
     if (hubId) {
       const choice = await confirm({
         title: "Delete group",
-        message: `Delete group "${folderName}"? The group goes to Archive. Its duckies can stay active, or go to Archive too.`,
-        confirmLabel: "Group only",
-        extraLabel: "Group and duckies",
+        message: `Move group "${folderName}" to Archive with everything in it (its duckies and nested groups)? From Archive you can return the group or delete it for good.`,
+        confirmLabel: "Move to Archive",
         danger: true,
       });
       if (choice === false) return;
-      archiveMembers = choice === "extra";
     } else if (!(await confirm({
       message: `Delete folder "${folderName}"? Duckies inside will move to the root.`,
       confirmLabel: "Delete",
@@ -1070,17 +1073,16 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       groups.length ? `${groups.length} group${groups.length === 1 ? "" : "s"}` : "",
       chats.length ? `${chats.length} ducky${chats.length === 1 ? "" : "s"}` : "",
     ].filter(Boolean);
-    let archiveMembers = false;
+    // Groups go to Archive whole, with their duckies and nested groups.
+    const archiveMembers = groups.length > 0;
     if (groups.length) {
       const choice = await confirm({
         title: "Delete selection",
-        message: `Delete ${targets.length} selected items (${parts.join(" and ")})? Groups go to Archive. Duckies you selected go to Archive. Duckies inside a group can stay active, or go to Archive too.`,
-        confirmLabel: "Group only",
-        extraLabel: "Group and duckies",
+        message: `Move ${targets.length} selected items (${parts.join(" and ")}) to Archive? Each group goes with everything in it. From Archive you can return them or delete them for good.`,
+        confirmLabel: "Move to Archive",
         danger: true,
       });
       if (choice === false) return false;
-      archiveMembers = choice === "extra";
     } else if (
       !(await confirm({
         message: `Delete all ${targets.length} selected items (${parts.join(" and ")})? Duckies move to Archive.`,

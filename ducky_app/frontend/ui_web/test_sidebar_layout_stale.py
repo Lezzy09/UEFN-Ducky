@@ -296,3 +296,23 @@ def test_global_agents_folders_rename_and_delete_from_any_island(tmp_path: Path,
     pc.save_conversation(sub, "")
     api.delete_conversation(lead.id)
     assert pc.load_conversation(lead.id, "") is None and pc.load_conversation(sub.id, "") is None
+
+
+def test_a_global_agents_group_goes_to_archive_and_back_whole(tmp_path: Path, monkeypatch, pushes) -> None:
+    monkeypatch.setenv("DUCKY_STORE_BACKEND", "db")
+    island = _island(tmp_path)
+    _open_island(monkeypatch, island)
+    api = PanelApiChatsMixin()
+    crew = api.group_create("Crew", "", False, "_no_project")
+    folder_id = next(f.id for f in pc.load_folders("") if f.group_hub_id == crew["id"])
+    member = pc.create_conversation(title="Builder", folder_id=folder_id, project_root="")
+    member.parent_conv_id = crew["id"]
+    pc.save_conversation(member, "")
+
+    api.delete_folder(folder_id, True)
+    assert pc.load_conversation(member.id, "").folder_id == pc.ARCHIVE_FOLDER_ID
+
+    api.move_conversation(crew["id"], "")
+    back = next(f for f in pc.load_folders("") if f.group_hub_id == crew["id"])
+    restored = pc.load_conversation(member.id, "")
+    assert (restored.folder_id, restored.parent_conv_id) == (back.id, crew["id"])

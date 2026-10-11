@@ -1378,31 +1378,47 @@ class PanelApiChatsMixin:
         )
         _pa.notify_chats_changed(open_tab=False)
 
+    def _chat_root(self, conv_id: str) -> str | None:
+        """The island a chat lives on (None: the open one): Global Agents and other
+        islands' chats are in the sidebar too."""
+        from frontend.ui_web.project_chats import conversation_project_slug
+
+        slug = conversation_project_slug(conv_id)
+        try:
+            return self._layout_project_root(slug) if slug else None
+        except ValueError:
+            return None
+
     def move_conversation(self, conv_id: str, folder_id: str) -> None:
         archiving = _pa.is_archive_folder_id(folder_id)
+        root = self._chat_root(conv_id)
         leaving: list[str] = []
         if archiving:
             from frontend.ui_web.agent_modes import cancel_agent, is_agent_running
 
-            leaving = [conv_id, *_pa.conversation_descendant_ids(conv_id)]
+            leaving = [conv_id, *_pa.conversation_descendant_ids(conv_id, root)]
+            conv = _pa.load_conversation(conv_id, root)
+            if conv is not None and getattr(conv, "is_group", False):
+                # A group goes to Archive with its duckies and nested groups.
+                own = next((f for f in _pa.load_folders(root) if (f.group_hub_id or "") == conv_id), None)
+                if own is not None:
+                    subtree = _pa.folder_subtree_ids(own.id, root)
+                    for hub_id in _pa.group_hub_ids_in(subtree, root):
+                        leaving.extend([hub_id, *_pa.conversation_descendant_ids(hub_id, root)])
+            leaving = list(dict.fromkeys(leaving))
             for target_id in leaving:
                 if is_agent_running(target_id):
                     _pa.cancel_agent(target_id)
-        _pa.move_conversation(conv_id, folder_id or "")
+        _pa.move_conversation(conv_id, folder_id or "", root)
         # Archived chats leave every open window's tree at once; a restore reloads them.
         _pa.notify_chats_changed(open_tab=False, removed_conv_ids=leaving)
 
     def delete_conversation(self, conv_id: str) -> None:
         from frontend.ui_web.agent_modes import cancel_agent, is_agent_running
 
-        from frontend.ui_web.project_chats import conversation_project_slug
-
-        slug = conversation_project_slug(conv_id)
-        try:
-            root = self._layout_project_root(slug) if slug else None
-        except ValueError:
-            root = None
-        # Its sub-agent chats are found on its own island (Global Agents or another one).
+        root = self._chat_root(conv_id)
+        # Its sub-agent chats (an archived group's duckies and nested groups too) are found
+        # on its own island (Global Agents or another one).
         doomed = [conv_id, *_pa.conversation_descendant_ids(conv_id, root)]
         for target_id in doomed:
             if is_agent_running(target_id):
