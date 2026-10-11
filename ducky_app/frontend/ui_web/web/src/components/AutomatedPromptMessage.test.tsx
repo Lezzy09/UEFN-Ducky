@@ -2,10 +2,15 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 
+import { vi } from "vitest";
+
 import type { AutomatedPrompt } from "../utils/automatedPrompt";
 import { AutomatedPromptMessage } from "./AutomatedPromptMessage";
 
-afterEach(cleanup);
+const titles = vi.hoisted(() => new Map<string, string>());
+vi.mock("../hooks/agentBackgroundActivity", () => ({ chatTitleFor: (id: string) => titles.get(id) || "" }));
+
+afterEach(() => { cleanup(); titles.clear(); });
 
 function prompt(count: number): AutomatedPrompt {
   return {
@@ -55,4 +60,12 @@ it("names each hidden sender once", () => {
   twice.parts[3].from = "Builder 3";
   const { container } = render(<AutomatedPromptMessage prompt={twice} />);
   expect(container.querySelector(".message-bubble-automated-more")?.textContent).toBe("+3 more from Builder 3, Builder 5");
+});
+
+it("names the sender by its chat's current title, not the profile it was made from", () => {
+  titles.set("lead-chat", "Video Plugin Lead");
+  const named = prompt(1);
+  named.parts[0] = { ...named.parts[0], from: "Verse Coder", fromConvId: "lead-chat" };
+  const { container } = render(<AutomatedPromptMessage prompt={named} />);
+  expect(container.querySelector(".message-bubble-automated-from")?.textContent).toBe("Video Plugin Lead");
 });

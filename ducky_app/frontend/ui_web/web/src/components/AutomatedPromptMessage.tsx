@@ -1,5 +1,6 @@
 import { memo, useState, type ComponentType } from "react";
 import { Icons } from "../icons/Icons";
+import { chatTitleFor } from "../hooks/agentBackgroundActivity";
 import { requestOpenChatTab } from "../navigation/openChatReference";
 import {
   automatedPromptText,
@@ -18,6 +19,11 @@ const PART_ICON: Record<AutomatedPartKind, ComponentType> = {
   plan: Icons.Plan,
   keeper: Icons.Clock,
 };
+
+/** The sender's chat as it is named now; older messages carry the name it had then. */
+function senderName(part: AutomatedPart): string {
+  return (part.fromConvId && chatTitleFor(part.fromConvId)) || part.from;
+}
 
 /** Collapsed, a turn shows at most this many one-line rows (one row on a phone). */
 const COLLAPSED_ROWS = 3;
@@ -38,6 +44,7 @@ function AutomatedPartView({
 }) {
   const Icon = PART_ICON[part.kind];
   const agent = codingAgentName(part.agent);
+  const from = senderName(part);
 
   return (
     <div className={`message-bubble-automated-part is-${part.kind}${compact ? " is-compact" : ""}${extra ? " is-extra" : ""}`}>
@@ -50,16 +57,16 @@ function AutomatedPartView({
           <button
             type="button"
             className="message-bubble-automated-from"
-            title={`Open ${part.from}`}
+            title={`Open ${from}`}
             onClick={(event) => {
               event.stopPropagation();
-              requestOpenChatTab(part.fromConvId!, part.from);
+              requestOpenChatTab(part.fromConvId!, from);
             }}
           >
-            {part.from}
+            {from}
           </button>
         ) : (
-          <span className="message-bubble-automated-from is-static">{part.from}</span>
+          <span className="message-bubble-automated-from is-static">{from}</span>
         )}
         {agent ? <span className="message-bubble-automated-agent">{agent}</span> : null}
         <span className="message-bubble-automated-tag">{part.tag}</span>
@@ -102,7 +109,7 @@ export const AutomatedPromptMessage = memo(function AutomatedPromptMessage({
           role="button"
           tabIndex={0}
           aria-expanded={expanded}
-          aria-label={`${first?.tag || "Message"} from ${first?.from || "another agent"}, not from you`}
+          aria-label={`${first?.tag || "Message"} from ${first ? senderName(first) : "another agent"}, not from you`}
           title={expanded ? "Collapse" : "Expand"}
           onClick={(event) => {
             if ((event.target as HTMLElement).closest?.(".chat-ref-chip, .message-bubble-automated-from")) return;
@@ -134,7 +141,7 @@ export const AutomatedPromptMessage = memo(function AutomatedPromptMessage({
           ))}
           {hidden.length ? (
             <div className="message-bubble-automated-more is-extra">
-              +{hidden.length} more from {[...new Set(hidden.map((part) => part.from))].join(", ")}
+              +{hidden.length} more from {[...new Set(hidden.map(senderName))].join(", ")}
             </div>
           ) : null}
         </div>

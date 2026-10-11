@@ -311,7 +311,9 @@ def _conv_meta(conv_id: str) -> tuple[str, str]:
         conv = None
     if conv is None:
         return "", ""
-    name = (conv.ducky_name or conv.title or "").strip()
+    # The chat's own name, as the sidebar shows it: never the profile it was made from
+    # (a lead titled "Video Plugin Lead" read as "Verse Coder" in every message).
+    name = (conv.title or conv.ducky_name or "").strip()
     return name, (conv.coding_agent or "ducky").strip()
 
 
