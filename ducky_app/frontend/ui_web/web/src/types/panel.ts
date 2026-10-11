@@ -1967,6 +1967,8 @@ export interface AgentEvent {
     | "direct_rtc"
     | "open_url";
   text?: string;
+  /** assistant_done: a group note (a member's work posted to its group), not the end of a turn. */
+  note?: boolean;
   /** ui_rpc_request: which panel method to run and its params. */
   method?: string;
   params?: Record<string, unknown>;

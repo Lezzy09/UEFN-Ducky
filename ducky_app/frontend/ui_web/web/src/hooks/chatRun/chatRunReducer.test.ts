@@ -153,6 +153,19 @@ describe("chatRunReducer — turn completion", () => {
     expect(s.thinking).toBe("");
   });
 
+  it("a group note is its own row: an idle group stays idle and a live reply keeps streaming", () => {
+    const note = ev({ type: "assistant_done", note: true, text: "*Assignment from Lead:* go\n\nDone.", author: { name: "Builder" } });
+    const idle = run(initialRunState, note);
+    expect(idle.status).toBe("idle");
+    expect(isRunActive(idle)).toBe(false);
+    expect(idle.messages.at(-1)?.author?.name).toBe("Builder");
+    const live = run(initialRunState, { type: "send", text: "hi" }, { type: "sendAccepted", runId: "r1" },
+      ev({ type: "text_delta", text: "Half a repl" }), note);
+    expect(live.stream).toBe("Half a repl");
+    expect(live.status).toBe("running");
+    expect(texts(live).at(-1)).toContain("Done.");
+  });
+
   it("assistant_done with nothing buffered commits no row", () => {
     const s = run(
       initialRunState,

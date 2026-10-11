@@ -692,8 +692,17 @@ def _announce_private_member_talk(
             if msg.get("group_briefing"):
                 return False
             plain = _message_plain_text(msg)
-            if not plain or is_group_turn_prompt(plain):
+            if not plain:
                 return False
+            if is_group_turn_prompt(plain):
+                # Answered live in the group chat, unless the group stopped waiting for it.
+                late_group = _take_late_group_turn(mid)
+                if not late_group:
+                    return False
+                group_id = late_group
+                group = load_conversation(group_id, project_root=project_root) or group
+                origin, asked = "Answer to the group chat", ""
+                break
             origin, asked = _turn_origin(plain)
             break
     if not origin or not reply:
@@ -725,8 +734,8 @@ def _announce_private_member_talk(
         author = author_payload({**speaker, "group_path": path, "group_id_path": id_path})
         append_group_assistant(hub, text=note, author=author, project_root=project_root, side_chat_announce=True)
         if push is not None:
-            push({"type": "text_delta", "text": note, "conv_id": hub_id, "author": author})
-            push({"type": "assistant_done", "conv_id": hub_id, "author": author, "text": note})
+            # A note, not a turn: it must not leave the group chat looking busy.
+            push({"type": "assistant_done", "conv_id": hub_id, "author": author, "text": note, "note": True})
     _announced_turns[announcement_key] = signature
     return True
 
@@ -1284,6 +1293,53 @@ def _publish_member_reply(
         pass
 
 
+# A group message a member answers after the group stopped waiting for it: it was busy
+# with its own work (never stopped for the group), or a coding agent still working when the
+# wait ran out. Its answer is posted to the group when that turn ends.
+_BUSY = "busy"
+_LATER = "later"
+_WAITING_NOTES = {
+    _BUSY: "Busy with my current task. Your message is next in line; my answer will be posted here.",
+    _LATER: "Still working on it. My answer will be posted here when I'm done.",
+}
+_group_turns_lock = threading.Lock()
+_group_turns: dict[str, dict[str, Any]] = {}
+
+
+def _track_group_turn(member_id: str, group_id: str, *, late: bool) -> None:
+    with _group_turns_lock:
+        _group_turns[member_id] = {"group_id": group_id, "late": late}
+
+
+def _settle_group_turn(member_id: str, *, answered: bool) -> None:
+    with _group_turns_lock:
+        if answered:
+            _group_turns.pop(member_id, None)
+        elif member_id in _group_turns:
+            _group_turns[member_id]["late"] = True
+
+
+def _take_late_group_turn(member_id: str) -> str:
+    """The group a late group-chat answer goes to ("" when none is owed)."""
+    with _group_turns_lock:
+        entry = _group_turns.get(member_id)
+        if not entry or not entry.get("late"):
+            return ""
+        _group_turns.pop(member_id, None)
+        return str(entry.get("group_id") or "")
+
+
+def _post_waiting_note(group_id: str, speaker: dict[str, Any], why: str, push: PushFn,
+                       lock: threading.Lock) -> None:
+    author = author_payload(speaker)
+    text = _WAITING_NOTES[why]
+    with lock:
+        group = load_conversation(group_id)
+        if group is not None:
+            append_group_assistant(group, text=text, author=author)
+        push({"type": "assistant_done", "conv_id": group_id, "author": author, "text": text, "note": True})
+
+
 def _member_push_to_group(
     *,
     group_id: str,
@@ -1372,6 +1428,17 @@ def _run_member_turn(
     # on "waiting for linked agent" while the reply already finished.
     member_id = str(speaker["member_conv_id"])
     author = author_payload(badge)
+    from frontend.ui_web.agent_modes import is_agent_running, run_message
+
+    if is_agent_running(member_id):
+        # Busy with its own work: a group message never stops it. It goes next in line.
+        _track_group_turn(member_id, group_id, late=True)
+        run_message(member_id, prompt, mode or "agent", member_model or (model or ""),
+                    parent="", queue_if_busy=True, attachments=attachments or None)
+        return badge, "", _BUSY
+    # A coding agent (Codex, Claude Code, Cursor) is never killed for running past the wait.
+    external = (getattr(member_conv, "coding_agent", None) or "ducky").strip().lower() != "ducky"
+    _track_group_turn(member_id, group_id, late=False)
     nested_ids = [str(x).strip() for x in (badge.get("group_id_path") or []) if str(x).strip()]
     hub_ids = [group_id] + [x for x in nested_ids if x != group_id]
     register_member_hub(member_id, hub_ids, author)
@@ -1393,12 +1460,16 @@ def _run_member_turn(
             model=member_model or (model or ""),
             timeout_sec=timeout_sec,
             push=member_push,
-            cancel_on_timeout=True,
+            cancel_on_timeout=not external,
             parent="",
             attachments=attachments or None,
         )
     finally:
         unregister_member_hub(member_id)
+    if external and result.get("status") == "timeout" and not cancel.is_set():
+        _settle_group_turn(member_id, answered=False)
+        return badge, "", _LATER
+    _settle_group_turn(member_id, answered=True)
     if cancel.is_set():
         return badge, "", "cancelled"
     reply = str(result.get("assistant_text") or "").strip()
@@ -1529,6 +1600,9 @@ def _run_group_turn_body(
                     return
                 speaker, reply, err = fut.result()
                 label = member_display_name(speaker)
+                if err in _WAITING_NOTES:
+                    _post_waiting_note(group_id, speaker, err, push, publish_lock)
+                    continue
                 if err:
                     push(
                         {
@@ -1607,6 +1681,9 @@ def _run_group_turn_body(
             attachments=attachments if hops == 0 else None,
         )
         if cancel.is_set():
+            return
+        if err in _WAITING_NOTES:
+            _post_waiting_note(group_id, published, err, push, publish_lock)
             return
         if err:
             push(

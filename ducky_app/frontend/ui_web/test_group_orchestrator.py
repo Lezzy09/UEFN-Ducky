@@ -729,8 +729,11 @@ def test_a_note_goes_up_to_every_group_above(monkeypatch):
     pushed: list[dict] = []
     assert go.announce_private_member_talk("m1", push=pushed.append) is True
     assert hubs == [("g1", []), ("top", ["Gateway"])]
-    deltas = [e for e in pushed if e["type"] == "text_delta"]
-    assert [e["conv_id"] for e in deltas] == ["g1", "top"] and all(e.get("author") for e in deltas)
+    # Notes, not turns: a streamed delta left the group chat "running" so nobody could send.
+    assert not any(e["type"] == "text_delta" for e in pushed)
+    notes = [e for e in pushed if e["type"] == "assistant_done"]
+    assert [e["conv_id"] for e in notes] == ["g1", "top"]
+    assert all(e.get("note") and e.get("author") for e in notes)
 
 
 def test_a_persons_private_talk_stays_on_hub_only(monkeypatch):
@@ -829,3 +832,72 @@ def test_briefing_load_to_append_race_observes_real_admission(monkeypatch):
     monkeypatch.setattr(go, "load_conversation", load)
     assert go.broadcast_group_briefing("g1", "Briefing", skip_member_ids={"m1"}) == 1
     assert briefed == ["m3"]
+
+
+def _busy_team(monkeypatch, *, busy: bool, agent: str = "codex"):
+    import frontend.ui_web.group_orchestrator as go
+
+    hub = SimpleNamespace(id="hub", is_group=True, messages=[], title="Team", model="", folder_id="",
+                          group_members=[{"member_conv_id": "m1", "name": "Builder", "profile_id": "p"}])
+    member = SimpleNamespace(id="m1", is_group=False, parent_conv_id="hub", messages=[], model="gpt-6.1-sol",
+                             coding_agent=agent, title="Builder", ducky_name="Builder")
+    convs = {"hub": hub, "m1": member}
+    calls: dict = {"queued": [], "waited": []}
+
+    class _InlineThread:
+        def __init__(self, target=None, name="", daemon=False):
+            self._target = target
+
+        def start(self):
+            if self._target:
+                self._target()
+
+    monkeypatch.setattr(go, "_announced_turns", {}, raising=False)
+    monkeypatch.setattr(go, "_group_turns", {}, raising=False)
+    monkeypatch.setattr(go, "load_conversation", lambda cid, project_root=None: convs.get(cid))
+    monkeypatch.setattr(go, "append_message", lambda conv, message, project_root=None: conv.messages.append(message))
+    monkeypatch.setattr(go, "sync_group_members_from_folder", lambda group, project_root=None: go.group_members(group))
+    monkeypatch.setattr(go, "is_group_running", lambda _gid: False)
+    monkeypatch.setattr(go, "_persist_group_attachments", lambda *_a, **_k: [])
+    monkeypatch.setattr(go, "_hub_chain", lambda gid, root=None: [(gid, [], [])])
+    monkeypatch.setattr(go.threading, "Thread", _InlineThread)
+    monkeypatch.setattr("frontend.ui_web.agent_modes.is_agent_running", lambda cid: busy and cid == "m1")
+    monkeypatch.setattr("frontend.ui_web.agent_modes.run_message",
+                        lambda cid, text, mode, model, **kw: calls["queued"].append((cid, text, kw)) or "queued")
+
+    def wait(cid, text, **kw):
+        calls["waited"].append(kw)
+        return {"status": "timeout", "conv_id": cid}
+
+    monkeypatch.setattr("frontend.ui_web.agent_modes.run_message_and_wait", wait)
+    monkeypatch.setattr("frontend.agent_profiles.list_agent_profiles_available", lambda: [])
+    monkeypatch.setattr("backend.agent.chat_title.start_auto_title", lambda *a, **k: None)
+    return go, hub, member, calls
+
+
+def test_a_busy_member_is_never_stopped_by_a_group_message(monkeypatch):
+    go, hub, member, calls = _busy_team(monkeypatch, busy=True)
+    events: list[dict] = []
+    assert go.run_group_turn("hub", "how is it going?", push=events.append)
+    assert calls["waited"] == []  # no force-run, no cancel of its own work
+    (cid, prompt, kw), = calls["queued"]
+    assert cid == "m1" and kw["queue_if_busy"] is True
+    assert "Busy with my current task" in hub.messages[-1]["content"]
+    notes = [e for e in events if e["type"] == "assistant_done"]
+    assert notes and all(e.get("note") for e in notes)
+    assert events[-1]["type"] == "agent_stopped"  # the group can take the next message
+    # Its queued turn ends later: the answer is posted to the group.
+    member.messages += [{"role": "user", "content": prompt}, {"role": "assistant", "content": "Discovery is done."}]
+    assert go.announce_private_member_talk("m1") is True
+    assert hub.messages[-1]["content"].startswith("*Answer to the group chat*")
+    assert "Discovery is done." in hub.messages[-1]["content"]
+
+
+def test_a_coding_agent_is_never_killed_for_outlasting_the_group_wait(monkeypatch):
+    go, hub, member, calls = _busy_team(monkeypatch, busy=False)
+    events: list[dict] = []
+    assert go.run_group_turn("hub", "build the timeline", push=events.append)
+    assert calls["waited"][0]["cancel_on_timeout"] is False
+    assert "Still working on it" in hub.messages[-1]["content"]
+    assert not any(e["type"] == "error" for e in events)
+    assert go._group_turns["m1"]["late"] is True

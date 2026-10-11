@@ -211,6 +211,17 @@ function onAgentEvent(event: AgentEvent) {
 
   if (event.type !== "assistant_done") return;
 
+  if (event.note) {
+    // A member's note posted to this group: read in its voice, leave any open reply alone.
+    const noteText = typeof event.text === "string" ? event.text : "";
+    void prepareSpokenText(noteText).then((spoken) => {
+      if (!spoken || !sessions.has(session.chatId)) return;
+      enqueueFinalSpeak(spoken, speakOpts(session, author));
+      publish(session, { status: "speaking", spokenText: spoken, speakerName: author?.name || session.speakerName });
+    }).catch(() => {});
+    return;
+  }
+
   // The reply's author speaks it; the chat's own voice and name stay the chat's.
   const speaker = author ?? session.replyAuthor;
   if (speaker && !session.replyAuthor) session.replyAuthor = speaker;

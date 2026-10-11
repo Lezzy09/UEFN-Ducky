@@ -95,6 +95,9 @@ export function useChatCompletionAlerts({
 
       setCompletionAlert(convId);
 
+      // A group note marks the group unread; it does not pull a window forward.
+      if (event.note) return;
+
       maybeRaiseFocusedWindow(convId);
 
       emitAppHook(event.type === "error" ? "agent.error" : "agent.done", { chatId: convId });

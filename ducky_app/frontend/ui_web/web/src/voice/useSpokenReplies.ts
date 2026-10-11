@@ -35,7 +35,7 @@ export function useSpokenReplies(opts?: {
   useEffect(() => {
     installAgentEventBus();
     return subscribeAgentEvents((event) => {
-      if (event.type !== "assistant_done") return;
+      if (event.type !== "assistant_done" || event.note) return;
       const convId = event.conv_id?.trim();
       if (!convId) return;
       const settings = getVoiceSettings();

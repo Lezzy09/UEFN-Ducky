@@ -369,6 +369,14 @@ function applyAgentEvent(state: RunState, event: AgentEvent): RunState {
     }
 
     case "assistant_done": {
+      // A group note (a member's work posted to its group) is its own row: it never
+      // takes over a reply streaming in this chat.
+      if (event.note) {
+        const text = (event.text ?? "").trim();
+        if (!text) return state;
+        const row: ChatMessage = { id: optId(state.idSeq), role: "assistant", text, ...(event.author ? { author: event.author } : {}) };
+        return reset(state, { messages: [...state.messages, row], idSeq: state.idSeq + 1, hasNewBelow: markNewBelow(state) });
+      }
       // Group orchestrator may push the full reply on the event without prior
       // text_delta (or after a missed delta) — prefer stream, fall back to event.text.
       const answer = state.stream.trim() || (event.text ?? "").trim();
