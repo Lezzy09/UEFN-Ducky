@@ -24,7 +24,12 @@ STARTER_UEFN_PLUGIN_SLUGS: tuple[str, ...] = (
     "translation",
 )
 
-POPULAR_PLUGIN_SLUGS: tuple[str, ...] = STARTER_LLM_GATEWAY_SLUGS + STARTER_UEFN_PLUGIN_SLUGS
+# Offline neural voices, so every ducky can read its replies in its own voice.
+STARTER_VOICE_PLUGIN_SLUGS: tuple[str, ...] = ("piper",)
+
+POPULAR_PLUGIN_SLUGS: tuple[str, ...] = (
+    STARTER_LLM_GATEWAY_SLUGS + STARTER_UEFN_PLUGIN_SLUGS + STARTER_VOICE_PLUGIN_SLUGS
+)
 
 STARTER_PLUGIN_LABELS: dict[str, str] = {
     "anthropic": "Anthropic",
@@ -42,6 +47,7 @@ STARTER_PLUGIN_LABELS: dict[str, str] = {
     "metahuman": "MetaHuman",
     "tester": "Tester",
     "translation": "Translation",
+    "piper": "Pipe voices",
 }
 
 _GATEWAY_CONTRIB_KEYS = (
@@ -153,6 +159,12 @@ def starter_llm_onboard_pending() -> dict[str, Any]:
         return {"ok": True, "pending": True}
 
 
+def _group(slug: str) -> str:
+    if slug in STARTER_LLM_GATEWAY_SLUGS:
+        return "gateway"
+    return "voice" if slug in STARTER_VOICE_PLUGIN_SLUGS else "editor"
+
+
 def starter_plugins() -> list[dict[str, Any]]:
     """The bundle the first-run setup installs, in install order, with what is on disk now."""
     from backend.uefn_plugins.store import is_plugin_installed
@@ -161,7 +173,7 @@ def starter_plugins() -> list[dict[str, Any]]:
         {
             "slug": slug,
             "label": STARTER_PLUGIN_LABELS.get(slug, slug),
-            "group": "gateway" if slug in STARTER_LLM_GATEWAY_SLUGS else "editor",
+            "group": _group(slug),
             "installed": bool(is_plugin_installed(slug)),
         }
         for slug in POPULAR_PLUGIN_SLUGS
@@ -226,6 +238,11 @@ def _install_missing(on_progress: Callable[[dict[str, Any]], None] | None) -> tu
         try:
             result = store_download_and_install(slug, replace=True, is_update=False)
             if result.get("ok"):
+                if result.get("enabled") is False:
+                    # Setup installs the bundle to use it: a plugin that ships off (Pipe) is turned on.
+                    from backend.uefn_plugins.store import set_uefn_plugin_enabled
+
+                    set_uefn_plugin_enabled(slug, True)
                 installed.append(slug)
                 _emit(
                     on_progress,
@@ -289,7 +306,7 @@ def ensure_popular_plugins(
     force: bool = False,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Install gateways, then UEFN editor plugins.
+    """Install gateways, then UEFN editor plugins, then Pipe voices.
 
     The auto path (``force=False``) runs once and skips machines that already
     used Ducky. The corner button passes ``force=True`` so a missing bundle

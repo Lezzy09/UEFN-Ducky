@@ -1872,7 +1872,7 @@ export interface CrashReportsState {
 export interface StarterPluginDto {
   slug: string;
   label: string;
-  group: "gateway" | "editor";
+  group: "gateway" | "editor" | "voice";
   installed: boolean;
 }
 

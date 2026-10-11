@@ -93,6 +93,12 @@ describe("SetupWizard", () => {
     expect(props.onInstall).toHaveBeenCalled();
   });
 
+  it("lists Pipe voices in its own Voices group", () => {
+    wizard({ step: "plugins", plugins: [...PLUGINS, { slug: "piper", label: "Pipe voices", group: "voice", installed: false }] });
+    expect(screen.getByRole("region", { name: "UEFN editor tools" }).textContent).not.toContain("Pipe");
+    expect(screen.getByRole("region", { name: "Voices" }).textContent).toContain("Pipe voices");
+  });
+
   it("shows installing and failed rows, and Try again after a failure", () => {
     wizard({ step: "plugins", installing: true, rows: { openai: { phase: "installing" }, verse: { phase: "installed" } } });
     expect(screen.getByRole("button", { name: /Installing 2 of 2/ })).toHaveProperty("disabled", true);

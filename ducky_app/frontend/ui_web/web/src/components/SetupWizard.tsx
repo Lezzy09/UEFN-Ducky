@@ -173,7 +173,15 @@ function PluginRow({
   return (
     <li className={`setup-wizard-plugin is-${row?.phase ?? "ready"}`}>
       <span className="setup-wizard-plugin-icon" aria-hidden>
-        {icon ? <img src={icon} alt="" draggable={false} /> : plugin.group === "gateway" ? <Icons.Brain /> : <Icons.Puzzle />}
+        {icon ? (
+          <img src={icon} alt="" draggable={false} />
+        ) : plugin.group === "gateway" ? (
+          <Icons.Brain />
+        ) : plugin.group === "voice" ? (
+          <Icons.Speaker />
+        ) : (
+          <Icons.Puzzle />
+        )}
       </span>
       <span className="setup-wizard-plugin-text">
         <span className="setup-wizard-plugin-name">{item?.name || plugin.label}</span>
@@ -197,7 +205,8 @@ function PluginsStep({
 }: Pick<SetupWizardProps, "plugins" | "rows" | "installing" | "installError">) {
   const items = useStoreItems();
   const gateways = plugins.filter((p) => p.group === "gateway");
-  const editor = plugins.filter((p) => p.group !== "gateway");
+  const editor = plugins.filter((p) => p.group === "editor");
+  const voices = plugins.filter((p) => p.group === "voice");
   const done = plugins.filter((p) => rows[p.slug]?.phase === "installed").length;
   return (
     <>
@@ -238,6 +247,18 @@ function PluginsStep({
           ))}
         </ul>
       </section>
+      {voices.length ? (
+        <section className="setup-wizard-group" aria-label="Voices">
+          <h3>
+            Voices <span className="setup-wizard-muted">each ducky reads its replies aloud, offline</span>
+          </h3>
+          <ul className="setup-wizard-plugin-list">
+            {voices.map((p) => (
+              <PluginRow key={p.slug} plugin={p} row={rows[p.slug]} item={items[p.slug]} />
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </>
   );
 }

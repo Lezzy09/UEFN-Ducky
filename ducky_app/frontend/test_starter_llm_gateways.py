@@ -139,3 +139,21 @@ def test_setup_status_lists_the_bundle_with_what_is_installed(isolated_appdata) 
     assert by_slug["anthropic"]["installed"] is False
     assert by_slug["verse"]["group"] == "editor" and by_slug["verse"]["installed"] is True
     assert by_slug["leveldesign"]["label"] == "Level Design"
+    assert by_slug["piper"]["group"] == "voice" and by_slug["piper"]["label"] == "Pipe voices"
+
+
+def test_setup_turns_on_a_plugin_that_ships_off(isolated_appdata, monkeypatch) -> None:
+    turned_on: list[str] = []
+
+    def _fake_download(slug: str, **_kwargs):
+        _write_plugin(isolated_appdata, slug)
+        return {"ok": True, "kind": "plugin", "id": slug, "enabled": slug != "piper"}
+
+    monkeypatch.setattr("frontend.duckyos_account.store_download_and_install", _fake_download)
+    monkeypatch.setattr(
+        "backend.uefn_plugins.store.set_uefn_plugin_enabled",
+        lambda slug, enabled, **_kw: turned_on.append(slug) or {"ok": True},
+    )
+    out = ensure_starter_llm_gateways()
+    assert "piper" in out["installed"]
+    assert turned_on == ["piper"]
