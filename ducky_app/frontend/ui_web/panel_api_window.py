@@ -405,6 +405,15 @@ class PanelApiWindowMixin:
 
         tab_registry.report_open_tabs(window_id or "main", list(tab_ids or []))
 
+    def report_plugin_panel(self, window_id: str = "", tab_id: str = "", visible: bool = True, open: bool = True) -> None:  # noqa: A002
+        """A plugin panel tab was shown, hidden or closed (agents are told when it is off screen)."""
+        from backend.uefn_plugins.panel_presence import note_panel
+
+        try:
+            note_panel(window_id or "main", str(tab_id or ""), visible=bool(visible), open_=bool(open))
+        except Exception:
+            pass
+
     def focus_tab(self, tab_id: str, requesting_window: str = "") -> dict[str, object]:
         """VS Code single-tab rule: raise + activate the window that owns tab_id.
 

@@ -391,6 +391,7 @@ _PUBLIC_METHODS = frozenset({
     'rename_project_entry',
     'replace_workspace',
     'reload_uefn_plugin',
+    'report_plugin_panel',
     'remote_set_enabled',
     'remote_sign_out_all',
     'remote_status',

@@ -3260,6 +3260,8 @@ export interface PanelApi {
   delete_changeset_entries?(run_id: string, seqs: number[]): Promise<{ removed: number; kept: number }>;
   stop_verse_diagnostics_scan(project_root?: string): Promise<{ ok: boolean }>;
   report_open_tabs(window_id: string, tab_ids: string[]): Promise<void>;
+  /** A plugin panel tab was shown, hidden or closed (agents are told when it is off screen). */
+  report_plugin_panel?(window_id: string, tab_id: string, visible: boolean, open: boolean): Promise<void>;
   focus_tab(tab_id: string, requesting_window: string): Promise<{ ok: boolean; window_id: string }>;
   claim_tab(tab_id: string, window_id: string): Promise<void>;
   get_tab_owner(tab_id: string): Promise<string>;

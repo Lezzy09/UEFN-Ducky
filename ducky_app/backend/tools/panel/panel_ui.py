@@ -44,6 +44,7 @@ _ROUTES = (
     "settings.permissions",
     "settings.tab",
     "chat",
+    "plugin_panel",
     "changes",
     "workflows",
     "skills_studio",
@@ -72,7 +73,25 @@ _MAX_ASK_USER_QUESTIONS = 8
 
 
 def _navigate(route: str, item_id: str = "") -> dict[str, Any]:
+    if route == "plugin_panel":
+        return _open_plugin_panel(item_id)
     return panel_rpc("navigate", {"route": route, "item_id": item_id})
+
+
+def _open_plugin_panel(item_id: str) -> dict[str, Any]:
+    """``<plugin_id>`` or ``<plugin_id>:<panel_id>``: open that panel and bring its tab up."""
+    from backend.uefn_plugins.host import get_contributions
+
+    plugin_id, _, panel_id = (item_id or "").partition(":")
+    plugin_id = plugin_id.strip().lower()
+    panels = [r for r in (get_contributions().get("ui_panels") or [])
+              if isinstance(r, dict) and r.get("plugin_id") == plugin_id]
+    if not panels:
+        return {"error": f"plugin {plugin_id!r} has no panel"}
+    panel = next((r for r in panels if r.get("id") == panel_id.strip()), panels[0])
+    out = panel_rpc("open_plugin_panel", {"plugin_id": plugin_id, "panel_id": panel.get("id"),
+                                          "title": str(panel.get("title") or panel.get("id") or "")})
+    return out if out.get("error") else {"ok": True, "route": "plugin_panel", "tab": out.get("tab")}
 
 
 def _list_targets(route: str = "", query: str = "", visible_only: bool = False) -> dict[str, Any]:
@@ -220,12 +239,14 @@ def ducky_ui_navigate(route: str, item_id: str = "", pretty: bool = False) -> st
     route: one of settings, settings.general, settings.store, settings.llms,
     settings.mcp_plugins, settings.skills, settings.appearance, settings.audio,
     settings.duckies, settings.plans, settings.memory, settings.languages,
-    settings.log_errors, settings.app_data, settings.tab, chat, chats, files, changes,
+    settings.log_errors, settings.app_data, settings.tab, chat, chats, files, plugin_panel, changes,
     workflows, skills_studio, terminals, plans, project_picker. `changes` opens the
     project-wide ledger. `workflows` opens the Workflows editor.
     `item_id`: settings.store → a Store slug opens that plugin's page; settings.tab →
     any Settings tab by name (a plugin's own tab like "Meshy", or "Audio");
-    settings.llms → a provider id; chat → a chat id; files → a project file path.
+    settings.llms → a provider id; chat → a chat id; files → a project file path;
+    plugin_panel → "<plugin_id>" or "<plugin_id>:<panel_id>" opens that plugin's panel on
+    screen (its panel code only runs while it is the visible tab).
     Returns {ok, route}. Needs an open panel; UEFN may be offline.
     Example: ducky_ui_navigate("settings.mcp_plugins").
     """

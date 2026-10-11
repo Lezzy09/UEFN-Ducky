@@ -250,6 +250,9 @@ def _run_panel(api_holder: dict[str, object]) -> None:
 
                 # A restart forgets the in-memory undo registry, so last session's trash is dead weight.
                 purge_undo_trash()
+                from backend.uefn_plugins.panel_presence import forget_all
+
+                forget_all()  # no plugin panel is open yet; a crash may have left old rows
                 apply_workspace_env(PanelSettings.load().uefn_project_root)
             except Exception:
                 pass

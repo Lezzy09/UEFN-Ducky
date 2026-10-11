@@ -958,6 +958,23 @@ def uefn_agent_tools_allowed(plugin_id: str) -> bool:
     return plugin_id in active
 
 
+def _with_panel_note(plugin_id: str, result: Any) -> Any:
+    """An agent's first call to a plugin whose panels are all off screen says so."""
+    try:
+        from backend.uefn_plugins.panel_presence import panel_note_once
+
+        note = panel_note_once(plugin_id)
+    except Exception:
+        return result
+    if not note:
+        return result
+    if isinstance(result, dict):
+        return {**result, "panel_note": note} if "panel_note" not in result else result
+    if isinstance(result, str):
+        return f"{result}\n\n{note}"
+    return result
+
+
 def register_panel_rpc(plugin_id: str, name: str, fn: Any) -> None:
     """Register a PanelApi / bridge callable for ``plugin_call(plugin_id, name, params)``."""
     from backend.uefn_plugins.store import normalize_plugin_id
@@ -3426,6 +3443,13 @@ class _PluginApi:
         """Record a mutation in the Changes ledger so Revert can unwind it."""
         return _ChangesetApi(self)
 
+    def panel_state(self) -> dict[str, Any]:
+        """Whether this plugin's panel is open and on screen: ``{open, visible, since, panels}``.
+        Panel code runs only while its tab is the visible one; a tool that needs it can say so."""
+        from backend.uefn_plugins.panel_presence import panel_state
+
+        return panel_state(self.plugin_id)
+
     @property
     def data(self) -> Any:
         """Host data service: docs (one JSON doc per entity) and files in the active
@@ -3571,7 +3595,7 @@ class _PluginApi:
                     from backend.uefn_plugins.scopes import active_scope, scope_name
 
                     result = {**result, "scope": scope_name(active_scope(pid))}
-                return result
+                return _with_panel_note(pid, result)
 
             mcp.tool(name=tool_name)(wrapper)
             _record_plugin_api_tool(pid, tool_name, intent=intent, listener=listener)
