@@ -955,6 +955,17 @@ class PanelApiStoreMixin:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    def reload_uefn_plugin(self, plugin_id: str) -> dict[str, Any]:
+        """The agents' tool server installed a new copy of a plugin: load it here too,
+        so the plugin's panels call the new code."""
+        from backend.uefn_plugins.host import reload_single_plugin
+
+        try:
+            reload_single_plugin(str(plugin_id or ""))
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True}
+
     def plugin_call(
         self,
         plugin_id: str,

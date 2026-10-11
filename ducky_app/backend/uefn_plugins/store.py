@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import io
 import json
+import logging
 import re
 import shutil
 import threading
@@ -789,6 +790,34 @@ def parse_plugin_manifest_from_zip(data: bytes) -> dict[str, Any]:
         return manifest
 
 
+def _reload_in_app_process(pid: str) -> None:
+    """An agent's tool server installs in its own process. The app's panels call the
+    plugin's RPCs in the app process, so it loads the new copy too; until it does,
+    panels keep calling the code that was there before."""
+    try:
+        from frontend.ui_web import agent_modes
+
+        if not agent_modes._in_bridge_process():
+            return
+    except Exception:
+        return
+
+    def run() -> None:
+        try:
+            import urllib.request
+
+            from frontend.settings import PANEL_LISTENER_PORT
+
+            url = f"http://127.0.0.1:{PANEL_LISTENER_PORT - 1}/__panel_api/reload_uefn_plugin"
+            data = json.dumps({"args": [pid]}).encode("utf-8")
+            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=30).read()
+        except Exception:
+            logging.getLogger(__name__).debug("app reload of plugin %s failed", pid, exc_info=True)
+
+    threading.Thread(target=run, daemon=True, name=f"plugin-app-reload-{pid}").start()
+
+
 def import_plugin_from_bytes(
     data: bytes,
     *,
@@ -1008,6 +1037,7 @@ def import_plugin_from_bytes(
         enabled_now = pid in get_enabled_plugin_ids()
     if skill_ids:
         _refresh_plugin_skills_async()
+    _reload_in_app_process(pid)
     return {
         "ok": True,
         "id": pid,

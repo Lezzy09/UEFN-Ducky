@@ -390,6 +390,7 @@ _PUBLIC_METHODS = frozenset({
     'rename_folder',
     'rename_project_entry',
     'replace_workspace',
+    'reload_uefn_plugin',
     'remote_set_enabled',
     'remote_sign_out_all',
     'remote_status',
