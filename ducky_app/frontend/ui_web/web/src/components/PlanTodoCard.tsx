@@ -28,7 +28,7 @@ function flattenOutline(nodes: PlanNode[] | undefined, prefix = "", inheritedOwn
   (nodes || []).forEach((node, i) => {
     const label = prefix ? `${prefix}.${i + 1}` : `${i + 1}`;
     const depth = prefix ? prefix.split(".").length : 0;
-    const owner = node.assignee || inheritedOwner;
+    const owner = node.assignee || node.assignee_inferred || inheritedOwner;
     out.push({ label, node, depth, owner });
     if (node.children?.length) out.push(...flattenOutline(node.children, label, owner));
   });
@@ -195,8 +195,8 @@ export function PlanTodoCard({
               highlighted={highlightNodeId === node.id}
               onSelect={onSelectNode ? () => onSelectNode(node) : undefined}
             />
-            {!isTemplate && owner && (node.assignee || node.status === "in_progress") ? (
-              <PlanOwnerChips ownerId={owner} activeOnly={!node.assignee} nodeId={node.id} />
+            {!isTemplate && owner && (node.assignee || node.assignee_inferred || node.status === "in_progress") ? (
+              <PlanOwnerChips ownerId={owner} activeOnly={!(node.assignee || node.assignee_inferred)} nodeId={node.id} />
             ) : null}
             </div>
           ))}

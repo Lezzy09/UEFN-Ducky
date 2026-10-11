@@ -6956,6 +6956,24 @@
   color: var(--danger, #e85d5d);
 }
 
+/* A member's plan → the team's main plan. */
+.chat-plan-popup-bar-main-plan {
+  flex-shrink: 0;
+  appearance: none;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--accent);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.chat-plan-popup-bar-main-plan:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+
 .chat-plan-popup-bar-stop:disabled {
   opacity: 0.35;
   cursor: default;

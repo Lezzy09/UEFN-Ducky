@@ -2,6 +2,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Mouse
 import type { ChatPlan, PlanProgress } from "../types/panel";
 import type { OpenFileHandler } from "../types/richContent";
 import { progressForPlan } from "../utils/planOutlineNav";
+import { requestOpenPlanTab } from "../navigation/openPlanTab";
 import { PlanTodoCard } from "./PlanTodoCard";
 import { RichContentRenderer } from "./rich-content/RichContentRenderer";
 
@@ -109,6 +110,16 @@ export const ChatPlanPopup = memo(function ChatPlanPopup({
             </svg>
           </span>
         </button>
+        {plan.team_plan ? (
+          <button
+            type="button"
+            className="chat-plan-popup-bar-main-plan"
+            onClick={() => requestOpenPlanTab({ chatId: plan.team_plan!.chat_id, title: plan.team_plan!.title })}
+            title={`Part of the team plan “${plan.team_plan.title}”. Open it.`}
+          >
+            Main plan
+          </button>
+        ) : null}
         {onOpenPlan ? (
           <button
             type="button"

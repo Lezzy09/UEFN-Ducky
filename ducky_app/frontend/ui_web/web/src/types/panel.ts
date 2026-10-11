@@ -718,6 +718,8 @@ export type PlanNodeKind = "step" | "subplan";
 
 export interface PlanNode {
   assignee?: string;
+  /** Shown only: the group a lead's unassigned step names ("Edit & Render group implements…"). */
+  assignee_inferred?: string;
   id: string;
   content: string;
   status: PlanTodoStatus;
@@ -754,6 +756,12 @@ export interface ChatPlan {
     node_id: string;
     plan_title: string;
     assignee: string;
+  };
+  /** A member's own plan: the team's main plan it is part of, and the step its group works on. */
+  team_plan?: {
+    chat_id: string;
+    title: string;
+    node_id?: string;
   };
 }
 

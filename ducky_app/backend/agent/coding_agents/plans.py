@@ -1184,6 +1184,72 @@ def _chat_and_group_ids(chat_id: str, project_root: str | None) -> list[str]:
     return ids
 
 
+def _group_short_name(title: str) -> str:
+    """"Island Media Kit — Edit & Render" → "Edit & Render": how plans name a team's groups."""
+    name = (title or "").strip()
+    return name.rsplit(" — ", 1)[-1].strip() if " — " in name else name
+
+
+def _with_inferred_owners(plan: dict[str, Any], lead_id: str, convs: list[Any]) -> dict[str, Any]:
+    """A copy of a lead's plan whose unassigned steps that name a group the lead runs
+    ("Edit & Render group implements…") carry ``assignee_inferred`` = that group."""
+    groups = [(c.id, _group_short_name(getattr(c, "title", "") or "")) for c in convs
+              if getattr(c, "is_group", False) and (getattr(c, "leader_conv_id", "") or "").strip() == lead_id]
+    groups = [(gid, name) for gid, name in groups if len(name) >= 4]
+    if not groups:
+        return plan
+
+    def walk(nodes: list[Any]) -> list[Any]:
+        out = []
+        for node in nodes or []:
+            row = dict(node)
+            if not row.get("assignee"):
+                text = str(row.get("content") or "").lower()
+                hits = [(len(name), gid) for gid, name in groups if name.lower() in text]
+                if hits:
+                    row["assignee_inferred"] = max(hits)[1]
+            if row.get("children"):
+                row["children"] = walk(row["children"])
+            out.append(row)
+        return out
+
+    return {**plan, "nodes": walk(list(plan.get("nodes") or []))}
+
+
+def with_team_links(plan: dict[str, Any] | None, chat_id: str,
+                    project_root: str | None = None) -> dict[str, Any] | None:
+    """Display links between a team's main plan and its members' own plans; never saved.
+
+    A lead's plan shows who works on each step it did not assign (the group its text
+    names). A member's own plan gets ``team_plan``: the plan of the nearest lead above
+    it and the step its group works on, so the plan links back to the main plan.
+    """
+    if not plan or plan.get("assigned_from"):
+        return plan
+    try:
+        from frontend.ui_web.project_chats import island_for_conversation, load_conversation
+
+        convs, _folders = island_for_conversation(chat_id, project_root)
+    except Exception:
+        return plan
+    plan = _with_inferred_owners(plan, chat_id, convs)
+    by_id = {c.id: c for c in convs}
+    ids = _chat_and_group_ids(chat_id, project_root)
+    for hub_id in ids[1:]:
+        hub = by_id.get(hub_id) or load_conversation(hub_id, project_root=project_root)
+        lead = (getattr(hub, "leader_conv_id", "") or "").strip() if hub is not None else ""
+        if not lead or lead == chat_id:
+            continue
+        main = load_plan(lead, project_root)
+        if main is None or main.get("status") == "archived":
+            continue
+        main = _with_inferred_owners(main, lead, convs)
+        node_id = next((str(n.get("id") or "") for n in _flatten_nodes(main.get("nodes"))
+                        if (n.get("assignee") or n.get("assignee_inferred")) in ids), "")
+        return {**plan, "team_plan": {"chat_id": lead, "title": str(main.get("title") or "Plan"), "node_id": node_id}}
+    return plan
+
+
 def load_plan_view(chat_id: str, project_root: str | None = None) -> dict[str, Any] | None:
     """Resolve an active read view without redirecting raw storage or mutations."""
     own = load_plan(chat_id, project_root)

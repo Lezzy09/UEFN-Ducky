@@ -568,6 +568,16 @@ export function PlanPane({
               </button>
             ) : plan ? (
               <>
+                {plan.team_plan ? (
+                  <button
+                    type="button"
+                    className="plan-pane-btn plan-pane-btn--ghost"
+                    onClick={() => requestOpenPlanTab({ chatId: plan.team_plan!.chat_id, title: plan.team_plan!.title })}
+                    title={`This chat's plan is part of the team plan “${plan.team_plan.title}”. Open it.`}
+                  >
+                    Main plan
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="plan-pane-btn plan-pane-btn--ghost"

@@ -1023,6 +1023,10 @@ class PanelApiSettingsMixin:
                 return {"ok": False, "plan": None, "error": str(exc)}
             except Exception:
                 plan = None
+        else:
+            from backend.agent.coding_agents.plans import with_team_links
+
+            plan = with_team_links(plan, chat_id, project_root=root)
         outline = [
             {"n": lab, "id": n["id"], "content": n["content"], "status": n["status"]}
             for lab, n in outline_numbers((plan or {}).get("nodes"))
