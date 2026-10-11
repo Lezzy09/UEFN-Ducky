@@ -500,6 +500,21 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
     return await api.plugin_cache_clear(ctx.pluginId, key);
   },
   ...Object.fromEntries(HOST_DATA_OPS.map((op) => [op, hostDataHandler(op)])),
+  /**
+   * The PC's file picker: ``{accept?: "video"|"audio"|"image"|"any", multiple?}`` →
+   * ``{files: [{path, name, kind, url}]}``. A big video stays where it is: the panel passes
+   * ``path`` to its backend and plays ``url`` (streamed, seekable). Uploading a 7 GB video
+   * through ``plugin.call`` in chunks froze the app; nothing is copied this way.
+   */
+  "files.pick": async (_ctx, params) => {
+    if (isRemote()) throw new Error("Pick files on the PC that runs Ducky.");
+    const api = getApi();
+    if (!api?.pick_workflow_files) throw new Error("file picker unavailable");
+    const accept = typeof params.accept === "string" ? params.accept : "any";
+    const res = await api.pick_workflow_files(accept, params.multiple === true);
+    if (!res?.ok) throw new Error(res?.error || "The file picker could not open.");
+    return { files: res.files ?? [] };
+  },
   /** Call a panel RPC registered by the plugin via ``api.register_panel_rpc``. */
   "plugin.call": async (ctx, params) => {
     const api = getApi();

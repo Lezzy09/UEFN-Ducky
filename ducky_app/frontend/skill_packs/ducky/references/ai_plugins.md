@@ -198,6 +198,7 @@ Panels are sandboxed iframes that talk to the host with `postMessage` on channel
 | `data.get` / `data.put` / `data.list` / `data.delete` | One JSON doc per key (≤ 1 MB) |
 | `files.put` / `files.get` / `files.list` / `files.delete` | Base64 files (≤ 100 MB) |
 | `cache.get` / `cache.set` / `cache.clear` | Throwaway cache |
+| `files.pick` | `{accept?: "video"\|"audio"\|"image"\|"any", multiple?}` → `{files: [{path, name, kind, url}]}`: the PC's file picker. Big media stays where it is: pass `path` to your backend (ffprobe/ffmpeg read it in place) and play `url` (streams with seeking). Never upload large files through `plugin.call` in chunks: a 7 GB video froze the app. Not available on a phone. |
 | `llm.complete` | `{system, user, model?}` → text from the user's chosen model |
 
 Host pushes: `appearance_theme`, `panel.visibility` (`visible`),
