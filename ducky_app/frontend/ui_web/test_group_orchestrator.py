@@ -901,3 +901,28 @@ def test_a_coding_agent_is_never_killed_for_outlasting_the_group_wait(monkeypatc
     assert "Still working on it" in hub.messages[-1]["content"]
     assert not any(e["type"] == "error" for e in events)
     assert go._group_turns["m1"]["late"] is True
+
+
+def test_a_message_between_teammates_shows_in_the_group_chats_they_share(monkeypatch):
+    import frontend.ui_web.group_orchestrator as go
+
+    convs = {
+        "render": SimpleNamespace(id="render", parent_conv_id="hub-edit", title="Render Jobs", ducky_name="Render Jobs", tts_voice=""),
+        "ui": SimpleNamespace(id="ui", parent_conv_id="hub-studio", title="Reference UI", ducky_name="Reference UI", tts_voice=""),
+        "hub-edit": SimpleNamespace(id="hub-edit", is_group=True, group_members=[{"member_conv_id": "render", "name": "Render Jobs", "color": "#f00"}]),
+        "hub-studio": SimpleNamespace(id="hub-studio", is_group=True, group_members=[]),
+        "hub-main": SimpleNamespace(id="hub-main", is_group=True, group_members=[]),
+    }
+    chains = {"hub-edit": [("hub-edit", [], []), ("hub-main", ["Edit & Render"], ["hub-edit"])],
+              "hub-studio": [("hub-studio", [], []), ("hub-main", ["Studio"], ["hub-studio"])]}
+    monkeypatch.setattr(go, "load_conversation", lambda cid, project_root=None: convs.get(cid))
+    monkeypatch.setattr(go, "_hub_chain", lambda gid, root=None: chains[gid])
+    posted: list[tuple[str, str, list]] = []
+    monkeypatch.setattr(go, "append_group_assistant",
+                        lambda g, text, author, **k: posted.append((g.id, text, author.get("group_path", []))))
+    pushed: list[dict] = []
+    assert go.post_team_message("render", "ui", "Frame contract is ready.", push=pushed.append) is True
+    # Different subgroups: only the group above both shows it, labelled with the sender's group.
+    assert posted == [("hub-main", "*To Reference UI:* Frame contract is ready.", ["Edit & Render"])]
+    assert pushed[0]["note"] is True and pushed[0]["author"]["name"] == "Render Jobs"
+    assert go.post_team_message("render", "nobody", "x") is False

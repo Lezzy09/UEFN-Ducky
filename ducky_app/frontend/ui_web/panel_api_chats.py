@@ -703,6 +703,14 @@ class PanelApiChatsMixin:
             "leader_conv_id": (getattr(group, "leader_conv_id", None) or "").strip(),
         }
 
+    def post_team_message(self, sender_id: str, receiver_id: str, body: str = "") -> dict[str, Any]:
+        """Show a message one team member sent another in their group chat (from the tool server)."""
+        from frontend.ui_web.agent_modes import get_panel_push
+        from frontend.ui_web.group_orchestrator import post_team_message
+
+        posted = post_team_message(str(sender_id or ""), str(receiver_id or ""), str(body or ""), push=get_panel_push())
+        return {"ok": True, "posted": posted}
+
     def save_chat_file(self, conv_id: str, name: str = "", data_base64: str = "") -> dict[str, Any]:
         """A file attached to an answer on an agent's question card, saved in that chat."""
         import base64

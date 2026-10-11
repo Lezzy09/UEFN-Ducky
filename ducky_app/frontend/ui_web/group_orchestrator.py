@@ -650,6 +650,54 @@ def _hub_chain(group_id: str, project_root: str | None = None) -> list[tuple[str
     return chain
 
 
+def post_team_message(sender_id: str, receiver_id: str, body: str, *, push: PushFn | None = None) -> bool:
+    """A message one team member sends another also shows in their group chat, the moment
+    it is sent: the group they share and every group above it. The team talks where the
+    person reads (and Live mode reads it out), not only in private inboxes."""
+    sender = load_conversation(sender_id)
+    receiver = load_conversation(receiver_id)
+    text = (body or "").strip()
+    if sender is None or receiver is None or not text:
+        return False
+    sender_hub = (getattr(sender, "parent_conv_id", None) or "").strip()
+    receiver_hub = (getattr(receiver, "parent_conv_id", None) or "").strip()
+    if not sender_hub or not receiver_hub:
+        return False
+    receiver_hubs = {hub for hub, _path, _ids in _hub_chain(receiver_hub)}
+    shared = [(hub, path, ids) for hub, path, ids in _hub_chain(sender_hub) if hub in receiver_hubs]
+    if not shared:
+        return False
+    group = load_conversation(sender_hub)
+    speaker: dict[str, Any] = next(
+        (dict(row) for row in group_members(group) if str(row.get("member_conv_id") or "") == sender_id), {}
+    ) if group is not None else {}
+    speaker = speaker or {"member_conv_id": sender_id, "name": str(getattr(sender, "ducky_name", None) or sender.title or "Ducky")}
+    if not speaker.get("tts_voice"):
+        speaker["tts_voice"] = str(getattr(sender, "tts_voice", None) or "")
+    to = str(getattr(receiver, "ducky_name", None) or getattr(receiver, "title", None) or "a teammate")
+    note = f"*To {to}:* {_truncate_brief(text, 600)}"
+    push = push or _panel_push()
+    for hub_id, path, id_path in shared:
+        hub = load_conversation(hub_id)
+        if hub is None or not is_group_conversation(hub):
+            continue
+        # The sender's path from this hub: the groups between it and the sender's own group.
+        author = author_payload({**speaker, "group_path": path, "group_id_path": id_path})
+        append_group_assistant(hub, text=note, author=author, side_chat_announce=True)
+        if push is not None:
+            push({"type": "assistant_done", "conv_id": hub_id, "author": author, "text": note, "note": True})
+    return True
+
+
+def _panel_push() -> PushFn | None:
+    try:
+        from frontend.ui_web.agent_modes import get_panel_push
+
+        return get_panel_push()
+    except Exception:
+        return None
+
+
 def _announce_private_member_talk(
     member_conv_id: str,
     *,

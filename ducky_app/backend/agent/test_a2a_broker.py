@@ -100,6 +100,8 @@ def broker(monkeypatch):
     # Delivery mechanics: FYI bundling off here, tested on its own below.
     module._FYI_BUNDLE_S = 0.0
     module._FYI_MAX_WAIT_S = 0.0
+    # The group-chat note is the group orchestrator's (tested there); these count delivery threads.
+    module._show_in_group_chat = lambda *_args: None
     return SimpleNamespace(mod=module, modes=fake_modes, chats=fake_chats)
 
 

@@ -925,6 +925,10 @@ def _from_another_ducky(receiver: str, text: str, root: str | None, sender: str 
     conv = load_conversation(sender, project_root=root)
     if conv is None:
         return text
+    # Written into the receiver's chat below, and shown in the group chat they share now.
+    from backend.agent.a2a_broker import _show_in_group_chat
+
+    _show_in_group_chat(sender, receiver, text)
     from backend.agent.a2a_format import sender_label
 
     try:

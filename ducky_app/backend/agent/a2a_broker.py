@@ -408,11 +408,39 @@ def send(
         _inbox.setdefault(receiver_conv_id, deque()).append(envelope)
         acknowledge_reports(sender_conv_id, receiver_conv_id)
     _kick_delivery(receiver_conv_id)
+    _show_in_group_chat(sender_conv_id, receiver_conv_id, body)
     return {
         "response_id": rid,
         "closed_thread": bool(closing),
         "queued_for": receiver_conv_id,
     }
+
+
+def _show_in_group_chat(sender_conv_id: str, receiver_conv_id: str, body: str) -> None:
+    """Teammates' messages also appear in their group chat as they are sent. The app owns
+    the group chats: the tool server hands the note to it over loopback."""
+
+    def run() -> None:
+        try:
+            from frontend.ui_web import agent_modes
+
+            if agent_modes._in_bridge_process():
+                import urllib.request
+
+                from frontend.settings import PANEL_LISTENER_PORT
+
+                url = f"http://127.0.0.1:{PANEL_LISTENER_PORT - 1}/__panel_api/post_team_message"
+                data = json.dumps({"args": [sender_conv_id, receiver_conv_id, body]}).encode("utf-8")
+                req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req, timeout=10).read()
+                return
+            from frontend.ui_web.group_orchestrator import post_team_message
+
+            post_team_message(sender_conv_id, receiver_conv_id, body)
+        except Exception:
+            pass
+
+    threading.Thread(target=run, daemon=True, name="a2a-group-note").start()
 
 
 def send_notice(
