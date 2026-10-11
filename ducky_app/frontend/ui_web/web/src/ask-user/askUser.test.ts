@@ -63,6 +63,17 @@ describe("ask-user types", () => {
     });
     expect(draftToAnswer(emptyDraft(), true).skipped).toBe(true);
   });
+
+  it("a file alone answers a written question and the answer says where it was saved", () => {
+    const q = parseAskUserQuestions([{ id: "a", prompt: "Where is the kit?", options: [] }])[0];
+    const file = { name: "Kit.html", path: "C:/chats/c1/attachments/1_Kit.html", readablePath: "C:/chats/c1/attachments/1_Kit.html.readable.txt" };
+    const draft = { selected: [], text: "", other: false, files: [file] };
+    expect(canSubmitQuestion(q, draft)).toBe(true);
+    expect(draftToAnswer({ ...draft, text: "Here it is" }).text).toBe(
+      "Here it is\nAttached file: Kit.html, saved at C:/chats/c1/attachments/1_Kit.html "
+      + "(readable copy: C:/chats/c1/attachments/1_Kit.html.readable.txt). Read it with workspace_read_file.",
+    );
+  });
 });
 
 describe("ask-user sessions", () => {

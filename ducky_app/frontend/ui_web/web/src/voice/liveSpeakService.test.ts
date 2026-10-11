@@ -55,6 +55,11 @@ vi.mock("./ttsEngine", () => ({
   ttsEngine: {
     onStateChange: () => () => {},
     isSpeaking: () => false,
+    whenVoicesReady: async () => [
+      { id: "builtin:David", label: "David", kind: "builtin" },
+      { id: "builtin:Zira", label: "Zira", kind: "builtin" },
+      { id: "group-voice", label: "Group", kind: "builtin" },
+    ],
   },
 }));
 
@@ -93,6 +98,23 @@ describe("liveSpeakService", () => {
       ["Plain reply.", "group-voice", "Group"],
     ]);
     expect(enqueueAnswerSpeak.mock.calls[0][1].rate).toBe(1.2);
+  });
+
+  it("gives members without a voice their own installed voice, never the group's", async () => {
+    const { startLiveChat } = await import("./liveSpeakService");
+    startLiveChat("hub", { voiceId: "group-voice", speed: 1, isGroup: true });
+    await new Promise((r) => setTimeout(r, 0));
+    const say = (id: string, text: string) => {
+      eventHandler!({ type: "assistant_done", conv_id: "hub", note: true, text, author: { name: id, member_conv_id: id } } as AgentEvent);
+    };
+    say("m1", "One.");
+    say("m2", "Two.");
+    say("m1", "Again.");
+    await new Promise((r) => setTimeout(r, 0));
+    const voices = enqueueFinalSpeak.mock.calls.map(([, opts]) => opts.voiceId);
+    expect(voices[0]).not.toBe(voices[1]);
+    expect(voices[2]).toBe(voices[0]);
+    expect(voices).not.toContain("group-voice");
   });
 
   it("keeps reconnect and mic failures visible during tool narration", async () => {

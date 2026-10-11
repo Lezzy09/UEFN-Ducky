@@ -282,6 +282,35 @@ def save_chat_screenshot(raw: bytes, *, prefix: str = "capture", conv_id: str = 
     }
 
 
+def save_chat_file(conv_id: str, name: str, raw: bytes) -> dict[str, Any]:
+    """A file the person hands an agent (an answer on its question card): saved in that
+    chat's attachments folder, with a readable copy for bundles, so the agent reads it by
+    path. The person never has to copy it anywhere."""
+    from backend.agent.attached_files import readable_copy_needed, readable_copy_path, readable_text
+    from backend.workspace.ai_ignore import DENIED, current_policy
+
+    dest_dir = chat_attachments_dir((conv_id or "").strip(), create=True)
+    if dest_dir is None:
+        return {"ok": False, "error": "No chat to save the file in."}
+    policy = current_policy()
+    if policy.denied_hint(name or ""):
+        return {"ok": False, "error": DENIED}
+    path = dest_dir / f"{int(time.time() * 1000)}_{_safe_attachment_filename(name)}"
+    policy.require(str(path))
+    path.write_bytes(raw)
+    out: dict[str, Any] = {"ok": True, "name": name, "path": str(path), "size_bytes": len(raw)}
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return out
+    if readable_copy_needed(text):
+        readable = readable_copy_path(path)
+        policy.require(str(readable))
+        readable.write_text(readable_text(text), encoding="utf-8")
+        out["readable_path"] = str(readable)
+    return out
+
+
 def hydrate_attachment_dicts(
     raw_list: list[Any] | None,
     conv_id: str,

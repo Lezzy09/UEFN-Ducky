@@ -306,6 +306,49 @@
   width: 100%;
 }
 
+/* Files attached to a written answer. */
+.ask-user-attach {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ask-user-attach-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ask-user-attach-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ask-user-attach-file button {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.ask-user-attach-error {
+  color: var(--danger, #e85d5d);
+  font-size: 12px;
+}
+
 .ask-user-footer {
   display: flex;
   align-items: center;

@@ -21,7 +21,7 @@ import { shouldNarrateTool, shouldNarrateToolResult, speakableThinkingLine } fro
 import { pullSentences } from "./sentenceQueue";
 import { loadLastAssistantText, prepareSpokenText, summarizeForSpeech } from "./speakReply";
 import { needsLlmSummary, spokenToolResult, spokenToolStart } from "./toolNarration";
-import { ttsEngine } from "./ttsEngine";
+import { ttsEngine, type TtsVoiceInfo } from "./ttsEngine";
 import { getVoiceSettings } from "./voiceSettings";
 
 export type LiveChatOpts = {
@@ -48,7 +48,11 @@ type LiveSession = {
   streamedThisTurn: boolean;
   /** Group chats: the member writing the open reply, read in its own voice. */
   replyAuthor: MessageAuthorDto | null;
+  /** Members with no voice of their own, and the installed voice each was given. */
+  memberVoices: Map<string, string>;
 };
+
+let installedVoices: TtsVoiceInfo[] = [];
 
 const sessions = new Map<string, LiveSession>();
 let micOwner: string | null = null;
@@ -58,6 +62,11 @@ let unsubTransport: (() => void) | null = null;
 
 function ensureBus() {
   if (unsubEvents) return;
+  if (!installedVoices.length) {
+    void Promise.resolve(ttsEngine.whenVoicesReady?.())
+      .then((voices) => { if (Array.isArray(voices) && voices.length) installedVoices = voices; })
+      .catch(() => {});
+  }
   installAgentEventBus();
   unsubEvents = subscribeAgentEvents(onAgentEvent);
   unsubTts = ttsEngine.onStateChange(onTtsState);
@@ -99,12 +108,31 @@ function publishBehind() {
   }
 }
 
+/** A member with no voice set still sounds like itself: an installed voice other than the
+ *  chat's, a different one per member while they last, the same one each time. */
+function memberVoice(session: LiveSession, author?: MessageAuthorDto | null): string {
+  if (author?.tts_voice) return author.tts_voice;
+  const id = author?.member_conv_id || "";
+  if (!id) return session.voiceId;
+  const given = session.memberVoices.get(id);
+  if (given) return given;
+  const pool = installedVoices.map((v) => v.id).filter((v) => v && v !== session.voiceId);
+  if (!pool.length) return session.voiceId;
+  let hash = 0;
+  for (const ch of id) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  const used = new Set(session.memberVoices.values());
+  const start = hash % pool.length;
+  const pick = pool.map((_, i) => pool[(start + i) % pool.length]).find((v) => !used.has(v)) ?? pool[start];
+  session.memberVoices.set(id, pick);
+  return pick;
+}
+
 /** A group member speaks in its own voice; the chat's voice is everyone else's. */
 function speakOpts(session: LiveSession, author?: MessageAuthorDto | null) {
   return {
     chatId: session.chatId,
     speaker: author?.name || session.speakerName || "Ducky",
-    voiceId: author?.tts_voice || session.voiceId,
+    voiceId: memberVoice(session, author),
     rate: author?.tts_speed || session.speed,
   };
 }
@@ -334,6 +362,7 @@ export function startLiveChat(chatId: string, opts: LiveChatOpts): void {
     replyOpen: false,
     streamedThisTurn: false,
     replyAuthor: null,
+    memberVoices: new Map(),
   });
   setLiveVoiceChat(id, true);
   patchLiveVoiceState(id, { status: "listening", error: "", muted: false });

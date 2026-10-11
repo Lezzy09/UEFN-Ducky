@@ -671,6 +671,21 @@ class PanelApiChatsMixin:
             "leader_conv_id": (getattr(group, "leader_conv_id", None) or "").strip(),
         }
 
+    def save_chat_file(self, conv_id: str, name: str = "", data_base64: str = "") -> dict[str, Any]:
+        """A file attached to an answer on an agent's question card, saved in that chat."""
+        import base64
+
+        from frontend.ui_web.conversation_attachments import save_chat_file
+
+        try:
+            raw = base64.b64decode(str(data_base64 or "").split(",", 1)[-1], validate=True)
+        except Exception:
+            return {"ok": False, "error": "The file could not be read."}
+        try:
+            return save_chat_file(str(conv_id or ""), str(name or "file"), raw)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
     def group_set_leader(self, group_id: str, member_conv_id: str) -> dict[str, Any]:
         """Designate the spokesperson for a group (cross-group / nested routing)."""
         from frontend.ui_web.group_orchestrator import group_members

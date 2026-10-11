@@ -29,10 +29,14 @@ export type AskUserResult = {
   skipped_all: boolean;
 };
 
+/** A file attached to a written answer, already saved in the asking chat. */
+export type AskUserFile = { name: string; path: string; readablePath?: string };
+
 export type AskUserDraft = {
   selected: string[];
   text: string;
   other: boolean;
+  files?: AskUserFile[];
 };
 
 export function emptyDraft(): AskUserDraft {
@@ -42,9 +46,17 @@ export function emptyDraft(): AskUserDraft {
 export function canSubmitQuestion(question: AskUserQuestion, draft: AskUserDraft): boolean {
   if (!question.required) return true;
   if (draft.other || (!question.options.length && question.allow_free_text)) {
-    return draft.text.trim().length > 0;
+    return draft.text.trim().length > 0 || Boolean(draft.files?.length);
   }
   return draft.selected.length > 0;
+}
+
+/** The written answer, with where each attached file was saved for the agent to read. */
+function answerText(draft: AskUserDraft): string {
+  const files = (draft.files ?? []).map((f) =>
+    `Attached file: ${f.name}, saved at ${f.path}${f.readablePath ? ` (readable copy: ${f.readablePath})` : ""}. `
+    + "Read it with workspace_read_file.");
+  return [draft.text.trim(), ...files].filter(Boolean).join("\n");
 }
 
 export function draftToAnswer(draft: AskUserDraft, skipped = false): AskUserAnswer {
@@ -52,11 +64,11 @@ export function draftToAnswer(draft: AskUserDraft, skipped = false): AskUserAnsw
     return { selected: [], text: "", skipped: true };
   }
   if (draft.other) {
-    return { selected: [], text: draft.text.trim(), skipped: false };
+    return { selected: [], text: answerText(draft), skipped: false };
   }
   return {
     selected: [...draft.selected],
-    text: draft.text.trim(),
+    text: answerText(draft),
     skipped: false,
   };
 }

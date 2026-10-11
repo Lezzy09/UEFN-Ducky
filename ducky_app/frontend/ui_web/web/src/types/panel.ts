@@ -2643,6 +2643,12 @@ export interface WinSttEvent {
 }
 
 export interface PanelApi {
+  /** A file attached to an answer on an agent's question card, saved in that chat. */
+  save_chat_file?(
+    conv_id: string,
+    name: string,
+    data_base64: string,
+  ): Promise<{ ok: boolean; path?: string; readable_path?: string; size_bytes?: number; error?: string }>;
   stage_video_attachment?(
     conv_id: string,
     name: string,

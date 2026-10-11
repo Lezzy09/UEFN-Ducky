@@ -419,6 +419,7 @@ _PUBLIC_METHODS = frozenset({
     'save_agent_profile_override',
     'save_agent_settings',
     'save_appearance',
+    'save_chat_file',
     'save_appearance_profile',
     'save_custom_verse_template',
     'save_editor_workspace',

@@ -16,6 +16,7 @@ import { useRunningAgents } from "../hooks/useRunningAgents";
 import { useFocusWindowTabs } from "../hooks/useFocusWindowTabs";
 import { dismissCompletionAlert, useCompletionAlertChatIds } from "../hooks/useChatCompletionAlerts";
 import { onApiReady } from "../hooks/onApiReady";
+import { registerOpenChatReference } from "../navigation/openChatReference";
 import { VerseEditorProvider, useVerseEditorOptional } from "../verse-editor";
 import { AppHeaderActionsProvider } from "../contexts/AppHeaderActionsContext";
 import { QuickOpenBridgeProvider, useRegisterQuickOpenHandlers, type QuickOpenHandlers } from "../contexts/QuickOpenBridge";
@@ -98,6 +99,10 @@ function FocusViewContent({ focusId }: FocusViewProps) {
   const runningChatIds = useRunningAgents();
   const { folders, rootChats, load } = useChatFolders(0, project.slug);
   const handleCloseWindow = useFocusCloseWindow();
+
+  // The header's background tray and chat links open chats here too; without an opener
+  // a pop-out window ignored every click on them.
+  useEffect(() => registerOpenChatReference((chat) => openChatTab(chat)), [openChatTab]);
 
   useEffect(() => {
     return onApiReady((api) => {

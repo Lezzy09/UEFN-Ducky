@@ -135,3 +135,18 @@ def test_video_prep_status_and_retry(monkeypatch):
     }
     assert api.get_video_prep_status() == {"ok": True, "prep": {}}
     assert api.retry_video_prep("a.mp4") == {"ok": True, "prep": {"state": "queued", "id": "a.mp4"}}
+
+
+def test_a_file_attached_to_an_answer_is_saved_in_that_chat(monkeypatch, tmp_path):
+    import base64
+
+    import frontend.ui_web.conversation_attachments as ca
+
+    att = tmp_path / "c1" / "attachments"
+    monkeypatch.setattr(ca, "chat_attachments_dir", lambda cid, create=False: att.mkdir(parents=True, exist_ok=True) or att)
+    page = '<h1>Kit</h1><img src="data:image/png;base64,' + "A" * 600 + '">'
+    out = PanelApi().save_chat_file("c1", "Island Kit.html", base64.b64encode(page.encode()).decode())
+    assert out["ok"] and out["path"].endswith("_Island_Kit.html")
+    assert (att / out["path"].split("\\")[-1].split("/")[-1]).read_text(encoding="utf-8") == page
+    assert "A" * 600 not in open(out["readable_path"], encoding="utf-8").read()
+    assert PanelApi().save_chat_file("c1", "x.bin", "not base64!!")["ok"] is False
