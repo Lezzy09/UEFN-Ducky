@@ -541,6 +541,7 @@ HOST_ONLY_TOOLS = frozenset(
         "workspace_write_file",
         "workspace_read_files",
         "workspace_file_outline",
+        "view_image",
         "workspace_tree",
         "workspace_search",
         "workspace_find",

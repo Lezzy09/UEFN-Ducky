@@ -48,17 +48,17 @@ def test_bootstrap_includes_chat_report_template() -> None:
 
 def test_bootstrap_sends_file_reads_to_ducky_tools_not_the_shell() -> None:
     text = bootstrap_system_prompt(project_root="/tmp/p", listener_online=False, conv_id="chat-a")
-    assert "## Files and git (no shell)" in text
+    assert "## Ducky tools only" in text
     # Codex runs tools from a code runner and reads other projects by absolute path.
     assert "tools.mcp__uefn__workspace_search" in text
     assert "other Ducky projects" in text
-    for shell_read in ("Get-Content", "Select-String", "rg", "git grep", "exec_command"):
+    for shell_read in ("Get-Content", "Select-String", "rg", "git grep"):
         assert shell_read in text
 
 
 @pytest.mark.parametrize("native_skills", [False, True])
 @pytest.mark.parametrize("listener_online", [False, True])
-def test_every_agent_bootstrap_requires_edit_tools(native_skills, listener_online) -> None:
+def test_every_agent_bootstrap_uses_ducky_tools_only(native_skills, listener_online) -> None:
     # runner builds this common prompt before dispatching to any CLI adapter.
     text = bootstrap_system_prompt(
         project_root="/tmp/project",
@@ -66,18 +66,23 @@ def test_every_agent_bootstrap_requires_edit_tools(native_skills, listener_onlin
         conv_id="chat-a",
         native_skills=native_skills,
     )
-    assert "For every file, in any folder" in text
-    for editor in ("Codex `apply_patch`", "Claude Code `Edit`/`Write`", "Cursor's edit tool", "`workspace_*` edit tools"):
-        assert editor in text
+    for tool in ("`workspace_edit_file`", "`ducky_terminal_open`", "`ducky_terminal_run(session_id, command)`",
+                 "`ducky_terminal_read_output(session_id)`", "`view_image`", "`web_search`",
+                 "`ducky_spawn_chat`", "`ducky_ask_user`"):
+        assert tool in text
+    assert "never edit a file with Codex `apply_patch`" in text
+    assert "background: true" in text
     assert "Never edit files by running a script or command that rewrites them." in text
-    assert "Use the shell for builds, tests and git only." in text
+    # The old split (own shell for builds, own edit tool in other projects) is gone.
+    assert "Use the shell for builds" not in text
+    assert "your own edit" not in text
 
 
-def test_team_plan_skill_requires_the_same_edit_tools() -> None:
+def test_team_plan_skill_requires_the_same_tools() -> None:
     app_root = Path(__file__).resolve().parents[3]
     skill = (app_root / "frontend/skill_packs/ducky/SKILL.md").read_text(encoding="utf-8")
     team_rules = " ".join(skill.split("### Team plans", 1)[1].split())
-    for editor in ("Codex `apply_patch`", "Claude Code `Edit`/`Write`", "Cursor's edit tool", "`workspace_*` edit tools"):
-        assert editor in team_rules
-    assert "Never edit files by running a script or command that rewrites them." in team_rules
-    assert "Use the shell for builds, tests and git only." in team_rules
+    assert "Ducky's tools only" in team_rules
+    assert "`workspace_*` edit tools" in team_rules
+    assert "`ducky_terminal_run`" in team_rules
+    assert "their own edit tool" not in team_rules

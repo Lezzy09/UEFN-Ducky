@@ -14,6 +14,8 @@ class WriteRequest:
     paths: tuple[str, ...]  # project-relative, normalised; destination last for rename/move
     tool: str = ""
     ctx: RunContext | None = None
+    # The root of the person's other Ducky project the paths are in; "" = the open project.
+    other_project: str = ""
 
 
 @dataclass(frozen=True)

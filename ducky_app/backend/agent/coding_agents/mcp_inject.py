@@ -198,29 +198,39 @@ CODING_AGENT_FOLDER_NOTE = (
     "publish or deploy unless the user asks.\n"
 )
 
-# Every shell call is its own step in the chat, slow to start on Windows, and a whole
-# file in the context. The `uefn` server reads only the lines asked for.
+# Everything an agent does goes through Ducky's tools, so the person sees it in the app:
+# commands run in a terminal tab they can open and stop, edits land in the change
+# journal, helpers are chats. The agent's own shell, file, web and sub-agent tools
+# are switched off by its plugin.
 FILE_TOOLS_RULE = (
-    "\n## Files and git (no shell)\n"
-    "Find, read, search and inspect git with the `uefn` workspace tools, never your shell: no "
-    "Get-Content, Select-String, Get-ChildItem, dir, ls, cat, type, rg, grep, findstr, git grep, "
-    "git status/diff/log/show, sed or Python one-liners, and none of these wrapped in "
-    "exec_command either (rg is not installed here). They work in the open project (relative "
-    "paths) and in every other folder you were given, the person's other Ducky projects "
-    "(absolute paths, e.g. path=\"C:/Users/.../OtherRepo\"). In a code runner call them as "
-    "`tools.mcp__uefn__workspace_search({...})`.\n"
+    "\n## Ducky tools only\n"
+    "Do every action with the `uefn` tools. Your own shell, file, edit, web, picture, "
+    "sub-agent and question tools are switched off here: never look for them or ask for "
+    "them, and never edit a file with Codex `apply_patch`. The tools work in the open project "
+    "(relative paths) and in every other folder you were given, the person's other Ducky "
+    "projects (absolute paths, e.g. path=\"C:/Users/.../OtherRepo\"). In a code runner call "
+    "them as `tools.mcp__uefn__workspace_search({...})`.\n"
     '- find files: `workspace_find` ("*.py", "src/**/mcp*"); a folder tree: `workspace_tree`\n'
     '- search text: `workspace_search` (output_mode="files" first on a broad search, then "content" with context)\n'
     "- read: `workspace_file_outline` for a big file, then `workspace_read_file` with start_line/end_line; "
     "several files at once: `workspace_read_files`\n"
-    "- edit in the open project: `workspace_edit_file` (exact text), `workspace_multi_edit` (several "
-    "in one file), `workspace_replace_lines` (a line range), `workspace_write_file` (new or whole "
-    "file), `workspace_move_file`, `workspace_delete_file`; in another project, your own edit/patch tool\n"
+    "- edit, in any of those projects: `workspace_edit_file` (exact text), `workspace_multi_edit` "
+    "(several in one file), `workspace_replace_lines` (a line range), `workspace_write_file` (new or "
+    "whole file), `workspace_move_file`, `workspace_delete_file`. Never edit files by running a "
+    "script or command that rewrites them.\n"
     "- git reads: `workspace_git` (status, diff, log, show, ls-files, blame, grep), path= picks the repository\n"
-    "For every file, in any folder, edit with your own edit tool (Codex `apply_patch`, "
-    "Claude Code `Edit`/`Write`, Cursor's edit tool) or Ducky's `workspace_*` edit tools. "
-    "Never edit files by running a script or command that rewrites them. "
-    "Use the shell for builds, tests and git only.\n"
+    "- commands (builds, tests, git changes, scripts): open a terminal once with "
+    '`ducky_terminal_open` (shell "bash" or "powershell", cwd = the folder), then '
+    "`ducky_terminal_run(session_id, command)`. The person watches it live in Ducky's terminal "
+    "tab and can stop it. Anything that may take more than a few minutes (a test suite, a build, "
+    "a release): `background: true`, then check on it with `ducky_terminal_read_output(session_id)`. "
+    "Never read or search files through a terminal: no Get-Content, Select-String, Get-ChildItem, "
+    "dir, ls, cat, type, rg, grep, findstr, git grep, git status/diff/log/show, sed or Python "
+    "one-liners (rg is not installed here).\n"
+    "- pictures (an attachment, a screenshot, an image file): `view_image` with its path\n"
+    "- the web: `web_search`, `web_fetch`\n"
+    "- a helper agent: `ducky_spawn_chat` (a chat the person can open)\n"
+    "- a question for the person: `ducky_ask_user`\n"
 )
 
 

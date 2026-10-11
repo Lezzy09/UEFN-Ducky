@@ -32,7 +32,14 @@ def _default_writer() -> ProjectWriter:
             )
         return roots[0]
 
-    return ProjectWriter(root_resolver=root, path_resolver=resolve_workspace_path)
+    def other_roots() -> list[str]:
+        # The person's other Ducky projects (header dropdown): agents edit them with Ducky's
+        # tools too, each change journaled in its own project.
+        from backend.bridge.client import _recent_project_roots
+
+        return [*workspace_roots()[1:], *_recent_project_roots()]
+
+    return ProjectWriter(root_resolver=root, path_resolver=resolve_workspace_path, other_roots=other_roots)
 
 
 def get_writer() -> ProjectWriter:

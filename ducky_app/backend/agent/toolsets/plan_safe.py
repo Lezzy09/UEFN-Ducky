@@ -13,7 +13,7 @@ from backend.agent.toolsets.categories import PLAN_TOOLS
 # required. Multi-operation executors (including workspace_git) are not reads.
 ASK_READ_TOOLS = frozenset({
     "workspace_read_file", "workspace_read_files", "workspace_list_dir",
-    "workspace_tree", "workspace_search", "workspace_find", "workspace_file_outline",
+    "workspace_tree", "workspace_search", "workspace_find", "workspace_file_outline", "view_image",
     "workspace_list_verse_errors", "workspace_editor_get_state",
     "web_search", "web_fetch", "ducky_get_tools", "ducky_find_tools",
     "ducky_get_plan", "ducky_list_plans", "ducky_get_plan_template",
@@ -330,6 +330,7 @@ _ALLOW_EXACT: frozenset[str] = frozenset(
         "workspace_read_file",
         "workspace_read_files",
         "workspace_file_outline",
+        "view_image",
         "workspace_tree",
         "workspace_search",
         "workspace_find",

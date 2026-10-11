@@ -383,7 +383,8 @@ class LanePolicy:
         lane = ctx.lane if ctx.lane is not None else resolve_lane(ctx.conv_id)
         if lane is None:
             return ALLOW
-        outside = [p for p in request.paths if not any_match(lane, p)]
+        # A lane is a part of the open project: another project is never inside it.
+        outside = list(request.paths) if request.other_project else [p for p in request.paths if not any_match(lane, p)]
         if not outside:
             return Decision(policy=self.name)
         reason = denial_text(outside[0], lane, ctx.leader_conv_id)

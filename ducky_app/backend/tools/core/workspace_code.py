@@ -289,6 +289,48 @@ def workspace_file_outline(path: str, pretty: bool = False) -> str:
                      pretty=pretty)
 
 
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+
+
+def _image_path(path: str) -> str:
+    """An image in the open project, another of the person's projects, or a chat's
+    attachments (pictures the person sent, screenshots Ducky took)."""
+    raw = (path or "").strip()
+    if not raw:
+        raise ValueError("path is required")
+    if not raw.lower().endswith(_IMAGE_SUFFIXES):
+        raise ValueError(f"Not a picture ({', '.join(_IMAGE_SUFFIXES)}): {raw!r}")
+    full = os.path.realpath(os.path.abspath(raw))
+    try:
+        from frontend.settings import default_app_data_dir
+
+        chats = os.path.realpath(str(default_app_data_dir() / "chats"))
+    except Exception:
+        chats = ""
+    if chats and os.path.isabs(raw) and os.path.commonpath([os.path.normcase(full), os.path.normcase(chats)]) == os.path.normcase(chats):
+        require_ai_access(full)
+    else:
+        full = resolve_workspace_path(raw)
+    if not os.path.isfile(full):
+        raise ValueError(f"No such picture: {raw!r}")
+    if os.path.getsize(full) > _MAX_IMAGE_BYTES:
+        raise ValueError(f"Picture is over {_MAX_IMAGE_BYTES // (1024 * 1024)} MB: {raw!r}")
+    return full
+
+
+@mcp.tool()
+def view_image(path: str, pretty: bool = False) -> Any:
+    """Look at a picture: one the person attached, a screenshot Ducky saved, or an image file in
+    a project (png, jpg, gif, webp, bmp). Pass the absolute path given in the chat, or a project
+    path. Returns the picture itself, so you see it."""
+    full = _image_path(path)
+    text = tool_json({"path": full.replace("\\", "/"), "bytes": os.path.getsize(full)}, pretty=pretty)
+    from mcp.server.fastmcp import Image
+
+    return [text, Image(path=full)]
+
+
 @mcp.tool()
 def workspace_tree(path: str = ".", depth: int = 3, max_entries: int = 400, pretty: bool = False) -> str:
     """A folder tree (folders end with /), down to ``depth`` levels. Use this instead of

@@ -29,6 +29,7 @@ const TOOL_ACTIVITY_LABELS: Record<string, string> = {
   workspace_read_file: "Read file",
   workspace_read_files: "Read files",
   workspace_file_outline: "File outline",
+  view_image: "Look at picture",
   workspace_tree: "Folder tree",
   workspace_search: "Search File Content",
   workspace_find: "Find files",

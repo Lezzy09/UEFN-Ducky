@@ -193,9 +193,12 @@ class ProjectWriter:
         observers: Iterable[WriteObserver] = (),
         journal: ChangeJournal | None = None,
         clock: Callable[[], float] = time.time,
+        other_roots: Callable[[], Iterable[str]] = tuple,
     ) -> None:
         self._root_resolver = root_resolver
         self._path_resolver = path_resolver
+        # The person's other Ducky projects: a path in one is written and journaled there.
+        self._other_roots = other_roots
         self._policies: list[WritePolicy] = list(policies)
         self._observers: list[WriteObserver] = list(observers)
         self._journal: ChangeJournal = journal or NullJournal()
@@ -268,7 +271,7 @@ class ProjectWriter:
         canonical, full, root = self._resolve(rel)
         ctx = identity.resolve_context()
         writer_meta = dict(writer) if writer is not None else identity.current_writer(tool=tool)
-        request = WriteRequest(op=op, paths=(canonical,), tool=tool, ctx=ctx)
+        request = WriteRequest(op=op, paths=(canonical,), tool=tool, ctx=ctx, other_project=self._other_project(root))
         with self._lock_many((full,)):
             if tool.startswith("workspace_") or (ctx is not None and ctx.source == identity.SOURCE_AGENT):
                 from backend.workspace.ai_ignore import require_ai_mutation
@@ -349,10 +352,16 @@ class ProjectWriter:
         """
         if op not in PATH_OPS:
             raise ValueError(f"Unknown path op: {op!r}")
-        canonical = tuple(self._resolve(path)[0] for path in paths)
-        if not canonical:
+        resolved = [self._resolve(path) for path in paths]
+        if not resolved:
             raise ValueError("At least one path is required.")
-        return self._decide(WriteRequest(op=op, paths=canonical, tool=tool, ctx=identity.resolve_context()))
+        roots = {os.path.normcase(root) for _c, _f, root in resolved}
+        if len(roots) > 1:
+            raise ValueError("One operation stays inside one project.")
+        return self._decide(WriteRequest(
+            op=op, paths=tuple(c for c, _f, _r in resolved), tool=tool, ctx=identity.resolve_context(),
+            other_project=self._other_project(resolved[0][2]),
+        ))
 
     def path_op(
         self,
@@ -382,12 +391,14 @@ class ProjectWriter:
         dst_rel, dst_full, root = self._resolve(path)
         src_rel = ""
         if source:
-            src_rel, _src_full, _ = self._resolve(source)
+            src_rel, _src_full, src_root = self._resolve(source)
+            if os.path.normcase(src_root) != os.path.normcase(root):
+                raise ValueError("Moving or copying between projects is not supported: both paths must be in one project.")
         policy_paths = (src_rel, dst_rel) if op in _SOURCE_MUTATED else (dst_rel,)
         lock_paths = (_src_full, dst_full) if src_rel else (dst_full,)
         ctx = identity.resolve_context()
         writer_meta = dict(writer) if writer is not None else identity.current_writer(tool=tool)
-        request = WriteRequest(op=op, paths=policy_paths, tool=tool, ctx=ctx)
+        request = WriteRequest(op=op, paths=policy_paths, tool=tool, ctx=ctx, other_project=self._other_project(root))
         with self._lock_many(lock_paths):
             if tool.startswith("workspace_") or (ctx is not None and ctx.source == identity.SOURCE_AGENT):
                 from backend.workspace.ai_ignore import require_ai_mutation, require_ai_path_operation
@@ -455,11 +466,29 @@ class ProjectWriter:
         require_not_digest_path(rel)
         full = self._path_resolver(rel)
         require_not_digest_path(full)
+        root = self._owning_root(full, root)
         _require_writable(full, root)
         canonical = rel_from_root(full, root)
         if not canonical:
             raise ValueError(f"Path is outside the active project: {rel_in!r}")
         return canonical, full, root
+
+    def _owning_root(self, full: str, active: str) -> str:
+        """The open project, or the person's other Ducky project that holds ``full``."""
+        if rel_from_root(full, active):
+            return active
+        try:
+            others = list(self._other_roots())
+        except Exception:  # noqa: BLE001 - no recent-project list: the open project only
+            others = []
+        for other in others:
+            if other and rel_from_root(full, other):
+                return other
+        return active
+
+    def _other_project(self, root: str) -> str:
+        """``root`` when it is not the open project, else ""."""
+        return "" if os.path.normcase(root) == os.path.normcase(self._root_resolver()) else root
 
     def _resolve_for_read(self, rel_in: str) -> tuple[str, str, str]:
         rel = normalize_rel(rel_in)
@@ -475,6 +504,7 @@ class ProjectWriter:
         full = self._path_resolver(rel)
         if guarded:
             require_ai_access(full)
+        root = self._owning_root(full, root)
         return rel_from_root(full, root) or rel, full, root
 
     def _decide(self, request: WriteRequest) -> Decision:

@@ -150,7 +150,7 @@ def current_policy() -> IgnorePolicy:
 # Exact audited tools only. Unknown/plugin tools, wrappers, code execution,
 # browser/desktop access and Git cannot bypass the guards in strict mode.
 SAFE_TOOLS = frozenset({
-    "workspace_read_file", "workspace_read_files", "workspace_file_outline",
+    "workspace_read_file", "workspace_read_files", "workspace_file_outline", "view_image",
     "workspace_list_dir", "workspace_tree", "workspace_search", "workspace_find",
     "workspace_write_file", "workspace_edit_file", "workspace_multi_edit",
     "workspace_replace_lines", "workspace_move_file", "workspace_delete_file",

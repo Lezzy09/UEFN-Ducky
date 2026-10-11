@@ -24,6 +24,7 @@ EXTENDED_TOOLS = frozenset(
         "workspace_find",
         "workspace_read_files",
         "workspace_file_outline",
+        "view_image",
         "workspace_tree",
         "workspace_multi_edit",
         "workspace_replace_lines",

@@ -115,10 +115,11 @@ check off.
 
 ### Team plans
 
-Team members edit every file, in any folder, with their own edit tool (Codex
-`apply_patch`, Claude Code `Edit`/`Write`, Cursor's edit tool) or Ducky's
-`workspace_*` edit tools. Never edit files by running a script or command that
-rewrites them. Use the shell for builds, tests and git only.
+Team members use Ducky's tools only. They edit every file, in any of the
+person's Ducky projects, with Ducky's `workspace_*` edit tools, and never by
+running a script or command that rewrites them. Builds, tests and git changes
+run in a Ducky terminal (`ducky_terminal_open`, then `ducky_terminal_run`), where
+the person can watch and stop them.
 
 Give each group one section assigned to the group's chat id, never several steps
 assigned to the same group. Members see that section in their own plan panel.

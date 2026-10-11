@@ -702,7 +702,8 @@ def workspace_roots() -> list[str]:
 
 
 def _recent_project_roots() -> list[str]:
-    """Projects in the header dropdown. Read-only extra roots; writes stay on the active one."""
+    """Projects in the header dropdown. Extra roots for agents' Ducky tools: reads, and writes
+    journaled in that project (workspace.runtime); team lanes stay in the open one."""
     try:
         from frontend.ui_web.recent_projects import load_recent_projects
     except Exception:
