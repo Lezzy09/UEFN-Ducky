@@ -462,12 +462,23 @@ def _live_step(node_id: str, state: str, *, came_from: str = "", label: str = ""
     _push(event)
 
 
-def _announce_run(wf: dict[str, Any], *, phase: str, detail: str = "", run_id: str = "") -> None:
-    """Header activity tray — running/finished graphs. Never blocks the walk."""
+def workflow_run_title(name: str) -> str:
+    """What the activity tray calls a run: always says it is a workflow, and which."""
+    clean = (name or "").strip()
+    return f"Workflow: {clean if clean and clean != 'Untitled' else 'Unnamed workflow'}"
+
+
+def _announce_run(
+    wf: dict[str, Any], *, phase: str, detail: str = "", run_id: str = "", chat: str = ""
+) -> None:
+    """Header activity tray — running/finished graphs. Never blocks the walk.
+
+    A run a chat's ducky started is not listed: that chat shows the run's live card,
+    and its ducky's own tray row says it is working."""
     wid = str(wf.get("id") or "").strip()
-    if not wid:
+    if not wid or chat:
         return
-    title = str(wf.get("name") or wid)
+    title = workflow_run_title(str(wf.get("name") or ""))
     payload = {
         "type": "background_job",
         "id": f"graph-run:{wid}:{run_id}" if run_id else f"graph:{wid}",
@@ -596,7 +607,7 @@ def run_workflow(
     error = ""
     steps: list[Any] = []
     try:
-        _announce_run(wf, phase="working", detail="Running", run_id=run_id)
+        _announce_run(wf, phase="working", detail="Running", run_id=run_id, chat=str(ctx.get("caller_conv_id") or ""))
         _push({
             "type": "workflow_run", "id": wid, "run": run_id, "state": "started",
             # The chat that started it shows a live card: its name, every step, which one is running.
@@ -636,6 +647,7 @@ def run_workflow(
             phase="done" if ok or stopped else "error",
             detail=STOPPED if stopped else (error or "Finished") if ok else (error or "Failed"),
             run_id=run_id,
+            chat=str(ctx.get("caller_conv_id") or ""),
         )
         # Not a chat's tool call (the chat reports it), not a nested workflow.call (the
         # outer run does), not stopped by the person.

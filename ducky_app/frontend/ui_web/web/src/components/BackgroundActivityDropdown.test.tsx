@@ -27,19 +27,19 @@ it("stops a specific concurrent workflow from the header activity tray", async (
 
 it("refreshes an already ended run without leaving a false Running row or warning", async () => {
   api.workflow_run_snapshot.mockResolvedValue({ ok: true, events: [
-    { type: "workflow_run", id: "wf", run: "first", state: "started", name: "Concurrent", conv: "chat" },
-    { type: "workflow_run", id: "wf", run: "second", state: "started", name: "Other", conv: "chat" },
+    { type: "workflow_run", id: "wf", run: "first", state: "started", name: "Concurrent", conv: "" },
+    { type: "workflow_run", id: "wf", run: "second", state: "started", name: "Other", conv: "" },
   ] });
   render(<BackgroundActivityDropdown />);
   fireEvent.click(screen.getByLabelText("Background activity"));
   await waitFor(() => expect(screen.getAllByText("Stop")).toHaveLength(2));
   api.stop_workflow.mockResolvedValue({ ok: true, stopped: false });
   api.workflow_run_snapshot.mockResolvedValue({ ok: true, events: [
-    { type: "workflow_run", id: "wf", run: "first", state: "started", name: "Concurrent", conv: "chat" },
+    { type: "workflow_run", id: "wf", run: "first", state: "started", name: "Concurrent", conv: "" },
     { type: "workflow_run", id: "wf", run: "first", state: "stopped" },
-    { type: "workflow_run", id: "wf", run: "second", state: "started", name: "Other", conv: "chat" },
+    { type: "workflow_run", id: "wf", run: "second", state: "started", name: "Other", conv: "" },
   ] });
-  fireEvent.click(screen.getByText("Concurrent").closest(".connection-status-menu-row")!.querySelector("button")!);
+  fireEvent.click(screen.getByText("Workflow: Concurrent").closest(".connection-status-menu-row")!.querySelector("button")!);
   await waitFor(() => expect(screen.getAllByText("Stop")).toHaveLength(1));
   expect(screen.getByText("Stopped")).toBeTruthy();
   expect(screen.queryByRole("alert")).toBeNull();

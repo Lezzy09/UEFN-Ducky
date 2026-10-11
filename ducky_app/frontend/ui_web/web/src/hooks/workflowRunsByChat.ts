@@ -8,6 +8,12 @@ import { getBackgroundJobs, upsertBackgroundJob } from "./backgroundActivity";
 import { workflowIdFromJobId } from "./graphActivity";
 import { setVisibleInterval } from "../utils/visibleInterval";
 
+/** Tray title for a run: always says it is a workflow, and which (runner.workflow_run_title). */
+export function workflowRunTitle(name: string | undefined): string {
+  const clean = String(name || "").trim();
+  return `Workflow: ${clean && clean !== "Untitled" && clean !== "Workflow" ? clean : "Unnamed workflow"}`;
+}
+
 /**
  * The workflow a chat's ducky is running, step by step, for the card above the plan.
  *
@@ -121,7 +127,8 @@ export function applyWorkflowEvent(event: WorkflowEvent): void {
       current: "",
       startedAt: Date.now(),
     });
-    upsertBackgroundJob({ id: `graph-run:${event.id}:${run}`, source: "workflow", title: event.name || "Workflow", phase: "working", cancelable: true });
+    // A chat's ducky started it: that chat shows the run's card, the tray does not.
+    if (!chat) upsertBackgroundJob({ id: `graph-run:${event.id}:${run}`, source: "workflow", title: workflowRunTitle(event.name), phase: "working", cancelable: true });
     emit();
     // The two push buses can deliver the finish before the start.
     const finished = [...latestEvents.values()].find((saved) =>
@@ -158,7 +165,7 @@ export function applyWorkflowEvent(event: WorkflowEvent): void {
       current: "",
       endedAt: now,
     });
-    upsertBackgroundJob({ id: `graph-run:${current.workflowId}:${run}`, source: "workflow", title: current.name, phase: state === "error" ? "error" : "done", detail: state === "stopped" ? "Stopped" : event.error || "Finished", cancelable: false });
+    if (!runToChat.get(run)) upsertBackgroundJob({ id: `graph-run:${current.workflowId}:${run}`, source: "workflow", title: workflowRunTitle(current.name), phase: state === "error" ? "error" : "done", detail: state === "stopped" ? "Stopped" : event.error || "Finished", cancelable: false });
     dropOldRuns(current.workflowId);
     emit();
     return;

@@ -101,20 +101,25 @@ function start(run: string): PanelPushEvent {
   return { type: "workflow_run", id: "wf", run, name: run, state: "started", conv: "chat" };
 }
 
+/** A run a person started (no chat): the kind the activity tray lists. */
+function personStart(run: string): PanelPushEvent {
+  return { ...start(run), conv: "" };
+}
+
 it("keeps a run ended when its finish arrives before its start", async () => {
   applyWorkflowEvent({ type: "workflow_run", id: "wf", run: "done", state: "done" });
-  applyWorkflowEvent(start("done"));
+  applyWorkflowEvent(personStart("done"));
   expect(getBackgroundJobs()[0]).toMatchObject({ phase: "done", cancelable: false });
-  api.workflow_run_snapshot.mockResolvedValue({ ok: true, events: [start("done"), { type: "workflow_run", id: "wf", run: "done", state: "done" }] });
+  api.workflow_run_snapshot.mockResolvedValue({ ok: true, events: [personStart("done"), { type: "workflow_run", id: "wf", run: "done", state: "done" }] });
   await refreshWorkflowRuns();
   expect(getBackgroundJobs()[0].phase).toBe("done");
 });
 
 it("recovers a missed finish while leaving another concurrent run active", async () => {
-  applyWorkflowEvent(start("done"));
-  applyWorkflowEvent(start("live"));
+  applyWorkflowEvent(personStart("done"));
+  applyWorkflowEvent(personStart("live"));
   api.workflow_run_snapshot.mockResolvedValue({ ok: true, events: [
-    start("done"), { type: "workflow_run", id: "wf", run: "done", state: "error", error: "Failed" }, start("live"),
+    personStart("done"), { type: "workflow_run", id: "wf", run: "done", state: "error", error: "Failed" }, personStart("live"),
   ] });
   expect(await refreshWorkflowRuns()).toBe(true);
   expect(getBackgroundJobs().find(j => j.id.endsWith(":done"))).toMatchObject({ phase: "error", detail: "Failed", cancelable: false });
@@ -122,7 +127,7 @@ it("recovers a missed finish while leaving another concurrent run active", async
 });
 
 it("reconciles both a forgotten run and a legacy persisted job", async () => {
-  applyWorkflowEvent(start("gone"));
+  applyWorkflowEvent(personStart("gone"));
   upsertBackgroundJob({ id: "graph:legacy", title: "Old", phase: "working", cancelable: true });
   api.workflow_run_snapshot.mockResolvedValue({ ok: true, events: [] });
   await refreshWorkflowRuns();
@@ -131,7 +136,7 @@ it("reconciles both a forgotten run and a legacy persisted job", async () => {
 });
 
 it("keeps Running when the bridge fails or refuses the snapshot", async () => {
-  applyWorkflowEvent(start("live"));
+  applyWorkflowEvent(personStart("live"));
   api.workflow_run_snapshot.mockRejectedValueOnce(new Error("Disconnected"));
   expect(await refreshWorkflowRuns()).toBe(false);
   api.workflow_run_snapshot.mockResolvedValueOnce({ ok: false, events: [] });
@@ -202,4 +207,14 @@ it("keeps only the newest finished runs of a workflow and lets go of the older o
   act(() => hydrateWorkflowRunHistory("wf", "Example",
     Array.from({ length: 30 }, (_, i) => ({ run: `saved${i}`, started: i + 1, ended: i + 2, ok: true, steps: [] }))));
   expect(finished()).toHaveLength(20);
+});
+
+it("lists a run you started in the tray as a named workflow, and leaves a chat's run to that chat", () => {
+  applyWorkflowEvent({ type: "workflow_run", id: "wf-a", run: "mine", state: "started", name: "Untitled", conv: "", plan: [] });
+  applyWorkflowEvent({ type: "workflow_run", id: "wf-b", run: "agent", state: "started", name: "IMK check", conv: "chat-1", plan: [] });
+  expect(getBackgroundJobs().map(j => j.title)).toEqual(["Workflow: Unnamed workflow"]);
+  applyWorkflowEvent({ type: "workflow_run", id: "wf-b", run: "agent", state: "error", error: "Explicit spend confirmation required" });
+  applyWorkflowEvent({ type: "workflow_run", id: "wf-a", run: "mine", state: "done" });
+  expect(getBackgroundJobs()).toHaveLength(1);
+  expect(getBackgroundJobs()[0]).toMatchObject({ title: "Workflow: Unnamed workflow", phase: "done" });
 });
