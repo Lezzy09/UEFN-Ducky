@@ -9,8 +9,10 @@ another process, so the state lives in the shared database (``workspace_state``)
 
 from __future__ import annotations
 
+import re
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 _TABLE = "workspace_state"
@@ -122,3 +124,31 @@ def panel_note_once(plugin_id: str) -> str:
         "is paused until it is the visible tab; backend tools work as usual. Show it with "
         f'ducky_ui_navigate("plugin_panel", "{plugin_id}:{panels[0]}").'
     )
+
+
+_LOCAL_NAME = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def plugin_local_dir(plugin_id: str, name: str = "") -> Path:
+    """``<AppData>/plugin_local/<plugin>/<name>``: a plugin's rebuildable files on this PC."""
+    from backend.skills.store import appdata_dir
+
+    pid = _LOCAL_NAME.sub("", str(plugin_id or "").strip().lower())
+    if not pid:
+        raise ValueError("plugin id required")
+    sub = _LOCAL_NAME.sub("_", str(name or "").strip()).strip("_")
+    folder = appdata_dir() / "plugin_local" / pid
+    if sub:
+        folder = folder / sub
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def erase_plugin_local(plugin_id: str) -> None:
+    import shutil
+
+    from backend.skills.store import appdata_dir
+
+    pid = _LOCAL_NAME.sub("", str(plugin_id or "").strip().lower())
+    if pid:
+        shutil.rmtree(appdata_dir() / "plugin_local" / pid, ignore_errors=True)

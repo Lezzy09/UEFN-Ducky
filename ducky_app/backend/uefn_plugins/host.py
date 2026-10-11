@@ -3443,6 +3443,14 @@ class _PluginApi:
         """Record a mutation in the Changes ledger so Revert can unwind it."""
         return _ChangesetApi(self)
 
+    def local_dir(self, name: str = "") -> str:
+        """A plain folder on this PC for files the plugin can rebuild: media proxies, thumbnails,
+        caches. Not synced and not encrypted (``data`` is for the plugin's real records); play a
+        file from it with ``media_url(path)``. Erased with the plugin's data."""
+        from backend.uefn_plugins.panel_presence import plugin_local_dir
+
+        return str(plugin_local_dir(self.plugin_id, name))
+
     def media_url(self, path: str) -> str:
         """A seekable link (HTTP Range) to a local media file, for this plugin's panel to play:
         an original the person picked with ``files.pick`` or a proxy the plugin made.

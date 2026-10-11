@@ -97,3 +97,13 @@ def test_plugins_get_a_seekable_link_for_local_media(tmp_path) -> None:
     url = api.media_url(str(proxy))
     assert url.startswith("http://127.0.0.1:") and "/workflow-media/" in url and url.endswith("/proxy_720p.mp4")
     assert api.media_url(str(tmp_path / "clip.avi")) == ""
+
+
+def test_plugins_get_a_plain_local_folder_for_rebuildable_files(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("backend.skills.store.appdata_dir", lambda: tmp_path)
+    folder = pp.plugin_local_dir("island-media-kit", "proxies")
+    assert folder == tmp_path / "plugin_local" / "island-media-kit" / "proxies" and folder.is_dir()
+    assert pp.plugin_local_dir("island-media-kit", "../../etc") == tmp_path / "plugin_local" / "island-media-kit" / "etc"
+    (folder / "clip_720p.mp4").write_bytes(b"\x00")
+    pp.erase_plugin_local("island-media-kit")
+    assert not (tmp_path / "plugin_local" / "island-media-kit").exists()

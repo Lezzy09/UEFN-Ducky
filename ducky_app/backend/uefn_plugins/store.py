@@ -690,6 +690,12 @@ def uninstall_uefn_plugin(plugin_id: str, *, erase_data: bool = False) -> dict[s
             erase_plugin(pid)
         except Exception:
             pass
+        try:
+            from backend.uefn_plugins.panel_presence import erase_plugin_local
+
+            erase_plugin_local(pid)  # proxies, thumbnails and caches the plugin made
+        except Exception:
+            pass
     # Persist disabled before deleting files so a restart mid-teardown still shows off.
     set_uefn_plugin_enabled(pid, False)
     # Drop imported modules (bounded unload) *before* rmtree — Windows locks .py files

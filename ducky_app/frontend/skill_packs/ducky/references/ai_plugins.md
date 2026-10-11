@@ -203,6 +203,9 @@ Panels are sandboxed iframes that talk to the host with `postMessage` on channel
 
 Backend: `api.media_url(path)` → the same seekable link for any local media file (a proxy your
 backend made, or a picked original); "" when a panel can't play that type. Loopback only.
+Backend: `api.local_dir(name="")` → a plain folder on this PC for files you can rebuild (media proxies,
+thumbnails, caches): not synced, not encrypted, erased with the plugin's data. Write a proxy there, then
+play it with `api.media_url(path)`. Real records go in `api.data`.
 
 Host pushes: `appearance_theme`, `panel.visibility` (`visible`),
 `plugin_scope_changed` (re-read your data), and the types you subscribed to.
