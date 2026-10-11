@@ -57,13 +57,6 @@
   cursor: default;
 }
 
-.group-member-chip-avatar-wrap .chat-waiting-marker--chip {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  pointer-events: none;
-}
-
 .editor-tab-hover-card-status--waiting {
   display: flex;
   align-items: center;

@@ -18,19 +18,22 @@ const rows = (): GroupMemberDto[] => ["Builder", "Designer"].map((name, index) =
     assignment: { plan_id: "canonical", chat_id: "coord", node_id: "original", title: "Original task", status: "in_progress" },
   },
 }));
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); });
+const openTeam = () => fireEvent.click(screen.getByRole("button", { name: /^Team/ }));
+const details = (name: string) => fireEvent.click(screen.getByRole("button", { name: `Details for ${name}` }));
 const props = { groupId: "group", members: rows(), onMembersChange: () => {}, onOpenMember: () => {} };
 
 describe("member observations", () => {
   it("renders scoped canonical task and runtime snapshots for two members", async () => {
     api.group_members.mockResolvedValue({ ok: true, members: rows() });
     render(<GroupMemberStrip {...props} />);
-    fireEvent.focus(screen.getByTitle("Open Builder's work"));
+    openTeam();
+    details("Builder");
     await screen.findByText("Runtime: running (snapshot; not task completion)");
     expect(screen.getByText("Assignment: Original task [in_progress] · plan canonical · node original")).toBeTruthy();
     expect(screen.getByText("Project: stored-project")).toBeTruthy();
     expect(screen.getByText("Group: group · Role: leader")).toBeTruthy();
-    fireEvent.focus(screen.getByTitle("Open Designer's work"));
+    details("Designer");
     await screen.findByText("Runtime: idle (snapshot; not task completion)");
     expect(screen.getByText("Group: group · Role: member")).toBeTruthy();
   });
@@ -43,7 +46,8 @@ describe("member observations", () => {
     view.rerender(<GroupMemberStrip {...props} groupId="other" />);
     await waitFor(() => expect(api.group_members).toHaveBeenCalledWith("other"));
     await act(async () => finish({ ok: true, members: rows() }));
-    fireEvent.focus(screen.getByTitle("Open Builder's work"));
+    openTeam();
+    details("Builder");
     await screen.findByText("Runtime: unknown");
     expect(screen.queryByText(/plan canonical/)).toBeNull();
   });
@@ -62,7 +66,8 @@ describe("member observations", () => {
   it("refreshes canonical-owner events but ignores unrelated projects and stale requests", async () => {
     api.group_members.mockResolvedValue({ ok: true, members: rows() });
     render(<GroupMemberStrip {...props} />);
-    fireEvent.focus(screen.getByTitle("Open Builder's work"));
+    openTeam();
+    details("Builder");
     await screen.findByText(/Assignment: Original task/);
     api.group_members.mockClear();
     act(() => { for (const fn of listeners) fn({ type: "plan_updated", conv_id: "unrelated" }); });

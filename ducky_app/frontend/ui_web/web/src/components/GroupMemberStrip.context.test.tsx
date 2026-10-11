@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatTab, FolderItem, GroupMemberDto } from "../types/panel";
@@ -13,7 +13,10 @@ vi.mock("../hooks/useAgentEventBus", () => ({
 
 const { GroupMemberStrip } = await import("./GroupMemberStrip");
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 function folder(partial: Partial<FolderItem> & Pick<FolderItem, "id" | "name">): FolderItem {
   return {
@@ -54,8 +57,13 @@ describe("group roster context", () => {
         onOpenMember={() => {}}
       />,
     );
+    // The bar counts every agent, the nested group's too.
+    expect(screen.getByText("2 agents · 1 group")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Team/ }));
     expect(screen.getByText("0")).toBeTruthy();
     expect(screen.getByText("Painter")).toBeTruthy();
-    expect(screen.getByText("1.2K")).toBeTruthy();
+    // Painter's own row and the group's total.
+    expect(screen.getAllByText("1.2K")).toHaveLength(2);
+    expect(screen.getByText("Total context 1.2K")).toBeTruthy();
   });
 });
