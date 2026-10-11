@@ -1005,7 +1005,7 @@ def publish_panel_bundle(version: str) -> None:
         )
         return
     print(f"panel: {version} staged — publish it with the plugin release:")
-    print("  bash plugins/plugin-uefn-ducky/scripts/release.sh --docker --upload")
+    print("  bash plugins/tooling/scripts/release.sh plugins/plugin-uefn-ducky --docker --upload --approve")
 
 
 if __name__ == "__main__":

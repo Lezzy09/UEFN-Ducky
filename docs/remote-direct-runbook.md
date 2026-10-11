@@ -50,7 +50,7 @@ Subresources and every other path keep the global policy unchanged.
 py release/publish_app.py --notes "Remote View: direct mode"
 
 # 2. panel + plugin → tenant
-bash plugins/plugin-uefn-ducky/scripts/release.sh --docker --upload
+bash plugins/tooling/scripts/release.sh plugins/plugin-uefn-ducky --docker --upload --approve
 ```
 
 `--docker` is not optional: a host build on Windows produces a `plugin.exe`

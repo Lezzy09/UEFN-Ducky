@@ -17,7 +17,7 @@ Usage (from repo root):
   py release/publish_panel.py --plugin-dir D  # plugin checkout elsewhere
 
 After staging, release the plugin from the DuckyOS repo:
-  bash plugins/plugin-uefn-ducky/scripts/release.sh --docker --upload
+  bash plugins/tooling/scripts/release.sh plugins/plugin-uefn-ducky --docker --upload --approve
 """
 
 from __future__ import annotations
@@ -94,7 +94,7 @@ def stage(plugin_dir: Path, ver: str) -> int:
             print(f"  {row}", file=sys.stderr)
         return 1
     print(f"panel: {ver} ready — release the plugin to publish it:")
-    print("  bash plugins/plugin-uefn-ducky/scripts/release.sh --docker --upload")
+    print("  bash plugins/tooling/scripts/release.sh plugins/plugin-uefn-ducky --docker --upload --approve")
     return 0
 
 
