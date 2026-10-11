@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { BillingBadge } from "./BillingBadge";
+import { billingKind } from "../utils/billing";
 import { DropdownPanel } from "./DropdownPanel";
 import { Icons } from "../icons/Icons";
 import { getApi } from "../hooks/usePanelApi";
@@ -360,6 +362,10 @@ export function ModelSelector({
         ? "No models"
         : currentModelData?.name ?? (selectedModel || placeholder);
   const triggerLabel = `${displayName}${effortSuffix(selectedMenu, thinkingEffort)}`;
+  // How this pick is paid: a subscription login, a pay-per-token API key, this PC or the account.
+  const billing = selectedModel
+    ? billingKind(codingAgent, currentModelData?.providerKey || selectedProviderKey, Boolean(currentModelData?.isLocal))
+    : "";
 
   useEffect(() => {
     onModelMetaChange?.({
@@ -964,6 +970,7 @@ export function ModelSelector({
         ) : (
           <Icons.Duck />
         )}
+        <BillingBadge kind={billing} compact={!labeled} />
         {labeled ? (
           <>
             <span className="model-selector-btn-text">

@@ -260,6 +260,51 @@ def allow_create_without_model(result: ResolveResult) -> ResolveResult:
     return result
 
 
+def billing_kind(coding_agent: str, provider: str, model: str = "") -> str:
+    """How a chat's turns are paid: "subscription" (a coding agent's own login),
+    "local" (a model on this PC), "account" (the UEFN Ducky account) or "api_key"
+    (billed per token to a saved key)."""
+    agent = (coding_agent or "").strip().lower()
+    if agent and agent != "ducky":
+        return "subscription"
+    prov = (provider or "").strip().lower()
+    if prov == "uefn_ducky":
+        return "account"
+    if not prov:
+        return ""
+    try:
+        from backend.agent.model_fetch import get_model_info
+
+        info = get_model_info(prov, model)
+        if info is not None and info.is_local:
+            return "local"
+    except Exception:
+        pass
+    return "local" if prov in ("ollama", "lmstudio", "llamacpp") else "api_key"
+
+
+def refuse_paid_api_for_agent(result: ResolveResult, settings: Any) -> ResolveResult:
+    """An agent seating or spawning a chat never puts it on a pay-per-token API key the
+    person has not opened to agents (Settings → LLMs → the provider's key)."""
+    if not isinstance(result, ResolveOk) or result.coding_agent != "ducky" or not result.model:
+        return result
+    if billing_kind("ducky", result.provider, result.model) != "api_key":
+        return result
+    allowed = {str(p).strip().lower() for p in (getattr(settings, "agent_api_keys", None) or [])}
+    if result.provider.strip().lower() in allowed:
+        return result
+    offered = sorted(aid for aid, ids in _available_agent_models(settings).items() if result.model in ids)
+    hint = (f" Use {offered[0]}:{result.model}, which runs on that subscription." if offered
+            else " Pick a subscription coding agent's model (e.g. codex:…) or a local model.")
+    return ResolveErr(
+        code="api_key_blocked",
+        message=(f"{result.selection.qualified} bills the person's {result.provider} API key per token, "
+                 f"and agents may not start chats on it.{hint} Only the person can allow agents to use "
+                 "this key, in Settings → LLMs."),
+        requested=result.selection.qualified,
+    )
+
+
 def resolve_model_strict(favorite_models: Any, settings: Any) -> ResolveResult:
     """Resolve the model for a Ducky/chat.
 
@@ -292,6 +337,13 @@ def resolve_model_strict(favorite_models: Any, settings: Any) -> ResolveResult:
         )
 
     selection = parse_selection(requested)
+    if selection is None:
+        bare = requested.strip()
+        # A bare id a logged-in coding agent offers runs there, on its subscription: an
+        # agent that wrote "gpt-6.1-sol" got OpenAI's per-token API instead of Codex.
+        subscribed = sorted(aid for aid, ids in _available_agent_models(settings).items() if bare in ids)
+        if subscribed:
+            selection = FavoriteSelection(backend=subscribed[0], model_id=bare)
     if selection is None:
         # Legacy bare API model id — only accept if uniquely present in one provider catalog.
         bare = requested.strip()

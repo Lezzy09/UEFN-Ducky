@@ -500,6 +500,9 @@ class PanelApiSettingsMixin:
                     from backend.agent.coding_agents.base import normalize_coding_agent
 
                     s.default_coding_agent = normalize_coding_agent(sel.coding_agent)
+        if "agent_api_keys" in patch:
+            raw_keys = patch.get("agent_api_keys") or []
+            s.agent_api_keys = sorted({str(p).strip().lower() for p in raw_keys if str(p).strip()})
         if "uefn_project_root" in patch:
             raw = str(patch.get("uefn_project_root") or "").strip()
             if raw:

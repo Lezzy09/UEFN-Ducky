@@ -1403,6 +1403,8 @@ export interface PanelSettingsDto {
   agent_model: string;
   /** Qualified "backend:model_id" used when a Ducky/chat has no model of its own. */
   default_model?: string;
+  /** Providers whose API key agents may start chats on (billed per token). */
+  agent_api_keys?: string[];
   uefn_project_root: string;
   antigravity_config_path: string;
   verse_diagnostics_cache_enabled?: boolean;

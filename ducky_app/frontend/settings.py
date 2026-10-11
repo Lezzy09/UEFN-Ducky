@@ -67,6 +67,11 @@ class PanelSettings:
     composer always overrides it.
     """
 
+    agent_api_keys: list[str] = field(default_factory=list)
+    """Providers whose API key an agent may start chats on (billed per token). Empty: chats
+    an agent seats or spawns run on subscriptions or local models only. Set by the person in
+    Settings → LLMs, never by an agent."""
+
     uefn_project_root: str = ""
     """UEFN project folder for workspace file tools."""
 

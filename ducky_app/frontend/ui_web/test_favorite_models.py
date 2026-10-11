@@ -356,3 +356,37 @@ def test_cold_cache_probe_is_bounded(monkeypatch):
         assert out == {}
     finally:
         release.set()
+
+
+def _catalogs(monkeypatch, *, agents: dict, apis: dict) -> None:
+    monkeypatch.setattr("frontend.favorite_models._available_agent_models", lambda settings, backend="": agents)
+    monkeypatch.setattr("frontend.favorite_models._available_api_models", lambda: apis)
+
+
+def test_a_bare_model_a_subscription_offers_runs_there_not_on_the_api_key(monkeypatch):
+    """An agent wrote "gpt-6.1-sol" and the chat billed OpenAI's API for an hour instead of Codex."""
+    _catalogs(monkeypatch, agents={"codex": {"gpt-6.1-sol"}}, apis={"openai": {"gpt-6.1-sol"}})
+    out = resolve_model_strict(["gpt-6.1-sol"], SimpleNamespace(default_model=""))
+    assert isinstance(out, ResolveOk) and out.coding_agent == "codex" and out.provider == ""
+    _catalogs(monkeypatch, agents={}, apis={"openai": {"gpt-6.1-sol"}})
+    api_only = resolve_model_strict(["gpt-6.1-sol"], SimpleNamespace(default_model=""))
+    assert isinstance(api_only, ResolveOk) and api_only.provider == "openai"
+
+
+def test_agents_never_start_chats_on_an_api_key_the_person_did_not_open(monkeypatch):
+    from frontend.favorite_models import billing_kind, refuse_paid_api_for_agent
+
+    _catalogs(monkeypatch, agents={"codex": {"gpt-6.1-sol"}}, apis={"openai": {"gpt-6.1-sol"}, "ollama": {"qwen3"}})
+    monkeypatch.setattr("backend.agent.model_fetch.get_model_info", lambda p, m: None)
+    shut = SimpleNamespace(default_model="", agent_api_keys=[])
+    api = resolve_model_strict(["openai:gpt-6.1-sol"], shut)
+    refused = refuse_paid_api_for_agent(api, shut)
+    assert isinstance(refused, ResolveErr) and refused.code == "api_key_blocked"
+    assert "codex:gpt-6.1-sol" in refused.message
+    opened = SimpleNamespace(default_model="", agent_api_keys=["openai"])
+    assert refuse_paid_api_for_agent(api, opened) is api
+    local = resolve_model_strict(["ollama:qwen3"], shut)
+    assert refuse_paid_api_for_agent(local, shut) is local
+    assert billing_kind("codex", "", "gpt-6.1-sol") == "subscription"
+    assert billing_kind("ducky", "openai", "gpt-6.1-sol") == "api_key"
+    assert billing_kind("ducky", "uefn_ducky", "ducky-brain") == "account"

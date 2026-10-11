@@ -18,6 +18,7 @@ import { ProviderIdeHookup } from "./ProviderIdeHookup";
 import { GeneralSectionHeader } from "./GeneralSectionHeader";
 import { PluginSettingsSections } from "./PluginSettingsSections";
 import { SettingsToggleRow } from "./SettingsToggleRow";
+import { AgentApiKeyToggle } from "./AgentApiKeyToggle";
 import { DuckyModelPicker } from "../../components/ducky/DuckyModelPicker";
 import { unsetDefaultGatewayIcons, type GatewayIcon } from "./defaultModelGateways";
 import {
@@ -963,6 +964,7 @@ export function AgentTab() {
                         ) : null}
                       </div>
                     </div>
+                    {!isUrl && saved ? <AgentApiKeyToggle providerId={selected.id} /> : null}
                   </section>
                 ) : null}
 

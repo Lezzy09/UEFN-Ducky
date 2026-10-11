@@ -510,11 +510,13 @@ class PanelApiChatsMixin:
         profile_id: str,
         model: str = "",
         write_allowed: list[str] | None = None,
+        for_agent: bool = False,
     ) -> dict[str, Any]:
         """Seat a ducky in a group, reusing its idle chat instead of a new group.
 
         A busy copy (another node still running) gets the next name, "Verse Coder 2",
-        in the same group.
+        in the same group. ``for_agent``: an agent is seating it, so it never lands on a
+        pay-per-token API key the person has not opened to agents.
         """
         from frontend.agent_profiles import get_agent_profile
         from frontend.ui_web.agent_modes import is_agent_running, wait_for_idle
@@ -538,6 +540,10 @@ class PanelApiChatsMixin:
             if is_agent_running(cid):
                 wait_for_idle(cid, 3.0)
             if not is_agent_running(cid):
+                if for_agent:
+                    blocked = self._agent_api_key_refusal(cid)
+                    if blocked:
+                        return {"ok": False, "error": blocked}
                 return {
                     "ok": True,
                     "member": member,
@@ -559,11 +565,32 @@ class PanelApiChatsMixin:
                 n += 1
                 copy = f"{base} {n}"
         seated = self.group_invite(
-            group_id, pid, model=model, write_allowed=write_allowed, name=copy
+            group_id, pid, model=model, write_allowed=write_allowed, name=copy, for_agent=for_agent
         )
         if seated.get("ok"):
             seated["reused"] = False
         return seated
+
+    @staticmethod
+    def _agent_api_key_refusal(conv_id: str) -> str:
+        """Why an agent may not run work in this chat ("" = it may): the chat bills an API
+        key per token that the person has not opened to agents."""
+        from frontend.favorite_models import billing_kind
+
+        conv = _pa.load_conversation(conv_id)
+        if conv is None:
+            return ""
+        agent = str(getattr(conv, "coding_agent", "") or "ducky")
+        provider = str(getattr(conv, "provider", "") or "")
+        if billing_kind(agent, provider, str(getattr(conv, "model", "") or "")) != "api_key":
+            return ""
+        allowed = {str(p).strip().lower() for p in (_pa.PanelSettings.load().agent_api_keys or [])}
+        if provider.strip().lower() in allowed:
+            return ""
+        return (f"Chat {conv.title!r} runs on the person's {provider} API key (billed per token); agents may "
+                "not use it. Seat a ducky whose profile model is a subscription model (e.g. "
+                "codex:…) instead, or ask the person to switch that chat's model or allow agents "
+                "to use this key in Settings → LLMs.")
 
     def group_invite(
         self,
@@ -572,6 +599,7 @@ class PanelApiChatsMixin:
         model: str = "",
         write_allowed: list[str] | None = None,
         name: str = "",
+        for_agent: bool = False,
     ) -> dict[str, Any]:
         """Spawn an independent member chat from a ducky profile and add it to the group.
 
@@ -605,6 +633,10 @@ class PanelApiChatsMixin:
         result = allow_create_without_model(
             _pa.resolve_model_selection(favorites, settings)
         )
+        if for_agent:
+            from frontend.favorite_models import refuse_paid_api_for_agent
+
+            result = refuse_paid_api_for_agent(result, settings)
         if isinstance(result, ResolveErr):
             return {"ok": False, "error": result.message}
         disabled_packs = profile.get("disabled_packs")

@@ -56,6 +56,10 @@ FIELD_META: dict[str, FieldMeta] = {
         "Default model", "LLMs", settable=True,
         description='Qualified "backend:model_id" default for chats/duckies.',
     ),
+    "agent_api_keys": FieldMeta(
+        "API keys agents may use", "LLMs", settable=False,
+        description="Providers whose per-token API key agents may start chats on. User-only setting.",
+    ),
     "uefn_project_root": FieldMeta(
         "UEFN project root", "General", settable=True,
         description="Prefer ducky_set_project, which also updates recents + deploy.",

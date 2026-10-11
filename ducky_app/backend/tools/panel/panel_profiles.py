@@ -54,7 +54,25 @@ def _normalize_patch(patch: dict[str, Any]) -> dict[str, Any]:
             out[canonical] = [str(value)] if value else []
         else:
             out[canonical] = value
+    if out.get("favorite_models"):
+        out["favorite_models"] = [_exact_model(str(m)) for m in out["favorite_models"]]
     return out
+
+
+def _exact_model(raw: str) -> str:
+    """A bare model id is saved as the exact pick it resolves to ("gpt-6.1-sol" →
+    "codex:gpt-6.1-sol" when Codex offers it), so the profile shows how it will run."""
+    from frontend.favorite_models import ResolveOk, parse_selection, resolve_model_strict
+    from frontend.settings import PanelSettings
+
+    text = (raw or "").strip()
+    if not text or parse_selection(text) is not None:
+        return text
+    try:
+        result = resolve_model_strict([text], PanelSettings.load())
+    except Exception:
+        return text
+    return result.selection.qualified if isinstance(result, ResolveOk) else text
 
 
 def set_profile(ducky_id: str, patch: dict[str, Any]) -> dict[str, Any]:

@@ -88,7 +88,7 @@ def test_busy_member_gets_a_numbered_copy_in_the_same_group(monkeypatch):
     monkeypatch.setattr("frontend.ui_web.agent_modes.is_agent_running", lambda cid: True)
     seated: dict[str, str] = {}
 
-    def invite(group_id, profile_id, model="", write_allowed=None, name=""):
+    def invite(group_id, profile_id, model="", write_allowed=None, name="", for_agent=False):
         seated["group_id"] = group_id
         seated["name"] = name
         return {"ok": True, "member": {"member_conv_id": "m2", "name": name}}
@@ -119,7 +119,7 @@ def test_spawn_from_a_group_member_joins_that_group(monkeypatch):
     seated: dict[str, str] = {}
 
     class Api:
-        def group_seat_profile(self, group_id, profile_id, model="", write_allowed=None):
+        def group_seat_profile(self, group_id, profile_id, model="", write_allowed=None, for_agent=False):
             seated["group_id"] = group_id
             return {
                 "ok": True,

@@ -15,6 +15,8 @@ export type RosterNode = {
   styleId?: string;
   model: string;
   codingAgent: string;
+  /** API provider of an embedded (ducky) member: decides how its turns are billed. */
+  provider?: string;
   contextTokens: number;
   isGroup: boolean;
   isLeader: boolean;
@@ -72,6 +74,7 @@ export function buildRoster(input: RosterInput): RosterNode[] {
       styleId: m.ducky_style || profile?.ducky_style || chat?.duckyStyle,
       model: (m.model || "").trim() || (chat?.model || "").trim() || modelFromFavorites(profile?.favorite_models),
       codingAgent: (m.coding_agent || "").trim() || (chat?.codingAgent || "").trim() || "ducky",
+      provider: (chat?.provider || "").trim(),
       contextTokens: Math.max(0, Number(chat?.contextTokens) || 0),
       isGroup,
       isLeader: !isGroup && Boolean(leaderId) && m.member_conv_id === leaderId,

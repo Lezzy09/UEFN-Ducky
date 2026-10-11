@@ -749,7 +749,7 @@ def ducky_group_invite(
     if write_allowed is not None:
         _require_lane_authority(group_id)
     api = _panel_api()
-    res = api.group_invite(group_id.strip(), pid, write_allowed=write_allowed)
+    res = api.group_invite(group_id.strip(), pid, write_allowed=write_allowed, for_agent=True)
     if not res.get("ok"):
         raise ValueError(str(res.get("error") or "group_invite failed"))
     return tool_json(res, pretty=pretty)
@@ -1220,12 +1220,13 @@ def _profile_spawn_kwargs(profile: dict[str, Any]) -> dict[str, Any]:
     explicit pick raises — never silently substitutes another model.
     """
     from frontend.ui_web.panel_api import resolve_model_selection
-    from frontend.favorite_models import ResolveErr, allow_create_without_model
+    from frontend.favorite_models import ResolveErr, allow_create_without_model, refuse_paid_api_for_agent
 
     settings = PanelSettings.load()
-    result = allow_create_without_model(
+    # Agents spawn here: never onto an API key the person has not opened to agents.
+    result = refuse_paid_api_for_agent(allow_create_without_model(
         resolve_model_selection(profile.get("favorite_models"), settings)
-    )
+    ), settings)
     if isinstance(result, ResolveErr):
         raise ValueError(result.message)
     disabled_packs = profile.get("disabled_packs")
@@ -1385,7 +1386,7 @@ def ducky_spawn_chat(
     if write_allowed is not None:
         _require_lane_authority(hub_id)
     seated = _panel_api().group_seat_profile(
-        hub_id, str(profile.get("id") or "").strip(), write_allowed=write_allowed
+        hub_id, str(profile.get("id") or "").strip(), write_allowed=write_allowed, for_agent=True
     )
     if not seated.get("ok"):
         raise ValueError(str(seated.get("error") or "group_invite failed"))

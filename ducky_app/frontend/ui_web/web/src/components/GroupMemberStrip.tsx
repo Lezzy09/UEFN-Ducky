@@ -1,4 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { BillingBadge } from "./BillingBadge";
+import { billingKind } from "../utils/billing";
 
 import { subscribeAgentEvents } from "../hooks/useAgentEventBus";
 import { requestReloadDuckies } from "../hooks/useChatsChanged";
@@ -690,11 +692,15 @@ export function GroupMemberStrip({
                 title={`Change ${node.name}'s model`}
                 onClick={() => setEditor(editor?.key === node.key && editor.kind === "model" ? null : { key: node.key, kind: "model" })}
               >
+                <BillingBadge kind={billingKind(node.codingAgent, node.provider)} compact />
                 <span className="team-roster-pick-text">{aiTypeLabel(node.model, node.codingAgent)}</span>
                 <Icons.ChevronDown />
               </button>
             ) : !node.isGroup ? (
-              <span className="team-roster-muted">{aiTypeLabel(node.model, node.codingAgent)}</span>
+              <span className="team-roster-muted">
+                <BillingBadge kind={billingKind(node.codingAgent, node.provider)} compact />
+                {aiTypeLabel(node.model, node.codingAgent)}
+              </span>
             ) : null}
           </span>
           <span className="team-roster-cell" role="cell">
