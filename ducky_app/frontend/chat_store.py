@@ -165,6 +165,10 @@ class Conversation:
     web_fetch_urls: list[str] = field(default_factory=list)
     """Canonical URLs from the latest web_search. The only fetch allowlist."""
 
+    settings_edited: float = 0.0
+    """When the ducky's style, name, voice or personality was last changed. A running
+    turn saves an older copy; save_conversation keeps the newer settings."""
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -214,6 +218,7 @@ class Conversation:
             "web_access_denied": bool(self.web_access_denied),
             "agent_allow_rules": [str(r) for r in (self.agent_allow_rules or []) if str(r).strip()],
             "web_fetch_urls": [str(u) for u in (self.web_fetch_urls or [])],
+            "settings_edited": float(self.settings_edited or 0.0),
         }
 
     @classmethod
@@ -317,6 +322,7 @@ class Conversation:
                 if isinstance(d.get("web_fetch_urls"), list)
                 else []
             ),
+            settings_edited=float(d.get("settings_edited", 0) or 0.0),
         )
 
 

@@ -868,6 +868,31 @@ def sync_skill_snapshot(
     return changed
 
 
+# What apply_ducky_config sets. A turn holds a copy loaded before the edit.
+_DUCKY_SETTINGS = (
+    "ducky_style",
+    "ducky_name",
+    "profile_id",
+    "ducky_personality",
+    "tts_voice",
+    "tts_speed",
+    "thinking_effort",
+)
+
+
+def _keep_newer_settings(conv: Conversation, stored: dict[str, Any] | None) -> None:
+    """Saving an older copy never puts back the voice, name or style the user just changed."""
+    if not stored:
+        return
+    edited = float(stored.get("settings_edited") or 0.0)
+    if edited <= float(conv.settings_edited or 0.0):
+        return
+    fresh = Conversation.from_dict({**stored, "id": conv.id, "messages": []})
+    for name in _DUCKY_SETTINGS:
+        setattr(conv, name, getattr(fresh, name))
+    conv.settings_edited = edited
+
+
 def save_conversation(conv: Conversation, project_root: str | None = None, *, touch_updated: bool = True) -> None:
     with _conversation_lock(conv.id):
         # A self-rename is made through the bridge while this runner owns an older
@@ -879,6 +904,7 @@ def save_conversation(conv: Conversation, project_root: str | None = None, *, to
         if touch_updated:
             conv.updated = time.time()
         if _use_db():
+            _keep_newer_settings(conv, _repo().conv_if_settings_newer(conv.id, conv.settings_edited))
             _save_conversation_rows(conv, project_root)
             return
         path = conversation_path(conv.id, project_root)
@@ -893,6 +919,8 @@ def save_conversation(conv: Conversation, project_root: str | None = None, *, to
         if path.is_file():
             try:
                 existing = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(existing, dict):
+                    _keep_newer_settings(conv, existing)
                 disk_msgs = existing.get("messages") if isinstance(existing, dict) else None
                 if isinstance(disk_msgs, list) and disk_msgs:
                     if not incoming_msgs:
@@ -1236,6 +1264,7 @@ def apply_ducky_config(
     from backend.agent.prompt_cache import invalidate_conv_cache
 
     invalidate_conv_cache(conv)
+    conv.settings_edited = time.time()
     save_conversation(conv, project_root, touch_updated=False)
 
 

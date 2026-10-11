@@ -485,6 +485,17 @@ def conv_count(project_id: str) -> int:
     return int(db.connect().execute("SELECT count(*) FROM conversations WHERE project_id=?", (project_id,)).fetchone()[0])
 
 
+def conv_if_settings_newer(conv_id: str, edited: float) -> dict[str, Any] | None:
+    """The stored chat (no messages) when its ducky settings changed after *edited*, else None."""
+    conn = db.connect()
+    row = conn.execute(
+        "SELECT json_extract(state, '$.settings_edited') FROM conversations WHERE id=?", (conv_id,)
+    ).fetchone()
+    if row is None or float(row[0] or 0.0) <= float(edited or 0.0):
+        return None
+    return conv_get(conv_id, with_messages=False)
+
+
 def conv_message_summary(conv_id: str) -> tuple[int, bool]:
     """(message count, any assistant row) without loading bodies."""
     row = db.connect().execute(
