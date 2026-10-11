@@ -86,3 +86,14 @@ def test_agents_can_open_a_plugin_panel(monkeypatch) -> None:
     assert panel_ui._navigate("plugin_panel", "imk") == {"ok": True, "route": "plugin_panel", "tab": "plugin:imk:main"}
     assert calls == [("open_plugin_panel", {"plugin_id": "imk", "panel_id": "main", "title": "Island Media Kit"})]
     assert "error" in panel_ui._navigate("plugin_panel", "nothing")
+
+
+def test_plugins_get_a_seekable_link_for_local_media(tmp_path) -> None:
+    from backend.uefn_plugins.host import _PluginApi
+
+    proxy = tmp_path / "proxy_720p.mp4"
+    proxy.write_bytes(b"\x00")
+    api = _PluginApi.__new__(_PluginApi)
+    url = api.media_url(str(proxy))
+    assert url.startswith("http://127.0.0.1:") and "/workflow-media/" in url and url.endswith("/proxy_720p.mp4")
+    assert api.media_url(str(tmp_path / "clip.avi")) == ""

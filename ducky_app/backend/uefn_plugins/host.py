@@ -3443,6 +3443,14 @@ class _PluginApi:
         """Record a mutation in the Changes ledger so Revert can unwind it."""
         return _ChangesetApi(self)
 
+    def media_url(self, path: str) -> str:
+        """A seekable link (HTTP Range) to a local media file, for this plugin's panel to play:
+        an original the person picked with ``files.pick`` or a proxy the plugin made.
+        '' when the file type can't be played in the panel. Loopback only: not on a phone."""
+        from backend.automations.files import media_url
+
+        return media_url(path)
+
     def panel_state(self) -> dict[str, Any]:
         """Whether this plugin's panel is open and on screen: ``{open, visible, since, panels}``.
         Panel code runs only while its tab is the visible one; a tool that needs it can say so."""

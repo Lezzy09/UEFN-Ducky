@@ -198,8 +198,11 @@ Panels are sandboxed iframes that talk to the host with `postMessage` on channel
 | `data.get` / `data.put` / `data.list` / `data.delete` | One JSON doc per key (≤ 1 MB) |
 | `files.put` / `files.get` / `files.list` / `files.delete` | Base64 files (≤ 100 MB) |
 | `cache.get` / `cache.set` / `cache.clear` | Throwaway cache |
-| `files.pick` | `{accept?: "video"\|"audio"\|"image"\|"any", multiple?}` → `{files: [{path, name, kind, url}]}`: the PC's file picker. Big media stays where it is: pass `path` to your backend (ffprobe/ffmpeg read it in place) and play `url` (streams with seeking). Never upload large files through `plugin.call` in chunks: a 7 GB video froze the app. Not available on a phone. |
+| `files.pick` | `{accept?: "video"\|"audio"\|"image"\|"mesh"\|"pdf"\|"svg"\|"any", multiple?}` → `{files: [{kind, path, name, url}]}`; cancel → `{files: []}`. The PC's file picker. Big media stays where it is: pass `path` to your backend (ffprobe/ffmpeg read it in place) and play `url` (HTTP Range, seekable). `url` is "" for types a panel can't play (e.g. .avi): play a proxy instead. Never upload large files through `plugin.call` in chunks: a 7 GB video froze the app. A phone gets an error. |
 | `llm.complete` | `{system, user, model?}` → text from the user's chosen model |
+
+Backend: `api.media_url(path)` → the same seekable link for any local media file (a proxy your
+backend made, or a picked original); "" when a panel can't play that type. Loopback only.
 
 Host pushes: `appearance_theme`, `panel.visibility` (`visible`),
 `plugin_scope_changed` (re-read your data), and the types you subscribed to.
