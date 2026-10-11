@@ -544,6 +544,45 @@ def _agent_modes(agent_id: str) -> tuple[str, ...]:
     return ()
 
 
+def _agent_plugin(agent_id: str) -> dict[str, str]:
+    """The installed plugin that adds this agent: id, name, version and where it came from."""
+    pid = str(_agent_registration(agent_id).get("plugin_id") or "").strip()
+    if not pid:
+        return {}
+    try:
+        from backend.uefn_plugins.plugin_version import format_plugin_version
+        from backend.uefn_plugins.store import load_plugin_manifest
+
+        manifest = load_plugin_manifest(pid) or {}
+        version = format_plugin_version(manifest["version"]) if manifest.get("version") else ""
+    except Exception:
+        manifest, version = {}, ""
+    return {
+        "id": pid,
+        "label": str(manifest.get("label") or pid),
+        "version": str(version or ""),
+        "source": str(manifest.get("source") or "local"),
+    }
+
+
+def _agents_that_ask() -> list[str]:
+    """Agents on this PC that stop for approval cards: Ducky, then any plugin agent that can."""
+    from backend.agent.coding_agents.base import coding_agent_label
+
+    labels = [coding_agent_label("ducky")]
+    try:
+        from backend.uefn_plugins.host import registered_coding_agent_ids
+
+        for aid in registered_coding_agent_ids():
+            if aid != "ducky" and MODE_ASK in _agent_modes(aid):
+                label = coding_agent_label(aid)
+                if label not in labels:
+                    labels.append(label)
+    except Exception:
+        pass
+    return labels
+
+
 def chat_permissions(conv_id: str, agent: str = "") -> dict[str, Any]:
     """Everything the chat's permissions pop-up shows. ``agent``: the agent its next turn
     uses (the composer's pick), else the chat's own."""
@@ -556,13 +595,36 @@ def chat_permissions(conv_id: str, agent: str = "") -> dict[str, Any]:
     allow = allow_state(conv_id)
     inherited = bool(allow["on"]) and not allow["own"]
     mode = MODE_ALL if allow["on"] else (MODE_ASK if _own_mode(conv_id) == MODE_ASK else MODE_EDITS)
+    # An agent that never stops for a card: say what it does instead of offering modes it ignores.
+    note = hint = ""
+    if not honoured:
+        note = f"{label} edits files and runs commands without asking. Ducky can't stop it to ask first."
+        others = [name for name in _agents_that_ask() if name != label]
+        if others:
+            hint = f"To approve changes first, switch this chat to {' or '.join(others)}."
+    # An agent whose plugin is older than the modes it is missing: name that plugin and its version.
+    update: dict[str, Any] | None = None
+    if honoured and any(m not in honoured for m in MODES):
+        plugin = _agent_plugin(agent_id)
+        if plugin:
+            update = {
+                "plugin_id": plugin["id"],
+                "label": plugin["label"],
+                "version": plugin["version"],
+                # Only a Store install can be updated from the Store; a local copy is the owner's own.
+                "from_store": plugin["source"] == "store",
+            }
     modes: list[dict[str, Any]] = []
     for mode_id in MODES:
         name, description = MODE_TEXT[mode_id]
         if not honoured:
-            reason = f"{label} doesn't ask for approval in Ducky."
+            reason = note
         elif mode_id not in honoured:
-            reason = f"Update {label} in the Store to use this."
+            if update:
+                have = f" (this PC has {update['version']})" if update["version"] else ""
+                reason = f"Needs a newer {update['label']} plugin{have}."
+            else:
+                reason = f"Needs a newer version of the plugin that adds {label}."
         elif inherited and mode_id != MODE_ALL:
             reason = f"Allow everything is on from {allow['from_title']}. Turn it off there."
         else:
@@ -577,9 +639,40 @@ def chat_permissions(conv_id: str, agent: str = "") -> dict[str, Any]:
         "agent": agent_id,
         "agent_label": label,
         "asks": bool(honoured),
+        "note": note,
+        "hint": hint,
+        "update": update,
         "modes": modes,
         "rules": allowed_rules(conv_id),
     }
+
+
+def update_agent_plugin(agent: str) -> dict[str, Any]:
+    """Install the Store's newest version of the plugin that adds ``agent`` (the pop-up's Update)."""
+    agent_id = (agent or "").strip().lower().replace("-", "_")
+    plugin = _agent_plugin(agent_id)
+    if not plugin:
+        raise ValueError("Ducky can't tell which plugin adds this agent.")
+    if plugin["source"] != "store":
+        raise ValueError(
+            f"Your {plugin['label']} plugin is a local copy, so the Store can't update it. "
+            "Update that copy, or remove it and install it from the Store."
+        )
+    from frontend.duckyos_account import DuckyOSAccountError, store_download_and_install
+
+    try:
+        result = store_download_and_install(plugin["id"], replace=True, is_update=True)
+    except DuckyOSAccountError as exc:
+        raise ValueError(exc.message or f"Could not update {plugin['label']}.") from exc
+    if not result.get("ok"):
+        raise ValueError(str(result.get("error") or f"Could not update {plugin['label']}."))
+    try:
+        from frontend.ui_web.agent_modes import push_ui_event
+
+        push_ui_event({"type": "uefn_plugins_changed"})
+    except Exception:
+        pass
+    return {"ok": True, "plugin_id": plugin["id"], "version": str(result.get("version") or "")}
 
 
 def _holds_local_only_plugin(root: str) -> bool:

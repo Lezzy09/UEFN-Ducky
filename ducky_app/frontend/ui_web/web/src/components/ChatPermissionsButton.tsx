@@ -91,8 +91,21 @@ export function ChatPermissionsButton({ convId, codingAgent }: ChatPermissionsBu
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open, state, pickMode]);
 
+  const [updating, setUpdating] = useState(false);
+  const updatePlugin = useCallback(async () => {
+    setUpdating(true);
+    try {
+      await apply(() => getApi()?.update_agent_plugin?.(convId, codingAgent));
+    } finally {
+      setUpdating(false);
+    }
+  }, [apply, convId, codingAgent]);
+
   const title = state ? (state.asks ? `Permissions: ${state.label}` : `Permissions: ${state.agent_label} never asks`) : "Permissions";
   const rules = state?.rules ?? [];
+  // An agent that never stops for a card gets one honest line, not modes it would ignore.
+  const neverAsks = Boolean(state && !state.asks);
+  const update = state?.asks ? state.update : null;
 
   return (
     <div className="ui-relative chat-perm">
@@ -112,11 +125,16 @@ export function ChatPermissionsButton({ convId, codingAgent }: ChatPermissionsBu
       <DropdownPanel anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} placement="top" width={300} idealHeight={460}>
         <div className="chat-perm-menu" role="menu" aria-label="Permissions">
           <div className="chat-perm-caption">Permissions</div>
-          {state && !state.asks ? <div className="chat-perm-note">{state.modes[0]?.reason}</div> : null}
+          {neverAsks ? (
+            <>
+              <div className="chat-perm-lead">{state?.note || state?.modes[0]?.reason}</div>
+              {state?.hint ? <div className="chat-perm-note">{state.hint}</div> : null}
+            </>
+          ) : null}
           {state && state.asks && !state.own ? (
             <div className="chat-perm-note">Allow everything is on from {state.from_title}.</div>
           ) : null}
-          {(state?.modes ?? []).map((mode, index) => {
+          {(neverAsks ? [] : state?.modes ?? []).map((mode, index) => {
             const active = mode.id === state?.mode;
             return (
               <button
@@ -145,39 +163,56 @@ export function ChatPermissionsButton({ convId, codingAgent }: ChatPermissionsBu
               </button>
             );
           })}
-          <div className="chat-perm-divider" role="separator" />
-          <div className="chat-perm-caption">Allowed in this chat</div>
-          {rules.length === 0 ? (
-            <div className="chat-perm-empty">Nothing yet. "Always allow" on an approval card adds it here.</div>
-          ) : (
-            <ul className="chat-perm-rules" aria-label="Allowed in this chat">
-              {rules.map((rule) => (
-                <li key={rule.rule} className="chat-perm-rule">
-                  <span className="chat-perm-rule-label" title={rule.label}>
-                    {rule.label}
-                  </span>
-                  <button
-                    type="button"
-                    className="chat-perm-rule-remove"
-                    aria-label={`Remove ${rule.label}`}
-                    title="Remove"
-                    onClick={() => void apply(() => getApi()?.remove_agent_permission_rule?.(convId, rule.rule, codingAgent))}
-                  >
-                    <Icons.Close />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          {rules.length > 1 ? (
-            <button
-              type="button"
-              className="chat-perm-clear"
-              onClick={() => void apply(() => getApi()?.clear_agent_permission_rules?.(convId, codingAgent))}
-            >
-              Clear all
-            </button>
+          {update ? (
+            <div className="chat-perm-update">
+              {update.from_store ? (
+                <button type="button" className="chat-perm-update-btn" disabled={updating} onClick={() => void updatePlugin()}>
+                  {updating ? `Updating ${update.label}…` : `Update ${update.label} plugin`}
+                </button>
+              ) : (
+                <span className="chat-perm-update-text">
+                  Your {update.label} plugin is a local copy, so Store updates don't reach it.
+                </span>
+              )}
+            </div>
           ) : null}
+          {neverAsks ? null : (
+            <>
+              <div className="chat-perm-divider" role="separator" />
+              <div className="chat-perm-caption">Allowed in this chat</div>
+              {rules.length === 0 ? (
+                <div className="chat-perm-empty">Nothing yet. "Always allow" on an approval card adds it here.</div>
+              ) : (
+                <ul className="chat-perm-rules" aria-label="Allowed in this chat">
+                  {rules.map((rule) => (
+                    <li key={rule.rule} className="chat-perm-rule">
+                      <span className="chat-perm-rule-label" title={rule.label}>
+                        {rule.label}
+                      </span>
+                      <button
+                        type="button"
+                        className="chat-perm-rule-remove"
+                        aria-label={`Remove ${rule.label}`}
+                        title="Remove"
+                        onClick={() => void apply(() => getApi()?.remove_agent_permission_rule?.(convId, rule.rule, codingAgent))}
+                      >
+                        <Icons.Close />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {rules.length > 1 ? (
+                <button
+                  type="button"
+                  className="chat-perm-clear"
+                  onClick={() => void apply(() => getApi()?.clear_agent_permission_rules?.(convId, codingAgent))}
+                >
+                  Clear all
+                </button>
+              ) : null}
+            </>
+          )}
           {error ? (
             <div className="chat-perm-error" role="alert">
               {error}

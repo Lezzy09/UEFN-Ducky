@@ -1257,6 +1257,15 @@ class PanelApiChatsMixin:
 
         return chat_permissions(str(conv_id or ""), str(agent or ""))
 
+    def update_agent_plugin(self, conv_id: str, agent: str = "") -> dict[str, Any]:
+        """The pop-up's Update: install the Store's newest plugin for this agent, then its new modes."""
+        from backend.tools.panel import permission_prompt as permissions
+
+        conv_id = str(conv_id or "")
+        agent_id = str(agent or "") or permissions.chat_permissions(conv_id)["agent"]
+        permissions.update_agent_plugin(agent_id)
+        return permissions.chat_permissions(conv_id, agent_id)
+
     def set_agent_permission_mode(self, conv_id: str, mode: str, agent: str = "") -> dict[str, Any]:
         """Pick "ask", "edits" or "all" for this chat; its next turn uses it."""
         from backend.tools.panel import permission_prompt as permissions

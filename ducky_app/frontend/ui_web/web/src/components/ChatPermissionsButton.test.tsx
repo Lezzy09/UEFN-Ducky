@@ -102,17 +102,56 @@ describe("ChatPermissionsButton", () => {
     await waitFor(() => expect(screen.getByText(/Nothing yet/)).toBeTruthy());
   });
 
-  it("shows every mode as unavailable, with the reason, for an agent that never asks", async () => {
+  it("says what an agent that never asks does, with no modes to pick and no allowed list", async () => {
+    const note = "Codex edits files and runs commands without asking. Ducky can't stop it to ask first.";
     api.get_agent_permissions.mockImplementation(async () =>
-      state("edits", { agent: "codex", agent_label: "Codex" }, "Codex doesn't ask for approval in Ducky."),
+      state(
+        "edits",
+        { agent: "codex", agent_label: "Codex", note, hint: "To approve changes first, switch this chat to Ducky or Claude Code." },
+        note,
+      ),
     );
     render(<ChatPermissionsButton convId="c1" codingAgent="codex" />);
     fireEvent.click(await screen.findByRole("button", { name: "Permissions: Codex never asks" }));
-    expect(screen.getByText("Codex doesn't ask for approval in Ducky.")).toBeTruthy();
-    const rows = screen.getAllByRole("menuitemradio") as HTMLButtonElement[];
-    expect(rows.every((row) => row.disabled)).toBe(true);
-    fireEvent.click(rows[2]);
+    expect(screen.getByText(note)).toBeTruthy();
+    expect(screen.getByText("To approve changes first, switch this chat to Ducky or Claude Code.")).toBeTruthy();
+    // No mode is shown as ticked, because none of them applies to Codex.
+    expect(screen.queryAllByRole("menuitemradio")).toHaveLength(0);
+    expect(screen.queryByText("Allowed in this chat")).toBeNull();
     fireEvent.keyDown(window, { key: "1" });
     expect(api.set_agent_permission_mode).not.toHaveBeenCalled();
+  });
+
+  it("names the old plugin on the mode it lacks and updates it from the Store in place", async () => {
+    const reason = "Needs a newer Anthropic plugin (this PC has 1.0.54).";
+    const old = state("all", { update: { plugin_id: "anthropic", label: "Anthropic", version: "1.0.54", from_store: true } });
+    old.modes[0] = { ...old.modes[0], available: false, reason };
+    api.get_agent_permissions.mockImplementation(async () => old);
+    const fresh = state("all");
+    const update = vi.fn(async () => fresh);
+    Object.assign(api, { update_agent_plugin: update });
+    render(<ChatPermissionsButton convId="c1" codingAgent="claude_code" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Permissions: Allow everything" }));
+    const ask = screen.getByRole("menuitemradio", { name: "Ask before changes" }) as HTMLButtonElement;
+    expect(ask.disabled).toBe(true);
+    expect(screen.getByText(reason)).toBeTruthy();
+    // After the update the new plugin honours Ask before changes.
+    api.get_agent_permissions.mockImplementation(async () => fresh);
+    fireEvent.click(screen.getByRole("button", { name: "Update Anthropic plugin" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith("c1", "claude_code"));
+    await waitFor(() =>
+      expect((screen.getByRole("menuitemradio", { name: "Ask before changes" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(screen.queryByRole("button", { name: "Update Anthropic plugin" })).toBeNull();
+    delete (api as Record<string, unknown>).update_agent_plugin;
+  });
+
+  it("says a local copy of the plugin is not updated from the Store", async () => {
+    const old = state("edits", { update: { plugin_id: "anthropic", label: "Anthropic", version: "1.0.54", from_store: false } });
+    old.modes[0] = { ...old.modes[0], available: false, reason: "Needs a newer Anthropic plugin (this PC has 1.0.54)." };
+    api.get_agent_permissions.mockImplementation(async () => old);
+    await openPopup();
+    expect(screen.getByText("Your Anthropic plugin is a local copy, so Store updates don't reach it.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Update Anthropic plugin" })).toBeNull();
   });
 });

@@ -390,25 +390,72 @@ def test_the_mode_goes_with_its_chat_and_to_a_recycled_twin(conv) -> None:
     assert pp.permission_mode("twin") == "ask"
 
 
-def test_each_agent_shows_the_modes_it_can_honour(monkeypatch, conv) -> None:
-    regs = {
-        "claude_code": {"chat_permission_modes": ("ask", "edits", "all"), "settings_defaults": {"permission_mode": "acceptEdits"}},
-        "old_claude": {"settings_defaults": {"permission_mode": "acceptEdits"}},
-        "codex": {"settings_defaults": {}},
-    }
-    monkeypatch.setattr(pp, "_agent_registration", lambda aid: regs.get(aid, {}))
-    monkeypatch.setattr("backend.agent.coding_agents.base.coding_agent_label",
-                        lambda aid: {"codex": "Codex", "old_claude": "Claude Code"}.get(aid, aid))
+_LABELS = {"ducky": "Ducky", "claude_code": "Claude Code", "old_claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"}
 
+
+@pytest.fixture
+def agents(monkeypatch):
+    regs = {
+        "claude_code": {"plugin_id": "anthropic", "chat_permission_modes": ("ask", "edits", "all"),
+                        "settings_defaults": {"permission_mode": "acceptEdits"}},
+        "old_claude": {"plugin_id": "anthropic", "settings_defaults": {"permission_mode": "acceptEdits"}},
+        "codex": {"plugin_id": "openai", "settings_defaults": {}},
+        "cursor": {"plugin_id": "cursor", "settings_defaults": {}},
+    }
+    manifests = {"anthropic": {"label": "Anthropic", "version": "1.0.54", "source": "store"}}
+    monkeypatch.setattr(pp, "_agent_registration", lambda aid: regs.get(aid, {}))
+    monkeypatch.setattr("backend.agent.coding_agents.base.coding_agent_label", lambda aid: _LABELS.get(aid, aid))
+    monkeypatch.setattr("backend.uefn_plugins.host.registered_coding_agent_ids", lambda: tuple(sorted(regs)))
+    monkeypatch.setattr("backend.uefn_plugins.store.load_plugin_manifest", lambda pid: manifests.get(pid))
+    return regs, manifests
+
+
+def test_each_agent_shows_the_modes_it_can_honour(agents, conv) -> None:
     def reasons(agent: str) -> dict[str, str]:
         return {m["id"]: m["reason"] for m in pp.chat_permissions("c1", agent)["modes"]}
 
     assert reasons("ducky") == {"ask": "", "edits": "", "all": ""}
     assert reasons("claude_code") == {"ask": "", "edits": "", "all": ""}
-    assert reasons("old_claude") == {"ask": "Update Claude Code in the Store to use this.", "edits": "", "all": ""}
+    assert pp.chat_permissions("c1", "claude_code")["update"] is None
+    # An older Claude Code plugin: the missing mode names the plugin and the version on this PC.
+    old = pp.chat_permissions("c1", "old_claude")
+    assert {m["id"]: m["reason"] for m in old["modes"]} == {
+        "ask": "Needs a newer Anthropic plugin (this PC has 1.0.54).", "edits": "", "all": ""}
+    assert old["update"] == {"plugin_id": "anthropic", "label": "Anthropic", "version": "1.0.54", "from_store": True}
+    assert old["note"] == ""
+
+
+def test_an_agent_that_never_asks_says_what_it_does_and_which_agents_do_ask(agents, conv) -> None:
     state = pp.chat_permissions("c1", "codex")
-    assert not state["asks"] and {m["reason"] for m in state["modes"]} == {"Codex doesn't ask for approval in Ducky."}
-    assert state["mode"] == "edits" and state["label"] == "Accept edits"
+    assert not state["asks"]
+    assert state["note"] == "Codex edits files and runs commands without asking. Ducky can't stop it to ask first."
+    # Only agents on this PC that really stop for a card: not the older Claude Code, not Cursor.
+    assert state["hint"] == "To approve changes first, switch this chat to Ducky or Claude Code."
+    assert all(not m["available"] and m["reason"] == state["note"] for m in state["modes"])
+    assert state["update"] is None
+    # The chat's own mode is kept for when it goes back to an agent that asks.
+    assert state["mode"] == "edits"
+
+
+def test_the_update_button_installs_the_store_plugin_and_never_a_local_copy(agents, conv, monkeypatch) -> None:
+    _regs, manifests = agents
+    calls: list[tuple[str, bool]] = []
+
+    def fake_install(slug, *, replace=True, is_update=False, version=None):
+        calls.append((slug, is_update))
+        return {"ok": True, "version": "1.0.56"}
+
+    monkeypatch.setattr("frontend.duckyos_account.store_download_and_install", fake_install)
+    assert pp.update_agent_plugin("old_claude") == {"ok": True, "plugin_id": "anthropic", "version": "1.0.56"}
+    assert calls == [("anthropic", True)]
+
+    manifests["anthropic"]["source"] = "local"
+    assert pp.chat_permissions("c1", "old_claude")["update"]["from_store"] is False
+    with pytest.raises(ValueError, match="local copy"):
+        pp.update_agent_plugin("old_claude")
+    assert len(calls) == 1
+    with pytest.raises(ValueError, match="which plugin"):
+        pp.update_agent_plugin("nobody")
 
 
 def test_a_mode_set_by_the_starting_chat_cannot_be_changed_here(monkeypatch, conv) -> None:

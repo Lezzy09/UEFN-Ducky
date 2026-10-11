@@ -67,6 +67,12 @@ export interface ChatPermissionsDto {
   agent_label: string;
   /** False when the agent never asks for approval inside Ducky (its modes are all unavailable). */
   asks: boolean;
+  /** For an agent that never asks: what it does instead ("Codex edits files … without asking"). */
+  note?: string;
+  /** For an agent that never asks: which agents on this PC do ask. */
+  hint?: string;
+  /** Set when a mode is missing because the agent's plugin is too old. */
+  update?: { plugin_id: string; label: string; version: string; from_store: boolean } | null;
   modes: ChatPermissionModeDto[];
   rules: { rule: string; label: string }[];
 }
@@ -3103,6 +3109,7 @@ export interface PanelApi {
   set_agent_permission_mode?(conv_id: string, mode: ChatPermissionModeId, agent?: string): Promise<ChatPermissionsDto>;
   remove_agent_permission_rule?(conv_id: string, rule: string, agent?: string): Promise<ChatPermissionsDto>;
   clear_agent_permission_rules?(conv_id: string, agent?: string): Promise<ChatPermissionsDto>;
+  update_agent_plugin?(conv_id: string, agent?: string): Promise<ChatPermissionsDto>;
   list_saved_agent_permissions(): Promise<SavedAgentPermissionDto[]>;
   revoke_saved_agent_permission(conv_id: string, rule: string): Promise<{ ok: boolean }>;
   move_conversation(conv_id: string, folder_id: string): Promise<void>;

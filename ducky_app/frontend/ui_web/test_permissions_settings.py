@@ -99,7 +99,7 @@ def test_chat_permissions_popup_api_refuses_a_mode_the_agent_cannot_use(monkeypa
     monkeypatch.setattr(permissions, "_agent_registration", lambda _aid: {})
     chat = create_conversation(PanelSettings.load(), "", title="Codex chat")
     api = PanelApiChatsMixin()
-    with pytest.raises(ValueError, match="doesn't ask for approval in Ducky"):
+    with pytest.raises(ValueError, match="without asking"):
         api.set_agent_permission_mode(chat.id, "all", "codex")
     assert not permissions.allows_everything(chat.id)
 

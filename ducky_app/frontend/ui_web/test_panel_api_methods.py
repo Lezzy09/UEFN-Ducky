@@ -272,6 +272,7 @@ _PUBLIC_METHODS = frozenset({
     'set_agent_permission_mode',
     'remove_agent_permission_rule',
     'clear_agent_permission_rules',
+    'update_agent_plugin',
     'list_saved_agent_permissions',
     'revoke_saved_agent_permission',
     'set_workflow_editor_prefs',
