@@ -60,5 +60,9 @@ export async function fetchChatRows(chatId: string, timeoutMs = CHAT_LOAD_TIMEOU
       window.clearTimeout(timer);
     }
   }
-  return withTimeout(api.load_messages(chatId), timeoutMs);
+  const rows: unknown = await withTimeout(api.load_messages(chatId), timeoutMs);
+  // On a phone a relay blip or a 502 answers with nothing at all: that is a failed load
+  // (the chat says so and retries), never an empty or missing list to render.
+  if (!Array.isArray(rows)) throw new Error("no messages came back (the connection dropped)");
+  return rows as ChatMessage[];
 }

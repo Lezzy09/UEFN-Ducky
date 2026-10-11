@@ -551,6 +551,7 @@ export function chatRunReducer(state: RunState, action: RunAction): RunState {
       return applyAgentEvent(state, action.event);
 
     case "loaded":
+      if (!Array.isArray(action.rows)) return state; // a load that brought nothing keeps what is shown
       return isInFlight(state) || state.stopped
         ? reset(state, { messages: mergeCommitted(state.messages, action.rows) })
         : reset(state, { messages: action.rows, stream: "", thinking: "", statusText: "", hasNewBelow: false });

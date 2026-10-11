@@ -492,6 +492,12 @@ describe("chatRunReducer — loaded merge vs replace", () => {
     { id: 2, role: "assistant", text: "hey" },
   ];
 
+  it("keeps what is shown when a load brings nothing (a phone's dropped connection)", () => {
+    const shown = chatRunReducer(initialRunState, { type: "loaded", rows: backend });
+    const s = chatRunReducer(shown, { type: "loaded", rows: undefined as unknown as ChatMessage[] });
+    expect(s).toBe(shown);
+  });
+
   it("replaces the whole tail when idle", () => {
     const s = chatRunReducer(initialRunState, { type: "loaded", rows: backend });
     expect(texts(s)).toEqual(["hi", "hey"]);
