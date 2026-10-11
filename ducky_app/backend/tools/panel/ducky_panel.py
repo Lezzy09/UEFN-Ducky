@@ -2016,6 +2016,21 @@ def ducky_create_plan(
       ``[{id?, content, status?, children?}, …]``, NOT text inside overview.
       Followable shape: Diagnose → Fix → Verify; each leaf = one concrete action + Done-when.
 
+    Write steps a person can follow:
+    - One outcome per step, about 15–30 minutes of one agent's work. "Check all features end
+      to end" is fifteen steps (one per feature or check), not one; then progress shows and a
+      failing check names itself.
+    - ``content``: a short title in plain words (under 80 characters).
+    - ``body_markdown`` on every step: what to do, Done when (name the check tool), and one
+      concrete example of the result. Sections get a one-line description too.
+    Example step:
+      {"id": "mov-export", "content": "Export the test project as a 15 s MOV",
+       "body_markdown": "Do: render the test project with the bundled ffmpeg.\\n"
+                        "Done when: imk_render_get says done and the file plays 15 s at 1920x1080.\\n"
+                        "Example: Island_trailer.mov, 15.0 s, 30 fps, 41 MB."}
+    The result lists ``plan_review`` for steps that are too big or have no description: fix them
+    before starting.
+
     Never leave only a chat prose Fix plan — call this tool with ``nodes`` filled.
     Legacy ``todos`` (flat {id?, content, status?}) become root nodes.
     chat_id defaults to the active conversation. One plan per chat; hierarchy is inside nodes.
@@ -2065,9 +2080,9 @@ def ducky_create_plan(
             "plan has 0 steps — pass nodes=[{id, content, children}] as a JSON array "
             "argument (not inside overview). UI Steps stay empty until nodes are set."
         )
-    from backend.agent.coding_agents.plans import attach_next_tick
+    from backend.agent.coding_agents.plans import attach_next_tick, with_plan_review
 
-    return tool_json(attach_next_tick(out, plan), pretty=pretty)
+    return tool_json(with_plan_review(attach_next_tick(out, plan), plan), pretty=pretty)
 
 
 @mcp.tool()
@@ -2130,7 +2145,12 @@ def ducky_update_plan(
             "plan still has 0 steps — pass nodes as a JSON array argument, "
             "not pasted into overview text."
         )
-    return tool_json(attach_next_tick(out, plan), pretty=pretty)
+    out = attach_next_tick(out, plan)
+    if nodes is not None:
+        from backend.agent.coding_agents.plans import with_plan_review
+
+        out = with_plan_review(out, plan)
+    return tool_json(out, pretty=pretty)
 
 
 @mcp.tool()
@@ -2206,13 +2226,18 @@ def ducky_plan_add_node(
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     if plan.get("kind") != "template":
         push_plan_updated(plan)
+    from backend.agent.coding_agents.plans import with_plan_review
+
     return tool_json(
-        {
-            "ok": True,
-            "plan": plan,
-            "progress": todo_progress(plan) if plan.get("kind") != "template" else None,
-            "outline": [{"n": lab, "id": n["id"], "content": n["content"], "status": n["status"]} for lab, n in outline_numbers(plan.get("nodes"))],
-        },
+        with_plan_review(
+            {
+                "ok": True,
+                "plan": plan,
+                "progress": todo_progress(plan) if plan.get("kind") != "template" else None,
+                "outline": [{"n": lab, "id": n["id"], "content": n["content"], "status": n["status"]} for lab, n in outline_numbers(plan.get("nodes"))],
+            },
+            plan,
+        ),
         pretty=pretty,
     )
 
