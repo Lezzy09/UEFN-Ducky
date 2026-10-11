@@ -565,16 +565,6 @@ def _message_plain_text(msg: dict[str, Any]) -> str:
     return ""
 
 
-# Messages that reach a member's chat from Ducky or other agents, never from a person:
-# agent mail, broker notices, re-delivered reports (a2a_broker), the plan's completion
-# notices (team_plan_events) and the team keeper's wakes. Each was posted on the hub as
-# "the user talked to me privately".
-_AGENT_TRAFFIC = (
-    "[ducky:agent-message]", "[ducky:agent-notice]", "Reports you have not acted on",
-    "[Team plan]", "[Ducky keeper]",
-)
-
-
 def _agent_running(conv_id: str) -> bool:
     try:
         from frontend.ui_web.agent_modes import is_agent_running
@@ -594,16 +584,83 @@ def announce_private_member_talk(member_conv_id: str, *, push: PushFn | None = N
         return _announce_private_member_talk(member_conv_id, push=push, project_root=project_root)
 
 
+_SENDER_LINE = re.compile(r"^\[ducky:agent-message\] from (?:(.*?) \(chat [^)\s]+\)|chat (\S+))")
+_FENCE_LINE = re.compile(r"^(?:\[ducky:untrusted-content [^\]]*\].*|<<<(?:end )?untrusted:[\w-]+>>>)$")
+
+
+def _turn_origin(plain: str) -> tuple[str, str]:
+    """(who asked, what they asked) for the user row that started a member's turn.
+
+    Rows another ducky or Ducky itself posted carry a protocol header; anything else the
+    person typed in that chat.
+    """
+    if plain.startswith("[Team plan]"):
+        return "Team plan update", plain[len("[Team plan]"):].strip()
+    if plain.startswith("[Ducky keeper]"):
+        return "Ducky keeper", plain[len("[Ducky keeper]"):].strip()
+    if plain.startswith("Reports you have not acted on"):
+        return "Reports waiting", plain[len("Reports you have not acted on"):].strip(" :\n")
+    if plain.startswith("[ducky:agent-notice]"):
+        lines = [ln[len("[ducky:agent-notice]"):].strip() for ln in plain.splitlines()
+                 if ln.startswith("[ducky:agent-notice]")]
+        return "Team notice", " ".join(lines[:1])
+    if plain.startswith("[ducky:agent-message]"):
+        sender = "Another ducky"
+        kind = "Message from"
+        body: list[str] = []
+        for line in plain.splitlines():
+            match = _SENDER_LINE.match(line.strip())
+            if match:
+                sender = (match.group(1) or f"chat {(match.group(2) or '')[:8]}").strip()
+                continue
+            if line.startswith("[ducky:agent-message]"):
+                if "assignment from your group leader" in line:
+                    kind = "Assignment from"
+                elif "This answers your request" in line and kind != "Assignment from":
+                    kind = "Answer from"
+                continue
+            if _FENCE_LINE.match(line.strip()):
+                continue
+            body.append(line)
+        return f"{kind} {sender}", "\n".join(body).strip()
+    return "The user asked me privately", plain
+
+
+def _hub_chain(group_id: str, project_root: str | None = None) -> list[tuple[str, list[str], list[str]]]:
+    """The member's own group, then every group above it, as (hub id, names of the groups
+    between that hub and the member, their hub ids). The member's own group has none."""
+    from frontend.ui_web.project_chats import island_for_conversation
+
+    _convs, folders = island_for_conversation(group_id, project_root)
+    by_hub = {(f.group_hub_id or "").strip(): f for f in folders if (getattr(f, "group_hub_id", None) or "").strip()}
+    by_id = {f.id: f for f in folders}
+    chain: list[tuple[str, list[str], list[str]]] = []
+    labels: list[str] = []
+    ids: list[str] = []
+    hub = group_id
+    while hub and hub not in {c[0] for c in chain}:
+        chain.append((hub, list(labels), list(ids)))
+        folder = by_hub.get(hub)
+        if folder is None:
+            break
+        labels.insert(0, str(folder.name or "Group"))
+        ids.insert(0, hub)
+        parent = by_id.get((folder.parent_id or "").strip())
+        hub = (getattr(parent, "group_hub_id", None) or "").strip() if parent is not None else ""
+    return chain
+
+
 def _announce_private_member_talk(
     member_conv_id: str,
     *,
     push: PushFn | None = None,
     project_root: str | None = None,
 ) -> bool:
-    """After a private DM with a group member, post a short note on the group hub.
+    """After a member's turn, post who asked it what and what it said on its group chat
+    and on every group above it, so each group chat is an overview of the work below.
 
-    So everyone sees that the user talked to them and about what — without
-    dumping the full side-chat transcript into the roundtable.
+    The note names who really asked (the person, the group's lead, another ducky, the
+    team plan). Roundtable turns post themselves; briefings are copies of the feed.
     """
     mid = (member_conv_id or "").strip()
     if not mid:
@@ -618,7 +675,8 @@ def _announce_private_member_talk(
     if not group or not is_group_conversation(group):
         return False
 
-    user_text = ""
+    asked = ""
+    origin = ""
     reply = ""
     for msg in reversed(list(getattr(member, "messages", None) or [])):
         role = msg.get("role")
@@ -634,64 +692,42 @@ def _announce_private_member_talk(
             if msg.get("group_briefing"):
                 return False
             plain = _message_plain_text(msg)
-            if not plain:
+            if not plain or is_group_turn_prompt(plain):
                 return False
-            # Only a person's private talk is news for the group. Agent-to-agent
-            # messages and notices are team traffic: announcing each one posted a
-            # "the user talked to me" note on the hub and a briefing into every
-            # other member's chat, hundreds per hour on a busy team.
-            if is_group_turn_prompt(plain) or plain.startswith(_AGENT_TRAFFIC):
-                return False
-            user_text = plain
+            origin, asked = _turn_origin(plain)
             break
-    if not user_text or not reply:
+    if not origin or not reply:
         return False
-    signature = hashlib.sha256(repr((len(member.messages), user_text, reply)).encode()).hexdigest()
+    signature = hashlib.sha256(repr((len(member.messages), asked, reply)).encode()).hexdigest()
     announcement_key = (str(project_root or ""), mid)
     if _announced_turns.get(announcement_key) == signature:
         return False
 
     sync_group_members_from_folder(group, project_root=project_root)
     group = load_conversation(group_id, project_root=project_root) or group
-    speaker: dict[str, Any] | None = None
-    for row in group_members(group):
-        if str(row.get("member_conv_id") or "") == mid:
-            speaker = row
-            break
-    if speaker is None:
-        speaker = {
-            "member_conv_id": mid,
-            "name": str(
-                getattr(member, "ducky_name", None) or getattr(member, "title", None) or "Ducky"
-            ),
-            "tts_voice": str(getattr(member, "tts_voice", None) or ""),
-            "tts_speed": float(getattr(member, "tts_speed", None) or 0.0),
-        }
+    speaker: dict[str, Any] = next(
+        (dict(row) for row in group_members(group) if str(row.get("member_conv_id") or "") == mid), {}
+    ) or {
+        "member_conv_id": mid,
+        "name": str(getattr(member, "ducky_name", None) or getattr(member, "title", None) or "Ducky"),
+    }
+    # The member's own voice reads its notes in Live mode.
+    if not speaker.get("tts_voice"):
+        speaker["tts_voice"] = str(getattr(member, "tts_voice", None) or "")
+        speaker["tts_speed"] = float(getattr(member, "tts_speed", None) or 0.0)
 
-    note = (
-        f"(Side chat) The user talked to me privately about: "
-        f"{_truncate_brief(user_text, 240)}\n"
-        f"What I said: {_truncate_brief(reply, 400)}"
-    )
-    author = author_payload(speaker)
-    append_group_assistant(
-        group,
-        text=note,
-        author=author,
-        project_root=project_root,
-        side_chat_announce=True,
-    )
+    lead = f"*{origin}:* {_truncate_brief(asked, 240)}" if asked else f"*{origin}*"
+    note = f"{lead}\n\n{_truncate_brief(reply, 600)}"
+    for hub_id, path, id_path in _hub_chain(group_id, project_root):
+        hub = group if hub_id == group_id else load_conversation(hub_id, project_root=project_root)
+        if hub is None or not is_group_conversation(hub):
+            continue
+        author = author_payload({**speaker, "group_path": path, "group_id_path": id_path})
+        append_group_assistant(hub, text=note, author=author, project_root=project_root, side_chat_announce=True)
+        if push is not None:
+            push({"type": "text_delta", "text": note, "conv_id": hub_id, "author": author})
+            push({"type": "assistant_done", "conv_id": hub_id, "author": author, "text": note})
     _announced_turns[announcement_key] = signature
-    if push is not None:
-        push({"type": "text_delta", "text": note, "conv_id": group_id})
-        push(
-            {
-                "type": "assistant_done",
-                "conv_id": group_id,
-                "author": author,
-                "text": note,
-            }
-        )
     return True
 
 def _member_aliases(member: dict[str, Any]) -> list[str]:
@@ -1224,6 +1260,8 @@ def _publish_member_reply(
                 "text": reply,
                 "conv_id": group_id,
                 "run_id": run_id,
+                # Live mode reads each member in its own voice from the first word.
+                "author": author,
             }
         )
         push(

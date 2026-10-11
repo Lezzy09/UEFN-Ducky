@@ -75,6 +75,26 @@ describe("liveSpeakService", () => {
     _resetLiveSpeakService();
   });
 
+  it("reads each group member in its own voice and keeps the group's voice", async () => {
+    const { startLiveChat } = await import("./liveSpeakService");
+    startLiveChat("hub", { voiceId: "group-voice", speed: 1, isGroup: true, speakerName: "Group" });
+    const intake = { name: "Media Intake", member_conv_id: "m1", tts_voice: "amy", tts_speed: 1.2 };
+    const qa = { name: "QA", member_conv_id: "m2", tts_voice: "david" };
+    eventHandler!({ type: "text_delta", conv_id: "hub", text: "Frames are ready. ", author: intake } as AgentEvent);
+    eventHandler!({ type: "assistant_done", conv_id: "hub", text: "Frames are ready.", author: intake } as AgentEvent);
+    eventHandler!({ type: "text_delta", conv_id: "hub", text: "Tests pass. ", author: qa } as AgentEvent);
+    eventHandler!({ type: "assistant_done", conv_id: "hub", text: "Tests pass.", author: qa } as AgentEvent);
+    eventHandler!({ type: "text_delta", conv_id: "hub", text: "Plain reply. " } as AgentEvent);
+    eventHandler!({ type: "assistant_done", conv_id: "hub", text: "Plain reply." } as AgentEvent);
+    const spoken = enqueueAnswerSpeak.mock.calls.map(([text, opts]) => [text, opts.voiceId, opts.speaker]);
+    expect(spoken).toEqual([
+      ["Frames are ready.", "amy", "Media Intake"],
+      ["Tests pass.", "david", "QA"],
+      ["Plain reply.", "group-voice", "Group"],
+    ]);
+    expect(enqueueAnswerSpeak.mock.calls[0][1].rate).toBe(1.2);
+  });
+
   it("keeps reconnect and mic failures visible during tool narration", async () => {
     const { startLiveChat } = await import("./liveSpeakService");
     const { patchLiveVoiceState, getLiveVoiceState } = await import("./liveChats");

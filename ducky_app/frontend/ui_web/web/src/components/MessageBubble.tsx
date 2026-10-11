@@ -82,7 +82,12 @@ export const MessageBubble = memo(function MessageBubble({
   const ttsActive = Boolean(readAlong);
   const speakVoice = author?.tts_voice || voiceId;
   const speakSpeed = author?.tts_speed ?? speed;
-  const authorName = author?.name?.trim();
+  // Group chats: which group (outer to inner) the speaking member works in.
+  const authorPath = (author?.group_path ?? []).map((g) => g.trim()).filter(Boolean);
+  let authorName = author?.name?.trim();
+  for (const group of authorPath) {
+    if (authorName?.startsWith(`${group} — `)) authorName = authorName.slice(group.length + 3);
+  }
 
   return (
     <div
@@ -96,6 +101,9 @@ export const MessageBubble = memo(function MessageBubble({
             className="message-bubble-author"
             style={{ ["--member-color" as string]: author?.color || "var(--accent)" }}
           >
+            {authorPath.length ? (
+              <span className="message-bubble-author-path">{authorPath.join(" › ")} › </span>
+            ) : null}
             {authorName}
           </div>
         ) : null}

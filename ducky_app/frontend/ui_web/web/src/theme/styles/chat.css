@@ -3879,6 +3879,11 @@
   margin-bottom: 4px;
 }
 
+.message-bubble-author-path {
+  color: var(--muted);
+  font-weight: 400;
+}
+
 .subagent-banner {
   display: flex;
   flex-wrap: wrap;

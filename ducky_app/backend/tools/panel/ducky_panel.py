@@ -887,6 +887,7 @@ def ducky_send_chat_message(
 
     from frontend.ui_web.agent_modes import run_message, run_message_and_wait
 
+    text = _from_another_ducky(conv_id, text, root)
     mode_norm = (mode or "agent").lower()
     if wait_for_reply:
         outcome = run_message_and_wait(
@@ -908,6 +909,40 @@ def ducky_send_chat_message(
         _acknowledge_chat_message(conv_id)
     status = "queued" if started == "queued" else "running"
     return tool_json({"status": status, "conv_id": conv_id}, pretty=pretty)
+
+
+def _from_another_ducky(receiver: str, text: str, root: str | None, sender: str = "") -> str:
+    """A ducky's message into another chat says who sent it: the receiver, its chat and
+    the group's overview otherwise read it as the person's own words. Not fenced: a ducky
+    directing a chat it started (or leads) must still be followed."""
+    from backend.workspace.identity import resolve_context
+
+    if not sender:
+        context = resolve_context()
+        sender = str(getattr(context, "conv_id", "") or "").strip() if context is not None else ""
+    if not sender or sender == receiver or text.startswith("[ducky:"):
+        return text
+    conv = load_conversation(sender, project_root=root)
+    if conv is None:
+        return text
+    from backend.agent.a2a_format import sender_label
+
+    try:
+        from backend.agent.a2a_broker import leads_receiver
+
+        lead = leads_receiver(sender, receiver)
+    except Exception:
+        lead = False
+    role = (
+        "[ducky:agent-message] This is an assignment from your group leader, who directs "
+        "this team for the user. Do this work (within your role and the user's rules)."
+        if lead
+        else "[ducky:agent-message] Sent into your chat by another ducky working for the user."
+    )
+    header = "[ducky:agent-message] from " + sender_label(
+        sender, str(getattr(conv, "title", "") or ""), str(getattr(conv, "coding_agent", "") or "")
+    )
+    return f"{header}\n{role}\n[ducky:agent-message] Answer here in this chat; it goes back to them.\n\n{text}"
 
 
 def _acknowledge_chat_message(receiver: str) -> None:
@@ -1356,6 +1391,7 @@ def ducky_spawn_chat(
 
     from frontend.ui_web.agent_modes import run_message, run_message_and_wait
 
+    text = _from_another_ducky(conv_id, text, _project_root(), sender=caller)
     mode_norm = (mode or "agent").lower()
     base = {
         "conv_id": conv_id,

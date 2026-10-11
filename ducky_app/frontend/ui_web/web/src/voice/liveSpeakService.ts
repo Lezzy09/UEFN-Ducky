@@ -46,6 +46,8 @@ type LiveSession = {
   /** Assistant is still streaming — do not return to listening between sentences. */
   replyOpen: boolean;
   streamedThisTurn: boolean;
+  /** Group chats: the member writing the open reply, read in its own voice. */
+  replyAuthor: MessageAuthorDto | null;
 };
 
 const sessions = new Map<string, LiveSession>();
@@ -97,13 +99,19 @@ function publishBehind() {
   }
 }
 
-function speakOpts(session: LiveSession, speaker?: string) {
+/** A group member speaks in its own voice; the chat's voice is everyone else's. */
+function speakOpts(session: LiveSession, author?: MessageAuthorDto | null) {
   return {
     chatId: session.chatId,
-    speaker: speaker || session.speakerName || "Ducky",
-    voiceId: session.voiceId,
-    rate: session.speed,
+    speaker: author?.name || session.speakerName || "Ducky",
+    voiceId: author?.tts_voice || session.voiceId,
+    rate: author?.tts_speed || session.speed,
   };
+}
+
+function eventAuthor(event: AgentEvent): MessageAuthorDto | null {
+  const author = (event as { author?: unknown }).author;
+  return author && typeof author === "object" ? (author as MessageAuthorDto) : null;
 }
 
 function enqueueAnswerSentences(session: LiveSession, force: boolean): void {
@@ -113,11 +121,11 @@ function enqueueAnswerSentences(session: LiveSession, force: boolean): void {
   session.streamedThisTurn = true;
   for (const line of sentences) {
     session.lastFlushedAnswer = line;
-    enqueueAnswerSpeak(line, speakOpts(session));
+    enqueueAnswerSpeak(line, speakOpts(session, session.replyAuthor));
   }
 }
 
-function flushThinking(session: LiveSession) {
+function flushThinking(session: LiveSession, author: MessageAuthorDto | null = session.replyAuthor) {
   if (session.thinkingTimer != null) {
     window.clearTimeout(session.thinkingTimer);
     session.thinkingTimer = null;
@@ -130,22 +138,22 @@ function flushThinking(session: LiveSession) {
   const line = speakableThinkingLine(burst, getVoiceSettings().processTalk);
   if (!line) return;
   session.lastThinkingAt = now;
-  enqueueProcessSpeak(line, speakOpts(session));
+  enqueueProcessSpeak(line, speakOpts(session, author));
 }
 
 function flushAssistant(session: LiveSession) {
   enqueueAnswerSentences(session, true);
 }
 
-function enqueueToolResult(session: LiveSession, tool: ToolCallData | undefined) {
+function enqueueToolResult(session: LiveSession, tool: ToolCallData | undefined, author: MessageAuthorDto | null) {
   if (!shouldNarrateToolResult(getVoiceSettings().processTalk)) return;
   const digest = spokenToolResult(tool);
   if (tool && needsLlmSummary(tool) && tool.result) {
     const raw = tool.result;
-    enqueueProcessSpeak(() => summarizeForSpeech(raw), speakOpts(session), digest);
+    enqueueProcessSpeak(() => summarizeForSpeech(raw), speakOpts(session, author), digest);
     return;
   }
-  enqueueProcessSpeak(digest, speakOpts(session));
+  enqueueProcessSpeak(digest, speakOpts(session, author));
 }
 
 function onAgentEvent(event: AgentEvent) {
@@ -153,6 +161,7 @@ function onAgentEvent(event: AgentEvent) {
   if (!convId) return;
   const session = sessions.get(convId);
   if (!session) return;
+  const author = eventAuthor(event);
 
   if (event.type === "text_delta") {
     const chunk = typeof event.text === "string" ? event.text : "";
@@ -161,6 +170,11 @@ function onAgentEvent(event: AgentEvent) {
       session.replyOpen = true;
       session.streamedThisTurn = false;
       session.lastFlushedAnswer = "";
+      session.replyAuthor = author;
+    } else if (author && author.member_conv_id !== session.replyAuthor?.member_conv_id) {
+      // Another member's reply: finish the last one in its own voice first.
+      flushAssistant(session);
+      session.replyAuthor = author;
     }
     session.assistantText += chunk;
     enqueueAnswerSentences(session, false);
@@ -175,7 +189,7 @@ function onAgentEvent(event: AgentEvent) {
     session.thinkingTimer = window.setTimeout(() => {
       session.thinkingTimer = null;
       if (!sessions.has(session.chatId)) return;
-      flushThinking(session);
+      flushThinking(session, author ?? session.replyAuthor);
     }, 450);
     return;
   }
@@ -184,30 +198,30 @@ function onAgentEvent(event: AgentEvent) {
     flushThinking(session);
     flushAssistant(session);
     if (shouldNarrateTool(getVoiceSettings().processTalk)) {
-      enqueueProcessSpeak(spokenToolStart(event.tool), speakOpts(session));
+      enqueueProcessSpeak(spokenToolStart(event.tool), speakOpts(session, author ?? session.replyAuthor));
     }
     publish(session, { status: "thinking", error: "" });
     return;
   }
 
   if (event.type === "tool_done") {
-    enqueueToolResult(session, event.tool);
+    enqueueToolResult(session, event.tool, author ?? session.replyAuthor);
     return;
   }
 
   if (event.type !== "assistant_done") return;
 
+  // The reply's author speaks it; the chat's own voice and name stay the chat's.
+  const speaker = author ?? session.replyAuthor;
+  if (speaker && !session.replyAuthor) session.replyAuthor = speaker;
   flushThinking(session);
   flushAssistant(session);
   session.replyOpen = false;
+  session.replyAuthor = null;
   session.speakingAfterDone = true;
   publish(session, { status: "thinking" });
 
-  const author = event.author as MessageAuthorDto | undefined;
   const eventText = typeof event.text === "string" ? event.text : "";
-  if (author?.name) session.speakerName = author.name;
-  if (author?.tts_voice) session.voiceId = author.tts_voice;
-  if (author?.tts_speed) session.speed = author.tts_speed;
 
   if (session.streamedThisTurn) {
     session.streamedThisTurn = false;
@@ -235,8 +249,8 @@ function onAgentEvent(event: AgentEvent) {
         return;
       }
       session.lastFlushedAnswer = spoken;
-      publish(session, { spokenText: spoken, speakerName: session.speakerName });
-      enqueueFinalSpeak(spoken, speakOpts(session, author?.name));
+      publish(session, { spokenText: spoken, speakerName: speaker?.name || session.speakerName });
+      enqueueFinalSpeak(spoken, speakOpts(session, speaker));
       publish(session, { status: "speaking", spokenText: spoken });
     } catch (err) {
       if (!sessions.has(session.chatId)) return;
@@ -308,6 +322,7 @@ export function startLiveChat(chatId: string, opts: LiveChatOpts): void {
     speakingAfterDone: false,
     replyOpen: false,
     streamedThisTurn: false,
+    replyAuthor: null,
   });
   setLiveVoiceChat(id, true);
   patchLiveVoiceState(id, { status: "listening", error: "", muted: false });
