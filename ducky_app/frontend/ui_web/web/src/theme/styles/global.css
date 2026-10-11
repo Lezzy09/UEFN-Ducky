@@ -2868,12 +2868,13 @@ button.sidebar-chat-nest-toggle {
 /* ── Tree drag and drop (tree-dnd): Duckies, Content and Workflows share one look.
    Only classes change while dragging — nothing changes size, so rows never shift. ── */
 [data-tree-node] { position: relative; }
+/* The line spans the whole row at every depth, the same width as the row highlight. */
 .tree-drop-before::before,
 .tree-drop-after::after {
   content: "";
   position: absolute;
-  left: calc(var(--sidebar-tree-pad-x, 10px) + var(--sidebar-tree-indent-level, 0px));
-  right: 6px;
+  left: 0;
+  right: 0;
   height: 2px;
   border-radius: 1px;
   background: var(--accent);
