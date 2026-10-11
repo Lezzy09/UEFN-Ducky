@@ -112,7 +112,14 @@ def commit_and_push_before_publish(root: Path, changelog: str = "") -> None:
 
     remote = _git(root, "remote", check=False).stdout.split()
     if "origin" in remote:
-        push = _git(root, "push", "-u", "origin", "HEAD", check=False)
+        branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        if branch == "HEAD":
+            # Detached release worktree: publish onto origin's default branch.
+            default = _git(root, "symbolic-ref", "-q", "refs/remotes/origin/HEAD", check=False).stdout.strip()
+            branch = default.rsplit("/", 1)[-1] or "main"
+            push = _git(root, "push", "origin", f"HEAD:refs/heads/{branch}", check=False)
+        else:
+            push = _git(root, "push", "-u", "origin", "HEAD", check=False)
         if push.returncode != 0:
             raise SystemExit(push.stderr or push.stdout or "git push failed")
         print("pushed HEAD to origin before Store publish")
