@@ -321,26 +321,6 @@ def test_phone_and_website_cannot_start_verse_lsp(panel_server, monkeypatch):
     assert calls == ["start_verse_lsp"]
 
 
-def test_a_phone_in_use_keeps_the_mailbox_quick(panel_server, monkeypatch):
-    """Remote View from a phone asks through the site mailbox, which eases off while quiet."""
-    from frontend import duckyos_account as acc
-    from frontend.ui_web import panel_api
-
-    woke: list[int] = []
-    monkeypatch.setattr(acc, "note_remote_activity", lambda: woke.append(1))
-    monkeypatch.setattr(panel_api.PanelApi, "list_folders", lambda self: [], raising=False)
-    remote = "u-abc.app.uefnducky.org"
-    token = httpd.mint_remote_login_token()
-    assert _ask(panel_server, f"/__remote_login?t={token}", remote) == 302
-    assert woke == [1]
-    cookie = f"{httpd._COOKIE_NAME}={httpd.issue_remote_cookie(remote)}"
-    assert _ask(panel_server, "/__panel_api/list_folders", remote, cookie, {}) == 200
-    assert woke == [1, 1]
-    # The Ducky window's own calls say nothing about a phone.
-    assert _ask(panel_server, "/__panel_api/list_folders", f"127.0.0.1:{panel_server}", body={}) == 200
-    assert woke == [1, 1]
-
-
 def test_remote_view_viewer_cannot_start_verse_lsp():
     """Remote View forwards a viewer's calls through the Ducky window by this list."""
     from frontend.duckyos_account import remote_denied

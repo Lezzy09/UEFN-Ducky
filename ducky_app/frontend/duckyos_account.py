@@ -1393,17 +1393,12 @@ _PRESENCE_INTERVAL_S = 90.0
 _RPC_STOP = __import__("threading").Event()
 _RPC_THREAD: Any = None
 _RPC_LOCK = __import__("threading").Lock()
-# Ends a quiet pause between mailbox asks at once (phone or Remote View opened, stop).
+# Ends a pause between mailbox waits at once (stop).
 _RPC_WAKE = threading.Event()
-_RPC_ACTIVE_AT = 0.0
-# Remote access asks the site's mailbox for work all day. Right after any request it
-# asks again ~1 s later; once nothing has come for a few minutes it eases off to one
-# ask every ~5 s (the pause plus the ask itself), so a phone or Remote View opened
-# after a quiet hour still connects in a few seconds.
-_RPC_FAST_PAUSE_S = 1.0
-_RPC_SLOW_PAUSE_S = 4.0
-_RPC_FAST_FOR_S = 120.0
-_RPC_EASE_S = 180.0
+# Remote access waits on the site's desktop-rpc channel: the site holds each wait up
+# to 25 s and answers the moment a phone or the website sends this account a command,
+# so the PC asks the mailbox only when told, not every second all day.
+_RPC_CHANNEL = "/api/v1/plugins/uefn-ducky/channels/desktop-rpc"
 RPC_ALLOWLIST = frozenset(
     {
         "list_folders",
@@ -1790,7 +1785,7 @@ def _remote_snapshot() -> dict[str, Any]:
 
 
 def _poll_desktop_rpc_once() -> bool:
-    """Long-poll one mailbox request. True if a job was handled."""
+    """Read one mailbox request and answer it. True if a job was handled."""
     pending = _plugin_collect(
         "uefn-ducky",
         "desktop-rpc-wait",
@@ -1823,22 +1818,16 @@ def _poll_desktop_rpc_once() -> bool:
     return True
 
 
-def rpc_idle_pause(quiet_s: float) -> float:
-    """Seconds to wait before the next mailbox ask when nothing came for ``quiet_s``."""
-    if quiet_s <= _RPC_FAST_FOR_S:
-        return _RPC_FAST_PAUSE_S
-    eased = min(1.0, (quiet_s - _RPC_FAST_FOR_S) / _RPC_EASE_S)
-    return _RPC_FAST_PAUSE_S + (_RPC_SLOW_PAUSE_S - _RPC_FAST_PAUSE_S) * eased
-
-
-def note_remote_activity() -> None:
-    """A phone, Remote View or the website is in use: ask the mailbox at the fast rate again."""
-    global _RPC_ACTIVE_AT
-    now = time.monotonic()
-    was_easing = now - _RPC_ACTIVE_AT > _RPC_FAST_FOR_S
-    _RPC_ACTIVE_AT = now
-    if was_easing:
-        _RPC_WAKE.set()
+def wait_desktop_rpc(cursor: int | None) -> tuple[bool, int | None]:
+    """Hold one wait on the desktop-rpc channel. Returns (told, cursor): told when a
+    command was sent to this account since ``cursor``; pass the cursor back next time."""
+    path = _RPC_CHANNEL if cursor is None else f"{_RPC_CHANNEL}?after={int(cursor)}"
+    status, parsed, _raw = api_request("GET", path, None, prefer_bearer=True, timeout=40.0)
+    if not (200 <= int(status) < 300) or not isinstance(parsed, dict):
+        raise DuckyOSAccountError("Can't connect right now. Try again.", code="rpc_wait_failed")
+    nxt = parsed.get("cursor")
+    messages = parsed.get("messages")
+    return bool(messages), int(nxt) if isinstance(nxt, int) else cursor
 
 
 def _rpc_pause(seconds: float) -> None:
@@ -1847,7 +1836,8 @@ def _rpc_pause(seconds: float) -> None:
 
 
 def start_rpc_waiter() -> None:
-    """Daemon thread: while logged in, long-poll the website mailbox."""
+    """Daemon thread: while logged in with remote access on, wait on the desktop-rpc
+    channel and answer each command from the website mailbox."""
     global _RPC_THREAD
     with _RPC_LOCK:
         if _RPC_THREAD is not None and _RPC_THREAD.is_alive():
@@ -1858,24 +1848,31 @@ def start_rpc_waiter() -> None:
         _RPC_WAKE.clear()
 
         def _loop() -> None:
-            global _RPC_ACTIVE_AT
-            _RPC_ACTIVE_AT = time.monotonic()
+            cursor: int | None = None
+            # A command sent before this wait began (app start, remote access just
+            # turned on, after an error): read the mailbox once without being told.
+            told = True
+            # A refused or failed wait backs off to once a minute, never a tight loop.
+            backoff = 5.0
             while not _RPC_STOP.is_set():
                 # The site offers Open only for a Live PC, and a PC is Live only
-                # with remote access on. Polling without it cost uefnducky.org a
-                # plugin call per second per signed-in PC for nothing.
+                # with remote access on.
                 if not _remote_access_on():
+                    told = True
                     _rpc_pause(5.0)
                     continue
-                failed = False
                 try:
-                    if _poll_desktop_rpc_once():
-                        _RPC_ACTIVE_AT = time.monotonic()
-                        continue
+                    if not told:
+                        told, cursor = wait_desktop_rpc(cursor)
+                    if told:
+                        while _poll_desktop_rpc_once() and not _RPC_STOP.is_set():
+                            pass
+                        told = False
+                    backoff = 5.0
                 except Exception:
-                    failed = True
-                pause = rpc_idle_pause(time.monotonic() - _RPC_ACTIVE_AT)
-                _rpc_pause(max(2.0, pause) if failed else pause)
+                    told = True
+                    _rpc_pause(backoff)
+                    backoff = min(backoff * 2, 60.0)
 
         _RPC_THREAD = __import__("threading").Thread(
             target=_loop, daemon=True, name="duckyos-rpc-wait"
