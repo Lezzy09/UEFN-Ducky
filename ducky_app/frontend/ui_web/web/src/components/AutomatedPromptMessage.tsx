@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useRef, useState, type ComponentType } from "react";
+import { memo, useState, type ComponentType } from "react";
 import { Icons } from "../icons/Icons";
 import { requestOpenChatTab } from "../navigation/openChatReference";
 import {
@@ -19,19 +19,28 @@ const PART_ICON: Record<AutomatedPartKind, ComponentType> = {
   keeper: Icons.Clock,
 };
 
-function AutomatedPartView({ part, expanded }: { part: AutomatedPart; expanded: boolean }) {
+/** Collapsed, a turn shows at most this many one-line rows (one row on a phone). */
+const COLLAPSED_ROWS = 3;
+
+function AutomatedPartView({
+  part,
+  compact,
+  extra,
+  more = 0,
+}: {
+  part: AutomatedPart;
+  /** One line: who it is from, then the start of the text. */
+  compact: boolean;
+  /** Not the first row: a phone hides it while collapsed. */
+  extra: boolean;
+  /** Rows after this one, counted for the phone's single row. */
+  more?: number;
+}) {
   const Icon = PART_ICON[part.kind];
   const agent = codingAgentName(part.agent);
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const [faded, setFaded] = useState(false);
-
-  useLayoutEffect(() => {
-    const el = bodyRef.current;
-    setFaded(!expanded && !!el && el.scrollHeight > el.clientHeight + 1);
-  }, [part.body, expanded]);
 
   return (
-    <div className={`message-bubble-automated-part is-${part.kind}`}>
+    <div className={`message-bubble-automated-part is-${part.kind}${compact ? " is-compact" : ""}${extra ? " is-extra" : ""}`}>
       <div className="message-bubble-automated-head">
         <span className="message-bubble-automated-icon" aria-hidden>
           <Icon />
@@ -56,9 +65,14 @@ function AutomatedPartView({ part, expanded }: { part: AutomatedPart; expanded: 
         <span className="message-bubble-automated-tag">{part.tag}</span>
       </div>
       {part.body ? (
-        <div ref={bodyRef} className={`message-bubble-automated-body${faded ? " is-faded" : ""}`}>
+        <div className="message-bubble-automated-body">
           <ChatRefText text={part.body} />
         </div>
+      ) : null}
+      {more > 0 ? (
+        <span className="message-bubble-automated-count" title={`${more} more`}>
+          +{more}
+        </span>
       ) : null}
     </div>
   );
@@ -75,6 +89,9 @@ export const AutomatedPromptMessage = memo(function AutomatedPromptMessage({
 }) {
   const [expanded, setExpanded] = useState(false);
   const first = prompt.parts[0];
+  const total = prompt.parts.length;
+  const shownCount = expanded ? total : total > COLLAPSED_ROWS ? COLLAPSED_ROWS - 1 : total;
+  const hidden = prompt.parts.slice(shownCount);
   const copy = automatedPromptText(prompt);
   const toggle = () => setExpanded((v) => !v);
   return (
@@ -105,10 +122,21 @@ export const AutomatedPromptMessage = memo(function AutomatedPromptMessage({
               {copy ? <PromptCopyButton text={copy} /> : null}
             </div>
           ) : null}
-          {prompt.heading ? <div className="message-bubble-automated-heading">{prompt.heading}</div> : null}
-          {prompt.parts.map((part, index) => (
-            <AutomatedPartView key={`${index}-${part.fromConvId || part.from}`} part={part} expanded={expanded} />
+          {expanded && prompt.heading ? <div className="message-bubble-automated-heading">{prompt.heading}</div> : null}
+          {prompt.parts.slice(0, shownCount).map((part, index) => (
+            <AutomatedPartView
+              key={`${index}-${part.fromConvId || part.from}`}
+              part={part}
+              compact={!expanded}
+              extra={index > 0}
+              more={!expanded && index === 0 ? total - 1 : 0}
+            />
           ))}
+          {hidden.length ? (
+            <div className="message-bubble-automated-more is-extra">
+              +{hidden.length} more from {[...new Set(hidden.map((part) => part.from))].join(", ")}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

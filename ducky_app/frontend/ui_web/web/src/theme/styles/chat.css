@@ -3733,14 +3733,107 @@
   overflow-wrap: anywhere;
 }
 
-.message-bubble-automated:not(.is-expanded) .message-bubble-automated-body {
-  max-height: calc(1.6em * 3);
-  overflow: hidden;
+/* Collapsed: at most three one-line rows (who it is from, then the start of the text);
+   the third says how many more there are. Click expands to every message in full. */
+.message-bubble-user-content.message-bubble-automated:not(.is-expanded),
+.virtual-chat-turn-query .message-bubble-user-content.message-bubble-automated:not(.is-expanded) {
+  gap: 4px;
+  padding: 8px 12px;
 }
 
-.message-bubble-automated:not(.is-expanded) .message-bubble-automated-body.is-faded {
-  -webkit-mask-image: linear-gradient(to bottom, #000 40%, transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 40%, transparent 100%);
+.message-bubble-automated-part.is-compact {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding-right: 56px; /* Copy, and Stop on a running turn */
+}
+
+.message-bubble-automated-part.is-compact + .message-bubble-automated-part.is-compact {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.message-bubble-automated-part.is-compact .message-bubble-automated-head {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  max-width: 55%;
+  padding-right: 0;
+}
+
+.message-bubble-automated-part.is-compact .message-bubble-automated-from {
+  min-width: 0;
+}
+
+.message-bubble-automated-part.is-compact .message-bubble-automated-label,
+.message-bubble-automated-part.is-compact .message-bubble-automated-agent,
+.message-bubble-automated-part.is-compact .message-bubble-automated-tag,
+.message-bubble-automated-part.is-compact .message-bubble-automated-icon {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.message-bubble-automated-part.is-compact .message-bubble-automated-body {
+  flex: 1 1 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+}
+
+.message-bubble-automated-more {
+  overflow: hidden;
+  padding-right: 56px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The phone's single row shows how many messages are folded into it. */
+.message-bubble-automated-count {
+  display: none;
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--automated-tone) 16%, transparent);
+  color: var(--automated-tone);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Phones: every collapsed prompt is one row. An agent turn keeps only its first sender
+   and the start of the text, plus "+N"; a person's prompt keeps one line. */
+@media (max-width: 640px) {
+  .message-bubble-automated:not(.is-expanded) .is-extra,
+  .message-bubble-automated:not(.is-expanded) .message-bubble-automated-label,
+  .message-bubble-automated:not(.is-expanded) .message-bubble-automated-agent,
+  .message-bubble-automated:not(.is-expanded) .message-bubble-automated-tag {
+    display: none;
+  }
+
+  .message-bubble-automated:not(.is-expanded) .message-bubble-automated-count {
+    display: inline-flex;
+  }
+
+  .message-bubble-automated-part.is-compact .message-bubble-automated-head {
+    max-width: 45%;
+  }
+
+  .message-bubble-user-content:not(.is-expanded) .message-bubble-user-text {
+    max-height: none;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+    overflow: hidden;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .message-bubble-user-content:not(.is-expanded) .message-bubble-user-text.is-faded {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
 }
 
 .tool-execution-card-stop-slot {
