@@ -34,7 +34,7 @@ LOCAL = "local"
 RUN_CAP = 20
 BEFORE_SYNC_NOTE = "Your copy before sync"
 NO_PERMISSION = "Only members with Manage automations can change team workflows."
-_DOC_FIELDS = ("id", "name", "description", "enabled", "folder", "graph", "updated")
+_DOC_FIELDS = ("id", "name", "description", "enabled", "folder", "graph", "updated", "created_by")
 FOLDERS_KEY = "_folders"  # never a workflow id (save refuses it)
 FOLDERS_MAX = 2000
 
@@ -177,7 +177,8 @@ def write(scope: dict[str, Any], doc: dict[str, Any], *, versions: tuple[dict[st
     from backend.store import db
     from backend.uefn_plugins.data_crypto import seal_text
 
-    body = {key: doc.get(key) for key in _DOC_FIELDS}
+    # created_by only when set: older workflows keep their exact stored form.
+    body = {key: doc.get(key) for key in _DOC_FIELDS if key != "created_by" or doc.get(key)}
     raw = scopes.encode_doc(body)
     if len(raw) > scopes.DOC_MAX_BYTES:
         raise ValueError("This workflow is over 1 MB. Split it into smaller workflows.")

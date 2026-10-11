@@ -82,7 +82,7 @@ panel?, tool?, node?, stack?}], counts}`, newest first. `since` is epoch seconds
 
 - Verse templates: `verse_template_verify(template_ids)` with UEFN open builds them
   in the project and maps compile errors back to each template.
-- Workflows: `run_workflow` the plugin's template, or `test_workflow_node` for one node.
+- Workflows: `ducky_plugin_test` already runs every node the plugin declares, and its templates live in its `plugin.json`. Never save workflows into the user's list to test a plugin (no "acceptance", catalog or one-node-per-action workflows); to check one action, call its tool.
 - A tool from a chat: call it like the user would (through the chat's tools) and read
   the result, including with the UEFN editor closed (`listener=False` tools must
   still work).

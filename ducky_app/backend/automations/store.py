@@ -547,6 +547,7 @@ def _view(doc: dict[str, Any], owner: dict[str, Any], state: dict[str, Any], run
         "last_run": float(state.get("last_run") or 0.0),
         "run_here": bool(state.get("run_here")),
         "owner": dict(owner),
+        **({"created_by": dict(doc["created_by"])} if isinstance(doc.get("created_by"), dict) else {}),
     }
 
 
@@ -645,6 +646,10 @@ def _merge(out: dict[str, Any], doc: dict[str, Any], *, team: bool = False) -> N
         out["enabled"] = bool(doc.get("enabled"))
     if "folder" in doc:
         out["folder"] = normalize_folder(doc.get("folder"))
+    made_by = doc.get("created_by")
+    if isinstance(made_by, dict) and not out.get("created_by"):
+        # The agent chat that made it (set once, on creation).
+        out["created_by"] = {"conv_id": str(made_by.get("conv_id") or ""), "name": str(made_by.get("name") or "")}
     if "graph" in doc:
         out["graph"] = _with_code(normalize_graph(doc.get("graph")), out.get("graph"), team=team)
 

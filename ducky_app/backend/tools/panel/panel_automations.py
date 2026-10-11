@@ -132,6 +132,11 @@ def save_workflow(
     """Create or replace a workflow. Opens the Workflows editor on it, glides to the nodes
     this save added or changed and lights them up, so the user sees what you did.
 
+    Save a workflow only when the person asked for one (or for a reusable flow). Never save
+    one to test tools, nodes or a plugin: call a tool to test it, and ducky_plugin_test
+    already runs every workflow node a plugin declares. A team member's new workflow is
+    filed under "Made by agents/<team>" unless you name a folder.
+
     graph = {nodes:[{id,type,x,y,config,label,description,color?,icon?,locked?}],
     edges:[{source,target,kind,source_pin?,target_pin?}], groups:[{id,name,node_ids,parent_id?,color?,icon?,locked?}]}.
     White wires: kind main | true | false (after If / Branch) | each | done (after For each).
@@ -198,6 +203,10 @@ def save_workflow(
     }
     if wid:
         doc["id"] = wid
+    if not before:
+        folder, made_by = _agents_folder(folder)
+        if made_by:
+            doc["created_by"] = made_by
     if folder is not None:
         doc["folder"] = folder
     try:
@@ -497,6 +506,48 @@ def _review_hint(out: dict[str, Any], workflow_id: str, node_ids: tuple[str, ...
     return out
 
 
+AGENTS_FOLDER = "Made by agents"
+
+
+def _agent_maker() -> tuple[str, str, str]:
+    """(chat id, chat name, team name or "") for the agent calling these tools. Only agents
+    call these tools; the person uses the editor."""
+    try:
+        from backend.tools.panel.panel_ui import _resolve_ask_user_conv_id
+        from frontend.ui_web.project_chats import load_conversation
+
+        cid = str(_resolve_ask_user_conv_id() or "").strip()
+        conv = load_conversation(cid) if cid else None
+    except Exception:
+        return "", "", ""
+    if conv is None:
+        return cid, "", ""
+    name = str(getattr(conv, "title", "") or getattr(conv, "ducky_name", "") or "").strip()
+    hub = (getattr(conv, "parent_conv_id", None) or "").strip()
+    team = ""
+    if hub:
+        try:
+            from frontend.ui_web.group_orchestrator import _hub_chain
+
+            top = load_conversation(_hub_chain(hub)[-1][0])
+            team = str(getattr(top, "title", "") or "").strip() if top is not None and getattr(top, "is_group", False) else ""
+        except Exception:
+            team = ""
+    return cid, name, team
+
+
+def _agents_folder(folder: str | None) -> tuple[str | None, dict[str, str]]:
+    """A new workflow a team member makes without naming a folder goes under
+    "Made by agents/<team>", never loose at the top of the person's list (a team's agent
+    once filled it with test workflows). A chat the person talks to directly keeps filing
+    at the top, as asked. Either way the workflow remembers which chat made it."""
+    cid, name, team = _agent_maker()
+    made_by = {"conv_id": cid, "name": name} if cid else {}
+    if (folder or "").strip() or not team:
+        return folder, made_by
+    return f"{AGENTS_FOLDER}/{team}", made_by
+
+
 def _chat_allows_everything() -> bool:
     """The chat running this tool said "Allow everything": its yes is already given."""
     try:
@@ -585,6 +636,7 @@ def create_workflow_from_template(
     from backend.automations.store import get_workflow as _get
     from backend.automations.templates import use_template
 
+    folder = _agents_folder(folder)[0] or ""
     try:
         out = use_template(template_id, owner, folder, name)
     except LookupError as exc:

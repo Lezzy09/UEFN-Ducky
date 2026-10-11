@@ -244,3 +244,31 @@ def test_save_workflow_refuses_data_wires_that_do_not_fit(monkeypatch):
         assert out["ok"] is True
     finally:
         delete_workflow(out["workflow"]["id"])
+
+
+def test_a_team_members_new_workflow_is_filed_under_its_team_never_loose(monkeypatch):
+    """A team's agent filled the person's list with 101-node "acceptance" workflows."""
+    from backend.automations.store import delete_workflow, get_workflow
+    from backend.tools.panel import panel_automations
+    from backend.tools.panel.panel_automations import save_workflow
+
+    _events(monkeypatch)
+    graph = {"nodes": [{"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}}], "edges": []}
+    made = []
+    try:
+        monkeypatch.setattr(panel_automations, "_agent_maker", lambda: ("m1", "Timeline Editing", "Island Media Kit Delivery"))
+        team = json.loads(save_workflow(name="Team made", graph=graph))["workflow"]
+        made.append(team["id"])
+        assert team["folder"] == "Made by agents/Island Media Kit Delivery"
+        assert get_workflow(team["id"])["created_by"] == {"conv_id": "m1", "name": "Timeline Editing"}
+        # Updating it never moves it.
+        again = json.loads(save_workflow(workflow_id=team["id"], name="Renamed"))["workflow"]
+        assert again["folder"] == "Made by agents/Island Media Kit Delivery"
+        # A chat the person talks to directly files where it always did.
+        monkeypatch.setattr(panel_automations, "_agent_maker", lambda: ("c1", "My chat", ""))
+        solo = json.loads(save_workflow(name="Asked for", graph=graph))["workflow"]
+        made.append(solo["id"])
+        assert solo["folder"] == ""
+    finally:
+        for wid in made:
+            delete_workflow(wid)
