@@ -692,13 +692,13 @@ export function GroupMemberStrip({
                 title={`Change ${node.name}'s model`}
                 onClick={() => setEditor(editor?.key === node.key && editor.kind === "model" ? null : { key: node.key, kind: "model" })}
               >
-                <BillingBadge kind={billingKind(node.codingAgent, node.provider)} compact />
+                <BillingBadge kind={billingKind(node.codingAgent, node.provider)} />
                 <span className="team-roster-pick-text">{aiTypeLabel(node.model, node.codingAgent)}</span>
                 <Icons.ChevronDown />
               </button>
             ) : !node.isGroup ? (
               <span className="team-roster-muted">
-                <BillingBadge kind={billingKind(node.codingAgent, node.provider)} compact />
+                <BillingBadge kind={billingKind(node.codingAgent, node.provider)} />
                 {aiTypeLabel(node.model, node.codingAgent)}
               </span>
             ) : null}

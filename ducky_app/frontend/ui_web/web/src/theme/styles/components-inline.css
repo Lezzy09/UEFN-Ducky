@@ -2103,6 +2103,7 @@ html.window-maximized .window-resize-grip {
 }
 
 .model-selector-btn {
+  position: relative; /* anchors the "API" corner tag */
   display: flex;
   align-items: center;
   gap: 6px;

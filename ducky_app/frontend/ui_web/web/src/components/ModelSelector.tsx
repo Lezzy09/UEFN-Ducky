@@ -970,7 +970,7 @@ export function ModelSelector({
         ) : (
           <Icons.Duck />
         )}
-        <BillingBadge kind={billing} compact={!labeled} />
+        <BillingBadge kind={billing} corner />
         {labeled ? (
           <>
             <span className="model-selector-btn-text">

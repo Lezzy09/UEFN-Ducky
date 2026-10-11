@@ -7389,33 +7389,24 @@
   max-height: 70vh;
 }
 
-/* How a model is paid: subscription, API key (per token, stands out), local, account. */
-.billing-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  flex-shrink: 0;
-  padding: 1px 5px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 10px;
-  line-height: 1.4;
-  color: var(--muted);
-  white-space: nowrap;
+/* A model that bills a pay-per-token API key: a tiny "API" tag, nothing for anything else. */
+.billing-api-tag {
+  display: inline-block;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--amber, #e0a43a);
+  color: var(--bg, #111);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  line-height: 12px;
+  vertical-align: middle;
+  pointer-events: none;
 }
 
-.billing-badge svg {
-  width: 11px;
-  height: 11px;
-}
-
-.billing-badge--api_key {
-  color: var(--amber, #e0a43a);
-  border-color: color-mix(in srgb, var(--amber, #e0a43a) 55%, transparent);
-  background: color-mix(in srgb, var(--amber, #e0a43a) 12%, transparent);
-}
-
-.billing-badge--subscription {
-  color: var(--green, #5fb878);
-  border-color: color-mix(in srgb, var(--green, #5fb878) 45%, transparent);
+/* Pinned to the model button's top-right corner, over the gateway icon. */
+.billing-api-tag--corner {
+  position: absolute;
+  top: 0;
+  right: 2px;
 }
