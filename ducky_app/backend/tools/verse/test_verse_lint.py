@@ -10,7 +10,11 @@ import pytest
 from backend.tools.verse.compile_hints import hints_for
 from backend.tools.verse.verse_lint import lint_verse, summarize_findings
 
-TEMPLATE_DIR = r"C:\Users\tas13\Documents\GitHub\UEFN-Ducky\plugins\uefn-plugin-virtualpointer\templates"
+# The Virtual Pointer plugin repo checked out next to this one (Documents/GitHub/uefn-plugins).
+TEMPLATE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), *[os.pardir] * 5,
+    "uefn-plugins", "uefn-plugin-virtualpointer", "templates",
+)
 
 DEVICE_USINGS = (
     "using { /Fortnite.com/Devices }\n"

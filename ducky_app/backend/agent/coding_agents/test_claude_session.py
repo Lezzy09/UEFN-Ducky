@@ -9,9 +9,9 @@ from backend.agent.coding_agents import runner
 
 
 def test_claude_project_slug_matches_claude_code() -> None:
-    root = r"C:\Users\tas13\Documents\Fortnite Projects\ExampleProject1"
+    root = r"C:\Users\someone\Documents\Fortnite Projects\ExampleProject1"
     assert runner.claude_project_slug(root) == (
-        "C--Users-tas13-Documents-Fortnite-Projects-ExampleProject1"
+        "C--Users-someone-Documents-Fortnite-Projects-ExampleProject1"
     )
 
 
