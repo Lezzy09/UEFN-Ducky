@@ -183,6 +183,37 @@ class WriteObserver(Protocol):
     def on_write(self, record: WriteRecord, result: WriteResult) -> None: ...
 
 
+def _ask_first(request: WriteRequest) -> None:
+    """"Ask before changes" for a coding agent that changes files through Ducky's tools
+    (Codex, Claude Code, Cursor): it waits for the person's OK on a card in its chat.
+    Asked before the file lock, so nothing else waits on the person. Ducky's own agent
+    asks before it calls the tool, so it is never asked twice."""
+    ctx = request.ctx
+    if ctx is None or ctx.source != identity.SOURCE_AGENT or not ctx.conv_id:
+        return
+    agent = (ctx.coding_agent or "ducky").strip().lower()
+    if agent == "ducky":
+        return
+    try:
+        from backend.tools.panel import permission_prompt as prompts
+
+        if prompts.permission_mode(ctx.conv_id) != prompts.MODE_ASK:
+            return
+        approved = prompts.approve_agent_change(ctx.conv_id, agent, request.op, request.paths)
+    except Exception:  # noqa: BLE001 - the person asked to be asked: never write unasked
+        log.warning("approval card for %s failed", request.paths[-1:], exc_info=True)
+        approved = False
+    if not approved:
+        raise WriteDenied(
+            Decision(
+                allow=False,
+                reason="The person did not approve this change (the chat is set to Ask before changes).",
+                policy="ask_before_changes",
+            ),
+            request,
+        )
+
+
 class ProjectWriter:
     def __init__(
         self,
@@ -272,6 +303,7 @@ class ProjectWriter:
         ctx = identity.resolve_context()
         writer_meta = dict(writer) if writer is not None else identity.current_writer(tool=tool)
         request = WriteRequest(op=op, paths=(canonical,), tool=tool, ctx=ctx, other_project=self._other_project(root))
+        _ask_first(request)
         with self._lock_many((full,)):
             if tool.startswith("workspace_") or (ctx is not None and ctx.source == identity.SOURCE_AGENT):
                 from backend.workspace.ai_ignore import require_ai_mutation
@@ -399,6 +431,7 @@ class ProjectWriter:
         ctx = identity.resolve_context()
         writer_meta = dict(writer) if writer is not None else identity.current_writer(tool=tool)
         request = WriteRequest(op=op, paths=policy_paths, tool=tool, ctx=ctx, other_project=self._other_project(root))
+        _ask_first(request)
         with self._lock_many(lock_paths):
             if tool.startswith("workspace_") or (ctx is not None and ctx.source == identity.SOURCE_AGENT):
                 from backend.workspace.ai_ignore import require_ai_mutation, require_ai_path_operation

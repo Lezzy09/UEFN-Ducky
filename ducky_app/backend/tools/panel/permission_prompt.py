@@ -428,7 +428,7 @@ def ducky_tool_gate(conv_id: str, tool_name: str, *, destructive: bool) -> str:
     return "refuse" if destructive else "run"
 
 
-def _ducky_card(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def _ducky_card(tool_name: str, arguments: dict[str, Any], *, agent_label: str = "Ducky") -> dict[str, Any]:
     args = arguments if isinstance(arguments, dict) else {}
     raw = json.dumps(args, ensure_ascii=False, default=str)[:2000]
     if _ducky_file_tool(tool_name):
@@ -439,7 +439,7 @@ def _ducky_card(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             verb, detail = ("delete" if tool_name == "workspace_delete_file" else "edit"), path
         rule = _DUCKY_EDIT_RULE if verb == "edit" else ""
         return {
-            "prompt": f"Allow Ducky to {verb} this file?",
+            "prompt": f"Allow {agent_label} to {verb} this file?",
             "detail": detail or raw,
             "warning": "",
             "risky": False,
@@ -447,7 +447,7 @@ def _ducky_card(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             "rule_label": "file edits" if rule else "",
         }
     return {
-        "prompt": f"Allow Ducky to run {tool_name}?",
+        "prompt": f"Allow {agent_label} to run {tool_name}?",
         "detail": raw,
         "warning": "This change is hard to undo.",
         "risky": True,
@@ -456,9 +456,11 @@ def _ducky_card(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def approve_ducky_tool(conv_id: str, tool_name: str, arguments: dict[str, Any]) -> bool:
+def approve_ducky_tool(
+    conv_id: str, tool_name: str, arguments: dict[str, Any], *, agent_label: str = "Ducky"
+) -> bool:
     """Approval card for one embedded Ducky tool call (skipped when a rule already allows it)."""
-    card = _ducky_card(tool_name, arguments)
+    card = _ducky_card(tool_name, arguments, agent_label=agent_label)
     rule = str(card.get("rule") or "")
     if rule and rule in _rules(conv_id):
         return True
@@ -470,6 +472,24 @@ def approve_ducky_tool(conv_id: str, tool_name: str, arguments: dict[str, Any]) 
         _remember(conv_id, rule)
         return True
     return answer == _ALLOW_ONCE
+
+
+_DELETE_OPS = frozenset({"delete"})
+_MOVE_OPS = frozenset({"rename", "move"})
+
+
+def approve_agent_change(conv_id: str, agent: str, op: str, paths: tuple[str, ...]) -> bool:
+    """"Ask before changes" for a coding agent (Codex, Claude Code, Cursor) changing a file
+    through Ducky's tools: the same card Ducky's own agent gets, naming that agent."""
+    from backend.agent.coding_agents.base import coding_agent_label
+
+    if op in _DELETE_OPS:
+        tool, args = "workspace_delete_file", {"path": paths[-1]}
+    elif op in _MOVE_OPS and len(paths) > 1:
+        tool, args = "workspace_move_file", {"path": paths[0], "destination": paths[-1]}
+    else:
+        tool, args = "workspace_write_file", {"path": paths[-1]}
+    return approve_ducky_tool(conv_id, tool, args, agent_label=coding_agent_label(agent))
 
 
 def rule_label(rule: str) -> str:
@@ -544,6 +564,10 @@ def _agent_modes(agent_id: str) -> tuple[str, ...]:
     return ()
 
 
+# A plugin the Store installed, or one installed before Ducky recorded where plugins came from.
+_STORE_UPDATABLE = ("store", "")
+
+
 def _agent_plugin(agent_id: str) -> dict[str, str]:
     """The installed plugin that adds this agent: id, name, version and where it came from."""
     pid = str(_agent_registration(agent_id).get("plugin_id") or "").strip()
@@ -561,7 +585,8 @@ def _agent_plugin(agent_id: str) -> dict[str, str]:
         "id": pid,
         "label": str(manifest.get("label") or pid),
         "version": str(version or ""),
-        "source": str(manifest.get("source") or "local"),
+        # "" = installed before Ducky kept where a plugin came from: the Store can update it.
+        "source": str(manifest.get("source") or ""),
     }
 
 
@@ -612,7 +637,7 @@ def chat_permissions(conv_id: str, agent: str = "") -> dict[str, Any]:
                 "label": plugin["label"],
                 "version": plugin["version"],
                 # Only a Store install can be updated from the Store; a local copy is the owner's own.
-                "from_store": plugin["source"] == "store",
+                "from_store": plugin["source"] in _STORE_UPDATABLE,
             }
     modes: list[dict[str, Any]] = []
     for mode_id in MODES:
@@ -653,7 +678,7 @@ def update_agent_plugin(agent: str) -> dict[str, Any]:
     plugin = _agent_plugin(agent_id)
     if not plugin:
         raise ValueError("Ducky can't tell which plugin adds this agent.")
-    if plugin["source"] != "store":
+    if plugin["source"] not in _STORE_UPDATABLE:
         raise ValueError(
             f"Your {plugin['label']} plugin is a local copy, so the Store can't update it. "
             "Update that copy, or remove it and install it from the Store."

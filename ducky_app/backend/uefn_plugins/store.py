@@ -863,9 +863,11 @@ def import_plugin_from_bytes(
 
     dest = plugin_dir(pid)
     existing = _read_json(dest / PLUGIN_MANIFEST) if dest.is_dir() else None
-    existing_source = str(existing.get("source") or "local") if existing else ""
-    # Same-source replace only — store/local/ai/bundled cannot overwrite each other.
-    if existing and existing_source != source:
+    existing_source = str(existing.get("source") or "") if existing else ""
+    # Same-source replace only — store/local/ai/bundled cannot overwrite each other. A copy
+    # that never recorded where it came from (installed before sources were kept) is not a
+    # local one: the Store showed it an Update that then always failed, so it never updated.
+    if existing and existing_source and existing_source != source:
         return {
             "ok": False,
             "error": (

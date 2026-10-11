@@ -176,43 +176,40 @@ export function ChatPermissionsButton({ convId, codingAgent }: ChatPermissionsBu
               )}
             </div>
           ) : null}
-          {neverAsks ? null : (
-            <>
-              <div className="chat-perm-divider" role="separator" />
-              <div className="chat-perm-caption">Allowed in this chat</div>
-              {rules.length === 0 ? (
-                <div className="chat-perm-empty">Nothing yet. "Always allow" on an approval card adds it here.</div>
-              ) : (
-                <ul className="chat-perm-rules" aria-label="Allowed in this chat">
-                  {rules.map((rule) => (
-                    <li key={rule.rule} className="chat-perm-rule">
-                      <span className="chat-perm-rule-label" title={rule.label}>
-                        {rule.label}
-                      </span>
-                      <button
-                        type="button"
-                        className="chat-perm-rule-remove"
-                        aria-label={`Remove ${rule.label}`}
-                        title="Remove"
-                        onClick={() => void apply(() => getApi()?.remove_agent_permission_rule?.(convId, rule.rule, codingAgent))}
-                      >
-                        <Icons.Close />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {rules.length > 1 ? (
-                <button
-                  type="button"
-                  className="chat-perm-clear"
-                  onClick={() => void apply(() => getApi()?.clear_agent_permission_rules?.(convId, codingAgent))}
-                >
-                  Clear all
-                </button>
-              ) : null}
-            </>
+          {/* A command in a Ducky terminal asks whatever the agent, so this list shows for every agent. */}
+          <div className="chat-perm-divider" role="separator" />
+          <div className="chat-perm-caption">Allowed in this chat</div>
+          {rules.length === 0 ? (
+            <div className="chat-perm-empty">Nothing yet. "Always allow" on an approval card adds it here.</div>
+          ) : (
+            <ul className="chat-perm-rules" aria-label="Allowed in this chat">
+              {rules.map((rule) => (
+                <li key={rule.rule} className="chat-perm-rule">
+                  <span className="chat-perm-rule-label" title={rule.label}>
+                    {rule.label}
+                  </span>
+                  <button
+                    type="button"
+                    className="chat-perm-rule-remove"
+                    aria-label={`Remove ${rule.label}`}
+                    title="Remove"
+                    onClick={() => void apply(() => getApi()?.remove_agent_permission_rule?.(convId, rule.rule, codingAgent))}
+                  >
+                    <Icons.Close />
+                  </button>
+                </li>
+              ))}
+            </ul>
           )}
+          {rules.length > 1 ? (
+            <button
+              type="button"
+              className="chat-perm-clear"
+              onClick={() => void apply(() => getApi()?.clear_agent_permission_rules?.(convId, codingAgent))}
+            >
+              Clear all
+            </button>
+          ) : null}
           {error ? (
             <div className="chat-perm-error" role="alert">
               {error}

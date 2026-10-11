@@ -102,7 +102,7 @@ describe("ChatPermissionsButton", () => {
     await waitFor(() => expect(screen.getByText(/Nothing yet/)).toBeTruthy());
   });
 
-  it("says what an agent that never asks does, with no modes to pick and no allowed list", async () => {
+  it("says what an agent that never asks does, with no modes to pick, and still lists what the chat allowed", async () => {
     const note = "Codex edits files and runs commands without asking. Ducky can't stop it to ask first.";
     api.get_agent_permissions.mockImplementation(async () =>
       state(
@@ -117,7 +117,8 @@ describe("ChatPermissionsButton", () => {
     expect(screen.getByText("To approve changes first, switch this chat to Ducky or Claude Code.")).toBeTruthy();
     // No mode is shown as ticked, because none of them applies to Codex.
     expect(screen.queryAllByRole("menuitemradio")).toHaveLength(0);
-    expect(screen.queryByText("Allowed in this chat")).toBeNull();
+    // Its commands in a Ducky terminal still ask, so the chat's allowed list shows.
+    expect(screen.getByText("Allowed in this chat")).toBeTruthy();
     fireEvent.keyDown(window, { key: "1" });
     expect(api.set_agent_permission_mode).not.toHaveBeenCalled();
   });

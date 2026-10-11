@@ -409,3 +409,28 @@ if __name__ == "__main__":
     test_rmtree_retry_recovers_from_winerror_32()
     test_parallel_plugin_replaces_do_not_overlap_rmtree()
     print("store_sync self-check OK")
+
+
+def test_a_copy_with_no_recorded_source_takes_store_updates_but_a_local_copy_does_not(monkeypatch) -> None:
+    """Oct 11 2026: Anthropic, OpenAI and Cursor were installed before Ducky recorded where a
+    plugin came from. The Store showed them an Update that always failed "installed from
+    'local'", so they never updated (and Claude Code never got Ask before changes)."""
+    from backend.uefn_plugins import store as st
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        monkeypatch.setenv("LOCALAPPDATA", tmp)
+        monkeypatch.setenv("USERPROFILE", tmp)
+        monkeypatch.setenv("HOME", tmp)
+        with patch.object(st, "_refresh_plugin_skills_async", lambda: None), \
+                patch.object(st, "_reload_in_app_process", lambda pid: None):
+            assert st.import_plugin_from_bytes(_zip_plugin("old", 1), source="local", replace=True).get("ok")
+            manifest = st.plugin_dir("old") / "plugin.json"
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            data.pop("source", None)
+            manifest.write_text(json.dumps(data), encoding="utf-8")
+            assert st.import_plugin_from_bytes(_zip_plugin("old", 2), source="store", replace=True).get("ok")
+            assert json.loads(manifest.read_text(encoding="utf-8"))["source"] == "store"
+
+            assert st.import_plugin_from_bytes(_zip_plugin("mine", 1), source="local", replace=True).get("ok")
+            refused = st.import_plugin_from_bytes(_zip_plugin("mine", 2), source="store", replace=True)
+            assert not refused.get("ok") and "installed from 'local'" in refused["error"]

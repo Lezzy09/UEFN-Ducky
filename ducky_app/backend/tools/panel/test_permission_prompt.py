@@ -467,3 +467,9 @@ def test_a_mode_set_by_the_starting_chat_cannot_be_changed_here(monkeypatch, con
     reasons = {m["id"]: m["reason"] for m in state["modes"]}
     assert reasons["all"] == ""
     assert reasons["ask"] == reasons["edits"] == "Allow everything is on from the chat that started it. Turn it off there."
+
+
+def test_a_plugin_with_no_recorded_source_is_updated_from_the_store(agents, conv) -> None:
+    _regs, manifests = agents
+    manifests["anthropic"].pop("source", None)
+    assert pp.chat_permissions("c1", "old_claude")["update"]["from_store"] is True
