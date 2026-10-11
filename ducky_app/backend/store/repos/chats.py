@@ -104,6 +104,14 @@ def folders_list_all_projects() -> list[tuple[str, list[dict[str, Any]]]]:
     return list(by.items())
 
 
+def folder_project_id(folder_id: str) -> str | None:
+    """The project a folder is stored under (the Archive folder is in every project: None)."""
+    if not folder_id or folder_id == "archive":
+        return None
+    row = db.connect().execute("SELECT project_id FROM folders WHERE id=? LIMIT 1", (folder_id,)).fetchone()
+    return str(row[0]) if row else None
+
+
 def folders_exist(project_id: str) -> bool:
     return db.connect().execute("SELECT 1 FROM folders WHERE project_id=? LIMIT 1", (project_id,)).fetchone() is not None
 
@@ -111,6 +119,15 @@ def folders_exist(project_id: str) -> bool:
 def folders_replace(project_id: str, folders: list[dict[str, Any]]) -> None:
     conn = db.connect()
     with db.write_txn(conn):
+        # A writer holding a folder list read before a delete must not put the folder back.
+        gone = {
+            str(r[0])[len(_DELETED_FOLDER_KEY):]
+            for r in conn.execute(
+                "SELECT key FROM workspace_state WHERE key >= ? AND key < ?",
+                (_DELETED_FOLDER_KEY, _DELETED_FOLDER_KEY[:-1] + ";"),
+            )
+        }
+        folders = [f for f in folders if str(f.get("id", "")) not in gone]
         conn.execute("DELETE FROM folders WHERE project_id=?", (project_id,))
         conn.executemany(
             "INSERT INTO folders(project_id, id, name, parent_id, sort_order, group_hub_id) VALUES (?, ?, ?, ?, ?, ?)",
@@ -487,6 +504,11 @@ def conv_save(project_id: str, doc: dict[str, Any], *, messages: list[dict[str, 
     stats = {"inserted": 0, "updated": 0, "deleted": 0, "bytes": 0}
     remember: tuple[dict[int, tuple[str, Any, int]], int] | None = None
     with db.write_txn(conn):
+        if _was_deleted(conn, str(doc["id"])):
+            # A turn, team message or other window still holding the chat saved it after
+            # it was deleted: never bring it back.
+            _log.info("skipped saving deleted chat %s", doc["id"])
+            return {**stats, "skipped": 1}
         snap_hash = _snapshot_put(conn, "skill_index", str(doc.get("skill_snapshot") or ""))
         values = {col: doc.get(col) for col in _COLUMNS}
         values["is_group"] = 1 if doc.get("is_group") else 0
@@ -617,13 +639,48 @@ def messages_get(conv_id: str) -> list[dict[str, Any]]:
     return out
 
 
+# Deleted chat and folder ids, kept in workspace_state (no new table: an older app must
+# still open this database) so a late save from any process can't re-create them.
+_DELETED_KEY = "deleted_chat:"
+_DELETED_FOLDER_KEY = "deleted_folder:"
+_DELETED_KEEP_S = 30 * 86400
+
+
+def _was_deleted(conn, conv_id: str) -> bool:
+    return conn.execute("SELECT 1 FROM workspace_state WHERE key=?", (_DELETED_KEY + conv_id,)).fetchone() is not None
+
+
+def _mark_deleted(conn, prefix: str, ids: list[str], now: float) -> None:
+    conn.executemany(
+        "INSERT INTO workspace_state(key, value, updated) VALUES (?, ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+        [(prefix + i, json.dumps(now), now) for i in ids if i],
+    )
+    # No turn outlives a month: older marks only take space.
+    conn.execute(
+        "DELETE FROM workspace_state WHERE key >= ? AND key < ? AND updated < ?",
+        (prefix, prefix[:-1] + ";", now - _DELETED_KEEP_S),
+    )
+
+
 def conv_delete(conv_id: str) -> bool:
     _forget_rows(conv_id)
     conn = db.connect()
     with db.write_txn(conn):
         conn.execute("DELETE FROM messages WHERE conv_id=?", (conv_id,))
         cur = conn.execute("DELETE FROM conversations WHERE id=?", (conv_id,))
+        _mark_deleted(conn, _DELETED_KEY, [conv_id], time.time())
     return cur.rowcount > 0
+
+
+def folders_mark_deleted(folder_ids: list[str]) -> None:
+    """Folders the person deleted: never written back by a stale folder list."""
+    ids = [str(i) for i in folder_ids if str(i or "").strip()]
+    if not ids:
+        return
+    conn = db.connect()
+    with db.write_txn(conn):
+        _mark_deleted(conn, _DELETED_FOLDER_KEY, ids, time.time())
 
 
 def conv_ids_by_parent(project_id: str) -> dict[str, list[str]]:

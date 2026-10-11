@@ -221,17 +221,32 @@ class PanelApiChatsMixin:
         f = _pa.create_folder(name, parent_id)
         return {"id": f.id, "name": f.name}
 
+    def _folder_root(self, folder_id: str) -> str | None:
+        """Where a folder lives (None: the open island). The sidebar lists Global Agents and,
+        with every island shown, other islands' folders too."""
+        from frontend.ui_web.project_chats import folder_project_slug
+
+        slug = folder_project_slug(folder_id)
+        try:
+            return self._layout_project_root(slug) if slug else None
+        except ValueError:
+            return None
+
     def rename_folder(self, folder_id: str, name: str) -> None:
-        _pa.rename_folder(folder_id, name)
+        _pa.rename_folder(folder_id, name, self._folder_root(folder_id))
 
     def delete_folder(self, folder_id: str, archive_members: bool = False) -> list[str]:
         """Delete a folder. Returns group hub ids moved to Archive.
 
         archive_members also archives duckies in the group. Otherwise they stay.
         """
+        from frontend.ui_web.project_chats import mark_folders_deleted
+
+        root = self._folder_root(folder_id)
+        subtree = _pa.folder_subtree_ids(folder_id, root)
         # Stop runners that are about to leave the active tree.
-        scope = _pa.folder_subtree_ids(folder_id) if archive_members else [folder_id]
-        hub_ids = _pa.group_hub_ids_in(scope)
+        scope = subtree if archive_members else [folder_id]
+        hub_ids = _pa.group_hub_ids_in(scope, root)
         archived: list[str] = []
         if hub_ids:
             from frontend.ui_web.agent_modes import cancel_agent, is_agent_running
@@ -239,12 +254,13 @@ class PanelApiChatsMixin:
             for hub_id in hub_ids:
                 targets = [hub_id]
                 if archive_members:
-                    targets.extend(_pa.conversation_descendant_ids(hub_id))
+                    targets.extend(_pa.conversation_descendant_ids(hub_id, root))
                 archived.extend(targets)
                 for target_id in targets:
                     if is_agent_running(target_id):
                         _pa.cancel_agent(target_id)
-        removed = _pa.delete_folder(folder_id, archive_members=bool(archive_members))
+        removed = _pa.delete_folder(folder_id, root, archive_members=bool(archive_members))
+        mark_folders_deleted(subtree or [folder_id], root)
         # Every open window drops the group (and what went with it) right away.
         _pa.notify_chats_changed(
             open_tab=False,
@@ -1379,11 +1395,19 @@ class PanelApiChatsMixin:
     def delete_conversation(self, conv_id: str) -> None:
         from frontend.ui_web.agent_modes import cancel_agent, is_agent_running
 
-        doomed = [conv_id, *_pa.conversation_descendant_ids(conv_id)]
+        from frontend.ui_web.project_chats import conversation_project_slug
+
+        slug = conversation_project_slug(conv_id)
+        try:
+            root = self._layout_project_root(slug) if slug else None
+        except ValueError:
+            root = None
+        # Its sub-agent chats are found on its own island (Global Agents or another one).
+        doomed = [conv_id, *_pa.conversation_descendant_ids(conv_id, root)]
         for target_id in doomed:
             if is_agent_running(target_id):
                 _pa.cancel_agent(target_id)
-        _pa.delete_conversation(conv_id)
+        _pa.delete_conversation(conv_id, root)
         _pa.notify_chats_changed(open_tab=False, removed_conv_ids=doomed)
 
     @staticmethod

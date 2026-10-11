@@ -242,3 +242,57 @@ def test_project_list_tags_no_island_rows_for_global_agents(monkeypatch) -> None
     rows = PanelApiChatsMixin().list_all_conversations(False)
 
     assert [(r["id"], r.get("project_slug")) for r in rows] == [("island", None), ("outside", "_no_project")]
+
+
+def test_a_late_save_never_brings_a_deleted_chat_back(tmp_path: Path, monkeypatch, pushes) -> None:
+    monkeypatch.setenv("DUCKY_STORE_BACKEND", "db")
+    island = _island(tmp_path)
+    _open_island(monkeypatch, island)
+    chat = pc.create_conversation(title="Doomed", project_root=island)
+    held = pc.load_conversation(chat.id, island)  # a running turn still holds the chat
+
+    PanelApiChatsMixin().delete_conversation(chat.id)
+    held.title = "Turn finished"
+    pc.save_conversation(held, island)
+
+    assert pc.load_conversation(chat.id, island) is None
+    assert chat.id not in {c.id for c in pc.list_conversations("", island)}
+
+
+def test_a_stale_folder_list_never_brings_a_deleted_group_back(tmp_path: Path, monkeypatch, pushes) -> None:
+    monkeypatch.setenv("DUCKY_STORE_BACKEND", "db")
+    island = _island(tmp_path)
+    _open_island(monkeypatch, island)
+    folder, _hub, _member = _group(island)
+    keep = pc.create_folder("Keep", project_root=island)
+    stale = pc.load_folders(island)  # read before the delete
+
+    PanelApiChatsMixin().delete_folder(folder.id, True)
+    pc.save_folders(stale, island)
+
+    ids = {f.id for f in pc.load_folders(island)}
+    assert folder.id not in ids and keep.id in ids
+
+
+def test_global_agents_folders_rename_and_delete_from_any_island(tmp_path: Path, monkeypatch, pushes) -> None:
+    monkeypatch.setenv("DUCKY_STORE_BACKEND", "db")
+    island = _island(tmp_path)
+    _open_island(monkeypatch, island)
+    api = PanelApiChatsMixin()
+    crew = api.group_create("Crew", "", False, "_no_project")
+    folder_id = next(f.id for f in pc.load_folders("") if f.group_hub_id == crew["id"])
+
+    api.rename_folder(folder_id, "Crew 2")
+    assert next(f.name for f in pc.load_folders("") if f.id == folder_id) == "Crew 2"
+
+    api.delete_folder(folder_id, True)
+    assert folder_id not in {f.id for f in pc.load_folders("")}
+    assert pushes[-1]["removed_folder_ids"] == [folder_id]
+
+    # A Global Agents chat takes its sub-agent chats with it, though another island is open.
+    lead = pc.create_conversation(title="Lead", project_root="")
+    sub = pc.create_conversation(title="Sub", project_root="")
+    sub.parent_conv_id = lead.id
+    pc.save_conversation(sub, "")
+    api.delete_conversation(lead.id)
+    assert pc.load_conversation(lead.id, "") is None and pc.load_conversation(sub.id, "") is None

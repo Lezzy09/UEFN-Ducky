@@ -387,6 +387,29 @@ def load_folders(project_root: str | None = None) -> list[ChatFolder]:
         return []
 
 
+def folder_project_slug(folder_id: str) -> str:
+    """The island a folder is stored under ("" when unknown): the sidebar shows Global Agents
+    and other islands' folders too, so a folder action can't assume the open island."""
+    if not _use_db() or not (folder_id or "").strip():
+        return ""
+    return _repo().folder_project_id(folder_id.strip()) or ""
+
+
+def conversation_project_slug(conv_id: str) -> str:
+    """The island a chat is stored under ("" when unknown or not on the database)."""
+    if not _use_db() or not (conv_id or "").strip():
+        return ""
+    return _repo().conv_project_id(conv_id.strip()) or ""
+
+
+def mark_folders_deleted(folder_ids: list[str], project_root: str | None = None) -> None:
+    """Of these folders, the ones a delete removed: a stale folder list can't bring them back."""
+    if not _use_db() or not folder_ids:
+        return
+    still = {f.id for f in load_folders(project_root)}
+    _repo().folders_mark_deleted([fid for fid in folder_ids if fid and fid not in still])
+
+
 def save_folders(folders: list[ChatFolder], project_root: str | None = None) -> None:
     if _use_db():
         _repo().folders_replace(_project_id(project_root), [f.to_dict() for f in folders])
@@ -849,6 +872,8 @@ def _save_conversation_rows(conv: Conversation, project_root: str | None) -> Non
             doc["tool_call_count"] = current.get("tool_call_count", doc["tool_call_count"])
             doc["file_count"] = current.get("file_count", doc["file_count"])
     result = repo.conv_save(project_id, doc, messages=messages)
+    if result.get("skipped"):
+        return  # the chat was deleted meanwhile; it stays deleted
     if messages is None:
         conv.messages = repo.messages_get(conv.id)
     try:
