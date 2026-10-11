@@ -734,7 +734,7 @@ def test_actual_stop_never_pairs_old_user_with_synthetic_reply(monkeypatch, reas
         synthetic,
         {"role": "assistant", "content": "Synthetic answer"},
     ])
-    monkeypatch.setattr(am, "_notify_phone", lambda *args: None)
+    monkeypatch.setattr(am, "_alert_finished", lambda *args: None)
     monkeypatch.setattr(am, "close_changeset_run", lambda *args: None)
     events = []
     am._push_agent_stopped(events.append, "m1", "synthetic", reason)
@@ -748,7 +748,7 @@ def test_actual_done_posts_one_hub_note_without_broadcast_under_concurrency(monk
         {"role": "user", "content": "A real new question"},
         {"role": "assistant", "content": "A real answer"},
     ])
-    monkeypatch.setattr(am, "_notify_phone", lambda *args: None)
+    monkeypatch.setattr(am, "_alert_finished", lambda *args: None)
     monkeypatch.setattr(am, "close_changeset_run", lambda *args: None)
     barrier = threading.Barrier(3)
     def stop():

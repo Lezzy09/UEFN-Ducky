@@ -2183,10 +2183,14 @@ export interface PanelPushEvent {
     | "templates_changed"
     | "starter_plugins_progress"
     | "plugin_hook"
-    | "appearance_profile_requested";
+    | "appearance_profile_requested"
+    /** A Windows notification was clicked: show this chat or workflow (`kind` + `id`). */
+    | "open_target";
   provider?: string;
   /** plugin_hook: the hook id; appearance_profile_requested: the plugin profile id. */
   id?: string;
+  /** background_job: the chat a row opens (a workflow's Message me). */
+  conv_id?: string;
   /** plugin_hook / appearance_profile_requested: when the plugin asked (epoch seconds). */
   at?: number;
   /** plugin_hook: what the plugin passed along with it. */
@@ -3705,6 +3709,8 @@ export interface PanelApi {
   /** Wait until the agent thread for this chat is gone (e.g. after Stop). */
   wait_for_agent_idle?(conv_id: string, timeout?: number): Promise<boolean>;
   report_ui_perf(entries: Array<Record<string, unknown>>): Promise<boolean>;
+  /** An activity-list job only the UI runs ended: alerts when it failed or took long work. */
+  notify_activity?(job: { title: string; detail?: string; phase: "done" | "error"; seconds: number }): Promise<boolean>;
   ui_rpc_respond(request_id: string, payload: Record<string, unknown>): Promise<boolean>;
   ui_rpc_pending_questions?(): Promise<AgentEvent[]>;
   /** This window took a Show me / tour request meant for it. */

@@ -47,6 +47,28 @@ _RPC_HANDLER_WAIT_S = 20.0
 # The active window acknowledges a Show me / tour within this, else any window may take it.
 _RPC_ACK_WAIT_S = 2.5
 
+def _alert_question(params: dict[str, Any]) -> None:
+    """An agent asks the person something: alert (frontend.notifications). The question
+    shows in the Windows notification only. Off-thread: naming the chat reads it from disk."""
+
+    def send() -> None:
+        try:
+            from frontend.notifications import alert
+            from frontend.ui_web.project_chats import load_conversation
+
+            conv_id = str(params.get("conv_id") or "").strip()
+            conv = load_conversation(conv_id) if conv_id else None
+            title = str(getattr(conv, "title", "") or "").strip() or str(params.get("title") or "") or "UEFN Ducky"
+            questions = params.get("questions") if isinstance(params.get("questions"), list) else []
+            first = questions[0] if questions and isinstance(questions[0], dict) else {}
+            alert(title, "Needs your answer.", level="ask", kind="chat" if conv else "",
+                  target_id=conv_id if conv else "", detail=str(first.get("prompt") or ""))
+        except Exception:
+            pass
+
+    threading.Thread(target=send, daemon=True, name="ask-alert").start()
+
+
 class _PanelServer(ThreadingHTTPServer):
     # Default backlog is 5; cloudflared + a React mount burst overflows it
     # (connection refused → Cloudflare 502). 128 holds the SYN queue.
@@ -695,8 +717,15 @@ def start_panel_ui_server(dist_root: Path) -> str:
                         push = get_panel_push()
                         if push is not None:
                             for ev in events:
-                                if isinstance(ev, dict):
-                                    push(ev)
+                                if not isinstance(ev, dict):
+                                    continue
+                                if ev.get("type") == "os_notification":
+                                    # The bridge has no tray: this process shows it.
+                                    from frontend.notifications import show_forwarded
+
+                                    show_forwarded(ev)
+                                    continue
+                                push(ev)
                     except Exception:
                         pass
                     self.send_response(204)
@@ -866,6 +895,8 @@ def start_panel_ui_server(dist_root: Path) -> str:
                     window = ui_rpc.window_for(method)
                     request_id, event = ui_rpc.submit(method, {**params, "_for_client": window} if window else params)
                     push(event)
+                    if method == "ask_user":
+                        _alert_question(params)
                     if window and not ui_rpc.wait_ack(request_id, _RPC_ACK_WAIT_S):
                         # The window the user last used didn't take it (closed?): any window may.
                         anyone = dict(event)

@@ -52,7 +52,7 @@ import { useNavigationShortcuts } from "./navigation/useNavigationShortcuts";
 import { useUndoShortcuts } from "./navigation/useUndoShortcuts";
 import { registerCloseSettingsView, registerOpenSettingsView, requestOpenSettings } from "./navigation/openSettingsTab";
 import { installDeepLinkListeners, peekStoreInstallRequest, requestOpenStore } from "./navigation/deepLinks";
-import { installOpenFromParent } from "./remote/openFromParent";
+import { installOpenFromNotification, installOpenFromParent } from "./remote/openFromParent";
 import { nextChatLayoutMode, type ViewId } from "./types/panel";
 import { WINDOW_ID } from "./tabs/tabRegistryClient";
 import { persistDockSnapshot, readDockSnapshot } from "./workspace/workspaceDockStorage";
@@ -198,6 +198,9 @@ export default function App() {
   useEffect(() => {
     return installOpenFromParent();
   }, []);
+
+  // A clicked Windows notification (frontend/notifications.py) opens its chat or workflow.
+  useEffect(() => installOpenFromNotification(), []);
 
   // Signed-out launch: Plugins library → Ducky Account details (do not auto-start pairing).
   useEffect(() => {

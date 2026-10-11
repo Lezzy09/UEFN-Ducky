@@ -6,10 +6,12 @@ import {
   clearFinishedBackgroundJobs,
   countWorkingBackgroundJobs,
   dismissBackgroundJob,
+  onBackgroundJobEnded,
   requestBackgroundJobCancel,
   useBackgroundActivity,
   type BackgroundJob,
 } from "../hooks/backgroundActivity";
+import { getApi, isRemote } from "../hooks/usePanelApi";
 import {
   applyBackgroundJobPush,
   requestFocusGraph,
@@ -42,10 +44,18 @@ export function BackgroundActivityDropdown() {
   jobsRef.current = jobs;
   const [now, setNow] = useState(Date.now);
   useEffect(() => subscribeAgentBackgroundActivity(), []);
+  // Agents and workflows alert from the app itself; installs and plugin jobs only run here.
+  useEffect(() => onBackgroundJobEnded((job, seconds) => {
+    if (isRemote() || job.source === "agent" || job.source === "workflow" || job.source === "message") return;
+    if (job.phase !== "done" && job.phase !== "error") return;
+    void getApi()?.notify_activity?.({ title: job.title, detail: job.detail, phase: job.phase, seconds }).catch(() => false);
+  }), []);
   const openJob = (job: BackgroundJob) => {
     setOpen(false);
-    if (job.source === "agent") void openAgentBackgroundJob(job).catch((error) => setActionError(String(error)));
-    else openGraphJob(job);
+    // A workflow's Message me row opens the chat it posted to.
+    if (job.source === "agent" || (job.convId && !workflowIdFromJobId(job.id))) {
+      void openAgentBackgroundJob(job).catch((error) => setActionError(String(error)));
+    } else openGraphJob(job);
   };
   const [open, setOpen] = useState(false);
   const [actionError, setActionError] = useState("");

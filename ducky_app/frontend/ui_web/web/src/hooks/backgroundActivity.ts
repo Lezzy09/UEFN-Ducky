@@ -114,7 +114,27 @@ export function upsertBackgroundJob(patch: Partial<BackgroundJob> & { id: string
   const all = [next, ...rest];
   snapshot = { jobs: [...all.filter((j) => j.phase === "working"), ...all.filter((j) => j.phase !== "working").slice(0, MAX_ITEMS)] };
   emit();
+  if (prev?.phase === "working" && (next.phase === "done" || next.phase === "error")) {
+    const seconds = Math.max(0, (now - (prev.startedAt || prev.ts)) / 1000);
+    for (const fn of [...endedListeners]) {
+      try {
+        fn(next, seconds);
+      } catch {
+        // A listener never breaks the caller's update.
+      }
+    }
+  }
   return next;
+}
+
+const endedListeners = new Set<(job: BackgroundJob, seconds: number) => void>();
+
+/** A working job turned done or error in this window, after `seconds` of work. */
+export function onBackgroundJobEnded(fn: (job: BackgroundJob, seconds: number) => void): () => void {
+  endedListeners.add(fn);
+  return () => {
+    endedListeners.delete(fn);
+  };
 }
 
 export function dismissBackgroundJob(id: string): void {

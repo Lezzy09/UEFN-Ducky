@@ -80,6 +80,7 @@ export function applyBackgroundJobPush(event: PanelPushEvent | (Partial<Backgrou
     percent: "percent" in event ? event.percent : undefined,
     phase: event.phase,
     cancelable: "cancelable" in event ? event.cancelable : undefined,
+    convId: "conv_id" in event && event.conv_id ? event.conv_id : undefined,
   });
 }
 

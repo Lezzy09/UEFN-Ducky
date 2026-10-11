@@ -1046,6 +1046,26 @@ class PanelApi(
             self._agent_push_timer = timer
             timer.start()
 
+    def notify_activity(self, job: dict[str, Any] | None = None) -> bool:
+        """An activity-list job only the UI runs (an install, a plugin's job) ended. It
+        alerts when it failed or took long work; every window reports it, alerts dedupe."""
+        from frontend.notifications import LONG_WORK_S, alert
+
+        raw = dict(job or {})
+        failed = raw.get("phase") == "error"
+        try:
+            seconds = float(raw.get("seconds") or 0)
+        except (TypeError, ValueError):
+            seconds = 0.0
+        if not failed and (raw.get("phase") != "done" or seconds < LONG_WORK_S):
+            return False
+        return alert(
+            str(raw.get("title") or "UEFN Ducky"),
+            "Failed." if failed else "Finished.",
+            level="error" if failed else "ok",
+            detail=str(raw.get("detail") or ""),
+        )
+
     def report_ui_perf(self, entries: list[dict[str, Any]] | None = None) -> bool:
         """Receive longtask / frame-stall samples from the React perf monitor."""
         try:

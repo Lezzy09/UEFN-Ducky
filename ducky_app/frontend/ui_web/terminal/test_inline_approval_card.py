@@ -149,3 +149,11 @@ def test_the_panel_api_passes_the_answer_and_lists_waiting_cards(monkeypatch, ch
     assert api.terminal_pending_commands() == []
     decided = [e for e in events if e["type"] == "terminal_command_decided"]
     assert decided == [{"type": "terminal_command_decided", "request_id": card["request_id"], "conv_id": "c1"}]
+
+
+def test_an_answer_before_the_agent_waits_still_reaches_it(monkeypatch, chat_rules) -> None:
+    mgr, _session, events = _manager(monkeypatch)
+    req = mgr.request_command("s1", "npm test", conv_id="c1", runner_waits=True)
+    assert mgr.approve_command(req["request_id"])["ok"]
+    assert mgr.wait_for_approval(req["request_id"], timeout_s=1) == {"ok": True, "approved": True}
+    assert mgr.wait_for_approval(req["request_id"], timeout_s=1)["error"] == "request not found"

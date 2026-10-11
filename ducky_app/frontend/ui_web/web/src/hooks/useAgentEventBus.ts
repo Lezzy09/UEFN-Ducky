@@ -29,6 +29,7 @@ const PANEL_PUSH_TYPES = new Set<string>([
   // A plugin's api.emit_hook / api.set_appearance_profile; the main window acts on them.
   "plugin_hook",
   "appearance_profile_requested",
+  "open_target",
 ]);
 
 type AgentEventListener = (event: AgentEvent) => void;

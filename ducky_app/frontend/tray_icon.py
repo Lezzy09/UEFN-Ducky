@@ -28,6 +28,15 @@ _STATUS_ALIASES: dict[str, ConnectionIcon] = {
 _ICO_SIZES = (16, 32, 48, 64, 128, 256)
 _TRAY_SIZE = 64
 
+# Shell_NotifyIcon: a balloon is a Windows 10/11 toast. Its click comes back to the
+# icon's window as NIN_BALLOONUSERCLICK (WM_USER + 5), which pystray ignores.
+_NIM_MODIFY = 0x1
+_NIF_INFO = 0x10
+_NIIF_USER = 0x4
+_NIIF_LARGE_ICON = 0x20
+_NIIF_RESPECT_QUIET_TIME = 0x80
+_NIN_BALLOONUSERCLICK = 0x405
+
 
 def open_png(path: Path):
     """Decode a PNG without Pillow's Image.init() codec sweep (AVIF/WebP/JPEG2000)."""
@@ -200,6 +209,48 @@ class TrayIconController:
             tooltip,
             menu,
         )
+        self._on_toast_click: Callable[[], None] | None = None
+        handlers = getattr(self._icon, "_message_handlers", None)
+        notify_msg = getattr(getattr(pystray, "_util", None), "win32", None)
+        notify_msg = getattr(notify_msg, "WM_NOTIFY", None)
+        if isinstance(handlers, dict) and notify_msg in handlers:
+            own = handlers[notify_msg]
+
+            def on_notify(wparam: int, lparam: int) -> object:
+                if lparam == _NIN_BALLOONUSERCLICK:
+                    click = self._on_toast_click
+                    if click is not None:
+                        self._dispatch(click)
+                    return 0
+                return own(wparam, lparam)
+
+            handlers[notify_msg] = on_notify
+
+    def toast(self, title: str, message: str, on_click: Callable[[], None] | None = None) -> bool:
+        """A Windows notification from the tray icon. A click runs ``on_click`` (the latest
+        toast's; Windows shows one at a time per icon). Quiet hours / Focus are respected."""
+        send = getattr(self._icon, "_message", None)
+        if send is None or not getattr(self._icon, "visible", False):
+            return False
+        self._on_toast_click = on_click
+        flags = _NIIF_RESPECT_QUIET_TIME
+        extra: dict[str, object] = {}
+        handle = getattr(self._icon, "_icon_handle", None)
+        if handle:
+            flags |= _NIIF_USER | _NIIF_LARGE_ICON
+            extra["hBalloonIcon"] = handle
+        try:
+            send(
+                _NIM_MODIFY,
+                _NIF_INFO,
+                szInfo=(message or " ")[:255],
+                szInfoTitle=(title or "UEFN Ducky")[:63],
+                dwInfoFlags=flags,
+                **extra,
+            )
+            return True
+        except Exception:
+            return False
 
     def set_connection_mode(self, mode: str | ConnectionIcon) -> None:
         """Swap tray icon to match connection state (safe from any thread)."""

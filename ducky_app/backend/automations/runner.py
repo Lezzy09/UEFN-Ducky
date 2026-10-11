@@ -487,14 +487,19 @@ def _announce_run(wf: dict[str, Any], *, phase: str, detail: str = "", run_id: s
         pass
 
 
-def _notify_phone(wf: dict[str, Any], ok: bool) -> None:
-    """Push the phone (tap → Remote View on this workflow). Never blocks or raises."""
+def _alert_run(wf: dict[str, Any], ok: bool, *, triggered: bool, seconds: float) -> None:
+    """Alert (frontend.notifications) for a run that ended on its own: a failure always,
+    a run you started once it took long work, a trigger's success never (its Message me
+    step is how a scheduled run talks to you). Never blocks or raises."""
     try:
-        from frontend.duckyos_account import notify_desktop_agent_done
+        from frontend.notifications import LONG_WORK_S, alert
 
-        notify_desktop_agent_done(
-            title=str(wf.get("name") or "Workflow")[:80],
-            body="Workflow finished. Tap to open it." if ok else "Workflow failed. Tap to see why.",
+        if ok and (triggered or seconds < LONG_WORK_S):
+            return
+        alert(
+            str(wf.get("name") or "Workflow"),
+            "Workflow finished." if ok else "Workflow failed.",
+            level="ok" if ok else "error",
             kind="workflow",
             target_id=str(wf.get("id") or ""),
         )
@@ -632,10 +637,10 @@ def run_workflow(
             detail=STOPPED if stopped else (error or "Finished") if ok else (error or "Failed"),
             run_id=run_id,
         )
-        # A run the person started (not a trigger, not a chat's tool call, not a
-        # nested workflow.call, not stopped by them): tell their phone.
-        if not stopped and not trigger_id and not ctx.get("caller_conv_id") and not _CALL_STACK.get():
-            _notify_phone(wf, ok)
+        # Not a chat's tool call (the chat reports it), not a nested workflow.call (the
+        # outer run does), not stopped by the person.
+        if not stopped and not ctx.get("caller_conv_id") and not _CALL_STACK.get():
+            _alert_run(wf, ok, triggered=bool(trigger_id), seconds=time.time() - started)
     ended = time.time()
     node_outputs = flow.summary()
     run = {

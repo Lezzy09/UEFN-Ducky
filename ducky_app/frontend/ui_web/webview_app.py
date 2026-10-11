@@ -597,6 +597,24 @@ def _run_panel(api_holder: dict[str, object]) -> None:
         except Exception:
             api._tray = None  # type: ignore[attr-defined]
 
+    def open_alert(kind: str, target_id: str) -> None:
+        """A Windows notification was clicked: the app comes up on that chat or workflow."""
+        restore()
+        w = window_holder.get("window")
+        if w is not None:
+            from frontend.ui_web.win_frameless import force_window_foreground
+
+            force_window_foreground(w)
+        if kind and target_id:
+            from frontend.ui_web.agent_modes import push_ui_event
+
+            push_ui_event({"type": "open_target", "kind": kind, "id": target_id})
+
+    from frontend import notifications
+
+    tray = getattr(api, "_tray", None)
+    notifications.bind_desktop(tray.toast if tray is not None else None, open_alert)
+
     icon_path = resolve_app_icon_path()
     _boot_trace("ready_for_webview_start", time.perf_counter())
     # Dev only: native Inspect menu + DevTools. Store EXE stays shipped; ErrorBoundary

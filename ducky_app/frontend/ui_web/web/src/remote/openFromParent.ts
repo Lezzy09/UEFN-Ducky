@@ -4,6 +4,7 @@
  * the iframe's load event fires before React mounts this listener.
  */
 import { isRemote } from "../hooks/usePanelApi";
+import { subscribePanelPush } from "../hooks/usePanelPushBus";
 import { requestFocusGraph } from "../hooks/graphActivity";
 import { requestOpenChatTab } from "../navigation/openChatReference";
 import { requestOpenWorkflowsTab } from "../navigation/openWorkflowsTab";
@@ -34,6 +35,16 @@ export function openTarget(target: OpenTarget): boolean {
   return requestOpenChatTab(target.id);
 }
 
+/** Open it now, or keep trying for 15 s while the chat list comes up. Returns a cancel. */
+export function openTargetSoon(target: OpenTarget): () => void {
+  if (openTarget(target)) return () => {};
+  let tries = 0;
+  const timer = window.setInterval(() => {
+    if (openTarget(target) || ++tries >= 60) window.clearInterval(timer);
+  }, 250);
+  return () => window.clearInterval(timer);
+}
+
 export function installOpenFromParent(): () => void {
   if (!isRemote() || typeof window === "undefined" || window.parent === window) return () => {};
   let timer = 0;
@@ -62,5 +73,22 @@ export function installOpenFromParent(): () => void {
   return () => {
     window.removeEventListener("message", onMessage);
     window.clearInterval(timer);
+  };
+}
+
+/** A clicked Windows notification: the app pushes `open_target` to the main window. */
+export function installOpenFromNotification(): () => void {
+  if (isRemote()) return () => {};
+  let cancel = () => {};
+  const stop = subscribePanelPush((event) => {
+    if (event.type !== "open_target") return;
+    const target = parseOpenTarget({ type: UD_OPEN_TARGET, kind: event.kind, id: event.id });
+    if (!target) return;
+    cancel();
+    cancel = openTargetSoon(target);
+  });
+  return () => {
+    stop();
+    cancel();
   };
 }

@@ -25,9 +25,28 @@ def _reports_chat(title: str):
     return create_conversation(PanelSettings.load(), "", title=title), True
 
 
+def _announce(conv: Any, title: str, text: str) -> None:
+    """A row in the header's activity list, and an alert: the message itself shows in the
+    Windows notification only; the account and the phone get "Sent you a message."."""
+    try:
+        from frontend.ui_web.agent_modes import push_ui_event
+
+        push_ui_event({"type": "background_job", "id": f"message:{conv.id}", "source": "message",
+                       "title": title, "detail": "Sent you a message", "phase": "done", "conv_id": conv.id})
+    except Exception:
+        pass
+    try:
+        from frontend.notifications import alert
+
+        alert(title, "Sent you a message.", level="info", kind="chat", target_id=conv.id, detail=text)
+    except Exception:
+        _log.debug("Message me alert failed", exc_info=True)
+
+
 def post(text: str, cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     """Post ``text`` (headed with the workflow's name) and say where it went."""
     name = str(payload.get("workflow_name") or "").strip()
+    said = text
     if name and cfg.get("heading", True) is not False:
         text = f"**{name}**\n\n{text}"
     from frontend.ui_web.agent_modes import notify_chats_changed
@@ -43,6 +62,9 @@ def post(text: str, cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
         notify_chats_changed(conv.id, conv.title, open_tab=False)
     except Exception:
         pass
+    # From a chat's run the message lands in that chat, which is already in front of you.
+    if conv.id != caller:
+        _announce(conv, name or str(conv.title or REPORTS_CHAT), said)
     # Not "conv_id": the run's own chat id lives under that name.
     return {"message_chat_id": conv.id, "message_chat": conv.title, "new_chat": created}
 

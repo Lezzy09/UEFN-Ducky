@@ -27,7 +27,7 @@ def local_runs(monkeypatch, tmp_path):
     monkeypatch.setattr(store, "use_db", lambda *_: False)
     monkeypatch.setattr(store, "_files_dir", lambda: tmp_path / "graphs")
     monkeypatch.setattr(store, "_announce_graphs_changed", lambda: None)
-    monkeypatch.setattr(runner, "_notify_phone", lambda *_: None)
+    monkeypatch.setattr(runner, "_alert_run", lambda *_a, **_k: None)
     return tmp_path
 
 
@@ -53,7 +53,7 @@ root = Path(sys.argv[1])
 live_runs._directory = lambda: root / "runs"
 store.use_db = lambda *_: False
 store._files_dir = lambda: root / "graphs"
-runner._notify_phone = lambda *_: None
+runner._alert_run = lambda *_a, **_k: None
 print(json.dumps(runner.run_workflow(sys.argv[2])), flush=True)
 """
     env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2]))

@@ -402,9 +402,10 @@ _sessions: dict[str, AgentSession] = {}
 _sessions_lock = threading.Lock()
 _linked_parents: dict[str, str] = {}
 _child_waiters: dict[str, set[str]] = {}
-# Runs another chat started (sub-agents): the parent's finish is the one the phone hears about.
+# Runs another chat or a workflow started (sub-agents, Agent steps): the parent's
+# finish, or the workflow's, is the one that alerts.
 _quiet_runs: set[str] = set()
-# A reply quicker than this was most likely watched as it happened: no phone push.
+# A reply quicker than this was most likely watched as it happened: no alert.
 PHONE_PUSH_MIN_SECONDS = 20.0
 _run_started: dict[str, float] = {}
 
@@ -563,9 +564,9 @@ def close_changeset_run(run_id: str, reason: str) -> None:
         pass
 
 
-def _notify_phone(conv_id: str, reason: str) -> None:
-    """Push the phone that this chat finished (tap → Remote View on it). Off-thread:
-    loading the chat and the site call never hold up the agent's own thread."""
+def _alert_finished(conv_id: str, reason: str) -> None:
+    """Alert that this chat finished or failed (frontend.notifications). Off-thread:
+    loading the chat never holds up the agent's own thread."""
 
     def _send() -> None:
         try:
@@ -573,15 +574,41 @@ def _notify_phone(conv_id: str, reason: str) -> None:
             # Group members report to their hub; the hub's own run is the one to announce.
             if conv is None or str(getattr(conv, "parent_conv_id", "") or ""):
                 return
-            from frontend.duckyos_account import notify_desktop_agent_done
+            from frontend.notifications import alert
 
             name = str(getattr(conv, "title", "") or "").strip() or "Your ducky"
-            body = "Finished. Tap to open it." if reason == "done" else "Stopped with an error. Tap to see why."
-            notify_desktop_agent_done(title=name, body=body, kind="chat", target_id=conv_id)
+            if reason == "done":
+                alert(name, "Finished.", level="ok", kind="chat", target_id=conv_id)
+            else:
+                alert(name, "Stopped with an error.", level="error", kind="chat", target_id=conv_id)
         except Exception:
             pass
 
-    threading.Thread(target=_send, daemon=True, name="phone-push").start()
+    threading.Thread(target=_send, daemon=True, name="chat-alert").start()
+
+
+def _alert_after_run(conv_id: str, run_id: str, reason: str) -> None:
+    """A run ended: a failure always alerts, a finish only after long work (a quick reply
+    was watched), a sub-agent's or a workflow step's never. Clears the run's bookkeeping."""
+    quiet = run_id in _quiet_runs
+    _quiet_runs.discard(run_id)
+    started = _run_started.pop(run_id, None)
+    if quiet:
+        return
+    if reason in ("error", "timeout"):
+        _alert_finished(conv_id, reason)
+    elif reason == "done" and not (started is not None and time.monotonic() - started < PHONE_PUSH_MIN_SECONDS):
+        _alert_finished(conv_id, reason)
+
+
+def _started_by_workflow() -> bool:
+    """This run starts inside a workflow run (an Agent or Prompt step)."""
+    try:
+        from backend.automations.runner import _LIVE
+
+        return _LIVE.get() is not None
+    except Exception:
+        return False
 
 
 def _push_agent_stopped(
@@ -601,17 +628,9 @@ def _push_agent_stopped(
         event["detail"] = "Agent errored before finishing its reply"
     push(event)
     close_changeset_run(run_id, reason)
-    quiet = run_id in _quiet_runs
-    _quiet_runs.discard(run_id)
-    started = _run_started.pop(run_id, None)
-    if started is not None and time.monotonic() - started < PHONE_PUSH_MIN_SECONDS:
-        quiet = True
-    if reason in ("error", "timeout") and not quiet:
-        _notify_phone(conv_id, reason)
+    _alert_after_run(conv_id, run_id, reason)
     if reason != "done":
         return
-    if not quiet:
-        _notify_phone(conv_id, reason)
     # Private DM with a group member → short note on the group hub for everyone.
     try:
         from frontend.ui_web.group_orchestrator import announce_private_member_talk
@@ -1629,6 +1648,8 @@ def run_message(
         parent_conv_id = active_parent
         _linked_parents[conv_id] = parent_conv_id
         _quiet_runs.add(run_id)
+    elif _started_by_workflow():
+        _quiet_runs.add(run_id)
     child_title = conv.title or "Chat"
     _run_started[run_id] = started_at
 
@@ -1651,6 +1672,14 @@ def run_message(
 
         def work_external() -> None:
             fresh = conv
+            # The coding-agent runner pushes its own agent_stopped: its reason is the alert's.
+            ended: dict[str, str] = {}
+
+            def watched_push(event: dict[str, Any]) -> None:
+                if event.get("type") == "agent_stopped" and event.get("run_id", run_id) == run_id:
+                    ended.setdefault("reason", str(event.get("reason") or ""))
+                push(event)
+
             try:
                 from backend.agent.coding_agents.runner import run_coding_agent_message
 
@@ -1664,7 +1693,7 @@ def run_message(
                         else (user_text or (content if isinstance(content, str) else str(content)))
                     ),
                     model=turn_model,
-                    push=push,
+                    push=watched_push,
                     run_id=run_id,
                     cancel=cancel_event,
                     mode=m,
@@ -1689,6 +1718,9 @@ def run_message(
                 close_changeset_run(run_id, "done")
                 # The coding-agent runner reports its own agent_stopped, which never
                 # cleared these; every external turn left both behind.
+                # Still booked: no _push_agent_stopped above has alerted for this run.
+                if ended.get("reason") and run_id in _run_started:
+                    _alert_after_run(conv_id, run_id, ended["reason"])
                 _run_started.pop(run_id, None)
                 _quiet_runs.discard(run_id)
 

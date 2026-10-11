@@ -37,6 +37,9 @@ class TerminalManager:
         self._lock = threading.Lock()
         self._sessions: dict[str, _SessionEntry] = {}
         self._pending: dict[str, PendingCommand] = {}
+        # Answered before the agent's thread got to wait_for_approval (a quick click):
+        # the waiter still finds the answer. The newest few only; a waiter pops its own.
+        self._decided: dict[str, PendingCommand] = {}
         self._push: Callable[[dict[str, Any]], None] | None = None
 
     def set_push(self, push: Callable[[dict[str, Any]], None] | None) -> None:
@@ -320,6 +323,7 @@ class TerminalManager:
             # A card in the chat that asked (conv_id); with no chat, an entry in the
             # header's background activity list.
             self._emit({"type": "terminal_command_pending", **_pending_dict(pending, source or "ducky_terminal_run")})
+            _alert_command(conv_id, cmd)
         return {"ok": True, "request_id": request_id, "status": "pending_approval"}
 
     def list_pending(self) -> list[dict[str, Any]]:
@@ -370,7 +374,7 @@ class TerminalManager:
 
     def wait_for_approval(self, request_id: str, timeout_s: float = _APPROVAL_TIMEOUT_S) -> dict[str, Any]:
         with self._lock:
-            pending = self._pending.get(request_id)
+            pending = self._pending.get(request_id) or self._decided.pop(request_id, None)
         if pending is None:
             return {"ok": False, "error": "request not found"}
         if not pending.decided.wait(timeout=max(1.0, float(timeout_s))):
@@ -472,6 +476,10 @@ class TerminalManager:
     def _take_pending(self, request_id: str) -> PendingCommand | None:
         with self._lock:
             pending = self._pending.pop(request_id, None)
+            if pending is not None and pending.runner_waits:
+                self._decided[request_id] = pending
+                for old in list(self._decided)[:-32]:
+                    self._decided.pop(old, None)
         if pending is not None and pending.asked:
             # Every window (and a page replaying the backlog after a reload) drops
             # its Allow pop-up: the question was answered here, or timed out.
@@ -523,6 +531,25 @@ def _remember_choice(pending: PendingCommand, scope: str) -> str:
         return remember(pending.conv_id, pending.command, scope, cwd=pending.cwd, local_only=pending.local_only)
     except Exception:
         return "once"
+
+
+def _alert_command(conv_id: str, command: str) -> None:
+    """A command waits for the person's OK: alert (frontend.notifications). The command
+    shows in the Windows notification only. Off-thread: naming the chat reads it from disk."""
+
+    def send() -> None:
+        try:
+            from frontend.notifications import alert
+            from frontend.ui_web.project_chats import load_conversation
+
+            conv = load_conversation(conv_id) if conv_id else None
+            title = str(getattr(conv, "title", "") or "").strip() or "UEFN Ducky"
+            alert(title, "Wants to run a command.", level="ask", kind="chat" if conv else "",
+                  target_id=conv_id if conv else "", detail=command)
+        except Exception:
+            pass
+
+    threading.Thread(target=send, daemon=True, name="command-alert").start()
 
 
 def _pending_dict(pending: PendingCommand, source: str) -> dict[str, Any]:

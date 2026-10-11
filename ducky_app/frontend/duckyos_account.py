@@ -1888,41 +1888,61 @@ def stop_rpc_waiter() -> None:
     _RPC_WAKE.set()
 
 
-def notify_desktop_agent_done(
-    *,
-    title: str = "UEFN Ducky",
-    body: str = "Your agent finished.",
-    kind: str = "",
-    target_id: str = "",
-) -> None:
-    """Tell the site to push the user's phone (FCM). Best-effort, on its own thread.
+def send_account_alerts(items: list[dict[str, Any]]) -> bool:
+    """One batch of alerts (frontend.notifications) to the account: the profile's bell
+    lists them and the site pushes the phone for the ones marked ``push``. One request.
 
-    ``kind`` ("chat" | "workflow") + ``target_id`` make the tap open that chat or
-    workflow in Remote View. Only names and a status line leave the PC, never
-    the reply text (pushes travel through Google's FCM).
-    """
-    payload: dict[str, Any] = {"title": title[:80], "body": body[:160]}
-    if kind in ("chat", "workflow") and target_id:
-        payload["kind"] = kind
-        payload["id"] = target_id[:80]
-
-    def _send() -> None:
-        try:
-            _plugin_collect(
-                "uefn-ducky",
-                "desktop-agent-done",
-                payload,
-                unavailable_code="push_unavailable",
-                unavailable_msg="Can't send mobile notification right now.",
-                error_code="push_error",
-                timeout=12.0,
-            )
-        except Exception:
-            return
-
-    import threading
-
-    threading.Thread(target=_send, daemon=True, name="duckyos-push").start()
+    Each item: ``title``, ``body`` (a status line, never reply text: pushes travel
+    through Google's FCM), ``level``, ``kind`` ("chat" | "workflow") + ``id`` (a tap
+    opens it in Remote View), ``push``, ``at``. Blocking; never raises. False when
+    signed out or the site didn't take it."""
+    items = [dict(i) for i in items if isinstance(i, dict)][:20]
+    if not items:
+        return True
+    blob = _load_blob()
+    if not account_key(blob):
+        return False
+    body: dict[str, Any] = {"items": items, "keyId": str(blob.get("device_key_id") or "")}
+    try:
+        _plugin_collect(
+            "uefn-ducky",
+            "desktop-notify",
+            body,
+            unavailable_code="push_unavailable",
+            unavailable_msg="Can't send notifications right now.",
+            error_code="push_error",
+            timeout=12.0,
+        )
+        return True
+    except DuckyOSAccountError as exc:
+        if exc.code != "push_unavailable":
+            return False
+    except Exception:
+        return False
+    # A site from before desktop-notify keeps only its phone push: one, for the batch.
+    pushed = [i for i in items if i.get("push")]
+    if not pushed:
+        return False
+    one = pushed[-1]
+    legacy: dict[str, Any] = {"title": str(one.get("title") or "UEFN Ducky")[:80], "body": str(one.get("body") or "")[:160]}
+    if len(pushed) > 1:
+        legacy = {"title": "UEFN Ducky", "body": f"{len(pushed)} updates on your PC."}
+    elif one.get("kind") in ("chat", "workflow") and one.get("id"):
+        legacy["kind"] = one["kind"]
+        legacy["id"] = str(one["id"])[:80]
+    try:
+        _plugin_collect(
+            "uefn-ducky",
+            "desktop-agent-done",
+            legacy,
+            unavailable_code="push_unavailable",
+            unavailable_msg="Can't send notifications right now.",
+            error_code="push_error",
+            timeout=12.0,
+        )
+        return True
+    except Exception:
+        return False
 
 
 def _plugin_collect(
