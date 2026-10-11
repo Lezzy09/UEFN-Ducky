@@ -106,3 +106,23 @@ def test_agent_send_infers_a_reply_from_response_id(monkeypatch, kwargs, expects
     ducky_panel.ducky_agent_send(to='coord', message='done', sender='member', **kwargs)
     assert sent[0]['expect_reply'] is expects
     assert sent[0]['response_id'] == kwargs.get('response_id', '')
+
+
+def test_a_message_to_an_agent_waiting_on_you_is_your_answer(monkeypatch):
+    # Oct 11 2026: builders answered the lead without the response_id. Each answer opened
+    # a new request back and the lead's stayed open: ack, notice, ack, all afternoon.
+    from backend.tools.panel import ducky_panel
+
+    sent = []
+    monkeypatch.setattr(ducky_panel, 'load_conversation', lambda cid, project_root=None: SimpleNamespace(folder_id=''))
+    monkeypatch.setattr(ducky_panel, '_project_root', lambda: '')
+    monkeypatch.setattr(a2a_client, 'send', lambda **kw: sent.append(kw) or {'response_id': ''})
+    monkeypatch.setattr(a2a_client, 'open_threads_for_receiver', lambda cid: [
+        {'response_id': 'other', 'sender_conv_id': 'someone', 'receiver_conv_id': 'member'},
+        {'response_id': 'rid9', 'sender_conv_id': 'coord', 'receiver_conv_id': 'member'},
+    ])
+    ducky_panel.ducky_agent_send(to='coord', message='done', sender='member')
+    assert (sent[0]['response_id'], sent[0]['expect_reply']) == ('rid9', False)
+    # Asking it something new on purpose still opens a request.
+    ducky_panel.ducky_agent_send(to='coord', message='which file?', sender='member', expect_reply=True)
+    assert (sent[1]['response_id'], sent[1]['expect_reply']) == ('', True)

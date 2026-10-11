@@ -1051,6 +1051,23 @@ def ducky_agent_list(sender: str = "", pretty: bool = False) -> str:
     )
 
 
+def _owed_reply(me: str, target: str) -> str:
+    """The request ``target`` is still waiting for ``me`` to answer ('' when none). Builders
+    answered without the id, each answer opened a new request back, the original stayed
+    open and its "finished without replying" notice woke the lead: a loop of acks."""
+    from backend.agent.a2a_client import open_threads_for_receiver
+
+    try:
+        threads = open_threads_for_receiver(me) or []
+    except Exception:
+        return ""
+    for thread in threads:
+        row = thread if isinstance(thread, dict) else vars(thread)
+        if str(row.get("sender_conv_id") or "") == target:
+            return str(row.get("response_id") or "")
+    return ""
+
+
 @mcp.tool()
 def ducky_agent_send(
     to: str,
@@ -1066,7 +1083,8 @@ def ducky_agent_send(
     the reply (or an inactivity notice) arrives later as a `[ducky:agent-message]` turn
     in YOUR chat. A new message expects a reply unless you pass `expect_reply=false`. To
     ANSWER a message that asked for a reply, pass its `response_id` (that makes it an
-    answer; leave `expect_reply` out). Never busy-wait for replies. `sender` is your own chat id
+    answer; leave `expect_reply` out). A message to an agent still waiting on your answer
+    IS that answer, even without the id. Never busy-wait for replies. `sender` is your own chat id
     (external coding agents must pass it; embedded duckies may omit it).
 
     A note that needs no reply (`expect_reply=false`, not from the receiver's lead) is not a
@@ -1095,6 +1113,8 @@ def ducky_agent_send(
     from backend.agent.a2a_client import send
 
     reply_to = (response_id or "").strip()
+    if not reply_to and expect_reply is None:
+        reply_to = _owed_reply(me, target)
     # Every agent answered with response_id alone, hit "not both" and had to retry.
     expects = (not reply_to) if expect_reply is None else bool(expect_reply)
     outcome = send(
