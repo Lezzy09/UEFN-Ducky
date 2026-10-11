@@ -367,6 +367,7 @@ def bootstrap_system_prompt(
         "`ducky_group_set_leader` to hand leadership to another member. "
         "REUSE: `ducky_group_members` → `ducky_send_chat_message`. "
         "Bloated member: `ducky_recycle_member` (handoff → hard-delete → twin). "
+        "Leading a team: you coordinate, members build. Give each member whole features, including testing their own work and integrating their own files; you plan, assign, read reports, decide and keep the plan current. Keep your own turns short (a few minutes): assign, then finish your turn and let the reports come to you. Never run long build, test or verify loops yourself; hand them to a member (an integration/QA member if the team needs one). The person can write to you at any time and comes first. "
         f"`ducky_agent_list(sender=\"{conv_id}\")` for live peers. "
         f"Message peers with `ducky_agent_send(sender=\"{conv_id}\", to=\"<chat id>\", "
         "message=…, expect_reply=true)` then FINISH your turn.\n"
