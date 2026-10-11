@@ -48,9 +48,11 @@ class Envelope:
     body: str
     response_id: str = ""
     is_notice: bool = False
-    enqueued_at: float = field(default_factory=time.time)
+    enqueued_at: float = field(default_factory=lambda: time.time())
     is_report: bool = False
     redelivery: bool = False
+    fyi: bool = False
+    """Asks for no reply, answers none and is not from the receiver's lead: see _fyi_wait."""
 
 
 @dataclass
@@ -91,6 +93,12 @@ _uncertain_chats: set[str] = set()
 _reports: dict[str, dict[str, UnansweredReport]] = {}
 _report_timers: dict[str, Any] = {}
 _REPORT_RETRY_S = 30.0
+# An FYI waits this long after the newest one for more to arrive (at most _FYI_MAX_WAIT_S
+# after the oldest), unless mail that needs action comes first and takes it along. A team
+# that sent every status note as its own turn woke idle agents dozens of times an hour.
+_FYI_BUNDLE_S = 90.0
+_FYI_MAX_WAIT_S = 300.0
+_fyi_timers: dict[str, threading.Timer] = {}
 
 
 def unanswered_reports(conv_id: str) -> list[dict[str, Any]]:
@@ -365,6 +373,7 @@ def send(
         raise ValueError("pass either expect_reply=true OR response_id (a reply), not both")
     # Read the teams before taking the lock: it walks every chat.
     needs_action = bool(response_id) and _answer_needs_action(sender_conv_id, receiver_conv_id)
+    fyi = not expect_reply and not response_id and not leads_receiver(sender_conv_id, receiver_conv_id)
 
     with _lock:
         closing: Thread | None = None
@@ -392,6 +401,7 @@ def send(
             body=body,
             response_id=rid if expect_reply else (response_id or ""),
             is_report=bool(closing) and needs_action,
+            fyi=fyi,
         )
         # Match, consume and enqueue atomically: racing duplicate replies cannot
         # both be admitted, or consume a later request between those steps.
@@ -511,6 +521,27 @@ def _format_envelope(envelope: Envelope) -> str:
     )
 
 
+def _fyi_wait(conv_id: str, now: float | None = None) -> float:
+    """Seconds an inbox of nothing but FYIs still waits for more (0 = deliver now)."""
+    queue = _inbox.get(conv_id)
+    if _FYI_BUNDLE_S <= 0 or not queue or not all(e.fyi for e in queue):
+        return 0.0
+    now = time.time() if now is None else now
+    newest = max(e.enqueued_at for e in queue)
+    oldest = min(e.enqueued_at for e in queue)
+    return max(0.0, min(newest + _FYI_BUNDLE_S, oldest + _FYI_MAX_WAIT_S) - now)
+
+
+def _schedule_fyi_kick(conv_id: str, wait: float) -> None:
+    old = _fyi_timers.pop(conv_id, None)
+    if old is not None:
+        old.cancel()
+    timer = threading.Timer(wait + 0.05, _kick_delivery, args=(conv_id,))
+    timer.daemon = True
+    _fyi_timers[conv_id] = timer
+    timer.start()
+
+
 def _kick_delivery(conv_id: str) -> None:
     """Deliver once; cooldown queues stay owned by this existing RAM broker."""
     with _lock:
@@ -521,6 +552,11 @@ def _kick_delivery(conv_id: str) -> None:
             _delivery_again.add(conv_id)
             return
         if conv_id in _active:
+            return
+        wait = _fyi_wait(conv_id)
+        if wait > 0:
+            # Only FYIs so far: more may follow, and they go in one turn.
+            _schedule_fyi_kick(conv_id, wait)
             return
         _delivery_inflight.add(conv_id)
 

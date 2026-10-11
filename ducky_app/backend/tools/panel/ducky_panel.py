@@ -1064,6 +1064,11 @@ def ducky_agent_send(
     ANSWER a message that asked for a reply, pass its `response_id` (that makes it an
     answer; leave `expect_reply` out). Never busy-wait for replies. `sender` is your own chat id
     (external coding agents must pass it; embedded duckies may omit it).
+
+    A note that needs no reply (`expect_reply=false`, not from the receiver's lead) is not a
+    turn of its own: it waits for a quiet minute and a half and reaches the receiver together
+    with other notes, or with the next message that needs action. Send one note per finished
+    piece of work, to the agent that needs it, not a copy to every teammate.
     """
     text = _truncate_text(message.strip(), _MAX_MESSAGE_CHARS)
     if not text:

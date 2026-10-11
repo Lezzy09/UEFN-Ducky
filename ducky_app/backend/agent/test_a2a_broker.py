@@ -97,6 +97,9 @@ def broker(monkeypatch):
     monkeypatch.setitem(sys.modules, "frontend.ui_web.group_orchestrator", fake_groups)
     module = importlib.import_module("backend.agent.a2a_broker")
     importlib.reload(module)
+    # Delivery mechanics: FYI bundling off here, tested on its own below.
+    module._FYI_BUNDLE_S = 0.0
+    module._FYI_MAX_WAIT_S = 0.0
     return SimpleNamespace(mod=module, modes=fake_modes, chats=fake_chats)
 
 
@@ -701,3 +704,50 @@ def test_uncertain_batch_not_replayed_when_pending_batch_drains(broker, delivery
     delivery_steps.drain()
     assert len(attempts) == 2
     assert broker.mod.read_inbox('recv1')[0]['status'] == 'held_manual_recovery'
+
+
+def test_fyi_notes_wait_and_reach_an_idle_receiver_in_one_turn(broker, fake_clock):
+    """A team woke idle agents for every status note: 43 of 82 turns in one hour."""
+    b = broker.mod
+    b._FYI_BUNDLE_S, b._FYI_MAX_WAIT_S = 90.0, 300.0
+    b.send(sender_conv_id="sender1", receiver_conv_id="recv1", body="module A written", expect_reply=False)
+    fake_clock.now += 30
+    b.send(sender_conv_id="sender1", receiver_conv_id="recv1", body="module B written", expect_reply=False)
+    time.sleep(0.2)
+    assert broker.modes.sent == []
+    live = [t for t in fake_clock.timers if not t.cancelled]
+    assert len(live) == 1 and 89 < live[0].delay < 91  # 90 s after the newest note
+    fake_clock.now += 91
+    live[0].fire()
+    _wait_sent(broker.modes)
+    (conv, text), = broker.modes.sent
+    assert conv == "recv1" and "module A written" in text and "module B written" in text
+
+
+def test_fyi_notes_never_wait_past_the_cap(broker, fake_clock):
+    b = broker.mod
+    b._FYI_BUNDLE_S, b._FYI_MAX_WAIT_S = 90.0, 300.0
+    b.send(sender_conv_id="sender1", receiver_conv_id="recv1", body="first", expect_reply=False)
+    fake_clock.now += 280
+    b.send(sender_conv_id="sender1", receiver_conv_id="recv1", body="late", expect_reply=False)
+    live = [t for t in fake_clock.timers if not t.cancelled]
+    assert len(live) == 1 and live[0].delay < 21  # 300 s after the oldest note
+
+
+def test_a_message_that_needs_action_goes_at_once_and_takes_the_notes_along(broker, fake_clock):
+    b = broker.mod
+    b._FYI_BUNDLE_S, b._FYI_MAX_WAIT_S = 90.0, 300.0
+    b.send(sender_conv_id="sender1", receiver_conv_id="recv1", body="status note", expect_reply=False)
+    b.send(sender_conv_id="sender1", receiver_conv_id="recv1", body="please review", expect_reply=True)
+    _wait_sent(broker.modes)
+    (_conv, text), = broker.modes.sent
+    assert "status note" in text and "please review" in text
+
+
+def test_a_leads_assignment_is_never_held(broker, fake_clock, monkeypatch):
+    b = broker.mod
+    b._FYI_BUNDLE_S, b._FYI_MAX_WAIT_S = 90.0, 300.0
+    monkeypatch.setattr(b, "leads_receiver", lambda sender, receiver: True)
+    b.send(sender_conv_id="sender1", receiver_conv_id="recv1", body="build module C", expect_reply=False)
+    _wait_sent(broker.modes)
+    assert "build module C" in broker.modes.sent[0][1]
