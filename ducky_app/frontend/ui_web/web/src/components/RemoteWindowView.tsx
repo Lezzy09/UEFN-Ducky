@@ -315,6 +315,47 @@ const RETRY_MS = [1500, 3000, 5000, 8000];
 const MAX_AUTO_RETRIES = 4;
 const SIZE_DEBOUNCE_MS = 400;
 
+/** A stream nobody touches for this long pauses: the desktop stops capturing and the phone
+ *  stops spending battery and data. A tap resumes it. */
+export const IDLE_PAUSE_MS = 5 * 60_000;
+const IDLE_CHECK_MS = 15_000;
+
+/** True once the view has had no touch, key or scroll for IDLE_PAUSE_MS while streaming. */
+export function useIdlePause(
+  overlayRef: { current: HTMLElement | null },
+  active: boolean,
+): { idle: boolean; resume: () => void } {
+  const [idle, setIdle] = useState(false);
+  const lastInput = useRef(Date.now());
+  useEffect(() => {
+    const el = overlayRef.current;
+    const mark = () => {
+      lastInput.current = Date.now();
+    };
+    const opts = { capture: true, passive: true } as const;
+    const kinds = ["pointerdown", "touchstart", "wheel", "keydown"] as const;
+    for (const kind of kinds) el?.addEventListener(kind, mark, opts);
+    window.addEventListener("keydown", mark, opts);
+    return () => {
+      for (const kind of kinds) el?.removeEventListener(kind, mark, opts);
+      window.removeEventListener("keydown", mark, opts);
+    };
+  }, [overlayRef, active]);
+  useEffect(() => {
+    if (!active || idle) return;
+    lastInput.current = Date.now();
+    const timer = window.setInterval(() => {
+      if (Date.now() - lastInput.current >= IDLE_PAUSE_MS) setIdle(true);
+    }, IDLE_CHECK_MS);
+    return () => window.clearInterval(timer);
+  }, [active, idle]);
+  const resume = useCallback(() => {
+    lastInput.current = Date.now();
+    setIdle(false);
+  }, []);
+  return { idle, resume };
+}
+
 /** Capture only while this tab is actually on screen — same idea as UE pausing when you tab away. */
 function useViewerActive(): boolean {
   const [on, setOn] = useState(() => typeof document === "undefined" || document.visibilityState === "visible");
@@ -1364,7 +1405,10 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
   const kindRef = useRef(kind);
   if (kind) kindRef.current = kind;
   const watchingUefn = (kind || kindRef.current) === "uefn";
-  const viewing = useViewerActive();
+  const onScreen = useViewerActive();
+  const { idle, resume } = useIdlePause(overlayRef, !!hwnd && onScreen);
+  // Stream only while the page is on screen and someone has used it in the last few minutes.
+  const viewing = onScreen && !idle;
 
   const send = useCallback((payload: Record<string, unknown>) => {
     const direct = getDirectTransport();
@@ -1660,7 +1704,7 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
         >
           <video
             ref={videoRef}
-            className={phase === "live" ? "remote-window-canvas" : "remote-window-canvas is-offscreen"}
+            className={phase === "live" && !idle ? "remote-window-canvas" : "remote-window-canvas is-offscreen"}
             autoPlay
             muted
             playsInline
@@ -1669,7 +1713,14 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
           />
         </div>
       </div>
-      {phase !== "live" ? (
+      {idle ? (
+        <div className="remote-window-status">
+          <p className="remote-window-overlay-msg">Paused after 5 minutes without use, to save battery and data.</p>
+          <button type="button" className="remote-window-retry" onClick={resume}>
+            Resume
+          </button>
+        </div>
+      ) : phase !== "live" ? (
         <div className="remote-window-status">
           <p className="remote-window-overlay-msg">
             {phase === "connecting" ? "Connecting to desktop…" : reason}
@@ -1685,11 +1736,11 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
           ) : null}
         </div>
       ) : null}
-      {phase === "live" && stats ? (
+      {!idle && phase === "live" && stats ? (
         <span className="remote-window-stats">{statsLabel(stats)}</span>
       ) : null}
-      {phase === "live" ? <RemoteTypeBar ref={typeBarRef} send={send} /> : null}
-      {phase === "live" && controls.overlay && watchingUefn ? (
+      {!idle && phase === "live" ? <RemoteTypeBar ref={typeBarRef} send={send} /> : null}
+      {!idle && phase === "live" && controls.overlay && watchingUefn ? (
         <UefnStickOverlay
           send={send}
           mode={controls.mode}

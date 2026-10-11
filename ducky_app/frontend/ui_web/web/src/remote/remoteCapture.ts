@@ -247,13 +247,22 @@ export function preferVideoCodecs(pc: RTCPeerConnection) {
   }
 }
 
-export async function tuneSender(sender: RTCRtpSender) {
+/**
+ * A stream starts modest and goes to full quality a few seconds later. Sent at 20 Mbps and
+ * 60 fps from the first frame, before the link has measured its bandwidth, a phone queued
+ * the opening frames: the view lagged, then raced to catch up.
+ */
+export const START_BITRATE = 2_500_000;
+export const START_FPS = 30;
+export const RAMP_MS = 4000;
+
+async function limitSender(sender: RTCRtpSender, bitrate: number, fps: number): Promise<void> {
   try {
     const params = sender.getParameters();
     if (!params.encodings?.length) params.encodings = [{}];
     for (const enc of params.encodings) {
-      enc.maxBitrate = MAX_BITRATE;
-      enc.maxFramerate = MAX_FPS;
+      enc.maxBitrate = bitrate;
+      enc.maxFramerate = fps;
       enc.scaleResolutionDownBy = 1;
       (enc as { priority?: string }).priority = "high";
       (enc as { networkPriority?: string }).networkPriority = "high";
@@ -261,6 +270,11 @@ export async function tuneSender(sender: RTCRtpSender) {
     (params as { degradationPreference?: string }).degradationPreference = "maintain-framerate";
     await sender.setParameters(params);
   } catch {
-    /* ignore */
+    /* ignore: the session closed */
   }
+}
+
+export async function tuneSender(sender: RTCRtpSender, rampMs = RAMP_MS): Promise<void> {
+  await limitSender(sender, START_BITRATE, START_FPS);
+  window.setTimeout(() => void limitSender(sender, MAX_BITRATE, MAX_FPS), rampMs);
 }
