@@ -28,9 +28,11 @@ commands ask) and "Allow everything" (the ``*`` rule above). Claude Code reads i
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
+import time
 from typing import Any
 
 from backend.server import mcp
@@ -232,13 +234,20 @@ def _rules(conv_id: str) -> list[str]:
     if not conv_id:
         return []
     if _rules_in_db():
-        try:
-            from backend.store.repos import kv
+        from backend.store.repos import kv
 
-            doc = kv.get_doc(_RULES_TABLE, _rules_key(conv_id))
-            return [str(r) for r in doc if str(r).strip()] if isinstance(doc, list) else []
-        except Exception:
-            return []
+        # A read that failed counted as "no rules": a team whose chats allowed everything
+        # had its commands wait on approval cards nobody saw (Oct 12 2026). Retry, and say so.
+        for attempt in range(3):
+            try:
+                doc = kv.get_doc(_RULES_TABLE, _rules_key(conv_id))
+                return [str(r) for r in doc if str(r).strip()] if isinstance(doc, list) else []
+            except Exception:
+                if attempt == 2:
+                    logging.getLogger(__name__).warning(
+                        "could not read the approval rules of chat %s", conv_id, exc_info=True)
+                    return []
+                time.sleep(0.2)
     conv = _load_conv(conv_id)  # files store: on the chat itself
     return list(getattr(conv, "agent_allow_rules", None) or []) if conv is not None else []
 

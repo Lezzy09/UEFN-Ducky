@@ -1871,6 +1871,11 @@ def ducky_terminal_run(
         command_timeout_s=max(5.0, min(float(command_timeout_s), 3600.0)),
         auto_approve=auto,
     )
+    if not auto and "not approved" in str(result.get("error") or ""):
+        # Say whose card it was: a team whose chats allowed everything waited on cards
+        # nobody saw, and the bare "timed out" didn't show why (Oct 12 2026).
+        result["asked_in_chat"] = chat or "(no chat: the call carried no chat identity)"
+        result["chat_allows_everything"] = bool(chat) and allows_everything(chat)
     return tool_json(result, pretty=pretty)
 
 

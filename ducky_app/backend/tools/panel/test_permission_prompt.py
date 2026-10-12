@@ -473,3 +473,26 @@ def test_a_plugin_with_no_recorded_source_is_updated_from_the_store(agents, conv
     _regs, manifests = agents
     manifests["anthropic"].pop("source", None)
     assert pp.chat_permissions("c1", "old_claude")["update"]["from_store"] is True
+
+
+def test_a_failed_read_of_a_chats_rules_is_retried_and_logged(monkeypatch, caplog) -> None:
+    # Oct 12 2026: a read that failed counted as "no rules", so a team whose chats allowed
+    # everything had its commands wait on approval cards nobody saw.
+    from backend.store.repos import kv
+
+    monkeypatch.setattr(pp, "_rules_in_db", lambda: True)
+    monkeypatch.setattr(pp.time, "sleep", lambda s: None)
+    calls = []
+
+    def flaky(table, key):
+        calls.append(key)
+        if len(calls) < 3:
+            raise RuntimeError("database is locked")
+        return ["*"]
+
+    monkeypatch.setattr(kv, "get_doc", flaky)
+    assert pp._rules("c-flaky") == ["*"] and len(calls) == 3
+    monkeypatch.setattr(kv, "get_doc", lambda table, key: (_ for _ in ()).throw(RuntimeError("database is locked")))
+    with caplog.at_level("WARNING"):
+        assert pp._rules("c-down") == []
+    assert "could not read the approval rules of chat c-down" in caplog.text
