@@ -1049,11 +1049,21 @@ def call_panel_rpc(plugin_id: str, method: str, params: dict[str, Any] | None = 
                     _REGISTERED.discard(pid)
             root = plugin_dir(pid)
             manifest = load_plugin_manifest(pid)
-            if manifest is not None and root.is_dir():
+            # A plugin that failed to load fails the same way on every call: a panel
+            # polling account.status reloaded Account every 2 s. Retry on the repair backoff.
+            now = time.monotonic()
+            failed_lately = pid in _LOAD_FAILURES and (
+                now - float(_REPAIR_ATTEMPTS.get(pid) or 0.0) < _REPAIR_BACKOFF_S
+            )
+            if manifest is not None and root.is_dir() and not failed_lately:
+                _REPAIR_ATTEMPTS[pid] = now
                 _load_enabled_plugin(pid, root, manifest)
             with _LOCK:
                 fn = (_PANEL_RPC.get(pid) or {}).get(name)
     if fn is None:
+        failure = _LOAD_FAILURES.get(pid)
+        if failure:
+            raise ValueError(f"{pid} didn't load: {failure}")
         raise ValueError(f"Unknown panel RPC: {pid}.{name}")
     kwargs = dict(params or {})
     return fn(**kwargs)
