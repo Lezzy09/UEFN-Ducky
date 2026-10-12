@@ -143,9 +143,9 @@ the notes. `after` = ids of steps or sub plans that must finish first. Adding a
 step needs no pause; content, moving and deleting steps require pausing the plan.
 The lead never dispatches, resumes or chases members by message (Ducky refuses a
 lead's message to a member with plan work); a bug the person reports becomes one
-point in the right sub plan. When nothing in its plan can move on its own for two
-idle minutes, the keeper wakes the lead;
-three wakes that change nothing park it until a step moves or a member works.
+point in the right sub plan. When nothing in its plan can move on its own for
+two idle minutes, the keeper wakes the lead; three wakes that change nothing park
+it until a step moves or a member works.
 
 ## Show the user (Show me)
 
