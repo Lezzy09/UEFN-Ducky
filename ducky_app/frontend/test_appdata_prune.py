@@ -8,6 +8,7 @@ from frontend.appdata_maintenance import (
     heal_plugin_runtime_homes,
     prune_empty_leftover_dirs,
     prune_empty_project_dirs,
+    retire_cloudflare_tunnel,
 )
 
 
@@ -57,3 +58,25 @@ def test_heal_moves_unity_mcp_under_plugin(tmp_path: Path) -> None:
     assert heal_plugin_runtime_homes(root) == 1
     assert not (root / "unity_mcp").exists()
     assert (plugin / "runtime" / "bin" / "uv.exe").is_file()
+
+
+def test_retire_cloudflare_tunnel_once(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "UEFN-Ducky"
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "cloudflared.exe").write_bytes(b"exe")
+    (root / "bin" / "uv.exe").write_bytes(b"uv")
+    (root / "diagnostics").mkdir()
+    (root / "diagnostics" / "cloudflared.log").write_text("log", encoding="utf-8")
+    killed: list[list[str]] = []
+    monkeypatch.setattr("subprocess.run", lambda argv, **_kw: killed.append(argv))
+    keys = {"uefn-ducky/remote_named_tunnel": "tok"}
+    monkeypatch.setattr("backend.agent.secrets.get_key", keys.get)
+    monkeypatch.setattr("backend.agent.secrets.clear_key", keys.pop)
+    assert retire_cloudflare_tunnel(root) == 2
+    assert not (root / "bin" / "cloudflared.exe").exists()
+    assert not (root / "diagnostics" / "cloudflared.log").exists()
+    assert (root / "bin" / "uv.exe").is_file()
+    assert keys == {}
+    killed.clear()
+    assert retire_cloudflare_tunnel(root) == 0
+    assert killed == []

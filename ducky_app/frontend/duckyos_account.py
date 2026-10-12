@@ -199,12 +199,6 @@ def _unpair_this_pc() -> None:
     stop_presence_heartbeat()
     stop_rpc_waiter()
     try:
-        from frontend.remote_tunnel import stop_remote_tunnel
-
-        stop_remote_tunnel(deprovision=True)
-    except Exception:
-        pass
-    try:
         publish_device_presence(live=False)
     except Exception:
         pass
@@ -622,14 +616,8 @@ def start_browser_login(base_url: str = "", *, timeout_secs: float = 600.0) -> d
                 publish_agent_catalog()
             except Exception:
                 pass
-            try:
-                from frontend.remote_tunnel import start_remote_tunnel
 
-                start_remote_tunnel()
-            except Exception:
-                pass
-
-        # ponytail: caps + cloudflared can take 10s+; Account is already signed in.
+        # ponytail: caps can take 10s+; Account is already signed in.
         __import__("threading").Thread(
             target=_after_login, daemon=True, name="ducky-login-followup"
         ).start()
@@ -647,17 +635,11 @@ def logout() -> dict[str, Any]:
     stop_rpc_waiter()
     blob = _load_blob()
     base = str(blob.get("base_url") or "").rstrip("/")
-    # End browser access while credentials are still available for deprovisioning.
+    # End browser access before the device key goes.
     try:
         from frontend.ui_web.panel_httpd import kick_all_remote
 
         kick_all_remote()
-    except Exception:
-        pass
-    try:
-        from frontend.remote_tunnel import stop_remote_tunnel
-
-        stop_remote_tunnel(deprovision=True)
     except Exception:
         pass
     _revoke_device_key(blob)
@@ -1419,8 +1401,6 @@ RPC_ALLOWLIST = frozenset(
         "list_changesets",
         "get_changeset",
         "remote_snapshot",
-        "remote_endpoint",
-        "remote_release",
         "rtc_connect",
         "rtc_report",
     }
@@ -1611,23 +1591,11 @@ def start_presence_heartbeat() -> None:
         )
         _PRESENCE_THREAD.start()
         start_rpc_waiter()
-        try:
-            from frontend.remote_tunnel import start_remote_tunnel
-
-            start_remote_tunnel()
-        except Exception:
-            pass
 
 
 def stop_presence_heartbeat() -> None:
     _PRESENCE_STOP.set()
     stop_rpc_waiter()
-    try:
-        from frontend.remote_tunnel import stop_remote_tunnel
-
-        stop_remote_tunnel()
-    except Exception:
-        pass
 
 
 def call_panel_method(api: Any, name: str, args: Any = None) -> Any:
@@ -1678,19 +1646,6 @@ def dispatch_desktop_rpc(method: str, args: dict[str, Any] | None = None) -> dic
             return {"ok": True, "result": _remote_snapshot()}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
-    if name == "remote_endpoint":
-        try:
-            return {"ok": True, "result": _remote_endpoint()}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-    if name == "remote_release":
-        try:
-            from frontend.ui_web import panel_httpd
-
-            panel_httpd.sign_out_all_remote()
-            return {"ok": True, "result": True}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
     if name == "rtc_connect":
         from frontend.remote_direct import rtc_connect
 
@@ -1713,36 +1668,6 @@ def dispatch_desktop_rpc(method: str, args: dict[str, Any] | None = None) -> dic
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "result": result}
-
-
-def _remote_endpoint() -> dict[str, Any]:
-    from frontend.settings import PanelSettings
-    from frontend.ui_web import panel_httpd
-    from frontend.remote_tunnel import remote_tunnel_status, start_remote_tunnel
-
-    s = PanelSettings.load()
-    if not bool(getattr(s, "remote_access", False)):
-        return {"enabled": False}
-    try:
-        start_remote_tunnel()
-    except Exception:
-        pass
-    st = remote_tunnel_status()
-    hostname = str(st.get("hostname") or "").strip()
-    mode = str(st.get("mode") or "")
-    if not hostname or not st.get("running"):
-        return {
-            "enabled": True,
-            "hostname": "",
-            "login_url": "",
-            "starting": True,
-            "mode": mode,
-            "error": str(st.get("error") or ""),
-        }
-    token = panel_httpd.mint_remote_login_token()
-    scheme = "http" if hostname.startswith("127.") else "https"
-    login_url = f"{scheme}://{hostname}/__remote_login?t={token}"
-    return {"enabled": True, "hostname": hostname, "login_url": login_url, "mode": mode}
 
 
 def _remote_snapshot() -> dict[str, Any]:

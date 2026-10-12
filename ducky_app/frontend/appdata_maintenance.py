@@ -417,6 +417,53 @@ def heal_plugin_runtime_homes(app_root: Path | None = None) -> int:
             return 0
 
 
+def retire_cloudflare_tunnel(app_root: Path | None = None) -> int:
+    """Remote Ducky connects peer to peer now. Ducky used to download Cloudflare's tunnel
+    (bin/cloudflared.exe) and keep it running: end any copy still running from there,
+    then delete it, its log and its cached tunnel token. Returns files removed."""
+    if app_root is None:
+        app_root = default_app_data_dir()
+    exe = app_root / "bin" / "cloudflared.exe"
+    if not exe.exists():
+        return 0  # never had it, or already retired
+    removed = 0
+    if os.name == "nt":
+        import subprocess
+
+        marker = str(exe).replace("'", "''")
+        script = (
+            "Get-CimInstance Win32_Process -Filter \"Name='cloudflared.exe'\" | "
+            f"Where-Object {{ $_.CommandLine -like '*{marker}*' }} | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+        )
+        try:
+            subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True, timeout=15,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception:
+            pass
+    for path in (exe, app_root / "diagnostics" / "cloudflared.log"):
+        for _ in range(10):
+            try:
+                path.unlink()
+                removed += 1
+                break
+            except FileNotFoundError:
+                break
+            except OSError:
+                time.sleep(0.5)  # the killed process still holds the file for a moment
+    try:
+        from backend.agent.secrets import clear_key, get_key
+
+        if get_key("uefn-ducky/remote_named_tunnel"):
+            clear_key("uefn-ducky/remote_named_tunnel")
+    except Exception:
+        pass
+    return removed
+
+
 def maintain_appdata(app_root: Path | None = None, *, count_boot: bool = True) -> dict[str, int]:
     """Run full AppData maintenance sweep.
 
@@ -453,11 +500,16 @@ def maintain_appdata(app_root: Path | None = None, *, count_boot: bool = True) -
         removed_installers = sweep_installer_cache()
     except Exception:
         removed_installers = 0
+    try:
+        retired_tunnel = retire_cloudflare_tunnel(app_root)
+    except Exception:
+        retired_tunnel = 0
     result = {
         "moved_backups": moved,
         "pruned_backups": pruned,
         "removed_project_dirs": removed_dirs,
         "removed_installer_cache": removed_installers,
+        "removed_cloudflare_tunnel": retired_tunnel,
         **db_result,
     }
     if any(result.values()):

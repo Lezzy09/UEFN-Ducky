@@ -28,11 +28,9 @@ def test_logout_disconnects_browser_access_and_removes_account() -> None:
     events = []
     blob = {"base_url": "https://example.test", "device_key_id": "this-pc", "device_key": "secret"}
     kick = Mock(side_effect=lambda: events.append("sessions"))
-    stop = Mock(side_effect=lambda **kwargs: events.append("tunnel"))
     with (
         patch.dict(sys.modules, {
             "frontend.ui_web.panel_httpd": SimpleNamespace(kick_all_remote=kick),
-            "frontend.remote_tunnel": SimpleNamespace(stop_remote_tunnel=stop),
         }),
         patch.object(acc, "_load_blob", return_value=blob),
         patch.object(acc, "stop_presence_heartbeat"),
@@ -42,9 +40,8 @@ def test_logout_disconnects_browser_access_and_removes_account() -> None:
         patch.object(acc, "get_status", return_value={"logged_in": False}),
     ):
         assert acc.logout() == {"logged_in": False}
-    stop.assert_called_once_with(deprovision=True)
     revoke.assert_called_once_with(blob)
-    assert events == ["sessions", "tunnel", "revoke", "clear"]
+    assert events == ["sessions", "revoke", "clear"]
 
 
 def test_logout_clears_account_even_if_browser_cleanup_fails() -> None:
@@ -57,7 +54,6 @@ def test_logout_clears_account_even_if_browser_cleanup_fails() -> None:
     with (
         patch.dict(sys.modules, {
             "frontend.ui_web.panel_httpd": SimpleNamespace(kick_all_remote=Mock(side_effect=RuntimeError)),
-            "frontend.remote_tunnel": SimpleNamespace(stop_remote_tunnel=Mock(side_effect=RuntimeError)),
         }),
         patch.object(acc, "_load_blob", return_value={}),
         patch.object(acc, "stop_presence_heartbeat"),
@@ -132,19 +128,6 @@ def test_dispatch_desktop_rpc_allowlist() -> None:
     assert "not allowed" in str(denied.get("error") or "")
 
 
-def test_dispatch_remote_release_clears_sessions() -> None:
-    from unittest.mock import patch
-
-    from frontend.duckyos_account import dispatch_desktop_rpc
-
-    with patch("frontend.ui_web.panel_httpd.sign_out_all_remote") as drop:
-        out = dispatch_desktop_rpc("remote_release", {})
-    assert out == {"ok": True, "result": True}
-    drop.assert_called_once_with()
-    gone = dispatch_desktop_rpc("kick_all_remote", {})
-    assert gone["ok"] is False
-
-
 class _StubApi:
     def list_folders(self, parent_id: str = "") -> list[str]:
         return [parent_id or "root"]
@@ -160,65 +143,6 @@ def test_call_panel_method_maps_kwargs_and_positional() -> None:
     assert call_panel_method(api, "list_folders", {"parent_id": "a"}) == ["a"]
     assert call_panel_method(api, "list_folders", []) == ["root"]
     assert call_panel_method(api, "send_message", ["c1", "hi"])["text"] == "hi"
-
-
-def test_remote_endpoint_shape_when_disabled() -> None:
-    from frontend.duckyos_account import _remote_endpoint
-    from frontend.settings import PanelSettings
-    from unittest.mock import patch
-
-    s = PanelSettings()
-    s.remote_access = False
-    with patch("frontend.settings.PanelSettings.load", return_value=s):
-        out = _remote_endpoint()
-    assert out == {"enabled": False}
-
-
-def test_remote_endpoint_waits_until_tunnel_registers() -> None:
-    from frontend.duckyos_account import _remote_endpoint
-    from frontend.settings import PanelSettings
-    from unittest.mock import patch
-
-    s = PanelSettings()
-    s.remote_access = True
-    with (
-        patch("frontend.settings.PanelSettings.load", return_value=s),
-        patch("frontend.remote_tunnel.start_remote_tunnel"),
-        patch(
-            "frontend.remote_tunnel.remote_tunnel_status",
-            return_value={
-                "hostname": "u-abc.uefnducky.org",
-                "mode": "named",
-                "running": False,
-                "error": "",
-            },
-        ),
-    ):
-        out = _remote_endpoint()
-    assert out["starting"] is True
-    assert out["login_url"] == ""
-
-
-def test_remote_endpoint_starting_when_tunnel_has_no_host() -> None:
-    from frontend.duckyos_account import _remote_endpoint
-    from frontend.settings import PanelSettings
-    from unittest.mock import patch
-
-    s = PanelSettings()
-    s.remote_access = True
-    with (
-        patch("frontend.settings.PanelSettings.load", return_value=s),
-        patch("frontend.remote_tunnel.start_remote_tunnel"),
-        patch(
-            "frontend.remote_tunnel.remote_tunnel_status",
-            return_value={"hostname": "", "mode": "starting", "error": ""},
-        ),
-    ):
-        out = _remote_endpoint()
-    assert out["enabled"] is True
-    assert out["login_url"] == ""
-    assert out["starting"] is True
-    assert out["mode"] == "starting"
 
 
 def test_remote_deny_covers_native_and_secret_paths() -> None:
@@ -275,7 +199,6 @@ def test_device_login_polls_until_token() -> None:
         ),
         patch.object(acc, "resolve_base_url", return_value="https://uefnducky.org"),
         patch("time.sleep"),
-        patch("frontend.remote_tunnel.start_remote_tunnel"),
     ):
         out = acc.start_browser_login("https://uefnducky.org", timeout_secs=30)
     assert out["ok"] is True
@@ -638,7 +561,6 @@ def test_revoke_account_pc_clears_this_device() -> None:
         patch.object(acc, "stop_presence_heartbeat"),
         patch.object(acc, "stop_rpc_waiter"),
         patch.object(acc, "get_status", return_value={"logged_in": True, "device_key_active": False}),
-        patch("frontend.remote_tunnel.stop_remote_tunnel"),
         patch.object(acc, "publish_device_presence"),
     ):
         out = acc.revoke_account_pc("k1")
@@ -714,7 +636,6 @@ def test_unpair_this_pc_keeps_session() -> None:
         patch.object(acc, "_save_blob", side_effect=saved.append),
         patch.object(acc, "stop_presence_heartbeat"),
         patch.object(acc, "stop_rpc_waiter"),
-        patch("frontend.remote_tunnel.stop_remote_tunnel"),
         patch.object(acc, "publish_device_presence"),
     ):
         acc._unpair_this_pc()
@@ -926,11 +847,7 @@ if __name__ == "__main__":
     test_tool_blocked_by_caps_see_toggles()
     test_name_allowed_matches_filter()
     test_dispatch_desktop_rpc_allowlist()
-    test_dispatch_remote_release_clears_sessions()
     test_call_panel_method_maps_kwargs_and_positional()
-    test_remote_endpoint_shape_when_disabled()
-    test_remote_endpoint_starting_when_tunnel_has_no_host()
-    test_remote_endpoint_waits_until_tunnel_registers()
     test_remote_deny_covers_native_and_secret_paths()
     test_publish_device_presence_offline_when_remote_off()
     test_plugin_collect_posts_v1_only()

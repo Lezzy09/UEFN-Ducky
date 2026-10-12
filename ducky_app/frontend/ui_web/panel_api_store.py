@@ -235,19 +235,17 @@ class PanelApiStoreMixin:
 
     def remote_status(self) -> dict[str, Any]:
         from frontend.settings import PanelSettings
-        from frontend.remote_tunnel import remote_tunnel_status
         from frontend.ui_web.panel_httpd import remote_session_count, remote_session_summaries
 
         s = PanelSettings.load()
-        st = remote_tunnel_status()
-        err = str(st.get("error") or "")
-        # Don't ship hostname / tunnel mode / named_reason to the panel UI.
+        enabled = bool(getattr(s, "remote_access", False))
+        # Remote Ducky connects peer to peer: nothing to start, so on is ready.
         return {
             "ok": True,
-            "enabled": bool(getattr(s, "remote_access", False)),
-            "running": bool(st.get("running")),
-            "error": "Couldn't start browser access." if err else "",
-            "site_update_pending": bool(st.get("site_update_pending")),
+            "enabled": enabled,
+            "running": enabled,
+            "error": "",
+            "site_update_pending": False,
             "sessions": remote_session_count(),
             "session_list": remote_session_summaries(),
         }
@@ -255,23 +253,18 @@ class PanelApiStoreMixin:
     def remote_set_enabled(self, enabled: bool = False) -> dict[str, Any]:
         from frontend.settings import PanelSettings
         from frontend.ui_web.panel_api import _save_panel_settings
-        from frontend.remote_tunnel import start_remote_tunnel, stop_remote_tunnel
+        from frontend.duckyos_account import publish_device_presence
 
         s = PanelSettings.load()
         s.remote_access = bool(enabled)
         _save_panel_settings(s)
         if s.remote_access:
-            start_remote_tunnel()
-            from frontend.duckyos_account import publish_device_presence
-
             publish_device_presence(live=True)
         else:
             from frontend.ui_web.panel_httpd import kick_all_remote
-            from frontend.duckyos_account import publish_device_presence
 
             kick_all_remote()
             publish_device_presence(live=False)
-            stop_remote_tunnel(deprovision=True)
         return self.remote_status()
 
     def remote_sign_out_all(self) -> dict[str, Any]:

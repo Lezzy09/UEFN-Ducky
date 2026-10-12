@@ -989,7 +989,7 @@ def publish_panel_bundle(version: str) -> None:
     plugin-uefn-ducky. The EXE build already produced web/dist for this exact
     version, so this is a copy. Publishing it is the plugin release, which is a
     separate repo and key — this prints the command rather than running it.
-    A failure here is reported, not fatal: phones fall back to the tunnel.
+    A failure here is reported, not fatal: phones keep the panel already published.
     """
     script = Path(__file__).resolve().parent / "publish_panel.py"
     if not script.is_file():
@@ -999,7 +999,7 @@ def publish_panel_bundle(version: str) -> None:
     proc = subprocess.run([sys.executable, str(script), "--no-build"], cwd=str(script.parent.parent))
     if proc.returncode != 0:
         print(
-            "panel: staging FAILED — phones keep using the tunnel until "
+            "panel: staging FAILED — phones keep the previous panel until "
             f"`py release/publish_panel.py --no-build` succeeds for {version}",
             file=sys.stderr,
         )

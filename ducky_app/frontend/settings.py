@@ -252,7 +252,7 @@ class PanelSettings:
     """DuckyOS tenant URL (empty = default https://uefnducky.org). Non-secret."""
 
     remote_access: bool = False
-    """When true, serve the panel UI through an outbound Cloudflare tunnel."""
+    """When true, your phone or another browser can open this panel through uefnducky.org (peer to peer)."""
 
     allow_settings_write: bool = True
     """When false, ducky_settings_set (agent-driven Ducky Settings writes) is refused."""
