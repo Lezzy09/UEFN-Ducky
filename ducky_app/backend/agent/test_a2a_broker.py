@@ -798,3 +798,28 @@ def test_held_messages_ride_along_with_the_next_mailbox_delivery(broker, monkeyp
     assert text.startswith("From the user: stop sending receipts.")
     assert "report: export ready" in text
     assert held == {}
+
+
+def test_the_same_report_to_the_same_teammate_is_not_sent_twice(broker):
+    # Oct 11 2026: a team sent 179 messages against 39 file writes, many of them the same
+    # report twice within seconds.
+    report = "Export flow repaired: the WebM path no longer calls the ProRes renderer. " * 4
+    first = broker.mod.send(sender_conv_id="sender1", receiver_conv_id="recv1", body=report, expect_reply=False)
+    again = broker.mod.send(sender_conv_id="sender1", receiver_conv_id="recv1", body=report + " (resent)", expect_reply=False)
+    assert first["queued_for"] == "recv1"
+    assert again["not_sent"] == "repeat" and "Don't send it again" in again["note"]
+    other = broker.mod.send(sender_conv_id="sender1", receiver_conv_id="chat9", body=report, expect_reply=False)
+    assert other["queued_for"] == "chat9"  # a different teammate still gets it
+
+
+def test_a_member_sending_teammates_a_note_after_every_small_step_is_held_back(broker, monkeypatch):
+    team = SimpleNamespace(id="team", leader_conv_id="lead")
+    monkeypatch.setattr(broker.mod, "_groups_by_member", lambda: {"m1": [team], "m2": [team], "lead": [team]})
+    sent = [broker.mod.send(sender_conv_id="m1", receiver_conv_id="m2", body=f"step {n} done", expect_reply=False)
+            for n in range(5)]
+    assert [bool(row.get("not_sent")) for row in sent] == [False, False, False, False, True]
+    assert "final reply" in sent[-1]["note"]
+    # A lead's assignments to its own team are never held back.
+    for n in range(6):
+        assert broker.mod.send(sender_conv_id="lead", receiver_conv_id="m2", body=f"assignment {n}",
+                               expect_reply=False)["queued_for"] == "m2"

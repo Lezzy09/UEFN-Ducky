@@ -160,8 +160,8 @@ t._resolve_sender = lambda value: value
 t._project_root = lambda: ''
 t.load_conversation = lambda *a, **kw: SimpleNamespace(folder_id='')
 b._kick_delivery = lambda *a: (_ for _ in ()).throw(AssertionError('tool-server broker used'))
-for rid in json.loads(sys.argv[2]):
-    result = json.loads(t.ducky_agent_send(to='coord', sender='member', message='report or assignment', expect_reply=False, response_id=rid))
+for n, rid in enumerate(json.loads(sys.argv[2])):
+    result = json.loads(t.ducky_agent_send(to='coord', sender='member', message=f'report or assignment {n}', expect_reply=False, response_id=rid))
     assert result['status'] == 'sent'
     request = urllib.request.Request('http://127.0.0.1:' + sys.argv[1] + '/end-turn', data=b'{}', method='POST')
     urllib.request.urlopen(request, timeout=10).read()

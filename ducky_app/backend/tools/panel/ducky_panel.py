@@ -1124,7 +1124,8 @@ def ducky_agent_send(
         expect_reply=expects,
         response_id=reply_to,
     )
-    return tool_json({"status": "sent", "sender": me, **outcome}, pretty=pretty)
+    status = "not_sent" if outcome.get("not_sent") else "sent"
+    return tool_json({"status": status, "sender": me, **outcome}, pretty=pretty)
 
 
 @mcp.tool()

@@ -77,6 +77,15 @@ class Thread:
 _inbox: dict[str, deque[Envelope]] = {}
 _ring: dict[str, list[Envelope]] = {}
 _threads: dict[str, Thread] = {}
+# What each chat sent lately, to stop the chatter that buried a team on Oct 11 2026
+# (179 messages against 39 file writes in 23 minutes): the same report sent twice to
+# the same teammate, and members sending a message after every small step.
+_sent_log: dict[str, deque[tuple[float, str, str]]] = {}  # sender -> (time, receiver, text key)
+_REPEAT_WINDOW_S = 15 * 60
+_REPEAT_SIMILARITY = 0.9
+_REPEAT_MIN_CHARS = 160
+_MEMBER_BURST = 4  # messages a member may send its teammates in _MEMBER_BURST_S
+_MEMBER_BURST_S = 5 * 60
 # Requests that closed before their receiver answered (it was stopped, or the request aged
 # out): response_id -> (sender, receiver, closed_at). The late answer is still delivered,
 # once, as a plain message; refusing it made every builder resend and explain why.
@@ -393,7 +402,14 @@ def send(
         raise ValueError("pass either expect_reply=true OR response_id (a reply), not both")
     # Read the teams before taking the lock: it walks every chat.
     needs_action = bool(response_id) and _answer_needs_action(sender_conv_id, receiver_conv_id)
-    fyi = not expect_reply and not response_id and not leads_receiver(sender_conv_id, receiver_conv_id)
+    leads = leads_receiver(sender_conv_id, receiver_conv_id)
+    fyi = not expect_reply and not response_id and not leads
+    # Replies go through the thread checks below; only new messages can be held back.
+    held = None if response_id else _held_back(
+        sender_conv_id, receiver_conv_id, body,
+        capped=not leads and _teammates(sender_conv_id, receiver_conv_id))
+    if held is not None:
+        return held
 
     late = False
     with _lock:
@@ -437,6 +453,8 @@ def send(
         # both be admitted, or consume a later request between those steps.
         _inbox.setdefault(receiver_conv_id, deque()).append(envelope)
         acknowledge_reports(sender_conv_id, receiver_conv_id)
+        _sent_log.setdefault(sender_conv_id, deque(maxlen=64)).append(
+            (time.time(), receiver_conv_id, _text_key(body)))
     _kick_delivery(receiver_conv_id)
     _show_in_group_chat(sender_conv_id, receiver_conv_id, body)
     out: dict[str, Any] = {
@@ -474,6 +492,52 @@ def _show_in_group_chat(sender_conv_id: str, receiver_conv_id: str, body: str) -
             pass
 
     threading.Thread(target=run, daemon=True, name="a2a-group-note").start()
+
+
+def _text_key(body: str) -> str:
+    return re.sub(r"\s+", " ", str(body or "")).strip().lower()[:1200]
+
+
+def _held_back(sender: str, receiver: str, body: str, *, capped: bool) -> dict[str, Any] | None:
+    """Why this message is not sent (a repeat, or a member over its burst), else None."""
+    from difflib import SequenceMatcher
+
+    now = time.time()
+    key = _text_key(body)
+    with _lock:
+        log = _sent_log.get(sender) or deque()
+        for at, to, earlier in reversed(log):
+            # Short notes differ by a word ("module A written" / "module B written"):
+            # only long reports count as repeats when they are merely similar.
+            if to == receiver and now - at <= _REPEAT_WINDOW_S and (
+                earlier == key
+                or (min(len(earlier), len(key)) >= _REPEAT_MIN_CHARS
+                    and SequenceMatcher(None, earlier, key).ratio() >= _REPEAT_SIMILARITY)
+            ):
+                return {
+                    "response_id": "",
+                    "queued_for": "",
+                    "not_sent": "repeat",
+                    "note": (
+                        f"Not sent: you sent this to them {int((now - at) // 60)} min ago and it was "
+                        "delivered. Don't send it again; send only what is new."
+                    ),
+                }
+        if not capped:
+            return None  # a lead's assignments to its team, or chats outside a team
+        recent = sum(1 for at, _to, _k in log if now - at <= _MEMBER_BURST_S)
+    if recent >= _MEMBER_BURST:
+        return {
+            "response_id": "",
+            "queued_for": "",
+            "not_sent": "too_many",
+            "note": (
+                f"Not sent: you already sent {recent} messages in the last {_MEMBER_BURST_S // 60} "
+                "minutes. Put this in your final reply instead (your lead reads it), and send "
+                "teammates only finished results or a real blocker."
+            ),
+        }
+    return None
 
 
 def send_notice(
@@ -536,6 +600,13 @@ def _enclosing_groups(containing: dict[str, list[Any]], conv_id: str) -> list[An
 def _leads(containing: dict[str, list[Any]], sender_conv_id: str, receiver_conv_id: str) -> bool:
     return any((getattr(g, "leader_conv_id", "") or "") == sender_conv_id
                for g in _enclosing_groups(containing, receiver_conv_id))
+
+
+def _teammates(sender_conv_id: str, receiver_conv_id: str) -> bool:
+    """Both chats sit in one team (a group, directly or through nested groups)."""
+    containing = _groups_by_member() or {}
+    mine = {g.id for g in _enclosing_groups(containing, sender_conv_id)}
+    return bool(mine) and bool(mine & {g.id for g in _enclosing_groups(containing, receiver_conv_id)})
 
 
 def leads_receiver(sender_conv_id: str, receiver_conv_id: str) -> bool:
