@@ -784,3 +784,17 @@ def test_late_answer_to_an_aged_out_request_is_delivered(broker):
     with pytest.raises(ValueError, match="not open"):
         broker.mod.send(sender_conv_id="sender1", receiver_conv_id="recv1", body="x",
                         expect_reply=False, response_id=rid2)
+
+
+def test_held_messages_ride_along_with_the_next_mailbox_delivery(broker, monkeypatch):
+    # Oct 11 2026: a message held for a busy team lead waited for an idle moment that never
+    # came: the mailbox started each next turn first, three turns in a row.
+    held = {"recv1": ["From the user: stop sending receipts."]}
+    monkeypatch.setattr(broker.modes, "take_pending_agent_messages", lambda cid: held.pop(cid, []), raising=False)
+    broker.mod.send(sender_conv_id="sender1", receiver_conv_id="recv1", body="report: export ready", expect_reply=False)
+    _wait_sent(broker.modes, 1)
+    conv_id, text = broker.modes.sent[0]
+    assert conv_id == "recv1"
+    assert text.startswith("From the user: stop sending receipts.")
+    assert "report: export ready" in text
+    assert held == {}

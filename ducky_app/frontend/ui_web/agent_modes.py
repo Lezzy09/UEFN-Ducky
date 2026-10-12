@@ -1293,6 +1293,17 @@ def _queue_pending(conv_id: str, text: str) -> None:
     _retry_queue_later(conv_id)
 
 
+def take_pending_agent_messages(conv_id: str) -> list[str]:
+    """Hand this chat's held messages to the agent mailbox's next delivery.
+
+    A busy team's mailbox starts the next turn the moment one ends, so these held
+    messages waited for an idle moment that never came (Oct 11 2026: a message to a
+    team lead sat undelivered through three of its turns).
+    """
+    with _pending_lock:
+        return _pending_agent_messages.pop(conv_id, [])
+
+
 def _deliver_pending_agent_messages(conv_id: str) -> None:
     from backend.agent.a2a_broker import automatic_work_blocked
     if automatic_work_blocked(conv_id, queued=True):

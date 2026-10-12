@@ -652,8 +652,11 @@ def _kick_delivery(conv_id: str) -> None:
             # Once handed to run_message, an empty result or exception is NOT
             # proof of non-execution. Never automatically requeue this batch.
             heading = "Reports you have not acted on\n\n" if any(e.redelivery for e in batch) else ""
-            started = run_message(conv_id, heading + "\n\n".join(_format_envelope(e) for e in batch),
-                                  "agent", "", queue_if_busy=True)
+            from frontend.ui_web import agent_modes
+            take_held = getattr(agent_modes, "take_pending_agent_messages", None)
+            held = take_held(conv_id) if callable(take_held) else []
+            text = "\n\n".join([*held, heading + "\n\n".join(_format_envelope(e) for e in batch)])
+            started = run_message(conv_id, text, "agent", "", queue_if_busy=True)
             if not started:
                 raise RuntimeError("Delivery unconfirmed")
         except Exception:

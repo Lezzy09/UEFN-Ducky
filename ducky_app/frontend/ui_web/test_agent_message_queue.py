@@ -54,3 +54,9 @@ def test_terminal_quota_tap_retains_pending_until_cooldown(monkeypatch):
     tap(event)
     assert calls == []
     assert am._pending_agent_messages == {"limited": ["queued work"]}
+
+
+def test_held_messages_are_handed_over_once(monkeypatch) -> None:
+    monkeypatch.setattr(am, "_pending_agent_messages", {"c3": ["one", "two"]})
+    assert am.take_pending_agent_messages("c3") == ["one", "two"]
+    assert am.take_pending_agent_messages("c3") == []
