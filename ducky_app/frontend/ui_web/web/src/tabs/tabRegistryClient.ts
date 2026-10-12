@@ -52,9 +52,10 @@ function claim(tabId: string): void {
 
 // Heartbeat: closed/crashed windows never un-report, so the backend expires window
 // entries that stop heartbeating (stale owners made focus_tab raise dead windows,
-// which blocked opening those files anywhere).
+// which blocked opening those files anywhere). An API without the method (a partial
+// panel API) skips the report instead of throwing on every visibility change.
 setVisibleInterval(() => {
-  void getApi()?.report_open_tabs(WINDOW_ID, [...lastReported]);
+  void getApi()?.report_open_tabs?.(WINDOW_ID, [...lastReported]);
 }, 10_000);
 
 // Best-effort ownership release when a focus window is closed by any path (OS X
@@ -72,7 +73,7 @@ export function releaseAllTabs(): void {
   lastReported = new Set();
   localOpenTabIds = new Set();
   log("releasing all tabs (window closing)");
-  void getApi()?.report_open_tabs(WINDOW_ID, []);
+  void getApi()?.report_open_tabs?.(WINDOW_ID, []);
 }
 
 /** Immediate (non-debounced) report — call on tab CLOSE so ownership frees at
@@ -83,7 +84,7 @@ export function reportOpenTabsNow(tabIds: string[]): void {
   const ids = registryTabIds(tabIds);
   if (reportTimer !== null) window.clearTimeout(reportTimer);
   reportTimer = null;
-  void getApi()?.report_open_tabs(WINDOW_ID, ids);
+  void getApi()?.report_open_tabs?.(WINDOW_ID, ids);
   lastReported = new Set(ids);
 }
 
@@ -96,7 +97,7 @@ export function reportOpenTabs(tabIds: string[]): void {
   if (reportTimer !== null) window.clearTimeout(reportTimer);
   reportTimer = window.setTimeout(() => {
     reportTimer = null;
-    void getApi()?.report_open_tabs(WINDOW_ID, ids);
+    void getApi()?.report_open_tabs?.(WINDOW_ID, ids);
     for (const id of ids) {
       if (!lastReported.has(id)) claim(id);
     }
