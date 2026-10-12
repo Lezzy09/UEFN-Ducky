@@ -182,7 +182,9 @@ def has_evidence(chat_id: str = "") -> bool:
     return bool(evidence_names())
 
 
-_RESULT_CHECKS = frozenset({"run_workflow", "ducky_terminal_run"})
+# Checks that count only when their result says ok. Plugin teams could not tick any Verify
+# step (Oct 12 2026): none of the plugin checks counted.
+_RESULT_CHECKS = frozenset({"run_workflow", "ducky_terminal_run", "ducky_plugin_validate", "ducky_plugin_test"})
 
 
 def _result_payloads(raw: Any) -> tuple[bool, list[dict[str, Any]]]:
@@ -248,7 +250,7 @@ def record_result(name: str, arguments: dict[str, Any] | None, raw: Any) -> None
                 return
             if not all(p.get("exit_code") == 0 for p in payloads):
                 return
-        else:
+        elif key == "run_workflow":
             for payload in payloads:
                 steps = payload.get("steps")
                 if (not isinstance(steps, list) or not steps

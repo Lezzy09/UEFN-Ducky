@@ -40,6 +40,14 @@ def checks(monkeypatch, tmp_path):
     def terminal(result: dict, wait: bool = True, background: bool = False) -> str:
         return json.dumps(result)
 
+    @server.tool(name="ducky_plugin_validate")
+    def validate(result: dict) -> str:
+        return json.dumps(result)
+
+    @server.tool(name="ducky_plugin_test")
+    def plugin_test(result: dict) -> str:
+        return json.dumps(result)
+
     @server.tool(name="ducky_plan_update_node")
     def tick(chat_id: str) -> str:
         return plans._apply_status_gate(
@@ -100,6 +108,9 @@ def test_failed_check_cannot_tick(checks, result):
 @pytest.mark.parametrize("tool,args", [
     ("run_workflow", {"result": {"ok": True, "steps": [{"ok": True, "id": "tests"}]}}),
     ("ducky_terminal_run", {"result": {"ok": True, "exit_code": 0}}),
+    # Oct 12 2026: plugin teams could not tick any Verify step; no plugin check counted.
+    ("ducky_plugin_validate", {"result": {"ok": True, "id": "imk"}}),
+    ("ducky_plugin_test", {"result": {"ok": True, "id": "imk", "failed": []}}),
 ])
 def test_completed_workflow_and_terminal_count(checks, tool, args):
     call(checks, tool, args, shared=True)
@@ -116,6 +127,8 @@ def test_completed_workflow_and_terminal_count(checks, tool, args):
     ("ducky_terminal_run", {"result": {"ok": True, "exit_code": 1}}),
     ("ducky_terminal_run", {"result": {"ok": True, "exit_code": 0}, "wait": False}),
     ("ducky_terminal_run", {"result": {"ok": True, "exit_code": 0}, "background": True}),
+    ("ducky_plugin_validate", {"result": {"ok": False, "errors": ["x"]}}),
+    ("ducky_plugin_test", {"result": {"ok": False, "failed": ["tools"]}}),
 ])
 def test_incomplete_or_failed_operation_does_not_count(checks, tool, args):
     call(checks, tool, args)
