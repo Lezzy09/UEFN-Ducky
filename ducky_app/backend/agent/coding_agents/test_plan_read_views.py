@@ -62,7 +62,7 @@ def test_mcp_assignment_read_preserves_raw_ownership(team, monkeypatch, backend,
         assert result['plan'] is None
         assert runtime == ''
         if state == 'ambiguous':
-            assert not result['ok'] and 'Multiple plan assignments' in result['error']
+            assert not result['ok'] and 'open steps in 2 plans' in result['error']
     assert plans.load_plan('builder', root) == before
     if state in ('assigned', 'archived'):
         with pytest.raises(ValueError):

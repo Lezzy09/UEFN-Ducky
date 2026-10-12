@@ -1331,41 +1331,90 @@ def assigned_plan_view(chat_id: str, project_root: str | None = None, *,
         live = [(p, n) for p, n in matches
                 if p.get("status") not in ("finished", "completed")
                 and n.get("status") not in ("completed", "cancelled")]
-        if len(live) > 1:
-            # There is no authorized plan binding to break this tie. Do not use
-            # save time as authority, nor silently fall back to a broader group.
-            if report_ambiguity:
-                raise ValueError("Multiple plan assignments match this chat. The coordinator must clear the conflicting assignments.")
-            return None
-        if live:
-            chosen = live
-        else:
+        # Several open steps in ONE plan is ordinary (a builder owns three features).
+        # Oct 11 2026: counting steps instead of plans blocked every builder of a team.
+        by_plan: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+        for p, n in live:
+            by_plan.setdefault(str(p.get("chat_id") or ""), (p, []))[1].append(n)
+        if len(by_plan) > 1:
+            # Open steps in two plans: the plan of this chat's own team lead wins.
+            leads = _team_leads(ids, project_root)
+            own = {cid: row for cid, row in by_plan.items() if cid in leads}
+            if len(own) != 1:
+                if report_ambiguity:
+                    raise ValueError(_two_plans_message(chat_id, by_plan))
+                return None
+            by_plan = own
+        if by_plan:
+            plan, nodes = next(iter(by_plan.values()))
+            nodes = _outermost(nodes)
+        elif matches:
             # Only finished parts: nothing to act on, so the latest one is shown read-only.
-            chosen = sorted(matches, key=lambda m: float(m[0].get("updated_at") or 0), reverse=True)[:1]
-        for plan, node in chosen:
-            title = str(plan.get("title") or "Plan")
-            return {
-                "id": str(plan.get("plan_id") or ""),
-                "kind": "project",
+            plan, node = max(matches, key=lambda m: float(m[0].get("updated_at") or 0))
+            nodes = [node]
+        else:
+            continue
+        title = str(plan.get("title") or "Plan")
+        first = nodes[0]
+        return {
+            "id": str(plan.get("plan_id") or ""),
+            "kind": "project",
+            "chat_id": str(plan.get("chat_id") or ""),
+            "title": str(first.get("content") or title) if len(nodes) == 1 else f"Your {len(nodes)} steps in “{title}”",
+            "overview": f"Part of the plan “{title}”.",
+            "body_markdown": str(first.get("body_markdown") or "") if len(nodes) == 1 else "",
+            "status": str(plan.get("status") or "open"),
+            "nodes": nodes,
+            "todos": [
+                {"id": n["id"], "content": n["content"], "status": n["status"]}
+                for n in _flatten_nodes(nodes)
+            ],
+            "updated_at": plan.get("updated_at"),
+            "assigned_from": {
                 "chat_id": str(plan.get("chat_id") or ""),
-                "title": str(node.get("content") or title),
-                "overview": f"Part of the plan “{title}”.",
-                "body_markdown": str(node.get("body_markdown") or ""),
-                "status": str(plan.get("status") or "open"),
-                "nodes": [node],
-                "todos": [
-                    {"id": n["id"], "content": n["content"], "status": n["status"]}
-                    for n in _flatten_nodes([node])
-                ],
-                "updated_at": plan.get("updated_at"),
-                "assigned_from": {
-                    "chat_id": str(plan.get("chat_id") or ""),
-                    "node_id": str(node.get("id") or ""),
-                    "plan_title": title,
-                    "assignee": wanted,
-                },
-            }
+                "node_id": str(first.get("id") or ""),
+                "node_ids": [str(n.get("id") or "") for n in nodes],
+                "plan_title": title,
+                "assignee": wanted,
+            },
+        }
     return None
+
+
+def _outermost(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop steps that sit inside another listed step (its section shows them already)."""
+    inner = {str(c.get("id")) for n in nodes for c in _flatten_nodes(n.get("children") or [])}
+    return [n for n in nodes if str(n.get("id")) not in inner]
+
+
+def _team_leads(ids: list[str], project_root: str | None) -> set[str]:
+    """Leaders of the groups this chat sits in (``ids``: the chat, then its groups)."""
+    from frontend.ui_web.project_chats import load_conversation
+
+    leads: set[str] = set()
+    for gid in ids[1:]:
+        try:
+            group = load_conversation(gid, project_root=project_root)
+        except Exception:
+            group = None
+        lead = str(getattr(group, "leader_conv_id", "") or "").strip() if group is not None else ""
+        if lead:
+            leads.add(lead)
+    return leads
+
+
+def _two_plans_message(chat_id: str, by_plan: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]]) -> str:
+    """A real conflict, said so its coordinator can fix it in one call."""
+    rows = []
+    for owner, (plan, nodes) in by_plan.items():
+        steps = ", ".join(f"`{n.get('id')}`" for n in nodes)
+        rows.append(f"“{plan.get('title') or 'Plan'}” (coordinator chat {owner}: steps {steps})")
+    return (
+        f"Chat {chat_id} has open steps in {len(by_plan)} plans: " + "; ".join(rows) + ". "
+        "Its coordinator fixes this in one call: keep the steps in the plan this chat works on now and "
+        "unassign the others with ducky_plan_update_node(chat_id=<that plan's coordinator>, node_id=<step>, "
+        "assignee=\"\"), or pause the other plan with ducky_update_plan(chat_id=<its coordinator>, status=\"paused\")."
+    )
 
 
 def list_plans(project_root: str | None = None) -> list[dict[str, Any]]:

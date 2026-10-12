@@ -55,6 +55,7 @@ def test_a_member_sees_its_groups_part(team) -> None:
     assert view["assigned_from"] == {
         "chat_id": "coord",
         "node_id": "a",
+        "node_ids": ["a"],
         "plan_title": "Repair modes",
         "assignee": "group-a",
     }
@@ -104,7 +105,7 @@ def test_multiple_matching_plans_refuse_instead_of_latest_save(team):
         {"id": "other", "content": "Other work", "assignee": "group-a"}
     ], project_root=team)
     assert plans.assigned_plan_view("builder", team) is None
-    with pytest.raises(ValueError, match="Multiple plan assignments"):
+    with pytest.raises(ValueError, match="open steps in 2 plans"):
         plans.assigned_plan_view("builder", team, report_ambiguity=True)
 
 
@@ -247,7 +248,7 @@ def test_archived_personal_reference_never_masks_canonical_assignment(team, monk
         assert result['plan'] is None
         if binding == 'ambiguous':
             assert result['ok'] is False
-            assert 'Multiple plan assignments' in result['error']
+            assert 'open steps in 2 plans' in result['error']
     assert plans.load_plan('builder', team) == archived
     assert next(p for p in plans.list_plans(team) if p['chat_id'] == 'builder')['status'] == 'archived'
 
@@ -276,3 +277,32 @@ def test_a_finished_part_never_hides_the_members_new_work(team):
     plans.update_node("outsider", "next", status="completed", project_root=team)
     view = plans.assigned_plan_view("builder", team, report_ambiguity=True)
     assert view["assigned_from"]["chat_id"] == "outsider"
+
+
+def test_a_builder_with_several_steps_in_one_plan_sees_them_all(team) -> None:
+    # Oct 11 2026: every builder of a new team owned two or three steps and got "Multiple plan
+    # assignments ... the coordinator must clear the conflicting assignments" on its first move.
+    plans.update_node("coord", "a2", assignee="builder", project_root=team)
+    plans.update_node("coord", "b", assignee="builder", project_root=team)
+    view = plans.load_plan_view("builder", project_root=team)
+    assert [n["id"] for n in view["nodes"]] == ["a2", "b"]
+    assert view["assigned_from"]["node_ids"] == ["a2", "b"]
+    assert view["title"] == "Your 2 steps in “Repair modes”"
+
+
+def test_a_real_conflict_goes_to_the_teams_own_lead_or_says_how_to_fix_it(team, monkeypatch) -> None:
+    plans.update_node("coord", "a", assignee="builder", project_root=team)
+    plans.create_plan("outsider", title="Side quest", nodes=[{"id": "x", "content": "X", "assignee": "builder"}],
+                      project_root=team)
+    with pytest.raises(ValueError) as err:
+        plans.load_plan_view("builder", project_root=team)
+    text = str(err.value)
+    assert "open steps in 2 plans" in text and "Repair modes" in text and "Side quest" in text
+    assert "`a`" in text and "`x`" in text and "ducky_plan_update_node" in text and "paused" in text
+    # The builder's group is led by coord: coord's plan is its work.
+    convs = {"builder": SimpleNamespace(parent_conv_id="group-a"),
+             "group-a": SimpleNamespace(parent_conv_id="team", leader_conv_id="coord"),
+             "team": SimpleNamespace(parent_conv_id=""), "coord": SimpleNamespace(parent_conv_id="team"),
+             "outsider": SimpleNamespace(parent_conv_id="")}
+    monkeypatch.setattr(project_chats, "load_conversation", lambda cid, project_root=None: convs.get(cid))
+    assert plans.load_plan_view("builder", project_root=team)["chat_id"] == "coord"
