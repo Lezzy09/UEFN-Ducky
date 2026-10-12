@@ -119,3 +119,13 @@ def test_group_get_and_check_lanes(panel) -> None:
     assert check["ok"] and check["normalized"] == ["Content/Verse/Hub/**"] and check["warnings"] == []
     bad = api.group_check_lane("hub", "artist", ["../escape"])
     assert not bad["ok"] and bad["normalized"] is None
+
+
+def test_group_invite_refuses_an_overlapping_lane_before_making_a_chat(panel, monkeypatch) -> None:
+    # Oct 12 2026: the refused invite still created the member's chat.
+    api, hub, saved, _ = panel
+    made: list = []
+    monkeypatch.setattr(_pa, "create_conversation", lambda *a, **k: made.append(a))
+    res = api.group_invite("hub", "builder", write_allowed=["Content/Verse/**"], name="Second")
+    assert not res["ok"] and "overlaps" in res["error"]
+    assert made == [] and saved == [] and len(hub.group_members) == 3

@@ -618,6 +618,11 @@ class PanelApiChatsMixin:
         group = _pa.load_conversation(group_id)
         if not group or not getattr(group, "is_group", False):
             return {"ok": False, "error": "Not a group chat"}
+        if write_allowed is not None:
+            # Check the lane first: a refused lane used to leave the new member's chat behind.
+            check = self.group_check_lane(group_id, "__new_member__", write_allowed)
+            if not check.get("ok"):
+                return {"ok": False, "error": "; ".join(check.get("errors") or ["lane refused"])}
         profile = get_agent_profile(profile_id)
         if not profile:
             return {"ok": False, "error": f"Unknown ducky profile: {profile_id}"}
