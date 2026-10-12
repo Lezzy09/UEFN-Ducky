@@ -9,6 +9,11 @@ steps, and its chat leads a group. Pausing the plan stops the keeper for it. Thr
 in a row that move nothing (no member works, no step changes status or owner) park it
 until something does: a plan waiting on the user's own step was woken every hour, and
 each wake re-read the coordinator's whole thread.
+
+A team can also go in circles while busy: on Oct 11 2026 six agents worked for an hour,
+sent 292 messages, and finished no step, all waiting on one export the plugin's own gate
+would never start. A team that stays busy for ``_STALL_S`` without finishing a step gets
+one circle notice for its coordinator, and the person is alerted.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ _IDLE_S = 120.0  # nobody running this long before a wake
 _MAX_WAIT_S = 3600.0  # wakes that start no work back off up to this
 _PARK_AFTER = 3  # wakes in a row that moved nothing: wait for a change instead
 _PARKED_TABLE = "workspace_state"
+_STALL_S = 45 * 60.0  # busy this long with no finished step: going in circles
 
 WAKE_TEXT = (
     "[Ducky keeper] Your team has had no agent running for {minutes} minutes and the plan "
@@ -29,6 +35,16 @@ WAKE_TEXT = (
     "in-progress step and its agent (ducky_agent_list, ducky_agent_transcript), and dispatch "
     "the work that can move now. If you are blocked on a decision only the user can make, "
     "say exactly which one and end your turn."
+)
+
+STALL_TEXT = (
+    "[Ducky keeper] Your team has been working for {minutes} minutes and no plan step has "
+    "finished ({done} of {total} done). Busy without finishing is a circle. In this turn: "
+    "name in one sentence the one thing the open steps are waiting on; give it to one owner, "
+    "or ask the person with ducky_ask_user if only they can decide it; tell everyone else to "
+    "finish their own steps without waiting for it; and give a member that keeps reporting "
+    "the same blocker a fresh start (ducky_recycle_member) with a short brief. "
+    "No status rounds, no relays, no acknowledgements."
 )
 
 _lock = threading.Lock()
@@ -46,6 +62,28 @@ def _open_steps(plan: dict[str, Any]) -> int:
 def _started(plan: dict[str, Any]) -> bool:
     prog = plan.get("progress") or {}
     return int(prog.get("completed") or 0) + int(prog.get("in_progress") or 0) > 0
+
+
+def _done(plan: dict[str, Any]) -> int:
+    return int((plan.get("progress") or {}).get("completed") or 0)
+
+
+def _total(plan: dict[str, Any]) -> int:
+    prog = plan.get("progress") or {}
+    return sum(int(prog.get(k) or 0) for k in ("pending", "in_progress", "completed", "cancelled"))
+
+
+def _tell_person(cid: str, minutes: int) -> None:
+    try:
+        from frontend.notifications import alert
+        from frontend.ui_web.project_chats import load_conversation
+
+        conv = load_conversation(cid)
+        name = str(getattr(conv, "title", "") or "").strip() or "Your team"
+        alert(name, f"No plan step finished in {minutes} minutes of work.", level="info",
+              kind="chat", target_id=cid)
+    except Exception:
+        pass
 
 
 def _moves(plan: dict[str, Any]) -> str:
@@ -157,12 +195,24 @@ def tick(
                 if parked is not None:
                     # Parked before a restart: three more wakes per app start added up.
                     st["moves"], st["wakes"] = parked, float(_PARK_AFTER)
+            done = _done(plan)
+            if "done" not in st or done > st["done"]:
+                st["done"], st["progress_at"], st["next_stall"] = done, now, 0.0
             member_ids, details = _team_context(plan)
             team_busy = busy.intersection(member_ids | {cid}) if member_ids else busy
             if team_busy:
                 st["quiet_since"] = now
                 if team_busy - {cid}:
                     _unpark(cid, st)  # the team is working again: drop the backoff
+                if now - st["progress_at"] >= _STALL_S and now >= st["next_stall"]:
+                    minutes = int((now - st["progress_at"]) // 60)
+                    try:
+                        wake(cid, STALL_TEXT.format(minutes=minutes, done=done, total=_total(plan)) + details)
+                    except Exception:
+                        continue
+                    _tell_person(cid, minutes)
+                    st["next_stall"] = now + _STALL_S
+                    woke.append(cid)
                 continue
             moves = _moves(plan)
             if st.get("moves") != moves:
