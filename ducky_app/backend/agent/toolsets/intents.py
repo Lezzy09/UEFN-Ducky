@@ -411,6 +411,7 @@ _PANEL_UI_TOOLS = frozenset(
         "ducky_plugin_scaffold",
         "ducky_plugin_list",
         "ducky_plugin_write_file",
+        "ducky_plugin_edit_file",
         "ducky_plugin_read_file",
         "ducky_plugin_validate",
         "ducky_plugin_install",

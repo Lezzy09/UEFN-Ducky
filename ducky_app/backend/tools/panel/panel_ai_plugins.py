@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 import py_compile
+import re
 import shutil
 import tempfile
 import zipfile
@@ -21,6 +22,17 @@ from backend.server import mcp
 _SKIP_DIR_NAMES = frozenset({"scripts", "deploy", ".git", "__pycache__", ".venv", "node_modules"})
 _SECRET_SUFFIXES = frozenset({".dat", ".env", ".pem", ".key"})
 _MAX_FILE_CHARS = 512 * 1024
+# A whole big file in an agent's context costs every later call of its turn: one team read
+# 4.7 MB of plugin files in 50 minutes (logic.js 6 times, background.py 18 times). Bigger files
+# without a line range come back as an outline and their first lines.
+_OUTLINE_OVER_CHARS = 48 * 1024
+_HEAD_LINES = 150
+_OUTLINE_RE = re.compile(
+    r"^\s*(?:(?:async\s+)?def\s+\w+|class\s+\w+"
+    r"|(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*\w+"
+    r"|(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*(?:async\s*)?(?:function|\([^)]*\)\s*=>|\w+\s*=>))"
+    r"|^\s{0,2}\"[^\"]+\"\s*:"
+)
 _AI_PLUGINS_SKILL = (
     Path(__file__).resolve().parents[3]
     / "frontend"
@@ -397,7 +409,7 @@ def write_ai_plugin_file(plugin_id: str, path: str, content: str) -> dict[str, A
     return {"ok": True, "id": pid, "path": rel, "bytes": len(text.encode("utf-8"))}
 
 
-def read_ai_plugin_file(plugin_id: str, path: str) -> dict[str, Any]:
+def read_ai_plugin_file(plugin_id: str, path: str, *, start_line: int = 0, end_line: int = 0) -> dict[str, Any]:
     from backend.uefn_plugins.store import normalize_plugin_id
 
     try:
@@ -419,9 +431,53 @@ def read_ai_plugin_file(plugin_id: str, path: str) -> dict[str, Any]:
         return {"ok": False, "error": "file is not UTF-8 text"}
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
+    rel = path.replace("\\", "/")
+    lines = content.splitlines()
+    if start_line or end_line:
+        first = max(1, int(start_line or 1))
+        last = min(len(lines), int(end_line or len(lines)))
+        if first > last:
+            return {"ok": False, "error": f"no lines {first}-{last}: the file has {len(lines)} lines"}
+        return {"ok": True, "id": pid, "path": rel, "start_line": first, "end_line": last,
+                "total_lines": len(lines), "content": "\n".join(lines[first - 1:last]) + "\n"}
+    if len(content) > _OUTLINE_OVER_CHARS:
+        outline = [f"{n}: {line.strip()[:120]}" for n, line in enumerate(lines, 1) if _OUTLINE_RE.match(line)]
+        return {
+            "ok": True, "id": pid, "path": rel, "partial": True, "total_lines": len(lines),
+            "outline": outline[:400], "content": "\n".join(lines[:_HEAD_LINES]) + "\n",
+            "hint": (f"{rel} is {len(content) // 1024} KB, so this is its outline and first {_HEAD_LINES} lines. "
+                     "Read the part you need with start_line/end_line, and change it with "
+                     "ducky_plugin_edit_file instead of rewriting the file."),
+        }
     if len(content) > _MAX_FILE_CHARS:
         content = content[:_MAX_FILE_CHARS] + "\n…(truncated)\n"
-    return {"ok": True, "id": pid, "path": path.replace("\\", "/"), "content": content}
+    return {"ok": True, "id": pid, "path": rel, "content": content}
+
+
+def edit_ai_plugin_file(plugin_id: str, path: str, old_string: str, new_string: str,
+                        replace_all: bool = False) -> dict[str, Any]:
+    """Replace an exact snippet in a draft file (unique unless ``replace_all``)."""
+    from backend.uefn_plugins.store import normalize_plugin_id
+
+    if not old_string:
+        return {"ok": False, "error": "old_string is empty: to create a file use ducky_plugin_write_file"}
+    try:
+        pid = normalize_plugin_id(plugin_id)
+        target = _resolve_jailed(_draft_root(pid), path)
+        text = target.read_text(encoding="utf-8")
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    except (OSError, UnicodeDecodeError):
+        return {"ok": False, "error": f"file not found or not UTF-8 text: {path}"}
+    count = text.count(old_string)
+    if count == 0:
+        return {"ok": False, "error": "old_string was not found: read those lines again (start_line/end_line) and copy them exactly"}
+    if count > 1 and not replace_all:
+        return {"ok": False, "error": f"old_string is in the file {count} times: add surrounding lines so it is unique, or pass replace_all=true"}
+    result = write_ai_plugin_file(pid, path, text.replace(old_string, new_string))
+    if result.get("ok"):
+        result["replacements"] = count if replace_all else 1
+    return result
 
 
 def validate_ai_plugin(plugin_id: str) -> dict[str, Any]:
@@ -622,9 +678,21 @@ def ducky_plugin_vendor(
 
 
 @mcp.tool()
-def ducky_plugin_read_file(id: str, path: str, pretty: bool = False) -> str:
-    """Read a UTF-8 file from an AI plugin draft (path-jailed)."""
-    return tool_json(read_ai_plugin_file(id, path), pretty=pretty)
+def ducky_plugin_read_file(id: str, path: str, start_line: int = 0, end_line: int = 0, pretty: bool = False) -> str:
+    """Read a UTF-8 file from an AI plugin draft (path-jailed).
+
+    start_line/end_line (1-based, inclusive) read only those lines. A file over 48 KB read
+    without them returns its outline (definitions with line numbers) and first lines."""
+    return tool_json(read_ai_plugin_file(id, path, start_line=start_line, end_line=end_line), pretty=pretty)
+
+
+@mcp.tool()
+def ducky_plugin_edit_file(id: str, path: str, old_string: str, new_string: str,
+                           replace_all: bool = False, pretty: bool = False) -> str:
+    """Change part of a file in an AI plugin draft: replace old_string (exact text, unique in the
+    file unless replace_all) with new_string. Use it instead of rewriting a whole file with
+    ducky_plugin_write_file; read the lines first with ducky_plugin_read_file(start_line, end_line)."""
+    return tool_json(edit_ai_plugin_file(id, path, old_string, new_string, replace_all=replace_all), pretty=pretty)
 
 
 @mcp.tool()

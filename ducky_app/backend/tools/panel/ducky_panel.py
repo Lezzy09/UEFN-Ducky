@@ -2297,9 +2297,13 @@ def ducky_plan_update_node(
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     if plan.get("kind") != "template":
         push_plan_updated(plan)
+    # The changed step, the outline and the progress: not the whole plan with every step's
+    # text (8.5 KB per tick; one team ticked 67 times in 50 minutes). ducky_get_plan reads it all.
+    changed = next((n for n in _walk_nodes(plan.get("nodes")) if n.get("id") == node_id), None)
     result: dict[str, Any] = {
         "ok": True,
-        "plan": plan,
+        "plan": {key: plan.get(key) for key in ("id", "chat_id", "title", "status", "kind")},
+        "node": {key: value for key, value in (changed or {}).items() if key != "children"},
         "progress": todo_progress(plan) if plan.get("kind") != "template" else None,
         "outline": [{"n": lab, "id": n["id"], "content": n["content"], "status": n["status"]} for lab, n in outline_numbers(plan.get("nodes"))],
     }
@@ -2311,6 +2315,13 @@ def ducky_plan_update_node(
         result["note"] = (f"{names} completed itself with this step. The note on this step is its "
                           "record: do not tick or annotate the section.")
     return tool_json(attach_next_tick(result, plan if plan.get("kind") != "template" else None), pretty=pretty)
+
+
+def _walk_nodes(nodes: Any):
+    for node in nodes or []:
+        if isinstance(node, dict):
+            yield node
+            yield from _walk_nodes(node.get("children"))
 
 
 def _sections_closed_by(nodes: Any, node_id: str) -> list[dict[str, Any]]:
