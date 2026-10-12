@@ -35,6 +35,29 @@ def _valid_styles() -> list[str]:
     return [d.id for d in list_bundled_duckies()]
 
 
+USE_EXISTING = (
+    "Not created: a team seats the existing ducky profiles. Pick one with ducky_list_duckies and "
+    "seat it with ducky_group_invite or ducky_spawn_chat(ducky=<name>); give it its job in the plan. "
+    "New profiles are the person's to make in Settings → Duckies."
+)
+
+
+def _team_caller() -> str:
+    """The calling agent's chat when it sits in a group (a lead or a member), else ''.
+
+    Leads made a new profile for every member they seated ("Island Kit Gateway …, Parallel
+    specialist for …"), so the person's Duckies page filled with one-off copies."""
+    try:
+        from backend.agent.coding_agents.plans import _chat_and_group_ids
+        from backend.workspace.identity import resolve_context
+
+        context = resolve_context()
+        cid = str(getattr(context, "conv_id", "") or "").strip() if context is not None else ""
+        return cid if cid and len(_chat_and_group_ids(cid, None)) > 1 else ""
+    except Exception:
+        return ""
+
+
 def _notify_changed() -> None:
     try:
         from frontend.ui_web.agent_modes import push_ui_event
@@ -141,8 +164,11 @@ def ducky_profile_set(ducky_id: str, patch: dict[str, Any], pretty: bool = False
 
 @mcp.tool()
 def ducky_profile_duplicate(ducky_id: str, pretty: bool = False) -> str:
-    """Clone a ducky profile into a new editable custom profile."""
+    """Clone a ducky profile into a new editable custom profile (never from inside a team)."""
     from frontend.agent_profiles import duplicate_agent_profile
+
+    if _team_caller():
+        return tool_json({"ok": False, "error": USE_EXISTING}, pretty=pretty)
 
     try:
         created = duplicate_agent_profile((ducky_id or "").strip())
@@ -157,9 +183,13 @@ def ducky_profile_create(name: str, patch: dict[str, Any] | None = None, pretty:
     """Create a new custom ducky profile.
 
     name: display name. patch: optional style/personality/when_to_use/favorite_model/
-    enabled_packs/tool_ids. An unknown `style` returns the valid options.
+    enabled_packs/tool_ids. An unknown `style` returns the valid options. A team never makes
+    profiles: it seats the existing ones (ducky_list_duckies).
     """
     from frontend.agent_profiles import save_agent_profile
+
+    if _team_caller():
+        return tool_json({"ok": False, "error": USE_EXISTING}, pretty=pretty)
 
     norm = _normalize_patch(patch or {})
     style = norm.get("ducky_style")
