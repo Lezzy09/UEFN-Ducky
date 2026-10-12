@@ -216,7 +216,12 @@ def sandbox_begin(plugin: str) -> dict[str, Any]:
              "readOnly": False, "state": "ok"}
     with _SANDBOX_LOCK:
         if plugin in _SANDBOXES:
-            raise ValueError(f"A test of {plugin} is already running")
+            raise ValueError(
+                f"A test of {plugin} is already running. Only one runs at a time because it moves "
+                f"{plugin}'s data to a test copy for everyone. Don't wait or queue for it: check your "
+                "own work with ducky_plugin_validate and live calls on your own test project, and leave "
+                "full tests to one member of the team."
+            )
         _SANDBOXES[plugin] = scope
     try:
         purge_team(account, scope_id)  # a test that died midway left its rows

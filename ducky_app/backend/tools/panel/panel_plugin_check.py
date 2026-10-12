@@ -523,5 +523,8 @@ def ducky_plugin_test(id: str, pretty: bool = False) -> str:
     plugin the user hasn't confirmed returns needs_trust (stop: the user confirms once
     in Settings → Store, then test again). Returns a pass / fail / skip row per check;
     fix the failures in the draft and run it again.
+    While it runs, the plugin is reinstalled and its data is the test copy for every caller,
+    so in a team one member runs it for a batch of finished work; the others check their
+    own work with ducky_plugin_validate and live calls, in parallel, never taking turns.
     """
     return tool_json(test_plugin(id), pretty=pretty)
