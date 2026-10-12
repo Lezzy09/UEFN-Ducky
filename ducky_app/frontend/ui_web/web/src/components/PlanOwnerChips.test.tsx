@@ -38,11 +38,12 @@ describe("plan owners", () => {
   emit({ type: "tool", conv_id: "b", tool: { name: "Bash", arguments: { command: "rg test src" } } });
   expect(screen.getByRole("button", { name: /Builder/ }).textContent).toMatch(/Search.*1m 12s/i);
   emit({ type: "linked_agent", parent_conv_id: "b", child_conv_id: "other", status: "running" });
-  expect(screen.getByText(/Waiting for reply/)).toBeTruthy();
+  await screen.findByText(/Waiting for reply/);
   emit({ type: "linked_agent", parent_conv_id: "b", child_conv_id: "other", status: "done" });
-  expect(screen.queryByText(/Waiting for reply/)).toBeNull();
+  // The chip re-renders after the event; checking at once failed most runs (release test run).
+  await waitFor(() => expect(screen.queryByText(/Waiting for reply/)).toBeNull());
   state.running.delete("b"); emit({ type: "agent_stopped", conv_id: "b" });
-  expect(screen.getByRole("button", { name: /Builder/ }).textContent).toContain("Idle");
+  await waitFor(() => expect(screen.getByRole("button", { name: /Builder/ }).textContent).toContain("Idle"));
  });
  it("shows inherited active builders without nesting buttons in outline buttons", async () => {
   roster(); state.running.add("b");
