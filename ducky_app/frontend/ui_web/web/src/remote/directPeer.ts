@@ -13,7 +13,8 @@
  * sendonly and attach the cropped screen track via replaceTrack when the
  * viewer asks to watch a window. No renegotiation ever.
  */
-import { getApi } from "../hooks/usePanelApi";
+import { getApi, isRemote } from "../hooks/usePanelApi";
+import { onApiReady } from "../hooks/onApiReady";
 import { installAgentEventBus, subscribeAgentEventsImmediate } from "../hooks/useAgentEventBus";
 import type { AgentEvent } from "../types/panel";
 import {
@@ -104,6 +105,22 @@ export function installDirectPeer(): () => void {
     unsub();
     unsubEnded();
     for (const id of [...sessions.keys()]) closeSession(id);
+  };
+}
+
+/**
+ * Desktop only. pywebview injects `window.pywebview` after the app's first effects, so
+ * asking isRemote() at mount took every desktop for a phone and no offer was ever answered
+ * (Open hung on "Opening UEFN Ducky…"). Decide once the bridge is in.
+ */
+export function installDirectPeerOnDesktop(): () => void {
+  let undo = () => {};
+  const stop = onApiReady(() => {
+    if (!isRemote()) undo = installDirectPeer();
+  });
+  return () => {
+    stop();
+    undo();
   };
 }
 

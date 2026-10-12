@@ -22,7 +22,7 @@ import { ProjectFilesSettingsProvider } from "./contexts/ProjectFilesSettingsCon
 import { Header } from "./components/Header";
 import { RemoteWindowLaunching, RemoteWindowOverlay, useUeFnLaunching } from "./components/RemoteWindowView";
 import { RemoteWindowSender } from "./components/RemoteWindowSender";
-import { installDirectPeer } from "./remote/directPeer";
+import { installDirectPeerOnDesktop } from "./remote/directPeer";
 import { isRemote } from "./hooks/usePanelApi";
 import { onApiReady } from "./hooks/onApiReady";
 import { WindowDrag } from "./components/WindowDrag";
@@ -143,10 +143,7 @@ export default function App() {
   const [watchWindowId, setWatchWindowId] = useState("");
   const uefnLaunching = useUeFnLaunching();
   // Desktop only: answer direct (tunnel-free) Remote View offers.
-  useEffect(() => {
-    if (isRemote()) return;
-    return installDirectPeer();
-  }, []);
+  useEffect(() => installDirectPeerOnDesktop(), []);
   const { mode: layoutMode, setMode: setLayoutMode } = useChatLayoutMode();
   const [sidebarRefresh, setSidebarRefresh] = useState(0);
   const [projectRefresh, setProjectRefresh] = useState(0);

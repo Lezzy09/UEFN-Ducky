@@ -1,13 +1,48 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const api: { remote_deny_methods?: () => unknown } = {};
+const api: { remote_deny_methods?: () => unknown; direct_rtc_answer?: (...a: unknown[]) => unknown } = {};
 vi.mock("../hooks/usePanelApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../hooks/usePanelApi")>()),
   getApi: () => api,
 }));
 
-import { DENY_WAIT_MS, deniedMethods, forgetDeniedMethodsForTest } from "./directPeer";
+import { DENY_WAIT_MS, deniedMethods, forgetDeniedMethodsForTest, installDirectPeerOnDesktop } from "./directPeer";
+import { pushLocalAgentEvent } from "../hooks/useAgentEventBus";
+import type { AgentEvent } from "../types/panel";
+
+describe("installDirectPeerOnDesktop", () => {
+  it("answers offers once pywebview's bridge arrives after the app mounted", async () => {
+    const w = window as unknown as { chrome?: unknown; pywebview?: unknown };
+    w.chrome = { webview: {} }; // the desktop's WebView2, before pywebview injected its bridge
+    vi.stubGlobal("fetch", () => new Promise(() => {})); // the bus's event poll never answers here
+    vi.stubGlobal(
+      "RTCPeerConnection",
+      class {
+        setRemoteDescription() {
+          return Promise.reject(new Error("bad offer"));
+        }
+        close() {}
+      },
+    );
+    const answer = vi.fn();
+    api.direct_rtc_answer = answer;
+    const offer = (session: string) =>
+      ({ type: "direct_rtc", session, offer: { type: "offer", sdp: "v=0" }, ts: Date.now() / 1000 }) as unknown as AgentEvent;
+    const stop = installDirectPeerOnDesktop();
+    try {
+      w.pywebview = { api };
+      window.dispatchEvent(new Event("pywebviewready"));
+      pushLocalAgentEvent(offer("s1"));
+      await vi.waitFor(() => expect(answer).toHaveBeenCalledWith("s1", null, "", "bad offer"));
+    } finally {
+      stop();
+      delete w.pywebview;
+      delete w.chrome;
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 describe("deniedMethods", () => {
   afterEach(() => {
