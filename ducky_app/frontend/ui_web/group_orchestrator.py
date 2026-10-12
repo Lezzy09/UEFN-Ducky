@@ -938,7 +938,8 @@ def build_member_prompt(
             "Before spawning parallel members, partition the work into disjoint write lanes "
             "(ducky_spawn_chat(write_allowed=[...]) or ducky_group_set_lane); keep shared files "
             "such as module_declarations.verse in your own lane; review changeset_list before compiling. "
-            "Summarize findings clearly so the whole group stays aware."
+            "Members work their sub plans alone: no status rounds, summaries or check-ins; you hear "
+            "when a sub plan is finished or a member is blocked."
         )
     if roundtable:
         bits.append(
@@ -961,7 +962,9 @@ def lane_prompt_bits(
 ) -> list[str]:
     """Prompt lines that tell a member its write lane and its teammates' lanes."""
     bits: list[str] = []
-    ask = f"ask @{leader_name} to change it" if leader_name and not is_leader else "ask the user to change it"
+    # A member never messages its lead for a lane change: it ends its turn with BLOCKED and the
+    # lead changes the lane or the plan.
+    ask = "end your turn with BLOCKED: <the file you need>" if leader_name and not is_leader else "ask the user to change it"
     if lane is not None:
         shown = ", ".join(lane) if lane else "(read-only: no file writes)"
         bits.append(
@@ -976,7 +979,8 @@ def lane_prompt_bits(
         their = m.get("write_allowed") or []
         teammates.append(f"{name} → {', '.join(their) if their else '(read-only)'}")
     if teammates:
-        bits.append("Teammate lanes (route file requests to the owner): " + "; ".join(teammates) + ".")
+        bits.append("Teammate lanes (a change you need in one of them: BLOCKED: <file and change>, not a message): "
+                    + "; ".join(teammates) + ".")
     return bits
 
 

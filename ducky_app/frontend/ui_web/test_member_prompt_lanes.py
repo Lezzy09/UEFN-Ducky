@@ -23,7 +23,7 @@ def test_member_prompt_states_own_lane_and_teammates() -> None:
         leader_name="Architect",
     )
     assert "Your write lane: Content/Verse/Shop/**" in prompt
-    assert "ask @Architect to change it" in prompt
+    assert "end your turn with BLOCKED: <the file you need>" in prompt  # never a message to the lead
     assert "Artist → Content/Verse/Hub/**" in prompt and "Reviewer → (read-only)" in prompt
     assert "Hacker →" not in prompt
 
