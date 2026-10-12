@@ -761,6 +761,11 @@ def run_regression_tests() -> None:
     npm = shutil.which("npm")
     if not npm:
         raise SystemExit("npm not found — panel vitest is required before Store publish")
+    # The git-ignored generated sources (Verse language assets, bundled duckies, critical
+    # CSS) are made by predev/prebuild, never by `npm test`: a fresh checkout or worktree
+    # failed 34 test files on a missing import before this ran.
+    print("=== generated web sources (predev) ===")
+    subprocess.run([npm, "run", "-s", "predev"], check=True, cwd=str(web))
     print("=== vitest (panel) ===")
     subprocess.run([npm, "test"], check=True, cwd=str(web))
     print("regression tests ok")
