@@ -1,9 +1,9 @@
 """Remote Ducky has no tunnel: the phone connects to this PC directly (peer to peer,
 frontend.remote_direct). The Cloudflare tunnel (cloudflared) is gone.
 
-These do nothing. They stay only because Ducky Account 1.0.51 and older import this
+These do nothing. They stay only because Ducky Account 1.0.52 and older import this
 module from their Browser access switch and sign-out; delete the module once every
-supported Account version is 1.0.52 or newer.
+supported Account version is 1.0.53 or newer.
 """
 
 from __future__ import annotations
