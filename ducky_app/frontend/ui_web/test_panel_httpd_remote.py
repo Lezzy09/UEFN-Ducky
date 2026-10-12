@@ -332,3 +332,26 @@ def test_remote_view_viewer_cannot_start_verse_lsp():
     assert not remote_denied("start_verse_lsp", on_this_pc=True)
     assert remote_denied("pick_project_path", on_this_pc=True)
     assert not remote_denied("scan_verse_diagnostics")
+
+
+def test_a_plugins_media_link_streams_ranges_and_lets_the_panel_read_frames(panel_server, tmp_path, monkeypatch):
+    # Oct 12 2026: api.media_url links read the whole file into memory (a 7 GB original froze the
+    # app), had no Range (no seeking) and no CORS header, so the panel's frame capture of a
+    # crossorigin video failed with "MEDIA_ELEMENT_ERROR: Format error".
+    import urllib.request
+
+    from backend.automations import files
+
+    monkeypatch.setattr(files, "_sign", lambda text: "0" * 32)
+    video = tmp_path / "proxy.webm"
+    video.write_bytes(bytes(range(256)) * 64)
+    url = files.media_url(video)
+    path = "/" + url.split("/", 3)[3]
+    req = urllib.request.Request(f"http://127.0.0.1:{panel_server}{path}",
+                                 headers={"Host": "127.0.0.1", "Range": "bytes=10-19"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        assert resp.status == 206
+        assert resp.headers["Content-Range"] == f"bytes 10-19/{256 * 64}"
+        assert resp.headers["Accept-Ranges"] == "bytes"
+        assert resp.headers["Access-Control-Allow-Origin"] == "*"
+        assert resp.read() == bytes(range(10, 20))

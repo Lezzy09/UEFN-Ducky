@@ -1074,18 +1074,27 @@ def start_panel_ui_server(dist_root: Path) -> str:
                     from backend.automations.files import resolve_media
                     from frontend.ui_web.project_media import media_content_type
 
+                    # Plugin panels play originals of any size through these links (api.media_url):
+                    # stream with Range so a video seeks, never read the whole file into memory
+                    # (a 7 GB original froze the app), and allow the sandboxed panel to read the
+                    # frames it captures (crossorigin video). The links are signed per file.
                     try:
                         file_path = resolve_media(wf_media.group(1), wf_media.group(2))
-                        data = file_path.read_bytes()
+                        status, extra, start, length = _plan_file_range(file_path, self.headers.get("Range"))
+                        fh = file_path.open("rb")
                     except (ValueError, OSError):
                         self.send_error(404)
                         return
-                    self.send_response(200)
-                    self.send_header("Content-Type", media_content_type(file_path) or "application/octet-stream")
-                    self.send_header("Content-Length", str(len(data)))
-                    self.send_header("Cache-Control", "private, max-age=3600")
-                    self.end_headers()
-                    self.wfile.write(data)
+                    with fh:
+                        self.send_response(status)
+                        self.send_header("Content-Type", media_content_type(file_path) or "application/octet-stream")
+                        self.send_header("Content-Length", str(length))
+                        for key, value in extra.items():
+                            self.send_header(key, value)
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.send_header("Cache-Control", "private, max-age=3600")
+                        self.end_headers()
+                        _copy_file_range(fh, start, length, self.wfile)
                     return
 
                 capture_match = _TOOL_CAPTURE_RE.match(rel)
