@@ -922,7 +922,7 @@ def on_agent_stopped(conv_id: str, reason: str, *, detail: str = "", run_id: str
                 _completed_runs.discard(_completed_order.popleft())
     try:
         from backend.agent.coding_agents.team_plan_events import member_stopped
-        member_stopped(conv_id)
+        member_stopped(conv_id, reason)
     except Exception:
         import logging
         logging.getLogger(__name__).exception("Could not report unfinished team plan step")

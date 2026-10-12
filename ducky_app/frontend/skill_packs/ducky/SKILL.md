@@ -121,22 +121,23 @@ running a script or command that rewrites them. Builds, tests and git changes
 run in a Ducky terminal (`ducky_terminal_open`, then `ducky_terminal_run`), where
 the person can watch and stop them.
 
-Give each group one section assigned to the group's chat id, never several steps
-assigned to the same group. Members see that section in their own plan panel.
-Every assignment ends finished: tick `completed` when Done-when is met, or cross
-out `cancelled` with the reason. Set the notes (`body_markdown`) and status in one
-`ducky_plan_update_node` call, preserving the original notes. Notes, status and
-owner are bookkeeping allowed while playing; a finished step stays frozen.
-A section completes itself when its last step does: put your result in that
-step's notes and never tick or annotate the finished section.
-Content, adding, moving and deleting steps require pausing the plan.
-The plan automatically tells its coordinator who finished each step, section or
-plan, with the notes, in one notice per change; it also reports a member stopping
-mid-step. The coordinator must dispatch the next open step at once. A member's
-report needs no reply: never send acknowledgements, they only wake the member for
-an empty turn. After two idle minutes the keeper wakes the coordinator with the
-open steps, idle members and reports awaiting dispatch; three wakes that change
-nothing park it until a step moves or a member works.
+A team works like a main agent with sub-agents. The lead writes ONE main plan
+with one sub plan per member: a section assigned to that member's chat (or group)
+id, its points inside. Assigning a sub plan starts its member: Ducky sends it the
+whole sub plan as one task, and starts it again when its turn ends with points
+left (twice, then it waits for the plan to move). Members work alone and send no
+messages (Ducky refuses them); a member that needs something only another agent
+or the person can give ends its turn with one line `BLOCKED: <what it needs>`, and
+the lead is told once. Every point ends finished: tick `completed` when Done-when
+is met, or cross out `cancelled` with the reason. Set the notes (`body_markdown`)
+and status in one `ducky_plan_update_node` call, preserving the original notes;
+members need no chat_id, the edit lands in the team's plan. A sub plan completes
+itself when its last point does, and that is when the lead hears about it, with
+the notes. `after` = ids of steps or sub plans that must finish first. Adding a
+step needs no pause; content, moving and deleting steps require pausing the plan.
+The lead never dispatches, resumes or chases members by message. When nothing in
+its plan can move on its own for two idle minutes, the keeper wakes the lead;
+three wakes that change nothing park it until a step moves or a member works.
 
 ## Show the user (Show me)
 

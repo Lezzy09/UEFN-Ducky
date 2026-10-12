@@ -500,7 +500,7 @@ def test_later_turn_cannot_complete_or_reuse_held_reply_thread(broker, fake_cloc
 def test_finished_runs_are_remembered_only_for_recent_turns(broker, monkeypatch):
     from backend.agent.coding_agents import team_plan_events
     stopped = []
-    monkeypatch.setattr(team_plan_events, "member_stopped", stopped.append)
+    monkeypatch.setattr(team_plan_events, "member_stopped", lambda conv_id, *rest: stopped.append(conv_id))
     for n in range(5000):
         broker.mod.on_agent_stopped("recv1", "done", run_id=f"run-{n}")
     assert len(stopped) == 5000
@@ -511,7 +511,7 @@ def test_finished_runs_are_remembered_only_for_recent_turns(broker, monkeypatch)
 
 def test_delivered_mail_of_quiet_chats_does_not_stay_forever(broker, monkeypatch):
     from backend.agent.coding_agents import team_plan_events
-    monkeypatch.setattr(team_plan_events, "member_stopped", lambda conv_id: None)
+    monkeypatch.setattr(team_plan_events, "member_stopped", lambda conv_id, *rest: None)
     for n in range(50):
         broker.mod.send(sender_conv_id="sender1", receiver_conv_id=f"chat{n}", body="report " * 500, expect_reply=False)
     _wait_sent(broker.modes, 50)

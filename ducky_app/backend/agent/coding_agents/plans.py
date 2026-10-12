@@ -24,10 +24,12 @@ PLAN_PROTOCOL = (
     "`ducky_plan_update_node` `in_progress` BEFORE the work, "
     "`completed` when Done-when is met. Mutators are blocked until a leaf is "
     "in_progress. If the approach changes, update the tree before more mutators — "
-    "never thrash off-plan. Team plans: ONE plan for the whole team, the lead's; members "
-    "never make their own. Every step has an owner (`assignee`) and, when it needs other "
-    "steps first, `after` = their ids; its description says Files (what it may change), Do, "
-    "Done when and Not yours (what to leave to others). Templates: `ducky_create_plan_template` / "
+    "never thrash off-plan. Team plans: ONE main plan, the lead's, with one sub plan per agent "
+    "(a section whose `assignee` is that agent) holding that agent's points; members never make "
+    "plans of their own. The agent ticks its points; ticking the last one checks its sub plan off "
+    "in the main plan and tells the lead, so nobody sends reports. A sub plan's description says "
+    "Files (what it may change), Done when and Not yours (what to leave to others); `after` = ids "
+    "of steps or sub plans that must finish first. Templates: `ducky_create_plan_template` / "
     "`ducky_instantiate_plan_template`. Plan mode: create/update then stop."
 )
 
@@ -1286,6 +1288,16 @@ def plan_review(plan: dict[str, Any] | None) -> list[dict[str, str]]:
     team = any(n.get("assignee") for n in flat)
     owned_sections = {str(c.get("id")) for n in flat if n.get("assignee")
                       for c in _flatten_nodes(n.get("children") or [])}
+    # An agent with several loose steps at the top: they belong in one sub plan assigned to it,
+    # so the agent works through its points and the lead hears once, when the sub plan is done.
+    loose: dict[str, int] = {}
+    for node in (plan or {}).get("nodes") or []:
+        if node.get("assignee") and not node.get("children") and node.get("status") not in _DONE:
+            loose[str(node["assignee"])] = loose.get(str(node["assignee"]), 0) + 1
+    for owner, count in loose.items():
+        if count > 1:
+            issues.append({"n": "-", "issue": f"{count} top-level steps are assigned to {owner}: put them in one "
+                                              "sub plan assigned to that agent (its points inside)."})
     for label, node in outline_numbers((plan or {}).get("nodes")):
         if node.get("status") in _DONE:
             continue
@@ -1627,7 +1639,9 @@ def assigned_plan_view(chat_id: str, project_root: str | None = None, *,
             "chat_id": str(plan.get("chat_id") or ""),
             # Always the team plan's own name: a one-step view titled with the step's name
             # read like a separate plan.
-            "title": f"Your step in “{title}”" if len(nodes) == 1 else f"Your {len(nodes)} steps in “{title}”",
+            "title": (f"Your sub plan in “{title}”" if len(nodes) == 1 and first.get("children")
+                      else f"Your step in “{title}”" if len(nodes) == 1
+                      else f"Your {len(nodes)} steps in “{title}”"),
             "overview": f"Part of the plan “{title}”.",
             "body_markdown": str(first.get("body_markdown") or "") if len(nodes) == 1 else "",
             "status": str(plan.get("status") or "open"),

@@ -22,11 +22,15 @@ def test_notes_and_tick_while_playing_freeze_finished_nodes(team, notices, statu
     notes = "Original instructions\nResult: " + status + "; dependency unavailable"
     doc = plans.update_node("coord", "a1", status=status, body_markdown=notes, project_root=team)
     assert plans._walk_find(doc["nodes"], "a1")[2]["body_markdown"] == notes
-    assert len(notices) == 1
-    assert notices[0]["receiver_conv_id"] == "coord"
-    assert "Builder" in notices[0]["body"] and notes in notices[0]["body"]
+    # A finished point of a sub plan is not news for the lead until the sub plan is done;
+    # a cancelled one is (its reason may need the lead).
+    told = 1 if status == "cancelled" else 0
+    assert len(notices) == told
+    if told:
+        assert notices[0]["receiver_conv_id"] == "coord"
+        assert "Builder" in notices[0]["body"] and notes in notices[0]["body"]
     plans.save_plan(doc, project_root=team)
-    assert len(notices) == 1
+    assert len(notices) == told
     for kwargs in ({"body_markdown": "overwrite"}, {"status": "pending"}, {"assignee": "builder"}):
         with pytest.raises(ValueError):
             plans.update_node("coord", "a1", project_root=team, **kwargs)
@@ -40,20 +44,21 @@ def test_notes_and_tick_while_playing_freeze_finished_nodes(team, notices, statu
 def test_rollup_and_whole_plan_report_once_with_notes(team, notices):
     plans.update_node("coord", "a", assignee="group-a", body_markdown="Section instructions", project_root=team)
     plans.update_node("coord", "a1", status="completed", body_markdown="Core passed", project_root=team)
+    # The lead hears once, when the sub plan is done: its last point and the sub plan together.
+    assert len(notices) == 0
     plans.update_node("coord", "a2", status="completed", body_markdown="Adapters passed", project_root=team)
-    # The last step and the section it closed arrive as one notice, step first.
-    assert len(notices) == 2
+    assert len(notices) == 1
     last = notices[-1]["body"]
     assert "section A Modes" in last and "Section instructions" in last
     assert last.index("Adapters passed") < last.index("section A Modes")
-    assert last.endswith("Dispatch the next open step at once.")
+    assert last.endswith("change the plan only if this result needs it.")
     doc = plans.update_node("coord", "b", status="completed", project_root=team)
     assert "finished plan" in notices[-1]["body"]
     assert notices[-1]["body"].endswith("check the results and report to the user.")
-    assert len(notices) == 3
-    assert len(doc["team_reports"]) == 4
+    assert len(notices) == 2
+    assert len(doc["team_reports"]) == 3
     plans.save_plan(doc, project_root=team)
-    assert len(notices) == 3
+    assert len(notices) == 2
 
 
 def test_new_dispatch_acknowledges_retained_reports(team, notices):
@@ -73,6 +78,8 @@ def test_stopped_member_reports_only_own_coordinator(team, notices, monkeypatch)
     assert "builder stopped without finishing Core (a1)" in notices[0]["body"]
     events.member_stopped("outsider")
     assert len(notices) == 1
+    events.member_stopped("builder", "done")  # a turn that simply ended: the keeper restarts it
+    assert len(notices) == 1
 
 
 @pytest.mark.parametrize("reason,detail", [("done", ""), ("error", "rate_limit_error")])
@@ -83,7 +90,7 @@ def test_lifecycle_calls_once_per_run(monkeypatch, reason, detail):
     monkeypatch.setattr(broker, "_account_key", lambda _: "isolated-test")
     monkeypatch.setattr(broker, "_cooldowns", {})
     monkeypatch.setattr(broker, "_uncertain_chats", set())
-    monkeypatch.setattr(events, "member_stopped", called.append)
+    monkeypatch.setattr(events, "member_stopped", lambda conv_id, *rest: called.append(conv_id))
     monkeypatch.setattr(broker, "_completed_runs", set())
     monkeypatch.setattr(broker, "open_threads_for_receiver", lambda _: [])
     monkeypatch.setattr(broker, "_schedule_reports", lambda _: None)
@@ -101,10 +108,25 @@ def test_team_plan_tool_and_skill_documentation():
     docs = [ast.get_docstring(n) for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
     assert len(docs) == 3
     for doc in docs:
-        assert "Team plans:" in doc and "one section" in doc
-        assert "preserving original notes" in doc and "at once" in doc
+        assert "Team plans:" in doc and "one sub plan per agent" in doc
+        assert "preserving original notes" in doc and "Nobody dispatches by message" in doc
     skill = (root / "frontend/skill_packs/ducky/SKILL.md").read_text(encoding="utf-8")
-    assert "Team plans" in skill and "two idle minutes" in skill
+    assert "Team plans" in skill and "two idle minutes" in skill and "BLOCKED:" in skill
+
+
+def test_members_on_a_team_plan_send_no_messages(monkeypatch):
+    # Oct 12 2026 owner: agents talked in circles instead of coding; a team works like a main
+    # agent with sub-agents, which send nothing but their result.
+    from backend.tools.panel import ducky_panel as panel
+
+    monkeypatch.setattr("backend.agent.a2a_broker.leads_receiver", lambda sender, receiver: sender == "lead")
+    monkeypatch.setattr(plans, "team_plan_for",
+                        lambda cid, root=None: {"chat_id": "lead"} if cid == "builder" else None)
+    assert panel._works_alone("builder", "lead", None)
+    assert panel._works_alone("builder", "peer", None)
+    assert not panel._works_alone("lead", "builder", None)
+    assert not panel._works_alone("solo", "other", None)
+    assert "BLOCKED:" in panel.WORK_ALONE
 
 
 @pytest.mark.parametrize("database", [False, True])

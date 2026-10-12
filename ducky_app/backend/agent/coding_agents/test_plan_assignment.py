@@ -59,7 +59,7 @@ def test_a_member_sees_its_groups_part(team) -> None:
         "plan_title": "Repair modes",
         "assignee": "group-a",
     }
-    assert view["title"] == "Your step in “Repair modes”"  # the team plan's name, never a step's
+    assert view["title"] == "Your sub plan in “Repair modes”"  # the team plan's name, never a step's
     assert [n["id"] for n in view["nodes"]] == ["a"]
     assert [t["id"] for t in view["todos"]] == ["a", "a1", "a2"]
     # The group chat itself sees it too; someone outside the team does not.
@@ -376,3 +376,19 @@ def test_a_real_conflict_goes_to_the_teams_own_lead_or_says_how_to_fix_it(team, 
              "outsider": SimpleNamespace(parent_conv_id="")}
     monkeypatch.setattr(project_chats, "load_conversation", lambda cid, project_root=None: convs.get(cid))
     assert plans.load_plan_view("builder", project_root=team)["chat_id"] == "coord"
+
+
+def test_plan_review_asks_for_one_sub_plan_per_agent():
+    loose = {"nodes": [
+        {"id": "x", "content": "Fix X", "assignee": "builder", "body_markdown": "Do X."},
+        {"id": "y", "content": "Fix Y", "assignee": "builder", "body_markdown": "Do Y."},
+        {"id": "z", "content": "Fix Z", "body_markdown": "Do Z."},
+    ]}
+    issues = [i["issue"] for i in plans.plan_review(loose)]
+    assert any("2 top-level steps are assigned to builder" in i for i in issues)
+    assert any("No owner" in i for i in issues)
+    grouped = {"nodes": [{"id": "sec", "content": "Builder's part", "assignee": "builder",
+                          "body_markdown": "Fixes X and Y.", "children": [
+                              {"id": "x", "content": "Fix X", "body_markdown": "Do X."},
+                              {"id": "y", "content": "Fix Y", "body_markdown": "Do Y."}]}]}
+    assert plans.plan_review(grouped) == []

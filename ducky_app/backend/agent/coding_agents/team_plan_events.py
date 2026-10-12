@@ -19,10 +19,19 @@ def completion_reports(before: dict, after: dict) -> list[dict[str, str]]:
     actor = getattr(context, "conv_id", "") or str(after.get("chat_id") or "")
     who = getattr(context, "ducky_name", "") or actor
     old = {n["id"]: n for n, _ in assigned_nodes(before.get("nodes"))}
+    done = {"completed", "cancelled"}
+    newly = {node["id"] for node, _ in assigned_nodes(after.get("nodes"))
+             if node.get("status") in done and old.get(node["id"], {}).get("status") not in done}
+    parent = {child["id"]: node for node, _ in assigned_nodes(after.get("nodes")) for child in node.get("children") or []}
     steps, sections = [], []
     for node, owner in assigned_nodes(after.get("nodes")):
         status = node.get("status")
-        if owner and status in {"completed", "cancelled"} and old.get(node["id"], {}).get("status") not in {"completed", "cancelled"}:
+        if owner and node["id"] in newly:
+            up = parent.get(node["id"])
+            if (status == "completed" and not node.get("children") and not node.get("assignee")
+                    and up is not None and up["id"] not in newly):
+                # A point of an agent's sub plan: the lead hears once, when the whole sub plan is done.
+                continue
             kind = "section" if node.get("children") else "step"
             body = f"{who} {status} {kind} {node['content']} ({node['id']}).\n{node.get('body_markdown', '')}"
             (sections if node.get("children") else steps).append({"sender": actor, "body": body})
@@ -40,7 +49,8 @@ def deliver_reports(plan: dict, reports: list[dict]) -> None:
     if not reports:
         return
     closing = ("Every step is finished: check the results and report to the user."
-               if plan.get("status") == "finished" else "Dispatch the next open step at once.")
+               if plan.get("status") == "finished" else
+               "Ducky starts the members whose work can go on: change the plan only if this result needs it.")
     body = "[Team plan] " + "\n".join(r["body"].rstrip("\n") for r in reports) + "\n" + closing
     try:
         send_notice(sender_conv_id=reports[0]["sender"], receiver_conv_id=plan["chat_id"], body=body)
@@ -49,7 +59,11 @@ def deliver_reports(plan: dict, reports: list[dict]) -> None:
         logging.getLogger(__name__).exception("Could not deliver team plan report")
 
 
-def member_stopped(chat_id: str) -> None:
+def member_stopped(chat_id: str, reason: str = "error") -> None:
+    """Tell the lead a member's turn failed mid-point. A turn that simply ended is not news:
+    the team keeper starts the member again, so the lead is not woken for it."""
+    if reason != "error":
+        return
     from backend.agent.coding_agents import plans
     from frontend.ui_web.project_chats import load_conversation
     ids = set(plans._chat_and_group_ids(chat_id, None))

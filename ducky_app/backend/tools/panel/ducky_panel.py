@@ -886,7 +886,12 @@ def ducky_send_chat_message(
         raise ValueError("Archived chats cannot run agents. Restore this chat or use an active ducky.")
 
     from frontend.ui_web.agent_modes import run_message, run_message_and_wait
+    from backend.workspace.identity import resolve_context
 
+    context = resolve_context()
+    me = str(getattr(context, "conv_id", "") or "").strip() if context is not None else ""
+    if me and me != conv_id and _works_alone(me, conv_id, root):
+        return tool_json({"status": "not_sent", "sender": me, "reason": WORK_ALONE}, pretty=pretty)
     text = _from_another_ducky(conv_id, text, root)
     mode_norm = (mode or "agent").lower()
     if wait_for_reply:
@@ -959,6 +964,27 @@ def _acknowledge_chat_message(receiver: str) -> None:
             acknowledge_reports(context.conv_id, receiver)
         except RuntimeError:
             pass  # The message was accepted; a lost acknowledgement leaves its report pending.
+
+
+WORK_ALONE = (
+    "Not sent: on a team plan you work your sub plan alone, like a sub-agent, and send no "
+    "messages. Tick your points with ducky_plan_update_node; ticking the last one tells your "
+    "lead. If you need something only another agent or the person can give, end your turn "
+    "with one line: BLOCKED: <what you need>."
+)
+
+
+def _works_alone(me: str, target: str, root: str | None) -> bool:
+    """A team member on its lead's plan sends nothing new: no reports, receipts, status rounds or
+    peer chat (one team sent 501 messages and wrote 126 files). A lead still directs the
+    members of its own groups, and anyone may answer a question put to it."""
+    try:
+        from backend.agent.a2a_broker import leads_receiver
+        from backend.agent.coding_agents.plans import team_plan_for
+
+        return not leads_receiver(me, target) and team_plan_for(me, root) is not None
+    except Exception:
+        return False
 
 
 def _resolve_sender(sender: str) -> str:
@@ -1116,6 +1142,8 @@ def ducky_agent_send(
     reply_to = (response_id or "").strip()
     if not reply_to and expect_reply is None:
         reply_to = _owed_reply(me, target)
+    if not reply_to and _works_alone(me, target, root):
+        return tool_json({"status": "not_sent", "sender": me, "reason": WORK_ALONE}, pretty=pretty)
     # Every agent answered with response_id alone, hit "not both" and had to retry.
     expects = (not reply_to) if expect_reply is None else bool(expect_reply)
     if expect_reply is None and not reply_to:
@@ -2049,18 +2077,20 @@ def ducky_create_plan(
     chat_id defaults to the active conversation. One plan per chat; hierarchy is inside nodes.
     Parents cannot be completed until nested subplans are done. Rearrange with ducky_plan_move_node.
 
-    Team plans: give each group one section assigned to its group's chat id, never
-    several steps to one group. Members see that section in their own plan panel.
+    Team plans: one main plan with one sub plan per agent or group (a section assigned to
+    its chat or group id, its points inside), never several loose steps to one agent. Members see that section in their own plan panel.
     Finish every assignment: completed, or cancelled with the reason; set notes
     (body_markdown) and status in one call, preserving original notes. A section
     completes itself when its last step does, so put your result in that step's
     notes; never tick or annotate the finished section. Notes,
     status and owner are bookkeeping allowed while playing; finished steps stay
     frozen. Content, moving and deleting steps require a pause; adding a step does
-    not. The plan automatically tells the coordinator who finished what, with notes,
-    and reports members stopping mid-step. The coordinator must dispatch the next step at once.
+    not. Assigning a sub plan starts its member: Ducky sends it the task, starts it again
+    when a turn ends with points left, and tells the lead when the sub plan is finished
+    (with its notes) or the member ends with "BLOCKED: ...". Nobody dispatches by message.
     A team works in ONE plan, its lead's: members never create their own. Members tick
-    and split their steps without chat_id (the edit lands in the team's plan). ``after``
+    and split their points without chat_id (the edit lands in the team's plan); the last
+    point checks the sub plan off and tells the lead, so members send no reports. ``after``
     = ids of steps that must finish first: such a step can't start, and its owner is
     not woken until they finish. A member blocked by a teammate's work: the lead adds
     the fix as a step for that teammate and sets the blocked step's ``after`` to it.
@@ -2218,18 +2248,20 @@ def ducky_plan_add_node(
 ) -> str:
     """Add a step or subplan node. kind=step|subplan. parent_id empty = root. template_id edits a template.
     ``assignee`` = the chat or group that owns it; ``after`` = step ids it waits for.
-    Team plans: give each group one section assigned to its group's chat id, never
-    several steps to one group. Members see that section in their own plan panel.
+    Team plans: one main plan with one sub plan per agent or group (a section assigned to
+    its chat or group id, its points inside), never several loose steps to one agent. Members see that section in their own plan panel.
     Finish every assignment: completed, or cancelled with the reason; set notes
     (body_markdown) and status in one call, preserving original notes. A section
     completes itself when its last step does, so put your result in that step's
     notes; never tick or annotate the finished section. Notes,
     status and owner are bookkeeping allowed while playing; finished steps stay
     frozen. Content, moving and deleting steps require a pause; adding a step does
-    not. The plan automatically tells the coordinator who finished what, with notes,
-    and reports members stopping mid-step. The coordinator must dispatch the next step at once.
+    not. Assigning a sub plan starts its member: Ducky sends it the task, starts it again
+    when a turn ends with points left, and tells the lead when the sub plan is finished
+    (with its notes) or the member ends with "BLOCKED: ...". Nobody dispatches by message.
     A team works in ONE plan, its lead's: members never create their own. Members tick
-    and split their steps without chat_id (the edit lands in the team's plan). ``after``
+    and split their points without chat_id (the edit lands in the team's plan); the last
+    point checks the sub plan off and tells the lead, so members send no reports. ``after``
     = ids of steps that must finish first: such a step can't start, and its owner is
     not woken until they finish. A member blocked by a teammate's work: the lead adds
     the fix as a step for that teammate and sets the blocked step's ``after`` to it.
@@ -2291,18 +2323,20 @@ def ducky_plan_update_node(
     group id that owns this part (``""`` clears it): that group's chats then show this
     part as their plan instead of "No plan".
 
-    Team plans: give each group one section assigned to its group's chat id, never
-    several steps to one group. Members see that section in their own plan panel.
+    Team plans: one main plan with one sub plan per agent or group (a section assigned to
+    its chat or group id, its points inside), never several loose steps to one agent. Members see that section in their own plan panel.
     Finish every assignment: completed, or cancelled with the reason; set notes
     (body_markdown) and status in one call, preserving original notes. A section
     completes itself when its last step does, so put your result in that step's
     notes; never tick or annotate the finished section. Notes,
     status and owner are bookkeeping allowed while playing; finished steps stay
     frozen. Content, moving and deleting steps require a pause; adding a step does
-    not. The plan automatically tells the coordinator who finished what, with notes,
-    and reports members stopping mid-step. The coordinator must dispatch the next step at once.
+    not. Assigning a sub plan starts its member: Ducky sends it the task, starts it again
+    when a turn ends with points left, and tells the lead when the sub plan is finished
+    (with its notes) or the member ends with "BLOCKED: ...". Nobody dispatches by message.
     A team works in ONE plan, its lead's: members never create their own. Members tick
-    and split their steps without chat_id (the edit lands in the team's plan). ``after``
+    and split their points without chat_id (the edit lands in the team's plan); the last
+    point checks the sub plan off and tells the lead, so members send no reports. ``after``
     = ids of steps that must finish first: such a step can't start, and its owner is
     not woken until they finish. A member blocked by a teammate's work: the lead adds
     the fix as a step for that teammate and sets the blocked step's ``after`` to it.
