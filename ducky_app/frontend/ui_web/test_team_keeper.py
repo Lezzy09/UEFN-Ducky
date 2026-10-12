@@ -97,6 +97,24 @@ def test_only_started_open_team_plans_are_kept(monkeypatch) -> None:
     assert [p["chat_id"] for p in keeper.kept_plans()] == ["coord"]
 
 
+def test_archived_and_dormant_team_plans_are_left_alone(monkeypatch) -> None:
+    # Oct 12 2026: scanning recent projects woke six chats of three earlier teams at once.
+    import time
+
+    import backend.agent.coding_agents.plans as plans
+
+    now = time.time()
+    rows = [
+        {**PLAN, "chat_id": "live", "updated_at": now - 600},
+        {**PLAN, "chat_id": "archived", "status": "archived", "updated_at": now - 600},
+        {**PLAN, "chat_id": "old", "updated_at": now - 3 * 3600},
+    ]
+    monkeypatch.setattr(plans, "list_plans", lambda project_root=None: rows)
+    monkeypatch.setattr(keeper, "_project_roots", lambda root: ["C:/island"])
+    monkeypatch.setattr(keeper, "_team_leaders", lambda root: {"live", "archived", "old"})
+    assert [p["chat_id"] for p in keeper.kept_plans()] == ["live"]
+
+
 def test_a_failed_wake_is_retried_next_tick() -> None:
     calls: list[str] = []
 

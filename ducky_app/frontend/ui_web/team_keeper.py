@@ -132,15 +132,26 @@ def _project_roots(project_root: str | None) -> list[str]:
     return roots
 
 
+_DORMANT_S = 2 * 3600.0  # a team plan unchanged this long is left alone until it changes again
+
+
+def _dormant(plan: dict[str, Any], now: float) -> bool:
+    """An old team's plan nobody touched for hours: the keeper must not bring that team back.
+    Oct 12 2026: scanning recent projects woke six chats of three earlier teams at once."""
+    updated = float(plan.get("updated_at") or 0.0)
+    return updated > 0 and now - updated > _DORMANT_S
+
+
 def kept_plans(project_root: str | None = None) -> list[dict[str, Any]]:
     """Team plans the keeper looks after right now, in every project the person works in."""
     from backend.agent.coding_agents.plans import list_plans
 
     out: list[dict[str, Any]] = []
+    now = time.time()
     for root in _project_roots(project_root):
         live = [plan for plan in list_plans(root)
-                if str(plan.get("status") or "open") not in ("paused", "finished")
-                and _started(plan) and _open_steps(plan)]
+                if str(plan.get("status") or "open") not in ("paused", "finished", "completed", "archived")
+                and _started(plan) and _open_steps(plan) and not _dormant(plan, now)]
         if not live:
             continue  # the team lookup reads every chat of the project: only when needed
         leaders = _team_leaders(root)
