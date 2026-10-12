@@ -18,14 +18,15 @@ another account on this PC can't read them. Team scopes sync through
 the PC. A plugin's cache and prefs rows (``plugin_kv``) follow the same scope but
 never sync: each team has its own on this PC.
 
-:func:`sandbox_begin` points one plugin at a throwaway scope for a plugin test
-(process-wide, every thread, that plugin only), so the test never touches the
-user's data.
+:func:`sandbox_begin` points one plugin at a throwaway scope for a plugin test: the
+test's own calls and the threads they start, that plugin only, so the test never
+touches the user's data and never hides it from anyone else.
 """
 
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import base64
 import hashlib
 import json
@@ -43,11 +44,17 @@ DOC_MAX_BYTES = 1024 * 1024
 ASSET_MAX_BYTES = 100 * 1024 * 1024
 # A team copy whose access was lost stays locked on this PC this long, then goes.
 LOST_KEEP_S = 7 * 24 * 3600
-# Throwaway scopes of plugin tests (:func:`sandbox_begin`), one per plugin under test:
-# plugin id → scope. Process-wide, so threads the plugin starts itself land there too.
+# Throwaway scopes of plugin tests (:func:`sandbox_begin`). The test copy belongs to the
+# test: its calls carry a token (``_SANDBOX_CTX``, inherited by the threads they start),
+# everyone else's calls read their real data. Oct 12 2026: when it was process-wide, a
+# team's live projects and requests "disappeared" whenever one member ran the full test.
+# A thread a test started reads the real data again once the test ends (its token is gone).
 SANDBOX_PREFIX = "_plugin_test_"
-_SANDBOXES: dict[str, dict[str, Any]] = {}
+_SANDBOXES: dict[str, dict[str, Any]] = {}  # token → scope, while its test runs
+_TESTING: dict[str, str] = {}  # plugin → token of the test running now
+_SANDBOX_CTX: contextvars.ContextVar[dict[str, str]] = contextvars.ContextVar("plugin_test_sandbox", default={})
 _SANDBOX_LOCK = threading.Lock()
+_inherit_installed = False
 
 _PLUGIN_RE = re.compile(r"^[a-z0-9._-]{1,64}$")
 _DOC_RE = re.compile(r"^[a-z0-9._-]{1,128}$")
@@ -190,7 +197,7 @@ def active_scope(plugin: str) -> dict[str, Any]:
     """The scope ``plugin``'s data reads and writes right now."""
     from backend.store.repos import plugin_data as repo
 
-    boxed = _SANDBOXES.get(plugin)
+    boxed = _boxed(plugin)
     if boxed is not None:
         return dict(boxed)
     account = account_id()
@@ -204,27 +211,38 @@ def active_scope(plugin: str) -> dict[str, Any]:
     return personal_scope(account) if scope["state"] == "unavailable" else scope
 
 
+def _boxed(plugin: str) -> dict[str, Any] | None:
+    """The test copy this call reads, when it is part of a running test of ``plugin``."""
+    token = _SANDBOX_CTX.get().get(plugin)
+    return _SANDBOXES.get(token) if token else None
+
+
 def sandbox_begin(plugin: str) -> dict[str, Any]:
-    """From now until :func:`sandbox_end`, every read and write of ``plugin``'s docs,
-    files, cache and prefs (Local, team or ``sensitive``, from any thread, the plugin's
-    own included) goes to a throwaway scope that starts empty. Other plugins are not
-    affected. Raises ``ValueError`` while a test of the plugin is already running."""
+    """From now until :func:`sandbox_end`, this caller's reads and writes of ``plugin``'s
+    docs, files, cache and prefs (Local, team or ``sensitive``), and those of the threads
+    it starts, go to a throwaway scope that starts empty. Everyone else keeps the real
+    data. Raises ``ValueError`` while another test of the plugin is running."""
+    import uuid
+
     _need(valid_plugin_id(plugin), "plugin id")
     account = account_id()
-    scope_id = SANDBOX_PREFIX + hashlib.sha256(plugin.encode("utf-8")).hexdigest()[:16]
+    token = uuid.uuid4().hex
+    scope_id = SANDBOX_PREFIX + hashlib.sha256(plugin.encode("utf-8")).hexdigest()[:8] + token[:8]
     scope = {"account": account, "id": scope_id, "kind": "sandbox", "label": "Plugin test", "teamId": "",
              "readOnly": False, "state": "ok"}
     with _SANDBOX_LOCK:
-        if plugin in _SANDBOXES:
+        if plugin in _TESTING:
             raise ValueError(
-                f"A test of {plugin} is already running. Only one runs at a time because it moves "
-                f"{plugin}'s data to a test copy for everyone. Don't wait or queue for it: check your "
-                "own work with ducky_plugin_validate and live calls on your own test project, and leave "
-                "full tests to one member of the team."
+                f"A test of {plugin} is already running. Its test copy is its own (everyone else's calls "
+                "keep their real data), so don't wait for it: check your own work with "
+                "ducky_plugin_validate and live calls, and leave full tests to one member of the team."
             )
-        _SANDBOXES[plugin] = scope
+        _TESTING[plugin] = token
+        _SANDBOXES[token] = scope
+    _SANDBOX_CTX.set({**_SANDBOX_CTX.get(), plugin: token})
+    _inherit_into_threads()
     try:
-        purge_team(account, scope_id)  # a test that died midway left its rows
+        purge_team(account, scope_id)
     except BaseException:
         sandbox_end(plugin)
         raise
@@ -232,11 +250,51 @@ def sandbox_begin(plugin: str) -> dict[str, Any]:
 
 
 def sandbox_end(plugin: str) -> None:
-    """``plugin``'s data is the user's again; the throwaway scope and its rows go."""
+    """The test is over: its throwaway scope and rows go, and threads it started read the
+    real data again."""
     with _SANDBOX_LOCK:
-        scope = _SANDBOXES.pop(plugin, None)
+        token = _TESTING.pop(plugin, "")
+        scope = _SANDBOXES.pop(token, None) if token else None
+    mine = _SANDBOX_CTX.get()
+    if plugin in mine:
+        _SANDBOX_CTX.set({k: v for k, v in mine.items() if k != plugin})
     if scope is not None:
         purge_team(scope["account"], scope["id"])
+
+
+def _inherit_into_threads() -> None:
+    """Threads and pool tasks started inside a test run in the test's context, so what the
+    plugin does on them lands in the test copy too. A pool's worker thread itself is never
+    bound to a test: only the task is."""
+    global _inherit_installed
+    with _SANDBOX_LOCK:
+        if _inherit_installed:
+            return
+        _inherit_installed = True
+    from concurrent.futures import ThreadPoolExecutor
+
+    thread_init = threading.Thread.__init__
+    pool_submit = ThreadPoolExecutor.submit
+
+    def init(self: threading.Thread, *args: Any, **kwargs: Any) -> None:
+        thread_init(self, *args, **kwargs)
+        if _SANDBOX_CTX.get():
+            ctx = contextvars.copy_context()
+            run = self.run
+            self.run = lambda: ctx.run(run)  # type: ignore[method-assign]
+
+    def submit(self: ThreadPoolExecutor, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+        if not _SANDBOX_CTX.get():
+            return pool_submit(self, fn, *args, **kwargs)
+        ctx = contextvars.copy_context()
+        unbound = _SANDBOX_CTX.set({})  # a worker this starts serves every caller
+        try:
+            return pool_submit(self, ctx.run, fn, *args, **kwargs)
+        finally:
+            _SANDBOX_CTX.reset(unbound)
+
+    threading.Thread.__init__ = init  # type: ignore[method-assign]
+    ThreadPoolExecutor.submit = submit  # type: ignore[method-assign]
 
 
 @contextlib.contextmanager
@@ -250,14 +308,13 @@ def sandbox(plugin: str):
 
 
 def sandboxed_plugins() -> frozenset[str]:
-    """Plugins whose data is in a test's throwaway scope right now."""
-    with _SANDBOX_LOCK:
-        return frozenset(_SANDBOXES)
+    """Plugins this caller is testing right now (their data is its test copy)."""
+    return frozenset(plugin for plugin in _SANDBOX_CTX.get() if _boxed(plugin) is not None)
 
 
 def _personal_for(plugin: str) -> dict[str, Any]:
     """The Local scope ``plugin`` writes ``sensitive`` docs to (its test scope while under test)."""
-    boxed = _SANDBOXES.get(plugin)
+    boxed = _boxed(plugin)
     return dict(boxed) if boxed is not None else personal_scope()
 
 

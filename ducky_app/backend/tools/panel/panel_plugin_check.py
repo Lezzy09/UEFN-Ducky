@@ -7,9 +7,10 @@
   MCP tools with safe sample input (skipping the ones it marks destructive), runs each
   workflow node it registers with a minimal ctx, opens each of its panels and collects
   what went wrong there, and checks its UI files. A pass / fail / skip report per
-  check. The whole test runs on a throwaway copy of that plugin's data
-  (:func:`scopes.sandbox_begin`: every thread, the plugin's own too; other plugins
-  untouched), so nothing it does reaches the user's data. An AI plugin the user
+  check. The test's calls run on a throwaway copy of that plugin's data
+  (:func:`scopes.sandbox_begin`: the test's calls and the threads they start; other
+  agents' calls and other plugins untouched), so nothing it does reaches the user's
+  data or hides it from anyone. An AI plugin the user
   hasn't confirmed answers ``needs_trust`` like turning it on does; it never runs.
 
 The recorders (:func:`record_tool_error`, :func:`record_node_error`,
@@ -394,30 +395,32 @@ def test_plugin(plugin_id: str) -> dict[str, Any]:
 
     ui = check_ui(root, manifest)
     checks.append({"check": "ui files", "status": "fail" if ui else "pass", **({"errors": ui} if ui else {})})
-    # From here to the end the plugin's data, from any thread (its own too), is a throwaway
-    # copy: the reinstall's register(), its tools and nodes, its panels.
+    # The reinstall is an ordinary install: register() and the workers it starts serve
+    # everyone, so they never belong to the test copy (a worker bound to it would lose the
+    # real data when the test ends).
+    installed = install_ai_plugin(pid)
+    if not installed.get("ok"):
+        checks.append({"check": "install", "status": "fail",
+                       "errors": installed.get("errors") or [installed.get("error") or "install failed"]})
+        return _report(pid, started, checks)
+    checks.append({"check": "install", "status": "pass", "detail": "validated and installed"})
+    if not is_plugin_enabled(pid):
+        turned_on = _turn_on(pid)
+        if turned_on.get("needs_trust"):
+            return {**_report(pid, started, checks), **turned_on}
+        if not turned_on.get("ok"):
+            checks.append({"check": "turn on", "status": "fail",
+                           "detail": str(turned_on.get("error") or "couldn't turn the plugin on")})
+            return _report(pid, started, checks)
+    wait_plugin_toggles(timeout=15.0)  # the reinstall registers the new backend in the background
+    # From here the test's own calls (and the threads they start) use a throwaway copy of
+    # the plugin's data; everyone else's calls keep the real data.
     try:
         scopes.sandbox_begin(pid)
     except ValueError as exc:
         return {"ok": False, "id": pid, "error": str(exc)}
     stragglers: list[threading.Thread] = []
     try:
-        installed = install_ai_plugin(pid)
-        if not installed.get("ok"):
-            checks.append({"check": "install", "status": "fail",
-                           "errors": installed.get("errors") or [installed.get("error") or "install failed"]})
-            return _report(pid, started, checks)
-        checks.append({"check": "install", "status": "pass", "detail": "validated and installed"})
-        if not is_plugin_enabled(pid):
-            turned_on = _turn_on(pid)
-            if turned_on.get("needs_trust"):
-                return {**_report(pid, started, checks), **turned_on}
-            if not turned_on.get("ok"):
-                checks.append({"check": "turn on", "status": "fail",
-                               "detail": str(turned_on.get("error") or "couldn't turn the plugin on")})
-                return _report(pid, started, checks)
-        wait_plugin_toggles(timeout=15.0)  # the reinstall registers the new backend in the background
-
         def run() -> None:
             # Every tool of this plugin, whatever this chat opted into.
             set_active_uefn_agent_plugin_ids(None)
@@ -523,8 +526,9 @@ def ducky_plugin_test(id: str, pretty: bool = False) -> str:
     plugin the user hasn't confirmed returns needs_trust (stop: the user confirms once
     in Settings → Store, then test again). Returns a pass / fail / skip row per check;
     fix the failures in the draft and run it again.
-    While it runs, the plugin is reinstalled and its data is the test copy for every caller,
-    so in a team one member runs it for a batch of finished work; the others check their
-    own work with ducky_plugin_validate and live calls, in parallel, never taking turns.
+    The test copy is the test's own: everyone else's calls keep their real data while it
+    runs. It does reinstall the plugin, so in a team one member runs it for a batch of
+    finished work; the others check their own work with ducky_plugin_validate and live
+    calls, in parallel, never taking turns.
     """
     return tool_json(test_plugin(id), pretty=pretty)

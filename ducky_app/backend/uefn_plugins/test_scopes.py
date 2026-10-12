@@ -759,3 +759,35 @@ def test_ids_and_paths_cannot_climb() -> None:
     assert not scopes.valid_doc_key("a/b") and not scopes.valid_team_id("personal")
     assert hashlib.sha256(scopes.encode_doc({"b": 1, "a": 2})).hexdigest() == hashlib.sha256(
         b'{"a":2,"b":1}').hexdigest()
+
+
+def test_a_plugin_test_hides_nothing_from_everyone_else(who: _Who) -> None:
+    # Oct 12 2026: the test copy was process-wide, so a team's live projects and requests
+    # "disappeared" whenever one member ran the full plugin test.
+    import contextvars
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    who.be("ana@x.org")
+    cards = PluginData("brainrot-tcg")
+    cards.put("card.pip", {"v": 1})
+    pool = ThreadPoolExecutor(max_workers=1)
+    keep_going, seen_after = threading.Event(), []
+    with scopes.sandbox("brainrot-tcg") as box:
+        # Another agent's call (its own context) still reads the real data.
+        assert contextvars.Context().run(lambda: cards.get("card.pip")) == {"v": 1}
+        # A pool task the test submits runs on the test copy; the pool's worker isn't bound to it.
+        assert pool.submit(lambda: scopes.active_scope("brainrot-tcg")["id"]).result() == box["id"]
+        assert contextvars.Context().run(
+            lambda: pool.submit(lambda: cards.get("card.pip")).result()) == {"v": 1}
+        # A thread the test starts that outlives it reads the real data once the test is over.
+        def worker() -> None:
+            keep_going.wait(5)
+            seen_after.append(cards.get("card.pip"))
+        late = threading.Thread(target=worker)
+        late.start()
+    keep_going.set()
+    late.join(5)
+    pool.shutdown()
+    assert seen_after == [{"v": 1}]
+    assert scopes.sandboxed_plugins() == frozenset()
