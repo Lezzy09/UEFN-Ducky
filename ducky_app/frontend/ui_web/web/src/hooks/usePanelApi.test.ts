@@ -1,6 +1,23 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getApi, isRemoteNetworkBlip, remoteInflightKey } from "./usePanelApi";
+import { getApi, isRemote, isRemoteNetworkBlip, remoteInflightKey } from "./usePanelApi";
+
+describe("isRemote", () => {
+  afterEach(() => {
+    const w = window as unknown as { chrome?: unknown; pywebview?: unknown };
+    delete w.chrome;
+    delete w.pywebview;
+  });
+
+  it("knows the desktop before pywebview has injected its bridge", () => {
+    const w = window as unknown as { chrome?: unknown; pywebview?: unknown };
+    expect(isRemote()).toBe(true); // a plain browser: phone, tunnel, panel host
+    w.chrome = { webview: {} }; // WebView2, bridge not in yet
+    expect(isRemote()).toBe(false);
+    w.pywebview = { api: {} };
+    expect(isRemote()).toBe(false);
+  });
+});
 
 describe("isRemoteNetworkBlip", () => {
   it("treats Failed to fetch and abort as tunnel blips", () => {

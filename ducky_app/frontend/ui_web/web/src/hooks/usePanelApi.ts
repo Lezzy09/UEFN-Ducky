@@ -2,9 +2,17 @@ import type { PanelApi } from "../types/panel";
 import { getDirectTransport } from "../remote/directTransport";
 import { openHttpsOnThisDevice } from "../remote/openHttps";
 
-/** True when the panel is running in a normal browser (no pywebview). */
+/**
+ * True in a phone, tunnel or panel-host browser: anything but the desktop's WebView2.
+ * pywebview injects `window.pywebview` only after the page loads, long after the app's
+ * first effects ran, so "no pywebview yet" is not "remote": every mount-once
+ * `if (isRemote()) return;` took the desktop for a phone (direct Remote View offers,
+ * notification clicks and the signed-out Store opener never started).
+ */
 export function isRemote(): boolean {
-  return typeof window !== "undefined" && !window.pywebview;
+  if (typeof window === "undefined") return false;
+  if (window.pywebview) return false;
+  return !(window as Window & { chrome?: { webview?: unknown } }).chrome?.webview;
 }
 
 /** pywebview may set `window.pywebview.api` before methods are bound — probe a core method. */
