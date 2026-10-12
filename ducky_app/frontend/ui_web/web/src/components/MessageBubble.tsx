@@ -1,5 +1,5 @@
-import { memo, useCallback, useSyncExternalStore } from "react";
-import type { MessageAuthorDto } from "../types/panel";
+import { memo, useCallback, useState, useSyncExternalStore } from "react";
+import type { MessageAttachmentDto, MessageAuthorDto } from "../types/panel";
 import type { OpenFileHandler } from "../types/richContent";
 import { SpeakMessageButton } from "../voice/VoiceControls";
 import { mapReadAlong, TtsReadAlong } from "../voice/TtsReadAlong";
@@ -8,6 +8,8 @@ import { ModelSelector } from "./ModelSelector";
 import { RichContentRenderer } from "./rich-content/RichContentRenderer";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { FileProtectionRecovery } from "./FileProtectionRecovery";
+import { AttachmentStrip } from "./EditableUserMessage";
+import { AttachmentPreviewModal } from "./AttachmentPreviewModal";
 
 interface MessageBubbleProps {
   role: string;
@@ -35,6 +37,20 @@ interface MessageBubbleProps {
   convId?: string;
   /** Play-audio control — only the latest assistant reply should pass true. */
   showSpeakButton?: boolean;
+  /** Pictures the agent made this turn (image tools or its own image generation). */
+  attachments?: MessageAttachmentDto[];
+}
+
+function ReplyPictures({ attachments }: { attachments: MessageAttachmentDto[] }) {
+  const [preview, setPreview] = useState<MessageAttachmentDto | null>(null);
+  const images = attachments.filter((a) => a.kind === "image");
+  if (!images.length) return null;
+  return (
+    <div className="message-bubble-reply-pictures">
+      <AttachmentStrip images={images} files={[]} videos={[]} onPreview={setPreview} />
+      <AttachmentPreviewModal open={preview !== null} attachment={preview} onClose={() => setPreview(null)} />
+    </div>
+  );
 }
 
 const IDLE_TTS: TtsProgress = { state: "idle", sourceText: "", spokenText: "", charIndex: 0, loading: false };
@@ -64,6 +80,7 @@ export const MessageBubble = memo(function MessageBubble({
   setCodingAgent,
   convId,
   showSpeakButton = false,
+  attachments,
 }: MessageBubbleProps) {
   // Every bubble used to hold its own TTS subscription and re-render on every
   // word boundary while anything was being spoken. Select instead: bubbles that
@@ -125,6 +142,7 @@ export const MessageBubble = memo(function MessageBubble({
           />
         )}
         {isStreaming && text ? <span className="message-bubble-stream-cursor" aria-hidden="true" /> : null}
+        {attachments?.length ? <ReplyPictures attachments={attachments} /> : null}
         {incomplete && !isStreaming ? (
           <div className="message-bubble-interrupted" role="alert">
             <span className="message-bubble-interrupted-icon" aria-hidden="true">⚠</span>

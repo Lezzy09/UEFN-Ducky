@@ -3258,6 +3258,21 @@
   background: var(--bg-elevated);
 }
 
+/* Pictures an agent made: the result itself, so shown large (click opens full size). */
+.message-bubble-reply-pictures .message-bubble-attachments {
+  margin: 8px 0 0;
+  gap: 8px;
+}
+
+.message-bubble-reply-pictures .message-bubble-attachment-image {
+  width: auto;
+  height: auto;
+  max-width: min(100%, 420px);
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
 .message-bubble-attachment-btn {
   padding: 0;
   border: none;

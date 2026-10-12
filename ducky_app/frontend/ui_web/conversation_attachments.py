@@ -166,6 +166,11 @@ def hydrate_attachment_dict(
     if not isinstance(raw, dict):
         return raw
     kind = str(raw.get("kind") or "").strip().lower()
+    if raw.get("generated"):
+        # A picture an agent made: kept once in Ducky's generated images folder.
+        from frontend.ui_web.generated_images import hydrate_generated
+
+        return hydrate_generated(raw)
     path = str(raw.get("path") or "").strip()
     if not path:
         return raw

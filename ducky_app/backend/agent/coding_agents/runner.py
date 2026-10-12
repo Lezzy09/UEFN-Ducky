@@ -539,6 +539,7 @@ def _emit_assistant(
     blocks: list[dict[str, Any]] | None = None,
     requested_mode: str = "",
     effective_mode: str = "",
+    images_since: float = 0.0,
 ) -> dict[str, Any]:
     from frontend.ui_web.project_chats import save_conversation, upsert_in_flight_assistant
 
@@ -576,6 +577,16 @@ def _emit_assistant(
             else dict(block)
             for block in blocks
         ]
+    if images_since:
+        # Pictures the agent made this turn (Ducky image tools, Codex's own) show inline.
+        try:
+            from frontend.ui_web.generated_images import turn_attachments
+
+            pictures = turn_attachments(conv.id, images_since)
+        except Exception:
+            pictures = []
+        if pictures:
+            msg["attachments"] = pictures
     if not ok:
         msg["incomplete"] = True
         if error:
@@ -693,6 +704,7 @@ def _run_coding_agent_message(
     ``timeout_s`` <= 0 means no wall-clock limit — the CLI runs until it finishes
     or the user cancels. Long UEFN builds must not be killed at 15 minutes.
     """
+    turn_started = time.time()  # pictures made for this chat from now on show in the reply
     agent_id = normalize_coding_agent(getattr(conv, "coding_agent", None) or "ducky")
     if agent_id == "ducky":
         return {"ok": False, "error": "not an external coding agent"}
@@ -972,4 +984,5 @@ def _run_coding_agent_message(
         blocks=result.blocks,
         requested_mode=mode,
         effective_mode=effective_mode,
+        images_since=turn_started,
     )

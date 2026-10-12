@@ -32,3 +32,20 @@ def test_real_text_reply_survives():
         streamed=True, blocks=[], session_id='old', new_session='old',
         usage={'output_tokens': 2}, agent_label='Codex', timeout_s=30, error_text='')
     assert result.reply_text == 'Answer' and result.usage['output_tokens'] == 2
+
+
+def test_a_coding_agents_reply_shows_the_pictures_it_made_this_turn(monkeypatch):
+    # Oct 11 2026: Codex and Claude Code replies never showed pictures; only the built-in agent tried.
+    from backend.agent.coding_agents import runner
+    from frontend.ui_web import agent_modes, generated_images, group_orchestrator, project_chats
+    picture = {"kind": "image", "name": "exec-1.png", "mime": "image/png", "generated": "exec-1.png"}
+    asked = []
+    monkeypatch.setattr(generated_images, "turn_attachments", lambda conv_id, since: asked.append((conv_id, since)) or [picture])
+    saved = []
+    monkeypatch.setattr(project_chats, "upsert_in_flight_assistant", lambda conv, msg, **kw: saved.append(msg))
+    monkeypatch.setattr(project_chats, "save_conversation", lambda conv: None)
+    monkeypatch.setattr(agent_modes, "close_changeset_run", lambda *a: None)
+    monkeypatch.setattr(group_orchestrator, "announce_private_member_talk", lambda *a, **kw: None)
+    runner._emit_assistant(SimpleNamespace(id="chat"), agent_id="codex", reply="Here is your duck.",
+                           push=lambda e: None, run_id="r", images_since=123.0)
+    assert asked == [("chat", 123.0)] and saved[0]["attachments"] == [picture]

@@ -289,6 +289,13 @@ def image_generators() -> list[dict[str, Any]]:
     return [dict(row) for row in rows if row.get("plugin_id") in enabled]
 
 
+def image_generator_tools() -> set[str]:
+    """Tool names of every declared image generator (no settings read: runs per tool call)."""
+    with _LOCK:
+        rows = list(_CONTRIBUTIONS["automations_image_generators"])
+    return {str(row.get("tool") or "") for row in rows if isinstance(row, dict)} - {""}
+
+
 def get_ui_contributions() -> dict[str, Any]:
     """Snapshot contrib registry for Settings UI — does not wait on register()."""
     enabled = list(get_enabled_plugin_ids())
@@ -3668,6 +3675,13 @@ class _PluginApi:
                         f"Plugin '{pid}' tools are disabled — enable it in Settings → Store"
                     )
                 result = func(*args, **kwargs)
+                try:
+                    # A picture made in a chat shows inline in that turn's reply.
+                    from frontend.ui_web.generated_images import note_tool_images
+
+                    note_tool_images(tool_name, result)
+                except Exception:
+                    _log.debug("could not keep %s pictures for the chat", tool_name, exc_info=True)
                 # Plugins on the host data service: say which copy the tool read or changed.
                 # ponytail: dict results only; string results would need parsing.
                 if pid in _DATA_PLUGINS and isinstance(result, dict) and "scope" not in result:

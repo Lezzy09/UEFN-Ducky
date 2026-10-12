@@ -629,8 +629,12 @@ def _messages_to_ui(conv, project_root: str | None = None, *, live: bool = False
             content = m.get("content", "")
             thinking = m.get("thinking")
             author = m.get("author") if isinstance(m.get("author"), dict) else None
-            if content or (isinstance(thinking, str) and thinking.strip()):
+            pictures = m.get("attachments") if isinstance(m.get("attachments"), list) else []
+            if content or pictures or (isinstance(thinking, str) and thinking.strip()):
                 row_asst: dict[str, Any] = {"id": i, "role": "assistant", "text": content}
+                if pictures:
+                    # Pictures the agent made this turn show under its reply.
+                    row_asst["attachments"] = hydrate_attachment_dicts(pictures, conv.id, conv_dir, root)
                 if isinstance(thinking, str) and thinking.strip():
                     row_asst["thinking"] = thinking
                 if author:

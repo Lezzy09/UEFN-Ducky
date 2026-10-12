@@ -156,3 +156,21 @@ def test_unloading_a_plugin_waits_for_its_load_to_finish() -> None:
             assert errors == []
             assert "racy" not in host._REGISTERED  # the unload came after the load
             assert not [k for k in sys.modules if k.startswith("uefn_plugin_racy")]
+
+
+def test_a_plugin_tools_result_is_offered_to_the_chat_pictures(monkeypatch) -> None:
+    """Every plugin tool's result passes the inline-pictures check, whoever called it."""
+    import backend.uefn_plugins.host as host
+    from frontend.ui_web import generated_images
+
+    seen: list[tuple[str, str]] = []
+    monkeypatch.setattr(host, "uefn_agent_tools_allowed", lambda pid: True)
+    monkeypatch.setattr(generated_images, "note_tool_images", lambda name, result: seen.append((name, result)))
+    wrapper = host._PluginApi("imgprobe").tool(name="imgprobe_make_image")(lambda: '{"downloaded": []}')
+    try:
+        assert wrapper() == '{"downloaded": []}'
+        assert seen == [("imgprobe_make_image", '{"downloaded": []}')]
+    finally:
+        with host._LOCK:
+            host._unregister_plugin_mcp_tools({"imgprobe_make_image"})
+        host.invalidate_plugin_runtime("imgprobe")

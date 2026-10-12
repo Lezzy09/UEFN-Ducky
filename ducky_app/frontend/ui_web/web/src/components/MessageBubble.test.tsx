@@ -59,3 +59,21 @@ it("a streaming checkpoint has no Interrupted banner or Continue until stopped",
   expect(screen.getByText("Interrupted before finishing")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
 });
+
+describe("MessageBubble pictures", () => {
+  afterEach(() => cleanup());
+
+  it("shows the pictures the agent made under its reply", () => {
+    // Oct 11 2026: replies never drew their attachments, so generated pictures never showed.
+    render(
+      <MessageBubble
+        role="assistant"
+        text="Here is your duck."
+        attachments={[{ kind: "image", name: "duck.png", mime: "image/png", data_base64: "iVBORw0KGgo=" }]}
+      />,
+    );
+    const img = screen.getByAltText("duck.png") as HTMLImageElement;
+    expect(img.src).toBe("data:image/png;base64,iVBORw0KGgo=");
+    expect(img.closest(".message-bubble-reply-pictures")).not.toBeNull();
+  });
+});

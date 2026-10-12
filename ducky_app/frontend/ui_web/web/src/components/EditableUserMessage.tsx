@@ -41,7 +41,7 @@ function formatSeconds(t: number): string {
 }
 
 /** Read-only thumbnails/chips for the message's attachments. */
-function AttachmentStrip({
+export function AttachmentStrip({
   images,
   files,
   videos,

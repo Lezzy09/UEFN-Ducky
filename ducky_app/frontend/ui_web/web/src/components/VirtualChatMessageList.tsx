@@ -310,6 +310,7 @@ const ChatRowView = memo(function ChatRowView({
         setCodingAgent={env.setComposerCodingAgent}
         convId={env.convId}
         showSpeakButton={showSpeakButton}
+        attachments={row.attachments}
       />
     );
   }
