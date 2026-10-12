@@ -20,6 +20,7 @@ _PUBLIC_METHODS = frozenset({
     'appdata_open',
     'appdata_overview',
     'appdata_projects',
+    'answer_late_question',
     'appdata_sweep',
     'store_action',
     'store_overview',

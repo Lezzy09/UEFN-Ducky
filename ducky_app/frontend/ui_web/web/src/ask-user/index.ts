@@ -9,6 +9,8 @@ export {
   countAskUserSessionsForConv,
   listAskUserSessions,
   subscribeAskUser,
+  markAskUserLate,
+  lateAnswerText,
 } from "./runAskUser";
 export {
   parseAskUserQuestions,

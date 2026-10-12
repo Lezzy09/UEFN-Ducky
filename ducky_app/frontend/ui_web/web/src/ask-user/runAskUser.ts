@@ -4,6 +4,7 @@
  * named in groupIds, oldest first). True orphans (no chat open) share one queue, answered one
  * at a time from "Waiting for you" in the header's background activity list.
  */
+import { getApi } from "../hooks/usePanelApi";
 import type { MessageAuthorDto } from "../types/panel";
 import { getFocusedChatForAsk } from "./focusedChatForAsk";
 import {
@@ -22,6 +23,8 @@ export type AskUserSession = {
   queueAhead: number;
   groupIds: string[];
   author?: MessageAuthorDto;
+  /** The asking agent's turn ended before the answer: Submit sends it to the chat as a message. */
+  late?: boolean;
 };
 
 export type AskUserRunOpts = {
@@ -39,6 +42,7 @@ type Pending = {
   groupIds: string[];
   author?: MessageAuthorDto;
   requestId?: string;
+  late?: boolean;
   resolve: (result: AskUserResult | { error: string }) => void;
 };
 
@@ -76,6 +80,7 @@ function toSession(p: Pending, queueAhead: number): AskUserSession {
     queueAhead,
     groupIds: p.groupIds,
     author: p.author,
+    late: p.late,
   };
 }
 
@@ -152,8 +157,42 @@ export function settleAskUser(
     orphanActiveId = null;
   }
   current.resolve(result);
+  if (current.late && "ok" in result && !result.skipped_all) deliverLateAnswer(current, result);
   pumpOrphan();
   notify();
+}
+
+/**
+ * The asking agent's turn ended while its card was open (a coding agent's run can end with
+ * the question still waiting): the answer would reach no one, so the card says so and Submit
+ * sends it into that chat as a message instead.
+ */
+export function markAskUserLate(convId: string): void {
+  let changed = false;
+  for (const p of sessions.values()) {
+    if (p.convId && p.convId === convId && !p.late) {
+      p.late = true;
+      changed = true;
+    }
+  }
+  if (changed) notify();
+}
+
+export function lateAnswerText(title: string, questions: AskUserQuestion[], result: AskUserResult): string {
+  const lines = [`Answer to your question${title ? ` "${title}"` : ""} (it came after your turn had ended):`];
+  for (const q of questions) {
+    const answer = result.answers[q.id];
+    if (!answer || answer.skipped) continue;
+    const labels = answer.selected.map((id) => q.options.find((o) => o.id === id)?.label || id);
+    const parts = [...labels, answer.text.trim()].filter(Boolean);
+    if (parts.length) lines.push(`- ${q.prompt}\n  ${parts.join("; ")}`);
+  }
+  return lines.join("\n");
+}
+
+function deliverLateAnswer(p: Pending, result: AskUserResult): void {
+  if (!p.convId) return;
+  void Promise.resolve(getApi()?.answer_late_question?.(p.convId, lateAnswerText(p.title, p.questions, result))).catch(() => {});
 }
 
 /** Another window (or the phone) answered this request: close it here. */

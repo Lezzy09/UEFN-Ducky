@@ -3736,6 +3736,8 @@ export interface PanelApi {
   /** An activity-list job only the UI runs ended: alerts when it failed or took long work. */
   notify_activity?(job: { title: string; detail?: string; phase: "done" | "error"; seconds: number }): Promise<boolean>;
   ui_rpc_respond(request_id: string, payload: Record<string, unknown>): Promise<boolean>;
+  /** A question card answered after the asking agent's turn ended: delivered to that chat as a message. */
+  answer_late_question?(conv_id: string, text: string): Promise<{ ok?: boolean; error?: string }>;
   ui_rpc_pending_questions?(): Promise<AgentEvent[]>;
   /** This window took a Show me / tour request meant for it. */
   ui_rpc_ack?(request_id: string): Promise<boolean>;

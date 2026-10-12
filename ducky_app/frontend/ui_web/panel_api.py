@@ -1147,6 +1147,18 @@ class PanelApi(
                 pass
         return answered
 
+    def answer_late_question(self, conv_id: str, text: str) -> dict[str, Any]:
+        """A question card answered after the asking agent's turn ended: the answer goes to
+        that chat as a message, after any turn still running (it never interrupts one)."""
+        from frontend.ui_web.agent_modes import run_message
+
+        cid = str(conv_id or "").strip()
+        body = str(text or "").strip()
+        if not cid or not body:
+            return {"ok": False, "error": "conv_id and text required"}
+        run_id = run_message(cid, body, "agent", "", queue_if_busy=True)
+        return {"ok": True, "run_id": run_id or ""}
+
     def ui_rpc_pending_questions(self) -> list[dict[str, Any]]:
         """Restore questions after a panel reload without synthesizing an answer."""
         from frontend.ui_web import ui_rpc

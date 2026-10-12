@@ -24,7 +24,7 @@ import { listUiActions, runUiAction, searchTargets, waitForUiAction } from "./re
 import { installEditorLineTargets } from "./editorLineTarget";
 import { asGuidedUi } from "./guidedBusy";
 import { getCurrentWorkflow, aiTourSteps, buildWorkflowTour, withOpenStep } from "../automations/workflowTour";
-import { dropAnsweredAskUser, runAskUser } from "../ask-user";
+import { dropAnsweredAskUser, markAskUserLate, runAskUser } from "../ask-user";
 import { runAgentWalkthrough } from "../walkthrough/agentWalkthrough";
 
 type RpcResult = Record<string, unknown>;
@@ -127,6 +127,10 @@ export function UiRpcBridge() {
     const seen = new Set<string>();
     const handler = async (event: AgentEvent) => {
       // Answered in another window or on the phone: close it here too.
+      if (event.type === "agent_stopped" && event.conv_id) {
+        markAskUserLate(String(event.conv_id));
+        return;
+      }
       if (event.type === "ui_rpc_settled") {
         seen.add(String(event.request_id ?? ""));
         dropAnsweredAskUser(String(event.request_id ?? ""));

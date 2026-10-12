@@ -25,6 +25,8 @@ type Props = {
   showDismiss?: boolean;
   /** The asking chat: files attached to a written answer are saved there for its agent. */
   chatId?: string;
+  /** The asking agent's turn already ended: Submit sends the answer to its chat. */
+  late?: boolean;
   onComplete: (result: AskUserResult) => void;
 };
 
@@ -72,6 +74,7 @@ export const AskUserForm = memo(function AskUserForm({
   captureKeys = true,
   showDismiss = true,
   chatId = "",
+  late = false,
   onComplete,
 }: Props) {
   const [index, setIndex] = useState(0);
@@ -296,7 +299,9 @@ export const AskUserForm = memo(function AskUserForm({
             {author.name.trim()}
           </span>
         ) : null}
-        <span className="ask-user-pause-hint">Agent paused until Submit</span>
+        <span className="ask-user-pause-hint">
+          {late ? "The agent moved on: Submit sends your answer to its chat" : "Agent paused until Submit"}
+        </span>
         {showDismiss && questions.every((q) => !q.required) ? (
           <button
             type="button"

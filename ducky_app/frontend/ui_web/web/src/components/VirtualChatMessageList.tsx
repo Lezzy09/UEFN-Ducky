@@ -994,6 +994,7 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
                       captureKeys={captureAskKeys}
                       showDismiss
                       chatId={convId}
+                      late={askSession.late}
                       onComplete={handleAskComplete}
                     />
                   </div>
