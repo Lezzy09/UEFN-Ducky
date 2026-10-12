@@ -73,7 +73,7 @@ def test_a_step_that_moves_unparks_the_keeper() -> None:
 
 def test_any_running_agent_keeps_the_keeper_quiet() -> None:
     woke: list[tuple[str, str]] = []
-    for minute in range(0, 44):  # 45 busy minutes with no finished step is a circle (below)
+    for minute in range(0, 19):  # 20 busy minutes with no finished step is a circle (below)
         _run(minute * MIN, ["someone"], woke)
     assert woke == []
 
@@ -162,22 +162,22 @@ def test_a_parked_team_stays_parked_after_the_app_restarts(_fresh) -> None:
     assert _run(202 * MIN, [], woke) == ["coord"]
 
 
-def test_a_busy_team_that_finishes_nothing_gets_one_circle_notice_per_45_minutes(monkeypatch) -> None:
+def test_a_busy_team_that_finishes_nothing_gets_one_circle_notice_per_20_minutes(monkeypatch) -> None:
     # Oct 11 2026: six agents worked for an hour, sent 292 messages and finished no step.
     told: list[int] = []
     monkeypatch.setattr(keeper, "_tell_person", lambda cid, minutes: told.append(minutes))
     woke: list[tuple[str, str]] = []
-    times = [m for m in range(0, 100) if _run(m * MIN, ["builder"], woke)]
-    assert times == [45, 90]
-    assert "45 minutes and no plan step has finished (2 of 6 done)" in woke[0][1]
+    times = [m for m in range(0, 50) if _run(m * MIN, ["builder"], woke)]
+    assert times == [20, 40]
+    assert "20 minutes and no plan step has finished (2 of 6 done)" in woke[0][1]
     assert "ask the person with ducky_ask_user" in woke[0][1]
-    assert told == [45, 90]
+    assert told == [20, 40]
 
 
 def test_a_finished_step_restarts_the_circle_clock() -> None:
     woke: list[tuple[str, str]] = []
-    for minute in range(0, 40):
+    for minute in range(0, 15):
         _run(minute * MIN, ["builder"], woke)
     progressed = {**PLAN, "progress": {"pending": 3, "in_progress": 0, "completed": 3}}
-    later = [m for m in range(40, 100) if _run(m * MIN, ["builder"], woke, plans=[progressed])]
-    assert later == [85]  # 45 minutes after the step finished at minute 40
+    later = [m for m in range(15, 50) if _run(m * MIN, ["builder"], woke, plans=[progressed])]
+    assert later == [35]  # 20 minutes after the step finished at minute 15

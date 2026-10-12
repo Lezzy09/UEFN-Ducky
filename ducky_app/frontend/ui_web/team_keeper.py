@@ -27,7 +27,9 @@ _IDLE_S = 120.0  # nobody running this long before a wake
 _MAX_WAIT_S = 3600.0  # wakes that start no work back off up to this
 _PARK_AFTER = 3  # wakes in a row that moved nothing: wait for a change instead
 _PARKED_TABLE = "workspace_state"
-_STALL_S = 45 * 60.0  # busy this long with no finished step: going in circles
+# Steps are sized 15-30 minutes and builders work in parallel: a team busy this long
+# with no finished step is going in circles (45 minutes was too long for the owner).
+_STALL_S = 20 * 60.0
 
 WAKE_TEXT = (
     "[Ducky keeper] Your team has had no agent running for {minutes} minutes and the plan "
