@@ -381,6 +381,7 @@ _PUBLIC_METHODS = frozenset({
     'pull_editor_log',
     'push_appearance_live',
     'push_verse_changes',
+    'queue_file_pick',
     'raise_focus_window',
     'read_file_history_entry',
     'read_import_drop_target',

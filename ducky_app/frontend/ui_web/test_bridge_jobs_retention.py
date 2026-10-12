@@ -77,7 +77,8 @@ def test_unknown_cancels_do_not_accumulate_and_tombstones_expire(submitted):
     assert not jobs._CANCELLED
     jid = jobs.job_start(lambda: None)["job_id"]
     jobs.job_cancel(jid)
-    jobs._reap_expired(jobs._CANCELLED[jid] + jobs._STALE_GRACE_S)
+    # Past the grace: (t + grace) - t can round to just under grace.
+    jobs._reap_expired(jobs._CANCELLED[jid] + jobs._STALE_GRACE_S + 1)
     assert not jobs._CANCELLED
 
 
