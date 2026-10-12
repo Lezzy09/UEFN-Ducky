@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../types/panel";
-import { coalesceAgentEvents, nextEventPollRetryMs, remoteGoneIsLive, replayedCount } from "./useAgentEventBus";
+import {
+  coalesceAgentEvents,
+  nextEventPollRetryMs,
+  pushLocalAgentEvent,
+  remoteGoneIsLive,
+  replayedCount,
+  subscribeAgentEventsImmediate,
+} from "./useAgentEventBus";
 
 describe("nextEventPollRetryMs", () => {
   it("doubles from 500ms and caps at 8s", () => {
@@ -61,5 +69,27 @@ describe("replayedCount", () => {
     expect(replayedCount(702, 4, 700)).toBe(2);
     // A page loaded on an empty backlog replays nothing.
     expect(replayedCount(3, 3, 0)).toBe(0);
+  });
+});
+
+describe("subscribeAgentEventsImmediate", () => {
+  it("hears each event as it arrives, with no frame (a minimized window paints none)", () => {
+    const raf = window.requestAnimationFrame;
+    window.requestAnimationFrame = () => 0; // frames never come, as in a minimized window
+    vi.stubGlobal("fetch", () => new Promise(() => {})); // the bus's event poll never answers here
+    try {
+      const heard: AgentEvent[] = [];
+      const stop = subscribeAgentEventsImmediate((event) => heard.push(event));
+      pushLocalAgentEvent({ type: "direct_rtc", session: "s1" } as unknown as AgentEvent);
+      pushLocalAgentEvent({ type: "text_delta", text: "a", conv_id: "c", run_id: "r" });
+      pushLocalAgentEvent({ type: "text_delta", text: "b", conv_id: "c", run_id: "r" });
+      expect(heard.map((e) => e.type)).toEqual(["direct_rtc", "text_delta", "text_delta"]);
+      stop();
+      pushLocalAgentEvent({ type: "text_delta", text: "c", conv_id: "c", run_id: "r" });
+      expect(heard).toHaveLength(3);
+    } finally {
+      window.requestAnimationFrame = raf;
+      vi.unstubAllGlobals();
+    }
   });
 });

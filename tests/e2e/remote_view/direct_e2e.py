@@ -279,7 +279,10 @@ async def main() -> int:
             views = await vcdp.eval("window.__duckyDirectTransport.invoke('list_window_views', [])")
             assert isinstance(views, list), f"list_window_views over rpc: {views!r}"
             print(f"rpc: list_window_views -> {len(views)} windows")
-            uefn = next((v for v in views if v.get("kind") == "uefn"), views[0] if views else None)
+            # UEFN when it is open, else any real window: a whole desktop or monitor
+            # is never cropped to one window, so the fit check below would fail on it.
+            windows = [v for v in views if str(v.get("id", "")).isdigit()]
+            uefn = next((v for v in windows if v.get("kind") == "uefn"), windows[0] if windows else None)
             if not uefn:
                 print("FAIL no windows to watch")
                 return 1

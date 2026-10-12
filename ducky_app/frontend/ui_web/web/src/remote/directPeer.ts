@@ -14,7 +14,7 @@
  * viewer asks to watch a window. No renegotiation ever.
  */
 import { getApi } from "../hooks/usePanelApi";
-import { installAgentEventBus, subscribeAgentEvents } from "../hooks/useAgentEventBus";
+import { installAgentEventBus, subscribeAgentEventsImmediate } from "../hooks/useAgentEventBus";
 import type { AgentEvent } from "../types/panel";
 import {
   BLOB_LOW_WATER_BYTES,
@@ -49,27 +49,51 @@ type Session = {
   eventSeq: number;
   streams: Map<string, WebSocket>;
   parts: PartAssembler;
-  denied: Set<string>;
+  /** Null until Ducky has said what a viewer may not call. */
+  denied: Set<string> | null;
 };
 
 const sessions = new Map<string, Session>();
 let installed = false;
-let deniedPromise: Promise<Set<string>> | null = null;
+/** How long one ask for the viewer deny list may take before the caller moves on. */
+export const DENY_WAIT_MS = 5000;
+let deniedCache: Set<string> | null = null;
+let deniedLoad: Promise<Set<string> | null> | null = null;
 
-function deniedMethods(): Promise<Set<string>> {
-  if (deniedPromise) return deniedPromise;
-  const api = getApi();
-  deniedPromise = Promise.resolve(api?.remote_deny_methods?.() ?? [])
-    .then((rows) => new Set((rows as string[]).map(String)))
-    .catch(() => new Set<string>());
-  return deniedPromise;
+/** What a viewer may not call: kept once Ducky answers, asked again when it did not.
+ * The one ask used to be kept even while it never settled, and a single lost bridge
+ * reply then held every later phone at "connecting" until Ducky restarted. Null means
+ * not known yet: callers refuse the call (fail closed) and the next call asks again. */
+export function deniedMethods(): Promise<Set<string> | null> {
+  if (deniedCache) return Promise.resolve(deniedCache);
+  if (!deniedLoad) {
+    const api = getApi();
+    const load = Promise.resolve(api?.remote_deny_methods?.())
+      .then((rows) => {
+        if (!Array.isArray(rows)) return null;
+        deniedCache = new Set(rows.map(String));
+        return deniedCache;
+      })
+      .catch(() => null);
+    const wait = new Promise<null>((resolve) => window.setTimeout(() => resolve(null), DENY_WAIT_MS));
+    deniedLoad = Promise.race([load, wait]).finally(() => {
+      deniedLoad = null;
+    });
+  }
+  return deniedLoad;
+}
+
+export function forgetDeniedMethodsForTest() {
+  deniedCache = null;
+  deniedLoad = null;
 }
 
 export function installDirectPeer(): () => void {
   if (installed) return () => {};
   installed = true;
   installAgentEventBus();
-  const unsub = subscribeAgentEvents((event) => {
+  // Not frame-batched: a minimized Ducky must still answer the phone.
+  const unsub = subscribeAgentEventsImmediate((event) => {
     if (event.type === "direct_rtc") void handleOffer(event);
   });
   const unsubEnded = onScreenEnded(() => {
@@ -110,9 +134,11 @@ async function handleOffer(event: AgentEvent) {
     eventSeq: 0,
     streams: new Map(),
     parts: new PartAssembler(),
-    denied: await deniedMethods(),
+    denied: null,
   };
   sessions.set(session, s);
+  // Asked now, waited for at the first call: the answer never waits on the bridge.
+  void deniedMethods();
   pc.ondatachannel = (ev) => wireChannel(s, ev.channel);
   pc.onconnectionstatechange = () => {
     console.debug("[remote-direct] connection", pc.connectionState);
@@ -172,7 +198,7 @@ function wireChannel(s: Session, ch: RTCDataChannel) {
       break;
     case CHANNEL_EVENTS:
       s.unsubEvents?.();
-      s.unsubEvents = subscribeAgentEvents((event) => {
+      s.unsubEvents = subscribeAgentEventsImmediate((event) => {
         if (event.type === "direct_rtc" || ch.readyState !== "open") return;
         s.eventSeq += 1;
         const text = JSON.stringify({ seq: s.eventSeq, event });
@@ -236,7 +262,12 @@ async function onRpc(s: Session, ch: RTCDataChannel, raw: string) {
     return;
   }
   const api = getApi() as unknown as Record<string, (...a: unknown[]) => unknown> | null;
-  if (!api || !method || method.startsWith("_") || s.denied.has(method)) {
+  const denied = s.denied ?? (s.denied = await deniedMethods());
+  if (!denied) {
+    reply({ id: req.id, ok: false, error: "UEFN Ducky on your PC is not ready yet. Try again." });
+    return;
+  }
+  if (!api || !method || method.startsWith("_") || denied.has(method)) {
     reply({ id: req.id, ok: false, error: "method not allowed" });
     return;
   }

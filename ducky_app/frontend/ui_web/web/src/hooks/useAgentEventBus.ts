@@ -35,6 +35,8 @@ const PANEL_PUSH_TYPES = new Set<string>([
 type AgentEventListener = (event: AgentEvent) => void;
 
 const listeners = new Set<AgentEventListener>();
+/** Called as each event arrives instead of on the next frame. */
+const immediateListeners = new Set<AgentEventListener>();
 const pendingEvents: AgentEvent[] = [];
 const MAX_EVENTS_PER_FRAME = 200;
 let deliveryScheduled = false;
@@ -96,6 +98,13 @@ function fanOut(event: AgentEvent) {
   if (String(event.type) === "open_url" && isRemote()) {
     openHttpsOnThisDevice(String(event.url || ""));
     return;
+  }
+  for (const listener of immediateListeners) {
+    try {
+      listener(event);
+    } catch {
+      // ignore subscriber errors
+    }
   }
   pendingEvents.push(event);
   notePendingDepth(pendingEvents.length);
@@ -223,6 +232,14 @@ export function installAgentEventBus() {
 export function subscribeAgentEvents(listener: AgentEventListener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+/** Like subscribeAgentEvents, but each event as it arrives, uncoalesced. A minimized or
+ * hidden window paints no frames, so frame-batched listeners hear nothing until it is
+ * shown again; Remote Ducky answers the phone and streams to it from this one. */
+export function subscribeAgentEventsImmediate(listener: AgentEventListener): () => void {
+  immediateListeners.add(listener);
+  return () => immediateListeners.delete(listener);
 }
 
 /** Inject a UI-local event (e.g. discovered external file delete) into the same bus
