@@ -90,6 +90,7 @@ def test_only_started_open_team_plans_are_kept(monkeypatch) -> None:
     import backend.agent.coding_agents.plans as plans
 
     monkeypatch.setattr(plans, "list_plans", lambda project_root=None: rows)
+    monkeypatch.setattr(keeper, "_project_roots", lambda root: ["C:/island"])
     monkeypatch.setattr(
         keeper, "_team_leaders", lambda root: {"coord", "paused", "finished", "unstarted", "done"}
     )
@@ -216,3 +217,20 @@ def test_a_stopped_builder_is_not_woken(monkeypatch) -> None:
     for minute in range(0, 10):
         _run(minute * MIN, ["coord"], woke, plans=[plan])
     assert [cid for cid, _ in woke if cid == "builder"] == []
+
+
+def test_a_team_in_another_project_is_kept_even_with_no_project_open(monkeypatch) -> None:
+    # Oct 12 2026: after a restart Ducky had no project open, so the keeper saw no team at all.
+    import backend.agent.coding_agents.plans as plans
+    from frontend.settings import PanelSettings
+
+    monkeypatch.setattr(PanelSettings, "load", classmethod(lambda cls: type("S", (), {"uefn_project_root": ""})()))
+    monkeypatch.setattr("frontend.ui_web.recent_projects.load_recent_projects", lambda: ["C:/Repo", "c:/repo/", "C:/Other"])
+    assert keeper._project_roots(None) == ["C:/Repo", "C:/Other"]
+    by_root = {"C:/Repo": [{**PLAN, "chat_id": "lead"}], "C:/Other": []}
+    monkeypatch.setattr(plans, "list_plans", lambda project_root=None: by_root.get(project_root, []))
+    leaders_read: list[str] = []
+    monkeypatch.setattr(keeper, "_team_leaders", lambda root: leaders_read.append(root) or {"lead"})
+    kept = keeper.kept_plans()
+    assert [(p["chat_id"], p["project_root"]) for p in kept] == [("lead", "C:/Repo")]
+    assert leaders_read == ["C:/Repo"]  # a project with no live plan isn't read

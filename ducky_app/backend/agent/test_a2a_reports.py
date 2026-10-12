@@ -367,3 +367,22 @@ def test_deliveries_and_report_retries_read_no_whole_chat(reports):
     assert [cid for cid, _ in f.modes.sent[1:]] == ['idle', 'coord']
     assert all('from Builder' in text for _, text in f.modes.sent[1:])
     assert f.chats.full_loads == []
+
+
+def test_a_report_from_a_member_waiting_on_others_is_not_repeated(monkeypatch):
+    # Oct 12 2026: the lead got a finished report every half minute because the member still
+    # owned a step that waited on a teammate.
+    from backend.agent import a2a_broker as b
+    from backend.agent.coding_agents import plans, team_plan_events
+
+    plan = {"status": "open", "nodes": [
+        {"id": "done", "status": "completed", "assignee": "m1"},
+        {"id": "later", "status": "pending", "assignee": "m1"},
+    ]}
+    monkeypatch.setattr(plans, "load_plan", lambda cid, root=None: plan)
+    monkeypatch.setattr(plans, "_chat_and_group_ids", lambda cid, root=None: [cid])
+    monkeypatch.setattr("frontend.ui_web.project_chats.conversation_project_slug", lambda cid: "repo")
+    monkeypatch.setattr("frontend.ui_web.project_chats.project_root_for_slug", lambda slug: "C:/Repo")
+    assert b._plan_work_done("lead", "m1") is True
+    plan["nodes"][1]["status"] = "in_progress"  # working on it: its reports may need the lead
+    assert b._plan_work_done("lead", "m1") is False

@@ -113,19 +113,41 @@ def _team_leaders(project_root: str | None) -> set[str]:
     return leaders
 
 
+def _project_roots(project_root: str | None) -> list[str]:
+    """The open project and the recent ones: a team keeps working in its own project while the
+    person has another open, or none (Oct 12 2026: after a restart with no project open, the
+    keeper saw no team at all)."""
+    if project_root is not None:
+        return [project_root]
+    from frontend.settings import PanelSettings
+    from frontend.ui_web.recent_projects import load_recent_projects
+
+    roots: list[str] = []
+    seen: set[str] = set()
+    for root in [PanelSettings.load().uefn_project_root or "", *load_recent_projects()]:
+        key = str(root or "").replace("\\", "/").rstrip("/").lower()
+        if key and key not in seen:
+            seen.add(key)
+            roots.append(str(root))
+    return roots
+
+
 def kept_plans(project_root: str | None = None) -> list[dict[str, Any]]:
-    """Team plans the keeper looks after right now."""
+    """Team plans the keeper looks after right now, in every project the person works in."""
     from backend.agent.coding_agents.plans import list_plans
 
-    leaders = _team_leaders(project_root)
     out: list[dict[str, Any]] = []
-    for plan in list_plans(project_root):
-        if str(plan.get("status") or "open") in ("paused", "finished"):
-            continue
-        if not _started(plan) or not _open_steps(plan):
-            continue
-        if str(plan.get("chat_id") or "") in leaders:
-            out.append(plan)
+    for root in _project_roots(project_root):
+        live = [plan for plan in list_plans(root)
+                if str(plan.get("status") or "open") not in ("paused", "finished")
+                and _started(plan) and _open_steps(plan)]
+        if not live:
+            continue  # the team lookup reads every chat of the project: only when needed
+        leaders = _team_leaders(root)
+        for plan in live:
+            if str(plan.get("chat_id") or "") in leaders:
+                plan.setdefault("project_root", root)
+                out.append(plan)
     return out
 
 

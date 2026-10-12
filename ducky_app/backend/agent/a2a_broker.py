@@ -184,19 +184,25 @@ def acknowledge_plan_changes(previous: dict, plan: dict, actor_id: str, project_
 
 
 def _plan_work_done(coordinator_id: str, member_id: str) -> bool:
-    """True when the coordinator's plan is finished or holds no open step for this member."""
+    """True when the coordinator's plan is finished or holds no step this member is working
+    on: what it reported is done, and what is left waits on others (Ducky starts it when its
+    turn comes). Oct 12 2026: a lead got the same finished report every half minute because
+    the member still had a step that waited on a teammate, and because the plan was looked
+    up in the project the app had open rather than the lead's own."""
     try:
         from backend.agent.coding_agents import plans
         from backend.agent.coding_agents.team_plan_events import assigned_nodes
+        from frontend.ui_web.project_chats import conversation_project_slug, project_root_for_slug
 
-        plan = plans.load_plan(coordinator_id)
+        root = project_root_for_slug(conversation_project_slug(coordinator_id))
+        plan = plans.load_plan(coordinator_id, root)
         if not plan:
             return False
         if str(plan.get("status") or "") in {"finished", "completed", "archived"}:
             return True
-        ids = set(plans._chat_and_group_ids(member_id, None))
+        ids = set(plans._chat_and_group_ids(member_id, root))
         owned = [n for n, owner in assigned_nodes(plan.get("nodes")) if owner in ids and not n.get("children")]
-        return bool(owned) and all(n.get("status") in {"completed", "cancelled"} for n in owned)
+        return bool(owned) and not any(n.get("status") == "in_progress" for n in owned)
     except Exception:
         return False
 
