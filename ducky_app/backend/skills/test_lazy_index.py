@@ -105,3 +105,14 @@ def test_disabled_packs_omitted_from_index_and_read() -> None:
         assert result.startswith("ERROR: pack denied")
     finally:
         set_active_disabled_packs(None)
+
+
+def test_the_mcp_tool_takes_skill_and_subskill_as_names_too() -> None:
+    # Oct 11 2026: prompts show skill_read_subskill("ducky", "ai_plugins"); agents called it
+    # with skill=/subskill= and every call failed validation.
+    from backend.tools.verse.skill_tool import skill_read_subskill as tool
+
+    by_alias = tool(skill="ducky", subskill="ai_plugins")
+    assert not by_alias.startswith("ERROR"), by_alias[:200]
+    assert by_alias == tool(pack_id="ducky", subskill_id="ai_plugins")
+    assert tool().startswith("ERROR: pack_id is required")

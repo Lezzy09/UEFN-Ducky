@@ -29,12 +29,18 @@ def uefn_skill() -> str:
 
 
 @mcp.tool()
-def skill_read_subskill(pack_id: str, subskill_id: str = "") -> str:
+def skill_read_subskill(pack_id: str = "", subskill_id: str = "", skill: str = "", subskill: str = "") -> str:
     """List or load a skill-pack subskill. Omit subskill_id to list all subskills in a pack.
 
-    Use when a subskill is disabled in the prompt index but needed for the current task."""
+    Use when a subskill is disabled in the prompt index but needed for the current task.
+    skill / subskill are the same as pack_id / subskill_id."""
+    # Prompts show it positionally ("ducky", "ai_plugins"); agents guessed skill=/subskill=
+    # and every call failed validation.
+    pack = (pack_id or skill or "").strip()
+    if not pack:
+        return 'ERROR: pack_id is required, e.g. skill_read_subskill(pack_id="ducky", subskill_id="ai_plugins")'
     try:
         seed_skill_packs()
-        return _read_subskill(pack_id, subskill_id)
+        return _read_subskill(pack, subskill_id or subskill)
     except Exception as e:
         return f"ERROR: {e}"
