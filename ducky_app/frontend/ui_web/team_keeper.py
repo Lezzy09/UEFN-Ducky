@@ -303,15 +303,20 @@ def tick(
 TASK_TEXT = (
     "[Ducky] Your task: the sub plan “{section}” in the plan “{plan}”.\n{about}"
     "Points:\n{points}\n\n"
-    "Work like a sub-agent: alone and on the code, until every point is ticked. Send no messages "
-    "to teammates or your lead (Ducky refuses them). Tick each point when its Done when is met: "
-    "ducky_plan_update_node(node_id=..., status=\"completed\", body_markdown=\"<what you changed "
-    "and how you checked it>\"). Ticking the last point tells your lead. If you need something "
-    "only another agent or the person can give, end your turn with one line: BLOCKED: <what you need>."
+    "Work like a sub-agent: alone, writing the code, until every point is ticked. Send no messages "
+    "to teammates or your lead (Ducky refuses them). A point is done when its change is made and its "
+    "tests pass: tick it then with ducky_plan_update_node(node_id=..., status=\"completed\", "
+    "body_markdown=\"<what you changed and how you tested it>\"). Never stop for bookkeeping or for "
+    "checks your tools can't do (change-ledger read-backs, live panel captures, the person's own "
+    "files): write what is still unchecked in the point's notes and tick it. Ticking the last point "
+    "tells your lead. Only when the code itself can't go on (a decision, access, a teammate's change), "
+    "end your turn with one line: BLOCKED: <what you need>."
 )
 CONTINUE_TEXT = (
-    "[Ducky] Points left in your sub plan “{section}”:\n{points}\nContinue with them. Ticking the "
-    "last one tells your lead. If you can't go on, end your turn with one line: BLOCKED: <what you need>."
+    "[Ducky] Points left in your sub plan “{section}”:\n{points}\nContinue with the code. Tick a "
+    "point when its change is made and its tests pass; note checks your tools can't do and tick it "
+    "anyway. Ticking the last one tells your lead. Only if the code can't go on, end your turn with "
+    "one line: BLOCKED: <what you need>."
 )
 BLOCKED_TEXT = (
     "[Team plan] {who} is blocked on “{section}”: {reason}\n"

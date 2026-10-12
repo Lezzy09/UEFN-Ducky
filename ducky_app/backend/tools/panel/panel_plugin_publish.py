@@ -113,7 +113,9 @@ def ducky_plugin_status(id: str, pretty: bool = False) -> str:
 def ducky_plugin_open_source(id: str, team_id: str = "", pretty: bool = False) -> str:
     """Open a team plugin's private source as a local draft to edit (needs Manage plugins).
 
-    Overwrites an existing draft of the same id, so it asks first when one exists.
+    When a local draft already exists it is returned as it is: edit it with ducky_plugin_read_file
+    and ducky_plugin_edit_file. An agent never replaces a draft (that discards its unpublished
+    changes); only the person can, by deleting the draft first.
     """
     from backend.uefn_plugins.publishing import open_for_edit
     from backend.uefn_plugins.store import appdata_ai_plugins_dir, normalize_plugin_id
@@ -123,11 +125,14 @@ def ducky_plugin_open_source(id: str, team_id: str = "", pretty: bool = False) -
     except ValueError as exc:
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     draft = appdata_ai_plugins_dir() / pid
-    if draft.is_dir() and not _confirm(
-        f"A local draft '{pid}' already exists. Replace it with the published source?",
-        title="Open source",
-    ):
-        return tool_json({"ok": False, "error": "Cancelled — draft kept."}, pretty=pretty)
+    if draft.is_dir():
+        # It used to ask the person "Replace it with the published source?" on every call: a
+        # worker asked again and again, and one Yes would have wiped the team's unpublished work.
+        return tool_json({
+            "ok": True, "id": pid, "status": "draft_exists", "path": str(draft),
+            "note": "Edit this local draft with ducky_plugin_read_file / ducky_plugin_edit_file; "
+                    "it is newer than the published source.",
+        }, pretty=pretty)
     return tool_json(open_for_edit(pid, team_id=team_id), pretty=pretty)
 
 

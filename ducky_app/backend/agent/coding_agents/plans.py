@@ -28,7 +28,8 @@ PLAN_PROTOCOL = (
     "(a section whose `assignee` is that agent) holding that agent's points; members never make "
     "plans of their own. The agent ticks its points; ticking the last one checks its sub plan off "
     "in the main plan and tells the lead, so nobody sends reports. A sub plan's description says "
-    "Files (what it may change), Done when and Not yours (what to leave to others); `after` = ids "
+    "Files (what it may change), Done when (the change and its tests, never evidence files, "
+    "read-backs or live checks only the person can do) and Not yours (what to leave to others); `after` = ids "
     "of steps or sub plans that must finish first. Templates: `ducky_create_plan_template` / "
     "`ducky_instantiate_plan_template`. Plan mode: create/update then stop."
 )
