@@ -35,6 +35,22 @@ PushFn = Callable[[dict[str, Any]], None]
 _HISTORY_PREFIX_MAX_CHARS = 6000
 
 
+def permission_note(conv_id: str) -> str:
+    """A line before this turn's message when the person turned on Allow everything for the
+    chat: a team lead that didn't know kept asking them to approve commands already allowed."""
+    try:
+        from backend.tools.panel.permission_prompt import allows_everything
+
+        if not allows_everything(str(conv_id or "")):
+            return ""
+    except Exception:
+        return ""
+    return (
+        "[ducky:permissions] Allow everything is on for this chat: commands and file changes run "
+        "without approval cards. Never ask the person to approve a command.\n\n"
+    )
+
+
 def inject_bootstrap_if_stale(
     conv: Any,
     prompt_text: str,
@@ -810,6 +826,7 @@ def _run_coding_agent_message(
     )
     if fresh_handoff:
         prompt_text = fresh_handoff + prompt_text
+    prompt_text = permission_note(conv.id) + prompt_text
     from frontend.ui_web.workspace_bootstrap import build_journal, build_run_context, record_external_edits
 
     run_ctx = build_run_context(conv, run_id=rid, model=(model or conv.model or ''), coding_agent=agent_id)

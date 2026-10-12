@@ -46,3 +46,13 @@ def test_small_sessions_new_sessions_and_solo_chats_keep_going(in_team, monkeypa
     assert sr.fresh_session_handoff(_conv(5_300_000, session="")) == ""
     monkeypatch.setattr(sr, "_team_chat", lambda conv_id: False)
     assert sr.fresh_session_handoff(_conv(5_300_000)) == ""
+
+
+def test_an_agent_is_told_when_its_chat_allows_everything(monkeypatch) -> None:
+    # Oct 11 2026: the team lead asked the person to approve a command twice after they had
+    # turned on Allow everything for the whole team.
+    from backend.agent.coding_agents import runner
+
+    monkeypatch.setattr("backend.tools.panel.permission_prompt.allows_everything", lambda cid: cid == "lead")
+    assert "Never ask the person to approve a command" in runner.permission_note("lead")
+    assert runner.permission_note("builder") == ""
