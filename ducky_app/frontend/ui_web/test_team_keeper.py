@@ -285,6 +285,32 @@ def test_a_blocked_member_is_left_alone_and_its_lead_told_once(monkeypatch, _wor
     assert len(_world) == 1
 
 
+def test_a_member_blocked_again_goes_to_the_person_not_the_lead(monkeypatch, _world) -> None:
+    # Oct 12 2026: a lead answered each block with one more step asking for the same live-panel
+    # evidence; the worker blocked again, and the lead was woken again, for an hour.
+    monkeypatch.setattr(keeper, "_team_context", lambda plan: ({"builder", "builder2"}, ""))
+    monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
+    asked: list[tuple[str, str]] = []
+    monkeypatch.setattr(keeper, "_ask_person", lambda plan, member, work, reason: asked.append((member, reason)))
+    said = {"text": ""}
+    monkeypatch.setattr(keeper, "_blocked_reason", lambda member: said["text"])
+    woke: list[tuple[str, str]] = []
+    _run(0, [], woke, plans=[SUB])
+    said["text"] = "need the live panel on screen"
+    _run(1 * MIN, [], woke, plans=[SUB])
+    assert _world == [("builder", "need the live panel on screen")] and asked == []
+    # The lead added a step; the member goes on, finishes nothing and blocks on it again.
+    moved = {**SUB, "nodes": [{**SUB["nodes"][0], "children": [*SUB["nodes"][0]["children"],
+             {"id": "again", "content": "Capture the live panel", "status": "pending"}]}, SUB["nodes"][1]]}
+    _run(5 * MIN, [], woke, plans=[moved])
+    said["text"] = "still need the live panel on screen"
+    for minute in range(7, 40):
+        _run(minute * MIN, [], woke, plans=[moved])
+    assert asked == [("builder", "still need the live panel on screen")]
+    assert len(_world) == 1  # the lead was not told a second time
+    assert "coord" not in [cid for cid, _ in woke]  # and not woken for it either
+
+
 def test_a_stopped_builder_is_not_woken(monkeypatch) -> None:
     monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: cid == "builder")
     plan = {**PLAN, "nodes": [{"id": "fx", "content": "Effects", "status": "in_progress", "assignee": "builder"}]}

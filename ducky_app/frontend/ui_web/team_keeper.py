@@ -270,9 +270,9 @@ def tick(
                     st["next_stall"] = now + _STALL_S
                     woke.append(cid)
                 continue
-            if cid in movable or now - _lead_told.get(cid, -_STALL_S) < _STALL_S / 2:
-                # Ducky is starting or continuing its members, or just told the lead one is
-                # blocked: the lead waits for results instead of a second wake.
+            if cid in movable or _lead_told.get(cid) == _moves(plan):
+                # Ducky is starting or continuing its members, or a block was already handed
+                # to the lead or the person and the plan hasn't changed since: the lead waits.
                 st["quiet_since"] = now
                 continue
             moves = _moves(plan)
@@ -315,14 +315,18 @@ CONTINUE_TEXT = (
 )
 BLOCKED_TEXT = (
     "[Team plan] {who} is blocked on “{section}”: {reason}\n"
-    "Decide in one turn: change its points, add what it needs as a point for whoever can give it "
-    "(with `after`), or ask the person with ducky_ask_user. Ducky starts it again when the plan changes."
+    "Decide once, then end your turn and wait. If it needs something only the person can see or do "
+    "(the live panel on screen, a real file of theirs, a decision), ask the person with ducky_ask_user; "
+    "never add a step that asks for the same thing again. Otherwise give what it needs to whoever can "
+    "provide it as one point (with `after`), or change its points. Don't message the member: Ducky "
+    "starts it again when the plan changes. If it blocks again without finishing a point, Ducky asks "
+    "the person, not you."
 )
 _MEMBER_IDLE_S = 90.0  # a member idle this long with points left gets its next turn
 _MEMBER_TRIES = 2  # turns that move nothing in the plan: wait for the plan to move
 _BLOCKED_RE = re.compile(r"(?im)^[\s>*_`-]*BLOCKED\s*[:\-]\s*(.+)$")
 _members: dict[str, dict[str, Any]] = {}
-_lead_told: dict[str, float] = {}  # lead -> when it was last told a member is blocked
+_lead_told: dict[str, str] = {}  # lead -> plan fingerprint when a block was last handled
 
 
 def _work_by_member(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -410,6 +414,32 @@ def _tell_lead(plan: dict[str, Any], member: str, work: dict[str, Any], reason: 
                 body=BLOCKED_TEXT.format(who=who, section=_section_title(work), reason=reason))
 
 
+def _done_points(section: dict[str, Any] | None) -> int:
+    stack = list((section or {}).get("children") or [])
+    done = 0
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            kids = node.get("children") or []
+            stack.extend(kids)
+            done += int(not kids and node.get("status") in ("completed", "cancelled"))
+    return done
+
+
+def _ask_person(plan: dict[str, Any], member: str, work: dict[str, Any], reason: str) -> None:
+    """A member blocked again on the same sub plan: the lead already decided once and nothing
+    got done since, so the person hears it (Oct 12 2026: a lead answered each block with one
+    more step asking for the same live-panel evidence, and the worker blocked on it again)."""
+    from frontend.notifications import alert
+    from frontend.ui_web.project_chats import load_conversation
+
+    conv = load_conversation(member)
+    who = str(getattr(conv, "ducky_name", "") or getattr(conv, "title", "") or member) if conv else member
+    # The status line may reach the phone; the block reason stays on this PC.
+    alert(who, "Stuck again: needs your answer.", level="ask", kind="chat", target_id=member,
+          detail=f"Stuck again on “{_section_title(work)}”: {reason[:300]} Answer in its chat or change the plan.")
+
+
 def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
                       wake: Callable[[str, str], None]) -> tuple[list[str], set[str]]:
     """Start each member on its sub plan, and again when its turn ends with points left.
@@ -432,7 +462,7 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
             if not member or member == lead:
                 continue
             st = _members.setdefault(member, {"idle_since": now, "tries": 0, "next": 0.0, "moves": moves,
-                                              "task": "", "blocked": "", "cleared": ""})
+                                              "task": "", "blocked": "", "cleared": "", "told_done": None})
             if st["moves"] != moves:
                 # The plan moved: whatever blocked the member may be solved, so it goes on.
                 st.update(moves=moves, tries=0, next=0.0, cleared=st["blocked"] or st["cleared"], blocked="")
@@ -450,7 +480,8 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
                     wake(member, _task_text(plan, work))
                 except Exception:
                     continue
-                st.update(task=task, tries=0, idle_since=now, next=now + _MEMBER_IDLE_S, blocked="", cleared="")
+                st.update(task=task, tries=0, idle_since=now, next=now + _MEMBER_IDLE_S, blocked="", cleared="",
+                          told_done=None)
                 woke.append(member)
                 movable.add(lead)
                 continue
@@ -459,11 +490,17 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
             reason = _blocked_reason(member)
             if reason and reason != st["cleared"]:
                 st["blocked"] = reason
+                done = _done_points(work.get("section"))
+                repeat = st.get("told_done") is not None and done <= st["told_done"]
                 try:
-                    _tell_lead(plan, member, work, reason)
-                    _lead_told[lead] = now
+                    if repeat:
+                        _ask_person(plan, member, work, reason)
+                    else:
+                        _tell_lead(plan, member, work, reason)
                 except Exception:
                     pass
+                st["told_done"] = done
+                _lead_told[lead] = moves
                 continue
             if st["tries"] >= _MEMBER_TRIES:
                 continue

@@ -892,6 +892,8 @@ def ducky_send_chat_message(
     me = str(getattr(context, "conv_id", "") or "").strip() if context is not None else ""
     if me and me != conv_id and _works_alone(me, conv_id, root):
         return tool_json({"status": "not_sent", "sender": me, "reason": WORK_ALONE}, pretty=pretty)
+    if me and me != conv_id and _lead_uses_plan(me, conv_id, root):
+        return tool_json({"status": "not_sent", "sender": me, "reason": LEAD_USES_PLAN}, pretty=pretty)
     text = _from_another_ducky(conv_id, text, root)
     mode_norm = (mode or "agent").lower()
     if wait_for_reply:
@@ -974,15 +976,37 @@ WORK_ALONE = (
 )
 
 
+LEAD_USES_PLAN = (
+    "Not sent: your members get their work from the plan, not from messages. Add or change their "
+    "points (ducky_plan_add_node / ducky_plan_update_node); Ducky hands the change to the member "
+    "when its current turn ends. To stop one, use ducky_agent_stop. Then end your turn and wait."
+)
+
+
 def _works_alone(me: str, target: str, root: str | None) -> bool:
     """A team member on its lead's plan sends nothing new: no reports, receipts, status rounds or
-    peer chat (one team sent 501 messages and wrote 126 files). A lead still directs the
-    members of its own groups, and anyone may answer a question put to it."""
+    peer chat (one team sent 501 messages and wrote 126 files). Anyone may answer a question
+    put to it."""
     try:
         from backend.agent.a2a_broker import leads_receiver
         from backend.agent.coding_agents.plans import team_plan_for
 
         return not leads_receiver(me, target) and team_plan_for(me, root) is not None
+    except Exception:
+        return False
+
+
+def _lead_uses_plan(me: str, target: str, root: str | None) -> bool:
+    """A lead whose plan gives this member work changes the plan instead of messaging it: a lead
+    kept interrupting its working member with "finish everything" and relayed each new bug."""
+    try:
+        from backend.agent.a2a_broker import leads_receiver
+        from backend.agent.coding_agents.plans import load_plan, team_plan_for
+
+        if not leads_receiver(me, target):
+            return False
+        team = team_plan_for(target, root)
+        return team is not None and str(team.get("chat_id") or "") == me and load_plan(me, root) is not None
     except Exception:
         return False
 
@@ -1144,6 +1168,8 @@ def ducky_agent_send(
         reply_to = _owed_reply(me, target)
     if not reply_to and _works_alone(me, target, root):
         return tool_json({"status": "not_sent", "sender": me, "reason": WORK_ALONE}, pretty=pretty)
+    if not reply_to and _lead_uses_plan(me, target, root):
+        return tool_json({"status": "not_sent", "sender": me, "reason": LEAD_USES_PLAN}, pretty=pretty)
     # Every agent answered with response_id alone, hit "not both" and had to retry.
     expects = (not reply_to) if expect_reply is None else bool(expect_reply)
     if expect_reply is None and not reply_to:

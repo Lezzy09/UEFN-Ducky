@@ -205,3 +205,16 @@ def test_the_last_tick_says_the_section_closed_itself_and_its_note_is_refused_cl
     assert "completed itself with this step" in last["note"]
     refused = _json.loads(ducky_panel.ducky_plan_update_node(node_id="a", body_markdown="Done.", chat_id="coord"))
     assert refused["ok"] is False and "completed itself when its last step did" in refused["error"]
+
+
+def test_a_lead_changes_the_plan_instead_of_messaging_a_working_member(monkeypatch):
+    from backend.tools.panel import ducky_panel as panel
+
+    monkeypatch.setattr("backend.agent.a2a_broker.leads_receiver", lambda sender, receiver: sender == "lead")
+    monkeypatch.setattr(plans, "team_plan_for",
+                        lambda cid, root=None: {"chat_id": "lead"} if cid == "builder" else None)
+    monkeypatch.setattr(plans, "load_plan", lambda cid, root=None: {"chat_id": cid} if cid == "lead" else None)
+    assert panel._lead_uses_plan("lead", "builder", None)
+    assert not panel._lead_uses_plan("lead", "idle-member", None)  # no plan work: a message is fine
+    assert not panel._lead_uses_plan("builder", "lead", None)
+    assert "ducky_plan_add_node" in panel.LEAD_USES_PLAN
