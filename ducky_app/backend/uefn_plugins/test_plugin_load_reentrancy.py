@@ -115,3 +115,44 @@ def test_two_loaders_of_one_plugin_register_it_once() -> None:
             assert "twice" in host._REGISTERED
             assert sys.modules["uefn_plugin_twice"].CALLS == [1]
         sys.modules.pop("uefn_plugin_twice", None)
+
+
+def test_unloading_a_plugin_waits_for_its_load_to_finish() -> None:
+    """Oct 11 2026: a reload dropped the plugin's modules while another thread was still
+    importing it, and that load failed with KeyError 'uefn_plugin_island_media_kit'."""
+    import sys
+    import time
+
+    import backend.uefn_plugins.host as host
+
+    src = (
+        "import time\n"
+        "def register(api):\n"
+        "    time.sleep(0.4)\n"
+        "    from . import late\n"
+        "    late.ok()\n"
+    )
+    errors: list[BaseException] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_plugin(root, "racy", src)
+        (root / "racy" / "backend" / "late.py").write_text("def ok():\n    return True\n", encoding="utf-8")
+        manifest = json.loads((root / "racy" / "plugin.json").read_text(encoding="utf-8"))
+        manifest["backend"] = {"entry": "backend", "register": "register"}
+
+        def load() -> None:
+            try:
+                host._load_one("racy", root / "racy", manifest)
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        with patch.object(host, "_REGISTERED", set()):
+            sys.modules.pop("uefn_plugin_racy", None)
+            loader = threading.Thread(target=load)
+            loader.start()
+            time.sleep(0.15)
+            host.invalidate_plugin_runtime("racy")
+            loader.join(timeout=10)
+            assert errors == []
+            assert "racy" not in host._REGISTERED  # the unload came after the load
+            assert not [k for k in sys.modules if k.startswith("uefn_plugin_racy")]

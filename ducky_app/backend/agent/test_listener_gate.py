@@ -139,3 +139,52 @@ def test_desktop_plugin_host_only_tools_skip_listener_gate(monkeypatch) -> None:
     result = asyncio.run(tools.execute_tool("ducktactoe_move", {"cell": 4}))
     assert result.ok, result.error
     assert health_calls == []
+
+
+def test_a_tool_whose_plugin_failed_to_reload_says_so_not_listener_offline(monkeypatch) -> None:
+    # Oct 11 2026: a team's plugin failed to reload mid-edit; its tools fell through to the
+    # editor gate, read "UEFN listener offline", and six agents chased the listener.
+    import backend.uefn_plugins.host as host
+
+    probes: list[int] = []
+    monkeypatch.setattr("backend.bridge.listener_get_health", lambda port, timeout=1.0: probes.append(port))
+    monkeypatch.setattr("backend.bridge.configured_listener_port", lambda: 4200)
+    monkeypatch.setattr(host, "_plugin_label", lambda pid: "Island Media Kit")
+    monkeypatch.setitem(host._TOOL_LAST_OWNER, "imk_project_get", "island-media-kit")
+    monkeypatch.setitem(host._LOAD_FAILURES, "island-media-kit", "ValueError: Action registry differs.")
+    monkeypatch.delitem(host._PLUGIN_TOOL_OWNER, "imk_project_get", raising=False)
+    called: list[str] = []
+
+    async def _fake_call(name: str, args: dict):
+        called.append(name)
+        return [SimpleNamespace(text="should not run")]
+
+    _patch_mcp_call(monkeypatch, _fake_call)
+
+    result = asyncio.run(tools.execute_tool("imk_project_get", {"project_id": "p1"}))
+    assert not result.ok
+    assert "Island Media Kit plugin, which failed to load: ValueError: Action registry differs." in result.error
+    assert "listener offline" not in result.error
+    assert probes == [] and called == []
+
+    monkeypatch.setitem(host._PLUGIN_TOOL_OWNER, "imk_project_get", "island-media-kit")
+    assert host.plugin_tool_unavailable_reason("imk_project_get") == ""  # loaded again
+
+
+def test_listener_offline_names_plugins_that_failed_to_load_for_an_unknown_tool(monkeypatch) -> None:
+    import backend.uefn_plugins.host as host
+
+    monkeypatch.setattr("backend.bridge.listener_get_health", lambda port, timeout=1.0: None)
+    monkeypatch.setattr("backend.bridge.configured_listener_port", lambda: 4200)
+    monkeypatch.setattr(host, "is_plugin_host_only_tool", lambda _n: False)
+    monkeypatch.setattr(host, "plugin_load_failures", lambda: {"Island Media Kit": "ValueError: bad registry."})
+    mcp = MagicMock()
+    mcp._tool_manager._tools = {"spawn_actor": object()}
+    monkeypatch.setattr(tools, "_ensure_mcp", lambda: mcp)
+
+    result = asyncio.run(tools.execute_tool("imk_render_create", {}))
+    assert "listener offline" in result.error
+    assert "Island Media Kit: ValueError: bad registry." in result.error
+
+    served = asyncio.run(tools.execute_tool("spawn_actor", {}))
+    assert served.error == "UEFN listener offline on port 4200"

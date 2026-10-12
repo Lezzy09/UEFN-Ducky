@@ -125,6 +125,11 @@ _API_TOOL_REGISTRY: dict[str, set[str]] = {}
 _API_INTENT_PATTERNS: dict[str, str] = {}
 # tool_name → plugin_id; survives reload so disable can hide orphaned MCP tools.
 _PLUGIN_TOOL_OWNER: dict[str, str] = {}
+# Every plugin tool this process has served, kept through unloads, and why each plugin's
+# last load failed: a call to a tool whose plugin failed to reload says so (it used to
+# fall through to the editor gate and read "UEFN listener offline").
+_TOOL_LAST_OWNER: dict[str, str] = {}
+_LOAD_FAILURES: dict[str, str] = {}
 # api.tool(listener=False) — host-cache / non-editor tools (skip UEFN listener gate).
 _PLUGIN_HOST_ONLY_TOOLS: set[str] = set()
 # Plugins that touched api.data: their tool results name the scope ("team Alpha Studio").
@@ -891,6 +896,23 @@ def invalidate_plugin_runtime(plugin_id: str, *, unload_timeout: float = 5.0) ->
                 )
             elif err:
                 _log.error("Plugin %s unload() failed: %s", pid, err[0], exc_info=err[0])
+    # Wait for a load of this plugin on another thread to finish: dropping its modules
+    # mid-import failed that load with KeyError 'uefn_plugin_<id>'.
+    load_lock = _backend_load_lock(pid)
+    held = load_lock.acquire(timeout=_INVALIDATE_WAIT_S)
+    if not held:
+        _log.warning("Plugin %s: still loading after %ss; unloading anyway", pid, _INVALIDATE_WAIT_S)
+    try:
+        _drop_plugin_runtime(pid, mod_name)
+    finally:
+        if held:
+            load_lock.release()
+
+
+_INVALIDATE_WAIT_S = 30.0
+
+
+def _drop_plugin_runtime(pid: str, mod_name: str) -> None:
     with _LOCK:
         _REGISTERED.discard(pid)
         _clear_node_handlers(pid)
@@ -1190,6 +1212,7 @@ def _record_plugin_api_tool(
         meta["tools"] = sorted(tools)
         _PLUGIN_TOOL_NAMES.add(tool_name)
         _PLUGIN_TOOL_OWNER[tool_name] = pid
+        _TOOL_LAST_OWNER[tool_name] = pid
         if listener:
             _PLUGIN_HOST_ONLY_TOOLS.discard(tool_name)
         else:
@@ -1205,6 +1228,43 @@ def is_plugin_host_only_tool(name: str) -> bool:
     ensure_plugins_loaded()
     with _LOCK:
         return n in _PLUGIN_HOST_ONLY_TOOLS
+
+
+def plugin_tool_unavailable_reason(name: str) -> str:
+    """Why a plugin tool this process served before is gone now ('' when it is served,
+    or was never a plugin tool here)."""
+    n = (name or "").strip()
+    with _LOCK:
+        if not n or n in _PLUGIN_TOOL_OWNER:
+            return ""
+        pid = _TOOL_LAST_OWNER.get(n, "")
+        failure = _LOAD_FAILURES.get(pid, "")
+    if not pid:
+        return ""
+    label = _plugin_label(pid)
+    if failure:
+        return (
+            f"{n} belongs to the {label} plugin, which failed to load: {failure} "
+            "Fix the plugin and reload it; until then none of its tools exist. "
+            "This has nothing to do with the UEFN listener."
+        )
+    return f"{n} belongs to the {label} plugin, which is not loaded right now (reloading, turned off or removed)."
+
+
+def plugin_load_failures() -> dict[str, str]:
+    """{plugin label: error} for plugins whose last load in this process failed."""
+    with _LOCK:
+        failures = dict(_LOAD_FAILURES)
+    return {_plugin_label(pid): err for pid, err in failures.items()}
+
+
+def _plugin_label(pid: str) -> str:
+    try:
+        from backend.uefn_plugins.store import load_plugin_manifest
+
+        return str((load_plugin_manifest(pid) or {}).get("label") or pid)
+    except Exception:
+        return pid
 
 
 def is_uefn_agent_tool_plugin(plugin_id: str) -> bool:
@@ -1735,6 +1795,7 @@ def _record_plugin_load_error(pid: str, exc: BaseException) -> None:
 
     # Shown in Settings and kept for 30 days, so no folders, emails or keys in it.
     message = scrub(f"{type(exc).__name__}: {exc}")
+    _LOAD_FAILURES[pid] = message
     try:
         from backend.store.switch import use_db
 
@@ -2733,6 +2794,7 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
         _PLUGIN_TOOL_NAMES.update(tool_names)
         for name in tool_names:
             _PLUGIN_TOOL_OWNER[name] = pid
+            _TOOL_LAST_OWNER[name] = pid
         _rebuild_intent_row(pid, tool_names, intent_re)
 
     if not register or pid in _REGISTERED:
@@ -2791,6 +2853,7 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
             # leaves the marker for the next launch to find.
             _load_marker_end(marker)
         _REGISTERED.add(pid)
+        _LOAD_FAILURES.pop(pid, None)
     finally:
         lock.release()
 

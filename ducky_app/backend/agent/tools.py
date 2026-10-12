@@ -657,6 +657,44 @@ def _requires_uefn_listener(name: str) -> bool:
     return True
 
 
+_PLUGIN_GONE_HINT = (
+    "Do not retry it or wait for UEFN. ducky_plugin_errors shows the load error; "
+    "once the plugin loads again its tools are back."
+)
+
+
+def _plugin_tool_gone(name: str) -> str:
+    try:
+        from backend.uefn_plugins.host import plugin_tool_unavailable_reason
+
+        return plugin_tool_unavailable_reason(name)
+    except Exception:
+        return ""
+
+
+def _failed_plugins_note(name: str) -> str:
+    """A tool no server serves may belong to a plugin that never loaded in this process."""
+    try:
+        from backend.uefn_plugins.host import plugin_load_failures
+
+        failures = plugin_load_failures()
+        if not failures or _served_by_mcp(name):
+            return ""
+    except Exception:
+        return ""
+    listed = "; ".join(f"{label}: {err}" for label, err in sorted(failures.items()))
+    return (
+        f". {name} is not a registered tool right now, and these plugins failed to load: "
+        f"{listed}. If it is one of their tools, the plugin is the problem, not UEFN."
+    )
+
+
+def _served_by_mcp(name: str) -> bool:
+    manager = getattr(_ensure_mcp(), "_tool_manager", None)
+    tools = getattr(manager, "_tools", None)
+    return not isinstance(tools, dict) or name in tools
+
+
 _LISTENER_OFFLINE_HINT = (
     "This tool needs the UEFN editor listener (Deploy + open project). "
     "Do NOT retry it until the listener is online — it will keep failing. "
@@ -1021,6 +1059,11 @@ async def _execute_tool_inner(
             msg = str(e)
             return ToolCallResult(ok=False, tool=name, error=msg, hint=_hint_for_error(name, msg), duration_ms=ms)
 
+    gone = _plugin_tool_gone(name)
+    if gone:
+        ms = int((time.time() - t0) * 1000)
+        return ToolCallResult(ok=False, tool=name, error=gone, hint=_PLUGIN_GONE_HINT, duration_ms=ms)
+
     # Opt-in listener check: only editor tools. Host tools never probe UEFN.
     if _requires_uefn_listener(name):
         from backend.bridge import configured_listener_port, listener_get_health
@@ -1031,7 +1074,7 @@ async def _execute_tool_inner(
             return ToolCallResult(
                 ok=False,
                 tool=name,
-                error=f"UEFN listener offline on port {port}",
+                error=f"UEFN listener offline on port {port}" + _failed_plugins_note(name),
                 hint=_LISTENER_OFFLINE_HINT,
                 duration_ms=ms,
             )
