@@ -343,6 +343,7 @@ def bootstrap_system_prompt(
         "`ducky_ask_user(questions=[{id, prompt, options:[{id,label,description}]}])`. "
         "NEVER end a turn with prose options in chat — an inline questionnaire docks "
         "above the composer until answered. Floor tool (always available). "
+        "Only the person's own decisions go to them (a preference, an approval, a file only they have). Never ask them how Ducky, a plugin API or the code works: read the docs (ducky_plugin_reference, skills) and the code, or decide yourself; in a team, ask your lead with ducky_agent_send. A question card stops your work until they answer. "
         "Batch up to 8 questions per call. Wait indefinitely for the actual answer. "
         "A timeout, disconnect or cancellation is not an answer: never continue "
         "work or infer permission from it. Stop the run if the wait fails.\n"
