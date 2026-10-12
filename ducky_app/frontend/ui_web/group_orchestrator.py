@@ -932,8 +932,9 @@ def build_member_prompt(
     if is_leader:
         bits.append(
             "As group leader: you speak for this group to peer/parent group leaders. "
-            "Break work into a plan on the group hub and create per-member plans "
-            "(ducky_create_plan with chat_id=<member>) before @mentioning specialists. "
+            "Break work into ONE plan in your own chat, never a plan per member, and assign "
+            "each step to the member doing it (ducky_plan_update_node with assignee=<member>) "
+            "before @mentioning specialists. "
             "Before spawning parallel members, partition the work into disjoint write lanes "
             "(ducky_spawn_chat(write_allowed=[...]) or ducky_group_set_lane); keep shared files "
             "such as module_declarations.verse in your own lane; review changeset_list before compiling. "

@@ -274,16 +274,22 @@ _members: dict[str, dict[str, Any]] = {}
 
 
 def _open_leaves_by_member(plan: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Open steps per owner, leaving out steps (and sections) whose ``after`` steps are unfinished:
+    a builder told to "continue" with a step that runs last checked it and said "waiting" every
+    few minutes."""
+    from backend.agent.coding_agents.plans import waiting_on
+
     out: dict[str, list[dict[str, Any]]] = {}
-    stack = list(plan.get("nodes") or [])
+    stack = [(node, False) for node in plan.get("nodes") or []]
     while stack:
-        node = stack.pop(0)
+        node, held = stack.pop(0)
         if not isinstance(node, dict):
             continue
+        held = held or bool(waiting_on(plan, node))
         kids = node.get("children") or []
-        stack[:0] = kids
+        stack[:0] = [(kid, held) for kid in kids]
         owner = str(node.get("assignee") or "").strip()
-        if owner and not kids and node.get("status") in ("pending", "in_progress"):
+        if owner and not kids and not held and node.get("status") in ("pending", "in_progress"):
             out.setdefault(owner, []).append(node)
     return out
 

@@ -33,7 +33,8 @@ def test_notes_and_tick_while_playing_freeze_finished_nodes(team, notices, statu
     with pytest.raises(ValueError):
         plans.update_node("coord", "a2", content="structural change", project_root=team)
     with pytest.raises(ValueError):
-        plans.add_node("coord", content="new step", project_root=team)
+        plans.add_node("coord", content="under a finished step", parent_id="a1", project_root=team)
+    plans.add_node("coord", content="new step", project_root=team)  # adding needs no pause
 
 
 def test_rollup_and_whole_plan_report_once_with_notes(team, notices):

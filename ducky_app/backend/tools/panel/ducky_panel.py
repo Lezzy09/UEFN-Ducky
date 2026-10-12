@@ -2056,9 +2056,14 @@ def ducky_create_plan(
     completes itself when its last step does, so put your result in that step's
     notes; never tick or annotate the finished section. Notes,
     status and owner are bookkeeping allowed while playing; finished steps stay
-    frozen. Content, adding, moving and deleting steps require a pause. The plan
-    automatically tells the coordinator who finished what, with notes, and reports
-    members stopping mid-step. The coordinator must dispatch the next step at once.
+    frozen. Content, moving and deleting steps require a pause; adding a step does
+    not. The plan automatically tells the coordinator who finished what, with notes,
+    and reports members stopping mid-step. The coordinator must dispatch the next step at once.
+    A team works in ONE plan, its lead's: members never create their own. Members tick
+    and split their steps without chat_id (the edit lands in the team's plan). ``after``
+    = ids of steps that must finish first: such a step can't start, and its owner is
+    not woken until they finish. A member blocked by a teammate's work: the lead adds
+    the fix as a step for that teammate and sets the blocked step's ``after`` to it.
     """
     from backend.agent.coding_agents.plans import create_plan, outline_numbers, push_plan_updated, todo_progress
 
@@ -2208,8 +2213,11 @@ def ducky_plan_add_node(
     kind: str = "",
     body_markdown: str = "",
     pretty: bool = False,
+    assignee: str = "",
+    after: list[str] | None = None,
 ) -> str:
     """Add a step or subplan node. kind=step|subplan. parent_id empty = root. template_id edits a template.
+    ``assignee`` = the chat or group that owns it; ``after`` = step ids it waits for.
     Team plans: give each group one section assigned to its group's chat id, never
     several steps to one group. Members see that section in their own plan panel.
     Finish every assignment: completed, or cancelled with the reason; set notes
@@ -2217,9 +2225,14 @@ def ducky_plan_add_node(
     completes itself when its last step does, so put your result in that step's
     notes; never tick or annotate the finished section. Notes,
     status and owner are bookkeeping allowed while playing; finished steps stay
-    frozen. Content, adding, moving and deleting steps require a pause. The plan
-    automatically tells the coordinator who finished what, with notes, and reports
-    members stopping mid-step. The coordinator must dispatch the next step at once.
+    frozen. Content, moving and deleting steps require a pause; adding a step does
+    not. The plan automatically tells the coordinator who finished what, with notes,
+    and reports members stopping mid-step. The coordinator must dispatch the next step at once.
+    A team works in ONE plan, its lead's: members never create their own. Members tick
+    and split their steps without chat_id (the edit lands in the team's plan). ``after``
+    = ids of steps that must finish first: such a step can't start, and its owner is
+    not woken until they finish. A member blocked by a teammate's work: the lead adds
+    the fix as a step for that teammate and sets the blocked step's ``after`` to it.
     """
     from backend.agent.coding_agents.plans import add_node, outline_numbers, push_plan_updated, todo_progress
 
@@ -2234,6 +2247,8 @@ def ducky_plan_add_node(
             body_markdown=body_markdown,
             project_root=_project_root() if not (template_id or "").strip() else None,
             template_id=(template_id or "").strip() or None,
+            assignee=assignee,
+            after=after,
         )
     except ValueError as exc:
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
@@ -2266,8 +2281,11 @@ def ducky_plan_update_node(
     body_markdown: str = "",
     pretty: bool = False,
     assignee: str | None = None,
+    after: list[str] | None = None,
 ) -> str:
-    """Update a node's content, status, kind, body_markdown and/or assignee.
+    """Update a node's content, status, kind, body_markdown, assignee and/or after.
+
+    ``after`` = ids of the steps this one waits for (``[]`` clears); allowed while playing.
 
     Status, notes and assignee updates are allowed after start. ``assignee`` is the chat or
     group id that owns this part (``""`` clears it): that group's chats then show this
@@ -2280,9 +2298,14 @@ def ducky_plan_update_node(
     completes itself when its last step does, so put your result in that step's
     notes; never tick or annotate the finished section. Notes,
     status and owner are bookkeeping allowed while playing; finished steps stay
-    frozen. Content, adding, moving and deleting steps require a pause. The plan
-    automatically tells the coordinator who finished what, with notes, and reports
-    members stopping mid-step. The coordinator must dispatch the next step at once.
+    frozen. Content, moving and deleting steps require a pause; adding a step does
+    not. The plan automatically tells the coordinator who finished what, with notes,
+    and reports members stopping mid-step. The coordinator must dispatch the next step at once.
+    A team works in ONE plan, its lead's: members never create their own. Members tick
+    and split their steps without chat_id (the edit lands in the team's plan). ``after``
+    = ids of steps that must finish first: such a step can't start, and its owner is
+    not woken until they finish. A member blocked by a teammate's work: the lead adds
+    the fix as a step for that teammate and sets the blocked step's ``after`` to it.
     """
     from backend.agent.coding_agents.plans import (
         attach_next_tick,
@@ -2304,6 +2327,7 @@ def ducky_plan_update_node(
             project_root=_project_root() if not (template_id or "").strip() else None,
             template_id=(template_id or "").strip() or None,
             assignee=assignee,
+            after=after,
         )
     except ValueError as exc:
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)

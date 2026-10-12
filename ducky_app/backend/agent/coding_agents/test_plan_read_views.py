@@ -22,7 +22,8 @@ def test_mcp_assignment_read_preserves_raw_ownership(team, monkeypatch, backend,
     if state == 'archived':
         plans.save_plan({'id': 'history', 'chat_id': 'builder', 'status': 'archived', 'nodes': []}, team)
     if state == 'own':
-        plans.create_plan('builder', nodes=[{'id': 'personal', 'content': 'Personal'}], project_root=team)
+        plans.create_plan('builder', nodes=[{'id': 'personal', 'content': 'Personal'}], project_root=team,
+                          team_check=False)
     if state == 'stale':
         original = project_chats.load_conversation
         monkeypatch.setattr(project_chats, 'load_conversation', lambda cid, project_root=None:
@@ -41,7 +42,8 @@ def test_mcp_assignment_read_preserves_raw_ownership(team, monkeypatch, backend,
     monkeypatch.setattr(chat_title, 'self_naming_instruction', lambda *a: '')
     runtime = prompt.get_system_prompt_parts(listener_online=False, listener_port=0,
         project_root=root, conv_id='builder')['plan']
-    if state in ('assigned', 'archived'):
+    if state in ('assigned', 'archived', 'own'):
+        # Open steps in the team's plan outrank a personal plan (Oct 12 2026).
         assert result['plan']['assigned_from']['node_id'] == 'a'
         assert result['plan']['id'] == plans.load_plan('coord', team)['id']
         assert result['plan']['id'] in runtime and '`a1`' in runtime
@@ -54,10 +56,6 @@ def test_mcp_assignment_read_preserves_raw_ownership(team, monkeypatch, backend,
         monkeypatch.setattr(agent_modes, 'get_active_conv_id', lambda: 'builder')
         monkeypatch.setenv('DUCKY_CONV_ID', 'outsider')
         assert json.loads(panel.ducky_get_plan())['plan'] == resumed
-    elif state == 'own':
-        assert result['plan']['nodes'][0]['id'] == 'personal'
-        assert 'assigned_from' not in result['plan']
-        assert '`personal`' in runtime
     else:
         assert result['plan'] is None
         assert runtime == ''
@@ -65,12 +63,13 @@ def test_mcp_assignment_read_preserves_raw_ownership(team, monkeypatch, backend,
             assert not result['ok'] and 'open steps in 2 plans' in result['error']
     assert plans.load_plan('builder', root) == before
     if state in ('assigned', 'archived'):
-        with pytest.raises(ValueError):
-            plans.update_node('builder', 'a1', status='completed', project_root=team)
-        assert plans.load_plan('coord', team)['nodes'][0]['children'][0]['status'] == 'in_progress'
+        # A member's tick lands in its team's plan; its own record stays untouched.
+        plans.update_node('builder', 'a1', status='completed', project_root=team)
+        assert plans.load_plan('coord', team)['nodes'][0]['children'][0]['status'] == 'completed'
+        assert plans.load_plan('builder', root) == before
 
 
-def test_runtime_prompt_refreshes_assignment_without_mutation_redirect(team, monkeypatch):
+def test_runtime_prompt_refreshes_assignment(team, monkeypatch):
     from backend.agent import prompt, chat_title
     from backend.agent.prompt_cache import build_cache_payload
     from backend.mcp_plugins import epic
@@ -89,7 +88,7 @@ def test_runtime_prompt_refreshes_assignment_without_mutation_redirect(team, mon
         return parts['plan']
     first = read()
     assert 'a1' in first and 'coord' in first
-    assert 'ducky_get_plan' in first and 'read-only' in first
+    assert 'ducky_get_plan' in first and 'ONE plan' in first and 'no chat_id needed' in first
     plans.update_node('coord', 'a2', assignee='builder', project_root=team)
     resumed = read()
     assert '`a2`' in resumed and '`a1`' not in resumed

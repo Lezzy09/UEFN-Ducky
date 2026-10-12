@@ -74,14 +74,12 @@ def test_same_node_independent_fields_survive(store, monkeypatch):
     assert node['body_markdown'] == 'Details'
 
 
-@pytest.mark.parametrize('operation', ['edit', 'add', 'delete', 'move'])
+@pytest.mark.parametrize('operation', ['edit', 'delete', 'move'])
 def test_structure_gate_checks_latest_started_state(store, monkeypatch, operation):
     def mutate():
         try:
             if operation == 'edit':
                 plans.update_node('owner', 'b', content='Changed', project_root=store)
-            elif operation == 'add':
-                plans.add_node('owner', content='Extra', project_root=store)
             elif operation == 'delete':
                 plans.delete_node('owner', 'b', project_root=store)
             else:
@@ -91,6 +89,7 @@ def test_structure_gate_checks_latest_started_state(store, monkeypatch, operatio
         return ''
     _, refusal = race(monkeypatch,
         lambda: plans.update_node('owner', 'a', status='in_progress', project_root=store), mutate)
-    assert refusal == 'plan is playing — pause it to edit unfinished steps or add new ones'
+    assert refusal == ('plan is playing — pause it to edit, move or delete unfinished steps '
+                       '(adding a step needs no pause)')
     assert [(n['id'], n['status']) for n in plans.load_plan('owner', store)['nodes']] == [
         ('a', 'in_progress'), ('b', 'pending')]

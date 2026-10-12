@@ -59,7 +59,7 @@ def test_a_member_sees_its_groups_part(team) -> None:
         "plan_title": "Repair modes",
         "assignee": "group-a",
     }
-    assert view["title"] == "A Modes"
+    assert view["title"] == "Your step in “Repair modes”"  # the team plan's name, never a step's
     assert [n["id"] for n in view["nodes"]] == ["a"]
     assert [t["id"] for t in view["todos"]] == ["a", "a1", "a2"]
     # The group chat itself sees it too; someone outside the team does not.
@@ -190,16 +190,86 @@ print(json.dumps(plans.assigned_plan_view('builder', sys.argv[1])))
     assert plans.assigned_plan_view('builder', team) is None
 
 
-def test_existing_personal_plan_keeps_precedence(team):
+def test_open_team_steps_outrank_a_personal_plan(team):
+    # Oct 12 2026: a member's private plan hid the step its lead assigned it.
     from frontend.ui_web import panel_api  # initialize the public API before its mixin
     from frontend.ui_web.panel_api_settings import PanelApiSettingsMixin
     plans.update_node('coord', 'a', assignee='group-a', project_root=team)
     personal = plans.create_plan('builder', title='Personal', nodes=[
         {'id': 'own', 'content': 'Own work'}
-    ], project_root=team)
+    ], project_root=team, team_check=False)
+    view = PanelApiSettingsMixin().get_plan('builder', project_root=team)['plan']
+    assert view['assigned_from']['chat_id'] == 'coord'
+    # With no open team step, the personal plan shows.
+    plans.update_node('coord', 'a1', status='completed', project_root=team)
+    plans.update_node('coord', 'a2', status='completed', project_root=team)
     view = PanelApiSettingsMixin().get_plan('builder', project_root=team)['plan']
     assert view['id'] == personal['id']
     assert 'assigned_from' not in view
+
+
+def test_a_member_cannot_make_a_second_plan(team):
+    plans.update_node('coord', 'a', assignee='group-a', project_root=team)
+    with pytest.raises(ValueError, match="ONE plan") as err:
+        plans.create_plan('builder', title='Mine', nodes=[{'id': 'x', 'content': 'X'}], project_root=team)
+    assert 'chat_id="coord"' in str(err.value)
+    assert plans.load_plan('builder', team) is None
+    # Outside the team nothing changes.
+    plans.create_plan('outsider', title='Solo', nodes=[{'id': 'x', 'content': 'X'}], project_root=team)
+
+
+def test_a_group_leads_plan_is_its_members_plan(team, monkeypatch):
+    convs = {
+        "builder": SimpleNamespace(parent_conv_id="crew"),
+        "crew": SimpleNamespace(parent_conv_id="", leader_conv_id="coord"),
+        "coord": SimpleNamespace(parent_conv_id="crew"),
+    }
+    monkeypatch.setattr(project_chats, "load_conversation", lambda cid, project_root=None: convs.get(cid))
+    # No step assigned yet: the lead's plan is still the team's one plan.
+    assert plans.team_plan_for('builder', team)['chat_id'] == 'coord'
+    assert plans.team_plan_for('coord', team) is None
+    with pytest.raises(ValueError, match="ONE plan"):
+        plans.create_plan('builder', title='Mine', project_root=team)
+
+
+def test_member_step_edits_land_in_the_team_plan(team):
+    # Oct 12 2026: ticks without the lead's chat id said "plan not found — call
+    # ducky_create_plan first", and members made private plans.
+    plans.update_node('coord', 'b', assignee='builder', project_root=team)
+    plan = plans.update_node('builder', 'b', status='in_progress', project_root=team)
+    assert plan['chat_id'] == 'coord'
+    plans.add_node('builder', content='Part one', parent_id='b', project_root=team)  # while playing
+    plan = plans.load_plan('coord', team)
+    assert [c['content'] for c in plans._walk_find(plan['nodes'], 'b')[2]['children']] == ['Part one']
+    assert plans.load_plan('builder', team) is None
+    with pytest.raises(ValueError, match="team's plan"):
+        plans.update_plan('builder', status='paused', project_root=team)
+
+
+def test_a_step_waits_for_its_after_steps(team):
+    plans.update_node('coord', 'b', assignee='builder', after=['a'], project_root=team)
+    with pytest.raises(ValueError, match="waits for"):
+        plans.update_node('builder', 'b', status='in_progress', project_root=team)
+    view = plans.assigned_plan_view('builder', team)
+    assert [w['id'] for w in view['nodes'][0]['waiting_on']] == ['a']
+    assert "waits for `a`" in plans.format_plan_prompt_block(view)
+    with pytest.raises(ValueError, match="no step nope"):
+        plans.update_node('coord', 'b', after=['nope'], project_root=team)
+    for step in ('a1', 'a2'):
+        plans.update_node('coord', step, status='completed', project_root=team)
+    plans.update_node('builder', 'b', status='in_progress', project_root=team)
+    plans.update_node('coord', 'b', after=[], project_root=team)
+    assert 'after' not in plans._walk_find(plans.load_plan('coord', team)['nodes'], 'b')[2]
+
+
+def test_a_lead_adds_an_owned_step_while_the_team_plays(team):
+    plan = plans.add_node('coord', content='Fix the blocker', assignee='builder', after=['a1'],
+                          project_root=team)
+    added = plan['nodes'][-1]
+    assert added['assignee'] == 'builder' and added['after'] == ['a1']
+    plans.update_node('coord', 'a1', status='completed', project_root=team)
+    with pytest.raises(ValueError, match="frozen"):
+        plans.add_node('coord', content='Under a finished step', parent_id='a1', project_root=team)
 
 @pytest.mark.parametrize('backend', ['files', 'db'])
 def test_deleted_assigned_node_falls_back_without_changing_master(team, monkeypatch, backend):
@@ -272,7 +342,7 @@ def test_a_finished_part_never_hides_the_members_new_work(team):
         {"id": "next", "content": "Next work", "assignee": "group-a"}
     ], project_root=team)
     view = plans.assigned_plan_view("builder", team, report_ambiguity=True)
-    assert view["assigned_from"]["chat_id"] == "outsider" and view["title"] == "Next work"
+    assert view["assigned_from"]["chat_id"] == "outsider" and view["title"] == "Your step in “Next round”"
     # Its new part done too: nothing to act on, so the latest part is shown, not an error.
     plans.update_node("outsider", "next", status="completed", project_root=team)
     view = plans.assigned_plan_view("builder", team, report_ambiguity=True)

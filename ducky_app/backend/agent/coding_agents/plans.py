@@ -24,7 +24,10 @@ PLAN_PROTOCOL = (
     "`ducky_plan_update_node` `in_progress` BEFORE the work, "
     "`completed` when Done-when is met. Mutators are blocked until a leaf is "
     "in_progress. If the approach changes, update the tree before more mutators — "
-    "never thrash off-plan. Templates: `ducky_create_plan_template` / "
+    "never thrash off-plan. Team plans: ONE plan for the whole team, the lead's; members "
+    "never make their own. Every step has an owner (`assignee`) and, when it needs other "
+    "steps first, `after` = their ids; its description says Files (what it may change), Do, "
+    "Done when and Not yours (what to leave to others). Templates: `ducky_create_plan_template` / "
     "`ducky_instantiate_plan_template`. Plan mode: create/update then stop."
 )
 
@@ -73,10 +76,59 @@ def _serialize_plan_edit(edit):
             # Resolve the default once so a project switch cannot split the key
             # from the document actually loaded/saved during this mutation.
             kwargs["project_root"] = root
+            if edit.__name__ in _STEP_EDITS:
+                # Before the lock, so the edit holds the key of the plan it really changes.
+                step = kwargs.get("node_id") or (args[0] if args else "") or kwargs.get("parent_id") or ""
+                chat_id = _edit_target(chat_id, str(step), root)
             key = f"plan:{_project_id(root)}:{_safe_id(chat_id)}"
         with _conversation_lock(key):
             return edit(chat_id, *args, **kwargs)
     return locked
+
+
+# Step edits a team member makes in its team's plan without naming the plan's chat.
+_STEP_EDITS = frozenset({"add_node", "update_node", "delete_node", "move_node"})
+
+
+def _edit_target(chat_id: str, step_id: str, project_root: str | None) -> str:
+    """The chat whose plan a step edit lands in: its own plan, else its team's plan.
+
+    Members ticked their steps without the lead's chat id, got "plan not found — call
+    ducky_create_plan first", and then made private plans the team never saw.
+    """
+    cid = (chat_id or "").strip()
+    if not cid:
+        return cid
+    own = load_plan(cid, project_root)
+    sid = (step_id or "").strip()
+    if own is not None and (not sid or _has_step(own, sid)):
+        return cid
+    try:
+        team = team_plan_for(cid, project_root)
+    except Exception:
+        team = None
+    if team is not None and (not sid or _has_step(team, sid)):
+        return str(team.get("chat_id") or cid)
+    return cid
+
+
+def _has_step(plan: dict[str, Any], step_id: str) -> bool:
+    return any(str(n.get("id")) == step_id for n in _flatten_nodes(plan.get("nodes")))
+
+
+def _no_plan_error(chat_id: str, project_root: str | None) -> ValueError:
+    """"No plan" said so a team member edits its team's plan instead of making its own."""
+    try:
+        team = team_plan_for(chat_id, project_root)
+    except Exception:
+        team = None
+    if team is None:
+        return ValueError("plan not found — call ducky_create_plan first")
+    return ValueError(
+        f"This chat has no plan of its own: it works in its team's plan “{team.get('title') or 'Plan'}” "
+        f"(coordinator chat {team.get('chat_id')}). Tick or annotate your steps with "
+        "ducky_plan_update_node(node_id=<step id>); ducky_get_plan lists them. Never make a second plan."
+    )
 
 
 def _plans_dir(project_root: str | None = None, *, create: bool = True) -> Path:
@@ -189,7 +241,38 @@ def _normalize_node(raw: Any, *, fallback_id: str | None = None) -> dict[str, An
     assignee = str(raw.get("assignee") or "").strip()
     if assignee:
         node["assignee"] = assignee  # exact chat or group identity
+    after = _normalize_after(raw.get("after"), own_id=nid)
+    if after:
+        node["after"] = after  # steps that must finish before this one starts
     return node
+
+
+def _normalize_after(raw: Any, *, own_id: str = "") -> list[str]:
+    """Step ids this step waits for: a list (or one id / comma list), deduped, never itself."""
+    if isinstance(raw, str):
+        raw = [part for part in raw.split(",")]
+    out: list[str] = []
+    for item in raw if isinstance(raw, list) else []:
+        sid = str(item or "").strip()
+        if sid and sid != own_id and sid not in out:
+            out.append(sid)
+    return out[:20]
+
+
+def waiting_on(plan: dict[str, Any] | None, node: dict[str, Any]) -> list[dict[str, Any]]:
+    """The unfinished steps ``node`` waits for (its ``after`` ids), with their owners."""
+    after = list(node.get("after") or [])
+    if not after:
+        return []
+    by_id = {str(n.get("id")): n for n in _flatten_nodes((plan or {}).get("nodes"))}
+    out = []
+    for sid in after:
+        pre = by_id.get(sid)
+        if pre is None or str(pre.get("status") or "") in _DONE:
+            continue
+        out.append({"id": sid, "content": str(pre.get("content") or ""),
+                    "status": str(pre.get("status") or ""), "assignee": str(pre.get("assignee") or "")})
+    return out
 
 
 def _parse_nodes_json(raw: Any) -> list[Any] | None:
@@ -316,7 +399,8 @@ def plan_structure_locked(plan: dict[str, Any] | None) -> bool:
 
 def _refuse_if_structure_locked(plan: dict[str, Any]) -> None:
     if plan_structure_locked(plan):
-        raise ValueError("plan is playing — pause it to edit unfinished steps or add new ones")
+        raise ValueError("plan is playing — pause it to edit, move or delete unfinished steps "
+                         "(adding a step needs no pause)")
 
 
 def _is_done_node(node: dict[str, Any] | None) -> bool:
@@ -398,23 +482,53 @@ def is_verify_leaf(node: dict[str, Any] | None) -> bool:
     return bool(_VERIFY_STEP.match(str(node.get("content") or "")))
 
 
-def _apply_status_gate(node: dict[str, Any], status: str, chat_id: str = "", *, by_user: bool = False) -> str:
+def _apply_status_gate(node: dict[str, Any], status: str, chat_id: str = "", *, by_user: bool = False,
+                       owners: set[str] | None = None, project_root: str | None = None) -> str:
     """Refuse completed unless descendants are done and Verify leaves have evidence.
 
-    *by_user*: the user ticked it in the plan view; their word is the evidence."""
+    *by_user*: the user ticked it in the plan view; their word is the evidence.
+    *owners*: the assignees on the step and the sections above it; a chat among them (or in
+    one of those groups) ticks with its own checks, though the plan belongs to its lead."""
     st = _normalize_status(status)
     if st == "completed" and not _descendants_done(node):
         raise ValueError("cannot complete a subplan while nested subplans are unfinished")
     if st == "completed" and not by_user and is_verify_leaf(node):
         from backend.agent.verify_evidence import has_evidence
 
-        if not has_evidence(chat_id):
+        if not has_evidence(chat_id) and not _owner_has_evidence(owners or set(), project_root):
             raise ValueError(
                 "cannot complete a Verify leaf until a check tool returned ok this turn: run one now, "
                 "then tick it in the same turn (ducky_plugin_validate or ducky_plugin_test for a plugin, "
                 "ducky_terminal_run with passing tests, workspace_compile_verse for Verse)"
             )
     return st
+
+
+def _owner_has_evidence(owners: set[str], project_root: str | None) -> bool:
+    """The ticking chat owns this step (itself or through its group) and ran a check this turn."""
+    from backend.agent.verify_evidence import current_conversation, has_evidence
+
+    actor = current_conversation()
+    if not actor or not owners:
+        return False
+    return bool(owners & set(_chat_and_group_ids(actor, project_root))) and has_evidence(actor)
+
+
+def _owners_of(roots: list[dict[str, Any]], node_id: str) -> set[str]:
+    """Assignees on ``node_id`` and on every section above it."""
+    def path(items: Any, trail: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            here = [*trail, item]
+            if str(item.get("id")) == node_id:
+                return here
+            found = path(item.get("children"), here)
+            if found is not None:
+                return found
+        return None
+
+    return {str(n.get("assignee")) for n in path(roots, []) or [] if n.get("assignee")}
 
 
 def _walk_find(
@@ -626,10 +740,14 @@ def create_plan(
     todos: list[dict[str, Any]] | None = None,
     template_id: str | None = None,
     project_root: str | None = None,
+    team_check: bool = True,
 ) -> dict[str, Any]:
+    """``team_check``: refuse a second plan for a chat on its team's plan (the person may)."""
     cid = (chat_id or "").strip()
     if not cid:
         raise ValueError("chat_id required")
+    if team_check:
+        _refuse_if_on_team_plan(cid, project_root)
     overview, nodes, _ = scrub_overview_and_recover_nodes(overview, nodes)
     if nodes is not None:
         tree = _normalize_nodes(nodes)
@@ -671,7 +789,7 @@ def update_plan(
         raise ValueError("chat_id required")
     plan = load_plan(cid, project_root)
     if not plan:
-        raise ValueError("plan not found — call ducky_create_plan first")
+        raise _no_plan_error(cid, project_root)
 
     # Heal mangled overview↔nodes before deciding what touched structure.
     if overview is not None or nodes is not None:
@@ -715,7 +833,9 @@ def update_plan(
                 tid = str(item["id"])
                 if tid in flat:
                     try:
-                        item["status"] = _apply_status_gate(flat[tid], item["status"], chat_id)
+                        item["status"] = _apply_status_gate(
+                            flat[tid], item["status"], chat_id,
+                            owners=_owners_of(plan.get("nodes") or [], tid), project_root=project_root)
                     except ValueError:
                         item["status"] = str(flat[tid].get("status") or "pending")
                     flat[tid]["content"] = item["content"]
@@ -740,8 +860,14 @@ def add_node(
     body_markdown: str = "",
     project_root: str | None = None,
     template_id: str | None = None,
+    assignee: str = "",
+    after: list[str] | str | None = None,
 ) -> dict[str, Any]:
-    """Add a step/subplan node. Pass template_id to edit a template instead of a project plan."""
+    """Add a step/subplan node. Pass template_id to edit a template instead of a project plan.
+
+    A new step may join a playing plan (it changes no step already there), so a team's lead
+    adds the fix for a blocker, and a member splits its own step, without pausing the team.
+    """
     node = _normalize_node(
         {
             "id": uuid.uuid4().hex[:10],
@@ -750,14 +876,18 @@ def add_node(
             "kind": kind,
             "body_markdown": body_markdown,
             "children": [],
+            "assignee": assignee,
         }
     )
     if not node:
         raise ValueError("content required")
     doc, save = _load_editable(chat_id, project_root=project_root, template_id=template_id)
-    if doc.get("kind") != "template":
+    playing = doc.get("kind") != "template" and plan_structure_locked(doc)
+    if playing and str(doc.get("status") or "").strip().lower() == "finished":
         _refuse_if_structure_locked(doc)
     roots = list(doc.get("nodes") or [])
+    if after is not None:
+        _set_after(doc, node, after)
     parent = (parent_id or "").strip()
     if not parent:
         idx = len(roots) if index is None else max(0, min(int(index), len(roots)))
@@ -767,6 +897,8 @@ def add_node(
         sibs, _, parent_node = _walk_find(roots, parent)
         if parent_node is None:
             raise ValueError("parent node not found")
+        if playing and _is_done_node(parent_node):
+            raise ValueError("completed steps stay frozen while the plan plays: add the new step beside it")
         kids = list(parent_node.get("children") or [])
         idx = len(kids) if index is None else max(0, min(int(index), len(kids)))
         kids.insert(idx, node)
@@ -791,6 +923,7 @@ def update_node(
     project_root: str | None = None,
     template_id: str | None = None,
     assignee: str | None = None,
+    after: list[str] | str | None = None,
     by_user: bool = False,
 ) -> dict[str, Any]:
     doc, save = _load_editable(chat_id, project_root=project_root, template_id=template_id)
@@ -800,7 +933,8 @@ def update_node(
         raise ValueError("node not found")
     if doc.get("kind") != "template" and _is_done_node(node):
         if (content is not None or kind is not None or body_markdown is not None
-                or assignee is not None or (status is not None and status != node.get("status"))):
+                or assignee is not None or after is not None
+                or (status is not None and status != node.get("status"))):
             if node.get("children") and node.get("status") == "completed":
                 raise ValueError(
                     "completed steps can't be edited: this section completed itself when its last "
@@ -814,6 +948,9 @@ def update_node(
             node["assignee"] = owner
         else:
             node.pop("assignee", None)
+    # So is what a step waits for: a lead orders the work without pausing the team.
+    if after is not None:
+        _set_after(doc, node, after)
     structure_touch = content is not None or kind is not None
     if structure_touch and doc.get("kind") != "template":
         _refuse_if_structure_locked(doc)
@@ -828,9 +965,42 @@ def update_node(
     if body_markdown is not None:
         node["body_markdown"] = (body_markdown or "").strip()
     if status is not None:
-        node["status"] = _apply_status_gate(node, status, chat_id, by_user=by_user)
+        if status == "in_progress" and node.get("status") != "in_progress" and not by_user:
+            _refuse_if_waiting(doc, node)
+        node["status"] = _apply_status_gate(node, status, chat_id, by_user=by_user,
+                                            owners=_owners_of(roots, node_id), project_root=project_root)
     doc["nodes"] = roots
     return save(doc)
+
+
+def _set_after(doc: dict[str, Any], node: dict[str, Any], after: list[str] | str) -> None:
+    """Replace ``node``'s prerequisites (``[]`` clears them); every id must be a step of this plan."""
+    nid = str(node.get("id") or "")
+    wanted = _normalize_after(after, own_id=nid)
+    known = {str(n.get("id")) for n in _flatten_nodes(doc.get("nodes"))}
+    inside = {str(n.get("id")) for n in _flatten_nodes(node.get("children") or [])}
+    unknown = [sid for sid in wanted if sid not in known]
+    if unknown:
+        raise ValueError(f"after: no step {', '.join(unknown)} in this plan (use step ids from its outline)")
+    if any(sid in inside for sid in wanted):
+        raise ValueError("after: a step can't wait for one of its own sub-steps")
+    if wanted:
+        node["after"] = wanted
+    else:
+        node.pop("after", None)
+
+
+def _refuse_if_waiting(doc: dict[str, Any], node: dict[str, Any]) -> None:
+    """A step whose prerequisites are unfinished can't start: its owner waits, quietly."""
+    pending = waiting_on(doc, node)
+    if not pending:
+        return
+    rows = "; ".join(f"`{p['id']}` {p['content']} ({p['status']})" for p in pending)
+    raise ValueError(
+        f"step `{node.get('id')}` waits for {rows}. Nothing to do or report until they finish: "
+        "the plan wakes you then. Its coordinator can change the order with "
+        "ducky_plan_update_node(node_id=..., after=[...])."
+    )
 
 
 @_serialize_plan_edit
@@ -918,7 +1088,7 @@ def _load_editable(
         raise ValueError("chat_id or template_id required")
     doc = load_plan(cid, project_root)
     if not doc:
-        raise ValueError("plan not found — call ducky_create_plan first")
+        raise _no_plan_error(cid, project_root)
     return doc, lambda d: save_plan(d, project_root)
 
 
@@ -1110,9 +1280,20 @@ def plan_review(plan: dict[str, Any] | None) -> list[dict[str, str]]:
     while fifteen checks inside it passed one by one; the plan read 15/19 the whole time.
     """
     issues: list[dict[str, str]] = []
+    flat = _flatten_nodes((plan or {}).get("nodes"))
+    known = {str(n.get("id")) for n in flat}
+    # A team plan (any step has an owner): an open step nobody owns is work nobody does.
+    team = any(n.get("assignee") for n in flat)
+    owned_sections = {str(c.get("id")) for n in flat if n.get("assignee")
+                      for c in _flatten_nodes(n.get("children") or [])}
     for label, node in outline_numbers((plan or {}).get("nodes")):
         if node.get("status") in _DONE:
             continue
+        unknown = [sid for sid in node.get("after") or [] if sid not in known]
+        if unknown:
+            issues.append({"n": label, "issue": f"Waits for steps that don't exist ({', '.join(unknown)}): use ids from the outline."})
+        if team and not node.get("children") and not node.get("assignee") and str(node.get("id")) not in owned_sections:
+            issues.append({"n": label, "issue": "No owner: set its assignee to the member who does it."})
         content = str(node.get("content") or "").strip()
         described = bool(str(node.get("body_markdown") or "").strip())
         if node.get("children"):
@@ -1151,6 +1332,16 @@ def attach_next_tick(payload: dict[str, Any], plan: dict[str, Any] | None) -> di
     return out
 
 
+def _waiting_note(node: dict[str, Any]) -> str:
+    """" — waits for `x` (owner)": said once in the outline, so nobody asks or reports it."""
+    rows = node.get("waiting_on") or []
+    if not rows or str(node.get("status") or "") in _DONE:
+        return ""
+    return " — waits for " + ", ".join(
+        f"`{r['id']}`" + (f" (owner {r['assignee'][:8]})" if r.get("assignee") else "") for r in rows
+    ) + ": nothing to do or report until then"
+
+
 def format_plan_prompt_block(
     plan: dict[str, Any] | None,
     *,
@@ -1174,17 +1365,20 @@ def format_plan_prompt_block(
     ]
     assignment = plan.get("assigned_from")
     if isinstance(assignment, dict):
-        lines[0] = "## Shared plan assignment (read-only view)"
+        lines[0] = "## Your steps in your team's plan"
         lines.extend([
-            f"Canonical plan `{plan.get('id')}`; assigned node `{assignment.get('node_id')}`; assignee `{assignment.get('assignee')}`.",
-            f"Read the full tree with ducky_get_plan(chat_id={json.dumps(assignment.get('chat_id'))}).",
-            "This view does not transfer plan mutation ownership from the coordinator.",
+            f"Your team works in ONE plan, “{assignment.get('plan_title') or title}” (`{plan.get('id')}`): "
+            "never create a plan of your own.",
+            "Tick your steps with ducky_plan_update_node(node_id=...) and split one with "
+            "ducky_plan_add_node(parent_id=<your step>, ...): no chat_id needed. "
+            f"The whole plan: ducky_get_plan(chat_id={json.dumps(assignment.get('chat_id'))}).",
         ])
         for i, (lab, node) in enumerate(outline_numbers(nodes)):
             if i >= max_nodes:
                 lines.append("…(truncated — read the full canonical plan)")
                 break
-            lines.append(f"- {lab} [{node.get('status', 'pending')}] `{node['id']}` — {str(node.get('content') or '')[:160]}")
+            lines.append(f"- {lab} [{node.get('status', 'pending')}] `{node['id']}` — {str(node.get('content') or '')[:160]}"
+                         + _waiting_note(node))
         return "\n".join(lines) + "\n"
     nudge = format_plan_tick_nudge(plan)
     if nudge:
@@ -1202,7 +1396,7 @@ def format_plan_prompt_block(
         status = str(n.get("status") or "pending")
         nid = str(n.get("id") or "")
         content = str(n.get("content") or "").strip().replace("\n", " ")[:160]
-        lines.append(f"- {lab} [{status}] `{nid}` — {content}")
+        lines.append(f"- {lab} [{status}] `{nid}` — {content}" + _waiting_note({**n, "waiting_on": waiting_on(plan, n)}))
     lines.append(
         "Protocol (every tool round): mark the current leaf `in_progress` BEFORE the "
         "work, `completed` when Done-when is met, then mark the next leaf `in_progress`. "
@@ -1230,6 +1424,62 @@ def _chat_and_group_ids(chat_id: str, project_root: str | None) -> list[str]:
         ids.append(cur)
         cur = (getattr(conv, "parent_conv_id", None) or "").strip() if conv is not None else ""
     return ids
+
+
+def _live_plan(plan: dict[str, Any] | None) -> bool:
+    return isinstance(plan, dict) and str(plan.get("status") or "open") not in ("archived", "finished", "completed")
+
+
+def team_plan_for(chat_id: str, project_root: str | None = None) -> dict[str, Any] | None:
+    """The live plan of this chat's team when another chat owns it, else None.
+
+    That is the plan of the lead of a group this chat sits in (the nearest group first),
+    else a live plan that gives this chat or its group an open step. A team works in one
+    plan: a member made its own private plan, the lead's plan never showed that work, and
+    a teammate reported the same "blocked" for an hour while the fix sat out of sight.
+    """
+    from frontend.ui_web.project_chats import load_conversation
+
+    ids = _chat_and_group_ids(chat_id, project_root)
+    if not ids:
+        return None
+    for gid in ids[1:]:
+        try:
+            group = load_conversation(gid, project_root=project_root)
+        except Exception:
+            group = None
+        lead = str(getattr(group, "leader_conv_id", "") or "").strip() if group is not None else ""
+        if not lead or lead == ids[0]:
+            continue
+        try:
+            alive = load_conversation(lead, project_root=project_root) is not None
+        except Exception:
+            alive = False
+        plan = load_plan(lead, project_root) if alive else None
+        if _live_plan(plan):
+            return plan
+    try:
+        view = assigned_plan_view(chat_id, project_root)
+    except ValueError:
+        view = None
+    if view and any(str(n.get("status") or "") not in _DONE for n in _flatten_nodes(view.get("nodes"))):
+        plan = load_plan(str(view.get("chat_id") or ""), project_root)
+        if _live_plan(plan):
+            return plan
+    return None
+
+
+def _refuse_if_on_team_plan(chat_id: str, project_root: str | None) -> None:
+    team = team_plan_for(chat_id, project_root)
+    if team is None:
+        return
+    lead = str(team.get("chat_id") or "")
+    raise ValueError(
+        f"This chat is on its team's plan “{team.get('title') or 'Plan'}” (coordinator chat {lead}). "
+        "A team works in ONE plan, so don't make another. To split your step, add sub-steps under it there: "
+        f"ducky_plan_add_node(chat_id=\"{lead}\", parent_id=<your step id>, content=..., body_markdown=...). "
+        "Work outside your steps: ask the coordinator to add a step for it."
+    )
 
 
 def _group_short_name(title: str) -> str:
@@ -1299,11 +1549,23 @@ def with_team_links(plan: dict[str, Any] | None, chat_id: str,
 
 
 def load_plan_view(chat_id: str, project_root: str | None = None) -> dict[str, Any] | None:
-    """Resolve an active read view without redirecting raw storage or mutations."""
+    """Resolve an active read view without redirecting raw storage or mutations.
+
+    Open steps in the team's plan outrank a plan of the chat's own: a member that made a
+    private plan kept seeing it instead of the step its lead assigned.
+    """
     own = load_plan(chat_id, project_root)
-    if own is not None and own.get("status") != "archived":
-        return own
-    return assigned_plan_view(chat_id, project_root, report_ambiguity=True)
+    own_live = own is not None and own.get("status") != "archived"
+    try:
+        view = assigned_plan_view(chat_id, project_root, report_ambiguity=True)
+    except ValueError:
+        if own_live:
+            return own
+        raise
+    if view is not None and (not own_live or any(
+            str(n.get("status") or "") not in _DONE for n in _flatten_nodes(view.get("nodes")))):
+        return view
+    return own if own_live else view
 
 
 def assigned_plan_view(chat_id: str, project_root: str | None = None, *,
@@ -1357,12 +1619,15 @@ def assigned_plan_view(chat_id: str, project_root: str | None = None, *,
         else:
             continue
         title = str(plan.get("title") or "Plan")
+        nodes = [_with_waiting(plan, n) for n in nodes]
         first = nodes[0]
         return {
             "id": str(plan.get("plan_id") or ""),
             "kind": "project",
             "chat_id": str(plan.get("chat_id") or ""),
-            "title": str(first.get("content") or title) if len(nodes) == 1 else f"Your {len(nodes)} steps in “{title}”",
+            # Always the team plan's own name: a one-step view titled with the step's name
+            # read like a separate plan.
+            "title": f"Your step in “{title}”" if len(nodes) == 1 else f"Your {len(nodes)} steps in “{title}”",
             "overview": f"Part of the plan “{title}”.",
             "body_markdown": str(first.get("body_markdown") or "") if len(nodes) == 1 else "",
             "status": str(plan.get("status") or "open"),
@@ -1381,6 +1646,17 @@ def assigned_plan_view(chat_id: str, project_root: str | None = None, *,
             },
         }
     return None
+
+
+def _with_waiting(plan: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
+    """A copy of ``node`` (and its steps) carrying ``waiting_on``: unfinished steps it needs first."""
+    row = dict(node)
+    pending = waiting_on(plan, node) if str(node.get("status") or "") not in _DONE else []
+    if pending:
+        row["waiting_on"] = pending
+    if node.get("children"):
+        row["children"] = [_with_waiting(plan, c) for c in node.get("children") or []]
+    return row
 
 
 def _outermost(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:

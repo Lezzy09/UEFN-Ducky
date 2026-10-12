@@ -281,7 +281,7 @@ class PlansStoreTests(unittest.TestCase):
         assert loaded is not None
         self.assertTrue(plans.plan_structure_locked(loaded))
         with self.assertRaises(ValueError):
-            plans.add_node("chat-tree", content="Extra", project_root=self.root)
+            plans.update_node("chat-tree", "p1", content="Renamed", project_root=self.root)
         plans.update_plan("chat-tree", status="paused", project_root=self.root)
         loaded = plans.load_plan("chat-tree", project_root=self.root)
         assert loaded is not None

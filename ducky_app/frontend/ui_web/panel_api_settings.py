@@ -1009,26 +1009,22 @@ class PanelApiSettingsMixin:
 
     def get_plan(self, chat_id: str, project_root: str | None = None) -> dict[str, Any]:
         from backend.agent.coding_agents.plans import (
-            assigned_plan_view,
-            load_plan,
+            load_plan_view,
             outline_numbers,
             todo_progress,
+            with_team_links,
         )
 
         root = project_root if project_root is not None else _pa.PanelSettings.load().uefn_project_root
-        plan = load_plan(chat_id, project_root=root)
-        if plan is None or plan.get("status") == "archived":
-            # Archived personal records remain history, not active assignments.
-            # Resolve only persisted node assignees, never reference prose.
-            try:
-                plan = assigned_plan_view(chat_id, project_root=root, report_ambiguity=True)
-            except ValueError as exc:
-                return {"ok": False, "plan": None, "error": str(exc)}
-            except Exception:
-                plan = None
-        else:
-            from backend.agent.coding_agents.plans import with_team_links
-
+        # The chat's open steps in its team's plan, else its own plan; archived personal
+        # records remain history. Resolve only persisted node assignees, never reference prose.
+        try:
+            plan = load_plan_view(chat_id, project_root=root)
+        except ValueError as exc:
+            return {"ok": False, "plan": None, "error": str(exc)}
+        except Exception:
+            plan = None
+        if plan is not None and not plan.get("assigned_from"):
             plan = with_team_links(plan, chat_id, project_root=root)
         outline = [
             {"n": lab, "id": n["id"], "content": n["content"], "status": n["status"]}
@@ -1466,6 +1462,7 @@ class PanelApiSettingsMixin:
                 nodes=nodes,
                 todos=todos,
                 project_root=root,
+                team_check=False,  # the person decides; only agents keep to their team's plan
             )
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}

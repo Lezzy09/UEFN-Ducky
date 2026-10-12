@@ -43,9 +43,9 @@ def test_two_group_shared_plan_workflow(team, monkeypatch, backend, tmp_path):
     assert read('peer')['assigned_from']['node_id'] == 'b'
     assert read()['id'] == read('peer')['id'] == master['id']
     assert [n['id'] for n in read('coord')['nodes']] == ['a', 'b']
-    # A scoped read is not a mutation redirect or a cloned personal plan.
-    with pytest.raises(ValueError, match='plan not found'):
-        plans.update_node('builder', 'a1', status='completed', project_root=root)
+    # A member's step edit lands in the team's plan, never in a cloned personal plan.
+    edited = plans.update_node('builder', 'a1', body_markdown='Started on core', project_root=root)
+    assert edited['id'] == master['id']
     assert plans.load_plan('builder', root) is None
     assert plans.load_plan_view('builder', str(tmp_path / 'other-project')) is None
 
