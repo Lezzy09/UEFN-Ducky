@@ -1081,7 +1081,8 @@ def ducky_agent_send(
 
     With `expect_reply=true` you get a `response_id`; finish your turn after sending —
     the reply (or an inactivity notice) arrives later as a `[ducky:agent-message]` turn
-    in YOUR chat. A new message expects a reply unless you pass `expect_reply=false`. To
+    in YOUR chat. A new message expects a reply unless you pass `expect_reply=false`, except a
+    lead's message to its own member: an assignment, answered by the member's report. To
     ANSWER a message that asked for a reply, pass its `response_id` (that makes it an
     answer; leave `expect_reply` out). A message to an agent still waiting on your answer
     IS that answer, even without the id. Never busy-wait for replies. `sender` is your own chat id
@@ -1117,6 +1118,12 @@ def ducky_agent_send(
         reply_to = _owed_reply(me, target)
     # Every agent answered with response_id alone, hit "not both" and had to retry.
     expects = (not reply_to) if expect_reply is None else bool(expect_reply)
+    if expect_reply is None and not reply_to:
+        from backend.agent.a2a_broker import leads_receiver
+
+        # A lead's assignment needs no answer: the member reports when the work is done. A
+        # lead whose 67 of 91 messages asked for replies kept its whole team answering it.
+        expects = not leads_receiver(me, target)
     outcome = send(
         sender_conv_id=me,
         receiver_conv_id=target,

@@ -181,3 +181,38 @@ def test_a_finished_step_restarts_the_circle_clock() -> None:
     progressed = {**PLAN, "progress": {"pending": 3, "in_progress": 0, "completed": 3}}
     later = [m for m in range(15, 50) if _run(m * MIN, ["builder"], woke, plans=[progressed])]
     assert later == [35]  # 20 minutes after the step finished at minute 15
+
+
+def test_an_idle_builder_with_open_steps_gets_its_next_turn_without_its_lead(monkeypatch) -> None:
+    # Oct 12 2026: builders stopped after every report and their lead sent 91 messages in
+    # 50 minutes, most of them "resume X now".
+    monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
+    plan = {**PLAN, "nodes": [
+        {"id": "fx", "content": "Effects", "status": "in_progress", "assignee": "builder"},
+        {"id": "blend", "content": "Blends", "status": "pending", "assignee": "builder"},
+        {"id": "done", "content": "Done", "status": "completed", "assignee": "other"},
+    ]}
+    woke: list[tuple[str, str]] = []
+    member_wakes = lambda: [cid for cid, _ in woke if cid == "builder"]  # noqa: E731
+    _run(0, ["builder", "coord"], woke, plans=[plan])
+    _run(60, ["coord"], woke, plans=[plan])  # idle a minute: not yet
+    assert member_wakes() == []
+    _run(150, ["coord"], woke, plans=[plan])
+    assert member_wakes() == ["builder"]
+    text = next(t for cid, t in woke if cid == "builder")
+    assert "`fx` Effects (in_progress)" in text and "`blend` Blends (pending)" in text and "done" not in text
+    for minute in range(3, 60):  # a blocked builder is woken twice, then waits for the plan to move
+        _run(minute * MIN, ["coord"], woke, plans=[plan])
+    assert len(member_wakes()) == 2
+    moved = {**plan, "nodes": [{**plan["nodes"][0], "status": "completed"}, *plan["nodes"][1:]]}
+    _run(61 * MIN, ["coord"], woke, plans=[moved])
+    assert len(member_wakes()) == 3
+
+
+def test_a_stopped_builder_is_not_woken(monkeypatch) -> None:
+    monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: cid == "builder")
+    plan = {**PLAN, "nodes": [{"id": "fx", "content": "Effects", "status": "in_progress", "assignee": "builder"}]}
+    woke: list[tuple[str, str]] = []
+    for minute in range(0, 10):
+        _run(minute * MIN, ["coord"], woke, plans=[plan])
+    assert [cid for cid, _ in woke if cid == "builder"] == []

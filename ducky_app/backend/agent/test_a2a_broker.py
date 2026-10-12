@@ -823,3 +823,22 @@ def test_a_member_sending_teammates_a_note_after_every_small_step_is_held_back(b
     for n in range(6):
         assert broker.mod.send(sender_conv_id="lead", receiver_conv_id="m2", body=f"assignment {n}",
                                expect_reply=False)["queued_for"] == "m2"
+
+
+def test_a_leads_message_to_its_own_member_needs_no_reply_by_default(monkeypatch):
+    # Oct 12 2026: 67 of a lead's 91 messages asked for a reply, so its whole team kept answering it.
+    import json as _json
+
+    from backend.agent import a2a_broker
+    from backend.tools.panel import ducky_panel
+
+    sent = []
+    monkeypatch.setattr(ducky_panel, "_resolve_sender", lambda value: value)
+    monkeypatch.setattr(ducky_panel, "load_conversation", lambda *a, **kw: SimpleNamespace(folder_id=""))
+    monkeypatch.setattr(ducky_panel, "_owed_reply", lambda me, target: "")
+    monkeypatch.setattr("backend.agent.a2a_client.send", lambda **kw: sent.append(kw) or {"response_id": "", "queued_for": kw["receiver_conv_id"]})
+    monkeypatch.setattr(a2a_broker, "leads_receiver", lambda s, r: (s, r) == ("lead", "member"))
+    _json.loads(ducky_panel.ducky_agent_send(to="member", sender="lead", message="build blends"))
+    _json.loads(ducky_panel.ducky_agent_send(to="lead", sender="member", message="which font?"))
+    _json.loads(ducky_panel.ducky_agent_send(to="member", sender="lead", message="tell me the count", expect_reply=True))
+    assert [kw["expect_reply"] for kw in sent] == [False, True, True]

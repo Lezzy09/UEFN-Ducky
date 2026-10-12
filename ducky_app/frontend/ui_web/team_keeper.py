@@ -237,6 +237,68 @@ def tick(
             st["next_wake"] = now + min(_IDLE_S * (2 ** (st["wakes"] - 1)), _MAX_WAIT_S)
             st["quiet_since"] = now
             woke.append(cid)
+        woke.extend(_continue_members(plans, busy, now, wake))
+    return woke
+
+
+CONTINUE_TEXT = (
+    "[Ducky keeper] You have open plan steps:\n{steps}\nContinue with the first one you can do "
+    "now. If every one is waiting on someone else's work, end your turn with one line saying "
+    "what it waits for. Don't ask your lead what to do next."
+)
+_MEMBER_IDLE_S = 90.0  # a builder idle this long with open steps gets its next turn
+_MEMBER_TRIES = 2  # wakes that move nothing in the plan: wait for the plan to move
+_members: dict[str, dict[str, Any]] = {}
+
+
+def _open_leaves_by_member(plan: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {}
+    stack = list(plan.get("nodes") or [])
+    while stack:
+        node = stack.pop(0)
+        if not isinstance(node, dict):
+            continue
+        kids = node.get("children") or []
+        stack[:0] = kids
+        owner = str(node.get("assignee") or "").strip()
+        if owner and not kids and node.get("status") in ("pending", "in_progress"):
+            out.setdefault(owner, []).append(node)
+    return out
+
+
+def _continue_members(plans: list[dict[str, Any]], busy: set[str], now: float,
+                      wake: Callable[[str, str], None]) -> list[str]:
+    """A builder that stops after each report waited for its lead to say "resume": one lead
+    sent 91 messages in 50 minutes, most of them that. Ducky starts the builder's next turn
+    itself, twice at most until the plan moves (a blocked builder is not woken forever).
+    Must hold ``_lock``."""
+    from backend.agent.a2a_broker import automatic_work_blocked
+
+    woke: list[str] = []
+    for plan in plans:
+        lead = str(plan.get("chat_id") or "")
+        moves = _moves(plan)
+        for member, steps in _open_leaves_by_member(plan).items():
+            if member == lead:
+                continue
+            st = _members.setdefault(member, {"idle_since": now, "tries": 0, "next": 0.0, "moves": moves})
+            if st["moves"] != moves:
+                st.update(moves=moves, tries=0, next=0.0)  # the plan moved: try again
+            if member in busy:
+                st["idle_since"] = now
+                continue
+            if (now - st["idle_since"] < _MEMBER_IDLE_S or now < st["next"]
+                    or st["tries"] >= _MEMBER_TRIES or automatic_work_blocked(member)):
+                continue
+            listing = "\n".join(f"- `{n.get('id')}` {n.get('content')} ({n.get('status')})" for n in steps)
+            try:
+                wake(member, CONTINUE_TEXT.format(steps=listing))
+            except Exception:
+                continue
+            st["tries"] += 1
+            st["idle_since"] = now
+            st["next"] = now + _MEMBER_IDLE_S * 2
+            woke.append(member)
     return woke
 
 
@@ -307,3 +369,4 @@ def stop_team_keeper() -> None:
 def reset_for_tests() -> None:
     with _lock:
         _teams.clear()
+        _members.clear()
