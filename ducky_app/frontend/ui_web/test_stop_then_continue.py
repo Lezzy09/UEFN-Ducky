@@ -25,7 +25,7 @@ def test_run_message_cancels_live_run_before_starting_follow_up():
     def fake_is_running(_cid: str) -> bool:
         return running["live"]
 
-    def fake_cancel(_cid=None) -> None:
+    def fake_cancel(_cid=None, **_kw) -> None:
         running["live"] = False
 
     def fake_wait(_cid: str, _timeout: float = 2.0) -> bool:

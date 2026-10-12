@@ -465,7 +465,7 @@ def _with_admission(fn):
             if queue:
                 _queue_pending(conv_id, user_text)
                 return "queued"
-            cancel_agent(conv_id)
+            cancel_agent(conv_id, by_user=False)  # replaced by this turn, not stopped
             wait_for_idle(conv_id, SESSION_JOIN_TIMEOUT)
         token = _reserve_admission(conv_id)
         if token is None:
@@ -723,7 +723,11 @@ def _wrap_push_for_linked_child(
     return linked_push
 
 
-def cancel_agent(conv_id: str | None = None) -> None:
+def cancel_agent(conv_id: str | None = None, *, by_user: bool = True) -> None:
+    """Stop a chat's agent. ``by_user=False``: a new turn replaces the running one; that is
+    not a Stop, so the chat stays free for automatic work and nobody is told it was stopped
+    (Oct 12 2026: a recycle's fresh-session message told the lead "stopped by the user", and
+    the lead stood its team down)."""
     targets: list[str] = []
     if conv_id:
         targets.append(conv_id)
@@ -754,9 +758,10 @@ def cancel_agent(conv_id: str | None = None) -> None:
                     pass
             with _pending_lock:
                 _pending_agent_messages.pop(cid, None)
-            from backend.agent.a2a_broker import on_agent_cancelled_by_user
+            if by_user:
+                from backend.agent.a2a_broker import on_agent_cancelled_by_user
 
-            on_agent_cancelled_by_user(cid)
+                on_agent_cancelled_by_user(cid)
         except Exception:
             pass
         finally:

@@ -12,7 +12,7 @@ def test_a_busy_chat_holds_agent_messages_and_runs_them_after_its_turn(monkeypat
     cancels: list[object] = []
     monkeypatch.setattr(am, "load_conversation", lambda cid, **kw: SimpleNamespace(id=cid))
     monkeypatch.setattr(am, "is_agent_running", lambda cid: True)
-    monkeypatch.setattr(am, "cancel_agent", lambda cid=None: cancels.append(cid))
+    monkeypatch.setattr(am, "cancel_agent", lambda cid=None, **kw: cancels.append(cid))
     monkeypatch.setattr(am, "_pending_agent_messages", {})
 
     assert am.run_message("c1", "report 1", "agent", "", queue_if_busy=True, _local=True) == "queued"
@@ -36,6 +36,19 @@ def test_a_person_pressing_stop_drops_held_agent_messages(monkeypatch) -> None:
     monkeypatch.setattr(am, "_pending_agent_messages", {"c2": ["held"]})
     am.cancel_agent("c2")
     assert "c2" not in am._pending_agent_messages
+
+
+def test_a_turn_that_replaces_a_running_one_is_not_a_stop(monkeypatch) -> None:
+    # Oct 12 2026: a recycle's fresh-session message replaced the member's running turn; the
+    # lead was told "stopped by the user" and stood its team down.
+    from backend.agent import a2a_broker as broker
+    stops: list[str] = []
+    monkeypatch.setattr(broker, "on_agent_cancelled_by_user", stops.append)
+    monkeypatch.setattr(am, "_pending_agent_messages", {})
+    am.cancel_agent("c3", by_user=False)
+    assert stops == []
+    am.cancel_agent("c3")  # the person's Stop
+    assert stops == ["c3"]
 
 
 def test_terminal_quota_tap_retains_pending_until_cooldown(monkeypatch):
