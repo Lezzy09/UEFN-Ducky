@@ -35,6 +35,8 @@ ALLOWLIST: dict[str, str] = {
     "backend/tools/panel/panel_ai_plugins.py::scaffold_ai_plugin": "plugin draft under AppData",
     "backend/tools/panel/panel_ai_plugins.py::write_ai_plugin_file": "plugin draft under AppData",
     "backend/tools/panel/panel_ai_plugins.py::delete_ai_plugin_draft": "plugin draft under AppData",
+    "backend/tools/panel/panel_ai_plugins.py::move_ai_plugin_file": "plugin draft under AppData",
+    "backend/tools/panel/panel_ai_plugins.py::delete_ai_plugin_file": "plugin draft under AppData",
     "backend/tools/panel/panel_ai_plugins.py::_self_check": "self-check temp dir",
     "backend/tools/panel/panel_verse_templates.py::_self_check": "self-check temp dir",
     "backend/tools/panel/panel_plugin_check.py::record": "plugin error log under AppData when the events DB is off",
