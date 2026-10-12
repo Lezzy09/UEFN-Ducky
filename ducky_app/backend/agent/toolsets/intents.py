@@ -377,6 +377,7 @@ _WORKSPACE_EDITOR_TOOLS = frozenset(
 _PANEL_UI_TOOLS = frozenset(
     {
         "ducky_ui_navigate",
+        "ducky_ui_queue_file_pick",
         "ducky_ui_list_targets",
         "ducky_ui_show",
         "ducky_walkthrough_run",

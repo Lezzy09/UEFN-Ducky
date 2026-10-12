@@ -349,7 +349,13 @@ class PanelApiAutomationsMixin:
     def pick_workflow_files(self, accept: str = "any", multiple: bool = False) -> dict[str, Any]:
         """Input nodes: the Windows file picker, filtered to what the node takes."""
         from backend.automations.files import FILE_FILTERS, file_ref, kind_of, with_url
+        from frontend.ui_web.picker_queue import take_queued_pick
 
+        kind = str(accept or "any")
+        queued = take_queued_pick()  # an agent checking a panel's import answered for the person
+        if queued is not None:
+            return {"ok": True, "files": [with_url(file_ref(path, kind if kind != "any" else kind_of(path)))
+                                          for path in queued[: None if multiple else 1]]}
         win = getattr(self, "_window", None)
         if win is None:
             return {"ok": False, "error": "No window to open the picker from", "files": []}
@@ -363,8 +369,13 @@ class PanelApiAutomationsMixin:
             picked = win.create_file_dialog(open_type, allow_multiple=bool(multiple), file_types=FILE_FILTERS.get(str(accept or "any"), FILE_FILTERS["any"]))
         except Exception as exc:
             return {"ok": False, "error": str(exc), "files": []}
-        kind = str(accept or "any")
         return {"ok": True, "files": [with_url(file_ref(path, kind if kind != "any" else kind_of(path))) for path in (picked or [])]}
+
+    def queue_file_pick(self, paths: list[str] | None = None, cancel: bool = False) -> dict[str, Any]:
+        """The next file picker's answer, given by an agent (see ``picker_queue``)."""
+        from frontend.ui_web.picker_queue import queue_pick
+
+        return queue_pick(paths, cancel=bool(cancel))
 
     def workflow_editor_prefs(self) -> dict[str, Any]:
         """Grid, snap, tool, panel sizes and zoom of the Workflows editor on this PC."""

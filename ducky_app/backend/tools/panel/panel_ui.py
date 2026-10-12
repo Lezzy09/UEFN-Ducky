@@ -233,6 +233,34 @@ def _normalize_ask_user_questions(
 
 
 @mcp.tool()
+def ducky_ui_queue_file_pick(paths: list[str] | None = None, cancel: bool = False, pretty: bool = False) -> str:
+    """Answer the NEXT file picker a panel opens, without the Windows dialog: for checking a
+    plugin panel's import flow (a person isn't needed at the PC). ``paths``: files to return
+    (they must exist); ``cancel=true``: the next picker returns nothing, as when the person
+    cancels. Used once; expires after 2 minutes. Queue it, then trigger the panel's pick."""
+    from frontend.ui_web import agent_modes
+
+    if not agent_modes._in_bridge_process():
+        from frontend.ui_web.picker_queue import queue_pick
+
+        return tool_json(queue_pick(paths, cancel=bool(cancel)), pretty=pretty)
+    import json
+    import urllib.request
+
+    from frontend.settings import PANEL_LISTENER_PORT
+
+    # The picker runs in the app window's process; this tool server is another one.
+    url = f"http://127.0.0.1:{PANEL_LISTENER_PORT - 1}/__panel_api/queue_file_pick"
+    data = json.dumps({"args": [list(paths or []), bool(cancel)]}).encode("utf-8")
+    try:
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        out = json.loads(urllib.request.urlopen(req, timeout=15).read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return tool_json({"ok": False, "error": f"Ducky's window did not answer: {exc}"}, pretty=pretty)
+    return tool_json(out.get("result") if isinstance(out.get("result"), dict) else out, pretty=pretty)
+
+
+@mcp.tool()
 def ducky_ui_navigate(route: str, item_id: str = "", pretty: bool = False) -> str:
     """Open a panel route so the user doesn't have to hunt for it.
 
