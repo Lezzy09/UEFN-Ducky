@@ -267,6 +267,27 @@ def _is_test_py(name: str) -> bool:
     return name.startswith("test_") and name.endswith(".py")
 
 
+def shipped_files(src: Path) -> list[Path]:
+    """The files a build ships (tests, scripts, dot folders, caches and archives stay behind)."""
+    out = []
+    for path in sorted(src.rglob("*")):
+        if not path.is_file():
+            continue
+        parts = path.relative_to(src).parts
+        if any(p in _SKIP_DIR_NAMES for p in parts) or any(p.startswith(".") for p in parts):
+            continue
+        if path.suffix.lower() in _SKIP_SUFFIXES or _is_test_py(path.name):
+            continue
+        out.append(path)
+    return out
+
+
+def shipped_personal_paths(src: Path) -> list[dict[str, object]]:
+    from backend.uefn_plugins.personal_paths import find_personal_paths
+
+    return find_personal_paths(src, shipped_files(src))
+
+
 def _stage_backend_package(pkg_src: Path, staged: Path) -> tuple[list[tuple[Path, Path]], list[Path]]:
     """Copy the backend package into ``staged`` for Nuitka, minus tests and foreign code.
 
@@ -537,6 +558,12 @@ def build_plugin(
     pkg_src = src / entry
     if not (pkg_src / "__init__.py").is_file():
         raise CompileError(f"backend entry {entry!r} is not a package under {src}")
+    from backend.uefn_plugins.personal_paths import personal_path_message
+
+    personal = shipped_personal_paths(src)
+    if personal and release:
+        # A published plugin would hand every user its author's account name and folders.
+        raise CompileError(personal_path_message(personal))
 
     _progress(progress, 0.02, "Preparing build kit…")
     kit = ensure_build_kit(progress)
@@ -545,7 +572,7 @@ def build_plugin(
     esbuild = _kit_esbuild(kit)
 
     final_pyd_name = f"{mod_name}.v{verrank}.{PY_ABI}.pyd"
-    warnings: list[str] = []
+    warnings: list[str] = [personal_path_message(personal)] if personal else []
     minified: list[str] = []
     uncompiled: list[str] = []
 

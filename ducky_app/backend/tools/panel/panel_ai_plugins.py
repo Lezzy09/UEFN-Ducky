@@ -480,6 +480,62 @@ def edit_ai_plugin_file(plugin_id: str, path: str, old_string: str, new_string: 
     return result
 
 
+def _draft_target(plugin_id: str, path: str) -> tuple[str, Path, Path]:
+    """(plugin id, draft root, jailed target) for a file tool; raises ValueError."""
+    from backend.uefn_plugins.store import normalize_plugin_id
+
+    pid = normalize_plugin_id(plugin_id)
+    root = _draft_root(pid)
+    if not root.is_dir():
+        raise ValueError(f"draft not found: {pid}")
+    target = _resolve_jailed(root, path)
+    if target == root.resolve():
+        raise ValueError("that is the whole draft: use ducky_plugin_delete_draft")
+    if target.name == "plugin.json" and target.parent == root.resolve():
+        raise ValueError("plugin.json stays where it is: edit it instead")
+    return pid, root, target
+
+
+def move_ai_plugin_file(plugin_id: str, path: str, to: str) -> dict[str, Any]:
+    """Move or rename a file or folder inside a draft (development evidence to tests/, which
+    never ships). Teams could read, write and edit plugin files but not move them, so a
+    cleanup step left twenty files with a personal path in the shipped folders."""
+    try:
+        pid, root, source = _draft_target(plugin_id, path)
+        _, _, dest = _draft_target(plugin_id, to)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    if not source.exists():
+        return {"ok": False, "error": f"not found: {path}"}
+    if dest.exists():
+        return {"ok": False, "error": f"{to} already exists: move it to a new path"}
+    if dest.is_relative_to(source):
+        return {"ok": False, "error": "a folder can't move inside itself"}
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source), str(dest))
+    base = root.resolve()
+    return {"ok": True, "id": pid, "from": source.relative_to(base).as_posix(), "to": dest.relative_to(base).as_posix()}
+
+
+def delete_ai_plugin_file(plugin_id: str, path: str, *, recursive: bool = False) -> dict[str, Any]:
+    """Delete a file from a draft, or a whole folder with ``recursive``."""
+    try:
+        pid, root, target = _draft_target(plugin_id, path)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    if not target.exists():
+        return {"ok": False, "error": f"not found: {path}"}
+    rel = target.relative_to(root.resolve()).as_posix()
+    if target.is_dir():
+        if not recursive:
+            return {"ok": False, "error": f"{rel} is a folder: pass recursive=true to delete it and everything in it"}
+        count = sum(1 for p in target.rglob("*") if p.is_file())
+        shutil.rmtree(target)
+        return {"ok": True, "id": pid, "deleted": rel, "files": count}
+    target.unlink()
+    return {"ok": True, "id": pid, "deleted": rel, "files": 1}
+
+
 def validate_ai_plugin(plugin_id: str) -> dict[str, Any]:
     from backend.uefn_plugins.store import normalize_plugin_id, validate_plugin_skills
 
@@ -519,14 +575,21 @@ def validate_ai_plugin(plugin_id: str) -> dict[str, Any]:
 
     # The ai_plugins reference rules, each with how to fix it.
     errors.extend(lint_draft(root, manifest, pid))
+    from backend.uefn_plugins.compile import shipped_personal_paths
+    from backend.uefn_plugins.personal_paths import personal_path_message
+
+    personal = shipped_personal_paths(root)
+    # Not an error while building (installs keep working); publishing refuses it.
+    warnings = [personal_path_message(personal)] if personal else []
     if errors:
-        return {"ok": False, "id": pid, "errors": errors}
+        return {"ok": False, "id": pid, "errors": errors, **({"warnings": warnings} if warnings else {})}
     return {
         "ok": True,
         "id": pid,
         "label": str(manifest.get("label") or pid),
         "version": str(manifest.get("version") or ""),
         "skills": skill_ids,
+        **({"warnings": warnings} if warnings else {}),
     }
 
 
@@ -693,6 +756,21 @@ def ducky_plugin_edit_file(id: str, path: str, old_string: str, new_string: str,
     file unless replace_all) with new_string. Use it instead of rewriting a whole file with
     ducky_plugin_write_file; read the lines first with ducky_plugin_read_file(start_line, end_line)."""
     return tool_json(edit_ai_plugin_file(id, path, old_string, new_string, replace_all=replace_all), pretty=pretty)
+
+
+@mcp.tool()
+def ducky_plugin_move_file(id: str, path: str, to: str, pretty: bool = False) -> str:
+    """Move or rename a file or folder inside an AI plugin draft (both paths inside the draft;
+    the target must not exist). Move development evidence and check scripts under tests/:
+    tests never ship in a build."""
+    return tool_json(move_ai_plugin_file(id, path, to), pretty=pretty)
+
+
+@mcp.tool()
+def ducky_plugin_delete_file(id: str, path: str, recursive: bool = False, pretty: bool = False) -> str:
+    """Delete a file from an AI plugin draft; a folder needs recursive=true. plugin.json and the
+    draft itself can't be deleted here (ducky_plugin_delete_draft removes a whole draft)."""
+    return tool_json(delete_ai_plugin_file(id, path, recursive=recursive), pretty=pretty)
 
 
 @mcp.tool()

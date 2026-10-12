@@ -413,6 +413,8 @@ _PANEL_UI_TOOLS = frozenset(
         "ducky_plugin_list",
         "ducky_plugin_write_file",
         "ducky_plugin_edit_file",
+        "ducky_plugin_move_file",
+        "ducky_plugin_delete_file",
         "ducky_plugin_read_file",
         "ducky_plugin_validate",
         "ducky_plugin_install",

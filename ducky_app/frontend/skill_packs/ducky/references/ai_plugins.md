@@ -42,7 +42,9 @@ download carries a license, baked in at build time, free ones too. See
 2. **Edit only with** `ducky_plugin_edit_file` (change part of a file) /
    `ducky_plugin_write_file` (new files) / `ducky_plugin_read_file` (pass
    `start_line`/`end_line` for big files: read the part you change, not the whole file) /
-   `ducky_plugin_list(id=…)`.
+   `ducky_plugin_move_file` / `ducky_plugin_delete_file` / `ducky_plugin_list(id=…)`.
+   Development evidence and check scripts live under `tests/` (never shipped), and no
+   file may hold a personal path such as `C:/Users/<name>`: validate warns, publishing refuses.
 3. **Blend with Ducky's tools.** Before writing a feature, search for it:
    `ducky_find_tools(query)` (and `ducky_store_search` for whole plugins). When a
    tool exists (Meshy, Blender, UEFN import, workspace files, workflows, Store…),
