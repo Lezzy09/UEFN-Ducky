@@ -1056,7 +1056,9 @@ def _copy_pack_tree(src: Path, dest: Path) -> None:
     """Full replace (reset / first install). Prefer :func:`_merge_pack_tree` for updates."""
     if dest.exists():
         shutil.rmtree(dest)
-    shutil.copytree(src, dest)
+    # Another seeding pass in this process can create ``dest`` between the two steps
+    # (the release suite caught FileExistsError); every shipped file is still copied over.
+    shutil.copytree(src, dest, dirs_exist_ok=True)
 
 
 def _merge_pack_tree(src: Path, dest: Path, *, ref_origin: str = ORIGIN_SHIPPED) -> None:
