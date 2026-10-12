@@ -8,7 +8,7 @@ import type { AgentEvent } from "../types/panel";
  * wid (focus-<uuid>) for focus windows. NEVER a tab id — a focus window hosts
  * many tabs, and borrowing its birth-tab id misattributed ownership of every
  * other tab dragged into it. The focus param (birth tab) stays separate. */
-const _params = new URLSearchParams(window.location.search);
+const _params = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
 export const WINDOW_ID: string = _params.get("wid") || _params.get("focus") || "main";
 
 function registryTabIds(tabIds: string[]): string[] {
