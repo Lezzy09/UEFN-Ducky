@@ -49,6 +49,7 @@ def env_with_fresh_path(base: dict[str, str] | None = None) -> dict[str, str]:
     if merged:
         env["Path"] = merged
         env["PATH"] = merged
+    _add_ducky_ffmpeg(env)
     # Claude Code / OAuth: embedded ConPTY often fails to open the default
     # browser ("about" link). Point BROWSER at a real Chrome/Edge if present.
     if not (env.get("BROWSER") or "").strip():
@@ -56,6 +57,31 @@ def env_with_fresh_path(base: dict[str, str] | None = None) -> dict[str, str]:
         if browser:
             env["BROWSER"] = browser
     return env
+
+
+def _add_ducky_ffmpeg(env: dict[str, str]) -> None:
+    """Ducky's own ffmpeg for programs run in its terminals.
+
+    Oct 12 2026: a plugin's tests ran in a terminal, outside the app, and could not find the
+    encoder the app bundles, so no builder could make its test export. ``DUCKY_FFMPEG`` and
+    ``DUCKY_FFPROBE`` name the exact files; the folder goes last on PATH, so the person's own
+    ffmpeg still wins.
+    """
+    try:
+        from backend.agent.video.ffmpeg_install import binaries
+
+        pair = binaries()
+    except Exception:
+        pair = None
+    if not pair:
+        return
+    ffmpeg, ffprobe = (str(p) for p in pair)
+    env["DUCKY_FFMPEG"], env["DUCKY_FFPROBE"] = ffmpeg, ffprobe
+    folder = os.path.dirname(ffmpeg)
+    current = env.get("PATH") or env.get("Path") or ""
+    if folder.lower() not in (part.strip().lower() for part in current.split(os.pathsep)):
+        joined = f"{current}{os.pathsep}{folder}" if current else folder
+        env["Path"] = env["PATH"] = joined
 
 
 def _windows_browser_exe() -> str:
