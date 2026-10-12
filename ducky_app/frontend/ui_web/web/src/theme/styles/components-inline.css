@@ -2818,6 +2818,28 @@ html.window-maximized .window-resize-grip {
   cursor: default;
 }
 
+/* A gateway's "API" / coding-agent sections: folds with a divider, the vendor groups inside stay plain. */
+.model-selector-section > .model-selector-provider-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-dim);
+  border-top: 1px solid var(--border);
+  padding-top: 7px;
+  padding-bottom: 6px;
+}
+
+.model-selector-section:first-child > .model-selector-provider-label {
+  border-top: none;
+}
+
+.model-selector-section > .model-selector-provider-label:hover {
+  color: var(--fg);
+}
+
+.model-selector-section.is-collapsed {
+  margin-bottom: 0;
+}
+
 .model-selector-provider-label.is-static:hover {
   color: var(--muted);
 }

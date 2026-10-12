@@ -9,6 +9,7 @@ import { hasUsableModels } from "./ducky/duckyPickerIssue";
 import { onApiReady } from "../hooks/onApiReady";
 import { installPanelPushBus, subscribePanelPush } from "../hooks/usePanelPushBus";
 import { groupByVendor } from "./modelVendors";
+import { ModelSection } from "./ModelSection";
 import {
   buildPickerGateways,
   gatewayForSelection,
@@ -797,31 +798,54 @@ export function ModelSelector({
         ? selectedRowId
         : null;
     const catalogPending = !catalogRows && !isModelsCatalogReady();
+    const apiHasPick = !!apiSelected && viewApiRows.some((m) => m.id === apiSelected);
+    // "API", then one section per coding agent: every one an accordion the person can fold
+    // (an API list holds dozens of models), remembered per gateway. A search, or the picked
+    // model, keeps its section open.
     return (
       <>
-        {catalogPending && viewApiRows.length === 0 ? (
-          <div className="model-selector-empty">Loading models…</div>
-        ) : (
-          renderFlatOrVendor(viewApiRows, apiAgentId, apiSelected, {
-            hideEmpty: !catalogPending && gw.nestedAgents.length > 0,
-          })
+        {(viewApiRows.length > 0 || catalogPending || gw.nestedAgents.length === 0) && (
+          <ModelSection
+            storageKey={`${gw.id}:api`}
+            label="API"
+            forceOpen={!!query || apiHasPick}
+            meta={
+              catalogPending && viewApiRows.length === 0 ? (
+                <span className="model-selector-unavailable-tag">Loading…</span>
+              ) : (
+                <span className="model-selector-provider-count">{viewApiRows.length}</span>
+              )
+            }
+          >
+            {catalogPending && viewApiRows.length === 0 ? (
+              <div className="model-selector-empty">Loading models…</div>
+            ) : (
+              renderFlatOrVendor(viewApiRows, apiAgentId, apiSelected)
+            )}
+          </ModelSection>
         )}
         {gw.nestedAgents.map((agent) => {
           const rows = agentModels(agent.id);
           const filtered = query ? rows.filter((m) => m.name.toLowerCase().includes(query)) : rows;
           const unavailable = agentIsUnavailable(agent.id);
+          const hasPick = codingAgent === agent.id && filtered.some((m) => m.id === normalizedSelectedModel);
           return (
-            <div key={agent.id} className="model-selector-provider-group">
-              <div className="model-selector-provider-label is-static">
-                <span className="model-selector-provider-name">{agent.label}</span>
-                {agentsChecking ? (
+            <ModelSection
+              key={agent.id}
+              storageKey={`${gw.id}:${agent.id}`}
+              label={agent.label}
+              forceOpen={!!query || hasPick}
+              disabled={unavailable}
+              meta={
+                agentsChecking ? (
                   <span className="model-selector-unavailable-tag">Checking…</span>
                 ) : unavailable ? (
                   <span className="model-selector-unavailable-tag">Unavailable</span>
                 ) : (
                   <span className="model-selector-provider-count">{filtered.length}</span>
-                )}
-              </div>
+                )
+              }
+            >
               {filtered.map((m) =>
                 renderRow(m, {
                   agentId: agent.id,
@@ -832,7 +856,7 @@ export function ModelSelector({
               {filtered.length === 0 && !unavailable && !agentsChecking ? (
                 <div className="model-selector-empty">No models.</div>
               ) : null}
-            </div>
+            </ModelSection>
           );
         })}
       </>
