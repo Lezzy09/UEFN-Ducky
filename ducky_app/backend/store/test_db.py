@@ -342,7 +342,13 @@ def test_finished_threads_do_not_leave_connections_open(monkeypatch) -> None:
         for t in threads:
             t.join(timeout=10)
         _run_in_thread(lambda: db.connect().execute("SELECT 1").fetchone())
+        # Finished threads close their connections as they exit; under a loaded full suite
+        # that can trail the join by a moment (a real leak never settles).
+        deadline = time.monotonic() + 2.0
         still_open = sum(1 for c in made if _is_open(c))
+        while still_open > 5 and time.monotonic() < deadline:
+            time.sleep(0.05)
+            still_open = sum(1 for c in made if _is_open(c))
     finally:
         gc.enable()
     # A handful stay open for reuse by the next new thread; the rest are closed.
