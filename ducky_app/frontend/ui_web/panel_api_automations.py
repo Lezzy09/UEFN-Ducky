@@ -346,6 +346,37 @@ class PanelApiAutomationsMixin:
         error = check(str(expression or ""))
         return {"ok": not error, "error": error}
 
+    def consume_dropped_file_paths(self, names: list[str] | None = None) -> dict[str, Any]:
+        """Real paths of files just dropped from Explorer onto a plugin panel.
+
+        WebView2 hands pywebview the full path of every dropped file (``FilesDropped``
+        with ``CoreWebView2File`` objects) for drops anywhere in the window, including
+        plugin iframes, but only the top document's drop handler ever consumed them. A
+        panel that received a DOM ``drop`` passes the file names it saw; the matching
+        entries are returned once and removed, so a later drop elsewhere cannot reuse them.
+        """
+        from backend.automations.files import file_ref, kind_of, with_url
+
+        wanted = [str(n) for n in (names or []) if isinstance(n, str) and n]
+        try:
+            from webview.dom import _dnd_state
+        except Exception:
+            return {"ok": True, "files": []}
+        pending = list(_dnd_state.get("paths") or [])
+        taken: list[str] = []
+        remaining = []
+        for entry in pending:
+            try:
+                base, full = entry
+            except (TypeError, ValueError):
+                continue
+            if (not wanted or base in wanted) and full and full not in taken:
+                taken.append(str(full))
+            else:
+                remaining.append(entry)
+        _dnd_state["paths"] = remaining
+        return {"ok": True, "files": [with_url(file_ref(path, kind_of(path))) for path in taken]}
+
     def pick_workflow_files(self, accept: str = "any", multiple: bool = False) -> dict[str, Any]:
         """Input nodes: the Windows file picker, filtered to what the node takes."""
         from backend.automations.files import FILE_FILTERS, file_ref, kind_of, with_url

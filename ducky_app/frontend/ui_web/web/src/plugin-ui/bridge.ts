@@ -515,6 +515,20 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
     if (!res?.ok) throw new Error(res?.error || "The file picker could not open.");
     return { files: res.files ?? [] };
   },
+  /**
+   * Real paths of files the person just dropped from Explorer onto this panel:
+   * ``{names?: string[]}`` → ``{files: [{path, name, kind, url}]}``. The panel's own
+   * DOM ``drop`` only sees names; the host saw the native drop and holds the paths.
+   */
+  "files.dropped": async (_ctx, params) => {
+    if (isRemote()) return { files: [] };
+    const api = getApi();
+    if (!api?.consume_dropped_file_paths) return { files: [] };
+    const raw = params.names;
+    const names = Array.isArray(raw) ? raw.filter((n): n is string => typeof n === "string") : [];
+    const res = await api.consume_dropped_file_paths(names);
+    return { files: res?.files ?? [] };
+  },
   /** Call a panel RPC registered by the plugin via ``api.register_panel_rpc``. */
   "plugin.call": async (ctx, params) => {
     const api = getApi();
