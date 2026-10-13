@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -867,6 +868,8 @@ async def execute_tool(
             verify_evidence.record_result(name, arguments or {}, result.data)
         except Exception:
             pass
+        if is_epic_capture_call(name, arguments or {}):
+            _request_render_trim()
         return result
     if result.error == "Cancelled":
         return result
@@ -921,6 +924,32 @@ def resolve_invented_tool_name(name: str, known: set[str]) -> str | None:
 
 def _unknown_tool_message(name: str) -> str:
     return f"Unknown tool: {name}. {_INVENTED_TOOL_HINT}"
+
+
+def is_epic_capture_call(name: str, arguments: dict[str, Any]) -> bool:
+    """True for a viewport capture made through Epic's MCP (``unreal__call_tool`` on
+    ``EditorAppToolset.CaptureViewport``). Such a capture never passes through Ducky's
+    listener, which otherwise schedules the redraw burst that lets the editor free the
+    ~700 MB of render targets each capture pins (see listener/render_trim.py)."""
+    tool = str(name or "").strip().lower()
+    if not tool.endswith("call_tool") or "unreal" not in tool:
+        return False
+    target = str((arguments or {}).get("tool_name") or "").strip()
+    return target.rsplit(".", 1)[-1].lower() == "captureviewport"
+
+
+def _request_render_trim() -> None:
+    """Ask the listener for a redraw burst; fire-and-forget, nothing if offline."""
+
+    def _go() -> None:
+        try:
+            from backend.bridge import send_command
+
+            send_command("render_trim", {}, timeout=5.0)
+        except Exception:
+            pass
+
+    threading.Thread(target=_go, name="render-trim", daemon=True).start()
 
 
 async def _execute_tool_inner(

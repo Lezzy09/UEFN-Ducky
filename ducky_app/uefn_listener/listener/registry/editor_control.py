@@ -152,9 +152,21 @@ def get_editor_stats() -> dict:
     return stats
 
 
+def render_trim(ticks: int = 0) -> dict:
+    """Redraw the level viewports for a burst so the render-target pool can free
+    what an off-screen render left behind (the host calls this after a capture
+    that went through Epic's MCP instead of this listener)."""
+    from listener import render_trim as _trim
+
+    n = int(ticks) if int(ticks or 0) > 0 else _trim.TRIM_TICKS
+    _trim.request_trim(n)
+    return {"ticks": n, "pending": _trim.pending()}
+
+
 register("exec_console_command")(exec_console_command)
 register("save_all_dirty")(save_all_dirty)
 register("take_high_res_screenshot")(take_high_res_screenshot)
+register("render_trim")(render_trim)
 def move_player_pawn(
     label: str = "",
     x: float | None = None,
