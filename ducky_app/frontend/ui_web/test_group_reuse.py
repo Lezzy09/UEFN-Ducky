@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 from types import SimpleNamespace
 
 import frontend.ui_web.panel_api as pa
@@ -75,7 +76,8 @@ def test_a_just_finished_member_is_reused_once_its_thread_ends(monkeypatch):
     assert out["reused"] is True and out["member"]["member_conv_id"] == "m1"
 
 
-def test_busy_member_gets_a_numbered_copy_in_the_same_group(monkeypatch):
+@pytest.mark.parametrize("busy, excluded", [(True, ""), (False, "m1")])
+def test_busy_member_or_caller_gets_a_numbered_copy(monkeypatch, busy, excluded):
     member = {
         "member_conv_id": "m1",
         "profile_id": "verse-coder",
@@ -85,7 +87,8 @@ def test_busy_member_gets_a_numbered_copy_in_the_same_group(monkeypatch):
     group = SimpleNamespace(id="hub", is_group=True, leader_conv_id="m1", group_members=[member], folder_id="f1")
     monkeypatch.setattr("frontend.agent_profiles.get_agent_profile", lambda pid: _PROFILE)
     monkeypatch.setattr(pa, "load_conversation", lambda cid, *a, **k: group if cid == "hub" else SimpleNamespace(id=cid))
-    monkeypatch.setattr("frontend.ui_web.agent_modes.is_agent_running", lambda cid: True)
+    monkeypatch.setattr("frontend.ui_web.agent_modes.is_agent_running", lambda cid: busy)
+    monkeypatch.setattr("frontend.ui_web.agent_modes.wait_for_idle", lambda *a: False)
     seated: dict[str, str] = {}
 
     def invite(group_id, profile_id, model="", write_allowed=None, name="", for_agent=False):
@@ -96,7 +99,7 @@ def test_busy_member_gets_a_numbered_copy_in_the_same_group(monkeypatch):
     api = _api()
     api.group_invite = invite  # type: ignore[method-assign]
 
-    out = api.group_seat_profile("hub", "verse-coder")
+    out = api.group_seat_profile("hub", "verse-coder", exclude_conv_id=excluded)
 
     assert seated == {"group_id": "hub", "name": "Verse Coder 2"}
     assert out["reused"] is False and out["member"]["member_conv_id"] == "m2"
@@ -119,12 +122,13 @@ def test_spawn_from_a_group_member_joins_that_group(monkeypatch):
     seated: dict[str, str] = {}
 
     class Api:
-        def group_seat_profile(self, group_id, profile_id, model="", write_allowed=None, for_agent=False):
+        def group_seat_profile(self, group_id, profile_id, model="", write_allowed=None, for_agent=False, exclude_conv_id=""):
             seated["group_id"] = group_id
+            assert exclude_conv_id == "mem"
             return {
                 "ok": True,
                 "member": {
-                    "member_conv_id": "mem",
+                    "member_conv_id": "worker",
                     "name": "Verse Coder",
                     "ducky_name": "Verse Coder",
                     "coding_agent": "ducky",
@@ -141,4 +145,4 @@ def test_spawn_from_a_group_member_joins_that_group(monkeypatch):
     data = json.loads(ducky_panel.ducky_spawn_chat("hello", ducky="Verse Coder", sender="mem"))
 
     assert seated["group_id"] == "hub"
-    assert data["group_id"] == "hub" and data["conv_id"] == "mem"
+    assert data["group_id"] == "hub" and data["conv_id"] == "worker"

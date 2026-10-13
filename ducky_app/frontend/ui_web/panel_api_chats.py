@@ -511,6 +511,7 @@ class PanelApiChatsMixin:
         model: str = "",
         write_allowed: list[str] | None = None,
         for_agent: bool = False,
+        exclude_conv_id: str = "",
     ) -> dict[str, Any]:
         """Seat a ducky in a group, reusing its idle chat instead of a new group.
 
@@ -533,7 +534,9 @@ class PanelApiChatsMixin:
         same = [m for m in members if m.get("profile_id") == pid and not m.get("is_group")]
         for member in same:
             cid = str(member.get("member_conv_id") or "").strip()
-            if not cid or _pa.load_conversation(cid) is None:
+            # The MCP bridge cannot see the caller's panel-process session.
+            # Never reuse the requesting chat as its own worker.
+            if not cid or cid == exclude_conv_id or _pa.load_conversation(cid) is None:
                 continue
             # A finished turn's thread stays alive for a moment after the reply.
             # That is not a parallel branch; wait it out before making a copy.
