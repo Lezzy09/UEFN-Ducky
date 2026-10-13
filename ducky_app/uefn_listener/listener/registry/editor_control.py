@@ -84,6 +84,11 @@ def take_high_res_screenshot(width: int = 1280, height: int = 720, filename: str
     """
     del filename  # host names the chat-folder file
     raw = _capture_viewport_png()
+    # The capture's render targets stay pinned until the viewport draws again
+    # (editor viewports are not realtime): ~700 MB per capture, see render_trim.
+    from listener import render_trim
+
+    render_trim.request_trim()
     return {
         "width": int(width),
         "height": int(height),

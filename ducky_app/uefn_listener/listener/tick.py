@@ -161,6 +161,7 @@ def register_heavy(name: str) -> None:
         _HEAVY_COMMANDS.add(cmd)
 
 
+from listener import render_trim
 from listener.dispatch import dispatch
 from listener.logutil import log_msg
 from listener.save_coalesce import flush_pending_save
@@ -323,6 +324,12 @@ def tick_handler(delta_time: float) -> None:
         processed += 1
 
     flush_pending_save()
+    if heavy_processed:
+        # Heavy commands render off-screen (captures, thumbnails, material
+        # previews); a non-realtime viewport would otherwise never let the
+        # render-target pool release what they allocated.
+        render_trim.request_trim()
+    render_trim.tick()
 
     now = time.time()
     with responses_lock:
