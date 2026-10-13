@@ -69,6 +69,7 @@ _PUBLIC_METHODS = frozenset({
     'compile_verse_project',
     'compress_chat_context',
     'connect_verse_workflow',
+    'consume_dropped_file_paths',
     'consume_pending_deep_links',
     'consume_pending_open_files',
     'continue_interrupted',
