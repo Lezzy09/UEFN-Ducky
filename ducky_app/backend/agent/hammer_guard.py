@@ -1,10 +1,12 @@
 """Hammer guard: stop the agent re-issuing a call that keeps failing identically.
 
-Tracks the last failure per conversation (falls back to a per-process slot when
-no conversation is bound). On the THIRD consecutive failure of the same tool
-with the same normalized error, the dispatcher swaps the raw error for a STOP
-payload that includes the tool's input schema. Any success, or a different
-error, resets the streak.
+Tracks the last failure per tool per conversation (falls back to a per-process
+slot when no conversation is bound). On the THIRD consecutive failure of the same
+tool with the same normalized error, the dispatcher swaps the raw error for a STOP
+payload that includes the tool's input schema. A success of THAT tool, or a
+different error from it, resets its streak. Other tools' calls in between do not:
+a model that alternates a failing sync with a successful status read used to keep
+the streak at 1 forever.
 """
 
 from __future__ import annotations
@@ -23,8 +25,8 @@ STOP_TEXT = (
 
 _conv_id: ContextVar[str] = ContextVar("ducky_hammer_conv_id", default="")
 _lock = threading.Lock()
-# conv_id -> (streak_key, count)
-_streaks: dict[str, tuple[str, int]] = {}
+# conv_id -> tool_name -> (streak_key, count)
+_streaks: dict[str, dict[str, tuple[str, int]]] = {}
 
 _DIGITS_RE = re.compile(r"\d+")
 _QUOTED_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
@@ -56,19 +58,26 @@ def streak_key(tool_name: str, error: str) -> str:
     return f"{tool_name}\x00{normalize_error(error)}"
 
 
-def note_success(tool_name: str) -> None:  # noqa: ARG001 — any success resets the streak
+def note_success(tool_name: str) -> None:
+    """A success of this tool ends its own streak; other tools keep theirs."""
     with _lock:
-        _streaks.pop(_conv_id.get(), None)
+        per_tool = _streaks.get(_conv_id.get())
+        if per_tool is not None:
+            per_tool.pop(str(tool_name or ""), None)
+            if not per_tool:
+                _streaks.pop(_conv_id.get(), None)
 
 
 def note_failure(tool_name: str, error: str) -> int:
-    """Record a failure; return the consecutive-identical count (1-based)."""
+    """Record a failure; return the consecutive-identical count (1-based) for this tool."""
     key = streak_key(tool_name, error)
     conv = _conv_id.get()
+    tool = str(tool_name or "")
     with _lock:
-        prev_key, prev_count = _streaks.get(conv, ("", 0))
+        per_tool = _streaks.setdefault(conv, {})
+        prev_key, prev_count = per_tool.get(tool, ("", 0))
         count = prev_count + 1 if prev_key == key else 1
-        _streaks[conv] = (key, count)
+        per_tool[tool] = (key, count)
     return count
 
 

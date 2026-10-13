@@ -183,24 +183,27 @@ def _refresh_project_cache() -> None:
     ttl = PROJECT_CACHE_REFRESH_SEC if cache.get("project_name") else 5.0
     if age < ttl:
         return
-    project_name = ""
-    content_root = ""
+    from listener.project_paths import island_directory, mount_from_world
+
+    # project_name is the island's content mount (its root plugin name — a GUID for
+    # some islands), empty for a non-island world (hub, unsaved level). island_dir is
+    # the island's folder on disk, so the panel can match by path when the mount is
+    # not the folder name. project_dir stays what it always was: the engine's own
+    # FortniteGame project, kept for old clients.
+    project_name = mount_from_world()
+    content_root = f"/{project_name}/" if project_name else ""
     project_dir = ""
     try:
-        world = unreal.EditorLevelLibrary.get_editor_world()
-        if world:
-            parts = world.get_path_name().split("/")
-            if len(parts) >= 2:
-                project_name = parts[1]
-                content_root = f"/{project_name}/"
         project_dir = str(unreal.Paths.project_dir())
     except Exception:
         pass
+    island_dir = island_directory()
     unreal._mcp_project_cache = {
         "at": now,
         "project_name": project_name,
         "project_dir": project_dir,
         "content_root": content_root,
+        "island_dir": island_dir,
     }
 
 

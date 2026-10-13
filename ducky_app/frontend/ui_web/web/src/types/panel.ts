@@ -1042,6 +1042,8 @@ export interface ListenerStatus {
   uefn_project_dir?: string;
   uefn_project_name?: string;
   project_match?: boolean;
+  /** The selected island's content mount, the other side of project_match. */
+  selected_project_mount?: string;
   port?: number;
   epic_mcp_online?: boolean;
   epic_mcp_reason?: string;
@@ -1074,6 +1076,10 @@ export interface ProjectInfo {
   kind?: ProjectKind;
   /** Content pane root: "Content" on an island, "." for a folder project. */
   content_root?: string;
+  /** The island's content mount (its root plugin name) — what UEFN reports as the live
+   * project. Usually the folder name, but UEFN names some root plugins by a GUID. Empty
+   * for a folder project. */
+  mount?: string;
 }
 
 export interface ProjectFolderInspection {

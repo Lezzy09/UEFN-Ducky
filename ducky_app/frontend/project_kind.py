@@ -15,6 +15,7 @@ Destructive island steps never trust the stored kind: they check
 
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 
@@ -136,6 +137,157 @@ def is_saved_folder_project(root: Path | str) -> bool:
 
 def content_root_for(kind: str) -> str:
     return FOLDER_CONTENT_ROOT if kind == FOLDER else UEFN_CONTENT_ROOT
+
+
+# --------------------------------------------------------------------------- identity
+#
+# UEFN mounts an island's content under its ROOT PLUGIN name (``/<Plugin>/...``), and
+# that is what the editor reports as the live project name. The plugin is usually named
+# after the folder, but UEFN also names it by a module GUID (folder ``MyProjectBJJJ``,
+# mount ``86ef2167-…``). The folder name alone therefore cannot identify an island; the
+# names below are everything the island is called, read from its own descriptors.
+
+# Mounts the editor uses for worlds that are not an island (unsaved level, Epic map).
+RESERVED_MOUNTS = frozenset({"temp", "game", "engine", "script"})
+
+_identity_cache: dict[str, tuple[tuple[object, ...], tuple[str, ...]]] = {}
+
+
+def is_reserved_mount(name: str) -> bool:
+    return str(name or "").strip().casefold() in RESERVED_MOUNTS
+
+
+def read_uefnproject(root: Path | str) -> dict:
+    """The island's ``*.uefnproject`` JSON, or ``{}`` when missing or unreadable."""
+    try:
+        base = Path(root)
+        matches = sorted(base.glob("*.uefnproject"))
+        if not matches:
+            return {}
+        data = json.loads(matches[0].read_text(encoding="utf-8-sig"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+
+
+def _root_plugin_names(data: dict) -> list[str]:
+    """Plugin names from a ``.uefnproject``, the root plugin first."""
+    plugins = data.get("plugins")
+    if not isinstance(plugins, list):
+        return []
+    roots: list[str] = []
+    others: list[str] = []
+    for entry in plugins:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            continue
+        (roots if entry.get("bIsRoot") else others).append(name)
+    return roots + others
+
+
+def _uplugin_stems(root: Path) -> list[str]:
+    """``<root>/*.uplugin`` (flat layout) then ``<root>/Plugins/*/*.uplugin`` (old layout)."""
+    stems: list[str] = []
+    try:
+        for pattern in ("*.uplugin", "Plugins/*/*.uplugin"):
+            for p in sorted(root.glob(pattern)):
+                if p.is_file() and p.stem:
+                    stems.append(p.stem)
+    except OSError:
+        pass
+    return stems
+
+
+def _identity_signature(root: Path) -> tuple[object, ...]:
+    """Cheap change detector: the descriptor file's mtime and size."""
+    try:
+        matches = sorted(root.glob("*.uefnproject"))
+        if not matches:
+            return ("none",)
+        st = matches[0].stat()
+        return (str(matches[0]), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return ("err",)
+
+
+def island_identity_names(root: Path | str) -> list[str]:
+    """Every name the island answers to, most specific first.
+
+    Order: root plugin (the content mount), other plugins, ``.uplugin`` stems, the
+    ``.uefnproject`` title, the folder name. Empty for an empty root. A folder project
+    just yields its folder name. Results are cached per root until its ``.uefnproject``
+    changes, so status polls do not re-read the descriptor every few seconds.
+    """
+    raw = str(root or "").strip()
+    if not raw:
+        return []
+    try:
+        base = project_root_path(raw)
+    except (OSError, ValueError):
+        base = Path(raw)
+    key = _key(base)
+    sig = _identity_signature(base)
+    with _cache_lock:
+        cached = _identity_cache.get(key)
+        if cached and cached[0] == sig:
+            return list(cached[1])
+    names: list[str] = []
+    data = read_uefnproject(base)
+    names.extend(_root_plugin_names(data))
+    names.extend(_uplugin_stems(base))
+    title = str(data.get("title") or "").strip()
+    if title:
+        names.append(title)
+    if base.name:
+        names.append(base.name)
+    seen: set[str] = set()
+    out: list[str] = []
+    for name in names:
+        folded = name.casefold()
+        if folded in seen:
+            continue
+        seen.add(folded)
+        out.append(name)
+    with _cache_lock:
+        _identity_cache[key] = (sig, tuple(out))
+    return out
+
+
+def island_mount_name(root: Path | str) -> str:
+    """The island's content mount (root plugin name); the folder name when no descriptor
+    says otherwise; empty for an empty root."""
+    raw = str(root or "").strip()
+    if not raw:
+        return ""
+    try:
+        base = project_root_path(raw)
+    except (OSError, ValueError):
+        base = Path(raw)
+    plugins = _root_plugin_names(read_uefnproject(base))
+    if plugins:
+        return plugins[0]
+    stems = _uplugin_stems(base)
+    if stems:
+        return stems[0]
+    return base.name
+
+
+def is_island_identity(root: Path | str, name: str) -> bool:
+    """True when ``name`` (the editor's live mount) is one of the island's names."""
+    needle = str(name or "").strip().casefold()
+    if not needle:
+        return False
+    return any(n.casefold() == needle for n in island_identity_names(root))
+
+
+def forget_cached_identity(root: Path | str | None = None) -> None:
+    with _cache_lock:
+        if root is None:
+            _identity_cache.clear()
+        else:
+            _identity_cache.pop(_key(root), None)
 
 
 def resolve_project_root(selection: Path | str) -> tuple[Path, str]:

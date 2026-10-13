@@ -67,6 +67,13 @@ def _resolve_project_root_arg(project: str) -> str:
             return path
         if str(p.get("name") or "").strip().lower() == low or str(p.get("slug") or "").lower() == low:
             return path
+    # The live UEFN name is the island's content mount (root plugin), which can be a
+    # GUID no folder is called: match it against each island's own descriptors.
+    from frontend.project_kind import is_island_identity
+
+    for p in projects:
+        if p.get("kind") == "uefn" and is_island_identity(str(p.get("path") or ""), key):
+            return str(p.get("path") or "")
     names = ", ".join(str(p.get("name") or "") for p in projects) or "(none)"
     raise ValueError(
         f"Unknown project {project!r}. Known projects: {names} — see ducky_list_projects."
@@ -417,12 +424,19 @@ def ducky_restart_uefn(project: str = "", timeout: float = 180, pretty: bool = F
 def ducky_wait_uefn_ready(timeout: float = 180, project: str = "", pretty: bool = False) -> str:
     """Wait until the UEFN listener is online and the open island matches.
 
-    ``project`` empty uses the panel's current island. Polls GET health (no
-    editor command). Returns project_name when ready.
+    ``project`` empty uses the panel's current island; otherwise a folder path, a
+    ``.uefnproject`` path, or a recent project's name / mount. An unknown name fails at
+    once instead of polling for the whole timeout. Polls GET health (no editor
+    command). Returns project_name when ready.
     """
+    import os
+
     from frontend.window_view import wait_uefn_ready
 
-    return tool_json(wait_uefn_ready(timeout=timeout, root=project or None), pretty=pretty)
+    root = (project or "").strip()
+    if root and not os.path.exists(root):
+        root = _resolve_project_root_arg(root)
+    return tool_json(wait_uefn_ready(timeout=timeout, root=root or None), pretty=pretty)
 
 
 @mcp.tool()
@@ -431,38 +445,68 @@ def ducky_sync_project_to_uefn(pretty: bool = False) -> str:
 
     Reads the live editor's project via the listener and switches the panel to the matching
     recent project, so file/workspace tools and the live UEFN map are the same project. Use
-    this when `ducky_get_status` reports `project_match: false`. Requires UEFN online; errors
-    if the open project isn't in the panel's recent list (add it via the header dropdown first).
+    this ONCE when `ducky_get_status` reports `project_match: false`. UEFN names the live
+    project by its content mount (the island's root plugin, sometimes a GUID), so the match
+    is made against each recent island's own descriptors, not its folder name.
+    `already_synced` means the panel project IS the open island: continue working. On an
+    error, do not retry, re-check status or switch projects: call `ducky_ask_user` once with
+    the two options in the error text and end the turn.
     """
     from backend.bridge import post_command_to_listener
+    from backend.bridge.status import _normalize_project_path, _same_or_nested
+    from frontend.project_kind import is_island_identity, is_reserved_mount
     from frontend.ui_web.project_switch import (
         get_panel_project_info,
-        resolve_panel_project_ref,
         switch_panel_project,
     )
 
     info = post_command_to_listener(PANEL_LISTENER_PORT, "get_project_info", {}, timeout=5.0)
     live_name = str(info.get("project_name") or "").strip() if isinstance(info, dict) else ""
+    if is_reserved_mount(live_name):
+        live_name = ""
     if not live_name:
-        raise ValueError("Could not read the live UEFN project — is a map open in UEFN?")
+        raise ValueError(
+            "Could not read the live UEFN project — is an island map open in UEFN? "
+            "Ask the user to open the island (ducky_ask_user), then end the turn."
+        )
+    island_dir = _normalize_project_path(str(info.get("island_dir") or "")) if isinstance(info, dict) else ""
+
+    def _is_live(path: str) -> bool:
+        if not path:
+            return False
+        if island_dir and _same_or_nested(island_dir, _normalize_project_path(path)):
+            return True
+        return is_island_identity(path, live_name)
 
     current = get_panel_project_info()
-    if str(current.get("name", "")).casefold() == live_name.casefold():
+    if current.get("kind") == "uefn" and _is_live(str(current.get("path", ""))):
         return tool_json(
             {"status": "already_synced", "project": current, "uefn_project": live_name},
             pretty=pretty,
         )
 
-    try:
-        resolved = resolve_panel_project_ref(name=live_name)
-    except ValueError:
-        raise ValueError(
-            f"UEFN has {live_name!r} open, but it isn't in the panel's recent projects. "
-            "Add it via the header project dropdown (Add project…), then retry."
-        )
-    new_info = switch_panel_project(path=resolved, push_ui=True)
-    return tool_json(
-        {"status": "switched", "project": new_info, "uefn_project": live_name}, pretty=pretty
+    projects = list_panel_projects()
+    for item in projects:
+        if item.get("kind") == "uefn" and _is_live(str(item.get("path", ""))):
+            new_info = switch_panel_project(path=str(item["path"]), push_ui=True)
+            return tool_json(
+                {"status": "switched", "project": new_info, "uefn_project": live_name},
+                pretty=pretty,
+            )
+
+    checked = ", ".join(
+        f"{item.get('name')} (mount {item.get('mount') or item.get('name')})"
+        for item in projects
+        if item.get("kind") == "uefn"
+    ) or "none"
+    panel_name = str(current.get("name") or "the panel project")
+    raise ValueError(
+        f"UEFN has island mount {live_name!r} open. None of the panel's recent islands "
+        f"declares that mount in its .uefnproject (checked: {checked}). Needs the user: "
+        f"call ducky_ask_user once with two options — open {panel_name} in UEFN, or add the "
+        f"island folder UEFN has open via Add project… in the header dropdown — then end the "
+        "turn. Do not call ducky_sync_project_to_uefn, ducky_set_project, ducky_list_projects "
+        "or ducky_get_status again this turn; nothing changes until the user acts."
     )
 
 
@@ -1472,7 +1516,8 @@ def ducky_spawn_chat(
     if write_allowed is not None:
         _require_lane_authority(hub_id)
     seated = _panel_api().group_seat_profile(
-        hub_id, str(profile.get("id") or "").strip(), write_allowed=write_allowed, for_agent=True
+        hub_id, str(profile.get("id") or "").strip(), write_allowed=write_allowed, for_agent=True,
+        exclude_conv_id=caller,
     )
     if not seated.get("ok"):
         raise ValueError(str(seated.get("error") or "group_invite failed"))

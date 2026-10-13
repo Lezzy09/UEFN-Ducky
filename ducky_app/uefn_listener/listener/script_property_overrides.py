@@ -86,14 +86,14 @@ def _project_paths() -> tuple[str, str]:
             return pkg_name, pkg_name.rsplit("/", 1)[-1]
     except Exception:
         pass
-    try:
-        project_file = str(unreal.Paths.get_project_file_path())
-        name = project_file.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].rsplit(".", 1)[0]
-        if name:
-            return f"/{name}/{name}", name
-    except Exception:
-        pass
-    return "/MCPTest/MCPTest", "MCPTest"
+    # No editor world: the island's content mount from its descriptor. Never the engine
+    # project file — inside UEFN that is FortniteGame.uproject, not the island.
+    from listener.project_paths import content_root
+
+    mount = content_root().strip("/")
+    if mount:
+        return f"/{mount}/{mount}", mount
+    raise RuntimeError("No island map is open — open the island in UEFN before wiring Verse refs.")
 
 
 def _short_actor_path(actor: unreal.Actor) -> str:
@@ -192,9 +192,11 @@ def _normalize_texture_object_path(texture_spec: str) -> str:
                 f"/YourProject/Textures/{name}.{name} or use search_assets."
             )
         if len(matches) > 1:
-            project_file = str(unreal.Paths.get_project_file_path())
-            project_name = project_file.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-            project_name = project_name.rsplit(".", 1)[0]
+            from listener.project_paths import content_root
+
+            # Prefer the island's own texture over gallery copies; the island is its
+            # content mount, not the engine project file (FortniteGame).
+            project_name = content_root().strip("/")
             preferred = f"/{project_name}/Textures/{name}."
             matches.sort(
                 key=lambda p: (

@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -37,13 +38,32 @@ def _claim_python_sweep(project_root: str, now: float) -> bool:
         return True
 
 
-@dataclass
+@dataclass(eq=False)  # identity-hashed: lives in a WeakSet below
 class ListenerStatusState:
     """Mutable state for wedged detection and project-info cache."""
 
     ping_fail_streak: int = 0
     project_cache: dict[str, Any] | None = None
     python_quarantined: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        with _states_lock:
+            _states.add(self)
+
+
+# Every live status state in the process, so a project switch can drop each one's cached
+# island (the MCP tools, the panel API and the agent loop each keep their own). Weak:
+# agent turns make a throwaway state per call and must not pile up here.
+_states_lock = threading.Lock()
+_states: weakref.WeakSet[ListenerStatusState] = weakref.WeakSet()
+
+
+def forget_listener_project_caches() -> None:
+    """Drop every cached live-project answer (called on a panel project switch)."""
+    with _states_lock:
+        for st in list(_states):
+            st.project_cache = None
+            st.ping_fail_streak = 0
 
 
 def _sec_to_uptime(sec: float) -> str:
@@ -91,17 +111,41 @@ def ping_listener(
     return False, last
 
 
+def _same_or_nested(a: str, b: str) -> bool:
+    """True when one normalized path is the other or lies inside it (old islands keep
+    the plugin under ``<root>/Plugins/<Name>``, so either side may be the deeper one)."""
+    if not a or not b:
+        return False
+    pa = os.path.normcase(os.path.normpath(a))
+    pb = os.path.normcase(os.path.normpath(b))
+    if pa == pb:
+        return True
+    return pa.startswith(pb + os.sep) or pb.startswith(pa + os.sep)
+
+
 def _project_from_health(
     health: dict[str, Any],
     *,
     selected_project_root: str = "",
 ) -> tuple[str, str, bool]:
-    """Derive (uefn_project_dir, uefn_project_name, project_match) from GET health."""
-    from frontend.ui_web.project_chats import project_display_name
+    """Derive (uefn_project_dir, uefn_project_name, project_match) from GET health.
+
+    The listener names the live island by its content mount, which is the island's
+    ROOT PLUGIN name, not its folder: UEFN names that plugin by a module GUID for
+    some islands (folder ``MyProjectBJJJ``, mount ``86ef2167-…``). So the match is
+    decided against every name the selected island declares in its own descriptors
+    (``.uefnproject`` plugins/title, ``.uplugin`` stems, folder), and first by path
+    when the listener reports the island's folder (``island_dir``). A reserved mount
+    (``Temp``, ``Game``, ``Engine``) means no island map is open, never a mismatch.
+    """
+    from frontend.project_kind import is_island_identity, is_reserved_mount
 
     uefn_project_name = str(health.get("project_name") or "").strip()
+    if is_reserved_mount(uefn_project_name):
+        uefn_project_name = ""
     raw_dir = str(health.get("project_dir") or "").strip()
     uefn_project_dir = _normalize_project_path(raw_dir) if raw_dir else ""
+    island_dir = str(health.get("island_dir") or "").strip()
     project_match = True
     selected = _normalize_project_path(selected_project_root)
     if uefn_project_name and selected:
@@ -109,8 +153,8 @@ def _project_from_health(
 
         # A folder project is not an island, so UEFN having one open is no mismatch.
         if not is_folder_project(selected):
-            selected_name = project_display_name(selected)
-            project_match = uefn_project_name.casefold() == selected_name.casefold()
+            by_path = _same_or_nested(_normalize_project_path(island_dir), selected) if island_dir else False
+            project_match = by_path or is_island_identity(selected, uefn_project_name)
     return uefn_project_dir, uefn_project_name, project_match
 
 
@@ -127,7 +171,14 @@ def listener_project_fields(
     get_project_info for status — that used to hammer the Slate tick.
     """
     now = time.time()
-    if cache and now - float(cache.get("at", 0)) < cache_ttl_sec:
+    selected = _normalize_project_path(selected_project_root)
+    # A cached answer is only good for the project it was computed against: after a
+    # project switch the old match flag must not survive for the TTL.
+    if (
+        cache
+        and now - float(cache.get("at", 0)) < cache_ttl_sec
+        and str(cache.get("selected_root", "")) == selected
+    ):
         return (
             str(cache.get("uefn_project_dir", "")),
             str(cache.get("uefn_project_name", "")),
@@ -147,6 +198,7 @@ def listener_project_fields(
 
     updated = {
         "at": now,
+        "selected_root": selected,
         "uefn_project_dir": uefn_project_dir,
         "uefn_project_name": uefn_project_name,
         "project_match": project_match,
@@ -259,6 +311,7 @@ def fetch_listener_status(
     uefn_project_dir = ""
     uefn_project_name = ""
     project_match = True
+    selected_norm = _normalize_project_path(selected_project_root)
     if online and isinstance(health, dict):
         # Prefer live GET fields; cache for panel consumers that call separately.
         uefn_project_dir, uefn_project_name, project_match = _project_from_health(
@@ -268,14 +321,27 @@ def fetch_listener_status(
         if uefn_project_name or uefn_project_dir:
             st.project_cache = {
                 "at": time.time(),
+                "selected_root": selected_norm,
                 "uefn_project_dir": uefn_project_dir,
                 "uefn_project_name": uefn_project_name,
                 "project_match": project_match,
             }
-        elif st.project_cache:
+        elif st.project_cache and str(st.project_cache.get("selected_root", "")) == selected_norm:
             uefn_project_dir = str(st.project_cache.get("uefn_project_dir", ""))
             uefn_project_name = str(st.project_cache.get("uefn_project_name", ""))
             project_match = bool(st.project_cache.get("project_match", True))
+
+    # Both sides of the comparison, so an agent (or a person reading ducky_get_status)
+    # can see that mount "86ef2167-…" IS the selected island rather than guessing.
+    selected_project_mount = ""
+    if selected_norm:
+        try:
+            from frontend.project_kind import is_folder_project, island_mount_name
+
+            if not is_folder_project(selected_norm):
+                selected_project_mount = island_mount_name(selected_norm)
+        except Exception:
+            selected_project_mount = ""
 
     # Race is only "active" when Toolsets+Python are on AND the listener failed to start.
     coexistence = bool(beta.get("python_and_toolsets"))
@@ -313,6 +379,7 @@ def fetch_listener_status(
         "uefn_project_dir": uefn_project_dir,
         "uefn_project_name": uefn_project_name,
         "project_match": project_match,
+        "selected_project_mount": selected_project_mount,
         "port": port,
         "tick_age_sec": tick_age,
         "current_command": current_command,

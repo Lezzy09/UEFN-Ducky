@@ -151,15 +151,37 @@ def _project_root() -> str:
     return ""
 
 
+def _saved_verse_names(project_name: str = "") -> list[str]:
+    """Names UEFN may have used for ``Saved/VerseProject/<name>``: the island's content
+    mount (its root plugin, a GUID for some islands) first, then the folder name."""
+    if project_name:
+        return [project_name]
+    names: list[str] = []
+    root = _project_root()
+    if root:
+        try:
+            from frontend.project_kind import island_mount_name
+
+            mount = island_mount_name(root)
+            if mount:
+                names.append(mount)
+        except Exception:
+            pass
+    folder = _project_name()
+    if folder and folder.casefold() not in {n.casefold() for n in names}:
+        names.append(folder)
+    return names
+
+
 def _verse_project_dir(project_name: str = "") -> str:
-    name = project_name or _project_name()
-    if not name:
-        return ""
     base = os.environ.get("LOCALAPPDATA") or os.environ.get("USERPROFILE") or ""
     if not base:
         return ""
-    path = os.path.join(base, "UnrealEditorFortnite", "Saved", "VerseProject", name)
-    return path if os.path.isdir(path) else ""
+    for name in _saved_verse_names(project_name):
+        path = os.path.join(base, "UnrealEditorFortnite", "Saved", "VerseProject", name)
+        if os.path.isdir(path):
+            return path
+    return ""
 
 
 def discover_digest_files(

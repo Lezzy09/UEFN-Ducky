@@ -57,3 +57,40 @@ def test_illegal_game_material_is_refused():
         raise AssertionError("expected ValueError")
     assert mod.require_island_ref("/Game/Creative/Materials/M_Sidewalk", root="/Proj")
     assert mod.require_island_ref("/Proj/Materials/MI_Sidewalk", root="/Proj") == "/Proj/Materials/MI_Sidewalk"
+
+
+# --------------------------------------------------------------------------- island mount
+
+
+def test_mount_from_world_path_skips_reserved_mounts():
+    assert mod.mount_from_world_path("/MyProject/MyProject.MyProject") == "MyProject"
+    assert mod.mount_from_world_path("/86ef2167-1111-2222-3333-444444444444/Maps/Main") == (
+        "86ef2167-1111-2222-3333-444444444444"
+    )
+    for reserved in ("/Temp/Untitled_1", "/Game/Athena/Maps/X", "/Engine/Maps/Entry", "/Script/Y"):
+        assert mod.mount_from_world_path(reserved) == ""
+    assert mod.mount_from_world_path("") == ""
+    assert mod.mount_from_world_path("NoSlash") == ""
+
+
+def test_root_plugin_name_reads_the_descriptor_not_the_folder(tmp_path):
+    import json
+
+    guid = "86ef2167-1111-2222-3333-444444444444"
+    root = tmp_path / "MyProjectBJJJ"
+    root.mkdir()
+    manifest = {"plugins": [{"name": "Helper", "bIsRoot": False}, {"name": guid, "bIsRoot": True}]}
+    (root / "MyProjectBJJJ.uefnproject").write_text(json.dumps(manifest), encoding="utf-8-sig")
+    assert mod.root_plugin_name_from_dir(str(root)) == guid
+
+    old = tmp_path / "Dark"
+    (old / "Plugins" / "DarkPlugin").mkdir(parents=True)
+    (old / "Dark.uefnproject").write_text("{}", encoding="utf-8")
+    (old / "Plugins" / "DarkPlugin" / "DarkPlugin.uplugin").write_text("{}", encoding="utf-8")
+    assert mod.root_plugin_name_from_dir(str(old)) == "DarkPlugin"
+
+    bare = tmp_path / "Bare"
+    bare.mkdir()
+    assert mod.root_plugin_name_from_dir(str(bare)) == ""
+    assert mod.root_plugin_name_from_dir("") == ""
+    assert mod.root_plugin_name_from_dir(str(tmp_path / "missing")) == ""

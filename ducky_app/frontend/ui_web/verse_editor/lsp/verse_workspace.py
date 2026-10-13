@@ -32,6 +32,20 @@ def _verse_saved_root(project_name: str) -> Path:
     return Path(local) / "UnrealEditorFortnite" / "Saved" / "VerseProject" / project_name
 
 
+def _saved_verse_name(root: Path) -> str:
+    """The ``Saved/VerseProject/<name>`` UEFN wrote for this island: its content mount
+    when that folder exists, else the folder name (the historical key)."""
+    try:
+        from frontend.project_kind import island_mount_name
+
+        mount = island_mount_name(root)
+    except Exception:
+        mount = ""
+    if mount and mount.casefold() != root.name.casefold() and _verse_saved_root(mount).is_dir():
+        return mount
+    return root.name
+
+
 def _parse_code_workspace(ws_path: Path) -> list[dict[str, str]]:
     try:
         data = json.loads(ws_path.read_text(encoding="utf-8"))
@@ -326,8 +340,12 @@ def discover_verse_workspace(project_root: str, *, include_watch_files: bool = T
         if folders:
             break
 
+    # UEFN keys Saved/VerseProject by the island's content mount (its root plugin name,
+    # a GUID for some islands), which is not always the folder name: try the mount
+    # first, then the folder.
+    saved_name = _saved_verse_name(root)
     if not folders:
-        saved = _verse_saved_root(root.name)
+        saved = _verse_saved_root(saved_name)
         if saved.is_dir():
             folders = _saved_layout_folders(root, saved)
 
@@ -340,7 +358,7 @@ def discover_verse_workspace(project_root: str, *, include_watch_files: bool = T
 
     folders = _expand_builtin_digest_folders(folders)
 
-    real_vproject = _verse_saved_root(root.name) / "vproject" / f"{root.name}.vproject"
+    real_vproject = _verse_saved_root(saved_name) / "vproject" / f"{saved_name}.vproject"
     shadow_vproject: Path | None = None
     if real_vproject.is_file():
         shadow_vproject = shadow_vproject_for(root, real_vproject)

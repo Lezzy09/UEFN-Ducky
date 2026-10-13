@@ -132,6 +132,14 @@ def _disk_project_content_dir() -> str | None:
             content = os.path.normpath(os.path.join(pd, "Content"))
             if os.path.isdir(content):
                 return content
+            # Older islands keep Content under Plugins/<RootPlugin>/.
+            from listener.project_paths import root_plugin_name_from_dir
+
+            plugin = root_plugin_name_from_dir(pd)
+            if plugin:
+                nested = os.path.normpath(os.path.join(pd, "Plugins", plugin, "Content"))
+                if os.path.isdir(nested):
+                    return nested
     except Exception:
         pass
     try:
@@ -1408,9 +1416,14 @@ def _load_verse_class(path: str) -> Any:
 
 
 def _find_verse_struct_class_path(struct_key: str) -> Optional[str]:
+    from listener.project_paths import content_root
+
     reg = unreal.AssetRegistryHelpers.get_asset_registry()
-    project = str(unreal.Paths.get_project_file_path()).rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-    project = project.rsplit(".", 1)[0]
+    # Compiled Verse lives under the island's content mount, never under the engine
+    # project (FortniteGame.uproject is what get_project_file_path() names in UEFN).
+    project = content_root().strip("/")
+    if not project:
+        return None
     verse_path = f"/{project}/_Verse"
     needle = struct_key.replace("_", "-")
     matches: List[str] = []

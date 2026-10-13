@@ -302,3 +302,105 @@ def test_verse_tools_are_off_for_folder_projects(tmp_path: Path, monkeypatch) ->
     assert api.start_lsp(client_id="t").get("folder_project") is True
     assert api.scan_verse_diagnostics(push_ui=False).get("folder_project") is True
     assert api.load_verse_diagnostics_cache()["files"] == []
+
+
+# --------------------------------------------------------------------------- island identity
+#
+# UEFN mounts an island under its ROOT PLUGIN name and reports that as the live project.
+# It is usually the folder name, but UEFN names some root plugins by a GUID.
+
+_GUID = "86ef2167-1111-2222-3333-444444444444"
+
+
+def _guid_island(tmp_path: Path, name: str = "MyProjectBJJJ") -> Path:
+    import json
+
+    root = tmp_path / name
+    (root / "Content" / "Verse").mkdir(parents=True)
+    manifest = {"title": name, "plugins": [{"name": _GUID, "bIsRoot": True, "bIsPublic": False}]}
+    (root / f"{name}.uefnproject").write_text(json.dumps(manifest), encoding="utf-8")
+    (root / f"{_GUID}.uplugin").write_text("{}", encoding="utf-8")
+    return root
+
+
+def test_identity_names_root_plugin_first(tmp_path: Path) -> None:
+    island = _guid_island(tmp_path)
+    names = pk.island_identity_names(island)
+    assert names[0] == _GUID
+    assert "MyProjectBJJJ" in names
+    assert pk.island_mount_name(island) == _GUID
+    assert pk.is_island_identity(island, _GUID.upper())
+    assert pk.is_island_identity(island, "myprojectbjjj")
+    assert not pk.is_island_identity(island, "Tycoony")
+    assert not pk.is_island_identity(island, "")
+
+
+def test_identity_prefers_the_bIsRoot_plugin(tmp_path: Path) -> None:
+    import json
+
+    root = tmp_path / "Island"
+    root.mkdir()
+    manifest = {
+        "plugins": [
+            {"name": "Helper", "bIsRoot": False},
+            {"name": _GUID, "bIsRoot": True},
+        ]
+    }
+    (root / "Island.uefnproject").write_text(json.dumps(manifest), encoding="utf-8")
+    assert pk.island_mount_name(root) == _GUID
+    assert pk.island_identity_names(root)[:2] == [_GUID, "Helper"]
+
+
+def test_identity_falls_back_to_uplugin_then_folder(tmp_path: Path) -> None:
+    old = tmp_path / "Dark"
+    (old / "Plugins" / "DarkPlugin" / "Content").mkdir(parents=True)
+    (old / "Dark.uefnproject").write_text("{}", encoding="utf-8")
+    (old / "Plugins" / "DarkPlugin" / "DarkPlugin.uplugin").write_text("{}", encoding="utf-8")
+    assert pk.island_mount_name(old) == "DarkPlugin"
+    assert pk.island_identity_names(old) == ["DarkPlugin", "Dark"]
+
+    bare = tmp_path / "Bare"
+    bare.mkdir()
+    (bare / "Bare.uefnproject").write_text("{not json", encoding="utf-8")
+    assert pk.island_mount_name(bare) == "Bare"
+    assert pk.island_identity_names(bare) == ["Bare"]
+    assert pk.island_identity_names("") == []
+    assert pk.island_mount_name("") == ""
+
+
+def test_identity_cache_follows_the_manifest(tmp_path: Path) -> None:
+    import json
+    import os
+
+    island = _guid_island(tmp_path)
+    assert pk.island_mount_name(island) == _GUID
+    assert pk.island_identity_names(island)[0] == _GUID
+    desc = island / "MyProjectBJJJ.uefnproject"
+    desc.write_text(json.dumps({"plugins": [{"name": "Renamed", "bIsRoot": True}]}), encoding="utf-8")
+    st = desc.stat()
+    os.utime(desc, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000))
+    assert pk.island_identity_names(island)[0] == "Renamed"
+
+
+def test_reserved_mounts(tmp_path: Path) -> None:
+    assert pk.is_reserved_mount("Temp") and pk.is_reserved_mount("game")
+    assert not pk.is_reserved_mount(_GUID) and not pk.is_reserved_mount("")
+
+
+def test_recent_project_rows_carry_the_mount_and_resolve_by_it(tmp_path: Path, monkeypatch) -> None:
+    from frontend.ui_web import project_switch
+
+    island = _guid_island(tmp_path)
+    repo = _repo(tmp_path)
+    # Switching saves each project's kind (the repo's lowercase content/ would otherwise
+    # read as an island on a case-insensitive disk).
+    project_switch.set_panel_project_root(str(repo), push_ui=False)
+    project_switch.set_panel_project_root(str(island), push_ui=False)
+    rows = {row["path"]: row for row in project_switch.list_panel_projects()}
+    assert rows[str(island.resolve())]["mount"] == _GUID
+    assert rows[str(repo.resolve())]["mount"] == ""
+    # The live UEFN name (a GUID no folder is called) resolves to the island.
+    assert project_switch.resolve_panel_project_ref(name=_GUID) == str(island.resolve())
+    assert project_switch.resolve_panel_project_ref(name="MyProjectBJJJ") == str(island.resolve())
+    with pytest.raises(ValueError):
+        project_switch.resolve_panel_project_ref(name="aaaaaaaa-0000-0000-0000-000000000000")

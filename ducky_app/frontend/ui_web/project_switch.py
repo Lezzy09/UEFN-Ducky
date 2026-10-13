@@ -13,9 +13,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 from frontend.project_kind import (
+    UEFN,
     content_root_for,
     forget_cached_kind,
     has_uefnproject,
+    is_island_identity,
+    island_mount_name,
     project_kind,
     project_root_path,
     resolve_project_root,
@@ -47,6 +50,17 @@ def normalize_project_path(path: str) -> str:
             return raw
 
 
+def _mount_for(root: str, kind: str) -> str:
+    """The island's content mount (root plugin name) — what UEFN reports as the live
+    project. Empty for a folder project or an empty root."""
+    if not root or kind != UEFN:
+        return ""
+    try:
+        return island_mount_name(root)
+    except Exception:
+        return ""
+
+
 def get_panel_project_info() -> dict[str, str]:
     root = normalize_project_path(PanelSettings.load().uefn_project_root.strip())
     kind = project_kind(root)
@@ -57,6 +71,7 @@ def get_panel_project_info() -> dict[str, str]:
         # 'uefn' island or plain 'folder'; content_root is the Content pane's tree root.
         "kind": kind,
         "content_root": content_root_for(kind),
+        "mount": _mount_for(root, kind),
     }
 
 
@@ -69,16 +84,19 @@ def list_panel_projects() -> list[dict[str, str | bool]]:
         if not norm or norm in seen:
             continue
         seen.add(norm)
+        kind = project_kind(norm)
         out.append(
             {
                 "path": norm,
                 "name": project_display_name(norm),
                 "slug": project_slug(norm),
                 "active": norm == current,
-                "kind": project_kind(norm),
+                "kind": kind,
+                "mount": _mount_for(norm, kind),
             }
         )
     if current and current not in seen:
+        kind = project_kind(current)
         out.insert(
             0,
             {
@@ -86,7 +104,8 @@ def list_panel_projects() -> list[dict[str, str | bool]]:
                 "name": project_display_name(current),
                 "slug": project_slug(current),
                 "active": True,
-                "kind": project_kind(current),
+                "kind": kind,
+                "mount": _mount_for(current, kind),
             },
         )
     return out
@@ -119,6 +138,13 @@ def set_panel_project_root(path: str, *, push_ui: bool = True) -> dict[str, str]
         add_recent_project(s.uefn_project_root, kind=kind)
     forget_cached_kind()
     apply_workspace_env(s.uefn_project_root)
+    try:
+        # Status must not answer for the previous island (name, match flag) after a switch.
+        from backend.bridge.status import forget_listener_project_caches
+
+        forget_listener_project_caches()
+    except Exception:
+        pass
     try:
         from frontend.ui_web.project_files import _invalidate_file_paths_cache
 
@@ -214,7 +240,8 @@ def resolve_panel_project_ref(*, path: str = "", name: str = "") -> str:
         raise ValueError("Provide path or name")
 
     key = raw_name.casefold()
-    for item in list_panel_projects():
+    projects = list_panel_projects()
+    for item in projects:
         candidates = (
             str(item.get("path", "")),
             str(item.get("name", "")),
@@ -225,6 +252,11 @@ def resolve_panel_project_ref(*, path: str = "", name: str = "") -> str:
                 continue
             if candidate.casefold() == key or Path(candidate).name.casefold() == key:
                 return str(item["path"])
+    # The live UEFN name is the island's content mount (root plugin), which may be a
+    # GUID that no folder is called: match it against each island's own descriptors.
+    for item in projects:
+        if item.get("kind") == UEFN and is_island_identity(str(item.get("path", "")), raw_name):
+            return str(item["path"])
     raise ValueError(f"Unknown project {name!r} — call ducky_list_projects for recent paths")
 
 

@@ -80,3 +80,56 @@ it("never warns about a UEFN mismatch while a folder project is open", async () 
   await act(async () => {});
   expect(screen.getByText("Tycoony", { selector: "strong" })).toBeTruthy();
 });
+
+it("treats an island whose content mount is a GUID as the live project", async () => {
+  // UEFN names the live project by the island's root plugin, which it sometimes makes a
+  // GUID: folder MyProjectBJJJ, mount 86ef2167-…. That is a match, never a warning.
+  const guid = "86ef2167-1111-2222-3333-444444444444";
+  mocks.api.list_recent_projects.mockResolvedValue([
+    { name: "MyProjectBJJJ", path: "C:/MyProjectBJJJ", slug: "m", active: true, kind: "uefn", mount: guid },
+    { name: "Tycoony", path: "C:/Tycoony", slug: "t", active: false, kind: "uefn", mount: "Tycoony" },
+  ]);
+  const { unmount } = render(
+    <ProjectSelector
+      embedded
+      project={{ path: "C:/MyProjectBJJJ", name: "MyProjectBJJJ", slug: "m", kind: "uefn", mount: guid }}
+      uefnProjectName={guid}
+      projectMatch={true}
+      listenerOnline
+    />,
+  );
+  await act(async () => {});
+  expect(screen.queryByText(/has/)).toBeNull();
+  expect(screen.getAllByTitle(/Open in UEFN/)).toHaveLength(1);
+  unmount();
+  // Even a stale projectMatch=false from an old backend is overruled by the mount.
+  render(
+    <ProjectSelector
+      embedded
+      project={{ path: "C:/MyProjectBJJJ", name: "MyProjectBJJJ", slug: "m", kind: "uefn", mount: guid }}
+      uefnProjectName={guid}
+      projectMatch={false}
+      listenerOnline
+    />,
+  );
+  await act(async () => {});
+  expect(screen.queryByText(/has/)).toBeNull();
+});
+
+it("offers the recent island that declares the live mount when another project is active", async () => {
+  const guid = "86ef2167-1111-2222-3333-444444444444";
+  mocks.api.list_recent_projects.mockResolvedValue([
+    { name: "MyProjectBJJJ", path: "C:/MyProjectBJJJ", slug: "m", active: false, kind: "uefn", mount: guid },
+  ]);
+  render(
+    <ProjectSelector
+      embedded
+      project={{ path: "C:/Tycoony", name: "Tycoony", slug: "t", kind: "uefn", mount: "Tycoony" }}
+      uefnProjectName={guid}
+      projectMatch={false}
+      listenerOnline
+    />,
+  );
+  await act(async () => {});
+  expect(screen.getByRole("button", { name: `Switch panel to ${guid}` })).toBeTruthy();
+});

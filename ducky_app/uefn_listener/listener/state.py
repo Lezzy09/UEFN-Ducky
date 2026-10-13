@@ -35,6 +35,7 @@ def _init_shared_state() -> None:
             "project_name": "",
             "project_dir": "",
             "content_root": "",
+            "island_dir": "",
         },
         "_mcp_reload_in_progress": False,
         "_mcp_log_ring": [],

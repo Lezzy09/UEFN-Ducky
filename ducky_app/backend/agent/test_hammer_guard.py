@@ -40,7 +40,21 @@ def test_streak_counts_and_resets():
     hg.note_success("t")
     assert hg.note_failure("t", "boom 4") == 1
     assert hg.note_failure("t", "different") == 1  # different error resets
-    assert hg.note_failure("other", "different") == 1  # different tool resets
+    assert hg.note_failure("other", "different") == 1  # another tool starts its own streak
+
+
+def test_other_tools_do_not_reset_a_streak():
+    """status(ok) → sync(err) → status(ok) → sync(err) → sync(err) must still STOP."""
+    assert hg.note_failure("ducky_sync_project_to_uefn", "not in recent projects") == 1
+    hg.note_success("ducky_get_status")
+    assert hg.note_failure("ducky_sync_project_to_uefn", "not in recent projects") == 2
+    hg.note_success("ducky_list_projects")
+    hg.note_failure("ducky_set_project", "unknown project")
+    assert hg.note_failure("ducky_sync_project_to_uefn", "not in recent projects") == 3
+    assert hg.should_stop(3)
+    # Its own success is what ends it.
+    hg.note_success("ducky_sync_project_to_uefn")
+    assert hg.note_failure("ducky_sync_project_to_uefn", "not in recent projects") == 1
 
 
 def test_streaks_are_per_conversation():

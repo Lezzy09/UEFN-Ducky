@@ -23,10 +23,17 @@ def describe_class(class_name: str, max_members: int = 200) -> dict:
     if cls is None and ("/" in class_name or class_name.startswith("Verse-")):
         path = class_name
         if not path.startswith("/"):
-            project_file = str(unreal.Paths.get_project_file_path())
-            project_name = project_file.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-            project_name = project_name.rsplit(".", 1)[0]
-            path = f"/{project_name}/_Verse.{class_name}"
+            # The island's content mount, never the engine project file: inside UEFN
+            # that is FortniteGame.uproject and /FortniteGame/_Verse holds nothing.
+            from listener.project_paths import content_root
+
+            mount = content_root().strip("/")
+            if not mount:
+                raise ValueError(
+                    f"Class not found: {class_name!r} — no island map is open, so its "
+                    "compiled Verse classes cannot be resolved. Open the island first."
+                )
+            path = f"/{mount}/_Verse.{class_name}"
         cls = unreal.load_class(None, path)
         if cls is None:
             cls = unreal.load_object(None, path)

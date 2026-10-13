@@ -29,27 +29,102 @@ _TEXTURE_EXT = frozenset({".png", ".jpg", ".jpeg", ".tga", ".exr"})
 _AUDIO_EXT = frozenset({".wav", ".ogg", ".mp3"})
 
 
-def content_root() -> str:
-    """Active project Content Browser mount, e.g. ``/MyProject/`` (trailing slash)."""
+# Mounts the editor uses for worlds that are not an island (unsaved level, Epic map).
+_RESERVED_MOUNTS = frozenset({"temp", "engine", "script", "game"})
+
+
+def mount_from_world_path(path: str) -> str:
+    """``/<Mount>/...`` → ``Mount``; empty for a reserved (non-island) mount. Pure."""
+    parts = str(path or "").split("/")
+    if len(parts) >= 2 and parts[1] and parts[1].lower() not in _RESERVED_MOUNTS:
+        return parts[1]
+    return ""
+
+
+def mount_from_world() -> str:
+    """The open island's content mount (its root plugin name), or empty when the
+    editor world is not an island map."""
     try:
         world = unreal.EditorLevelLibrary.get_editor_world()
+        if not world:
+            return ""
+        return mount_from_world_path(world.get_path_name())
     except Exception:
-        world = None
-    if world:
-        parts = world.get_path_name().split("/")
-        if len(parts) >= 2 and parts[1]:
-            name = parts[1]
-            if name not in ("Temp", "Engine", "Script", "Game"):
-                return f"/{name}/"
+        return ""
+
+
+def island_directory() -> str:
+    """On-disk folder of the open island (``ValkyrieProjectLibrary``), or empty.
+
+    ``unreal.Paths.project_dir()`` is NOT this: inside UEFN that is the engine's
+    FortniteGame project, never the island.
+    """
     try:
-        proj = str(unreal.Paths.project_dir() or "").rstrip("/\\")
-        if proj:
-            name = os.path.basename(proj)
-            if name:
-                return f"/{name}/"
+        lib = unreal.ValkyrieProjectLibrary
+        handle = lib.get_main_project()
+        if handle and lib.is_project_handle_valid(handle):
+            raw = str(lib.get_project_directory(handle) or "").strip()
+            return os.path.normpath(raw) if raw else ""
     except Exception:
         pass
     return ""
+
+
+def root_plugin_name_from_dir(directory: str) -> str:
+    """The island's root plugin name read from its own descriptors on disk. Pure.
+
+    ``<dir>/*.uefnproject`` ``plugins[]`` (``bIsRoot`` first), else a ``*.uplugin`` stem
+    at ``<dir>`` or under ``<dir>/Plugins/*/`` (old layout). Empty when nothing is found:
+    the folder name is NOT the mount (UEFN names some root plugins by a GUID).
+    """
+    import glob
+    import json
+
+    base = str(directory or "").strip()
+    if not base or not os.path.isdir(base):
+        return ""
+    for desc in sorted(glob.glob(os.path.join(base, "*.uefnproject"))):
+        try:
+            with open(desc, "r", encoding="utf-8-sig") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError, UnicodeDecodeError):
+            continue
+        plugins = data.get("plugins") if isinstance(data, dict) else None
+        if not isinstance(plugins, list):
+            continue
+        roots = [
+            str(p.get("name") or "").strip()
+            for p in plugins
+            if isinstance(p, dict) and p.get("bIsRoot") and str(p.get("name") or "").strip()
+        ]
+        others = [
+            str(p.get("name") or "").strip()
+            for p in plugins
+            if isinstance(p, dict) and str(p.get("name") or "").strip()
+        ]
+        if roots:
+            return roots[0]
+        if others:
+            return others[0]
+    for pattern in ("*.uplugin", os.path.join("Plugins", "*", "*.uplugin")):
+        found = sorted(glob.glob(os.path.join(base, pattern)))
+        if found:
+            return os.path.splitext(os.path.basename(found[0]))[0]
+    return ""
+
+
+def content_root() -> str:
+    """Active project Content Browser mount, e.g. ``/MyProject/`` (trailing slash).
+
+    Empty when no island map is open. Never falls back to ``Paths.project_dir()``:
+    inside UEFN that is ``FortniteGame``, a mount that holds no island content, and
+    create-path pins built on it landed assets outside the island.
+    """
+    name = mount_from_world()
+    if not name:
+        # Hub / unsaved level: the island's own descriptor still names its mount.
+        name = root_plugin_name_from_dir(island_directory())
+    return f"/{name}/" if name else ""
 
 
 def pin_folder_string(folder: str, root: str, *, default_leaf: str = "Materials") -> str:

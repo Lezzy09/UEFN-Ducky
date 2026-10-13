@@ -25,6 +25,12 @@ function sameProjectName(a: string | undefined, b: string | undefined): boolean 
   return !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
+/** UEFN names the live project by the island's content mount (its root plugin, which
+ * can be a GUID), so a project is the live one when its mount OR its name matches. */
+function isLiveProject(item: { name?: string; mount?: string }, uefnName: string): boolean {
+  return sameProjectName(item.mount, uefnName) || sameProjectName(item.name, uefnName);
+}
+
 type ConfirmFn = ReturnType<typeof useConfirmModal>["confirm"];
 type AlertFn = ReturnType<typeof useConfirmModal>["alert"];
 
@@ -185,8 +191,8 @@ export function ProjectSelector({
   // island, so UEFN having any island open is never a mismatch.
   const isFolderProject = project.kind === "folder";
   const mismatch =
-    hasLiveProject && !isFolderProject && projectMatch === false && !sameProjectName(project.name, uefnName);
-  const matchedRecent = mismatch ? recent.find((r) => sameProjectName(r.name, uefnName)) : undefined;
+    hasLiveProject && !isFolderProject && projectMatch === false && !isLiveProject(project, uefnName);
+  const matchedRecent = mismatch ? recent.find((r) => isLiveProject(r, uefnName)) : undefined;
 
   const onAnchorPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (ignoreAnchorRef.current || pickingRef.current) {
@@ -243,7 +249,7 @@ export function ProjectSelector({
             </div>
             {recent.map((item) => {
               const isActive = item.active;
-              const isConnected = hasLiveProject && sameProjectName(item.name, uefnName);
+              const isConnected = hasLiveProject && isLiveProject(item, uefnName);
               return (
                 <div key={item.path} className="project-selector-item-row">
                   <button

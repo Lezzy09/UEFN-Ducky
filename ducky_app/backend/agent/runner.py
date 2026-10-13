@@ -122,8 +122,34 @@ def _repeat_guard_message(name: str, count: int) -> str:
         "change anything. Do one of these instead: take a different concrete action, change the "
         "arguments if you need different data, or reply to the user with what you already have. "
         "If you were polling for the listener/editor to come online, it will not on its own — stop "
-        "polling and proceed."
+        "polling and proceed. If the blocker is something only the user can do (open or add a "
+        "project, press a dialog, approve a change), call `ducky_ask_user` once and end the turn."
     )
+
+
+def note_executed_call(
+    executed_calls: dict[str, list[str]],
+    sig: str,
+    llm_content: str,
+    *,
+    ok: bool,
+    readonly: bool,
+) -> None:
+    """Record a finished tool call for the repeat-call guard.
+
+    A SUCCESSFUL mutation changes state, so identical re-reads can legitimately return
+    different results (write file → re-check errors): every OTHER call's history is
+    reset. This call's own history is kept so a no-op mutation repeated with identical
+    args still trips the guard. A FAILED mutation changed nothing, so nothing is reset:
+    the old rule let a failing `ducky_sync_project_to_uefn` wipe `ducky_get_status`'s
+    history every round, and the status → sync → status loop never tripped the guard.
+    """
+    if ok and not readonly:
+        own = executed_calls.get(sig)
+        executed_calls.clear()
+        if own is not None:
+            executed_calls[sig] = own
+    executed_calls.setdefault(sig, []).append(llm_content)
 
 
 def _allows_everything(conv_id: str) -> bool:
@@ -445,6 +471,11 @@ class AgentRunner:
         deadline: float,
         timeout_sec: int = STREAM_TIMEOUT_SEC,
     ) -> AsyncIterator[StreamEvent]:
+        # The deadline is an IDLE timeout: it moves forward on every event the
+        # provider delivers. A fixed whole-step wall clock cut reasoning models
+        # (DeepSeek-style, minutes of thinking per step) off mid-stream, and the
+        # next turn replayed the half-finished step so they re-thought it all.
+        got_event = False
         while True:
             # Poll the queue in short slices so a Stop press is observed within
             # ~250ms even while the provider is mid-request (no deltas arriving),
@@ -455,15 +486,19 @@ class AgentRunner:
                     return
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    yield StreamEvent(
-                        kind=StreamEventKind.ERROR,
-                        error=(
+                    if got_event:
+                        error = (
+                            f"LLM stream stalled: no data for {timeout_sec}s after it had "
+                            "started answering. Click Stop and send again."
+                        )
+                    else:
+                        error = (
                             f"LLM request timed out after {timeout_sec}s "
                             "(still waiting on the first token — local prompt eval "
                             "can take a while). Click Stop and try again, or use a "
                             "smaller context / more GPU layers."
-                        ),
-                    )
+                        )
+                    yield StreamEvent(kind=StreamEventKind.ERROR, error=error)
                     return
                 try:
                     item = await asyncio.wait_for(queue.get(), timeout=min(0.25, remaining))
@@ -475,6 +510,8 @@ class AgentRunner:
             if isinstance(item, Exception):
                 yield StreamEvent(kind=StreamEventKind.ERROR, error=str(item))
                 return
+            got_event = True
+            deadline = time.monotonic() + timeout_sec
             yield item
 
     def _provider_tools(self, provider: str, tools: list) -> list[dict[str, Any]]:
@@ -1228,18 +1265,13 @@ class AgentRunner:
                     fmt=self.config.tool_result_format,  # type: ignore[arg-type]
                 )
                 self._attach_llm_payload(rec, llm_content)
-                if not _is_readonly_tool(effective_tool_name(rec.name, rec.arguments)):
-                    # State changed: identical re-reads can now legitimately
-                    # return different results (write file → re-check errors),
-                    # so reset every OTHER call's repeat history. Keep this
-                    # call's own history so a no-op mutation repeated with
-                    # identical args (rewriting the same content over and
-                    # over) still trips the guard instead of looping forever.
-                    own = executed_calls.get(sig)
-                    executed_calls.clear()
-                    if own is not None:
-                        executed_calls[sig] = own
-                executed_calls.setdefault(sig, []).append(llm_content)
+                note_executed_call(
+                    executed_calls,
+                    sig,
+                    llm_content,
+                    ok=bool(result.ok),
+                    readonly=_is_readonly_tool(effective_tool_name(rec.name, rec.arguments)),
+                )
                 block = self._record_to_block(rec)
                 assistant_blocks.append(block)
                 yield AgentEvent(kind="tool_end", tool=rec)

@@ -99,6 +99,7 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             "project_name": str(project.get("project_name") or ""),
             "project_dir": str(project.get("project_dir") or ""),
             "content_root": str(project.get("content_root") or ""),
+            "island_dir": str(project.get("island_dir") or ""),
             "command_timings": list(metrics.get("command_timings") or [])[-20:],
         }).encode()
         self._send_json(200, body)

@@ -410,8 +410,17 @@ def wait_uefn_ready(
     if root:
         try:
             selected = str(Path(uefnproject_path(root)).parent)
-        except Exception:
-            selected = str(root)
+        except Exception as exc:
+            # A bare name that is no folder used to be kept as the "root": it was then
+            # classed as a folder project, the match check was skipped, and the call
+            # reported ready for an island that was never checked.
+            return {
+                "ok": False,
+                "error": f"Not a UEFN island: {exc}",
+                "seconds": 0.0,
+                "project_name": "",
+                "project_match": False,
+            }
     else:
         selected = (PanelSettings.load().uefn_project_root or "").strip()
     last_name = ""
@@ -432,9 +441,23 @@ def wait_uefn_ready(
                     "project_match": True,
                 }
         time.sleep(2.0)
+    error = "timed out waiting for UEFN"
+    if last_name and selected:
+        # Say which island the editor reports, and what the panel expected, so a
+        # mismatch is visible instead of a bare timeout.
+        try:
+            from frontend.project_kind import island_mount_name
+
+            expected = island_mount_name(selected) or Path(selected).name
+        except Exception:
+            expected = Path(selected).name
+        error = (
+            f"timed out waiting for UEFN: it reports island {last_name!r} open, but the "
+            f"panel project {Path(selected).name} is mounted as {expected!r}"
+        )
     return {
         "ok": False,
-        "error": "timed out waiting for UEFN",
+        "error": error,
         "seconds": round(time.time() - started, 1),
         "project_name": last_name,
         "project_match": False,

@@ -52,8 +52,11 @@ def open_project(project: str | None, *, timeout: float = 180, wait: bool = True
             if ready.get("stopped"):
                 return ready
             if not ready.get("ok"):
-                return {**ready, "error": "UEFN is already running but the requested project is not ready. "
-                        "Use Restart UEFN to switch projects, or check the editor's login / loading screen."}
+                live = str(ready.get("project_name") or "").strip()
+                have = f"it has {live!r} open" if live else "no island map is open yet"
+                return {**ready, "error": f"UEFN is already running but {have}, not the requested "
+                        f"project ({ready.get('error') or 'not ready'}). Use Restart UEFN to switch "
+                        "projects, or check the editor's login / loading screen."}
             switch_panel_project(path=str(path.parent), background_deploy=False)
             return {"ok": True, "path": str(path), "already_running": True, "ready": ready}
 

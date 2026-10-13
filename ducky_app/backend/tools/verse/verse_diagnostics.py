@@ -134,8 +134,17 @@ def verse_asset_directory(project_name: str = "") -> str:
 
 
 def _project_mount_name() -> str:
+    """The island's content mount (root plugin name), which UEFN may make a GUID; the
+    folder name only when no descriptor says otherwise."""
     root = _project_root()
-    return Path(root).name if root else ""
+    if not root:
+        return ""
+    try:
+        from frontend.project_kind import island_mount_name
+
+        return island_mount_name(root) or Path(root).name
+    except Exception:
+        return Path(root).name
 
 
 def _spawnable_verse_classes(limit: int = 40) -> Any:
