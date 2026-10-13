@@ -2981,6 +2981,8 @@ export interface PanelApi {
   set_workflow_editor_prefs?(prefs: Record<string, unknown>): Promise<{ ok?: boolean; prefs?: Record<string, unknown> }>;
   /** Input nodes: pick files on this PC (accept = image | audio | video | mesh | pdf | svg | any). */
   pick_workflow_files?(accept: string, multiple: boolean): Promise<{ ok?: boolean; files?: FileRefDto[]; error?: string }>;
+  /** Real paths of files just dropped from Explorer onto a plugin panel, handed out once. */
+  consume_dropped_file_paths?(names: string[]): Promise<{ ok?: boolean; files?: FileRefDto[] }>;
   /** Save file nodes: the Windows folder picker. */
   pick_workflow_folder?(): Promise<{ ok?: boolean; folder?: string; error?: string }>;
   /** Run one node now; what feeds it is reused from the last run. */
