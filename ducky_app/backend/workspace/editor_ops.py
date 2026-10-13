@@ -298,7 +298,7 @@ READ_COMMANDS: frozenset[str] = frozenset(
         "get_npc_definition_info", "list_npc_definitions", "npc_author_capabilities",
         # editor view / session state — no project change
         "focus_selected", "open_asset_in_uefn", "play_in_editor", "move_player_pawn", "select_actors",
-        "select_entities", "set_viewport_camera", "stop_pie", "take_high_res_screenshot",
+        "select_entities", "set_viewport_camera", "stop_pie", "render_trim", "take_high_res_screenshot",
         # process control
         "reload_listener", "shutdown",
         # saves flush edits that are already journaled; they are not changes of their own
