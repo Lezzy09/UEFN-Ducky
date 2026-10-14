@@ -551,6 +551,15 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
     if (!res?.ok) throw new Error(res?.error || "The file picker could not open.");
     return { files: res.files ?? [] };
   },
+  /** Windows folder picker (e.g. where a panel saves its exports): ``{}`` → ``{folder}`` ("" when cancelled). */
+  "files.pickFolder": async () => {
+    if (isRemote()) throw new Error("Pick folders on the PC that runs Ducky.");
+    const api = getApi();
+    if (!api?.pick_workflow_folder) throw new Error("folder picker unavailable");
+    const res = await api.pick_workflow_folder();
+    if (!res?.ok) throw new Error(res?.error || "The folder picker could not open.");
+    return { folder: res.folder ?? "" };
+  },
   /**
    * Real paths of files the person just dropped from Explorer onto this panel:
    * ``{names?: string[]}`` → ``{files: [{path, name, kind, url}]}``. The panel's own

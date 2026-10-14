@@ -2,7 +2,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({
-  api: { get_models_catalog: vi.fn() },
+  api: { get_models_catalog: vi.fn(), pick_workflow_folder: vi.fn() },
   confirm: vi.fn(),
   alert: vi.fn(),
 }));
@@ -46,4 +46,11 @@ it("lists the chat models a plugin can pass to llm.complete, without keys or pri
   const res = await call("models.list", {});
   expect(res).toMatchObject({ ok: true, result: { default_model: "m-agent", models: [{ id: "m1", name: "Model One", provider: "openai", is_local: false }] } });
   expect(JSON.stringify(res)).not.toContain("price_in");
+});
+
+it("opens the Windows folder picker and returns the chosen folder", async () => {
+  host.api.pick_workflow_folder.mockResolvedValue({ ok: true, folder: "D:/Trailers" });
+  expect(await call("files.pickFolder", {})).toMatchObject({ ok: true, result: { folder: "D:/Trailers" } });
+  host.api.pick_workflow_folder.mockResolvedValue({ ok: true, folder: "" });
+  expect(await call("files.pickFolder", {})).toMatchObject({ ok: true, result: { folder: "" } });
 });
