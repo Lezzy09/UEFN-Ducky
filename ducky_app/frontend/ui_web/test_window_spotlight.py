@@ -50,3 +50,81 @@ def test_card_stays_on_the_monitor_and_off_the_hole():
     assert x >= 0 and x + 200 <= 800
     assert y >= 0 and y + 120 <= 600
     assert x + 200 <= 700
+
+
+# ---- pixels: the desktop card, ring and dim drawn like the in-app Show me popup ----
+
+
+def test_card_pixels_match_the_popup_layout_and_expose_its_buttons():
+    from frontend.ui_web.window_spotlight_paint import CARD_W, SURFACE, CardState, render_card
+
+    px = render_card(CardState(title="Your custom water materials", body="Both are **here**: `Materials`.", index=1, total=3))
+    pad_l, pad_t, pad_r, pad_b = px.pad
+    assert px.visible[0] == CARD_W
+    assert px.image.size == (pad_l + CARD_W + pad_r, pad_t + px.visible[1] + pad_b)
+    # Opaque surface in the middle, fully transparent far corner (so a click there passes through).
+    assert px.image.getpixel((pad_l + CARD_W // 2, pad_t + 40))[:3] == SURFACE
+    assert px.image.getpixel((0, 0))[3] == 0
+    assert set(px.hits) == {"close", "next", "back"}
+    cx0, cy0, cx1, cy1 = px.hits["close"]
+    assert cx1 - cx0 == 28 and cy1 - cy0 == 28
+    assert cx1 <= pad_l + CARD_W and cy0 >= pad_t - 4
+    assert px.hit(cx0 + 14, cy0 + 14) == "close"
+    assert px.hit(pad_l + 20, pad_t + 20) is None
+
+    # One step: no footer, no Next/Back; a click step keeps Next off until the last step.
+    single = render_card(CardState(title="T", body="B", index=0, total=1))
+    assert set(single.hits) == {"close"} and single.visible[1] < px.visible[1]
+    clicky = render_card(CardState(title="T", body="B", index=0, total=2, click=True))
+    assert "next" not in clicky.hits
+    last = render_card(CardState(title="T", body="B", index=1, total=2, click=True))
+    assert "next" in last.hits  # it reads Close there
+
+
+def test_hovering_a_button_changes_its_pixels_only():
+    from frontend.ui_web.window_spotlight_paint import CardState, render_card
+
+    plain = render_card(CardState(title="T", body="B", index=0, total=1))
+    hover = render_card(CardState(title="T", body="B", index=0, total=1, hover="close"))
+    x0, y0, x1, y1 = plain.hits["close"]
+    assert plain.image.getpixel((x0 + 3, y0 + 3)) != hover.image.getpixel((x0 + 3, y0 + 3))
+    pad_l, pad_t, _r, _b = plain.pad
+    assert plain.image.getpixel((pad_l + 30, pad_t + 60)) == hover.image.getpixel((pad_l + 30, pad_t + 60))
+
+
+def test_dim_is_clear_inside_the_hole_and_dark_outside():
+    from frontend.ui_web.window_spotlight_paint import DIM_ALPHA, render_dim
+
+    dim = render_dim(400, 300, (100, 100, 120, 80), 12)
+    assert dim.size == (400, 300)
+    assert dim.getpixel((160, 140))[3] == 0
+    assert dim.getpixel((10, 10))[3] == DIM_ALPHA
+    assert dim.getpixel((100, 100))[3] == DIM_ALPHA  # rounded corner stays dim
+    assert 0 < dim.getpixel((104, 104))[3] < DIM_ALPHA  # anti-aliased edge
+
+
+def test_ring_glows_outside_and_stays_clear_inside():
+    from frontend.ui_web.window_spotlight_paint import render_ring
+
+    ring, margin = render_ring(120, 80, 12)
+    assert ring.size == (120 + 2 * margin, 80 + 2 * margin)
+    assert ring.getpixel((ring.width // 2, ring.height // 2))[3] == 0
+    assert ring.getpixel((margin + 1, ring.height // 2))[3] > 200
+    assert 0 < ring.getpixel((margin - 6, ring.height // 2))[3] < 200
+    assert ring.getpixel((0, 0))[3] == 0
+
+
+def test_clear_rect_and_text_helpers():
+    from PIL import Image
+
+    from frontend.ui_web.window_spotlight_paint import clear_rect, font, plain_text, wrap
+
+    img = Image.new("RGBA", (50, 50), (1, 2, 3, 255))
+    out = clear_rect(img, (10, 10, 20, 20))
+    assert out.getpixel((15, 15))[3] == 0 and out.getpixel((5, 5))[3] == 255
+    assert img.getpixel((15, 15))[3] == 255  # the input is untouched
+    assert plain_text("Line one\n- item **bold** `code`\n\nSecond para") == ["Line one • item bold code", "Second para"]
+    fnt = font("regular", 13)
+    lines = wrap("a few words that will certainly not fit on one short line", fnt, 120)
+    assert len(lines) > 1 and all(fnt.getlength(line) <= 120 for line in lines)
+    assert wrap("", fnt, 100) == [""]
