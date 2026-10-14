@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ConfirmModalProvider } from "./contexts/ConfirmModalContext";
+import { PluginModelPickerHost } from "./plugin-ui/PluginModelPickerHost";
 import { installTerminalApprovals } from "./terminal/terminalApprovals";
 import { EditorWorkspaceBridgeProvider } from "./contexts/EditorWorkspaceBridge";
 import { QuickOpenBridgeProvider } from "./contexts/QuickOpenBridge";
@@ -247,6 +248,7 @@ export default function App() {
       <ProjectFilesSettingsProvider>
       <VerseDiagnosticsSettingsProvider>
       <ThemeProvider />
+      <PluginModelPickerHost />
       <AppearanceCssBridge />
       <AppearanceFxBridge />
       <AppearanceSkinBridge />

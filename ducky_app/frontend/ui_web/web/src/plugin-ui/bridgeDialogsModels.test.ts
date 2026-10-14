@@ -5,7 +5,11 @@ const host = vi.hoisted(() => ({
   api: { get_models_catalog: vi.fn(), pick_workflow_folder: vi.fn() },
   confirm: vi.fn(),
   alert: vi.fn(),
+  pick: vi.fn(),
+  rec: { start: vi.fn(), stop: vi.fn(), cancel: vi.fn() },
 }));
+vi.mock("./PluginModelPickerHost", () => ({ pickModelFromHost: host.pick }));
+vi.mock("./hostRecorder", () => ({ startRecording: host.rec.start, stopRecording: host.rec.stop, cancelRecording: host.rec.cancel }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => host.api, isRemote: () => false }));
 vi.mock("../contexts/ConfirmModalContext", () => ({ confirmFromHost: host.confirm, alertFromHost: host.alert }));
 
@@ -41,10 +45,10 @@ it("lists the chat models a plugin can pass to llm.complete, without keys or pri
   host.api.get_models_catalog.mockResolvedValue({
     default_model: "m-default",
     agent_model: "m-agent",
-    models: [{ id: "m1", name: "Model One", provider: "openai", price_in: 3, is_local: false }],
+    models: [{ id: "m1", name: "Model One", provider: "openai", price_in: 3, is_local: false, supports_vision: true }],
   });
   const res = await call("models.list", {});
-  expect(res).toMatchObject({ ok: true, result: { default_model: "m-agent", models: [{ id: "m1", name: "Model One", provider: "openai", is_local: false }] } });
+  expect(res).toMatchObject({ ok: true, result: { default_model: "m-agent", models: [{ id: "m1", name: "Model One", provider: "openai", is_local: false, supports_vision: true }] } });
   expect(JSON.stringify(res)).not.toContain("price_in");
 });
 
@@ -53,4 +57,22 @@ it("opens the Windows folder picker and returns the chosen folder", async () => 
   expect(await call("files.pickFolder", {})).toMatchObject({ ok: true, result: { folder: "D:/Trailers" } });
   host.api.pick_workflow_folder.mockResolvedValue({ ok: true, folder: "" });
   expect(await call("files.pickFolder", {})).toMatchObject({ ok: true, result: { folder: "" } });
+});
+
+it("opens Ducky's model picker for a panel and returns the qualified pick", async () => {
+  host.pick.mockResolvedValue({ model: "openai:m1", name: "Model One" });
+  const res = await call("ui.pickModel", { purpose: "video", current: "" });
+  expect(host.pick).toHaveBeenCalledWith(expect.objectContaining({ purpose: "video" }));
+  expect(res).toMatchObject({ ok: true, result: { model: "openai:m1", name: "Model One" } });
+  host.pick.mockResolvedValue(null);
+  expect(await call("ui.pickModel", {})).toMatchObject({ ok: true, result: { model: "" } });
+});
+
+it("records from the microphone for a panel, scoped to that plugin", async () => {
+  host.rec.start.mockResolvedValue({ id: "rec-1" });
+  host.rec.stop.mockResolvedValue({ b64: "QUJD", mime: "audio/webm", seconds: 2.5, bytes: 3 });
+  expect(await call("audio.recordStart", {})).toMatchObject({ ok: true, result: { id: "rec-1" } });
+  expect(host.rec.start).toHaveBeenCalledWith("island-media-kit");
+  expect(await call("audio.recordStop", { id: "rec-1" })).toMatchObject({ ok: true, result: { mime: "audio/webm" } });
+  expect(host.rec.stop).toHaveBeenCalledWith("island-media-kit", "rec-1");
 });

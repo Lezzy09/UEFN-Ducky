@@ -492,6 +492,31 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
     });
     return { ok: true };
   },
+  /** Ducky's own model picker in a dialog: ``{purpose?: "video"|"chat", current?, title?}`` → ``{model, name}`` or ``{model: ""}`` when cancelled. */
+  "ui.pickModel": async (_ctx, params) => {
+    if (isRemote()) throw new Error("Pick models on the PC that runs Ducky.");
+    const { pickModelFromHost } = await import("./PluginModelPickerHost");
+    const picked = await pickModelFromHost({
+      purpose: typeof params.purpose === "string" ? params.purpose : "chat",
+      current: typeof params.current === "string" ? params.current : "",
+      title: typeof params.title === "string" ? params.title : "",
+    });
+    return picked ?? { model: "", name: "" };
+  },
+  /** Record from the microphone in the host window (panels have no microphone access). */
+  "audio.recordStart": async (ctx) => {
+    if (isRemote()) throw new Error("Record on the PC that runs Ducky.");
+    const { startRecording } = await import("./hostRecorder");
+    return await startRecording(ctx.pluginId);
+  },
+  "audio.recordStop": async (ctx, params) => {
+    const { stopRecording } = await import("./hostRecorder");
+    return await stopRecording(ctx.pluginId, typeof params.id === "string" ? params.id : "");
+  },
+  "audio.recordCancel": async (ctx, params) => {
+    const { cancelRecording } = await import("./hostRecorder");
+    return cancelRecording(ctx.pluginId, typeof params.id === "string" ? params.id : "");
+  },
   "models.list": async () => {
     // The chat models the person can pick, so a plugin can offer the same choice its
     // llm.complete call accepts (ids only; keys and prices stay with the app).
@@ -500,7 +525,14 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
     const catalog = await api.get_models_catalog(false);
     return {
       default_model: catalog?.agent_model || catalog?.default_model || "",
-      models: (catalog?.models || []).map((m) => ({ id: m.id, name: m.name, provider: m.provider, is_local: !!m.is_local })),
+      models: (catalog?.models || []).map((m) => ({
+        id: m.id,
+        name: m.name,
+        provider: m.provider,
+        provider_key: m.provider_key || "",
+        is_local: !!m.is_local,
+        supports_vision: !!m.supports_vision,
+      })),
     };
   },
   "llm.complete": async (ctx, params) => {
