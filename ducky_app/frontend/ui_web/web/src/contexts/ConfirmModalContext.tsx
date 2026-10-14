@@ -44,6 +44,20 @@ function confirmShortcutKey(label: string): string | null {
   return match ? match[0].toLowerCase() : null;
 }
 
+// The mounted provider's dialogs, reachable from code that runs outside React
+// (the plugin-panel bridge): a plugin's "are you sure?" opens Ducky's own modal.
+let mountedDialogs: ConfirmModalContextValue | null = null;
+
+export function confirmFromHost(options: ConfirmOptions | string): Promise<ConfirmResult> {
+  if (!mountedDialogs) return Promise.reject(new Error("confirm dialog is not mounted"));
+  return mountedDialogs.confirm(options);
+}
+
+export function alertFromHost(options: AlertOptions | string): Promise<void> {
+  if (!mountedDialogs) return Promise.reject(new Error("alert dialog is not mounted"));
+  return mountedDialogs.alert(options);
+}
+
 export function ConfirmModalProvider({ children }: { children: ReactNode }) {
   const [dialog, setDialog] = useState<DialogState | null>(null);
 
@@ -60,6 +74,13 @@ export function ConfirmModalProvider({ children }: { children: ReactNode }) {
       setDialog({ type: "alert", options: opts, resolve });
     });
   }, []);
+
+  useEffect(() => {
+    mountedDialogs = { confirm, alert };
+    return () => {
+      if (mountedDialogs && mountedDialogs.confirm === confirm) mountedDialogs = null;
+    };
+  }, [confirm, alert]);
 
   const dismissConfirm = (result: ConfirmResult) => {
     if (dialog?.type !== "confirm") return;

@@ -467,6 +467,42 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
     writePluginPref(ctx.pluginId, id, params.value ?? null);
     return { ok: true };
   },
+  "ui.confirm": async (ctx, params) => {
+    // A plugin's "are you sure?" is Ducky's own confirm modal, not a bar inside the panel.
+    const { confirmFromHost } = await import("../contexts/ConfirmModalContext");
+    const message = typeof params.message === "string" ? params.message.trim() : "";
+    if (!message) throw new Error("ui.confirm requires message");
+    const result = await confirmFromHost({
+      title: typeof params.title === "string" && params.title.trim() ? params.title.trim() : ctx.pluginId,
+      message,
+      confirmLabel: typeof params.confirm === "string" && params.confirm.trim() ? params.confirm.trim() : undefined,
+      cancelLabel: typeof params.cancel === "string" && params.cancel.trim() ? params.cancel.trim() : undefined,
+      danger: params.danger === true,
+    });
+    return { confirmed: result === true };
+  },
+  "ui.alert": async (ctx, params) => {
+    const { alertFromHost } = await import("../contexts/ConfirmModalContext");
+    const message = typeof params.message === "string" ? params.message.trim() : "";
+    if (!message) throw new Error("ui.alert requires message");
+    await alertFromHost({
+      title: typeof params.title === "string" && params.title.trim() ? params.title.trim() : ctx.pluginId,
+      message,
+      okLabel: typeof params.ok === "string" && params.ok.trim() ? params.ok.trim() : undefined,
+    });
+    return { ok: true };
+  },
+  "models.list": async () => {
+    // The chat models the person can pick, so a plugin can offer the same choice its
+    // llm.complete call accepts (ids only; keys and prices stay with the app).
+    const api = getApi();
+    if (!api?.get_models_catalog) throw new Error("get_models_catalog unavailable");
+    const catalog = await api.get_models_catalog(false);
+    return {
+      default_model: catalog?.agent_model || catalog?.default_model || "",
+      models: (catalog?.models || []).map((m) => ({ id: m.id, name: m.name, provider: m.provider, is_local: !!m.is_local })),
+    };
+  },
   "llm.complete": async (ctx, params) => {
     const { pluginLlmCompleteAsync } = await import("./pluginLlmAsync");
     const system = typeof params.system === "string" ? params.system : "";
