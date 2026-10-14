@@ -871,3 +871,64 @@ def test_a_refused_download_shows_the_stores_reason() -> None:
     with pytest.raises(DuckyOSAccountError) as empty:
         store_zip_bytes({})
     assert empty.value.code == "store_empty"
+
+
+def test_store_update_retry_loop_runs_early_then_periodically() -> None:
+    from frontend import duckyos_account as acc
+
+    waits: list[float] = []
+    runs: list[int] = []
+
+    def wait(seconds: float) -> bool:
+        waits.append(seconds)
+        return len(waits) >= 6  # the app quits on the sixth wait
+
+    passes = acc._store_update_retry_loop(wait, lambda: runs.append(1), delays=(1.0, 2.0, 3.0), period=9.0)
+    assert waits == [1.0, 2.0, 3.0, 9.0, 9.0, 9.0]
+    assert len(runs) == passes == 5  # three early passes, then two periodic ones
+
+
+def test_store_update_retries_start_once(monkeypatch) -> None:
+    import threading
+
+    from frontend import duckyos_account as acc
+
+    started: list[str] = []
+
+    class FakeThread:
+        def __init__(self, *a, **kw):
+            started.append(kw.get("name", ""))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(acc, "_retry_thread_started", False)
+    monkeypatch.setattr(threading, "Thread", FakeThread)
+    acc.start_store_update_retries()
+    acc.start_store_update_retries()
+    assert started == ["store-update-retries"]
+
+
+def test_auto_apply_records_an_activity_line(monkeypatch) -> None:
+    from unittest.mock import patch
+
+    from frontend import duckyos_account as acc
+
+    lines: list[tuple[str, str]] = []
+    catalog = {"ok": True, "items": [
+        {"slug": "openai", "kind": "plugin", "state": "update", "source": "store"},
+        {"slug": "broken", "kind": "plugin", "state": "update", "source": "store"},
+    ]}
+
+    def install(slug, **_kw):
+        return {"ok": slug == "openai", "error": None if slug == "openai" else "zip missing"}
+
+    with (
+        patch.object(acc, "store_catalog", return_value=catalog),
+        patch.object(acc, "store_download_and_install", side_effect=install),
+        patch("frontend.error_log.record_activity", side_effect=lambda s, m: lines.append((s, m))),
+    ):
+        out = acc.auto_apply_store_updates(force=True)
+    assert out["updated"] == ["openai"]
+    assert lines and lines[0][0] == "store"
+    assert "updated openai" in lines[0][1] and "broken: zip missing" in lines[0][1]

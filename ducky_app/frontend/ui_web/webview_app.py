@@ -263,9 +263,10 @@ def _run_panel(api_holder: dict[str, object]) -> None:
             except Exception:
                 pass
             try:
-                from frontend.duckyos_account import auto_apply_store_updates
+                from frontend.duckyos_account import auto_apply_store_updates, start_store_update_retries
 
                 auto_apply_store_updates()
+                start_store_update_retries()
             except Exception:
                 pass
             try:

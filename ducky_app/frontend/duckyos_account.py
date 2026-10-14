@@ -2968,6 +2968,52 @@ def _store_download_and_install_unlocked(
 _AUTO_APPLY_LOCK = __import__("threading").Lock()
 _auto_apply_ran = False
 
+# The start-up pass is one shot: offline at launch, a catalog hiccup, or sign-in
+# arriving a moment later used to mean no plugin updates until the next restart,
+# and a user sat on a stale plugin for days. So the pass is repeated early on and
+# then once in a while for as long as the app runs.
+STORE_UPDATE_RETRY_DELAYS_S = (120.0, 600.0, 1800.0)
+STORE_UPDATE_PERIOD_S = 6 * 3600.0
+_retry_thread_started = False
+
+
+def _store_update_retry_loop(wait, run, *, delays=STORE_UPDATE_RETRY_DELAYS_S, period=STORE_UPDATE_PERIOD_S) -> int:
+    """Run ``run()`` after each delay, then every ``period``; ``wait(seconds)`` returns
+    True to stop. Returns how many passes ran (for tests)."""
+    passes = 0
+    for delay in delays:
+        if wait(delay):
+            return passes
+        run()
+        passes += 1
+    while True:
+        if wait(period):
+            return passes
+        run()
+        passes += 1
+
+
+def start_store_update_retries() -> None:
+    """Keep re-running the Store auto-update pass in the background (once per process)."""
+    global _retry_thread_started
+    if _retry_thread_started:
+        return
+    _retry_thread_started = True
+    stop = threading.Event()
+
+    def _run() -> None:
+        try:
+            auto_apply_store_updates(force=True)
+        except Exception:
+            pass
+
+    threading.Thread(
+        target=_store_update_retry_loop,
+        args=(stop.wait, _run),
+        name="store-update-retries",
+        daemon=True,
+    ).start()
+
 
 def auto_apply_store_updates(*, force: bool = False) -> dict[str, Any]:
     """Quietly install newer Store versions of already-installed plugins/skills.
@@ -3015,6 +3061,19 @@ def auto_apply_store_updates(*, force: bool = False) -> dict[str, Any]:
             else:
                 errors.append({"slug": slug, "error": result.get("error")})
         _auto_apply_ran = True
+        if updated or errors:
+            # One line in activity.jsonl, so "why is my plugin still old?" has an answer.
+            try:
+                from frontend.error_log import record_activity
+
+                record_activity(
+                    "store",
+                    "auto-update: "
+                    + (("updated " + ", ".join(updated)) if updated else "nothing updated")
+                    + (("; failed " + ", ".join(f"{e.get('slug')}: {e.get('error')}" for e in errors)) if errors else ""),
+                )
+            except Exception:
+                pass
         if updated:
             try:
                 from frontend.ui_web.agent_modes import push_ui_event
