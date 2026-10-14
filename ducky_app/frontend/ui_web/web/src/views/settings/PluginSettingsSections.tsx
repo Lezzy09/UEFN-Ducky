@@ -29,6 +29,10 @@ function isPrefFieldProp(p: PluginSettingsProperty): boolean {
   return t === "select" || t === "string" || t === "text";
 }
 
+function isActionProp(p: PluginSettingsProperty): boolean {
+  return (p.type || "").toLowerCase() === "action";
+}
+
 /**
  * Encrypted secret (e.g. an API key). The value is never read back — we only learn
  * whether one is set. Writes go through set_uefn_plugin_secret, which enforces that
@@ -187,6 +191,91 @@ function SecretField({
   );
 }
 
+type ActionResult = { ok?: boolean; connected?: boolean; detail?: string; error?: string };
+type ActionStatus = { tone: "" | "is-ok" | "is-error"; text: string };
+
+function actionStatus(res: ActionResult): ActionStatus | null {
+  const text = String(res.detail || res.error || "");
+  if (!text) return null;
+  return { tone: res.ok === false ? "is-error" : res.connected ? "is-ok" : "", text };
+}
+
+/**
+ * Button backed by plugin panel RPCs (e.g. "Sign in with Notion"). The status line
+ * comes from the RPC's own `{ ok, connected, detail }` result; once connected the
+ * button swaps to `connected_label` / `connected_rpc`.
+ */
+function ActionField({
+  pluginId,
+  prop,
+  compact,
+}: {
+  pluginId: string;
+  prop: PluginSettingsProperty;
+  compact?: boolean;
+}) {
+  const [connected, setConnected] = useState(false);
+  const [status, setStatus] = useState<ActionStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const call = useCallback(
+    async (method: string) => {
+      const api = getApi();
+      if (!api?.plugin_call) {
+        setStatus({ tone: "is-error", text: "Update the app to use this button" });
+        return;
+      }
+      try {
+        const res = (await api.plugin_call(pluginId, method, {})) as ActionResult;
+        setConnected(Boolean(res.connected));
+        setStatus(actionStatus(res));
+      } catch (e) {
+        setStatus({ tone: "is-error", text: e instanceof Error ? e.message : "Failed" });
+      }
+    },
+    [pluginId],
+  );
+
+  useEffect(() => {
+    if (prop.status_rpc) void call(prop.status_rpc);
+  }, [call, prop.status_rpc]);
+
+  const swap = connected && Boolean(prop.connected_rpc);
+  const method = swap ? prop.connected_rpc : prop.rpc;
+  const label = swap ? prop.connected_label || "Disconnect" : prop.label || prop.id;
+
+  return (
+    <div className="voice-settings-row">
+      {!compact && prop.description ? (
+        <p className="general-tab-section-desc">{prop.description}</p>
+      ) : null}
+      <div className="plugin-secret-field">
+        <button
+          type="button"
+          className={`settings-btn llms-provider-btn${connected ? " is-saved" : ""}`}
+          disabled={busy || !method}
+          onClick={async () => {
+            if (!method) return;
+            setBusy(true);
+            try {
+              await call(method);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "Waiting…" : label}
+        </button>
+      </div>
+      {status ? (
+        <p className={`plugin-secret-test-detail${status.tone ? ` ${status.tone}` : ""}`} role="status">
+          {status.text}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /** Non-secret string / select property, persisted to plugin UI prefs. */
 function PrefField({
   pluginId,
@@ -255,6 +344,7 @@ function sectionHasFields(section: PluginSettingsSection): boolean {
   if (!pluginId) return false;
   return (
     section.properties.some(isBoolProp) ||
+    section.properties.some(isActionProp) ||
     section.properties.some(isSecretProp) ||
     section.properties.some(isPrefFieldProp)
   );
@@ -269,12 +359,16 @@ function SectionFields({
 }) {
   const pluginId = (section.plugin_id || "").trim().toLowerCase();
   const { getBool, setPref } = usePluginUiPrefs(pluginId || "_");
+  const actionProps = section.properties.filter(isActionProp);
   const boolProps = section.properties.filter(isBoolProp);
   const secretProps = section.properties.filter(isSecretProp);
   const prefFieldProps = section.properties.filter(isPrefFieldProp);
 
   return (
     <>
+      {actionProps.map((prop) => (
+        <ActionField key={prop.id} pluginId={pluginId} prop={prop} compact={compact} />
+      ))}
       {boolProps.length ? (
         <div className="general-tab-toggle-card">
           {boolProps.map((prop) => {

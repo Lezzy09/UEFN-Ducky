@@ -51,7 +51,7 @@ export type PluginUiPanel = {
 
 export type PluginSettingsProperty = {
   id: string;
-  /** "boolean" (default) | "secret" | "string" | "select". */
+  /** "boolean" (default) | "secret" | "string" | "select" | "action". */
   type?: string;
   default?: boolean | string | number;
   label?: string;
@@ -61,6 +61,14 @@ export type PluginSettingsProperty = {
   options?: Array<{ value: string; label?: string }>;
   /** Show a Test button for secret fields (plugin registers api.register_secret_test). */
   testable?: boolean;
+  /** "action": panel RPC the button calls (plugin api.register_panel_rpc). Returns { ok, connected, detail }. */
+  rpc?: string;
+  /** "action": panel RPC read on mount for the status line. */
+  status_rpc?: string;
+  /** "action": button label once the status says connected. */
+  connected_label?: string;
+  /** "action": panel RPC the button calls once connected. */
+  connected_rpc?: string;
 };
 
 export type PluginSettingsSection = {
