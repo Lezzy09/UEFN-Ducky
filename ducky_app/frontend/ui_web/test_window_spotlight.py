@@ -128,3 +128,23 @@ def test_clear_rect_and_text_helpers():
     lines = wrap("a few words that will certainly not fit on one short line", fnt, 120)
     assert len(lines) > 1 and all(fnt.getlength(line) <= 120 for line in lines)
     assert wrap("", fnt, 100) == [""]
+
+
+def test_a_click_on_the_highlight_advances_even_when_it_fits_between_two_polls():
+    from frontend.ui_web.window_spotlight import click_in_hole
+
+    # Press seen inside the hole, release seen inside it: advance on the release.
+    advance, armed = click_in_hole(False, False, True, True, True)
+    assert (advance, armed) == (False, True)
+    assert click_in_hole(armed, True, False, True, True) == (True, False)
+    # Released outside the hole: nothing, and the step is disarmed.
+    assert click_in_hole(True, True, False, True, False) == (False, False)
+    # A press that started outside the hole never arms it.
+    assert click_in_hole(False, False, True, True, False) == (False, False)
+    # Down and up both happened between polls: the "pressed since" flag with the
+    # pointer in the hole is that click.
+    assert click_in_hole(False, False, False, True, True) == (True, False)
+    assert click_in_hole(False, False, False, True, False) == (False, False)
+    # Nothing pressed: nothing happens.
+    assert click_in_hole(False, False, False, False, True) == (False, False)
+

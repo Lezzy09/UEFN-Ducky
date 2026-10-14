@@ -146,7 +146,9 @@ ducky_ui_show(target="Run this node only", role="button", title="Run just this n
 ### Rules
 
 - One Show me call per answer: several things go in `steps`, not several calls (a new
-  one replaces the one on screen).
+  one replaces the one on screen). A walkthrough on a window is one call too: a show
+  with a single `click: true` step ends the moment they click it, which looks to them
+  like the walkthrough closing.
 - Not while a `ducky_ask_user` question is open.
 - `missing` → look the id up with `ducky_ui_list_targets(route, query)` before trying again.
 - Never use a Show me to click for the user: they click; you show.

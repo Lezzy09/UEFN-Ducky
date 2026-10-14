@@ -25,7 +25,7 @@ from typing import Any
 
 _DIM_ALPHA = 140  # rgba(0, 0, 0, 0.55), same as the in-app spotlight
 _GAP = 12
-_POLL_MS = 100
+_POLL_MS = 50
 _MIN_PX = 8
 
 _current: Spotlight | None = None
@@ -473,6 +473,29 @@ def _key_down(vk: int) -> bool:
     return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
 
 
+def _button_state(vk: int = 0x01) -> tuple[bool, bool]:
+    """(held now, pressed at any moment since the previous call) for a mouse button."""
+    state = int(ctypes.windll.user32.GetAsyncKeyState(vk))
+    return bool(state & 0x8000), bool(state & 0x0001)
+
+
+def click_in_hole(armed: bool, was_down: bool, down: bool, pressed_since: bool, in_hole: bool) -> tuple[bool, bool]:
+    """Decide whether the user just clicked the highlight. Returns (advance, armed).
+
+    A press seen inside the hole arms the step and the release inside it advances, so
+    the whole click reaches the real control first. A quick click can begin and end
+    between two polls: ``pressed_since`` (the button was pressed since the last poll)
+    with the pointer in the hole counts as that click.
+    """
+    if down and not was_down and in_hole:
+        armed = True
+    if armed and not down:
+        return in_hole, False
+    if not down and not was_down and pressed_since and in_hole:
+        return True, False
+    return False, armed
+
+
 def _cursor() -> tuple[int, int]:
     class _POINT(ctypes.Structure):
         _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
@@ -681,20 +704,17 @@ class Spotlight:
         if _key_down(0x1B):
             self._finish("esc")
             return
-        down = _key_down(0x01)
+        down, pressed_since = _button_state(0x01)
         # Advance on mouse-up so the whole click reaches the real control before the hole moves.
         if self._visible and bool(self._step().get("click")):
             x, y = _cursor()
             hx, hy, hw, hh = self._hole
             in_hole = hx <= x <= hx + hw and hy <= y <= hy + hh
-            if down and not self._was_down and in_hole:
-                self._arm = True
-            if self._arm and not down:
-                self._arm = False
-                if in_hole:
-                    self._was_down = False
-                    self._advance(clicked=True)
-                    return
+            advance, self._arm = click_in_hole(self._arm, self._was_down, down, pressed_since, in_hole)
+            if advance:
+                self._was_down = False
+                self._advance(clicked=True)
+                return
         else:
             self._arm = False
         self._was_down = down

@@ -537,8 +537,11 @@ def ducky_ui_show(
     for a Blueprint, Widget or material; ``uefn_window_click`` for a menu), then
     ``uefn_window_capture``, then this. It darkens every monitor and blocks every
     click except the hole. ``click: true`` continues only when they press the
-    hole. The result includes a screenshot with the box drawn — call again if it
-    missed. A call is all in-app steps or all window steps, not a mix.
+    hole; that click reaches the real control. The result includes a screenshot
+    with the box drawn — call again if it missed. A call is all in-app steps or all
+    window steps, not a mix. A walkthrough is ONE call with every step in ``steps``:
+    a show with a single click step ends the moment they click it, which looks to
+    the user like the walkthrough closing on them.
 
     wait: true returns only when the user closes the popup (window: also ``reason``
     of done, close or esc, and ``step``).
