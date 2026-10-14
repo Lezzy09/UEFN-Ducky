@@ -77,6 +77,8 @@ export type PluginSettingsSection = {
   title?: string;
   description?: string;
   order?: number;
+  /** Render as a closed accordion (optional / advanced settings). */
+  collapsed?: boolean;
   properties: PluginSettingsProperty[];
   plugin_id?: string;
 };

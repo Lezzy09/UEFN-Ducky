@@ -491,7 +491,7 @@ export function PluginSettingsSections({
   return (
     <>
       {sections.map((section, i) =>
-        accordion ? (
+        accordion || section.collapsed ? (
           <AccordionSection
             key={`${section.plugin_id}:${section.id}`}
             section={section}

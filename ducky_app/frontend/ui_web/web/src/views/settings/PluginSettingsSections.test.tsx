@@ -83,3 +83,27 @@ it("asks for an app update when the bridge has no plugin_call", async () => {
     expect(screen.getByRole("status").textContent).toBe("Update the app to use this button"),
   );
 });
+
+it("renders a collapsed section as a closed accordion", async () => {
+  pluginCall.mockResolvedValue({ ok: true, connected: false, detail: "Not connected" });
+  sections = [
+    account,
+    {
+      id: "advanced",
+      tab: "Notion",
+      plugin_id: "notion",
+      title: "Advanced",
+      collapsed: true,
+      order: 30,
+      properties: [{ id: "notion_token", type: "secret", label: "Internal integration token" }],
+    },
+  ];
+  const { container } = render(<PluginSettingsSections tabId="Notion" />);
+  const details = container.querySelector("details");
+  expect(details).toBeTruthy();
+  expect(details!.open).toBe(false);
+  expect(details!.textContent).toContain("Advanced");
+  expect(details!.textContent).toContain("Internal integration token");
+  expect(details!.textContent).not.toContain("Sign in with Notion");
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Not connected"));
+});
