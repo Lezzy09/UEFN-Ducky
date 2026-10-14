@@ -16,7 +16,9 @@ const DUCKY_HOVER_PREVIEW_GAP = 12;
 /** No new output for this long while writing or thinking reads as "working on the next step". */
 const QUIET_AFTER_MS = 15_000;
 const QUIET_HINT =
-  "The model shows its next step only once it has written it out. A long plan, file or edit can take minutes.";
+  "The model is still working. Codex and other coding agents send nothing while they reason, and on a big chat " +
+  "(100k+ tokens of context) each step can take 30 seconds to a few minutes. A long plan, file or edit shows up " +
+  "only once it is written out. Ducky restarts the step by itself if Codex stays silent for 15 minutes.";
 
 interface AgentActivityPanelProps {
   lines: ActivityLine[];
@@ -166,7 +168,7 @@ export const AgentActivityPanel = memo(function AgentActivityPanel({
           </span>
           {quiet ? (
             <span className="agent-activity-panel-quiet" title={QUIET_HINT}>
-              no new output for {formatElapsedMs(quietMs)}
+              still working · {formatElapsedMs(quietMs)} since the last step
             </span>
           ) : null}
           {chatId ? (
