@@ -45,3 +45,31 @@ def test_absolute_path_under_a_recent_project_is_readable(monkeypatch, tmp_path:
     except ValueError:
         return
     raise AssertionError("path outside every project should be refused")
+
+
+def test_a_shared_server_call_uses_its_agents_project(monkeypatch, tmp_path: Path) -> None:
+    # Oct 15 2026: the shared tool server was started while project B was open; agents started
+    # later in project D wrote their relative paths into B. Each call carries its agent's project.
+    from backend.bridge.shared_mcp import identity_from_payload
+    from backend.workspace import identity
+    from frontend import shared_mcp_adapter as adapter
+
+    started_in, agent_in = tmp_path / "B", tmp_path / "D"
+    started_in.mkdir()
+    agent_in.mkdir()
+    monkeypatch.setenv("UEFN_DUCKY_PROJECT_ROOT", str(agent_in))
+    monkeypatch.setenv("UEFN_VSCODE_WORKSPACE_FOLDERS", f'["{agent_in.as_posix()}"]')
+    monkeypatch.setenv("DUCKY_CONV_ID", "member")
+    sent = adapter._identity()  # noqa: SLF001 - what the adapter sends in its hello
+    assert sent["project_root"] == str(agent_in) and sent["conv_id"] == "member"
+
+    monkeypatch.setenv("UEFN_DUCKY_PROJECT_ROOT", str(started_in))  # the server's own env
+    monkeypatch.setenv("UEFN_VSCODE_WORKSPACE_FOLDERS", f'["{started_in.as_posix()}"]')
+    token = identity.bind(identity_from_payload(sent))
+    try:
+        assert client.workspace_roots() == [str(agent_in.resolve())]
+        assert client.resolve_workspace_path("textkit/stats.py") == str((agent_in / "textkit" / "stats.py").resolve())
+    finally:
+        identity.reset(token)
+    # A call without an agent project (an older adapter) keeps the server's own roots.
+    assert client.workspace_roots() == [str(started_in.resolve())]

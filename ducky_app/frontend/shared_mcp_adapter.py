@@ -37,6 +37,10 @@ _IDENTITY_ENV = (
     ("DUCKY_CODING_AGENT", "coding_agent"),
     ("DUCKY_GROUP_ID", "group_id"),
     ("DUCKY_LEADER_CONV_ID", "leader_conv_id"),
+    # The project this agent was started in. The shared daemon was started for whichever
+    # project was open then; without these an agent in another project wrote there.
+    ("UEFN_DUCKY_PROJECT_ROOT", "project_root"),
+    ("UEFN_VSCODE_WORKSPACE_FOLDERS", "workspace_folders"),
 )
 
 

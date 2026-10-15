@@ -648,8 +648,38 @@ def _normalize_project_root(selection: str) -> str:
     return full
 
 
+def _calling_agent_roots() -> list[str]:
+    """The project of the agent whose call this is, on the shared tool server.
+
+    The daemon serves every agent from one process, started with whichever project was open
+    then. On Oct 15 2026 agents started in a new project wrote their relative paths into the
+    previous one; each call now carries its agent's own project (shared_mcp_adapter)."""
+    try:
+        from backend.workspace import identity
+
+        ctx = identity.current()
+    except Exception:
+        return []
+    extra = getattr(ctx, "extra", None) or {}
+    roots: list[str] = []
+    raw = str(extra.get("workspace_folders") or "").strip()
+    if raw:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = []
+        roots += [os.path.realpath(os.path.abspath(str(item))) for item in data if item] if isinstance(data, list) else []
+    root = str(extra.get("project_root") or "").strip()
+    if root:
+        roots.append(os.path.realpath(os.path.abspath(root)))
+    return list(dict.fromkeys(roots))
+
+
 def _configured_project_roots() -> list[str]:
-    """Project roots from env or panel settings (fallback when VS Code folders unset)."""
+    """Project roots from the calling agent, env or panel settings (fallback when VS Code folders unset)."""
+    calling = _calling_agent_roots()
+    if calling:
+        return calling
     roots: list[str] = []
     for key in ("UEFN_VSCODE_WORKSPACE_FOLDERS",):
         raw = os.environ.get(key, "").strip()

@@ -120,6 +120,8 @@ def identity_from_payload(raw: dict[str, Any] | None) -> Any:
     data = raw if isinstance(raw, dict) else {}
     lane = data.get("lane")
     lane_t = tuple(str(x) for x in lane) if isinstance(lane, (list, tuple)) else None
+    # The calling agent's project (backend.bridge.client resolves workspace paths from it).
+    project = {k: str(data.get(k) or "").strip() for k in ("project_root", "workspace_folders")}
     return RunContext(
         run_id=str(data.get("run_id") or ""),
         conv_id=str(data.get("conv_id") or ""),
@@ -130,6 +132,7 @@ def identity_from_payload(raw: dict[str, Any] | None) -> Any:
         group_id=str(data.get("group_id") or ""),
         leader_conv_id=str(data.get("leader_conv_id") or ""),
         lane=lane_t,
+        extra={k: v for k, v in project.items() if v},
     )
 
 
