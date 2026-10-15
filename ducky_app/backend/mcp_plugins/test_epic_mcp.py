@@ -143,7 +143,7 @@ def _probe(monkeypatch, *, process: str, root: str, up: bool = True) -> dict:
     monkeypatch.setattr(epic, "epic_mcp_url", lambda: EPIC_MCP_DEFAULT_URL)
     monkeypatch.setattr(epic, "epic_mcp_enabled", lambda: True)
     monkeypatch.setattr(epic, "tcp_probe_url", lambda *_a, **_k: up)
-    monkeypatch.setattr(epic, "_listening_process", lambda _port: process)
+    monkeypatch.setattr(epic, "_listening_process", lambda _port: (process, 4242 if process else 0, 1.0))
     epic.invalidate_epic_mcp_probe()
     return epic.probe_epic_mcp(project_root=root)
 
@@ -223,7 +223,8 @@ def test_port_owner_is_cached_until_the_port_closes(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(epic, "epic_mcp_url", lambda: EPIC_MCP_DEFAULT_URL)
     monkeypatch.setattr(epic, "epic_mcp_enabled", lambda: True)
     monkeypatch.setattr(epic, "tcp_probe_url", lambda *_a, **_k: True)
-    monkeypatch.setattr(epic, "_listening_process", lambda port: calls.append(port) or "UnrealEditor.exe")
+    monkeypatch.setattr(epic, "_listening_process", lambda port: calls.append(port) or ("UnrealEditor.exe", 4242, 1.0))
+    monkeypatch.setattr(epic, "_same_process", lambda pid, started: (pid, started) == (4242, 1.0))
     epic.invalidate_epic_mcp_probe()
     epic.probe_epic_mcp(project_root=island, ttl_sec=0)
     epic.probe_epic_mcp(project_root=island, ttl_sec=0)
@@ -233,6 +234,38 @@ def test_port_owner_is_cached_until_the_port_closes(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(epic, "tcp_probe_url", lambda *_a, **_k: True)
     epic.probe_epic_mcp(project_root=island, ttl_sec=0)
     assert calls == [8000, 8000]
+
+
+def test_port_owner_is_checked_again_when_its_process_is_gone(tmp_path: Path, monkeypatch) -> None:
+    # UEFN closes and Unreal Editor takes the port between two probes: the port never
+    # looked closed, so only the cached process's identity tells them apart.
+    island, _game, _repo = _projects(tmp_path)
+    owners = iter([("UnrealEditorFortnite-Win64-Shipping.exe", 100, 1.0), ("UnrealEditor.exe", 200, 2.0)])
+    alive = {100}
+    monkeypatch.setattr(epic, "epic_mcp_url", lambda: EPIC_MCP_DEFAULT_URL)
+    monkeypatch.setattr(epic, "epic_mcp_enabled", lambda: True)
+    monkeypatch.setattr(epic, "tcp_probe_url", lambda *_a, **_k: True)
+    monkeypatch.setattr(epic, "_listening_process", lambda _port: next(owners))
+    monkeypatch.setattr(epic, "_same_process", lambda pid, started: pid in alive)
+    epic.invalidate_epic_mcp_probe()
+    assert epic.probe_epic_mcp(project_root=island, ttl_sec=0)["epic_mcp_online"] is True
+    alive.clear()
+    swapped = epic.probe_epic_mcp(project_root=island, ttl_sec=0)
+    assert swapped["epic_mcp_reason"] == "other_editor"
+    assert swapped["epic_mcp_editor"] == epic.EDITOR_UNREAL
+
+
+def test_listening_process_names_a_real_listener() -> None:
+    import os
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        name, pid, started = epic._listening_process(sock.getsockname()[1])
+    assert pid == os.getpid() and name.lower().startswith("python") and started > 0
+    assert epic._same_process(pid, started) is True
+    assert epic._same_process(pid, started + 1) is False
 
 
 def test_call_tool_refuses_the_wrong_editor_without_connecting(monkeypatch) -> None:

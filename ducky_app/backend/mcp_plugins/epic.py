@@ -85,7 +85,7 @@ EPIC_PRUNED_DUCKY_TOOLS: frozenset[str] = frozenset(
 )
 
 _probe_cache: dict[str, Any] = {"at": 0.0, "root": "", "result": None}
-_owner_cache: dict[str, Any] = {"at": 0.0, "port": 0, "name": ""}
+_owner_cache: dict[str, Any] = {"at": 0.0, "port": 0, "name": "", "pid": 0, "started": 0.0}
 
 
 def epic_mcp_url() -> str:
@@ -145,25 +145,41 @@ def editor_label(editor: str) -> str:
     return "Unreal Editor" if editor == EDITOR_UNREAL else "UEFN"
 
 
-def _listening_process(port: int) -> str:
-    """Image name of the local process listening on ``port``; '' when it can't be read."""
+def _listening_process(port: int) -> tuple[str, int, float]:
+    """(image name, pid, start time) of the local process listening on ``port``; ('', 0, 0) unknown."""
     try:
         import psutil
 
         for conn in psutil.net_connections(kind="tcp"):
             if conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port == port and conn.pid:
-                return psutil.Process(conn.pid).name()
+                proc = psutil.Process(conn.pid)
+                return proc.name(), conn.pid, proc.create_time()
     except Exception:
         pass
-    return ""
+    return "", 0, 0.0
+
+
+def _same_process(pid: int, started: float) -> bool:
+    try:
+        import psutil
+
+        return bool(pid) and psutil.Process(pid).create_time() == started
+    except Exception:
+        return False
 
 
 def _port_owner(port: int) -> str:
+    # One editor can close and another take the port between two probes, so a cached
+    # owner only counts while that same process is still running.
     now = time.time()
-    if _owner_cache.get("port") == port and now - float(_owner_cache.get("at") or 0) < _OWNER_CACHE_SEC:
+    if (
+        _owner_cache.get("port") == port
+        and now - float(_owner_cache.get("at") or 0) < _OWNER_CACHE_SEC
+        and _same_process(int(_owner_cache.get("pid") or 0), float(_owner_cache.get("started") or 0))
+    ):
         return str(_owner_cache.get("name") or "")
-    name = _listening_process(port)
-    _owner_cache.update(at=now, port=port, name=name)
+    name, pid, started = _listening_process(port)
+    _owner_cache.update(at=now, port=port, name=name, pid=pid, started=started)
     return name
 
 
