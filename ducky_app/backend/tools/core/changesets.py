@@ -126,6 +126,7 @@ def changeset_list(
     for Explorer / VS Code / UEFN). Each summary has ``source`` and ``programs``
     ({file, uefn, blender, …}). Archived runs stay readable (revert_locked=true)
     — use changeset_export / changeset_contents, not revert.
+    group_id also lists the runs of members in groups nested inside that group.
     Filter archived=all|live|archived. Then changeset_revert to undo a live run.
     Agents cannot revert human runs (no matching conv_id); only the user can.
     """

@@ -55,8 +55,9 @@ that made it, ledgered per run, and checked against the writer's lane.
 - **Members can't change their own lane.** An out-of-lane write is refused (only
   flagged while the `write_lanes_mode` setting is `shadow`): never retry the path; ask
   the leader in the group chat or stay inside the lane.
-- **Changesets.** `changeset_list(group_id=…)` shows what every member wrote
-  (archived runs too: `archived=true`, `revert_locked=true`). Summaries include
+- **Changesets.** `changeset_list(group_id=…)` shows what every member wrote,
+  members of nested groups included (archived runs too: `archived=true`,
+  `revert_locked=true`). Summaries include
   `source` (agent / user / revert) and `programs` (`file`, `uefn`, `blender`, …). The
   ledger covers UEFN listener and Epic `unreal__*` changes, Store plugin edits, and
   human file edits (`source=user`, `run_id` like `human:YYYY-MM-DD`, `tool=external`

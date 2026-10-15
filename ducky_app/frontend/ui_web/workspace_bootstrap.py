@@ -145,8 +145,16 @@ def _journal_enabled() -> bool:
     return bool(getattr(PanelSettings.load(), "changeset_journal_enabled", True))
 
 
+def _group_scope(group_id: str) -> list[str]:
+    """A team's changes include its nested groups': each run keeps the group its chat sits in.
+    Oct 15 2026: a lead whose members all sat in Core / Interface / Quality listed none."""
+    from frontend.ui_web.group_orchestrator import group_and_nested_ids
+
+    return group_and_nested_ids(group_id)
+
+
 def build_journal() -> FileChangeJournal:
-    return FileChangeJournal(_changesets_storage, enabled=_journal_enabled)
+    return FileChangeJournal(_changesets_storage, enabled=_journal_enabled, group_scope=_group_scope)
 
 
 def _panel_event_sink(event: dict[str, Any]) -> None:

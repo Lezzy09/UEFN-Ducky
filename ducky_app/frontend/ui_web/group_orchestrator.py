@@ -95,6 +95,34 @@ def group_members(conv: Any) -> list[dict[str, Any]]:
     return out
 
 
+def group_and_nested_ids(group_id: str, project_root: str | None = None) -> list[str]:
+    """This group, then every group inside it at any depth (cycle-safe).
+
+    Inside = a hub whose parent_conv_id leads here (groups made in a group's folder), or a
+    nested-group row in a roster (teams made before those hubs had a parent).
+    """
+    from frontend.ui_web.project_chats import conversation_descendant_ids, load_conversation_meta
+
+    root = (group_id or "").strip()
+    if not root:
+        return []
+    found = [root]
+    queue = [root, *conversation_descendant_ids(root, project_root)]
+    seen: set[str] = set()
+    while queue:
+        cid = queue.pop(0)
+        if cid in seen:
+            continue
+        seen.add(cid)
+        conv = load_conversation_meta(cid, project_root)
+        if conv is None or not is_group_conversation(conv):
+            continue
+        if cid not in found:
+            found.append(cid)
+        queue += [m["member_conv_id"] for m in group_members(conv) if m["is_group"] and m["member_conv_id"]]
+    return found
+
+
 def is_subagent_conversation(conv: Any, project_root: str | None = None) -> bool:
     """True when parent is a normal ducky (not a group hub) — AI-spawned only."""
     parent_id = (getattr(conv, "parent_conv_id", None) or "").strip()

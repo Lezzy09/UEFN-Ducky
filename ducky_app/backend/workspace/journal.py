@@ -21,7 +21,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Protocol, runtime_checkable
 
 from backend.workspace import events, identity
 from backend.workspace.editor_ops import usable_ident
@@ -354,6 +354,9 @@ class NullJournal:
 
 
 StorageLocator = Callable[[str], Path]
+#: A group id -> that group and every group nested in it. A run carries the group its
+#: chat sits in directly, so asking by an outer group matches nothing without this.
+GroupScope = Callable[[str], Iterable[str]]
 
 
 class FileChangeJournal:
@@ -363,10 +366,12 @@ class FileChangeJournal:
         *,
         enabled: Callable[[], bool] = lambda: True,
         clock: Callable[[], float] = time.time,
+        group_scope: GroupScope = lambda group_id: (group_id,),
     ) -> None:
         self._storage_for_root = storage_for_root
         self._enabled = enabled
         self._clock = clock
+        self._group_scope = group_scope
         self._locks: dict[str, threading.RLock] = {}
         self._locks_guard = threading.Lock()
         # Reads seen by a run before its first write (no run document yet).
@@ -522,7 +527,7 @@ class FileChangeJournal:
             return []
         cap = max(1, int(limit))
         conv_id = (conv_id or "").strip()
-        group_id = (group_id or "").strip()
+        group_ids = self._group_ids(group_id)
         want_archived = None if archived is None else bool(archived)
         runs: list[dict[str, Any]] = []
         with self._lock(storage):
@@ -533,7 +538,7 @@ class FileChangeJournal:
             for rid, meta in catalog.items():
                 if conv_id and str(meta.get("conv_id") or "") != conv_id:
                     continue
-                if group_id and str(meta.get("group_id") or "") != group_id:
+                if group_ids and str(meta.get("group_id") or "") not in group_ids:
                     continue
                 if want_archived is not None and bool(meta.get("archived")) != want_archived:
                     continue
@@ -1473,13 +1478,13 @@ class FileChangeJournal:
         """Move ledger rows to/from the archive. Does not revert the island."""
         storage = self._storage(project_root)
         conv_id = (conv_id or "").strip()
-        group_id = (group_id or "").strip()
+        group_ids = self._group_ids(group_id)
         run_id = (run_id or "").strip()
         want = bool(archived)
         updated = 0
         with self._lock(storage):
             for run in self._iter_run_docs(storage):
-                if not self._match_run(run, conv_id=conv_id, group_id=group_id, run_id=run_id):
+                if not self._match_run(run, conv_id=conv_id, group_ids=group_ids, run_id=run_id):
                     continue
                 if run.get("status") in _OPEN_STATUSES:
                     continue
@@ -1506,14 +1511,14 @@ class FileChangeJournal:
         """Drop ledger rows. Does not revert project files or editor work."""
         storage = self._storage(project_root)
         conv_id = (conv_id or "").strip()
-        group_id = (group_id or "").strip()
+        group_ids = self._group_ids(group_id)
         run_id = (run_id or "").strip()
         removed_runs = 0
         with self._lock(storage):
             deleted_ids: set[str] = set()
             keep: list[dict[str, Any]] = []
             for run in self._iter_run_docs(storage):
-                match = self._match_run(run, conv_id=conv_id, group_id=group_id, run_id=run_id)
+                match = self._match_run(run, conv_id=conv_id, group_ids=group_ids, run_id=run_id)
                 if match and run.get("status") not in _OPEN_STATUSES:
                     if archived_only and not run.get("archived"):
                         keep.append(run)
@@ -1566,14 +1571,26 @@ class FileChangeJournal:
                 "Unarchive it first, or read it with changeset_list / changeset_export / changeset_contents."
             )
 
+    def _group_ids(self, group_id: str) -> frozenset[str]:
+        """``group_id`` and the groups nested in it; empty when no group was asked for."""
+        group_id = (group_id or "").strip()
+        if not group_id:
+            return frozenset()
+        try:
+            nested = {str(g).strip() for g in self._group_scope(group_id)}
+        except Exception:  # noqa: BLE001 - chats unreadable: the group itself still filters
+            log.debug("group scope failed for %s", group_id, exc_info=True)
+            nested = set()
+        return frozenset((nested | {group_id}) - {""})
+
     @staticmethod
-    def _match_run(run: dict[str, Any], *, conv_id: str, group_id: str, run_id: str) -> bool:
+    def _match_run(run: dict[str, Any], *, conv_id: str, group_ids: frozenset[str], run_id: str) -> bool:
         rid = str(run.get("run_id") or "")
         if run_id:
             return rid == run_id
-        if conv_id or group_id:
+        if conv_id or group_ids:
             return (not conv_id or run.get("conv_id") == conv_id) and (
-                not group_id or run.get("group_id") == group_id
+                not group_ids or run.get("group_id") in group_ids
             )
         return True
 
