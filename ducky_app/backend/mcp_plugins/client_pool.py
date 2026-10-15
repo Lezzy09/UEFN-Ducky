@@ -503,6 +503,17 @@ class PluginClientPool:
             raise ValueError(f"Not a plugin tool: {namespaced_name}")
         plugin_id, original_name = parsed
         args = arguments or {}
+        from backend.mcp_plugins.epic import EDITOR_UNREAL, EPIC_MCP_SERVER_ID, probe_epic_mcp
+
+        epic_call = plugin_id == EPIC_MCP_SERVER_ID
+        epic_editor = ""
+        if epic_call:
+            # UEFN and Unreal Editor share Epic's MCP port: never send work to the wrong one.
+            epic = await asyncio.to_thread(probe_epic_mcp)
+            if epic.get("epic_mcp_reason") in ("other_editor", "port_taken"):
+                steps = epic.get("epic_mcp_setup_steps") or ["Epic MCP's port is held by another program."]
+                raise RuntimeError(" ".join(steps))
+            epic_editor = str(epic.get("epic_mcp_editor") or "")
         # Empty-str exceptions (bare TimeoutError/ConnectionError) surface to agents as
         # "Error executing tool X:" with no detail — always raise with a real message.
         try:
@@ -519,23 +530,17 @@ class PluginClientPool:
         def _watchdog():
             # Epic's MCP runs on UEFN's Slate thread: a Save prompt it opens would
             # hold this call for the whole timeout, so the host presses it meanwhile.
-            from backend.mcp_plugins.epic import EPIC_MCP_PREFIX
-
-            if plugin_id != EPIC_MCP_PREFIX:
+            # The watchdog presses UEFN's prompts only, so not for Unreal Editor.
+            if not epic_call or epic_editor == EDITOR_UNREAL:
                 return nullcontext()
             from backend.tools.core.uefn_modal import save_modal_watchdog
 
             return save_modal_watchdog(f"{plugin_id}:{original_name}")
 
         async def _invoke(session_obj):
-            from backend.mcp_plugins.epic import EPIC_MCP_PREFIX
             from backend.mcp_plugins.epic_array_set import expand_epic_call
 
-            sequence = (
-                expand_epic_call(original_name, args)
-                if plugin_id == EPIC_MCP_PREFIX
-                else [args]
-            )
+            sequence = expand_epic_call(original_name, args) if epic_call else [args]
             last = None
             for index, step in enumerate(sequence):
                 last = await asyncio.wait_for(

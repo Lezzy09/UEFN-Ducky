@@ -21,6 +21,26 @@ _handle = None
 _ticks = 0
 
 
+def _in_uefn() -> bool:
+    """False in full Unreal Editor, which runs the Documents copy of this file too.
+
+    Unreal MCP (UE 5.8+) needs Python, so every Unreal Editor would start a UEFN
+    listener: it takes UEFN's listener port and answers island tools from the wrong
+    editor. Ducky reaches Unreal Editor through Unreal MCP instead.
+    """
+    if sys.platform != "win32":
+        return False  # UEFN is Windows-only
+    try:
+        import ctypes
+
+        buf = ctypes.create_unicode_buffer(1024)
+        if not ctypes.windll.kernel32.GetModuleFileNameW(None, buf, len(buf)):
+            return True
+    except Exception:
+        return True
+    return "unrealeditorfortnite" in Path(buf.value).name.lower()
+
+
 def _start_ducky() -> None:
     if os.environ.get("UEFN_DUCKY_DISABLE", "").strip().lower() in ("1", "true", "yes"):
         return
@@ -72,6 +92,14 @@ def _tick(_dt: float) -> None:
 
 def _run() -> None:
     global _handle
+    if not _in_uefn():
+        try:
+            import unreal
+
+            unreal.log("[MCP] UEFN-Ducky: not UEFN, listener stays off (Ducky uses Unreal MCP here)")
+        except Exception:
+            pass
+        return
     try:
         import unreal
 

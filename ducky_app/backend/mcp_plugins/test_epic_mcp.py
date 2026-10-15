@@ -123,6 +123,144 @@ def test_tcp_probe_closed_port_is_false() -> None:
     assert epic.tcp_probe_url("http://127.0.0.1:1/mcp", timeout=0.2) is False
 
 
+# --------------------------------------------------------------------------- UEFN vs Unreal Editor
+# Both editors ship the same Unreal MCP on the same default port.
+
+
+def _projects(tmp_path: Path) -> tuple[str, str, str]:
+    island = tmp_path / "Island"
+    island.mkdir()
+    (island / "Island.uefnproject").write_text("{}", encoding="utf-8")
+    game = tmp_path / "MyGame"
+    (game / "Content").mkdir(parents=True)
+    (game / "MyGame.uproject").write_text("{}", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    return str(island), str(game), str(repo)
+
+
+def _probe(monkeypatch, *, process: str, root: str, up: bool = True) -> dict:
+    monkeypatch.setattr(epic, "epic_mcp_url", lambda: EPIC_MCP_DEFAULT_URL)
+    monkeypatch.setattr(epic, "epic_mcp_enabled", lambda: True)
+    monkeypatch.setattr(epic, "tcp_probe_url", lambda *_a, **_k: up)
+    monkeypatch.setattr(epic, "_listening_process", lambda _port: process)
+    epic.invalidate_epic_mcp_probe()
+    return epic.probe_epic_mcp(project_root=root)
+
+
+def test_editor_of_process_names() -> None:
+    assert epic.editor_of_process("UnrealEditorFortnite-Win64-Shipping.exe") == epic.EDITOR_UEFN
+    assert epic.editor_of_process("UnrealEditor.exe") == epic.EDITOR_UNREAL
+    assert epic.editor_of_process("UnrealEditor-Win64-DebugGame.exe") == epic.EDITOR_UNREAL
+    assert epic.editor_of_process("python.exe") == "other"
+    assert epic.editor_of_process("") == ""
+
+
+def test_expected_editor_follows_the_project(tmp_path: Path) -> None:
+    island, game, repo = _projects(tmp_path)
+    assert epic.expected_editor(island) == epic.EDITOR_UEFN
+    assert epic.expected_editor(game) == epic.EDITOR_UNREAL
+    assert epic.expected_editor(repo) == ""
+    assert epic.expected_editor("") == ""
+
+
+def test_island_refuses_unreal_editor_on_the_port(tmp_path: Path, monkeypatch) -> None:
+    island, _game, _repo = _projects(tmp_path)
+    result = _probe(monkeypatch, process="UnrealEditor.exe", root=island)
+    assert result["epic_mcp_online"] is False
+    assert result["epic_mcp_reason"] == "other_editor"
+    assert result["epic_mcp_editor"] == epic.EDITOR_UNREAL
+    assert "held by Unreal Editor" in result["epic_mcp_setup_steps"][0]
+
+
+def test_unreal_project_uses_unreal_editor_and_refuses_uefn(tmp_path: Path, monkeypatch) -> None:
+    _island, game, _repo = _projects(tmp_path)
+    ok = _probe(monkeypatch, process="UnrealEditor.exe", root=game)
+    assert ok["epic_mcp_online"] is True
+    assert ok["epic_mcp_editor"] == epic.EDITOR_UNREAL
+    assert ok["epic_mcp_setup_steps"] == []
+    blocked = _probe(monkeypatch, process="UnrealEditorFortnite-Win64-Shipping.exe", root=game)
+    assert blocked["epic_mcp_reason"] == "other_editor"
+    assert "held by UEFN" in blocked["epic_mcp_setup_steps"][0]
+
+
+def test_plain_folder_takes_either_editor(tmp_path: Path, monkeypatch) -> None:
+    _island, _game, repo = _projects(tmp_path)
+    for process, editor in (("UnrealEditor.exe", "unreal"), ("UnrealEditorFortnite-Win64-Shipping.exe", "uefn")):
+        result = _probe(monkeypatch, process=process, root=repo)
+        assert result["epic_mcp_online"] is True
+        assert result["epic_mcp_editor"] == editor
+
+
+def test_other_program_on_the_port_is_port_taken(tmp_path: Path, monkeypatch) -> None:
+    island, _game, _repo = _projects(tmp_path)
+    result = _probe(monkeypatch, process="python.exe", root=island)
+    assert result["epic_mcp_online"] is False
+    assert result["epic_mcp_reason"] == "port_taken"
+    assert "python.exe" in result["epic_mcp_setup_steps"][0]
+
+
+def test_unknown_owner_stays_online(tmp_path: Path, monkeypatch) -> None:
+    island, _game, _repo = _projects(tmp_path)
+    result = _probe(monkeypatch, process="", root=island)
+    assert result["epic_mcp_online"] is True
+    assert result["epic_mcp_editor"] == ""
+
+
+def test_offline_steps_match_the_editor(tmp_path: Path, monkeypatch) -> None:
+    island, game, _repo = _projects(tmp_path)
+    assert _probe(monkeypatch, process="", root=game, up=False)["epic_mcp_setup_steps"] == list(
+        epic.UNREAL_MCP_SETUP_STEPS
+    )
+    assert _probe(monkeypatch, process="", root=island, up=False)["epic_mcp_setup_steps"] == list(
+        epic.EPIC_MCP_SETUP_STEPS
+    )
+
+
+def test_port_owner_is_cached_until_the_port_closes(tmp_path: Path, monkeypatch) -> None:
+    island, _game, _repo = _projects(tmp_path)
+    calls: list[int] = []
+    monkeypatch.setattr(epic, "epic_mcp_url", lambda: EPIC_MCP_DEFAULT_URL)
+    monkeypatch.setattr(epic, "epic_mcp_enabled", lambda: True)
+    monkeypatch.setattr(epic, "tcp_probe_url", lambda *_a, **_k: True)
+    monkeypatch.setattr(epic, "_listening_process", lambda port: calls.append(port) or "UnrealEditor.exe")
+    epic.invalidate_epic_mcp_probe()
+    epic.probe_epic_mcp(project_root=island, ttl_sec=0)
+    epic.probe_epic_mcp(project_root=island, ttl_sec=0)
+    assert calls == [8000]
+    monkeypatch.setattr(epic, "tcp_probe_url", lambda *_a, **_k: False)
+    epic.probe_epic_mcp(project_root=island, ttl_sec=0)
+    monkeypatch.setattr(epic, "tcp_probe_url", lambda *_a, **_k: True)
+    epic.probe_epic_mcp(project_root=island, ttl_sec=0)
+    assert calls == [8000, 8000]
+
+
+def test_call_tool_refuses_the_wrong_editor_without_connecting(monkeypatch) -> None:
+    rebuild_plugin_prefix_cache([{"id": EPIC_MCP_SERVER_ID, "tool_prefix": "unreal"}])
+    monkeypatch.setattr("backend.mcp_plugins.client_pool.ensure_plugin_prefix_cache", lambda: None)
+    monkeypatch.setattr(
+        epic,
+        "probe_epic_mcp",
+        lambda **_k: {
+            "epic_mcp_online": False,
+            "epic_mcp_reason": "other_editor",
+            "epic_mcp_editor": "unreal",
+            "epic_mcp_setup_steps": ["Port 8000 is held by Unreal Editor, not UEFN."],
+        },
+    )
+    pool = PluginClientPool()
+
+    async def _no_connect(_pid):
+        raise AssertionError("must not connect to the wrong editor")
+
+    monkeypatch.setattr(pool, "_get_or_create", _no_connect)
+    try:
+        asyncio.run(pool.call_tool("unreal__list_toolsets", {}))
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        assert "held by Unreal Editor" in str(exc)
+
+
 def test_ensure_editor_auto_start_appends_and_flips(tmp_path: Path) -> None:
     ini = tmp_path / "Editor.ini"
     ini.write_text("[/Script/Foo]\nBar=1\n", encoding="utf-8")

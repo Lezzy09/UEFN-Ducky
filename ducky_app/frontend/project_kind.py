@@ -39,15 +39,24 @@ def _key(root: Path | str) -> str:
         return str(root).lower()
 
 
-def has_uefnproject(root: Path | str) -> bool:
-    """True when *root* holds a ``*.uefnproject`` file, the only disk proof of an island."""
+def _has_file(root: Path | str, pattern: str) -> bool:
     try:
         base = Path(root)
         if not base.is_dir():
             return False
-        return any(p.is_file() for p in base.glob("*.uefnproject"))
+        return any(p.is_file() for p in base.glob(pattern))
     except OSError:
         return False
+
+
+def has_uefnproject(root: Path | str) -> bool:
+    """True when *root* holds a ``*.uefnproject`` file, the only disk proof of an island."""
+    return _has_file(root, "*.uefnproject")
+
+
+def has_uproject(root: Path | str) -> bool:
+    """True when *root* holds a ``*.uproject``: an Unreal Engine project, never an island."""
+    return _has_file(root, "*.uproject")
 
 
 def project_root_path(selection: Path | str) -> Path:
@@ -85,6 +94,9 @@ def _saved_kind(root: Path | str) -> str:
 def _compute_kind(root: Path) -> str:
     if has_uefnproject(root):
         return UEFN
+    if has_uproject(root):
+        # Unreal Engine projects have a Content folder too; old rows saved them as islands.
+        return FOLDER
     saved = _saved_kind(root)
     if saved in KINDS:
         return saved
@@ -299,6 +311,8 @@ def resolve_project_root(selection: Path | str) -> tuple[Path, str]:
     root = project_root_path(selection)
     if has_uefnproject(root):
         return root, UEFN
+    if has_uproject(root):
+        return root, FOLDER
     saved = _saved_kind(root)
     return root, saved if saved in KINDS else FOLDER
 

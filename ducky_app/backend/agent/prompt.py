@@ -220,11 +220,17 @@ def get_system_prompt_parts(
     else:
         project_context_line = ""
 
-    epic = probe_epic_mcp()
-    epic_line = (
-        f"- Epic UEFN MCP: online ({epic.get('epic_mcp_url')})\n"
-        if epic.get("epic_mcp_online")
-        else (
+    epic = probe_epic_mcp(project_root=project_root.strip() or None)
+    if epic.get("epic_mcp_online") and epic.get("epic_mcp_editor") == "unreal":
+        epic_line = (
+            f"- Epic Unreal MCP: online in Unreal Editor ({epic.get('epic_mcp_url')}): full Unreal "
+            "Engine, not UEFN. No Verse, Fortnite devices or islands there; find its tools with "
+            "`unreal__list_toolsets`.\n"
+        )
+    elif epic.get("epic_mcp_online"):
+        epic_line = f"- Epic UEFN MCP: online ({epic.get('epic_mcp_url')})\n"
+    else:
+        epic_line = (
             f"- Epic UEFN MCP: offline ({epic.get('epic_mcp_reason') or 'unreachable'} "
             f"at {epic.get('epic_mcp_url')}). Greetings, questions and file-only work: "
             "just answer — do not mention Epic MCP, setup, or reconnect steps. Only if "
@@ -232,7 +238,6 @@ def get_system_prompt_parts(
             "paste `epic_mcp_setup_steps` from `ducky_get_status` once and stop. Do not "
             "use pruned Ducky editor tools.\n"
         )
-    )
     beta_line = ""
     try:
         from frontend.uefn_project_beta import read_uefn_beta_access

@@ -1,7 +1,7 @@
 {
   "id": "unreal-mcp",
   "label": "UEFN MCP (Epic)",
-  "description": "Official Epic in-editor MCP nested under Ducky. UI shows three tools: unreal__list_toolsets, unreal__describe_toolset, unreal__call_tool — then call Valkyrie Device/Entity/Verse/Session toolsets (and editor_toolset.*). Do not add a second IDE mcp.json entry.",
+  "description": "Official Epic in-editor MCP nested under Ducky, in UEFN and in Unreal Editor 5.8+ (Unreal MCP). UI shows three tools: unreal__list_toolsets, unreal__describe_toolset, unreal__call_tool — then call that editor's toolsets (UEFN: Valkyrie Device/Entity/Verse/Session and editor_toolset.*). Ducky checks which editor holds the port and never sends island work to Unreal Editor, or Unreal project work to UEFN. Do not add a second IDE mcp.json entry.",
   "kind": "catalog",
   "version": 2,
   "default_enabled": true,
@@ -31,6 +31,7 @@
     "Open the project in UEFN (restart once if Epic MCP is still off).",
     "In Settings → MCPs confirm \"UEFN MCP (Epic)\" is Enabled (slug unreal-mcp).",
     "Do not enable another HTTP/SSE MCP on the same host:port — Ducky blocks that and will disable duplicates.",
-    "If port 8000 is taken, set Editor Preferences → Model Context Protocol port, then Settings → MCPs unreal-mcp URL to match."
+    "If port 8000 is taken, set Editor Preferences → Model Context Protocol port, then Settings → MCPs unreal-mcp URL to match.",
+    "Unreal Editor 5.8+: enable the Unreal MCP and All Toolsets plugins, turn on Editor Preferences → Model Context Protocol → Auto Start Server, and open the project folder (the one with the .uproject) in Ducky."
   ]
 }

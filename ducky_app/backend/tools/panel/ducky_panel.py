@@ -152,7 +152,8 @@ def _discovery_cached_connections() -> dict[str, Any]:
         if type(online) is bool:
             status["epic_mcp_online"] = online
             reason = observed.get("epic_mcp_reason")
-            status["epic_mcp_reason"] = reason if reason in ("", "disabled", "unreachable") else "unknown"
+            known = ("", "disabled", "unreachable", "other_editor", "port_taken")
+            status["epic_mcp_reason"] = reason if reason in known else "unknown"
     host = sys.modules.get("backend.uefn_plugins.host")
     cache = getattr(host, "_CONNECTION_CACHE", {})
     # Bound the snapshot and never wait for a provider lock. A concurrent cache

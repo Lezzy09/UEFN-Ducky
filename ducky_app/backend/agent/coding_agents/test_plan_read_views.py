@@ -37,7 +37,7 @@ def test_mcp_assignment_read_preserves_raw_ownership(team, monkeypatch, backend,
     result = json.loads(panel.ducky_get_plan())
     from backend.agent import prompt, chat_title
     from backend.mcp_plugins import epic
-    monkeypatch.setattr(epic, 'probe_epic_mcp', lambda: {})
+    monkeypatch.setattr(epic, 'probe_epic_mcp', lambda **_k: {})
     monkeypatch.setattr(prompt, '_rules_body', lambda *a, **kw: '')
     monkeypatch.setattr(chat_title, 'self_naming_instruction', lambda *a: '')
     runtime = prompt.get_system_prompt_parts(listener_online=False, listener_port=0,
@@ -73,7 +73,7 @@ def test_runtime_prompt_refreshes_assignment(team, monkeypatch):
     from backend.agent import prompt, chat_title
     from backend.agent.prompt_cache import build_cache_payload
     from backend.mcp_plugins import epic
-    monkeypatch.setattr(epic, 'probe_epic_mcp', lambda: {})
+    monkeypatch.setattr(epic, 'probe_epic_mcp', lambda **_k: {})
     monkeypatch.setattr(prompt, '_rules_body', lambda *a, **kw: '')
     monkeypatch.setattr(chat_title, 'self_naming_instruction', lambda *a: '')
     plans.update_node('coord', 'a', assignee='group-a', project_root=team)

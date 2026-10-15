@@ -22,17 +22,43 @@ function computeMenuPosition(trigger: HTMLElement): { top: number; left: number 
   return { top: rect.bottom + MENU_GAP, left };
 }
 
-function Row({
-  label,
-  detail,
-  ok,
-  warn,
-}: {
+interface RowProps {
   label: string;
   detail: string;
   ok: boolean;
   warn?: boolean;
-}) {
+}
+
+/** UEFN and Unreal Editor 5.8+ serve the same Epic MCP on one port; epic_mcp_editor says which holds it. */
+export function epicMcpRows(status: ListenerStatus): [RowProps, RowProps] {
+  const url = status.epic_mcp_url || "http://127.0.0.1:8000/mcp";
+  const reason = String(status.epic_mcp_reason || "").trim();
+  const editor = status.epic_mcp_editor || "";
+  // other_editor: the editor on the port is not the one this project belongs in.
+  const wrongProject = reason === "other_editor";
+  const row = (label: string, mine: boolean, otherEditor: string, offline: string): RowProps => {
+    if (reason === "disabled") return { label, detail: "Disabled in Settings → MCPs", ok: false };
+    if (reason === "port_taken") return { label, detail: "Port taken by another program", ok: false, warn: true };
+    if (mine) {
+      return wrongProject
+        ? { label, detail: "Running · not used for this project", ok: false, warn: true }
+        : { label, detail: `Connected · ${url}`, ok: true };
+    }
+    if (editor) return { label, detail: `Offline · port held by ${otherEditor}`, ok: false, warn: wrongProject };
+    return { label, detail: offline, ok: false };
+  };
+  return [
+    row(
+      "UEFN MCP",
+      editor === "uefn" || (!editor && Boolean(status.epic_mcp_online)),
+      "Unreal Editor",
+      `Offline${reason ? ` · ${reason}` : ""}`,
+    ),
+    row("Unreal MCP", editor === "unreal", "UEFN", "Offline · open Unreal Editor 5.8+ with Unreal MCP"),
+  ];
+}
+
+function Row({ label, detail, ok, warn }: RowProps) {
   const state = warn ? "warn" : ok ? "ok" : "off";
   return (
     <div className={`connection-status-menu-row is-${state}`}>
@@ -71,7 +97,6 @@ export function ConnectionStatusDropdown({
 
   const isOnline = Boolean(status.online);
   const isWedged = Boolean(status.wedged);
-  const epicOnline = Boolean(status.epic_mcp_online);
   const race = Boolean(status.listener_init_race) && !isOnline;
   const uptimeSec = useListenerUptimeSec(open) ?? status.uptime_sec;
 
@@ -121,12 +146,7 @@ export function ConnectionStatusDropdown({
         ? "Offline — listener init race; stay on workspace_*"
         : "Offline — open UEFN + start listener";
 
-  const epicReason = String(status.epic_mcp_reason || "").trim();
-  const epicDetail = epicOnline
-    ? `Connected · ${status.epic_mcp_url || "http://127.0.0.1:8000/mcp"}`
-    : epicReason === "disabled"
-      ? "Disabled in Settings → MCPs"
-      : `Offline${epicReason ? ` · ${epicReason}` : ""}`;
+  const [uefnMcpRow, unrealMcpRow] = epicMcpRows(status);
 
   const panelProject = projectName?.trim() || "";
   const duckyMcpDetail = panelProject ? `Connected · ${panelProject}` : "Connected";
@@ -171,7 +191,8 @@ export function ConnectionStatusDropdown({
         <div className="connection-status-menu-head">Connections</div>
         <Row label="Ducky MCP" detail={duckyMcpDetail} ok />
         <Row label="UEFN listener" detail={duckyDetail} ok={isOnline && !isWedged} warn={isWedged || race} />
-        <Row label="UEFN MCP" detail={epicDetail} ok={epicOnline} />
+        <Row {...uefnMcpRow} />
+        <Row {...unrealMcpRow} />
         {(status.plugin_connections ?? []).map((row) => (
           <Row
             key={row.id}

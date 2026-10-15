@@ -281,12 +281,13 @@ def fetch_listener_status(
     if get_ok and isinstance(health, dict):
         uptime = float(health.get("uptime_sec", 0) or 0)
 
-    from backend.mcp_plugins.epic import probe_epic_mcp
+    from backend.mcp_plugins.epic import editor_label, probe_epic_mcp
     from frontend.uefn_project_beta import read_uefn_beta_access
 
-    epic = probe_epic_mcp()
+    epic = probe_epic_mcp(project_root=selected_project_root or None)
     epic_online = bool(epic.get("epic_mcp_online"))
     epic_reason = str(epic.get("epic_mcp_reason") or "")
+    epic_editor = str(epic.get("epic_mcp_editor") or "")
     beta = read_uefn_beta_access(selected_project_root)
     if wedged:
         status_text = "Listener wedged — call reload_listener once, then stay on workspace_*"
@@ -302,7 +303,11 @@ def fetch_listener_status(
         if beta.get("listener_init_race"):
             status_text = "Offline — listener init race; stay on workspace_*; reload_listener once"
     if epic_online:
-        status_text = f"{status_text} · UEFN MCP online"
+        status_text = f"{status_text} · {editor_label(epic_editor)} MCP online"
+    elif epic_reason == "other_editor":
+        status_text = f"{status_text} · MCP port held by {editor_label(epic_editor)}"
+    elif epic_reason == "port_taken":
+        status_text = f"{status_text} · MCP port taken by another program"
     elif epic_reason == "disabled":
         status_text = f"{status_text} · UEFN MCP disabled (Settings → MCPs)"
     else:
@@ -386,6 +391,7 @@ def fetch_listener_status(
         "epic_mcp_online": epic_online,
         "epic_mcp_reason": epic_reason,
         "epic_mcp_url": str(epic.get("epic_mcp_url") or ""),
+        "epic_mcp_editor": epic_editor,
         "epic_mcp_setup_steps": list(epic.get("epic_mcp_setup_steps") or []),
         "uefn_python_editor_scripting": bool(beta.get("python_editor_scripting")),
         "uefn_mcp_toolsets": bool(beta.get("uefn_mcp_toolsets")),

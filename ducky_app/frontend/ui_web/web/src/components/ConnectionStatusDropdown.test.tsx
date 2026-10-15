@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ConnectionStatusDropdown } from "./ConnectionStatusDropdown";
+import { ConnectionStatusDropdown, epicMcpRows } from "./ConnectionStatusDropdown";
 import type { ListenerStatus } from "../types/panel";
 
 const status: ListenerStatus = {
@@ -40,16 +40,45 @@ describe("ConnectionStatusDropdown", () => {
     expect(screen.getByText("Connected · ExampleProject1")).toBeTruthy();
     expect(screen.getByText("UEFN listener")).toBeTruthy();
     expect(screen.getByText("UEFN MCP")).toBeTruthy();
+    expect(screen.getByText("Unreal MCP")).toBeTruthy();
     expect(screen.queryByText("Ducky listener")).toBeNull();
     expect(screen.queryByText(/Offline · ExampleProject1/)).toBeNull();
     const labels = [...dialog.querySelectorAll(".connection-status-menu-label")].map((el) => el.textContent);
-    expect(labels).toEqual(["Ducky MCP", "UEFN listener", "UEFN MCP", "Blender MCP"]);
+    expect(labels).toEqual(["Ducky MCP", "UEFN listener", "UEFN MCP", "Unreal MCP", "Blender MCP"]);
     expect(screen.queryByText(/restart UEFN/i)).toBeNull();
     const settings = dialog.querySelector(".connection-status-menu-settings");
     const head = dialog.querySelector(".connection-status-menu-head");
     expect(settings && head && settings.compareDocumentPosition(head) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText("Close web view")).toBeNull();
     expect(screen.queryByText("RECENT PROJECTS")).toBeNull();
+  });
+
+  it("shows UEFN MCP and Unreal MCP by the editor holding Epic's port", () => {
+    const url = "http://127.0.0.1:8000/mcp";
+    const rows = (extra: Partial<ListenerStatus>) =>
+      epicMcpRows({ ...status, epic_mcp_url: url, ...extra }).map((r) => [r.label, r.detail, r.ok, Boolean(r.warn)]);
+
+    expect(rows({ epic_mcp_online: true, epic_mcp_reason: "", epic_mcp_editor: "uefn" })).toEqual([
+      ["UEFN MCP", `Connected · ${url}`, true, false],
+      ["Unreal MCP", "Offline · port held by UEFN", false, false],
+    ]);
+    expect(rows({ epic_mcp_online: true, epic_mcp_reason: "", epic_mcp_editor: "unreal" })).toEqual([
+      ["UEFN MCP", "Offline · port held by Unreal Editor", false, false],
+      ["Unreal MCP", `Connected · ${url}`, true, false],
+    ]);
+    // An island is open but Unreal Editor holds the port: Ducky sends it nothing.
+    expect(rows({ epic_mcp_reason: "other_editor", epic_mcp_editor: "unreal" })).toEqual([
+      ["UEFN MCP", "Offline · port held by Unreal Editor", false, true],
+      ["Unreal MCP", "Running · not used for this project", false, true],
+    ]);
+    expect(rows({ epic_mcp_reason: "unreachable" })).toEqual([
+      ["UEFN MCP", "Offline · unreachable", false, false],
+      ["Unreal MCP", "Offline · open Unreal Editor 5.8+ with Unreal MCP", false, false],
+    ]);
+    expect(rows({ epic_mcp_reason: "port_taken" }).map((r) => r[1])).toEqual([
+      "Port taken by another program",
+      "Port taken by another program",
+    ]);
   });
 
   it("renders extra (recent projects) above Connections on remote", () => {

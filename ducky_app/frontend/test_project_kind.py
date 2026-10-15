@@ -68,6 +68,17 @@ def test_new_folder_with_content_dir_is_a_folder_project(tmp_path: Path) -> None
     assert pk.resolve_project_root(repo / "content") == ((repo / "content").resolve(), FOLDER)
 
 
+def test_unreal_engine_project_is_a_folder_project(tmp_path: Path, monkeypatch) -> None:
+    # A .uproject folder has Content/ like an island; an old row may even say "uefn".
+    root = tmp_path / "MyGame"
+    (root / "Content").mkdir(parents=True)
+    (root / "MyGame.uproject").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(pk, "_saved_kind", lambda _root: UEFN)
+    assert pk.has_uproject(root) and not pk.has_uefnproject(root)
+    assert pk.project_kind(root) == FOLDER
+    assert pk.resolve_project_root(root) == (root.resolve(), FOLDER)
+
+
 def test_drive_roots_and_files_are_refused(tmp_path: Path) -> None:
     anchor = Path(tmp_path.resolve().anchor)
     with pytest.raises(ValueError):

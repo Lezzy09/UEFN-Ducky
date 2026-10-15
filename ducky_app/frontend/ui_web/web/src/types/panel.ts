@@ -1048,6 +1048,8 @@ export interface ListenerStatus {
   epic_mcp_online?: boolean;
   epic_mcp_reason?: string;
   epic_mcp_url?: string;
+  /** Editor holding Epic's MCP port: "uefn", "unreal" (Unreal Editor 5.8+), or "" unknown. */
+  epic_mcp_editor?: string;
   epic_mcp_setup_steps?: string[];
   uefn_python_editor_scripting?: boolean;
   uefn_mcp_toolsets?: boolean;

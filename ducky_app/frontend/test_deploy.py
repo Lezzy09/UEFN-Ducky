@@ -18,6 +18,39 @@ def _isolate_init_refresh(monkeypatch, tmp_path_factory) -> None:
     monkeypatch.setattr(deploy, "install_toolset_listener_boot", lambda: None)
 
 
+def _load_boot_file(monkeypatch):
+    """Run the managed init_unreal.py against a fake ``unreal`` module."""
+    import importlib.util
+    import sys
+    import types
+
+    calls: dict[str, list] = {"log": [], "ticks": []}
+    fake = types.SimpleNamespace(
+        log=calls["log"].append,
+        log_warning=lambda _msg: None,
+        log_error=lambda _msg: None,
+        register_slate_post_tick_callback=lambda fn: calls["ticks"].append(fn) or len(calls["ticks"]),
+        unregister_slate_post_tick_callback=lambda _handle: None,
+    )
+    monkeypatch.setitem(sys.modules, "unreal", fake)
+    spec = importlib.util.spec_from_file_location("ducky_boot_under_test", Path(deploy.__file__).with_name("init_unreal.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module, calls
+
+
+def test_boot_file_starts_nothing_outside_uefn(monkeypatch) -> None:
+    # Full Unreal Editor runs the Documents copy too (Unreal MCP needs Python); this test
+    # process is python.exe, not UEFN.
+    module, calls = _load_boot_file(monkeypatch)
+    assert module._in_uefn() is False
+    assert calls["ticks"] == []
+    assert any("not UEFN" in line for line in calls["log"])
+    monkeypatch.setattr(module, "_in_uefn", lambda: True)
+    module._run()
+    assert len(calls["ticks"]) == 1
+
+
 def _listener_source(root: Path) -> Path:
     source = root / "source"
     package = source / "listener"
