@@ -248,6 +248,34 @@ def test_each_member_gets_its_sub_plan_as_one_task_and_the_lead_waits(monkeypatc
     assert [cid for cid, _ in woke] == ["builder"]
 
 
+def test_a_members_task_carries_the_leads_spec_and_says_not_to_search(monkeypatch) -> None:
+    # Oct 15 2026: members given only their own points put files at the project root instead of
+    # the spec's pocket_ledger/ and renamed a field; most of their tool calls went to
+    # find_workflows, skill reads and folder listings.
+    monkeypatch.setattr(keeper, "_team_context", lambda plan: ({"builder", "builder2"}, ""))
+    monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
+    spec = "Package pocket_ledger/ with models.py. Transaction keeps amount_cents (int)."
+    woke: list[tuple[str, str]] = []
+    _run(0, [], woke, plans=[{**SUB, "overview": "A pocket ledger CLI.", "body_markdown": spec}])
+    task = woke[0][1]
+    assert "Spec from your lead" in task and "A pocket ledger CLI." in task and "amount_cents (int)" in task
+    assert task.index("Spec from your lead") < task.index("Files: fx.py") < task.index("Points:")
+    assert "don't search workflows or skills (find_workflows" in task
+
+
+def test_the_spec_is_read_from_the_plan_and_capped(monkeypatch) -> None:
+    import backend.agent.coding_agents.plans as plans
+
+    # The keeper's plan rows carry no description: it comes from the stored plan.
+    monkeypatch.setattr(plans, "load_plan", lambda cid, root=None: {"overview": "Ledger.", "body_markdown": "Use pocket_ledger/."}
+                        if (cid, root) == ("coord", "C:/island") else None)
+    assert "Ledger.\n\nUse pocket_ledger/." in keeper._spec({"chat_id": "coord", "project_root": "C:/island"})
+    # About 1200 characters at most, with where to read the rest.
+    long = keeper._spec({"chat_id": "coord", "body_markdown": "x" * 5000})
+    assert "x" * 1200 in long and "x" * 1201 not in long and 'ducky_get_plan(chat_id="coord")' in long
+    assert keeper._spec({"chat_id": "coord"}) == ""  # no description: no spec block
+
+
 def test_a_member_whose_turn_ends_with_points_left_is_started_again(monkeypatch) -> None:
     monkeypatch.setattr(keeper, "_team_context", lambda plan: ({"builder", "builder2"}, ""))
     monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)

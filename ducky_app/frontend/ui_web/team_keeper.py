@@ -348,10 +348,12 @@ def tick(
 
 
 TASK_TEXT = (
-    "[Ducky] Your task: the sub plan “{section}” in the plan “{plan}”.\n{about}"
+    "[Ducky] Your task: the sub plan “{section}” in the plan “{plan}”.\n{spec}{about}"
     "Points:\n{points}\n\n"
     "Work like a sub-agent: alone, writing the code, until every point is ticked. Send no messages "
-    "to teammates or your lead (Ducky refuses them). A point is done when its change is made and its "
+    "to teammates or your lead (Ducky refuses them). Everything you need is above: don't search "
+    "workflows or skills (find_workflows, skill reads) for this task and don't browse folders; open "
+    "only the files you change or use. A point is done when its change is made and its "
     "tests pass: tick it then with ducky_plan_update_node(node_id=..., status=\"completed\", "
     "body_markdown=\"<what you changed and how you tested it>\"). Never stop for bookkeeping or for "
     "checks your tools can't do (change-ledger read-backs, live panel captures, the person's own "
@@ -445,10 +447,38 @@ def _section_title(work: dict[str, Any]) -> str:
     return str(section.get("content") or "your steps") if section.get("children") else "your steps"
 
 
+_SPEC_CHARS = 1200
+
+
+def _spec(plan: dict[str, Any]) -> str:
+    """The main plan's description: the lead's spec for the whole team, as one block.
+
+    Oct 15 2026: members given only their own points put their files at the project root
+    instead of the spec's pocket_ledger/ and renamed a field the spec named. The keeper's plan
+    rows carry no description, so the plan itself is read."""
+    doc = plan
+    if "body_markdown" not in plan and plan.get("project_root"):
+        try:
+            from backend.agent.coding_agents.plans import load_plan
+
+            doc = load_plan(str(plan.get("chat_id") or ""), plan.get("project_root")) or plan
+        except Exception:
+            doc = plan
+    overview = str(doc.get("overview") or "").strip()
+    body = str(doc.get("body_markdown") or "").strip()
+    text = body if overview and body.startswith(overview) else "\n\n".join(p for p in (overview, body) if p)
+    if not text:
+        return ""
+    if len(text) > _SPEC_CHARS:
+        text = text[:_SPEC_CHARS].rstrip() + f" …(the rest: ducky_get_plan(chat_id=\"{plan.get('chat_id')}\"))"
+    return ("Spec from your lead, for the whole team (keep its folders, file names and field names "
+            f"exactly):\n{text}\n\n")
+
+
 def _task_text(plan: dict[str, Any], work: dict[str, Any]) -> str:
     section = work.get("section") or {}
     about = str(section.get("body_markdown") or "").strip() if section.get("children") else ""
-    return TASK_TEXT.format(section=_section_title(work), plan=plan.get("title") or "Plan",
+    return TASK_TEXT.format(section=_section_title(work), plan=plan.get("title") or "Plan", spec=_spec(plan),
                             about=(about + "\n") if about else "", points=_points(work["points"], bodies=True))
 
 

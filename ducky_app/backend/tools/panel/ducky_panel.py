@@ -939,6 +939,8 @@ def ducky_send_chat_message(
         return tool_json({"status": "not_sent", "sender": me, "reason": WORK_ALONE}, pretty=pretty)
     if me and me != conv_id and _lead_uses_plan(me, conv_id, root):
         return tool_json({"status": "not_sent", "sender": me, "reason": LEAD_USES_PLAN}, pretty=pretty)
+    if me and me != conv_id and _lead_without_plan(me, conv_id, root):
+        return tool_json({"status": "not_sent", "sender": me, "reason": LEAD_NEEDS_PLAN}, pretty=pretty)
     text = _from_another_ducky(conv_id, text, root)
     mode_norm = (mode or "agent").lower()
     if wait_for_reply:
@@ -1052,6 +1054,44 @@ def _lead_uses_plan(me: str, target: str, root: str | None) -> bool:
             return False
         team = team_plan_for(target, root)
         return team is not None and str(team.get("chat_id") or "") == me and load_plan(me, root) is not None
+    except Exception:
+        return False
+
+
+LEAD_NEEDS_PLAN = (
+    "Not sent: your team works from your plan and you have none yet. Write it first with "
+    "ducky_create_plan, one sub plan per member assigned to its chat id (seat members with "
+    "ducky_group_invite): assigning a sub plan starts its member."
+)
+
+
+def _lead_without_plan(me: str, target: str, root: str | None) -> bool:
+    """A lead with no live plan gives its members work only through a plan. Oct 15 2026: a lead
+    handed out work by message before writing any plan; a member then wrote a plan of its own and
+    the keeper woke that member as a lead."""
+    try:
+        from backend.agent.a2a_broker import leads_receiver
+        from backend.agent.coding_agents.plans import _live_plan, load_plan
+
+        return leads_receiver(me, target) and not _live_plan(load_plan(me, root))
+    except Exception:
+        return False
+
+
+def _spawn_needs_plan(caller: str, hub_id: str, root: str | None) -> bool:
+    """Seating work into a group the caller leads, while its team has members and it has no live plan."""
+    if not caller:
+        return False
+    try:
+        from backend.agent.a2a_broker import leads_receiver
+        from backend.agent.coding_agents.plans import _live_plan, load_plan
+        from frontend.ui_web.team_keeper import _staffed_leaders
+
+        hub = load_conversation(hub_id, project_root=root)
+        lead = str(getattr(hub, "leader_conv_id", "") or "").strip() if hub is not None else ""
+        if lead != caller and not leads_receiver(caller, hub_id):
+            return False
+        return not _live_plan(load_plan(caller, root)) and caller in _staffed_leaders(root)
     except Exception:
         return False
 
@@ -1453,6 +1493,8 @@ def ducky_spawn_chat(
     inside the caller's folder. A ducky already seated and idle gets the message in
     its existing chat; a busy one gets a numbered copy ("Verse Coder 2") in the
     same group. Prefer ``ducky_send_chat_message`` when you already have the chat id.
+    A lead whose team has members writes its plan first: work spawned into its team before
+    that is refused (seat members with ``ducky_group_invite``, then assign sub plans).
     """
     text = _truncate_text(message.strip(), _MAX_MESSAGE_CHARS)
     if not text:
@@ -1508,6 +1550,8 @@ def ducky_spawn_chat(
             save_conversation(hub, root)
     if not hub_id:
         raise ValueError("No group to seat this ducky in.")
+    if _spawn_needs_plan(caller, hub_id, root):
+        return tool_json({"status": "not_sent", "sender": caller, "reason": LEAD_NEEDS_PLAN}, pretty=pretty)
 
     profile = _resolve_ducky_profile(ducky)
     if profile is None:

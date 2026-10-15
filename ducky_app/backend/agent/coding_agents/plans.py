@@ -751,6 +751,7 @@ def create_plan(
         raise ValueError("chat_id required")
     if team_check:
         _refuse_if_on_team_plan(cid, project_root)
+        _refuse_if_lead_has_no_plan(cid, project_root)
     overview, nodes, _ = scrub_overview_and_recover_nodes(overview, nodes)
     if nodes is not None:
         tree = _normalize_nodes(nodes)
@@ -1493,6 +1494,32 @@ def _refuse_if_on_team_plan(chat_id: str, project_root: str | None) -> None:
         f"ducky_plan_add_node(chat_id=\"{lead}\", parent_id=<your step id>, content=..., body_markdown=...). "
         "Work outside your steps: ask the coordinator to add a step for it."
     )
+
+
+def _refuse_if_lead_has_no_plan(chat_id: str, project_root: str | None) -> None:
+    """A member whose lead has no plan yet works from its task and makes no plan of its own.
+
+    Oct 15 2026: a lead handed out work by message before writing its plan, a member wrote a
+    plan of its own, and Ducky's keeper then woke that member as the team's lead."""
+    from frontend.ui_web.project_chats import load_conversation
+
+    ids = _chat_and_group_ids(chat_id, project_root)
+    for gid in ids[1:]:
+        try:
+            group = load_conversation(gid, project_root=project_root)
+            lead = str(getattr(group, "leader_conv_id", "") or "").strip() if group is not None else ""
+            alive = bool(lead) and lead != ids[0] and load_conversation(lead, project_root=project_root) is not None
+        except Exception:
+            alive = False
+        if not alive:
+            continue
+        plan = load_plan(lead, project_root)
+        if plan is None or plan.get("status") == "archived":
+            raise ValueError(
+                f"This chat is in a team whose lead (chat {lead}) has no plan yet. A team works in ONE "
+                "plan, its lead's, so don't make one of your own: do the task you were given. If the work "
+                "needs a plan, say so in your answer; the lead writes it."
+            )
 
 
 def _group_short_name(title: str) -> str:

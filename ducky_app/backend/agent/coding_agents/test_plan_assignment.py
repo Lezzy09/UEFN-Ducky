@@ -232,6 +232,32 @@ def test_a_group_leads_plan_is_its_members_plan(team, monkeypatch):
         plans.create_plan('builder', title='Mine', project_root=team)
 
 
+def test_a_member_makes_no_plan_while_its_lead_has_none(team, monkeypatch):
+    # Oct 15 2026: a lead handed out work by message before writing its plan, a member wrote a
+    # plan of its own, and the keeper woke that member as the team's lead.
+    convs = {
+        "builder": SimpleNamespace(parent_conv_id="crew"),
+        "crew": SimpleNamespace(parent_conv_id="", leader_conv_id="lead"),
+        "lead": SimpleNamespace(parent_conv_id=""),
+        "helper": SimpleNamespace(parent_conv_id="open-crew"),
+        "open-crew": SimpleNamespace(parent_conv_id=""),  # the person leads this group
+    }
+    monkeypatch.setattr(project_chats, "load_conversation", lambda cid, project_root=None: convs.get(cid))
+    with pytest.raises(ValueError, match="has no plan yet") as err:
+        plans.create_plan("builder", title="Mine", nodes=[{"id": "x", "content": "X"}], project_root=team)
+    assert "chat lead" in str(err.value) and "do the task you were given" in str(err.value)
+    assert plans.load_plan("builder", team) is None
+    # The person may still give the member a plan, and a group the person leads has no lead plan.
+    plans.create_plan("helper", title="Solo", project_root=team)
+    plans.create_plan("builder", title="Asked for", project_root=team, team_check=False)
+    plans.delete_plan("builder", team)
+    # Once the lead writes the team plan, that plan is the member's, as before.
+    plans.create_plan("lead", title="Team", nodes=[{"id": "s", "content": "S", "assignee": "builder"}],
+                      project_root=team)
+    with pytest.raises(ValueError, match="on its team's plan"):
+        plans.create_plan("builder", title="Mine", project_root=team)
+
+
 def test_member_step_edits_land_in_the_team_plan(team):
     # Oct 12 2026: ticks without the lead's chat id said "plan not found — call
     # ducky_create_plan first", and members made private plans.
