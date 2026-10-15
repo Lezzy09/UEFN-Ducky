@@ -527,7 +527,7 @@ class FileChangeJournal:
             return []
         cap = max(1, int(limit))
         conv_id = (conv_id or "").strip()
-        group_ids = self._group_ids(group_id)
+        group_ids = self.group_ids(group_id)
         want_archived = None if archived is None else bool(archived)
         runs: list[dict[str, Any]] = []
         with self._lock(storage):
@@ -1478,7 +1478,7 @@ class FileChangeJournal:
         """Move ledger rows to/from the archive. Does not revert the island."""
         storage = self._storage(project_root)
         conv_id = (conv_id or "").strip()
-        group_ids = self._group_ids(group_id)
+        group_ids = self.group_ids(group_id)
         run_id = (run_id or "").strip()
         want = bool(archived)
         updated = 0
@@ -1511,7 +1511,7 @@ class FileChangeJournal:
         """Drop ledger rows. Does not revert project files or editor work."""
         storage = self._storage(project_root)
         conv_id = (conv_id or "").strip()
-        group_ids = self._group_ids(group_id)
+        group_ids = self.group_ids(group_id)
         run_id = (run_id or "").strip()
         removed_runs = 0
         with self._lock(storage):
@@ -1571,7 +1571,7 @@ class FileChangeJournal:
                 "Unarchive it first, or read it with changeset_list / changeset_export / changeset_contents."
             )
 
-    def _group_ids(self, group_id: str) -> frozenset[str]:
+    def group_ids(self, group_id: str) -> frozenset[str]:
         """``group_id`` and the groups nested in it; empty when no group was asked for."""
         group_id = (group_id or "").strip()
         if not group_id:

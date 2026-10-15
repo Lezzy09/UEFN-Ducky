@@ -124,6 +124,7 @@ def from_env(environ: Mapping[str, str] | None = None) -> RunContext | None:
     run_id = (env.get(ENV_RUN_ID) or "").strip()
     if not conv_id and not run_id:
         return None
+    leader_conv_id = (env.get(ENV_LEADER_CONV_ID) or "").strip()
     return RunContext(
         run_id=run_id,
         conv_id=conv_id,
@@ -132,7 +133,10 @@ def from_env(environ: Mapping[str, str] | None = None) -> RunContext | None:
         model=(env.get(ENV_MODEL) or "").strip(),
         coding_agent=(env.get(ENV_CODING_AGENT) or "").strip() or "ducky",
         group_id=(env.get(ENV_GROUP_ID) or "").strip(),
-        leader_conv_id=(env.get(ENV_LEADER_CONV_ID) or "").strip(),
+        leader_conv_id=leader_conv_id,
+        # The env names the leader, not a flag. Without this no Claude Code / Codex lead
+        # passed the changeset_revert leader check.
+        is_leader=bool(leader_conv_id and leader_conv_id == conv_id),
     )
 
 

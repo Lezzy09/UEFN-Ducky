@@ -36,8 +36,10 @@ def test_env_round_trip() -> None:
     back = identity.from_env(ctx.to_env())
     assert back is not None
     assert back.run_id == "r1" and back.conv_id == "c1" and back.profile_id == "hacker"
-    assert back.group_id == "g1" and back.leader_conv_id == "l1"
+    assert back.group_id == "g1" and back.leader_conv_id == "l1" and back.is_leader is False
     assert back.coding_agent == "claude_code"
+    lead = identity.from_env(RunContext(run_id="r2", conv_id="l1", group_id="g1", leader_conv_id="l1").to_env())
+    assert lead is not None and lead.is_leader is True
 
 
 def test_from_env_is_none_without_identity() -> None:

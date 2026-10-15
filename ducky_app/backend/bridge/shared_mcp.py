@@ -122,15 +122,19 @@ def identity_from_payload(raw: dict[str, Any] | None) -> Any:
     lane_t = tuple(str(x) for x in lane) if isinstance(lane, (list, tuple)) else None
     # The calling agent's project (backend.bridge.client resolves workspace paths from it).
     project = {k: str(data.get(k) or "").strip() for k in ("project_root", "workspace_folders")}
+    conv_id = str(data.get("conv_id") or "")
+    leader_conv_id = str(data.get("leader_conv_id") or "")
     return RunContext(
         run_id=str(data.get("run_id") or ""),
-        conv_id=str(data.get("conv_id") or ""),
+        conv_id=conv_id,
         profile_id=str(data.get("profile_id") or ""),
         ducky_name=str(data.get("ducky_name") or ""),
         model=str(data.get("model") or ""),
         coding_agent=str(data.get("coding_agent") or "") or "ducky",
         group_id=str(data.get("group_id") or ""),
-        leader_conv_id=str(data.get("leader_conv_id") or ""),
+        leader_conv_id=leader_conv_id,
+        # The payload names the leader, not a flag (see identity.from_env).
+        is_leader=bool(leader_conv_id and leader_conv_id == conv_id),
         lane=lane_t,
         extra={k: v for k, v in project.items() if v},
     )

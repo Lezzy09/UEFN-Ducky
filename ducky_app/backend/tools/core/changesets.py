@@ -95,18 +95,22 @@ def _summary(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def require_revert_allowed(run: dict[str, Any]) -> None:
-    """The user, the run's own chat, or the leader of the run's group may revert it."""
+def require_revert_allowed(run: dict[str, Any], journal: FileChangeJournal) -> None:
+    """The user, the run's own chat, or the leader of the run's group or of a group it is nested in.
+
+    A run keeps the group its chat sits in directly, so a team's lead reaches its sub-groups'
+    runs; a sub-group's leader reaches neither the outer team nor a sibling sub-group.
+    """
     ctx = identity.resolve_context()
     if ctx is None:
         return
     if ctx.conv_id and ctx.conv_id == run.get("conv_id"):
         return
-    if ctx.is_leader and ctx.group_id and ctx.group_id == run.get("group_id"):
+    if ctx.is_leader and ctx.group_id and run.get("group_id") in journal.group_ids(ctx.group_id):
         return
     raise ValueError(
-        "Only the chat that made these changes, its group leader, or the user can revert "
-        f"run {run.get('run_id', '')!r}. Ask the leader in the group chat."
+        "Only the chat that made these changes, its group leader (or the lead of a team its group "
+        f"is nested in), or the user can revert run {run.get('run_id', '')!r}. Ask the leader in the group chat."
     )
 
 
@@ -175,7 +179,7 @@ def changeset_archive(
     journal = _journal()
     rid = run_id.strip()
     if rid:
-        require_revert_allowed(journal.get_run(rid, project_root=root))
+        require_revert_allowed(journal.get_run(rid, project_root=root), journal)
     elif identity.resolve_context() is not None:
         raise ValueError("Agents may archive one run_id they own. Bulk archive is for the user.")
     result = journal.set_archived(
@@ -195,8 +199,9 @@ def changeset_revert(
     """Undo a live run's writes (or one file: pass seq). Archived runs refuse — unarchive first.
 
     Files changed by someone else since are skipped unless force=true. Allowed for the
-    chat that made the changes, the leader of its group, or the user. The revert is
-    journaled as its own run (source "revert"); Redo is reverting that run.
+    chat that made the changes, the leader of its group or of a team that group is nested
+    in, or the user. The revert is journaled as its own run (source "revert"); Redo is
+    reverting that run.
 
     step=true with seq set undoes that one write only. A later unreverted write on
     the same path blocks — revert newest first.
@@ -206,7 +211,7 @@ def changeset_revert(
     root = _project_root()
     journal = _journal()
     run = journal.get_run(run_id.strip(), project_root=root)
-    require_revert_allowed(run)
+    require_revert_allowed(run, journal)
     actor = identity.current_writer(tool="changeset_revert")
     if int(seq) > 0:
         result = journal.revert_entry(

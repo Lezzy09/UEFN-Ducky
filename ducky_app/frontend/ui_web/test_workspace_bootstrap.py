@@ -156,29 +156,54 @@ def test_build_run_context_resolves_group_and_leader(monkeypatch) -> None:
     assert named.ducky_name == "Animation Engineer" and named.profile_id == "verse-coder"
 
 
-def test_a_lead_sees_what_members_of_its_nested_groups_wrote(tmp_path: Path, monkeypatch) -> None:
-    # Oct 15 2026: a Codex lead built a team of nested groups (Ledger Team > Core / Interface /
-    # Quality) in a folder project; its members wrote ~50 files through the shared tool server,
-    # and changeset_list(group_id=<its team>) returned no runs. Each run carries the group its
-    # member sits in directly, which was always a nested one.
+@pytest.fixture
+def folder_project(tmp_path: Path, monkeypatch) -> Path:
+    """A folder project open in the panel; the shared tool server was started on another one."""
     import frontend.ui_web.panel_api as pa
-    from backend.bridge.shared_mcp import identity_from_payload
-    from backend.tools.core import changesets
-    from backend.tools.core.system import workspace_write_file
-    from frontend.settings import PanelSettings
-    from frontend.ui_web import changesets_api, project_switch
-    from frontend.ui_web.panel_api_chats import PanelApiChatsMixin
-    from frontend.ui_web.project_chats import create_conversation, load_conversation, save_conversation
+    from frontend.ui_web import project_switch
 
     for key in ("UEFN_VSCODE_WORKSPACE_FOLDERS", "UEFN_DUCKY_PROJECT_ROOT", *RunContext().to_env()):
         monkeypatch.delenv(key, raising=False)
     repo = tmp_path / "ledger-app"
     repo.mkdir()
     project_switch.set_panel_project_root(str(repo), push_ui=False)
-    # The shared tool server was started while another project was open.
     monkeypatch.setenv("UEFN_DUCKY_PROJECT_ROOT", str(tmp_path / "older-project"))
     monkeypatch.setenv("UEFN_VSCODE_WORKSPACE_FOLDERS", json.dumps([str(tmp_path / "older-project")]))
     monkeypatch.setattr(pa, "notify_chats_changed", lambda *a, **k: None)
+    runtime.reset_for_tests(None)
+    runtime.get_writer().set_journal(workspace_bootstrap.build_journal())
+    yield repo
+    runtime.reset_for_tests(None)
+
+
+def _call_as(repo: Path, conv, run_id: str, fn, /, *args, **kwargs):
+    """Call a tool as a Codex chat on the shared tool server, bound the way the daemon binds it."""
+    from backend.bridge.shared_mcp import identity_from_payload
+
+    ctx = workspace_bootstrap.build_run_context(conv, run_id=run_id, coding_agent="codex")
+    payload = {**ctx.as_writer(), "leader_conv_id": ctx.leader_conv_id, "project_root": str(repo),
+               "workspace_folders": json.dumps([str(repo)])}
+    token, shared = identity.bind(identity_from_payload(payload)), identity.mark_shared()
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        identity.reset_shared(shared)
+        identity.reset(token)
+
+
+def test_a_lead_sees_what_members_of_its_nested_groups_wrote(folder_project: Path) -> None:
+    # Oct 15 2026: a Codex lead built a team of nested groups (Ledger Team > Core / Interface /
+    # Quality) in a folder project; its members wrote ~50 files through the shared tool server,
+    # and changeset_list(group_id=<its team>) returned no runs. Each run carries the group its
+    # member sits in directly, which was always a nested one.
+    from backend.tools.core import changesets
+    from backend.tools.core.system import workspace_write_file
+    from frontend.settings import PanelSettings
+    from frontend.ui_web import changesets_api
+    from frontend.ui_web.panel_api_chats import PanelApiChatsMixin
+    from frontend.ui_web.project_chats import create_conversation, load_conversation, save_conversation
+
+    repo = folder_project
     settings = PanelSettings.load()
     api = PanelApiChatsMixin()
     team = api.group_create("Ledger Team", "", False)
@@ -193,41 +218,68 @@ def test_a_lead_sees_what_members_of_its_nested_groups_wrote(tmp_path: Path, mon
     hub.group_members = [{"member_conv_id": quality["id"], "is_group": True}]
     save_conversation(hub)
 
-    runtime.reset_for_tests(None)
-    runtime.get_writer().set_journal(workspace_bootstrap.build_journal())
+    wrote = json.loads(_call_as(repo, member, "member-run", workspace_write_file, "ledger/models.py", content="x = 1\n"))
+    assert wrote["changeset"]["run_id"] == "member-run"
+    assert (repo / "ledger" / "models.py").is_file()
+    _call_as(repo, tester, "tester-run", workspace_write_file, "tests/test_models.py", content="assert True\n")
 
-    def call_as(conv, run_id: str, fn, *args, **kwargs):
-        ctx = workspace_bootstrap.build_run_context(conv, run_id=run_id, coding_agent="codex")
-        payload = {**ctx.as_writer(), "leader_conv_id": ctx.leader_conv_id, "project_root": str(repo),
-                   "workspace_folders": json.dumps([str(repo)])}
-        token, shared = identity.bind(identity_from_payload(payload)), identity.mark_shared()
-        try:
-            return fn(*args, **kwargs)
-        finally:
-            identity.reset_shared(shared)
-            identity.reset(token)
+    listed = json.loads(_call_as(repo, lead, "lead-run", changesets.changeset_list, group_id=team["id"]))["runs"]
+    assert sorted((r["run_id"], r["group_id"], tuple(r["files"])) for r in listed) == [
+        ("member-run", core["id"], ("ledger/models.py",)),
+        ("tester-run", quality["id"], ("tests/test_models.py",)),
+    ]
+    # A nested group still lists only its own members' runs.
+    core_only = json.loads(_call_as(repo, lead, "lead-run", changesets.changeset_list, group_id=core["id"]))["runs"]
+    assert [r["run_id"] for r in core_only] == ["member-run"]
+    # The Changes tab of the team, and its Archive, cover the same runs.
+    assert sorted(r["run_id"] for r in changesets_api.list_changesets(group_id=team["id"])) == [
+        "member-run", "tester-run",
+    ]
+    assert changesets_api.archive_changesets(group_id=team["id"])["updated"] == 2
 
-    try:
-        wrote = json.loads(call_as(member, "member-run", workspace_write_file, "ledger/models.py", content="x = 1\n"))
-        assert wrote["changeset"]["run_id"] == "member-run"
-        assert (repo / "ledger" / "models.py").is_file()
-        call_as(tester, "tester-run", workspace_write_file, "tests/test_models.py", content="assert True\n")
 
-        listed = json.loads(call_as(lead, "lead-run", changesets.changeset_list, group_id=team["id"]))["runs"]
-        assert sorted((r["run_id"], r["group_id"], tuple(r["files"])) for r in listed) == [
-            ("member-run", core["id"], ("ledger/models.py",)),
-            ("tester-run", quality["id"], ("tests/test_models.py",)),
-        ]
-        # A nested group still lists only its own members' runs.
-        core_only = json.loads(call_as(lead, "lead-run", changesets.changeset_list, group_id=core["id"]))["runs"]
-        assert [r["run_id"] for r in core_only] == ["member-run"]
-        # The Changes tab of the team, and its Archive, cover the same runs.
-        assert sorted(r["run_id"] for r in changesets_api.list_changesets(group_id=team["id"])) == [
-            "member-run", "tester-run",
-        ]
-        assert changesets_api.archive_changesets(group_id=team["id"])["updated"] == 2
-    finally:
-        runtime.reset_for_tests(None)
+def test_a_lead_reverts_its_nested_groups_runs_and_a_sub_group_leader_stays_in_its_group(
+    folder_project: Path,
+) -> None:
+    # Everything goes through the team's lead, so it may revert what a sub-group's member wrote.
+    # A sub-group's own leader reaches neither a sibling sub-group nor the outer team. Before,
+    # only the leader of the run's direct group passed, and no Codex / Claude Code lead passed
+    # at all: the identity from the shared tool server never set is_leader.
+    from backend.tools.core import changesets
+    from backend.tools.core.system import workspace_write_file
+    from frontend.settings import PanelSettings
+    from frontend.ui_web.panel_api_chats import PanelApiChatsMixin
+    from frontend.ui_web.project_chats import create_conversation, load_conversation, save_conversation
+
+    repo = folder_project
+    settings = PanelSettings.load()
+    api = PanelApiChatsMixin()
+    team = api.group_create("Ledger Team", "", False)
+    core = api.group_create("Core", team["folder_id"], False)
+    interface = api.group_create("Interface", team["folder_id"], False)
+
+    def led_by(group: dict, title: str):
+        chat = create_conversation(settings, group["folder_id"], title=title, parent_conv_id=group["id"])
+        hub = load_conversation(group["id"])
+        hub.leader_conv_id = chat.id
+        save_conversation(hub)
+        return chat
+
+    lead, core_lead, ui_lead = led_by(team, "Ledger Lead"), led_by(core, "Core Lead"), led_by(interface, "UI Lead")
+    member = create_conversation(settings, core["folder_id"], title="Verse Coder", parent_conv_id=core["id"])
+    _call_as(repo, member, "member-run", workspace_write_file, "ledger/models.py", content="x = 1\n")
+    _call_as(repo, lead, "lead-run", workspace_write_file, "ledger/spec.md", content="spec\n")
+
+    for tool in (changesets.changeset_revert, changesets.changeset_archive):
+        with pytest.raises(ValueError, match="group leader"):
+            _call_as(repo, ui_lead, "ui-run", tool, "member-run")
+    with pytest.raises(ValueError, match="group leader"):
+        _call_as(repo, core_lead, "core-run", changesets.changeset_revert, "lead-run")
+    assert (repo / "ledger" / "models.py").is_file() and (repo / "ledger" / "spec.md").is_file()
+
+    reverted = json.loads(_call_as(repo, lead, "lead-run-2", changesets.changeset_revert, "member-run"))
+    assert reverted["ok"] and reverted["reverted"] == [1]
+    assert not (repo / "ledger" / "models.py").exists()
 
 
 def test_record_external_edits_attributes_native_writes(project: Path, monkeypatch) -> None:
