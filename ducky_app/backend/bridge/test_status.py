@@ -139,6 +139,18 @@ def test_epic_mcp_offline_includes_setup_steps(monkeypatch):
     assert "UEFN MCP offline" in status["status_text"]
 
 
+def test_unreal_project_status_names_unreal_editor(monkeypatch, tmp_path):
+    # A folder with a .uproject never uses the UEFN listener; its editor is Unreal Editor.
+    game = tmp_path / "MyGame"
+    (game / "Content").mkdir(parents=True)
+    (game / "MyGame.uproject").write_text("{}", encoding="utf-8")
+    _patch_epic(monkeypatch, online=False)
+    monkeypatch.setattr("backend.bridge.status.listener_get_health", lambda _port: None)
+    status = fetch_listener_status(4200, state=ListenerStatusState(), version="test",
+                                   selected_project_root=str(game))
+    assert status["status_text"] == "Unreal project · Unreal Editor MCP offline"
+
+
 def test_island_sweep_runs_once_a_minute_whatever_state_the_caller_passes(monkeypatch, tmp_path):
     # Oct 10 2026: every HTTP poll, agent turn and coding-agent run asked with a fresh (or
     # no) state, so the once-a-minute island sweep ran every time and rewrote a file in the
