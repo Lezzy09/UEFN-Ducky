@@ -496,3 +496,18 @@ def test_a_failed_read_of_a_chats_rules_is_retried_and_logged(monkeypatch, caplo
     with caplog.at_level("WARNING"):
         assert pp._rules("c-down") == []
     assert "could not read the approval rules of chat c-down" in caplog.text
+
+
+def test_a_card_also_shows_at_the_top_of_its_started_by_links(monkeypatch, conv) -> None:
+    # Oct 15 2026: a team member's terminal card waited in its own chat, which nobody had
+    # open, and the whole team stopped. Its cards also show in the chat that leads it.
+    monkeypatch.setattr(pp, "_chat_exists", lambda cid: cid != "deleted")
+    pp.note_started_by("member", "group-lead")
+    pp.note_started_by("group-lead", "lead")
+    pp.note_started_by("loop-a", "loop-b")
+    pp.note_started_by("loop-b", "loop-a")
+    pp.note_started_by("orphan", "deleted")
+    assert pp.starter_root("member") == "lead" and pp.starter_root("group-lead") == "lead"
+    for alone in ("lead", "stranger", "orphan", ""):
+        assert pp.starter_root(alone) == "", alone
+    assert pp.starter_root("loop-a") == "loop-b"  # a loop ends instead of spinning

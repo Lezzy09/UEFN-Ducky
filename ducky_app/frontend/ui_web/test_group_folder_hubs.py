@@ -262,3 +262,26 @@ def test_a_lead_stays_on_top_of_its_own_group_when_it_leads_a_subgroup():
     assert not stays_with_outer_group(NS(id="other", folder_id="main"), "qa", folders, by_id)
     assert not stays_with_outer_group(NS(id="lead", folder_id="plain"), "qa", folders, by_id)
     assert not stays_with_outer_group(NS(id="lead", folder_id="qa"), "main", folders, by_id)
+
+
+def test_a_group_made_inside_another_sits_in_it_and_is_deleted_with_it(monkeypatch, tmp_path):
+    # Oct 15 2026: a lead made its team's groups with ducky_group_create(parent_folder_id=...);
+    # the nested hubs had no parent_conv_id, so deleting the team kept them and their members.
+    import frontend.ui_web.panel_api as pa
+    from frontend.ui_web.panel_api_chats import PanelApiChatsMixin
+
+    settings = PanelSettings.load()
+    settings.uefn_project_root = str(tmp_path)
+    monkeypatch.setattr(pa.PanelSettings, "load", classmethod(lambda cls: settings))
+    monkeypatch.setattr(pa, "notify_chats_changed", lambda *a, **k: None)
+    api = PanelApiChatsMixin()
+    outer = api.group_create("Ledger Team", "", False)
+    inner = api.group_create("Core", outer["folder_id"], False)
+    member = create_conversation(settings, inner["folder_id"], title="Builder", parent_conv_id=inner["id"],
+                                 project_root=str(tmp_path))
+    assert load_conversation(inner["id"], project_root=str(tmp_path)).parent_conv_id == outer["id"]
+    assert load_conversation(outer["id"], project_root=str(tmp_path)).parent_conv_id == ""
+
+    api.delete_conversation(outer["id"])
+    for cid in (outer["id"], inner["id"], member.id):
+        assert load_conversation(cid, project_root=str(tmp_path)) is None, cid

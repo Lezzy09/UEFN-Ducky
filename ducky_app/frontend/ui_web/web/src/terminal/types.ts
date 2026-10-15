@@ -25,6 +25,10 @@ export interface PendingTerminalCommand {
   local_only?: boolean;
   /** Unix seconds when the agent asked. */
   created_at?: number;
+  /** A team member's card also shows in its lead's chat (the chat that started its run). */
+  lead_conv_id?: string;
+  /** The member that asked, named on the lead's copy of the card. */
+  asked_by?: string;
 }
 
 /** once / always (this command in this chat) / all (everything in this chat) / deny. */

@@ -194,6 +194,10 @@ class PendingCommand:
     local_only: bool = False
     shell: str = ""
     cwd: str = ""
+    # A team member's card also shows in its lead's chat (the chat that started its run),
+    # named after the member that asked.
+    lead_conv_id: str = ""
+    asked_by: str = ""
 
 
 class TerminalSession:
@@ -239,6 +243,11 @@ class TerminalSession:
         self._pending_exit_code: int | None = None
         # The end of the last chunk: the done marker can be split across two reads.
         self._done_scan = ""
+        # Last output or input: an agent's terminal idle this long is closed (TerminalManager),
+        # unless it ever ran a background command (a PowerShell one runs inside the console, so
+        # a quiet one can't be told from an idle shell).
+        self.last_activity = time.time()
+        self.ran_background = False
 
     def spawn(self) -> None:
         import os
@@ -290,6 +299,7 @@ class TerminalSession:
             text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else str(chunk)
             if not text:
                 continue
+            self.last_activity = time.time()
             with self._output_cond:
                 self._keep_output(_PROGRESS_SEQ_RE.sub("", text))
                 self._output_cond.notify_all()
@@ -351,6 +361,7 @@ class TerminalSession:
             raise RuntimeError("terminal session not running")
         with self._write_lock:
             pty.write(data)
+        self.last_activity = time.time()
 
     def resize(self, cols: int, rows: int) -> None:
         self._cols = max(20, min(int(cols), 500))
@@ -445,6 +456,7 @@ class TerminalSession:
         if self.is_busy() and not background:
             return {"ok": False, "error": "session busy", "hint": "Wait for the current command or open another terminal."}
         wrapped = self._wrap_agent_command(command, background)
+        self.ran_background = self.ran_background or background
         self.set_busy(not background)
         self._pending_done = None if background else threading.Event()
         self._pending_exit_code = None

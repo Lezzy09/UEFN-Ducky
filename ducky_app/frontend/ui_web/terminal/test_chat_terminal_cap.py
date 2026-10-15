@@ -46,6 +46,7 @@ def mgr(monkeypatch):
     running: dict[int, list[int]] = {}
     names = {9999: "npm.exe"}
     monkeypatch.setattr(manager_module, "_process_snapshot", lambda: (running, names))
+    monkeypatch.setattr(TerminalManager, "_ensure_reaper", lambda self: None)  # tests call it directly
     m = TerminalManager()
     events: list[dict] = []
     m.set_push(events.append)
@@ -110,3 +111,24 @@ def test_a_person_never_hits_the_cap(mgr, tmp_path):
     for _ in range(manager_module._MAX_CHAT_SHELLS + 2):
         assert "closed" not in mgr.spawn(shell="powershell", cwd=str(tmp_path))
     assert len(mgr._sessions) == manager_module._MAX_CHAT_SHELLS + 2
+
+
+def test_an_agents_terminal_it_is_done_with_closes_by_itself(mgr, tmp_path):
+    # Oct 15 2026: agents never closed their terminals, so every member of a team left a shell,
+    # a conhost and a socket bridge open until Ducky quit.
+    mine = mgr.spawn(shell="powershell", cwd=str(tmp_path))["session_id"]  # a person's own
+    done = _open(mgr, tmp_path, "builder")["session_id"]
+    working = _open(mgr, tmp_path, "busy-agent")["session_id"]
+    server = _open(mgr, tmp_path, "server-agent")["session_id"]
+    quiet_job = _open(mgr, tmp_path, "job-agent")["session_id"]
+    mgr.running[mgr.get_session(server)._pty.pid] = [9999]  # a dev server it left running
+    mgr.get_session(quiet_job).ran_background = True  # a PowerShell job runs inside the console
+    start = mgr.get_session(done).last_activity
+    assert mgr.close_idle_agent_terminals(now=start + 60, running={"busy-agent"}) == []  # not quiet long enough
+    later = start + manager_module._AGENT_IDLE_CLOSE_S + 1
+    assert mgr.close_idle_agent_terminals(now=later, running={"busy-agent"}) == [done]
+    assert {"type": "terminal_close", "session_id": done} in mgr.events  # its tab closes too
+    assert set(mgr._sessions) == {mine, working, server, quiet_job}
+    # Typing in it counts as use: a terminal someone is working in stays.
+    mgr.get_session(working).last_activity = later
+    assert mgr.close_idle_agent_terminals(now=later + 60, running=set()) == []

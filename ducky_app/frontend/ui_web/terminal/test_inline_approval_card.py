@@ -157,3 +157,29 @@ def test_an_answer_before_the_agent_waits_still_reaches_it(monkeypatch, chat_rul
     assert mgr.approve_command(req["request_id"])["ok"]
     assert mgr.wait_for_approval(req["request_id"], timeout_s=1) == {"ok": True, "approved": True}
     assert mgr.wait_for_approval(req["request_id"], timeout_s=1)["error"] == "request not found"
+
+
+def test_a_members_card_also_shows_in_its_leads_chat(monkeypatch, chat_rules) -> None:
+    # Oct 15 2026: a member's card waited 120 s in its own chat, nobody saw it, and the team
+    # stopped. It now also shows in the lead's chat, named after the member, and Allow
+    # everything picked there is saved on the lead (which covers every member it starts).
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(permission_prompt, "starter_root", lambda cid: "lead" if cid == "member" else "")
+    monkeypatch.setattr("frontend.ui_web.project_chats.load_conversation",
+                        lambda cid, **_k: SimpleNamespace(ducky_name="Verse Coder", title="Verse Coder"))
+    alerts: list[tuple] = []
+    monkeypatch.setattr("frontend.ui_web.terminal.manager._alert_command", lambda *a: alerts.append(a))
+    mgr, _session, events = _manager(monkeypatch)
+    card, worker = _ask(mgr, events, "py -3 -m unittest", conv_id="member")
+    assert card["conv_id"] == "member" and card["lead_conv_id"] == "lead" and card["asked_by"] == "Verse Coder"
+    assert alerts == [("lead", "py -3 -m unittest", "Verse Coder")]
+    assert mgr.approve_command(card["request_id"], scope="all", answered_in="lead")["saved"] == "all"
+    worker.join(5)
+    assert chat_rules == {"lead": ["*"]}
+    # A chat nobody started keeps its card, and its answers, to itself.
+    card, worker = _ask(mgr, events, "npm test", conv_id="c1")
+    assert card["lead_conv_id"] == "" and card["asked_by"] == ""
+    assert mgr.approve_command(card["request_id"], scope="all", answered_in="lead")["saved"] == "all"
+    worker.join(5)
+    assert chat_rules == {"lead": ["*"], "c1": ["*"]}

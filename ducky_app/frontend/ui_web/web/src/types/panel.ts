@@ -4163,7 +4163,11 @@ export interface PanelApi {
     conv_id?: string,
   ): Promise<Record<string, unknown>>;
   /** scope: once, always (this command in the chat that asked) or all (everything in it). */
-  terminal_approve_command(request_id: string, scope?: "once" | "always" | "all"): Promise<Record<string, unknown>>;
+  terminal_approve_command(
+    request_id: string,
+    scope?: "once" | "always" | "all",
+    answered_in?: string,
+  ): Promise<Record<string, unknown>>;
   /** Agent commands still waiting for an answer (cards to show again after a reload). */
   terminal_pending_commands?(): Promise<Array<Record<string, unknown>>>;
   terminal_reject_command(request_id: string, reason?: string): Promise<Record<string, unknown>>;

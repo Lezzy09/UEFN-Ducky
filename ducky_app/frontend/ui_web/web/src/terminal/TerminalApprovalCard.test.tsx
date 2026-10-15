@@ -68,6 +68,28 @@ describe("terminal command card in the chat that asked", () => {
     expect(document.querySelector('[data-pending-card="command"]')).toBeTruthy();
   });
 
+  it("a team member's card also shows in its lead's chat, named, and answers there for the lead", async () => {
+    // Oct 15 2026: a member's command card waited in its own chat, nobody saw it, and the team stopped.
+    render(
+      <>
+        <section aria-label="member"><ChatTerminalApprovals convId="member" /></section>
+        <section aria-label="lead"><ChatTerminalApprovals convId="lead" /></section>
+        <section aria-label="other"><ChatTerminalApprovals convId="other" /></section>
+      </>,
+    );
+    act(() => pushLocalAgentEvent(pending("r9", "member", "npm test", { lead_conv_id: "lead", asked_by: "Verse Coder" })));
+    await flush();
+    expect(screen.getByLabelText("member").textContent).toContain("Allow this terminal command?");
+    const lead = screen.getByLabelText("lead");
+    expect(lead.textContent).toContain("Verse Coder wants to run a terminal command");
+    expect(lead.textContent).toContain("Never ask again in this chat or the agents its plan starts");
+    expect(screen.getByLabelText("other").textContent).toBe("");
+    const all = [...lead.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Allow everything"))!;
+    fireEvent.click(all);
+    await waitFor(() => expect(api.terminal_approve_command).toHaveBeenCalledWith("r9", "all", "lead"));
+    await waitFor(() => expect(document.querySelectorAll("[data-approval-request]")).toHaveLength(0));
+  });
+
   it("Always allow, Allow everything and Deny each call the matching answer", async () => {
     render(<ChatTerminalApprovals convId="c1" />);
     act(() => {

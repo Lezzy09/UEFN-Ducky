@@ -447,6 +447,13 @@ class PanelApiChatsMixin:
         conv.is_group = True
         conv.leader_conv_id = ""
         conv.group_members = []
+        # A group made inside another group's folder sits in that group, the way archiving
+        # keeps it: deleting, archiving and team plans follow parent_conv_id. Oct 15 2026: a
+        # lead's nested groups had none, so deleting its team left them and their members.
+        outer = next((f for f in _pa.load_folders(project_root) if parent_folder and f.id == parent_folder), None)
+        outer_hub = (getattr(outer, "group_hub_id", None) or "").strip() if outer is not None else ""
+        if outer_hub:
+            conv.parent_conv_id = outer_hub
         _pa.save_conversation(conv, project_root)
         # Link folder → hub so the sidebar treats the folder as the group.
         folders = _pa.load_folders(project_root)

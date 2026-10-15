@@ -1015,11 +1015,13 @@ class PanelApiWindowMixin:
             session_id.strip(), command, source=source, conv_id=conv_id,
         )
 
-    def terminal_approve_command(self, request_id: str, scope: str = "once") -> dict[str, Any]:
-        """scope: once, always (this command in the chat that asked) or all (everything in it)."""
+    def terminal_approve_command(self, request_id: str, scope: str = "once", answered_in: str = "") -> dict[str, Any]:
+        """scope: once, always (this command in the chat that asked) or all (everything in it).
+        answered_in: the chat whose card was used (a member's card also shows in its lead's chat)."""
         from frontend.ui_web.terminal import get_terminal_manager
 
-        return get_terminal_manager().approve_command(str(request_id or "").strip(), scope=str(scope or "once"))
+        return get_terminal_manager().approve_command(
+            str(request_id or "").strip(), scope=str(scope or "once"), answered_in=str(answered_in or "").strip())
 
     def terminal_pending_commands(self) -> list[dict[str, Any]]:
         """Agent commands still waiting for an answer (a reloaded window shows their cards)."""

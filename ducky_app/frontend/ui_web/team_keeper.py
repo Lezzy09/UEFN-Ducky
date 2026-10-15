@@ -11,8 +11,9 @@ A coordinator agent only runs when a message wakes it. When it ended a turn with
 reply on the way, or the AI account ran out of credits, the whole team stopped until a
 person noticed and nudged it. The keeper is that nudge, inside Ducky.
 
-A plan is kept going while it has started, is not paused or finished, still has open
-steps, and its chat leads a group. Pausing the plan stops the keeper for it. Three wakes
+A plan is kept going while it has started (or gives a sub plan an owner, or its lead has
+seated members), is not paused or finished, still has open steps, and its chat leads a
+group. Pausing the plan stops the keeper for it. Three wakes
 in a row that move nothing (no member works, no step changes status or owner) park it
 until something does: a plan waiting on the user's own step was woken every hour, and
 each wake re-read the coordinator's whole thread.
@@ -28,6 +29,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+import zlib
 from typing import Any, Callable
 
 _TICK_S = 60.0
@@ -107,6 +109,14 @@ def _moves(plan: dict[str, Any]) -> str:
     return "|".join(sorted(parts))
 
 
+def _work_text(work: dict[str, Any]) -> str:
+    """A member's sub plan and open points as written (title, description, `after`)."""
+    rows = [work.get("section") or {}, *(work.get("points") or [])]
+    text = "\0".join(f"{n.get('id')}\0{n.get('content') or ''}\0{n.get('body_markdown') or ''}\0"
+                     f"{','.join(str(a) for a in n.get('after') or [])}" for n in rows if isinstance(n, dict))
+    return f"{zlib.crc32(text.encode('utf-8', 'replace')):08x}"
+
+
 def _team_leaders(project_root: str | None) -> set[str]:
     from frontend.ui_web.group_orchestrator import is_group_conversation
     from frontend.ui_web.project_chats import list_all_conversation_metadata
@@ -170,16 +180,43 @@ def kept_plans(project_root: str | None = None) -> list[dict[str, Any]]:
     for root in _project_roots(project_root):
         live = [plan for plan in list_plans(root)
                 if str(plan.get("status") or "open") not in ("paused", "finished", "completed", "archived")
-                and (_started(plan) or _has_owner(plan)) and _open_steps(plan)
-                and not _dormant(plan, now)]
+                and _open_steps(plan) and not _dormant(plan, now)]
         if not live:
             continue  # the team lookup reads every chat of the project: only when needed
         leaders = _team_leaders(root)
+        staffed: set[str] | None = None
         for plan in live:
-            if str(plan.get("chat_id") or "") in leaders:
-                plan.setdefault("project_root", root)
-                out.append(plan)
+            cid = str(plan.get("chat_id") or "")
+            if cid not in leaders:
+                continue
+            if not (_started(plan) or _has_owner(plan)):
+                # Nothing assigned yet. A lead whose turn ended after writing the plan and
+                # seating members, before giving any sub plan an owner, was never woken.
+                if staffed is None:
+                    staffed = _staffed_leaders(root)
+                if cid not in staffed:
+                    continue
+            plan.setdefault("project_root", root)
+            out.append(plan)
     return out
+
+
+def _staffed_leaders(project_root: str | None) -> set[str]:
+    """Leaders of groups that hold at least one other member (a chat or a nested group)."""
+    try:
+        from frontend.ui_web.group_orchestrator import group_members, is_group_conversation
+        from frontend.ui_web.project_chats import list_all_conversation_metadata
+
+        out: set[str] = set()
+        for conv in list_all_conversation_metadata(project_root):
+            if not is_group_conversation(conv):
+                continue
+            lid = str(getattr(conv, "leader_conv_id", None) or "").strip()
+            if lid and any(str(m.get("member_conv_id") or "") not in ("", lid) for m in group_members(conv)):
+                out.add(lid)
+        return out
+    except Exception:
+        return set()
 
 
 def _wake(chat_id: str, text: str) -> None:
@@ -270,12 +307,22 @@ def tick(
                     st["next_stall"] = now + _STALL_S
                     woke.append(cid)
                 continue
-            if cid in movable or _lead_told.get(cid) == _moves(plan):
-                # Ducky is starting or continuing its members, or a block was already handed
-                # to the lead or the person and the plan hasn't changed since: the lead waits.
-                st["quiet_since"] = now
-                continue
             moves = _moves(plan)
+            if cid in movable:
+                st["quiet_since"] = now  # Ducky is starting or continuing its members: the lead waits
+                continue
+            if _lead_told.get(cid) == moves:
+                # A block went to the lead (or the person) and the plan hasn't changed since.
+                # When the lead's turn ended without changing it, only the person can move the
+                # team now: tell them once. Oct 15 2026 a team sat idle for good after its lead
+                # answered a block, and nobody was told.
+                if now - st["quiet_since"] >= _IDLE_S and _person_told.get(cid) != moves:
+                    _person_told[cid] = moves
+                    try:
+                        _alert_waiting(cid)
+                    except Exception:
+                        pass
+                continue
             if st.get("moves") != moves:
                 st["moves"] = moves
                 _unpark(cid, st)  # a step moved: the next quiet spell wakes it again
@@ -309,8 +356,10 @@ TASK_TEXT = (
     "body_markdown=\"<what you changed and how you tested it>\"). Never stop for bookkeeping or for "
     "checks your tools can't do (change-ledger read-backs, live panel captures, the person's own "
     "files): write what is still unchecked in the point's notes and tick it. Ticking the last point "
-    "tells your lead. Only when the code itself can't go on (a decision, access, a teammate's change), "
-    "end your turn with one line: BLOCKED: <what you need>."
+    "tells your lead. A point that waits for a teammate's step (`after`) is not yours yet: finish the "
+    "others and end your turn; Ducky starts you again when it can start. Only when the code itself "
+    "can't go on (a decision, access, a teammate's change), end your turn with one line: "
+    "BLOCKED: <what you need>."
 )
 CONTINUE_TEXT = (
     "[Ducky] Points left in your sub plan “{section}”:\n{points}\nContinue with the code. Tick a "
@@ -332,6 +381,8 @@ _MEMBER_TRIES = 2  # turns that move nothing in the plan: wait for the plan to m
 _BLOCKED_RE = re.compile(r"(?im)^[\s>*_`-]*BLOCKED\s*[:\-]\s*(.+)$")
 _members: dict[str, dict[str, Any]] = {}
 _lead_told: dict[str, str] = {}  # lead -> plan fingerprint when a block was last handled
+_person_told: dict[str, str] = {}  # lead -> plan fingerprint when the person heard the team waits
+_had_work: set[str] = set()  # members that had startable points at the last check
 
 
 def _work_by_member(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -445,6 +496,33 @@ def _ask_person(plan: dict[str, Any], member: str, work: dict[str, Any], reason:
           detail=f"Stuck again on “{_section_title(work)}”: {reason[:300]} Answer in its chat or change the plan.")
 
 
+def _inherit_lead(member: str, lead: str) -> None:
+    """The member works its lead's plan, so it runs under the lead's approvals ("Allow
+    everything" passes down "started by" links only) and its question and command cards also
+    show in the lead's chat. Oct 15 2026: Ducky started members with no link, so a team whose
+    lead allowed everything stopped on a member's terminal card that nobody saw."""
+    try:
+        from backend.tools.panel.permission_prompt import note_started_by
+
+        note_started_by(member, lead)
+    except Exception:
+        pass
+
+
+def _alert_waiting(lead: str) -> None:
+    """Tell the person a team can't move until they act: its lead already had the block."""
+    from frontend.notifications import alert
+    from frontend.ui_web.project_chats import load_conversation
+
+    reasons = [str(st["blocked"]) for st in _members.values() if st.get("lead") == lead and st.get("blocked")]
+    conv = load_conversation(lead)
+    who = str(getattr(conv, "title", "") or "").strip() or "Your team" if conv else "Your team"
+    # The status line may reach the phone; the block reasons stay on this PC.
+    alert(who, "The team is waiting on you.", level="ask", kind="chat", target_id=lead,
+          detail=("Blocked: " + " · ".join(r[:200] for r in reasons[:3])) if reasons
+          else "Its lead had a blocked member and the plan hasn't changed since. Open its chat.")
+
+
 def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
                       wake: Callable[[str, str], None]) -> tuple[list[str], set[str]]:
     """Start each member on its sub plan, and again when its turn ends with points left.
@@ -459,17 +537,38 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
 
     woke: list[str] = []
     movable: set[str] = set()
+    with_work: set[str] = set()
     for plan in plans:
         lead = str(plan.get("chat_id") or "")
         moves = _moves(plan)
+        # One task per member chat. A group's sub plan goes to the group's leader, which may
+        # also own a sub plan of its own: two owners, one chat, and the task alternated
+        # between them on every tick (each switch also reset the member's tries).
+        by_member: dict[str, tuple[str, dict[str, Any]]] = {}
         for owner, work in _work_by_member(plan).items():
             member = _member_chat(owner, plan.get("project_root"))
             if not member or member == lead:
                 continue
+            if member in by_member:
+                by_member[member][1]["points"].extend(work["points"])
+            else:
+                by_member[member] = (owner, {"section": work["section"], "points": list(work["points"])})
+        for member, (owner, work) in by_member.items():
             st = _members.setdefault(member, {"idle_since": now, "tries": 0, "next": 0.0, "moves": moves,
                                               "task": "", "blocked": "", "cleared": "", "told_done": None})
-            if st["moves"] != moves:
-                # The plan moved: whatever blocked the member may be solved, so it goes on.
+            st["lead"] = lead
+            with_work.add(member)
+            if member not in _had_work and st["task"]:
+                # Its points only now became startable. A BLOCKED it ended with while it waited
+                # on them is answered: on Oct 15 2026 a member that said "BLOCKED: needs the CLI"
+                # while its point waited on the CLI was reported blocked after the CLI was done.
+                st.update(tries=0, next=0.0, blocked="", cleared=_blocked_reason(member) or st["cleared"])
+            text = _work_text(work)
+            if st["moves"] != moves or (st["blocked"] and st.get("blocked_text") != text):
+                # The plan moved, or someone rewrote the blocked member's points (it isn't running,
+                # so the lead or the person did): whatever blocked it may be solved, so it goes on.
+                # Oct 15 2026 a lead answered a block by rewriting the point without a status
+                # change; that counted as nothing, and the team sat idle with nobody told.
                 st.update(moves=moves, tries=0, next=0.0, cleared=st["blocked"] or st["cleared"], blocked="")
             if member in busy:
                 st["idle_since"] = None  # idle time counts from the first quiet look
@@ -481,6 +580,7 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
                 continue
             task = f"{plan.get('id') or plan.get('plan_id') or lead}:{(work.get('section') or {}).get('id') or owner}"
             if st["task"] != task:
+                _inherit_lead(member, lead)
                 try:
                     wake(member, _task_text(plan, work))
                 except Exception:
@@ -494,12 +594,13 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
                 continue
             reason = _blocked_reason(member)
             if reason and reason != st["cleared"]:
-                st["blocked"] = reason
+                st["blocked"], st["blocked_text"] = reason, text
                 done = _done_points(work.get("section"))
                 repeat = st.get("told_done") is not None and done <= st["told_done"]
                 try:
                     if repeat:
                         _ask_person(plan, member, work, reason)
+                        _person_told[lead] = moves  # asked already: no second "waiting on you"
                     else:
                         _tell_lead(plan, member, work, reason)
                 except Exception:
@@ -512,6 +613,7 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
             movable.add(lead)
             if now - st["idle_since"] < _MEMBER_IDLE_S or now < st["next"]:
                 continue
+            _inherit_lead(member, lead)
             try:
                 wake(member, CONTINUE_TEXT.format(section=_section_title(work),
                                                   points=_points(work["points"], bodies=False)))
@@ -521,6 +623,8 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
             st["idle_since"] = now
             st["next"] = now + _MEMBER_IDLE_S * 2
             woke.append(member)
+    _had_work.clear()
+    _had_work.update(with_work)
     return woke, movable
 
 
@@ -593,3 +697,5 @@ def reset_for_tests() -> None:
         _teams.clear()
         _members.clear()
         _lead_told.clear()
+        _person_told.clear()
+        _had_work.clear()

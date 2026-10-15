@@ -6,11 +6,16 @@ import {
   listTerminalApprovals,
   subscribeTerminalApprovals,
   terminalApprovalChoices,
+  terminalApprovalShowsIn,
   type TerminalApproval,
 } from "./terminalApprovals";
 import type { PendingTerminalCommand, TerminalApprovalChoice } from "./types";
 
-function choiceText(choice: TerminalApprovalChoice, item: PendingTerminalCommand): { label: string; desc: string } {
+function choiceText(
+  choice: TerminalApprovalChoice,
+  item: PendingTerminalCommand,
+  inLead = false,
+): { label: string; desc: string } {
   switch (choice) {
     case "once":
       return { label: "Allow once", desc: "Run it this time. Ask again next time." };
@@ -19,7 +24,9 @@ function choiceText(choice: TerminalApprovalChoice, item: PendingTerminalCommand
     case "all":
       return {
         label: "Allow everything in this chat",
-        desc: "Never ask again in this chat: pushes, deletes and publishes run too. Turn it off in the chat's context panel.",
+        desc: inLead
+          ? "Never ask again in this chat or the agents its plan starts: pushes, deletes and publishes run too. Turn it off in the chat's context panel."
+          : "Never ask again in this chat: pushes, deletes and publishes run too. Turn it off in the chat's context panel.",
       };
     default:
       return { label: "Deny", desc: "Don't run it. The agent is told you said no." };
@@ -30,19 +37,23 @@ type Props = {
   item: PendingTerminalCommand;
   /** The header's activity list: tighter, no pause hint. */
   compact?: boolean;
+  /** The chat showing the card: in a lead's chat, a member's card names the member. */
+  inConv?: string;
 };
 
 /** One agent command waiting for Allow/Deny, in the same look as the question cards. */
-export function TerminalApprovalCard({ item, compact = false }: Props) {
+export function TerminalApprovalCard({ item, compact = false, inConv = "" }: Props) {
   const [busy, setBusy] = useState<TerminalApprovalChoice | null>(null);
   const [error, setError] = useState("");
   const where = [item.cwd, item.shell].filter(Boolean).join(" · ");
+  // A member's card in its lead's chat: name the member, and save "in this chat" on the lead.
+  const inLead = Boolean(inConv) && inConv === item.lead_conv_id && inConv !== item.conv_id;
 
   const answer = async (choice: TerminalApprovalChoice) => {
     if (busy) return;
     setBusy(choice);
     setError("");
-    const result = await answerTerminalApproval(item.request_id, choice);
+    const result = await answerTerminalApproval(item.request_id, choice, inLead ? inConv : "");
     if (!result.ok) {
       setError(result.error);
       setBusy(null);
@@ -62,7 +73,9 @@ export function TerminalApprovalCard({ item, compact = false }: Props) {
         </span>
         {compact ? null : <span className="ask-user-pause-hint">Agent paused until you answer</span>}
       </div>
-      <h2 className="ask-user-prompt">Allow this terminal command?</h2>
+      <h2 className="ask-user-prompt">
+        {inLead && item.asked_by ? `${item.asked_by} wants to run a terminal command` : "Allow this terminal command?"}
+      </h2>
       {item.local_only ? (
         <p className="ask-user-warning" role="note">
           <Icons.AlertTriangle />
@@ -73,7 +86,7 @@ export function TerminalApprovalCard({ item, compact = false }: Props) {
       {where ? <p className="terminal-approval-where">Runs in {where}</p> : null}
       <div className="ask-user-options" aria-label="Answer">
         {terminalApprovalChoices(item).map((choice) => {
-          const text = choiceText(choice, item);
+          const text = choiceText(choice, item, inLead);
           return (
             <button
               key={choice}
@@ -102,12 +115,12 @@ export function TerminalApprovalCard({ item, compact = false }: Props) {
 function useApprovalsForConv(convId: string): TerminalApproval[] {
   const all = useSyncExternalStore(subscribeTerminalApprovals, listTerminalApprovals, listTerminalApprovals);
   const cid = (convId || "").trim();
-  return cid ? all.filter((item) => item.conv_id === cid) : [];
+  return cid ? all.filter((item) => terminalApprovalShowsIn(item, cid)) : [];
 }
 
 export function useHasTerminalApprovals(convId: string): boolean {
   const cid = (convId || "").trim();
-  const read = () => Boolean(cid) && listTerminalApprovals().some((item) => item.conv_id === cid);
+  const read = () => Boolean(cid) && listTerminalApprovals().some((item) => terminalApprovalShowsIn(item, cid));
   return useSyncExternalStore(subscribeTerminalApprovals, read, read);
 }
 
@@ -124,7 +137,7 @@ export function ChatTerminalApprovals({ convId }: { convId: string }) {
           data-pending-card="command"
         >
           <div className="virtual-chat-ask-panel">
-            <TerminalApprovalCard item={item} />
+            <TerminalApprovalCard item={item} inConv={convId} />
           </div>
         </div>
       ))}

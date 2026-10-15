@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import os
 import threading
+import time
 import uuid
 from typing import Any, Callable
 
@@ -23,6 +24,11 @@ _APPROVAL_TIMEOUT_S = 120.0
 # Terminals one chat may keep open. Each holds a shell, a conhost and a socket bridge,
 # and an agent that opens one per turn in different folders piled them up all day.
 _MAX_CHAT_SHELLS = 6
+# An agent's terminal with no output, no typing and nothing running for this long, while its
+# agent is not working, is closed. Agents never closed theirs: a team left one shell (a
+# shell, a conhost and a socket bridge) per member open until Ducky quit (Oct 15 2026).
+_AGENT_IDLE_CLOSE_S = 10 * 60.0
+_REAP_EVERY_S = 60.0
 _manager: "TerminalManager | None" = None
 _manager_lock = threading.Lock()
 
@@ -40,6 +46,8 @@ class TerminalManager:
         # Answered before the agent's thread got to wait_for_approval (a quick click):
         # the waiter still finds the answer. The newest few only; a waiter pops its own.
         self._decided: dict[str, PendingCommand] = {}
+        self._reaper: threading.Thread | None = None
+        self._reaper_stop = threading.Event()
         self._push: Callable[[dict[str, Any]], None] | None = None
 
     def set_push(self, push: Callable[[dict[str, Any]], None] | None) -> None:
@@ -151,7 +159,52 @@ class TerminalManager:
             result["closed"] = closed
         if push_open and not session.hidden:
             self._emit_open(session, conv_id, activate)
+        if conv_id:
+            self._ensure_reaper()
         return result
+
+    def _ensure_reaper(self) -> None:
+        with self._lock:
+            if self._reaper is not None and self._reaper.is_alive():
+                return
+            self._reaper = threading.Thread(target=self._reap_loop, daemon=True, name="terminal-reaper")
+            self._reaper.start()
+
+    def _reap_loop(self) -> None:
+        while not self._reaper_stop.wait(_REAP_EVERY_S):
+            try:
+                self.close_idle_agent_terminals()
+            except Exception:
+                pass
+
+    def close_idle_agent_terminals(
+        self,
+        *,
+        now: float | None = None,
+        running: set[str] | None = None,
+    ) -> list[str]:
+        """Close agents' terminals they are done with: the agent is not working (or its chat
+        is gone) and the terminal has been quiet for ``_AGENT_IDLE_CLOSE_S``. A terminal running
+        anything, waiting on an Allow card, or where the agent started a background command
+        (a dev server) is kept, and a person's own terminals (no chat) are never closed."""
+        now = time.time() if now is None else now
+        if running is None:
+            from frontend.ui_web.agent_modes import list_running_agents
+
+            running = set(list_running_agents())
+        with self._lock:
+            agents = [(e.session, e.chat) for e in self._sessions.values() if e.chat]
+            asked = {p.session_id for p in self._pending.values()}
+        snapshot = functools.cache(_process_snapshot)
+        closed: list[str] = []
+        for session, chat in agents:
+            if (chat in running or session.id in asked or getattr(session, "ran_background", False)
+                    or session.has_running_command(snapshot)):
+                continue
+            if now - float(getattr(session, "last_activity", now)) >= _AGENT_IDLE_CLOSE_S:
+                if self.kill(session.id).get("ok"):
+                    closed.append(session.id)
+        return closed
 
     def _idle_session(self, reuse_key: tuple[str, str, str]) -> TerminalSession | None:
         with self._lock:
@@ -302,6 +355,7 @@ class TerminalManager:
         request_id = uuid.uuid4().hex[:12]
         cwd = str(getattr(session, "cwd", "") or "")
         offers = _card_offers(cmd, cwd) if push_pending else {}
+        lead, asked_by = _lead_of(conv_id) if push_pending else ("", "")
         pending = PendingCommand(
             request_id=request_id,
             session_id=session_id,
@@ -316,14 +370,16 @@ class TerminalManager:
             local_only=bool(offers.get("local_only")),
             shell=str(getattr(session, "shell", "") or ""),
             cwd=cwd,
+            lead_conv_id=lead,
+            asked_by=asked_by,
         )
         with self._lock:
             self._pending[request_id] = pending
         if push_pending:
-            # A card in the chat that asked (conv_id); with no chat, an entry in the
-            # header's background activity list.
+            # A card in the chat that asked (conv_id) and in its lead's chat; with no chat, an
+            # entry in the header's background activity list.
             self._emit({"type": "terminal_command_pending", **_pending_dict(pending, source or "ducky_terminal_run")})
-            _alert_command(conv_id, cmd)
+            _alert_command(lead or conv_id, cmd, asked_by if lead else "")
         return {"ok": True, "request_id": request_id, "status": "pending_approval"}
 
     def list_pending(self) -> list[dict[str, Any]]:
@@ -333,12 +389,14 @@ class TerminalManager:
         rows.sort(key=lambda p: p.created_at)
         return [_pending_dict(p, p.source) for p in rows]
 
-    def approve_command(self, request_id: str, scope: str = "once") -> dict[str, Any]:
-        """scope: once, always (this command, in its chat) or all (everything, in its chat)."""
+    def approve_command(self, request_id: str, scope: str = "once", answered_in: str = "") -> dict[str, Any]:
+        """scope: once, always (this command, in its chat) or all (everything, in its chat).
+        answered_in: the chat whose card was used; the lead's card saves the choice on the lead,
+        which covers every member its plan starts."""
         pending = self._take_pending(request_id)
         if pending is None:
             return {"ok": False, "error": "request not found or already decided"}
-        saved = _remember_choice(pending, scope) if scope in ("always", "all") else "once"
+        saved = _remember_choice(pending, scope, answered_in) if scope in ("always", "all") else "once"
         session = self.get_session(pending.session_id)
         if not session:
             pending.approved = False
@@ -465,6 +523,7 @@ class TerminalManager:
         }
 
     def shutdown_all(self) -> None:
+        self._reaper_stop.set()
         with self._lock:
             ids = list(self._sessions.keys())
             pending_ids = list(self._pending.keys())
@@ -522,20 +581,42 @@ def _chat_always_allows(conv_id: str, command: str, cwd: str) -> bool:
         return False
 
 
-def _remember_choice(pending: PendingCommand, scope: str) -> str:
-    if not pending.conv_id:
+def _remember_choice(pending: PendingCommand, scope: str, answered_in: str = "") -> str:
+    chat = pending.conv_id
+    if answered_in and answered_in == pending.lead_conv_id:
+        chat = answered_in  # "in this chat" on the lead's card means the lead's chat
+    if not chat:
         return "once"
     try:
         from backend.tools.panel.terminal_approval import remember
 
-        return remember(pending.conv_id, pending.command, scope, cwd=pending.cwd, local_only=pending.local_only)
+        return remember(chat, pending.command, scope, cwd=pending.cwd, local_only=pending.local_only)
     except Exception:
         return "once"
 
 
-def _alert_command(conv_id: str, command: str) -> None:
+def _lead_of(conv_id: str) -> tuple[str, str]:
+    """The lead chat a member's card also shows in, and the member's name ('' when none)."""
+    if not conv_id:
+        return "", ""
+    try:
+        from backend.tools.panel.permission_prompt import starter_root
+        from frontend.ui_web.project_chats import load_conversation
+
+        lead = starter_root(conv_id)
+        if not lead or lead == conv_id:
+            return "", ""
+        conv = load_conversation(conv_id)
+        name = str(getattr(conv, "ducky_name", "") or getattr(conv, "title", "") or "").strip() if conv else ""
+        return lead, name or "Team member"
+    except Exception:
+        return "", ""
+
+
+def _alert_command(conv_id: str, command: str, asked_by: str = "") -> None:
     """A command waits for the person's OK: alert (frontend.notifications). The command
-    shows in the Windows notification only. Off-thread: naming the chat reads it from disk."""
+    shows in the Windows notification only. Off-thread: naming the chat reads it from disk.
+    A member's command alerts its lead's chat (``conv_id``), naming the member (``asked_by``)."""
 
     def send() -> None:
         try:
@@ -544,7 +625,8 @@ def _alert_command(conv_id: str, command: str) -> None:
 
             conv = load_conversation(conv_id) if conv_id else None
             title = str(getattr(conv, "title", "") or "").strip() or "UEFN Ducky"
-            alert(title, "Wants to run a command.", level="ask", kind="chat" if conv else "",
+            status = f"{asked_by} wants to run a command." if asked_by else "Wants to run a command."
+            alert(title, status, level="ask", kind="chat" if conv else "",
                   target_id=conv_id if conv else "", detail=command)
         except Exception:
             pass
@@ -564,6 +646,8 @@ def _pending_dict(pending: PendingCommand, source: str) -> dict[str, Any]:
         "rule_label": pending.rule_label,
         "local_only": pending.local_only,
         "created_at": pending.created_at,
+        "lead_conv_id": pending.lead_conv_id,
+        "asked_by": pending.asked_by,
     }
 
 

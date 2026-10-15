@@ -629,6 +629,29 @@ def _resolve_ask_user_conv_id() -> str:
     return (os.environ.get("DUCKY_CONV_ID") or "").strip()
 
 
+def _show_in_lead_chat(payload: dict[str, Any], conv_id: str) -> None:
+    """A team member's question (or approval) also shows in its lead's chat, with the
+    member's name on it: the person works with a team through its lead, and a card in a
+    member chat nobody has open stopped the whole team (Oct 15 2026)."""
+    try:
+        from backend.tools.panel.permission_prompt import starter_root
+        from frontend.ui_web.project_chats import load_conversation
+
+        lead = starter_root(conv_id)
+        if not lead or lead == conv_id:
+            return
+        ids = [str(i) for i in payload.get("group_ids") or [] if str(i).strip()]
+        if lead not in ids:
+            payload["group_ids"] = [*ids, lead]
+        payload["lead_conv_id"] = lead
+        if not payload.get("author"):
+            conv = load_conversation(conv_id)
+            name = str(getattr(conv, "ducky_name", "") or getattr(conv, "title", "") or "").strip() if conv else ""
+            payload["author"] = {"name": name or "Team member", "member_conv_id": conv_id}
+    except Exception:
+        pass
+
+
 @mcp.tool()
 def ducky_ask_user(
     questions: list[dict[str, Any]],
@@ -686,6 +709,7 @@ def ducky_ask_user(
                     payload["author"] = author
         except Exception:
             pass
+        _show_in_lead_chat(payload, conv_id)
     out = panel_rpc("ask_user", payload, timeout=_MAX_ASK_USER_WAIT_S)
     if isinstance(out, dict) and not out.get("error"):
         out = {**out, "questions": cleaned}

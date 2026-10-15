@@ -101,3 +101,32 @@ if __name__ == "__main__":
     test_ui_rpc_active_poll_survives_sweep()
     test_ui_rpc_has_pending_for_conv()
     print("ok")
+
+
+def test_a_members_question_also_shows_in_its_leads_chat(monkeypatch):
+    # Oct 15 2026 owner: everything goes through the lead. A team member's question card sat
+    # in a member chat nobody had open; it now also shows in the lead's chat, with the
+    # member's name on it (the panel already shows a member's card in the chats named in
+    # group_ids), and the alert opens the lead's chat.
+    import json
+    from types import SimpleNamespace
+
+    from backend.tools.panel import panel_ui, permission_prompt
+
+    sent: list[dict] = []
+    monkeypatch.setattr(panel_ui, "_resolve_ask_user_conv_id", lambda: "member")
+    monkeypatch.setattr("frontend.ui_web.group_orchestrator.lookup_member_hub", lambda cid: (["group-core"], {}))
+    monkeypatch.setattr(permission_prompt, "starter_root", lambda cid: "lead" if cid == "member" else "")
+    monkeypatch.setattr("frontend.ui_web.project_chats.load_conversation",
+                        lambda cid, **_k: SimpleNamespace(ducky_name="Verse Coder", title="Verse Coder"))
+    monkeypatch.setattr(panel_ui, "panel_rpc", lambda method, payload, timeout=0: sent.append(payload) or {"ok": True})
+    out = json.loads(panel_ui.ducky_ask_user([{"id": "q", "prompt": "Which date format?"}]))
+    assert out["ok"] is True
+    assert sent[0]["conv_id"] == "member" and sent[0]["lead_conv_id"] == "lead"
+    assert sent[0]["group_ids"] == ["group-core", "lead"]
+    assert sent[0]["author"] == {"name": "Verse Coder", "member_conv_id": "member"}
+
+    monkeypatch.setattr(panel_ui, "_resolve_ask_user_conv_id", lambda: "lead")
+    monkeypatch.setattr("frontend.ui_web.group_orchestrator.lookup_member_hub", lambda cid: None)
+    panel_ui.ducky_ask_user([{"id": "q", "prompt": "Ship it?"}])
+    assert "lead_conv_id" not in sent[1] and "group_ids" not in sent[1]

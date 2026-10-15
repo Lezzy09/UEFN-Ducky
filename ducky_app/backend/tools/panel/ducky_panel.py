@@ -1923,7 +1923,9 @@ def ducky_terminal_open(
     """Open a visible integrated terminal tab (bash or powershell) in the Ducky panel.
 
     In a chat, an idle terminal it already opened with the same shell and folder is
-    shown again instead of a new one (the result says reused=true)."""
+    shown again instead of a new one (the result says reused=true). Close it with
+    ducky_terminal_close when you are done with it; Ducky closes a chat's terminal itself
+    after 10 quiet minutes while that chat's agent is not working (nothing running in it)."""
     mgr = _terminal_manager()
     result = mgr.spawn(
         shell=shell, cwd=cwd or None, title=title, push_open=True,

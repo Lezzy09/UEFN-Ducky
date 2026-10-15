@@ -56,7 +56,7 @@ function collect(): WaitingItem[] {
       key: `cmd:${item.request_id}`,
       kind: "command",
       convId: (item.conv_id || "").trim(),
-      alsoIn: [],
+      alsoIn: item.lead_conv_id && item.lead_conv_id !== item.conv_id ? [item.lead_conv_id] : [],
       text: item.command,
       id: item.request_id,
     });

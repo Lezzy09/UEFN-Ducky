@@ -55,6 +55,13 @@ afterEach(() => {
 });
 
 describe("chats waiting on the user", () => {
+  it("a team member's command also marks its lead's chat as waiting", async () => {
+    act(() => pushLocalAgentEvent({ ...command("r7", "member"), lead_conv_id: "lead", asked_by: "Verse Coder" }));
+    await flush();
+    expect([...waitingChatIds()].sort()).toEqual(["lead", "member"]);
+    expect(listWaitingItems()[0].alsoIn).toEqual(["lead"]);
+  });
+
   it("knows several chats at once and clears each one as soon as its card is answered", async () => {
     void runAskUser(question, "", "c1");
     act(() => {

@@ -218,3 +218,27 @@ def test_a_lead_changes_the_plan_instead_of_messaging_a_working_member(monkeypat
     assert not panel._lead_uses_plan("lead", "idle-member", None)  # no plan work: a message is fine
     assert not panel._lead_uses_plan("builder", "lead", None)
     assert "ducky_plan_add_node" in panel.LEAD_USES_PLAN
+
+
+def test_an_inner_sub_plan_done_is_kept_on_the_plan_not_a_lead_turn(notices):
+    # Oct 15 2026: a nested team (a sub plan per group, inside it one per member) woke its lead
+    # seven times; four were members' inner sub plans finishing, where Ducky already starts
+    # whatever waited on them and the lead had nothing to do.
+    def ledger(models, integrate):
+        core = "completed" if models == integrate == "completed" else "in_progress"
+        return {"chat_id": "coord", "title": "Ledger", "status": "finished" if core == "completed" else "open",
+                "nodes": [{"id": "core", "content": "Core", "assignee": "group-core", "status": core, "children": [
+                    {"id": "models", "content": "Models", "assignee": "builder", "status": models, "children": [
+                        {"id": "m1", "content": "Transaction", "status": models}]},
+                    {"id": "integrate", "content": "Integrate", "assignee": "core-lead", "status": integrate}]}]}
+
+    first = events.completion_reports(ledger("pending", "pending"), ledger("completed", "pending"))
+    assert first and all(r.get("quiet") for r in first)  # kept on the plan
+    events.deliver_reports(ledger("completed", "pending"), first)
+    assert notices == []  # but no lead turn
+    last = events.completion_reports(ledger("completed", "pending"), ledger("completed", "completed"))
+    assert not any(r.get("quiet") for r in last)
+    events.deliver_reports(ledger("completed", "completed"), last)
+    assert len(notices) == 1
+    body = notices[0]["body"]
+    assert "step Integrate" in body and "section Core" in body and "finished plan Ledger" in body

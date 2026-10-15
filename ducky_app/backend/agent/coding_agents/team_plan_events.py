@@ -23,6 +23,17 @@ def completion_reports(before: dict, after: dict) -> list[dict[str, str]]:
     newly = {node["id"] for node, _ in assigned_nodes(after.get("nodes"))
              if node.get("status") in done and old.get(node["id"], {}).get("status") not in done}
     parent = {child["id"]: node for node, _ in assigned_nodes(after.get("nodes")) for child in node.get("children") or []}
+
+    def inside_open_sub_plan(node_id: str) -> bool:
+        # A sub plan nested in another one that is still open (a member's part of its group's
+        # sub plan): Ducky starts whatever waited on it, so the lead has nothing to do yet.
+        up = parent.get(node_id)
+        while up is not None:
+            if up.get("assignee") and up.get("status") not in done:
+                return True
+            up = parent.get(up["id"])
+        return False
+
     steps, sections = [], []
     for node, owner in assigned_nodes(after.get("nodes")):
         status = node.get("status")
@@ -34,7 +45,12 @@ def completion_reports(before: dict, after: dict) -> list[dict[str, str]]:
                 continue
             kind = "section" if node.get("children") else "step"
             body = f"{who} {status} {kind} {node['content']} ({node['id']}).\n{node.get('body_markdown', '')}"
-            (sections if node.get("children") else steps).append({"sender": actor, "body": body})
+            report = {"sender": actor, "body": body}
+            if status == "completed" and inside_open_sub_plan(node["id"]):
+                # Kept on the plan (the keeper's wake lists it), not a lead turn: on Oct 15 2026 a
+                # nested team woke its lead seven times, four of them for inner sub plans.
+                report["quiet"] = True
+            (sections if node.get("children") else steps).append(report)
     # In the order it happened: the step, then the sections it closed, innermost first.
     reports = steps + sections[::-1]
     if (any(owner for _, owner in assigned_nodes(after.get("nodes")))
@@ -44,8 +60,10 @@ def completion_reports(before: dict, after: dict) -> list[dict[str, str]]:
 
 
 def deliver_reports(plan: dict, reports: list[dict]) -> None:
-    """One notice per plan change: every notice is a coordinator turn that re-reads its thread."""
+    """One notice per plan change: every notice is a coordinator turn that re-reads its thread.
+    Quiet reports (an inner sub plan done while its outer one is open) are not sent."""
     from backend.agent.a2a_client import send_notice
+    reports = [r for r in reports if not r.get("quiet")]
     if not reports:
         return
     closing = ("Every step is finished: check the results and report to the user."

@@ -50,7 +50,15 @@ function fromRow(row: Record<string, unknown>): PendingTerminalCommand | null {
     rule_label: String(row.rule_label ?? "").trim(),
     local_only: Boolean(row.local_only),
     created_at: typeof row.created_at === "number" ? row.created_at : undefined,
+    lead_conv_id: String(row.lead_conv_id ?? "").trim() || undefined,
+    asked_by: String(row.asked_by ?? "").trim() || undefined,
   };
+}
+
+/** The card belongs in this chat: the chat that asked, or its lead's chat. */
+export function terminalApprovalShowsIn(item: PendingTerminalCommand, convId: string): boolean {
+  const cid = (convId || "").trim();
+  return Boolean(cid) && (item.conv_id === cid || item.lead_conv_id === cid);
 }
 
 function addApproval(item: PendingTerminalCommand): void {
@@ -113,9 +121,7 @@ export function listTerminalApprovals(): TerminalApproval[] {
 }
 
 export function terminalApprovalsForConv(convId: string): TerminalApproval[] {
-  const cid = (convId || "").trim();
-  if (!cid) return [];
-  return snapshot.filter((item) => item.conv_id === cid);
+  return snapshot.filter((item) => terminalApprovalShowsIn(item, convId));
 }
 
 /** The chat's options: Always/Everything only for a chat, and never for a local-only push. */
@@ -135,6 +141,7 @@ export function terminalApprovalChoices(item: PendingTerminalCommand): TerminalA
 export async function answerTerminalApproval(
   requestId: string,
   choice: TerminalApprovalChoice,
+  answeredIn = "",
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const api = getApi();
   if (!api) return { ok: false, error: "Ducky is not connected." };
@@ -143,7 +150,9 @@ export async function answerTerminalApproval(
     result =
       choice === "deny"
         ? await api.terminal_reject_command(requestId)
-        : await api.terminal_approve_command(requestId, choice);
+        : answeredIn
+          ? await api.terminal_approve_command(requestId, choice, answeredIn)
+          : await api.terminal_approve_command(requestId, choice);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

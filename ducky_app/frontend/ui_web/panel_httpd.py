@@ -56,12 +56,15 @@ def _alert_question(params: dict[str, Any]) -> None:
             from frontend.notifications import alert
             from frontend.ui_web.project_chats import load_conversation
 
-            conv_id = str(params.get("conv_id") or "").strip()
+            # A team member's question opens its lead's chat, where the person works with the team.
+            conv_id = str(params.get("lead_conv_id") or params.get("conv_id") or "").strip()
             conv = load_conversation(conv_id) if conv_id else None
             title = str(getattr(conv, "title", "") or "").strip() or str(params.get("title") or "") or "UEFN Ducky"
             questions = params.get("questions") if isinstance(params.get("questions"), list) else []
             first = questions[0] if questions and isinstance(questions[0], dict) else {}
-            alert(title, "Needs your answer.", level="ask", kind="chat" if conv else "",
+            asker = params.get("author") if params.get("lead_conv_id") and isinstance(params.get("author"), dict) else {}
+            status = f"{asker['name']} needs your answer." if str(asker.get("name") or "").strip() else "Needs your answer."
+            alert(title, status, level="ask", kind="chat" if conv else "",
                   target_id=conv_id if conv else "", detail=str(first.get("prompt") or ""))
         except Exception:
             pass

@@ -13,8 +13,10 @@ the chat (its own ``workspace_state`` row, so saving the chat can't drop it) for
 ``;``/``&&``/``|`` or spanning lines is never remembered on its own, and pushes, force/reset/
 clean, deletes, PR/release actions and build/publish/deploy scripts are never remembered that
 way. "Allow everything in this chat" (rule ``*``) stops every card in that chat and in the
-runs it starts (a sub-agent, a group member, a workflow ducky it sent work to: each run saves
-who started it), those too. The one thing it never runs: a push or publish of a local-only
+runs it starts (a sub-agent, a group member, a workflow ducky it sent work to, the members
+Ducky starts on its team plan: each run saves who started it), those too. A card from a chat
+another chat started also shows in the chat at the top of those links (``starter_root``),
+where the person works with the team. The one thing it never runs: a push or publish of a local-only
 AI plugin (the owner's rule), which is refused. The chat's context panel shows it and turns
 it off; deleting a chat drops its rows.
 
@@ -336,6 +338,23 @@ def allow_state(conv_id: str) -> dict[str, Any]:
 def allows_everything(conv_id: str) -> bool:
     """"Allow everything" was picked in this chat, or in the chat that started its run."""
     return bool(allow_source(conv_id))
+
+
+def starter_root(conv_id: str) -> str:
+    """The chat at the top of this chat's "started by" links (a team's lead, the chat that
+    spawned a helper), or '' when no other chat started it. A card for this chat shows there
+    too: on Oct 15 2026 a team member's test command waited 120 s on a card in its own chat,
+    which nobody had open, and the whole team stopped."""
+    seen: list[str] = []
+    top = ""
+    cid = (conv_id or "").strip()
+    while cid and cid not in seen and len(seen) < 8:
+        seen.append(cid)
+        up = _started_by(cid)
+        if not up or up in seen or not _chat_exists(up):
+            break
+        top = cid = up
+    return top
 
 
 # The approval mode of a chat. "edits" is the default and keeps no row; "all" is the "*"
