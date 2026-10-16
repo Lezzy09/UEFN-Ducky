@@ -284,6 +284,10 @@ def workspace_push_verse_changes(verse_only: bool = True, pretty: bool = False) 
             pass
         return tool_json({"ok": False, "error": WORKFLOW_NOT_CONNECTED}, pretty=pretty)
     if not client.can_push_verse_changes:
-        raise ValueError("UEFN is not ready to push Verse changes")
+        raise ValueError(
+            "UEFN is not ready to push Verse changes. If the Session menu's VerseVM toggle is On, "
+            "Verse Reload is disabled (UEFN 42.40): build Verse and restart the session instead, "
+            "or turn the toggle Off."
+        )
     message = client.push_changes(bool(verse_only))
     return tool_json({"message": message, "status": client.get_status()}, pretty=pretty)

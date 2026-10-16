@@ -371,12 +371,13 @@ def test_l16_concrete_subtype_not_editable_is_silent() -> None:
     assert not [f for f in lint_verse(src) if f["rule"] == "concrete_subtype_editable"]
 
 
-# --- 42.30: these two files compiled with 0 errors in UEFN 42.30 (Tycoony, Oct 1 2026).
+# --- Compile-verified samples: llm_npc_4230 in UEFN 42.30 (Tycoony, Oct 1 2026);
+# abilities_4240 and text_chat_4240 in UEFN 42.40 (ExampleProject1, Oct 16 2026).
 _TESTDATA = os.path.join(os.path.dirname(__file__), "testdata")
 
 
-@pytest.mark.parametrize("name", ["llm_npc_4230.verse", "abilities_4230.verse"])
-def test_42_30_compile_verified_samples_have_no_errors(name: str) -> None:
+@pytest.mark.parametrize("name", ["llm_npc_4230.verse", "abilities_4240.verse", "text_chat_4240.verse"])
+def test_compile_verified_samples_have_no_errors(name: str) -> None:
     with open(os.path.join(_TESTDATA, name), encoding="utf-8") as fh:
         findings = lint_verse(fh.read())
     assert [f for f in findings if f["severity"] == "error"] == []
@@ -414,3 +415,62 @@ def test_42_30_conversation_types_need_their_usings() -> None:
     missing = {f["message"] for f in lint_verse(code) if f["rule"] == "missing_using"}
     assert any("/Verse.org/Chat" in m for m in missing)
     assert any("/UnrealEngine.com/Conversations" in m for m in missing)
+
+
+def test_42_40_ability_renames_are_flagged() -> None:
+    code = (
+        "using { /Fortnite.com/Abilities }\n\n"
+        "Q():fort_wedge_ability_target_query = fort_wedge_ability_target_query{Radius := 500.0, CentralAngle := 90.0}\n"
+        "S():ability_target_query = self_ability_target_query{}\n"
+        "C():void = MakeAbilityEffectComponent(my_component)\n"
+    )
+    messages = " ".join(f["message"] for f in lint_verse(code) if f["severity"] == "error")
+    assert "CentralAngle" in messages
+    assert "`self_ability_target_query` was renamed" in messages
+    assert "MakeAbilityEffectComponent" in messages
+
+
+def test_42_40_new_names_are_not_flagged_as_renames() -> None:
+    code = (
+        "using { /Fortnite.com/Abilities }\n\n"
+        "S():fort_self_ability_target_query = fort_self_ability_target_query{}\n"
+        "Q():fort_wedge_ability_target_query = fort_wedge_ability_target_query{Radius := 500.0, Angle := 1.5708}\n"
+    )
+    assert not [f for f in lint_verse(code) if f["rule"] == "unknown_api"]
+
+
+def test_43_00_event_subscribe_extension_is_a_warning() -> None:
+    code = (
+        "using { /Verse.org/Simulation }\n\n"
+        "(Event:event(t) where t : type).Subscribe(Callback(:t):void):cancelable =\n"
+        "    Event.Subscribe(Callback)\n"
+    )
+    found = [f for f in lint_verse(code) if f["rule"] == "unknown_api"]
+    assert [f["severity"] for f in found] == ["warning"]
+    assert "43.00" in found[0]["message"]
+
+
+def test_listenable_subscribe_is_not_the_event_extension() -> None:
+    code = (
+        "using { /Verse.org/Simulation }\n\n"
+        "(L:listenable(agent)).SubscribeAgent(F(:agent):void):cancelable =\n"
+        "    L.Subscribe(F)\n"
+    )
+    assert not [f for f in lint_verse(code) if f["rule"] == "unknown_api"]
+
+
+def test_42_40_text_chat_types_need_their_usings() -> None:
+    code = (
+        "m := class(has_text_member_info){}\n"
+        "S():text_message_style = text_message_style{TextColor := NamedColors.Red}\n"
+    )
+    missing = {f["message"] for f in lint_verse(code) if f["rule"] == "missing_using"}
+    assert any("/Verse.org/Chat" in m for m in missing)
+    assert any("/Verse.org/Colors" in m for m in missing)
+
+
+def test_bare_device_get_simulation_entity_needs_no_scene_graph() -> None:
+    device = "using { /Fortnite.com/Devices }\nd := class(creative_device):\n    F():void =\n        if (Sim := GetSimulationEntity[]) {}\n"
+    assert not [f for f in lint_verse(device) if f["rule"] == "missing_using"]
+    entity = "F(E:entity):void =\n    if (Sim := E.GetSimulationEntity[]) {}\n"
+    assert any("/Verse.org/SceneGraph" in f["message"] for f in lint_verse(entity) if f["rule"] == "missing_using")

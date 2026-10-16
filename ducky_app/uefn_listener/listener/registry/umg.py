@@ -326,7 +326,7 @@ def umg_capabilities() -> dict:
             "Bindings: MVVMToolset.create_view_binding / create_view_event_binding.",
             "Verse fields reach the Assets digest (UW_* type members) only once the widget's asset editor "
             "has been opened this session; the Verse-field tools do that themselves (verse_ready), then build Verse.",
-            "UMG event fields are Verse event(): Await them in a loop — they have no Subscribe.",
+            "UMG event fields are Verse event(): Await them in a loop — no Subscribe on an event until 43.00 (never add your own Subscribe extension).",
             "Compile with BlueprintEditorLibrary.compile_blueprint after tree edits.",
         ],
     }

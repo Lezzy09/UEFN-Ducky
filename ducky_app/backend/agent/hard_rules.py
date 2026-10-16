@@ -193,9 +193,19 @@ AGENT_HARD_RULES = (
     "parametric (`x := class(fort_template_ability):`); target queries take "
     "`Targets := array{…}` (`Any` → `Neutral`). Held items = `held_item_template` "
     '(`skill_read_subskill("scenegraph", "held_items")`). UMG `event` fields are creatable '
-    "(≤1 bool/int/float param) and reflect as `event(tuple())` — `Await` them in a loop, they "
-    "have no `Subscribe`; Custom Button binds `OnButtonClicked` — `OnClicked` no "
+    "(≤1 bool/int/float param) and reflect as `event(tuple())` — `Await` them in a loop (no "
+    "`Subscribe` on an `event` until 43.00); Custom Button binds `OnButtonClicked` — `OnClicked` no "
     'longer compiles (`skill_read_subskill("verse", "umg_verse_field_events")`).\n'
+    "- **42.40 (HARD):** text chat = `/Verse.org/Chat` `text_channel(member)` + "
+    "`has_text_member_info` (`CanSend` = read-only, `MessageStyle`) + `text_message_style` "
+    "(color, [label]) registered with `AddChatChannel` — Verse cannot send or read messages "
+    '(`skill_read_subskill("verse", "sys_text_chat")`). Abilities are out of Experimental: '
+    "`ability_context.Instigator` is `?entity` (cast `agent[...]`), `Ability.Use(...)` is "
+    "no_rollback (never inside `if`), wedge `Angle` in radians (not `CentralAngle`), "
+    "`fort_self_ability_target_query`, open enums need `_ =>` "
+    '(`skill_read_subskill("scenegraph", "custom_abilities")`). 43.00 makes `event(t)` '
+    "subscribable — never write your own `Subscribe` extension on events "
+    '(`skill_read_subskill("verse", "events_subscriptions")`).\n'
     "- **Persistence `weak_map` (HARD):** never remove player keys once added. Replace "
     "values only via rebuild+`set`. Do not add/remove persistable fields without "
     '`skill_read_subskill("verse","persistence")` + `sys_persistence_migration`.\n'

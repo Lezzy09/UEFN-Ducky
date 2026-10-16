@@ -122,7 +122,9 @@ _USING_RULES: tuple[tuple[str, str, str], ...] = (
     (r"\bFindSweepHits\b", "/Verse.org/SceneGraph", "/Verse.org/SceneGraph"),
     (r"\bmesh_component\b", "/Verse.org/SceneGraph", "/Verse.org/SceneGraph"),
     (r"\bentity\s*\{", "/Verse.org/SceneGraph", "/Verse.org/SceneGraph"),
-    (r"\bGetSimulationEntity\b", "/Verse.org/SceneGraph", "/Verse.org/SceneGraph"),
+    # Only the entity extension needs SceneGraph; a creative_device's own bare
+    # GetSimulationEntity[] compiles without it (verified 42.40).
+    (r"\.\s*GetSimulationEntity\b", "/Verse.org/SceneGraph", "/Verse.org/SceneGraph"),
     # Bare GetPlayspace() is a creative_device method and needs no import; only the
     # fort_playspace type / GetPlayspaceForEntity come from the Playspaces module.
     (r"\bfort_playspace\b", "/Fortnite.com/Playspaces", "/Fortnite.com/Playspaces"),
@@ -150,6 +152,14 @@ _USING_RULES: tuple[tuple[str, str, str], ...] = (
     (r"\bfort_template_ability\b", "/Fortnite.com/Abilities", "/Fortnite.com/Abilities"),
     (r"\bfort_target_query_affiliation\b", "/Fortnite.com/Abilities", "/Fortnite.com/Abilities"),
     (r"\bheld_item_template\b", "/Fortnite.com/Armory", "/Fortnite.com/Armory"),
+    # 42.40 text chat channels and ability types.
+    (r"\btext_channel\b", "/Verse.org/Chat", "/Verse.org/Chat"),
+    (r"\bhas_text_member_info\b", "/Verse.org/Chat", "/Verse.org/Chat"),
+    (r"\btext_message_style\b", "/Verse.org/Chat", "/Verse.org/Chat"),
+    (r"\bGetTextChannels\b", "/Verse.org/Chat", "/Verse.org/Chat"),
+    (r"\bNamedColors\.", "/Verse.org/Colors", "/Verse.org/Colors"),
+    (r"\bfort_self_ability_target_query\b", "/Fortnite.com/Abilities", "/Fortnite.com/Abilities"),
+    (r"\bfort_attribute_modifier\b", "/Fortnite.com/Abilities", "/Fortnite.com/Abilities"),
 )
 
 # (regex, message, fix, severity)
@@ -209,6 +219,32 @@ _BAD_API_RULES: tuple[tuple[str, str, str, str], ...] = (
         "Ability target queries take `Targets` (an array) since 42.30.",
         "Use `Targets := array{fort_target_query_affiliation.Hostile}`.",
         "error",
+    ),
+    # 42.40 ability renames (verified: Script error 3506 on the old names).
+    (
+        r"\bCentralAngle\b",
+        "`fort_wedge_ability_target_query.CentralAngle` was renamed in 42.40.",
+        "Use `Angle`, in radians: `Angle := 1.5708` for 90 degrees.",
+        "error",
+    ),
+    (
+        r"\bself_ability_target_query\b",
+        "`self_ability_target_query` was renamed in 42.40.",
+        "Use `fort_self_ability_target_query{}`.",
+        "error",
+    ),
+    (
+        r"\bMakeAbilityEffectComponent\b",
+        "`MakeAbilityEffectComponent` was removed in 42.40.",
+        "Build the effect prefab in `MakeAbility()` and keep your logic in its `ability_effect_component`.",
+        "error",
+    ),
+    # 43.00 makes event(t) subscribable; a hand-written Subscribe extension becomes ambiguous.
+    (
+        r"^\s*\(\s*\w+\s*:\s*event\b.*?\)\s*\.\s*Subscribe\s*\(",
+        "A `Subscribe` extension on `event` breaks in 43.00, when `event(t)` gets a built-in `Subscribe`.",
+        "Await the event in a loop instead (skill verse `events_subscriptions`) and delete this extension.",
+        "warning",
     ),
 )
 
