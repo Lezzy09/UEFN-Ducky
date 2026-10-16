@@ -191,9 +191,11 @@ UMG / Widget Blueprints (registry tools; capability-guarded)
 - ``list_widget_classes`` before any class name. ``build_widget_tree`` writes the nested
   tree, slots, and widget props in one compile. ``set_widget_slot`` nudges anchors / ZOrder.
 - Animations: ``create_widget_animation`` → ``add_animation_keys`` (Opacity, Color, Transform).
-  Verse fields: ``add_verse_field`` (bool/int/float/string/message/color/texture/material;
-  ``logic`` maps to bool). ``event`` fields cannot be created here — ``bind_widget_event``
-  points OnClicked / OnButtonHighlight at a bool or int field.
+  Verse fields: ``add_verse_field`` (bool/int/float/string/message/color/texture/material, and
+  ``event`` with at most one bool/int/float parameter; ``logic`` maps to bool).
+  ``bind_widget_event`` binds a Custom Button's OnButtonClicked / OnButtonHighlight — or a child's
+  inner button (``Main_Button.OnButtonClicked``) — to an event, bool or int field.
+  Text: ``set_widget_property`` with ``{"Text": "NSLOCTEXT(...)"}`` keeps it localizable.
 - Read back: ``get_widget_blueprint_info`` (slots, animation key counts, verse_fields,
   view_bindings). Skill: ``umg_mcp_tools`` then ``umg_recipes``.
 - Runtime Verse: Assets digest name, one instance per player, SetFocus, InputMode.All for

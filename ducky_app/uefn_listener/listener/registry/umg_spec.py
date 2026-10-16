@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import uuid
 from typing import Any
 
 # Classes ListWidgetClasses marks as panels, plus the Fortnite buttons that
@@ -159,3 +161,80 @@ def button_event_name(event_name: str, widget_class: str = "") -> str:
     if name in BUTTON_EVENTS:
         return name
     return _BUTTON_EVENT_ALIASES.get(name.lower(), name)
+
+
+# --------------------------------------------------------------------------- Localizable text
+
+_TEXT_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+_TEXT_MACROS = ("NSLOCTEXT(", "LOCTEXT(", "INVTEXT(", "LOCTABLE(", "LOCGEN_")
+
+
+def is_text_macro(value: Any) -> bool:
+    """True when the string is already an FText import (NSLOCTEXT, INVTEXT, LOCTABLE…)."""
+    return isinstance(value, str) and value.lstrip().startswith(_TEXT_MACROS)
+
+
+def nsloctext(text: str, key: str = "") -> str:
+    """Localizable FText import text with a fresh 32-hex key, as the UMG designer writes it.
+
+    A plain Python string becomes FText::FromString: it has no key, so Export Localization
+    never gathers it. Verified live in UEFN 42.30 (Oct 16 2026): ObjectTools.set_properties
+    with this value saves the key beside the text in the .uasset.
+    """
+    escaped = "".join(_TEXT_ESCAPES.get(ch, ch) for ch in str(text))
+    return f'NSLOCTEXT("", "{key or uuid.uuid4().hex.upper()}", "{escaped}")'
+
+
+# --------------------------------------------------------------------------- MVVM view events
+
+_MEMBER = re.compile(r'MemberName="([^"]*)"')
+_WIDGET = re.compile(r'WidgetName="([^"]*)"')
+_PIN_NAMES = re.compile(r"PinNames=\(([^)]*)\)")
+_PIN_DEFAULT = re.compile(r'DefaultString="((?:[^"\\]|\\.)*)"')
+
+
+def property_path_text(export_text: str) -> str:
+    """`ToggleButton1.Main_Button.OnButtonClicked` from an exported FMVVMBlueprintPropertyPath."""
+    text = export_text or ""
+    widget = _WIDGET.search(text)
+    parts = [widget.group(1)] if widget and widget.group(1) not in ("", "None") else []
+    return ".".join(parts + _MEMBER.findall(text))
+
+
+def event_pin_values(pin_texts: list[str]) -> dict[str, str]:
+    """What each event parameter sends: {"Param0": "0"} (a bound pin shows its path instead)."""
+    values: dict[str, str] = {}
+    for text in pin_texts or []:
+        names = _PIN_NAMES.search(text or "")
+        if not names:
+            continue
+        name = ".".join(part.strip().strip('"') for part in names.group(1).split(","))
+        path_at = text.find("Path=(")
+        bound = property_path_text(text[path_at:]) if path_at >= 0 else ""
+        default = _PIN_DEFAULT.search(text)
+        values[name] = bound or (default.group(1) if default else "")
+    return values
+
+
+# --------------------------------------------------------------------------- ObjectTools listings
+
+
+def property_shape(schema: Any, depth: int = 0) -> Any:
+    """One ObjectTools.list_properties entry, cut down to the value format set_properties takes."""
+    if not isinstance(schema, dict):
+        return str(schema)
+    if schema.get("enum"):
+        return "|".join(str(v) for v in schema["enum"][:16])
+    kind = schema.get("type")
+    if kind == "object" and isinstance(schema.get("properties"), dict) and depth < 1:
+        return {name: property_shape(sub, depth + 1) for name, sub in schema["properties"].items()}
+    if kind == "array":
+        return [property_shape(schema.get("items") or {}, depth + 1)]
+    return schema.get("title") or kind or "?"
+
+
+def property_shapes(listing: Any) -> dict[str, Any]:
+    """{name: shape} for a whole list_properties result (full JSON schemas run to ~20 KB)."""
+    if not isinstance(listing, dict):
+        return {}
+    return {name: property_shape(schema) for name, schema in sorted(listing.items())}

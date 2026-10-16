@@ -6,7 +6,6 @@ Never dumps toolset JSON schemas. Never patches .uasset bytes.
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, List, Optional
 
 import unreal
@@ -15,6 +14,8 @@ from listener.dispatch import register
 from listener.registry.umg_spec import (
     BINDING_MODES,
     button_event_name,
+    is_text_macro,
+    nsloctext,
     verse_field_spec,
     validate_widget_tree_spec,
 )
@@ -293,10 +294,16 @@ def _apply_widget_props(widget_obj, props: dict) -> List[str]:
     if not isinstance(props, dict) or not props:
         return notes
     if "text" in props:
+        raw = str(props["text"])
         try:
-            widget_obj.set_editor_property("text", str(props["text"]))
+            # Localizable (keyed) text; set_editor_property(str) would save an unkeyed string.
+            _mod().set_object_properties(_ref(widget_obj), {"Text": raw if is_text_macro(raw) else nsloctext(raw)})
         except Exception as exc:  # noqa: BLE001
-            notes.append(f"text: {exc}"[:160])
+            try:
+                widget_obj.set_editor_property("text", raw)
+                notes.append(f"text: saved as a plain string, not localizable ({_err_head(str(exc))})"[:240])
+            except Exception as exc2:  # noqa: BLE001
+                notes.append(f"text: {exc2}"[:160])
     if "render_opacity" in props:
         try:
             widget_obj.set_editor_property("render_opacity", float(props["render_opacity"]))
@@ -1006,6 +1013,11 @@ def bind_widget_event(
 ) -> dict:
     """Bind a widget event to a Verse field: an `event` field (42.30) or a bool/int the device watches.
 
+    event_name may reach into a child widget's own tree: `Main_Button.OnButtonClicked` on the kit
+    widget `ToggleButton1`, or two levels deep (verified live in UEFN 42.30, Oct 16 2026: compiles,
+    survives save + reload, the field reaches Verse). A path that names nothing raises: MVVM returns
+    no event for it and the compile still passes. Binding the same source to the same field again
+    returns the existing event instead of firing twice.
     Custom Buttons compile only OnButtonClicked / OnButtonHighlight / OnButtonUnhighlight in 42.30;
     OnClicked, OnPressed, OnHovered… are remapped. The compile result is returned, not hidden.
     The widget's editor is opened once first (ensure_verse_fields_live): without that the binding
@@ -1021,17 +1033,54 @@ def bind_widget_event(
             f"No Verse field named {destination_field}. Add it first: add_verse_field(field_type='event') "
             f"for a click, or bool/int. Fields: {_field_names(widget_path)}"
         )
-    event = _mvvm().create_view_event_binding(wbp, widget_obj, used, None, destination_field)
+    source = f"{widget_name}.{used}"
+    bound = _find_event(_view_events(wbp), source=source, destination=destination_field)
+    already = bound is not None
+    if bound is None:
+        event = _mvvm().create_view_event_binding(wbp, widget_obj, used, None, destination_field)
+        if event is None:
+            raise ValueError(
+                f"{widget_name} has no event {used!r}, so nothing was bound. A nested path names a widget in "
+                f"{widget_name}'s own tree, then its event (Main_Button.OnButtonClicked); read that tree with "
+                "get_widget_blueprint_info on the child's class. Custom Buttons fire OnButtonClicked, "
+                "OnButtonHighlight and OnButtonUnhighlight."
+            )
+        bound = _find_event(_view_events(wbp), ref=_ref(event)) or {"ref": _ref(event)}
+    sends = bound.get("sends") or {}
     return {
         "widget_path": _ref(wbp),
         "widget_name": widget_name,
         "event_name": used,
         **({"event_name_requested": event_name} if used != event_name else {}),
         "destination_field": destination_field,
-        "event": str(event)[:200],
+        "event": bound.get("ref", ""),
+        **({"already_bound": True} if already else {}),
+        "sends": sends,
+        **({"manual_step": _send_value_step(source, destination_field, sends)} if sends else {}),
         "verse_ready": live,
         **_compile_checked(wbp),
     }
+
+
+def _view_events(wbp) -> List[dict]:
+    return _mod().widget_view_events(wbp)
+
+
+def _find_event(rows: List[dict], *, source: str = "", destination: str = "", ref: str = "") -> Optional[dict]:
+    for row in rows:
+        if ref and row.get("ref") == ref:
+            return row
+        if source and row.get("source") == source and row.get("destination") == destination:
+            return row
+    return None
+
+
+def _send_value_step(source: str, destination: str, sends: dict) -> str:
+    pins = ", ".join(f"{pin} = {value}" for pin, value in sends.items())
+    return (
+        f"{source} → {destination} sends {pins}. If each child must send its own number, set it in the "
+        "widget's View Bindings panel (no tool can: the event's saved pins are read-only)."
+    )
 
 
 def list_bindable_properties(widget_path: str, widget_name: str) -> dict:

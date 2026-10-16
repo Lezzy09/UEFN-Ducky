@@ -21,13 +21,14 @@ HARD RULES (UEFN crash avoidance):
 from __future__ import annotations
 
 import json
-from typing import Any, List, Optional
+from typing import Any, List
 
 import unreal
 
 from listener.dispatch import register
 from listener.project_paths import pin_project_folder
 from listener.registry.asset_registry import assets_by_class as _assets_by_class
+from listener.registry.umg_spec import event_pin_values, property_path_text, property_shapes
 
 _UMG_CLASSES = (
     "WidgetBlueprint",
@@ -53,7 +54,9 @@ _HARD_LIST_CAP = 200
 # ToolsetRegistry names are "<Class>.<Class>" (verified live). Short "UMGToolSet"
 # alone returns "Toolset not found". NEVER dump get_*_json_schema — crashes UEFN.
 _UMG_TOOLSET = "UMGToolSet.UMGToolSet"
-_OBJECT_TOOLSET = "ObjectTools.ObjectTools"
+# Epic's Python toolsets register under their module path (UEFN 42.30, Oct 16 2026);
+# "ObjectTools.ObjectTools" is not a toolset. Arguments: instance + values (a JSON string).
+_OBJECT_TOOLSET = "editor_toolset.toolsets.object.ObjectTools"
 _KNOWN_UMG_TOOLS = (
     "GetWidgets",
     "GetWidgetDescription",
@@ -290,7 +293,6 @@ def umg_capabilities() -> dict:
     }
     if reg is not None:
         _ensure_toolset_registered(reg, "UMGToolSet")
-        _ensure_toolset_registered(reg, "ObjectTools")
         try:
             toolset["umg_toolset_registered_by_name"] = bool(reg.is_toolset_registered(_UMG_TOOLSET))
         except Exception as exc:  # noqa: BLE001
@@ -530,41 +532,53 @@ def set_widget_property(
     properties: dict,
     list_first: bool = True,
 ) -> dict:
-    """Set properties on a widget or slot via ObjectTools (list → set).
+    """Set properties on a widget, slot or class default object via ObjectTools (list → set).
 
-    Property names vary per class — when ``list_first`` is True (default), call
-    ObjectTools.list_properties first and include the names in the response so
-    agents can correct typos. Never guess property names.
+    Property names vary per class — when ``list_first`` is True (default), list the
+    object's properties first and return each one's value format (``listed_properties``).
+    A name the object does not have fails the call; nothing is set silently.
     """
     if not isinstance(properties, dict) or not properties:
         raise ValueError("properties must be a non-empty object of {name: value}")
     wbp = _load_asset(widget_path)  # ensure asset exists / dirty tracking
-    listed: Optional[dict] = None
+    listed: Any = None
     if list_first:
         try:
-            listed = _execute_tool(
-                _OBJECT_TOOLSET,
-                "list_properties",
-                {"object": {"refPath": target_ref_path}},
-            )
+            listed = list_object_properties(target_ref_path)
         except Exception as exc:  # noqa: BLE001
-            listed = {"ok": False, "error": str(exc)[:200]}
-
-    result = _execute_tool(
-        _OBJECT_TOOLSET,
-        "set_properties",
-        {
-            "object": {"refPath": target_ref_path},
-            "properties": properties,
-        },
-    )
+            listed = {"error": str(exc)[:200]}
+    result = set_object_properties(target_ref_path, properties)
     _compile_and_save(wbp)
     return {
         "widget_path": _ref_path(wbp),
         "target_ref_path": target_ref_path,
-        "listed_properties": listed.get("result") if isinstance(listed, dict) else listed,
+        "listed_properties": listed,
         "set_result": result.get("result"),
     }
+
+
+def _json_value(raw: Any) -> Any:
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+    return raw
+
+
+def list_object_properties(ref_path: str) -> dict:
+    """{name: value format} for any object (ObjectTools.list_properties, cut down)."""
+    listed = _execute_tool(_OBJECT_TOOLSET, "list_properties", {"instance": {"refPath": ref_path}})
+    return property_shapes(_json_value(listed.get("result")))
+
+
+def set_object_properties(ref_path: str, values: dict) -> dict:
+    """ObjectTools.set_properties: import-text values, so FText takes NSLOCTEXT(…) strings."""
+    return _execute_tool(
+        _OBJECT_TOOLSET,
+        "set_properties",
+        {"instance": {"refPath": ref_path}, "values": json.dumps(values)},
+    )
 
 
 def _resolve_widget_class_ref(widget_class: str) -> str:
@@ -631,7 +645,46 @@ def list_widget_bindings(widget_path: str) -> dict:
         except Exception:
             continue
 
-    return {"widget_path": _ref_path(wbp), "bindings": bindings_out, "view": _ref_path(view)}
+    return {
+        "widget_path": _ref_path(wbp),
+        "bindings": bindings_out,
+        "events": view_events(view),
+        "view": _ref_path(view),
+    }
+
+
+def view_events(view) -> List[dict]:
+    """Event bindings on an MVVM view: source path, destination field, what each parameter sends.
+
+    `sends` is the value the event passes (Param0 of a shared int event). New bindings send 0;
+    only the View Bindings panel can change it (SavedPins is read-only to Python and ObjectTools).
+    """
+    rows: List[dict] = []
+    try:
+        events = list(view.get_editor_property("events") or [])
+    except Exception:  # noqa: BLE001
+        return rows
+    for event in events[:100]:
+        try:
+            rows.append({
+                "source": property_path_text(event.get_editor_property("event_path").export_text()),
+                "destination": property_path_text(event.get_editor_property("destination_path").export_text()),
+                "sends": event_pin_values([p.export_text() for p in event.get_editor_property("saved_pins")]),
+                "enabled": bool(event.get_editor_property("enabled")),
+                "ref": _ref_path(event),
+            })
+        except Exception as exc:  # noqa: BLE001
+            rows.append({"ref": _ref_path(event), "error": str(exc)[:160]})
+    return rows
+
+
+def widget_view_events(wbp) -> List[dict]:
+    """view_events for a WidgetBlueprint; [] when it has no MVVM view yet."""
+    try:
+        view = _mvvm_subsystem().get_view(wbp)
+    except Exception:  # noqa: BLE001
+        return []
+    return view_events(view) if view is not None else []
 
 
 def _serialize_bindings(val: Any) -> List[Any]:

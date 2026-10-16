@@ -93,7 +93,12 @@ def set_widget_property(
     list_first: bool = True,
     pretty: bool = False,
 ) -> str:
-    """Set properties on a widget/slot via ObjectTools (list_properties first by default)."""
+    """Set properties on a widget, slot or class default object via Epic ObjectTools.
+
+    list_first (default) returns listed_properties: each name's value format. A wrong name fails.
+    Localizable text: {"Text": "NSLOCTEXT(\\"\\", \\"<32-hex key>\\", \\"Play\\")"}. Desired focus:
+    target_ref_path "<package>.Default__<Name>_C", {"DesiredFocusWidget": {"widgetName": "<child>"}}.
+    """
     return tool_json(
         send_command(
             "set_widget_property",
@@ -110,7 +115,7 @@ def set_widget_property(
 
 @plugin_mcp_tool("verse")
 def list_widget_bindings(widget_path: str, pretty: bool = False) -> str:
-    """List MVVM view bindings on a WidgetBlueprint."""
+    """List MVVM property bindings and click events (source path → field, what each event sends)."""
     return tool_json(send_command("list_widget_bindings", {"widget_path": widget_path}), pretty=pretty)
 
 
@@ -170,7 +175,10 @@ def build_widget_tree(
     folder: str = "",
     pretty: bool = False,
 ) -> str:
-    """Build a nested Widget Blueprint tree (class, name, slot, properties, children). One compile."""
+    """Build a nested Widget Blueprint tree (class, name, slot, properties, children). One compile.
+
+    properties.text is written as localizable text (NSLOCTEXT with a fresh key).
+    """
     return tool_json(
         send_command(
             "build_widget_tree",
@@ -434,7 +442,10 @@ def bind_widget_event(
     """Bind a button event to a Verse field (an event field, or a bool/int the device watches).
 
     Custom Buttons: OnButtonClicked, OnButtonHighlight, OnButtonUnhighlight (OnClicked /
-    OnHovered are remapped; they fail to compile in 42.30). Check `compiled` in the result.
+    OnHovered are remapped; they fail to compile in 42.30). event_name may reach into a child
+    widget: widget_name "ToggleButton1", event_name "Main_Button.OnButtonClicked". A path that
+    binds nothing raises; binding the same click again returns already_bound. `sends` is what the
+    event passes (new bindings send 0; only the View Bindings panel changes it). Check `compiled`.
     """
     return tool_json(
         send_command(
