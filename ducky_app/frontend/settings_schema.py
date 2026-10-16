@@ -326,6 +326,10 @@ FIELD_META: dict[str, FieldMeta] = {
         "Starter LLM gateways seeded", "internal",
         description="First-run Store install of Anthropic, Cursor, and OpenAI already ran once.",
     ),
+    "welcome_ducky_offered": FieldMeta(
+        "Welcome ducky offered", "internal",
+        description="The first start already decided on the welcome ducky that offers the walkthroughs.",
+    ),
     "shared_mcp": FieldMeta(
         "Shared MCP backend",
         "internal",

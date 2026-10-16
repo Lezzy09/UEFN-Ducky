@@ -159,6 +159,40 @@ def starter_llm_onboard_pending() -> dict[str, Any]:
         return {"ok": True, "pending": True}
 
 
+# The welcome ducky a fresh install opens on its first start: its first message offers
+# these walkthroughs (ids of the app's own tours) as buttons.
+WELCOME_DUCKY_TITLE = "Welcome to Ducky"
+WELCOME_DUCKY_TOURS: tuple[str, ...] = (
+    "app.shell",
+    "chat.composer",
+    "workflows.intro",
+    "workflows.first_build",
+    "settings.store",
+    "llms.setup",
+    "settings.duckies",
+)
+WELCOME_DUCKY_TEXT = (
+    "Hi, I'm Ducky! Right after setup, the Welcome walkthrough shows you around the app.\n\n"
+    "Every walkthrough is below. Press one to start it, now or any time later. "
+    "Once an AI is connected, ask me anything here."
+)
+
+
+def claim_welcome_ducky() -> bool:
+    """True on a fresh install's first start, once per AppData: the caller makes the
+    welcome ducky. Any later call, or an install that already used Ducky, is False."""
+    from frontend.settings import PanelSettings
+
+    fresh = bool(starter_llm_onboard_pending().get("pending"))
+    with _STATE:
+        settings = PanelSettings.load()
+        if bool(getattr(settings, "welcome_ducky_offered", False)):
+            return False
+        settings.welcome_ducky_offered = True
+        settings.save()
+    return fresh
+
+
 def _group(slug: str) -> str:
     if slug in STARTER_LLM_GATEWAY_SLUGS:
         return "gateway"

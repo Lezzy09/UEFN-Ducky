@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StarterPluginDto } from "../types/panel";
 
@@ -9,6 +9,11 @@ const fake = vi.hoisted(() => {
     get_key_status: vi.fn(),
     list_coding_agents: vi.fn(),
     save_agent_settings: vi.fn(),
+    coding_agent_login: vi.fn(),
+    coding_agent_login_status: vi.fn(),
+    coding_agent_login_submit: vi.fn(),
+    coding_agent_login_cancel: vi.fn(),
+    detect_coding_agent_cli: vi.fn(),
   };
   return { api, runBridgeJob: vi.fn(), providers: [] as unknown[] };
 });
@@ -20,6 +25,7 @@ vi.mock("../hooks/storeCatalogCache", () => ({ peekStoreCatalogCache: () => null
 vi.mock("../hooks/usePluginContributions", () => ({
   usePluginContributions: () => ({ llm_providers: fake.providers, llm_coding_agents: [], ready: true }),
 }));
+vi.mock("../hooks/modelsCatalogCache", () => ({ refreshModelsCatalog: vi.fn(), rereadModelsCatalog: vi.fn() }));
 
 const { SetupWizard } = await import("./SetupWizard");
 
@@ -36,6 +42,33 @@ const OPENAI = {
   plugin_id: "openai",
   order: 20,
 };
+const ANTHROPIC = { ...OPENAI, id: "anthropic", label: "Anthropic", secret_key: "anthropic", plugin_id: "anthropic", order: 10 };
+const CURSOR = { id: "cursor", label: "Cursor", kind: "url" as const, plugin_id: "cursor", order: 30 };
+
+const AGENTS = [
+  { id: "codex", label: "Codex", plugin_id: "openai", available: true, logged_in: true, enabled: true, status: "ok" },
+  {
+    id: "claude_code",
+    label: "Claude Code",
+    plugin_id: "anthropic",
+    available: true,
+    logged_in: false,
+    can_login: true,
+    enabled: true,
+    status: "Not logged in",
+  },
+  {
+    id: "cursor",
+    label: "Cursor Agent",
+    plugin_id: "cursor",
+    available: false,
+    logged_in: null,
+    enabled: true,
+    status: "CLI not found",
+    install_help: "Install the Cursor CLI, then press Check.",
+  },
+  { id: "ducky", label: "Ducky", plugin_id: "", available: true, enabled: true, status: "ok" },
+];
 
 function wizard(over: Partial<Parameters<typeof SetupWizard>[0]> = {}) {
   const props = {
@@ -63,6 +96,8 @@ beforeEach(() => {
   fake.api.get_key_status.mockResolvedValue({});
   fake.api.list_coding_agents.mockResolvedValue({ agents: [] });
   fake.api.save_agent_settings.mockResolvedValue(undefined);
+  fake.api.coding_agent_login_status.mockResolvedValue({ ok: true, logged_in: false });
+  fake.api.coding_agent_login_cancel.mockResolvedValue({ ok: true });
 });
 
 afterEach(() => {
@@ -119,8 +154,9 @@ describe("SetupWizard", () => {
     fake.providers = [OPENAI];
     fake.runBridgeJob.mockResolvedValue({ ok: true, detail: "ok" });
     const props = wizard({ step: "ai" });
-    expect(screen.getByText("API key")).toBeTruthy();
-    expect(screen.getByText("Coding agent")).toBeTruthy();
+    const ways = document.querySelector<HTMLElement>(".setup-wizard-ways")!;
+    expect(within(ways).getByText("API key")).toBeTruthy();
+    expect(within(ways).getByText("Coding agent")).toBeTruthy();
     expect(screen.getByText("Not connected")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: " sk-test " } });
     await act(async () => {
@@ -153,8 +189,73 @@ describe("SetupWizard", () => {
       agents: [{ id: "codex", label: "Codex", plugin_id: "openai", available: true, logged_in: true, enabled: true, status: "ok" }],
     });
     wizard({ step: "ai" });
-    await waitFor(() => expect(screen.getByText("Codex is signed in on this PC.")).toBeTruthy());
-    expect(screen.getByText("Connected")).toBeTruthy();
+    await waitFor(() => expect(screen.getByLabelText("Codex: Logged in")).toBeTruthy());
+    expect(screen.getByLabelText("OpenAI: Connected")).toBeTruthy();
+    expect(screen.getByLabelText("OpenAI API key: No key")).toBeTruthy();
+  });
+
+  it("shows each provider's key and each coding agent's login, connected or not", async () => {
+    fake.providers = [OPENAI, ANTHROPIC, CURSOR];
+    fake.api.get_key_status.mockResolvedValue({ openai: true });
+    fake.api.list_coding_agents.mockResolvedValue({ agents: AGENTS });
+    wizard({ step: "ai" });
+    await waitFor(() => expect(screen.getByLabelText("Claude Code: Not logged in")).toBeTruthy());
+    expect(screen.getByLabelText("OpenAI: Connected")).toBeTruthy();
+    expect(screen.getByLabelText("OpenAI API key: Key saved")).toBeTruthy();
+    expect(screen.getByLabelText("Codex: Logged in")).toBeTruthy();
+    expect(screen.getByLabelText("Anthropic: Not connected")).toBeTruthy();
+    expect(screen.getByLabelText("Anthropic API key: No key")).toBeTruthy();
+    expect(screen.getByLabelText("Cursor: Not connected")).toBeTruthy();
+    expect(screen.getByLabelText("Cursor Agent: Not installed")).toBeTruthy();
+    expect(screen.getByText("Install the Cursor CLI, then press Check.")).toBeTruthy();
+    expect(screen.queryByLabelText(/Ducky:/)).toBeNull(); // Ducky's own agent is not a login
+    // Log in only where the gateway can run it; a key field only for API-key providers.
+    const claude = screen.getByRole("list", { name: "Anthropic coding agents" });
+    expect(within(claude).getByRole("button", { name: "Log in" })).toBeTruthy();
+    expect(within(screen.getByRole("list", { name: "OpenAI coding agents" })).queryByRole("button", { name: "Log in" })).toBeNull();
+    expect(screen.queryByLabelText("Cursor API key")).toBeNull();
+  });
+
+  it("logs a coding agent in the way Settings does, then shows it logged in", async () => {
+    fake.providers = [ANTHROPIC];
+    let loggedIn = false;
+    fake.api.list_coding_agents.mockImplementation(() =>
+      Promise.resolve({ agents: [{ ...AGENTS[1]!, logged_in: loggedIn }] }),
+    );
+    fake.api.coding_agent_login.mockResolvedValue({ ok: true, auth_url: "https://claude.ai/oauth?x=1" });
+    fake.api.coding_agent_login_submit.mockImplementation(() => {
+      loggedIn = true;
+      return Promise.resolve({ ok: true, logged_in: true });
+    });
+    wizard({ step: "ai" });
+    fireEvent.click(await screen.findByRole("button", { name: "Log in" }));
+    expect(await screen.findByText("Log in to Claude Code")).toBeTruthy();
+    await waitFor(() => expect(fake.api.coding_agent_login).toHaveBeenCalledWith("claude_code"));
+    fireEvent.change(await screen.findByPlaceholderText("Paste the login code"), { target: { value: "abc#123" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    });
+    expect(fake.api.coding_agent_login_submit).toHaveBeenCalledWith("claude_code", "abc#123");
+    await waitFor(() => expect(screen.getByLabelText("Claude Code: Logged in")).toBeTruthy());
+    expect(screen.getByLabelText("Anthropic: Connected")).toBeTruthy();
+    expect(screen.queryByText("Log in to Claude Code")).toBeNull();
+  });
+
+  it("checks an agent again after it was installed or signed in elsewhere", async () => {
+    fake.providers = [CURSOR];
+    let installed = false;
+    fake.api.list_coding_agents.mockImplementation(() =>
+      Promise.resolve({ agents: [{ ...AGENTS[2]!, available: installed, logged_in: installed ? true : null }] }),
+    );
+    fake.api.detect_coding_agent_cli.mockImplementation(() => {
+      installed = true;
+      return Promise.resolve({ ok: true });
+    });
+    wizard({ step: "ai" });
+    fireEvent.click(await screen.findByRole("button", { name: "Check" }));
+    await waitFor(() => expect(screen.getByLabelText("Cursor Agent: Logged in")).toBeTruthy());
+    expect(fake.api.detect_coding_agent_cli).toHaveBeenCalledWith("cursor");
+    expect(screen.getByLabelText("Cursor: Connected")).toBeTruthy();
   });
 
   it("sends people back to install when no gateway is there", () => {

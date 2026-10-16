@@ -8,8 +8,10 @@ import { getApi } from "../hooks/usePanelApi";
 import { usePluginContributions, type PluginLlmProvider } from "../hooks/usePluginContributions";
 import { installPanelPushBus, subscribePanelPush } from "../hooks/usePanelPushBus";
 import { peekStoreCatalogCache, rememberStoreCatalog } from "../hooks/storeCatalogCache";
+import { refreshModelsCatalog } from "../hooks/modelsCatalogCache";
 import { Icons } from "../icons/Icons";
 import type { CodingAgentDto, DuckyOSStoreItemDto, StarterPluginDto } from "../types/panel";
+import { CodingAgentLoginModal } from "../views/settings/CodingAgentsSection";
 
 export type SetupStep = "welcome" | "plugins" | "ai";
 export type InstallPhase = "ready" | "installing" | "installed" | "error";
@@ -265,15 +267,115 @@ function PluginsStep({
 
 type KeyState = { text: string; ok: boolean; pending?: boolean };
 
+export type AgentConnection = "logged_in" | "ready" | "logged_out" | "missing";
+
+/** Where a coding agent stands on this PC, as Settings → LLMs → Coding agent shows it. */
+export function agentConnection(agent: CodingAgentDto): AgentConnection {
+  if (!agent.available) return "missing";
+  if (agent.logged_in === true) return "logged_in";
+  if (agent.logged_in === false) return "logged_out";
+  return "ready"; // installed, and it has no account to sign in to
+}
+
+const AGENT_STATE_LABEL: Record<AgentConnection, string> = {
+  logged_in: "Logged in",
+  ready: "Ready",
+  logged_out: "Not logged in",
+  missing: "Not installed",
+};
+
+function isConnectedAgent(agent: CodingAgentDto): boolean {
+  const state = agentConnection(agent);
+  return state === "logged_in" || state === "ready";
+}
+
+/** A coding agent row: its state, Log in (the gateway's own CLI login) and Check (detect again). */
+function AgentRow({ agent, onChanged }: { agent: CodingAgentDto; onChanged: () => void }) {
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [note, setNote] = useState("");
+  const state = agentConnection(agent);
+  const ok = isConnectedAgent(agent);
+
+  const check = async () => {
+    const api = getApi();
+    if (!api?.detect_coding_agent_cli) return;
+    setChecking(true);
+    setNote("");
+    try {
+      const res = await api.detect_coding_agent_cli(agent.id);
+      if (res && res.ok === false) setNote(String(res.error || res.status || "Check failed"));
+      onChanged();
+      void refreshModelsCatalog();
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : "Check failed");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const help = (agent.install_help || "").trim();
+  return (
+    <li className={`setup-wizard-agent is-${state}`}>
+      <span className="setup-wizard-agent-head">
+        <span className="setup-wizard-agent-icon" aria-hidden>
+          <Icons.Terminal />
+        </span>
+        <span className="setup-wizard-agent-name">{agent.label}</span>
+        <span className={`setup-wizard-pill${ok ? " is-ok" : ""}`} aria-label={`${agent.label}: ${AGENT_STATE_LABEL[state]}`}>
+          {ok ? <Icons.Check /> : null} {AGENT_STATE_LABEL[state]}
+        </span>
+        {agent.can_login && state === "logged_out" ? (
+          <button type="button" className="setup-wizard-btn" onClick={() => setLoginOpen(true)}>
+            Log in
+          </button>
+        ) : null}
+        {state === "logged_out" || state === "missing" ? (
+          <button
+            type="button"
+            className="setup-wizard-btn is-ghost"
+            disabled={checking}
+            title="Look again: after you installed it or signed in somewhere else"
+            onClick={() => void check()}
+          >
+            {checking ? "Checking…" : "Check"}
+          </button>
+        ) : null}
+      </span>
+      {state === "missing" && help ? <span className="setup-wizard-agent-note">{help}</span> : null}
+      {state === "logged_out" && !agent.can_login ? (
+        <span className="setup-wizard-agent-note">Sign in with {agent.label} itself, then press Check.</span>
+      ) : null}
+      {note ? <span className="setup-wizard-agent-note is-error">{note}</span> : null}
+      {loginOpen ? (
+        <CodingAgentLoginModal
+          agentId={agent.id}
+          title={`Log in to ${agent.label}`}
+          zIndex={2147483300}
+          onClose={() => {
+            void getApi()?.coding_agent_login_cancel?.(agent.id);
+            setLoginOpen(false);
+          }}
+          onLoggedIn={() => {
+            setLoginOpen(false);
+            onChanged();
+            void refreshModelsCatalog();
+          }}
+        />
+      ) : null}
+    </li>
+  );
+}
+
 function ProviderCard({
   provider,
-  agent,
+  agents,
   saved,
   onSaved,
   onShowMe,
 }: {
   provider: PluginLlmProvider;
-  agent: CodingAgentDto | undefined;
+  agents: CodingAgentDto[];
   saved: boolean;
   onSaved: () => void;
   onShowMe: (provider: PluginLlmProvider) => void;
@@ -281,8 +383,7 @@ function ProviderCard({
   const [draft, setDraft] = useState("");
   const [state, setState] = useState<KeyState | null>(null);
   const secretKey = provider.secret_key || provider.id;
-  const agentReady = !!agent && agent.available && agent.logged_in !== false;
-  const connected = saved || agentReady;
+  const connected = saved || agents.some(isConnectedAgent);
 
   const testAndSave = async () => {
     const value = draft.trim();
@@ -308,13 +409,6 @@ function ProviderCard({
     }
   };
 
-  let agentLine = "";
-  if (agent) {
-    if (agentReady) agentLine = `${agent.label} is signed in on this PC.`;
-    else if (agent.available) agentLine = `${agent.label} is installed but not signed in.`;
-    else agentLine = `Or use ${agent.label}: install it and sign in, no key needed.`;
-  }
-
   return (
     <li className={`setup-wizard-provider${connected ? " is-connected" : ""}`}>
       <div className="setup-wizard-provider-head">
@@ -322,7 +416,10 @@ function ProviderCard({
           {provider.icon_data_url ? <img src={provider.icon_data_url} alt="" draggable={false} /> : <Icons.Brain />}
         </span>
         <span className="setup-wizard-provider-name">{provider.label}</span>
-        <span className={`setup-wizard-pill${connected ? " is-ok" : ""}`}>
+        <span
+          className={`setup-wizard-pill${connected ? " is-ok" : ""}`}
+          aria-label={`${provider.label}: ${connected ? "Connected" : "Not connected"}`}
+        >
           {connected ? (
             <>
               <Icons.Check /> Connected
@@ -332,6 +429,14 @@ function ProviderCard({
           )}
         </span>
       </div>
+      {provider.kind === "secret" ? (
+        <div className="setup-wizard-key-label">
+          <span>API key</span>
+          <span className={`setup-wizard-pill${saved ? " is-ok" : ""}`} aria-label={`${provider.label} API key: ${saved ? "Key saved" : "No key"}`}>
+            {saved ? <Icons.Check /> : null} {saved ? "Key saved" : "No key"}
+          </span>
+        </div>
+      ) : null}
       {provider.kind === "secret" ? (
         <div className="setup-wizard-key-row">
           <input
@@ -358,14 +463,34 @@ function ProviderCard({
         </div>
       ) : null}
       {state ? <p className={`setup-wizard-key-status${state.ok ? "" : " is-error"}`}>{state.text}</p> : null}
+      {agents.length ? (
+        <ul className="setup-wizard-agents" aria-label={`${provider.label} coding agents`}>
+          {agents.map((a) => (
+            <AgentRow key={a.id} agent={a} onChanged={onSaved} />
+          ))}
+        </ul>
+      ) : null}
       <div className="setup-wizard-provider-foot">
-        <span className="setup-wizard-muted">{agentLine}</span>
+        <span className="setup-wizard-muted">
+          {agents.length && provider.kind === "secret" ? "A key or a logged-in coding agent is enough." : ""}
+        </span>
         <button type="button" className="setup-wizard-link" onClick={() => onShowMe(provider)}>
           Show me how
         </button>
       </div>
     </li>
   );
+}
+
+/** Coding agents by the gateway plugin that registered them (Ducky's own agent left out). */
+export function agentsByPlugin(agents: CodingAgentDto[]): Map<string, CodingAgentDto[]> {
+  const out = new Map<string, CodingAgentDto[]>();
+  for (const a of agents) {
+    const pid = (a.plugin_id || "").trim().toLowerCase();
+    if (!pid || a.id === "ducky") continue;
+    out.set(pid, [...(out.get(pid) || []), a]);
+  }
+  return out;
 }
 
 function AiStep({ onShowMe, onInstallStep }: { onShowMe: SetupWizardProps["onShowMe"]; onInstallStep: () => void }) {
@@ -400,6 +525,10 @@ function AiStep({ onShowMe, onInstallStep }: { onShowMe: SetupWizardProps["onSho
         .sort((a, b) => (a.order ?? 100) - (b.order ?? 100)),
     [contrib.llm_providers],
   );
+  const byPlugin = useMemo(() => agentsByPlugin(agents), [agents]);
+  // Agents from a gateway that adds no provider row of its own still get a row.
+  const shown = new Set(providers.map((p) => p.plugin_id.toLowerCase()));
+  const otherAgents = [...byPlugin.entries()].filter(([pid]) => !shown.has(pid)).flatMap(([, list]) => list);
 
   return (
     <>
@@ -431,18 +560,33 @@ function AiStep({ onShowMe, onInstallStep }: { onShowMe: SetupWizardProps["onSho
           </span>
         </div>
       </div>
-      {providers.length ? (
+      {providers.length || otherAgents.length ? (
         <ul className="setup-wizard-providers">
           {providers.map((p) => (
             <ProviderCard
               key={p.id}
               provider={p}
-              agent={agents.find((a) => (a.plugin_id || "").toLowerCase() === p.plugin_id.toLowerCase())}
+              agents={byPlugin.get(p.plugin_id.toLowerCase()) || []}
               saved={!!keySaved[p.secret_key || p.id]}
               onSaved={refresh}
               onShowMe={onShowMe}
             />
           ))}
+          {otherAgents.length ? (
+            <li className="setup-wizard-provider">
+              <div className="setup-wizard-provider-head">
+                <span className="setup-wizard-provider-logo" aria-hidden>
+                  <Icons.Terminal />
+                </span>
+                <span className="setup-wizard-provider-name">Other coding agents</span>
+              </div>
+              <ul className="setup-wizard-agents" aria-label="Other coding agents">
+                {otherAgents.map((a) => (
+                  <AgentRow key={a.id} agent={a} onChanged={refresh} />
+                ))}
+              </ul>
+            </li>
+          ) : null}
         </ul>
       ) : (
         <div className="setup-wizard-empty">

@@ -11,6 +11,10 @@ errors are answered by rule, so an agent never sits behind them:
 * Verse Build Errors → Skip Rebuild, then Data Loss Warning → Skip Rebuild & Continue
 * Verse Validation Errors → Continue
 
+A call that waits behind any other blocking popup with a single blue button (a
+message box such as "Unable to Refresh" [OK]) gets that button pressed too, from
+the waiting call's watchdog (``press_lone_button_popups``).
+
 Continuing leaves the open level's Verse devices broken in memory, and saving the
 level then breaks them for good. From that press until Verse builds clean and the
 map is reloaded from disk, Ducky does not save (see ``verse_skip_active``).
@@ -21,6 +25,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -171,7 +176,8 @@ def list_popups() -> list[dict[str, Any]]:
         rect = _rect(int(win["hwnd"]))
         if rect.get("width", 0) <= 0 or rect.get("height", 0) <= 0:
             continue
-        out.append({"hwnd": int(win["hwnd"]), "title": title, "rect": rect, "blocking": blocked})
+        out.append({"hwnd": int(win["hwnd"]), "title": title, "rect": rect, "blocking": blocked,
+                    "enabled": bool(ctypes.windll.user32.IsWindowEnabled(int(win["hwnd"])))})
     return out
 
 
@@ -267,17 +273,23 @@ def describe_popup(popup: dict[str, Any], *, save: bool = True) -> dict[str, Any
     if rule:
         out["known"] = {"press": rule["press"], "label": rule["label"]}
     if save:
-        try:
-            from frontend.ui_web.tool_captures import save_capture_for_agents
-
-            buf = io.BytesIO()
-            annotate(img, buttons).save(buf, format="PNG")
-            saved = save_capture_for_agents(buf.getvalue(), prefix="uefn_popup")
-            if saved.get("ok"):
-                out["path"] = str(saved.get("path") or "")
-        except Exception:
-            pass
+        path = _save_capture(img, buttons)
+        if path:
+            out["path"] = path
     return out
+
+
+def _save_capture(img: Any, buttons: list[dict[str, Any]]) -> str:
+    """The numbered capture in this chat's attachments; "" when there is no chat."""
+    try:
+        from frontend.ui_web.tool_captures import save_capture_for_agents
+
+        buf = io.BytesIO()
+        annotate(img, buttons).save(buf, format="PNG")
+        saved = save_capture_for_agents(buf.getvalue(), prefix="uefn_popup")
+        return str(saved.get("path") or "") if saved.get("ok") else ""
+    except Exception:
+        return ""
 
 
 def press_button(hwnd: int, n: int) -> dict[str, Any]:
@@ -325,8 +337,7 @@ def answer_known_popups() -> list[dict[str, Any]]:
     done = []
     now = time.monotonic()
     on_screen = list_popups()
-    for hwnd in set(_retry) - {p["hwnd"] for p in on_screen}:
-        del _retry[hwnd]
+    _forget_closed(on_screen)
     for popup in on_screen:
         title = popup["title"].strip().lower()
         if title not in KNOWN_POPUPS:
@@ -344,6 +355,97 @@ def answer_known_popups() -> list[dict[str, Any]]:
             _back_off(popup["hwnd"], title, now)
         done.append({**result, "label": info["known"]["label"]})
     return done
+
+
+def _forget_closed(on_screen: list[dict[str, Any]]) -> None:
+    # The guard and every waiting call's watchdog share _retry: pop, never del.
+    for hwnd in set(_retry) - {p["hwnd"] for p in on_screen}:
+        _retry.pop(hwnd, None)
+
+
+# --------------------------------------------------------------------------- lone OK / Close
+
+
+# "Unable to Refresh — Timed out attempting to stop game." [OK] held an agent's Epic
+# call for its whole 180 s on Oct 16 2026 and was still up minutes later: neither the
+# Save watchdog (title-gated) nor the rules above knew it. A blocking popup whose only
+# button is the blue default is a message box, and that button is the one way on.
+# Titles where a lone button could still commit something stay with the AI.
+_LONE_REJECT_RE = re.compile(
+    r"\b(delete|discard|remove|overwrite|replace|uninstall|quit|exit|close project"
+    r"|publish|upload|private version|purchase|sign in|log in)\b"
+)
+_lone_lock = threading.Lock()
+# A message box is small; a floating tool window (Message Log, Output Log) is not.
+# Generous enough for 200% display scaling.
+_LONE_MAX_W = 1400
+_LONE_MAX_H = 900
+
+
+def is_lone_button_popup(popup: dict[str, Any], buttons: list[dict[str, Any]]) -> bool:
+    """A blocking message box whose only button is the blue default (OK / Close)."""
+    title = str(popup.get("title") or "").strip().lower()
+    if not popup.get("blocking") or not popup.get("enabled", True):
+        return False  # the modal itself is the one enabled window
+    if not title or title in KNOWN_POPUPS or _LONE_REJECT_RE.search(title):
+        return False
+    rect = popup.get("rect") or {}
+    if rect.get("width", 0) > _LONE_MAX_W or rect.get("height", 0) > _LONE_MAX_H:
+        return False
+    return len(buttons) == 1 and bool(buttons[0].get("primary"))
+
+
+def press_lone_button_popups() -> list[dict[str, Any]]:
+    """Press the only button of each blocking UEFN message box on screen. One pass.
+
+    For a call that waits on the editor (``uefn_modal.save_modal_watchdog``). Each
+    press keeps the numbered capture in the chat (``path``), so what UEFN said is
+    not lost with the popup.
+    """
+    if not _lone_lock.acquire(blocking=False):
+        return []  # another waiting call is pressing right now
+    try:
+        done: list[dict[str, Any]] = []
+        now = time.monotonic()
+        on_screen = list_popups()
+        _forget_closed(on_screen)
+        for popup in on_screen:
+            hwnd, title = popup["hwnd"], popup["title"].strip().lower()
+            if not is_lone_button_popup(popup, [{"primary": True}]):
+                continue  # not blocking, a known popup, or a title left to the AI
+            seen = _retry.get(hwnd)
+            if seen is not None and seen[0] == title and now < seen[2]:
+                continue
+            img = _grab(popup["rect"], hwnd)
+            buttons = find_buttons(img)
+            if not is_lone_button_popup(popup, buttons):
+                _back_off(hwnd, title, now)
+                continue
+            path = _save_capture(img, buttons)
+            result = press_button(hwnd, 1)
+            if not result.get("closed"):
+                _back_off(hwnd, title, now)
+            done.append({**result, "label": "its only button", "path": path})
+        return done
+    finally:
+        _lone_lock.release()
+
+
+def blocked_call_hint() -> str:
+    """What a hung or timed-out editor call tells the agent: look at UEFN and act."""
+    try:
+        titles = [p["title"] for p in list_popups() if p.get("blocking")]
+    except Exception:
+        titles = []
+    act = (
+        "call `uefn_popups` (a capture with its buttons numbered; `uefn_window_capture` "
+        "for any other UEFN window), pick the button, then `uefn_popup_press(hwnd, n)`. "
+        "Do not wait it out or retry the call first."
+    )
+    if titles:
+        names = ", ".join(f"'{t}'" for t in titles[:3])
+        return f"UEFN is showing a popup that holds the editor ({names}): {act}"
+    return f"UEFN may be behind a popup: {act}"
 
 
 # --------------------------------------------------------------------------- guard

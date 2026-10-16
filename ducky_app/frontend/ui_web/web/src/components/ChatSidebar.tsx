@@ -44,6 +44,7 @@ import { getApi } from "../hooks/usePanelApi";
 import { onApiReady } from "../hooks/onApiReady";
 import { emitDuckyProfileChanged, onDuckyProfileChanged } from "../navigation/duckyProfileChanged";
 import { SidebarStackedPanels } from "./sidebar/SidebarStackedPanels";
+import { canToggleStackedPanel, contentCollapsedWithoutProject } from "./sidebar/contentWithoutProject";
 import type { StackedPanelResizeSnapshot } from "../utils/stackedPanelFlex";
 import { SidebarPanelTabs } from "./sidebar/SidebarPanelTabs";
 import type { DockDropTarget } from "../utils/dockPanelDrag";
@@ -338,22 +339,33 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
           order: sideFilePanels,
           splitRatio: dockStack.splitRatio,
           panelFlex: dockStack.panelFlex,
-          collapsed: {
-            chats: dockStack.collapsed.chats,
-            files: dockStack.collapsed.files,
-          },
+          collapsed: contentCollapsedWithoutProject(
+            {
+              chats: dockStack.collapsed.chats,
+              files: dockStack.collapsed.files,
+            },
+            projectSlug,
+          ),
           focusedPanel: (sideFilePanels.includes(dockStack.focusedPanel as SidebarPanelTab)
             ? dockStack.focusedPanel
             : sideFilePanels[0] ?? "chats") as SidebarPanelTab,
           setFocusedPanel: (id: SidebarPanelTab) => dock.setFocusedPanel(dockSide, id),
-          toggleCollapsed: (id: SidebarPanelTab) => dock.toggleCollapsed(dockSide, id),
+          toggleCollapsed: (id: SidebarPanelTab) => {
+            if (canToggleStackedPanel(id, projectSlug)) dock.toggleCollapsed(dockSide, id);
+          },
           swapOrder: () => dock.swapOrder(dockSide),
           swapPanels: (a: SidebarPanelTab, b: SidebarPanelTab, edge?: StackedPanelDropEdge) => dock.swapPanels(dockSide, a, b, edge),
           resizeSplit: (splitIndex: number, delta: number, h: number, snapshot?: StackedPanelResizeSnapshot<SidebarPanelTab>) =>
             dock.resizeSplit(dockSide, splitIndex, delta, h, snapshot),
           persistSplit: dock.persistSplit,
         }
-      : legacyStackedLayout;
+      : {
+          ...legacyStackedLayout,
+          collapsed: contentCollapsedWithoutProject(legacyStackedLayout.collapsed, projectSlug),
+          toggleCollapsed: (id: SidebarPanelTab) => {
+            if (canToggleStackedPanel(id, projectSlug)) legacyStackedLayout.toggleCollapsed(id);
+          },
+        };
   const foldersRef = useRef(folders);
   foldersRef.current = folders;
   const rootChatsRef = useRef(rootChats);
@@ -1512,10 +1524,13 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
         discordhub: false,
       };
     }
-    return Object.fromEntries(
-      unifiedStackPanelIds.map((id) => [id, dockStack.collapsed[id]]),
-    ) as Record<DockPanelId, boolean>;
-  }, [unifiedStackPanelIds, dockStack]);
+    return contentCollapsedWithoutProject(
+      Object.fromEntries(
+        unifiedStackPanelIds.map((id) => [id, dockStack.collapsed[id]]),
+      ) as Record<DockPanelId, boolean>,
+      projectSlug,
+    );
+  }, [unifiedStackPanelIds, dockStack, projectSlug]);
 
   const innerBody = singlePanel ? (
     singlePanel === "chats" ? (
@@ -1627,7 +1642,9 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
         splitRatio={dockStack!.splitRatio}
         panelFlex={dockStack!.panelFlex}
         collapsed={unifiedStackCollapsed}
-        onToggleCollapsed={(id) => dock!.toggleCollapsed(dockSide, id)}
+        onToggleCollapsed={(id) => {
+          if (canToggleStackedPanel(id, projectSlug)) dock!.toggleCollapsed(dockSide, id);
+        }}
         onSwapPanels={(panelA, panelB, edge) => dock!.swapPanels(dockSide, panelA, panelB, edge)}
         onResizeSplit={(splitIndex, delta, h, snapshot) => dock!.resizeSplit(dockSide, splitIndex, delta, h, snapshot)}
         onPersistSplit={dock!.persistSplit}

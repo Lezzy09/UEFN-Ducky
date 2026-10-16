@@ -157,3 +157,39 @@ def test_setup_turns_on_a_plugin_that_ships_off(isolated_appdata, monkeypatch) -
     out = ensure_starter_llm_gateways()
     assert "piper" in out["installed"]
     assert turned_on == ["piper"]
+
+
+def _welcome_api(monkeypatch):
+    import frontend.ui_web.panel_api as pa
+    from frontend.ui_web.panel_api_chats import PanelApiChatsMixin
+
+    opened: list[str] = []
+    monkeypatch.setattr(pa, "notify_chats_changed", lambda conv_id="", *a, **k: opened.append(conv_id))
+    return PanelApiChatsMixin(), opened
+
+
+def test_a_fresh_install_makes_the_welcome_ducky_once(isolated_appdata, monkeypatch) -> None:
+    from frontend.starter_llm_gateways import WELCOME_DUCKY_TITLE, WELCOME_DUCKY_TOURS
+    from frontend.ui_web.panel_api import _messages_to_ui, load_conversation
+
+    api, opened = _welcome_api(monkeypatch)
+    made = api.welcome_ducky_first_run()
+    assert made["ok"] and made["created"] and made["title"] == WELCOME_DUCKY_TITLE
+    assert opened == [made["id"]]  # announced (tab opens) with its message already in it
+
+    conv = load_conversation(made["id"])
+    rows = _messages_to_ui(conv)
+    assert [r["role"] for r in rows] == ["assistant"]
+    assert rows[0]["tours"] == list(WELCOME_DUCKY_TOURS) and "app.shell" in rows[0]["tours"]
+    assert "walkthrough" in rows[0]["text"].lower()
+
+    again = api.welcome_ducky_first_run()  # every later start
+    assert again == {"ok": True, "created": False}
+    assert opened == [made["id"]]
+
+
+def test_an_install_that_already_used_ducky_gets_no_welcome_ducky(isolated_appdata, monkeypatch) -> None:
+    _write_plugin(isolated_appdata, "verse")
+    api, opened = _welcome_api(monkeypatch)
+    assert api.welcome_ducky_first_run() == {"ok": True, "created": False}
+    assert opened == []

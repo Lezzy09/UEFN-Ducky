@@ -127,6 +127,10 @@ def _busy_error_message(port: int, command: str) -> str:
             " If a Save/Yes popup is up, call `dismiss_uefn_modal` (Ducky host) "
             "— do not retry execute_python or unreal__*."
         )
+    else:
+        from backend.tools.core.uefn_popups import blocked_call_hint
+
+        extra = " " + blocked_call_hint()
     return (
         f"Editor busy{running} — do not re-issue `{command}`, wait for the current "
         f"command to finish. {BUSY_HINT}{extra}"
@@ -257,7 +261,11 @@ def _post_json_locked(
         except Exception as e:
             if "timed out" in str(e).lower():
                 time.sleep(_POST_TIMEOUT_COOLDOWN_SEC)
-                raise TimeoutError(f"Command '{command}' timed out after {timeout}s") from e
+                from backend.tools.core.uefn_popups import blocked_call_hint
+
+                raise TimeoutError(
+                    f"Command '{command}' timed out after {timeout}s. {blocked_call_hint()}"
+                ) from e
             raise
 
 # ---------------------------------------------------------------------------

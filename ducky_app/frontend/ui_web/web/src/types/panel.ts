@@ -941,6 +941,8 @@ export interface ChatMessage {
   error?: string;
   /** Group-chat speaker metadata (name/color/voice). */
   author?: MessageAuthorDto;
+  /** Walkthrough ids this message offers as Start buttons (the welcome ducky). */
+  tours?: string[];
 }
 
 export interface VideoFrameDto {
@@ -2915,6 +2917,14 @@ export interface PanelApi {
     ok?: boolean;
     pending?: boolean;
     grandfathered?: boolean;
+    error?: string;
+  }>;
+  /** A fresh install's first start: makes the welcome ducky (once per AppData). */
+  welcome_ducky_first_run?(): Promise<{
+    ok?: boolean;
+    created?: boolean;
+    id?: string;
+    title?: string;
     error?: string;
   }>;
   starter_setup_status?(): Promise<{

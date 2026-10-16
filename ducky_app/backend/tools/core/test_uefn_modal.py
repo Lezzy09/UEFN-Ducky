@@ -90,6 +90,7 @@ def test_watchdog_presses_while_caller_blocks_then_stops(monkeypatch):
         return None
 
     monkeypatch.setattr(uefn_modal, "auto_dismiss_save_modal", fake)
+    monkeypatch.setattr(uefn_modal, "auto_press_lone_button_popups", lambda: [])  # never real windows
     seen: list[dict] = []
 
     def until(predicate, timeout=30.0):
@@ -156,6 +157,7 @@ def test_watchdog_block_waits_for_the_press_in_flight(monkeypatch):
         return {"sent_enter": True, "method": "enter_posted", "window_title": "Save Content"}
 
     monkeypatch.setattr(uefn_modal, "auto_dismiss_save_modal", slow_press)
+    monkeypatch.setattr(uefn_modal, "auto_press_lone_button_popups", lambda: [])
 
     with uefn_modal.save_modal_watchdog("slow", poll_sec=0.01):
         assert entered.wait(30.0), "watchdog never started its press"

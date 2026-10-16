@@ -10,6 +10,7 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { FileProtectionRecovery } from "./FileProtectionRecovery";
 import { AttachmentStrip } from "./EditableUserMessage";
 import { AttachmentPreviewModal } from "./AttachmentPreviewModal";
+import { TourOffer } from "../walkthrough/TourOffer";
 
 interface MessageBubbleProps {
   role: string;
@@ -39,6 +40,8 @@ interface MessageBubbleProps {
   showSpeakButton?: boolean;
   /** Pictures the agent made this turn (image tools or its own image generation). */
   attachments?: MessageAttachmentDto[];
+  /** Walkthroughs offered as Start buttons under the text (the welcome ducky). */
+  tours?: string[];
 }
 
 function ReplyPictures({ attachments }: { attachments: MessageAttachmentDto[] }) {
@@ -81,6 +84,7 @@ export const MessageBubble = memo(function MessageBubble({
   convId,
   showSpeakButton = false,
   attachments,
+  tours,
 }: MessageBubbleProps) {
   // Every bubble used to hold its own TTS subscription and re-render on every
   // word boundary while anything was being spoken. Select instead: bubbles that
@@ -143,6 +147,7 @@ export const MessageBubble = memo(function MessageBubble({
         )}
         {isStreaming && text ? <span className="message-bubble-stream-cursor" aria-hidden="true" /> : null}
         {attachments?.length ? <ReplyPictures attachments={attachments} /> : null}
+        {tours?.length && !isStreaming ? <TourOffer ids={tours} /> : null}
         {incomplete && !isStreaming ? (
           <div className="message-bubble-interrupted" role="alert">
             <span className="message-bubble-interrupted-icon" aria-hidden="true">⚠</span>

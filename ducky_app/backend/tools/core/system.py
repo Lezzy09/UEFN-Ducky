@@ -34,7 +34,8 @@ def dismiss_uefn_modal(pretty: bool = False) -> str:
     or Verse build/push is waiting. Use this only when a Save Content / unsaved
     assets / checkout popup is still up and Epic MCP or execute_python stay
     frozen — those run on the blocked Slate thread. This tool does not.
-    Never use this for Delete / Don't Save / Cancel dialogs.
+    Never use this for Delete / Don't Save / Cancel dialogs. Any other popup
+    (an error box, "Unable to Refresh" …): uefn_popups, then uefn_popup_press.
     """
     from backend.tools.core.uefn_modal import dismiss_uefn_save_modal
 
@@ -71,7 +72,8 @@ def uefn_window_list(title_regex: str = "", pretty: bool = False) -> str:
 def uefn_window_capture(hwnd: int = 0, title_regex: str = "", pretty: bool = False) -> Any:
     """Screenshot one UEFN window into this chat's AppData attachments folder.
 
-    Pass ``hwnd`` from uefn_window_list, or a ``title_regex``.
+    Pass ``hwnd`` from uefn_window_list, or a ``title_regex``. To see why UEFN stopped
+    answering, start with uefn_popups (it numbers a popup's buttons for uefn_popup_press).
     """
     from backend.tools.core.uefn_windows import capture_uefn_window
 
@@ -112,7 +114,11 @@ def uefn_popups(pretty: bool = False) -> str:
     """UEFN popups on screen now (any window besides the main editor), each captured into
     this chat with its buttons boxed and numbered 1, 2, 3… left to right.
 
-    Look at the capture, pick the button, then uefn_popup_press(hwnd, n). Known popups say
+    Call this first whenever an Epic unreal__* / execute_python / listener call hangs,
+    times out or says the editor is busy: a popup holds UEFN's editor thread, and nothing
+    behind it moves until a button is pressed. ``blocking`` is true while one is modal.
+    Look at the capture, pick the button, then uefn_popup_press(hwnd, n). A message box
+    with a single OK / Close is pressed for you while a call waits on the editor. Known popups say
     which button Ducky presses for them (``known``); the Verse-error popups UEFN shows when
     a project opens are pressed automatically (Skip Rebuild → Skip Rebuild & Continue →
     Continue). After that the level is not saved until Verse builds clean (Ducky reloads

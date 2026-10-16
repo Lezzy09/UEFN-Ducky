@@ -150,3 +150,77 @@
   color: #e8a87c;
   margin: -6px 0 10px;
 }
+
+/* Walkthroughs a chat message offers (the welcome ducky's first message). */
+.tour-offer {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tour-offer-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--fg, #f0f2f6) 3%, transparent);
+}
+
+.tour-offer-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tour-offer-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg, #f0f2f6);
+}
+
+.tour-offer-seen {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.tour-offer-desc {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.tour-offer-error {
+  font-size: 12px;
+  color: var(--error, #f87171);
+}
+
+.tour-offer-start {
+  flex: 0 0 auto;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  background: color-mix(in srgb, var(--accent, #fbbf24) 22%, transparent);
+  color: var(--fg, #f0f2f6);
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.tour-offer-start:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent, #fbbf24) 34%, transparent);
+}
+
+.tour-offer-start:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

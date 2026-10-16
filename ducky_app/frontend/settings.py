@@ -317,6 +317,9 @@ class PanelSettings:
     starter_llm_gateways_seeded: bool = False
     """First-run Store install of Anthropic / Cursor / OpenAI already attempted."""
 
+    welcome_ducky_offered: bool = False
+    """The first start decided on the welcome ducky (made on a fresh install): never again."""
+
     shared_mcp: bool = False
     """Prototype: one FastMCP daemon for multiple IDE adapters. Off by default; env UEFN_DUCKY_SHARED_MCP wins."""
 
@@ -511,6 +514,7 @@ class PanelSettings:
             or not self.allow_see_other_programs
             or bool(self.walkthrough_completed)
             or self.starter_llm_gateways_seeded
+            or self.welcome_ducky_offered
             or self.shared_mcp
             or self.follow_code_enabled
             or self.follow_code_off_migrated

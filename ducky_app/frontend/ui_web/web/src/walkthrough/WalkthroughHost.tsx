@@ -1,6 +1,7 @@
 /**
  * Mounts the product walkthrough overlay, registers builtin + plugin tours,
- * hydrates completion flags, and auto-starts `app.shell` when a project is open.
+ * hydrates completion flags, opens the welcome ducky on a fresh install, and
+ * auto-starts `app.shell` on the first open.
  */
 import { useEffect, useRef, useState } from "react";
 import { usePluginContributions } from "../hooks/usePluginContributions";
@@ -17,6 +18,7 @@ import { WalkthroughOverlay } from "./WalkthroughOverlay";
 import { openCodingAgentLoginUi } from "./openCodingAgentLogin";
 import { newlyEnabledForWalkthrough, rememberEnabledPlugin } from "./firstEnable";
 import { whenFirstRunSetupDone } from "./firstRunSetup";
+import { openWelcomeDuckyOnFirstRun } from "./welcomeDucky";
 
 const registeredPluginTourIds = new Set<string>();
 
@@ -68,6 +70,11 @@ export function WalkthroughHost() {
     if (!contrib.ready) return;
     newlyEnabledForWalkthrough(contrib.enabled_ids);
   }, [contrib]);
+
+  // A fresh install's first start opens the welcome ducky, which offers every walkthrough.
+  useEffect(() => {
+    void openWelcomeDuckyOnFirstRun();
+  }, []);
 
   // First open starts Welcome even with no island. A failed start stays
   // unarmed so the next attempt can retry.

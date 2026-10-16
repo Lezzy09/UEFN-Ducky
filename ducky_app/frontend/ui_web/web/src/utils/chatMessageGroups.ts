@@ -20,6 +20,7 @@ export type ChatRow =
       role: ChatMessage["role"];
       text: string;
       attachments?: ChatMessage["attachments"];
+      tours?: ChatMessage["tours"];
       isStreaming?: boolean;
       thinking?: string;
       incomplete?: boolean;
@@ -226,6 +227,7 @@ export function groupChatMessages(messages: ChatMessage[]): ChatRow[] {
         role: msg.role,
         text: msg.text,
         attachments: msg.attachments,
+        ...(msg.tours?.length ? { tours: msg.tours } : {}),
         thinking: msg.thinking,
         incomplete: msg.incomplete || msg.checkpoint,
         run_id: msg.run_id,

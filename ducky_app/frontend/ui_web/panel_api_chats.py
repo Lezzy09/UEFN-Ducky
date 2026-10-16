@@ -10,6 +10,24 @@ import frontend.ui_web.panel_api as _pa
 GLOBAL_SLUG = "_no_project"
 
 
+def _conversation_row(conv: Any) -> dict[str, Any]:
+    return {
+        "id": conv.id,
+        "title": conv.title,
+        "ducky_style": conv.ducky_style,
+        "ducky_name": conv.ducky_name or "",
+        "profile_id": getattr(conv, "profile_id", None) or "",
+        "ducky_personality": conv.ducky_personality,
+        "tts_voice": getattr(conv, "tts_voice", None) or "",
+        "tts_speed": float(getattr(conv, "tts_speed", 0) or 0.0),
+        "thinking_effort": getattr(conv, "thinking_effort", None) or "",
+        "file_path": conv.file_path,
+        "model": conv.model or "",
+        "provider": conv.provider or "",
+        "coding_agent": getattr(conv, "coding_agent", None) or "ducky",
+    }
+
+
 def _sync_composer_selection(conv_id: str, model: str, coding_agent: str = "") -> None:
     """Apply the composer's model + backend to the chat before a turn starts.
 
@@ -276,6 +294,49 @@ class PanelApiChatsMixin:
         file_path: str | None = None,
         config: dict[str, Any] | None = None,
     ) -> dict[str, str]:
+        conv = self._new_conversation(folder_id, ducky_style, file_path, config)
+        _pa.notify_chats_changed(conv.id, conv.title, folder_id)
+        return _conversation_row(conv)
+
+    def welcome_ducky_first_run(self) -> dict[str, Any]:
+        """A fresh install's first start: make the welcome ducky, whose first message offers
+        the walkthroughs. Once per AppData; every later call is ``created: False``."""
+        import time
+
+        from frontend.starter_llm_gateways import (
+            WELCOME_DUCKY_TEXT,
+            WELCOME_DUCKY_TITLE,
+            WELCOME_DUCKY_TOURS,
+            claim_welcome_ducky,
+        )
+        from frontend.ui_web.project_chats import append_message
+
+        try:
+            if not claim_welcome_ducky():
+                return {"ok": True, "created": False}
+            conv = self._new_conversation("", None, None, {"title": WELCOME_DUCKY_TITLE})
+            append_message(
+                conv,
+                {
+                    "role": "assistant",
+                    "content": WELCOME_DUCKY_TEXT,
+                    "tours": list(WELCOME_DUCKY_TOURS),
+                    "ts": time.time(),
+                },
+            )
+        except Exception as exc:
+            return {"ok": False, "created": False, "error": str(exc)}
+        # Announced only now, so the tab never opens on an empty chat.
+        _pa.notify_chats_changed(conv.id, conv.title, "")
+        return {"ok": True, "created": True, **_conversation_row(conv)}
+
+    def _new_conversation(
+        self,
+        folder_id: str,
+        ducky_style: str | None = None,
+        file_path: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> Any:
         style = ducky_style if ducky_style is not None else _pa.default_bundled_style()
         settings = _pa.PanelSettings.load()
         cfg = config if isinstance(config, dict) else {}
@@ -371,22 +432,7 @@ class PanelApiChatsMixin:
             coding_agent=coding_agent,
             project_root=project_root,
         )
-        _pa.notify_chats_changed(conv.id, conv.title, folder_id)
-        return {
-            "id": conv.id,
-            "title": conv.title,
-            "ducky_style": conv.ducky_style,
-            "ducky_name": conv.ducky_name or "",
-            "profile_id": getattr(conv, "profile_id", None) or "",
-            "ducky_personality": conv.ducky_personality,
-            "tts_voice": getattr(conv, "tts_voice", None) or "",
-            "tts_speed": float(getattr(conv, "tts_speed", 0) or 0.0),
-            "thinking_effort": getattr(conv, "thinking_effort", None) or "",
-            "file_path": conv.file_path,
-            "model": conv.model or "",
-            "provider": conv.provider or "",
-            "coding_agent": getattr(conv, "coding_agent", None) or "ducky",
-        }
+        return conv
 
     def apply_ducky_config(self, conv_id: str, config: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(config, dict):

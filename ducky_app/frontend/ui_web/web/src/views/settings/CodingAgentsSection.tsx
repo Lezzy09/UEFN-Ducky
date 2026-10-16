@@ -87,16 +87,20 @@ function useCodingAgentsState() {
   return { agents, drafts, loaded, refresh, saveAgent, setDraft };
 }
 
-function CodingAgentLoginModal({
+/** Runs a coding agent's own CLI login (link + pasted code, or a browser sign-in it polls for). */
+export function CodingAgentLoginModal({
   agentId,
   title,
   onClose,
   onLoggedIn,
+  zIndex = 100040,
 }: {
   agentId: string;
   title: string;
   onClose: () => void;
   onLoggedIn: () => void;
+  /** Above the first-run setup when it opens from there. */
+  zIndex?: number;
 }) {
   const [authUrl, setAuthUrl] = useState("");
   const [code, setCode] = useState("");
@@ -228,7 +232,7 @@ function CodingAgentLoginModal({
       onClose={onClose}
       title={title}
       width={480}
-      zIndex={100040}
+      zIndex={zIndex}
       footer={
         <ModalActions
           onCancel={onClose}

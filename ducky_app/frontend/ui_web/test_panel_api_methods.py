@@ -531,6 +531,7 @@ _PUBLIC_METHODS = frozenset({
     'voice_win_tts_voices_start',
     'voice_win_tts_poll',
     'wait_for_agent_idle',
+    'welcome_ducky_first_run',
     'window_box',
     'window_text_focus',
     'window_spotlight_replay',

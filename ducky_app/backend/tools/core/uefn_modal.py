@@ -14,11 +14,15 @@ What was verified against a live UEFN "Save Content" (SPackagesDialog):
   stray Enter can never land in the user's chat box.
 * The Slate tick keeps running inside the modal loop, but the command that
   opened the dialog stays on the stack — so the host must press the button.
+
+The watchdog also presses the one button of any other blocking message box
+(OK / Close, found in a capture by ``uefn_popups``) once a call has waited a while.
 """
 
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import re
 import sys
 import threading
@@ -81,6 +85,8 @@ _BUTTON_REJECT = (
 _AUTO_COOLDOWN_SEC = 4.0
 # Bound on waiting for an in-flight press when the watchdog block exits.
 _STOP_JOIN_S = 5.0
+# A call still blocked after this long gets a lone-button message box pressed.
+_LONE_BUTTON_AFTER_SEC = 5.0
 _last_auto_press_at = 0.0
 _auto_lock = threading.Lock()
 
@@ -159,30 +165,54 @@ def auto_dismiss_save_modal() -> dict[str, Any] | None:
     return None
 
 
+def auto_press_lone_button_popups() -> list[dict[str, Any]]:
+    """Press OK on blocking UEFN message boxes (``uefn_popups.press_lone_button_popups``),
+    shaped like a Save press for the watchdog's callers."""
+    try:
+        from backend.tools.core.uefn_popups import press_lone_button_popups
+
+        presses = press_lone_button_popups()
+    except Exception:
+        return []
+    return [
+        {**p, "window_title": p.get("title") or "", "method": "lone_button", "clicked": True}
+        for p in presses
+    ]
+
+
 @contextlib.contextmanager
 def save_modal_watchdog(
     label: str,
     *,
     poll_sec: float = 1.0,
+    lone_button_after_sec: float | None = None,
     on_press: Callable[[dict[str, Any]], None] | None = None,
 ) -> Iterator[list[dict[str, Any]]]:
     """Press UEFN Save prompts while the caller blocks on the editor.
 
     A daemon thread checks right away and then every ``poll_sec`` until the
     ``with`` block exits, so the blocked host call (listener POST, Verse
-    workflow request) needs no cooperation. Yields the list of presses made.
+    workflow request, Epic MCP call) needs no cooperation. Once the block has
+    lasted ``lone_button_after_sec`` (default ``_LONE_BUTTON_AFTER_SEC``), a
+    blocking message box with one button (OK / Close) is pressed too. Yields the
+    list of presses made.
     """
     events: list[dict[str, Any]] = []
     if sys.platform != "win32":
         yield events
         return
     stop = threading.Event()
+    lone_after = _LONE_BUTTON_AFTER_SEC if lone_button_after_sec is None else lone_button_after_sec
 
     def _run() -> None:
+        started = time.monotonic()
         while not stop.is_set():
             info = auto_dismiss_save_modal()
-            if info:
-                event = {**info, "label": label, "at": time.time()}
+            presses = [info] if info else []
+            if not presses and time.monotonic() - started >= lone_after:
+                presses = auto_press_lone_button_popups()
+            for press in presses:
+                event = {**press, "label": label, "at": time.time()}
                 events.append(event)
                 if on_press is not None:
                     try:
@@ -192,7 +222,11 @@ def save_modal_watchdog(
             if stop.wait(poll_sec):
                 return
 
-    thread = threading.Thread(target=_run, name=f"uefn-modal-watchdog:{label}", daemon=True)
+    # The caller's context rides along, so a popup's capture lands in its chat.
+    ctx = contextvars.copy_context()
+    thread = threading.Thread(
+        target=ctx.run, args=(_run,), name=f"uefn-modal-watchdog:{label}", daemon=True
+    )
     thread.start()
     try:
         yield events

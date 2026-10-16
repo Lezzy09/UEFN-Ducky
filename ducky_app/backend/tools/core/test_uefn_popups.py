@@ -6,6 +6,7 @@ errors (Oct 2 2026); an agent and a workflow sat behind them until they timed ou
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -189,3 +190,147 @@ def test_each_answered_popup_is_logged_once(screen) -> None:
         "Verse Build Errors: pressed Skip Rebuild",
         "Verse Validation Errors: pressed Continue",
     ]
+
+
+# --------------------------------------------------------------------------- lone OK / Close
+#
+# Oct 16 2026: UEFN showed "Unable to Refresh — Timed out attempting to stop game." [OK]
+# while an agent pushed a level. Its Epic call (SessionToolset.GetSessionStatus) hung the
+# full 180 s, the timeout said only "use the Ducky fallback tool", and the agent then sat
+# on uefn_logs_wait for 7 minutes with the popup still up. The fixture is that dialog.
+
+
+def _box(title: str = "Unable to Refresh", **over) -> dict:
+    w, h = _img("unable_to_refresh").size
+    rect = {"left": 0, "top": 0, "right": w, "bottom": h, "width": w, "height": h}
+    return {"hwnd": 515, "title": title, "rect": rect, "blocking": True, "enabled": True, **over}
+
+
+def test_unable_to_refresh_is_a_lone_ok_message_box() -> None:
+    buttons = popups.find_buttons(_img("unable_to_refresh"))
+    assert len(buttons) == 1 and buttons[0]["primary"]  # the blue OK; the clipboard icon is no button
+    box = _box()
+    assert popups.is_lone_button_popup(box, buttons)
+    assert not popups.is_lone_button_popup({**box, "blocking": False}, buttons)  # the editor is not held
+    assert not popups.is_lone_button_popup({**box, "enabled": False}, buttons)  # a window behind the modal
+    assert not popups.is_lone_button_popup(_box("Delete Assets"), buttons)
+    assert not popups.is_lone_button_popup(_box("Private version has been created"), buttons)  # copy first
+    assert not popups.is_lone_button_popup(_box("Verse Build Errors"), buttons)  # answered by its rule
+    big = _box(rect={"left": 0, "top": 0, "right": 1800, "bottom": 1000, "width": 1800, "height": 1000})
+    assert not popups.is_lone_button_popup(big, buttons)  # a floating tool window, not a message box
+    assert not popups.is_lone_button_popup(box, popups.find_buttons(_img("data_loss_warning")))  # a choice
+
+
+@pytest.fixture()
+def uefn_popup(monkeypatch):
+    """A fake UEFN showing one blocking popup until any of its buttons is clicked."""
+    state = {"up": None, "clicks": [], "image": "unable_to_refresh"}
+
+    def show(title: str, image: str) -> None:
+        state["up"], state["image"] = _box(title), image
+
+    def inject_pointer(hwnd, kind, nx, ny, **_):
+        if kind == "up" and state["up"] and hwnd == state["up"]["hwnd"]:
+            state["clicks"].append((state["up"]["title"], nx, ny))
+            state["up"] = None
+
+    monkeypatch.setattr(popups, "list_popups", lambda: [dict(state["up"])] if state["up"] else [])
+    monkeypatch.setattr(popups, "_grab", lambda rect, hwnd=0: _img(state["image"]))
+    monkeypatch.setattr(popups, "_save_capture", lambda img, buttons: "C:/chat/attachments/uefn_popup_1.png")
+    monkeypatch.setattr(popups, "_retry", {})
+    monkeypatch.setattr("frontend.window_view.inject_pointer", inject_pointer)
+    state["show"] = show
+    return state
+
+
+def test_the_lone_button_pass_presses_ok_and_keeps_the_capture(uefn_popup) -> None:
+    uefn_popup["show"]("Unable to Refresh", "unable_to_refresh")
+    done = popups.press_lone_button_popups()
+    assert [(d["title"], d["closed"], d["path"]) for d in done] == [
+        ("Unable to Refresh", True, "C:/chat/attachments/uefn_popup_1.png")
+    ]
+    assert len(uefn_popup["clicks"]) == 1
+    assert popups.press_lone_button_popups() == []  # nothing left on screen
+
+
+def test_a_popup_with_a_choice_is_left_to_the_agent(uefn_popup) -> None:
+    uefn_popup["show"]("Unable to Launch", "data_loss_warning")
+    assert popups.press_lone_button_popups() == []
+    assert uefn_popup["clicks"] == [] and uefn_popup["up"] is not None
+
+
+def _epic_pool(monkeypatch, popup_state, *, timeout: float = 180.0):
+    """The plugin pool wired to a fake UEFN Epic MCP whose call runs on the Slate thread:
+    it cannot answer while a popup is up."""
+    from types import SimpleNamespace
+
+    from mcp.types import TextContent
+
+    from backend.mcp_plugins import client_pool, epic
+    from backend.mcp_plugins.registry import rebuild_plugin_prefix_cache
+    from backend.tools.core import uefn_modal
+
+    rebuild_plugin_prefix_cache([{"id": epic.EPIC_MCP_SERVER_ID, "tool_prefix": "unreal"}])
+    monkeypatch.setattr(client_pool, "ensure_plugin_prefix_cache", lambda: None)
+    monkeypatch.setattr(client_pool, "_TOOL_TIMEOUT_SEC", timeout)
+    monkeypatch.setattr(epic, "probe_epic_mcp", lambda **_k: {"epic_mcp_online": True, "epic_mcp_editor": "uefn"})
+    monkeypatch.setattr(uefn_modal.sys, "platform", "win32")
+    monkeypatch.setattr(uefn_modal, "_LONE_BUTTON_AFTER_SEC", 0.0)
+    monkeypatch.setattr(uefn_modal, "auto_dismiss_save_modal", lambda: None)
+
+    class Session:
+        async def call_tool(self, name, args):
+            while popup_state["up"]:
+                await asyncio.sleep(0.02)
+            return SimpleNamespace(content=[TextContent(type="text", text='{"sessionStatus": "Edit"}')])
+
+    pool = client_pool.PluginClientPool()
+    conn = SimpleNamespace(last_used=0.0)
+
+    async def get_or_create(_pid):
+        return conn
+
+    async def ensure_session(_conn):
+        return Session()
+
+    monkeypatch.setattr(pool, "_get_or_create", get_or_create)
+    monkeypatch.setattr(pool, "_ensure_session", ensure_session)
+    return pool
+
+
+_GET_SESSION_STATUS = {
+    "toolset_name": "ValkyrieToolset.SessionToolset",
+    "tool_name": "GetSessionStatus",
+    "arguments": {},
+}
+
+
+def test_a_hung_epic_call_gets_the_unable_to_refresh_popup_pressed(uefn_popup, monkeypatch) -> None:
+    uefn_popup["show"]("Unable to Refresh", "unable_to_refresh")
+    pool = _epic_pool(monkeypatch, uefn_popup)
+    out = asyncio.run(asyncio.wait_for(pool.call_tool("unreal__call_tool", _GET_SESSION_STATUS), 30))
+    assert out.startswith('{"sessionStatus": "Edit"}')
+    assert len(uefn_popup["clicks"]) == 1
+    assert "pressed UEFN's popup 'Unable to Refresh' → its only button" in out
+    assert "uefn_popup_1.png" in out  # the agent can still read what UEFN said
+
+
+def test_a_timed_out_epic_call_tells_the_agent_to_look_and_press(uefn_popup, monkeypatch) -> None:
+    uefn_popup["show"]("Unable to Launch", "data_loss_warning")  # two buttons: not pressed for it
+    pool = _epic_pool(monkeypatch, uefn_popup, timeout=0.3)
+    with pytest.raises(RuntimeError) as err:
+        asyncio.run(pool.call_tool("unreal__call_tool", _GET_SESSION_STATUS))
+    text = str(err.value)
+    assert "'Unable to Launch'" in text
+    assert "`uefn_popups`" in text and "`uefn_popup_press(hwnd, n)`" in text and "uefn_window_capture" in text
+    assert text.index("uefn_popups") < text.index("fallback tool")  # look first, fall back after
+    # The agent follows it: the capture numbers the buttons, it presses one.
+    listed = popups.describe_popup(popups.list_popups()[0], save=False)
+    assert len(listed["buttons"]) == 2
+    assert popups.press_button(listed["hwnd"], 1)["closed"] is True
+
+
+def test_the_timeout_hint_without_a_popup_still_says_where_to_look(monkeypatch) -> None:
+    monkeypatch.setattr(popups, "list_popups", lambda: [])
+    hint = popups.blocked_call_hint()
+    assert hint.startswith("UEFN may be behind a popup") and "`uefn_popups`" in hint

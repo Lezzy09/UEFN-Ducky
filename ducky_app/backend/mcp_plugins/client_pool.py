@@ -527,12 +527,14 @@ class PluginClientPool:
                 f"'{original_name}': {detail}. The server may answer TCP but have a "
                 f"dead MCP session — use the Ducky fallback tool for this step; {_TOGGLE_HINT}"
             ) from e
+        uefn_call = epic_call and epic_editor != EDITOR_UNREAL
+
         def _watchdog():
-            # Epic's MCP runs on UEFN's Slate thread: a Save prompt it opens would
-            # hold this call for the whole timeout, so the host presses it meanwhile.
-            # The watchdog presses UEFN's prompts only, so not for Unreal Editor.
-            if not epic_call or epic_editor == EDITOR_UNREAL:
-                return nullcontext()
+            # Epic's MCP runs on UEFN's Slate thread: a Save prompt or message box
+            # would hold this call for the whole timeout, so the host presses it
+            # meanwhile. The watchdog presses UEFN's popups only, so not for Unreal Editor.
+            if not uefn_call:
+                return nullcontext([])
             from backend.tools.core.uefn_modal import save_modal_watchdog
 
             return save_modal_watchdog(f"{plugin_id}:{original_name}")
@@ -558,14 +560,22 @@ class PluginClientPool:
                     break
             return last
 
+        pressed: list[dict[str, Any]] = []
         try:
-            with _watchdog():
+            with _watchdog() as pressed:
                 raw = await _invoke(session)
         except asyncio.TimeoutError:
+            popup = ""
+            if uefn_call:
+                from backend.tools.core.uefn_popups import blocked_call_hint
+
+                popup = (await asyncio.to_thread(blocked_call_hint)) + " If no popup is up, use"
+            else:
+                popup = "Use"
             raise RuntimeError(
                 f"Nested MCP '{plugin_id}' tool '{original_name}' timed out after "
-                f"{_TOOL_TIMEOUT_SEC:.0f}s — server reachable but unresponsive. Use "
-                f"the Ducky fallback tool for this step; {_TOGGLE_HINT}"
+                f"{_TOOL_TIMEOUT_SEC:.0f}s — server reachable but unresponsive.{_pressed_note(pressed)} "
+                f"{popup} the Ducky fallback tool for this step; {_TOGGLE_HINT}"
             ) from None
         except Exception:
             # The request may already have executed. Retire the stream for the
@@ -577,9 +587,9 @@ class PluginClientPool:
                 "execution may have occurred. Check the result before retrying."
             ) from None
         conn.last_used = time.time()
-        if hasattr(raw, "content"):
-            return _content_to_text(raw.content)
-        return _content_to_text(raw)
+        text = _content_to_text(raw.content if hasattr(raw, "content") else raw)
+        note = _pressed_note(pressed)
+        return f"{text}\n\n[Ducky:{note}]" if note else text
 
     @_pool_loop_bound
     async def test_plugin(self, plugin_id: str) -> dict[str, Any]:
@@ -616,6 +626,20 @@ class PluginClientPool:
                     "tool_count": len(tools),
                 }
         return {"ok": True, "tool_count": len(tools), "stages": stages, "tools": [t.name for t in tools[:40]]}
+
+
+def _pressed_note(pressed: list[dict[str, Any]]) -> str:
+    """" While this call waited, Ducky pressed …" for the UEFN popups the watchdog
+    answered (with each capture), so the agent knows what UEFN said; "" when none."""
+    if not pressed:
+        return ""
+    parts = []
+    for press in pressed[:3]:
+        title = press.get("window_title") or "Save"
+        what = press.get("button") or ("its only button" if press.get("method") == "lone_button" else "Save")
+        seen = f" (capture: {press['path']})" if press.get("path") else ""
+        parts.append(f"'{title}' → {what}{seen}")
+    return " While this call waited, Ducky pressed UEFN's popup " + "; ".join(parts) + "."
 
 
 def _hint_for_connect_error(msg: str, transport: str = "stdio") -> str:

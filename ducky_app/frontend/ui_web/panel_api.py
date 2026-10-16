@@ -646,6 +646,10 @@ def _messages_to_ui(conv, project_root: str | None = None, *, live: bool = False
                         "color": str(author.get("color") or "").strip(),
                         "profile_id": str(author.get("profile_id") or "").strip(),
                     }
+                tours = m.get("tours")
+                if isinstance(tours, list) and tours:
+                    # Walkthroughs this message offers as buttons (the welcome ducky).
+                    row_asst["tours"] = [str(t) for t in tours if str(t).strip()]
                 if m.get("incomplete") and not in_flight:
                     row_asst["incomplete"] = True
                     if isinstance(m.get("error"), str) and m["error"].strip():

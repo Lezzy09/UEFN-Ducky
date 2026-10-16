@@ -311,6 +311,7 @@ const ChatRowView = memo(function ChatRowView({
         convId={env.convId}
         showSpeakButton={showSpeakButton}
         attachments={row.attachments}
+        tours={row.tours}
       />
     );
   }
