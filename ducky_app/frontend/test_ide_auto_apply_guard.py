@@ -129,3 +129,23 @@ def test_manual_apply_is_not_guarded(monkeypatch):
     monkeypatch.setattr(ide_apply, "apply_ide_bridge", lambda kind, _s=None: applied.append(kind.value) or "x")
     ide_apply.apply_all_ide_bridges()
     assert applied == ["cursor"]
+
+
+def test_automatic_skill_syncs_leave_ide_folders_alone_when_sandboxed(monkeypatch):
+    # Plugin install/update/uninstall, Store actions and MCP startup all sync through
+    # sync_skill_all_ides; a sandbox on port 4300 rewrote ~/.claude/skills that way.
+    from backend.skills import store as skill_store
+    from frontend import skill_deploy
+
+    calls: list[str] = []
+    monkeypatch.setattr(skill_store, "seed_skill_packs", lambda force=False: calls.append("seed") or [])
+    monkeypatch.setattr(skill_deploy, "sync_skill", lambda **_k: calls.append("ide skills") or [])
+    monkeypatch.setattr(ide_apply, "auto_apply_skip_reason", lambda: "panel port 4300 is not the default 4200")
+    log = skill_deploy.sync_skill_all_ides()
+    assert calls == ["seed"]
+    assert log == ["IDE skill folders left alone: panel port 4300 is not the default 4200"]
+
+    calls.clear()
+    monkeypatch.setattr(ide_apply, "auto_apply_skip_reason", lambda: "")
+    skill_deploy.sync_skill_all_ides()
+    assert calls == ["ide skills"]

@@ -369,7 +369,19 @@ def sync_skill_for_ide(config_path: Path | str, *, force_appdata: bool = False) 
 
 
 def sync_skill_all_ides(antigravity_override: str = "", *, force_appdata: bool = False) -> list[str]:
-    """On MCP/EXE startup: upgrade AppData + refresh skills beside every IDE config path."""
+    """On MCP/EXE startup: upgrade AppData + refresh skills beside every IDE config path.
+
+    Every automatic sync (startup, plugin install/update/uninstall, Store actions) comes
+    through here. A second instance (sandboxed test build, other panel port or profile)
+    refreshes only its own AppData packs: on Oct 16 a sandbox on port 4300 rewrote the
+    person's ~/.claude, ~/.codex and ~/.cursor skill folders with its own packs on
+    every plugin load. Settings → Apply (``sync_skill_for_ide``) still writes.
+    """
+    from frontend.ide_apply import auto_apply_skip_reason
+
+    reason = auto_apply_skip_reason()
+    if reason:
+        return [*_skill.seed_skill_packs(force=force_appdata), f"IDE skill folders left alone: {reason}"]
     return sync_skill(
         ide_config_paths=ide_config_paths(antigravity_override),
         force_appdata=force_appdata,
