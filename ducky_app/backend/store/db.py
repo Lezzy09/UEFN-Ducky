@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import sqlite3
+import sys
 import threading
 import time
 from contextlib import contextmanager, nullcontext
@@ -226,8 +227,16 @@ def record_integrity(conn: sqlite3.Connection, result: str) -> None:
 def _refuse_real_appdata_under_pytest(path: Path) -> None:
     """A test that escapes the conftest redirect must fail loudly instead of
     migrating, importing into, or pruning the developer's live database.
-    ``DUCKY_TESTS_REAL_APPDATA=1`` opts out deliberately."""
-    if "PYTEST_CURRENT_TEST" not in os.environ or os.environ.get("DUCKY_TESTS_REAL_APPDATA") == "1":
+    ``DUCKY_TESTS_REAL_APPDATA=1`` opts out deliberately.
+
+    Any process running pytest counts, not only a test's run phase: PYTEST_CURRENT_TEST is
+    unset while test modules are imported and collected, and a plugin repo's tests (no app
+    conftest redirect) migrated the owner's live ducky.db past the installed app's schema
+    that way on Oct 16 2026, so the installed app could no longer open it."""
+    under_pytest = (
+        "PYTEST_CURRENT_TEST" in os.environ or "PYTEST_VERSION" in os.environ or "pytest" in sys.modules
+    )
+    if not under_pytest or os.environ.get("DUCKY_TESTS_REAL_APPDATA") == "1":
         return
     try:
         real = (Path.home() / "AppData" / "Local" / "UEFN-Ducky").resolve()
@@ -514,6 +523,8 @@ def migrate(conn: sqlite3.Connection) -> int:
     if current == head:
         return current
     if current > 0:
+        _refuse_source_upgrade_of_real_db(conn, current, head)
+    if current > 0:
         # On the connection we already hold: snapshot() would re-enter connect()
         # and deadlock on _guard (1.2.90 hung every upgraded panel at boot).
         try:
@@ -628,6 +639,27 @@ def unchanged_since_snapshot(conn: sqlite3.Connection, newest: Path) -> bool:
     if not isinstance(saved, dict) or saved.get("name") != newest.name:
         return False
     return saved.get("fingerprint") == data_fingerprint(conn)
+
+
+def _refuse_source_upgrade_of_real_db(conn: sqlite3.Connection, current: int, head: int) -> None:
+    """A source checkout (a script, a dev run, a plugin's tests) must not upgrade the
+    person's real ducky.db past the installed app's schema: the installed app then
+    refuses the file ("written by a newer UEFN-Ducky") on its next start, and so does
+    every IDE bridge it launches. That happened on Oct 16 2026 (schema 15 -> 18). Built
+    apps upgrade as always; ``DUCKY_DEV_MIGRATE_REAL_DB=1`` allows it on purpose."""
+    if getattr(sys, "frozen", False) or os.environ.get("DUCKY_DEV_MIGRATE_REAL_DB") == "1":
+        return
+    try:
+        here = Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent.resolve()
+        real = (Path.home() / "AppData" / "Local" / "UEFN-Ducky").resolve()
+    except OSError:
+        return
+    if here == real:
+        raise StoreError(
+            f"refusing to upgrade the real ducky.db from schema {current} to {head} from a source "
+            "checkout: the installed UEFN Ducky could no longer open it. Point LOCALAPPDATA at a "
+            "copy, or set DUCKY_DEV_MIGRATE_REAL_DB=1 to do it on purpose."
+        )
 
 
 _premigrate_done: set[tuple[str, int]] = set()

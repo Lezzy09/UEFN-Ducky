@@ -544,3 +544,43 @@ def test_upgrade_retries_take_one_pre_migrate_copy(tmp_path: Path, monkeypatch) 
     db._pre_migrate_copy(conn, 7)
     copies = list(db.snapshot_dir(root).glob("ducky-*-pre-migrate-v7*.db"))
     assert len(copies) == 1
+
+
+def test_a_source_checkout_never_upgrades_the_real_database(tmp_path: Path, monkeypatch) -> None:
+    # Oct 16 2026: repo code opened the owner's live ducky.db and took it from schema 15 to
+    # 18; the installed app then refuses the file on its next start.
+    home = tmp_path / "home"
+    real = home / "AppData" / "Local" / "UEFN-Ducky"
+    real.mkdir(parents=True)
+    old = sqlite3.connect(str(real / db.DB_NAME), isolation_level=None)
+    for number, path in db.migration_files():
+        if number > 15:
+            break
+        for stmt in db._split_statements(path.read_text(encoding="utf-8")):
+            old.execute(stmt)
+    old.execute("PRAGMA user_version=15")
+    old.close()
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DUCKY_TESTS_REAL_APPDATA", "1")  # past the test guard: this checks the next one
+    db.reset_for_tests()
+    with pytest.raises(db.StoreError, match="refusing to upgrade the real ducky.db"):
+        db.connect(real)
+    check = sqlite3.connect(str(real / db.DB_NAME))
+    assert check.execute("PRAGMA user_version").fetchone()[0] == 15
+    check.close()
+    db.reset_for_tests()
+    monkeypatch.setenv("DUCKY_DEV_MIGRATE_REAL_DB", "1")  # on purpose
+    assert db.user_version(db.connect(real)) == db.head_version()
+    db.reset_for_tests()
+
+
+def test_the_real_database_is_refused_in_any_pytest_process(tmp_path: Path, monkeypatch) -> None:
+    # PYTEST_CURRENT_TEST is unset while test modules are imported and collected.
+    home = tmp_path / "home"
+    (home / "AppData" / "Local" / "UEFN-Ducky").mkdir(parents=True)
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    with pytest.raises(RuntimeError, match="refusing to open the real ducky.db"):
+        db.connect(home / "AppData" / "Local" / "UEFN-Ducky")
