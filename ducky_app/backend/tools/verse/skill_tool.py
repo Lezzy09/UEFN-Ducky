@@ -33,16 +33,22 @@ def uefn_skill() -> str:
 
 @mcp.tool()
 def skill_read_subskill(
-    pack_id: str = "", subskill_id: str = "", skill: str = "", subskill: str = "", section: str = ""
+    pack_id: str = "",
+    subskill_id: str = "",
+    skill: str = "",
+    subskill: str = "",
+    section: str = "",
+    pack: str = "",
 ) -> str:
     """List or load a skill-pack subskill. Omit subskill_id to list all subskills in a pack.
 
     section= loads only that ## heading of the file (skill_search names it); an unknown
     section lists the file's headings. Use when a subskill is disabled in the prompt index
-    but needed for the current task. skill / subskill are the same as pack_id / subskill_id."""
+    but needed for the current task. skill / pack and subskill are the same as pack_id /
+    subskill_id."""
     # Prompts show it positionally ("ducky", "ai_plugins"); agents guessed skill=/subskill=
-    # and every call failed validation.
-    pack = (pack_id or skill or "").strip()
+    # (Oct 11) and pack=/subskill= (Oct 16, a gpt-6-luna run) and the call failed validation.
+    pack = (pack_id or skill or pack or "").strip()
     if not pack:
         return 'ERROR: pack_id is required, e.g. skill_read_subskill(pack_id="ducky", subskill_id="ai_plugins")'
     try:

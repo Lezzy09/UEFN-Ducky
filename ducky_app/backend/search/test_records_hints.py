@@ -81,7 +81,7 @@ def test_hint_names_the_best_section_for_a_clear_request() -> None:
     _pack()
     text = hints.skill_hint("make an archer enemy that patrols and shoots arrows at the player")
     assert text.startswith("Relevant skills for this request")
-    assert 'skill_read_subskill("npc", "ranged", section="Archer behavior")' in text
+    assert 'skill_read_subskill(pack_id="npc", subskill_id="ranged", section="Archer behavior")' in text
     assert len(text) <= len("Relevant skills for this request (read before acting): ") + hints.MAX_CHARS + 120
 
 

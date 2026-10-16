@@ -115,4 +115,5 @@ def test_the_mcp_tool_takes_skill_and_subskill_as_names_too() -> None:
     by_alias = tool(skill="ducky", subskill="ai_plugins")
     assert not by_alias.startswith("ERROR"), by_alias[:200]
     assert by_alias == tool(pack_id="ducky", subskill_id="ai_plugins")
+    assert tool(pack="ducky", subskill="ai_plugins") == by_alias  # Oct 16: a gpt-6-luna run guessed pack=
     assert tool().startswith("ERROR: pack_id is required")

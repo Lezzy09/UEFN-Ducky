@@ -176,13 +176,14 @@ def read_call(doc: dict[str, Any]) -> str:
     pack, sub = doc.get("pack_id") or "", doc.get("subskill_id") or ""
     if kind == "tool":
         return f'ducky_get_tools(name="{doc.get("tool_name")}")'
+    # Named, as an MCP call takes them: from a positional form agents guess the names.
     if kind == "pack":
-        return f'skill_read_subskill("{pack}", "core")'
+        return f'skill_read_subskill(pack_id="{pack}", subskill_id="core")'
     if kind == "section" and doc.get("section"):
         section = str(doc["section"]).replace('"', "'")
-        return f'skill_read_subskill("{pack}", "{sub}", section="{section}")'
+        return f'skill_read_subskill(pack_id="{pack}", subskill_id="{sub}", section="{section}")'
     if kind in ("subskill", "section"):
-        return f'skill_read_subskill("{pack}", "{sub}")'
+        return f'skill_read_subskill(pack_id="{pack}", subskill_id="{sub}")'
     return ""
 
 

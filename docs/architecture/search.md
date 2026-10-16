@@ -38,7 +38,7 @@ averaged into one vector drowned what the tool does. `CHUNKER_VERSION` is part o
 every row's content hash, so changing how rows or vectors are built re-embeds them.
 
 Results never list the same read call twice (a pack and its `core` sub-skill both
-open with `skill_read_subskill(pack, "core")`).
+open with `skill_read_subskill(pack_id=pack, subskill_id="core")`).
 
 ## Sources and freshness
 
@@ -75,8 +75,10 @@ catalog is not re-indexed.
    the chat's live catalog, records of other plugins or scopes.
 5. At most two rows per sub-skill.
 
-Every hit carries `read`: the exact `skill_read_subskill(..., section=...)` or
-`ducky_get_tools(name=...)` call that opens it.
+Every hit carries `read`: the exact `skill_read_subskill(pack_id=..., subskill_id=...,
+section=...)` or `ducky_get_tools(name=...)` call that opens it, with named arguments
+as an MCP call takes them (from the positional form agents guessed `pack=`, which the
+tool now also accepts beside `skill=`).
 
 ## Fallbacks
 

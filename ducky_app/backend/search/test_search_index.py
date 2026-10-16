@@ -78,12 +78,12 @@ def test_search_finds_the_section_and_names_the_read_call() -> None:
     rows = query.search("starfield recipe twinkling stars", context=EVERYTHING, refresh=False)
     top = rows[0]
     assert (top["pack"], top["subskill"], top.get("section")) == ("sky", "starfield", "Night sky")
-    assert top["read"] == 'skill_read_subskill("sky", "starfield", section="Night sky")'
+    assert top["read"] == 'skill_read_subskill(pack_id="sky", subskill_id="starfield", section="Night sky")'
     assert top["where"] == "Sky > Starfield > Night sky"
     # The pack row and its core sub-skill open with the same call; it is listed once.
     rows = query.search("sky night looks for islands", limit=20, context=EVERYTHING, refresh=False)
     reads = [r["read"] for r in rows]
-    assert 'skill_read_subskill("sky", "core")' in reads and len(reads) == len(set(reads))
+    assert 'skill_read_subskill(pack_id="sky", subskill_id="core")' in reads and len(reads) == len(set(reads))
 
 
 def test_unchanged_packs_are_skipped_and_edits_touch_only_their_rows() -> None:
