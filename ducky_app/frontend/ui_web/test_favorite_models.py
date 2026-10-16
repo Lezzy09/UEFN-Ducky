@@ -390,3 +390,56 @@ def test_agents_never_start_chats_on_an_api_key_the_person_did_not_open(monkeypa
     assert billing_kind("codex", "", "gpt-6.1-sol") == "subscription"
     assert billing_kind("ducky", "openai", "gpt-6.1-sol") == "api_key"
     assert billing_kind("ducky", "uefn_ducky", "ducky-brain") == "account"
+
+
+def test_a_stale_default_model_still_creates_the_chat_but_a_profile_pick_does_not(monkeypatch):
+    # Oct 16 2026: Codex stopped offering gpt-6-astra, the Default Model. Every spawn and
+    # seat with no profile model raised "Model 'gpt-6-astra' is not advertised by codex".
+    settings = SimpleNamespace(default_model="codex:gpt-6-astra")
+    monkeypatch.setattr("frontend.favorite_models._available_agent_models",
+                        lambda _s, **_k: {"codex": {"gpt-6-luna"}})
+    monkeypatch.setattr("frontend.favorite_models._available_api_models", lambda: {})
+    stale = resolve_model_strict(None, settings)
+    assert isinstance(stale, ResolveErr) and stale.code == "model_unavailable" and stale.from_default
+    created = allow_create_without_model(stale)
+    assert isinstance(created, ResolveOk) and created.model == "" and created.coding_agent == "ducky"
+    own = resolve_model_strict(["codex:gpt-6-astra"], settings)
+    assert isinstance(own, ResolveErr) and not own.from_default
+    assert allow_create_without_model(own) is own
+
+
+def test_ducky_ai_is_offered_only_to_an_account_that_has_it(monkeypatch):
+    import frontend.duckyos_account as account
+    import frontend.favorite_models as fm
+
+    monkeypatch.setattr("frontend.favorite_models.api_backends", lambda: _TEST_APIS | {"uefn_ducky"})
+    monkeypatch.setattr("frontend.favorite_models._available_api_models", lambda: {"uefn_ducky": {"ducky-brain"}})
+    monkeypatch.setattr(account, "ducky_ai_hidden", lambda _p: False)
+    pick = fm.ducky_ai_selection()
+    assert (pick.coding_agent, pick.model, pick.provider) == ("ducky", "ducky-brain", "uefn_ducky")
+    monkeypatch.setattr(account, "ducky_ai_hidden", lambda _p: True)
+    assert fm.ducky_ai_selection() is None
+
+
+def test_chat_model_choice_prefers_the_default_then_ducky_ai(monkeypatch):
+    import frontend.favorite_models as fm
+
+    ducky_ai = ResolveOk(coding_agent="ducky", model="ducky-brain", provider="uefn_ducky",
+                         selection=fm.FavoriteSelection(backend="uefn_ducky", model_id="ducky-brain"))
+    monkeypatch.setattr(fm, "ducky_ai_selection", lambda: ducky_ai)
+    monkeypatch.setattr("frontend.favorite_models._available_agent_models",
+                        lambda _s, **_k: {"codex": {"gpt-6-luna"}})
+    monkeypatch.setattr("frontend.favorite_models._available_api_models", lambda: {})
+
+    choice, note, error = fm.chat_model_choice(SimpleNamespace(default_model="codex:gpt-6-luna"))
+    assert (choice.coding_agent, choice.model, note, error) == ("codex", "gpt-6-luna", "", "")
+
+    choice, note, error = fm.chat_model_choice(SimpleNamespace(default_model="codex:gpt-6-astra"))
+    assert choice is ducky_ai and error == ""
+    assert note == ("Your Default Model codex:gpt-6-astra isn't available, so this ducky uses Ducky AI. "
+                    "Pick another model below anytime.")
+
+    monkeypatch.setattr(fm, "ducky_ai_selection", lambda: None)
+    choice, note, error = fm.chat_model_choice(SimpleNamespace(default_model=""))
+    assert choice is None and note == ""
+    assert error == "No Default Model is set. Pick a model below and this ducky uses it."

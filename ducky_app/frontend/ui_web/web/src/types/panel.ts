@@ -1983,7 +1983,9 @@ export interface AgentEvent {
     | "files_reverted"
     | "window_rtc"
     | "direct_rtc"
-    | "open_url";
+    | "open_url"
+    | "model_needed"
+    | "model_adopted";
   text?: string;
   /** assistant_done: a group note (a member's work posted to its group), not the end of a turn. */
   note?: boolean;
@@ -2088,6 +2090,12 @@ export interface AgentEvent {
   ts?: number;
   /** open_url: https link to open on the remote viewer. */
   url?: string;
+  /** model_needed: messages this chat keeps until a model is picked. */
+  held?: number;
+  /** model_adopted: the model a chat with none just took (the Default Model or Ducky AI). */
+  model?: string;
+  coding_agent?: string;
+  provider?: string;
 }
 
 export interface WindowBox {
@@ -3393,11 +3401,24 @@ export interface PanelApi {
     model?: string,
     provider?: string,
   ): Promise<{ ok: boolean; coding_agent?: string; model?: string; provider?: string; error?: string }>;
-  /** A Ducky chat with no model takes the Default Model (agent and model), as a new chat does. */
+  /** A Ducky chat with no model takes the Default Model (agent and model), as a new chat does,
+   * else Ducky AI (note says why). With neither, error says so and held counts waiting messages. */
   adopt_default_model?(
     conv_id: string,
     keep_agent?: boolean,
-  ): Promise<{ ok: boolean; coding_agent?: string; model?: string; provider?: string; error?: string }>;
+  ): Promise<{
+    ok: boolean;
+    coding_agent?: string;
+    model?: string;
+    provider?: string;
+    note?: string;
+    held?: number;
+    error?: string;
+  }>;
+  /** The composer picked a model: save it and run the messages that waited for one. */
+  run_held_messages?(conv_id: string, model: string, coding_agent?: string): Promise<{ ok: boolean; ran?: number; error?: string }>;
+  /** Messages this chat keeps until a model is picked. */
+  held_for_model?(conv_id: string): Promise<{ ok: boolean; held: number }>;
   set_conversation_thinking_effort(
     conv_id: string,
     effort: string,

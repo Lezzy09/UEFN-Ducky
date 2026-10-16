@@ -740,6 +740,10 @@ class PanelApiSettingsMixin:
             conv.provider = ""
         _pa.save_conversation(conv)
         _pa.notify_chats_changed(conv.id, conv.title, conv.folder_id, push=self._push, open_tab=False)
+        if conv.model:
+            from frontend.ui_web.agent_modes import release_held_for_model
+
+            release_held_for_model(conv.id)
         return {
             "ok": True,
             "coding_agent": conv.coding_agent,
@@ -749,9 +753,12 @@ class PanelApiSettingsMixin:
 
     def adopt_default_model(self, conv_id: str, keep_agent: bool = False) -> dict[str, Any]:
         """A Ducky chat with no model takes the Default Model (agent and model), the way a new
-        chat does. keep_agent: a branded chat that stays on Ducky's own agent takes the first
-        API model instead of a coding-agent default, as when it was created."""
-        from frontend.favorite_models import ResolveOk
+        chat does, else UEFN Ducky's own model (Ducky AI) with a note saying why. With neither,
+        the person picks one in the composer, and messages sent meanwhile run then (held).
+        keep_agent: a branded chat that stays on Ducky's own agent never takes a coding-agent
+        default, as when it was created."""
+        from frontend.favorite_models import chat_model_choice
+        from frontend.ui_web.agent_modes import held_for_model, release_held_for_model
 
         conv = _pa.load_conversation(conv_id)
         if not conv:
@@ -759,21 +766,19 @@ class PanelApiSettingsMixin:
         current = {"ok": True, "coding_agent": conv.coding_agent or "ducky", "model": conv.model or "",
                    "provider": conv.provider or ""}
         if (conv.model or "").strip() or (conv.coding_agent or "ducky") != "ducky" or conv.is_group:
+            if (conv.model or "").strip():
+                release_held_for_model(conv.id)
             return current
-        result = _pa.resolve_model_selection(None, _pa.PanelSettings.load())
-        if not isinstance(result, ResolveOk) or not result.model:
-            return {"ok": False, "error": getattr(result, "message", "") or "No Default Model is set."}
-        agent, model, provider = result.coding_agent, result.model, result.provider
-        if keep_agent and agent != "ducky":
-            pick = _pa._first_available_api_model()
-            if not pick:
-                return {"ok": False, "error": "The Default Model is a coding agent and this chat stays on Ducky."}
-            (provider, model), agent = pick, "ducky"
+        choice, note, error = chat_model_choice(_pa.PanelSettings.load(), keep_agent)
+        if choice is None:
+            return {"ok": False, "error": error, "held": held_for_model(conv.id)}
+        agent, model = choice.coding_agent, choice.model
         conv.coding_agent, conv.model = agent, model
-        conv.provider = provider or ("" if agent != "ducky" else conv.provider)
+        conv.provider = choice.provider or ("" if agent != "ducky" else conv.provider)
         _pa.save_conversation(conv)
         _pa.notify_chats_changed(conv.id, conv.title, conv.folder_id, push=self._push, open_tab=False)
-        return {"ok": True, "coding_agent": agent, "model": model, "provider": conv.provider or ""}
+        release_held_for_model(conv.id)
+        return {"ok": True, "coding_agent": agent, "model": model, "provider": conv.provider or "", "note": note}
 
     def set_conversation_thinking_effort(self, conv_id: str, effort: str = "off") -> dict[str, Any]:
         from backend.agent.thinking_effort import normalize_thinking_effort

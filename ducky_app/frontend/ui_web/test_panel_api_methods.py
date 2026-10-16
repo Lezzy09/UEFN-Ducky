@@ -443,6 +443,8 @@ _PUBLIC_METHODS = frozenset({
     'scan_verse_diagnostics',
     'search_workspace',
     'send_message',
+    'run_held_messages',
+    'held_for_model',
     'set_chat_mcp_plugins',
     'set_conversation_coding_agent',
     'adopt_default_model',

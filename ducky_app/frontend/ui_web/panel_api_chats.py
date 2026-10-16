@@ -1602,7 +1602,27 @@ class PanelApiChatsMixin:
             )
             return {"run_id": run_id}
         run_id = _pa.run_message(conv_id, text, mode, model, push=self._push, attachments=attachments or [])
+        from frontend.ui_web.agent_modes import HELD_FOR_MODEL
+
+        if run_id == HELD_FOR_MODEL:
+            return {"run_id": "", "held_for_model": "1"}
         return {"run_id": run_id}
+
+    def run_held_messages(self, conv_id: str, model: str, coding_agent: str = "") -> dict[str, Any]:
+        """The composer picked a model for a chat whose messages waited for one: save the
+        pick the way a send does, then run them in order."""
+        from frontend.ui_web.agent_modes import release_held_for_model
+
+        if not (model or "").strip() or (model or "").strip().lower() == "default":
+            return {"ok": False, "error": "Pick a model first."}
+        _sync_composer_selection(conv_id, model, coding_agent)
+        return {"ok": True, "ran": release_held_for_model(conv_id)}
+
+    def held_for_model(self, conv_id: str) -> dict[str, Any]:
+        """How many messages this chat keeps until a model is picked."""
+        from frontend.ui_web.agent_modes import held_for_model
+
+        return {"ok": True, "held": held_for_model(conv_id)}
 
     def continue_interrupted(
         self,

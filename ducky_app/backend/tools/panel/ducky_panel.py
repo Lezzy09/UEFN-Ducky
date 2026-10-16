@@ -930,7 +930,7 @@ def ducky_send_chat_message(
     if is_archive_folder_id(target_conv.folder_id):
         raise ValueError("Archived chats cannot run agents. Restore this chat or use an active ducky.")
 
-    from frontend.ui_web.agent_modes import run_message, run_message_and_wait
+    from frontend.ui_web.agent_modes import HELD_FOR_MODEL, run_message, run_message_and_wait
     from backend.workspace.identity import resolve_context
 
     context = resolve_context()
@@ -961,7 +961,7 @@ def ducky_send_chat_message(
     started = run_message(conv_id, text, mode_norm, "", queue_if_busy=True)
     if started:
         _acknowledge_chat_message(conv_id)
-    status = "queued" if started == "queued" else "running"
+    status = {"queued": "queued", HELD_FOR_MODEL: "waiting_for_model"}.get(started, "running")
     return tool_json({"status": status, "conv_id": conv_id}, pretty=pretty)
 
 
@@ -1665,7 +1665,7 @@ def ducky_recycle_member(
             "Seat agents with ducky_group_invite / ducky_spawn_chat(group_id=…)."
         )
 
-    from frontend.ui_web.agent_modes import run_message, run_message_and_wait
+    from frontend.ui_web.agent_modes import HELD_FOR_MODEL, run_message, run_message_and_wait
     from frontend.ui_web.context_control import reset_context
     from backend.tools.panel.permission_prompt import approvals_of
 
@@ -1729,8 +1729,9 @@ def ducky_recycle_member(
         from backend.agent.a2a_client import open_thread
 
         response_id = open_thread(caller, member.id, deliver_result=True)
-    run_message(member.id, spawn_text, mode_norm, "", parent=parent_id, started_by=kept_starter)
-    return tool_json({**base, "status": "running", "response_id": response_id}, pretty=pretty)
+    started = run_message(member.id, spawn_text, mode_norm, "", parent=parent_id, started_by=kept_starter)
+    status = "waiting_for_model" if started == HELD_FOR_MODEL else "running"
+    return tool_json({**base, "status": status, "response_id": response_id}, pretty=pretty)
 
 
 @mcp.tool()

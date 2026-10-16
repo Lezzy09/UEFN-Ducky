@@ -286,6 +286,14 @@ export function ChatPane({
   const [slashRefsOn, setSlashRefsOn] = useState(true);
   const [slashStatus, setSlashStatus] = useState("");
   const [modelPickerSignal, setModelPickerSignal] = useState(0);
+  // A chat with no model: why (noModelText), how many messages Ducky keeps for it until a
+  // model is picked (they run then), and whether the composer's text sends on that pick.
+  // modelNote says why a chat took Ducky AI instead of the Default Model.
+  const [modelNote, setModelNote] = useState<{ model: string; text: string } | null>(null);
+  const [noModelText, setNoModelText] = useState("");
+  const [heldForModel, setHeldForModel] = useState(0);
+  const sendAfterPickRef = useRef(false);
+  const pickerContextRef = useRef({ visible, selectedModel: "" });
   const { chatPlan, chatPlanProgress, setChatPlan, setChatPlanProgress } = useChatPlan(chat.id);
   const planAllDone = useMemo(() => {
     if (!chatPlan) return true;
@@ -518,6 +526,10 @@ export function ChatPane({
     // selection with a stale cache entry. Restore only when the pane changes chat.
     if (loadedChatIdRef.current === chat.id) return;
     loadedChatIdRef.current = chat.id;
+    setModelNote(null);
+    setNoModelText("");
+    setHeldForModel(0);
+    sendAfterPickRef.current = false;
     const cached = getCachedChatComposer(chat.id);
     const nextCodingAgent = chat.codingAgent || "ducky";
     const matchingCached =
@@ -657,6 +669,22 @@ export function ChatPane({
     useCallback(
       (event) => {
         if (event.conv_id && event.conv_id !== chat.id) return;
+        if (event.type === "model_needed") {
+          setNoDefaultModel(true);
+          setNoModelText(event.text || "");
+          setHeldForModel(event.held || 0);
+          const { visible: shown, selectedModel: picked } = pickerContextRef.current;
+          if (shown && !(picked || "").trim()) setModelPickerSignal((n) => n + 1);
+          return;
+        }
+        if (event.type === "model_adopted") {
+          if (!event.model) return;
+          setCodingAgent(event.coding_agent || "ducky");
+          setSelectedModel(event.model);
+          setSelectedModelDisplayName(event.model);
+          setModelNote(event.text ? { model: event.model, text: event.text } : null);
+          return;
+        }
         if (event.type === "chats_changed") {
           const api = getApi();
           if (!chat.isGroup || !api?.group_members) return;
@@ -926,17 +954,28 @@ export function ChatPane({
     const res = await Promise.resolve(getApi()?.adopt_default_model?.(chat.id, keepDuckyAgent)).catch(() => null);
     const model = (res?.ok && res.model) || "";
     setNoDefaultModel(!model);
-    if (!model) return false;
+    if (!model) {
+      setNoModelText(res?.error || "");
+      setHeldForModel(res?.held || 0);
+      if ((res?.held || 0) > 0 && visible) setModelPickerSignal((n) => n + 1);
+      return false;
+    }
     setCodingAgent(res?.coding_agent || "ducky");
     setSelectedModel(model);
     setSelectedModelDisplayName(model);
+    setModelNote(res?.note ? { model, text: res.note } : null);
     return true;
-  }, [chat.id, keepDuckyAgent]);
+  }, [chat.id, keepDuckyAgent, visible]);
   useEffect(() => {
     if (visible && needsModel) void adoptDefaultModel();
   }, [visible, needsModel, adoptDefaultModel]);
   const promptForDefaultModel = needsModel && noDefaultModel;
-  const showDefaultModelCta = promptForDefaultModel || modelsUnavailable;
+  // No model and none to take: the person picks one in the composer, and what they (or an
+  // agent) sent meanwhile runs then. Only with no models at all does send open Settings.
+  const pickModelFirst = promptForDefaultModel && !modelsUnavailable;
+  const showDefaultModelCta = modelsUnavailable;
+  const modelNoteText = modelNote && modelNote.model === selectedModel ? modelNote.text : "";
+  pickerContextRef.current = { visible, selectedModel };
   const canSend = canCompose && !agentRunning;
   const canQueue = canCompose && agentRunning;
   const isEmpty = messages.length === 0 && !streamBuffer && !agentRunning;
@@ -954,7 +993,9 @@ export function ChatPane({
 
   const sendBtnTitle = showDefaultModelCta
     ? "Set a Default Model in Settings → LLMs"
-    : canQueue
+    : pickModelFirst
+      ? "Pick a model — your message sends then"
+      : canQueue
       ? "Queue follow-up (runs when this turn finishes)"
       : canSend
         ? externalAgent
@@ -965,7 +1006,7 @@ export function ChatPane({
   const sendBtnClass = showDefaultModelCta
     ? "chat-pane-send-btn chat-pane-send-btn--settings-cta"
     : hasContent
-      ? canSend || canQueue
+      ? canSend || canQueue || pickModelFirst
         ? "chat-pane-send-btn chat-pane-send-btn--has-text-can-send"
         : "chat-pane-send-btn chat-pane-send-btn--has-text-no-send"
       : "chat-pane-send-btn";
@@ -1161,14 +1202,15 @@ export function ChatPane({
     }
 
     if (showDefaultModelCta) {
-      // A Default Model set since this chat last looked is taken now; otherwise go set one.
-      if (promptForDefaultModel && !modelsUnavailable) {
-        void adoptDefaultModel().then((adopted) => {
-          if (!adopted) openDefaultModelSettings();
-        });
-        return;
-      }
       openDefaultModelSettings();
+      return;
+    }
+    if (pickModelFirst) {
+      // The text stays and sends the moment a model is picked, or a model set since is taken.
+      sendAfterPickRef.current = hasContent;
+      void adoptDefaultModel().then((adopted) => {
+        if (!adopted) setModelPickerSignal((n) => n + 1);
+      });
       return;
     }
     const apiAttachments = overrideText ? [] : toApiAttachments();
@@ -1197,8 +1239,24 @@ export function ChatPane({
     if (!overrideText && !canSend) return;
     setInputText("");
     if (!overrideText) clearAttachments();
+    setModelNote(null);
     dispatchSend(text, apiAttachments, agentMode, selectedModel, codingAgent);
   };
+
+  // A model picked (or taken) for a chat that had none: run the messages Ducky kept for it,
+  // and send the composer's text that was waiting on the pick.
+  useEffect(() => {
+    const model = (selectedModel || "").trim();
+    if (!model) return;
+    if (heldForModel > 0) {
+      setHeldForModel(0);
+      void getApi()?.run_held_messages?.(chat.id, model, codingAgent);
+    }
+    if (sendAfterPickRef.current) {
+      sendAfterPickRef.current = false;
+      handleSend();
+    }
+  }, [selectedModel, heldForModel]);
 
   // Drain queue one turn at a time when the agent goes idle.
   useEffect(() => {
@@ -1588,13 +1646,17 @@ export function ChatPane({
           </div>
 
           <div className="chat-pane-composer-pane chat-pane-composer-pane--type">
-            {(showDefaultModelCta || visionBlocked || attachmentError) && (
+            {(showDefaultModelCta || pickModelFirst || visionBlocked || attachmentError || modelNoteText) && (
               <div className={`composer-attach-warning${visionBlocked ? " is-vision-blocked" : ""}`}>
                 {showDefaultModelCta
                   ? "This ducky has no model. Set a Default Model."
-                  : visionBlocked
-                    ? `${displayModelLabel} cannot use images — switch to a vision model or remove images.`
-                    : attachmentError}
+                  : pickModelFirst
+                    ? heldForModel > 0
+                      ? `${heldForModel === 1 ? "A message is" : `${heldForModel} messages are`} waiting. Pick a model below and ${heldForModel === 1 ? "it runs" : "they run"}.`
+                      : noModelText || "This ducky has no model. Pick one below."
+                    : visionBlocked
+                      ? `${displayModelLabel} cannot use images — switch to a vision model or remove images.`
+                      : attachmentError || modelNoteText}
               </div>
             )}
             {slashStatus ? <div className="slash-command-status">{slashStatus}</div> : null}
@@ -1806,7 +1868,7 @@ export function ChatPane({
                   <button
                     type="button"
                     onClick={() => handleSend()}
-                    disabled={!showDefaultModelCta && !canSend}
+                    disabled={!showDefaultModelCta && !pickModelFirst && !canSend}
                     title={sendBtnTitle}
                     className={sendBtnClass}
                   >

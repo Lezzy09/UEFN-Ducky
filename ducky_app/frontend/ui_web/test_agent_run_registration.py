@@ -83,6 +83,7 @@ def external_turns(monkeypatch, tmp_path):
     """run_message down the coding-agent path with everything outside it stubbed."""
     from backend.agent import a2a_broker, attachments
     from backend.agent.coding_agents import base, runner
+    from frontend import notifications
     from frontend.ui_web import context_omit, conversation_attachments, project_chats
 
     chats: dict[str, SimpleNamespace] = {}
@@ -93,7 +94,12 @@ def external_turns(monkeypatch, tmp_path):
             id=cid, title=cid, folder_id="", coding_agent="codex", provider="openai", model=model,
             messages=[{"role": "user", "content": "earlier"}])
 
+    turns: list[tuple[str, str]] = []
+    alerts: list[tuple] = []
+    events: list[dict] = []
+
     def finish_turn(fresh, text, *, push, run_id, **kwargs):
+        turns.append((fresh.id, text))
         push({"type": "agent_stopped", "reason": "done", "conv_id": fresh.id, "run_id": run_id})
 
     monkeypatch.setattr(agent_modes, "_sessions", {})
@@ -118,7 +124,10 @@ def external_turns(monkeypatch, tmp_path):
     monkeypatch.setattr(base, "normalize_coding_agent", lambda value: value or "ducky")
     monkeypatch.setattr(runner, "run_coding_agent_message", finish_turn)
     monkeypatch.setattr(a2a_broker, "on_agent_stopped", lambda *a, **kw: None)
-    return SimpleNamespace(conv=conv, parent=parent)
+    monkeypatch.setattr(agent_modes, "_held_messages", {})
+    monkeypatch.setattr(agent_modes, "_panel_push", events.append)  # never the live panel
+    monkeypatch.setattr(notifications, "alert", lambda *a, **kw: alerts.append(a) or True)
+    return SimpleNamespace(conv=conv, parent=parent, chats=chats, turns=turns, alerts=alerts, events=events)
 
 
 def test_external_turns_and_refused_sends_leave_no_bookkeeping(external_turns):
@@ -132,10 +141,66 @@ def test_external_turns_and_refused_sends_leave_no_bookkeeping(external_turns):
         time.sleep(0.01)
     assert agent_modes.list_running_agents() == []
     assert sum(e.get("type") == "agent_stopped" for e in pushed) == 25
-    # Sends refused before a turn starts: no model picked for the chat.
+    # Sends that wait before a turn starts: no model picked for the chat.
     for n in range(25):
         external_turns.conv(f"nomodel{n}", model="")
-        assert agent_modes.run_message(f"nomodel{n}", "go", "agent", "", push=pushed.append) == ""
+        assert agent_modes.run_message(f"nomodel{n}", "go", "agent", "", push=pushed.append) == agent_modes.HELD_FOR_MODEL
     assert agent_modes._run_started == {}
     assert agent_modes._quiet_runs == set()
     assert agent_modes._sessions == {}
+
+
+def _wait_for(check, seconds=10.0):
+    deadline = time.monotonic() + seconds
+    while not check() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return check()
+
+
+def test_a_message_to_a_chat_with_no_model_waits_and_runs_once_one_is_picked(external_turns):
+    # Oct 16 2026: a ducky opened with no usable model, the message it was sent errored
+    # ("No exact model selected for this chat") and the chain that sent it stopped there.
+    external_turns.conv("member", model="")
+    pushed: list[dict] = []
+    assert agent_modes.run_message("member", "build the parser", "agent", "", push=pushed.append,
+                                   parent="lead") == agent_modes.HELD_FOR_MODEL
+    assert agent_modes.run_message("member", "build the parser", "agent", "", push=pushed.append)         == agent_modes.HELD_FOR_MODEL  # the same message again (a retry) is kept once
+    assert agent_modes.held_for_model("member") == 1
+    needed = [e for e in pushed if e["type"] == "model_needed"]
+    assert needed and needed[-1]["conv_id"] == "member" and needed[-1]["held"] == 1
+    assert external_turns.alerts and external_turns.alerts[-1][1] == "A message is waiting for you to pick a model."
+    assert external_turns.turns == [] and agent_modes.list_running_agents() == []
+
+    external_turns.chats["member"].model = "gpt-6-luna"  # the person picks a model
+    assert agent_modes.release_held_for_model("member") == 1
+    assert _wait_for(lambda: external_turns.turns == [("member", "build the parser")])
+    assert agent_modes.held_for_model("member") == 0
+    assert agent_modes.release_held_for_model("member") == 0
+
+
+def test_an_agent_waiting_on_a_reply_hears_the_chat_needs_a_model(external_turns):
+    external_turns.conv("member", model="")
+    out = agent_modes.run_message_and_wait("member", "build the parser", timeout_sec=5)
+    assert out["status"] == "waiting_for_model"
+    assert "your message runs then" in out["error"]
+    assert agent_modes.held_for_model("member") == 1
+
+
+def test_a_ducky_chat_with_no_model_takes_ducky_ai_and_says_why(monkeypatch):
+    import frontend.favorite_models as fm
+
+    ducky_ai = fm.ResolveOk(coding_agent="ducky", model="ducky-brain", provider="uefn_ducky",
+                            selection=fm.FavoriteSelection(backend="uefn_ducky", model_id="ducky-brain"))
+    note = "Your Default Model codex:gpt-6-astra isn't available, so this ducky uses Ducky AI."
+    monkeypatch.setattr(fm, "chat_model_choice", lambda settings, keep_agent=False: (ducky_ai, note, ""))
+    monkeypatch.setattr(agent_modes, "save_conversation", lambda c: None)
+    monkeypatch.setattr(agent_modes, "notify_chats_changed", lambda *a, **kw: None)
+    conv = SimpleNamespace(id="c1", title="Builder", folder_id="", coding_agent="ducky", model="", provider="")
+    pushed: list[dict] = []
+    assert agent_modes._take_chat_model(conv, SimpleNamespace(), pushed.append) == ("ducky-brain", "ducky", "")
+    assert (conv.coding_agent, conv.model, conv.provider) == ("ducky", "ducky-brain", "uefn_ducky")
+    assert pushed == [{"type": "model_adopted", "conv_id": "c1", "text": note, "model": "ducky-brain",
+                       "coding_agent": "ducky", "provider": "uefn_ducky"}]
+    monkeypatch.setattr(fm, "chat_model_choice", lambda settings, keep_agent=False: (None, "", "Pick a model."))
+    conv.model = ""
+    assert agent_modes._take_chat_model(conv, SimpleNamespace(), pushed.append) == ("", "ducky", "Pick a model.")

@@ -1,4 +1,5 @@
-"""A Ducky chat with no model takes the Default Model the way a new chat does."""
+"""A Ducky chat with no model takes the Default Model the way a new chat does, else
+UEFN Ducky's own model (Ducky AI); with neither, the person picks one."""
 
 from __future__ import annotations
 
@@ -6,9 +7,14 @@ from types import SimpleNamespace
 
 import pytest
 
+import frontend.favorite_models as fm
+import frontend.ui_web.agent_modes as am
 import frontend.ui_web.panel_api as pa
 from frontend.favorite_models import FavoriteSelection, ResolveErr, ResolveOk
 from frontend.ui_web.panel_api_settings import PanelApiSettingsMixin
+
+_DUCKY_AI = ResolveOk(coding_agent="ducky", model="ducky-brain", provider="uefn_ducky",
+                      selection=FavoriteSelection(backend="uefn_ducky", model_id="ducky-brain"))
 
 
 @pytest.fixture
@@ -16,11 +22,17 @@ def chat(monkeypatch):
     conv = SimpleNamespace(id="c1", title="Builder", folder_id="", coding_agent="ducky", model="",
                            provider="", is_group=False)
     saved: list[tuple[str, str, str]] = []
+    released: list[str] = []
     monkeypatch.setattr(pa, "load_conversation", lambda _cid: conv)
     monkeypatch.setattr(pa, "save_conversation", lambda c: saved.append((c.coding_agent, c.model, c.provider)))
     monkeypatch.setattr(pa, "notify_chats_changed", lambda *a, **k: None)
-    monkeypatch.setattr(pa, "_first_available_api_model", lambda: ("anthropic", "claude-opus-5-5"))
-    conv.saved = saved
+    monkeypatch.setattr(pa.PanelSettings, "load", staticmethod(lambda: SimpleNamespace(default_model="")))
+    monkeypatch.setattr(fm, "ducky_ai_selection", lambda: _DUCKY_AI)
+    monkeypatch.setattr(fm, "_first_api_model", lambda: ResolveOk(
+        coding_agent="ducky", model="claude-opus-5-5", provider="anthropic",
+        selection=FavoriteSelection(backend="anthropic", model_id="claude-opus-5-5")))
+    monkeypatch.setattr(am, "release_held_for_model", lambda cid: released.append(cid) or 0)
+    conv.saved, conv.released = saved, released
     return conv
 
 
@@ -28,7 +40,12 @@ def _default(monkeypatch, agent: str, model: str, provider: str = "") -> None:
     backend = agent if agent != "ducky" else provider
     result = ResolveOk(coding_agent=agent, model=model, provider=provider,
                        selection=FavoriteSelection(backend=backend, model_id=model))
-    monkeypatch.setattr(pa, "resolve_model_selection", lambda _fav, _settings: result)
+    monkeypatch.setattr(fm, "resolve_model_strict", lambda _fav, _settings: result)
+
+
+def _no_default(monkeypatch, code: str = "model_required", requested: str = "") -> None:
+    monkeypatch.setattr(fm, "resolve_model_strict", lambda _fav, _settings: ResolveErr(
+        code=code, message="whatever the strict resolver says", requested=requested))
 
 
 def _api() -> PanelApiSettingsMixin:
@@ -38,35 +55,64 @@ def _api() -> PanelApiSettingsMixin:
 
 
 def test_a_chat_with_no_model_takes_a_coding_agent_default(monkeypatch, chat):
-    _default(monkeypatch, "codex", "gpt-6-astra")
+    _default(monkeypatch, "codex", "gpt-6-luna")
     out = _api().adopt_default_model("c1")
-    assert out == {"ok": True, "coding_agent": "codex", "model": "gpt-6-astra", "provider": ""}
-    assert chat.saved == [("codex", "gpt-6-astra", "")]
+    assert out == {"ok": True, "coding_agent": "codex", "model": "gpt-6-luna", "provider": "", "note": ""}
+    assert chat.saved == [("codex", "gpt-6-luna", "")]
+    assert chat.released == ["c1"]
 
 
 def test_a_chat_with_no_model_takes_an_api_default(monkeypatch, chat):
     _default(monkeypatch, "ducky", "claude-opus-5-5", provider="anthropic")
     out = _api().adopt_default_model("c1")
-    assert out == {"ok": True, "coding_agent": "ducky", "model": "claude-opus-5-5", "provider": "anthropic"}
+    assert out == {"ok": True, "coding_agent": "ducky", "model": "claude-opus-5-5", "provider": "anthropic",
+                   "note": ""}
 
 
-def test_a_branded_chat_stays_on_ducky_with_an_api_model(monkeypatch, chat):
-    _default(monkeypatch, "codex", "gpt-6-astra")
-    out = _api().adopt_default_model("c1", True)
-    assert out == {"ok": True, "coding_agent": "ducky", "model": "claude-opus-5-5", "provider": "anthropic"}
-
-
-def test_without_a_default_model_nothing_changes(monkeypatch, chat):
-    monkeypatch.setattr(pa, "resolve_model_selection",
-                        lambda _fav, _settings: ResolveErr(code="model_required", message="No model selected."))
+def test_without_a_default_model_the_chat_takes_ducky_ai(monkeypatch, chat):
+    _no_default(monkeypatch)
     out = _api().adopt_default_model("c1")
-    assert out["ok"] is False and out["error"] == "No model selected."
-    assert chat.saved == [] and chat.model == ""
+    assert (out["ok"], out["coding_agent"], out["model"], out["provider"]) == (True, "ducky", "ducky-brain", "uefn_ducky")
+    assert out["note"].startswith("No Default Model is set, so this ducky uses Ducky AI.")
+    assert chat.saved == [("ducky", "ducky-brain", "uefn_ducky")]
 
 
-def test_a_chat_that_has_a_model_keeps_it(monkeypatch, chat):
-    _default(monkeypatch, "codex", "gpt-6-astra")
+def test_an_unavailable_default_model_falls_back_to_ducky_ai_and_says_so(monkeypatch, chat):
+    # Oct 16 2026: the Default Model codex:gpt-6-astra left Codex's list, and every new
+    # ducky opened on "This ducky has no model. Set a Default Model." and stopped there.
+    _no_default(monkeypatch, code="model_unavailable", requested="codex:gpt-6-astra")
+    out = _api().adopt_default_model("c1")
+    assert out["model"] == "ducky-brain"
+    assert "Your Default Model codex:gpt-6-astra isn't available" in out["note"]
+
+
+def test_a_branded_chat_stays_on_ducky_and_takes_ducky_ai(monkeypatch, chat):
+    _default(monkeypatch, "codex", "gpt-6-luna")
+    out = _api().adopt_default_model("c1", True)
+    assert (out["coding_agent"], out["model"], out["provider"]) == ("ducky", "ducky-brain", "uefn_ducky")
+
+
+def test_a_branded_chat_without_ducky_ai_takes_the_first_api_model(monkeypatch, chat):
+    _default(monkeypatch, "codex", "gpt-6-luna")
+    monkeypatch.setattr(fm, "ducky_ai_selection", lambda: None)
+    out = _api().adopt_default_model("c1", True)
+    assert (out["coding_agent"], out["model"], out["provider"]) == ("ducky", "claude-opus-5-5", "anthropic")
+
+
+def test_with_no_model_at_all_the_person_picks_one(monkeypatch, chat):
+    _no_default(monkeypatch, code="model_unavailable", requested="codex:gpt-6-astra")
+    monkeypatch.setattr(fm, "ducky_ai_selection", lambda: None)
+    monkeypatch.setattr(am, "held_for_model", lambda _cid: 2)
+    out = _api().adopt_default_model("c1")
+    assert out["ok"] is False and out["held"] == 2
+    assert out["error"] == ("Your Default Model codex:gpt-6-astra isn't available. "
+                            "Pick a model below and this ducky uses it.")
+    assert chat.saved == [] and chat.model == "" and chat.released == []
+
+
+def test_a_chat_that_has_a_model_keeps_it_and_runs_what_waited(monkeypatch, chat):
+    _default(monkeypatch, "codex", "gpt-6-luna")
     chat.model, chat.provider = "claude-opus-5-5", "anthropic"
     out = _api().adopt_default_model("c1")
     assert out == {"ok": True, "coding_agent": "ducky", "model": "claude-opus-5-5", "provider": "anthropic"}
-    assert chat.saved == []
+    assert chat.saved == [] and chat.released == ["c1"]

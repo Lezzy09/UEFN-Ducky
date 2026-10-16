@@ -1225,6 +1225,11 @@ def run_message_and_wait(
             result["status"] = "cancelled" if text == "Cancelled" else "error"
             result["error"] = text
             done.set()
+        elif kind == "model_needed":
+            result["status"] = "waiting_for_model"
+            result["error"] = (f"{event.get('text') or 'This chat has no model.'} The person was asked to "
+                               "pick one; your message runs then and its reply arrives in your inbox.")
+            done.set()
 
     parent_active = (parent or "").strip() or get_active_conv_id()
     if parent_active and parent_active != conv_id:
@@ -1279,6 +1284,79 @@ def run_message_and_wait(
             with _sessions_lock:
                 _child_waiters.get(parent_active, set()).discard(conv_id)
     return result
+
+
+# Messages sent to a chat that had no model and none to take (no usable Default Model,
+# no Ducky AI on this account): kept until the person picks a model, then run in order.
+HELD_FOR_MODEL = "held_for_model"
+_held_messages: dict[str, list[dict[str, Any]]] = {}
+_held_lock = threading.Lock()
+_HELD_MAX = 10
+
+
+def _take_chat_model(conv: Any, settings: PanelSettings, push: PushFn) -> tuple[str, str, str]:
+    """Give a Ducky chat with no model the Default Model, else Ducky AI.
+
+    Returns (model, coding_agent, error); with neither, model is "" and error says why."""
+    from frontend.favorite_models import chat_model_choice
+
+    choice, note, error = chat_model_choice(settings)
+    if choice is None:
+        return "", "ducky", error
+    conv.coding_agent, conv.model = choice.coding_agent, choice.model
+    conv.provider = choice.provider or ("" if choice.coding_agent != "ducky" else conv.provider)
+    try:
+        save_conversation(conv)
+    except Exception:
+        pass
+    notify_chats_changed(conv.id, conv.title, conv.folder_id, push=push, open_tab=False)
+    push({"type": "model_adopted", "conv_id": conv.id, "text": note, "model": choice.model,
+          "coding_agent": choice.coding_agent, "provider": choice.provider})
+    return choice.model, choice.coding_agent, ""
+
+
+def _hold_for_model(conv: Any, text: str, mode: str, attachments: list[dict[str, Any]] | None,
+                    parent: str, started_by: str | None, why: str, push: PushFn) -> str:
+    """Keep a message for a chat with no model, and ask the person to pick one."""
+    item = {"text": text, "mode": mode or "agent", "attachments": list(attachments or []),
+            "parent": parent or "", "started_by": started_by}
+    with _held_lock:
+        held = _held_messages.setdefault(conv.id, [])
+        if not any(h["text"] == text for h in held):
+            held.append(item)
+        del held[:-_HELD_MAX]
+        count = len(held)
+    push({"type": "model_needed", "conv_id": conv.id, "held": count, "text": why})
+    try:
+        from frontend.notifications import alert
+
+        who = str(getattr(conv, "title", "") or "").strip() or "A ducky"
+        alert(who, "A message is waiting for you to pick a model.", level="ask", kind="chat",
+              target_id=conv.id, detail="Open the chat and pick a model; the message runs then.")
+    except Exception:
+        pass
+    return HELD_FOR_MODEL
+
+
+def held_for_model(conv_id: str) -> int:
+    with _held_lock:
+        return len(_held_messages.get(conv_id) or [])
+
+
+def release_held_for_model(conv_id: str) -> int:
+    """Run the messages a chat kept while it had no model, oldest first. Returns how many."""
+    with _held_lock:
+        held = _held_messages.pop(conv_id, [])
+    if not held:
+        return 0
+
+    def _worker() -> None:
+        for item in held:
+            run_message(conv_id, item["text"], item["mode"], "", attachments=item["attachments"] or None,
+                        parent=item["parent"], started_by=item["started_by"], queue_if_busy=True)
+
+    threading.Thread(target=_worker, daemon=True, name=f"held-for-model-{conv_id[:8]}").start()
+    return len(held)
 
 
 # Agent messages that arrived mid-turn (queue_if_busy): started when that turn ends.
@@ -1468,20 +1546,21 @@ def run_message(
 
     coding_agent = normalize_coding_agent(getattr(conv, "coding_agent", None) or "ducky")
 
-    # Exact model for this conversation only — never invent from global settings.
+    # Exact model for this conversation only. A Ducky chat with none takes the Default
+    # Model, else UEFN Ducky's own model; with neither, the message waits for the person
+    # to pick one (it used to error, and the agent or team that sent it stopped there).
     turn_model = (model or getattr(conv, "model", None) or "").strip()
-    if not turn_model or turn_model.lower() == "default":
-        push(
-            {
-                "type": "error",
-                "text": (
-                    "No exact model selected for this chat. Pick a model in the composer "
-                    "(or set a Default Model in Settings → LLMs) before sending."
-                ),
-                "conv_id": conv_id,
-            }
-        )
-        return ""
+    if turn_model.lower() == "default":
+        turn_model = ""
+    why = ""
+    if not turn_model and coding_agent == "ducky" and not getattr(conv, "is_group", False):
+        turn_model, coding_agent, why = _take_chat_model(conv, settings, push)
+    if not turn_model:
+        why = why or "This chat has no model. Pick a model below and your message runs."
+        if resume or not (user_text or "").strip():
+            push({"type": "error", "conv_id": conv_id, "text": why})
+            return ""
+        return _hold_for_model(conv, user_text, mode, attachments, parent, started_by, why, push)
 
     # UEFN Ducky is not a local model. The turn is a site-chat post; the Brain
     # workflow chooses the agent and what to show. A leftover Claude Code flag

@@ -12,7 +12,7 @@ exact model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 
@@ -107,6 +107,8 @@ class ResolveErr:
     code: str
     message: str
     requested: str = ""
+    # The failing choice is Settings → LLMs → Default Model, not the profile's own pick.
+    from_default: bool = False
 
 
 ResolveResult = ResolveOk | ResolveErr
@@ -246,11 +248,13 @@ def default_model_selection(settings: Any) -> str:
 
 
 def allow_create_without_model(result: ResolveResult) -> ResolveResult:
-    """Create paths may open with no model. A bad explicit pick still errors.
+    """Create paths may open with no model, also when the Default Model is no longer offered.
+    A bad explicit pick still errors.
 
-    Sending a message is what asks the user to set Settings → LLMs → Default Model.
+    The chat's first message then takes the Default Model or Ducky AI, else waits for the
+    person to pick a model (agent_modes.run_message).
     """
-    if isinstance(result, ResolveErr) and result.code == "model_required":
+    if isinstance(result, ResolveErr) and (result.code == "model_required" or result.from_default):
         return ResolveOk(
             coding_agent="ducky",
             model="",
@@ -312,6 +316,13 @@ def resolve_model_strict(favorite_models: Any, settings: Any) -> ResolveResult:
     global settings.default_model applies. A missing/unavailable selection
     errors — it is never silently replaced by another model.
     """
+    result = _resolve_model_strict(favorite_models, settings)
+    if isinstance(result, ResolveErr) and not first_favorite(favorite_models):
+        return replace(result, from_default=True)
+    return result
+
+
+def _resolve_model_strict(favorite_models: Any, settings: Any) -> ResolveResult:
     requested = first_favorite(favorite_models)
     where = "in the Ducky profile"
     if not requested:
@@ -411,3 +422,61 @@ def resolve_model_strict(favorite_models: Any, settings: Any) -> ResolveResult:
         provider=selection.provider,
         selection=selection,
     )
+
+
+# UEFN Ducky's own model on the account plugin's gateway (shown as "Ducky AI").
+DUCKY_AI_MODEL = "ducky-brain"
+
+
+def ducky_ai_selection() -> ResolveOk | None:
+    """UEFN Ducky's own model, paid from the UEFN Ducky account, when this account has it."""
+    try:
+        from frontend.duckyos_account import DUCKY_AI_PROVIDER, ducky_ai_hidden
+    except Exception:
+        return None
+    if ducky_ai_hidden(DUCKY_AI_PROVIDER) or DUCKY_AI_PROVIDER not in api_backends():
+        return None
+    ids = _available_api_models().get(DUCKY_AI_PROVIDER) or set()
+    model = DUCKY_AI_MODEL if not ids or DUCKY_AI_MODEL in ids else sorted(ids)[0]
+    return ResolveOk(
+        coding_agent="ducky",
+        model=model,
+        provider=DUCKY_AI_PROVIDER,
+        selection=FavoriteSelection(backend=DUCKY_AI_PROVIDER, model_id=model),
+    )
+
+
+def _first_api_model() -> ResolveOk | None:
+    catalog = _available_api_models()
+    for provider in sorted(catalog):
+        ids = sorted(catalog.get(provider) or [])
+        if ids:
+            return ResolveOk(coding_agent="ducky", model=ids[0], provider=provider,
+                             selection=FavoriteSelection(backend=provider, model_id=ids[0]))
+    return None
+
+
+def chat_model_choice(settings: Any, keep_agent: bool = False) -> tuple[ResolveOk | None, str, str]:
+    """The model a chat with none takes: the Default Model, else UEFN Ducky's own model.
+
+    Returns (choice, note, error): note says why the chat got Ducky AI instead of the
+    Default Model; error says why there is no model at all, and the person then picks one
+    in the composer. keep_agent: the chat stays on Ducky's own agent, so a coding-agent
+    Default Model does not apply and the first API model is the last resort.
+    """
+    result = resolve_model_strict(None, settings)
+    if isinstance(result, ResolveOk) and result.model and not (keep_agent and result.coding_agent != "ducky"):
+        return result, "", ""
+    if isinstance(result, ResolveOk):
+        why = ""
+    elif result.code == "model_required":
+        why = "No Default Model is set"
+    else:
+        why = f"Your Default Model {result.requested or default_model_selection(settings)} isn't available"
+    fallback = ducky_ai_selection() or (_first_api_model() if keep_agent else None)
+    if fallback is not None:
+        note = f"{why}, so this ducky uses Ducky AI. Pick another model below anytime." if why else ""
+        if note and fallback.provider != "uefn_ducky":
+            note = note.replace("Ducky AI", fallback.selection.qualified)
+        return fallback, note, ""
+    return None, "", f"{why or 'This ducky has no model'}. Pick a model below and this ducky uses it."
