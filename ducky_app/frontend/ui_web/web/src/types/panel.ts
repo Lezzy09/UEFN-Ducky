@@ -1,6 +1,5 @@
 export type AgentMode = "ask" | "plan" | "agent";
 
-export type ViewId = "chat" | "settings";
 
 export type ChatLayoutMode = "full" | "sidebarHidden";
 

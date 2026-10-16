@@ -30,7 +30,6 @@ import { WindowDrag } from "./components/WindowDrag";
 import { WindowResize } from "./components/WindowResize";
 import { ChatView } from "./views/ChatView";
 import { FocusView } from "./views/FocusView";
-import { SettingsView } from "./views/SettingsView";
 import { useListenerStatus } from "./hooks/useListenerStatus";
 import { useConnectionIcon } from "./hooks/useConnectionIcon";
 import { useProject } from "./hooks/useProject";
@@ -46,15 +45,14 @@ import { UpdateLockOverlay } from "./components/UpdateLockOverlay";
 import {
   NavigationHistoryProvider,
   useNavigationHistoryOptional,
-  viewForHistory,
 } from "./navigation/NavigationHistoryContext";
 import { UndoHistoryProvider, useUndoHistoryOptional } from "./navigation/UndoHistoryContext";
 import { useNavigationShortcuts } from "./navigation/useNavigationShortcuts";
 import { useUndoShortcuts } from "./navigation/useUndoShortcuts";
-import { registerCloseSettingsView, registerOpenSettingsView, requestOpenSettings } from "./navigation/openSettingsTab";
+import { requestOpenSettings } from "./navigation/openSettingsTab";
 import { installDeepLinkListeners, peekStoreInstallRequest, requestOpenStore } from "./navigation/deepLinks";
 import { installOpenFromNotification, installOpenFromParent } from "./remote/openFromParent";
-import { nextChatLayoutMode, type ViewId } from "./types/panel";
+import { nextChatLayoutMode } from "./types/panel";
 import { WINDOW_ID } from "./tabs/tabRegistryClient";
 import { persistDockSnapshot, readDockSnapshot } from "./workspace/workspaceDockStorage";
 import { PluginShellBootBridge } from "./plugin-ui/shellBoot";
@@ -112,21 +110,11 @@ function PluginTrustBridge() {
   return null;
 }
 
-function AppShortcutsBridge({
-  setView,
-  hasProject,
-}: {
-  setView: (v: ViewId) => void;
-  hasProject: boolean;
-}) {
+function AppShortcutsBridge() {
   const nav = useNavigationHistoryOptional();
   const undo = useUndoHistoryOptional();
   useNavigationShortcuts(nav?.back ?? NOOP, nav?.forward ?? NOOP);
   useUndoShortcuts(undo?.undo ?? NOOP, undo?.redo ?? NOOP);
-  useEffect(() => {
-    nav?.registerViewApplier((view) => setView(viewForHistory(view, hasProject)));
-    return () => nav?.registerViewApplier(null);
-  }, [nav, setView, hasProject]);
   return null;
 }
 
@@ -140,7 +128,6 @@ export default function App() {
   if (focusId) {
     return <FocusView focusId={focusId} />;
   }
-  const [currentView, setCurrentView] = useState<ViewId>("chat");
   const [watchWindowId, setWatchWindowId] = useState("");
   const uefnLaunching = useUeFnLaunching();
   // Desktop only: answer direct (tunnel-free) Remote View offers.
@@ -167,20 +154,6 @@ export default function App() {
     setLayoutMode(next);
     persistDockSnapshot({ ...snapshot, leftRailOpen: next === "full" }, WINDOW_ID);
   }, [layoutMode, setLayoutMode]);
-
-  useEffect(() => {
-    if (!hasProject || currentView !== "settings") return;
-    // A project keeps Settings as an editor tab. A full settings page unmounts both rails.
-    setCurrentView("chat");
-  }, [hasProject, currentView]);
-
-  useEffect(() => {
-    return registerOpenSettingsView(() => {
-      setCurrentView((view) => (view === "settings" ? view : "settings"));
-    });
-  }, []);
-
-  useEffect(() => registerCloseSettingsView(() => setCurrentView("chat")), []);
 
   useEffect(() => {
     void loadAudioSettings();
@@ -222,11 +195,8 @@ export default function App() {
     installModelsCatalogAutoRefresh();
   }, []);
 
-  const settingsView = <SettingsView version={listener.version} />;
-
-  const mainContent = currentView === "settings" ? (
-    settingsView
-  ) : (
+  // Settings is only ever an editor tab in ChatView, with or without a project.
+  const mainContent = (
     <ChatView
       layoutMode={layoutMode}
       sidebarRefresh={sidebarRefresh}
@@ -257,7 +227,7 @@ export default function App() {
       <WindowDrag />
       <NavigationHistoryProvider>
       <UndoHistoryProvider>
-      <AppShortcutsBridge setView={setCurrentView} hasProject={hasProject} />
+      <AppShortcutsBridge />
       <PluginTrustBridge />
       <GraphFocusBridge />
       <PluginPrefsHydrate />
@@ -270,8 +240,6 @@ export default function App() {
         <div id="ducky-skin-frame" className="ducky-skin-slot ducky-skin-slot--frame" aria-hidden="true" />
         <PluginCrashBanner />
         <Header
-          currentView={currentView}
-          setView={setCurrentView}
           isOnline={listener.online}
           isWedged={listener.wedged}
           statusText={listener.status_text}

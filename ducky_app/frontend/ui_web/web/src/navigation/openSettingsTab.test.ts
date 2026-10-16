@@ -7,6 +7,7 @@ import {
   openDefaultModelSettings,
   openLlmsProviderSettings,
   peekLlmsShortcutJump,
+  registerOpenSettingsEditorTab,
   registerSettingsTabConsumer,
   requestOpenSettings,
   takePendingLlmsProvider,
@@ -137,5 +138,24 @@ describe("requestOpenSettings debounce", () => {
     requestOpenSettings("Account");
     expect(fn.mock.calls.map((c) => c[0])).toEqual(["Store"]);
     stop();
+  });
+});
+
+describe("Settings is only ever a tab", () => {
+  it("a request before ChatView mounts opens the Settings tab once ChatView is ready", () => {
+    // Oct 16 2026: a Store/Account jump at startup (before ChatView registered its tab)
+    // opened a whole-window Settings page with "< Back", and every later open stayed there.
+    sessionStorage.clear();
+    requestOpenSettings("Store", { storeSlug: "account" });
+    const openTab = vi.fn();
+    const stop = registerOpenSettingsEditorTab(openTab);
+    expect(openTab).toHaveBeenCalledTimes(1);
+    stop();
+    const again = vi.fn();
+    const stopAgain = registerOpenSettingsEditorTab(again);
+    expect(again).not.toHaveBeenCalled(); // the held request opened once
+    requestOpenSettings("LLMs");
+    expect(again).toHaveBeenCalledTimes(1);
+    stopAgain();
   });
 });

@@ -148,11 +148,11 @@ describe("Windows header input", () => {
     expect(toggleMaximize).not.toHaveBeenCalled();
   });
 
-  it("keeps the standalone Settings header's drag filler working", () => {
+  it("keeps the focus window header's drag filler working", () => {
     const { container } = render(<>
       <WindowDrag />
-      <header className="app-header app-header--settings">
-        <button className="no-drag">Back</button>
+      <header className="app-header app-header--focus">
+        <button className="no-drag">Close</button>
         <div className="app-header-drag-fill drag-region app-drag-surface" />
       </header>
     </>);

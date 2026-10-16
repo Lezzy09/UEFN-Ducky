@@ -259,8 +259,7 @@ body.native-caption-input-ready .app-header .drag-region {
   cursor: default;
   pointer-events: none;
 }
-.connection-status-gear,
-.connection-status-back {
+.connection-status-gear {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -268,10 +267,6 @@ body.native-caption-input-ready .app-header .drag-region {
 .connection-status-gear svg {
   width: 18px;
   height: 18px;
-}
-.connection-status-back {
-  white-space: nowrap;
-  line-height: 1;
 }
 
 .connection-status-root {
@@ -532,33 +527,10 @@ body.native-caption-input-ready .app-header .drag-region {
   min-width: 0;
   z-index: 1;
 }
-.app-header-left--settings {
-  flex: 0 0 auto;
-  gap: 8px;
-  position: relative;
-  z-index: 2;
-}
-
-.app-header--settings .connection-status-btn.is-active {
-  position: relative;
-  z-index: 1;
-  width: auto;
-  height: auto;
-  padding: 4px 8px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
 .app-header-drag-fill {
   flex: 1;
   min-width: 0;
   align-self: stretch;
-}
-
-.app-header-trailing--settings {
-  flex: 0 0 auto;
-  position: relative;
-  z-index: 2;
 }
 
 /* Match the left/right chrome stacking. The positioned skin slot otherwise
@@ -813,10 +785,6 @@ body.native-caption-input-ready .app-header .drag-region {
   display: block;
 }
 
-.app-header-main--settings .app-header-status-row,
-.app-header-left--settings .app-header-status-row {
-  flex: 0;
-}
 .app-header-project-label {
   font-size: 13px;
   font-weight: 600;

@@ -1,6 +1,6 @@
 import { requestShowChatComposer } from "../navigation/openChatComposer";
 import { requestOpenDockSide } from "../navigation/openSidebarPanel";
-import { requestCloseSettingsView, requestOpenSettings } from "../navigation/openSettingsTab";
+import { requestOpenSettings } from "../navigation/openSettingsTab";
 import { getTargetElement, settingsTabTargetId } from "../ui-targets/registry";
 import { listEnabledGatewayTours } from "./pluginWalkthroughs";
 import {
@@ -429,11 +429,6 @@ export const APP_SHELL_TOUR: WalkthroughDef = {
       body: "This is the desktop app for your Fortnite islands. The top bar picks an island, shows whether UEFN is connected, and opens Settings.",
       advance: "next",
       mode: "rect",
-      // The tour shows the main window: leave a full Settings page (setup's "Show me how" opens one).
-      onEnter: () => {
-        requestCloseSettingsView();
-        return wait(250);
-      },
     },
     {
       target: "shell.left",

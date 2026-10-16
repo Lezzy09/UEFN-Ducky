@@ -15,7 +15,7 @@ import { useOverlayRailSession } from "../hooks/useOverlayRailSession";
 import { toggleOverlayRail } from "../workspace/overlayRailSession";
 import { QuickOpenBar } from "./quick-open/QuickOpenBar";
 import { useQuickOpenBridge } from "../contexts/QuickOpenBridge";
-import type { ChatLayoutMode, ListenerStatus, ProjectInfo, ViewId } from "../types/panel";
+import type { ChatLayoutMode, ListenerStatus, ProjectInfo } from "../types/panel";
 import { getApi, isRemote } from "../hooks/usePanelApi";
 import { isNativeWindowChrome } from "../utils/nativeWindowChrome";
 import { requestOpenSettings } from "../navigation/openSettingsTab";
@@ -39,8 +39,6 @@ import type { PluginHeaderButton } from "../hooks/usePluginContributions";
 
 interface HeaderProps {
   variant?: "main" | "focus";
-  currentView?: ViewId;
-  setView?: (v: ViewId) => void;
   isOnline: boolean;
   isWedged?: boolean;
   statusText?: string;
@@ -271,7 +269,6 @@ function PluginHeaderMenu({ buttons }: { buttons: PluginHeaderButton[] }) {
 
 export function Header({
   variant = "main",
-  currentView = "chat",
   isOnline,
   isWedged = false,
   statusText,
@@ -291,8 +288,6 @@ export function Header({
 }: HeaderProps) {
   const [isMaximized, setIsMaximized] = useState(false);
   const isFocus = variant === "focus";
-  // Full-page settings overlay only when no project (welcome). With a project, Settings is an editor tab.
-  const isSettingsOverlay = !isFocus && !hasProject && currentView === "settings";
 
   const handleSettingsToggle = () => {
     requestOpenSettings();
@@ -377,7 +372,6 @@ export function Header({
   };
   const nav = useNavigationHistoryOptional();
   const showNav = !isFocus && !!nav;
-  const sidebarEnabled = isFocus || !isSettingsOverlay;
   const headerActions = useAppHeaderActions();
   const { leftRailOpen, rightRailOpen, hasRightPanels, toggleRightRail, leftRailEnabled, rightRailEnabled } =
     useRightRailOpen();
@@ -387,7 +381,7 @@ export function Header({
   const { hasUpdates: hasStoreUpdates } = useStoreUpdateBadge();
   const narrowHeader = useNarrowLayout();
   const pluginHeaderButtons = useMemo(() => {
-    if (!hasProject || isFocus || isSettingsOverlay) return [];
+    if (!hasProject || isFocus) return [];
     return sortPluginHeaderButtons(pluginContrib.header_buttons).filter((btn) => {
       const isTranslation = btn.plugin_id === "translation" || btn.id === "translation";
       if (!isTranslation && !resolvePluginHeaderAction(btn.action, btn.plugin_id)) return false;
@@ -397,7 +391,6 @@ export function Header({
     headerBtnVisible,
     hasProject,
     isFocus,
-    isSettingsOverlay,
     pluginContrib.header_buttons,
   ]);
   const compactHeader = narrowHeader;
@@ -408,13 +401,12 @@ export function Header({
       <PluginHeaderItem key={`${btn.plugin_id || btn.id}:${btn.id}`} btn={btn} layout="icon" />
     ))
   );
-  const showEditorActions = isFocus || !isSettingsOverlay;
-  const saveAction = showEditorActions ? headerActions.save : null;
-  const workflowAction = showEditorActions && hasProject ? headerActions.verseWorkflow : null;
-  const problemsAction = showEditorActions && hasProject ? headerActions.problems : null;
-  const terminalAction = showEditorActions && hasProject ? headerActions.terminal : null;
+  const saveAction = headerActions.save;
+  const workflowAction = hasProject ? headerActions.verseWorkflow : null;
+  const problemsAction = hasProject ? headerActions.problems : null;
+  const terminalAction = hasProject ? headerActions.terminal : null;
   // The ledger is always reachable once a project is open, even with no other editor action.
-  const showChanges = showEditorActions && hasProject;
+  const showChanges = hasProject;
   const overlayLeftOpen = overlaySession.left;
   const overlayRightOpen = overlaySession.right;
   const leftRailShown = compactHeader
@@ -425,7 +417,7 @@ export function Header({
   const LayoutToggleIcon = layoutToggle.Icon;
   const rightRailToggle = RIGHT_RAIL_TOGGLE_META[rightRailShown ? "open" : "closed"];
   const RightRailToggleIcon = rightRailToggle.Icon;
-  const rightSidebarEnabled = sidebarEnabled && hasRightPanels;
+  const rightSidebarEnabled = hasRightPanels;
   const showNavButtons = showNav && headerBtnVisible("nav");
   const showSearch = !!showQuickOpen && headerBtnVisible("search");
   const showLeftSidebarToggle = leftRailEnabled && headerBtnVisible("leftSidebar");
@@ -497,12 +489,10 @@ export function Header({
   return (
     <header
       ref={headerTargetRef}
-      className={`glass-panel app-header${isFocus ? " app-header--focus" : ""}${isSettingsOverlay ? " app-header--settings" : " drag-region app-drag-surface"}${compactHeader ? " app-header--compact" : ""}${isRemote() ? " app-header--remote" : ""}`}
+      className={`glass-panel app-header${isFocus ? " app-header--focus" : ""} drag-region app-drag-surface${compactHeader ? " app-header--compact" : ""}${isRemote() ? " app-header--remote" : ""}`}
     >
       <div id="ducky-skin-header" className="ducky-skin-slot ducky-skin-slot--header" aria-hidden="true" />
-      <div className={`app-header-left${isSettingsOverlay ? " app-header-left--settings" : ""}`}>
-        {!isSettingsOverlay ? (
-          <>
+      <div className="app-header-left">
           <div className="app-header-status-row">
             <span ref={settingsTargetRef}>
               <ConnectionStatusDropdown
@@ -540,24 +530,13 @@ export function Header({
               />
             )}
           </div>
-          </>
-        ) : (
-          <button
-            type="button"
-            className="no-drag connection-status-btn is-active"
-            title="Back"
-            onClick={() => void handleSettingsToggle()}
-          >
-            <span className="connection-status-back">&lt; Back</span>
-          </button>
-        )}
       </div>
 
-      {isSettingsOverlay || isFocus ? (
+      {isFocus ? (
         <div className="app-header-drag-fill drag-region app-drag-surface" aria-hidden="true" />
       ) : null}
 
-      {!isSettingsOverlay && !isFocus ? (
+      {!isFocus ? (
         <div className="app-header-center drag-region app-drag-surface">
           {compactHeader ? (
             <>
@@ -571,7 +550,7 @@ export function Header({
               onForward={() => nav?.forward()}
               layoutTitle={layoutToggle.title}
               onCycleLayout={onCycleLayout}
-              sidebarEnabled={sidebarEnabled}
+              sidebarEnabled
               showLeftToggle={showLeftSidebarToggle}
               rightTitle={rightRailToggle.title}
               onToggleRight={onToggleRight}
@@ -606,7 +585,7 @@ export function Header({
                 <button
                   type="button"
                   onClick={onCycleLayout}
-                  className={`icon-btn no-drag sidebar-toggle-btn sidebar-toggle-btn--${layoutMode} ${sidebarEnabled ? "" : "is-disabled"}`}
+                  className={`icon-btn no-drag sidebar-toggle-btn sidebar-toggle-btn--${layoutMode}`}
                   title={layoutToggle.title}
                 >
                   <LayoutToggleIcon />
@@ -632,70 +611,68 @@ export function Header({
         </div>
       ) : null}
 
-      <div className={`app-header-trailing${isSettingsOverlay ? " app-header-trailing--settings" : ""}`}>
-        {showEditorActions ? (
-          <span className="app-header-editor-actions">
-            {showWorkflow && workflowAction ? (
-              <div
-                className="app-header-verse-workflow no-drag"
-                title={workflowAction.lastLog || "Verse workflow"}
+      <div className="app-header-trailing">
+        <span className="app-header-editor-actions">
+          {showWorkflow && workflowAction ? (
+            <div
+              className="app-header-verse-workflow no-drag"
+              title={workflowAction.lastLog || "Verse workflow"}
+            >
+              <button
+                type="button"
+                className="connection-status-btn app-header-workflow-btn"
+                onClick={workflowAction.onCompile}
+                disabled={workflowAction.busy || workflowAction.buildState === 3}
+                title="Build Verse project"
               >
+                <img src={workflowAction.buildIconSrc} alt="" draggable={false} />
+              </button>
+              {workflowAction.canPush ? (
                 <button
                   type="button"
                   className="connection-status-btn app-header-workflow-btn"
-                  onClick={workflowAction.onCompile}
-                  disabled={workflowAction.busy || workflowAction.buildState === 3}
-                  title="Build Verse project"
+                  onClick={workflowAction.onPush}
+                  disabled={workflowAction.busy}
+                  title="Push Verse changes"
                 >
-                  <img src={workflowAction.buildIconSrc} alt="" draggable={false} />
+                  <img src="/verse-workflow/verse-icon-upload.svg" alt="" draggable={false} />
                 </button>
-                {workflowAction.canPush ? (
-                  <button
-                    type="button"
-                    className="connection-status-btn app-header-workflow-btn"
-                    onClick={workflowAction.onPush}
-                    disabled={workflowAction.busy}
-                    title="Push Verse changes"
-                  >
-                    <img src="/verse-workflow/verse-icon-upload.svg" alt="" draggable={false} />
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-            {problemsAction ? (
-              <span className="app-header-problems">
-                <VerseProblemsDropdown {...problemsAction} onOpenChange={onProblemsOpenChange} />
-              </span>
-            ) : null}
-            {terminalAction ? (
-              <span className="app-header-terminal">
-                <TerminalHeaderDropdown {...terminalAction} />
-              </span>
-            ) : null}
+              ) : null}
+            </div>
+          ) : null}
+          {problemsAction ? (
+            <span className="app-header-problems">
+              <VerseProblemsDropdown {...problemsAction} onOpenChange={onProblemsOpenChange} />
+            </span>
+          ) : null}
+          {terminalAction ? (
+            <span className="app-header-terminal">
+              <TerminalHeaderDropdown {...terminalAction} />
+            </span>
+          ) : null}
+          <button
+              ref={workflowsTargetRef}
+              type="button"
+              className="icon-btn no-drag"
+              title="Workflows"
+              aria-label="Open Workflows"
+              onClick={() => requestOpenWorkflowsTab()}
+            >
+              <Icons.GitBranch />
+          </button>
+          {showChanges ? (
             <button
-                ref={workflowsTargetRef}
-                type="button"
-                className="icon-btn no-drag"
-                title="Workflows"
-                aria-label="Open Workflows"
-                onClick={() => requestOpenWorkflowsTab()}
-              >
-                <Icons.GitBranch />
+              ref={changesTargetRef}
+              type="button"
+              className="icon-btn app-header-changes-btn"
+              title="Ledger — everything the AI changed, and how to undo it"
+              aria-label="Open ledger"
+              onClick={() => requestOpenChangesTab()}
+            >
+              <Icons.Diff />
             </button>
-            {showChanges ? (
-              <button
-                ref={changesTargetRef}
-                type="button"
-                className="icon-btn app-header-changes-btn"
-                title="Ledger — everything the AI changed, and how to undo it"
-                aria-label="Open ledger"
-                onClick={() => requestOpenChangesTab()}
-              >
-                <Icons.Diff />
-              </button>
-            ) : null}
-          </span>
-        ) : null}
+          ) : null}
+        </span>
         {saveAction ? (
           <button
             type="button"

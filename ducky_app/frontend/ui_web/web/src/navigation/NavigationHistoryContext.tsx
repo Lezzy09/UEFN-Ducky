@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from "react";
 import { isRemote } from "../hooks/usePanelApi";
-import type { ViewId } from "../types/panel";
 import { framedHistType } from "./framedHist";
 import {
   applySettingsHistory,
@@ -32,19 +31,12 @@ function postParent(msg: Record<string, unknown>): void {
 export type NavLocation =
   | { kind: "file"; path: string; name: string }
   | { kind: "chat"; chatId: string; name: string }
-  | { kind: "view"; view: Extract<ViewId, "settings"> }
   | SettingsNavLocation;
-
-/** With a project open, history stays on the chat workspace so the side rails stay mounted. */
-export function viewForHistory(view: ViewId, hasProject: boolean): ViewId {
-  return hasProject ? "chat" : view;
-}
 
 export function sameLocation(a: NavLocation, b: NavLocation): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "file" && b.kind === "file") return a.path === b.path;
   if (a.kind === "chat" && b.kind === "chat") return a.chatId === b.chatId;
-  if (a.kind === "view" && b.kind === "view") return a.view === b.view;
   if (a.kind === "settings" && b.kind === "settings") return sameSettingsLocation(a, b);
   return false;
 }
@@ -65,8 +57,6 @@ export interface NavigationHistoryValue {
   peekBack: () => NavLocation | null;
   /** Overwrite the current stack entry without applying it (UI already updated). */
   replace: (loc: NavLocation) => void;
-  /** App-level: switch the top-level view (chat/settings) when a location is applied. */
-  registerViewApplier: (fn: ((view: ViewId) => void) | null) => void;
   /** ChatView-level: open/focus the tab for a file/chat/settings location. */
   registerOpenApplier: (fn: ((loc: NavLocation) => void) | null) => void;
 }
@@ -76,7 +66,6 @@ const NavigationHistoryContext = createContext<NavigationHistoryValue | null>(nu
 export function NavigationHistoryProvider({ children }: { children: ReactNode }) {
   const stackRef = useRef<NavLocation[]>([]);
   const indexRef = useRef(-1);
-  const viewApplierRef = useRef<((view: ViewId) => void) | null>(null);
   const openApplierRef = useRef<((loc: NavLocation) => void) | null>(null);
   const [flags, setFlags] = useState({ canBack: false, canForward: false });
 
@@ -136,17 +125,8 @@ export function NavigationHistoryProvider({ children }: { children: ReactNode })
       const loc = stackRef.current[idx];
       if (!loc) return;
       indexRef.current = idx;
-      if (loc.kind === "view") {
-        viewApplierRef.current?.(loc.view);
-      } else if (loc.kind === "settings") {
-        // Welcome overlay: flip App view. Project mode: ChatView opens the Settings editor tab.
-        viewApplierRef.current?.("settings");
-        openApplierRef.current?.(loc);
-        applySettingsHistory(loc);
-      } else {
-        viewApplierRef.current?.("chat");
-        openApplierRef.current?.(loc);
-      }
+      openApplierRef.current?.(loc);
+      if (loc.kind === "settings") applySettingsHistory(loc);
       syncFlags();
     },
     [syncFlags],
@@ -191,9 +171,6 @@ export function NavigationHistoryProvider({ children }: { children: ReactNode })
     return () => window.removeEventListener("message", onMsg);
   }, []);
 
-  const registerViewApplier = useCallback((fn: ((view: ViewId) => void) | null) => {
-    viewApplierRef.current = fn;
-  }, []);
   const registerOpenApplier = useCallback((fn: ((loc: NavLocation) => void) | null) => {
     openApplierRef.current = fn;
   }, []);
@@ -208,7 +185,6 @@ export function NavigationHistoryProvider({ children }: { children: ReactNode })
       peekCurrent,
       peekBack,
       replace,
-      registerViewApplier,
       registerOpenApplier,
     }),
     [
@@ -220,7 +196,6 @@ export function NavigationHistoryProvider({ children }: { children: ReactNode })
       peekCurrent,
       peekBack,
       replace,
-      registerViewApplier,
       registerOpenApplier,
     ],
   );

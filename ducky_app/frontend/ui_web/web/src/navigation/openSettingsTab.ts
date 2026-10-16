@@ -78,10 +78,10 @@ let pendingTab: SettingsTab | null = null;
 let pendingDuckyProfileId: string | null = null;
 let pendingNewDucky = false;
 let duckyDeepLinkEpoch = 0;
-/** No-project / welcome: full-page settings view. */
-let openSettingsView: (() => void) | null = null;
-/** Project open: VS Code–style singleton editor tab. Preferred when registered. */
+/** ChatView: VS Code–style singleton Settings editor tab. Settings is only ever this tab. */
 let openSettingsEditorTab: (() => void) | null = null;
+/** Settings asked for before ChatView mounted (startup Store/Account jumps, deep links). */
+let pendingEditorOpen = false;
 const tabConsumers = new Set<(tab: SettingsTab) => void>();
 const duckyDeepLinkConsumers = new Set<(epoch: number) => void>();
 let lastRequestAt = 0;
@@ -99,31 +99,13 @@ function flushDuckyDeepLink(): void {
   for (const consumer of duckyDeepLinkConsumers) consumer(duckyDeepLinkEpoch);
 }
 
-/** App-level: switch to the settings view when no project / welcome. */
-export function registerOpenSettingsView(fn: () => void): () => void {
-  openSettingsView = fn;
-  return () => {
-    if (openSettingsView === fn) openSettingsView = null;
-  };
-}
-
-let closeSettingsView: (() => void) | null = null;
-
-/** App-level: leave the full Settings page for the main view (a project keeps Settings as a tab). */
-export function registerCloseSettingsView(fn: () => void): () => void {
-  closeSettingsView = fn;
-  return () => {
-    if (closeSettingsView === fn) closeSettingsView = null;
-  };
-}
-
-export function requestCloseSettingsView(): void {
-  closeSettingsView?.();
-}
-
-/** ChatView: open/focus the Settings editor tab when a project is loaded. */
+/** ChatView: open/focus the Settings editor tab, with or without a project. */
 export function registerOpenSettingsEditorTab(fn: () => void): () => void {
   openSettingsEditorTab = fn;
+  if (pendingEditorOpen) {
+    pendingEditorOpen = false;
+    fn();
+  }
   return () => {
     if (openSettingsEditorTab === fn) openSettingsEditorTab = null;
   };
@@ -211,11 +193,12 @@ export function requestOpenSettings(
     pendingNewDucky = true;
     duckyDeepLinkEpoch += 1;
   }
-  // Prefer editor tab when ChatView is mounted (project open).
+  // Always the editor tab. A whole-window Settings page used to open when ChatView had not
+  // mounted yet (startup Store/Account jumps, deep links) and then kept every later open.
   if (openSettingsEditorTab) {
     openSettingsEditorTab();
   } else {
-    openSettingsView?.();
+    pendingEditorOpen = true;
   }
   flushPendingTab();
   if (opts?.duckyProfileId || opts?.newDucky) flushDuckyDeepLink();
