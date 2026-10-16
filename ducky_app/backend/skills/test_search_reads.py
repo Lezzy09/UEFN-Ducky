@@ -52,3 +52,16 @@ def test_blurb_handles_empty_label_prefix_and_block_scalars() -> None:
     assert store._label_with_blurb("Sky", {"description": ""}, 50) == "Sky"
     assert store._label_with_blurb("Sky", {"description": ">-"}, 50) == "Sky"
     assert store._label_with_blurb("Sky", {"description": "Sky — night looks"}, 50) == "Sky: night looks"
+
+
+def test_skill_search_hits_carry_only_what_an_agent_uses() -> None:
+    # Scores, match details and ids already inside `read` were about a third of each hit.
+    from backend.tools.verse.skill_tool import _lean
+
+    row = {"kind": "section", "title": "Stars", "where": "Sky > Starfield > Stars", "snippet": "Make stars.",
+           "score": 0.03, "pack": "sky", "subskill": "starfield", "section": "Stars", "plugin": "p",
+           "read": 'skill_read_subskill(pack_id="sky", subskill_id="starfield", section="Stars")',
+           "match": {"keyword_rank": 1, "meaning": 0.6}}
+    assert _lean(row) == {"where": row["where"], "snippet": row["snippet"], "read": row["read"]}
+    assert _lean({"kind": "tool", "tool": "spawn_actor", "snippet": "Place an actor.", "read": 'ducky_get_tools(name="spawn_actor")',
+                  "where": ""}) == {"tool": "spawn_actor", "snippet": "Place an actor.", "read": 'ducky_get_tools(name="spawn_actor")'}

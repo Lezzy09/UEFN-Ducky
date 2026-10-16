@@ -139,6 +139,29 @@ its own background "search-index" thread and many request threads.
   large write used to leave it at its high-water mark while any process kept the file
   open.
 
+## Token cost
+
+`skill_search` returns 5 hits by default, each only where it is, a snippet and the
+`read` call (scores, match details and the ids inside `read` were a third of every hit);
+the app's own search boxes keep the full rows. `ducky_get_tools(pattern=)` returns 10
+schemas per page by default (each about 210 tokens).
+
+Measured on the installed skills (123 packs) and a 1,257-tool catalog, tokens estimated
+as characters / 4, counting everything an agent reads until it reaches the right file or
+tool (at most three reads):
+
+| | Before | Search | Per-turn hint |
+|---|---|---|---|
+| Skills: right file reached | 51% | 94% | 100% (on the 40% of questions that get a hint) |
+| Skills: tokens per right answer | 5,185 | 1,947 | 1,404 |
+| Tools: right tool reached | 31% | 97% (`skill_search(kind="tools")` + one schema) | |
+| Tools: tokens per right answer | 1,617 | 596 | |
+
+Before, the agent picked whole files by their ids and tools by all-words matching (which
+usually returned nothing). The skill index in Ducky's own system prompt grew by about
+1,400 tokens (pack descriptions and the `skill_search` lines); it is part of the cached
+prompt prefix. Coding agents (Codex, Claude Code, Cursor) do not get that index.
+
 ## Fallbacks
 
 No model folder or a load error → keyword search only (logged once). An index

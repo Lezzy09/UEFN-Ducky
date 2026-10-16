@@ -258,7 +258,7 @@ def _ranked_tool_names(
 async def ducky_get_tools(
     name: str = "",
     pattern: str = "",
-    limit: int = 20,
+    limit: int = 10,
     pretty: bool = False,
     offset: int = 0,
     diagnostics: bool = False,
@@ -282,7 +282,7 @@ async def ducky_get_tools(
 
     n = (name or "").strip()
     p = (pattern or "").strip()
-    lim = max(1, min(int(limit or 20), 50))
+    lim = max(1, min(int(limit or 10), 50))
     tools = [t for t in await list_mcp_tools() if t.name not in EXCLUDED_TOOLS]
     by_name = {t.name: t for t in tools}
     revision = catalog_revision(tools)

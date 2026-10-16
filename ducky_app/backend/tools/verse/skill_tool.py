@@ -58,8 +58,18 @@ def skill_read_subskill(
         return f"ERROR: {e}"
 
 
+def _lean(row: dict) -> dict:
+    """What an agent needs from a hit: where it is, a snippet and the call that opens it.
+
+    Scores, match details and the ids already inside ``read`` cost about a third of every
+    hit's tokens (the app's own search boxes keep them).
+    """
+    out = {k: row[k] for k in ("tool", "where", "snippet", "read") if row.get(k)}
+    return out
+
+
 @mcp.tool()
-async def skill_search(query: str, limit: int = 8, kind: str = "", pretty: bool = False) -> str:
+async def skill_search(query: str, limit: int = 5, kind: str = "", pretty: bool = False) -> str:
     """Find the skill section or tool for a task, by meaning and keywords, in plain words.
 
     Searches every skill pack you can use (UEFN Ducky's own, yours, Store and plugin
@@ -73,19 +83,19 @@ async def skill_search(query: str, limit: int = 8, kind: str = "", pretty: bool 
     if not text:
         return tool_json({"ok": False, "error": 'query is required, e.g. skill_search("night sky material")'})
     want = (kind or "skills").strip().lower()
-    lim = max(1, min(int(limit or 8), 25))
+    lim = max(1, min(int(limit or 5), 25))
     out: dict = {"query": text}
     try:
         if want in ("skills", "skill", "all"):
             # The run's skill selection lives in context vars: carry them into the worker thread.
             ctx = search_query.chat_context()
-            out["skills"] = await asyncio.to_thread(search_query.search, text, limit=lim, context=ctx)
+            out["skills"] = [_lean(r) for r in await asyncio.to_thread(search_query.search, text, limit=lim, context=ctx)]
         if want in ("tools", "tool", "all"):
             from backend.agent.tools import list_mcp_tools
             from backend.agent.toolsets.excluded import EXCLUDED_TOOLS
 
             names = {t.name for t in await list_mcp_tools() if t.name not in EXCLUDED_TOOLS}
-            out["tools"] = await asyncio.to_thread(search_query.search_tools, text, names, limit=lim)
+            out["tools"] = [_lean(r) for r in await asyncio.to_thread(search_query.search_tools, text, names, limit=lim)]
     except Exception as exc:  # noqa: BLE001 — the index is a convenience, never a blocker
         out["error"] = f"search unavailable ({type(exc).__name__})"
     found = any(out.get(k) for k in ("skills", "tools"))
