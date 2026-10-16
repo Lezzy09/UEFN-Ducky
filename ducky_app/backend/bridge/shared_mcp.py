@@ -332,10 +332,23 @@ def _tool_row(tool: Any) -> dict[str, Any]:
 
 
 def _call_result(raw: Any) -> dict[str, Any]:
-    if isinstance(raw, tuple) and raw:
+    """FastMCP's call_tool return as a CallToolResult body, shaped as the stdio server shapes it.
+
+    A tool with an outputSchema returns (content, structured). Keeping only the content
+    made Claude Code reject every such result: "Tool X has an output schema but did not
+    return structured content".
+    """
+    structured: Any = None
+    if isinstance(raw, tuple) and len(raw) == 2:
+        raw, structured = raw
+    elif isinstance(raw, tuple) and raw:
         raw = raw[0]
+    if hasattr(raw, "model_dump") and hasattr(raw, "content"):
+        return raw.model_dump(by_alias=True, exclude_none=True)  # the tool's own CallToolResult
     if isinstance(raw, dict) and "content" in raw:
         return raw
+    if isinstance(raw, dict):
+        structured, raw = raw, [{"type": "text", "text": json.dumps(raw, indent=2)}]
     blocks: list[Any]
     if isinstance(raw, list):
         blocks = []
@@ -346,8 +359,12 @@ def _call_result(raw: Any) -> dict[str, Any]:
                 blocks.append(item)
             else:
                 blocks.append({"type": "text", "text": str(getattr(item, "text", item))})
-        return {"content": blocks, "isError": False}
-    return {"content": [{"type": "text", "text": "" if raw is None else str(raw)}], "isError": False}
+    else:
+        blocks = [{"type": "text", "text": "" if raw is None else str(raw)}]
+    result: dict[str, Any] = {"content": blocks, "isError": False}
+    if structured is not None:
+        result["structuredContent"] = structured
+    return result
 
 
 def _plugins_ready() -> bool:
