@@ -101,6 +101,7 @@ _READONLY_TOOL_PREFIXES = (
     "ducky_memory_overview",
     "uefn_skill",
     "skill_read_subskill",
+    "skill_search",
     "ik_retarget_capabilities",
 )
 
@@ -826,7 +827,15 @@ class AgentRunner:
         # Frozen/dynamic split is host-owned and unconditional. enable_cache
         # only adds provider markers. Volatile memory/plan/status is a tail message.
         system = prompt_cache.frozen_system
-        volatile_tail = with_user_request(prompt_cache.dynamic_system, user_text)
+        dynamic = prompt_cache.dynamic_system
+        if not resume:
+            # The best skill sections for this request ride in the live tail, never the cached prefix.
+            from backend.search.hints import skill_hint
+
+            hint = await asyncio.to_thread(skill_hint, user_text, conv=self.config.conv)
+            if hint:
+                dynamic = f"{dynamic.strip()}\n\n{hint}" if (dynamic or "").strip() else hint
+        volatile_tail = with_user_request(dynamic, user_text)
         stream_cache = markers_only_payload(prompt_cache) if prompt_cache.enable_cache else None
 
         working_history = list(history)

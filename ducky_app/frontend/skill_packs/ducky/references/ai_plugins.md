@@ -164,6 +164,7 @@ settings), `contributes`, `"backend": {"entry": "backend", "register": "register
 | `api.register_panel_rpc(name, fn)` | Panel `plugin.call` target. `fn` is called with **keyword** arguments: `fn(**params)`. |
 | `api.call_tool(name, arguments=None)` | Call any Ducky MCP tool in-process, with the same approvals as the agent; returns the parsed result, raises `ValueError` on failure. |
 | `api.data` | Docs and files in the plugin's data scope (`plugin_data`). Tools of a plugin that uses it get `scope` (`local` / `team <name>`) added to their dict results. |
+| `api.search.upsert(id, title, text, meta=None)` / `.delete(id)` / `.clear()` / `.query(text, limit=10)` | Make the plugin's own records (pages, cards, entries) findable by meaning and keywords. Only this plugin's records in its data scope; removed on uninstall. Expose them to agents through your own tool that calls `api.search.query`. One record per section of a long document. |
 | `api.changeset.record(command=, kind=, ident=, facet=, before=, inverse=, slot=)` | Changes ledger entry; never raises. |
 | `api.listener(command, params, timeout=None)` | One command to the live UEFN listener. |
 | `api.http_json(method, url, …)`, `api.poll(…)` | HTTP JSON and polling helpers. |
@@ -185,6 +186,22 @@ prefs_plugin_get` then `prefs_plugin_get(api.plugin_id).get("<property id>")`.
 Push a live update to your panels: `from frontend.ui_web.verse_editor.panel_events
 import push_agent_event` then `push_agent_event({"type": "<id>_changed", …})`; the
 panel subscribes with `plugin.subscribe`.
+
+### Make it findable
+
+Agents find skills and tools with `skill_search` and `ducky_get_tools(pattern=…)`, which
+rank by the words you write. Your skills and tools are indexed the moment the plugin is
+installed; nothing to register. What decides whether they are found:
+
+- Every `skills/*/SKILL.md` and `references/*.md` has a **one-line** `description:` that
+  says what it covers and when to read it (validate fails without one; a `>-` block reads
+  as empty). Add `keywords:` with the words people use.
+- One topic per `##` section: search points an agent at a single section by its heading.
+- Every `@api.tool` docstring **starts** with one line saying what it does and when to use
+  it ("Split the clip under the playhead in two, for cutting a shot."). Validate warns
+  under 30 characters.
+- `ducky_plugin_test` ends with a **search** check: each skill file and tool searched by
+  its own description. Anything outside the top 5 is listed with what beat it: reword it.
 
 ### The panel bridge
 

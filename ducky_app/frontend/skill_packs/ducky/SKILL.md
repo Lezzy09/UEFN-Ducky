@@ -4,7 +4,7 @@ description: "UEFN-Ducky control panel — setup, IDE hookup, Skills studio, cha
 license: Ducky Source-Available License v1.0
 metadata:
   label: UEFN Ducky
-  version: 39
+  version: 40
   managed_by: uefn-ducky
   author: UEFN-Ducky
   copyright: Copyright 2026 UEFN-Ducky
@@ -38,6 +38,11 @@ waits; if the editor still reports busy, call `dismiss_uefn_modal` (Ducky host).
 
 When the UEFN MCP server is available, load pack detail with
 `skill_read_subskill("<pack_id>", "<id>")` only.
+
+Not sure which pack or file covers the task? `skill_search("<what you need>")` searches
+every pack (UEFN Ducky's own, yours, Store and plugin packs) down to single `##`
+sections and returns the exact `skill_read_subskill(..., section="...")` call to read
+just that part. `skill_search(..., kind="tools")` does the same for tools.
 
 **Never** use the IDE Read/open-file tool on `~/.claude/skills/**`,
 `~/.cursor/skills/**`, or `references/*.md` under those trees — Cursor treats

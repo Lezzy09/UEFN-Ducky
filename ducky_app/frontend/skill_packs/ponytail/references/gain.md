@@ -1,5 +1,5 @@
 ---
-description: "Benchmark impact scoreboard"
+description: "Benchmark the impact of ponytail simplifications: lines, files and runtime before and after, as an honest scoreboard"
 metadata:
   label: "Ponytail Gain"
   default_enabled: false

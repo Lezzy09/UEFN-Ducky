@@ -323,6 +323,7 @@ _ALLOW_EXACT: frozenset[str] = frozenset(
         "actor_state_diff",
         "uefn_skill",
         "skill_read_subskill",
+        "skill_search",
         "uefn_editor_python_hints",
         "code_detect_project",
         "code_list_errors",

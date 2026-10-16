@@ -34,3 +34,7 @@ toon_format @ git+https://github.com/toon-format/toon-python.git
 mini-racer==0.14.1
 # Compiled plugins: disassemble a build to prove every PC's CPU runs it (cpu_check.py).
 iced-x86==1.21.0
+# Skill and tool search (backend/search): the meaning model's matrix math and its tokenizer.
+# The model files come from build/fetch_search_model.py (pinned, SHA-256 checked).
+numpy==2.5.4
+tokenizers==0.23.3

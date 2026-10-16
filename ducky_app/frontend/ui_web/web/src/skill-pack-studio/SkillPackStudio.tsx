@@ -28,6 +28,7 @@ import { fileKey, type PackWithFiles, type SkillFile } from "./model/types";
 import { FileEditorPane } from "./components/FileEditorPane";
 import { PackEditorPane } from "./components/PackEditorPane";
 import { CreateReferenceFileModal } from "./components/CreateReferenceFileModal";
+import { SkillSearchHits, useSkillSearch } from "./components/SkillSearchHits";
 import * as api from "./api/skillPackStudioApi";
 import type { SkillPackDraft } from "./api/skillPackStudioApi";
 import { fileToBase64, pickSkillPackZipFile } from "./utils/fileTransfer";
@@ -173,9 +174,10 @@ export function SkillPackStudio({ sectionTab = "skills" }: SkillPackStudioProps)
     void ensurePackContent(selectedKey);
   }, [selectedKey, ensurePackContent]);
 
-  const [wantedSkill, setWantedSkill] = useState<{ packId: string; subId: string } | null>(
+  const [wantedSkill, setWantedSkill] = useState<{ packId: string; subId: string; section?: string } | null>(
     () => takePendingSkillPack(),
   );
+  const [focusSection, setFocusSection] = useState("");
   useEffect(() => {
     const onOpen = (event: Event) => {
       const detail = (event as CustomEvent<{ packId?: string; subId?: string }>).detail;
@@ -199,6 +201,7 @@ export function SkillPackStudio({ sectionTab = "skills" }: SkillPackStudioProps)
       ? pack.files.find((row) => row.id === wantedSkill.subId || row.file.includes(wantedSkill.subId))
       : undefined;
     setFocusId(file?.id ?? null);
+    setFocusSection(wantedSkill.section ?? "");
     setWantedSkill(null);
   }, [wantedSkill, packs, selectedKey, setFocusId, setSelectedKey]);
 
@@ -298,11 +301,14 @@ export function SkillPackStudio({ sectionTab = "skills" }: SkillPackStudioProps)
     }
   }, [confirm, reload]);
 
+  const searchHits = useSkillSearch(query);
   const filtered = useMemo(() => {
     const q = query.trim();
     if (!q) return packs;
-    return packs.filter((p) => matchesQuery(p, q));
-  }, [packs, query]);
+    // Packs the search index found by meaning stay listed even when no word matches.
+    const found = new Set(searchHits.map((h) => h.pack));
+    return packs.filter((p) => matchesQuery(p, q) || found.has(p.id));
+  }, [packs, query, searchHits]);
 
   const selectedPack = selectedKey ? packs.find((p) => p.id === selectedKey) ?? null : null;
   const focusFile =
@@ -459,6 +465,11 @@ export function SkillPackStudio({ sectionTab = "skills" }: SkillPackStudioProps)
               : "No packs match your search."}
           </div>
         ) : (
+          <>
+          <SkillSearchHits
+            hits={searchHits}
+            onOpen={(hit) => setWantedSkill({ packId: hit.pack || "", subId: hit.subskill || "", section: hit.section })}
+          />
           <ul className="catalog-slide-list">
             {filtered.map((pack) => {
               const canDelete = packOriginBadge(pack) === "Created";
@@ -510,6 +521,7 @@ export function SkillPackStudio({ sectionTab = "skills" }: SkillPackStudioProps)
               );
             })}
           </ul>
+          </>
         )
       }
       detailHead={
@@ -575,6 +587,7 @@ export function SkillPackStudio({ sectionTab = "skills" }: SkillPackStudioProps)
                   }
                   onReload={() => void reload(selectedPack.id)}
                   onStatus={setStatusMsg}
+                  focusSection={focusSection}
                 />
               )
             : (

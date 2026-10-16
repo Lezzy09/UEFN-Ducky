@@ -1,5 +1,5 @@
 ---
-description: "Quick reference for modes and subskills"
+description: "Quick reference for ponytail modes, intensity levels and which subskill to enable for audits, reviews and debt"
 metadata:
   label: "Ponytail Help"
   default_enabled: false

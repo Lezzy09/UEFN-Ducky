@@ -978,3 +978,65 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* Skill search hits (meaning + keywords) above the pack list. */
+.sps-search-hits {
+  margin: 0 0 10px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+.sps-search-hits-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 0 0 6px 2px;
+}
+.sps-search-hits-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sps-search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+.sps-search-hit:hover,
+.sps-search-hit:focus-visible {
+  background: var(--btn-hover);
+  outline: none;
+}
+.sps-search-hit:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.sps-search-hit-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.sps-search-hit-where,
+.sps-search-hit-snippet {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sps-hint--nudge {
+  color: var(--warn, var(--accent));
+  margin: 6px 0 0;
+}

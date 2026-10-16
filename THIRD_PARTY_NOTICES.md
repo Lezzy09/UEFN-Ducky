@@ -45,6 +45,17 @@ not affiliated with or endorsed by Epic Games, Inc.
   `autobuild-2026-08-31-13-27` (https://github.com/BtbN/FFmpeg-Builds). Running from source
   (not packaged) downloads the same pinned build into `%LOCALAPPDATA%\UEFN-Ducky\tools\ffmpeg\`.
 
+### Skill and tool search: potion-base-8M, NumPy, Hugging Face Tokenizers
+- **potion-base-8M** (MinishLab, https://huggingface.co/minishlab/potion-base-8M) — **License:** MIT.
+  A model2vec static embedding distilled from BAAI `bge-base-en-v1.5` (MIT). Shipped as
+  `models/search/` inside the app (the embedding matrix as float16, the tokenizer, the config and
+  the upstream model card), fetched at build time at a pinned commit and checked by SHA-256
+  (`build/fetch_search_model.py`). Used only to rank skills and tools by meaning; nothing is
+  downloaded at runtime.
+- **NumPy** — **License:** BSD-3-Clause (© NumPy Developers); its Windows wheel bundles
+  **OpenBLAS** (BSD-3-Clause). https://numpy.org
+- **Tokenizers** (Hugging Face) — **License:** Apache-2.0. https://github.com/huggingface/tokenizers
+
 ### @lore-vcs/sdk
 - **License:** MIT
 - **Copyright:** © 2026 Epic Games, Inc.

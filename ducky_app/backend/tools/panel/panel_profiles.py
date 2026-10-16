@@ -153,7 +153,7 @@ def ducky_profile_get(ducky_id: str, pretty: bool = False) -> str:
 
 @mcp.tool()
 def ducky_profile_set(ducky_id: str, patch: dict[str, Any], pretty: bool = False) -> str:
-    """Edit a ducky profile.
+    """Edit a ducky profile: its name, look, personality, when to use it, model, packs or tools.
 
     patch keys: display_name, style, personality, when_to_use, favorite_model,
     enabled_packs, tool_ids. An unknown `style` returns the valid options.

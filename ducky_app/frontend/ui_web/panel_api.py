@@ -978,6 +978,12 @@ class PanelApi(
             pass
         kick_model_refresh()
         self._push_panel({"type": "uefn_plugins_changed"})
+        try:
+            from backend.search import indexer
+
+            indexer.request_refresh("plugins-ready")  # skills + tools, in the background
+        except Exception:
+            pass
 
     def _start_plugins_load_async(self) -> None:
         """Kick the first plugin load; a no-op once plugins are loaded.

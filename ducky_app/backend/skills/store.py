@@ -843,6 +843,18 @@ def _specialist_opted_in(sel: SkillSelection, pack_id: str) -> bool:
     return pack_id in (sel.enabled_subskills or {})
 
 
+def _label_with_blurb(label: str, manifest: dict[str, Any], limit: int) -> str:
+    """``Label: the start of the pack description`` on one line (blurb cut to ``limit`` chars)."""
+    desc = " ".join(str(manifest.get("description") or "").split())
+    if not desc or desc in (label, ">-", ">", "|"):
+        return label
+    if desc.lower().startswith(label.lower()):
+        desc = desc[len(label):].lstrip(" :—–-")
+    if len(desc) > limit:
+        desc = desc[:limit].rsplit(" ", 1)[0].rstrip(",;:—–- ") + "…"
+    return f"{label}: {desc}" if desc else label
+
+
 def build_skill_prompt(selection: SkillSelection | None = None) -> str:
     """Compact pack + subskill index, plus bodies of non-core always_on refs.
 
@@ -853,6 +865,8 @@ def build_skill_prompt(selection: SkillSelection | None = None) -> str:
     lines: list[str] = [
         "## Available skill packs (lazy-loaded)",
         "Tags: [yours]=you created, [store]=Store, [shipped]=bundled with app, [plugin]=desktop plugin.",
+        'Not sure which pack or file covers it? skill_search("<what you need, in plain words>") '
+        "returns the matching section and the exact skill_read_subskill call to read it.",
         'Call skill_read_subskill("<pack_id>", "core") to load a pack\'s SKILL.md.',
         'Call skill_read_subskill("<pack_id>") with no id to list its reference files, then load one by id.',
         "Load only what the current task needs — do not fetch every pack.",
@@ -875,7 +889,7 @@ def build_skill_prompt(selection: SkillSelection | None = None) -> str:
         pack_tag = _pack_origin_tag(manifest)
         tag = _index_tag_label(pack_tag)
         label = str(manifest.get("label") or pack_id)
-        lines.append(f"- `{pack_id}` [{tag}] — {label}")
+        lines.append(f"- `{pack_id}` [{tag}] — {_label_with_blurb(label, manifest, 100)}")
         for sub in list_subskills(manifest):
             sid = str(sub.get("id") or "")
             if not sid or not _subskill_allowed(pack_id, sub):
@@ -917,6 +931,7 @@ def build_skill_prompt_compact(selection: SkillSelection | None = None) -> str:
     sel = selection or default_skill_selection()
     lines: list[str] = [
         "## Available skill packs (lazy-loaded)",
+        'Find the right file with skill_search("<what you need>"). '
         'Call skill_read_subskill("<pack_id>", "core") for SKILL.md; omit id to list refs.',
         "Load only what the current task needs. Titles are not the skill — do not invent APIs or files from a title.",
         "Never claim a file exists unless workspace_write_file returned that path this turn.",
@@ -936,7 +951,7 @@ def build_skill_prompt_compact(selection: SkillSelection | None = None) -> str:
         pack_tag = _pack_origin_tag(manifest)
         tag = _index_tag_label(pack_tag)
         label = str(manifest.get("label") or pack_id)
-        lines.append(f"- `{pack_id}` [{tag}] — {label}")
+        lines.append(f"- `{pack_id}` [{tag}] — {_label_with_blurb(label, manifest, 60)}")
         for sub in list_subskills(manifest):
             sid = str(sub.get("id") or "")
             if not sid or not _subskill_allowed(pack_id, sub):
@@ -967,7 +982,22 @@ def _subskill_allowed(pid: str, sub: dict[str, Any]) -> bool:
     return sid in allow[pid]
 
 
-def skill_read_subskill(pack_id: str, subskill_id: str = "") -> str:
+def _find_section(body: str, section: str) -> tuple[str, str] | None:
+    """(heading, text) of the ``##``/``###`` section named ``section`` (case and punctuation ignored)."""
+    from backend.search.chunker import slug, split_sections
+
+    want = slug(section)
+    _, sections = split_sections(body)
+    for heading, text in sections:
+        if slug(heading) == want:
+            return heading, text
+    for heading, text in sections:
+        if want and (want in slug(heading) or slug(heading) in want):
+            return heading, text
+    return None
+
+
+def skill_read_subskill(pack_id: str, subskill_id: str = "", section: str = "") -> str:
     pid = normalize_pack_id(pack_id)
     if pid in active_disabled_packs():
         return f"ERROR: pack denied for this ducky: {pid}"
@@ -995,6 +1025,16 @@ def skill_read_subskill(pack_id: str, subskill_id: str = "") -> str:
         return f"ERROR: subskill not found: {pid}/{sid}"
     sub_label = str(sub.get("label") or sid)
     heading = f"## {pack_label}" if sid == CORE_ID else f"## {pack_label} — {sub_label}"
+    if section.strip():
+        found = _find_section(body, section)
+        if found is None:
+            from backend.search.chunker import split_sections
+
+            names = [h for h, _ in split_sections(body)[1]]
+            listed = "\n".join(f"- {h}" for h in names) or "(this file has no ## sections; read it whole)"
+            return f"ERROR: no section {section!r} in {pid}/{sid}. Sections:\n{listed}"
+        title, text = found
+        return f"{heading} > {title}\n\n{text.strip()}"
     return f"{heading}\n\n{body.strip()}"
 
 
@@ -1234,6 +1274,8 @@ def seed_skill_packs(*, force: bool = False) -> list[str]:
 
     if version_changed:
         _write_seeded_app_version(app_version)
+    if any(("seeded ->" in line) or ("merged ->" in line) or line.startswith("Removed skill pack") for line in logs):
+        _skills_changed()
     return logs
 
 
@@ -1275,6 +1317,7 @@ def _bump_pack_version(pack_id: str) -> Path:
         meta["metadata"] = md
     md["version"] = next_skill_version(md.get("version"))
     path.write_text(serialize_frontmatter(meta, body), encoding="utf-8")
+    _skills_changed()
     return path
 
 
@@ -1303,6 +1346,7 @@ def create_skill_pack(pack_id: str, label: str, description: str = "") -> Path:
         serialize_frontmatter(meta, f"# {clean_label}\n\nAdd operator guidance for the agent here.\n"),
         encoding="utf-8",
     )
+    _skills_changed()
     return dest
 
 
@@ -1318,6 +1362,7 @@ def delete_skill_pack(pack_id: str) -> bool:
     dest = appdata_skill_packs_dir() / pid
     if dest.is_dir():
         shutil.rmtree(dest)
+        _skills_changed()
         return True
     return False
 
@@ -1332,6 +1377,7 @@ def reset_skill_pack(pack_id: str) -> Path | None:
         raise ValueError(f"No bundled pack: {pid}")
     dest = appdata_skill_packs_dir() / pid
     _copy_pack_tree(src, dest)
+    _skills_changed()
     return dest
 
 
@@ -1415,6 +1461,7 @@ def save_subskill(pack_id: str, subskill_id: str, text: str) -> Path:
         path.write_text(serialize_frontmatter(meta, text), encoding="utf-8")
     else:
         path.write_text(text if text.endswith("\n") else f"{text.rstrip()}\n", encoding="utf-8")
+    _skills_changed()
     return path
 
 
@@ -1816,6 +1863,7 @@ def import_skill_pack_from_zip(
         result["store_slug"] = str(manifest["store_slug"])
     if manifest.get("source"):
         result["source"] = str(manifest["source"])
+    _skills_changed()
     return result
 
 
@@ -1876,6 +1924,17 @@ def invalidate_skills_revision() -> None:
     global _SKILLS_REV, _SKILLS_REV_AT
     _SKILLS_REV = ""
     _SKILLS_REV_AT = 0.0
+
+
+def _skills_changed() -> None:
+    """A pack changed on disk: drop the memoized revision and re-index search soon."""
+    invalidate_skills_revision()
+    try:
+        from backend.search import indexer
+
+        indexer.request_refresh("skills-only")
+    except Exception:  # noqa: BLE001 — search catches up on its next periodic check
+        pass
 
 
 def conversation_skill_text(

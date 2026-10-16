@@ -2567,7 +2567,7 @@ export interface AppDataProject {
 export interface StoreTable {
   name: string;
   label: string;
-  group: "chats" | "settings" | "changes" | "plans" | "verse" | "logs";
+  group: "chats" | "settings" | "changes" | "plans" | "verse" | "logs" | "search";
   group_label: string;
   description: string;
   rows: number;
@@ -2614,6 +2614,39 @@ export interface StoreOverview {
   clean_boots: number;
   clean_boots_needed: number;
   error: string;
+}
+
+/** Skill and tool search index (backend/search): Database tab card and search boxes. */
+export interface SearchStatus {
+  ok: boolean;
+  error?: string;
+  running: boolean;
+  model: string;
+  model_error: string;
+  docs?: Partial<Record<"pack" | "subskill" | "section" | "tool" | "record", number>>;
+  vectors?: Record<string, number>;
+  last_indexed?: number;
+  sources?: number;
+}
+
+export interface SearchHit {
+  kind: "pack" | "subskill" | "section" | "tool" | "record";
+  title: string;
+  where: string;
+  snippet: string;
+  score: number;
+  pack?: string;
+  subskill?: string;
+  section?: string;
+  tool?: string;
+  plugin?: string;
+  read?: string;
+}
+
+export interface SearchQueryResult {
+  ok: boolean;
+  error?: string;
+  results: SearchHit[];
 }
 
 export interface StoreTablePreview {
@@ -3841,6 +3874,9 @@ export interface PanelApi {
   store_overview(): Promise<StoreOverview>;
   store_table_preview(table: string, limit?: number, offset?: number): Promise<StoreTablePreview>;
   store_action(action: string, arg?: string): Promise<StoreActionResult>;
+  search_status(): Promise<SearchStatus>;
+  search_rebuild(): Promise<{ ok: boolean; error?: string }>;
+  search_query(text: string, kind?: "skills" | "tools", limit?: number): Promise<SearchQueryResult>;
   open_path_in_explorer(path: string): Promise<void>;
   open_project_path_in_explorer(relative_path: string): Promise<void>;
   open_skills_folder(): Promise<void>;

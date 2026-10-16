@@ -56,18 +56,23 @@ export function mcpCatalogForPlugin(plugin: McpPluginDto, catalog: McpCatalogDto
   return categories;
 }
 
-export function filterMcpCategories(categories: McpCategoryDto[], query: string): McpCategoryDto[] {
+export function filterMcpCategories(categories: McpCategoryDto[], query: string, ranked: string[] = []): McpCategoryDto[] {
   const q = query.trim().toLowerCase();
   if (!q) return categories;
+  // ``ranked``: tool names the search index matched by meaning, best first.
+  const rank = new Map(ranked.map((name, i) => [name, i]));
   return categories
     .map((cat) => ({
       ...cat,
-      tools: cat.tools.filter(
-        (t) =>
-          t.name.toLowerCase().includes(q) ||
-          t.description.toLowerCase().includes(q) ||
-          t.category_label.toLowerCase().includes(q),
-      ),
+      tools: cat.tools
+        .filter(
+          (t) =>
+            rank.has(t.name) ||
+            t.name.toLowerCase().includes(q) ||
+            t.description.toLowerCase().includes(q) ||
+            t.category_label.toLowerCase().includes(q),
+        )
+        .sort((a, b) => (rank.get(a.name) ?? Infinity) - (rank.get(b.name) ?? Infinity)),
     }))
     .filter((cat) => cat.tools.length > 0);
 }

@@ -37,3 +37,16 @@ def test_released_build_is_checked(tmp_path: Path) -> None:
     dlls = ["avcodec-63.dll", "avdevice-63.dll", "avfilter-12.dll", "avformat-63.dll"]
     app = _app(tmp_path, ["ffmpeg.exe", "ffprobe.exe", *dlls], dlls)
     assert be.duplicate_ffmpeg_dlls(app) == sorted(dlls)
+
+
+def test_search_model_present(tmp_path: Path) -> None:
+    folder = tmp_path / "_internal" / "models" / "search"
+    folder.mkdir(parents=True)
+    for name in be.SEARCH_MODEL_FILES:
+        (folder / name).write_bytes(b"x")
+    assert be.missing_search_model_files(tmp_path) == []
+
+
+def test_search_model_missing_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "_internal").mkdir()
+    assert be.missing_search_model_files(tmp_path) == list(be.SEARCH_MODEL_FILES)

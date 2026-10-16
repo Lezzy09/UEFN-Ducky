@@ -113,3 +113,25 @@ describe("mcpCatalogForPlugin", () => {
     expect(names).toEqual(["hook_probe_ping"]);
   });
 });
+
+describe("filterMcpCategories with ranked names", () => {
+  it("keeps tools the index matched by meaning and orders them first", async () => {
+    const { filterMcpCategories } = await import("./mcpCatalogForPlugin");
+    const cats = [
+      {
+        id: "scene",
+        label: "Scene",
+        tools: [
+          tool("spawn_actor", { description: "Place an actor in the level." }),
+          tool("save_current_level", { description: "Save the level." }),
+        ],
+      },
+    ];
+    const plain = filterMcpCategories(cats, "place");
+    expect(plain[0].tools.map((t) => t.name)).toEqual(["spawn_actor"]);
+    const ranked = filterMcpCategories(cats, "store the map", ["save_current_level"]);
+    expect(ranked[0].tools.map((t) => t.name)).toEqual(["save_current_level"]);
+    const both = filterMcpCategories(cats, "level", ["spawn_actor"]);
+    expect(both[0].tools.map((t) => t.name)).toEqual(["spawn_actor", "save_current_level"]);
+  });
+});

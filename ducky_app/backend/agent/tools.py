@@ -568,6 +568,7 @@ HOST_ONLY_TOOLS = frozenset(
         "uefn_skill",
         "uefn_editor_python_hints",
         "skill_read_subskill",
+        "skill_search",
         "list_verse_digests",
         "list_verse_types",
         "list_verse_devices",
@@ -889,7 +890,7 @@ async def execute_tool(
 _INVENTED_TOOL_HINT = (
     "Call ducky_call_tool with the flat name (blender_* or prefix__tool). "
     "Do not invent mcp__, computer, or computer_use. "
-    "Find the name with ducky_find_tools."
+    "Find the name with ducky_get_tools(pattern=...) in plain words."
 )
 
 

@@ -865,6 +865,35 @@ class PanelApiWindowMixin:
 
         return run_action(action or "", arg or "")
 
+    # Skill and tool search index (backend/search): Database tab card, studio and picker boxes.
+    def search_status(self) -> dict:
+        from backend.search.indexer import status
+
+        return status()
+
+    def search_rebuild(self) -> dict:
+        from backend.search.indexer import rebuild
+
+        return rebuild()
+
+    def search_query(self, text: str, kind: str = "skills", limit: int = 20) -> dict:
+        """Ranked skills or tools for the app's own search boxes (every installed one)."""
+        from backend.search import query
+        from backend.store.repos import search as repo
+
+        k = (kind or "skills").strip().lower()
+        lim = max(1, min(int(limit or 20), 50))
+        try:
+            if k == "tools":
+                names = {str(d.get("tool_name")) for d in repo.get_docs(repo.find_ids(kind="tool")).values()}
+                rows = query.search(text or "", kinds=query.TOOL_KINDS, limit=lim,
+                                    context=query.chat_context(allowed_tools=names))
+            else:
+                rows = query.search(text or "", limit=lim)
+        except Exception as exc:  # noqa: BLE001 — the box falls back to plain filtering
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "results": []}
+        return {"ok": True, "results": rows}
+
     def _pick_save_file_webview(
         self,
         win: Any,

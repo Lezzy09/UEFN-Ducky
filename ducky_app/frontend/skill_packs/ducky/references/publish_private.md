@@ -1,3 +1,10 @@
+---
+description: "Open, close and restart UEFN, upload a Private Version and run Launch Memory Calculation by driving UEFN's menus with window captures and clicks"
+metadata:
+  label: "UEFN private version and memory calculation"
+  default_enabled: false
+---
+
 # Open UEFN, private version, memory calculation
 
 UEFN has no API for these menus. Drive them with captures and clicks.

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { rankToolNames } from "../hooks/useToolSearch";
 import { ChoiceDropdown, type ChoiceOption } from "../components/ChoiceDropdown";
 import { getApi } from "../hooks/usePanelApi";
 import type { AutomationGraphNodeDto, McpCatalogDto, McpToolDto, McpToolParameterDto } from "../types/panel";
@@ -84,7 +85,7 @@ export function ToolSettings({ node, onChange }: { node: AutomationGraphNodeDto;
   return <>
     <div className="aw-field">
       <span className="aw-field-label">Tool</span>
-      <ChoiceDropdown aria-label="Tool" value={name} options={options} onChange={(next) => onChange({ ...node, config: { ...node.config, name: next } })} placeholder="Choose a tool…" searchable searchPlaceholder="Search tools" showSelectedHint={false} onOpen={onOpen} size="compact" minWidth={300} emptyLabel={status === "loading" ? "Loading tools…" : "No tools available"} footer={status === "error" ? "Could not load tools — reopen to retry" : undefined} />
+      <ChoiceDropdown aria-label="Tool" value={name} options={options} onChange={(next) => onChange({ ...node, config: { ...node.config, name: next } })} placeholder="Choose a tool…" searchable searchPlaceholder="Search tools" rankSearch={rankToolNames} showSelectedHint={false} onOpen={onOpen} size="compact" minWidth={300} emptyLabel={status === "loading" ? "Loading tools…" : "No tools available"} footer={status === "error" ? "Could not load tools — reopen to retry" : undefined} />
     </div>
     {args.valid ? <>
       {parameters.map((parameter) => <ToolArgument key={parameter.name} parameter={parameter} value={args.values[parameter.name]} onChange={(value) => setArgument(parameter.name, value)} />)}

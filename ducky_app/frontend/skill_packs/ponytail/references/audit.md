@@ -1,5 +1,5 @@
 ---
-description: "Whole-repo over-engineering audit"
+description: "Whole-repo over-engineering audit: hunt unused abstractions, speculative options and dead layers, and report them by tag"
 metadata:
   label: "Ponytail Audit"
   default_enabled: false

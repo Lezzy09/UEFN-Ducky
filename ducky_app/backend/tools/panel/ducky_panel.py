@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import json
 import sys
 import time
@@ -191,6 +193,41 @@ def _discovery_miss_context() -> dict[str, Any]:
     return context
 
 
+_seen_catalog_revision = ""
+
+
+def _note_catalog_revision(revision: str) -> None:
+    """A new tool catalog (plugin loaded, MCP server connected): re-index tool search soon."""
+    global _seen_catalog_revision
+    if revision and revision != _seen_catalog_revision:
+        first = not _seen_catalog_revision
+        _seen_catalog_revision = revision
+        if not first:
+            try:
+                from backend.search import indexer
+
+                indexer.request_refresh("tools")
+            except Exception:
+                pass
+
+
+def _ranked_tool_names(tools: list[Any], by_name: dict[str, Any], text: str, limit: int) -> list[str]:
+    """Meaning + keyword hits from the search index first, then the old all-words matches."""
+    from backend.agent.toolsets.tool_index import search_tool_catalog
+
+    names: list[str] = []
+    try:
+        from backend.search import query as search_query
+
+        names = [r["tool"] for r in search_query.search_tools(text, set(by_name), limit=limit) if r.get("tool") in by_name]
+    except Exception:
+        names = []
+    for row in search_tool_catalog(tools, text, limit=limit)["matches"]:
+        if row["name"] not in names:
+            names.append(row["name"])
+    return names
+
+
 @mcp.tool()
 async def ducky_get_tools(
     name: str = "",
@@ -236,18 +273,25 @@ async def ducky_get_tools(
             row["hint"] = "Known tool is currently unavailable; wait for provider recovery before calling. " + row.get("mode_reason", "")
         return row
 
+    _note_catalog_revision(revision)
     if n:
         canonical = n if n in by_name else resolve_invented_tool_name(n, set(by_name))
         if canonical:
             return tool_json({**describe(tool_catalog_row(by_name[canonical])), "revision": revision}, pretty=pretty)
-        close = search_tool_catalog(tools, n, limit=10)
+        close = await asyncio.to_thread(_ranked_tool_names, tools, by_name, n, 10)
         return tool_json({
             "ok": False, "error": f"tool not found in current catalog: {n}",
-            "close_matches": [row["name"] for row in close["matches"]],
+            "close_matches": close[:10],
             "revision": revision, **_discovery_miss_context(),
         }, pretty=pretty)
 
-    page = search_tool_catalog(tools, p, offset=offset, limit=lim)
+    ranked = await asyncio.to_thread(_ranked_tool_names, tools, by_name, p, 50)
+    start = max(0, int(offset))
+    names = ranked[start:start + lim]
+    end = start + len(names)
+    page = {"revision": revision, "total": len(ranked), "count": len(names), "offset": start,
+            "next_offset": end if end < len(ranked) else None,
+            "matches": [tool_catalog_row(by_name[name]) for name in names]}
     page["matches"] = [describe(row) for row in page["matches"]]
     guidance = {"hint": "Invoke a discovered tool only if allowed in the current mode and available. Use next_offset for more matches."}
     if not page["total"]:

@@ -1,0 +1,35 @@
+{"q": "wire a device into a verse field", "expect": ["wire_verse_device_ref"]}
+{"q": "place an actor in the level", "expect": ["spawn_actor"]}
+{"q": "take a screenshot of the viewport", "expect": ["take_high_res_screenshot", "uefn_window_capture"]}
+{"q": "find assets by name in the content browser", "expect": ["search_assets", "list_assets"]}
+{"q": "compile the verse code", "expect": ["workspace_compile_verse"]}
+{"q": "read the UEFN output log", "expect": ["uefn_logs_last", "get_editor_log", "get_log", "uefn_logs_capture"]}
+{"q": "change a property on a placed device", "expect": ["set_actor_properties", "set_verse_editable", "set_object_property"]}
+{"q": "create a material instance", "expect": ["create_material_instance"]}
+{"q": "set a scalar parameter on a material instance", "expect": ["set_material_instance_scalar"]}
+{"q": "retarget an animation to another skeleton", "expect": ["retarget_animation", "retarget_animation_pipeline"]}
+{"q": "import an FBX file", "expect": ["import_asset", "forge_import_mesh"]}
+{"q": "make an NPC character definition", "expect": ["create_npc_character_definition"]}
+{"q": "add an emitter to a Niagara system", "expect": ["add_niagara_emitter"]}
+{"q": "generate terrain for the island", "expect": ["terrain_generate", "landscape_create"]}
+{"q": "scatter trees and grass", "expect": ["foliage_scatter"]}
+{"q": "fill a data table from a CSV file", "expect": ["fill_data_table_from_csv"]}
+{"q": "look up a Verse API in the digest", "expect": ["search_verse_digest", "get_verse_api"]}
+{"q": "ask the person a question with options", "expect": ["ducky_ask_user"]}
+{"q": "write a plan with steps", "expect": ["ducky_create_plan"]}
+{"q": "send a message to another ducky", "expect": ["ducky_send_chat_message", "ducky_agent_send"]}
+{"q": "text to 3D model", "expect": ["meshy_text_to_3d", "meshy_text_to_3d_preview"]}
+{"q": "automatically rig a model", "expect": ["meshy_rig", "forge_rig"]}
+{"q": "run python in Blender", "expect": ["blender_execute_blender_code"]}
+{"q": "remove the background of a photo in Photoshop", "expect": ["photoshop_recipe_remove_background"]}
+{"q": "export the trailer as an MP4", "expect": ["imk_export_save", "imk_export_sequence"]}
+{"q": "press a button on a UEFN popup", "expect": ["uefn_popup_press"]}
+{"q": "run a workflow", "expect": ["run_workflow"]}
+{"q": "undo the changes an agent made", "expect": ["changeset_revert"]}
+{"q": "open a web page in the browser tab", "expect": ["browser_open", "browser_navigate"]}
+{"q": "send a Discord message", "expect": ["discord_send_message"]}
+{"q": "drop an actor onto the ground", "expect": ["snap_actor_to_ground", "get_ground_z"]}
+{"q": "measure the distance between two actors", "expect": ["measure_distance"]}
+{"q": "save the level", "expect": ["save_current_level", "save_all_dirty"]}
+{"q": "show the user a part of the app", "expect": ["ducky_ui_show", "ducky_ui_navigate"]}
+{"q": "upload a picture to the site storage", "expect": ["uefn-duckyos-site__storage_upload", "storage_upload"]}

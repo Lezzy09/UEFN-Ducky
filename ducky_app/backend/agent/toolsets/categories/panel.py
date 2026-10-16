@@ -44,7 +44,7 @@ CORE_TOOLS = frozenset(
         "ducky_get_status",
         "ducky_get_tools",
         "ducky_call_tool",
-        "ducky_find_tools",  # alias — keep registered in tools[] during transition
+        "skill_search",
         "ducky_ask_user",
         "ducky_rename_self",
         "web_search",
@@ -101,6 +101,8 @@ EXTENDED_TOOLS = frozenset(
         "ducky_plugin_errors",
         "ducky_verse_template_list",
         "ducky_verse_template_get",
+        # Old alias of ducky_get_tools(pattern=): still callable, no longer in the floor.
+        "ducky_find_tools",
     }
 ) | _DELEGATION_TOOLS | _STORE_BROWSE | _STORE_MUTATE
 
@@ -112,6 +114,7 @@ PLAN_TOOLS = frozenset(
         "ducky_get_tools",
         "ducky_call_tool",
         "ducky_find_tools",
+        "skill_search",
         "ducky_ask_user",
         "ducky_rename_self",
         "web_search",

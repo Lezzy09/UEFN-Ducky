@@ -32,7 +32,9 @@ Paid licenses are not available yet: don't promise a price or a sale.
 1. The draft passes `ducky_plugin_validate`, `ducky_plugin_test` and
    `ducky_plugin_errors` clean (`plugin_testing`). Plugins with Verse templates also
    pass `verse_template_verify` with UEFN open.
-2. Raise `version` in `plugin.json` (semver) so installs see an update.
+2. Raise `version` in `plugin.json` (semver) so installs see an update. The build
+   report lists skill files without a description and tools with a weak first docstring
+   line: fix them first, or agents won't find the plugin (`ai_plugins` → Make it findable).
 3. Ask the user where it goes (`ducky_ask_user`: their team or public), which team owns
    it (their team ids are in `ducky_team_plugins()` / the Account panel), and for one
    line of release notes.

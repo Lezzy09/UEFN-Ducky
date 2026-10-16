@@ -1,10 +1,10 @@
 ---
 name: ponytail
-description: "YAGNI / minimal code (MIT)"
+description: "Ponytail: YAGNI and minimal-code rules for writing, reviewing and trimming code; the lazy ladder, intensity levels and when not to cut"
 license: MIT
 metadata:
   label: Ponytail
-  version: 7
+  version: 8
   source: "https://github.com/DietrichGebert/ponytail"
   author: Dietrich Gebert
   copyright: Copyright Dietrich Gebert / ponytail contributors

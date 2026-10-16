@@ -49,6 +49,8 @@ TABLES: dict[str, tuple[str, str, str, bool]] = {
     "usage_calls": ("Usage ledger", "logs", "Provider calls with tokens and cost (90-day retention).", True),
     "cache_docs": ("Cache documents", "logs", "Model lists, store catalog, skill manifests, perf reports.", True),
     "captures": ("Capture index", "logs", "Screenshots under tool_captures/, pruned by row.", True),
+    "search_docs": ("Search index", "search", "Skills, sections, tools and plugin records agents search; rebuilt by itself.", True),
+    "search_vecs": ("Search vectors", "search", "Meaning vectors for the search index; rebuilt by itself.", True),
 }
 
 GROUPS: dict[str, str] = {
@@ -58,6 +60,7 @@ GROUPS: dict[str, str] = {
     "plans": "Plans & memory",
     "verse": "Verse",
     "logs": "Logs & caches",
+    "search": "Search",
 }
 
 _SENSITIVE_KEY = re.compile(r"(key|token|secret|password|credential|cookie)", re.IGNORECASE)
@@ -266,6 +269,9 @@ def _clear_table(table: str) -> dict[str, Any]:
                     pass
         if table == "digest_files":
             conn.execute("DELETE FROM digest_lines")
+        if table in ("search_docs", "search_vecs"):
+            # Forget what was indexed so the next refresh rebuilds every source.
+            conn.execute("DELETE FROM search_state")
         cur = conn.execute(f"DELETE FROM {table}")
         removed = cur.rowcount
     if table in ("digest_files", "digest_lines"):
@@ -273,6 +279,13 @@ def _clear_table(table: str) -> dict[str, Any]:
             from backend.tools.verse import verse_digests
 
             verse_digests.clear_cache()
+        except Exception:  # noqa: BLE001
+            pass
+    if table in ("search_docs", "search_vecs"):
+        try:
+            from backend.search import indexer
+
+            indexer.request_refresh("cleared")
         except Exception:  # noqa: BLE001
             pass
     if table == "verse_diagnostics":

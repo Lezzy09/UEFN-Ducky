@@ -344,6 +344,9 @@ class _Backend:
 
     def __init__(self) -> None:
         self.tools: set[str] = set()
+        self.tool_docs: dict[str, str] = {}  # tool name -> first docstring line ('' when none)
+        self.func_docs: dict[str, str] = {}  # function name -> first docstring line
+        self.tool_funcs: dict[str, str] = {}  # api.tool(fn, name=...) form: tool name -> function name
         self.rpcs: set[str] = set()
         self.nodes: set[str] = set()
         self.source_reads: list[str] = []
@@ -351,11 +354,14 @@ class _Backend:
     def scan(self, rel: str, tree: ast.AST) -> None:
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.func_docs[node.name] = (ast.get_docstring(node) or "").strip().split("\n", 1)[0].strip()
                 for deco in node.decorator_list:
                     target = deco.func if isinstance(deco, ast.Call) else deco
                     if _call_name(target) == "tool":
                         named = _kw_str(deco, "name") if isinstance(deco, ast.Call) else ""
                         self.tools.add(named or node.name)
+                        doc = (ast.get_docstring(node) or "").strip()
+                        self.tool_docs[named or node.name] = doc.split("\n", 1)[0].strip()
                     elif _call_name(target) in ("register_pipeline_node", "register_automation_node"):
                         if isinstance(deco, ast.Call) and _first_str(deco):
                             self.nodes.add(_first_str(deco))
@@ -368,6 +374,7 @@ class _Backend:
                 self.nodes.add(_first_str(node))
             elif name == "tool" and node.args and isinstance(node.args[0], ast.Name):
                 self.tools.add(_kw_str(node, "name") or node.args[0].id)
+                self.tool_funcs[_kw_str(node, "name") or node.args[0].id] = node.args[0].id
             self._source_read(rel, node, name)
 
     def _source_read(self, rel: str, call: ast.Call, name: str) -> None:
@@ -408,7 +415,7 @@ class _Backend:
             )
 
 
-def scan_backend(root: Path) -> _Backend:
+def scan_backend(root: Path, *, skip_tests: bool = False) -> _Backend:
     found = _Backend()
     backend = root / "backend"
     if not backend.is_dir():
@@ -416,6 +423,8 @@ def scan_backend(root: Path) -> _Backend:
     for py in sorted(backend.rglob("*.py")):
         if any(part in _SKIP_PARTS - {"backend"} for part in py.relative_to(root).parts):
             continue
+        if skip_tests and (py.name.startswith(("test_", "conftest")) or "tests" in py.relative_to(root).parts):
+            continue  # fixture tools in tests are not what agents search
         try:
             tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
         except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
@@ -485,6 +494,75 @@ def check_skill(root: Path, plugin_id: str) -> list[str]:
         f"Add skills/{plugin_id}/SKILL.md (front matter name: {plugin_id}, then what each tool does and "
         "when to use it) so later chats know the plugin's tools."
     ]
+
+
+# Search finds skills and tools by their descriptions; these are the floors.
+MIN_SKILL_DESCRIPTION = 40
+MIN_TOOL_FIRST_LINE = 30
+_BLOCK_SCALARS = frozenset({">", ">-", ">+", "|", "|-", "|+"})
+
+
+def _skill_description(path: Path) -> str | None:
+    """The one-line ``description:`` of a skill file; None when missing or multi-line."""
+    from backend.skills.store import parse_frontmatter
+
+    try:
+        meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+    desc = str(meta.get("description") or "").strip()
+    return None if not desc or desc in _BLOCK_SCALARS else desc
+
+
+def check_findability(root: Path, plugin_id: str = "") -> tuple[list[str], list[str]]:
+    """(errors, warnings) for what makes a plugin findable by skill and tool search.
+
+    Error: a skill file (``skills/*/SKILL.md`` or ``references/*.md``) without a one-line
+    ``description:``. Warning: a description under 40 characters, or an ``@api.tool``
+    whose docstring has no first line of at least 30 characters.
+    """
+    del plugin_id
+    errors, warnings = skill_description_issues(root / "skills", root)
+    return errors, warnings + tool_docstring_issues(root)
+
+
+def skill_description_issues(skills: Path, base: Path) -> tuple[list[str], list[str]]:
+    """(errors, warnings) for every pack folder under ``skills`` (paths shown relative to ``base``)."""
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not skills.is_dir():
+        return errors, warnings
+    for pack in sorted(p for p in skills.iterdir() if (p / "SKILL.md").is_file()):
+        refs = sorted((pack / "references").glob("*.md")) if (pack / "references").is_dir() else []
+        for path in [pack / "SKILL.md", *refs]:
+            rel = path.relative_to(base).as_posix()
+            desc = _skill_description(path)
+            if desc is None:
+                errors.append(
+                    f"{rel}: add a one-line `description:` to its front matter (what it covers and when to "
+                    "read it). Skill search and the skill index show it; a multi-line `>-` block reads as empty."
+                )
+            elif len(desc) < MIN_SKILL_DESCRIPTION:
+                warnings.append(
+                    f"{rel}: description {desc!r} is short; say what it covers and when to read it "
+                    f"(at least {MIN_SKILL_DESCRIPTION} characters) so search can find it."
+                )
+    return errors, warnings
+
+
+def tool_docstring_issues(root: Path) -> list[str]:
+    """Warnings for tools under ``root/backend`` whose docstring's first line is missing or short."""
+    warnings: list[str] = []
+    found = scan_backend(root, skip_tests=True)
+    for name in sorted(found.tools):
+        first = found.tool_docs.get(name) or found.func_docs.get(found.tool_funcs.get(name, ""), "")
+        if len(first) < MIN_TOOL_FIRST_LINE:
+            what = "has no docstring" if not first else f"starts {first!r}"
+            warnings.append(
+                f"tool {name} {what}: begin its docstring with one line that says what it does and when to "
+                f"use it (at least {MIN_TOOL_FIRST_LINE} characters); tool search ranks by it."
+            )
+    return warnings
 
 
 def lint_draft(root: Path, manifest: dict[str, Any], plugin_id: str) -> list[str]:

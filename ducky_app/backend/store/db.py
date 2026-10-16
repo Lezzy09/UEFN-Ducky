@@ -429,10 +429,13 @@ def migrate(conn: sqlite3.Connection) -> int:
         sql = path.read_text(encoding="utf-8")
         conn.execute("BEGIN IMMEDIATE")
         try:
-            # Not executescript(): it would COMMIT behind our back.
-            for statement in _split_statements(sql):
-                conn.execute(statement)
-            conn.execute(f"PRAGMA user_version={number}")
+            # Another process opening the same file may have applied this step while we
+            # waited for the write lock; re-running it would fail (ALTER TABLE ADD COLUMN).
+            if user_version(conn) < number:
+                # Not executescript(): it would COMMIT behind our back.
+                for statement in _split_statements(sql):
+                    conn.execute(statement)
+                conn.execute(f"PRAGMA user_version={number}")
         except BaseException:
             conn.execute("ROLLBACK")
             raise

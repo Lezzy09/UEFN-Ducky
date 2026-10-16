@@ -11,3 +11,6 @@ changed. Format: Context, Decision, Alternatives considered, Consequences.
 - [0003](0003-one-local-sqlite-database.md) — one local SQLite database
   (`ducky.db`, WAL) for all app state; direct multi-process access; per-store
   shadow migration. Reference: `docs/architecture/store.md`.
+- [0004](0004-search-index-in-ducky-db.md) — skill and tool search: an index inside
+  `ducky.db` (FTS5 + static-embedding vectors), hybrid ranking, filtered per chat.
+  Reference: `docs/architecture/search.md`.

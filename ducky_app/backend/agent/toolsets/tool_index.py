@@ -129,7 +129,7 @@ def build_tool_index_text(
         "## Tool index (lazy — schemas via ducky_get_tools)",
         "Full JSON schemas are NOT in this prompt. Call `ducky_get_tools(name=…)` or "
         "`ducky_get_tools(pattern=…)` then `ducky_call_tool(name, arguments)` for non-floor tools. "
-        "Floor tools (workspace_*, ducky_get_status, ducky_ask_user, get/call) are always in tools[].",
+        "Floor tools (workspace_*, ducky_get_status, ducky_ask_user, get/call, skill_search) are always in tools[].",
     ]
     for group in sorted(grouped):
         items = sorted(grouped[group], key=lambda x: x[0])

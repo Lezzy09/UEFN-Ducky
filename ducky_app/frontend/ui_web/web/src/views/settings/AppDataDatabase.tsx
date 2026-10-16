@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useConfirmModal } from "../../contexts/ConfirmModalContext";
 import { getApi } from "../../hooks/usePanelApi";
 import { onApiReady } from "../../hooks/onApiReady";
-import type { StoreActionResult, StoreOverview, StoreTable, StoreTablePreview } from "../../types/panel";
+import type { SearchStatus, StoreActionResult, StoreOverview, StoreTable, StoreTablePreview } from "../../types/panel";
 import { formatAppDataBytes } from "./AppDataTab";
 import { GeneralSectionHeader } from "./GeneralSectionHeader";
 
@@ -15,7 +15,7 @@ import { GeneralSectionHeader } from "./GeneralSectionHeader";
  * goes through `store_action`, so the page never holds SQL.
  */
 
-const GROUP_ORDER: StoreTable["group"][] = ["chats", "settings", "changes", "plans", "verse", "logs"];
+const GROUP_ORDER: StoreTable["group"][] = ["chats", "settings", "changes", "plans", "verse", "logs", "search"];
 
 function DatabaseIcon() {
   return (
@@ -192,6 +192,78 @@ function TableRow({
         {open ? <TablePreview table={t} refreshKey={refreshKey} /> : null}
       </div>
     </details>
+  );
+}
+
+const SEARCH_KINDS: [keyof NonNullable<SearchStatus["docs"]>, string][] = [
+  ["pack", "skill packs"],
+  ["subskill", "skill files"],
+  ["section", "sections"],
+  ["tool", "tools"],
+  ["record", "plugin records"],
+];
+
+/** The skill and tool search index: what is in it, the model, and a rebuild. */
+export function SearchIndexCard({ refreshKey }: { refreshKey: number }) {
+  const [status, setStatus] = useState<SearchStatus | null>(null);
+  const [rebuilding, setRebuilding] = useState(false);
+
+  const load = useCallback(async () => {
+    const api = getApi();
+    if (!api?.search_status) return;
+    try {
+      setStatus(await api.search_status());
+    } catch {
+      setStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load, refreshKey]);
+
+  useEffect(() => {
+    if (!status?.running) return;
+    const timer = window.setTimeout(() => void load(), 1500);
+    return () => window.clearTimeout(timer);
+  }, [status, load]);
+
+  const rebuild = useCallback(async () => {
+    const api = getApi();
+    if (!api?.search_rebuild) return;
+    setRebuilding(true);
+    try {
+      await api.search_rebuild();
+      await load();
+    } finally {
+      setRebuilding(false);
+    }
+  }, [load]);
+
+  const docs = status?.docs || {};
+  const total = SEARCH_KINDS.reduce((a, [k]) => a + (docs[k] || 0), 0);
+  const parts = SEARCH_KINDS.filter(([k]) => docs[k]).map(([k, label]) => `${(docs[k] || 0).toLocaleString()} ${label}`);
+  return (
+    <section className="general-tab-section" data-testid="search-index-card">
+      <h3 className="dbtab-h3">Search index</h3>
+      <p className="general-tab-section-note">
+        What agents search with skill_search and ducky_get_tools: every skill pack, file and section, and every tool,
+        from UEFN Ducky and your plugins. It updates by itself when skills or plugins change.
+      </p>
+      {status?.error ? <p className="general-tab-section-note general-tab-section-note--error">{status.error}</p> : null}
+      <p className="appdata-summary-meta">
+        {status ? (total ? parts.join(" · ") : "Empty") : "Reading…"}
+        <span className="appdata-dot">·</span>
+        {status?.model ? `meaning model ${status.model}` : `keywords only${status?.model_error ? ` (${status.model_error})` : ""}`}
+        <span className="appdata-dot">·</span>
+        {status?.running ? "indexing…" : `updated ${when(status?.last_indexed)}`}
+      </p>
+      <div className="appdata-tab-toolbar log-errors-actions no-drag">
+        <button type="button" className="settings-btn" disabled={rebuilding || !!status?.running} onClick={() => void rebuild()}>
+          {rebuilding || status?.running ? "Indexing…" : "Rebuild index"}
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -402,6 +474,8 @@ export function AppDataDatabase({ onOpenRel }: { onOpenRel: (rel: string) => voi
         </div>
         {note ? <p className="appdata-tab-note">{note}</p> : null}
       </section>
+
+      <SearchIndexCard refreshKey={refreshKey} />
 
       <section className="general-tab-section">
         <h3 className="dbtab-h3">Tables</h3>

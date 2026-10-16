@@ -41,6 +41,8 @@ while True:
     if _panel_test_port not in (*_LIVE_PORTS, 65535):
         break
 os.environ["UEFN_DUCKY_PANEL_PORT"] = str(_panel_test_port + 1)  # panel server = port - 1
+# Skill search indexes in a background thread; tests index explicitly (backend/search/indexer.py).
+os.environ.setdefault("DUCKY_SEARCH_AUTOINDEX", "0")
 os.environ["UEFN_DUCKY_PORT"] = str(_panel_test_port)  # bridge's listener default
 
 
@@ -217,6 +219,13 @@ def _reset_store_memos() -> None:
         phase1.reset_for_tests()
     except Exception:
         pass
+    try:
+        from backend.search import indexer, query
+
+        indexer.reset_for_tests()
+        query.reset_for_tests()
+    except Exception:
+        pass
 
 
 @pytest.fixture(autouse=True)
@@ -247,7 +256,7 @@ def _join_host_workers(timeout: float = 5.0) -> None:
     for t in threading.enumerate():
         if t is threading.current_thread():
             continue
-        if t.name in ("uefn-plugins-repair", "appdata-maintenance"):
+        if t.name in ("uefn-plugins-repair", "appdata-maintenance", "search-index"):
             if t.ident is None:
                 continue
             t.join(timeout)

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { fileKey, type PackWithFiles, type SkillFile } from "../model/types";
 import { fileBasename } from "../utils/fileDisplay";
 import { Icons } from "./icons";
@@ -13,6 +13,8 @@ interface FileEditorPaneProps {
   onDirtyChange: (key: string, dirty: boolean) => void;
   onReload: () => void;
   onStatus: (msg: string) => void;
+  /** A ## heading to scroll the editor to (from a skill search hit). */
+  focusSection?: string;
 }
 
 type DetailTab = "content" | "details";
@@ -26,9 +28,29 @@ export function FileEditorPane({
   onDirtyChange,
   onReload,
   onStatus,
+  focusSection = "",
 }: FileEditorPaneProps) {
   const [tab, setTab] = useState<DetailTab>("content");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Put the caret on the searched section's heading; focusing scrolls the textarea to it.
+  useEffect(() => {
+    const el = editorRef.current;
+    const want = focusSection.trim().toLowerCase();
+    if (!el || !want || tab !== "content") return;
+    const lines = file.content.split("\n");
+    let pos = 0;
+    for (const line of lines) {
+      const m = /^#{2,3}\s+(.+?)\s*#*\s*$/.exec(line);
+      if (m && m[1].replace(/[`*_]/g, "").trim().toLowerCase() === want) {
+        el.focus();
+        el.setSelectionRange(pos, pos + line.length);
+        return;
+      }
+      pos += line.length + 1;
+    }
+  }, [focusSection, file.id, file.content, tab]);
 
   const key = fileKey(pack.id, file.id);
   const isCore = file.id === "core";
@@ -100,6 +122,7 @@ export function FileEditorPane({
       {tab === "content" ? (
         <div className="sps-content-pane">
           <textarea
+            ref={editorRef}
             className="sps-textarea sps-textarea--editor"
             value={file.content}
             spellCheck={false}
@@ -114,6 +137,11 @@ export function FileEditorPane({
               }
             }}
           />
+          {!file.description.trim() ? (
+            <p className="sps-hint sps-hint--nudge" data-testid="sps-description-nudge">
+              Add a description (Details) so agents can find this file when they search.
+            </p>
+          ) : null}
           <div className="sps-content-footer">
             <span className="sps-hint">
               {isCore
@@ -154,7 +182,8 @@ export function FileEditorPane({
             <p className="sps-hint">
               {isCore
                 ? "Written to SKILL.md frontmatter — shown in the skill index for every ducky."
-                : "Shown in the reference index so agents know when to read this file."}
+                : "Shown in the reference index so agents know when to read this file."}{" "}
+              Agents search by it: one line saying what it covers and when to read it.
             </p>
           </div>
 

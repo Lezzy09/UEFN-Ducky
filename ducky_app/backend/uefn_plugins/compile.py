@@ -264,7 +264,7 @@ def _check_kit_abi(kpy: Path) -> None:
 
 
 def _is_test_py(name: str) -> bool:
-    return name.startswith("test_") and name.endswith(".py")
+    return name == "conftest.py" or (name.startswith("test_") and name.endswith(".py"))
 
 
 def shipped_files(src: Path) -> list[Path]:
@@ -573,6 +573,13 @@ def build_plugin(
 
     final_pyd_name = f"{mod_name}.v{verrank}.{PY_ABI}.pyd"
     warnings: list[str] = [personal_path_message(personal)] if personal else []
+    try:
+        from backend.uefn_plugins.plugin_lint import check_findability
+
+        find_errors, find_warnings = check_findability(src)
+        warnings.extend(find_errors + find_warnings)
+    except Exception:  # noqa: BLE001 — a findability note never blocks a build
+        pass
     minified: list[str] = []
     uncompiled: list[str] = []
 

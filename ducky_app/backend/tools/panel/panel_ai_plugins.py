@@ -193,15 +193,19 @@ def _skill_stub(pid: str, label: str) -> str:
         "---\n"
         f"name: {pid}\n"
         f'description: "{safe}: list and update its records with the {fn}_* tools."\n'
+        f'keywords: "{safe}, {fn}, records"\n'
         "---\n"
         "\n"
         f"# {label}\n"
+        "\n"
+        "## Tools\n"
         "\n"
         f"- `{fn}_list(kind?)` lists the records.\n"
         f"- `{fn}_upsert(item_id, fields)` creates or updates one.\n"
         f"- Workflow node `{pid}.run` does what `{fn}_list` does.\n"
         "\n"
-        "Describe each tool here as you add it, and when a chat should use it.\n"
+        "Describe each tool here as you add it, and when a chat should use it. Keep one topic per\n"
+        "`##` section: skill search points agents at a single section by its heading.\n"
     )
 
 
@@ -581,6 +585,11 @@ def validate_ai_plugin(plugin_id: str) -> dict[str, Any]:
     personal = shipped_personal_paths(root)
     # Not an error while building (installs keep working); publishing refuses it.
     warnings = [personal_path_message(personal)] if personal else []
+    from backend.uefn_plugins.plugin_lint import check_findability
+
+    find_errors, find_warnings = check_findability(root, pid)
+    errors.extend(find_errors)
+    warnings.extend(find_warnings)
     if errors:
         return {"ok": False, "id": pid, "errors": errors, **({"warnings": warnings} if warnings else {})}
     return {

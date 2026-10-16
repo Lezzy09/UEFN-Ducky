@@ -256,6 +256,15 @@ def duplicate_ffmpeg_dlls(app_dir: Path) -> list[str]:
     return sorted(dll.name for dll in tools.glob("*.dll") if (internal / dll.name).is_file())
 
 
+SEARCH_MODEL_FILES = ("embeddings.f16.npy", "tokenizer.json", "config.json")
+
+
+def missing_search_model_files(app_dir: Path) -> list[str]:
+    """Search model files the built app lacks (skill search would run on keywords only)."""
+    folder = app_dir / "_internal" / "models" / "search"
+    return [name for name in SEARCH_MODEL_FILES if not (folder / name).is_file()]
+
+
 def main() -> int:
     args = _parse_args()
     dev_build = bool(args.dev)
@@ -295,6 +304,10 @@ def main() -> int:
     from fetch_ffmpeg import ensure_bundle as ensure_ffmpeg_bundle
 
     ensure_ffmpeg_bundle()
+    # Pinned search model for models/search (SHA-256 verified; fails the build on mismatch).
+    from fetch_search_model import ensure_model as ensure_search_model
+
+    ensure_search_model()
 
     _build_react_panel(root)
     # Freeze the panel before PyInstaller. npm rebuilds during Analysis replace
@@ -460,6 +473,10 @@ def main() -> int:
     doubled = duplicate_ffmpeg_dlls(wrote)
     if doubled:
         print(f"ERROR: ffmpeg DLLs shipped twice (tools/ffmpeg and _internal): {', '.join(doubled)}", file=sys.stderr)
+        return 1
+    missing_model = missing_search_model_files(wrote)
+    if missing_model:
+        print(f"ERROR: search model files missing from _internal/models/search: {', '.join(missing_model)}", file=sys.stderr)
         return 1
 
     smoke_exe = wrote / f"{exe_stem}.exe"

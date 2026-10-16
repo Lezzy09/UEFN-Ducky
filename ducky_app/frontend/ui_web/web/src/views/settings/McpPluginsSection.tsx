@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRankedToolNames } from "../../hooks/useToolSearch";
 
 import {
   AgentCatalogCreateModal,
@@ -390,9 +391,10 @@ export function McpPluginsSection() {
   const toolsLoading = !!selectedServer?.enabled && !toolsError
     && (serverTools.id !== selectedServer.id || !serverTools.catalog);
 
+  const rankedTools = useRankedToolNames(toolQuery, 50);
   const filteredToolCategories = useMemo(
-    () => filterMcpCategories(pluginCategories, toolQuery),
-    [pluginCategories, toolQuery],
+    () => filterMcpCategories(pluginCategories, toolQuery, rankedTools),
+    [pluginCategories, toolQuery, rankedTools],
   );
 
   const toolTotalCount = pluginCategories.reduce((n, c) => n + c.tools.length, 0);

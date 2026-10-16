@@ -41,6 +41,16 @@ def test_the_build_leaves_tests_behind_and_names_personal_paths(tmp_path: Path):
     assert [f["path"] for f in shipped_personal_paths(tmp_path)] == ["assets/coverage.json"]
 
 
+def test_the_build_leaves_pytest_files_behind(tmp_path: Path):
+    from backend.uefn_plugins.compile import shipped_files
+
+    for rel in ("conftest.py", "test_tools.py", "backend/conftest.py", "backend/tools.py", "plugin.json"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x = 1\n", encoding="utf-8")
+    shipped = sorted(p.relative_to(tmp_path).as_posix() for p in shipped_files(tmp_path))
+    assert shipped == ["backend/tools.py", "plugin.json"]
+
+
 @pytest.fixture()
 def draft(tmp_path, monkeypatch):
     from backend.tools.panel import panel_ai_plugins as pap

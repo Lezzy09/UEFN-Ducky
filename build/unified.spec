@@ -73,8 +73,9 @@ _HEAVY_EXCLUDES = [
     "notebook",
     # Not app dependencies (not in requirements.txt): PyInstaller follows optional
     # imports in third-party code into whatever the builder's Python has installed.
-    # numpy + its OpenBLAS added ~27 MB to 1.2.348-1.2.351; pycryptodome ~1.6 MB.
-    "numpy",
+    # pycryptodome ~1.6 MB. numpy is a real dependency since skill and tool search
+    # (backend/search); only its Fortran bridge is left out.
+    "numpy.f2py",
     "Crypto",
 ]
 
@@ -113,6 +114,13 @@ if not (_ffmpeg_bundle / "ffmpeg.exe").is_file():
 for path in sorted(_ffmpeg_bundle.iterdir()):
     if path.is_file() and path.name != ".installed":
         _datas.append((str(path), "tools/ffmpeg"))
+# Skill and tool search model (MIT, pinned); build/fetch_search_model.py populates the folder.
+_search_model = ROOT / "build" / "search-model"
+_SEARCH_MODEL_FILES = ("embeddings.f16.npy", "tokenizer.json", "config.json", "manifest.json", "MODEL_CARD.md")
+if not all((_search_model / name).is_file() for name in _SEARCH_MODEL_FILES):
+    raise RuntimeError("unified.spec: search model missing - run build/fetch_search_model.py")
+for name in _SEARCH_MODEL_FILES:
+    _datas.append((str(_search_model / name), "models/search"))
 # One boot file — island stub, Documents Python, and Engine Toolset hook.
 _init = FRONTEND / "init_unreal.py"
 if _init.is_file():
@@ -324,6 +332,12 @@ a = Analysis(
         "pypdf",
         "toon_format",
         "toon_format.types",
+        # Skill and tool search: imported lazily, so name them for the analysis.
+        "numpy",
+        "tokenizers",
+        "backend.search.embedder",
+        "backend.search.query",
+        "backend.search.indexer",
         # ADR 0003: ducky.db. Nothing else imports sqlite3, so the analysis
         # would otherwise leave _sqlite3.pyd + sqlite3.dll out of the EXE.
         "sqlite3",
@@ -383,6 +397,11 @@ if not any(_n.startswith("_sqlite3") for _n in _binary_names):
     )
 if "backend.store.db" not in _pure_names:
     raise RuntimeError("unified.spec: frozen build is missing backend.store.db")
+# Skill and tool search: without these it silently falls back to keywords only.
+if not any("tokenizers" in _n.lower() for _n in _binary_names):
+    raise RuntimeError("unified.spec: frozen build is missing the tokenizers extension (skill search model)")
+if not any(_n.startswith("numpy") for _n in _pure_names):
+    raise RuntimeError("unified.spec: frozen build is missing numpy (skill search model)")
 _REQUIRED_PURE = (
     "backend.agent.prompt",
     "backend.agent.runner",

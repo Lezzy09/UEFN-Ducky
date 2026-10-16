@@ -280,7 +280,9 @@ def bootstrap_system_prompt(
                 "(e.g. `uefn` for device wiring/golden paths, `verse` for Verse code, "
                 "`leveldesign` for placement/blockouts, `islandsettings` for MaxPlayers/pads, "
                 "`materials`, `vfx`, `animation`, `modeling`). "
-                "They contain the project's best practices — do not work from memory when a skill covers the task.\n"
+                "They contain the project's best practices — do not work from memory when a skill covers the task. "
+                'Not sure which one? Call the Ducky tool `skill_search("<what you need>")`: it names the exact '
+                "section across every pack, plugin packs included.\n"
             )
         else:
             skills_block += (
@@ -289,7 +291,9 @@ def bootstrap_system_prompt(
                 '`skill_read_subskill("<pack>", "core")` '
                 "(e.g. `uefn`, `verse`, `leveldesign`, `islandsettings`) — "
                 "do not filesystem-Read `~/.claude/skills` / `~/.cursor/skills` / "
-                "`references/*.md`, and do not work from memory when a skill covers the task.\n"
+                "`references/*.md`, and do not work from memory when a skill covers the task. "
+                'Not sure which pack or file? `skill_search("<what you need>")` returns the section and '
+                "the exact `skill_read_subskill(..., section=...)` call.\n"
             )
     return (
         "You are running as a coding agent inside UEFN-Ducky.\n"

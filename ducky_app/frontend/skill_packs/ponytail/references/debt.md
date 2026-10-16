@@ -1,5 +1,5 @@
 ---
-description: "Harvest ponytail: comment debt ledger"
+description: "Harvest ponytail: shortcut comments into a debt ledger, so deliberate simplifications get revisited later"
 metadata:
   label: "Ponytail Debt"
   default_enabled: false

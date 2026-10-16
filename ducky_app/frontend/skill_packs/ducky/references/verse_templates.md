@@ -1,3 +1,10 @@
+---
+description: "Save, list, apply and delete your own reusable Verse templates (ducky_verse_template_*), single files or multi-file system packs; never edit Store templates"
+metadata:
+  label: "Custom Verse templates"
+  default_enabled: false
+---
+
 # Custom Verse templates (user / AI)
 
 Reusable Verse scaffolds stored in AppData — **not** Store plugin packs.

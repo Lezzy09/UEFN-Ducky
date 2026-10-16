@@ -1,0 +1,72 @@
+{"q": "make a starry night sky material", "expect": ["materials/starfield_recipe"]}
+{"q": "ocean water material with waves and foam that you can't see through far", "expect": ["materials/water_recipes", "materials/water_exact_defaults"]}
+{"q": "material shows a checkerboard after compiling", "expect": ["materials/fixing_materials"]}
+{"q": "swap a material at runtime from Verse", "expect": ["materials/runtime_materials_verse"]}
+{"q": "textures look washed out after import", "expect": ["materials/texture_import"]}
+{"q": "rebuild Blender principled materials in UEFN after FBX export", "expect": ["materials/blender_handoff"]}
+{"q": "retarget a Mixamo animation to the Fortnite mannequin", "expect": ["animation/retargeting"]}
+{"q": "play a custom animation on the player character", "expect": ["animation/player_animation"]}
+{"q": "animated mesh device won't play my animation in game", "expect": ["animation/runtime_playback"]}
+{"q": "cutscene with a cine camera in a level sequence", "expect": ["animation/sequencer_cinematics"]}
+{"q": "attach a sword to an NPC's hand bone", "expect": ["animation/npc_items", "npc-ai/equipment"]}
+{"q": "custom gravity and jump on a Scene Graph player controller", "expect": ["scenegraph/custom_player_controller"]}
+{"q": "my scene graph entity does not move when I set its transform", "expect": ["scenegraph/movement_transforms"]}
+{"q": "grant a Fortnite weapon from Verse using an inventory component", "expect": ["scenegraph/itemization"]}
+{"q": "make a custom torch the player can carry", "expect": ["scenegraph/held_items"]}
+{"q": "custom sprint ability with a template ability", "expect": ["scenegraph/template_abilities"]}
+{"q": "orbit camera on a scene graph entity", "expect": ["scenegraph/cameras"]}
+{"q": "Verse compile error 3512 no_rollback", "expect": ["verse/compile_errors"]}
+{"q": "save player stats between game sessions", "expect": ["verse/persistence", "verse/sys_persistence_migration", "verse/sys_player_data"]}
+{"q": "build a shop where players buy items with coins", "expect": ["verse/sys_economy", "verse/sys_canvas_cookbook", "verse/sys_ui_menus"]}
+{"q": "per-player HUD that shows the score", "expect": ["verse/sys_hud", "verse/sys_scoring", "verse/sys_hud_template"]}
+{"q": "round timer and game phases state machine", "expect": ["verse/sys_rounds_timers"]}
+{"q": "assign a player to a team and count players per team", "expect": ["verse/sys_teams"]}
+{"q": "LLM powered talking NPC with a persona", "expect": ["verse/sys_conversations"]}
+{"q": "custom voice chat channel", "expect": ["verse/sys_chat_channels"]}
+{"q": "tycoon plots with rebirth", "expect": ["verse/sys_tycoon"]}
+{"q": "idle generator with passive income and upgrades", "expect": ["verse/sys_generators"]}
+{"q": "controller focus for custom UI buttons", "expect": ["verse/umg_navigation", "verse/sys_custom_buttons"]}
+{"q": "bind a Verse field to a text widget in UMG", "expect": ["verse/umg_view_bindings", "verse/umg_verse_fields"]}
+{"q": "what does suspends mean, and race vs sync vs rush", "expect": ["verse/async"]}
+{"q": "how do using imports and module folders work in Verse", "expect": ["verse/modules"]}
+{"q": "set max players and the number of spawn pads", "expect": ["islandsettings/session_setup", "islandsettings/core"]}
+{"q": "wire a placed device into a Verse @editable field", "expect": ["uefn/verse_devices", "uefn/golden_paths", "uefn/verse_editable_internals", "uefn/core"]}
+{"q": "a UEFN popup is blocking and tools hang", "expect": ["uefn/uefn_popups"]}
+{"q": "which Epic toolset has the tool to place actors", "expect": ["uefn/epic_toolsets", "uefn/epic_mcp"]}
+{"q": "find a device in the level by its label", "expect": ["uefn/discovery"]}
+{"q": "what changed in Fortnite 42.30", "expect": ["uefn/patch_42_30"]}
+{"q": "STALE REFLECTION and the 9002 digest deadlock", "expect": ["uefn/verse_build_lifecycle"]}
+{"q": "export island text to PO files for translation", "expect": ["localization/export", "localization/translation", "localization/core"]}
+{"q": "edit one row of a DataTable from JSON", "expect": ["datatables/row_editing", "datatables/core"]}
+{"q": "cover heights and sightlines for a box fight arena", "expect": ["leveldesign/combat_spaces", "leveldesign/design_styles"]}
+{"q": "place spawn pads fairly so nobody spawn camps", "expect": ["leveldesign/spawn_and_fairness"]}
+{"q": "lighting looks flat and gray, fog and post process", "expect": ["leveldesign/lighting"]}
+{"q": "procedurally generate a city layout", "expect": ["leveldesign/procedural_generation", "leveldesign/environment_elements"]}
+{"q": "find wall and floor props in the content drawer", "expect": ["leveldesign/content_catalog"]}
+{"q": "Niagara fire effect from stock modules", "expect": ["vfx/stock_module_assembly", "vfx/niagara_workflow", "vfx/core"]}
+{"q": "imported FBX has the wrong scale and no collision", "expect": ["modeling/fbx_import_pipeline"]}
+{"q": "merge pieces into one static mesh", "expect": ["modeling/mesh_build_workflow"]}
+{"q": "boolean and remesh with geometry scripting", "expect": ["modeling/geometry_scripting"]}
+{"q": "use a MetaHuman as an NPC that walks around", "expect": ["metahuman/npc_spawn"]}
+{"q": "Verse test asserts like ExpectEqual", "expect": ["tester/verse_harness"]}
+{"q": "simulate device events offline without playing", "expect": ["tester/device_simulation"]}
+{"q": "export a rigged character from Blender to UEFN", "expect": ["blender/skeletal_export"]}
+{"q": "clean up a messy mesh with non-manifold edges", "expect": ["blender/mesh_cleanup"]}
+{"q": "find a free model from the Meshy community", "expect": ["meshy-api/core", "meshy-api/examples"]}
+{"q": "walk cycle animation in Forge", "expect": ["forge/animation"]}
+{"q": "send a Forge mesh to the UEFN island", "expect": ["forge/send_to_game"]}
+{"q": "build a desktop plugin with a dock panel", "expect": ["ducky/ai_plugins", "ducky/plugin_examples_ui"]}
+{"q": "publish my plugin to my team", "expect": ["ducky/plugin_publishing"]}
+{"q": "show the user where a setting is in the app", "expect": ["ducky/guided_ui"]}
+{"q": "enemy archer that shoots arrows at players", "expect": ["npc-ai/behaviors_ranged", "verse/sys_npc_ai", "npc-ai/projectiles"]}
+{"q": "make a trailer for my island from a recording", "expect": ["island-media-kit/core"]}
+{"q": "pinch to zoom on mobile", "expect": ["virtualpointer/pinch_zoom"]}
+{"q": "Roblox remote events between client and server", "expect": ["roblox/remotes"]}
+{"q": "wate rmaterial ocean waves bigger and foam on top", "expect": ["materials/water_recipes", "materials/water_exact_defaults", "materials/mf_reusable_patterns"], "style": "user"}
+{"q": "where do i find colliison on thigns", "expect": ["modeling/fbx_import_pipeline", "modeling/core", "collision-proxy/core", "blender/uefn_export"], "style": "user"}
+{"q": "make the npcs patrol and shoot at the player", "expect": ["npc-ai/behavior_base", "npc-ai/behaviors_ranged", "verse/sys_npc_ai", "npc-ai/core", "npc-ai/projectiles"], "style": "user"}
+{"q": "nothing happens when i pick up the coin collectible", "expect": ["verse/devices", "uefn/creative_devices", "verse/sys_inventory", "uefn/troubleshooting"], "style": "user"}
+{"q": "i cant push changes verse errors when building", "expect": ["verse/compile_errors", "uefn/verse_build_lifecycle"], "style": "user"}
+{"q": "can you export everything from uefn and import it in blender", "expect": ["blender/import_assets", "blender/uefn_export", "modeling/fbx_import_pipeline"], "style": "user"}
+{"q": "the water is moving way too fast", "expect": ["materials/water_recipes", "materials/water_exact_defaults", "materials/mf_reusable_patterns"], "style": "user"}
+{"q": "teleport the players away from each other when the match starts", "expect": ["verse/sys_rounds_timers", "verse/sys_spawning", "animation/player_animation", "leveldesign/spawn_and_fairness"], "style": "user"}

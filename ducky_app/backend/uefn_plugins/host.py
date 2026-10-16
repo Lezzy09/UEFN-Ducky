@@ -3556,6 +3556,16 @@ class _PluginApi:
         _DATA_PLUGINS.add(self.plugin_id)
         return PluginData(self.plugin_id)
 
+    @property
+    def search(self) -> Any:
+        """Make this plugin's own records findable by meaning and keywords: ``upsert(id, title,
+        text, meta)``, ``delete(id)``, ``clear()``, ``query(text, limit)``. Only this plugin's
+        records in its active data scope; removed on uninstall. Expose them to agents through
+        one of the plugin's own tools. See ``backend.search.records.SearchApi``."""
+        from backend.search.records import SearchApi
+
+        return SearchApi(self.plugin_id)
+
     def http_json(
         self,
         method: str,

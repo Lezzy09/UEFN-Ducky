@@ -480,6 +480,12 @@ def invalidate_plugin_skill_caches() -> None:
         invalidate_skills_revision()
     except Exception:
         pass
+    try:
+        from backend.search import indexer
+
+        indexer.request_refresh("plugins")
+    except Exception:
+        pass
 
 
 def list_plugin_owned_skills() -> list[dict[str, str]]:
@@ -720,6 +726,12 @@ def uninstall_uefn_plugin(plugin_id: str, *, erase_data: bool = False) -> dict[s
             _rmtree_retry(dest, ignore_final=True)
     # Folder is gone now; the memoized fingerprint would keep its skills "owned" until TTL.
     invalidate_plugin_skill_caches()
+    try:
+        from backend.search import indexer
+
+        indexer.forget_plugin(pid)  # its api.search records; packs and tools leave on the refresh
+    except Exception:
+        pass
     from frontend.settings import PanelSettings, replace
 
     settings = PanelSettings.load()

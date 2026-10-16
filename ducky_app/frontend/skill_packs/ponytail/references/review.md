@@ -1,5 +1,5 @@
 ---
-description: "Over-engineering diff review"
+description: "Review a diff for over-engineering: flag needless abstraction, options and layers, with examples and a score"
 metadata:
   label: "Ponytail Review"
   default_enabled: false

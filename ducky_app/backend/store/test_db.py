@@ -135,6 +135,22 @@ def test_migration_files_are_contiguous_and_apply_from_zero(tmp_path: Path) -> N
     raw.close()
 
 
+def test_migrate_skips_steps_another_process_applied_while_it_waited(tmp_path: Path, monkeypatch) -> None:
+    """Two processes opening a fresh ducky.db both read version 0; the second one waits
+    for the write lock and must not re-run steps the first already committed."""
+    raw = sqlite3.connect(str(tmp_path / "race.db"), isolation_level=None)
+    db.migrate(raw)
+    real = db.user_version
+    stale = [0]  # this process's first read, before the other one finished
+
+    def user_version(conn: sqlite3.Connection) -> int:
+        return stale.pop() if stale else real(conn)
+
+    monkeypatch.setattr(db, "user_version", user_version)
+    assert db.migrate(raw) == db.head_version()
+    raw.close()
+
+
 def test_upgrade_from_previous_schema_does_not_deadlock(tmp_path: Path) -> None:
     """1.2.90: migrate() → snapshot() → connect() re-entered _guard and hung every
     upgraded panel at boot. An older database must open on a worker

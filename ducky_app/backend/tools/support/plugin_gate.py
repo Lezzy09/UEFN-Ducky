@@ -14,6 +14,7 @@ HOST_DISK_TOOLS = frozenset(
         "workspace_compile_verse",
         "workspace_push_verse_changes",
         "skill_read_subskill",
+        "skill_search",
         "uefn_skill",
         "search_verse_digest",
         "get_verse_api",

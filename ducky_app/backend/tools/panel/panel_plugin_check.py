@@ -432,6 +432,7 @@ def test_plugin(plugin_id: str) -> dict[str, Any]:
         loads = [e for e in plugin_errors(pid, since=started, limit=50).get("errors") or [] if e["source"] == "load"]
         checks.append({"check": "backend load", "status": "fail" if loads else "pass",
                        **({"errors": loads} if loads else {})})
+        checks.append(_check_search(pid))
         report = _report(pid, started, checks)
         if any(t.is_alive() for t in stragglers):
             report["note"] = (
@@ -488,6 +489,57 @@ def _end_sandbox(pid: str, stragglers: list[threading.Thread]) -> None:
         threading.Thread(target=end, name="plugin-test-sandbox", daemon=True).start()
     else:
         end()
+
+
+def _check_search(pid: str) -> dict[str, Any]:
+    """Can skill and tool search find this plugin? Each of its skill files and tools is
+    searched by its own description; anything outside the top 5 is listed with the row
+    that beat it. Never fails the test: it says what to reword."""
+    try:
+        from backend.search import indexer, query
+        from backend.store.repos import search as repo
+
+        indexer.refresh_now()
+        ids = [i for kind in ("subskill", "tool") for i in repo.find_ids(kind=kind)]
+        docs = [d for d in repo.get_docs(ids).values() if d.get("plugin_id") == pid]
+    except Exception as exc:  # noqa: BLE001
+        return {"check": "search", "status": "skip", "detail": f"search index unavailable ({type(exc).__name__})"}
+    if not docs:
+        return {"check": "search", "status": "skip", "detail": "no skill files or tools to find"}
+    weak: list[dict[str, Any]] = []
+    all_tools = _all_tool_names()
+    for doc in docs:
+        meta = doc.get("meta") or {}
+        text = str(meta.get("description") or doc.get("title") or "")
+        if doc["kind"] == "tool":
+            ctx = query.Context(allowed_tools=all_tools)
+            rows = query.search(text, kinds=query.TOOL_KINDS, limit=10, context=ctx, refresh=False)
+            keys = [r.get("tool") for r in rows]
+            me = doc.get("tool_name")
+            name = str(me)
+        else:
+            rows = query.search(text, limit=10, context=query.Context(), refresh=False)
+            keys = [f"{r.get('pack')}/{r.get('subskill') or 'core'}" for r in rows]
+            me = f"{doc.get('pack_id')}/{doc.get('subskill_id')}"
+            name = str(me)
+        rank = keys.index(me) + 1 if me in keys else None
+        if rank is None or rank > 5:
+            beaten_by = next((k for k in keys if k != me), "")
+            weak.append({
+                "item": name,
+                "rank": rank,
+                "searched": text[:120],
+                "fix": ("Add a description" if not meta.get("description") else
+                        f"Reword it: it reads closer to {beaten_by!r}" if beaten_by else "Reword it with the words people use"),
+            })
+    detail = f"{len(docs) - len(weak)} of {len(docs)} skill files and tools rank in the top 5 for their own description"
+    return {"check": "search", "status": "pass", "detail": detail, **({"reword": weak} if weak else {})}
+
+
+def _all_tool_names() -> set[str]:
+    from backend.store.repos import search as repo
+
+    return {str(d.get("tool_name")) for d in repo.get_docs(repo.find_ids(kind="tool")).values()}
 
 
 def _report(pid: str, started: float, checks: list[dict[str, Any]]) -> dict[str, Any]:

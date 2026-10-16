@@ -4,7 +4,7 @@
  * mode="checkbox" → multi choice with checkmarks (stays open until outside click)
  */
 
-import { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Icons } from "../icons/Icons";
 import { DropdownPanel } from "./DropdownPanel";
@@ -49,6 +49,9 @@ type CommonProps = {
   /** Search the same reusable radio/checkbox menu. */
   searchable?: boolean;
   searchPlaceholder?: string;
+  /** Rank the search box's text elsewhere (e.g. tool search by meaning): values best first.
+   * Ranked options lead the list, then the plain word matches. */
+  rankSearch?: (query: string) => Promise<string[]>;
   onOpen?: () => void;
   showSelectedHint?: boolean;
 };
@@ -116,6 +119,7 @@ export function ChoiceDropdown(props: ChoiceDropdownProps) {
     fixedLabel,
     searchable = false,
     searchPlaceholder = "Search options",
+    rankSearch,
     onOpen,
     showSelectedHint = true,
   } = props;
@@ -154,10 +158,38 @@ export function ChoiceDropdown(props: ChoiceDropdownProps) {
     return options.find((o) => o.value === props.value)?.hint;
   }, [checkbox, options, props]);
 
+  const [ranked, setRanked] = useState<string[]>([]);
+  useEffect(() => {
+    const q = query.trim();
+    if (!rankSearch || q.length < 3) {
+      setRanked([]);
+      return;
+    }
+    let live = true;
+    const timer = window.setTimeout(() => {
+      void rankSearch(q)
+        .then((values) => {
+          if (live) setRanked(values);
+        })
+        .catch(() => {
+          if (live) setRanked([]);
+        });
+    }, 200);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [query, rankSearch]);
   const filtered = useMemo(() => {
     const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
-    return options.filter((option) => terms.every((term) => [option.label, option.value, option.hint, option.group].join(" ").toLowerCase().includes(term)));
-  }, [options, query]);
+    const words = options.filter((option) => terms.every((term) => [option.label, option.value, option.hint, option.group].join(" ").toLowerCase().includes(term)));
+    if (!ranked.length || !terms.length) return words;
+    // Best-first order only reads as one list: drop the groups while ranked results show.
+    const byValue = new Map(options.map((option) => [option.value, option]));
+    const top = ranked.map((value) => byValue.get(value)).filter((option): option is ChoiceOption => !!option);
+    const seen = new Set(top.map((option) => option.value));
+    return [...top, ...words.filter((option) => !seen.has(option.value))].map((option) => ({ ...option, group: undefined }));
+  }, [options, query, ranked]);
   const groups = useMemo(() => groupOptions(filtered), [filtered]);
 
   const toggleCheckbox = (value: string) => {

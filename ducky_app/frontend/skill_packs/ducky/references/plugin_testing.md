@@ -23,7 +23,9 @@ empty. Don't tell the user it works before that.
 ## What validate checks
 
 - `plugin.json` is valid; backend files compile; no secrets in files.
-- `skills/<id>/SKILL.md` exists.
+- `skills/<id>/SKILL.md` exists, and every skill file has a one-line `description:`
+  (warnings for descriptions under 40 characters and tool docstrings whose first line is
+  under 30: search ranks by them).
 - Every panel RPC has an MCP tool: RPC `save` needs a tool named `save` or
   `<something>_save` (`card_shop_save`).
 - At least one workflow node is declared, every declared node has a
@@ -48,6 +50,9 @@ empty. Don't tell the user it works before that.
 - Opens **each panel**, waits a few seconds and fails it on any panel error. If the app
   window isn't up the panel check is skipped: open Ducky and test again.
 - Fails on backend load errors.
+- **Search**: each skill file and tool is searched by its own description; any that
+  lands outside the top 5 is listed under `reword` with the row that beat it. It never
+  fails the test.
 - Everything runs on a **throwaway copy** of the plugin's data (docs, files, sensitive
   docs, cache and prefs); the user's data is never touched. A call that takes over
   30 seconds fails as timed out.

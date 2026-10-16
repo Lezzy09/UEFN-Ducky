@@ -838,6 +838,14 @@ def _run_coding_agent_message(
     )
     if fresh_handoff:
         prompt_text = fresh_handoff + prompt_text
+    try:
+        from backend.search.hints import skill_hint
+
+        hint = skill_hint(user_text, conv=conv)
+        if hint:
+            prompt_text = f"[{hint}]\n\n{prompt_text}"
+    except Exception:  # noqa: BLE001 — a hint is optional
+        pass
     prompt_text = permission_note(conv.id) + prompt_text
     from frontend.ui_web.workspace_bootstrap import build_journal, build_run_context, record_external_edits
 
