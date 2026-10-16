@@ -373,6 +373,12 @@ def test_move_and_delete_use_the_undoable_project_operations(project, monkeypatc
     assert calls == [("rename", "src/app.py", "core.py")]
     out = _call(wc.workspace_delete_file, "README.md")
     assert out == {"path": "README.md", "deleted": True, "restorable": True}
+    # .verse entries say whether UEFN's Verse build was told (Epic VerseToolset) or not.
+    monkeypatch.setattr(project_files, "delete_project_entry", lambda rel: {"path": rel, "via": "uefn"})
+    assert _call(wc.workspace_delete_file, "Verse/A")["via"] == "uefn"
+    monkeypatch.setattr(project_files, "move_project_entry", lambda src, parent: {"path": f"{parent}/A", "via": "uefn"})
+    monkeypatch.setattr(project_files, "rename_project_entry", lambda src, name: {"path": f"lib/{name}", "via": "disk"})
+    assert _call(wc.workspace_move_file, "src/A", "lib/B")["via"] == "disk"
 
 
 def test_reads_reach_another_of_the_persons_projects_by_absolute_path(project, monkeypatch, tmp_path) -> None:

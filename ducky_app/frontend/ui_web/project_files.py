@@ -1128,8 +1128,50 @@ def _is_descendant_or_self(ancestor: Path, candidate: Path) -> bool:
     return _is_path_under(candidate, ancestor)
 
 
+def _move_entry(source: Path, dest: Path) -> None:
+    """Move a file or folder; a folder holding .verse files moves file by file.
+
+    UEFN's Verse build follows file events, and a folder moved in one step reports only
+    the folder: its files stay on the build's list where they were (Script error 3000 on
+    every later build) and are not compiled where they land.
+    """
+    from backend.mcp_plugins.epic_verse_files import holds_verse
+
+    if source.is_symlink() or source.is_junction() or not (source.is_dir() and holds_verse(source)):
+        shutil.move(str(source), str(dest))
+        return
+    for dirpath, dirnames, filenames in os.walk(source):
+        here = Path(dirpath)
+        into = dest / here.relative_to(source)
+        into.mkdir(parents=True, exist_ok=True)
+        # A linked folder moves as the link, never as the files it points at.
+        links = [d for d in dirnames if (here / d).is_symlink() or (here / d).is_junction()]
+        dirnames[:] = [d for d in dirnames if d not in links]
+        for name in (*links, *filenames):
+            shutil.move(str(here / name), str(into / name))
+    shutil.rmtree(source)
+
+
+def _drop_lore_orphans(relative_paths: list[str]) -> None:
+    """Lore keeps a pending add for a file that is gone, and CheckIn then fails to hash it."""
+    try:
+        from frontend.ui_web.verse_editor.urc.lore_host import drop_missing_orphans, has_lore
+
+        root = str(_project_root())
+        if has_lore(root):
+            drop_missing_orphans(root, prefixes=relative_paths)
+    except Exception:
+        pass  # revision control housekeeping never fails the file operation
+
+
 def move_project_entry(source_relative: str, dest_parent_relative: str) -> dict[str, str]:
-    """Move a file or folder under Content into another Content folder."""
+    """Move a file or folder under Content into another Content folder.
+
+    With UEFN open on this island, .verse entries move through Epic's VerseToolset so
+    the Verse build follows them (backend.mcp_plugins.epic_verse_files).
+    """
+    from backend.mcp_plugins import epic_verse_files
+
     _require_writable_mutation(source_relative)
     _require_writable_content_path(dest_parent_relative)
     source_rel = source_relative.strip().replace("\\", "/").strip("/")
@@ -1160,13 +1202,22 @@ def move_project_entry(source_relative: str, dest_parent_relative: str) -> dict[
 
     root = _project_root().resolve()
     dest_rel = str(dest.relative_to(root)).replace("\\", "/")
+    verse = epic_verse_files.holds_verse(source)
+    via = "disk"
 
     def _do_move() -> None:
-        shutil.move(str(source), str(dest))
+        nonlocal via
+        if verse and epic_verse_files.move(root, source, dest):
+            via = "uefn"
+        else:
+            _move_entry(source, dest)
 
     _pipeline_path_op("move", dest_rel, source=source_rel, tool="move_project_entry", perform=_do_move)
     _invalidate_file_paths_cache()
-    return {"path": dest_rel}
+    if not verse:
+        return {"path": dest_rel}
+    _drop_lore_orphans([source_rel])
+    return {"path": dest_rel, "via": via}
 
 
 def _dedupe_dest_name(dest_parent: Path, name: str, *, is_dir: bool) -> str:
@@ -1372,7 +1423,13 @@ def purge_undo_trash() -> None:
 
 
 def delete_project_entry(relative_path: str) -> dict[str, str]:
-    """Move a file or folder under Content to the undo-trash (restorable via Ctrl+Z)."""
+    """Move a file or folder under Content to the undo-trash (restorable via Ctrl+Z).
+
+    With UEFN open on this island, .verse entries are deleted through Epic's
+    VerseToolset so the Verse build drops them; the trash keeps a copy for undo.
+    """
+    from backend.mcp_plugins import epic_verse_files
+
     _require_writable_mutation(relative_path)
     rel = relative_path.strip().replace("\\", "/").strip("/")
     if not rel or _is_content_root_rel(rel):
@@ -1382,12 +1439,29 @@ def delete_project_entry(relative_path: str) -> dict[str, str]:
     if not target.exists():
         raise ValueError(f"Not found: {relative_path}")
     token = uuid.uuid4().hex
+    root = _project_root().resolve()
+    verse = epic_verse_files.holds_verse(target)
+    via = "disk"
 
     def _do_trash() -> dict[str, str]:
+        nonlocal via
         slot = _trash_dir() / token
         slot.mkdir(parents=True, exist_ok=True)
         dest = slot / target.name
-        shutil.move(str(target), str(dest))
+        package = epic_verse_files.delete_package(root, target) if verse else ""
+        if not package:
+            _move_entry(target, dest)
+        else:
+            if target.is_dir():
+                shutil.copytree(target, dest, symlinks=True)
+            else:
+                shutil.copy2(target, dest)
+            if epic_verse_files.delete(package, root, target):
+                via = "uefn"
+            elif target.is_dir():
+                shutil.rmtree(target)  # file by file, so the build still hears each one go
+            else:
+                target.unlink()
         _trash_registry[token] = {
             "orig": str(target),
             "trash": str(dest),
@@ -1399,7 +1473,10 @@ def delete_project_entry(relative_path: str) -> dict[str, str]:
 
     _pipeline_path_op("delete", rel, tool="delete_project_entry", perform=_do_trash)
     _invalidate_file_paths_cache()
-    return {"path": rel, "trash_token": token, "name": target.name}
+    if not verse:
+        return {"path": rel, "trash_token": token, "name": target.name}
+    _drop_lore_orphans([rel])
+    return {"path": rel, "trash_token": token, "name": target.name, "via": via}
 
 
 def restore_trashed_entry(trash_token: str) -> dict[str, str]:
@@ -1423,7 +1500,7 @@ def restore_trashed_entry(trash_token: str) -> dict[str, str]:
         rel = str(meta.get("rel") or dest.name)
 
     def _do_restore() -> None:
-        shutil.move(str(trash_path), str(dest))
+        _move_entry(trash_path, dest)
         try:
             trash_path.parent.rmdir()  # remove the now-empty token slot
         except OSError:
@@ -1436,7 +1513,9 @@ def restore_trashed_entry(trash_token: str) -> dict[str, str]:
 
 
 def rename_project_entry(source_relative: str, new_name: str) -> dict[str, str]:
-    """Rename a file or folder in place under Content."""
+    """Rename a file or folder in place under Content (.verse entries as in move_project_entry)."""
+    from backend.mcp_plugins import epic_verse_files
+
     _require_writable_mutation(source_relative)
     safe_name = _validate_entry_name(new_name)
     _require_not_digest(safe_name)
@@ -1455,13 +1534,22 @@ def rename_project_entry(source_relative: str, new_name: str) -> dict[str, str]:
         raise ValueError(f"Already exists: {safe_name}")
     root = _project_root().resolve()
     dest_rel = str(dest.relative_to(root)).replace("\\", "/")
+    verse = epic_verse_files.holds_verse(source)
+    via = "disk"
 
     def _do_rename() -> None:
-        source.rename(dest)
+        nonlocal via
+        if verse and epic_verse_files.move(root, source, dest):
+            via = "uefn"
+        else:
+            _move_entry(source, dest)
 
     _pipeline_path_op("rename", dest_rel, source=source_rel, tool="rename_project_entry", perform=_do_rename)
     _invalidate_file_paths_cache()
-    return {"path": dest_rel}
+    if not verse:
+        return {"path": dest_rel}
+    _drop_lore_orphans([source_rel])
+    return {"path": dest_rel, "via": via}
 
 
 def create_project_verse_file(parent_relative: str, name: str, content: str = "") -> dict[str, str]:

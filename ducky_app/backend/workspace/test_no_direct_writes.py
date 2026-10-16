@@ -49,12 +49,10 @@ ALLOWLIST: dict[str, str] = {
     "frontend/ui_web/project_files.py::purge_undo_trash": "undo-trash housekeeping, not project content",
     # `perform` callbacks: the filesystem step of ProjectWriter.path_op, run under its
     # locks, policy and journal. The enclosing function passes them to _pipeline_path_op.
-    "frontend/ui_web/project_files.py::rename_project_entry._do_rename": "path_op perform",
-    "frontend/ui_web/project_files.py::move_project_entry._do_move": "path_op perform",
     "frontend/ui_web/project_files.py::copy_project_entry._do_copy": "path_op perform",
     "frontend/ui_web/project_files.py::import_external_entries._do_import": "path_op perform",
     "frontend/ui_web/project_files.py::delete_project_entry._do_trash": "path_op perform",
-    "frontend/ui_web/project_files.py::restore_trashed_entry._do_restore": "path_op perform",
+    "frontend/ui_web/project_files.py::_move_entry": "the move step of the rename/move/delete/restore path_op performs",
     "backend/tools/verse/template_verify.py::_cleanup._unlink": "path_op perform",
     "backend/workspace/journal.py::_unlink_through_pipeline._unlink": "path_op perform",
     "backend/workspace/journal.py::_move_back_through_pipeline._move": "path_op perform",

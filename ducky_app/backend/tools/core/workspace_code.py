@@ -682,6 +682,9 @@ def workspace_replace_lines(
 def workspace_move_file(source: str, destination: str, pretty: bool = False) -> str:
     """Move or rename a project file or folder (destination: the new project-relative path).
     Undoable from the Changes view like an edit; never overwrites an existing destination.
+    With UEFN open, .verse files move through Epic's VerseToolset so the Verse build follows
+    them (via: "uefn"). A Verse folder moved in a shell breaks every later build with
+    Script error 3000, so use this.
     """
     from frontend.ui_web import project_files
 
@@ -700,19 +703,22 @@ def workspace_move_file(source: str, destination: str, pretty: bool = False) -> 
     # that the final destination is out of lane. Each step also rechecks policy.
     paths = (src, intermediate, dst) if dst_parent != src_parent else (src, dst)
     get_writer().preflight_paths("move", paths, tool="workspace_move_file")
-    path = src
+    path, via = src, ""
     if dst_parent != src_parent:
         require_ai_path_operation(resolve_workspace_path(src), resolve_workspace_path(intermediate))
-        path = project_files.move_project_entry(src, dst_parent)["path"]
+        out = project_files.move_project_entry(src, dst_parent)
+        path, via = out["path"], out.get("via") or via
     if dst_name != src_name:
-        path = project_files.rename_project_entry(path, dst_name)["path"]
-    return tool_json({"path": path, "from": src}, pretty=pretty)
+        out = project_files.rename_project_entry(path, dst_name)
+        path, via = out["path"], out.get("via") or via
+    return tool_json({"path": path, "from": src, **({"via": via} if via else {})}, pretty=pretty)
 
 
 @mcp.tool()
 def workspace_delete_file(relative_path: str = "", pretty: bool = False, path: str = "") -> str:
     """Delete a project file or folder. It goes to Ducky's undo trash (restorable from the
-    Changes view), so prefer this to a shell rm / Remove-Item.
+    Changes view), so prefer this to a shell rm / Remove-Item. With UEFN open, .verse files
+    are deleted through Epic's VerseToolset so the Verse build drops them (via: "uefn").
     """
     from frontend.ui_web import project_files
 
@@ -721,7 +727,10 @@ def workspace_delete_file(relative_path: str = "", pretty: bool = False, path: s
     from backend.workspace.ai_ignore import require_ai_path_operation
     require_ai_path_operation(resolve_workspace_path(relative_path))
     out = project_files.delete_project_entry(relative_path)
-    return tool_json({"path": out.get("path"), "deleted": True, "restorable": True}, pretty=pretty)
+    payload = {"path": out.get("path"), "deleted": True, "restorable": True}
+    if out.get("via"):
+        payload["via"] = out["via"]
+    return tool_json(payload, pretty=pretty)
 
 
 # ----------------------------------------------------------------------------- git
