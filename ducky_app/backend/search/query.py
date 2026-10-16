@@ -1,6 +1,7 @@
 """Ranked search over the skill and tool index: keywords + meaning, then what this chat may use.
 
-1. Keyword candidates: FTS5 bm25 over title, heading path and body (top 50).
+1. Keyword candidates: FTS5 bm25 over title, heading path, body and a tool's summary
+   line (top 50).
 2. Meaning candidates: cosine between the query vector and every row vector (top 50).
 3. Reciprocal rank fusion (k=60) merges the two lists; an exact pack / sub-skill id
    or tool name in the query is pinned first.

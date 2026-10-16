@@ -108,7 +108,12 @@ def test_search_rows_from_before_the_summary_column_survive_the_upgrade(monkeypa
     assert len(repo.keyword("place an actor", kinds=["tool"])) == 1
     assert repo.keyword("UEFN", kinds=["tool"]) == []
     assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    conn.execute("INSERT INTO search_fts(search_fts) VALUES ('integrity-check')")
+    # rank=1 compares the index with search_docs; without it FTS5 only checks itself.
+    conn.execute("INSERT INTO search_fts(search_fts, rank) VALUES ('integrity-check', 1)")
+    # A change to the summary alone reaches the index too (the update trigger lists it).
+    conn.execute("UPDATE search_docs SET summary='Drop a prop on the map.' WHERE doc_key='tool:spawn_actor'")
+    assert len(repo.keyword("prop map", kinds=["tool"])) == 1 and repo.keyword("place level", kinds=["tool"]) == []
+    conn.execute("INSERT INTO search_fts(search_fts, rank) VALUES ('integrity-check', 1)")
 
 
 def test_hostile_query_text_never_raises() -> None:

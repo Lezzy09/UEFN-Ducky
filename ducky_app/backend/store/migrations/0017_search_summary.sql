@@ -2,8 +2,10 @@
 -- docstring plus parameter names, so bm25 sank a tool whose first line says exactly what
 -- the question asks ("Place an actor ..." for "place an actor in the level") under shorter
 -- rows that only shared a word. search_fts is rebuilt with a fourth column, summary, that
--- ranking weights on its own; the body keeps the full text. Skill and record rows leave it
--- empty. Rows are derived data: the chunker version bump re-indexes every source.
+-- ranking weights on its own. The chunker moves the first line out of the body into it (not
+-- a copy: bm25 measures row length over all columns, so a copy shifted skill rankings too).
+-- Skill and record rows leave it empty. Rows are derived data: the chunker version bump
+-- re-indexes every source.
 
 ALTER TABLE search_docs ADD COLUMN summary TEXT NOT NULL DEFAULT '';
 

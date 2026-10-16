@@ -114,6 +114,11 @@ def test_upgrade_from_schema_nine_preserves_existing_workflows(storage):
     conn.execute("DROP TABLE workflow_versions")
     conn.execute("ALTER TABLE projects DROP COLUMN kind")  # 0011 re-adds it
     conn.execute("ALTER TABLE messages DROP COLUMN fmt")  # 0015 re-adds it
+    # 0016 recreates the search triggers and FTS table, 0017 re-adds the summary column.
+    for trigger in ("search_docs_ai", "search_docs_ad", "search_docs_au"):
+        conn.execute(f"DROP TRIGGER {trigger}")
+    conn.execute("DROP TABLE search_fts")
+    conn.execute("ALTER TABLE search_docs DROP COLUMN summary")
     conn.execute("PRAGMA user_version=9")
     db.reset_for_tests()
     assert store.get_workflow(legacy["id"])["name"] == "Before versions"
