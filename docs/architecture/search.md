@@ -66,7 +66,7 @@ catalog is not re-indexed.
 2. Meaning: cosine with every vector of the current model, top 50 (per-process
    matrix, cached until the index changes).
 3. Reciprocal rank fusion, weights (keyword, meaning) = (1, 1) for skills and
-   (1, 0.5) for tools, tuned on the eval set. An exact `pack/sub-skill`, pack id or
+   (1, 0.75) for tools, tuned on the eval set. An exact `pack/sub-skill`, pack id or
    tool name in the query is pinned first, and so is a tool whose name the query
    spells in plain words ("run a workflow" pins `run_workflow`; skipped when more
    than three tools share the words).

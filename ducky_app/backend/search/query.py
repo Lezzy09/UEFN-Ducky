@@ -31,7 +31,7 @@ TOOL_KINDS = ("tool",)
 CANDIDATES = 50
 RRF_K = 60
 # Reciprocal rank fusion weights (keyword, meaning), tuned on backend/search/eval.
-WEIGHTS = {"skills": (1.0, 1.0), "tools": (1.0, 0.5)}
+WEIGHTS = {"skills": (1.0, 1.0), "tools": (1.0, 0.75)}
 PER_SUBSKILL = 2
 _ID_PAIR = re.compile(r"^\s*([a-z][a-z0-9_-]{0,63})\s*/\s*([a-z][a-z0-9_-]{0,63})\s*$")
 _NAME = re.compile(r"[A-Za-z0-9_\-]+")
