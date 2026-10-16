@@ -22,7 +22,8 @@ tool from plain words. Decision record: [ADR 0004](../adr/0004-search-index-in-d
 
 - **pack** — `skill:<pack>`: label, description, keywords and the list of its files.
 - **subskill** — `skill:<pack>/<id>` (SKILL.md is `core`): label, description,
-  load condition, keywords and the opening of the file.
+  load condition, keywords and the file's intro (or the list of its section headings),
+  so a specific question lands on the section row that holds the details.
 - **section** — `skill:<pack>/<id>#<heading-slug>`: one `##`/`###` section, at most
   1,200 characters (longer ones split on paragraphs; a code block stays whole up to
   2,400).
@@ -31,7 +32,13 @@ tool from plain words. Decision record: [ADR 0004](../adr/0004-search-index-in-d
 - **record** — `record:<plugin>:<scope>:<id>`: a plugin's own row through `api.search`.
 
 The vector of a row is computed from its heading path ("pack > file > section")
-plus its text, so a short section still says what it belongs to.
+plus its text, so a short section still says what it belongs to. A tool's vector is
+its name and the first line of its description only: a long docstring of usage notes
+averaged into one vector drowned what the tool does. `CHUNKER_VERSION` is part of
+every row's content hash, so changing how rows or vectors are built re-embeds them.
+
+Results never list the same read call twice (a pack and its `core` sub-skill both
+open with `skill_read_subskill(pack, "core")`).
 
 ## Sources and freshness
 

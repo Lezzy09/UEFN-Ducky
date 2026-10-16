@@ -274,6 +274,7 @@ def search(
     docs = repo.get_docs(ordered)
     out: list[dict[str, Any]] = []
     per_sub: dict[tuple[str, str], int] = {}
+    reads: set[str] = set()
     for doc_id in ordered:
         doc = docs.get(doc_id)
         if doc is None or doc.get("kind") not in kinds or not ctx.allows(doc):
@@ -283,7 +284,12 @@ def search(
             if per_sub.get(key, 0) >= PER_SUBSKILL:
                 continue
             per_sub[key] = per_sub.get(key, 0) + 1
-        out.append(_result(doc, fused[doc_id], kw_rank.get(doc_id), cos.get(doc_id)))
+        row = _result(doc, fused[doc_id], kw_rank.get(doc_id), cos.get(doc_id))
+        # A pack and its core sub-skill open with the same call: list it once.
+        if row.get("read") and row["read"] in reads:
+            continue
+        reads.add(str(row.get("read") or ""))
+        out.append(row)
         if len(out) >= limit:
             break
     return out

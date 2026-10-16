@@ -21,7 +21,7 @@ from typing import Any, Iterable
 from backend.store.repos.search import Doc
 
 # Bump when the rows built from the same files change shape; every source re-indexes.
-CHUNKER_VERSION = "2"
+CHUNKER_VERSION = "3"
 SECTION_MAX = 1200
 CODE_BLOCK_MAX = 2400
 SUBSKILL_INTRO = 600
@@ -52,12 +52,22 @@ def content_hash(*parts: Any) -> str:
 
 
 def _finish(doc: Doc) -> Doc:
-    doc.content_hash = content_hash(doc.kind, doc.title, doc.path, doc.body, doc.meta, doc.origin, doc.plugin_id)
+    # The version is part of the hash, so a new way of building rows or vectors re-embeds them.
+    doc.content_hash = content_hash(
+        CHUNKER_VERSION, doc.kind, doc.title, doc.path, doc.body, doc.meta, doc.origin, doc.plugin_id
+    )
     return doc
 
 
 def embed_text(doc: Doc) -> str:
-    """What the meaning model reads for one row."""
+    """What the meaning model reads for one row.
+
+    A tool is its name and the first line of its description: a long docstring (usage
+    notes, parameter rules) averaged into one vector drowns what the tool does.
+    """
+    if doc.kind == "tool":
+        lead = str((doc.meta or {}).get("description") or "")
+        return f"{doc.title}\n{lead}".strip()
     head = doc.path or doc.title
     if doc.title and doc.title not in head:
         head = f"{head}{SEP}{doc.title}"
