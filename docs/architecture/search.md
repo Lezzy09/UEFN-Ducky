@@ -31,7 +31,13 @@ tool from plain words. Decision record: [ADR 0004](../adr/0004-search-index-in-d
   names; `path` is who provides it (core, a plugin, a nested MCP server). The first
   line of the description sits in its own `summary` column instead of the body (see
   Ranking); skill and record rows leave `summary` empty.
-- **record** — `record:<plugin>:<scope>:<id>`: a plugin's own row through `api.search`.
+- **record** — `record:<plugin>:<account>~<scope>:<id>`: a plugin's own row through
+  `api.search`. The signed-in account is part of the key (every account's Local scope
+  is `personal`), so one person never reads or clears another's records on a shared PC.
+  Records have no other source: a rebuild keeps them and re-embeds them. They go with
+  an uninstall (and the plugin's later writes are refused until it is installed again),
+  with a purged team copy, and with a plugin-test sandbox (when the test ends, or six
+  hours later if the app closed first).
 
 The vector of a row is computed from its heading path ("pack > file > section")
 plus its text, so a short section still says what it belongs to. A tool's vector is
@@ -48,7 +54,7 @@ open with `skill_read_subskill(pack_id=pack, subskill_id="core")`).
 |---|---|---|
 | One skill pack (shipped, user, Store or plugin; disabled plugins too) | `pack:<id>` | chunker version, model, folder, origin, owner plugin, file stamps |
 | The MCP tool catalog (unfiltered) | `tools` | chunker version, model, catalog hash |
-| A plugin's records in one scope | `record:<plugin>:<scope>` | written directly by `api.search` |
+| A plugin's records in one account's scope | `record:<plugin>:<account>~<scope>` | written directly by `api.search` |
 
 A refresh skips a source whose revision matches `search_state`; inside a changed
 source it re-embeds only rows whose content hash changed or that lack a vector for
@@ -74,7 +80,7 @@ catalog is not re-indexed.
    rankings too. Indexing only the first paragraph was tried and lost tools whose key
    words sit further down ("undo the changes an agent made" → `changeset_revert`).
 2. Meaning: cosine with every vector of the current model, top 50 (per-process
-   matrix, cached until the index changes).
+   matrix, cached until the index changes; see Concurrency).
 3. Reciprocal rank fusion, weights (keyword, meaning) = (1, 1) for skills and
    (1, 0.75) for tools, tuned on the eval set. An exact `pack/sub-skill`, pack id or
    tool name in the query is pinned first, and so is a tool whose name the query
@@ -82,7 +88,8 @@ catalog is not re-indexed.
    than three tools share the words).
 4. Filters for the calling chat, applied after ranking: packs denied for the ducky,
    its sub-skill allowlist (always-on and `core` stay), disabled plugins, tools not in
-   the chat's live catalog, records of other plugins or scopes.
+   the chat's live catalog. A plugin's record query is limited to its own source
+   *before* the top-50 cut, so other plugins' records can never crowd its rows out.
 5. At most two rows per sub-skill.
 
 Every hit carries `read`: the exact `skill_read_subskill(pack_id=..., subskill_id=...,
@@ -100,6 +107,37 @@ change any files") and pulled the hint toward UEFN Ducky's own how-to sections. 
 whole message is searched only when that sentence finds nothing. A hit counts when
 its meaning score is at least 0.42, or at least 0.28 with a keyword rank in the top
 10, so chit-chat ("continue", "did you finish?") gets no hint.
+
+## Concurrency
+
+Several processes use one `ducky.db`: the app and every IDE or agent bridge, each with
+its own background "search-index" thread and many request threads.
+
+- **First open.** A process's first open of the file (a staged restore, the switch to
+  WAL, migrations and the pre-migrate snapshot) runs under `ducky.db.open-lock`, an OS
+  file lock (`store/db.py`). The WAL switch also retries: SQLite never waits on that
+  read-to-write lock upgrade, so two processes opening a new file failed at once with
+  "database is locked". `open_checked` never treats a lock as damage, so it never
+  restores a snapshot over live data because another process held the file.
+- **Cache token.** Triggers count every insert, update and delete of `search_docs` and
+  `search_vecs` in `search_meta` (migration 0018), whoever writes them. That counter
+  keys each process's vector-matrix cache; one thread loads a new revision while
+  concurrent searches wait for it.
+- **One snapshot per search.** The keyword ids, vector ids, pins and the rows they name
+  are read in one read transaction (one WAL snapshot), so a rebuild in between cannot
+  hand a search unrelated rows under re-used ids.
+- **Writes check inside the transaction.** A vector fill stores a vector only if the row
+  still holds the text it was made from. A record write checks the per-plugin cap and
+  the plugin's uninstall mark inside its own write transaction. An unchanged record is
+  not re-embedded or rewritten.
+- **Triggers that re-list tools.** A plugin that finishes registering after boot
+  (enable, reload, repair, late register) requests a refresh. A plugin that is enabled
+  but not loaded in this process keeps its tool rows. `ducky_get_tools` remembers the
+  catalog revision per chat filter, so chats with different plugin selections in one
+  process are not mistaken for a catalog change.
+- **WAL size.** `journal_size_limit` caps `ducky.db-wal` at 64 MiB after each reset; one
+  large write used to leave it at its high-water mark while any process kept the file
+  open.
 
 ## Fallbacks
 
@@ -123,4 +161,6 @@ tool questions against a full 1,257-tool catalog: hybrid hit@1 0.714 → 0.771, 
 question, hit@3 0.886 → 0.857, MRR 0.792 → 0.779: `set_actor_properties` and
 `set_verse_editable` have first lines without "change" or "device", so other rows
 whose first lines have them pass them for "change a property on a placed device".
-Skills are unchanged.
+Skills are unchanged. The first lines of `set_actor_properties`, `spawn_actor`,
+`search_assets`, `add_niagara_emitter`, `ducky_ask_user` and `changeset_revert` were
+then reworded to say what each tool does in the words people use.

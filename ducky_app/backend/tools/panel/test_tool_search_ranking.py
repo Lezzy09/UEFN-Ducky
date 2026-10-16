@@ -39,8 +39,38 @@ def test_a_new_catalog_revision_requests_a_tool_reindex(monkeypatch) -> None:
 
     calls: list[str] = []
     monkeypatch.setattr(indexer, "request_refresh", lambda reason="": calls.append(reason))
-    monkeypatch.setattr(ducky_panel, "_seen_catalog_revision", "")
+    monkeypatch.setattr(ducky_panel, "_seen_catalog_revisions", {})
     ducky_panel._note_catalog_revision("r1")  # first sight in this process: nothing changed yet
     ducky_panel._note_catalog_revision("r1")
     ducky_panel._note_catalog_revision("r2")
     assert calls == ["tools"]
+
+
+def test_chats_with_different_tool_filters_do_not_look_like_a_catalog_change(monkeypatch) -> None:
+    # Two chats in one process see differently filtered catalogs; alternating between
+    # them used to start a full tool re-list on every call.
+    from backend.search import indexer
+    from backend.uefn_plugins.host import _ACTIVE_UEFN_AGENT_IDS
+
+    calls: list[str] = []
+    monkeypatch.setattr(indexer, "request_refresh", lambda reason="": calls.append(reason))
+    monkeypatch.setattr(ducky_panel, "_seen_catalog_revisions", {})
+    for _ in range(3):
+        token = _ACTIVE_UEFN_AGENT_IDS.set(("meshy",))
+        ducky_panel._note_catalog_revision("only-meshy")
+        _ACTIVE_UEFN_AGENT_IDS.reset(token)
+        ducky_panel._note_catalog_revision("everything")
+    assert calls == []
+    ducky_panel._note_catalog_revision("everything-plus-a-new-plugin")
+    assert calls == ["tools"]
+
+
+def test_pattern_paging_reaches_every_word_match(monkeypatch) -> None:
+    from backend.search import query
+
+    names = [f"thing_export_{i:03d}" for i in range(140)]
+    tools = _tools(*names)
+    monkeypatch.setattr(query, "search_tools", lambda *a, **k: [])
+    ranked = ducky_panel._ranked_tool_names(tools, {t.name: t for t in tools}, "thing export", 50, all_words=True)
+    assert sorted(ranked) == names  # every match, not the first 50
+    assert len(ducky_panel._ranked_tool_names(tools, {t.name: t for t in tools}, "thing export", 50)) == 50

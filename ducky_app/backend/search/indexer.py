@@ -30,6 +30,9 @@ _log = logging.getLogger("uefn_ducky.search")
 CHECK_EVERY_S = 30.0
 DEBOUNCE_S = 0.75
 IDLE_EXIT_S = 10.0  # the worker thread ends after this long with nothing to do
+# Records a plugin test wrote are purged when the test ends; these outlived a test whose
+# app was closed first. No test runs this long.
+SANDBOX_RECORD_TTL_S = 6 * 3600.0
 
 _state_lock = threading.Lock()
 _wake = threading.Event()
@@ -187,9 +190,15 @@ def _list_tools_blocking_unfiltered() -> list[Any]:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
+        # The search-index thread: each nested server's connect and listing is bounded
+        # by the MCP pool; a cap here would abandon slow cold listings for good.
         return asyncio.run(list_mcp_tools(apply_filters=False))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="search-list-tools")
+    try:
         return pool.submit(lambda: asyncio.run(list_mcp_tools(apply_filters=False))).result(timeout=60)
+    finally:
+        # Not `with`: its exit waits for the listing, so the 60 s bound never applied.
+        pool.shutdown(wait=False)
 
 
 def _enabled_mcp_servers() -> set[str]:
@@ -265,13 +274,42 @@ def index_tools(rows: list[dict[str, Any]], catalog_rev: str) -> dict[str, int]:
         return {"skipped": 1}
     docs = chunker.tool_docs(rows)
     names = {d.doc_key for d in docs}
-    # A nested MCP server that is enabled but not answering keeps its last rows.
+    # A nested MCP server that is enabled but not answering keeps its last rows, and so
+    # does a desktop plugin that is enabled but not registered in this process yet (a
+    # slow boot register, a bridge started before the plugin was switched on): the
+    # catalog lists only what is loaded here.
     enabled = _enabled_mcp_servers()
+    listed_plugins = {str(r.get("plugin_id") or "") for r in rows}
+    enabled_plugins = _enabled_desktop_plugins() - listed_plugins - _tried_and_not_loaded()
+    owners = repo.tool_owners("tools")
     keep = {
         key for key in repo.existing("tools", model)
-        if key not in names and "__" in key and key.split(":", 1)[1].split("__", 1)[0] in enabled
+        if key not in names and (
+            ("__" in key and key.split(":", 1)[1].split("__", 1)[0] in enabled)
+            or owners.get(key, "") in enabled_plugins
+        )
     }
     return index_source("tools", docs, revision, keep=keep)
+
+
+def _tried_and_not_loaded() -> set[str]:
+    """Enabled plugins that failed to load or are paused here: not "still registering",
+    so their old tool rows go (process-local state; another process keeps serving its own)."""
+    try:
+        from backend.uefn_plugins.host import tried_and_not_loaded
+
+        return tried_and_not_loaded()
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _enabled_desktop_plugins() -> set[str]:
+    try:
+        from backend.uefn_plugins.store import get_enabled_plugin_ids
+
+        return {str(p) for p in get_enabled_plugin_ids() if p}
+    except Exception:  # noqa: BLE001
+        return set()
 
 
 def fill_missing_vectors() -> int:
@@ -282,7 +320,8 @@ def fill_missing_vectors() -> int:
     if not docs:
         return 0
     vectors, model = _embed(docs)
-    return repo.set_vectors(vectors, model)
+    # Only rows that still hold the text the vectors were made from (see set_vectors).
+    return repo.set_vectors(vectors, model, {d.doc_key: d.content_hash for d in docs})
 
 
 def refresh_now(*, packs: bool = True, tools: bool = True) -> dict[str, Any]:
@@ -291,7 +330,10 @@ def refresh_now(*, packs: bool = True, tools: bool = True) -> dict[str, Any]:
     report: dict[str, Any] = {}
     if packs:
         try:
-            report["packs"] = index_packs(live_pack_sources())
+            from backend.skills.store import pass_memo
+
+            with pass_memo():  # each pack's files are stat'd once per pass, not three times
+                report["packs"] = index_packs(live_pack_sources())
         except Exception as exc:  # noqa: BLE001
             _log.warning("search: indexing skills failed (%s)", type(exc).__name__, exc_info=True)
             report["packs_error"] = type(exc).__name__
@@ -306,6 +348,11 @@ def refresh_now(*, packs: bool = True, tools: bool = True) -> dict[str, Any]:
         report["filled"] = fill_missing_vectors()
     except Exception:  # noqa: BLE001
         _log.debug("search: filling vectors failed", exc_info=True)
+    try:
+        # A plugin test whose app was closed before the test ended never purged its sandbox.
+        report["stale_sandbox_records"] = repo.drop_stale_sandbox_records(SANDBOX_RECORD_TTL_S)
+    except Exception:  # noqa: BLE001
+        _log.debug("search: dropping stale sandbox records failed", exc_info=True)
     report["seconds"] = round(time.perf_counter() - started, 3)
     report["at"] = time.time()
     global _last_report
@@ -340,8 +387,13 @@ def _worker() -> None:
         # The tool catalog is listed only when something says it changed (or was never
         # indexed): listing it can wake nested MCP servers, a skill stat pass cannot.
         quiet = {"skills-only", "periodic"}
-        tools = bool(reasons - quiet) or repo.get_state("tools") is None
         try:
+            # Inside the try: a failed read here used to kill the worker with _running
+            # still True (periodic checks stopped, the Database card said "Indexing" for good).
+            try:
+                tools = bool(reasons - quiet) or repo.get_state("tools") is None
+            except Exception:  # noqa: BLE001
+                tools = bool(reasons - quiet)
             refresh_now(tools=tools)
         except Exception:  # noqa: BLE001
             _log.debug("search: refresh failed", exc_info=True)
@@ -402,12 +454,22 @@ def on_change(reason: str) -> Callable[[], None]:
 
 
 def forget_plugin(plugin_id: str) -> None:
-    """Uninstall: drop the plugin's records now; its packs and tools go with the next refresh."""
+    """Uninstall: drop the plugin's records now and refuse its later record writes (from a
+    thread that outlived the unload, or its copy in a bridge); packs and tools go with the
+    next refresh."""
     try:
-        repo.drop_sources_like(f"record:{plugin_id}:")
+        repo.forget_records(plugin_id)
     except Exception:  # noqa: BLE001
-        _log.debug("search: dropping records of %s failed", plugin_id, exc_info=True)
+        _log.warning("search: dropping the records of %s failed", plugin_id, exc_info=True)
     request_refresh(f"uninstall:{plugin_id}")
+
+
+def plugin_installed(plugin_id: str) -> None:
+    """Install or reinstall: the plugin may write records again."""
+    try:
+        repo.clear_plugin_gone(plugin_id)
+    except Exception:  # noqa: BLE001
+        _log.warning("search: re-allowing records of %s failed", plugin_id, exc_info=True)
 
 
 def reset_for_tests() -> None:
@@ -445,7 +507,7 @@ def status() -> dict[str, Any]:
 
 
 def rebuild() -> dict[str, Any]:
-    """Drop every row and index everything again (in the background)."""
+    """Drop every derived row (plugin records stay) and index everything again (in the background)."""
     repo.wipe()
     request_refresh("rebuild")
     return {"ok": True, "started": True}

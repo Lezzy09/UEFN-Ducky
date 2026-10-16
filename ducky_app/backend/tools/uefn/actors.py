@@ -80,7 +80,7 @@ def spawn_actor(
     tags: Optional[list[str]] = None,
     pretty: bool = False,
 ) -> str:
-    """Place an actor (asset_path or actor_class) — meshes, Blueprints, Verse devices.
+    """Place an actor, prop or Creative device in the level (asset_path or actor_class): meshes, Blueprints, Verse devices.
 
     Prefer ``label`` + ``folder`` here (same tick) instead of separate
     set_actor_label / set_actor_folder calls. New actor is selected by default.
@@ -171,7 +171,10 @@ def get_actor_properties(actor_path: str, properties: list[str], pretty: bool = 
 
 @plugin_mcp_tool("uefn")
 def set_actor_properties(actor_path: str, properties: dict[str, Any], pretty: bool = False) -> str:
-    """Set actor properties via set_editor_property. See uefn_editor_python_hints for Fort* quirks."""
+    """Change property values on an existing actor such as a light, mesh or prop (set_editor_property).
+
+    See uefn_editor_python_hints for Fort* quirks.
+    """
     result = send_command("set_actor_properties", {"actor_path": actor_path, "properties": properties})
     return tool_json(result, pretty=pretty)
 

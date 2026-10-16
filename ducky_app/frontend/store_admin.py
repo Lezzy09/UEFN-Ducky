@@ -49,7 +49,7 @@ TABLES: dict[str, tuple[str, str, str, bool]] = {
     "usage_calls": ("Usage ledger", "logs", "Provider calls with tokens and cost (90-day retention).", True),
     "cache_docs": ("Cache documents", "logs", "Model lists, store catalog, skill manifests, perf reports.", True),
     "captures": ("Capture index", "logs", "Screenshots under tool_captures/, pruned by row.", True),
-    "search_docs": ("Search index", "search", "Skills, sections, tools and plugin records agents search; rebuilt by itself.", True),
+    "search_docs": ("Search index", "search", "Skills, sections, tools and plugin records agents search; rebuilt by itself (plugin records are kept).", True),
     "search_vecs": ("Search vectors", "search", "Meaning vectors for the search index; rebuilt by itself.", True),
 }
 
@@ -272,7 +272,14 @@ def _clear_table(table: str) -> dict[str, Any]:
         if table in ("search_docs", "search_vecs"):
             # Forget what was indexed so the next refresh rebuilds every source.
             conn.execute("DELETE FROM search_state")
-        cur = conn.execute(f"DELETE FROM {table}")
+        if table == "search_docs":
+            # Plugin records (api.search) have no other source: keep them, drop their
+            # vectors (the fill pass re-embeds them), rebuild the keyword index.
+            conn.execute("DELETE FROM search_vecs WHERE doc_id IN (SELECT id FROM search_docs WHERE kind='record')")
+            cur = conn.execute("DELETE FROM search_docs WHERE kind != 'record'")
+            conn.execute("INSERT INTO search_fts(search_fts) VALUES ('rebuild')")
+        else:
+            cur = conn.execute(f"DELETE FROM {table}")
         removed = cur.rowcount
     if table in ("digest_files", "digest_lines"):
         try:

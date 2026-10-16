@@ -21,15 +21,22 @@ import shutil
 import sqlite3
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Iterator
 
 DB_NAME = "ducky.db"
 SIDECAR_NAMES = (DB_NAME + "-wal", DB_NAME + "-shm")
 SNAPSHOT_DIR_NAME = "snapshots"
+# Held by a process while it opens ducky.db for the first time (staged restore, WAL
+# switch, migrations), so the app and its IDE/agent bridges never do those at once.
+OPEN_LOCK_NAME = DB_NAME + ".open-lock"
+OPEN_LOCK_WAIT_S = 120.0  # a migration may first copy a large database (pre-migrate snapshot)
 KEEP_SNAPSHOTS = 3
 BUSY_TIMEOUT_MS = 5000
+# ducky.db-wal is reused, never shrunk, while any process keeps the file open; one big
+# transaction (a re-index, an import) left it at its high-water mark for good.
+WAL_SIZE_LIMIT = 64 * 1024 * 1024
 # Connections of finished threads kept open for the next new thread to adopt.
 _IDLE_KEEP = 4
 # Page cache per connection, KiB. Worker threads get a small one: each kept its
@@ -105,17 +112,90 @@ def _apply_pending_restore(path: Path) -> None:
     if not pending.is_file():
         return
     try:
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        if path.exists():
-            path.replace(path.parent / f"{DB_NAME}.replaced-{stamp}")
-        for name in SIDECAR_NAMES:
-            side = path.parent / name
-            if side.exists():
-                side.unlink()
-        pending.replace(path)
-        _log.warning("ducky.db restored from a staged snapshot (previous file kept as %s.replaced-%s)", DB_NAME, stamp)
+        backup = path.parent / f"{DB_NAME}.replaced-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+        n = 1
+        while backup.exists() or backup.with_name(backup.name + "-wal").exists():
+            n += 1
+            backup = backup.with_name(f"{backup.name.rsplit('~', 1)[0]}~{n}")
     except OSError as exc:
         _log.warning("staged ducky.db restore could not be applied yet: %s", exc)
+        return
+    # All or nothing. ducky.db goes first (that rename fails while any connection holds
+    # it); the old WAL travels with it (the app is often killed without a checkpoint, so
+    # the WAL holds the latest commits and SQLite replays it when the backup is opened).
+    # If any step fails, everything moved is put back: SQLite deletes a WAL left beside a
+    # missing or empty ducky.db, so a half-done swap would lose those commits.
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for name in (DB_NAME, *SIDECAR_NAMES):
+            src = path.parent / name
+            if src.exists():
+                dst = backup.with_name(backup.name + name[len(DB_NAME):])
+                src.rename(dst)
+                moved.append((src, dst))
+        pending.replace(path)
+        _log.warning("ducky.db restored from a staged snapshot (previous file kept as %s)", backup.name)
+    except OSError as exc:
+        for src, dst in reversed(moved):
+            try:
+                dst.rename(src)
+            except OSError:
+                _log.error("could not put %s back after a failed restore swap", src.name, exc_info=True)
+        _log.warning("staged ducky.db restore could not be applied yet: %s", exc)
+
+
+@contextmanager
+def _first_open_lock(folder: Path, wait_s: float = OPEN_LOCK_WAIT_S) -> Iterator[None]:
+    """Hold ``ducky.db.open-lock`` (an OS file lock, released if the process dies).
+
+    The app and every IDE/agent bridge open ducky.db at boot. Without this, two first
+    opens at once raced on the WAL switch ("database is locked" at once: SQLite never
+    waits on a read-to-write lock upgrade), a staged restore could be applied by two
+    processes and lose the previous file, and each upgrading process took its own
+    pre-migrate snapshot, pushing older restore points out.
+    """
+    folder.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(folder / OPEN_LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o600)
+    deadline = time.monotonic() + wait_s
+    try:
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise sqlite3.OperationalError(
+                        "database is locked: another UEFN Ducky process is still opening ducky.db"
+                    ) from None
+                time.sleep(0.02)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                import msvcrt
+
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _is_busy(exc: BaseException) -> bool:
+    """SQLITE_BUSY / SQLITE_LOCKED: another connection holds the lock (not damage)."""
+    code = getattr(exc, "sqlite_errorcode", 0) & 0xFF
+    return code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or "database is locked" in str(exc)
 
 
 DatabaseError = sqlite3.DatabaseError
@@ -186,8 +266,6 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
 
     _refuse_network_path(path)
     _refuse_real_appdata_under_pytest(path)
-    if (key or raw) not in _migrated:
-        _apply_pending_restore(path)
     # Resolve only after the guards have passed and the directory exists, so the
     # key is the settled one from the very first call. Keying the first call on
     # the pre-mkdir spelling and later calls on the resolved one opened a second
@@ -203,26 +281,30 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
         cache[key] = conn
         _thread_local.conns = cache
         return conn
-    # check_same_thread=False only so a finished thread's connection can be
-    # closed or handed to the next new thread; each connection still has one
-    # owning thread at a time.
-    conn = sqlite3.connect(
-        str(path), timeout=BUSY_TIMEOUT_MS / 1000, isolation_level=None, check_same_thread=False
-    )
-    conn.row_factory = sqlite3.Row
-    if os.environ.get("DUCKY_DB_TRACE"):
-        _install_trace(conn, path)
-    try:
-        with _guard:
-            # Initial WAL setup and migrations share the lock: opening another
-            # connection during schema creation cannot race the journal switch.
-            _configure(conn)
-            if key not in _migrated:
-                migrate(conn)
-                _migrated.add(key)
-    except BaseException:
-        conn.close()  # never leave a corrupt file held open (restore must rename it)
-        raise
+    with _guard:
+        # This process's first open of the file (staged restore, WAL switch, migrations)
+        # runs under the cross-process open lock; later connections only configure.
+        first = key not in _migrated
+        with _first_open_lock(path.parent) if first else nullcontext():
+            if first:
+                _apply_pending_restore(path)
+            # check_same_thread=False only so a finished thread's connection can be
+            # closed or handed to the next new thread; each connection still has one
+            # owning thread at a time.
+            conn = sqlite3.connect(
+                str(path), timeout=BUSY_TIMEOUT_MS / 1000, isolation_level=None, check_same_thread=False
+            )
+            conn.row_factory = sqlite3.Row
+            if os.environ.get("DUCKY_DB_TRACE"):
+                _install_trace(conn, path)
+            try:
+                _configure(conn)
+                if first:
+                    migrate(conn)
+                    _migrated.add(key)
+            except BaseException:
+                conn.close()  # never leave a corrupt file held open (restore must rename it)
+                raise
     cache[key] = conn
     _thread_local.conns = cache
     with _owned_lock:
@@ -305,11 +387,26 @@ def _install_trace(conn: sqlite3.Connection, path: Path) -> None:
 
 def _configure(conn: sqlite3.Connection) -> None:
     conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-    # Switching to WAL takes an exclusive lock and fails at once ("database is
-    # locked") while another connection writes; the file stays WAL once set, so
-    # only switch a file that is not already.
-    if str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "wal":
-        conn.execute("PRAGMA journal_mode=WAL")
+    # Switching to WAL upgrades a read lock to a write lock, and SQLite never runs the
+    # busy handler for that upgrade: it fails at once ("database is locked") while
+    # another connection holds the file. The file stays WAL once set, so only a file
+    # that is not (new, or put back by a restore) is switched, and the switch is retried.
+    deadline = time.monotonic() + BUSY_TIMEOUT_MS / 1000
+
+    def _mode() -> str:
+        return str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+
+    while _mode() != "wal":
+        try:
+            if str(conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower() == "wal":
+                break
+        except sqlite3.OperationalError as exc:
+            if not _is_busy(exc):
+                raise
+        if time.monotonic() > deadline:
+            raise sqlite3.OperationalError("database is locked: ducky.db could not be switched to WAL")
+        time.sleep(0.02)
+    conn.execute(f"PRAGMA journal_size_limit={WAL_SIZE_LIMIT}")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA temp_store=MEMORY")
@@ -420,7 +517,7 @@ def migrate(conn: sqlite3.Connection) -> int:
         # On the connection we already hold: snapshot() would re-enter connect()
         # and deadlock on _guard (1.2.90 hung every upgraded panel at boot).
         try:
-            _vacuum_into(conn, Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent, label="pre-migrate")
+            _pre_migrate_copy(conn, current)
         except Exception:
             pass
     for number, path in migration_files():
@@ -533,6 +630,31 @@ def unchanged_since_snapshot(conn: sqlite3.Connection, newest: Path) -> bool:
     return saved.get("fingerprint") == data_fingerprint(conn)
 
 
+_premigrate_done: set[tuple[str, int]] = set()
+
+
+def _pre_migrate_copy(conn: sqlite3.Connection, current: int) -> None:
+    """One copy of the database before an upgrade from schema ``current``.
+
+    A first open that fails (busy) is retried, and the next process to take the open
+    lock migrates too: each used to add another copy of the same data, and keeping
+    three snapshots pushed every older restore point out. A recent copy for this
+    schema, made by this process or another, is reused.
+    """
+    folder = Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent
+    label = f"pre-migrate-v{current}"
+    mark = (str(folder), current)
+    if mark in _premigrate_done:
+        return
+    recent = [
+        p for p in snapshot_dir(folder).glob(f"ducky-*-{label}*.db")
+        if time.time() - p.stat().st_mtime < 2 * OPEN_LOCK_WAIT_S
+    ]
+    if not recent:
+        _vacuum_into(conn, folder, label=label)
+    _premigrate_done.add(mark)
+
+
 def _vacuum_into(conn: sqlite3.Connection, root: Path, *, label: str = "") -> Path:
     target_dir = snapshot_dir(root)
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -573,22 +695,35 @@ def restore_snapshot(root: Path | None = None) -> Path:
         raise StoreError("ducky.db failed its integrity check and no snapshot exists to restore")
     reset_for_tests()
     dest = db_path(root)
-    for name in (DB_NAME, *SIDECAR_NAMES):
-        p = root / name
-        if p.exists():
-            p.replace(root / (name + ".corrupt"))
-    shutil.copy2(src, dest)
+    with _first_open_lock(root):  # no other process may be mid-first-open while the file is swapped
+        for name in (DB_NAME, *SIDECAR_NAMES):
+            p = root / name
+            if p.exists():
+                p.replace(root / (name + ".corrupt"))
+        shutil.copy2(src, dest)
     return src
 
 
 def open_checked(root: Path | None = None) -> sqlite3.Connection:
-    """Boot-time open: integrity check, restore from snapshot if it fails."""
+    """Boot-time open: integrity check, restore from snapshot if it fails.
+
+    A lock held by another process ("database is locked") is not damage: it is retried
+    and then raised, never answered by restoring an older snapshot over live data.
+    """
     root = root or app_root()
-    try:
-        conn = connect(root)
-        result = integrity_check(conn)
-    except sqlite3.DatabaseError as exc:
-        result = f"error: {exc}"
+    result = ""
+    for attempt in range(4):
+        try:
+            conn = connect(root)
+            result = integrity_check(conn)
+            break
+        except sqlite3.DatabaseError as exc:
+            if not _is_busy(exc):
+                result = f"error: {exc}"
+                break
+            if attempt == 3:
+                raise
+            time.sleep(0.5 * (attempt + 1))
     if result == "ok":
         return conn
     restored = restore_snapshot(root)
@@ -609,7 +744,7 @@ def _record_restore(conn: sqlite3.Connection, restored: Path, why: str) -> None:
 
 def is_store_file(name: str) -> bool:
     """True for the DB, its sidecars and the snapshots dir (AppData maintenance)."""
-    return name in (DB_NAME, *SIDECAR_NAMES, SNAPSHOT_DIR_NAME)
+    return name in (DB_NAME, *SIDECAR_NAMES, SNAPSHOT_DIR_NAME, OPEN_LOCK_NAME)
 
 
 __all__ = [

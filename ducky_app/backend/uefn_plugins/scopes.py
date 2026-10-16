@@ -419,6 +419,12 @@ def purge_team(account: str, team: str) -> None:
     workflows.runtime_delete(account, team_workflows)
     repo.delete_scope(account, team)
     plugin_kv.delete_scope(account, team)
+    try:  # plugins' api.search records of this copy go with its other data
+        from backend.store.repos import search as search_repo
+
+        search_repo.drop_scope_records(account, team)
+    except Exception:  # noqa: BLE001 — a search error never blocks the purge
+        pass
     shutil.rmtree(scopes_root(account) / team, ignore_errors=True)
     if lost_since(account, team):
         clear_lost(account, team)

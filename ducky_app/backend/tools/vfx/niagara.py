@@ -106,7 +106,7 @@ def add_niagara_emitter(
     finalize: bool = True,
     pretty: bool = False,
 ) -> str:
-    """Add ONE emitter (stock modules + renderers) to a saved NiagaraSystem, then finalize and save.
+    """Add ONE emitter (stock modules + renderers) to a saved Niagara system (NiagaraSystem), then finalize and save.
 
     Never batch a whole scene: a monolithic builder that finalized ~22 emitters at once
     crashed UEFN. One emitter per call.

@@ -885,7 +885,7 @@ class PanelApiWindowMixin:
         lim = max(1, min(int(limit or 20), 50))
         try:
             if k == "tools":
-                names = {str(d.get("tool_name")) for d in repo.get_docs(repo.find_ids(kind="tool")).values()}
+                names = repo.tool_names()
                 rows = query.search(text or "", kinds=query.TOOL_KINDS, limit=lim,
                                     context=query.chat_context(allowed_tools=names))
             else:

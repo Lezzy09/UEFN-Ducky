@@ -10,8 +10,8 @@ from backend.store.repos import search as repo
 
 @pytest.fixture
 def scope(monkeypatch):
-    current = {"id": "personal"}
-    monkeypatch.setattr(records, "_scope", lambda plugin_id: current["id"])
+    current = {"id": "personal", "account": "_local"}
+    monkeypatch.setattr(records, "_scope", lambda plugin_id: (f"{current['account']}~{current['id']}", current["id"]))
     return current
 
 
@@ -56,7 +56,71 @@ def test_uninstall_drops_the_plugins_records(scope) -> None:
     api = records.SearchApi("wiki")
     api.upsert("p1", "Page", "text")
     indexer.forget_plugin("wiki")
-    assert repo.count_source("record:wiki:personal") == 0
+    assert repo.count_source("record:wiki:_local~personal") == 0
+    with pytest.raises(ValueError):  # a thread that outlived the uninstall cannot write back
+        api.upsert("p2", "Late", "text")
+    indexer.plugin_installed("wiki")
+    assert api.upsert("p2", "Again", "text")["ok"]
+
+
+def test_records_of_one_account_are_never_shown_to_another(monkeypatch) -> None:
+    # Every account's Local scope is "personal"; the account is part of the key.
+    from backend.uefn_plugins import scopes
+
+    who = {"account": "a_alice"}
+    monkeypatch.setattr(scopes, "active_scope", lambda plugin: {"account": who["account"], "id": "personal"})
+    api = records.SearchApi("wiki")
+    assert api.upsert("p1", "Alice page", "storm circle notes")["scope"] == "personal"
+    who["account"] = "a_bob"
+    assert api.query("storm circle") == []
+    assert api.clear() == 0  # Bob cannot clear Alice's records
+    who["account"] = "a_alice"
+    assert [r["title"] for r in api.query("storm circle")] == ["Alice page"]
+
+
+def test_no_scope_no_records(monkeypatch) -> None:
+    from backend.uefn_plugins import scopes
+
+    def broken(plugin):
+        raise RuntimeError("no account data key")
+
+    monkeypatch.setattr(scopes, "active_scope", broken)
+    api = records.SearchApi("wiki")
+    assert api.query("anything") == []
+    with pytest.raises(RuntimeError):
+        api.upsert("p1", "t", "x")  # never a shared fallback bucket
+
+
+def test_other_plugins_records_never_crowd_out_yours(scope) -> None:
+    other = records.SearchApi("cards")
+    for i in range(70):
+        other.upsert(f"c{i}", f"Storm card {i}", "storm circle storm circle storm circle")
+    mine = records.SearchApi("wiki")
+    mine.upsert("page", "Storm page", "a note about the storm circle")
+    assert [r["id"] for r in mine.query("storm circle")] == ["page"]
+
+
+def test_a_record_id_comes_back_even_when_meta_has_its_own_id(scope) -> None:
+    api = records.SearchApi("wiki")
+    api.upsert("p#2", "Spawner", "item spawner device grants weapons", {"id": "p", "section": 2})
+    row = api.query("item spawner device")[0]
+    assert row["id"] == "p#2" and row["meta"] == {"id": "p", "section": 2}
+    assert api.delete(row["id"])
+
+
+def test_an_unchanged_record_is_not_embedded_again(scope, monkeypatch) -> None:
+    from backend.search import embedder
+
+    api = records.SearchApi("wiki")
+    api.upsert("p1", "Page", "storm circle settings")
+    emb = embedder.get_embedder()
+    if emb is None:
+        pytest.skip("no meaning model in this checkout")
+    calls: list[int] = []
+    real = type(emb).encode
+    monkeypatch.setattr(type(emb), "encode", lambda self, texts: calls.append(1) or real(self, texts))
+    api.upsert("p1", "Page", "storm circle settings")
+    assert calls == []
 
 
 # --------------------------------------------------------------------------- hints
@@ -120,3 +184,16 @@ def test_hint_respects_the_chats_denied_packs() -> None:
         enabled_subskills: dict = {}
 
     assert hints.skill_hint("make an archer enemy that patrols and shoots arrows", conv=Conv()) == ""
+
+
+def test_a_reinstalled_plugin_heals_a_leftover_uninstall_mark(scope, monkeypatch) -> None:
+    from backend.uefn_plugins import store as plugin_store
+
+    api = records.SearchApi("wiki")
+    api.upsert("p1", "Page", "text")
+    repo.forget_records("wiki")  # uninstalled; the clear at reinstall did not land
+    monkeypatch.setattr(plugin_store, "is_plugin_installed", lambda pid: False)
+    with pytest.raises(repo.PluginGone):
+        api.upsert("p2", "Late", "text")
+    monkeypatch.setattr(plugin_store, "is_plugin_installed", lambda pid: True)
+    assert api.upsert("p2", "After reinstall", "text")["ok"]

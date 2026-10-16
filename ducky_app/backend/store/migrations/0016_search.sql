@@ -1,8 +1,9 @@
 -- 0016: skill and tool search. One row per findable thing: a skill pack, a sub-skill,
 -- one section of a sub-skill, an MCP tool, or a record a plugin indexed through
 -- api.search. Keyword search runs on search_fts (bm25); meaning search on the
--- vectors in search_vecs. Rows are derived data: the indexer rebuilds them from the
--- skill files, the tool catalog and plugin calls, so wiping the tables loses nothing.
+-- vectors in search_vecs. Skill and tool rows are derived data the indexer rebuilds
+-- from the skill files and the tool catalog; plugin records exist only because their
+-- plugin wrote them, so a rebuild keeps those (repos/search.py wipe).
 -- Every statement is IF NOT EXISTS so a re-run over an existing schema is a no-op.
 
 CREATE TABLE IF NOT EXISTS search_docs (

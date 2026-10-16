@@ -254,3 +254,52 @@ def test_rebuild_wipes_rows() -> None:
     _index()
     assert indexer.rebuild()["ok"]
     assert not repo.has_docs()
+
+
+def test_the_worker_survives_a_failed_state_read(monkeypatch) -> None:
+    # The read used to sit outside the try: the worker died with _running True, so
+    # periodic checks stopped and the Database card said "Indexing" for good.
+    monkeypatch.setenv("DUCKY_SEARCH_AUTOINDEX", "1")
+    monkeypatch.setattr(indexer, "DEBOUNCE_S", 0.01)
+    monkeypatch.setattr(indexer, "live_tool_rows", lambda: None)
+
+    def broken(key):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(repo, "get_state", broken)
+    indexer.request_refresh("periodic")
+    assert indexer.wait_idle(30)
+    assert not indexer.is_running()
+
+
+def test_tools_of_an_enabled_plugin_not_loaded_here_are_kept(monkeypatch) -> None:
+    # A slow boot register, or a bridge started before the plugin was switched on,
+    # lists the catalog without it; its rows must not be pruned until it is off.
+    rows = [dict(TOOLS[1], plugin_id="uefn"), {"name": "meshy_balance", "description": "Credits left.", "plugin_id": "meshy"}]
+    indexer.index_tools(rows, "rev1")
+    monkeypatch.setattr(indexer, "_enabled_desktop_plugins", lambda: {"uefn", "meshy"})
+    indexer.index_tools(rows[:1], "rev2")  # meshy still registering in this process
+    assert repo.find_doc("tool:meshy_balance") is not None
+    monkeypatch.setattr(indexer, "_enabled_desktop_plugins", lambda: {"uefn"})
+    indexer.index_tools(rows[:1], "rev3")  # switched off: gone
+    assert repo.find_doc("tool:meshy_balance") is None
+
+
+def test_rebuild_keeps_plugin_records(monkeypatch) -> None:
+    from backend.search import records
+
+    monkeypatch.setattr(records, "_scope", lambda plugin_id: ("_local~personal", "personal"))
+    _sky_pack()
+    _index()
+    records.SearchApi("wiki").upsert("p1", "Storm page", "storm circle settings")
+    assert indexer.rebuild()["ok"]
+    assert [r["id"] for r in records.SearchApi("wiki").query("storm circle")] == ["p1"]
+
+
+def test_tools_of_a_plugin_that_failed_or_is_paused_here_are_pruned(monkeypatch) -> None:
+    rows = [dict(TOOLS[1], plugin_id="uefn"), {"name": "team_tool", "description": "A team tool.", "plugin_id": "teamplug"}]
+    indexer.index_tools(rows, "rev1")
+    monkeypatch.setattr(indexer, "_enabled_desktop_plugins", lambda: {"uefn", "teamplug"})
+    monkeypatch.setattr(indexer, "_tried_and_not_loaded", lambda: {"teamplug"})  # paused: lost team access
+    indexer.index_tools(rows[:1], "rev2")
+    assert repo.find_doc("tool:team_tool") is None

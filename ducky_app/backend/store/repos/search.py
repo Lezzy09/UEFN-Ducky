@@ -1,8 +1,9 @@
 """``search_docs`` + ``search_fts`` + ``search_vecs``: the skill and tool search index.
 
-Rows are derived data (``backend.search.indexer`` rebuilds them), so every write
-here is an idempotent upsert keyed by ``doc_key``: two processes indexing the same
-source at once end with the same rows.
+Skill, sub-skill, section and tool rows are derived data (``backend.search.indexer``
+rebuilds them), so every write here is an idempotent upsert keyed by ``doc_key``: two
+processes indexing the same source at once end with the same rows. Plugin records
+(``api.search``) have no other source: a rebuild keeps them and re-embeds them.
 """
 
 from __future__ import annotations
@@ -162,16 +163,22 @@ def missing_vectors(model: str, limit: int = 5000) -> list[Doc]:
     return out
 
 
-def set_vectors(vectors: dict[str, bytes], model: str) -> int:
-    """doc_key -> vector for rows that already exist."""
+def set_vectors(vectors: dict[str, bytes], model: str, hashes: dict[str, str] | None = None) -> int:
+    """doc_key -> vector for rows that already exist.
+
+    With ``hashes`` (doc_key -> the content_hash the vector was made from) a row whose
+    text changed while the vector was being made is skipped: its writer stored its own
+    vector, or the next fill makes one. Without the check a fill could leave a row with
+    its old text's vector for good.
+    """
     if not vectors:
         return 0
     conn = db.connect()
     n = 0
     with db.write_txn(conn):
         for key, vec in vectors.items():
-            row = conn.execute("SELECT id FROM search_docs WHERE doc_key=?", (key,)).fetchone()
-            if row is None:
+            row = conn.execute("SELECT id, content_hash FROM search_docs WHERE doc_key=?", (key,)).fetchone()
+            if row is None or (hashes is not None and str(row[1]) != hashes.get(key)):
                 continue
             conn.execute(
                 "INSERT INTO search_vecs(doc_id, model, vec) VALUES (?, ?, ?) "
@@ -182,30 +189,66 @@ def set_vectors(vectors: dict[str, bytes], model: str) -> int:
     return n
 
 
-def upsert_one(doc: Doc, vec: bytes | None, model: str) -> None:
-    """One record row (api.search): insert or update in place, vector alongside."""
+def tool_owners(source_key: str) -> dict[str, str]:
+    """doc_key -> owning desktop plugin id ('' for core and MCP tools) of one source."""
+    rows = db.connect().execute(
+        "SELECT doc_key, plugin_id FROM search_docs WHERE source_key=?", (source_key,)
+    ).fetchall()
+    return {str(r[0]): str(r[1] or "") for r in rows}
+
+
+def record_state(doc_key: str, model: str) -> tuple[str, bool] | None:
+    """(content_hash, has a vector for ``model``) of one row, or None when it does not exist."""
+    row = db.connect().execute(
+        "SELECT d.content_hash, (v.doc_id IS NOT NULL) FROM search_docs d "
+        "LEFT JOIN search_vecs v ON v.doc_id = d.id AND v.model = ? WHERE d.doc_key = ?",
+        (model, doc_key),
+    ).fetchone()
+    return None if row is None else (str(row[0]), bool(row[1]))
+
+
+def upsert_one(doc: Doc, vec: bytes | None, model: str, *, max_in_source: int | None = None) -> bool:
+    """One record row (api.search): insert or update in place, vector alongside.
+
+    Returns False when the row already holds this text (and a vector for ``model``).
+    ``max_in_source`` caps a new row's source inside the write transaction, so writers
+    in several threads or processes cannot pass the cap together.
+    """
     conn = db.connect()
     with db.write_txn(conn):
-        row = conn.execute("SELECT id, content_hash FROM search_docs WHERE doc_key=?", (doc.doc_key,)).fetchone()
+        if doc.kind == "record":
+            _refuse_gone_plugin(conn, doc.plugin_id)
+        row = conn.execute(
+            "SELECT d.id, d.content_hash, (v.doc_id IS NOT NULL) FROM search_docs d "
+            "LEFT JOIN search_vecs v ON v.doc_id = d.id AND v.model = ? WHERE d.doc_key = ?",
+            (model, doc.doc_key),
+        ).fetchone()
         if row is None:
+            if max_in_source is not None:
+                n = conn.execute("SELECT count(*) FROM search_docs WHERE source_key=?", (doc.source_key,)).fetchone()[0]
+                if int(n) >= max_in_source:
+                    raise ValueError(f"search holds at most {max_in_source} records per plugin; delete some first")
             cur = conn.execute(f"INSERT INTO search_docs({_COLUMNS}) VALUES ({', '.join('?' * 17)})", doc.row())
             doc_id = int(cur.lastrowid)
         else:
             doc_id = int(row[0])
-            if str(row[1]) == doc.content_hash and vec is None:
-                return
-            conn.execute(
-                "UPDATE search_docs SET source_key=?, kind=?, origin=?, plugin_id=?, pack_id=?, subskill_id=?, "
-                "section=?, tool_name=?, scope=?, title=?, path=?, body=?, summary=?, meta=?, content_hash=?, updated=? WHERE id=?",
-                (*doc.row()[1:], doc_id),
-            )
-            conn.execute("DELETE FROM search_vecs WHERE doc_id=?", (doc_id,))
+            if str(row[1]) == doc.content_hash and (bool(row[2]) or vec is None):
+                return False
+            if str(row[1]) != doc.content_hash:
+                conn.execute(
+                    "UPDATE search_docs SET source_key=?, kind=?, origin=?, plugin_id=?, pack_id=?, subskill_id=?, "
+                    "section=?, tool_name=?, scope=?, title=?, path=?, body=?, summary=?, meta=?, content_hash=?, "
+                    "updated=? WHERE id=?",
+                    (*doc.row()[1:], doc_id),
+                )
+                conn.execute("DELETE FROM search_vecs WHERE doc_id=?", (doc_id,))
         if vec is not None:
             conn.execute(
                 "INSERT INTO search_vecs(doc_id, model, vec) VALUES (?, ?, ?) "
                 "ON CONFLICT(doc_id) DO UPDATE SET model=excluded.model, vec=excluded.vec",
                 (doc_id, model, vec),
             )
+    return True
 
 
 def find_doc(doc_key: str) -> int | None:
@@ -248,9 +291,88 @@ def drop_sources_like(prefix: str) -> int:
     return n
 
 
+def forget_records(plugin_id: str) -> int:
+    """Uninstall: delete a plugin's records and mark it gone, in one transaction.
+
+    A record write checks the mark inside its own write transaction, so a plugin thread
+    that outlives the uninstall, or the plugin's copy in an IDE bridge, cannot add rows
+    back. Installing the plugin again clears the mark (:func:`clear_plugin_gone`).
+    """
+    like = f"record:{plugin_id}:".replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    conn = db.connect()
+    with db.write_txn(conn):
+        conn.execute(
+            "INSERT INTO search_meta(key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value=1",
+            (f"gone:{plugin_id}",),
+        )
+        n = conn.execute("DELETE FROM search_docs WHERE source_key LIKE ? ESCAPE '\\'", (like,)).rowcount
+        conn.execute("DELETE FROM search_state WHERE source_key LIKE ? ESCAPE '\\'", (like,))
+    return n
+
+
+def clear_plugin_gone(plugin_id: str) -> None:
+    conn = db.connect()
+    with db.write_txn(conn):
+        conn.execute("DELETE FROM search_meta WHERE key=?", (f"gone:{plugin_id}",))
+
+
+class PluginGone(ValueError):
+    """A record write from a plugin whose uninstall marked it gone."""
+
+
+def _refuse_gone_plugin(conn: Any, plugin_id: str) -> None:
+    if plugin_id and conn.execute("SELECT 1 FROM search_meta WHERE key=?", (f"gone:{plugin_id}",)).fetchone():
+        raise PluginGone(f"plugin {plugin_id} was uninstalled; its search records are gone")
+
+
+def drop_scope_records(account: str, scope_id: str) -> int:
+    """Delete every plugin record of one account's data scope (a team copy purged, a
+    plugin-test sandbox ended). ``scope`` of a record row is ``<account>~<scope id>``."""
+    conn = db.connect()
+    with db.write_txn(conn):
+        n = conn.execute(
+            "DELETE FROM search_docs WHERE kind='record' AND scope=?", (f"{account or '_local'}~{scope_id}",)
+        ).rowcount
+    return n
+
+
+def drop_stale_sandbox_records(older_than_s: float) -> int:
+    """Delete plugin-test sandbox records not written for ``older_than_s`` seconds."""
+    conn = db.connect()
+    where = "kind='record' AND scope LIKE ? ESCAPE '\\' AND updated < ?"
+    args = ("%~\\_plugin\\_test\\_%", time.time() - older_than_s)
+    if conn.execute(f"SELECT 1 FROM search_docs WHERE {where} LIMIT 1", args).fetchone() is None:
+        return 0  # the common case: no write lock taken
+    with db.write_txn(conn):
+        n = conn.execute(f"DELETE FROM search_docs WHERE {where}", args).rowcount
+    return n
+
+
+def record_sources() -> dict[str, str]:
+    """source_key -> plugin id of every source holding plugin records."""
+    rows = db.connect().execute(
+        "SELECT DISTINCT source_key, plugin_id FROM search_docs WHERE kind='record'"
+    ).fetchall()
+    return {str(r[0]): str(r[1]) for r in rows}
+
+
 def source_keys() -> list[str]:
     rows = db.connect().execute("SELECT DISTINCT source_key FROM search_docs").fetchall()
     return [str(r[0]) for r in rows]
+
+
+def source_ids(source_key: str) -> list[int]:
+    """Row ids of one source (index-backed; a plugin's records are at most MAX_RECORDS)."""
+    rows = db.connect().execute("SELECT id FROM search_docs WHERE source_key=?", (source_key,)).fetchall()
+    return [int(r[0]) for r in rows]
+
+
+def tool_names() -> set[str]:
+    """Every indexed tool name (the search boxes' allowed set; no row bodies read)."""
+    rows = db.connect().execute(
+        "SELECT DISTINCT tool_name FROM search_docs WHERE kind='tool' AND tool_name != ''"
+    ).fetchall()
+    return {str(r[0]) for r in rows}
 
 
 def get_state(source_key: str) -> str | None:
@@ -266,10 +388,17 @@ def states() -> dict[str, tuple[str, float]]:
 
 
 def wipe() -> None:
+    """Drop every derived row (Rebuild, the Database tab's clear) and rebuild the keyword index.
+
+    Plugin records have no source to rebuild them from, so they stay; their vectors go
+    and the fill pass re-embeds them.
+    """
     conn = db.connect()
     with db.write_txn(conn):
-        conn.execute("DELETE FROM search_docs")
+        conn.execute("DELETE FROM search_vecs WHERE doc_id IN (SELECT id FROM search_docs WHERE kind='record')")
+        conn.execute("DELETE FROM search_docs WHERE kind != 'record'")
         conn.execute("DELETE FROM search_state")
+        conn.execute("INSERT INTO search_fts(search_fts) VALUES ('rebuild')")
 
 
 # --------------------------------------------------------------------------- reads
@@ -291,8 +420,13 @@ def fts_query(text: str) -> str:
     return " OR ".join(parts)
 
 
-def keyword(text: str, kinds: Iterable[str] | None = None, limit: int = 50) -> list[tuple[int, float]]:
-    """(doc id, bm25 score — lower is better) for the best keyword matches."""
+def keyword(
+    text: str, kinds: Iterable[str] | None = None, limit: int = 50, *, source_key: str = ""
+) -> list[tuple[int, float]]:
+    """(doc id, bm25 score — lower is better) for the best keyword matches.
+
+    ``source_key`` limits candidates to one source before the cut (a plugin's records in
+    one scope must not be crowded out by other plugins' rows)."""
     match = fts_query(text)
     if not match:
         return []
@@ -305,6 +439,9 @@ def keyword(text: str, kinds: Iterable[str] | None = None, limit: int = 50) -> l
     if kinds:
         sql += f" AND d.kind IN ({', '.join('?' * len(kinds))})"
         args.extend(kinds)
+    if source_key:
+        sql += " AND d.source_key = ?"
+        args.append(source_key)
     sql += " ORDER BY score LIMIT ?"
     args.append(max(1, int(limit)))
     try:
@@ -388,7 +525,8 @@ def data_version() -> int:
 
 
 def revision_token() -> str:
-    """Changes whenever any source was re-indexed (cheap; drives per-process caches)."""
-    row = db.connect().execute("SELECT count(*), coalesce(max(indexed), 0), coalesce(sum(length(revision)), 0) FROM search_state").fetchone()
-    vecs = db.connect().execute("SELECT count(*), coalesce(max(doc_id), 0) FROM search_vecs").fetchone()
-    return f"{row[0]}:{row[1]}:{row[2]}:{vecs[0]}:{vecs[1]}"
+    """Changes on every insert, update or delete of an index row or vector, by any
+    process (triggers count them in search_meta, migration 0018). One row read; it
+    keys the per-process vector-matrix cache."""
+    row = db.connect().execute("SELECT value FROM search_meta WHERE key='writes'").fetchone()
+    return str(row[0] if row else 0)

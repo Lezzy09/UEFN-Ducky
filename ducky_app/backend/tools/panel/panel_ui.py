@@ -658,7 +658,7 @@ def ducky_ask_user(
     title: str = "",
     pretty: bool = False,
 ) -> str:
-    """Pause mid-task and ask the user one or more clarifying questions in this chat.
+    """Ask the user clarifying questions in this chat (options to pick, or free text) and wait for the answers.
 
     HARD: use this instead of writing "Your call", "A — … B — …", numbered path options,
     or wait-vs-proceed choices in plain chat text. Ending a turn with prose A/B/C is wrong —

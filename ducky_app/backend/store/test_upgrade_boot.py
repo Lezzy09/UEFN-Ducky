@@ -105,6 +105,7 @@ def test_first_boot_imports_everything_and_leaves_no_stray_files(tmp_path: Path)
         "ducky.db",
         "ducky.db-wal",
         "ducky.db-shm",
+        "ducky.db.open-lock",
         "legacy",
         "snapshots",
         "mcp.json",

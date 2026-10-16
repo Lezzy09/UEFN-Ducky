@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 import zipfile
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -42,6 +43,19 @@ REFERENCES_DIR = "references"
 # (plugin fingerprint, enabled ids) -> pack_id → dir (see _plugin_owned_skill_map).
 _OWNED_MAP_CACHE: dict[Any, dict[str, Path]] = {}
 _OWNED_MAP_LOCK = threading.Lock()
+# One indexing pass (backend.search.indexer): per-pack stat passes, the plugin skill map
+# and the bundled packs folder are computed once per pass instead of two or three times
+# per pack. Per thread/context, so passes never share it.
+_PASS_MEMO: ContextVar[dict[Any, Any] | None] = ContextVar("skill_pass_memo", default=None)
+
+
+@contextmanager
+def pass_memo():
+    token = _PASS_MEMO.set({})
+    try:
+        yield
+    finally:
+        _PASS_MEMO.reset(token)
 CORE_ID = "core"
 
 # Provenance stamps in SKILL.md / references frontmatter metadata.
@@ -125,6 +139,15 @@ def appdata_skill_packs_dir() -> Path:
 
 
 def bundled_skill_packs_dir() -> Path | None:
+    memo = _PASS_MEMO.get()
+    if memo is not None:
+        if "bundled" not in memo:
+            memo["bundled"] = _bundled_skill_packs_dir()
+        return memo["bundled"]
+    return _bundled_skill_packs_dir()
+
+
+def _bundled_skill_packs_dir() -> Path | None:
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         p = Path(meipass) / "frontend" / SKILL_PACKS_DIR
@@ -412,8 +435,18 @@ def _plugin_owned_skill_map() -> dict[str, Path]:
 
     Cached on (plugin-tree fingerprint, enabled ids): _pack_roots() calls this for
     every pack lookup, and the uncached version re-stat'd every plugin skill dir
-    and reloaded panel_settings.json per entry.
+    and reloaded panel_settings.json per entry. Inside :func:`pass_memo` even the
+    fingerprint and settings read run once per pass.
     """
+    memo = _PASS_MEMO.get()
+    if memo is not None:
+        if "owned_map" not in memo:
+            memo["owned_map"] = _plugin_owned_skill_map_uncached()
+        return dict(memo["owned_map"])
+    return _plugin_owned_skill_map_uncached()
+
+
+def _plugin_owned_skill_map_uncached() -> dict[str, Path]:
     try:
         from backend.uefn_plugins.host import is_plugin_enabled
         from backend.uefn_plugins.store import (
@@ -557,6 +590,16 @@ def _manifest_from_skill_dir(root: Path, pack_id: str, kind: str) -> dict[str, A
 
 def _pack_stamp(root: Path) -> str:
     """One stat pass over SKILL.md + references/*.md (what parsing would read)."""
+    memo = _PASS_MEMO.get()
+    if memo is not None:
+        key = ("stamp", str(root))
+        if key not in memo:
+            memo[key] = _pack_stamp_uncached(root)
+        return memo[key]
+    return _pack_stamp_uncached(root)
+
+
+def _pack_stamp_uncached(root: Path) -> str:
     parts: list[str] = []
     refs = sorted((root / REFERENCES_DIR).glob("*.md")) if (root / REFERENCES_DIR).is_dir() else []
     for f in [root / PACK_FILE, *refs]:

@@ -38,6 +38,7 @@ _ID_PAIR = re.compile(r"^\s*([a-z][a-z0-9_-]{0,63})\s*/\s*([a-z][a-z0-9_-]{0,63}
 _NAME = re.compile(r"[A-Za-z0-9_\-]+")
 
 _cache_lock = threading.Lock()
+_load_lock = threading.Lock()
 _cache: dict[str, Any] = {"key": None}
 
 
@@ -104,26 +105,35 @@ def chat_context(*, allowed_tools: set[str] | None = None) -> Context:
 
 
 def _matrix(model: str):
-    """(ids, kinds, matrix) for every vector of ``model``, cached per index revision."""
+    """(ids, kinds, matrix) for every vector of ``model``, cached per index revision.
+
+    One thread loads a new revision while the others wait for it (single flight): after
+    an index change, concurrent searches used to each read every vector.
+    """
     import numpy as np
 
     key = (model, repo.revision_token())
     with _cache_lock:
         if _cache.get("key") == key:
             return _cache["ids"], _cache["kinds"], _cache["matrix"]
-    ids, kinds, blob = repo.load_vectors(model)
-    if ids:
-        matrix = np.frombuffer(blob, dtype=np.float32).reshape(len(ids), -1)
-    else:
-        matrix = np.zeros((0, 1), dtype=np.float32)
-    ids_arr = np.asarray(ids, dtype=np.int64)
-    kinds_arr = np.asarray(kinds)
-    with _cache_lock:
-        _cache.update(key=key, ids=ids_arr, kinds=kinds_arr, matrix=matrix)
+    with _load_lock:
+        with _cache_lock:
+            if _cache.get("key") == key:
+                return _cache["ids"], _cache["kinds"], _cache["matrix"]
+        ids, kinds, blob = repo.load_vectors(model)
+        if ids:
+            matrix = np.frombuffer(blob, dtype=np.float32).reshape(len(ids), -1)
+        else:
+            matrix = np.zeros((0, 1), dtype=np.float32)
+        ids_arr = np.asarray(ids, dtype=np.int64)
+        kinds_arr = np.asarray(kinds)
+        with _cache_lock:
+            _cache.update(key=key, ids=ids_arr, kinds=kinds_arr, matrix=matrix)
     return ids_arr, kinds_arr, matrix
 
 
-def _meaning(text: str, kinds: Iterable[str], limit: int) -> list[tuple[int, float]]:
+def _meaning(text: str, kinds: Iterable[str], limit: int, *, only: list[int] | None = None) -> list[tuple[int, float]]:
+    """Top ``limit`` rows by cosine; ``only`` restricts candidates to these row ids first."""
     import numpy as np
 
     from backend.search.embedder import get_embedder
@@ -141,6 +151,8 @@ def _meaning(text: str, kinds: Iterable[str], limit: int) -> list[tuple[int, flo
     wanted = list(kinds)
     if wanted:
         scores = np.where(np.isin(doc_kinds, wanted), scores, -2.0)
+    if only is not None:
+        scores = np.where(np.isin(ids, np.asarray(only, dtype=np.int64)), scores, -2.0)
     n = min(limit, len(scores))
     top = np.argpartition(-scores, n - 1)[:n]
     top = top[np.argsort(-scores[top])]
@@ -207,8 +219,10 @@ def _result(doc: dict[str, Any], score: float, kw_rank: int | None, meaning: flo
     if kind == "tool":
         row["tool"] = doc.get("tool_name")
     elif kind == "record":
-        row["id"] = meta.get("id")
-        row["meta"] = {k: v for k, v in meta.items() if k != "id"}
+        # The id comes from the key (record ids have no ':'), never from the plugin's meta.
+        rid = str(doc.get("doc_key") or "").rsplit(":", 1)[-1]
+        row["id"] = rid
+        row["meta"] = {k: v for k, v in meta.items() if not (k == "id" and v == rid)}
     else:
         row["pack"] = doc.get("pack_id")
         if kind != "pack":
@@ -248,32 +262,54 @@ def search(
             indexer.maybe_refresh(wait_s=0.0 if repo.has_docs() else 2.0)
         except Exception:  # noqa: BLE001
             _log.debug("search: refresh check failed", exc_info=True)
+    # A plugin's records compete only with its own rows in its own scope, before the cut:
+    # filtered afterwards, other plugins' better matches could fill every candidate slot.
+    source = ""
+    if kinds == ("record",) and ctx.record_plugin and ctx.record_scope:
+        source = f"record:{ctx.record_plugin}:{ctx.record_scope}"
+    from backend.store import db
+
+    conn = db.connect()
+    # One read transaction is one WAL snapshot: the keyword ids, the vector ids, the
+    # pins and the rows they name all come from the same state of the index. Read
+    # separately, a rebuild in between re-used ids for unrelated rows.
+    own_snapshot = not conn.in_transaction
+    if own_snapshot:
+        conn.execute("BEGIN")
     try:
-        keyword = repo.keyword(text, kinds, CANDIDATES) if use_keywords else []
-    except Exception:  # noqa: BLE001
-        _log.debug("search: keyword query failed", exc_info=True)
-        return []
-    try:
-        meaning = _meaning(text, kinds, CANDIDATES) if use_meaning else []
-    except Exception:  # noqa: BLE001
-        _log.debug("search: meaning query failed", exc_info=True)
-        meaning = []
-    fused: dict[int, float] = {}
-    kw_rank: dict[int, int] = {}
-    cos: dict[int, float] = {}
-    w_kw, w_mean = WEIGHTS["tools" if kinds == TOOL_KINDS else "skills"]
-    for rank, (doc_id, _) in enumerate(keyword):
-        fused[doc_id] = fused.get(doc_id, 0.0) + w_kw / (RRF_K + rank + 1)
-        kw_rank[doc_id] = rank + 1
-    for rank, (doc_id, score) in enumerate(meaning):
-        fused[doc_id] = fused.get(doc_id, 0.0) + w_mean / (RRF_K + rank + 1)
-        cos[doc_id] = score
-    pins = _pins(text, kinds)
-    top = 1.0 + max(fused.values(), default=0.0)
-    for i, doc_id in enumerate(pins):
-        fused[doc_id] = top + (len(pins) - i)
-    ordered = sorted(fused, key=lambda d: -fused[d])[: max(limit * 6, 60)]
-    docs = repo.get_docs(ordered)
+        try:
+            keyword = repo.keyword(text, kinds, CANDIDATES, source_key=source) if use_keywords else []
+        except Exception:  # noqa: BLE001
+            _log.debug("search: keyword query failed", exc_info=True)
+            return []
+        try:
+            only = repo.source_ids(source) if source else None
+            meaning = _meaning(text, kinds, CANDIDATES, only=only) if use_meaning else []
+        except Exception:  # noqa: BLE001
+            _log.debug("search: meaning query failed", exc_info=True)
+            meaning = []
+        fused: dict[int, float] = {}
+        kw_rank: dict[int, int] = {}
+        cos: dict[int, float] = {}
+        w_kw, w_mean = WEIGHTS["tools" if kinds == TOOL_KINDS else "skills"]
+        for rank, (doc_id, _) in enumerate(keyword):
+            fused[doc_id] = fused.get(doc_id, 0.0) + w_kw / (RRF_K + rank + 1)
+            kw_rank[doc_id] = rank + 1
+        for rank, (doc_id, score) in enumerate(meaning):
+            fused[doc_id] = fused.get(doc_id, 0.0) + w_mean / (RRF_K + rank + 1)
+            cos[doc_id] = score
+        pins = _pins(text, kinds)
+        top = 1.0 + max(fused.values(), default=0.0)
+        for i, doc_id in enumerate(pins):
+            fused[doc_id] = top + (len(pins) - i)
+        ordered = sorted(fused, key=lambda d: -fused[d])[: max(limit * 6, 60)]
+        docs = repo.get_docs(ordered)
+    finally:
+        if own_snapshot:
+            try:
+                conn.execute("COMMIT")
+            except Exception:  # noqa: BLE001
+                _log.debug("search: closing the read snapshot failed", exc_info=True)
     out: list[dict[str, Any]] = []
     per_sub: dict[tuple[str, str], int] = {}
     reads: set[str] = set()

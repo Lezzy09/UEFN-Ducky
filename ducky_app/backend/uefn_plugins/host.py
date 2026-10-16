@@ -1433,6 +1433,13 @@ def _notify_uefn_plugins_changed() -> None:
         push_ui_event({"type": "uefn_plugins_changed"})
     except Exception:
         pass
+    if _LOADED:  # a register()/unload finished after boot: enable, reload, repair, late register
+        try:
+            from backend.search import indexer
+
+            indexer.request_refresh("plugins")  # debounced; re-lists the tool catalog
+        except Exception:
+            pass
 
 
 def _spawn_toggle_thread(target: Callable[[], None], *, name: str) -> None:
@@ -1988,6 +1995,12 @@ def _repair_missing_backends_once() -> None:
 def plugins_ready() -> bool:
     """True once the first ensure_plugins_loaded pass has finished."""
     return _LOADED
+
+
+def tried_and_not_loaded() -> set[str]:
+    """Plugins this process tried to load that are not loaded here: register() failed, or
+    the plugin is paused (team access lost). Their tools will not appear here on their own."""
+    return (set(_LOAD_FAILURES) | set(_PAUSED_TEAM_PLUGINS)) - set(_REGISTERED)
 
 
 def plugins_ui_ready() -> bool:

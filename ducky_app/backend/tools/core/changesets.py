@@ -196,7 +196,7 @@ def changeset_archive(
 def changeset_revert(
     run_id: str, seq: int = 0, force: bool = False, step: bool = False, program: str = "", pretty: bool = False
 ) -> str:
-    """Undo a live run's writes (or one file: pass seq). Archived runs refuse — unarchive first.
+    """Revert what one agent run changed: its file writes and UEFN/Blender edits (or one file: pass seq). Archived runs refuse — unarchive first.
 
     Files changed by someone else since are skipped unless force=true. Allowed for the
     chat that made the changes, the leader of its group or of a team that group is nested

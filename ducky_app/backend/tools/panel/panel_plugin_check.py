@@ -539,7 +539,7 @@ def _check_search(pid: str) -> dict[str, Any]:
 def _all_tool_names() -> set[str]:
     from backend.store.repos import search as repo
 
-    return {str(d.get("tool_name")) for d in repo.get_docs(repo.find_ids(kind="tool")).values()}
+    return repo.tool_names()
 
 
 def _report(pid: str, started: float, checks: list[dict[str, Any]]) -> dict[str, Any]:

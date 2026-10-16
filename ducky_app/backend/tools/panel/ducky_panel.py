@@ -6,6 +6,7 @@ import asyncio
 
 import json
 import sys
+import threading
 import time
 from itertools import islice
 from typing import Any, Literal, Optional
@@ -193,26 +194,49 @@ def _discovery_miss_context() -> dict[str, Any]:
     return context
 
 
-_seen_catalog_revision = ""
+# Last catalog revision per tool-filter scope. A chat's catalog is filtered by its own
+# plugin and tool-group selection, so two chats with different filters alternating in
+# one process are not a catalog change (each alternation used to start a full re-list);
+# a change, or a change back, within one scope still is.
+_seen_catalog_revisions: dict[tuple[Any, ...], str] = {}
+_seen_lock = threading.Lock()
+
+
+def _catalog_scope() -> tuple[Any, ...]:
+    from backend.agent.builtin_toolsets import _ACTIVE_BUILTIN_GROUPS
+    from backend.mcp_plugins.store import _ACTIVE_PLUGIN_IDS
+    from backend.uefn_plugins.host import _ACTIVE_UEFN_AGENT_IDS
+
+    return (_ACTIVE_BUILTIN_GROUPS.get(), _ACTIVE_PLUGIN_IDS.get(), _ACTIVE_UEFN_AGENT_IDS.get())
 
 
 def _note_catalog_revision(revision: str) -> None:
     """A new tool catalog (plugin loaded, MCP server connected): re-index tool search soon."""
-    global _seen_catalog_revision
-    if revision and revision != _seen_catalog_revision:
-        first = not _seen_catalog_revision
-        _seen_catalog_revision = revision
-        if not first:
-            try:
-                from backend.search import indexer
+    if not revision:
+        return
+    try:
+        scope = _catalog_scope()
+    except Exception:
+        scope = ()
+    with _seen_lock:
+        prev = _seen_catalog_revisions.get(scope)
+        _seen_catalog_revisions[scope] = revision
+        while len(_seen_catalog_revisions) > 64:
+            _seen_catalog_revisions.pop(next(iter(_seen_catalog_revisions)))
+    if prev and prev != revision:
+        try:
+            from backend.search import indexer
 
-                indexer.request_refresh("tools")
-            except Exception:
-                pass
+            indexer.request_refresh("tools")
+        except Exception:
+            pass
 
 
-def _ranked_tool_names(tools: list[Any], by_name: dict[str, Any], text: str, limit: int) -> list[str]:
-    """Meaning + keyword hits from the search index first, then the old all-words matches."""
+def _ranked_tool_names(
+    tools: list[Any], by_name: dict[str, Any], text: str, limit: int, *, all_words: bool = False
+) -> list[str]:
+    """Meaning + keyword hits from the search index first, then the old all-words matches
+    (every one with ``all_words``, so paging reaches each match the old pager did)."""
     from backend.agent.toolsets.tool_index import search_tool_catalog
 
     names: list[str] = []
@@ -222,8 +246,10 @@ def _ranked_tool_names(tools: list[Any], by_name: dict[str, Any], text: str, lim
         names = [r["tool"] for r in search_query.search_tools(text, set(by_name), limit=limit) if r.get("tool") in by_name]
     except Exception:
         names = []
-    for row in search_tool_catalog(tools, text, limit=limit)["matches"]:
-        if row["name"] not in names:
+    seen = set(names)
+    for row in search_tool_catalog(tools, text, limit=None if all_words else limit)["matches"]:
+        if row["name"] not in seen:
+            seen.add(row["name"])
             names.append(row["name"])
     return names
 
@@ -246,7 +272,7 @@ async def ducky_get_tools(
     """
     from backend.agent.tools import list_mcp_tools, resolve_invented_tool_name
     from backend.agent.toolsets.excluded import EXCLUDED_TOOLS
-    from backend.agent.toolsets.tool_index import search_tool_catalog, tool_catalog_row, catalog_revision
+    from backend.agent.toolsets.tool_index import tool_catalog_row, catalog_revision
 
     if diagnostics:
         from frontend.ui_web.mcp_catalog import build_mcp_diagnostics
@@ -285,7 +311,7 @@ async def ducky_get_tools(
             "revision": revision, **_discovery_miss_context(),
         }, pretty=pretty)
 
-    ranked = await asyncio.to_thread(_ranked_tool_names, tools, by_name, p, 50)
+    ranked = await asyncio.to_thread(_ranked_tool_names, tools, by_name, p, 50, all_words=True)
     start = max(0, int(offset))
     names = ranked[start:start + lim]
     end = start + len(names)

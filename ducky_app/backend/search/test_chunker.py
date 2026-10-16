@@ -90,6 +90,6 @@ def test_tool_docs_words_owner_and_params() -> None:
 def test_embed_text_and_snippet() -> None:
     doc = chunker.record_doc("wiki", "personal", "p1", "Spawner", "How spawners work.", {"url": "x"})
     assert chunker.embed_text(doc).startswith("Spawner")
-    assert doc.doc_key == "record:wiki:personal:p1" and doc.meta == {"id": "p1", "url": "x"}
+    assert doc.doc_key == "record:wiki:personal:p1" and doc.meta == {"url": "x"}
     assert chunker.snippet("```py\nprint(1)\n```  and   more", 12).endswith("…")
     assert chunker.slug("Prefer Epic first (HARD)") == "prefer-epic-first-hard"

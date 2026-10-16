@@ -164,7 +164,7 @@ settings), `contributes`, `"backend": {"entry": "backend", "register": "register
 | `api.register_panel_rpc(name, fn)` | Panel `plugin.call` target. `fn` is called with **keyword** arguments: `fn(**params)`. |
 | `api.call_tool(name, arguments=None)` | Call any Ducky MCP tool in-process, with the same approvals as the agent; returns the parsed result, raises `ValueError` on failure. |
 | `api.data` | Docs and files in the plugin's data scope (`plugin_data`). Tools of a plugin that uses it get `scope` (`local` / `team <name>`) added to their dict results. |
-| `api.search.upsert(id, title, text, meta=None)` / `.delete(id)` / `.clear()` / `.query(text, limit=10)` | Make the plugin's own records (pages, cards, entries) findable by meaning and keywords. Only this plugin's records in its data scope; removed on uninstall. Expose them to agents through your own tool that calls `api.search.query`. One record per section of a long document. |
+| `api.search.upsert(id, title, text, meta=None)` / `.delete(id)` / `.clear()` / `.query(text, limit=10)` | Make the plugin's own records (pages, cards, entries) findable by meaning and keywords. Only this plugin's records in its data scope for the signed-in person; kept on an index rebuild, removed on uninstall. Upserting unchanged text is free, so re-sync everything on start. Expose them to agents through your own tool that calls `api.search.query`. One record per section of a long document. |
 | `api.changeset.record(command=, kind=, ident=, facet=, before=, inverse=, slot=)` | Changes ledger entry; never raises. |
 | `api.listener(command, params, timeout=None)` | One command to the live UEFN listener. |
 | `api.http_json(method, url, …)`, `api.poll(…)` | HTTP JSON and polling helpers. |

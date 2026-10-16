@@ -414,3 +414,133 @@ def test_worker_thread_connections_use_a_small_page_cache() -> None:
     sizes: list[int] = []
     _run_in_thread(lambda: sizes.append(int(db.connect().execute("PRAGMA cache_size").fetchone()[0])))
     assert sizes and sizes[0] >= -4096, f"worker connection cache_size={sizes[0]} (KiB when negative)"
+
+
+def test_first_open_waits_out_another_connection_holding_the_new_file(tmp_path: Path) -> None:
+    # Switching to WAL upgrades a read lock; SQLite never waits there, so a first open
+    # failed at once with "database is locked" while another opener held the file.
+    root = tmp_path / "w"
+    root.mkdir()
+    other = sqlite3.connect(str(root / db.DB_NAME), isolation_level=None, check_same_thread=False)
+    other.execute("BEGIN IMMEDIATE")
+    timer = threading.Timer(0.3, lambda: other.execute("COMMIT"))
+    timer.start()
+    try:
+        conn = db.connect(root)
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert db.user_version(conn) == db.head_version()
+    finally:
+        timer.join()
+        other.close()
+
+
+def test_several_processes_open_a_brand_new_database_at_once(tmp_path: Path) -> None:
+    # The app and its IDE/agent bridges start together on a fresh install.
+    import subprocess
+    import sys
+
+    code = (
+        "import pathlib, sys, time\n"
+        "sys.path.insert(0, sys.argv[3])\n"
+        "from backend.store import db\n"
+        "go = pathlib.Path(sys.argv[2])\n"
+        "while not go.exists():\n"
+        "    time.sleep(0.001)\n"
+        "conn = db.connect(pathlib.Path(sys.argv[1]))\n"
+        "assert conn.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'\n"
+        "assert db.user_version(conn) == db.head_version()\n"
+    )
+    app = str(Path(__file__).resolve().parents[2])
+    for rep in range(3):
+        root = tmp_path / f"rep{rep}"
+        go = tmp_path / f"rep{rep}.go"
+        procs = [
+            subprocess.Popen([sys.executable, "-c", code, str(root), str(go), app], stderr=subprocess.PIPE)
+            for _ in range(4)
+        ]
+        time.sleep(1.5)  # let every process import and wait at the start line
+        go.write_text("go")
+        errors = [p.communicate(timeout=120)[1].decode(errors="replace") for p in procs]
+        assert [p.returncode for p in procs] == [0, 0, 0, 0], errors
+
+
+def test_open_checked_never_restores_over_a_locked_database(monkeypatch) -> None:
+    calls: list[int] = []
+
+    def locked(root=None):
+        calls.append(1)
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(db, "connect", locked)
+    monkeypatch.setattr(db, "restore_snapshot", lambda root=None: pytest.fail("restored a snapshot over live data"))
+    monkeypatch.setattr(db.time, "sleep", lambda s: None)
+    with pytest.raises(sqlite3.OperationalError):
+        db.open_checked()
+    assert len(calls) == 4  # retried, then raised
+
+
+def test_a_staged_restore_keeps_the_previous_database_whole(tmp_path: Path) -> None:
+    import shutil
+
+    conn = db.connect()
+    conn.execute("CREATE TABLE notes (x TEXT)")
+    with db.write_txn(conn):
+        conn.execute("INSERT INTO notes VALUES ('before')")
+    snap = db.snapshot(label="test")
+    with db.write_txn(conn):
+        conn.execute("INSERT INTO notes VALUES ('after the snapshot')")
+    root = tmp_path / "UEFN-Ducky"
+    shutil.copy2(snap, root / db.RESTORE_PENDING_NAME)
+    db.reset_for_tests()
+    conn = db.connect()
+    assert [r[0] for r in conn.execute("SELECT x FROM notes")] == ["before"]
+    backups = [p for p in root.iterdir() if p.name.startswith(f"{db.DB_NAME}.replaced-") and not p.name.endswith(("-wal", "-shm"))]
+    assert len(backups) == 1
+    old = sqlite3.connect(str(backups[0]))
+    try:
+        assert sorted(r[0] for r in old.execute("SELECT x FROM notes")) == ["after the snapshot", "before"]
+    finally:
+        old.close()
+
+
+def test_the_wal_file_is_capped_after_each_reset() -> None:
+    conn = db.connect()
+    assert conn.execute("PRAGMA journal_size_limit").fetchone()[0] == db.WAL_SIZE_LIMIT
+    assert db.is_store_file(db.OPEN_LOCK_NAME)
+
+
+def test_a_restore_swap_that_cannot_finish_puts_everything_back(tmp_path: Path, monkeypatch) -> None:
+    # SQLite deletes a WAL left beside a missing ducky.db: a half-done swap lost commits.
+    conn = db.connect()
+    conn.execute("CREATE TABLE notes (x TEXT)")
+    with db.write_txn(conn):
+        conn.execute("INSERT INTO notes VALUES ('live')")
+    root = tmp_path / "UEFN-Ducky"
+    db.reset_for_tests()
+    (root / db.RESTORE_PENDING_NAME).write_bytes(b"not used")
+    (root / (db.DB_NAME + "-wal")).write_bytes(b"")  # a sidecar that is there to move
+    real_rename = Path.rename
+
+    def flaky(self, target):
+        if self.name == db.DB_NAME + "-wal":
+            raise PermissionError("held by an indexer")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky)
+    db._apply_pending_restore(root / db.DB_NAME)
+    monkeypatch.setattr(Path, "rename", real_rename)
+    assert (root / db.DB_NAME).is_file() and (root / db.RESTORE_PENDING_NAME).is_file()  # stays pending
+    assert not [p for p in root.iterdir() if p.name.startswith(f"{db.DB_NAME}.replaced-")]
+    (root / db.RESTORE_PENDING_NAME).unlink()  # this test's staged file is not a real snapshot
+    assert [r[0] for r in db.connect().execute("SELECT x FROM notes")] == ["live"]
+
+
+def test_upgrade_retries_take_one_pre_migrate_copy(tmp_path: Path, monkeypatch) -> None:
+    conn = db.connect()
+    root = tmp_path / "UEFN-Ducky"
+    monkeypatch.setattr(db, "_premigrate_done", set())
+    db._pre_migrate_copy(conn, 7)
+    monkeypatch.setattr(db, "_premigrate_done", set())  # another process, or a retry after reset
+    db._pre_migrate_copy(conn, 7)
+    copies = list(db.snapshot_dir(root).glob("ducky-*-pre-migrate-v7*.db"))
+    assert len(copies) == 1

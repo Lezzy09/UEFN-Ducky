@@ -280,5 +280,7 @@ def record_doc(plugin_id: str, scope: str, record_id: str, title: str, text: str
     return _finish(Doc(
         doc_key=f"record:{plugin_id}:{scope}:{record_id}", source_key=f"record:{plugin_id}:{scope}", kind="record",
         title=title, path=title, body=text, origin="plugin", plugin_id=plugin_id, scope=scope,
-        meta={"id": record_id, **(meta or {})},
+        # The plugin's meta as given: the record id comes back from doc_key, so a meta
+        # "id" of its own can neither replace it nor be lost.
+        meta=dict(meta or {}),
     ))

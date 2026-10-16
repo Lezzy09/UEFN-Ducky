@@ -188,7 +188,7 @@ def search_assets(
     fields: Optional[list[str]] = None,
     pretty: bool = False,
 ) -> str:
-    """Search assets by name/path substring (search=) or exact class (class_name=).
+    """Find assets in the Content Browser by name/path substring (search=) or exact class (class_name=).
 
     Use ``search=`` (not query/name_filter). Fortnite Creative props/devices/kits:
     ``directory="/Game/Creative"`` (or BuildingActors / Sets / Devices) — never

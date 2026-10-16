@@ -1038,6 +1038,12 @@ def import_plugin_from_bytes(
         return {"ok": False, "error": str(exc)}
 
     was_installed = existing is not None
+    try:  # an uninstall refused this plugin's search records; installed again, it may write them
+        from backend.search import indexer
+
+        indexer.plugin_installed(pid)
+    except Exception:
+        pass
     enabled_now = was_installed and pid in get_enabled_plugin_ids()
     # First Store/bundled install with default_enabled: enable via the real toggle
     # path (settings + contributions). Updates keep the prior on/off state.

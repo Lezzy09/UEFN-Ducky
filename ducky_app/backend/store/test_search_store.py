@@ -160,3 +160,114 @@ def test_missing_vectors_and_counts() -> None:
     assert repo.has_docs()
     repo.wipe()
     assert not repo.has_docs() and repo.states() == {}
+
+
+def _record(rid: str, body: str, *, plugin: str = "wiki", scope: str = "_local~personal") -> repo.Doc:
+    return _doc(f"record:{plugin}:{scope}:{rid}", rid, body, source=f"record:{plugin}:{scope}", kind="record",
+                plugin_id=plugin, scope=scope)
+
+
+def test_the_revision_token_moves_on_every_in_place_change() -> None:
+    # The vector-matrix cache is keyed on it: an updated or deleted record that kept the
+    # same row id and count used to leave every process ranking its old vector.
+    rec = _record("p1", "storm circle")
+    repo.upsert_one(rec, _vec(1, 0), "m")
+    t1 = repo.revision_token()
+    rec2 = _record("p1", "storm circle shrinks")
+    assert repo.upsert_one(rec2, _vec(0, 1), "m") is True
+    t2 = repo.revision_token()
+    assert t2 != t1
+    assert repo.load_vectors("m")[2] == _vec(0, 1)
+    db.connect().execute("DELETE FROM search_vecs")  # any writer moves it (triggers), raw SQL too
+    assert repo.revision_token() != t2
+
+
+def test_an_unchanged_record_is_not_rewritten() -> None:
+    rec = _record("p1", "storm circle")
+    assert repo.upsert_one(rec, _vec(1, 0), "m") is True
+    token = repo.revision_token()
+    assert repo.upsert_one(rec, _vec(1, 0), "m") is False
+    assert repo.revision_token() == token
+    assert repo.record_state(rec.doc_key, "m") == (rec.content_hash, True)
+    assert repo.record_state(rec.doc_key, "other-model") == (rec.content_hash, False)
+    assert repo.record_state("record:wiki:_local~personal:nope", "m") is None
+
+
+def test_the_record_cap_holds_inside_the_write() -> None:
+    repo.upsert_one(_record("a", "x"), None, "m", max_in_source=2)
+    repo.upsert_one(_record("b", "x"), None, "m", max_in_source=2)
+    repo.upsert_one(_record("a", "changed"), None, "m", max_in_source=2)  # replacing is fine at the cap
+    try:
+        repo.upsert_one(_record("c", "x"), None, "m", max_in_source=2)
+    except ValueError as exc:
+        assert "at most 2" in str(exc)
+    else:
+        raise AssertionError("the cap was passed")
+
+
+def test_a_fill_never_stores_a_vector_made_from_old_text() -> None:
+    old = _doc("skill:p/a#1", "One", "old text")
+    repo.write_source("pack:p", [old], {}, model="", revision="r")
+    missing = repo.missing_vectors("m")
+    hashes = {d.doc_key: d.content_hash for d in missing}
+    new = _doc("skill:p/a#1", "One", "new text")  # rewritten while the fill was embedding
+    repo.write_source("pack:p", [new], {new.doc_key: _vec(0, 1)}, model="m", revision="r2")
+    assert repo.set_vectors({old.doc_key: _vec(1, 0)}, "m", hashes) == 0
+    assert repo.load_vectors("m")[2] == _vec(0, 1)
+
+
+def test_a_rebuild_keeps_plugin_records_and_drops_their_vectors() -> None:
+    a = _doc("skill:p/a#1", "One", "night sky")
+    repo.write_source("pack:p", [a], {a.doc_key: _vec(1, 0)}, model="m", revision="r")
+    rec = _record("p1", "storm circle settings")
+    repo.upsert_one(rec, _vec(0, 1), "m")
+    repo.wipe()
+    assert repo.find_doc(a.doc_key) is None and repo.find_doc(rec.doc_key) is not None
+    assert [d.doc_key for d in repo.missing_vectors("m")] == [rec.doc_key]  # the fill re-embeds it
+    assert len(repo.keyword("storm circle", kinds=["record"])) == 1
+    db.connect().execute("INSERT INTO search_fts(search_fts, rank) VALUES ('integrity-check', 1)")
+
+
+def test_record_keyword_candidates_come_from_one_source_before_the_cut() -> None:
+    for i in range(60):  # another plugin with many better matches
+        repo.upsert_one(_record(f"o{i}", "storm circle storm circle storm", plugin="other"), None, "m")
+    mine = _record("mine", "a note about the storm circle")
+    repo.upsert_one(mine, None, "m")
+    assert all(repo.get_docs([i])[i]["plugin_id"] == "other" for i, _ in repo.keyword("storm circle", ["record"], 50))
+    hits = repo.keyword("storm circle", ["record"], 50, source_key=mine.source_key)
+    assert [repo.get_docs([i])[i]["doc_key"] for i, _ in hits] == [mine.doc_key]
+
+
+def test_an_uninstalled_plugin_cannot_write_records_back() -> None:
+    repo.upsert_one(_record("p1", "x"), None, "m")
+    assert repo.forget_records("wiki") == 1
+    try:
+        repo.upsert_one(_record("p2", "late write from a lingering thread"), None, "m")
+    except ValueError as exc:
+        assert "uninstalled" in str(exc)
+    else:
+        raise AssertionError("an uninstalled plugin wrote a record")
+    assert repo.count_source("record:wiki:_local~personal") == 0
+    repo.clear_plugin_gone("wiki")  # installed again
+    assert repo.upsert_one(_record("p3", "x"), None, "m") is True
+
+
+def test_scope_and_stale_sandbox_records_are_dropped() -> None:
+    repo.upsert_one(_record("t1", "x", scope="a_1~team-9"), None, "m")
+    repo.upsert_one(_record("t2", "x", scope="a_2~team-9"), None, "m")
+    assert repo.drop_scope_records("a_1", "team-9") == 1  # another account's copy stays
+    assert repo.count_source("record:wiki:a_2~team-9") == 1
+    box = _record("s1", "x", scope="a_1~_plugin_test_abcd1234")
+    repo.upsert_one(box, None, "m")
+    assert repo.drop_stale_sandbox_records(3600) == 0  # just written
+    db.connect().execute("UPDATE search_docs SET updated = 0 WHERE doc_key=?", (box.doc_key,))
+    assert repo.drop_stale_sandbox_records(3600) == 1
+    assert repo.find_doc("record:wiki:a_2~team-9:t2") is not None
+
+
+def test_tool_names_and_owners() -> None:
+    t = _doc("tool:spawn_actor", "spawn actor", "x", source="tools", kind="tool", tool_name="spawn_actor",
+             plugin_id="uefn")
+    repo.write_source("tools", [t], {}, model="", revision="r")
+    assert repo.tool_names() == {"spawn_actor"}
+    assert repo.tool_owners("tools") == {"tool:spawn_actor": "uefn"}
