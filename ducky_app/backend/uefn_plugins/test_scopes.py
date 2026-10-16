@@ -281,8 +281,14 @@ def test_copy_local_into_a_team_is_one_way_and_keeps_the_teams_items(who: _Who, 
     pushes = [p for r in store.requests for p in r.get("pushes") or []]
     pushed = sorted(p["key"] for p in pushes if p["pluginId"] == "brainrot-tcg")
     assert pushed == ["assets/pip.png", "card.mo", "card.pip"] and "secret" not in repr(store.requests)
-    personal = team_sync.share_plugin_id(ana, "brainrot-tcg")
-    assert sorted(p["key"] for p in pushes if p["pluginId"] == personal) == ["card.mo", "card.pip"]
+    # Local data never leaves the PC: no member's own copy is ever pushed.
+    assert all(p["pluginId"] == "brainrot-tcg" for p in pushes)
+    # A member's own copy an earlier version pulled or queued is dropped from this PC's team copy.
+    own = "a_0123456789abcdef.brainrot-tcg"
+    repo.put(ana, "teamT", own, "doc", "db", value="x", size=1, sha256="s", dirty=True)
+    assert _sync(store)["state"] == "ok"
+    assert own not in repo.scope_plugin_ids(ana, "teamT")
+    assert not any(p["pluginId"] == own for r in store.requests for p in r.get("pushes") or [])
     # The Local copy is untouched.
     scopes.link_plugin("brainrot-tcg", scopes.PERSONAL)
     assert cards.items() == {"card.mo": {"v": "local"}, "card.pip": {"v": "local"}}

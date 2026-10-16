@@ -189,6 +189,21 @@ def delete_plugin(account: str, plugin: str) -> None:
         conn.execute("DELETE FROM plugin_data WHERE account_id=? AND plugin_id=?", (account, plugin))
 
 
+def scope_plugin_ids(account: str, scope: str) -> list[str]:
+    """Every plugin id with rows in one scope, deleted and sensitive ones too."""
+    out = db.connect().execute(
+        "SELECT DISTINCT plugin_id FROM plugin_data WHERE account_id=? AND scope_id=? ORDER BY plugin_id",
+        (account, scope),
+    ).fetchall()
+    return [str(r[0]) for r in out]
+
+
+def delete_scope_plugin(account: str, scope: str, plugin: str) -> None:
+    conn = db.connect()
+    with db.write_txn(conn):
+        conn.execute("DELETE FROM plugin_data WHERE account_id=? AND scope_id=? AND plugin_id=?", (account, scope, plugin))
+
+
 def delete_scope(account: str, scope: str) -> None:
     conn = db.connect()
     with db.write_txn(conn):

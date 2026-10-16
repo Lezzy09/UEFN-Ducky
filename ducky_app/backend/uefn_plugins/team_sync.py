@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
 import threading
 import time
 import urllib.error
@@ -132,7 +133,6 @@ def _store(scope: dict[str, Any], kind: str, pid: str, key: str, data: bytes, re
     else:
         repo.put(scope["account"], scope["id"], pid, kind, key, value=seal_text(data.decode("utf-8"), scope["account"]),
                  size=len(data), sha256=sha, dirty=False, rev=rev)
-    _land_own(scope, kind, pid, key, data)
 
 
 def _sealed(scope: dict[str, Any], row: dict[str, Any], tk: tuple[int, bytes]) -> bytes | None:
@@ -178,34 +178,12 @@ def _reseal(scope: dict[str, Any], it: tuple[str, str, str], may_automate: bool)
     repo.mark_dirty(scope["account"], scope["id"], it[1], it[0], it[2])
 
 
-def share_plugin_id(account: str, plugin: str) -> str | None:
-    """This person's copy of a plugin on a team: ``a_<16 hex>.<plugin>``."""
-    pid = f"{account}.{plugin}"
-    if re.fullmatch(r"a_[0-9a-f]{16}", account or "") and scopes.valid_plugin_id(plugin) and scopes.valid_plugin_id(pid):
-        return pid
-    return None
-
-
-def own_base(account: str, plugin_id: str) -> str | None:
-    """The plugin id inside this account's personal share, or None for anyone else's."""
-    plugin = plugin_id[len(account) + 1 :] if plugin_id.startswith(account + ".") else ""
-    return plugin if plugin and share_plugin_id(account, plugin) == plugin_id else None
-
-
-def sidecar_root() -> Path:
-    """Where plugins keep a ``db.json`` beside the host data service."""
-    from backend.skills.store import appdata_dir
-
-    return appdata_dir()
-
-
 def plugin_label(plugin_id: str) -> str:
     """The plugin's display name, from its manifest. Empty when it has none."""
-    base = own_base_any(plugin_id)
     try:
         from backend.uefn_plugins.store import load_plugin_manifest
 
-        manifest = load_plugin_manifest(base) or {}
+        manifest = load_plugin_manifest(plugin_id) or {}
         label = str(manifest.get("label") or "").strip()
         if label and len(label) <= 80 and all(ord(c) >= 32 for c in label):
             return label
@@ -214,101 +192,19 @@ def plugin_label(plugin_id: str) -> str:
     return ""
 
 
-def own_base_any(plugin_id: str) -> str:
-    """``a_<16 hex>.<plugin>`` → ``<plugin>``. Any other id is unchanged."""
-    m = re.fullmatch(r"a_[0-9a-f]{16}\.(.+)", plugin_id or "")
-    plugin = m.group(1) if m else plugin_id
-    return plugin if scopes.valid_plugin_id(plugin) else plugin_id
+# Earlier versions uploaded each member's Local data into their teams as
+# ``a_<16 hex>.<plugin>`` and pulled everyone else's. Local data never leaves its
+# PC, and no one holds another member's data: this PC's copy of a team keeps none.
+_OWN_COPY = re.compile(r"a_[0-9a-f]{16}\..+")
 
 
-def _queue_doc(account: str, team: str, share: str, key: str, raw: bytes) -> None:
-    from backend.uefn_plugins.data_crypto import seal_text
-
-    if not scopes.valid_doc_key(key) or not raw or len(raw) > scopes.DOC_MAX_BYTES:
-        return
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeError:
-        return
-    sha = hashlib.sha256(raw).hexdigest()
-    old = repo.get(account, team, share, "doc", key)
-    if old and not old["deleted"] and old["sha256"] == sha:
-        return
-    repo.put(account, team, share, "doc", key, value=seal_text(text, account), size=len(raw), sha256=sha, dirty=True)
-
-
-def queue_personal(account: str, team: str) -> None:
-    """Queue this person's Local plugin docs, and any ``<plugin>/db.json``, onto the
-    team under ``{account}.{plugin}``. Sensitive docs stay on the PC. A matching
-    sha is left alone, so a quiet round does not re-upload."""
-    from backend.uefn_plugins.data_crypto import Locked, open_text
-
-    for plugin in repo.plugin_ids(account, scopes.PERSONAL):
-        share = share_plugin_id(account, plugin)
-        if not share:
-            continue
-        try:
-            saved = repo.rows(account, scopes.PERSONAL, plugin, "doc")
-        except Exception:
-            continue
-        for row in saved:
-            if row["sensitive"] or row["value"] is None:
-                continue
-            try:
-                raw = open_text(row["value"], account).encode("utf-8")
-            except (Locked, ValueError, UnicodeError):
-                continue
-            _queue_doc(account, team, share, row["key"], raw)
-    root = sidecar_root()
-    if not root.is_dir():
-        return
-    try:
-        children = list(root.iterdir())
-    except OSError:
-        return
-    for child in children:
-        db = child / "db.json"
-        if not child.is_dir() or not db.is_file():
-            continue
-        plugin = child.name.replace("_", "-").lower()
-        share = share_plugin_id(account, plugin)
-        if not share:
-            continue
-        try:
-            raw = db.read_bytes()
-        except OSError:
-            continue
-        _queue_doc(account, team, share, "db", raw)
-
-
-def _write_sidecar(plugin: str, data: bytes) -> None:
-    root = sidecar_root()
-    underscored = root / plugin.replace("-", "_") / "db.json"
-    hyphenated = root / plugin / "db.json"
-    path = hyphenated if hyphenated.is_file() and not underscored.is_file() else underscored
-    try:
-        if path.is_file() and path.read_bytes() == data:
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_bytes(data)
-        tmp.replace(path)
-    except OSError:
-        return
-
-
-def _land_own(scope: dict[str, Any], kind: str, pid: str, key: str, data: bytes) -> None:
-    """A download of this account's personal plugin: write ``db.json`` back, and the
-    Local docs the plugin reads. Someone else's rows stay in the team copy only."""
-    if kind != "doc" or scope.get("id") == scopes.PERSONAL:
-        return
-    plugin = own_base(scope["account"], pid)
-    if not plugin:
-        return
-    if key == "db":
-        _write_sidecar(plugin, data)
-    personal = {"account": scope["account"], "id": scopes.PERSONAL, "kind": "personal"}
-    _store(personal, kind, plugin, key, data, 0)
+def drop_own_copies(account: str, team: str) -> None:
+    """Remove members' own Local data from this PC's copy of ``team``: rows, unpushed
+    changes and files. The Store refuses and hides them as well."""
+    for plugin in repo.scope_plugin_ids(account, team):
+        if _OWN_COPY.fullmatch(plugin):
+            repo.delete_scope_plugin(account, team, plugin)
+            shutil.rmtree(scopes.scopes_root(account) / team / plugin, ignore_errors=True)
 
 
 def _apply_change(scope: dict[str, Any], t: Transport, ch: dict[str, Any], changed: set[str],
@@ -454,7 +350,7 @@ def _round(account: str, team: str, cursor: int, t: Transport, now: Callable[[],
         # First round with the team's key on this PC: pull the whole team once, so
         # every item the server still holds in plaintext is found and pushed again.
         cursor = 0
-    queue_personal(account, team)
+    drop_own_copies(account, team)
     changed: set[str] = set()
     errors: list[str] = []
     pushes: list[dict[str, Any]] = []
