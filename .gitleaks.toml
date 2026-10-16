@@ -6,10 +6,12 @@ useDefault = true
 
 # LLM plugins pass a model id as test_key_model= — not a credential.
 # The release-signing tests pin a made-up Ed25519 PUBLIC key (bytes 0..31) as _STORE_KEY.
+# build/fetch_search_model.py pins each model file's SHA-256 ("tokenizer.json": "<64 hex>").
 [allowlist]
-description = "LLM test_key_model is a model id; _STORE_KEY is a fake public key in tests"
+description = "LLM test_key_model is a model id; _STORE_KEY is a fake public key in tests; file SHA-256 pins"
 regexTarget = "line"
 regexes = [
   '''test_key_model\s*=''',
   '''^_STORE_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="''',
+  '''^\s*"[\w.-]+\.(json|safetensors|md)": "[0-9a-f]{64}",$''',
 ]
