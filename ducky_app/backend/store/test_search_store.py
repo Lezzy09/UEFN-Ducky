@@ -67,6 +67,50 @@ def test_keyword_ranks_by_bm25_and_filters_kinds() -> None:
     assert [repo.get_docs([i])[i]["kind"] for i, _ in tools] == ["tool"]
 
 
+def test_a_tools_summary_line_outweighs_the_same_words_in_its_body() -> None:
+    # Same words and lengths; only where "place an actor" sits differs.
+    lead = _doc("tool:spawn_thing", "spawn thing", "spawn thing\nWorks with meshes and devices.", kind="tool",
+                source="tools", summary="Place an actor.")
+    notes = _doc("tool:read_thing", "read thing", "read thing\nPlace an actor.", kind="tool", source="tools",
+                 summary="Works with meshes and devices.")
+    # Enough other rows that "place" and "actor" stay rare (a positive idf).
+    others = [_doc(f"skill:p/a#{i}", f"Other {i}", "ocean water waves foam") for i in range(4)]
+    repo.write_source("pack:p", others, {}, model="", revision="r")
+    repo.write_source("tools", [notes, lead], {}, model="", revision="r")
+    hits = repo.keyword("place an actor", kinds=["tool"])
+    assert [repo.get_docs([i])[i]["doc_key"] for i, _ in hits] == ["tool:spawn_thing", "tool:read_thing"]
+
+
+def test_search_rows_from_before_the_summary_column_survive_the_upgrade(monkeypatch) -> None:
+    """0017 rebuilds search_fts with a summary column; rows indexed at 0016 stay findable
+    until the chunker version bump rewrites them."""
+    real_files = db.migration_files
+    monkeypatch.setattr(db, "migration_files", lambda: [(n, p) for n, p in real_files() if n <= 16])
+    db.reset_for_tests()
+    conn = db.connect()
+    assert db.user_version(conn) == 16
+    with db.write_txn(conn):
+        conn.execute(
+            "INSERT INTO search_docs(doc_key, source_key, kind, title, path, body, content_hash) "
+            "VALUES ('tool:spawn_actor', 'tools', 'tool', 'spawn actor', 'UEFN', 'Place an actor in the level.', 'old')"
+        )
+    db.reset_for_tests()
+    monkeypatch.setattr(db, "migration_files", real_files)
+
+    conn = db.connect()
+    assert db.user_version(conn) == db.head_version()
+    hits = repo.keyword("place an actor", kinds=["tool"])
+    assert [repo.get_docs([i])[i]["doc_key"] for i, _ in hits] == ["tool:spawn_actor"]
+    # The rewrite moves the first line into the summary; the delete trigger must find the old body.
+    new = _doc("tool:spawn_actor", "spawn actor", "spawn actor", kind="tool", source="tools",
+               summary="Place an actor in the level.")
+    assert repo.write_source("tools", [new], {}, model="", revision="r")["changed"] == 1
+    assert len(repo.keyword("place an actor", kinds=["tool"])) == 1
+    assert repo.keyword("UEFN", kinds=["tool"]) == []
+    assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    conn.execute("INSERT INTO search_fts(search_fts) VALUES ('integrity-check')")
+
+
 def test_hostile_query_text_never_raises() -> None:
     repo.write_source("pack:p", [_doc("skill:p/a#1", "Title", "body text")], {}, model="", revision="r")
     for text in ['AND OR NOT', '"unbalanced', "star*", "col:umn", "🦆🦆", "", "   ", "NEAR(a b)", "a" * 5000]:

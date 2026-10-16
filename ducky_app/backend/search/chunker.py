@@ -21,7 +21,7 @@ from typing import Any, Iterable
 from backend.store.repos.search import Doc
 
 # Bump when the rows built from the same files change shape; every source re-indexes.
-CHUNKER_VERSION = "3"
+CHUNKER_VERSION = "4"
 SECTION_MAX = 1200
 CODE_BLOCK_MAX = 2400
 SUBSKILL_INTRO = 600
@@ -54,7 +54,7 @@ def content_hash(*parts: Any) -> str:
 def _finish(doc: Doc) -> Doc:
     # The version is part of the hash, so a new way of building rows or vectors re-embeds them.
     doc.content_hash = content_hash(
-        CHUNKER_VERSION, doc.kind, doc.title, doc.path, doc.body, doc.meta, doc.origin, doc.plugin_id
+        CHUNKER_VERSION, doc.kind, doc.title, doc.path, doc.body, doc.summary, doc.meta, doc.origin, doc.plugin_id
     )
     return doc
 
@@ -253,21 +253,25 @@ def tool_docs(rows: Iterable[dict[str, Any]], *, source_key: str = "tools") -> l
         if not name:
             continue
         desc = str(row.get("description") or "").strip()[:TOOL_DESC_MAX]
+        lead, _, rest = desc.partition("\n")
         aliases = [a for a in row.get("aliases") or [] if isinstance(a, str)]
         owner = str(row.get("owner_label") or "")
         params = _schema_params(row.get("inputSchema"))
         body = "\n".join(x for x in (
             words(name.split("__", 1)[-1]),
-            desc,
+            rest.strip(),
             ("Also called: " + ", ".join(aliases)) if aliases else "",
             ("Parameters: " + ", ".join(params)) if params else "",
         ) if x)
         docs.append(_finish(Doc(
             doc_key=f"tool:{name}", source_key=source_key, kind="tool", title=words(name.split("__", 1)[-1]),
-            path=owner, body=body,
+            # The first description line moves to its own keyword column, weighted above the
+            # body: inside a long docstring it counted no more than a usage note did. Moved,
+            # not copied, so row lengths (and every other row's bm25) stay the same.
+            path=owner, body=body, summary=lead,
             origin="plugin" if row.get("plugin_id") else ("mcp" if "__" in name else "core"),
             plugin_id=str(row.get("plugin_id") or ""), tool_name=name,
-            meta={"aliases": aliases, "owner": owner, "description": desc.split("\n", 1)[0][:300]},
+            meta={"aliases": aliases, "owner": owner, "description": lead[:300]},
         )))
     return docs
 

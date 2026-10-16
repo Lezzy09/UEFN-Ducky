@@ -81,7 +81,10 @@ def test_tool_docs_words_owner_and_params() -> None:
     assert wire.title == "wire verse device ref" and wire.path == "Plugin: UEFN" and wire.origin == "plugin"
     assert "device (the device label)" in wire.body and "wire_device" in wire.body
     assert wire.meta["description"] == "Assign one device to a Verse @editable field."
-    assert docs[1].origin == "mcp" and docs[1].title == "ping"
+    # The first line moves to the summary column (weighted on its own); the rest stays in the body.
+    assert wire.summary == "Assign one device to a Verse @editable field."
+    assert "Assign one device" not in wire.body and "More text." in wire.body
+    assert docs[1].origin == "mcp" and docs[1].title == "ping" and docs[1].summary == ""
 
 
 def test_embed_text_and_snippet() -> None:

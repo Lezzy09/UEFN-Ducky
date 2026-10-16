@@ -167,6 +167,11 @@ def test_upgrade_from_previous_schema_does_not_deadlock(tmp_path: Path) -> None:
     conn.execute("INSERT INTO plugin_kv VALUES ('demo', 'es', '{}', 0, 0)")
     conn.execute("ALTER TABLE projects DROP COLUMN kind")  # 0011 re-adds it
     conn.execute("ALTER TABLE messages DROP COLUMN fmt")  # 0015 re-adds it
+    # 0016 recreates the search triggers and FTS table, 0017 re-adds the summary column.
+    for trigger in ("search_docs_ai", "search_docs_ad", "search_docs_au"):
+        conn.execute(f"DROP TRIGGER {trigger}")
+    conn.execute("DROP TABLE search_fts")
+    conn.execute("ALTER TABLE search_docs DROP COLUMN summary")
     conn.execute("PRAGMA user_version=8")
     db.reset_for_tests()
 

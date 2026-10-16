@@ -7,7 +7,7 @@ tool from plain words. Decision record: [ADR 0004](../adr/0004-search-index-in-d
 
 | Piece | File |
 |---|---|
-| Tables (`search_docs`, `search_fts`, `search_vecs`, `search_state`) | `backend/store/migrations/0016_search.sql` |
+| Tables (`search_docs`, `search_fts`, `search_vecs`, `search_state`) | `backend/store/migrations/0016_search.sql`, `0017_search_summary.sql` (summary column) |
 | SQL (upserts, bm25 query, vectors) | `backend/store/repos/search.py` |
 | Model loading and encoding | `backend/search/embedder.py` |
 | Packs and tools → rows | `backend/search/chunker.py` |
@@ -28,7 +28,9 @@ tool from plain words. Decision record: [ADR 0004](../adr/0004-search-index-in-d
   1,200 characters (longer ones split on paragraphs; a code block stays whole up to
   2,400).
 - **tool** — `tool:<name>`: the name as words, description, aliases and parameter
-  names; `path` is who provides it (core, a plugin, a nested MCP server).
+  names; `path` is who provides it (core, a plugin, a nested MCP server). The first
+  line of the description sits in its own `summary` column instead of the body (see
+  Ranking); skill and record rows leave `summary` empty.
 - **record** — `record:<plugin>:<scope>:<id>`: a plugin's own row through `api.search`.
 
 The vector of a row is computed from its heading path ("pack > file > section")
@@ -60,9 +62,17 @@ catalog is not re-indexed.
 
 ## Ranking
 
-1. Keywords: FTS5 bm25 over title, path and body, top 50. The query is tokenized,
-   stopwords dropped, each token quoted (no FTS syntax from the person's words), the
-   last one used as a prefix.
+1. Keywords: FTS5 bm25 over title, path, body and summary with column weights 3, 2,
+   1 and 2.5, top 50. The query is tokenized, stopwords dropped, each token quoted (no
+   FTS syntax from the person's words), the last one used as a prefix. The summary
+   weight is for tools: in a body holding the whole docstring and parameter names, the
+   line that says what the tool does counted no more than a usage note, so
+   `spawn_actor` ("Place an actor …") fell out of the keyword top 10 for "place an
+   actor in the level" (10th after fusion).
+   The line is moved out of the body, not copied, because FTS5 bm25 measures length
+   over all columns: a copy lengthens tool rows and the average row, which moved skill
+   rankings too. Indexing only the first paragraph was tried and lost tools whose key
+   words sit further down ("undo the changes an agent made" → `changeset_revert`).
 2. Meaning: cosine with every vector of the current model, top 50 (per-process
    matrix, cached until the index changes).
 3. Reciprocal rank fusion, weights (keyword, meaning) = (1, 1) for skills and
@@ -103,4 +113,14 @@ old all-words matches). An empty index on the first search in a process waits up
 `python scripts/search_eval.py --engine all --misses` builds a throwaway index in a
 temp folder from the skills installed on the PC and the running app's tool catalog,
 and prints hit@1, hit@3 and MRR for today's lookup, keywords only and hybrid. The
-person's `ducky.db` is never opened.
+person's `ducky.db` is never opened. `--tools-json` scores a saved
+`get_mcp_tools_catalog` result instead; save one while Ducky's own editor tools are
+listed, or the questions about them are skipped.
+
+The summary column (summary weight 2.5 vs. 1, which equals the old ranking) on 35
+tool questions against a full 1,257-tool catalog: hybrid hit@1 0.714 → 0.771, hit@3
+0.914 → 0.971, MRR 0.818 → 0.867. Keywords alone (the no-model fallback) lose one
+question, hit@3 0.886 → 0.857, MRR 0.792 → 0.779: `set_actor_properties` and
+`set_verse_editable` have first lines without "change" or "device", so other rows
+whose first lines have them pass them for "change a property on a placed device".
+Skills are unchanged.

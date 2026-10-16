@@ -16,8 +16,9 @@ from typing import Any, Iterable
 from backend.store import db
 
 KINDS = ("pack", "subskill", "section", "tool", "record")
-# bm25 column weights: title, heading path, body.
-_BM25 = "bm25(search_fts, 3.0, 2.0, 1.0)"
+# bm25 column weights: title, heading path, body, summary (a tool's first description line,
+# tuned on backend/search/eval; skill and record rows leave it empty).
+_BM25 = "bm25(search_fts, 3.0, 2.0, 1.0, 2.5)"
 _TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
 _MAX_QUERY_TOKENS = 16
 # Words that match nearly every row; OR-ing them in only adds noise to the candidates.
@@ -35,6 +36,7 @@ class Doc:
     title: str
     body: str
     path: str = ""
+    summary: str = ""
     origin: str = ""
     plugin_id: str = ""
     pack_id: str = ""
@@ -49,13 +51,14 @@ class Doc:
         return (
             self.doc_key, self.source_key, self.kind, self.origin, self.plugin_id, self.pack_id,
             self.subskill_id, self.section, self.tool_name, self.scope, self.title, self.path,
-            self.body, json.dumps(self.meta, sort_keys=True, ensure_ascii=False), self.content_hash, time.time(),
+            self.body, self.summary, json.dumps(self.meta, sort_keys=True, ensure_ascii=False), self.content_hash,
+            time.time(),
         )
 
 
 _COLUMNS = (
     "doc_key, source_key, kind, origin, plugin_id, pack_id, subskill_id, section, tool_name, "
-    "scope, title, path, body, meta, content_hash, updated"
+    "scope, title, path, body, summary, meta, content_hash, updated"
 )
 
 
@@ -101,7 +104,7 @@ def write_source(
                 # A doc_key can move between sources (a pack moved from AppData to a plugin).
                 conn.execute("DELETE FROM search_docs WHERE doc_key=?", (doc.doc_key,))
                 cur = conn.execute(
-                    f"INSERT INTO search_docs({_COLUMNS}) VALUES ({', '.join('?' * 16)})", doc.row()
+                    f"INSERT INTO search_docs({_COLUMNS}) VALUES ({', '.join('?' * 17)})", doc.row()
                 )
                 doc_id = int(cur.lastrowid)
                 added += 1
@@ -110,7 +113,7 @@ def write_source(
                 if current[1] != doc.content_hash:
                     conn.execute(
                         "UPDATE search_docs SET source_key=?, kind=?, origin=?, plugin_id=?, pack_id=?, subskill_id=?, "
-                        "section=?, tool_name=?, scope=?, title=?, path=?, body=?, meta=?, content_hash=?, updated=? "
+                        "section=?, tool_name=?, scope=?, title=?, path=?, body=?, summary=?, meta=?, content_hash=?, updated=? "
                         "WHERE id=?",
                         (*doc.row()[1:], doc_id),
                     )
@@ -152,7 +155,7 @@ def missing_vectors(model: str, limit: int = 5000) -> list[Doc]:
             meta = {}
         out.append(Doc(
             doc_key=r["doc_key"], source_key=r["source_key"], kind=r["kind"], title=r["title"], body=r["body"],
-            path=r["path"], origin=r["origin"], plugin_id=r["plugin_id"], pack_id=r["pack_id"],
+            path=r["path"], summary=r["summary"], origin=r["origin"], plugin_id=r["plugin_id"], pack_id=r["pack_id"],
             subskill_id=r["subskill_id"], section=r["section"], tool_name=r["tool_name"], scope=r["scope"],
             meta=meta, content_hash=r["content_hash"],
         ))
@@ -185,7 +188,7 @@ def upsert_one(doc: Doc, vec: bytes | None, model: str) -> None:
     with db.write_txn(conn):
         row = conn.execute("SELECT id, content_hash FROM search_docs WHERE doc_key=?", (doc.doc_key,)).fetchone()
         if row is None:
-            cur = conn.execute(f"INSERT INTO search_docs({_COLUMNS}) VALUES ({', '.join('?' * 16)})", doc.row())
+            cur = conn.execute(f"INSERT INTO search_docs({_COLUMNS}) VALUES ({', '.join('?' * 17)})", doc.row())
             doc_id = int(cur.lastrowid)
         else:
             doc_id = int(row[0])
@@ -193,7 +196,7 @@ def upsert_one(doc: Doc, vec: bytes | None, model: str) -> None:
                 return
             conn.execute(
                 "UPDATE search_docs SET source_key=?, kind=?, origin=?, plugin_id=?, pack_id=?, subskill_id=?, "
-                "section=?, tool_name=?, scope=?, title=?, path=?, body=?, meta=?, content_hash=?, updated=? WHERE id=?",
+                "section=?, tool_name=?, scope=?, title=?, path=?, body=?, summary=?, meta=?, content_hash=?, updated=? WHERE id=?",
                 (*doc.row()[1:], doc_id),
             )
             conn.execute("DELETE FROM search_vecs WHERE doc_id=?", (doc_id,))
