@@ -13,10 +13,27 @@ from typing import Callable, Optional
 from frontend.ide_paths import IdeKind, path_for_ide
 from frontend.mcp_block import build_uefn_server_block
 from frontend.merge import merge_uefn_into_config
-from frontend.settings import PANEL_LISTENER_PORT, PanelSettings
+from frontend.settings import DEFAULT_PANEL_LISTENER_PORT, PANEL_LISTENER_PORT, PanelSettings
 from frontend.skill_deploy import sync_skill_for_ide
 
 ALL_IDES = (IdeKind.CURSOR, IdeKind.CLAUDE, IdeKind.ANTIGRAVITY, IdeKind.CODEX)
+
+
+def auto_apply_skip_reason() -> str:
+    """Why this instance must not rewrite the shared IDE configs on its own ("" = it may).
+
+    Boot, the listener coming online, and gateway hookups re-point
+    ~/.codex/config.toml, ~/.cursor/mcp.json, Claude and Antigravity at the
+    running exe and sync skills beside them. A sandboxed test build (own
+    LOCALAPPDATA, panel port 4300) did that too, aiming the person's IDEs at a
+    throwaway exe and sandbox AppData until their own app re-applied. The
+    Settings Apply button and the MCP apply tool still write.
+    """
+    if PANEL_LISTENER_PORT != DEFAULT_PANEL_LISTENER_PORT:
+        return f"panel port {PANEL_LISTENER_PORT} is not the default {DEFAULT_PANEL_LISTENER_PORT}"
+    from frontend.app_paths import foreign_profile_reason
+
+    return foreign_profile_reason()
 
 
 def _active_ide_kinds() -> tuple[IdeKind, ...]:

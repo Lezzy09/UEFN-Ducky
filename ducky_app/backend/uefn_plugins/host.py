@@ -3898,6 +3898,12 @@ class _PluginApi:
         if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1":
             self.log(f"IDE auto-apply skipped ({kind}): MCP bridge process")
             return
+        from frontend.ide_apply import auto_apply_skip_reason
+
+        reason = auto_apply_skip_reason()
+        if reason:
+            self.log(f"IDE auto-apply skipped ({kind}): {reason}")
+            return
         # Off the plugin-load thread: config merge + skill deploy is disk-bound and
         # nothing in the UI needs it. Inline, three gateways serialized ~60s of
         # writes ahead of _LOADED, so the Store/Settings panes sat empty that long.

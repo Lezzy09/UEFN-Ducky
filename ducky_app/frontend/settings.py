@@ -29,7 +29,8 @@ def default_app_data_dir() -> Path:
 # Listener / bridge port for the packaged panel — not user-configurable in the UI.
 # UEFN_DUCKY_PANEL_PORT exists for test sessions (conftest.py), which must never
 # reach the running app at 4199/4200.
-PANEL_LISTENER_PORT = int(os.environ.get("UEFN_DUCKY_PANEL_PORT") or 4200)
+DEFAULT_PANEL_LISTENER_PORT = 4200
+PANEL_LISTENER_PORT = int(os.environ.get("UEFN_DUCKY_PANEL_PORT") or DEFAULT_PANEL_LISTENER_PORT)
 
 
 def _settings_use_db() -> bool:

@@ -199,19 +199,36 @@ def ship_newest_everywhere(
         except Exception:
             pass  # listener offline — nothing to refresh
 
+        # A sandboxed test build must leave the person's IDE configs and skill
+        # folders alone; its own AppData packs still refresh.
         try:
-            from frontend.settings import PanelSettings
-            from frontend.skill_deploy import sync_skill_all_ides
+            from frontend.ide_apply import auto_apply_skip_reason
 
-            for ln in sync_skill_all_ides(
-                PanelSettings.load().antigravity_config_path,
-                force_appdata=force_skills,
-            ):
-                _log(ln)
+            keep_ides = auto_apply_skip_reason()
+        except Exception:  # noqa: BLE001
+            keep_ides = ""
+        if keep_ides:
+            _log(f"IDE configs and skills left alone: {keep_ides}")
+
+        try:
+            if keep_ides:
+                from backend.skills.store import seed_skill_packs
+
+                for ln in seed_skill_packs(force=force_skills):
+                    _log(ln)
+            else:
+                from frontend.settings import PanelSettings
+                from frontend.skill_deploy import sync_skill_all_ides
+
+                for ln in sync_skill_all_ides(
+                    PanelSettings.load().antigravity_config_path,
+                    force_appdata=force_skills,
+                ):
+                    _log(ln)
         except Exception as exc:  # noqa: BLE001
             _log(f"skill sync failed: {exc}")
 
-        if apply_ides:
+        if apply_ides and not keep_ides:
             try:
                 from frontend.ide_apply import apply_all_ide_bridges
 
