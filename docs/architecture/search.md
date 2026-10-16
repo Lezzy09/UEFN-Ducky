@@ -80,6 +80,17 @@ section=...)` or `ducky_get_tools(name=...)` call that opens it, with named argu
 as an MCP call takes them (from the positional form agents guessed `pack=`, which the
 tool now also accepts beside `skill=`).
 
+## Per-turn hints
+
+Each user turn gets at most three sections, in the live-context tail for Ducky's own
+agent and in front of the prompt for coding agents, never in the cached system
+prompt. The search runs on the first sentence with three or more content words (the
+task); later sentences are usually about the reply ("answer in four lines", "don't
+change any files") and pulled the hint toward UEFN Ducky's own how-to sections. The
+whole message is searched only when that sentence finds nothing. A hit counts when
+its meaning score is at least 0.42, or at least 0.28 with a keyword rank in the top
+10, so chit-chat ("continue", "did you finish?") gets no hint.
+
 ## Fallbacks
 
 No model folder or a load error → keyword search only (logged once). An index

@@ -9,9 +9,11 @@ hint is only given when the top match is clearly relevant; chit-chat ("continue"
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 _log = logging.getLogger("uefn_ducky.search")
+_SENTENCE = re.compile(r"(?<=[.?!])\s+")
 
 MAX_CHARS = 400
 MIN_TEXT = 8
@@ -58,6 +60,21 @@ def context_for_conversation(conv: Any) -> Any:
         return chat_context()
 
 
+def _focus(text: str) -> str:
+    """The sentence the request is about: the first with three or more content words.
+
+    Later sentences are often about the answer ("reply in three lines", "don't change any
+    files", "name the section you read"); searched with the rest they pulled the hint
+    toward UEFN Ducky's own how-to sections (Oct 16 live test).
+    """
+    from backend.store.repos.search import title_words
+
+    for sentence in _SENTENCE.split(text):
+        if len(title_words(sentence).split()) >= 3:
+            return sentence.strip()
+    return text
+
+
 def skill_hint(user_text: str, *, conv: Any = None, limit: int = 3) -> str:
     """One short block naming the best sections for ``user_text``, or '' when none is clear."""
     text = " ".join((user_text or "").split())
@@ -68,7 +85,10 @@ def skill_hint(user_text: str, *, conv: Any = None, limit: int = 3) -> str:
 
         indexer.maybe_refresh()
         ctx = context_for_conversation(conv) if conv is not None else query.chat_context()
-        rows = [r for r in query.search(text[:QUERY_CHARS], limit=limit, context=ctx, refresh=False) if _relevant(r)]
+        focus = _focus(text)
+        rows = [r for r in query.search(focus[:QUERY_CHARS], limit=limit, context=ctx, refresh=False) if _relevant(r)]
+        if not rows and focus != text:
+            rows = [r for r in query.search(text[:QUERY_CHARS], limit=limit, context=ctx, refresh=False) if _relevant(r)]
     except Exception:  # noqa: BLE001 — a hint is optional
         _log.debug("search: skill hint failed", exc_info=True)
         return ""

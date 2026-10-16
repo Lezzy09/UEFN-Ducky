@@ -85,6 +85,27 @@ def test_hint_names_the_best_section_for_a_clear_request() -> None:
     assert len(text) <= len("Relevant skills for this request (read before acting): ") + hints.MAX_CHARS + 120
 
 
+def test_hint_follows_the_request_not_the_reply_instructions() -> None:
+    # Oct 16 live test: "…stats save between sessions? Read the matching skill guidance
+    # first, answer in four short lines and name the skill section you read." hinted
+    # UEFN Ducky's own how-to sections, not persistence.
+    from frontend.app_paths import resolve_app_data_dir
+
+    _pack()
+    root = resolve_app_data_dir() / "skill_packs" / "howto"
+    root.mkdir(parents=True)
+    (root / "SKILL.md").write_text(
+        "---\nname: howto\ndescription: How agents read skill guidance and answer\nmetadata:\n  label: How to\n---\n\n"
+        "## Reading skill sections\nRead the matching skill guidance first, answer in short lines, "
+        "name the skill section you read and do not change any files.\n",
+        encoding="utf-8")
+    indexer.index_packs(indexer.live_pack_sources())
+    text = hints.skill_hint(
+        "Make an archer enemy that patrols and shoots arrows at the player. Read the matching skill guidance "
+        "first, answer in four short lines and name the skill section you read. Do not change any files.")
+    assert 'pack_id="npc"' in text and 'pack_id="howto"' not in text
+
+
 @pytest.mark.parametrize("chat", ["continue", "ok", "finish did you finish", "why is the plan not finished"])
 def test_no_hint_for_chit_chat(chat: str) -> None:
     _pack()
