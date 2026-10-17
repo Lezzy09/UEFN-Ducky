@@ -526,9 +526,10 @@ def test_scope_status_says_whether_a_plugin_can_share_at_all(monkeypatch) -> Non
 
     _signed_in_with_a_space(monkeypatch)
     try:
-        # A Forge-like plugin keeps its own files: the bar shows, and says Local only.
+        # A Forge-like plugin keeps its own files: nothing to pick, so no bar at all.
         status = spaces.scope_status("scene-maker")
-        assert (status["visible"], status["shareable"], status["scope"]["kind"]) == (True, False, "personal")
-        assert spaces.scope_status("cards")["shareable"] is True
+        assert (status["visible"], status["shareable"], status["scope"]["kind"]) == (False, False, "personal")
+        status = spaces.scope_status("cards")
+        assert (status["visible"], status["shareable"]) == (True, True)
     finally:
         spaces.reset_for_tests()

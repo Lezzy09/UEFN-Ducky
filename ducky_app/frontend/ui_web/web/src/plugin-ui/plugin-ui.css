@@ -436,9 +436,10 @@
   outline: 2px solid var(--accent, #d4a017);
   outline-offset: 2px;
 }
+/* Change sits right after the scope, so its menu opens rightwards and stays on screen. */
 .plugin-scope-bar__menu {
   position: absolute;
-  right: 0;
+  left: 0;
   top: calc(100% + 4px);
   z-index: 20;
   display: flex;

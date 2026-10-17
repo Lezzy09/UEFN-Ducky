@@ -8,7 +8,6 @@ import { installScopeAlerts, onRefusedWrite, rememberPluginLabel, type RefusedWr
 import {
   DATA_AT_REST,
   kindTitle,
-  LOCAL_ONLY_TEXT,
   locksText,
   notShared,
   peopleRows,
@@ -193,16 +192,8 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
   if (!status?.visible || !status.scope) return null;
   const scope = status.scope;
   const shared = scope.kind === "shared";
-
-  if (!shared && status.shareable === false) {
-    // Nothing of this plugin goes through the host data service: no space to offer.
-    return (
-      <div className="plugin-scope-bar plugin-scope-bar--personal" role="status" aria-live="polite" aria-label="Plugin data: local">
-        <span className="plugin-scope-bar__badge plugin-scope-bar__badge--local">Local</span>
-        <span className="plugin-scope-bar__text">{LOCAL_ONLY_TEXT}</span>
-      </div>
-    );
-  }
+  // A plugin that can't share has nothing to pick: no bar (older apps sent visible anyway).
+  if (!shared && status.shareable === false) return null;
 
   const api = getApi();
   const kind = (status.kindLabel || "space").toLowerCase();

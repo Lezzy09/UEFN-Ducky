@@ -3,7 +3,7 @@ import { getApi } from "../../../hooks/usePanelApi";
 import { installPanelPushBus, subscribePanelPush } from "../../../hooks/usePanelPushBus";
 import { Icons } from "../../../icons/Icons";
 import { PluginScopeDrawer } from "../../../plugin-ui/PluginScopeDrawer";
-import { formatBytes, kindTitle, LOCAL_ONLY_TEXT, syncText } from "../../../plugin-ui/scopeBarText";
+import { formatBytes, kindTitle, syncText } from "../../../plugin-ui/scopeBarText";
 import type { PluginDataTotals, PluginScopeChoice, PluginScopeStatus } from "../../../types/panel";
 
 /** "12 docs · 3 files · 4.2 MB", or that nothing is stored. */
@@ -61,18 +61,8 @@ export function PluginDataPanel({ pluginId, name }: { pluginId: string; name: st
   if (!status?.visible || !status.scope) return null;
   const scope = status.scope;
   const shared = scope.kind === "shared";
-  if (!shared && status.shareable === false) {
-    // Nothing of this plugin goes through the host data service: no space to offer.
-    return (
-      <div className="ds-panel ds-data">
-        <h3 className="ds-panel-title">Data</h3>
-        <p className="ds-data-where">
-          <span className="ds-data-pill ds-data-pill--local"><Icons.Monitor />Local</span>
-          <span className="ds-data-help">{LOCAL_ONLY_TEXT}</span>
-        </p>
-      </div>
-    );
-  }
+  // A plugin that can't share has nothing to pick: no Data section.
+  if (!shared && status.shareable === false) return null;
   const kind = (status.kindLabel || "space").toLowerCase();
   const where = shared ? `${kindTitle(kind)} · ${scope.label}` : "Local";
   const locked = readOnlyText(status, kind);

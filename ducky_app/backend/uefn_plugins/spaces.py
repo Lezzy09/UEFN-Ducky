@@ -436,7 +436,9 @@ def scope_status(plugin: str) -> dict[str, Any]:
     shared = scope["kind"] == "shared"
     out: dict[str, Any] = {
         "ok": True,
-        "visible": shared or (scopes.sharing_allowed(plugin) and provider().enabled()),
+        # No bar at all for a plugin that can't share (it keeps its own files, or says
+        # data_sharing: false): there is nothing to pick.
+        "visible": shared or (scopes.shareable(plugin) and provider().enabled()),
         "shareable": shared or scopes.shareable(plugin),
         "kindLabel": provider().kind_label,
         "scope": scopes.scope_view(scope),

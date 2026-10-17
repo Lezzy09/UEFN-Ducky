@@ -64,15 +64,14 @@ describe("plugin scope bar", () => {
     expect(api.plugin_scope_sync).not.toHaveBeenCalled();
   });
 
-  it("says Local only for a plugin that keeps its own files, with nothing to switch", async () => {
+  it("renders nothing for a plugin that can't share, even from an app that still sends it visible", async () => {
     api.plugin_scope_status.mockResolvedValue({
       ok: true, visible: true, shareable: false, canChange: true, state: "ok",
       scope: { kind: "personal", label: "Local", spaceId: "", readOnly: false },
     });
-    bar();
-    expect(await screen.findByText("Local only: this plugin keeps its own files")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Change ▾" })).toBeNull();
-    expect(line().getAttribute("aria-live")).toBe("polite");
+    const { container } = bar();
+    await waitFor(() => expect(api.plugin_scope_status).toHaveBeenCalled());
+    expect(container.textContent).toBe("");
     expect(api.plugin_scope_sync).not.toHaveBeenCalled();
   });
 

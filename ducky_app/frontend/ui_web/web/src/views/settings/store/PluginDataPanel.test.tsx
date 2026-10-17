@@ -83,10 +83,11 @@ describe("Plugins page → Data", () => {
     expect(api.plugin_data_open_web).toHaveBeenCalledWith("brainrot-tcg");
   });
 
-  it("says Local only for a plugin that keeps its own files, with nothing to pick", async () => {
+  it("shows no Data section for a plugin that can't share", async () => {
     api.plugin_scope_status.mockResolvedValue({ ...LOCAL, shareable: false });
-    render(<PluginDataPanel pluginId="scene-maker" name="Scene Maker" />);
-    expect(await screen.findByText("Local only: this plugin keeps its own files")).toBeTruthy();
+    const { container } = render(<PluginDataPanel pluginId="scene-maker" name="Scene Maker" />);
+    await waitFor(() => expect(api.plugin_scope_status).toHaveBeenCalled());
+    expect(container.textContent).toBe("");
     expect(screen.queryByRole("button", { name: "Keep data in…" })).toBeNull();
   });
 

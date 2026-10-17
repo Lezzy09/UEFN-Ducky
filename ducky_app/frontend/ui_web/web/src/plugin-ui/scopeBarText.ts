@@ -50,9 +50,6 @@ export function syncText(status: PluginScopeStatus, nowMs: number): string {
   return `${synced}${waiting}`;
 }
 
-/** What the bar says for a plugin that keeps its own files: nothing to share. */
-export const LOCAL_ONLY_TEXT = "Local only: this plugin keeps its own files";
-
 /** Help text (same words as the web). */
 export const DATA_AT_REST = "Plugin data on each PC is encrypted for the signed-in account.";
 

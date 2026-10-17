@@ -866,12 +866,14 @@ def test_only_plugins_on_the_host_data_service_are_offered_a_space(who: _Who, fa
 
     who.be("ana@x.org")
     fake_spaces.spaces["spaceT"] = "Alpha Studio"
-    # Keeps its own files (a Forge-like plugin): nothing to share, the bar says Local only.
+    # Keeps its own files (a Forge-like plugin): nothing to share, so no bar at all.
     assert scopes.shareable("scene-maker") is False
     status = spaces.scope_status("scene-maker")
-    assert (status["visible"], status["shareable"]) == (True, False)
+    assert (status["visible"], status["shareable"]) == (False, False)
     PluginData("scene-maker").put("scene.a", {"v": 1})
-    assert scopes.shareable("scene-maker") and spaces.scope_status("scene-maker")["shareable"] is True
+    assert scopes.shareable("scene-maker")
+    status = spaces.scope_status("scene-maker")
+    assert (status["visible"], status["shareable"]) == (True, True)
     assert scopes.shareable("ducky.automations")
     manifest("declares", data_sharing=True)
     assert scopes.shareable("declares")
