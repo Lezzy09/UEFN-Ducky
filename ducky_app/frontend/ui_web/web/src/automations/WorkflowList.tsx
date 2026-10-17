@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEve
 import { getApi } from "../hooks/usePanelApi";
 import type { AutomationSummaryDto, AutomationTemplateDto, PluginScopeStatus, WorkflowOwnerDto, WorkflowOwnersDto } from "../types/panel";
 import { Icons } from "../icons/Icons";
-import { syncText } from "../plugin-ui/scopeBarText";
+import { kindTitle, syncText } from "../plugin-ui/scopeBarText";
 import { ContextMenu, useContextMenuState, type ContextMenuItem } from "../components/ContextMenu";
 import { contextMenuSeparator } from "../utils/sidebarContextMenuItems";
 import { targetRef } from "../ui-targets/registry";
@@ -16,26 +16,27 @@ import { buildFolderTree, folderName, folderPaths, joinFolder, movedPath, normal
 export const LOCAL_OWNER: WorkflowOwnerDto = { id: "local", kind: "local", label: "Local" };
 
 export function ownerName(owner: WorkflowOwnerDto | undefined): string {
-  return owner?.kind === "team" ? `Team · ${owner.label}` : "Local";
+  return owner?.kind === "shared" ? `${kindTitle(owner.kindLabel)} · ${owner.label}` : "Local";
 }
 
 export function OwnerIcon({ owner }: { owner: WorkflowOwnerDto | undefined }) {
-  return owner?.kind === "team" ? <Icons.Users /> : <Icons.Monitor />;
+  return owner?.kind === "shared" ? <Icons.Users /> : <Icons.Monitor />;
 }
 
 /** Who can see it, in words (tooltips on the folder and the toolbar chip). */
 export function ownerHelp(owner: WorkflowOwnerDto | undefined): string {
-  if (owner?.kind !== "team") return "Local workflows stay with your account on this PC.";
-  const who = `Team ${owner.label}: every member sees it and changes sync to the team.`;
+  if (owner?.kind !== "shared") return "Local workflows stay with your account on this PC.";
+  const kind = (owner.kindLabel || "space").toLowerCase();
+  const who = `${kindTitle(kind)} ${owner.label}: every member sees it and changes sync to the ${kind}.`;
   return owner.readOnly && owner.reason ? `${who} ${owner.reason}` : who;
 }
 
-/** The folder's second line. Local has none; a team line is where its copy stands. */
+/** The folder's second line. Local has none; a shared line is where its copy stands. */
 export function folderStatus(owner: WorkflowOwnerDto, nowMs: number): string {
-  if (owner.kind !== "team") return "";
-  if (owner.state === "waiting") return "Waiting for team data";
+  if (owner.kind !== "shared") return "";
+  if (owner.state === "waiting") return `Waiting for ${(owner.kindLabel || "space").toLowerCase()} data`;
   if (owner.state === "locked") return "Waiting for your data key";
-  if (owner.state === "paused") return "Team Private paused";
+  if (owner.state === "paused") return owner.pausedLabel || "Paused";
   const sync = owner.sync || {};
   return syncText({ state: sync.state, pending: sync.pending, syncedAt: sync.syncedAt ?? null } as PluginScopeStatus, nowMs);
 }
@@ -51,12 +52,12 @@ const TRIGGER_ICONS: Record<string, typeof Icons.Play> = {
 /** What starts it, as an icon (the words are its name and tooltip). */
 function TriggerIcon({ row }: { row: AutomationSummaryDto }) {
   const trigger = row.trigger || { kind: "manual", label: "Manual" };
-  const teamRun = row.owner?.kind === "team" && (trigger.kind === "schedule" || trigger.kind === "event");
-  const here = teamRun ? (row.run_here ? " · runs on this PC" : " · not on this PC") : "";
+  const sharedRun = row.owner?.kind === "shared" && (trigger.kind === "schedule" || trigger.kind === "event");
+  const here = sharedRun ? (row.run_here ? " · runs on this PC" : " · not on this PC") : "";
   const title = trigger.kind === "function" ? "Function: other workflows run it with a Run workflow node" : `Starts from: ${trigger.label}${here}`;
   const Icon = TRIGGER_ICONS[trigger.kind] || Icons.Zap;
   return (
-    <span className={`aw-trigger aw-trigger--${trigger.kind}${teamRun && !row.run_here ? " is-elsewhere" : ""}`} role="img" aria-label={trigger.label} title={title}>
+    <span className={`aw-trigger aw-trigger--${trigger.kind}${sharedRun && !row.run_here ? " is-elsewhere" : ""}`} role="img" aria-label={trigger.label} title={title}>
       <Icon />
     </span>
   );
@@ -118,7 +119,7 @@ type Props = {
   showNew?: boolean;
 };
 
-/** Workflows sidebar: one section per owner (Local, then each team), with folders
+/** Workflows sidebar: one section per owner (Local, then each shared space), with folders
  *  inside. Drag a workflow or a folder onto a folder, or onto the owner, to file it;
  *  right-click anything for what you can do with it. */
 export function WorkflowList({ listId, listRef, owners, rows, activeId, collapsed, nowMs, emptyFolders = {}, onToggleCollapsed, onOpen, onCreate, onImportLocal, onAddFolder, onMoveWorkflow, onMoveFolder, onRenameWorkflow, onDuplicateWorkflow, onSetEnabled, onDeleteWorkflow, onDeleteWorkflows, onRemoveFolder, onCopyFolder, onSaveFolderTemplate, featured = [], onCreateFrom, showNew }: Props) {
@@ -137,12 +138,12 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
   // like the Duckies list: right-click, drag or Delete acts on all of them.
   const [pickedIds, setPicked] = useState<string[]>([]);
   const [syncing, setSyncing] = useState("");
-  const updateOnline = async (teamId: string) => {
-    setSyncing(teamId);
+  const updateOnline = async (spaceId: string) => {
+    setSyncing(spaceId);
     try {
-      await getApi()?.workflow_sync?.(true, teamId, true);
+      await getApi()?.workflow_sync?.(true, spaceId, true);
     } finally {
-      setSyncing((current) => (current === teamId ? "" : current));
+      setSyncing((current) => (current === spaceId ? "" : current));
     }
   };
   const picked = pickedIds.filter((id) => rows.some((row) => row.id === id));
@@ -383,7 +384,7 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
     }
     if (target.kind === "folder") {
       const { folder } = target;
-      // Another owner's copy of the whole tree: Local from a team, a team from Local or another team.
+      // Another owner's copy of the whole tree: Local from a space, a space from Local or another space.
       const others = onCopyFolder ? sections.filter((to) => to.id !== owner.id && !to.readOnly) : [];
       const counts = { workflows: folder.count, folders: folderPaths(folder).length };
       const send: ContextMenuItem[] = others.length ? [
@@ -412,7 +413,7 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
         { id: "new", label: "New workflow", onClick: () => onCreate(owner.id) },
         ...(onAddFolder ? [{ id: "new-folder", label: "New folder", onClick: () => newFolderIn(owner, "") }] : []),
       ] : [{ id: "none", label: "Read-only", disabled: true }]),
-      ...(owner.kind === "team" ? [contextMenuSeparator("sep-sync"), { id: "sync", label: "Update online", onClick: () => void updateOnline(owner.id) }] : []),
+      ...(owner.kind === "shared" ? [contextMenuSeparator("sep-sync"), { id: "sync", label: "Update online", onClick: () => void updateOnline(owner.id) }] : []),
     ];
   };
   const contextFor = (target: MenuTarget) => (event: MouseEvent) => {
@@ -529,7 +530,7 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
         ) : null}
         {ownerTrees.map(({ owner, mine, tree }) => {
           const open = !closed[owner.id];
-          const name = owner.kind === "team" ? owner.label : "Local";
+          const name = owner.kind === "shared" ? owner.label : "Local";
           const bodyId = `${listId}-${owner.id}`;
           return (
             <section className={`aw-workflow-section aw-folder aw-folder--${owner.kind}`} key={owner.id} aria-label={ownerName(owner)} data-tree-node={ownerNodeId(owner.id)}>
@@ -542,8 +543,8 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
                 {owner.sync?.error ? <span className="aw-folder-lock aw-sync-error" role="img" aria-label={`Sync problem: ${owner.sync.error}`} title={owner.sync.error}><Icons.AlertTriangle /></span> : null}
                 {owner.readOnly ? <span className="aw-folder-lock" role="img" aria-label={`Read-only: ${owner.reason || ""}`} title={owner.reason}><Icons.Lock /></span> : null}
                 {/* Shown on hover, over the end of the row, like a folder's. */}
-                {(owner.kind === "team" && owner.slug) || !owner.readOnly ? <span className="aw-tree-actions aw-section-actions">
-                  {owner.kind === "team" ? <button type="button" className="aw-icon-button" title={`Update ${ownerName(owner)} online`} aria-label={`Update ${ownerName(owner)} online`} disabled={syncing === owner.id} onClick={() => void updateOnline(owner.id)}>{syncing === owner.id ? <Icons.Spinner /> : <Icons.Refresh />}</button> : null}
+                {(owner.kind === "shared" && owner.slug) || !owner.readOnly ? <span className="aw-tree-actions aw-section-actions">
+                  {owner.kind === "shared" ? <button type="button" className="aw-icon-button" title={`Update ${ownerName(owner)} online`} aria-label={`Update ${ownerName(owner)} online`} disabled={syncing === owner.id} onClick={() => void updateOnline(owner.id)}>{syncing === owner.id ? <Icons.Spinner /> : <Icons.Refresh />}</button> : null}
                   {!owner.readOnly && onAddFolder ? <button type="button" className="aw-icon-button" title={`New folder in ${ownerName(owner)}`} aria-label={`New folder in ${ownerName(owner)}`} onClick={() => newFolderIn(owner, "")}><Icons.FolderPlus /></button> : null}
                   {!owner.readOnly ? <button ref={targetRef(`workflows.list.new.${owner.id}`, { route: "workflows", label: `New workflow in ${ownerName(owner)}` })} type="button" className="aw-icon-button" title={`New workflow in ${ownerName(owner)}`} aria-label={`New workflow in ${ownerName(owner)}`} onClick={() => onCreate(owner.id)}><Icons.Plus /></button> : null}
                 </span> : null}
@@ -560,7 +561,7 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
                       <li className="aw-section-empty aw-section-empty--card">
                         <span className="aw-section-empty-icon" aria-hidden="true"><OwnerIcon owner={owner} /></span>
                         <strong>No workflows yet</strong>
-                        <small>{owner.kind === "team" ? `Shared with everyone in ${owner.label}.` : "Saved on this PC."}</small>
+                        <small>{owner.kind === "shared" ? `Shared with everyone in ${owner.label}.` : "Saved on this PC."}</small>
                         <button ref={targetRef(`workflows.section.new.${owner.id}`, { route: "workflows", label: `New workflow in ${ownerName(owner)}` })} type="button" className="aw-new-button aw-section-new" onClick={() => onCreate(owner.id)}><Icons.Plus /> New workflow</button>
                       </li>
                     )
@@ -575,7 +576,7 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
             </section>
           );
         })}
-        {owners.signedIn === false ? <p className="aw-list-hint">Sign in to share workflows with a team.</p> : null}
+        {owners.signedIn === false ? <p className="aw-list-hint">Sign in to share workflows with a {(owners.kindLabel || "space").toLowerCase()}.</p> : null}
       </div>
       {showNew && rows.length && !collapsed && sections.some((owner) => !owner.readOnly) ? (
         <div className="aw-list-foot">

@@ -57,10 +57,10 @@ def list_workflow_templates(pretty: bool = False) -> str:
 @mcp.tool()
 def list_workflows(pretty: bool = False) -> str:
     """Saved workflows (id, name, enabled, folder, what starts them) and their owner:
-    Local (this PC only) or a team (synced to every member). A reusable workflow
+    Local (this PC only) or a shared space (synced to everyone in it). A reusable workflow
     has a signature: the inputs a Run workflow node passes and the outputs it returns."""
     from backend.automations.store import list_workflows as _list
-    from backend.automations.team import owners
+    from backend.automations.shared import owners
 
     return tool_json({"ok": True, "workflows": _list(), "owners": owners()["owners"]}, pretty=pretty)
 
@@ -157,7 +157,7 @@ def save_workflow(
     Pass workflow_id to update the same graph. Updating, anything you leave out (graph,
     name, description, enabled) stays as it is; each save refreshes the open canvas.
     owner picks where a NEW workflow lives: "local" (default, this PC only) or a
-    team id from list_workflows owners (shared with that team). An existing
+    space id from list_workflows owners (shared with that space). An existing
     workflow keeps its owner; use copy_workflow to move it. folder files it in the
     list ("Play tests/Tycoon"; "" = top level); omit it to keep the current folder.
 
@@ -330,7 +330,7 @@ def tour_workflow(
 def move_workflow_folder(owner: str, path: str, new_path: str = "", pretty: bool = False) -> str:
     """Rename or move a folder of the Workflows list, with everything in it.
 
-    owner is "local" or a team id; path is the folder ("Play tests/Tycoon"). new_path is
+    owner is "local" or a space id; path is the folder ("Play tests/Tycoon"). new_path is
     where it goes ("Play tests/Lobby" renames it); its parent ("Play tests") or "" for a
     top-level one removes the folder and keeps its workflows."""
     from backend.automations.store import move_folder
@@ -345,8 +345,8 @@ def move_workflow_folder(owner: str, path: str, new_path: str = "", pretty: bool
 @mcp.tool()
 def add_workflow_folder(owner: str, path: str, pretty: bool = False) -> str:
     """Make a folder in the Workflows list that may hold nothing yet. owner is "local"
-    or a team id; path is "Play tests/Tycoon" (missing parents are made too). A team's
-    folders, empty ones included, sync to every member."""
+    or a space id; path is "Play tests/Tycoon" (missing parents are made too). A shared
+    space's folders, empty ones included, sync to everyone in it."""
     from backend.automations.store import add_folder
 
     try:
@@ -396,10 +396,10 @@ def import_workflow_bundle(bundle: dict[str, Any] | str, owner: str = "local", p
 def copy_workflow_folder(owner_from: str, path: str, owner_to: str, parent_path: str = "", move: bool = False,
                          pretty: bool = False) -> str:
     """Copy a whole folder (nested folders, empty ones, every workflow) from one owner
-    ("local" or a team id) into owner_to/parent_path. A copy gets new ids with its Run
+    ("local" or a space id) into owner_to/parent_path. A copy gets new ids with its Run
     workflow steps pointed at the copies; move=True keeps the ids and removes the
-    source once everything is in place (moving out of a team removes it for every
-    member). Inside one owner a move is move_workflow_folder."""
+    source once everything is in place (moving out of a shared space removes it for
+    everyone in it). Inside one owner a move is move_workflow_folder."""
     from backend.automations.bundles import copy_folder
 
     try:
@@ -468,8 +468,8 @@ def set_workflow_folder(workflow_id: str, folder: str = "", pretty: bool = False
 
 @mcp.tool()
 def copy_workflow(workflow_id: str, owner: str, move: bool = False, pretty: bool = False) -> str:
-    """Copy a workflow to "local" or a team id (new id), or move it there (move=True).
-    Moving a team workflow to local removes it for the team's members."""
+    """Copy a workflow to "local" or a space id (new id), or move it there (move=True).
+    Moving a shared workflow to local removes it for everyone in the space."""
     from backend.automations.store import copy_workflow as _copy
 
     try:
@@ -561,10 +561,10 @@ def _chat_allows_everything() -> bool:
 
 @mcp.tool()
 def delete_workflow(workflow_id: str, confirmed: bool = False, pretty: bool = False) -> str:
-    """Delete one workflow (for every member, if it is a team's) and close it in the editor.
+    """Delete one workflow (for everyone in the space, if it is shared) and close it in the editor.
 
     It can't be undone, so first ask the user with ducky_ask_user (yes / no, naming the
-    workflow and, for a team's, that every member loses it). Only after they say yes call
+    workflow and, for a shared one, that everyone in the space loses it). Only after they say yes call
     again with confirmed=true. Never delete to "clean up" on your own."""
     from backend.automations.store import delete_workflow as _delete
     from backend.automations.store import get_workflow as _get
@@ -574,12 +574,12 @@ def delete_workflow(workflow_id: str, confirmed: bool = False, pretty: bool = Fa
         wf = _get(wid)
         if wf is None:
             return tool_json({"ok": False, "error": "workflow not found"}, pretty=pretty)
-        team = (wf.get("owner") or {}).get("kind") == "team"
+        shared = (wf.get("owner") or {}).get("kind") == "shared"
         return tool_json({
             "ok": False,
             "needs_confirmation": True,
             "error": (f"Deleting “{wf.get('name') or wid}” can't be undone"
-                      + (f" and every member of {(wf.get('owner') or {}).get('label') or 'the team'} loses it" if team else "")
+                      + (f" and everyone in {(wf.get('owner') or {}).get('label') or 'the space'} loses it" if shared else "")
                       + ". Ask the user with ducky_ask_user (yes / no) first; only after they say yes, call again with confirmed=true."),
         }, pretty=pretty)
     try:
@@ -629,7 +629,7 @@ def create_workflow_from_template(
     user before turning spend on. Returns the new workflow (run it with run_workflow).
 
     A folder template (shape "bundle") makes its whole folder tree inside folder (the
-    parent; "" = top level) of owner ("local" or a team id): every workflow with a new
+    parent; "" = top level) of owner ("local" or a space id): every workflow with a new
     id, Run workflow steps between them pointed at the new ones. name renames the root
     folder. Returns bundle {folder, workflows [{key, id, name}], outside} and the main
     workflow it opened."""
@@ -746,7 +746,7 @@ def save_workflow_template(
     category is the picker shelf (Images, 3D, Characters, Text & AI, Documents, Play
     tests, UEFN, or your own name); blank = Yours.
 
-    folder (with owner, "local" or a team id) keeps that whole folder instead: every
+    folder (with owner, "local" or a space id) keeps that whole folder instead: every
     nested folder and workflow in it, as a folder template (blank name = the folder's
     name). Its Run workflow steps between those workflows keep pointing at each other
     in every copy made from it. Editing a folder template without folder keeps its tree.

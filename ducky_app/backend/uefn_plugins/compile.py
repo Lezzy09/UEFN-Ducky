@@ -347,14 +347,14 @@ _LICENSE_MODULE = "_ducky_license"
 
 
 def _inject_license(
-    staged_pkg: Path, pid: str, version: str, visibility: str, team_id: str, pubkey: str
+    staged_pkg: Path, pid: str, version: str, visibility: str, audience: str, pubkey: str
 ) -> None:
     """Bake a license gate into the staged package so it compiles into the binary.
 
-    The gate's identity (id, version, visibility, team) and the Store's public key are
+    The gate's identity (id, version, visibility, audience) and the Store's public key are
     literals, so they live in the .pyd and cannot be edited after the build. It runs at
-    import: a missing/tampered signed record, a mismatched id/version, or (team items)
-    lost team access makes the import fail, so the plugin refuses to register. A dev
+    import: a missing/tampered signed record, a mismatched id/version, or (private items)
+    lost access to the audience makes the import fail, so the plugin refuses to register. A dev
     build with no key bakes an empty one, which skips the gate.
     """
     gate = (
@@ -364,7 +364,7 @@ def _inject_license(
         f"_ID = {pid!r}\n"
         f"_VERSION = {version!r}\n"
         f"_VISIBILITY = {visibility!r}\n"
-        f"_TEAM_ID = {team_id!r}\n\n\n"
+        f"_AUDIENCE = {audience!r}\n\n\n"
         "def enforce() -> None:\n"
         "    import os\n\n"
         "    if os.environ.get('DUCKY_SKIP_LICENSE_GATE') == '1':\n"
@@ -372,7 +372,7 @@ def _inject_license(
         "    if not _PUBKEY:\n"
         "        return\n"
         "    from backend.uefn_plugins.signing import verify_installed_record\n\n"
-        "    verify_installed_record(_ID, _VERSION, _VISIBILITY, _TEAM_ID, _PUBKEY)\n"
+        "    verify_installed_record(_ID, _VERSION, _VISIBILITY, _AUDIENCE, _PUBKEY)\n"
     )
     (staged_pkg / f"{_LICENSE_MODULE}.py").write_text(gate, encoding="utf-8")
 
@@ -514,15 +514,16 @@ def build_plugin(
     out_zip: str | Path,
     *,
     visibility: str = "public",
-    team_id: str = "",
+    audience: str = "",
     smoke_test: bool = True,
     release: bool = False,
     progress: ProgressFn | None = None,
 ) -> dict[str, Any]:
     """Compile a plugin into a Store-ready zip with no readable Python. Returns a report.
 
-    ``visibility`` (public|team) and ``team_id`` are baked into the license gate so a
-    team build only loads where that team's key is held. They do not change what ships.
+    ``visibility`` (public, or the Store's private value) and ``audience`` are baked into
+    the license gate so a private build only loads where its audience is reachable. They
+    do not change what ships.
     ``smoke_test=False`` skips importing the built module — a reviewer rebuilding
     someone else's submission never runs its code. ``release=True`` (Store publish and
     review builds) bakes in the Store's public key — the one this app carries, else
@@ -539,8 +540,8 @@ def build_plugin(
         pubkey = pinned_public_key()
     src = Path(src_dir).resolve()
     out_zip = Path(out_zip)
-    visibility = "team" if str(visibility).strip().lower() == "team" else "public"
-    team_id = str(team_id or "").strip() if visibility == "team" else ""
+    visibility = str(visibility or "").strip().lower() or "public"
+    audience = str(audience or "").strip() if visibility != "public" else ""
     manifest_path = src / PLUGIN_MANIFEST
     if not manifest_path.is_file():
         raise CompileError(f"no {PLUGIN_MANIFEST} in {src}")
@@ -588,7 +589,7 @@ def build_plugin(
         staged = work / mod_name
         _progress(progress, 0.55, "Staging backend…")
         data_files, foreign = _stage_backend_package(pkg_src, staged)
-        _inject_license(staged, pid, version_str, visibility, team_id, pubkey)
+        _inject_license(staged, pid, version_str, visibility, audience, pubkey)
         _progress(progress, 0.6, "Compiling backend with Nuitka…")
         pyd, nuitka_warn = _run_nuitka(kpy, work, mod_name)
         warnings.extend(nuitka_warn)
@@ -607,8 +608,8 @@ def build_plugin(
         # load compiled plugins safely, so a compiled build never asks for less.
         out_manifest["min_app_version"] = _at_least(str(manifest.get("min_app_version") or ""), COMPILED_MIN_APP)
         out_manifest["visibility"] = visibility
-        if visibility == "team" and team_id:
-            out_manifest["team_id"] = team_id
+        if visibility != "public" and audience:
+            out_manifest["audience"] = audience
         out_backend = dict(backend_cfg)
         out_backend["register"] = register_name
         out_backend["compiled"] = final_pyd_name
@@ -682,7 +683,7 @@ def build_plugin(
         "pyd": final_pyd_name,
         "version": version_str,
         "visibility": visibility,
-        "team_id": team_id,
+        "audience": audience,
         "sha256": _sha256_of(out_zip.read_bytes()),
         "out": str(out_zip),
         "bytes": out_zip.stat().st_size,
@@ -734,9 +735,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("plugin_dir", help="plugin source folder (holds plugin.json)")
     parser.add_argument("out_zip", help="output .zip path")
-    parser.add_argument("--visibility", default="public", choices=["public", "team"],
-                        help="bake the license gate for a public or team release")
-    parser.add_argument("--team-id", default="", help="team id when --visibility team")
+    parser.add_argument("--visibility", default="public",
+                        help="bake the license gate for a public release or the Store's private value")
+    parser.add_argument("--audience", default="", help="who a private release is for")
     parser.add_argument("--release", action="store_true",
                         help="a build that will ship: bake in the Store's signing key (fetched from "
                              "DUCKYOS_BASE_URL, default uefnducky.org) and fail if it can't be had")
@@ -750,7 +751,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         report = build_plugin(
             args.plugin_dir, args.out_zip,
-            visibility=args.visibility, team_id=args.team_id,
+            visibility=args.visibility, audience=args.audience,
             release=args.release, progress=_prog,
         )
     except CompileError as exc:

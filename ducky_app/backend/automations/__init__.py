@@ -1,4 +1,4 @@
-"""Desktop Workflows: graphs owned by Local or a team, runner, plugin nodes, panel-process scheduler."""
+"""Desktop Workflows: graphs owned by Local or a shared space, runner, plugin nodes, panel-process scheduler."""
 
 from backend.automations.catalog import list_nodes as list_workflow_nodes
 from backend.automations.runner import emit_trigger, run_workflow

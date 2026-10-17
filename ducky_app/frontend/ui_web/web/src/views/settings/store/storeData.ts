@@ -1,10 +1,10 @@
 import type { DuckyOSStoreItemDto, UefnPluginDto } from "../../../types/panel";
 import {
   categoryLabel,
-  groupByTeam,
+  groupByAudience,
   HIDDEN_BROWSE_CATEGORIES,
   isInstalledItem,
-  isTeamItem,
+  isSharedItem,
   itemCategories,
   itemKind,
 } from "../storeFilters";
@@ -139,9 +139,9 @@ export function patchItemFromLocalPlugin(
 /**
  * Derive the landing rows from the raw catalog:
  * Gateways first (everything is a plugin — no Plugins row), then
- * Trending → one row per team of mine → Installed → other browse categories.
+ * Trending → one row per audience of mine → Installed → other browse categories.
  */
-export function deriveSections(items: DuckyOSStoreItemDto[]): StoreSection[] {
+export function deriveSections(items: DuckyOSStoreItemDto[], sharedLabel = "Shared"): StoreSection[] {
   const sections: StoreSection[] = [];
   if (!items.length) return sections;
 
@@ -165,8 +165,8 @@ export function deriveSections(items: DuckyOSStoreItemDto[]): StoreSection[] {
     .slice(0, 10);
   if (trending.length) sections.push({ key: "trending", title: "Trending", items: trending });
 
-  for (const group of groupByTeam(items.filter(isTeamItem))) {
-    sections.push({ key: `team:${group.key}`, title: `Team · ${group.team || "Team"}`, items: group.items });
+  for (const group of groupByAudience(items.filter(isSharedItem))) {
+    sections.push({ key: `shared:${group.key}`, title: `${sharedLabel} · ${group.label || sharedLabel}`, items: group.items });
   }
 
   const installed = items.filter(isInstalled);
@@ -259,10 +259,10 @@ export function authorLabelFor(item: DuckyOSStoreItemDto): string {
   return itemKind(item) === "plugin" ? "Plugin" : "Skill pack";
 }
 
-/** "Private · Alpha Studio" / "Public · Alpha Studio" on my teams' items; "" otherwise. */
-export function teamBadge(item: DuckyOSStoreItemDto): string {
-  if (!isTeamItem(item)) return "";
-  return `${item.visibility === "private" ? "Private" : "Public"} · ${item.owner_team_name || "Team"}`;
+/** "Private · Alpha Studio" / "Public · Alpha Studio" on items shared with me; "" otherwise. */
+export function audienceBadge(item: DuckyOSStoreItemDto, sharedLabel = "Shared"): string {
+  if (!isSharedItem(item)) return "";
+  return `${item.visibility === "private" ? "Private" : "Public"} · ${item.audience_label || sharedLabel}`;
 }
 
 export function formatPatchDate(raw: string | null | undefined): string {

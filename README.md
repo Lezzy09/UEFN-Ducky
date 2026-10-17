@@ -119,7 +119,7 @@ that teaches your duckies how to use them properly.
 |--------|--------------|
 | **Web Browser** | A real Chromium tab inside the app — docs, dashboards, and AI-driven navigation |
 | **Discord** | Bot chat, `!ducky` commands, and server-admin tools for your agents |
-| **Ducky Account** | Sign in, manage team presence, link the desktop app to the cloud |
+| **Ducky Account** | Sign in, link the desktop app to the cloud, publish plugins |
 | **Translation** | Live-translate the whole UI into languages you add, using the model you pick |
 | **Vim** | Vim keybindings in the Verse editors |
 

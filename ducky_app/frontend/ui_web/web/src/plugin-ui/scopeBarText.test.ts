@@ -18,7 +18,7 @@ describe("scope bar text", () => {
   it("says when it synced, what is queued, and the switch warning", () => {
     expect(syncText({ syncedAt: 100, pending: 0, state: "ok" }, 105_000)).toBe("Synced 5 s ago");
     expect(syncText({ syncedAt: 100, pending: 3, state: "offline" }, 105_000)).toBe("Offline · 3 changes waiting");
-    expect(switchConfirm("BrainRot TCG", { kind: "team", label: "Alpha Studio" })).toEqual({
+    expect(switchConfirm("BrainRot TCG", { kind: "shared", label: "Alpha Studio" })).toEqual({
       title: "Switch BrainRot TCG to Alpha Studio data?",
       message: "Nothing is copied. BrainRot TCG restarts with Alpha Studio's data.",
     });
@@ -28,7 +28,7 @@ describe("scope bar text", () => {
     });
   });
 
-  it("says a lost team's copy is locked and when it leaves this PC", () => {
+  it("says a lost space's copy is locked and when it leaves this PC", () => {
     const at = new Date(2026, 9, 15, 12).getTime() / 1000;
     expect(lostText("Alpha Studio", at, "en-US")).toBe(
       "You no longer have access to Alpha Studio. Its data here is locked and leaves this PC on October 15 unless access comes back.",

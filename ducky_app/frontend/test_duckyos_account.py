@@ -413,20 +413,6 @@ def test_waiting_on_the_channel_sends_the_cursor_and_reads_the_answer() -> None:
             acc.wait_desktop_rpc(3)
 
 
-def test_name_allowed_matches_filter() -> None:
-    from frontend.duckyos_account import _role_has, name_allowed
-
-    assert name_allowed("Classic")
-    assert not name_allowed("shit crew")
-    assert _role_has([], "owner", "manage_roles")
-    assert not _role_has(
-        [{"id": "lead", "perms": ["invite", "manage_roles"]}],
-        "lead",
-        "manage_roles",
-    )
-    assert _role_has([{"id": "lead", "perms": ["invite"]}], "lead", "invite")
-
-
 def test_store_item_versions_needs_slug() -> None:
     from frontend.duckyos_account import store_item_versions
 
@@ -845,7 +831,6 @@ if __name__ == "__main__":
     test_store_item_versions_needs_slug()
     test_set_agent_caps_stays_on_desktop()
     test_tool_blocked_by_caps_see_toggles()
-    test_name_allowed_matches_filter()
     test_dispatch_desktop_rpc_allowlist()
     test_call_panel_method_maps_kwargs_and_positional()
     test_remote_deny_covers_native_and_secret_paths()

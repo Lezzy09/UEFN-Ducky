@@ -101,7 +101,7 @@ const MADE_EXTRA = 210;
 const PICTURE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
 
 /** Empty folders that older builds kept in this browser only: hand them to the host once
- *  (a read-only team's wait until it can take them). */
+ *  (a read-only shared owner's wait until it can take them). */
 async function keepOldEmptyFolders(owners: WorkflowOwnerDto[]): Promise<void> {
   const left = loadEmptyFolders();
   if (!getApi()?.add_workflow_folder || !Object.keys(left).length) return;
@@ -264,9 +264,9 @@ function groupCatalog(catalog: PaletteTile[], query: string) {
   return keys.map((k) => [k, map.get(k) || []] as const);
 }
 
-/** Team workflows sync once when the view opens and then only after a save: saves
+/** Shared workflows sync once when the view opens and then only after a save: saves
  *  close together go up as one round, a few seconds after the last. */
-const TEAM_SYNC_DELAY_MS = 4000;
+const SHARED_SYNC_DELAY_MS = 4000;
 /** A test run may take long (UEFN, duckies); Stop ends it any time. */
 const RUN_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 /** The server turned a save down and said why (too much code, say): retrying won't help. */
@@ -460,7 +460,7 @@ export function AutomationsView() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pickerOwner, setPickerOwner] = useState(LOCAL_OWNER.id);
   const [pickerFolder, setPickerFolder] = useState("");
-  // Folders the host keeps per owner (empty ones too; a team's sync), plus ones made or
+  // Folders the host keeps per owner (empty ones too; a space's sync), plus ones made or
   // left here that the next list refresh has not brought back yet.
   const [emptyFolders, setEmptyFolders] = useState<Record<string, string[]>>({});
   const folderLists = useMemo(() => {
@@ -641,10 +641,10 @@ export function AutomationsView() {
     return () => { stopWaiting(); stopped = true; window.clearTimeout(timer); catalogTry.current++; };
   }, [loadCatalog]);
 
-  // Teams: ask the Store which teams this account has once per open and sync them once
-  // (teammates' changes come in); after that only a save sends a round (queueTeamSync).
+  // Shared spaces: ask which spaces this account has once per open and sync them once
+  // (others' changes come in); after that only a save sends a round (queueSharedSync).
   // Another chat's edits and finished rounds arrive as graphs_changed.
-  const hasTeams = !!owners.owners?.some((owner) => owner.kind === "team");
+  const hasShared = !!owners.owners?.some((owner) => owner.kind === "shared");
   const draftIdRef = useRef("");
   draftIdRef.current = draft?.id || "";
   const [liveByRun, setLiveByRun] = useState<Record<string, LiveRun>>({});
@@ -703,7 +703,7 @@ export function AutomationsView() {
     })());
     installPanelPushBus();
     const stop = subscribePanelPush((event) => {
-      // A team round started elsewhere (a plugin's scope bar) can bring workflow changes too.
+      // A shared round started elsewhere (a plugin's scope bar) can bring workflow changes too.
       const workflowsSynced = event.type === "plugin_scope_changed" && !!event.plugins?.includes("ducky.automations");
       if (event.type === "graphs_changed" || event.type === "duckyos_account_changed" || workflowsSynced) void refreshList();
       // The open workflow running (Play, a schedule, a chat): light up where it is.
@@ -712,13 +712,13 @@ export function AutomationsView() {
     return () => { cancelled = true; stopWaiting(); stop(); };
   }, [refreshList]);
   useEffect(() => {
-    if (!hasTeams) return;
+    if (!hasShared) return;
     return onApiReady(() => void getApi()?.workflow_sync?.(false));
-  }, [hasTeams]);
+  }, [hasShared]);
   const syncTimer = useRef(0);
-  const queueTeamSync = () => {
+  const queueSharedSync = () => {
     window.clearTimeout(syncTimer.current);
-    syncTimer.current = window.setTimeout(() => { syncTimer.current = 0; void getApi()?.workflow_sync?.(true); }, TEAM_SYNC_DELAY_MS);
+    syncTimer.current = window.setTimeout(() => { syncTimer.current = 0; void getApi()?.workflow_sync?.(true); }, SHARED_SYNC_DELAY_MS);
   };
   // Leaving with a save still queued: send it now.
   useEffect(() => () => { if (syncTimer.current) { window.clearTimeout(syncTimer.current); void getApi()?.workflow_sync?.(true); } }, []);
@@ -886,13 +886,13 @@ export function AutomationsView() {
     sendingRef.current = next;
     setSending(next);
     const operation = saveQueue.current.then(async () => {
-    if (next.id && next.owner?.readOnly) return next;  // someone else's team workflow: never pushed from here
+    if (next.id && next.owner?.readOnly) return next;  // someone else's shared workflow: never pushed from here
     // The list files workflows (set_workflow_folder); an open canvas must not undo that.
     const { folder, ...body } = next;
     const res = await api?.save_workflow?.(next.id ? body : { ...body, folder: folder || "" }, owner || undefined);
     const row = res?.workflow;
     if (row) {
-      if (row.owner?.kind === "team") queueTeamSync();
+      if (row.owner?.kind === "shared") queueSharedSync();
       if (gen === loadGen.current) {
         acknowledgeDraft((current) => {
           if (next.id && current !== next) {
@@ -963,7 +963,7 @@ export function AutomationsView() {
     if (clean) setEmptyFolders((current) => (current[ownerId] || []).includes(clean) ? current : { ...current, [ownerId]: [...(current[ownerId] || []), clean] });
   };
 
-  /** New folder: kept by the host, so it stays empty and a team's reaches every member. */
+  /** New folder: kept by the host, so it stays empty and a space's reaches every member. */
   const rememberFolder = async (ownerId: string, path: string) => {
     showFolder(ownerId, path);
     const res = await getApi()?.add_workflow_folder?.(ownerId, normalizeFolder(path));
@@ -972,7 +972,7 @@ export function AutomationsView() {
       setEmptyFolders((current) => ({ ...current, [ownerId]: (current[ownerId] || []).filter((item) => item !== normalizeFolder(path)) }));
       return;
     }
-    if (ownerId !== LOCAL_OWNER.id) queueTeamSync();
+    if (ownerId !== LOCAL_OWNER.id) queueSharedSync();
     if (res) await refreshList();
   };
 
@@ -982,7 +982,7 @@ export function AutomationsView() {
     await saveQueue.current;
     const res = await getApi()?.set_workflow_folder?.(id, folder);
     if (!res?.workflow) { setActionError(res?.error || "Could not move workflow"); return; }
-    if (ownerId !== LOCAL_OWNER.id) queueTeamSync();
+    if (ownerId !== LOCAL_OWNER.id) queueSharedSync();
     setActionError("");
     showFolder(ownerId, from);  // the folder it left stays
     acknowledgeDraft((current) => current && current.id === id ? { ...current, folder: res.workflow?.folder ?? folder } : current);
@@ -994,7 +994,7 @@ export function AutomationsView() {
     await saveQueue.current;
     const res = await getApi()?.move_workflow_folder?.(ownerId, path, newPath);
     if (!res || res.ok === false) { setActionError(res?.error || "Could not move folder"); return; }
-    if (ownerId !== LOCAL_OWNER.id) queueTeamSync();
+    if (ownerId !== LOCAL_OWNER.id) queueSharedSync();
     setActionError("");
     setEmptyFolders((current) => ({ ...current, [ownerId]: [...new Set((current[ownerId] || []).map((item) => movedPath(item, path, newPath) ?? item).filter(Boolean))] }));
     acknowledgeDraft((current) => {
@@ -1015,7 +1015,7 @@ export function AutomationsView() {
     await saveQueue.current;
     const res = await getApi()?.save_workflow?.(body);
     if (!res?.workflow) { setActionError(res?.error || "Could not save workflow"); return; }
-    if (res.workflow.owner?.kind === "team") queueTeamSync();
+    if (res.workflow.owner?.kind === "shared") queueSharedSync();
     setActionError("");
     await refreshList();
   };
@@ -1031,7 +1031,7 @@ export function AutomationsView() {
     if (doc) await saveOther({ ...doc, ...patch });
   };
 
-  /** A copy beside it (same owner and folder); a read-only team one is copied to Local. */
+  /** A copy beside it (same owner and folder); a read-only shared one is copied to Local. */
   const duplicateWorkflow = async (id: string) => {
     const doc = await workflowDoc(id);
     if (!doc) return;
@@ -1042,24 +1042,24 @@ export function AutomationsView() {
       folder: shared ? rows.find((row) => row.id === id)?.folder ?? doc.folder ?? "" : "",
     }, shared ? doc.owner?.id || LOCAL_OWNER.id : LOCAL_OWNER.id);
     if (!res?.workflow) { setActionError(res?.error || "Could not duplicate workflow"); return; }
-    if (res.workflow.owner?.kind === "team") queueTeamSync();
+    if (res.workflow.owner?.kind === "shared") queueSharedSync();
     setActionError("");
     await refreshList();
   };
 
   /** Deleting always asks first, in the app's own dialog; several picked ones ask once.
-   *  A team's workflow goes for every member, and the dialog says so. */
+   *  A shared workflow goes for everyone in its space, and the dialog says so. */
   const deleteWorkflows = async (ids: string[]) => {
     if (!ids.length) return;
     const owner = (id: string) => draft?.id === id ? draft.owner : rows.find((item) => item.id === id)?.owner;
     const name = (id: string) => (draft?.id === id ? draft.name : rows.find((item) => item.id === id)?.name) || "this workflow";
-    const teams = [...new Set(ids.map(owner).filter((item) => item?.kind === "team").map((item) => item!.label))];
+    const spaces = [...new Set(ids.map(owner).filter((item) => item?.kind === "shared").map((item) => item!.label))];
     const listed = ids.slice(0, 5).map((id) => `“${name(id)}”`).join(", ") + (ids.length > 5 ? ` and ${ids.length - 5} more` : "");
-    const ok = await confirm(ids.length === 1 && teams.length
-      ? { title: `Delete for everyone in ${teams[0]}?`, message: `Every member loses “${name(ids[0])}”. You can't undo this.`, confirmLabel: "Delete", danger: true }
+    const ok = await confirm(ids.length === 1 && spaces.length
+      ? { title: `Delete for everyone in ${spaces[0]}?`, message: `Every member loses “${name(ids[0])}”. You can't undo this.`, confirmLabel: "Delete", danger: true }
       : ids.length === 1
         ? { title: `Delete “${name(ids[0])}”?`, message: "You can't undo this.", confirmLabel: "Delete", danger: true }
-        : { title: `Delete ${ids.length} workflows?`, message: `${listed}. ${teams.length ? `Members of ${teams.join(", ")} lose theirs too. ` : ""}You can't undo this.`, confirmLabel: `Delete ${ids.length}`, danger: true });
+        : { title: `Delete ${ids.length} workflows?`, message: `${listed}. ${spaces.length ? `Members of ${spaces.join(", ")} lose theirs too. ` : ""}You can't undo this.`, confirmLabel: `Delete ${ids.length}`, danger: true });
     if (ok !== true) return;
     for (const id of ids) {
       const open = draft?.id === id;
@@ -1068,7 +1068,7 @@ export function AutomationsView() {
       if (res?.ok === false) { setActionError(res.error || "Could not delete workflow"); continue; }
       if (open && gen === loadGen.current) { setDraft(null); setSelectedId(""); writeView({ open: "" }); }
     }
-    if (teams.length) queueTeamSync();
+    if (spaces.length) queueSharedSync();
     await refreshList();
   };
   const deleteWorkflow = (id: string) => deleteWorkflows([id]);
@@ -1082,17 +1082,17 @@ export function AutomationsView() {
     const what = [plural(counts.workflows, "workflow"), ...(counts.folders ? [plural(counts.folders, "folder")] : [])].join(" and ");
     const lines = [
       `${what} go${counts.workflows + counts.folders === 1 ? "es" : ""} along, nested as they are. Run workflow steps between them keep working.`,
-      ...(to.kind === "team" ? [`Every member of ${to.label} gets ${move ? "them" : "the copy"}.`] : []),
-      ...(move && from.kind === "team" ? [`Members of ${from.label} lose them.`] : []),
+      ...(to.kind === "shared" ? [`Every member of ${to.label} gets ${move ? "them" : "the copy"}.`] : []),
+      ...(move && from.kind === "shared" ? [`Members of ${from.label} lose them.`] : []),
     ];
     const ok = await confirm({ title: `${move ? "Move" : "Copy"} “${folderName(path)}” to ${ownerName(to)}?`, message: lines.join(" "), confirmLabel: move ? "Move" : "Copy" });
     if (ok !== true) return;
     await saveQueue.current;
     const res = await getApi()?.copy_workflow_folder?.(fromId, path, toId, "", move);
     if (!res || res.ok === false) { setActionError(res?.error || `Could not ${move ? "move" : "copy"} folder`); return; }
-    if (from.kind === "team" || to.kind === "team") queueTeamSync();
+    if (from.kind === "shared" || to.kind === "shared") queueSharedSync();
     const outside = res.outside?.length || 0;
-    setActionError(outside && to.kind === "team"
+    setActionError(outside && to.kind === "shared"
       ? `${plural(outside, "Run workflow step")} in “${folderName(path)}” call${outside === 1 ? "s" : ""} workflows outside it, which members of ${to.label} may not have.`
       : "");
     if (move) {
@@ -1153,7 +1153,7 @@ export function AutomationsView() {
     const res = await getApi()?.use_workflow_template?.(template.id, ownerId, parent, "");
     if (!res || res.ok === false) { setActionError(res?.error || "Could not create the workflows"); return; }
     if (res.folder) showFolder(ownerId, res.folder);
-    if ((owners.owners || []).find((owner) => owner.id === ownerId)?.kind === "team") queueTeamSync();
+    if ((owners.owners || []).find((owner) => owner.id === ownerId)?.kind === "shared") queueSharedSync();
     await refreshList();
     if (gen !== loadGen.current) return;
     if (res.main) await loadOne(res.main);
@@ -1165,14 +1165,14 @@ export function AutomationsView() {
   const createFrom = (template: AutomationTemplateDto | null, at?: { owner: string; folder: string }) =>
     void (template?.shape === "bundle" ? createFromFolderTemplate(template, at) : createFromTemplate(template, at));
 
-  /** Copy (new id) or move a workflow to Local or a team. */
+  /** Copy (new id) or move a workflow to Local or a shared space. */
   const sendTo = async (value: string) => {
     if (!draft?.id) return;
     const [action, target] = [value.slice(0, 4), value.slice(5)];
     if (action === "fold") { await moveWorkflow(draft.id, draft.owner?.id || LOCAL_OWNER.id, target); return; }
     const from = draft.owner || LOCAL_OWNER;
     const to = owners.owners?.find((owner) => owner.id === target) || LOCAL_OWNER;
-    if (action === "move" && from.kind === "team") {
+    if (action === "move" && from.kind === "shared") {
       const ok = await confirm({ title: `Move out of ${from.label}?`, message: `Members of ${from.label} will lose this workflow. It moves to ${ownerName(to)}.`, confirmLabel: "Move" });
       if (ok !== true) return;
     }
@@ -1297,7 +1297,7 @@ export function AutomationsView() {
     flushWorkflowEdits();
     const doc = history.current.current;
     if (!doc || doc.owner?.readOnly) return;
-    const teamId = doc.owner?.kind === "team" ? doc.owner.id : "";
+    const spaceId = doc.owner?.kind === "shared" ? doc.owner.id : "";
     window.clearTimeout(savedTimer.current);
     setSaveState({ kind: "saving" });
     try {
@@ -1311,10 +1311,10 @@ export function AutomationsView() {
     setTextSaveError("");
     setSaveState({ kind: "saved" });
     savedTimer.current = window.setTimeout(() => setSaveState({ kind: "idle" }), SAVED_MS);
-    if (!teamId) return;
+    if (!spaceId) return;
     window.clearTimeout(syncTimer.current);
     syncTimer.current = 0;
-    await getApi()?.workflow_sync?.(true, teamId, true);
+    await getApi()?.workflow_sync?.(true, spaceId, true);
   };
   const saveDraft = () => { void saveNow().catch(() => undefined); };
 
@@ -1435,9 +1435,9 @@ export function AutomationsView() {
   // no Return before an input.
   const spawnDir = spawn?.wire?.dir;
   const spawnPin = spawn?.wire?.pin ? spawn.wire.pinType || "any" : "";
-  const teamWorkflow = draft?.owner?.kind === "team";
+  const sharedWorkflow = draft?.owner?.kind === "shared";
   const spawnGroups = useMemo(() => groupCatalog([...catalog, ...functionTiles].filter((tile) => {
-    if (tile.type === CODE_TYPE && teamWorkflow) return false;  // custom code runs in Local workflows only for now
+    if (tile.type === CODE_TYPE && sharedWorkflow) return false;  // custom code runs in Local workflows only for now
     if (spawnPin) {
       const config = (tile as PaletteTile).workflowId ? { workflow_id: (tile as PaletteTile).workflowId } : tile.type === CODE_TYPE ? blankCodeConfig() : {};
       const pins = nodePins({ id: "", type: tile.type, x: 0, y: 0, config }, tile, rows);
@@ -1446,7 +1446,7 @@ export function AutomationsView() {
     if (tile.exec === false && spawnDir) return false;  // a white wire can't reach a data node
     return spawnDir === "out" ? !(tile.role === "starter" || tile.type.startsWith("start.") || tile.type === "flow.input")
       : spawnDir === "in" ? !END_TYPES.has(tile.type) : true;
-  }), spawnFilter), [catalog, functionTiles, spawnFilter, spawnDir, spawnPin, rows, teamWorkflow]);
+  }), spawnFilter), [catalog, functionTiles, spawnFilter, spawnDir, spawnPin, rows, sharedWorkflow]);
 
   const worldFromClient = (clientX: number, clientY: number) => {
     const board = boardRef.current?.getBoundingClientRect();
@@ -2392,13 +2392,13 @@ export function AutomationsView() {
                 title={readOnly ? `Read-only: ${draft.owner?.reason || "it can't be saved here."}`
                   : saveLook === "saving" ? "Saving…"
                   : saveLook === "error" ? failedSave
-                  : saveLook === "dirty" ? `Unsaved changes - ${draft.owner?.kind === "team" ? "Save and update online" : "Save"} (Ctrl+S)`
+                  : saveLook === "dirty" ? `Unsaved changes - ${draft.owner?.kind === "shared" ? "Save and update online" : "Save"} (Ctrl+S)`
                   : saveLook === "saved" ? "Saved"
-                  : `${draft.owner?.kind === "team" ? "Save and update online" : "Save"} (Ctrl+S)`}>
+                  : `${draft.owner?.kind === "shared" ? "Save and update online" : "Save"} (Ctrl+S)`}>
                 {saveLook === "saving" ? <span className="aw-spin"><Icons.Spinner /></span> : saveLook === "saved" ? <Icons.Check /> : saveLook === "error" ? <Icons.AlertTriangle /> : <Icons.Save />}
                 {saveLook === "dirty" ? <span className="aw-save-dot" aria-hidden="true" /> : null}
               </button>
-              {draft.owner?.kind === "team" && ["start.cron", ...catalog.filter((n) => n.role === "starter" && n.plugin_id).map((n) => n.type)].some((type) => draft.graph.nodes.some((node) => node.type === type)) ? (
+              {draft.owner?.kind === "shared" && ["start.cron", ...catalog.filter((n) => n.role === "starter" && n.plugin_id).map((n) => n.type)].some((type) => draft.graph.nodes.some((node) => node.type === type)) ? (
                 <button type="button" aria-label="Run on this PC" aria-pressed={!!draft.run_here}
                   title={draft.run_here ? "This PC runs its schedule and triggers. Click to stop." : "Its schedule and triggers run on other members' PCs only. Click to run them here too."}
                   onClick={async () => { const res = await getApi()?.set_workflow_run_here?.(draft.id, !draft.run_here); if (res?.workflow) { acknowledgeDraft((current) => current && current.id === draft.id ? { ...current, run_here: !!res.workflow?.run_here } : current); await refreshList(); } }}>
@@ -2667,7 +2667,7 @@ export function AutomationsView() {
           onNodeChange={changeNode}
           onNodeReplace={replaceNode}
           onCodeSession={codeTyping}
-          team={teamWorkflow}
+          shared={sharedWorkflow}
           detailsTab={detailsTab}
           onDetailsTab={pickDetailsTab}
           codeWide={codeWide}

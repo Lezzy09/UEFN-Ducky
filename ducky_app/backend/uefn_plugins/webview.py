@@ -137,7 +137,7 @@ PLUGIN_UI_HTML_CSP = (
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data: blob: https:; "
     "connect-src 'self' data: blob:; "
-    # https media like https images: team data players (short presigned storage links).
+    # https media like https images: shared-data players (short presigned storage links).
     "font-src 'self' data:; media-src 'self' data: blob: https:; "
     "object-src 'none'; base-uri 'self'"
 )

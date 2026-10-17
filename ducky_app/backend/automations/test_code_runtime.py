@@ -345,10 +345,10 @@ def test_code_with_problems_does_not_run(events, approvals):
     assert approvals.gate_calls == []
 
 
-def test_team_workflows_refuse_code(events, approvals, monkeypatch):
+def test_shared_workflows_refuse_code(events, approvals, monkeypatch):
     wid = _save([_code_node("c", _module("  return {};"))], [])
     real = store.get_workflow
-    monkeypatch.setattr(code_node, "get_workflow", lambda w: {**real(w), "owner": {"kind": "team", "id": "t1"}})
+    monkeypatch.setattr(code_node, "get_workflow", lambda w: {**real(w), "owner": {"kind": "shared", "id": "s1"}})
     out = runner.run_node(wid, "c", person=True)
     assert out["ok"] is False and out["error"].endswith("Custom code runs in Local workflows for now.")
 

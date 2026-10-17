@@ -24,7 +24,7 @@ vi.mock("./AutomationTemplatePicker", () => ({
     <>
       {(owners || []).map((owner) => (
         <button key={owner.id} type="button" aria-pressed={owner.id === ownerId} disabled={!!owner.readOnly} onClick={() => onOwnerChange?.(owner.id)}>
-          {`Save in ${owner.kind === "team" ? `Team · ${owner.label}` : "Local"}`}
+          {`Save in ${owner.kind === "shared" ? `Space · ${owner.label}` : "Local"}`}
         </button>
       ))}
       {saveFolder ? <p>{`Keep ${saveFolder.ownerId}/${saveFolder.path} as a template`}</p> : null}
@@ -37,7 +37,7 @@ vi.mock("./AutomationTemplatePicker", () => ({
 }));
 
 const LOCAL: WorkflowOwnerDto = { id: "local", kind: "local", label: "Local", state: "ok", readOnly: false, reason: "" };
-let TEAM: WorkflowOwnerDto;
+let SHARED: WorkflowOwnerDto;
 let owners: WorkflowOwnersDto;
 let saved: AutomationDto;
 let daily: AutomationDto;
@@ -53,8 +53,8 @@ beforeEach(() => {
   // Drags here check exact distances; snapping to the grid has its own test.
   window.localStorage.setItem("ducky.workflows.view.v1", JSON.stringify({ snap: false }));
   document.elementsFromPoint = vi.fn(() => []);
-  TEAM = { id: "teamT", kind: "team", label: "Alpha Studio", state: "ok", readOnly: false, reason: "", slug: "alpha", sync: { state: "ok", pending: 0, syncedAt: null, members: 3 } };
-  owners = { ok: true, owners: [LOCAL, TEAM], signedIn: true, teamsEnabled: true, localImport: 0 };
+  SHARED = { id: "spaceT", kind: "shared", label: "Alpha Studio", state: "ok", readOnly: false, reason: "", slug: "alpha", sync: { state: "ok", pending: 0, syncedAt: null, members: 3 } };
+  owners = { ok: true, owners: [LOCAL, SHARED], signedIn: true, spacesEnabled: true, localImport: 0 };
   saved = { id: "p", name: "Example", enabled: true, owner: LOCAL, graph: {
     nodes: [
       { id: "s", type: "start.chat", label: "Chat", x: 0, y: 0, config: {} },
@@ -62,7 +62,7 @@ beforeEach(() => {
       { id: "b", type: "flow.wait", label: "Continue", x: 560, y: 0, config: {} },
     ], edges: [{ source: "s", target: "a", kind: "main" }],
   } };
-  daily = { id: "d", name: "Daily check", enabled: true, owner: TEAM, run_here: false, graph: { nodes: [{ id: "timer", type: "start.cron", x: 0, y: 0, config: {} }], edges: [] } };
+  daily = { id: "d", name: "Daily check", enabled: true, owner: SHARED, run_here: false, graph: { nodes: [{ id: "timer", type: "start.cron", x: 0, y: 0, config: {} }], edges: [] } };
   api.list_workflow_versions.mockResolvedValue({ ok: true, versions: [] });
   api.get_workflow_version.mockResolvedValue({ ok: false });
   api.get_mcp_tools_catalog.mockResolvedValue({ tools: [] });
@@ -76,14 +76,14 @@ beforeEach(() => {
   api.list_workflow_nodes.mockResolvedValue({ nodes: [{ type: "start.chat", label: "Chat", role: "starter", group: "Starting" }, { type: "start.cron", label: "Schedule", role: "starter", group: "Starting" }, { type: "flow.wait", label: "Wait", group: "Logic", config_fields: [{ id: "seconds", label: "Seconds", type: "number" }] }] });
   api.get_workflow.mockImplementation(async (id: string) => ({ workflow: structuredClone(id === "d" ? daily : saved) }));
   api.save_workflow.mockImplementation(async (doc: AutomationDto, owner?: string) => {
-    if (!doc.id) return { workflow: { ...structuredClone(doc), id: "new-workflow", owner: owner === "teamT" ? TEAM : LOCAL } };
+    if (!doc.id) return { workflow: { ...structuredClone(doc), id: "new-workflow", owner: owner === "spaceT" ? SHARED : LOCAL } };
     if (doc.id === "d") { daily = structuredClone(doc); return { workflow: daily }; }
     saved = structuredClone(doc);
     return { workflow: saved };
   });
   api.run_workflow.mockResolvedValue({ ok: true, steps: [] });
   api.delete_workflow.mockResolvedValue({ ok: true });
-  api.copy_workflow.mockImplementation(async (id: string, owner: string) => ({ workflow: { ...structuredClone(id === "d" ? daily : saved), owner: owner === "teamT" ? TEAM : LOCAL } }));
+  api.copy_workflow.mockImplementation(async (id: string, owner: string) => ({ workflow: { ...structuredClone(id === "d" ? daily : saved), owner: owner === "spaceT" ? SHARED : LOCAL } }));
   api.set_workflow_run_here.mockImplementation(async (_id: string, on: boolean) => ({ workflow: { ...structuredClone(daily), run_here: on } }));
   api.import_local_workflows.mockResolvedValue({ ok: true, moved: 2 });
   api.list_agent_profiles.mockResolvedValue({ profiles: [{ id: "artist", name: "My Artist", ducky_style: "artist" }], template_profiles: [{ id: "artist", name: "Original Artist" }, { id: "coder", name: "Verse Coder", ducky_style: "hacker" }], blank_profile_id: "__blank__" });
@@ -725,21 +725,21 @@ describe("Workflows folders by owner", () => {
   it("lists each workflow in its owner's folder with what starts it, and labels the open one", async () => {
     renderView();
     const local = await screen.findByRole("region", { name: "Local" });
-    const team = screen.getByRole("region", { name: "Team · Alpha Studio" });
+    const space = screen.getByRole("region", { name: "Space · Alpha Studio" });
     expect(local.textContent).toContain("Example");
     expect(within(local).getByRole("img", { name: "Chat" }).textContent).toBe("");  // an icon, not the word
     expect(local.textContent).not.toContain("Only on this PC");
     expect(local.querySelector(".aw-folder-status")).toBeNull();
-    expect(team.textContent).toContain("Daily check");
-    expect(within(team).getByRole("img", { name: "Every 5m" })).toBeTruthy();
-    expect(team.textContent).not.toContain("Not synced yet");  // no sync line under the team…
-    expect(screen.getByRole("button", { name: "Team · Alpha Studio", exact: true }).getAttribute("title")).toContain("Not synced yet");  // …it is in the tooltip
+    expect(space.textContent).toContain("Daily check");
+    expect(within(space).getByRole("img", { name: "Every 5m" })).toBeTruthy();
+    expect(space.textContent).not.toContain("Not synced yet");  // no sync line under the space…
+    expect(screen.getByRole("button", { name: "Space · Alpha Studio", exact: true }).getAttribute("title")).toContain("Not synced yet");  // …it is in the tooltip
     expect(document.querySelector(".aw-folder-status")).toBeNull();
-    expect(team.querySelector(".aw-trigger")?.getAttribute("title")).toContain("not on this PC");
+    expect(space.querySelector(".aw-trigger")?.getAttribute("title")).toContain("not on this PC");
     fireEvent.click(screen.getByText("Daily check"));
     await screen.findByDisplayValue("Daily check");
     expect(document.querySelector(".aw-owner-chip")).toBeNull();  // only the name in the toolbar
-    expect(document.querySelector(".aw-name")?.getAttribute("title")).toContain("Team Alpha Studio");
+    expect(document.querySelector(".aw-name")?.getAttribute("title")).toContain("Space Alpha Studio");
     fireEvent.click(screen.getByText("Example"));
     await screen.findByDisplayValue("Example");
     expect(document.querySelector(".aw-name")?.getAttribute("title")).toContain("Local workflows");
@@ -748,7 +748,7 @@ describe("Workflows folders by owner", () => {
   });
   it("collapses the entire list without losing the graph or folder states", async () => {
     await open();
-    fireEvent.click(screen.getByRole("button", { name: "Team · Alpha Studio", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Space · Alpha Studio", exact: true }));
     const toggle = screen.getByRole("button", { name: "Workflows", exact: true });
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
@@ -762,34 +762,34 @@ describe("Workflows folders by owner", () => {
     expect(screen.queryByRole("button", { name: "New workflow", exact: true })).toBeNull();  // each section has its own +
     expect(screen.getByRole("button", { name: "New workflow in Local" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Local", exact: true }).getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByRole("button", { name: "Team · Alpha Studio", exact: true }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("button", { name: "Space · Alpha Studio", exact: true }).getAttribute("aria-expanded")).toBe("false");
   });
   it("creates a workflow in the folder whose + was used", async () => {
     await open();
-    fireEvent.click(screen.getByRole("button", { name: "New workflow in Team · Alpha Studio" }));
+    fireEvent.click(screen.getByRole("button", { name: "New workflow in Space · Alpha Studio" }));
     fireEvent.click(screen.getByRole("button", { name: "Create workflow" }));
-    await waitFor(() => expect(api.save_workflow).toHaveBeenCalledWith(expect.objectContaining({ id: "", name: "Untitled" }), "teamT"));
+    await waitFor(() => expect(api.save_workflow).toHaveBeenCalledWith(expect.objectContaining({ id: "", name: "Untitled" }), "spaceT"));
     await screen.findByDisplayValue("Untitled");
-    expect(document.querySelector(".aw-name")?.getAttribute("title")).toContain("Team Alpha Studio");
+    expect(document.querySelector(".aw-name")?.getAttribute("title")).toContain("Space Alpha Studio");
     fireEvent.click(screen.getByRole("button", { name: "New workflow in Local" }));
     fireEvent.click(screen.getByRole("button", { name: "Save in Local" }));
     fireEvent.click(screen.getByRole("button", { name: "Create workflow" }));
     await waitFor(() => expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "" }), "local"));
     fireEvent.click(screen.getByRole("button", { name: "New workflow in Local" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save in Team · Alpha Studio" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save in Space · Alpha Studio" }));
     fireEvent.click(screen.getByRole("button", { name: "Create workflow" }));
-    await waitFor(() => expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "" }), "teamT"));
+    await waitFor(() => expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "" }), "spaceT"));
   });
-  it("runs and duplicates a read-only team workflow but never edits or pushes it", async () => {
-    TEAM.readOnly = true;
-    TEAM.reason = "Only members with Manage automations can change team workflows.";
-    daily.owner = TEAM;
+  it("runs and duplicates a read-only space workflow but never edits or pushes it", async () => {
+    SHARED.readOnly = true;
+    SHARED.reason = "Only space editors can change these workflows.";
+    daily.owner = SHARED;
     await open("Daily check");
-    expect(screen.getByRole("note").textContent).toContain("Manage automations");
+    expect(screen.getByRole("note").textContent).toContain("Only space editors can change these workflows.");
     for (const name of ["Save", "Delete", "Enabled", "Undo"]) {
       expect(screen.getByRole("button", { name, exact: true }).hasAttribute("disabled")).toBe(true);
     }
-    expect(screen.queryByRole("button", { name: "New workflow in Team · Alpha Studio" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New workflow in Space · Alpha Studio" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Test", exact: true }));
     await waitFor(() => expect(api.run_workflow).toHaveBeenCalledWith("d"));
     expect(api.save_workflow).not.toHaveBeenCalled();
@@ -797,11 +797,11 @@ describe("Workflows folders by owner", () => {
     fireEvent.click(await screen.findByRole("radio", { name: "Local" }));
     await waitFor(() => expect(api.save_workflow).toHaveBeenCalledWith(expect.objectContaining({ id: "", name: "Daily check copy" }), "local"));
   });
-  it("moves a Local workflow to a team, and asks before moving one out of a team", async () => {
+  it("moves a Local workflow to a space, and asks before moving one out of a space", async () => {
     await open();
     dropdown("Move or copy");
-    fireEvent.click(await screen.findByRole("radio", { name: "Move to Team · Alpha Studio" }));
-    await waitFor(() => expect(api.copy_workflow).toHaveBeenCalledWith("p", "teamT", true));
+    fireEvent.click(await screen.findByRole("radio", { name: "Move to Space · Alpha Studio" }));
+    await waitFor(() => expect(api.copy_workflow).toHaveBeenCalledWith("p", "spaceT", true));
     fireEvent.click(screen.getByText("Daily check"));
     await screen.findByDisplayValue("Daily check");
     dropdown("Move or copy");
@@ -811,7 +811,7 @@ describe("Workflows folders by owner", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Move \(/ }));
     await waitFor(() => expect(api.copy_workflow).toHaveBeenLastCalledWith("d", "local", true));
   });
-  it("asks before deleting a team workflow for everyone", async () => {
+  it("asks before deleting a space workflow for everyone", async () => {
     await open("Daily check");
     fireEvent.click(screen.getByRole("button", { name: "Delete", exact: true }));
     await screen.findByText("Delete for everyone in Alpha Studio?");
@@ -819,7 +819,7 @@ describe("Workflows folders by owner", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Delete \(/ }));
     await waitFor(() => expect(api.delete_workflow).toHaveBeenCalledWith("d"));
   });
-  it("switches Run on this PC for a scheduled team workflow", async () => {
+  it("switches Run on this PC for a scheduled space workflow", async () => {
     await open("Daily check");
     const toggle = screen.getByRole("button", { name: "Run on this PC" });
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
@@ -830,14 +830,14 @@ describe("Workflows folders by owner", () => {
     await screen.findByDisplayValue("Example");
     expect(screen.queryByRole("button", { name: "Run on this PC" })).toBeNull();
   });
-  it("updates a team online from its folder", async () => {
+  it("updates a space online from its folder", async () => {
     renderView();
-    fireEvent.click(await screen.findByRole("button", { name: "Update Team · Alpha Studio online" }));
-    await waitFor(() => expect(api.workflow_sync).toHaveBeenCalledWith(true, "teamT", true));
+    fireEvent.click(await screen.findByRole("button", { name: "Update Space · Alpha Studio online" }));
+    await waitFor(() => expect(api.workflow_sync).toHaveBeenCalledWith(true, "spaceT", true));
     expect(screen.queryByRole("button", { name: "Update Local online" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Open Team · Alpha Studio on the web" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open Space · Alpha Studio on the web" })).toBeNull();
   });
-  it("asks the Store for teams once when opened and syncs them while open", async () => {
+  it("asks for spaces once when opened and syncs them while open", async () => {
     renderView();
     await screen.findByText("Example");
     await waitFor(() => expect(api.workflow_owners).toHaveBeenCalledWith(true));
@@ -851,9 +851,9 @@ describe("Workflows folders by owner", () => {
     await waitFor(() => expect(api.import_local_workflows).toHaveBeenCalled());
     cleanup();
     api.workflow_sync.mockClear();
-    owners = { ok: true, owners: [LOCAL], signedIn: false, teamsEnabled: false, localImport: 0 };
+    owners = { ok: true, owners: [LOCAL], signedIn: false, spacesEnabled: false, localImport: 0 };
     renderView();
-    expect(await screen.findByText("Sign in to share workflows with a team.")).toBeTruthy();
+    expect(await screen.findByText("Sign in to share workflows with a space.")).toBeTruthy();
     expect(api.workflow_sync).not.toHaveBeenCalled();
   });
   it("opens a chat-linked workflow and ignores deletes of other workflows", async () => {
@@ -1541,7 +1541,7 @@ describe("node search", () => {
   });
 });
 
-describe("several workflows, live runs, outline and team sync", () => {
+describe("several workflows, live runs, outline and space sync", () => {
   it("picks several workflows with Ctrl and Shift + click and deletes them after one question", async () => {
     api.list_workflows.mockImplementation(async () => ({ workflows: [
       { id: "p", name: "Example", enabled: true, owner: LOCAL, trigger: { kind: "chat", label: "Chat" } },
@@ -1687,12 +1687,12 @@ describe("several workflows, live runs, outline and team sync", () => {
     expect(details()).toBeTruthy();
   });
 
-  it("syncs a team once when opened and then only after a save, never on a timer", async () => {
+  it("syncs a space once when opened and then only after a save, never on a timer", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       saved = { ...structuredClone(daily) };
       api.get_workflow.mockImplementation(async () => ({ ok: true, workflow: structuredClone(saved) }));
-      api.save_workflow.mockImplementation(async (doc: AutomationDto) => ({ ok: true, workflow: { ...structuredClone(doc), owner: TEAM } }));
+      api.save_workflow.mockImplementation(async (doc: AutomationDto) => ({ ok: true, workflow: { ...structuredClone(doc), owner: SHARED } }));
       renderView();
       fireEvent.click(await screen.findByText("Daily check"));
       await screen.findByDisplayValue("Daily check");
@@ -1700,8 +1700,8 @@ describe("several workflows, live runs, outline and team sync", () => {
       await act(async () => { vi.advanceTimersByTime(5 * 60_000); });
       expect(api.workflow_sync).toHaveBeenCalledTimes(1);  // no polling
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
-      await waitFor(() => expect(api.workflow_sync).toHaveBeenLastCalledWith(true, "teamT", true));
-      expect(api.workflow_sync).toHaveBeenCalledTimes(2);  // open, then Save updates the team now
+      await waitFor(() => expect(api.workflow_sync).toHaveBeenLastCalledWith(true, "spaceT", true));
+      expect(api.workflow_sync).toHaveBeenCalledTimes(2);  // open, then Save updates the space now
     } finally {
       vi.useRealTimers();
     }
@@ -1822,7 +1822,7 @@ describe("folders in the Workflows list", () => {
     window.localStorage.clear();
     api.list_workflows.mockImplementation(async () => ({ workflows: [
       { id: "p", name: "Example", enabled: true, owner: LOCAL, folder: "Tests/Smoke", trigger: { kind: "chat", label: "Chat" } },
-      { id: "d", name: "Daily check", enabled: true, owner: TEAM, run_here: false, trigger: { kind: "schedule", label: "Every 5m" } },
+      { id: "d", name: "Daily check", enabled: true, owner: SHARED, run_here: false, trigger: { kind: "schedule", label: "Every 5m" } },
     ] }));
     api.set_workflow_folder.mockImplementation(async (id: string, folder: string) => ({ ok: true, workflow: { ...structuredClone(saved), id, folder } }));
     api.move_workflow_folder.mockResolvedValue({ ok: true, moved: 1 });
@@ -1860,11 +1860,11 @@ describe("folders in the Workflows list", () => {
     expect(folderRow("QA").classList.contains("tree-drop-into")).toBe(true);
     fireEvent.drop(folderRow("QA"), { dataTransfer });
     await waitFor(() => expect(api.set_workflow_folder).toHaveBeenCalledWith("p", "QA"));
-    // Its old folder stays until removed; a team folder never takes a Local workflow.
+    // Its old folder stays until removed; a space folder never takes a Local workflow.
     expect(await screen.findByRole("button", { name: "Folder Smoke" })).toBeTruthy();
     fireEvent.dragStart(screen.getByText("Example").closest("button")!, { dataTransfer });
-    fireEvent.dragOver(screen.getByRole("button", { name: "Team · Alpha Studio" }).parentElement!, { dataTransfer });
-    fireEvent.drop(screen.getByRole("button", { name: "Team · Alpha Studio" }).parentElement!, { dataTransfer });
+    fireEvent.dragOver(screen.getByRole("button", { name: "Space · Alpha Studio" }).parentElement!, { dataTransfer });
+    fireEvent.drop(screen.getByRole("button", { name: "Space · Alpha Studio" }).parentElement!, { dataTransfer });
     expect(api.set_workflow_folder).toHaveBeenCalledTimes(1);
   });
 
@@ -1886,47 +1886,47 @@ describe("folders in the Workflows list", () => {
     await waitFor(() => expect(api.move_workflow_folder).toHaveBeenLastCalledWith("local", "Tests/Smoke", "Smoke"));
   });
 
-  it("shows every folder the host keeps, empty ones and a team's too", async () => {
-    owners = { ...owners, owners: [{ ...LOCAL, folders: ["Tests", "Tests/Smoke", "Later"] }, { ...TEAM, folders: ["Shared/Empty"] }] };
+  it("shows every folder the host keeps, empty ones and a space's too", async () => {
+    owners = { ...owners, owners: [{ ...LOCAL, folders: ["Tests", "Tests/Smoke", "Later"] }, { ...SHARED, folders: ["Shared/Empty"] }] };
     renderView();
     expect(await screen.findByRole("button", { name: "Folder Later" })).toBeTruthy();
-    const team = screen.getByRole("region", { name: "Team · Alpha Studio" });
-    expect(within(team).getByRole("button", { name: "Folder Shared" })).toBeTruthy();
-    expect(within(team).getByRole("button", { name: "Folder Empty" })).toBeTruthy();
+    const space = screen.getByRole("region", { name: "Space · Alpha Studio" });
+    expect(within(space).getByRole("button", { name: "Folder Shared" })).toBeTruthy();
+    expect(within(space).getByRole("button", { name: "Folder Empty" })).toBeTruthy();
   });
 
   it("hands empty folders an older build kept in this browser to the host once", async () => {
-    window.localStorage.setItem("ducky.workflows.emptyFolders.v1", JSON.stringify({ local: ["Old/Empty"], teamGone: ["Elsewhere"] }));
+    window.localStorage.setItem("ducky.workflows.emptyFolders.v1", JSON.stringify({ local: ["Old/Empty"], spaceGone: ["Elsewhere"] }));
     renderView();
     await waitFor(() => expect(api.add_workflow_folder).toHaveBeenCalledWith("local", "Old/Empty"));
-    expect(api.add_workflow_folder).not.toHaveBeenCalledWith("teamGone", "Elsewhere");
-    expect(JSON.parse(window.localStorage.getItem("ducky.workflows.emptyFolders.v1") || "{}")).toEqual({ teamGone: ["Elsewhere"] });
+    expect(api.add_workflow_folder).not.toHaveBeenCalledWith("spaceGone", "Elsewhere");
+    expect(JSON.parse(window.localStorage.getItem("ducky.workflows.emptyFolders.v1") || "{}")).toEqual({ spaceGone: ["Elsewhere"] });
   });
 
-  it("copies a whole folder to a team after saying what goes, and moves one back", async () => {
+  it("copies a whole folder to a space after saying what goes, and moves one back", async () => {
     renderView();
     await screen.findByText("Example");
     fireEvent.contextMenu(screen.getByRole("button", { name: "Folder Tests" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Copy folder to Team · Alpha Studio" }));
-    expect(await screen.findByText("Copy “Tests” to Team · Alpha Studio?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy folder to Space · Alpha Studio" }));
+    expect(await screen.findByText("Copy “Tests” to Space · Alpha Studio?")).toBeTruthy();
     expect(screen.getByText(/1 workflow and 1 folder go along, nested as they are\..*Every member of Alpha Studio gets the copy\./)).toBeTruthy();
     expect(api.copy_workflow_folder).not.toHaveBeenCalled();
     await confirmIt("Copy");
-    await waitFor(() => expect(api.copy_workflow_folder).toHaveBeenCalledWith("local", "Tests", "teamT", "", false));
+    await waitFor(() => expect(api.copy_workflow_folder).toHaveBeenCalledWith("local", "Tests", "spaceT", "", false));
 
     api.copy_workflow_folder.mockResolvedValueOnce({ ok: true, folder: "Tests", moved: 1, outside: ["elsewhere"], workflows: [{ key: "p", id: "p", name: "Example" }] });
     fireEvent.contextMenu(screen.getByRole("button", { name: "Folder Smoke" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move folder to Team · Alpha Studio" }));
-    expect(await screen.findByText("Move “Smoke” to Team · Alpha Studio?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move folder to Space · Alpha Studio" }));
+    expect(await screen.findByText("Move “Smoke” to Space · Alpha Studio?")).toBeTruthy();
     await confirmIt("Move");
-    await waitFor(() => expect(api.copy_workflow_folder).toHaveBeenLastCalledWith("local", "Tests/Smoke", "teamT", "", true));
+    await waitFor(() => expect(api.copy_workflow_folder).toHaveBeenLastCalledWith("local", "Tests/Smoke", "spaceT", "", true));
     expect(await screen.findByText(/1 Run workflow step in “Smoke” calls workflows outside it/)).toBeTruthy();
   });
 
-  it("offers only a copy out of a team this member can't change", async () => {
-    owners = { ...owners, owners: [LOCAL, { ...TEAM, readOnly: true, reason: "Only members with Manage automations can change team workflows." }] };
+  it("offers only a copy out of a space this member can't change", async () => {
+    owners = { ...owners, owners: [LOCAL, { ...SHARED, readOnly: true, reason: "Only space editors can change these workflows." }] };
     api.list_workflows.mockImplementation(async () => ({ workflows: [
-      { id: "d", name: "Daily check", enabled: true, owner: { ...TEAM, readOnly: true }, folder: "Ops", trigger: { kind: "schedule", label: "Every 5m" } },
+      { id: "d", name: "Daily check", enabled: true, owner: { ...SHARED, readOnly: true }, folder: "Ops", trigger: { kind: "schedule", label: "Every 5m" } },
     ] }));
     renderView();
     fireEvent.contextMenu(await screen.findByRole("button", { name: "Folder Ops" }));
@@ -1935,7 +1935,7 @@ describe("folders in the Workflows list", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Copy folder to Local" }));
     expect(await screen.findByText("Copy “Ops” to Local?")).toBeTruthy();
     await confirmIt("Copy");
-    await waitFor(() => expect(api.copy_workflow_folder).toHaveBeenCalledWith("teamT", "Ops", "local", "", false));
+    await waitFor(() => expect(api.copy_workflow_folder).toHaveBeenCalledWith("spaceT", "Ops", "local", "", false));
   });
 
   it("creates a workflow in a folder and moves the open one from the toolbar", async () => {
@@ -2037,7 +2037,7 @@ describe("right-click menus in the Workflows list", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Move out of folder" }));
     await waitFor(() => expect(api.set_workflow_folder).toHaveBeenCalledWith("p", "Tests"));
     fireEvent.contextMenu(screen.getByRole("button", { name: "Folder Smoke" }));
-    expect(items()).toEqual(["New workflow here", "New folder inside", "Rename", "Copy folder to Team · Alpha Studio", "Move folder to Team · Alpha Studio", "Save folder as template", "Remove folder (keeps its workflows)"]);
+    expect(items()).toEqual(["New workflow here", "New folder inside", "Rename", "Copy folder to Space · Alpha Studio", "Move folder to Space · Alpha Studio", "Save folder as template", "Remove folder (keeps its workflows)"]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
     expect((screen.getByRole("textbox", { name: "Folder name" }) as HTMLInputElement).value).toBe("Smoke");
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Folder name" }), { key: "Escape" });
@@ -2324,7 +2324,7 @@ describe("custom code nodes", () => {
     expect(node.config.pins).toEqual({ exec: true, inputs: [{ id: "text", type: "text", label: "Text" }], outputs: [{ id: "text", type: "text", label: "Text" }] });
   });
 
-  it("keeps Custom code out of a team workflow's palette", async () => {
+  it("keeps Custom code out of a space workflow's palette", async () => {
     await open("Daily check");
     fireEvent.click(screen.getByRole("button", { name: "Add nodes" }));
     const menu = screen.getByRole("dialog", { name: "Add node" });
@@ -2506,7 +2506,7 @@ describe("unsaved changes and Save", () => {
   });
 
   it("never saves a read-only workflow with Ctrl+S and says why", async () => {
-    daily.owner = { ...TEAM, readOnly: true, reason: "Only Alpha Studio's editors can change it." };
+    daily.owner = { ...SHARED, readOnly: true, reason: "Only Alpha Studio's editors can change it." };
     await open("Daily check");
     expect((saveButton() as HTMLButtonElement).disabled).toBe(true);
     expect(ctrlS(canvas())).toBe(false);

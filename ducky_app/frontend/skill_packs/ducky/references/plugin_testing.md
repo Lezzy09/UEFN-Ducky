@@ -77,7 +77,7 @@ panel?, tool?, node?, stack?}], counts}`, newest first. `since` is epoch seconds
 
 | `source` | Means | Usual fix |
 |---|---|---|
-| `load` | `register(api)` or an import failed, or a team plugin is paused | The message and stack name the line. Relative imports; no missing modules. |
+| `load` | `register(api)` or an import failed, or a private plugin is paused | The message and stack name the line. Relative imports; no missing modules. |
 | `panel_crash` | The panel page crashed | Check the page's script for a top-level error. |
 | `panel` | Uncaught error, rejected promise or `console.error` in a panel (at most 20 per page load) | Catch bridge errors and show them in a `dk-error` state. |
 | `tool` | An MCP tool raised | Return `{"ok": False, "error": …}` for expected problems. |

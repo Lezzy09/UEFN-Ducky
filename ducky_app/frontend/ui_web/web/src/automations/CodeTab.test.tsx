@@ -45,7 +45,7 @@ function graphOf(node: AutomationGraphNodeDto): AutomationGraphDto {
 function setup(node: AutomationGraphNodeDto, patch: Partial<CodeTabProps> = {}) {
   const props: CodeTabProps = {
     workflowId: "w1", node, graph: graphOf(node), byType, workflows: [], pins: nodePins(node, byType.get(node.type)),
-    readOnly: false, locked: false, team: false, wide: false, onWide: vi.fn(),
+    readOnly: false, locked: false, shared: false, wide: false, onWide: vi.fn(),
     onNodeChange: vi.fn(), onNodeReplace: vi.fn(), onCodeSession: vi.fn(), onRunNode: vi.fn(),
     ...patch,
   };
@@ -80,7 +80,7 @@ describe("Code tab of a built-in", () => {
     const cases: Array<[Partial<CodeTabProps>, RegExp]> = [
       [{ locked: true }, /locked/],
       [{ readOnly: true }, /read-only/],
-      [{ team: true }, /Local workflows/],
+      [{ shared: true }, /Local workflows/],
     ];
     for (const [patch, why] of cases) {
       view.rerender(<CodeTab {...setupProps(builtin(), patch)} />);
@@ -156,7 +156,7 @@ describe("Code tab of a built-in", () => {
 function setupProps(node: AutomationGraphNodeDto, patch: Partial<CodeTabProps> = {}): CodeTabProps {
   return {
     workflowId: "w1", node, graph: graphOf(node), byType, workflows: [], pins: nodePins(node, byType.get(node.type)),
-    readOnly: false, locked: false, team: false, wide: false, onWide: vi.fn(),
+    readOnly: false, locked: false, shared: false, wide: false, onWide: vi.fn(),
     onNodeChange: vi.fn(), onNodeReplace: vi.fn(), onCodeSession: vi.fn(), onRunNode: vi.fn(), ...patch,
   };
 }

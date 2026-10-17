@@ -13,7 +13,7 @@ def _cache_store_catalog(result: dict[str, Any], account: str = "") -> dict[str,
     copy without icons).
 
     Keyed by ``account``: the catalog carries the signed-in account's private
-    team items, so another account's copy is dropped, never served.
+    items, so another account's copy is dropped, never served.
     """
     result["account"] = account
     try:
@@ -130,108 +130,16 @@ class PanelApiStoreMixin:
         if base:
             webbrowser.open(f"{base}/admin")
 
-    def duckyos_teams_snapshot(self, stale_seconds: int = 120) -> dict[str, Any]:
-        from frontend.duckyos_account import DuckyOSAccountError, teams_snapshot
-
-        try:
-            return teams_snapshot(stale_seconds=int(stale_seconds or 120))
-        except DuckyOSAccountError as exc:
-            return {
-                "ok": False,
-                "error": exc.message,
-                "code": exc.code,
-                "teams": [],
-                "needs_team": True,
-                "online": [],
-            }
-        except Exception as exc:
-            return {
-                "ok": False,
-                "error": str(exc),
-                "code": "error",
-                "teams": [],
-                "needs_team": True,
-                "online": [],
-            }
-
-    def duckyos_open_teams_site(self, path: str = "/teams") -> dict[str, Any]:
+    def duckyos_open_site(self, path: str = "/") -> dict[str, Any]:
+        """Open a path of the signed-in account's website in the browser."""
         from frontend.duckyos_account import DuckyOSAccountError, open_site_path
 
         try:
-            return open_site_path(str(path or "/teams"))
+            return open_site_path(str(path or "/"))
         except DuckyOSAccountError as exc:
             return {"ok": False, "error": exc.message, "code": exc.code}
         except Exception as exc:
             return {"ok": False, "error": str(exc), "code": "error"}
-
-    def _duckyos_team_call(self, fn, **kwargs: Any) -> dict[str, Any]:
-        from frontend.duckyos_account import DuckyOSAccountError
-
-        try:
-            out = fn(**kwargs)
-            if isinstance(out, dict):
-                out.setdefault("ok", True)
-                return out
-            return {"ok": True}
-        except DuckyOSAccountError as exc:
-            return {"ok": False, "error": exc.message, "code": exc.code}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc), "code": "error"}
-
-    def duckyos_team_create(self, name: str = "") -> dict[str, Any]:
-        from frontend.duckyos_account import team_create
-
-        return self._duckyos_team_call(team_create, name=str(name or ""))
-
-    def duckyos_team_update(self, team_slug: str = "", name: str | None = None) -> dict[str, Any]:
-        from frontend.duckyos_account import team_update
-
-        return self._duckyos_team_call(
-            team_update, team_slug=str(team_slug or ""), name=name
-        )
-
-    def duckyos_team_invite(
-        self, team_slug: str = "", email: str = "", role: str = "member"
-    ) -> dict[str, Any]:
-        from frontend.duckyos_account import team_invite
-
-        return self._duckyos_team_call(
-            team_invite,
-            team_slug=str(team_slug or ""),
-            email=str(email or ""),
-            role=str(role or "member"),
-        )
-
-    def duckyos_team_set_role(
-        self, team_slug: str = "", user_id: str = "", role: str = "member"
-    ) -> dict[str, Any]:
-        from frontend.duckyos_account import team_set_role
-
-        return self._duckyos_team_call(
-            team_set_role,
-            team_slug=str(team_slug or ""),
-            user_id=str(user_id or ""),
-            role=str(role or "member"),
-        )
-
-    def duckyos_team_set_roles(self, team_slug: str = "", roles: list | None = None) -> dict[str, Any]:
-        from frontend.duckyos_account import team_set_roles
-
-        return self._duckyos_team_call(
-            team_set_roles, team_slug=str(team_slug or ""), roles=roles or []
-        )
-
-    def duckyos_team_remove_member(self, team_slug: str = "", user_id: str = "") -> dict[str, Any]:
-        from frontend.duckyos_account import team_remove_member
-
-        return self._duckyos_team_call(
-            team_remove_member, team_slug=str(team_slug or ""), user_id=str(user_id or "")
-        )
-
-    def duckyos_team_revoke_invite(self, token: str = "") -> dict[str, Any]:
-        from frontend.duckyos_account import team_revoke_invite
-
-        return self._duckyos_team_call(team_revoke_invite, token=str(token or ""))
 
     def remote_status(self) -> dict[str, Any]:
         from frontend.settings import PanelSettings
@@ -809,7 +717,7 @@ class PanelApiStoreMixin:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    # --- host data service (team plans P3): panels' data.* / files.* / scope.get
+    # --- host data service: panels' data.* / files.* / scope.get
 
     def plugin_data(self, plugin_id: str, op: str, params: dict | None = None) -> dict[str, Any]:
         from backend.uefn_plugins.scopes import ReadOnlyScope, panel_call
@@ -823,7 +731,7 @@ class PanelApiStoreMixin:
 
     def plugin_scope_status(self, plugin_id: str) -> dict[str, Any]:
         """Where one plugin's data lives (scope bar, Plugins page)."""
-        from backend.uefn_plugins.team_sync import scope_status
+        from backend.uefn_plugins.spaces import scope_status
 
         try:
             return scope_status(str(plugin_id or ""))
@@ -831,21 +739,21 @@ class PanelApiStoreMixin:
             return {"ok": False, "visible": False, "error": str(exc)}
 
     def plugin_scope_choices(self) -> dict[str, Any]:
-        """Pickers only: calls the Store hub (never on a timer)."""
-        from backend.uefn_plugins.team_sync import scope_choices
+        """Pickers only: asks the spaces provider (never on a timer)."""
+        from backend.uefn_plugins.spaces import scope_choices
 
         try:
-            return scope_choices()
+            return scope_choices("data")
         except Exception as exc:
             return {"ok": False, "choices": [], "error": str(exc)}
 
     def plugin_scope_set(self, plugin_id: str, scope_id: str) -> dict[str, Any]:
-        """Keep a plugin's data in Local or one team. Nothing moves: the plugin restarts
-        on that scope's own copy, then its open panels reload (``switched``)."""
+        """Keep a plugin's data in Local or one shared space. Nothing moves: the plugin
+        restarts on that scope's own copy, then its open panels reload (``switched``)."""
         import threading
 
         from backend.uefn_plugins.scopes import active_scope
-        from backend.uefn_plugins.team_sync import link_scope, sync_active
+        from backend.uefn_plugins.spaces import link_scope, sync_active
 
         pid = str(plugin_id or "")
         try:
@@ -855,7 +763,7 @@ class PanelApiStoreMixin:
             return {"ok": False, "error": str(exc)}
         self._push_panel({"type": "plugin_scope_changed", "plugins": [pid]})
         sync_active(pid, force=True, on_done=self._scope_synced)
-        if out.get("scope", {}).get("teamId", "") == ("" if before == "personal" else before):
+        if out.get("scope", {}).get("spaceId", "") == ("" if before == "personal" else before):
             return out  # same copy as before: nothing to restart
 
         def _restart() -> None:
@@ -873,22 +781,22 @@ class PanelApiStoreMixin:
         return out
 
     def plugin_scope_sync(self, plugin_id: str, force: bool = False) -> dict[str, Any]:
-        """Scope bar asks on plugin open, focus and each minute; the engine rate-limits."""
-        from backend.uefn_plugins.team_sync import sync_active
+        """Scope bar asks on plugin open, focus and each minute; the provider rate-limits."""
+        from backend.uefn_plugins.spaces import sync_active
 
         try:
             return sync_active(str(plugin_id or ""), force=bool(force), on_done=self._scope_synced)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    def plugin_data_copy_to_team(self, plugin_id: str, team_id: str) -> dict[str, Any]:
-        """One way, on request: a plugin's Local data into one team's copy (theirs is kept)."""
+    def plugin_data_copy_to_space(self, plugin_id: str, space_id: str) -> dict[str, Any]:
+        """One way, on request: a plugin's Local data into one space's copy (theirs is kept)."""
         from backend.uefn_plugins.scopes import ReadOnlyScope, copy_local_into
-        from backend.uefn_plugins.team_sync import sync_active
+        from backend.uefn_plugins.spaces import sync_active
 
         pid = str(plugin_id or "")
         try:
-            out = copy_local_into(pid, str(team_id or ""))
+            out = copy_local_into(pid, str(space_id or ""))
         except (ReadOnlyScope, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
         self._push_panel({"type": "plugin_scope_changed", "plugins": [pid]})
@@ -906,17 +814,15 @@ class PanelApiStoreMixin:
         return {"ok": True}
 
     def plugin_data_open_web(self, plugin_id: str) -> dict[str, Any]:
-        """The team's copy of this plugin's data on the website (team → Plugins)."""
-        from urllib.parse import quote
-
-        from backend.uefn_plugins.team_sync import scope_status
-        from frontend.duckyos_account import open_site_path
+        """The shared space's copy of this plugin's data on the web (the provider knows where)."""
+        from backend.uefn_plugins.scopes import active_scope
+        from backend.uefn_plugins.spaces import provider
 
         pid = str(plugin_id or "")
-        slug = str(scope_status(pid).get("teamSlug") or "")
-        if not slug:
-            return {"ok": False, "error": "This plugin's data isn't shared with a team."}
-        return open_site_path(f"/profile/teams/{quote(slug)}?tab=plugins&plugin={quote(pid)}")
+        scope = active_scope(pid)
+        if scope["kind"] != "shared":
+            return {"ok": False, "error": "This plugin's data isn't shared."}
+        return provider().open_web(space_id=scope["id"], plugin=pid, page="plugins")
 
     def _scope_synced(self, result: dict[str, Any]) -> None:
         self._push_panel(

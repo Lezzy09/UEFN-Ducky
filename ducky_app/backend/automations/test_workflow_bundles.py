@@ -146,7 +146,7 @@ def test_copy_and_move_inside_local():
     with pytest.raises(ValueError):
         bundles.copy_folder("local", "Games", "local", "Games/BrainRot TCG", move=True)
     with pytest.raises(ValueError, match="database store"):
-        bundles.copy_folder("local", "Games", "teamT")
+        bundles.copy_folder("local", "Games", "spaceT")
 
 
 def test_empty_folders_persist_and_follow_renames():

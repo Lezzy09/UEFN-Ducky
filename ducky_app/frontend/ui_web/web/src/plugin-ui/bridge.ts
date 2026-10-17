@@ -322,8 +322,8 @@ export function shouldForwardPluginPush(
 }
 
 /**
- * Host data service (docs + files in the active scope, Personal or the project's
- * team). One panel API dispatcher; the host always uses the iframe's own plugin id.
+ * Host data service (docs + files in the active scope, Personal or a shared space).
+ * One panel API dispatcher; the host always uses the iframe's own plugin id.
  */
 export const HOST_DATA_OPS = [
   "scope.get",

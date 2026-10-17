@@ -1,6 +1,6 @@
 """Panel-process cron/interval loop for workflows. No-ops when the panel is not running.
 
-A team workflow fires only on PCs where a member switched on "Run on this PC".
+A shared workflow fires only on PCs where someone switched on "Run on this PC".
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import threading
 import time
 from datetime import datetime
 
-from backend.automations import team
+from backend.automations import shared
 from backend.automations.runner import is_running, run_workflow
 from backend.automations.store import all_workflows, runs_here
 
@@ -94,7 +94,7 @@ def _tick() -> list[threading.Thread]:
     now = time.time()
     now_dt = datetime.now()
     workflows = all_workflows()
-    team.background(workflows, now)
+    shared.background(workflows, now)
     for wf in workflows:
         if not wf.get("enabled") or not runs_here(wf):
             continue

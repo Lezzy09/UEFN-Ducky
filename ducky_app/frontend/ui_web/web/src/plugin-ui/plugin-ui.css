@@ -308,8 +308,8 @@
   border-radius: 0;
 }
 
-/* Host scope bar (team plans §8): whose data the panel shows. Team = accent,
-   Local = neutral, paused = warning; the badge names the team, or says Local. */
+/* Host scope bar: whose data the panel shows. Shared = accent, Local = neutral,
+   paused = warning; the badge names the shared space, or says Local. */
 .plugin-scope-bar {
   flex: 0 0 auto;
   display: flex;
@@ -335,12 +335,12 @@
   color: var(--fg);
   background: var(--bg-elevated);
 }
-.plugin-scope-bar__badge--team {
+.plugin-scope-bar__badge--shared {
   border-color: var(--accent);
   color: var(--accent);
 }
-/* A dot marks shared data, so the team reads as a team at a glance. */
-.plugin-scope-bar__badge--team::before {
+/* A dot marks shared data, so a shared copy reads as shared at a glance. */
+.plugin-scope-bar__badge--shared::before {
   content: "";
   display: inline-block;
   width: 6px;
@@ -357,7 +357,7 @@
   border-color: var(--warn);
   color: var(--warn);
 }
-.plugin-scope-bar--paused .plugin-scope-bar__badge--team::before {
+.plugin-scope-bar--paused .plugin-scope-bar__badge--shared::before {
   background: var(--warn);
 }
 .plugin-scope-bar__text--error {

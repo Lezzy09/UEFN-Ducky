@@ -1502,7 +1502,7 @@ def _remote_direct_report() -> dict[str, Any]:
 
 
 def send_presence_heartbeat() -> bool:
-    """POST presence to uefn-ducky-store collect (teams hub). Returns False if not logged in / skipped."""
+    """POST this PC's presence to the account's Store hub. Returns False if not logged in / skipped."""
     blob = _load_blob()
     if not (blob.get("device_key") or blob.get("session_value")):
         return False
@@ -1569,7 +1569,7 @@ def publish_device_presence(*, live: bool | None = None) -> None:
 
 
 def start_presence_heartbeat() -> None:
-    """Daemon thread: while logged in, ping team presence about once a minute."""
+    """Daemon thread: while logged in, report this PC's presence about once a minute."""
     global _PRESENCE_THREAD
     with _PRESENCE_LOCK:
         if _PRESENCE_THREAD is not None and _PRESENCE_THREAD.is_alive():
@@ -1912,14 +1912,14 @@ def _plugin_collect(
 
 
 def _collect_payload(event: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-    # Teams live inside uefn-ducky-store (merged from former uefn-teams plugin).
+    """One collect call to the account's Store hub (presence and account events)."""
     return _plugin_collect(
         "uefn-ducky-store",
         event,
         body,
-        unavailable_code="teams_unavailable",
-        unavailable_msg="Ducky Store (teams) is not active on this tenant yet.",
-        error_code="teams_error",
+        unavailable_code="hub_unavailable",
+        unavailable_msg="The Ducky Store is not active on this site yet.",
+        error_code="hub_error",
     )
 
 
@@ -1942,389 +1942,19 @@ def _store_collect(
     )
 
 
-def _is_online(presence: Any, *, stale_seconds: int = 120) -> bool:
-    if not isinstance(presence, dict):
-        return False
-    last = str(presence.get("last_seen") or "")
-    if not last:
-        return False
-    try:
-        from datetime import datetime, timezone
-
-        dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-        age = (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds()
-        return age <= float(stale_seconds)
-    except Exception:
-        return False
-
-
-def teams_snapshot(*, stale_seconds: int = 120) -> dict[str, Any]:
-    """Hub snapshot for the Account tab (one collect call — presence is upserted inside hub)."""
-    blob = _load_blob()
-    if not (blob.get("device_key") or blob.get("session_value")):
-        raise DuckyOSAccountError("Not logged in", code="not_logged_in")
-    email = str(blob.get("email") or "").strip()
-    # Include desktop presence fields so hub's internal upsert stays useful.
-    body = {
-        "email": email,
-        "source": "desktop",
-        "staleSeconds": int(stale_seconds),
-        "projectLabel": _presence_project_label(),
-        "uefnOnline": _presence_uefn_online(),
-        "appVersion": __version__,
-        "direct": True,
-        "directProtocol": 1,
-        "remoteDirect": _remote_direct_report(),
-    }
-    try:
-        hub = _collect_payload("hub", body)
-    except DuckyOSAccountError as exc:
-        return {
-            "ok": False,
-            "error": exc.message,
-            "code": exc.code,
-            "teams": [],
-            "needs_team": True,
-            "online": [],
-            "teams_url": _teams_site_url("/teams"),
-        }
-
-    teams_raw = hub.get("teams") if isinstance(hub.get("teams"), list) else []
-    teams: list[dict[str, Any]] = []
-    online_by_id: dict[str, dict[str, Any]] = {}
-    self_email = email.lower()
-    for entry in teams_raw:
-        if not isinstance(entry, dict):
-            continue
-        team = entry.get("team") if isinstance(entry.get("team"), dict) else {}
-        members_out: list[dict[str, Any]] = []
-        for mem in entry.get("members") or []:
-            if not isinstance(mem, dict):
-                continue
-            presence = mem.get("presence") if isinstance(mem.get("presence"), dict) else {}
-            profile = mem.get("profile") if isinstance(mem.get("profile"), dict) else {}
-            user_id = str(mem.get("userId") or "")
-            mem_email = str(mem.get("email") or "")
-            display = str(profile.get("display_name") or mem_email or user_id or "member")
-            online = _is_online(presence, stale_seconds=stale_seconds)
-            members_out.append(
-                {
-                    "user_id": user_id,
-                    "email": mem_email,
-                    "role": str(mem.get("role") or "member"),
-                    "display_name": display,
-                    "online": online,
-                    "presence": {
-                        "source": str(presence.get("source") or ""),
-                        "project_label": str(presence.get("project_label") or ""),
-                        "uefn_online": bool(presence.get("uefn_online")),
-                        "last_seen": str(presence.get("last_seen") or ""),
-                    },
-                }
-            )
-            if online and user_id and user_id not in online_by_id:
-                online_by_id[user_id] = {
-                    "user_id": user_id,
-                    "display_name": display,
-                    "source": str(presence.get("source") or ""),
-                    "project_label": str(presence.get("project_label") or ""),
-                    "uefn_online": bool(presence.get("uefn_online")),
-                    "is_self": bool(
-                        mem_email.lower() == self_email
-                        if self_email and mem_email
-                        else False
-                    ),
-                }
-        roles = _team_roles(team)
-        my_role = str(entry.get("myRole") or "member")
-        can = entry.get("can") if isinstance(entry.get("can"), dict) else {}
-        pending = []
-        for inv in entry.get("pendingInvites") or []:
-            if not isinstance(inv, dict):
-                continue
-            pending.append(
-                {
-                    "email": str(inv.get("email") or ""),
-                    "role": str(inv.get("role") or "member"),
-                    "token": str(inv.get("token") or ""),
-                }
-            )
-        teams.append(
-            {
-                "id": str(team.get("id") or ""),
-                "name": str(team.get("name") or ""),
-                "slug": str(team.get("slug") or ""),
-                "description": str(team.get("description") or ""),
-                "my_role": my_role,
-                "members": members_out,
-                "roles": roles,
-                "pending_invites": pending,
-                "perms": {
-                    "invite": _role_has(roles, my_role, "invite"),
-                    "revoke_invite": _role_has(roles, my_role, "revoke_invite"),
-                    "change_role": _role_has(roles, my_role, "change_role"),
-                    "remove_member": _role_has(roles, my_role, "remove_member"),
-                    "edit_team": _role_has(roles, my_role, "edit_team"),
-                    "manage_roles": _role_has(roles, my_role, "manage_roles"),
-                    "manage_plugins": _role_has(roles, my_role, "manage_plugins"),
-                    # The Store refuses team workflow pushes without it: trust its own flag first.
-                    "manage_automations": bool(can.get("manage_automations", _role_has(roles, my_role, "manage_automations"))),
-                },
-                # Team Private status + storage: the plugin scope picker lists only active teams.
-                "private_plan": (entry.get("plans") or {}).get("private") if isinstance(entry.get("plans"), dict) else None,
-                "storage": entry.get("storage") if isinstance(entry.get("storage"), dict) else None,
-            }
-        )
-
-    quota_raw = hub.get("quota") if isinstance(hub.get("quota"), dict) else {}
-    try:
-        max_owned = int(quota_raw.get("maxOwned") or 1)
-    except (TypeError, ValueError):
-        max_owned = 1
-    try:
-        owned_count = int(quota_raw.get("ownedCount") or 0)
-    except (TypeError, ValueError):
-        owned_count = 0
-    return {
-        "ok": True,
-        "teams": teams,
-        "needs_team": bool(hub.get("needsTeam")) or not teams,
-        "online": list(online_by_id.values()),
-        "teams_url": _teams_site_url("/teams"),
-        "invite_url": _teams_site_url("/login"),
-        "stale_seconds": int(stale_seconds),
-        "quota": {
-            "can_create": bool(quota_raw.get("canCreate")),
-            "max_owned": max_owned,
-            "owned_count": owned_count,
-        },
-    }
-
-
-def _teams_site_url(path: str) -> str:
+def site_url(path: str = "/") -> str:
+    """Absolute URL of a path on the signed-in account's website."""
     blob = _load_blob()
     base = str(blob.get("base_url") or resolve_base_url()).rstrip("/")
-    path = path if path.startswith("/") else f"/{path}"
+    path = path if (path or "").startswith("/") else f"/{path or ''}"
     return f"{base}{path}"
 
 
-_NAME_NOT_ALLOWED = "That name isn't allowed."
-_BLOCKED_NAMES = frozenset(
-    (
-        "ass",
-        "asshole",
-        "bastard",
-        "bitch",
-        "cock",
-        "crap",
-        "cunt",
-        "dick",
-        "dildo",
-        "dyke",
-        "fag",
-        "faggot",
-        "fuck",
-        "fuckin",
-        "fucking",
-        "goddamn",
-        "nigga",
-        "nigger",
-        "penis",
-        "piss",
-        "pussy",
-        "rape",
-        "shit",
-        "slut",
-        "tit",
-        "tits",
-        "twat",
-        "vagina",
-        "wank",
-        "whore",
-    )
-)
-_DEFAULT_TEAM_ROLES = (
-    {"id": "owner", "name": "Owner", "builtin": True, "perms": ["*"]},
-    {
-        "id": "admin",
-        "name": "Admin",
-        "builtin": True,
-        "perms": [
-            "invite",
-            "revoke_invite",
-            "change_role",
-            "remove_member",
-            "edit_team",
-            "manage_plugins",
-        ],
-    },
-    {"id": "member", "name": "Member", "builtin": True, "perms": []},
-)
-
-
-def _fold_leet(ch: str) -> str:
-    c = ch.lower()
-    if c == "0":
-        return "o"
-    if c in ("1", "!"):
-        return "i"
-    if c == "3":
-        return "e"
-    if c == "4":
-        return "a"
-    if c in ("5", "$"):
-        return "s"
-    if c == "7":
-        return "t"
-    if c == "@":
-        return "a"
-    return c
-
-
-def name_allowed(raw: str) -> bool:
-    """Same token rule as duckyos-input::filter_profanity — reject if it would change."""
-    out: list[str] = []
-    folded: list[str] = []
-    orig: list[str] = []
-
-    def flush() -> None:
-        if not orig:
-            return
-        token = "".join(folded)
-        out.extend(["*"] * len(orig) if token in _BLOCKED_NAMES else orig)
-        folded.clear()
-        orig.clear()
-
-    for c in raw:
-        if (c.isascii() and c.isalnum()) or c in "@$!":
-            orig.append(c)
-            folded.append(_fold_leet(c))
-            continue
-        flush()
-        out.append(c)
-    flush()
-    return "".join(out) == raw
-
-
-def _require_clean_name(name: str) -> str:
-    s = (name or "").strip()
-    if not s:
-        raise DuckyOSAccountError("name required", code="bad_name")
-    if not name_allowed(s):
-        raise DuckyOSAccountError(_NAME_NOT_ALLOWED, code="bad_name")
-    return s
-
-
-def _team_roles(team: dict[str, Any]) -> list[dict[str, Any]]:
-    raw = team.get("roles")
-    if not isinstance(raw, list) or not raw:
-        return [dict(r) for r in _DEFAULT_TEAM_ROLES]
-    out: list[dict[str, Any]] = []
-    for row in raw:
-        if not isinstance(row, dict):
-            continue
-        perms = [str(p) for p in (row.get("perms") or []) if str(p)]
-        out.append(
-            {
-                "id": str(row.get("id") or ""),
-                "name": str(row.get("name") or row.get("id") or ""),
-                "builtin": bool(row.get("builtin")),
-                "perms": perms,
-            }
-        )
-    return out or [dict(r) for r in _DEFAULT_TEAM_ROLES]
-
-
-def _role_has(roles: list[dict[str, Any]], role_id: str, perm: str) -> bool:
-    if role_id == "owner":
-        return True
-    if perm == "manage_roles":
-        return False
-    for row in roles:
-        if str(row.get("id") or "") == role_id:
-            perms = row.get("perms") or []
-            return "*" in perms or perm in perms
-    return role_id == "admin" and perm != "manage_roles"
-
-
-def team_create(*, name: str) -> dict[str, Any]:
-    return _collect_payload("create-team", {"name": _require_clean_name(name)})
-
-
-def team_update(*, team_slug: str, name: str | None = None) -> dict[str, Any]:
-    body: dict[str, Any] = {"teamSlug": str(team_slug or "").strip()}
-    if name is not None:
-        body["name"] = _require_clean_name(name)
-    return _collect_payload("update-team", body)
-
-
-def team_invite(*, team_slug: str, email: str, role: str = "member") -> dict[str, Any]:
-    body: dict[str, Any] = {
-        "teamSlug": str(team_slug or "").strip(),
-        "email": str(email or "").strip(),
-        "role": str(role or "member").strip() or "member",
-        "joinPath": "/login",
-    }
-    blob = _load_blob()
-    base = str(blob.get("base_url") or resolve_base_url()).rstrip("/")
-    if base.startswith("https://"):
-        body["origin"] = base
-    return _collect_payload("invite", body)
-
-
-def team_set_role(*, team_slug: str, user_id: str, role: str) -> dict[str, Any]:
-    return _collect_payload(
-        "set-role",
-        {
-            "teamSlug": str(team_slug or "").strip(),
-            "userId": str(user_id or "").strip(),
-            "role": str(role or "member").strip(),
-        },
-    )
-
-
-def team_set_roles(*, team_slug: str, roles: list[Any]) -> dict[str, Any]:
-    clean: list[dict[str, Any]] = []
-    for row in roles or []:
-        if not isinstance(row, dict):
-            continue
-        name = str(row.get("name") or "").strip()
-        if name:
-            _require_clean_name(name)
-        perms = [str(p) for p in (row.get("perms") or []) if str(p)]
-        clean.append(
-            {
-                "id": str(row.get("id") or ""),
-                "name": name,
-                "builtin": bool(row.get("builtin")),
-                "perms": perms,
-            }
-        )
-    return _collect_payload(
-        "set-team-roles",
-        {"teamSlug": str(team_slug or "").strip(), "roles": clean},
-    )
-
-
-def team_remove_member(*, team_slug: str, user_id: str) -> dict[str, Any]:
-    return _collect_payload(
-        "remove-member",
-        {
-            "teamSlug": str(team_slug or "").strip(),
-            "userId": str(user_id or "").strip(),
-        },
-    )
-
-
-def team_revoke_invite(*, token: str) -> dict[str, Any]:
-    return _collect_payload("revoke-invite", {"token": str(token or "").strip()})
-
-
-def open_site_path(path: str = "/teams") -> dict[str, Any]:
-    """Open a tenant website path in the system browser (teams create/manage UI lives there)."""
+def open_site_path(path: str = "/") -> dict[str, Any]:
+    """Open a path of the account's website in the system browser."""
     import webbrowser
 
-    url = _teams_site_url(path or "/teams")
+    url = site_url(path or "/")
     webbrowser.open(url, new=2)
     return {"ok": True, "url": url}
 
@@ -2398,13 +2028,20 @@ def _local_plugin_icon_fields(plug: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _store_team_fields(raw: dict[str, Any]) -> dict[str, Any]:
-    """Owning team for the library's Team category. Missing fields = not my team."""
+def _store_audience_fields(raw: dict[str, Any]) -> dict[str, Any]:
+    """Who a Store item is for: public, or private to an audience the spaces provider
+    reads from the Store row (``audience_id``, ``audience_label``, ``mine``)."""
+    try:
+        from backend.uefn_plugins.spaces import provider
+
+        extra = provider().catalog_item(raw) or {}
+    except Exception:
+        extra = {}
     return {
         "visibility": "private" if raw.get("visibility") == "private" else "public",
-        "owner_team_id": str(raw.get("owner_team_id") or "") or None,
-        "owner_team_name": str(raw.get("owner_team_name") or ""),
-        "my_team": raw.get("my_team") is True,
+        "audience_id": str(extra.get("audience_id") or "") or None,
+        "audience_label": str(extra.get("audience_label") or ""),
+        "mine": extra.get("mine") is True,
     }
 
 
@@ -2412,8 +2049,8 @@ def store_catalog() -> dict[str, Any]:
     """Published store items + local install/update state for skills and UEFN plugins.
 
     Fetched as the signed-in account when there is one (``api_request`` attaches
-    its credentials even with ``allow_anonymous``), so members get their teams'
-    private items; signed out it is the anonymous public catalog.
+    its credentials even with ``allow_anonymous``), so private items shared with the
+    account show; signed out it is the anonymous public catalog.
     """
     try:
         payload = _store_collect("catalog", {}, allow_anonymous=True, timeout=20.0)
@@ -2502,7 +2139,7 @@ def store_catalog() -> dict[str, Any]:
         remote_display = format_plugin_version(latest or raw.get("pack_version") or 0)
 
         icon_fields = _store_icon_fields_from_remote(raw)
-        team = _store_team_fields(raw)
+        audience = _store_audience_fields(raw)
         local_rank = None
         local_display = None
         enabled = None
@@ -2545,7 +2182,7 @@ def store_catalog() -> dict[str, Any]:
                             "source": source,
                             "state": state,
                             "contributes_summary": _plugin_contributes_summary(plug),
-                            **team,
+                            **audience,
                             **icon_fields,
                         }
                     )
@@ -2604,7 +2241,7 @@ def store_catalog() -> dict[str, Any]:
                 "source": source,
                 "state": state,
                 "contributes_summary": contrib_summary,
-                **team,
+                **audience,
                 **icon_fields,
             }
         )
@@ -2638,28 +2275,23 @@ def store_catalog() -> dict[str, Any]:
                 **_local_plugin_icon_fields(plug),
             }
         )
-    # Teams are a gated beta (uefn-ducky-store.teams): only then does the library show them.
-    teams = payload.get("teams") is True
-    return {"ok": True, "items": items_out, "teams": teams, "teamsInfo": _teams_info(payload) if teams else []}
+    # Private audiences are optional: only when the spaces provider says so does the
+    # library show its Shared category.
+    try:
+        from backend.uefn_plugins.spaces import provider
 
-
-def _teams_info(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Per-team library notes (Team Private paused → N private plugins hidden)."""
-    out: list[dict[str, Any]] = []
-    for row in payload.get("teamsInfo") if isinstance(payload.get("teamsInfo"), list) else []:
-        if not isinstance(row, dict) or not str(row.get("teamId") or ""):
-            continue
-        try:
-            hidden = max(0, int(row.get("hiddenPrivate") or 0))
-        except (TypeError, ValueError):
-            hidden = 0
-        out.append({
-            "teamId": str(row.get("teamId")),
-            "name": str(row.get("name") or ""),
-            "privateActive": row.get("privateActive") is True,
-            "hiddenPrivate": hidden,
-        })
-    return out
+        extras = provider().catalog_extras(payload) or {}
+    except Exception:
+        extras = {}
+    audiences = extras.get("audiences") is True
+    return {
+        "ok": True,
+        "items": items_out,
+        "audiences": audiences,
+        "audienceNotes": list(extras.get("audienceNotes") or []) if audiences else [],
+        "audienceCategoryLabel": str(extras.get("audienceCategoryLabel") or "Shared"),
+        "audienceEmpty": extras.get("audienceEmpty") if audiences and isinstance(extras.get("audienceEmpty"), dict) else None,
+    }
 
 
 def store_item_versions(slug: str, latest_version: str | None = None) -> dict[str, Any]:
@@ -2807,8 +2439,8 @@ def store_download_and_install(
 ) -> dict[str, Any]:
     """Download a published skill or plugin zip and install into AppData.
 
-    Sent as the signed-in account when there is one (private team items are
-    members-only, server-enforced); anonymous otherwise.
+    Sent as the signed-in account when there is one (private items are only for
+    their audience, server-enforced); anonymous otherwise.
 
     Pass ``is_update=True`` when the pack is already installed locally so the
     Store does not increment ``install_count``.

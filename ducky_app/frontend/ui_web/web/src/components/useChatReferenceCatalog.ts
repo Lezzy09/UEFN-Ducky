@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { kindTitle } from "../plugin-ui/scopeBarText";
 import { getApi } from "../hooks/usePanelApi";
 import { usePluginContributions } from "../hooks/usePluginContributions";
 import { chatMentionGroup, dedupeChatRefs, orderChatMentions, type ChatRef } from "./chatReferences";
@@ -97,7 +98,7 @@ export function useChatReferenceCatalog(
 
       const slash: ChatRef[] = [];
       for (const workflow of workflows?.workflows || []) {
-        const owner = workflow.owner?.kind === "team" ? `Team ${workflow.owner.label}` : "Local";
+        const owner = workflow.owner?.kind === "shared" ? `${kindTitle(workflow.owner.kindLabel)} ${workflow.owner.label}` : "Local";
         const about = workflow.description || "Run this workflow with the request you type after it";
         slash.push(chatRef("/", `workflow:${workflow.id}`, workflow.name || "Untitled workflow", "Workflows", `workflow:${workflow.id}`, `${owner} · ${about}`));
       }

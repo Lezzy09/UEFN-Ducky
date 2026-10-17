@@ -36,7 +36,7 @@ tool from plain words. Decision record: [ADR 0004](../adr/0004-search-index-in-d
   is `personal`), so one person never reads or clears another's records on a shared PC.
   Records have no other source: a rebuild keeps them and re-embeds them. They go with
   an uninstall (and the plugin's later writes are refused until it is installed again),
-  with a purged team copy, and with a plugin-test sandbox (when the test ends, or six
+  with a purged shared copy, and with a plugin-test sandbox (when the test ends, or six
   hours later if the app closed first).
 
 The vector of a row is computed from its heading path ("pack > file > section")

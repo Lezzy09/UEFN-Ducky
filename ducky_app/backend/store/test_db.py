@@ -172,6 +172,7 @@ def test_upgrade_from_previous_schema_does_not_deadlock(tmp_path: Path) -> None:
         conn.execute(f"DROP TRIGGER {trigger}")
     conn.execute("DROP TABLE search_fts")
     conn.execute("ALTER TABLE search_docs DROP COLUMN summary")
+    conn.execute("DROP TABLE space_meta")  # 0012 makes it under its first name, 0019 renames it
     conn.execute("PRAGMA user_version=8")
     db.reset_for_tests()
 

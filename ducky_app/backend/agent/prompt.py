@@ -358,7 +358,7 @@ def get_system_prompt_parts(
         "(draft → validate → install → test; the user trusts it once) to add panels, tools, "
         "workflow nodes, themes or any contribution — never edit core app files. "
         "Read `skill_read_subskill(\"ducky\", \"ai_plugins\")` before authoring; plugins "
-        "reach other people only through the Store (`ducky_plugin_publish`, team or public). "
+        "reach other people only through the Store (`ducky_plugin_publish`). "
         "For **reusable Verse scaffolds** (single file or multi-file system packs) use "
         "`ducky_verse_template_*` on custom AppData templates only — never edit Store "
         "`verse_template_*` packs; prefer applying a template over pasting one-off code.\n\n"
@@ -468,7 +468,7 @@ def assemble_system_prompt(parts: dict[str, str], *, omit: frozenset[str] | None
             "(draft → validate → install → test; the user trusts it once) to add panels, tools, "
             "workflow nodes, themes or any contribution — never edit core app files. "
             "Read `skill_read_subskill(\"ducky\", \"ai_plugins\")` before authoring; plugins "
-            "reach other people only through the Store (`ducky_plugin_publish`, team or public). "
+            "reach other people only through the Store (`ducky_plugin_publish`). "
             "For **reusable Verse scaffolds** use `ducky_verse_template_*` (custom only; "
             "never Store `verse_template_*`).\n"
         )

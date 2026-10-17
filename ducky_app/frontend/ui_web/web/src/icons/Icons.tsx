@@ -598,7 +598,7 @@ export const Icons = {
       <path d="M9 6h3a2 2 0 012 2v8a2 2 0 002 2" />
     </svg>
   ),
-  /** Move or copy something somewhere else (Local ↔ team). */
+  /** Move or copy something somewhere else (Local ↔ a shared space). */
   Share: () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M4 12v7a2 2 0 002 2h12a2 2 0 002-2v-7" />

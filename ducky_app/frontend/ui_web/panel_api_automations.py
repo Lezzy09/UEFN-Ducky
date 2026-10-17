@@ -54,38 +54,38 @@ class PanelApiAutomationsMixin:
         return {"ok": True, "workflows": list_workflows()}
 
     def workflow_owners(self, refresh: bool = False) -> dict[str, Any]:
-        """Folders for the list. ``refresh`` asks the Store for the account's teams
-        (one hub call, when the view opens)."""
-        from backend.automations import team
+        """Folders for the list. ``refresh`` asks the spaces provider which spaces the
+        account has (when the view opens)."""
+        from backend.automations import shared
 
         try:
-            return team.refresh_teams() if refresh else team.owners()
+            return shared.refresh_spaces() if refresh else shared.owners()
         except Exception as exc:
             return _refused(exc)
 
-    def workflow_sync(self, force: bool = False, team_id: str = "", upload: bool = False) -> dict[str, Any]:
-        """Team rounds while the Workflows view is open. A team id (Save, Update
-        online) pushes that team's workflows and waits for the round."""
-        from backend.automations import team
+    def workflow_sync(self, force: bool = False, space_id: str = "", upload: bool = False) -> dict[str, Any]:
+        """Shared rounds while the Workflows view is open. A space id (Save, Update
+        online) pushes that space's workflows and waits for the round."""
+        from backend.automations import shared
 
         try:
-            return team.sync(force=bool(force), team_id=str(team_id or ""), upload=bool(upload))
+            return shared.sync(force=bool(force), space_id=str(space_id or ""), upload=bool(upload))
         except Exception as exc:
             return _refused(exc)
 
-    def workflow_open_web(self, team_id: str) -> dict[str, Any]:
-        from backend.automations import team
+    def workflow_open_web(self, space_id: str) -> dict[str, Any]:
+        from backend.automations import shared
 
         try:
-            return team.open_web(str(team_id or ""))
+            return shared.open_web(str(space_id or ""))
         except Exception as exc:
             return _refused(exc)
 
     def import_local_workflows(self) -> dict[str, Any]:
-        from backend.automations import team
+        from backend.automations import shared
 
         try:
-            return team.import_local()
+            return shared.import_local()
         except (PermissionError, ValueError) as exc:
             return _refused(exc)
 
@@ -152,7 +152,7 @@ class PanelApiAutomationsMixin:
             return _refused(exc)
 
     def add_workflow_folder(self, owner: str, path: str) -> dict[str, Any]:
-        """Make a folder that may hold nothing yet (a team's syncs to every member)."""
+        """Make a folder that may hold nothing yet (a shared space's syncs to everyone in it)."""
         from backend.automations.store import add_folder
 
         try:
@@ -183,7 +183,7 @@ class PanelApiAutomationsMixin:
 
     def copy_workflow_folder(self, owner_from: str, path: str, owner_to: str, parent_path: str = "",
                              move: bool = False) -> dict[str, Any]:
-        """Copy or move a whole folder tree to Local or a team, Run workflow steps intact."""
+        """Copy or move a whole folder tree to Local or a shared space, Run workflow steps intact."""
         from backend.automations.bundles import copy_folder
 
         try:
@@ -306,9 +306,9 @@ class PanelApiAutomationsMixin:
         if node is None or node.get("type") != "code.js":
             return {"ok": False, "error": "That node isn't Custom code in the saved workflow; save first."}
         if not is_local(wf):
-            from backend.automations.code_approval import TEAM_REFUSAL
+            from backend.automations.code_approval import SHARED_REFUSAL
 
-            return {"ok": False, "error": TEAM_REFUSAL}
+            return {"ok": False, "error": SHARED_REFUSAL}
         sha = node_sha(node)
         if str(code_sha or "").strip() != sha:
             return {"ok": False, "error": "The code changed since you opened it; review it again.", "code_sha": sha}

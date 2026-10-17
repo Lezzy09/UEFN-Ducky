@@ -182,12 +182,12 @@ rules and a complete plugin, and says which of these to load next:
 | Reference | When |
 |---|---|
 | `plugin_look` | Any panel, dock, editor or theme: the UI kit, every Appearance variable, panel states |
-| `plugin_data` | The plugin stores anything; Local or one team; `sensitive` |
-| `plugin_publishing` | Sharing through the Store, team or public, licenses, what compiles |
+| `plugin_data` | The plugin stores anything; Local or one shared space; `sensitive` |
+| `plugin_publishing` | Sharing through the Store, licenses, what compiles |
 | `plugin_testing` | After every change: validate, test, errors |
 | `plugin_known_problems` | Before you say it's done |
 | `plugin_examples_ui` | Dashboard tab, dock, file editor, theme |
-| `plugin_examples_tools` | Tools only, workflow nodes and templates, settings and secrets, connection checks, team data |
+| `plugin_examples_tools` | Tools only, workflow nodes and templates, settings and secrets, connection checks, shared data |
 | `plugin_examples_uefn` | Verse templates, UEFN listener tools, Blender and Meshy pipelines |
 | `plugin_examples_app` | Image generators, AI providers, sounds and hooks, walkthroughs |
 
@@ -195,9 +195,8 @@ The rules every plugin follows: `ducky_plugin_list` first and never glob or shel
 AppData; search `ducky_find_tools` and reuse tools with `api.call_tool`; an
 `@api.tool()` and a workflow node for every user action; the UI kit and Appearance
 variables only (never color literals); data only through `api.data`; validate, test
-and read errors after every change; share only through the Store
-(`ducky_plugin_publish` to a team or public; `ducky_plugin_build` checks the build
-first). Never git-clone a Store plugin,
+and read errors after every change; share only through the Store (the publishing
+tools come with the Ducky Account plugin; `plugin_publishing`). Never git-clone a Store plugin,
 never edit the EXE, never `ducky_skills_create_pack` unless they asked for a skill
 pack.
 

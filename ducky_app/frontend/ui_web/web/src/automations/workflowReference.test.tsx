@@ -13,7 +13,7 @@ const api = vi.hoisted(() => ({
   list_project_file_paths: vi.fn().mockResolvedValue([]),
   list_workflows: vi.fn().mockResolvedValue({ workflows: [
     { id: "saved-id", name: "Build island", enabled: true, owner: { id: "local", kind: "local", label: "Local" } },
-    { id: "team-id", name: "Nightly", enabled: true, owner: { id: "teamT", kind: "team", label: "Alpha Studio" } },
+    { id: "shared-id", name: "Nightly", enabled: true, owner: { id: "spaceT", kind: "shared", label: "Alpha Studio" } },
   ] }),
 }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
@@ -26,7 +26,7 @@ it("offers saved workflows in slash references with their owner and preserves th
   const ref = result.current.slashRefs.find((row) => row.href === "workflow:saved-id")!;
   expect(ref.group).toBe("Workflows");
   expect(ref.description).toMatch(/^Local · /);
-  expect(result.current.slashRefs.find((row) => row.href === "workflow:team-id")?.description).toMatch(/^Team Alpha Studio · /);
+  expect(result.current.slashRefs.find((row) => row.href === "workflow:shared-id")?.description).toMatch(/^Space Alpha Studio · /);
   const inserted = insertChatRef("/build make a red tower", { trigger: "/", query: "build", start: 0, end: 6 }, ref.label, ref.href);
   expect(inserted.text).toContain("make a red tower");
   expect(findChatRefTokens(inserted.text)[0].href).toBe("workflow:saved-id");

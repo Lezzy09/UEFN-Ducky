@@ -1,6 +1,7 @@
 """Per-account workflow state that never syncs (migration 0012): the run log, last
-run and "Run on this PC" (``workflow_runtime``), plus what the account may do in
-each team (``team_perms``). The workflow docs themselves are ``plugin_data`` rows.
+run and "Run on this PC" (``workflow_runtime``), plus one meta row per shared space
+(``space_meta``, 0019): whether this account may change the space's workflows, and the
+space's web page. The workflow docs themselves are ``plugin_data`` rows.
 """
 
 from __future__ import annotations
@@ -45,32 +46,34 @@ def runtime_delete(account: str, workflow_ids: list[str]) -> None:
         )
 
 
-def perms_get(account: str, team: str) -> bool:
+def workflows_writable(account: str, space: str) -> bool:
     r = db.connect().execute(
-        "SELECT manage_automations FROM team_perms WHERE account_id=? AND team_id=?", (account, team)
+        "SELECT workflows_writable FROM space_meta WHERE account_id=? AND space_id=?", (account, space)
     ).fetchone()
     return bool(r and r[0])
 
 
-def perms_put(account: str, team: str, *, manage_automations: bool, slug: str = "") -> None:
+def meta_put(account: str, space: str, *, workflows_writable: bool, web_slug: str = "") -> None:
     conn = db.connect()
     with db.write_txn(conn):
         conn.execute(
-            "INSERT OR REPLACE INTO team_perms(account_id, team_id, manage_automations, slug, updated) "
+            "INSERT OR REPLACE INTO space_meta(account_id, space_id, workflows_writable, web_slug, updated) "
             "VALUES (?, ?, ?, ?, ?)",
-            (account, team, 1 if manage_automations else 0, slug, time.time()),
+            (account, space, 1 if workflows_writable else 0, web_slug, time.time()),
         )
 
 
-def team_slug(account: str, team: str) -> str:
-    """The team's web slug (``/profile/teams/{slug}``), ``""`` until the hub was read once."""
-    r = db.connect().execute("SELECT slug FROM team_perms WHERE account_id=? AND team_id=?", (account, team)).fetchone()
+def web_slug(account: str, space: str) -> str:
+    """The space's web page id, ``""`` until the provider recorded it."""
+    r = db.connect().execute(
+        "SELECT web_slug FROM space_meta WHERE account_id=? AND space_id=?", (account, space)
+    ).fetchone()
     return str(r[0]) if r else ""
 
 
-def synced_teams(account: str) -> list[str]:
-    """Teams this account has a sync row for (linked or listed once), in label order."""
+def synced_spaces(account: str) -> list[str]:
+    """Spaces this account has a sync row for (linked or listed once), in label order."""
     rows = db.connect().execute(
-        "SELECT team_id FROM scope_sync WHERE account_id=? ORDER BY label COLLATE NOCASE, team_id", (account,)
+        "SELECT space_id FROM scope_sync WHERE account_id=? ORDER BY label COLLATE NOCASE, space_id", (account,)
     ).fetchall()
     return [str(r[0]) for r in rows]

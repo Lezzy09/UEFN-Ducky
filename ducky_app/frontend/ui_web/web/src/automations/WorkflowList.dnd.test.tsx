@@ -9,8 +9,8 @@ import { WorkflowList } from "./WorkflowList";
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => ({}) }));
 
 const LOCAL: WorkflowOwnerDto = { id: "local", kind: "local", label: "Local", readOnly: false };
-const TEAM: WorkflowOwnerDto = { id: "teamA", kind: "team", label: "Alpha", readOnly: false };
-const LOCKED: WorkflowOwnerDto = { id: "teamB", kind: "team", label: "Beta", readOnly: true, reason: "No Manage automations" };
+const SHARED: WorkflowOwnerDto = { id: "spaceA", kind: "shared", label: "Alpha", readOnly: false };
+const LOCKED: WorkflowOwnerDto = { id: "spaceB", kind: "shared", label: "Beta", readOnly: true, reason: "No permission" };
 
 const row = (id: string, folder: string, owner = LOCAL): AutomationSummaryDto =>
   ({ id, name: id, enabled: true, folder, owner, trigger: { kind: "manual", label: "Manual" } }) as AutomationSummaryDto;
@@ -25,8 +25,8 @@ function mount(onMoveWorkflow = vi.fn(async () => undefined), onMoveFolder = vi.
   render(
     <UndoHistoryProvider>
       <Shortcuts />
-      <WorkflowList listId="list" listRef={{ current: null }} owners={{ owners: [LOCAL, TEAM, LOCKED] }}
-        rows={[row("Main", "Kit"), row("Helper", "Kit/Lib"), row("Loose", ""), row("Shared", "", TEAM)]} activeId=""
+      <WorkflowList listId="list" listRef={{ current: null }} owners={{ owners: [LOCAL, SHARED, LOCKED] }}
+        rows={[row("Main", "Kit"), row("Helper", "Kit/Lib"), row("Loose", ""), row("Shared", "", SHARED)]} activeId=""
         collapsed={false} nowMs={0} onToggleCollapsed={() => {}} onOpen={() => {}} onCreate={() => {}} onImportLocal={() => {}}
         onMoveWorkflow={onMoveWorkflow} onMoveFolder={onMoveFolder} />
     </UndoHistoryProvider>,
@@ -79,10 +79,10 @@ describe("Workflows list on the shared drag engine", () => {
     expect(onMoveFolder).toHaveBeenCalledExactlyOnceWith("local", "Kit/Lib", "Lib");
   });
 
-  it("never files into another owner or a read-only team", () => {
+  it("never files into another owner or a read-only space", () => {
     const { onMoveWorkflow } = mount();
-    dragTo(workflowRow("Loose"), ownerHead("Team · Alpha"));
-    dragTo(workflowRow("Loose"), ownerHead("Team · Beta"));
+    dragTo(workflowRow("Loose"), ownerHead("Space · Alpha"));
+    dragTo(workflowRow("Loose"), ownerHead("Space · Beta"));
     dragTo(workflowRow("Shared"), ownerHead("Local"));
     expect(onMoveWorkflow).not.toHaveBeenCalled();
   });

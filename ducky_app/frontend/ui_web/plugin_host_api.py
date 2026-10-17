@@ -1,10 +1,10 @@
 """Generic plugin host helpers: LLM complete + JSON cache (not feature-specific).
 
 Cache and prefs belong to the signed-in account and live in the scope the plugin's
-data lives in (Local, or its team): never synced, so each team has its own on this
-PC. A team whose access was lost hides them (read-only) until access comes back,
-and they go with its copy a week later. Data a team shares goes through the host
-data service (``backend.uefn_plugins.scopes``).
+data lives in (Local, or a shared space): never synced, so each space has its own on
+this PC. A space whose access was lost hides them (read-only) until access comes back,
+and they go with its copy. Data a space shares goes through the host data service
+(``backend.uefn_plugins.scopes``).
 """
 
 from __future__ import annotations
@@ -74,8 +74,8 @@ def _mine() -> dict[str, str]:
 
 def _where(plugin_id: str) -> tuple[dict[str, str], bool]:
     """``plugin_id``'s cache + prefs rows: the account's, in the scope its data lives in
-    now (Local, its team, or a plugin test's sandbox). ``closed`` when access to that
-    team was lost: the rows are hidden and read-only until access comes back."""
+    now (Local, a shared space, or a plugin test's sandbox). ``closed`` when access to
+    that space was lost: the rows are hidden and read-only until access comes back."""
     from backend.uefn_plugins.scopes import active_scope, valid_plugin_id
 
     mine = _mine()
@@ -88,7 +88,7 @@ def _where(plugin_id: str) -> tuple[dict[str, str], bool]:
 def _closed_error(plugin_id: str) -> Exception:
     from backend.uefn_plugins.scopes import ReadOnlyScope
 
-    return ReadOnlyScope(f"{plugin_id}: access to this team was lost. Its data on this PC is locked.")
+    return ReadOnlyScope(f"{plugin_id}: access to this space was lost. Its data on this PC is locked.")
 
 
 def _seal(data: dict[str, Any], account: str) -> str:
@@ -238,8 +238,8 @@ def prefs_all_path() -> Path:
 
 def _scoped_prefs(mine: dict[str, str]) -> dict[str, tuple[str, bool]]:
     """Every plugin's stored prefs row, each from the scope its data lives in: Local
-    rows, with plugins kept in a team (or a test sandbox) read from there instead,
-    and none for a team whose access was lost."""
+    rows, with plugins kept in a shared space (or a test sandbox) read from there
+    instead, and none for a space whose access was lost."""
     from backend.store.repos import plugin_data
     from backend.uefn_plugins.scopes import sandboxed_plugins
 
@@ -249,7 +249,7 @@ def _scoped_prefs(mine: dict[str, str]) -> dict[str, tuple[str, bool]]:
     for pid in set(plugin_data.links(mine["account"])) | sandboxed_plugins():
         where, closed = _where(pid)
         if where["scope"] == mine["scope"]:
-            continue  # the team isn't available here: its data is Local again
+            continue  # the space isn't available here: its data is Local again
         rows.pop(pid, None)
         if closed:
             continue
@@ -333,7 +333,7 @@ def prefs_all_set(all_prefs: dict[str, Any]) -> dict[str, Any]:
                         continue
                     where, closed = _where(pid)
                     if closed:
-                        bag.pop(pid, None)  # a lost team's prefs stay locked as they were
+                        bag.pop(pid, None)  # a lost space's prefs stay locked as they were
                         continue
                     # Sealed for the account; raises while its data key is missing (never plaintext).
                     repo.set_prefs(pid, _seal(bag[pid], where["account"]), **where)

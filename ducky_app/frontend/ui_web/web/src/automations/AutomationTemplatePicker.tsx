@@ -59,9 +59,9 @@ interface AutomationTemplatePickerProps {
   onClose: () => void;
   onSelect: (template: AutomationTemplateDto | null) => void;
   currentGraph?: AutomationGraphDto | null;
-  /** Where the new workflow will live ("Local", "Team · Alpha Studio"). */
+  /** Where the new workflow will live ("Local", or a shared space by kind and name). */
   ownerLabel?: string;
-  /** Local and each team. The footer lets you pick before the workflow is created. */
+  /** Local and each shared space. The footer lets you pick before the workflow is created. */
   owners?: WorkflowOwnerDto[];
   ownerId?: string;
   onOwnerChange?: (ownerId: string) => void;

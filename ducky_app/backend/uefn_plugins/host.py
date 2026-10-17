@@ -132,7 +132,7 @@ _TOOL_LAST_OWNER: dict[str, str] = {}
 _LOAD_FAILURES: dict[str, str] = {}
 # api.tool(listener=False) — host-cache / non-editor tools (skip UEFN listener gate).
 _PLUGIN_HOST_ONLY_TOOLS: set[str] = set()
-# Plugins that touched api.data: their tool results name the scope ("team Alpha Studio").
+# Plugins that touched api.data: their tool results name the scope ("space Alpha Studio").
 _DATA_PLUGINS: set[str] = set()
 # secret_key → {plugin_id, test_fn} — Settings "Test" for plugin API keys (e.g. Meshy).
 _SECRET_TESTERS: dict[str, dict[str, Any]] = {}
@@ -875,6 +875,12 @@ def invalidate_plugin_runtime(plugin_id: str, *, unload_timeout: float = 5.0) ->
     except ValueError:
         return
     mod_name = backend_module_name(pid)
+    try:  # a shared-spaces provider stops providing when its plugin unloads
+        from backend.uefn_plugins import spaces
+
+        spaces.unregister(pid)
+    except Exception:  # noqa: BLE001
+        _log.debug("spaces unregister failed for %s", pid, exc_info=True)
     # Let the plugin stop background threads before modules are dropped.
     mod = sys.modules.get(mod_name)
     if mod is not None:
@@ -978,13 +984,18 @@ def set_active_uefn_agent_plugin_ids(plugin_ids: list[str] | None) -> None:
 
 
 def uefn_agent_tools_allowed(plugin_id: str) -> bool:
-    """True when the plugin is enabled and opted in for this run (or unscoped)."""
+    """True when the plugin is enabled and opted in for this run (or unscoped). The shared-
+    spaces provider's tools are part of the app, like core tools: never opted out per chat."""
     if not is_plugin_enabled(plugin_id):
         return False
     active = _ACTIVE_UEFN_AGENT_IDS.get()
     if active is None:
         return True
-    return plugin_id in active
+    if plugin_id in active:
+        return True
+    from backend.uefn_plugins.spaces import provider_plugin
+
+    return plugin_id == provider_plugin()
 
 
 def _with_panel_note(plugin_id: str, result: Any) -> Any:
@@ -1999,8 +2010,9 @@ def plugins_ready() -> bool:
 
 def tried_and_not_loaded() -> set[str]:
     """Plugins this process tried to load that are not loaded here: register() failed, or
-    the plugin is paused (team access lost). Their tools will not appear here on their own."""
-    return (set(_LOAD_FAILURES) | set(_PAUSED_TEAM_PLUGINS)) - set(_REGISTERED)
+    the plugin is paused (access to its audience lost). Their tools will not appear here on
+    their own."""
+    return (set(_LOAD_FAILURES) | set(_PAUSED_PRIVATE_PLUGINS)) - set(_REGISTERED)
 
 
 def plugins_ui_ready() -> bool:
@@ -2247,12 +2259,12 @@ def _run_first_plugin_load() -> None:
     with _LOCK:
         _UI_READY = True
         _LOADED = True
-    # Pause any team plugin whose team access is currently lost (plain-source items;
-    # compiled ones also self-pause through their baked gate).
+    # Pause any private plugin whose audience access is currently lost (plain-source
+    # items; compiled ones also self-pause through their baked gate).
     try:
-        reevaluate_team_plugins()
+        reevaluate_private_plugins()
     except Exception:
-        _log.debug("team-plugin reevaluation at boot failed", exc_info=True)
+        _log.debug("private-plugin reevaluation at boot failed", exc_info=True)
     _start_crash_heal()
     _log.info(
         "UEFN plugins ready: register phase %.0fms%s",
@@ -3316,40 +3328,38 @@ def sweep_orphan_compiled_folders() -> None:
             pass  # still mapped by a live process — try again next launch
 
 
-# plugin_id -> team_id it is paused for (access lost). Cleared when access returns.
-_PAUSED_TEAM_PLUGINS: dict[str, str] = {}
+# plugin_id -> audience it is paused for (access lost). Cleared when access returns.
+_PAUSED_PRIVATE_PLUGINS: dict[str, str] = {}
 
 
-def _plugin_team_visibility(manifest: dict[str, Any]) -> tuple[str, str]:
-    """(visibility, team_id) recorded for an installed plugin ('', '' when not a team item)."""
+def _plugin_audience(manifest: dict[str, Any]) -> str:
+    """The audience recorded for an installed private plugin ('' for a public one)."""
+    from backend.uefn_plugins.signing import AUDIENCE_FIELD
+
     vis = str(manifest.get("visibility") or "").strip()
-    team = str(manifest.get("team_id") or "").strip()
-    if vis != "team" or not team:
-        return "", ""
-    return "team", team
+    if vis in ("", "public"):
+        return ""
+    return str(manifest.get("audience") or manifest.get(AUDIENCE_FIELD) or "").strip()
 
 
-def _team_access_state(team_id: str) -> tuple[bool, str]:
-    """(has_access, label) for a team: has the key and not lost → True."""
+def _audience_access_state(audience: str) -> tuple[bool, str]:
+    """(has_access, label) for a private plugin's audience (a shared space)."""
     try:
-        from backend.uefn_plugins.scopes import account_id, team_scope
+        from backend.uefn_plugins.scopes import space_access
 
-        scope = team_scope(account_id(), team_id)
-        label = str(scope.get("label") or team_id)
-        return scope.get("state") in ("ok", "paused"), label
+        return space_access(audience)
     except Exception:
-        return True, team_id  # never pause on an evaluation error
+        return True, audience  # never pause on an evaluation error
 
 
-def reevaluate_team_plugins(account: str | None = None) -> dict[str, Any]:
-    """Pause team plugins whose team access was lost; resume them when it returns.
+def reevaluate_private_plugins(account: str | None = None) -> dict[str, Any]:
+    """Pause private plugins whose audience access was lost; resume them when it returns.
 
-    Called at boot and on enable, and meant to be called by the team-data sync when a
-    team flips to ``lost`` or unlocks (one line where ``plugin_scope_changed`` is
-    pushed). A paused plugin is unloaded and shows "Paused, no access to <team>"; when
-    access returns it is loaded again. Compiled team plugins also enforce this at load
-    through the baked license gate; this handles the live transition and plain-source
-    team plugins.
+    Called at boot and on enable, and by the spaces provider when a space flips to
+    ``lost`` or unlocks. A paused plugin is unloaded and shows "Paused, no access to
+    <label>"; when access returns it is loaded again. Compiled private plugins also
+    enforce this at load through the baked license gate; this handles the live
+    transition and plain-source private plugins.
     """
     from backend.uefn_plugins.store import load_plugin_manifest
 
@@ -3359,36 +3369,36 @@ def reevaluate_team_plugins(account: str | None = None) -> dict[str, Any]:
         manifest = load_plugin_manifest(pid)
         if not manifest:
             continue
-        vis, team = _plugin_team_visibility(manifest)
-        if not vis:
+        audience = _plugin_audience(manifest)
+        if not audience:
             continue
-        has_access, label = _team_access_state(team)
+        has_access, label = _audience_access_state(audience)
         if not has_access:
-            if pid in _REGISTERED or pid not in _PAUSED_TEAM_PLUGINS:
+            if pid in _REGISTERED or pid not in _PAUSED_PRIVATE_PLUGINS:
                 try:
                     invalidate_plugin_runtime(pid)
                     with _LOCK:
                         _strip_contributions_for(pid)
                     _record_plugin_load_error(pid, RuntimeError(f"Paused: no access to {label}"))
                 except Exception:
-                    _log.exception("pausing team plugin %s failed", pid)
-                _PAUSED_TEAM_PLUGINS[pid] = team
+                    _log.exception("pausing private plugin %s failed", pid)
+                _PAUSED_PRIVATE_PLUGINS[pid] = audience
                 paused.append(pid)
-        elif pid in _PAUSED_TEAM_PLUGINS:
-            _PAUSED_TEAM_PLUGINS.pop(pid, None)
+        elif pid in _PAUSED_PRIVATE_PLUGINS:
+            _PAUSED_PRIVATE_PLUGINS.pop(pid, None)
             try:
                 reload_single_plugin(pid)
             except Exception:
-                _log.exception("resuming team plugin %s failed", pid)
+                _log.exception("resuming private plugin %s failed", pid)
             resumed.append(pid)
     if paused or resumed:
         _notify_uefn_plugins_changed()
     return {"paused": paused, "resumed": resumed}
 
 
-def is_team_plugin_paused(plugin_id: str) -> bool:
-    """True when a team plugin is currently paused for lost access (Settings badge)."""
-    return plugin_id in _PAUSED_TEAM_PLUGINS
+def is_private_plugin_paused(plugin_id: str) -> bool:
+    """True when a private plugin is currently paused for lost access (Settings badge)."""
+    return plugin_id in _PAUSED_PRIVATE_PLUGINS
 
 
 class _ChangesetApi:
@@ -3563,7 +3573,7 @@ class _PluginApi:
     def data(self) -> Any:
         """Host data service: docs (one JSON doc per entity) and files in the active
         scope. Never pick your own folder: rows and files are per account and scope,
-        and team scopes sync. See ``backend.uefn_plugins.scopes.PluginData``."""
+        and shared scopes sync. See ``backend.uefn_plugins.scopes.PluginData``."""
         from backend.uefn_plugins.scopes import PluginData
 
         _DATA_PLUGINS.add(self.plugin_id)
@@ -3833,6 +3843,15 @@ class _PluginApi:
         """
         register_tts_voices_lister(self.plugin_id, list_voices_fn)
         self.log("TTS voices lister registered")
+
+    def provide_spaces(self, impl: Any) -> None:
+        """Provide shared spaces (a :class:`backend.uefn_plugins.spaces.Provider`): which
+        spaces the account has, their sync, labels and web pages. One provider at a time,
+        from a Store-signed install."""
+        from backend.uefn_plugins import spaces
+
+        spaces.register(self.plugin_id, impl)
+        self.log("Shared spaces provider registered")
 
     def register_llm_provider(
         self,

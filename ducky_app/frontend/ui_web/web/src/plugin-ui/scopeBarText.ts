@@ -1,4 +1,4 @@
-/** Scope bar wording (plan §8). Pure so the 80% / full rules have one test. */
+/** Scope bar wording. Pure so the 80% / full rules have one test. */
 import type { PluginScopeStatus, PluginScopeUsage } from "../types/panel";
 
 const UNITS = ["B", "KB", "MB", "GB", "TB"];
@@ -34,7 +34,7 @@ export function agoText(seconds: number): string {
   return `${Math.round(s / 3600)} h ago`;
 }
 
-/** Sync part of a team bar: synced time, queued changes, or why it isn't syncing. */
+/** Sync part of a shared bar: synced time, queued changes, or why it isn't syncing. */
 export function syncText(status: PluginScopeStatus, nowMs: number): string {
   const pending = status.pending ?? 0;
   const waiting = pending ? `${pending} change${pending === 1 ? "" : "s"} waiting` : "";
@@ -44,22 +44,28 @@ export function syncText(status: PluginScopeStatus, nowMs: number): string {
   return waiting ? `${synced} · ${waiting}` : synced;
 }
 
-/** A team copy whose access was lost: locked here, and when it leaves this PC. */
-export function lostText(team: string, deleteAt?: number | null, locale?: string): string {
+/** A shared copy whose access was lost: locked here, and when it leaves this PC. */
+export function lostText(label: string, deleteAt?: number | null, locale?: string): string {
   const when = deleteAt
     ? new Date(deleteAt * 1000).toLocaleDateString(locale, { month: "long", day: "numeric" })
     : "";
   return when
-    ? `You no longer have access to ${team}. Its data here is locked and leaves this PC on ${when} unless access comes back.`
-    : `You no longer have access to ${team}. Its data here is locked until access comes back.`;
+    ? `You no longer have access to ${label}. Its data here is locked and leaves this PC on ${when} unless access comes back.`
+    : `You no longer have access to ${label}. Its data here is locked until access comes back.`;
+}
+
+/** Title case of a provider's kind label ("space" → "Space"); "Space" when there is none. */
+export function kindTitle(kindLabel?: string): string {
+  const k = (kindLabel || "space").trim();
+  return k.charAt(0).toUpperCase() + k.slice(1);
 }
 
 /** The question before a plugin's data switches: nothing is copied, and the plugin
  * restarts on the other copy. */
 export function switchConfirm(plugin: string, to: { kind: string; label: string }): { title: string; message: string } {
-  const team = to.kind === "team";
+  const shared = to.kind === "shared";
   return {
-    title: `Switch ${plugin} to ${team ? to.label : "Local"} data?`,
-    message: `Nothing is copied. ${plugin} restarts with ${team ? `${to.label}'s` : "its Local"} data.`,
+    title: `Switch ${plugin} to ${shared ? to.label : "Local"} data?`,
+    message: `Nothing is copied. ${plugin} restarts with ${shared ? `${to.label}'s` : "its Local"} data.`,
   };
 }

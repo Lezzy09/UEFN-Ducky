@@ -23,7 +23,7 @@ _FILE = "workflow_code_approvals.json"
 _KEEP_PER_NODE = 8
 _LOCK = threading.RLock()
 
-TEAM_REFUSAL = "Custom code runs in Local workflows for now."
+SHARED_REFUSAL = "Custom code runs in Local workflows for now."
 REVIEW = ("Review this code before it runs: it was changed by an agent. "
           "Open the node and press Review, or run it once yourself.")
 
@@ -145,7 +145,7 @@ def gate(wf: dict[str, Any], node: dict[str, Any], ctx: dict[str, Any] | None = 
     Who started the run comes from the runner, fixed when it started; the run's fields
     (``ctx``) never count, since any step can write them."""
     if not is_local(wf):
-        return TEAM_REFUSAL
+        return SHARED_REFUSAL
     from backend.automations.runner import started_by_person
 
     wid, nid = str(wf.get("id") or ""), str(node.get("id") or "")

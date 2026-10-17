@@ -187,14 +187,14 @@ def test_a_command_typed_into_a_local_workflow_runs_without_asking(events, monke
     assert not runner.typed_command_approved("py -3 -u release/publish_app.py")  # only while its step runs
 
 
-def test_a_team_workflow_or_a_wired_command_still_asks(monkeypatch):
+def test_a_shared_workflow_or_a_wired_command_still_asks(monkeypatch):
     from types import SimpleNamespace
     from backend.server import mcp
 
     seen: list[bool] = []
     monkeypatch.setattr(mcp._tool_manager, "get_tool", lambda name: SimpleNamespace(
         fn=lambda **kw: seen.append(runner.typed_command_approved(kw["command"])) or {"ok": True}))
-    owners = {"mine": {"kind": "local"}, "theirs": {"kind": "team"}}
+    owners = {"mine": {"kind": "local"}, "theirs": {"kind": "shared"}}
     monkeypatch.setattr(runner, "get_workflow", lambda wid: {"id": wid, "owner": owners[wid]})
     typed = {"name": "ducky_terminal_run", "arguments": {"session_id": "t1", "command": "git push"}}
     for wid, cfg, payload in (

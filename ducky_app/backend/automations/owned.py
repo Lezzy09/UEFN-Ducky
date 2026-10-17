@@ -1,18 +1,18 @@
-"""Workflows owned by Local or a team (DuckyOS plan §14), database mode.
+"""Workflows owned by Local or a shared space, database mode.
 
 Each workflow is one doc of the host data service under the reserved id
 ``ducky.automations``: Local = the account's Personal scope (never leaves this PC),
-Team = that team's scope (synced by :mod:`backend.uefn_plugins.team_sync`; the
-Store refuses pushes from members without Manage automations). Docs are sealed
-for the account (plan §13). Unlike ``PluginData`` this module names its scope on
-every call: the list shows Local and every team at once, whatever project is open.
+a shared space = that space's scope (its changes are queued for the spaces provider
+to sync; the space meta row says whether this account may change them). Docs are
+sealed for the account. Unlike ``PluginData`` this module names its scope on every
+call: the list shows Local and every space at once, whatever project is open.
 
 Per-PC state never syncs: the run log, last run and "Run on this PC" live in
 ``workflow_runtime``; saved versions in ``workflow_versions`` (sealed too).
 
 Folders: each workflow carries its own ``folder`` path. The owner's folder list
 (empty folders included) is one more doc of the same scope under the reserved key
-``_folders``, ``{"folders": ["Play tests", "Play tests/Tycoon"]}``, so a team's
+``_folders``, ``{"folders": ["Play tests", "Play tests/Tycoon"]}``, so a space's
 tree syncs with its workflows and the website can read it.
 """
 
@@ -33,7 +33,7 @@ DOC_PLUGIN = "ducky.automations"
 LOCAL = "local"
 RUN_CAP = 20
 BEFORE_SYNC_NOTE = "Your copy before sync"
-NO_PERMISSION = "Only members with Manage automations can change team workflows."
+NO_PERMISSION = "This account can't change these workflows."
 _DOC_FIELDS = ("id", "name", "description", "enabled", "folder", "graph", "updated", "created_by")
 FOLDERS_KEY = "_folders"  # never a workflow id (save refuses it)
 FOLDERS_MAX = 2000
@@ -55,21 +55,26 @@ def account() -> str:
     return aid
 
 
-def _can_automate(scope: dict[str, Any]) -> bool:
-    return scope["kind"] != "team" or runtime.perms_get(scope["account"], scope["id"])
+def _refusal(scope: dict[str, Any]) -> str:
+    """Why this account can't change the scope's workflows ("" when it can)."""
+    if scope["kind"] != "shared" or runtime.workflows_writable(scope["account"], scope["id"]):
+        return ""
+    from backend.uefn_plugins.spaces import provider
+
+    return provider().workflow_edit_refusal(scope["account"], scope["id"], scope["label"]) or NO_PERMISSION
 
 
 def owner_scopes(aid: str | None = None) -> list[dict[str, Any]]:
-    """Local first, then every team this account belongs to. A team whose access was
-    lost is left out: its workflows stay locked on this PC (not listed, never run)
-    until access comes back or the copy expires."""
+    """Local first, then every shared space this account keeps a copy of. A space whose
+    access was lost is left out: its workflows stay locked on this PC (not listed,
+    never run) until access comes back or the copy goes."""
     aid = aid or account()
     out = [scopes.personal_scope(aid)]
     if aid == scopes.LOCAL:
         return out
-    for team in runtime.synced_teams(aid):
-        if scopes.valid_team_id(team):
-            scope = scopes.team_scope(aid, team)
+    for space in runtime.synced_spaces(aid):
+        if scopes.valid_space_id(space):
+            scope = scopes.shared_scope(aid, space)
             if scope["state"] not in ("unavailable", "lost"):
                 out.append(scope)
     return out
@@ -80,25 +85,28 @@ def _reason(scope: dict[str, Any]) -> str:
     if state == "locked":
         return "Waiting for your account's data key. Read-only until you're back online."
     if state == "waiting":
-        return f"Waiting for team data from {scope['label']}. Read-only until it arrives."
-    # Paused (Team Private off) still lists the team and still takes workflows.
-    # Sharing waits until the plan is active again.
-    if not _can_automate(scope):
-        return NO_PERMISSION
-    return ""
+        return f"Waiting for {scope['label']}'s data. Read-only until it arrives."
+    # Paused still lists the space and still takes workflows; sharing waits until it resumes.
+    return _refusal(scope)
 
 
 def owner_view(scope: dict[str, Any]) -> dict[str, Any]:
-    team = scope["kind"] == "team"
+    shared = scope["kind"] == "shared"
     reason = _reason(scope)
-    return {
-        "id": scope["id"] if team else LOCAL,
-        "kind": "team" if team else LOCAL,
-        "label": scope["label"] if team else "Local",
+    view = {
+        "id": scope["id"] if shared else LOCAL,
+        "kind": "shared" if shared else LOCAL,
+        "label": scope["label"] if shared else "Local",
         "state": scope["state"],
         "readOnly": bool(reason),
         "reason": reason,
     }
+    if shared:
+        from backend.uefn_plugins.spaces import provider
+
+        view["kindLabel"] = provider().kind_label
+        view["pausedLabel"] = provider().paused_label
+    return view
 
 
 def scope_for(owner: str, aid: str | None = None) -> dict[str, Any]:
@@ -171,7 +179,7 @@ def find(workflow_id: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
 
 
 def write(scope: dict[str, Any], doc: dict[str, Any], *, versions: tuple[dict[str, Any], ...] = ()) -> None:
-    """Store the synced part of ``doc`` in ``scope`` (a team copy is queued to push),
+    """Store the synced part of ``doc`` in ``scope`` (a shared copy is queued to push),
     and the saved copies in ``versions``, in one transaction: a save that fails
     leaves no version behind. Everything is sealed before the transaction opens."""
     from backend.store import db
@@ -194,7 +202,7 @@ def write(scope: dict[str, Any], doc: dict[str, Any], *, versions: tuple[dict[st
             legacy.archive(conn, wid, saved_at, text)
         if sealed is not None:
             data.upsert(conn, aid, scope["id"], DOC_PLUGIN, "doc", wid, value=sealed, size=len(raw), sha256=sha,
-                        dirty=scope["kind"] == "team")
+                        dirty=scope["kind"] == "shared")
 
 
 def folders(scope: dict[str, Any]) -> list[str]:
@@ -206,7 +214,7 @@ def folders(scope: dict[str, Any]) -> list[str]:
 
 
 def write_folders(scope: dict[str, Any], paths: list[str]) -> None:
-    """Replace the owner's folder list (a team's is queued to push like a workflow)."""
+    """Replace the owner's folder list (a space's is queued to push like a workflow)."""
     from backend.store import db
     from backend.uefn_plugins.data_crypto import seal_text
 
@@ -220,7 +228,7 @@ def write_folders(scope: dict[str, Any], paths: list[str]) -> None:
     conn = db.connect()
     with db.write_txn(conn):
         data.upsert(conn, aid, scope["id"], DOC_PLUGIN, "doc", FOLDERS_KEY, value=sealed, size=len(raw), sha256=sha,
-                    dirty=scope["kind"] == "team")
+                    dirty=scope["kind"] == "shared")
 
 
 def remove(scope: dict[str, Any], workflow_id: str) -> bool:
@@ -229,7 +237,7 @@ def remove(scope: dict[str, Any], workflow_id: str) -> bool:
     if not old or old["deleted"]:
         return False
     data.remove(aid, scope["id"], DOC_PLUGIN, "doc", workflow_id,
-                tombstone=scope["kind"] == "team" and old["rev"] > 0)
+                tombstone=scope["kind"] == "shared" and old["rev"] > 0)
     return True
 
 
@@ -295,8 +303,8 @@ def open_version(stored: str, aid: str) -> dict[str, Any] | None:
 
 
 def archive_before_adopt(scope: dict[str, Any], workflow_id: str) -> None:
-    """Team sync is about to replace this PC's unpushed edit with the server copy:
-    keep the local one as a saved version so History can bring it back."""
+    """A sync is about to replace this PC's unpushed edit with the other copy: keep the
+    local one as a saved version so History can bring it back."""
     from backend.store import db
 
     if workflow_id == FOLDERS_KEY:

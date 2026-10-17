@@ -81,7 +81,7 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
 
   usePluginThemePush(iframeRef, src);
 
-  // Data switched between Local and a team: the plugin restarted on the other copy,
+  // Data switched between Local and a shared space: the plugin restarted on the other copy,
   // so the panel loads again too (nothing of the old copy stays on screen). Setting
   // src again reloads the same iframe, so its theme and bridge listeners stay bound.
   const pluginId = parsed?.pluginId ?? "";

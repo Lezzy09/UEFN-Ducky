@@ -46,7 +46,7 @@ def test_rename_move_and_delete_folders_keep_the_workflows():
     assert store.move_folder("local", "QA/Play/Tycoon", "QA/Play") == 1  # delete: into its parent
     assert store.move_folder("local", "QA", "") == 2  # delete a top folder: contents go to the top
     assert folders() == {"A": "Play", "B": "Play", "C": "Play testsX", "D": ""}
-    assert store.move_folder("teamT", "Play", "Elsewhere") == 0  # another owner's folder
+    assert store.move_folder("spaceT", "Play", "Elsewhere") == 0  # another owner's folder
     with pytest.raises(ValueError):
         store.move_folder("local", "Play", "Play/Inner")
     with pytest.raises(ValueError):

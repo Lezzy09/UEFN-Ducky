@@ -12,7 +12,7 @@ metadata:
 A workflow is a graph of nodes that runs on this PC: a start (Manual, Chat input,
 Cron, a plugin trigger, or Inputs for a reusable one), steps (tools, Duckies,
 agents, waits, branches, loops, UEFN play tests, other workflows) and an end.
-Each belongs to **Local** (this PC) or a **team** (synced to every member).
+Each belongs to **Local** (this PC) or a **shared space** (synced to every member).
 Do the work with the tools below; never tell the user to open the tab — the
 tools open it and show them what you did.
 
@@ -28,7 +28,7 @@ tools open it and show them what you did.
   The header folds the list into a small pill; its edge drags to resize.
 - **Top bar**: the name on its own on the left; the buttons in a pill on the right,
   right to left: Play (test run; Stop while it runs), the on/off light,
-  Run on this PC (team schedules), Save, Duplicate, Move or copy, History, Redo,
+  Run on this PC (shared schedules), Save, Duplicate, Move or copy, History, Redo,
   Undo, Delete. While a workflow runs the step running now glows, the wire it came
   along runs thick and bright, and the run log fills in step by step.
 - **Canvas** (Unreal style): Select tool `V` boxes nodes, Hand `H` (or hold
@@ -248,11 +248,11 @@ names them; ask the user, and only after they agree pass
 | `run_workflow_node` | run one node now, reusing what fed it last run |
 | `stop_workflow` | stop every run of it on this PC right away |
 | `set_workflow_folder` / `move_workflow_folder` | file a workflow / rename, move or remove a folder |
-| `copy_workflow` | copy or move to Local or a team |
-| `add_workflow_folder` | make a folder that holds nothing yet (a team's syncs to members) |
-| `copy_workflow_folder` | copy or move a whole folder tree to Local or a team; Run workflow steps inside it keep working |
+| `copy_workflow` | copy or move to Local or a shared space |
+| `add_workflow_folder` | make a folder that holds nothing yet (a shared space's syncs to members) |
+| `copy_workflow_folder` | copy or move a whole folder tree to Local or a shared space; Run workflow steps inside it keep working |
 | `export_workflow_folder` / `import_workflow_bundle` | a folder tree as one bundle / make a copy of a bundle anywhere (new ids, calls re-pointed) |
-| `delete_workflow` | delete (for everyone, if it is a team's) |
+| `delete_workflow` | delete (for everyone, if it is shared) |
 | `list_workflow_versions` / `restore_workflow_version` | History: saved versions, bring one back |
 | `clear_workflow_runs` | Clear log |
 | `emit_workflow_trigger` | fire a plugin trigger to test listeners |
@@ -264,7 +264,7 @@ names them; ask the user, and only after they agree pass
 
 Every node's details have a Code tab with the JavaScript it runs. Built-ins keep
 running their own step; editing a node's code turns it into a **Custom code** node
-(`code.js`) in that workflow only. Local workflows only (a team's refuses it).
+(`code.js`) in that workflow only. Local workflows only (a shared one refuses it).
 
 - **When**: only when no node or setting does it — a small transform, a few tool
   calls in a row, a check with its own message. A Custom code node is one step: it

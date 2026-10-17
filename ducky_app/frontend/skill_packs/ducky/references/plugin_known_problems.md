@@ -26,8 +26,8 @@ Check these before you tell the user a plugin works.
 | Logs, tool errors and node results end up in Settings → Errors and in Support feedback. `api.log` scrubs folders, emails and keys, but not what you put in a result. | Never put the user's chat text, keys or files in logs or errors; secrets go in `secret_keys`. |
 | `scripts/`, `deploy/`, `tests/`, `test_*.py`, `*.zip`, `*.bin` never ship. | Keep runtime files elsewhere. |
 | `api.data.put` over 1 MB raises. | One doc per record; big blobs go in `put_file`. |
-| Writes raise `PermissionError` when the team copy is read-only or access was lost. | Catch it in tools and return the message as `{"ok": False, "error": …}`. |
-| `api.data.delete(key)` doesn't remove a `sensitive=True` doc while the plugin uses a team. | `api.data.personal().delete(key)`. |
+| Writes raise `PermissionError` when the shared copy is read-only or access was lost. | Catch it in tools and return the message as `{"ok": False, "error": …}`. |
+| `api.data.delete(key)` doesn't remove a `sensitive=True` doc while the plugin uses a shared space. | `api.data.personal().delete(key)`. |
 | `api.call_tool` raises `ValueError` when the tool fails; a destructive tool it calls still waits for the user's Allow. | Catch and report; don't call destructive tools from nodes that run unattended. |
 | Push events reach every panel subscribed to that type. | Prefix event types with your plugin id (`card_shop_changed`). |
 | Workflow nodes pass on only the returned keys that match an output pin id. | Return `{"ok": True, "<pin id>": value, …}` for every declared output. |

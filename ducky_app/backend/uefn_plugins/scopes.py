@@ -1,22 +1,22 @@
-"""Plugin data scopes + the host data service (team plans P3/P4).
+"""Plugin data scopes + the host data service.
 
-A scope is ``(account, personal | team_id)``:
+A scope is ``(account, personal | space_id)``:
 
 - the account is the signed-in DuckyOS user (a stable hash of site + email), or
   ``_local`` when signed out;
-- where a plugin's data lives is picked per plugin (``plugin_scopes``, plan §15.1):
-  Local (scope ``personal``) or exactly one team. No pick, or team storage
-  unavailable for this account → Local. Teams never share rows: switching shows
-  that scope's own copy, and the only way data moves is an explicit copy of the
-  Local copy into one team (:func:`copy_local_into`).
+- where a plugin's data lives is picked per plugin (``plugin_scopes``): Local (scope
+  ``personal``) or exactly one shared space (:mod:`backend.uefn_plugins.spaces`). No
+  pick, or the space unavailable for this account → Local. Spaces never share rows:
+  switching shows that scope's own copy, and the only way data moves is an explicit
+  copy of the Local copy into one space (:func:`copy_local_into`).
 
 Plugins never pick their own folder or rows: docs (one JSON doc per entity) and
 files go through :class:`PluginData`, which writes the active scope only. Rows
 and folders are keyed by account and sealed for it (:mod:`data_crypto`), so
-another account on this PC can't read them. Team scopes sync through
-:mod:`backend.uefn_plugins.team_sync`; Personal and ``sensitive`` data never leave
-the PC. A plugin's cache and prefs rows (``plugin_kv``) follow the same scope but
-never sync: each team has its own on this PC.
+another account on this PC can't read them. Changes to a shared space's copy are
+queued (``dirty``) for the spaces provider to sync; Personal and ``sensitive`` data
+never leave the PC. A plugin's cache and prefs rows (``plugin_kv``) follow the same
+scope but never sync: each space has its own on this PC.
 
 :func:`sandbox_begin` points one plugin at a throwaway scope for a plugin test: the
 test's own calls and the threads they start, that plugin only, so the test never
@@ -34,20 +34,19 @@ import os
 import re
 import shutil
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
 LOCAL = "_local"
 PERSONAL = "personal"
 DOC_MAX_BYTES = 1024 * 1024
+# How long a plugin's first read of a never-pulled shared space waits for the pull.
+FIRST_PULL_WAIT_S = 10.0
 ASSET_MAX_BYTES = 100 * 1024 * 1024
-# A team copy whose access was lost stays locked on this PC this long, then goes.
-LOST_KEEP_S = 7 * 24 * 3600
 # Throwaway scopes of plugin tests (:func:`sandbox_begin`). The test copy belongs to the
 # test: its calls carry a token (``_SANDBOX_CTX``, inherited by the threads they start),
 # everyone else's calls read their real data. Oct 12 2026: when it was process-wide, a
-# team's live projects and requests "disappeared" whenever one member ran the full test.
+# shared space's live projects and requests "disappeared" whenever one agent ran the full test.
 # A thread a test started reads the real data again once the test ends (its token is gone).
 SANDBOX_PREFIX = "_plugin_test_"
 _SANDBOXES: dict[str, dict[str, Any]] = {}  # token → scope, while its test runs
@@ -59,11 +58,11 @@ _inherit_installed = False
 _PLUGIN_RE = re.compile(r"^[a-z0-9._-]{1,64}$")
 _DOC_RE = re.compile(r"^[a-z0-9._-]{1,128}$")
 _ASSET_RE = re.compile(r"^[a-z0-9._/-]{1,256}$")
-_TEAM_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_SPACE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class ReadOnlyScope(PermissionError):
-    """Team Private is paused: the team's copy is read-only until the owner renews."""
+    """The scope can't be written from this PC right now (the message says why)."""
 
 
 # --------------------------------------------------------------------------- ids
@@ -86,8 +85,8 @@ def valid_asset_path(path: str) -> bool:
     )
 
 
-def valid_team_id(team: str) -> bool:
-    return bool(_TEAM_RE.match(team or "")) and team not in (PERSONAL, LOCAL)
+def valid_space_id(space: str) -> bool:
+    return bool(_SPACE_RE.match(space or "")) and space not in (PERSONAL, LOCAL)
 
 
 def _need(ok: bool, what: str) -> None:
@@ -134,63 +133,40 @@ def personal_scope(account: str | None = None) -> dict[str, Any]:
     locked = _locked(account)
     # Shown as "Local": it never leaves this PC (the id stays "personal").
     return {"account": account, "id": PERSONAL, "kind": "personal", "label": "Local",
-            "teamId": "", "readOnly": locked, "state": "locked" if locked else "ok"}
+            "spaceId": "", "readOnly": locked, "state": "locked" if locked else "ok"}
 
 
-def team_scope(account: str, team: str) -> dict[str, Any]:
-    """A team scope. ``waiting``: never pulled on this PC for this account, so it is
-    read-only until the first pull lands — a plugin must not seed its empty-state
-    defaults over the team's data. ``locked``: the account's data key is missing.
-    ``lost``: the account lost access to the team; its copy here is unreadable and
-    read-only until access comes back, and goes after :data:`LOST_KEEP_S`."""
+def shared_scope(account: str, space: str) -> dict[str, Any]:
+    """A shared space's scope, from its sync row (the spaces provider keeps it). ``waiting``:
+    never pulled on this PC for this account, so it is read-only until the first pull
+    lands — a plugin must not seed its empty-state defaults over the space's data.
+    ``locked``: the account's data key is missing. ``lost``: access to the space is gone;
+    its copy here is unreadable and read-only until access comes back."""
     from backend.store.repos import plugin_data as repo
 
-    sync = repo.sync_get(account, team)
+    sync = repo.sync_get(account, space)
     state = sync["state"]
     if state == "lost":
-        if lost_expired(account, team):
-            # A week without access: the copy on this PC goes (the server's stays).
-            purge_team(account, team)
-            state = "unavailable"
-    elif state != "unavailable" and _locked(account):
+        from backend.uefn_plugins.spaces import provider
+
+        # The provider may drop a copy whose access has been gone long enough.
+        state = provider().settle_lost(account, space) or "lost"
+    if state not in ("unavailable", "lost") and _locked(account):
         state = "locked"
-    elif not sync["synced_at"] and state not in ("paused", "unavailable"):
+    elif not sync["synced_at"] and state not in ("paused", "unavailable", "lost"):
         state = "waiting"
-    return {"account": account, "id": team, "kind": "team", "label": sync["label"] or "Team", "teamId": team,
+    return {"account": account, "id": space, "kind": "shared", "label": sync["label"] or "Shared", "spaceId": space,
             "readOnly": state in ("paused", "waiting", "locked", "lost"), "state": state}
 
 
-def _lost_key(account: str, team: str) -> str:
-    return f"team_access_lost.{account}.{team}"
-
-
-def lost_since(account: str, team: str) -> float:
-    """When this PC learned the account lost access to ``team`` (0: it hasn't)."""
-    from backend.store.repos import kv
-
-    try:
-        return float(kv.meta_get(_lost_key(account, team)) or 0)
-    except ValueError:
-        return 0.0
-
-
-def mark_lost(account: str, team: str, since: float | None = None) -> None:
-    """Access to ``team`` is gone: keep the first time this PC saw it (the clock of the purge)."""
-    from backend.store.repos import kv
-
-    if not lost_since(account, team):
-        kv.meta_set(_lost_key(account, team), repr(time.time() if since is None else since))
-
-
-def clear_lost(account: str, team: str) -> None:
-    from backend.store.repos import kv
-
-    kv.meta_set(_lost_key(account, team), "")
-
-
-def lost_expired(account: str, team: str) -> bool:
-    since = lost_since(account, team)
-    return bool(since) and time.time() - since >= LOST_KEEP_S
+def space_access(space: str) -> tuple[bool, str]:
+    """(may use, label) for a shared space of the signed-in account: private compiled
+    plugins published to it load only while this holds (paused data is still access)."""
+    account = account_id()
+    if account == LOCAL or not valid_space_id(space):
+        return False, space
+    scope = shared_scope(account, space)
+    return scope["state"] in ("ok", "paused"), str(scope["label"] or space)
 
 
 def active_scope(plugin: str) -> dict[str, Any]:
@@ -203,11 +179,11 @@ def active_scope(plugin: str) -> dict[str, Any]:
     account = account_id()
     if account == LOCAL:
         return personal_scope(account)
-    team = repo.link_get(account, plugin)
-    if team == PERSONAL or not valid_team_id(team):
+    space = repo.link_get(account, plugin)
+    if space == PERSONAL or not valid_space_id(space):
         return personal_scope(account)
-    scope = team_scope(account, team)
-    # Teams beta or team storage gone for this account: Local only, no teaser.
+    scope = shared_scope(account, space)
+    # The space isn't available to this account any more: Local only, no teaser.
     return personal_scope(account) if scope["state"] == "unavailable" else scope
 
 
@@ -219,7 +195,7 @@ def _boxed(plugin: str) -> dict[str, Any] | None:
 
 def sandbox_begin(plugin: str) -> dict[str, Any]:
     """From now until :func:`sandbox_end`, this caller's reads and writes of ``plugin``'s
-    docs, files, cache and prefs (Local, team or ``sensitive``), and those of the threads
+    docs, files, cache and prefs (Local, shared or ``sensitive``), and those of the threads
     it starts, go to a throwaway scope that starts empty. Everyone else keeps the real
     data. Raises ``ValueError`` while another test of the plugin is running."""
     import uuid
@@ -228,21 +204,21 @@ def sandbox_begin(plugin: str) -> dict[str, Any]:
     account = account_id()
     token = uuid.uuid4().hex
     scope_id = SANDBOX_PREFIX + hashlib.sha256(plugin.encode("utf-8")).hexdigest()[:8] + token[:8]
-    scope = {"account": account, "id": scope_id, "kind": "sandbox", "label": "Plugin test", "teamId": "",
+    scope = {"account": account, "id": scope_id, "kind": "sandbox", "label": "Plugin test", "spaceId": "",
              "readOnly": False, "state": "ok"}
     with _SANDBOX_LOCK:
         if plugin in _TESTING:
             raise ValueError(
                 f"A test of {plugin} is already running. Its test copy is its own (everyone else's calls "
                 "keep their real data), so don't wait for it: check your own work with "
-                "ducky_plugin_validate and live calls, and leave full tests to one member of the team."
+                "ducky_plugin_validate and live calls, and leave full tests to one agent."
             )
         _TESTING[plugin] = token
         _SANDBOXES[token] = scope
     _SANDBOX_CTX.set({**_SANDBOX_CTX.get(), plugin: token})
     _inherit_into_threads()
     try:
-        purge_team(account, scope_id)
+        purge_space(account, scope_id)
     except BaseException:
         sandbox_end(plugin)
         raise
@@ -259,7 +235,7 @@ def sandbox_end(plugin: str) -> None:
     if plugin in mine:
         _SANDBOX_CTX.set({k: v for k, v in mine.items() if k != plugin})
     if scope is not None:
-        purge_team(scope["account"], scope["id"])
+        purge_space(scope["account"], scope["id"])
 
 
 def _inherit_into_threads() -> None:
@@ -320,60 +296,65 @@ def _personal_for(plugin: str) -> dict[str, Any]:
 
 def scope_view(scope: dict[str, Any]) -> dict[str, Any]:
     """What panels and tool results see: label, kind, read-only (no account id)."""
-    return {"kind": scope["kind"], "label": scope["label"], "teamId": scope["teamId"], "readOnly": scope["readOnly"]}
+    return {"kind": scope["kind"], "label": scope["label"], "spaceId": scope["spaceId"], "readOnly": scope["readOnly"]}
 
 
 def scope_name(scope: dict[str, Any]) -> str:
-    """``team Alpha Studio`` / ``local`` — how tool results name the copy they changed."""
-    return f"team {scope['label']}" if scope["kind"] == "team" else "local"
+    """``<kind> <label>`` / ``local`` — how tool results name the copy they changed."""
+    if scope["kind"] != "shared":
+        return "local"
+    from backend.uefn_plugins.spaces import provider
+
+    return f"{provider().kind_label} {scope['label']}"
 
 
-def link_plugin(plugin: str, scope_id: str, *, label: str = "", members: int = 0) -> dict[str, Any]:
-    """Keep ``plugin``'s data in Local or in one of the account's teams. Nothing moves:
-    the plugin shows that scope's own copy from now on."""
+def link_plugin(plugin: str, scope_id: str) -> dict[str, Any]:
+    """Keep ``plugin``'s data in Local or in one of the account's shared spaces. Nothing
+    moves: the plugin shows that scope's own copy from now on."""
     from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins.spaces import provider
 
     _need(valid_plugin_id(plugin), "plugin id")
     account = account_id()
     if account == LOCAL:
-        raise ValueError("Sign in to share a plugin's data with a team")
+        raise ValueError("Sign in to share a plugin's data")
     if scope_id != PERSONAL:
-        _need(valid_team_id(scope_id), "team id")
-        old = repo.sync_get(account, scope_id)
-        # A fresh link tries again even if an earlier round found the team unavailable.
-        repo.sync_put(account, scope_id, label=label or old["label"], members=int(members or old["members"]),
-                      state="ok" if old["state"] == "unavailable" else old["state"], error="")
+        _need(valid_space_id(scope_id), "space id")
+        if repo.sync_get(account, scope_id)["state"] == "unavailable":
+            # A fresh link tries again even if an earlier round found the space unavailable.
+            repo.sync_put(account, scope_id, state="ok", error="")
     repo.link_set(account, plugin, scope_id)
+    if scope_id != PERSONAL:
+        provider().linked(account, plugin, scope_id)
     return active_scope(plugin)
 
 
-def copy_local_into(plugin: str, team: str) -> dict[str, Any]:
-    """One way, on request: the plugin's Local docs and files go into ``team``'s copy
-    (queued to sync). A team item with the same key is kept as it is. Sensitive docs
-    stay Local. Team → team never happens."""
+def copy_local_into(plugin: str, space: str) -> dict[str, Any]:
+    """One way, on request: the plugin's Local docs and files go into ``space``'s copy
+    (queued to sync). An item of the space with the same key is kept as it is.
+    Sensitive docs stay Local. Space → space never happens."""
     from backend.store.repos import plugin_data as repo
     from backend.uefn_plugins.data_crypto import open_bytes, open_text, seal_bytes, seal_text
+    from backend.uefn_plugins.spaces import provider
 
     _need(valid_plugin_id(plugin), "plugin id")
-    _need(valid_team_id(team), "team id")
+    _need(valid_space_id(space), "space id")
     account = account_id()
     if account == LOCAL:
-        raise ValueError("Sign in to share a plugin's data with a team")
+        raise ValueError("Sign in to share a plugin's data")
     src = personal_scope(account)
-    target = team_scope(account, team)
+    target = shared_scope(account, space)
     if target["state"] == "waiting":
-        # Never pulled on this PC: get the team's copy first, so "keep theirs" is true.
-        from backend.uefn_plugins.team_sync import first_pull
-
-        first_pull(account, team)
-        target = team_scope(account, team)
+        # Never pulled on this PC: get the space's copy first, so "keep theirs" is true.
+        provider().first_pull(account, space, FIRST_PULL_WAIT_S)
+        target = shared_scope(account, space)
     dst = PluginData(plugin)._writable(target)
     copied = kept = 0
     for kind in ("doc", "asset"):
         for row in repo.rows(account, PERSONAL, plugin, kind):
             if row["sensitive"]:
                 continue
-            old = repo.get(account, team, plugin, kind, row["key"])
+            old = repo.get(account, space, plugin, kind, row["key"])
             if old and not old["deleted"]:
                 kept += 1
                 continue
@@ -387,7 +368,7 @@ def copy_local_into(plugin: str, team: str) -> dict[str, Any]:
                     continue
                 write_asset_bytes(asset_file(dst, plugin, row["key"]), seal_bytes(open_bytes(source.read_bytes(), account), account))
                 value = None
-            repo.put(account, team, plugin, kind, row["key"], value=value, size=int(row["size"]), sha256=row["sha256"],
+            repo.put(account, space, plugin, kind, row["key"], value=value, size=int(row["size"]), sha256=row["sha256"],
                      dirty=True)
             copied += 1
     return {"ok": True, "copied": copied, "kept": kept}
@@ -400,34 +381,32 @@ def scopes_root(account: str) -> Path:
 
 
 def plugin_dir(scope: dict[str, Any], plugin: str) -> Path:
-    """``%LOCALAPPDATA%/UEFN-Ducky/scopes/{account}/{personal|team_id}/{plugin_id}/``."""
+    """``%LOCALAPPDATA%/UEFN-Ducky/scopes/{account}/{personal|space_id}/{plugin_id}/``."""
     _need(valid_plugin_id(plugin), "plugin id")
     return scopes_root(scope["account"]) / scope["id"] / plugin
 
 
-def purge_team(account: str, team: str) -> None:
-    """The team's local copy goes, rows and files: a week after access was lost (or
-    at once when this PC held nothing of it). Never the server's copy."""
+def purge_space(account: str, space: str) -> None:
+    """A shared space's copy on this PC goes, rows and files (the provider decides when,
+    e.g. a while after access was lost). Never anyone else's copy."""
     from backend.store.repos import plugin_data as repo
     from backend.store.repos import plugin_kv
 
-    if not valid_team_id(team):
+    if not valid_space_id(space):
         return
     from backend.store.repos import workflows
 
-    team_workflows = [r["key"] for r in repo.rows(account, team, "ducky.automations", "doc")]
-    workflows.runtime_delete(account, team_workflows)
-    repo.delete_scope(account, team)
-    plugin_kv.delete_scope(account, team)
+    space_workflows = [r["key"] for r in repo.rows(account, space, "ducky.automations", "doc")]
+    workflows.runtime_delete(account, space_workflows)
+    repo.delete_scope(account, space)
+    plugin_kv.delete_scope(account, space)
     try:  # plugins' api.search records of this copy go with its other data
         from backend.store.repos import search as search_repo
 
-        search_repo.drop_scope_records(account, team)
+        search_repo.drop_scope_records(account, space)
     except Exception:  # noqa: BLE001 — a search error never blocks the purge
         pass
-    shutil.rmtree(scopes_root(account) / team, ignore_errors=True)
-    if lost_since(account, team):
-        clear_lost(account, team)
+    shutil.rmtree(scopes_root(account) / space, ignore_errors=True)
 
 
 def erase_plugin(plugin: str) -> None:
@@ -467,7 +446,7 @@ def write_asset_bytes(target: Path, data: bytes) -> None:
 
 
 def _closed(scope: dict[str, Any]) -> bool:
-    """Access to the team is lost: its copy here reads as empty until access comes back."""
+    """Access to the space is lost: its copy here reads as empty until access comes back."""
     return scope["state"] == "lost"
 
 
@@ -493,10 +472,10 @@ class PluginData:
             return _personal_for(self.plugin_id)
         s = active_scope(self.plugin_id)
         if s["state"] == "waiting":
-            # First use of a team scope on this PC: pull before the plugin sees it (bounded).
-            from backend.uefn_plugins.team_sync import first_pull
+            # First use of a shared scope on this PC: pull before the plugin sees it (bounded).
+            from backend.uefn_plugins.spaces import provider
 
-            if first_pull(s["account"], s["id"]):
+            if provider().first_pull(s["account"], s["id"], FIRST_PULL_WAIT_S):
                 s = active_scope(self.plugin_id)
         return s
 
@@ -508,11 +487,11 @@ class PluginData:
         if s["state"] == "locked":
             raise ReadOnlyScope("Waiting for this account's data key. Plugin data opens once you're online.")
         if s["state"] == "waiting":
-            raise ReadOnlyScope(f"Waiting for team data from {s['label']}. Read-only until it arrives.")
+            raise ReadOnlyScope(f"Waiting for {s['label']}'s data. Read-only until it arrives.")
         if s["state"] == "lost":
             raise ReadOnlyScope(f"You no longer have access to {s['label']}. Its data on this PC is locked.")
         if s["readOnly"]:
-            raise ReadOnlyScope(f"Team Private is paused for {s['label']}. Read-only.")
+            raise ReadOnlyScope(f"{s['label']} is paused. Read-only.")
         return s
 
     # -- docs (sealed for the account at rest, plan §13; sha256/size are of the plaintext)
@@ -548,7 +527,7 @@ class PluginData:
         if old and not old["deleted"] and old["sha256"] == sha:
             return {"ok": True, "key": key, "changed": False}
         repo.put(s["account"], s["id"], self.plugin_id, "doc", key, value=seal_text(raw.decode("utf-8"), s["account"]),
-                 size=len(raw), sha256=sha, dirty=s["kind"] == "team" and not sensitive, sensitive=sensitive)
+                 size=len(raw), sha256=sha, dirty=s["kind"] == "shared" and not sensitive, sensitive=sensitive)
         return {"ok": True, "key": key, "changed": True}
 
     def keys(self, prefix: str = "") -> list[str]:
@@ -585,7 +564,7 @@ class PluginData:
         old = repo.get(s["account"], s["id"], self.plugin_id, "doc", key)
         if not old or old["deleted"]:
             return False
-        repo.remove(s["account"], s["id"], self.plugin_id, "doc", key, tombstone=s["kind"] == "team" and old["rev"] > 0)
+        repo.remove(s["account"], s["id"], self.plugin_id, "doc", key, tombstone=s["kind"] == "shared" and old["rev"] > 0)
         return True
 
     # -- files (assets)
@@ -604,7 +583,7 @@ class PluginData:
             return {"ok": True, "path": path, "changed": False}
         write_asset_bytes(target, seal_bytes(data, s["account"]))
         repo.put(s["account"], s["id"], self.plugin_id, "asset", path, value=None, size=len(data), sha256=sha,
-                 dirty=s["kind"] == "team")
+                 dirty=s["kind"] == "shared")
         return {"ok": True, "path": path, "changed": True, "size": len(data)}
 
     def has_file(self, path: str) -> bool:
@@ -647,7 +626,7 @@ class PluginData:
             return False
         target.unlink(missing_ok=True)
         repo.remove(s["account"], s["id"], self.plugin_id, "asset", path,
-                    tombstone=s["kind"] == "team" and old["rev"] > 0)
+                    tombstone=s["kind"] == "shared" and old["rev"] > 0)
         return True
 
 

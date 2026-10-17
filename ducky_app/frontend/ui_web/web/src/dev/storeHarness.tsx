@@ -149,10 +149,10 @@ let catalog: DuckyOSStoreItemDto[] = [
     categories: ["themes"],
     latest_version: "2",
     install_count: 56,
-    my_team: true,
+    mine: true,
     visibility: "private",
-    owner_team_id: "team-alpha",
-    owner_team_name: "Alpha Studio",
+    audience_id: "space-alpha",
+    audience_label: "Alpha Studio",
   }),
   item({
     slug: "ducktactoe",
@@ -220,7 +220,7 @@ let jobSeq = 0;
 const mockApi = {
   get_listener_status: async () => ({ ok: true }),
   duckyos_get_status: async () => ({ ok: true, logged_in: false, email: "" }),
-  duckyos_store_catalog: async () => ({ ok: true, teams: true, items: catalog.map((i) => ({ ...i })) }),
+  duckyos_store_catalog: async () => ({ ok: true, audiences: true, items: catalog.map((i) => ({ ...i })) }),
   duckyos_store_versions: async (slug: string, _latestVersion?: string) => {
     const count = slug === "discord" ? 12 : 2;
     return {

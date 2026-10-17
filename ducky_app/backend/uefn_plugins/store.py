@@ -689,7 +689,7 @@ def uninstall_uefn_plugin(plugin_id: str, *, erase_data: bool = False) -> dict[s
             cache_clear(pid)
         except Exception:
             pass
-        # Host data service docs + files on this PC (a team's server copy stays the team's).
+        # Host data service docs + files on this PC (a shared space's other copies stay theirs).
         try:
             from backend.uefn_plugins.scopes import erase_plugin
 
@@ -1007,15 +1007,17 @@ def import_plugin_from_bytes(
             written["id"] = pid
             written["kind"] = str(written.get("kind") or "plugin")
             written["source"] = source
-            # Record which team a team-visibility item belongs to, so it can be paused
-            # when access to that team is lost (and resumed when it returns).
+            # Record a private item's audience, so it can be paused when access to it is
+            # lost (and resumed when it returns).
             if isinstance(signed_record, dict):
+                from backend.uefn_plugins.signing import AUDIENCE_FIELD
+
                 vis = str(signed_record.get("visibility") or "").strip()
-                team = str(signed_record.get("team_id") or "").strip()
+                audience = str(signed_record.get(AUDIENCE_FIELD) or "").strip()
                 if vis:
                     written["visibility"] = vis
-                if vis == "team" and team:
-                    written["team_id"] = team
+                if vis not in ("", "public") and audience:
+                    written["audience"] = audience
             _write_json(dest / PLUGIN_MANIFEST, written)
             # Keep the signed record beside the plugin for the load-time license check.
             if isinstance(signed_record, dict) and signed_record.get("signature"):

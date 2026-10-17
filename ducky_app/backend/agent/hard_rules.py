@@ -273,7 +273,7 @@ AGENT_HARD_RULES = (
     "only (`var(--bg)` / `--fg` / `--accent` / …): never hardcode colors (no hex, rgb(), "
     "named colors; `ducky_plugin_validate` rejects them). After every change: "
     "`ducky_plugin_validate` → `ducky_plugin_test` → `ducky_plugin_errors`, fix until "
-    "clean. Share only through the Store (`ducky_plugin_publish`, team or public).\n"
+    "clean. Share only through the Store (`ducky_plugin_publish`).\n"
     "\n"
     "### Plans and evidence\n"
     "- **Check off the plan (HARD):** If this chat has a Plan, tick every step. Before "

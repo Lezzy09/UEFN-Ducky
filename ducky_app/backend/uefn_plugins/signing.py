@@ -10,9 +10,10 @@ compiled copy cannot be sideloaded as a local plugin. Nobody runs a setup step o
 a key; a release that cannot reach the Store fails instead of shipping without the key.
 
 Signed fields (the server builds the identical message): slug, version, sha256 of the
-zip, visibility (public|team), team_id, compiled, issued_at. The canonical message is a
-newline-joined ``key=value`` list in sorted-key order — language-agnostic, no JSON-encoding
-ambiguity — so the Rust signer and this verifier always agree.
+zip, visibility (public or private), the audience of a private item, compiled, issued_at.
+The canonical message is a newline-joined ``key=value`` list in sorted-key order —
+language-agnostic, no JSON-encoding ambiguity — so the Rust signer and this verifier
+always agree.
 
 Dev runs (no built-in key) never fetch and never block: Store installs go unverified and
 compiled builds made there bake an empty key that skips the load-time check. This module
@@ -47,7 +48,9 @@ SIGNING_PUBKEY_PATH = "/api/v1/plugins/uefn-ducky-store/collect/signing-pubkey"
 SIG_FILENAME = ".ducky-sig.json"
 
 # Signed fields, in the order the canonical message sorts them.
-SIGNED_FIELDS = ("compiled", "issued_at", "sha256", "slug", "team_id", "version", "visibility")
+# The Store's signed record names a private item's audience in this field.
+AUDIENCE_FIELD = "team_id"
+SIGNED_FIELDS = ("compiled", "issued_at", "sha256", "slug", AUDIENCE_FIELD, "version", "visibility")
 
 
 class LicenseError(RuntimeError):
@@ -305,24 +308,31 @@ def verify_download(record: dict[str, Any] | None, zip_sha256: str) -> tuple[boo
     return True, "ok"
 
 
-def _team_access(team_id: str) -> tuple[bool, str]:
-    """(ok, label) for a team the compiled plugin was published to."""
-    from backend.uefn_plugins.scopes import account_id, team_scope
+def installed_record_ok(plugin_id: str) -> bool:
+    """The installed copy carries a valid Store-signed record for this id."""
+    from backend.uefn_plugins.store import plugin_dir
+
+    record = read_installed_record(plugin_dir(plugin_id))
+    if not record or str(record.get("slug") or "") != plugin_id:
+        return False
+    return verify_signature(record, str(record.get("signature") or ""), release_public_key())
+
+
+def _audience_access(audience: str) -> tuple[bool, str]:
+    """(ok, label) for the shared space a private compiled plugin was published to."""
+    from backend.uefn_plugins.scopes import space_access
 
     try:
-        scope = team_scope(account_id(), team_id)
+        return space_access(audience)
     except Exception:
-        return False, team_id
-    label = str(scope.get("label") or team_id)
-    # Has the key and not lost: ok to load (paused is read-only data, access intact).
-    return scope.get("state") in ("ok", "paused"), label
+        return False, audience
 
 
 def verify_installed_record(
     plugin_id: str,
     version: str,
     visibility: str,
-    team_id: str,
+    audience: str,
     pubkey_b64: str,
 ) -> None:
     """License gate run from inside a compiled plugin at load. Raises LicenseError.
@@ -348,7 +358,7 @@ def verify_installed_record(
         or not bool(record.get("compiled"))
     ):
         raise LicenseError("This copy isn't licensed for this PC")
-    if str(visibility) == "team":
-        ok, label = _team_access(str(team_id or record.get("team_id") or ""))
+    if str(visibility or "public") != "public":
+        ok, label = _audience_access(str(audience or record.get(AUDIENCE_FIELD) or ""))
         if not ok:
             raise LicenseError(f"Paused: no access to {label}")

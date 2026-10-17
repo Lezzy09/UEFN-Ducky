@@ -1,10 +1,10 @@
 ---
-description: "Worked plugin examples without much UI: tools only, workflow nodes with pins, triggers and folder templates, settings and secrets, connection checks, team-shared data"
+description: "Worked plugin examples without much UI: tools only, workflow nodes with pins, triggers and folder templates, settings and secrets, connection checks, shared data"
 metadata:
   order: 5
   label: "Plugin examples: tools, nodes, settings, data"
   default_enabled: false
-  load_condition: "Building a plugin that adds MCP tools, workflow nodes or templates, settings or API keys, a Connections row, or data shared with a team"
+  load_condition: "Building a plugin that adds MCP tools, workflow nodes or templates, settings or API keys, a Connections row, or data shared with others"
 ---
 
 # Plugin examples: tools, nodes, settings, data
@@ -286,11 +286,11 @@ timeout), never real work.
 The same row gates Revert for changes recorded under your plugin id: while it says
 offline, Ducky won't try to undo them.
 
-## 5. Team-shared data
+## 5. Shared data
 
-Nothing special to switch on: the user picks Local or one team for the plugin, and the
-same `api.data` calls then read and write the team's copy (`plugin_data`). Design for
-several people writing at once:
+Nothing special to switch on: the user picks Local or one shared space for the plugin,
+and the same `api.data` calls then read and write that space's copy (`plugin_data`).
+Design for several people writing at once:
 
 ```python
     def add_note(level: str = "", text: str = "", private: bool = False) -> dict:
@@ -309,7 +309,7 @@ several people writing at once:
 - One doc per entity, ids that never collide (time-based or random), no shared
   counters or one-big-list docs.
 - `sensitive=True` for anything personal: it stays on this PC and never syncs.
-- Tool results get `scope` (`local` / `team <name>`) added by the host; `data.scope()`
+- Tool results get `scope` (`local` or the space's name) added by the host; `data.scope()`
   gives the label when a node or panel needs it.
 - Read-only and lost-access copies raise `PermissionError` on writes: return the
   message. Panels re-read on `plugin_scope_changed`.

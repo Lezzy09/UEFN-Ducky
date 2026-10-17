@@ -134,7 +134,7 @@ def test_store_catalog_cache_never_serves_another_account() -> None:
     from frontend.ui_web import panel_api_store as pas
 
     offline = lambda: {"ok": False, "error": "offline", "items": []}  # noqa: E731
-    pas._cache_store_catalog({"ok": True, "items": [{"slug": "alpha-private", "my_team": True}]}, "site|ana")
+    pas._cache_store_catalog({"ok": True, "items": [{"slug": "alpha-private", "mine": True}]}, "site|ana")
     assert pas._cache_store_catalog(offline(), "site|ana")["items"][0]["slug"] == "alpha-private"
     # Account switch: B gets nothing, and A's copy is gone too (cleared, not just hidden).
     assert pas._cache_store_catalog(offline(), "site|bo")["items"] == []

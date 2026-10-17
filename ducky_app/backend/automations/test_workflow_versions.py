@@ -119,6 +119,9 @@ def test_upgrade_from_schema_nine_preserves_existing_workflows(storage):
         conn.execute(f"DROP TRIGGER {trigger}")
     conn.execute("DROP TABLE search_fts")
     conn.execute("ALTER TABLE search_docs DROP COLUMN summary")
+    # 0019 renames the space tables and columns 0009 and 0012 made: undo it.
+    conn.execute("DROP TABLE space_meta")
+    conn.execute("ALTER TABLE scope_sync RENAME COLUMN space_id TO team_id")
     conn.execute("PRAGMA user_version=9")
     db.reset_for_tests()
     assert store.get_workflow(legacy["id"])["name"] == "Before versions"

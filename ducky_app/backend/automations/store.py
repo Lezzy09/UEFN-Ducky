@@ -2,7 +2,7 @@
 
 A workflow is one graph; what starts it comes from its nodes (Chat input, a
 schedule, a plugin trigger, or Run). Each workflow is owned by **Local** (this PC
-only) or a **team** (synced to every member): see :mod:`backend.automations.owned`.
+only) or a **shared space** (synced to everyone in it): see :mod:`backend.automations.owned`.
 ``DUCKY_STORE_BACKEND=files`` keeps the old JSON folder, Local only.
 """
 
@@ -221,7 +221,7 @@ def empty_workflow(*, name: str = "Untitled") -> dict[str, Any]:
 
 
 def list_workflows() -> list[dict[str, Any]]:
-    """Summaries of every workflow this account can see, Local first, then teams."""
+    """Summaries of every workflow this account can see, Local first, then shared spaces."""
     return [_summary(wf) for wf in all_workflows()]
 
 
@@ -294,10 +294,10 @@ def delete_workflow(workflow_id: str) -> bool:
 
 
 def copy_workflow(workflow_id: str, owner: str, *, move: bool = False) -> dict[str, Any]:
-    """Copy (new id) or move (same id) a workflow to Local or a team. A copy's Custom code
+    """Copy (new id) or move (same id) a workflow to Local or a shared space. A copy's Custom code
     may run on its own only where the original's could."""
     if not use_db("automations"):
-        raise ValueError("Sharing with a team needs the database store")
+        raise ValueError("Sharing needs the database store")
     from backend.automations import owned
 
     with _SAVE_LOCK:
@@ -306,10 +306,10 @@ def copy_workflow(workflow_id: str, owner: str, *, move: bool = False) -> dict[s
             raise KeyError("workflow not found")
         src, doc = found
         dst = owned.writable(owned.scope_for(owner, src["account"]))
-        if dst["kind"] == "team" and _has_code((doc.get("graph") or {}).get("nodes")):
-            from backend.automations.code_approval import TEAM_REFUSAL
+        if dst["kind"] == "shared" and _has_code((doc.get("graph") or {}).get("nodes")):
+            from backend.automations.code_approval import SHARED_REFUSAL
 
-            raise ValueError(TEAM_REFUSAL)
+            raise ValueError(SHARED_REFUSAL)
         if move:
             owned.writable(src)
             if src["id"] == dst["id"]:
@@ -318,7 +318,7 @@ def copy_workflow(workflow_id: str, owner: str, *, move: bool = False) -> dict[s
         owned.write(dst, out, versions=(out,))
         if move:
             owned.remove(src, str(doc["id"]))
-        if dst["kind"] == "team":
+        if dst["kind"] == "shared":
             owned.set_run_here(dst["account"], str(out["id"]), True)
     copied = get_workflow(str(out["id"])) or {}
     if not move:
@@ -405,7 +405,7 @@ def folders_of(owner: str = LOCAL, workflows: list[dict[str, Any]] | None = None
 
 
 def add_folder(owner: str, path: str) -> list[str]:
-    """Make a folder (it may hold nothing yet); a team's folders sync with its workflows.
+    """Make a folder (it may hold nothing yet); a shared space's folders sync with its workflows.
     Returns the owner's folders."""
     clean = normalize_folder(path)
     if not clean:
@@ -435,7 +435,7 @@ def _remember_folders(owner: str, paths: list[str]) -> bool:
 
 
 def listed_folders(owner: str) -> list[str]:
-    """The owner's folder list as kept (synced for a team), without the folders its
+    """The owner's folder list as kept (synced for a shared space), without the folders its
     workflows imply; :func:`folders_of` has both."""
     if not use_db("automations"):
         if owner != LOCAL:
@@ -475,7 +475,7 @@ def _put_folders(owner: str, paths: list[str]) -> bool:
 
 
 def set_run_here(workflow_id: str, on: bool) -> dict[str, Any] | None:
-    """Team workflows: whether this PC runs its schedule and triggers."""
+    """Shared workflows: whether this PC runs its schedule and triggers."""
     if not use_db("automations"):
         return get_workflow(workflow_id)
     from backend.automations import owned
@@ -489,8 +489,8 @@ def set_run_here(workflow_id: str, on: bool) -> dict[str, Any] | None:
 
 
 def runs_here(wf: dict[str, Any]) -> bool:
-    """Local workflows run where they live; a team one only where a member said so,
-    so a team schedule never fires once per member."""
+    """Local workflows run where they live; a shared one only where someone said so,
+    so a shared schedule never fires once per PC."""
     owner = wf.get("owner") or {}
     return owner.get("kind", LOCAL) == LOCAL or bool(wf.get("run_here"))
 
@@ -625,19 +625,19 @@ def _db_save(doc: dict[str, Any], owner: str, *, archive: bool = True) -> dict[s
     out = deepcopy(existing) if existing else empty_workflow(name=str(doc.get("name") or "Untitled"))
     if wid:
         out["id"] = wid
-    _merge(out, doc, team=scope["kind"] == "team")
+    _merge(out, doc, shared=scope["kind"] == "shared")
     if archive:  # filing keeps its place in the list
         out["updated"] = time.time()
     aid = scope["account"]
     first = (existing,) if existing and not versions_repo.has_versions(wid) else ()
     owned.write(scope, out, versions=(*first, out) if archive else ())
     wid = str(out["id"])
-    if existing is None and scope["kind"] == "team":
+    if existing is None and scope["kind"] == "shared":
         owned.set_run_here(aid, wid, True)  # on for the member who made it
     return _view(out, owned.owner_view(scope), owned.state(aid, wid), owned.runs(aid, wid))
 
 
-def _merge(out: dict[str, Any], doc: dict[str, Any], *, team: bool = False) -> None:
+def _merge(out: dict[str, Any], doc: dict[str, Any], *, shared: bool = False) -> None:
     if "name" in doc:
         out["name"] = str(doc.get("name") or "").strip() or out["name"]
     if "description" in doc:
@@ -651,7 +651,7 @@ def _merge(out: dict[str, Any], doc: dict[str, Any], *, team: bool = False) -> N
         # The agent chat that made it (set once, on creation).
         out["created_by"] = {"conv_id": str(made_by.get("conv_id") or ""), "name": str(made_by.get("name") or "")}
     if "graph" in doc:
-        out["graph"] = _with_code(normalize_graph(doc.get("graph")), out.get("graph"), team=team)
+        out["graph"] = _with_code(normalize_graph(doc.get("graph")), out.get("graph"), shared=shared)
 
 
 # --------------------------------------------------------------------------- custom code nodes
@@ -670,19 +670,19 @@ def _forget_approvals(workflow_id: str) -> None:
         pass
 
 
-def _with_code(graph: dict[str, Any], before: Any, *, team: bool) -> dict[str, Any]:
+def _with_code(graph: dict[str, Any], before: Any, *, shared: bool) -> dict[str, Any]:
     """Every Custom code node as saved: blank code filled in, its sha and problems
     refreshed, and its pins, settings and tools read from the code (kept from the last
     good check while the code has errors, so wires survive a half-typed edit). A node
     sent without its code but with the saved code's sha keeps the saved code. Saves
-    are refused only for code that is too big, or for code in a team's workflow."""
+    are refused only for code that is too big, or for code in a shared workflow."""
     nodes = [n for n in graph.get("nodes") or [] if n.get("type") == CODE_TYPE]
     if not nodes:
         return graph
-    if team:
-        from backend.automations.code_approval import TEAM_REFUSAL
+    if shared:
+        from backend.automations.code_approval import SHARED_REFUSAL
 
-        raise ValueError(TEAM_REFUSAL)
+        raise ValueError(SHARED_REFUSAL)
     from backend.automations import code_check
 
     old = {str(n.get("id")): n for n in normalize_graph(before).get("nodes") or [] if n.get("type") == CODE_TYPE}

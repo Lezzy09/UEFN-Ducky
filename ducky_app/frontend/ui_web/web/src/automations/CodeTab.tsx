@@ -39,12 +39,12 @@ export type CodeTabProps = {
   workflows: AutomationSummaryDto[];
   /** The node's pins now (what the canvas draws). */
   pins: NodePins;
-  /** Read-only here (someone else's team workflow, no rights). */
+  /** Read-only here (someone else's shared workflow, no rights). */
   readOnly: boolean;
   /** Locked itself or by a group around it. */
   locked: boolean;
-  /** A team's workflow: custom code runs in Local workflows only for now. */
-  team: boolean;
+  /** A shared workflow: custom code runs in Local workflows only for now. */
+  shared: boolean;
   /** This node's newest step in the last run (its inputs, log, code error). */
   lastStep?: AutomationRunStepDto;
   /** Show this line (a failed step clicked in the run log). */
@@ -164,14 +164,14 @@ export function CodeTab(props: CodeTabProps) {
     : <BuiltinCode {...props} info={info} state={infoState} error={infoError} />;
 }
 
-function BuiltinCode({ node, graph, byType, readOnly, locked, team, info, state, error, onNodeReplace, workflowId }: CodeTabProps & { info: WorkflowNodeCodeDto | null; state: "loading" | "ready" | "failed"; error: string }) {
+function BuiltinCode({ node, graph, byType, readOnly, locked, shared, info, state, error, onNodeReplace, workflowId }: CodeTabProps & { info: WorkflowNodeCodeDto | null; state: "loading" | "ready" | "failed"; error: string }) {
   const meta = byType.get(node.type);
   const name = meta?.label || node.type;
   const [confirming, setConfirming] = useState(false);
   const nameOf = (id: string) => { const item = graph.nodes.find((row) => row.id === id); return item ? nodeLabel(item, byType.get(item.type)) : id; };
   const blocked = readOnly ? "This workflow is read-only here. Duplicate it to change a Local copy."
     : locked ? "This node is locked. Unlock it to edit its code."
-    : team ? "Custom code runs in Local workflows for now."
+    : shared ? "Custom code runs in Local workflows for now."
     : !info ? (state === "loading" ? "Loading its code…" : error || "Its code isn't available here.")
     : info.kind === "flow" || !info.convertible ? info.reason || "This step steers the workflow, so it can't become custom code."
     : "";
@@ -400,7 +400,7 @@ function CustomCode(props: CustomProps) {
       <span><strong>Custom code</strong>{from ? ` · made from ${fromName}` : ""}</span>
       <ProblemsChip problems={chipProblems} onPick={show} />
     </div>
-    {props.team ? <p className="aw-field-error aw-code-why" role="note">Custom code runs in Local workflows for now: a team workflow can't save or run it. Copy this workflow to Local to use it.</p> : null}
+    {props.shared ? <p className="aw-field-error aw-code-why" role="note">Custom code runs in Local workflows for now: a shared workflow can't save or run it. Copy this workflow to Local to use it.</p> : null}
     {needsReview ? <div className="aw-code-review" role="status">
       <p>An agent changed this code, so it won't run on its own yet. Read it, then press Review, or run it once yourself.</p>
       <button type="button" className="is-primary" title="You read this code: it may run on its own on this PC" onClick={() => void approve()}><Icons.Check /> Review</button>

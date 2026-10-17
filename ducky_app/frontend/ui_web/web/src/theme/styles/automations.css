@@ -93,9 +93,9 @@
 .aw-list-toggle { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .aw-list-toggle:hover { background: var(--bg-hover); }
 .aw-root.is-list-collapsed .aw-list-head { border-bottom: 0; }
-/* Folders by owner: Local, then each team. */
+/* Folders by owner: Local, then each shared space. */
 .aw-folder-icon { display: inline-flex; color: var(--text-muted); }
-.aw-folder--team .aw-folder-icon { color: var(--blue); }
+.aw-folder--shared .aw-folder-icon { color: var(--blue); }
 .aw-folder-lock { display: grid; place-items: center; width: 30px; height: 30px; color: var(--text-muted); }
 .aw-sync-error { color: var(--amber); }
 .aw-list-name { flex: 1; min-width: 0; }
@@ -1094,7 +1094,7 @@
   backdrop-filter: blur(var(--wf-panel-blur)) saturate(140%);
 }
 
-/* Local / team row: its buttons float over the end of the row on hover, like a folder's. */
+/* Local / shared row: its buttons float over the end of the row on hover, like a folder's. */
 .aw-section-head { position: relative; }
 .aw-section-head:hover .aw-section-actions, .aw-section-head:focus-within .aw-section-actions { opacity: 1; pointer-events: auto; }
 

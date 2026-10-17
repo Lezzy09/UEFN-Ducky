@@ -122,14 +122,14 @@ describe("folder templates", () => {
     api.export_workflow_folder.mockResolvedValue({ ok: true, bundle: exported });
     api.save_workflow_template.mockResolvedValue({ ok: true, template: { ...mine, id: "custom:new12345" } });
     const onClose = vi.fn();
-    show({ onClose, saveFolder: { ownerId: "teamA", path: "Games/Kit" } });
+    show({ onClose, saveFolder: { ownerId: "spaceA", path: "Games/Kit" } });
     expect(await screen.findByText("Save folder as template")).toBeTruthy();
-    expect(api.export_workflow_folder).toHaveBeenCalledWith("teamA", "Games/Kit");
+    expect(api.export_workflow_folder).toHaveBeenCalledWith("spaceA", "Games/Kit");
     expect((screen.getByRole("textbox", { name: "Template name" }) as HTMLInputElement).value).toBe("Kit");
     await screen.findByText(/The folder “Kit”: 2 workflows, 1 folder inside/);
     expect(within(screen.getByRole("list", { name: "What it makes" })).getByText("Card art - one card")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save template" }));
-    await waitFor(() => expect(api.save_workflow_template).toHaveBeenCalledWith("Kit", "", "📁", "", "", "Yours", "teamA", "Games/Kit"));
+    await waitFor(() => expect(api.save_workflow_template).toHaveBeenCalledWith("Kit", "", "📁", "", "", "Yours", "spaceA", "Games/Kit"));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 

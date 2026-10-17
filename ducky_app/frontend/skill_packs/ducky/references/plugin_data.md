@@ -1,18 +1,18 @@
 ---
-description: "Plugin data and teams: api.data docs and files, Local or exactly one team, sensitive data, encryption, read-only and lost access"
+description: "Plugin data: api.data docs and files, Local or one shared space, sensitive data, encryption, read-only and lost access"
 metadata:
   order: 4
-  label: "Plugins: data and teams"
+  label: "Plugins: data"
   default_enabled: false
-  load_condition: "A plugin stores records, files or settings, or the user asks about sharing plugin data with a team"
+  load_condition: "A plugin stores records, files or settings, or the user asks where a plugin's data lives or about sharing it"
 ---
 
-# Plugin data and teams
+# Plugin data
 
 Every plugin stores its data through the host: `api.data` in the backend, `data.*` /
 `files.*` in panels. Never a folder, file, SQLite database or `%LOCALAPPDATA%` path
 you pick: the host keeps each plugin's data per signed-in account and per scope,
-encrypted on disk, and syncs team copies.
+encrypted on disk, and syncs shared copies.
 
 ## Docs and files
 
@@ -27,7 +27,7 @@ encrypted on disk, and syncs team copies.
 | `get_file(path)` → bytes or `None` | `files.get {path}` → `{ok, b64}` | Read it back; there is no file path to hand out |
 | `has_file(path)`, `files(prefix)` | `files.list {prefix}` | Exists / list `[{path, size, sha256}]` |
 | `delete_file(path)` | `files.delete {path}` | Remove one file |
-| `scope()` | `scope.get` → `{scope}` | `{kind, label, teamId, readOnly}`: whose copy this is |
+| `scope()` | `scope.get` → `{scope}` | `{kind, label, spaceId, readOnly}`: whose copy this is (`kind` is `personal`, `shared` or `sandbox`) |
 
 - **One doc per entity**: `card.pip`, `pack.starter`, `run.2026-10-08`. Never one
   big `db.json`: two people editing different cards must not overwrite each other.
@@ -36,41 +36,40 @@ encrypted on disk, and syncs team copies.
   no `..`, no leading dot. Sanitize ids that come from users before using them in keys.
 - `put` returns `changed: false` when nothing changed, so it is cheap to call.
 
-## Local or exactly one team
+## Local or one shared space
 
 - The **user** picks, per plugin, whether its data is **Local** (this account on this
-  PC) or shared with **one** team: Plugins → the plugin → Data. A plugin never
-  decides, never mixes the two, and needs no code for either.
+  PC) or one **shared space** offered by an installed plugin: Plugins → the plugin →
+  Data. A plugin never decides, never mixes the two, and needs no code for either.
+  With no shared spaces on offer, Local is the only choice and the Data page says so.
 - `ducky_plugin_data_scope(id, scope="")`: empty `scope` tells you which copy a plugin
-  uses; `"local"` or a team id switches it. Switch only when the user asks: it asks
+  uses; `"local"` or a space id switches it. Switch only when the user asks: it asks
   them first, nothing is copied, open panels are told, the new copy syncs, and the
   plugin restarts on it with its open panels reloaded.
 - Panels get `plugin_scope_changed` when the scope switches or a sync brings new data:
   re-read your docs. The backend reads the scope fresh on every call.
-- `prefs.*` and `cache.*` follow the scope too: a team copy has its own prefs and cache
-  on this PC (never synced), locked and unlocked with it.
+- `prefs.*` and `cache.*` follow the scope too: a shared copy has its own prefs and
+  cache on this PC (never synced), locked and unlocked with it.
 
-## Team copies
+## Shared copies
 
-- Synced with the team through the Store. Each item is encrypted with that team's
-  own key before it leaves the PC; the server stores only encrypted bytes. Teams
-  never see each other's data.
-- A team copy can be **read-only** (the team's storage plan is paused). Writes then
+- Synced with everyone in the space; each space keeps its own copy and spaces never
+  see each other's data. The plugin that offers the space syncs it; its skill says how.
+- A shared copy can be **read-only** (paused by whoever runs the space). Writes then
   raise `PermissionError` with a message for the user. Catch it in tools and return
   `{"ok": False, "error": str(exc)}`.
-- **Losing access** to the team locks its copy on this PC: reads come back empty and
-  writes fail until access returns, then everything unlocks as it was. After a week
-  without access the copy on this PC is deleted (never the server's). A plugin
-  published to that team pauses too, and resumes when access returns.
+- **Losing access** to the space locks its copy on this PC: reads come back empty and
+  writes fail until access returns, then everything unlocks as it was. A copy that
+  stays locked long enough leaves this PC (never the server's).
 - Whose data the user is looking at: the panel's scope bar shows it, and the host adds
-  `scope` (`local` or `team <name>`) to every dict a tool of a data-using plugin
+  `scope` (`local` or the space's name) to every dict a tool of a data-using plugin
   returns. Say it in your reply when it matters.
 
 ## Sensitive data
 
 `api.data.put(key, value, sensitive=True)` keeps a doc on this PC in the account's
 own scope and **never syncs it**, whatever scope the plugin uses. Use it for
-personal tokens, private notes, anything that must not reach a team.
+personal tokens, private notes, anything that must not leave this PC.
 
 - Read it with `get(key, sensitive=True)`. `keys()` and `items()` never list it.
 - Delete it with `api.data.personal().delete(key)` (plain `delete` acts on the

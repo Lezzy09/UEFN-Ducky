@@ -521,15 +521,18 @@ export interface AutomationRunDto {
   node_outputs?: Record<string, Record<string, unknown>>;
 }
 
-/** Who owns a workflow: Local (this PC only) or a team (synced to every member). */
+/** Who owns a workflow: Local (this PC only) or a shared space (synced to everyone in it). */
 export interface WorkflowOwnerDto {
   id: string;
-  kind: "local" | "team";
+  kind: "local" | "shared";
   label: string;
   state?: string;
   readOnly?: boolean;
-  /** Why it is read-only here (no Manage automations, waiting for team data, …). */
+  /** Why it is read-only here (no permission, waiting for the space's data, …). */
   reason?: string;
+  /** How a shared owner is named (the provider's word for it), and what its paused line says. */
+  kindLabel?: string;
+  pausedLabel?: string;
   sync?: {
     state?: string;
     error?: string;
@@ -537,9 +540,9 @@ export interface WorkflowOwnerDto {
     pending?: number;
     members?: number;
   };
-  /** Team's web slug (team folders), for "Open on the web". */
+  /** The space's web page id (shared folders), for "Open on the web". */
   slug?: string;
-  /** The owner's kept folders, empty ones too (a team's sync to every member); the list adds the folders its rows are filed in. */
+  /** The owner's kept folders, empty ones too (a space's sync to everyone in it); the list adds the folders its rows are filed in. */
   folders?: string[];
 }
 
@@ -570,7 +573,9 @@ export interface WorkflowOwnersDto {
   error?: string;
   owners?: WorkflowOwnerDto[];
   signedIn?: boolean;
-  teamsEnabled?: boolean;
+  spacesEnabled?: boolean;
+  /** How shared owners are named (the provider's word for it); "space" when unset. */
+  kindLabel?: string;
   /** Workflows made while signed out on this PC, offered to the signed-in account. */
   localImport?: number;
 }
@@ -593,7 +598,7 @@ export interface AutomationDto {
   updated?: number;
   last_run?: number;
   owner?: WorkflowOwnerDto;
-  /** Team workflows: this PC runs its schedule and triggers. */
+  /** Shared workflows: this PC runs its schedule and triggers. */
   run_here?: boolean;
 }
 
@@ -1562,75 +1567,6 @@ export type RemoteAccessStatus = {
   session_list?: { n: number; expires_in_s: number }[];
 };
 
-export interface DuckyOSTeamMemberDto {
-  user_id?: string;
-  email?: string;
-  role?: string;
-  display_name?: string;
-  online?: boolean;
-  presence?: {
-    source?: string;
-    project_label?: string;
-    uefn_online?: boolean;
-    last_seen?: string;
-  };
-}
-
-export interface DuckyOSTeamRoleDto {
-  id?: string;
-  name?: string;
-  builtin?: boolean;
-  perms?: string[];
-}
-
-export interface DuckyOSTeamPermsDto {
-  invite?: boolean;
-  revoke_invite?: boolean;
-  change_role?: boolean;
-  remove_member?: boolean;
-  edit_team?: boolean;
-  manage_roles?: boolean;
-  manage_plugins?: boolean;
-}
-
-export interface DuckyOSTeamDto {
-  id?: string;
-  name?: string;
-  slug?: string;
-  description?: string;
-  my_role?: string;
-  members?: DuckyOSTeamMemberDto[];
-  roles?: DuckyOSTeamRoleDto[];
-  pending_invites?: Array<{ email?: string; role?: string; token?: string }>;
-  perms?: DuckyOSTeamPermsDto;
-}
-
-export interface DuckyOSTeamQuotaDto {
-  can_create?: boolean;
-  max_owned?: number;
-  owned_count?: number;
-}
-
-export interface DuckyOSTeamsSnapshot {
-  ok?: boolean;
-  error?: string;
-  code?: string;
-  teams?: DuckyOSTeamDto[];
-  needs_team?: boolean;
-  online?: Array<{
-    user_id?: string;
-    display_name?: string;
-    source?: string;
-    project_label?: string;
-    uefn_online?: boolean;
-    is_self?: boolean;
-  }>;
-  teams_url?: string;
-  invite_url?: string;
-  stale_seconds?: number;
-  quota?: DuckyOSTeamQuotaDto;
-}
-
 export type DuckyOSStoreItemState = "available" | "installed" | "update" | "unsupported";
 
 export interface DuckyOSStoreItemDto {
@@ -1657,21 +1593,20 @@ export interface DuckyOSStoreItemDto {
   has_icon?: boolean;
   icon_mime?: string | null;
   icon_data_url?: string | null;
-  /** Private items are listed only to members of the owning team. */
+  /** Private items are listed only to their audience. */
   visibility?: "public" | "private";
-  owner_team_id?: string | null;
-  owner_team_name?: string;
-  /** Owned by one of the signed-in account's teams (Team category). */
-  my_team?: boolean;
+  audience_id?: string | null;
+  audience_label?: string;
+  /** Shared with the signed-in account (Shared category). */
+  mine?: boolean;
   /** Content summary when a plugin bundles skills/themes/etc. */
   contributes_summary?: string[];
 }
 
-export interface DuckyOSStoreTeamInfo {
-  teamId: string;
-  name: string;
-  privateActive?: boolean;
-  hiddenPrivate?: number;
+export interface DuckyOSStoreAudienceNote {
+  id: string;
+  label: string;
+  note: string;
 }
 
 export interface DuckyOSStoreCatalog {
@@ -1680,10 +1615,14 @@ export interface DuckyOSStoreCatalog {
   code?: string;
   /** Account this catalog was fetched as ("" signed out) — caches are keyed by it. */
   account?: string;
-  /** Account has the teams beta (uefn-ducky-store.teams); missing = false. */
-  teams?: boolean;
-  /** Per team (only with `teams`): hiddenPrivate > 0 while Team Private is paused. */
-  teamsInfo?: DuckyOSStoreTeamInfo[];
+  /** The account has private audiences (the Shared category shows); missing = false. */
+  audiences?: boolean;
+  /** Notes per audience (only with `audiences`), e.g. why its private items are hidden. */
+  audienceNotes?: DuckyOSStoreAudienceNote[];
+  /** What the Shared category is called (the provider's word for it). */
+  audienceCategoryLabel?: string;
+  /** What the empty Shared category says, and where its link goes. */
+  audienceEmpty?: { text?: string; actionLabel?: string; path?: string } | null;
   items?: DuckyOSStoreItemDto[];
 }
 
@@ -2288,11 +2227,11 @@ export interface PanelPushEvent {
   setup_phase?: "installing" | "installed" | "skipped" | "error";
 }
 
-/** Whose plugin data a panel shows (host scope bar; team plans P3). */
+/** Whose plugin data a panel shows (host scope bar). */
 export interface PluginScopeView {
-  kind: "personal" | "team";
+  kind: "personal" | "shared" | "sandbox";
   label: string;
-  teamId: string;
+  spaceId: string;
   readOnly: boolean;
 }
 
@@ -2306,15 +2245,17 @@ export interface PluginScopeUsage {
 
 export interface PluginScopeStatus {
   ok?: boolean;
-  /** False for accounts without the Teams beta: no bar at all. */
+  /** False while the account has no shared spaces to offer: no bar at all. */
   visible?: boolean;
+  /** How shared spaces are named (the provider's word for it); "space" when unset. */
+  kindLabel?: string;
   scope?: PluginScopeView;
   /** The plugin's display name (its id when the manifest has none). */
   pluginLabel?: string;
   email?: string;
   canChange?: boolean;
   members?: number;
-  /** ok | paused | offline | error | unavailable | waiting | locked | lost (access to the team lost) */
+  /** ok | paused | offline | error | unavailable | waiting | locked | lost (access to the space lost) */
   state?: string;
   error?: string;
   syncedAt?: number | null;
@@ -2323,8 +2264,11 @@ export interface PluginScopeStatus {
   /** This plugin's Local copy, and the copy it shows now (the same when Local). */
   local?: PluginDataTotals;
   current?: PluginDataTotals;
-  /** The team's web slug, for "View on the web" (team copy only). */
-  teamSlug?: string;
+  /** The space has a web page, for "View on the web" (shared copy only). */
+  webPage?: boolean;
+  /** What a paused (read-only) shared copy says, and a link that helps. */
+  pausedText?: string;
+  pausedAction?: { label: string; path: string };
   /** Lost access: when (epoch seconds) the locked copy leaves this PC unless access comes back. */
   deleteAt?: number;
 }
@@ -2338,7 +2282,7 @@ export interface PluginDataTotals {
 
 export interface PluginScopeChoice {
   id: string;
-  kind: "personal" | "team";
+  kind: "personal" | "shared";
   label: string;
   members?: number;
   slug?: string;
@@ -2913,29 +2857,8 @@ export interface PanelApi {
   }>;
   duckyos_revoke_pc?(key_id: string): Promise<DuckyOSAccountStatus & { ok?: boolean; error?: string }>;
   duckyos_open_admin(): Promise<void>;
-  duckyos_teams_snapshot?(stale_seconds?: number): Promise<DuckyOSTeamsSnapshot>;
-  duckyos_open_teams_site?(path?: string): Promise<{ ok?: boolean; url?: string; error?: string }>;
-  duckyos_team_create?(name: string): Promise<{ ok?: boolean; slug?: string; error?: string }>;
-  duckyos_team_update?(team_slug: string, name?: string): Promise<{ ok?: boolean; error?: string }>;
-  duckyos_team_invite?(
-    team_slug: string,
-    email: string,
-    role?: string,
-  ): Promise<{ ok?: boolean; emailed?: boolean; token?: string; error?: string }>;
-  duckyos_team_set_role?(
-    team_slug: string,
-    user_id: string,
-    role: string,
-  ): Promise<{ ok?: boolean; error?: string }>;
-  duckyos_team_set_roles?(
-    team_slug: string,
-    roles: DuckyOSTeamRoleDto[],
-  ): Promise<{ ok?: boolean; error?: string }>;
-  duckyos_team_remove_member?(
-    team_slug: string,
-    user_id: string,
-  ): Promise<{ ok?: boolean; error?: string }>;
-  duckyos_team_revoke_invite?(token: string): Promise<{ ok?: boolean; error?: string }>;
+  /** Opens a path of the signed-in account's website. */
+  duckyos_open_site?(path?: string): Promise<{ ok?: boolean; url?: string; error?: string }>;
   remote_status?(): Promise<RemoteAccessStatus>;
   remote_set_enabled?(enabled: boolean): Promise<RemoteAccessStatus>;
   remote_sign_out_all?(): Promise<RemoteAccessStatus>;
@@ -3007,10 +2930,10 @@ export interface PanelApi {
   get_workflow_version?(workflowId: string, versionId: string): Promise<{ ok?: boolean; workflow?: AutomationDto; error?: string }>;
   list_workflows?(): Promise<{ ok?: boolean; workflows?: AutomationSummaryDto[] }>;
   workflow_owners?(refresh?: boolean): Promise<WorkflowOwnersDto>;
-  workflow_sync?(force?: boolean, team_id?: string, upload?: boolean): Promise<{ ok?: boolean; started?: boolean; error?: string }>;
+  workflow_sync?(force?: boolean, space_id?: string, upload?: boolean): Promise<{ ok?: boolean; started?: boolean; error?: string }>;
   import_local_workflows?(): Promise<{ ok?: boolean; moved?: number; error?: string }>;
-  /** Opens the team's Workflows tab on the website. */
-  workflow_open_web?(team_id: string): Promise<{ ok?: boolean; url?: string; error?: string }>;
+  /** Opens the shared space's Workflows page on the web. */
+  workflow_open_web?(space_id: string): Promise<{ ok?: boolean; url?: string; error?: string }>;
   get_workflow?(workflow_id: string): Promise<{ ok?: boolean; error?: string; workflow?: AutomationDto }>;
   save_workflow?(doc: Partial<AutomationDto> & { graph?: AutomationGraphDto }, owner?: string): Promise<{
     ok?: boolean;
@@ -3027,7 +2950,7 @@ export interface PanelApi {
   add_workflow_folder?(owner: string, path: string): Promise<{ ok?: boolean; error?: string; folders?: string[] }>;
   export_workflow_folder?(owner: string, path: string): Promise<{ ok?: boolean; error?: string; bundle?: WorkflowBundleDto }>;
   import_workflow_bundle?(bundle: WorkflowBundleDto, owner?: string, parent_path?: string, name?: string): Promise<WorkflowFolderCopyDto>;
-  /** Copy (new ids, calls re-pointed) or move (same ids) a whole folder tree to Local or a team. */
+  /** Copy (new ids, calls re-pointed) or move (same ids) a whole folder tree to Local or a shared space. */
   copy_workflow_folder?(owner_from: string, path: string, owner_to: string, parent_path?: string, move?: boolean): Promise<WorkflowFolderCopyDto>;
   delete_workflow?(workflow_id: string): Promise<{ ok?: boolean; error?: string }>;
   /** Stop button: ends every run of this workflow on this PC now. */
@@ -4054,17 +3977,17 @@ export interface PanelApi {
     op: string,
     params?: Record<string, unknown>,
   ): Promise<Record<string, unknown> & { ok?: boolean; error?: string; code?: string }>;
-  /** Where one plugin's data lives: Local or one team (picked per plugin). */
+  /** Where one plugin's data lives: Local or one shared space (picked per plugin). */
   plugin_scope_status?(plugin_id: string): Promise<PluginScopeStatus>;
-  /** Calls the Store hub — only when a picker opens. */
-  plugin_scope_choices?(): Promise<{ ok?: boolean; choices?: PluginScopeChoice[]; error?: string }>;
+  /** Asks the spaces provider — only when a picker opens. */
+  plugin_scope_choices?(): Promise<{ ok?: boolean; choices?: PluginScopeChoice[]; kindLabel?: string; emptyNote?: string; error?: string }>;
   plugin_scope_set?(plugin_id: string, scope_id: string): Promise<PluginScopeStatus>;
   /** An error inside a plugin panel (bridge `panel.error`), for ducky_plugin_errors. */
   plugin_panel_error?(plugin_id: string, panel_id: string, kind: string, message: string, stack: string): Promise<{ ok?: boolean }>;
   plugin_scope_sync?(plugin_id: string, force?: boolean): Promise<{ ok?: boolean; started?: boolean; error?: string }>;
-  /** One way, on request: the plugin's Local data into one team's copy (the team's items are kept). */
-  plugin_data_copy_to_team?(plugin_id: string, team_id: string): Promise<{ ok?: boolean; copied?: number; kept?: number; error?: string }>;
-  /** Opens the team's copy of this plugin's data on the website. */
+  /** One way, on request: the plugin's Local data into one shared space's copy (its items are kept). */
+  plugin_data_copy_to_space?(plugin_id: string, space_id: string): Promise<{ ok?: boolean; copied?: number; kept?: number; error?: string }>;
+  /** Opens the shared space's copy of this plugin's data on the web. */
   plugin_data_open_web?(plugin_id: string): Promise<{ ok?: boolean; url?: string; error?: string }>;
   plugin_prefs_get_all?(): Promise<{
     ok: boolean;

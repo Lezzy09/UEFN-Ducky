@@ -12,24 +12,21 @@ metadata:
 You build plugins **for this install** with `ducky_plugin_*` only. Drafts are
 shared across chats; the tools write the files and you never open those folders.
 A draft runs only on its author's PC and needs no license. Other people get a plugin
-only through the UEFN Ducky Store: `ducky_plugin_publish(id, target="team"|"public",
-team_id, notes)` builds it compiled and uploads it (`ducky_plugin_build` checks the
-build first). Team: live for that team's members at once, and it pauses for anyone who
-loses access. Public: anyone, after Store staff review and rebuild it. Every Store
-download carries a license, baked in at build time, free ones too. See
-`plugin_publishing`.
+only through the UEFN Ducky Store: the Ducky Account plugin's publishing tools build it
+compiled and upload it. Every Store download carries a license, baked in at build time,
+free ones too. See `plugin_publishing`.
 
 ### Load the reference you need
 
 | Need | `skill_read_subskill("ducky", …)` |
 |---|---|
 | UI kit, every Appearance variable, panel states, hidden tabs, themes | `plugin_look` |
-| `api.data`, Local or one team, `sensitive`, encryption, lost team access | `plugin_data` |
-| Build, publish to a team or public, licenses, what compiles | `plugin_publishing` |
+| `api.data`, Local or one shared space, `sensitive`, encryption, lost access | `plugin_data` |
+| Share through the Store, licenses, what compiles | `plugin_publishing` |
 | Validate, test, read errors, fix loop | `plugin_testing` |
 | Known problems (read before you say it's done) | `plugin_known_problems` |
 | Examples: tab app or dashboard, dock panel, file editor, theme or skin | `plugin_examples_ui` |
-| Examples: tools only, workflow nodes and templates, settings and secrets, connection checks, team-shared data | `plugin_examples_tools` |
+| Examples: tools only, workflow nodes and templates, settings and secrets, connection checks, shared data | `plugin_examples_tools` |
 | Examples: Verse templates, UEFN listener tools, Blender and Meshy pipelines | `plugin_examples_uefn` |
 | Examples: image generators, AI providers, sounds and hooks, walkthroughs | `plugin_examples_app` |
 | Workflow graphs, nodes, pins, templates in depth | `workflows` |
@@ -73,9 +70,9 @@ download carries a license, baked in at build time, free ones too. See
 7. **Mutators record a changeset** (`api.changeset.record(…)` with an `inverse`, slot
    `{plugin_id}://{kind}/{id}/{facet}`) so Revert can undo them.
 8. **Data only through `api.data`** (panels: `data.*` / `files.*`). Never a folder or
-   file you pick. One doc per record. The user picks Local or exactly one team per
+   file you pick. One doc per record. The user picks Local or one shared space per
    plugin (never mixed; switching restarts the plugin on the other copy), and prefs
-   and cache follow that choice. Team copies are encrypted per team and lock when
+   and cache follow that choice. Shared copies are encrypted per space and lock when
    access is lost; `sensitive=True` docs stay on this PC. See `plugin_data`.
 9. **Write code that compiles.** Published backends are compiled: never read your own
    `.py` source, never load `.py` files by path, import your modules relatively
@@ -163,7 +160,7 @@ settings), `contributes`, `"backend": {"entry": "backend", "register": "register
 | `@api.register_pipeline_node("<id>.<node>")` | Workflow node handler `fn(ctx) -> dict` (alias `register_automation_node`). |
 | `api.register_panel_rpc(name, fn)` | Panel `plugin.call` target. `fn` is called with **keyword** arguments: `fn(**params)`. |
 | `api.call_tool(name, arguments=None)` | Call any Ducky MCP tool in-process, with the same approvals as the agent; returns the parsed result, raises `ValueError` on failure. |
-| `api.data` | Docs and files in the plugin's data scope (`plugin_data`). Tools of a plugin that uses it get `scope` (`local` / `team <name>`) added to their dict results. |
+| `api.data` | Docs and files in the plugin's data scope (`plugin_data`). Tools of a plugin that uses it get `scope` (`local` or the space's name) added to their dict results. |
 | `api.search.upsert(id, title, text, meta=None)` / `.delete(id)` / `.clear()` / `.query(text, limit=10)` | Make the plugin's own records (pages, cards, entries) findable by meaning and keywords. Only this plugin's records in its data scope for the signed-in person; kept on an index rebuild, removed on uninstall. Upserting unchanged text is free, so re-sync everything on start. Expose them to agents through your own tool that calls `api.search.query`. One record per section of a long document. |
 | `api.changeset.record(command=, kind=, ident=, facet=, before=, inverse=, slot=)` | Changes ledger entry; never raises. |
 | `api.listener(command, params, timeout=None)` | One command to the live UEFN listener. |
@@ -215,7 +212,7 @@ Panels are sandboxed iframes that talk to the host with `postMessage` on channel
 | `plugin.subscribe` | `{types: [...]}`: host push events you want |
 | `theme.get` | → `{vars}` (keys without `--`; the kit applies them) |
 | `prefs.get` / `prefs.set` | `{id}` / `{id, value}`: small per-plugin UI choices (follow the data scope) |
-| `scope.get` | → `{scope: {kind, label, teamId, readOnly}}` |
+| `scope.get` | → `{scope: {kind, label, spaceId, readOnly}}` |
 | `data.get` / `data.put` / `data.list` / `data.delete` | One JSON doc per key (≤ 1 MB) |
 | `files.put` / `files.get` / `files.list` / `files.delete` | Base64 files (≤ 100 MB) |
 | `cache.get` / `cache.set` / `cache.clear` | Throwaway cache |

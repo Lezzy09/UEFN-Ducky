@@ -51,13 +51,13 @@ import {
   categoryLabel,
   CORE_STORE_CATEGORIES,
   filterStoreItems,
-  groupByTeam,
+  groupByAudience,
   HIDDEN_BROWSE_CATEGORIES,
   AI_MADE_CATEGORY,
   INSTALLED_CATEGORY,
   itemCategories,
   itemKind,
-  TEAM_CATEGORY,
+  SHARED_CATEGORY,
 } from "./storeFilters";
 import { StoreCard } from "./store/StoreCard";
 import { StoreDetailView } from "./store/StoreDetailView";
@@ -336,12 +336,13 @@ export function StoreTab() {
     return () => window.clearTimeout(t);
   }, [catalogLoading, catalog?.items?.length, query, categoryFilter]);
 
-  // Teams beta off (or lost on an account switch): no Team category at all.
-  const teamsOn = catalog?.teams === true;
+  // No audiences (or lost on an account switch): no Shared category at all.
+  const sharedOn = catalog?.audiences === true;
+  const sharedLabel = catalog?.audienceCategoryLabel || "Shared";
   useEffect(() => {
-    const noTeams = categoryFilter === TEAM_CATEGORY && catalog && !teamsOn;
-    if (HIDDEN_BROWSE_CATEGORIES.has(categoryFilter) || noTeams) setCategoryFilter("");
-  }, [categoryFilter, catalog, teamsOn]);
+    const noShared = categoryFilter === SHARED_CATEGORY && catalog && !sharedOn;
+    if (HIDDEN_BROWSE_CATEGORIES.has(categoryFilter) || noShared) setCategoryFilter("");
+  }, [categoryFilter, catalog, sharedOn]);
 
   useEffect(() => {
     if (!detailItem || !catalog?.items) return;
@@ -404,7 +405,7 @@ export function StoreTab() {
     let timer: number | undefined;
     const unsubscribe = subscribePanelPush((event) => {
       if (event.type === "duckyos_account_changed") {
-        // Never show the previous account's team items: drop them, refetch as the new one.
+        // Never show the previous account's private items: drop them, refetch as the new one.
         clearStoreCatalogCache();
         setCatalog(null);
         setDetailItem(null);
@@ -811,7 +812,7 @@ export function StoreTab() {
 
   const allItems = useMemo(() => catalogItems(catalog), [catalog]);
   allItemsRef.current = allItems;
-  const sections = useMemo(() => deriveSections(allItems), [allItems]);
+  const sections = useMemo(() => deriveSections(allItems, sharedLabel), [allItems, sharedLabel]);
   const slides = useMemo(() => deriveHeroSlides(allItems), [allItems]);
   const filtering = Boolean(query.trim() || categoryFilter);
   const filteredItems = useMemo(
@@ -827,21 +828,21 @@ export function StoreTab() {
           (c) =>
             c !== INSTALLED_CATEGORY &&
             c !== AI_MADE_CATEGORY &&
-            c !== TEAM_CATEGORY &&
+            c !== SHARED_CATEGORY &&
             !HIDDEN_BROWSE_CATEGORIES.has(c),
         )
         .sort(),
     [allItems],
   );
   const sectionData = activeSection ? sections.find((s) => s.key === activeSection) : undefined;
-  // Team category: one heading per team when the viewer is in several, plus the
-  // "Team Private paused" note for teams whose private plugins are hidden.
+  // Shared category: one heading per audience when the viewer is in several, plus each
+  // audience's note (e.g. why its private plugins are hidden).
   const gridGroups = useMemo(
     () =>
-      categoryFilter === TEAM_CATEGORY
-        ? groupByTeam(filteredItems, teamsOn ? catalog?.teamsInfo : [])
-        : [{ key: "", team: "", items: filteredItems, note: "" }],
-    [categoryFilter, filteredItems, teamsOn, catalog?.teamsInfo],
+      categoryFilter === SHARED_CATEGORY
+        ? groupByAudience(filteredItems, sharedOn ? catalog?.audienceNotes : [])
+        : [{ key: "", label: "", items: filteredItems, note: "" }],
+    [categoryFilter, filteredItems, sharedOn, catalog?.audienceNotes],
   );
   const view = detailItem || pendingDetailSlug ? "detail" : activeSection ? "section" : "main";
   const showSkeleton = catalogLoading && allItems.length === 0;
@@ -1154,7 +1155,7 @@ export function StoreTab() {
                 value={categoryFilter}
                 options={[
                   { value: "", label: "All Categories" },
-                  ...(teamsOn ? [{ value: TEAM_CATEGORY, label: "Team" }] : []),
+                  ...(sharedOn ? [{ value: SHARED_CATEGORY, label: sharedLabel }] : []),
                   { value: INSTALLED_CATEGORY, label: "Installed" },
                   { value: AI_MADE_CATEGORY, label: "AI-made" },
                   ...categoryOptions.map((c) => ({ value: c, label: categoryLabel(c) })),
@@ -1238,9 +1239,9 @@ export function StoreTab() {
                 gridGroups.map((group) => (
                   <Fragment key={group.key}>
                     {gridGroups.length > 1 ? (
-                      <h3 className="ds-section-title">{group.team || "Team"}</h3>
+                      <h3 className="ds-section-title">{group.label || sharedLabel}</h3>
                     ) : null}
-                    {group.note ? <p className="ds-team-note">{group.note}</p> : null}
+                    {group.note ? <p className="ds-audience-note">{group.note}</p> : null}
                     {group.items.length ? (
                       <div className="ds-grid">
                         {group.items.map((item, i) => (
@@ -1250,21 +1251,21 @@ export function StoreTab() {
                     ) : null}
                   </Fragment>
                 ))
-              ) : categoryFilter === TEAM_CATEGORY && teamsOn && !query.trim() ? (
-                // ponytail: no team items reads as "no team" — telling "in a team with
-                // nothing shared yet" apart needs the Teams hub call; add it with the Teams tab.
+              ) : categoryFilter === SHARED_CATEGORY && sharedOn && catalog?.audienceEmpty?.text && !query.trim() ? (
                 <div className="ds-empty">
                   <span className="ds-empty-icon" aria-hidden>
                     <Icons.Box />
                   </span>
-                  <p>Join or create a team to share private plugins.</p>
-                  <button
-                    type="button"
-                    className="ds-link"
-                    onClick={() => void getApi()?.duckyos_open_teams_site?.("/profile")}
-                  >
-                    Open Teams
-                  </button>
+                  <p>{catalog.audienceEmpty.text}</p>
+                  {catalog.audienceEmpty.actionLabel ? (
+                    <button
+                      type="button"
+                      className="ds-link"
+                      onClick={() => void getApi()?.duckyos_open_site?.(catalog.audienceEmpty?.path || "/")}
+                    >
+                      {catalog.audienceEmpty.actionLabel}
+                    </button>
+                  ) : null}
                 </div>
               ) : (
                 <div className="ds-empty">

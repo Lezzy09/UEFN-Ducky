@@ -60,7 +60,7 @@ await call("prefs.get", { id: "highScore" });
 | `theme.get` | — | `{ vars }` — Appearance CSS vars (keys without `--`) |
 | `prefs.get` | optional `{ id }` | `{ prefs }` or `{ id, value }` |
 | `prefs.set` | `{ id, value }` (bool/string/number/null) | `{ ok: true }` |
-| `scope.get` | — | `{ scope: { kind, label, teamId, readOnly } }` — whose data this panel shows |
+| `scope.get` | — | `{ scope: { kind, label, spaceId, readOnly } }` — whose data this panel shows (`kind`: `personal`, `shared` or `sandbox`) |
 | `data.get` | `{ key }` | `{ key, value }` (`null` when missing) |
 | `data.put` | `{ key, value }` (any JSON, ≤ 1 MB) | `{ ok, changed }` |
 | `data.list` | `{ prefix?, values? }` | `{ keys }`, or `{ items: { key: value } }` with `values: true` |
@@ -74,8 +74,8 @@ await call("prefs.get", { id: "highScore" });
 
 Store plugin data through `data.*` / `files.*` (panels) or `api.data` (Python
 backends) — never a folder you pick yourself. The host keeps it per signed-in
-account and per scope: Local, or the one team the user picked for this plugin in
-Plugins → the plugin → Data (the plugin has no say). Team copies sync; teams never
+account and per scope: Local, or the one shared space the user picked for this plugin
+in Plugins → the plugin → Data (the plugin has no say). Shared copies sync; spaces never
 share data with each other. Plugin data on each PC is encrypted for
 the signed-in account (docs, files, cache and prefs), so files have no readable
 path: read them with `files.get`.
@@ -85,11 +85,11 @@ path: read them with `files.get`.
 - Doc keys `[a-z0-9._-]` ≤ 128; file paths `[a-z0-9._/-]` ≤ 256, no `..`, no
   leading dots.
 - A shared scope can be read-only; writes then fail with a clear error. When the
-  user loses access to the team, its copy is locked: reads come back empty and
-  writes fail until access returns (a week later the copy leaves the PC).
+  user loses access to the space, its copy is locked: reads come back empty and
+  writes fail until access returns (after a while the copy leaves the PC).
 - When the scope changes or a sync brings new data, the host pushes
   `{ channel, event: { type: "plugin_scope_changed", scope } }`: re-read your docs.
-- Switching the plugin between Local and a team restarts its backend and reloads
+- Switching the plugin between Local and a shared space restarts its backend and reloads
   its open panels on the new copy; nothing of the old copy is carried over.
 
 The host also pushes `{ channel, event: { type: "appearance_theme", vars } }` on iframe

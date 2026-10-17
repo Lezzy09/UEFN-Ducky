@@ -326,7 +326,7 @@ def _refuse_gone_plugin(conn: Any, plugin_id: str) -> None:
 
 
 def drop_scope_records(account: str, scope_id: str) -> int:
-    """Delete every plugin record of one account's data scope (a team copy purged, a
+    """Delete every plugin record of one account's data scope (a shared copy purged, a
     plugin-test sandbox ended). ``scope`` of a record row is ``<account>~<scope id>``."""
     conn = db.connect()
     with db.write_txn(conn):

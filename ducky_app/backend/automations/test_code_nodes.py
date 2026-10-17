@@ -306,11 +306,11 @@ def test_size_caps_refuse_the_save(files):
         store.save_workflow({"name": "Many", "graph": _graph({"code": chunk}, extra_nodes=nodes)})
 
 
-def test_team_workflows_refuse_code_nodes():
+def test_shared_workflows_refuse_code_nodes():
     with pytest.raises(ValueError, match="Custom code runs in Local workflows for now"):
-        store._with_code(store.normalize_graph(_graph({"code": BLANK})), None, team=True)
+        store._with_code(store.normalize_graph(_graph({"code": BLANK})), None, shared=True)
     plain = store.normalize_graph({"nodes": [{"id": "s", "type": "start.manual"}], "edges": []})
-    assert store._with_code(plain, None, team=True) is plain
+    assert store._with_code(plain, None, shared=True) is plain
 
 
 # --------------------------------------------------------------------------- approvals
@@ -332,11 +332,11 @@ def _run_started(*, person: bool = False, chat: str = ""):
         runner._PERSON.reset(tokens[0])
 
 
-def test_gate_refuses_team_and_unreviewed_agent_code(files, monkeypatch):
+def test_gate_refuses_shared_and_unreviewed_agent_code(files, monkeypatch):
     monkeypatch.setattr("backend.tools.panel.permission_prompt.allows_everything", lambda conv: False)
-    wf, node = _local(kind="team")
+    wf, node = _local(kind="shared")
     with _run_started(person=True):
-        assert code_approval.gate(wf, node, {}) == code_approval.TEAM_REFUSAL
+        assert code_approval.gate(wf, node, {}) == code_approval.SHARED_REFUSAL
     wf, node = _local()
     assert code_approval.gate(wf, node, {"caller_conv_id": "chat-1"}) == code_approval.REVIEW
     assert "Review this code before it runs" in code_approval.REVIEW

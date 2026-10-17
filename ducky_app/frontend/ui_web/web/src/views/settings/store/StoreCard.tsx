@@ -4,7 +4,7 @@ import { targetRef } from "../../../ui-targets/registry";
 import type { DuckyOSStoreItemDto } from "../../../types/panel";
 import { StoreActions, type StoreItemHandlers } from "./StoreActions";
 import { StoreInstallOverlay } from "./StoreInstallOverlay";
-import { authorLabelFor, formatInstalls, itemInitials, teamBadge, type CardBusy } from "./storeData";
+import { audienceBadge, authorLabelFor, formatInstalls, itemInitials, type CardBusy } from "./storeData";
 
 type Props = {
   item: DuckyOSStoreItemDto;
@@ -21,7 +21,7 @@ export function StoreCard({ item, busy, actionBusy, handlers, onOpen }: Props) {
   const done = busy?.phase === "done";
   // Badge only while Update is the pressable action — hide during install overlay.
   const showUpdateBadge = state === "update" && !busy && !actionBusy;
-  const team = teamBadge(item);
+  const audience = audienceBadge(item);
 
   const open = () => onOpen(item);
   const onKeyDown = (e: KeyboardEvent) => {
@@ -70,12 +70,12 @@ export function StoreCard({ item, busy, actionBusy, handlers, onOpen }: Props) {
       <div className="ds-card-body">
         <h4 className="ds-card-title">{item.name || slug}</h4>
         <p className="ds-card-author">{authorLabelFor(item)}</p>
-        {team ? (
+        {audience ? (
           <span
-            className={`ds-team-chip${item.visibility === "private" ? " ds-team-chip--private" : ""}`}
-            title={team}
+            className={`ds-audience-chip${item.visibility === "private" ? " ds-audience-chip--private" : ""}`}
+            title={audience}
           >
-            {team}
+            {audience}
           </span>
         ) : null}
         <div className="ds-card-stats">

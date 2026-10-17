@@ -68,7 +68,7 @@ function CardBody({ row, icon, onOpen }: { row: AutomationSummaryDto; icon: Reac
     return () => { alive = false; };
   }, [row.id, row.updated, row.node_count]);
   const nodes = row.node_count ?? graph?.nodes.length ?? 0;
-  const where = [row.owner?.kind === "team" ? row.owner.label : "Local", row.folder].filter(Boolean).join(" / ");
+  const where = [row.owner?.kind === "shared" ? row.owner.label : "Local", row.folder].filter(Boolean).join(" / ");
   return (
     <button type="button" className="aw-hover-card" onClick={onOpen} title="Open this workflow">
       <div className="editor-tab-hover-card-header">

@@ -1,12 +1,11 @@
-"""P3/P4 + §13 checks: plugin data scopes on one PC, sealed per account, and team
-sync against a fake Store.
+"""Plugin data scopes on one PC, sealed per account, and shared spaces through a fake
+provider (no service: a space's copy lives here exactly like Local's).
 
-Plan P3: two accounts never see each other's rows or folders; switching project
-switches data; signed-out ``_local`` is separate; ``sensitive`` docs never reach a
-sync request; BrainrotTCG cards sync between two members and never to a third
-team; paused = read-only; access lost locks the team scope, access back unlocks
-it, a week later it goes; the inclusive cursor is deduped; a stale push adopts the
-server copy.
+Scopes: two accounts never see each other's rows or folders; signed-out ``_local`` is
+separate; the pick is per plugin; ``sensitive`` docs never land in a shared copy; a
+copy of Local into a space is one way; paused = read-only; access lost locks the copy
+and the provider may drop it; the first use of a space pulls before a plugin seeds
+defaults; without a provider there is only Local.
 §13: another account can't read the DB or files; the owner reads them again after
 signing back in; old plaintext is sealed once; an offline restart works; no key
 yet = read-only, never plaintext.
@@ -14,9 +13,7 @@ yet = read-only, never plaintext.
 
 from __future__ import annotations
 
-import base64
 import hashlib
-import itertools
 import sys
 import time
 from typing import Any
@@ -27,7 +24,7 @@ import pytest
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="DPAPI")
 
 from backend.store.repos import plugin_data as repo
-from backend.uefn_plugins import scopes, team_sync
+from backend.uefn_plugins import scopes, spaces
 from backend.uefn_plugins.scopes import PluginData
 
 
@@ -48,117 +45,6 @@ class _Who:
 @pytest.fixture
 def who(monkeypatch: pytest.MonkeyPatch) -> _Who:
     return _Who(monkeypatch)
-
-
-def team_key(team: str) -> bytes:
-    """The Store's team data key: one per team, members only."""
-    return hashlib.sha256(b"tdk/" + team.encode()).digest()
-
-
-class FakeStore:
-    """The Store's team-data contract in memory: inclusive cursor, last write wins,
-    per-team membership, paused plans, team keys."""
-
-    def __init__(self) -> None:
-        self.rows: dict[tuple[str, str, str, str], dict[str, Any]] = {}
-        self.rev: dict[str, int] = {}
-        self.members: dict[str, set[str]] = {}
-        self.paused: set[str] = set()
-        self.blobs: dict[str, bytes] = {}
-        self.uploads: dict[str, dict[str, Any]] = {}
-        self.requests: list[dict[str, Any]] = []
-        self.key_calls = 0
-        self._ids = itertools.count(1)
-
-    def transport(self, account: str) -> "_Transport":
-        return _Transport(self, account)
-
-    def view(self, team: str, item: tuple[str, str, str]) -> dict[str, Any]:
-        row = self.rows[(team, *item)]
-        out = {"kind": item[0], "pluginId": item[1], "key": item[2], "rev": row["rev"], "size": row["size"],
-               "sha256": row["sha256"], "enc": row.get("enc", 0), "deleted": row["deleted"]}
-        if not row["deleted"]:
-            url = f"get://{next(self._ids)}"
-            self.blobs[url] = row["blob"]
-            out["getUrl"] = url
-        return out
-
-
-class _Transport:
-    def __init__(self, store: FakeStore, account: str) -> None:
-        self.s, self.account = store, account
-
-    def collect(self, event: str, body: dict[str, Any]) -> dict[str, Any]:
-        s, team = self.s, body["teamId"]
-        s.requests.append({"event": event, **body})
-        if self.account not in s.members.get(team, set()):
-            raise team_sync.SyncError("team not found")
-        if event == "team-data-key":
-            # Members read it while paused too, like the rest of the team's data.
-            s.key_calls += 1
-            return {"key": base64.b64encode(team_key(team)).decode(), "version": 1}
-        if team in s.paused:
-            raise team_sync.SyncError("plan_paused: Team Private isn't active for this team.")
-        if not body.get("enc") and any(r.get("enc") for k, r in s.rows.items() if k[0] == team):
-            raise team_sync.SyncError("Update UEFN Ducky to use this team's data.")
-        if event == "team-data-commit":
-            results = []
-            for c in body["commits"]:
-                item = (c["kind"], c["pluginId"], c["key"])
-                up = next((u for u in s.uploads.values() if u["team"] == team and u["item"] == item), None)
-                row = s.rows.get((team, *item))
-                if up is None or (row["rev"] if row else 0) != c["rev"]:
-                    results.append({**dict(zip(("kind", "pluginId", "key"), item)), "status": "stale",
-                                    "server": s.view(team, item) if row else None})
-                    continue
-                s.rev[team] = s.rev.get(team, 0) + 1
-                blob = s.blobs[up["url"]]
-                if len(blob) != up["size"] or hashlib.sha256(blob).hexdigest() != up["sha256"]:
-                    raise AssertionError("the upload isn't the bytes its push described")
-                s.rows[(team, *item)] = {"rev": s.rev[team], "size": len(blob), "sha256": up["sha256"],
-                                         "enc": up["enc"], "deleted": False, "blob": blob}
-                del s.uploads[up["url"]]
-                results.append({**dict(zip(("kind", "pluginId", "key"), item)), "status": "committed",
-                                "rev": s.rev[team]})
-            return {"results": results, "usage": {"usedBytes": 1}}
-        accepted, deleted, stale = [], [], []
-        for p in body.get("pushes") or []:
-            item = (p["kind"], p["pluginId"], p["key"])
-            row = s.rows.get((team, *item))
-            named = dict(zip(("kind", "pluginId", "key"), item))
-            if p["baseRev"] != (row["rev"] if row else 0):
-                stale.append({**named, "server": s.view(team, item) if row else None})
-            elif p.get("delete"):
-                s.rev[team] = s.rev.get(team, 0) + 1
-                row.update(rev=s.rev[team], deleted=True, blob=b"", size=0)
-                deleted.append({**named, "rev": s.rev[team]})
-            else:
-                url = f"put://{next(s._ids)}"
-                s.uploads[url] = {"team": team, "item": item, "url": url, "sha256": p["sha256"], "size": p["size"],
-                                  "enc": int(p.get("enc") or 0)}
-                accepted.append({**named, "rev": p["baseRev"], "putUrl": url, "expiresAt": 0})
-        cursor = int(body.get("cursorRev") or 0)
-        changes = [s.view(team, k[1:]) for k, r in sorted(s.rows.items(), key=lambda kv: kv[1]["rev"])
-                   if k[0] == team and r["rev"] >= cursor]
-        return {"cursorRev": max(s.rev.get(team, 0), cursor), "more": False, "changes": changes,
-                "accepted": accepted, "deleted": deleted, "stale": stale, "refused": [],
-                "usage": {"usedBytes": sum(r["size"] for k, r in s.rows.items() if k[0] == team),
-                          "limitBytes": 5 << 30}}
-
-    def put(self, url: str, data: bytes) -> None:
-        self.s.blobs[url] = data
-
-    def get(self, url: str) -> bytes:
-        return self.s.blobs[url]
-
-
-@pytest.fixture(autouse=True)
-def store(monkeypatch: pytest.MonkeyPatch) -> FakeStore:
-    """Every Store call the host makes (first pulls included) goes to this fake."""
-    fake = FakeStore()
-    monkeypatch.setattr(team_sync, "Transport", lambda: fake.transport(scopes.account_id()))
-    monkeypatch.setattr(team_sync, "_FIRST_PULL_TRIED", set())
-    return fake
 
 
 ADK_ONLINE = {"on": True}
@@ -184,22 +70,77 @@ def account_keys(monkeypatch: pytest.MonkeyPatch):
     data_crypto.reset_for_tests()
 
 
-def _sync(store: FakeStore, plugin: str = "brainrot-tcg") -> dict[str, Any]:
-    s = scopes.active_scope(plugin)
-    return team_sync.sync_team(s["account"], s["id"], force=True, transport=store.transport(s["account"]))
+class FakeSpaces(spaces.Provider):
+    """A spaces provider with nothing behind it: it names spaces, says whether a first
+    pull can happen (and what it brings), and drops a lost copy when told to."""
+
+    kind_label = "space"
+    paused_label = "Space paused"
+
+    def __init__(self) -> None:
+        self.spaces: dict[str, str] = {}  # id → label
+        self.server: dict[tuple[str, str, str], Any] = {}  # (space, plugin, key) → doc a first pull brings
+        self.online = True
+        self.expired: set[str] = set()
+        self.rounds: list[tuple[str, str]] = []
+
+    def enabled(self) -> bool:
+        return bool(self.spaces)
+
+    def choices(self, purpose: str) -> list[dict[str, Any]]:
+        return [{"id": sid, "label": label, "members": 3} for sid, label in self.spaces.items()]
+
+    def choices_note(self, purpose: str) -> str:
+        return "No spaces yet."
+
+    def linked(self, account: str, plugin: str, space_id: str) -> None:
+        repo.sync_put(account, space_id, label=self.spaces.get(space_id, space_id), members=3)
+
+    def first_pull(self, account: str, space_id: str, timeout: float) -> bool:
+        if not self.online:
+            return False
+        from backend.uefn_plugins.data_crypto import seal_text
+
+        for (sid, plugin, key), value in self.server.items():
+            if sid == space_id:
+                data = scopes.encode_doc(value)
+                repo.put(account, sid, plugin, "doc", key, value=seal_text(data.decode("utf-8"), account),
+                         size=len(data), sha256=hashlib.sha256(data).hexdigest(), dirty=False, rev=1)
+        repo.sync_put(account, space_id, synced_at=time.time())
+        return True
+
+    def settle_lost(self, account: str, space_id: str) -> str:
+        if space_id in self.expired:
+            scopes.purge_space(account, space_id)
+            return "unavailable"
+        return "lost"
+
+    def sync(self, account: str, space_id: str, *, force: bool = False) -> dict[str, Any]:
+        self.rounds.append((account, space_id))
+        return {"state": "ok", "changed": [], "error": ""}
 
 
-def _join(store: FakeStore, who: _Who, email: str, team: str, label: str, plugin: str = "brainrot-tcg") -> str:
+@pytest.fixture
+def fake_spaces(account_keys) -> FakeSpaces:
+    fake = FakeSpaces()
+    spaces.install_for_tests(fake)
+    yield fake
+    spaces.reset_for_tests()
+
+
+def open_space(fake: FakeSpaces, who: _Who, email: str, space: str, label: str, plugin: str = "brainrot-tcg") -> str:
+    """Sign in as ``email`` and point ``plugin`` at ``space``, already pulled once."""
     aid = who.be(email)
-    store.members.setdefault(team, set()).add(aid)
-    scopes.link_plugin(plugin, team, label=label, members=2)
+    fake.spaces[space] = label
+    scopes.link_plugin(plugin, space)
+    repo.sync_put(aid, space, synced_at=time.time())
     return aid
 
 
 # --------------------------------------------------------------------------- scopes on one PC
 
 
-def test_accounts_plugins_and_local_never_share_rows_or_folders(who: _Who, store: FakeStore) -> None:
+def test_accounts_plugins_and_local_never_share_rows_or_folders(who: _Who, fake_spaces: FakeSpaces) -> None:
     from frontend.ui_web import plugin_host_api as pha
 
     cards = PluginData("brainrot-tcg")
@@ -221,208 +162,132 @@ def test_accounts_plugins_and_local_never_share_rows_or_folders(who: _Who, store
     assert local == scopes.LOCAL and cards.get("card.pip") is None
     cards.put("card.pip", {"name": "Local Pip"})
 
-    # The pick is per plugin: BrainrotTCG → team T shows the team's copy, Forge stays Local.
-    store.members["teamT"] = {who.be("ana@x.org")}
+    # The pick is per plugin: BrainrotTCG → space T shows the space's copy, Forge stays Local.
+    who.be("ana@x.org")
     scenes.put("scene.a", {"by": "ana"})
-    scopes.link_plugin("brainrot-tcg", "teamT", label="Alpha Studio")
-    assert scopes.active_scope("brainrot-tcg")["label"] == "Alpha Studio" and cards.keys() == []
+    open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    scope = scopes.active_scope("brainrot-tcg")
+    assert (scope["kind"], scope["label"], scope["spaceId"]) == ("shared", "Alpha Studio", "spaceT")
+    assert cards.keys() == []
     assert scopes.active_scope("forge")["kind"] == "personal" and scenes.get("scene.a") == {"by": "ana"}
-    cards.put("card.pip", {"name": "Team Pip"})
+    cards.put("card.pip", {"name": "Shared Pip"})
     scopes.link_plugin("brainrot-tcg", scopes.PERSONAL)
     assert cards.get("card.pip") == {"name": "Pip"}  # nothing moved on either switch
     assert cards.get_file("assets/pip.png") == b"PNG-ana"
-    scopes.link_plugin("brainrot-tcg", "teamT")
-    assert cards.get("card.pip") == {"name": "Team Pip"}
+    scopes.link_plugin("brainrot-tcg", "spaceT")
+    assert cards.get("card.pip") == {"name": "Shared Pip"}
     who.be("")
     assert cards.get("card.pip") == {"name": "Local Pip"}
     with pytest.raises(ValueError, match="Sign in"):
-        scopes.link_plugin("brainrot-tcg", "teamT")
+        scopes.link_plugin("brainrot-tcg", "spaceT")
 
 
-def test_two_teams_of_one_account_never_share_a_plugins_data(who: _Who, store: FakeStore) -> None:
+def test_two_spaces_of_one_account_never_share_a_plugins_data(who: _Who, fake_spaces: FakeSpaces) -> None:
     cards = PluginData("brainrot-tcg")
-    ana = _join(store, who, "ana@x.org", "teamT", "Alpha Studio")
-    _join(store, who, "ana@x.org", "teamU", "Beta Crew", plugin="forge")
-    _sync(store)
-    _sync(store, "forge")
-    cards.put("card.pip", {"team": "T"})
-    _sync(store)
-    # Switching BrainrotTCG to team U shows U's own (empty) copy: T's card never arrives there.
-    scopes.link_plugin("brainrot-tcg", "teamU")
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    open_space(fake_spaces, who, "ana@x.org", "spaceU", "Beta Crew", plugin="forge")
+    cards.put("card.pip", {"space": "T"})
+    # Switching BrainrotTCG to space U shows U's own (empty) copy: T's card never arrives there.
+    scopes.link_plugin("brainrot-tcg", "spaceU")
+    repo.sync_put(ana, "spaceU", synced_at=time.time())
     assert cards.keys() == []
-    cards.put("card.mo", {"team": "U"})
-    _sync(store)
-    pushed = {(r["teamId"], p["key"]) for r in store.requests for p in r.get("pushes") or []}
-    assert pushed == {("teamT", "card.pip"), ("teamU", "card.mo")}
-    scopes.link_plugin("brainrot-tcg", "teamT")
-    assert cards.items() == {"card.pip": {"team": "T"}}
-    assert repo.links(ana) == {"brainrot-tcg": "teamT", "forge": "teamU"}
+    cards.put("card.mo", {"space": "U"})
+    assert [r["key"] for r in repo.rows(ana, "spaceU", "brainrot-tcg", "doc")] == ["card.mo"]
+    scopes.link_plugin("brainrot-tcg", "spaceT")
+    assert cards.items() == {"card.pip": {"space": "T"}}
+    assert repo.links(ana) == {"brainrot-tcg": "spaceT", "forge": "spaceU"}
 
 
-def test_copy_local_into_a_team_is_one_way_and_keeps_the_teams_items(who: _Who, store: FakeStore) -> None:
+def test_copy_local_into_a_space_is_one_way_and_keeps_the_spaces_items(who: _Who, fake_spaces: FakeSpaces) -> None:
     cards = PluginData("brainrot-tcg")
     ana = who.be("ana@x.org")
     cards.put("card.pip", {"v": "local"})
     cards.put("card.mo", {"v": "local"})
     cards.put("token", {"secret": 1}, sensitive=True)
     cards.put_file("assets/pip.png", b"PNG local")
-    store.members["teamT"] = {ana}
-    scopes.link_plugin("brainrot-tcg", "teamT", label="Alpha Studio")
-    _sync(store)
-    cards.put("card.pip", {"v": "team"})
-    status = team_sync.scope_status("brainrot-tcg")
+    open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    cards.put("card.pip", {"v": "shared"})
+    status = spaces.scope_status("brainrot-tcg")
     assert status["local"] == {"docs": 2, "files": 1, "docsBytes": status["local"]["docsBytes"], "filesBytes": 9}
-    assert status["current"]["docs"] == 1
+    assert status["current"]["docs"] == 1 and status["kindLabel"] == "space"
 
-    assert scopes.copy_local_into("brainrot-tcg", "teamT") == {"ok": True, "copied": 2, "kept": 1}
-    assert cards.items() == {"card.mo": {"v": "local"}, "card.pip": {"v": "team"}}
+    assert scopes.copy_local_into("brainrot-tcg", "spaceT") == {"ok": True, "copied": 2, "kept": 1}
+    assert cards.items() == {"card.mo": {"v": "local"}, "card.pip": {"v": "shared"}}
     assert cards.get_file("assets/pip.png") == b"PNG local"
-    assert _sync(store)["state"] == "ok"
-    pushes = [p for r in store.requests for p in r.get("pushes") or []]
-    pushed = sorted(p["key"] for p in pushes if p["pluginId"] == "brainrot-tcg")
-    assert pushed == ["assets/pip.png", "card.mo", "card.pip"] and "secret" not in repr(store.requests)
-    # Local data never leaves the PC: no member's own copy is ever pushed.
-    assert all(p["pluginId"] == "brainrot-tcg" for p in pushes)
-    # A member's own copy an earlier version pulled or queued is dropped from this PC's team copy.
-    own = "a_0123456789abcdef.brainrot-tcg"
-    repo.put(ana, "teamT", own, "doc", "db", value="x", size=1, sha256="s", dirty=True)
-    assert _sync(store)["state"] == "ok"
-    assert own not in repo.scope_plugin_ids(ana, "teamT")
-    assert not any(p["pluginId"] == own for r in store.requests for p in r.get("pushes") or [])
+    # Queued for the provider's next round; the sensitive doc stayed Local.
+    dirty = {r["key"] for r in repo.rows(ana, "spaceT", "brainrot-tcg", "doc")} | {
+        r["key"] for r in repo.rows(ana, "spaceT", "brainrot-tcg", "asset")}
+    assert dirty == {"card.mo", "card.pip", "assets/pip.png"} and repo.count_dirty(ana, "spaceT") == 3
     # The Local copy is untouched.
     scopes.link_plugin("brainrot-tcg", scopes.PERSONAL)
     assert cards.items() == {"card.mo": {"v": "local"}, "card.pip": {"v": "local"}}
 
 
-def test_sensitive_docs_stay_personal_and_never_reach_a_sync_request(who: _Who, store: FakeStore, monkeypatch) -> None:
+def test_sensitive_docs_stay_personal_and_never_land_in_a_shared_copy(who: _Who, fake_spaces: FakeSpaces,
+                                                                      monkeypatch) -> None:
     from backend.agent import secrets as sec
 
     monkeypatch.setattr(sec, "protect_text", lambda s: b"blob-" + s.encode())
     monkeypatch.setattr(sec, "unprotect_text", lambda b: b[5:].decode())
-    _join(store, who, "ana@x.org", "teamT", "Alpha Studio", plugin="discord")
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio", plugin="discord")
     data = PluginData("discord")
     data.put("token", {"bot": "very-secret"}, sensitive=True)
     data.put("channel", {"id": 7})
     assert data.get("token", sensitive=True) == {"bot": "very-secret"}
     assert "token" not in data.keys()
-    assert _sync(store, "discord")["state"] == "ok"
-    pushed = [p["key"] for r in store.requests for p in r.get("pushes") or []]
-    assert pushed == ["channel"] and "very-secret" not in repr(store.requests)
+    assert [r["key"] for r in repo.rows(ana, "spaceT", "discord", "doc")] == ["channel"]
 
 
-# --------------------------------------------------------------------------- team sync
-
-
-def test_cards_sync_between_members_and_never_to_another_team(who: _Who, store: FakeStore) -> None:
-    cards = PluginData("brainrot-tcg")
-    _join(store, who, "ana@x.org", "teamT", "Alpha Studio")
-    cards.put("card.pip", {"name": "Pip", "attack": 1700})
-    cards.put_file("assets/pip.png", b"\x89PNG pip")
-    assert _sync(store)["state"] == "ok"
-    assert repo.count_dirty(scopes.account_id(), "teamT") == 0
-
-    _join(store, who, "bo@x.org", "teamT", "Alpha Studio")
-    out = _sync(store)
-    assert out["changed"] == ["brainrot-tcg"]
-    assert cards.get("card.pip") == {"attack": 1700, "name": "Pip"}
-    assert cards.get_file("assets/pip.png") == b"\x89PNG pip"
-
-    # Bo edits and deletes; Ana gets both.
-    cards.put("card.pip", {"name": "Pip", "attack": 1900})
-    cards.delete_file("assets/pip.png")
-    _sync(store)
-    who.be("ana@x.org")
-    _sync(store)
-    assert cards.get("card.pip")["attack"] == 1900 and cards.get_file("assets/pip.png") is None
-
-    # A member of team U only never sees team T's cards, and can't ask for team T.
-    cy = _join(store, who, "cy@x.org", "teamU", "Beta Crew")
-    _sync(store)
-    assert cards.keys() == [] and cards.files() == []
-    assert team_sync.sync_team(cy, "teamT", force=True, transport=store.transport(cy))["state"] == "removed"
-    assert repo.rows(cy, "teamT", "brainrot-tcg", "doc") == []
-
-
-def test_inclusive_cursor_is_deduped_and_stale_push_adopts_server(who: _Who, store: FakeStore) -> None:
-    cards = PluginData("brainrot-tcg")
-    ana = _join(store, who, "ana@x.org", "teamT", "Alpha Studio")
-    cards.put("card.pip", {"v": 1})
-    _sync(store)
-    before = repo.get(ana, "teamT", "brainrot-tcg", "doc", "card.pip")
-    # The next round gets card.pip again (rev >= cursor): nothing re-downloaded or changed.
-    assert _sync(store)["changed"] == []
-    assert repo.get(ana, "teamT", "brainrot-tcg", "doc", "card.pip") == before
-
-    # Bo writes v2 first; Ana's offline edit (base rev 1) is stale → Ana adopts v2.
-    _join(store, who, "bo@x.org", "teamT", "Alpha Studio")
-    _sync(store)
-    cards.put("card.pip", {"v": 2})
-    _sync(store)
-    who.be("ana@x.org")
-    cards.put("card.pip", {"v": "ana-offline"})
-    assert _sync(store)["changed"] == ["brainrot-tcg"]
-    assert cards.get("card.pip") == {"v": 2} and repo.count_dirty(ana, "teamT") == 0
-
-
-def test_paused_is_read_only_and_access_lost_locks_then_deletes_the_team_scope(who: _Who, store: FakeStore) -> None:
+def test_paused_is_read_only_and_access_lost_locks_then_the_provider_drops_it(who: _Who,
+                                                                             fake_spaces: FakeSpaces) -> None:
     from backend.store.repos import plugin_kv
-    from backend.uefn_plugins import team_keys
     from frontend.ui_web import plugin_host_api as host_api
 
     cards = PluginData("brainrot-tcg")
-    ana = _join(store, who, "ana@x.org", "teamT", "Alpha Studio")
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
     cards.put("card.pip", {"v": 1})
     cards.put_file("assets/pip.png", b"pip")
-    # Cache and prefs follow the team copy too (kept on this PC, never synced).
+    # Cache and prefs follow the shared copy too (kept on this PC, never synced).
     host_api.cache_set("brainrot-tcg", "deck", {"n": 1})
     host_api.prefs_plugin_set("brainrot-tcg", {"sort": "name"})
-    assert plugin_kv.keys("brainrot-tcg", account=ana, scope="teamT") == ["deck"]
+    assert plugin_kv.keys("brainrot-tcg", account=ana, scope="spaceT") == ["deck"]
     assert plugin_kv.keys("brainrot-tcg", account=ana, scope=scopes.PERSONAL) == []
-    _sync(store)
-    team_dir = scopes.scopes_root(ana) / "teamT"
-    assert team_dir.is_dir()
+    space_dir = scopes.scopes_root(ana) / "spaceT"
+    assert space_dir.is_dir()
 
-    store.paused.add("teamT")
-    assert _sync(store)["state"] == "paused"
+    repo.sync_put(ana, "spaceT", state="paused")
     assert scopes.active_scope("brainrot-tcg")["readOnly"] and cards.get("card.pip") == {"v": 1}
-    with pytest.raises(scopes.ReadOnlyScope):
+    with pytest.raises(scopes.ReadOnlyScope, match="paused"):
         cards.put("card.pip", {"v": 2})
-    store.paused.clear()
-    assert _sync(store)["state"] == "ok" and not scopes.active_scope("brainrot-tcg")["readOnly"]
+    repo.sync_put(ana, "spaceT", state="ok")
+    assert not scopes.active_scope("brainrot-tcg")["readOnly"]
 
-    # Access lost: the key goes and the copy here locks (unreadable, read-only), kept as it is.
-    store.members["teamT"].discard(ana)
-    assert _sync(store)["state"] == "lost"
-    assert (ana, "teamT") not in team_keys._KEYS
+    # Access lost: the copy here locks (unreadable, read-only), kept as it is.
+    repo.sync_put(ana, "spaceT", state="lost")
     scope = scopes.active_scope("brainrot-tcg")
-    assert (scope["kind"], scope["state"], scope["readOnly"]) == ("team", "lost", True)
+    assert (scope["kind"], scope["state"], scope["readOnly"]) == ("shared", "lost", True)
     assert cards.get("card.pip") is None and cards.keys() == [] and cards.get_file("assets/pip.png") is None
     with pytest.raises(scopes.ReadOnlyScope, match="no longer have access"):
         cards.put("card.pip", {"v": 3})
     assert host_api.cache_get("brainrot-tcg", "deck") == {} and host_api.prefs_plugin_get("brainrot-tcg") == {}
     with pytest.raises(scopes.ReadOnlyScope):
         host_api.cache_set("brainrot-tcg", "deck", {"n": 2})
-    assert team_dir.is_dir() and repo.rows(ana, "teamT", "brainrot-tcg", "doc")
-    assert team_sync.scope_status("brainrot-tcg")["deleteAt"] > 0
+    assert space_dir.is_dir() and repo.rows(ana, "spaceT", "brainrot-tcg", "doc")
 
-    # Access back: the key is fetched again, the data unlocks and sync resumes.
-    store.members["teamT"].add(ana)
-    assert _sync(store)["state"] == "ok" and cards.get("card.pip") == {"v": 1}
+    # Access back: the data unlocks as it was.
+    repo.sync_put(ana, "spaceT", state="ok")
+    assert cards.get("card.pip") == {"v": 1}
     assert host_api.cache_get("brainrot-tcg", "deck") == {"n": 1}
     assert host_api.prefs_plugin_get("brainrot-tcg") == {"sort": "name"}
-    assert not scopes.lost_since(ana, "teamT")
 
-    # A week without access: the copy on this PC goes (the server's stays).
-    store.members["teamT"].discard(ana)
-    _sync(store)
-    scopes.clear_lost(ana, "teamT")
-    scopes.mark_lost(ana, "teamT", since=time.time() - scopes.LOST_KEEP_S - 60)
+    # Lost again, and the provider decides the copy here goes (the server's is not core's business).
+    repo.sync_put(ana, "spaceT", state="lost")
+    fake_spaces.expired.add("spaceT")
     assert scopes.active_scope("brainrot-tcg")["kind"] == "personal"  # the plugin's link went with it
-    assert not team_dir.exists() and repo.rows(ana, "teamT", "brainrot-tcg", "doc") == []
-    assert plugin_kv.keys("brainrot-tcg", account=ana, scope="teamT") == []
-    assert plugin_kv.all_prefs(account=ana, scope="teamT") == {}
+    assert not space_dir.exists() and repo.rows(ana, "spaceT", "brainrot-tcg", "doc") == []
+    assert plugin_kv.keys("brainrot-tcg", account=ana, scope="spaceT") == []
+    assert plugin_kv.all_prefs(account=ana, scope="spaceT") == {}
     assert repo.links(ana) == {}
-    assert ("teamT", "doc", "brainrot-tcg", "card.pip") in store.rows
 
 
 def test_a_plugin_test_runs_in_a_sandbox_that_never_touches_the_users_data(who: _Who) -> None:
@@ -459,92 +324,35 @@ def test_a_plugin_test_runs_in_a_sandbox_that_never_touches_the_users_data(who: 
     assert repo.rows(scopes.account_id(), box["id"], "brainrot-tcg", "doc") == []
 
 
-def test_team_data_leaves_the_pc_encrypted_with_its_teams_own_key(who: _Who, store: FakeStore) -> None:
-    from backend.uefn_plugins import team_keys
-
-    cards = PluginData("brainrot-tcg")
-    ana = _join(store, who, "ana@x.org", "teamT", "Alpha Studio")
-    cards.put("card.pip", {"name": "Pip"})
-    cards.put_file("assets/pip.png", b"\x89PNG pip")
-    assert _sync(store)["state"] == "ok"
-    doc = store.rows[("teamT", "doc", "brainrot-tcg", "card.pip")]
-    png = store.rows[("teamT", "asset", "brainrot-tcg", "assets/pip.png")]
-    for row in (doc, png):
-        assert row["enc"] == 1 and row["blob"].startswith(team_keys.MAGIC) and b"Pip" not in row["blob"]
-    # The server's size and sha256 are the stored (encrypted) bytes; the local row keeps the plaintext's.
-    local = repo.get(ana, "teamT", "brainrot-tcg", "doc", "card.pip")
-    assert doc["sha256"] == hashlib.sha256(doc["blob"]).hexdigest() != local["sha256"]
-    assert local["sha256"] == hashlib.sha256(scopes.encode_doc({"name": "Pip"})).hexdigest()
-    # Only that team's key opens it, and only as the item and team it was written for.
-    item = ("doc", "brainrot-tcg", "card.pip")
-    tk = (1, team_key("teamT"))
-    assert team_keys.open_object(tk, "teamT", item, doc["blob"]) == scopes.encode_doc({"name": "Pip"})
-    with pytest.raises(ValueError):
-        team_keys.open_object((1, team_key("teamU")), "teamT", item, doc["blob"])
-    with pytest.raises(ValueError):
-        team_keys.open_object(tk, "teamT", ("doc", "brainrot-tcg", "card.mo"), doc["blob"])
-    with pytest.raises(ValueError):
-        team_keys.open_object(tk, "teamU", item, doc["blob"])
-    # The same item and bytes always encrypt to the same object (a push names it before the upload).
-    assert team_keys.seal(tk, "teamT", item, b"x") == team_keys.seal(tk, "teamT", item, b"x")
-    assert team_keys.seal(tk, "teamT", item, b"x")[5:17] != team_keys.seal(tk, "teamT", item, b"y")[5:17]
-    # Sync and commit requests say this app opens encrypted items.
-    assert all(r.get("enc") == team_keys.FORMAT for r in store.requests if r["event"] != "team-data-key")
-    # The key is asked of the Store once, then kept.
-    calls = store.key_calls
-    _sync(store)
-    assert calls == 1 and store.key_calls == calls
+def test_without_a_provider_there_is_only_local(who: _Who) -> None:
+    ana = who.be("ana@x.org")
+    assert not spaces.has_provider()
+    assert [c["id"] for c in spaces.scope_choices()["choices"]] == ["personal"]
+    assert spaces.scope_status("brainrot-tcg")["visible"] is False  # no bar, no teaser
+    # A copy linked while a provider was there stays readable here; it just doesn't sync.
+    repo.link_set(ana, "brainrot-tcg", "spaceT")
+    assert scopes.active_scope("brainrot-tcg")["kind"] == "shared"
+    assert spaces.sync_active("brainrot-tcg", force=True)["ok"] is True
 
 
-def test_plaintext_from_before_team_keys_still_reads_and_goes_up_again_encrypted(who: _Who, store: FakeStore) -> None:
-    cards = PluginData("brainrot-tcg")
-    ana = _join(store, who, "ana@x.org", "teamT", "Alpha Studio")
-    # The team's copy as an older app left it: plaintext, key version 0.
-    legacy = scopes.encode_doc({"name": "Old"})
-    store.rev["teamT"] = 1
-    store.rows[("teamT", "doc", "brainrot-tcg", "card.old")] = {
-        "rev": 1, "size": len(legacy), "sha256": hashlib.sha256(legacy).hexdigest(), "enc": 0, "deleted": False,
-        "blob": legacy,
-    }
-    assert _sync(store)["state"] == "ok"
-    assert cards.get("card.old") == {"name": "Old"}
-    row = store.rows[("teamT", "doc", "brainrot-tcg", "card.old")]
-    assert row["enc"] == 1 and row["rev"] > 1 and b"Old" not in row["blob"]
-    assert repo.count_dirty(ana, "teamT") == 0
-    # Once: later rounds push nothing.
-    store.requests.clear()
-    _sync(store)
-    assert not any(r.get("pushes") for r in store.requests)
-
-
-def test_scope_picker_lists_only_active_team_private_and_hides_without_beta(who: _Who, monkeypatch) -> None:
-    from frontend import duckyos_account
-
+def test_the_picker_lists_the_providers_spaces_and_a_fresh_link_waits(who: _Who, fake_spaces: FakeSpaces) -> None:
     who.be("ana@x.org")
-    teams = [
-        {"id": "teamT", "name": "Alpha Studio", "members": [{}, {}, {}], "private_plan": {"status": "active"}},
-        {"id": "teamF", "name": "Free Team", "members": [{}], "private_plan": None},
-        {"id": "teamP", "name": "Paused Crew", "members": [{}], "private_plan": {"status": "paused"}},
-    ]
-    monkeypatch.setattr(duckyos_account, "teams_snapshot", lambda **_: {"ok": True, "teams": teams})
-    monkeypatch.setattr(team_sync, "teams_enabled", lambda: False)
-    assert [c["id"] for c in team_sync.scope_choices()["choices"]] == ["personal"]
-    assert team_sync.scope_status("brainrot-tcg")["visible"] is False  # rule 13: no bar, no teaser
-    monkeypatch.setattr(team_sync, "teams_enabled", lambda: True)
-    choices = team_sync.scope_choices()["choices"]
-    assert [(c["id"], c.get("members")) for c in choices] == [("personal", None), ("teamT", 3)]
-    status = team_sync.link_scope("brainrot-tcg", "teamT")
+    out = spaces.scope_choices()
+    assert out["choices"] == [{"id": "personal", "kind": "personal", "label": "Local"}]
+    assert out["emptyNote"] == "No spaces yet." and out["kindLabel"] == "space"
+    assert spaces.scope_status("brainrot-tcg")["visible"] is False
+    fake_spaces.spaces["spaceT"] = "Alpha Studio"
+    choices = spaces.scope_choices()["choices"]
+    assert [(c["id"], c["kind"], c.get("members")) for c in choices] == [
+        ("personal", "personal", None), ("spaceT", "shared", 3)]
+    fake_spaces.online = False
+    status = spaces.link_scope("brainrot-tcg", "spaceT")
     # Fresh link: read-only "waiting" until the first pull lands.
-    assert status["scope"] == {"kind": "team", "label": "Alpha Studio", "teamId": "teamT", "readOnly": True}
+    assert status["scope"] == {"kind": "shared", "label": "Alpha Studio", "spaceId": "spaceT", "readOnly": True}
     assert status["visible"] and status["state"] == "waiting" and status["members"] == 3 and status["pending"] == 0
 
 
-class _Offline:
-    def collect(self, event: str, body: dict[str, Any]) -> dict[str, Any]:
-        raise team_sync.SyncError("Network error: offline", offline=True)
-
-
-def test_first_use_of_a_team_pulls_before_a_plugin_can_seed_defaults(who: _Who, store: FakeStore, monkeypatch) -> None:
+def test_first_use_of_a_space_pulls_before_a_plugin_can_seed_defaults(who: _Who, fake_spaces: FakeSpaces) -> None:
     def load_or_seed(data: PluginData) -> dict[str, Any]:
         """What BrainrotTCG's load_db does: an empty scope gets the bundled defaults."""
         docs = data.items()
@@ -555,26 +363,28 @@ def test_first_use_of_a_team_pulls_before_a_plugin_can_seed_defaults(who: _Who, 
         return docs
 
     cards = PluginData("brainrot-tcg")
-    _join(store, who, "ana@x.org", "teamT", "Alpha Studio")
-    cards.put("meta", {"team": True})
-    cards.put("card.pip", {"name": "Pip"})
-    _sync(store)
+    fake_spaces.spaces["spaceT"] = "Alpha Studio"
+    fake_spaces.server[("spaceT", "brainrot-tcg", "card.pip")] = {"name": "Pip"}
+    fake_spaces.server[("spaceT", "brainrot-tcg", "meta")] = {"space": True}
 
-    # Bo links the team for the first time: the first pull lands before the plugin reads.
-    _join(store, who, "bo@x.org", "teamT", "Alpha Studio")
-    assert load_or_seed(cards) == {"card.pip": {"name": "Pip"}, "meta": {"team": True}}
+    # Bo links the space for the first time: the first pull lands before the plugin reads.
+    who.be("bo@x.org")
+    scopes.link_plugin("brainrot-tcg", "spaceT")
+    assert load_or_seed(cards) == {"card.pip": {"name": "Pip"}, "meta": {"space": True}}
 
-    # Cy's first use is offline: read-only "waiting", the seed is refused, nothing reaches the team.
-    cy = _join(store, who, "cy@x.org", "teamT", "Alpha Studio")
-    monkeypatch.setattr(team_sync, "Transport", _Offline)
-    with pytest.raises(scopes.ReadOnlyScope, match="Waiting for team data"):
+    # Cy's first use is offline: read-only "waiting", the seed is refused, nothing is written.
+    cy = who.be("cy@x.org")
+    fake_spaces.online = False
+    scopes.link_plugin("brainrot-tcg", "spaceT")
+    with pytest.raises(scopes.ReadOnlyScope, match="Waiting for Alpha Studio's data"):
         load_or_seed(cards)
     assert scopes.active_scope("brainrot-tcg")["state"] == "waiting"
-    # Back online, the minute sync brings the team's copy and the scope opens.
-    assert team_sync.sync_team(cy, "teamT", force=True, transport=store.transport(cy))["state"] == "ok"
+    assert repo.rows(cy, "spaceT", "brainrot-tcg", "doc") == []
+    # Back online, the next read pulls and the scope opens.
+    fake_spaces.online = True
     assert load_or_seed(cards)["card.pip"] == {"name": "Pip"}
     assert not scopes.active_scope("brainrot-tcg")["readOnly"]
-    assert not any(k[3] == "card.default" for k in store.rows)
+    assert repo.get(cy, "spaceT", "brainrot-tcg", "doc", "card.default") is None
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="DPAPI")
@@ -738,7 +548,7 @@ def test_rewritten_big_docs_are_not_kept_open_in_memory(monkeypatch) -> None:
     tracemalloc.start()
     try:
         base = tracemalloc.get_traced_memory()[0]
-        for n in range(20):  # one big team doc saved and read 20 times: a new ciphertext each save
+        for n in range(20):  # one big doc saved and read 20 times: a new ciphertext each save
             doc = json.dumps({"save": n, "cards": "x" * 300_000})
             sealed = data_crypto.seal_text(doc, local)
             assert data_crypto.open_text(sealed, local) == doc
@@ -762,14 +572,14 @@ def test_ids_and_paths_cannot_climb() -> None:
     assert scopes.valid_asset_path("assets/cards/pip.png")
     for bad in ("../x", "a/../b", ".hidden", "a//b", "A.png", "a\\b", "x" * 257):
         assert not scopes.valid_asset_path(bad), bad
-    assert not scopes.valid_doc_key("a/b") and not scopes.valid_team_id("personal")
+    assert not scopes.valid_doc_key("a/b") and not scopes.valid_space_id("personal")
     assert hashlib.sha256(scopes.encode_doc({"b": 1, "a": 2})).hexdigest() == hashlib.sha256(
         b'{"a":2,"b":1}').hexdigest()
 
 
 def test_a_plugin_test_hides_nothing_from_everyone_else(who: _Who) -> None:
-    # Oct 12 2026: the test copy was process-wide, so a team's live projects and requests
-    # "disappeared" whenever one member ran the full plugin test.
+    # Oct 12 2026: the test copy was process-wide, so shared projects and requests
+    # "disappeared" for everyone whenever one person ran the full plugin test.
     import contextvars
     import threading
     from concurrent.futures import ThreadPoolExecutor

@@ -244,7 +244,7 @@ def _register_stub(plugin_id: str) -> str:
         "        doc = {**(data.get(f\"item.{key}\") or {}), **(fields or {}), \"id\": key}\n"
         "        try:\n"
         "            data.put(f\"item.{key}\", doc)\n"
-        "        except PermissionError as exc:  # a read-only or locked team copy\n"
+        "        except PermissionError as exc:  # a read-only or locked shared copy\n"
         "            return {\"ok\": False, \"error\": str(exc)}\n"
         "        return {\"ok\": True, \"item\": doc}\n"
         "\n"

@@ -50,7 +50,7 @@ function introSteps(): WalkthroughStep[] {
   const open = !!getCurrentWorkflow();
   const steps: WalkthroughStep[] = [
     next("workflows.list", "Your workflows",
-      "A workflow runs steps for you: make a picture, test your island, post a report. **Local** ones stay on this PC; **team** ones are shared. Right-click one to rename, switch it off, duplicate or delete it.",
+      "A workflow runs steps for you: make a picture, test your island, post a report. **Local** ones stay on this PC; **shared** ones sync to everyone in their space. Right-click one to rename, switch it off, duplicate or delete it.",
       openWorkflows),
     next(firstShown(...NEW_BUTTONS), "New workflow", "Start from a ready-made template (pictures, 3D, characters, play tests…) or a blank canvas."),
   ];

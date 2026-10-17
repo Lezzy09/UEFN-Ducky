@@ -3,9 +3,9 @@ import {
   catalogItems,
   categoryLabel,
   filterStoreItems,
-  groupByTeam,
+  groupByAudience,
   itemCategories,
-  TEAM_CATEGORY,
+  SHARED_CATEGORY,
 } from "./storeFilters";
 import type { DuckyOSStoreItemDto } from "../../types/panel";
 
@@ -93,46 +93,46 @@ describe("filterStoreItems", () => {
     ).toEqual([]);
   });
 
-  it("filters the virtual team category to my teams' items, grouped per team", () => {
-    const team = (slug: string, id: string, name: string, visibility: "public" | "private") =>
-      ({ slug, kind: "plugin", name: slug, my_team: true, owner_team_id: id, owner_team_name: name, visibility }) as DuckyOSStoreItemDto;
-    const withTeams: DuckyOSStoreItemDto[] = [
+  it("filters the virtual Shared category to items shared with me, grouped per audience", () => {
+    const shared = (slug: string, id: string, label: string, visibility: "public" | "private") =>
+      ({ slug, kind: "plugin", name: slug, mine: true, audience_id: id, audience_label: label, visibility }) as DuckyOSStoreItemDto;
+    const withShared: DuckyOSStoreItemDto[] = [
       ...items,
-      team("zeta-tool", "t2", "Zeta", "public"),
-      team("alpha-cards", "t1", "Alpha Studio", "private"),
-      team("alpha-board", "t1", "Alpha Studio", "public"),
-      // Another team's public item: not mine, even with a team name on it.
-      { slug: "their-tool", kind: "plugin", owner_team_id: "t9", owner_team_name: "Other", visibility: "public" },
+      shared("zeta-tool", "s2", "Zeta", "public"),
+      shared("alpha-cards", "s1", "Alpha Studio", "private"),
+      shared("alpha-board", "s1", "Alpha Studio", "public"),
+      // Someone else's public item: not mine, even with an audience on it.
+      { slug: "their-tool", kind: "plugin", audience_id: "s9", audience_label: "Other", visibility: "public" },
     ];
-    const beta = catalogItems({ teams: true, items: withTeams });
-    const mine = filterStoreItems(beta, { category: TEAM_CATEGORY });
+    const on = catalogItems({ audiences: true, items: withShared });
+    const mine = filterStoreItems(on, { category: SHARED_CATEGORY });
     expect(mine.map((i) => i.slug)).toEqual(["zeta-tool", "alpha-cards", "alpha-board"]);
-    expect(groupByTeam(mine).map((g) => [g.team, g.items.map((i) => i.slug)])).toEqual([
+    expect(groupByAudience(mine).map((g) => [g.label, g.items.map((i) => i.slug)])).toEqual([
       ["Alpha Studio", ["alpha-cards", "alpha-board"]],
       ["Zeta", ["zeta-tool"]],
     ]);
-    // In the beta but no team: the category is empty (the tab shows the join-a-team state).
-    expect(filterStoreItems(items, { category: TEAM_CATEGORY })).toEqual([]);
-    // Teams beta off (teams false or missing): nothing is a team item at all.
-    for (const teams of [false, undefined]) {
-      const off = catalogItems({ teams, items: withTeams });
-      expect(off.filter((i) => i.my_team)).toEqual([]);
-      expect(filterStoreItems(off, { category: TEAM_CATEGORY })).toEqual([]);
+    // Audiences on but nothing shared: the category is empty (the tab shows the empty state).
+    expect(filterStoreItems(items, { category: SHARED_CATEGORY })).toEqual([]);
+    // Audiences off (false or missing): nothing is a shared item at all.
+    for (const audiences of [false, undefined]) {
+      const off = catalogItems({ audiences, items: withShared });
+      expect(off.filter((i) => i.mine)).toEqual([]);
+      expect(filterStoreItems(off, { category: SHARED_CATEGORY })).toEqual([]);
     }
   });
 
-  it("notes paused Team Private under its team, even when every item is hidden", () => {
-    const pip = { slug: "alpha-board", kind: "plugin", my_team: true, owner_team_id: "t1", owner_team_name: "Alpha Studio" };
-    const groups = groupByTeam([pip], [
-      { teamId: "t1", name: "Alpha Studio", privateActive: false, hiddenPrivate: 3 },
-      { teamId: "t2", name: "Beta Crew", privateActive: false, hiddenPrivate: 1 },
-      { teamId: "t3", name: "Gamma", privateActive: true, hiddenPrivate: 0 },
+  it("puts each audience's note under it, even when every item is hidden", () => {
+    const pip = { slug: "alpha-board", kind: "plugin", mine: true, audience_id: "s1", audience_label: "Alpha Studio" };
+    const groups = groupByAudience([pip], [
+      { id: "s1", label: "Alpha Studio", note: "3 private plugins hidden." },
+      { id: "s2", label: "Beta Crew", note: "1 private plugin hidden." },
+      { id: "s3", label: "Gamma", note: "" },
     ]);
-    expect(groups.map((g) => [g.team, g.items.length, g.note])).toEqual([
-      ["Alpha Studio", 1, "Team Private paused: 3 private plugins hidden until the owner renews."],
-      ["Beta Crew", 0, "Team Private paused: 1 private plugin hidden until the owner renews."],
+    expect(groups.map((g) => [g.label, g.items.length, g.note])).toEqual([
+      ["Alpha Studio", 1, "3 private plugins hidden."],
+      ["Beta Crew", 0, "1 private plugin hidden."],
     ]);
-    expect(groupByTeam([pip]).map((g) => g.note)).toEqual([""]); // no teamsInfo: nothing shown
+    expect(groupByAudience([pip]).map((g) => g.note)).toEqual([""]); // no notes: nothing shown
   });
 
   it("falls back empty categories to package bucket", () => {

@@ -137,7 +137,7 @@ def ducky_store_search(
 
     Returns slim items (no icon payloads): slug, name, description, kind, categories,
     tags, latest_version, installed_version, state, enabled, visibility,
-    owner_team_name, my_team, contributes_summary.
+    audience_label, mine, contributes_summary.
     """
     cat = _fetch_catalog()
     if cat.get("ok") is False:
@@ -184,7 +184,7 @@ def ducky_store_install(
 ) -> str:
     """Install a Store plugin or skill by slug (download + AppData install).
 
-    Every Store item is free. Private team plugins need a signed-in team member.
+    Every Store item is free. A private plugin installs only for the account it is shared with.
     New plugins with default_enabled are turned on automatically after install.
     For an already-installed pack with a newer version, prefer ducky_store_update.
     """

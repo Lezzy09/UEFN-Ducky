@@ -1,5 +1,5 @@
 """Folder bundles: a folder of workflows, nested folders and empty ones included, as
-one value, so a whole tree can be copied, moved to or from a team, or kept as a
+one value, so a whole tree can be copied, moved to or from a shared space, or kept as a
 template, with every Run workflow step still pointing at the right workflow.
 
 A bundle (version 1)::
@@ -219,15 +219,15 @@ def free_folder(owner: str, parent: str, name: str) -> str:
     return path
 
 
-def _refuse_team_code(key: str, rows: list[dict[str, Any]]) -> None:
+def _refuse_shared_code(key: str, rows: list[dict[str, Any]]) -> None:
     if key == store.LOCAL or not store.use_db("automations"):
         return
     from backend.automations import owned
 
-    if owned.scope_for(key)["kind"] == "team" and any(store._has_code(r["graph"].get("nodes")) for r in rows):
-        from backend.automations.code_approval import TEAM_REFUSAL
+    if owned.scope_for(key)["kind"] == "shared" and any(store._has_code(r["graph"].get("nodes")) for r in rows):
+        from backend.automations.code_approval import SHARED_REFUSAL
 
-        raise ValueError(TEAM_REFUSAL)
+        raise ValueError(SHARED_REFUSAL)
 
 
 def _discard(key: str, workflow_id: str) -> None:
@@ -261,7 +261,7 @@ def import_bundle(bundle: Any, owner: str, parent_path: str = "", *, name: str |
     parent = store.normalize_folder(parent_path)
     _owner_label(key)  # unknown owner: ValueError before anything is written
     rows = clean["workflows"]
-    _refuse_team_code(key, rows)
+    _refuse_shared_code(key, rows)
     idmap = {row["key"]: str(uuid.uuid4()) for row in rows}
     fields = workflow_fields()
     outside = sorted({ref for row in rows for ref in calls_of(row["graph"], fields=fields)
@@ -292,7 +292,7 @@ def import_bundle(bundle: Any, owner: str, parent_path: str = "", *, name: str |
 
 def copy_folder(owner_from: str, path: str, owner_to: str, parent_path: str = "", *, move: bool = False) -> dict[str, Any]:
     """Copy folder ``path`` of ``owner_from`` with everything in it, nested as it is,
-    into ``owner_to``/``parent_path`` (Local or a team). A copy gets new ids with its
+    into ``owner_to``/``parent_path`` (Local or a shared space). A copy gets new ids with its
     Run workflow steps re-pointed; a move to another owner keeps every id (calls from
     outside keep working) and removes the source only once the whole tree is in place.
     Inside one owner a move is a folder move. Returns :func:`import_bundle`'s shape
@@ -303,7 +303,7 @@ def copy_folder(owner_from: str, path: str, owner_to: str, parent_path: str = ""
         raise ValueError("Choose a folder to copy")
     parent = store.normalize_folder(parent_path)
     if src_key != dst_key and not store.use_db("automations"):
-        raise ValueError("Sharing with a team needs the database store")
+        raise ValueError("Sharing needs the database store")
     if move and src_key == dst_key:
         if parent == src.rpartition("/")[0]:  # already there
             return {"folder": src, "owner": dst_key, "outside": [], "workflows": [], "moved": 0}
@@ -328,7 +328,7 @@ def _move_tree(bundle: dict[str, Any], src_key: str, src_path: str, dst_key: str
     rows = bundle["workflows"]
     src_scope = owned.writable(owned.scope_for(src_key))
     dst_scope = owned.writable(owned.scope_for(dst_key))
-    _refuse_team_code(dst_key, rows)
+    _refuse_shared_code(dst_key, rows)
     fields = workflow_fields()
     ids = {row["key"] for row in rows}
     outside = sorted({ref for row in rows for ref in calls_of(row["graph"], fields=fields) if ref not in ids})
@@ -352,7 +352,7 @@ def _move_tree(bundle: dict[str, Any], src_key: str, src_path: str, dst_key: str
                     pass
             _restore_folders(dst_key, before)
             raise
-        if dst_scope["kind"] == "team":
+        if dst_scope["kind"] == "shared":
             for wid in written:
                 owned.set_run_here(dst_scope["account"], wid, True)
         for wid in written:

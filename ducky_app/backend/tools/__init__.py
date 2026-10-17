@@ -15,7 +15,7 @@ from backend.tools.panel import panel_automations  # noqa: F401
 from backend.tools.panel import panel_i18n  # noqa: F401
 from backend.tools.panel import panel_mcp  # noqa: F401
 from backend.tools.panel import panel_plugin_check  # noqa: F401
-from backend.tools.panel import panel_plugin_publish  # noqa: F401
+from backend.tools.panel import panel_plugin_data  # noqa: F401
 from backend.tools.panel import panel_profiles  # noqa: F401
 from backend.tools.panel import panel_settings  # noqa: F401
 from backend.tools.panel import panel_skills  # noqa: F401

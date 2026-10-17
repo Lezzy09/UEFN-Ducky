@@ -86,8 +86,8 @@ type Props = InspectorActions & {
   liveNodes?: Record<string, LiveNodeRun>;
   /** Each node's newest step in the last run (inputs, log, code error). */
   lastSteps?: Record<string, AutomationRunStepDto>;
-  /** A team's workflow (custom code runs in Local ones only for now). */
-  team?: boolean;
+  /** A shared workflow (custom code runs in Local ones only for now). */
+  shared?: boolean;
   detailsTab?: DetailsTab;
   codeWide?: boolean;
   /** Open this node's Code tab at a line (a failed code step clicked in the run log). */
@@ -392,7 +392,7 @@ function SettingsFold({ children }: { children: ReactNode }) {
   </details>;
 }
 
-function NodeDetails({ node, graph, byType, faces, readOnly, workflows, currentId, editing, onEditing, pinsOf, nodeOutputs, liveNodes, lastSteps, team, detailsTab = "settings", codeWide = false, codeFocus, savedAt, ...on }: Props & EditProps & { node: AutomationGraphNodeDto }) {
+function NodeDetails({ node, graph, byType, faces, readOnly, workflows, currentId, editing, onEditing, pinsOf, nodeOutputs, liveNodes, lastSteps, shared, detailsTab = "settings", codeWide = false, codeFocus, savedAt, ...on }: Props & EditProps & { node: AutomationGraphNodeDto }) {
   const meta = byType.get(node.type);
   const basedMeta = byType.get(basedOnNode(node)?.type || "");
   const label = nodeLabel(node, meta);
@@ -429,7 +429,7 @@ function NodeDetails({ node, graph, byType, faces, readOnly, workflows, currentI
     </div>
     <div className="aw-insp-subpanel" role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${tab}`}>
       {tab === "code" ? <CodeTab workflowId={currentId || ""} node={node} graph={graph} byType={byType} workflows={workflows}
-        pins={pinsOf ? pinsOf(node) : { exec: true, inputs: [], outputs: [] }} readOnly={readOnly} locked={locked} team={!!team}
+        pins={pinsOf ? pinsOf(node) : { exec: true, inputs: [], outputs: [] }} readOnly={readOnly} locked={locked} shared={!!shared}
         lastStep={lastSteps?.[node.id]} reveal={reveal} savedAt={savedAt} wide={codeWide} onWide={(wide) => on.onCodeWide?.(wide)}
         onNodeChange={on.onNodeChange} onNodeReplace={(next, label) => on.onNodeReplace?.(next, label)}
         onCodeSession={(phase, id) => on.onCodeSession?.(phase, id)} onRunNode={on.onRunNode} runningNode={on.runningNode} /> : <>

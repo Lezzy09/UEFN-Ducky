@@ -1,5 +1,5 @@
 """Host data service tables (migration 0009): ``plugin_data`` docs + asset metadata,
-``scope_sync`` per-team sync state, ``plugin_scopes`` where each plugin's data lives.
+``scope_sync`` per-space sync state, ``plugin_scopes`` where each plugin's data lives.
 
 Every call names its ``(account, scope)``; nothing here reads across accounts.
 """
@@ -154,7 +154,7 @@ def set_rev(account: str, scope: str, plugin: str, kind: str, key: str, rev: int
 
 
 def mark_plugin_dirty(account: str, scope: str, plugin: str) -> None:
-    """Queue every live doc of one plugin to push on the next team round."""
+    """Queue every live doc of one plugin to push on the next sync round."""
     conn = db.connect()
     with db.write_txn(conn):
         conn.execute(
@@ -208,18 +208,18 @@ def delete_scope(account: str, scope: str) -> None:
     conn = db.connect()
     with db.write_txn(conn):
         conn.execute("DELETE FROM plugin_data WHERE account_id=? AND scope_id=?", (account, scope))
-        conn.execute("DELETE FROM scope_sync WHERE account_id=? AND team_id=?", (account, scope))
+        conn.execute("DELETE FROM scope_sync WHERE account_id=? AND space_id=?", (account, scope))
         conn.execute("DELETE FROM plugin_scopes WHERE account_id=? AND scope_id=?", (account, scope))
 
 
 # --------------------------------------------------------------------------- sync state
 
 
-def sync_get(account: str, team: str) -> dict[str, Any]:
+def sync_get(account: str, space: str) -> dict[str, Any]:
     r = db.connect().execute(
         "SELECT label, members, cursor_rev, state, error, usage, synced_at, called_at FROM scope_sync "
-        "WHERE account_id=? AND team_id=?",
-        (account, team),
+        "WHERE account_id=? AND space_id=?",
+        (account, space),
     ).fetchone()
     if not r:
         return {"label": "", "members": 0, "cursor_rev": 0, "state": "ok", "error": "", "usage": {},
@@ -232,16 +232,16 @@ def sync_get(account: str, team: str) -> dict[str, Any]:
     return out
 
 
-def sync_put(account: str, team: str, **fields: Any) -> None:
-    """Merge ``fields`` into the team's sync row."""
-    row = sync_get(account, team)
+def sync_put(account: str, space: str, **fields: Any) -> None:
+    """Merge ``fields`` into the space's sync row."""
+    row = sync_get(account, space)
     row.update(fields)
     conn = db.connect()
     with db.write_txn(conn):
         conn.execute(
-            "INSERT OR REPLACE INTO scope_sync(account_id, team_id, label, members, cursor_rev, state, error, usage, "
+            "INSERT OR REPLACE INTO scope_sync(account_id, space_id, label, members, cursor_rev, state, error, usage, "
             "synced_at, called_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (account, team, str(row["label"]), int(row["members"]), int(row["cursor_rev"]), str(row["state"]),
+            (account, space, str(row["label"]), int(row["members"]), int(row["cursor_rev"]), str(row["state"]),
              str(row["error"]), json.dumps(row["usage"] or {}), float(row["synced_at"]), float(row["called_at"])),
         )
 
@@ -250,7 +250,7 @@ def sync_put(account: str, team: str, **fields: Any) -> None:
 
 
 def link_get(account: str, plugin: str) -> str:
-    """Where this plugin's data lives for the account: ``personal`` (Local) or a team id."""
+    """Where this plugin's data lives for the account: ``personal`` (Local) or a space id."""
     r = db.connect().execute(
         "SELECT scope_id FROM plugin_scopes WHERE account_id=? AND plugin_id=?", (account, plugin)
     ).fetchone()
@@ -270,7 +270,7 @@ def link_set(account: str, plugin: str, scope: str) -> None:
 
 
 def links(account: str) -> dict[str, str]:
-    """Every plugin of the account whose data lives in a team: ``{plugin_id: team_id}``."""
+    """Every plugin of the account whose data lives in a shared space: ``{plugin_id: space_id}``."""
     rows = db.connect().execute(
         "SELECT plugin_id, scope_id FROM plugin_scopes WHERE account_id=?", (account,)
     ).fetchall()

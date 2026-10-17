@@ -12,8 +12,8 @@ data, not even from the DB or the files directly.
 - Signed out (``_local``) there is no ADK: plain DPAPI.
 - No ADK yet (offline first sign-in): the account's data is locked, never written
   as plaintext; scopes open read-only until the key arrives.
-- Team copies are encrypted again with each team's own key before they leave the
-  PC (:mod:`team_keys`); this module is the at-rest layer on this PC.
+- A shared space's copy may be encrypted again by its spaces provider before it
+  leaves the PC; this module is the at-rest layer on this PC.
 """
 
 from __future__ import annotations
@@ -165,9 +165,9 @@ def on_login_change(before: dict[str, Any], after: dict[str, Any]) -> None:
         _LAST_TRY.clear()
         _open.cache_clear()
         _open_big.cache_clear()
-    from backend.uefn_plugins import team_keys
+    from backend.uefn_plugins.spaces import provider
 
-    team_keys.on_login_change(keep)
+    provider().on_login_change(keep)
 
 
 # --------------------------------------------------------------------------- seal / open
@@ -270,7 +270,7 @@ def ensure_migrated(account: str) -> None:
 
 
 def reset_for_tests() -> None:
-    from backend.uefn_plugins import team_keys
+    from backend.uefn_plugins import spaces
 
     with _GUARD:
         _KEYS.clear()
@@ -278,4 +278,4 @@ def reset_for_tests() -> None:
         _MIGRATED.clear()
         _open.cache_clear()
         _open_big.cache_clear()
-    team_keys.reset_for_tests()
+    spaces.reset_for_tests()

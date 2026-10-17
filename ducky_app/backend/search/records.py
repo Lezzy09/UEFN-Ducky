@@ -2,8 +2,8 @@
 
 Records live in the same index as skills and tools (``kind = 'record'``), keyed by
 plugin, signed-in account and data scope, so a plugin sees only its own rows in the
-copy it is using (Local or one team) for the person signed in. They are deleted when
-the plugin is uninstalled (and refused from then on), when a team copy is purged and
+copy it is using (Local or one shared space) for the person signed in. They are deleted
+when the plugin is uninstalled (and refused from then on), when a shared copy is purged and
 when a plugin-test sandbox ends. Agents do not see records through ``skill_search``;
 the plugin exposes its own tool that calls :func:`query`.
 """
@@ -100,7 +100,7 @@ def query(plugin_id: str, text: str, limit: int = 10) -> list[dict[str, Any]]:
 
 class SearchApi:
     """``api.search`` for one plugin. Every call is limited to this plugin's records in its
-    active data scope (Local or the one team the plugin's data lives in)."""
+    active data scope (Local or the one shared space the plugin's data lives in)."""
 
     def __init__(self, plugin_id: str) -> None:
         self._plugin = plugin_id
