@@ -456,27 +456,25 @@ def _first_api_model() -> ResolveOk | None:
     return None
 
 
-def chat_model_choice(settings: Any, keep_agent: bool = False) -> tuple[ResolveOk | None, str, str]:
+def chat_model_choice(settings: Any, keep_agent: bool = False) -> tuple[ResolveOk | None, str]:
     """The model a chat with none takes: the Default Model, else UEFN Ducky's own model.
 
-    Returns (choice, note, error): note says why the chat got Ducky AI instead of the
-    Default Model; error says why there is no model at all, and the person then picks one
-    in the composer. keep_agent: the chat stays on Ducky's own agent, so a coding-agent
-    Default Model does not apply and the first API model is the last resort.
+    Returns (choice, error). A chat that falls back to Ducky AI just shows Ducky AI: the
+    composer says nothing about the Default Model. error says why there is no model at all,
+    and the person then picks one in the composer. keep_agent: the chat stays on Ducky's own
+    agent, so a coding-agent Default Model does not apply and the first API model is the
+    last resort.
     """
     result = resolve_model_strict(None, settings)
     if isinstance(result, ResolveOk) and result.model and not (keep_agent and result.coding_agent != "ducky"):
-        return result, "", ""
+        return result, ""
+    fallback = ducky_ai_selection() or (_first_api_model() if keep_agent else None)
+    if fallback is not None:
+        return fallback, ""
     if isinstance(result, ResolveOk):
-        why = ""
+        why = "This ducky has no model"
     elif result.code == "model_required":
         why = "No Default Model is set"
     else:
         why = f"Your Default Model {result.requested or default_model_selection(settings)} isn't available"
-    fallback = ducky_ai_selection() or (_first_api_model() if keep_agent else None)
-    if fallback is not None:
-        note = f"{why}, so this ducky uses Ducky AI. Pick another model below anytime." if why else ""
-        if note and fallback.provider != "uefn_ducky":
-            note = note.replace("Ducky AI", fallback.selection.qualified)
-        return fallback, note, ""
-    return None, "", f"{why or 'This ducky has no model'}. Pick a model below and this ducky uses it."
+    return None, f"{why}. Pick a model below and this ducky uses it."

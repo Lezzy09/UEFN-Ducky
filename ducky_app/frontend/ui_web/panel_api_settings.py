@@ -753,7 +753,7 @@ class PanelApiSettingsMixin:
 
     def adopt_default_model(self, conv_id: str, keep_agent: bool = False) -> dict[str, Any]:
         """A Ducky chat with no model takes the Default Model (agent and model), the way a new
-        chat does, else UEFN Ducky's own model (Ducky AI) with a note saying why. With neither,
+        chat does, else UEFN Ducky's own model (Ducky AI). With neither,
         the person picks one in the composer, and messages sent meanwhile run then (held).
         keep_agent: a branded chat that stays on Ducky's own agent never takes a coding-agent
         default, as when it was created."""
@@ -769,7 +769,7 @@ class PanelApiSettingsMixin:
             if (conv.model or "").strip():
                 release_held_for_model(conv.id)
             return current
-        choice, note, error = chat_model_choice(_pa.PanelSettings.load(), keep_agent)
+        choice, error = chat_model_choice(_pa.PanelSettings.load(), keep_agent)
         if choice is None:
             return {"ok": False, "error": error, "held": held_for_model(conv.id)}
         agent, model = choice.coding_agent, choice.model
@@ -778,7 +778,7 @@ class PanelApiSettingsMixin:
         _pa.save_conversation(conv)
         _pa.notify_chats_changed(conv.id, conv.title, conv.folder_id, push=self._push, open_tab=False)
         release_held_for_model(conv.id)
-        return {"ok": True, "coding_agent": agent, "model": model, "provider": conv.provider or "", "note": note}
+        return {"ok": True, "coding_agent": agent, "model": model, "provider": conv.provider or ""}
 
     def set_conversation_thinking_effort(self, conv_id: str, effort: str = "off") -> dict[str, Any]:
         from backend.agent.thinking_effort import normalize_thinking_effort

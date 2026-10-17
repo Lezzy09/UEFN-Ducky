@@ -76,15 +76,16 @@ it("says how many messages wait for a model", async () => {
   await waitFor(() => expect(screen.getByText("2 messages are waiting. Pick a model below and they run.")).toBeTruthy());
 });
 
-it("a chat that took Ducky AI says why, and runs what waited once it has a model", async () => {
-  const note = "Your Default Model codex:gpt-6-astra isn't available, so this ducky uses Ducky AI. Pick another model below anytime.";
-  overrides.adopt_default_model = vi.fn(async () => ({
-    ok: true, coding_agent: "ducky", model: "ducky-brain", provider: "uefn_ducky", note,
-  }));
+it("a chat that took Ducky AI says nothing about the Default Model, and runs what waited", async () => {
+  const adopt = vi.fn(async () => ({ ok: true, coding_agent: "ducky", model: "ducky-brain", provider: "uefn_ducky" }));
+  overrides.adopt_default_model = adopt;
   const runHeld = vi.fn(async () => ({ ok: true, ran: 1 }));
   (overrides as Record<string, unknown>).run_held_messages = runHeld;
-  render(<Pane />);
-  await waitFor(() => expect(screen.getByText(note)).toBeTruthy());
+  const { container } = render(<Pane />);
+  await waitFor(() => expect(adopt).toHaveBeenCalled());
+  await act(async () => {});
+  expect(container.querySelector(".composer-attach-warning")).toBeNull();
+  expect(screen.queryByText(/Default Model/)).toBeNull();
   // An agent's message reached the chat before its model was saved: it runs on this one.
   await act(async () => {
     pushLocalAgentEvent({ type: "model_needed", conv_id: "chat-1", held: 1, text: "No model." });

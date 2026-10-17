@@ -3368,7 +3368,7 @@ export interface PanelApi {
     provider?: string,
   ): Promise<{ ok: boolean; coding_agent?: string; model?: string; provider?: string; error?: string }>;
   /** A Ducky chat with no model takes the Default Model (agent and model), as a new chat does,
-   * else Ducky AI (note says why). With neither, error says so and held counts waiting messages. */
+   * else Ducky AI. With neither, error says so and held counts waiting messages. */
   adopt_default_model?(
     conv_id: string,
     keep_agent?: boolean,
@@ -3377,7 +3377,6 @@ export interface PanelApi {
     coding_agent?: string;
     model?: string;
     provider?: string;
-    note?: string;
     held?: number;
     error?: string;
   }>;

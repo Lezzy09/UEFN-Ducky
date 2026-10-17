@@ -57,7 +57,7 @@ def _api() -> PanelApiSettingsMixin:
 def test_a_chat_with_no_model_takes_a_coding_agent_default(monkeypatch, chat):
     _default(monkeypatch, "codex", "gpt-6-luna")
     out = _api().adopt_default_model("c1")
-    assert out == {"ok": True, "coding_agent": "codex", "model": "gpt-6-luna", "provider": "", "note": ""}
+    assert out == {"ok": True, "coding_agent": "codex", "model": "gpt-6-luna", "provider": ""}
     assert chat.saved == [("codex", "gpt-6-luna", "")]
     assert chat.released == ["c1"]
 
@@ -65,25 +65,24 @@ def test_a_chat_with_no_model_takes_a_coding_agent_default(monkeypatch, chat):
 def test_a_chat_with_no_model_takes_an_api_default(monkeypatch, chat):
     _default(monkeypatch, "ducky", "claude-opus-5-5", provider="anthropic")
     out = _api().adopt_default_model("c1")
-    assert out == {"ok": True, "coding_agent": "ducky", "model": "claude-opus-5-5", "provider": "anthropic",
-                   "note": ""}
+    assert out == {"ok": True, "coding_agent": "ducky", "model": "claude-opus-5-5", "provider": "anthropic"}
 
 
 def test_without_a_default_model_the_chat_takes_ducky_ai(monkeypatch, chat):
     _no_default(monkeypatch)
     out = _api().adopt_default_model("c1")
-    assert (out["ok"], out["coding_agent"], out["model"], out["provider"]) == (True, "ducky", "ducky-brain", "uefn_ducky")
-    assert out["note"].startswith("No Default Model is set, so this ducky uses Ducky AI.")
+    assert out == {"ok": True, "coding_agent": "ducky", "model": "ducky-brain", "provider": "uefn_ducky"}
     assert chat.saved == [("ducky", "ducky-brain", "uefn_ducky")]
 
 
-def test_an_unavailable_default_model_falls_back_to_ducky_ai_and_says_so(monkeypatch, chat):
+def test_an_unavailable_default_model_falls_back_to_ducky_ai_quietly(monkeypatch, chat):
     # Oct 16 2026: the Default Model codex:gpt-6-astra left Codex's list, and every new
     # ducky opened on "This ducky has no model. Set a Default Model." and stopped there.
+    # A chat on Ducky AI then said why in a yellow note; the owner: never mention the
+    # Default Model to someone using Ducky AI.
     _no_default(monkeypatch, code="model_unavailable", requested="codex:gpt-6-astra")
     out = _api().adopt_default_model("c1")
-    assert out["model"] == "ducky-brain"
-    assert "Your Default Model codex:gpt-6-astra isn't available" in out["note"]
+    assert out == {"ok": True, "coding_agent": "ducky", "model": "ducky-brain", "provider": "uefn_ducky"}
 
 
 def test_a_branded_chat_stays_on_ducky_and_takes_ducky_ai(monkeypatch, chat):

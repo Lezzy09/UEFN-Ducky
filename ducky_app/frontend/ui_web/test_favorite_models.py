@@ -431,15 +431,16 @@ def test_chat_model_choice_prefers_the_default_then_ducky_ai(monkeypatch):
                         lambda _s, **_k: {"codex": {"gpt-6-luna"}})
     monkeypatch.setattr("frontend.favorite_models._available_api_models", lambda: {})
 
-    choice, note, error = fm.chat_model_choice(SimpleNamespace(default_model="codex:gpt-6-luna"))
-    assert (choice.coding_agent, choice.model, note, error) == ("codex", "gpt-6-luna", "", "")
+    choice, error = fm.chat_model_choice(SimpleNamespace(default_model="codex:gpt-6-luna"))
+    assert (choice.coding_agent, choice.model, error) == ("codex", "gpt-6-luna", "")
 
-    choice, note, error = fm.chat_model_choice(SimpleNamespace(default_model="codex:gpt-6-astra"))
+    choice, error = fm.chat_model_choice(SimpleNamespace(default_model="codex:gpt-6-astra"))
     assert choice is ducky_ai and error == ""
-    assert note == ("Your Default Model codex:gpt-6-astra isn't available, so this ducky uses Ducky AI. "
-                    "Pick another model below anytime.")
 
     monkeypatch.setattr(fm, "ducky_ai_selection", lambda: None)
-    choice, note, error = fm.chat_model_choice(SimpleNamespace(default_model=""))
-    assert choice is None and note == ""
+    choice, error = fm.chat_model_choice(SimpleNamespace(default_model=""))
+    assert choice is None
     assert error == "No Default Model is set. Pick a model below and this ducky uses it."
+    choice, error = fm.chat_model_choice(SimpleNamespace(default_model="codex:gpt-6-astra"))
+    assert choice is None
+    assert error == "Your Default Model codex:gpt-6-astra isn't available. Pick a model below and this ducky uses it."

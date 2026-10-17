@@ -30,7 +30,7 @@ import { ThinkingEffortFooter } from "./ThinkingEffortFooter";
 import { effortGlow, GatewayUsageFooter, type UsageNotice, type UsageWindow } from "./GatewayUsageFooter";
 import { catalogThinkingMenu, effortInMenu, effortSuffix } from "./thinkingMenu";
 import { openCodingAgentLoginUi } from "../walkthrough/openCodingAgentLogin";
-import { openLlmsProviderSettings } from "../navigation/openSettingsTab";
+import { openDefaultModelSettings, openLlmsProviderSettings } from "../navigation/openSettingsTab";
 import { LlmPluginSlot } from "../plugin-ui/llmPluginSlots";
 
 function formatContext(n: number): string {
@@ -55,15 +55,7 @@ function normId(id: string): string {
   return (id || "").trim().toLowerCase().replace(/-/g, "_");
 }
 
-function LlmSettingsGear({
-  providerId,
-  label,
-  onOpen,
-}: {
-  providerId: string;
-  label: string;
-  onOpen: () => void;
-}) {
+function SettingsGear({ label, onOpen }: { label: string; onOpen: () => void }) {
   return (
     <button
       type="button"
@@ -74,7 +66,6 @@ function LlmSettingsGear({
         e.stopPropagation();
         e.preventDefault();
         onOpen();
-        openLlmsProviderSettings(providerId);
       }}
     >
       <Icons.Settings />
@@ -1040,12 +1031,22 @@ export function ModelSelector({
                 <span className="model-selector-navhdr-title">Pick model</span>
               )}
               {navGateway && activeGateway ? (
-                <LlmSettingsGear
-                  providerId={activeGateway.id}
+                <SettingsGear
                   label={activeGateway.label}
-                  onOpen={requestClose}
+                  onOpen={() => {
+                    requestClose();
+                    openLlmsProviderSettings(activeGateway.id);
+                  }}
                 />
-              ) : null}
+              ) : (
+                <SettingsGear
+                  label="Default Model"
+                  onOpen={() => {
+                    requestClose();
+                    openDefaultModelSettings();
+                  }}
+                />
+              )}
             </div>
             {searchBox()}
             <div className="model-selector-viewport">

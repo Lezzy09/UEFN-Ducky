@@ -288,8 +288,6 @@ export function ChatPane({
   const [modelPickerSignal, setModelPickerSignal] = useState(0);
   // A chat with no model: why (noModelText), how many messages Ducky keeps for it until a
   // model is picked (they run then), and whether the composer's text sends on that pick.
-  // modelNote says why a chat took Ducky AI instead of the Default Model.
-  const [modelNote, setModelNote] = useState<{ model: string; text: string } | null>(null);
   const [noModelText, setNoModelText] = useState("");
   const [heldForModel, setHeldForModel] = useState(0);
   const sendAfterPickRef = useRef(false);
@@ -526,7 +524,6 @@ export function ChatPane({
     // selection with a stale cache entry. Restore only when the pane changes chat.
     if (loadedChatIdRef.current === chat.id) return;
     loadedChatIdRef.current = chat.id;
-    setModelNote(null);
     setNoModelText("");
     setHeldForModel(0);
     sendAfterPickRef.current = false;
@@ -682,7 +679,6 @@ export function ChatPane({
           setCodingAgent(event.coding_agent || "ducky");
           setSelectedModel(event.model);
           setSelectedModelDisplayName(event.model);
-          setModelNote(event.text ? { model: event.model, text: event.text } : null);
           return;
         }
         if (event.type === "chats_changed") {
@@ -963,7 +959,6 @@ export function ChatPane({
     setCodingAgent(res?.coding_agent || "ducky");
     setSelectedModel(model);
     setSelectedModelDisplayName(model);
-    setModelNote(res?.note ? { model, text: res.note } : null);
     return true;
   }, [chat.id, keepDuckyAgent, visible]);
   useEffect(() => {
@@ -974,7 +969,6 @@ export function ChatPane({
   // agent) sent meanwhile runs then. Only with no models at all does send open Settings.
   const pickModelFirst = promptForDefaultModel && !modelsUnavailable;
   const showDefaultModelCta = modelsUnavailable;
-  const modelNoteText = modelNote && modelNote.model === selectedModel ? modelNote.text : "";
   pickerContextRef.current = { visible, selectedModel };
   const canSend = canCompose && !agentRunning;
   const canQueue = canCompose && agentRunning;
@@ -1239,7 +1233,6 @@ export function ChatPane({
     if (!overrideText && !canSend) return;
     setInputText("");
     if (!overrideText) clearAttachments();
-    setModelNote(null);
     dispatchSend(text, apiAttachments, agentMode, selectedModel, codingAgent);
   };
 
@@ -1646,7 +1639,7 @@ export function ChatPane({
           </div>
 
           <div className="chat-pane-composer-pane chat-pane-composer-pane--type">
-            {(showDefaultModelCta || pickModelFirst || visionBlocked || attachmentError || modelNoteText) && (
+            {(showDefaultModelCta || pickModelFirst || visionBlocked || attachmentError) && (
               <div className={`composer-attach-warning${visionBlocked ? " is-vision-blocked" : ""}`}>
                 {showDefaultModelCta
                   ? "This ducky has no model. Set a Default Model."
@@ -1656,7 +1649,7 @@ export function ChatPane({
                       : noModelText || "This ducky has no model. Pick one below."
                     : visionBlocked
                       ? `${displayModelLabel} cannot use images — switch to a vision model or remove images.`
-                      : attachmentError || modelNoteText}
+                      : attachmentError}
               </div>
             )}
             {slashStatus ? <div className="slash-command-status">{slashStatus}</div> : null}

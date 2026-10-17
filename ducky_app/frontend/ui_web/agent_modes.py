@@ -1300,7 +1300,7 @@ def _take_chat_model(conv: Any, settings: PanelSettings, push: PushFn) -> tuple[
     Returns (model, coding_agent, error); with neither, model is "" and error says why."""
     from frontend.favorite_models import chat_model_choice
 
-    choice, note, error = chat_model_choice(settings)
+    choice, error = chat_model_choice(settings)
     if choice is None:
         return "", "ducky", error
     conv.coding_agent, conv.model = choice.coding_agent, choice.model
@@ -1310,7 +1310,7 @@ def _take_chat_model(conv: Any, settings: PanelSettings, push: PushFn) -> tuple[
     except Exception:
         pass
     notify_chats_changed(conv.id, conv.title, conv.folder_id, push=push, open_tab=False)
-    push({"type": "model_adopted", "conv_id": conv.id, "text": note, "model": choice.model,
+    push({"type": "model_adopted", "conv_id": conv.id, "model": choice.model,
           "coding_agent": choice.coding_agent, "provider": choice.provider})
     return choice.model, choice.coding_agent, ""
 
