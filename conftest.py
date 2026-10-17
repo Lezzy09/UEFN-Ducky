@@ -240,6 +240,9 @@ def _appdata_per_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     (root / "Roaming").mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("LOCALAPPDATA", str(root))
     monkeypatch.setenv("APPDATA", str(root / "Roaming"))
+    # Starting the MCP bridge in-process (frontend.launcher) marks the whole process
+    # as the bridge; without this every later test would run as if it were one.
+    monkeypatch.delenv("UEFN_DUCKY_MCP_BRIDGE", raising=False)
     _reset_store_memos()
     yield
     _join_host_workers()
