@@ -283,6 +283,18 @@ describe("plugin scope drawer", () => {
     expect(await screen.findByRole("button", { name: "Undo #12" })).toBeTruthy();
   });
 
+  it("history: the move to the new sync (#1) can be restored to but not undone", async () => {
+    api.plugin_scope_history.mockResolvedValue({ ok: true, more: false, entries: [
+      { seq: 2, by: "Ana", count: 1 },
+      { seq: 1, by: "Imported from team data", count: 40 },
+    ] });
+    drawer(status());
+    fireEvent.click(screen.getByRole("button", { name: "Show history" }));
+    expect(await screen.findByRole("button", { name: "Undo #2" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Undo #1" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Restore to #1" })).toBeTruthy();
+  });
+
   it("folder units show only when the plugin declares folders; Lock and Release", async () => {
     const view = drawer(status());
     expect(screen.queryByText("Folder units")).toBeNull();

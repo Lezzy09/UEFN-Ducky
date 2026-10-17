@@ -39,6 +39,8 @@ import {
 /** Rows of a long table listed before "Show all". */
 const ROWS_SHOWN = 20;
 const HISTORY_PAGE = 20;
+/** Who the server names as the author of a plugin's move to the new sync (history #1). */
+const IMPORTED_BY = "Imported from team data";
 
 type Props = {
   pluginId: string;
@@ -611,10 +613,13 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
                         <td className="plugin-scope-drawer__actions">
                           {api?.plugin_scope_restore ? (
                             <>
-                              <button type="button" className="plugin-scope-bar__link" disabled={busy}
-                                aria-label={`Undo #${e.seq}`} onClick={() => void restore("undo", e.seq)}>
-                                Undo
-                              </button>
+                              {/* The move to the new sync can't be undone (the server refuses it too). */}
+                              {e.seq === 1 && e.by === IMPORTED_BY ? null : (
+                                <button type="button" className="plugin-scope-bar__link" disabled={busy}
+                                  aria-label={`Undo #${e.seq}`} onClick={() => void restore("undo", e.seq)}>
+                                  Undo
+                                </button>
+                              )}
                               <button type="button" className="plugin-scope-bar__link" disabled={busy}
                                 aria-label={`Restore to #${e.seq}`} onClick={() => void restore("to", e.seq)}>
                                 Restore to here
