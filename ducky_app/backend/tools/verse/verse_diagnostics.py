@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +30,45 @@ WORKFLOW_NOT_CONNECTED = (
 _VERSE_FILE_RE = re.compile(r"[\w\-./\\]+\.verse\b")
 
 
+# An agent's check answers within this; a slow or stuck verse-lsp never holds its turn.
+_AGENT_SCAN_SECONDS = 90.0
+
+
 def _project_root() -> str:
-    return normalize_verse_lsp_project_root(PanelSettings.load().uefn_project_root.strip())
+    """The calling agent's project: the one its write tools write into. Oct 17 2026: a chat
+    working in Roguelike wrote its .verse there while this checked the project open in
+    Settings and answered "0 errors" for a file it never saw."""
+    from backend.bridge.client import workspace_roots
+
+    roots = workspace_roots()
+    raw = roots[0] if roots else PanelSettings.load().uefn_project_root.strip()
+    return normalize_verse_lsp_project_root(raw)
+
+
+def _scan_within_limit(root: str, full: bool) -> bool:
+    """Run the scan for an agent, at most _AGENT_SCAN_SECONDS; True when it finished. A scan
+    that runs over is stopped (each checked batch is already saved, newest files first)."""
+    from frontend.ui_web.verse_editor.lsp.diagnostics_scan import (
+        abort_active_scan,
+        scan_project_verse_diagnostics,
+    )
+
+    done = threading.Event()
+
+    def run() -> None:
+        try:
+            scan_project_verse_diagnostics(root, full=full, on_progress=_ui_progress(root))
+        except Exception:
+            pass
+        finally:
+            done.set()
+
+    threading.Thread(target=run, name="verse-check", daemon=True).start()
+    if done.wait(_AGENT_SCAN_SECONDS):
+        return True
+    abort_active_scan()
+    done.wait(5.0)
+    return False
 
 
 def _ui_progress(root: str):
@@ -81,21 +119,26 @@ def workspace_list_verse_errors(pretty: bool = False, full: bool = False, rescan
     from frontend.ui_web.verse_editor.lsp.diagnostics_cache import load_for_ui, stale_keys
     from frontend.ui_web.verse_editor.panel_events import push_verse_diagnostics_sync
 
-    if rescan:
-        from frontend.ui_web.verse_editor.lsp.diagnostics_scan import (
-            scan_project_verse_diagnostics,
-        )
-
-        if full:
-            scan_project_verse_diagnostics(root, full=True, on_progress=_ui_progress(root))
-        elif stale_keys(root):
-            scan_project_verse_diagnostics(root, full=False, on_progress=_ui_progress(root))
+    finished = True
+    if rescan and (full or stale_keys(root)):
+        finished = _scan_within_limit(root, full)
     # load_for_ui reconciles against disk (deleted/moved files pruned), so the
     # payload is authoritative — always replace the UI registry with it.
     merged = load_for_ui(root)
     push_verse_diagnostics_sync(list(merged.get("files") or []), root, replace=True)
     payload = dict(merged)
+    payload["project_root"] = root
     payload["note"] = OFFLINE_SCAN_NOTE
+    if not finished:
+        unchecked = sorted(stale_keys(root))
+        payload["complete"] = False
+        payload["unchecked"] = unchecked[:50]
+        payload["note"] = (
+            f"The check stopped after {int(_AGENT_SCAN_SECONDS)} s with {len(unchecked)} file(s) not checked "
+            "yet (listed in unchecked; recently changed files go first). A file in unchecked has NOT been "
+            "checked: call this once more to continue, and never report such a file as clean. "
+            + OFFLINE_SCAN_NOTE
+        )
     return tool_json(payload, pretty=pretty)
 
 

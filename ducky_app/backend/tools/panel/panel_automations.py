@@ -601,7 +601,7 @@ def find_workflows(task: str, limit: int = 6, pretty: bool = False) -> str:
     e.g. "prompt to 3D model in UEFN"), best first. A saved workflow that fits: run it
     with run_workflow (or show it). A template that fits: create_workflow_from_template,
     adjust its settings, then run it. Only when nothing fits, do the task by hand or
-    build a new workflow, and say so in one line."""
+    build a new workflow, and say so once in one line (not again on later steps)."""
     from backend.automations.finder import find
     from backend.automations.store import list_workflows as _list
     from backend.automations.templates import list_templates

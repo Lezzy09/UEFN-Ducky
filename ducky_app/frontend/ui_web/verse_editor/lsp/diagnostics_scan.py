@@ -70,6 +70,13 @@ def _registry_key(path: str) -> str:
     return _norm_rel(path).lower()
 
 
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def _count_severities(diagnostics: list[dict[str, Any]]) -> tuple[int, int]:
     errors = 0
     warnings = 0
@@ -340,6 +347,9 @@ def _run_scan(
         }
 
     scan_keys = [_registry_key(rel) for rel, _ in files] if full else sorted(stale_set)
+    # Newest first: the file an agent just wrote is checked in the first batch, so a check
+    # stopped early (first scan of a big project) has still answered for it.
+    scan_keys.sort(key=lambda k: -_mtime(Path(root) / k))
     # Dedupe registry keys (same basename in different folders is fine — keys are full rel paths).
     seen_keys: set[str] = set()
     deduped_scan_keys: list[str] = []
