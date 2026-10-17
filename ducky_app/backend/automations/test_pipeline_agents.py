@@ -141,3 +141,26 @@ def test_profile_invite_resolves_its_own_model_without_bare_id_override(monkeypa
     assert out["group_id"] == "run-group"
     api.group_create.assert_not_called()
     api.group_seat_profile.assert_called_once_with("run-group", "artist", model="")
+
+
+def test_an_agent_step_may_use_the_run_s_folders_only_while_it_works(monkeypatch, tmp_path):
+    # Oct 17 2026: a trailer workflow's steps could not open <Output root>/<run>/bible.json.
+    from backend.workspace.run_folders import granted
+
+    out = tmp_path / "Ducky Trailers"
+    out.mkdir()
+    conv = create_conversation(PanelSettings.load(), "", title="Concept artist")
+    seen = {}
+
+    def wait(conv_id, *_a, **_k):
+        seen["during"] = granted(conv_id)
+        return {"status": "done", "assistant_text": "Done"}
+
+    monkeypatch.setattr(runner, "_run_message_and_wait", wait)
+    monkeypatch.setattr("frontend.ui_web.agent_modes.is_agent_running", lambda cid: False)
+    out_ok = runner._pipeline_agent(
+        {"ducky": f"chat:{conv.id}"}, {"prompt": "Read bible.json", "caller_conv_id": "caller", "_run_folders": [str(out)]}
+    )
+    assert out_ok["ok"] is True
+    assert seen["during"] == [str(out)]
+    assert granted(conv.id) == []

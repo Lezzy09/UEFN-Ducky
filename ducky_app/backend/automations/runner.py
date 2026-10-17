@@ -586,6 +586,10 @@ def run_workflow(
         ctx["files"] = files
     ctx["caller_conv_id"] = _caller(caller_conv_id or str(ctx.get("caller_conv_id") or ""))
     ctx["workflow_name"] = str(wf.get("name") or "")
+    from backend.workspace.run_folders import named_folders
+
+    # Folders this workflow names (an Output root folder): its Agent steps may use them.
+    ctx["_run_folders"] = named_folders(nodes.values())
     if trigger_id:
         ctx["_trigger_id"] = trigger_id  # the plugin that fired it is here: its trigger node runs
     _prepare_run_ctx(ctx, wf)
@@ -2007,6 +2011,10 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
     timeout = min(max(float(cfg.get("timeout_sec") or 180.0), 1.0), _AGENT_WAIT_CAP_S)
     caller = str(payload.get("caller_conv_id") or "").strip()
     release = _cancel_agent_on_stop(conv_id)
+    from backend.workspace.run_folders import grant
+
+    # The run's named folders, for this step's ducky only and only while it works on the step.
+    lend = grant(conv_id, list(payload.get("_run_folders") or []), timeout + 60.0)
     try:
         wait = _run_message_and_wait(
             conv_id,
@@ -2021,6 +2029,7 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
         )
     finally:
         release()
+        lend()
     if str(wait.get("status") or "") != "done":
         if node_id:
             seats.pop(node_id, None)  # it may still be busy: a next pass gets a fresh ducky

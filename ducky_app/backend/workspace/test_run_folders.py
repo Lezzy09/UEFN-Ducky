@@ -1,0 +1,93 @@
+"""A workflow run lends the folders it names to its Agent steps, one step's chat at a time."""
+
+from __future__ import annotations
+
+import os
+import time
+from pathlib import Path
+
+import pytest
+
+from backend.workspace import identity, run_folders
+
+
+@pytest.fixture
+def out(tmp_path: Path) -> Path:
+    folder = tmp_path / "Ducky Trailers"
+    folder.mkdir()
+    return folder
+
+
+def _as(conv_id: str):
+    return identity.bind(identity.RunContext(conv_id=conv_id, run_id="r"))
+
+
+def test_a_named_folder_is_lent_but_never_a_broad_or_private_one(out: Path, monkeypatch) -> None:
+    assert run_folders.usable_folder(str(out)) == os.path.realpath(out)
+    monkeypatch.setenv("TRAILERS_TEST", str(out))
+    assert run_folders.usable_folder("%TRAILERS_TEST%") == os.path.realpath(out)
+    home = Path.home()
+    for raw in (
+        "",
+        "relative/folder",
+        "line one\nline two",
+        str(home),
+        str(home.parent),
+        Path(str(home)).anchor,
+        str(home / ".ssh"),
+        str(out / ".git" / "objects"),
+        os.path.join(os.environ["LOCALAPPDATA"], "UEFN-Ducky"),
+    ):
+        assert run_folders.usable_folder(raw) == "", raw
+    (out / "bible.json").write_text("{}", encoding="utf-8")
+    assert run_folders.usable_folder(str(out / "bible.json")) == ""  # a file, not a folder
+
+
+def test_the_folders_a_workflow_names_are_its_text_inputs(out: Path) -> None:
+    nodes = [
+        {"type": "input.text", "config": {"value": str(out)}},
+        {"type": "input.text", "config": {"value": "Formats: 16:9 trailer"}},
+        {"type": "input.number", "config": {"value": 3}},
+        {"type": "input.text", "config": {"value": str(out)}},
+    ]
+    assert run_folders.named_folders(nodes) == [os.path.realpath(out)]
+
+
+def test_a_grant_is_one_chat_s_until_released_or_expired(out: Path, monkeypatch) -> None:
+    release = run_folders.grant("step-chat", [str(out)], 60)
+    assert run_folders.granted("step-chat") == [str(out)]
+    assert run_folders.granted("another-chat") == []
+    release()
+    assert run_folders.granted("step-chat") == []
+    run_folders.grant("step-chat", [str(out)], 1)
+    later = time.time() + 5
+    monkeypatch.setattr(run_folders.time, "time", lambda: later)  # a crashed run's grant runs out
+    assert run_folders.granted("step-chat") == []
+
+
+def test_the_step_s_agent_reads_and_writes_the_lent_folder_and_no_one_else(out: Path, monkeypatch) -> None:
+    from backend.bridge import client
+    from backend.workspace import writer
+
+    project = out.parent / "Island"
+    project.mkdir()
+    monkeypatch.delenv("UEFN_VSCODE_WORKSPACE_FOLDERS", raising=False)
+    monkeypatch.setenv("UEFN_DUCKY_PROJECT_ROOT", str(project))
+    monkeypatch.setattr("frontend.ui_web.recent_projects.load_recent_projects", lambda: [])
+    bible = out / "goblins_1430" / "bible.json"
+    release = run_folders.grant("step-chat", [os.path.realpath(out)], 60)
+    try:
+        token = _as("step-chat")
+        try:
+            assert client.resolve_workspace_path(str(bible)) == os.path.realpath(bible)
+            writer._require_writable(str(bible), os.path.realpath(out))  # plain files, no island rules
+        finally:
+            identity.reset(token)
+        token = _as("another-chat")
+        try:
+            with pytest.raises(ValueError, match="outside allowed workspace folders"):
+                client.resolve_workspace_path(str(bible))
+        finally:
+            identity.reset(token)
+    finally:
+        release()

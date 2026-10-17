@@ -44,6 +44,7 @@ ALLOWLIST: dict[str, str] = {
     "backend/tools/core/uefn_windows.py::_save_clicks": "Copy/OK click cache under AppData",
     "backend/tools/core/uefn_popups.py::mark_verse_skip": "uefn_verse_skip.json marker under AppData",
     "backend/tools/core/uefn_popups.py::clear_verse_skip": "removes the AppData skip marker",
+    "backend/workspace/run_folders.py::_save": "workflow folder grants file under AppData",
     "backend/tools/uefn/editor.py::_drop_temp_capture": "delete a leftover PNG under %TEMP%/ducky_captures only",
     "frontend/ui_web/project_files.py::write_external_file": "ext: files live outside the project",
     "frontend/ui_web/project_files.py::purge_undo_trash": "undo-trash housekeeping, not project content",

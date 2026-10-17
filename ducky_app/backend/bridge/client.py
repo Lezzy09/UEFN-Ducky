@@ -797,7 +797,13 @@ def _resolve_workspace_path_unchecked(relative_or_absolute: str) -> str:
         for recent in recents:
             if _is_under_root(full, recent):
                 return full
-        allowed = list(dict.fromkeys([*roots, *recents]))
+        from backend.workspace.run_folders import granted
+
+        lent = granted()  # folders the workflow step this agent is doing names
+        for folder in lent:
+            if _is_under_root(full, folder):
+                return full
+        allowed = list(dict.fromkeys([*roots, *recents, *lent]))
         # Name the allowed folders: a model told only "outside" retries the same path for turns.
         raise ValueError(
             f"Path is outside allowed workspace folders: {relative_or_absolute!r}. Ducky's file tools "

@@ -58,8 +58,19 @@ def _is_folder_project_root(root: str) -> bool:
         return False
 
 
+def _is_lent_folder(root: str) -> bool:
+    """A folder the workflow step this agent is doing lends it (backend.workspace.run_folders)."""
+    try:
+        from backend.workspace.run_folders import is_granted_root
+
+        return is_granted_root(root)
+    except Exception:
+        return False
+
+
 def _require_writable(full: str, root: str) -> None:
-    if _is_folder_project_root(root):
+    # A lent folder is plain files, like a folder project: never the island rules.
+    if _is_folder_project_root(root) or _is_lent_folder(root):
         require_writable_folder_path(full, root)
     else:
         require_writable_project_path(full)

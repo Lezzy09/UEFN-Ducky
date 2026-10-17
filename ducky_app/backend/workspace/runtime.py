@@ -36,8 +36,10 @@ def _default_writer() -> ProjectWriter:
         # The person's other Ducky projects (header dropdown): agents edit them with Ducky's
         # tools too, each change journaled in its own project.
         from backend.bridge.client import _recent_project_roots
+        from backend.workspace.run_folders import granted
 
-        return [*workspace_roots()[1:], *_recent_project_roots()]
+        # Last: a workflow step's lent folders (journaled as their own root).
+        return [*workspace_roots()[1:], *_recent_project_roots(), *granted()]
 
     return ProjectWriter(root_resolver=root, path_resolver=resolve_workspace_path, other_roots=other_roots)
 
