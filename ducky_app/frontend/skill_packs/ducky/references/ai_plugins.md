@@ -136,6 +136,7 @@ can't reuse a Store or local plugin's id (uninstall first). No secrets in files
 Top level: `id`, `"kind": "plugin"`, `version`, `label`, `description`,
 `min_app_version`, `"default_enabled": false`, `secret_keys` (ids of `secret`
 settings), `contributes`, `"backend": {"entry": "backend", "register": "register"}`.
+Optional `"data_sharing": false`: the plugin's data always stays Local (`plugin_data`).
 
 | `contributes` key | What | Example in |
 |---|---|---|

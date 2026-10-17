@@ -2245,7 +2245,8 @@ export interface PluginScopeUsage {
 
 export interface PluginScopeStatus {
   ok?: boolean;
-  /** False while the account has no shared spaces to offer: no bar at all. */
+  /** False while the account has no shared spaces to offer, or the plugin never shares
+   * its data (`"data_sharing": false`): no bar at all. */
   visible?: boolean;
   /** How shared spaces are named (the provider's word for it); "space" when unset. */
   kindLabel?: string;

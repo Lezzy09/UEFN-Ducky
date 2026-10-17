@@ -57,7 +57,10 @@ def ducky_plugin_data_scope(id: str, scope: str = "", pretty: bool = False) -> s
     if not want:
         return tool_json({"ok": True, "scope": scopes.scope_view(scopes.active_scope(pid))}, pretty=pretty)
     scope_id = scopes.PERSONAL if want.lower() in ("local", "personal") else want
-    label = "Local" if scope_id == scopes.PERSONAL else f"{provider().kind_label} {want}"
+    if scope_id != scopes.PERSONAL and not scopes.sharing_allowed(pid):
+        return tool_json({"ok": False, "error": f"'{pid}' keeps its data on this PC only. It can't be shared."},
+                         pretty=pretty)
+    label ="Local" if scope_id == scopes.PERSONAL else f"{provider().kind_label} {want}"
     if not _confirm(f"Switch '{pid}' data to {label}? Nothing is copied.", title="Switch data"):
         return tool_json({"ok": False, "error": "Cancelled — data scope unchanged."}, pretty=pretty)
     # Same steps as the scope bar's switch (PanelApi.plugin_scope_set): relink, tell the

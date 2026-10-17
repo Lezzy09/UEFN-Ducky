@@ -135,6 +135,13 @@ def _note_login_change(before: dict[str, Any], after: dict[str, Any]) -> None:
         push_ui_event({"type": "duckyos_account_changed", "account": account_key(after)})
     except Exception:
         pass
+    try:
+        from backend.uefn_plugins.scopes import account_id_for
+        from backend.uefn_plugins.spaces import on_account_change
+
+        on_account_change(account_id_for(account_key(before)), account_id_for(account_key(after)))
+    except Exception:
+        pass
 
 
 def _save_blob(data: dict[str, Any]) -> None:

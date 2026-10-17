@@ -40,8 +40,11 @@ encrypted on disk, and syncs shared copies.
 
 - The **user** picks, per plugin, whether its data is **Local** (this account on this
   PC) or one **shared space** offered by an installed plugin: Plugins → the plugin →
-  Data. A plugin never decides, never mixes the two, and needs no code for either.
+  Data. A plugin never mixes the two and needs no code for either.
   With no shared spaces on offer, Local is the only choice and the Data page says so.
+- A plugin whose data must never reach a team (browsing, personal tools) sets
+  `"data_sharing": false` at the top of `plugin.json`: its data is always Local, it
+  gets no scope bar and no Data picker, and switching it to a space is refused.
 - `ducky_plugin_data_scope(id, scope="")`: empty `scope` tells you which copy a plugin
   uses; `"local"` or a space id switches it. Switch only when the user asks: it asks
   them first, nothing is copied, open panels are told, the new copy syncs, and the

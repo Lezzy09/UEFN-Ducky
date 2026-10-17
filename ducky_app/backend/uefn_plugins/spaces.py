@@ -212,8 +212,9 @@ def sync_active(plugin: str, *, force: bool = False, on_done: Any = None) -> dic
 
 def scope_status(plugin: str) -> dict[str, Any]:
     """Where ``plugin``'s data lives: the host scope bar and the Plugins page. ``visible``
-    is false while the account has no shared spaces to offer. ``local`` / ``current`` are
-    the Local and the shown copy's counts and bytes."""
+    is false while the account has no shared spaces to offer, and always for a plugin
+    that never shares its data. ``local`` / ``current`` are the Local and the shown
+    copy's counts and bytes."""
     from backend.store.repos import plugin_data as repo
     from backend.uefn_plugins import scopes
     from frontend.duckyos_account import get_status
@@ -223,7 +224,7 @@ def scope_status(plugin: str) -> dict[str, Any]:
     shared = scope["kind"] == "shared"
     out: dict[str, Any] = {
         "ok": True,
-        "visible": shared or provider().enabled(),
+        "visible": shared or (scopes.sharing_allowed(plugin) and provider().enabled()),
         "kindLabel": provider().kind_label,
         "scope": scopes.scope_view(scope),
         "pluginLabel": plugin_label(plugin) or plugin,
@@ -269,3 +270,39 @@ def link_scope(plugin: str, scope_id: str) -> dict[str, Any]:
 
     scopes.link_plugin(plugin, scope_id)
     return scope_status(plugin)
+
+
+def on_account_change(before: str, after: str) -> None:
+    """Sign-in, sign-out or another account (account ids). Every plugin that showed a
+    shared space's copy, or shows one now, restarts on the copy it reads now and its
+    open panels reload, like a switch: signing out puts them all on Local instead of
+    leaving the space's data on screen."""
+    from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins import scopes
+
+    plugins = sorted(
+        {
+            plugin
+            for account in {before, after} - {scopes.LOCAL}
+            for plugin, space in repo.links(account).items()
+            if scopes.valid_space_id(space) and scopes.sharing_allowed(plugin)
+        }
+    )
+    if not plugins:
+        return
+
+    def _work() -> None:
+        from backend.uefn_plugins.host import reload_single_plugin
+        from backend.uefn_plugins.store import get_enabled_plugin_ids
+        from frontend.ui_web.agent_modes import push_ui_event
+
+        enabled = set(get_enabled_plugin_ids())
+        for plugin in plugins:
+            if plugin in enabled:
+                try:
+                    reload_single_plugin(plugin)
+                except Exception:  # noqa: BLE001 — its panels still reload on the new copy
+                    _log.debug("restart after account change failed for %s", plugin, exc_info=True)
+        push_ui_event({"type": "plugin_scope_changed", "plugins": plugins, "switched": True})
+
+    threading.Thread(target=_work, name="space-account-change", daemon=True).start()

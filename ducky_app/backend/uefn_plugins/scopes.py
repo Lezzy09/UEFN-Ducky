@@ -8,7 +8,8 @@ A scope is ``(account, personal | space_id)``:
   ``personal``) or exactly one shared space (:mod:`backend.uefn_plugins.spaces`). No
   pick, or the space unavailable for this account → Local. Spaces never share rows:
   switching shows that scope's own copy, and the only way data moves is an explicit
-  copy of the Local copy into one space (:func:`copy_local_into`).
+  copy of the Local copy into one space (:func:`copy_local_into`). A plugin whose
+  manifest says ``"data_sharing": false`` is always Local (:func:`sharing_allowed`).
 
 Plugins never pick their own folder or rows: docs (one JSON doc per entity) and
 files go through :class:`PluginData`, which writes the active scope only. Rows
@@ -169,6 +170,35 @@ def space_access(space: str) -> tuple[bool, str]:
     return scope["state"] in ("ok", "paused"), str(scope["label"] or space)
 
 
+_SHARING: dict[str, tuple[float, bool]] = {}  # manifest path → (mtime, sharing allowed)
+
+
+def sharing_allowed(plugin: str) -> bool:
+    """False when the plugin's manifest says ``"data_sharing": false``: its data always
+    stays Local on this PC, whatever was picked before, and nothing offers it a shared
+    space. Read per data call, so cached by the manifest's mtime."""
+    from backend.uefn_plugins.store import PLUGIN_MANIFEST, load_plugin_manifest, plugin_dir
+
+    try:
+        path = plugin_dir(plugin) / PLUGIN_MANIFEST
+        mtime = path.stat().st_mtime
+    except (OSError, ValueError):
+        return True  # no manifest (core data such as workflows): the user picks
+    hit = _SHARING.get(str(path))
+    if hit and hit[0] == mtime:
+        return hit[1]
+    allowed = (load_plugin_manifest(plugin) or {}).get("data_sharing") is not False
+    _SHARING[str(path)] = (mtime, allowed)
+    return allowed
+
+
+def _refuse_sharing(plugin: str) -> None:
+    if not sharing_allowed(plugin):
+        from backend.uefn_plugins.spaces import plugin_label
+
+        raise ValueError(f"{plugin_label(plugin) or plugin} keeps its data on this PC only. It can't be shared.")
+
+
 def active_scope(plugin: str) -> dict[str, Any]:
     """The scope ``plugin``'s data reads and writes right now."""
     from backend.store.repos import plugin_data as repo
@@ -177,7 +207,7 @@ def active_scope(plugin: str) -> dict[str, Any]:
     if boxed is not None:
         return dict(boxed)
     account = account_id()
-    if account == LOCAL:
+    if account == LOCAL or not sharing_allowed(plugin):
         return personal_scope(account)
     space = repo.link_get(account, plugin)
     if space == PERSONAL or not valid_space_id(space):
@@ -320,6 +350,7 @@ def link_plugin(plugin: str, scope_id: str) -> dict[str, Any]:
         raise ValueError("Sign in to share a plugin's data")
     if scope_id != PERSONAL:
         _need(valid_space_id(scope_id), "space id")
+        _refuse_sharing(plugin)
         if repo.sync_get(account, scope_id)["state"] == "unavailable":
             # A fresh link tries again even if an earlier round found the space unavailable.
             repo.sync_put(account, scope_id, state="ok", error="")
@@ -339,6 +370,7 @@ def copy_local_into(plugin: str, space: str) -> dict[str, Any]:
 
     _need(valid_plugin_id(plugin), "plugin id")
     _need(valid_space_id(space), "space id")
+    _refuse_sharing(plugin)
     account = account_id()
     if account == LOCAL:
         raise ValueError("Sign in to share a plugin's data")

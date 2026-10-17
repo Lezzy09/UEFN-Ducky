@@ -335,6 +335,57 @@ def test_without_a_provider_there_is_only_local(who: _Who) -> None:
     assert spaces.sync_active("brainrot-tcg", force=True)["ok"] is True
 
 
+def test_a_plugin_that_never_shares_its_data_is_always_local(who: _Who, fake_spaces: FakeSpaces) -> None:
+    import json
+
+    from backend.uefn_plugins.store import PLUGIN_MANIFEST, plugin_dir
+
+    root = plugin_dir("browser")
+    root.mkdir(parents=True)
+    (root / PLUGIN_MANIFEST).write_text(json.dumps({"id": "browser", "label": "Browser", "data_sharing": False}))
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    assert spaces.scope_status("brainrot-tcg")["visible"] is True
+    # No bar, no Data picker, no way into a space — even a link made before the flag.
+    assert spaces.scope_status("browser")["visible"] is False
+    with pytest.raises(ValueError, match="Browser keeps its data on this PC only"):
+        scopes.link_plugin("browser", "spaceT")
+    with pytest.raises(ValueError, match="on this PC only"):
+        scopes.copy_local_into("browser", "spaceT")
+    repo.link_set(ana, "browser", "spaceT")
+    PluginData("browser").put("tab.home", {"url": "https://example.org"})
+    assert scopes.active_scope("browser")["kind"] == "personal"
+    assert repo.rows(ana, "spaceT", "browser", "doc") == []
+    assert scopes.link_plugin("browser", scopes.PERSONAL)["kind"] == "personal"
+
+
+def test_signing_in_or_out_restarts_and_reloads_plugins_that_show_a_space(who: _Who, fake_spaces: FakeSpaces,
+                                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    from backend.uefn_plugins import host, store
+    from frontend.ui_web import agent_modes
+
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio", plugin="forge")
+    restarted: list[str] = []
+    pushed: list[dict[str, Any]] = []
+    done = threading.Event()
+    monkeypatch.setattr(store, "get_enabled_plugin_ids", lambda: ["brainrot-tcg", "tester"])
+    monkeypatch.setattr(host, "reload_single_plugin", restarted.append)
+    monkeypatch.setattr(agent_modes, "push_ui_event", lambda e: (pushed.append(e), done.set()))
+
+    # Signing out: both plugins that showed space T move to Local; only the enabled one restarts.
+    spaces.on_account_change(ana, scopes.LOCAL)
+    assert done.wait(5)
+    assert restarted == ["brainrot-tcg"]
+    assert pushed == [{"type": "plugin_scope_changed", "plugins": ["brainrot-tcg", "forge"], "switched": True}]
+
+    # An account with every plugin on Local has nothing to restart.
+    done.clear()
+    spaces.on_account_change(scopes.LOCAL, who.be("bo@x.org"))
+    assert not done.wait(0.2) and restarted == ["brainrot-tcg"]
+
+
 def test_the_picker_lists_the_providers_spaces_and_a_fresh_link_waits(who: _Who, fake_spaces: FakeSpaces) -> None:
     who.be("ana@x.org")
     out = spaces.scope_choices()
