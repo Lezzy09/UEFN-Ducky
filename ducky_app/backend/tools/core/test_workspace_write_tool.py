@@ -93,3 +93,12 @@ def test_read_tool_picks_one_file_from_both_path_spellings() -> None:
     assert system._file_arg("Content/run", absolute) == absolute
     assert system._file_arg("run/01_refs/bible.json", "bible.json") == "run/01_refs/bible.json"
     assert system._file_arg("run/01_refs", "review.md") == os.path.join("run/01_refs", "review.md")
+
+
+def test_write_tools_take_path_when_relative_path_is_dot() -> None:
+    # Oct 17 2026: a Ducky AI lead's Verse write (relative_path=".", path=<file>) was refused.
+    from backend.tools.core.workspace_code import path_arg
+
+    assert path_arg(".", "Content/DuckyAITest/treasure_hunt_device.verse") == "Content/DuckyAITest/treasure_hunt_device.verse"
+    with pytest.raises(ValueError, match="different files"):
+        path_arg("Content/a.verse", "Content/b.verse")

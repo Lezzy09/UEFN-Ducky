@@ -197,3 +197,14 @@ def test_ducky_s_own_workflow_tools_never_wait_for_uefn():
     for name in ("find_workflows", "run_workflow", "get_workflow", "list_workflows", "save_workflow"):
         assert not _requires_uefn_listener(name), name
     assert _requires_uefn_listener("spawn_actor")
+
+
+def test_an_error_answer_is_a_failure_not_a_success():
+    # Oct 17 2026: "Error: Ducky AI pictures are not set up on this site yet." showed as a success.
+    from backend.agent.tools import MARKDOWN_TOOLS, _looks_like_tool_failure
+
+    assert _looks_like_tool_failure("some_plugin_tool", "Error: pictures are not set up on this site yet.")
+    assert _looks_like_tool_failure("some_plugin_tool", "ERROR: listener offline")
+    assert not _looks_like_tool_failure("some_plugin_tool", '{"ok": true, "downloaded": ["a.png"]}')
+    if MARKDOWN_TOOLS:
+        assert not _looks_like_tool_failure(next(iter(MARKDOWN_TOOLS)), "Error: is a word in this guide")

@@ -722,7 +722,9 @@ def _looks_like_tool_failure(name: str, text: str) -> bool:
         return True
     if name in MARKDOWN_TOOLS:
         return stripped.startswith("ERROR:")
-    if stripped.startswith("ERROR:"):
+    # "Error: …" too: plugin tools (e.g. a picture tool) answer refusals that way, and their
+    # cards said success while the agent read on as if the picture existed.
+    if stripped.startswith(("ERROR:", "Error: ")):
         return True
     from backend.agent.serialization import parse_tool_result_envelope
 

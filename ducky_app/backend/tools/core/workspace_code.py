@@ -155,6 +155,8 @@ def path_arg(relative_path: str, path: str) -> str:
     """The file a tool works on: relative_path, or path= (workspace_read_file takes both,
     so agents send either one to the edit tools too)."""
     rel, alias = (relative_path or "").strip(), (path or "").strip()
+    if rel in (".", "./", ".\\"):  # "the project" next to a real path= means that path
+        rel = ""
     if rel and alias and rel.replace("\\", "/") != alias.replace("\\", "/"):
         raise ValueError("relative_path and path name different files: pass only one of them")
     if not rel and not alias:

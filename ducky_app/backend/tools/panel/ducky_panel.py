@@ -2236,7 +2236,7 @@ def _resolve_plan_chat_id(chat_id: str = "") -> str:
 
 @mcp.tool()
 def ducky_create_plan(
-    title: str,
+    title: str = "",
     overview: str = "",
     body_markdown: str = "",
     nodes: list[dict[str, Any]] | None = None,
@@ -2247,6 +2247,7 @@ def ducky_create_plan(
     """Create a project Plan with an outline tree (main → subplans). In Plan mode, create then stop.
 
     Field roles (do NOT mix):
+    - ``title``: the plan's short name (left out: the first words of ``overview``).
     - ``overview``: short 1–3 sentence summary ONLY (plain text). Never paste JSON or XML here.
     - ``body_markdown``: longer plan description (markdown). Optional but preferred for context.
     - ``nodes``: REQUIRED for multi-step work — a real JSON **array** argument
@@ -2296,6 +2297,8 @@ def ducky_create_plan(
     cid = _resolve_plan_chat_id(chat_id)
     if not cid:
         return tool_json({"ok": False, "error": "chat_id required (no active conversation)"}, pretty=pretty)
+    # Oct 17 2026: a lead sent overview without title twice and got a validation error each time.
+    title = (title or "").strip() or (" ".join((overview or "").split())[:80].rstrip(" .,;:") or "Plan")
     try:
         plan = create_plan(
             cid,
