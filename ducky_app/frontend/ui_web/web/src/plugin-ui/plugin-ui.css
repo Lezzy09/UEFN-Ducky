@@ -309,7 +309,15 @@
 }
 
 /* Host scope bar: whose data the panel shows. Shared = accent, Local = neutral,
-   paused = warning; the badge names the shared space, or says Local. */
+   paused = warning; the badge names the shared space, or says Local. The drawer opens
+   under the line and scrolls on its own, so the panel keeps most of the height. */
+.plugin-scope {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 55%;
+}
 .plugin-scope-bar {
   flex: 0 0 auto;
   display: flex;
@@ -360,8 +368,15 @@
 .plugin-scope-bar--paused .plugin-scope-bar__badge--shared::before {
   background: var(--warn);
 }
+/* The one status phrase reads first; its tone colours repeat what its words say. */
+.plugin-scope-bar__phrase {
+  color: var(--fg, #e6e6e6);
+}
 .plugin-scope-bar__text--error {
   color: var(--danger, #e55);
+}
+.plugin-scope-bar__text--warn {
+  color: var(--warn, #d97706);
 }
 .plugin-scope-bar__storage {
   display: inline-flex;
@@ -394,14 +409,13 @@
 }
 .plugin-scope-bar__change {
   position: relative;
-  margin-left: auto;
 }
-/* Sync now sits at the right, just before Change. */
-.plugin-scope-bar__sync {
+/* Sync now (or Push and Pull) and Details sit at the right. */
+.plugin-scope-bar__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   margin-left: auto;
-}
-.plugin-scope-bar__sync + .plugin-scope-bar__change {
-  margin-left: 0;
 }
 .plugin-scope-bar__link {
   padding: 0;
@@ -415,38 +429,10 @@
   color: var(--muted, #888);
   cursor: default;
 }
-/* Changes that aren't going out: their own rows under the line, until they're fixed. */
-.plugin-scope-bar__held {
-  flex: 1 1 100%;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 10px;
-}
-.plugin-scope-bar__held-title {
-  font-weight: 600;
-  color: var(--fg, #e6e6e6);
-}
-.plugin-scope-bar__held-list {
-  flex: 1 1 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.plugin-scope-bar__held-item {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0 10px;
-}
-.plugin-scope-bar__held-item > span {
-  overflow-wrap: anywhere;
-}
 .plugin-scope-bar__link:focus-visible,
-.plugin-scope-bar__menu-item:focus-visible {
+.plugin-scope-bar__menu-item:focus-visible,
+.plugin-scope-drawer__btn:focus-visible,
+.plugin-scope-drawer__choice:focus-visible {
   outline: 2px solid var(--accent, #d4a017);
   outline-offset: 2px;
 }
@@ -480,4 +466,127 @@
 }
 .plugin-scope-bar__menu-note {
   padding: 6px 8px;
+}
+
+/* Details: small tables under the line. */
+.plugin-scope-drawer {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 10px 10px;
+  font-size: 12px;
+  color: var(--text-muted, #a0a0a0);
+  background: var(--card, #252525);
+  border-bottom: 1px solid var(--border, #3a3a3a);
+}
+.plugin-scope-drawer__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.plugin-scope-drawer__section > button {
+  align-self: flex-start;
+}
+.plugin-scope-drawer__title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg, #e6e6e6);
+}
+.plugin-scope-drawer__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0;
+}
+.plugin-scope-drawer__empty,
+.plugin-scope-drawer__help,
+.plugin-scope-drawer__note {
+  margin: 0;
+}
+.plugin-scope-drawer__error {
+  margin: 0;
+  color: var(--danger, #e55);
+}
+.plugin-scope-drawer__table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.plugin-scope-drawer__table th,
+.plugin-scope-drawer__table td {
+  padding: 3px 8px 3px 0;
+  text-align: left;
+  vertical-align: baseline;
+  overflow-wrap: anywhere;
+}
+.plugin-scope-drawer__table th {
+  font-weight: 600;
+  color: var(--fg, #e6e6e6);
+}
+.plugin-scope-drawer__table tbody tr + tr td {
+  border-top: 1px solid var(--border, #3a3a3a);
+}
+.plugin-scope-drawer__actions {
+  white-space: nowrap;
+}
+.plugin-scope-drawer__actions > button + button {
+  margin-left: 10px;
+}
+.plugin-scope-drawer__items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.plugin-scope-drawer__items li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
+}
+.plugin-scope-drawer__diff {
+  max-height: 240px;
+  margin: 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  color: var(--fg, #e6e6e6);
+}
+.plugin-scope-drawer__btn,
+.plugin-scope-drawer__choice {
+  padding: 3px 10px;
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: 6px;
+  background: var(--bg-elevated, #2b2b2b);
+  color: var(--fg, #e6e6e6);
+  font: inherit;
+  cursor: pointer;
+}
+.plugin-scope-drawer__btn:disabled,
+.plugin-scope-drawer__choice:disabled {
+  color: var(--muted, #888);
+  cursor: default;
+}
+.plugin-scope-drawer__choice[aria-checked="true"] {
+  border-color: var(--accent, #d4a017);
+  color: var(--accent, #d4a017);
+}
+.plugin-scope-drawer__input {
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: 6px;
+  background: var(--bg, #1e1e1e);
+  color: var(--fg, #e6e6e6);
+  font: inherit;
 }

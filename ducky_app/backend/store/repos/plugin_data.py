@@ -59,12 +59,14 @@ def put(
     dirty: bool,
     rev: int | None = None,
     sensitive: bool = False,
+    group_id: str = "",
 ) -> None:
-    """Upsert a live row. ``rev=None`` keeps the stored rev (a local write)."""
+    """Upsert a live row. ``rev=None`` keeps the stored rev (a local write). ``group_id``:
+    the write group (one tool call or panel call) the write was made in, '' for none."""
     conn = db.connect()
     with db.write_txn(conn):
         upsert(conn, account, scope, plugin, kind, key, value=value, size=size, sha256=sha256, dirty=dirty, rev=rev,
-               sensitive=sensitive)
+               sensitive=sensitive, group_id=group_id)
 
 
 def upsert(
@@ -81,18 +83,19 @@ def upsert(
     dirty: bool,
     rev: int | None = None,
     sensitive: bool = False,
+    group_id: str = "",
 ) -> None:
     """:func:`put` inside a transaction the caller holds (writes that must land together).
     Every write starts the row's sync afresh: a new edit or a pulled copy is never refused
-    or blocked."""
+    or blocked, and it goes out with the write group of its newest write."""
     conn.execute(
         "INSERT INTO plugin_data(account_id, scope_id, plugin_id, kind, key, value, size, sha256, rev, dirty, "
-        "deleted, sensitive, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?) "
+        "deleted, sensitive, updated, group_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?) "
         "ON CONFLICT(account_id, scope_id, plugin_id, kind, key) DO UPDATE SET value=excluded.value, "
         "size=excluded.size, sha256=excluded.sha256, rev=COALESCE(?, plugin_data.rev), dirty=excluded.dirty, "
-        f"deleted=0, sensitive=excluded.sensitive, updated=excluded.updated, {_FRESH}",
+        f"deleted=0, sensitive=excluded.sensitive, updated=excluded.updated, group_id=excluded.group_id, {_FRESH}",
         (account, scope, plugin, kind, key, value, size, sha256, rev or 0, 1 if dirty else 0,
-         1 if sensitive else 0, time.time(), rev),
+         1 if sensitive else 0, time.time(), group_id, rev),
     )
 
 
@@ -107,6 +110,7 @@ def put_file_row(
     size: int,
     sha256: str,
     dirty: bool,
+    group_id: str = "",
 ) -> None:
     """A local file write: ``temp_path`` (the sealed bytes, in the target's own folder)
     replaces ``target_path`` inside the row's transaction, so the row and the file never
@@ -114,7 +118,8 @@ def put_file_row(
     conn = db.connect()
     try:
         with db.write_txn(conn):
-            upsert(conn, account, scope, plugin, "asset", key, value=None, size=size, sha256=sha256, dirty=dirty)
+            upsert(conn, account, scope, plugin, "asset", key, value=None, size=size, sha256=sha256, dirty=dirty,
+                   group_id=group_id)
             _replace(temp_path, target_path)
     finally:
         Path(temp_path).unlink(missing_ok=True)
@@ -129,6 +134,7 @@ def remove(
     *,
     tombstone: bool,
     target_path: str | os.PathLike[str] | None = None,
+    group_id: str = "",
 ) -> None:
     """Local delete: a tombstone waiting to push (it keeps the deleted content's sha256),
     or the row just goes. A file's ``target_path`` goes in the same transaction, after
@@ -138,8 +144,9 @@ def remove(
     with db.write_txn(conn):
         if tombstone:
             conn.execute(
-                f"UPDATE plugin_data SET value=NULL, size=0, deleted=1, dirty=1, updated=?, {_FRESH} WHERE {_WHERE}",
-                (time.time(), *args),
+                f"UPDATE plugin_data SET value=NULL, size=0, deleted=1, dirty=1, updated=?, group_id=?, {_FRESH} "
+                f"WHERE {_WHERE}",
+                (time.time(), group_id, *args),
             )
         else:
             conn.execute(f"DELETE FROM plugin_data WHERE {_WHERE}", args)
@@ -347,11 +354,19 @@ def settle_reset(account: str, scope: str, *, keep: bool) -> int:
     for the whole copy: ``keep`` (Upload my copy) queues every live row again as new (base
     rev 0) and drops tombstones (nothing is left there to delete); otherwise (Clear my
     copy) every row goes, and the space's data comes down instead. The space is writable
-    again and pulls from the start, all in one transaction. Returns how many rows were
-    queued, or removed."""
+    again and pulls from the start, all in one transaction: on the older sync its cursor
+    goes back to 0, on the new one every plugin's head does, and what this PC kept of the
+    old versions goes (changesets, merge bases, unit seqs, items set aside, conflicts; a
+    conflict's losing version of mine is folded into its row first on Upload my copy).
+    Returns how many rows were queued, or removed."""
     conn = db.connect()
     args = (account, scope)
     with db.write_txn(conn):
+        for table in ("space_changesets", "space_conflicts", "space_incoming_blocked", "plugin_data_base",
+                      "space_units"):
+            conn.execute(f"DELETE FROM {table} WHERE account_id=? AND space_id=?", args)
+        conn.execute("UPDATE space_heads SET seq=0, remote_seq=0, moves=0, attempts=0, next_try=0 "
+                     "WHERE account_id=? AND space_id=?", args)
         if keep:
             cur = conn.execute(
                 f"UPDATE plugin_data SET rev=0, dirty=1, {_FRESH} WHERE account_id=? AND scope_id=? AND deleted=0 "
@@ -390,6 +405,14 @@ def state_items(account: str, scope: str, plugin: str | None = None, limit: int 
     if plugin is not None:
         sql, args = sql + " AND plugin_id=?", [*args, plugin]
     return [_row(r) for r in db.connect().execute(sql + " ORDER BY updated DESC LIMIT ?", [*args, limit]).fetchall()]
+
+
+def pending_items(account: str, scope: str, plugin: str, limit: int = 200) -> list[dict[str, Any]]:
+    """One plugin's changes not sent yet (dirty, never sensitive), oldest first, without
+    their content: kind, key, size, deleted, sync_state, sync_error, attempts, next_try."""
+    sql = ("SELECT kind, key, size, deleted, sync_state, sync_error, attempts, next_try FROM plugin_data "
+           "WHERE account_id=? AND scope_id=? AND plugin_id=? AND dirty=1 AND sensitive=0 ORDER BY updated LIMIT ?")
+    return [_row(r) for r in db.connect().execute(sql, (account, scope, plugin, limit)).fetchall()]
 
 
 def _unchanged(row: dict[str, Any] | None, expect: dict[str, Any] | None) -> bool:
@@ -481,10 +504,12 @@ def drop_held(
     """Drop my change: the row ``expect`` (read just before) goes, with ``target_path``,
     in one transaction, and only while it is still that change held back (dirty, refused
     or blocked, same content, same deleted flag). A newer edit, or a change whose push is
-    under way, is never dropped. When the team has the item (rev > 0) the space's cursor
-    goes back to its rev (the pull cursor is inclusive) and stays at most there until a
-    round that started after the drop writes it, so a round already running can't move
-    it past again. False when the row changed meanwhile."""
+    under way, is never dropped. When the team has the item (rev > 0) it comes back: on
+    the older sync the space's cursor goes back to its rev (the pull cursor is inclusive)
+    and stays at most there until a round that started after the drop writes it, so a
+    round already running can't move it past again; on the new sync (the plugin's head is
+    past it) the item is set aside to be fetched at its current version on the next
+    round. False when the row changed meanwhile."""
     conn = db.connect()
     args = (account, scope, plugin, kind, key)
     rev = int(expect.get("rev") or 0)
@@ -496,7 +521,17 @@ def drop_held(
         )
         if not cur.rowcount:
             return False
-        if rev > 0:
+        engine = conn.execute("SELECT engine FROM space_heads WHERE account_id=? AND space_id=? AND plugin_id=?",
+                              (account, scope, plugin)).fetchone()
+        if rev > 0 and engine is not None and engine[0] == "v2":
+            conn.execute(
+                "INSERT INTO space_incoming_blocked(account_id, space_id, plugin_id, kind, key, unit, seq, error, "
+                "attempts, next_try) VALUES (?, ?, ?, ?, ?, ?, ?, 'Getting the team''s version.', 0, 0) "
+                "ON CONFLICT(account_id, space_id, plugin_id, kind, key) "
+                "DO UPDATE SET seq=MAX(space_incoming_blocked.seq, excluded.seq), next_try=0",
+                (*args, f"{kind}:{key}", rev),
+            )
+        elif rev > 0:
             conn.execute(
                 "UPDATE scope_sync SET cursor_rev=MIN(cursor_rev, ?), "
                 "rewind_rev=CASE WHEN rewind_at>0 THEN MIN(rewind_rev, ?) ELSE ? END, rewind_at=? "
@@ -585,7 +620,9 @@ _CURSOR_SET = (
 def sync_put(account: str, space: str, **fields: Any) -> None:
     """Set ``fields`` on the space's sync row in one statement, so two writers (a round and
     a picker refresh, in any process) never undo each other's columns. Other names are
-    ignored. A ``cursor_rev`` honours a dropped change's rewind (:func:`drop_held`)."""
+    ignored. A ``cursor_rev`` honours a dropped change's rewind (:func:`drop_held`). A
+    space back to ``ok`` forgets what the person chose for unsent changes when access
+    went: a later loss asks again."""
     cols = [name for name in fields if name in _SYNC_FIELDS]
     if not cols:
         return
@@ -598,6 +635,8 @@ def sync_put(account: str, space: str, **fields: Any) -> None:
             f"ON CONFLICT(account_id, space_id) DO UPDATE SET {', '.join(sets)}",
             (account, space, *values),
         )
+        if fields.get("state") == "ok":
+            conn.execute("DELETE FROM space_lost_choice WHERE account_id=? AND space_id=?", (account, space))
 
 
 # --------------------------------------------------------------------------- plugin links

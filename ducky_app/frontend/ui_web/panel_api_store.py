@@ -803,10 +803,13 @@ class PanelApiStoreMixin:
     # --- host data service: panels' data.* / files.* / scope.get
 
     def plugin_data(self, plugin_id: str, op: str, params: dict | None = None) -> dict[str, Any]:
-        from backend.uefn_plugins.scopes import ReadOnlyScope, panel_call
+        from backend.uefn_plugins.scopes import LockedOut, ReadOnlyScope, panel_call
 
         try:
             return panel_call(str(plugin_id or ""), str(op or ""), dict(params or {}))
+        except LockedOut as exc:
+            # Someone else holds the item: the panel's bar offers Ask to release.
+            return {"ok": False, "error": str(exc), "code": "locked", "lock": dict(exc.lock)}
         except ReadOnlyScope as exc:
             return {"ok": False, "error": str(exc), "code": "read_only"}
         except Exception as exc:
@@ -950,6 +953,117 @@ class PanelApiStoreMixin:
 
         threading.Thread(target=_restart, name="space-reset-restart", daemon=True).start()
         return out
+
+    # --- team copies (the new sync): the scope bar's drawer
+
+    def plugin_scope_activity(self, plugin_id: str) -> dict[str, Any]:
+        """The drawer's tables (people, locks, changes, conflicts, mode, head) with the rest
+        of the status. A team space is looked at again right away (heads, presence)."""
+        from backend.uefn_plugins.scopes import active_scope
+        from backend.uefn_plugins.spaces import scope_status
+        from backend.uefn_plugins.sync_scheduler import wake
+
+        pid = str(plugin_id or "")
+        try:
+            scope = active_scope(pid)
+            if scope["kind"] == "shared":
+                wake(scope["account"], scope["id"])
+            return scope_status(pid)
+        except Exception as exc:
+            return {"ok": False, "visible": False, "error": str(exc)}
+
+    def _team_call(self, plugin_id: str, fn: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """One team call for the drawer: its answer, or ``{ok: false, error}``; the plugin's
+        bar reads its status again after a change."""
+        pid = str(plugin_id or "")
+        try:
+            out = fn(pid, *args, **kwargs)
+        except (ValueError, PermissionError) as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        out = dict(out or {})
+        out.setdefault("ok", not out.get("error"))
+        return out
+
+    def plugin_scope_lock(self, plugin_id: str, unit: str, name: str = "") -> dict[str, Any]:
+        """Lock a unit by hand (kept until released)."""
+        from backend.uefn_plugins.spaces import team_lock
+
+        return self._team_call(plugin_id, team_lock, str(unit or ""), "acquire", name=str(name or ""))
+
+    def plugin_scope_unlock(self, plugin_id: str, unit: str) -> dict[str, Any]:
+        from backend.uefn_plugins.spaces import team_lock
+
+        return self._team_call(plugin_id, team_lock, str(unit or ""), "release")
+
+    def plugin_scope_break(self, plugin_id: str, unit: str) -> dict[str, Any]:
+        """Break someone's lock (owners and admins, or anyone once its lease ran out)."""
+        from backend.uefn_plugins.spaces import team_lock
+
+        return self._team_call(plugin_id, team_lock, str(unit or ""), "break")
+
+    def plugin_scope_ask(self, plugin_id: str, unit: str) -> dict[str, Any]:
+        """Ask the holder to release a unit."""
+        from backend.uefn_plugins.spaces import team_lock
+
+        return self._team_call(plugin_id, team_lock, str(unit or ""), "ask")
+
+    def plugin_scope_resolve(self, plugin_id: str, kind: str, key: str, choice: str) -> dict[str, Any]:
+        """Settle a conflict: mine, theirs, or compare (``diff``, nothing changes)."""
+        from backend.uefn_plugins.spaces import team_resolve
+
+        return self._team_call(plugin_id, team_resolve, str(kind or ""), str(key or ""), str(choice or ""))
+
+    def plugin_scope_restore(self, plugin_id: str, request: dict | None = None) -> dict[str, Any]:
+        """A new changeset on the server: ``items`` (kind, key, seq) back to that version,
+        the plugin as of ``toSeq``, or changeset ``undoSeq`` undone. ``skipped``: items
+        whose version is no longer kept."""
+        from backend.uefn_plugins.spaces import team_restore
+
+        req = dict(request or {})
+        to_seq = req.get("toSeq")
+        return self._team_call(plugin_id, team_restore, items=list(req.get("items") or []) or None,
+                               to_seq=int(to_seq) if to_seq is not None else None,
+                               undo_seq=int(req.get("undoSeq") or 0) or None, message=str(req.get("message") or ""))
+
+    def plugin_scope_history(self, plugin_id: str, request: dict | None = None) -> dict[str, Any]:
+        """Changesets newest first, or one item's versions (``kind`` + ``key``), before ``before``."""
+        from backend.uefn_plugins.spaces import team_history
+
+        req = dict(request or {})
+        return self._team_call(plugin_id, team_history, kind=str(req.get("kind") or ""), key=str(req.get("key") or ""),
+                               before=int(req.get("before") or 0) or None, limit=int(req.get("limit") or 50))
+
+    def plugin_scope_mode(self, plugin_id: str, mode: str) -> dict[str, Any]:
+        """Auto (rounds push and pull by themselves) or Manual (only Push and Pull do)."""
+        from backend.uefn_plugins.spaces import team_mode
+
+        out = self._team_call(plugin_id, team_mode, str(mode or ""))
+        if out.get("ok"):
+            self._push_panel({"type": "plugin_scope_changed", "plugins": [str(plugin_id or "")]})
+        return out
+
+    def plugin_scope_push(self, plugin_id: str, message: str = "") -> dict[str, Any]:
+        """Send this PC's changes now (Manual mode's Push), with an optional message."""
+        from backend.uefn_plugins.spaces import team_sync
+
+        return self._team_call(plugin_id, team_sync, push=True, message=str(message or ""), on_done=self._scope_synced)
+
+    def plugin_scope_pull(self, plugin_id: str, kind: str = "", key: str = "") -> dict[str, Any]:
+        """Bring everyone's changes now (Pull, Update now); with ``kind`` + ``key``, that
+        incoming item is downloaded again first."""
+        from backend.uefn_plugins.spaces import team_sync
+
+        return self._team_call(plugin_id, team_sync, pull=True, kind=str(kind or ""), key=str(key or ""),
+                               on_done=self._scope_synced)
+
+    def plugin_scope_save_unsent(self, plugin_id: str, action: str = "save") -> dict[str, Any]:
+        """Lost access: copy this PC's changes to the space that never went out into Local
+        (``save``), or let them go with the copy (``discard``)."""
+        from backend.uefn_plugins.spaces import save_unsent
+
+        return self._team_call(plugin_id, save_unsent, str(action or "save"))
 
     def plugin_data_copy_to_space(self, plugin_id: str, space_id: str) -> dict[str, Any]:
         """One way, on request: a plugin's Local data into one space's copy (theirs is kept)."""

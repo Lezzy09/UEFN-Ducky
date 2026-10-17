@@ -992,6 +992,9 @@ def _drop_plugin_runtime(pid: str, mod_name: str) -> None:
         _PANEL_RPC.pop(pid, None)
         _CONNECTION_PROBES.pop(pid, None)
         _CONNECTION_CACHE.pop(pid, None)
+        from backend.uefn_plugins.scopes import forget_change_listeners
+
+        forget_change_listeners(pid)
         # Drop the plugin's MCP tools from the shared FastMCP server too, or a reinstall
         # keeps serving the old wrapper (which still calls the dropped module's code).
         tool_names = set(_API_TOOL_REGISTRY.pop(pid, set()) or set())
@@ -1127,7 +1130,13 @@ def call_panel_rpc(plugin_id: str, method: str, params: dict[str, Any] | None = 
             raise ValueError(f"{pid} didn't load: {failure}")
         raise ValueError(f"Unknown panel RPC: {pid}.{name}")
     kwargs = dict(params or {})
-    return fn(**kwargs)
+    from backend.uefn_plugins.scopes import caller, write_group
+
+    # What the call writes to a shared copy goes out as one change, the person's (or the
+    # agent's whose run made the call).
+    actor, ducky = caller("user")
+    with write_group(pid, actor=actor, ducky=ducky, message=name):
+        return fn(**kwargs)
 
 
 def plugin_intent_rows() -> list[tuple[re.Pattern[str], frozenset[str]]]:
@@ -3793,7 +3802,20 @@ class _PluginApi:
                     raise ValueError(
                         f"Plugin '{pid}' tools are disabled — enable it in Settings → Store"
                     )
-                result = func(*args, **kwargs)
+                if pid in _DATA_PLUGINS:
+                    try:  # a sync in the app process changed its data: its on_change hears it first
+                        from backend.uefn_plugins.scopes import deliver_data_changes
+
+                        deliver_data_changes(pid)
+                    except Exception:  # noqa: BLE001 — the tool runs anyway
+                        _log.debug("delivering data changes to %s failed", pid, exc_info=True)
+                from backend.uefn_plugins.scopes import caller, write_group
+
+                # One tool call is one change to a shared copy, made by the calling agent
+                # (an MCP client of the bridge is an agent even without a ducky's name).
+                actor, ducky = caller("agent" if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1" else "user")
+                with write_group(pid, actor=actor, ducky=ducky, message=tool_name):
+                    result = func(*args, **kwargs)
                 try:
                     # A picture made in a chat shows inline in that turn's reply.
                     from frontend.ui_web.generated_images import note_tool_images

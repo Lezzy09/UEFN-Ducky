@@ -15,13 +15,24 @@ never went out, and this PC never pulled. This daemon keeps every space in step:
   every 30 s while each one still sends some of them;
 - after a round that failed (``error``, ``offline``, ``unavailable``) the space is tried
   again after 1 and 5 minutes, then every 15;
-- at exit, :func:`flush` sends what is still queued, for at most 5 s.
+- at exit, :func:`flush` sends what is still queued, for at most 5 s, and releases the
+  auto locks this PC holds.
+
+Plugins whose provider hands core a ledger (``Provider.ledger``, a team copy) go through
+core's version engine (:mod:`vcs_engine`); the provider's own round keeps the rest. A
+round of a team space asks ``heads`` first, then pulls the plugins with changesets
+waiting and pushes the ones with closed write groups. A team space is active while a
+linked panel or the Workflows view is on screen, it changed here in the last 5 minutes,
+this PC holds a lock there or has changes to send: then its round comes every 60 s and
+its presence goes out when it changed (and each minute to stay listed), with the locks it
+holds renewed; idle, every 15 minutes and no presence. A provider's channel event
+(``spaces.remote_event``) starts a round within seconds. A writer waiting for a lock (a
+``required`` prefix) is answered within a tick or two.
 
 Every round is wrapped in ``spaces._round_failed``: one that raises is recorded on the
 space and the next tick runs. Rounds of one space never overlap, in any process: each
-holds the space's round lock (:func:`run_round`). The provider decides what a round does.
-Never runs in the MCP bridge (``UEFN_DUCKY_MCP_BRIDGE=1``): the app's scheduler sees the
-bridge's writes.
+holds the space's round lock (:func:`run_round`). Never runs in the MCP bridge
+(``UEFN_DUCKY_MCP_BRIDGE=1``): the app's scheduler sees the bridge's writes.
 """
 
 from __future__ import annotations
@@ -53,6 +64,16 @@ SLOW_STATES = frozenset({"lost", "reset"})
 # Workflow docs' plugin id (owned.DOC_PLUGIN). The Workflows view reports itself as this
 # plugin's panel, so panel_presence says when it is on screen.
 WORKFLOWS = "ducky.automations"
+# Team spaces (plugins on a ledger).
+ACTIVE_FOR_S = 5 * 60.0  # a change made here keeps the space active this long
+WAKE_GAP_S = 5.0  # a provider's events start a round at most this often per space
+WAKE_KEEP_S = 120.0  # an event for a space not known yet waits this long for it
+SIDE_EVERY_S = 5.0  # an active space's presence and locks are looked at this often
+PRUNE_EVERY_S = 60.0
+GROUP_OPEN_MAX_S = 3600.0  # a write group open this long was left by a call that never returned
+# The provider's own round keeps these: access gone or unsure, or the data reset on the
+# server (nothing goes out until the person chooses).
+HOLD_STATES = frozenset({"lost", "unavailable", "reset"})
 
 
 def _in_bridge() -> bool:
@@ -75,13 +96,33 @@ def _try_lock(handle: Any) -> bool:
     return True
 
 
+_HELD = threading.local()  # (account, space) round locks this thread holds
+
+
 @contextlib.contextmanager
 def _round_lock(account: str, space: str, wait: float) -> Iterator[bool]:
     """The space's round lock: an OS file lock, so a round in the MCP bridge (a plugin
     tool asking for one) and one here never overlap, and a process that dies frees it.
     Yields False when another round still holds it after ``wait`` seconds. Before, the
     provider's lock was per process: two rounds pushed at once, and the one whose push
-    went stale replaced an edit the other hadn't confirmed yet."""
+    went stale replaced an edit the other hadn't confirmed yet. A thread that already
+    holds it gets it again at once (a round's own steps take it too)."""
+    held: set[tuple[str, str]] = getattr(_HELD, "spaces", None) or set()
+    _HELD.spaces = held
+    if (account, space) in held:
+        yield True
+        return
+    with _round_lock_file(account, space, wait) as got:
+        if got:
+            held.add((account, space))
+        try:
+            yield got
+        finally:
+            held.discard((account, space))
+
+
+@contextlib.contextmanager
+def _round_lock_file(account: str, space: str, wait: float) -> Iterator[bool]:
     from frontend.app_paths import resolve_app_data_dir
 
     try:
@@ -115,20 +156,113 @@ def _round_lock(account: str, space: str, wait: float) -> Iterator[bool]:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def run_round(account: str, space: str, *, force: bool) -> dict[str, Any]:
-    """One provider round for ``(account, space)``, holding the space's round lock: a
-    forced round waits for one already running (up to :data:`ROUND_WAIT_S`), any other
-    answers ``busy``. A round that raises is recorded on the space (state ``error`` and
-    the provider plugin's errors) instead of escaping."""
+def run_round(account: str, space: str, *, force: bool, pull: Any = (), push_only: bool = False) -> dict[str, Any]:
+    """One round for ``(account, space)``, holding the space's round lock: a forced round
+    waits for one already running (up to :data:`ROUND_WAIT_S`), any other answers ``busy``.
+    Plugins with a ledger go through the version engine (``pull``: plugins to pull even
+    when heads says nothing moved; ``push_only``: send what is queued, no heads or pulls),
+    the provider's own round keeps the rest. A round that raises is recorded on the space
+    (state ``error`` and the provider plugin's errors) instead of escaping."""
     from backend.uefn_plugins import spaces
 
     try:
         with _round_lock(account, space, ROUND_WAIT_S if force else 0.0) as held:
             if not held:
                 return {"state": "busy", "changed": [], "error": ""}
-            return spaces.provider().sync(account, space, force=force) or {}
+            return _space_round(account, space, force=force, pull=frozenset(pull or ()), push_only=push_only)
     except Exception as exc:  # noqa: BLE001 — any failure is the space's, never the caller's
         return spaces._round_failed({"account": account, "id": space}, exc)
+
+
+def space_plugins(account: str, space: str) -> set[str]:
+    """Plugins whose copy lives in the space for this account: the ones linked to it, its
+    workflows when this account keeps workflows there, and any with rows there."""
+    from backend.store.repos import plugin_data as repo
+    from backend.store.switch import use_db
+    from backend.uefn_plugins import scopes
+
+    out = {p for p, s in repo.links(account).items() if s == space and scopes.sharing_allowed(p)}
+    out.update(repo.scope_plugin_ids(account, space))
+    if use_db("automations"):
+        from backend.store.repos import workflows as runtime
+
+        if space in runtime.synced_spaces(account):
+            out.add(WORKFLOWS)
+    return out
+
+
+def _space_round(account: str, space: str, *, force: bool, pull: frozenset[str], push_only: bool) -> dict[str, Any]:
+    from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins import spaces
+
+    members = space_plugins(account, space)
+    team = spaces.ledgers(account, space, members) if members else {}
+    if not team or repo.sync_get(account, space)["state"] in HOLD_STATES:
+        return spaces.provider().sync(account, space, force=force) or {}
+    out = _ledger_round(account, space, team, force=force, pull=pull, push_only=push_only)
+    if members - set(team):  # plugins still on the provider's own sync
+        older = spaces.provider().sync(account, space, force=force) or {}
+        out = {
+            "state": out["state"] if out["state"] != "ok" else str(older.get("state") or "ok"),
+            "changed": [*out["changed"], *[p for p in older.get("changed") or [] if p not in out["changed"]]],
+            "error": out["error"] or str(older.get("error") or ""),
+        }
+    return out
+
+
+def _ledger_work(account: str, space: str, plugin: str, now: float) -> bool:
+    """Something to do for ``plugin``: its first round on the new sync (the move from the
+    older one), changesets waiting on the server, changes to send, a set-aside download due
+    again."""
+    from backend.store.repos import space_vcs
+
+    head = space_vcs.head_get(account, space, plugin)
+    return (head["engine"] != "v2" or int(head["remote_seq"]) > int(head["seq"])
+            or space_vcs.has_outgoing(account, space, plugin, now) or bool(space_vcs.cs_open(account, space, plugin))
+            or bool(space_vcs.blocked(account, space, plugin, due=now)))
+
+
+def _ledger_round(account: str, space: str, team: dict[str, Any], *, force: bool, pull: frozenset[str],
+                  push_only: bool) -> dict[str, Any]:
+    """Heads (what moved, locks, the roster), then a version-engine round for each plugin
+    with something to do (all of them when ``force``). A plugin's first round reconciles
+    its copy and puts it on the new sync (its writers group, lock and note from then on)."""
+    from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins import vcs_engine
+
+    now = time.time()
+    importing: dict[str, Any] = {}
+    if not push_only:
+        seen = vcs_engine.refresh(account, space, sorted(team), next(iter(team.values())), now=now)
+        if seen["state"] != "ok":
+            error = str(seen.get("error") or "")
+            if seen["state"] in ("offline", "error"):  # the bar says "Not synced" and why
+                repo.sync_put(account, space, called_at=now, state=seen["state"], error=error)
+            else:
+                repo.sync_put(account, space, called_at=now)
+            return {"state": seen["state"], "changed": [], "error": error}
+        importing = dict(seen.get("importing") or {})
+    changed: list[str] = []
+    failed: list[tuple[str, str]] = []
+    for plugin, backend in sorted(team.items()):
+        if plugin in importing:
+            continue  # it stays on the older copy until its move to the new sync is done
+        if not (force or plugin in pull or _ledger_work(account, space, plugin, now)):
+            continue
+        got = vcs_engine.run(account, space, plugin, backend, force=force, pull=False if push_only else None, now=now)
+        if got.get("skipped") or got.get("state") == "busy":
+            continue
+        changed += [p for p in got.get("changed") or [] if p not in changed]
+        if got.get("state") != "ok":
+            failed.append((str(got.get("state")), str(got.get("error") or "")))
+    fields: dict[str, Any] = {"called_at": now}
+    if not failed:
+        fields["synced_at"] = now
+        if repo.sync_get(account, space)["state"] in ("offline", "error"):
+            fields.update(state="ok", error="")
+    repo.sync_put(account, space, **fields)
+    state, error = failed[0] if failed else ("ok", "")
+    return {"state": state, "changed": changed, "error": error}
 
 
 def _announce(out: dict[str, Any]) -> None:
@@ -199,6 +333,46 @@ class _Space:
     looked: float = 0.0  # called_at at the last look
     more: bool = False  # rounds since the last look sent some of them, and some are left
     running: bool = False
+    team: frozenset[str] = frozenset()  # plugins on a ledger: the version engine syncs them
+    hot: bool = False  # a team space in active use (see the module docstring)
+    wrote: float = 0.0  # newest change made here this scheduler saw (activity, changes to send)
+    wake: bool = False  # a provider's event asks for a round
+    pull: set[str] = field(default_factory=set)  # plugins an event says have new changesets
+    side_at: float = float("-inf")  # last look at its presence and locks
+    side_running: bool = False
+
+
+_WAKES: dict[tuple[str, str], tuple[float, frozenset[str]]] = {}  # (account, space) → (when, plugins to pull)
+_WAKE_LOCK = threading.Lock()
+
+
+def wake(account: str, space: str, plugin: str | None = None) -> None:
+    """A provider heard about the space (``spaces.remote_event``): the scheduler starts a
+    round for it on its next tick (heads; ``plugin`` is pulled), at most one per
+    :data:`WAKE_GAP_S`."""
+    with _WAKE_LOCK:
+        _, plugins = _WAKES.get((account, space), (0.0, frozenset()))
+        _WAKES[(account, space)] = (time.time(), plugins | ({plugin} if plugin else frozenset()))
+
+
+def _team_looks(account: str, found: dict[str, tuple[set[str], bool, float]]) -> dict[str, tuple[frozenset[str], float, bool, float]]:
+    """``{space: (plugins on a ledger, newest change made here, a lock held here, newest
+    closed write group with changes to send)}`` of the spaces that have any."""
+    from backend.store.repos import plugin_data as repo
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import spaces
+
+    out: dict[str, tuple[frozenset[str], float, bool, float]] = {}
+    closed: dict[str, float] | None = None
+    for space, (plugins, _, _) in found.items():
+        team = frozenset(spaces.ledgers(account, space, plugins | set(repo.scope_plugin_ids(account, space))))
+        if not team:
+            continue
+        if closed is None:
+            closed = space_vcs.groups_closed(account)
+        holds = any(lk["mine"] for lk in space_vcs.locks(account, space))
+        out[space] = (team, space_vcs.last_activity(account, space), holds, closed.get(space, 0.0))
+    return out
 
 
 class Scheduler:
@@ -215,9 +389,12 @@ class Scheduler:
         self._version: int | None = None
         self._refreshed = float("-inf")
         self._stale = True
+        self._pruned = float("-inf")
+        self._chores_running = False
 
     def tick(self, now: float | None = None) -> list[str]:
-        """Start every round that is due. Returns their spaces."""
+        """Start every round that is due, and a team space's presence and lock look when
+        due. Returns the spaces whose round started."""
         from backend.store import db
         from backend.uefn_plugins import spaces
 
@@ -229,17 +406,52 @@ class Scheduler:
         since = now - self._refreshed
         if provider != self._who[1] or since >= REFRESH_EVERY_S or (self._stale and since >= REFRESH_MIN_S):
             self._refresh(now, provider)
-        due: list[tuple[str, bool]] = []
+        self._take_wakes()
+        due: list[tuple[str, bool, frozenset[str]]] = []
+        side: list[tuple[str, list[str]]] = []
         with self._lock:
             account = self._who[0]
             for space, rec in self.spaces.items():
                 force = self._due(rec, now)
                 if force is not None:
                     rec.running, rec.owed, rec.started = True, False, now
-                    due.append((space, force))
-        for space, force in due:
-            self.spawn(lambda space=space, force=force: self._round(account, space, force, now))
-        return [space for space, _ in due]
+                    due.append((space, force, frozenset(rec.pull)))
+                    rec.pull, rec.wake = set(), False
+                if rec.team and rec.hot and not rec.side_running and now >= rec.side_at + SIDE_EVERY_S:
+                    rec.side_running, rec.side_at = True, now
+                    side.append((space, sorted(rec.team)))
+            teams = any(rec.team for rec in self.spaces.values())
+        for space, force, pulls in due:
+            self.spawn(lambda space=space, force=force, pulls=pulls: self._round(account, space, force, now, pulls))
+        for space, plugins in side:
+            self.spawn(lambda space=space, plugins=plugins: self._side(account, space, plugins))
+        self._chores(account, now, teams)
+        return [space for space, _, _ in due]
+
+    def _take_wakes(self) -> None:
+        """Provider events into the spaces they are about (one for a space not known yet
+        waits for the next refresh, :data:`WAKE_KEEP_S` at most)."""
+        with _WAKE_LOCK:
+            pending = dict(_WAKES)
+        if not pending:
+            return
+        now = time.time()
+        done: list[tuple[str, str]] = []
+        with self._lock:
+            for (account, space), (at, plugins) in pending.items():
+                rec = self.spaces.get(space) if account == self._who[0] else None
+                if rec is not None:
+                    rec.wake = True
+                    rec.pull |= set(plugins)
+                    done.append((account, space))
+                elif now - at > WAKE_KEEP_S:
+                    done.append((account, space))
+                else:
+                    self._stale = True
+        with _WAKE_LOCK:
+            for key in done:
+                if _WAKES.get(key) is pending[key]:  # a newer event stays for the next tick
+                    del _WAKES[key]
 
     def _refresh(self, now: float, provider: str) -> None:
         from backend.store.repos import plugin_data as repo
@@ -250,6 +462,7 @@ class Scheduler:
         found = {} if account == scopes.LOCAL else _plan(account)
         rows = {space: repo.sync_get(account, space) for space in found}
         left = {space: repo.count_dirty(account, space) for space, (_, _, written) in found.items() if written}
+        teams = _team_looks(account, found) if found else {}
         with self._lock:
             fresh = (account, provider) != self._who
             if fresh:
@@ -258,7 +471,13 @@ class Scheduler:
                 rec = self.spaces.get(space)
                 if rec is None:
                     rec = self.spaces[space] = _Space(owed=fresh and bool(plugins))
-                rec.plugins, rec.active, rec.written = plugins, active, written
+                team, wrote, holds, closed = teams.get(space, (frozenset(), 0.0, False, 0.0))
+                if team:
+                    # A write group's changes go out a few seconds after its call returned.
+                    written = max(written, closed)
+                    rec.wrote = max(rec.wrote, wrote, written)
+                rec.plugins, rec.active, rec.written, rec.team = plugins, active, written, team
+                rec.hot = bool(team) and (active or bool(written) or holds or now - rec.wrote < ACTIVE_FOR_S)
                 rec.state, rec.called_at = str(rows[space]["state"] or "ok"), float(rows[space]["called_at"] or 0.0)
                 if rec.state not in RETRY_STATES and rec.called_at > rec.started:
                     rec.fails = 0  # a round started elsewhere (the scope bar, a Save) worked since
@@ -286,18 +505,77 @@ class Scheduler:
         if rec.owed:
             return unsent
         last = max(rec.started, rec.called_at)
+        if rec.wake and now >= last + WAKE_GAP_S:  # a teammate's change, a lock, presence
+            return unsent
         failing = rec.fails > 0 or rec.state in RETRY_STATES
         wait = RETRY_AFTER_S[min(max(rec.fails, 1), len(RETRY_AFTER_S)) - 1] if failing else 0.0
         slow = rec.state in SLOW_STATES
         if unsent and not slow and now >= max(rec.written + DEBOUNCE_S, last + MIN_GAP_S, last + wait):
             return True
-        every = IDLE_EVERY_S if slow else wait or (ACTIVE_EVERY_S if rec.active else IDLE_EVERY_S)
+        every = IDLE_EVERY_S if slow else wait or (ACTIVE_EVERY_S if rec.active or rec.hot else IDLE_EVERY_S)
         return False if now >= last + every else None
 
-    def _round(self, account: str, space: str, force: bool, started: float) -> None:
+    def _side(self, account: str, space: str, plugins: list[str]) -> None:
+        """An active team space: presence when it changed (or each minute), locks of mine
+        renewed each minute, auto locks released 5 minutes after their last change went out."""
+        from backend.uefn_plugins import spaces, vcs_engine
+
+        try:
+            team = spaces.ledgers(account, space, plugins)
+            if team:
+                vcs_engine.beat(account, space, next(iter(team.values())), list(team))
+                for plugin, backend in team.items():
+                    due = vcs_engine.renew_due(account, space, plugin, active=True)
+                    if due:
+                        vcs_engine.renew(account, space, plugin, backend, due)
+                    vcs_engine.release_idle(account, space, plugin, backend)
+        except Exception:  # noqa: BLE001 — the next look tries again
+            _log.debug("presence and locks of %s failed", space, exc_info=True)
+        finally:
+            with self._lock:
+                rec = self.spaces.get(space)
+                if rec is not None:
+                    rec.side_running = False
+
+    def _chores(self, account: str, now: float, teams: bool) -> None:
+        """Writers waiting for a lock (each tick, while any space has a ledger), and every
+        minute the housekeeping: old activity, changesets and answered requests go, and
+        write groups left open by a call that never returned close."""
+        from backend.uefn_plugins import scopes
+
+        if not account or account == scopes.LOCAL or self._chores_running:
+            return
+        from backend.store.repos import space_vcs
+
+        prune = now >= self._pruned + PRUNE_EVERY_S
+        asks = teams and bool(space_vcs.lock_requests_pending(account))
+        if not (prune or asks):
+            return
+        if prune:
+            self._pruned = now
+        self._chores_running = True
+
+        def work() -> None:
+            from backend.uefn_plugins import spaces, vcs_engine
+
+            try:
+                if asks and vcs_engine.serve_lock_requests(
+                        account, lambda space, plugin: spaces.ledger_for(account, space, plugin)):
+                    self._stale = True  # a lock held now makes its space active
+                if prune:
+                    space_vcs.prune()
+                    space_vcs.groups_close_stale(GROUP_OPEN_MAX_S)
+            except Exception:  # noqa: BLE001 — the next tick tries again
+                _log.debug("space sync chores failed", exc_info=True)
+            finally:
+                self._chores_running = False
+
+        self.spawn(work)
+
+    def _round(self, account: str, space: str, force: bool, started: float, pull: frozenset[str] = frozenset()) -> None:
         from backend.store.repos import plugin_data as repo
 
-        out = run_round(account, space, force=force)
+        out = run_round(account, space, force=force, pull=pull)
         state = str(out.get("state") or "")
         ran = state != "busy" and not out.get("skipped")  # busy: another round holds the space
         try:
@@ -319,8 +597,9 @@ class Scheduler:
 
 def flush(timeout: float = FLUSH_TIMEOUT_S) -> int:
     """At exit (``shutdown.hard_exit``): one round for every space with changes still to
-    send, all at once, for at most ``timeout`` seconds in all; rounds still running then
-    are left behind. Returns how many started. Never raises."""
+    send (team copies only send, they don't pull), all at once, and the auto locks this PC
+    holds released, for at most ``timeout`` seconds in all; what still runs then is left
+    behind. Returns how many rounds started. Never raises."""
     deadline = time.monotonic() + max(0.0, timeout)
     try:
         from backend.store.repos import plugin_data as repo
@@ -331,41 +610,74 @@ def flush(timeout: float = FLUSH_TIMEOUT_S) -> int:
         account = scopes.account_id()
         if account == scopes.LOCAL:
             return 0
+        unsent = repo.unsent_spaces(account)
         targets = [
-            space for space in sorted(repo.unsent_spaces(account))
+            space for space in sorted(unsent)
             if scopes.valid_space_id(space) and not space.startswith(scopes.SANDBOX_PREFIX)
             and repo.sync_get(account, space)["state"] not in SLOW_STATES
         ]
+        linked = sorted({s for s in repo.links(account).values() if scopes.valid_space_id(s)} | set(targets))
     except Exception:  # noqa: BLE001 — exit goes on
         _log.debug("sync flush skipped", exc_info=True)
         return 0
     workers = [
-        threading.Thread(target=run_round, args=(account, space), kwargs={"force": True}, name="space-sync-flush",
-                         daemon=True)
+        threading.Thread(target=run_round, args=(account, space), kwargs={"force": True, "push_only": True},
+                         name="space-sync-flush", daemon=True)
         for space in targets
     ]
-    for worker in workers:
+
+    def release() -> None:
+        for space in linked:
+            try:
+                spaces.release_auto_locks(account, space)
+            except Exception:  # noqa: BLE001 — their leases run out on the server
+                _log.debug("releasing locks of %s at exit failed", space, exc_info=True)
+
+    releaser = threading.Thread(target=release, name="space-lock-release", daemon=True)
+    for worker in [*workers, releaser]:
         worker.start()
-    for worker in workers:
+    for worker in [*workers, releaser]:
         worker.join(max(0.0, deadline - time.monotonic()))
     return len(workers)
+
+
+def space_active(account: str, space: str) -> bool:
+    """``spaces.space_active``: the running scheduler's word for a space it follows,
+    else a look of its own (a panel on screen, a change in the last few minutes, a lock
+    held here, changes to send)."""
+    sched = _SCHEDULER
+    if sched is not None:
+        with sched._lock:
+            rec = sched.spaces.get(space) if sched._who[0] == account else None
+            if rec is not None:
+                return rec.active or rec.hot
+    from backend.store.repos import plugin_data as repo
+    from backend.store.repos import space_vcs
+
+    if repo.count_dirty(account, space) or time.time() - space_vcs.last_activity(account, space) < ACTIVE_FOR_S:
+        return True
+    if any(lk["mine"] for lk in space_vcs.locks(account, space)):
+        return True
+    return any(_visible(plugin) for plugin in space_plugins(account, space))
 
 
 _START_LOCK = threading.Lock()
 _STOP = threading.Event()
 _THREAD: threading.Thread | None = None
+_SCHEDULER: Scheduler | None = None  # the daemon's, in this process
 
 
 def start() -> bool:
     """Start the daemon (app process only). False in the MCP bridge, or when it runs."""
-    global _THREAD
+    global _THREAD, _SCHEDULER
     if _in_bridge():
         return False
     with _START_LOCK:
         if _THREAD is not None and _THREAD.is_alive():
             return False
         _STOP.clear()
-        _THREAD = threading.Thread(target=_loop, args=(Scheduler(),), name="space-sync-scheduler", daemon=True)
+        _SCHEDULER = Scheduler()
+        _THREAD = threading.Thread(target=_loop, args=(_SCHEDULER,), name="space-sync-scheduler", daemon=True)
         _THREAD.start()
     return True
 

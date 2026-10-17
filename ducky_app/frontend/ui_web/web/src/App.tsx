@@ -57,6 +57,7 @@ import { WINDOW_ID } from "./tabs/tabRegistryClient";
 import { persistDockSnapshot, readDockSnapshot } from "./workspace/workspaceDockStorage";
 import { PluginShellBootBridge } from "./plugin-ui/shellBoot";
 import { PluginCrashBanner } from "./plugin-ui/PluginCrashBanner";
+import { installScopeAlerts } from "./plugin-ui/scopeAlerts";
 import { installPluginFaultGuards } from "./plugin-ui/pluginCrashGuard";
 import { useHydratePluginUiPrefs } from "./hooks/usePluginUiPrefs";
 import { installModelsCatalogAutoRefresh } from "./hooks/modelsCatalogCache";
@@ -86,6 +87,12 @@ function GraphFocusBridge() {
       if (event.type === "graph_focus") applyGraphFocusPush(event);
     });
   }, []);
+  return null;
+}
+
+/** Lock events (a refused agent write, a teammate's ask, a lost lock) whichever panels are open. */
+function ScopeAlertsBridge() {
+  useEffect(() => installScopeAlerts(), []);
   return null;
 }
 
@@ -230,6 +237,7 @@ export default function App() {
       <AppShortcutsBridge />
       <PluginTrustBridge />
       <GraphFocusBridge />
+      <ScopeAlertsBridge />
       <PluginPrefsHydrate />
       <PluginShellBootBridge />
       <UiRpcBridge />

@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { Profiler } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { BackgroundActivityDropdown } from "./BackgroundActivityDropdown";
-import { _resetBackgroundActivityForTests, upsertBackgroundJob } from "../hooks/backgroundActivity";
+import { _resetBackgroundActivityForTests, onBackgroundJobAction, upsertBackgroundJob } from "../hooks/backgroundActivity";
 import { resetWorkflowRunsForTests } from "../hooks/workflowRunsByChat";
 
 const api = vi.hoisted(() => ({ stop_workflow: vi.fn(), workflow_run_snapshot: vi.fn() }));
@@ -54,6 +54,20 @@ it("reconciles a restored stale tray entry without opening a workflow editor or 
   await screen.findByText("No longer running");
   expect(screen.queryByText("Stop")).toBeNull();
   expect(screen.getByText("Nothing running. You can keep working.")).toBeTruthy();
+});
+
+it("a row's own button (Release) is a real button whose press its owner hears", () => {
+  const heard: string[] = [];
+  const stop = onBackgroundJobAction((id) => heard.push(id));
+  render(<BackgroundActivityDropdown />);
+  act(() => upsertBackgroundJob({
+    id: "scope-asked:forge:doc:scene.a", source: "plugin-data", title: "Forge",
+    detail: "Ben asks you to release Scene A.", phase: "done", action: "Release",
+  }));
+  fireEvent.click(screen.getByLabelText("Background activity"));
+  fireEvent.click(screen.getByRole("button", { name: "Release" }));
+  stop();
+  expect(heard).toEqual(["scope-asked:forge:doc:scene.a"]);
 });
 
 it("reports cancellation errors instead of silently ignoring Stop", async () => {

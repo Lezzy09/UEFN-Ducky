@@ -135,3 +135,39 @@ def test_reloading_modules_is_rejected_because_compiled_builds_cannot(tmp_path: 
     ))
     text = "\n".join(check_backend(tmp_path, {}, "demo"))
     assert "backend/__init__.py:5: importlib.reload() fails in the compiled build" in text
+
+
+def test_data_sharing_and_data_locks_must_say_something_valid() -> None:
+    from backend.uefn_plugins.plugin_lint import check_manifest
+    from backend.uefn_plugins.store import data_locks
+
+    good = {"data_sharing": True, "data_locks": {"scene.": "required", "card.": "auto", "": "auto"}}
+    assert check_manifest(good) == [] and check_manifest({}) == []
+    assert data_locks(good) == {"scene.": "required", "card.": "auto", "": "auto"}
+    text = "\n".join(check_manifest({"data_sharing": "yes", "data_locks": {
+        "Scene.": "auto", "card.": "always", "art/": "required"}}))
+    assert "\"data_sharing\" is 'yes'" in text
+    assert "key 'Scene.' isn't the start of a doc key or file path" in text
+    assert "'card.' is 'always': use \"auto\" or \"required\"" in text
+    assert "'art/'" not in text  # a file path prefix
+    assert len(text.splitlines()) == 3
+    assert check_manifest({"data_locks": ["scene."]}) == [
+        'plugin.json "data_locks" must be an object: {"<doc key or file path prefix>": "auto" or "required"}.']
+    both = check_manifest({"data_sharing": False, "data_locks": {"scene.": "auto"}})
+    assert both == ['plugin.json has "data_locks" but "data_sharing": false: nothing is shared, so remove one.']
+    assert data_locks({"data_sharing": False, "data_locks": {"scene.": "auto"}}) == {}
+    assert data_locks({"data_locks": {"Scene.": "auto", "card.": "always", "pack.": "auto"}}) == {"pack.": "auto"}
+
+
+def test_a_plugin_with_bad_data_locks_does_not_install() -> None:
+    import io
+    import zipfile
+
+    from backend.uefn_plugins import store
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("plugin.json", json.dumps({"id": "lockdemo", "data_locks": {"scene.": "always"}}))
+    out = store.import_plugin_from_bytes(buf.getvalue(), source="local")
+    assert out == {"ok": False, "error": 'plugin.json "data_locks" \'scene.\' is \'always\': use "auto" or "required".'}
+    assert not store.plugin_dir("lockdemo").exists()

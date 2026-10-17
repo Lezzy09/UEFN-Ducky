@@ -7,6 +7,7 @@ import {
   countWorkingBackgroundJobs,
   dismissBackgroundJob,
   onBackgroundJobEnded,
+  requestBackgroundJobAction,
   requestBackgroundJobCancel,
   useBackgroundActivity,
   type BackgroundJob,
@@ -176,6 +177,12 @@ export function BackgroundActivityDropdown() {
                       value={Math.max(0, Math.min(100, job.percent))}
                     />
                   ) : null}
+                  {job.action ? (
+                    <button type="button" className="bg-activity-link"
+                      onClick={(event) => { event.stopPropagation(); requestBackgroundJobAction(job.id); }}>
+                      {job.action}
+                    </button>
+                  ) : null}
                   {job.cancelable || (job.source === "agent" && job.convId) ? (
                     <button
                       type="button"
@@ -221,6 +228,12 @@ export function BackgroundActivityDropdown() {
                 <div className="connection-status-menu-text">
                   <span className="connection-status-menu-label">{job.title}</span>
                   <span className="connection-status-menu-detail">{job.detail || job.phase}</span>
+                  {job.action ? (
+                    <button type="button" className="bg-activity-link"
+                      onClick={(event) => { event.stopPropagation(); requestBackgroundJobAction(job.id); }}>
+                      {job.action}
+                    </button>
+                  ) : null}
                 </div>
                 <button
                   type="button"

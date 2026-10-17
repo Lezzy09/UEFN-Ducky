@@ -8,10 +8,17 @@ retried after 1, 5, then 15 minutes, recorded on the space while the next tick s
 runs; changes queued again without a write keep rounds coming while each sends some;
 rounds of one space never overlap across processes; the exit flush is bounded; the
 daemon never runs in the MCP bridge.
+
+Team spaces (every plugin on a ledger, a fake team server): heads each minute while
+active, every 15 minutes idle, and no provider round; an agent's write with the panel
+closed makes the space active, sends presence and goes out as its call's one change; a
+head event pulls within seconds; a writer waiting for a lock gets it within 3 s; the exit
+flush sends without pulling and releases auto locks.
 """
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -356,6 +363,217 @@ def test_changes_queued_again_keep_rounds_coming_while_each_sends_some(who, cloc
         assert repo.count_dirty(aid, "spaceT") == 1
     finally:
         spaces.reset_for_tests()
+
+
+# --------------------------------------------------------------------------- team spaces (a ledger)
+
+dpapi = pytest.mark.skipif(sys.platform != "win32", reason="DPAPI")
+TEAM = "cards"
+
+
+class Team(spaces.Provider):
+    """Every plugin is on the new sync: its ledger is Ana's client of the fake server.
+    ``rounds``: the provider's own rounds (none while every plugin has a ledger)."""
+
+    def __init__(self, backend: Any) -> None:
+        self.backend = backend
+        self.rounds: list[tuple[str, bool]] = []
+
+    def enabled(self) -> bool:
+        return True
+
+    def ledger(self, account: str, space_id: str, plugin: str) -> Any:
+        return self.backend
+
+    def sync(self, account: str, space_id: str, *, force: bool = False) -> dict[str, Any]:
+        self.rounds.append((space_id, force))
+        return {"state": "ok", "changed": [], "error": ""}
+
+
+@pytest.fixture
+def team(monkeypatch: pytest.MonkeyPatch):
+    """Ana signed in, ``cards`` linked to spaceT, a fake team server, a clock that starts
+    now (rows and activity are stamped with it), and Ben's client."""
+    import hashlib
+
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import data_crypto, vcs_engine
+    from backend.uefn_plugins import ledger_conformance as conf
+    from frontend import duckyos_account
+
+    key = "https://uefnducky.org|ana@example.com"
+    data_crypto.reset_for_tests()
+    monkeypatch.setattr(duckyos_account, "account_key", lambda blob=None: key)
+    monkeypatch.setattr(data_crypto, "_fetch_adk", lambda: hashlib.sha256(b"adk/" + key.encode()).digest())
+    clock = Clock()
+    clock.now = time.time()
+    monkeypatch.setattr(repo, "time", SimpleNamespace(time=clock))
+    monkeypatch.setattr(space_vcs, "time", SimpleNamespace(time=clock))
+    from backend.uefn_plugins import scopes
+
+    aid = scopes.account_id()
+    repo.link_set(aid, TEAM, "spaceT")
+    repo.sync_put(aid, "spaceT", label="Alpha", synced_at=1.0)
+    world = conf.FakeWorld()
+    impl = Team(world.server.client("u_ana", vcs_engine.device_id(), name="Ana"))
+    spaces.install_for_tests(impl)
+    ben = world.server.client("u_ben", "d_ben", name="Ben")
+    yield SimpleNamespace(aid=aid, clock=clock, world=world, provider=impl, ben=ben)
+    spaces.reset_for_tests()
+    scopes.forget_change_listeners(TEAM)
+    world.server.rmtree()
+    data_crypto.reset_for_tests()
+
+
+def _heads(team: Any) -> int:
+    return sum(1 for method, *_ in team.world.server.calls if method == "heads")
+
+
+@dpapi
+def test_a_team_space_asks_heads_every_minute_while_active_and_every_15_minutes_idle(team, events) -> None:
+    from backend.uefn_plugins.panel_presence import note_panel
+
+    clock, start = team.clock, team.clock.now
+    sched = scheduler(clock)
+    assert sched.tick() == ["spaceT"] and _heads(team) == 1  # heads at start
+    assert team.provider.rounds == []  # every plugin is on the new sync: no provider round
+    assert sched.spaces["spaceT"].team == frozenset({TEAM}) and not sched.spaces["spaceT"].hot
+    assert ticks(sched, clock, start + 60, start + 300, start + IDLE_EVERY_S - 1) == [[], [], []]
+    # (+1: the round at start stamped the real clock a moment after it began)
+    assert ticks(sched, clock, start + IDLE_EVERY_S + 1) == [["spaceT"]] and _heads(team) == 2
+    assert team.ben.beat("spaceT", {}) and team.world.server.space("spaceT").presence.keys() == {("u_ben", "d_ben")}
+
+    # The plugin's panel on screen: active, a round (heads) each minute.
+    later = start + IDLE_EVERY_S + 1
+    clock.now = later + 1
+    elsewhere(lambda: note_panel("main", f"plugin:{TEAM}:main", visible=True))
+    assert ticks(sched, clock, later + 6, later + 59, later + 60, later + 119, later + 120) == [
+        [], [], ["spaceT"], [], ["spaceT"]]
+    assert sched.spaces["spaceT"].hot and _heads(team) == 4
+    from backend.uefn_plugins import sync_scheduler as module
+
+    module._SCHEDULER = sched
+    try:
+        assert spaces.space_active(team.aid, "spaceT")
+    finally:
+        module._SCHEDULER = None
+    clock.now = later + 121
+    elsewhere(lambda: note_panel("main", f"plugin:{TEAM}:main", visible=False))
+    assert ticks(sched, clock, later + 127, later + 180, later + 120 + IDLE_EVERY_S - 1) == [[], [], []]
+    assert not spaces.space_active(team.aid, "spaceT")
+
+
+@dpapi
+def test_an_agent_write_with_the_panel_closed_makes_the_space_active_sends_a_beat_and_pushes(team, events) -> None:
+    from backend.uefn_plugins import vcs_engine
+    from backend.uefn_plugins.scopes import PluginData, write_group
+
+    clock, start = team.clock, team.clock.now
+    sched = scheduler(clock)
+    assert sched.tick() == ["spaceT"]  # the round at start: on the new sync from now on
+    assert not sched.spaces["spaceT"].hot
+
+    def agent_edit() -> None:
+        with write_group(TEAM, actor="agent", ducky="Builder", message="cards_tune"):
+            PluginData(TEAM).put("card.pip", {"hp": 9})
+            PluginData(TEAM).put("card.zed", {"hp": 1})
+
+    clock.now = start + 100
+    elsewhere(agent_edit)  # the MCP bridge's own connection
+    assert ticks(sched, clock, start + 105) == [["spaceT"]]  # a round 5 s after the call returned
+    rec = sched.spaces["spaceT"]
+    assert rec.hot and not rec.active
+    blob, _ = team.world.server.space("spaceT").presence[("u_ana", vcs_engine.device_id())]
+    editing = blob["plugins"][TEAM]["editing"]
+    assert {(e["unitName"], e["actor"], e["ducky"]) for e in editing} == {
+        ("card.pip", "agent", "Builder"), ("card.zed", "agent", "Builder")}
+    repo_ = team.world.server.space("spaceT").repo(TEAM)
+    assert repo_.head == 1 and repo_.changesets[1].message == "cards_tune" and len(repo_.changesets[1].items) == 2
+    assert spaces.space_active(team.aid, "spaceT")  # without a running scheduler: its own look
+    # Active: a round each minute. Five quiet minutes after the write it is idle again:
+    # heads every 15 minutes, no beats.
+    assert ticks(sched, clock, start + 165, start + 225) == [["spaceT"], ["spaceT"]]
+    beats = sum(1 for method, *_ in team.world.server.calls if method == "beat")
+    assert ticks(sched, clock, start + 401, start + 470, start + 900) == [[], [], []]
+    assert not sched.spaces["spaceT"].hot
+    assert sum(1 for method, *_ in team.world.server.calls if method == "beat") == beats
+
+
+@dpapi
+def test_a_head_event_pulls_within_seconds(team, events) -> None:
+    from backend.uefn_plugins import ledger_conformance as conf
+    from backend.uefn_plugins.scopes import PluginData
+
+    clock, start = team.clock, team.clock.now
+    sched = scheduler(clock)
+    assert sched.tick() == ["spaceT"]
+    out = team.ben.push("spaceT", TEAM, conf.changeset(conf.put_item("doc", "card.new", b'{"v":1}')))
+    assert type(out).__name__ == "Committed"
+    spaces.remote_event(team.aid, "spaceT", "head", TEAM, {"seq": out.seq})
+    # At most one round per 5 s (+1: the round at start stamped the real clock a moment later).
+    assert ticks(sched, clock, start + 1, start + 6) == [[], ["spaceT"]]
+    assert PluginData(TEAM).get("card.new") == {"v": 1}
+    assert events[-1] == {"type": "plugin_scope_changed", "plugins": [TEAM], "synced": True}
+
+
+@dpapi
+def test_a_lock_request_is_answered_within_3s(team, events, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import store
+    from backend.uefn_plugins.scopes import PluginData
+
+    monkeypatch.setattr(repo, "time", time)  # real time: the daemon's own loop
+    monkeypatch.setattr(space_vcs, "time", time)
+    folder = store.plugin_dir(TEAM)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "plugin.json").write_text(json.dumps({"id": TEAM, "data_locks": {"scene.": "required"}}))
+    sched = Scheduler()
+    stop = threading.Event()
+
+    def loop() -> None:
+        while not stop.is_set():
+            sched.tick()
+            stop.wait(0.2)
+
+    daemon = threading.Thread(target=loop)
+    daemon.start()
+    try:
+        deadline = time.monotonic() + 10
+        while space_vcs.head_get(team.aid, "spaceT", TEAM)["engine"] != "v2" and time.monotonic() < deadline:
+            time.sleep(0.05)  # the round at start puts the plugin on the new sync
+        began = time.monotonic()
+        PluginData(TEAM).put("scene.duel", {"v": 1})
+        assert time.monotonic() - began < 3.0
+    finally:
+        stop.set()
+        daemon.join(10)
+        (folder / "plugin.json").unlink(missing_ok=True)
+    assert PluginData(TEAM).get("scene.duel") == {"v": 1}
+    held = [(lk["unit"], lk["mine"], lk["reason"]) for lk in space_vcs.locks(team.aid, "spaceT", TEAM)]
+    assert held == [("doc:scene.duel", True, "auto")]
+
+
+@dpapi
+def test_exit_sends_without_pulling_and_releases_auto_locks(team, events) -> None:
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import ledger_conformance as conf, vcs_engine
+    from backend.uefn_plugins.scopes import PluginData
+
+    assert sync_scheduler.run_round(team.aid, "spaceT", force=True)["state"] == "ok"
+    PluginData(TEAM).put("card.pip", {"hp": 2})
+    vcs_engine.acquire(team.aid, "spaceT", TEAM, team.provider.backend, [("doc:card.pip", "card.pip")], reason="auto")
+    vcs_engine.acquire(team.aid, "spaceT", TEAM, team.provider.backend, [("doc:card.keep", "card.keep")])
+    team.ben.push("spaceT", TEAM, conf.changeset(conf.put_item("doc", "card.ben", b"{}")))
+    calls = len(team.world.server.calls)
+    assert sync_scheduler.flush(timeout=5.0) == 1
+    made = [m for m, *_ in team.world.server.calls[calls:]]
+    assert "push" in made and "pull" not in made and "heads" not in made
+    assert team.world.server.space("spaceT").repo(TEAM).items[("doc", "card.pip")].content == b'{"hp":2}'
+    assert PluginData(TEAM).get("card.ben") is None  # nothing came down
+    assert [lk["unit"] for lk in space_vcs.locks(team.aid, "spaceT", TEAM) if lk["mine"]] == ["doc:card.keep"]
+    assert ("cards", "doc:card.pip") not in team.world.server.space("spaceT").locks  # released on the server too
 
 
 def test_rounds_of_one_space_never_overlap_across_processes(who, monkeypatch: pytest.MonkeyPatch) -> None:

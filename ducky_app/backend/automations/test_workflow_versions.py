@@ -127,6 +127,7 @@ def test_upgrade_from_schema_nine_preserves_existing_workflows(storage):
         conn.execute(f"ALTER TABLE plugin_data DROP COLUMN {column}")
     for column in ("rewind_rev", "rewind_at"):
         conn.execute(f"ALTER TABLE scope_sync DROP COLUMN {column}")
+    conn.execute("ALTER TABLE plugin_data DROP COLUMN group_id")  # 0021 re-adds it
     conn.execute("PRAGMA user_version=9")
     db.reset_for_tests()
     assert store.get_workflow(legacy["id"])["name"] == "Before versions"

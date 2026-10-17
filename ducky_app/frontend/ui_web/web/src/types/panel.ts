@@ -2144,6 +2144,12 @@ export interface PanelPushEvent {
     | "uefn_plugins_changed"
     | "duckyos_account_changed"
     | "plugin_scope_changed"
+    /** A write of a plugin (an agent's tool call, its folder) was refused: someone holds the unit. */
+    | "plugin_write_refused"
+    /** A teammate (`holder`) asks this PC to release its lock on `unit`. */
+    | "plugin_lock_asked"
+    /** A lock this PC held went: `holder` took it (broke it), or its lease ran out (no holder). */
+    | "plugin_lock_lost"
     | "models_updated"
     | "coding_agents_updated"
     | "uefn_plugin_trust_request"
@@ -2185,6 +2191,14 @@ export interface PanelPushEvent {
   synced?: boolean;
   /** plugin_scope_changed after a switch: the plugin restarted on the other copy; its panels reload. */
   switched?: boolean;
+  /** plugin_write_refused: the unit, its name, who holds it and since when (epoch seconds).
+   * plugin_lock_asked: who asks. plugin_lock_lost: who has it now, and `kept` (unsent edits
+   * kept as a conflict). */
+  unit?: string;
+  unit_name?: string;
+  holder?: string;
+  since?: number;
+  kept?: boolean;
   /** duckyos_account_changed — the new account key ("" signed out). */
   account?: string;
   source?: string;
@@ -2290,6 +2304,150 @@ export interface PluginScopeStatus {
   pausedAction?: { label: string; path: string };
   /** Lost access: when (epoch seconds) the locked copy leaves this PC unless access comes back. */
   deleteAt?: number;
+  /** Lost access: this PC's changes to the space never sent (Save my unsent changes to Local). */
+  unsent?: number;
+  /** Lost access: the person already chose what happens to them (saved or discarded). */
+  unsentChosen?: boolean;
+  /** Who else is in the space now (presence); never this PC. */
+  people?: PluginScopePerson[];
+  /** Live locks on this plugin's units. */
+  locks?: PluginScopeLock[];
+  /** What goes out and comes in (team repo copies). */
+  changes?: PluginScopeChanges;
+  /** Items changed here and by someone else, kept until resolved. */
+  conflicts?: PluginScopeConflict[];
+  /** v1: the provider's older sync (no people, locks, history or mode); v2: the new sync. */
+  engine?: "v1" | "v2";
+  /** auto: rounds push and pull by themselves; manual: only Push and Pull do. */
+  mode?: "auto" | "manual";
+  /** The last changeset applied on this PC (#482). */
+  head?: number;
+  /** When (epoch seconds) a failed round tries again. */
+  nextTry?: number | null;
+  /** The plugin's data is still moving to the new sync: percent done. */
+  importing?: number | null;
+  /** A plugin's declared folders: one row per unit. */
+  folders?: PluginScopeFolderUnit[];
+}
+
+/** Someone in a shared space now. Either one row per activity (`doing`), or a roster row
+ * with each plugin's activity in `plugins`. */
+export interface PluginScopePerson {
+  name?: string;
+  user?: string;
+  user_name?: string;
+  /** The PC's label. */
+  device?: string;
+  /** This PC: never listed. */
+  me?: boolean;
+  /** viewing | editing | "" (in the space, not in this plugin). */
+  doing?: string;
+  unitName?: string;
+  /** user | agent (one of their duckies). */
+  actor?: string;
+  ducky?: string;
+  /** Epoch seconds. */
+  since?: number;
+  plugins?: Record<string, {
+    viewing?: boolean;
+    editing?: { unitName?: string; actor?: string; ducky?: string; since?: number }[];
+  }>;
+}
+
+export interface PluginScopeLock {
+  unit: string;
+  /** The unit's name as people know it. */
+  name?: string;
+  holder?: string;
+  /** Held by this PC. */
+  mine?: boolean;
+  /** Epoch seconds. */
+  since?: number;
+  /** Seconds left on the lease (server clock). */
+  leaseLeft?: number;
+}
+
+/** One change of this PC not sent yet. */
+export interface PluginScopeOutgoing {
+  kind: string;
+  key: string;
+  /** Shown instead of the key (a folder file's name). */
+  name?: string;
+  size?: number;
+  deleted?: boolean;
+  /** queued | sending | refused | blocked | locked_out | conflict */
+  state: string;
+  reason?: string;
+  attempts?: number;
+}
+
+/** An incoming item that couldn't be applied here; it is retried alone. */
+export interface PluginScopeIncomingBlocked {
+  kind: string;
+  key: string;
+  name?: string;
+  error?: string;
+  attempts?: number;
+}
+
+export interface PluginScopeChanges {
+  outgoing?: PluginScopeOutgoing[];
+  /** Changesets on the server not applied here yet, and who made them. */
+  incoming?: number;
+  incomingBy?: string[];
+  /** The incoming changes wait for Update now (a plugin that restarts to take them). */
+  held?: boolean;
+  blocked?: PluginScopeIncomingBlocked[];
+  /** An upload running now: bytes sent of the total. */
+  sentBytes?: number;
+  totalBytes?: number;
+}
+
+export interface PluginScopeConflict {
+  kind: string;
+  key: string;
+  name?: string;
+  unit?: string;
+  /** edit (both changed it) | deleted (they deleted, you changed) | mine_deleted | lock_broken */
+  reason?: string;
+  /** Whose version won here, and when (epoch seconds). */
+  by?: string;
+  at?: number;
+  theirsSeq?: number;
+}
+
+/** A unit of a declared folder. */
+export interface PluginScopeFolderUnit {
+  unit: string;
+  name: string;
+  /** ok | changed | locked | conflict */
+  state: string;
+  holder?: string;
+  /** Held by this PC. */
+  mine?: boolean;
+}
+
+/** A changeset (`count` items), or one item's version (`kind`/`key` set). */
+export interface PluginScopeHistoryEntry {
+  seq: number;
+  by?: string;
+  at?: number;
+  device?: string;
+  actor?: string;
+  ducky?: string;
+  message?: string;
+  count?: number;
+  kind?: string;
+  key?: string;
+  deleted?: boolean;
+  size?: number;
+  /** A changeset's items as [kind, key]. */
+  items?: [string, string][];
+}
+
+export interface PluginScopeResult {
+  ok?: boolean;
+  error?: string;
 }
 
 /** One of a plugin's changes that isn't going out to its shared space. */
@@ -4026,6 +4184,31 @@ export interface PanelApi {
   /** A space whose data was reset on the server: Upload my copy or Clear my copy, for this
    * PC's whole copy of it (every plugin's data and its workflows). */
   space_reset_settle?(space_id: string, action: "upload" | "clear"): Promise<{ ok?: boolean; error?: string; queued?: number; cleared?: number }>;
+  /** The drawer opened: the space is looked at again now (heads, presence; a round, so once
+   * per open, never per status), and the status comes back with the drawer's tables. */
+  plugin_scope_activity?(plugin_id: string): Promise<PluginScopeStatus>;
+  /** Lock a unit by hand (kept until released). */
+  plugin_scope_lock?(plugin_id: string, unit: string, name?: string): Promise<PluginScopeResult & { state?: string }>;
+  plugin_scope_unlock?(plugin_id: string, unit: string): Promise<PluginScopeResult>;
+  /** Break someone's lock (owners and admins, or anyone once its lease ran out). */
+  plugin_scope_break?(plugin_id: string, unit: string): Promise<PluginScopeResult>;
+  /** Ask the holder to release a unit. */
+  plugin_scope_ask?(plugin_id: string, unit: string): Promise<PluginScopeResult>;
+  /** Settle a conflict: mine, theirs, both (folder units), or compare (returns `diff`, changes nothing). */
+  plugin_scope_resolve?(plugin_id: string, kind: string, key: string, choice: "mine" | "theirs" | "both" | "compare"): Promise<PluginScopeResult & { diff?: string }>;
+  /** A new changeset on the server: items back to their version at a seq, the plugin as of
+   * `toSeq`, or changeset `undoSeq` undone. `skipped`: items whose version is no longer kept. */
+  plugin_scope_restore?(plugin_id: string, request: { items?: { kind: string; key: string; seq: number }[]; toSeq?: number; undoSeq?: number; message?: string }): Promise<PluginScopeResult & { seq?: number; skipped?: [string, string][] }>;
+  /** Changesets newest first, or one item's versions (`kind` + `key`), before seq `before`. */
+  plugin_scope_history?(plugin_id: string, request?: { kind?: string; key?: string; before?: number; limit?: number }): Promise<PluginScopeResult & { entries?: PluginScopeHistoryEntry[]; more?: boolean }>;
+  plugin_scope_mode?(plugin_id: string, mode: "auto" | "manual"): Promise<PluginScopeResult & { mode?: string }>;
+  /** Send this PC's changes now (Manual mode's Push), with an optional message. */
+  plugin_scope_push?(plugin_id: string, message?: string): Promise<PluginScopeResult & { started?: boolean }>;
+  /** Bring everyone's changes now (Pull, Update now); with `kind` + `key`, download that one item again. */
+  plugin_scope_pull?(plugin_id: string, kind?: string, key?: string): Promise<PluginScopeResult & { started?: boolean }>;
+  /** Lost access: copy this PC's unsent changes to the space into Local before it leaves this PC
+   * (`save`), or let them go with it (`discard`). */
+  plugin_scope_save_unsent?(plugin_id: string, action?: "save" | "discard"): Promise<PluginScopeResult & { saved?: { plugin: string; kind: string; key: string; localKey: string }[] }>;
   /** One way, on request: the plugin's Local data into one shared space's copy (its items are
    * kept). `tooBig`: keys left Local because they wouldn't fit once sealed. */
   plugin_data_copy_to_space?(plugin_id: string, space_id: string): Promise<{ ok?: boolean; copied?: number; kept?: number; tooBig?: string[]; error?: string }>;

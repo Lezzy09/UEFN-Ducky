@@ -154,6 +154,46 @@ def test_plugin_data_from_schema_19_upgrades_with_a_fresh_sync_state(monkeypatch
     assert index is not None and "WHERE dirty=1" in index[0]
 
 
+def test_plugin_data_from_schema_20_upgrades_to_the_team_repo_tables(monkeypatch) -> None:
+    """0021 adds each row's write group and the team repo's tables. Rows from before keep
+    everything they had, are in no group, and still go out (as one changeset); the new
+    tables start empty and work."""
+    from backend.store.repos import plugin_data, space_vcs
+
+    real_files = db.migration_files
+    monkeypatch.setattr(db, "migration_files", lambda: [(n, p) for n, p in real_files() if n <= 20])
+    db.reset_for_tests()
+    conn = db.connect()
+    assert db.user_version(conn) == 20
+    with db.write_txn(conn):
+        conn.execute(
+            "INSERT INTO plugin_data(account_id, scope_id, plugin_id, kind, key, value, size, sha256, rev, dirty, "
+            "deleted, sensitive, updated, sync_state, sync_error, attempts) VALUES ('a_1', 'spaceT', 'cards', 'doc', "
+            "'card.pip', 'v', 1, 'abc', 4, 1, 0, 0, 1.0, 'refused', 'too big', 2)"
+        )
+        conn.execute("INSERT INTO plugin_data(account_id, scope_id, plugin_id, kind, key, value, size, sha256, rev, "
+                     "dirty, deleted, sensitive, updated) VALUES ('a_1', 'spaceT', 'cards', 'doc', 'card.zed', 'z', 1, "
+                     "'def', 2, 1, 0, 0, 2.0)")
+    db.reset_for_tests()
+    monkeypatch.setattr(db, "migration_files", real_files)
+
+    conn = db.connect()
+    assert db.user_version(conn) == db.head_version()
+    row = space_vcs.row(None, "a_1", "spaceT", "cards", "doc", "card.pip")
+    assert (row["group_id"], row["rev"], row["dirty"], row["sync_state"], row["sync_error"], row["attempts"]) == (
+        "", 4, 1, "refused", "too big", 2)
+    assert plugin_data.get("a_1", "spaceT", "cards", "doc", "card.pip")["sha256"] == "abc"
+    assert [r["key"] for r in space_vcs.outgoing_rows("a_1", "spaceT", "cards")] == ["card.zed"]
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    assert {"space_heads", "space_changesets", "space_conflicts", "space_incoming_blocked", "space_locks",
+            "space_presence", "space_activity", "space_groups", "space_lock_requests", "plugin_data_base",
+            "space_units", "space_lost_choice"} <= tables
+    assert space_vcs.head_get("a_1", "spaceT", "cards")["engine"] == "v1"  # every plugin stays on v1 until a ledger
+    space_vcs.head_put("a_1", "spaceT", "cards", seq=4, engine="v2")
+    assert space_vcs.head_get("a_1", "spaceT", "cards")["seq"] == 4
+    assert space_vcs.pending_unsent("a_1", "spaceT") == 2
+
+
 def test_links_to_a_space_already_unavailable_go_so_those_plugins_keep_local(monkeypatch) -> None:
     """Before 0020 a plugin linked to a space the provider couldn't use read and wrote its
     Local copy. The upgrade keeps it there instead of switching it to that space's old

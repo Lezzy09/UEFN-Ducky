@@ -18,12 +18,13 @@ tree syncs with its workflows and the website can read it.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 import threading
 import uuid
-from typing import Any
+from typing import Any, Iterator
 
 from backend.store.repos import automations as legacy
 from backend.store.repos import plugin_data as data
@@ -264,6 +265,24 @@ def _max_bytes(scope: dict[str, Any]) -> int:
     return scopes.DOC_MAX_BYTES - (scopes.SHARED_SEAL_OVERHEAD if scope["kind"] == "shared" else 0)
 
 
+@contextlib.contextmanager
+def _team_write(scope: dict[str, Any], key: str, message: str, *, changes: bool = True) -> Iterator[str | None]:
+    """A workflow write to a shared copy goes through the writer's checks like any plugin
+    data: refused while someone else holds the key's lock (``scopes.LockedOut``, a
+    ``ReadOnlyScope``), one write group (one changeset, unless a call already opened one),
+    and presence says who edits it. Yields the group id to store with the row ('' for none),
+    or None for a Local copy, a copy on the older sync, or nothing to write."""
+    if scope["kind"] != "shared" or not changes:
+        yield None
+        return
+    actor, ducky = scopes.caller()
+    with scopes.write_group(DOC_PLUGIN, actor=actor, ducky=ducky, message=message):
+        group = scopes._team_write(scope, DOC_PLUGIN, "doc", key)
+        yield group
+        if group is not None:
+            scopes._note_write(scope, DOC_PLUGIN, "doc", key)
+
+
 def write(scope: dict[str, Any], doc: dict[str, Any], *, versions: tuple[dict[str, Any], ...] = ()) -> None:
     """Store the synced part of ``doc`` in ``scope`` (a shared copy is queued to push),
     and the saved copies in ``versions``, in one transaction: a save that fails
@@ -281,13 +300,14 @@ def write(scope: dict[str, Any], doc: dict[str, Any], *, versions: tuple[dict[st
     unchanged = bool(old and not old["deleted"] and old["sha256"] == sha)
     sealed = None if unchanged else seal_text(raw.decode("utf-8"), aid)
     snaps = [(float(v.get("updated") or 0.0), _seal(_snapshot(v), aid)) for v in versions]
-    conn = db.connect()
-    with db.write_txn(conn):
-        for saved_at, text in snaps:
-            legacy.archive(conn, wid, saved_at, text)
-        if sealed is not None:
-            data.upsert(conn, aid, scope["id"], DOC_PLUGIN, "doc", wid, value=sealed, size=len(raw), sha256=sha,
-                        dirty=scope["kind"] == "shared")
+    with _team_write(scope, wid, f"Workflow {doc.get('name') or wid}", changes=sealed is not None) as group:
+        conn = db.connect()
+        with db.write_txn(conn):
+            for saved_at, text in snaps:
+                legacy.archive(conn, wid, saved_at, text)
+            if sealed is not None:
+                data.upsert(conn, aid, scope["id"], DOC_PLUGIN, "doc", wid, value=sealed, size=len(raw), sha256=sha,
+                            dirty=scope["kind"] == "shared", group_id=group or "")
 
 
 def folders(scope: dict[str, Any]) -> list[str]:
@@ -313,10 +333,11 @@ def write_folders(scope: dict[str, Any], paths: list[str]) -> None:
     if old and not old["deleted"] and old["sha256"] == sha:
         return
     sealed = seal_text(raw.decode("utf-8"), aid)
-    conn = db.connect()
-    with db.write_txn(conn):
-        data.upsert(conn, aid, scope["id"], DOC_PLUGIN, "doc", FOLDERS_KEY, value=sealed, size=len(raw), sha256=sha,
-                    dirty=scope["kind"] == "shared")
+    with _team_write(scope, FOLDERS_KEY, "Workflow folders") as group:
+        conn = db.connect()
+        with db.write_txn(conn):
+            data.upsert(conn, aid, scope["id"], DOC_PLUGIN, "doc", FOLDERS_KEY, value=sealed, size=len(raw),
+                        sha256=sha, dirty=scope["kind"] == "shared", group_id=group or "")
 
 
 def remove(scope: dict[str, Any], workflow_id: str) -> bool:
@@ -326,7 +347,9 @@ def remove(scope: dict[str, Any], workflow_id: str) -> bool:
         return False
     # Always a tombstone in a shared copy: the server may hold it even at rev 0 (a push in
     # flight, a lost answer), and a delete of an item it never had is harmless.
-    data.remove(aid, scope["id"], DOC_PLUGIN, "doc", workflow_id, tombstone=scope["kind"] == "shared")
+    with _team_write(scope, workflow_id, f"Deleted workflow {workflow_id}") as group:
+        data.remove(aid, scope["id"], DOC_PLUGIN, "doc", workflow_id, tombstone=scope["kind"] == "shared",
+                    group_id=group or "")
     return True
 
 
@@ -393,7 +416,8 @@ def open_version(stored: str, aid: str) -> dict[str, Any] | None:
 
 def archive_before_adopt(scope: dict[str, Any], workflow_id: str) -> None:
     """A sync is about to replace this PC's unpushed edit with the other copy: keep the
-    local one as a saved version so History can bring it back."""
+    local one as a saved version so History can bring it back. Inside a transaction the
+    caller holds (a pull applying a changeset), it lands in that one."""
     from backend.store import db
 
     if workflow_id == FOLDERS_KEY:
@@ -404,7 +428,7 @@ def archive_before_adopt(scope: dict[str, Any], workflow_id: str) -> None:
         return
     text = _seal({**_snapshot(doc), "note": BEFORE_SYNC_NOTE}, aid)
     conn = db.connect()
-    with db.write_txn(conn):
+    with contextlib.nullcontext(conn) if conn.in_transaction else db.write_txn(conn):
         legacy.archive(conn, workflow_id, float(doc.get("updated") or 0.0), text)
 
 

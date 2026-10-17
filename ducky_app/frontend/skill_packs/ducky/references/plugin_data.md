@@ -1,5 +1,5 @@
 ---
-description: "Plugin data: api.data docs and files, Local or one shared space, sensitive data, encryption, read-only and lost access"
+description: "Plugin data: api.data docs and files, Local or one shared space, team locks, conflicts and history, sensitive data, encryption, read-only and lost access"
 metadata:
   order: 4
   label: "Plugins: data"
@@ -45,12 +45,20 @@ encrypted on disk, and syncs shared copies.
 - A plugin whose data must never reach a team (browsing, personal tools) sets
   `"data_sharing": false` at the top of `plugin.json`: its data is always Local, it
   gets no scope bar and no Data picker, and switching it to a space is refused.
+  `"data_sharing": true` offers a shared space before the plugin has stored anything.
+  Any other value is refused by `ducky_plugin_validate`.
 - `ducky_plugin_data_scope(id, scope="")`: empty `scope` tells you which copy a plugin
   uses; `"local"` or a space id switches it. Switch only when the user asks: it asks
   them first, nothing is copied, open panels are told, the new copy syncs, and the
   plugin restarts on it with its open panels reloaded.
 - Panels get `plugin_scope_changed` when the scope switches or a sync brings new data:
   re-read your docs. The backend reads the scope fresh on every call.
+- A backend that caches docs in memory registers `api.data.on_change(callback)` once in
+  `register(api)`. After a sync changed this plugin's data, `callback(keys)` gets the doc
+  keys and file paths that changed: drop those from the cache. It runs in every process
+  that loaded the plugin (in the agents' bridge just before the plugin's next tool call),
+  so never assume it runs on a particular thread, and keep it quick. An exception in it is
+  logged and ignored.
 - `prefs.*` and `cache.*` follow the scope too: a shared copy has its own prefs and
   cache on this PC (never synced), locked and unlocked with it.
 
@@ -63,10 +71,45 @@ encrypted on disk, and syncs shared copies.
   `{"ok": False, "error": str(exc)}`.
 - **Losing access** to the space locks its copy on this PC: reads come back empty and
   writes fail until access returns, then everything unlocks as it was. A copy that
-  stays locked long enough leaves this PC (never the server's).
+  stays locked long enough leaves this PC (never the server's); changes made here that
+  never went out wait until the person saves them to Local or lets them go (the bar's
+  Details offers it).
 - Whose data the user is looking at: the panel's scope bar shows it, and the host adds
   `scope` (`local` or the space's name) to every dict a tool of a data-using plugin
   returns. Say it in your reply when it matters.
+
+## Team copies: changes, locks, conflicts, history
+
+A team's shared copy keeps every change, like source control. The plugin needs no
+code for it; these rules decide how well it works for people editing together.
+
+- **One call is one change.** Everything one tool call or one panel RPC writes goes out
+  together, named after the call and marked as the person's or their ducky's. Teammates
+  get all of it or none of it. Write related docs in one call.
+- **Locks.** Anyone can lock an item (a doc or a file) from the bar's Details, and a
+  ducky can with `ducky_team_lock(plugin, unit, "acquire")` before a long edit (release
+  it after). While someone else holds an item, a write to it raises `PermissionError`
+  ("card.pip is locked by Ana since 3:02 PM. Your change wasn't saved."). Catch it in
+  tools and return `{"ok": False, "error": str(exc)}`, as for read-only copies.
+- A plugin whose items must be held while one person edits them declares
+  `"data_locks": {"<key prefix>": "auto" | "required"}` in `plugin.json` (the start of
+  a doc key or file path; the longest match wins; `""` is every item):
+  - `auto`: the first change takes the lock for this PC; the write goes ahead either
+    way. It is released 5 minutes after the last change went out.
+  - `required`: the write waits up to 3 s for the lock and is refused without it.
+  Leave it out for data that merges well (most plugins).
+- **Conflicts.** Docs edited on two PCs at once merge field by field. Arrays of objects
+  that all have an `id` merge by `id`; other arrays are replaced whole. When both sides
+  changed the same field, the team's version stays and this PC's is kept as a conflict
+  for the person (Keep mine, Keep theirs, Compare in the bar's Details). Files are never
+  merged: the team's version stays and this PC's is kept beside it. So keep fields that
+  people edit separately in separate keys or `id`'d objects, and big blobs in files.
+- **History.** Every change is kept with who made it and when. The bar's Details shows
+  it; restoring an item, or the whole plugin to an earlier change, is a new change that
+  everyone gets, never a rewrite.
+- `ducky_team_status(plugin)` says who is in the copy and what they do, what is locked,
+  what waits to go out or come in, and the conflicts. `ducky_plugin_data_scope` gives
+  the same for a shared copy.
 
 ## Sensitive data
 

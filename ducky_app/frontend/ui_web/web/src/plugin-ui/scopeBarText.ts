@@ -1,5 +1,5 @@
 /** Scope bar wording. Pure so the 80% / full rules have one test. */
-import type { PluginScopeStatus, PluginScopeUsage } from "../types/panel";
+import type { PluginScopeLock, PluginScopePerson, PluginScopeStatus, PluginScopeUsage } from "../types/panel";
 
 const UNITS = ["B", "KB", "MB", "GB", "TB"];
 
@@ -52,6 +52,9 @@ export function syncText(status: PluginScopeStatus, nowMs: number): string {
 
 /** What the bar says for a plugin that keeps its own files: nothing to share. */
 export const LOCAL_ONLY_TEXT = "Local only: this plugin keeps its own files";
+
+/** Help text (same words as the web). */
+export const DATA_AT_REST = "Plugin data on each PC is encrypted for the signed-in account.";
 
 /** A shared copy the provider can't use now: read-only, with the reason. */
 export function unavailableText(label: string, reason?: string): string {
@@ -172,4 +175,236 @@ export function resetConfirm(
         title: `Clear your copy of ${label}?`,
         message: `This PC's whole copy of ${label}'s data is deleted${what}. ${label}'s data on the server comes down instead, and nothing is sent.`,
       };
+}
+
+// --------------------------------------------------------------------------- the one-line bar
+
+export type PhraseTone = "" | "warn" | "error";
+
+/** The bar's one status phrase. `action`: the phrase carries a button (Update now). */
+export type StatusPhrase = { key: string; text: string; tone: PhraseTone; action?: "update" };
+
+/** "40 s", "3 min", "2 h". */
+export function durationText(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.round(s / 60)} min`;
+  return `${Math.round(s / 3600)} h`;
+}
+
+/** "3:02 PM": a time of day (epoch seconds). */
+export function clockText(epochSeconds: number, locale?: string): string {
+  return new Date(epochSeconds * 1000).toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+}
+
+const MB = 1024 ** 2;
+
+/** "412 of 1,200 MB": both in the total's unit. */
+export function sentText(sent: number, total: number): string {
+  const unit = total >= MB ? MB : 1024;
+  const n = (v: number) => Math.round(Math.max(0, v) / unit).toLocaleString("en-US");
+  return `${n(sent)} of ${n(total)} ${unit === MB ? "MB" : "KB"}`;
+}
+
+/** Locks held by someone else. */
+export const foreignLocks = (status: PluginScopeStatus) => (status.locks ?? []).filter((lock) => !lock.mine);
+
+/** Changes not sent yet: the status's count, else the queued and sending rows. */
+function toSend(status: PluginScopeStatus): number {
+  if (typeof status.pending === "number") return status.pending;
+  return (status.changes?.outgoing ?? []).filter((c) => c.state === "queued" || c.state === "sending").length;
+}
+
+/**
+ * The one phrase the bar shows, highest priority first: why nothing syncs, a reset, conflicts,
+ * a lock, updates waiting, an import, an upload, what is queued, waiting, paused, up to date.
+ */
+export function statusPhrase(status: PluginScopeStatus, nowMs: number): StatusPhrase {
+  const scope = status.scope;
+  const label = scope?.label || "This space";
+  const kind = (status.kindLabel || "space").toLowerCase();
+  const state = status.state || "";
+  const pending = toSend(status);
+  const queued = pending ? ` · ${pending} to send` : "";
+  if (scope?.kind !== "shared") return { key: "local", text: `Only on this PC · ${DATA_AT_REST}`, tone: "" };
+  if (state === "lost") return { key: "lost", text: lostText(label, status.deleteAt), tone: "error" };
+  if (state === "locked") {
+    return { key: "key", text: "Waiting for your account's data key. Read-only until you're back online.", tone: "warn" };
+  }
+  if (state === "offline" || state === "error") {
+    const reason = status.error || (state === "offline" ? "offline" : "");
+    const wait = status.nextTry ? status.nextTry - nowMs / 1000 : 0;
+    const retry = wait > 0 ? ` · retry in ${durationText(wait)}` : "";
+    return { key: "not_synced", text: `Not synced${reason ? `: ${reason}` : ""}${retry}`, tone: "error" };
+  }
+  if (state === "no_provider") {
+    return { key: "no_provider", text: `${status.error || "Not connected: Ducky Account isn't running"}${queued}`, tone: "error" };
+  }
+  if (state === "unavailable") return { key: "unavailable", text: unavailableText(label, status.error), tone: "error" };
+  if (state === "reset") return { key: "reset", text: `${label}'s ${kind} data was reset on the server`, tone: "warn" };
+  const conflicts = status.conflicts?.length || status.conflict || 0;
+  if (conflicts) return { key: "conflict", text: plural(conflicts, "conflict"), tone: "warn" };
+  const locked = foreignLocks(status);
+  if (locked.length) {
+    const first = locked[0];
+    const more = locked.length > 1 ? ` and ${locked.length - 1} more` : "";
+    return {
+      key: "locked",
+      text: `Locked by ${first.holder || "someone"}: ${first.name || first.unit}${more} (read-only for you)`,
+      tone: "warn",
+    };
+  }
+  const changes = status.changes ?? {};
+  const incoming = changes.incoming ?? 0;
+  if (changes.held && incoming) {
+    const by = changes.incomingBy?.length ? ` from ${listText(changes.incomingBy)}` : " waiting";
+    return { key: "updates", text: `${plural(incoming, "update")}${by}`, tone: "", action: "update" };
+  }
+  if (state === "importing" || typeof status.importing === "number") {
+    return { key: "importing", text: `Moving ${label}'s data to the new sync… ${Math.round(status.importing ?? 0)}%`, tone: "" };
+  }
+  if (changes.totalBytes) {
+    return { key: "sending", text: `Sending ${sentText(changes.sentBytes ?? 0, changes.totalBytes)}`, tone: "" };
+  }
+  const held = notShared(status).count;
+  const parts = [
+    pending ? `${pending} to send` : "",
+    incoming ? `${incoming} incoming` : "",
+    held ? `${held} can't be sent` : "",
+  ].filter(Boolean);
+  if (parts.length) return { key: "queue", text: parts.join(" · "), tone: held ? "warn" : "" };
+  if (state === "waiting") return { key: "waiting", text: `Waiting for ${label}'s data…`, tone: "" };
+  if (scope.readOnly || state === "paused") {
+    return { key: "paused", text: status.pausedText || `${label} is paused. Read-only.`, tone: "warn" };
+  }
+  if (!status.syncedAt && !status.head) return { key: "up_to_date", text: "Not synced yet", tone: "" };
+  const when = status.syncedAt ? agoText(nowMs / 1000 - status.syncedAt) : "";
+  return { key: "up_to_date", text: ["Up to date", status.head ? `#${status.head}` : "", when].filter(Boolean).join(" · "), tone: "" };
+}
+
+/** One person's activity in this plugin, flattened. `doing` "" means elsewhere in the space. */
+export type PersonRow = {
+  name: string;
+  device: string;
+  doing: string;
+  unitName: string;
+  actor: string;
+  ducky: string;
+  since: number;
+};
+
+/** The people in a space as rows for this plugin (never this PC). A roster row with a
+ * `plugins` map gives one row per unit being edited, or one viewing row. */
+export function peopleRows(people: PluginScopePerson[] | undefined, pluginId: string): PersonRow[] {
+  const rows: PersonRow[] = [];
+  for (const p of people ?? []) {
+    if (p.me) continue;
+    const base = { name: p.name || p.user_name || p.user || "Someone", device: p.device || "", since: p.since ?? 0 };
+    if (!p.plugins) {
+      rows.push({ ...base, doing: p.doing || "", unitName: p.unitName || "", actor: p.actor || "user", ducky: p.ducky || "" });
+      continue;
+    }
+    const here = p.plugins[pluginId];
+    const editing = here?.editing ?? [];
+    for (const e of editing) {
+      rows.push({
+        ...base, doing: "editing", unitName: e.unitName || "", actor: e.actor || "user", ducky: e.ducky || "",
+        since: e.since ?? base.since,
+      });
+    }
+    if (!editing.length) rows.push({ ...base, doing: here?.viewing ? "viewing" : "", unitName: "", actor: "user", ducky: "" });
+  }
+  return rows;
+}
+
+/** "Ana (editing MEGA_Duel_Stadium)", "Ben's ducky Builder", "Cy". */
+function personLabel(row: PersonRow): string {
+  if (row.actor === "agent") return `${row.name}'s ducky ${row.ducky || "ducky"}`;
+  return row.doing === "editing" && row.unitName ? `${row.name} (editing ${row.unitName})` : row.name;
+}
+
+/** Who else is in this plugin: "with Ana (editing X), Ben's ducky Builder +3" ("" when nobody). */
+export function peopleText(rows: PersonRow[], max = 2): string {
+  const labels = [...new Set(rows.filter((r) => r.doing).map(personLabel))];
+  if (!labels.length) return "";
+  const rest = labels.length - max;
+  return `with ${labels.slice(0, max).join(", ")}${rest > 0 ? ` +${rest}` : ""}`;
+}
+
+/** What a person is doing, for the drawer's People table. */
+export function doingText(row: PersonRow): string {
+  if (row.actor === "agent") return `Ducky ${row.ducky ? `${row.ducky} ` : ""}editing ${row.unitName}`.trim();
+  if (row.doing === "editing") return row.unitName ? `Editing ${row.unitName}` : "Editing";
+  if (row.doing === "viewing") return "Viewing";
+  return "Not in this plugin";
+}
+
+/** "2 locked · You hold 1" ("" when there are none). */
+export function locksText(locks: PluginScopeLock[] | undefined): string {
+  const mine = (locks ?? []).filter((lock) => lock.mine).length;
+  const others = (locks ?? []).length - mine;
+  return [others ? `${others} locked` : "", mine ? `You hold ${mine}` : ""].filter(Boolean).join(" · ");
+}
+
+/** A refused write, for the alerts system: "Forge: MEGA_Duel_Stadium is locked by Ana since 3:02 PM.
+ * Your change wasn't saved." Without a holder, the refusal's own reason. */
+export function refusedWriteText(
+  plugin: string,
+  write: { name?: string; holder?: string; since?: number; error?: string },
+  locale?: string,
+): string {
+  if (!write.holder) return `${plugin}: your change wasn't saved.${write.error ? ` ${write.error}` : ""}`;
+  const since = write.since ? ` since ${clockText(write.since, locale)}` : "";
+  return `${plugin}: ${write.name || "it"} is locked by ${write.holder}${since}. Your change wasn't saved.`;
+}
+
+/** The question before Break: the holder's unsent edits become a conflict. */
+export function breakConfirm(holder: string, name: string): { title: string; message: string } {
+  return {
+    title: `Break ${holder}'s lock on ${name}?`,
+    message:
+      `${holder} is told, and what ${holder} changed in ${name} and hasn't sent yet becomes a conflict ` +
+      "on their PC. Nothing of theirs is lost.",
+  };
+}
+
+/** The question before a restore: always a new change everyone gets, never a rewrite. */
+export function restoreConfirm(
+  action: "item" | "to" | "undo",
+  label: string,
+  what: { plugin: string; seq: number; key?: string },
+): { title: string; message: string } {
+  const after = `It is a new change everyone in ${label} gets; the history stays as it is.`;
+  if (action === "item") {
+    return { title: `Restore ${what.key} to #${what.seq}?`, message: `${what.key} goes back to how it was at #${what.seq}. ${after}` };
+  }
+  if (action === "undo") {
+    return { title: `Undo change #${what.seq}?`, message: `Each item it changed goes back to how it was before #${what.seq}. ${after}` };
+  }
+  return {
+    title: `Restore ${what.plugin} to #${what.seq}?`,
+    message: `Every item goes back to how it was at #${what.seq}, and items made after it are deleted. ${after}`,
+  };
+}
+
+/** What a conflict is about, for the drawer. */
+export function conflictText(reason: string | undefined, by: string | undefined): string {
+  const who = by || "Someone";
+  if (reason === "deleted") return `${who} deleted this; you changed it`;
+  if (reason === "mine_deleted") return `You deleted this; ${who} changed it`;
+  if (reason === "lock_broken") return `Your lock was taken by ${who}; your unsent change is kept`;
+  return `Changed here and by ${who}`;
+}
+
+/** One outgoing change's state, for the drawer. */
+export function outgoingStateText(state: string, reason?: string, attempts?: number): string {
+  if (state === "sending") return "Sending";
+  if (state === "refused") return `Refused: ${reason || "the server refused it"}`;
+  if (state === "blocked") {
+    const tries = attempts ? ` after ${attempts} ${attempts === 1 ? "try" : "tries"}` : "";
+    return `Couldn't be sent${tries}${reason ? `: ${reason}` : ""}`;
+  }
+  if (state === "locked_out") return reason || "Locked by someone else";
+  if (state === "conflict") return "Changed here and by someone else";
+  return "Queued";
 }

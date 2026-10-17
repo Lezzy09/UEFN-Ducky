@@ -3,28 +3,24 @@ import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { getApi } from "../hooks/usePanelApi";
 import { installPanelPushBus, subscribePanelPush } from "../hooks/usePanelPushBus";
 import type { PluginScopeChoice, PluginScopeStatus } from "../types/panel";
+import { PluginScopeDrawer } from "./PluginScopeDrawer";
+import { installScopeAlerts, onRefusedWrite, rememberPluginLabel, type RefusedWrite } from "./scopeAlerts";
 import {
-  dropConfirm,
+  DATA_AT_REST,
   kindTitle,
   LOCAL_ONLY_TEXT,
-  lostText,
+  locksText,
   notShared,
+  peopleRows,
+  peopleText,
   resetConfirm,
-  resetText,
+  statusPhrase,
   storageLine,
   switchConfirm,
-  syncText,
-  unavailableText,
-  type HeldItem,
 } from "./scopeBarText";
 
 /** Sync now waits for its round's result; a round stuck longer than this frees the button. */
 const SYNC_NOW_GIVE_UP_MS = 120_000;
-/** Changes not shared that are listed before "Show all". */
-const HELD_SHOWN = 3;
-
-/** Help text (same words as the web). */
-const DATA_AT_REST = "Plugin data on each PC is encrypted for the signed-in account.";
 
 type Props = {
   pluginId: string;
@@ -40,10 +36,32 @@ type ActionResult = { ok?: boolean; error?: string } | undefined;
 const scopeKey = (s: PluginScopeStatus | null) =>
   s ? `${s.email}:${s.scope?.kind}:${s.scope?.spaceId}:${s.scope?.readOnly}` : "";
 
+/** Phrases that already carry `status.error`, or say what it says (a reset, lost access). */
+const ERROR_IN_PHRASE = new Set(["not_synced", "no_provider", "unavailable", "reset", "lost"]);
+
+/** The drawer's open state, per plugin and per viewer (a convenience: storage may be off). */
+const drawerKey = (pluginId: string) => `ducky.pluginScopeDrawer.${pluginId}`;
+function readDrawerOpen(pluginId: string): boolean {
+  try {
+    return localStorage.getItem(drawerKey(pluginId)) === "1";
+  } catch {
+    return false;
+  }
+}
+function writeDrawerOpen(pluginId: string, open: boolean): void {
+  try {
+    if (open) localStorage.setItem(drawerKey(pluginId), "1");
+    else localStorage.removeItem(drawerKey(pluginId));
+  } catch {
+    /* storage off: the drawer just starts closed */
+  }
+}
+
 /**
- * Host-rendered bar above every plugin panel: whose data this is. The plugin can't
- * hide or restyle it. Renders nothing while the account has no shared spaces to offer
- * (normal members see no change).
+ * Host-rendered line above every plugin panel: whose data this is, one status phrase, who
+ * else is here and what is locked, Sync now (Push and Pull in Manual mode) and Details, which
+ * opens the drawer under it. The plugin can't hide or restyle it. Renders nothing while the
+ * account has no shared spaces to offer (normal members see no change).
  */
 export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Props) {
   const { confirm } = useConfirmModal();
@@ -54,7 +72,8 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
   const [syncing, setSyncing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [allHeld, setAllHeld] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(() => readDrawerOpen(pluginId));
+  const [refused, setRefused] = useState<{ write: RefusedWrite; text: string; asked?: boolean } | null>(null);
   const notify = useRef(onScopeChanged);
   notify.current = onScopeChanged;
   const last = useRef<PluginScopeStatus | null>(null);
@@ -67,6 +86,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
       const next = await api.plugin_scope_status(pluginId);
       const moved = last.current !== null && scopeKey(next) !== scopeKey(last.current);
       last.current = next;
+      rememberPluginLabel(pluginId, next.pluginLabel);
       setStatus(next);
       setNow(Date.now());
       if (moved || dataChanged) notify.current(next);
@@ -78,7 +98,8 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
   useEffect(() => {
     void refresh();
     installPanelPushBus();
-    return subscribePanelPush((event) => {
+    installScopeAlerts(); // refused writes, asks and lost locks are told app-wide (the app installs it too)
+    const stopPush = subscribePanelPush((event) => {
       if (event.type === "plugin_scope_changed") {
         if (event.synced) setSyncing(false);
         // A sync round with no changes for this plugin only refreshes the bar.
@@ -88,6 +109,13 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
         void refresh();
       }
     });
+    const stopRefused = onRefusedWrite((write, text) => {
+      if (write.pluginId === pluginId) setRefused({ write, text });
+    });
+    return () => {
+      stopPush();
+      stopRefused();
+    };
   }, [refresh, pluginId]);
 
   // Core's scheduler syncs shared copies in the background; the bar only asks for a
@@ -109,6 +137,17 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
     const giveUp = window.setTimeout(() => setSyncing(false), SYNC_NOW_GIVE_UP_MS);
     return () => window.clearTimeout(giveUp);
   }, [syncing]);
+
+  // "retry in 40 s" counts down while the panel is on screen.
+  const nextTry = status?.nextTry ?? 0;
+  useEffect(() => {
+    if (!active || !nextTry || nextTry * 1000 <= Date.now()) return;
+    const tick = window.setInterval(() => {
+      setNow(Date.now());
+      if (Date.now() >= nextTry * 1000) window.clearInterval(tick);
+    }, 1000);
+    return () => window.clearInterval(tick);
+  }, [nextTry, active]);
 
   /** A full round now (sends this PC's changes, brings everyone else's), past the minute cap. */
   const syncNow = async () => {
@@ -145,6 +184,12 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
     }
   };
 
+  const toggleDrawer = () => {
+    const open = !drawerOpen;
+    setDrawerOpen(open);
+    writeDrawerOpen(pluginId, open);
+  };
+
   if (!status?.visible || !status.scope) return null;
   const scope = status.scope;
   const shared = scope.kind === "shared";
@@ -163,20 +208,18 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
   const kind = (status.kindLabel || "space").toLowerCase();
   const plugin = status.pluginLabel || pluginId;
   const current = shared ? scope.spaceId : "personal";
-  const storage = shared ? storageLine(status.usage) : null;
   const state = status.state || "";
   const waiting = shared && state === "waiting";
-  const locked = state === "locked";
+  const keyLocked = state === "locked";
   const lost = shared && state === "lost";
-  const unavailable = shared && state === "unavailable";
   const reset = shared && state === "reset";
-  // While reset, Retry and Drop wait: Upload or Clear my copy decides for the whole copy.
-  const canRetry = Boolean(api?.plugin_scope_retry) && !reset;
-  const canDrop = Boolean(api?.plugin_scope_drop) && !reset;
   const canSettle = Boolean(api?.space_reset_settle);
-  const held = shared && !lost ? notShared(status) : { count: 0, items: [] };
-  const heldShown = allHeld ? held.items : held.items.slice(0, HELD_SHOWN);
-  const fixable = held.items.filter((item) => item.fixable).length;
+  const phrase = statusPhrase(status, now);
+  const people = shared ? peopleText(peopleRows(status.people, pluginId)) : "";
+  const locks = shared ? locksText(status.locks) : "";
+  const storage = shared ? storageLine(status.usage) : null;
+  const manual = shared && status.mode === "manual" && Boolean(api?.plugin_scope_push || api?.plugin_scope_pull);
+  const canSync = shared && !lost && !keyLocked && !reset;
 
   const toggleMenu = async () => {
     if (menuOpen) {
@@ -208,19 +251,6 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
     await refresh();
   };
 
-  /** Send refused or blocked changes again (all of them without a key), then sync. */
-  const retry = async (key?: string) => {
-    // No key at all for "every one" (the bridge would send null for undefined).
-    const run = async () => (key ? getApi()?.plugin_scope_retry?.(pluginId, key) : getApi()?.plugin_scope_retry?.(pluginId));
-    if (await act(run)) void syncNow();
-  };
-
-  const drop = async (item: HeldItem) => {
-    const ok = await confirm({ ...dropConfirm(scope.label, item.key), confirmLabel: "Drop my change", danger: true });
-    if (ok !== true) return;
-    await act(async () => getApi()?.plugin_scope_drop?.(pluginId, item.kind, item.key), true);
-  };
-
   /** Upload my copy / Clear my copy: for this PC's whole copy of the space, which the
    * confirm names. The host starts the round. */
   const settle = async (action: "upload" | "clear") => {
@@ -232,191 +262,161 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
     await act(async () => getApi()?.space_reset_settle?.(scope.spaceId, action), action === "clear");
   };
 
-  const variant = shared ? (scope.readOnly && !waiting && !locked ? "paused" : "shared") : "personal";
-  const paused = status.pausedText || `${scope.label} is paused. Read-only.`;
-  // Shown in the phrase already: an unavailable copy's reason, and why nothing syncs.
-  const errorInPhrase = state === "offline" || state === "unavailable" || state === "no_provider";
+  /** Update now / Pull: bring everyone's changes in now. */
+  const pull = () =>
+    act(async () => (api?.plugin_scope_pull ? api.plugin_scope_pull(pluginId) : api?.plugin_scope_sync?.(pluginId, true)), true);
+  const push = () => act(async () => api?.plugin_scope_push?.(pluginId));
+
+  const askRelease = async () => {
+    const write = refused?.write;
+    if (!write?.unit) return;
+    if (await act(async () => api?.plugin_scope_ask?.(pluginId, write.unit as string))) {
+      setRefused({ write, text: `Asked ${write.holder || "them"} to release ${write.name || write.unit}.`, asked: true });
+    }
+  };
+
+  const variant = shared ? (scope.readOnly && !waiting && !keyLocked ? "paused" : "shared") : "personal";
+  const storageNote = storage && storage.level !== "ok" ? (storage.level === "full" ? storage.note : `Storage ${storage.note}`) : "";
+  const drawerId = `plugin-scope-drawer-${pluginId}`;
   return (
-    <div
-      className={`plugin-scope-bar plugin-scope-bar--${variant}`}
-      role="status"
-      aria-live="polite"
-      aria-label={shared ? `Plugin data: ${kind} ${scope.label}` : "Plugin data: local"}
-      title={DATA_AT_REST}
-    >
-      <span
-        className={`plugin-scope-bar__badge plugin-scope-bar__badge--${shared ? "shared" : "local"}`}
-        title={shared ? `${kindTitle(kind)} data: ${scope.label}` : "Local data: only on this PC"}
+    <div className="plugin-scope">
+      <div
+        className={`plugin-scope-bar plugin-scope-bar--${variant}`}
+        role="status"
+        aria-live="polite"
+        aria-label={shared ? `Plugin data: ${kind} ${scope.label}` : "Plugin data: local"}
+        title={DATA_AT_REST}
       >
-        {shared ? scope.label : "Local"}
-      </span>
-      {locked ? (
-        <span className="plugin-scope-bar__text">
-          Waiting for your account&apos;s data key. Read-only until you&apos;re back online.
+        <span
+          className={`plugin-scope-bar__badge plugin-scope-bar__badge--${shared ? "shared" : "local"}`}
+          title={shared ? `${kindTitle(kind)} data: ${scope.label}` : "Local data: only on this PC"}
+        >
+          {shared ? scope.label : "Local"}
         </span>
-      ) : waiting ? (
-        <span className="plugin-scope-bar__text">Waiting for {kind} data. Read-only until it arrives.</span>
-      ) : lost ? (
-        <span className="plugin-scope-bar__text">{lostText(scope.label, status.deleteAt)}</span>
-      ) : unavailable ? (
-        <span className="plugin-scope-bar__text">{unavailableText(scope.label, status.error)}</span>
-      ) : reset ? (
-        <>
-          <span className="plugin-scope-bar__text">{resetText(scope.label, kind, canSettle)}</span>
-          {canSettle ? (
-            <>
-              <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void settle("upload")}>
-                Upload my copy
-              </button>
-              <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void settle("clear")}>
-                Clear my copy
-              </button>
-            </>
+        <span className="plugin-scope-bar__change">
+          <button
+            type="button"
+            className="plugin-scope-bar__link"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={() => void toggleMenu()}
+          >
+            Change ▾
+          </button>
+          {menuOpen ? (
+            <span className="plugin-scope-bar__menu" role="menu">
+              {!status.canChange ? (
+                <span className="plugin-scope-bar__menu-note">Open a project to choose whose data it shows.</span>
+              ) : menu === null ? (
+                <span className="plugin-scope-bar__menu-note">Loading…</span>
+              ) : (
+                menu.map((choice) => (
+                  <button
+                    key={choice.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={choice.id === current}
+                    className="plugin-scope-bar__menu-item"
+                    onClick={() => void choose(choice)}
+                  >
+                    {choice.kind === "shared" ? `${kindTitle(kind)} · ${choice.label}` : "Local"}
+                  </button>
+                ))
+              )}
+            </span>
           ) : null}
-        </>
-      ) : shared && scope.readOnly ? (
-        <>
-          <span className="plugin-scope-bar__text">{paused}</span>
-          {status.pausedAction ? (
-            <button
-              type="button"
-              className="plugin-scope-bar__link"
-              onClick={() => void getApi()?.duckyos_open_site?.(status.pausedAction?.path || "/")}
-            >
-              {status.pausedAction.label}
-            </button>
-          ) : null}
-        </>
-      ) : (
-        <>
-          {status.email ? <span className="plugin-scope-bar__text">signed in as {status.email}</span> : null}
-          {shared ? (
-            <>
-              {status.members ? (
-                <span className="plugin-scope-bar__text">
-                  shared with {status.members} member{status.members === 1 ? "" : "s"}
-                </span>
-              ) : null}
-              <span className="plugin-scope-bar__text">{syncText(status, now)}</span>
-              {storage ? (
-                <span className={`plugin-scope-bar__storage plugin-scope-bar__storage--${storage.level}`}>
-                  <progress
-                    className="plugin-scope-bar__meter"
-                    value={storage.pct}
-                    max={100}
-                    aria-label="Storage used"
-                  />
-                  <span>{storage.text}</span>
-                  {storage.note ? <strong>{storage.note}</strong> : null}
-                </span>
-              ) : null}
-            </>
-          ) : (
-            <span className="plugin-scope-bar__text">only on this PC · {DATA_AT_REST}</span>
-          )}
-        </>
-      )}
-      {status.error && !errorInPhrase ? (
-        <span className="plugin-scope-bar__text plugin-scope-bar__text--error">{status.error}</span>
-      ) : null}
-      {actionError && actionError !== status.error ? (
-        <span className="plugin-scope-bar__text plugin-scope-bar__text--error">{actionError}</span>
-      ) : null}
-      {shared && !lost && !locked && !reset ? (
-        <button
-          type="button"
-          className="plugin-scope-bar__link plugin-scope-bar__sync"
-          onClick={() => void syncNow()}
-          disabled={syncing}
-          title={`Send this PC's changes to ${scope.label} and get everyone else's now`}
-        >
-          {syncing ? "Syncing…" : "Sync now"}
-        </button>
-      ) : null}
-      <span className="plugin-scope-bar__change">
-        <button
-          type="button"
-          className="plugin-scope-bar__link"
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          onClick={() => void toggleMenu()}
-        >
-          Change ▾
-        </button>
-        {menuOpen ? (
-          <span className="plugin-scope-bar__menu" role="menu">
-            {!status.canChange ? (
-              <span className="plugin-scope-bar__menu-note">Open a project to choose whose data it shows.</span>
-            ) : menu === null ? (
-              <span className="plugin-scope-bar__menu-note">Loading…</span>
-            ) : (
-              menu.map((choice) => (
-                <button
-                  key={choice.id}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={choice.id === current}
-                  className="plugin-scope-bar__menu-item"
-                  onClick={() => void choose(choice)}
-                >
-                  {choice.kind === "shared" ? `${kindTitle(kind)} · ${choice.label}` : "Local"}
-                </button>
-              ))
-            )}
-          </span>
+        </span>
+        <span className={`plugin-scope-bar__text plugin-scope-bar__phrase${phrase.tone ? ` plugin-scope-bar__text--${phrase.tone}` : ""}`}>
+          {phrase.text}
+        </span>
+        {phrase.action === "update" ? (
+          <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void pull()}>
+            Update now
+          </button>
         ) : null}
-      </span>
-      {held.count ? (
-        <div className="plugin-scope-bar__held">
-          <span className="plugin-scope-bar__held-title">Not shared: {held.count}</span>
-          {canRetry && fixable > 1 ? (
-            <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void retry()}>
-              Retry all
+        {reset && canSettle ? (
+          <>
+            <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void settle("upload")}>
+              Upload my copy
             </button>
-          ) : null}
-          <ul className="plugin-scope-bar__held-list">
-            {heldShown.map((item) => (
-              <li key={`${item.kind}:${item.key}`} className="plugin-scope-bar__held-item">
-                <span>{item.text}</span>
-                {item.fixable && canRetry ? (
-                  <button
-                    type="button"
-                    className="plugin-scope-bar__link"
-                    aria-label={`Retry ${item.key}`}
-                    disabled={busy}
-                    onClick={() => void retry(item.key)}
-                  >
-                    Retry
-                  </button>
-                ) : null}
-                {item.fixable && canDrop ? (
-                  <button
-                    type="button"
-                    className="plugin-scope-bar__link"
-                    aria-label={`Drop my change to ${item.key}`}
-                    disabled={busy}
-                    onClick={() => void drop(item)}
-                  >
-                    Drop my change
-                  </button>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-          {held.items.length > HELD_SHOWN ? (
+            <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void settle("clear")}>
+              Clear my copy
+            </button>
+          </>
+        ) : null}
+        {phrase.key === "paused" && status.pausedAction ? (
+          <button
+            type="button"
+            className="plugin-scope-bar__link"
+            onClick={() => void getApi()?.duckyos_open_site?.(status.pausedAction?.path || "/")}
+          >
+            {status.pausedAction.label}
+          </button>
+        ) : null}
+        {people ? <span className="plugin-scope-bar__text">{people}</span> : null}
+        {locks ? <span className="plugin-scope-bar__text">{locks}</span> : null}
+        {storageNote ? <span className="plugin-scope-bar__text plugin-scope-bar__text--warn">{storageNote}</span> : null}
+        {status.error && !ERROR_IN_PHRASE.has(phrase.key) ? (
+          <span className="plugin-scope-bar__text plugin-scope-bar__text--error">{status.error}</span>
+        ) : null}
+        {refused ? (
+          <>
+            <span className={`plugin-scope-bar__text${refused.asked ? "" : " plugin-scope-bar__text--error"}`}>{refused.text}</span>
+            {!refused.asked && refused.write.unit && refused.write.holder && api?.plugin_scope_ask ? (
+              <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void askRelease()}>
+                Ask to release
+              </button>
+            ) : null}
+            <button type="button" className="plugin-scope-bar__link" onClick={() => setRefused(null)}>
+              Dismiss
+            </button>
+          </>
+        ) : null}
+        {actionError && actionError !== status.error ? (
+          <span className="plugin-scope-bar__text plugin-scope-bar__text--error">{actionError}</span>
+        ) : null}
+        <span className="plugin-scope-bar__actions">
+          {canSync && manual ? (
+            <>
+              {api?.plugin_scope_push ? (
+                <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void push()}
+                  title={`Send this PC's changes to ${scope.label} now`}>
+                  Push
+                </button>
+              ) : null}
+              {api?.plugin_scope_pull ? (
+                <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void pull()}
+                  title={`Get everyone else's changes from ${scope.label} now`}>
+                  Pull
+                </button>
+              ) : null}
+            </>
+          ) : canSync ? (
             <button
               type="button"
               className="plugin-scope-bar__link"
-              aria-expanded={allHeld}
-              onClick={() => setAllHeld(!allHeld)}
+              onClick={() => void syncNow()}
+              disabled={syncing}
+              title={`Send this PC's changes to ${scope.label} and get everyone else's now`}
             >
-              {allHeld ? "Show fewer" : `Show all ${held.items.length}`}
+              {syncing ? "Syncing…" : "Sync now"}
             </button>
           ) : null}
-          {held.count > held.items.length ? (
-            <span className="plugin-scope-bar__text">{held.count - held.items.length} more not listed</span>
+          {shared ? (
+            <button
+              type="button"
+              className="plugin-scope-bar__link"
+              aria-expanded={drawerOpen}
+              aria-controls={drawerId}
+              onClick={toggleDrawer}
+            >
+              Details ▾
+            </button>
           ) : null}
-        </div>
+        </span>
+      </div>
+      {shared && drawerOpen ? (
+        <PluginScopeDrawer id={drawerId} pluginId={pluginId} status={status} onChanged={(changed) => refresh(changed)} />
       ) : null}
     </div>
   );

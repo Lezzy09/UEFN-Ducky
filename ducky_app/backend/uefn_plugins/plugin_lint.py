@@ -12,6 +12,8 @@ each problem with a message that says how to fix it.
   and ``:focus-visible`` styles when there is a panel.
 - The backend never reads its own ``.py`` source or loads ``.py`` files by path:
   installed plugins can be compiled, and those files are gone then.
+- ``plugin.json``: ``data_sharing`` is true or false, and ``data_locks`` maps doc key or
+  file path prefixes to ``auto`` or ``required``.
 """
 
 from __future__ import annotations
@@ -565,6 +567,15 @@ def tool_docstring_issues(root: Path) -> list[str]:
     return warnings
 
 
+def check_manifest(manifest: dict[str, Any]) -> list[str]:
+    """``data_sharing`` is true or false; ``data_locks`` maps doc key / file path prefixes to
+    ``auto`` or ``required`` (:func:`backend.uefn_plugins.store.manifest_data_errors`)."""
+    from backend.uefn_plugins.store import manifest_data_errors
+
+    return manifest_data_errors(manifest)
+
+
 def lint_draft(root: Path, manifest: dict[str, Any], plugin_id: str) -> list[str]:
     """Every rule above, in the order a fix is easiest to follow."""
-    return check_skill(root, plugin_id) + check_backend(root, manifest, plugin_id) + check_ui(root, manifest)
+    return (check_manifest(manifest) + check_skill(root, plugin_id) + check_backend(root, manifest, plugin_id)
+            + check_ui(root, manifest))

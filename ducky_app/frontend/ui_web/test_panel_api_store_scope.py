@@ -1,6 +1,12 @@
 """The scope bar's bridge: switching away from a shared space sends its queued changes
 first; Retry and Drop my change for changes that aren't going out; Upload my copy and
 Clear my copy, for the space's whole copy, after its data was reset on the server.
+
+The drawer of a team copy (the new sync, a fake team server): people, locks, changes,
+conflicts, mode and head; lock, release, ask and break; compare and resolve; history,
+restore and undo; Auto/Manual with Push and Pull; a panel write refused with who holds
+the item; unsent changes of a lost space saved to Local; a copy on the older sync says
+those aren't there yet.
 """
 
 from __future__ import annotations
@@ -251,3 +257,193 @@ def test_clear_my_copy_clears_the_whole_spaces_copy_and_sends_nothing(who, fake:
         time.sleep(0.02)
     assert {"type": "plugin_scope_changed", "plugins": [PLUGIN, "forge"], "switched": True} in api.pushed
     assert api.space_reset_settle("spaceT", "throw away")["ok"] is False
+
+
+# --------------------------------------------------------------------------- team copies: the drawer's calls
+
+team_pc = test_scopes.team_pc
+TEAM = "cards"
+
+
+class Team(spaces.Provider):
+    """Every plugin is on the new sync, through Ana's client of the fake server."""
+
+    def __init__(self, backend: Any) -> None:
+        self.backend = backend
+
+    def enabled(self) -> bool:
+        return True
+
+    def ledger(self, account: str, space_id: str, plugin: str) -> Any:
+        return self.backend
+
+
+@pytest.fixture
+def team(team_pc, monkeypatch: pytest.MonkeyPatch):
+    """Ana on the new sync with Ben; rounds a call starts in the background are noted, not run."""
+    pc, ben, world = team_pc
+    spaces.install_for_tests(Team(pc.backend))
+    started: list[tuple[str, bool]] = []
+
+    def note_round(account: str, space: str, force: bool = False, on_done: Any = None) -> dict[str, Any]:
+        started.append((space, force))
+        return {"ok": True, "started": True}
+
+    monkeypatch.setattr(spaces, "sync_space", note_round)
+    yield pc, ben, world, started
+    spaces.reset_for_tests()
+
+
+def _conflict(pc: Any, ben: Any) -> None:
+    pc.data.put("card.pip", {"hp": 1})
+    pc.run()
+    ben.put_doc("card.pip", {"hp": 3})
+    pc.data.put("card.pip", {"hp": 2})
+    assert pc.run()["conflicts"] == 1
+
+
+def test_the_drawer_reads_people_locks_changes_conflicts_mode_and_head(team) -> None:
+    from backend.uefn_plugins import vcs_engine
+    from backend.uefn_plugins.ledger import LockUnit
+
+    pc, ben, _, _ = team
+    _conflict(pc, ben)
+    ben.client.lock("spaceT", TEAM, [LockUnit("doc:card.zed", "Zed")], "best", {})
+    editing = [{"unitName": "Zed", "actor": "agent", "ducky": "Builder", "since": 5.0}]
+    ben.client.beat("spaceT", {"label": "Ben's PC", "plugins": {TEAM: {"viewing": True, "editing": editing}}})
+    assert vcs_engine.beat(pc.account, "spaceT", pc.backend, [TEAM], force=True)["ok"]
+    pc.data.put("card.new", {"v": 1})
+    out = Api().plugin_scope_activity(TEAM)
+    assert out["ok"] and out["scope"]["kind"] == "shared" and out["state"] == "ok"
+    assert (out["head"], out["mode"], out["pending"], out["nextTry"], out["importing"]) == (2, "auto", 1, None, None)
+    people = {p["name"]: p for p in out["people"]}
+    assert people["Ana"]["me"] and not people["Ben"]["me"] and people["Ben"]["device"] == "Ben's PC"
+    assert people["Ben"]["plugins"][TEAM] == {"viewing": True, "editing": editing}
+    assert [(lk["unit"], lk["name"], lk["holder"], lk["mine"]) for lk in out["locks"]] == [
+        ("doc:card.zed", "Zed", "Ben", False)]
+    assert out["locks"][0]["leaseLeft"] > 200
+    assert [(c["kind"], c["key"], c["reason"], c["by"], c["theirsSeq"]) for c in out["conflicts"]] == [
+        ("doc", "card.pip", "changed", "Ben", 2)]
+    assert out["changes"]["incoming"] == 0 and out["changes"]["blocked"] == []
+    assert [(o["key"], o["state"]) for o in out["changes"]["outgoing"]] == [("card.new", "queued")]
+
+
+def test_lock_release_ask_and_break_from_the_drawer(team) -> None:
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins.ledger import LockUnit
+
+    pc, ben, world, _ = team
+    api = Api()
+    got = api.plugin_scope_lock(TEAM, "card.pip", "Pip")
+    assert (got["ok"], got["state"], got["unit"]) == (True, "granted", "doc:card.pip")
+    assert [(lk["unit"], lk["name"], lk["reason"]) for lk in space_vcs.locks(pc.account, "spaceT", TEAM)] == [
+        ("doc:card.pip", "Pip", "manual")]
+    theirs = ben.client.lock("spaceT", TEAM, [LockUnit("doc:card.pip")], "best", {})
+    assert type(theirs["doc:card.pip"]).__name__ == "LockInfo"
+    assert api.plugin_scope_unlock(TEAM, "doc:card.pip") == {"ok": True, "error": "", "unit": "doc:card.pip"}
+    assert space_vcs.locks(pc.account, "spaceT", TEAM) == [] and world.server.space("spaceT").locks == {}
+    ben.client.lock("spaceT", TEAM, [LockUnit("doc:card.zed", "Zed")], "best", {})
+    assert api.plugin_scope_ask(TEAM, "doc:card.zed")["ok"]
+    assert world.server.asks == [("spaceT", TEAM, "doc:card.zed", "u_ana")]
+    refused = api.plugin_scope_break(TEAM, "doc:card.zed")
+    assert refused["ok"] is False and "owners and admins" in refused["error"]
+    bad = api.plugin_scope_lock(TEAM, "../x")
+    assert bad == {"ok": False, "error": "invalid unit: '../x' (use doc:<key> or asset:<path>)"}
+
+
+def test_resolve_compares_and_keeps_mine(team) -> None:
+    pc, ben, _, started = team
+    _conflict(pc, ben)
+    api = Api()
+    diff = api.plugin_scope_resolve(TEAM, "doc", "card.pip", "compare")
+    assert diff["ok"] and '-  "hp": 3' in diff["diff"] and '+  "hp": 2' in diff["diff"]
+    assert api.plugin_scope_resolve(TEAM, "doc", "card.pip", "both")["ok"] is False
+    assert api.plugin_scope_resolve(TEAM, "doc", "card.pip", "mine") == {"ok": True}
+    assert started == [("spaceT", True)]  # what was kept goes out on a round
+    assert pc.run()["pushed"] == 1 and ben.doc("card.pip") == {"hp": 2}
+    gone = api.plugin_scope_resolve(TEAM, "doc", "card.pip", "theirs")
+    assert gone == {"ok": False, "error": "There is no conflict here any more."}
+
+
+def test_history_restore_and_mode(team) -> None:
+    pc, _, _, _ = team
+    api = Api()
+    pc.data.put("card.pip", {"hp": 1})
+    pc.run()
+    pc.data.put("card.pip", {"hp": 2})
+    pc.run()
+    hist = api.plugin_scope_history(TEAM)
+    assert hist["ok"] and [e["seq"] for e in hist["entries"]] == [2, 1]
+    assert hist["entries"][0]["items"] == [["doc", "card.pip"]]
+    versions = api.plugin_scope_history(TEAM, {"kind": "doc", "key": "card.pip", "limit": 1})
+    assert [e["seq"] for e in versions["entries"]] == [2] and versions["more"] is True
+    out = api.plugin_scope_restore(TEAM, {"items": [{"kind": "doc", "key": "card.pip", "seq": 1}]})
+    assert out["ok"] and out["seq"] == 3 and out["skipped"] == [] and pc.data.get("card.pip") == {"hp": 1}
+    out = api.plugin_scope_restore(TEAM, {"undoSeq": 3})
+    assert out["ok"] and pc.data.get("card.pip") == {"hp": 2}
+    assert api.plugin_scope_restore(TEAM, {})["ok"] is False
+    assert api.plugin_scope_mode(TEAM, "manual") == {"ok": True, "mode": "manual"}
+    assert Api().plugin_scope_activity(TEAM)["mode"] == "manual"
+    assert api.plugin_scope_mode(TEAM, "sometimes") == {"ok": False, "error": "Choose Auto or Manual."}
+
+
+def test_push_and_pull_now(team) -> None:
+    pc, ben, _, _ = team
+    api = Api()
+    api.plugin_scope_mode(TEAM, "manual")
+    pc.data.put("card.pip", {"hp": 1})
+    ben.put_doc("card.zed", {"hp": 7})
+
+    def wait_synced() -> None:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not any(e.get("synced") for e in api.pushed):
+            time.sleep(0.02)
+        assert any(e.get("synced") for e in api.pushed)
+        api.pushed.clear()
+
+    assert api.plugin_scope_push(TEAM, "Tuned Pip") == {"ok": True, "started": True}
+    wait_synced()
+    assert ben.doc("card.pip") == {"hp": 1} and pc.data.get("card.zed") is None  # Push only sends
+    assert ben.client.history("spaceT", TEAM).entries[0].message == "Tuned Pip"
+    assert api.plugin_scope_pull(TEAM) == {"ok": True, "started": True}
+    wait_synced()
+    assert pc.data.get("card.zed") == {"hp": 7}
+
+
+def test_a_refused_panel_write_says_who_holds_it(team) -> None:
+    from backend.uefn_plugins import vcs_engine
+    from backend.uefn_plugins.ledger import LockUnit
+
+    pc, ben, _, _ = team
+    ben.client.lock("spaceT", TEAM, [LockUnit("doc:card.pip", "Pip")], "best", {})
+    vcs_engine.refresh(pc.account, "spaceT", [TEAM], pc.backend)
+    out = Api().plugin_data(TEAM, "data.put", {"key": "card.pip", "value": {"hp": 1}})
+    assert (out["ok"], out["code"]) == (False, "locked") and out["error"].startswith("Pip is locked by Ben since ")
+    lock = {k: out["lock"][k] for k in ("unit", "name", "holder")}
+    assert lock == {"unit": "doc:card.pip", "name": "Pip", "holder": "Ben"}
+
+
+def test_unsent_changes_of_a_lost_space_are_saved_to_local(team) -> None:
+    pc, _, _, _ = team
+    api = Api()
+    pc.data.put("card.pip", {"hp": 2})
+    assert api.plugin_scope_save_unsent(TEAM) == {"ok": False, "error": "Only for a space you lost access to."}
+    repo.sync_put(pc.account, "spaceT", state="lost")
+    status = api.plugin_scope_activity(TEAM)
+    assert (status["state"], status["unsent"], status["unsentChosen"]) == ("lost", 1, False)
+    out = api.plugin_scope_save_unsent(TEAM)
+    assert out["ok"] and out["saved"] == [{"plugin": TEAM, "kind": "doc", "key": "card.pip", "localKey": "card.pip"}]
+    assert pc.data.personal().get("card.pip") == {"hp": 2}
+    status = api.plugin_scope_activity(TEAM)
+    assert (status["unsent"], status["unsentChosen"]) == (0, True)
+
+
+def test_a_copy_on_the_older_sync_has_no_locks_or_history(who, fake: Sending) -> None:
+    open_space(fake, who, "ana@x.org", "spaceT", "Alpha")
+    api = Api()
+    for out in (api.plugin_scope_lock(PLUGIN, "card.pip"), api.plugin_scope_history(PLUGIN),
+                api.plugin_scope_push(PLUGIN), api.plugin_scope_mode(PLUGIN, "manual")):
+        assert out == {"ok": False, "error": spaces.NO_LEDGER_ERROR}
+    status = api.plugin_scope_activity(PLUGIN)
+    assert (status["engine"], status["conflicts"]) == ("v1", [])
+    assert not {"head", "mode", "people", "locks"} & set(status)  # the drawer shows none of the new sync's tables

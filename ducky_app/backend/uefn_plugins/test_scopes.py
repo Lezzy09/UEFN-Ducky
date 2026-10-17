@@ -9,6 +9,9 @@ defaults; without a provider there is only Local.
 §13: another account can't read the DB or files; the owner reads them again after
 signing back in; old plaintext is sealed once; an offline restart works; no key
 yet = read-only, never plaintext.
+Team copies at the writer: a write from another process to an item someone else holds
+is refused with their name; a tool call or panel RPC is one change, made by the agent
+(and its ducky) or the person; a ``required`` prefix waits for its lock.
 """
 
 from __future__ import annotations
@@ -1099,3 +1102,184 @@ def test_a_plugin_test_hides_nothing_from_everyone_else(who: _Who) -> None:
     pool.shutdown()
     assert seen_after == [{"v": 1}]
     assert scopes.sandboxed_plugins() == frozenset()
+
+
+# --------------------------------------------------------------------------- team copies at the writer
+#
+# A team copy (the new sync): Ana on this PC, Ben a client of the same fake server.
+
+
+@pytest.fixture
+def team_pc(monkeypatch: pytest.MonkeyPatch):
+    """Ana's copy of ``cards`` in spaceT, already on the new sync (one round run), and Ben."""
+    from backend.uefn_plugins import data_crypto
+    from backend.uefn_plugins import ledger_conformance as conf
+    from backend.uefn_plugins.test_vcs_engine import PC, Ben
+    from frontend import duckyos_account
+
+    key = "https://uefnducky.org|ana@example.com"
+    data_crypto.reset_for_tests()
+    monkeypatch.setattr(duckyos_account, "account_key", lambda blob=None: key)
+    monkeypatch.setattr(data_crypto, "_fetch_adk", lambda: hashlib.sha256(b"adk/" + key.encode()).digest())
+    account = scopes.account_id()
+    repo.link_set(account, "cards", "spaceT")
+    repo.sync_put(account, "spaceT", label="Alpha", synced_at=time.time())
+    world = conf.FakeWorld()
+    pc = PC(world, account)
+    pc.run()
+    yield pc, Ben(world), world
+    scopes.forget_change_listeners("cards")
+    world.server.rmtree()
+    data_crypto.reset_for_tests()
+
+
+def test_a_write_from_another_process_to_an_item_someone_holds_is_refused_with_their_name(team_pc) -> None:
+    import os
+    import subprocess
+    from pathlib import Path
+
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import vcs_engine
+    from backend.uefn_plugins.ledger import LockUnit
+
+    pc, ben, _ = team_pc
+    pc.data.put("card.pip", {"hp": 1})
+    pc.run()
+    ben.client.lock("spaceT", "cards", [LockUnit("doc:card.pip", "Pip")], "best", {"doc:card.pip": 1})
+    vcs_engine.refresh(pc.account, "spaceT", ["cards"], pc.backend)  # heads: Ben holds it
+    assert space_vcs.foreign_lock(pc.account, "spaceT", "cards", "doc:card.pip")["holder_name"] == "Ben"
+    code = (
+        "import hashlib, sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "from frontend import duckyos_account\n"
+        "from backend.uefn_plugins import data_crypto, scopes\n"
+        "key = 'https://uefnducky.org|ana@example.com'\n"
+        "duckyos_account.account_key = lambda blob=None: key\n"
+        "data_crypto._fetch_adk = lambda: hashlib.sha256(b'adk/' + key.encode()).digest()\n"
+        "cards = scopes.PluginData('cards')\n"
+        "try:\n"
+        "    cards.put('card.pip', {'hp': 9})\n"
+        "    print('WROTE')\n"
+        "except scopes.ReadOnlyScope as exc:\n"
+        "    print('REFUSED', exc)\n"
+        "cards.put('card.zed', {'hp': 2})\n"
+        "print('ZED')\n"
+    )
+    app_dir = str(Path(__file__).resolve().parents[2])
+    out = subprocess.run([sys.executable, "-c", code, app_dir], capture_output=True, text=True, check=True,
+                         env=dict(os.environ), timeout=120).stdout
+    assert "REFUSED Pip is locked by Ben since" in out and "Your change wasn't saved." in out
+    assert "WROTE" not in out and "ZED" in out
+    assert pc.data.get("card.pip") == {"hp": 1} and pc.data.get("card.zed") == {"hp": 2}
+    # The same refusal here, as the panel bridge answers it (the bar offers Ask to release).
+    with pytest.raises(scopes.LockedOut) as caught:
+        scopes.panel_call("cards", "data.put", {"key": "card.pip", "value": {"hp": 3}})
+    assert caught.value.lock["holder"] == "Ben" and caught.value.lock["unit"] == "doc:card.pip"
+
+
+def test_a_tool_call_writing_three_docs_goes_out_as_one_change(team_pc, monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import host
+    from backend.workspace import identity
+
+    pc, ben, _ = team_pc
+    monkeypatch.setattr(host, "uefn_agent_tools_allowed", lambda pid: True)
+    api = host._PluginApi("cards")
+
+    def cards_tune_test(n: int) -> dict:
+        for i in range(3):
+            api.data.put(f"card.t{i}", {"n": n})
+        return {"ok": True}
+
+    tool = api.tool(name="cards_tune_test")(cards_tune_test)
+    token = identity.bind(identity.RunContext(conv_id="c1", ducky_name="Builder"))
+    try:
+        assert tool(n=1)["ok"]
+    finally:
+        identity.reset(token)
+        host._drop_plugin_runtime("cards", host.backend_module_name("cards"))
+    groups = {space_vcs.row(None, pc.account, "spaceT", "cards", "doc", f"card.t{i}")["group_id"] for i in range(3)}
+    assert len(groups) == 1 and "" not in groups
+    (group,) = space_vcs.groups(groups).values()
+    assert (group["open"], group["actor"], group["ducky"]) == (0, "agent", "Builder")  # closed when the call returned
+    pc.data.put("card.solo", {"x": 1})  # outside any call: the person's own change
+    assert pc.run()["pushed"] == 2
+    made = {(e.message, e.count, e.actor, e.ducky) for e in ben.client.history("spaceT", "cards").entries}
+    assert ("cards_tune_test", 3, "agent", "Builder") in made and ("", 1, "user", "") in made
+    acts = {(a["unit"], a["actor"], a["ducky"]) for a in space_vcs.activity(pc.account, "spaceT")}
+    assert ("doc:card.t0", "agent", "Builder") in acts and ("doc:card.solo", "user", "") in acts
+
+
+def test_a_panel_rpc_is_one_change_and_panel_saves_go_out_together(team_pc, monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import host
+
+    pc, ben, _ = team_pc
+    monkeypatch.setattr(host, "is_plugin_enabled", lambda pid: True)
+
+    def save_deck(name: str) -> dict:
+        PluginData("cards").put("deck.main", {"name": name})
+        PluginData("cards").put("deck.side", {"name": name})
+        return {"ok": True}
+
+    host.register_panel_rpc("cards", "save_deck", save_deck)
+    try:
+        host.call_panel_rpc("cards", "save_deck", {"name": "Starter"})
+    finally:
+        host._PANEL_RPC.pop("cards", None)
+    scopes.panel_call("cards", "data.put", {"key": "card.a", "value": {"v": 1}})
+    scopes.panel_call("cards", "data.put", {"key": "card.b", "value": {"v": 1}})
+    assert space_vcs.row(None, pc.account, "spaceT", "cards", "doc", "card.a")["group_id"] == ""
+    assert pc.run()["pushed"] == 2
+    made = sorted((e.message, e.count, e.actor) for e in ben.client.history("spaceT", "cards").entries)
+    assert made == [("", 2, "user"), ("save_deck", 2, "user")]
+
+
+def test_a_required_prefix_waits_for_its_lock_and_refuses_without_it(team_pc, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+    import threading
+
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import store, vcs_engine
+    from backend.uefn_plugins.ledger import LockUnit
+
+    pc, ben, _ = team_pc
+    folder = store.plugin_dir("cards")
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "plugin.json").write_text(json.dumps({"id": "cards", "data_locks": {"scene.": "required",
+                                                                                    "card.": "auto"}}))
+    monkeypatch.setattr(scopes, "LOCK_WAIT_S", 0.5)
+    try:
+        # Nobody answers (no background sync here): refused, nothing written.
+        with pytest.raises(scopes.ReadOnlyScope, match="needs a lock"):
+            pc.data.put("scene.duel", {"v": 1})
+        assert pc.data.get("scene.duel") is None
+
+        # Answered by the background sync: written once the lock is this PC's.
+        stop = threading.Event()
+
+        def serve() -> None:
+            while not stop.is_set():
+                vcs_engine.serve_lock_requests(pc.account, lambda space, plugin: pc.backend)
+                stop.wait(0.05)
+
+        server = threading.Thread(target=serve)
+        server.start()
+        try:
+            pc.data.put("scene.duel", {"v": 2})
+            ben.client.lock("spaceT", "cards", [LockUnit("doc:scene.arena", "Arena")], "best", {})
+            with pytest.raises(scopes.LockedOut, match="Arena is locked by Ben"):
+                pc.data.put("scene.arena", {"v": 1})
+        finally:
+            stop.set()
+            server.join(10)
+        assert pc.data.get("scene.duel") == {"v": 2}
+        mine = {lk["unit"]: lk["reason"] for lk in space_vcs.locks(pc.account, "spaceT", "cards") if lk["mine"]}
+        assert mine == {"doc:scene.duel": "auto"}
+
+        # An auto prefix asks for the lock and writes right away.
+        pc.data.put("card.pip", {"hp": 1})
+        assert pc.data.get("card.pip") == {"hp": 1}
+        assert space_vcs.lock_request_get(pc.account, "spaceT", "cards", "doc:card.pip")["state"] == "pending"
+    finally:
+        (folder / "plugin.json").unlink(missing_ok=True)

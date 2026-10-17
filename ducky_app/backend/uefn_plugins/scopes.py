@@ -23,6 +23,11 @@ scope but never sync: each space has its own on this PC.
 :func:`sandbox_begin` points one plugin at a throwaway scope for a plugin test: the
 test's own calls and the threads they start, that plugin only, so the test never
 touches the user's data and never hides it from anyone else.
+
+Writes to a shared copy also do what a team copy needs (:func:`write_group`): each plugin
+tool call or panel call is one write group (one changeset, with who made it); a write to
+an item someone else holds a lock on is refused with their name; a ``data_locks`` prefix
+of the manifest takes a lock first; and what changed here is noted for presence.
 """
 
 from __future__ import annotations
@@ -32,12 +37,18 @@ import contextvars
 import base64
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
 import threading
+import time
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 LOCAL = "_local"
 PERSONAL = "personal"
@@ -68,6 +79,15 @@ _SPACE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 class ReadOnlyScope(PermissionError):
     """The scope can't be written from this PC right now (the message says why)."""
+
+
+class LockedOut(ReadOnlyScope):
+    """A write refused because someone else holds a lock on the item. ``lock``: ``unit``,
+    ``name``, ``holder`` (their name) and ``since`` (epoch seconds)."""
+
+    def __init__(self, message: str, lock: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.lock = lock
 
 
 # --------------------------------------------------------------------------- ids
@@ -198,6 +218,28 @@ def _data_sharing(plugin: str) -> Any:
     flag = (load_plugin_manifest(plugin) or {}).get("data_sharing")
     _SHARING[str(path)] = (mtime, flag)
     return flag
+
+
+_LOCKS: dict[str, tuple[float, dict[str, str]]] = {}  # manifest path → (mtime, its valid "data_locks")
+
+
+def data_lock_policy(plugin: str, key: str) -> str:
+    """``auto``, ``required`` or '' for a doc key or file path of ``plugin``: the manifest's
+    ``"data_locks": {"<key prefix>": "auto" | "required"}``, the longest prefix winning.
+    Entries that aren't valid are ignored (``ducky_plugin_validate`` names them)."""
+    from backend.uefn_plugins.store import PLUGIN_MANIFEST, data_locks, load_plugin_manifest, plugin_dir
+
+    try:
+        path = plugin_dir(plugin) / PLUGIN_MANIFEST
+        mtime = path.stat().st_mtime
+    except (OSError, ValueError):
+        return ""
+    hit = _LOCKS.get(str(path))
+    if not hit or hit[0] != mtime:
+        hit = (mtime, data_locks(load_plugin_manifest(plugin) or {}))
+        _LOCKS[str(path)] = hit
+    matches = [prefix for prefix in hit[1] if key.startswith(prefix)]
+    return hit[1][max(matches, key=len)] if matches else ""
 
 
 def sharing_allowed(plugin: str) -> bool:
@@ -474,10 +516,13 @@ def purge_space(account: str, space: str) -> None:
         return
     from backend.store.repos import workflows
 
+    from backend.store.repos import space_vcs
+
     space_workflows = [r["key"] for r in repo.rows(account, space, "ducky.automations", "doc")]
     workflows.runtime_delete(account, space_workflows)
     repo.delete_scope(account, space)
     plugin_kv.delete_scope(account, space)
+    space_vcs.forget_space(account, space)  # its heads, changesets, conflicts, locks and merge bases
     try:  # plugins' api.search records of this copy go with its other data
         from backend.store.repos import search as search_repo
 
@@ -526,11 +571,9 @@ def write_asset_bytes(target: Path, data: bytes) -> None:
 
 
 def _write_asset(scope: dict[str, Any], plugin: str, path: str, sealed: bytes, *, size: int, sha256: str,
-                 dirty: bool) -> None:
+                 dirty: bool, group_id: str = "") -> None:
     """A local file write: the sealed bytes go to a uuid temp file next to the target, then
     the file and its row land in one transaction (nobody sees one without the other)."""
-    import uuid
-
     from backend.store.repos import plugin_data as repo
 
     target = asset_file(scope, plugin, path)
@@ -542,12 +585,291 @@ def _write_asset(scope: dict[str, Any], plugin: str, path: str, sealed: bytes, *
         temp.unlink(missing_ok=True)
         raise
     repo.put_file_row(scope["account"], scope["id"], plugin, path, temp_path=temp, target_path=target, size=size,
-                      sha256=sha256, dirty=dirty)
+                      sha256=sha256, dirty=dirty, group_id=group_id)
 
 
 def _closed(scope: dict[str, Any]) -> bool:
     """Access to the space is lost: its copy here reads as empty until access comes back."""
     return scope["state"] == "lost"
+
+
+# --------------------------------------------------------------------------- write groups + team writes
+#
+# One plugin tool call, panel RPC or panel data call is one write group: what it writes to
+# a shared copy goes out as one changeset, named after the call and made by the person or
+# by an agent (with its ducky's name). A group is stored (space_groups) only once it writes
+# to a shared copy, and closed when the call returns; its rows wait until then.
+
+LOCK_WAIT_S = 3.0  # a write to a ``required`` prefix waits this long for its lock
+AUTO_ASK_AGAIN_S = 30.0  # an ``auto`` lock refused is asked for again after this
+ACTIVITY_EVERY_S = 10.0  # one activity note per unit and writer this often (presence reads 2 minutes)
+REFUSED_EVERY_S = 10.0  # one "write refused" event per unit this often
+
+
+@dataclass
+class WriteGroup:
+    id: str
+    plugin: str
+    actor: str = "user"  # user | agent
+    ducky: str = ""
+    message: str = ""
+    # A panel's own data.* call (one write each): its rows go out with the person's other
+    # edits instead of one changeset per save.
+    panel: bool = False
+    stored: bool = False
+    closed: bool = False
+
+
+_GROUPS: contextvars.ContextVar[dict[str, WriteGroup]] = contextvars.ContextVar("plugin_write_groups", default={})
+_NOTED: dict[tuple[str, ...], float] = {}  # (account, space, plugin, unit, actor, ducky) → last activity note
+_REFUSED: dict[tuple[str, str], float] = {}  # (plugin, unit) → last refused-write event
+_NOTE_LOCK = threading.Lock()
+
+
+def caller(default: str = "user") -> tuple[str, str]:
+    """``(actor, ducky)`` of the code running now: ``agent`` with the ducky's name inside an
+    agent's run (bound or handed down to a coding agent), ``agent`` inside a run that limits
+    its plugin tools, else ``default``."""
+    try:
+        from backend.workspace.identity import resolve_context
+
+        ctx = resolve_context()
+    except Exception:  # noqa: BLE001 — attribution never fails a call
+        ctx = None
+    if ctx is not None:
+        return "agent", str(ctx.ducky_name or "")
+    try:
+        from backend.uefn_plugins.host import _ACTIVE_UEFN_AGENT_IDS
+
+        if _ACTIVE_UEFN_AGENT_IDS.get() is not None:
+            return "agent", ""
+    except Exception:  # noqa: BLE001
+        pass
+    return default, ""
+
+
+@contextlib.contextmanager
+def write_group(plugin: str, *, actor: str = "user", ducky: str = "", message: str = "", panel: bool = False):
+    """Everything ``plugin`` writes inside the block is one group. A group already open for
+    the plugin (a panel RPC calling a tool) takes the inner writes too."""
+    groups = _GROUPS.get()
+    outer = groups.get(plugin)
+    if outer is not None and not outer.closed:
+        yield outer
+        return
+    group = WriteGroup(uuid.uuid4().hex, plugin, actor if actor in ("user", "agent") else "user", str(ducky or "")[:80],
+                       str(message or "")[:200], panel)
+    token = _GROUPS.set({**groups, plugin: group})
+    try:
+        yield group
+    finally:
+        group.closed = True
+        try:
+            _GROUPS.reset(token)
+        except ValueError:  # left from another context: drop just this group
+            _GROUPS.set({k: g for k, g in _GROUPS.get().items() if g is not group})
+        if group.stored:
+            try:
+                from backend.store.repos import space_vcs
+
+                space_vcs.group_close(group.id)
+            except Exception:  # noqa: BLE001 — the scheduler closes groups left open
+                _log.warning("closing write group %s failed", group.id, exc_info=True)
+
+
+def open_group(plugin: str) -> WriteGroup | None:
+    group = _GROUPS.get().get(plugin)
+    return group if group is not None and not group.closed else None
+
+
+def _clock(at: float) -> str:
+    t = time.localtime(at)
+    return f"{t.tm_hour % 12 or 12}:{t.tm_min:02d} {'AM' if t.tm_hour < 12 else 'PM'}"
+
+
+def _unit_label(unit: str) -> str:
+    return unit.split(":", 1)[1] if ":" in unit else unit
+
+
+def _locked_out(plugin: str, unit: str, held: dict[str, Any]) -> LockedOut:
+    """The refusal of a write to ``unit`` while ``held`` (someone else's live lock) holds it.
+    Panels show it from the answer; anyone else's refusal (an agent's tool call) is told to
+    the app, so the plugin's bar and the alerts say who has it."""
+    holder = str(held.get("holder_name") or held.get("holder_user") or "someone")
+    name = str(held.get("name") or _unit_label(unit))
+    since = float(held.get("since") or 0.0)
+    lock = {"unit": unit, "name": name, "holder": holder, "since": since}
+    group = open_group(plugin)
+    if group is None or not group.panel:
+        now = time.monotonic()
+        with _NOTE_LOCK:
+            fresh = now - _REFUSED.get((plugin, unit), float("-inf")) >= REFUSED_EVERY_S
+            if fresh:
+                _REFUSED[(plugin, unit)] = now
+        if fresh:
+            try:
+                from frontend.ui_web.agent_modes import push_ui_event
+
+                push_ui_event({"type": "plugin_write_refused", "plugin_id": plugin, "unit": unit, "unit_name": name,
+                               "holder": holder, "since": since})
+            except Exception:  # noqa: BLE001 — the refusal itself still says it
+                _log.debug("telling the app about a refused write failed", exc_info=True)
+    when = f" since {_clock(since)}" if since else ""
+    return LockedOut(f"{name} is locked by {holder}{when}. Your change wasn't saved.", lock)
+
+
+def _lock_wanted(scope: dict[str, Any], plugin: str, unit: str, name: str, *, wait: bool) -> None:
+    """A ``data_locks`` prefix: ask the background sync for the lock (a lock request), and for
+    ``required`` wait for it (refused without it)."""
+    from backend.store.repos import space_vcs
+
+    account, space = scope["account"], scope["id"]
+    if any(lk["unit"] == unit and lk["mine"] for lk in space_vcs.locks(account, space, plugin)):
+        return
+    req = space_vcs.lock_request_get(account, space, plugin, unit)
+    age = time.time() - float(req["created"] or 0.0) if req else float("inf")
+    pending = req is not None and req["state"] == "pending" and age < 3 * LOCK_WAIT_S  # else nobody served it
+    if not pending and (wait or age >= AUTO_ASK_AGAIN_S):  # an auto lock refused lately isn't asked for on every write
+        space_vcs.lock_request_add(account, space, plugin, unit, name)
+    if not wait:
+        return
+    deadline = time.monotonic() + LOCK_WAIT_S
+    while True:
+        req = space_vcs.lock_request_get(account, space, plugin, unit)
+        state = str(req["state"]) if req else ""
+        if state == "granted":
+            return
+        if state == "refused" or time.monotonic() >= deadline:
+            held = space_vcs.foreign_lock(account, space, plugin, unit)
+            if held:
+                raise _locked_out(plugin, unit, held)
+            why = str(req["answer"] or "") if req and state == "refused" else "no answer in time"
+            raise ReadOnlyScope(f"{name} needs a lock before it changes, and it couldn't be locked ({why}). "
+                                "Your change wasn't saved.")
+        time.sleep(0.1)
+
+
+def _team_write(scope: dict[str, Any], plugin: str, kind: str, key: str) -> str | None:
+    """Before a write to a shared copy on the new sync (a team copy): refused while someone
+    else holds the item's lock; a ``data_locks`` prefix takes the lock first; the write
+    group, if one is open, is stored. Returns the group id ('' for none), or None for a
+    copy on the older sync (no locks, groups or presence there)."""
+    from backend.store.repos import space_vcs
+
+    account, space = scope["account"], scope["id"]
+    head = space_vcs.head_get(account, space, plugin)
+    if head["engine"] != "v2":
+        return None
+    if head["state"] == "paused":  # the new sync is switched off on the server, or the space is paused
+        why = head["error"] or f"{scope.get('label') or 'This space'} is paused"
+        raise ReadOnlyScope(f"{why}. Read-only.")
+    unit = f"{kind}:{key}"
+    held = space_vcs.foreign_lock(account, space, plugin, unit)
+    if held:
+        raise _locked_out(plugin, unit, held)
+    policy = data_lock_policy(plugin, key)
+    if policy:
+        _lock_wanted(scope, plugin, unit, key, wait=policy == "required")
+    group = open_group(plugin)
+    if group is None or group.panel:
+        return ""
+    if not group.stored:
+        space_vcs.group_open(group.id, plugin, actor=group.actor, ducky=group.ducky, message=group.message)
+        group.stored = True
+    return group.id
+
+
+def _note_write(scope: dict[str, Any], plugin: str, kind: str, key: str) -> None:
+    """A shared item changed here: presence says who is editing it (at most one note per
+    unit and writer every few seconds)."""
+    group = open_group(plugin)
+    actor, ducky = (group.actor, group.ducky) if group is not None else caller()
+    unit = f"{kind}:{key}"
+    seen = (scope["account"], scope["id"], plugin, unit, actor, ducky)
+    now = time.monotonic()
+    with _NOTE_LOCK:
+        if now - _NOTED.get(seen, float("-inf")) < ACTIVITY_EVERY_S:
+            return
+        if len(_NOTED) > 2000:
+            _NOTED.clear()
+        _NOTED[seen] = now
+    try:
+        from backend.store.repos import space_vcs
+
+        space_vcs.activity_note(scope["account"], scope["id"], plugin, unit, actor=actor, ducky=ducky)
+    except Exception:  # noqa: BLE001 — the write itself landed
+        _log.debug("noting activity on %s failed", unit, exc_info=True)
+
+
+# --------------------------------------------------------------------------- change callbacks
+#
+# ``api.data.on_change(callback)``: a pull that changed a plugin's data calls
+# ``callback(keys)`` (doc keys and file paths) in every process that loaded the plugin.
+# The app process (where pulls run) calls it right away; any other process (the MCP
+# bridge) hears it before the plugin's next tool call, from the plugin's epoch row.
+
+_CHANGE_LISTENERS: dict[str, list[Any]] = {}
+_CHANGE_SEEN: dict[str, int] = {}  # plugin → epoch delivered in this process
+_CHANGE_LOCK = threading.Lock()
+
+
+def add_change_listener(plugin: str, callback: Any) -> None:
+    if not callable(callback):
+        raise TypeError("on_change needs a function: callback(keys)")
+    from backend.store.repos import space_vcs
+
+    epoch = space_vcs.change_log(plugin)["epoch"]
+    with _CHANGE_LOCK:
+        _CHANGE_LISTENERS.setdefault(plugin, []).append(callback)
+        _CHANGE_SEEN.setdefault(plugin, epoch)  # only changes from now on
+
+
+def forget_change_listeners(plugin: str) -> None:
+    """The plugin unloaded: its callbacks belong to modules that are gone."""
+    with _CHANGE_LOCK:
+        _CHANGE_LISTENERS.pop(plugin, None)
+        _CHANGE_SEEN.pop(plugin, None)
+
+
+def _call_listeners(plugin: str, listeners: list[Any], keys: list[str]) -> None:
+    import logging
+
+    for callback in listeners:
+        try:
+            callback(list(keys))
+        except Exception:  # noqa: BLE001 — a plugin's callback never breaks a pull or a tool call
+            logging.getLogger(__name__).warning("%s: data on_change callback failed", plugin, exc_info=True)
+
+
+def deliver_data_changes(plugin: str) -> int:
+    """What pulls changed since this process last looked, to the plugin's callbacks: after a
+    pull here, and before the plugin's tool calls for pulls in another process. Every entry
+    of the plugin's change log since then, so a pull elsewhere is never jumped over.
+    Returns how many keys were delivered."""
+    with _CHANGE_LOCK:
+        listeners = list(_CHANGE_LISTENERS.get(plugin, ()))
+        seen = _CHANGE_SEEN.get(plugin)
+    if not listeners:
+        return 0
+    from backend.store.repos import space_vcs
+
+    log = space_vcs.change_log(plugin)
+    with _CHANGE_LOCK:
+        seen = _CHANGE_SEEN.get(plugin, seen)
+        if seen is None or log["epoch"] <= seen:
+            if seen is None:
+                _CHANGE_SEEN[plugin] = log["epoch"]
+            return 0
+        _CHANGE_SEEN[plugin] = log["epoch"]
+    entries = [c for c in log["changes"] if int(c[0]) > seen]
+    if seen < log["trimmed"] or any(c[1] is None for c in entries):
+        data = PluginData(plugin)  # too much changed to list: every key
+        keys = data.keys() + [f["path"] for f in data.files()]
+    else:
+        keys = sorted({k for c in entries for k in c[1]})
+    if keys:
+        _call_listeners(plugin, listeners, keys)
+    return len(keys)
 
 
 class PluginData:
@@ -581,6 +903,11 @@ class PluginData:
 
     def scope(self) -> dict[str, Any]:
         return scope_view(self._scope())
+
+    def on_change(self, callback: Any) -> None:
+        """``callback(keys)`` after a sync brought changes to this plugin's data (doc keys
+        and file paths). Register once in ``register(api)``; drop caches of those keys."""
+        add_change_listener(self.plugin_id, callback)
 
     def _writable(self, scope: dict[str, Any] | None = None) -> dict[str, Any]:
         s = scope or self._scope()
@@ -635,8 +962,12 @@ class PluginData:
         old = repo.get(s["account"], s["id"], self.plugin_id, "doc", key)
         if old and not old["deleted"] and old["sha256"] == sha:
             return {"ok": True, "key": key, "changed": False}
+        shared = s["kind"] == "shared" and not sensitive
+        group = _team_write(s, self.plugin_id, "doc", key) if shared else None
         repo.put(s["account"], s["id"], self.plugin_id, "doc", key, value=seal_text(raw.decode("utf-8"), s["account"]),
-                 size=len(raw), sha256=sha, dirty=s["kind"] == "shared" and not sensitive, sensitive=sensitive)
+                 size=len(raw), sha256=sha, dirty=shared, sensitive=sensitive, group_id=group or "")
+        if group is not None:
+            _note_write(s, self.plugin_id, "doc", key)
         return {"ok": True, "key": key, "changed": True}
 
     def keys(self, prefix: str = "") -> list[str]:
@@ -673,9 +1004,13 @@ class PluginData:
         old = repo.get(s["account"], s["id"], self.plugin_id, "doc", key)
         if not old or old["deleted"]:
             return False
+        shared = s["kind"] == "shared"
+        group = _team_write(s, self.plugin_id, "doc", key) if shared else None
         # Always a tombstone in a shared copy: the server may hold the doc even at rev 0
         # (a push in flight, a lost answer), and a delete of an item it never had is harmless.
-        repo.remove(s["account"], s["id"], self.plugin_id, "doc", key, tombstone=s["kind"] == "shared")
+        repo.remove(s["account"], s["id"], self.plugin_id, "doc", key, tombstone=shared, group_id=group or "")
+        if group is not None:
+            _note_write(s, self.plugin_id, "doc", key)
         return True
 
     # -- files (assets)
@@ -696,7 +1031,11 @@ class PluginData:
         old = repo.get(s["account"], s["id"], self.plugin_id, "asset", path)
         if old and not old["deleted"] and old["sha256"] == sha and target.is_file():
             return {"ok": True, "path": path, "changed": False}
-        _write_asset(s, self.plugin_id, path, seal_bytes(data, s["account"]), size=len(data), sha256=sha, dirty=shared)
+        group = _team_write(s, self.plugin_id, "asset", path) if shared else None
+        _write_asset(s, self.plugin_id, path, seal_bytes(data, s["account"]), size=len(data), sha256=sha, dirty=shared,
+                     group_id=group or "")
+        if group is not None:
+            _note_write(s, self.plugin_id, "asset", path)
         return {"ok": True, "path": path, "changed": True, "size": len(data)}
 
     def has_file(self, path: str) -> bool:
@@ -737,14 +1076,24 @@ class PluginData:
         old = repo.get(s["account"], s["id"], self.plugin_id, "asset", path)
         if not old or old["deleted"]:
             return False
+        shared = s["kind"] == "shared"
+        group = _team_write(s, self.plugin_id, "asset", path) if shared else None
         # The row first, then the file, in one transaction: never a live row without its file.
-        repo.remove(s["account"], s["id"], self.plugin_id, "asset", path, tombstone=s["kind"] == "shared",
-                    target_path=target)
+        repo.remove(s["account"], s["id"], self.plugin_id, "asset", path, tombstone=shared, target_path=target,
+                    group_id=group or "")
+        if group is not None:
+            _note_write(s, self.plugin_id, "asset", path)
         return True
 
 
 def panel_call(plugin_id: str, op: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Panel bridge entry (``data.*`` / ``files.*`` / ``scope.get``): one dispatcher, JSON in and out."""
+    """Panel bridge entry (``data.*`` / ``files.*`` / ``scope.get``): one dispatcher, JSON in and
+    out. A write is the person's own (a user write group)."""
+    with write_group(plugin_id, actor="user", message=f"Panel {op}", panel=True):
+        return _panel_op(plugin_id, op, params)
+
+
+def _panel_op(plugin_id: str, op: str, params: dict[str, Any] | None) -> dict[str, Any]:
     p = params or {}
     data = PluginData(plugin_id)
     if op == "scope.get":

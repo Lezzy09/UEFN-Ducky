@@ -8,6 +8,7 @@ import { BRIDGE_CHANNEL } from "./constants";
 import { getApi, isRemote } from "../hooks/usePanelApi";
 import { pluginPrefsKey } from "../hooks/pluginPrefsStorage";
 import { getPluginThemeVars } from "./pluginTheme";
+import { alertRefusedWrite, refusedFromResult } from "./scopeAlerts";
 import { pluginUiTabId, type BridgeRequest, type BridgeResponse } from "./types";
 
 export type BridgeContext = {
@@ -342,6 +343,8 @@ function hostDataHandler(op: string): BridgeHandler {
     const api = getApi();
     if (!api?.plugin_data) throw new Error("plugin data unavailable");
     const out = await api.plugin_data(ctx.pluginId, op, params);
+    const refused = refusedFromResult(ctx.pluginId, out);
+    if (refused) alertRefusedWrite(refused);
     if (out?.ok === false && out.error) throw new Error(String(out.error));
     return out;
   };

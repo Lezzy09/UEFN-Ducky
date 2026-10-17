@@ -77,6 +77,51 @@ def appdata_ai_plugins_dir() -> Path:
     return appdata_dir() / AI_PLUGINS_DIR
 
 
+# Manifest ``"data_locks": {"<key prefix>": "auto" | "required"}``: which of a plugin's
+# shared docs and files one person holds while they edit them. ``auto`` takes the lock on
+# the first change (the write goes ahead either way); ``required`` waits for it and refuses
+# the write without it. A prefix is the start of a doc key or file path ('' for all).
+DATA_LOCK_POLICIES = ("auto", "required")
+_DATA_LOCK_PREFIX_RE = re.compile(r"^[a-z0-9._/-]{0,256}$")
+
+
+def manifest_data_errors(manifest: dict[str, Any]) -> list[str]:
+    """What is wrong with a manifest's ``data_sharing`` and ``data_locks``, each with the fix."""
+    errors: list[str] = []
+    sharing = manifest.get("data_sharing")
+    if "data_sharing" in manifest and not isinstance(sharing, bool):
+        errors.append(
+            f'plugin.json "data_sharing" is {sharing!r}: use true (offer a shared space even before the plugin '
+            "stores data) or false (always Local), or leave it out."
+        )
+    if "data_locks" not in manifest:
+        return errors
+    locks = manifest.get("data_locks")
+    if not isinstance(locks, dict):
+        return [*errors, 'plugin.json "data_locks" must be an object: {"<doc key or file path prefix>": "auto" or '
+                         '"required"}.']
+    for prefix, policy in locks.items():
+        if not _DATA_LOCK_PREFIX_RE.match(str(prefix)):
+            errors.append(
+                f'plugin.json "data_locks" key {prefix!r} isn\'t the start of a doc key or file path: use a-z, 0-9, '
+                "and . _ / - (256 at most)."
+            )
+        elif policy not in DATA_LOCK_POLICIES:
+            errors.append(f'plugin.json "data_locks" {prefix!r} is {policy!r}: use "auto" or "required".')
+    if locks and sharing is False:
+        errors.append('plugin.json has "data_locks" but "data_sharing": false: nothing is shared, so remove one.')
+    return errors
+
+
+def data_locks(manifest: dict[str, Any]) -> dict[str, str]:
+    """The valid entries of a manifest's ``data_locks`` (``{prefix: policy}``)."""
+    locks = manifest.get("data_locks")
+    if not isinstance(locks, dict) or manifest.get("data_sharing") is False:
+        return {}
+    return {str(prefix): str(policy) for prefix, policy in locks.items()
+            if _DATA_LOCK_PREFIX_RE.match(str(prefix)) and policy in DATA_LOCK_POLICIES}
+
+
 def normalize_plugin_id(plugin_id: str) -> str:
     pid = (plugin_id or "").strip().lower().replace(" ", "_")
     if not _PLUGIN_ID_RE.match(pid):
@@ -866,6 +911,11 @@ def import_plugin_from_bytes(
     if too_old:
         # Nothing is written: the installed version (if any) keeps working.
         return {"ok": False, "code": "needs_newer_app", "error": too_old}
+    # A bad "data_locks" would lock the wrong items, or none: refused like a bad zip.
+    # ("data_sharing" was read loosely before it was checked: only the lint names it.)
+    bad_locks = [e for e in manifest_data_errors(manifest) if '"data_locks"' in e]
+    if bad_locks:
+        return {"ok": False, "error": " ".join(bad_locks)}
 
     # Refuse a Store zip whose signature does not match it (tamper check before write).
     try:

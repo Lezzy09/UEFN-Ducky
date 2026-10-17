@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render as renderPlain, screen, waitFor, within } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { ConfirmModalProvider } from "../../../contexts/ConfirmModalContext";
 import { PluginDataPanel, totalsText } from "./PluginDataPanel";
 import type { PluginScopeStatus } from "../../../types/panel";
 
@@ -10,8 +12,11 @@ const api = vi.hoisted(() => ({
   plugin_scope_set: vi.fn(),
   plugin_data_copy_to_space: vi.fn(),
   plugin_data_open_web: vi.fn(),
+  plugin_scope_unlock: vi.fn(),
 }));
 vi.mock("../../../hooks/usePanelApi", () => ({ getApi: () => api }));
+
+const render = (ui: ReactElement) => renderPlain(<ConfirmModalProvider>{ui}</ConfirmModalProvider>);
 
 const LOCAL: PluginScopeStatus = {
   ok: true, visible: true, canChange: true, state: "ok",
@@ -90,6 +95,28 @@ describe("Plugins page → Data", () => {
     render(<PluginDataPanel pluginId="brainrot-tcg" name="BrainRot TCG" />);
     expect(await screen.findByText("Waiting for space data. Read-only until it arrives.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Copy Local data/ })).toBeNull();
+  });
+
+  it("a shared copy shows the scope bar's drawer, and its actions work here too", async () => {
+    api.plugin_scope_unlock.mockResolvedValue({ ok: true });
+    api.plugin_scope_status.mockResolvedValue({
+      ...SHARED, head: 4, locks: [{ unit: "doc:deck", name: "deck", mine: true }],
+      changes: { outgoing: [{ kind: "doc", key: "deck", state: "queued" }] },
+    });
+    render(<PluginDataPanel pluginId="brainrot-tcg" name="BrainRot TCG" />);
+    const drawer = await screen.findByRole("region", { name: "Sync details: Alpha Studio" });
+    expect(within(drawer).getByText("Queued")).toBeTruthy();
+    fireEvent.click(within(drawer).getByRole("button", { name: "Release deck" }));
+    await waitFor(() => expect(api.plugin_scope_unlock).toHaveBeenCalledWith("brainrot-tcg", "doc:deck"));
+    // The panel re-reads its status after the action.
+    await waitFor(() => expect(api.plugin_scope_status.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("a Local copy has no drawer", async () => {
+    api.plugin_scope_status.mockResolvedValue(LOCAL);
+    render(<PluginDataPanel pluginId="brainrot-tcg" name="BrainRot TCG" />);
+    expect(await screen.findByText("Only on this PC, for your account.")).toBeTruthy();
+    expect(screen.queryByRole("region")).toBeNull();
   });
 
   it("words the totals", () => {

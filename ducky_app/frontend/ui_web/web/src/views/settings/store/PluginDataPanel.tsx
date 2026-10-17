@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { getApi } from "../../../hooks/usePanelApi";
 import { installPanelPushBus, subscribePanelPush } from "../../../hooks/usePanelPushBus";
 import { Icons } from "../../../icons/Icons";
+import { PluginScopeDrawer } from "../../../plugin-ui/PluginScopeDrawer";
 import { formatBytes, kindTitle, LOCAL_ONLY_TEXT, syncText } from "../../../plugin-ui/scopeBarText";
 import type { PluginDataTotals, PluginScopeChoice, PluginScopeStatus } from "../../../types/panel";
 
@@ -26,6 +27,7 @@ type Confirm = { kind: "switch"; choice: PluginScopeChoice } | { kind: "copy" };
 /**
  * Plugins page → a plugin → Data: where its data lives (Local or one shared space, picked
  * per plugin), how much there is, and a one-way copy of the Local data into that space.
+ * A shared copy also shows the scope bar's drawer (people, locks, changes, history, mode).
  * Every space keeps its own copy; nothing moves between spaces. Renders nothing while the
  * account has no shared spaces to offer.
  */
@@ -195,6 +197,7 @@ export function PluginDataPanel({ pluginId, name }: { pluginId: string; name: st
       ) : null}
 
       {message ? <p className="ds-data-help" role="status">{message}</p> : null}
+      {shared ? <PluginScopeDrawer pluginId={pluginId} status={status} onChanged={() => refresh()} /> : null}
       <p className="ds-data-help">Each {kind} keeps its own copy. Data never moves between {kind}s.</p>
     </div>
   );

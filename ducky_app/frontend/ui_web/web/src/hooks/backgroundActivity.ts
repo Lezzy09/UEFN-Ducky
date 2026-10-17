@@ -13,6 +13,8 @@ export type BackgroundJob = {
   phase: BackgroundJobPhase;
   ts: number;
   cancelable?: boolean;
+  /** The label of the row's own button (Release); pressing it is heard through `onBackgroundJobAction`. */
+  action?: string;
   convId?: string;
   toolId?: string;
   runId?: string;
@@ -109,6 +111,7 @@ export function upsertBackgroundJob(patch: Partial<BackgroundJob> & { id: string
     startedAt: patch.startedAt ?? prev?.startedAt,
     endedAt: patch.endedAt ?? prev?.endedAt,
     cancelable: patch.cancelable !== undefined ? Boolean(patch.cancelable) : prev?.cancelable,
+    action: patch.action !== undefined ? patch.action || undefined : prev?.action,
   };
   const rest = snapshot.jobs.filter((j) => j.id !== id);
   const all = [next, ...rest];
@@ -154,6 +157,22 @@ export function clearFinishedBackgroundJobs(): void {
 export function requestBackgroundJobCancel(id: string): void {
   if (!id) return;
   window.dispatchEvent(new CustomEvent(ACTION_EVENT, { detail: { id, action: "cancel" } }));
+}
+
+/** A row's own button (`job.action`) was pressed. */
+export function requestBackgroundJobAction(id: string): void {
+  if (!id) return;
+  window.dispatchEvent(new CustomEvent(ACTION_EVENT, { detail: { id, action: "act" } }));
+}
+
+/** Hear a row's own button: `fn(id)`. Returns the unsubscribe. */
+export function onBackgroundJobAction(fn: (id: string) => void): () => void {
+  const listener = (ev: Event) => {
+    const detail = (ev as CustomEvent<{ id?: string; action?: string }>).detail;
+    if (detail?.action === "act" && detail.id) fn(detail.id);
+  };
+  window.addEventListener(ACTION_EVENT, listener);
+  return () => window.removeEventListener(ACTION_EVENT, listener);
 }
 
 export function countWorkingBackgroundJobs(jobs: BackgroundJob[]): number {
