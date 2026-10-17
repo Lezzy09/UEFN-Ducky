@@ -45,6 +45,7 @@ import {
   MIN_CHAT_COLUMN_WIDTH,
   useChatColumnWidthSetting,
 } from "../../hooks/useChatColumnWidth";
+import { useStickyQuestions } from "../../hooks/useStickyQuestions";
 import { usePluginContributions } from "../../hooks/usePluginContributions";
 import { ChoiceDropdown } from "../../components/ChoiceDropdown";
 import { SoundsSection } from "../../sfx/SoundsSection";
@@ -67,6 +68,7 @@ const RESET_ICON = (
 );
 
 function ChatReferenceToggles() {
+  const { sticky, setSticky } = useStickyQuestions();
   const [mentions, setMentions] = useState(true);
   const [slashRefs, setSlashRefs] = useState(true);
   useEffect(() => {
@@ -112,6 +114,13 @@ function ChatReferenceToggles() {
           publish(mentions, checked);
           void getApi()?.save_agent_settings({ chat_slash_references_enabled: checked });
         }}
+      />
+      <SettingsToggleRow
+        id="toggle-chat-sticky-questions"
+        label="Sticky questions"
+        description="Pin each question to the top of the chat while you scroll through its answer. Off: questions stay where they were asked."
+        checked={sticky}
+        onChange={setSticky}
       />
     </div>
   );

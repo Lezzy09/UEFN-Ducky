@@ -2427,18 +2427,25 @@
   contain: layout;
 }
 
-/* Query pins under the top edge while its own turn scrolls (Cursor-style).
-   Sticky is scoped to .virtual-chat-turn, so the next turn's query pushes the
-   pinned one out natively — no JS handoff needed.
-   Height must NOT change on stuck — clamping here caused a scroll feedback loop. */
+/* By default a query stays where it was asked (relative keeps the plan popup's
+   stacking above the next turn). */
 .virtual-chat-turn-query {
   width: 100%;
-  position: sticky;
-  top: 5px;
+  position: relative;
   z-index: 6;
   contain: none;
   overflow: visible;
   container-type: scroll-state;
+}
+
+/* Settings → Appearance → Sticky questions: the query pins under the top edge
+   while its own turn scrolls (Cursor-style). Sticky is scoped to
+   .virtual-chat-turn, so the next turn's query pushes the pinned one out
+   natively — no JS handoff needed.
+   Height must NOT change on stuck — clamping here caused a scroll feedback loop. */
+.virtual-chat-message-list-root.is-sticky-questions .virtual-chat-turn-query {
+  position: sticky;
+  top: 5px;
 }
 
 /* Same fill + edge as the composer textarea box below. */
@@ -7466,11 +7473,30 @@
   max-height: min(70vh, calc(100% - 72px));
 }
 
-.message-bubble-attachment-video {
-  max-width: 360px;
-  max-height: 240px;
-  border-radius: 6px;
-  display: block;
+/* A video in a question is the same small thumb as a picture, with a play badge. */
+.message-bubble-attachment-video-btn {
+  position: relative;
+}
+.message-bubble-attachment-video-badge {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  pointer-events: none;
+}
+.message-bubble-attachment-video-badge svg {
+  width: 10px;
+  height: 10px;
+}
+.message-bubble-video-frames {
+  margin-top: 8px;
 }
 .message-bubble-video-frames summary {
   cursor: pointer;

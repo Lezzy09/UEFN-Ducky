@@ -35,11 +35,6 @@ function attachmentSrc(att: MessageAttachmentDto): string | null {
   return `data:${mime};base64,${att.data_base64}`;
 }
 
-function formatSeconds(t: number): string {
-  const s = Math.floor(t);
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-}
-
 /** Read-only thumbnails/chips for the message's attachments. */
 export function AttachmentStrip({
   images,
@@ -77,28 +72,45 @@ export function AttachmentStrip({
           </button>
         );
       })}
-      {videos.map((att) => (
-        <div key={`vid-${att.name}-${att.media_url ?? ""}`} className="message-bubble-attachment-video-wrap">
-          {att.media_url ? (
-            <video src={att.media_url} controls preload="metadata" className="message-bubble-attachment-video" />
-          ) : (
-            <span className="message-bubble-attachment-file-name">{att.name}</span>
-          )}
-          {att.frames && att.frames.length > 0 ? (
-            <details className="message-bubble-video-frames">
-              <summary>{att.frames.length} frames sent to the AI</summary>
-              <div className="message-bubble-video-frames-grid">
-                {att.frames.map((f, i) => (
-                  <figure key={f.media_url ?? i}>
-                    {f.media_url ? <img src={f.media_url} alt={`Frame ${i + 1}`} /> : null}
-                    <figcaption>{formatSeconds(f.t_s)}</figcaption>
-                  </figure>
-                ))}
-              </div>
-            </details>
-          ) : null}
-        </div>
-      ))}
+      {videos.map((att) => {
+        // Same small thumb as a picture; the player and the frames open in the preview.
+        const poster = att.frames?.find((f) => f.media_url)?.media_url;
+        if (!poster && !att.media_url) {
+          return (
+            <span key={`vid-${att.name}`} className="message-bubble-attachment-file">
+              <span className="message-bubble-attachment-file-icon">
+                <Icons.Play />
+              </span>
+              <span className="message-bubble-attachment-file-name">{att.name}</span>
+            </span>
+          );
+        }
+        return (
+          <button
+            key={`vid-${att.name}-${att.media_url ?? ""}`}
+            type="button"
+            className="message-bubble-attachment-btn message-bubble-attachment-video-btn"
+            onClick={
+              onPreview
+                ? (e) => {
+                    e.stopPropagation();
+                    onPreview(att);
+                  }
+                : undefined
+            }
+            title={onPreview ? `Play ${att.name}` : att.name}
+          >
+            {poster ? (
+              <img src={poster} alt={att.name} className="message-bubble-attachment-image" />
+            ) : (
+              <video src={att.media_url} muted preload="metadata" className="message-bubble-attachment-image" />
+            )}
+            <span className="message-bubble-attachment-video-badge" aria-hidden>
+              <Icons.Play />
+            </span>
+          </button>
+        );
+      })}
       {files.map((att) => (
         <button
           key={`file-${att.name}`}
@@ -178,7 +190,7 @@ export const EditableUserMessage = memo(function EditableUserMessage({
       return;
     }
     setFaded(el.scrollHeight > el.clientHeight + 1);
-  }, [text, expanded, editing, images.length]);
+  }, [text, expanded, editing, images.length, videos.length]);
 
   const beginEdit = () => {
     if (!editable) return;
@@ -300,12 +312,12 @@ export const EditableUserMessage = memo(function EditableUserMessage({
   }
 
   const interactive = Boolean(editable || text || items.length > 0);
-  const hasImages = images.length > 0;
+  const hasMedia = images.length > 0 || videos.length > 0;
   const contentClass = [
     "message-bubble-user-content",
     editable ? "message-bubble-user-content--editable" : "",
     !editable && text ? "message-bubble-user-content--expandable" : "",
-    hasImages ? "message-bubble-user-content--with-media" : "",
+    hasMedia ? "message-bubble-user-content--with-media" : "",
     expanded ? "is-expanded" : "",
   ]
     .filter(Boolean)

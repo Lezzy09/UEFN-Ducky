@@ -10,6 +10,11 @@ interface AttachmentPreviewModalProps {
   onSaveDrawing?: (dataUrl: string) => void;
 }
 
+function formatSeconds(t: number): string {
+  const s = Math.floor(t);
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
 function attachmentImageSrc(att: MessageAttachmentDto): string | null {
   if (att.kind !== "image" || !att.data_base64) return null;
   const mime = att.mime || "image/png";
@@ -182,8 +187,25 @@ export function AttachmentPreviewModal({ open, attachment, onClose, onSaveDrawin
               />
             )}
           </div>
-        ) : attachment.kind === "video" && attachment.media_url ? (
-          <video src={attachment.media_url} controls autoPlay className="attachment-preview-video" />
+        ) : attachment.kind === "video" && (attachment.media_url || attachment.frames?.length) ? (
+          <>
+            {attachment.media_url ? (
+              <video src={attachment.media_url} controls autoPlay className="attachment-preview-video" />
+            ) : null}
+            {attachment.frames && attachment.frames.length > 0 ? (
+              <details className="message-bubble-video-frames">
+                <summary>{attachment.frames.length} frames sent to the AI</summary>
+                <div className="message-bubble-video-frames-grid">
+                  {attachment.frames.map((f, i) => (
+                    <figure key={f.media_url ?? i}>
+                      {f.media_url ? <img src={f.media_url} alt={`Frame ${i + 1}`} /> : null}
+                      <figcaption>{formatSeconds(f.t_s)}</figcaption>
+                    </figure>
+                  ))}
+                </div>
+              </details>
+            ) : null}
+          </>
         ) : attachment.kind === "file" ? (
           <pre className="attachment-preview-file selectable-text">{attachment.text || ""}</pre>
         ) : (

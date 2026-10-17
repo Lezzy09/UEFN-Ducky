@@ -38,6 +38,7 @@ import {
 } from "../utils/chatMessageGroups";
 
 import { ChatCollapseScopeProvider } from "../hooks/useChatCollapseState";
+import { useStickyQuestions } from "../hooks/useStickyQuestions";
 import { DOCK_LAYOUT_IDLE_EVENT, dockLayoutBusy } from "../workspace/dockLayoutEvents";
 
 import { ChatPlanPopup } from "./ChatPlanPopup";
@@ -933,6 +934,7 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
       ],
     );
 
+    const { sticky: stickyQuestions } = useStickyQuestions();
     const askSessionId = askSession?.id;
     const handleAskComplete = useCallback(
       (result: Parameters<typeof settleAskUser>[0]) => {
@@ -944,7 +946,7 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
     return (
       <ChatRowEnvContext.Provider value={env}>
         <div
-          className="virtual-chat-message-list-root"
+          className={`virtual-chat-message-list-root${stickyQuestions ? " is-sticky-questions" : ""}`}
           {...(translateMessages ? {} : { "data-no-translate": "" })}
         >
           <div
