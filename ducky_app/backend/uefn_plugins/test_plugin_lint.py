@@ -171,3 +171,73 @@ def test_a_plugin_with_bad_data_locks_does_not_install() -> None:
     out = store.import_plugin_from_bytes(buf.getvalue(), source="local")
     assert out == {"ok": False, "error": 'plugin.json "data_locks" \'scene.\' is \'always\': use "auto" or "required".'}
     assert not store.plugin_dir("lockdemo").exists()
+
+
+FORGE_FOLDER = {"id": "scenes", "root": "{LOCALAPPDATA}/UEFN-Ducky/forge/scenes", "unit": "*", "lock": "unit",
+                "last": ["scene.json"], "ignore": ["*/history.json", "*/history-index.json", "*/history-snapshots/**",
+                                                   "**/*.tmp"], "after_pull": "reload"}
+
+
+def test_team_folders_need_a_root_the_plugin_owns_and_a_known_unit() -> None:
+    from backend.uefn_plugins.plugin_lint import check_manifest
+    from backend.uefn_plugins.team_folders import declarations
+
+    rogue = [{"id": "design", "root": "{PROJECT}/.ducky/roguelike-design", "unit": ".", "lock": "unit",
+              "last": ["store.json"], "ignore": ["store.prev.json", "**/*.tmp"], "after_pull": "reload"},
+             {"id": "noproject", "root": "{LOCALAPPDATA}/UEFN-Ducky/roguelike_design_data", "unit": "*",
+              "lock": "unit", "last": ["store.json"], "ignore": ["*/store.prev.json", "**/*.tmp"],
+              "after_pull": "reload"}]
+    cards = {"id": "cards", "root": "{LOCALAPPDATA}/UEFN-Ducky/brainrot_tcg", "unit": "file", "lock": "unit",
+             "ignore": ["backups/**", "**/*.tmp"], "after_pull": "reload", "on_locked": "quarantine",
+             "merge": ["*.json"]}
+    for good in ([FORGE_FOLDER], rogue, [cards]):
+        assert check_manifest({"team_folders": good}) == []
+    assert [f.id for f in declarations({"team_folders": rogue})] == ["design", "noproject"]
+
+    def errors(**entry: object) -> str:
+        return "\n".join(check_manifest({"team_folders": [{**FORGE_FOLDER, **entry}]}))
+
+    assert 'must start with {LOCALAPPDATA}/UEFN-Ducky/ or {PROJECT}/' in errors(root="C:/Users/me/scenes")
+    assert 'must start with' in errors(root="{PROJECT}")
+    assert "must be inside {LOCALAPPDATA}/UEFN-Ducky/" in errors(root="{LOCALAPPDATA}/Epic/scenes")
+    assert "must be inside {LOCALAPPDATA}/UEFN-Ducky/" in errors(root="{LOCALAPPDATA}/UEFN-Ducky")
+    assert "one of the app's own folders" in errors(root="{LOCALAPPDATA}/UEFN-Ducky/scopes/x")
+    assert "has a bad part '..'" in errors(root="{PROJECT}/../elsewhere")
+    assert "has a bad part 'a:b'" in errors(root="{PROJECT}/a:b")
+    assert '"unit" is \'dir\': use "*" (each top-level folder or file), "." (the whole folder) or "file"' in errors(
+        unit="dir")
+    assert '"lock" is \'always\': use "unit" or "none".' in errors(lock="always")
+    assert '"after_pull" is \'restart\': use "notify" or "reload".' in errors(after_pull="restart")
+    assert '"on_locked" is \'block\'' in errors(on_locked="block")
+    assert "isn't a relative glob" in errors(ignore=["/abs/**"])
+    assert "isn't a relative glob" in errors(last=["../scene.json"])
+    assert 'must be a list of globs' in errors(merge="*.json")
+    assert "has unknown 'mode'" in errors(mode="sync")
+    assert '"id" must be 1-32' in errors(id="Scenes!")
+    assert check_manifest({"team_folders": {"id": "x"}}) == [
+        'plugin.json "team_folders" must be a list of folders: [{"id": "scenes", "root": '
+        '"{LOCALAPPDATA}/UEFN-Ducky/<plugin>/scenes", "unit": "*"}].']
+    two = check_manifest({"team_folders": [FORGE_FOLDER, {**FORGE_FOLDER, "root": "{LOCALAPPDATA}/UEFN-Ducky/x"}]})
+    assert two == ['plugin.json "team_folders" has two folders with "id" \'scenes\': give each its own.']
+    nested = check_manifest({"team_folders": [FORGE_FOLDER, {**FORGE_FOLDER, "id": "inner",
+                                                              "root": "{LOCALAPPDATA}/UEFN-Ducky/forge/scenes/a"}]})
+    assert nested == ['plugin.json "team_folders" \'inner\' and \'scenes\' overlap: one root is inside the other. '
+                      'Declare each folder once.']
+    off = check_manifest({"data_sharing": False, "team_folders": [FORGE_FOLDER]})
+    assert off == ['plugin.json has "team_folders" but "data_sharing": false: nothing is shared, so remove one.']
+    assert declarations({"data_sharing": False, "team_folders": [FORGE_FOLDER]}) == []
+    assert declarations({"team_folders": [FORGE_FOLDER, {**FORGE_FOLDER, "id": "b", "unit": "dir"}]})[0].id == "scenes"
+
+
+def test_a_plugin_with_bad_team_folders_does_not_install() -> None:
+    import io
+    import zipfile
+
+    from backend.uefn_plugins import store
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("plugin.json", json.dumps({"id": "folderdemo", "team_folders": [{**FORGE_FOLDER, "unit": "dir"}]}))
+    out = store.import_plugin_from_bytes(buf.getvalue(), source="local")
+    assert out["ok"] is False and '"unit" is \'dir\'' in out["error"]
+    assert not store.plugin_dir("folderdemo").exists()

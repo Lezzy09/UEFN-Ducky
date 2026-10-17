@@ -83,6 +83,44 @@ describe("Plugins page → Data", () => {
     expect(api.plugin_data_open_web).toHaveBeenCalledWith("brainrot-tcg");
   });
 
+  it("a team with none of the plugin's folder files asks which Local units to share first", async () => {
+    api.plugin_scope_status.mockResolvedValue({ ...LOCAL, teamFolders: [{ id: "scenes" }] });
+    let answer: (value: unknown) => void = () => {};
+    api.plugin_scope_set.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    render(<PluginDataPanel pluginId="forge" name="Forge" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Keep data in…" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /Space · Alpha Studio/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+    // The team's files come first, while the plugin still shows its current copy.
+    expect(await screen.findByText("Getting Alpha Studio's files…")).toBeTruthy();
+    answer({
+      ok: false, needs: "first_share", team: "Alpha Studio",
+      units: [{ folder: "scenes", unit: "Arena", name: "Arena", files: 3, bytes: 2048 }],
+    });
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Share Forge's files with Alpha Studio?")).toBeTruthy();
+    expect(within(dialog).getByText("3 files · 2 KB")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Copy and share" }));
+    await waitFor(() => expect(api.plugin_scope_set).toHaveBeenLastCalledWith("forge", "spaceT", { units: ["Arena"] }));
+    expect(await screen.findByText("Forge now shows Alpha Studio's copy.")).toBeTruthy();
+  });
+
+  it("a folder that can't be shared from this PC says why, and offers no team", async () => {
+    const URC = "Carried by this island's UEFN revision control";
+    api.plugin_scope_status.mockResolvedValue({ ...LOCAL, teamFolders: [{ id: "design", refused: URC }] });
+    const view = render(<PluginDataPanel pluginId="roguelike" name="Roguelike" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Keep data in…" }));
+    expect(await screen.findByText(URC)).toBeTruthy();
+    expect(screen.getByRole("radio", { name: /Local/ })).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: /Alpha Studio/ })).toBeNull();
+    view.unmount();
+
+    api.plugin_scope_status.mockResolvedValue({ ...LOCAL, shareable: false, teamFolders: [{ id: "design", refused: URC }] });
+    render(<PluginDataPanel pluginId="roguelike" name="Roguelike" />);
+    expect(await screen.findByText(URC)).toBeTruthy();
+    expect(screen.queryByText("Local only: this plugin keeps its own files")).toBeNull();
+  });
+
   it("shows no Data section for a plugin that can't share", async () => {
     api.plugin_scope_status.mockResolvedValue({ ...LOCAL, shareable: false });
     const { container } = render(<PluginDataPanel pluginId="scene-maker" name="Scene Maker" />);

@@ -222,3 +222,51 @@ def test_links_to_a_space_already_unavailable_go_so_those_plugins_keep_local(mon
     # The new cursor columns start empty: cursor writes go through as before.
     plugin_data.sync_put("a_1", "spaceOk", cursor_rev=9)
     assert plugin_data.sync_get("a_1", "spaceOk")["cursor_rev"] == 9
+
+
+def test_schema_21_upgrades_to_the_folder_tables(monkeypatch) -> None:
+    """0022 adds the folder copies of plugins that keep their own folders. Everything from
+    before stays; the new tables start empty and work, and the per-plugin epoch row the
+    data change log already uses gains a reload mark without losing its entries."""
+    from backend.store.repos import folder_files, plugin_data, space_vcs
+
+    real_files = db.migration_files
+    monkeypatch.setattr(db, "migration_files", lambda: [(n, p) for n, p in real_files() if n <= 21])
+    db.reset_for_tests()
+    conn = db.connect()
+    assert db.user_version(conn) == 21
+    with db.write_txn(conn):
+        conn.execute("INSERT INTO plugin_data(account_id, scope_id, plugin_id, kind, key, value, size, sha256, rev, "
+                     "dirty, deleted, sensitive, updated, group_id) VALUES ('a_1', 'spaceT', 'forge', 'doc', 'ui.tab', "
+                     "'v', 1, 'abc', 3, 1, 0, 0, 1.0, 'g1')")
+        conn.execute("INSERT INTO space_heads(account_id, space_id, plugin_id, seq, engine) VALUES "
+                     "('a_1', 'spaceT', 'forge', 7, 'v2')")
+        space_vcs.change_log_bump(conn, "forge", ["ui.tab"])
+    db.reset_for_tests()
+    monkeypatch.setattr(db, "migration_files", real_files)
+
+    conn = db.connect()
+    assert db.user_version(conn) == db.head_version() >= 22
+    assert plugin_data.get("a_1", "spaceT", "forge", "doc", "ui.tab")["rev"] == 3
+    assert space_vcs.head_get("a_1", "spaceT", "forge")["seq"] == 7
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    assert {"folder_files", "folder_links", "folder_copies", "folder_merge_base"} <= tables
+
+    with db.write_txn(conn):
+        folder_files.file_put(conn, "a_1", "spaceT", "forge", "scenes", "MEGA/scene.json", unit="MEGA", size=5,
+                              mtime_ns=1_789_000_000_123_456_700, sha256="s1", dirty=True, changed_at=2.0)
+    row = folder_files.file_get("a_1", "spaceT", "forge", "scenes", "MEGA/scene.json")
+    assert (row["unit"], row["mtime_ns"], row["dirty"], row["base_seq"], row["project_id"]) == (
+        "MEGA", 1_789_000_000_123_456_700, 1, 0, "")
+    assert folder_files.dirty_units("a_1", "spaceT", "forge")[("scenes", "MEGA")]["files"] == 1
+    folder_files.link_put("forge", "scenes", "", root="C:/x/scenes", target="C:/y", account="_pc", space="personal")
+    assert folder_files.link_get("forge", "scenes")["adopted_at"] > 0
+    folder_files.copy_put("a_1", "spaceT", "forge", "scenes", ready=1, pulled_at=3.0)
+    assert folder_files.ever_synced("a_1", "spaceT", "forge")
+    assert folder_files.reload_bump("forge", "switch") == 2
+    log = space_vcs.change_log("forge")
+    assert log["epoch"] == 2 and log["changes"] == [[1, ["ui.tab"]], [2, []]]
+    assert folder_files.reload_epoch("forge") == 2
+    space_vcs.forget_space("a_1", "spaceT")
+    folder_files.forget_files("a_1", "spaceT")
+    assert folder_files.files("a_1", "spaceT", "forge", "scenes") == []

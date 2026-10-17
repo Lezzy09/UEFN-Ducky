@@ -120,9 +120,34 @@ def _push_project_changed(info: dict[str, str]) -> None:
         pass
 
 
+def _rebind_project_folders(root: str) -> threading.Thread | None:
+    """Plugins that keep a folder in the project (a ``{PROJECT}`` team folder) point it at
+    the copy they read for this project, in the background: a team's copy of it may come
+    down first. None when no plugin on keeps one."""
+    try:
+        from backend.uefn_plugins.spaces import project_folder_plugins, rebind_project_folders
+
+        plugins = project_folder_plugins()
+    except Exception:  # noqa: BLE001 — each plugin's bind before its next load does it
+        return None
+    if not plugins:
+        return None
+
+    def work() -> None:
+        try:
+            rebind_project_folders(root, plugins)
+        except Exception:  # noqa: BLE001 — each plugin's bind before its next load tries again
+            pass
+
+    t = threading.Thread(target=work, daemon=True, name="project-folders")
+    t.start()
+    return t
+
+
 def set_panel_project_root(path: str, *, push_ui: bool = True) -> dict[str, str]:
     """Switch the panel's active project, island or folder (same as the header dropdown)."""
     s = PanelSettings.load()
+    before = str(s.uefn_project_root or "").strip()
     raw = (path or "").strip()
     kind = ""
     if raw:
@@ -157,6 +182,8 @@ def set_panel_project_root(path: str, *, push_ui: bool = True) -> dict[str, str]
         clear_diag_cache(s.uefn_project_root or None)
     except Exception:
         pass
+    if s.uefn_project_root and s.uefn_project_root != before:
+        _rebind_project_folders(s.uefn_project_root)
     info = get_panel_project_info()
     if push_ui:
         _push_project_changed(info)

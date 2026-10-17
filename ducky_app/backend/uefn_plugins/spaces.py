@@ -377,9 +377,9 @@ def settle_reset(space: str, action: str) -> dict[str, Any]:
     (Upload my copy: this PC's copy goes up again as new) or ``clear`` (Clear my copy: it
     goes, rows and files, and the space's data comes down instead). Either one is for the
     space's whole copy here, every plugin's and its workflows, because the provider waits
-    for all of it. ``plugins``: the plugin ids whose copy it was."""
-    import shutil
-
+    for all of it; folders plugins keep included (their copies stay in place, emptied on
+    Clear my copy, so their junctions never dangle). ``plugins``: the plugin ids whose copy
+    it was."""
     from backend.store.repos import plugin_data as repo
     from backend.store.repos import workflows
     from backend.uefn_plugins import scopes
@@ -409,7 +409,9 @@ def settle_reset(space: str, action: str) -> dict[str, Any]:
         search_repo.drop_scope_records(account, space)
     except Exception:  # noqa: BLE001 — a search error never blocks the clear
         _log.debug("dropping search records of %s failed", space, exc_info=True)
-    shutil.rmtree(scopes.scopes_root(account) / space, ignore_errors=True)
+    from backend.uefn_plugins import team_folders
+
+    team_folders.clear_space(account, space)
     return {"ok": True, "plugins": plugins, "cleared": count}
 
 
@@ -449,6 +451,10 @@ def scope_status(plugin: str) -> dict[str, Any]:
         "local": repo.totals(account, scopes.PERSONAL, plugin),
         "current": repo.totals(account, scope["id"], plugin),
     }
+    try:
+        out.update(_folder_fields(plugin))
+    except Exception:  # noqa: BLE001 — the bar still shows the rest
+        _log.debug("folder fields failed for %s", plugin, exc_info=True)
     if shared:
         st = repo.sync_get(account, scope["id"])
         held = repo.state_counts(account, scope["id"], plugin)
@@ -477,6 +483,8 @@ def scope_status(plugin: str) -> dict[str, Any]:
             out.update(provider().status(account, scope["id"], plugin) or {})
         except Exception:  # noqa: BLE001 — the bar still shows what core knows
             _log.debug("provider status failed for %s", plugin, exc_info=True)
+    if out.get("binding"):  # a switch is getting a team's folder files first
+        out["state"] = "binding"
     return out
 
 
@@ -565,7 +573,65 @@ def team_fields(account: str, space: str, plugin: str, *, state: str = "ok") -> 
     if state == "lost":
         out.update(unsent=space_vcs.pending_unsent(account, space),
                    unsentChosen=bool(space_vcs.lost_choice_get(account, space)))
+    from backend.uefn_plugins import team_folders
+
+    if team_folders.plugin_folders(plugin):
+        _team_folder_fields(out, account, space, plugin)
     return out
+
+
+def _folder_fields(plugin: str) -> dict[str, Any]:
+    """A plugin that keeps its own folders: ``teamFolders`` (each declared folder: ``id``,
+    ``refused`` (why it can't be shared from this PC), ``adopted``, ``bound``,
+    ``afterPull``), ``folderOffers`` (teams the bar offers to copy Local into),
+    ``folderNote`` (its files are plaintext on each PC) and, while a switch gets a team's
+    copy first, state ``binding`` with ``binding`` (``{team, pct, text}``: "Getting
+    Alpha's files… 40%")."""
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import team_folders
+
+    if not team_folders.plugin_folders(plugin):
+        return {}
+    st = team_folders.status(plugin)
+    out: dict[str, Any] = {"teamFolders": st["folders"], "folderOffers": st["offers"], "folderNote": st["note"]}
+    progress = space_vcs.binding_get(plugin)
+    out["binding"] = None if progress is None else {
+        **progress, "text": team_folders.PULLING.format(team=progress["team"] or "the team", pct=progress["pct"])}
+    return out
+
+
+def _team_folder_fields(out: dict[str, Any], account: str, space: str, plugin: str) -> None:
+    """The team copy's folder units for the bar and drawer: ``folders`` (each unit:
+    ``folder_id``, ``unit``, ``unitId``, ``name``, ``state`` up_to_date | changed_here |
+    locked_by | conflict | incoming | quarantined | refused, ``holder``, ``mine``),
+    folder units in ``changes.outgoing`` (and ``pending``), ``changes.held`` (incoming
+    changes wait for Update now) with ``changes.incoming`` and ``changes.incomingBy``
+    ("2 updates from Ana · Update now"), and folder unit conflicts and set-aside downloads
+    named by their unit and file."""
+    from backend.store.repos import folder_files, space_vcs
+    from backend.uefn_plugins import vcs_engine
+
+    rows = vcs_engine.folder_rows(account, space, plugin, ledger_for(account, space, plugin))
+    out["folders"] = rows
+    outgoing = vcs_engine.folder_outgoing(account, space, plugin)
+    changes = out.setdefault("changes", {})
+    changes["outgoing"] = [*changes.get("outgoing", []), *outgoing]
+    waiting = space_vcs.incoming_queue_get(account, space, plugin)
+    changes["held"] = bool(waiting["count"])
+    changes["incomingBy"] = waiting["by"]
+    if waiting["count"]:
+        changes["incoming"] = max(int(changes.get("incoming") or 0), waiting["count"])
+    for b in changes.get("blocked") or []:
+        if b.get("kind") == "tree":
+            row = folder_files.by_key(account, space, plugin, str(b["key"]))
+            b["name"] = row["relpath"] if row else "A file of this plugin's folder"
+    if "pending" in out:
+        out["pending"] = int(out["pending"]) + sum(1 for o in outgoing if o["state"] in ("queued", "sending"))
+    names = {(r["folder_id"], r["unit"]): r["name"] for r in rows}
+    for c in out.get("conflicts") or []:
+        if c.get("kind") == "tree":
+            fid, _, unit = str(c["key"]).partition("/")
+            c.update(folder_id=fid, unit=unit, name=names.get((fid, unit), unit))
 
 
 def scope_choices(purpose: str = "data") -> dict[str, Any]:
@@ -595,6 +661,120 @@ def link_scope(plugin: str, scope_id: str) -> dict[str, Any]:
     return scope_status(plugin)
 
 
+def switch_folders(plugin: str, scope_id: str, *, first_share: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+    """The folder part of a plugin's switch, before it is linked to ``scope_id`` (None: the
+    plugin keeps no folders). Leaving a team: its changed units go out first (up to 30 s).
+    To a team: the team's copy comes down first while the plugin still reads its current
+    copy ("Getting Alpha's files… 40%" on the bar), and a failed pull changes nothing; an
+    empty team copy is bound only after the first share (``{needs: "first_share", units,
+    note}`` until ``first_share`` is ``{"units": [...]}`` or ``{"startEmpty": true}``;
+    ``{"pick": true}`` asks with the Local units the team lacks even when it has files).
+    Then, once the plugin's calls are done, its folders point at the new copy. ``ok``
+    false: nothing was linked; the caller links on ``ok``."""
+    from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins import scopes, team_folders, vcs_engine
+
+    if not team_folders.plugin_folders(plugin):
+        return None
+    leaving = scopes.active_scope(plugin)
+    if leaving["kind"] == "shared" and leaving["id"] != scope_id and leaving["state"] not in ("lost", "reset"):
+        backend = ledger_for(leaving["account"], leaving["id"], plugin)
+        if backend is not None:
+            vcs_engine.send_before_leaving(leaving["account"], leaving["id"], plugin, backend)
+    if scope_id == scopes.PERSONAL:
+        return team_folders.switch(plugin, scope_id)
+    account = scopes.account_id()
+    backend = ledger_for(account, scope_id, plugin) if account != scopes.LOCAL else None
+    label = str(repo.sync_get(account, scope_id)["label"] or "") if account != scopes.LOCAL else ""
+
+    def pull() -> tuple[bool, str]:
+        if backend is None:
+            return False, NO_LEDGER_ERROR if has_provider() else NO_PROVIDER_ERROR
+        return vcs_engine.pull_copy(account, scope_id, plugin, backend, label=label)
+
+    def push() -> tuple[bool, str]:
+        if backend is None:
+            return False, NO_LEDGER_ERROR if has_provider() else NO_PROVIDER_ERROR
+        return vcs_engine.send_copy(account, scope_id, plugin, backend, label=label)
+
+    share: dict[str, Any] | None = None
+    if first_share:
+        share = {"units": [str(u) for u in first_share.get("units") or []],
+                 "start_empty": bool(first_share.get("startEmpty") or first_share.get("start_empty")),
+                 "pick": bool(first_share.get("pick"))}
+    return team_folders.switch(plugin, scope_id, pull=pull, push=push, first_share=share)
+
+
+def project_folder_plugins() -> list[str]:
+    """Enabled plugins that keep a folder inside the open project (a ``{PROJECT}`` root)."""
+    from backend.uefn_plugins import team_folders
+    from backend.uefn_plugins.store import get_enabled_plugin_ids
+
+    return sorted(p for p in set(get_enabled_plugin_ids())
+                  if any(f.project for f in team_folders.plugin_folders(p)))
+
+
+def rebind_project_folders(project_root: str, plugins: list[str] | None = None) -> list[str]:
+    """The open project changed: each enabled plugin with a ``{PROJECT}`` folder (or each of
+    ``plugins``) points it at the copy it reads for that project. On a team, the team's
+    copy of the new project comes down first and is used once it has files; with none
+    yet, the bar offers to copy Local into the team. What that pull changed in the copies
+    the plugin uses is told to it as any pull is (a ``reload`` plugin restarts). A plugin
+    whose folder moved restarts (every process reloads it before its next call). Returns
+    the plugins whose folders moved or that restart for the pull."""
+    from backend.store.repos import folder_files
+    from backend.uefn_plugins import scopes, team_folders, vcs_engine
+
+    moved: list[str] = []
+    for plugin in project_folder_plugins() if plugins is None else sorted(set(plugins)):
+        folders = [f for f in team_folders.plugin_folders(plugin) if f.project]
+        if not folders:
+            continue
+        try:
+            before = folder_files.reload_epoch(plugin)
+            scope = scopes.active_scope(plugin)
+            if scope["kind"] == "shared" and project_root:
+                account, space = scope["account"], scope["id"]
+                backend = ledger_for(account, space, plugin)
+                pulled, landed = False, {"tree": 0}
+                if backend is not None:
+                    pulled, _why = vcs_engine.pull_copy(account, space, plugin, backend,
+                                                        label=str(scope.get("label") or ""), landed=landed)
+                if landed["tree"]:  # the pull changed files the plugin may be using: it hears it (or restarts)
+                    vcs_engine.after_pull(plugin)
+                for b in team_folders.resolve(plugin, project_root=project_root):
+                    if not pulled or not b.folder.project or b.root is None or b.refused:
+                        continue  # a pull that didn't finish says nothing about what the team has
+                    copy = team_folders.team_copy(account, space, plugin, b.folder, b.project_id)
+                    if team_folders._has_files(copy, b.folder):
+                        folder_files.copy_put(account, space, plugin, b.folder.id, b.project_id, ready=1,
+                                              pulled_at=time.time())
+                    elif not folder_files.copy_get(account, space, plugin, b.folder.id, b.project_id)["ready"]:
+                        folder_files.copy_put(account, space, plugin, b.folder.id, b.project_id, offer=1)
+            team_folders.bind_plugin(plugin, project_root=project_root)
+            if folder_files.reload_epoch(plugin) != before:
+                moved.append(plugin)
+        except Exception:  # noqa: BLE001 — its bind before load tries again
+            _log.warning("pointing %s's project folder at its copy failed", plugin, exc_info=True)
+    if not moved:
+        return moved
+    if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") != "1":
+        from backend.uefn_plugins.host import reload_single_plugin
+
+        for plugin in moved:
+            try:
+                reload_single_plugin(plugin)
+            except Exception:  # noqa: BLE001 — its next call reloads it through the epoch
+                _log.debug("restart after a project switch failed for %s", plugin, exc_info=True)
+    try:
+        from frontend.ui_web.agent_modes import push_ui_event
+
+        push_ui_event({"type": "plugin_scope_changed", "plugins": moved, "switched": True})
+    except Exception:  # noqa: BLE001 — panels read the new copy on their next open
+        _log.debug("telling panels about the project's folders failed", exc_info=True)
+    return moved
+
+
 def release_auto_locks(account: str, space: str, plugin: str | None = None) -> int:
     """Release the auto locks this PC holds in the space (``plugin``'s only, when given):
     a scope switch, the app closing. Manual locks stay until released. Best effort: a
@@ -619,10 +799,13 @@ def on_account_change(before: str, after: str) -> None:
     """Sign-in, sign-out or another account (account ids). Every plugin that showed a
     shared space's copy, or shows one now, restarts on the copy it reads now and its
     open panels reload, like a switch: signing out puts them all on Local instead of
-    leaving the space's data on screen."""
+    leaving the space's data on screen. Folders a plugin keeps itself point at the copy it
+    reads now first (Local's after a sign-out), whether the plugin is on or not."""
+    from backend.store.repos import folder_files
     from backend.store.repos import plugin_data as repo
     from backend.uefn_plugins import scopes
 
+    folders = sorted({lk["plugin_id"] for lk in folder_files.links() if lk["account_id"] != folder_files.LOCAL_ACCOUNT})
     plugins = sorted(
         {
             plugin
@@ -630,15 +813,22 @@ def on_account_change(before: str, after: str) -> None:
             for plugin, space in repo.links(account).items()
             if scopes.valid_space_id(space) and scopes.sharing_allowed(plugin)
         }
+        | set(folders)
     )
     if not plugins:
         return
 
     def _work() -> None:
+        from backend.uefn_plugins import team_folders
         from backend.uefn_plugins.host import reload_single_plugin
         from backend.uefn_plugins.store import get_enabled_plugin_ids
         from frontend.ui_web.agent_modes import push_ui_event
 
+        for plugin in folders:
+            try:
+                team_folders.bind_plugin(plugin)
+            except Exception:  # noqa: BLE001 — its bind before load tries again
+                _log.warning("pointing %s's folders at the copy it reads now failed", plugin, exc_info=True)
         enabled = set(get_enabled_plugin_ids())
         for plugin in plugins:
             if plugin in enabled:
@@ -710,7 +900,11 @@ def team_lock(plugin: str, unit: str, action: str = "acquire", *, name: str = ""
     from backend.uefn_plugins import vcs_engine
 
     account, space, backend = _team(plugin)
-    unit = team_unit(plugin, unit)
+    folder_unit = _folder_unit_id(plugin, space, backend, unit)
+    if folder_unit:
+        unit, name = folder_unit[0], name or folder_unit[1]
+    else:
+        unit = team_unit(plugin, unit)
     if action == "acquire":
         got = vcs_engine.acquire(account, space, plugin, backend, [(unit, name or unit.split(":", 1)[-1])])[unit]
         out = {k: v for k, v in got.items() if k != "unit"}
@@ -724,6 +918,60 @@ def team_lock(plugin: str, unit: str, action: str = "acquire", *, name: str = ""
         raise ValueError("action must be acquire, release, break or ask")
     _changed(plugin)
     return {"unit": unit, **out}
+
+
+def _folder_unit_id(plugin: str, space: str, backend: Any, unit: str) -> tuple[str, str] | None:
+    """A folder unit of a plugin that keeps its own folders, named ``<folder>/<unit>`` (or
+    ``tree:<folder>/<unit>``), as locks name it: (unit id, name). None for anything else,
+    an id already (``tree:<folder>/<hash>``) included."""
+    import re
+
+    from backend.store.repos import folder_files
+    from backend.uefn_plugins import scopes, team_folders
+
+    text = str(unit or "").strip()
+    named = text[len("tree:"):] if text.startswith("tree:") else text
+    folder_id, sep, rest = named.partition("/")
+    folder = team_folders.folder_of(plugin, folder_id) if sep and rest else None
+    if folder is None:
+        return None
+    if text.startswith("tree:"):
+        known = {r["unit"] for r in folder_files.files(scopes.account_id(), space, plugin, folder.id)}
+        if rest not in known and re.fullmatch(r"[0-9a-f]{32}", rest):
+            return None  # the id itself
+    name = rest.split("/", 1)[-1] if folder.project and "/" in rest else rest
+    return team_folders.tree_unit(backend, space, folder.id, rest), name
+
+
+def team_folder_unit(plugin: str, folder_id: str, unit: str, choice: str) -> dict[str, Any]:
+    """Settle a folder unit: after a conflict ``mine`` (Keep mine), ``theirs`` (Take theirs)
+    or ``both`` (Keep both); changed while someone else holds it, ``keep_copy`` (Keep mine as
+    a copy) or ``discard`` (Discard mine). What is kept goes out on the next round, and what
+    comes back from the team comes down on it."""
+    from backend.uefn_plugins import vcs_engine
+
+    account, space, _ = _team(plugin, need_ledger=False)
+    out = vcs_engine.resolve_unit(account, space, plugin, ledger_for(account, space, plugin), str(folder_id),
+                                  str(unit), str(choice))
+    if out.get("ok"):
+        _changed(plugin)
+        sync_space(account, space, force=True)
+    return out
+
+
+def _unit_text(account: str, space: str, plugin: str, folder_id: str, unit: str) -> str:
+    """Compare a folder unit: the files changed here, and the team's files waiting."""
+    from backend.store.repos import folder_files, space_vcs
+    from backend.uefn_plugins import vcs_engine
+
+    mine = [r["relpath"] for r in folder_files.files(account, space, plugin, folder_id, unit=unit) if r["dirty"]]
+    c = space_vcs.conflict_get(account, space, plugin, "tree", f"{folder_id}/{unit}")
+    theirs = vcs_engine._held_items(c)
+    who = (c["theirs_by"] if c else "") or "the team"
+    lines = [f"Changed here: {len(mine)} file(s)", *[f"  {rel}" for rel in mine]]
+    lines += [f"Changed by {who}: {len(theirs)} file(s)",
+              *[f"  {rel}{' (deleted)' if op == 'del' else ''}" for _k, _s, op, rel in theirs]]
+    return "\n".join(lines)
 
 
 def _conflict_text(account: str, space: str, plugin: str, kind: str, key: str) -> str:
@@ -779,12 +1027,17 @@ def _conflict_text(account: str, space: str, plugin: str, kind: str, key: str) -
 def team_resolve(plugin: str, kind: str, key: str, choice: str) -> dict[str, Any]:
     """Settle a conflict: ``mine`` (Keep mine, Restore mine), ``theirs`` (Keep theirs,
     Accept delete), or ``compare`` (``diff``, nothing changes). ``both`` is for folder
-    units. What is kept goes out on the next round."""
+    units (kind ``tree``, key ``<folder>/<unit>``). What is kept goes out on the next round."""
     from backend.uefn_plugins import vcs_engine
 
     account, space, _ = _team(plugin, need_ledger=False)
+    if kind == "tree":
+        folder_id, _, unit = str(key).partition("/")
+        if choice == "compare":
+            return {"ok": True, "diff": _unit_text(account, space, plugin, folder_id, unit)}
+        return team_folder_unit(plugin, folder_id, unit, choice)
     if kind not in ("doc", "asset"):
-        raise ValueError("kind must be doc or asset")
+        raise ValueError("kind must be doc, asset or tree")
     if choice == "compare":
         return {"ok": True, "diff": _conflict_text(account, space, plugin, kind, key)}
     if choice == "both":
@@ -864,6 +1117,8 @@ def team_sync(plugin: str, *, push: bool | None = None, pull: bool | None = None
             out = vcs_engine.run(account, space, plugin, backend, push=push, pull=pull, force=True, message=message)
         except Exception as exc:  # noqa: BLE001 — recorded like any round that raised
             out = _round_failed({"account": account, "id": space}, exc)
+        if out.get("tree"):  # its folder files changed: reload it, or tell its panels
+            vcs_engine.after_pull(plugin)
         if on_done is not None:
             on_done(out)
 

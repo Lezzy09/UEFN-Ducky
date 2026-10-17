@@ -44,6 +44,18 @@ that sync's revisions). After a pull changed a plugin's data, its backend's
 ``api.data.on_change`` callbacks hear the keys. Nothing moves while the space is reset,
 lost, unavailable or paused.
 
+Folders a plugin keeps itself (``team_folders``, :mod:`team_folders`) are items of kind
+``tree``, one per file, grouped in units. A unit quiet for 3 s goes out as one changeset,
+its files copied once into core's outbox and streamed from there (never split: a very big
+unit goes as parts of one group); its first change here takes the unit's lock. A pull
+applies each unit whole and in seq order, with the origin's mtimes (a unit one of whose
+files didn't arrive waits whole); a unit changed here is never overwritten: it is held as a
+conflict (Keep mine, Take theirs, Keep both) unless its files merge (``merge`` globs). A
+``reload`` plugin whose panel is on screen gets its incoming changes only on "Update now",
+once its panel is hidden, or before an agent's call; meanwhile the units they touch are
+read-only. After a pull changed its files a ``reload`` plugin restarts (every process that
+loaded it, through its reload epoch) and ``notify`` panels hear it.
+
 Callers hold the space's round lock (:func:`backend.uefn_plugins.sync_scheduler._round_lock`);
 the functions here take it themselves when it isn't held on this thread.
 """
@@ -60,14 +72,16 @@ import shutil
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 from backend.store import db
+from backend.store.repos import folder_files as ff
 from backend.store.repos import plugin_data as repo
 from backend.store.repos import space_vcs
 from backend.uefn_plugins import data_crypto, json_merge, scopes
+from backend.uefn_plugins import team_folders as tf
 from backend.uefn_plugins.ledger import (
     Behind,
     Committed,
@@ -105,7 +119,11 @@ _log = logging.getLogger(__name__)
 
 WORKFLOWS = "ducky.automations"  # owned.DOC_PLUGIN
 FOLDERS_KEY = "_folders"  # owned.FOLDERS_KEY: concurrent folder adds keep both
-KINDS = ("doc", "asset")  # what this engine syncs; tree items are the folder engine's
+KINDS = ("doc", "asset")  # api.data items; folder files are TREE items (see "folders" below)
+TREE = "tree"
+SWITCH_PULL_S = 600.0  # a switch to a team gets its folder copy for at most this long
+LEAVE_SEND_S = 30.0  # a switch away sends the old copy's changed units for at most this long
+CALL_APPLY_WAIT_S = 60.0  # an agent's call waits this long for its plugin's waiting changes
 PULL_LIMIT = 50
 MAX_PAGES = 20
 MAX_ITEMS = 400  # per commit call; a bigger group goes as parts
@@ -289,6 +307,8 @@ class _Out:
 
 
 def _push_cs(ctx: Ctx, cs: dict[str, Any], *, now: float) -> _Out:
+    if _is_tree_cs(cs):
+        return _push_tree_cs(ctx, cs, now=now)
     first_try = cs["state"] == "pending"
     items: list[OutgoingItem] = []
     sent: list[dict[str, Any]] = []
@@ -423,13 +443,22 @@ def _stop(ctx: Ctx, res: Any, *, now: float) -> _Out:
     return _Out("stop", state=state, error=reason)
 
 
-def _push_round(ctx: Ctx, *, message: str = "", now: float, pull: bool = True) -> dict[str, Any]:
+def _push_round(ctx: Ctx, *, message: str = "", now: float, pull: bool = True,
+                quiet_s: float = tf.QUIET_S) -> dict[str, Any]:
     """Send what is ready. ``pull`` False (the exit flush): a conflict ends the round instead
-    of pulling, so nothing is applied while the app is closing; the rows go next time."""
-    pushed = 0
+    of pulling, so nothing is applied while the app is closing; the rows go next time.
+    ``quiet_s``: how long a folder unit must be unchanged to go (0: every changed unit
+    without a save in progress, as a switch away sends them)."""
+    pushed = tree = 0
     missing: dict[str, int] = {}
+    folders = bool(tf.plugin_folders(ctx.plugin))
+    if folders:  # copies made to go out by changesets no longer waiting (a crash's leftovers) go
+        tf.prune_snapshots(ctx.account, ctx.space, ctx.plugin,
+                           {cs["cs_id"] for cs in space_vcs.cs_open(ctx.account, ctx.space, ctx.plugin)})
     for _ in range(50):
         _build(ctx, message=message, now=now)
+        if folders:
+            _build_tree(ctx, now=now, quiet_s=quiet_s)
         pending = space_vcs.cs_open(ctx.account, ctx.space, ctx.plugin)
         if not pending:
             break
@@ -446,12 +475,12 @@ def _push_round(ctx: Ctx, *, message: str = "", now: float, pull: bool = True) -
                 missing[cs["cs_id"]] = missing.get(cs["cs_id"], 0) + 1
                 if missing[cs["cs_id"]] > 1:
                     stop = _stop(ctx, Error(out.error), now=now)
-                    return {"state": stop.state, "error": stop.error, "pushed": pushed}
+                    return {"state": stop.state, "error": stop.error, "pushed": pushed, "tree": tree}
                 again = True  # the backend sends what went missing on the next try
                 break
             if out.kind == "conflict":
                 if not pull:
-                    return {"state": "ok", "error": "", "pushed": pushed}
+                    return {"state": "ok", "error": "", "pushed": pushed, "tree": tree}
                 moves = int(space_vcs.head_get(ctx.account, ctx.space, ctx.plugin)["moves"]) + 1
                 space_vcs.head_put(ctx.account, ctx.space, ctx.plugin, moves=moves)
                 if moves >= CONFLICT_MOVES:
@@ -459,16 +488,19 @@ def _push_round(ctx: Ctx, *, message: str = "", now: float, pull: bool = True) -
                     space_vcs.backoff(ctx.account, ctx.space, ctx.plugin, "ok", "",
                                       after=random.uniform(*MOVES_BACKOFF_S), now=now)
                     return {"state": "retry", "error": "Others keep changing this; trying again soon.",
-                            "pushed": pushed}
+                            "pushed": pushed, "tree": tree}
                 pulled = _pull_round(ctx, now=now)
+                tree += int(pulled.get("tree") or 0)
                 if pulled["state"] != "ok":
-                    return {**pulled, "pushed": pushed}
+                    return {**pulled, "pushed": pushed, "tree": tree}
+                if pulled.get("queued"):  # the newer changes wait behind Update now: so does this
+                    return {"state": "ok", "error": "", "pushed": pushed, "tree": tree}
                 again = True
                 break
-            return {"state": out.state, "error": out.error, "pushed": pushed}
+            return {"state": out.state, "error": out.error, "pushed": pushed, "tree": tree}
         if not again:
             break
-    return {"state": "ok", "error": "", "pushed": pushed}
+    return {"state": "ok", "error": "", "pushed": pushed, "tree": tree}
 
 
 # --------------------------------------------------------------------------- pull
@@ -857,11 +889,17 @@ def _fetch_bases(ctx: Ctx, wanted: Iterable[tuple[str, int]]) -> dict[tuple[str,
 def _apply(ctx: Ctx, changesets: list[IncomingChangeset], *, force: bool = False) -> dict[str, Any]:
     """Download, then apply ``changesets`` in one transaction (the head moves to the last
     one's seq). ``force``: a clean row takes theirs even at the same or a newer rev (a
-    resync). Returns ``{state, changed, conflicts, merges, blocked, blocked_units}``."""
+    resync). Folder files land first, unit by unit (:func:`_apply_tree`), so the head never
+    moves past a unit that didn't land or wasn't held. Returns ``{state, changed,
+    conflicts, merges, blocked, blocked_units, tree}`` (``tree``: folder units that changed)."""
     latest: dict[ItemId, tuple[IncomingItem, int, str, float]] = {}
     units: dict[str, int] = {}
+    tree: list[tuple[IncomingItem, int, str, float]] = []
     for cs in changesets:
         for it in cs.items:
+            if it.kind == TREE:
+                tree.append((it, int(it.seq or cs.seq), it.by or cs.by, float(it.at or cs.at)))
+                continue
             if it.kind not in KINDS:
                 continue
             seq = int(it.seq or cs.seq)
@@ -880,6 +918,9 @@ def _apply(ctx: Ctx, changesets: list[IncomingChangeset], *, force: bool = False
             b = space_vcs.base_get(ctx.account, ctx.space, ctx.plugin, it.key)
             if not b or int(b["seq"]) != int(cur["rev"]) or b["value"] is None:
                 wanted.append((it.key, int(cur["rev"])))
+    folded = _apply_tree(ctx, tree) if tree else {"state": "ok", "units": [], "conflicts": 0, "blocked": 0}
+    if folded["state"] != "ok":
+        return {"state": folded["state"], "error": folded.get("error", "")}
     fetched = _download(ctx, [it for it, *_ in work if it.op == "put"])
     if any(isinstance(got, Offline) for got in fetched.values()):
         for got in fetched.values():
@@ -913,8 +954,9 @@ def _apply(ctx: Ctx, changesets: list[IncomingChangeset], *, force: bool = False
         for prep in preps.values():
             if prep.temp is not None:
                 prep.temp.unlink(missing_ok=True)  # gone already once it landed
-    return {"state": "ok", "changed": run.changed, "conflicts": run.conflicts, "merges": run.merges,
-            "blocked": len(run.blocked), "blocked_units": set(run.blocked)}
+    return {"state": "ok", "changed": run.changed, "conflicts": run.conflicts + folded["conflicts"],
+            "merges": run.merges, "blocked": len(run.blocked) + folded["blocked"], "blocked_units": set(run.blocked),
+            "tree": len(folded["units"])}
 
 
 def _settle_in_flight(ctx: Ctx, *, now: float) -> _Out | None:
@@ -943,64 +985,88 @@ def _deliver(ctx: Ctx, keys: list[str]) -> None:
         scopes.deliver_data_changes(ctx.plugin)
 
 
-def _pull_round(ctx: Ctx, *, now: float) -> dict[str, Any]:
+def _pull_round(ctx: Ctx, *, now: float, apply_now: bool = False,
+                progress: Callable[[int, int], None] | None = None) -> dict[str, Any]:
     """Pull to the head. Whatever it changed, even when it stops part way, is told to the
-    plugin once at the end."""
+    plugin once at the end. A ``reload`` plugin whose panel is on screen gets its changes
+    only when asked (``apply_now``: Update now, Pull, an agent's call, a switch); until then
+    they wait behind "Update now" (``queued``). ``progress(seq, head)`` after each landing."""
     changed: list[str] = []
     try:
-        return _pull_pages(ctx, changed, now=now)
+        return _pull_pages(ctx, changed, now=now, apply_now=apply_now, progress=progress)
     finally:
         _deliver(ctx, changed)
 
 
-def _pull_pages(ctx: Ctx, changed: list[str], *, now: float) -> dict[str, Any]:
+def _pull_pages(ctx: Ctx, changed: list[str], *, now: float, apply_now: bool = False,
+                progress: Callable[[int, int], None] | None = None) -> dict[str, Any]:
     settled = _settle_in_flight(ctx, now=now)
     if settled is not None:
         return {"state": settled.state, "error": settled.error, "changed": [], "pulled": 0, "conflicts": 0}
     head = space_vcs.head_get(ctx.account, ctx.space, ctx.plugin)
     cursor = int(head["seq"])
+    hold = not apply_now and _holds_incoming(ctx)
+    me = device_id() if hold else ""
     buffer: list[IncomingChangeset] = []
-    conflicts = 0
-    pulled = 0
+    waiting: list[IncomingChangeset] = []
+    conflicts = pulled = tree = 0
     for _ in range(MAX_PAGES):
         page = _call(ctx.backend.pull, ctx.space, ctx.plugin, cursor, PULL_LIMIT)
         if not isinstance(page, PullPage):
             out = _stop(ctx, page, now=now)
             return {"state": out.state, "error": out.error, "changed": changed, "pulled": pulled,
-                    "conflicts": conflicts}
+                    "conflicts": conflicts, "tree": tree}
         if page.resync:
             return _resync(ctx, page.head, changed, now=now)
         space_vcs.head_put(ctx.account, ctx.space, ctx.plugin, remote_seq=page.head)
         for cs in page.changesets:
-            buffer.append(cs)
             cursor = max(cursor, cs.seq)
+            if hold and (waiting or cs.device != me):
+                waiting.append(cs)  # behind Update now (this PC's own commits still land)
+                continue
+            buffer.append(cs)
             if _groups_open(buffer, now):
                 continue
             out = _apply(ctx, buffer)
             if out["state"] != "ok":
                 stop = _stop(ctx, Offline(out.get("error", "")), now=now)
                 return {"state": stop.state, "error": stop.error, "changed": changed, "pulled": pulled,
-                        "conflicts": conflicts}
+                        "conflicts": conflicts, "tree": tree}
             changed += out["changed"]
             conflicts += out["conflicts"]
+            tree += int(out.get("tree") or 0)
             pulled += len(buffer)
             buffer = []
+            if progress is not None:
+                progress(cs.seq, page.head)
         if not page.more:
             break
+    if hold or space_vcs.incoming_queue_get(ctx.account, ctx.space, ctx.plugin)["count"]:
+        _wait_behind_update(ctx, waiting)
+    if waiting:
+        return {"state": "ok", "error": "", "changed": changed, "pulled": pulled, "conflicts": conflicts,
+                "tree": tree, "queued": len(waiting)}
     blocked = _retry_blocked(ctx, now=now)
     changed += blocked["changed"]
+    again = _refetch(ctx) if tf.plugin_folders(ctx.plugin) else {"units": [], "conflicts": 0}
     return {"state": blocked["state"], "error": blocked.get("error", ""), "changed": changed, "pulled": pulled,
-            "conflicts": conflicts + blocked["conflicts"]}
+            "conflicts": conflicts + blocked["conflicts"] + again["conflicts"],
+            "tree": tree + blocked.get("tree", 0) + len(again["units"])}
 
 
 def _retry_blocked(ctx: Ctx, *, now: float) -> dict[str, Any]:
-    """Items set aside whose wait is over, each alone at its current version."""
+    """Items set aside whose wait is over, each alone at its current version (a folder unit's
+    files together: a unit is never applied in halves)."""
     changed: list[str] = []
-    conflicts = 0
+    conflicts = tree = 0
+    units: dict[str, list[dict[str, Any]]] = {}
     for b in space_vcs.blocked(ctx.account, ctx.space, ctx.plugin, due=now):
+        if b["kind"] == TREE:
+            units.setdefault(str(b["unit"]), []).append(b)
+            continue
         got = _call(ctx.backend.fetch, ctx.space, ctx.plugin, b["kind"], b["key"], None)
         if isinstance(got, Offline):
-            return {"state": "ok", "changed": changed, "conflicts": conflicts}  # the next round tries again
+            return {"state": "ok", "changed": changed, "conflicts": conflicts, "tree": tree}  # the next round tries again
         if not isinstance(got, IncomingItem):
             conn = db.connect()
             with db.write_txn(conn):
@@ -1010,10 +1076,30 @@ def _retry_blocked(ctx: Ctx, *, now: float) -> dict[str, Any]:
         out = _apply(ctx, [IncomingChangeset(seq=0, items=(got,))], force=True)
         changed += out.get("changed", [])
         conflicts += int(out.get("conflicts", 0))
-    return {"state": "ok", "changed": changed, "conflicts": conflicts}
+    for rows in units.values():
+        gots: list[IncomingItem] = []
+        for b in rows:
+            got = _call(ctx.backend.fetch, ctx.space, ctx.plugin, TREE, b["key"], None)
+            if isinstance(got, Offline):
+                for g in gots:
+                    _drop_temp(g)
+                return {"state": "ok", "changed": changed, "conflicts": conflicts, "tree": tree}
+            if isinstance(got, IncomingItem):
+                gots.append(got)
+                continue
+            conn = db.connect()
+            with db.write_txn(conn):
+                space_vcs.blocked_put(conn, ctx.account, ctx.space, ctx.plugin, TREE, b["key"], unit=b["unit"],
+                                      seq=int(b["seq"]), error=reason_of(got), now=now)
+        if gots:
+            out = _apply(ctx, [IncomingChangeset(seq=0, items=tuple(gots))])
+            conflicts += int(out.get("conflicts", 0))
+            tree += int(out.get("tree") or 0)
+    return {"state": "ok", "changed": changed, "conflicts": conflicts, "tree": tree}
 
 
-def _listing(ctx: Ctx, *, now: float) -> tuple[dict[ItemId, IncomingItem], int] | dict[str, Any]:
+def _listing(ctx: Ctx, *, now: float,
+             kinds: tuple[str, ...] = KINDS) -> tuple[dict[ItemId, IncomingItem], int] | dict[str, Any]:
     """Every item's current version on the server (``pull(full=True)``, paged) and the head;
     or why the round stops."""
     listing: dict[ItemId, IncomingItem] = {}
@@ -1026,7 +1112,7 @@ def _listing(ctx: Ctx, *, now: float) -> tuple[dict[ItemId, IncomingItem], int] 
             return {"state": out.state, "error": out.error, "changed": [], "pulled": 0, "conflicts": 0}
         head = max(head, int(page.head))
         for it in page.items:
-            if it.kind in KINDS:
+            if it.kind in kinds:
                 listing[it.id] = it
         if not page.more or not page.after or page.after == after:
             return listing, head
@@ -1036,11 +1122,17 @@ def _listing(ctx: Ctx, *, now: float) -> tuple[dict[ItemId, IncomingItem], int] 
 def _resync(ctx: Ctx, head_seq: int, changed: list[str], *, now: float) -> dict[str, Any]:
     """The cursor is older than what the server keeps: list every item and reconcile each
     by seq (missing here: applied; extra here and clean: removed; edited here: the usual
-    merge and conflict rules)."""
-    got = _listing(ctx, now=now)
+    merge and conflict rules; folder units as a pull applies them)."""
+    got = _listing(ctx, now=now, kinds=(*KINDS, TREE))
     if isinstance(got, dict):
         return got
     listing, _ = got
+    tree = {vid: it for vid, it in listing.items() if vid[0] == TREE}
+    listing = {vid: it for vid, it in listing.items() if vid[0] != TREE}
+    folded = _resync_tree(ctx, tree, head_seq)
+    if folded["state"] != "ok":
+        stop = _stop(ctx, Offline(folded.get("error", "")), now=now)
+        return {"state": stop.state, "error": stop.error, "changed": changed, "pulled": 0, "conflicts": 0}
     local = {(r["kind"], r["key"]): r for r in space_vcs.plugin_rows(ctx.account, ctx.space, ctx.plugin)
              if r["kind"] in KINDS}
     todo: list[IncomingItem] = []
@@ -1090,8 +1182,24 @@ def _resync(ctx: Ctx, head_seq: int, changed: list[str], *, now: float) -> dict[
         raise
     run.committed()
     changed += run.changed
-    return {"state": "ok", "error": "", "changed": changed, "pulled": len(todo), "conflicts": conflicts,
-            "resync": True}
+    return {"state": "ok", "error": "", "changed": changed, "pulled": len(todo) + len(tree),
+            "conflicts": conflicts + folded["conflicts"], "resync": True, "tree": len(folded["units"])}
+
+
+def _resync_tree(ctx: Ctx, listed: Mapping[ItemId, IncomingItem], head_seq: int) -> dict[str, Any]:
+    """A resync's folder files: each one's current version lands as a pull would land it
+    (one here at that seq stays), and a file here the team no longer has, sent before and
+    not changed since, goes."""
+    if not listed and not tf.plugin_folders(ctx.plugin):
+        return {"state": "ok", "units": [], "conflicts": 0}
+    entries = [(it, int(it.seq), it.by, float(it.at)) for it in listed.values()]
+    keys = {vid[1] for vid in listed}
+    for folder in tf.plugin_folders(ctx.plugin):
+        for r in ff.files(ctx.account, ctx.space, ctx.plugin, folder.id):
+            if r["item_key"] and r["item_key"] not in keys and int(r["base_seq"]) and not r["dirty"]:
+                entries.append((IncomingItem(kind=TREE, key=r["item_key"], op="del", seq=int(head_seq)),
+                                int(head_seq), "", 0.0))
+    return _apply_tree(ctx, entries) if entries else {"state": "ok", "units": [], "conflicts": 0}
 
 
 def _v1rev(it: IncomingItem) -> int | None:
@@ -1126,17 +1234,26 @@ def _reconcile_v1(ctx: Ctx, *, now: float) -> dict[str, Any]:
       was edited on top of a revision, sent as new when it was made here.
 
     All in one transaction; only then is the plugin on the new sync (engine ``v2``) with
-    the server's head. A copy with nothing from the older sync (no rows, or only changes
-    made here and never sent) needs none of it: it pulls from the start like any."""
+    the server's head. Folder files the listing has land first, as a resync lands them
+    (the head jumps past their changesets). A copy with nothing from the older sync (no
+    rows, or only changes made here and never sent) needs none of it: it pulls from the
+    start like any."""
     if not any(int(r["rev"]) > 0 or not int(r["dirty"])
                for r in space_vcs.plugin_rows(ctx.account, ctx.space, ctx.plugin)
                if r["kind"] in KINDS and not int(r["sensitive"])):
         space_vcs.head_put(ctx.account, ctx.space, ctx.plugin, engine="v2")
         return {"state": "ok", "error": "", "changed": [], "pulled": 0, "conflicts": 0}
-    got = _listing(ctx, now=now)
+    got = _listing(ctx, now=now, kinds=(*KINDS, TREE))
     if isinstance(got, dict):
         return got
     listing, head_seq = got
+    tree = {vid: it for vid, it in listing.items() if vid[0] == TREE}
+    listing = {vid: it for vid, it in listing.items() if vid[0] != TREE}
+    if tree:
+        folded = _resync_tree(ctx, tree, head_seq)
+        if folded["state"] != "ok":
+            out = _stop(ctx, Offline(folded.get("error", "")), now=now)
+            return {"state": out.state, "error": out.error, "changed": [], "pulled": 0, "conflicts": 0}
     local = {(r["kind"], r["key"]): r for r in space_vcs.plugin_rows(ctx.account, ctx.space, ctx.plugin)
              if r["kind"] in KINDS}
     need = [it for vid, it in listing.items() if not it.deleted and not _keeps(local.get(vid), it)]
@@ -1201,6 +1318,928 @@ def _reconcile_v1(ctx: Ctx, *, now: float) -> dict[str, Any]:
     return {"state": "ok", "error": "", "changed": run.changed, "pulled": len(need), "conflicts": run.conflicts}
 
 
+# --------------------------------------------------------------------------- folders (kind tree)
+
+
+def _is_tree_cs(cs: Mapping[str, Any]) -> bool:
+    return any(i.get("kind") == TREE for i in cs.get("items") or [])
+
+
+def _tree_folder_id(key: str) -> str:
+    return key[len("tree:"):].split("/", 1)[0] if key.startswith("tree:") else ""
+
+
+def _unit_key(folder_id: str, unit: str) -> str:
+    """A folder unit's conflict key (``<folder>/<unit>``; the unit keeps its project id)."""
+    return f"{folder_id}/{unit}"
+
+
+def _unit_display(folder: tf.Folder, unit: str) -> str:
+    """How a unit reads on the bar: its folder or file name (the folder's id for a whole folder)."""
+    if folder.project:
+        rest = unit.split("/", 1)[1] if "/" in unit else ""
+        return rest or folder.id
+    return folder.id if unit == "." else unit
+
+
+def _uids(ctx: Ctx, folder: tf.Folder) -> Callable[[str], str]:
+    return tf.unit_ids(ctx.backend, ctx.space, folder.id)
+
+
+def _folder_copies(ctx: Ctx) -> list[tuple[tf.Folder, str]]:
+    """Each copy of the plugin's declared folders in the space: ``(folder, project_id)``. A
+    ``{PROJECT}`` folder has one per project this PC keeps files of."""
+    out: list[tuple[tf.Folder, str]] = []
+    for folder in tf.plugin_folders(ctx.plugin):
+        if not folder.project:
+            out.append((folder, ""))
+            continue
+        pids = {str(r[0]) for r in db.connect().execute(
+            "SELECT DISTINCT project_id FROM folder_files WHERE account_id=? AND space_id=? AND plugin_id=? AND "
+            "folder_id=? AND project_id<>''", (ctx.account, ctx.space, ctx.plugin, folder.id)).fetchall()}
+        base = tf.team_copy(ctx.account, ctx.space, ctx.plugin, folder)
+        pids |= {e.name for e in tf._entries(base) if e.is_dir(follow_symlinks=False) and not e.is_junction()}
+        out += [(folder, pid) for pid in sorted(pids)]
+    return out
+
+
+def _copy_units(ctx: Ctx, folder: tf.Folder, project_id: str) -> list[str]:
+    return [str(r[0]) for r in db.connect().execute(
+        "SELECT DISTINCT unit FROM folder_files WHERE account_id=? AND space_id=? AND plugin_id=? AND folder_id=? AND "
+        "project_id=?", (ctx.account, ctx.space, ctx.plugin, folder.id, project_id)).fetchall()]
+
+
+def _holds_incoming(ctx: Ctx) -> bool:
+    """Incoming changes wait behind "Update now": a ``reload`` plugin whose panel is on screen."""
+    if not any(f.after_pull == "reload" for f in tf.plugin_folders(ctx.plugin)):
+        return False
+    try:
+        from backend.uefn_plugins.panel_presence import panel_state
+
+        return bool(panel_state(ctx.plugin)["visible"])
+    except Exception:  # noqa: BLE001 — unsure: apply them
+        return False
+
+
+def _protect(ctx: Ctx) -> None:
+    """Read-only exactly where it should be in every copy: units someone else holds (unless
+    the folder quarantines), units with changes waiting behind Update now."""
+    waiting = set(space_vcs.incoming_queue_get(ctx.account, ctx.space, ctx.plugin)["units"])
+    for folder, pid in _folder_copies(ctx):
+        uid = _uids(ctx, folder)
+        incoming = [u for u in _copy_units(ctx, folder, pid) if uid(u) in waiting] if waiting else []
+        try:
+            tf.refresh_readonly(ctx.account, ctx.space, ctx.plugin, folder, project_id=pid, unit_id=uid,
+                                incoming=incoming)
+        except OSError:
+            _log.debug("read-only refresh of %s failed", folder.id, exc_info=True)
+
+
+def _auto_lock(ctx: Ctx, folder: tf.Folder, changed: Iterable[str], uid: Callable[[str], str], *, now: float) -> None:
+    """A unit's first change here takes its lock (``lock: unit``). Refused because someone
+    else holds it: the change was made before this PC knew, so it is quarantined."""
+    if folder.lock != "unit":
+        return
+    a = (ctx.account, ctx.space, ctx.plugin)
+    mine = {lk["unit"] for lk in space_vcs.locks(*a, now=now) if lk["mine"]}
+    dirty = ff.dirty_units(*a, folder.id)
+    want: list[tuple[str, str, str]] = []
+    for unit in sorted(set(changed)):
+        u = uid(unit)
+        info = dirty.get((folder.id, unit))
+        if u in mine or info is None or info["states"] & set(tf.HELD_STATES):
+            continue
+        if space_vcs.foreign_lock(*a, u, now=now):
+            continue  # the scan quarantined it
+        want.append((unit, u, _unit_display(folder, unit)))
+    if not want:
+        return
+    got = acquire(*a, ctx.backend, [(u, name) for _, u, name in want], reason="auto", now=now)
+    for unit, u, _ in want:
+        ans = got.get(u) or {}
+        if ans.get("state") == "locked":
+            ff.unit_set_state(*a, folder.id, unit, "quarantined",
+                              f"Changed here while {ans.get('holder') or 'someone'} holds it")
+
+
+def watch(account: str, space: str, plugin: str, backend: Any, *, now: float | None = None) -> dict[str, int]:
+    """One look at a plugin's folder copies in a team space (the background sync's watcher,
+    every 2 s while the plugin is in use and after each of its calls, else every minute):
+    what changed is noted (presence says who edits what), a unit's first change takes its
+    lock, and units someone else holds or with changes waiting behind Update now are
+    read-only. Nothing goes out here. Returns ``{quiet, waiting, held}``: units ready to go
+    out, still changing (or mid-save), held back (``busy`` when a round holds the space)."""
+    now = time.time() if now is None else now
+    out = {"quiet": 0, "waiting": 0, "held": 0}
+    if not tf.plugin_folders(plugin) or held_reason(account, space):
+        return out
+    ctx = Ctx(account, space, plugin, backend)
+    with _lock(account, space, 0.0) as got:
+        if not got:
+            return {**out, "busy": 1}
+        for folder, pid in _folder_copies(ctx):
+            uid = _uids(ctx, folder)
+            sc = tf.scan(account, space, plugin, folder, project_id=pid, now=now, unit_id=uid)
+            if sc.changed:
+                _auto_lock(ctx, folder, sc.changed, uid, now=now)
+            out["quiet"] += len(sc.quiet)
+            out["waiting"] += len(sc.waiting)
+            out["held"] += len(sc.held)
+        _protect(ctx)
+    return out
+
+
+def _unit_actor(ctx: Ctx, unit_id: str, now: float) -> tuple[str, str]:
+    """Who changed the unit last here (the person, or a ducky through the plugin's calls)."""
+    for act in space_vcs.activity(ctx.account, ctx.space, now=now):
+        if act["plugin_id"] == ctx.plugin and act["unit"] == unit_id:
+            return str(act["actor"] or "user"), str(act["ducky"] or "")
+    return "user", ""
+
+
+def _unit_changeset(ctx: Ctx, folder: tf.Folder, pid: str, unit: str, unit_id: str, *, base_seq: int,
+                    now: float) -> int:
+    """One quiet unit as one changeset, written before any upload (a very big unit: parts of
+    one group, the last one marked). Returns how many were written."""
+    a = (ctx.account, ctx.space, ctx.plugin)
+    items = tf.outgoing(*a, folder, unit, project_id=pid)
+    if not items:
+        return 0
+    snaps: list[dict[str, Any]] = []
+    for it in items:
+        key = it["item_key"] or tf.tree_key(ctx.backend, ctx.space, folder.id, unit, it["relpath"])
+        if not it["item_key"]:
+            ff.file_put(None, *a, folder.id, it["relpath"], item_key=key)
+        snaps.append({"kind": TREE, "key": key, "unit": unit_id, "op": it["op"], "sha256": it["sha256"],
+                      "size": int(it["size"]), "deleted": 1 if it["op"] == "del" else 0, "relpath": it["relpath"],
+                      "folder": folder.id, "project": pid, "unit_name": unit, "mtime_ns": int(it["mtime_ns"]),
+                      "base_seq": int(it["base_seq"])})
+    actor, ducky = _unit_actor(ctx, unit_id, now)
+    parts = [snaps[i:i + MAX_ITEMS] for i in range(0, len(snaps), MAX_ITEMS)]
+    gid = f"unit-{uuid.uuid4().hex}" if len(parts) > 1 else ""
+    for n, part in enumerate(parts, 1):
+        space_vcs.cs_add(*a, uuid.uuid4().hex, base_seq=base_seq, items=part, group_id=gid, part=n,
+                         last=n == len(parts), message=_unit_display(folder, unit), actor=actor, ducky=ducky)
+    return len(parts)
+
+
+def _build_tree(ctx: Ctx, *, now: float, quiet_s: float = tf.QUIET_S) -> int:
+    """Scan every folder copy and write a changeset per unit ready to go out: quiet for
+    ``quiet_s`` seconds, no save in progress, not already going, not held (conflict,
+    quarantine, refused), not waiting behind Update now. A unit someone else holds is
+    quarantined. Returns how many changesets were written."""
+    now = max(now, time.time())  # the round's start is older than a merge its pull just wrote
+    a = (ctx.account, ctx.space, ctx.plugin)
+    going = {(str(i.get("folder")), str(i.get("unit_name"))) for cs in space_vcs.cs_open(*a)
+             for i in cs["items"] if i.get("kind") == TREE}
+    waiting = set(space_vcs.incoming_queue_get(*a)["units"])
+    head_seq = int(space_vcs.head_get(*a)["seq"])
+    made = 0
+    for folder, pid in _folder_copies(ctx):
+        uid = _uids(ctx, folder)
+        sc = tf.scan(*a, folder, project_id=pid, now=now, quiet_s=quiet_s, unit_id=uid)
+        if sc.changed:
+            _auto_lock(ctx, folder, sc.changed, uid, now=now)
+        if not sc.quiet:
+            continue
+        dirty = ff.dirty_units(*a, folder.id)
+        for unit in sc.quiet:
+            u = uid(unit)
+            info = dirty.get((folder.id, unit))
+            if (folder.id, unit) in going or u in waiting or info is None or info["states"] & set(tf.HELD_STATES):
+                continue
+            held = space_vcs.foreign_lock(*a, u, now=now)
+            if held:
+                ff.unit_set_state(*a, folder.id, unit, "quarantined", tf._held_text(held))
+                continue
+            made += _unit_changeset(ctx, folder, pid, unit, u, base_seq=head_seq, now=now)
+    return made
+
+
+def _tree_path(ctx: Ctx, snap: Mapping[str, Any]) -> str:
+    folder = tf.folder_of(ctx.plugin, str(snap["folder"]))
+    if folder is None:
+        return ""
+    pid = str(snap.get("project") or "")
+    base = tf.team_copy(ctx.account, ctx.space, ctx.plugin, folder, pid)
+    return os.path.join(tf._lp(base), *tf._bound_rel(str(snap["relpath"]), pid).split("/"))
+
+
+def _tree_meta(snap: Mapping[str, Any]) -> dict[str, Any]:
+    """What travels sealed with a folder file: its real name, unit and mtime."""
+    return {"relpath": snap["relpath"], "unit_name": snap["unit_name"], "folder": snap["folder"],
+            "project": snap.get("project") or "", "mtime_ns": int(snap.get("mtime_ns") or 0)}
+
+
+def _units_of(snaps: Iterable[Mapping[str, Any]]) -> dict[str, tuple[str, str]]:
+    """``{unit id: (folder id, unit)}`` of the snapshots."""
+    return {str(s["unit"]): (str(s["folder"]), str(s["unit_name"])) for s in snaps}
+
+
+def _tree_sent(ctx: Ctx, snaps: list[Mapping[str, Any]], seq: int) -> None:
+    by_copy: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for s in snaps:
+        by_copy.setdefault((str(s["folder"]), str(s.get("project") or "")), []).append(
+            {"relpath": s["relpath"], "op": s["op"], "sha256": s["sha256"],
+             "path": "" if s["op"] == "del" else _tree_path(ctx, s)})
+    for (fid, pid), items in by_copy.items():
+        folder = tf.folder_of(ctx.plugin, fid)
+        if folder is not None:
+            tf.mark_sent(ctx.account, ctx.space, ctx.plugin, folder, items, seq, project_id=pid)
+
+
+def _push_tree_cs(ctx: Ctx, cs: dict[str, Any], *, now: float) -> _Out:
+    """One unit's changeset: each file is copied once into core's outbox, verified against
+    what the changeset says (:func:`team_folders.snapshot`), and the backend reads the copy
+    at its own pace, so the plugin's saves never wait for an upload and what goes out always
+    matches its sha256. On a first try the unit must still be exactly what the changeset
+    holds, else it goes again whole, later; a retry (its answer got lost) sends the same
+    copies."""
+    a = (ctx.account, ctx.space, ctx.plugin)
+    first_try = cs["state"] == "pending"
+    snaps = [s for s in cs["items"] if s.get("kind") == TREE]
+    rows = {(str(s["folder"]), str(s["relpath"])): ff.file_get(*a, str(s["folder"]), str(s["relpath"]))
+            for s in snaps}
+
+    def dropped() -> _Out:
+        space_vcs.cs_delete(ctx.account, ctx.space, cs["cs_id"])
+        tf.drop_snapshots(*a, cs["cs_id"])
+        return _Out("dropped")
+
+    if first_try:
+        for s in snaps:
+            r = rows[(str(s["folder"]), str(s["relpath"]))]
+            if (r is None or not r["dirty"] or r["sync_state"] in tf.HELD_STATES or r["sha256"] != s["sha256"]
+                    or bool(r["deleted"]) != (s["op"] == "del")):
+                return dropped()  # changed since: the unit goes again as it is now
+        space_vcs.cs_set(ctx.account, ctx.space, cs["cs_id"], state="pushing")
+    items: list[OutgoingItem] = []
+    for s in snaps:
+        r = rows[(str(s["folder"]), str(s["relpath"]))]
+        base = int(r["base_seq"]) if r is not None else int(s.get("base_seq") or 0)
+        if s["op"] == "del":
+            items.append(OutgoingItem(kind=TREE, key=s["key"], unit=s["unit"], op="del", base_seq=base,
+                                      meta=_tree_meta(s)))
+            continue
+        path = _tree_path(ctx, s)
+        copy = tf.snapshot(*a, cs["cs_id"], str(s["key"]), path, str(s["sha256"])) if path else ""
+        if not copy:
+            return dropped()  # changed since the scan: the unit goes again as it is now
+        items.append(OutgoingItem(kind=TREE, key=s["key"], unit=s["unit"], op="put", base_seq=base,
+                                  sha256=str(s["sha256"]), size=int(s["size"]), path=copy, meta=_tree_meta(s)))
+    if not items:
+        return dropped()
+    units = sorted({i.unit for i in items})
+    fences = {lk["unit"]: int(lk["fence"]) for lk in space_vcs.locks(*a, now=now) if lk["mine"] and lk["unit"] in units}
+    head = space_vcs.head_get(*a)
+    out = OutgoingChangeset(cs_id=cs["cs_id"], base_seq=int(head["seq"]), items=tuple(items), device=device_id(),
+                            group=cs["group_id"], part=int(cs["part"]), last=bool(cs["last"]), message=cs["message"],
+                            actor=cs["actor"], ducky=cs["ducky"], fences=fences)
+    res = _call(ctx.backend.push, ctx.space, ctx.plugin, out)
+    if isinstance(res, (Committed, Replay, Conflict, Locked, Refused)):
+        tf.drop_snapshots(*a, cs["cs_id"])  # answered for good: no retry sends them again
+    if isinstance(res, (Committed, Replay)):
+        _tree_sent(ctx, snaps, res.seq)
+        space_vcs.mark_committed(*a, res.seq, [], units=units)
+        space_vcs.cs_set(ctx.account, ctx.space, cs["cs_id"], state="committed", seq=res.seq)
+        space_vcs.head_put(*a, moves=0)
+        return _Out("committed", seq=res.seq)
+    named = _units_of(snaps)
+    if isinstance(res, Conflict):
+        space_vcs.cs_delete(ctx.account, ctx.space, cs["cs_id"])
+        return _Out("conflict")
+    if isinstance(res, Locked):
+        space_vcs.cs_delete(ctx.account, ctx.space, cs["cs_id"])
+        for lk in res.units:
+            _cache_lock(ctx, lk, now)
+            if lk.unit in named:
+                fid, unit = named[lk.unit]
+                ff.unit_set_state(*a, fid, unit, "quarantined",
+                                  f"Changed here while {lk.user_name or lk.user or 'someone'} holds it")
+        return _Out("locked")
+    if isinstance(res, Refused):
+        space_vcs.cs_delete(ctx.account, ctx.space, cs["cs_id"])
+        unit_of_key = {str(s["key"]): str(s["unit"]) for s in snaps}
+        for it in res.items:
+            if unit_of_key.get(it.key) in named:
+                fid, unit = named[unit_of_key[it.key]]
+                ff.unit_set_state(*a, fid, unit, "refused", it.reason)
+        return _Out("refused")
+    if isinstance(res, Missing):
+        return _Out("missing", error=reason_of(res))
+    return _stop(ctx, res, now=now)
+
+
+@dataclass
+class _UnitIn:
+    """One unit of a pull: its files in order, the seq it lands at, who changed it."""
+
+    folder: tf.Folder
+    project_id: str
+    unit: str
+    uid: str
+    seq: int = 0
+    by: str = ""
+    at: float = 0.0
+    items: list[tf.Incoming] = field(default_factory=list)
+    keys: list[list[Any]] = field(default_factory=list)  # [key, seq, op, relpath]: what a conflict holds
+
+
+def _rel_ok(rel: str) -> bool:
+    return bool(rel) and not rel.startswith("/") and "\\" not in rel and ":" not in rel and all(
+        p and p not in (".", "..") for p in rel.split("/"))
+
+
+def _land(got: IncomingItem, temp: Path) -> str:
+    """A download into ``temp`` (beside its target, so the apply is a rename). Returns the
+    sha256 of what landed, streamed."""
+    tp = tf._lp(temp)
+    if got.data is not None:
+        with open(tp, "wb") as f:
+            f.write(got.data)
+    else:
+        try:
+            os.replace(got.path, tp)
+        except OSError:  # another volume
+            shutil.copyfile(got.path, tp)
+            Path(got.path).unlink(missing_ok=True)
+    return tf._sha_file(temp)
+
+
+def _held_items(c: Mapping[str, Any] | None) -> list[list[Any]]:
+    """What a folder unit's conflict holds of theirs: ``[key, seq, op, relpath]`` each."""
+    if not c or not c["mine_value"]:
+        return []
+    try:
+        held = json.loads(c["mine_value"]).get("held") or []
+    except (ValueError, AttributeError):
+        return []
+    return [list(h) for h in held if isinstance(h, list) and len(h) == 4]
+
+
+def _hold_unit(conn: Any, ctx: Ctx, u: _UnitIn) -> None:
+    """Theirs is held: the unit changed here, so nothing on disk changes. The conflict keeps
+    what theirs is (newest seq per file) for Keep mine, Take theirs or Keep both. Mine is
+    the unit as it is on disk; ``mine_value`` lists theirs (keys and seqs, no content)."""
+    a = (ctx.account, ctx.space, ctx.plugin)
+    key = _unit_key(u.folder.id, u.unit)
+    held = {str(h[0]): h for h in _held_items(space_vcs.conflict_get(*a, TREE, key, conn=conn))}
+    for k, seq, op, rel in u.keys:
+        if k not in held or int(seq) >= int(held[k][1]):
+            held[k] = [k, int(seq), op, rel]
+    space_vcs.conflict_put(conn, *a, TREE, key, unit=u.uid, reason="changed",
+                           mine_value=json.dumps({"held": sorted(held.values())}, separators=(",", ":")),
+                           theirs_seq=max(int(h[1]) for h in held.values()), theirs_by=u.by, theirs_at=u.at)
+
+
+def _apply_tree(ctx: Ctx, entries: list[tuple[IncomingItem, int, str, float]], *,
+                force: bool = False) -> dict[str, Any]:
+    """Pulled folder files, unit by unit in seq order: each file's newest version is
+    downloaded and verified into a temp file beside its target, then the unit lands whole
+    (:func:`team_folders.apply_unit`: other files, ``last``, deletes; the origin's mtimes).
+    A unit changed here is held as a conflict (or merges); a unit one of whose files can't
+    be downloaded or verified doesn't land at all, and every file of it is set aside to be
+    retried together (never applied in halves). A file this PC already has at that seq, or
+    changed on top of it (its own commit coming back), is skipped. Names are this PC's: a
+    file or unit named here with another case or Unicode form keeps its name here.
+    ``force``: Take theirs over changes here. Returns ``{state, units, conflicts, blocked}``
+    (``units``: unit ids that changed here)."""
+    a = (ctx.account, ctx.space, ctx.plugin)
+    latest: dict[str, tuple[IncomingItem, int, str, float]] = {}
+    for it, seq, by, at in sorted(entries, key=lambda e: e[1]):
+        latest.pop(it.key, None)
+        latest[it.key] = (it, seq, by, at)
+    units: dict[tuple[str, str, str], _UnitIn] = {}
+    seen: list[tuple[str, int]] = []  # (unit id, seq) applied with nothing to do here
+    blocked: list[tuple[IncomingItem, int, str]] = []
+    failed: dict[str, str] = {}  # unit id → why one of its files can't land now
+    named: dict[tuple[str, str], dict[str, str]] = {}
+
+    def local_unit(folder: tf.Folder, pid: str, unit: str) -> str:
+        """A unit as this PC names it."""
+        names = named.get((folder.id, pid))
+        if names is None:
+            names = named[(folder.id, pid)] = {tf.norm_name(r["unit"]): r["unit"]
+                                               for r in ff.files(*a, folder.id, project_id=pid)}
+        return names.get(tf.norm_name(unit), unit)
+
+    def unit_in(folder: tf.Folder, pid: str, unit: str, seq: int, by: str, at: float) -> _UnitIn:
+        u = units.get((folder.id, pid, tf.norm_name(unit)))
+        if u is None:
+            u = units[(folder.id, pid, tf.norm_name(unit))] = _UnitIn(
+                folder, pid, unit, tf.tree_unit(ctx.backend, ctx.space, folder.id, unit))
+        u.seq, u.by, u.at = max(u.seq, seq), by or u.by, at or u.at
+        return u
+
+    def here(row: Mapping[str, Any] | None, seq: int) -> bool:
+        """This version, or a newer one, is here already: a clean file at or past it, or one
+        changed here on top of it (as for docs)."""
+        return (row is not None and row["sync_state"] != "refetch" and int(row["base_seq"]) >= seq
+                and (bool(row["dirty"]) or not force))
+
+    def fail(it: IncomingItem, folder: tf.Folder, row: Mapping[str, Any] | None, seq: int, why: str) -> None:
+        blocked.append((it, seq, why))
+        for uid in {it.unit, tf.tree_unit(ctx.backend, ctx.space, folder.id, str(row["unit"])) if row else ""} - {""}:
+            failed.setdefault(uid, why)
+
+    def gone(it: IncomingItem, folder: tf.Folder, seq: int, by: str, at: float) -> None:
+        row = ff.by_key(*a, it.key)
+        if row is None or here(row, seq):  # unknown here, or made again here on top of this delete
+            seen.append((it.unit, seq))
+            return
+        pid = str(row["project_id"])
+        u = unit_in(folder, pid, str(row["unit"]), seq, by, at)
+        u.items.append(tf.Incoming(relpath=tf._bound_rel(row["relpath"], pid), op="del", item_key=it.key))
+        u.keys.append([it.key, seq, "del", row["relpath"]])
+
+    todo: list[tuple[IncomingItem, int, str, float, tf.Folder, dict[str, Any] | None]] = []
+    for it, seq, by, at in latest.values():
+        folder = tf.folder_of(ctx.plugin, _tree_folder_id(it.key))
+        if folder is None:
+            seen.append((it.unit, seq))  # a folder the plugin no longer declares
+            continue
+        row = ff.by_key(*a, it.key)
+        if here(row, seq):
+            seen.append((it.unit, seq))
+            continue
+        if it.op == "del":
+            gone(it, folder, seq, by, at)
+        else:
+            todo.append((it, seq, by, at, folder, row))
+    fetched = _download(ctx, [it for it, *_ in todo])
+    if any(isinstance(g, Offline) for g in fetched.values()):
+        for g in fetched.values():
+            _drop_temp(g)
+        return {"state": "offline", "error": reason_of(next(g for g in fetched.values() if isinstance(g, Offline)))}
+    for it, seq, by, at, folder, row in todo:
+        got = fetched.get(it.id)
+        if not isinstance(got, IncomingItem):
+            fail(it, folder, row, seq, reason_of(got) or "The download failed.")
+            continue
+        if got.op == "del":  # deleted since (a set-aside file fetched again)
+            gone(it, folder, int(got.seq or seq), got.by or by, got.at or at)
+            continue
+        meta = dict(got.meta or it.meta or {})
+        stored = str(meta.get("relpath") or "")
+        pid = stored.split("/", 1)[0] if folder.project and "/" in stored else ""
+        rel = tf._bound_rel(stored, pid)
+        if not _rel_ok(stored) or (folder.project and not pid):
+            _drop_temp(got)
+            fail(it, folder, row, seq, "This file's name can't be used on this PC.")
+            continue
+        if row is not None and str(row["project_id"]) == pid:
+            rel, unit = tf._bound_rel(row["relpath"], pid), str(row["unit"])  # its name here
+        else:
+            theirs = tf.unit_of(folder, rel, pid)
+            unit = local_unit(folder, pid, theirs)
+            if unit != theirs and folder.unit == "*":  # a unit named here with another case
+                rel = tf._unit_local(unit, pid) + rel[len(tf._unit_local(theirs, pid)):]
+        stored = tf._stored(rel, pid)
+        if tf.matches(folder.ignore, rel):
+            _drop_temp(got)
+            seen.append((it.unit, seq))
+            continue
+        try:
+            temp = tf.temp_for(*a, folder, rel, pid)
+            sha = _land(got, temp)
+        except OSError as exc:
+            _drop_temp(got)
+            fail(it, folder, row, seq, _why(exc))
+            continue
+        want = got.sha256 or it.sha256
+        if want and want != sha:
+            Path(tf._lp(temp)).unlink(missing_ok=True)
+            fail(it, folder, row, seq, "The download didn't match what was sent.")
+            continue
+        u = unit_in(folder, pid, unit, int(got.seq or seq), got.by or by, got.at or at)
+        u.items.append(tf.Incoming(relpath=rel, op="put", temp=str(temp), mtime_ns=int(meta.get("mtime_ns") or 0),
+                                   sha256=sha, size=os.stat(tf._lp(temp)).st_size, item_key=it.key))
+        u.keys.append([it.key, int(got.seq or seq), "put", stored])
+    applied: list[str] = []
+    conflicts = held_back = 0
+    for u in units.values():
+        why = failed.get(u.uid)
+        if why is not None:
+            # A file of the unit didn't arrive whole: none of it lands; all of it is retried together.
+            for item in u.items:
+                if item.temp:
+                    Path(tf._lp(item.temp)).unlink(missing_ok=True)
+            conn = db.connect()
+            with db.write_txn(conn):
+                for k, seq, _op, _rel in u.keys:
+                    space_vcs.blocked_put(conn, *a, TREE, k, unit=u.uid, seq=int(seq), error=why)
+            held_back += 1
+            continue
+        foreign = space_vcs.foreign_lock(*a, u.uid)
+        try:
+            res = tf.apply_unit(*a, u.folder, u.unit, u.items, seq=u.seq, project_id=u.project_id,
+                                held=bool(foreign) and u.folder.on_locked == "readonly", force=force)
+        finally:
+            for item in u.items:
+                if item.temp:
+                    Path(tf._lp(item.temp)).unlink(missing_ok=True)
+        conn = db.connect()
+        with db.write_txn(conn):
+            if res.get("ok"):
+                space_vcs.unit_seen(conn, *a, u.uid, u.seq)
+                for k, *_ in u.keys:
+                    space_vcs.blocked_delete(conn, *a, TREE, k)
+                if force:
+                    space_vcs.conflict_delete(conn, *a, TREE, _unit_key(u.folder.id, u.unit))
+                applied.append(u.uid)
+            elif res.get("state") == "conflict":
+                _hold_unit(conn, ctx, u)
+                conflicts += 1
+            else:
+                held_back += 1
+                for k, seq, _op, _rel in u.keys:
+                    space_vcs.blocked_put(conn, *a, TREE, k, unit=u.uid, seq=int(seq),
+                                          error=str(res.get("error") or "The unit couldn't be applied."))
+    conn = db.connect()
+    with db.write_txn(conn):
+        for unit_id, seq in seen:
+            if unit_id not in failed:
+                space_vcs.unit_seen(conn, *a, unit_id, seq)
+        for it, seq, why in blocked:
+            space_vcs.blocked_put(conn, *a, TREE, it.key, unit=it.unit, seq=seq, error=why)
+    return {"state": "ok", "units": applied, "conflicts": conflicts, "blocked": len(blocked) + held_back}
+
+
+def _wait_behind_update(ctx: Ctx, waiting: list[IncomingChangeset]) -> None:
+    """What waits behind "Update now" (the bar says how many and from whom), and its units
+    read-only so nobody edits a stale base. An empty list clears it."""
+    a = (ctx.account, ctx.space, ctx.plugin)
+    before = space_vcs.incoming_queue_get(*a)
+    space_vcs.incoming_queue_put(*a, count=len(waiting), by=[cs.by for cs in waiting],
+                                 units=[i.unit for cs in waiting for i in cs.items if i.unit],
+                                 seq=max((cs.seq for cs in waiting), default=0))
+    if before["count"] or waiting:
+        _protect(ctx)
+
+
+def _refetch(ctx: Ctx) -> dict[str, Any]:
+    """Folder files to fetch again at the team's head (Discard mine, Take theirs over a file
+    only this PC changed). A file the team no longer has just goes."""
+    a = (ctx.account, ctx.space, ctx.plugin)
+    rows = tf.refetch_items(*a)
+    entries: list[tuple[IncomingItem, int, str, float]] = []
+    for r in rows:
+        folder = tf.folder_of(ctx.plugin, r["folder_id"])
+        if folder is None:
+            continue
+        key = r["item_key"] or tf.tree_key(ctx.backend, ctx.space, folder.id, r["unit"], r["relpath"])
+        got = _call(ctx.backend.fetch, ctx.space, ctx.plugin, TREE, key, None)
+        if isinstance(got, Offline):
+            for it, *_ in entries:
+                _drop_temp(it)
+            return {"state": "ok", "units": [], "conflicts": 0}  # the next round tries again
+        if not isinstance(got, IncomingItem):
+            conn = db.connect()
+            with db.write_txn(conn):
+                ff.file_delete(conn, *a, folder.id, r["relpath"])
+            continue
+        entries.append((got, int(got.seq), got.by, float(got.at)))
+    if not entries:
+        return {"state": "ok", "units": [], "conflicts": 0}
+    return _apply_tree(ctx, entries)
+
+
+def after_pull(plugin: str) -> None:
+    """A pull changed the files of a plugin that keeps its own folders. ``reload``: its
+    reload epoch moves on, so every process that loaded it reloads it: the app restarts it
+    once none of its calls is running (:func:`host.reload_moved_plugins`, which then
+    refreshes its panels), an MCP bridge before its next call. ``notify``: its open panels
+    hear it."""
+    if any(f.after_pull == "reload" for f in tf.plugin_folders(plugin)):
+        ff.reload_bump(plugin, "pull")
+        return
+    _tell_panels(plugin, switched=False)
+
+
+def _tell_panels(plugin: str, *, switched: bool) -> None:
+    try:
+        from frontend.ui_web.agent_modes import push_ui_event
+
+        push_ui_event({"type": "plugin_scope_changed", "plugins": [plugin], **({"switched": True} if switched else {})})
+    except Exception:  # noqa: BLE001 — the next status read shows it
+        _log.debug("telling %s's panels failed", plugin, exc_info=True)
+
+
+def apply_waiting(plugin: str, *, wait: float = CALL_APPLY_WAIT_S) -> dict[str, Any]:
+    """Before an agent's call: changes waiting behind "Update now" for ``plugin`` land first
+    (the agent never works on a stale base). Its reload epoch moves on, so the call's own
+    process reloads the plugin before it runs (the caller checks); the app restarts it."""
+    scope = scopes.active_scope(plugin)
+    if scope["kind"] != "shared":
+        return {"ok": True, "applied": 0}
+    account, space = scope["account"], scope["id"]
+    if not space_vcs.incoming_queue_get(account, space, plugin)["count"]:
+        return {"ok": True, "applied": 0}
+    from backend.uefn_plugins.spaces import ledger_for
+
+    backend = ledger_for(account, space, plugin)
+    if backend is None:
+        return {"ok": False, "applied": 0}
+    out = run(account, space, plugin, backend, push=False, pull=True, force=True, lock_wait=wait)
+    if out.get("tree"):
+        after_pull(plugin)
+    return {"ok": out["state"] == "ok", "applied": int(out.get("tree") or 0), "error": out.get("error", "")}
+
+
+def folder_work(account: str, space: str, plugin: str) -> bool:
+    """Something for a round to do in the plugin's folder copies: changed units not held
+    back, files to fetch again, or changes waiting behind Update now that may land now."""
+    if not tf.plugin_folders(plugin):
+        return False
+    if any(not info["states"] & set(tf.HELD_STATES) for info in ff.dirty_units(account, space, plugin).values()):
+        return True
+    return folder_due(account, space, plugin)
+
+
+def folder_due(account: str, space: str, plugin: str) -> bool:
+    """A round should come now for the plugin's folders even with nothing quiet to send:
+    files to fetch again (Discard mine, Take theirs), or changes that waited behind Update
+    now and may land now (its panel was hidden)."""
+    if tf.refetch_items(account, space, plugin):
+        return True
+    return bool(space_vcs.incoming_queue_get(account, space, plugin)["count"]) and not _holds_incoming(
+        Ctx(account, space, plugin, None))
+
+
+def _local_unsent(account: str, space: str, plugin: str) -> list[str]:
+    """Units with changes not sent and not held back (a conflict, a quarantine, refused)."""
+    return sorted(f"{fid}/{unit}" for (fid, unit), info in ff.dirty_units(account, space, plugin).items()
+                  if not info["states"] & set(tf.HELD_STATES))
+
+
+def pull_copy(account: str, space: str, plugin: str, backend: Any, *, label: str = "",
+              timeout: float = SWITCH_PULL_S, landed: dict[str, int] | None = None) -> tuple[bool, str]:
+    """A switch to a team: the team's copy of the plugin (its folders too) comes down to the
+    head first, while the plugin still reads the copy it uses now. The bar shows "Getting
+    <team>'s files… 40%". ``(False, why)`` when it didn't finish: nothing changes then.
+    ``landed["tree"]`` adds up the folder units it changed here (also when it stops part way)."""
+    label = label or repo.sync_get(account, space)["label"] or "The team"
+    deadline = time.monotonic() + max(1.0, timeout)
+    try:
+        space_vcs.binding_put(plugin, label, 0)
+        seen = refresh(account, space, [plugin], backend)
+        if seen["state"] not in ("ok",):
+            return False, f"{label}'s files didn't arrive ({seen.get('error') or seen['state']}). Nothing changed."
+        start = int(space_vcs.head_get(account, space, plugin)["seq"])
+
+        def progress(seq: int, head: int) -> None:
+            span = max(1, int(head) - start)
+            space_vcs.binding_put(plugin, label, int(100 * max(0, int(seq) - start) / span))
+
+        while True:
+            out = run(account, space, plugin, backend, push=False, pull=True, force=True, progress=progress)
+            if landed is not None:
+                landed["tree"] = int(landed.get("tree") or 0) + int(out.get("tree") or 0)
+            if out["state"] != "ok":
+                return False, f"{label}'s files didn't arrive ({out.get('error') or out['state']}). Nothing changed."
+            head = space_vcs.head_get(account, space, plugin)
+            if int(head["seq"]) >= int(head["remote_seq"]):
+                break
+            if time.monotonic() >= deadline:
+                return False, f"Getting {label}'s files is taking too long. Nothing changed; try again."
+        stuck = [b for b in space_vcs.blocked(account, space, plugin) if b["kind"] == TREE]
+        if stuck:
+            return False, f"Some of {label}'s files couldn't be downloaded ({stuck[0]['error']}). Nothing changed."
+        return True, ""
+    finally:
+        space_vcs.binding_put(plugin, None)
+
+
+def send_copy(account: str, space: str, plugin: str, backend: Any, *, label: str = "",
+              timeout: float = SWITCH_PULL_S) -> tuple[bool, str]:
+    """The first share: the units just copied into the team's copy go out now (every changed
+    unit, not only quiet ones). ``(False, why)`` when some didn't."""
+    label = label or repo.sync_get(account, space)["label"] or "the team"
+    out = run(account, space, plugin, backend, push=True, pull=False, force=True, quiet_s=0.0,
+              lock_wait=min(timeout, 600.0))
+    left = _local_unsent(account, space, plugin)
+    if out["state"] != "ok" or left:
+        why = out.get("error") or (f"{len(left)} not sent" if left else out["state"])
+        return False, f"Your files didn't reach {label} ({why}). Nothing changed."
+    return True, ""
+
+
+def send_before_leaving(account: str, space: str, plugin: str, backend: Any, *,
+                        timeout: float = LEAVE_SEND_S) -> list[str]:
+    """A switch away from a team copy: its changed units go out first, quiet or not (a save
+    in progress is waited for), for at most ``timeout`` seconds. Returns the units still
+    not sent (they stay in that copy)."""
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        run(account, space, plugin, backend, push=True, force=True, quiet_s=0.0,
+            lock_wait=max(1.0, deadline - time.monotonic()))
+        unsent = _local_unsent(account, space, plugin)
+        if not unsent or time.monotonic() >= deadline:
+            return unsent
+        time.sleep(0.5)
+
+
+def resolve_unit(account: str, space: str, plugin: str, backend: Any, folder_id: str, unit: str,
+                 choice: str) -> dict[str, Any]:
+    """Settle a folder unit. A conflict (changed here and by the team): ``mine`` (Keep mine:
+    the unit as it is here goes out on top of theirs), ``theirs`` (Take theirs: the team's
+    version replaces it), ``both`` (Keep both: mine is kept beside it as ``<unit> (<name>'s
+    copy)``, a unit of its own, then theirs lands). Theirs is downloaded first: until it is
+    here, and while it hasn't landed, nothing changes and the conflict stays (``ok`` false
+    with the reason). Changed while someone else holds it (quarantined): ``keep_copy``
+    (Keep mine as a copy, then the team's version comes back), ``discard`` (Discard mine),
+    or ``mine`` once their lock has gone."""
+    folder = tf.folder_of(plugin, folder_id)
+    if folder is None:
+        raise ValueError(f"{folder_id} isn't one of this plugin's folders.")
+    pid = unit.split("/", 1)[0] if folder.project else ""
+    a = (account, space, plugin)
+    key = _unit_key(folder.id, unit)
+    c = space_vcs.conflict_get(*a, TREE, key)
+    me = _my_name()
+    if choice == "keep_copy":
+        out = tf.keep_mine_as_copy(*a, folder, unit, project_id=pid, holder=me)
+    elif choice == "discard":
+        out = tf.discard_mine(*a, folder, unit, project_id=pid)
+    elif choice == "mine":
+        held = space_vcs.foreign_lock(*a, tf.tree_unit(backend, space, folder.id, unit))
+        if held and c is None:
+            return {"ok": False, "error": f"{held['holder_name'] or held['holder_user'] or 'Someone'} still holds it. "
+                                          "Ask them to release it first."}
+        out = _keep_mine(account, space, plugin, folder, unit, pid, _held_items(c), conflict=c is not None)
+    elif choice in ("theirs", "both"):
+        if backend is None:
+            return {"ok": False, "error": "Not connected: this space can't be reached right now."}
+        ctx = Ctx(account, space, plugin, backend)
+        entries, why = _fetch_theirs(ctx, _held_items(c))  # theirs first: nothing here changes without it
+        if why:
+            return {"ok": False, "error": why}
+        if choice == "both":
+            try:
+                tf.keep_mine_as_copy(*a, folder, unit, project_id=pid, holder=me)
+            except BaseException:
+                _drop_entries(entries)
+                raise
+        out = _take_theirs(ctx, folder, unit, pid, entries)
+    else:
+        raise ValueError("Choose mine, theirs, both, keep_copy or discard.")
+    if not out.get("ok"):
+        return {"ok": False, "error": str(out.get("error") or "That didn't work. The conflict is still there.")}
+    conn = db.connect()
+    with db.write_txn(conn):
+        space_vcs.conflict_delete(conn, *a, TREE, key)
+    return {"ok": True, **{k: v for k, v in dict(out).items() if k != "ok"}}
+
+
+def _my_name() -> str:
+    try:
+        from frontend.duckyos_account import get_status
+
+        st = get_status()
+        return str(st.get("display_name") or str(st.get("email") or "").split("@", 1)[0] or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _keep_mine(account: str, space: str, plugin: str, folder: tf.Folder, unit: str, pid: str,
+               held: list[list[Any]], *, conflict: bool) -> dict[str, Any]:
+    """Keep mine. After a conflict the unit as it is here goes out on top of theirs: each file
+    they changed goes again from here based on their seq (so the server takes it), a file
+    only they have goes as a delete. A quarantined unit (their lock is gone) just goes."""
+    a = (account, space, plugin)
+    seqs = {str(h[0]): int(h[1]) for h in held}
+    rows = ff.files(*a, folder.id, unit=unit)
+    by_key = {r["item_key"]: r for r in rows if r["item_key"]}
+    now = time.time()
+    conn = db.connect()
+    with db.write_txn(conn):
+        for r in rows:
+            if r["sync_state"] == "refetch":
+                continue
+            if conflict and r["item_key"] in seqs:
+                ff.file_put(conn, *a, folder.id, r["relpath"], dirty=True,
+                            base_seq=max(int(r["base_seq"]), seqs[r["item_key"]]), sync_state="", sync_error="",
+                            changed_at=now)
+            elif r["dirty"]:
+                ff.file_put(conn, *a, folder.id, r["relpath"], sync_state="", sync_error="")
+        for k, seq, op, rel in held:
+            if op == "put" and k not in by_key and _rel_ok(str(rel)):
+                ff.file_put(conn, *a, folder.id, str(rel), unit=unit, project_id=pid, dirty=True, deleted=True,
+                            base_seq=int(seq), sha256="", size=0, mtime_ns=0, changed_at=now, item_key=k,
+                            sync_state="", sync_error="")
+        # The unit isn't held back any more (its clean files carried the conflict too).
+        conn.execute("UPDATE folder_files SET sync_state='', sync_error='' WHERE account_id=? AND space_id=? AND "
+                     "plugin_id=? AND folder_id=? AND unit=? AND sync_state IN ('conflict', 'quarantined', "
+                     "'locked_out')", (*a, folder.id, unit))
+    return {"ok": True, "kept": len(rows)}
+
+
+def _fetch_theirs(ctx: Ctx, held: list[list[Any]]) -> tuple[list[tuple[IncomingItem, int, str, float]], str]:
+    """What a folder unit's conflict holds of theirs, each file's current version
+    downloaded first: ``(entries, '')``, or ``([], why)`` when one of them can't be."""
+    entries: list[tuple[IncomingItem, int, str, float]] = []
+    for k, seq, op, _rel in held:
+        if op == "del":
+            entries.append((IncomingItem(kind=TREE, key=str(k), op="del", seq=int(seq)), int(seq), "", 0.0))
+            continue
+        got = _call(ctx.backend.fetch, ctx.space, ctx.plugin, TREE, str(k), None)
+        if not isinstance(got, IncomingItem):
+            _drop_entries(entries)
+            return [], f"The team's version couldn't be downloaded ({reason_of(got) or 'no answer'}). Nothing changed."
+        entries.append((got, int(got.seq or seq), got.by, float(got.at)))
+    return entries, ""
+
+
+def _drop_entries(entries: Iterable[tuple[IncomingItem, int, str, float]]) -> None:
+    for it, *_ in entries:
+        _drop_temp(it)
+
+
+def _take_theirs(ctx: Ctx, folder: tf.Folder, unit: str, pid: str,
+                 entries: list[tuple[IncomingItem, int, str, float]]) -> dict[str, Any]:
+    """Take theirs (``entries``: :func:`_fetch_theirs`): the team's version of each held file
+    lands over this PC's changes; files only this PC changed come back at the team's head
+    (or go). Not ``ok`` while theirs didn't land (the conflict stays)."""
+    if not entries:  # nothing of theirs held (a broken lock): the team's version comes back
+        tf.discard_mine(ctx.account, ctx.space, ctx.plugin, folder, unit, project_id=pid)
+        return {"ok": True}
+    with _lock(ctx.account, ctx.space, 30.0) as held:
+        if not held:
+            _drop_entries(entries)
+            return {"ok": False, "error": "A sync of this space is running. Try again in a moment."}
+        out = _apply_tree(ctx, entries, force=True)
+    if out["state"] != "ok":
+        return {"ok": False, "error": out.get("error", "")}
+    uid = tf.tree_unit(ctx.backend, ctx.space, folder.id, unit)
+    if uid not in out["units"]:
+        stuck = next((b for b in space_vcs.blocked(ctx.account, ctx.space, ctx.plugin) if b["unit"] == uid), None)
+        if stuck is not None or out["conflicts"]:
+            return {"ok": False, "error": (stuck or {}).get("error") or "The team's version couldn't land. Try again."}
+        tf.discard_mine(ctx.account, ctx.space, ctx.plugin, folder, unit, project_id=pid)  # nothing of theirs left
+    return {"ok": True}
+
+
+def folder_rows(account: str, space: str, plugin: str, backend: Any = None) -> list[dict[str, Any]]:
+    """The bar's folder units: ``folder_id``, ``unit``, ``unitId`` (what its lock goes by),
+    ``name``, ``state`` (``up_to_date``, ``changed_here``, ``locked_by``, ``conflict``,
+    ``incoming``, ``quarantined``, ``refused``), ``holder``, ``mine`` (this PC holds its
+    lock), ``files``, ``bytes`` and ``reason``."""
+    ctx = Ctx(account, space, plugin, backend)
+    waiting = set(space_vcs.incoming_queue_get(account, space, plugin)["units"])
+    mine = {lk["unit"] for lk in space_vcs.locks(account, space, plugin) if lk["mine"]}
+    names = {"synced": "up_to_date", "changed": "changed_here", "locked": "locked_by"}
+    out: list[dict[str, Any]] = []
+    for folder, pid in _folder_copies(ctx):
+        uid = _uids(ctx, folder)
+        for u in tf.units_table(account, space, plugin, folder, project_id=pid, unit_id=uid):
+            state = names.get(u["state"], u["state"])
+            if state in ("up_to_date", "changed_here") and uid(u["unit"]) in waiting:
+                state = "incoming"
+            out.append({"folder_id": folder.id, "unit": u["unit"], "unitId": uid(u["unit"]),
+                        "name": _unit_display(folder, u["unit"]), "state": state, "holder": u.get("holder", ""),
+                        "mine": uid(u["unit"]) in mine, "files": u["files"], "bytes": u["bytes"],
+                        "reason": u["reason"]})
+    return out
+
+
+def folder_outgoing(account: str, space: str, plugin: str) -> list[dict[str, Any]]:
+    """Folder units with changes to send (the drawer's outgoing list), each with its state:
+    ``sending``, ``queued``, or why it is held back."""
+    going = {(str(i.get("folder")), str(i.get("unit_name"))) for cs in space_vcs.cs_open(account, space, plugin)
+             for i in cs["items"] if i.get("kind") == TREE}
+    out: list[dict[str, Any]] = []
+    for (fid, unit), info in sorted(ff.dirty_units(account, space, plugin).items()):
+        folder = tf.folder_of(plugin, fid)
+        held = next((s for s in tf.HELD_STATES if s in info["states"]), "")
+        reason = ""
+        if held:
+            reason = next((r["sync_error"] for r in ff.files(account, space, plugin, fid, unit=unit)
+                           if r["sync_state"] == held), "")
+        out.append({"kind": TREE, "key": _unit_key(fid, unit), "name": _unit_display(folder, unit) if folder else unit,
+                    "folder_id": fid, "unit": unit, "files": info["files"],
+                    "state": held or ("sending" if (fid, unit) in going else "queued"), "reason": reason})
+    return out
+
+
+def migrate_folder_links() -> list[str]:
+    """Once at start: a plugin that keeps its own folders and is linked to a team whose
+    folder copy this PC never pulled or sent goes back on Local, and its bar offers "Copy
+    Local into <team>" (the units the person picks). Returns the plugins moved."""
+    account = scopes.account_id()
+    if account == scopes.LOCAL:
+        return []
+    moved: list[str] = []
+    for plugin, space in sorted(repo.links(account).items()):
+        if not scopes.valid_space_id(space) or not tf.plugin_folders(plugin):
+            continue
+        try:
+            if tf._migrate_link(plugin, scopes.shared_scope(account, space)):
+                moved.append(plugin)
+        except Exception:  # noqa: BLE001 — the plugin's bind before load tries again
+            _log.warning("moving %s back to Local failed", plugin, exc_info=True)
+    return moved
+
+
 # --------------------------------------------------------------------------- rounds
 
 
@@ -1214,28 +2253,36 @@ def held_reason(account: str, space: str) -> str:
 
 
 def run(account: str, space: str, plugin: str, backend: Any, *, push: bool | None = None, pull: bool | None = None,
-        force: bool = False, message: str = "", now: float | None = None) -> dict[str, Any]:
+        force: bool = False, message: str = "", now: float | None = None, quiet_s: float | None = None,
+        lock_wait: float | None = None, progress: Callable[[int, int], None] | None = None) -> dict[str, Any]:
     """One round for (space, plugin): pull, then push. In Manual mode nothing moves unless
     asked (``push=True`` / ``pull=True``, with an optional ``message`` for the push). A
     round backing off is skipped unless ``force``; nothing moves while the space is held
     (:func:`held_reason`). The plugin's first round on the new sync reconciles this PC's
     copy first (:func:`_reconcile_v1`). Returns ``{state, changed, error, pushed, pulled,
-    conflicts}`` (``changed``: ``[plugin]`` when a pull changed its data); ``busy`` when
-    another round holds the space. A round that raises is this plugin's error (it backs
-    off), never the space's other plugins'."""
+    conflicts, tree}`` (``changed``: ``[plugin]`` when a pull changed its data; ``tree``:
+    folder units a pull changed here, with ``reload`` when the plugin restarts for them;
+    ``queued``: changesets waiting behind Update now); ``busy`` when another round holds
+    the space. ``pull=True`` (asked for) also lands what waits behind Update now.
+    ``quiet_s``: folder units unchanged this long go out (3 s; 0 for every changed unit).
+    ``lock_wait``: how long to wait for another round of the space (10 minutes when
+    ``force``, else none). A round that raises is this plugin's error (it backs off), never
+    the space's other plugins'."""
     now = time.time() if now is None else now
     ctx = Ctx(account, space, plugin, backend)
     head = space_vcs.head_get(account, space, plugin)
     manual = head["mode"] == "manual"
     do_pull = (not manual) if pull is None else bool(pull)
     do_push = (not manual) if push is None else bool(push)
-    out: dict[str, Any] = {"state": "ok", "changed": [], "error": "", "pushed": 0, "pulled": 0, "conflicts": 0}
+    out: dict[str, Any] = {"state": "ok", "changed": [], "error": "", "pushed": 0, "pulled": 0, "conflicts": 0,
+                           "tree": 0}
     held_by = held_reason(account, space)
     if held_by:
         return {**out, "state": repo.sync_get(account, space)["state"], "error": held_by}
     if not force and float(head["next_try"]) > now:
         return {**out, "state": head["state"], "error": head["error"], "skipped": True}
-    with _lock(account, space, 600.0 if force else 0.0) as held:
+    wait = (600.0 if force else 0.0) if lock_wait is None else max(0.0, lock_wait)
+    with _lock(account, space, wait) as held:
         if not held:
             return {**out, "state": "busy"}
         repo.sync_put(account, space, called_at=now)
@@ -1248,13 +2295,18 @@ def run(account: str, space: str, plugin: str, backend: Any, *, push: bool | Non
                 out.update(state=got["state"], error=got.get("error", ""), pulled=got.get("pulled", 0),
                            conflicts=got.get("conflicts", 0), changed=[plugin] if got.get("changed") else [])
             if do_pull and out["state"] == "ok":
-                got = _pull_round(ctx, now=now)
+                got = _pull_round(ctx, now=now, apply_now=pull is True, progress=progress)
                 out.update(state=got["state"], error=got.get("error", ""), pulled=out["pulled"] + got.get("pulled", 0),
-                           conflicts=out["conflicts"] + got.get("conflicts", 0),
-                           changed=[plugin] if got.get("changed") or out["changed"] else [])
+                           conflicts=out["conflicts"] + got.get("conflicts", 0), tree=int(got.get("tree") or 0),
+                           queued=int(got.get("queued") or 0),
+                           changed=[plugin] if got.get("changed") or got.get("tree") or out["changed"] else [])
             if do_push and out["state"] == "ok":
-                sent = _push_round(ctx, message=message, now=now, pull=pull is not False)
-                out.update(state=sent["state"], error=sent.get("error", ""), pushed=sent.get("pushed", 0))
+                sent = _push_round(ctx, message=message, now=now, pull=pull is not False,
+                                   quiet_s=tf.QUIET_S if quiet_s is None else quiet_s)
+                out.update(state=sent["state"], error=sent.get("error", ""), pushed=sent.get("pushed", 0),
+                           tree=out["tree"] + int(sent.get("tree") or 0))
+                if sent.get("tree"):
+                    out["changed"] = [plugin]
         except data_crypto.Locked as exc:
             return {**out, "state": "locked", "error": str(exc)}
         except Exception as exc:  # noqa: BLE001 — this plugin's round failed; the others go on
@@ -1262,6 +2314,8 @@ def run(account: str, space: str, plugin: str, backend: Any, *, push: bool | Non
     if out["state"] == "ok":
         space_vcs.head_ok(account, space, plugin, now=now)
         repo.sync_put(account, space, synced_at=now)
+    if out["tree"] and any(f.after_pull == "reload" for f in tf.plugin_folders(plugin)):
+        out["reload"] = True
     return out
 
 
@@ -1475,7 +2529,9 @@ def renew(account: str, space: str, plugin: str, backend: Any, units: list[str],
                    now=now)
 
 
-def _unit_unsent(account: str, space: str, plugin: str, unit: str) -> bool:
+def _unit_unsent(account: str, space: str, plugin: str, unit: str, backend: Any = None) -> bool:
+    if unit.startswith("tree:"):
+        return unit in _tree_unsent(account, space, plugin, backend)
     row = _row_of_unit(unit)
     if row is None:
         return False
@@ -1483,12 +2539,20 @@ def _unit_unsent(account: str, space: str, plugin: str, unit: str) -> bool:
     return bool(r and int(r["dirty"]))
 
 
-def idle_auto_locks(account: str, space: str, plugin: str, *, now: float | None = None) -> list[str]:
-    """Auto locks of mine whose unit's last change went out 5 minutes ago (nothing unsent)."""
+def _tree_unsent(account: str, space: str, plugin: str, backend: Any) -> set[str]:
+    """Ids of the plugin's folder units with changes here not sent yet (held back too)."""
+    return {tf.tree_unit(backend, space, fid, unit) for fid, unit in ff.dirty_units(account, space, plugin)}
+
+
+def idle_auto_locks(account: str, space: str, plugin: str, *, now: float | None = None,
+                    backend: Any = None) -> list[str]:
+    """Auto locks of mine whose unit's last change went out 5 minutes ago (nothing unsent;
+    a folder unit with changes here keeps its lock)."""
     now = time.time() if now is None else now
-    return [lk["unit"] for lk in space_vcs.locks(account, space, plugin, now=now, live=False)
-            if lk["mine"] and lk["reason"] == "auto" and now - float(lk["touched"]) >= AUTO_RELEASE_S
-            and not _unit_unsent(account, space, plugin, lk["unit"])]
+    idle = [lk["unit"] for lk in space_vcs.locks(account, space, plugin, now=now, live=False)
+            if lk["mine"] and lk["reason"] == "auto" and now - float(lk["touched"]) >= AUTO_RELEASE_S]
+    tree = _tree_unsent(account, space, plugin, backend) if any(u.startswith("tree:") for u in idle) else set()
+    return [u for u in idle if u not in tree and (u.startswith("tree:") or not _unit_unsent(account, space, plugin, u))]
 
 
 def release(account: str, space: str, plugin: str, backend: Any, units: list[str]) -> dict[str, Any]:
@@ -1500,7 +2564,7 @@ def release(account: str, space: str, plugin: str, backend: Any, units: list[str
 
 
 def release_idle(account: str, space: str, plugin: str, backend: Any, *, now: float | None = None) -> list[str]:
-    units = idle_auto_locks(account, space, plugin, now=now)
+    units = idle_auto_locks(account, space, plugin, now=now, backend=backend)
     if units:
         release(account, space, plugin, backend, units)
     return units
@@ -1808,7 +2872,8 @@ def _local_key(account: str, plugin: str, kind: str, key: str, slug: str) -> str
 def save_unsent_to_local(account: str, space: str, *, label: str = "") -> dict[str, Any]:
     """Access to the space is gone (or going): this PC's unsent changes are copied into
     Local, each under its own key when Local has none, else ``<key>-from-<space>``: rows
-    never sent, and the losing versions of mine unresolved conflicts keep. The copies are
+    never sent, the losing versions of mine unresolved conflicts keep, and folder units
+    changed here (``<unit> (from <space>)`` when Local has that unit). The copies are
     sealed for this account already, so they are copied as they are."""
     label = label or repo.sync_get(account, space)["label"] or space
     slug = _slug(label)
@@ -1837,8 +2902,32 @@ def save_unsent_to_local(account: str, space: str, *, label: str = "") -> dict[s
             repo.put_file_row(account, scopes.PERSONAL, plugin, new_key, temp_path=temp, target_path=dst,
                               size=int(size), sha256=sha, dirty=False)
         saved.append({"plugin": plugin, "kind": kind, "key": key, "localKey": new_key})
+    saved += _save_unsent_units(account, space, label)
     space_vcs.lost_choice_put(account, space, "saved")
     return {"ok": True, "saved": saved}
+
+
+def _save_unsent_units(account: str, space: str, label: str) -> list[dict[str, str]]:
+    """Folder units changed here and never sent (held back ones too) go into each plugin's
+    Local copy (:func:`team_folders.save_unit_to_local`) before the team's copy can go."""
+    saved: list[dict[str, str]] = []
+    plugins = [str(r[0]) for r in db.connect().execute(
+        "SELECT DISTINCT plugin_id FROM folder_files WHERE account_id=? AND space_id=? AND dirty=1 ORDER BY plugin_id",
+        (account, space)).fetchall()]
+    for plugin in plugins:
+        for (fid, unit) in sorted(ff.dirty_units(account, space, plugin)):
+            folder = tf.folder_of(plugin, fid)
+            if folder is None:
+                continue
+            pid = unit.split("/", 1)[0] if folder.project else ""
+            try:
+                where = tf.save_unit_to_local(account, space, plugin, folder, unit, label, project_id=pid)
+            except OSError:
+                _log.warning("saving %s/%s of %s to Local failed", fid, unit, plugin, exc_info=True)
+                continue
+            if where:
+                saved.append({"plugin": plugin, "kind": TREE, "key": _unit_key(fid, unit), "localKey": where})
+    return saved
 
 
 def conflicts_into_rows(account: str, space: str) -> int:

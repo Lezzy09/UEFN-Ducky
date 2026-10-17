@@ -40,7 +40,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import threading
 import time
 import uuid
@@ -251,17 +250,21 @@ def sharing_allowed(plugin: str) -> bool:
 
 def shareable(plugin: str) -> bool:
     """Whether a shared space is worth offering ``plugin``: only data that goes through the
-    host data service syncs. True when the plugin has data rows, used ``api.data`` in this
-    process, declares ``"data_sharing": true``, or is core data (``ducky.*``, such as
-    workflows). A plugin that keeps its own files gets False, and ``"data_sharing": false``
-    always wins."""
+    host data service, or a folder the plugin declares (``team_folders``), syncs. True when
+    the plugin has data rows, used ``api.data`` in this process, declares
+    ``"data_sharing": true`` or team folders, or is core data (``ducky.*``, such as
+    workflows). A plugin that keeps its own files without declaring them gets False, and
+    ``"data_sharing": false`` always wins."""
     from backend.store.repos import plugin_data as repo
     from backend.uefn_plugins import host
+    from backend.uefn_plugins.team_folders import plugin_folders
 
     flag = _data_sharing(plugin)
     if flag is False:
         return False
     if flag is True or plugin.startswith("ducky.") or plugin in host._DATA_PLUGINS:
+        return True
+    if plugin_folders(plugin):
         return True
     return repo.has_rows(account_id(), plugin)
 
@@ -304,8 +307,13 @@ def sandbox_begin(plugin: str) -> dict[str, Any]:
     """From now until :func:`sandbox_end`, this caller's reads and writes of ``plugin``'s
     docs, files, cache and prefs (Local, shared or ``sensitive``), and those of the threads
     it starts, go to a throwaway scope that starts empty. Everyone else keeps the real
-    data. Raises ``ValueError`` while another test of the plugin is running."""
+    data. A plugin that keeps its own folders is the exception: a folder's junction is
+    every process's, so while its test runs, the plugin's calls from outside the test are
+    refused (:func:`write_group`). Raises ``ValueError`` while another test of the plugin
+    is running."""
     import uuid
+
+    from backend.uefn_plugins import team_folders
 
     _need(valid_plugin_id(plugin), "plugin id")
     account = account_id()
@@ -315,6 +323,11 @@ def sandbox_begin(plugin: str) -> dict[str, Any]:
              "readOnly": False, "state": "ok"}
     with _SANDBOX_LOCK:
         if plugin in _TESTING:
+            if team_folders.plugin_folders(plugin):
+                raise ValueError(
+                    f"A test of {plugin} is already running, and while it runs the plugin's own folders are the "
+                    "test's: its other calls are refused. Try again when it finishes."
+                )
             raise ValueError(
                 f"A test of {plugin} is already running. Its test copy is its own (everyone else's calls "
                 "keep their real data), so don't wait for it: check your own work with "
@@ -326,6 +339,9 @@ def sandbox_begin(plugin: str) -> dict[str, Any]:
     _inherit_into_threads()
     try:
         purge_space(account, scope_id)
+        # Folders the plugin keeps itself point at the test's copies too (a junction is
+        # every process's): its calls from outside the test are refused meanwhile.
+        team_folders.sandbox_begin(plugin, scope)
     except BaseException:
         sandbox_end(plugin)
         raise
@@ -333,14 +349,20 @@ def sandbox_begin(plugin: str) -> dict[str, Any]:
 
 
 def sandbox_end(plugin: str) -> None:
-    """The test is over: its throwaway scope and rows go, and threads it started read the
-    real data again."""
+    """The test is over: its throwaway scope and rows go, the plugin's folders point at
+    its real copies again, and threads it started read the real data again."""
     with _SANDBOX_LOCK:
         token = _TESTING.pop(plugin, "")
         scope = _SANDBOXES.pop(token, None) if token else None
     mine = _SANDBOX_CTX.get()
     if plugin in mine:
         _SANDBOX_CTX.set({k: v for k, v in mine.items() if k != plugin})
+    try:
+        from backend.uefn_plugins import team_folders
+
+        team_folders.sandbox_end(plugin)
+    except Exception:  # noqa: BLE001 — the next bind puts them back
+        _log.warning("putting %s's folders back after its test failed", plugin, exc_info=True)
     if scope is not None:
         purge_space(scope["account"], scope["id"])
 
@@ -508,9 +530,11 @@ def plugin_dir(scope: dict[str, Any], plugin: str) -> Path:
 
 def purge_space(account: str, space: str) -> None:
     """A shared space's copy on this PC goes, rows and files (the provider decides when,
-    e.g. a while after access was lost). Never anyone else's copy."""
+    e.g. a while after access was lost). Never anyone else's copy: a plugin folder pointing
+    into it goes back to Local first, and links inside are removed, never followed."""
     from backend.store.repos import plugin_data as repo
     from backend.store.repos import plugin_kv
+    from backend.uefn_plugins import team_folders
 
     if not valid_space_id(space):
         return
@@ -529,21 +553,32 @@ def purge_space(account: str, space: str) -> None:
         search_repo.drop_scope_records(account, space)
     except Exception:  # noqa: BLE001 — a search error never blocks the purge
         pass
-    shutil.rmtree(scopes_root(account) / space, ignore_errors=True)
+    try:  # folder copies: junctions into them go back to Local, then the copies and their rows
+        team_folders.purge_space(account, space)
+    except Exception:  # noqa: BLE001 — the copy below still goes
+        _log.warning("purging the folder copies of %s failed", space, exc_info=True)
+    team_folders.remove_tree(scopes_root(account) / space)
 
 
 def erase_plugin(plugin: str) -> None:
     """Uninstall + erase data: this account's docs and files of ``plugin`` in every scope,
     and its link (a reinstall shows Local). Later rounds of those spaces don't bring the
-    copy back; linking the plugin to one again does (:func:`link_plugin`)."""
+    copy back; linking the plugin to one again does (:func:`link_plugin`). Folders it
+    keeps itself lose their junction (the Local copy goes back in its place); this
+    account's team copies of them go, never a copy another scope still uses."""
     from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins import team_folders
 
     account = account_id()
+    try:
+        team_folders.erase_plugin(account, plugin)
+    except Exception:  # noqa: BLE001 — the plugin's data rows still go
+        _log.warning("erasing the folders of %s failed", plugin, exc_info=True)
     repo.delete_plugin(account, plugin)
     root = scopes_root(account)
     if root.is_dir():
         for scope_dir in root.iterdir():
-            shutil.rmtree(scope_dir / plugin, ignore_errors=True)
+            team_folders.remove_tree(scope_dir / plugin)
 
 
 # --------------------------------------------------------------------------- host data API
@@ -661,7 +696,8 @@ def write_group(plugin: str, *, actor: str = "user", ducky: str = "", message: s
                        str(message or "")[:200], panel)
     token = _GROUPS.set({**groups, plugin: group})
     try:
-        yield group
+        with _folder_call(plugin, group):
+            yield group
     finally:
         group.closed = True
         try:
@@ -675,6 +711,31 @@ def write_group(plugin: str, *, actor: str = "user", ducky: str = "", message: s
                 space_vcs.group_close(group.id)
             except Exception:  # noqa: BLE001 — the scheduler closes groups left open
                 _log.warning("closing write group %s failed", group.id, exc_info=True)
+
+
+def _folder_call(plugin: str, group: WriteGroup) -> Any:
+    """While a tool call or panel RPC of a plugin that keeps declared folders runs, its
+    call marker tells a junction re-point in any process to wait for it. A panel's own
+    data calls never touch those folders. While a test of the plugin has its folders, a
+    call from outside the test is refused: it would read and write the test's copy, which
+    goes when the test ends."""
+    if group.panel:
+        return contextlib.nullcontext()
+    testing = False
+    try:
+        from backend.uefn_plugins import team_folders
+
+        if not team_folders.plugin_folders(plugin):
+            return contextlib.nullcontext()
+        testing = _boxed(plugin) is None and team_folders.sandboxed(plugin)
+        if not testing:
+            return team_folders.call_marker(plugin, actor=group.actor, ducky=group.ducky)
+    except Exception:  # noqa: BLE001 — a marker never fails the call
+        _log.debug("recording the call marker of %s failed", plugin, exc_info=True)
+        return contextlib.nullcontext()
+    from backend.uefn_plugins.spaces import plugin_label
+
+    raise ValueError(team_folders.TEST_RUNNING.format(plugin=plugin_label(plugin) or plugin))
 
 
 def open_group(plugin: str) -> WriteGroup | None:

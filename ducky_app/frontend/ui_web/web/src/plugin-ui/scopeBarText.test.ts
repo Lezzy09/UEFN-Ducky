@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { PluginScopeStatus } from "../types/panel";
 import {
+  bindingText,
   breakConfirm,
   clockText,
   conflictText,
+  discardConfirm,
   doingText,
   dropConfirm,
   durationText,
+  firstShareText,
+  folderRefusal,
+  folderRefusalText,
+  folderUnitKey,
+  folderUnitLockId,
+  folderUnitStateText,
+  holdsFolderUnit,
   listText,
   locksText,
   lostText,
@@ -14,16 +23,19 @@ import {
   outgoingStateText,
   peopleRows,
   peopleText,
+  pickedText,
   refusedWriteText,
   resetConfirm,
   resetText,
   restoreConfirm,
   sentText,
+  sharingText,
   statusPhrase,
   storageLine,
   switchConfirm,
   syncText,
   unavailableText,
+  unitSizeText,
 } from "./scopeBarText";
 
 const GB = 1024 ** 3;
@@ -250,3 +262,141 @@ describe("the bar's one status phrase", () => {
     expect(sentText(512 * 1024, 900 * 1024)).toBe("512 of 900 KB");
   });
 });
+
+describe("declared folders", () => {
+  const LOCAL = { kind: "personal" as const, label: "Local", spaceId: "", readOnly: false };
+  const URC = "Carried by this island's UEFN revision control";
+  const say = (s: PluginScopeStatus) => statusPhrase(s, NOW).text;
+  const declared = (...folders: { id: string; refused?: string }[]) => ({ teamFolders: folders });
+
+  it("words each reason a folder can't be shared from this PC, and keeps the host's own words", () => {
+    expect(folderRefusalText("urc")).toBe(URC);
+    expect(folderRefusalText("onedrive")).toBe(
+      "This folder is synced by OneDrive. Move it out of OneDrive to share it with a team.");
+    expect(folderRefusalText("network")).toBe(
+      "This folder is on a network drive. Team folders work only on this PC's own drives.");
+    expect(folderRefusalText("volume", { fs: "FAT32" })).toBe("This folder is on a FAT32 drive. Team folders need an NTFS drive.");
+    expect(folderRefusalText("volume")).toBe("This folder is on a non-NTFS drive. Team folders need an NTFS drive.");
+    expect(folderRefusalText("case", { names: ["Scene.json", "scene.json"] })).toBe(
+      "Scene.json and scene.json differ only by upper/lower case or accents. Rename one so the team can tell them apart.");
+    expect(folderRefusalText("This folder is on a exFAT drive. Team folders need an NTFS drive.")).toBe(
+      "This folder is on a exFAT drive. Team folders need an NTFS drive.");
+    // One folder that can't be shared keeps the plugin off a team.
+    expect(folderRefusal(shared(declared({ id: "noproject" }, { id: "design", refused: URC })))).toBe(URC);
+    expect(folderRefusal(shared(declared({ id: "design", refused: "urc" })))).toBe(URC);
+    expect(folderRefusal(shared(declared({ id: "scenes", refused: "" })))).toBe("");
+    expect(folderRefusal(shared())).toBe("");
+  });
+
+  it("a switch getting a team's files comes first, even while the plugin still shows Local", () => {
+    expect(bindingText("Alpha", 40.4)).toBe("Getting Alpha's files… 40%");
+    expect(bindingText("Alpha")).toBe("Getting Alpha's files…");
+    expect(sharingText("Alpha")).toBe("Sending your files to Alpha…");
+    const local = shared({ scope: LOCAL, ...declared({ id: "scenes" }), state: "binding", binding: { team: "Alpha", pct: 40, at: 1 } });
+    expect(statusPhrase(local, NOW)).toMatchObject({ key: "binding", text: "Getting Alpha's files… 40%" });
+    expect(say(shared({ state: "error", binding: { team: "", pct: 0 }, conflicts: [{ kind: "doc", key: "deck" }] })))
+      .toBe("Getting Alpha's files… 0%");
+    expect(say(shared({ binding: null }))).toBe("Up to date · #482 · 2 min ago");
+  });
+
+  it("on Local, a folder that can't be shared says why; a folder plugin's files aren't called encrypted", () => {
+    expect(statusPhrase(shared({ scope: LOCAL, ...declared({ id: "design", refused: URC }) }), NOW)).toMatchObject({
+      key: "folder_refused", text: URC, tone: "",
+    });
+    expect(say(shared({ scope: LOCAL, ...declared({ id: "scenes" }) }))).toBe("Only on this PC");
+    expect(say(shared({ scope: LOCAL }))).toBe("Only on this PC · Plugin data on each PC is encrypted for the signed-in account.");
+    // On a team copy it is a warning ahead of conflicts.
+    expect(statusPhrase(shared({ ...declared({ id: "scenes", refused: "onedrive" }), conflict: 1 }), NOW)).toMatchObject({
+      key: "folder_refused", tone: "warn",
+      text: "This folder is synced by OneDrive. Move it out of OneDrive to share it with a team.",
+    });
+  });
+
+  it("units changed while someone else holds them come after conflicts and before locks", () => {
+    const held = { folder_id: "scenes", unit: "MEGA_Duel_Stadium", name: "MEGA_Duel_Stadium", state: "quarantined",
+      reason: "Changed here while Ana holds it" };
+    const s = shared({ folders: [held], locks: [ANA_LOCK], conflicts: [{ kind: "doc", key: "deck" }] });
+    expect(say(s)).toBe("1 conflict");
+    delete s.conflicts;
+    expect(statusPhrase(s, NOW)).toMatchObject({
+      key: "quarantined", text: "MEGA_Duel_Stadium: changed here while Ana holds it", tone: "warn",
+    });
+    s.folders = [held, { ...held, unit: "Arena", name: "Arena" }];
+    expect(say(s)).toBe("2 units changed here while someone else holds them");
+    s.folders = [];
+    expect(say(s)).toBe("Locked by Ana: MEGA_Duel_Stadium (read-only for you)");
+  });
+
+  it("updates waiting for Update now name who made them; a unit refused for a name clash counts as not sent", () => {
+    expect(statusPhrase(shared({ changes: { held: true, incoming: 2, incomingBy: ["Ana", "Ben"] } }), NOW)).toEqual({
+      key: "updates", text: "2 updates from Ana and Ben", tone: "", action: "update",
+    });
+    expect(say(shared({ changes: { held: true, incoming: 1 } }))).toBe("1 update waiting");
+    // Applied by themselves: just incoming.
+    expect(say(shared({ changes: { held: false, incoming: 2 } }))).toBe("2 incoming");
+    const clash = "Lobby.json and lobby.json differ only by upper/lower case or accents. Rename one so the team can tell them apart.";
+    expect(statusPhrase(shared({ folders: [{ folder_id: "scenes", unit: "Lobby", name: "Lobby", state: "refused", reason: clash }] }), NOW))
+      .toMatchObject({ key: "queue", text: "1 can't be sent", tone: "warn" });
+  });
+
+  it("words each folder unit state, its size, and the first share and Discard mine questions", () => {
+    const unit = (state: string, extra = {}) => folderUnitStateText({ unit: "u", name: "Arena", state, ...extra });
+    expect(unit("synced")).toBe("Up to date");
+    expect(unit("ok")).toBe("Up to date");
+    expect(unit("up_to_date")).toBe("Up to date");
+    expect(unit("changed")).toBe("Changed here");
+    expect(unit("changed_here")).toBe("Changed here");
+    expect(unit("incoming")).toBe("Update waiting");
+    expect(unit("locked", { holder: "Ana" })).toBe("Locked by Ana");
+    expect(unit("locked_by", { holder: "Ana" })).toBe("Locked by Ana");
+    expect(unit("locked", { mine: true })).toBe("Locked by you");
+    expect(outgoingStateText("quarantined", "Changed here while Ana holds it")).toBe("Changed here while Ana holds it");
+    expect(outgoingStateText("quarantined")).toBe("Changed here while someone else holds it");
+    expect(outgoingStateText("refetch")).toBe("Getting the team's version again");
+    expect(unit("conflict")).toBe("Changed here and by someone else");
+    expect(unit("quarantined", { holder: "Ben" })).toBe("Changed here while Ben holds it");
+    expect(unit("quarantined", { reason: "Changed here while Ana holds it" })).toBe("Changed here while Ana holds it");
+    expect(unit("refused", { reason: "case" })).toMatch(/^Two names differ only by upper\/lower case/);
+    expect(unit("refused")).toBe("Can't be shared");
+    expect(unitSizeText(12, 226 * 1024 ** 2)).toBe("12 files · 226 MB");
+    expect(unitSizeText(1, 0)).toBe("1 file · 0 B");
+    expect(unitSizeText()).toBe("");
+    const units = [
+      { unit: "a", name: "A", bytes: 2 * 1024 ** 2 },
+      { unit: "b", name: "B", bytes: 1024 ** 2 },
+      { unit: "c", name: "C" },
+    ];
+    expect(pickedText(units, new Set(["a", "b"]))).toBe("2 of 3 picked · 3 MB");
+    expect(pickedText(units, new Set())).toBe("0 of 3 picked");
+    expect(firstShareText("Forge", "Alpha")).toEqual({
+      title: "Share Forge's files with Alpha?",
+      message: "Alpha has none of Forge's files yet. Pick what to copy from your Local copy; the rest stays only on this PC.",
+    });
+    expect(firstShareText("Forge", "Alpha", true).message).toBe(
+      "Alpha has some of Forge's files already. Pick what else to copy from your Local copy; the rest stays only on this PC.",
+    );
+    expect(discardConfirm("Arena", "Alpha")).toEqual({
+      title: "Discard your changes to Arena?",
+      message: "Arena goes back to Alpha's version. What you changed here is not kept.",
+    });
+  });
+
+  it("names a folder unit for a conflict and for its lock, and knows when this PC holds it", () => {
+    const arena = { folder_id: "scenes", unit: "Arena", name: "Arena", state: "up_to_date" };
+    expect(folderUnitKey(arena)).toBe("scenes/Arena");
+    expect(folderUnitKey({ folder_id: "design", unit: "1f0c-guid", name: "design", state: "ok" })).toBe("design/1f0c-guid");
+    expect(folderUnitKey({ unit: "tree:scenes/4", name: "Vault", state: "ok" })).toBe("tree:scenes/4");
+    expect(folderUnitKey({ unit: "Arena", name: "Arena", state: "ok" })).toBe("Arena");
+    // The host's lock id when it gives one, else <folder>/<unit> for the host to map.
+    expect(folderUnitLockId({ ...arena, unitId: "tree:scenes/ab12" })).toBe("tree:scenes/ab12");
+    expect(folderUnitLockId(arena)).toBe("scenes/Arena");
+    expect(holdsFolderUnit({ ...arena, mine: true })).toBe(true);
+    expect(holdsFolderUnit({ ...arena, unitId: "tree:scenes/ab12" }, [{ unit: "tree:scenes/ab12", name: "Arena", mine: true }]))
+      .toBe(true);
+    expect(holdsFolderUnit({ ...arena, unitId: "tree:scenes/ab12" }, [{ unit: "tree:scenes/ab12", name: "Arena", holder: "Ana" }]))
+      .toBe(false);
+    expect(holdsFolderUnit(arena, [{ unit: "doc:Arena", name: "Arena", mine: true }])).toBe(false);
+    expect(holdsFolderUnit({ unit: "tree:scenes/4", name: "Vault", state: "ok" }, [{ unit: "tree:scenes/4", mine: true }])).toBe(true);
+  });
+});
+

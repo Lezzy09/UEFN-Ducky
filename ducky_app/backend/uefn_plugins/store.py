@@ -86,7 +86,10 @@ _DATA_LOCK_PREFIX_RE = re.compile(r"^[a-z0-9._/-]{0,256}$")
 
 
 def manifest_data_errors(manifest: dict[str, Any]) -> list[str]:
-    """What is wrong with a manifest's ``data_sharing`` and ``data_locks``, each with the fix."""
+    """What is wrong with a manifest's ``data_sharing``, ``data_locks`` and ``team_folders``
+    (:mod:`backend.uefn_plugins.team_folders`), each with the fix."""
+    from backend.uefn_plugins.team_folders import declaration_errors
+
     errors: list[str] = []
     sharing = manifest.get("data_sharing")
     if "data_sharing" in manifest and not isinstance(sharing, bool):
@@ -94,6 +97,7 @@ def manifest_data_errors(manifest: dict[str, Any]) -> list[str]:
             f'plugin.json "data_sharing" is {sharing!r}: use true (offer a shared space even before the plugin '
             "stores data) or false (always Local), or leave it out."
         )
+    errors += declaration_errors(manifest)
     if "data_locks" not in manifest:
         return errors
     locks = manifest.get("data_locks")
@@ -911,9 +915,10 @@ def import_plugin_from_bytes(
     if too_old:
         # Nothing is written: the installed version (if any) keeps working.
         return {"ok": False, "code": "needs_newer_app", "error": too_old}
-    # A bad "data_locks" would lock the wrong items, or none: refused like a bad zip.
-    # ("data_sharing" was read loosely before it was checked: only the lint names it.)
-    bad_locks = [e for e in manifest_data_errors(manifest) if '"data_locks"' in e]
+    # A bad "data_locks" would lock the wrong items, or none, and a bad "team_folders"
+    # would move the wrong folder: refused like a bad zip. ("data_sharing" was read
+    # loosely before it was checked: only the lint names it.)
+    bad_locks = [e for e in manifest_data_errors(manifest) if '"data_locks"' in e or '"team_folders"' in e]
     if bad_locks:
         return {"ok": False, "error": " ".join(bad_locks)}
 

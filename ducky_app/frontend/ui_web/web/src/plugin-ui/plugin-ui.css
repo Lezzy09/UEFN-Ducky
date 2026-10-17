@@ -591,3 +591,44 @@
   color: var(--fg, #e6e6e6);
   font: inherit;
 }
+
+/* First share of a plugin's folders: pick the Local units to copy into the team. */
+.plugin-folder-share {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.plugin-folder-share__units {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  margin: 0;
+  padding: 4px 0;
+  overflow: auto;
+  border: 0;
+}
+.plugin-folder-share__unit {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+  color: var(--fg, #e6e6e6);
+  cursor: pointer;
+}
+.plugin-folder-share__unit input {
+  accent-color: var(--accent);
+}
+.plugin-folder-share__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.plugin-folder-share__size,
+.plugin-folder-share__picked {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted, #888);
+  white-space: nowrap;
+}

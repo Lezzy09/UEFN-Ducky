@@ -29,6 +29,16 @@ holds renewed; idle, every 15 minutes and no presence. A provider's channel even
 (``spaces.remote_event``) starts a round within seconds. A writer waiting for a lock (a
 ``required`` prefix) is answered within a tick or two.
 
+Plugins that keep declared folders (``team_folders``) in a team space: their copies are
+looked at (:func:`vcs_engine.watch`) every 2 s while the plugin's panel is on screen or
+one of its calls ran in the last 2 minutes, right after each call returns, and every
+minute otherwise; a unit quiet for 3 s, files to fetch again, or changes that waited
+behind Update now (the panel was hidden) start a round. A pull that changed a plugin's
+files runs its ``after_pull``, and a plugin loaded here whose folders moved (a pull, a
+switch, a project change, in any process) restarts once none of its calls is running.
+Once per account, plugins linked to a team before their folders could be shared go back
+on Local with the bar's offer (:func:`vcs_engine.migrate_folder_links`).
+
 Every round is wrapped in ``spaces._round_failed``: one that raises is recorded on the
 space and the next tick runs. Rounds of one space never overlap, in any process: each
 holds the space's round lock (:func:`run_round`). Never runs in the MCP bridge
@@ -74,6 +84,10 @@ GROUP_OPEN_MAX_S = 3600.0  # a write group open this long was left by a call tha
 # The provider's own round keeps these: access gone or unsure, or the data reset on the
 # server (nothing goes out until the person chooses).
 HOLD_STATES = frozenset({"lost", "unavailable", "reset"})
+# Folders plugins keep themselves (team_folders), in a team space.
+FOLDER_FAST_S = 2.0  # a look this often while the panel is on screen or a call ran lately
+FOLDER_SLOW_S = 60.0  # otherwise
+FOLDER_IN_USE_S = 120.0  # a call this recent keeps the plugin in use
 
 
 def _in_bridge() -> bool:
@@ -213,13 +227,15 @@ def _space_round(account: str, space: str, *, force: bool, pull: frozenset[str],
 def _ledger_work(account: str, space: str, plugin: str, now: float) -> bool:
     """Something to do for ``plugin``: its first round on the new sync (the move from the
     older one), changesets waiting on the server, changes to send, a set-aside download due
-    again."""
+    again, folder units changed here (:func:`vcs_engine.folder_work`)."""
     from backend.store.repos import space_vcs
+    from backend.uefn_plugins import vcs_engine
 
     head = space_vcs.head_get(account, space, plugin)
     return (head["engine"] != "v2" or int(head["remote_seq"]) > int(head["seq"])
             or space_vcs.has_outgoing(account, space, plugin, now) or bool(space_vcs.cs_open(account, space, plugin))
-            or bool(space_vcs.blocked(account, space, plugin, due=now)))
+            or bool(space_vcs.blocked(account, space, plugin, due=now))
+            or vcs_engine.folder_work(account, space, plugin))
 
 
 def _ledger_round(account: str, space: str, team: dict[str, Any], *, force: bool, pull: frozenset[str],
@@ -252,6 +268,8 @@ def _ledger_round(account: str, space: str, team: dict[str, Any], *, force: bool
         got = vcs_engine.run(account, space, plugin, backend, force=force, pull=False if push_only else None, now=now)
         if got.get("skipped") or got.get("state") == "busy":
             continue
+        if got.get("tree"):  # its folder files changed: reload it, or tell its panels
+            vcs_engine.after_pull(plugin)
         changed += [p for p in got.get("changed") or [] if p not in changed]
         if got.get("state") != "ok":
             failed.append((str(got.get("state")), str(got.get("error") or "")))
@@ -391,6 +409,10 @@ class Scheduler:
         self._stale = True
         self._pruned = float("-inf")
         self._chores_running = False
+        # Folder plugins in team spaces: (space, plugin) → (last look, its last call seen then).
+        self._folder_looks: dict[tuple[str, str], tuple[float, float]] = {}
+        self._folder_running: set[str] = set()  # spaces with a look running
+        self._migrated: set[str] = set()  # accounts whose folder links were looked at once
 
     def tick(self, now: float | None = None) -> list[str]:
         """Start every round that is due, and a team space's presence and lock look when
@@ -425,8 +447,63 @@ class Scheduler:
             self.spawn(lambda space=space, force=force, pulls=pulls: self._round(account, space, force, now, pulls))
         for space, plugins in side:
             self.spawn(lambda space=space, plugins=plugins: self._side(account, space, plugins))
+        if teams:
+            for space, plugins in self._folders_due(now):
+                self.spawn(lambda space=space, plugins=plugins: self._folder_look(account, space, plugins))
         self._chores(account, now, teams)
+        _reload_moved()
         return [space for space, _, _ in due]
+
+    def _folders_due(self, now: float) -> list[tuple[str, list[str]]]:
+        """Team spaces whose folder plugins are due a look: every :data:`FOLDER_FAST_S` while
+        a plugin's panel is on screen or one of its calls runs or ran in the last
+        :data:`FOLDER_IN_USE_S`, right after a call returned, else every :data:`FOLDER_SLOW_S`."""
+        from backend.store.repos import folder_files
+        from backend.uefn_plugins import team_folders
+
+        with self._lock:
+            looks = [(space, sorted(rec.team)) for space, rec in self.spaces.items()
+                     if rec.team and space not in self._folder_running]
+        out: list[tuple[str, list[str], dict[str, float]]] = []
+        for space, team in looks:
+            due: dict[str, float] = {}
+            for plugin in team:
+                if not team_folders.plugin_folders(plugin):
+                    continue
+                last, seen = self._folder_looks.get((space, plugin), (float("-inf"), 0.0))
+                called = float(folder_files.last_call(plugin).get("at") or 0.0)
+                busy = now - called < FOLDER_IN_USE_S or bool(folder_files.calls(plugin)) or _visible(plugin)
+                if called > seen or now >= last + (FOLDER_FAST_S if busy else FOLDER_SLOW_S):
+                    due[plugin] = called
+            if due:
+                out.append((space, sorted(due), due))
+        picked: list[tuple[str, list[str]]] = []
+        with self._lock:
+            for space, plugins, calls in out:
+                if space in self._folder_running:
+                    continue
+                self._folder_running.add(space)
+                for plugin in plugins:
+                    self._folder_looks[(space, plugin)] = (now, calls[plugin])
+                picked.append((space, plugins))
+        return picked
+
+    def _folder_look(self, account: str, space: str, plugins: list[str]) -> None:
+        """Look at the plugins' folder copies (:func:`vcs_engine.watch`): what changed is
+        noted and locked; a quiet unit, files to fetch again, or changes that may land now
+        start a round for the plugin."""
+        from backend.uefn_plugins import spaces, vcs_engine
+
+        try:
+            for plugin, backend in spaces.ledgers(account, space, plugins).items():
+                seen = vcs_engine.watch(account, space, plugin, backend)
+                if seen.get("quiet") or vcs_engine.folder_due(account, space, plugin):
+                    wake(account, space, plugin)
+        except Exception:  # noqa: BLE001 — the next look tries again
+            _log.debug("looking at the folders in %s failed", space, exc_info=True)
+        finally:
+            with self._lock:
+                self._folder_running.discard(space)
 
     def _take_wakes(self) -> None:
         """Provider events into the spaces they are about (one for a space not known yet
@@ -463,6 +540,9 @@ class Scheduler:
         rows = {space: repo.sync_get(account, space) for space in found}
         left = {space: repo.count_dirty(account, space) for space, (_, _, written) in found.items() if written}
         teams = _team_looks(account, found) if found else {}
+        if account != scopes.LOCAL and account not in self._migrated:
+            self._migrated.add(account)
+            self.spawn(_migrate_folder_links)
         with self._lock:
             fresh = (account, provider) != self._who
             if fresh:
@@ -593,6 +673,41 @@ class Scheduler:
                     rec.state = state or rec.state
             self._stale = True
         _announce(out)
+
+
+def _reload_moved() -> None:
+    """Plugins loaded here whose folders moved since they loaded restart
+    (:func:`host.reload_moved_plugins`). Nothing is loaded before the plugin host is."""
+    import sys
+
+    host = sys.modules.get("backend.uefn_plugins.host")
+    if host is None:
+        return
+    try:
+        host.reload_moved_plugins()
+    except Exception:  # noqa: BLE001 — the next tick looks again
+        _log.debug("restarting plugins whose folders moved failed", exc_info=True)
+
+
+def _migrate_folder_links() -> None:
+    """Once per account: plugins linked to a team before their folders could be shared go
+    back on Local, with the bar's offer to copy Local into the team; they restart on it."""
+    from backend.uefn_plugins import vcs_engine
+
+    try:
+        moved = vcs_engine.migrate_folder_links()
+        if not moved:
+            return
+        from backend.uefn_plugins.host import is_plugin_enabled, reload_single_plugin
+
+        for plugin in moved:
+            if is_plugin_enabled(plugin):
+                reload_single_plugin(plugin)
+        from frontend.ui_web.agent_modes import push_ui_event
+
+        push_ui_event({"type": "plugin_scope_changed", "plugins": moved, "switched": True})
+    except Exception:  # noqa: BLE001 — each plugin's bind before load does it too
+        _log.debug("moving folder plugins back to Local failed", exc_info=True)
 
 
 def flush(timeout: float = FLUSH_TIMEOUT_S) -> int:

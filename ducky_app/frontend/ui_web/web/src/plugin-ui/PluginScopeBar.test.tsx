@@ -302,6 +302,214 @@ describe("plugin scope bar", () => {
     expect(api.plugin_scope_drop).not.toHaveBeenCalled();
   });
 
+  describe("plugins that keep their own folders", () => {
+    const LOCAL = { kind: "personal", label: "Local", spaceId: "", readOnly: false };
+    const URC = "Carried by this island's UEFN revision control";
+    const NOTE = "This plugin's files are stored as it writes them on each member's PC; on the server and in transit they are encrypted.";
+    /** The host's folder fields: the declared folders, the teams it offers Local into, the note. */
+    const declared = (folders: Record<string, unknown>[] = [{ id: "scenes" }], offers: unknown[] = []) =>
+      ({ teamFolders: folders, folderOffers: offers, folderNote: NOTE });
+    const localStatus = (extra: Record<string, unknown> = {}) => ({
+      ok: true, visible: true, pluginLabel: "Forge", canChange: true, state: "ok", ...declared(), binding: null,
+      ...extra, scope: LOCAL,
+    });
+    const UNITS = [
+      { folder: "scenes", unit: "MEGA_Duel_Stadium", name: "MEGA_Duel_Stadium", files: 12, bytes: 226 * 1024 ** 2 },
+      { folder: "scenes", unit: "Arena", name: "Arena", files: 3, bytes: 2 * 1024 ** 2 },
+    ];
+    const chooseAlpha = async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Change ▾" }));
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: /Alpha Studio/ }));
+      fireEvent.click(await screen.findByRole("button", { name: /^Switch/ }));
+    };
+    const choices = () => api.plugin_scope_choices.mockResolvedValue({ ok: true, choices: [
+      { id: "personal", kind: "personal", label: "Local" },
+      { id: "s1", kind: "shared", label: "Alpha Studio" },
+    ] });
+    /** A call that answers when the test says so. */
+    const pending = () => {
+      let answer: (value: unknown) => void = () => {};
+      api.plugin_scope_set.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+      return (value: unknown) => answer(value);
+    };
+
+    it("a switch says it is getting the team's files, reads how far it got, then asks which Local units to share", async () => {
+      api.plugin_scope_status.mockResolvedValue(localStatus());
+      choices();
+      const answer = pending();
+      bar("forge");
+      expect(await screen.findByText("Only on this PC")).toBeTruthy();
+      await chooseAlpha();
+      await waitFor(() => expect(api.plugin_scope_set).toHaveBeenCalledWith("forge", "s1"));
+      expect(await screen.findByText("Getting Alpha Studio's files…")).toBeTruthy();
+      expect((screen.getByRole("button", { name: "Change ▾" }) as HTMLButtonElement).disabled).toBe(true);
+      // The host notes its progress without telling the panel: the bar reads it while the switch runs.
+      api.plugin_scope_status.mockResolvedValue(localStatus({ state: "binding", binding: { team: "Alpha Studio", pct: 40, at: 1 } }));
+      expect(await screen.findByText("Getting Alpha Studio's files… 40%", undefined, { timeout: 3000 })).toBeTruthy();
+
+      answer({ ok: false, needs: "first_share", team: "Alpha Studio", note: NOTE, units: UNITS });
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText("Share Forge's files with Alpha Studio?")).toBeTruthy();
+      expect(within(dialog).getByText(
+        "Alpha Studio has none of Forge's files yet. Pick what to copy from your Local copy; the rest stays only on this PC.",
+      )).toBeTruthy();
+      expect(within(dialog).getByText(NOTE)).toBeTruthy();
+      expect(within(dialog).getByText("12 files · 226 MB")).toBeTruthy();
+      expect(within(dialog).getByText("2 of 2 picked · 228 MB")).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: /Arena/ }));
+      expect(within(dialog).getByText("1 of 2 picked · 226 MB")).toBeTruthy();
+
+      // The picked units go in: the bar says they are being sent, then shows the team's copy.
+      api.plugin_scope_status.mockResolvedValue(localStatus());
+      const sent = pending();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Copy and share" }));
+      await waitFor(() => expect(api.plugin_scope_set).toHaveBeenLastCalledWith(
+        "forge", "s1", { units: ["MEGA_Duel_Stadium"] }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(await screen.findByText("Sending your files to Alpha Studio…")).toBeTruthy();
+      api.plugin_scope_status.mockResolvedValue(sharedStatus({ pluginLabel: "Forge", ...declared() }));
+      sent({ ok: true });
+      expect(await screen.findByText(/^Up to date/)).toBeTruthy();
+    });
+
+    it("picking nothing shares nothing until Start empty; Cancel changes nothing", async () => {
+      api.plugin_scope_status.mockResolvedValue(localStatus());
+      choices();
+      api.plugin_scope_set.mockResolvedValueOnce({ ok: false, needs: "first_share", team: "Alpha Studio", units: UNITS.slice(1) });
+      bar("forge");
+      await chooseAlpha();
+      const dialog = await screen.findByRole("dialog");
+      // Without the host's note the dialog still says the files are stored as written on each PC.
+      expect(within(dialog).getByText(NOTE)).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole("checkbox", { name: /Arena/ }));
+      expect((within(dialog).getByRole("button", { name: "Copy and share" }) as HTMLButtonElement).disabled).toBe(true);
+      api.plugin_scope_set.mockResolvedValue({ ok: true });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Start empty" }));
+      await waitFor(() => expect(api.plugin_scope_set).toHaveBeenLastCalledWith("forge", "s1", { start_empty: true }));
+
+      api.plugin_scope_set.mockResolvedValueOnce({ ok: false, needs: "first_share", team: "Alpha Studio", units: [] });
+      await chooseAlpha();
+      const again = await screen.findByRole("dialog");
+      expect(within(again).getByText("Your Local copy is empty.")).toBeTruthy();
+      fireEvent.click(within(again).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(api.plugin_scope_set).toHaveBeenCalledTimes(3);
+    });
+
+    it("a failed pull fails the switch with the reason, and nothing changes", async () => {
+      api.plugin_scope_status.mockResolvedValue(localStatus());
+      choices();
+      api.plugin_scope_set.mockResolvedValue({ ok: false, error: "Alpha Studio's files didn't arrive (offline). Nothing changed." });
+      bar("forge");
+      await chooseAlpha();
+      expect(await screen.findByText("Alpha Studio's files didn't arrive (offline). Nothing changed.")).toBeTruthy();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.getByText("Only on this PC")).toBeTruthy();
+      expect((screen.getByRole("button", { name: "Change ▾" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    it("a folder that can't be shared from this PC says why and offers no team", async () => {
+      api.plugin_scope_status.mockResolvedValue(localStatus(declared([{ id: "design", refused: URC }, { id: "noproject" }])));
+      choices();
+      bar("roguelike");
+      expect(await screen.findByText(URC)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Change ▾" }));
+      expect(await screen.findByRole("menuitemradio", { name: "Local" })).toBeTruthy();
+      expect(screen.queryByRole("menuitemradio", { name: /Alpha Studio/ })).toBeNull();
+      expect(screen.getAllByText(URC).length).toBe(2);
+      cleanup();
+
+      // Nothing else to share: no bar at all (Settings → Data says why).
+      api.plugin_scope_status.mockResolvedValue(localStatus({ shareable: false, ...declared([{ id: "design", refused: URC }]) }));
+      const { container } = bar("roguelike");
+      await waitFor(() => expect(api.plugin_scope_status).toHaveBeenCalled());
+      expect(container.textContent).toBe("");
+    });
+
+    it("offers to copy Local into a team it was linked to before: the first share's picker", async () => {
+      api.plugin_scope_status.mockResolvedValue(localStatus(declared(undefined, [{ space: "s1", label: "Alpha Studio" }])));
+      api.plugin_scope_set.mockResolvedValueOnce({ ok: false, needs: "first_share", team: "Alpha Studio", units: UNITS });
+      bar("forge");
+      fireEvent.click(await screen.findByRole("button", { name: "Copy Local into Alpha Studio" }));
+      // It asks which units even when the team has files already.
+      await waitFor(() => expect(api.plugin_scope_set).toHaveBeenCalledWith("forge", "s1", { pick: true }));
+      const dialog = await screen.findByRole("dialog");
+      api.plugin_scope_set.mockResolvedValue({ ok: true });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Copy and share" }));
+      await waitFor(() => expect(api.plugin_scope_set).toHaveBeenLastCalledWith(
+        "forge", "s1", { units: ["MEGA_Duel_Stadium", "Arena"] }));
+    });
+
+    it("the offer, when the team already has the files, switches and says nothing was copied", async () => {
+      api.plugin_scope_status.mockResolvedValue(localStatus(declared(undefined, [{ space: "s1", label: "Alpha Studio" }])));
+      api.plugin_scope_set.mockResolvedValue({ ok: true });
+      bar("forge");
+      fireEvent.click(await screen.findByRole("button", { name: "Copy Local into Alpha Studio" }));
+      expect(await screen.findByText(
+        "Alpha Studio already has Forge's files, so nothing was copied. Your Local copy stays on this PC.",
+      )).toBeTruthy();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      expect(screen.queryByText(/already has Forge's files/)).toBeNull();
+    });
+
+    it("on a team, offers to copy Local in for a project the team has no copy of, and names what it lacks", async () => {
+      api.plugin_scope_status.mockResolvedValue(sharedStatus({
+        pluginLabel: "Forge", ...declared(undefined, [{ space: "s1", label: "Alpha Studio" }]),
+      }));
+      api.plugin_scope_set.mockResolvedValueOnce({
+        ok: false, needs: "first_share", team: "Alpha Studio", units: UNITS.slice(1), partial: true,
+      });
+      bar("forge");
+      fireEvent.click(await screen.findByRole("button", { name: "Copy Local into Alpha Studio" }));
+      await waitFor(() => expect(api.plugin_scope_set).toHaveBeenCalledWith("forge", "s1", { pick: true }));
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText(
+        "Alpha Studio has some of Forge's files already. Pick what else to copy from your Local copy; the rest stays only on this PC.",
+      )).toBeTruthy();
+      expect(within(dialog).getByRole("button", { name: "Copy nothing" })).toBeTruthy();
+      api.plugin_scope_set.mockResolvedValue({ ok: true });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Copy and share" }));
+      await waitFor(() => expect(api.plugin_scope_set).toHaveBeenLastCalledWith("forge", "s1", { units: ["Arena"] }));
+    });
+
+    it("no offer while a folder can't be shared from this PC", async () => {
+      api.plugin_scope_status.mockResolvedValue(localStatus(declared([{ id: "design", refused: URC }], [{ space: "s1", label: "Alpha Studio" }])));
+      bar("roguelike");
+      expect(await screen.findByText(URC)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Copy Local into Alpha Studio" })).toBeNull();
+    });
+
+    it("on a team: a unit changed while someone holds it, and updates waiting behind Update now", async () => {
+      api.plugin_scope_status.mockResolvedValue(sharedStatus({
+        pluginLabel: "Forge", ...declared(),
+        folders: [{ folder_id: "scenes", unit: "MEGA_Duel_Stadium", name: "MEGA_Duel_Stadium", state: "quarantined",
+          reason: "Changed here while Ana holds it" }],
+      }));
+      bar("forge");
+      expect(await screen.findByText("MEGA_Duel_Stadium: changed here while Ana holds it")).toBeTruthy();
+      expect(line().getAttribute("title")).toBe(`Plugin data on each PC is encrypted for the signed-in account. ${NOTE}`);
+      cleanup();
+
+      api.plugin_scope_status.mockResolvedValue(sharedStatus({
+        pluginLabel: "Forge", ...declared(), head: 9,
+        changes: { incoming: 2, incomingBy: ["Ana"], held: true },
+      }));
+      api.plugin_scope_pull?.mockResolvedValue({ ok: true });
+      const changed = vi.fn();
+      render(
+        <ConfirmModalProvider>
+          <PluginScopeBar pluginId="forge" onScopeChanged={changed} />
+        </ConfirmModalProvider>,
+      );
+      expect(await screen.findByText("2 updates from Ana")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Update now" }));
+      await waitFor(() => expect(api.plugin_scope_pull).toHaveBeenCalledWith("forge"));
+      // The panel re-reads its data once the updates are in.
+      await waitFor(() => expect(changed).toHaveBeenCalled());
+    });
+  });
+
   it("after a reset, without the host call, says so and offers no choice", async () => {
     api.space_reset_settle = undefined;
     api.plugin_scope_status.mockResolvedValue(sharedStatus({ state: "reset", kindLabel: "Team" }, { readOnly: true }));

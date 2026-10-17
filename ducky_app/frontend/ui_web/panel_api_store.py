@@ -47,6 +47,17 @@ def _cache_store_catalog(result: dict[str, Any], account: str = "") -> dict[str,
 SWITCH_SEND_TIMEOUT_S = 30.0
 
 
+def _folder_offer(plugin: str, space: str) -> bool:
+    """The bar offers to copy ``plugin``'s Local folders into ``space`` (a project the team
+    has no copy of yet, or a link made before folders could be shared)."""
+    try:
+        from backend.uefn_plugins import team_folders
+
+        return any(o["space"] == space for o in team_folders.offers(plugin))
+    except Exception:  # noqa: BLE001 — no offer then
+        return False
+
+
 def _send_before_leaving(plugin: str, leaving: dict[str, Any], target: str) -> int | None:
     """A switch away from a shared space sends that copy's queued changes first, up to
     :data:`SWITCH_SEND_TIMEOUT_S` (after the switch nothing would send them). Returns how
@@ -833,22 +844,41 @@ class PanelApiStoreMixin:
         except Exception as exc:
             return {"ok": False, "choices": [], "error": str(exc)}
 
-    def plugin_scope_set(self, plugin_id: str, scope_id: str) -> dict[str, Any]:
+    def plugin_scope_set(self, plugin_id: str, scope_id: str, options: dict | None = None) -> dict[str, Any]:
         """Keep a plugin's data in Local or one shared space. Nothing moves: the plugin
         restarts on that scope's own copy, then its open panels reload (``switched``).
         Changes still queued for the space it leaves are sent first (up to 30 s);
-        ``unsent`` is how many of them didn't go (they stay queued in that copy)."""
+        ``unsent`` is how many of them didn't go (they stay queued in that copy).
+
+        A plugin that keeps its own folders: the old copy's changed units go out first,
+        then the team's folder copy comes down while the plugin still reads its current one
+        (a failed pull changes nothing). An empty team copy answers ``{ok: false, needs:
+        "first_share", team, units, note}``: call again with the first share as the third
+        argument, ``{units: [...]}`` (copied from Local and sent, then used) or
+        ``{start_empty: true}`` (also accepted as ``{firstShare: {...}}``). The bar's "Copy
+        Local into <team>" sends ``{pick: true}``: the answer asks which Local units to copy
+        even when the team already has files, and the same call with the units copies them.
+        A team that has no copy yet of a project opened since (its offer) goes through the
+        switch too, even when the plugin is on that team already."""
         import threading
 
         from backend.uefn_plugins.scopes import active_scope
-        from backend.uefn_plugins.spaces import link_scope, sync_active
+        from backend.uefn_plugins.spaces import link_scope, switch_folders, sync_active
 
         pid = str(plugin_id or "")
         target = str(scope_id or "")
+        opts = dict(options or {}) if isinstance(options, dict) else {}
+        first_share = opts.get("firstShare") if isinstance(opts.get("firstShare"), dict) else None
+        if first_share is None and any(k in opts for k in ("units", "start_empty", "startEmpty", "pick")):
+            first_share = opts
         try:
             leaving = active_scope(pid)
             before = leaving["id"]
             unsent = _send_before_leaving(pid, leaving, target)
+            folders = switch_folders(pid, target, first_share=first_share) \
+                if before != target or first_share or _folder_offer(pid, target) else None
+            if folders is not None and not folders.get("ok"):
+                return {**folders, "ok": False}
             out = link_scope(pid, target)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
@@ -856,7 +886,8 @@ class PanelApiStoreMixin:
             out = {**out, "unsent": unsent, "unsentLabel": str(leaving["label"])}
         self._push_panel({"type": "plugin_scope_changed", "plugins": [pid]})
         sync_active(pid, force=True, on_done=self._scope_synced)
-        if out.get("scope", {}).get("spaceId", "") == ("" if before == "personal" else before):
+        if out.get("scope", {}).get("spaceId", "") == ("" if before == "personal" else before) and not (
+                folders and folders.get("changed")):
             return out  # same copy as before: nothing to restart
 
         def _restart() -> None:
@@ -1010,7 +1041,10 @@ class PanelApiStoreMixin:
         return self._team_call(plugin_id, team_lock, str(unit or ""), "ask")
 
     def plugin_scope_resolve(self, plugin_id: str, kind: str, key: str, choice: str) -> dict[str, Any]:
-        """Settle a conflict: mine, theirs, or compare (``diff``, nothing changes)."""
+        """Settle a conflict: mine, theirs, or compare (``diff``, nothing changes). A folder
+        unit (kind ``tree``, key ``<folder>/<unit>``): also both (Keep both), and for one
+        changed here while someone else holds it keep_copy (Keep mine as a copy) or discard
+        (Discard mine)."""
         from backend.uefn_plugins.spaces import team_resolve
 
         return self._team_call(plugin_id, team_resolve, str(kind or ""), str(key or ""), str(choice or ""))

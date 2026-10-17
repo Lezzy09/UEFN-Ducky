@@ -852,6 +852,63 @@ def test_erase_drops_the_link_and_a_relink_pulls_the_whole_copy_again(who: _Who,
     assert repo.sync_get(ana, "spaceT")["cursor_rev"] == 9
 
 
+
+def test_erase_removes_the_junction_but_not_the_target_of_another_scope(who: _Who, fake_spaces: FakeSpaces,
+                                                                         monkeypatch: pytest.MonkeyPatch,
+                                                                         tmp_path) -> None:
+    """A plugin that keeps a declared folder: erase takes away its junction and this
+    account's team copy (read-only files and links inside too, never followed), puts the
+    Local copy back where the plugin keeps its folder, and leaves another account's copy."""
+    import _winapi
+    import json
+    import os
+
+    from backend.store.repos import folder_files
+    from backend.uefn_plugins import team_folders as tf
+    from backend.uefn_plugins.store import PLUGIN_MANIFEST, plugin_dir
+
+    monkeypatch.setattr(tf, "_volume", lambda path: ("NTFS", False))
+    monkeypatch.setattr(tf, "_onedrive_roots", lambda: [])
+    pid = "scene-maker"
+    plugin_dir(pid).mkdir(parents=True)
+    (plugin_dir(pid) / PLUGIN_MANIFEST).write_text(json.dumps({"id": pid, "team_folders": [
+        {"id": "scenes", "root": "{LOCALAPPDATA}/UEFN-Ducky/scene-maker/scenes", "unit": "*"}]}), encoding="utf-8")
+    tf._DECLS.clear()
+    folder = tf.plugin_folders(pid)[0]
+    root = tf.local_appdata() / "UEFN-Ducky" / pid / "scenes"
+    (root / "MEGA").mkdir(parents=True)
+    (root / "MEGA" / "scene.json").write_text("{}", encoding="utf-8")
+    fake_spaces.spaces["spaceT"] = "Alpha Studio"
+    ben = who.be("ben@x.org")  # another account on this PC, with its own copy of the team's folder
+    ben_copy = tf.team_copy(ben, "spaceT", pid, folder)
+    (ben_copy / "Ben").mkdir(parents=True)
+    (ben_copy / "Ben" / "scene.json").write_text("{}", encoding="utf-8")
+    ana = who.be("ana@x.org")
+    team = tf.team_copy(ana, "spaceT", pid, folder)
+    (team / "Arena").mkdir(parents=True)
+    (team / "Arena" / "scene.json").write_text("{}", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep", encoding="utf-8")
+    try:
+        assert tf.switch(pid, "spaceT", project_root="", pull=lambda: (True, ""))["ok"]
+        scopes.link_plugin(pid, "spaceT")
+        assert tf._key(tf.junction_target(root)) == tf._key(team)
+        tf.scan(ana, "spaceT", pid, folder)
+        tf.protect(ana, "spaceT", pid, folder, ["Arena"], True)
+        _winapi.CreateJunction(str(outside), str(team / "link"))
+
+        scopes.erase_plugin(pid)
+        assert not tf._is_junction(root) and (root / "MEGA" / "scene.json").is_file()  # Local is back in place
+        assert not team.exists() and folder_files.files(ana, "spaceT", pid, "scenes") == []
+        assert (ben_copy / "Ben" / "scene.json").is_file()  # another account's copy stays
+        assert (outside / "keep.txt").read_text(encoding="utf-8") == "keep"  # never followed
+        assert folder_files.links(pid) == [] and scopes.active_scope(pid)["kind"] == "personal"
+    finally:
+        for link in (team / "link", root):
+            if os.path.isjunction(link):
+                os.rmdir(link)
+
 def test_only_plugins_on_the_host_data_service_are_offered_a_space(who: _Who, fake_spaces: FakeSpaces,
                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
     import json

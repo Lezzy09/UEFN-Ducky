@@ -32,12 +32,18 @@ The server rules modelled (and checked):
   leases run 300 s on the server clock;
 - a beat answers the roster (live presence) and live locks;
 - a commit and a beat name the caller's device: the lock that device holds is the one
-  its commits carry the fence of, and its roster row carries that device id.
+  its commits carry the fence of, and its roster row carries that device id;
+- folder files (``tree``) are read from the plaintext path core names (a ``\\\\?\\`` path
+  on Windows) and come back with the exact ``meta`` core sent (``relpath``, ``mtime_ns``);
+  two clients of one team give a file and a unit the same hashed name, and a lock on a
+  folder unit covers every file in it.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
 import tempfile
 import threading
 import time
@@ -971,6 +977,79 @@ def check_device_identity(world: World) -> None:
     _expect([(lk.unit, lk.device, lk.mine) for lk in roster.locks] == [(unit, device, True)], f"locks {roster.locks}")
 
 
+def _tree_names(backend: Any, folder: str, unit: str, relpath: str) -> tuple[str, str]:
+    """A folder file's item key and its unit's id, as the backend names them (core's
+    fallback for a backend that doesn't)."""
+    key_of, unit_of_ = getattr(backend, "tree_key", None), getattr(backend, "tree_unit", None)
+    if callable(key_of) and callable(unit_of_):
+        return str(key_of(SPACE, folder, unit, relpath)), str(unit_of_(SPACE, folder, unit))
+    h32 = lambda text: hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]  # noqa: E731
+    return f"tree:{folder}/{h32(f'{unit}/{relpath}')}", f"tree:{folder}/{h32(f'{folder}/{unit}')}"
+
+
+def _tree_put(key: str, unit: str, path: str, content: bytes, meta: Mapping[str, Any], *, base: int = 0) -> OutgoingItem:
+    return OutgoingItem(kind="tree", key=key, unit=unit, op="put", base_seq=base, sha256=sha(content),
+                        size=len(content), path=path, meta=dict(meta))
+
+
+def check_tree_files(world: World) -> None:
+    """Folder files: streamed from the path core names (long, non-ASCII names), back with
+    the exact meta core sent; both PCs hash names alike; a lock on the unit covers its files."""
+    a, b = world.client("ana", "d1", name="Ana"), world.client("ben", "d2", name="Ben")
+    unit_name = "mega_duel_stadium_rounded"
+    long_dir = "/".join(["Bühne_" + "x" * 40] * 6)  # with the copy's own path, well over 260 characters
+    rel_scene, rel_moves = f"{unit_name}/scene.json", f"{unit_name}/{long_dir}/transforms.json"
+    key_scene, unit = _tree_names(a, "scenes", unit_name, rel_scene)
+    key_moves, _ = _tree_names(a, "scenes", unit_name, rel_moves)
+    _expect(key_scene.startswith("tree:scenes/") and len(key_scene.split("/", 1)[1]) == 32
+            and unit_name not in key_scene and unit.startswith("tree:scenes/") and unit != key_scene,
+            f"hashed names {key_scene!r} {unit!r}")
+    _expect(_tree_names(b, "scenes", unit_name, rel_scene) == (key_scene, unit), "another PC names them alike")
+    scene = b"".join(hashlib.sha256(str(i).encode()).digest() for i in range(20000))  # ~625 KiB, several chunks
+    moves = b'{"base_stamp": 1760000000123456789, "moves": []}'
+    tmp = tempfile.mkdtemp(prefix="ledger-tree-")
+    root = "\\\\?\\" + os.path.abspath(tmp) if os.name == "nt" else tmp  # as core hands paths over
+    try:
+        p_scene, p_moves = os.path.join(root, "a.out"), os.path.join(root, *long_dir.split("/"), "b.out")
+        os.makedirs(os.path.dirname(p_moves))
+        for path, data in ((p_scene, scene), (p_moves, moves)):
+            with open(path, "wb") as fh:
+                fh.write(data)
+        meta_scene = {"relpath": rel_scene, "unit_name": unit_name, "folder": "scenes", "project": "",
+                      "mtime_ns": 1760000000123456789}
+        meta_moves = {**meta_scene, "relpath": rel_moves, "mtime_ns": 1760000000987654321}
+        first = _commit(a, _tree_put(key_scene, unit, p_scene, scene, meta_scene),
+                        _tree_put(key_moves, unit, p_moves, moves, meta_moves))
+        page = b.pull(SPACE, PLUGIN, 0, 50)
+        _expect(isinstance(page, PullPage) and [cs.seq for cs in page.changesets] == [first.seq], f"pull {page!r}")
+        _expect({(i.kind, i.key, i.unit) for i in page.changesets[0].items}
+                == {("tree", key_scene, unit), ("tree", key_moves, unit)}, "tree items and their unit")
+        for key, data, meta in ((key_scene, scene, meta_scene), (key_moves, moves, meta_moves)):
+            got = b.fetch(SPACE, PLUGIN, "tree", key, None)
+            _expect(isinstance(got, IncomingItem) and got.op == "put" and got.unit == unit, f"fetch {got!r}")
+            try:
+                _expect(got.read() == data and got.sha256 == sha(data) and got.size == len(data), "tree content")
+                _expect(got.meta.get("relpath") == meta["relpath"] and int(got.meta.get("mtime_ns") or 0)
+                        == meta["mtime_ns"], f"meta back as sent {dict(got.meta)!r}")
+            finally:
+                if got.path:
+                    Path(got.path).unlink(missing_ok=True)
+        held = b.lock(SPACE, PLUGIN, [LockUnit(unit, unit_name)], "best", {unit: first.seq})
+        _expect(isinstance(held.get(unit), Granted), f"lock on a folder unit {held!r}")
+        edit = moves.replace(b"[]", b"[1]")
+        with open(p_moves, "wb") as fh:
+            fh.write(edit)
+        out = a.push(SPACE, PLUGIN, changeset(_tree_put(key_moves, unit, p_moves, edit, meta_moves, base=first.seq)))
+        _expect(isinstance(out, Locked) and out.units[0].unit == unit and out.units[0].user_name == "Ben",
+                f"another file of a held unit {out!r}")
+        b.unlock(SPACE, PLUGIN, [unit])
+        gone = _commit(a, del_item("tree", key_scene, base=first.seq, unit=unit))
+        got = b.fetch(SPACE, PLUGIN, "tree", key_scene, None)
+        _expect(isinstance(got, IncomingItem) and got.op == "del" and got.seq == gone.seq, f"deleted {got!r}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 CHECKS: list[Callable[[World], None]] = [
     check_commit_and_pull,
     check_replay,
@@ -988,4 +1067,5 @@ CHECKS: list[Callable[[World], None]] = [
     check_beat,
     check_revert_keys_as_of,
     check_device_identity,
+    check_tree_files,
 ]

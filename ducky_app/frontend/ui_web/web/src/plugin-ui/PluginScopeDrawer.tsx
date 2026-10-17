@@ -3,6 +3,7 @@ import "./plugin-ui.css";
 import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { getApi } from "../hooks/usePanelApi";
 import type {
+  PluginScopeFolderUnit,
   PluginScopeHistoryEntry,
   PluginScopeOutgoing,
   PluginScopeResult,
@@ -13,15 +14,26 @@ import {
   clockText,
   conflictText,
   DATA_AT_REST,
+  discardConfirm,
   doingText,
   dropConfirm,
   durationText,
+  folderNote,
+  folderRefusalText,
+  folderUnitKey,
+  folderUnitLockId,
+  folderUnitStateText,
   formatBytes,
+  hasFolders,
+  holdsFolderUnit,
+  listText,
   notShared,
   outgoingStateText,
   peopleRows,
+  refusedFolders,
   restoreConfirm,
   storageLine,
+  unitSizeText,
 } from "./scopeBarText";
 
 /** Rows of a long table listed before "Show all". */
@@ -121,6 +133,16 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
     await act(async () => api?.plugin_scope_break?.(pluginId, unit));
   };
   const lockUnit = (unit: string, name: string) => act(async () => api?.plugin_scope_lock?.(pluginId, unit, name));
+
+  // ---------------------------------------------------------------- folder units changed while held
+  const keepCopy = (f: PluginScopeFolderUnit) =>
+    act(async () => api?.plugin_scope_resolve?.(pluginId, "tree", folderUnitKey(f), "keep_copy"), true,
+      `Your version of ${f.name} is kept beside it as a copy; ${f.name} has ${label}'s version again.`);
+  const discard = async (f: PluginScopeFolderUnit) => {
+    const ok = await confirm({ ...discardConfirm(f.name, label), confirmLabel: "Discard mine", danger: true });
+    if (ok !== true) return;
+    await act(async () => api?.plugin_scope_resolve?.(pluginId, "tree", folderUnitKey(f), "discard"), true);
+  };
 
   // ---------------------------------------------------------------- changes
   const retry = async (key?: string) => {
@@ -245,12 +267,14 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
   const locks = s.locks ?? [];
   const outgoing = outgoingRows(s);
   const shownOut = allRows ? outgoing : outgoing.slice(0, ROWS_SHOWN);
-  const fixable = outgoing.filter((row) => row.state === "refused" || row.state === "blocked");
+  // Retry and Drop my change are for data items; a held folder unit says what fixes it.
+  const fixable = outgoing.filter((row) => row.kind !== "tree" && (row.state === "refused" || row.state === "blocked"));
   const canFix = !reset;
   const changes = s.changes ?? {};
   const blockedIn = changes.blocked ?? [];
   const conflicts = s.conflicts ?? [];
   const folders = s.folders ?? [];
+  const refusals = refusedFolders(s);
   const pending = typeof s.pending === "number" ? s.pending : outgoing.filter((row) => row.state === "queued").length;
   const retryAll = canFix && fixable.length > 1 && Boolean(api?.plugin_scope_retry);
   // A provider lists the newest held changes only; the count is all of them.
@@ -385,11 +409,11 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
                 <tbody>
                   {shownOut.map((row) => {
                     const name = row.name || row.key;
-                    const fix = canFix && (row.state === "refused" || row.state === "blocked");
+                    const fix = canFix && fixable.includes(row);
                     return (
                       <tr key={`${row.kind}:${row.key}`}>
                         <td>{name}{row.deleted ? " (deleted here)" : ""}</td>
-                        <td>{row.size ? formatBytes(row.size) : ""}</td>
+                        <td>{row.size ? formatBytes(row.size) : row.files ? unitSizeText(row.files) : ""}</td>
                         <td>{outgoingStateText(row.state, row.reason, row.attempts)}</td>
                         <td className="plugin-scope-drawer__actions">
                           {fix && api?.plugin_scope_retry ? (
@@ -431,8 +455,15 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
           )}
           {changes.incoming ? (
             <p className="plugin-scope-drawer__line">
-              {changes.incoming} incoming{changes.incomingBy?.length ? ` from ${changes.incomingBy.join(", ")}` : ""}
-              {changes.held ? " · they wait until you update" : ""}
+              <span>
+                {changes.incoming} incoming{changes.incomingBy?.length ? ` from ${listText(changes.incomingBy)}` : ""}
+                {changes.held ? " · they wait until you update" : ""}
+              </span>
+              {changes.held && api?.plugin_scope_pull ? (
+                <button type="button" className="plugin-scope-bar__link" disabled={busy || reset} onClick={() => void pull()}>
+                  Update now
+                </button>
+              ) : null}
             </p>
           ) : null}
           {blockedIn.length ? (
@@ -629,39 +660,72 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
         </section>
       ) : null}
 
-      {folders.length ? (
+      {folders.length || refusals.length ? (
         <section className="plugin-scope-drawer__section">
           <h4 className="plugin-scope-drawer__title">Folder units</h4>
-          <table className="plugin-scope-drawer__table">
-            <thead>
-              <tr><th>Unit</th><th>State</th><th><span className="sr-only">Actions</span></th></tr>
-            </thead>
-            <tbody>
-              {folders.map((f) => (
-                <tr key={f.unit}>
-                  <td>{f.name}</td>
-                  <td>
-                    {f.state === "changed" ? "Changed here"
-                      : f.state === "locked" ? `Locked by ${f.mine ? "you" : f.holder || "someone"}`
-                        : f.state === "conflict" ? "Conflict" : "Up to date"}
-                  </td>
-                  <td className="plugin-scope-drawer__actions">
-                    {f.state === "locked" && f.mine && api?.plugin_scope_unlock ? (
-                      <button type="button" className="plugin-scope-bar__link" disabled={busy}
-                        aria-label={`Release ${f.name}`} onClick={() => void release(f.unit)}>
-                        Release
-                      </button>
-                    ) : f.state !== "locked" && api?.plugin_scope_lock ? (
-                      <button type="button" className="plugin-scope-bar__link" disabled={busy}
-                        aria-label={`Lock ${f.name}`} onClick={() => void lockUnit(f.unit, f.name)}>
-                        Lock
-                      </button>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {refusals.map((folder) => (
+            <p key={folder.id} className="plugin-scope-drawer__line plugin-scope-bar__text--warn">
+              {refusals.length > 1 ? `${folder.id}: ` : ""}{folderRefusalText(folder.refused || "")}
+            </p>
+          ))}
+          {folders.length ? (
+            <table className="plugin-scope-drawer__table">
+              <thead>
+                <tr><th>Unit</th><th>Size</th><th>State</th><th><span className="sr-only">Actions</span></th></tr>
+              </thead>
+              <tbody>
+                {folders.map((f) => {
+                  const held = f.state === "quarantined";
+                  const holder = f.holder || "the holder";
+                  const lockId = folderUnitLockId(f);
+                  const mine = holdsFolderUnit(f, locks);
+                  const theirs = !mine && (f.state === "locked" || f.state === "locked_by");
+                  return (
+                    <tr key={`${f.folder_id ?? ""}:${f.unit}`}>
+                      <td>{f.name}</td>
+                      <td>{unitSizeText(f.files, f.bytes)}</td>
+                      <td>{folderUnitStateText(f)}</td>
+                      <td className="plugin-scope-drawer__actions">
+                        {held ? (
+                          <>
+                            {api?.plugin_scope_ask ? (
+                              <button type="button" className="plugin-scope-bar__link" disabled={busy}
+                                aria-label={`Ask ${holder} to release ${f.name}`}
+                                onClick={() => void ask(lockId, f.holder || "them", f.name)}>
+                                Ask to release
+                              </button>
+                            ) : null}
+                            {api?.plugin_scope_resolve ? (
+                              <>
+                                <button type="button" className="plugin-scope-bar__link" disabled={busy}
+                                  aria-label={`Keep mine as a copy: ${f.name}`} onClick={() => void keepCopy(f)}>
+                                  Keep mine as a copy
+                                </button>
+                                <button type="button" className="plugin-scope-bar__link" disabled={busy}
+                                  aria-label={`Discard mine: ${f.name}`} onClick={() => void discard(f)}>
+                                  Discard mine
+                                </button>
+                              </>
+                            ) : null}
+                          </>
+                        ) : mine && api?.plugin_scope_unlock ? (
+                          <button type="button" className="plugin-scope-bar__link" disabled={busy}
+                            aria-label={`Release ${f.name}`} onClick={() => void release(lockId)}>
+                            Release
+                          </button>
+                        ) : !theirs && f.state !== "refused" && api?.plugin_scope_lock ? (
+                          <button type="button" className="plugin-scope-bar__link" disabled={busy}
+                            aria-label={`Lock ${f.name}`} onClick={() => void lockUnit(lockId, f.name)}>
+                            Lock
+                          </button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : null}
         </section>
       ) : null}
 
@@ -706,6 +770,7 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
       ) : null}
 
       <p className="plugin-scope-drawer__help">{DATA_AT_REST}</p>
+      {hasFolders(s) ? <p className="plugin-scope-drawer__help">{folderNote(s)}</p> : null}
     </div>
   );
 }

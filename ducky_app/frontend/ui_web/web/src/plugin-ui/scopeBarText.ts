@@ -1,5 +1,12 @@
 /** Scope bar wording. Pure so the 80% / full rules have one test. */
-import type { PluginScopeLock, PluginScopePerson, PluginScopeStatus, PluginScopeUsage } from "../types/panel";
+import type {
+  PluginFolderShareUnit,
+  PluginScopeFolderUnit,
+  PluginScopeLock,
+  PluginScopePerson,
+  PluginScopeStatus,
+  PluginScopeUsage,
+} from "../types/panel";
 
 const UNITS = ["B", "KB", "MB", "GB", "TB"];
 
@@ -181,6 +188,122 @@ export type PhraseTone = "" | "warn" | "error";
 /** The bar's one status phrase. `action`: the phrase carries a button (Update now). */
 export type StatusPhrase = { key: string; text: string; tone: PhraseTone; action?: "update" };
 
+// --------------------------------------------------------------------------- declared folders
+
+/** Folder files are kept as the plugin writes them: the first share and the help say so. */
+export const FOLDER_NOTE =
+  "This plugin's files are stored as it writes them on each member's PC; on the server and in transit they are encrypted.";
+
+/** Why a folder can't be shared with a team from this PC, by reason (`urc`, `onedrive`,
+ * `network`, `volume`, `case`); a reason already in words is its own text. */
+export function folderRefusalText(reason: string, detail: { fs?: string; names?: string[] } = {}): string {
+  if (reason === "urc") return "Carried by this island's UEFN revision control";
+  if (reason === "onedrive") return "This folder is synced by OneDrive. Move it out of OneDrive to share it with a team.";
+  if (reason === "network") return "This folder is on a network drive. Team folders work only on this PC's own drives.";
+  if (reason === "volume") return `This folder is on a ${detail.fs || "non-NTFS"} drive. Team folders need an NTFS drive.`;
+  if (reason === "case") {
+    const names = detail.names?.length ? detail.names.join(" and ") : "Two names";
+    return `${names} differ only by upper/lower case or accents. Rename one so the team can tell them apart.`;
+  }
+  return reason;
+}
+
+/** The plugin's declared folders that can't be shared from this PC, each with why. */
+export const refusedFolders = (status: PluginScopeStatus) =>
+  (status.teamFolders ?? []).filter((folder) => folder.refused);
+
+/** The first declared folder that can't be shared from this PC, in words ("" when all can):
+ * one such folder keeps the whole plugin off a team. */
+export function folderRefusal(status: PluginScopeStatus): string {
+  const refused = refusedFolders(status)[0]?.refused;
+  return refused ? folderRefusalText(refused) : "";
+}
+
+/** The plugin keeps declared folders (their files are plaintext on each PC). */
+export const hasFolders = (status: PluginScopeStatus) =>
+  Boolean(status.teamFolders?.length || status.folders?.length);
+
+/** What the help says of a folder plugin's files on each PC. */
+export const folderNote = (status: PluginScopeStatus) => status.folderNote || FOLDER_NOTE;
+
+/** "Getting Alpha's files… 40%": a switch to a team brings its folder files first. */
+export function bindingText(team: string, pct?: number | null): string {
+  return `Getting ${team}'s files…${typeof pct === "number" ? ` ${Math.round(pct)}%` : ""}`;
+}
+
+/** A first share sending the picked Local units into the team before the switch. */
+export const sharingText = (team: string) => `Sending your files to ${team}…`;
+
+/** "12 files · 226 MB" ("" when the counts aren't known). */
+export function unitSizeText(files?: number, bytes?: number): string {
+  if (files === undefined && bytes === undefined) return "";
+  return [files !== undefined ? plural(files, "file") : "", bytes !== undefined ? formatBytes(bytes) : ""]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
+
+/** A folder unit's state, for the drawer's Folder units table. */
+export function folderUnitStateText(unit: PluginScopeFolderUnit): string {
+  if (unit.state === "changed" || unit.state === "changed_here") return "Changed here";
+  if (unit.state === "locked" || unit.state === "locked_by") return `Locked by ${unit.mine ? "you" : unit.holder || "someone"}`;
+  if (unit.state === "incoming") return "Update waiting";
+  if (unit.state === "conflict") return "Changed here and by someone else";
+  if (unit.state === "quarantined") {
+    return unit.reason || `Changed here while ${unit.holder || "someone else"} holds it`;
+  }
+  if (unit.state === "refused") return unit.reason ? folderRefusalText(unit.reason) : "Can't be shared";
+  return "Up to date";
+}
+
+/** Units changed here while someone else holds them: never sent until the person chooses. */
+export const quarantinedUnits = (status: PluginScopeStatus) =>
+  (status.folders ?? []).filter((unit) => unit.state === "quarantined");
+
+/** A folder unit's key for a conflict or a held change: `<folder>/<unit>` (a unit already
+ * named as a lock, `tree:…`, is its own). */
+export function folderUnitKey(unit: PluginScopeFolderUnit): string {
+  if (unit.unit.startsWith("tree:") || !unit.folder_id) return unit.unit;
+  return `${unit.folder_id}/${unit.unit}`;
+}
+
+/** What lock calls name a folder unit by: its lock id from the host, else `<folder>/<unit>`,
+ * which the host maps to it. */
+export const folderUnitLockId = (unit: PluginScopeFolderUnit) => unit.unitId || folderUnitKey(unit);
+
+/** This PC holds the unit's lock: the row says so, or a live lock of ours has its id. */
+export function holdsFolderUnit(unit: PluginScopeFolderUnit, locks: PluginScopeLock[] = []): boolean {
+  const id = folderUnitLockId(unit);
+  return Boolean(unit.mine) || locks.some((lock) => lock.mine && lock.unit === id);
+}
+
+/** The question before a first share: the team has none of the plugin's files yet, or
+ * (`partial`, "Copy Local into") some of them already. */
+export function firstShareText(plugin: string, team: string, partial = false): { title: string; message: string } {
+  return {
+    title: `Share ${plugin}'s files with ${team}?`,
+    message: partial
+      ? `${team} has some of ${plugin}'s files already. Pick what else to copy from your Local copy; the rest stays only on this PC.`
+      : `${team} has none of ${plugin}'s files yet. Pick what to copy from your Local copy; the rest stays only on this PC.`,
+  };
+}
+
+/** "2 of 3 picked · 228 MB". */
+export function pickedText(units: PluginFolderShareUnit[], picked: Set<string>): string {
+  const chosen = units.filter((unit) => picked.has(unit.unit));
+  const bytes = chosen.reduce((sum, unit) => sum + (unit.bytes ?? 0), 0);
+  return `${chosen.length} of ${units.length} picked${chosen.length ? ` · ${formatBytes(bytes)}` : ""}`;
+}
+
+/** The question before Discard mine: this PC's change to the unit goes, the team's comes back. */
+export function discardConfirm(name: string, label: string): { title: string; message: string } {
+  return {
+    title: `Discard your changes to ${name}?`,
+    message: `${name} goes back to ${label}'s version. What you changed here is not kept.`,
+  };
+}
+
 /** "40 s", "3 min", "2 h". */
 export function durationText(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
@@ -213,8 +336,10 @@ function toSend(status: PluginScopeStatus): number {
 }
 
 /**
- * The one phrase the bar shows, highest priority first: why nothing syncs, a reset, conflicts,
- * a lock, updates waiting, an import, an upload, what is queued, waiting, paused, up to date.
+ * The one phrase the bar shows, highest priority first: a switch getting a team's files, why
+ * nothing syncs, a reset, a folder that can't be shared, conflicts, units changed here while
+ * someone else holds them, a lock, updates waiting for Update now, an import, an upload, what
+ * is queued, waiting, paused, up to date.
  */
 export function statusPhrase(status: PluginScopeStatus, nowMs: number): StatusPhrase {
   const scope = status.scope;
@@ -223,7 +348,15 @@ export function statusPhrase(status: PluginScopeStatus, nowMs: number): StatusPh
   const state = status.state || "";
   const pending = toSend(status);
   const queued = pending ? ` · ${pending} to send` : "";
-  if (scope?.kind !== "shared") return { key: "local", text: `Only on this PC · ${DATA_AT_REST}`, tone: "" };
+  if (status.binding) {
+    return { key: "binding", text: bindingText(status.binding.team || label, status.binding.pct), tone: "" };
+  }
+  const refusal = folderRefusal(status);
+  if (scope?.kind !== "shared") {
+    if (refusal) return { key: "folder_refused", text: refusal, tone: "" };
+    // Folder files aren't sealed on the PC: only api.data's are.
+    return { key: "local", text: hasFolders(status) ? "Only on this PC" : `Only on this PC · ${DATA_AT_REST}`, tone: "" };
+  }
   if (state === "lost") return { key: "lost", text: lostText(label, status.deleteAt), tone: "error" };
   if (state === "locked") {
     return { key: "key", text: "Waiting for your account's data key. Read-only until you're back online.", tone: "warn" };
@@ -239,8 +372,20 @@ export function statusPhrase(status: PluginScopeStatus, nowMs: number): StatusPh
   }
   if (state === "unavailable") return { key: "unavailable", text: unavailableText(label, status.error), tone: "error" };
   if (state === "reset") return { key: "reset", text: `${label}'s ${kind} data was reset on the server`, tone: "warn" };
+  if (refusal) return { key: "folder_refused", text: refusal, tone: "warn" };
   const conflicts = status.conflicts?.length || status.conflict || 0;
   if (conflicts) return { key: "conflict", text: plural(conflicts, "conflict"), tone: "warn" };
+  const quarantined = quarantinedUnits(status);
+  if (quarantined.length) {
+    const first = quarantined[0];
+    return {
+      key: "quarantined",
+      text: quarantined.length > 1
+        ? `${quarantined.length} units changed here while someone else holds them`
+        : `${first.name}: ${lowerFirst(folderUnitStateText(first))}`,
+      tone: "warn",
+    };
+  }
   const locked = foreignLocks(status);
   if (locked.length) {
     const first = locked[0];
@@ -263,7 +408,8 @@ export function statusPhrase(status: PluginScopeStatus, nowMs: number): StatusPh
   if (changes.totalBytes) {
     return { key: "sending", text: `Sending ${sentText(changes.sentBytes ?? 0, changes.totalBytes)}`, tone: "" };
   }
-  const held = notShared(status).count;
+  // Folder units refused (a name clash) don't go out either.
+  const held = notShared(status).count + (status.folders ?? []).filter((unit) => unit.state === "refused").length;
   const parts = [
     pending ? `${pending} to send` : "",
     incoming ? `${incoming} incoming` : "",
@@ -403,5 +549,7 @@ export function outgoingStateText(state: string, reason?: string, attempts?: num
   }
   if (state === "locked_out") return reason || "Locked by someone else";
   if (state === "conflict") return "Changed here and by someone else";
+  if (state === "quarantined") return reason || "Changed here while someone else holds it";
+  if (state === "refetch") return "Getting the team's version again";
   return "Queued";
 }

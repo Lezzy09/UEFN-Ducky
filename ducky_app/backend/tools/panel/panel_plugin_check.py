@@ -352,6 +352,15 @@ def _check_panels(pid: str, manifest: dict[str, Any], started: float, checks: li
     panels = [p for p in contributes.get("ui.panels") or contributes.get("ui_panels") or [] if isinstance(p, dict)]
     if not panels:
         return
+    from backend.uefn_plugins import team_folders
+
+    if team_folders.plugin_folders(pid):
+        # Its folders are the test's while it runs, and calls from outside the test (its
+        # panels' among them) are refused meanwhile: open its panels after the test.
+        for panel in panels:
+            checks.append({"check": f"panel {str(panel.get('id') or '').strip().lower()}", "status": "skip",
+                           "detail": "this plugin keeps its own folders: open its panels after the test"})
+        return
     opened: list[str] = []
     for panel in panels:
         panel_id = str(panel.get("id") or "").strip().lower()

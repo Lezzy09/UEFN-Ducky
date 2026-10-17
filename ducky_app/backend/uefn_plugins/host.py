@@ -134,6 +134,15 @@ _LOAD_FAILURES: dict[str, str] = {}
 _PLUGIN_HOST_ONLY_TOOLS: set[str] = set()
 # Plugins that touched api.data: their tool results name the scope ("space Alpha Studio").
 _DATA_PLUGINS: set[str] = set()
+# Plugins that keep declared folders (team_folders): the reload epoch each was loaded at
+# in this process. Their folders are junctions any process can re-point (a switch, a
+# pull, a project change); a moved epoch means this process reloads the plugin before
+# its next tool call, and the app restarts it (reload_moved_plugins).
+_FOLDER_EPOCH: dict[str, int] = {}
+_FOLDER_MOVED: dict[str, tuple[int, float]] = {}  # app: epoch seen moved, and since when
+_FOLDER_RELOAD_LOCKS: dict[str, threading.Lock] = {}
+_FOLDER_RELOAD_GUARD = threading.Lock()
+FOLDER_RELOAD_GRACE_S = 3.0  # an explicit restart (a switch) gets this long to start first
 # secret_key → {plugin_id, test_fn} — Settings "Test" for plugin API keys (e.g. Meshy).
 _SECRET_TESTERS: dict[str, dict[str, Any]] = {}
 # plugin_id → {method_name → callable} — PanelApi.plugin_call / bridge plugin.call
@@ -978,6 +987,8 @@ _INVALIDATE_WAIT_S = 30.0
 def _drop_plugin_runtime(pid: str, mod_name: str) -> None:
     with _LOCK:
         _REGISTERED.discard(pid)
+        _FOLDER_EPOCH.pop(pid, None)
+        _FOLDER_MOVED.pop(pid, None)
         _clear_node_handlers(pid)
         _TTS_SYNTHESIZERS.pop(pid, None)
         _TTS_VOICE_LISTERS.pop(pid, None)
@@ -1049,6 +1060,31 @@ def uefn_agent_tools_allowed(plugin_id: str) -> bool:
     from backend.uefn_plugins.spaces import provider_plugin
 
     return plugin_id == provider_plugin()
+
+
+def _folder_plugin_call(pid: str, tool_name: str, current: Callable[..., Any]) -> Callable[..., Any] | None:
+    """Before a tool call of a plugin that keeps declared folders: an agent's call first
+    lands the team's changes waiting behind Update now (an agent never edits a stale
+    base); then, when its folders moved since this process loaded it, it reloads here and
+    the call goes to the reloaded tool, which is returned. None: run the tool as loaded."""
+    from backend.uefn_plugins.scopes import caller
+
+    actor, _ = caller("agent" if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1" else "user")
+    if actor == "agent":
+        try:
+            from backend.uefn_plugins import vcs_engine
+
+            vcs_engine.apply_waiting(pid)
+        except Exception:  # noqa: BLE001 — the call still runs; Update now stays on the bar
+            _log.debug("landing %s's waiting changes before a call failed", pid, exc_info=True)
+    if not reload_if_folders_moved(pid):
+        return None
+    from backend.server import mcp
+
+    fn = getattr(mcp._tool_manager.get_tool(tool_name), "fn", None)
+    if not callable(fn) or fn is current:
+        raise RuntimeError(f"{pid} restarted after its files changed and no longer has the tool {tool_name}.")
+    return fn
 
 
 def _with_panel_note(plugin_id: str, result: Any) -> Any:
@@ -1136,6 +1172,13 @@ def call_panel_rpc(plugin_id: str, method: str, params: dict[str, Any] | None = 
     # agent's whose run made the call).
     actor, ducky = caller("user")
     with write_group(pid, actor=actor, ducky=ducky, message=name):
+        # Its folders moved since it loaded here (a switch, a pull, a project change in any
+        # process): it reloads first, so the panel never saves the old copy's state into the new one.
+        if pid in _FOLDER_EPOCH and reload_if_folders_moved(pid):
+            with _LOCK:
+                fn = (_PANEL_RPC.get(pid) or {}).get(name)
+            if fn is None:
+                raise ValueError(f"{pid} restarted after its files changed and no longer has {name}.")
         return fn(**kwargs)
 
 
@@ -1644,7 +1687,8 @@ def reload_single_plugin(plugin_id: str) -> None:
     (or hold ``_STORE_INSTALL_LOCK`` / host ``_LOCK`` indefinitely).
 
     ``register()`` runs on a toggle daemon — a hung plugin backend must not stick
-    the Store install bridge on "Refreshing store…".
+    the Store install bridge on "Refreshing store…". Folders the plugin keeps itself
+    (``team_folders``) are bound again before that register() (:func:`_bind_folders`).
     """
     from backend.uefn_plugins.store import load_plugin_manifest, normalize_plugin_id, plugin_dir
 
@@ -2933,6 +2977,9 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
         backend = manifest.get("backend") if isinstance(manifest.get("backend"), dict) else {}
         entry = str(backend.get("entry") or "backend").strip() or "backend"
         register_name = str(backend.get("register") or "register").strip() or "register"
+        # Folders it keeps itself point at the copy it reads now before it imports or
+        # registers anything (a broken junction is repaired).
+        folder_epoch = _bind_folders(pid)
         marker = _load_marker_begin(pid, version)
         try:
             if _manifest_is_compiled(manifest):
@@ -2955,8 +3002,127 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
             _load_marker_end(marker)
         _REGISTERED.add(pid)
         _LOAD_FAILURES.pop(pid, None)
+        if folder_epoch is not None:
+            _FOLDER_EPOCH[pid] = folder_epoch
+            _FOLDER_MOVED.pop(pid, None)
     finally:
         lock.release()
+
+
+def _bind_folders(pid: str) -> int | None:
+    """A plugin that keeps declared folders, about to load: they point at the copy it reads
+    now (:func:`team_folders.bind_plugin`). Returns the reload epoch it loads at (None: it
+    keeps none). A bind that fails never stops the load; the next one tries again."""
+    try:
+        from backend.uefn_plugins import team_folders
+
+        if not team_folders.plugin_folders(pid):
+            return None
+    except Exception:  # noqa: BLE001 — a manifest that can't be read: no folders
+        return None
+    try:
+        out = team_folders.bind_plugin(pid)
+        if not out.get("ok"):
+            _log.warning("Plugin %s: its folders couldn't be pointed at its copy: %s", pid, out.get("error"))
+    except Exception:  # noqa: BLE001
+        _log.warning("Plugin %s: binding its folders failed", pid, exc_info=True)
+    try:
+        from backend.store.repos import folder_files
+
+        return folder_files.reload_epoch(pid)
+    except Exception:  # noqa: BLE001 — without an epoch it is never reloaded for a move
+        _log.debug("Plugin %s: no reload epoch", pid, exc_info=True)
+        return None
+
+
+def _folder_reload_lock(pid: str) -> threading.Lock:
+    with _FOLDER_RELOAD_GUARD:
+        return _FOLDER_RELOAD_LOCKS.setdefault(pid, threading.Lock())
+
+
+def _folders_moved(pid: str) -> bool:
+    """The plugin's folders moved (its reload epoch) since this process loaded it."""
+    loaded = _FOLDER_EPOCH.get(pid)
+    if loaded is None:
+        return False
+    from backend.store.repos import folder_files
+
+    return folder_files.reload_epoch(pid) != loaded
+
+
+def reload_if_folders_moved(pid: str) -> bool:
+    """Before a tool call here: when the plugin's folders moved since this process loaded
+    it, unload and load it again now (its caches belong to the old files). Returns
+    whether its tools were registered anew (the call must run on the new ones). Raises
+    with the reason when it can't load again."""
+    if not _folders_moved(pid):
+        return False
+    with _folder_reload_lock(pid):
+        if pid in _FOLDER_EPOCH and not _folders_moved(pid):
+            return True  # another call reloaded it meanwhile
+        from backend.uefn_plugins.store import load_plugin_manifest, plugin_dir
+
+        label = pid
+        try:
+            invalidate_plugin_runtime(pid)
+            manifest = load_plugin_manifest(pid)
+            root = plugin_dir(pid)
+            if manifest is None or not root.is_dir() or not is_plugin_enabled(pid):
+                raise RuntimeError("it is no longer installed and on")
+            label = str(manifest.get("label") or pid)
+            _load_one(pid, root, manifest)
+            if pid not in _REGISTERED:
+                raise RuntimeError(_LOAD_FAILURES.get(pid) or "its register() didn't finish")
+        except Exception as exc:  # noqa: BLE001 — the call says why instead of running stale code
+            _record_plugin_load_error(pid, exc)
+            raise RuntimeError(f"{label} couldn't restart after its files changed: {exc}") from exc
+    _log.info("Plugin %s reloaded here: its folders moved", pid)
+    return True
+
+
+def reload_moved_plugins(now: float | None = None) -> list[str]:
+    """The app process (each scheduler tick): a plugin loaded here whose folders moved (a
+    pull, a switch or a project change made in any process) restarts once its epoch has
+    stayed moved for :data:`FOLDER_RELOAD_GRACE_S` (a switch restarts it itself first)
+    and none of its calls is running in any process; its panels then reload. Returns the
+    plugins restarting."""
+    if not _FOLDER_EPOCH:
+        return []
+    from backend.store.repos import folder_files
+    from backend.uefn_plugins import team_folders
+
+    now = time.time() if now is None else now
+    out: list[str] = []
+    for pid, loaded in list(_FOLDER_EPOCH.items()):
+        epoch = folder_files.reload_epoch(pid)
+        if epoch == loaded:
+            _FOLDER_MOVED.pop(pid, None)
+            continue
+        seen = _FOLDER_MOVED.get(pid)
+        if seen is None or seen[0] != epoch:
+            _FOLDER_MOVED[pid] = (epoch, now)
+            continue
+        if now - seen[1] < FOLDER_RELOAD_GRACE_S or team_folders.live_calls(pid):
+            continue
+        _FOLDER_MOVED.pop(pid, None)
+        _FOLDER_EPOCH.pop(pid, None)  # one restart; the load records the epoch again
+        out.append(pid)
+        threading.Thread(target=_restart_moved, args=(pid,), name=f"uefn-plugin-folders-moved-{pid}",
+                         daemon=True).start()
+    return out
+
+
+def _restart_moved(pid: str) -> None:
+    try:
+        reload_single_plugin(pid)
+    except Exception:  # noqa: BLE001 — its next tool call reloads it
+        _log.warning("Plugin %s: restarting after its folders moved failed", pid, exc_info=True)
+    try:
+        from frontend.ui_web.agent_modes import push_ui_event
+
+        push_ui_event({"type": "plugin_scope_changed", "plugins": [pid], "switched": True})
+    except Exception:  # noqa: BLE001 — its panels read the new files on their next open
+        _log.debug("telling %s's panels about its restart failed", pid, exc_info=True)
 
 
 _BACKEND_LOAD_LOCKS: dict[str, threading.RLock] = {}
@@ -3815,6 +3981,11 @@ class _PluginApi:
                 # (an MCP client of the bridge is an agent even without a ducky's name).
                 actor, ducky = caller("agent" if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1" else "user")
                 with write_group(pid, actor=actor, ducky=ducky, message=tool_name):
+                    # A plugin that keeps declared folders: checked once its call marker is down
+                    # (a move of its folders either waited for this call or finished first).
+                    fresh = _folder_plugin_call(pid, tool_name, wrapper) if pid in _FOLDER_EPOCH else None
+                    if fresh is not None:  # reloaded here: the call runs on the new plugin
+                        return fresh(*args, **kwargs)
                     result = func(*args, **kwargs)
                 try:
                     # A picture made in a chat shows inline in that turn's reply.

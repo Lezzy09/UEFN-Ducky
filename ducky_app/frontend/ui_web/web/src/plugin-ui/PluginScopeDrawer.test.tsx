@@ -49,6 +49,9 @@ const drawer = (s: PluginScopeStatus) =>
     </ConfirmModalProvider>,
   );
 
+const NOTE = "This plugin's files are stored as it writes them on each member's PC; on the server and in transit they are encrypted.";
+const URC = "Carried by this island's UEFN revision control";
+
 /** The confirm modal's main button ("Break lock (B)"). */
 const confirmButton = (label: string) => screen.getByRole("button", { name: new RegExp(`^${label} \\(`) });
 
@@ -302,6 +305,160 @@ describe("plugin scope drawer", () => {
     await waitFor(() => expect(api.plugin_scope_lock).toHaveBeenCalledWith("forge", "tree:scenes/4", "Vault"));
     fireEvent.click(screen.getByRole("button", { name: "Release Lobby" }));
     await waitFor(() => expect(api.plugin_scope_unlock).toHaveBeenCalledWith("forge", "tree:scenes/3"));
+  });
+
+  it("the folder units table: size, each state, and the plaintext note in the help", () => {
+    drawer(status({
+      teamFolders: [{ id: "scenes" }], folderNote: NOTE,
+      folders: [
+        { folder_id: "scenes", unit: "MEGA_Duel_Stadium", name: "MEGA_Duel_Stadium", state: "up_to_date", files: 12, bytes: 226 * 1024 ** 2 },
+        { folder_id: "scenes", unit: "Arena", name: "Arena", state: "conflict", files: 3, bytes: 2048 },
+        { folder_id: "scenes", unit: "Lobby", name: "Lobby", state: "refused", files: 2, bytes: 10,
+          reason: "Lobby.json and lobby.json differ only by upper/lower case or accents. Rename one so the team can tell them apart." },
+      ],
+    }));
+    const table = screen.getByText("Folder units").parentElement as HTMLElement;
+    const rows = within(table).getAllByRole("row").slice(1).map((r) => [...r.querySelectorAll("td")].slice(0, 3).map((td) => td.textContent));
+    expect(rows).toEqual([
+      ["MEGA_Duel_Stadium", "12 files · 226 MB", "Up to date"],
+      ["Arena", "3 files · 2 KB", "Changed here and by someone else"],
+      ["Lobby", "2 files · 10 B",
+        "Lobby.json and lobby.json differ only by upper/lower case or accents. Rename one so the team can tell them apart."],
+    ]);
+    // A refused unit can't be locked; the others can.
+    expect(screen.queryByRole("button", { name: "Lock Lobby" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Lock Arena" })).toBeTruthy();
+    expect(screen.getByText(NOTE)).toBeTruthy();
+  });
+
+  it("says why a declared folder can't be shared from this PC", () => {
+    drawer(status({ teamFolders: [{ id: "design", refused: URC }, { id: "noproject" }] }));
+    expect(screen.getByText("Folder units")).toBeTruthy();
+    expect(screen.getByText(URC)).toBeTruthy();
+    // The plaintext note says what the help says even without the host's words.
+    expect(screen.getByText(NOTE)).toBeTruthy();
+    cleanup();
+    drawer(status({ teamFolders: [
+      { id: "design", refused: URC },
+      { id: "noproject", refused: "This folder is synced by OneDrive. Move it out of OneDrive to share it with a team." },
+    ] }));
+    expect(screen.getByText(`design: ${URC}`)).toBeTruthy();
+    expect(screen.getByText("noproject: This folder is synced by OneDrive. Move it out of OneDrive to share it with a team.")).toBeTruthy();
+  });
+
+  it("a unit changed while someone else holds it: Ask to release, Keep mine as a copy, Discard mine after a confirm", async () => {
+    drawer(status({
+      folders: [{ folder_id: "scenes", unit: "MEGA_Duel_Stadium", name: "MEGA_Duel_Stadium", state: "quarantined",
+        reason: "Changed here while Ana holds it" }],
+    }));
+    expect(screen.getByText("Changed here while Ana holds it")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Lock MEGA_Duel_Stadium" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask the holder to release MEGA_Duel_Stadium" }));
+    await waitFor(() => expect(api.plugin_scope_ask).toHaveBeenCalledWith("forge", "scenes/MEGA_Duel_Stadium"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Keep mine as a copy: MEGA_Duel_Stadium" }));
+    await waitFor(() => expect(api.plugin_scope_resolve).toHaveBeenCalledWith(
+      "forge", "tree", "scenes/MEGA_Duel_Stadium", "keep_copy"));
+    expect(await screen.findByText(
+      "Your version of MEGA_Duel_Stadium is kept beside it as a copy; MEGA_Duel_Stadium has Alpha's version again.")).toBeTruthy();
+    expect(onChanged).toHaveBeenLastCalledWith(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard mine: MEGA_Duel_Stadium" }));
+    expect(await screen.findByText("Discard your changes to MEGA_Duel_Stadium?")).toBeTruthy();
+    expect(screen.getByText("MEGA_Duel_Stadium goes back to Alpha's version. What you changed here is not kept.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Cancel/ }));
+    await waitFor(() => expect(screen.queryByText("Discard your changes to MEGA_Duel_Stadium?")).toBeNull());
+    expect(api.plugin_scope_resolve).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Discard mine: MEGA_Duel_Stadium" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Discard mine \(/ }));
+    await waitFor(() => expect(api.plugin_scope_resolve).toHaveBeenLastCalledWith(
+      "forge", "tree", "scenes/MEGA_Duel_Stadium", "discard"));
+  });
+
+  it("a {PROJECT} folder's unit goes by its folder and project id; a refusal from the host stays in the drawer", async () => {
+    api.plugin_scope_resolve.mockResolvedValueOnce({ ok: false, error: "MEGA_Duel_Stadium is open in another program." });
+    drawer(status({
+      folders: [{ folder_id: "design", unit: "1f0c-guid", name: "design", state: "quarantined", holder: "Ben" }],
+    }));
+    expect(screen.getByText("Changed here while Ben holds it")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Keep mine as a copy: design" }));
+    await waitFor(() => expect(api.plugin_scope_resolve).toHaveBeenCalledWith("forge", "tree", "design/1f0c-guid", "keep_copy"));
+    expect((await screen.findByRole("alert")).textContent).toBe("MEGA_Duel_Stadium is open in another program.");
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it("without the host's call, a held unit offers no Keep or Discard", () => {
+    const saved = api.plugin_scope_resolve;
+    Object.assign(api, { plugin_scope_resolve: undefined });
+    try {
+      drawer(status({ folders: [{ folder_id: "scenes", unit: "Arena", name: "Arena", state: "quarantined" }] }));
+      expect(screen.getByText("Changed here while someone else holds it")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Keep mine as a copy: Arena" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Discard mine: Arena" })).toBeNull();
+    } finally {
+      Object.assign(api, { plugin_scope_resolve: saved });
+    }
+  });
+
+  it("the host's unit states; Lock and Release go by the unit's lock id, else <folder>/<unit>", async () => {
+    drawer(status({
+      locks: [{ unit: "tree:scenes/9f2c", name: "Lobby", mine: true }],
+      folders: [
+        { folder_id: "scenes", unit: "Arena", unitId: "tree:scenes/ab12", name: "Arena", state: "up_to_date" },
+        { folder_id: "scenes", unit: "Vault", name: "Vault", state: "changed_here" },
+        { folder_id: "scenes", unit: "Lobby", unitId: "tree:scenes/9f2c", name: "Lobby", state: "up_to_date", mine: true },
+        { folder_id: "scenes", unit: "Dock", unitId: "tree:scenes/77d0", name: "Dock", state: "locked_by", holder: "Ana" },
+        { folder_id: "scenes", unit: "Pier", unitId: "tree:scenes/5e1a", name: "Pier", state: "incoming" },
+      ],
+    }));
+    const table = screen.getByText("Folder units").parentElement as HTMLElement;
+    const states = within(table).getAllByRole("row").slice(1).map((r) => r.querySelectorAll("td")[2].textContent);
+    expect(states).toEqual(["Up to date", "Changed here", "Up to date", "Locked by Ana", "Update waiting"]);
+    expect(screen.queryByRole("button", { name: "Lock Dock" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Lock Arena" }));
+    await waitFor(() => expect(api.plugin_scope_lock).toHaveBeenCalledWith("forge", "tree:scenes/ab12", "Arena"));
+    fireEvent.click(screen.getByRole("button", { name: "Lock Vault" }));
+    await waitFor(() => expect(api.plugin_scope_lock).toHaveBeenLastCalledWith("forge", "scenes/Vault", "Vault"));
+    // This PC holds Lobby: Release, never Lock.
+    expect(within(table).queryByRole("button", { name: "Lock Lobby" })).toBeNull();
+    fireEvent.click(within(table).getByRole("button", { name: "Release Lobby" }));
+    await waitFor(() => expect(api.plugin_scope_unlock).toHaveBeenCalledWith("forge", "tree:scenes/9f2c"));
+  });
+
+  it("a folder unit's outgoing change shows its file count and why it is held, without Retry or Drop", () => {
+    drawer(status({
+      changes: { outgoing: [
+        { kind: "tree", key: "scenes/Arena", folder_id: "scenes", unit: "Arena", name: "Arena", files: 3, state: "quarantined",
+          reason: "Changed here while Ana holds it" },
+        { kind: "tree", key: "scenes/Vault", folder_id: "scenes", unit: "Vault", name: "Vault", files: 1, state: "queued" },
+        { kind: "tree", key: "scenes/Lobby", folder_id: "scenes", unit: "Lobby", name: "Lobby", files: 2, state: "refused",
+          reason: "Lobby.json and lobby.json differ only by upper/lower case or accents. Rename one." },
+      ] },
+    }));
+    const rows = within(screen.getByText("Changes").parentElement as HTMLElement).getAllByRole("row").slice(1)
+      .map((r) => [...r.querySelectorAll("td")].slice(0, 3).map((td) => td.textContent));
+    expect(rows).toEqual([
+      ["Arena", "3 files", "Changed here while Ana holds it"],
+      ["Vault", "1 file", "Queued"],
+      ["Lobby", "2 files", "Refused: Lobby.json and lobby.json differ only by upper/lower case or accents. Rename one."],
+    ]);
+    // Renaming fixes a name clash: Retry and Drop my change are for data items.
+    expect(screen.queryByRole("button", { name: "Retry Lobby" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Drop my change to Lobby" })).toBeNull();
+  });
+
+  it("updates held for a restart wait for Update now, which brings them in", async () => {
+    const view = drawer(status({ changes: { incoming: 2, incomingBy: ["Ana", "Ben"], held: true } }));
+    expect(screen.getByText("2 incoming from Ana and Ben · they wait until you update")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Update now" }));
+    await waitFor(() => expect(api.plugin_scope_pull).toHaveBeenCalledWith("forge"));
+    expect(onChanged).toHaveBeenLastCalledWith(true);
+    view.unmount();
+    // Changes that apply by themselves need no button.
+    drawer(status({ changes: { incoming: 1, incomingBy: ["Ana"], held: false } }));
+    expect(screen.getByText("1 incoming from Ana")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
   });
 
   it("mode: Auto or Manual; Manual pushes with an optional message and pulls", async () => {

@@ -52,6 +52,11 @@ def _team_summary(pid: str) -> dict[str, Any]:
     if changes.get("blocked"):
         out["incomingBlocked"] = [{"kind": b["kind"], "key": b["key"], "error": b.get("error")}
                                   for b in changes["blocked"]]
+    if changes.get("held"):  # waits behind the bar's Update now; lands before this ducky's next call
+        out["updatesWaitingFrom"] = list(changes.get("incomingBy") or [])
+    if st.get("folders"):  # a plugin that keeps its own folders: each unit and who holds it
+        out["folders"] = [{"unit": f"{f['folder_id']}/{f['unit']}", "name": f["name"], "state": f["state"],
+                           **({"holder": f["holder"]} if f.get("holder") else {})} for f in st["folders"]]
     return out
 
 
@@ -117,13 +122,23 @@ def ducky_plugin_data_scope(id: str, scope: str = "", pretty: bool = False) -> s
     # panels, sync, then restart the plugin on the new copy and reload its open panels.
     import threading
 
-    from backend.uefn_plugins.spaces import link_scope, sync_active
+    from backend.uefn_plugins.spaces import link_scope, switch_folders, sync_active
     from frontend.ui_web.agent_modes import push_ui_event
 
     try:
         before = scopes.active_scope(pid)["id"]
+        # A plugin that keeps its own folders: the copy it leaves sends its changes, the
+        # team's files come down, then its folders point at them (as the bar's switch).
+        folders = switch_folders(pid, scope_id) if before != scope_id else None
+        if folders is not None and not folders.get("ok"):
+            if folders.get("needs") == "first_share":
+                return tool_json({"ok": False, "needs": "first_share", "units": folders.get("units") or [],
+                                  "error": f"{folders.get('team') or 'The team'} has none of this plugin's files "
+                                           "yet. Choose which to copy in the plugin's bar (Change)."}, pretty=pretty)
+            return tool_json({"ok": False, "error": folders.get("error") or "The plugin's folders couldn't move."},
+                             pretty=pretty)
         result = link_scope(pid, scope_id)
-    except (ValueError, PermissionError) as exc:
+    except (ValueError, PermissionError, OSError) as exc:
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     push_ui_event({"type": "plugin_scope_changed", "plugins": [pid]})
     try:
@@ -178,7 +193,9 @@ def ducky_team_lock(plugin: str, unit: str, action: str = "acquire", pretty: boo
     """Lock or release one item of a plugin's team copy, so nobody else changes it meanwhile.
 
     ``unit``: ``doc:<key>`` for a doc, ``asset:<path>`` for a file, or just the key or
-    path. ``action``: ``acquire`` (kept until you release it; renewed while the app runs)
+    path; for a plugin that keeps its own folders, ``<folder>/<unit>`` as
+    ``ducky_team_status`` lists it (e.g. ``scenes/MEGA_Duel_Stadium``).
+    ``action``: ``acquire`` (kept until you release it; renewed while the app runs)
     or ``release`` (as soon as your edit is saved). Someone else's lock answers who holds
     it; a copy you're behind on is synced first. Only for a shared copy on the new sync.
     """

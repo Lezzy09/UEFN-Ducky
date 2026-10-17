@@ -37,6 +37,11 @@ DEVICE_KEY = "space_device_id"
 CHANGE_LOG_PREFIX = "plugin_epoch:"
 CHANGE_LOG_KEEP = 32
 CHANGE_KEYS_MAX = 500
+# Changesets of a plugin waiting behind "Update now" (workspace_state, every process).
+INCOMING_PREFIX = "space_incoming:"
+# A switch getting a team's folder copy first: its progress for the bar.
+BINDING_PREFIX = "plugin_binding:"
+BINDING_KEEP_S = 120.0  # a progress row older than this was left by a switch that died
 
 
 def _row(r: Any) -> dict[str, Any]:
@@ -298,6 +303,7 @@ def reset_epoch(account: str, space: str, epoch: str) -> None:
             conn.execute(f"DELETE FROM {table} WHERE account_id=? AND space_id=?", (account, space))
         conn.execute("UPDATE space_heads SET seq=0, remote_seq=0, epoch=?, moves=0, attempts=0, next_try=0 "
                      "WHERE account_id=? AND space_id=?", (epoch, account, space))
+        _queues_drop(conn, account, space)
 
 
 def backoff(account: str, space: str, plugin: str, state: str, error: str = "", *, after: float | None = None,
@@ -904,18 +910,23 @@ def unit_seqs(account: str, space: str, plugin: str, units: Iterable[str]) -> di
 
 
 # An unresolved conflict whose losing version is mine and lives only there: the row holds
-# theirs (a doc clash, a file kept both ways), so nothing else on this PC has mine.
+# theirs (a doc clash, a file kept both ways), so nothing else on this PC has mine. A
+# folder unit's conflict keeps mine on disk (it counts as a changed unit instead).
 _MINE_ONLY = (
-    "c.account_id=? AND c.space_id=? AND c.mine_deleted=0 AND (c.mine_value IS NOT NULL OR c.mine_path<>'') "
+    "c.account_id=? AND c.space_id=? AND c.kind IN ('doc', 'asset') AND c.mine_deleted=0 "
+    "AND (c.mine_value IS NOT NULL OR c.mine_path<>'') "
     "AND NOT EXISTS (SELECT 1 FROM plugin_data d WHERE d.account_id=c.account_id AND d.scope_id=c.space_id "
     "AND d.plugin_id=c.plugin_id AND d.kind=c.kind AND d.key=c.key AND d.dirty=1)"
 )
 
 
 def pending_unsent(account: str, space: str) -> int:
-    """Changes of this PC a lost space never got: live dirty rows (never sensitive) and
-    conflicts whose losing version is mine (:func:`unsent_conflicts`). Once the person
-    chose what to do with them (saved or discarded), only what changed after that counts."""
+    """Changes of this PC a lost space never got: live dirty rows (never sensitive),
+    conflicts whose losing version is mine (:func:`unsent_conflicts`) and folder units
+    changed here (held back ones too). Once the person chose what to do with them (saved
+    or discarded), only what changed after that counts."""
+    from backend.store.repos import folder_files
+
     conn = db.connect()
     r = conn.execute("SELECT at FROM space_lost_choice WHERE account_id=? AND space_id=?", (account, space)).fetchone()
     since = float(r[0]) if r else None
@@ -925,7 +936,8 @@ def pending_unsent(account: str, space: str) -> int:
     if since is not None:
         rows_sql, rows_args = rows_sql + " AND updated>?", [*rows_args, since]
         mine_sql, mine_args = mine_sql + " AND c.created>?", [*mine_args, since]
-    return int(conn.execute(rows_sql, rows_args).fetchone()[0]) + int(conn.execute(mine_sql, mine_args).fetchone()[0])
+    return (int(conn.execute(rows_sql, rows_args).fetchone()[0]) + int(conn.execute(mine_sql, mine_args).fetchone()[0])
+            + folder_files.unsent_units(account, space, since=since))
 
 
 def unsent_conflicts(account: str, space: str) -> list[dict[str, Any]]:
@@ -1031,6 +1043,66 @@ def change_log(plugin: str) -> dict[str, Any]:
             "trimmed": int(doc.get("trimmed") or 0)}
 
 
+# --------------------------------------------------------------------------- waiting incoming + switch progress
+
+
+def _state_doc(key: str) -> dict[str, Any]:
+    r = db.connect().execute("SELECT value FROM workspace_state WHERE key=?", (key,)).fetchone()
+    try:
+        doc = json.loads(r[0]) if r else {}
+    except ValueError:
+        doc = {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def _state_put(key: str, doc: dict[str, Any] | None) -> None:
+    conn = db.connect()
+    with db.write_txn(conn):
+        if doc is None:
+            conn.execute("DELETE FROM workspace_state WHERE key=?", (key,))
+            return
+        conn.execute(
+            "INSERT INTO workspace_state(key, value, updated) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+            (key, json.dumps(doc, separators=(",", ":")), time.time()),
+        )
+
+
+def incoming_queue_get(account: str, space: str, plugin: str) -> dict[str, Any]:
+    """Changesets of ``plugin`` pulled but not applied, waiting behind "Update now":
+    ``{count, by: [names], units: [unit ids], seq}`` (``count`` 0: none)."""
+    doc = _state_doc(f"{INCOMING_PREFIX}{account}:{space}:{plugin}")
+    return {"count": int(doc.get("count") or 0), "by": [str(b) for b in doc.get("by") or []],
+            "units": [str(u) for u in doc.get("units") or []], "seq": int(doc.get("seq") or 0)}
+
+
+def incoming_queue_put(account: str, space: str, plugin: str, *, count: int = 0, by: Iterable[str] = (),
+                       units: Iterable[str] = (), seq: int = 0) -> None:
+    """What waits behind "Update now" now (``count`` 0 clears it)."""
+    key = f"{INCOMING_PREFIX}{account}:{space}:{plugin}"
+    if count <= 0:
+        _state_put(key, None)
+        return
+    _state_put(key, {"count": int(count), "by": list(dict.fromkeys(b for b in by if b))[:8],
+                     "units": sorted(set(units))[:2000], "seq": int(seq)})
+
+
+def binding_get(plugin: str, *, now: float | None = None) -> dict[str, Any] | None:
+    """A switch of ``plugin`` getting a team's folder copy right now: ``{team, pct, at}``."""
+    doc = _state_doc(BINDING_PREFIX + plugin)
+    if not doc or _now(now) - float(doc.get("at") or 0.0) > BINDING_KEEP_S:
+        return None
+    return {"team": str(doc.get("team") or ""), "pct": int(doc.get("pct") or 0), "at": float(doc.get("at") or 0.0)}
+
+
+def binding_put(plugin: str, team: str | None, pct: int = 0) -> None:
+    """The switch's progress (``team`` None: it is over)."""
+    if team is None:
+        _state_put(BINDING_PREFIX + plugin, None)
+        return
+    _state_put(BINDING_PREFIX + plugin, {"team": team, "pct": max(0, min(100, int(pct))), "at": time.time()})
+
+
 # --------------------------------------------------------------------------- housekeeping
 
 
@@ -1066,3 +1138,10 @@ def forget_space(account: str, space: str) -> None:
                       "space_presence", "space_activity", "space_lock_requests", "plugin_data_base", "space_units",
                       "space_lost_choice"):
             conn.execute(f"DELETE FROM {table} WHERE account_id=? AND space_id=?", (account, space))
+        _queues_drop(conn, account, space)
+
+
+def _queues_drop(conn: Any, account: str, space: str) -> None:
+    """Every plugin's changesets waiting behind "Update now" in the space."""
+    prefix = f"{INCOMING_PREFIX}{account}:{space}:"
+    conn.execute("DELETE FROM workspace_state WHERE key>=? AND key<?", (prefix, prefix[:-1] + chr(ord(prefix[-1]) + 1)))

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.store import db
+from backend.store.repos import folder_files
 
 _COLS = ("plugin_id, kind, key, value, size, sha256, rev, dirty, deleted, sensitive, updated, sync_state, sync_error, "
          "attempts, next_try")
@@ -338,14 +339,14 @@ def note_attempt(account: str, scope: str, plugin: str, kind: str, key: str, err
 
 def requeue_refused(account: str, scope: str) -> int:
     """Refused rows of a scope go back in the queue (the plan or the space's usage
-    changed). Returns how many."""
+    changed), folder files plugins keep too. Returns how many."""
     conn = db.connect()
     with db.write_txn(conn):
         cur = conn.execute(
             f"UPDATE plugin_data SET {_FRESH} WHERE account_id=? AND scope_id=? AND sync_state='refused'",
             (account, scope),
         )
-    return cur.rowcount
+        return cur.rowcount + folder_files.requeue_refused(conn, account, scope)
 
 
 def settle_reset(account: str, scope: str, *, keep: bool) -> int:
@@ -358,7 +359,9 @@ def settle_reset(account: str, scope: str, *, keep: bool) -> int:
     goes back to 0, on the new one every plugin's head does, and what this PC kept of the
     old versions goes (changesets, merge bases, unit seqs, items set aside, conflicts; a
     conflict's losing version of mine is folded into its row first on Upload my copy).
-    Returns how many rows were queued, or removed."""
+    Folder files plugins keep go up again as new too, or their rows go
+    (:func:`folder_files.reset_rows`). Returns how many rows and files were queued, or
+    removed."""
     conn = db.connect()
     args = (account, scope)
     with db.write_txn(conn):
@@ -376,12 +379,13 @@ def settle_reset(account: str, scope: str, *, keep: bool) -> int:
             conn.execute("DELETE FROM plugin_data WHERE account_id=? AND scope_id=? AND deleted=1", args)
         else:
             cur = conn.execute("DELETE FROM plugin_data WHERE account_id=? AND scope_id=?", args)
+        count = cur.rowcount + folder_files.reset_rows(conn, account, scope, keep=keep)  # folders plugins keep
         conn.execute(
             "UPDATE scope_sync SET state='ok', error='', cursor_rev=0, rewind_rev=0, rewind_at=0 "
             "WHERE account_id=? AND space_id=?",
             args,
         )
-    return cur.rowcount
+    return count
 
 
 def state_counts(account: str, scope: str, plugin: str | None = None) -> dict[str, int]:

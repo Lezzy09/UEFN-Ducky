@@ -75,9 +75,26 @@ def _should_keep_project_slug(slug: str, known_slugs: set[str], app_root: Path) 
     return False
 
 
-def _safe_rmtree(path: Path) -> bool:
+def _is_junction(path: Path) -> bool:
     try:
-        shutil.rmtree(path)
+        return os.path.isjunction(path)
+    except OSError:
+        return False
+
+
+def _safe_rmtree(path: Path) -> bool:
+    """Delete a folder. A junction (a plugin folder pointing at its copy under ``scopes``)
+    is removed itself, never followed; read-only files go too."""
+    try:
+        if _is_junction(path):
+            os.rmdir(path)
+            return True
+
+        def _writable_again(func: Any, p: str, _exc: BaseException) -> None:
+            os.chmod(p, 0o666)
+            func(p)
+
+        shutil.rmtree(path, onexc=_writable_again)
         return True
     except OSError:
         return False
@@ -129,6 +146,7 @@ _SWEEP_SKIP_DIRS = frozenset(
         "webview2_browser", "tool_captures", "tool_spills", "coding_agents", "verse-lsp", "legacy", "snapshots",
         "piper_tts", "meshy_hats", "meshy_free", "asset_previews", "mesh_previews", "listener",
         "uefn_plugins", "skill_packs", "ai_plugins", "mcp_plugins", "setup-engine", "exports", "imports",
+        "scopes",
     }
 )
 
@@ -165,6 +183,8 @@ def _walk_for_backups(app_root: Path):
         if rel_top and rel_top[0] in _SWEEP_SKIP_DIRS:
             dirnames[:] = []
             continue
+        # A plugin folder that is a junction to its copy under scopes/: never walked twice.
+        dirnames[:] = [d for d in dirnames if not _is_junction(Path(dirpath) / d)]
         for name in filenames:
             if ".bak." in name:
                 yield Path(dirpath) / name
@@ -256,7 +276,18 @@ _KNOWN: dict[str, tuple[str, str, str]] = {
     "snapshots": ("Database snapshots", "Consistent copies of ducky.db (newest 3).", "settings"),
     "legacy": ("Legacy stores", "Pre-database files kept until three clean boots.", "cache"),
     "exports": ("Exports", "Tables exported from Settings → App Data → Database.", "user"),
+    "scopes": ("Plugin data", "Plugins' data per account and team, and the copies of folders plugins share with "
+               "a team. Change it from each plugin's bar.", "user"),
 }
+
+# Rows under scopes/ (``rel`` from the App Data root): the Local copies of plugin folders
+# and each copy's folder. They hold plugins' own files (their folders point here).
+_SCOPE_ROWS: dict[str, tuple[str, str]] = {
+    "scopes/_pc": ("Local folder copies", "This PC's copy of each plugin folder shared with a team; every account "
+                   "on this PC uses it."),
+}
+_FOLDER_COPY = ("Folder copies", "One plugin's copies of the folders it shares, as it writes them.")
+_JUNCTION = "Points at this folder's copy under Plugin data (scopes); its files are counted there."
 
 _PROTECTED_NAMES = frozenset(
     {
@@ -269,6 +300,7 @@ _PROTECTED_NAMES = frozenset(
         "ducky.db-wal",
         "ducky.db-shm",
         "snapshots",
+        "scopes",
     }
 )
 
@@ -622,7 +654,9 @@ def resolve_appdata_rel(rel: str, app_root: Path | None = None) -> Path | None:
         return root
     if any(part in ("..", "") for part in raw.split("/")):
         return None
-    path = (root / raw).resolve()
+    # The last part is never resolved: a plugin folder that is a junction to its copy
+    # under scopes/ is that link (deleting it removes the link, not the copy).
+    path = (root / raw).parent.resolve() / raw.rsplit("/", 1)[-1]
     try:
         path.relative_to(root)
     except ValueError:
@@ -631,10 +665,13 @@ def resolve_appdata_rel(rel: str, app_root: Path | None = None) -> Path | None:
 
 
 def _walk_stats(path: Path) -> tuple[int, int, int]:
-    """Return (bytes, files, dirs) without following symlinks."""
+    """Return (bytes, files, dirs) without following symlinks or junctions (a plugin
+    folder pointing at its copy under scopes/ is counted there, once)."""
     size = 0
     files = 0
     dirs = 0
+    if _is_junction(path):
+        return 0, 0, 0
     stack = [path]
     while stack:
         current = stack.pop()
@@ -642,7 +679,7 @@ def _walk_stats(path: Path) -> tuple[int, int, int]:
             with os.scandir(current) as it:
                 for entry in it:
                     try:
-                        if entry.is_symlink():
+                        if entry.is_symlink() or entry.is_junction():
                             continue
                         if entry.is_dir(follow_symlinks=False):
                             dirs += 1
@@ -659,7 +696,7 @@ def _walk_stats(path: Path) -> tuple[int, int, int]:
 
 def _rel_to_root(path: Path, root: Path) -> str:
     try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
+        return (path.parent.resolve() / path.name).relative_to(root.resolve()).as_posix()
     except ValueError:
         return path.name
 
@@ -692,9 +729,15 @@ def _item_dict(path: Path, root: Path, *, nested: bool = False) -> dict[str, Any
         clearable, deletable, protected = True, True, False
         if top in _PROTECTED_NAMES:
             clearable, deletable, protected = False, False, True
+        if rel in _SCOPE_ROWS:
+            label, description = _SCOPE_ROWS[rel]
+        elif top == "scopes" and rel.endswith("/folders"):
+            label, description = _FOLDER_COPY
     else:
         clearable, deletable, protected = _flags(name, kind)
-    is_dir = path.is_dir() and not path.is_symlink()
+    if _is_junction(path):
+        description = _JUNCTION
+    is_dir = path.is_dir() and not path.is_symlink() and not _is_junction(path)
     if is_dir:
         size, files, dirs = _walk_stats(path)
     elif path.is_file():
@@ -782,7 +825,13 @@ def _clear_contents(path: Path) -> int:
     except OSError:
         return 0
     for child in children:
-        if child.is_symlink() or child.is_file():
+        if _is_junction(child):
+            try:  # the link goes, never what it points at
+                os.rmdir(child)
+                removed += 1
+            except OSError:
+                pass
+        elif child.is_symlink() or child.is_file():
             try:
                 child.unlink()
                 removed += 1

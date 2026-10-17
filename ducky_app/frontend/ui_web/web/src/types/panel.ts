@@ -2278,7 +2278,8 @@ export interface PluginScopeStatus {
   members?: number;
   /** ok | paused | offline | error | unavailable | waiting | locked | lost (access to the
    * space lost) | reset (its data was reset on the server) | no_provider (nothing to sync
-   * with; changes still queue). `error` carries the reason. */
+   * with; changes still queue) | binding (a switch is getting a team's folder files first,
+   * see `binding`). `error` carries the reason. */
   state?: string;
   error?: string;
   syncedAt?: number | null;
@@ -2326,8 +2327,54 @@ export interface PluginScopeStatus {
   nextTry?: number | null;
   /** The plugin's data is still moving to the new sync: percent done. */
   importing?: number | null;
-  /** A plugin's declared folders: one row per unit. */
+  /** A plugin's declared folders on a team copy: one row per unit. */
   folders?: PluginScopeFolderUnit[];
+  /** A plugin that keeps its own folders (`team_folders` in plugin.json), in any copy: each
+   * declared folder, and why it can't be shared with a team from this PC, if so. */
+  teamFolders?: PluginScopeTeamFolder[];
+  /** Teams this plugin was linked to before its folders could be shared: the bar offers to
+   * copy its Local folders into them. */
+  folderOffers?: { space: string; label: string }[];
+  /** Folder files are stored as the plugin writes them on each PC: the first share and the
+   * help say so. */
+  folderNote?: string;
+  /** State `binding`: a switch to a team is getting that team's folder files first
+   * ("Getting Alpha's files… 40%"); the plugin still reads its current copy meanwhile. */
+  binding?: { team?: string; pct?: number | null; at?: number; text?: string } | null;
+}
+
+/** One declared folder of a plugin. */
+export interface PluginScopeTeamFolder {
+  id: string;
+  root?: string;
+  /** A `{PROJECT}` folder: the open project's id ("" for other folders). */
+  projectId?: string;
+  /** Why this folder can't be shared with a team from this PC ("" when it can): a
+   * revision-controlled island, OneDrive, a network or non-NTFS drive. */
+  refused?: string;
+  /** Moved into the Local copy (its old place is a link now). */
+  adopted?: boolean;
+  /** The space its link points at ("personal" for Local, "" when not linked). */
+  bound?: string;
+  afterPull?: string;
+}
+
+/** A unit of a plugin's Local folder copy that a first share can copy into a team. */
+export interface PluginFolderShareUnit {
+  folder?: string;
+  unit: string;
+  name: string;
+  files?: number;
+  bytes?: number;
+}
+
+/** A switch into a team whose folder copy is empty: which Local units to copy first, or
+ * start with it empty. */
+export interface PluginScopeFirstShare {
+  units?: string[];
+  start_empty?: boolean;
+  /** Ask which Local units to copy even when the team already has files ("Copy Local into"). */
+  pick?: boolean;
 }
 
 /** Someone in a shared space now. Either one row per activity (`doing`), or a roster row
@@ -2371,11 +2418,18 @@ export interface PluginScopeLock {
 export interface PluginScopeOutgoing {
   kind: string;
   key: string;
-  /** Shown instead of the key (a folder file's name). */
+  /** Shown instead of the key (a folder unit's name). */
   name?: string;
   size?: number;
+  /** A folder unit (kind `tree`, key `<folder>/<unit>`): its folder, its unit and how many
+   * of its files changed. */
+  folder_id?: string;
+  unit?: string;
+  files?: number;
   deleted?: boolean;
-  /** queued | sending | refused | blocked | locked_out | conflict */
+  /** queued | sending | refused | blocked | locked_out | conflict; a folder unit also
+   * quarantined (changed while someone else holds it) | refetch (the team's version is
+   * being fetched again) */
   state: string;
   reason?: string;
   attempts?: number;
@@ -2395,7 +2449,8 @@ export interface PluginScopeChanges {
   /** Changesets on the server not applied here yet, and who made them. */
   incoming?: number;
   incomingBy?: string[];
-  /** The incoming changes wait for Update now (a plugin that restarts to take them). */
+  /** The incoming changes wait for Update now (a plugin that restarts to take them, with
+   * its panel on screen). */
   held?: boolean;
   blocked?: PluginScopeIncomingBlocked[];
   /** An upload running now: bytes sent of the total. */
@@ -2408,6 +2463,8 @@ export interface PluginScopeConflict {
   key: string;
   name?: string;
   unit?: string;
+  /** A folder unit (kind `tree`, key `<folder>/<unit>`): its folder. */
+  folder_id?: string;
   /** edit (both changed it) | deleted (they deleted, you changed) | mine_deleted | lock_broken */
   reason?: string;
   /** Whose version won here, and when (epoch seconds). */
@@ -2418,13 +2475,23 @@ export interface PluginScopeConflict {
 
 /** A unit of a declared folder. */
 export interface PluginScopeFolderUnit {
+  /** The unit inside its folder (a `{PROJECT}` folder's units start with the project id). */
   unit: string;
   name: string;
-  /** ok | changed | locked | conflict */
+  /** The declared folder's id. */
+  folder_id?: string;
+  /** The id its lock goes by (`tree:<folder>/<hash>`). */
+  unitId?: string;
+  /** up_to_date | changed_here | locked_by | incoming (the team's change waits behind
+   * Update now) | conflict | quarantined (changed here while someone else holds it: never
+   * sent) | refused (`reason` says why); also synced / ok, changed, locked. */
   state: string;
   holder?: string;
   /** Held by this PC. */
   mine?: boolean;
+  files?: number;
+  bytes?: number;
+  reason?: string;
 }
 
 /** A changeset (`count` items), or one item's version (`kind`/`key` set). */
@@ -4171,8 +4238,26 @@ export interface PanelApi {
   /** Asks the spaces provider — only when a picker opens. */
   plugin_scope_choices?(): Promise<{ ok?: boolean; choices?: PluginScopeChoice[]; kindLabel?: string; emptyNote?: string; error?: string }>;
   /** Switches the plugin's copy; changes still queued for the shared space it leaves are
-   * sent first (up to 30 s). `unsent`: how many of them didn't go (they stay in that copy). */
-  plugin_scope_set?(plugin_id: string, scope_id: string): Promise<PluginScopeStatus & { unsent?: number; unsentLabel?: string }>;
+   * sent first (up to 30 s). `unsent`: how many of them didn't go (they stay in that copy).
+   * A plugin with declared folders gets the team's files first (a failed pull changes
+   * nothing); when the team has none yet the answer is `needs: "first_share"` with the
+   * Local `units` to pick from, and the call again with `first_share` copies them (or
+   * starts empty). `refused`: folder id → why it can't be shared from this PC. */
+  plugin_scope_set?(
+    plugin_id: string,
+    scope_id: string,
+    first_share?: PluginScopeFirstShare,
+  ): Promise<PluginScopeStatus & {
+    unsent?: number;
+    unsentLabel?: string;
+    needs?: "first_share";
+    team?: string;
+    note?: string;
+    units?: PluginFolderShareUnit[];
+    /** The team has some of the files already: `units` are the Local ones it lacks. */
+    partial?: boolean;
+    refused?: Record<string, string>;
+  }>;
   /** An error inside a plugin panel (bridge `panel.error`), for ducky_plugin_errors. */
   plugin_panel_error?(plugin_id: string, panel_id: string, kind: string, message: string, stack: string): Promise<{ ok?: boolean }>;
   plugin_scope_sync?(plugin_id: string, force?: boolean): Promise<{ ok?: boolean; started?: boolean; error?: string }>;
@@ -4194,8 +4279,16 @@ export interface PanelApi {
   plugin_scope_break?(plugin_id: string, unit: string): Promise<PluginScopeResult>;
   /** Ask the holder to release a unit. */
   plugin_scope_ask?(plugin_id: string, unit: string): Promise<PluginScopeResult>;
-  /** Settle a conflict: mine, theirs, both (folder units), or compare (returns `diff`, changes nothing). */
-  plugin_scope_resolve?(plugin_id: string, kind: string, key: string, choice: "mine" | "theirs" | "both" | "compare"): Promise<PluginScopeResult & { diff?: string }>;
+  /** Settle a conflict: mine, theirs, both (folder units: kind `tree`, key
+   * `<folder>/<unit>`), or compare (returns `diff`, changes nothing). A folder unit changed
+   * here while someone else holds it: keep_copy (Keep mine as a copy, beside it; `copy` is
+   * where) or discard (Discard mine); the team's version comes back either way. */
+  plugin_scope_resolve?(
+    plugin_id: string,
+    kind: string,
+    key: string,
+    choice: "mine" | "theirs" | "both" | "compare" | "keep_copy" | "discard",
+  ): Promise<PluginScopeResult & { diff?: string; copy?: string }>;
   /** A new changeset on the server: items back to their version at a seq, the plugin as of
    * `toSeq`, or changeset `undoSeq` undone. `skipped`: items whose version is no longer kept. */
   plugin_scope_restore?(plugin_id: string, request: { items?: { kind: string; key: string; seq: number }[]; toSeq?: number; undoSeq?: number; message?: string }): Promise<PluginScopeResult & { seq?: number; skipped?: [string, string][] }>;
