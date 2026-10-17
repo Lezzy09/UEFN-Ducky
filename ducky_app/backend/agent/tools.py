@@ -637,7 +637,7 @@ def _requires_uefn_listener(name: str) -> bool:
     (e.g. Duck-Tac-Toe cache) never hit this gate. Editor desktop plugins
     (materials, spawn_*, …) still require the listener.
     """
-    if is_host_only_tool(name):
+    if is_host_only_tool(name) or _panel_tool(name):
         return False
     # Duck-Tac-Toe is host-cache-only; keep working even before plugin zip bump.
     if name.startswith("ducktactoe_"):
@@ -689,6 +689,17 @@ def _failed_plugins_note(name: str) -> str:
         f". {name} is not a registered tool right now, and these plugins failed to load: "
         f"{listed}. If it is one of their tools, the plugin is the problem, not UEFN."
     )
+
+
+def _panel_tool(name: str) -> bool:
+    """Defined with Ducky's own panel tools (workflows, chats, plans, plugins), so it never
+    talks to UEFN. Oct 17 2026: find_workflows was refused as "UEFN listener offline"."""
+    try:
+        tools = getattr(getattr(_ensure_mcp(), "_tool_manager", None), "_tools", None) or {}
+        fn = getattr(tools.get(name), "fn", None)
+    except Exception:
+        return False
+    return str(getattr(fn, "__module__", "") or "").startswith("backend.tools.panel.")
 
 
 def _served_by_mcp(name: str) -> bool:

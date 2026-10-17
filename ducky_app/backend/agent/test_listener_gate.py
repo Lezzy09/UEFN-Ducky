@@ -188,3 +188,12 @@ def test_listener_offline_names_plugins_that_failed_to_load_for_an_unknown_tool(
 
     served = asyncio.run(tools.execute_tool("spawn_actor", {}))
     assert served.error == "UEFN listener offline on port 4200"
+
+
+def test_ducky_s_own_workflow_tools_never_wait_for_uefn():
+    # Oct 17 2026: a lead's find_workflows was refused with "UEFN listener offline".
+    from backend.agent.tools import _requires_uefn_listener
+
+    for name in ("find_workflows", "run_workflow", "get_workflow", "list_workflows", "save_workflow"):
+        assert not _requires_uefn_listener(name), name
+    assert _requires_uefn_listener("spawn_actor")
