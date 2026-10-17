@@ -123,3 +123,62 @@ def test_first_boot_imports_everything_and_leaves_no_stray_files(tmp_path: Path)
     assert not (root / "legacy").exists()
     conn = db.connect()  # boots dropped the earlier connection
     assert int(conn.execute("SELECT count(*) FROM messages").fetchone()[0]) == 4  # cleanup removed files, not rows
+
+
+def test_plugin_data_from_schema_19_upgrades_with_a_fresh_sync_state(monkeypatch) -> None:
+    """0020 adds each plugin_data row's sync state: rows written before it read as queued
+    (no state, no attempts) and still push."""
+    from backend.store.repos import plugin_data
+
+    real_files = db.migration_files
+    monkeypatch.setattr(db, "migration_files", lambda: [(n, p) for n, p in real_files() if n <= 19])
+    db.reset_for_tests()
+    conn = db.connect()
+    assert db.user_version(conn) == 19
+    with db.write_txn(conn):
+        conn.execute(
+            "INSERT INTO plugin_data(account_id, scope_id, plugin_id, kind, key, value, size, sha256, rev, dirty, "
+            "deleted, sensitive, updated) VALUES ('a_1', 'spaceT', 'cards', 'doc', 'card.pip', 'v', 1, 'abc', 4, 1, "
+            "0, 0, 1.0)"
+        )
+    db.reset_for_tests()
+    monkeypatch.setattr(db, "migration_files", real_files)
+
+    conn = db.connect()
+    assert db.user_version(conn) == db.head_version()
+    row = plugin_data.get("a_1", "spaceT", "cards", "doc", "card.pip")
+    assert (row["sync_state"], row["sync_error"], row["attempts"], row["next_try"]) == ("", "", 0, 0)
+    assert (row["rev"], row["dirty"], row["sha256"]) == (4, 1, "abc")
+    assert [r["key"] for r in plugin_data.dirty("a_1", "spaceT", 10)] == ["card.pip"]
+    index = conn.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name='plugin_data_dirty'").fetchone()
+    assert index is not None and "WHERE dirty=1" in index[0]
+
+
+def test_links_to_a_space_already_unavailable_go_so_those_plugins_keep_local(monkeypatch) -> None:
+    """Before 0020 a plugin linked to a space the provider couldn't use read and wrote its
+    Local copy. The upgrade keeps it there instead of switching it to that space's old
+    copy, read-only; links to usable spaces stay, and so does the space's own copy."""
+    from backend.store.repos import plugin_data
+
+    real_files = db.migration_files
+    monkeypatch.setattr(db, "migration_files", lambda: [(n, p) for n, p in real_files() if n <= 19])
+    db.reset_for_tests()
+    conn = db.connect()
+    with db.write_txn(conn):
+        for plugin, space in (("cards", "spaceGone"), ("forge", "spaceOk")):
+            conn.execute("INSERT INTO plugin_scopes(account_id, plugin_id, scope_id, updated) VALUES ('a_1', ?, ?, 1.0)",
+                         (plugin, space))
+        conn.execute("INSERT INTO scope_sync(account_id, space_id, state, error, cursor_rev) "
+                     "VALUES ('a_1', 'spaceGone', 'unavailable', 'permission denied', 12)")
+        conn.execute("INSERT INTO scope_sync(account_id, space_id, state, cursor_rev) VALUES ('a_1', 'spaceOk', 'ok', 4)")
+    db.reset_for_tests()
+    monkeypatch.setattr(db, "migration_files", real_files)
+
+    conn = db.connect()
+    assert db.user_version(conn) == db.head_version()
+    assert plugin_data.links("a_1") == {"forge": "spaceOk"}
+    gone = plugin_data.sync_get("a_1", "spaceGone")
+    assert (gone["state"], gone["cursor_rev"]) == ("unavailable", 12)
+    # The new cursor columns start empty: cursor writes go through as before.
+    plugin_data.sync_put("a_1", "spaceOk", cursor_rev=9)
+    assert plugin_data.sync_get("a_1", "spaceOk")["cursor_rev"] == 9

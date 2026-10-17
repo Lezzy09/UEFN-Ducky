@@ -164,6 +164,7 @@ Optional `"data_sharing": false`: the plugin's data always stays Local (`plugin_
 | `api.data` | Docs and files in the plugin's data scope (`plugin_data`). Tools of a plugin that uses it get `scope` (`local` or the space's name) added to their dict results. |
 | `api.search.upsert(id, title, text, meta=None)` / `.delete(id)` / `.clear()` / `.query(text, limit=10)` | Make the plugin's own records (pages, cards, entries) findable by meaning and keywords. Only this plugin's records in its data scope for the signed-in person; kept on an index rebuild, removed on uninstall. Upserting unchanged text is free, so re-sync everything on start. Expose them to agents through your own tool that calls `api.search.query`. One record per section of a long document. |
 | `api.changeset.record(command=, kind=, ident=, facet=, before=, inverse=, slot=)` | Changes ledger entry; never raises. |
+| `api.crypto.aead_seal(key, nonce, data, aad)` / `.aead_open(key, nonce, data, aad)` | AES-256-GCM from the app's own cryptography (32-byte key, 12-byte nonce, tag appended). Use it instead of importing `cryptography`, which the app may not bundle all of. A wrong key, nonce or `aad` raises `InvalidTag`. |
 | `api.listener(command, params, timeout=None)` | One command to the live UEFN listener. |
 | `api.http_json(method, url, …)`, `api.poll(…)` | HTTP JSON and polling helpers. |
 | `api.emit_automation(trigger_id, payload)` | Run this PC's workflows that start on your trigger. |

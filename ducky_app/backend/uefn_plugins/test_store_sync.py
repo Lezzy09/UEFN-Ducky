@@ -434,3 +434,101 @@ def test_a_copy_with_no_recorded_source_takes_store_updates_but_a_local_copy_doe
             assert st.import_plugin_from_bytes(_zip_plugin("mine", 1), source="local", replace=True).get("ok")
             refused = st.import_plugin_from_bytes(_zip_plugin("mine", 2), source="store", replace=True)
             assert not refused.get("ok") and "installed from 'local'" in refused["error"]
+
+
+def _signed_in_with_a_space(monkeypatch) -> str:
+    """Ana is signed in with her data key, and plugin ``cards`` shows space T (pulled once)."""
+    from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins import scopes, spaces
+    from frontend import duckyos_account
+
+    class Spaces(spaces.Provider):
+        def enabled(self) -> bool:
+            return True
+
+    monkeypatch.setattr(duckyos_account, "account_key", lambda blob=None: "https://uefnducky.org|ana@x.org")
+    monkeypatch.setattr(scopes, "_locked", lambda account: False)
+    spaces.install_for_tests(Spaces())
+    ana = scopes.account_id()
+    repo.link_set(ana, "cards", "spaceT")
+    repo.sync_put(ana, "spaceT", label="Alpha", members=3, synced_at=time.time())
+    return ana
+
+
+def test_scope_status_reports_each_shared_state(monkeypatch) -> None:
+    from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins import spaces
+
+    ana = _signed_in_with_a_space(monkeypatch)
+    try:
+        for key, dirty in (("a", True), ("b", True), ("c", True), ("d", False)):
+            repo.put(ana, "spaceT", "cards", "doc", key, value=None, size=1, sha256=key, dirty=dirty)
+        repo.put(ana, "spaceT", "other", "doc", "x", value=None, size=1, sha256="x", dirty=True)  # not this bar's
+        repo.set_state(ana, "spaceT", "cards", "doc", "b", "refused", "Too big for this plan")
+        for _ in range(repo.BLOCK_AFTER):
+            repo.note_attempt(ana, "spaceT", "cards", "doc", "c", "File missing")
+        repo.set_state(ana, "spaceT", "cards", "doc", "d", "conflict", "Ana changed it too")
+
+        status = spaces.scope_status("cards")
+        assert status["visible"] and (status["state"], status["error"], status["members"]) == ("ok", "", 3)
+        # Pending leaves out refused and blocked changes; those are counted and listed with their reasons.
+        assert (status["pending"], status["refused"], status["blocked"], status["conflict"]) == (1, 1, 1, 1)
+        assert sorted((i["key"], i["state"], i["reason"]) for i in status["items"]) == [
+            ("b", "refused", "Too big for this plan"), ("c", "blocked", "File missing"),
+            ("d", "conflict", "Ana changed it too")]
+
+        for state, error, read_only in (
+            ("paused", "", True),
+            ("unavailable", "permission denied: teams", True),
+            ("reset", "", True),
+            ("error", "Sync failed: KeyError: 'rev'", False),
+            ("offline", "offline", False),
+            ("lost", "", True),
+        ):
+            repo.sync_put(ana, "spaceT", state=state, error=error)
+            status = spaces.scope_status("cards")
+            assert (status["state"], status["error"], status["scope"]["readOnly"], status["visible"]) == (
+                state, error, read_only, True), state
+        # Reset: the bar names everything Upload my copy / Clear my copy act on (the whole copy).
+        repo.sync_put(ana, "spaceT", state="reset", error="")
+        assert spaces.scope_status("cards")["resetContents"] == ["cards", "other"]
+        repo.sync_put(ana, "spaceT", state="ok", error="", synced_at=0)
+        assert (spaces.scope_status("cards")["state"], spaces.scope_status("cards")["scope"]["readOnly"]) == (
+            "waiting", True)
+
+        # No provider loaded: the copy stays writable (writes queue) and the bar says why nothing syncs.
+        spaces.reset_for_tests()
+        repo.sync_put(ana, "spaceT", state="error", error="old error", synced_at=time.time())
+        status = spaces.scope_status("cards")
+        assert (status["state"], status["error"], status["scope"]["readOnly"], status["visible"]) == (
+            "no_provider", "Not connected: Ducky Account isn't running", False, True)
+        repo.sync_put(ana, "spaceT", state="unavailable", error="permission denied: teams")
+        assert spaces.scope_status("cards")["state"] == "unavailable"  # the provider's last word still shows
+    finally:
+        spaces.reset_for_tests()
+
+
+def test_sync_now_without_a_provider_says_why(monkeypatch) -> None:
+    from backend.uefn_plugins import spaces
+
+    _signed_in_with_a_space(monkeypatch)
+    try:
+        spaces.reset_for_tests()
+        assert spaces.sync_active("cards", force=True) == {
+            "ok": False, "started": False, "error": "Not connected: Ducky Account isn't running"}
+        assert spaces.sync_active("local-only") == {"ok": True, "started": False}
+    finally:
+        spaces.reset_for_tests()
+
+
+def test_scope_status_says_whether_a_plugin_can_share_at_all(monkeypatch) -> None:
+    from backend.uefn_plugins import spaces
+
+    _signed_in_with_a_space(monkeypatch)
+    try:
+        # A Forge-like plugin keeps its own files: the bar shows, and says Local only.
+        status = spaces.scope_status("scene-maker")
+        assert (status["visible"], status["shareable"], status["scope"]["kind"]) == (True, False, "personal")
+        assert spaces.scope_status("cards")["shareable"] is True
+    finally:
+        spaces.reset_for_tests()

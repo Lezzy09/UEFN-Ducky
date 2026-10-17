@@ -106,7 +106,7 @@ async function saveKept() {
   const doc = pending;
   if (!doc) return;
   const { folder: _folder, ...body } = doc;
-  const res = await getApi()?.save_workflow?.(body);
+  const res = await getApi()?.save_workflow?.(body, doc.owner?.id || undefined);
   if (!res?.workflow) throw new Error(res?.error ? `Could not save changes. ${res.error}` : "Could not save changes.");
   if (pending === doc) setUnsavedWorkflow(null);
   if (res.workflow.owner?.kind === "shared") await getApi()?.workflow_sync?.(true, res.workflow.owner.id, true);

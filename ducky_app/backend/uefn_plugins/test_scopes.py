@@ -211,7 +211,7 @@ def test_copy_local_into_a_space_is_one_way_and_keeps_the_spaces_items(who: _Who
     assert status["local"] == {"docs": 2, "files": 1, "docsBytes": status["local"]["docsBytes"], "filesBytes": 9}
     assert status["current"]["docs"] == 1 and status["kindLabel"] == "space"
 
-    assert scopes.copy_local_into("brainrot-tcg", "spaceT") == {"ok": True, "copied": 2, "kept": 1}
+    assert scopes.copy_local_into("brainrot-tcg", "spaceT") == {"ok": True, "copied": 2, "kept": 1, "tooBig": []}
     assert cards.items() == {"card.mo": {"v": "local"}, "card.pip": {"v": "shared"}}
     assert cards.get_file("assets/pip.png") == b"PNG local"
     # Queued for the provider's next round; the sensitive doc stayed Local.
@@ -329,10 +329,20 @@ def test_without_a_provider_there_is_only_local(who: _Who) -> None:
     assert not spaces.has_provider()
     assert [c["id"] for c in spaces.scope_choices()["choices"]] == ["personal"]
     assert spaces.scope_status("brainrot-tcg")["visible"] is False  # no bar, no teaser
-    # A copy linked while a provider was there stays readable here; it just doesn't sync.
+    # A copy linked while a provider was there stays here and takes writes; they queue,
+    # and the bar and Sync now say nothing can sync.
     repo.link_set(ana, "brainrot-tcg", "spaceT")
-    assert scopes.active_scope("brainrot-tcg")["kind"] == "shared"
-    assert spaces.sync_active("brainrot-tcg", force=True)["ok"] is True
+    repo.sync_put(ana, "spaceT", label="Alpha Studio", synced_at=time.time())
+    scope = scopes.active_scope("brainrot-tcg")
+    assert (scope["kind"], scope["state"], scope["readOnly"]) == ("shared", "no_provider", False)
+    PluginData("brainrot-tcg").put("card.pip", {"v": 1})
+    assert repo.count_dirty(ana, "spaceT") == 1
+    status = spaces.scope_status("brainrot-tcg")
+    assert (status["visible"], status["state"], status["error"], status["pending"]) == (
+        True, "no_provider", "Not connected: Ducky Account isn't running", 1)
+    assert spaces.sync_active("brainrot-tcg", force=True) == {
+        "ok": False, "started": False, "error": "Not connected: Ducky Account isn't running"}
+    assert spaces.sync_active("forge") == {"ok": True, "started": False}  # Local needs no provider
 
 
 def test_a_plugin_that_never_shares_its_data_is_always_local(who: _Who, fake_spaces: FakeSpaces) -> None:
@@ -486,6 +496,411 @@ def test_a_bridge_process_follows_an_account_switch_made_in_the_app(monkeypatch)
     assert bo != ana
     assert repo.get(bo, "personal", "brainrot-tcg", "doc", "card.b") is not None
     assert repo.get(ana, "personal", "brainrot-tcg", "doc", "card.b") is None
+
+
+# --------------------------------------------------------------------------- sync bookkeeping
+
+
+def _sha_of(account: str, key: str, space: str = "spaceT", kind: str = "doc") -> str:
+    return str(repo.get(account, space, "brainrot-tcg", kind, key)["sha256"])
+
+
+def _queue(account: str, limit: int = 100) -> list[str]:
+    return [r["key"] for r in repo.dirty(account, "spaceT", limit)]
+
+
+def test_a_content_push_confirmed_after_a_local_delete_keeps_the_delete(who: _Who, fake_spaces: FakeSpaces) -> None:
+    cards = PluginData("brainrot-tcg")
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    cards.put("card.pip", {"v": 1})
+    repo.mark_pushed(ana, "spaceT", "brainrot-tcg", "doc", "card.pip", rev=5, sha256=_sha_of(ana, "card.pip"))
+    assert _queue(ana) == []
+    cards.put("card.pip", {"v": 2})
+    pushed = repo.dirty(ana, "spaceT", 100)[0]  # a round reads the row and pushes it on base 5
+    cards.delete("card.pip")  # deleted while that push is in flight
+    repo.mark_pushed(ana, "spaceT", "brainrot-tcg", "doc", "card.pip", rev=6, sha256=pushed["sha256"])
+    row = repo.get(ana, "spaceT", "brainrot-tcg", "doc", "card.pip")
+    # Before, the tombstone went here: the delete never pushed and the doc came back everywhere.
+    assert (row["deleted"], row["dirty"], row["rev"], row["sha256"]) == (1, 1, 6, pushed["sha256"])
+    assert _queue(ana) == ["card.pip"]
+    repo.mark_pushed(ana, "spaceT", "brainrot-tcg", "doc", "card.pip", rev=7, sha256="", pushed_delete=True)
+    assert repo.get(ana, "spaceT", "brainrot-tcg", "doc", "card.pip") is None
+
+    # An edit made while a content push is in flight stays queued on the new base rev.
+    cards.put("card.mo", {"v": 1})
+    sent = _sha_of(ana, "card.mo")
+    cards.put("card.mo", {"v": 2})
+    repo.mark_pushed(ana, "spaceT", "brainrot-tcg", "doc", "card.mo", rev=8, sha256=sent)
+    row = repo.get(ana, "spaceT", "brainrot-tcg", "doc", "card.mo")
+    assert (row["dirty"], row["rev"]) == (1, 8)
+    # A delete confirmed after the key was made again keeps the new copy, on the delete's rev.
+    cards.delete("card.mo")
+    cards.put("card.mo", {"v": 3})
+    repo.mark_pushed(ana, "spaceT", "brainrot-tcg", "doc", "card.mo", rev=9, sha256="")
+    row = repo.get(ana, "spaceT", "brainrot-tcg", "doc", "card.mo")
+    assert (row["deleted"], row["dirty"], row["rev"]) == (0, 1, 9) and cards.get("card.mo") == {"v": 3}
+
+
+def test_a_rev_0_delete_while_its_push_is_in_flight_leaves_a_tombstone_that_pushes(who: _Who,
+                                                                                   fake_spaces: FakeSpaces) -> None:
+    cards = PluginData("brainrot-tcg")
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    cards.put("card.new", {"v": 1})  # never pushed: rev 0
+    pushed = repo.dirty(ana, "spaceT", 100)[0]
+    cards.delete("card.new")
+    row = repo.get(ana, "spaceT", "brainrot-tcg", "doc", "card.new")
+    assert (row["deleted"], row["dirty"], row["rev"]) == (1, 1, 0)  # before: the row just went
+    # The commit lands.
+    repo.mark_pushed(ana, "spaceT", "brainrot-tcg", "doc", "card.new", rev=3, sha256=pushed["sha256"])
+    assert [(r["key"], r["deleted"], r["rev"]) for r in repo.dirty(ana, "spaceT", 100)] == [("card.new", 1, 3)]
+    # An older provider's answer to the delete (no pushed_delete flag, an empty sha).
+    repo.mark_pushed(ana, "spaceT", "brainrot-tcg", "doc", "card.new", rev=4, sha256="")
+    assert repo.get(ana, "spaceT", "brainrot-tcg", "doc", "card.new") is None
+    # Files too; Local deletes still just go.
+    cards.put_file("assets/new.png", b"png")
+    assert cards.delete_file("assets/new.png")
+    row = repo.get(ana, "spaceT", "brainrot-tcg", "asset", "assets/new.png")
+    assert (row["deleted"], row["dirty"]) == (1, 1) and not cards.has_file("assets/new.png")
+    scopes.link_plugin("brainrot-tcg", scopes.PERSONAL)
+    cards.put("card.local", {"v": 1})
+    assert cards.delete("card.local") and repo.get(ana, scopes.PERSONAL, "brainrot-tcg", "doc", "card.local") is None
+
+
+def test_a_file_delete_drops_the_row_and_the_file_together(who: _Who, fake_spaces: FakeSpaces,
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    from pathlib import Path
+
+    cards = PluginData("brainrot-tcg")
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    cards.put_file("assets/pip.png", b"png")
+    path = scopes.asset_file(scopes.active_scope("brainrot-tcg"), "brainrot-tcg", "assets/pip.png")
+    real_unlink = Path.unlink
+
+    def held_open(self: Path, missing_ok: bool = False) -> None:
+        if self == path:
+            raise PermissionError("in use")
+        real_unlink(self, missing_ok=missing_ok)
+
+    # The file can't go (held open): the row stays live with its file, never a row without one.
+    monkeypatch.setattr(Path, "unlink", held_open)
+    with pytest.raises(PermissionError):
+        cards.delete_file("assets/pip.png")
+    row = repo.get(ana, "spaceT", "brainrot-tcg", "asset", "assets/pip.png")
+    assert row["deleted"] == 0 and cards.has_file("assets/pip.png")
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    assert cards.delete_file("assets/pip.png")
+    row = repo.get(ana, "spaceT", "brainrot-tcg", "asset", "assets/pip.png")
+    assert (row["deleted"], row["dirty"]) == (1, 1) and not path.exists()
+
+
+def test_a_pull_never_overwrites_a_local_write_made_during_its_download(who: _Who, fake_spaces: FakeSpaces) -> None:
+    import threading
+
+    from backend.store import db
+    from backend.uefn_plugins.data_crypto import seal_bytes, seal_text
+
+    cards = PluginData("brainrot-tcg")
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    cards.put("card.pip", {"v": 1})
+    repo.mark_pushed(ana, "spaceT", "brainrot-tcg", "doc", "card.pip", rev=1, sha256=_sha_of(ana, "card.pip"))
+    expect = repo.get(ana, "spaceT", "brainrot-tcg", "doc", "card.pip")
+
+    def in_another_connection(fn: Any) -> None:
+        def run() -> None:
+            try:
+                fn()
+            finally:
+                db.close_thread_connections()
+
+        worker = threading.Thread(target=run)
+        worker.start()
+        worker.join(10)
+
+    # The download runs; meanwhile the MCP bridge (another connection) saves the doc.
+    in_another_connection(lambda: cards.put("card.pip", {"v": "mine"}))
+    theirs = scopes.encode_doc({"v": "theirs"})
+    remote = {"value": seal_text(theirs.decode("utf-8"), ana), "size": len(theirs),
+              "sha256": hashlib.sha256(theirs).hexdigest(), "rev": 2}
+    assert repo.apply_remote(ana, "spaceT", "brainrot-tcg", "doc", "card.pip", expect=expect, **remote) is False
+    assert cards.get("card.pip") == {"v": "mine"}
+    assert repo.get(ana, "spaceT", "brainrot-tcg", "doc", "card.pip")["dirty"]
+    # Nothing written meanwhile: the pulled copy lands clean.
+    assert repo.apply_remote(ana, "spaceT", "brainrot-tcg", "doc", "card.new", expect=None, **remote) is True
+    row = repo.get(ana, "spaceT", "brainrot-tcg", "doc", "card.new")
+    assert cards.get("card.new") == {"v": "theirs"} and (row["dirty"], row["rev"]) == (0, 2)
+
+    # A file: the temp next to the target replaces it in the same transaction, or goes.
+    scope = scopes.active_scope("brainrot-tcg")
+    target = scopes.asset_file(scope, "brainrot-tcg", "assets/pip.png")
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    def temp_with(data: bytes) -> Any:
+        temp = target.with_name(f"pip.{len(data)}.tmp")
+        temp.write_bytes(seal_bytes(data, ana))
+        return temp
+
+    file_remote = {"value": None, "size": 6, "sha256": hashlib.sha256(b"theirs").hexdigest(), "rev": 3}
+    temp = temp_with(b"theirs")
+    assert repo.apply_remote(ana, "spaceT", "brainrot-tcg", "asset", "assets/pip.png", expect=None, temp_path=temp,
+                             target_path=target, **file_remote) is True
+    assert cards.get_file("assets/pip.png") == b"theirs" and not temp.exists()
+    expect = repo.get(ana, "spaceT", "brainrot-tcg", "asset", "assets/pip.png")
+    in_another_connection(lambda: cards.put_file("assets/pip.png", b"my edit"))
+    temp = temp_with(b"newer")
+    assert repo.apply_remote(ana, "spaceT", "brainrot-tcg", "asset", "assets/pip.png", expect=expect, temp_path=temp,
+                             target_path=target, **{**file_remote, "rev": 4}) is False
+    assert cards.get_file("assets/pip.png") == b"my edit" and not temp.exists()
+    # A pulled delete waits for the same: a local edit keeps the row and the file.
+    assert repo.remove_remote(ana, "spaceT", "brainrot-tcg", "asset", "assets/pip.png", expect=expect,
+                              target_path=target) is False
+    assert cards.get_file("assets/pip.png") == b"my edit"
+    repo.mark_pushed(ana, "spaceT", "brainrot-tcg", "asset", "assets/pip.png", rev=5,
+                     sha256=_sha_of(ana, "assets/pip.png", kind="asset"))
+    expect = repo.get(ana, "spaceT", "brainrot-tcg", "asset", "assets/pip.png")
+    assert repo.remove_remote(ana, "spaceT", "brainrot-tcg", "asset", "assets/pip.png", expect=expect,
+                              target_path=target) is True
+    assert repo.get(ana, "spaceT", "brainrot-tcg", "asset", "assets/pip.png") is None and not target.exists()
+    assert list(target.parent.glob("*.tmp")) == []
+
+
+def test_a_prefix_is_exact(who: _Who) -> None:
+    from backend.store.repos import plugin_kv
+
+    who.be("ana@x.org")
+    data = PluginData("scene-maker")
+    for key in ("scene_1_mesh", "scene_10_x", "scene-1-x", "scene_1"):
+        data.put(key, {"k": key})
+    data.put_file("scene_1_/a.bin", b"a")
+    data.put_file("scene_10/b.bin", b"b")
+    assert data.items("scene_1_") == {"scene_1_mesh": {"k": "scene_1_mesh"}}
+    assert data.keys("scene_1_") == ["scene_1_mesh"]
+    assert data.keys("scene_1") == ["scene_1", "scene_10_x", "scene_1_mesh"]
+    assert [f["path"] for f in data.files("scene_1_")] == ["scene_1_/a.bin"]
+    assert len(data.keys()) == 4
+
+    # Cache prefixes too: clearing "a_b" leaves "aXb1" and "a%b".
+    for key in ("a_bc", "aXb1", "a_b", "a%b"):
+        plugin_kv.set("scene-maker", key, 1, account="acc", scope=scopes.PERSONAL)
+    assert plugin_kv.delete_prefix("scene-maker", "a_b", account="acc", scope=scopes.PERSONAL) == ["a_b", "a_bc"]
+    assert plugin_kv.keys("scene-maker", account="acc", scope=scopes.PERSONAL) == ["a%b", "aXb1"]
+
+
+def test_a_row_that_keeps_failing_backs_off_and_never_blocks_newer_rows(who: _Who, fake_spaces: FakeSpaces,
+                                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    import types
+
+    clock = [time.time()]
+    monkeypatch.setattr(repo, "time", types.SimpleNamespace(time=lambda: clock[0]))
+    cards = PluginData("brainrot-tcg")
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    cards.put_file("assets/gone.png", b"x")  # the oldest change: its file goes missing
+    clock[0] += 1
+    cards.put("card.new", {"v": 1})
+    assert _queue(ana, 1) == ["assets/gone.png"]
+
+    waits = []
+    for n in range(1, repo.BLOCK_AFTER + 1):
+        out = repo.note_attempt(ana, "spaceT", "brainrot-tcg", "asset", "assets/gone.png", "File missing")
+        waits.append(round(out["next_try"] - clock[0]))
+        assert out["attempts"] == n
+        assert _queue(ana, 1) == ["card.new"]  # backing off: newer rows go first
+        clock[0] = out["next_try"]
+        if n < repo.BLOCK_AFTER:
+            assert _queue(ana, 1) == ["card.new"]  # due again, but fewest attempts first
+            assert _queue(ana) == ["card.new", "assets/gone.png"]
+    assert waits == [60, 120, 240, 480, 960] and out["state"] == "blocked"
+    clock[0] += 100_000
+    assert _queue(ana) == ["card.new"] and repo.count_dirty(ana, "spaceT") == 1
+    status = spaces.scope_status("brainrot-tcg")
+    assert (status["pending"], status["blocked"], status["refused"]) == (1, 1, 0)
+    assert status["items"] == [{"kind": "asset", "key": "assets/gone.png", "state": "blocked", "reason": "File missing",
+                                "attempts": 5, "deleted": False}]
+    assert repo.note_attempt(ana, "spaceT", "brainrot-tcg", "doc", "card.none", "x") is None
+    # Retry puts it back with fresh attempts.
+    assert repo.set_state(ana, "spaceT", "brainrot-tcg", "asset", "assets/gone.png", "")
+    assert _queue(ana) == ["assets/gone.png", "card.new"]
+    assert repo.get(ana, "spaceT", "brainrot-tcg", "asset", "assets/gone.png")["attempts"] == 0
+
+
+def test_a_refused_change_stays_listed_until_it_is_queued_again(who: _Who, fake_spaces: FakeSpaces) -> None:
+    cards = PluginData("brainrot-tcg")
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    cards.put("card.big", {"v": 1})
+    cards.put("card.ok", {"v": 1})
+    # An older provider refuses through clear_dirty: kept as refused, never "synced".
+    repo.clear_dirty(ana, "spaceT", "brainrot-tcg", "doc", "card.big")
+    row = repo.get(ana, "spaceT", "brainrot-tcg", "doc", "card.big")
+    assert (row["dirty"], row["sync_state"], row["sync_error"]) == (1, "refused", repo.REFUSED_REASON)
+    assert _queue(ana) == ["card.ok"] and repo.count_dirty(ana, "spaceT") == 1
+    status = spaces.scope_status("brainrot-tcg")
+    assert (status["pending"], status["refused"], status["blocked"], status["conflict"]) == (1, 1, 0, 0)
+    assert [(i["key"], i["state"], i["reason"]) for i in status["items"]] == [
+        ("card.big", "refused", repo.REFUSED_REASON)]
+    # A refusal of content that was edited since never marks the new edit.
+    sent = _sha_of(ana, "card.ok")
+    cards.put("card.ok", {"v": 2})
+    assert not repo.set_state(ana, "spaceT", "brainrot-tcg", "doc", "card.ok", "refused", "Storage is full",
+                              expect_sha=sent)
+    assert repo.set_state(ana, "spaceT", "brainrot-tcg", "doc", "card.ok", "refused", "Storage is full",
+                          expect_sha=_sha_of(ana, "card.ok"))
+    assert repo.state_counts(ana, "spaceT", "brainrot-tcg")["refused"] == 2 and _queue(ana) == []
+    # The plan changed: both go back in the queue. A new edit of a refused row starts afresh too.
+    assert repo.requeue_refused(ana, "spaceT") == 2 and _queue(ana) == ["card.big", "card.ok"]
+    repo.set_state(ana, "spaceT", "brainrot-tcg", "doc", "card.big", "refused", "Too big")
+    cards.put("card.big", {"v": 2})
+    assert repo.get(ana, "spaceT", "brainrot-tcg", "doc", "card.big")["sync_state"] == ""
+    with pytest.raises(ValueError, match="unknown sync state"):
+        repo.set_state(ana, "spaceT", "brainrot-tcg", "doc", "card.big", "stuck")
+
+
+def test_concurrent_sync_row_writes_keep_each_others_fields() -> None:
+    import threading
+
+    from backend.store import db
+
+    start = threading.Barrier(2)
+
+    def writer(fields: Any) -> None:
+        try:
+            start.wait(5)
+            for n in range(40):
+                repo.sync_put("acc", "spaceT", **fields(n))
+        finally:
+            db.close_thread_connections()
+
+    workers = [
+        threading.Thread(target=writer, args=(lambda n: {"label": f"Alpha {n}", "members": n},)),  # a picker refresh
+        threading.Thread(target=writer, args=(lambda n: {"cursor_rev": n, "synced_at": float(n)},)),  # a round
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(30)
+    row = repo.sync_get("acc", "spaceT")
+    assert (row["label"], row["members"], row["cursor_rev"], row["synced_at"], row["state"]) == (
+        "Alpha 39", 39, 39, 39.0, "ok")
+    repo.sync_put("acc", "spaceT", nothing="ignored", usage={"usedBytes": 5})
+    assert repo.sync_get("acc", "spaceT")["usage"] == {"usedBytes": 5}
+
+
+def test_an_unavailable_space_stays_read_only_with_its_reason_and_never_writes_local(who: _Who,
+                                                                                      fake_spaces: FakeSpaces) -> None:
+    cards = PluginData("brainrot-tcg")
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    cards.put("card.pip", {"v": 1})
+    repo.sync_put(ana, "spaceT", state="unavailable", error="permission denied: teams")
+    scope = scopes.active_scope("brainrot-tcg")
+    assert (scope["kind"], scope["state"], scope["readOnly"]) == ("shared", "unavailable", True)
+    assert cards.get("card.pip") == {"v": 1}
+    with pytest.raises(scopes.ReadOnlyScope,
+                       match=r"Alpha Studio isn't available right now \(permission denied: teams\)\. Read-only"):
+        cards.put("card.mo", {"v": 1})
+    with pytest.raises(scopes.ReadOnlyScope):
+        cards.delete("card.pip")
+    assert repo.rows(ana, scopes.PERSONAL, "brainrot-tcg", "doc") == []
+    status = spaces.scope_status("brainrot-tcg")
+    assert (status["state"], status["error"], status["scope"]["readOnly"]) == (
+        "unavailable", "permission denied: teams", True)
+    # A plugin with no copy left in the space (the provider dropped it) shows Local.
+    repo.link_set(ana, "forge", "spaceT")
+    assert scopes.active_scope("forge")["kind"] == "personal"
+    # Reset on the server: read-only too, until the user picks what to keep.
+    repo.sync_put(ana, "spaceT", state="reset", error="")
+    assert scopes.active_scope("brainrot-tcg")["readOnly"]
+    with pytest.raises(scopes.ReadOnlyScope, match="reset on the server"):
+        cards.put("card.pip", {"v": 2})
+    assert scopes.space_access("spaceT")[0] is True  # membership didn't change
+
+
+def test_erase_drops_the_link_and_a_relink_pulls_the_whole_copy_again(who: _Who, fake_spaces: FakeSpaces,
+                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    cards = PluginData("brainrot-tcg")
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio", plugin="forge")
+    cards.put("card.pip", {"v": 1})
+    cards.put_file("assets/pip.png", b"pip")
+    repo.sync_put(ana, "spaceT", cursor_rev=42)
+    scopes.erase_plugin("brainrot-tcg")
+    assert scopes.active_scope("brainrot-tcg")["kind"] == "personal"  # reinstalled: Local
+    assert repo.links(ana) == {"forge": "spaceT"}
+    # The space's cursor stays: forge's next round must not bring the erased copy back
+    # (a pull stores every plugin's items).
+    assert repo.rows(ana, "spaceT", "brainrot-tcg", "doc") == [] and repo.sync_get(ana, "spaceT")["cursor_rev"] == 42
+
+    cursors: list[int] = []
+    done = threading.Event()
+
+    def sync(account: str, space_id: str, *, force: bool = False) -> dict[str, Any]:
+        cursors.append(repo.sync_get(account, space_id)["cursor_rev"])
+        return {"state": "ok", "changed": [], "error": ""}
+
+    monkeypatch.setattr(fake_spaces, "sync", sync)
+    # Linked again: nothing of it is here, so the next round pulls the whole copy.
+    scopes.link_plugin("brainrot-tcg", "spaceT")
+    spaces.sync_active("brainrot-tcg", on_done=lambda out: done.set())
+    assert done.wait(5) and cursors == [0]
+    # A plugin whose copy is here links without pulling everything again.
+    cards.put("card.mo", {"v": 1})
+    repo.sync_put(ana, "spaceT", cursor_rev=9)
+    scopes.link_plugin("brainrot-tcg", scopes.PERSONAL)
+    scopes.link_plugin("brainrot-tcg", "spaceT")
+    assert repo.sync_get(ana, "spaceT")["cursor_rev"] == 9
+
+
+def test_only_plugins_on_the_host_data_service_are_offered_a_space(who: _Who, fake_spaces: FakeSpaces,
+                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    from backend.uefn_plugins import host
+    from backend.uefn_plugins.store import PLUGIN_MANIFEST, plugin_dir
+
+    def manifest(pid: str, **fields: Any) -> None:
+        root = plugin_dir(pid)
+        root.mkdir(parents=True)
+        (root / PLUGIN_MANIFEST).write_text(json.dumps({"id": pid, "label": pid, **fields}))
+
+    who.be("ana@x.org")
+    fake_spaces.spaces["spaceT"] = "Alpha Studio"
+    # Keeps its own files (a Forge-like plugin): nothing to share, the bar says Local only.
+    assert scopes.shareable("scene-maker") is False
+    status = spaces.scope_status("scene-maker")
+    assert (status["visible"], status["shareable"]) == (True, False)
+    PluginData("scene-maker").put("scene.a", {"v": 1})
+    assert scopes.shareable("scene-maker") and spaces.scope_status("scene-maker")["shareable"] is True
+    assert scopes.shareable("ducky.automations")
+    manifest("declares", data_sharing=True)
+    assert scopes.shareable("declares")
+    monkeypatch.setattr(host, "_DATA_PLUGINS", {"api-user"})
+    assert scopes.shareable("api-user")
+    manifest("never", data_sharing=False)
+    PluginData("never").put("tab.home", {"v": 1})
+    assert not scopes.shareable("never") and spaces.scope_status("never")["visible"] is False
+    fake_spaces.spaces.clear()  # no spaces to offer: no bar at all
+    assert spaces.scope_status("scene-maker")["visible"] is False
+
+
+def test_shared_copies_refuse_what_wont_fit_once_sealed(who: _Who, fake_spaces: FakeSpaces,
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    cards = PluginData("brainrot-tcg")
+    near = {"x": "a" * (scopes.DOC_MAX_BYTES - 8 - 10)}  # 10 bytes under 1 MB once encoded
+    assert len(scopes.encode_doc(near)) == scopes.DOC_MAX_BYTES - 10
+    monkeypatch.setattr(scopes, "ASSET_MAX_BYTES", 1000)
+    who.be("ana@x.org")
+    assert cards.put("card.big", near)["changed"]  # Local keeps the full limits
+    assert cards.put_file("assets/big.bin", b"x" * 990)["changed"]
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    with pytest.raises(ValueError, match="too big to share"):
+        cards.put("card.big", near)
+    with pytest.raises(ValueError, match=r"too big to share \(over 967 bytes\)"):
+        cards.put_file("assets/big.bin", b"x" * 990)
+    assert cards.put_file("assets/ok.bin", b"x" * 967)["changed"]
+    assert repo.rows(ana, "spaceT", "brainrot-tcg", "doc") == []
+    # A copy of Local into the space leaves them Local instead of queueing what the server refuses.
+    assert scopes.copy_local_into("brainrot-tcg", "spaceT") == {
+        "ok": True, "copied": 0, "kept": 0, "tooBig": ["card.big", "assets/big.bin"]}
+    assert repo.count_dirty(ana, "spaceT") == 1  # assets/ok.bin only
 
 
 # --------------------------------------------------------------------------- §13 sealed per account

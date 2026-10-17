@@ -85,3 +85,22 @@ describe("folder menu: save folder as template", () => {
     expect(items()).not.toContain("Save folder as template");
   });
 });
+
+describe("a space whose data was reset on the server", () => {
+  it("says so and offers Upload my copy and Clear my copy", () => {
+    const reset: WorkflowOwnerDto = { id: "spaceR", kind: "shared", label: "Gamma", state: "reset", readOnly: true,
+      reason: "Gamma's data was reset on the server.", resetContents: ["Workflows"] };
+    const onResetChoice = vi.fn();
+    render(
+      <WorkflowList listId="list" listRef={{ current: null }} owners={{ owners: [LOCAL, ALPHA, reset] }} rows={[row("Team flow", "", reset)]}
+        activeId="" collapsed={false} nowMs={0} onToggleCollapsed={() => {}} onOpen={() => {}} onCreate={() => {}} onImportLocal={() => {}}
+        onResetChoice={onResetChoice} />,
+    );
+    expect(screen.getByText("Gamma's data was reset on the server. Your copy here is read-only until you choose what to do with it.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Upload my copy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear my copy" }));
+    expect(onResetChoice.mock.calls).toEqual([["spaceR", "upload"], ["spaceR", "clear"]]);
+    // Only that space: Alpha has no such row.
+    expect(screen.getAllByRole("button", { name: "Upload my copy" }).length).toBe(1);
+  });
+});

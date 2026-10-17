@@ -281,6 +281,7 @@ def delete_workflow(workflow_id: str) -> bool:
     else:
         from backend.automations import owned
 
+        _one_copy(wid)
         found = owned.find(wid)
         ok = False
         if found is not None:
@@ -301,6 +302,8 @@ def copy_workflow(workflow_id: str, owner: str, *, move: bool = False) -> dict[s
     from backend.automations import owned
 
     with _SAVE_LOCK:
+        if move:
+            _one_copy(workflow_id)
         found = owned.find(workflow_id)
         if found is None:
             raise KeyError("workflow not found")
@@ -331,17 +334,27 @@ def set_folder(workflow_id: str, folder: str) -> dict[str, Any] | None:
     """File one workflow in a folder of its owner (no saved version, keeps its place).
     The folder it leaves stays in the owner's folder list."""
     wid = (workflow_id or "").strip()
+    if use_db("automations"):
+        _one_copy(wid)
     wf = get_workflow(wid)
     if wf is None:
         return None
     doc = {"id": wid, "folder": normalize_folder(folder)}
     with _SAVE_LOCK:
-        out = _files_save(doc, archive=False) if not use_db("automations") else _db_save(doc, LOCAL, archive=False)
+        out = _files_save(doc, archive=False) if not use_db("automations") else _db_save(doc, owner_key(wf), archive=False)
         old = normalize_folder(wf.get("folder"))
         if old and old != out["folder"]:
             _remember_folders(owner_key(wf), [old])
     _announce_graphs_changed()
     return out
+
+
+def _one_copy(workflow_id: str) -> None:
+    """A delete or a move by id alone never guesses which copy an id held twice means."""
+    from backend.automations import owned
+
+    if len(owned.holders(workflow_id)) > 1:
+        raise ValueError(owned.AMBIGUOUS)
 
 
 def owner_key(wf: dict[str, Any]) -> str:
@@ -614,10 +627,15 @@ def _db_save(doc: dict[str, Any], owner: str, *, archive: bool = True) -> dict[s
     from backend.uefn_plugins.scopes import valid_doc_key
 
     wid = str(doc.get("id") or "").strip()
-    found = owned.find(wid) if wid else None
+    found = owned.find(wid, owner) if wid else None
     if found is not None:
         scope, existing = found
     else:
+        held = owned.held_unlisted(wid) if wid else None
+        if held is not None:
+            # Its space is locked here (access lost, not available now). A Local copy under
+            # the same id would shadow the space's copy for good once it's back.
+            raise owned.ReadOnlyOwner(owned.unlisted_reason(held))
         scope, existing = owned.scope_for(owner or LOCAL), None
         if wid and (not valid_doc_key(wid) or wid == owned.FOLDERS_KEY):
             raise ValueError("Workflow ids use lowercase letters, digits, '.', '_' and '-'.")

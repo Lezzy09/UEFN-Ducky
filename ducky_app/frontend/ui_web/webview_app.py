@@ -276,6 +276,13 @@ def _run_panel(api_holder: dict[str, object]) -> None:
             except Exception:
                 pass
             try:
+                # Shared spaces sync in the background: after writes, on a timer, at start.
+                from backend.uefn_plugins.sync_scheduler import start as start_space_sync
+
+                start_space_sync()
+            except Exception:
+                pass
+            try:
                 from frontend.ui_web.team_keeper import start_team_keeper
 
                 start_team_keeper()

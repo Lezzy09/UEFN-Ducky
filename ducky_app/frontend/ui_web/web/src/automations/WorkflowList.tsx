@@ -94,6 +94,8 @@ type Props = {
   onOpen: (id: string) => void;
   onCreate: (ownerId: string, folder?: string) => void;
   onImportLocal: () => void;
+  /** A space whose data was reset on the server: Upload my copy or Clear my copy (asks first). */
+  onResetChoice?: (ownerId: string, action: "upload" | "clear") => void;
   onAddFolder?: (ownerId: string, path: string) => void;
   /** File a workflow in a folder; resolves once the list shows it there. */
   onMoveWorkflow?: (id: string, ownerId: string, folder: string) => void | Promise<unknown>;
@@ -122,7 +124,7 @@ type Props = {
 /** Workflows sidebar: one section per owner (Local, then each shared space), with folders
  *  inside. Drag a workflow or a folder onto a folder, or onto the owner, to file it;
  *  right-click anything for what you can do with it. */
-export function WorkflowList({ listId, listRef, owners, rows, activeId, collapsed, nowMs, emptyFolders = {}, onToggleCollapsed, onOpen, onCreate, onImportLocal, onAddFolder, onMoveWorkflow, onMoveFolder, onRenameWorkflow, onDuplicateWorkflow, onSetEnabled, onDeleteWorkflow, onDeleteWorkflows, onRemoveFolder, onCopyFolder, onSaveFolderTemplate, featured = [], onCreateFrom, showNew }: Props) {
+export function WorkflowList({ listId, listRef, owners, rows, activeId, collapsed, nowMs, emptyFolders = {}, onToggleCollapsed, onOpen, onCreate, onImportLocal, onResetChoice, onAddFolder, onMoveWorkflow, onMoveFolder, onRenameWorkflow, onDuplicateWorkflow, onSetEnabled, onDeleteWorkflow, onDeleteWorkflows, onRemoveFolder, onCopyFolder, onSaveFolderTemplate, featured = [], onCreateFrom, showNew }: Props) {
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const [editing, setEditing] = useState<Editing | null>(null);
   const [renamingId, setRenamingId] = useState("");
@@ -550,6 +552,13 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
                 </span> : null}
               </div>
               <ul className="aw-list-ul" id={bodyId} hidden={!open}>
+                {owner.kind === "shared" && owner.state === "reset" && onResetChoice ? (
+                  <li className="aw-import-row aw-reset-row">
+                    <span>{name}&apos;s data was reset on the server. Your copy here is read-only until you choose what to do with it.</span>
+                    <button type="button" onClick={() => onResetChoice(owner.id, "upload")}><Icons.Upload /> Upload my copy</button>
+                    <button type="button" onClick={() => onResetChoice(owner.id, "clear")}><Icons.Trash /> Clear my copy</button>
+                  </li>
+                ) : null}
                 {newFolderRow(owner, "", 0)}
                 {tree.folders.map((folder) => renderFolder(owner, folder, 0, open && !collapsed))}
                 {renderRows(owner, tree.rows, 0, open && !collapsed)}

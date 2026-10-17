@@ -63,10 +63,11 @@ def delete(plugin_id: str, key: str, *, account: str, scope: str) -> bool:
 
 
 def keys(plugin_id: str, prefix: str = "", *, account: str, scope: str) -> list[str]:
+    """Keys starting with exactly ``prefix`` (``_`` and ``%`` are no wildcards)."""
     rows = db.connect().execute(
-        "SELECT key FROM plugin_kv WHERE account_id=? AND scope_id=? AND plugin_id=? AND key LIKE ? "
+        "SELECT key FROM plugin_kv WHERE account_id=? AND scope_id=? AND plugin_id=? AND substr(key, 1, ?)=? "
         "AND key<>? ORDER BY key",
-        (account, scope, plugin_id, prefix + "%", PREFS_KEY),
+        (account, scope, plugin_id, len(prefix), prefix, PREFS_KEY),
     ).fetchall()
     return [str(r[0]) for r in rows]
 
@@ -77,8 +78,9 @@ def delete_prefix(plugin_id: str, prefix: str, *, account: str, scope: str) -> l
     if cleared:
         with db.write_txn(conn):
             conn.execute(
-                "DELETE FROM plugin_kv WHERE account_id=? AND scope_id=? AND plugin_id=? AND key LIKE ? AND key<>?",
-                (account, scope, plugin_id, prefix + "%", PREFS_KEY),
+                "DELETE FROM plugin_kv WHERE account_id=? AND scope_id=? AND plugin_id=? AND substr(key, 1, ?)=? "
+                "AND key<>?",
+                (account, scope, plugin_id, len(prefix), prefix, PREFS_KEY),
             )
     return cleared
 

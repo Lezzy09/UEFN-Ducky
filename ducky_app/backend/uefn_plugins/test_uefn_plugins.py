@@ -1318,3 +1318,23 @@ def test_a_plugin_that_needs_a_newer_ducky_is_never_installed_or_loaded(monkeypa
     host._REGISTERED.discard("newer")
     host._load_one("newer", tmp_path, {"id": "newer", "label": "Newer", "version": "3", "min_app_version": "9.0.0"})
     assert imported == [] and errors and "needs UEFN Ducky 9.0.0 or newer" in errors[0]
+
+
+def test_plugin_api_crypto_seals_and_opens_with_aes_gcm() -> None:
+    """api.crypto: plugins seal with the app's cryptography, whatever else the EXE bundles."""
+    from cryptography.exceptions import InvalidTag
+
+    from backend.uefn_plugins.host import _PluginApi
+
+    crypto = _PluginApi("cryptoprobe").crypto
+    key, nonce, aad = bytes(range(32)), bytes(range(12)), b"team|doc|card.pip"
+    sealed = crypto.aead_seal(key, nonce, b"Pip the duck", aad)
+    assert b"Pip" not in sealed and len(sealed) == len(b"Pip the duck") + 16  # the tag rides along
+    assert crypto.aead_open(key, nonce, sealed, aad) == b"Pip the duck"
+    for wrong in ({"aad": b"team|doc|card.pop"}, {"key": bytes(32)}, {"data": sealed[:-1] + bytes([sealed[-1] ^ 1])}):
+        args = {"key": key, "nonce": nonce, "data": sealed, "aad": aad, **wrong}
+        try:
+            crypto.aead_open(args["key"], args["nonce"], args["data"], args["aad"])
+            raise AssertionError(f"opened with {sorted(wrong)} changed")
+        except InvalidTag:
+            pass

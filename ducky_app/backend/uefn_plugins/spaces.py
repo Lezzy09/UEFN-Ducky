@@ -24,8 +24,12 @@ from typing import Any
 _log = logging.getLogger(__name__)
 
 # Generic space states. A provider reports one; core decides read-only and closed.
-STATES_READ_ONLY = frozenset({"paused", "waiting", "locked", "lost"})
+# ``unavailable``: the provider can't use the space now (the sync row's error says why);
+# ``reset``: its data was reset on the server. ``no_provider`` (core's own) stays writable.
+STATES_READ_ONLY = frozenset({"paused", "waiting", "locked", "lost", "unavailable", "reset"})
 STATE_CLOSED = "lost"  # access gone: the copy here reads as empty until it comes back
+NO_PROVIDER_ERROR = "Not connected: Ducky Account isn't running"
+WORKFLOW_DOCS = "ducky.automations"  # the plugin id workflows are kept under (owned.DOC_PLUGIN)
 
 
 class Provider:
@@ -194,18 +198,25 @@ def plugin_label(plugin_id: str) -> str:
 
 def sync_active(plugin: str, *, force: bool = False, on_done: Any = None) -> dict[str, Any]:
     """Start a round for the shared space ``plugin``'s data lives in, on a worker thread
-    (no-op for Local)."""
+    (no-op for Local). Without a provider nothing can sync, and the answer says so."""
     from backend.uefn_plugins import scopes
 
     scope = scopes.active_scope(plugin)
-    if scope["kind"] != "shared" or not has_provider():
+    if scope["kind"] != "shared":
         return {"ok": True, "started": False}
+    return sync_space(scope["account"], scope["id"], force=force, on_done=on_done)
+
+
+def sync_space(account: str, space: str, *, force: bool = False, on_done: Any = None) -> dict[str, Any]:
+    """:func:`sync_active` for a space by id. The round holds the space's round lock, so
+    it never overlaps one of the same space in another process (the MCP bridge)."""
+    if not has_provider():
+        return {"ok": False, "started": False, "error": NO_PROVIDER_ERROR}
 
     def _work() -> None:
-        try:
-            out = provider().sync(scope["account"], scope["id"], force=force)
-        except Exception as exc:  # noqa: BLE001 — a round that dies says so instead of vanishing
-            out = _round_failed(scope, exc)
+        from backend.uefn_plugins.sync_scheduler import run_round
+
+        out = run_round(account, space, force=force)
         if on_done and (out.get("changed") or not out.get("skipped")):
             on_done(out)
 
@@ -233,11 +244,65 @@ def _round_failed(scope: dict[str, Any], exc: Exception) -> dict[str, Any]:
     return {"state": "error", "changed": [], "error": msg}
 
 
+def space_contents(account: str, space: str) -> list[str]:
+    """What this PC keeps of a space, by name: each plugin's label, sorted, then
+    ``Workflows`` when it holds the space's workflows."""
+    from backend.store.repos import plugin_data as repo
+
+    plugins = repo.scope_plugin_ids(account, space)
+    names = {plugin_label(plugin) or plugin for plugin in plugins if plugin != WORKFLOW_DOCS}
+    return sorted(names, key=str.casefold) + (["Workflows"] if WORKFLOW_DOCS in plugins else [])
+
+
+def settle_reset(space: str, action: str) -> dict[str, Any]:
+    """The person's choice for a space whose data was reset on the server: ``upload``
+    (Upload my copy: this PC's copy goes up again as new) or ``clear`` (Clear my copy: it
+    goes, rows and files, and the space's data comes down instead). Either one is for the
+    space's whole copy here, every plugin's and its workflows, because the provider waits
+    for all of it. ``plugins``: the plugin ids whose copy it was."""
+    import shutil
+
+    from backend.store.repos import plugin_data as repo
+    from backend.store.repos import workflows
+    from backend.uefn_plugins import scopes
+
+    if action not in ("upload", "clear"):
+        raise ValueError("Choose Upload my copy or Clear my copy.")
+    account = scopes.account_id()
+    if account == scopes.LOCAL or not scopes.valid_space_id(space):
+        raise ValueError("invalid space id")
+    sync = repo.sync_get(account, space)
+    if sync["state"] != "reset":
+        return {"ok": False, "error": f"{sync['label'] or 'This space'}'s data wasn't reset on the server."}
+    plugins = repo.scope_plugin_ids(account, space)
+    space_workflows = [r["key"] for r in repo.rows(account, space, WORKFLOW_DOCS, "doc")]
+    count = repo.settle_reset(account, space, keep=action == "upload")
+    if action == "upload":
+        return {"ok": True, "plugins": plugins, "queued": count}
+    # The copy's files and what this PC derived from it go too; its links and sync row stay.
+    workflows.runtime_delete(account, space_workflows)
+    try:
+        from backend.store.repos import search as search_repo
+
+        search_repo.drop_scope_records(account, space)
+    except Exception:  # noqa: BLE001 — a search error never blocks the clear
+        _log.debug("dropping search records of %s failed", space, exc_info=True)
+    shutil.rmtree(scopes.scopes_root(account) / space, ignore_errors=True)
+    return {"ok": True, "plugins": plugins, "cleared": count}
+
+
 def scope_status(plugin: str) -> dict[str, Any]:
     """Where ``plugin``'s data lives: the host scope bar and the Plugins page. ``visible``
     is false while the account has no shared spaces to offer, and always for a plugin
-    that never shares its data. ``local`` / ``current`` are the Local and the shown
-    copy's counts and bytes."""
+    that never shares its data (``"data_sharing": false``). ``shareable`` is false for a
+    plugin that keeps its own files (:func:`scopes.shareable`): no space is offered and
+    the bar says Local only. ``local`` / ``current`` are the Local and the shown copy's
+    counts and bytes.
+
+    For a shared copy: ``pending`` is this plugin's changes still to send; ``refused``,
+    ``blocked`` and ``conflict`` count its changes that aren't going out, listed in
+    ``items`` (kind, key, state, reason, attempts, deleted). ``resetContents`` (state
+    ``reset``) names everything Upload my copy / Clear my copy act on."""
     from backend.store.repos import plugin_data as repo
     from backend.uefn_plugins import scopes
     from frontend.duckyos_account import get_status
@@ -248,6 +313,7 @@ def scope_status(plugin: str) -> dict[str, Any]:
     out: dict[str, Any] = {
         "ok": True,
         "visible": shared or (scopes.sharing_allowed(plugin) and provider().enabled()),
+        "shareable": shared or scopes.shareable(plugin),
         "kindLabel": provider().kind_label,
         "scope": scopes.scope_view(scope),
         "pluginLabel": plugin_label(plugin) or plugin,
@@ -259,13 +325,24 @@ def scope_status(plugin: str) -> dict[str, Any]:
     }
     if shared:
         st = repo.sync_get(account, scope["id"])
+        held = repo.state_counts(account, scope["id"], plugin)
         out.update(
             members=int(st["members"]),
-            error=st["error"],
+            error=NO_PROVIDER_ERROR if scope["state"] == "no_provider" else st["error"],
             syncedAt=float(st["synced_at"]) or None,
-            pending=repo.count_dirty(account, scope["id"]),
+            pending=repo.count_dirty(account, scope["id"], plugin),
+            refused=held["refused"],
+            blocked=held["blocked"],
+            conflict=held["conflict"],
+            items=[
+                {"kind": r["kind"], "key": r["key"], "state": r["sync_state"], "reason": r["sync_error"],
+                 "attempts": int(r["attempts"]), "deleted": bool(r["deleted"])}
+                for r in repo.state_items(account, scope["id"], plugin)
+            ],
             usage=st["usage"] or {},
         )
+        if scope["state"] == "reset":
+            out["resetContents"] = space_contents(account, scope["id"])
         try:
             out.update(provider().status(account, scope["id"], plugin) or {})
         except Exception:  # noqa: BLE001 — the bar still shows what core knows

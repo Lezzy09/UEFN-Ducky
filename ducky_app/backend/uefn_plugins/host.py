@@ -3502,6 +3502,27 @@ class _ChangesetApi:
             pass
 
 
+class _CryptoApi:
+    """AES-256-GCM from the app's own cryptography, so a plugin that seals data never
+    depends on which modules the EXE happens to bundle (the shared-spaces provider died
+    on every team change when 1.2.392 shipped without ``ciphers.aead``)."""
+
+    @staticmethod
+    def aead_seal(key: bytes, nonce: bytes, data: bytes, aad: bytes | None = None) -> bytes:
+        """Ciphertext plus its 16-byte tag. ``key`` is 32 bytes, ``nonce`` 12."""
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        return AESGCM(bytes(key)).encrypt(bytes(nonce), bytes(data), None if aad is None else bytes(aad))
+
+    @staticmethod
+    def aead_open(key: bytes, nonce: bytes, data: bytes, aad: bytes | None = None) -> bytes:
+        """The plaintext. Raises cryptography's ``InvalidTag`` when the data, key, nonce or
+        ``aad`` don't match, the same as importing cryptography directly."""
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        return AESGCM(bytes(key)).decrypt(bytes(nonce), bytes(data), None if aad is None else bytes(aad))
+
+
 class _PluginApi:
     """Narrow host surface passed to plugin register(api)."""
 
@@ -3595,6 +3616,11 @@ class _PluginApi:
     def changeset(self) -> "_ChangesetApi":
         """Record a mutation in the Changes ledger so Revert can unwind it."""
         return _ChangesetApi(self)
+
+    @property
+    def crypto(self) -> "_CryptoApi":
+        """``aead_seal(key, nonce, data, aad)`` / ``aead_open(...)``: AES-256-GCM from the app."""
+        return _CryptoApi()
 
     def local_dir(self, name: str = "") -> str:
         """A plain folder on this PC for files the plugin can rebuild: media proxies, thumbnails,

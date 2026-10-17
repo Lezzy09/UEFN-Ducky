@@ -43,6 +43,89 @@ def _cache_store_catalog(result: dict[str, Any], account: str = "") -> dict[str,
     return result
 
 
+# How long a scope switch waits for the round that sends the old space's queued changes.
+SWITCH_SEND_TIMEOUT_S = 30.0
+
+
+def _send_before_leaving(plugin: str, leaving: dict[str, Any], target: str) -> int | None:
+    """A switch away from a shared space sends that copy's queued changes first, up to
+    :data:`SWITCH_SEND_TIMEOUT_S` (after the switch nothing would send them). Returns how
+    many of this plugin's changes are still queued there; None when there was nothing to
+    send or nothing could send it."""
+    import threading
+
+    from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins.spaces import has_provider
+    from backend.uefn_plugins.sync_scheduler import SLOW_STATES, run_round
+
+    account, space = leaving["account"], leaving["id"]
+    if leaving["kind"] != "shared" or space == target or leaving["state"] in SLOW_STATES or not has_provider():
+        return None
+    if not repo.count_dirty(account, space, plugin):
+        return None
+    worker = threading.Thread(target=run_round, args=(account, space), kwargs={"force": True},
+                              name="plugin-scope-send", daemon=True)
+    worker.start()
+    worker.join(SWITCH_SEND_TIMEOUT_S)
+    return repo.count_dirty(account, space, plugin)
+
+
+# Retry and Drop my change wait while a space's data is reset on the server: its copy
+# stays as it is until the person picks Upload my copy or Clear my copy for all of it.
+RESET_FIRST = "This space's data was reset on the server. Choose Upload my copy or Clear my copy first."
+
+
+def _shared_scope_of(plugin: str) -> dict[str, Any]:
+    """The shared copy ``plugin`` shows, for Retry and Drop my change (which wait while
+    its space's data is reset on the server, whatever else the copy shows now)."""
+    from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins.scopes import active_scope
+
+    scope = active_scope(plugin)
+    if scope["kind"] != "shared":
+        raise ValueError("This plugin's data isn't shared.")
+    if repo.sync_get(scope["account"], scope["id"])["state"] == "reset":
+        raise ValueError(RESET_FIRST)
+    return scope
+
+
+def _retry_held(plugin: str, key: str) -> dict[str, Any]:
+    """Refused and blocked changes of ``plugin`` (only ``key``'s when given) go back in the
+    queue."""
+    from backend.store.repos import plugin_data as repo
+
+    scope = _shared_scope_of(plugin)
+    account, space = scope["account"], scope["id"]
+    retried = 0
+    for row in repo.state_items(account, space, plugin, limit=10_000):
+        if row["sync_state"] in ("refused", "blocked") and (not key or row["key"] == key):
+            retried += repo.set_state(account, space, plugin, row["kind"], row["key"], "")
+    if key and not retried:
+        return {"ok": False, "error": "That change isn't waiting to be sent again."}
+    return {"ok": True, "retried": retried}
+
+
+def _drop_change(plugin: str, kind: str, key: str) -> dict[str, Any]:
+    """This PC's refused or blocked change to one item goes: a never-sent item is just
+    removed, an item the team has comes back on the next pull (the cursor goes back to its
+    rev). Only that change: an edit made since, or a change being sent, stays."""
+    from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins import scopes
+
+    scope = _shared_scope_of(plugin)
+    account, space = scope["account"], scope["id"]
+    if kind not in ("doc", "asset"):
+        raise ValueError("invalid item kind")
+    row = repo.get(account, space, plugin, kind, key)
+    gone = {"ok": False, "error": "That change was already sent or dropped."}
+    if not row or not row["dirty"] or row["sync_state"] not in ("refused", "blocked"):
+        return gone
+    target = scopes.asset_file(scope, plugin, key) if kind == "asset" else None
+    if not repo.drop_held(account, space, plugin, kind, key, expect=row, target_path=target):
+        return gone
+    return {"ok": True, "dropped": 1}
+
+
 class PanelApiStoreMixin:
     def duckyos_get_status(self) -> dict[str, Any]:
         # Store tab also reads status — do not gate on the Account plugin.
@@ -749,18 +832,25 @@ class PanelApiStoreMixin:
 
     def plugin_scope_set(self, plugin_id: str, scope_id: str) -> dict[str, Any]:
         """Keep a plugin's data in Local or one shared space. Nothing moves: the plugin
-        restarts on that scope's own copy, then its open panels reload (``switched``)."""
+        restarts on that scope's own copy, then its open panels reload (``switched``).
+        Changes still queued for the space it leaves are sent first (up to 30 s);
+        ``unsent`` is how many of them didn't go (they stay queued in that copy)."""
         import threading
 
         from backend.uefn_plugins.scopes import active_scope
         from backend.uefn_plugins.spaces import link_scope, sync_active
 
         pid = str(plugin_id or "")
+        target = str(scope_id or "")
         try:
-            before = active_scope(pid)["id"]
-            out = link_scope(pid, str(scope_id or ""))
+            leaving = active_scope(pid)
+            before = leaving["id"]
+            unsent = _send_before_leaving(pid, leaving, target)
+            out = link_scope(pid, target)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+        if unsent is not None:
+            out = {**out, "unsent": unsent, "unsentLabel": str(leaving["label"])}
         self._push_panel({"type": "plugin_scope_changed", "plugins": [pid]})
         sync_active(pid, force=True, on_done=self._scope_synced)
         if out.get("scope", {}).get("spaceId", "") == ("" if before == "personal" else before):
@@ -788,6 +878,78 @@ class PanelApiStoreMixin:
             return sync_active(str(plugin_id or ""), force=bool(force), on_done=self._scope_synced)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def plugin_scope_retry(self, plugin_id: str, key: str = "") -> dict[str, Any]:
+        """Send a refused or blocked change again (every one without ``key``), then sync."""
+        from backend.uefn_plugins.spaces import sync_active
+
+        pid = str(plugin_id or "")
+        try:
+            out = _retry_held(pid, str(key or ""))
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        if out.get("ok"):
+            self._push_panel({"type": "plugin_scope_changed", "plugins": [pid]})
+            sync_active(pid, force=True, on_done=self._scope_synced)
+        return out
+
+    def plugin_scope_drop(self, plugin_id: str, kind: str, key: str) -> dict[str, Any]:
+        """Drop this PC's refused or blocked change: the team's copy of the item comes back
+        on the next pull."""
+        from backend.uefn_plugins.spaces import sync_active
+
+        pid = str(plugin_id or "")
+        try:
+            out = _drop_change(pid, str(kind or ""), str(key or ""))
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        if not out.get("ok"):
+            return out
+        self._push_panel({"type": "plugin_scope_changed", "plugins": [pid]})
+        sync_active(pid, force=True, on_done=self._scope_synced)
+        return out
+
+    def space_reset_settle(self, space_id: str, action: str) -> dict[str, Any]:
+        """A space whose data was reset on the server: Upload my copy (``upload``) or Clear
+        my copy (``clear``), for this PC's whole copy of it (every plugin's, its workflows
+        too), then a round. After a clear, the plugins showing that space restart on the
+        copy pulled again, like after a switch."""
+        import threading
+
+        from backend.uefn_plugins.scopes import account_id
+        from backend.uefn_plugins.spaces import WORKFLOW_DOCS, settle_reset, sync_space
+
+        space = str(space_id or "")
+        try:
+            out = settle_reset(space, str(action or ""))
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        if not out.get("ok"):
+            return out
+        plugins = sorted(out.pop("plugins", []))
+        self._push_panel({"type": "plugin_scope_changed", "plugins": plugins})
+        if WORKFLOW_DOCS in plugins:
+            self._push_panel({"type": "graphs_changed"})
+        sync_space(account_id(), space, force=True, on_done=self._scope_synced)
+        if "cleared" not in out:
+            return out
+
+        def _restart() -> None:
+            # Their backend state belongs to the copy that just went.
+            from backend.store.repos import plugin_data as repo
+
+            linked = sorted(p for p, s in repo.links(account_id()).items() if s == space)
+            for pid in linked:
+                try:
+                    from backend.uefn_plugins.host import reload_single_plugin
+
+                    reload_single_plugin(pid)
+                except Exception:
+                    pass
+            self._push_panel({"type": "plugin_scope_changed", "plugins": linked, "switched": True})
+
+        threading.Thread(target=_restart, name="space-reset-restart", daemon=True).start()
+        return out
 
     def plugin_data_copy_to_space(self, plugin_id: str, space_id: str) -> dict[str, Any]:
         """One way, on request: a plugin's Local data into one space's copy (theirs is kept)."""

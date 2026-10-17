@@ -29,9 +29,11 @@ import { clearWorkflowRunHistory, hydrateWorkflowRunHistory, stopWorkflowRun, su
 import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { installPanelPushBus, subscribePanelPush } from "../hooks/usePanelPushBus";
 import { onApiReady } from "../hooks/onApiReady";
+import { WINDOW_ID } from "../tabs/tabRegistryClient";
 import { runBridgeJob } from "../hooks/bridgeJobAsync";
 import { WorkflowOutline } from "./WorkflowOutline";
 import { LOCAL_OWNER, WorkflowList, ownerHelp, ownerName } from "./WorkflowList";
+import { resetConfirm } from "../plugin-ui/scopeBarText";
 import { PanelResizeHandle } from "./PanelResizeHandle";
 import { takePendingGraphFocusTarget, type GraphFocus } from "../hooks/graphActivity";
 import { getTargetElement, registerTarget, targetRef, unregisterTarget } from "../ui-targets/registry";
@@ -267,6 +269,9 @@ function groupCatalog(catalog: PaletteTile[], query: string) {
 /** Shared workflows sync once when the view opens and then only after a save: saves
  *  close together go up as one round, a few seconds after the last. */
 const SHARED_SYNC_DELAY_MS = 4000;
+/** How the view reports itself on screen (as the workflow docs' panel): Ducky's background
+ *  sync pulls shared workflows every minute while it is, every 15 minutes otherwise. */
+const WORKFLOWS_VIEW_TAB = "plugin:ducky.automations:workflows";
 /** A test run may take long (UEFN, duckies); Stop ends it any time. */
 const RUN_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 /** The server turned a save down and said why (too much code, say): retrying won't help. */
@@ -715,6 +720,10 @@ export function AutomationsView() {
     if (!hasShared) return;
     return onApiReady(() => void getApi()?.workflow_sync?.(false));
   }, [hasShared]);
+  useEffect(() => {
+    const stopWaiting = onApiReady((api) => void api.report_plugin_panel?.(WINDOW_ID, WORKFLOWS_VIEW_TAB, true, true));
+    return () => { stopWaiting(); void getApi()?.report_plugin_panel?.(WINDOW_ID, WORKFLOWS_VIEW_TAB, false, false); };
+  }, []);
   const syncTimer = useRef(0);
   const queueSharedSync = () => {
     window.clearTimeout(syncTimer.current);
@@ -889,7 +898,9 @@ export function AutomationsView() {
     if (next.id && next.owner?.readOnly) return next;  // someone else's shared workflow: never pushed from here
     // The list files workflows (set_workflow_folder); an open canvas must not undo that.
     const { folder, ...body } = next;
-    const res = await api?.save_workflow?.(next.id ? body : { ...body, folder: folder || "" }, owner || undefined);
+    // Always with its owner: while that space is locked here the save is refused, never
+    // forked into Local under the same id.
+    const res = await api?.save_workflow?.(next.id ? body : { ...body, folder: folder || "" }, owner || next.owner?.id || undefined);
     const row = res?.workflow;
     if (row) {
       if (row.owner?.kind === "shared") queueSharedSync();
@@ -1013,7 +1024,7 @@ export function AutomationsView() {
   const saveOther = async (doc: AutomationDto) => {
     const { folder: _folder, ...body } = doc;
     await saveQueue.current;
-    const res = await getApi()?.save_workflow?.(body);
+    const res = await getApi()?.save_workflow?.(body, doc.owner?.id || undefined);
     if (!res?.workflow) { setActionError(res?.error || "Could not save workflow"); return; }
     if (res.workflow.owner?.kind === "shared") queueSharedSync();
     setActionError("");
@@ -1072,6 +1083,27 @@ export function AutomationsView() {
     await refreshList();
   };
   const deleteWorkflow = (id: string) => deleteWorkflows([id]);
+
+  /** A space whose data was reset on the server: Upload my copy or Clear my copy. Either
+   *  one is for this PC's whole copy of the space (plugins' data too), which the dialog names. */
+  const resetChoice = async (ownerId: string, action: "upload" | "clear") => {
+    const owner = (owners.owners || []).find((item) => item.id === ownerId);
+    if (!owner) return;
+    const ask = resetConfirm(action, owner.label, owner.resetContents ?? []);
+    const ok = await confirm(action === "upload"
+      ? { ...ask, confirmLabel: "Upload my copy" }
+      : { ...ask, confirmLabel: "Yes, clear it", danger: true });
+    if (ok !== true) return;
+    const res = await getApi()?.space_reset_settle?.(ownerId, action);
+    if (!res || res.ok === false) { setActionError(res?.error || "That didn't work. Try again."); return; }
+    setActionError("");
+    if (action === "clear" && draft?.owner?.id === ownerId) {
+      // The open workflow was this PC's copy: it went with it.
+      ++loadGen.current;
+      setDraft(null); setSelectedId(""); writeView({ open: "" });
+    }
+    await refreshList();
+  };
 
   /** Copy or move a whole folder tree to another owner: asks first, saying what goes. */
   const copyFolder = async (fromId: string, path: string, toId: string, move: boolean, counts: { workflows: number; folders: number }) => {
@@ -2308,6 +2340,7 @@ export function AutomationsView() {
         collapsed={listCollapsed} nowMs={nowMs} onToggleCollapsed={() => setListCollapsed((collapsed) => !collapsed)}
         onOpen={(id) => { void openWorkflow(id); const width = rootRef.current?.clientWidth || 0; if (width > 0 && width <= PHONE_EDITOR_W) setListCollapsed(true); }} onCreate={createNew}
         onImportLocal={() => void getApi()?.import_local_workflows?.().then(() => refreshList())}
+        onResetChoice={(ownerId, action) => void resetChoice(ownerId, action)}
         emptyFolders={folderLists} onAddFolder={(ownerId, path) => void rememberFolder(ownerId, path)}
         onMoveWorkflow={(id, ownerId, folder) => moveWorkflow(id, ownerId, folder)}
         onMoveFolder={(ownerId, path, newPath) => moveFolder(ownerId, path, newPath)}

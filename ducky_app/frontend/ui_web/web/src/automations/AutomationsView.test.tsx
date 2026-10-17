@@ -8,7 +8,7 @@ import { setUnsavedWorkflow } from "./unsavedWorkflow";
 import { installAppIdle } from "../utils/appIdle";
 import type { AutomationDto, WorkflowOwnerDto, WorkflowOwnersDto } from "../types/panel";
 
-const api = vi.hoisted(() => ({ stop_workflow: vi.fn(), list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_workflows: vi.fn(), list_workflow_nodes: vi.fn(), get_workflow: vi.fn(), save_workflow: vi.fn(), run_workflow: vi.fn(), delete_workflow: vi.fn(), workflow_owners: vi.fn(), workflow_sync: vi.fn(), copy_workflow: vi.fn(), set_workflow_run_here: vi.fn(), import_local_workflows: vi.fn(), workflow_open_web: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn(), get_workflow_tools_catalog: vi.fn(), set_workflow_folder: vi.fn(), move_workflow_folder: vi.fn(), add_workflow_folder: vi.fn(), copy_workflow_folder: vi.fn(), use_workflow_template: vi.fn(), clear_workflow_runs: vi.fn(), run_workflow_node: vi.fn(), get_workflow_node_code: vi.fn(), check_workflow_node_code: vi.fn(), workflow_code_api: vi.fn(), test_workflow_node: vi.fn(), approve_workflow_node_code: vi.fn() }));
+const api = vi.hoisted(() => ({ stop_workflow: vi.fn(), list_workflow_versions: vi.fn(), get_workflow_version: vi.fn(), list_workflows: vi.fn(), list_workflow_nodes: vi.fn(), get_workflow: vi.fn(), save_workflow: vi.fn(), run_workflow: vi.fn(), delete_workflow: vi.fn(), workflow_owners: vi.fn(), workflow_sync: vi.fn(), copy_workflow: vi.fn(), set_workflow_run_here: vi.fn(), import_local_workflows: vi.fn(), workflow_open_web: vi.fn(), list_recent_projects: vi.fn(), set_project_root: vi.fn(), list_agent_profiles: vi.fn(), list_all_conversations: vi.fn(), get_mcp_tools_catalog: vi.fn(), get_workflow_tools_catalog: vi.fn(), set_workflow_folder: vi.fn(), move_workflow_folder: vi.fn(), add_workflow_folder: vi.fn(), copy_workflow_folder: vi.fn(), use_workflow_template: vi.fn(), clear_workflow_runs: vi.fn(), run_workflow_node: vi.fn(), get_workflow_node_code: vi.fn(), check_workflow_node_code: vi.fn(), workflow_code_api: vi.fn(), test_workflow_node: vi.fn(), approve_workflow_node_code: vi.fn(), report_plugin_panel: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
 vi.mock("./AutomationTemplatePicker", () => ({
   AutomationTemplatePicker: ({ open, owners, ownerId, onOwnerChange, onSelect, folder, onFolderChange, saveFolder }: {
@@ -1687,6 +1687,13 @@ describe("several workflows, live runs, outline and space sync", () => {
     expect(details()).toBeTruthy();
   });
 
+  it("says it is on screen while open, so Ducky pulls shared workflows each minute", async () => {
+    const view = renderView();
+    await waitFor(() => expect(api.report_plugin_panel).toHaveBeenCalledWith("main", "plugin:ducky.automations:workflows", true, true));
+    view.unmount();
+    expect(api.report_plugin_panel).toHaveBeenLastCalledWith("main", "plugin:ducky.automations:workflows", false, false);
+  });
+
   it("syncs a space once when opened and then only after a save, never on a timer", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
@@ -1702,6 +1709,8 @@ describe("several workflows, live runs, outline and space sync", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() => expect(api.workflow_sync).toHaveBeenLastCalledWith(true, "spaceT", true));
       expect(api.workflow_sync).toHaveBeenCalledTimes(2);  // open, then Save updates the space now
+      // With its owner: while that space is locked here the save is refused, never forked into Local.
+      expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "d" }), "spaceT");
     } finally {
       vi.useRealTimers();
     }
@@ -1996,11 +2005,11 @@ describe("right-click menus in the Workflows list", () => {
     const input = screen.getByRole("textbox", { name: "Rename workflow" });
     fireEvent.change(input, { target: { value: "Renamed example" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(api.save_workflow).toHaveBeenCalledWith(expect.objectContaining({ id: "p", name: "Renamed example" })));
+    await waitFor(() => expect(api.save_workflow).toHaveBeenCalledWith(expect.objectContaining({ id: "p", name: "Renamed example" }), "local"));
     expect(api.save_workflow.mock.calls.at(-1)![0]).not.toHaveProperty("folder");  // renaming never refiles it
     fireEvent.contextMenu(screen.getByText("Example"));
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "On" }));
-    await waitFor(() => expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "p", enabled: false })));
+    await waitFor(() => expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "p", enabled: false }), "local"));
     fireEvent.contextMenu(screen.getByText("Example"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
     await waitFor(() => expect(api.save_workflow).toHaveBeenLastCalledWith(expect.objectContaining({ id: "", name: "Renamed example copy", folder: "" }), "local"));

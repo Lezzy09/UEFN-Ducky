@@ -1263,7 +1263,8 @@ def api_request(
                 "Session expired — log in again", code="session_expired"
             ) from exc
         return int(exc.code), parsed, raw
-    except (OSError, urllib.error.URLError, ValueError) as exc:
+    except (OSError, urllib.error.URLError, ValueError, http.client.HTTPException) as exc:
+        # HTTPException: a body cut off mid-read (IncompleteRead), a bad status line.
         raise DuckyOSAccountError(f"Network error: {exc}", code="network") from exc
 
 

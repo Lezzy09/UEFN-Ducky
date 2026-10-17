@@ -3,10 +3,11 @@ signed-out workflows into the account.
 
 Owners are Local plus every shared space this PC keeps a copy of (its sync rows). The
 spaces provider (:mod:`backend.uefn_plugins.spaces`) refreshes which spaces exist and
-runs the rounds. Load rule (the 2026-09-16 outage was a desktop poller): rounds run
-while the Workflows view is open (on open, on focus, each minute; the provider caps
-one per space per minute), plus one background round every 15 minutes, and only for
-spaces where this PC runs a scheduled or triggered shared workflow.
+runs the rounds. Load rule (the 2026-09-16 outage was a desktop poller): the view asks
+for rounds when it opens and after a save (the provider caps one per space per minute),
+a background round every 15 minutes covers spaces where this PC runs a scheduled or
+triggered shared workflow, and :mod:`backend.uefn_plugins.sync_scheduler` keeps the
+rest in step (after writes, every minute while the view is on screen, else every 15).
 """
 
 from __future__ import annotations
@@ -60,6 +61,11 @@ def owners() -> dict[str, Any]:
                 "members": int(st["members"]),
             }
             view["slug"] = runtime.web_slug(aid, scope["id"])
+            if scope["state"] == "reset":
+                # What Upload my copy / Clear my copy act on: the space's whole copy here.
+                from backend.uefn_plugins.spaces import space_contents
+
+                view["resetContents"] = space_contents(aid, scope["id"])
         out.append(view)
     return {"ok": True, "owners": out, "signedIn": aid != LOCAL, "spacesEnabled": provider().enabled(),
             "kindLabel": kind_label, "localImport": owned.local_import_count(aid)}
@@ -84,12 +90,19 @@ def _space_ids() -> list[tuple[str, str]]:
     return [(s["account"], s["id"]) for s in owned.owner_scopes() if s["kind"] == "shared"]
 
 
-def _round(targets: list[tuple[str, str]], force: bool) -> None:
-    from backend.uefn_plugins.spaces import provider
+def _sync_one(account: str, space: str, force: bool) -> dict[str, Any]:
+    """One provider round. One that raises shows on its space (state ``error`` and why,
+    via ``spaces._round_failed``) and the next space still syncs; before, the thread died
+    and the list kept its old "Synced"."""
+    from backend.uefn_plugins.sync_scheduler import run_round
 
+    return run_round(account, space, force=force)
+
+
+def _round(targets: list[tuple[str, str]], force: bool) -> None:
     changed = False
     for account, space in targets:
-        out = provider().sync(account, space, force=force)
+        out = _sync_one(account, space, force)
         changed = changed or bool(out.get("changed")) or not out.get("skipped")
     if changed:
         _announce()
@@ -118,13 +131,13 @@ def sync(*, force: bool = False, space_id: str = "", upload: bool = False) -> di
 def _sync_now(targets: list[tuple[str, str]], *, upload: bool) -> dict[str, Any]:
     from backend.automations.owned import DOC_PLUGIN
     from backend.store.repos import plugin_data as data
-    from backend.uefn_plugins.spaces import provider
 
     errors: list[str] = []
     for account, space in targets:
-        if upload:
+        if upload and data.sync_get(account, space)["state"] != "reset":
+            # A reset copy stays as it is until the person picks Upload or Clear my copy.
             data.mark_plugin_dirty(account, space, DOC_PLUGIN)
-        out = provider().sync(account, space, force=True)
+        out = _sync_one(account, space, True)
         err = str(out.get("error") or "")
         if err:
             errors.append(err)

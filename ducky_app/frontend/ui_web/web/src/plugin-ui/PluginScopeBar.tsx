@@ -3,14 +3,25 @@ import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { getApi } from "../hooks/usePanelApi";
 import { installPanelPushBus, subscribePanelPush } from "../hooks/usePanelPushBus";
 import type { PluginScopeChoice, PluginScopeStatus } from "../types/panel";
-import { setVisibleInterval } from "../utils/visibleInterval";
-import { kindTitle, lostText, storageLine, switchConfirm, syncText } from "./scopeBarText";
+import {
+  dropConfirm,
+  kindTitle,
+  LOCAL_ONLY_TEXT,
+  lostText,
+  notShared,
+  resetConfirm,
+  resetText,
+  storageLine,
+  switchConfirm,
+  syncText,
+  unavailableText,
+  type HeldItem,
+} from "./scopeBarText";
 
-/** Shared pulls: on open, on focus, and each minute while a shared-scope panel is open.
- * The provider also caps it at one call per space per minute. */
-const SYNC_EVERY_MS = 60_000;
 /** Sync now waits for its round's result; a round stuck longer than this frees the button. */
 const SYNC_NOW_GIVE_UP_MS = 120_000;
+/** Changes not shared that are listed before "Show all". */
+const HELD_SHOWN = 3;
 
 /** Help text (same words as the web). */
 const DATA_AT_REST = "Plugin data on each PC is encrypted for the signed-in account.";
@@ -19,9 +30,11 @@ type Props = {
   pluginId: string;
   /** The plugin's data or scope changed: the pane tells the iframe to re-read. */
   onScopeChanged: (status: PluginScopeStatus) => void;
-  /** False while the tab is kept but hidden: no minute sync for a panel nobody sees. */
+  /** False while the tab is kept but hidden: no sync for a panel nobody sees. */
   active?: boolean;
 };
+
+type ActionResult = { ok?: boolean; error?: string } | undefined;
 
 /** Whose data: account + scope. Any change means the plugin must re-read. */
 const scopeKey = (s: PluginScopeStatus | null) =>
@@ -39,6 +52,9 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
   const [menuOpen, setMenuOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [syncing, setSyncing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [allHeld, setAllHeld] = useState(false);
   const notify = useRef(onScopeChanged);
   notify.current = onScopeChanged;
   const last = useRef<PluginScopeStatus | null>(null);
@@ -74,20 +90,18 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
     });
   }, [refresh, pluginId]);
 
+  // Core's scheduler syncs shared copies in the background; the bar only asks for a
+  // round when the panel opens and when the window gets focus (the provider rate-limits).
   const spaceId = status?.visible && status.scope?.kind === "shared" ? status.scope.spaceId : "";
   useEffect(() => {
     if (!spaceId || !active) return;
-    const sync = () => void getApi()?.plugin_scope_sync?.(pluginId, false);
+    const sync = () => {
+      setNow(Date.now());
+      void getApi()?.plugin_scope_sync?.(pluginId, false);
+    };
     sync();
     window.addEventListener("focus", sync);
-    const stop = setVisibleInterval(() => {
-      sync();
-      setNow(Date.now());
-    }, SYNC_EVERY_MS);
-    return () => {
-      window.removeEventListener("focus", sync);
-      stop();
-    };
+    return () => window.removeEventListener("focus", sync);
   }, [spaceId, pluginId, active]);
 
   useEffect(() => {
@@ -98,17 +112,71 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
 
   /** A full round now (sends this PC's changes, brings everyone else's), past the minute cap. */
   const syncNow = async () => {
+    setActionError("");
     setSyncing(true);
-    const res = await getApi()?.plugin_scope_sync?.(pluginId, true);
-    if (!res?.ok || !res.started) setSyncing(false);
+    try {
+      const res = await getApi()?.plugin_scope_sync?.(pluginId, true);
+      if (res?.ok && res.started) return;
+      setSyncing(false);
+      if (res?.ok === false && res.error) setActionError(res.error);
+    } catch (err) {
+      setSyncing(false);
+      setActionError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  /** One bar action; its error stays on the bar until the next one. True when it worked. */
+  const act = async (run: () => Promise<ActionResult>, dataChanged = false): Promise<boolean> => {
+    setActionError("");
+    setBusy(true);
+    try {
+      const res = await run();
+      if (res?.ok === false) {
+        setActionError(res.error || "That didn't work. Try again.");
+        return false;
+      }
+      await refresh(dataChanged);
+      return true;
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+      return false;
+    } finally {
+      setBusy(false);
+    }
   };
 
   if (!status?.visible || !status.scope) return null;
   const scope = status.scope;
   const shared = scope.kind === "shared";
+
+  if (!shared && status.shareable === false) {
+    // Nothing of this plugin goes through the host data service: no space to offer.
+    return (
+      <div className="plugin-scope-bar plugin-scope-bar--personal" role="status" aria-live="polite" aria-label="Plugin data: local">
+        <span className="plugin-scope-bar__badge plugin-scope-bar__badge--local">Local</span>
+        <span className="plugin-scope-bar__text">{LOCAL_ONLY_TEXT}</span>
+      </div>
+    );
+  }
+
+  const api = getApi();
   const kind = (status.kindLabel || "space").toLowerCase();
+  const plugin = status.pluginLabel || pluginId;
   const current = shared ? scope.spaceId : "personal";
   const storage = shared ? storageLine(status.usage) : null;
+  const state = status.state || "";
+  const waiting = shared && state === "waiting";
+  const locked = state === "locked";
+  const lost = shared && state === "lost";
+  const unavailable = shared && state === "unavailable";
+  const reset = shared && state === "reset";
+  // While reset, Retry and Drop wait: Upload or Clear my copy decides for the whole copy.
+  const canRetry = Boolean(api?.plugin_scope_retry) && !reset;
+  const canDrop = Boolean(api?.plugin_scope_drop) && !reset;
+  const canSettle = Boolean(api?.space_reset_settle);
+  const held = shared && !lost ? notShared(status) : { count: 0, items: [] };
+  const heldShown = allHeld ? held.items : held.items.slice(0, HELD_SHOWN);
+  const fixable = held.items.filter((item) => item.fixable).length;
 
   const toggleMenu = async () => {
     if (menuOpen) {
@@ -125,25 +193,54 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
   const choose = async (choice: PluginScopeChoice) => {
     setMenuOpen(false);
     if (choice.id === current) return;
-    const ok = await confirm({ ...switchConfirm(status.pluginLabel || pluginId, choice), confirmLabel: "Switch" });
+    // Counts as of now: the background scheduler may have sent some since the last refresh.
+    if (shared) await refresh();
+    const before = last.current ?? status;
+    const from = shared ? { label: scope.label, pending: before.pending ?? 0, held: notShared(before).count } : undefined;
+    const ok = await confirm({ ...switchConfirm(plugin, choice, from), confirmLabel: "Switch" });
     if (ok !== true) return;
+    setActionError("");
     const next = await getApi()?.plugin_scope_set?.(pluginId, choice.id);
     if (next?.ok === false && next.error) {
-      setStatus({ ...status, error: next.error });
+      setActionError(next.error);
       return;
     }
     await refresh();
   };
 
-  const waiting = shared && status.state === "waiting";
-  const locked = status.state === "locked";
-  const lost = shared && status.state === "lost";
+  /** Send refused or blocked changes again (all of them without a key), then sync. */
+  const retry = async (key?: string) => {
+    // No key at all for "every one" (the bridge would send null for undefined).
+    const run = async () => (key ? getApi()?.plugin_scope_retry?.(pluginId, key) : getApi()?.plugin_scope_retry?.(pluginId));
+    if (await act(run)) void syncNow();
+  };
+
+  const drop = async (item: HeldItem) => {
+    const ok = await confirm({ ...dropConfirm(scope.label, item.key), confirmLabel: "Drop my change", danger: true });
+    if (ok !== true) return;
+    await act(async () => getApi()?.plugin_scope_drop?.(pluginId, item.kind, item.key), true);
+  };
+
+  /** Upload my copy / Clear my copy: for this PC's whole copy of the space, which the
+   * confirm names. The host starts the round. */
+  const settle = async (action: "upload" | "clear") => {
+    const ask = resetConfirm(action, scope.label, status.resetContents ?? []);
+    const ok = await confirm(action === "upload"
+      ? { ...ask, confirmLabel: "Upload my copy" }
+      : { ...ask, confirmLabel: "Yes, clear it", danger: true });
+    if (ok !== true) return;
+    await act(async () => getApi()?.space_reset_settle?.(scope.spaceId, action), action === "clear");
+  };
+
   const variant = shared ? (scope.readOnly && !waiting && !locked ? "paused" : "shared") : "personal";
   const paused = status.pausedText || `${scope.label} is paused. Read-only.`;
+  // Shown in the phrase already: an unavailable copy's reason, and why nothing syncs.
+  const errorInPhrase = state === "offline" || state === "unavailable" || state === "no_provider";
   return (
     <div
       className={`plugin-scope-bar plugin-scope-bar--${variant}`}
       role="status"
+      aria-live="polite"
       aria-label={shared ? `Plugin data: ${kind} ${scope.label}` : "Plugin data: local"}
       title={DATA_AT_REST}
     >
@@ -161,6 +258,22 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
         <span className="plugin-scope-bar__text">Waiting for {kind} data. Read-only until it arrives.</span>
       ) : lost ? (
         <span className="plugin-scope-bar__text">{lostText(scope.label, status.deleteAt)}</span>
+      ) : unavailable ? (
+        <span className="plugin-scope-bar__text">{unavailableText(scope.label, status.error)}</span>
+      ) : reset ? (
+        <>
+          <span className="plugin-scope-bar__text">{resetText(scope.label, kind, canSettle)}</span>
+          {canSettle ? (
+            <>
+              <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void settle("upload")}>
+                Upload my copy
+              </button>
+              <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void settle("clear")}>
+                Clear my copy
+              </button>
+            </>
+          ) : null}
+        </>
       ) : shared && scope.readOnly ? (
         <>
           <span className="plugin-scope-bar__text">{paused}</span>
@@ -203,10 +316,13 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
           )}
         </>
       )}
-      {status.error && status.state !== "offline" ? (
+      {status.error && !errorInPhrase ? (
         <span className="plugin-scope-bar__text plugin-scope-bar__text--error">{status.error}</span>
       ) : null}
-      {shared && !lost && !locked ? (
+      {actionError && actionError !== status.error ? (
+        <span className="plugin-scope-bar__text plugin-scope-bar__text--error">{actionError}</span>
+      ) : null}
+      {shared && !lost && !locked && !reset ? (
         <button
           type="button"
           className="plugin-scope-bar__link plugin-scope-bar__sync"
@@ -250,6 +366,58 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
           </span>
         ) : null}
       </span>
+      {held.count ? (
+        <div className="plugin-scope-bar__held">
+          <span className="plugin-scope-bar__held-title">Not shared: {held.count}</span>
+          {canRetry && fixable > 1 ? (
+            <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void retry()}>
+              Retry all
+            </button>
+          ) : null}
+          <ul className="plugin-scope-bar__held-list">
+            {heldShown.map((item) => (
+              <li key={`${item.kind}:${item.key}`} className="plugin-scope-bar__held-item">
+                <span>{item.text}</span>
+                {item.fixable && canRetry ? (
+                  <button
+                    type="button"
+                    className="plugin-scope-bar__link"
+                    aria-label={`Retry ${item.key}`}
+                    disabled={busy}
+                    onClick={() => void retry(item.key)}
+                  >
+                    Retry
+                  </button>
+                ) : null}
+                {item.fixable && canDrop ? (
+                  <button
+                    type="button"
+                    className="plugin-scope-bar__link"
+                    aria-label={`Drop my change to ${item.key}`}
+                    disabled={busy}
+                    onClick={() => void drop(item)}
+                  >
+                    Drop my change
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          {held.items.length > HELD_SHOWN ? (
+            <button
+              type="button"
+              className="plugin-scope-bar__link"
+              aria-expanded={allHeld}
+              onClick={() => setAllHeld(!allHeld)}
+            >
+              {allHeld ? "Show fewer" : `Show all ${held.items.length}`}
+            </button>
+          ) : null}
+          {held.count > held.items.length ? (
+            <span className="plugin-scope-bar__text">{held.count - held.items.length} more not listed</span>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

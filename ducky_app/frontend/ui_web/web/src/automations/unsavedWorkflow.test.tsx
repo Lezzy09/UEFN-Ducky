@@ -7,7 +7,7 @@ import { guardUnsavedWorkflow, setUnsavedWorkflow, unsavedWorkflow, UnsavedWorkf
 const api = vi.hoisted(() => ({ save_workflow: vi.fn(), workflow_sync: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
 
-const edited: AutomationDto = { id: "p", name: "Example", enabled: true, folder: "Tests", graph: { nodes: [{ id: "s", type: "start.chat", x: 40, y: 0, config: {} }], edges: [] } };
+const edited: AutomationDto = { id: "p", name: "Example", enabled: true, folder: "Tests", owner: { id: "spaceT", kind: "shared", label: "Alpha" }, graph: { nodes: [{ id: "s", type: "start.chat", x: 40, y: 0, config: {} }], edges: [] } };
 
 afterEach(() => { cleanup(); setUnsavedWorkflow(null); window.localStorage.clear(); vi.clearAllMocks(); });
 
@@ -18,7 +18,7 @@ describe("closing Workflows with unsaved edits (its editor in the background)", 
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("Save sends the kept edits (never refiling the workflow), then lets go", async () => {
+  it("Save sends the kept edits with their owner (never refiling the workflow), then lets go", async () => {
     api.save_workflow.mockResolvedValue({ workflow: { ...edited, owner: { id: "local", kind: "local" } } });
     render(<UnsavedWorkflowPrompt />);
     setUnsavedWorkflow(edited);
@@ -29,7 +29,7 @@ describe("closing Workflows with unsaved edits (its editor in the background)", 
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await expect(answer).resolves.toBe(true);
     const { folder: _folder, ...body } = edited;
-    expect(api.save_workflow).toHaveBeenCalledWith(body);
+    expect(api.save_workflow).toHaveBeenCalledWith(body, "spaceT");  // refused, never forked, while that space is locked
     expect(unsavedWorkflow()).toBeNull();
   });
 

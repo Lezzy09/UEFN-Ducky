@@ -544,6 +544,9 @@ export interface WorkflowOwnerDto {
   slug?: string;
   /** The owner's kept folders, empty ones too (a space's sync to everyone in it); the list adds the folders its rows are filed in. */
   folders?: string[];
+  /** State `reset`: what this PC keeps of the space (plugin names, then "Workflows"), all of
+   * which Upload my copy / Clear my copy act on. */
+  resetContents?: string[];
 }
 
 /** A folder with everything in it, as one value (export_workflow_folder). Paths are
@@ -2248,6 +2251,9 @@ export interface PluginScopeStatus {
   /** False while the account has no shared spaces to offer, or the plugin never shares
    * its data (`"data_sharing": false`): no bar at all. */
   visible?: boolean;
+  /** False for a plugin that keeps its own files (nothing goes through the host data
+   * service): no shared space is offered, and a visible bar says Local only. */
+  shareable?: boolean;
   /** How shared spaces are named (the provider's word for it); "space" when unset. */
   kindLabel?: string;
   scope?: PluginScopeView;
@@ -2256,11 +2262,23 @@ export interface PluginScopeStatus {
   email?: string;
   canChange?: boolean;
   members?: number;
-  /** ok | paused | offline | error | unavailable | waiting | locked | lost (access to the space lost) */
+  /** ok | paused | offline | error | unavailable | waiting | locked | lost (access to the
+   * space lost) | reset (its data was reset on the server) | no_provider (nothing to sync
+   * with; changes still queue). `error` carries the reason. */
   state?: string;
   error?: string;
   syncedAt?: number | null;
+  /** This plugin's changes still to send (refused and blocked ones aren't counted). */
   pending?: number;
+  /** This plugin's changes that aren't going out, per state (shared copy only). */
+  refused?: number;
+  blocked?: number;
+  conflict?: number;
+  /** Those changes, newest first, each with its reason. */
+  items?: PluginScopeItem[];
+  /** State `reset`: what this PC keeps of the space (plugin names, then "Workflows"), all of
+   * which Upload my copy / Clear my copy act on. */
+  resetContents?: string[];
   usage?: PluginScopeUsage;
   /** This plugin's Local copy, and the copy it shows now (the same when Local). */
   local?: PluginDataTotals;
@@ -2272,6 +2290,19 @@ export interface PluginScopeStatus {
   pausedAction?: { label: string; path: string };
   /** Lost access: when (epoch seconds) the locked copy leaves this PC unless access comes back. */
   deleteAt?: number;
+}
+
+/** One of a plugin's changes that isn't going out to its shared space. */
+export interface PluginScopeItem {
+  /** doc | asset */
+  kind: string;
+  key: string;
+  /** refused (by the server) | blocked (failed too often) | conflict | locked_out */
+  state: string;
+  reason?: string;
+  attempts?: number;
+  /** The change is a delete. */
+  deleted?: boolean;
 }
 
 export interface PluginDataTotals {
@@ -3981,12 +4012,23 @@ export interface PanelApi {
   plugin_scope_status?(plugin_id: string): Promise<PluginScopeStatus>;
   /** Asks the spaces provider — only when a picker opens. */
   plugin_scope_choices?(): Promise<{ ok?: boolean; choices?: PluginScopeChoice[]; kindLabel?: string; emptyNote?: string; error?: string }>;
-  plugin_scope_set?(plugin_id: string, scope_id: string): Promise<PluginScopeStatus>;
+  /** Switches the plugin's copy; changes still queued for the shared space it leaves are
+   * sent first (up to 30 s). `unsent`: how many of them didn't go (they stay in that copy). */
+  plugin_scope_set?(plugin_id: string, scope_id: string): Promise<PluginScopeStatus & { unsent?: number; unsentLabel?: string }>;
   /** An error inside a plugin panel (bridge `panel.error`), for ducky_plugin_errors. */
   plugin_panel_error?(plugin_id: string, panel_id: string, kind: string, message: string, stack: string): Promise<{ ok?: boolean }>;
   plugin_scope_sync?(plugin_id: string, force?: boolean): Promise<{ ok?: boolean; started?: boolean; error?: string }>;
-  /** One way, on request: the plugin's Local data into one shared space's copy (its items are kept). */
-  plugin_data_copy_to_space?(plugin_id: string, space_id: string): Promise<{ ok?: boolean; copied?: number; kept?: number; error?: string }>;
+  /** Send a refused or blocked change again; without `key`, every one of them. Refused while
+   * the space's data is reset on the server (Upload or Clear my copy comes first). */
+  plugin_scope_retry?(plugin_id: string, key?: string): Promise<{ ok?: boolean; error?: string }>;
+  /** Drop this PC's refused or blocked change (the team's copy comes back on the next pull). */
+  plugin_scope_drop?(plugin_id: string, kind: string, key: string): Promise<{ ok?: boolean; error?: string }>;
+  /** A space whose data was reset on the server: Upload my copy or Clear my copy, for this
+   * PC's whole copy of it (every plugin's data and its workflows). */
+  space_reset_settle?(space_id: string, action: "upload" | "clear"): Promise<{ ok?: boolean; error?: string; queued?: number; cleared?: number }>;
+  /** One way, on request: the plugin's Local data into one shared space's copy (its items are
+   * kept). `tooBig`: keys left Local because they wouldn't fit once sealed. */
+  plugin_data_copy_to_space?(plugin_id: string, space_id: string): Promise<{ ok?: boolean; copied?: number; kept?: number; tooBig?: string[]; error?: string }>;
   /** Opens the shared space's copy of this plugin's data on the web. */
   plugin_data_open_web?(plugin_id: string): Promise<{ ok?: boolean; url?: string; error?: string }>;
   plugin_prefs_get_all?(): Promise<{

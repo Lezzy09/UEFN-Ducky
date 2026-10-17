@@ -93,6 +93,16 @@ def archive(conn: Any, workflow_id: str, saved_at: float, snapshot: str) -> None
     )
 
 
+def copy_versions(conn: Any, old_id: str, new_id: str) -> None:
+    """Inside the caller's transaction: ``new_id`` gets a copy of every saved version of
+    ``old_id``, oldest first (a workflow split off another keeps its History)."""
+    rows = conn.execute(
+        "SELECT saved_at, snapshot FROM workflow_versions WHERE workflow_id=? ORDER BY sequence", (old_id,)
+    ).fetchall()
+    for saved_at, snapshot in rows:
+        archive(conn, new_id, float(saved_at or 0), str(snapshot))
+
+
 def has_versions(workflow_id: str) -> bool:
     return db.connect().execute(
         "SELECT 1 FROM workflow_versions WHERE workflow_id=? LIMIT 1", (workflow_id,)

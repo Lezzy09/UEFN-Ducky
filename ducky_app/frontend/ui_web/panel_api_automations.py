@@ -210,7 +210,7 @@ class PanelApiAutomationsMixin:
 
         try:
             ok = delete_workflow(workflow_id)
-        except PermissionError as exc:
+        except (PermissionError, ValueError) as exc:
             return _refused(exc)
         return {"ok": True} if ok else {"ok": False, "error": "workflow not found"}
 

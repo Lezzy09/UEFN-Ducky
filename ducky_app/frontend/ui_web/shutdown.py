@@ -47,6 +47,17 @@ def _stop_all_terminals() -> None:
         pass
 
 
+def _flush_space_sync() -> None:
+    """Send shared-space changes still queued, for at most 5 s (the provider plugin is
+    still loaded)."""
+    try:
+        from backend.uefn_plugins.sync_scheduler import flush
+
+        flush(timeout=5.0)
+    except Exception:
+        pass
+
+
 def _stop_mcp_plugins() -> None:
     try:
         from backend.mcp_plugins.client_pool import shutdown_plugin_pool
@@ -149,6 +160,7 @@ def hard_exit(*, api: Any = None) -> None:
     _stop_all_agents()
     _stop_cpu_workers()
     _stop_all_terminals()
+    _flush_space_sync()
     _stop_mcp_plugins()
     release_panel_process()
     if api is not None:

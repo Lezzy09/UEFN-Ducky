@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { getApi } from "../../../hooks/usePanelApi";
 import { installPanelPushBus, subscribePanelPush } from "../../../hooks/usePanelPushBus";
 import { Icons } from "../../../icons/Icons";
-import { formatBytes, kindTitle, syncText } from "../../../plugin-ui/scopeBarText";
+import { formatBytes, kindTitle, LOCAL_ONLY_TEXT, syncText } from "../../../plugin-ui/scopeBarText";
 import type { PluginDataTotals, PluginScopeChoice, PluginScopeStatus } from "../../../types/panel";
 
 /** "12 docs · 3 files · 4.2 MB", or that nothing is stored. */
@@ -59,6 +59,18 @@ export function PluginDataPanel({ pluginId, name }: { pluginId: string; name: st
   if (!status?.visible || !status.scope) return null;
   const scope = status.scope;
   const shared = scope.kind === "shared";
+  if (!shared && status.shareable === false) {
+    // Nothing of this plugin goes through the host data service: no space to offer.
+    return (
+      <div className="ds-panel ds-data">
+        <h3 className="ds-panel-title">Data</h3>
+        <p className="ds-data-where">
+          <span className="ds-data-pill ds-data-pill--local"><Icons.Monitor />Local</span>
+          <span className="ds-data-help">{LOCAL_ONLY_TEXT}</span>
+        </p>
+      </div>
+    );
+  }
   const kind = (status.kindLabel || "space").toLowerCase();
   const where = shared ? `${kindTitle(kind)} · ${scope.label}` : "Local";
   const locked = readOnlyText(status, kind);
@@ -97,7 +109,8 @@ export function PluginDataPanel({ pluginId, name }: { pluginId: string; name: st
       const res = await getApi()?.plugin_data_copy_to_space?.(pluginId, scope.spaceId);
       if (!res || res.ok === false) return res?.error || "Could not copy.";
       const kept = res.kept ? ` ${res.kept} ${res.kept === 1 ? "item" : "items"} ${scope.label} already had stayed as they were.` : "";
-      return `Copied ${res.copied ?? 0} ${res.copied === 1 ? "item" : "items"} into ${scope.label}.${kept}`;
+      const big = res.tooBig?.length ? ` ${res.tooBig.length} too big to share stayed Local.` : "";
+      return `Copied ${res.copied ?? 0} ${res.copied === 1 ? "item" : "items"} into ${scope.label}.${kept}${big}`;
     });
 
   return (

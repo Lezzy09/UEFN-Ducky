@@ -403,10 +403,6 @@
 .plugin-scope-bar__sync + .plugin-scope-bar__change {
   margin-left: 0;
 }
-.plugin-scope-bar__sync:disabled {
-  color: var(--muted, #888);
-  cursor: default;
-}
 .plugin-scope-bar__link {
   padding: 0;
   border: 0;
@@ -414,6 +410,40 @@
   color: var(--accent, #d4a017);
   font: inherit;
   cursor: pointer;
+}
+.plugin-scope-bar__link:disabled {
+  color: var(--muted, #888);
+  cursor: default;
+}
+/* Changes that aren't going out: their own rows under the line, until they're fixed. */
+.plugin-scope-bar__held {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+}
+.plugin-scope-bar__held-title {
+  font-weight: 600;
+  color: var(--fg, #e6e6e6);
+}
+.plugin-scope-bar__held-list {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.plugin-scope-bar__held-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 10px;
+}
+.plugin-scope-bar__held-item > span {
+  overflow-wrap: anywhere;
 }
 .plugin-scope-bar__link:focus-visible,
 .plugin-scope-bar__menu-item:focus-visible {

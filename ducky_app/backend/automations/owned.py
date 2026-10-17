@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 import uuid
 from typing import Any
@@ -29,6 +30,8 @@ from backend.store.repos import plugin_data as data
 from backend.store.repos import workflows as runtime
 from backend.uefn_plugins import scopes
 
+_log = logging.getLogger(__name__)
+
 DOC_PLUGIN = "ducky.automations"
 LOCAL = "local"
 RUN_CAP = 20
@@ -37,9 +40,14 @@ NO_PERMISSION = "This account can't change these workflows."
 _DOC_FIELDS = ("id", "name", "description", "enabled", "folder", "graph", "updated", "created_by")
 FOLDERS_KEY = "_folders"  # never a workflow id (save refuses it)
 FOLDERS_MAX = 2000
+_UNLISTED = ("unavailable", "lost")  # space states whose workflows are locked on this PC
 
 _CLAIMED: set[tuple[str, str]] = set()  # (database file, account) checked this process
+_SPLIT: set[tuple[str, str]] = set()  # (database file, account) whose forked ids were split this process
 _CLAIM_LOCK = threading.Lock()
+_DUPLICATES: set[tuple[str, ...]] = set()  # (workflow id, owner ids…) already logged
+AMBIGUOUS = ("More than one copy on this PC has this workflow's id, so it isn't clear which one you mean. "
+             "Restart UEFN Ducky and try again.")
 
 
 class ReadOnlyOwner(PermissionError):
@@ -52,6 +60,7 @@ class ReadOnlyOwner(PermissionError):
 def account() -> str:
     aid = scopes.account_id()
     _claim_legacy(aid)
+    _split_forks(aid)
     return aid
 
 
@@ -64,20 +73,39 @@ def _refusal(scope: dict[str, Any]) -> str:
     return provider().workflow_edit_refusal(scope["account"], scope["id"], scope["label"]) or NO_PERMISSION
 
 
+def _space_scopes(aid: str) -> list[dict[str, Any]]:
+    """Every shared space this account keeps a copy of, whatever its state."""
+    if aid == scopes.LOCAL:
+        return []
+    return [scopes.shared_scope(aid, space) for space in runtime.synced_spaces(aid) if scopes.valid_space_id(space)]
+
+
 def owner_scopes(aid: str | None = None) -> list[dict[str, Any]]:
     """Local first, then every shared space this account keeps a copy of. A space whose
-    access was lost is left out: its workflows stay locked on this PC (not listed,
-    never run) until access comes back or the copy goes."""
+    access was lost, or that isn't available now, is left out: its workflows stay locked
+    on this PC (not listed, never run) until it is back or the copy goes."""
     aid = aid or account()
-    out = [scopes.personal_scope(aid)]
-    if aid == scopes.LOCAL:
-        return out
-    for space in runtime.synced_spaces(aid):
-        if scopes.valid_space_id(space):
-            scope = scopes.shared_scope(aid, space)
-            if scope["state"] not in ("unavailable", "lost"):
-                out.append(scope)
-    return out
+    return [scopes.personal_scope(aid)] + [s for s in _space_scopes(aid) if s["state"] not in _UNLISTED]
+
+
+def unlisted_reason(scope: dict[str, Any]) -> str:
+    """Why a space :func:`owner_scopes` leaves out takes no changes from this PC."""
+    if scope["state"] == "lost":
+        return f"You no longer have access to {scope['label']}. Its workflows on this PC are locked."
+    why = f" ({scope['reason']})" if scope.get("reason") else ""
+    return f"{scope['label']} isn't available right now{why}. Its workflows can't change until it's back."
+
+
+def held_unlisted(workflow_id: str, aid: str | None = None) -> dict[str, Any] | None:
+    """The left-out space (access lost, not available now) that still holds this workflow
+    on this PC: a save must refuse instead of forking it into Local under the same id."""
+    aid = aid or account()
+    for scope in _space_scopes(aid):
+        if scope["state"] in _UNLISTED:
+            row = data.get(aid, scope["id"], DOC_PLUGIN, "doc", workflow_id)
+            if row and not row["deleted"]:
+                return scope
+    return None
 
 
 def _reason(scope: dict[str, Any]) -> str:
@@ -86,6 +114,9 @@ def _reason(scope: dict[str, Any]) -> str:
         return "Waiting for your account's data key. Read-only until you're back online."
     if state == "waiting":
         return f"Waiting for {scope['label']}'s data. Read-only until it arrives."
+    if state == "reset":
+        return (f"{scope['label']}'s data was reset on the server. Read-only until you choose what to do with "
+                "this PC's copy.")
     # Paused still lists the space and still takes workflows; sharing waits until it resumes.
     return _refusal(scope)
 
@@ -110,10 +141,14 @@ def owner_view(scope: dict[str, Any]) -> dict[str, Any]:
 
 
 def scope_for(owner: str, aid: str | None = None) -> dict[str, Any]:
+    aid = aid or account()
     key = (owner or LOCAL).strip()
     for scope in owner_scopes(aid):
         if (scope["kind"] == "personal" and key in (LOCAL, scopes.PERSONAL)) or scope["id"] == key:
             return scope
+    for scope in _space_scopes(aid):
+        if scope["id"] == key:
+            raise ReadOnlyOwner(unlisted_reason(scope))
     raise ValueError(f"unknown workflow owner: {key}")
 
 
@@ -166,16 +201,67 @@ def docs(scope: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def find(workflow_id: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    """``(scope, doc)`` of a workflow this account can see."""
+def _held(workflow_id: str) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     wid = (workflow_id or "").strip()
     if not scopes.valid_doc_key(wid) or wid == FOLDERS_KEY:
-        return None
+        return []
+    held = []
     for scope in owner_scopes():
-        doc = _doc_of(data.get(scope["account"], scope["id"], DOC_PLUGIN, "doc", wid), scope["account"])
+        row = data.get(scope["account"], scope["id"], DOC_PLUGIN, "doc", wid)
+        if row and not row["deleted"] and row["value"] is not None:
+            held.append((scope, row))
+    return held
+
+
+def holders(workflow_id: str) -> list[dict[str, Any]]:
+    """The owners holding a workflow under this id: more than one only for a duplicate
+    id (:func:`find`), which an action by id alone must not guess at."""
+    return [scope for scope, _ in _held(workflow_id)]
+
+
+def find(workflow_id: str, owner: str = "") -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """``(scope, doc)`` of a workflow this account can see; ``owner``'s copy (an owner id,
+    ``local``) when it holds one. Ids are unique per account (:func:`_split_forks`); one
+    held by more than one owner all the same (pulled since) resolves to the space's copy,
+    so this PC keeps following the team's, and the duplicate is logged."""
+    held = _held(workflow_id)
+    if len(held) > 1:
+        _note_duplicate(workflow_id.strip(), [scope for scope, _ in held])
+    held.sort(key=lambda hit: hit[0]["kind"] != "shared")  # stable: the first space's copy, else Local
+    if owner:
+        held.sort(key=lambda hit: not _is_owner(hit[0], owner))
+    for scope, row in held:
+        doc = _doc_of(row, scope["account"])
         if doc is not None:
             return scope, doc
     return None
+
+
+def _is_owner(scope: dict[str, Any], owner: str) -> bool:
+    key = owner.strip()
+    return scope["id"] == key or (scope["kind"] == "personal" and key in (LOCAL, scopes.PERSONAL))
+
+
+def _note_duplicate(workflow_id: str, owners: list[dict[str, Any]]) -> None:
+    mark = (workflow_id, *(scope["id"] for scope in owners))
+    if mark in _DUPLICATES:
+        return
+    _DUPLICATES.add(mark)
+    _log.warning(
+        "workflow %s is in more than one owner (%s); the shared copy is the one used", workflow_id,
+        ", ".join(scope["label"] for scope in owners),
+    )
+
+
+def _body(doc: dict[str, Any]) -> dict[str, Any]:
+    """The synced part of a workflow (created_by only when set: older workflows keep their
+    exact stored form)."""
+    return {key: doc.get(key) for key in _DOC_FIELDS if key != "created_by" or doc.get(key)}
+
+
+def _max_bytes(scope: dict[str, Any]) -> int:
+    """A doc's size limit in ``scope``: a shared copy's is what still fits once sealed."""
+    return scopes.DOC_MAX_BYTES - (scopes.SHARED_SEAL_OVERHEAD if scope["kind"] == "shared" else 0)
 
 
 def write(scope: dict[str, Any], doc: dict[str, Any], *, versions: tuple[dict[str, Any], ...] = ()) -> None:
@@ -185,11 +271,10 @@ def write(scope: dict[str, Any], doc: dict[str, Any], *, versions: tuple[dict[st
     from backend.store import db
     from backend.uefn_plugins.data_crypto import seal_text
 
-    # created_by only when set: older workflows keep their exact stored form.
-    body = {key: doc.get(key) for key in _DOC_FIELDS if key != "created_by" or doc.get(key)}
-    raw = scopes.encode_doc(body)
-    if len(raw) > scopes.DOC_MAX_BYTES:
-        raise ValueError("This workflow is over 1 MB. Split it into smaller workflows.")
+    raw = scopes.encode_doc(_body(doc))
+    if len(raw) > _max_bytes(scope):
+        size = "too big to share" if scope["kind"] == "shared" else "over 1 MB"
+        raise ValueError(f"This workflow is {size}. Split it into smaller workflows.")
     aid, wid = scope["account"], str(doc["id"])
     sha = hashlib.sha256(raw).hexdigest()
     old = data.get(aid, scope["id"], DOC_PLUGIN, "doc", wid)
@@ -219,6 +304,9 @@ def write_folders(scope: dict[str, Any], paths: list[str]) -> None:
     from backend.uefn_plugins.data_crypto import seal_text
 
     raw = scopes.encode_doc({"folders": list(paths)[:FOLDERS_MAX]})
+    if len(raw) > _max_bytes(scope):
+        size = "too big to share" if scope["kind"] == "shared" else "over 1 MB"
+        raise ValueError(f"The folder list is {size}. Use fewer or shorter folder names.")
     aid = scope["account"]
     sha = hashlib.sha256(raw).hexdigest()
     old = data.get(aid, scope["id"], DOC_PLUGIN, "doc", FOLDERS_KEY)
@@ -236,8 +324,9 @@ def remove(scope: dict[str, Any], workflow_id: str) -> bool:
     old = data.get(aid, scope["id"], DOC_PLUGIN, "doc", workflow_id)
     if not old or old["deleted"]:
         return False
-    data.remove(aid, scope["id"], DOC_PLUGIN, "doc", workflow_id,
-                tombstone=scope["kind"] == "shared" and old["rev"] > 0)
+    # Always a tombstone in a shared copy: the server may hold it even at rev 0 (a push in
+    # flight, a lost answer), and a delete of an item it never had is harmless.
+    data.remove(aid, scope["id"], DOC_PLUGIN, "doc", workflow_id, tombstone=scope["kind"] == "shared")
     return True
 
 
@@ -365,6 +454,60 @@ def _claim_legacy(aid: str) -> None:
         _CLAIMED.add(key)
 
 
+def _in_a_space(aid: str, spaces: list[str], workflow_id: str) -> bool:
+    return any((row := data.get(aid, space, DOC_PLUGIN, "doc", workflow_id)) and not row["deleted"]
+               for space in spaces)
+
+
+def _split_forks(aid: str) -> None:
+    """Older builds saved a space's workflow into Local under the space's id while that
+    space wasn't listed here, so one id named two workflows and an action by id (Delete,
+    a move) could hit the team's copy instead of this PC's. Each such Local copy gets a
+    fresh id; its runs, saved versions and code approvals come along. Once per process
+    per account, before anything lists workflows: saves refuse to fork since."""
+    from backend.store import db
+    from backend.uefn_plugins.data_crypto import available
+
+    key = (str(db.db_path()), aid)
+    if key in _SPLIT:
+        return
+    with _CLAIM_LOCK:
+        if key in _SPLIT:
+            return
+        if aid != scopes.LOCAL:
+            if not available(aid):
+                return  # locked: nothing can be sealed yet, try again on the next call
+            spaces = [space for space in runtime.synced_spaces(aid) if scopes.valid_space_id(space)]
+            for row in data.rows(aid, scopes.PERSONAL, DOC_PLUGIN, "doc") if spaces else []:
+                if row["key"] != FOLDERS_KEY and _in_a_space(aid, spaces, row["key"]):
+                    _split(aid, spaces, row["key"])
+        _SPLIT.add(key)
+
+
+def _split(aid: str, spaces: list[str], workflow_id: str) -> None:
+    from backend.automations.store import carry_approvals
+    from backend.store import db
+    from backend.uefn_plugins.data_crypto import seal_text
+
+    new_id = str(uuid.uuid4())
+    conn = db.connect()
+    with db.write_txn(conn):
+        # Read again inside the transaction: another process may have split it already.
+        doc = _doc_of(data.get(aid, scopes.PERSONAL, DOC_PLUGIN, "doc", workflow_id), aid)
+        if doc is None or not _in_a_space(aid, spaces, workflow_id):
+            return
+        raw = scopes.encode_doc(_body({**doc, "id": new_id}))
+        data.upsert(conn, aid, scopes.PERSONAL, DOC_PLUGIN, "doc", new_id, value=seal_text(raw.decode("utf-8"), aid),
+                    size=len(raw), sha256=hashlib.sha256(raw).hexdigest(), dirty=False)
+        data.delete_row(conn, aid, scopes.PERSONAL, DOC_PLUGIN, "doc", workflow_id)
+        legacy.copy_versions(conn, workflow_id, new_id)
+    old = runtime.runtime_get(aid, workflow_id)  # the run log is per id here: both copies' runs
+    if old["runs"] or old["last_run"]:
+        runtime.runtime_put(aid, new_id, runs=old["runs"], last_run=old["last_run"])
+    carry_approvals({"id": new_id, "graph": doc.get("graph"), "owner": {"kind": LOCAL}}, [workflow_id])
+    _log.info("workflow %s: this PC's Local copy of a space's workflow now has its own id, %s", workflow_id, new_id)
+
+
 def local_import_count(aid: str) -> int:
     """Workflows made while signed out on this PC, offered to the signed-in account."""
     if aid == scopes.LOCAL:
@@ -399,3 +542,4 @@ def import_local(aid: str) -> int:
 
 def reset_for_tests() -> None:
     _CLAIMED.clear()
+    _SPLIT.clear()

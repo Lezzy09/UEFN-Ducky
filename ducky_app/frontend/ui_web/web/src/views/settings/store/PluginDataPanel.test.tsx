@@ -70,8 +70,19 @@ describe("Plugins page → Data", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
     await waitFor(() => expect(api.plugin_data_copy_to_space).toHaveBeenCalledWith("brainrot-tcg", "spaceT"));
     expect(await screen.findByText(/Copied 3 items into Alpha Studio. 1 item Alpha Studio already had stayed as they were./)).toBeTruthy();
+    api.plugin_data_copy_to_space.mockResolvedValue({ ok: true, copied: 0, kept: 0, tooBig: ["scene.big"] });
+    fireEvent.click(screen.getByRole("button", { name: "Copy Local data into Alpha Studio" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    expect(await screen.findByText("Copied 0 items into Alpha Studio. 1 too big to share stayed Local.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /View on the web/ }));
     expect(api.plugin_data_open_web).toHaveBeenCalledWith("brainrot-tcg");
+  });
+
+  it("says Local only for a plugin that keeps its own files, with nothing to pick", async () => {
+    api.plugin_scope_status.mockResolvedValue({ ...LOCAL, shareable: false });
+    render(<PluginDataPanel pluginId="scene-maker" name="Scene Maker" />);
+    expect(await screen.findByText("Local only: this plugin keeps its own files")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Keep data in…" })).toBeNull();
   });
 
   it("keeps a read-only shared copy from being written", async () => {

@@ -584,7 +584,7 @@ def delete_workflow(workflow_id: str, confirmed: bool = False, pretty: bool = Fa
         }, pretty=pretty)
     try:
         ok = _delete(wid)
-    except PermissionError as exc:
+    except (PermissionError, ValueError) as exc:
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     if not ok:
         return tool_json({"ok": False, "error": "workflow not found"}, pretty=pretty)

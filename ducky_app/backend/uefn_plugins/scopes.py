@@ -6,10 +6,11 @@ A scope is ``(account, personal | space_id)``:
   ``_local`` when signed out;
 - where a plugin's data lives is picked per plugin (``plugin_scopes``): Local (scope
   ``personal``) or exactly one shared space (:mod:`backend.uefn_plugins.spaces`). No
-  pick, or the space unavailable for this account → Local. Spaces never share rows:
-  switching shows that scope's own copy, and the only way data moves is an explicit
-  copy of the Local copy into one space (:func:`copy_local_into`). A plugin whose
-  manifest says ``"data_sharing": false`` is always Local (:func:`sharing_allowed`).
+  pick → Local; a space that can't be used now stays on screen, read-only with the
+  reason. Spaces never share rows: switching shows that scope's own copy, and the only
+  way data moves is an explicit copy of the Local copy into one space
+  (:func:`copy_local_into`). A plugin whose manifest says ``"data_sharing": false`` is
+  always Local (:func:`sharing_allowed`).
 
 Plugins never pick their own folder or rows: docs (one JSON doc per entity) and
 files go through :class:`PluginData`, which writes the active scope only. Rows
@@ -44,6 +45,9 @@ DOC_MAX_BYTES = 1024 * 1024
 # How long a plugin's first read of a never-pulled shared space waits for the pull.
 FIRST_PULL_WAIT_S = 10.0
 ASSET_MAX_BYTES = 100 * 1024 * 1024
+# What sealing adds to a shared doc or file: the server limits the sealed size, so shared
+# copies are refused up front this much below the Local limits.
+SHARED_SEAL_OVERHEAD = 33
 # Throwaway scopes of plugin tests (:func:`sandbox_begin`). The test copy belongs to the
 # test: its calls carry a token (``_SANDBOX_CTX``, inherited by the threads they start),
 # everyone else's calls read their real data. Oct 12 2026: when it was process-wide, a
@@ -142,22 +146,26 @@ def shared_scope(account: str, space: str) -> dict[str, Any]:
     never pulled on this PC for this account, so it is read-only until the first pull
     lands — a plugin must not seed its empty-state defaults over the space's data.
     ``locked``: the account's data key is missing. ``lost``: access to the space is gone;
-    its copy here is unreadable and read-only until access comes back."""
+    its copy here is unreadable and read-only until access comes back. ``unavailable``
+    (the provider can't use the space now) and ``reset`` (its data was reset on the server)
+    are read-only; ``reason`` says why. ``no_provider``: no provider is loaded, so nothing
+    syncs; writes still queue."""
     from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins.spaces import STATES_READ_ONLY, has_provider, provider
 
     sync = repo.sync_get(account, space)
     state = sync["state"]
     if state == "lost":
-        from backend.uefn_plugins.spaces import provider
-
         # The provider may drop a copy whose access has been gone long enough.
         state = provider().settle_lost(account, space) or "lost"
     if state not in ("unavailable", "lost") and _locked(account):
         state = "locked"
     elif not sync["synced_at"] and state not in ("paused", "unavailable", "lost"):
         state = "waiting"
+    elif state not in STATES_READ_ONLY and not has_provider():
+        state = "no_provider"
     return {"account": account, "id": space, "kind": "shared", "label": sync["label"] or "Shared", "spaceId": space,
-            "readOnly": state in ("paused", "waiting", "locked", "lost"), "state": state}
+            "readOnly": state in STATES_READ_ONLY, "state": state, "reason": str(sync["error"] or "")}
 
 
 def space_access(space: str) -> tuple[bool, str]:
@@ -167,29 +175,53 @@ def space_access(space: str) -> tuple[bool, str]:
     if account == LOCAL or not valid_space_id(space):
         return False, space
     scope = shared_scope(account, space)
-    return scope["state"] in ("ok", "paused"), str(scope["label"] or space)
+    # No provider loaded, or the space's data reset on the server: membership is unchanged.
+    return scope["state"] in ("ok", "paused", "no_provider", "reset"), str(scope["label"] or space)
 
 
-_SHARING: dict[str, tuple[float, bool]] = {}  # manifest path → (mtime, sharing allowed)
+_SHARING: dict[str, tuple[float, Any]] = {}  # manifest path → (mtime, its "data_sharing" value)
 
 
-def sharing_allowed(plugin: str) -> bool:
-    """False when the plugin's manifest says ``"data_sharing": false``: its data always
-    stays Local on this PC, whatever was picked before, and nothing offers it a shared
-    space. Read per data call, so cached by the manifest's mtime."""
+def _data_sharing(plugin: str) -> Any:
+    """The manifest's ``"data_sharing"`` value; None when unset or there is no manifest
+    (core data such as workflows). Read per data call, so cached by the manifest's mtime."""
     from backend.uefn_plugins.store import PLUGIN_MANIFEST, load_plugin_manifest, plugin_dir
 
     try:
         path = plugin_dir(plugin) / PLUGIN_MANIFEST
         mtime = path.stat().st_mtime
     except (OSError, ValueError):
-        return True  # no manifest (core data such as workflows): the user picks
+        return None
     hit = _SHARING.get(str(path))
     if hit and hit[0] == mtime:
         return hit[1]
-    allowed = (load_plugin_manifest(plugin) or {}).get("data_sharing") is not False
-    _SHARING[str(path)] = (mtime, allowed)
-    return allowed
+    flag = (load_plugin_manifest(plugin) or {}).get("data_sharing")
+    _SHARING[str(path)] = (mtime, flag)
+    return flag
+
+
+def sharing_allowed(plugin: str) -> bool:
+    """False when the plugin's manifest says ``"data_sharing": false``: its data always
+    stays Local on this PC, whatever was picked before, and nothing offers it a shared
+    space."""
+    return _data_sharing(plugin) is not False
+
+
+def shareable(plugin: str) -> bool:
+    """Whether a shared space is worth offering ``plugin``: only data that goes through the
+    host data service syncs. True when the plugin has data rows, used ``api.data`` in this
+    process, declares ``"data_sharing": true``, or is core data (``ducky.*``, such as
+    workflows). A plugin that keeps its own files gets False, and ``"data_sharing": false``
+    always wins."""
+    from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins import host
+
+    flag = _data_sharing(plugin)
+    if flag is False:
+        return False
+    if flag is True or plugin.startswith("ducky.") or plugin in host._DATA_PLUGINS:
+        return True
+    return repo.has_rows(account_id(), plugin)
 
 
 def _refuse_sharing(plugin: str) -> None:
@@ -213,8 +245,11 @@ def active_scope(plugin: str) -> dict[str, Any]:
     if space == PERSONAL or not valid_space_id(space):
         return personal_scope(account)
     scope = shared_scope(account, space)
-    # The space isn't available to this account any more: Local only, no teaser.
-    return personal_scope(account) if scope["state"] == "unavailable" else scope
+    if scope["state"] == "unavailable" and not repo.has_rows(account, plugin, space):
+        # The provider already dropped this plugin's copy here: Local, no teaser. A copy
+        # still here stays on screen, read-only with the reason.
+        return personal_scope(account)
+    return scope
 
 
 def _boxed(plugin: str) -> dict[str, Any] | None:
@@ -351,9 +386,14 @@ def link_plugin(plugin: str, scope_id: str) -> dict[str, Any]:
     if scope_id != PERSONAL:
         _need(valid_space_id(scope_id), "space id")
         _refuse_sharing(plugin)
-        if repo.sync_get(account, scope_id)["state"] == "unavailable":
+        sync = repo.sync_get(account, scope_id)
+        if sync["state"] == "unavailable":
             # A fresh link tries again even if an earlier round found the space unavailable.
             repo.sync_put(account, scope_id, state="ok", error="")
+        if sync["cursor_rev"] and not repo.has_rows(account, plugin, scope_id):
+            # Nothing of the plugin here although the space was pulled (its data was erased
+            # with an uninstall): the next round pulls from the start and brings it back.
+            repo.sync_put(account, scope_id, cursor_rev=0)
     repo.link_set(account, plugin, scope_id)
     if scope_id != PERSONAL:
         provider().linked(account, plugin, scope_id)
@@ -363,7 +403,8 @@ def link_plugin(plugin: str, scope_id: str) -> dict[str, Any]:
 def copy_local_into(plugin: str, space: str) -> dict[str, Any]:
     """One way, on request: the plugin's Local docs and files go into ``space``'s copy
     (queued to sync). An item of the space with the same key is kept as it is.
-    Sensitive docs stay Local. Space → space never happens."""
+    Sensitive docs stay Local, and so do items too big to share once sealed (listed in
+    ``tooBig``: the server would refuse them). Space → space never happens."""
     from backend.store.repos import plugin_data as repo
     from backend.uefn_plugins.data_crypto import open_bytes, open_text, seal_bytes, seal_text
     from backend.uefn_plugins.spaces import provider
@@ -382,7 +423,9 @@ def copy_local_into(plugin: str, space: str) -> dict[str, Any]:
         target = shared_scope(account, space)
     dst = PluginData(plugin)._writable(target)
     copied = kept = 0
+    too_big: list[str] = []
     for kind in ("doc", "asset"):
+        limit = (DOC_MAX_BYTES if kind == "doc" else ASSET_MAX_BYTES) - SHARED_SEAL_OVERHEAD
         for row in repo.rows(account, PERSONAL, plugin, kind):
             if row["sensitive"]:
                 continue
@@ -390,20 +433,23 @@ def copy_local_into(plugin: str, space: str) -> dict[str, Any]:
             if old and not old["deleted"]:
                 kept += 1
                 continue
+            if int(row["size"]) > limit:
+                too_big.append(row["key"])
+                continue
             if kind == "doc":
                 if row["value"] is None:
                     continue
-                value = seal_text(open_text(row["value"], account), account)
+                sealed = seal_text(open_text(row["value"], account), account)
+                repo.put(account, space, plugin, kind, row["key"], value=sealed, size=int(row["size"]),
+                         sha256=row["sha256"], dirty=True)
             else:
                 source = asset_file(src, plugin, row["key"])
                 if not source.is_file():
                     continue
-                write_asset_bytes(asset_file(dst, plugin, row["key"]), seal_bytes(open_bytes(source.read_bytes(), account), account))
-                value = None
-            repo.put(account, space, plugin, kind, row["key"], value=value, size=int(row["size"]), sha256=row["sha256"],
-                     dirty=True)
+                _write_asset(dst, plugin, row["key"], seal_bytes(open_bytes(source.read_bytes(), account), account),
+                             size=int(row["size"]), sha256=row["sha256"], dirty=True)
             copied += 1
-    return {"ok": True, "copied": copied, "kept": kept}
+    return {"ok": True, "copied": copied, "kept": kept, "tooBig": too_big}
 
 
 def scopes_root(account: str) -> Path:
@@ -442,7 +488,9 @@ def purge_space(account: str, space: str) -> None:
 
 
 def erase_plugin(plugin: str) -> None:
-    """Uninstall + erase data: this account's docs and files of ``plugin`` in every scope."""
+    """Uninstall + erase data: this account's docs and files of ``plugin`` in every scope,
+    and its link (a reinstall shows Local). Later rounds of those spaces don't bring the
+    copy back; linking the plugin to one again does (:func:`link_plugin`)."""
     from backend.store.repos import plugin_data as repo
 
     account = account_id()
@@ -475,6 +523,26 @@ def write_asset_bytes(target: Path, data: bytes) -> None:
     tmp = target.with_name(target.name + f".{os.getpid()}.tmp")
     tmp.write_bytes(data)
     tmp.replace(target)
+
+
+def _write_asset(scope: dict[str, Any], plugin: str, path: str, sealed: bytes, *, size: int, sha256: str,
+                 dirty: bool) -> None:
+    """A local file write: the sealed bytes go to a uuid temp file next to the target, then
+    the file and its row land in one transaction (nobody sees one without the other)."""
+    import uuid
+
+    from backend.store.repos import plugin_data as repo
+
+    target = asset_file(scope, plugin, path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temp.write_bytes(sealed)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
+    repo.put_file_row(scope["account"], scope["id"], plugin, path, temp_path=temp, target_path=target, size=size,
+                      sha256=sha256, dirty=dirty)
 
 
 def _closed(scope: dict[str, Any]) -> bool:
@@ -522,6 +590,12 @@ class PluginData:
             raise ReadOnlyScope(f"Waiting for {s['label']}'s data. Read-only until it arrives.")
         if s["state"] == "lost":
             raise ReadOnlyScope(f"You no longer have access to {s['label']}. Its data on this PC is locked.")
+        if s["state"] == "unavailable":
+            reason = f" ({s['reason']})" if s.get("reason") else ""
+            raise ReadOnlyScope(f"{s['label']} isn't available right now{reason}. Read-only until it's back.")
+        if s["state"] == "reset":
+            raise ReadOnlyScope(f"{s['label']}'s data was reset on the server. Read-only until you choose what to "
+                                "do with your copy.")
         if s["readOnly"]:
             raise ReadOnlyScope(f"{s['label']} is paused. Read-only.")
         return s
@@ -552,6 +626,9 @@ class PluginData:
         _need(valid_doc_key(key), "doc key")
         s = self._writable(_personal_for(self.plugin_id) if sensitive else None)
         raw = encode_doc(value)
+        shared_max = DOC_MAX_BYTES - SHARED_SEAL_OVERHEAD
+        if s["kind"] == "shared" and len(raw) > shared_max:
+            raise ValueError(f"doc {key!r} is too big to share (over {shared_max:,} bytes); split it into one doc per entity")
         if len(raw) > DOC_MAX_BYTES:
             raise ValueError(f"doc {key!r} is over 1 MB; split it into one doc per entity")
         sha = _sha(raw)
@@ -596,7 +673,9 @@ class PluginData:
         old = repo.get(s["account"], s["id"], self.plugin_id, "doc", key)
         if not old or old["deleted"]:
             return False
-        repo.remove(s["account"], s["id"], self.plugin_id, "doc", key, tombstone=s["kind"] == "shared" and old["rev"] > 0)
+        # Always a tombstone in a shared copy: the server may hold the doc even at rev 0
+        # (a push in flight, a lost answer), and a delete of an item it never had is harmless.
+        repo.remove(s["account"], s["id"], self.plugin_id, "doc", key, tombstone=s["kind"] == "shared")
         return True
 
     # -- files (assets)
@@ -607,15 +686,17 @@ class PluginData:
 
         s = self._writable()
         target = asset_file(s, self.plugin_id, path)
+        shared = s["kind"] == "shared"
+        shared_max = ASSET_MAX_BYTES - SHARED_SEAL_OVERHEAD
+        if shared and len(data) > shared_max:
+            raise ValueError(f"file {path!r} is too big to share (over {shared_max:,} bytes)")
         if len(data) > ASSET_MAX_BYTES:
             raise ValueError(f"file {path!r} is over 100 MB")
         sha = _sha(data)
         old = repo.get(s["account"], s["id"], self.plugin_id, "asset", path)
         if old and not old["deleted"] and old["sha256"] == sha and target.is_file():
             return {"ok": True, "path": path, "changed": False}
-        write_asset_bytes(target, seal_bytes(data, s["account"]))
-        repo.put(s["account"], s["id"], self.plugin_id, "asset", path, value=None, size=len(data), sha256=sha,
-                 dirty=s["kind"] == "shared")
+        _write_asset(s, self.plugin_id, path, seal_bytes(data, s["account"]), size=len(data), sha256=sha, dirty=shared)
         return {"ok": True, "path": path, "changed": True, "size": len(data)}
 
     def has_file(self, path: str) -> bool:
@@ -656,9 +737,9 @@ class PluginData:
         old = repo.get(s["account"], s["id"], self.plugin_id, "asset", path)
         if not old or old["deleted"]:
             return False
-        target.unlink(missing_ok=True)
-        repo.remove(s["account"], s["id"], self.plugin_id, "asset", path,
-                    tombstone=s["kind"] == "shared" and old["rev"] > 0)
+        # The row first, then the file, in one transaction: never a live row without its file.
+        repo.remove(s["account"], s["id"], self.plugin_id, "asset", path, tombstone=s["kind"] == "shared",
+                    target_path=target)
         return True
 
 

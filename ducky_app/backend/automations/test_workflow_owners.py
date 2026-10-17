@@ -290,3 +290,130 @@ def test_a_lost_space_hides_its_workflows_until_access_returns(who: _Who, fake: 
     assert [o["id"] for o in shared.owners()["owners"]] == ["local"]
     assert repo.rows(ana, "spaceT", owned.DOC_PLUGIN, "doc") == []
     assert runtime.runtime_get(ana, wf["id"])["run_here"] is False
+
+
+def test_a_round_that_raises_shows_on_its_space_and_the_next_space_still_syncs(who: _Who, fake: FakeWorkflowSpaces) -> None:
+    ana = join(fake, who, "ana@x.org")
+    join(fake, who, "ana@x.org", space="spaceU")
+    synced = fake.sync
+
+    def sync(account: str, space_id: str, *, force: bool = False) -> dict[str, Any]:
+        if space_id == "spaceT":
+            raise KeyError("rev")
+        return synced(account, space_id, force=force)
+
+    fake.sync = sync  # type: ignore[method-assign]
+    shared._round([(ana, "spaceT"), (ana, "spaceU")], False)
+    assert fake.rounds == [(ana, "spaceU")]
+    st = repo.sync_get(ana, "spaceT")
+    assert st["state"] == "error" and "KeyError" in st["error"]
+    assert owners_by_id()["spaceT"]["sync"]["state"] == "error"
+    # Save and Update online wait for the round: its error comes back instead of escaping.
+    out = shared.sync(force=True, space_id="spaceT", upload=True)
+    assert out["ok"] is False and "KeyError" in out["error"]
+
+
+def test_saving_while_the_space_is_locked_here_is_refused_never_forked_into_local(
+    who: _Who, fake: FakeWorkflowSpaces
+) -> None:
+    ana = join(fake, who, "ana@x.org")
+    wf = store.save_workflow({"name": "Shared", "graph": CRON}, owner="spaceT")
+    repo.sync_put(ana, "spaceT", state="unavailable", error="permission denied")
+    for owner in ("", "spaceT"):  # an old editor sends no owner; the editor now sends it
+        with pytest.raises(owned.ReadOnlyOwner, match=r"Alpha Studio isn't available right now \(permission denied\)"):
+            store.save_workflow({"id": wf["id"], "name": "Renamed"}, owner=owner)
+    repo.sync_put(ana, "spaceT", state="lost")
+    with pytest.raises(owned.ReadOnlyOwner, match="no longer have access to Alpha Studio"):
+        store.save_workflow({"id": wf["id"], "name": "Renamed"})
+    assert repo.get(ana, scopes.PERSONAL, owned.DOC_PLUGIN, "doc", wf["id"]) is None  # no Local fork
+    # Back: the save lands in the space's copy.
+    repo.sync_put(ana, "spaceT", state="ok", error="")
+    assert store.save_workflow({"id": wf["id"], "name": "Renamed"})["owner"]["id"] == "spaceT"
+
+
+def test_an_id_in_local_and_a_space_opens_the_space_copy(who: _Who, fake: FakeWorkflowSpaces) -> None:
+    ana = join(fake, who, "ana@x.org")
+    wf = store.save_workflow({"name": "Team copy", "graph": CRON}, owner="spaceT")
+    # A Local copy under the same id, as an older app forked it while the space was away.
+    owned.write(scopes.personal_scope(ana), {**store.get_workflow(wf["id"]), "name": "Old fork"})
+    got = store.get_workflow(wf["id"])
+    assert got["owner"]["id"] == "spaceT" and got["name"] == "Team copy"
+    assert store.save_workflow({"id": wf["id"], "name": "Edited"})["owner"]["id"] == "spaceT"
+
+
+def test_deleting_a_never_sent_shared_workflow_leaves_a_tombstone(who: _Who, fake: FakeWorkflowSpaces) -> None:
+    ana = join(fake, who, "ana@x.org")
+    wf = store.save_workflow({"name": "Shared", "graph": CRON}, owner="spaceT")
+    assert repo.get(ana, "spaceT", owned.DOC_PLUGIN, "doc", wf["id"])["rev"] == 0
+    assert store.delete_workflow(wf["id"]) is True
+    row = repo.get(ana, "spaceT", owned.DOC_PLUGIN, "doc", wf["id"])
+    assert row["deleted"] == 1 and row["dirty"] == 1  # the delete still goes out (a push may be in flight)
+
+
+def test_a_local_fork_of_a_spaces_workflow_gets_its_own_id(who: _Who, fake: FakeWorkflowSpaces) -> None:
+    ana = join(fake, who, "ana@x.org")
+    wf = store.save_workflow({"name": "Team copy", "graph": CRON}, owner="spaceT")
+    store.append_run(wf["id"], {"ok": True, "ended": 7})
+    # A Local copy under the same id, as an older app forked it while the space was away.
+    owned.write(scopes.personal_scope(ana), {**store.get_workflow(wf["id"]), "name": "Old fork"})
+    # While one id names two workflows, a delete or a move by id alone guesses at nothing.
+    with pytest.raises(ValueError, match="More than one copy"):
+        store.delete_workflow(wf["id"])
+    with pytest.raises(ValueError, match="More than one copy"):
+        store.set_folder(wf["id"], "Elsewhere")
+    with pytest.raises(ValueError, match="More than one copy"):
+        store.copy_workflow(wf["id"], "local", move=True)
+    # The next start splits it: the Local copy gets its own id, with its runs and History.
+    owned.reset_for_tests()
+    rows = {w["owner"]["id"]: w for w in store.list_workflows()}
+    fork = rows["local"]
+    assert fork["name"] == "Old fork" and fork["id"] != wf["id"] and rows["spaceT"]["id"] == wf["id"]
+    assert repo.get(ana, scopes.PERSONAL, owned.DOC_PLUGIN, "doc", wf["id"]) is None
+    assert store.get_workflow(fork["id"])["runs"] == [{"ok": True, "ended": 7}]
+    assert [v["name"] for v in versions.list_versions(fork["id"])] == ["Team copy"]
+    # Deleting the fork leaves the team's copy alone.
+    assert store.delete_workflow(fork["id"]) is True
+    team = repo.get(ana, "spaceT", owned.DOC_PLUGIN, "doc", wf["id"])
+    assert team["deleted"] == 0 and store.get_workflow(wf["id"])["name"] == "Team copy"
+
+
+def test_a_space_reset_on_the_server_is_read_only_until_upload_or_clear(who: _Who, fake: FakeWorkflowSpaces) -> None:
+    ana = join(fake, who, "ana@x.org")
+    wf = store.save_workflow({"name": "Team flow", "graph": CRON}, owner="spaceT")
+    for row in repo.dirty(ana, "spaceT", 100):
+        repo.mark_pushed(ana, "spaceT", row["plugin_id"], row["kind"], row["key"], rev=4, sha256=row["sha256"])
+    repo.sync_put(ana, "spaceT", state="reset", error="This team's data was reset on the server.")
+    owner = owners_by_id()["spaceT"]
+    assert owner["readOnly"] is True and "reset on the server" in owner["reason"]
+    assert owner["resetContents"] == ["Workflows"]
+    with pytest.raises(owned.ReadOnlyOwner, match="reset on the server"):
+        store.save_workflow({"id": wf["id"], "name": "Edited"})
+    # Update online leaves the copy as it is until the choice.
+    shared.sync(force=True, space_id="spaceT", upload=True)
+    assert repo.get(ana, "spaceT", owned.DOC_PLUGIN, "doc", wf["id"])["dirty"] == 0
+    # A space holding only workflows has its way out too: Upload my copy.
+    assert spaces.settle_reset("spaceT", "upload")["ok"] is True
+    row = repo.get(ana, "spaceT", owned.DOC_PLUGIN, "doc", wf["id"])
+    assert (row["rev"], row["dirty"]) == (0, 1) and repo.sync_get(ana, "spaceT")["state"] == "ok"
+    assert store.save_workflow({"id": wf["id"], "name": "Edited"})["owner"]["id"] == "spaceT"
+    # Or Clear my copy: the space's workflows and their per-PC state go, and nothing is sent.
+    repo.sync_put(ana, "spaceT", state="reset")
+    assert spaces.settle_reset("spaceT", "clear") == {"ok": True, "plugins": [owned.DOC_PLUGIN], "cleared": 1}
+    assert repo.rows(ana, "spaceT", owned.DOC_PLUGIN, "doc") == [] and repo.count_dirty(ana, "spaceT") == 0
+    assert runtime.runtime_get(ana, wf["id"])["run_here"] is False
+    assert owners_by_id()["spaceT"]["readOnly"] is False
+
+
+def test_a_shared_workflow_must_fit_once_sealed(who: _Who, fake: FakeWorkflowSpaces, monkeypatch) -> None:
+    ana = join(fake, who, "ana@x.org")
+    wf = store.save_workflow({"name": "Big", "graph": CRON})
+    size = int(repo.get(ana, scopes.PERSONAL, owned.DOC_PLUGIN, "doc", wf["id"])["size"])
+    monkeypatch.setattr(scopes, "DOC_MAX_BYTES", size + 10)  # fits Local, not once sealed for a space
+    assert store.save_workflow({"id": wf["id"], "name": "Big", "description": "ok"})["owner"]["kind"] == "local"
+    with pytest.raises(ValueError, match="too big to share"):
+        store.copy_workflow(wf["id"], "spaceT")
+    assert repo.rows(ana, "spaceT", owned.DOC_PLUGIN, "doc") == []
+    monkeypatch.setattr(scopes, "DOC_MAX_BYTES", 200)
+    owned.write_folders(owned.scope_for("local"), ["f" * 180])  # 195 bytes encoded
+    with pytest.raises(ValueError, match="too big to share"):
+        owned.write_folders(owned.scope_for("spaceT"), ["f" * 180])

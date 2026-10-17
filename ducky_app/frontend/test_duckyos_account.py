@@ -603,6 +603,28 @@ def test_session_route_401_keeps_the_paired_pc() -> None:
     assert unpaired == ["unpair"]
 
 
+def test_a_body_cut_off_mid_read_is_a_network_error_not_an_escape() -> None:
+    """http.client errors (IncompleteRead, a bad status line) aren't OSErrors: they used to
+    escape api_request and kill a team sync round instead of reading as offline."""
+    import http.client
+    from unittest.mock import MagicMock, patch
+
+    from frontend import duckyos_account as acc
+
+    blob = {"device_key": "dky_v1_x", "device_key_id": "k1", "base_url": "https://uefnducky.org", "email": "a@b.co"}
+    cut = MagicMock()
+    cut.__enter__.return_value = cut
+    cut.read.side_effect = http.client.IncompleteRead(b'{"changes": [', 4096)
+    for opened in ({"return_value": cut}, {"side_effect": http.client.BadStatusLine("HTTP/1.1 ???")}):
+        with patch.object(acc, "_load_blob", return_value=dict(blob)), patch.object(acc, "_site_urlopen", **opened):
+            try:
+                acc.api_request("POST", "/api/v1/plugins/uefn-ducky-store/collect/team-data-sync", {"teamId": "t"})
+                raised = None
+            except acc.DuckyOSAccountError as exc:
+                raised = exc
+        assert raised is not None and raised.code == "network"
+
+
 def test_unpair_this_pc_keeps_session() -> None:
     from unittest.mock import patch
 

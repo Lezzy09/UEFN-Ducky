@@ -122,6 +122,11 @@ def test_upgrade_from_schema_nine_preserves_existing_workflows(storage):
     # 0019 renames the space tables and columns 0009 and 0012 made: undo it.
     conn.execute("DROP TABLE space_meta")
     conn.execute("ALTER TABLE scope_sync RENAME COLUMN space_id TO team_id")
+    # 0020 adds plugin_data's sync columns and scope_sync's rewind: undo it.
+    for column in ("sync_state", "sync_error", "attempts", "next_try"):
+        conn.execute(f"ALTER TABLE plugin_data DROP COLUMN {column}")
+    for column in ("rewind_rev", "rewind_at"):
+        conn.execute(f"ALTER TABLE scope_sync DROP COLUMN {column}")
     conn.execute("PRAGMA user_version=9")
     db.reset_for_tests()
     assert store.get_workflow(legacy["id"])["name"] == "Before versions"

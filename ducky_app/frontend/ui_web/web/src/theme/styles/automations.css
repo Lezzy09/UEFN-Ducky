@@ -107,6 +107,9 @@
 .aw-trigger.is-elsewhere { opacity: 0.55; }
 .aw-import-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; padding: 6px 8px; border: 1px dashed var(--border); border-radius: 8px; color: var(--text-muted); }
 .aw-import-row button { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+/* A space reset on the server: the reason on its own line, then Upload my copy / Clear my copy. */
+.aw-reset-row { flex-wrap: wrap; justify-content: flex-start; }
+.aw-reset-row > span { flex: 1 1 100%; }
 .aw-list-hint { margin: 8px; color: var(--text-muted); font-size: 11px; }
 .aw-readonly-note { position: absolute; z-index: 5; bottom: 60px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; max-width: calc(100% - 48px); margin: 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--text-muted); }
 .aw-list-sections { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 4px 4px 48px; }
