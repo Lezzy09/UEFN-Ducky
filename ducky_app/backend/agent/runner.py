@@ -227,6 +227,22 @@ def with_user_request(volatile_tail: str, user_text: str) -> str:
     return f"{tail}\n\nReply to the user's request: {request}"
 
 
+def with_naming_rule(volatile_tail: str, conv_id: str) -> str:
+    """Live-context tail led by "Name this Ducky first" while the chat has its placeholder
+    name. Asked every step, so the rule is gone the moment the agent renames itself. The
+    frozen prefix never carries it, and task tools are refused until the rename."""
+    from backend.agent.chat_title import self_naming_instruction
+
+    try:
+        rule = self_naming_instruction("", conv_id).strip() if conv_id else ""
+    except Exception:
+        rule = ""
+    if not rule:
+        return volatile_tail
+    tail = (volatile_tail or "").strip()
+    return f"{rule}\n\n{tail}" if tail else rule
+
+
 def forced_web_search(user_text: str, tool_names: list[str]) -> ToolCallRequest | None:
     """Step 1 for a clear search request: the app calls web_search itself."""
     if "web_search" not in tool_names:
@@ -1000,11 +1016,12 @@ class AgentRunner:
                 yield AgentEvent(kind="status", text=f"Trimmed {freed:,} tokens of old tool output")
 
             stream_messages = provider_messages
-            if volatile_tail:
+            tail = with_naming_rule(volatile_tail, trim_conv_id)
+            if tail:
                 stream_messages = list(provider_messages) + [
                     ProviderMessage(
                         role="user",
-                        content=f"{LIVE_CONTEXT_PREFIX}\n{volatile_tail}",
+                        content=f"{LIVE_CONTEXT_PREFIX}\n{tail}",
                     )
                 ]
 

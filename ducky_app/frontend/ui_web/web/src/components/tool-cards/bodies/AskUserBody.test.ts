@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rowsFromAskUser } from "./AskUserBody";
+import { askUserError, rowsFromAskUser } from "./AskUserBody";
 
 describe("AskUserBody rows", () => {
   it("summarizes selected labels and skipped answers", () => {
@@ -46,5 +46,16 @@ describe("AskUserBody rows", () => {
     expect(rows).toHaveLength(2);
     expect(rows.every((r) => r.status === "waiting")).toBe(true);
     expect(rows[0].summary).toBe("Waiting…");
+  });
+
+  it("a refused question says it was not asked and why, never Waiting", () => {
+    // Oct 17 2026: the card said "failed" over "→ Waiting…" and hid the refusal.
+    const why = "Call ducky_rename_self first with a 2–4 word task name, then retry this tool.";
+    const rows = rowsFromAskUser({ questions: [{ id: "count_mode", prompt: "How should I count duckies?" }] }, why, {
+      failed: true,
+    });
+    expect(rows).toEqual([{ id: "count_mode", prompt: "How should I count duckies?", summary: "Not asked", status: "failed" }]);
+    expect(askUserError(why)).toBe(why);
+    expect(askUserError(JSON.stringify({ ok: false, error: "No chat to ask in." }))).toBe("No chat to ask in.");
   });
 });

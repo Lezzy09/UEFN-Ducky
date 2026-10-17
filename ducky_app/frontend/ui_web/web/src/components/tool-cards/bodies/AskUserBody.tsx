@@ -5,8 +5,8 @@ export type AnswerRow = {
   id: string;
   prompt: string;
   summary: string;
-  /** waiting | answered | skipped */
-  status: "waiting" | "answered" | "skipped";
+  /** waiting | answered | skipped | failed (the tool refused, nothing was asked) */
+  status: "waiting" | "answered" | "skipped" | "failed";
 };
 
 type QuestionRow = {
@@ -69,8 +69,11 @@ function summarizeAnswer(
 export function rowsFromAskUser(
   args: Record<string, unknown>,
   resultText: string,
-  opts?: { pending?: boolean },
+  opts?: { pending?: boolean; failed?: boolean },
 ): AnswerRow[] {
+  if (opts?.failed) {
+    return questionsFromArgs(args).map((q) => ({ id: q.id, prompt: q.prompt, summary: "Not asked", status: "failed" }));
+  }
   const pending = Boolean(opts?.pending);
   let questions = questionsFromArgs(args);
   let answers: Record<string, unknown> | null = null;
@@ -111,12 +114,43 @@ export function rowsFromAskUser(
   });
 }
 
-export function AskUserBody({ args, resultText, showResult }: ToolCardBodyProps) {
+/** Why the tool refused: the error of a JSON result, else the text itself. */
+export function askUserError(resultText: string): string {
+  const text = (resultText || "").trim();
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown };
+    if (parsed && typeof parsed === "object" && parsed.error) return String(parsed.error);
+  } catch {
+    /* plain text */
+  }
+  return text || "The question could not be asked.";
+}
+
+export function AskUserBody({ args, resultText, showResult, isError }: ToolCardBodyProps) {
   const pending = !showResult;
+  const failed = Boolean(isError && showResult);
   const rows = useMemo(
-    () => rowsFromAskUser(args, resultText, { pending }),
-    [args, resultText, pending],
+    () => rowsFromAskUser(args, resultText, { pending, failed }),
+    [args, resultText, pending, failed],
   );
+
+  if (failed) {
+    return (
+      <div className="tool-card-ask-user-body">
+        {rows.length ? (
+          <ul className="tool-card-ask-user-rows">
+            {rows.map((row) => (
+              <li key={row.id} className="tool-card-ask-user-row tool-card-ask-user-row--failed">
+                <span className="tool-card-ask-user-q">{row.prompt}</span>
+                <span className="tool-card-ask-user-a">→ {row.summary}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <p className="tool-execution-card-hint">{askUserError(resultText)}</p>
+      </div>
+    );
+  }
 
   if (!rows.length) {
     return (

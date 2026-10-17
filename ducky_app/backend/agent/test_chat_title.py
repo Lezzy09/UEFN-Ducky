@@ -58,6 +58,7 @@ def _new_conv(root: str, title: str):
 def test_first_turn_names_itself_without_an_extra_model(isolated_appdata, tmp_path, monkeypatch):
     import json
     from backend.agent.chat_title import require_self_name, self_naming_instruction, start_auto_title
+    from backend.agent.runner import with_naming_rule
     from backend.tools.panel.ducky_panel import ducky_rename_self
     from backend.workspace import identity
     from frontend.settings import PanelSettings
@@ -73,6 +74,10 @@ def test_first_turn_names_itself_without_an_extra_model(isolated_appdata, tmp_pa
     assert start_auto_title(conv, "fix chat questions", project_root=root) == ""
     assert load_conversation(conv.id).title == "New ducky2"
     assert "FIRST tool call" in self_naming_instruction(conv.title, conv.id)
+    # Oct 17 2026: the frozen prefix never carried the rule, so the model met only refusals
+    # (Ducky AI looped on them). The live tail leads with it while the chat is unnamed.
+    tail = with_naming_rule("Listener: offline", conv.id)
+    assert tail.startswith("## Name this Ducky first") and tail.endswith("Listener: offline")
     with pytest.raises(ValueError, match="ducky_rename_self first"):
         require_self_name("workspace_read_file", conv.id)
     require_self_name("ducky_rename_self", conv.id)
@@ -88,6 +93,7 @@ def test_first_turn_names_itself_without_an_extra_model(isolated_appdata, tmp_pa
     assert load_conversation(conv.id).title == "Chat Lifecycle Engineer"
     require_self_name("workspace_read_file", conv.id)
     assert self_naming_instruction("New ducky2", conv.id) == ""
+    assert with_naming_rule("Listener: offline", conv.id) == "Listener: offline"
 
 
 def test_manual_names_and_disabled_auto_naming_are_preserved(isolated_appdata, tmp_path):
