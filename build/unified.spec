@@ -45,6 +45,13 @@ for _mod in ("html", "html.parser", "html.entities"):
     if _mod not in backend_hidden:
         backend_hidden.append(_mod)
 
+# Plugins use the app's cryptography: the shared-spaces provider seals and opens team
+# data with AES-GCM. Core itself imports only ed25519, so without this the EXE ships
+# no ciphers.aead and every team sync round dies on its first change.
+for _mod in collect_submodules("cryptography.hazmat.primitives"):
+    if _mod not in backend_hidden:
+        backend_hidden.append(_mod)
+
 # Keep the one-file EXE lean — block heavy optional deps PyInstaller may trace from the global env.
 _HEAVY_EXCLUDES = [
     "torch",
@@ -412,6 +419,11 @@ if _missing_pure:
     raise RuntimeError(
         "unified.spec: frozen build missing modules (panel would crash on boot): "
         + ", ".join(_missing_pure)
+    )
+if "cryptography.hazmat.primitives.ciphers.aead" not in _pure_names:
+    raise RuntimeError(
+        "unified.spec: frozen build is missing cryptography.hazmat.primitives.ciphers.aead: "
+        "team data could not be encrypted, so every team sync round would fail."
     )
 
 pyz = PYZ(a.pure)
