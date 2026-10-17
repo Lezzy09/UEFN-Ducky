@@ -43,6 +43,10 @@ _IMAGE_QUERY = re.compile(
     re.I,
 )
 _WEB_ASK = re.compile(r"\b(?:seach|search(?:ing)?|look\s*up|google)\b", re.I)
+# A picture word alone is no web ask: "show me / find pictures of …" looks existing ones up,
+# "make / generate an image of …" is a picture to make (Oct 17 2026: every such ask was web-searched).
+_SHOW_ASK = re.compile(r"\b(?:show\s+me|find(?:\s+me)?|get\s+me|look\s+(?:at|for))\b", re.I)
+_MAKE_ASK = re.compile(r"\b(?:make|generate|create|draw|design|paint|render|build|edit)\b", re.I)
 # A clear ask is a short message with a short subject. A workflow step's instructions
 # mention "search" or "picture" too, and its sentences are not a query.
 _MAX_ASK_CHARS = 300
@@ -79,7 +83,7 @@ def web_intent(text: str) -> tuple[str, bool] | None:
         return None
     images = bool(_IMAGE_QUERY.search(raw))
     ask = _WEB_ASK.search(raw)
-    if ask is None and not images:
+    if ask is None and not (images and _SHOW_ASK.search(raw) and not _MAKE_ASK.search(raw)):
         return None
     query = ""
     if images:

@@ -196,6 +196,16 @@ def test_a_workflow_step_is_not_a_search_request():
     assert web.web_intent("search for " + "very long subject words " * 8) is None
 
 
+def test_a_picture_to_make_is_not_a_web_search():
+    # Oct 17 2026: "make an image of …" forced a web image search before the model started.
+    assert web.web_intent("make an image of a goblin chasing cats") is None
+    assert web.web_intent("generate pictures of a pirate island at sunset") is None
+    assert web.web_intent("draw me a picture of a treasure chest") is None
+    assert web.web_intent("i like this picture") is None
+    assert web.web_intent("show me pictures of a pirate island") == ("a pirate island", True)
+    assert web.web_intent("search for photos of fortnite islands") == ("fortnite islands", True)
+
+
 def test_second_call_in_allowed_chat_skips_the_question(monkeypatch):
     web.begin_web_turn()
     monkeypatch.setattr(web, "_save_conv", lambda conv: setattr(conv, "saved", conv.saved + 1))
