@@ -102,3 +102,21 @@ def test_write_tools_take_path_when_relative_path_is_dot() -> None:
     assert path_arg(".", "Content/DuckyAITest/treasure_hunt_device.verse") == "Content/DuckyAITest/treasure_hunt_device.verse"
     with pytest.raises(ValueError, match="different files"):
         path_arg("Content/a.verse", "Content/b.verse")
+
+
+def test_write_tools_join_a_folder_and_a_file_name() -> None:
+    # Oct 17 2026: a Ducky AI chat split the folder and the file across the two arguments
+    # five ways and every write was refused.
+    from backend.tools.core.workspace_code import path_arg
+
+    want = "Content/DuckyAITest/treasure_hunt_device.verse"
+    assert path_arg("Content/DuckyAITest", "treasure_hunt_device.verse") == want
+    assert path_arg("Content/DuckyAITest/", want) == want
+    assert path_arg("Content/DuckyAITest", want) == want
+    assert path_arg("DuckyAITest/treasure_hunt_device.verse", "Content") == want
+    assert path_arg(want, "treasure_hunt_device.verse") == want
+    assert path_arg("Content\\DuckyAITest", "treasure_hunt_device.verse") == want
+    with pytest.raises(ValueError, match="different files"):
+        path_arg("Content/A", "Content/B")
+    with pytest.raises(ValueError, match="different files"):
+        path_arg("Content", "C:/elsewhere/x.verse")

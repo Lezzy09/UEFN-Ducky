@@ -151,17 +151,33 @@ def _require_file(path: str) -> str:
     return full
 
 
+def _is_file_name(p: str) -> bool:
+    return bool(os.path.splitext(p.rstrip("/").rsplit("/", 1)[-1])[1])
+
+
 def path_arg(relative_path: str, path: str) -> str:
     """The file a tool works on: relative_path, or path= (workspace_read_file takes both,
-    so agents send either one to the edit tools too)."""
+    so agents send either one to the edit tools too). A folder in one and the file in the
+    other is that file: the full path when it already starts with the folder, else joined."""
     rel, alias = (relative_path or "").strip(), (path or "").strip()
     if rel in (".", "./", ".\\"):  # "the project" next to a real path= means that path
         rel = ""
-    if rel and alias and rel.replace("\\", "/") != alias.replace("\\", "/"):
-        raise ValueError("relative_path and path name different files: pass only one of them")
     if not rel and not alias:
         raise ValueError("relative_path is required (path= also accepted)")
-    return rel or alias
+    if not rel or not alias:
+        return rel or alias
+    a, b = rel.replace("\\", "/"), alias.replace("\\", "/")
+    if a == b:
+        return rel
+    for longer, shorter in ((a, b), (b, a)):
+        if longer.startswith(shorter.rstrip("/") + "/") or longer.endswith("/" + shorter):
+            return longer
+    # Oct 17 2026: relative_path="Content/DuckyAITest" + path="treasure_hunt_device.verse" was refused.
+    if _is_file_name(a) != _is_file_name(b):
+        folder, name = (b, a) if _is_file_name(a) else (a, b)
+        if not os.path.isabs(name) and not re.match(r"^[A-Za-z]:", name):
+            return folder.rstrip("/") + "/" + name
+    raise ValueError("relative_path and path name different files: pass only one of them")
 
 
 def read_lines(full: str, start_line: int = 0, end_line: int = 0, line_numbers: bool = False) -> dict[str, Any]:

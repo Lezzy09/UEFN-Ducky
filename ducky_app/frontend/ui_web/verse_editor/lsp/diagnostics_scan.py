@@ -517,6 +517,14 @@ def _run_scan(
                             items = items2
                             errors = 0
                             warnings = 0
+                if not errors:
+                    # An empty read can be verse-lsp's false all-clear; a syntax error it
+                    # published for this unchanged text during the scan stands.
+                    sticky = session.syntax_errors(doc_uri)
+                    if sticky:
+                        items = _diagnostics_to_items(sticky)
+                        errors = sum(1 for i in items if i["severity"] == "error")
+                        warnings = sum(1 for i in items if i["severity"] == "warning")
                 file_result = {
                     "path": key,
                     "errors": errors,

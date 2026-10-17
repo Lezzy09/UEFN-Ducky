@@ -193,7 +193,13 @@ def discover_digest_files(
 ) -> list[str]:
     """Find *.digest.verse files for the configured project (or an explicit path)."""
     if digest_path:
-        return [digest_path] if os.path.isfile(digest_path) else []
+        if os.path.isfile(digest_path):
+            return [digest_path]
+        # A bare name ("Fortnite.digest.verse") is that digest of this project; without
+        # this the tools fell back to the UEFN listener and refused with UEFN closed.
+        want = os.path.basename(digest_path.replace("\\", "/").rstrip("/")).lower()
+        found = discover_digest_files(project_name=project_name, project_root=project_root, extra_roots=extra_roots)
+        return [p for p in found if os.path.basename(p).lower() == want]
 
     roots: list[str] = []
     saved = _verse_project_dir(project_name)

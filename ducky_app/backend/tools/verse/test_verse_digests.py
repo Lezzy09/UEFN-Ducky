@@ -151,3 +151,19 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def test_a_bare_digest_name_finds_that_project_digest(tmp_path: Path, monkeypatch):
+    # Oct 17 2026: digest_path="Fortnite.digest.verse" fell back to the UEFN listener and
+    # search_verse_digest refused with UEFN closed.
+    vd.clear_cache()
+    monkeypatch.setattr(vd, "_verse_project_dir", lambda _name="": "")
+    monkeypatch.setattr(vd, "_project_root", lambda: "")
+    content = tmp_path / "Content"
+    content.mkdir()
+    path = _write_digest(content)
+    _write_digest(content, name="Verse.digest.verse", text="Verse := module:\n")
+    roots = [str(content)]
+    assert vd.discover_digest_files(digest_path="Fortnite.digest.verse", extra_roots=roots) == [str(path)]
+    assert vd.discover_digest_files(digest_path="Missing.digest.verse", extra_roots=roots) == []
+    assert vd.digests_available(digest_path="fortnite.digest.verse", extra_roots=roots)

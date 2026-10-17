@@ -28,6 +28,13 @@ def to_monaco_file_uri(abs_path: str) -> str:
     return "file:///" + quote(full.lstrip("/"), safe="/")
 
 
+def is_syntax_error(diag: dict[str, Any]) -> bool:
+    """A verse-lsp parse error (vErr:S…), as opposed to a type or name check."""
+    code = str(diag.get("code") or "")
+    message = str(diag.get("message") or "")
+    return diag.get("severity") in (None, 1) and (code.startswith("vErr:S") or message.startswith("vErr:S"))
+
+
 class LspStdioSession:
     """Drive verse-lsp over Content-Length stdio framing."""
 
@@ -46,6 +53,8 @@ class LspStdioSession:
         self._stderr_thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._diag_by_uri: dict[str, list[dict[str, Any]]] = {}
+        # The last publish per uri that held a syntax error (see syntax_errors).
+        self._syntax_by_uri: dict[str, list[dict[str, Any]]] = {}
 
     def file_uri(self, relative_path: str = "") -> str:
         root = self.project_root.replace("\\", "/").rstrip("/")
@@ -142,6 +151,22 @@ class LspStdioSession:
                     return list(diags)
         return None
 
+    def syntax_errors(self, uri: str) -> list[dict[str, Any]]:
+        """The last diagnostics published for uri that held a syntax error, or [].
+
+        verse-lsp flips between a file's real errors and an empty set for the same text
+        (Oct 17 2026: 1, 0, 1, 1, 0 for one file in one scan), and a scan that read the
+        empty one called broken Verse clean. A parse error for unchanged text is real.
+        """
+        with self._lock:
+            if uri in self._syntax_by_uri:
+                return list(self._syntax_by_uri[uri])
+            want = self._norm_uri(uri)
+            for key, diags in self._syntax_by_uri.items():
+                if self._norm_uri(key) == want:
+                    return list(diags)
+        return []
+
     def diagnostic_uri_count(self) -> int:
         with self._lock:
             return len(self._diag_by_uri)
@@ -209,6 +234,8 @@ class LspStdioSession:
                 if uri and isinstance(diags, list):
                     with self._lock:
                         self._diag_by_uri[uri] = diags
+                        if any(is_syntax_error(d) for d in diags if isinstance(d, dict)):
+                            self._syntax_by_uri[uri] = diags
         with self._lock:
             self._inbound.append(msg)
             msg_id = msg.get("id")
