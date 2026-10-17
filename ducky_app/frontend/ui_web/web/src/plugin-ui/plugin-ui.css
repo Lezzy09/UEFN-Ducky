@@ -396,6 +396,17 @@
   position: relative;
   margin-left: auto;
 }
+/* Sync now sits at the right, just before Change. */
+.plugin-scope-bar__sync {
+  margin-left: auto;
+}
+.plugin-scope-bar__sync + .plugin-scope-bar__change {
+  margin-left: 0;
+}
+.plugin-scope-bar__sync:disabled {
+  color: var(--muted, #888);
+  cursor: default;
+}
 .plugin-scope-bar__link {
   padding: 0;
   border: 0;

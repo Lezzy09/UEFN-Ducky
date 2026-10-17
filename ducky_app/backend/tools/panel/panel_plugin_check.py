@@ -41,6 +41,7 @@ SOURCES = {
     "plugin_panel_error": "panel",
     "plugin_tool_error": "tool",
     "plugin_node_error": "node",
+    "plugin_sync_error": "sync",
 }
 _KEEP = 500
 _MAX_AGE_S = 30 * 86400

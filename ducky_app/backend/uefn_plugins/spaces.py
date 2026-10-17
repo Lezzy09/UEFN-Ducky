@@ -202,12 +202,35 @@ def sync_active(plugin: str, *, force: bool = False, on_done: Any = None) -> dic
         return {"ok": True, "started": False}
 
     def _work() -> None:
-        out = provider().sync(scope["account"], scope["id"], force=force)
+        try:
+            out = provider().sync(scope["account"], scope["id"], force=force)
+        except Exception as exc:  # noqa: BLE001 — a round that dies says so instead of vanishing
+            out = _round_failed(scope, exc)
         if on_done and (out.get("changed") or not out.get("skipped")):
             on_done(out)
 
     threading.Thread(target=_work, name="space-data-sync", daemon=True).start()
     return {"ok": True, "started": True}
+
+
+def _round_failed(scope: dict[str, Any], exc: Exception) -> dict[str, Any]:
+    """A provider's round raised. The space shows the error (the bar says "Not synced" and
+    why) and the provider plugin's errors get it with the traceback; before, the thread
+    died silently and the bar kept saying when the last round worked."""
+    import traceback
+
+    from backend.store.repos import plugin_data as repo
+
+    msg = f"Sync failed: {type(exc).__name__}: {exc}"
+    _log.warning("sync of space %s failed", scope["id"], exc_info=True)
+    try:
+        repo.sync_put(scope["account"], scope["id"], state="error", error=msg[:500])
+        from backend.tools.panel.panel_plugin_check import record
+
+        record("plugin_sync_error", provider_plugin(), msg, stack=traceback.format_exc()[-4000:])
+    except Exception:  # noqa: BLE001 — reporting must not raise from the sync thread
+        _log.debug("recording the sync failure failed", exc_info=True)
+    return {"state": "error", "changed": [], "error": msg}
 
 
 def scope_status(plugin: str) -> dict[str, Any]:

@@ -11,6 +11,14 @@ const api = vi.hoisted(() => ({
   plugin_scope_sync: vi.fn(),
 }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api, isRemote: () => false }));
+const push = vi.hoisted(() => ({ handlers: new Set<(event: Record<string, unknown>) => void>() }));
+vi.mock("../hooks/usePanelPushBus", () => ({
+  installPanelPushBus: () => {},
+  subscribePanelPush: (fn: (event: Record<string, unknown>) => void) => {
+    push.handlers.add(fn);
+    return () => push.handlers.delete(fn);
+  },
+}));
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -57,5 +65,27 @@ describe("plugin scope bar", () => {
     expect(api.plugin_scope_set).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /^Switch/ }));
     await waitFor(() => expect(api.plugin_scope_set).toHaveBeenCalledWith("brainrot-tcg", "personal"));
+  });
+
+  it("Sync now forces a round and waits for its result", async () => {
+    api.plugin_scope_status.mockResolvedValue({
+      ok: true, visible: true, canChange: true, state: "ok", pending: 9, syncedAt: Date.now() / 1000 - 3120,
+      scope: { kind: "shared", label: "test", spaceId: "s1", readOnly: false },
+    });
+    api.plugin_scope_sync.mockResolvedValue({ ok: true, started: true });
+    bar();
+    expect(await screen.findByText("Synced 52 min ago · 9 changes waiting")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    await waitFor(() => expect(api.plugin_scope_sync).toHaveBeenCalledWith("brainrot-tcg", true));
+    expect((screen.getByRole("button", { name: "Syncing…" }) as HTMLButtonElement).disabled).toBe(true);
+
+    api.plugin_scope_status.mockResolvedValue({
+      ok: true, visible: true, canChange: true, state: "error", pending: 9, error: "Sync failed: HTTPException: boom",
+      syncedAt: Date.now() / 1000 - 3120, scope: { kind: "shared", label: "test", spaceId: "s1", readOnly: false },
+    });
+    push.handlers.forEach((fn) => fn({ type: "plugin_scope_changed", plugins: [], synced: true }));
+    expect(await screen.findByRole("button", { name: "Sync now" })).toBeTruthy();
+    expect(await screen.findByText("Sync failed: HTTPException: boom")).toBeTruthy();
+    expect(screen.getByText("Not synced · 9 changes waiting")).toBeTruthy();
   });
 });

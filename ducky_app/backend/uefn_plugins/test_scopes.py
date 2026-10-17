@@ -386,6 +386,32 @@ def test_signing_in_or_out_restarts_and_reloads_plugins_that_show_a_space(who: _
     assert not done.wait(0.2) and restarted == ["brainrot-tcg"]
 
 
+def test_a_sync_round_that_raises_shows_its_error_instead_of_vanishing(who: _Who, fake_spaces: FakeSpaces,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    from backend.tools.panel import panel_plugin_check
+
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio")
+    recorded: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(panel_plugin_check, "record", lambda kind, pid, msg, **_: recorded.append((kind, pid, msg)))
+
+    def boom(*_: Any, **__: Any) -> dict[str, Any]:
+        raise ConnectionAbortedError("upload cut off")
+
+    monkeypatch.setattr(fake_spaces, "sync", boom)
+    results: list[dict[str, Any]] = []
+    done = threading.Event()
+    spaces.sync_active("brainrot-tcg", force=True, on_done=lambda out: (results.append(out), done.set()))
+    assert done.wait(5)
+    msg = "Sync failed: ConnectionAbortedError: upload cut off"
+    assert results == [{"state": "error", "changed": [], "error": msg}]
+    assert recorded == [("plugin_sync_error", "test-spaces", msg)]
+    status = spaces.scope_status("brainrot-tcg")
+    assert (status["state"], status["error"]) == ("error", msg)
+    assert repo.sync_get(ana, "spaceT")["state"] == "error"
+
+
 def test_the_picker_lists_the_providers_spaces_and_a_fresh_link_waits(who: _Who, fake_spaces: FakeSpaces) -> None:
     who.be("ana@x.org")
     out = spaces.scope_choices()

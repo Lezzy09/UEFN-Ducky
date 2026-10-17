@@ -9,6 +9,8 @@ import { kindTitle, lostText, storageLine, switchConfirm, syncText } from "./sco
 /** Shared pulls: on open, on focus, and each minute while a shared-scope panel is open.
  * The provider also caps it at one call per space per minute. */
 const SYNC_EVERY_MS = 60_000;
+/** Sync now waits for its round's result; a round stuck longer than this frees the button. */
+const SYNC_NOW_GIVE_UP_MS = 120_000;
 
 /** Help text (same words as the web). */
 const DATA_AT_REST = "Plugin data on each PC is encrypted for the signed-in account.";
@@ -36,6 +38,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
   const [menu, setMenu] = useState<PluginScopeChoice[] | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [syncing, setSyncing] = useState(false);
   const notify = useRef(onScopeChanged);
   notify.current = onScopeChanged;
   const last = useRef<PluginScopeStatus | null>(null);
@@ -61,6 +64,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
     installPanelPushBus();
     return subscribePanelPush((event) => {
       if (event.type === "plugin_scope_changed") {
+        if (event.synced) setSyncing(false);
         // A sync round with no changes for this plugin only refreshes the bar.
         const plugins = event.plugins ?? [];
         void refresh(plugins.includes(pluginId) || (!event.synced && plugins.length === 0));
@@ -85,6 +89,19 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
       stop();
     };
   }, [spaceId, pluginId, active]);
+
+  useEffect(() => {
+    if (!syncing) return;
+    const giveUp = window.setTimeout(() => setSyncing(false), SYNC_NOW_GIVE_UP_MS);
+    return () => window.clearTimeout(giveUp);
+  }, [syncing]);
+
+  /** A full round now (sends this PC's changes, brings everyone else's), past the minute cap. */
+  const syncNow = async () => {
+    setSyncing(true);
+    const res = await getApi()?.plugin_scope_sync?.(pluginId, true);
+    if (!res?.ok || !res.started) setSyncing(false);
+  };
 
   if (!status?.visible || !status.scope) return null;
   const scope = status.scope;
@@ -188,6 +205,17 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
       )}
       {status.error && status.state !== "offline" ? (
         <span className="plugin-scope-bar__text plugin-scope-bar__text--error">{status.error}</span>
+      ) : null}
+      {shared && !lost && !locked ? (
+        <button
+          type="button"
+          className="plugin-scope-bar__link plugin-scope-bar__sync"
+          onClick={() => void syncNow()}
+          disabled={syncing}
+          title={`Send this PC's changes to ${scope.label} and get everyone else's now`}
+        >
+          {syncing ? "Syncing…" : "Sync now"}
+        </button>
       ) : null}
       <span className="plugin-scope-bar__change">
         <button
