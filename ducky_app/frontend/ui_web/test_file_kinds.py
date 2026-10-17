@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import mimetypes
+
 from frontend.ui_web.file_kinds import (
     classify_by_name,
     is_audio_file_name,
@@ -40,6 +42,19 @@ def test_mime_for_audio_and_video():
         assert mime_for_path(name).startswith("audio/"), name
     for name in ("old.m4v", "theora.ogv"):
         assert mime_for_path(name).startswith("video/"), name
+
+
+def test_web_types_ignore_the_windows_registry(monkeypatch):
+    # mimetypes reads HKCR on Windows; a PC with .js/.css as text/plain there got
+    # its scripts refused and sat on the loading splash forever.
+    monkeypatch.setattr(mimetypes, "guess_type", lambda *a, **k: ("text/plain", None))
+    assert mime_for_path("assets/index-BKxgrpK1.js") == "text/javascript"
+    assert mime_for_path("assets/worker.MJS") == "text/javascript"
+    assert mime_for_path("assets/index-C4Yo7bd-.css") == "text/css"
+    assert mime_for_path("index.html") == "text/html"
+    assert mime_for_path("ui/data.json") == "application/json"
+    assert mime_for_path("draco/decoder.wasm") == "application/wasm"
+    assert mime_for_path("verse-icon.svg") == "image/svg+xml"
 
 
 def test_ext_encoded_and_ws_encoded_audio_video_paths_classify():

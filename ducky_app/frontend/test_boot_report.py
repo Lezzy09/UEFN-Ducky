@@ -309,3 +309,92 @@ def test_second_launch_preserves_running_launch_until_its_crash(crash, tmp_path,
         if proc.poll() is None:
             proc.kill()
         proc.communicate(timeout=10)
+
+
+@pytest.fixture
+def page(crash, monkeypatch):
+    monkeypatch.setattr(boot_report, "_page", {"started": False, "watching": False, "errors": []})
+    return crash
+
+
+_SCRIPTS_AS_TEXT = [
+    "WebView2 Edg/141.0.3537.71",
+    "index.html 200 text/html",
+    "assets/index-x.js 200 text/plain",
+]
+
+
+def test_a_page_stuck_on_the_splash_is_reported_like_a_crash(page) -> None:
+    # Oct 17 2026: a user's window sat on the duck splash forever and nothing was reported.
+    boot_report.begin("1.2.394")
+    boot_report.stage("window_shown")
+    boot_report.mark("ok")
+    body = boot_report.page_stuck(_SCRIPTS_AS_TEXT, 60)
+    assert body is not None
+    assert "got stuck on its loading screen (last stage: window_shown)" in body["message"]
+    assert "Likely cause: assets/index-x.js was sent as text/plain" in body["error_log"]
+    assert "WebView2 Edg/141.0.3537.71" in body["error_log"]
+    assert "Likely cause:" in boot_report.why_summary(body)
+    # Closing the stuck window is a normal exit, but the next launch still asks.
+    boot_report.mark("closed")
+    boot_report.begin("1.2.394")
+    assert len(page["asked"]) == 1
+    assert "got stuck" in page["asked"][0]["message"]
+
+
+def test_a_page_that_started_is_not_stuck(page) -> None:
+    boot_report.begin("1.2.394")
+    boot_report.mark("ok")
+    boot_report.page_started()
+    boot_report.page_error("after start: not kept")
+    assert boot_report.page_stuck(_SCRIPTS_AS_TEXT, 60) is None
+    assert ["page_started"] == [s[0] for s in boot_report._state["stages"] if s[0] == "page_started"]
+    boot_report.mark("closed")
+    boot_report.begin("1.2.394")
+    assert page["asked"] == []
+
+
+def test_answering_the_stuck_popup_while_open_means_the_next_launch_does_not_ask(page, monkeypatch) -> None:
+    import threading
+    import tkinter
+
+    monkeypatch.setattr(tkinter, "Toplevel", lambda root: object())
+    monkeypatch.setattr(boot_report, "_fill_popup", lambda root, body, done: done(True))
+    boot_report.begin("1.2.394")
+    boot_report.mark("ok")
+    boot_report.page_error("Could not load http://127.0.0.1:4198/assets/index-x.js")
+    body = boot_report.page_stuck(["index.html 200 text/html", "assets/index-x.js 200 text/javascript"], 60)
+    assert "Likely cause: Could not load" in body["error_log"]
+    boot_report.show_now(None, body)
+    for t in threading.enumerate():
+        if t.name == "crash-report-send":
+            t.join(5)
+    assert len(page["sent"]) == 1 and [r["sent"] for r in boot_report.list_reports()] == [True]
+    boot_report.mark("closed")
+    boot_report.begin("1.2.394")
+    assert page["asked"] == []
+
+
+def test_watch_page_shows_the_report_only_when_the_page_never_started(page) -> None:
+    import threading
+
+    boot_report.begin("1.2.394")
+    boot_report.mark("ok")
+    shown = threading.Event()
+    boot_report.watch_page(lambda body: shown.set(), lambda: [], wait_s=0.05)
+    assert shown.wait(5)
+    assert "the window never asked for the app's scripts" in boot_report._state["error"]
+
+
+@pytest.mark.parametrize(
+    ("files", "cause"),
+    [
+        ([], "never asked for the app's scripts"),
+        (["index.html 200 text/html", "assets/a.js 404"], "assets/a.js could not be loaded (404)"),
+        (["assets/a.js 200 text/javascript", "assets/a.css 200 text/plain"], "assets/a.css was sent as text/plain"),
+        (["assets/a.js 200 text/javascript", "assets/a.css 200 text/css"], ""),
+    ],
+)
+def test_stuck_cause(files, cause) -> None:
+    got = boot_report._stuck_cause(files, [])
+    assert (cause in got) if cause else got == ""

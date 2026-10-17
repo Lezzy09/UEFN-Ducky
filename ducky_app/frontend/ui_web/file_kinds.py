@@ -305,8 +305,30 @@ def looks_like_text(head: bytes) -> bool:
     return (weird / len(sample)) < 0.30
 
 
+# Types the browser checks strictly (module scripts, stylesheets, wasm). On Windows,
+# mimetypes takes them from the registry, and some PCs map .js or .css to
+# text/plain there; the app's own scripts are then refused and it never gets past
+# the loading splash. These never ask the registry.
+_WEB_TYPES = {
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".css": "text/css",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".json": "application/json",
+    ".map": "application/json",
+    ".svg": "image/svg+xml",
+    ".wasm": "application/wasm",
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+}
+
+
 def mime_for_path(relative_path: str) -> str:
     name = _basename(relative_path)
+    fixed = _WEB_TYPES.get(_suffix(name))
+    if fixed:
+        return fixed
     guessed, _ = mimetypes.guess_type(name)
     if guessed:
         return guessed

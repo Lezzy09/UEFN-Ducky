@@ -355,3 +355,20 @@ def test_a_plugins_media_link_streams_ranges_and_lets_the_panel_read_frames(pane
         assert resp.headers["Accept-Ranges"] == "bytes"
         assert resp.headers["Access-Control-Allow-Origin"] == "*"
         assert resp.read() == bytes(range(10, 20))
+
+
+def test_app_scripts_keep_their_type_when_the_registry_says_text_plain(panel_server, monkeypatch, tmp_path):
+    # Oct 17 2026: a PC whose registry maps .js to text/plain never got past the boot
+    # splash, because WebView2 refuses a module script that isn't served as JavaScript.
+    import mimetypes
+    import urllib.request
+
+    monkeypatch.setattr(mimetypes, "guess_type", lambda *a, **k: ("text/plain", None))
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "index-x.js").write_text("export {};", encoding="utf-8")
+    (tmp_path / "assets" / "index-x.css").write_text("body{}", encoding="utf-8")
+    for name, want in (("index-x.js", "text/javascript"), ("index-x.css", "text/css")):
+        req = urllib.request.Request(f"http://127.0.0.1:{panel_server}/assets/{name}",
+                                     headers={"Host": "127.0.0.1"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            assert resp.headers["Content-Type"] == want

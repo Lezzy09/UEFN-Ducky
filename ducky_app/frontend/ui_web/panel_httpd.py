@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import mimetypes
 import re
 import secrets
 import socket
@@ -18,6 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from frontend.settings import PANEL_LISTENER_PORT, default_app_data_dir
+from frontend.ui_web.file_kinds import mime_for_path
 
 PANEL_UI_HTTP_PORT = PANEL_LISTENER_PORT - 1
 # Cloudflare (and any reverse proxy) needs HTTP/1.1 + Content-Length.
@@ -112,6 +112,26 @@ _window_rtc_lock = threading.Lock()
 # Every live /__window_stream viewer socket. One viewer at a time: a new
 # browser kicks the old one (its reader thread wakes on the closed socket).
 _window_viewers: list[object] = []
+# The page's own files as sent ("path status type"), and the browser that asked for
+# index.html: what a stuck-on-the-splash crash report shows.
+_page_files: deque[str] = deque(maxlen=24)
+_page_browser = {"name": ""}
+_PAGE_FILE_SUFFIXES = (".html", ".js", ".mjs", ".css")
+_BROWSER_RE = re.compile(r"\b(Edg|Chrome)/[\d.]+")
+
+
+def page_files() -> list[str]:
+    browser = _page_browser["name"]
+    return ([f"WebView2 {browser}"] if browser else []) + list(_page_files)
+
+
+def _note_page_file(rel: str, status: int, mime: str = "", user_agent: str = "") -> None:
+    if not rel.lower().endswith(_PAGE_FILE_SUFFIXES):
+        return
+    if rel == "index.html":
+        found = _BROWSER_RE.search(user_agent or "")
+        _page_browser["name"] = found.group(0) if found else ""
+    _page_files.append(f"{rel} {status} {mime}".strip())
 
 
 def panel_ui_http_url() -> str:
@@ -699,6 +719,22 @@ def start_panel_ui_server(dist_root: Path) -> str:
                         return
                     self._send_json(200, {"ok": True, "result": result})
                     return
+                # The window's page started, or hit an error before it could (boot_report:
+                # a page that never starts is reported as a stuck launch).
+                if path == "/__panel_boot":
+                    try:
+                        payload = self._read_json_body()
+                    except Exception:
+                        payload = None
+                    if isinstance(payload, dict) and host_is_local(self._request_host()):
+                        from frontend import boot_report
+
+                        if payload.get("started"):
+                            boot_report.page_started()
+                        elif payload.get("error"):
+                            boot_report.page_error(str(payload["error"]))
+                    self._send_json(200, {"ok": True})
+                    return
                 # Cross-process event bridge: the stdio MCP bridge runs in a
                 # SEPARATE process from this panel, so its notify_chats_changed /
                 # agent-stream pushes can't reach the UI directly. It POSTs them
@@ -1212,12 +1248,15 @@ def start_panel_ui_server(dist_root: Path) -> str:
                 try:
                     file_path.relative_to(root)
                 except ValueError:
+                    _note_page_file(rel, 403)
                     self.send_error(403)
                     return
                 if not file_path.is_file():
+                    _note_page_file(rel, 404)
                     self.send_error(404)
                     return
-                mime = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+                mime = mime_for_path(file_path.name)
+                _note_page_file(rel, 200, mime, self.headers.get("User-Agent") or "")
                 data = file_path.read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", mime)

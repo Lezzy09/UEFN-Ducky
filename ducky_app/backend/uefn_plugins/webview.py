@@ -10,11 +10,12 @@ Delete this file (+ the one-line hooks) to remove the feature.
 
 from __future__ import annotations
 
-import mimetypes
 import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
+
+from frontend.ui_web.file_kinds import mime_for_path
 
 # Route: /plugin-ui/<plugin_id>/<relative/path>
 PLUGIN_UI_ROUTE_RE = re.compile(
@@ -214,7 +215,7 @@ def try_serve_plugin_ui(handler: Any, rel_path: str) -> bool:
         send_plugin_ui_error(handler, 404)
         return True
 
-    mime = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+    mime = mime_for_path(file_path.name)
     if mime.split(";", 1)[0].strip().lower() == "text/html":
         data = with_panel_error_script(data)
     _send_plugin_ui_bytes(handler, data, mime)
@@ -273,7 +274,7 @@ def try_serve_user_sound(handler: Any, rel_path: str) -> bool:
         handler.send_error(404)
         return True
 
-    mime = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+    mime = mime_for_path(target.name)
     handler.send_response(200)
     handler.send_header("Content-Type", mime)
     handler.send_header("Content-Length", str(len(data)))

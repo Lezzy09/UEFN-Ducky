@@ -17,6 +17,11 @@ import { installAppIdle } from "./utils/appIdle";
 // mounts so the first PanelApi call already has somewhere to go.
 if (isDirectMode()) {
   startDirectTransport(directConfigFromLocation(__PANEL_VERSION__));
+} else {
+  // Tell Ducky the page started: a window whose page never gets here is reported
+  // as stuck on its loading screen (frontend/boot_report.py).
+  (window as Window & { __duckyStarted?: boolean }).__duckyStarted = true;
+  void fetch("/__panel_boot", { method: "POST", body: '{"started":true}' }).catch(() => undefined);
 }
 
 // Endless glows hold still while the window sits in the background.

@@ -556,6 +556,14 @@ def _run_panel(api_holder: dict[str, object]) -> None:
 
             boot_report.stage("window_shown")
             boot_report.mark("ok")
+            from frontend.ui_web.panel_httpd import page_files
+            from frontend.ui_web.shutdown import schedule_tk_call
+
+            # Still on the loading splash a minute later: a crash, with the pop-up now.
+            boot_report.watch_page(
+                lambda body: schedule_tk_call(lambda: boot_report.show_now(tk_root_holder["root"], body)),
+                page_files,
+            )
         except Exception:
             pass
 

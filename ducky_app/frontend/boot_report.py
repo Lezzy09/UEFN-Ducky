@@ -10,6 +10,10 @@ away), and Send report / Don't send. Nothing is sent without that click. Sent re
 to the uefnducky.org feedback form (``source: crash``); unsent ones stay in Settings →
 Support with Send and Delete.
 
+A launch whose window opens but whose page never starts (stuck on the loading splash)
+counts as a crash too: after ``STUCK_AFTER_S`` the same pop-up shows at once, and if it
+is never answered the next launch asks.
+
 Standard library only: this runs before the rest of Ducky has loaded.
 """
 
@@ -20,7 +24,9 @@ import os
 import platform
 import re
 import sys
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -45,9 +51,14 @@ NO_TRACE = (
 )
 # sent = the user sent it; kept = not sent (they chose not to, or sending failed).
 _REPORT_ID = re.compile(r"^(?:sent|kept)-\d{8}-\d{6}$")
+# How long the window's page has, once the window shows, to run its main script.
+STUCK_AFTER_S = 60.0
+STUCK_HEADING = "UEFN Ducky got stuck while starting"
 
 _state: dict[str, Any] = {}
 _native_file: Any = None
+# The window's page: started = its main script ran; errors = what it hit before that.
+_page: dict[str, Any] = {"started": False, "watching": False, "errors": []}
 
 
 def _dir() -> Path:
@@ -222,6 +233,8 @@ def build_report(previous: dict[str, Any], native: str, *, restarted: bool = Fal
         return None
     if state == "ok" and not native and restarted:
         return None
+    if state == "stuck" and previous.get("reported") and not native:
+        return None  # the pop-up already asked while that launch was open
     started = float(previous.get("started") or 0.0)
     stages = previous.get("stages") or []
     last = stages[-1][0] if stages else "launch"
@@ -230,6 +243,8 @@ def build_report(previous: dict[str, Any], native: str, *, restarted: bool = Fal
         what = f"Ducky crashed {when} (last stage: {last})"
     elif state == "fatal":
         what = f"Ducky showed a startup error (last stage: {last})"
+    elif state == "stuck":
+        what = f"Ducky got stuck on its loading screen (last stage: {last})"
     elif state == "ok":
         what = "Ducky closed by itself while running"
     else:
@@ -275,7 +290,7 @@ def why_summary(body: dict[str, Any]) -> str:
             break
     for line in log:
         lowered = line.lower()
-        if line == NO_TRACE or "fatal exception" in lowered or line.startswith(("ImportError", "RuntimeError", "OSError", "MemoryError")):
+        if line == NO_TRACE or "fatal exception" in lowered or line.startswith(("ImportError", "RuntimeError", "OSError", "MemoryError", "Likely cause: ")):
             out.append(line.strip())
             break
     return "\n".join(out)
@@ -302,15 +317,47 @@ def _ask_to_send(body: dict[str, str]) -> bool:
     True only when the user presses Send report."""
     try:
         import tkinter as tk
-    except Exception:
-        return False
-    bg, fg, dim, accent, panel = "#121216", "#ededed", "#a1a1aa", "#2563eb", "#1c1c22"
-    choice = {"send": False}
-    try:
+
         root = tk.Tk()
     except Exception:
         return False
-    root.title("UEFN Ducky closed unexpectedly")
+    choice = {"send": False}
+    _fill_popup(root, body, lambda send: choice.update(send=send))
+    try:
+        root.mainloop()
+    except Exception:
+        pass
+    return choice["send"]
+
+
+def show_now(tk_root: Any, body: dict[str, str]) -> None:
+    """The crash pop-up while this launch is still open (it got stuck). Runs on the Tk
+    pump thread. Answered = the next launch won't ask again; unanswered = it will."""
+    import tkinter as tk
+
+    def done(send: bool) -> None:
+        _state["reported"] = True
+        _write_state()
+        version = str(_state.get("version") or "")
+        threading.Thread(
+            target=lambda: _save(body, "sent" if send and _send(body, version) else "kept"),
+            daemon=True,
+            name="crash-report-send",
+        ).start()
+
+    try:
+        _fill_popup(tk.Toplevel(tk_root), body, done)
+    except Exception:
+        pass
+
+
+def _fill_popup(root: Any, body: dict[str, str], done: Callable[[bool], None]) -> None:
+    """The pop-up's contents in *root* (a Tk root or a Toplevel); *done(send)* runs once."""
+    import tkinter as tk
+
+    bg, fg, dim, accent, panel = "#121216", "#ededed", "#a1a1aa", "#2563eb", "#1c1c22"
+    heading = STUCK_HEADING if "got stuck" in str(body.get("message") or "") else "UEFN Ducky closed unexpectedly"
+    root.title(heading)
     root.configure(bg=bg, padx=22, pady=18)
     root.resizable(False, False)
     try:
@@ -318,7 +365,7 @@ def _ask_to_send(body: dict[str, str]) -> bool:
     except Exception:
         pass
     wrap = 470
-    tk.Label(root, text="UEFN Ducky closed unexpectedly", bg=bg, fg=fg, font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x")
+    tk.Label(root, text=heading, bg=bg, fg=fg, font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x")
     tk.Label(root, text=why_summary(body), bg=bg, fg=fg, font=("Segoe UI", 10), justify="left", wraplength=wrap, anchor="w").pack(fill="x", pady=(10, 6))
     tk.Label(
         root,
@@ -339,26 +386,21 @@ def _ask_to_send(body: dict[str, str]) -> bool:
             details.pack(fill="both", pady=(12, 0), before=buttons)
             view.configure(text="Hide report")
 
-    def send() -> None:
-        choice["send"] = True
+    def answer(send: bool) -> None:
         root.destroy()
+        done(send)
 
     style = {"font": ("Segoe UI", 10), "relief": "flat", "padx": 14, "pady": 6, "cursor": "hand2", "borderwidth": 0}
     view = tk.Button(buttons, text="View report", bg=panel, fg=fg, activebackground=panel, activeforeground=fg, command=toggle_details, **style)
     view.pack(side="left")
-    tk.Button(buttons, text="Send report", bg=accent, fg="#ffffff", activebackground=accent, activeforeground="#ffffff", command=send, **style).pack(side="right")
-    tk.Button(buttons, text="Don't send", bg=panel, fg=fg, activebackground=panel, activeforeground=fg, command=root.destroy, **style).pack(side="right", padx=(0, 8))
-    root.protocol("WM_DELETE_WINDOW", root.destroy)
+    tk.Button(buttons, text="Send report", bg=accent, fg="#ffffff", activebackground=accent, activeforeground="#ffffff", command=lambda: answer(True), **style).pack(side="right")
+    tk.Button(buttons, text="Don't send", bg=panel, fg=fg, activebackground=panel, activeforeground=fg, command=lambda: answer(False), **style).pack(side="right", padx=(0, 8))
+    root.protocol("WM_DELETE_WINDOW", lambda: answer(False))
     root.update_idletasks()
     x = (root.winfo_screenwidth() - root.winfo_reqwidth()) // 2
     y = (root.winfo_screenheight() - root.winfo_reqheight()) // 3
     root.geometry(f"+{max(0, x)}+{max(0, y)}")
     root.focus_force()
-    try:
-        root.mainloop()
-    except Exception:
-        pass
-    return choice["send"]
 
 
 def _save(body: dict[str, str], prefix: str) -> str:
@@ -497,7 +539,9 @@ def mark(state: str, *, error: str = "") -> None:
         return
     if _state.get("state") == "fatal" and state == "closed":
         return  # the startup error dialog exits through the normal shutdown: keep the error
-    _state["state"] = state
+    # Closing a stuck window is a normal exit, but the launch still got stuck.
+    if not (_state.get("state") == "stuck" and state == "closed"):
+        _state["state"] = state
     if error:
         _state["error"] = _scrub(error)[-4000:]
     _write_state()
@@ -512,3 +556,69 @@ def mark(state: str, *, error: str = "") -> None:
             _native_path().write_text("", encoding="utf-8")
         except Exception:
             pass
+
+
+def page_started() -> None:
+    """The window's page ran its main script: the app is past its loading splash."""
+    if _page["started"]:
+        return
+    _page["started"] = True
+    stage("page_started")
+
+
+def page_error(message: str) -> None:
+    """An error the page hit before it started (index.html's catcher sends these)."""
+    if not _page["started"] and len(_page["errors"]) < 8:
+        _page["errors"].append(_scrub(str(message or "").strip())[:300])
+
+
+def watch_page(show: Callable[[dict[str, str]], None], files: Callable[[], list[str]], wait_s: float = STUCK_AFTER_S) -> None:
+    """Once the window shows: if its page hasn't started within *wait_s*, this launch is
+    stuck; *show* gets the report (the crash pop-up). *files* lists what the page loaded."""
+    if not _state or _page["started"] or _page["watching"]:
+        return
+    _page["watching"] = True
+
+    def check() -> None:
+        body = page_stuck(files(), wait_s)
+        if body:
+            show(body)
+
+    timer = threading.Timer(wait_s, check)
+    timer.daemon = True
+    timer.start()
+
+
+def _stuck_cause(files: list[str], errors: list[str]) -> str:
+    """What most likely kept the page from starting: a script that wasn't sent right
+    (the reason it failed) before the page's own error, before nothing at all."""
+    scripts = [f.split(" ") for f in files if f.split(" ")[0].endswith((".js", ".mjs", ".css"))]
+    for name, status, *_kind in scripts:
+        if status != "200":
+            return f"{name} could not be loaded ({status}): files may be missing from the install"
+    for name, _status, *kind in scripts:
+        want = "text/css" if name.endswith(".css") else "text/javascript"
+        if (kind[0] if kind else "") != want:
+            return f"{name} was sent as {kind[0] if kind else 'nothing'}, which WebView2 refuses"
+    if errors:
+        return errors[0]
+    if not scripts:
+        return "the window never asked for the app's scripts (WebView2 did not load the page)"
+    return ""
+
+
+def page_stuck(files: list[str], waited: float) -> dict[str, str] | None:
+    """Mark this launch stuck on its loading splash and return the report, or None when
+    the page started after all (or this process isn't recording)."""
+    if not _state or _page["started"]:
+        return None
+    errors = list(_page["errors"])
+    lines = [f"The window opened but its page did not start within {waited:.0f} s."]
+    cause = _stuck_cause(files, errors)
+    if cause:
+        lines.insert(0, "Likely cause: " + cause)
+    if errors:
+        lines += ["Page errors:", *("  " + e for e in errors)]
+    lines += ["Page files:", *("  " + f for f in files)] if files else ["Page files: none"]
+    mark("stuck", error="\n".join(lines))
+    return build_report(dict(_state), "")
