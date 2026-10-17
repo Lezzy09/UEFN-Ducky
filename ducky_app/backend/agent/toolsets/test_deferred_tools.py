@@ -139,3 +139,25 @@ def test_ducky_call_tool_dispatches(monkeypatch):
         assert "ok" in raw
     finally:
         reset_plan_only(token)
+
+
+def test_a_call_wrapped_twice_runs_the_inner_tool(monkeypatch):
+    # Oct 17 2026: a lead sent ducky_call_tool(name="ducky_call_tool", arguments={name, arguments})
+    # and got "cannot dispatch meta-tool ducky_call_tool".
+    from backend.tools.panel import ducky_panel
+    import backend.agent.tools as tools_mod
+
+    seen = []
+
+    async def _exec(name, arguments=None, **_kw):
+        seen.append((name, arguments))
+        return tools_mod.ToolCallResult(ok=True, tool=name, data="{}")
+
+    monkeypatch.setattr(tools_mod, "execute_tool", _exec)
+    token = set_plan_only(False)
+    try:
+        asyncio.run(ducky_panel.ducky_call_tool(
+            name="ducky_call_tool", arguments={"name": "find_workflows", "arguments": {"task": "trailer"}}))
+    finally:
+        reset_plan_only(token)
+    assert seen == [("find_workflows", {"task": "trailer"})]

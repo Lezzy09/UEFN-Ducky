@@ -351,6 +351,13 @@ async def ducky_call_tool(
         if reason:
             return tool_json({"ok": False, "tool": str(name), "error": reason}, pretty=pretty)
     tool_name = (name or "").strip()
+    # A model that wraps the call twice (ducky_call_tool → ducky_call_tool → the tool) means the
+    # inner tool: run it instead of refusing the turn.
+    for _ in range(3):
+        inner = arguments if isinstance(arguments, dict) else {}
+        if tool_name != "ducky_call_tool" or not str(inner.get("name") or "").strip():
+            break
+        tool_name, arguments = str(inner["name"]).strip(), inner.get("arguments")
     if not tool_name:
         raise ValueError("name must not be empty")
     if tool_name in _DISPATCHER_BLOCKLIST:
