@@ -186,20 +186,20 @@ def test_an_agent_waiting_on_a_reply_hears_the_chat_needs_a_model(external_turns
     assert agent_modes.held_for_model("member") == 1
 
 
-def test_a_ducky_chat_with_no_model_takes_ducky_ai(monkeypatch):
+def test_a_ducky_chat_with_no_model_takes_the_fallback_model(monkeypatch):
     import frontend.favorite_models as fm
 
-    ducky_ai = fm.ResolveOk(coding_agent="ducky", model="ducky-brain", provider="uefn_ducky",
-                            selection=fm.FavoriteSelection(backend="uefn_ducky", model_id="ducky-brain"))
-    monkeypatch.setattr(fm, "chat_model_choice", lambda settings, keep_agent=False: (ducky_ai, ""))
+    fallback = fm.ResolveOk(coding_agent="ducky", model="hosted-ai", provider="hosted",
+                            selection=fm.FavoriteSelection(backend="hosted", model_id="hosted-ai"))
+    monkeypatch.setattr(fm, "chat_model_choice", lambda settings, keep_agent=False: (fallback, ""))
     monkeypatch.setattr(agent_modes, "save_conversation", lambda c: None)
     monkeypatch.setattr(agent_modes, "notify_chats_changed", lambda *a, **kw: None)
     conv = SimpleNamespace(id="c1", title="Builder", folder_id="", coding_agent="ducky", model="", provider="")
     pushed: list[dict] = []
-    assert agent_modes._take_chat_model(conv, SimpleNamespace(), pushed.append) == ("ducky-brain", "ducky", "")
-    assert (conv.coding_agent, conv.model, conv.provider) == ("ducky", "ducky-brain", "uefn_ducky")
-    assert pushed == [{"type": "model_adopted", "conv_id": "c1", "model": "ducky-brain",
-                       "coding_agent": "ducky", "provider": "uefn_ducky"}]
+    assert agent_modes._take_chat_model(conv, SimpleNamespace(), pushed.append) == ("hosted-ai", "ducky", "")
+    assert (conv.coding_agent, conv.model, conv.provider) == ("ducky", "hosted-ai", "hosted")
+    assert pushed == [{"type": "model_adopted", "conv_id": "c1", "model": "hosted-ai",
+                       "coding_agent": "ducky", "provider": "hosted"}]
     monkeypatch.setattr(fm, "chat_model_choice", lambda settings, keep_agent=False: (None, "Pick a model."))
     conv.model = ""
     assert agent_modes._take_chat_model(conv, SimpleNamespace(), pushed.append) == ("", "ducky", "Pick a model.")

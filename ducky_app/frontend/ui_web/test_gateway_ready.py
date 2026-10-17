@@ -87,11 +87,11 @@ def test_resolve_gateway_credential_uses_normalize_not_localhost():
         ),
         patch(
             "backend.uefn_plugins.host.get_contributions",
-            return_value={"llm_providers": [{"id": "uefn_ducky", "kind": "secret"}]},
+            return_value={"llm_providers": [{"id": "hosted", "kind": "secret"}]},
         ),
         patch("backend.agent.secrets.get_key", return_value=None),
     ):
-        assert resolve_gateway_credential("uefn_ducky") == "dky_v1_device"
+        assert resolve_gateway_credential("hosted") == "dky_v1_device"
 
 
 def test_warm_model_cache_fetches_contrib_key_optional_without_factory():
@@ -99,23 +99,23 @@ def test_warm_model_cache_fetches_contrib_key_optional_without_factory():
     from backend.agent.model_fetch import ModelInfo
 
     pa._model_cache.clear()
-    fake = [{"id": "uefn_ducky", "label": "UEFN Ducky", "key_optional": True, "kind": "secret"}]
+    fake = [{"id": "hosted", "label": "Hosted", "key_optional": True, "kind": "secret"}]
 
     def _fetch(provider: str, _cred: str):
-        assert provider == "uefn_ducky"
-        return [ModelInfo(id="ducky-brain", display_name="UEFN Ducky")]
+        assert provider == "hosted"
+        return [ModelInfo(id="hosted-ai", display_name="Hosted")]
 
     with (
         patch("backend.uefn_plugins.host.get_contributions", return_value={"llm_providers": fake}),
         patch("backend.uefn_plugins.host.get_llm_provider_registration", return_value={}),
         patch("backend.uefn_plugins.host.resolve_gateway_credential", return_value=""),
-        patch("frontend.ui_web.panel_api._contributed_provider_ids", return_value={"uefn_ducky"}),
+        patch("frontend.ui_web.panel_api._contributed_provider_ids", return_value={"hosted"}),
         patch("frontend.ui_web.panel_api.all_providers", return_value=()),
         patch("backend.agent.model_fetch.fetch_models", _fetch),
         patch("frontend.ui_web.panel_api._save_model_cache_to_disk"),
     ):
         pa._warm_model_cache()
-    assert pa._model_cache["uefn_ducky"][0].id == "ducky-brain"
+    assert pa._model_cache["hosted"][0].id == "hosted-ai"
 
 
 def test_resolve_gateway_credential_url_defaults_localhost():
@@ -135,11 +135,16 @@ def test_resolve_gateway_credential_url_defaults_localhost():
         assert resolve_gateway_credential("ollama") == "http://localhost:11434"
 
 
-def test_ducky_brain_is_the_hosted_account_gateway():
-    from backend.agent.model_pricing import infer_provider
+def test_a_gateway_s_own_model_ids_find_it():
+    from unittest.mock import patch
 
-    assert infer_provider("ducky-brain") == "uefn_ducky"
-    assert infer_provider("uefn_ducky:ducky-brain") == "uefn_ducky"
-    assert infer_provider("claude_code:ducky-brain") == "uefn_ducky"
-    assert infer_provider("ducky-ai") == "uefn_ducky"
-    assert infer_provider("uefn_ducky:ducky-ai") == "uefn_ducky"
+    from backend.agent.model_pricing import infer_provider
+    from backend.uefn_plugins import host
+
+    reg = {"factory": object, "model_ids": ("hosted-ai",), "model_aliases": {"hosted-old": "hosted-ai"}}
+    with patch.dict(host._LLM_PROVIDER_FACTORIES, {"hosted": reg}):
+        for mid in ("hosted-ai", "hosted:hosted-ai", "claude_code:hosted-old", "hosted-old"):
+            assert infer_provider(mid) == "hosted", mid
+        assert host.current_model_id("hosted", "hosted-old") == "hosted-ai"
+        assert host.current_model_id("hosted", "hosted-ai") == "hosted-ai"
+    assert infer_provider("hosted-ai") != "hosted"  # unregistered: no gateway owns it

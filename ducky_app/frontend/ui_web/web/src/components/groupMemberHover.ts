@@ -1,4 +1,5 @@
 import { parseFavoriteSelection } from "../hooks/favoriteModelsCatalog";
+import { getCachedModels } from "../hooks/modelsCatalogCache";
 import type { AgentProfileDto, ChatTab, ChangesetRunDto, FolderItem, GroupMemberDto } from "../types/panel";
 import {
   findFolderByHubId,
@@ -59,7 +60,10 @@ export function shortModelLabel(raw: string): string {
   const text = (raw || "").trim();
   if (!text) return "Default model";
   const parsed = parseFavoriteSelection(text);
-  return parsed?.modelId || text;
+  const id = parsed?.modelId || text;
+  // The model's name from the catalog ("Ducky AI", not its id), old ids included.
+  const row = (getCachedModels() || []).find((m) => m.id === id || (m.aliases || []).includes(id));
+  return row?.name?.trim() || id;
 }
 
 /** "claude-haiku" or "cursor · claude-haiku" when a coding agent is set. */

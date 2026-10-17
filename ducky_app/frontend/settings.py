@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import threading
 import time
@@ -347,18 +348,18 @@ class PanelSettings:
             raise ValueError("ai_ignore_strict must be a boolean")
         if self.port < 1 or self.port > 65535:
             raise ValueError("port must be 1-65535")
-        # Builtins + contributed gateway ids (UEFN Ducky, Cursor's API sibling, …).
-        # uefn_ducky (Ducky AI) is listed only once the site grants it: a saved pick
-        # must not fail every settings save while that answer is pending or offline.
+        # Builtins + contributed gateway ids. A plugin's gateway may not be loaded or shown
+        # yet (a hidden gateway, an early boot), so any gateway-shaped id is kept: a saved
+        # pick must never fail every settings save.
         if self.agent_provider:
-            allowed = {"anthropic", "gemini", "openai", "ollama", "uefn_ducky"}
+            allowed = {"anthropic", "gemini", "openai", "ollama"}
             try:
                 from frontend.favorite_models import api_backends
 
                 allowed |= {str(p).strip().lower() for p in api_backends() if str(p).strip()}
             except Exception:
                 pass
-            if self.agent_provider not in allowed:
+            if self.agent_provider not in allowed and not re.fullmatch(r"[a-z][a-z0-9_]{1,47}", self.agent_provider):
                 raise ValueError("agent_provider must be empty or a gateway id")
         if self.tool_result_format not in ("toon", "json"):
             raise ValueError("tool_result_format must be toon or json")

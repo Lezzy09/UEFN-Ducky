@@ -32,9 +32,17 @@ def infer_provider(model: str) -> str:
     if not raw:
         return ""
     m = raw.lower()
-    # Hosted account chat. The Brain workflow picks gateways — never Claude/Ollama.
-    if m in ("ducky-brain", "ducky-ai") or m.endswith(":ducky-brain") or m.endswith(":ducky-ai"):
-        return "uefn_ducky"
+    # A plugin gateway's own model ids (its model_ids / model_aliases), bare or qualified.
+    try:
+        from backend.uefn_plugins.host import provider_for_model, registered_providers
+
+        # A leftover "claude_code:<its id>" still belongs to that gateway.
+        owner = provider_for_model(m.rsplit(":", 1)[-1] if ":" in m else m)
+        if owner:
+            return owner
+        plugin_gateways = tuple(registered_providers())
+    except Exception:
+        plugin_gateways = ()
 
     # Qualified "provider:model" (and "ollama:qwen3.6:latest" → provider=ollama).
     known = (
@@ -45,7 +53,7 @@ def infer_provider(model: str) -> str:
         "cursor",
         "kimi",
         "spacexai",
-        "uefn_ducky",
+        *plugin_gateways,
     )
     if ":" in raw:
         prefix = raw.split(":", 1)[0].strip().lower()

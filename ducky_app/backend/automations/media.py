@@ -464,7 +464,7 @@ def setup_for(row: dict[str, Any], label: str = "") -> dict[str, str] | None:
 
 def cost_text(row: dict[str, Any]) -> str:
     if row.get("cost"):
-        return str(row["cost"])  # the plugin's own words ("Ducky AI credit")
+        return str(row["cost"])  # the plugin's own words
     return "Your own API key" if row.get("node") else f"~{row['credits']} credits"
 
 

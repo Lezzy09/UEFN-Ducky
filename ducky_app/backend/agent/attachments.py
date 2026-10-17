@@ -149,18 +149,16 @@ def reads_files_in_parts(provider: str, model: str, coding_agent: str = "") -> b
     """True when the turn can call workspace_read_file, so a big file is read in parts.
 
     Coding agents always have Ducky's read tools. A gateway model has them unless its API
-    says it takes no tools; the site's own Brain runs remotely and cannot read this PC.
+    says it takes no tools (a hosted gateway's tool calls run on this PC too).
     """
     agent = (coding_agent or "").strip().lower()
     if agent and agent != "ducky":
         return True
     from backend.agent.model_capabilities import supports_tools
-    from backend.agent.model_pricing import infer_provider, resolve_provider_for_model
+    from backend.agent.model_pricing import resolve_provider_for_model
 
     mid = (model or "").strip()
     prov = (resolve_provider_for_model(mid, provider) or provider or "").strip().lower()
-    if prov == "uefn_ducky" or infer_provider(mid) == "uefn_ducky":
-        return False
     return not model_in_cache(prov, mid) or supports_tools(prov, mid)
 
 

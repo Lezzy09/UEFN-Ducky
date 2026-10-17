@@ -160,16 +160,19 @@ def _models_fingerprint() -> str:
 
 def serialize_model_rows(provider: str, models: list[Any]) -> list[dict[str, Any]]:
     """JS-facing model rows from an in-memory cache. Never hits provider APIs."""
+    from backend.uefn_plugins.host import provider_visible
     from frontend.agent_models import provider_label
-    from frontend.duckyos_account import ducky_ai_hidden
 
     prov = (provider or "").strip().lower()
-    if ducky_ai_hidden(prov):  # last session's disk cache must not list it either
+    if not provider_visible(prov):  # last session's disk cache must not list a hidden gateway either
         return []
     label = provider_label(prov) or PROVIDER_LABELS.get(prov, prov.title())
     rows: list[dict[str, Any]] = []
     from backend.agent.thinking_effort import ensure_thinking_menu
+    from backend.uefn_plugins.host import provider_option
 
+    # Old ids the gateway renamed (model_aliases), so a chat saved with one still shows the name.
+    renamed = dict(provider_option(prov, "model_aliases") or {})
     for m in models:
         menu = ensure_thinking_menu(getattr(m, "thinking_menu", None))
         supports = True if menu else getattr(m, "supports_thinking_effort", None)
@@ -178,6 +181,7 @@ def serialize_model_rows(provider: str, models: list[Any]) -> list[dict[str, Any
                 "provider": label,
                 "provider_key": prov,
                 "id": m.id,
+                "aliases": [old for old, new in renamed.items() if new == m.id],
                 "name": m.display_name or m.id,
                 "supports_vision": m.supports_vision,
                 "supports_tools": m.supports_tools,

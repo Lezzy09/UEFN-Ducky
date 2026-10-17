@@ -6,6 +6,8 @@ export interface CatalogModelRow {
   provider: string;
   providerKey: string;
   id: string;
+  /** Old ids of this model (its gateway renamed it), e.g. from chats saved before. */
+  aliases?: string[];
   name: string;
   supportsVision: boolean;
   supportsTools: boolean;
@@ -123,6 +125,7 @@ export function installModelsCatalogAutoRefresh(): void {
 
 type ApiModelRow = {
   id: string;
+  aliases?: string[];
   name: string;
   provider: string;
   provider_key?: string;
@@ -152,6 +155,7 @@ function mapApiRow(row: ApiModelRow, fallbackKey: string): CatalogModelRow {
     provider: row.provider,
     providerKey: (row.provider_key || fallbackKey || "").trim(),
     id: row.id,
+    ...(row.aliases?.length ? { aliases: row.aliases } : {}),
     name: row.name,
     supportsVision: !!row.supports_vision,
     supportsTools: !!row.supports_tools,

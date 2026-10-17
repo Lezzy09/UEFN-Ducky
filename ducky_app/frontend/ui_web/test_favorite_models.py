@@ -389,7 +389,12 @@ def test_agents_never_start_chats_on_an_api_key_the_person_did_not_open(monkeypa
     assert refuse_paid_api_for_agent(local, shut) is local
     assert billing_kind("codex", "", "gpt-6.1-sol") == "subscription"
     assert billing_kind("ducky", "openai", "gpt-6.1-sol") == "api_key"
-    assert billing_kind("ducky", "uefn_ducky", "ducky-brain") == "account"
+    from unittest.mock import patch
+
+    from backend.uefn_plugins import host
+
+    with patch.dict(host._LLM_PROVIDER_FACTORIES, {"hosted": {"factory": object, "billing": "account"}}):
+        assert billing_kind("ducky", "hosted", "hosted-ai") == "account"
 
 
 def test_a_stale_default_model_still_creates_the_chat_but_a_profile_pick_does_not(monkeypatch):
@@ -408,25 +413,29 @@ def test_a_stale_default_model_still_creates_the_chat_but_a_profile_pick_does_no
     assert allow_create_without_model(own) is own
 
 
-def test_ducky_ai_is_offered_only_to_an_account_that_has_it(monkeypatch):
-    import frontend.duckyos_account as account
+def test_a_gateway_s_fallback_model_is_offered_only_while_its_plugin_shows_it(monkeypatch):
+    from unittest.mock import patch
+
+    import frontend.favorite_models as fm
+    from backend.uefn_plugins import host
+
+    allowed = {"on": True}
+    reg = {"factory": object, "fallback_model": "hosted-ai", "visible": lambda: allowed["on"]}
+    monkeypatch.setattr("frontend.favorite_models.api_backends", lambda: _TEST_APIS | {"hosted"})
+    monkeypatch.setattr("frontend.favorite_models._available_api_models", lambda: {"hosted": {"hosted-ai"}})
+    with patch.dict(host._LLM_PROVIDER_FACTORIES, {"hosted": reg}):
+        pick = fm.fallback_selection()
+        assert (pick.coding_agent, pick.model, pick.provider) == ("ducky", "hosted-ai", "hosted")
+        allowed["on"] = False
+        assert fm.fallback_selection() is None
+
+
+def test_chat_model_choice_prefers_the_default_then_a_gateway_fallback(monkeypatch):
     import frontend.favorite_models as fm
 
-    monkeypatch.setattr("frontend.favorite_models.api_backends", lambda: _TEST_APIS | {"uefn_ducky"})
-    monkeypatch.setattr("frontend.favorite_models._available_api_models", lambda: {"uefn_ducky": {"ducky-brain"}})
-    monkeypatch.setattr(account, "ducky_ai_hidden", lambda _p: False)
-    pick = fm.ducky_ai_selection()
-    assert (pick.coding_agent, pick.model, pick.provider) == ("ducky", "ducky-brain", "uefn_ducky")
-    monkeypatch.setattr(account, "ducky_ai_hidden", lambda _p: True)
-    assert fm.ducky_ai_selection() is None
-
-
-def test_chat_model_choice_prefers_the_default_then_ducky_ai(monkeypatch):
-    import frontend.favorite_models as fm
-
-    ducky_ai = ResolveOk(coding_agent="ducky", model="ducky-brain", provider="uefn_ducky",
-                         selection=fm.FavoriteSelection(backend="uefn_ducky", model_id="ducky-brain"))
-    monkeypatch.setattr(fm, "ducky_ai_selection", lambda: ducky_ai)
+    fallback = ResolveOk(coding_agent="ducky", model="hosted-ai", provider="hosted",
+                         selection=fm.FavoriteSelection(backend="hosted", model_id="hosted-ai"))
+    monkeypatch.setattr(fm, "fallback_selection", lambda: fallback)
     monkeypatch.setattr("frontend.favorite_models._available_agent_models",
                         lambda _s, **_k: {"codex": {"gpt-6-luna"}})
     monkeypatch.setattr("frontend.favorite_models._available_api_models", lambda: {})
@@ -435,9 +444,9 @@ def test_chat_model_choice_prefers_the_default_then_ducky_ai(monkeypatch):
     assert (choice.coding_agent, choice.model, error) == ("codex", "gpt-6-luna", "")
 
     choice, error = fm.chat_model_choice(SimpleNamespace(default_model="codex:gpt-6-astra"))
-    assert choice is ducky_ai and error == ""
+    assert choice is fallback and error == ""
 
-    monkeypatch.setattr(fm, "ducky_ai_selection", lambda: None)
+    monkeypatch.setattr(fm, "fallback_selection", lambda: None)
     choice, error = fm.chat_model_choice(SimpleNamespace(default_model=""))
     assert choice is None
     assert error == "No Default Model is set. Pick a model below and this ducky uses it."

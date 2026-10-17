@@ -648,100 +648,62 @@ def test_revoke_device_key_also_collects() -> None:
     assert seen == ["desktop-device-revoke"]
 
 
-def test_ducky_ai_exists_only_for_an_account_holding_its_permission() -> None:
-    """Owner rule 2026-10-08: without the Ducky AI permission the app shows no Ducky AI at
-    all (gateway, model, meter, notice, saved default). The site refuses brain-status then."""
-    import io
-    import urllib.error
-    from unittest.mock import Mock, patch
+def test_a_gateway_its_plugin_hides_is_hidden_everywhere() -> None:
+    """A plugin's gateway (here an account plugin's hosted model) shows on no surface while
+    its plugin's ``visible`` option says no: gateway list, registration, models, meter."""
+    from unittest.mock import patch
 
     from backend.agent import model_fetch
     from backend.agent.model_fetch import ModelInfo
     from backend.uefn_plugins import host
-    from frontend import duckyos_account as acc
-    from frontend.settings import PanelSettings
     from frontend.ui_web.panel_api import serialize_model_rows
 
-    blob = {"device_key": "dky_v1_x", "device_key_id": "k1", "base_url": "https://uefnducky.org", "email": "a@b.co"}
-    gateway = {"id": "uefn_ducky", "label": "UEFN Ducky", "kind": "secret", "plugin_id": "account"}
+    gateway = {"id": "hosted", "label": "Hosted", "kind": "secret", "plugin_id": "account"}
     other = {"id": "openai", "label": "OpenAI", "kind": "secret", "plugin_id": "openai"}
     meter = {"windows": [{"id": "period", "label": "This period", "used": 40, "limit": 100}]}
-    reg = {"factory": object, "key_optional": True, "fetch_usage": lambda *_a, **_k: meter}
-
-    class _Granted(io.BytesIO):
-        status = 200
-
-    def refused() -> urllib.error.HTTPError:
-        body = io.BytesIO(b'{"error":"permission denied: uefn-ducky.ai","request_id":"r"}')
-        return urllib.error.HTTPError(acc._BRAIN_STATUS, 400, "Bad Request", hdrs=None, fp=body)
+    allowed = {"on": False}
+    reg = {"factory": object, "key_optional": True, "fetch_usage": lambda *_a, **_k: meter,
+           "visible": lambda: allowed["on"], "billing": "account"}
 
     def surfaces() -> tuple:
         model_fetch.reset_usage_cache()
-        rows = serialize_model_rows("uefn_ducky", [ModelInfo(id="ducky-brain", display_name="Ducky AI")])
+        rows = serialize_model_rows("hosted", [ModelInfo(id="hosted-1", display_name="Hosted AI")])
+        listed = host.get_ui_contributions()["llm_providers"]
         return (
-            sorted(r["id"] for r in host.get_ui_contributions()["llm_providers"]),
-            host.get_llm_provider_registration("uefn_ducky") is not None,
+            sorted(r["id"] for r in listed),
+            host.get_llm_provider_registration("hosted") is not None,
             [r["id"] for r in rows],
-            model_fetch.fetch_usage("uefn_ducky", ""),
+            model_fetch.fetch_usage("hosted", ""),
+            [r.get("billing") for r in listed if r["id"] == "hosted"],
         )
 
-    hidden = (["openai"], False, [], {"windows": []})
-    shown = (["openai", "uefn_ducky"], True, ["ducky-brain"], meter)
-    saved = PanelSettings.load()
-    before = (saved.default_model, saved.agent_provider, saved.agent_model)
-    saved.default_model, saved.agent_provider, saved.agent_model = "uefn_ducky:ducky-brain", "uefn_ducky", "ducky-brain"
-    saved.save()
-    changed = Mock()
+    with (
+        patch.dict(host._CONTRIBUTIONS, {"llm_providers": [gateway, other]}),
+        patch.dict(host._LLM_PROVIDER_FACTORIES, {"hosted": reg}),
+        patch("frontend.agent_models.provider_label", return_value="Hosted"),
+    ):
+        assert surfaces() == (["openai"], False, [], {"windows": []}, [])
+        allowed["on"] = True
+        assert surfaces() == (["hosted", "openai"], True, ["hosted-1"], meter, ["account"])
+
+
+def test_plugins_hear_every_sign_in_sign_out_and_refresh() -> None:
+    from unittest.mock import patch
+
+    from frontend import duckyos_account as acc
+
+    heard: list[tuple[str, str]] = []
+    acc.add_account_listener(lambda before, after: heard.append((before, after)))
+    blob = {"device_key": "dky_v1_x", "base_url": "https://uefnducky.org", "email": "a@b.co"}
     try:
-        with (
-            patch.object(acc, "_load_blob", return_value=dict(blob)),
-            patch.object(acc, "_ducky_ai_changed", changed),
-            patch.dict(acc._AI, {"who": "", "at": float("-inf"), "ok": False, "refused": False, "busy": False}),
-            patch.dict(host._CONTRIBUTIONS, {"llm_providers": [gateway, other]}),
-            patch.dict(host._LLM_PROVIDER_FACTORIES, {"uefn_ducky": reg}),
-            patch("frontend.agent_models.provider_label", return_value="UEFN Ducky"),
-        ):
-            who = acc.account_key()
-            # Refused: nothing shows, and the Ducky AI default the plugin saved is gone.
-            with patch.object(acc, "_site_urlopen", side_effect=refused()):
-                acc._check_ducky_ai(who)
-            assert surfaces() == hidden
-            s = PanelSettings.load()
-            assert (s.default_model, s.agent_provider, s.agent_model) == ("", "", "")
-            assert changed.call_count == 1
-            # A refusal stands: the site is not asked again (no polling).
-            assert acc.ducky_ai_allowed() is False and acc._AI["busy"] is False
-            # Granted (a 2xx answer): every surface shows.
-            with patch.object(acc, "_site_urlopen", return_value=_Granted(b'{"ok":true,"payload":{"subscribed":true}}')):
-                acc._check_ducky_ai(who)
-            assert surfaces() == shown and changed.call_count == 2
-            # Offline or any error: hidden again (fail closed).
-            with patch.object(acc, "_site_urlopen", side_effect=OSError("offline")):
-                acc._check_ducky_ai(who)
-            assert surfaces() == hidden and changed.call_count == 3
-            # No answer is asked again only after the retry wait, not on every look.
-            assert acc.ducky_ai_allowed() is False and acc._AI["busy"] is False
-            # Another account on this PC starts hidden and is asked about at once.
-            with patch.object(acc, "_site_urlopen", return_value=_Granted(b'{"ok":true}')):
-                acc._check_ducky_ai(who)
-            assert acc.ducky_ai_allowed() is True
-            acc._load_blob.return_value = {**blob, "email": "b@b.co"}
-            with patch.object(acc, "_check_ducky_ai"):
-                assert acc.ducky_ai_allowed() is False and acc._AI["busy"] is True
-            # A website sign-in carries the permission list: the site is never asked.
-            with patch.object(acc, "_site_urlopen", side_effect=AssertionError("no request")):
-                acc._load_blob.return_value = {**blob, "session_value": "s", "permissions": ["uefn-ducky.brain"]}
-                assert acc.ducky_ai_allowed() is True
-                acc._load_blob.return_value = {**blob, "session_value": "s", "permissions": ["uefn-ducky.app"]}
-                assert acc.ducky_ai_allowed() is False
-            # Signed out: hidden, and no request goes out.
-            acc._load_blob.return_value = {}
-            with patch.object(acc, "_site_urlopen", side_effect=AssertionError("no request")):
-                assert surfaces() == hidden
+        acc._note_login_change({}, blob)
+        with patch.object(acc, "_load_blob", return_value=dict(blob)):
+            acc.refresh_status()
+        acc._note_login_change(blob, {})
     finally:
-        s = PanelSettings.load()
-        s.default_model, s.agent_provider, s.agent_model = before
-        s.save()
+        acc._ACCOUNT_LISTENERS.clear()
+    who = acc.account_key(blob)
+    assert heard == [("", who), (who, who), (who, "")]
 
 
 def test_mailbox_polls_reuse_one_connection() -> None:

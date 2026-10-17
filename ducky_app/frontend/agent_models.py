@@ -60,9 +60,15 @@ def default_provider_with_key(has_key_fn) -> str | None:
     from backend.agent.providers import all_providers
 
     ids = [p for p in all_providers() if p]
-    # Account plugin: UEFN Ducky is the hosted default when the device is signed in.
-    if "uefn_ducky" in ids and has_key_fn("uefn_ducky"):
-        return "uefn_ducky"
+    # A plugin gateway that offers a fallback model (its plugin's hosted model) comes first.
+    try:
+        from backend.uefn_plugins.host import provider_option, provider_visible
+
+        for p in ids:
+            if provider_option(p, "fallback_model") and provider_visible(p) and has_key_fn(p):
+                return p
+    except Exception:
+        pass
     for p in ids:
         if has_key_fn(p):
             return p

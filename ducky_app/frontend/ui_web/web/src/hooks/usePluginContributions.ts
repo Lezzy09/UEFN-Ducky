@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { onApiReady } from "./onApiReady";
 import { getApi } from "./usePanelApi";
 import { installPanelPushBus, subscribePanelPush } from "./usePanelPushBus";
+import { setGatewayBilling } from "../utils/billing";
 
 export type PluginSettingsTab = {
   id: string;
@@ -165,6 +166,8 @@ export type PluginLlmProvider = {
   icon_data_url?: string;
   /** False keeps the row on Settings → LLMs and out of the chat model picker. */
   chat?: boolean;
+  /** How the gateway's turns are paid, from its plugin (e.g. "account"). */
+  billing?: string;
 };
 
 export type PluginContributions = {
@@ -268,6 +271,7 @@ function _emit() {
 function _setContrib(next: PluginContributions) {
   if (next === _contrib) return;
   _contrib = next;
+  setGatewayBilling(next.llm_providers || []);
   if (next.ready) _stopPoll();
   _emit();
 }

@@ -2081,7 +2081,7 @@ def _create_pipeline_ducky(cfg: dict[str, Any], payload: dict[str, Any]) -> dict
 
     settings = PanelSettings.load()
     model = str(cfg.get("model") or "").strip()
-    # A stale Default Model still creates the ducky: its first message takes Ducky AI or waits for a pick.
+    # A stale Default Model still creates the ducky: its first message takes a gateway's fallback model or waits for a pick.
     resolved = allow_create_without_model(resolve_model_selection([model] if model else None, settings))
     if isinstance(resolved, ResolveErr):
         return {"ok": False, "error": resolved.message}

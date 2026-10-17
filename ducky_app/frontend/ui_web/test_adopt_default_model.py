@@ -13,8 +13,8 @@ import frontend.ui_web.panel_api as pa
 from frontend.favorite_models import FavoriteSelection, ResolveErr, ResolveOk
 from frontend.ui_web.panel_api_settings import PanelApiSettingsMixin
 
-_DUCKY_AI = ResolveOk(coding_agent="ducky", model="ducky-brain", provider="uefn_ducky",
-                      selection=FavoriteSelection(backend="uefn_ducky", model_id="ducky-brain"))
+_FALLBACK = ResolveOk(coding_agent="ducky", model="hosted-ai", provider="hosted",
+                      selection=FavoriteSelection(backend="hosted", model_id="hosted-ai"))
 
 
 @pytest.fixture
@@ -27,7 +27,7 @@ def chat(monkeypatch):
     monkeypatch.setattr(pa, "save_conversation", lambda c: saved.append((c.coding_agent, c.model, c.provider)))
     monkeypatch.setattr(pa, "notify_chats_changed", lambda *a, **k: None)
     monkeypatch.setattr(pa.PanelSettings, "load", staticmethod(lambda: SimpleNamespace(default_model="")))
-    monkeypatch.setattr(fm, "ducky_ai_selection", lambda: _DUCKY_AI)
+    monkeypatch.setattr(fm, "fallback_selection", lambda: _FALLBACK)
     monkeypatch.setattr(fm, "_first_api_model", lambda: ResolveOk(
         coding_agent="ducky", model="claude-opus-5-5", provider="anthropic",
         selection=FavoriteSelection(backend="anthropic", model_id="claude-opus-5-5")))
@@ -68,39 +68,39 @@ def test_a_chat_with_no_model_takes_an_api_default(monkeypatch, chat):
     assert out == {"ok": True, "coding_agent": "ducky", "model": "claude-opus-5-5", "provider": "anthropic"}
 
 
-def test_without_a_default_model_the_chat_takes_ducky_ai(monkeypatch, chat):
+def test_without_a_default_model_the_chat_takes_the_fallback_model(monkeypatch, chat):
     _no_default(monkeypatch)
     out = _api().adopt_default_model("c1")
-    assert out == {"ok": True, "coding_agent": "ducky", "model": "ducky-brain", "provider": "uefn_ducky"}
-    assert chat.saved == [("ducky", "ducky-brain", "uefn_ducky")]
+    assert out == {"ok": True, "coding_agent": "ducky", "model": "hosted-ai", "provider": "hosted"}
+    assert chat.saved == [("ducky", "hosted-ai", "hosted")]
 
 
-def test_an_unavailable_default_model_falls_back_to_ducky_ai_quietly(monkeypatch, chat):
+def test_an_unavailable_default_model_falls_back_quietly(monkeypatch, chat):
     # Oct 16 2026: the Default Model codex:gpt-6-astra left Codex's list, and every new
     # ducky opened on "This ducky has no model. Set a Default Model." and stopped there.
     # A chat on Ducky AI then said why in a yellow note; the owner: never mention the
     # Default Model to someone using Ducky AI.
     _no_default(monkeypatch, code="model_unavailable", requested="codex:gpt-6-astra")
     out = _api().adopt_default_model("c1")
-    assert out == {"ok": True, "coding_agent": "ducky", "model": "ducky-brain", "provider": "uefn_ducky"}
+    assert out == {"ok": True, "coding_agent": "ducky", "model": "hosted-ai", "provider": "hosted"}
 
 
-def test_a_branded_chat_stays_on_ducky_and_takes_ducky_ai(monkeypatch, chat):
+def test_a_branded_chat_stays_on_ducky_and_takes_the_fallback_model(monkeypatch, chat):
     _default(monkeypatch, "codex", "gpt-6-luna")
     out = _api().adopt_default_model("c1", True)
-    assert (out["coding_agent"], out["model"], out["provider"]) == ("ducky", "ducky-brain", "uefn_ducky")
+    assert (out["coding_agent"], out["model"], out["provider"]) == ("ducky", "hosted-ai", "hosted")
 
 
-def test_a_branded_chat_without_ducky_ai_takes_the_first_api_model(monkeypatch, chat):
+def test_a_branded_chat_without_a_fallback_takes_the_first_api_model(monkeypatch, chat):
     _default(monkeypatch, "codex", "gpt-6-luna")
-    monkeypatch.setattr(fm, "ducky_ai_selection", lambda: None)
+    monkeypatch.setattr(fm, "fallback_selection", lambda: None)
     out = _api().adopt_default_model("c1", True)
     assert (out["coding_agent"], out["model"], out["provider"]) == ("ducky", "claude-opus-5-5", "anthropic")
 
 
 def test_with_no_model_at_all_the_person_picks_one(monkeypatch, chat):
     _no_default(monkeypatch, code="model_unavailable", requested="codex:gpt-6-astra")
-    monkeypatch.setattr(fm, "ducky_ai_selection", lambda: None)
+    monkeypatch.setattr(fm, "fallback_selection", lambda: None)
     monkeypatch.setattr(am, "held_for_model", lambda _cid: 2)
     out = _api().adopt_default_model("c1")
     assert out["ok"] is False and out["held"] == 2

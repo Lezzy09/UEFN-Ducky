@@ -378,15 +378,14 @@ def get_ui_contributions() -> dict[str, Any]:
             "walkthroughs": list(_CONTRIBUTIONS.get("walkthroughs") or []),
             "enabled_ids": enabled,
         }
-    # Every gateway list reads this: Ducky AI exists only for an account holding its permission.
-    out["llm_providers"] = [row for row in out["llm_providers"] if not _ducky_ai_hidden(row.get("id"))]
+    # Every gateway list reads this: a plugin's gateway shows only while the plugin says so,
+    # and says how its turns are paid (billing) so the UI never names a gateway.
+    out["llm_providers"] = [
+        {**row, **({"billing": billing} if (billing := provider_option(row.get("id"), "billing")) else {})}
+        for row in out["llm_providers"]
+        if provider_visible(row.get("id"))
+    ]
     return out
-
-
-def _ducky_ai_hidden(provider_id: Any) -> bool:
-    from frontend.duckyos_account import ducky_ai_hidden
-
-    return ducky_ai_hidden(provider_id)
 
 
 def get_contributions() -> dict[str, Any]:
@@ -731,13 +730,64 @@ def register_coding_agent_factory(
 def get_llm_provider_registration(provider_id: str) -> dict[str, Any] | None:
     """Return registration for a provider id (may be disabled — caller gates).
 
-    None for Ducky AI without its permission, so its models and meter never load."""
+    None while its plugin hides it (``visible``), so its models and meter never load."""
     provid = str(provider_id or "").strip().lower()
-    if not provid or _ducky_ai_hidden(provid):
+    if not provid or not provider_visible(provid):
         return None
     with _LOCK:
         row = _LLM_PROVIDER_FACTORIES.get(provid)
         return dict(row) if row else None
+
+
+# Gateway options a plugin passes to register_llm_provider (core never names a gateway):
+# - visible: () -> bool, False hides the gateway everywhere (an account without access)
+# - fallback_model: the model a chat with no usable model takes, while visible
+# - remote: True when the model runs on a server and cannot read this PC
+# - billing: how its turns are paid, e.g. "account"
+# - model_ids: its own model ids, so a bare id finds its gateway
+# - model_aliases: {old id: current id}, so chats saved with an old id keep working
+def provider_option(provider_id: Any, key: str, default: Any = None) -> Any:
+    provid = str(provider_id or "").strip().lower()
+    with _LOCK:
+        row = _LLM_PROVIDER_FACTORIES.get(provid)
+        return row.get(key, default) if row else default
+
+
+def provider_visible(provider_id: Any) -> bool:
+    check = provider_option(provider_id, "visible")
+    if not callable(check):
+        return True
+    try:
+        return bool(check())
+    except Exception:
+        return False
+
+
+def registered_providers() -> list[str]:
+    with _LOCK:
+        return list(_LLM_PROVIDER_FACTORIES)
+
+
+def provider_for_model(model: Any) -> str:
+    """The gateway whose model_ids or model_aliases hold this bare model id ("" when none)."""
+    mid = str(model or "").strip().lower()
+    if not mid:
+        return ""
+    with _LOCK:
+        rows = list(_LLM_PROVIDER_FACTORIES.items())
+    for provid, row in rows:
+        owned = {str(m).strip().lower() for m in row.get("model_ids") or ()}
+        owned |= {str(m).strip().lower() for m in dict(row.get("model_aliases") or {})}
+        if mid in owned:
+            return provid
+    return ""
+
+
+def current_model_id(provider_id: Any, model: Any) -> str:
+    """The id a gateway uses now for ``model`` (its model_aliases), else ``model`` as given."""
+    mid = str(model or "").strip()
+    aliases = provider_option(provider_id, "model_aliases") or {}
+    return str(dict(aliases).get(mid.lower()) or dict(aliases).get(mid) or mid)
 
 
 def resolve_gateway_credential(

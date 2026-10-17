@@ -251,7 +251,7 @@ def allow_create_without_model(result: ResolveResult) -> ResolveResult:
     """Create paths may open with no model, also when the Default Model is no longer offered.
     A bad explicit pick still errors.
 
-    The chat's first message then takes the Default Model or Ducky AI, else waits for the
+    The chat's first message then takes the Default Model or a gateway's fallback model, else waits for the
     person to pick a model (agent_modes.run_message).
     """
     if isinstance(result, ResolveErr) and (result.code == "model_required" or result.from_default):
@@ -272,10 +272,16 @@ def billing_kind(coding_agent: str, provider: str, model: str = "") -> str:
     if agent and agent != "ducky":
         return "subscription"
     prov = (provider or "").strip().lower()
-    if prov == "uefn_ducky":
-        return "account"
     if not prov:
         return ""
+    try:
+        from backend.uefn_plugins.host import provider_option
+
+        billing = str(provider_option(prov, "billing") or "")
+    except Exception:
+        billing = ""
+    if billing:
+        return billing
     try:
         from backend.agent.model_fetch import get_model_info
 
@@ -424,26 +430,27 @@ def _resolve_model_strict(favorite_models: Any, settings: Any) -> ResolveResult:
     )
 
 
-# UEFN Ducky's own model on the account plugin's gateway (shown as "Ducky AI").
-DUCKY_AI_MODEL = "ducky-brain"
-
-
-def ducky_ai_selection() -> ResolveOk | None:
-    """UEFN Ducky's own model, paid from the UEFN Ducky account, when this account has it."""
+def fallback_selection() -> ResolveOk | None:
+    """The model a plugin's gateway offers for a chat with no usable model (its
+    ``fallback_model`` option), while visible."""
     try:
-        from frontend.duckyos_account import DUCKY_AI_PROVIDER, ducky_ai_hidden
+        from backend.uefn_plugins.host import provider_option, provider_visible, registered_providers
     except Exception:
         return None
-    if ducky_ai_hidden(DUCKY_AI_PROVIDER) or DUCKY_AI_PROVIDER not in api_backends():
-        return None
-    ids = _available_api_models().get(DUCKY_AI_PROVIDER) or set()
-    model = DUCKY_AI_MODEL if not ids or DUCKY_AI_MODEL in ids else sorted(ids)[0]
-    return ResolveOk(
-        coding_agent="ducky",
-        model=model,
-        provider=DUCKY_AI_PROVIDER,
-        selection=FavoriteSelection(backend=DUCKY_AI_PROVIDER, model_id=model),
-    )
+    backends = api_backends()
+    for provider in registered_providers():
+        wanted = str(provider_option(provider, "fallback_model") or "").strip()
+        if not wanted or provider not in backends or not provider_visible(provider):
+            continue
+        ids = _available_api_models().get(provider) or set()
+        model = wanted if not ids or wanted in ids else sorted(ids)[0]
+        return ResolveOk(
+            coding_agent="ducky",
+            model=model,
+            provider=provider,
+            selection=FavoriteSelection(backend=provider, model_id=model),
+        )
+    return None
 
 
 def _first_api_model() -> ResolveOk | None:
@@ -457,9 +464,9 @@ def _first_api_model() -> ResolveOk | None:
 
 
 def chat_model_choice(settings: Any, keep_agent: bool = False) -> tuple[ResolveOk | None, str]:
-    """The model a chat with none takes: the Default Model, else UEFN Ducky's own model.
+    """The model a chat with none takes: the Default Model, else a gateway's fallback model.
 
-    Returns (choice, error). A chat that falls back to Ducky AI just shows Ducky AI: the
+    Returns (choice, error). A chat that takes a fallback model just shows that model: the
     composer says nothing about the Default Model. error says why there is no model at all,
     and the person then picks one in the composer. keep_agent: the chat stays on Ducky's own
     agent, so a coding-agent Default Model does not apply and the first API model is the
@@ -468,7 +475,7 @@ def chat_model_choice(settings: Any, keep_agent: bool = False) -> tuple[ResolveO
     result = resolve_model_strict(None, settings)
     if isinstance(result, ResolveOk) and result.model and not (keep_agent and result.coding_agent != "ducky"):
         return result, ""
-    fallback = ducky_ai_selection() or (_first_api_model() if keep_agent else None)
+    fallback = fallback_selection() or (_first_api_model() if keep_agent else None)
     if fallback is not None:
         return fallback, ""
     if isinstance(result, ResolveOk):

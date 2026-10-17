@@ -1287,7 +1287,7 @@ def run_message_and_wait(
 
 
 # Messages sent to a chat that had no model and none to take (no usable Default Model,
-# no Ducky AI on this account): kept until the person picks a model, then run in order.
+# no gateway fallback model): kept until the person picks a model, then run in order.
 HELD_FOR_MODEL = "held_for_model"
 _held_messages: dict[str, list[dict[str, Any]]] = {}
 _held_lock = threading.Lock()
@@ -1295,7 +1295,7 @@ _HELD_MAX = 10
 
 
 def _take_chat_model(conv: Any, settings: PanelSettings, push: PushFn) -> tuple[str, str, str]:
-    """Give a Ducky chat with no model the Default Model, else Ducky AI.
+    """Give a Ducky chat with no model the Default Model, else a gateway's fallback model.
 
     Returns (model, coding_agent, error); with neither, model is "" and error says why."""
     from frontend.favorite_models import chat_model_choice
@@ -1562,19 +1562,24 @@ def run_message(
             return ""
         return _hold_for_model(conv, user_text, mode, attachments, parent, started_by, why, push)
 
-    # UEFN Ducky is not a local model. The turn is a site-chat post; the Brain
-    # workflow chooses the agent and what to show. A leftover Claude Code flag
-    # must not receive --model ducky-brain.
+    # A plugin's remote gateway (its ``remote`` option) runs the model on a server: the turn
+    # is Ducky's own agent, never a coding agent's CLI with that gateway's model id. A model
+    # id the gateway renamed (``model_aliases``) moves to the current one.
     from backend.agent.model_pricing import infer_provider
+    from backend.uefn_plugins.host import current_model_id, provider_option
 
     recorded_provider = (getattr(conv, "provider", None) or "").strip().lower()
-    if recorded_provider == "uefn_ducky" or infer_provider(turn_model) == "uefn_ducky":
+    remote = next(
+        (p for p in (recorded_provider, infer_provider(turn_model)) if p and provider_option(p, "remote")), ""
+    )
+    if remote:
         coding_agent = "ducky"
         conv.coding_agent = "ducky"
-        conv.provider = "uefn_ducky"
+        conv.provider = remote
         if ":" in turn_model:
             turn_model = turn_model.split(":")[-1].strip() or turn_model
-            conv.model = turn_model
+        turn_model = current_model_id(remote, turn_model)
+        conv.model = turn_model
         try:
             save_conversation(conv)
         except Exception:

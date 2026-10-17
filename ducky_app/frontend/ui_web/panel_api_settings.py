@@ -753,7 +753,7 @@ class PanelApiSettingsMixin:
 
     def adopt_default_model(self, conv_id: str, keep_agent: bool = False) -> dict[str, Any]:
         """A Ducky chat with no model takes the Default Model (agent and model), the way a new
-        chat does, else UEFN Ducky's own model (Ducky AI). With neither,
+        chat does, else a gateway's fallback model. With neither,
         the person picks one in the composer, and messages sent meanwhile run then (held).
         keep_agent: a branded chat that stays on Ducky's own agent never takes a coding-agent
         default, as when it was created."""
