@@ -793,10 +793,17 @@ def _resolve_workspace_path_unchecked(relative_or_absolute: str) -> str:
         for r in roots:
             if _is_under_root(full, r):
                 return full
-        for recent in _recent_project_roots():
+        recents = _recent_project_roots()
+        for recent in recents:
             if _is_under_root(full, recent):
                 return full
-        raise ValueError(f"Path is outside allowed workspace folders: {relative_or_absolute!r}")
+        allowed = list(dict.fromkeys([*roots, *recents]))
+        # Name the allowed folders: a model told only "outside" retries the same path for turns.
+        raise ValueError(
+            f"Path is outside allowed workspace folders: {relative_or_absolute!r}. Ducky's file tools "
+            f"reach only the person's Ducky projects: {'; '.join(allowed)}. Do not retry this path "
+            "in any spelling; tell the person their folder is outside their Ducky projects."
+        )
     primary = roots[0]
     full = os.path.realpath(os.path.abspath(os.path.join(primary, p)))
     if not _is_under_root(full, primary):

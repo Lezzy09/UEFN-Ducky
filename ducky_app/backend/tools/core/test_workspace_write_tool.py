@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -80,3 +81,15 @@ def test_write_tool_takes_path_like_the_read_tool(project, monkeypatch) -> None:
     monkeypatch.setattr(system, "tool_json", lambda payload, pretty=False: json.dumps(payload))
     _payload(system.workspace_write_file(path="Content/Verse/b.verse", content="x\n"))
     assert (root / "Content" / "Verse" / "b.verse").read_text(encoding="utf-8") == "x\n"
+
+
+def test_read_tool_picks_one_file_from_both_path_spellings() -> None:
+    # Oct 17 2026: relative_path="." with an absolute path read the project folder itself
+    # ("Not a file: ...\Content"), and the model kept retrying.
+    absolute = str(Path("C:/Trailers/run/bible.json"))
+    assert system._file_arg(".", absolute) == absolute
+    assert system._file_arg("", "bible.json") == "bible.json"
+    assert system._file_arg("Verse/ui.verse", "") == "Verse/ui.verse"
+    assert system._file_arg("Content/run", absolute) == absolute
+    assert system._file_arg("run/01_refs/bible.json", "bible.json") == "run/01_refs/bible.json"
+    assert system._file_arg("run/01_refs", "review.md") == os.path.join("run/01_refs", "review.md")

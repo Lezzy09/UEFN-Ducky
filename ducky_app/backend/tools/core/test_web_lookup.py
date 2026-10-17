@@ -183,6 +183,19 @@ def test_web_intent_reads_the_picture_request():
     assert web.web_intent("fix the verse compile error") is None
 
 
+def test_a_workflow_step_is_not_a_search_request():
+    # Oct 17 2026: every concept-art step began with a forced web_search whose query was
+    # the step's own instructions ("the whole idea. If a picture tool costs credits, ...").
+    step = (
+        "This is one step of a workflow: do the work directly. You are the CONCEPT ARTIST. "
+        "Read <folder>/bible.json. For every asset make one clean reference picture; search "
+        "the bible for the whole idea. If a picture tool costs credits, ask once with "
+        "ducky_ask_user before the first paid picture of this round (how many pictures, what it costs)."
+    )
+    assert web.web_intent(step) is None
+    assert web.web_intent("search for " + "very long subject words " * 8) is None
+
+
 def test_second_call_in_allowed_chat_skips_the_question(monkeypatch):
     web.begin_web_turn()
     monkeypatch.setattr(web, "_save_conv", lambda conv: setattr(conv, "saved", conv.saved + 1))

@@ -42,7 +42,9 @@ def test_absolute_path_under_a_recent_project_is_readable(monkeypatch, tmp_path:
     assert client.resolve_workspace_path(str(verse)) == str(verse.resolve())
     try:
         client.resolve_workspace_path(str(outside / "secret.txt"))
-    except ValueError:
+    except ValueError as exc:
+        # The refusal names where the tools do reach, so a model stops retrying the path.
+        assert str(other.resolve()) in str(exc) and "Do not retry" in str(exc)
         return
     raise AssertionError("path outside every project should be refused")
 

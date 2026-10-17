@@ -43,6 +43,10 @@ _IMAGE_QUERY = re.compile(
     re.I,
 )
 _WEB_ASK = re.compile(r"\b(?:seach|search(?:ing)?|look\s*up|google)\b", re.I)
+# A clear ask is a short message with a short subject. A workflow step's instructions
+# mention "search" or "picture" too, and its sentences are not a query.
+_MAX_ASK_CHARS = 300
+_MAX_QUERY_CHARS = 120
 _MAX_REDIRECTS = 3
 _MAX_SEARCHES = 8
 _MAX_FETCHES = 4
@@ -71,7 +75,7 @@ def web_intent(text: str) -> tuple[str, bool] | None:
     ponytail: keywords and typos only. Upgrade path is a small classifier.
     """
     raw = " ".join((text or "").split())
-    if not raw:
+    if not raw or len(raw) > _MAX_ASK_CHARS:
         return None
     images = bool(_IMAGE_QUERY.search(raw))
     ask = _WEB_ASK.search(raw)
@@ -98,7 +102,7 @@ def web_intent(text: str) -> tuple[str, bool] | None:
         tail = re.sub(r"^(?:of|for|about)\s+", "", tail, flags=re.I)
         query = tail
     query = query.strip(" ?!.\"'")
-    if len(query) < 2:
+    if not 2 <= len(query) <= _MAX_QUERY_CHARS:
         return None
     return query, images
 

@@ -263,6 +263,20 @@ def workspace_list_dir(relative_path: str = ".", path: str = "", pretty: bool = 
     return tool_json(payload, pretty=pretty)
 
 
+def _file_arg(relative_path: str, path: str) -> str:
+    """One file path from the two spellings models send. "." (or empty) relative_path
+    means "use path"; an absolute path wins; a folder in relative_path plus a file
+    name in path is that file in that folder."""
+    rel, given = (relative_path or "").strip(), (path or "").strip()
+    if rel in ("", ".", "./", ".\\") or not given:
+        return given or rel
+    if os.path.isabs(given):
+        return given
+    if os.path.basename(rel.rstrip("\\/")).lower() == os.path.basename(given).lower():
+        return rel
+    return os.path.join(rel, given)
+
+
 @mcp.tool()
 def workspace_read_file(
     relative_path: str = "",
@@ -281,7 +295,7 @@ def workspace_read_file(
     line with its number (for workspace_replace_lines). For a big file, read its
     workspace_file_outline first and then only the lines you need.
     """
-    rel_in = (relative_path or "").strip() or (path or "").strip()
+    rel_in = _file_arg(relative_path, path)
     if not rel_in:
         raise ValueError("relative_path is required (path= also accepted)")
     relative_path = rel_in

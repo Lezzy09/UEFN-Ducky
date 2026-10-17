@@ -128,6 +128,32 @@ def _repeat_guard_message(name: str, count: int) -> str:
     )
 
 
+class AskedAlready:
+    """A turn's last answered ducky_ask_user. Another question before any tool has worked
+    since is the model looping on a failure (Oct 17 2026: the same picture-budget question
+    five times while every file read failed), so it gets the answer back instead."""
+
+    def __init__(self) -> None:
+        self.answer = ""
+        self.worked_since = False
+
+    def blocks(self, name: str) -> bool:
+        return name == "ducky_ask_user" and bool(self.answer) and not self.worked_since
+
+    def note(self, name: str, ok: bool, llm_content: str) -> None:
+        if name == "ducky_ask_user" and ok:
+            self.answer, self.worked_since = llm_content, False
+        elif ok:
+            self.worked_since = True
+
+    def message(self) -> str:
+        return (
+            "Not asked again: the person already answered a question in this turn and no tool has "
+            f"worked since. Their answer: {self.answer.strip()[:600]} Use that answer. If something "
+            "keeps failing (a file you cannot open, a tool that errors), stop and tell the person what it is."
+        )
+
+
 def note_executed_call(
     executed_calls: dict[str, list[str]],
     sig: str,
@@ -937,6 +963,7 @@ class AgentRunner:
         # Per-turn record of executed (tool, args) → list of result payloads, used to
         # short-circuit the model re-running the same call over and over.
         executed_calls: dict[str, list[str]] = {}
+        asked = AskedAlready()
 
         def _accumulate_usage(usage: dict[str, int] | None) -> dict[str, int]:
             if not usage:
@@ -1226,8 +1253,12 @@ class AgentRunner:
                     len(prior) >= _MAX_IDENTICAL_RESULT_CALLS
                     and len(set(prior[-_MAX_IDENTICAL_RESULT_CALLS:])) == 1
                 )
-                if identical_tail or len(prior) >= _MAX_SIGNATURE_CALLS:
-                    nudge = _repeat_guard_message(call_name, len(prior))
+                asked_again = asked.blocks(call_name)
+                if identical_tail or len(prior) >= _MAX_SIGNATURE_CALLS or asked_again:
+                    if asked_again:
+                        nudge, hint = asked.message(), "asked already"
+                    else:
+                        nudge, hint = _repeat_guard_message(call_name, len(prior)), "repeat-call guard"
                     payload_json = json.dumps({"ok": False, "tool": rec.name, "error": nudge}, ensure_ascii=False)
                     llm_content = format_tool_result_for_llm(
                         rec.name,
@@ -1237,7 +1268,7 @@ class AgentRunner:
                     self._attach_llm_payload(rec, llm_content)
                     rec.status = "error"
                     rec.duration_ms = 0
-                    rec.result = {"ok": False, "data": nudge, "hint": "repeat-call guard"}
+                    rec.result = {"ok": False, "data": nudge, "hint": hint}
                     block = self._record_to_block(rec)
                     assistant_blocks.append(block)
                     yield AgentEvent(kind="tool_end", tool=rec)
@@ -1298,6 +1329,7 @@ class AgentRunner:
                     ok=bool(result.ok),
                     readonly=_is_readonly_tool(effective_tool_name(rec.name, rec.arguments)),
                 )
+                asked.note(call_name, bool(result.ok), llm_content)
                 block = self._record_to_block(rec)
                 assistant_blocks.append(block)
                 yield AgentEvent(kind="tool_end", tool=rec)
