@@ -17,7 +17,16 @@ lock are ``locked_out`` and stay here. The answer:
 - conflict: pull to the head (merging or keeping both), rebuild, retry; three moves in a
   row back off 30 to 120 s;
 - locked, refused: those rows wait with the reason; the rest go on;
-- retry, offline, error: the round backs off (30 s, 2 min, 5 min, 15 min).
+- error (the server took none of it and said why; also an upload that went missing
+  twice): a changeset's first try steps aside and the others go on. Rows of no write group
+  go again at once in two halves, no try counted, so the row the server won't take is
+  found while the rest land. Anything else (a write group with its unsent parts, a folder
+  unit) counts a try once the server took or answered another changeset in the round, and
+  is ``blocked`` with the reason after the last (Retry, Drop my change). When it answered
+  none, or two fail in a row, the server is taken to refuse the plugin: no try counts and
+  the round backs off. An error to a resend (its first answer got lost) or to a later part
+  of a write group backs the round off too, and that changeset goes again as it is;
+- retry, offline: the round backs off (30 s, 2 min, 5 min, 15 min).
 
 Pull. Changesets apply in seq order; a grouped one waits for its last part (24 h at
 most). Content is downloaded and verified first (files to a temp file in their own
@@ -111,6 +120,7 @@ from backend.uefn_plugins.ledger import (
     Retry,
     Roster,
     failed,
+    person,
     reason_of,
     unit_of,
 )
@@ -203,6 +213,11 @@ def _row_of_unit(unit: str) -> tuple[str, str] | None:
     return (kind, key) if kind in KINDS and key else None
 
 
+def _who(*names: Any) -> str:
+    """:func:`ledger.person` at the start of a sentence."""
+    return person(*names, fallback="A teammate")
+
+
 # --------------------------------------------------------------------------- push
 
 
@@ -227,7 +242,7 @@ def _build(ctx: Ctx, *, message: str = "", now: float) -> int:
         held = space_vcs.foreign_lock(ctx.account, ctx.space, ctx.plugin, unit_of(r["kind"], r["key"]), now=now)
         if held:
             repo.set_state(ctx.account, ctx.space, ctx.plugin, r["kind"], r["key"], "locked_out",
-                           f"Locked by {held['holder_name'] or held['holder_user'] or 'someone'}")
+                           f"Locked by {person(held['holder_name'], held['holder_user'])}")
             continue
         info = groups.get(r["group_id"]) if r["group_id"] else None
         if info and info["open"]:
@@ -300,16 +315,28 @@ def _outgoing(ctx: Ctx, r: Mapping[str, Any], failures: dict[ItemId, str]) -> Ou
 
 @dataclass
 class _Out:
-    kind: str  # committed | dropped | conflict | locked | refused | missing | stop
+    kind: str  # committed | dropped | conflict | locked | refused | failed | missing | stop
     seq: int = 0
     state: str = ""
     error: str = ""
+    sent: list[dict[str, Any]] | None = None  # failed, missing: the rows (files) this try sent
 
 
-def _push_cs(ctx: Ctx, cs: dict[str, Any], *, now: float) -> _Out:
+def _later_part(cs: Mapping[str, Any]) -> bool:
+    """A part of a write group after its first: an earlier part may have landed already."""
+    return bool(cs["group_id"]) and int(cs["part"]) > 1
+
+
+def _push_cs(ctx: Ctx, cs: dict[str, Any], *, now: float, fresh: bool | None = None) -> _Out:
+    """Send one changeset and settle its answer. ``fresh``: no try of it can have committed
+    (it was pending when this round began on it; default: pending now). An error then is
+    ``failed`` for the round to settle (:func:`_push_round`); on a resend, or on a later
+    part of a write group, it backs the plugin off and the same changeset goes again, so a
+    commit whose answer got lost is answered (replay) and a group closes."""
     if _is_tree_cs(cs):
-        return _push_tree_cs(ctx, cs, now=now)
+        return _push_tree_cs(ctx, cs, now=now, fresh=fresh)
     first_try = cs["state"] == "pending"
+    fresh = first_try if fresh is None else fresh
     items: list[OutgoingItem] = []
     sent: list[dict[str, Any]] = []
     bases: dict[str, tuple[str, str]] = {}
@@ -382,7 +409,7 @@ def _push_cs(ctx: Ctx, cs: dict[str, Any], *, now: float) -> _Out:
             row = _row_of_unit(lk.unit)
             if row:
                 repo.set_state(ctx.account, ctx.space, ctx.plugin, *row, "locked_out",
-                               f"Locked by {lk.user_name or lk.user or 'someone'}")
+                               f"Locked by {person(lk.user_name, lk.user)}")
         return _Out("locked")
     if isinstance(res, Refused):
         space_vcs.cs_delete(ctx.account, ctx.space, cs["cs_id"])
@@ -390,8 +417,76 @@ def _push_cs(ctx: Ctx, cs: dict[str, Any], *, now: float) -> _Out:
             repo.set_state(ctx.account, ctx.space, ctx.plugin, it.kind, it.key, "refused", it.reason)
         return _Out("refused")
     if isinstance(res, Missing):
-        return _Out("missing", error=reason_of(res))
+        return _Out("missing", error=reason_of(res), sent=sent)
+    if isinstance(res, Error) and fresh and not _later_part(cs):
+        return _Out("failed", error=reason_of(res), sent=sent)
     return _stop(ctx, res, now=now)
+
+
+def _group_unsent(ctx: Ctx, cs: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The other parts of ``cs``'s write group not sent yet."""
+    if not cs["group_id"]:
+        return []
+    return [o for o in space_vcs.cs_open(ctx.account, ctx.space, ctx.plugin)
+            if o["group_id"] == cs["group_id"] and o["cs_id"] != cs["cs_id"] and o["state"] == "pending"]
+
+
+def _splittable(cs: Mapping[str, Any], sent: list[dict[str, Any]] | None) -> bool:
+    """Rows of no write group, more than one: they carry no promise to land together."""
+    return not cs["group_id"] and not _is_tree_cs(cs) and len(sent if sent is not None else cs["items"]) > 1
+
+
+def _split(ctx: Ctx, cs: dict[str, Any], sent: list[dict[str, Any]] | None) -> frozenset[str]:
+    """A failed changeset of rows of no write group goes again at once as two halves, with no
+    try counted: halving finds the row the server won't take in about 2·log2(n) pushes while
+    the other rows land in a few commits. Returns the halves' ids."""
+    a = (ctx.account, ctx.space, ctx.plugin)
+    space_vcs.cs_delete(ctx.account, ctx.space, cs["cs_id"])
+    now = time.time()
+    rows = []
+    for s in (sent if sent is not None else cs["items"]):
+        r = space_vcs.row(None, *a, str(s["kind"]), str(s["key"]))
+        if (r and int(r["dirty"]) and not int(r["sensitive"]) and not r["group_id"]
+                and r["sync_state"] not in space_vcs.HELD_STATES and float(r["next_try"]) <= now):
+            rows.append(r)
+    seq = int(space_vcs.head_get(*a)["seq"])
+    half = (len(rows) + 1) // 2
+    made = []
+    for part in (rows[:half], rows[half:]):
+        if part:
+            made.append(uuid.uuid4().hex)
+            space_vcs.cs_add(*a, made[-1], base_seq=seq, items=[_snapshot(r) for r in part], message=cs["message"],
+                             actor=cs["actor"], ducky=cs["ducky"])
+    return frozenset(made)
+
+
+def _failed(ctx: Ctx, cs: dict[str, Any], reason: str, *, snaps: Iterable[Mapping[str, Any]] | None = None) -> None:
+    """The server took none of ``cs`` and said why while it took other changesets: the error
+    is this changeset's own. It goes, and its rows count a try
+    (:func:`plugin_data.note_attempts`; a folder unit's, :func:`space_vcs.unit_try_note`)
+    and go again after the backoff, ``blocked`` with the reason after the last. Parts of its
+    write group not sent yet go and count with it, so a group never lands in halves.
+    ``snaps``: the rows this try sent (else what the changeset holds)."""
+    a = (ctx.account, ctx.space, ctx.plugin)
+    group = [cs, *_group_unsent(ctx, cs)]
+    for o in group:
+        space_vcs.cs_delete(ctx.account, ctx.space, o["cs_id"])
+    _log.info("a changeset of %s in %s failed (%s); its rows wait", ctx.plugin, ctx.space, reason)
+    if _is_tree_cs(cs):
+        for o in group:
+            tf.drop_snapshots(*a, o["cs_id"])
+        named = _units_of(s for o in group for s in o["items"] if s.get("kind") == TREE)
+        got = space_vcs.unit_try_note(*a, [_unit_key(fid, unit) for fid, unit in named.values()], reason,
+                                      block_after=repo.BLOCK_AFTER)
+        if got["blocked"]:
+            for fid, unit in named.values():
+                ff.unit_set_state(*a, fid, unit, "blocked", reason)
+        return
+    mine = list(cs["items"] if snaps is None else snaps)
+    rows = {(str(s["kind"]), str(s["key"])) for s in [*mine, *(s for o in group[1:] for s in o["items"])]
+            if not _rewritten(ctx, s)}  # written again since: it goes as it is now, with no try counted
+    if rows:
+        repo.note_attempts(*a, sorted(rows), reason)
 
 
 def _rewritten(ctx: Ctx, snap: Mapping[str, Any] | None) -> bool:
@@ -443,14 +538,75 @@ def _stop(ctx: Ctx, res: Any, *, now: float) -> _Out:
     return _Out("stop", state=state, error=reason)
 
 
+@dataclass
+class _Errors:
+    """What a push round learnt from error answers to fresh changesets (the server took none
+    of them). ``aside``: changesets that stepped aside, pending again (cs_id → (reason, rows
+    sent)); ``held``: those and their write groups' parts not sent yet, skipped for the rest
+    of the round; ``answered``: the server answered another changeset on its merits
+    (committed, conflict, locked, refused), so an error is the changeset's own; ``fails``:
+    failures since the last commit; ``halves``: what the last split made; ``reason``: the
+    last error."""
+
+    aside: dict[str, tuple[str, list[dict[str, Any]] | None]] = field(default_factory=dict)
+    held: set[str] = field(default_factory=set)
+    answered: bool = False
+    fails: int = 0
+    halves: frozenset[str] = frozenset()
+    reason: str = ""
+
+
+def _step_aside(ctx: Ctx, errs: _Errors, cs: dict[str, Any], out: _Out) -> bool:
+    """A fresh changeset failed (an error, or an upload missing twice). Rows of no write
+    group go again at once as two halves (:func:`_split`); anything else steps aside,
+    pending again with its group's unsent parts, until the round ends. Returns True when
+    the round ends here: a second failure since the last commit, unless it is a half of
+    the failure just before (one half of a split is expected to fail)."""
+    errs.fails += 1
+    errs.reason = out.error
+    cut = errs.fails >= 2 and cs["cs_id"] not in errs.halves
+    current = space_vcs.cs_get(ctx.account, ctx.space, cs["cs_id"]) or cs
+    if _splittable(current, out.sent):
+        errs.halves = _split(ctx, current, out.sent)
+        return cut
+    space_vcs.cs_set(ctx.account, ctx.space, cs["cs_id"], state="pending")
+    errs.aside[cs["cs_id"]] = (out.error, out.sent)
+    errs.held |= {cs["cs_id"], *(o["cs_id"] for o in _group_unsent(ctx, current))}
+    errs.halves = frozenset()
+    return cut
+
+
 def _push_round(ctx: Ctx, *, message: str = "", now: float, pull: bool = True,
                 quiet_s: float = tf.QUIET_S) -> dict[str, Any]:
     """Send what is ready. ``pull`` False (the exit flush): a conflict ends the round instead
     of pulling, so nothing is applied while the app is closing; the rows go next time.
     ``quiet_s``: how long a folder unit must be unchanged to go (0: every changed unit
-    without a save in progress, as a switch away sends them)."""
+    without a save in progress, as a switch away sends them).
+
+    An error to a fresh changeset (:func:`_step_aside`) is that changeset's own only when
+    the server answered another one in the round: then its rows count a try
+    (:func:`_failed`). When it answered none, it is taken to refuse the plugin (a rate
+    limit, a broken server): nothing counts a try, the changesets stay pending and the
+    round backs off with the error, as it does after two failures in a row."""
+    errs = _Errors()
+    try:
+        out = _push_loop(ctx, errs, message=message, now=now, pull=pull, quiet_s=quiet_s)
+    finally:
+        if errs.answered:
+            for cs_id, (reason, sent) in errs.aside.items():
+                cs = space_vcs.cs_get(ctx.account, ctx.space, cs_id)
+                if cs is not None and cs["state"] == "pending":
+                    _failed(ctx, cs, reason, snaps=sent)
+    if out["state"] == "ok" and errs.reason and not errs.answered:
+        stop = _stop(ctx, Error(errs.reason), now=now)
+        out = {**out, "state": stop.state, "error": stop.error}
+    return out
+
+
+def _push_loop(ctx: Ctx, errs: _Errors, *, message: str, now: float, pull: bool, quiet_s: float) -> dict[str, Any]:
     pushed = tree = 0
     missing: dict[str, int] = {}
+    fresh: set[str] = set()  # pending when this round began on them: no try of them can have committed
     folders = bool(tf.plugin_folders(ctx.plugin))
     if folders:  # copies made to go out by changesets no longer waiting (a crash's leftovers) go
         tf.prune_snapshots(ctx.account, ctx.space, ctx.plugin,
@@ -459,26 +615,40 @@ def _push_round(ctx: Ctx, *, message: str = "", now: float, pull: bool = True,
         _build(ctx, message=message, now=now)
         if folders:
             _build_tree(ctx, now=now, quiet_s=quiet_s)
-        pending = space_vcs.cs_open(ctx.account, ctx.space, ctx.plugin)
+        pending = [cs for cs in space_vcs.cs_open(ctx.account, ctx.space, ctx.plugin) if cs["cs_id"] not in errs.held]
         if not pending:
             break
         again = False
         for cs in pending:
-            out = _push_cs(ctx, cs, now=now)
+            if cs["state"] == "pending":
+                fresh.add(cs["cs_id"])
+            out = _push_cs(ctx, cs, now=now, fresh=cs["cs_id"] in fresh)
             if out.kind == "committed":
                 pushed += 1
+                errs.answered, errs.fails, errs.halves = True, 0, frozenset()
                 continue
             if out.kind in ("dropped", "locked", "refused"):
+                errs.answered = errs.answered or out.kind != "dropped"
+                fresh.discard(cs["cs_id"])  # one kept (an unreadable row left out) goes again as a resend
                 again = True
                 continue
             if out.kind == "missing":
                 missing[cs["cs_id"]] = missing.get(cs["cs_id"], 0) + 1
-                if missing[cs["cs_id"]] > 1:
+                again = True
+                if missing[cs["cs_id"]] == 1:
+                    break  # the backend sends what went missing on the next try
+                if cs["cs_id"] not in fresh or _later_part(cs):  # still missing: as an error to a resend
                     stop = _stop(ctx, Error(out.error), now=now)
                     return {"state": stop.state, "error": stop.error, "pushed": pushed, "tree": tree}
-                again = True  # the backend sends what went missing on the next try
+                out = _Out("failed", error=out.error, sent=out.sent)
+            if out.kind == "failed":
+                if _step_aside(ctx, errs, cs, out):
+                    stop = _stop(ctx, Error(out.error), now=now)
+                    return {"state": stop.state, "error": stop.error, "pushed": pushed, "tree": tree}
+                again = True
                 break
             if out.kind == "conflict":
+                errs.answered = True
                 if not pull:
                     return {"state": "ok", "error": "", "pushed": pushed, "tree": tree}
                 moves = int(space_vcs.head_get(ctx.account, ctx.space, ctx.plugin)["moves"]) + 1
@@ -662,7 +832,7 @@ class _Apply:
         if gid is None:
             gid = self._merge_groups[by] = f"merge-{uuid.uuid4().hex}"
             space_vcs.group_add_closed(self.conn, gid, self.ctx.plugin,
-                                       message=f"Merged with {by}'s change" if by else "Merged with a change")
+                                       message=f"Merged with {person(by)}'s change" if by else "Merged with a change")
         return gid
 
     def one(self, it: IncomingItem, seq: int, by: str, at: float, prep: _Prep | None, *,
@@ -718,7 +888,7 @@ class _Apply:
             return
         if int(cur["deleted"]):
             # Deleted here, changed there: theirs is applied, the delete waits for the person.
-            self._theirs(it, seq, prep, keep_conflict=True, error=f"{by or 'Someone'} changed this; you deleted it.")
+            self._theirs(it, seq, prep, keep_conflict=True, error=f"{_who(by)} changed this; you deleted it.")
             space_vcs.conflict_put(conn, *a, unit=unit_of(it.kind, it.key), reason="mine_deleted", mine_deleted=True,
                                    base_seq=int(cur["rev"]), theirs_seq=seq, theirs_by=by, theirs_at=at)
             self.conflicts += 1
@@ -757,7 +927,7 @@ class _Apply:
                                    mine_value=cur["value"], mine_sha=cur["sha256"], mine_size=int(cur["size"]),
                                    base_seq=int(cur["rev"]), theirs_seq=seq, theirs_by=by, theirs_at=at,
                                    theirs_deleted=True)
-            space_vcs.set_row_state(conn, *a, "conflict", f"{by or 'Someone'} deleted this; you changed it.", rev=seq)
+            space_vcs.set_row_state(conn, *a, "conflict", f"{_who(by)} deleted this; you changed it.", rev=seq)
             space_vcs.base_delete(conn, ctx.account, ctx.space, ctx.plugin, it.key)
             self.conflicts += 1
             return
@@ -777,7 +947,7 @@ class _Apply:
         takes it with it. False when mine's side copy is gone (nothing left to keep)."""
         ctx, conn = self.ctx, self.conn
         a = (ctx.account, ctx.space, ctx.plugin, it.kind, it.key)
-        error = f"{by or 'Someone'} deleted this; you changed it."
+        error = f"{_who(by)} deleted this; you changed it."
         mine_value = c["mine_value"] if it.kind == "doc" else None
         if it.kind == "asset" and not Path(c["mine_path"]).is_file():
             return False
@@ -835,7 +1005,7 @@ class _Apply:
         space_vcs.conflict_put(conn, *a, unit=unit_of("doc", it.key), reason="changed", mine_value=cur["value"],
                                mine_sha=cur["sha256"], mine_size=int(cur["size"]), base_seq=rev,
                                theirs_seq=seq, theirs_by=by, theirs_at=at)
-        self._theirs(it, seq, prep, keep_conflict=True, error=f"{by or 'Someone'} changed this too.")
+        self._theirs(it, seq, prep, keep_conflict=True, error=f"{_who(by)} changed this too.")
         self.conflicts += 1
 
     def _keep_both_files(self, it: IncomingItem, seq: int, by: str, at: float, cur: dict[str, Any],
@@ -855,7 +1025,7 @@ class _Apply:
         space_vcs.conflict_put(conn, *a, unit=unit_of("asset", it.key), reason="changed", mine_path=mine_path,
                                mine_sha=cur["sha256"], mine_size=int(cur["size"]), base_seq=int(cur["rev"]),
                                theirs_seq=seq, theirs_by=by, theirs_at=at)
-        self._theirs(it, seq, prep, keep_conflict=True, error=f"{by or 'Someone'} changed this file too.")
+        self._theirs(it, seq, prep, keep_conflict=True, error=f"{_who(by)} changed this file too.")
         self.conflicts += 1
 
     def undo(self) -> None:
@@ -890,8 +1060,11 @@ def _apply(ctx: Ctx, changesets: list[IncomingChangeset], *, force: bool = False
     """Download, then apply ``changesets`` in one transaction (the head moves to the last
     one's seq). ``force``: a clean row takes theirs even at the same or a newer rev (a
     resync). Folder files land first, unit by unit (:func:`_apply_tree`), so the head never
-    moves past a unit that didn't land or wasn't held. Returns ``{state, changed,
-    conflicts, merges, blocked, blocked_units, tree}`` (``tree``: folder units that changed)."""
+    moves past a unit that didn't land or wasn't held. Units are claimed at their seq unless
+    an item of them is still set aside (:func:`space_vcs.unit_claim`); a folder unit whole
+    again is claimed at the head this leaves (``upto`` of :func:`_apply_tree`). Returns
+    ``{state, changed, conflicts, merges, blocked, blocked_units, tree}`` (``tree``: folder
+    units that changed)."""
     latest: dict[ItemId, tuple[IncomingItem, int, str, float]] = {}
     units: dict[str, int] = {}
     tree: list[tuple[IncomingItem, int, str, float]] = []
@@ -918,7 +1091,10 @@ def _apply(ctx: Ctx, changesets: list[IncomingChangeset], *, force: bool = False
             b = space_vcs.base_get(ctx.account, ctx.space, ctx.plugin, it.key)
             if not b or int(b["seq"]) != int(cur["rev"]) or b["value"] is None:
                 wanted.append((it.key, int(cur["rev"])))
-    folded = _apply_tree(ctx, tree) if tree else {"state": "ok", "units": [], "conflicts": 0, "blocked": 0}
+    last = max((cs.seq for cs in changesets), default=0)
+    upto = last or int(space_vcs.head_get(ctx.account, ctx.space, ctx.plugin)["seq"])
+    folded = (_apply_tree(ctx, tree, upto=upto) if tree
+              else {"state": "ok", "units": [], "conflicts": 0, "blocked": 0})
     if folded["state"] != "ok":
         return {"state": folded["state"], "error": folded.get("error", "")}
     fetched = _download(ctx, [it for it, *_ in work if it.op == "put"])
@@ -932,7 +1108,6 @@ def _apply(ctx: Ctx, changesets: list[IncomingChangeset], *, force: bool = False
             if it.op == "put":
                 preps[it.id] = _prepare(ctx, it, fetched.get(it.id))
         bases = _fetch_bases(ctx, wanted) if wanted else {}
-        last = max((cs.seq for cs in changesets), default=0)
         conn = db.connect()
         run = _Apply(ctx, conn, force=force, bases=bases)
         try:
@@ -941,7 +1116,7 @@ def _apply(ctx: Ctx, changesets: list[IncomingChangeset], *, force: bool = False
                     run.one(it, seq, by, at, preps.get(it.id))
                 for unit, seq in units.items():
                     if unit not in run.blocked:
-                        space_vcs.unit_seen(conn, ctx.account, ctx.space, ctx.plugin, unit, seq)
+                        space_vcs.unit_claim(conn, ctx.account, ctx.space, ctx.plugin, unit, seq)
                 if last:
                     space_vcs.head_advance(conn, ctx.account, ctx.space, ctx.plugin, last)
                 if run.changed:
@@ -962,7 +1137,9 @@ def _apply(ctx: Ctx, changesets: list[IncomingChangeset], *, force: bool = False
 def _settle_in_flight(ctx: Ctx, *, now: float) -> _Out | None:
     """Changesets already sent once are answered before anything is pulled: one the server
     committed (its answer lost) would otherwise come back in the pull looking like someone
-    else's change to the same rows. Returns why the round must stop, or None."""
+    else's change to the same rows. So an error to one of them (a rate limit can answer
+    before the server looks at the changeset) never drops it: the round backs off and it
+    goes again. Returns why the round must stop, or None."""
     for cs in space_vcs.cs_open(ctx.account, ctx.space, ctx.plugin):
         if cs["state"] != "pushing":
             continue
@@ -1419,7 +1596,7 @@ def _auto_lock(ctx: Ctx, folder: tf.Folder, changed: Iterable[str], uid: Callabl
         ans = got.get(u) or {}
         if ans.get("state") == "locked":
             ff.unit_set_state(*a, folder.id, unit, "quarantined",
-                              f"Changed here while {ans.get('holder') or 'someone'} holds it")
+                              f"Changed here while {person(ans.get('holder'))} holds it")
 
 
 def watch(account: str, space: str, plugin: str, backend: Any, *, now: float | None = None) -> dict[str, int]:
@@ -1486,8 +1663,9 @@ def _unit_changeset(ctx: Ctx, folder: tf.Folder, pid: str, unit: str, unit_id: s
 def _build_tree(ctx: Ctx, *, now: float, quiet_s: float = tf.QUIET_S) -> int:
     """Scan every folder copy and write a changeset per unit ready to go out: quiet for
     ``quiet_s`` seconds, no save in progress, not already going, not held (conflict,
-    quarantine, refused), not waiting behind Update now. A unit someone else holds is
-    quarantined. Returns how many changesets were written."""
+    quarantine, refused, blocked), not waiting behind Update now, not waiting after a
+    failed try. A unit someone else holds is quarantined. Returns how many changesets
+    were written."""
     now = max(now, time.time())  # the round's start is older than a merge its pull just wrote
     a = (ctx.account, ctx.space, ctx.plugin)
     going = {(str(i.get("folder")), str(i.get("unit_name"))) for cs in space_vcs.cs_open(*a)
@@ -1503,10 +1681,12 @@ def _build_tree(ctx: Ctx, *, now: float, quiet_s: float = tf.QUIET_S) -> int:
         if not sc.quiet:
             continue
         dirty = ff.dirty_units(*a, folder.id)
+        tries = space_vcs.unit_tries(*a)  # after the scan: a unit that changed again goes afresh
         for unit in sc.quiet:
             u = uid(unit)
             info = dirty.get((folder.id, unit))
-            if (folder.id, unit) in going or u in waiting or info is None or info["states"] & set(tf.HELD_STATES):
+            if ((folder.id, unit) in going or u in waiting or info is None or info["states"] & set(tf.HELD_STATES)
+                    or float((tries.get(_unit_key(folder.id, unit)) or {}).get("next_try") or 0.0) > now):
                 continue
             held = space_vcs.foreign_lock(*a, u, now=now)
             if held:
@@ -1548,15 +1728,17 @@ def _tree_sent(ctx: Ctx, snaps: list[Mapping[str, Any]], seq: int) -> None:
             tf.mark_sent(ctx.account, ctx.space, ctx.plugin, folder, items, seq, project_id=pid)
 
 
-def _push_tree_cs(ctx: Ctx, cs: dict[str, Any], *, now: float) -> _Out:
+def _push_tree_cs(ctx: Ctx, cs: dict[str, Any], *, now: float, fresh: bool | None = None) -> _Out:
     """One unit's changeset: each file is copied once into core's outbox, verified against
     what the changeset says (:func:`team_folders.snapshot`), and the backend reads the copy
     at its own pace, so the plugin's saves never wait for an upload and what goes out always
     matches its sha256. On a first try the unit must still be exactly what the changeset
     holds, else it goes again whole, later; a retry (its answer got lost) sends the same
-    copies."""
+    copies. ``fresh`` and errors: as :func:`_push_cs` (a big unit's later part that fails
+    keeps its copies and goes again, so its group closes)."""
     a = (ctx.account, ctx.space, ctx.plugin)
     first_try = cs["state"] == "pending"
+    fresh = first_try if fresh is None else fresh
     snaps = [s for s in cs["items"] if s.get("kind") == TREE]
     rows = {(str(s["folder"]), str(s["relpath"])): ff.file_get(*a, str(s["folder"]), str(s["relpath"]))
             for s in snaps}
@@ -1598,13 +1780,14 @@ def _push_tree_cs(ctx: Ctx, cs: dict[str, Any], *, now: float) -> _Out:
     res = _call(ctx.backend.push, ctx.space, ctx.plugin, out)
     if isinstance(res, (Committed, Replay, Conflict, Locked, Refused)):
         tf.drop_snapshots(*a, cs["cs_id"])  # answered for good: no retry sends them again
+    named = _units_of(snaps)
     if isinstance(res, (Committed, Replay)):
         _tree_sent(ctx, snaps, res.seq)
         space_vcs.mark_committed(*a, res.seq, [], units=units)
         space_vcs.cs_set(ctx.account, ctx.space, cs["cs_id"], state="committed", seq=res.seq)
         space_vcs.head_put(*a, moves=0)
+        space_vcs.unit_tries_clear(*a, [_unit_key(fid, unit) for fid, unit in named.values()])
         return _Out("committed", seq=res.seq)
-    named = _units_of(snaps)
     if isinstance(res, Conflict):
         space_vcs.cs_delete(ctx.account, ctx.space, cs["cs_id"])
         return _Out("conflict")
@@ -1615,7 +1798,7 @@ def _push_tree_cs(ctx: Ctx, cs: dict[str, Any], *, now: float) -> _Out:
             if lk.unit in named:
                 fid, unit = named[lk.unit]
                 ff.unit_set_state(*a, fid, unit, "quarantined",
-                                  f"Changed here while {lk.user_name or lk.user or 'someone'} holds it")
+                                  f"Changed here while {person(lk.user_name, lk.user)} holds it")
         return _Out("locked")
     if isinstance(res, Refused):
         space_vcs.cs_delete(ctx.account, ctx.space, cs["cs_id"])
@@ -1626,7 +1809,9 @@ def _push_tree_cs(ctx: Ctx, cs: dict[str, Any], *, now: float) -> _Out:
                 ff.unit_set_state(*a, fid, unit, "refused", it.reason)
         return _Out("refused")
     if isinstance(res, Missing):
-        return _Out("missing", error=reason_of(res))
+        return _Out("missing", error=reason_of(res), sent=snaps)
+    if isinstance(res, Error) and fresh and not _later_part(cs):
+        return _Out("failed", error=reason_of(res), sent=snaps)
     return _stop(ctx, res, now=now)
 
 
@@ -1693,7 +1878,7 @@ def _hold_unit(conn: Any, ctx: Ctx, u: _UnitIn) -> None:
 
 
 def _apply_tree(ctx: Ctx, entries: list[tuple[IncomingItem, int, str, float]], *,
-                force: bool = False) -> dict[str, Any]:
+                force: bool = False, upto: int | None = None) -> dict[str, Any]:
     """Pulled folder files, unit by unit in seq order: each file's newest version is
     downloaded and verified into a temp file beside its target, then the unit lands whole
     (:func:`team_folders.apply_unit`: other files, ``last``, deletes; the origin's mtimes).
@@ -1702,7 +1887,11 @@ def _apply_tree(ctx: Ctx, entries: list[tuple[IncomingItem, int, str, float]], *
     retried together (never applied in halves). A file this PC already has at that seq, or
     changed on top of it (its own commit coming back), is skipped. Names are this PC's: a
     file or unit named here with another case or Unicode form keeps its name here.
-    ``force``: Take theirs over changes here. Returns ``{state, units, conflicts, blocked}``
+    ``force``: Take theirs over changes here. A unit is claimed at its seq (what lock
+    requests say) only while nothing of it is set aside (:func:`space_vcs.unit_claim`);
+    the landing that makes it whole again claims it at ``upto``, the seq every changeset is
+    applied up to once this lands (claims skipped meanwhile, this PC's own commits too,
+    are at or below it), else at its seq. Returns ``{state, units, conflicts, blocked}``
     (``units``: unit ids that changed here)."""
     a = (ctx.account, ctx.space, ctx.plugin)
     latest: dict[str, tuple[IncomingItem, int, str, float]] = {}
@@ -1841,9 +2030,10 @@ def _apply_tree(ctx: Ctx, entries: list[tuple[IncomingItem, int, str, float]], *
         conn = db.connect()
         with db.write_txn(conn):
             if res.get("ok"):
-                space_vcs.unit_seen(conn, *a, u.uid, u.seq)
+                was_aside = space_vcs.unit_set_aside(conn, *a, u.uid)
                 for k, *_ in u.keys:
                     space_vcs.blocked_delete(conn, *a, TREE, k)
+                space_vcs.unit_claim(conn, *a, u.uid, upto if was_aside and upto is not None else u.seq)
                 if force:
                     space_vcs.conflict_delete(conn, *a, TREE, _unit_key(u.folder.id, u.unit))
                 applied.append(u.uid)
@@ -1859,7 +2049,7 @@ def _apply_tree(ctx: Ctx, entries: list[tuple[IncomingItem, int, str, float]], *
     with db.write_txn(conn):
         for unit_id, seq in seen:
             if unit_id not in failed:
-                space_vcs.unit_seen(conn, *a, unit_id, seq)
+                space_vcs.unit_claim(conn, *a, unit_id, seq)
         for it, seq, why in blocked:
             space_vcs.blocked_put(conn, *a, TREE, it.key, unit=it.unit, seq=seq, error=why)
     return {"state": "ok", "units": applied, "conflicts": conflicts, "blocked": len(blocked) + held_back}
@@ -1948,10 +2138,14 @@ def apply_waiting(plugin: str, *, wait: float = CALL_APPLY_WAIT_S) -> dict[str, 
 
 def folder_work(account: str, space: str, plugin: str) -> bool:
     """Something for a round to do in the plugin's folder copies: changed units not held
-    back, files to fetch again, or changes waiting behind Update now that may land now."""
+    back (nor waiting after a failed try), files to fetch again, or changes waiting behind
+    Update now that may land now."""
     if not tf.plugin_folders(plugin):
         return False
-    if any(not info["states"] & set(tf.HELD_STATES) for info in ff.dirty_units(account, space, plugin).values()):
+    tries, now = space_vcs.unit_tries(account, space, plugin), time.time()
+    if any(not info["states"] & set(tf.HELD_STATES)
+           and float((tries.get(_unit_key(fid, unit)) or {}).get("next_try") or 0.0) <= now
+           for (fid, unit), info in ff.dirty_units(account, space, plugin).items()):
         return True
     return folder_due(account, space, plugin)
 
@@ -2064,7 +2258,7 @@ def resolve_unit(account: str, space: str, plugin: str, backend: Any, folder_id:
     elif choice == "mine":
         held = space_vcs.foreign_lock(*a, tf.tree_unit(backend, space, folder.id, unit))
         if held and c is None:
-            return {"ok": False, "error": f"{held['holder_name'] or held['holder_user'] or 'Someone'} still holds it. "
+            return {"ok": False, "error": f"{_who(held['holder_name'], held['holder_user'])} still holds it. "
                                           "Ask them to release it first."}
         out = _keep_mine(account, space, plugin, folder, unit, pid, _held_items(c), conflict=c is not None)
     elif choice in ("theirs", "both"):
@@ -2208,16 +2402,19 @@ def folder_outgoing(account: str, space: str, plugin: str) -> list[dict[str, Any
     going = {(str(i.get("folder")), str(i.get("unit_name"))) for cs in space_vcs.cs_open(account, space, plugin)
              for i in cs["items"] if i.get("kind") == TREE}
     out: list[dict[str, Any]] = []
+    tries = space_vcs.unit_tries(account, space, plugin)
     for (fid, unit), info in sorted(ff.dirty_units(account, space, plugin).items()):
         folder = tf.folder_of(plugin, fid)
         held = next((s for s in tf.HELD_STATES if s in info["states"]), "")
-        reason = ""
+        tried = tries.get(_unit_key(fid, unit)) or {}
+        reason = str(tried.get("error") or "")  # waiting after a failed try: says why
         if held:
             reason = next((r["sync_error"] for r in ff.files(account, space, plugin, fid, unit=unit)
                            if r["sync_state"] == held), "")
         out.append({"kind": TREE, "key": _unit_key(fid, unit), "name": _unit_display(folder, unit) if folder else unit,
                     "folder_id": fid, "unit": unit, "files": info["files"],
-                    "state": held or ("sending" if (fid, unit) in going else "queued"), "reason": reason})
+                    "state": held or ("sending" if (fid, unit) in going else "queued"), "reason": reason,
+                    "attempts": int(tried.get("attempts") or 0)})
     return out
 
 
@@ -2417,7 +2614,7 @@ def _locks_from(account: str, space: str, live: Iterable[LockInfo], *, now: floa
         _tell_lock_lost(lk, kept=kept)
         if not kept:
             continue
-        holder = lk.get("now_holder") or "someone"
+        holder = person(lk.get("now_holder"))
         conn = db.connect()
         with db.write_txn(conn):
             space_vcs.conflict_put(conn, account, space, lk["plugin_id"], r["kind"], r["key"], unit=lk["unit"],
@@ -2435,7 +2632,7 @@ def _tell_lock_lost(lk: Mapping[str, Any], *, kept: bool) -> None:
     activity list, the plugin's bar)."""
     plugin, unit = str(lk["plugin_id"]), str(lk["unit"])
     name = str(lk.get("name") or _unit_name(unit))
-    holder = str(lk.get("now_holder") or "")
+    holder = _who(lk["now_holder"]) if lk.get("now_holder") else ""
     detail = f"{holder} took {name}" if holder else f"Your lock on {name} ended"
     detail += "; your unsent change is kept as a conflict." if kept else "."
     try:
@@ -2458,10 +2655,10 @@ def _lock_answer(unit: str, res: Any) -> dict[str, Any]:
         return {"unit": unit, "ok": True, "state": "granted" if isinstance(res, Granted) else "held",
                 "fence": res.fence, "leaseLeft": res.lease_left}
     if isinstance(res, Behind):
-        return {"unit": unit, "ok": False, "state": "behind", "seq": res.seq, "by": res.by,
-                "error": f"{res.by or 'Someone'} changed this after your copy. Sync first."}
+        return {"unit": unit, "ok": False, "state": "behind", "seq": res.seq, "by": person(res.by) if res.by else "",
+                "error": f"{_who(res.by)} changed this after your copy. Sync first."}
     if isinstance(res, LockInfo):
-        who = res.user_name or res.user or "someone"
+        who = person(res.user_name, res.user)
         return {"unit": unit, "ok": False, "state": "locked", "holder": who, "since": res.since,
                 "leaseLeft": res.lease_left, "error": f"Locked by {who}"}
     return {"unit": unit, "ok": False, "state": "error", "error": "No answer for this unit."}
@@ -2469,11 +2666,13 @@ def _lock_answer(unit: str, res: Any) -> dict[str, Any]:
 
 def acquire(account: str, space: str, plugin: str, backend: Any, units: list[tuple[str, str]], *,
             reason: str = "manual", mode: str = "best", now: float | None = None) -> dict[str, dict[str, Any]]:
-    """Lock ``units`` (``(unit, name)``) for this PC. Each says the seq of its last change
-    applied here; a unit this PC is behind on is pulled and asked for once more (not while
-    the space is held: :func:`held_reason`). ``reason``: ``auto`` (released 5 minutes after
-    its last change went out), ``manual`` (kept until released), or '' to keep the reason
-    each lock of mine already has (a renewal). Returns ``{unit: {ok, state, ...}}``."""
+    """Lock ``units`` (``(unit, name)``) for this PC. Each says the seq of the last change to
+    it applied here (:func:`space_vcs.unit_seqs`: never the plugin's head, which can be past
+    a change of the unit set aside); a unit this PC is behind on is pulled (a download of it
+    set aside is tried again now) and asked for once more (not while the space is held:
+    :func:`held_reason`). ``reason``: ``auto`` (released 5 minutes after its last change
+    went out), ``manual`` (kept until released), or '' to keep the reason each lock of mine
+    already has (a renewal). Returns ``{unit: {ok, state, ...}}``."""
     now = time.time() if now is None else now
     ctx = Ctx(account, space, plugin, backend)
     asked = [LockUnit(u, n) for u, n in units]
@@ -2483,6 +2682,10 @@ def acquire(account: str, space: str, plugin: str, backend: Any, units: list[tup
         return {u: {"unit": u, "ok": False, "state": "error", "error": reason_of(res)} for u, _ in units}
     behind = [lu for lu in asked if isinstance(res.get(lu.unit), Behind)]
     if behind and not held_reason(account, space):
+        late = {lu.unit for lu in behind}
+        for b in space_vcs.blocked(account, space, plugin):
+            if b["unit"] in late:
+                space_vcs.blocked_retry_now(account, space, plugin, b["kind"], b["key"])
         with _lock(account, space, 30.0) as held:
             if held:
                 _pull_round(ctx, now=now)
@@ -2775,7 +2978,7 @@ def restore(account: str, space: str, plugin: str, backend: Any, *, items: Mappi
     got = _call(backend.revert, space, plugin, items=dict(items) if items is not None else None, to_seq=to_seq,
                 message=message, **extra)
     if isinstance(got, Locked):
-        who = ", ".join(sorted({lk.user_name or lk.user for lk in got.units})) or "someone"
+        who = ", ".join(sorted({person(lk.user_name, lk.user) for lk in got.units})) or person()
         return {"ok": False, "error": f"Locked by {who}"}
     if not isinstance(got, Committed):
         return {"ok": False, "error": reason_of(got) or "The server didn't restore it."}
@@ -2828,12 +3031,14 @@ def status(account: str, space: str, plugin: str, *, now: float | None = None) -
         "syncedAt": float(head["synced_at"]) or None,
         "outgoing": outgoing,
         "sending": len(space_vcs.cs_open(account, space, plugin)),
-        "conflicts": [{"kind": c["kind"], "key": c["key"], "reason": c["reason"], "by": c["theirs_by"],
+        "conflicts": [{"kind": c["kind"], "key": c["key"], "reason": c["reason"],
+                       "by": person(c["theirs_by"]) if c["theirs_by"] else "",
                        "at": c["theirs_at"], "theirsSeq": int(c["theirs_seq"])}
                       for c in space_vcs.conflicts(account, space, plugin)],
         "blocked": [{"kind": b["kind"], "key": b["key"], "error": b["error"], "attempts": int(b["attempts"]),
                      "nextTry": float(b["next_try"])} for b in space_vcs.blocked(account, space, plugin)],
-        "locks": [{"unit": lk["unit"], "name": lk["name"] or _unit_name(lk["unit"]), "holder": lk["holder_name"],
+        "locks": [{"unit": lk["unit"], "name": lk["name"] or _unit_name(lk["unit"]),
+                   "holder": "" if lk["mine"] else person(lk["holder_name"], lk["holder_user"]),
                    "mine": lk["mine"], "since": lk["since"], "leaseLeft": lk["lease_left"]} for lk in locks],
         "people": list((roster or {}).get("people") or []) if isinstance(roster, dict) else [],
     }

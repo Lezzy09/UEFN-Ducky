@@ -101,16 +101,32 @@ def _shared_scope_of(plugin: str) -> dict[str, Any]:
 
 
 def _retry_held(plugin: str, key: str) -> dict[str, Any]:
-    """Refused and blocked changes of ``plugin`` (only ``key``'s when given) go back in the
-    queue."""
+    """Refused and blocked changes of ``plugin`` go back in the queue: all of them, blocked
+    folder units too; or only ``key``'s, with the rows blocked in the same write group (they
+    go again together), or the blocked folder unit ``key`` names (``<folder>/<unit>``)."""
+    from backend.store.repos import folder_files
     from backend.store.repos import plugin_data as repo
+    from backend.store.repos import space_vcs
 
     scope = _shared_scope_of(plugin)
     account, space = scope["account"], scope["id"]
+
+    def group_of(row: dict[str, Any]) -> str:
+        r = space_vcs.row(None, account, space, plugin, row["kind"], row["key"])
+        return str(r["group_id"] or "") if r and row["sync_state"] == "blocked" else ""
+
+    held = [row for row in repo.state_items(account, space, plugin, limit=10_000)
+            if row["sync_state"] in ("refused", "blocked")]
+    groups = {group_of(row) for row in held if row["key"] == key} - {""} if key else set()
     retried = 0
-    for row in repo.state_items(account, space, plugin, limit=10_000):
-        if row["sync_state"] in ("refused", "blocked") and (not key or row["key"] == key):
+    for row in held:
+        if not key or row["key"] == key or (groups and group_of(row) in groups):
             retried += repo.set_state(account, space, plugin, row["kind"], row["key"], "")
+    if not key:
+        retried += folder_files.requeue_blocked(account, space, plugin)
+    elif not retried and "/" in key:
+        folder_id, unit = key.split("/", 1)
+        retried = folder_files.requeue_blocked(account, space, plugin, folder_id, unit)
     if key and not retried:
         return {"ok": False, "error": "That change isn't waiting to be sent again."}
     return {"ok": True, "retried": retried}

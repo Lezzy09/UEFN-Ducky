@@ -39,6 +39,8 @@ CHANGE_LOG_KEEP = 32
 CHANGE_KEYS_MAX = 500
 # Changesets of a plugin waiting behind "Update now" (workspace_state, every process).
 INCOMING_PREFIX = "space_incoming:"
+# Folder units whose changeset failed as a whole: their tries and when the next one goes.
+UNIT_TRIES_PREFIX = "space_unit_tries:"
 # A switch getting a team's folder copy first: its progress for the bar.
 BINDING_PREFIX = "plugin_binding:"
 BINDING_KEEP_S = 120.0  # a progress row older than this was left by a switch that died
@@ -174,9 +176,11 @@ def mark_committed(
 
     ``bases`` (doc key → (sha256, sealed value)) are docs whose committed content is known:
     they become the merge bases at ``seq``, also for a row edited since (its edit is on top
-    of that content). ``units`` are applied at ``seq`` here, the head moves when ``seq`` is
-    the next one, and locks this PC holds on those units note the change. Returns
-    ``{clean, kept}``."""
+    of that content). The head moves when ``seq`` is the next one, and only then are
+    ``units`` claimed at ``seq`` (:func:`unit_claim`: what lock requests say): past a gap, a
+    teammate's change to another file of a unit may sit in it, and the pull that fills the
+    gap lands this changeset and says so. Locks this PC holds on those units note the
+    change. Returns ``{clean, kept}``."""
     conn = db.connect()
     clean = kept = 0
     now = time.time()
@@ -206,9 +210,9 @@ def mark_committed(
             kept += cur.rowcount
         for key, (sha, value) in (bases or {}).items():
             base_put(conn, account, space, plugin, key, int(seq), sha, value)
-        for unit in set(units):
-            unit_seen(conn, account, space, plugin, unit, int(seq))
-        head_advance(conn, account, space, plugin, int(seq), only_next=True)
+        if head_advance(conn, account, space, plugin, int(seq), only_next=True):
+            for unit in set(units):
+                unit_claim(conn, account, space, plugin, unit, int(seq))
         lock_touch(conn, account, space, plugin, units, now)
     return {"clean": clean, "kept": kept}
 
@@ -890,6 +894,23 @@ def unit_seen(conn: Any, account: str, space: str, plugin: str, unit: str, seq: 
     )
 
 
+def unit_set_aside(conn: Any, account: str, space: str, plugin: str, unit: str) -> bool:
+    """An incoming item of ``unit`` is set aside here (:func:`blocked_put`)."""
+    return conn.execute("SELECT 1 FROM space_incoming_blocked WHERE account_id=? AND space_id=? AND plugin_id=? "
+                        "AND unit=? LIMIT 1", (account, space, plugin, unit)).fetchone() is not None
+
+
+def unit_claim(conn: Any, account: str, space: str, plugin: str, unit: str, seq: int) -> bool:
+    """Every change to ``unit`` up to ``seq`` is here: :func:`unit_seen`, which lock requests
+    say, unless an incoming item of the unit is set aside (the unit isn't whole: a lock on
+    it would be granted on a stale copy). The landing that makes it whole again claims it
+    then. Returns whether it was claimed."""
+    if not unit or unit_set_aside(conn, account, space, plugin, unit):
+        return False
+    unit_seen(conn, account, space, plugin, unit, seq)
+    return True
+
+
 def unit_seqs(account: str, space: str, plugin: str, units: Iterable[str]) -> dict[str, int]:
     """``{unit: applied seq}`` (0 for a unit never applied here)."""
     want = list(dict.fromkeys(units))
@@ -1103,6 +1124,47 @@ def binding_put(plugin: str, team: str | None, pct: int = 0) -> None:
     _state_put(BINDING_PREFIX + plugin, {"team": team, "pct": max(0, min(100, int(pct))), "at": time.time()})
 
 
+def unit_tries(account: str, space: str, plugin: str) -> dict[str, dict[str, Any]]:
+    """Folder units (``<folder>/<unit>``) whose changeset failed as a whole lately:
+    ``{unit: {attempts, next_try, error}}`` (each waits until its ``next_try``)."""
+    doc = _state_doc(f"{UNIT_TRIES_PREFIX}{account}:{space}:{plugin}")
+    return {str(u): {"attempts": int(t.get("attempts") or 0), "next_try": float(t.get("next_try") or 0.0),
+                     "error": str(t.get("error") or "")}
+            for u, t in doc.items() if isinstance(t, dict)}
+
+
+def unit_try_note(account: str, space: str, plugin: str, units: Iterable[str], error: str, *,
+                  block_after: int) -> dict[str, Any]:
+    """These folder units' (``<folder>/<unit>``) changeset failed as a whole: they count one
+    try together (as many as the most-tried of them) and wait ``min(2**attempts * 30 s,
+    1 h)``. Returns ``{attempts, next_try, blocked}``; ``blocked`` once ``block_after``
+    tries failed, when the record of them goes (the caller marks the units)."""
+    key = f"{UNIT_TRIES_PREFIX}{account}:{space}:{plugin}"
+    doc = {u: t for u, t in _state_doc(key).items() if isinstance(t, dict)}
+    units = list(dict.fromkeys(u for u in units if u))
+    attempts = max((int((doc.get(u) or {}).get("attempts") or 0) for u in units), default=0) + 1
+    next_try = time.time() + min(2 ** attempts * 30.0, BLOCKED_MAX_WAIT_S)
+    blocked = attempts >= block_after
+    for u in units:
+        if blocked:
+            doc.pop(u, None)
+        else:
+            doc[u] = {"attempts": attempts, "next_try": next_try, "error": str(error or "")[:500]}
+    _state_put(key, doc or None)
+    return {"attempts": attempts, "next_try": next_try, "blocked": blocked}
+
+
+def unit_tries_clear(account: str, space: str, plugin: str, units: Iterable[str]) -> None:
+    """These folder units went out (or were let go): no more waiting for them."""
+    key = f"{UNIT_TRIES_PREFIX}{account}:{space}:{plugin}"
+    doc = _state_doc(key)
+    gone = [u for u in units if u in doc]
+    if gone:
+        for u in gone:
+            doc.pop(u, None)
+        _state_put(key, doc or None)
+
+
 # --------------------------------------------------------------------------- housekeeping
 
 
@@ -1142,6 +1204,9 @@ def forget_space(account: str, space: str) -> None:
 
 
 def _queues_drop(conn: Any, account: str, space: str) -> None:
-    """Every plugin's changesets waiting behind "Update now" in the space."""
-    prefix = f"{INCOMING_PREFIX}{account}:{space}:"
-    conn.execute("DELETE FROM workspace_state WHERE key>=? AND key<?", (prefix, prefix[:-1] + chr(ord(prefix[-1]) + 1)))
+    """Every plugin's changesets waiting behind "Update now" in the space, and its folder
+    units' tries."""
+    for head in (INCOMING_PREFIX, UNIT_TRIES_PREFIX):
+        prefix = f"{head}{account}:{space}:"
+        conn.execute("DELETE FROM workspace_state WHERE key>=? AND key<?",
+                     (prefix, prefix[:-1] + chr(ord(prefix[-1]) + 1)))

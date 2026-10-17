@@ -31,6 +31,7 @@ Rules every backend keeps:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence, Union, runtime_checkable
@@ -428,6 +429,21 @@ def reason_of(result: Any) -> str:
     if isinstance(result, Missing):
         return "an upload didn't arrive"
     return ""
+
+
+TEAMMATE = "a teammate"
+_USER_ID = re.compile(r"[0-9a-f]{8}(-?)[0-9a-f]{4}\1[0-9a-f]{4}\1[0-9a-f]{4}\1[0-9a-f]{12}", re.IGNORECASE)
+
+
+def person(*names: Any, fallback: str = TEAMMATE) -> str:
+    """Who someone is, for the bar and the drawer: the first of ``names`` (a display name,
+    then the user id the server keeps) that reads as a name; ``fallback`` when none does.
+    A bare user id (uuid-shaped) never shows."""
+    for name in names:
+        text = str(name or "").strip()
+        if text and not _USER_ID.fullmatch(text):
+            return text
+    return fallback
 
 
 @runtime_checkable

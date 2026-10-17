@@ -30,7 +30,7 @@ pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="DPAPI")
 from backend.store.repos import plugin_data as repo
 from backend.store.repos import space_vcs
 from backend.uefn_plugins import data_crypto, ledger_conformance as conf, scopes, vcs_engine
-from backend.uefn_plugins.ledger import Committed, LockUnit, Offline
+from backend.uefn_plugins.ledger import Committed, Error, LockUnit, Offline
 from backend.uefn_plugins.scopes import PluginData
 
 SPACE, PLUGIN, WF = "spaceT", "cards", "ducky.automations"
@@ -477,6 +477,63 @@ def test_a_lock_on_a_unit_this_pc_is_behind_on_pulls_first(pc: PC, ben: Ben) -> 
     assert type(free["doc:card.pip"]).__name__ == "Granted"
 
 
+class _AsksLocks:
+    """Records what each lock call says this PC has of each unit."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner, self.asked = inner, []
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    def lock(self, space: str, plugin: str, units: list[LockUnit], mode: str, have_seq: Any) -> Any:
+        self.asked.append(dict(have_seq))
+        return self.inner.lock(space, plugin, units, mode, have_seq)
+
+
+def test_a_lock_says_the_units_own_applied_seq_and_a_behind_answer_pulls_then_asks_once_more(
+        pc: PC, ben: Ben, world: conf.FakeWorld) -> None:
+    pc.data.put("card.pip", {"hp": 1})
+    pc.run()  # card.pip at 1
+    ben.put_doc("card.zed", {"v": 1})
+    pc.run()  # the head is at 2, card.pip's last change still 1
+    ben.put_doc("card.pip", {"hp": 2})  # 3, not here yet
+    asks = _AsksLocks(pc.backend)
+    got = vcs_engine.acquire(pc.account, SPACE, PLUGIN, asks, [("doc:card.pip", "card.pip")])
+    assert asks.asked == [{"doc:card.pip": 1}, {"doc:card.pip": 3}]  # never the head; after one pull, the new seq
+    assert got["doc:card.pip"]["state"] == "granted" and pc.data.get("card.pip") == {"hp": 2}
+
+    # A change of the unit set aside: the head moves past it, the unit's seq doesn't.
+    ben.put_doc("card.a", {"v": 1})  # 4
+    world.server.bad.add((SPACE, PLUGIN, "doc", "card.a", 4))
+    pc.run()
+    assert space_vcs.head_get(pc.account, SPACE, PLUGIN)["seq"] == 4
+    asks.asked.clear()
+    got = vcs_engine.acquire(pc.account, SPACE, PLUGIN, asks, [("doc:card.a", "card.a")])
+    assert asks.asked == [{"doc:card.a": 0}, {"doc:card.a": 0}]  # asked once more after the pull, still behind
+    assert (got["doc:card.a"]["state"], got["doc:card.a"]["by"]) == ("behind", "Ben")
+    assert got["doc:card.a"]["error"] == "Ben changed this after your copy. Sync first."
+    world.server.bad.clear()
+    asks.asked.clear()
+    got = vcs_engine.acquire(pc.account, SPACE, PLUGIN, asks, [("doc:card.a", "card.a")])
+    assert asks.asked == [{"doc:card.a": 0}, {"doc:card.a": 4}]  # its download is tried again at once
+    assert got["doc:card.a"]["state"] == "granted" and pc.data.get("card.a") == {"v": 1}
+
+
+def test_an_own_commit_past_a_gap_claims_its_units_only_once_the_gap_is_pulled(pc: PC, ben: Ben) -> None:
+    pc.data.put("card.pip", {"hp": 1})
+    pc.run()
+    ben.put_doc("card.zed", {"v": 1})  # 2: not here when mine goes out
+    pc.data.put("card.pip", {"hp": 2})
+    out = pc.run(pull=False, push=True)
+    assert out["pushed"] == 1 and ben.head() == 3
+    assert space_vcs.head_get(pc.account, SPACE, PLUGIN)["seq"] == 1
+    assert space_vcs.unit_seqs(pc.account, SPACE, PLUGIN, ["doc:card.pip"]) == {"doc:card.pip": 1}
+    pc.run()
+    assert space_vcs.unit_seqs(pc.account, SPACE, PLUGIN, ["doc:card.pip", "doc:card.zed"]) == {
+        "doc:card.pip": 3, "doc:card.zed": 2}
+
+
 def test_auto_locks_go_five_minutes_after_their_last_change_went_out(pc: PC) -> None:
     pc.data.put("card.pip", {"hp": 1})
     vcs_engine.acquire(pc.account, SPACE, PLUGIN, pc.backend, [("doc:card.pip", "card.pip")], reason="auto")
@@ -530,6 +587,265 @@ def test_offline_backs_off_and_a_forced_round_goes_anyway(pc: PC, ben: Ben, worl
     out = pc.run()
     assert (out["state"], out["pushed"]) == ("ok", 1)
     assert space_vcs.head_get(pc.account, SPACE, PLUGIN)["attempts"] == 0
+
+
+class _Rejects:
+    """The server answers every changeset that carries ``key`` with an error, a request it
+    will never take (``tries`` counts them); everything else goes as usual."""
+
+    def __init__(self, inner: Any, key: str) -> None:
+        self.inner, self.key, self.tries = inner, key, 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    def push(self, space: str, plugin: str, cs: Any) -> Any:
+        if any(i.key == self.key for i in cs.items):
+            self.tries += 1
+            return Error("bad request: ops[8]: by must be an integer")
+        return self.inner.push(space, plugin, cs)
+
+
+def _store_api() -> Any:
+    """The drawer's Retry and Drop my change (panel_api_store loads with panel_api)."""
+    from frontend.ui_web import panel_api  # noqa: F401
+    from frontend.ui_web import panel_api_store
+
+    return panel_api_store
+
+
+def _waits_over(account: str) -> None:
+    """Every row's wait after a failed try is over, as if the backoff had passed."""
+    from backend.store import db
+
+    conn = db.connect()
+    with db.write_txn(conn):
+        conn.execute("UPDATE plugin_data SET next_try=0 WHERE account_id=? AND scope_id=?", (account, SPACE))
+
+
+class _Pushes:
+    """Counts push calls (``calls``); after ``limit`` of them the server answers every one
+    with an error, as a rate limit or a broken server does."""
+
+    def __init__(self, inner: Any, limit: int = 10 ** 9) -> None:
+        self.inner, self.limit, self.calls = inner, limit, 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    def push(self, space: str, plugin: str, cs: Any) -> Any:
+        self.calls += 1
+        if self.calls > self.limit:
+            return Error("collect rate limit exceeded")
+        return self.inner.push(space, plugin, cs)
+
+
+def test_a_changeset_the_server_keeps_failing_waits_alone_and_later_changes_go(pc: PC, ben: Ben) -> None:
+    panel_api_store = _store_api()
+    pc.run()  # on the new sync: each call's writes go as one changeset
+    rejects = _Rejects(pc.backend, "big.bin")
+    with scopes.write_group(PLUGIN, message="Tool put_file"):
+        PluginData(PLUGIN).put_file("big.bin", b"x" * 64)
+    out = pc.run(backend=rejects)
+    # Alone, its error may be the server refusing everything: no try counts, the plugin backs off.
+    assert (out["state"], out["pushed"], rejects.tries) == ("error", 0, 1) and "by must be an integer" in out["error"]
+    assert space_vcs.head_get(pc.account, SPACE, PLUGIN)["next_try"] > time.time()
+    assert (pc.row("big.bin", "asset")["attempts"], pc.row("big.bin", "asset")["dirty"]) == (0, 1)
+    assert [cs["state"] for cs in space_vcs.cs_open(pc.account, SPACE)] == ["pending"]
+
+    def with_a_card(n: int) -> dict[str, Any]:
+        with scopes.write_group(PLUGIN, message="Tool put_docs"):
+            PluginData(PLUGIN).put(f"card.{n}", {"hp": n})
+        return pc.run(backend=rejects)
+
+    out = with_a_card(1)  # the server takes another changeset in the round: the error is the file's own
+    assert (out["state"], out["pushed"], rejects.tries) == ("ok", 1, 2) and ben.doc("card.1") == {"hp": 1}
+    head = space_vcs.head_get(pc.account, SPACE, PLUGIN)
+    assert (head["state"], head["next_try"]) == ("ok", 0.0)  # the plugin doesn't back off for it
+    r = pc.row("big.bin", "asset")
+    assert (r["dirty"], r["attempts"], r["sync_state"]) == (1, 1, "") and r["next_try"] > time.time()
+    assert "by must be an integer" in r["sync_error"] and space_vcs.cs_open(pc.account, SPACE) == []
+    assert (with_a_card(2)["pushed"], rejects.tries) == (1, 2)  # the file waits its turn
+
+    for n in range(2, repo.BLOCK_AFTER + 1):  # each try after its wait counts; the last one blocks it
+        _waits_over(pc.account)
+        assert with_a_card(n + 1)["state"] == "ok" and rejects.tries == n + 1
+    r = pc.row("big.bin", "asset")
+    assert (r["sync_state"], r["attempts"], r["dirty"]) == ("blocked", repo.BLOCK_AFTER, 1)
+    _waits_over(pc.account)
+    assert pc.run(backend=rejects)["state"] == "ok"
+    assert rejects.tries == repo.BLOCK_AFTER + 1  # held until the person picks
+    shown = vcs_engine.status(pc.account, SPACE, PLUGIN)["outgoing"]
+    assert [(o["key"], o["state"]) for o in shown] == [("big.bin", "blocked")]
+    assert "by must be an integer" in shown[0]["reason"]
+
+    assert panel_api_store._retry_held(PLUGIN, "big.bin") == {"ok": True, "retried": 1}
+    assert pc.run()["pushed"] == 1  # the server takes it now
+    assert ben.server.space(SPACE).repo(PLUGIN).items[("asset", "big.bin")].content == b"x" * 64
+    r = pc.row("big.bin", "asset")
+    assert (r["dirty"], r["attempts"], r["sync_state"], r["sync_error"]) == (0, 0, "", "")
+
+
+def test_a_blocked_change_can_be_dropped_and_the_teams_version_comes_back(pc: PC, ben: Ben,
+                                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    panel_api_store = _store_api()
+    monkeypatch.setattr(repo, "BLOCK_AFTER", 1)
+    pc.data.put_file("big.bin", b"v1")
+    pc.run()
+    rejects = _Rejects(pc.backend, "big.bin")
+    with scopes.write_group(PLUGIN, message="Tool put_file"):
+        PluginData(PLUGIN).put_file("big.bin", b"v2" * 64)
+    with scopes.write_group(PLUGIN, message="Tool put_docs"):
+        PluginData(PLUGIN).put("card.pip", {"hp": 1})  # it lands: the file's error is its own
+    assert pc.run(backend=rejects)["state"] == "ok"
+    r = pc.row("big.bin", "asset")
+    assert (r["sync_state"], r["dirty"]) == ("blocked", 1) and "by must be an integer" in r["sync_error"]
+    assert panel_api_store._drop_change(PLUGIN, "asset", "big.bin") == {"ok": True, "dropped": 1}
+    assert pc.run()["state"] == "ok"
+    assert pc.data.get_file("big.bin") == b"v1" and pc.row("big.bin", "asset")["dirty"] == 0
+    assert rejects.tries == 1 and ben.head() == 2
+
+
+def test_rows_of_no_write_group_that_fail_together_go_again_in_halves(pc: PC, ben: Ben) -> None:
+    rejects = _Rejects(pc.backend, "big.bin")
+    pc.data.put_file("big.bin", b"x" * 64)
+    pc.data.put("card.pip", {"hp": 1})  # no write group: both go in one changeset first
+    out = pc.run(backend=rejects)
+    assert (out["state"], out["pushed"], rejects.tries) == ("ok", 1, 2)  # together, then the file alone
+    assert ben.doc("card.pip") == {"hp": 1} and pc.row("card.pip")["dirty"] == 0
+    r = pc.row("big.bin", "asset")
+    assert (r["dirty"], r["attempts"], r["sync_state"]) == (1, 1, "")
+
+
+def test_halving_finds_one_bad_row_among_many_within_the_servers_rate_limit(pc: PC, ben: Ben) -> None:
+    for i in range(200):
+        pc.data.put(f"card.{i:03d}", {"v": i})  # before the move: no write groups
+    pushes = _Pushes(_Rejects(pc.backend, "card.150"), limit=60)  # 60 commits a minute, as DuckyOS allows
+    out = pc.run(backend=pushes)
+    assert (out["state"], pushes.calls <= 2 * 8 + 1) == ("ok", True)  # about 2·log2(200) pushes, not 200
+    assert out["pushed"] == ben.head() and ben.head() <= 9  # the good rows land in a few commits
+    tried = [r["key"] for r in space_vcs.plugin_rows(pc.account, SPACE, PLUGIN) if int(r["attempts"])]
+    dirty = [r["key"] for r in space_vcs.plugin_rows(pc.account, SPACE, PLUGIN) if int(r["dirty"])]
+    assert tried == dirty == ["card.150"]  # only the row the server won't take counts a try
+    assert ben.doc("card.149") == {"v": 149} and ben.doc("card.150") is None
+
+
+def test_an_error_to_every_changeset_backs_off_counts_no_try_and_all_goes_once_the_server_takes_it(
+        pc: PC, ben: Ben) -> None:
+    for i in range(120):
+        pc.data.put(f"card.{i:03d}", {"v": i})  # before the move: one changeset of no write group
+    refusing = _Pushes(pc.backend, limit=0)
+    out = pc.run(backend=refusing)
+    assert (out["state"], out["pushed"], refusing.calls) == ("error", 0, 3)  # all of it, then both halves
+    assert out["error"] == "collect rate limit exceeded"
+    head = space_vcs.head_get(pc.account, SPACE, PLUGIN)
+    assert head["state"] == "error" and head["next_try"] > time.time()
+    assert vcs_engine.run(pc.account, SPACE, PLUGIN, refusing)["skipped"]  # it waits out the backoff
+    rows = space_vcs.plugin_rows(pc.account, SPACE, PLUGIN)
+    assert len(rows) == 120 and all(int(r["dirty"]) and not int(r["attempts"]) and not r["sync_state"] for r in rows)
+    assert (pc.run()["pushed"], ben.head()) == (4, 4)  # the server takes it now: every quarter lands
+    assert ben.doc("card.000") == {"v": 0} and ben.doc("card.119") == {"v": 119}
+
+    for i in range(3):
+        with scopes.write_group(PLUGIN, message=f"Tool put {i}"):
+            PluginData(PLUGIN).put(f"deck.{i}", {"v": i})
+    refusing.calls = 0
+    out = pc.run(backend=refusing)
+    assert (out["state"], refusing.calls) == ("error", 2)  # two in a row with nothing taken: the round ends
+    assert [int(pc.row(f"deck.{i}")["attempts"]) for i in range(3)] == [0, 0, 0]
+    assert pc.run()["pushed"] == 3
+
+
+class _AnswerLost:
+    """The server commits, but its answer never arrives (a timeout)."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    def push(self, space: str, plugin: str, cs: Any) -> Any:
+        self.inner.push(space, plugin, cs)
+        return Offline("timed out")
+
+
+def test_an_error_to_a_resend_keeps_it_so_its_lost_commit_is_answered_never_pulled_back(pc: PC, ben: Ben) -> None:
+    pc.run()
+    with scopes.write_group(PLUGIN, message="Tool put_docs"):
+        PluginData(PLUGIN).put("card.pip", {"hp": 1})
+    assert pc.run(backend=_AnswerLost(pc.backend))["state"] == "offline"
+    assert ben.doc("card.pip") == {"hp": 1}  # it landed; this PC doesn't know
+    pc.data.put("card.pip", {"hp": 2})  # edited meanwhile
+    limited = _Pushes(pc.backend, limit=0)  # a rate limit answers before the server looks at the changeset
+    out = pc.run(backend=limited)
+    assert (out["state"], limited.calls) == ("error", 1)
+    assert [cs["state"] for cs in space_vcs.cs_open(pc.account, SPACE)] == ["pushing"]  # kept to be answered
+    assert pc.row("card.pip")["attempts"] == 0 and space_vcs.conflicts(pc.account, SPACE) == []
+    out = pc.run()  # answered (replay) before anything is pulled: no change of "a teammate" to merge
+    assert (out["state"], out["conflicts"]) == ("ok", 0) and space_vcs.conflicts(pc.account, SPACE) == []
+    assert ben.doc("card.pip") == {"hp": 2} and pc.row("card.pip")["dirty"] == 0
+
+
+class _FailsOnce:
+    """The server answers the first changeset ``pick`` picks with an error, then takes all."""
+
+    def __init__(self, inner: Any, pick: Any) -> None:
+        self.inner, self.pick, self.failed = inner, pick, 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    def push(self, space: str, plugin: str, cs: Any) -> Any:
+        if not self.failed and self.pick(cs):
+            self.failed += 1
+            return Error("bad request")
+        return self.inner.push(space, plugin, cs)
+
+
+def test_a_later_part_of_a_write_group_that_fails_goes_again_as_it_was_so_its_group_closes(
+        pc: PC, ben: Ben, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vcs_engine, "MAX_ITEMS", 2)
+    pc.run()  # on the new sync
+    with scopes.write_group(PLUGIN, message="Tool build_set"):
+        for key in ("card.a", "card.b", "card.c"):
+            PluginData(PLUGIN).put(key, {"v": 1})
+    once = _FailsOnce(pc.backend, lambda cs: cs.part == 2)
+    out = pc.run(backend=once)
+    assert (out["state"], out["pushed"], once.failed) == ("error", 1, 1)  # part 1 landed: part 2 backs off
+    assert [(cs["part"], cs["state"]) for cs in space_vcs.cs_open(pc.account, SPACE)] == [(2, "pushing")]
+    assert [int(pc.row(k)["attempts"]) for k in ("card.a", "card.b", "card.c")] == [0, 0, 0]
+    assert pc.run()["state"] == "ok"
+    page = ben.client.pull(SPACE, PLUGIN, 0, 50)
+    assert [(cs.part, cs.last) for cs in page.changesets] == [(1, False), (2, True)]
+    assert len({cs.group for cs in page.changesets}) == 1 and ben.doc("card.c") == {"v": 1}
+
+
+def test_a_failed_part_of_a_write_group_holds_its_other_parts_and_they_go_again_together(
+        pc: PC, ben: Ben, monkeypatch: pytest.MonkeyPatch) -> None:
+    panel_api_store = _store_api()
+    monkeypatch.setattr(vcs_engine, "MAX_ITEMS", 2)
+    monkeypatch.setattr(repo, "BLOCK_AFTER", 1)
+    pc.run()  # on the new sync
+    rejects = _Rejects(pc.backend, "big.bin")
+    with scopes.write_group(PLUGIN, message="Tool build_set"):
+        data = PluginData(PLUGIN)
+        data.put_file("big.bin", b"x" * 64)  # in the first part
+        data.put("card.a", {"v": 1})
+        data.put("card.b", {"v": 1})  # in the second
+    with scopes.write_group(PLUGIN, message="Tool put_docs"):
+        PluginData(PLUGIN).put("card.z", {"v": 1})  # it lands: the group's error is its own
+    out = pc.run(backend=rejects)
+    assert (out["state"], out["pushed"], rejects.tries, ben.head()) == ("ok", 1, 1, 1)  # no part of the group
+    rows = [pc.row("big.bin", "asset"), pc.row("card.a"), pc.row("card.b")]
+    assert [(r["sync_state"], r["attempts"], r["dirty"]) for r in rows] == [("blocked", 1, 1)] * 3
+    assert space_vcs.cs_open(pc.account, SPACE) == []
+    assert panel_api_store._retry_held(PLUGIN, "card.b") == {"ok": True, "retried": 3}  # its group comes along
+    assert pc.run()["pushed"] == 2
+    assert ben.doc("card.a") == {"v": 1} and ben.doc("card.b") == {"v": 1}
+    page = ben.client.pull(SPACE, PLUGIN, 1, 50)
+    assert [(bool(cs.group), cs.part, cs.last) for cs in page.changesets] == [(True, 1, False), (True, 2, True)]
+    assert len({cs.group for cs in page.changesets}) == 1
 
 
 def test_a_failed_read_of_one_file_never_holds_up_the_rest(pc: PC, ben: Ben) -> None:
@@ -1094,3 +1410,40 @@ def test_workflow_saves_take_the_writers_checks_and_go_as_one_changeset(pc: PC, 
     assert [a["unit"] for a in space_vcs.activity(pc.account, SPACE)] == ["doc:wf1"]
     assert pc.run(WF)["pushed"] == 1
     assert ben.client.history(SPACE, WF).entries[0].message == "Workflow Daily check"
+
+
+def test_a_teammate_the_server_has_no_name_for_reads_as_a_teammate_never_as_a_user_id(
+        pc: PC, ben: Ben, world: conf.FakeWorld, monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.uefn_plugins import spaces
+    from frontend.ui_web import agent_modes
+
+    uid = "01a14b07-3d9c-78d2-88f6-684331c12a1a"
+    sam = world.client(uid, "d_sam")  # no display name: the server only has the user id
+    events: list[dict[str, Any]] = []
+    monkeypatch.setattr(agent_modes, "push_ui_event", events.append)
+    pc.data.put("card.pip", {"hp": 1, "name": "Pip"})
+    pc.data.put("card.zed", {"hp": 1})
+    pc.run()
+    sam.push(SPACE, PLUGIN, conf.changeset(
+        conf.put_item("doc", "card.pip", scopes.encode_doc({"hp": 1, "name": "Pipo"}), base=1),
+        conf.put_item("doc", "card.zed", scopes.encode_doc({"hp": 3}), base=1)))
+    pc.data.put("card.pip", {"hp": 2, "name": "Pip"})  # merges
+    pc.data.put("card.zed", {"hp": 2})  # clashes
+    assert pc.run()["conflicts"] == 1
+    assert ben.client.history(SPACE, PLUGIN).entries[0].message == "Merged with a teammate's change"
+    assert pc.row("card.zed")["sync_error"] == "A teammate changed this too."
+    assert [c["by"] for c in vcs_engine.status(pc.account, SPACE, PLUGIN)["conflicts"]] == ["a teammate"]
+
+    sam.lock(SPACE, PLUGIN, [LockUnit("doc:card.lock", "card.lock")], "best", {})
+    sam.beat(SPACE, {"label": "Sam's PC"})
+    vcs_engine.refresh(pc.account, SPACE, [PLUGIN], pc.backend)
+    with pytest.raises(scopes.LockedOut, match="card.lock is locked by a teammate"):
+        pc.data.put("card.lock", {"v": 1})
+    got = vcs_engine.acquire(pc.account, SPACE, PLUGIN, pc.backend, [("doc:card.lock", "card.lock")])
+    assert (got["doc:card.lock"]["holder"], got["doc:card.lock"]["error"]) == ("a teammate", "Locked by a teammate")
+    fields = spaces.team_fields(pc.account, SPACE, PLUGIN)
+    assert [c["by"] for c in fields["conflicts"]] == ["a teammate"]
+    assert [lk["holder"] for lk in fields["locks"]] == ["a teammate"]
+    assert [(p["name"], p["user"]) for p in fields["people"]] == [("A teammate", uid)]  # the id only as an id
+    shown = {**fields, "people": [{k: v for k, v in p.items() if k != "user"} for p in fields["people"]]}
+    assert uid not in json.dumps([shown, events, vcs_engine.status(pc.account, SPACE, PLUGIN)["locks"]])

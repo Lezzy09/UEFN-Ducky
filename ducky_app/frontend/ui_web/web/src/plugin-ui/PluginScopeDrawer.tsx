@@ -267,8 +267,9 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
   const locks = s.locks ?? [];
   const outgoing = outgoingRows(s);
   const shownOut = allRows ? outgoing : outgoing.slice(0, ROWS_SHOWN);
-  // Retry and Drop my change are for data items; a held folder unit says what fixes it.
-  const fixable = outgoing.filter((row) => row.kind !== "tree" && (row.state === "refused" || row.state === "blocked"));
+  // Retry and Drop my change are for data items; a folder unit the server kept failing has
+  // Retry too. Any other held folder unit says what fixes it.
+  const fixable = outgoing.filter((row) => row.state === "blocked" || (row.kind !== "tree" && row.state === "refused"));
   const canFix = !reset;
   const changes = s.changes ?? {};
   const blockedIn = changes.blocked ?? [];
@@ -422,7 +423,7 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
                               Retry
                             </button>
                           ) : null}
-                          {fix && api?.plugin_scope_drop ? (
+                          {fix && row.kind !== "tree" && api?.plugin_scope_drop ? (
                             <button type="button" className="plugin-scope-bar__link" disabled={busy}
                               aria-label={`Drop my change to ${name}`} onClick={() => void drop(row)}>
                               Drop my change

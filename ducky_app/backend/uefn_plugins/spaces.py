@@ -28,6 +28,8 @@ import threading
 import time
 from typing import Any, Callable, Mapping
 
+from backend.uefn_plugins.ledger import person
+
 _log = logging.getLogger(__name__)
 
 # Generic space states. A provider reports one; core decides read-only and closed.
@@ -286,7 +288,7 @@ def _asked(account: str, space: str, plugin: str, data: dict[str, Any]) -> None:
     if mine is None:
         return
     plugin = plugin or str(mine["plugin_id"])
-    who = str(data.get("user_name") or data.get("user") or "A teammate")
+    who = person(data.get("user_name"), data.get("user"), fallback="A teammate")
     name = str(mine["name"] or unit.split(":", 1)[-1])
     label = plugin_label(plugin) or plugin
     try:
@@ -508,7 +510,7 @@ def _people(account: str, space: str, plugin: str) -> list[dict[str, Any]]:
             for e in here.get("editing") or [] if isinstance(e, Mapping)
         ]
         out.append({
-            "name": str(p.get("user_name") or p.get("user") or "Someone"),
+            "name": person(p.get("user_name"), p.get("user"), fallback="A teammate"),
             "user": str(p.get("user") or ""),
             "device": str(p.get("label") or ""),
             "me": str(p.get("device") or "") == me,
@@ -546,7 +548,8 @@ def team_fields(account: str, space: str, plugin: str, *, state: str = "ok") -> 
         "engine": "v2" if v2 else "v1",
         "changes": {"outgoing": outgoing},
         "conflicts": [{"kind": c["kind"], "key": c["key"], "name": c["key"], "unit": c["unit"],
-                       "reason": c["reason"], "by": c["theirs_by"], "at": c["theirs_at"],
+                       "reason": c["reason"], "by": person(c["theirs_by"]) if c["theirs_by"] else "",
+                       "at": c["theirs_at"],
                        "theirsSeq": int(c["theirs_seq"])} for c in space_vcs.conflicts(account, space, plugin)],
         "importing": float(pct.group(1)) if pct else None,
     }
@@ -556,7 +559,8 @@ def team_fields(account: str, space: str, plugin: str, *, state: str = "ok") -> 
             mode=head["mode"],
             people=_people(account, space, plugin),
             locks=[{"unit": lk["unit"], "name": lk["name"] or lk["unit"].split(":", 1)[-1],
-                    "holder": lk["holder_name"] or lk["holder_user"], "mine": lk["mine"], "since": lk["since"],
+                    "holder": "" if lk["mine"] else person(lk["holder_name"], lk["holder_user"]),
+                    "mine": lk["mine"], "since": lk["since"],
                     "leaseLeft": lk["lease_left"]} for lk in space_vcs.locks(account, space, plugin, now=now)],
             nextTry=float(head["next_try"]) if float(head["next_try"]) > now else None,
             pending=sum(1 for o in outgoing if o["state"] in ("queued", "sending")),
@@ -618,7 +622,7 @@ def _team_folder_fields(out: dict[str, Any], account: str, space: str, plugin: s
     changes["outgoing"] = [*changes.get("outgoing", []), *outgoing]
     waiting = space_vcs.incoming_queue_get(account, space, plugin)
     changes["held"] = bool(waiting["count"])
-    changes["incomingBy"] = waiting["by"]
+    changes["incomingBy"] = list(dict.fromkeys(person(b) for b in waiting["by"]))
     if waiting["count"]:
         changes["incoming"] = max(int(changes.get("incoming") or 0), waiting["count"])
     for b in changes.get("blocked") or []:
@@ -967,7 +971,7 @@ def _unit_text(account: str, space: str, plugin: str, folder_id: str, unit: str)
     mine = [r["relpath"] for r in folder_files.files(account, space, plugin, folder_id, unit=unit) if r["dirty"]]
     c = space_vcs.conflict_get(account, space, plugin, "tree", f"{folder_id}/{unit}")
     theirs = vcs_engine._held_items(c)
-    who = (c["theirs_by"] if c else "") or "the team"
+    who = person(c["theirs_by"]) if c and c["theirs_by"] else "the team"
     lines = [f"Changed here: {len(mine)} file(s)", *[f"  {rel}" for rel in mine]]
     lines += [f"Changed by {who}: {len(theirs)} file(s)",
               *[f"  {rel}{' (deleted)' if op == 'del' else ''}" for _k, _s, op, rel in theirs]]
@@ -1015,12 +1019,12 @@ def _conflict_text(account: str, space: str, plugin: str, kind: str, key: str) -
             def line(who: str, gone: bool, size: int, sha: str, by: str) -> str:
                 return f"{who}: deleted" if gone else f"{who}: {size:,} bytes, sha256 {sha[:12]}{by}"
 
-            by = f", by {c['theirs_by']}" if c["theirs_by"] else ""
+            by = f", by {person(c['theirs_by'])}" if c["theirs_by"] else ""
             return "\n".join([
                 line("Theirs", theirs_deleted, int(row["size"]) if row else 0, str(row["sha256"]) if row else "", by),
                 line("Mine", mine_deleted, int(c["mine_size"]), str(c["mine_sha"]), ""),
             ])
-    who = c["theirs_by"] or "theirs"
+    who = person(c["theirs_by"]) if c["theirs_by"] else "theirs"
     return "\n".join(difflib.unified_diff(theirs, mine, fromfile=f"{who}'s", tofile="mine", lineterm=""))
 
 
@@ -1088,6 +1092,8 @@ def team_history(plugin: str, *, kind: str = "", key: str = "", before: int | No
                              limit=max(1, min(int(limit or 50), 200)))
     for entry in out.get("entries") or []:
         entry["items"] = [list(i) for i in entry.get("items") or []]
+        if entry.get("by"):
+            entry["by"] = person(entry["by"])
     return out
 
 

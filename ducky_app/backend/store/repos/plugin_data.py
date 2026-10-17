@@ -11,7 +11,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from backend.store import db
 from backend.store.repos import folder_files
@@ -335,6 +335,35 @@ def note_attempt(account: str, scope: str, plugin: str, kind: str, key: str, err
             (attempts, next_try, state, str(error or "")[:500], *args),
         )
     return {"attempts": attempts, "next_try": next_try, "state": state}
+
+
+def note_attempts(account: str, scope: str, plugin: str, items: Iterable[tuple[str, str]],
+                  error: str) -> dict[str, Any] | None:
+    """A changeset of these rows failed as a whole (the server took none of it and said
+    why). They count one try together, as many as the most-tried of them, so they wait
+    alike (:func:`note_attempt`'s backoff), come back together and are ``blocked`` with
+    the reason together after :data:`BLOCK_AFTER`. Returns ``{attempts, next_try, state}``;
+    None when none of them is here any more."""
+    conn = db.connect()
+    with db.write_txn(conn):
+        found = []
+        for kind, key in dict.fromkeys(items):
+            r = conn.execute(f"SELECT attempts, sync_state FROM plugin_data WHERE {_WHERE}",
+                             (account, scope, plugin, kind, key)).fetchone()
+            if r is not None:
+                found.append((kind, key, r))
+        if not found:
+            return None
+        attempts = max(int(r[0]) for *_, r in found) + 1
+        next_try = time.time() + min(2 ** attempts * 30, 3600)
+        blocked = attempts >= BLOCK_AFTER
+        for kind, key, r in found:
+            conn.execute(
+                f"UPDATE plugin_data SET attempts=?, next_try=?, sync_state=?, sync_error=? WHERE {_WHERE}",
+                (attempts, next_try, "blocked" if blocked else str(r[1]), str(error or "")[:500],
+                 account, scope, plugin, kind, key),
+            )
+    return {"attempts": attempts, "next_try": next_try, "state": "blocked" if blocked else ""}
 
 
 def requeue_refused(account: str, scope: str) -> int:

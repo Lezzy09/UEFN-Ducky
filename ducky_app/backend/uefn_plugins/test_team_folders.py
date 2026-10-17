@@ -1694,12 +1694,19 @@ def test_own_commit_coming_back_after_a_gap_is_no_conflict(env: Env, pcs: tuple[
         _write(ben.root / "Duel" / "scene.json", '{"v": "ben"}', mtime_ns=MTIME + 1000)
         assert ben.round(quiet_s=0)["pushed"] == 1 and team.head() == 3  # Ana hasn't pulled it
     with ana:
+        from backend.store.repos import space_vcs
+
+        mega = ana.rows()["MEGA"]["unitId"]
+        sent = space_vcs.unit_seqs(ana.account, SPACE, PLUGIN, [mega])
         _write(ana.root / "MEGA" / "scene.json", '{"v": "ana"}', mtime_ns=MTIME + 4000)
         assert ana.round(pull=False, quiet_s=0)["pushed"] == 1 and team.head() == 4  # past the gap
+        # Not claimed at 4 yet (what a lock asks with): the gap may hold a change of MEGA.
+        assert space_vcs.unit_seqs(ana.account, SPACE, PLUGIN, [mega]) == sent and sent[mega] < 3
         _write(ana.root / "MEGA" / "scene.json", '{"v": "ana, again"}', mtime_ns=MTIME + 5000)
         vcs_engine.watch(ana.account, SPACE, PLUGIN, ana.backend)  # seen as a change on top of seq 4
         got = ana.round(push=False)  # Ben's seq 3, then this PC's own seq 4
         assert got["conflicts"] == 0 and ana.rows()["MEGA"]["state"] == "changed_here"
+        assert space_vcs.unit_seqs(ana.account, SPACE, PLUGIN, [mega]) == {mega: 4}
         assert _read(ana.root / "MEGA" / "scene.json") == '{"v": "ana, again"}'
         assert _read(ana.root / "Duel" / "scene.json") == '{"v": "ben"}'
         assert ana.round(quiet_s=0)["pushed"] == 1 and team.content("MEGA/scene.json") == b'{"v": "ana, again"}'
@@ -1983,3 +1990,188 @@ def test_going_local_takes_every_projects_folder_back_to_local(env: Env, pcs: tu
             link = root / ".ducky" / "scene-maker"
             assert tf._key(tf.junction_target(link)) == tf._key(tf.local_copy(PLUGIN, ana.folder(), pid))
             assert repo.link_get(PLUGIN, "design", pid)["space_id"] == "personal"
+
+
+def test_a_unit_the_server_keeps_failing_waits_alone_and_other_units_go(env: Env, pcs: tuple[Machine, Machine],
+                                                                       team: TeamService) -> None:
+    from backend.store.repos import plugin_data, space_vcs
+    from backend.uefn_plugins import vcs_engine
+    from backend.uefn_plugins.ledger import Error
+    from frontend.ui_web import panel_api  # noqa: F401  (panel_api_store loads with it)
+    from frontend.ui_web import panel_api_store
+
+    ana, _ = pcs
+    with ana:
+        _share_scenes(ana, ["MEGA", "Duel"])
+        inner, tries = ana.backend, []
+
+        class NoMega:  # the server never takes a changeset of MEGA
+            def __getattr__(self, name: str) -> Any:
+                return getattr(inner, name)
+
+            def push(self, space: str, plugin: str, cs: Any) -> Any:
+                if any(i.meta.get("unit_name") == "MEGA" for i in cs.items):
+                    tries.append(cs.cs_id)
+                    return Error("bad request")
+                return inner.push(space, plugin, cs)
+
+        def waits_over() -> None:  # as if MEGA's backoff had passed
+            left = space_vcs.unit_tries(ana.account, SPACE, PLUGIN)
+            space_vcs._state_put(f"{space_vcs.UNIT_TRIES_PREFIX}{ana.account}:{SPACE}:{PLUGIN}",
+                                 {u: {**t, "next_try": 0.0} for u, t in left.items()} or None)
+
+        def mega() -> dict[str, Any]:
+            return next(o for o in vcs_engine.folder_outgoing(ana.account, SPACE, PLUGIN) if o["unit"] == "MEGA")
+
+        team.clients[ana.account] = NoMega()
+        head = team.head()
+        _write(ana.root / "MEGA" / "scene.json", '{"name": "MEGA", "v": 2}', mtime_ns=MTIME + 3000)
+        out = ana.round(quiet_s=0)
+        # Alone, its error may be the server refusing everything: no try counts, the plugin backs off.
+        assert (out["state"], len(tries), team.head()) == ("error", 1, head)
+        assert space_vcs.head_get(ana.account, SPACE, PLUGIN)["next_try"] > time.time()
+        assert (mega()["state"], mega()["attempts"]) == ("sending", 0)
+        n = 2
+
+        def with_duel() -> dict[str, Any]:  # another unit changes and goes in the same round
+            nonlocal n
+            n += 1
+            _write(ana.root / "Duel" / "scene.json", json.dumps({"v": n}), mtime_ns=MTIME + 3000 + n * 1000)
+            return ana.round(quiet_s=0)
+
+        out = with_duel()  # Duel lands: MEGA's error is its own; it waits, the plugin doesn't back off
+        assert (out["state"], out["pushed"], len(tries)) == ("ok", 1, 2)
+        assert team.content("Duel/scene.json") == b'{"v": 3}'
+        assert space_vcs.head_get(ana.account, SPACE, PLUGIN)["next_try"] == 0.0
+        assert (mega()["state"], mega()["attempts"], mega()["reason"]) == ("queued", 1, "bad request")
+        assert vcs_engine.folder_work(ana.account, SPACE, PLUGIN) is False  # nothing to do while it waits
+        for k in range(2, plugin_data.BLOCK_AFTER + 1):
+            waits_over()
+            with_duel()
+            assert len(tries) == k + 1
+        assert (mega()["state"], mega()["reason"]) == ("blocked", "bad request")
+        with_duel()
+        assert len(tries) == plugin_data.BLOCK_AFTER + 1  # held: Retry, or a change, sends it again
+        assert panel_api_store._retry_held(PLUGIN, "scenes/MEGA") == {"ok": True, "retried": 1}  # the drawer's Retry
+        assert ana.round(quiet_s=0)["state"] == "error"  # alone again: no try counts
+        assert len(tries) == plugin_data.BLOCK_AFTER + 2 and mega()["attempts"] == 0
+        _write(ana.root / "MEGA" / "scene.json", '{"name": "MEGA", "v": 3}', mtime_ns=MTIME + 4000)
+        ana.round(quiet_s=0)  # changed again: it goes at once, as it is now
+        assert len(tries) == plugin_data.BLOCK_AFTER + 3
+        team.clients[ana.account] = inner  # the server takes it now
+        assert ana.round(quiet_s=0)["pushed"] == 1 and team.content("MEGA/scene.json") == b'{"name": "MEGA", "v": 3}'
+        assert ana.rows()["MEGA"]["state"] == "up_to_date"
+        assert space_vcs.unit_tries(ana.account, SPACE, PLUGIN) == {}
+
+
+def test_a_lock_on_a_unit_with_a_file_set_aside_waits_until_the_unit_lands_whole(
+        env: Env, pcs: tuple[Machine, Machine], team: TeamService) -> None:
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import vcs_engine
+
+    ana, ben = pcs
+    with ana:
+        _share_scenes(ana, ["MEGA", "Duel"], LOOSE)
+    with ben:
+        ben.join(LOOSE)
+        assert ben.switch()["ok"]
+        mega = ben.rows()["MEGA"]["unitId"]
+    with ana:
+        _write(ana.root / "MEGA" / "transforms.json", json.dumps({"base_stamp": MTIME, "moves": [1, 2]}))
+        assert ana.round(quiet_s=0)["pushed"] == 1
+    bad = next(i for i in team.server.space(SPACE).repo(PLUGIN).items.values()
+               if i.meta.get("relpath") == "MEGA/transforms.json")
+    team.server.bad.add((SPACE, PLUGIN, "tree", bad.key, bad.seq))  # its download won't verify
+    with ben:
+        assert ben.round(quiet_s=0)["tree"] == 0 and len(space_vcs.blocked(ben.account, SPACE, PLUGIN)) == 1
+    with ana:
+        _write(ana.root / "Duel" / "scene.json", '{"v": "ana"}', mtime_ns=MTIME + 2000)
+        assert ana.round(quiet_s=0)["pushed"] == 1  # a gap for Ben
+    with ben:
+        _write(ben.root / "MEGA" / "scene.json", '{"name": "MEGA", "v": "ben"}', mtime_ns=MTIME + 3000)
+        assert ben.round(pull=False, quiet_s=0)["pushed"] == 1  # another file of MEGA, past the gap
+        top = team.head()
+        assert ben.round(push=False)["state"] == "ok"  # Duel, then Ben's own commit comes back
+        assert space_vcs.head_get(ben.account, SPACE, PLUGIN)["seq"] == top
+        assert space_vcs.unit_seqs(ben.account, SPACE, PLUGIN, [mega])[mega] < bad.seq  # never claimed past it
+        got = vcs_engine.acquire(ben.account, SPACE, PLUGIN, ben.backend, [(mega, "MEGA")])
+        assert got[mega]["state"] == "behind"  # transforms.json isn't here: no lock on a stale MEGA
+        team.server.bad.clear()
+        got = vcs_engine.acquire(ben.account, SPACE, PLUGIN, ben.backend, [(mega, "MEGA")])
+        assert got[mega]["state"] == "granted"  # it landed whole: claimed at the head, past Ben's own commit
+        assert json.loads(_read(ben.root / "MEGA" / "transforms.json"))["moves"] == [1, 2]
+        assert space_vcs.unit_seqs(ben.account, SPACE, PLUGIN, [mega]) == {mega: top}
+
+
+def test_an_own_commit_while_a_file_of_its_unit_is_set_aside_is_claimed_once_the_unit_lands(
+        env: Env, pcs: tuple[Machine, Machine], team: TeamService) -> None:
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import vcs_engine
+
+    ana, ben = pcs
+    with ana:
+        _share_scenes(ana, ["MEGA"], LOOSE)
+    with ben:
+        ben.join(LOOSE)
+        assert ben.switch()["ok"]
+        mega = ben.rows()["MEGA"]["unitId"]
+    with ana:
+        _write(ana.root / "MEGA" / "transforms.json", json.dumps({"base_stamp": MTIME, "moves": [1, 2]}))
+        assert ana.round(quiet_s=0)["pushed"] == 1
+    bad = next(i for i in team.server.space(SPACE).repo(PLUGIN).items.values()
+               if i.meta.get("relpath") == "MEGA/transforms.json")
+    team.server.bad.add((SPACE, PLUGIN, "tree", bad.key, bad.seq))
+    with ben:
+        assert ben.round(quiet_s=0)["tree"] == 0
+        before = space_vcs.unit_seqs(ben.account, SPACE, PLUGIN, [mega])[mega]
+        _write(ben.root / "MEGA" / "scene.json", '{"name": "MEGA", "v": "ben"}', mtime_ns=MTIME + 3000)
+        assert ben.round(quiet_s=0)["pushed"] == 1
+        top = team.head()
+        assert space_vcs.head_get(ben.account, SPACE, PLUGIN)["seq"] == top  # the next seq: the head moved
+        assert space_vcs.unit_seqs(ben.account, SPACE, PLUGIN, [mega]) == {mega: before}  # but MEGA isn't whole
+        team.server.bad.clear()
+        got = vcs_engine.acquire(ben.account, SPACE, PLUGIN, ben.backend, [(mega, "MEGA")])
+        assert got[mega]["state"] == "granted"  # never "behind" for good: the commit skipped is claimed now
+        assert space_vcs.unit_seqs(ben.account, SPACE, PLUGIN, [mega]) == {mega: top}
+
+
+def test_a_big_units_later_part_that_fails_goes_again_as_it_was_so_its_group_closes(
+        env: Env, pcs: tuple[Machine, Machine], team: TeamService, monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import vcs_engine
+    from backend.uefn_plugins.ledger import Error
+
+    monkeypatch.setattr(vcs_engine, "MAX_ITEMS", 1)  # each file a part of the unit's group
+    ana, ben = pcs
+    with ana:
+        _share_scenes(ana, ["MEGA"], LOOSE)
+        inner, failed, shared = ana.backend, [], team.head()
+
+        class Part2FailsOnce:
+            def __getattr__(self, name: str) -> Any:
+                return getattr(inner, name)
+
+            def push(self, space: str, plugin: str, cs: Any) -> Any:
+                if cs.part == 2 and not failed:
+                    failed.append(cs.cs_id)
+                    return Error("bad request")
+                return inner.push(space, plugin, cs)
+
+        team.clients[ana.account] = Part2FailsOnce()
+        _write(ana.root / "MEGA" / "scene.json", '{"name": "MEGA", "v": 2}', mtime_ns=MTIME + 3000)
+        _write(ana.root / "MEGA" / "transforms.json", json.dumps({"base_stamp": MTIME + 3000, "moves": [1, 2]}))
+        _write(ana.root / "MEGA" / "notes.txt", "new")
+        out = ana.round(quiet_s=0)
+        assert (out["state"], out["pushed"], len(failed)) == ("error", 1, 1)  # part 1 landed: part 2 backs off
+        assert [(cs["part"], cs["state"]) for cs in space_vcs.cs_open(ana.account, SPACE)] == [
+            (2, "pushing"), (3, "pending")]
+        team.clients[ana.account] = inner
+        assert ana.round(quiet_s=0)["state"] == "ok" and space_vcs.cs_open(ana.account, SPACE) == []
+    unit = [cs for s, cs in sorted(team.server.space(SPACE).repo(PLUGIN).changesets.items()) if s > shared]
+    assert [(cs.part, cs.last) for cs in unit] == [(1, False), (2, False), (3, True)]
+    assert len({cs.group for cs in unit}) == 1  # one group, and it closed
+    with ben:
+        ben.join(LOOSE)
+        assert ben.switch()["ok"]
+        assert _read(ben.root / "MEGA" / "notes.txt") == "new"
+        assert json.loads(_read(ben.root / "MEGA" / "scene.json"))["v"] == 2

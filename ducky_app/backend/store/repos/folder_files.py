@@ -185,6 +185,19 @@ def requeue_refused(conn: Any, account: str, space: str) -> int:
                         "AND sync_state='refused'", (account, space)).rowcount
 
 
+def requeue_blocked(account: str, space: str, plugin: str, folder_id: str | None = None,
+                    unit: str | None = None) -> int:
+    """Folder files of ``plugin`` (of one unit when ``folder_id`` and ``unit`` are given)
+    whose unit's sends kept failing go out again (Retry). Returns how many."""
+    sql, args = ("UPDATE folder_files SET sync_state='', sync_error='' WHERE account_id=? AND space_id=? "
+                 "AND plugin_id=? AND sync_state='blocked'", [account, space, plugin])
+    if folder_id is not None and unit is not None:
+        sql, args = sql + " AND folder_id=? AND unit=?", [*args, folder_id, unit]
+    conn = db.connect()
+    with db.write_txn(conn):
+        return conn.execute(sql, args).rowcount
+
+
 def unsent_units(account: str, space: str, *, since: float | None = None) -> int:
     """How many folder units of the space have changes this PC never sent (held back ones
     too), changed after ``since`` when given."""

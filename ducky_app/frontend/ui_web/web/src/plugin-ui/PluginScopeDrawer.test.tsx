@@ -448,6 +448,23 @@ describe("plugin scope drawer", () => {
     expect(screen.queryByRole("button", { name: "Drop my change to Lobby" })).toBeNull();
   });
 
+  it("a folder unit the server kept failing has Retry (and Retry all), never Drop my change", async () => {
+    drawer(status({
+      changes: { outgoing: [
+        { kind: "tree", key: "scenes/Arena", folder_id: "scenes", unit: "Arena", name: "Arena", files: 2, state: "blocked",
+          reason: "bad request" },
+        { kind: "tree", key: "scenes/Vault", folder_id: "scenes", unit: "Vault", name: "Vault", files: 1, state: "blocked",
+          reason: "bad request" },
+      ] },
+    }));
+    expect(screen.getAllByText("Couldn't be sent: bad request")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Drop my change to Arena" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry Arena" }));
+    await waitFor(() => expect(api.plugin_scope_retry).toHaveBeenCalledWith("forge", "scenes/Arena"));
+    fireEvent.click(screen.getByRole("button", { name: "Retry all" }));
+    await waitFor(() => expect(api.plugin_scope_retry).toHaveBeenLastCalledWith("forge"));
+  });
+
   it("updates held for a restart wait for Update now, which brings them in", async () => {
     const view = drawer(status({ changes: { incoming: 2, incomingBy: ["Ana", "Ben"], held: true } }));
     expect(screen.getByText("2 incoming from Ana and Ben · they wait until you update")).toBeTruthy();

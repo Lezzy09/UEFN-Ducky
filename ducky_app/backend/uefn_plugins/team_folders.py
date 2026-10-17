@@ -71,6 +71,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
 from backend.store.repos import folder_files as repo
+from backend.uefn_plugins.ledger import person
 
 _log = logging.getLogger(__name__)
 
@@ -1942,7 +1943,15 @@ def scan(account: str, space: str, plugin: str, folder: Folder, *, project_id: s
                      "plugin_id=? AND folder_id=? AND project_id=? AND sync_state='refused' AND "
                      f"(sync_error LIKE ? OR sync_error LIKE ?) AND unit NOT IN ({still})",
                      (account, space, plugin, folder.id, project_id, f"%{CLASH}%", f"{TOO_BIG}%", *out.refused))
+        # A unit whose sends kept failing (blocked) goes again, afresh, once it changes.
+        if out.changed:
+            conn.execute("UPDATE folder_files SET sync_state='', sync_error='' WHERE account_id=? AND space_id=? AND "
+                         "plugin_id=? AND folder_id=? AND sync_state='blocked' AND unit IN "
+                         f"({', '.join('?' * len(out.changed))})", (account, space, plugin, folder.id, *out.changed))
     if out.changed:
+        from backend.store.repos import space_vcs
+
+        space_vcs.unit_tries_clear(account, space, plugin, [f"{folder.id}/{unit}" for unit in out.changed])
         _note_activity(account, space, plugin, folder, out.changed, now, unit_id)
     for (_fid, unit), info in repo.dirty_units(account, space, plugin, folder.id).items():
         if project_id and not (unit == project_id or unit.startswith(project_id + "/")):
@@ -1962,7 +1971,7 @@ def scan(account: str, space: str, plugin: str, folder: Folder, *, project_id: s
 def _held_text(lock: dict[str, Any] | None) -> str:
     if not lock:
         return ""
-    return f"Changed here while {lock.get('holder_name') or lock.get('holder_user') or 'someone'} holds it"
+    return f"Changed here while {person(lock.get('holder_name'), lock.get('holder_user'))} holds it"
 
 
 def _note_activity(account: str, space: str, plugin: str, folder: Folder, changed: dict[str, int], now: float,
@@ -2867,7 +2876,7 @@ def units_table(account: str, space: str, plugin: str, folder: Folder, *, projec
         state = next((s for s in ("conflict", "quarantined", "refused") if s in states), "")
         if not state and unit in locked:
             state = "locked"
-            u["holder"] = str(locked[unit].get("holder_name") or locked[unit].get("holder_user") or "")
+            u["holder"] = person(locked[unit].get("holder_name"), locked[unit].get("holder_user"))
         state = state or ("changed" if u["dirty"] else "synced")
         out.append({**u, "state": state})
     return out

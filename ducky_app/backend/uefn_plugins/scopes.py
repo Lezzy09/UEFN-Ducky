@@ -756,7 +756,9 @@ def _locked_out(plugin: str, unit: str, held: dict[str, Any]) -> LockedOut:
     """The refusal of a write to ``unit`` while ``held`` (someone else's live lock) holds it.
     Panels show it from the answer; anyone else's refusal (an agent's tool call) is told to
     the app, so the plugin's bar and the alerts say who has it."""
-    holder = str(held.get("holder_name") or held.get("holder_user") or "someone")
+    from backend.uefn_plugins.ledger import person
+
+    holder = person(held.get("holder_name"), held.get("holder_user"))
     name = str(held.get("name") or _unit_label(unit))
     since = float(held.get("since") or 0.0)
     lock = {"unit": unit, "name": name, "holder": holder, "since": since}
