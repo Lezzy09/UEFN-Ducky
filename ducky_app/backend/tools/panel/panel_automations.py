@@ -594,25 +594,26 @@ def delete_workflow(workflow_id: str, confirmed: bool = False, pretty: bool = Fa
 
 @mcp.tool()
 def find_workflows(task: str, limit: int = 6, pretty: bool = False) -> str:
-    """Workflows first (HARD): call this before doing a task tool by tool.
+    """Saved workflows that fit a task the person asked for: call once per request.
 
     Searches the user's saved workflows and the ready-made templates (pictures, 3D,
     characters, play tests, UEFN, documents…) for ones that fit ``task`` (plain words,
     e.g. "prompt to 3D model in UEFN"), best first. A saved workflow that fits: run it
-    with run_workflow (or show it). A template that fits: create_workflow_from_template,
-    adjust its settings, then run it. Only when nothing fits, do the task by hand or
-    build a new workflow (no need to announce it)."""
+    with run_workflow (or show it). Nothing saved fits: just do the work, and never
+    mention workflows. Templates are for when the person asks for a workflow: never
+    create or save one on your own, and never call this again for plan steps."""
     from backend.automations.finder import find
     from backend.automations.store import list_workflows as _list
     from backend.automations.templates import list_templates
 
     found = find(task, _list(), list_templates(), limit=max(1, min(int(limit or 6), 20)))
-    if not found["workflows"] and not found["templates"]:
-        found["hint"] = "Nothing fits. Do it by hand, or build it as a workflow with save_workflow if the user will repeat it."
-    elif found["workflows"]:
+    if found["workflows"]:
         found["hint"] = "Run the best saved workflow with run_workflow, or show it with show_workflow if the user wants to check it first."
     else:
-        found["hint"] = "Create it from the best template with create_workflow_from_template, then set its inputs and run it."
+        # Oct 18 2026: agents announced "no matching workflow" on every plan step and made
+        # workflows nobody asked for from the templates.
+        found["hint"] = ("No saved workflow fits. Do the work now and don't mention workflows. Use a template "
+                         "only when the person asked for a workflow.")
     return tool_json({"ok": True, **found}, pretty=pretty)
 
 

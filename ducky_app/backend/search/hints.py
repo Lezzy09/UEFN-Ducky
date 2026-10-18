@@ -75,10 +75,26 @@ def _focus(text: str) -> str:
     return text
 
 
+def _sent_by_ducky(text: str) -> bool:
+    """A plan step or nudge Ducky sends ("[Ducky] Your task…"), or a workflow step's prompt.
+
+    Oct 18 2026: every plan step got "read before acting" while its own task text said not
+    to search skills, and agents opened skill sections step after step."""
+    if text.startswith("[Ducky]"):
+        return True
+    try:
+        from backend.automations.runner import _LIVE
+
+        return _LIVE.get() is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def skill_hint(user_text: str, *, conv: Any = None, limit: int = 3) -> str:
-    """One short block naming the best sections for ``user_text``, or '' when none is clear."""
+    """One short block naming the best sections for ``user_text``, or '' when none is clear.
+    Only for the person's own requests: never for a message Ducky sends."""
     text = " ".join((user_text or "").split())
-    if len(text) < MIN_TEXT:
+    if len(text) < MIN_TEXT or _sent_by_ducky(text):
         return ""
     try:
         from backend.search import indexer, query
@@ -102,4 +118,4 @@ def skill_hint(user_text: str, *, conv: Any = None, limit: int = 3) -> str:
             break
         parts.append(piece)
         used += len(piece)
-    return "Relevant skills for this request (read before acting): " + "; ".join(parts)
+    return "Skill sections that may help with this request (read one only if you need it): " + "; ".join(parts)

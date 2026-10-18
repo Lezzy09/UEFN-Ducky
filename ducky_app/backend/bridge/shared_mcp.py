@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import hashlib
 import json
 import os
@@ -45,6 +46,14 @@ _ready_info: dict[str, Any] = {}
 _inflight: dict[tuple[int, str], asyncio.Future[Any]] = {}
 _shared_serving = False
 _listen_sock: socket.socket | None = None
+# Answered from Ducky's own tool catalog and skill index: a call past this never answers,
+# so it is stopped and the agent hears why. Oct 18 2026: a user's agent sat 29 minutes on
+# ducky_find_tools; agents (Claude Code) wait on an MCP call with no limit of their own.
+QUICK_TOOLS = frozenset({"ducky_get_tools", "ducky_find_tools", "skill_search", "skill_read_subskill"})
+QUICK_TOOL_LIMIT_S = 60.0
+# Any other call still running this long: where it waits is recorded (events kind
+# "tool_stuck") and it keeps running, since workflows, renders and questions take minutes.
+STUCK_REPORT_S = 120.0
 
 
 def enabled(settings: Any | None = None) -> bool:
@@ -475,6 +484,107 @@ def _calling_mode(ident: Any) -> str:
     return "agent"
 
 
+class _CallTimedOut(Exception):
+    """A quick tool did not answer within its limit: the agent gets this text as an error."""
+
+
+def _in_own_thread(fn: Any, thread: dict[str, int], name: str) -> asyncio.Future[Any]:
+    """Run ``fn`` on a new thread with this call's context (identity, mode); its result
+    settles the returned future on this loop. ``thread['id']`` names the thread."""
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[Any] = loop.create_future()
+    ctx = contextvars.copy_context()
+
+    def _settle(value: Any, error: BaseException | None) -> None:
+        if fut.done():
+            return
+        if error is not None:
+            fut.set_exception(error)
+        else:
+            fut.set_result(value)
+
+    def _run() -> None:
+        thread["id"] = threading.get_ident()
+        try:
+            value, error = ctx.run(fn), None
+        except BaseException as exc:  # noqa: BLE001 — handed to the awaiting call
+            value, error = None, exc
+        try:
+            loop.call_soon_threadsafe(_settle, value, error)
+        except RuntimeError:
+            pass  # the loop is gone (daemon stopping)
+
+    threading.Thread(target=_run, daemon=True, name=f"shared-mcp-call:{name}"[:60]).start()
+    return fut
+
+
+async def _watched(work: asyncio.Future[Any], name: str, thread: dict[str, int], ident: Any) -> Any:
+    """Await one tool call. A quick tool past :data:`QUICK_TOOL_LIMIT_S` is stopped and
+    raises :class:`_CallTimedOut`; any call past the first check is recorded where it waits."""
+    limit = QUICK_TOOL_LIMIT_S if name in QUICK_TOOLS else None
+    first = min(limit, STUCK_REPORT_S) if limit is not None else STUCK_REPORT_S
+    try:
+        done, _ = await asyncio.wait({work}, timeout=first)
+        if not done:
+            _report_stuck(name, first, work, thread, ident)
+            if limit is not None:
+                work.cancel()
+                raise _CallTimedOut(
+                    f"{name} did not answer within {limit:.0f} s and was stopped. Call it once more; "
+                    "if it stops again, carry on without it and tell the person."
+                )
+            await asyncio.wait({work})
+    except asyncio.CancelledError:
+        work.cancel()  # the agent cancelled the call
+        raise
+    return work.result()
+
+
+def _await_chain(work: Any) -> list[str]:
+    """Where a suspended call waits: its coroutine await chain, innermost last."""
+    lines: list[str] = []
+    coro = work.get_coro() if isinstance(work, asyncio.Task) else None
+    for _ in range(80):
+        if coro is None:
+            break
+        frame = getattr(coro, "cr_frame", None) or getattr(coro, "gi_frame", None)
+        if frame is None:
+            lines.append(f"  awaiting {type(coro).__name__}\n")
+            break
+        lines.append(f'  File "{frame.f_code.co_filename}", line {frame.f_lineno}, in {frame.f_code.co_name}\n')
+        coro = getattr(coro, "cr_await", None) or getattr(coro, "gi_yieldfrom", None)
+    return lines
+
+
+def _report_stuck(name: str, seconds: float, work: Any, thread: dict[str, int], ident: Any) -> None:
+    """One events row (kind ``tool_stuck``) with where the call waits. Never raises."""
+    try:
+        import sys
+        import traceback
+
+        frames = sys._current_frames()
+        tid = thread.get("id")
+        if tid and tid in frames:
+            lines = traceback.format_stack(frames[tid])
+        else:
+            lines = _await_chain(work)
+        # A wait on another loop (nested MCP servers) continues on that loop's thread.
+        for t in threading.enumerate():
+            if t.name == "mcp-plugin-pool" and t.ident in frames:
+                lines += ["mcp-plugin-pool:\n", *traceback.format_stack(frames[t.ident])[-12:]]
+        from backend.store.repos import events
+        from backend.util.privacy import scrub
+
+        now = time.time()
+        stack = scrub("".join(lines))[-8000:]
+        events.insert("tool_stuck", ts=now, source=name, message=f"{name} still running after {seconds:.0f} s",
+                      payload={"tool": name, "seconds": seconds, "conv_id": str(getattr(ident, "conv_id", "") or ""),
+                               "coding_agent": str(getattr(ident, "coding_agent", "") or ""), "stack": stack})
+        events.trim("tool_stuck", older_than=now - 30 * 86400, keep=200)
+    except Exception:  # noqa: BLE001 — a report never breaks the call
+        pass
+
+
 async def _call_tool(mcp: Any, name: str, arguments: dict[str, Any], ident: Any) -> dict[str, Any]:
     from backend.agent import hammer_guard
     from backend.workspace import identity
@@ -500,15 +610,22 @@ async def _call_tool(mcp: Any, name: str, arguments: dict[str, Any], ident: Any)
             reason = mode_tool_block_reason(mode, name, arguments, catalog)
             if reason:
                 return {"content": [{"type": "text", "text": reason}], "isError": True}
+        thread: dict[str, int] = {}
         if _is_sync_tool(mcp, name):
-            # A sync tool runs on a worker thread. On this loop it held up every agent
+            # A sync tool runs on a thread of its own. On this loop it held up every agent
             # sharing the daemon, and one that waits on another agent (run_workflow,
             # ducky_send_chat_message, ducky_ask_user, …) deadlocked as soon as that
-            # agent called a tool here: the Tycoony demo's preflight hung this way.
+            # agent called a tool here: the Tycoony demo's preflight hung this way. Not on
+            # the loop's pool either: calls that wait for minutes (or were given up) kept
+            # its threads, and every later call queued behind them at its first step.
             # Listener POSTs stay serialized by bridge.client._listener_lock.
-            raw = await asyncio.to_thread(asyncio.run, mcp.call_tool(name, arguments or {}))
+            work = _in_own_thread(lambda: asyncio.run(mcp.call_tool(name, arguments or {})), thread, name)
         else:
-            raw = await mcp.call_tool(name, arguments or {})
+            work = asyncio.ensure_future(mcp.call_tool(name, arguments or {}))
+        try:
+            raw = await _watched(work, name, thread, ident)
+        except _CallTimedOut as exc:
+            return {"content": [{"type": "text", "text": str(exc)}], "isError": True}
         return _call_result(raw)
     finally:
         hammer_guard.reset_conversation(hammer)

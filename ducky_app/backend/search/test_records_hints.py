@@ -144,9 +144,19 @@ def _pack() -> None:
 def test_hint_names_the_best_section_for_a_clear_request() -> None:
     _pack()
     text = hints.skill_hint("make an archer enemy that patrols and shoots arrows at the player")
-    assert text.startswith("Relevant skills for this request")
+    assert text.startswith("Skill sections that may help with this request")
     assert 'skill_read_subskill(pack_id="npc", subskill_id="ranged", section="Archer behavior")' in text
-    assert len(text) <= len("Relevant skills for this request (read before acting): ") + hints.MAX_CHARS + 120
+    assert len(text) <= 100 + hints.MAX_CHARS + 120
+
+
+def test_messages_ducky_sends_get_no_hint() -> None:
+    """Oct 18 2026: every plan step got "read before acting" while its task text said not to
+    search skills; agents opened skill sections step after step."""
+    _pack()
+    ask = "make an archer enemy that patrols and shoots arrows at the player"
+    assert hints.skill_hint(ask)
+    assert hints.skill_hint(f"[Ducky] Your task: the sub plan “Enemies”. {ask}") == ""
+    assert hints.skill_hint(f"[Ducky] Points left in your sub plan “Enemies”: {ask}") == ""
 
 
 def test_hint_follows_the_request_not_the_reply_instructions() -> None:

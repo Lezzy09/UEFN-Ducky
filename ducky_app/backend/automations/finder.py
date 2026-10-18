@@ -1,5 +1,5 @@
-"""Workflows first: before an agent does a task tool by tool, it looks here for a saved
-workflow that already does it, or a template that does most of it.
+"""Saved workflows for a task the person asked for (an agent checks once per request),
+and the templates that do most of it (used only when the person asks for a workflow).
 
 Plain word matching over names, descriptions, folders, categories and (for
 templates) the kinds of node in the graph, with a few synonyms so "3D model",

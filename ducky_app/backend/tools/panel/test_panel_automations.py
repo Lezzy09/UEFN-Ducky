@@ -107,7 +107,11 @@ def test_find_workflows_then_make_one_from_a_template(monkeypatch):
         assert found["ok"] and found["workflows"][0]["id"] == mine and "run_workflow" in found["hint"]
         assert found["templates"][0]["id"] == "builtin:pipe-prompt-3d-uefn"
         nothing = json.loads(find_workflows("zzz qqq"))
-        assert nothing["workflows"] == [] and nothing["templates"] == [] and "Nothing fits" in nothing["hint"]
+        assert nothing["workflows"] == [] and nothing["templates"] == [] and "No saved workflow fits" in nothing["hint"]
+        # A template that fits is never a reason to make a workflow nobody asked for.
+        only_templates = json.loads(find_workflows("sprite sheet pictures"))
+        assert only_templates["workflows"] == [] and only_templates["templates"]
+        assert "create_workflow_from_template" not in only_templates["hint"] and "No saved workflow fits" in only_templates["hint"]
         made = json.loads(create_workflow_from_template("builtin:pipe-sprite-sheet", name="My sheet"))
         assert made["ok"], made
         wid = made["workflow"]["id"]

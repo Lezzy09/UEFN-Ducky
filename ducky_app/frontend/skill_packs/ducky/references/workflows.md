@@ -14,7 +14,8 @@ Cron, a plugin trigger, or Inputs for a reusable one), steps (tools, Duckies,
 agents, waits, branches, loops, UEFN play tests, other workflows) and an end.
 Each belongs to **Local** (this PC) or a **shared space** (synced to every member).
 Do the work with the tools below; never tell the user to open the tab — the
-tools open it and show them what you did.
+tools open it and show them what you did. Make, copy or save a workflow only
+when the person asked for one; running a task is never a reason to make one.
 
 ### The editor (what the user sees)
 
