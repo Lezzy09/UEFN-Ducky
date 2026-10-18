@@ -279,6 +279,9 @@ class HistoryEntry:
     size: int = 0
     sha256: str = ""
     items: tuple[ItemId, ...] = ()
+    # The name of the PC ``device`` is, when the change says it ("" otherwise: core names
+    # the PCs its rosters have seen).
+    device_name: str = ""
 
 
 @dataclass(frozen=True)

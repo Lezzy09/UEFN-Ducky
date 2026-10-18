@@ -1090,10 +1090,16 @@ def team_history(plugin: str, *, kind: str = "", key: str = "", before: int | No
     item = (kind, key) if kind and key else None
     out = vcs_engine.history(account, space, plugin, backend, key=item, before=before or None,
                              limit=max(1, min(int(limit or 50), 200)))
+    names = vcs_engine.device_names(account, space) if out.get("entries") else {}
     for entry in out.get("entries") or []:
         entry["items"] = [list(i) for i in entry.get("items") or []]
         if entry.get("by"):
             entry["by"] = person(entry["by"])
+        # "device" is the PC's name, never its id: the name the change carries, else one a
+        # roster gave that id, else blank. "deviceId" keeps the id.
+        device = str(entry.get("device") or "")
+        entry["deviceId"] = device
+        entry["device"] = str(entry.pop("device_name", "") or "") or names.get(device, "")
     return out
 
 

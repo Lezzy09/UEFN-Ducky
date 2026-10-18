@@ -2578,7 +2578,8 @@ def refresh(account: str, space: str, plugins: list[str], backend: Any, *, now: 
         space_vcs.head_put(account, space, plugin, **fields)
         incoming[plugin] = max(0, remote - int(head["seq"]))
     _locks_from(account, space, got.locks, now=now, asked_at=asked_at)
-    space_vcs.presence_put(account, space, {"people": [dict(p) for p in got.people], "usage": dict(got.usage)},
+    roster = {"people": [dict(p) for p in got.people], "usage": dict(got.usage)}
+    space_vcs.presence_put(account, space, with_devices(space_vcs.presence_get(account, space)["roster"], roster),
                            now=now)
     return {"state": "reset" if reset else "ok", "error": "", "incoming": incoming, "epoch": got.epoch,
             "importing": dict(got.importing)}
@@ -2826,6 +2827,34 @@ def device_label() -> str:
     return (platform.node() or "This PC")[:64]
 
 
+DEVICES_MAX = 200  # PC names a space remembers (the oldest go first)
+
+
+def with_devices(old: Any, roster: dict[str, Any]) -> dict[str, Any]:
+    """``roster`` with every PC name seen in the space, by device id (``devices``): the
+    names ``old`` kept plus those of its people. A PC keeps its name after it leaves, so
+    history can say which PC a change came from."""
+    known = dict(old.get("devices") or {}) if isinstance(old, Mapping) and isinstance(old.get("devices"), Mapping) \
+        else {}
+    for p in roster.get("people") or []:
+        if not isinstance(p, Mapping):
+            continue
+        device, label = str(p.get("device") or ""), str(p.get("label") or "").strip()[:64]
+        if device and label:
+            known.pop(device, None)
+            known[device] = label  # newest last
+    while len(known) > DEVICES_MAX:
+        known.pop(next(iter(known)))
+    return {**roster, "devices": known}
+
+
+def device_names(account: str, space: str) -> dict[str, str]:
+    """Device id → PC name for a space: this PC's own, and every PC its rosters named."""
+    roster = space_vcs.presence_get(account, space)["roster"]
+    known = roster.get("devices") if isinstance(roster, dict) and isinstance(roster.get("devices"), Mapping) else {}
+    return {**{str(k): str(v) for k, v in known.items()}, space_vcs.device_id(): device_label()}
+
+
 def presence_blob(account: str, space: str, plugins: Iterable[str], *, now: float | None = None) -> dict[str, Any]:
     """What this PC says in the space: per plugin whether its panel is on screen, the units
     changed in the last 2 minutes (by the person or a ducky) and the locks held here."""
@@ -2873,7 +2902,7 @@ def beat(account: str, space: str, backend: Any, plugins: Iterable[str], *, forc
         return {"ok": False, "error": reason_of(got)}
     roster = dict(last["roster"]) if isinstance(last["roster"], dict) else {}
     roster["people"] = [dict(p) for p in got.people]
-    space_vcs.presence_put(account, space, roster, sent_sha=sha, now=now)
+    space_vcs.presence_put(account, space, with_devices(last["roster"], roster), sent_sha=sha, now=now)
     _locks_from(account, space, got.locks, now=now, asked_at=asked_at)
     return {"ok": True, "people": len(got.people)}
 

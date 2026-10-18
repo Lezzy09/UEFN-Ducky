@@ -937,6 +937,32 @@ def test_presence_says_who_edits_what_and_keeps_the_roster(pc: PC, ben: Ben, wor
     assert sorted(p["user_name"] for p in people) == ["Ana", "Ben"]
 
 
+def test_history_names_each_pc_by_the_name_a_roster_or_the_change_gave(
+        pc: PC, ben: Ben, monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.uefn_plugins import spaces
+    from backend.uefn_plugins.ledger import History, HistoryEntry
+
+    ben.client.beat(SPACE, {"label": "Ben's PC"})
+    assert vcs_engine.beat(pc.account, SPACE, pc.backend, [PLUGIN], force=True)["people"] == 2
+    names = vcs_engine.device_names(pc.account, SPACE)
+    assert names["d_ben"] == "Ben's PC" and names[vcs_engine.device_id()] == vcs_engine.device_label()
+    # Ben's PC leaves the roster and keeps its name.
+    kept = vcs_engine.with_devices(space_vcs.presence_get(pc.account, SPACE)["roster"], {"people": []})
+    assert kept["devices"]["d_ben"] == "Ben's PC"
+
+    monkeypatch.setattr(spaces, "_team", lambda plugin: (pc.account, SPACE, pc.backend))
+    monkeypatch.setattr(pc.backend, "history", lambda *a, **k: History((
+        HistoryEntry(seq=3, device="d_ben"),
+        HistoryEntry(seq=2, device="d_lap", device_name="Ana's laptop"),
+        HistoryEntry(seq=1, device="d_gone"),
+    )))
+    got = spaces.team_history(PLUGIN)["entries"]
+    # The PC's name, never its id ("deviceId" keeps that): the change's own name, else a
+    # roster's, else blank.
+    assert [(e["device"], e["deviceId"]) for e in got] == [
+        ("Ben's PC", "d_ben"), ("Ana's laptop", "d_lap"), ("", "d_gone")]
+
+
 # --------------------------------------------------------------------------- restore, history, lost access
 
 
