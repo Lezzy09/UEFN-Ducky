@@ -1360,7 +1360,18 @@ REMOTE_DENY = frozenset(
 # Every remote page also brings a new window id, and enough of those push the Ducky
 # window's own session out of the pool. A browser on this PC can reach the socket.
 OFF_PC_DENY = frozenset(
-    {"get_verse_lsp_status", "start_verse_lsp", "stop_verse_lsp", "reload_uefn_plugin"}
+    {
+        "get_verse_lsp_status",
+        "start_verse_lsp",
+        "stop_verse_lsp",
+        "reload_uefn_plugin",
+        # Reaching your other UEFN Duckies is for this PC's own windows: a phone or
+        # the website must never use this Ducky as a relay to the others.
+        "ducky_link_list",
+        "ducky_link_call",
+        "ducky_link_rtc_connect",
+        "ducky_link_open",
+    }
 )
 
 
@@ -1627,7 +1638,14 @@ def _poll_desktop_rpc_once() -> bool:
     rid = str(pending.get("id") or "")
     method = str(pending.get("method") or "")
     args = pending.get("args")
-    out = dispatch_desktop_rpc(method, args if isinstance(args, dict) else {})
+    sender = str(pending.get("from") or "")
+    if sender:
+        # Another UEFN Ducky of the account asked: sealed both ways (frontend.ducky_link).
+        from frontend.ducky_link import answer
+
+        out = answer(rid, sender, method, args)
+    else:
+        out = dispatch_desktop_rpc(method, args if isinstance(args, dict) else {})
     body: dict[str, Any] = {"id": rid, "ok": bool(out.get("ok"))}
     if "result" in out:
         body["result"] = out["result"]

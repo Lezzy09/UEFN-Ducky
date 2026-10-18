@@ -10,12 +10,22 @@ import "./theme/styles/index.css";
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { dismissBootSplashAfterPaint } from "./bootSplash";
-import { directConfigFromLocation, isDirectMode, startDirectTransport } from "./remote/directTransport";
+import {
+  directConfigFromLocation,
+  hideDesktopBridge,
+  isDirectMode,
+  isRemoteDuckyWindow,
+  startDirectTransport,
+} from "./remote/directTransport";
+import { RemoteDuckyBar } from "./components/RemoteDuckyBar";
 import { installAppIdle } from "./utils/appIdle";
 
-// Phone panel on the panel host: bring up the WebRTC transport before React
-// mounts so the first PanelApi call already has somewhere to go.
+const remoteDucky = isRemoteDuckyWindow();
+// Phone panel on the panel host, or a window showing another of your UEFN Duckies:
+// bring up the WebRTC transport before React mounts so the first PanelApi call
+// already has somewhere to go.
 if (isDirectMode()) {
+  if (remoteDucky) hideDesktopBridge();
   startDirectTransport(directConfigFromLocation(__PANEL_VERSION__));
 } else {
   // Tell Ducky the page started: a window whose page never gets here is reported
@@ -29,6 +39,7 @@ installAppIdle();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
+    {remoteDucky ? <RemoteDuckyBar name={directConfigFromLocation(__PANEL_VERSION__).name || "UEFN Ducky"} /> : null}
     <ErrorBoundary label="App">
       <App />
     </ErrorBoundary>

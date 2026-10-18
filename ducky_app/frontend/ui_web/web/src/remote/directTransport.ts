@@ -37,10 +37,15 @@ export type DirectState = "idle" | "connecting" | "live" | "failed";
 export type DirectStatus = { state: DirectState; reason: string; desktopVersion: string };
 
 export type DirectConfig = {
-  /** Where signaling goes. */
-  bridge: "parent" | "local";
+  /** Where signaling goes: the site page, the desktop's loopback API (tests), or —
+   * in a window of this app showing another of your UEFN Duckies — this Ducky,
+   * which hands the offer to that one sealed (frontend/ducky_link.py). */
+  bridge: "parent" | "local" | "ducky";
   /** Local bridge only: desktop panel origin, e.g. http://127.0.0.1:4199. */
   desktopOrigin?: string;
+  /** Ducky bridge only: the other UEFN Ducky's key id, and its name for the window. */
+  to?: string;
+  name?: string;
   ice?: RTCIceServer[];
   /** Panel bundle version (from build) for skew checks. */
   panelVersion: string;
@@ -70,7 +75,26 @@ export function isDirectMode(): boolean {
   const w = window as Window & { __duckyDirect?: DirectConfig };
   if (w.__duckyDirect) return true;
   const q = new URLSearchParams(window.location.search);
-  return q.get("direct") === "1" || q.get("direct") === "local";
+  return q.get("direct") === "1" || q.get("direct") === "local" || q.get("direct") === "ducky";
+}
+
+/** A window of this app showing another of your UEFN Duckies (not this one). */
+export function isRemoteDuckyWindow(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("direct") === "ducky";
+}
+
+/**
+ * The other Ducky's window lives inside this app, so pywebview would hand its page
+ * this Ducky's JS bridge, and code that sees one reads this PC's chats and files.
+ * Here every call must go to the other Ducky, so the bridge never lands.
+ */
+export function hideDesktopBridge(): void {
+  try {
+    Object.defineProperty(window, "pywebview", { configurable: false, get: () => undefined, set: () => undefined });
+  } catch {
+    /* already defined: the page loaded with a bridge it can't drop */
+  }
 }
 
 /** Build config from the URL / injected globals. */
@@ -78,6 +102,9 @@ export function directConfigFromLocation(panelVersion: string): DirectConfig {
   const w = window as Window & { __duckyDirect?: DirectConfig };
   if (w.__duckyDirect) return { ...w.__duckyDirect, panelVersion: w.__duckyDirect.panelVersion || panelVersion };
   const q = new URLSearchParams(window.location.search);
+  if (q.get("direct") === "ducky") {
+    return { bridge: "ducky", to: q.get("to") || "", name: q.get("name") || "UEFN Ducky", panelVersion };
+  }
   if (q.get("direct") === "local") {
     return {
       bridge: "local",
@@ -145,13 +172,18 @@ function parentBridge(): Bridge {
   };
 }
 
-function localBridge(desktopOrigin: string): Bridge {
+/** The desktop's loopback API answers the offer: itself (local end-to-end runs), or
+ * with `to`, another of your UEFN Duckies it relays it to sealed (`ducky_link_rtc_connect`). */
+function localBridge(desktopOrigin: string, to?: string): Bridge {
+  const method = to === undefined ? "direct_rtc_connect" : "ducky_link_rtc_connect";
   return {
     async connect(session, offer, ice) {
-      const r = await fetch(`${desktopOrigin}/__panel_api/direct_rtc_connect`, {
+      const call: Record<string, unknown> = { session, offer, ice, protocol: PROTOCOL_VERSION };
+      if (to !== undefined) call.to = to;
+      const r = await fetch(`${desktopOrigin}/__panel_api/${method}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ args: [{ session, offer, ice, protocol: PROTOCOL_VERSION }] }),
+        body: JSON.stringify({ args: [call] }),
       });
       const json = (await r.json()) as { ok?: boolean; result?: Record<string, unknown>; error?: string };
       if (!r.ok || json.ok === false || !json.result) throw new Error(json.error || `HTTP ${r.status}`);
@@ -202,7 +234,13 @@ export class DirectTransport {
 
   constructor(config: DirectConfig) {
     this.config = config;
-    this.bridge = config.bridge === "local" ? localBridge(config.desktopOrigin ?? "http://127.0.0.1:4199") : parentBridge();
+    this.bridge =
+      config.bridge === "local"
+        ? localBridge(config.desktopOrigin ?? "http://127.0.0.1:4199")
+        : config.bridge === "ducky"
+          ? // Same origin: this window is served by this Ducky's own panel server.
+            localBridge("", config.to ?? "")
+          : parentBridge();
     installServiceWorkerBlobBridge(this);
   }
 

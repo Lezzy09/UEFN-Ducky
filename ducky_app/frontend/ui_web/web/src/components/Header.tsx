@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Icons } from "../icons/Icons";
 import { ProjectSelector } from "./ProjectSelector";
 import { ConnectionStatusDropdown } from "./ConnectionStatusDropdown";
+import { DuckiesDropdown } from "./DuckiesDropdown";
 import { BackgroundActivityDropdown } from "./BackgroundActivityDropdown";
 import { VerseProblemsDropdown } from "./VerseProblemsDropdown";
 import { TerminalHeaderDropdown } from "../terminal/TerminalHeaderDropdown";
@@ -514,6 +515,8 @@ export function Header({
                 }
               />
             </span>
+            {/* Your other UEFN Duckies: only this PC's own windows can open them. */}
+            {!isRemote() ? <DuckiesDropdown /> : null}
             {isFocus ? (
               project.path?.trim() ? (
                 <span className="app-header-project-label" title={project.path}>

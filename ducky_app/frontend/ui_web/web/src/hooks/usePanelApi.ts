@@ -1,5 +1,5 @@
 import type { PanelApi } from "../types/panel";
-import { getDirectTransport } from "../remote/directTransport";
+import { getDirectTransport, isRemoteDuckyWindow } from "../remote/directTransport";
 import { openHttpsOnThisDevice } from "../remote/openHttps";
 
 /**
@@ -11,6 +11,9 @@ import { openHttpsOnThisDevice } from "../remote/openHttps";
  */
 export function isRemote(): boolean {
   if (typeof window === "undefined") return false;
+  // A WebView2 window of this app showing another of your UEFN Duckies is that
+  // Ducky's remote view, like a phone: never this desktop.
+  if (isRemoteDuckyWindow()) return true;
   if (window.pywebview) return false;
   return !(window as Window & { chrome?: { webview?: unknown } }).chrome?.webview;
 }

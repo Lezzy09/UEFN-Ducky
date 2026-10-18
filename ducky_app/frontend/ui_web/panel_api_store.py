@@ -220,6 +220,57 @@ class PanelApiStoreMixin:
         except Exception as exc:
             return {"ok": False, "error": str(exc), "code": "error", "devices": []}
 
+    # ---- Your other UEFN Duckies (frontend.ducky_link). This PC's windows only: OFF_PC_DENY.
+
+    def ducky_link_list(self) -> dict[str, Any]:
+        """The account's UEFN Duckies; ``mine`` is this one, ``live`` = reachable now."""
+        from frontend.duckyos_account import DuckyOSAccountError
+        from frontend.ducky_link import list_duckies
+
+        try:
+            return list_duckies()
+        except DuckyOSAccountError as exc:
+            return {"ok": False, "error": exc.message, "devices": []}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "devices": []}
+
+    def ducky_link_call(self, to: str = "", method: str = "", args: dict | None = None) -> dict[str, Any]:
+        """Run one allowlisted call (list_all_conversations, load_messages, send_message…)
+        on another of your UEFN Duckies."""
+        from frontend.ducky_link import call
+
+        return call(str(to or ""), str(method or ""), args if isinstance(args, dict) else {})
+
+    def ducky_link_rtc_connect(self, args: dict | None = None) -> dict[str, Any]:
+        """Handshake for a window showing another UEFN Ducky: the page's offer goes to
+        that Ducky sealed; its answer comes back. ``{"answer", "version", "protocol"}``."""
+        from frontend.ducky_link import call
+
+        raw = args if isinstance(args, dict) else {}
+        out = call(
+            str(raw.get("to") or ""),
+            "rtc_connect",
+            {k: raw.get(k) for k in ("session", "offer", "ice", "protocol")},
+            timeout=45.0,
+        )
+        if not out.get("ok"):
+            raise RuntimeError(str(out.get("error") or "That UEFN Ducky didn't answer."))
+        return out.get("result") if isinstance(out.get("result"), dict) else {}
+
+    def ducky_link_open(self, key_id: str = "", name: str = "") -> dict[str, Any]:
+        """Open another of your UEFN Duckies in its own window here."""
+        import re
+
+        from frontend.ui_web.remote_ducky_window import open_remote_ducky
+
+        key = str(key_id or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", key):
+            return {"ok": False, "error": "Pick one of your UEFN Duckies."}
+        label = (str(name or "").strip() or "UEFN Ducky")[:64]
+        # Like a focus window: pywebview marshals window creation onto its own thread.
+        open_remote_ducky(key, label)
+        return {"ok": True}
+
     def duckyos_revoke_pc(self, key_id: str = "") -> dict[str, Any]:
         from frontend.duckyos_account import DuckyOSAccountError, revoke_account_pc
 

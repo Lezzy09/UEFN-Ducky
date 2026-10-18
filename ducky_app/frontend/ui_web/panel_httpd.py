@@ -138,6 +138,18 @@ def panel_ui_http_url() -> str:
     return f"http://127.0.0.1:{PANEL_UI_HTTP_PORT}/"
 
 
+# Where a window showing another UEFN Ducky loads the bundle (see do_GET).
+REMOTE_DUCKY_DIR = "remote-ducky/"
+
+
+def bundle_rel(rel: str) -> str:
+    """A request path under ``/remote-ducky/`` is this same bundle: the window showing
+    another UEFN Ducky gets its own path (and Service Worker scope), not its own files."""
+    if rel == REMOTE_DUCKY_DIR.rstrip("/") or rel.startswith(REMOTE_DUCKY_DIR):
+        return rel[len(REMOTE_DUCKY_DIR) :] or "index.html"
+    return rel
+
+
 def host_is_local(host_header: str | None) -> bool:
     host = (host_header or "").split("/")[0].strip().lower()
     if not host:
@@ -1020,6 +1032,10 @@ def start_panel_ui_server(dist_root: Path) -> str:
                 raw_rel = parsed.path.lstrip("/") or "index.html"
                 req_path = unquote(parsed.path)
                 rel = "index.html" if req_path in ("", "/") else req_path.lstrip("/")
+                # A window showing another UEFN Ducky: this same bundle under its own
+                # path, so that page's Service Worker scope never covers this Ducky's
+                # own windows (frontend/ui_web/remote_ducky_window.py).
+                rel, raw_rel = bundle_rel(rel), bundle_rel(raw_rel)
 
                 font_match = _FONT_RE.match(rel)
                 if font_match:

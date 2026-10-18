@@ -5121,6 +5121,68 @@ html.window-maximized .window-resize-grip {
   color: var(--red);
 }
 
+/* ── RemoteDuckyBar: a window showing another of your UEFN Duckies ── */
+#root:has(> .remote-ducky-bar) {
+  display: flex;
+  flex-direction: column;
+}
+
+#root:has(> .remote-ducky-bar) > .app-container {
+  flex: 1 1 auto;
+  height: auto;
+}
+
+.remote-ducky-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.remote-ducky-bar__dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--amber);
+}
+
+.remote-ducky-bar.is-live .remote-ducky-bar__dot {
+  background: var(--green);
+}
+
+.remote-ducky-bar.is-off .remote-ducky-bar__dot {
+  background: var(--red);
+}
+
+.remote-ducky-bar__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-ducky-bar__retry {
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--btn-bg);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.remote-ducky-bar__retry:hover {
+  background: var(--bg-hover);
+}
+
 /* ── UpdateAvailableModal (bottom-left toast) ── */
 @keyframes update-toast-enter {
   from {

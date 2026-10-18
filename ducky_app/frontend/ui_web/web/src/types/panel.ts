@@ -3113,6 +3113,16 @@ export interface PanelApi {
     devices?: Array<{ keyId?: string; name?: string; live?: boolean; last_seen?: number; mine?: boolean }>;
   }>;
   duckyos_revoke_pc?(key_id: string): Promise<DuckyOSAccountStatus & { ok?: boolean; error?: string }>;
+  /** Your account's UEFN Duckies (`mine` = this one; `live` = reachable now). This PC's windows only. */
+  ducky_link_list?(): Promise<{
+    ok?: boolean;
+    error?: string;
+    devices?: Array<{ keyId?: string; name?: string; live?: boolean; last_seen?: number; mine?: boolean }>;
+  }>;
+  /** One allowlisted call (list_all_conversations, load_messages, send_message…) on another of your UEFN Duckies. */
+  ducky_link_call?(to: string, method: string, args?: Record<string, unknown>): Promise<{ ok?: boolean; result?: unknown; error?: string }>;
+  /** Open another of your UEFN Duckies in its own window here: its whole app, chats included. */
+  ducky_link_open?(key_id: string, name?: string): Promise<{ ok?: boolean; error?: string }>;
   duckyos_open_admin(): Promise<void>;
   /** Opens a path of the signed-in account's website. */
   duckyos_open_site?(path?: string): Promise<{ ok?: boolean; url?: string; error?: string }>;
