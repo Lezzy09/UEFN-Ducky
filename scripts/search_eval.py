@@ -22,9 +22,11 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -34,6 +36,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 EVAL_DIR = ROOT / "ducky_app" / "backend" / "search" / "eval"
 TOKEN = re.compile(r"[^\W_]+")
+
+
+def _drop_scratch(scratch: Path) -> None:
+    """Close the throwaway index and delete it; each run used to leave ~14 MB in Temp."""
+    try:
+        from backend.store import db
+
+        db.reset_for_tests()
+    except Exception:  # noqa: BLE001
+        pass
+    shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _load(name: str) -> list[dict]:
@@ -129,6 +142,7 @@ def main() -> int:
 
     # Index into a throwaway database: the person's ducky.db is never opened.
     scratch = Path(tempfile.mkdtemp(prefix="ducky-search-eval-"))
+    atexit.register(_drop_scratch, scratch)
     os.environ["LOCALAPPDATA"] = str(scratch)
     sys.path.insert(0, str(ROOT / "ducky_app"))
     from backend.search import indexer, query
