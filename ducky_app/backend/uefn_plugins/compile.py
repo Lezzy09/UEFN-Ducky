@@ -82,6 +82,9 @@ _SKIP_SUFFIXES = frozenset({".pyc", ".pyo", ".zip", ".bin"})
 _FOREIGN_RUNTIME_DIRS = frozenset({"listener"})
 # Web assets minified with esbuild (vendored *.min.* left untouched).
 _MINIFY_SUFFIXES = frozenset({".js", ".css", ".mjs"})
+# The kit's python, Nuitka's compiler children and esbuild are console programs: from the
+# app (which has no console) each would open its own window, and closing one stops the build.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 ProgressFn = Callable[[float, str], None]
 
@@ -218,7 +221,7 @@ def ensure_build_kit(progress: ProgressFn | None = None) -> Path:
         _progress(progress, 0.35, "Preparing pip…")
         subprocess.run(
             [str(kpy), "-m", "ensurepip", "--upgrade"],
-            check=False, capture_output=True, text=True,
+            check=False, capture_output=True, text=True, creationflags=_NO_WINDOW,
         )
         _progress(progress, 0.45, "Installing Nuitka and the C compiler…")
         res = subprocess.run(
@@ -226,7 +229,7 @@ def ensure_build_kit(progress: ProgressFn | None = None) -> Path:
                 str(kpy), "-m", "pip", "install", "--no-warn-script-location",
                 "--disable-pip-version-check", NUITKA_SPEC, ZIGLANG_SPEC,
             ],
-            capture_output=True, text=True,
+            capture_output=True, text=True, creationflags=_NO_WINDOW,
         )
         if res.returncode != 0:
             raise CompileError(f"Build kit pip install failed:\n{res.stdout}\n{res.stderr}")
@@ -250,7 +253,7 @@ def _check_kit_abi(kpy: Path) -> None:
     """Fail early if the kit interpreter's major.minor differs from the app's."""
     res = subprocess.run(
         [str(kpy), "-c", "import sys;print('%d.%d' % sys.version_info[:2])"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, creationflags=_NO_WINDOW,
     )
     kit_mm = (res.stdout or "").strip()
     app_mm = f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -427,7 +430,7 @@ def _run_nuitka(kpy: Path, work: Path, mod_name: str) -> tuple[Path, list[str]]:
         "--no-progressbar",
     ]
     env = dict(os.environ, CFLAGS=BASELINE_CPU_FLAGS, LDFLAGS=BASELINE_CPU_FLAGS)
-    res = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True, env=env)
+    res = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True, env=env, creationflags=_NO_WINDOW)
     warnings = [
         line.strip()
         for line in (res.stderr or "").splitlines()
@@ -459,7 +462,7 @@ def _esbuild_minify(esbuild: Path, infile: Path) -> tuple[bytes, str]:
     try:
         res = subprocess.run(
             [str(esbuild), str(infile), "--minify", "--log-level=silent"],
-            capture_output=True,
+            capture_output=True, creationflags=_NO_WINDOW,
         )
         if res.returncode == 0 and res.stdout:
             return res.stdout, ""
@@ -502,7 +505,7 @@ def _smoke_import(pyd: Path, mod_name: str, register_name: str) -> str:
     env["DUCKY_SKIP_LICENSE_GATE"] = "1"  # smoke test checks load only, not licensing
     res = subprocess.run(
         [sys.executable, "-I", "-c", code, mod_name, str(pyd), register_name],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, env=env, creationflags=_NO_WINDOW,
     )
     if res.returncode == 0 and "ok" in res.stdout:
         return ""
