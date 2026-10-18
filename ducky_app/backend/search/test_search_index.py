@@ -303,3 +303,68 @@ def test_tools_of_a_plugin_that_failed_or_is_paused_here_are_pruned(monkeypatch)
     monkeypatch.setattr(indexer, "_tried_and_not_loaded", lambda: {"teamplug"})  # paused: lost team access
     indexer.index_tools(rows[:1], "rev2")
     assert repo.find_doc("tool:team_tool") is None
+
+
+def _index_health(source_key: str) -> tuple[int, int, int]:
+    """(rows of the source, rows of it with a vector, vectors left with no row); the keyword
+    index (external content) must match its table."""
+    from backend.store import db
+
+    conn = db.connect()
+    rows = conn.execute("SELECT count(*) FROM search_docs WHERE source_key=?", (source_key,)).fetchone()[0]
+    vecs = conn.execute(
+        "SELECT count(*) FROM search_vecs v JOIN search_docs d ON d.id = v.doc_id WHERE d.source_key=?",
+        (source_key,)).fetchone()[0]
+    orphans = conn.execute("SELECT count(*) FROM search_vecs WHERE doc_id NOT IN (SELECT id FROM search_docs)").fetchone()[0]
+    conn.execute("INSERT INTO search_fts(search_fts, rank) VALUES('integrity-check', 1)")
+    return rows, vecs, orphans
+
+
+def test_installing_removing_and_reinstalling_a_plugin_keeps_the_index_and_vectors_in_step(monkeypatch) -> None:
+    """Oct 18 2026 owner: "as we install and uninstall plugins with skills and tools, does the
+    vector part of the db get updated properly?" Every step: rows, their vectors, no leftovers."""
+    import shutil
+
+    from backend.search import embedder
+
+    if embedder.get_embedder() is None:
+        pytest.skip("the search model is not in this checkout (build/fetch_search_model.py)")
+    enabled = {"oceanplug"}
+    monkeypatch.setattr(indexer, "_enabled_desktop_plugins", lambda: set(enabled))
+    monkeypatch.setattr(indexer, "_tried_and_not_loaded", lambda: set())
+    plugin_tools = [{"name": "ocean_make_waves", "description": "Make ocean waves on the island water.",
+                     "plugin_id": "oceanplug"}]
+    base_tools = [dict(t) for t in TOOLS]
+
+    def search_ocean() -> list[dict]:
+        return query.search("bigger ocean waves far from shore", context=EVERYTHING, refresh=False)
+
+    # Installed: its skill pack and tool are indexed, each row with a vector, and found by meaning.
+    root = _plugin_pack()
+    _index()
+    indexer.index_tools(base_tools + plugin_tools, "rev-installed")
+    rows, vecs, orphans = _index_health("pack:ocean")
+    assert rows > 0 and vecs == rows and orphans == 0
+    hit = search_ocean()[0]
+    assert hit["pack"] == "ocean" and (hit.get("match") or {}).get("meaning") is not None
+    assert repo.find_doc("tool:ocean_make_waves") is not None
+
+    # Uninstalled: its rows and their vectors go; nothing is left behind.
+    shutil.rmtree(root.parent.parent)
+    enabled.clear()
+    _index()
+    indexer.index_tools(base_tools, "rev-removed")
+    assert _index_health("pack:ocean") == (0, 0, 0)
+    assert repo.find_doc("tool:ocean_make_waves") is None
+    assert not any(r.get("pack") == "ocean" for r in search_ocean())
+    assert _index_health("tools")[2] == 0
+
+    # Installed again: everything comes back with fresh vectors.
+    _plugin_pack()
+    enabled.add("oceanplug")
+    _index()
+    indexer.index_tools(base_tools + plugin_tools, "rev-again")
+    rows, vecs, orphans = _index_health("pack:ocean")
+    assert rows > 0 and vecs == rows and orphans == 0
+    assert search_ocean()[0]["pack"] == "ocean"
+    assert repo.find_doc("tool:ocean_make_waves") is not None
