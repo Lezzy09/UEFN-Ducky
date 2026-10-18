@@ -1526,6 +1526,14 @@ export interface ChatContextMemoryDto {
   reason?: string;
 }
 
+/** Another of your UEFN Duckies, and its chats as this Ducky last copied them. */
+export interface DuckySyncPeer {
+  ducky: string;
+  name: string;
+  synced: number;
+  chats: Array<{ conv_id: string; title: string; updated: number; synced: number }>;
+}
+
 export interface DuckyOSAccountStatus {
   ok?: boolean;
   logged_in?: boolean;
@@ -3121,8 +3129,21 @@ export interface PanelApi {
   }>;
   /** One allowlisted call (list_all_conversations, load_messages, send_message…) on another of your UEFN Duckies. */
   ducky_link_call?(to: string, method: string, args?: Record<string, unknown>): Promise<{ ok?: boolean; result?: unknown; error?: string }>;
-  /** Open another of your UEFN Duckies in its own window here: its whole app, chats included. */
-  ducky_link_open?(key_id: string, name?: string): Promise<{ ok?: boolean; error?: string }>;
+  /** Open another of your UEFN Duckies in its own window here: its whole app, chats included (at `chat_id`). */
+  ducky_link_open?(key_id: string, name?: string, chat_id?: string): Promise<{ ok?: boolean; error?: string }>;
+  /** Your other UEFN Duckies' chats as copied here by sync (no rows). */
+  ducky_sync_list?(): Promise<{ ok?: boolean; error?: string; duckies?: DuckySyncPeer[] }>;
+  /** The read-only copy of one of another Ducky's chats. */
+  ducky_sync_copy?(key_id: string, chat_id: string): Promise<{
+    ok?: boolean;
+    error?: string;
+    title?: string;
+    updated?: number;
+    synced?: number;
+    rows?: Array<{ id?: number | string; role?: string; text?: string }>;
+  }>;
+  /** Pull from your other UEFN Duckies now. */
+  ducky_sync_now?(): Promise<{ ok?: boolean }>;
   duckyos_open_admin(): Promise<void>;
   /** Opens a path of the signed-in account's website. */
   duckyos_open_site?(path?: string): Promise<{ ok?: boolean; url?: string; error?: string }>;

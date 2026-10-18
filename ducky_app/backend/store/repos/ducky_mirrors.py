@@ -1,0 +1,98 @@
+"""``ducky_mirror_chats`` / ``ducky_mirror_peers`` (migration 0023): read-only copies of
+your other UEFN Duckies' chats, pulled by ``frontend.ducky_sync``. Copies only: a chat
+lives on its home Ducky, so nothing here is ever sent back or run.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from typing import Any
+
+from backend.store import db
+
+
+def note_chat(account: str, ducky: str, conv_id: str, title: str, updated: float) -> bool:
+    """Record a chat the home Ducky lists. True when its rows need pulling: never
+    pulled, or changed there since the rows here (a failed pull stays True)."""
+    conn = db.connect()
+    with db.write_txn(conn):
+        conn.execute(
+            "INSERT INTO ducky_mirror_chats(account_id, ducky, conv_id, title, updated, gone) VALUES (?, ?, ?, ?, ?, 0) "
+            "ON CONFLICT(account_id, ducky, conv_id) DO UPDATE SET title=excluded.title, updated=excluded.updated, gone=0",
+            (account, ducky, conv_id, title, float(updated)),
+        )
+        (rows_of,) = conn.execute(
+            "SELECT rows_of FROM ducky_mirror_chats WHERE account_id=? AND ducky=? AND conv_id=?",
+            (account, ducky, conv_id),
+        ).fetchone()
+    return float(rows_of) < 0 or float(updated) > float(rows_of)
+
+
+def put_rows(account: str, ducky: str, conv_id: str, rows: list[dict[str, Any]], *, of: float) -> None:
+    """The chat's newest rows, as of the home's updated time ``of``."""
+    conn = db.connect()
+    with db.write_txn(conn):
+        conn.execute(
+            "UPDATE ducky_mirror_chats SET rows=?, rows_of=?, synced=? WHERE account_id=? AND ducky=? AND conv_id=?",
+            (json.dumps(rows, ensure_ascii=False, default=str), float(of), time.time(), account, ducky, conv_id),
+        )
+
+
+def mark_gone(account: str, ducky: str, listed: set[str]) -> int:
+    """Chats the home Ducky no longer lists drop out of the lists; their copies stay."""
+    conn = db.connect()
+    have = [r[0] for r in conn.execute(
+        "SELECT conv_id FROM ducky_mirror_chats WHERE account_id=? AND ducky=? AND gone=0", (account, ducky)
+    ).fetchall()]
+    gone = [c for c in have if c not in listed]
+    if gone:
+        with db.write_txn(conn):
+            conn.executemany(
+                "UPDATE ducky_mirror_chats SET gone=1 WHERE account_id=? AND ducky=? AND conv_id=?",
+                [(account, ducky, c) for c in gone],
+            )
+    return len(gone)
+
+
+def note_peer(account: str, ducky: str, name: str) -> None:
+    conn = db.connect()
+    with db.write_txn(conn):
+        conn.execute(
+            "INSERT INTO ducky_mirror_peers(account_id, ducky, name, synced) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(account_id, ducky) DO UPDATE SET name=excluded.name, synced=excluded.synced",
+            (account, ducky, name, time.time()),
+        )
+
+
+def peers(account: str) -> list[dict[str, Any]]:
+    """Every other Ducky with copies here, its chats newest first (rows left out)."""
+    conn = db.connect()
+    out: list[dict[str, Any]] = []
+    for ducky, name, synced in conn.execute(
+        "SELECT ducky, name, synced FROM ducky_mirror_peers WHERE account_id=? ORDER BY name, ducky", (account,)
+    ).fetchall():
+        chats = [
+            {"conv_id": c, "title": t, "updated": float(u or 0), "synced": float(s or 0)}
+            for c, t, u, s in conn.execute(
+                "SELECT conv_id, title, updated, synced FROM ducky_mirror_chats "
+                "WHERE account_id=? AND ducky=? AND gone=0 ORDER BY updated DESC",
+                (account, ducky),
+            ).fetchall()
+        ]
+        out.append({"ducky": ducky, "name": name, "synced": float(synced or 0), "chats": chats})
+    return out
+
+
+def rows(account: str, ducky: str, conv_id: str) -> dict[str, Any] | None:
+    r = db.connect().execute(
+        "SELECT title, updated, rows, synced FROM ducky_mirror_chats WHERE account_id=? AND ducky=? AND conv_id=?",
+        (account, ducky, conv_id),
+    ).fetchone()
+    if r is None:
+        return None
+    try:
+        parsed = json.loads(r[2] or "[]")
+    except ValueError:
+        parsed = []
+    return {"title": r[0], "updated": float(r[1] or 0), "rows": parsed if isinstance(parsed, list) else [], "synced": float(r[3] or 0)}

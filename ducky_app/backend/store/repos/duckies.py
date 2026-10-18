@@ -80,6 +80,35 @@ def save(ducky_id: str, kind: str, data: dict[str, Any]) -> None:
         )
 
 
+def save_synced(ducky_id: str, kind: str, data: dict[str, Any], updated: float) -> bool:
+    """Take another of your UEFN Duckies' copy of one ducky (frontend.ducky_sync).
+
+    Only when it changed there after it changed here, and only its fields: archive and
+    delete stay this computer's own, and a new ducky comes in active. ``updated`` keeps
+    the other Ducky's time, so the two never pass the same copy back and forth. The row
+    it replaces goes to ``duckies_history`` first. True when something was written.
+    """
+    conn = db.connect()
+    with db.write_txn(conn):
+        cur = conn.execute("SELECT kind, data, updated FROM duckies WHERE id=?", (ducky_id,)).fetchone()
+        new = json.dumps(data, ensure_ascii=False, sort_keys=True)
+        if cur is not None:
+            try:
+                same = json.dumps(json.loads(cur[1] or "{}"), ensure_ascii=False, sort_keys=True) == new
+            except json.JSONDecodeError:
+                same = False
+            if same or float(cur[2] or 0) >= float(updated) or str(cur[0]) != kind:
+                return False
+            _keep_previous(conn, ducky_id, time.time())
+            conn.execute("UPDATE duckies SET data=?, updated=? WHERE id=?", (new, float(updated), ducky_id))
+            return True
+        conn.execute(
+            "INSERT INTO duckies(id, kind, data, archived, deleted, created, updated) VALUES (?, ?, ?, 0, 0, ?, ?)",
+            (ducky_id, kind, new, float(updated), float(updated)),
+        )
+        return True
+
+
 def set_archived(ducky_id: str, kind: str, archived: bool) -> None:
     now = time.time()
     conn = db.connect()

@@ -1,5 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getDirectTransport, type DirectStatus } from "../remote/directTransport";
+import { requestOpenChatTab } from "../navigation/openChatReference";
+
+const OPEN_CHAT_TRIES = 30;
+const OPEN_CHAT_EVERY_MS = 500;
 
 /** What the bar says for each link state. */
 export function remoteDuckyLine(name: string, status: DirectStatus | null): { text: string; tone: "live" | "wait" | "off" } {
@@ -17,9 +21,25 @@ export function remoteDuckyLine(name: string, status: DirectStatus | null): { te
  * to and whether the link is up. Everything below it is that Ducky's own app: a chat
  * started here runs on its computer, with its tools.
  */
-export function RemoteDuckyBar({ name }: { name: string }) {
+export function RemoteDuckyBar({ name, chat = "" }: { name: string; chat?: string }) {
   const [status, setStatus] = useState<DirectStatus | null>(null);
+  const opened = useRef(false);
   useEffect(() => getDirectTransport()?.onStatus(setStatus), []);
+  // Opened at one of that Ducky's chats (a synced copy in the sidebar): open it once the
+  // link is up and the app has mounted its chat tabs.
+  const live = status?.state === "live";
+  useEffect(() => {
+    if (!chat || !live || opened.current) return;
+    let tries = 0;
+    const t = window.setInterval(() => {
+      tries += 1;
+      if (requestOpenChatTab(chat) || tries >= OPEN_CHAT_TRIES) {
+        opened.current = true;
+        window.clearInterval(t);
+      }
+    }, OPEN_CHAT_EVERY_MS);
+    return () => window.clearInterval(t);
+  }, [chat, live]);
   const line = remoteDuckyLine(name, status);
   return (
     <div className={`remote-ducky-bar is-${line.tone}`} role="status" aria-live="polite">

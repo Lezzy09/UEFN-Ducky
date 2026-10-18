@@ -257,8 +257,8 @@ class PanelApiStoreMixin:
             raise RuntimeError(str(out.get("error") or "That UEFN Ducky didn't answer."))
         return out.get("result") if isinstance(out.get("result"), dict) else {}
 
-    def ducky_link_open(self, key_id: str = "", name: str = "") -> dict[str, Any]:
-        """Open another of your UEFN Duckies in its own window here."""
+    def ducky_link_open(self, key_id: str = "", name: str = "", chat_id: str = "") -> dict[str, Any]:
+        """Open another of your UEFN Duckies in its own window here (at ``chat_id``, one of its chats)."""
         import re
 
         from frontend.ui_web.remote_ducky_window import open_remote_ducky
@@ -266,9 +266,36 @@ class PanelApiStoreMixin:
         key = str(key_id or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", key):
             return {"ok": False, "error": "Pick one of your UEFN Duckies."}
+        chat = str(chat_id or "").strip()
+        if chat and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", chat):
+            return {"ok": False, "error": "That isn't one of its chats."}
         label = (str(name or "").strip() or "UEFN Ducky")[:64]
         # Like a focus window: pywebview marshals window creation onto its own thread.
-        open_remote_ducky(key, label)
+        open_remote_ducky(key, label, chat)
+        return {"ok": True}
+
+    def ducky_sync_list(self) -> dict[str, Any]:
+        """Your other UEFN Duckies' chats as copied here (no rows), for the sidebar."""
+        from frontend.ducky_sync import mirror_list
+
+        try:
+            return {"ok": True, "duckies": mirror_list()}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "duckies": []}
+
+    def ducky_sync_copy(self, key_id: str = "", chat_id: str = "") -> dict[str, Any]:
+        """The read-only copy of one of another Ducky's chats: its newest rows."""
+        from frontend.ducky_sync import mirror_rows
+
+        copy = mirror_rows(str(key_id or ""), str(chat_id or ""))
+        return {"ok": True, **copy} if copy else {"ok": False, "error": "No copy of that chat here yet."}
+
+    def ducky_sync_now(self) -> dict[str, Any]:
+        """Pull from your other UEFN Duckies now instead of at the next round."""
+        from frontend import ducky_sync
+
+        ducky_sync.start()
+        ducky_sync.sync_now()
         return {"ok": True}
 
     def duckyos_revoke_pc(self, key_id: str = "") -> dict[str, Any]:

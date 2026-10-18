@@ -40,10 +40,11 @@ import { useSidebarPanelLayout } from "../hooks/useSidebarPanelLayout";
 import { useSidebarPanelMode } from "../hooks/useSidebarPanelMode";
 import { useSidebarWidth } from "../hooks/useSidebarWidth";
 import { OPEN_SIDEBAR_PANEL_EVENT } from "../navigation/openSidebarPanel";
-import { getApi } from "../hooks/usePanelApi";
+import { getApi, isRemote } from "../hooks/usePanelApi";
 import { onApiReady } from "../hooks/onApiReady";
 import { emitDuckyProfileChanged, onDuckyProfileChanged } from "../navigation/duckyProfileChanged";
 import { SidebarStackedPanels } from "./sidebar/SidebarStackedPanels";
+import { OtherDuckiesChats } from "./sidebar/OtherDuckiesChats";
 import { canToggleStackedPanel, contentCollapsedWithoutProject } from "./sidebar/contentWithoutProject";
 import type { StackedPanelResizeSnapshot } from "../utils/stackedPanelFlex";
 import { SidebarPanelTabs } from "./sidebar/SidebarPanelTabs";
@@ -1316,6 +1317,8 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
             currentProjectSlug={projectSlug}
             showGlobalAgents={duckiesGlobalAgents}
           />
+          {/* Chats of your other UEFN Duckies, copied by sync: this PC's windows only. */}
+          {!isRemote() ? <OtherDuckiesChats /> : null}
           </>
         )}
       </div>

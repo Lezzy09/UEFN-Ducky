@@ -39,7 +39,12 @@ installAppIdle();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    {remoteDucky ? <RemoteDuckyBar name={directConfigFromLocation(__PANEL_VERSION__).name || "UEFN Ducky"} /> : null}
+    {remoteDucky ? (
+      <RemoteDuckyBar
+        name={directConfigFromLocation(__PANEL_VERSION__).name || "UEFN Ducky"}
+        chat={new URLSearchParams(window.location.search).get("chat") || ""}
+      />
+    ) : null}
     <ErrorBoundary label="App">
       <App />
     </ErrorBoundary>

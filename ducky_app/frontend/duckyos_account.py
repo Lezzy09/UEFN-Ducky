@@ -1303,6 +1303,10 @@ RPC_ALLOWLIST = frozenset(
         "remote_snapshot",
         "rtc_connect",
         "rtc_report",
+        # Your other UEFN Duckies pull these to sync (frontend.ducky_sync).
+        "ducky_sync_duckies",
+        "ducky_sync_chats",
+        "ducky_sync_rows",
     }
 )
 
@@ -1371,6 +1375,9 @@ OFF_PC_DENY = frozenset(
         "ducky_link_call",
         "ducky_link_rtc_connect",
         "ducky_link_open",
+        "ducky_sync_list",
+        "ducky_sync_copy",
+        "ducky_sync_now",
     }
 )
 
@@ -1502,11 +1509,18 @@ def start_presence_heartbeat() -> None:
         )
         _PRESENCE_THREAD.start()
         start_rpc_waiter()
+        # Chats and duckies from your other UEFN Duckies (peer to peer, sealed).
+        from frontend import ducky_sync
+
+        ducky_sync.start()
 
 
 def stop_presence_heartbeat() -> None:
     _PRESENCE_STOP.set()
     stop_rpc_waiter()
+    from frontend import ducky_sync
+
+    ducky_sync.stop()
 
 
 def call_panel_method(api: Any, name: str, args: Any = None) -> Any:
@@ -1572,6 +1586,17 @@ def dispatch_desktop_rpc(method: str, args: dict[str, Any] | None = None) -> dic
 
         note_report(raw)
         return {"ok": True, "result": True}
+    if name.startswith("ducky_sync_"):
+        from frontend import ducky_sync
+
+        try:
+            if name == "ducky_sync_duckies":
+                return {"ok": True, "result": ducky_sync.duckies_for_sync()}
+            if name == "ducky_sync_chats":
+                return {"ok": True, "result": ducky_sync.chats_for_sync()}
+            return {"ok": True, "result": ducky_sync.rows_for_sync(str(raw.get("conv_id") or ""))}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
     try:
         result = call_panel_method(shared_panel_api(), name, raw)
     except TypeError as exc:

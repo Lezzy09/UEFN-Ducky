@@ -17,10 +17,14 @@ _open: dict[str, Any] = {}
 _lock = threading.Lock()
 
 
-def remote_ducky_url(base_url: str, key_id: str, name: str) -> str:
+def remote_ducky_url(base_url: str, key_id: str, name: str, chat_id: str = "") -> str:
+    """``chat``: one of that Ducky's chats to open once the link is up."""
     from frontend.ui_web.panel_httpd import REMOTE_DUCKY_DIR
 
-    query = urlencode({"direct": "ducky", "to": key_id, "name": name}, quote_via=quote)
+    params = {"direct": "ducky", "to": key_id, "name": name}
+    if chat_id:
+        params["chat"] = chat_id
+    query = urlencode(params, quote_via=quote)
     return f"{base_url.rstrip('/')}/{REMOTE_DUCKY_DIR}?{query}"
 
 
@@ -28,16 +32,19 @@ def window_title(name: str) -> str:
     return f"{name} · UEFN Ducky"
 
 
-def open_remote_ducky(key_id: str, name: str) -> None:
-    """Open (or bring forward) the window for UEFN Ducky ``key_id``."""
+def open_remote_ducky(key_id: str, name: str, chat_id: str = "") -> None:
+    """Open (or bring forward) the window for UEFN Ducky ``key_id``, at ``chat_id`` if given."""
     import webview
 
     from frontend.ui_web.panel_httpd import panel_ui_http_url
 
+    url = remote_ducky_url(panel_ui_http_url(), key_id, name, chat_id)
     with _lock:
         window = _open.get(key_id)
     if window is not None:
         try:
+            if chat_id:
+                window.load_url(url)  # the page reconnects and opens that chat
             window.restore()
             window.show()
             return
@@ -46,7 +53,7 @@ def open_remote_ducky(key_id: str, name: str) -> None:
                 _open.pop(key_id, None)
     window = webview.create_window(
         window_title(name),
-        url=remote_ducky_url(panel_ui_http_url(), key_id, name),
+        url=url,
         width=1280,
         height=820,
         min_size=(520, 380),
