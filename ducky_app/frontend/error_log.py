@@ -137,6 +137,13 @@ def _append(name: str, source: str, message: str, *, dedupe: bool) -> None:
     message = _scrub((message or "").strip())
     if not message:
         return
+    if name == _ERRORS_NAME:
+        try:
+            from frontend import usage_stats
+
+            usage_stats.error(source or "")
+        except Exception:
+            pass
     if _use_db():
         try:
             repo = _repo()

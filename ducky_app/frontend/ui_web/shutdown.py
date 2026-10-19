@@ -284,6 +284,12 @@ def abort_and_quit(
     window_holder: dict[str, object],
 ) -> None:
     """Exit even when an agent is running or HTTP/tool calls are in flight."""
+    try:
+        from frontend import usage_stats
+
+        usage_stats.app_closing()
+    except Exception:
+        pass
     _stop_all_agents()
     arm_force_exit(0.08, api=api)
     arm_force_exit(0.2, api=api)

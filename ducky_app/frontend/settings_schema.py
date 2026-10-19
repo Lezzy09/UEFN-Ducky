@@ -258,6 +258,12 @@ FIELD_META: dict[str, FieldMeta] = {
         settable=True,
         description="Serve this PC's UEFN Ducky in the browser at /ducky.",
     ),
+    "usage_stats": FieldMeta(
+        "Send anonymous usage stats",
+        "General",
+        settable=True,
+        description="Counts which features you use and which errors happen, by code. Never your chats, files or project names.",
+    ),
     "allow_settings_write": FieldMeta(
         "Change Ducky Settings", "Account", settable=True,
         description="Let the AI save Appearance, models, voice, and layout in this app.",

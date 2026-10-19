@@ -711,6 +711,12 @@ def uninstall_uefn_plugin(plugin_id: str, *, erase_data: bool = False) -> dict[s
     dest = plugin_dir(pid)
     if not dest.is_dir():
         raise FileNotFoundError(f"UEFN plugin not found: {pid}")
+    try:
+        from frontend import usage_stats
+
+        usage_stats.plugin_removed(pid)
+    except Exception:
+        pass
     had_skills = bool(list_plugin_skill_dirs(dest))
     erased_keys: list[str] = []
     if erase_data:

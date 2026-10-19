@@ -1447,6 +1447,13 @@ def send_presence_heartbeat() -> bool:
         "remoteDirect": _remote_direct_report(),
     }
     try:
+        from frontend import usage_stats
+
+        if usage_stats.enabled():
+            body["installId"] = usage_stats.install_id()
+    except Exception:
+        pass
+    try:
         status, _parsed, _raw = api_request(
             "POST",
             "/api/v1/plugins/uefn-ducky-store/collect/presence",
@@ -2400,12 +2407,20 @@ def store_download_and_install(
     Store does not increment ``install_count``.
     """
     with _STORE_INSTALL_LOCK:
-        return _store_download_and_install_unlocked(
+        result = _store_download_and_install_unlocked(
             slug,
             version=version,
             replace=replace,
             is_update=is_update,
         )
+    if not is_update:
+        try:
+            from frontend import usage_stats
+
+            usage_stats.plugin_installed(slug)
+        except Exception:
+            pass
+    return result
 
 
 # Matches backend.uefn_plugins.store.MAX_PLUGIN_ZIP_BYTES: nothing bigger installs anyway.

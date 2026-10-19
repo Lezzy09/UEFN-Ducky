@@ -581,7 +581,23 @@ def _report_stuck(name: str, seconds: float, work: Any, thread: dict[str, int], 
                       payload={"tool": name, "seconds": seconds, "conv_id": str(getattr(ident, "conv_id", "") or ""),
                                "coding_agent": str(getattr(ident, "coding_agent", "") or ""), "stack": stack})
         events.trim("tool_stuck", older_than=now - 30 * 86400, keep=200)
+        from frontend import usage_stats
+
+        usage_stats.stuck(str(getattr(ident, "coding_agent", "") or ""), float(seconds))
     except Exception:  # noqa: BLE001 — a report never breaks the call
+        pass
+
+
+def _usage_tool_done(name: str, ok: bool, t0: float, ident: Any, arguments: dict[str, Any] | None) -> None:
+    """One anonymous tool.call count for an outside agent's call; never raises."""
+    try:
+        from frontend import usage_stats
+
+        usage_stats.tool_done(
+            name, ok=ok, duration_ms=(time.monotonic() - t0) * 1000.0,
+            conv_id=str(getattr(ident, "conv_id", "") or ""), args=arguments if isinstance(arguments, dict) else None,
+        )
+    except Exception:
         pass
 
 
@@ -622,11 +638,15 @@ async def _call_tool(mcp: Any, name: str, arguments: dict[str, Any], ident: Any)
             work = _in_own_thread(lambda: asyncio.run(mcp.call_tool(name, arguments or {})), thread, name)
         else:
             work = asyncio.ensure_future(mcp.call_tool(name, arguments or {}))
+        t0 = time.monotonic()
         try:
             raw = await _watched(work, name, thread, ident)
         except _CallTimedOut as exc:
+            _usage_tool_done(name, False, t0, ident, arguments)
             return {"content": [{"type": "text", "text": str(exc)}], "isError": True}
-        return _call_result(raw)
+        result = _call_result(raw)
+        _usage_tool_done(name, not bool(result.get("isError")), t0, ident, arguments)
+        return result
     finally:
         hammer_guard.reset_conversation(hammer)
         identity.reset_shared(shared)

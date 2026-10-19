@@ -593,6 +593,12 @@ def _alert_after_run(conv_id: str, run_id: str, reason: str) -> None:
     quiet = run_id in _quiet_runs
     _quiet_runs.discard(run_id)
     started = _run_started.pop(run_id, None)
+    try:
+        from frontend import usage_stats
+
+        usage_stats.run_end(run_id, reason)
+    except Exception:
+        pass
     if quiet:
         return
     if reason in ("error", "timeout"):
@@ -840,6 +846,15 @@ def _push_tool_done(push: PushFn, conv_id: str, rec: Any) -> None:
             float(ms),
             result_bytes=len(result_text),
             status=status,
+        )
+    except Exception:
+        pass
+    try:
+        from frontend import usage_stats
+
+        usage_stats.tool_done(
+            str(rec.name or "tool"), ok=status in ("", "success", "ok"), duration_ms=float(ms),
+            conv_id=conv_id, args=args,
         )
     except Exception:
         pass
@@ -1755,6 +1770,14 @@ def run_message(
         _quiet_runs.add(run_id)
     child_title = conv.title or "Chat"
     _run_started[run_id] = started_at
+    try:
+        from frontend import usage_stats
+
+        usage_stats.run_begin(
+            run_id, conv_id, coding_agent=coding_agent, provider=provider_name or "", model=turn_model or "",
+        )
+    except Exception:
+        pass
 
     if external:
         # BYOA path: Claude Code / Codex / Cursor — no embedded AgentRunner.

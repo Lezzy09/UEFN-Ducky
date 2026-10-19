@@ -256,6 +256,9 @@ class PanelSettings:
     remote_access: bool = False
     """When true, your phone or another browser can open this panel through uefnducky.org (peer to peer)."""
 
+    usage_stats: bool = True
+    """Send anonymous usage counts (features used, errors by code, time open) to the UEFN Ducky Store."""
+
     allow_settings_write: bool = True
     """When false, ducky_settings_set (agent-driven Ducky Settings writes) is refused."""
 

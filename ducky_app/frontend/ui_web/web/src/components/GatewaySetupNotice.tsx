@@ -13,6 +13,7 @@ import {
 } from "../hooks/storeInstallJobs";
 import { installPanelPushBus, subscribePanelPush } from "../hooks/usePanelPushBus";
 import type { PluginLlmProvider } from "../hooks/usePluginContributions";
+import { usageTrack } from "../hooks/usageTrack";
 import { openLlmsProviderSettings } from "../navigation/openSettingsTab";
 import type { StarterPluginDto } from "../types/panel";
 import { reportFirstRunSetup } from "../walkthrough/firstRunSetup";
@@ -102,6 +103,11 @@ export function GatewaySetupNotice() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const decided = useRef(false);
+  // Anonymous funnel: which setup step is on screen (welcome → plugins → connect_ai → done).
+  useEffect(() => {
+    if (!wizard) return;
+    usageTrack("setup.step", { step: wizard === "ai" ? "connect_ai" : wizard });
+  }, [wizard]);
 
   const applyStatus = useCallback((status: SetupStatus | undefined) => {
     const gateways = status?.gateway_ids || [];
@@ -202,6 +208,7 @@ export function GatewaySetupNotice() {
   }, [refresh]);
 
   const close = useCallback((reason: "skip" | "finish") => {
+    usageTrack("setup.step", { step: reason === "finish" ? "done" : "skipped" });
     if (reason === "finish") {
       // The setup covered the Store and LLM tours the Welcome tour would chain into.
       markStarterPluginToursCompleted();

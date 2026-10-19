@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type { EditorLayoutState, EditorTab, EditorDropZone } from "../types/panel";
+import { usageTrack } from "./usageTrack";
 import {
   collectTabIds,
   createDefaultLayout,
@@ -75,6 +76,10 @@ export function useEditorLayout(initialOpenTabs: EditorTab[] = []) {
       const preview = options?.preview ?? false;
       setState(({ openTabs: prev, layout: prevLayout }) => {
         const existing = prev.find((t) => t.id === tab.id);
+        if (!existing) {
+          // Anonymous usage: which kinds of tabs get opened (a file is "editor"; never its name).
+          usageTrack("feature.open", { tab: tab.kind === "file" ? "editor" : String(tab.kind || "") });
+        }
         if (existing) {
           // Already open: a permanent open pins a preview tab; otherwise leave state as-is.
           const nextTabs =

@@ -657,6 +657,12 @@ def run_workflow(
         # outer run does), not stopped by the person.
         if not stopped and not ctx.get("caller_conv_id") and not _CALL_STACK.get():
             _alert_run(wf, ok, triggered=bool(trigger_id), seconds=time.time() - started)
+        try:
+            from frontend import usage_stats
+
+            usage_stats.workflow_done(ok=bool(ok), stopped=bool(stopped), nodes=len(nodes))
+        except Exception:
+            pass
     ended = time.time()
     node_outputs = flow.summary()
     run = {

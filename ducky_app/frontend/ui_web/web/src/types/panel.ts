@@ -1434,6 +1434,7 @@ export interface PanelSettingsDto {
   allow_see_other_programs?: boolean;
   show_hidden_project_files?: boolean;
   terminals_enabled?: boolean;
+  usage_stats?: boolean;
   prompt_caching_enabled?: boolean;
   freeze_prompt_prefix?: boolean;
   anthropic_extended_cache_ttl?: boolean;
@@ -3646,6 +3647,8 @@ export interface PanelApi {
       PanelSettingsDto & { keys?: Record<string, string>; discord_name?: string; discord_allowed_ids?: string }
     >,
   ): Promise<string>;
+  /** Anonymous usage stats from the UI: a tab opened or a setup step (names outside that list are refused). */
+  usage_track?(name: string, props?: Record<string, string | number | boolean>): Promise<boolean>;
   test_key(provider: string, key?: string): Promise<{ ok: boolean; detail: string }>;
   list_coding_agents(): Promise<{ agents: CodingAgentDto[]; checking?: boolean }>;
   set_conversation_coding_agent(

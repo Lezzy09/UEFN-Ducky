@@ -35,6 +35,7 @@ class PanelApiSettingsMixin:
             "coding_agents": coding_agents_dict(s),
             "duckyos_base_url": s.duckyos_base_url or "",
             "remote_access": bool(getattr(s, "remote_access", False)),
+            "usage_stats": bool(getattr(s, "usage_stats", True)),
             "voice_enabled": bool(s.voice_enabled),
             "voice_spoken_style": s.voice_spoken_style or "summary",
             "voice_summary_model": s.voice_summary_model or "",
@@ -479,6 +480,14 @@ class PanelApiSettingsMixin:
         for key in ("allow_settings_write", "allow_agent_clicks", "allow_see_uefn", "allow_see_other_programs"):
             if key in patch:
                 setattr(s, key, bool(patch[key]))
+        if "usage_stats" in patch:
+            s.usage_stats = bool(patch["usage_stats"])
+            try:
+                from frontend import usage_stats
+
+                usage_stats.set_enabled(s.usage_stats)
+            except Exception:
+                pass
         if patch.get("agent_provider"):
             s.agent_provider = str(patch["agent_provider"])
         if patch.get("agent_model"):
@@ -924,7 +933,29 @@ class PanelApiSettingsMixin:
         if result.get("logged_in"):
             invalidate_detect_cache()
             kick_detect_refresh()
+            try:
+                from frontend import usage_stats
+
+                usage_stats.login(aid, ok=True)
+            except Exception:
+                pass
+        elif result.get("ok") is False:
+            try:
+                from frontend import usage_stats
+
+                usage_stats.login(aid, ok=False, reason="auth")
+            except Exception:
+                pass
         return result
+
+    def usage_track(self, name: str, props: dict[str, Any] | None = None) -> bool:
+        """The panel UI reports a tab opened or a setup step; names outside the UI list are refused."""
+        try:
+            from frontend import usage_stats
+
+            return bool(usage_stats.ui_track(str(name or ""), props if isinstance(props, dict) else None))
+        except Exception:
+            return False
 
     def coding_agent_login_cancel(self, agent_id: str) -> dict[str, Any]:
         """Destroy the login terminal tab when the Settings modal is cancelled."""

@@ -92,6 +92,12 @@ def _poll_listener(api: object) -> None:
             if mode != last_mode:
                 last_mode = mode
                 _apply_shell_icons(api, mode)
+                try:
+                    from frontend import usage_stats
+
+                    usage_stats.uefn_mode(mode)
+                except Exception:
+                    pass
         except Exception:
             pass
         time.sleep(8)
@@ -636,6 +642,16 @@ def _run_panel(api_holder: dict[str, object]) -> None:
 
     icon_path = resolve_app_icon_path()
     _boot_trace("ready_for_webview_start", time.perf_counter())
+    try:
+        from frontend import usage_stats
+
+        raw_t0 = os.environ.get("UEFN_DUCKY_BOOT_T0")
+        boot_ms = (time.perf_counter() - float(raw_t0)) * 1000.0 if raw_t0 else None
+        threading.Thread(
+            target=usage_stats.app_opened, args=(boot_ms,), name="usage-stats-open", daemon=True
+        ).start()
+    except Exception:
+        pass
     # Dev only: native Inspect menu + DevTools. Store EXE stays shipped; ErrorBoundary
     # still calls open_devtools() when someone actually wants Inspector.
     try:

@@ -99,3 +99,23 @@ def trim(kind: str, *, older_than: float, keep: int) -> int:
 
 def count(kind: str) -> int:
     return int(db.connect().execute("SELECT count(*) FROM events WHERE kind=?", (kind,)).fetchone()[0])
+
+
+def oldest(kind: str, *, limit: int) -> list[dict[str, Any]]:
+    """The oldest rows of a kind with their ids (a queue's head)."""
+    rows = db.connect().execute(
+        "SELECT id, ts, source, message, payload FROM events WHERE kind=? ORDER BY id ASC LIMIT ?", (kind, limit)
+    ).fetchall()
+    out = _rows(rows)
+    for d, r in zip(out, rows):
+        d["id"] = int(r["id"])
+    return out
+
+
+def delete_ids(ids: list[int]) -> int:
+    if not ids:
+        return 0
+    conn = db.connect()
+    with db.write_txn(conn):
+        cur = conn.executemany("DELETE FROM events WHERE id=?", [(int(i),) for i in ids])
+    return int(cur.rowcount or 0)

@@ -68,6 +68,12 @@ def record_crash(
         "thinking_chars": len(thinking or ""),
         "answer_chars": len(answer or ""),
     }
+    try:
+        from frontend import usage_stats
+
+        usage_stats.agent_crash(provider)
+    except Exception:
+        pass
     if _use_db():
         try:
             repo = _repo()

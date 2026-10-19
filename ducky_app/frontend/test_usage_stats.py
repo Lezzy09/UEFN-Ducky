@@ -1,0 +1,175 @@
+"""Anonymous usage stats: the allowlist, the queue, the switch, the batch."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from frontend import usage_events as ev
+from frontend import usage_stats as us
+
+
+@pytest.fixture(autouse=True)
+def _fresh_module():
+    us._enabled_cache = None
+    us._run_meta.clear()
+    us._conv_run.clear()
+    us._mem_queue.clear()
+    us.send_override = None
+    us._last_uefn_mode = None
+    us._install_fresh = False
+    us._stop.set()
+    yield
+    us.send_override = None
+    us._enabled_cache = None
+    us._stop.set()
+
+
+SAMPLES: dict[str, dict[str, Any]] = {
+    "app.open": {"version": "1.2.401", "os": "win11", "install_age_s": 10},
+    "app.heartbeat": {"uefn_up": True},
+    "app.close": {"uptime_s": 5400},
+    "update.installed": {"from": "1.2.400", "to": "1.2.401"},
+    "setup.step": {"step": "connect_ai"},
+    "setup.first_message": {"within": "later"},
+    "uefn.connect": {"ok": False, "reason": "port_busy"},
+    "uefn.popup_watchdog": {"kind": "save"},
+    "agent.login": {"provider": "codex", "ok": True, "reason": "other"},
+    "chat.turn": {"provider": "claude", "model_family": "claude", "outcome": "ok", "duration_s": 70, "tool_calls_n": 3},
+    "tool.call": {"tool": "spawn_actor", "ok": True, "duration_s": 3.4},
+    "skill.used": {"skill": "verse"},
+    "workflow.run": {"outcome": "ok", "nodes_n": 7},
+    "plugin.install": {"plugin_id": "uefn-physics"},
+    "plugin.remove": {"plugin_id": "uefn-physics"},
+    "feature.open": {"tab": "workflows"},
+    "error.code": {"code": "agent_timeout", "where": "agent"},
+    "agent.stuck": {"provider": "codex", "after_s": 90},
+    "ui.crash": {"code": "render"},
+    "perf.sample": {"startup_s": 3.2, "idle_cpu_pct": 0.4, "memory_mb": 700},
+}
+
+
+def test_every_listed_event_validates_and_buckets() -> None:
+    for name, props in SAMPLES.items():
+        cleaned = ev.validate(name, props)
+        assert cleaned is not None and cleaned, name
+        for v in cleaned.values():
+            assert isinstance(v, str) and v
+    assert ev.validate("app.close", {"uptime_s": 5400}) == {"uptime": "2h"}
+    assert ev.validate("chat.turn", SAMPLES["chat.turn"])["tool_calls"] == "1-5"
+    assert ev.validate("chat.turn", SAMPLES["chat.turn"])["duration"] == "5m"
+    assert ev.validate("tool.call", SAMPLES["tool.call"]) == {"tool": "spawn_actor", "ok": "yes", "duration": "10s"}
+    assert ev.validate("perf.sample", SAMPLES["perf.sample"]) == {"startup": "5s", "idle_cpu": "1pct", "memory": "1gb"}
+
+
+def test_free_text_and_unknown_names_never_pass() -> None:
+    assert ev.validate("chat.text", {"text": "hello"}) is None
+    cleaned = ev.validate("chat.turn", {"provider": "C:/Users/x", "outcome": "ok", "prompt": "secret"})
+    assert cleaned == {"outcome": "ok"}
+    assert ev.validate("error.code", {"code": "Traceback (most recent call last)", "where": "agent"}) == {"where": "agent"}
+    assert ev.validate("tool.call", {"tool": "Has Space", "ok": "yes"}) == {"ok": "yes"}
+    assert ev.validate("app.open", {"version": "1.2"}) == {}
+    assert ev.validate("feature.open", {"tab": "my-secret-project"}) == {}
+
+
+def test_error_source_becomes_a_code_never_a_message() -> None:
+    assert ev.code_of("Agent stream") == "agent_stream"
+    assert ev.where_of("uefn listener") == "bridge"
+    assert ev.where_of("verse build") == "uefn"
+    assert ev.where_of("plugin install") == "store"
+    assert ev.where_of("") == "other"
+    assert ev.provider_of("claude_code") == "claude"
+    assert ev.provider_of("ducky", "anthropic") == "claude"
+    assert ev.provider_of("ducky", "ollama") == "ollama"
+    assert ev.model_family("gpt-6-luna", "openai") == "gpt"
+
+
+def test_install_id_is_random_stable_and_resettable() -> None:
+    first = us.install_id()
+    assert len(first) == 32 and int(first, 16) >= 0
+    assert us.install_id() == first
+    us.reset_install_id()
+    second = us.install_id()
+    assert len(second) == 32 and second != first
+
+
+def test_track_queues_and_flush_sends_one_batch_then_drops_rows() -> None:
+    sent: list[dict[str, Any]] = []
+    us.send_override = lambda body: sent.append(body) or True
+    for _ in range(60):
+        assert us.track("tool.call", tool="spawn_actor", ok=True, duration_s=0.005)
+    assert us.track("chat.text", text="nope") is False
+    assert us.queued() == 60
+    assert us.flush() is True
+    assert len(sent) == 1
+    body = sent[0]
+    assert set(body) == {"installId", "appVersion", "events"}
+    assert body["installId"] == us.install_id()
+    assert len(body["events"]) == 60
+    assert body["events"][0]["name"] == "tool.call"
+    assert body["events"][0]["props"] == {"tool": "spawn_actor", "ok": "yes", "duration": "1s"}
+    assert us.queued() == 0
+
+
+def test_failed_send_keeps_the_rows() -> None:
+    us.send_override = lambda body: False
+    us.track("feature.open", tab="chat")
+    assert us.flush() is False
+    assert us.queued() == 1
+    us.send_override = lambda body: True
+    assert us.flush() is True
+    assert us.queued() == 0
+
+
+def test_switch_off_means_no_queue_and_no_network() -> None:
+    sent: list[dict[str, Any]] = []
+    us.send_override = lambda body: sent.append(body) or True
+    us.track("feature.open", tab="chat")
+    assert us.queued() == 1
+    us.set_enabled(False)
+    assert us.queued() == 0, "turning it off empties the queue"
+    for _ in range(10):
+        assert us.track("feature.open", tab="chat") is False
+    assert us.flush() is False
+    assert sent == []
+    assert us.queued() == 0
+    us.set_enabled(True)
+    assert us.track("feature.open", tab="chat")
+
+
+def test_chat_turn_counts_its_tools_and_first_message_once() -> None:
+    us.run_begin("run-1", "conv-1", coding_agent="codex", provider="openai", model="gpt-6-luna")
+    us.tool_done("spawn_actor", ok=True, duration_ms=12, conv_id="conv-1", args={"label": "Cube"})
+    us.tool_done("skill_read_subskill", ok=True, duration_ms=12, conv_id="conv-1", args={"pack_id": "verse", "subskill_id": "ui"})
+    us.run_end("run-1", "done")
+    us.run_begin("run-2", "conv-1", coding_agent="ducky", provider="anthropic", model="claude-opus-5-5")
+    us.run_end("run-2", "error")
+    rows, _ = us._take(100)
+    names = [r["name"] for r in rows]
+    assert names.count("setup.first_message") == 1
+    assert names.count("tool.call") == 2
+    assert names.count("skill.used") == 1
+    turns = [r["props"] for r in rows if r["name"] == "chat.turn"]
+    assert turns[0] == {"provider": "codex", "model_family": "gpt", "outcome": "ok", "duration": "10s", "tool_calls": "1-5"}
+    assert turns[1]["provider"] == "claude" and turns[1]["outcome"] == "error" and turns[1]["tool_calls"] == "0"
+    assert not any("Cube" in str(r) for r in rows)
+
+
+def test_ui_track_accepts_only_ui_events_and_uefn_transitions_count_once() -> None:
+    assert us.ui_track("feature.open", {"tab": "settings"})
+    assert us.ui_track("error.code", {"code": "x", "where": "ui"}) is False
+    us.uefn_mode("offline")
+    us.uefn_mode("online")
+    us.uefn_mode("online")
+    us.uefn_mode("wedged")
+    rows, _ = us._take(100)
+    connects = [r["props"] for r in rows if r["name"] == "uefn.connect"]
+    assert connects == [{"ok": "yes"}, {"ok": "no", "reason": "lost"}]
+
+
+def test_debug_state_has_no_event_content() -> None:
+    us.track("error.code", code="boom", where="ui")
+    state = us.debug_state()
+    assert set(state) == {"enabled", "queued", "thread_alive", "runs_open", "install_id_set"}
+    assert state["queued"] == 1

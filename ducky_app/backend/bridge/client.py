@@ -175,6 +175,12 @@ def _auto_dismiss_save_modal(command: str) -> bool:
     if not info:
         return False
     _note_dismissed(command, info)
+    try:
+        from frontend import usage_stats
+
+        usage_stats.popup("save")
+    except Exception:
+        pass
     return True
 
 

@@ -131,6 +131,10 @@ function WelcomeStep() {
         />
       </ul>
       <p className="setup-wizard-note">Two quick steps: install the starter plugins, then connect an AI.</p>
+      <p className="setup-wizard-note setup-wizard-privacy">
+        Ducky sends anonymous usage counts (which features, which errors by code, how long it was open) under a
+        random install id. Never your chats, files or project names. One switch in Settings → Permissions turns it off.
+      </p>
     </>
   );
 }

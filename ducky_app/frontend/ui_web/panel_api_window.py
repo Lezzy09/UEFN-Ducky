@@ -670,6 +670,12 @@ class PanelApiWindowMixin:
                 "faultKind": str(data.get("faultKind") or "")[:32],
                 "faultAction": str(data.get("faultAction") or "")[:32],
             }
+            try:
+                from frontend import usage_stats
+
+                usage_stats.ui_crash(row["faultKind"] or row["surface"] or row["label"] or "boundary")
+            except Exception:
+                pass
             from backend.store.switch import use_db
 
             if use_db("events"):
