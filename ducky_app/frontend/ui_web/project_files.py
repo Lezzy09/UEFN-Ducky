@@ -442,7 +442,12 @@ def _resolve_file_path(relative_path: str) -> Path:
 
 def _require_writable_content_path(relative_path: str) -> None:
     if _is_workspace_locked_path(relative_path):
-        raise ValueError(f"Locked workspace file cannot be modified: {relative_path}")
+        raise ValueError(
+            f"Locked workspace file cannot be modified: {relative_path}. On a UEFN island only paths "
+            "under Content/ can be written, moved or deleted here (the project root, .ducky and "
+            "outside folders are read-only). Don't offer to move files there: to take files out of "
+            "the build, delete them with the user's OK or ask the user to move them."
+        )
     _require_not_digest(relative_path)
     target = _resolve_relative(relative_path)
     _require_under_content(target, relative_path)

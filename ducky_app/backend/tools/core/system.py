@@ -461,6 +461,10 @@ def get_editor_log(
     lines = result.get("lines", [])
     if result.get("error"):
         return f"Error: {result['error']}"
+    if not lines:
+        # An empty answer read as a failed call with no message.
+        match = regex or filter_str
+        return f"No Output Log lines matching {match!r}." if match else "No new Output Log lines."
     return "\n".join(lines)
 
 

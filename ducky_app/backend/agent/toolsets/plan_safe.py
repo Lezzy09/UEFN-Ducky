@@ -442,7 +442,9 @@ def is_plan_safe_tool(name: str) -> bool:
     n = (name or "").strip()
     if not n:
         return False
-    if n in PLAN_TOOLS:
+    # Fixed read-only operations (reading a long tool result, a chat, a terminal's output)
+    # never wait for a plan tick.
+    if n in PLAN_TOOLS or n in ASK_READ_TOOLS:
         return True
     if n in _plugin_declared_plan_tools():
         return True

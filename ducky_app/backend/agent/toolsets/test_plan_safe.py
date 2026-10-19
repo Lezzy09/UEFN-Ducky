@@ -133,3 +133,16 @@ def test_ask_answers_questions_about_the_level_and_ducky_but_changes_nothing():
             assert mode_tool_block_reason(mode, name, {}, catalog) == "", (mode, name)
         for name in writes:
             assert mode_tool_block_reason(mode, name, {}, catalog), (mode, name)
+
+
+def test_read_only_tools_never_wait_for_a_plan_tick(monkeypatch):
+    """Reading a long tool result, a chat or a terminal is never gated on ticking a plan step."""
+    from backend.agent.coding_agents import plans
+
+    monkeypatch.setattr(plans, "load_active_plan", lambda: {"nodes": []})
+    monkeypatch.setattr(plans, "next_tick_dict", lambda _plan: {"n": 1, "id": "diagnose", "status": "pending",
+                                                                "content": "Diagnose", "call": "ducky_plan_update_node(...)"})
+    for name in ("ducky_read_tool_spill", "ducky_read_chat", "ducky_terminal_read_output", "get_editor_log"):
+        assert is_plan_safe_tool(name), name
+        assert plans.plan_mutator_block_reason(name) is None, name
+    assert plans.plan_mutator_block_reason("save_current_level")

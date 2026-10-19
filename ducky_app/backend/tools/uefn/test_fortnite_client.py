@@ -122,3 +122,19 @@ def test_the_uefn_plugin_registers_three_client_nodes(monkeypatch) -> None:
     assert sorted(registered) == ["uefn.client.capture", "uefn.client.move", "uefn.client.wait"]
     monkeypatch.setattr(fc, "client_move", lambda key, seconds: {"ok": True, "key": key, "seconds": seconds})
     assert registered["uefn.client.move"]({"config": {"key": "A", "seconds": "0.5"}}) == {"ok": True, "key": "A", "seconds": 0.5}
+
+
+def test_status_with_no_client_open_is_an_answer_not_an_error(monkeypatch) -> None:
+    def none_open():
+        raise fc.NoClientWindow("Expected exactly one visible Fortnite client window; found 0")
+
+    monkeypatch.setattr(fc, "_client", none_open)
+    status = fc.client_status()
+    assert status["ok"] is True and status["running"] is False
+    assert "play session" in status["hint"]
+
+    def two_open():
+        raise RuntimeError("Expected exactly one visible Fortnite client window; found 2")
+
+    monkeypatch.setattr(fc, "_client", two_open)
+    assert fc.client_status() == {"ok": False, "error": "Expected exactly one visible Fortnite client window; found 2"}

@@ -715,6 +715,16 @@ _LISTENER_OFFLINE_HINT = (
 )
 
 
+def _failure_text(text: str) -> str:
+    """A failed call's message; an empty answer still says what happened."""
+    return (text or "").strip()[:8000] or "The tool returned no output."
+
+
+def _exception_text(exc: BaseException) -> str:
+    """str(exc), or the exception's type when it carries no message (a bare timeout)."""
+    return str(exc).strip() or f"{type(exc).__name__} (no message)"
+
+
 def _looks_like_tool_failure(name: str, text: str) -> bool:
     """Avoid false failures when markdown/tool prose contains the word 'error'."""
     stripped = text.strip()
@@ -1086,7 +1096,7 @@ async def _execute_tool_inner(
             ms = int((time.time() - t0) * 1000)
             if _looks_like_tool_failure(name, text):
                 _record_plugin_sidecar(name, args, text, ok=False)
-                return ToolCallResult(ok=False, tool=name, error=text[:8000], duration_ms=ms)
+                return ToolCallResult(ok=False, tool=name, error=_failure_text(text), duration_ms=ms)
             from backend.agent.tool_spills import inline_or_spill
 
             data = inline_or_spill(name, text)
@@ -1099,7 +1109,7 @@ async def _execute_tool_inner(
             return ToolCallResult(ok=False, tool=name, error="Cancelled", duration_ms=ms)
         except Exception as e:
             ms = int((time.time() - t0) * 1000)
-            msg = str(e)
+            msg = _exception_text(e)
             return ToolCallResult(ok=False, tool=name, error=msg, hint=_hint_for_error(name, msg), duration_ms=ms)
 
     gone = _plugin_tool_gone(name)
@@ -1154,7 +1164,7 @@ async def _execute_tool_inner(
                 )
             hint = _hint_for_error(name, text)
             _record_plugin_sidecar(name, args, text, ok=False)
-            return ToolCallResult(ok=False, tool=name, error=text[:8000], hint=hint, duration_ms=ms)
+            return ToolCallResult(ok=False, tool=name, error=_failure_text(text), hint=hint, duration_ms=ms)
         from backend.agent.tool_spills import inline_or_spill
 
         data = inline_or_spill(name, text)
@@ -1167,7 +1177,7 @@ async def _execute_tool_inner(
         return ToolCallResult(ok=False, tool=name, error="Cancelled", duration_ms=ms)
     except Exception as e:
         ms = int((time.time() - t0) * 1000)
-        msg = str(e)
+        msg = _exception_text(e)
         if not _alias_tried and "Unknown tool:" in msg:
             try:
                 known = {str(getattr(t, "name", "") or "") for t in await list_mcp_tools()}

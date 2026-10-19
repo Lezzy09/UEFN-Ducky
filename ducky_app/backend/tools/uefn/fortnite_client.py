@@ -63,6 +63,10 @@ def _user32():
     return u
 
 
+class NoClientWindow(RuntimeError):
+    """No visible Fortnite client window: nothing is playing yet."""
+
+
 def _client() -> tuple[Any, int, str]:
     """The one visible window titled "Fortnite" (never the editor or the launcher)."""
     if sys.platform != "win32":
@@ -83,6 +87,8 @@ def _client() -> tuple[Any, int, str]:
         return True
 
     u.EnumWindows(proc(visit), 0)
+    if not hits:
+        raise NoClientWindow("Expected exactly one visible Fortnite client window; found 0")
     if len(hits) != 1:
         raise RuntimeError(f"Expected exactly one visible Fortnite client window; found {len(hits)}")
     return u, int(hits[0][0]), hits[0][1]
@@ -139,11 +145,16 @@ def _shot(u: Any, hwnd: int, label: str) -> dict[str, Any]:
 def client_status() -> dict[str, Any]:
     try:
         u, hwnd, title = _client()
+    except NoClientWindow:
+        # A status answer, not a failure: no play session has opened the client yet.
+        return {"ok": True, "running": False,
+                "hint": "No Fortnite client is open. Start a play session in UEFN, then fortnite_client_wait."}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
     age = gameplay_loaded_for()
     return {
         "ok": True,
+        "running": True,
         "hwnd": hwnd,
         "title": title,
         "foreground": u.GetForegroundWindow() == hwnd,
