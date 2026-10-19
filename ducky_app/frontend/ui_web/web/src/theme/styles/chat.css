@@ -73,8 +73,10 @@
 }
 
 .chat-column-shell {
+  /* The same space on both sides. The right pad is 6px less only where the message list's
+     6px scrollbar sits; the chat box and empty state use the left pad on both sides. */
   --chat-column-pad-left: max(24px, calc((100% - var(--chat-column-width, 960px)) / 2 + 24px));
-  --chat-column-pad-right: max(15px, calc((100% - var(--chat-column-width, 960px)) / 2 + 15px));
+  --chat-column-pad-right: max(18px, calc((100% - var(--chat-column-width, 960px)) / 2 + 18px));
   flex: 1;
   display: flex;
   min-height: 0;
@@ -161,7 +163,7 @@
   justify-content: center;
   min-height: 100%;
   padding-left: var(--chat-column-pad-left);
-  padding-right: var(--chat-column-pad-right);
+  padding-right: var(--chat-column-pad-left);
   box-sizing: border-box;
 }
 
@@ -180,7 +182,7 @@
 }
 
 .chat-pane-input-area {
-  padding: 0 var(--chat-column-pad-right) 24px var(--chat-column-pad-left);
+  padding: 0 var(--chat-column-pad-left) 24px var(--chat-column-pad-left);
   display: flex;
   flex-direction: column;
   min-width: 0;
