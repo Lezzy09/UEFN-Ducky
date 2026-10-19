@@ -982,6 +982,14 @@ export function ModelSelector({
         title={triggerLabel}
         aria-label={labeled ? `Model: ${triggerLabel}` : triggerLabel}
       >
+        {/* Thinking effort as a small fire flickering behind the logo: none when off, bigger and redder up to the top level. */}
+        {!labeled && glow > 0 ? (
+          <span className="model-selector-btn-fire" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+        ) : null}
         {selectedGateway?.iconDataUrl ? (
           <img
             className="model-selector-btn-logo"
