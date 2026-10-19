@@ -128,6 +128,19 @@ def test_upgrade_from_schema_nine_preserves_existing_workflows(storage):
     for column in ("rewind_rev", "rewind_at"):
         conn.execute(f"ALTER TABLE scope_sync DROP COLUMN {column}")
     conn.execute("ALTER TABLE plugin_data DROP COLUMN group_id")  # 0021 re-adds it
+    # 0024 adds the owner account to chats and duckies and rebuilds folders: undo it.
+    for index in ("ix_conv_account", "ux_duckies_account", "duckies_history_account"):
+        conn.execute(f"DROP INDEX {index}")
+    for table, column in (("conversations", "account_id"), ("messages", "account_id"), ("duckies", "account_id"),
+                          ("duckies", "ducky_id"), ("duckies_history", "account_id")):
+        conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+    conn.execute(
+        "CREATE TABLE folders_v3 (project_id TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', "
+        "parent_id TEXT NOT NULL DEFAULT '', sort_order REAL NOT NULL DEFAULT 0, "
+        "group_hub_id TEXT NOT NULL DEFAULT '', PRIMARY KEY (project_id, id))"
+    )
+    conn.execute("DROP TABLE folders")
+    conn.execute("ALTER TABLE folders_v3 RENAME TO folders")
     conn.execute("PRAGMA user_version=9")
     db.reset_for_tests()
     assert store.get_workflow(legacy["id"])["name"] == "Before versions"
