@@ -291,6 +291,7 @@ _PUBLIC_METHODS = frozenset({
     'import_workflow_bundle',
     'copy_workflow_folder',
     'use_workflow_template',
+    'usage_track',
     'workflow_open_web',
     'workflow_owners',
     'workflow_sync',
