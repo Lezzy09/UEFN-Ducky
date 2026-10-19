@@ -30,7 +30,7 @@ def _annotate_stale_listener(result: dict) -> dict:
     return result
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def inspect_verse_device(actor_path: str, pretty: bool = False) -> str:
     """READ one Verse device — only the device you are about to write.
 
@@ -51,7 +51,7 @@ def inspect_verse_device(actor_path: str, pretty: bool = False) -> str:
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def resize_verse_array(
     actor_path: str,
     array_field: str,
@@ -79,7 +79,7 @@ def resize_verse_array(
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def patch_verse_array_entry(
     actor_path: str,
     array_field: str,

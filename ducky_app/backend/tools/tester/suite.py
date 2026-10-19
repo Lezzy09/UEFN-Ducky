@@ -43,7 +43,7 @@ def _snapshot_live(**kwargs: Any) -> dict:
     raise ConnectionError(err or "UEFN offline — no live device graph")
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def device_graph_snapshot(
     label_filter: str = "",
     class_filter: str = "",
@@ -68,7 +68,7 @@ def device_graph_snapshot(
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def simulate_device_event(
     device: str,
     event: str = "InteractedWithEvent",
@@ -89,7 +89,7 @@ def simulate_device_event(
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def device_graph_audit(snapshot_json: str = "", pretty: bool = False) -> str:
     """Audit a device graph for unwired refs, orphans, cycles, missing spawn pads.
 
@@ -102,7 +102,7 @@ def device_graph_audit(snapshot_json: str = "", pretty: bool = False) -> str:
     return tool_json(_audit(snapshot), pretty=pretty)
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def verse_test_scaffold(overwrite: bool = False, pretty: bool = False) -> str:
     """Write Verse/DuckyTests/ducky_test_device.verse assert harness (ExpectEqual/True/InRange).
 
@@ -135,7 +135,7 @@ def verse_test_scaffold(overwrite: bool = False, pretty: bool = False) -> str:
     return tool_json(payload, pretty=pretty)
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def verse_test_run(start_session: bool = False, pretty: bool = False) -> str:
     """Compile Verse, push changes, optionally start a play session for the harness.
 
@@ -168,7 +168,7 @@ def verse_test_run(start_session: bool = False, pretty: bool = False) -> str:
     )
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def verse_test_results(
     last_n: int = 500,
     since_offset: int = 0,
@@ -192,13 +192,13 @@ def verse_test_results(
     return tool_json(parsed, pretty=pretty)
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def session_status(pretty: bool = False) -> str:
     """Whether a play/PIE session is active, plus world name."""
     return tool_json(send_command("session_status", {}), pretty=pretty)
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def actor_state_snapshot(
     labels: list[str] | None = None,
     label_filter: str = "",
@@ -228,7 +228,7 @@ def actor_state_snapshot(
     )
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def actor_state_diff(
     before_json: str,
     after_json: str,
@@ -259,7 +259,7 @@ def actor_state_diff(
     )
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def tester_list_devices(pretty: bool = False) -> str:
     """List devices for the Tester panel: live graph via UEFN MCP, else listener, else Verse sources.
 
@@ -268,7 +268,7 @@ def tester_list_devices(pretty: bool = False) -> str:
     return tool_json(_list_tester_devices(project_root=_project_root()), pretty=pretty)
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def tester_list_tests(pretty: bool = False) -> str:
     """List harness cases (Verse/DuckyTests) and saved simulation scenarios (.ducky/tests).
 
@@ -281,7 +281,7 @@ def tester_list_tests(pretty: bool = False) -> str:
     return tool_json({"ok": True, "tests": tests, "count": len(tests)}, pretty=pretty)
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def tester_create_simulation(
     name: str,
     device: str,
@@ -309,7 +309,7 @@ def tester_create_simulation(
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def tester_run_simulation(
     name: str = "",
     device: str = "",
@@ -384,7 +384,7 @@ def tester_run_simulation(
     )
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def verse_test_add_case(
     name: str,
     kind: str = "equal",
@@ -429,7 +429,7 @@ def verse_test_add_case(
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("tester")
+@plugin_mcp_tool("uefn")
 def tester_get_results(
     last_n: int = 500,
     since_offset: int = 0,

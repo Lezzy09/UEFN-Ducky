@@ -142,7 +142,7 @@ def workspace_list_verse_errors(pretty: bool = False, full: bool = False, rescan
     return tool_json(payload, pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def workspace_open_verse_file(
     relative_path: str,
     line: int = 1,
@@ -215,7 +215,7 @@ def _compile_text(payload: dict[str, Any], last_log: str) -> str:
     return body + "\n" + str(last_log or "")
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def workspace_compile_verse(pretty: bool = False) -> str:
     """Compile the Verse project inside UEFN via Verse Workflow Server (requires UEFN running).
 
@@ -309,7 +309,7 @@ def workspace_compile_verse(pretty: bool = False) -> str:
     return tool_json(payload, pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def workspace_push_verse_changes(verse_only: bool = True, pretty: bool = False) -> str:
     """Push Verse changes to the running UEFN session (hot reload)."""
     from frontend.ui_web.verse_editor.workflow.client import get_workflow_client

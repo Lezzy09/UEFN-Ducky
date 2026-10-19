@@ -26,8 +26,8 @@ HOST_DISK_TOOLS = frozenset(
 )
 
 # Installed Store plugins that must come back on when an agent needs them.
-# Partial settings imports used to leave verse off → Unknown tool / "enable in Store".
-_CORE_STORE_HEAL = frozenset({"verse", "uefn"})
+# Partial settings imports used to leave it off → Unknown tool / "enable in Store".
+_CORE_STORE_HEAL = frozenset({"uefn"})
 
 
 def heal_enable_store_plugin(plugin_id: str) -> bool:

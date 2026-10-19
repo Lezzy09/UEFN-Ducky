@@ -9,7 +9,7 @@ from backend.util.json_util import tool_json
 from backend.tools.support.plugin_gate import plugin_mcp_tool
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def umg_capabilities(pretty: bool = False) -> str:
     """Probe UMG / MVVM / ToolsetRegistry availability (run before other umg tools).
 
@@ -18,7 +18,7 @@ def umg_capabilities(pretty: bool = False) -> str:
     return tool_json(send_command("umg_capabilities", {}), pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def list_widget_blueprints(search: str = "", offset: int = 0, limit: int = 50, pretty: bool = False) -> str:
     """List WidgetBlueprint assets in the project (filter with search, paged)."""
     return tool_json(
@@ -27,13 +27,13 @@ def list_widget_blueprints(search: str = "", offset: int = 0, limit: int = 50, p
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def get_widget_blueprint_info(widget_path: str, pretty: bool = False) -> str:
     """Inspect a WidgetBlueprint: member vars (Verse fields), event dispatchers, tree, MVVM bindings."""
     return tool_json(send_command("get_widget_blueprint_info", {"widget_path": widget_path}), pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def create_widget_blueprint(
     asset_name: str,
     folder: str = "",
@@ -50,7 +50,7 @@ def create_widget_blueprint(
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def add_widget_to_tree(
     widget_path: str,
     widget_class: str,
@@ -73,7 +73,7 @@ def add_widget_to_tree(
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def remove_widget_from_tree(widget_path: str, widget_ref_path: str, pretty: bool = False) -> str:
     """Remove a widget instance from the tree via UMGToolSet.RemoveWidget."""
     return tool_json(
@@ -85,7 +85,7 @@ def remove_widget_from_tree(widget_path: str, widget_ref_path: str, pretty: bool
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def set_widget_property(
     widget_path: str,
     target_ref_path: str,
@@ -113,13 +113,13 @@ def set_widget_property(
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def list_widget_bindings(widget_path: str, pretty: bool = False) -> str:
     """List MVVM property bindings and click events (source path → field, what each event sends)."""
     return tool_json(send_command("list_widget_bindings", {"widget_path": widget_path}), pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def add_widget_binding(
     widget_path: str,
     source_path: str = "",
@@ -140,7 +140,7 @@ def add_widget_binding(
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def remove_widget_binding(widget_path: str, binding_index: int = 0, pretty: bool = False) -> str:
     """Remove an MVVM binding by index."""
     return tool_json(
@@ -152,13 +152,13 @@ def remove_widget_binding(widget_path: str, binding_index: int = 0, pretty: bool
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def list_widget_classes(pretty: bool = False) -> str:
     """UEFN UMG palette (ListWidgetClasses). Call before guessing a widget class."""
     return tool_json(send_command("list_widget_classes", {}), pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def get_widget_class_info(widget_class: str, pretty: bool = False) -> str:
     """Describe one widget class (panel, category). Class must exist on unreal."""
     return tool_json(
@@ -167,7 +167,7 @@ def get_widget_class_info(widget_class: str, pretty: bool = False) -> str:
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def build_widget_tree(
     tree: dict[str, Any],
     widget_path: str = "",
@@ -193,7 +193,7 @@ def build_widget_tree(
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def set_widget_slot(
     widget_path: str,
     widget_name: str,
@@ -210,13 +210,13 @@ def set_widget_slot(
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def list_named_slots(widget_path: str, pretty: bool = False) -> str:
     """List NamedSlot widgets on a Widget Blueprint."""
     return tool_json(send_command("list_named_slots", {"widget_path": widget_path}), pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def set_named_slot_content(
     widget_path: str,
     slot_name: str,
@@ -239,7 +239,7 @@ def set_named_slot_content(
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def create_widget_animation(
     widget_path: str,
     animation_name: str,
@@ -260,7 +260,7 @@ def create_widget_animation(
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def bind_widget_animation(
     widget_path: str,
     animation_name: str,
@@ -281,7 +281,7 @@ def bind_widget_animation(
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def add_animation_keys(
     widget_path: str,
     animation_name: str,
@@ -308,13 +308,13 @@ def add_animation_keys(
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def list_widget_animations(widget_path: str, pretty: bool = False) -> str:
     """List animations with track names and key counts."""
     return tool_json(send_command("list_widget_animations", {"widget_path": widget_path}), pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def add_verse_field(
     widget_path: str,
     field_name: str,
@@ -349,7 +349,7 @@ def add_verse_field(
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def edit_verse_field(
     widget_path: str,
     field_name: str,
@@ -373,13 +373,13 @@ def edit_verse_field(
     return tool_json(send_command("edit_verse_field", params), pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def remove_verse_field(widget_path: str, field_name: str, pretty: bool = False) -> str:
     """Remove a Verse field from a Widget Blueprint (UEFN 42.30+)."""
     return tool_json(send_command("remove_verse_field", {"widget_path": widget_path, "field_name": field_name}), pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def duplicate_verse_field(widget_path: str, field_name: str, new_name: str, pretty: bool = False) -> str:
     """Copy a Verse field under a new, unused name (UEFN 42.30+)."""
     return tool_json(
@@ -388,19 +388,19 @@ def duplicate_verse_field(widget_path: str, field_name: str, new_name: str, pret
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def list_verse_field_types(pretty: bool = False) -> str:
     """Field types and event parameter types this UEFN build accepts."""
     return tool_json(send_command("list_verse_field_types", {}), pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def list_verse_fields(widget_path: str, pretty: bool = False) -> str:
     """List Verse fields on a Widget Blueprint (type, default, access, var, event parameters)."""
     return tool_json(send_command("list_verse_fields", {"widget_path": widget_path}), pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def bind_verse_field(
     widget_path: str,
     source_field: str,
@@ -431,7 +431,7 @@ def bind_verse_field(
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def bind_widget_event(
     widget_path: str,
     widget_name: str,
@@ -461,7 +461,7 @@ def bind_widget_event(
     )
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def list_bindable_properties(widget_path: str, widget_name: str, pretty: bool = False) -> str:
     """Property paths on one widget that View Bindings can target."""
     return tool_json(

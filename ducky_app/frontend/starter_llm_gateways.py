@@ -9,20 +9,7 @@ from typing import Any
 
 STARTER_LLM_GATEWAY_SLUGS: tuple[str, ...] = ("anthropic", "cursor", "openai")
 
-STARTER_UEFN_PLUGIN_SLUGS: tuple[str, ...] = (
-    "uefn",
-    "verse",
-    "leveldesign",
-    "materials",
-    "vfx",
-    "animation",
-    "modeling",
-    "scenegraph",
-    "uefn-physics",
-    "metahuman",
-    "tester",
-    "translation",
-)
+STARTER_UEFN_PLUGIN_SLUGS: tuple[str, ...] = ("uefn", "translation")
 
 # Offline neural voices, so every ducky can read its replies in its own voice.
 STARTER_VOICE_PLUGIN_SLUGS: tuple[str, ...] = ("piper",)
@@ -36,16 +23,6 @@ STARTER_PLUGIN_LABELS: dict[str, str] = {
     "cursor": "Cursor",
     "openai": "OpenAI",
     "uefn": "UEFN",
-    "verse": "Verse",
-    "leveldesign": "Level Design",
-    "materials": "Materials",
-    "vfx": "VFX",
-    "animation": "Animation",
-    "modeling": "Modeling",
-    "scenegraph": "Scene Graph",
-    "uefn-physics": "Physics",
-    "metahuman": "MetaHuman",
-    "tester": "Tester",
     "translation": "Translation",
     "piper": "Pipe voices",
 }

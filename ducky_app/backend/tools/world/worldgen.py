@@ -9,13 +9,13 @@ from backend.util.json_util import tool_json
 from backend.tools.support.plugin_gate import plugin_mcp_tool
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def worldgen_capabilities(pretty: bool = False) -> str:
     """Probe terrain/foliage backends (mesh vs landscape, foliage vs HISM). Run first."""
     return tool_json(send_command("worldgen_capabilities", {}), pretty=pretty)
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def terrain_generate(
     location: Optional[list[float]] = None,
     size_uu: float = 12800.0,
@@ -50,13 +50,13 @@ def terrain_generate(
     return tool_json(send_command("terrain_generate", params, timeout=120.0), pretty=pretty)
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def terrain_get_info(actor_path: str = "", pretty: bool = False) -> str:
     """Inspect a generated terrain actor, or list tagged worldgen terrains when actor_path is empty."""
     return tool_json(send_command("terrain_get_info", {"actor_path": actor_path}), pretty=pretty)
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def terrain_remove_generated(
     folder_prefix: str = "",
     asset_name_prefix: str = "",
@@ -72,7 +72,7 @@ def terrain_remove_generated(
     )
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def foliage_list_sources(search: str = "", folder: str = "", limit: int = 40, pretty: bool = False) -> str:
     """Discover Content Drawer foliage props (Creative Environments) plus project meshes."""
     return tool_json(
@@ -81,7 +81,7 @@ def foliage_list_sources(search: str = "", folder: str = "", limit: int = 40, pr
     )
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def foliage_scatter(
     center: Optional[list[float]] = None,
     extent: Optional[list[float]] = None,
@@ -121,13 +121,13 @@ def foliage_scatter(
     return tool_json(send_command("foliage_scatter", params, timeout=180.0), pretty=pretty)
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def foliage_get_stats(folder_prefix: str = "", pretty: bool = False) -> str:
     """Summarize tagged worldgen foliage / HISM actors."""
     return tool_json(send_command("foliage_get_stats", {"folder_prefix": folder_prefix}), pretty=pretty)
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def foliage_clear_generated(
     folder_prefix: str = "",
     foliage_type_paths: Optional[list[str]] = None,
@@ -143,13 +143,13 @@ def foliage_clear_generated(
     )
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def landscape_list(pretty: bool = False) -> str:
     """List Landscape roots and whether their streaming-proxy panels exist."""
     return tool_json(send_command("landscape_list", {}), pretty=pretty)
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def landscape_get_info(label: str = "", actor_path: str = "", pretty: bool = False) -> str:
     """Inspect one Landscape (panels are on LandscapeStreamingProxy actors)."""
     return tool_json(
@@ -158,7 +158,7 @@ def landscape_get_info(label: str = "", actor_path: str = "", pretty: bool = Fal
     )
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def landscape_create(
     label: str = "level1 landscape",
     location: Optional[list[float]] = None,
@@ -183,7 +183,7 @@ def landscape_create(
     )
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def landscape_rename(
     new_label: str,
     label: str = "",
@@ -200,7 +200,7 @@ def landscape_rename(
     )
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def landscape_sculpt(
     label: str = "",
     actor_path: str = "",

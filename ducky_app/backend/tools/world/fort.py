@@ -9,7 +9,7 @@ from backend.util.json_util import tool_json
 from backend.tools.support.plugin_gate import plugin_mcp_tool
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def list_fort_actors(class_prefix: str = "Fort", offset: int = 0, limit: Optional[int] = None, fields: Optional[list[str]] = None, pretty: bool = False) -> str:
     """List level actors whose class starts with Fort (devices, props, etc.)."""
     params: dict = {"class_prefix": class_prefix, "offset": offset}
@@ -20,7 +20,7 @@ def list_fort_actors(class_prefix: str = "Fort", offset: int = 0, limit: Optiona
     return tool_json(send_command("list_fort_actors", params), pretty=pretty)
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def get_fort_actor_info(actor_path: str, properties: Optional[list[str]] = None, pretty: bool = False) -> str:
     """Inspect a Fort* actor (read-only properties)."""
     params: dict = {"actor_path": actor_path}

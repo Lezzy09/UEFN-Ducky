@@ -434,15 +434,15 @@ class PanelApiProjectMixin:
         return normalize_verse_lsp_project_root(_pa.PanelSettings.load().uefn_project_root.strip())
 
     def _require_tester_plugin(self) -> dict[str, Any] | None:
-        """Tester dock + bridge require the Store tester plugin to be enabled."""
+        """Tester dock + bridge require the Store UEFN plugin (it holds testing) to be enabled."""
         try:
             from backend.uefn_plugins.host import is_plugin_enabled
 
-            if is_plugin_enabled("tester"):
+            if is_plugin_enabled("uefn"):
                 return None
         except Exception:
             pass
-        return {"ok": False, "error": "Tester plugin is disabled — enable it in Settings → Store"}
+        return {"ok": False, "error": "UEFN plugin is disabled — enable it in Settings → Store"}
 
     def tester_list_devices(self) -> dict[str, Any]:
         """Device outliner for the Tester dock: UEFN MCP first, listener second, Verse sources last."""

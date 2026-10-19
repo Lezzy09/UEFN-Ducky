@@ -7,13 +7,13 @@ from backend.util.json_util import tool_json
 from backend.tools.support.plugin_gate import plugin_mcp_tool
 
 
-@plugin_mcp_tool("scenegraph")
+@plugin_mcp_tool("uefn")
 def scene_graph_capabilities(pretty: bool = False) -> str:
     """Probe Scene Graph editor scripting (prefab helpers). Entity CRUD uses nested Epic `unreal__*` tools."""
     return tool_json(send_command("scene_graph_capabilities", {}), pretty=pretty)
 
 
-@plugin_mcp_tool("scenegraph")
+@plugin_mcp_tool("uefn")
 def create_empty_prefab(prefab_name: str, folder: str = "", pretty: bool = False) -> str:
     """Create a blank EntityPrefab asset under the PROJECT mount (e.g. /MyProject/Prefabs).
 
@@ -26,7 +26,7 @@ def create_empty_prefab(prefab_name: str, folder: str = "", pretty: bool = False
     )
 
 
-@plugin_mcp_tool("scenegraph")
+@plugin_mcp_tool("uefn")
 def create_prefab_from_entities(entity_names: list[str], prefab_name: str, folder: str = "", pretty: bool = False) -> str:
     """Package existing level entities into a new Prefab asset (they become an instance of it).
 
@@ -41,7 +41,7 @@ def create_prefab_from_entities(entity_names: list[str], prefab_name: str, folde
     )
 
 
-@plugin_mcp_tool("scenegraph")
+@plugin_mcp_tool("uefn")
 def instantiate_prefab(
     prefab_path: str,
     name: str = "",
@@ -60,7 +60,7 @@ def instantiate_prefab(
     return tool_json(send_command("instantiate_prefab", params), pretty=pretty)
 
 
-@plugin_mcp_tool("scenegraph")
+@plugin_mcp_tool("uefn")
 def convert_actors_to_entities(actor_paths: list[str], pretty: bool = False) -> str:
     """Convert level actors to Scene Graph entities (guarded; irreversible — confirm intent first)."""
     return tool_json(send_command("convert_actors_to_entities", {"actor_paths": actor_paths}), pretty=pretty)

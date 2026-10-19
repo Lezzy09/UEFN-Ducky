@@ -2569,6 +2569,45 @@ def _store_download_and_install_unlocked(
 _AUTO_APPLY_LOCK = __import__("threading").Lock()
 _auto_apply_ran = False
 
+# UEFN 1.1.0 holds these plugins; once it is installed their old copies go (one-time move).
+FOLDED_INTO_UEFN: tuple[str, ...] = (
+    "animation", "leveldesign", "materials", "modeling", "vfx", "scenegraph", "verse",
+    "tester", "uefn-physics", "uefn-virtualpointer", "metahuman", "uefn-logs",
+)
+_UEFN_ALL_IN_ONE = (1, 1, 0)
+
+
+def fold_into_uefn(updated: list[str], errors: list[dict[str, Any]]) -> list[str]:
+    """Replace the old per-area UEFN plugins with the one UEFN plugin. Returns the ids removed.
+
+    They kept no data of their own (tools and skills only), so removing them loses nothing.
+    Until UEFN 1.1.0 is installed here they stay, so their tools keep working.
+    """
+    from backend.uefn_plugins.store import load_plugin_manifest, plugin_dir, set_uefn_plugin_enabled, uninstall_uefn_plugin
+    from frontend.version_check import parse_version_tuple
+
+    old = [pid for pid in FOLDED_INTO_UEFN if plugin_dir(pid).is_dir()]
+    if not old:
+        return []
+    if not plugin_dir("uefn").is_dir():
+        try:
+            if store_download_and_install("uefn", replace=True, is_update=False).get("ok"):
+                updated.append("uefn")
+        except Exception as exc:
+            errors.append({"slug": "uefn", "error": str(exc)})
+    version = parse_version_tuple(str((load_plugin_manifest("uefn") or {}).get("version") or ""))
+    if version is None or version < _UEFN_ALL_IN_ONE:
+        return []
+    set_uefn_plugin_enabled("uefn", True)
+    removed = []
+    for pid in old:
+        try:
+            uninstall_uefn_plugin(pid)
+            removed.append(pid)
+        except Exception as exc:
+            errors.append({"slug": pid, "error": f"remove after UEFN 1.1.0: {exc}"})
+    return removed
+
 # The start-up pass is one shot: offline at launch, a catalog hiccup, or sign-in
 # arriving a moment later used to mean no plugin updates until the next restart,
 # and a user sat on a stale plugin for days. So the pass is repeated early on and
@@ -2661,8 +2700,9 @@ def auto_apply_store_updates(*, force: bool = False) -> dict[str, Any]:
                 updated.append(slug)
             else:
                 errors.append({"slug": slug, "error": result.get("error")})
+        removed = fold_into_uefn(updated, errors)
         _auto_apply_ran = True
-        if updated or errors:
+        if updated or errors or removed:
             # One line in activity.jsonl, so "why is my plugin still old?" has an answer.
             try:
                 from frontend.error_log import record_activity
@@ -2671,15 +2711,16 @@ def auto_apply_store_updates(*, force: bool = False) -> dict[str, Any]:
                     "store",
                     "auto-update: "
                     + (("updated " + ", ".join(updated)) if updated else "nothing updated")
+                    + (("; now part of UEFN, removed " + ", ".join(removed)) if removed else "")
                     + (("; failed " + ", ".join(f"{e.get('slug')}: {e.get('error')}" for e in errors)) if errors else ""),
                 )
             except Exception:
                 pass
-        if updated:
+        if updated or removed:
             try:
                 from frontend.ui_web.agent_modes import push_ui_event
 
                 push_ui_event({"type": "uefn_plugins_changed"})
             except Exception:
                 pass
-        return {"ok": True, "updated": updated, "errors": errors}
+        return {"ok": True, "updated": updated, "errors": errors, "removed": removed}

@@ -7,25 +7,25 @@ from backend.util.json_util import tool_json
 from backend.tools.support.plugin_gate import plugin_mcp_tool
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def niagara_capabilities(pretty: bool = False) -> str:
     """Probe which Niagara classes this UEFN build exposes (run before other niagara tools)."""
     return tool_json(send_command("niagara_capabilities", {}), pretty=pretty)
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def list_niagara_systems(search: str = "", offset: int = 0, limit: int = 50, pretty: bool = False) -> str:
     """List NiagaraSystem assets in the project (filter with search, paged)."""
     return tool_json(send_command("list_niagara_systems", {"search": search, "offset": offset, "limit": limit}), pretty=pretty)
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def get_niagara_system_info(system_path: str, pretty: bool = False) -> str:
     """Read a NiagaraSystem: user parameters (incl. ones linked during assembly), emitters, open session."""
     return tool_json(send_command("get_niagara_system_info", {"system_path": system_path}), pretty=pretty)
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def list_niagara_user_parameters(
     actor_path: str,
     names: list[str],
@@ -42,7 +42,7 @@ def list_niagara_user_parameters(
     )
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def create_niagara_system(asset_name: str, folder: str = "", pretty: bool = False) -> str:
     """Create an empty NiagaraSystem asset (errors if it already exists). Place it with spawn_actor(asset_path=...).
 
@@ -51,7 +51,7 @@ def create_niagara_system(asset_name: str, folder: str = "", pretty: bool = Fals
     return tool_json(send_command("create_niagara_system", {"asset_name": asset_name, "folder": folder}), pretty=pretty)
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def create_niagara_mesh(
     asset_name: str,
     shape: str = "sphere",
@@ -91,7 +91,7 @@ def create_niagara_mesh(
     )
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def add_niagara_emitter(
     system_path: str,
     emitter_name: str,
@@ -146,7 +146,7 @@ def add_niagara_emitter(
     )
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def add_niagara_module(
     system_path: str,
     emitter_name: str,
@@ -179,7 +179,7 @@ def add_niagara_module(
     )
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def set_niagara_module_parameter(
     system_path: str,
     emitter_name: str,
@@ -212,7 +212,7 @@ def set_niagara_module_parameter(
     )
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def add_niagara_renderer(
     system_path: str,
     emitter_name: str,
@@ -246,19 +246,19 @@ def add_niagara_renderer(
     )
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def finalize_niagara_system(system_path: str, pretty: bool = False) -> str:
     """Compile and SAVE the open conversion session for a system (ends a finalize=false chain)."""
     return tool_json(send_command("finalize_niagara_system", {"system_path": system_path}), pretty=pretty)
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def get_niagara_component_info(actor_path: str, pretty: bool = False) -> str:
     """Read the system + available parameter setters on an actor's NiagaraComponent."""
     return tool_json(send_command("get_niagara_component_info", {"actor_path": actor_path}), pretty=pretty)
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def set_niagara_component_parameter(
     actor_path: str,
     param_name: str,
@@ -280,7 +280,7 @@ def set_niagara_component_parameter(
     )
 
 
-@plugin_mcp_tool("vfx")
+@plugin_mcp_tool("uefn")
 def control_niagara_actor(actor_path: str, action: str, pretty: bool = False) -> str:
     """Activate/deactivate/reset/reinitialize the NiagaraComponent on an actor."""
     return tool_json(send_command("control_niagara_actor", {"actor_path": actor_path, "action": action}), pretty=pretty)

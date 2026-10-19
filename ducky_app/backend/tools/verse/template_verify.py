@@ -140,7 +140,7 @@ def parse_compile_message(message: str, written: dict[str, str]) -> tuple[dict[s
     return per_file, other
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def verse_template_verify(template_ids: str = "", cleanup: bool = True, pretty: bool = False) -> str:
     """Build every installed plugin's Verse template pack in the open UEFN project and report per-file compile errors.
 

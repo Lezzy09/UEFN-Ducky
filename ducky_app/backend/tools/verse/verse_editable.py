@@ -11,7 +11,7 @@ from backend.tools.support.plugin_gate import plugin_mcp_tool
 from backend.tools.verse.wire_preflight import note_resolved_fields, run_with_build_retry
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def list_verse_property_hashes(refresh: bool = False, pretty: bool = False) -> str:
     """List Verse @editable field names mapped to computed __verse_0x... names.
 
@@ -22,7 +22,7 @@ def list_verse_property_hashes(refresh: bool = False, pretty: bool = False) -> s
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def get_verse_editables(
     actor_path: str,
     include_wiring_hints: bool = True,
@@ -62,7 +62,7 @@ def get_verse_editables(
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def set_verse_editable(
     actor_path: str,
     field: str,
@@ -93,7 +93,7 @@ def set_verse_editable(
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def wire_player_spawners(
     manager_path: str,
     spawn_pad_paths: list[str] | None = None,
@@ -111,7 +111,7 @@ def wire_player_spawners(
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def set_verse_texture_icon(
     actor_path: str,
     icon_field: str,
@@ -142,7 +142,7 @@ def set_verse_texture_icon(
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def list_verse_reference_types(pretty: bool = False) -> str:
     """Catalog Verse @editable reference types (wrapper class + link property + which tool to use).
 
@@ -152,7 +152,7 @@ def list_verse_reference_types(pretty: bool = False) -> str:
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def wire_verse_device_ref(
     actor_path: str,
     field: str,
@@ -184,7 +184,7 @@ def wire_verse_device_ref(
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def wire_verse_device_array(
     actor_path: str,
     field: str,
@@ -220,7 +220,7 @@ def wire_verse_device_array(
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def wire_verse_prop_assets(
     actor_path: str,
     field: str,
@@ -239,7 +239,7 @@ def wire_verse_prop_assets(
     return tool_json(result, pretty=pretty)
 
 
-@plugin_mcp_tool("verse")
+@plugin_mcp_tool("uefn")
 def set_currency_config_entries(
     actor_path: str,
     entries: list[dict[str, Any]] | None = None,

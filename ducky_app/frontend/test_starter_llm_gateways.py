@@ -40,7 +40,7 @@ def _write_plugin(root: Path, plugin_id: str, contributes: dict | None = None) -
 
 
 def test_existing_plugin_install_is_grandfathered(isolated_appdata, monkeypatch) -> None:
-    _write_plugin(isolated_appdata, "verse")
+    _write_plugin(isolated_appdata, "uefn")
     calls: list[str] = []
 
     def _boom(slug: str, **_kwargs):
@@ -94,7 +94,7 @@ def test_already_present_gateway_is_skipped(isolated_appdata, monkeypatch) -> No
 
 
 def test_force_downloads_when_grandfathered(isolated_appdata, monkeypatch) -> None:
-    _write_plugin(isolated_appdata, "verse")
+    _write_plugin(isolated_appdata, "uefn")
     downloaded: list[str] = []
 
     def _fake_download(slug: str, **_kwargs):
@@ -109,12 +109,12 @@ def test_force_downloads_when_grandfathered(isolated_appdata, monkeypatch) -> No
     assert blocked["first_run"] is False
     assert downloaded == []
     forced = ensure_starter_llm_gateways(force=True)
-    assert forced["installed"] == [slug for slug in POPULAR_PLUGIN_SLUGS if slug != "verse"]
-    assert "verse" in forced["skipped"]
+    assert forced["installed"] == [slug for slug in POPULAR_PLUGIN_SLUGS if slug != "uefn"]
+    assert "uefn" in forced["skipped"]
 
 
 def test_setup_status_detects_gateway_contrib(isolated_appdata) -> None:
-    _write_plugin(isolated_appdata, "verse")
+    _write_plugin(isolated_appdata, "uefn")
     none = starter_setup_status()
     assert none["gateway_ids"] == []
     assert none["pending_first_run"] is False
@@ -131,14 +131,14 @@ def test_setup_status_detects_gateway_contrib(isolated_appdata) -> None:
 
 def test_setup_status_lists_the_bundle_with_what_is_installed(isolated_appdata) -> None:
     _write_plugin(isolated_appdata, "openai")
-    _write_plugin(isolated_appdata, "verse")
+    _write_plugin(isolated_appdata, "uefn")
     plugins = starter_setup_status()["plugins"]
     assert [p["slug"] for p in plugins] == list(POPULAR_PLUGIN_SLUGS)
     by_slug = {p["slug"]: p for p in plugins}
     assert by_slug["openai"] == {"slug": "openai", "label": "OpenAI", "group": "gateway", "installed": True}
     assert by_slug["anthropic"]["installed"] is False
-    assert by_slug["verse"]["group"] == "editor" and by_slug["verse"]["installed"] is True
-    assert by_slug["leveldesign"]["label"] == "Level Design"
+    assert by_slug["uefn"]["group"] == "editor" and by_slug["uefn"]["installed"] is True
+    assert by_slug["uefn"]["label"] == "UEFN" and "leveldesign" not in by_slug
     assert by_slug["piper"]["group"] == "voice" and by_slug["piper"]["label"] == "Pipe voices"
 
 
@@ -189,7 +189,7 @@ def test_a_fresh_install_makes_the_welcome_ducky_once(isolated_appdata, monkeypa
 
 
 def test_an_install_that_already_used_ducky_gets_no_welcome_ducky(isolated_appdata, monkeypatch) -> None:
-    _write_plugin(isolated_appdata, "verse")
+    _write_plugin(isolated_appdata, "uefn")
     api, opened = _welcome_api(monkeypatch)
     assert api.welcome_ducky_first_run() == {"ok": True, "created": False}
     assert opened == []

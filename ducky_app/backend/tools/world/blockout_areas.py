@@ -9,13 +9,13 @@ from backend.util.json_util import tool_json
 from backend.tools.support.plugin_gate import plugin_mcp_tool
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def area_list(pretty: bool = False) -> str:
     """List named Areas/* layouts (origin, slot, has terrain/blockout)."""
     return tool_json(send_command("area_list", {}), pretty=pretty)
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def area_create(
     area_id: str,
     preset: str = "",
@@ -49,13 +49,13 @@ def area_create(
     )
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def blockout_list_presets(pretty: bool = False) -> str:
     """List greybox blockout presets (hub, store, arena, corridor, lobby)."""
     return tool_json(send_command("blockout_list_presets", {}), pretty=pretty)
 
 
-@plugin_mcp_tool("leveldesign")
+@plugin_mcp_tool("uefn")
 def blockout_layout(
     area_id: str,
     preset: str,
