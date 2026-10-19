@@ -61,6 +61,8 @@ type Bridge = {
 };
 
 const RPC_TIMEOUT_MS = 30_000;
+/** How long an asset asked for before the link is up waits for the blob channel. */
+const BLOB_WAIT_MS = 30_000;
 const CONNECT_BUDGET_MS = 8_000;
 const ICE_GATHER_MS = 2_500;
 const LOOPBACK_ORIGINS = ["http://127.0.0.1:4199", "http://localhost:4199"];
@@ -219,6 +221,7 @@ export class DirectTransport {
   private blobWaiters = new Map<number, { header?: BlobHeader; chunks: Uint8Array[]; resolve: (r: Response) => void; reject: (e: Error) => void }>();
   private streamSockets = new Map<string, DirectStreamSocket>();
   private queuedInvokes: Array<() => void> = [];
+  private queuedBlobs: Array<() => void> = [];
   private attempt = 0;
   status: DirectStatus = { state: "idle", reason: "", desktopVersion: "" };
   lastEventSeq = 0;
@@ -298,6 +301,7 @@ export class DirectTransport {
       if (st === "connected") {
         this.setStatus("live", "");
         if (this.rpc?.readyState === "open") this.flushQueued();
+        if (this.blob?.readyState === "open") this.flushBlobs();
         this.bridge.report({ connect_ms: Math.round(performance.now() - t0), candidate: "" });
         void this.reportCandidatePair();
       } else if (st === "failed" || st === "closed") {
@@ -515,22 +519,44 @@ export class DirectTransport {
 
   fetchBlob(path: string, etag?: string): Promise<Response> {
     return new Promise((resolve, reject) => {
-      const ch = this.blob;
-      if (!ch || ch.readyState !== "open") {
-        reject(new Error("desktop not connected"));
+      const send = () => {
+        const ch = this.blob;
+        if (!ch || ch.readyState !== "open") {
+          reject(new Error("desktop not connected"));
+          return;
+        }
+        const id = this.nextId++;
+        this.blobWaiters.set(id, { chunks: [], resolve, reject });
+        ch.send(JSON.stringify({ id, get: path, etag }));
+        window.setTimeout(() => {
+          const w = this.blobWaiters.get(id);
+          if (w) {
+            this.blobWaiters.delete(id);
+            w.reject(new Error("blob timeout"));
+          }
+        }, 60_000);
+      };
+      if (this.blob?.readyState === "open") {
+        send();
         return;
       }
-      const id = this.nextId++;
-      this.blobWaiters.set(id, { chunks: [], resolve, reject });
-      ch.send(JSON.stringify({ id, get: path, etag }));
+      // Pictures asked for while the link is still opening (a phone's first seconds,
+      // "Connecting to …") wait for the blob channel: answered at once, the image
+      // stayed broken, since nothing asks for it again once the link is up.
+      this.queuedBlobs.push(send);
       window.setTimeout(() => {
-        const w = this.blobWaiters.get(id);
-        if (w) {
-          this.blobWaiters.delete(id);
-          w.reject(new Error("blob timeout"));
+        const i = this.queuedBlobs.indexOf(send);
+        if (i >= 0) {
+          this.queuedBlobs.splice(i, 1);
+          reject(new Error("desktop not connected"));
         }
-      }, 60_000);
+      }, BLOB_WAIT_MS);
     });
+  }
+
+  private flushBlobs() {
+    const q = this.queuedBlobs.splice(0);
+    for (const fn of q) fn();
   }
 
   private onBlobMessage(data: string | ArrayBuffer) {
@@ -626,7 +652,13 @@ export class DirectTransport {
       };
     }
     if (this.events) this.events.onmessage = (ev) => typeof ev.data === "string" && this.onEventMessage(ev.data);
-    if (this.blob) this.blob.onmessage = (ev) => this.onBlobMessage(ev.data as string | ArrayBuffer);
+    if (this.blob) {
+      this.blob.onmessage = (ev) => this.onBlobMessage(ev.data as string | ArrayBuffer);
+      this.blob.onopen = () => {
+        this.mark("blob open");
+        this.flushBlobs();
+      };
+    }
   }
 
   private async reportCandidatePair() {
