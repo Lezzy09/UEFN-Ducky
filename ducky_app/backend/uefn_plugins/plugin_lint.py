@@ -13,7 +13,8 @@ each problem with a message that says how to fix it.
 - The backend never reads its own ``.py`` source or loads ``.py`` files by path:
   installed plugins can be compiled, and those files are gone then.
 - ``plugin.json``: ``data_sharing`` is true or false, ``data_locks`` maps doc key or
-  file path prefixes to ``auto`` or ``required``, and each ``team_folders`` entry has an
+  file path prefixes to ``auto`` or ``required``, ``data_local`` lists prefixes of this
+  PC's own items, and each ``team_folders`` entry has an
   id, a root under ``{LOCALAPPDATA}/UEFN-Ducky/`` or ``{PROJECT}/``, a unit of ``*``, ``.``
   or ``file`` and relative globs.
 """
@@ -571,7 +572,7 @@ def tool_docstring_issues(root: Path) -> list[str]:
 
 def check_manifest(manifest: dict[str, Any]) -> list[str]:
     """``data_sharing`` is true or false; ``data_locks`` maps doc key / file path prefixes to
-    ``auto`` or ``required``; ``team_folders`` entries are valid
+    ``auto`` or ``required``; ``data_local`` lists prefixes; ``team_folders`` entries are valid
     (:func:`backend.uefn_plugins.store.manifest_data_errors`)."""
     from backend.uefn_plugins.store import manifest_data_errors
 

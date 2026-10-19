@@ -2200,6 +2200,10 @@ export interface PanelPushEvent {
   synced?: boolean;
   /** plugin_scope_changed after a switch: the plugin restarted on the other copy; its panels reload. */
   switched?: boolean;
+  /** plugin_scope_changed for the bar only (a lock, the mode, a switch starting): no data changed. */
+  status?: boolean;
+  /** plugin_scope_changed from a sync: per plugin, the doc keys and file paths its pull changed. */
+  keys?: Record<string, string[]>;
   /** plugin_write_refused: the unit, its name, who holds it and since when (epoch seconds).
    * plugin_lock_asked: who asks. plugin_lock_lost: who has it now, and `kept` (unsent edits
    * kept as a conflict). */

@@ -83,11 +83,33 @@ def appdata_ai_plugins_dir() -> Path:
 # the write without it. A prefix is the start of a doc key or file path ('' for all).
 DATA_LOCK_POLICIES = ("auto", "required")
 _DATA_LOCK_PREFIX_RE = re.compile(r"^[a-z0-9._/-]{0,256}$")
+# Manifest ``"data_local": ["<key prefix>", ...]``: docs and files that belong to this PC
+# (diagnostics, per-device state). They stay in the plugin's Local copy whatever copy it
+# shows, never sync, and never count as team activity. A prefix is never '' (that would be
+# all of the plugin's data: use ``"data_sharing": false`` for that).
+_DATA_LOCAL_PREFIX_RE = re.compile(r"^[a-z0-9._/-]{1,256}$")
+
+
+def _data_local_errors(manifest: dict[str, Any]) -> list[str]:
+    if "data_local" not in manifest:
+        return []
+    local = manifest.get("data_local")
+    if not isinstance(local, list):
+        return ['plugin.json "data_local" must be a list of doc key or file path prefixes: ["qa.", "device/"].']
+    errors = [
+        f'plugin.json "data_local" entry {prefix!r} isn\'t the start of a doc key or file path: use a-z, 0-9, '
+        "and . _ / - (1 to 256)."
+        for prefix in local if not isinstance(prefix, str) or not _DATA_LOCAL_PREFIX_RE.match(prefix)
+    ]
+    if local and manifest.get("data_sharing") is False:
+        errors.append('plugin.json has "data_local" but "data_sharing": false: all of it is Local already, so '
+                      "remove one.")
+    return errors
 
 
 def manifest_data_errors(manifest: dict[str, Any]) -> list[str]:
-    """What is wrong with a manifest's ``data_sharing``, ``data_locks`` and ``team_folders``
-    (:mod:`backend.uefn_plugins.team_folders`), each with the fix."""
+    """What is wrong with a manifest's ``data_sharing``, ``data_locks``, ``data_local`` and
+    ``team_folders`` (:mod:`backend.uefn_plugins.team_folders`), each with the fix."""
     from backend.uefn_plugins.team_folders import declaration_errors
 
     errors: list[str] = []
@@ -98,6 +120,7 @@ def manifest_data_errors(manifest: dict[str, Any]) -> list[str]:
             "stores data) or false (always Local), or leave it out."
         )
     errors += declaration_errors(manifest)
+    errors += _data_local_errors(manifest)
     if "data_locks" not in manifest:
         return errors
     locks = manifest.get("data_locks")
@@ -124,6 +147,14 @@ def data_locks(manifest: dict[str, Any]) -> dict[str, str]:
         return {}
     return {str(prefix): str(policy) for prefix, policy in locks.items()
             if _DATA_LOCK_PREFIX_RE.match(str(prefix)) and policy in DATA_LOCK_POLICIES}
+
+
+def data_local(manifest: dict[str, Any]) -> tuple[str, ...]:
+    """The valid prefixes of a manifest's ``data_local``."""
+    local = manifest.get("data_local")
+    if not isinstance(local, list):
+        return ()
+    return tuple(sorted({p for p in local if isinstance(p, str) and _DATA_LOCAL_PREFIX_RE.match(p)}))
 
 
 def normalize_plugin_id(plugin_id: str) -> str:
@@ -921,10 +952,12 @@ def import_plugin_from_bytes(
     if too_old:
         # Nothing is written: the installed version (if any) keeps working.
         return {"ok": False, "code": "needs_newer_app", "error": too_old}
-    # A bad "data_locks" would lock the wrong items, or none, and a bad "team_folders"
-    # would move the wrong folder: refused like a bad zip. ("data_sharing" was read
-    # loosely before it was checked: only the lint names it.)
-    bad_locks = [e for e in manifest_data_errors(manifest) if '"data_locks"' in e or '"team_folders"' in e]
+    # A bad "data_locks" would lock the wrong items, or none, a bad "data_local" would share
+    # this PC's own items, and a bad "team_folders" would move the wrong folder: refused
+    # like a bad zip. ("data_sharing" was read loosely before it was checked: only the lint
+    # names it.)
+    bad_locks = [e for e in manifest_data_errors(manifest)
+                 if '"data_locks"' in e or '"data_local"' in e or '"team_folders"' in e]
     if bad_locks:
         return {"ok": False, "error": " ".join(bad_locks)}
 

@@ -87,10 +87,17 @@ path: read them with `files.get`.
 - A shared scope can be read-only; writes then fail with a clear error. When the
   user loses access to the space, its copy is locked: reads come back empty and
   writes fail until access returns (after a while the copy leaves the PC).
-- When the scope changes or a sync brings new data, the host pushes
-  `{ channel, event: { type: "plugin_scope_changed", scope } }`: re-read your docs.
-- Switching the plugin between Local and a shared space restarts its backend and reloads
-  its open panels on the new copy; nothing of the old copy is carried over.
+- When a sync brings teammates' changes, the host pushes
+  `{ channel, event: { type: "plugin_scope_changed", scope, reason: "synced", keys } }`
+  (`keys`: the doc keys and file paths that changed; absent means re-read everything).
+  Merge them into what is on screen: keep the open item, selection and scroll. Bursts are
+  merged into one push (at most one every ~1 s), and a hidden panel gets one when shown.
+- `reason: "switched"`: whose data the panel shows changed (account, Local or a space):
+  start over. Switching also restarts the plugin's backend and reloads its open panels on
+  the new copy; nothing of the old copy is carried over.
+- Items that belong to one PC (diagnostics, per-device state) go under a prefix named in
+  `plugin.json` `"data_local": ["qa."]`: they stay in Local whatever copy is shown, never
+  sync, and never show as a teammate editing something.
 
 The host also pushes `{ channel, event: { type: "appearance_theme", vars } }` on iframe
 load and whenever Appearance changes (keys without `--`). Use `var(--bg)`, `var(--fg)`,

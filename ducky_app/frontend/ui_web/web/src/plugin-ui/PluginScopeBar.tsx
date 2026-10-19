@@ -11,6 +11,7 @@ import type {
 } from "../types/panel";
 import { FolderShareDialog } from "./FolderShareDialog";
 import { PluginScopeDrawer } from "./PluginScopeDrawer";
+import { PresenceAvatar } from "./PresenceAvatar";
 import { installScopeAlerts, onRefusedWrite, rememberPluginLabel, type RefusedWrite } from "./scopeAlerts";
 import {
   bindingText,
@@ -18,11 +19,12 @@ import {
   folderRefusal,
   folderNote,
   hasFolders,
+  hereText,
   kindTitle,
   locksText,
   notShared,
-  peopleRows,
-  peopleText,
+  othersHere,
+  presence,
   resetConfirm,
   sharingText,
   statusPhrase,
@@ -34,14 +36,37 @@ import {
 const SYNC_NOW_GIVE_UP_MS = 120_000;
 /** How often the bar reads a switch's progress ("Getting Alpha's files… 40%"). */
 const BINDING_POLL_MS = 1000;
+/** Pushes that land together (a round's, a lock's, another plugin's) make one status read. */
+const REFRESH_SETTLE_MS = 400;
+/** Teammates' changes reach the panel at most this often, merged into one note. */
+const TELL_SETTLE_MS = 800;
+/** "Up to date · 12 s ago" moves on by itself while the panel is on screen. */
+const AGO_TICK_MS = 15_000;
+/** People shown as avatars on the bar before "+N". */
+const AVATARS_SHOWN = 4;
+
+/** What the panel is told (bridge event `plugin_scope_changed`). `switched`: whose data it
+ * shows changed (account, Local or a space): start over. `synced`: a sync brought new data
+ * into the same copy: re-read `keys` (every key when absent) and keep what is open. */
+export type ScopeChange = { reason: "switched" | "synced"; keys?: string[] };
 
 type Props = {
   pluginId: string;
-  /** The plugin's data or scope changed: the pane tells the iframe to re-read. */
-  onScopeChanged: (status: PluginScopeStatus) => void;
-  /** False while the tab is kept but hidden: no sync for a panel nobody sees. */
+  /** The panel is told its data moved or changed (see {@link ScopeChange}). */
+  onScopeChanged: (status: PluginScopeStatus, change: ScopeChange) => void;
+  /** False while the tab is kept but hidden: no sync and no status reads for a panel nobody sees. */
   active?: boolean;
 };
+
+/** Data that changed for this plugin and isn't told yet; `keys` null: unknown, re-read all. */
+type Pending = { keys: Set<string> | null };
+
+function mergePending(prev: Pending | null, keys: string[] | null): Pending {
+  if (!prev) return { keys: keys ? new Set(keys) : null };
+  if (!prev.keys || !keys) return { keys: null };
+  for (const key of keys) prev.keys.add(key);
+  return prev;
+}
 
 type ActionResult = { ok?: boolean; error?: string } | undefined;
 
@@ -97,9 +122,34 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
   const notify = useRef(onScopeChanged);
   notify.current = onScopeChanged;
   const last = useRef<PluginScopeStatus | null>(null);
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  /** Teammates' changes not told to the panel yet, and the timer that tells them. */
+  const untold = useRef<Pending | null>(null);
+  const tellTimer = useRef<number | undefined>(undefined);
+  /** Pushes waiting for the next status read (with the data they changed), and its timer;
+   * `stale`: some came while the panel was hidden. */
+  const queued = useRef<{ data: Pending | null } | null>(null);
+  const readTimer = useRef<number | undefined>(undefined);
+  const stale = useRef(false);
 
-  /** Re-read the bar; tell the iframe when the scope moved or its data changed. */
-  const refresh = useCallback(async (dataChanged = false) => {
+  /** Tell the panel what syncs brought, once a burst settles and only while it is on
+   * screen: a hidden panel hears it all in one note when shown again. */
+  const tellSoon = useCallback(() => {
+    window.clearTimeout(tellTimer.current);
+    if (!activeRef.current) return;
+    tellTimer.current = window.setTimeout(() => {
+      const pending = untold.current;
+      const current = last.current;
+      if (!pending || !current || current.binding) return;
+      untold.current = null;
+      notify.current(current, { reason: "synced", ...(pending.keys ? { keys: [...pending.keys].sort() } : {}) });
+    }, TELL_SETTLE_MS);
+  }, []);
+
+  /** Re-read the bar. Whose data it shows moved (account, Local or a space): the panel
+   * starts over at once. Data a sync brought (`data`): the panel merges it ({@link tellSoon}). */
+  const refresh = useCallback(async (data: Pending | null = null) => {
     const api = getApi();
     if (!api?.plugin_scope_status) return;
     try {
@@ -110,11 +160,37 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
       setStatus(next);
       setNow(Date.now());
       // While a switch gets a team's files the plugin still reads its current copy.
-      if ((moved || dataChanged) && !next.binding) notify.current(next);
+      if (next.binding) return;
+      if (moved) {
+        untold.current = null;
+        window.clearTimeout(tellTimer.current);
+        notify.current(next, { reason: "switched" });
+      } else if (data) {
+        untold.current = mergePending(untold.current, data.keys ? [...data.keys] : null);
+        tellSoon();
+      }
     } catch {
       /* keep the last bar */
     }
-  }, [pluginId]);
+  }, [pluginId, tellSoon]);
+
+  /** One status read per burst of pushes (`data`: keys they changed, null for all, undefined
+   * for none); none while hidden, one when shown again. */
+  const refreshSoon = useCallback((data: string[] | null | undefined) => {
+    const q = queued.current ?? { data: null };
+    if (data !== undefined) q.data = mergePending(q.data, data);
+    queued.current = q;
+    if (!activeRef.current) {
+      stale.current = true;
+      return;
+    }
+    window.clearTimeout(readTimer.current);
+    readTimer.current = window.setTimeout(() => {
+      const run = queued.current;
+      queued.current = null;
+      void refresh(run?.data ?? null);
+    }, REFRESH_SETTLE_MS);
+  }, [refresh]);
 
   useEffect(() => {
     void refresh();
@@ -123,11 +199,15 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
     const stopPush = subscribePanelPush((event) => {
       if (event.type === "plugin_scope_changed") {
         if (event.synced) setSyncing(false);
-        // A sync round with no changes for this plugin only refreshes the bar.
         const plugins = event.plugins ?? [];
-        void refresh(plugins.includes(pluginId) || (!event.synced && plugins.length === 0));
+        // Its data changed: a sync's pull (with the keys it changed), a resolve or restore,
+        // or a change for every plugin (no list). A lock, the mode or a round that brought
+        // nothing only moves the bar; a switch restarts the panel (the pane reloads it).
+        const data = !event.status && !event.switched
+          && (plugins.includes(pluginId) || (!event.synced && !plugins.length));
+        refreshSoon(data ? event.keys?.[pluginId] ?? null : undefined);
       } else if (event.type === "duckyos_account_changed") {
-        void refresh();
+        refreshSoon(undefined);
       }
     });
     const stopRefused = onRefusedWrite((write, text) => {
@@ -136,8 +216,29 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
     return () => {
       stopPush();
       stopRefused();
+      window.clearTimeout(readTimer.current);
+      window.clearTimeout(tellTimer.current);
     };
-  }, [refresh, pluginId]);
+  }, [refresh, refreshSoon, pluginId]);
+
+  // Shown again: what came while hidden is read once, and the panel hears it once.
+  useEffect(() => {
+    if (!active) return;
+    if (stale.current) {
+      stale.current = false;
+      refreshSoon(undefined);
+    } else if (untold.current) {
+      tellSoon();
+    }
+  }, [active, refreshSoon, tellSoon]);
+
+  // "12 s ago" keeps moving while the panel is on screen.
+  const ticking = Boolean(active && status?.visible && status.scope?.kind === "shared");
+  useEffect(() => {
+    if (!ticking) return;
+    const tick = window.setInterval(() => setNow(Date.now()), AGO_TICK_MS);
+    return () => window.clearInterval(tick);
+  }, [ticking]);
 
   // Core's scheduler syncs shared copies in the background; the bar only asks for a
   // round when the panel opens and when the window gets focus (the provider rate-limits).
@@ -202,7 +303,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
         setActionError(res.error || "That didn't work. Try again.");
         return false;
       }
-      await refresh(dataChanged);
+      await refresh(dataChanged ? { keys: null } : null);
       return true;
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
@@ -246,7 +347,9 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
   // the team this plugin is on, for a project opened since that it has no copy of.
   const offers = status.canChange && !refusal ? status.folderOffers ?? [] : [];
   const help = hasFolders(status) ? `${DATA_AT_REST} ${folderNote(status)}` : DATA_AT_REST;
-  const people = shared ? peopleText(peopleRows(status.people, pluginId)) : "";
+  const here = shared ? presence(status.people, pluginId) : [];
+  const others = othersHere(here);
+  const hereLine = hereText(here);
   const locks = shared ? locksText(status.locks) : "";
   const storage = shared ? storageLine(status.usage) : null;
   const manual = shared && status.mode === "manual" && Boolean(api?.plugin_scope_push || api?.plugin_scope_pull);
@@ -450,7 +553,28 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
             {status.pausedAction.label}
           </button>
         ) : null}
-        {people ? <span className="plugin-scope-bar__text">{people}</span> : null}
+        {others.length ? (
+          <button
+            type="button"
+            className="plugin-scope-bar__people"
+            aria-expanded={drawerOpen}
+            aria-controls={drawerId}
+            aria-label={`${hereLine}. ${drawerOpen ? "Hide" : "Show"} who is here.`}
+            onClick={toggleDrawer}
+          >
+            <span className="plugin-scope-bar__avatars">
+              {others.slice(0, AVATARS_SHOWN).map((row) => (
+                <PresenceAvatar key={row.key} row={row} plugin={plugin} labelled={false} />
+              ))}
+              {others.length > AVATARS_SHOWN ? (
+                <span className="plugin-scope-avatar plugin-scope-avatar--more" aria-hidden>
+                  +{others.length - AVATARS_SHOWN}
+                </span>
+              ) : null}
+            </span>
+            <span className="plugin-scope-bar__here">{hereLine}</span>
+          </button>
+        ) : null}
         {locks ? <span className="plugin-scope-bar__text">{locks}</span> : null}
         {storageNote ? <span className="plugin-scope-bar__text plugin-scope-bar__text--warn">{storageNote}</span> : null}
         {status.error && !ERROR_IN_PHRASE.has(phrase.key) ? (
@@ -513,7 +637,8 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
         </span>
       </div>
       {shared && drawerOpen ? (
-        <PluginScopeDrawer id={drawerId} pluginId={pluginId} status={status} onChanged={(changed) => refresh(changed)} />
+        <PluginScopeDrawer id={drawerId} pluginId={pluginId} status={status}
+          onChanged={(changed) => refresh(changed ? { keys: null } : null)} />
       ) : null}
       {share ? (
         <FolderShareDialog

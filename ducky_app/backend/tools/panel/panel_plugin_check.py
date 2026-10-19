@@ -528,7 +528,7 @@ def _end_sandbox(pid: str, stragglers: list[threading.Thread]) -> None:
         try:
             from frontend.ui_web.agent_modes import push_ui_event
 
-            push_ui_event({"type": "plugin_scope_changed", "plugins": [pid]})
+            push_ui_event({"type": "plugin_scope_changed", "plugins": [pid], "status": True})
         except Exception:
             pass
 

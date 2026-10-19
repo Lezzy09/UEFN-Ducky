@@ -17,8 +17,10 @@ files go through :class:`PluginData`, which writes the active scope only. Rows
 and folders are keyed by account and sealed for it (:mod:`data_crypto`), so
 another account on this PC can't read them. Changes to a shared space's copy are
 queued (``dirty``) for the spaces provider to sync; Personal and ``sensitive`` data
-never leave the PC. A plugin's cache and prefs rows (``plugin_kv``) follow the same
-scope but never sync: each space has its own on this PC.
+never leave the PC, and neither do the items a manifest names as this PC's own
+(``"data_local"`` prefixes: they stay in Local whatever copy the plugin shows). A plugin's
+cache and prefs rows (``plugin_kv``) follow the same scope but never sync: each space has
+its own on this PC.
 
 :func:`sandbox_begin` points one plugin at a throwaway scope for a plugin test: the
 test's own calls and the threads they start, that plugin only, so the test never
@@ -247,6 +249,33 @@ def data_lock_policy(plugin: str, key: str) -> str:
     return hit[1][max(matches, key=len)] if matches else ""
 
 
+_LOCAL_PREFIXES: dict[str, tuple[float, tuple[str, ...]]] = {}  # manifest path → (mtime, its "data_local")
+
+
+def local_prefixes(plugin: str) -> tuple[str, ...]:
+    """The manifest's ``"data_local": ["<key prefix>", ...]``: docs and files of this PC
+    only (diagnostics, per-device state). Whatever copy the plugin shows, they live in its
+    Local copy, never sync and never count as team activity; a team copy's own items under
+    them are never read. Read per data call, so cached by the manifest's mtime."""
+    from backend.uefn_plugins.store import PLUGIN_MANIFEST, data_local, load_plugin_manifest, plugin_dir
+
+    try:
+        path = plugin_dir(plugin) / PLUGIN_MANIFEST
+        mtime = path.stat().st_mtime
+    except (OSError, ValueError):
+        return ()
+    hit = _LOCAL_PREFIXES.get(str(path))
+    if not hit or hit[0] != mtime:
+        hit = (mtime, data_local(load_plugin_manifest(plugin) or {}))
+        _LOCAL_PREFIXES[str(path)] = hit
+    return hit[1]
+
+
+def is_local_key(plugin: str, key: str) -> bool:
+    """``key`` (a doc key or file path) is one of this PC's own items (:func:`local_prefixes`)."""
+    return any(key.startswith(prefix) for prefix in local_prefixes(plugin))
+
+
 def sharing_allowed(plugin: str) -> bool:
     """False when the plugin's manifest says ``"data_sharing": false``: its data always
     stays Local on this PC, whatever was picked before, and nothing offers it a shared
@@ -473,7 +502,8 @@ def link_plugin(plugin: str, scope_id: str) -> dict[str, Any]:
 def copy_local_into(plugin: str, space: str) -> dict[str, Any]:
     """One way, on request: the plugin's Local docs and files go into ``space``'s copy
     (queued to sync). An item of the space with the same key is kept as it is.
-    Sensitive docs stay Local, and so do items too big to share once sealed (listed in
+    Sensitive docs and the plugin's own items of this PC (``data_local``) stay Local, and
+    so do items too big to share once sealed (listed in
     ``tooBig``: the server would refuse them). Space → space never happens."""
     from backend.store.repos import plugin_data as repo
     from backend.uefn_plugins.data_crypto import open_bytes, open_text, seal_bytes, seal_text
@@ -497,7 +527,7 @@ def copy_local_into(plugin: str, space: str) -> dict[str, Any]:
     for kind in ("doc", "asset"):
         limit = (DOC_MAX_BYTES if kind == "doc" else ASSET_MAX_BYTES) - SHARED_SEAL_OVERHEAD
         for row in repo.rows(account, PERSONAL, plugin, kind):
-            if row["sensitive"]:
+            if row["sensitive"] or is_local_key(plugin, row["key"]):
                 continue
             old = repo.get(account, space, plugin, kind, row["key"])
             if old and not old["deleted"]:
@@ -973,6 +1003,33 @@ class PluginData:
     def scope(self) -> dict[str, Any]:
         return scope_view(self._scope())
 
+    def _local(self, key: str) -> bool:
+        """``key`` is one of this PC's own items (manifest ``data_local``): it lives in Local."""
+        return not self._personal and is_local_key(self.plugin_id, key)
+
+    def _scope_for(self, key: str) -> dict[str, Any]:
+        return _personal_for(self.plugin_id) if self._local(key) else self._scope()
+
+    def _rows(self, kind: str, prefix: str) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        """``(scope, row)`` of every live row under ``prefix``, by key: this PC's own items
+        (``data_local``) from Local, the rest from the copy the plugin shows (a team copy's
+        own items under a ``data_local`` prefix are never read)."""
+        from backend.store.repos import plugin_data as repo
+
+        s = self._scope()
+        out = [] if _closed(s) else [(s, r) for r in repo.rows(s["account"], s["id"], self.plugin_id, kind, prefix)]
+        local = () if self._personal else local_prefixes(self.plugin_id)
+        mine = _personal_for(self.plugin_id) if local else s
+        if not local or (mine["account"], mine["id"]) == (s["account"], s["id"]):
+            return out
+        out = [(sc, r) for sc, r in out if not any(r["key"].startswith(p) for p in local)]
+        own: dict[str, dict[str, Any]] = {}
+        for p in local:
+            narrower = p if p.startswith(prefix) else prefix if prefix.startswith(p) else None
+            if narrower is not None:
+                own.update((r["key"], r) for r in repo.rows(mine["account"], mine["id"], self.plugin_id, kind, narrower))
+        return sorted([*out, *((mine, r) for r in own.values())], key=lambda pair: pair[1]["key"])
+
     def on_change(self, callback: Any) -> None:
         """``callback(keys)`` after a sync brought changes to this plugin's data (doc keys
         and file paths). Register once in ``register(api)``; drop caches of those keys."""
@@ -1003,7 +1060,7 @@ class PluginData:
         from backend.uefn_plugins.data_crypto import Locked, open_text
 
         _need(valid_doc_key(key), "doc key")
-        s = _personal_for(self.plugin_id) if sensitive else self._scope()
+        s = _personal_for(self.plugin_id) if sensitive else self._scope_for(key)
         if _closed(s):
             return default
         row = repo.get(s["account"], s["id"], self.plugin_id, "doc", key)
@@ -1020,7 +1077,7 @@ class PluginData:
         from backend.uefn_plugins.data_crypto import seal_text
 
         _need(valid_doc_key(key), "doc key")
-        s = self._writable(_personal_for(self.plugin_id) if sensitive else None)
+        s = self._writable(_personal_for(self.plugin_id) if sensitive or self._local(key) else None)
         raw = encode_doc(value)
         shared_max = DOC_MAX_BYTES - SHARED_SEAL_OVERHEAD
         if s["kind"] == "shared" and len(raw) > shared_max:
@@ -1040,25 +1097,15 @@ class PluginData:
         return {"ok": True, "key": key, "changed": True}
 
     def keys(self, prefix: str = "") -> list[str]:
-        from backend.store.repos import plugin_data as repo
-
-        s = self._scope()
-        if _closed(s):
-            return []
-        return [r["key"] for r in repo.rows(s["account"], s["id"], self.plugin_id, "doc", prefix) if not r["sensitive"]]
+        return [r["key"] for _, r in self._rows("doc", prefix) if not r["sensitive"]]
 
     def items(self, prefix: str = "") -> dict[str, Any]:
         """All docs under ``prefix`` in one read: ``{key: value}``."""
-        from backend.store.repos import plugin_data as repo
-
         from backend.uefn_plugins.data_crypto import Locked, open_text
 
-        s = self._scope()
         out: dict[str, Any] = {}
-        if _closed(s):
-            return out
         try:
-            for r in repo.rows(s["account"], s["id"], self.plugin_id, "doc", prefix):
+            for s, r in self._rows("doc", prefix):
                 if not r["sensitive"] and r["value"] is not None:
                     out[r["key"]] = json.loads(open_text(r["value"], s["account"]))
         except Locked:
@@ -1069,7 +1116,7 @@ class PluginData:
         from backend.store.repos import plugin_data as repo
 
         _need(valid_doc_key(key), "doc key")
-        s = self._writable()
+        s = self._writable(_personal_for(self.plugin_id) if self._local(key) else None)
         old = repo.get(s["account"], s["id"], self.plugin_id, "doc", key)
         if not old or old["deleted"]:
             return False
@@ -1088,7 +1135,7 @@ class PluginData:
         from backend.store.repos import plugin_data as repo
         from backend.uefn_plugins.data_crypto import seal_bytes
 
-        s = self._writable()
+        s = self._writable(_personal_for(self.plugin_id) if self._local(path) else None)
         target = asset_file(s, self.plugin_id, path)
         shared = s["kind"] == "shared"
         shared_max = ASSET_MAX_BYTES - SHARED_SEAL_OVERHEAD
@@ -1110,7 +1157,7 @@ class PluginData:
     def has_file(self, path: str) -> bool:
         from backend.store.repos import plugin_data as repo
 
-        s = self._scope()
+        s = self._scope_for(path)
         if _closed(s):
             return False
         row = repo.get(s["account"], s["id"], self.plugin_id, "asset", path)
@@ -1120,7 +1167,7 @@ class PluginData:
         """A stored file's bytes (sealed on disk, so there is no path to hand out)."""
         from backend.uefn_plugins.data_crypto import Locked, open_bytes
 
-        s = self._scope()
+        s = self._scope_for(path)
         if not self.has_file(path):
             return None
         try:
@@ -1129,18 +1176,12 @@ class PluginData:
             return None
 
     def files(self, prefix: str = "") -> list[dict[str, Any]]:
-        from backend.store.repos import plugin_data as repo
-
-        s = self._scope()
-        if _closed(s):
-            return []
-        return [{"path": r["key"], "size": r["size"], "sha256": r["sha256"]}
-                for r in repo.rows(s["account"], s["id"], self.plugin_id, "asset", prefix)]
+        return [{"path": r["key"], "size": r["size"], "sha256": r["sha256"]} for _, r in self._rows("asset", prefix)]
 
     def delete_file(self, path: str) -> bool:
         from backend.store.repos import plugin_data as repo
 
-        s = self._writable()
+        s = self._writable(_personal_for(self.plugin_id) if self._local(path) else None)
         target = asset_file(s, self.plugin_id, path)
         old = repo.get(s["account"], s["id"], self.plugin_id, "asset", path)
         if not old or old["deleted"]:

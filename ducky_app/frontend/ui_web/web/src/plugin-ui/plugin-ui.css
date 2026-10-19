@@ -5,6 +5,8 @@
   width: 100%;
   height: 100%;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
   background: var(--bg, #1e1e1e);
   position: relative;
 }
@@ -316,6 +318,7 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   max-height: 55%;
 }
 .plugin-scope-bar {
@@ -409,6 +412,91 @@
 }
 .plugin-scope-bar__change {
   position: relative;
+}
+/* Who else is here: their avatars and one line; opens the drawer's People table. */
+.plugin-scope-bar__people {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px 8px 1px 3px;
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: 999px;
+  background: var(--bg-elevated, #272727);
+  color: var(--fg, #e6e6e6);
+  font: inherit;
+  cursor: pointer;
+  --avatar-ring: var(--bg-elevated, #272727);
+}
+.plugin-scope-bar__people:hover {
+  border-color: var(--fg-dim, #a0a0a0);
+}
+.plugin-scope-bar__people:focus-visible {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: 2px;
+}
+.plugin-scope-bar__avatars {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+}
+.plugin-scope-bar__here {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* A person: initials on their own colour; a ring while they edit. */
+.plugin-scope-avatar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: hsl(var(--avatar-hue, 210) 45% 40%);
+  box-shadow: 0 0 0 2px var(--avatar-ring, var(--card, #181818));
+}
+.plugin-scope-avatar--tone-0 { --avatar-hue: 0; }
+.plugin-scope-avatar--tone-1 { --avatar-hue: 30; }
+.plugin-scope-avatar--tone-2 { --avatar-hue: 60; }
+.plugin-scope-avatar--tone-3 { --avatar-hue: 90; }
+.plugin-scope-avatar--tone-4 { --avatar-hue: 120; }
+.plugin-scope-avatar--tone-5 { --avatar-hue: 150; }
+.plugin-scope-avatar--tone-6 { --avatar-hue: 180; }
+.plugin-scope-avatar--tone-7 { --avatar-hue: 210; }
+.plugin-scope-avatar--tone-8 { --avatar-hue: 240; }
+.plugin-scope-avatar--tone-9 { --avatar-hue: 270; }
+.plugin-scope-avatar--tone-10 { --avatar-hue: 300; }
+.plugin-scope-avatar--tone-11 { --avatar-hue: 330; }
+.plugin-scope-avatar--editing {
+  box-shadow: 0 0 0 2px var(--avatar-ring, var(--card, #181818)), 0 0 0 3.5px var(--green, #3ddc84);
+}
+.plugin-scope-avatar--away {
+  opacity: 0.55;
+}
+.plugin-scope-avatar--more {
+  color: var(--fg, #e6e6e6);
+  background: var(--bg-elevated, #272727);
+}
+.plugin-scope-people__who {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.plugin-scope-people--editing .plugin-scope-people__doing {
+  color: var(--green, #3ddc84);
+}
+.plugin-scope-people--away td {
+  color: var(--muted, #7a7a7a);
 }
 /* Sync now (or Push and Pull) and Details sit at the right. */
 .plugin-scope-bar__actions {
@@ -523,6 +611,17 @@
   text-align: left;
   vertical-align: baseline;
   overflow-wrap: anywhere;
+}
+/* People: as wide as its words, so "Since" sits next to what they do. */
+.plugin-scope-drawer__table--people {
+  align-self: flex-start;
+  width: auto;
+  max-width: 100%;
+}
+.plugin-scope-drawer__table--people th,
+.plugin-scope-drawer__table--people td {
+  padding-right: 20px;
+  vertical-align: middle;
 }
 .plugin-scope-drawer__table th {
   font-weight: 600;

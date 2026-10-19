@@ -228,7 +228,8 @@ thumbnails, caches): not synced, not encrypted, erased with the plugin's data. W
 play it with `api.media_url(path)`. Real records go in `api.data`.
 
 Host pushes: `appearance_theme`, `panel.visibility` (`visible`),
-`plugin_scope_changed` (re-read your data), and the types you subscribed to.
+`plugin_scope_changed` (`reason: "synced"`: merge the `keys` it lists, keep what is open;
+`"switched"`: start over), and the types you subscribed to.
 Visited tabs stay alive while hidden: pause timers, polling and media when
 `panel.visibility` says `visible: false`. Moving a tab to a floating window reloads
 the page: keep state in `prefs` / `data`, never only in page memory. Every panel

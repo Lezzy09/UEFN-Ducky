@@ -219,6 +219,7 @@ def _space_round(account: str, space: str, *, force: bool, pull: frozenset[str],
         out = {
             "state": out["state"] if out["state"] != "ok" else str(older.get("state") or "ok"),
             "changed": [*out["changed"], *[p for p in older.get("changed") or [] if p not in out["changed"]]],
+            "keys": out["keys"],
             "error": out["error"] or str(older.get("error") or ""),
         }
     return out
@@ -242,7 +243,8 @@ def _ledger_round(account: str, space: str, team: dict[str, Any], *, force: bool
                   push_only: bool) -> dict[str, Any]:
     """Heads (what moved, locks, the roster), then a version-engine round for each plugin
     with something to do (all of them when ``force``). A plugin's first round reconciles
-    its copy and puts it on the new sync (its writers group, lock and note from then on)."""
+    its copy and puts it on the new sync (its writers group, lock and note from then on).
+    ``keys``: per changed plugin, the doc keys and file paths its pulls changed."""
     from backend.store.repos import plugin_data as repo
     from backend.uefn_plugins import vcs_engine
 
@@ -256,9 +258,10 @@ def _ledger_round(account: str, space: str, team: dict[str, Any], *, force: bool
                 repo.sync_put(account, space, called_at=now, state=seen["state"], error=error)
             else:
                 repo.sync_put(account, space, called_at=now)
-            return {"state": seen["state"], "changed": [], "error": error}
+            return {"state": seen["state"], "changed": [], "keys": {}, "error": error}
         importing = dict(seen.get("importing") or {})
     changed: list[str] = []
+    keys: dict[str, list[str]] = {}
     failed: list[tuple[str, str]] = []
     for plugin, backend in sorted(team.items()):
         if plugin in importing:
@@ -271,6 +274,8 @@ def _ledger_round(account: str, space: str, team: dict[str, Any], *, force: bool
         if got.get("tree"):  # its folder files changed: reload it, or tell its panels
             vcs_engine.after_pull(plugin)
         changed += [p for p in got.get("changed") or [] if p not in changed]
+        if got.get("keys"):
+            keys[plugin] = list(got["keys"])
         if got.get("state") != "ok":
             failed.append((str(got.get("state")), str(got.get("error") or "")))
     fields: dict[str, Any] = {"called_at": now}
@@ -280,7 +285,19 @@ def _ledger_round(account: str, space: str, team: dict[str, Any], *, force: bool
             fields.update(state="ok", error="")
     repo.sync_put(account, space, **fields)
     state, error = failed[0] if failed else ("ok", "")
-    return {"state": state, "changed": changed, "error": error}
+    return {"state": state, "changed": changed, "keys": {p: k for p, k in keys.items() if p in changed}, "error": error}
+
+
+def synced_event(out: dict[str, Any]) -> dict[str, Any]:
+    """The push after a round: ``plugins`` whose data it changed (their bars refresh and
+    their panels merge it), ``keys`` per plugin when known (the doc keys and file paths that
+    changed), ``synced`` (every bar refreshes its status)."""
+    event: dict[str, Any] = {"type": "plugin_scope_changed", "plugins": [str(p) for p in out.get("changed") or []],
+                             "synced": True}
+    keys = out.get("keys")
+    if isinstance(keys, dict) and keys:
+        event["keys"] = {str(p): [str(k) for k in v] for p, v in keys.items() if p in event["plugins"]}
+    return event
 
 
 def _announce(out: dict[str, Any]) -> None:
@@ -291,7 +308,7 @@ def _announce(out: dict[str, Any]) -> None:
     try:
         from frontend.ui_web.agent_modes import push_ui_event
 
-        push_ui_event({"type": "plugin_scope_changed", "plugins": changed, "synced": True})
+        push_ui_event(synced_event(out))
         if WORKFLOWS in changed:
             push_ui_event({"type": "graphs_changed"})
     except Exception:  # noqa: BLE001 — the next status read shows it anyway

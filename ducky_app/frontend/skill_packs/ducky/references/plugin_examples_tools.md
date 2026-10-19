@@ -312,4 +312,5 @@ Design for several people writing at once:
 - Tool results get `scope` (`local` or the space's name) added by the host; `data.scope()`
   gives the label when a node or panel needs it.
 - Read-only and lost-access copies raise `PermissionError` on writes: return the
-  message. Panels re-read on `plugin_scope_changed`.
+  message. Panels re-read on `plugin_scope_changed` (merging the changed `keys` when
+  `reason` is `"synced"`).

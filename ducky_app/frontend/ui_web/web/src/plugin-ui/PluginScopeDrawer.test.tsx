@@ -56,21 +56,31 @@ const URC = "Carried by this island's UEFN revision control";
 const confirmButton = (label: string) => screen.getByRole("button", { name: new RegExp(`^${label} \\(`) });
 
 describe("plugin scope drawer", () => {
-  it("lists who else is here and what they are doing, never this PC", async () => {
+  it("lists everyone in the space, one row each: you first, then who edits, views, the rest", async () => {
     drawer(status({
       people: [
-        { user_name: "Ana", device: "ANA-PC", plugins: { forge: { editing: [{ unitName: "MEGA_Duel_Stadium", actor: "user" }] } } },
-        { user_name: "Ben", device: "BEN-PC", plugins: { forge: { editing: [{ unitName: "Arena", actor: "agent", ducky: "Builder" }] } } },
+        { user_name: "Dee", device: "DEE-PC", plugins: { other: { viewing: true } } },
         { user_name: "Cy", device: "CY-PC", plugins: { forge: { viewing: true } } },
-        { user_name: "Me", me: true, plugins: { forge: { viewing: true } } },
+        { user_name: "Ana", device: "ANA-PC", plugins: { forge: { editing: [
+          { unitName: "MEGA_Duel_Stadium", actor: "user" }, { unitName: "Crate", actor: "user" },
+        ] } } },
+        { user_name: "Ben", device: "BEN-PC", plugins: { forge: { editing: [{ unitName: "Arena", actor: "agent", ducky: "Builder" }] } } },
+        { user_name: "Me", me: true, device: "MainPC", plugins: { forge: { viewing: true } } },
       ],
     }));
-    const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1).map((r) => r.textContent);
+    expect(screen.getByText("People in Alpha")).toBeTruthy();
+    const table = screen.getAllByRole("table")[0];
+    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Member", "PC", "In Forge", "Since"]);
+    const rows = within(table).getAllByRole("row").slice(1).map((r) => r.textContent);
+    // Each name follows its avatar's initials.
     expect(rows).toEqual([
-      "AnaANA-PCEditing MEGA_Duel_Stadium",
-      "BenBEN-PCDucky Builder editing Arena",
-      "CyCY-PCViewing",
+      "MYou (Me)MainPCViewing",
+      "AAnaANA-PCEditing MEGA_Duel_Stadium and Crate",
+      "BBenBEN-PCTheir ducky Builder is editing Arena",
+      "CCyCY-PCViewing",
+      "DDeeDEE-PCNot in Forge",
     ]);
+    expect(screen.queryByText("Nobody else is here right now.")).toBeNull();
     await waitFor(() => expect(api.plugin_scope_activity).toHaveBeenCalledWith("forge"));
   });
 

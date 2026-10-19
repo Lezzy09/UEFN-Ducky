@@ -220,9 +220,9 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
         <PluginScopeBar
           pluginId={parsed.pluginId}
           active={visible}
-          onScopeChanged={(status) =>
+          onScopeChanged={(status, change) =>
             iframeRef.current?.contentWindow?.postMessage(
-              { channel: BRIDGE_CHANNEL, event: { type: "plugin_scope_changed", scope: status.scope } },
+              { channel: BRIDGE_CHANNEL, event: { type: "plugin_scope_changed", scope: status.scope, ...change } },
               "*",
             )
           }

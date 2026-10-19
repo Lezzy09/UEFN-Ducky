@@ -208,6 +208,46 @@ def _unit_name(unit: str) -> str:
     return unit.split(":", 1)[1] if unit.startswith(("doc:", "asset:")) else unit
 
 
+LABEL_FIELDS = ("name", "title", "label")  # a doc's own name, in this order
+_LABELS: dict[tuple[str, str, str, str], tuple[str, str]] = {}  # (account, space, plugin, key) → (sha256, label)
+_LABELS_MAX = 2000
+
+
+def unit_label(account: str, space: str, plugin: str, unit: str) -> str:
+    """What people see a unit called (presence, the drawer): a doc's own name (its
+    ``name``, ``title`` or ``label`` field, so "Untitled island 1" rather than
+    ``project.mvbtpazj``), a file's name, else the key. Cached per version of the doc."""
+    kind, _, key = unit.partition(":")
+    if kind == "asset":
+        return key.rsplit("/", 1)[-1] or key
+    if kind != "doc" or not key:
+        return _unit_name(unit)
+    row = repo.get(account, space, plugin, "doc", key)
+    if not row or row["deleted"] or row["value"] is None:
+        return key
+    hit = _LABELS.get((account, space, plugin, key))
+    if hit and hit[0] == row["sha256"]:
+        return hit[1]
+    label = key
+    try:
+        value = json.loads(data_crypto.open_text(row["value"], account))
+        if isinstance(value, Mapping):
+            label = next((str(value[f]).strip()[:80] for f in LABEL_FIELDS
+                          if isinstance(value.get(f), str) and value[f].strip()), key)
+    except Exception:  # noqa: BLE001 — a doc that can't be read here is named by its key
+        label = key
+    if len(_LABELS) >= _LABELS_MAX:
+        _LABELS.clear()
+    _LABELS[(account, space, plugin, key)] = (str(row["sha256"]), label)
+    return label
+
+
+def _seen_keys(plugin: str, keys: Any) -> list[str]:
+    """The doc keys and file paths a pull changed that the plugin reads: a team copy's items
+    under a ``data_local`` prefix never are (it reads this PC's own instead)."""
+    return [str(k) for k in keys or [] if not scopes.is_local_key(plugin, str(k))]
+
+
 def _row_of_unit(unit: str) -> tuple[str, str] | None:
     kind, _, key = unit.partition(":")
     return (kind, key) if kind in KINDS and key else None
@@ -2456,8 +2496,9 @@ def run(account: str, space: str, plugin: str, backend: Any, *, push: bool | Non
     asked (``push=True`` / ``pull=True``, with an optional ``message`` for the push). A
     round backing off is skipped unless ``force``; nothing moves while the space is held
     (:func:`held_reason`). The plugin's first round on the new sync reconciles this PC's
-    copy first (:func:`_reconcile_v1`). Returns ``{state, changed, error, pushed, pulled,
-    conflicts, tree}`` (``changed``: ``[plugin]`` when a pull changed its data; ``tree``:
+    copy first (:func:`_reconcile_v1`). Returns ``{state, changed, keys, error, pushed, pulled,
+    conflicts, tree}`` (``changed``: ``[plugin]`` when a pull changed data the plugin reads;
+    ``keys``: those doc keys and file paths, never this PC's own items; ``tree``:
     folder units a pull changed here, with ``reload`` when the plugin restarts for them;
     ``queued``: changesets waiting behind Update now); ``busy`` when another round holds
     the space. ``pull=True`` (asked for) also lands what waits behind Update now.
@@ -2472,7 +2513,7 @@ def run(account: str, space: str, plugin: str, backend: Any, *, push: bool | Non
     do_pull = (not manual) if pull is None else bool(pull)
     do_push = (not manual) if push is None else bool(push)
     out: dict[str, Any] = {"state": "ok", "changed": [], "error": "", "pushed": 0, "pulled": 0, "conflicts": 0,
-                           "tree": 0}
+                           "tree": 0, "keys": []}
     held_by = held_reason(account, space)
     if held_by:
         return {**out, "state": repo.sync_get(account, space)["state"], "error": held_by}
@@ -2489,14 +2530,16 @@ def run(account: str, space: str, plugin: str, backend: Any, *, push: bool | Non
                     return {**out, "skipped": True}
                 got = _reconcile_v1(ctx, now=now)
                 _deliver(ctx, got.get("changed") or [])
+                keys = _seen_keys(plugin, got.get("changed"))
                 out.update(state=got["state"], error=got.get("error", ""), pulled=got.get("pulled", 0),
-                           conflicts=got.get("conflicts", 0), changed=[plugin] if got.get("changed") else [])
+                           conflicts=got.get("conflicts", 0), changed=[plugin] if keys else [], keys=keys)
             if do_pull and out["state"] == "ok":
                 got = _pull_round(ctx, now=now, apply_now=pull is True, progress=progress)
+                keys = [*out["keys"], *(k for k in _seen_keys(plugin, got.get("changed")) if k not in out["keys"])]
                 out.update(state=got["state"], error=got.get("error", ""), pulled=out["pulled"] + got.get("pulled", 0),
                            conflicts=out["conflicts"] + got.get("conflicts", 0), tree=int(got.get("tree") or 0),
-                           queued=int(got.get("queued") or 0),
-                           changed=[plugin] if got.get("changed") or got.get("tree") or out["changed"] else [])
+                           queued=int(got.get("queued") or 0), keys=keys,
+                           changed=[plugin] if keys or got.get("tree") or out["changed"] else [])
             if do_push and out["state"] == "ok":
                 sent = _push_round(ctx, message=message, now=now, pull=pull is not False,
                                    quiet_s=tf.QUIET_S if quiet_s is None else quiet_s)
@@ -2646,7 +2689,7 @@ def _tell_lock_lost(lk: Mapping[str, Any], *, kept: bool) -> None:
 
         push_ui_event({"type": "plugin_lock_lost", "plugin_id": plugin, "unit": unit, "unit_name": name,
                        "holder": holder, "kept": kept, "detail": detail})
-        push_ui_event({"type": "plugin_scope_changed", "plugins": [plugin]})
+        push_ui_event({"type": "plugin_scope_changed", "plugins": [plugin], "status": True})
     except Exception:  # noqa: BLE001 — the bar's lock list says it on its next read
         _log.debug("telling about a lost lock failed", exc_info=True)
 
@@ -2871,9 +2914,10 @@ def presence_blob(account: str, space: str, plugins: Iterable[str], *, now: floa
             viewing = False
         out[plugin] = {
             "viewing": viewing,
-            "editing": [{"unitName": names.get((plugin, a["unit"])) or _unit_name(a["unit"]), "actor": a["actor"],
-                         "ducky": a["ducky"], "since": float(a["since"])}
-                        for a in acts if a["plugin_id"] == plugin],
+            "editing": [{"unitName": names.get((plugin, a["unit"])) or unit_label(account, space, plugin, a["unit"]),
+                         "actor": a["actor"], "ducky": a["ducky"], "since": float(a["since"])}
+                        for a in acts if a["plugin_id"] == plugin
+                        and not scopes.is_local_key(plugin, _unit_name(a["unit"]))],
             "locks": sorted(lk["name"] or _unit_name(lk["unit"]) for lk in mine if lk["plugin_id"] == plugin),
         }
     # "label", never "device": a roster row's "device" is the device id the server adds.

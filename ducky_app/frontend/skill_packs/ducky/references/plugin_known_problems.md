@@ -44,7 +44,7 @@ Check these before you tell the user a plugin works.
 | The iframe is sandboxed without same-origin or modals: `alert`, `confirm`, `prompt`, `localStorage`, cookies and `window.top` navigation fail; POSTs to `/__panel_*` are rejected. | Show messages in the page (`dk-error`, a confirm row); keep state with `prefs.*` / `data.*`; talk to the host with the bridge. |
 | Hidden tabs keep running (timers, polling, video) and `document.visibilityState` stays `visible`. | Pause on `panel.visibility` with `visible: false`. |
 | Moving a tab to a floating window reloads the page. | Restore from `prefs` / `data` on load. |
-| Scope switches and syncs change the data under an open panel. | Re-read on `plugin_scope_changed`. |
+| Scope switches and syncs change the data under an open panel. | On `plugin_scope_changed` with `reason: "synced"`, re-read the `keys` it lists and keep the open item; start over only on `"switched"`. |
 | Loading your own scripts with `fetch` + `eval`. | `<script src>` / `<link href>` for your files. |
 | Anything from the internet (CDN scripts like unpkg or Tailwind's, outside stylesheets or fonts, `import` from a URL) is blocked, so the panel loads broken or unstyled. Validate rejects it. | `ducky_plugin_vendor` the exact npm version into `ui/vendor/` and load it from there; for styling use the UI kit and Appearance variables. |
 | `prefs.set` keeps only booleans, strings, numbers and `null`. | Store objects with `data.put`. |

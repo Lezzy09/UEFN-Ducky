@@ -195,7 +195,7 @@ The kit already does this; prefer the kit.
 window.addEventListener("message", (ev) => {
   const e = ev.data?.channel === "uefn-plugin-ui" ? ev.data.event : null;
   if (e?.type === "panel.visibility") e.visible ? resume() : pause();
-  if (e?.type === "plugin_scope_changed") reload();  // data scope switched or synced
+  if (e?.type === "plugin_scope_changed") reload(e.reason === "synced" ? e.keys : null);  // merge, or start over
 });
 ```
 

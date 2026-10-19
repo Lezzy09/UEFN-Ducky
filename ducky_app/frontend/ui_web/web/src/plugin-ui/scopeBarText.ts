@@ -425,61 +425,124 @@ export function statusPhrase(status: PluginScopeStatus, nowMs: number): StatusPh
   return { key: "up_to_date", text: ["Up to date", status.head ? `#${status.head}` : "", when].filter(Boolean).join(" · "), tone: "" };
 }
 
-/** One person's activity in this plugin, flattened. `doing` "" means elsewhere in the space. */
-export type PersonRow = {
+/** editing: they (or one of their duckies) changed something here in the last 2 minutes;
+ * viewing: the plugin is open on their PC; away: in the space, not in this plugin. */
+export type PresenceState = "editing" | "viewing" | "away";
+
+/** One person on one PC, as the bar's avatars and the drawer's People table show them. */
+export type Presence = {
+  key: string;
+  /** The person (their user id, else name): their avatar's colour comes from it. */
+  id: string;
   name: string;
   device: string;
-  doing: string;
-  unitName: string;
-  actor: string;
-  ducky: string;
+  /** This PC. */
+  me: boolean;
+  state: PresenceState;
+  /** What they edit here themselves, by name, each once. */
+  editing: string[];
+  /** What their duckies edit here. */
+  duckies: { ducky: string; unitName: string }[];
+  /** Epoch seconds: since when they edit (their oldest edit still going), else 0. */
   since: number;
 };
 
-/** The people in a space as rows for this plugin (never this PC). A roster row with a
- * `plugins` map gives one row per unit being edited, or one viewing row. */
-export function peopleRows(people: PluginScopePerson[] | undefined, pluginId: string): PersonRow[] {
-  const rows: PersonRow[] = [];
+const STATE_ORDER: Record<PresenceState, number> = { editing: 0, viewing: 1, away: 2 };
+
+/** The people in a space, one row per person and PC (every edit of theirs folded in): this
+ * PC first, then whoever edits, views, then the rest, by name. A roster row with a
+ * `plugins` map says what each does in `pluginId`; an older activity row says it itself. */
+export function presence(people: PluginScopePerson[] | undefined, pluginId: string): Presence[] {
+  const rows = new Map<string, Presence>();
   for (const p of people ?? []) {
-    if (p.me) continue;
-    const base = { name: p.name || p.user_name || p.user || "Someone", device: p.device || "", since: p.since ?? 0 };
-    if (!p.plugins) {
-      rows.push({ ...base, doing: p.doing || "", unitName: p.unitName || "", actor: p.actor || "user", ducky: p.ducky || "" });
-      continue;
+    const name = p.name || p.user_name || p.user || "Someone";
+    const device = p.device || "";
+    const key = `${p.me ? "me" : p.user || name}:${device}`;
+    const row: Presence = rows.get(key)
+      ?? { key, id: p.user || name, name, device, me: Boolean(p.me), state: "away", editing: [], duckies: [], since: 0 };
+    rows.set(key, row);
+    const here = p.plugins ? p.plugins[pluginId] : undefined;
+    const edits = p.plugins
+      ? here?.editing ?? []
+      : p.doing === "editing" ? [{ unitName: p.unitName, actor: p.actor, ducky: p.ducky, since: p.since }] : [];
+    const viewing = p.plugins ? Boolean(here?.viewing) : p.doing === "viewing";
+    for (const e of edits) {
+      const unit = e.unitName || "";
+      if (e.actor === "agent") {
+        if (!row.duckies.some((d) => d.ducky === (e.ducky || "") && d.unitName === unit)) {
+          row.duckies.push({ ducky: e.ducky || "", unitName: unit });
+        }
+      } else if (unit && !row.editing.includes(unit)) {
+        row.editing.push(unit);
+      }
+      const since = e.since ?? 0;
+      if (since && (!row.since || since < row.since)) row.since = since;
     }
-    const here = p.plugins[pluginId];
-    const editing = here?.editing ?? [];
-    for (const e of editing) {
-      rows.push({
-        ...base, doing: "editing", unitName: e.unitName || "", actor: e.actor || "user", ducky: e.ducky || "",
-        since: e.since ?? base.since,
-      });
-    }
-    if (!editing.length) rows.push({ ...base, doing: here?.viewing ? "viewing" : "", unitName: "", actor: "user", ducky: "" });
+    if (edits.length) row.state = "editing";
+    else if (viewing && row.state === "away") row.state = "viewing";
   }
-  return rows;
+  return [...rows.values()].sort((a, b) =>
+    Number(b.me) - Number(a.me) || STATE_ORDER[a.state] - STATE_ORDER[b.state] || a.name.localeCompare(b.name));
 }
 
-/** "Ana (editing MEGA_Duel_Stadium)", "Ben's ducky Builder", "Cy". */
-function personLabel(row: PersonRow): string {
-  if (row.actor === "agent") return `${row.name}'s ducky ${row.ducky || "ducky"}`;
-  return row.doing === "editing" && row.unitName ? `${row.name} (editing ${row.unitName})` : row.name;
+/** The others in this plugin now (viewing or editing): who the bar's avatars show. */
+export const othersHere = (rows: Presence[]) => rows.filter((row) => !row.me && row.state !== "away");
+
+/** "Untitled island 1", "Untitled island 1 and Trailer 1", "Untitled island 1 +2". */
+function unitsText(units: string[]): string {
+  if (units.length <= 2) return listText(units);
+  return `${units[0]} +${units.length - 1}`;
 }
 
-/** Who else is in this plugin: "with Ana (editing X), Ben's ducky Builder +3" ("" when nobody). */
-export function peopleText(rows: PersonRow[], max = 2): string {
-  const labels = [...new Set(rows.filter((r) => r.doing).map(personLabel))];
-  if (!labels.length) return "";
-  const rest = labels.length - max;
-  return `with ${labels.slice(0, max).join(", ")}${rest > 0 ? ` +${rest}` : ""}`;
+/** What one person does here, for the drawer and an avatar's label: "Editing Untitled
+ * island 1", "Their ducky Builder is editing Arena", "Viewing", "Not in Forge". */
+export function presenceText(row: Presence, plugin = "this plugin"): string {
+  const parts: string[] = [];
+  if (row.editing.length) parts.push(`Editing ${unitsText(row.editing)}`);
+  else if (row.state === "editing" && !row.duckies.length) parts.push("Editing");
+  for (const d of row.duckies) {
+    const who = `${row.me ? "Your" : "Their"} ducky${d.ducky ? ` ${d.ducky}` : ""}`;
+    parts.push(d.unitName ? `${who} is editing ${d.unitName}` : `${who} is editing`);
+  }
+  if (parts.length) return parts.join(" · ");
+  return row.state === "viewing" ? "Viewing" : `Not in ${plugin}`;
 }
 
-/** What a person is doing, for the drawer's People table. */
-export function doingText(row: PersonRow): string {
-  if (row.actor === "agent") return `Ducky ${row.ducky ? `${row.ducky} ` : ""}editing ${row.unitName}`.trim();
-  if (row.doing === "editing") return row.unitName ? `Editing ${row.unitName}` : "Editing";
-  if (row.doing === "viewing") return "Viewing";
-  return "Not in this plugin";
+/** The bar's line beside the avatars ("" when nobody else is here): whoever edits first,
+ * "Ana is editing Untitled island 1 · 2 more here"; else "Ana is here", "Ana and Ben are
+ * here", "Ana, Ben +2 are here". */
+export function hereText(rows: Presence[]): string {
+  const others = othersHere(rows);
+  if (!others.length) return "";
+  const editor = others.find((row) => row.state === "editing");
+  if (editor) {
+    const unit = editor.editing.length ? unitsText(editor.editing) : editor.duckies[0]?.unitName || "";
+    const what = editor.editing.length || !editor.duckies.length
+      ? `${editor.name} is editing${unit ? ` ${unit}` : ""}`
+      : `${editor.name}'s ducky${editor.duckies[0].ducky ? ` ${editor.duckies[0].ducky}` : ""} is editing${unit ? ` ${unit}` : ""}`;
+    const more = others.length - 1;
+    return more ? `${what} · ${more} more here` : what;
+  }
+  if (others.length === 1) return `${others[0].name} is here`;
+  if (others.length === 2) return `${others[0].name} and ${others[1].name} are here`;
+  return `${others[0].name}, ${others[1].name} +${others.length - 2} are here`;
+}
+
+/** "IK" for "iliya kovachki", "A" for "Ana" or "ana@x.com". */
+export function initials(name: string): string {
+  const words = (name.split("@")[0] || name).split(/[\s._-]+/).filter(Boolean);
+  const letters = words.length > 1 ? words[0][0] + words[words.length - 1][0] : (words[0] || "?")[0];
+  return letters.toUpperCase();
+}
+
+/** Avatar colours (`plugin-scope-avatar--tone-N`). */
+export const AVATAR_TONES = 12;
+
+/** A steady colour (0 to AVATAR_TONES - 1) per person, so their avatar keeps it on every PC. */
+export function personTone(key: string): number {
+  let h = 0;
+  for (let i = 0; i < key.length; i += 1) h = (h * 31 + key.charCodeAt(i)) % 7919;
+  return h % AVATAR_TONES;
 }
 
 /** "2 locked · You hold 1" ("" when there are none). */

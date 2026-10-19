@@ -532,6 +532,10 @@ def team_fields(account: str, space: str, plugin: str, *, state: str = "ok") -> 
 
     from backend.store.repos import plugin_data as repo
     from backend.store.repos import space_vcs
+    from backend.uefn_plugins.vcs_engine import unit_label
+
+    def name(kind: str, key: str) -> str:
+        return unit_label(account, space, plugin, f"{kind}:{key}") if kind in ("doc", "asset") else key
 
     now = time.time()
     head = space_vcs.head_get(account, space, plugin)
@@ -540,14 +544,14 @@ def team_fields(account: str, space: str, plugin: str, *, state: str = "ok") -> 
     outgoing = []
     for r in repo.pending_items(account, space, plugin):
         queued = r["sync_state"] or ("sending" if (r["kind"], r["key"]) in sending else "queued")
-        outgoing.append({"kind": r["kind"], "key": r["key"], "name": r["key"], "size": int(r["size"]),
+        outgoing.append({"kind": r["kind"], "key": r["key"], "name": name(r["kind"], r["key"]), "size": int(r["size"]),
                          "deleted": bool(r["deleted"]), "state": queued, "reason": r["sync_error"],
                          "attempts": int(r["attempts"])})
     pct = re.search(r"(\d+)%", str(head["error"] or "")) if head["state"] == "importing" else None
     out: dict[str, Any] = {
         "engine": "v2" if v2 else "v1",
         "changes": {"outgoing": outgoing},
-        "conflicts": [{"kind": c["kind"], "key": c["key"], "name": c["key"], "unit": c["unit"],
+        "conflicts": [{"kind": c["kind"], "key": c["key"], "name": name(c["kind"], c["key"]), "unit": c["unit"],
                        "reason": c["reason"], "by": person(c["theirs_by"]) if c["theirs_by"] else "",
                        "at": c["theirs_at"],
                        "theirsSeq": int(c["theirs_seq"])} for c in space_vcs.conflicts(account, space, plugin)],
@@ -567,7 +571,7 @@ def team_fields(account: str, space: str, plugin: str, *, state: str = "ok") -> 
         )
         out["changes"].update(
             incoming=max(0, int(head["remote_seq"]) - int(head["seq"])),
-            blocked=[{"kind": b["kind"], "key": b["key"], "name": b["key"], "error": b["error"],
+            blocked=[{"kind": b["kind"], "key": b["key"], "name": name(b["kind"], b["key"]), "error": b["error"],
                       "attempts": int(b["attempts"])} for b in space_vcs.blocked(account, space, plugin)],
         )
         if state == "ok" and head["state"] in ("offline", "error", "retry"):
@@ -889,11 +893,13 @@ def team_unit(plugin: str, unit: str) -> str:
     raise ValueError(f"invalid unit: {unit!r} (use doc:<key> or asset:<path>)")
 
 
-def _changed(plugin: str) -> None:
+def _changed(plugin: str, *, data: bool = True) -> None:
+    """The plugin's bars read their status again; ``data``: its panels re-read too (a
+    resolve or restore changed its data; a lock or the mode didn't)."""
     try:
         from frontend.ui_web.agent_modes import push_ui_event
 
-        push_ui_event({"type": "plugin_scope_changed", "plugins": [plugin]})
+        push_ui_event({"type": "plugin_scope_changed", "plugins": [plugin], **({} if data else {"status": True})})
     except Exception:  # noqa: BLE001 — the next status read shows it
         _log.debug("announcing a team change failed", exc_info=True)
 
@@ -920,7 +926,7 @@ def team_lock(plugin: str, unit: str, action: str = "acquire", *, name: str = ""
         out = vcs_engine.ask(account, space, plugin, backend, unit)
     else:
         raise ValueError("action must be acquire, release, break or ask")
-    _changed(plugin)
+    _changed(plugin, data=False)
     return {"unit": unit, **out}
 
 
@@ -1109,7 +1115,7 @@ def team_mode(plugin: str, mode: str) -> dict[str, Any]:
 
     account, space, _ = _team(plugin)  # Manual mode is the new sync's; the older one never reads it
     out = vcs_engine.set_mode(account, space, plugin, mode)
-    _changed(plugin)
+    _changed(plugin, data=False)
     return out
 
 
@@ -1132,7 +1138,7 @@ def team_sync(plugin: str, *, push: bool | None = None, pull: bool | None = None
         if out.get("tree"):  # its folder files changed: reload it, or tell its panels
             vcs_engine.after_pull(plugin)
         if on_done is not None:
-            on_done(out)
+            on_done({**out, "keys": {plugin: list(out.get("keys") or [])}})
 
     threading.Thread(target=_work, name="space-team-sync", daemon=True).start()
     return {"ok": True, "started": True}

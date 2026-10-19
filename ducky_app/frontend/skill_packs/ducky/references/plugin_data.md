@@ -51,8 +51,18 @@ encrypted on disk, and syncs shared copies.
   uses; `"local"` or a space id switches it. Switch only when the user asks: it asks
   them first, nothing is copied, open panels are told, the new copy syncs, and the
   plugin restarts on it with its open panels reloaded.
-- Panels get `plugin_scope_changed` when the scope switches or a sync brings new data:
-  re-read your docs. The backend reads the scope fresh on every call.
+- Panels get `plugin_scope_changed` with a `reason`. `"synced"`: a sync brought
+  teammates' changes into the same copy; `keys` lists the doc keys and file paths that
+  changed (absent: re-read everything). Merge them into what is on screen and keep the
+  open item, selection and scroll: never close what the person has open. `"switched"`:
+  whose data it is changed (account, Local or a space): start over. Bursts arrive as one
+  push, and a hidden panel gets one when shown. The backend reads the scope fresh on
+  every call.
+- Items that belong to one PC (diagnostics, per-device state, a "last opened" note) go
+  under a prefix listed in `"data_local": ["qa.", "device/"]` at the top of
+  `plugin.json`: they stay in the Local copy whatever copy the plugin shows, never sync,
+  and never show teammates as someone editing them. Without it, every write of such an
+  item goes out to the whole team and lands in their open panels.
 - A backend that caches docs in memory registers `api.data.on_change(callback)` once in
   `register(api)`. After a sync changed this plugin's data, `callback(keys)` gets the doc
   keys and file paths that changed: drop those from the cache. It runs in every process

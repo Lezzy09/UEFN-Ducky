@@ -241,6 +241,61 @@ def test_sensitive_docs_stay_personal_and_never_land_in_a_shared_copy(who: _Who,
     assert [r["key"] for r in repo.rows(ana, "spaceT", "discord", "doc")] == ["channel"]
 
 
+def test_a_pcs_own_items_stay_local_whatever_copy_the_plugin_shows(who: _Who, fake_spaces: FakeSpaces) -> None:
+    """``"data_local": ["qa.", "device/"]``: what a panel notes about this PC (Island Media
+    Kit wrote a diagnostics doc on every load) stays here. Before, each one went to the
+    whole team, showed as someone editing it, and reset the open panels on every PC."""
+    import json
+
+    from backend.uefn_plugins.data_crypto import seal_text
+    from backend.uefn_plugins.store import PLUGIN_MANIFEST, plugin_dir
+
+    pid = "island-media-kit"
+    root = plugin_dir(pid)
+    root.mkdir(parents=True)
+    (root / PLUGIN_MANIFEST).write_text(json.dumps({"id": pid, "label": "Island Media Kit",
+                                                    "data_local": ["qa.", "device/"]}))
+    ana = open_space(fake_spaces, who, "ana@x.org", "spaceT", "Alpha Studio", plugin=pid)
+    data = PluginData(pid)
+    data.put("project.a", {"name": "Island"})
+    data.put("qa.boot.1", {"phase": "mounted"})
+    data.put_file("device/log.txt", b"hello")
+    data.put_file("art/logo.png", b"png")
+    # One a teammate's older version of the plugin sent: in the team copy, never read here.
+    raw = scopes.encode_doc({"phase": "theirs"})
+    repo.put(ana, "spaceT", pid, "doc", "qa.boot.9", value=seal_text(raw.decode("utf-8"), ana), size=len(raw),
+             sha256=hashlib.sha256(raw).hexdigest(), dirty=False, rev=3)
+
+    assert [r["key"] for r in repo.rows(ana, "spaceT", pid, "doc")] == ["project.a", "qa.boot.9"]
+    assert [r["key"] for r in repo.rows(ana, "spaceT", pid, "asset")] == ["art/logo.png"]
+    assert [r["key"] for r in repo.rows(ana, scopes.PERSONAL, pid, "doc")] == ["qa.boot.1"]
+    assert [r["key"] for r in repo.rows(ana, scopes.PERSONAL, pid, "asset")] == ["device/log.txt"]
+    assert repo.count_dirty(ana, "spaceT", pid) == 2  # project.a and art/logo.png go out, nothing of qa.
+    assert data.get("qa.boot.1") == {"phase": "mounted"} and data.get("qa.boot.9") is None
+    assert data.keys() == ["project.a", "qa.boot.1"]
+    assert data.keys("qa.") == data.keys("qa.boot.") == ["qa.boot.1"]
+    assert data.keys("project.") == ["project.a"]
+    assert data.items("q") == {"qa.boot.1": {"phase": "mounted"}}
+    assert [f["path"] for f in data.files()] == ["art/logo.png", "device/log.txt"]
+    assert data.get_file("device/log.txt") == b"hello" and data.has_file("device/log.txt")
+
+    # A paused team copy is read-only; this PC's own items aren't the team's to pause.
+    repo.sync_put(ana, "spaceT", state="paused")
+    with pytest.raises(scopes.ReadOnlyScope):
+        data.put("project.b", {"name": "B"})
+    data.put("qa.boot.2", {"phase": "boot"})
+    assert data.delete("qa.boot.1") is True and data.delete_file("device/log.txt") is True
+    assert data.keys("qa.") == ["qa.boot.2"] and data.files("device/") == []
+    repo.sync_put(ana, "spaceT", state="ok")
+
+    # Copying Local into the team never takes them along.
+    scopes.link_plugin(pid, scopes.PERSONAL)
+    data.put("project.local", {"name": "Mine"})
+    assert data.keys() == ["project.local", "qa.boot.2"]
+    scopes.copy_local_into(pid, "spaceT")
+    assert [r["key"] for r in repo.rows(ana, "spaceT", pid, "doc")] == ["project.a", "project.local", "qa.boot.9"]
+
+
 def test_paused_is_read_only_and_access_lost_locks_then_the_provider_drops_it(who: _Who,
                                                                              fake_spaces: FakeSpaces) -> None:
     from backend.store.repos import plugin_kv

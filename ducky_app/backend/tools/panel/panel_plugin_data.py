@@ -142,13 +142,9 @@ def ducky_plugin_data_scope(id: str, scope: str = "", pretty: bool = False) -> s
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     push_ui_event({"type": "plugin_scope_changed", "plugins": [pid]})
     try:
-        sync_active(
-            pid,
-            force=True,
-            on_done=lambda r: push_ui_event(
-                {"type": "plugin_scope_changed", "plugins": list(r.get("changed") or []), "synced": True}
-            ),
-        )
+        from backend.uefn_plugins.sync_scheduler import synced_event
+
+        sync_active(pid, force=True, on_done=lambda r: push_ui_event(synced_event(r)))
     except Exception:
         pass
     if before != scope_id:

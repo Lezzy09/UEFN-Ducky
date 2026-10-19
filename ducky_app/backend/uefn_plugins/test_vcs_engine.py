@@ -924,6 +924,47 @@ def test_on_change_tells_the_plugin_which_keys_a_pull_changed(pc: PC, ben: Ben,
     assert scopes.deliver_data_changes(PLUGIN) == 0
 
 
+def test_a_pull_names_the_keys_it_changed_and_never_this_pcs_own_items(pc: PC, ben: Ben,
+                                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    """Open panels merge the keys a pull changed. A teammate's own items under a
+    ``data_local`` prefix (Island Media Kit's per-load diagnostics) are never news here:
+    they used to reset every open panel on every PC."""
+    from backend.uefn_plugins.sync_scheduler import synced_event
+
+    monkeypatch.setattr(scopes, "local_prefixes", lambda plugin: ("qa.",) if plugin == PLUGIN else ())
+    ben.put_doc("qa.boot.1", {"phase": "mounted"})
+    out = pc.run()
+    assert (out["state"], out["changed"], out["keys"]) == ("ok", [], [])
+    ben.put_doc("card.a", {"v": 1})
+    ben.put_file("img/a.png", b"A")
+    out = pc.run()
+    assert (out["changed"], out["keys"]) == ([PLUGIN], ["card.a", "img/a.png"])
+    assert synced_event({"changed": [PLUGIN], "keys": {PLUGIN: out["keys"], "other": ["x"]}}) == {
+        "type": "plugin_scope_changed", "plugins": [PLUGIN], "synced": True, "keys": {PLUGIN: ["card.a", "img/a.png"]}}
+    assert synced_event({"changed": [], "state": "ok"}) == {"type": "plugin_scope_changed", "plugins": [], "synced": True}
+
+
+def test_presence_and_the_drawer_name_a_doc_by_its_own_name(pc: PC, monkeypatch: pytest.MonkeyPatch) -> None:
+    """"Editing Untitled island 1", never "Editing qa.panel.2de0…": a doc's name, title or
+    label field names it, a file its file name; this PC's own items never show."""
+    from backend.uefn_plugins import spaces
+
+    monkeypatch.setattr(scopes, "local_prefixes", lambda plugin: ("qa.",) if plugin == PLUGIN else ())
+    pc.put_raw(PLUGIN, "project.mvbtpazj", {"name": "Untitled island 1", "clips": []})
+    pc.put_raw(PLUGIN, "seq.1", {"title": "  Trailer 1 "})
+    pc.put_raw(PLUGIN, "card.zed", {"hp": 2})
+    for unit in ("doc:project.mvbtpazj", "doc:seq.1", "doc:card.zed", "doc:qa.panel.2de0", "asset:img/art/logo.png"):
+        space_vcs.activity_note(pc.account, SPACE, PLUGIN, unit)
+    blob = vcs_engine.presence_blob(pc.account, SPACE, [PLUGIN])
+    names = sorted(e["unitName"] for e in blob["plugins"][PLUGIN]["editing"])
+    assert names == ["Trailer 1", "Untitled island 1", "card.zed", "logo.png"]
+    pc.put_raw(PLUGIN, "project.mvbtpazj", {"name": "Crash Course"})
+    assert vcs_engine.unit_label(pc.account, SPACE, PLUGIN, "doc:project.mvbtpazj") == "Crash Course"
+    assert vcs_engine.unit_label(pc.account, SPACE, PLUGIN, "doc:gone") == "gone"
+    outgoing = {o["key"]: o["name"] for o in spaces.team_fields(pc.account, SPACE, PLUGIN)["changes"]["outgoing"]}
+    assert (outgoing["project.mvbtpazj"], outgoing["card.zed"]) == ("Crash Course", "card.zed")
+
+
 def test_presence_says_who_edits_what_and_keeps_the_roster(pc: PC, ben: Ben, world: conf.FakeWorld) -> None:
     space_vcs.activity_note(pc.account, SPACE, PLUGIN, "doc:card.pip", actor="agent", ducky="Builder")
     assert vcs_engine.beat(pc.account, SPACE, pc.backend, [PLUGIN])["ok"]

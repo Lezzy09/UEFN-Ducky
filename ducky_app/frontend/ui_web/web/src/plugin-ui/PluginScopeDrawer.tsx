@@ -15,7 +15,6 @@ import {
   conflictText,
   DATA_AT_REST,
   discardConfirm,
-  doingText,
   dropConfirm,
   durationText,
   folderNote,
@@ -29,12 +28,14 @@ import {
   listText,
   notShared,
   outgoingStateText,
-  peopleRows,
+  presence,
+  presenceText,
   refusedFolders,
   restoreConfirm,
   storageLine,
   unitSizeText,
 } from "./scopeBarText";
+import { PresenceAvatar } from "./PresenceAvatar";
 
 /** Rows of a long table listed before "Show all". */
 const ROWS_SHOWN = 20;
@@ -265,7 +266,7 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
     s.email ? `Signed in as ${s.email}` : "",
     s.members ? `${s.members} member${s.members === 1 ? "" : "s"}` : "",
   ].filter(Boolean).join(" · ");
-  const people = peopleRows(s.people, pluginId);
+  const people = presence(s.people, pluginId);
   const locks = s.locks ?? [];
   const outgoing = outgoingRows(s);
   const shownOut = allRows ? outgoing : outgoing.slice(0, ROWS_SHOWN);
@@ -323,18 +324,23 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
 
       {s.people !== undefined ? (
         <section className="plugin-scope-drawer__section">
-          <h4 className="plugin-scope-drawer__title">People</h4>
+          <h4 className="plugin-scope-drawer__title">People in {label}</h4>
           {people.length ? (
-            <table className="plugin-scope-drawer__table">
+            <table className="plugin-scope-drawer__table plugin-scope-drawer__table--people">
               <thead>
-                <tr><th>Member</th><th>Device</th><th>Doing</th><th>Since</th></tr>
+                <tr><th>Member</th><th>PC</th><th>In {plugin}</th><th>Since</th></tr>
               </thead>
               <tbody>
-                {people.map((row, i) => (
-                  <tr key={`${row.name}:${row.device}:${row.unitName}:${i}`}>
-                    <td>{row.name}</td>
+                {people.map((row) => (
+                  <tr key={row.key} className={`plugin-scope-people--${row.state}`}>
+                    <td>
+                      <span className="plugin-scope-people__who">
+                        <PresenceAvatar row={row} plugin={plugin} labelled={false} />
+                        <span>{row.me ? `You (${row.name})` : row.name}</span>
+                      </span>
+                    </td>
                     <td>{row.device}</td>
-                    <td>{doingText(row)}</td>
+                    <td className="plugin-scope-people__doing">{presenceText(row, plugin)}</td>
                     <td>{row.since ? clockText(row.since) : ""}</td>
                   </tr>
                 ))}
@@ -343,6 +349,9 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
           ) : (
             <p className="plugin-scope-drawer__empty">Nobody else is here right now.</p>
           )}
+          {people.length && people.every((row) => row.me) ? (
+            <p className="plugin-scope-drawer__empty">Nobody else is here right now.</p>
+          ) : null}
         </section>
       ) : null}
 

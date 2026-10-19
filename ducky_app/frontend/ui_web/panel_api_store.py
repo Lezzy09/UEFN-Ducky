@@ -978,7 +978,8 @@ class PanelApiStoreMixin:
             return {"ok": False, "error": str(exc)}
         if unsent is not None:
             out = {**out, "unsent": unsent, "unsentLabel": str(leaving["label"])}
-        self._push_panel({"type": "plugin_scope_changed", "plugins": [pid]})
+        # Its bar reads the new scope; its panels start over with the "switched" push below.
+        self._push_panel({"type": "plugin_scope_changed", "plugins": [pid], "status": True})
         sync_active(pid, force=True, on_done=self._scope_synced)
         if out.get("scope", {}).get("spaceId", "") == ("" if before == "personal" else before) and not (
                 folders and folders.get("changed")):
@@ -1017,7 +1018,7 @@ class PanelApiStoreMixin:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
         if out.get("ok"):
-            self._push_panel({"type": "plugin_scope_changed", "plugins": [pid]})
+            self._push_panel({"type": "plugin_scope_changed", "plugins": [pid], "status": True})
             sync_active(pid, force=True, on_done=self._scope_synced)
         return out
 
@@ -1169,7 +1170,7 @@ class PanelApiStoreMixin:
 
         out = self._team_call(plugin_id, team_mode, str(mode or ""))
         if out.get("ok"):
-            self._push_panel({"type": "plugin_scope_changed", "plugins": [str(plugin_id or "")]})
+            self._push_panel({"type": "plugin_scope_changed", "plugins": [str(plugin_id or "")], "status": True})
         return out
 
     def plugin_scope_push(self, plugin_id: str, message: str = "") -> dict[str, Any]:
@@ -1229,9 +1230,9 @@ class PanelApiStoreMixin:
         return provider().open_web(space_id=scope["id"], plugin=pid, page="plugins")
 
     def _scope_synced(self, result: dict[str, Any]) -> None:
-        self._push_panel(
-            {"type": "plugin_scope_changed", "plugins": list(result.get("changed") or []), "synced": True}
-        )
+        from backend.uefn_plugins.sync_scheduler import synced_event
+
+        self._push_panel(synced_event(result))
 
     def plugin_prefs_get_all(self) -> dict[str, Any]:
         """Disk-backed plugin UI prefs (survives WebView localStorage wipes)."""

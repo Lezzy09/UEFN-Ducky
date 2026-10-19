@@ -6,7 +6,6 @@ import {
   clockText,
   conflictText,
   discardConfirm,
-  doingText,
   dropConfirm,
   durationText,
   firstShareText,
@@ -15,15 +14,19 @@ import {
   folderUnitKey,
   folderUnitLockId,
   folderUnitStateText,
+  hereText,
   holdsFolderUnit,
+  initials,
   listText,
   locksText,
   lostText,
   notShared,
+  othersHere,
   outgoingStateText,
-  peopleRows,
-  peopleText,
+  personTone,
   pickedText,
+  presence,
+  presenceText,
   refusedWriteText,
   resetConfirm,
   resetText,
@@ -211,23 +214,57 @@ describe("the bar's one status phrase", () => {
     expect(say(shared({ head: undefined, pending: 1 }))).toBe("1 to send");
   });
 
-  it("says who else is here, at most two names then +N, never this PC", () => {
+  it("one row per person and PC: this PC first, then who edits, views, the rest", () => {
     const roster = [
-      { user: "u1", user_name: "Ana", device: "ANA-PC", plugins: { forge: { viewing: true, editing: [{ unitName: "MEGA_Duel_Stadium", actor: "user", since: 100 }] } } },
-      { user: "u2", user_name: "Ben", device: "BEN-PC", plugins: { forge: { editing: [{ unitName: "Arena", actor: "agent", ducky: "Builder" }] } } },
-      { user: "u3", user_name: "Cy", plugins: { forge: { viewing: true } } },
-      { user: "u4", user_name: "Di", plugins: { forge: { viewing: true } } },
       { user: "u5", user_name: "Ed", plugins: { other: { viewing: true } } },
-      { user: "me", user_name: "Me", me: true, plugins: { forge: { viewing: true } } },
+      { user: "u3", user_name: "Cy", plugins: { forge: { viewing: true } } },
+      { user: "u2", user_name: "Ben", device: "BEN-PC", plugins: { forge: { editing: [{ unitName: "Arena", actor: "agent", ducky: "Builder" }] } } },
+      { user: "u1", user_name: "Ana", device: "ANA-PC", plugins: { forge: { viewing: true, editing: [
+        { unitName: "MEGA_Duel_Stadium", actor: "user", since: 200 },
+        { unitName: "MEGA_Duel_Stadium", actor: "user", since: 100 },
+        { unitName: "Crate", actor: "user", since: 150 },
+      ] } } },
+      { user: "me", user_name: "Me", me: true, device: "MainPC", plugins: { forge: { viewing: true } } },
     ];
-    const rows = peopleRows(roster, "forge");
-    expect(peopleText(rows)).toBe("with Ana (editing MEGA_Duel_Stadium), Ben's ducky Builder +2");
-    expect(rows.map(doingText)).toEqual([
-      "Editing MEGA_Duel_Stadium", "Ducky Builder editing Arena", "Viewing", "Viewing", "Not in this plugin",
+    const rows = presence(roster, "forge");
+    expect(rows.map((r) => [r.name, r.state])).toEqual([
+      ["Me", "viewing"], ["Ana", "editing"], ["Ben", "editing"], ["Cy", "viewing"], ["Ed", "away"],
     ]);
-    expect(rows[0]).toMatchObject({ name: "Ana", device: "ANA-PC", since: 100 });
-    expect(peopleText(peopleRows([{ name: "Ana", doing: "viewing" }, { name: "Ben", doing: "" }], "forge"))).toBe("with Ana");
-    expect(peopleText([])).toBe("");
+    // Ana's edits fold into one row, each unit once, since her oldest edit.
+    expect(rows[1]).toMatchObject({ device: "ANA-PC", editing: ["MEGA_Duel_Stadium", "Crate"], since: 100 });
+    expect(rows.map((r) => presenceText(r, "Forge"))).toEqual([
+      "Viewing", "Editing MEGA_Duel_Stadium and Crate", "Their ducky Builder is editing Arena", "Viewing", "Not in Forge",
+    ]);
+    expect(othersHere(rows).map((r) => r.name)).toEqual(["Ana", "Ben", "Cy"]);
+    expect(hereText(rows)).toBe("Ana is editing MEGA_Duel_Stadium and Crate · 2 more here");
+  });
+
+  it("the bar's line: whoever edits first, else who is here", () => {
+    const at = (people: Record<string, unknown>[]) => hereText(presence(people, "forge"));
+    const viewing = (name: string) => ({ user: name, user_name: name, plugins: { forge: { viewing: true } } });
+    expect(at([])).toBe("");
+    expect(at([{ user_name: "Me", me: true, plugins: { forge: { viewing: true } } }])).toBe("");
+    expect(at([viewing("Ana")])).toBe("Ana is here");
+    expect(at([viewing("Ana"), viewing("Ben")])).toBe("Ana and Ben are here");
+    expect(at([viewing("Ana"), viewing("Ben"), viewing("Cy"), viewing("Di")])).toBe("Ana, Ben +2 are here");
+    expect(at([{ user_name: "Ben", plugins: { forge: { editing: [{ unitName: "Arena", actor: "agent", ducky: "Builder" }] } } }]))
+      .toBe("Ben's ducky Builder is editing Arena");
+    expect(at([{ user_name: "Ana", plugins: { forge: { editing: [{ unitName: "A" }, { unitName: "B" }, { unitName: "C" }] } } }]))
+      .toBe("Ana is editing A +2");
+    // An older roster's activity rows say it themselves.
+    expect(at([{ name: "Ana", doing: "editing", unitName: "Arena" }, { name: "Ben", doing: "" }])).toBe("Ana is editing Arena");
+  });
+
+  it("avatars: initials and a colour that is the same for a person on every PC", () => {
+    expect(initials("iliya kovachki")).toBe("IK");
+    expect(initials("Ana")).toBe("A");
+    expect(initials("ana.b@x.com")).toBe("AB");
+    expect(initials("")).toBe("?");
+    expect(personTone("u1")).toBe(personTone("u1"));
+    expect(personTone("u1")).not.toBe(personTone("u2"));
+    const tones = new Set(["u1", "u2", "u3", "u4", "ana", "ben", "iliya", "tas"].map(personTone));
+    expect([...tones].every((t) => t >= 0 && t < 12)).toBe(true);
+    expect(tones.size).toBeGreaterThan(4);
   });
 
   it("counts locks: others' and mine", () => {

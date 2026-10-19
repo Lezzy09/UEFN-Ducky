@@ -90,7 +90,10 @@ describe("plugin scope bar", () => {
     expect(await screen.findByText("Locked by Ana: deck (read-only for you)")).toBeTruthy();
     const status = line();
     expect(status.getAttribute("aria-live")).toBe("polite");
-    expect(within(status).getByText("with Ana (editing MEGA_Duel_Stadium), Ben's ducky Builder +1")).toBeTruthy();
+    // Who else is here: their avatars and one line, a button that opens the drawer.
+    const here = within(status).getByRole("button", { name: "Ana is editing MEGA_Duel_Stadium · 2 more here. Show who is here." });
+    expect(here.textContent).toBe("ABCAna is editing MEGA_Duel_Stadium · 2 more here");
+    expect(here.getAttribute("aria-expanded")).toBe("false");
     expect(within(status).getByText("1 locked · You hold 1")).toBeTruthy();
     // Left to right: the scope, Change, then the phrase.
     const text = status.textContent ?? "";
@@ -172,7 +175,11 @@ describe("plugin scope bar", () => {
     api.plugin_scope_status.mockResolvedValue(sharedStatus());
     bar();
     await waitFor(() => expect(api.plugin_scope_sync).toHaveBeenCalledTimes(1));
-    expect(every.mock.calls.filter(([, ms]) => Number(ms) >= 10_000)).toEqual([]);
+    // A slow timer only moves "12 s ago" on: running it asks for nothing.
+    await waitFor(() => expect(every.mock.calls.some(([, ms]) => Number(ms) >= 10_000)).toBe(true));
+    for (const [fn, ms] of every.mock.calls) if (Number(ms) >= 10_000) (fn as () => void)();
+    expect(api.plugin_scope_sync).toHaveBeenCalledTimes(1);
+    expect(api.plugin_scope_status).toHaveBeenCalledTimes(1);
     fireEvent.focus(window);
     expect(api.plugin_scope_sync).toHaveBeenCalledTimes(2);
     expect(api.plugin_scope_sync).toHaveBeenLastCalledWith("brainrot-tcg", false);
@@ -505,8 +512,79 @@ describe("plugin scope bar", () => {
       expect(await screen.findByText("2 updates from Ana")).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Update now" }));
       await waitFor(() => expect(api.plugin_scope_pull).toHaveBeenCalledWith("forge"));
-      // The panel re-reads its data once the updates are in.
-      await waitFor(() => expect(changed).toHaveBeenCalled());
+      // The panel merges the updates once they are in (its open item stays open).
+      await waitFor(() => expect(changed).toHaveBeenCalledWith(expect.anything(), { reason: "synced" }));
+    });
+  });
+
+  describe("what the panel is told", () => {
+    const watch = (active = true) => {
+      const changed = vi.fn();
+      const view = render(
+        <ConfirmModalProvider>
+          <PluginScopeBar pluginId="island-media-kit" onScopeChanged={changed} active={active} />
+        </ConfirmModalProvider>,
+      );
+      const rerender = (on: boolean) => view.rerender(
+        <ConfirmModalProvider>
+          <PluginScopeBar pluginId="island-media-kit" onScopeChanged={changed} active={on} />
+        </ConfirmModalProvider>,
+      );
+      return { changed, rerender };
+    };
+    const send = (event: Record<string, unknown>) => push.handlers.forEach((fn) => fn(event));
+
+    it("teammates' changes: one note per burst with every key, never a restart", async () => {
+      api.plugin_scope_status.mockResolvedValue(sharedStatus());
+      const { changed } = watch();
+      await waitFor(() => expect(api.plugin_scope_status).toHaveBeenCalledTimes(1));
+      send({ type: "plugin_scope_changed", plugins: ["island-media-kit"], synced: true,
+        keys: { "island-media-kit": ["project.a"] } });
+      send({ type: "plugin_scope_changed", plugins: ["island-media-kit", "forge"], synced: true,
+        keys: { "island-media-kit": ["sequence.a.1", "project.a"], forge: ["scene.x"] } });
+      await waitFor(() => expect(changed).toHaveBeenCalledTimes(1), { timeout: 3000 });
+      expect(changed).toHaveBeenCalledWith(expect.objectContaining({ ok: true }),
+        { reason: "synced", keys: ["project.a", "sequence.a.1"] });
+      // The burst made one status read.
+      expect(api.plugin_scope_status).toHaveBeenCalledTimes(2);
+    });
+
+    it("a lock, the mode, another plugin's round or a switch restarting it: the bar only", async () => {
+      api.plugin_scope_status.mockResolvedValue(sharedStatus());
+      const { changed } = watch();
+      await waitFor(() => expect(api.plugin_scope_status).toHaveBeenCalledTimes(1));
+      send({ type: "plugin_scope_changed", plugins: ["island-media-kit"], status: true });
+      send({ type: "plugin_scope_changed", plugins: ["forge"], synced: true });
+      send({ type: "plugin_scope_changed", plugins: [], synced: true });
+      send({ type: "plugin_scope_changed", plugins: ["island-media-kit"], switched: true });
+      await waitFor(() => expect(api.plugin_scope_status).toHaveBeenCalledTimes(2));
+      await new Promise((r) => setTimeout(r, 1000));
+      expect(changed).not.toHaveBeenCalled();
+    });
+
+    it("whose data it shows moved: the panel starts over at once", async () => {
+      api.plugin_scope_status.mockResolvedValue(sharedStatus());
+      const { changed } = watch();
+      await waitFor(() => expect(api.plugin_scope_status).toHaveBeenCalledTimes(1));
+      api.plugin_scope_status.mockResolvedValue(sharedStatus({}, { spaceId: "s2", label: "Beta" }));
+      send({ type: "plugin_scope_changed", plugins: ["island-media-kit"], synced: true });
+      await waitFor(() => expect(changed).toHaveBeenCalledWith(expect.anything(), { reason: "switched" }));
+      expect(changed).toHaveBeenCalledTimes(1);
+    });
+
+    it("hidden: no status reads and nothing told; shown again: one read and one note", async () => {
+      api.plugin_scope_status.mockResolvedValue(sharedStatus());
+      const { changed, rerender } = watch(false);
+      await waitFor(() => expect(api.plugin_scope_status).toHaveBeenCalledTimes(1));
+      for (const key of ["project.a", "project.b", "project.c"]) {
+        send({ type: "plugin_scope_changed", plugins: ["island-media-kit"], synced: true, keys: { "island-media-kit": [key] } });
+      }
+      await new Promise((r) => setTimeout(r, 600));
+      expect(api.plugin_scope_status).toHaveBeenCalledTimes(1);
+      rerender(true);
+      await waitFor(() => expect(changed).toHaveBeenCalledTimes(1), { timeout: 3000 });
+      expect(changed).toHaveBeenCalledWith(expect.anything(), { reason: "synced", keys: ["project.a", "project.b", "project.c"] });
+      expect(api.plugin_scope_status).toHaveBeenCalledTimes(2);
     });
   });
 

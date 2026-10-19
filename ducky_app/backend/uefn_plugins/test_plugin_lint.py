@@ -159,6 +159,22 @@ def test_data_sharing_and_data_locks_must_say_something_valid() -> None:
     assert data_locks({"data_locks": {"Scene.": "auto", "card.": "always", "pack.": "auto"}}) == {"pack.": "auto"}
 
 
+def test_data_local_lists_prefixes_of_this_pcs_own_items() -> None:
+    from backend.uefn_plugins.plugin_lint import check_manifest
+    from backend.uefn_plugins.store import data_local
+
+    assert check_manifest({"data_local": ["qa.", "device/"]}) == []
+    assert data_local({"data_local": ["qa.", "device/", "qa."]}) == ("device/", "qa.")
+    assert check_manifest({"data_local": "qa."}) == [
+        'plugin.json "data_local" must be a list of doc key or file path prefixes: ["qa.", "device/"].']
+    text = "\n".join(check_manifest({"data_local": ["QA.", "", 7, "ok."]}))
+    assert "entry 'QA.' isn't the start" in text and "entry ''" in text and "entry 7" in text
+    assert len(text.splitlines()) == 3
+    assert data_local({"data_local": ["QA.", "", 7, "ok."]}) == ("ok.",)
+    assert check_manifest({"data_sharing": False, "data_local": ["qa."]}) == [
+        'plugin.json has "data_local" but "data_sharing": false: all of it is Local already, so remove one.']
+
+
 def test_a_plugin_with_bad_data_locks_does_not_install() -> None:
     import io
     import zipfile

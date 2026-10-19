@@ -513,7 +513,9 @@ def test_a_head_event_pulls_within_seconds(team, events) -> None:
     # At most one round per 5 s (+1: the round at start stamped the real clock a moment later).
     assert ticks(sched, clock, start + 1, start + 6) == [[], ["spaceT"]]
     assert PluginData(TEAM).get("card.new") == {"v": 1}
-    assert events[-1] == {"type": "plugin_scope_changed", "plugins": [TEAM], "synced": True}
+    # Open panels hear which keys came in, so they merge them and keep what is open.
+    assert events[-1] == {"type": "plugin_scope_changed", "plugins": [TEAM], "synced": True,
+                          "keys": {TEAM: ["card.new"]}}
 
 
 @dpapi
