@@ -560,7 +560,6 @@ body.native-caption-input-ready .app-header .drag-region {
 }
 .app-header {
   height: 40px;
-  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -571,6 +570,12 @@ body.native-caption-input-ready .app-header .drag-region {
   position: relative;
   font-family: var(--font-header, var(--font-ui));
   overflow: visible;
+}
+/* The top bar is the app background itself: no panel fill, blur or bottom line. */
+.app-header.glass-panel {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 .app-header-left {
   flex: 1;

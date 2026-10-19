@@ -195,49 +195,30 @@
   justify-content: flex-end;
 }
 
-/* Floating panels (like VS Code): the sidebars and the editor area are rounded cards with a
-   small gap of app background around and between them. The gap is the divider: the 1px
-   lines turn invisible but still drag, and light up on hover. Rail widths are unchanged —
-   the gutter comes out of the rail's own width. Not for phones (slide-over rails) or Focus. */
+/* Floating sidebars (like VS Code): each sidebar is a rounded card with a small gap of app
+   background around it, and the editor area is that background itself, with no frame. The
+   gap is the divider: the 1px line turns invisible but still drags, and lights up on hover.
+   Rail widths are unchanged — the gutter comes out of the rail's own width. Not for phones
+   (slide-over rails) or Focus. */
 .workspace-dock-layout--default:not(.is-narrow) {
   --dock-gap: 6px;
-  --dock-card-radius: var(--radius-sm, 8px);
-  background: var(--bg);
 }
 
+/* The gutter is see-through, so a plugin skin's art shows in it too. */
 .workspace-dock-layout--default:not(.is-narrow) .dock-rail {
   box-sizing: border-box;
-  background: var(--bg);
-  padding: var(--dock-gap) calc(var(--dock-gap) / 2);
-}
-
-.workspace-dock-layout--default:not(.is-narrow) .dock-rail--left {
-  padding-left: var(--dock-gap);
-}
-
-.workspace-dock-layout--default:not(.is-narrow) .dock-rail--right {
-  padding-right: var(--dock-gap);
+  background: transparent;
+  padding: var(--dock-gap);
 }
 
 .workspace-dock-layout--default:not(.is-narrow) .dock-rail-inner {
   border: 1px solid var(--border);
-  border-radius: var(--dock-card-radius);
+  border-radius: var(--radius-sm, 8px);
   background: var(--panel-header);
 }
 
-.workspace-dock-layout--default:not(.is-narrow) > .workspace-dock-center {
-  margin: var(--dock-gap) calc(var(--dock-gap) / 2);
-  border: 1px solid var(--border);
-  border-radius: var(--dock-card-radius);
-}
-
-/* With a sidebar closed, the editor card keeps the full gap from the window edge. */
-.workspace-dock-layout--default:not(.is-narrow):not(:has(> .dock-rail-shell--left.is-open)) > .workspace-dock-center {
-  margin-left: var(--dock-gap);
-}
-
-.workspace-dock-layout--default:not(.is-narrow):not(:has(> .dock-rail-shell--right.is-open)) > .workspace-dock-center {
-  margin-right: var(--dock-gap);
+body.appearance-skin-active .workspace-dock-layout--default:not(.is-narrow) .dock-rail-inner {
+  background: color-mix(in srgb, var(--bg-panel) 55%, transparent);
 }
 
 .workspace-dock-layout--default:not(.is-narrow) .dock-rail-resize-handle:not(:hover):not(.is-dragging) {
