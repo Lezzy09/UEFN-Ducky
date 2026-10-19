@@ -90,6 +90,8 @@ _CONTRIBUTIONS: dict[str, Any] = {
     "automations_templates": [],  # contributes.automations.templates (+ plugin_id, graph)
     # Text to Image backends a plugin offers: {id, label, tool, credits, args?, prompt_arg?, plugin_id}
     "automations_image_generators": [],
+    # Backends a plugin adds to the other image / 3D nodes (Text to 3D, Rig…): {node, id, label, tool, pins, …}
+    "automations_media_backends": [],
     # New-file Verse scaffolds for the template picker (content inlined at load).
     "verse_templates": [],  # {id, name, icon, description?, content, order?, file?, plugin_id}
     "tts_voices": [],  # {id, label, plugin_id}
@@ -296,6 +298,14 @@ def image_generators() -> list[dict[str, Any]]:
     with _LOCK:
         rows = _dedupe_contrib_rows(_CONTRIBUTIONS["automations_image_generators"])
     return [dict(row) for row in rows if row.get("plugin_id") in enabled]
+
+
+def media_backends(node_type: str) -> list[dict[str, Any]]:
+    """Backends the loaded plugins add to one image / 3D node (contributes.automations.media_backends)."""
+    enabled = set(get_enabled_plugin_ids())
+    with _LOCK:
+        rows = _dedupe_contrib_rows(_CONTRIBUTIONS["automations_media_backends"], key_fields=("node", "id"))
+    return [dict(row) for row in rows if row.get("plugin_id") in enabled and row.get("node") == node_type]
 
 
 def image_generator_tools() -> set[str]:
@@ -1780,6 +1790,7 @@ def reload_plugins() -> None:
             _CONTRIBUTIONS["automations_triggers"] = []
             _CONTRIBUTIONS["automations_templates"] = []
             _CONTRIBUTIONS["automations_image_generators"] = []
+            _CONTRIBUTIONS["automations_media_backends"] = []
             try:
                 from backend.automations.plugin import clear_all as _clear_auto_handlers
 
@@ -1894,6 +1905,30 @@ def _image_generator_row(row: Any, pid: str) -> dict[str, Any] | None:
         fields = []
     if fields:
         out["config_fields"] = fields
+    return out
+
+
+def _media_backend_row(row: Any, pid: str) -> dict[str, Any] | None:
+    """One backend for a built-in image / 3D node: the plugin's MCP tool and how the node's
+    input pins map onto its arguments (``pins``; ``task_args`` when the wired file came from
+    this plugin and carries its task id; ``task_only`` pins accept nothing else)."""
+    base = _image_generator_row({**row, "prompt_arg": "__unused__"}, pid) if isinstance(row, dict) else None
+    node = str(row.get("node") or "").strip() if isinstance(row, dict) else ""
+    if base is None or not node or node == "image.generate":
+        return None
+    base.pop("prompt_arg", None)
+
+    def names(raw: Any) -> dict[str, str]:
+        return {str(k).strip(): str(v).strip() for k, v in raw.items() if str(k).strip() and str(v).strip()} if isinstance(raw, dict) else {}
+
+    out: dict[str, Any] = {**base, "node": node, "pins": names(row.get("pins")), "task_args": names(row.get("task_args")),
+                           "cfg": names(row.get("cfg"))}
+    only = [str(p).strip() for p in row.get("task_only") or [] if str(p).strip()] if isinstance(row.get("task_only"), list) else []
+    if only:
+        out["task_only"] = only
+    stage = str(row.get("stage") or "").strip()
+    if stage:
+        out["stage"] = stage
     return out
 
 
@@ -2816,6 +2851,10 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
         parsed = _image_generator_row(row, pid)
         if parsed:
             _CONTRIBUTIONS["automations_image_generators"].append(parsed)
+    for row in auto.get("media_backends") or []:
+        parsed = _media_backend_row(row, pid)
+        if parsed:
+            _CONTRIBUTIONS["automations_media_backends"].append(parsed)
 
     for voice in contributes.get("tts.voices") or contributes.get("tts_voices") or []:
         if not isinstance(voice, dict):

@@ -148,10 +148,10 @@ LIBRARY: list[dict[str, Any]] = [
           "Adds a skeleton to a textured humanoid model so it can be animated (walk and run included).",
           inputs=[_MESH_IN, _pin("height", "Height (m)", "number")], outputs=[_MESH_OUT, _FILES_OUT], paid=True),
     _node("mesh.animate", "Animate Rigged Mesh", "Characters", "action",
-          "Applies up to ten animations from the Meshy library to a rigged character (one model per animation).",
+          "Applies up to ten animations from the backend's library to a character from its Rig node (one model per animation).",
           inputs=[_MESH_IN, _pin("actions", "Animations", "text")],
           outputs=[_MESH_OUT, _pin("meshes", "All animations", "json"), _FILES_OUT],
-          fields=[{"id": "actions", "label": "Animation numbers (Idle 1 = 11, Big Wave = 28, Victory Cheer = 59, Attack = 4)", "type": "string"}], paid=True),
+          fields=[{"id": "actions", "label": "Animations (Meshy numbers: Idle 1 = 11, Big Wave = 28, Victory Cheer = 59; other backends: names like idle, walk, run)", "type": "string"}], paid=True),
     # ------------------------------------------------------------------ 3D tools (free, on this PC, GLB)
     _node("mesh.info", "Mesh Info", "3D tools", "function",
           "The model's size, triangle count, materials, and whether it is rigged or animated.",

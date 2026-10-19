@@ -3,8 +3,9 @@ plugin registers (3D AI Studio, Meshy), or an AI gateway plugin's own image node
 (Google, OpenAI) — and the node calls the one picked in its details, waits for it, and
 turns the files it downloads into file refs on its output pins. Text to Image lists only
 what the plugins turned on here declare (contributes.automations.image_generators) and
-the gateways' image nodes. A backend whose plugin is off, or (gateways) has no key,
-can't be picked or run.
+the gateways' image nodes; the other nodes add what plugins declare under
+contributes.automations.media_backends. A backend whose plugin is off, or (gateways)
+has no key, can't be picked or run.
 
 Paid backends keep the plugins' spend lock: a node only spends credits (or, on a
 gateway, the person's own API key) when its "Spend credits" switch is on (a person
@@ -292,15 +293,89 @@ def _declared(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def plugin_media_backends(ntype: str) -> list[dict[str, Any]]:
+    """What the plugins turned on here add to this node (contributes.automations.media_backends)."""
+    try:
+        from backend.uefn_plugins.host import media_backends
+
+        return media_backends(ntype)
+    except Exception:
+        return []
+
+
+def _pin_types(ntype: str) -> dict[str, dict[str, Any]]:
+    from backend.automations.node_library import LIBRARY
+
+    spec = next((node for node in LIBRARY if node["type"] == ntype), {})
+    return {pin["id"]: pin for pin in spec.get("inputs") or []}
+
+
+def _declared_media(row: dict[str, Any]) -> dict[str, Any]:
+    """A plugin's backend for a built-in node: each wired pin goes into the tool argument the
+    plugin named. A file this plugin made goes in as its task id (no upload) when it says where."""
+    pid, ntype = str(row.get("plugin_id") or ""), str(row["node"])
+    pins, task_args, cfg_map = dict(row.get("pins") or {}), dict(row.get("task_args") or {}), dict(row.get("cfg") or {})
+    only = set(row.get("task_only") or [])
+    fields = [dict(field) for field in row.get("config_fields") or [] if isinstance(field, dict) and field.get("id")]
+    allowed = {str(field["id"]) for field in fields}
+    name = _manifest_label(pid) or pid
+
+    def args(inputs: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+        settings = ((cfg.get("gateway_config") or {}).get(row["id"]) or {}) if isinstance(cfg.get("gateway_config"), dict) else {}
+        out: dict[str, Any] = {**dict(row.get("args") or {}),
+                               **({k: v for k, v in settings.items() if k in allowed and v not in (None, "")} if isinstance(settings, dict) else {})}
+        for key, arg in cfg_map.items():
+            if cfg.get(key) not in (None, ""):
+                out[arg] = cfg[key]
+        types = _pin_types(ntype)
+        for pin, arg in pins.items():
+            spec = types.get(pin, {"label": pin, "type": "text"})
+            what, value = str(spec.get("label") or pin), inputs.get(pin)
+            first = value[0] if isinstance(value, list) and value else value
+            if pin in task_args and isinstance(first, dict) and first.get("plugin_id") == pid and first.get("task_id"):
+                out[task_args[pin]] = str(first["task_id"])
+            elif pin in only:
+                raise ValueError(f"{row['label']} needs {what} straight from a {name} node.")
+            elif spec.get("type") == "images":
+                paths = [path_of(item) for item in (value if isinstance(value, list) else [value]) if path_of(item)]
+                if not paths and spec.get("required"):
+                    raise ValueError(f"Nothing in {what}: wire one in or pick it in the details.")
+                if paths:
+                    out[arg] = json.dumps([_need_file({"x": p}, "x", what) for p in paths[:4]])
+            elif spec.get("type") in ("image", "mesh"):
+                if path_of(value) or spec.get("required"):
+                    out[arg] = _need_file(inputs, pin, what)
+            elif spec.get("type") == "number":
+                if value not in (None, ""):
+                    out[arg] = _number(inputs, {}, pin, 0)
+            elif spec.get("required"):
+                out[arg] = _need_text(inputs, pin, what)
+            elif value not in (None, "", []):
+                out[arg] = value if isinstance(value, str) else json.dumps(value)
+        return out
+
+    out = {"id": row["id"], "label": row["label"], "plugin": name, "plugin_id": pid, "tool": row["tool"],
+           "credits": int(row.get("credits") or 0), "args": args, "declared": True}
+    for key in ("cost", "stage"):
+        if row.get(key):
+            out[key] = str(row[key])
+    if row.get("paid") is True:
+        out["paid"] = True
+    if fields:
+        out["config_fields"] = fields
+    return out
+
+
 def table(ntype: str) -> list[dict[str, Any]]:
     """The node's backends. Text to Image: every image tool a plugin turned on here
     declares (the account plugin's first, so its gateway is the default pick), plus the
-    image node of every AI gateway plugin installed here."""
+    image node of every AI gateway plugin installed here. The other nodes: the built-in
+    rows, then what the plugins turned on here add."""
     if ntype == "image.generate":
         rows = sorted((_declared(row) for row in plugin_image_generators()), key=lambda row: row["plugin_id"] != "account")
         rows.extend(_gateway(pid, node) for node, pid in gateway_image_nodes())
         return rows
-    return list(BACKENDS.get(ntype) or [])
+    return list(BACKENDS.get(ntype) or []) + [_declared_media(row) for row in plugin_media_backends(ntype)]
 
 
 # node type → backends, first = default (first that can run, when none is picked).
@@ -537,6 +612,8 @@ def _remote(data: dict[str, Any], kind: str) -> str:
         for fmt in ("glb", "fbx", "obj"):
             if str(urls.get(fmt) or "").startswith("https://"):
                 return str(urls[fmt])
+        if str(data.get("model_url") or "").startswith("https://"):
+            return str(data["model_url"])
     for item in data.get("results") or []:
         url = item.get("asset") if isinstance(item, dict) else None
         if isinstance(url, str) and url.startswith("https://") and kind_of(url.split("?")[0], "") == kind:
@@ -549,7 +626,7 @@ def run_media(ntype: str, cfg: dict[str, Any], inputs: dict[str, Any], folder: P
     next backend if it fails" on, a failure moves on to the next one that is set up."""
     first = pick_backend(ntype, cfg.get("backend"))
     if ntype == "mesh.animate":
-        return _run_animations(cfg, inputs, folder)
+        return _run_animations(first, cfg, inputs, folder)
     if cfg.get("fallback") is not True:
         return _run_once(ntype, first, cfg, inputs, folder)
     order = [first] + [row for row in table(ntype) if row["id"] != first["id"]]
@@ -568,16 +645,31 @@ def run_media(ntype: str, cfg: dict[str, Any], inputs: dict[str, Any], folder: P
     return {"ok": False, "error": "Every backend failed: " + " · ".join(errors)}
 
 
-def _run_animations(cfg: dict[str, Any], inputs: dict[str, Any], folder: Path) -> dict[str, Any]:
+def action_names(inputs: dict[str, Any], cfg: dict[str, Any]) -> list[str]:
+    """A plugin backend's animations by name: 'idle, walk run' or a list (at most 10)."""
+    raw = inputs.get("actions")
+    if raw in (None, "", []):
+        raw = cfg.get("actions")
+    items = raw if isinstance(raw, list) else str(raw or "").replace(",", " ").split()
+    out = [str(item).strip() for item in items if str(item).strip()]
+    if not out:
+        raise ValueError("Set the animations in the details (names from the backend's library, like idle, walk, run).")
+    if len(out) > 10:
+        raise ValueError("Ten animations at most per node.")
+    return list(dict.fromkeys(out))
+
+
+def _run_animations(backend: dict[str, Any], cfg: dict[str, Any], inputs: dict[str, Any], folder: Path) -> dict[str, Any]:
     try:
-        actions = action_ids(inputs, cfg)
+        actions: list[Any] = action_names(inputs, cfg) if backend.get("declared") else action_ids(inputs, cfg)
     except ValueError as exc:
         return {"ok": False, "error": str(exc), "gate": True}
-    backend = pick_backend("mesh.animate", "")
     meshes: list[dict[str, Any]] = []
     files: list[dict[str, Any]] = []
     for n, action in enumerate(actions):
-        step = _run_once("mesh.animate", backend, cfg, {**inputs, "actions": [action]}, folder / f"{n + 1}-{action}", credits_for=len(actions))
+        one = action if backend.get("declared") else [action]
+        where = folder / f"{n + 1}-{''.join(c if c.isalnum() or c in '-_' else '_' for c in str(action))[:40]}"
+        step = _run_once("mesh.animate", backend, cfg, {**inputs, "actions": one}, where, credits_for=len(actions))
         if not step.get("ok"):
             return step if not meshes else {**step, "error": f"Animation {action}: {step.get('error')}"}
         meshes.append(step["outputs"]["mesh"])
@@ -651,6 +743,8 @@ def _run_once(ntype: str, backend: dict[str, Any], cfg: dict[str, Any], inputs: 
     wanted = str(cfg.get("format") or "").lower() if ntype == "mesh.convert" else ""
     main = next((path for path in paths if wanted and path.lower().endswith("." + wanted)), "") or _main_file(paths, kind)
     ref: dict[str, Any] = {**file_ref(main, kind), "provider": backend["plugin"], "backend": backend["id"]}
+    if backend.get("declared"):  # the plugin's next step takes its own task instead of the file
+        ref["plugin_id"] = backend["plugin_id"]
     if data.get("task_id"):
         ref["task_id"] = str(data["task_id"])
     if backend.get("stage"):

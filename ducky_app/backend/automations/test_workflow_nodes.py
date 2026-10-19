@@ -170,6 +170,14 @@ def image_generators(monkeypatch):
     return rows
 
 
+@pytest.fixture(autouse=True)
+def media_backends(monkeypatch):
+    """What plugins add to the other image / 3D nodes (contributes.automations.media_backends)."""
+    rows: list[dict[str, Any]] = []
+    monkeypatch.setattr(media, "plugin_media_backends", lambda ntype: [dict(r) for r in rows if r["node"] == ntype])
+    return rows
+
+
 @pytest.fixture
 def tools(monkeypatch, tmp_path):
     fake = Tools(tmp_path)
@@ -374,6 +382,62 @@ def test_a_plugin_declares_its_image_generators(monkeypatch):
     monkeypatch.setitem(host._CONTRIBUTIONS, "automations_image_generators", [parsed, {**parsed, "plugin_id": "off"}])
     monkeypatch.setattr(host, "get_enabled_plugin_ids", lambda: ["x"])
     assert [row["plugin_id"] for row in host.image_generators()] == ["x"]  # a plugin turned off lists nothing
+
+
+def test_a_plugin_adds_backends_to_the_3d_nodes(tools, monkeypatch, media_backends):
+    from backend.uefn_plugins import host
+
+    def declare(**row: Any) -> dict[str, Any]:
+        parsed = host._media_backend_row(row, "tripo")
+        assert parsed is not None
+        media_backends.append(parsed)
+        return parsed
+
+    assert host._media_backend_row({"node": "image.generate", "id": "x", "tool": "t"}, "tripo") is None  # Text to Image has its own list
+    assert host._media_backend_row({"id": "x", "tool": "t"}, "tripo") is None  # no node
+    declare(node="mesh.generate", id="tripo_text_to_3d", label="Tripo v3.1", tool="tripo_text_to_3d", credits=20,
+            args={"model_version": "v3.1-20260211"}, pins={"prompt": "prompt"},
+            config_fields=[{"id": "texture", "label": "Texture", "type": "string"}])
+    declare(node="mesh.rig", id="tripo_rig", label="Tripo", tool="tripo_rig", credits=25, pins={"mesh": "source"},
+            task_args={"mesh": "source"}, stage="rig")
+    declare(node="mesh.animate", id="tripo_animate", label="Tripo", tool="tripo_animate", credits=10,
+            pins={"mesh": "rig_task_id", "actions": "animations"}, task_args={"mesh": "rig_task_id"}, task_only=["mesh"])
+    declare(node="mesh.multi_view", id="tripo_multiview", label="Tripo", tool="tripo_multiview_to_3d", credits=30, pins={"images": "images"})
+    monkeypatch.setattr(media, "_manifest_label", lambda pid: {"tripo": "Tripo", "meshy": "Meshy"}.get(pid, ""))
+
+    listed = media.backends_for("mesh.generate")
+    assert listed[0]["id"] == "meshy_text_to_3d" and listed[-1]["id"] == "tripo_text_to_3d"  # built-in rows stay first
+    assert listed[-1]["plugin"] == "Tripo" and listed[-1]["cost"] == "~20 credits" and listed[-1]["config_fields"][0]["id"] == "texture"
+    gated = run("mesh.generate", {"backend": "tripo_text_to_3d"}, {"prompt": "a chest"})
+    assert gated["ok"] is False and "Spend credits" in gated["error"] and tools.calls == []
+    made = run("mesh.generate", {"backend": "tripo_text_to_3d", "spend": True, "gateway_config": {"tripo_text_to_3d": {"texture": "none", "x": 1}}},
+               {"prompt": "a chest"})
+    assert made["ok"], made
+    name, args = tools.calls[-1]
+    assert name == "tripo_text_to_3d"
+    assert {k: args[k] for k in ("prompt", "model_version", "texture", "confirm_spend", "wait")} == \
+        {"prompt": "a chest", "model_version": "v3.1-20260211", "texture": "none", "confirm_spend": True, "wait": True}
+    assert "x" not in args  # only the backend's own settings go through
+    mesh = made["outputs"]["mesh"]
+    assert mesh["plugin_id"] == "tripo" and mesh["task_id"] and mesh["remote"] == "https://assets.example/model.glb"
+
+    rigged = run("mesh.rig", {"backend": "tripo_rig", "spend": True}, {"mesh": mesh})
+    assert rigged["ok"] and tools.calls[-1][1]["source"] == mesh["task_id"]  # its own model: the task, no upload
+    assert rigged["outputs"]["mesh"]["stage"] == "rig"
+    local = run("mesh.rig", {"backend": "tripo_rig", "spend": True}, {"mesh": ref(make_glb(Path(tools.tmp) / "in.glb"), "mesh")})
+    assert local["ok"] and tools.calls[-1][1]["source"].endswith("in.glb")  # any other model: the file
+
+    anim = run("mesh.animate", {"backend": "tripo_animate", "spend": True, "actions": "idle, walk"}, {"mesh": rigged["outputs"]["mesh"]})
+    assert anim["ok"], anim
+    assert [(c[1]["rig_task_id"], c[1]["animations"]) for c in tools.calls[-2:]] == [(rigged["outputs"]["mesh"]["task_id"], "idle"),
+                                                                                   (rigged["outputs"]["mesh"]["task_id"], "walk")]
+    assert anim["result"]["credits"] == 20 and len(anim["outputs"]["meshes"]) == 2
+    wrong = run("mesh.animate", {"backend": "tripo_animate", "spend": True, "actions": "idle"}, {"mesh": ref("C:/x/m.glb", "mesh")})
+    assert wrong["ok"] is False and "straight from a Tripo node" in wrong["error"]
+
+    views = [ref(png(Path(tools.tmp) / f"{v}.png")) for v in ("front", "left")]
+    multi = run("mesh.multi_view", {"backend": "tripo_multiview", "spend": True}, {"images": views})
+    assert multi["ok"] and json.loads(tools.calls[-1][1]["images"]) == [v["path"] for v in views]
 
 
 def test_an_account_image_generator_says_its_cost_gates_spend_and_passes_its_settings(tools, monkeypatch, image_generators):
