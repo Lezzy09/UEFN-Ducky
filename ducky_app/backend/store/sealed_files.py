@@ -405,7 +405,23 @@ def _made(st: os.stat_result) -> float:
     return float(getattr(st, "st_birthtime", 0) or (st.st_ctime if os.name == "nt" else st.st_mtime))
 
 
-def seal_backups(account: str, *, made_before: float, settle_s: float = 60.0) -> int:
+SETTLE_S = 60.0  # a backup this fresh may still be being written
+
+
+def backups_waiting(*, made_before: float) -> bool:
+    """A backup from before ``made_before``, still plain, skipped only for being fresh."""
+    now, settle_s = time.time(), SETTLE_S
+    for path in backup_files():
+        try:
+            st = path.stat()
+            if _made(st) < made_before and now - st.st_mtime < settle_s and not is_sealed_file(path):
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def seal_backups(account: str, *, made_before: float, settle_s: float | None = None) -> int:
     """Seal for ``account`` every backup of ducky.db started before ``made_before`` (they
     hold chats from before they were sealed); a snapshot keeps only ``account``'s plugin
     search records. One still being written is left for the next run."""
@@ -414,6 +430,7 @@ def seal_backups(account: str, *, made_before: float, settle_s: float = 60.0) ->
         return 0
     sealed = 0
     now = time.time()
+    settle_s = SETTLE_S if settle_s is None else settle_s
     snapshots = db.snapshot_dir().resolve()
     for path in backup_files():
         try:

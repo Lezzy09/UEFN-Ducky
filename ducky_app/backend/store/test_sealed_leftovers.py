@@ -275,6 +275,21 @@ def test_backups_from_before_are_sealed_for_the_account_the_rows_went_to(who: _W
     assert not sealed_files.is_sealed_file(fresh) and not sealed_files.is_sealed_file(kept)
 
 
+def test_a_backup_too_fresh_to_seal_is_sealed_once_settled_not_at_the_next_start(who: _Who, monkeypatch) -> None:
+    who.key = ALICE
+    monkeypatch.setattr(sealed_files, "SETTLE_S", 3.0)
+    _database_from_before(monkeypatch)
+    alice = account_rows.current()
+    [snap] = list(db.snapshot_dir().glob("ducky-*-pre-migrate-v23.db"))
+    os.utime(snap)  # just written, as when the pass right after the upgrade is quick
+    out = account_rows.seal_pending(alice, pause_s=0)
+    assert "backups" not in out and not sealed_files.is_sealed_file(snap)
+    deadline = time.time() + 15
+    while not sealed_files.is_sealed_file(snap) and time.time() < deadline:
+        time.sleep(0.2)
+    assert sealed_files.sealed_for(snap) == alice and b"pelican" not in snap.read_bytes()
+
+
 def test_a_restored_sealed_backup_goes_to_its_owner_whoever_is_signed_in(who: _Who, monkeypatch) -> None:
     from frontend import store_admin
 

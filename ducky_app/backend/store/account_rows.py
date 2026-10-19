@@ -571,4 +571,18 @@ def _seal_backups(conn) -> dict[str, int]:
     except Exception:  # noqa: BLE001
         _log.warning("sealing ducky.db backups from before failed", exc_info=True)
         return {}
+    if sealed_files.backups_waiting(made_before=float(sealed_at)):
+        # One written moments ago (the copy made before the upgrade) is sealed once it
+        # has settled, not only at the next start.
+        timer = threading.Timer(sealed_files.SETTLE_S + 1.0, _seal_backups_later, args=(str(db.db_path()),))
+        timer.daemon = True
+        timer.start()
     return {"backups": n} if n else {}
+
+
+def _seal_backups_later(path: str) -> None:
+    try:
+        if str(db.db_path()) == path:
+            _seal_backups(db.connect())
+    except Exception:  # noqa: BLE001 — the next start tries again
+        _log.warning("sealing ducky.db backups from before failed", exc_info=True)
