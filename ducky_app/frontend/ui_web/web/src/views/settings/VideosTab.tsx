@@ -11,8 +11,16 @@ import { GeneralSectionHeader } from "./GeneralSectionHeader";
 
 type NumericKey = "video_max_mb" | "video_frames_per_video" | "max_images_per_message";
 
-const FIELDS: { key: NumericKey; label: string; min: number; max: number; hint: string; auto?: number }[] = [
-  { key: "video_max_mb", label: "Max video size (MB)", min: 10, max: 200, hint: "Largest video one message can carry." },
+const FIELDS: {
+  key: NumericKey;
+  label: string;
+  unit?: string;
+  min: number;
+  max: number;
+  hint: string;
+  auto?: number;
+}[] = [
+  { key: "video_max_mb", label: "Max video size", unit: "MB", min: 10, max: 200, hint: "Largest video one message can carry." },
   { key: "video_frames_per_video", label: "Frames per video", min: 1, max: 40, auto: 20, hint: "Frames sent to models without native video (Claude, OpenAI, coding agents…)." },
   { key: "max_images_per_message", label: "Max images per message", min: 1, max: 100, auto: 40, hint: "Images per message, video frames included." },
 ];
@@ -23,6 +31,13 @@ function ffmpegLabel(st: FfmpegStatusDto): string {
   if (st.state === "installing") return `Installing… ${Math.round(st.progress * 100)}%`;
   if (st.state === "error") return st.error || "Install failed";
   return "Not installed";
+}
+
+function ffmpegTone(st: FfmpegStatusDto): string {
+  if (st.state === "ready") return " general-tab-badge--installed";
+  if (st.state === "error") return " videos-tab-badge--error";
+  if (st.state === "installing") return "";
+  return " videos-tab-badge--muted";
 }
 
 function errMsg(prefix: string, err: unknown): string {
@@ -139,70 +154,115 @@ export function VideosTab() {
     return error ? (
       <div className="general-tab-shell videos-tab">
         <AppNotice message={error} className="plans-tab-notice" />
-        <div className="videos-tab-actions">
-          <button type="button" onClick={() => void load()}>
+        <div className="general-tab-btn-row">
+          <button type="button" className="settings-btn" onClick={() => void load()}>
             Retry
           </button>
         </div>
       </div>
     ) : null;
   }
+
+  const ffmpeg = settings.ffmpeg;
   return (
     <div className="general-tab-shell videos-tab">
       {error ? <AppNotice message={error} className="plans-tab-notice" /> : null}
-      <GeneralSectionHeader icon={<Icons.Play />} title="Videos" />
-      {FIELDS.map((f) => (
-        <div key={f.key} className="memory-tab-field">
-          <span className="memory-tab-field-label">{f.label}</span>
-          <input
-            className="memory-tab-input"
-            type="number"
-            min={f.min}
-            max={f.max}
-            aria-label={f.label}
-            value={f.auto !== undefined && settings[f.key] === 0 ? "" : draft[f.key]}
-            placeholder={f.auto !== undefined && settings[f.key] === 0 ? "Auto" : undefined}
-            disabled={f.auto !== undefined && settings[f.key] === 0}
-            onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
-            onBlur={() => void save(f.key)}
-          />
-          {f.auto !== undefined ? (
-            <label className="memory-tab-field-hint">
-              <input
-                type="checkbox"
-                aria-label={`${f.label} Auto`}
-                checked={settings[f.key] === 0}
-                onChange={(e) => void toggleAuto(f.key, f.auto as number, e.target.checked)}
-              />{" "}
-              Auto
-            </label>
-          ) : null}
-          <span className="memory-tab-field-hint">{f.hint}</span>
+      <h2 className="general-tab-page-title">Videos</h2>
+
+      <section className="general-tab-section">
+        <GeneralSectionHeader
+          icon={<Icons.Sliders />}
+          title="Limits"
+          description="How much video, and how many pictures, one message can carry."
+        />
+        <div className="general-tab-toggle-card">
+          {FIELDS.map((f) => {
+            const id = `videos-${f.key}`;
+            const auto = f.auto !== undefined && settings[f.key] === 0;
+            return (
+              <div key={f.key} className="general-tab-toggle-row videos-tab-row">
+                <div className="general-tab-toggle-row-text">
+                  <label htmlFor={id} className="general-tab-toggle-label">
+                    {f.label}
+                  </label>
+                  <p className="general-tab-toggle-desc">{f.hint}</p>
+                </div>
+                <div className="videos-tab-control">
+                  {f.auto !== undefined ? (
+                    <label className="videos-tab-auto">
+                      <span>Auto</span>
+                      <span className="general-tab-switch general-tab-switch--compact">
+                        <input
+                          type="checkbox"
+                          className="general-tab-switch-input"
+                          aria-label={`${f.label} Auto`}
+                          checked={auto}
+                          onChange={(e) => void toggleAuto(f.key, f.auto as number, e.target.checked)}
+                        />
+                        <span className="general-tab-switch-track" aria-hidden />
+                      </span>
+                    </label>
+                  ) : null}
+                  <span className={`videos-tab-number${auto ? " is-auto" : ""}`}>
+                    <input
+                      id={id}
+                      className="settings-input videos-tab-input"
+                      type="number"
+                      min={f.min}
+                      max={f.max}
+                      aria-label={f.label}
+                      value={auto ? "" : draft[f.key]}
+                      placeholder={auto ? "Auto" : undefined}
+                      disabled={auto}
+                      onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
+                      onBlur={() => void save(f.key)}
+                    />
+                    {f.unit ? <span className="videos-tab-unit">{f.unit}</span> : null}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
         </div>
-      ))}
-      <div className="memory-tab-field">
-        <span className="memory-tab-field-label">ffmpeg</span>
-        <span>{ffmpegLabel(settings.ffmpeg)}</span>
-        {settings.ffmpeg.bundled ? null : (
-        <span className="memory-tab-field-hint">
-          Downloaded automatically (~67 MB, LGPL build) the first time a video needs frames. Gemini users with small
-          videos never need it.
-        </span>
-        )}
-        {settings.ffmpeg.bundled ? null : (
-        <div className="videos-tab-actions">
-          {settings.ffmpeg.state !== "ready" ? (
-            <button type="button" disabled={installing} onClick={() => void runFfmpeg("install")}>
-              Install now
-            </button>
-          ) : (
-            <button type="button" onClick={() => void runFfmpeg("remove")}>
-              Remove
-            </button>
-          )}
+      </section>
+
+      <section className="general-tab-section">
+        <GeneralSectionHeader
+          icon={<Icons.Download />}
+          title="ffmpeg"
+          description="Turns a video into frames for models that can't watch video."
+        />
+        <div className="general-tab-toggle-card">
+          <div className="general-tab-toggle-row videos-tab-row">
+            <div className="general-tab-toggle-row-text">
+              <span className={`general-tab-badge videos-tab-badge${ffmpegTone(ffmpeg)}`}>{ffmpegLabel(ffmpeg)}</span>
+              {ffmpeg.bundled ? null : (
+                <p className="general-tab-toggle-desc">
+                  Downloaded automatically (~67 MB, LGPL build) the first time a video needs frames. Gemini users with
+                  small videos never need it.
+                </p>
+              )}
+              {installing ? (
+                <progress className="videos-tab-progress" value={ffmpeg.progress} max={1} aria-label="ffmpeg download" />
+              ) : null}
+            </div>
+            {ffmpeg.bundled ? null : ffmpeg.state !== "ready" ? (
+              <button
+                type="button"
+                className="settings-btn general-tab-btn-primary videos-tab-action"
+                disabled={installing}
+                onClick={() => void runFfmpeg("install")}
+              >
+                Install now
+              </button>
+            ) : (
+              <button type="button" className="settings-btn videos-tab-action" onClick={() => void runFfmpeg("remove")}>
+                Remove
+              </button>
+            )}
+          </div>
         </div>
-        )}
-      </div>
+      </section>
     </div>
   );
 }

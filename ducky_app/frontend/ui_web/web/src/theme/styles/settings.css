@@ -7467,15 +7467,108 @@
   margin-top: 10px;
 }
 
-.videos-tab {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+/* Videos: rows of text and a control (an Auto switch beside a number box), like General. */
+.videos-tab-row {
+  align-items: center;
 }
 
-.videos-tab-actions {
+.videos-tab-control {
   display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+}
+
+.videos-tab-auto {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
+  color: var(--fg-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.videos-tab-auto .general-tab-switch {
+  margin-top: 0;
+}
+
+.videos-tab-number {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.videos-tab-input.settings-input {
+  width: 88px;
+  padding: 7px 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.videos-tab-number:has(.videos-tab-unit) .videos-tab-input.settings-input {
+  padding-right: 36px;
+}
+
+.videos-tab-number.is-auto .videos-tab-input.settings-input {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.videos-tab-unit {
+  position: absolute;
+  right: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.videos-tab-badge {
+  align-self: flex-start;
+  margin: 0 0 6px;
+}
+
+.videos-tab-badge--muted {
+  border-color: var(--border-light);
+  background: var(--btn-bg);
+  color: var(--fg-dim);
+}
+
+.videos-tab-badge--error {
+  border-color: color-mix(in srgb, var(--red) 30%, transparent);
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+  color: var(--red);
+}
+
+.videos-tab-progress {
+  width: 100%;
+  height: 6px;
+  margin-top: 10px;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  appearance: none;
+  background: var(--btn-bg);
+  accent-color: var(--accent);
+}
+
+.videos-tab-progress::-webkit-progress-bar {
+  background: var(--btn-bg);
+}
+
+.videos-tab-progress::-webkit-progress-value {
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.videos-tab-action {
+  flex: none;
+  padding: 8px 14px;
+}
+
+@media (max-width: 720px) {
+  .videos-tab-row .videos-tab-action {
+    width: 100%;
+  }
 }
 .settings-permissions-table {
   width: 100%;
