@@ -17,8 +17,9 @@ describe("MobileTabSwitcher", () => {
     const onActivate = vi.fn();
     const onClose = vi.fn();
     render(<MobileTabSwitcher tabs={tabs} activeTabId="workflows:main" onActivate={onActivate} onClose={onClose} />);
+    // A bare icon like the other top-bar buttons: its label and tooltip name the open tab.
     const trigger = screen.getByRole("button", { name: "Tabs: Workflows (2 open)" });
-    expect(trigger.textContent).toContain("Workflows");
+    expect(trigger.getAttribute("title")).toBe("Workflows — open tabs");
     fireEvent.click(trigger);
     expect(screen.getByRole("menuitem", { name: "Workflows" }).getAttribute("aria-current")).toBe("true");
     fireEvent.click(screen.getByRole("menuitem", { name: "New ducky3" }));
