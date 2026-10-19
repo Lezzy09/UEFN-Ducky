@@ -327,9 +327,11 @@ body.appearance-skin-active .workspace-dock-layout--default:not(.is-narrow) .doc
   border-radius: 6px;
 }
 
-/* The chat box ends level with the sidebar cards. */
+/* The chat box ends level with the sidebar cards and runs the middle's full width (still
+   centred at the chat column's width on a wide screen). */
 .workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .chat-pane-input-area {
   padding-bottom: var(--dock-gap);
+  padding-inline: max(0px, calc((100% - var(--chat-column-width, 960px)) / 2));
 }
 
 .chat-view-layout .workspace-dock-layout {
