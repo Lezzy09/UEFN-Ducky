@@ -1,8 +1,8 @@
 /**
  * One collapsible section of the model picker: "API", "Codex", "Claude Code", … inside a
  * gateway. Every section is an accordion the person can fold (an API list can hold dozens
- * of models), and the fold is remembered per gateway and section. A section with the
- * picked model, or with a search hit, opens itself so the pick is never hidden.
+ * of models), and the fold is remembered per gateway and section. A search opens every
+ * section; the picked model never holds one open, a folded section with it shows a check.
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { Icons } from "../icons/Icons";
@@ -42,13 +42,23 @@ export interface ModelSectionProps {
   label: string;
   /** Shown after the label: a count, "Unavailable", "Checking…". */
   meta?: ReactNode;
-  /** A search is on, or the picked model sits in here: the section stays open. */
+  /** A search is on: the section stays open. */
   forceOpen?: boolean;
+  /** The picked model sits in here: a folded header shows a check. */
+  holdsPick?: boolean;
   disabled?: boolean;
   children: ReactNode;
 }
 
-export function ModelSection({ storageKey, label, meta, forceOpen, disabled, children }: ModelSectionProps) {
+export function ModelSection({
+  storageKey,
+  label,
+  meta,
+  forceOpen,
+  holdsPick,
+  disabled,
+  children,
+}: ModelSectionProps) {
   const [collapsed, setCollapsed] = useState(() => isSectionCollapsed(storageKey));
   useEffect(() => {
     setCollapsed(isSectionCollapsed(storageKey));
@@ -71,6 +81,11 @@ export function ModelSection({ storageKey, label, meta, forceOpen, disabled, chi
         </span>
         <span className="model-selector-provider-name">{label}</span>
         {meta}
+        {!open && holdsPick ? (
+          <span className="model-selector-check" title="Your model is in here">
+            <Icons.Check />
+          </span>
+        ) : null}
       </button>
       {open && children}
     </div>

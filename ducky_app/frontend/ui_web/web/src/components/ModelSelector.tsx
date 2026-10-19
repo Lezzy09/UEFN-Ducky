@@ -791,15 +791,16 @@ export function ModelSelector({
     const catalogPending = !catalogRows && !isModelsCatalogReady();
     const apiHasPick = !!apiSelected && viewApiRows.some((m) => m.id === apiSelected);
     // "API", then one section per coding agent: every one an accordion the person can fold
-    // (an API list holds dozens of models), remembered per gateway. A search, or the picked
-    // model, keeps its section open.
+    // (an API list holds dozens of models), remembered per gateway. A search keeps every
+    // section open; the picked model never stops its section folding.
     return (
       <>
         {(viewApiRows.length > 0 || catalogPending || gw.nestedAgents.length === 0) && (
           <ModelSection
             storageKey={`${gw.id}:api`}
             label="API"
-            forceOpen={!!query || apiHasPick}
+            forceOpen={!!query}
+            holdsPick={apiHasPick}
             meta={
               catalogPending && viewApiRows.length === 0 ? (
                 <span className="model-selector-unavailable-tag">Loading…</span>
@@ -825,7 +826,8 @@ export function ModelSelector({
               key={agent.id}
               storageKey={`${gw.id}:${agent.id}`}
               label={agent.label}
-              forceOpen={!!query || hasPick}
+              forceOpen={!!query}
+              holdsPick={hasPick}
               disabled={unavailable}
               meta={
                 agentsChecking ? (

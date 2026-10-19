@@ -29,7 +29,7 @@ describe("ModelSection", () => {
     expect(screen.queryByText("whisper-1")).toBeNull(); // still folded after reopening the picker
   });
 
-  it("stays open while searching or when it holds the picked model", () => {
+  it("stays open while searching", () => {
     window.localStorage.setItem("ducky.modelPicker.sections", JSON.stringify({ "openai:codex": true }));
     render(
       <ModelSection storageKey="openai:codex" label="Codex" forceOpen>
@@ -37,5 +37,18 @@ describe("ModelSection", () => {
       </ModelSection>,
     );
     expect(screen.getByText("GPT-6.1-Sol")).toBeTruthy();
+  });
+
+  it("folds even when it holds the picked model, and the folded header shows a check", () => {
+    render(
+      <ModelSection storageKey="anthropic:api" label="API" holdsPick>
+        <div>Claude Opus 5.5</div>
+      </ModelSection>,
+    );
+    expect(screen.queryByTitle("Your model is in here")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /API/ }));
+    expect(screen.queryByText("Claude Opus 5.5")).toBeNull();
+    expect(screen.getByTitle("Your model is in here")).toBeTruthy();
+    expect(isSectionCollapsed("anthropic:api")).toBe(true);
   });
 });
