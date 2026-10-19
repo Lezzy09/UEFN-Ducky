@@ -197,6 +197,10 @@ def run() -> None:
     # Cold start: queue CLI paths / deep links until React mounts and consumes them.
     enqueue_open_paths(open_paths)
     enqueue_deep_links(deep_links)
+    # The panel (never an IDE/agent bridge) may run the one-time ducky.db rebuild at its first open.
+    from backend.store import db as store_db
+
+    store_db.allow_rebuild()
 
     try:
         _run_panel(api_holder := {"api": None, "tk_root": None, "window_holder": {}})

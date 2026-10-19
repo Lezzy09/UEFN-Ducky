@@ -393,7 +393,7 @@ def stage_restore(snapshot_name: str) -> dict[str, Any]:
     src = db.snapshot_dir(root) / Path(snapshot_name).name
     if not src.is_file() or not src.name.startswith("ducky-") or src.suffix != ".db":
         return {"ok": False, "error": "unknown snapshot"}
-    from backend.store.sealed_files import WrongAccount
+    from backend.store.sealed_files import WrongAccount, sealed_for
     from backend.uefn_plugins.data_crypto import Locked
 
     try:
@@ -401,6 +401,11 @@ def stage_restore(snapshot_name: str) -> dict[str, Any]:
         if result != "ok":
             return {"ok": False, "error": f"snapshot fails integrity_check: {result}"}
         db.copy_backup(src, root / RESTORE_PENDING_NAME)
+        owner = sealed_for(src)
+        if owner:
+            # Its rows from before accounts go to the account it was sealed for, whoever
+            # is signed in when it is swapped in.
+            db.bind_restore_owner(root / RESTORE_PENDING_NAME, owner)
     except (WrongAccount, Locked) as exc:
         # A backup from before chats were sealed is sealed for the account they belonged to.
         return {"ok": False, "error": str(exc)}

@@ -146,9 +146,16 @@ def _apply_pending_restore(path: Path) -> None:
 
 
 VACUUM_PENDING_NAME = DB_NAME + ".vacuum-pending"
-# Starts that find ducky.db open in another process before the rebuild runs anyway.
-VACUUM_MAX_WAITS = 5
 VACUUM_MAX_FAILURES = 3
+# Only the panel process rebuilds (webview_app calls allow_rebuild before its first open):
+# an IDE/agent bridge starts on every agent turn, while the app holds the file.
+_rebuild_here = False
+
+
+def allow_rebuild() -> None:
+    """This process is the panel: its first open of ducky.db may run the one-time rebuild."""
+    global _rebuild_here
+    _rebuild_here = True
 
 
 def request_vacuum(root: Path | None = None) -> None:
@@ -183,13 +190,28 @@ def _held_elsewhere(path: Path) -> bool:
     return False
 
 
+def _vacuum_need_ok(path: Path, size: int) -> bool:
+    """Room for a VACUUM: a temp copy in %TEMP% plus every page again in the WAL."""
+    import tempfile
+
+    margin = 64 * 1024 * 1024
+    temp = Path(tempfile.gettempdir())
+    try:
+        same = os.stat(path.parent).st_dev == os.stat(temp).st_dev
+    except OSError:
+        same = True
+    if same:
+        return shutil.disk_usage(path.parent).free >= 2 * size + margin
+    return shutil.disk_usage(path.parent).free >= size + margin and shutil.disk_usage(temp).free >= size + margin
+
+
 def _vacuum_if_requested(path: Path) -> None:
-    """First open of a start, under the open lock: rebuild ducky.db once if
-    :func:`request_vacuum` asked for it. Waits (a few starts) for no other process to hold
-    the file, since the rebuild holds the write lock throughout. A failure keeps the
-    original whole (VACUUM is one transaction) and is tried again; never raises."""
+    """The panel's first open of a start, under the open lock: rebuild ducky.db once if
+    :func:`request_vacuum` asked for it, only while no other process holds the file (the
+    rebuild holds the write lock throughout); otherwise a later start does it. A failure
+    keeps the original whole (VACUUM is one transaction) and is tried again; never raises."""
     marker = path.parent / VACUUM_PENDING_NAME
-    if not marker.is_file():
+    if not _rebuild_here or not marker.is_file():
         return
     try:
         state = json.loads(marker.read_text(encoding="utf-8") or "{}")
@@ -208,27 +230,28 @@ def _vacuum_if_requested(path: Path) -> None:
         if not path.is_file():
             marker.unlink(missing_ok=True)
             return
-        if _held_elsewhere(path) and waits < VACUUM_MAX_WAITS:
+        if _held_elsewhere(path):
             _note(waits=waits + 1)
-            _log.info("ducky.db rebuild waits for the next start: another process has it open")
+            _log.info("ducky.db rebuild waits for a start with no other process holding it")
             return
-        import tempfile
-
         size = path.stat().st_size
         wal = path.with_name(path.name + "-wal")
         size += wal.stat().st_size if wal.is_file() else 0
-        need = int(size * 1.2) + 64 * 1024 * 1024
-        if min(shutil.disk_usage(path.parent).free, shutil.disk_usage(tempfile.gettempdir()).free) < need:
-            _log.warning("ducky.db rebuild waits: not enough free disk space (%d MB needed)", need >> 20)
+        if not _vacuum_need_ok(path, size):
+            _log.warning("ducky.db rebuild waits: not enough free disk space (%d MB needed)", (2 * size) >> 20)
             return
         started = time.monotonic()
         conn = sqlite3.connect(str(path), timeout=BUSY_TIMEOUT_MS / 1000, isolation_level=None)
         try:
             conn.execute("PRAGMA secure_delete=ON")
             conn.execute("VACUUM")
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            busy = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
         finally:
             conn.close()
+        if busy:
+            # The rebuilt pages are in the WAL but older frames may remain: finish next start.
+            _log.info("ducky.db rebuilt; its WAL is truncated at the next start")
+            return
         marker.unlink(missing_ok=True)
         _log.info("ducky.db rebuilt in %.1f s: no plaintext from before is left in it", time.monotonic() - started)
     except Exception:  # noqa: BLE001 — never in the way of opening the store
@@ -342,6 +365,47 @@ def copy_backup(src: Path, dest: Path) -> None:
         sealed_files.open_to(src, dest)
     else:
         shutil.copy2(src, dest)
+
+
+def bind_restore_owner(path: Path, owner: str) -> None:
+    """A backup staged for restore that was sealed for ``owner``: its rows from before
+    accounts go to ``owner`` when it is applied, whoever is signed in then
+    (``account_rows.claim`` gives them to ``rows_claimed_by``)."""
+    conn = sqlite3.connect(str(path), isolation_level=None)
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value, updated) VALUES ('rows_claimed_by', ?, ?)", (owner, time.time())
+        )
+    finally:
+        conn.close()
+
+
+def strip_foreign_records(path: Path, owner: str) -> int:
+    """Before a snapshot from before sealing is sealed for ``owner``: other accounts' plugin
+    search records go from it (each account's plugins write their own again), so ``owner``
+    can't read them from it. Keeps the file's times. Returns how many went."""
+    times = path.stat()
+    conn = sqlite3.connect(str(path), isolation_level=None)
+    try:
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='search_docs'").fetchone() is None:
+            return 0
+        theirs = "kind='record' AND substr(scope, 1, length(?) + 1) <> ? || '~'"
+        n = int(conn.execute(f"SELECT count(*) FROM search_docs WHERE {theirs}", (owner, owner)).fetchone()[0])
+        if not n:
+            return 0
+        conn.execute("PRAGMA secure_delete=ON")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            f"DELETE FROM search_vecs WHERE doc_id IN (SELECT id FROM search_docs WHERE {theirs})", (owner, owner)
+        )
+        conn.execute(f"DELETE FROM search_docs WHERE {theirs}", (owner, owner))
+        conn.execute("COMMIT")
+        conn.execute("INSERT INTO search_fts(search_fts) VALUES('optimize')")
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+    os.utime(path, ns=(times.st_atime_ns, times.st_mtime_ns))
+    return n
 
 
 def record_integrity(conn: sqlite3.Connection, result: str) -> None:
@@ -851,9 +915,10 @@ def newest_snapshot(root: Path | None = None) -> Path | None:
 def restore_snapshot(root: Path | None = None) -> Path:
     """Replace a corrupt ``ducky.db`` with the newest snapshot it can open. Loud on failure.
 
-    A snapshot sealed for an account (made before its chats were sealed) needs that
-    account's keys, which a corrupt database may not give: plain snapshots go first,
-    newest first, and sealed ones only after them."""
+    Plain snapshots go first, newest first (a plain one is always kept once chats are
+    sealed). A snapshot sealed for an account (made before its chats were sealed) needs
+    that account's keys and login, which live in the database being replaced, so one is
+    opened to a plain copy before the swap, and only when no plain one exists."""
     from backend.store import sealed_files
 
     root = root or app_root()
@@ -861,25 +926,49 @@ def restore_snapshot(root: Path | None = None) -> Path:
     files = sorted(d.glob("ducky-*.db"), key=lambda p: p.stat().st_mtime, reverse=True) if d.is_dir() else []
     if not files:
         raise StoreError("ducky.db failed its integrity check and no snapshot exists to restore")
-    files.sort(key=sealed_files.is_sealed_file)  # stable: plain ones first, each group newest first
+    plain = [p for p in files if not sealed_files.is_sealed_file(p)]
+    opened: tuple[Path, Path] | None = None if plain else _open_sealed_snapshot(files)
     reset_for_tests()
     dest = db_path(root)
-    with _first_open_lock(root):  # no other process may be mid-first-open while the file is swapped
-        moved: list[tuple[Path, Path]] = []
-        for name in (DB_NAME, *SIDECAR_NAMES):
-            p = root / name
-            if p.exists():
-                p.replace(root / (name + ".corrupt"))
-                moved.append((root / (name + ".corrupt"), p))
-        for src in files:
-            try:
-                copy_backup(src, dest)
-                return src
-            except Exception:  # noqa: BLE001 — a sealed one locked here: try the next one
-                _log.warning("snapshot %s could not be restored", src.name, exc_info=True)
-        for corrupt, original in moved:  # nothing could be restored: leave things as found
-            corrupt.replace(original)
+    try:
+        with _first_open_lock(root):  # no other process may be mid-first-open while the file is swapped
+            moved: list[tuple[Path, Path]] = []
+            for name in (DB_NAME, *SIDECAR_NAMES):
+                p = root / name
+                if p.exists():
+                    p.replace(root / (name + ".corrupt"))
+                    moved.append((root / (name + ".corrupt"), p))
+            for src in plain:
+                try:
+                    shutil.copy2(src, dest)
+                    return src
+                except OSError:
+                    _log.warning("snapshot %s could not be restored", src.name, exc_info=True)
+            if opened is not None:
+                os.replace(opened[0], dest)
+                return opened[1]
+            for corrupt, original in moved:  # nothing could be restored: leave things as found
+                corrupt.replace(original)
+    finally:
+        if opened is not None:
+            opened[0].unlink(missing_ok=True)
     raise StoreError("ducky.db failed its integrity check and no snapshot here can be opened")
+
+
+def _open_sealed_snapshot(files: list[Path]) -> tuple[Path, Path] | None:
+    """(plain copy, its snapshot) of the newest sealed snapshot the signed-in account can
+    open, made while the store is still in place; None when none can be."""
+    from backend.store import sealed_files
+
+    for src in files:
+        plain = src.with_name(f".{src.stem}.{os.getpid()}.restore{sealed_files.TMP_SUFFIX}")
+        try:
+            sealed_files.open_to(src, plain)
+            return plain, src
+        except Exception:  # noqa: BLE001 — another account's, or the store can't say who is signed in
+            plain.unlink(missing_ok=True)
+            _log.warning("sealed snapshot %s could not be opened for a restore", src.name, exc_info=True)
+    return None
 
 
 def open_checked(root: Path | None = None) -> sqlite3.Connection:

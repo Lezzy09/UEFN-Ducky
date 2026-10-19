@@ -210,6 +210,20 @@ def record_state(doc_key: str, model: str) -> tuple[str, bool] | None:
     return None if row is None else (str(row[0]), bool(row[1]))
 
 
+def _note_plain_records(conn: Any, where: str, args: tuple[Any, ...]) -> None:
+    """Inside a write: plaintext plugin records (from before they were sealed) are about to
+    be replaced or deleted. Their old words stay in the file's free space and in the
+    keyword index until the one rebuild after sealing, so ask for it (``account_rows``)."""
+    from backend.search.sealed_records import SEALED_PREFIX
+
+    conn.execute(
+        "INSERT OR REPLACE INTO meta(key, value, updated) SELECT 'vacuum_wanted', '1', ? WHERE EXISTS ("
+        f"SELECT 1 FROM search_docs WHERE ({where}) AND kind='record' "
+        f"AND substr(meta, 1, {len(SEALED_PREFIX)}) <> ?)",
+        (time.time(), *args, SEALED_PREFIX),
+    )
+
+
 def upsert_one(doc: Doc, vec: bytes | None, model: str, *, max_in_source: int | None = None) -> bool:
     """One record row (api.search): insert or update in place, vector alongside.
 
@@ -238,6 +252,7 @@ def upsert_one(doc: Doc, vec: bytes | None, model: str, *, max_in_source: int | 
             if str(row[1]) == doc.content_hash and (bool(row[2]) or vec is None):
                 return False
             if str(row[1]) != doc.content_hash:
+                _note_plain_records(conn, "id=?", (doc_id,))
                 conn.execute(
                     "UPDATE search_docs SET source_key=?, kind=?, origin=?, plugin_id=?, pack_id=?, subskill_id=?, "
                     "section=?, tool_name=?, scope=?, title=?, path=?, body=?, summary=?, meta=?, content_hash=?, "
@@ -272,6 +287,7 @@ def delete_docs(doc_keys: Iterable[str]) -> int:
     n = 0
     with db.write_txn(conn):
         for key in keys:
+            _note_plain_records(conn, "doc_key=?", (key,))
             n += conn.execute("DELETE FROM search_docs WHERE doc_key=?", (key,)).rowcount
     return n
 
@@ -279,6 +295,7 @@ def delete_docs(doc_keys: Iterable[str]) -> int:
 def drop_source(source_key: str) -> int:
     conn = db.connect()
     with db.write_txn(conn):
+        _note_plain_records(conn, "source_key=?", (source_key,))
         n = conn.execute("DELETE FROM search_docs WHERE source_key=?", (source_key,)).rowcount
         conn.execute("DELETE FROM search_state WHERE source_key=?", (source_key,))
     return n
@@ -289,6 +306,7 @@ def drop_sources_like(prefix: str) -> int:
     conn = db.connect()
     like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
     with db.write_txn(conn):
+        _note_plain_records(conn, "source_key LIKE ? ESCAPE '\\'", (like,))
         n = conn.execute("DELETE FROM search_docs WHERE source_key LIKE ? ESCAPE '\\'", (like,)).rowcount
         conn.execute("DELETE FROM search_state WHERE source_key LIKE ? ESCAPE '\\'", (like,))
     return n
@@ -308,6 +326,7 @@ def forget_records(plugin_id: str) -> int:
             "INSERT INTO search_meta(key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value=1",
             (f"gone:{plugin_id}",),
         )
+        _note_plain_records(conn, "source_key LIKE ? ESCAPE '\\'", (like,))
         n = conn.execute("DELETE FROM search_docs WHERE source_key LIKE ? ESCAPE '\\'", (like,)).rowcount
         conn.execute("DELETE FROM search_state WHERE source_key LIKE ? ESCAPE '\\'", (like,))
     return n
@@ -332,10 +351,10 @@ def drop_scope_records(account: str, scope_id: str) -> int:
     """Delete every plugin record of one account's data scope (a shared copy purged, a
     plugin-test sandbox ended). ``scope`` of a record row is ``<account>~<scope id>``."""
     conn = db.connect()
+    scope = f"{account or '_local'}~{scope_id}"
     with db.write_txn(conn):
-        n = conn.execute(
-            "DELETE FROM search_docs WHERE kind='record' AND scope=?", (f"{account or '_local'}~{scope_id}",)
-        ).rowcount
+        _note_plain_records(conn, "scope=?", (scope,))
+        n = conn.execute("DELETE FROM search_docs WHERE kind='record' AND scope=?", (scope,)).rowcount
     return n
 
 
@@ -347,6 +366,7 @@ def drop_stale_sandbox_records(older_than_s: float) -> int:
     if conn.execute(f"SELECT 1 FROM search_docs WHERE {where} LIMIT 1", args).fetchone() is None:
         return 0  # the common case: no write lock taken
     with db.write_txn(conn):
+        _note_plain_records(conn, where, args)
         n = conn.execute(f"DELETE FROM search_docs WHERE {where}", args).rowcount
     return n
 
@@ -407,8 +427,10 @@ def wipe() -> None:
 # --------------------------------------------------------------------------- reads
 
 
-def fts_query(text: str) -> str:
-    """Safe FTS5 MATCH text: quoted tokens OR'd together, the last one as a prefix.
+def fts_query(text: str, *, prefix: bool = True) -> str:
+    """Safe FTS5 MATCH text: quoted tokens OR'd together, the last one as a prefix
+    (``prefix=False``: exact words only, for rows whose words are blinded tokens, where a
+    prefix would match unrelated tokens).
 
     Quoting every token keeps FTS5 syntax (AND, NEAR, ``*``, ``:``, quotes) in the
     person's words from being parsed as operators.
@@ -419,7 +441,7 @@ def fts_query(text: str) -> str:
         return ""
     parts = [f'"{t}"' for t in tokens[:-1]]
     last = tokens[-1]
-    parts.append(f'"{last}"*' if len(last) >= 3 else f'"{last}"')
+    parts.append(f'"{last}"*' if prefix and len(last) >= 3 else f'"{last}"')
     return " OR ".join(parts)
 
 

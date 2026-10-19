@@ -28,7 +28,7 @@ from backend.store import db
 
 MAGIC = b"UDF1"
 CHUNK = 1024 * 1024
-_TMP = ".udf-tmp"
+TMP_SUFFIX = ".udf-tmp"  # a copy being written; swept if a crash leaves it
 _PUB_META = "file_key_pub:"
 _PRIV_META = "file_key_priv:"
 _ARRANGED_META = "chat_files_for"
@@ -74,7 +74,7 @@ def _read_keys_file() -> dict[str, dict[str, str]]:
 
 def _write_keys_file(keys: dict[str, dict[str, str]]) -> None:
     path = _keys_path()
-    tmp = path.with_name(path.name + f".{os.getpid()}.{threading.get_ident()}{_TMP}")
+    tmp = path.with_name(path.name + f".{os.getpid()}.{threading.get_ident()}{TMP_SUFFIX}")
     try:
         tmp.write_text(json.dumps(keys, indent=1, sort_keys=True), encoding="utf-8")
         os.replace(tmp, path)
@@ -277,7 +277,7 @@ def _decrypt_stream(src, file_key: bytes, header_raw: bytes) -> Iterator[bytes]:
 
 
 def _swap_in(tmp: Path, path: Path, times: os.stat_result) -> None:
-    os.replace(tmp, path)
+    _replace(tmp, path)
     try:
         os.utime(path, ns=(times.st_atime_ns, times.st_mtime_ns))
     except OSError:
@@ -285,7 +285,7 @@ def _swap_in(tmp: Path, path: Path, times: os.stat_result) -> None:
 
 
 def _tmp_for(path: Path) -> Path:
-    return path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}{_TMP}")
+    return path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}{TMP_SUFFIX}")
 
 
 def seal_file(path: Path, account: str, pub: bytes | None = None) -> bool:
@@ -342,9 +342,23 @@ def open_to(path: Path, dest: Path, account: str | None = None) -> None:
                 os.fsync(out.fileno())
         finally:
             fh.close()
-        os.replace(tmp, dest)
+        _replace(tmp, dest)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def _replace(tmp: Path, dest: Path, wait_s: float = 2.0) -> None:
+    """``os.replace``, waiting a moment while another reader still has ``dest`` open (on
+    Windows the swap fails then; two openers of one file finish within milliseconds)."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            os.replace(tmp, dest)
+            return
+        except PermissionError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.05)
 
 
 def open_file(path: Path, account: str | None = None) -> bool:
@@ -383,36 +397,71 @@ def backup_files(root: Path | None = None) -> list[Path]:
     out = list(db.snapshot_dir(root).glob("ducky-*.db")) if db.snapshot_dir(root).is_dir() else []
     out += [p for p in root.glob(db.DB_NAME + ".replaced-*") if p.is_file()]
     out += [p for p in root.glob(db.DB_NAME + "*.corrupt") if p.is_file()]
-    return [p for p in out if not p.name.endswith(_TMP)]
+    return [p for p in out if not p.name.endswith(TMP_SUFFIX)]
+
+
+def _made(st: os.stat_result) -> float:
+    """When a file was made (a snapshot's copy starts then; sealing it keeps its mtime)."""
+    return float(getattr(st, "st_birthtime", 0) or (st.st_ctime if os.name == "nt" else st.st_mtime))
 
 
 def seal_backups(account: str, *, made_before: float, settle_s: float = 60.0) -> int:
-    """Seal for ``account`` every backup of ducky.db made before ``made_before`` (they hold
-    chats from before they were sealed). One still being written is left for the next run."""
+    """Seal for ``account`` every backup of ducky.db started before ``made_before`` (they
+    hold chats from before they were sealed); a snapshot keeps only ``account``'s plugin
+    search records. One still being written is left for the next run."""
     pub = public_key(account)
     if pub is None:
         return 0
     sealed = 0
     now = time.time()
+    snapshots = db.snapshot_dir().resolve()
     for path in backup_files():
         try:
-            mtime = path.stat().st_mtime
-            if mtime > made_before or now - mtime < settle_s:
+            st = path.stat()
+            if _made(st) >= made_before or now - st.st_mtime < settle_s or is_sealed_file(path):
                 continue
+            if path.parent.resolve() == snapshots:
+                db.strip_foreign_records(path, account)
             if seal_file(path, account, pub):
                 sealed += 1
-        except OSError:
+        except Exception:  # noqa: BLE001 — in use or unreadable: the next pass tries again
             _log.warning("could not seal the ducky.db backup %s yet", path.name, exc_info=True)
     return sealed
+
+
+# --------------------------------------------------------------------------- leftovers
+
+LEFTOVER_AGE_S = 600.0
+
+
+def sweep_leftovers(*, older_than_s: float = LEFTOVER_AGE_S) -> int:
+    """Plain copies an interrupted open left behind (a crash, or the app closed mid-open):
+    ``*.udf-tmp`` beside ducky.db, its snapshots and chat attachments, and integrity-check
+    copies of sealed backups. One still being written is newer than ``older_than_s``."""
+    root = db.app_root()
+    places = [p for p in root.glob("*" + TMP_SUFFIX)]
+    snaps = db.snapshot_dir(root)
+    if snaps.is_dir():
+        places += list(snaps.glob("*" + TMP_SUFFIX)) + list(snaps.glob(".*.check.db*"))
+    for _conv, folder in _chat_folders():
+        places += [p for p in folder.rglob("*" + TMP_SUFFIX) if p.is_file()]
+    removed = 0
+    now = time.time()
+    for path in places:
+        try:
+            if now - path.stat().st_mtime >= older_than_s:
+                path.unlink()
+                removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 # --------------------------------------------------------------------------- chat attachments
 
 
 def _chat_folders() -> Iterator[tuple[str, Path]]:
-    from frontend.app_paths import resolve_app_data_dir
-
-    projects = resolve_app_data_dir() / "chats" / "projects"
+    projects = db.app_root() / "chats" / "projects"
     if not projects.is_dir():
         return
     for project in projects.iterdir():
@@ -426,7 +475,7 @@ def _chat_folders() -> Iterator[tuple[str, Path]]:
 
 
 def _files(folder: Path) -> Iterable[Path]:
-    return [p for p in folder.rglob("*") if p.is_file() and not p.name.endswith(_TMP)]
+    return [p for p in folder.rglob("*") if p.is_file() and not p.name.endswith(TMP_SUFFIX)]
 
 
 def open_chat_folder(folder: Path, account: str) -> int:
@@ -444,46 +493,66 @@ def open_chat_folder(folder: Path, account: str) -> int:
     return n
 
 
-def arrange_chat_files(account: str) -> dict[str, int]:
-    """Chat attachments on disk follow who is signed in: ``account``'s are opened (it is
-    signed in, its data key is here), every other account's chats' are sealed for their
-    owner. Done once per sign-in; a file in use is retried the next time."""
-    from backend.uefn_plugins import data_crypto
+_arranging = threading.Lock()
 
-    conn = db.connect()
-    if _meta(conn, _ARRANGED_META) == account:
-        return {}
-    owners = {str(r[0]): str(r[1]) for r in conn.execute("SELECT id, account_id FROM conversations")}
-    pubs: dict[str, bytes | None] = {}
-    out = {"attachments_opened": 0, "attachments_sealed": 0, "attachments_left": 0}
-    for conv_id, folder in _chat_folders():
-        owner = owners.get(conv_id)
-        if owner is None:
-            continue  # not a saved chat (or one from before accounts that nobody claimed yet)
-        if owner != account and owner not in pubs:
-            pubs[owner] = public_key(owner)
-        for path in _files(folder):
-            try:
-                if owner == account:
-                    if sealed_for(path) == account and open_file(path, account):
-                        out["attachments_opened"] += 1
-                elif pubs[owner] is None:
-                    out["attachments_left"] += 1  # no file keys for its owner yet: sealed once they sign in
-                elif seal_file(path, owner, pubs[owner]):
-                    out["attachments_sealed"] += 1
-            except data_crypto.Locked:
-                out["attachments_left"] += 1
-            except (OSError, ValueError, WrongAccount):
-                out["attachments_left"] += 1
-                _log.warning("could not arrange a chat attachment of %s yet", conv_id, exc_info=True)
-    if not out["attachments_left"]:
-        with db.write_txn(conn):
+
+def _set_arranged(conn, account: str | None) -> None:
+    with db.write_txn(conn):
+        if account is None:
+            conn.execute("DELETE FROM meta WHERE key=?", (_ARRANGED_META,))
+        else:
             conn.execute(
                 "INSERT INTO meta(key, value, updated) VALUES (?, ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
                 (_ARRANGED_META, account, time.time()),
             )
-    return {k: v for k, v in out.items() if v}
+
+
+def arrange_chat_files(account: str) -> dict[str, int]:
+    """Chat attachments on disk follow who is signed in: ``account``'s are opened (it is
+    signed in, its data key is here), every other account's chats' are sealed for their
+    owner. Done once per sign-in, one pass at a time; a pass stops as soon as someone else
+    signs in (that sign-in's own pass takes over), and a file in use is tried again by the
+    next pass, since only a whole pass marks the account done."""
+    from backend.store import account_rows
+    from backend.uefn_plugins import data_crypto
+
+    if account_rows.current() != account:
+        return {}
+    with _arranging:
+        conn = db.connect()
+        if _meta(conn, _ARRANGED_META) == account:
+            return {}
+        _set_arranged(conn, None)  # a pass cut short must never look done for anyone
+        owners = {str(r[0]): str(r[1]) for r in conn.execute("SELECT id, account_id FROM conversations")}
+        pubs: dict[str, bytes | None] = {}
+        out = {"attachments_opened": 0, "attachments_sealed": 0, "attachments_left": 0}
+        for conv_id, folder in _chat_folders():
+            owner = owners.get(conv_id)
+            if owner is None:
+                continue  # not a saved chat (or one from before accounts that nobody claimed yet)
+            if account_rows.current() != account:
+                out["attachments_left"] += 1
+                break
+            if owner != account and owner not in pubs:
+                pubs[owner] = public_key(owner)
+            for path in _files(folder):
+                try:
+                    if owner == account:
+                        if sealed_for(path) == account and open_file(path, account):
+                            out["attachments_opened"] += 1
+                    elif pubs[owner] is None:
+                        out["attachments_left"] += 1  # no file keys for its owner yet: sealed once they have some
+                    elif seal_file(path, owner, pubs[owner]):
+                        out["attachments_sealed"] += 1
+                except data_crypto.Locked:
+                    out["attachments_left"] += 1
+                except (OSError, ValueError, WrongAccount):
+                    out["attachments_left"] += 1
+                    _log.warning("could not arrange a chat attachment of %s yet", conv_id, exc_info=True)
+        if not out["attachments_left"] and account_rows.current() == account:
+            _set_arranged(conn, account)
+        return {k: v for k, v in out.items() if v}
 
 
 def reset_for_tests() -> None:

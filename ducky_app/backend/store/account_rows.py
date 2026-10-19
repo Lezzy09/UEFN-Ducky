@@ -104,7 +104,27 @@ def ready(account: str) -> bytes:
 
     if not data_crypto.available(account):
         raise data_crypto.Locked("Waiting for this account's data key. Your chats open once you're online.")
-    return chat_key(account)
+    key = chat_key(account)
+    _ensure_file_keys(account)
+    return key
+
+
+_file_keys_done: set[tuple[str, str]] = set()
+
+
+def _ensure_file_keys(account: str) -> None:
+    """The account's file keypair, as soon as its data key is here (once per process), so
+    its chat attachments can be sealed whenever another account signs in on this PC."""
+    memo = (str(db.db_path()), account)
+    if memo in _file_keys_done or db.connect().in_transaction:
+        return
+    try:
+        from backend.store import sealed_files
+
+        sealed_files.ensure_keypair(account)
+        _file_keys_done.add(memo)
+    except Exception:  # noqa: BLE001 — never in the way of a read or write; the next call tries again
+        _log.debug("file keys for this account not made yet", exc_info=True)
 
 
 def chat_key(account: str) -> bytes:
@@ -194,6 +214,7 @@ def forget() -> None:
         _chat_keys.clear()
         _opened.clear()
         _opened_chars = 0
+    _file_keys_done.clear()
     sealed_files.forget()
 
 
@@ -265,6 +286,8 @@ def _zeroing(conn) -> Iterator[None]:
 
 def claim(account: str) -> int:
     """Rows from before 0024 become ``account``'s, all of them at once. Returns how many.
+    If the database already names the account they went to (a backup sealed for it,
+    restored while another account was signed in), they go to that account instead.
 
     A message belongs to its chat; its own ``account_id`` is filled when it is sealed
     (a batch at a time), not here: rewriting every message in one transaction would hold
@@ -272,6 +295,7 @@ def claim(account: str) -> int:
     conn = db.connect()
     if not conn.execute(_UNCLAIMED_ROWS).fetchone()[0]:
         return 0
+    account = claimer() or account
     with _zeroing(conn), db.write_txn(conn):
         moved = conn.execute("UPDATE conversations SET account_id=? WHERE account_id=''", (account,)).rowcount
         for table in ("folders", "duckies"):
@@ -453,6 +477,10 @@ def seal_pending(account: str | None = None, *, batch: int = 40, pause_s: float 
     conn = db.connect()
     out: dict[str, int] = {}
     try:
+        out["leftovers_removed"] = sealed_files.sweep_leftovers()
+    except Exception:  # noqa: BLE001
+        _log.warning("sweeping plain copies left by an interrupted open failed", exc_info=True)
+    try:
         ready(account)
         sealed_files.ensure_keypair(account)
         from backend.store.repos import chats
@@ -461,6 +489,7 @@ def seal_pending(account: str | None = None, *, batch: int = 40, pause_s: float 
         # Once nothing of the account is left in plaintext, every writer seals what it
         # writes (an older build can't open this schema): later passes skip the scans.
         if _get_meta(conn, _DONE + account) is not None:
+            out.update(_rebuild_if_wanted(conn))  # a plugin's old records went meanwhile
             raise _AlreadySealed
         # Asked before rewriting anything, so a pass cut short still rebuilds in the end.
         if _plaintext_left(conn, account, claimer_pass=claimer_pass):
@@ -478,26 +507,54 @@ def seal_pending(account: str | None = None, *, batch: int = 40, pause_s: float 
             out.update({k: v for k, v in sealed.items() if v})
             out["search_records"] = sealed_records.seal_existing(account, batch=batch)
         if not _plaintext_left(conn, account, claimer_pass=claimer_pass):
+            out.update(_rebuild_if_wanted(conn))
             _set_meta(conn, _DONE + account, str(time.time()))
-            if claimer_pass:
+            if claimer_pass and _get_meta(conn, _SEALED_AT) is None:
                 _set_meta(conn, _CLAIMED_BY, account, replace=False)
-                _set_meta(conn, _SEALED_AT, str(time.time()), replace=False)
-            if _get_meta(conn, _VACUUM_WANTED) is not None:
-                db.request_vacuum()
-                with db.write_txn(conn):
-                    conn.execute("DELETE FROM meta WHERE key=?", (_VACUUM_WANTED,))
-                out["rebuild_next_start"] = 1
+                _set_meta(conn, _SEALED_AT, str(time.time()))
+                out.update(_keep_a_plain_snapshot())
     except (data_crypto.Locked, _AlreadySealed):
         pass
     finally:
         with _lock:
             _sealing.discard(memo)
     out.update(_seal_backups(conn))
-    try:
-        out.update(sealed_files.arrange_chat_files(account))
-    except Exception:  # noqa: BLE001 — a folder in use: the next sign-in or start does it
-        _log.warning("arranging chat attachments for the signed-in account failed", exc_info=True)
+    if account == current():  # a pass that outlived a sign-in leaves the files to the new one's
+        try:
+            out.update(sealed_files.arrange_chat_files(account))
+        except Exception:  # noqa: BLE001 — a folder in use: the next sign-in or start does it
+            _log.warning("arranging chat attachments for the signed-in account failed", exc_info=True)
     return {k: v for k, v in out.items() if v}
+
+
+def _rebuild_if_wanted(conn) -> dict[str, int]:
+    """Plaintext was rewritten or deleted: the search indexes drop the old words (their
+    segments are rows a rebuild would copy), then ducky.db is rebuilt at the next start."""
+    if _get_meta(conn, _VACUUM_WANTED) is None:
+        return {}
+    with _zeroing(conn):
+        for fts in ("message_fts", "search_fts"):
+            with db.write_txn(conn):
+                conn.execute(f"INSERT INTO {fts}({fts}) VALUES('optimize')")
+    db.request_vacuum()
+    with db.write_txn(conn):
+        conn.execute("DELETE FROM meta WHERE key=?", (_VACUUM_WANTED,))
+    return {"rebuild_next_start": 1}
+
+
+def _keep_a_plain_snapshot() -> dict[str, int]:
+    """A snapshot made now holds every claimed row sealed and no old fragments, so it stays
+    plain: a corrupt ducky.db is always restored from it, never needing a sealed one."""
+    from backend.store import sealed_files
+
+    if not sealed_files.backup_files():
+        return {}  # nothing from before to seal, nothing to keep beside it
+    try:
+        db.snapshot(label="sealed")
+    except Exception:  # noqa: BLE001 — the daily snapshot makes one later
+        _log.warning("snapshot after sealing failed", exc_info=True)
+        return {}
+    return {"plain_snapshot": 1}
 
 
 def _seal_backups(conn) -> dict[str, int]:
@@ -509,8 +566,8 @@ def _seal_backups(conn) -> dict[str, int]:
     if not owner or sealed_at is None:
         return {}
     try:
-        # A snapshot started just before then may finish a little after.
-        n = sealed_files.seal_backups(owner, made_before=float(sealed_at) + 300.0)
+        # Only copies started before then: one started after holds sealed rows only.
+        n = sealed_files.seal_backups(owner, made_before=float(sealed_at))
     except Exception:  # noqa: BLE001
         _log.warning("sealing ducky.db backups from before failed", exc_info=True)
         return {}

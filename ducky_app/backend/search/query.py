@@ -290,8 +290,9 @@ def search(
     if source and vec_key:
         from backend.search import sealed_records
 
-        plain, blind = repo.fts_query(text), sealed_records.blind_match(text, vec_key)
-        # Rows from before sealing still match on their words until the seal pass reaches them.
+        plain, blind = repo.fts_query(text, prefix=False), sealed_records.blind_match(text, vec_key)
+        # Rows from before sealing still match on their words until the seal pass reaches
+        # them; exact words only, since a prefix would also match blinded tokens.
         match = " OR ".join(f"({q})" for q in (plain, blind) if q)
     conn = db.connect()
     # One read transaction is one WAL snapshot: the keyword ids, the vector ids, the
