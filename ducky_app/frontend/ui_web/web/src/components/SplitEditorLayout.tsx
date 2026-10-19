@@ -282,6 +282,8 @@ export function SplitEditorLayout({
 
           isFocused={layout.focusedGroupId === group.id}
 
+          split={layout.root.type !== "group"}
+
           variant={variant}
 
           allChats={allChats}

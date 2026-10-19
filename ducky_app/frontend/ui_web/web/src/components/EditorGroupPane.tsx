@@ -41,6 +41,8 @@ interface EditorGroupPaneProps {
   group: EditorGroup;
   openTabs: EditorTab[];
   isFocused: boolean;
+  /** The editor area is split into more than one pane. */
+  split?: boolean;
   variant?: "default" | "focus";
   allChats: ChatTab[];
   folders?: FolderItem[];
@@ -77,6 +79,7 @@ export const EditorGroupPane = memo(function EditorGroupPane({
   group,
   openTabs,
   isFocused,
+  split = false,
   variant = "default",
   allChats,
   folders = [],
@@ -160,10 +163,11 @@ export const EditorGroupPane = memo(function EditorGroupPane({
         .filter((t) => terminalsEnabled || t.kind !== "terminal"),
     [group.tabIds, openTabs, terminalsEnabled],
   );
-  // Phones: the focused group's tabs are a dropdown in the header, not a row here.
+  // Phones: the focused group's tabs are a dropdown in the header, not a row here. A split
+  // keeps each pane's own row, so every pane shows (and can close) its tabs.
   const narrow = useNarrowLayout();
   const headerTabsSlot = useHeaderTabsSlot();
-  const tabsInHeader = narrow && isFocused && variant !== "focus" && !!headerTabsSlot && groupTabs.length > 0;
+  const tabsInHeader = narrow && !split && isFocused && variant !== "focus" && !!headerTabsSlot && groupTabs.length > 0;
 
   const activeTab = group.activeTabId ? openTabs.find((t) => t.id === group.activeTabId) : undefined;
 

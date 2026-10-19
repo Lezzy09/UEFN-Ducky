@@ -44,6 +44,23 @@
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
+  animation: quick-open-drop 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+/* The search slides down a little into place as it opens. */
+@keyframes quick-open-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .quick-open-palette {
+    animation: none;
+  }
 }
 .quick-open-palette-input-wrap {
   display: flex;
@@ -265,21 +282,47 @@
   font-size: 12px;
 }
 
+/* Narrow windows and phones: the search drops down from under the top bar (which stays
+   visible and usable) and is only as tall as what it shows. */
 @media (max-width: 720px) {
   .quick-open-overlay {
-    padding-top: 8px;
-    padding-left: 8px;
-    padding-right: 8px;
-    padding-bottom: max(8px, env(safe-area-inset-bottom));
-    align-items: stretch;
+    top: var(--app-header-height);
+    padding-top: 6px;
+    padding-left: 6px;
+    padding-right: 6px;
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
+    align-items: flex-start;
   }
   .quick-open-palette {
     width: 100%;
-    max-height: calc(100dvh - 16px);
-    border-radius: 10px;
+    max-height: calc(100dvh - var(--app-header-height) - 12px);
+    border-radius: var(--radius-sm, 8px);
   }
+  /* Compact tiles: icon beside a one-line name, so the list stays short. */
   .quick-open-services-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2px;
+    padding: 2px 4px 6px;
+  }
+  .quick-open-service-tile {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    padding: 4px 8px;
+  }
+  .quick-open-service-tile-icon {
+    width: 18px;
+    height: 18px;
+  }
+  .quick-open-service-tile-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+  .quick-open-service-tile-label {
+    text-align: left;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
   }
 }
 

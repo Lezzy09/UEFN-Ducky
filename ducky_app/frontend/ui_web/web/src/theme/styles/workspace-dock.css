@@ -332,13 +332,27 @@ body.appearance-skin-active .workspace-dock-layout--default:not(.is-narrow) .doc
   padding-right: var(--dock-gap);
 }
 
+/* Narrow windows and phones use the same edge. Their tabs have no pill inset, so the tab
+   itself starts at the edge (tab margin 1px). */
+.workspace-dock-layout--default.is-narrow .workspace-dock-center {
+  --chat-edge-inset: 6px;
+}
+
+.workspace-dock-layout--default.is-narrow .workspace-dock-center .editor-tabs-bar {
+  padding-left: 5px;
+}
+
+.workspace-dock-layout--default.is-narrow .workspace-dock-center .editor-tabs-shell .editor-tab-bar-actions {
+  padding-right: 6px;
+}
+
 /* The turn ticks fit in that edge (they still grow while you use them). */
-.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .chat-scroll-peek-track {
+.workspace-dock-layout--default .workspace-dock-center .chat-scroll-peek-track {
   left: 0;
 }
 
-.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .chat-scroll-peek-tick {
-  width: calc(var(--dock-gap) - 1px);
+.workspace-dock-layout--default .workspace-dock-center .chat-scroll-peek-tick {
+  width: calc(var(--chat-edge-inset) - 1px);
 }
 
 .chat-view-layout .workspace-dock-layout {

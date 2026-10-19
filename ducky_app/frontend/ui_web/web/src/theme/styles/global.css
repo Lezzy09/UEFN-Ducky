@@ -558,8 +558,11 @@ body.native-caption-input-ready .app-header .drag-region {
   background: var(--red);
   color: var(--fg);
 }
+:root {
+  --app-header-height: 34px;
+}
 .app-header {
-  height: 34px;
+  height: var(--app-header-height);
   display: flex;
   align-items: center;
   justify-content: space-between;
