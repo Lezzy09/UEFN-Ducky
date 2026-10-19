@@ -559,7 +559,7 @@ body.native-caption-input-ready .app-header .drag-region {
   color: var(--fg);
 }
 .app-header {
-  height: 48px;
+  height: 40px;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -874,7 +874,7 @@ body.native-caption-input-ready .app-header .drag-region {
 }
 .remote-window-overlay {
   position: absolute;
-  inset: 48px 0 0 0;
+  inset: 40px 0 0 0; /* below .app-header */
   z-index: 20;
   background: #0b0b0d;
   display: flex;
