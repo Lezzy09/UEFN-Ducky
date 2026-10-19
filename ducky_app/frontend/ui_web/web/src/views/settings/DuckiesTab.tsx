@@ -135,13 +135,15 @@ export function DuckiesTab() {
   );
 
   // UEFN agent tool rows land after plugin register(); re-fetch when host signals ready.
+  // Duckies are the signed-in account's: another account's sign-in shows its own.
   useEffect(() => {
     installPanelPushBus();
     return subscribePanelPush((event) => {
+      if (event.type === "duckyos_account_changed") void refreshProfiles();
       if (event.type !== "uefn_plugins_changed") return;
       void refreshCatalog();
     });
-  }, [refreshCatalog]);
+  }, [refreshCatalog, refreshProfiles]);
 
   // Deep-link from create-flow / group invite "Create new".
   useEffect(() => {

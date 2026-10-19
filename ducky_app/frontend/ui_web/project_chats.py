@@ -1845,20 +1845,11 @@ def _commit_project_move(
     dest_folder_for,
 ) -> None:
     if _use_db():
-        from backend.store import db
-
-        conn = db.connect()
-        with db.write_txn(conn):
-            for source, folder in moved_folders:
-                conn.execute(
-                    "UPDATE folders SET project_id=?, parent_id=? WHERE project_id=? AND id=?",
-                    (target, folder.parent_id or "", source, folder.id),
-                )
-            for cid in move_conv_ids:
-                conn.execute(
-                    "UPDATE conversations SET project_id=?, folder_id=? WHERE id=?",
-                    (target, dest_folder_for(cid), cid),
-                )
+        _repo().move_to_project(
+            target,
+            [(source, folder.id, folder.parent_id or "") for source, folder in moved_folders],
+            [(cid, dest_folder_for(cid)) for cid in move_conv_ids],
+        )
         return
 
     for cid in move_conv_ids:

@@ -173,6 +173,21 @@ def test_upgrade_from_previous_schema_does_not_deadlock(tmp_path: Path) -> None:
     conn.execute("DROP TABLE search_fts")
     conn.execute("ALTER TABLE search_docs DROP COLUMN summary")
     conn.execute("DROP TABLE space_meta")  # 0012 makes it under its first name, 0019 renames it
+    # 0024 adds the account columns and gives folders a key with the account in it.
+    conn.execute("DROP INDEX ix_conv_account")
+    conn.execute("ALTER TABLE conversations DROP COLUMN account_id")
+    conn.execute("ALTER TABLE messages DROP COLUMN account_id")
+    conn.execute("DROP TABLE folders")
+    conn.execute(
+        "CREATE TABLE folders (project_id TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', "
+        "parent_id TEXT NOT NULL DEFAULT '', sort_order REAL NOT NULL DEFAULT 0, "
+        "group_hub_id TEXT NOT NULL DEFAULT '', PRIMARY KEY (project_id, id))"
+    )
+    conn.execute("DROP INDEX ux_duckies_account")
+    conn.execute("ALTER TABLE duckies DROP COLUMN account_id")
+    conn.execute("ALTER TABLE duckies DROP COLUMN ducky_id")
+    conn.execute("DROP INDEX duckies_history_account")
+    conn.execute("ALTER TABLE duckies_history DROP COLUMN account_id")
     conn.execute("PRAGMA user_version=8")
     db.reset_for_tests()
 

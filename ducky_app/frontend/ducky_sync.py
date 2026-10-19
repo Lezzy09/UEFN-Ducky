@@ -38,7 +38,7 @@ _last: dict[str, Any] = {}
 
 def duckies_for_sync() -> list[dict[str, Any]]:
     """This Ducky's own duckies for another Ducky of the account (``ducky_sync_duckies``):
-    edited shipped ones and custom ones, deleted ones left out."""
+    the signed-in account's edited shipped ones and custom ones, deleted ones left out."""
     from backend.store.repos import duckies as repo
 
     return [
@@ -95,8 +95,9 @@ def slim_rows(rows: Any) -> list[dict[str, Any]]:
     return out
 
 
-def apply_duckies(rows: Any) -> int:
-    """Take the other Ducky's duckies that changed there last. Returns how many changed here."""
+def apply_duckies(rows: Any, account: str | None = None) -> int:
+    """Take the other Ducky's duckies that changed there last, into ``account``'s (the
+    signed-in one by default). Returns how many changed here."""
     from backend.store.repos import duckies as repo
 
     changed = 0
@@ -107,9 +108,9 @@ def apply_duckies(rows: Any) -> int:
         if not rid or kind not in ("custom", "bundled") or not isinstance(data, dict) or not data:
             continue
         # One archived over there doesn't turn up here; one already here keeps its own state.
-        if row.get("archived") and repo.get(rid) is None:
+        if row.get("archived") and repo.get(rid, account=account) is None:
             continue
-        if repo.save_synced(rid, kind, data, float(row.get("updated") or 0)):
+        if repo.save_synced(rid, kind, data, float(row.get("updated") or 0), account=account):
             changed += 1
     return changed
 
@@ -134,7 +135,7 @@ def sync_with(peer: dict[str, Any]) -> dict[str, Any]:
     got = call(key, "ducky_sync_duckies", {})
     if not got.get("ok"):
         return {"ok": False, "ducky": name, "error": got.get("error")}
-    out["duckies"] = apply_duckies(got.get("result"))
+    out["duckies"] = apply_duckies(got.get("result"), account)
     listed = call(key, "ducky_sync_chats", {})
     if not listed.get("ok"):
         return {**out, "ok": False, "error": listed.get("error")}

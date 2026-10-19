@@ -6,7 +6,7 @@ import json
 import sqlite3
 import time
 
-from backend.store import db
+from backend.store import account_rows, db
 from backend.store.repos import chats as repo
 
 PROJECT = "proj_parts"
@@ -112,7 +112,7 @@ def test_large_top_level_fields_and_odd_shapes_round_trip() -> None:
     assert _json(repo.messages_get("c4")) == _json(json.loads(_json(messages)))
     # content and text hold the same reply: one stored copy
     first = db.connect().execute("SELECT body FROM messages WHERE conv_id='c4' AND seq=0").fetchone()[0]
-    refs = json.loads(first)["x"]
+    refs = json.loads(account_rows.open_text(first, account_rows.current()))["x"]
     assert len({r[-1] for r in refs}) == 2 and len(refs) == 3
 
 
@@ -255,25 +255,29 @@ def _fmts() -> dict[tuple[str, int], int]:
     return {(c, s): f for c, s, f in rows}
 
 
-def test_older_rows_are_compacted_and_read_back_identical(monkeypatch) -> None:
+def test_older_rows_are_sealed_compacted_and_read_back_identical(monkeypatch) -> None:
     chats = _old_chats()
     _saved_before_the_upgrade(monkeypatch, chats)
     conn = db.connect()
-    hashes = conn.execute("SELECT id, hash, text FROM messages ORDER BY id").fetchall()
+    hashes = conn.execute("SELECT id, hash FROM messages ORDER BY id").fetchall()
 
-    result = repo.compact_stored_messages(batch=2, pause_s=0)
+    result = repo.seal_stored_messages(batch=2, pause_s=0)
 
-    assert result["compacted"] == 4
+    assert (result["sealed"], result["compacted"]) == (6, 4)
     big = {("old1", 1), ("old1", 3), ("old2", 0), ("old2", 1)}
     assert {k for k, f in _fmts().items() if f == repo.FMT_PARTS} == big
     assert _count("SELECT count(*) FROM message_parts") == 4  # the shared read is stored once
-    assert conn.execute("SELECT id, hash, text FROM messages ORDER BY id").fetchall() == hashes
+    assert conn.execute("SELECT id, hash FROM messages ORDER BY id").fetchall() == hashes
+    # Bodies, payloads and search text hold none of the words any more.
+    for body, text in conn.execute("SELECT body, text FROM messages"):
+        assert body.startswith("enc1:") and "goblin" not in body + text
+    assert all(bytes(d).startswith(b"UDE1") for (d,) in conn.execute("SELECT data FROM message_parts"))
     for conv_id, messages in chats.items():
         assert _json(repo.messages_get(conv_id)) == _json(messages)
     assert repo.search_messages(PROJECT, "goblin_three")[0]["conv_id"] == "old2"
     conn.execute("INSERT INTO message_fts(message_fts) VALUES('integrity-check')")
     # Done: the next boot has nothing left to look at.
-    assert repo.compact_stored_messages(batch=2, pause_s=0) == {"compacted": 0, "scanned": 0}
+    assert repo.seal_stored_messages(batch=2, pause_s=0) == {"sealed": 0, "compacted": 0, "scanned": 0, "parts": 0}
 
 
 def test_compaction_picks_up_where_it_stopped(monkeypatch) -> None:
@@ -282,24 +286,24 @@ def test_compaction_picks_up_where_it_stopped(monkeypatch) -> None:
     real = repo._write_parts
     calls: list[int] = []
 
-    def fail_in_second_batch(conn, message_id, parts):
+    def fail_in_third_batch(conn, message_id, parts, account):
         calls.append(message_id)
         if len(calls) == 3:
             raise RuntimeError("app closed")
-        return real(conn, message_id, parts)
+        return real(conn, message_id, parts, account)
 
-    monkeypatch.setattr(repo, "_write_parts", fail_in_second_batch)
+    monkeypatch.setattr(repo, "_write_parts", fail_in_third_batch)
     try:
-        repo.compact_stored_messages(batch=2, pause_s=0)
+        repo.seal_stored_messages(batch=2, pause_s=0)
     except RuntimeError:
         pass
-    # The first batch stayed done; the interrupted one rolled back whole.
+    # The first batches stayed done; the interrupted one rolled back whole.
     assert sorted(f for f in _fmts().values()) == [0, 0, 0, 0, 1, 1]
     for conv_id, messages in chats.items():
         assert _json(repo.messages_get(conv_id)) == _json(messages)
 
     monkeypatch.setattr(repo, "_write_parts", real)
-    assert repo.compact_stored_messages(batch=2, pause_s=0)["compacted"] == 2
+    assert repo.seal_stored_messages(batch=2, pause_s=0)["compacted"] == 2
     assert sorted(f for f in _fmts().values()) == [0, 0, 1, 1, 1, 1]
     for conv_id, messages in chats.items():
         assert _json(repo.messages_get(conv_id)) == _json(messages)
@@ -312,13 +316,13 @@ def test_compaction_leaves_a_row_that_was_saved_meanwhile(monkeypatch) -> None:
     edited[1] = _assistant(_tool_text("edited"))
     real = repo._compact_stored
 
-    def save_while_reading(body):
-        out = real(body)
+    def save_while_reading(body, digest_of):
+        out = real(body, digest_of)
         if "goblin_three" in body:
             repo.conv_save(PROJECT, _doc("old2"), messages=edited)  # the chat goes on meanwhile
         return out
 
     monkeypatch.setattr(repo, "_compact_stored", save_while_reading)
-    repo.compact_stored_messages(batch=10, pause_s=0)
+    repo.seal_stored_messages(batch=10, pause_s=0)
     assert _json(repo.messages_get("old2")) == _json(edited)
     assert _json(repo.messages_get("old1")) == _json(chats["old1"])

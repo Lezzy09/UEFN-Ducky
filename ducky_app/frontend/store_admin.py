@@ -327,28 +327,36 @@ def export_table(table: str) -> dict[str, Any]:
 
 
 def delete_project_rows(project_id: str) -> dict[str, int]:
-    """Remove every row scoped to one project (chats cascade to messages, runs to entries)."""
+    """Remove every row scoped to one project (chats cascade to messages, runs to entries).
+    Chats and folders go only for the signed-in account; another account's stay."""
+    from backend.store import account_rows
+
     pid = (project_id or "").strip()
     if not pid:
         return {}
+    account = account_rows.current()
     db = _db()
     conn = db.connect()
     removed: dict[str, int] = {}
     with db.write_txn(conn):
         # Cascades (messages, run entries, seen marks) are counted up front so the
         # report says what really went, then the parents go and take them along.
-        for child, sql in (
-            ("messages", "SELECT count(*) FROM messages WHERE conv_id IN (SELECT id FROM conversations WHERE project_id=?)"),
-            ("run_entries", "SELECT count(*) FROM run_entries WHERE run_id IN (SELECT run_id FROM runs WHERE project_id=?)"),
-            ("run_seen", "SELECT count(*) FROM run_seen WHERE run_id IN (SELECT run_id FROM runs WHERE project_id=?)"),
+        for child, sql, args in (
+            ("messages", "SELECT count(*) FROM messages WHERE conv_id IN "
+             "(SELECT id FROM conversations WHERE project_id=? AND account_id=?)", (pid, account)),
+            ("run_entries", "SELECT count(*) FROM run_entries WHERE run_id IN (SELECT run_id FROM runs WHERE project_id=?)", (pid,)),
+            ("run_seen", "SELECT count(*) FROM run_seen WHERE run_id IN (SELECT run_id FROM runs WHERE project_id=?)", (pid,)),
         ):
-            n = int(conn.execute(sql, (pid,)).fetchone()[0])
+            n = int(conn.execute(sql, args).fetchone()[0])
             if n:
                 removed[child] = n
         for table in TABLES:
             cols = {str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
             if "project_id" in cols:
-                cur = conn.execute(f"DELETE FROM {table} WHERE project_id=?", (pid,))
+                if table in ("conversations", "folders"):
+                    cur = conn.execute(f"DELETE FROM {table} WHERE project_id=? AND account_id=?", (pid, account))
+                else:
+                    cur = conn.execute(f"DELETE FROM {table} WHERE project_id=?", (pid,))
                 if cur.rowcount:
                     removed[table] = cur.rowcount
         cur = conn.execute("DELETE FROM projects WHERE id=?", (pid,))

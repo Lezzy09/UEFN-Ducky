@@ -236,6 +236,21 @@ def chat_attachments_dir(conv_id: str, *, create: bool = False) -> Path | None:
     return path
 
 
+def _signed_in_account_may_open(conv_id: str) -> bool:
+    """A chat of another Ducky account on this PC serves none of its files. A chat not
+    saved yet (its first message is on its way) has no owner and is the current one's."""
+    from backend.store.switch import use_db
+
+    if not use_db("chats"):
+        return True
+    from backend.store import account_rows
+    from backend.store.repos import chats
+
+    me = account_rows.current()  # first: it claims rows from before accounts
+    owner = chats.conv_account(conv_id)
+    return owner is None or owner == me
+
+
 def build_chat_attachment_url(conv_id: str, filename: str) -> str:
     from frontend.settings import PANEL_LISTENER_PORT
 
@@ -248,6 +263,8 @@ def resolve_chat_attachment_path(conv_id: str, filename: str) -> Path:
     cid = Path(conv_id or "").name
     name = Path(filename or "").name
     if cid != (conv_id or "") or not _CONV_ID_RE.fullmatch(cid) or not _CHAT_FILE_RE.fullmatch(name):
+        raise ValueError("Invalid attachment")
+    if not _signed_in_account_may_open(cid):
         raise ValueError("Invalid attachment")
     root = chat_attachments_dir(cid)
     if root is None:

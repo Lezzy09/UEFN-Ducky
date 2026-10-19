@@ -110,8 +110,8 @@ def _note_login_change(before: dict[str, Any], after: dict[str, Any]) -> None:
 
     The account data key cache (wrapped with the old device token) goes with the
     old login (plan §13); a new sign-in fetches the new account's key in the
-    background. The panel drops account-scoped caches (Store catalog, prefs) so one
-    account never sees another's."""
+    background. The panel drops account-scoped caches (Store catalog, prefs) and
+    swaps chats and duckies, so one account never sees another's."""
     signed_in = account_key(after) and account_key(after) != account_key(before)
     try:
         from backend.uefn_plugins.data_crypto import on_login_change, prefetch
@@ -128,6 +128,17 @@ def _note_login_change(before: dict[str, Any], after: dict[str, Any]) -> None:
         from frontend.ui_web.agent_modes import push_ui_event
 
         push_ui_event({"type": "duckyos_account_changed", "account": account_key(after)})
+    except Exception:
+        pass
+    try:
+        from backend.store import account_rows
+        from backend.uefn_plugins.scopes import account_id_for
+        from frontend.ui_web.agent_modes import notify_chats_changed
+
+        # Chats are the signed-in account's: every window drops the old account's rows at
+        # once and loads the new one's (the Duckies tab reloads on the account event).
+        convs, folders = account_rows.owned_ids(account_id_for(account_key(before)))
+        notify_chats_changed(open_tab=False, removed_conv_ids=convs, removed_folder_ids=folders)
     except Exception:
         pass
     try:

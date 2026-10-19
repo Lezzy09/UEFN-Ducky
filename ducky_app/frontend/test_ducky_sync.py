@@ -4,13 +4,29 @@ from __future__ import annotations
 
 from typing import Any
 
+import hashlib
+
 import pytest
 
 from backend.store.repos import duckies as repo
 from backend.store.repos import ducky_mirrors as mirrors
-from frontend import ducky_sync
+from backend.uefn_plugins import data_crypto
+from backend.uefn_plugins.scopes import account_id_for
+from frontend import duckyos_account, ducky_sync
 
-ACCOUNT = "a_test"
+KEY = "https://uefnducky.org|me@example.com"
+ACCOUNT = account_id_for(KEY)
+
+
+@pytest.fixture(autouse=True)
+def signed_in(monkeypatch: pytest.MonkeyPatch):
+    """Signed in (copies are sealed for the account), its data key from a fake server."""
+    who = {"key": KEY}
+    monkeypatch.setattr(duckyos_account, "account_key", lambda blob=None: who["key"])
+    monkeypatch.setattr(data_crypto, "_fetch_adk", lambda: hashlib.sha256(b"adk/" + who["key"].encode()).digest())
+    data_crypto.reset_for_tests()
+    yield who
+    data_crypto.reset_for_tests()
 
 
 # --------------------------------------------------------------------------- duckies
@@ -134,11 +150,21 @@ def test_a_failed_pull_is_tried_again_next_round(peer: _Peer) -> None:
     assert _pulled(peer) == ["x1"]
 
 
-def test_another_accounts_copies_never_show() -> None:
-    mirrors.note_peer("a_other", "k9", "Theirs")
-    mirrors.note_chat("a_other", "k9", "z1", "Secret", 1.0)
+def test_another_accounts_copies_never_show(signed_in) -> None:
+    signed_in["key"] = "https://uefnducky.org|other@example.com"
+    other = account_id_for(signed_in["key"])
+    mirrors.note_peer(other, "k9", "Theirs")
+    mirrors.note_chat(other, "k9", "z1", "Secret", 1.0)
+    mirrors.put_rows(other, "k9", "z1", [{"id": 0, "role": "user", "text": "secret words"}], of=1.0)
+    signed_in["key"] = KEY
     assert mirrors.peers(ACCOUNT) == []
     assert mirrors.rows(ACCOUNT, "k9", "z1") is None
+    # The copy is sealed for its account: its title and rows aren't in the table as text.
+    from backend.store import db
+
+    title, rows = db.connect().execute("SELECT title, rows FROM ducky_mirror_chats WHERE conv_id='z1'").fetchone()
+    assert title.startswith("enc1:") and rows.startswith("enc1:")
+    assert "Secret" not in title + rows and "secret words" not in title + rows
 
 
 def test_a_long_chat_is_trimmed_to_fit_one_sealed_answer(monkeypatch: pytest.MonkeyPatch) -> None:

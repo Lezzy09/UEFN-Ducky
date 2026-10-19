@@ -609,7 +609,8 @@ def _maintain_store(app_root: Path, *, count_boot: bool = True) -> dict[str, int
 
 
 def compact_chat_history() -> dict[str, int]:
-    """Give chat rows saved before compact storage existed the compact form.
+    """Seal the signed-in account's chats and duckies still stored in plaintext (saved
+    before they were per account), giving older large rows the compact form on the way.
 
     Runs after the boot snapshot, a few rows per transaction; picks up where it
     stopped on the next boot. Never raises.
@@ -619,11 +620,11 @@ def compact_chat_history() -> dict[str, int]:
 
         if not use_db("chats"):
             return {}
-        from backend.store.repos import chats
+        from backend.store import account_rows
 
-        result = chats.compact_stored_messages()
-        if result.get("compacted"):
-            _log.info("ducky.db: %s older chat messages stored compact", result["compacted"])
+        result = account_rows.seal_pending()
+        if result:
+            _log.info("ducky.db: older chats and duckies sealed for this account: %s", result)
         return result
     except Exception:
         _log.exception("compacting older chat messages failed")

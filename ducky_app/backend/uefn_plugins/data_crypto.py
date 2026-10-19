@@ -1,7 +1,8 @@
 """Plugin data encrypted for the signed-in account (plan §13).
 
 Every per-account store (plugin cache + prefs rows, plugin docs, scoped files,
-automations) is sealed with DPAPI (this Windows user) plus the account data key
+automations, chats and duckies: ``backend.store.account_rows``) is sealed with DPAPI
+(this Windows user) plus the account data key
 (ADK) as a second secret: two accounts on one Windows user can't read each other's
 data, not even from the DB or the files directly.
 
@@ -130,14 +131,16 @@ def migrate_if_ready(account: str) -> None:
 
 def prefetch() -> None:
     """Sign-in: fetch (and cache) the new account's key off the UI thread, then seal
-    its old plaintext rows, so the first plugin call doesn't wait."""
+    its old plaintext rows (plugin data, chats, duckies), so the first call doesn't wait."""
     def _work() -> None:
         try:
+            from backend.store import account_rows
             from backend.uefn_plugins.scopes import account_id
 
             account = account_id()
             if account != _LOCAL and adk(account) is not None:
                 ensure_migrated(account)
+                account_rows.seal_pending(account)
         except Exception:
             pass
 
@@ -165,7 +168,10 @@ def on_login_change(before: dict[str, Any], after: dict[str, Any]) -> None:
         _LAST_TRY.clear()
         _open.cache_clear()
         _open_big.cache_clear()
+    from backend.store import account_rows
     from backend.uefn_plugins.spaces import provider
+
+    account_rows.forget()
 
     provider().on_login_change(keep)
 
@@ -270,6 +276,7 @@ def ensure_migrated(account: str) -> None:
 
 
 def reset_for_tests() -> None:
+    from backend.store import account_rows
     from backend.uefn_plugins import spaces
 
     with _GUARD:
@@ -278,4 +285,5 @@ def reset_for_tests() -> None:
         _MIGRATED.clear()
         _open.cache_clear()
         _open_big.cache_clear()
+    account_rows.forget()
     spaces.reset_for_tests()

@@ -9,10 +9,16 @@ A message field of ``PART_MIN_CHARS`` or more (a tool result, tool arguments, a
 long reply) is stored once in ``message_parts``, compressed, and the row keeps
 a reference to it (``fmt`` 1). Reads put the fields back, so callers always see
 the message exactly as it was saved; rows written before that keep ``fmt`` 0.
+
+Every chat and folder belongs to the signed-in account (migration 0024,
+:mod:`backend.store.account_rows`): these functions see only its rows, and its
+titles, state, message bodies, payloads and folder names are sealed for it. A
+message's search text is kept as keyed word tokens, so search needs no plaintext.
 """
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import logging
@@ -22,7 +28,7 @@ import zlib
 from collections import OrderedDict
 from typing import Any, Callable
 
-from backend.store import db
+from backend.store import account_rows, db
 
 _log = logging.getLogger("uefn_ducky.store")
 
@@ -51,6 +57,8 @@ _COLUMNS = (
     "file_count",
 )
 _STATE_EXCLUDED = set(_COLUMNS) | {"id", "messages", "skill_snapshot"}
+_SEALED = "enc1:"
+_SEALED_BLOB = b"UDE1"
 
 
 def _hash(text: str) -> str:
@@ -81,26 +89,41 @@ def message_search_text(message: dict[str, Any]) -> str:
     return str(message.get("text") or message.get("content") or "")
 
 
+def _owned(conn, conv_id: str, account: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM conversations WHERE id=? AND account_id=?", (conv_id, account)
+    ).fetchone() is not None
+
+
 # --------------------------------------------------------------------------- folders
 
 
+def _folder(row, account: str) -> dict[str, Any]:
+    out = dict(row)
+    out["name"] = account_rows.open_cached(str(out.get("name") or ""), account)
+    return out
+
+
 def folders_get(project_id: str) -> list[dict[str, Any]]:
+    account = account_rows.current()
     rows = db.connect().execute(
-        "SELECT id, name, parent_id, sort_order, group_hub_id FROM folders WHERE project_id=? "
+        "SELECT id, name, parent_id, sort_order, group_hub_id FROM folders WHERE account_id=? AND project_id=? "
         "ORDER BY parent_id, sort_order, id",
-        (project_id,),
+        (account, project_id),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [_folder(r, account) for r in rows]
 
 
 def folders_list_all_projects() -> list[tuple[str, list[dict[str, Any]]]]:
+    account = account_rows.current()
     rows = db.connect().execute(
-        "SELECT project_id, id, name, parent_id, sort_order, group_hub_id FROM folders "
-        "ORDER BY project_id, parent_id, sort_order, id"
+        "SELECT project_id, id, name, parent_id, sort_order, group_hub_id FROM folders WHERE account_id=? "
+        "ORDER BY project_id, parent_id, sort_order, id",
+        (account,),
     ).fetchall()
     by: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
-        by.setdefault(str(r["project_id"]), []).append(dict(r))
+        by.setdefault(str(r["project_id"]), []).append(_folder(r, account))
     return list(by.items())
 
 
@@ -108,15 +131,34 @@ def folder_project_id(folder_id: str) -> str | None:
     """The project a folder is stored under (the Archive folder is in every project: None)."""
     if not folder_id or folder_id == "archive":
         return None
-    row = db.connect().execute("SELECT project_id FROM folders WHERE id=? LIMIT 1", (folder_id,)).fetchone()
+    row = db.connect().execute(
+        "SELECT project_id FROM folders WHERE account_id=? AND id=? LIMIT 1", (account_rows.current(), folder_id)
+    ).fetchone()
     return str(row[0]) if row else None
 
 
 def folders_exist(project_id: str) -> bool:
-    return db.connect().execute("SELECT 1 FROM folders WHERE project_id=? LIMIT 1", (project_id,)).fetchone() is not None
+    return db.connect().execute(
+        "SELECT 1 FROM folders WHERE account_id=? AND project_id=? LIMIT 1", (account_rows.current(), project_id)
+    ).fetchone() is not None
 
 
 def folders_replace(project_id: str, folders: list[dict[str, Any]]) -> None:
+    account = account_rows.current()
+    account_rows.ready(account)
+    rows = [
+        (
+            account,
+            project_id,
+            str(f.get("id", "")),
+            account_rows.seal(str(f.get("name", "")), account),
+            str(f.get("parent_id", "") or ""),
+            float(f.get("sort_order", 0.0) or 0.0),
+            str(f.get("group_hub_id", "") or ""),
+        )
+        for f in folders
+        if f.get("id")
+    ]
     conn = db.connect()
     with db.write_txn(conn):
         # A writer holding a folder list read before a delete must not put the folder back.
@@ -127,23 +169,30 @@ def folders_replace(project_id: str, folders: list[dict[str, Any]]) -> None:
                 (_DELETED_FOLDER_KEY, _DELETED_FOLDER_KEY[:-1] + ";"),
             )
         }
-        folders = [f for f in folders if str(f.get("id", "")) not in gone]
-        conn.execute("DELETE FROM folders WHERE project_id=?", (project_id,))
+        conn.execute("DELETE FROM folders WHERE account_id=? AND project_id=?", (account, project_id))
         conn.executemany(
-            "INSERT INTO folders(project_id, id, name, parent_id, sort_order, group_hub_id) VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    project_id,
-                    str(f.get("id", "")),
-                    str(f.get("name", "")),
-                    str(f.get("parent_id", "") or ""),
-                    float(f.get("sort_order", 0.0) or 0.0),
-                    str(f.get("group_hub_id", "") or ""),
-                )
-                for f in folders
-                if f.get("id")
-            ],
+            "INSERT INTO folders(account_id, project_id, id, name, parent_id, sort_order, group_hub_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [row for row in rows if row[2] not in gone],
         )
+
+
+def move_to_project(target: str, folders: list[tuple[str, str, str]], convs: list[tuple[str, str]]) -> None:
+    """Move folders ``(source project, folder id, new parent)`` and chats ``(chat id, folder)``
+    of the signed-in account onto the ``target`` project, in one transaction."""
+    account = account_rows.current()
+    conn = db.connect()
+    with db.write_txn(conn):
+        for source, folder_id, parent_id in folders:
+            conn.execute(
+                "UPDATE folders SET project_id=?, parent_id=? WHERE account_id=? AND project_id=? AND id=?",
+                (target, parent_id, account, source, folder_id),
+            )
+        for conv_id, folder_id in convs:
+            conn.execute(
+                "UPDATE conversations SET project_id=?, folder_id=? WHERE account_id=? AND id=?",
+                (target, folder_id, account, conv_id),
+            )
 
 
 # --------------------------------------------------------------------------- snapshots
@@ -170,7 +219,9 @@ def _snapshot_text(conn, h: str) -> str:
 # --------------------------------------------------------------------------- message parts
 
 
-def _split_parts(message: dict[str, Any]) -> tuple[dict[str, Any], list[list[Any]], dict[str, str]]:
+def _split_parts(
+    message: dict[str, Any], digest_of: Callable[[str], str]
+) -> tuple[dict[str, Any], list[list[Any]], dict[str, str]]:
     """The message with its large fields set to None, where they were, and the fields.
 
     Large means ``PART_MIN_CHARS`` or more of JSON: a top-level field, or one
@@ -189,7 +240,7 @@ def _split_parts(message: dict[str, Any]) -> tuple[dict[str, Any], list[list[Any
         text = _dumps(value)
         if len(text) < PART_MIN_CHARS:
             return False
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        digest = digest_of(text)
         parts[digest] = text
         refs.append([*path, digest])
         return True
@@ -209,7 +260,7 @@ def _split_parts(message: dict[str, Any]) -> tuple[dict[str, Any], list[list[Any
     return skeleton, refs, parts
 
 
-def _compact(message: Any, body: str) -> tuple[str, int, dict[str, str]]:
+def _compact(message: Any, body: str, digest_of: Callable[[str], str]) -> tuple[str, int, dict[str, str]]:
     """(stored body, fmt, {part hash: part JSON}) for a message whose JSON is *body*.
 
     The row hash stays the hash of the whole message JSON whichever way the
@@ -217,7 +268,7 @@ def _compact(message: Any, body: str) -> tuple[str, int, dict[str, str]]:
     """
     if not isinstance(message, dict) or len(body) < PART_MIN_CHARS:
         return body, FMT_PLAIN, {}
-    skeleton, refs, parts = _split_parts(message)
+    skeleton, refs, parts = _split_parts(message, digest_of)
     if not refs:
         return body, FMT_PLAIN, {}
     return _dumps({"m": skeleton, "x": refs}), FMT_PARTS, parts
@@ -246,8 +297,8 @@ def _decode_parts(envelope: Any, part_text: Callable[[str], str | None]) -> dict
     return message
 
 
-def _write_parts(conn, message_id: int, parts: dict[str, str]) -> None:
-    """Point the row at exactly *parts*: store new ones, drop refs it no longer uses."""
+def _write_parts(conn, message_id: int, parts: dict[str, str], account: str) -> None:
+    """Point the row at exactly *parts*: store new ones (sealed), drop refs it no longer uses."""
     old = {str(r[0]) for r in conn.execute("SELECT hash FROM message_part_refs WHERE message_id=?", (message_id,))}
     for digest, text in parts.items():
         if digest in old:
@@ -256,7 +307,7 @@ def _write_parts(conn, message_id: int, parts: dict[str, str]) -> None:
             raw = text.encode("utf-8")
             conn.execute(
                 "INSERT INTO message_parts(hash, data, size, created) VALUES (?, ?, ?, ?)",
-                (digest, zlib.compress(raw, 6), len(raw), time.time()),
+                (digest, account_rows.seal_blob(zlib.compress(raw, 6), account), len(raw), time.time()),
             )
         conn.execute("INSERT INTO message_part_refs(message_id, hash) VALUES (?, ?)", (message_id, digest))
     stale = old - parts.keys()
@@ -266,8 +317,24 @@ def _write_parts(conn, message_id: int, parts: dict[str, str]) -> None:
         )
 
 
-def _conv_parts(conn, conv_id: str) -> Callable[[str], str | None]:
-    """Part JSON by hash for one chat, read in one query and inflated on first use."""
+def _part_reader(packed: dict[str, bytes], account: str) -> Callable[[str], str | None]:
+    inflated: dict[str, str] = {}
+
+    def part_text(digest: str) -> str | None:
+        text = inflated.get(digest)
+        if text is None and digest in packed:
+            try:
+                raw = account_rows.open_blob(packed[digest], account)
+                text = inflated[digest] = zlib.decompress(raw).decode("utf-8")
+            except (zlib.error, UnicodeDecodeError):
+                return None
+        return text
+
+    return part_text
+
+
+def _conv_parts(conn, conv_id: str, account: str) -> Callable[[str], str | None]:
+    """Part JSON by hash for one chat, read in one query and opened on first use."""
     packed = {
         str(h): bytes(data)
         for h, data in conn.execute(
@@ -276,32 +343,39 @@ def _conv_parts(conn, conv_id: str) -> Callable[[str], str | None]:
             (conv_id,),
         )
     }
-    inflated: dict[str, str] = {}
+    return _part_reader(packed, account)
 
-    def part_text(digest: str) -> str | None:
-        text = inflated.get(digest)
-        if text is None and digest in packed:
-            try:
-                text = inflated[digest] = zlib.decompress(packed[digest]).decode("utf-8")
-            except (zlib.error, UnicodeDecodeError):
-                return None
-        return text
 
-    return part_text
+def _message_parts(conn, message_id: int, account: str) -> Callable[[str], str | None]:
+    packed = {
+        str(h): bytes(data)
+        for h, data in conn.execute(
+            "SELECT p.hash, p.data FROM message_parts p JOIN message_part_refs r ON r.hash = p.hash "
+            "WHERE r.message_id=?",
+            (message_id,),
+        )
+    }
+    return _part_reader(packed, account)
+
+
+def _message(body: str, fmt: int, account: str, parts: Callable[[], Callable[[str], str | None]]) -> Any:
+    """One stored row as the message it was saved as; ``ValueError`` when it isn't one."""
+    text = account_rows.open_text(body, account)
+    if fmt == FMT_PARTS:
+        return _decode_parts(json.loads(text), parts())
+    return json.loads(text)
 
 
 # --------------------------------------------------------------------------- older rows
 
-COMPACT_CURSOR_KEY = "messages_compacted_to"
 
-
-def _compact_stored(body: str) -> tuple[str, dict[str, str]] | None:
+def _compact_stored(body: str, digest_of: Callable[[str], str]) -> tuple[str, dict[str, str]] | None:
     """The compact form of a stored ``fmt`` 0 body, only if it reads back as the same JSON."""
     try:
         message = json.loads(body)
     except ValueError:
         return None
-    stored, fmt, parts = _compact(message, body)
+    stored, fmt, parts = _compact(message, body, digest_of)
     if fmt != FMT_PARTS:
         return None
     try:
@@ -313,52 +387,82 @@ def _compact_stored(body: str) -> tuple[str, dict[str, str]] | None:
     return stored, parts
 
 
-def compact_stored_messages(*, batch: int = 40, pause_s: float = 0.05) -> dict[str, int]:
-    """Give rows saved before message parts existed the compact form, a few rows per
-    transaction so chats keep saving meanwhile.
+def seal_stored_messages(account: str | None = None, *, batch: int = 40, pause_s: float = 0.05) -> dict[str, int]:
+    """Seal the account's message rows still in plaintext (saved before 0024, or by an older
+    build), a few rows per transaction so chats keep saving meanwhile. A large row from
+    before message parts gets the compact form on the way. Then its payloads from before.
 
-    Resumable: ``meta`` keeps the last row id finished. Rows added after the pass
-    started are compact already. A row is replaced only when it still holds what
-    was read and its compact form reads back as the same message; its search
-    text is left as it is.
+    Resumable: a sealed row is never looked at again. A row is replaced only when it still
+    holds what was read (a save meanwhile wrote it sealed); its hash stays the same.
     """
+    account = account or account_rows.current()
+    key = account_rows.ready(account)
+    digest_of = functools.partial(account_rows.part_digest, key=key)
     conn = db.connect()
-    row = conn.execute("SELECT value FROM meta WHERE key=?", (COMPACT_CURSOR_KEY,)).fetchone()
-    try:
-        cursor = int(row[0]) if row else 0
-    except ValueError:
-        cursor = 0
-    end = int(conn.execute("SELECT coalesce(max(id), 0) FROM messages").fetchone()[0])
-    compacted = scanned = 0
-    while cursor < end:
+    sealed = compacted = scanned = cursor = 0
+    while True:
         rows = conn.execute(
-            "SELECT id, hash, body FROM messages WHERE id>? AND id<=? AND fmt=? AND length(body)>=? "
-            "ORDER BY id LIMIT ?",
-            (cursor, end, FMT_PLAIN, PART_MIN_CHARS, batch),
+            "SELECT m.id, m.body, m.fmt, m.text FROM messages m JOIN conversations c ON c.id = m.conv_id "
+            "WHERE c.account_id=? AND m.id>? AND substr(m.body, 1, 5)<>? ORDER BY m.id LIMIT ?",
+            (account, cursor, _SEALED, batch),
         ).fetchall()
-        todo: list[tuple[int, str, str, dict[str, str]]] = []
-        for row_id, h, body in rows:
+        if not rows:
+            break
+        todo: list[tuple[int, str, int, str, str, dict[str, str]]] = []
+        for row_id, body, fmt, text in rows:
             scanned += 1
-            done = _compact_stored(str(body))
-            if done is not None:
-                todo.append((int(row_id), str(h), *done))
+            stored, new_fmt, parts = str(body), int(fmt), {}
+            if new_fmt == FMT_PLAIN and len(stored) >= PART_MIN_CHARS:
+                done = _compact_stored(stored, digest_of)
+                if done is not None:
+                    (stored, parts), new_fmt = done, FMT_PARTS
+            blind = account_rows.blind_text(str(text or ""), key)
+            todo.append((int(row_id), str(body), new_fmt, account_rows.seal(stored, account), blind, parts))
         with db.write_txn(conn):
-            for row_id, h, stored, parts in todo:
-                now = conn.execute("SELECT hash FROM messages WHERE id=? AND fmt=?", (row_id, FMT_PLAIN)).fetchone()
-                if now is None or str(now[0]) != h:
-                    continue  # saved again since it was read; that save wrote the compact form
-                _write_parts(conn, row_id, parts)
-                conn.execute("UPDATE messages SET body=?, fmt=? WHERE id=?", (stored, FMT_PARTS, row_id))
-                compacted += 1
-            cursor = int(rows[-1][0]) if rows else end
-            conn.execute(
-                "INSERT INTO meta(key, value, updated) VALUES (?, ?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
-                (COMPACT_CURSOR_KEY, str(cursor), time.time()),
-            )
-        if pause_s and cursor < end:
+            for row_id, old, new_fmt, body, blind, parts in todo:
+                now = conn.execute("SELECT body FROM messages WHERE id=?", (row_id,)).fetchone()
+                if now is None or str(now[0]) != old:
+                    continue  # saved again since it was read; that save sealed it
+                if parts:
+                    _write_parts(conn, row_id, parts, account)
+                    compacted += 1
+                conn.execute(
+                    "UPDATE messages SET body=?, fmt=?, text=?, account_id=? WHERE id=?",
+                    (body, new_fmt, blind, account, row_id),
+                )
+                sealed += 1
+        cursor = int(rows[-1][0])
+        if pause_s:
             time.sleep(pause_s)
-    return {"compacted": compacted, "scanned": scanned}
+    if sealed:
+        # The index still holds the old rows' words in segments it marked deleted; one
+        # merge leaves only the tokens.
+        with db.write_txn(conn):
+            conn.execute("INSERT INTO message_fts(message_fts) VALUES('optimize')")
+    return {"sealed": sealed, "compacted": compacted, "scanned": scanned, "parts": _seal_stored_parts(conn, account, batch)}
+
+
+def _seal_stored_parts(conn, account: str, batch: int) -> int:
+    """Seal in place the plaintext payloads the account's messages use (saved before 0024)."""
+    sealed = 0
+    cursor = ""
+    while True:
+        rows = conn.execute(
+            "SELECT p.hash, p.data FROM message_parts p WHERE p.hash>? AND substr(p.data, 1, 4)<>? AND EXISTS ("
+            "SELECT 1 FROM message_part_refs r JOIN messages m ON m.id = r.message_id "
+            "JOIN conversations c ON c.id = m.conv_id WHERE r.hash = p.hash AND c.account_id=?) "
+            "ORDER BY p.hash LIMIT ?",
+            (cursor, _SEALED_BLOB, account, batch),
+        ).fetchall()
+        if not rows:
+            return sealed
+        todo = [(str(h), bytes(data), account_rows.seal_blob(bytes(data), account)) for h, data in rows]
+        with db.write_txn(conn):
+            for digest, old, new in todo:
+                sealed += conn.execute(
+                    "UPDATE message_parts SET data=? WHERE hash=? AND data=?", (new, digest, old)
+                ).rowcount
+        cursor = todo[-1][0]
 
 
 # --------------------------------------------------------------------------- saved rows
@@ -433,73 +537,94 @@ def _forget_rows(conv_id: str) -> None:
 # --------------------------------------------------------------------------- conversations
 
 
-def _row_to_doc(conn, row, *, with_messages: bool) -> dict[str, Any]:
+def _row_to_doc(conn, row, account: str, *, with_messages: bool) -> dict[str, Any]:
     doc: dict[str, Any] = {}
     try:
-        doc.update(json.loads(row["state"] or "{}"))
+        doc.update(json.loads(account_rows.open_cached(row["state"] or "{}", account)))
     except ValueError:
         pass
     for col in _COLUMNS:
         doc[col] = row[col]
+    doc["title"] = account_rows.open_cached(str(row["title"] or ""), account)
     doc["is_group"] = bool(row["is_group"])
     doc["id"] = row["id"]
     doc["skill_snapshot"] = _snapshot_text(conn, row["skill_snapshot_hash"])
-    doc["messages"] = messages_get(row["id"]) if with_messages else []
+    doc["messages"] = _messages(conn, row["id"], account) if with_messages else []
     return doc
 
 
 def conv_get(conv_id: str, *, project_id: str | None = None, with_messages: bool = True) -> dict[str, Any] | None:
+    account = account_rows.current()
     conn = db.connect()
     if project_id is None:
-        row = conn.execute("SELECT * FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        row = conn.execute("SELECT * FROM conversations WHERE id=? AND account_id=?", (conv_id, account)).fetchone()
     else:
         row = conn.execute(
-            "SELECT * FROM conversations WHERE id=? AND project_id=?", (conv_id, project_id)
+            "SELECT * FROM conversations WHERE id=? AND project_id=? AND account_id=?", (conv_id, project_id, account)
         ).fetchone()
     if row is None:
         return None
-    return _row_to_doc(conn, row, with_messages=with_messages)
+    return _row_to_doc(conn, row, account, with_messages=with_messages)
 
 
 def conv_project_id(conv_id: str) -> str | None:
-    row = db.connect().execute("SELECT project_id FROM conversations WHERE id=?", (conv_id,)).fetchone()
+    row = db.connect().execute(
+        "SELECT project_id FROM conversations WHERE id=? AND account_id=?", (conv_id, account_rows.current())
+    ).fetchone()
+    return None if row is None else str(row[0])
+
+
+def conv_account(conv_id: str) -> str | None:
+    """Whose chat this is (any account), or None when there is no such chat."""
+    row = db.connect().execute("SELECT account_id FROM conversations WHERE id=?", (conv_id,)).fetchone()
     return None if row is None else str(row[0])
 
 
 def conv_list(project_id: str, *, with_messages: bool = False) -> list[dict[str, Any]]:
+    account = account_rows.current()
     conn = db.connect()
     rows = conn.execute(
-        "SELECT * FROM conversations WHERE project_id=? ORDER BY sort_order, updated DESC, id",
-        (project_id,),
+        "SELECT * FROM conversations WHERE account_id=? AND project_id=? ORDER BY sort_order, updated DESC, id",
+        (account, project_id),
     ).fetchall()
-    return [_row_to_doc(conn, r, with_messages=with_messages) for r in rows]
+    return [_row_to_doc(conn, r, account, with_messages=with_messages) for r in rows]
 
 
 def conv_list_all_projects(*, with_messages: bool = False) -> list[tuple[str, dict[str, Any]]]:
+    account = account_rows.current()
     conn = db.connect()
-    rows = conn.execute("SELECT * FROM conversations ORDER BY project_id, id").fetchall()
-    return [(str(r["project_id"]), _row_to_doc(conn, r, with_messages=with_messages)) for r in rows]
+    rows = conn.execute("SELECT * FROM conversations WHERE account_id=? ORDER BY project_id, id", (account,)).fetchall()
+    return [(str(r["project_id"]), _row_to_doc(conn, r, account, with_messages=with_messages)) for r in rows]
 
 
 def conv_count(project_id: str) -> int:
+    """Chats of every account in one project: AppData upkeep keeps a project's folder
+    (attachments) while any account still has a chat in it."""
     return int(db.connect().execute("SELECT count(*) FROM conversations WHERE project_id=?", (project_id,)).fetchone()[0])
 
 
 def conv_if_settings_newer(conv_id: str, edited: float) -> dict[str, Any] | None:
     """The stored chat (no messages) when its ducky settings changed after *edited*, else None."""
-    conn = db.connect()
-    row = conn.execute(
-        "SELECT json_extract(state, '$.settings_edited') FROM conversations WHERE id=?", (conv_id,)
+    account = account_rows.current()
+    row = db.connect().execute(
+        "SELECT state FROM conversations WHERE id=? AND account_id=?", (conv_id, account)
     ).fetchone()
-    if row is None or float(row[0] or 0.0) <= float(edited or 0.0):
+    if row is None:
         return None
-    return conv_get(conv_id, with_messages=False)
+    try:
+        state = json.loads(account_rows.open_cached(row[0] or "{}", account))
+        newer = float(state.get("settings_edited") or 0.0) > float(edited or 0.0)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return conv_get(conv_id, with_messages=False) if newer else None
 
 
 def conv_message_summary(conv_id: str) -> tuple[int, bool]:
     """(message count, any assistant row) without loading bodies."""
     row = db.connect().execute(
-        "SELECT count(*), coalesce(max(role='assistant'), 0) FROM messages WHERE conv_id=?", (conv_id,)
+        "SELECT count(m.id), coalesce(max(m.role='assistant'), 0) FROM messages m "
+        "JOIN conversations c ON c.id = m.conv_id WHERE m.conv_id=? AND c.account_id=?",
+        (conv_id, account_rows.current()),
     ).fetchone()
     return int(row[0]), bool(row[1])
 
@@ -509,24 +634,34 @@ def conv_save(project_id: str, doc: dict[str, Any], *, messages: list[dict[str, 
 
     Returns counts: rows inserted/updated/deleted for messages. Passing
     ``messages=None`` leaves the transcript untouched (metadata-only save).
+    A chat of another account is never written (``skipped``).
     """
+    account = account_rows.current()
+    key = account_rows.ready(account)
     conn = db.connect()
     state = {k: v for k, v in doc.items() if k not in _STATE_EXCLUDED}
+    values = {col: doc.get(col) for col in _COLUMNS}
+    values["is_group"] = 1 if doc.get("is_group") else 0
+    title = account_rows.seal(str(values["title"] or ""), account)
+    sealed_state = account_rows.seal(_dumps(state), account)
     stats = {"inserted": 0, "updated": 0, "deleted": 0, "bytes": 0}
     remember: tuple[dict[int, tuple[str, Any, int]], int] | None = None
     with db.write_txn(conn):
+        owner = conn.execute("SELECT account_id FROM conversations WHERE id=?", (doc["id"],)).fetchone()
+        if owner is not None and str(owner[0]) != account:
+            _log.warning("skipped saving chat %s: it belongs to another account", doc["id"])
+            return {**stats, "skipped": 1}
         if _was_deleted(conn, str(doc["id"])):
             # A turn, team message or other window still holding the chat saved it after
             # it was deleted: never bring it back.
             _log.info("skipped saving deleted chat %s", doc["id"])
             return {**stats, "skipped": 1}
         snap_hash = _snapshot_put(conn, "skill_index", str(doc.get("skill_snapshot") or ""))
-        values = {col: doc.get(col) for col in _COLUMNS}
-        values["is_group"] = 1 if doc.get("is_group") else 0
         conn.execute(
-            "INSERT INTO conversations(id, project_id, folder_id, title, created, updated, sort_order, provider, model, "
-            "coding_agent, profile_id, file_path, parent_conv_id, leader_conv_id, is_group, tool_call_count, file_count, "
-            "message_count, skill_snapshot_hash, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+            "INSERT INTO conversations(id, account_id, project_id, folder_id, title, created, updated, sort_order, "
+            "provider, model, coding_agent, profile_id, file_path, parent_conv_id, leader_conv_id, is_group, "
+            "tool_call_count, file_count, message_count, skill_snapshot_hash, state) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
             "coalesce((SELECT message_count FROM conversations WHERE id=?), 0), ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, folder_id=excluded.folder_id, "
             "title=excluded.title, created=excluded.created, updated=excluded.updated, sort_order=excluded.sort_order, "
@@ -536,9 +671,10 @@ def conv_save(project_id: str, doc: dict[str, Any], *, messages: list[dict[str, 
             "file_count=excluded.file_count, skill_snapshot_hash=excluded.skill_snapshot_hash, state=excluded.state",
             (
                 doc["id"],
+                account,
                 project_id,
                 str(values["folder_id"] or ""),
-                str(values["title"] or ""),
+                title,
                 float(values["created"] or 0.0),
                 float(values["updated"] or 0.0),
                 float(values["sort_order"] or 0.0),
@@ -554,11 +690,11 @@ def conv_save(project_id: str, doc: dict[str, Any], *, messages: list[dict[str, 
                 int(values["file_count"] or 0),
                 doc["id"],
                 snap_hash,
-                _dumps(state),
+                sealed_state,
             ),
         )
         if messages is not None:
-            counts, rows, chars = _sync_messages(conn, doc["id"], messages)
+            counts, rows, chars = _sync_messages(conn, doc["id"], messages, account, key)
             stats.update(counts)
             remember = (rows, chars)
             conn.execute("UPDATE conversations SET message_count=? WHERE id=?", (len(messages), doc["id"]))
@@ -568,7 +704,7 @@ def conv_save(project_id: str, doc: dict[str, Any], *, messages: list[dict[str, 
 
 
 def _sync_messages(
-    conn, conv_id: str, messages: list[dict[str, Any]]
+    conn, conv_id: str, messages: list[dict[str, Any]], account: str, key: bytes
 ) -> tuple[dict[str, int], dict[int, tuple[str, Any, int]], int]:
     """Write the messages whose row differs; returns counts and what to remember."""
     existing = {
@@ -576,6 +712,7 @@ def _sync_messages(
         for r in conn.execute("SELECT seq, hash, id FROM messages WHERE conv_id=?", (conv_id,))
     }
     known = _saved_rows(conv_id)
+    digest_of = functools.partial(account_rows.part_digest, key=key)
     remembered: dict[int, tuple[str, Any, int]] = {}
     chars = 0
     inserted = updated = deleted = nbytes = 0
@@ -598,14 +735,14 @@ def _sync_messages(
         if row is not None and row[0] == h:
             continue
         nbytes += len(body)
-        body, fmt, parts = _compact(source, body)
+        body, fmt, parts = _compact(source, body, digest_of)
         params = (
             h,
             str(source.get("role") or "") if isinstance(source, dict) else "",
             float(source.get("ts") or 0.0) if isinstance(source, dict) else 0.0,
             str(source.get("run_id") or "") if isinstance(source, dict) else "",
-            message_search_text(source) if isinstance(source, dict) else "",
-            body,
+            account_rows.blind_text(message_search_text(source), key) if isinstance(source, dict) else "",
+            account_rows.seal(body, account),
             fmt,
         )
         if row is not None:
@@ -617,14 +754,14 @@ def _sync_messages(
             updated += 1
         else:
             cur = conn.execute(
-                "INSERT INTO messages(conv_id, seq, hash, role, ts, run_id, text, body, fmt) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (conv_id, seq, *params),
+                "INSERT INTO messages(conv_id, seq, hash, role, ts, run_id, text, body, fmt, account_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (conv_id, seq, *params, account),
             )
             message_id = int(cur.lastrowid)
             inserted += 1
         if parts or row is not None:
-            _write_parts(conn, message_id, parts)
+            _write_parts(conn, message_id, parts, account)
     if len(existing) > len(messages):
         conn.execute("DELETE FROM messages WHERE conv_id=? AND seq>=?", (conv_id, len(messages)))
         deleted = len(existing) - len(messages)
@@ -632,22 +769,30 @@ def _sync_messages(
     return counts, remembered, chars
 
 
-def messages_get(conv_id: str) -> list[dict[str, Any]]:
-    conn = db.connect()
+def _messages(conn, conv_id: str, account: str) -> list[dict[str, Any]]:
     rows = conn.execute("SELECT body, fmt FROM messages WHERE conv_id=? ORDER BY seq", (conv_id,)).fetchall()
-    part_text: Callable[[str], str | None] | None = None
+    reader: list[Callable[[str], str | None]] = []
+
+    def parts() -> Callable[[str], str | None]:
+        if not reader:
+            reader.append(_conv_parts(conn, conv_id, account))
+        return reader[0]
+
     out: list[dict[str, Any]] = []
     for body, fmt in rows:
         try:
-            if fmt == FMT_PARTS:
-                if part_text is None:
-                    part_text = _conv_parts(conn, conv_id)
-                out.append(_decode_parts(json.loads(body), part_text))
-            else:
-                out.append(json.loads(body))
+            out.append(_message(str(body), int(fmt), account, parts))
         except ValueError:
             continue
     return out
+
+
+def messages_get(conv_id: str) -> list[dict[str, Any]]:
+    account = account_rows.current()
+    conn = db.connect()
+    if not _owned(conn, conv_id, account):
+        return []
+    return _messages(conn, conv_id, account)
 
 
 # Deleted chat and folder ids, kept in workspace_state (no new table: an older app must
@@ -675,11 +820,15 @@ def _mark_deleted(conn, prefix: str, ids: list[str], now: float) -> None:
 
 
 def conv_delete(conv_id: str) -> bool:
+    """Delete one of the signed-in account's chats (another account's is left alone)."""
+    account = account_rows.current()
     _forget_rows(conv_id)
     conn = db.connect()
     with db.write_txn(conn):
+        if not _owned(conn, conv_id, account):
+            return False
         conn.execute("DELETE FROM messages WHERE conv_id=?", (conv_id,))
-        cur = conn.execute("DELETE FROM conversations WHERE id=?", (conv_id,))
+        cur = conn.execute("DELETE FROM conversations WHERE id=? AND account_id=?", (conv_id, account))
         _mark_deleted(conn, _DELETED_KEY, [conv_id], time.time())
     return cur.rowcount > 0
 
@@ -696,7 +845,8 @@ def folders_mark_deleted(folder_ids: list[str]) -> None:
 
 def conv_ids_by_parent(project_id: str) -> dict[str, list[str]]:
     rows = db.connect().execute(
-        "SELECT parent_conv_id, id FROM conversations WHERE project_id=? AND parent_conv_id<>''", (project_id,)
+        "SELECT parent_conv_id, id FROM conversations WHERE account_id=? AND project_id=? AND parent_conv_id<>''",
+        (account_rows.current(), project_id),
     ).fetchall()
     out: dict[str, list[str]] = {}
     for parent, cid in rows:
@@ -706,7 +856,8 @@ def conv_ids_by_parent(project_id: str) -> dict[str, list[str]]:
 
 def conv_max_sort_order(project_id: str, folder_id: str) -> float:
     row = db.connect().execute(
-        "SELECT max(sort_order) FROM conversations WHERE project_id=? AND folder_id=?", (project_id, folder_id)
+        "SELECT max(sort_order) FROM conversations WHERE account_id=? AND project_id=? AND folder_id=?",
+        (account_rows.current(), project_id, folder_id),
     ).fetchone()
     return float(row[0]) if row and row[0] is not None else -1.0
 
@@ -725,20 +876,53 @@ def _fts_query(query: str) -> str:
     return and_q
 
 
+_PREVIEW_WORDS = 12
+
+
+def _preview(text: str, query: str) -> str:
+    """About a dozen words around the first one the query matched."""
+    wanted = set(account_rows.words(query))
+    chunks = text.split()
+    at = next((i for i, chunk in enumerate(chunks) if wanted & set(account_rows.words(chunk))), 0)
+    start = max(0, at - _PREVIEW_WORDS // 2 + 1)
+    shown = chunks[start:start + _PREVIEW_WORDS]
+    return ("…" if start else "") + " ".join(shown) + ("…" if start + _PREVIEW_WORDS < len(chunks) else "")
+
+
 def search_messages(project_id: str, query: str, *, limit: int = 200) -> list[dict[str, Any]]:
-    """Body search over every message in a project via FTS5 (bm25 ranked)."""
-    q = _fts_query(query)
-    if not q:
+    """Body search over every message of the account in a project via FTS5 (bm25 ranked).
+
+    Rows hold keyed word tokens; the plain query still finds rows an older build saved
+    until they are sealed. Previews are made from the opened message."""
+    account = account_rows.current()
+    blind = account_rows.blind_query(query, account_rows.chat_key(account))
+    plain = _fts_query(query)
+    if not blind and not plain:
         return []
-    rows = db.connect().execute(
-        "SELECT c.id AS conv_id, c.title, c.folder_id, m.seq, "
-        "snippet(message_fts, 0, '', '', '…', 12) AS preview "
+    q = f"({blind}) OR ({plain})" if blind and plain else (blind or plain)
+    conn = db.connect()
+    rows = conn.execute(
+        "SELECT c.id AS conv_id, c.title, c.folder_id, m.seq, m.id AS message_id, m.body, m.fmt "
         "FROM message_fts JOIN messages m ON m.id = message_fts.rowid "
         "JOIN conversations c ON c.id = m.conv_id "
-        "WHERE message_fts MATCH ? AND c.project_id=? ORDER BY bm25(message_fts) LIMIT ?",
-        (q, project_id, limit),
+        "WHERE message_fts MATCH ? AND c.account_id=? AND c.project_id=? ORDER BY bm25(message_fts) LIMIT ?",
+        (q, account, project_id, limit),
     ).fetchall()
-    return [dict(r) for r in rows]
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        try:
+            message = _message(str(r["body"]), int(r["fmt"]), account, lambda: _message_parts(conn, r["message_id"], account))
+            preview = _preview(message_search_text(message) if isinstance(message, dict) else "", query)
+        except ValueError:
+            preview = ""
+        out.append({
+            "conv_id": r["conv_id"],
+            "title": account_rows.open_cached(str(r["title"] or ""), account),
+            "folder_id": r["folder_id"],
+            "seq": r["seq"],
+            "preview": preview,
+        })
+    return out
 
 
 def has_rows() -> bool:

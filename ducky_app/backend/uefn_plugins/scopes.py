@@ -138,11 +138,17 @@ def account_id() -> str:
 
 
 def _claim_legacy(aid: str) -> None:
-    """Rows from before scopes (migration 0009) join the first account that opens them."""
+    """Rows from before scopes (migration 0009) join the first account that opens them,
+    and so do chats and duckies from before they were per account (migration 0024)."""
+    from backend.store import account_rows
     from backend.store.repos import plugin_kv
 
     if plugin_kv.has_unclaimed():
         plugin_kv.claim_unclaimed(aid)
+    try:
+        account_rows.claim(aid)
+    except Exception:  # noqa: BLE001 — never in the way of the account id; the next call tries again
+        _log.exception("claiming chats and duckies from before accounts failed")
 
 
 def _locked(account: str) -> bool:

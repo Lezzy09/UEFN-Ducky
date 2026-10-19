@@ -420,18 +420,18 @@ def _join_maintenance() -> None:
             t.join(30)
 
 
-def test_panel_boot_compacts_older_chat_rows_after_maintenance(appdata: Path, monkeypatch) -> None:
-    from backend.store.repos import chats
+def test_panel_boot_seals_older_chat_rows_after_maintenance(appdata: Path, monkeypatch) -> None:
+    from backend.store import account_rows
     from frontend import appdata_maintenance as am
 
     calls: list[str] = []
-    monkeypatch.setattr(chats, "compact_stored_messages", lambda **kw: calls.append("compact") or {"compacted": 0})
+    monkeypatch.setattr(account_rows, "seal_pending", lambda **kw: calls.append("seal") or {})
     am.start_appdata_maintenance_async(appdata, count_boot=False)  # a bridge: one turn, leaves it to the panel
     _join_maintenance()
     assert calls == []
     am.start_appdata_maintenance_async(appdata)
     _join_maintenance()
-    assert calls == ["compact"]
+    assert calls == ["seal"]
 
 
 def test_backups_age_out_in_database_mode(appdata: Path) -> None:

@@ -73,9 +73,12 @@ def run(root: Path) -> dict[str, Any]:
 
 
 def ensure() -> None:
+    from backend.store import account_rows
     from backend.store.importers import phase1
 
-    # Settings rows first, outside once(): its lock is not re-entrant.
+    # Settings rows and the account id (it reads the login from secrets, another
+    # importer) first, outside once(): its lock is not re-entrant.
     if use_db("settings"):
         phase1.ensure("settings")
+    account_rows.current()
     phase1.once(NAME, run)

@@ -1,6 +1,9 @@
 """``ducky_mirror_chats`` / ``ducky_mirror_peers`` (migration 0023): read-only copies of
 your other UEFN Duckies' chats, pulled by ``frontend.ducky_sync``. Copies only: a chat
 lives on its home Ducky, so nothing here is ever sent back or run.
+
+A copy's title and rows are sealed for its account (:mod:`backend.store.account_rows`);
+copies an older build stored plain still read, and are sealed in place.
 """
 
 from __future__ import annotations
@@ -9,18 +12,26 @@ import json
 import time
 from typing import Any
 
-from backend.store import db
+from backend.store import account_rows, db
 
 
 def note_chat(account: str, ducky: str, conv_id: str, title: str, updated: float) -> bool:
     """Record a chat the home Ducky lists. True when its rows need pulling: never
     pulled, or changed there since the rows here (a failed pull stays True)."""
+    account_rows.ready(account)
     conn = db.connect()
+    row = conn.execute(
+        "SELECT title FROM ducky_mirror_chats WHERE account_id=? AND ducky=? AND conv_id=?", (account, ducky, conv_id)
+    ).fetchone()
+    # Every round lists every chat: a title that didn't change isn't sealed and written again.
+    stored = row[0] if row is not None and account_rows.open_cached(str(row[0]), account) == title else None
+    if stored is None:
+        stored = account_rows.seal(title, account)
     with db.write_txn(conn):
         conn.execute(
             "INSERT INTO ducky_mirror_chats(account_id, ducky, conv_id, title, updated, gone) VALUES (?, ?, ?, ?, ?, 0) "
             "ON CONFLICT(account_id, ducky, conv_id) DO UPDATE SET title=excluded.title, updated=excluded.updated, gone=0",
-            (account, ducky, conv_id, title, float(updated)),
+            (account, ducky, conv_id, stored, float(updated)),
         )
         (rows_of,) = conn.execute(
             "SELECT rows_of FROM ducky_mirror_chats WHERE account_id=? AND ducky=? AND conv_id=?",
@@ -31,11 +42,13 @@ def note_chat(account: str, ducky: str, conv_id: str, title: str, updated: float
 
 def put_rows(account: str, ducky: str, conv_id: str, rows: list[dict[str, Any]], *, of: float) -> None:
     """The chat's newest rows, as of the home's updated time ``of``."""
+    account_rows.ready(account)
+    sealed = account_rows.seal(json.dumps(rows, ensure_ascii=False, default=str), account)
     conn = db.connect()
     with db.write_txn(conn):
         conn.execute(
             "UPDATE ducky_mirror_chats SET rows=?, rows_of=?, synced=? WHERE account_id=? AND ducky=? AND conv_id=?",
-            (json.dumps(rows, ensure_ascii=False, default=str), float(of), time.time(), account, ducky, conv_id),
+            (sealed, float(of), time.time(), account, ducky, conv_id),
         )
 
 
@@ -73,7 +86,8 @@ def peers(account: str) -> list[dict[str, Any]]:
         "SELECT ducky, name, synced FROM ducky_mirror_peers WHERE account_id=? ORDER BY name, ducky", (account,)
     ).fetchall():
         chats = [
-            {"conv_id": c, "title": t, "updated": float(u or 0), "synced": float(s or 0)}
+            {"conv_id": c, "title": account_rows.open_cached(str(t or ""), account), "updated": float(u or 0),
+             "synced": float(s or 0)}
             for c, t, u, s in conn.execute(
                 "SELECT conv_id, title, updated, synced FROM ducky_mirror_chats "
                 "WHERE account_id=? AND ducky=? AND gone=0 ORDER BY updated DESC",
@@ -92,7 +106,12 @@ def rows(account: str, ducky: str, conv_id: str) -> dict[str, Any] | None:
     if r is None:
         return None
     try:
-        parsed = json.loads(r[2] or "[]")
+        parsed = json.loads(account_rows.open_text(str(r[2] or "[]"), account) or "[]")
     except ValueError:
         parsed = []
-    return {"title": r[0], "updated": float(r[1] or 0), "rows": parsed if isinstance(parsed, list) else [], "synced": float(r[3] or 0)}
+    return {
+        "title": account_rows.open_cached(str(r[0] or ""), account),
+        "updated": float(r[1] or 0),
+        "rows": parsed if isinstance(parsed, list) else [],
+        "synced": float(r[3] or 0),
+    }
