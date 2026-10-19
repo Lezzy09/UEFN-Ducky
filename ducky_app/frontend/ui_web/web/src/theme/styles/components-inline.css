@@ -3116,7 +3116,7 @@ html.window-maximized .window-resize-grip {
   right: 0;
   z-index: 20;
   width: 300px;
-  background: var(--bg-elevated, var(--bg));
+  background: var(--dropdown-bg);
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: 0 12px 32px #0008;
@@ -3167,7 +3167,7 @@ html.window-maximized .window-resize-grip {
 .attach-menu-divider { height: 1px; margin: 6px; background: var(--border-subtle, var(--border)); }
 .attach-menu-tip { padding: 6px 10px 4px; color: var(--muted); font-size: 11px; }
 .attach-menu-error { padding: 8px 10px; color: var(--amber, var(--muted)); font-size: 12px; }
-.attach-menu-preview { display: block; width: 100%; border-radius: 8px; margin-bottom: 6px; background: #000; }
+.attach-menu-preview { display: block; width: 100%; border-radius: 8px; margin-bottom: 6px; background: var(--bg); }
 .attach-menu-camera-actions { display: flex; gap: 6px; }
 .attach-menu-camera-btn {
   display: inline-flex;
@@ -3793,7 +3793,7 @@ html.window-maximized .window-resize-grip {
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: var(--card);
+  background: var(--dropdown-bg);
   box-shadow: var(--shadow-md);
   box-sizing: border-box;
 }
@@ -4730,7 +4730,7 @@ html.window-maximized .window-resize-grip {
   padding: 20px 18px 16px;
   border: 1px solid var(--border);
   border-radius: 14px;
-  background: var(--card);
+  background: var(--dropdown-bg);
   box-shadow: 0 12px 40px color-mix(in srgb, var(--bg) 55%, transparent);
   text-align: center;
 }

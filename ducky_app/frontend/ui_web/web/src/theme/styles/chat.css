@@ -7023,7 +7023,7 @@
   align-items: center;
   border: 1px solid var(--border);
   border-radius: 16px;
-  background: var(--card);
+  background: var(--dropdown-bg);
   color: var(--fg);
   padding-right: 4px;
 }
@@ -7173,7 +7173,7 @@
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 0 0 16px 16px;
-  background: var(--card);
+  background: var(--dropdown-bg);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 

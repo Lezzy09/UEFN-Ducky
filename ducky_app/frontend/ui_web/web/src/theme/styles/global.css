@@ -278,7 +278,7 @@ body.native-caption-input-ready .app-header .drag-region {
 .connection-status-menu {
   width: 300px;
   max-height: min(80vh, 560px);
-  background: var(--dropdown-bg, var(--panel, #1e1e1e));
+  background: var(--dropdown-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 8px);
   box-shadow: 0 8px 24px var(--overlay, rgba(0, 0, 0, 0.35));
@@ -483,7 +483,7 @@ body.native-caption-input-ready .app-header .drag-region {
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--surface-2, var(--hover, rgba(255, 255, 255, 0.06)));
+  background: var(--btn-bg);
   color: var(--text);
   font-size: 14px;
   font-weight: 600;
@@ -492,7 +492,7 @@ body.native-caption-input-ready .app-header .drag-region {
 }
 
 .connection-status-menu-settings:hover {
-  background: var(--hover, rgba(255, 255, 255, 0.1));
+  background: var(--btn-hover);
 }
 
 .connection-status-menu-settings svg {
@@ -898,10 +898,6 @@ body.native-caption-input-ready .app-header .drag-region {
 
 /* View menu (phone / web header): Ducky, UEFN, screens and windows as icon rows and tiles,
    with a check on what is showing instead of radio circles. */
-/* Dark like the sidebar cards. */
-.dropdown-panel:has(.view-menu) {
-  background: var(--sidebar);
-}
 .view-menu {
   --border: var(--border-light);
   display: flex;
@@ -1611,7 +1607,7 @@ body.layout-sidebar-only .project-selector-title--sidebar-only {
   max-height: 420px;
   display: flex;
   flex-direction: column;
-  background: var(--bg-elevated);
+  background: var(--dropdown-bg);
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: var(--shadow-lg);
@@ -4580,7 +4576,7 @@ body.focus-window .focus-content {
 .context-menu {
   position: fixed;
   z-index: 100002;
-  background: var(--panel-header);
+  background: var(--dropdown-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lg);
@@ -4629,8 +4625,8 @@ body.focus-window .focus-content {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  background: var(--fg);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--bg) 35%, transparent);
   transition: transform 0.15s ease;
 }
 .context-menu-switch.is-on .context-menu-switch-knob { transform: translateX(16px); }

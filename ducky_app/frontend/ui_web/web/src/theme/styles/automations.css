@@ -1009,7 +1009,7 @@
   padding: 5px;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 12px;
-  background: var(--wf-panel);
+  background: var(--dropdown-bg);
   -webkit-backdrop-filter: blur(var(--wf-panel-blur)) saturate(140%);
   backdrop-filter: blur(var(--wf-panel-blur)) saturate(140%);
   box-shadow: var(--shadow-md);
@@ -1092,7 +1092,7 @@
 /* Add-node menu, outline and icon picker: the same see-through, blurred look as the panels. */
 .aw-spawn-menu, .dropdown-panel:has(> .aw-outline), .dropdown-panel:has(> .aw-icon-panel) {
   border-color: color-mix(in srgb, var(--border) 70%, transparent);
-  background: var(--wf-panel);
+  background: var(--dropdown-bg);
   -webkit-backdrop-filter: blur(var(--wf-panel-blur)) saturate(140%);
   backdrop-filter: blur(var(--wf-panel-blur)) saturate(140%);
 }
@@ -1583,32 +1583,47 @@ button.aw-code-chip { cursor: pointer; }
 }
 .aw-log-dock { border-radius: var(--aw-radius); }
 
+/* The bottom toolbar, tighter: less room between the buttons and around the zoom. */
+.aw-canvas-controls { gap: 2px; padding: 4px; }
+.aw-canvas-controls > button { min-width: 30px; padding: 0 5px; }
+.aw-controls-sep { margin: 6px 2px; }
+.aw-zoom-label { min-width: 34px; }
+
+/* Touch screens pan and pick with fingers: no Select or Hand tool (or the line after them). */
+@media (pointer: coarse) {
+  .aw-canvas-controls > .aw-tool,
+  .aw-canvas-controls > .aw-tool + .aw-tool + .aw-controls-sep { display: none; }
+}
+
 @container (max-width: 680px) {
-  .aw-toolbar, .aw-root.is-list-collapsed .aw-toolbar { left: var(--aw-inset); }
+  .aw-toolbar { left: var(--aw-inset); }
+  /* Folded, the list is one square button at the top left, on the name's row. */
+  .aw-root.is-list-collapsed .aw-toolbar { left: calc(var(--aw-list-folded-w) + var(--aw-inset) * 2); }
+  .aw-root.has-workflow.is-list-collapsed .aw-list {
+    top: var(--aw-inset);
+    left: var(--aw-inset);
+    width: var(--aw-list-folded-w);
+    height: var(--aw-bar-h);
+  }
+  /* Open, it is a sheet under the name. */
   .aw-root.has-workflow:not(.is-list-collapsed) .aw-list {
     top: calc(var(--aw-bar-h) + var(--aw-inset) * 2);
     left: var(--aw-inset);
     width: calc(100% - var(--aw-inset) * 2);
     height: calc(100% - var(--aw-bar-h) - var(--aw-inset) * 3);
   }
-  /* Folded, the list is one square button at the top left under the name, not a column. */
-  .aw-root.has-workflow.is-list-collapsed .aw-list {
-    top: calc(var(--aw-bar-h) + var(--aw-inset) * 2);
-    left: var(--aw-inset);
-    width: var(--aw-list-folded-w);
-    height: var(--aw-bar-h);
-  }
   .aw-inspector { left: var(--aw-inset); }
-  .aw-toolbar .aw-more-toggle,
-  .aw-canvas-fab { border-radius: var(--aw-radius); }
-  .aw-canvas-fab { right: var(--aw-inset); bottom: var(--aw-inset); }
-  .aw-canvas-controls.is-open { right: var(--aw-inset); bottom: calc(48px + var(--aw-inset) * 2); }
-  /* The labeled lists: buttons count their padding, so nothing scrolls sideways. */
-  .aw-toolbar .aw-toolbar-actions.is-open,
-  .aw-canvas-controls.is-open { overflow-x: hidden; border-radius: var(--aw-radius); }
+  .aw-toolbar .aw-more-toggle { border-radius: var(--aw-radius); }
+  /* The bottom toolbar stays as it is on a wide screen (not folded into one button), hidden
+     only while the details sheet covers the bottom. */
+  .aw-canvas-fab { display: none; }
+  .aw-canvas-controls:not(.is-open) { display: flex; }
+  .aw-root.has-inspector .aw-canvas-controls { display: none; }
+  .aw-canvas-controls { bottom: var(--aw-inset); gap: 2px; padding: 4px; }
+  .aw-canvas-controls > button { min-width: 34px; }
+  /* The top bar's labeled list: buttons count their padding, so nothing scrolls sideways. */
+  .aw-toolbar .aw-toolbar-actions.is-open { overflow-x: hidden; border-radius: var(--aw-radius); }
   .aw-toolbar .aw-toolbar-actions.is-open > button,
   .aw-toolbar .aw-toolbar-actions.is-open .choice-dropdown,
-  .aw-toolbar .aw-toolbar-actions.is-open .choice-dropdown .choice-dropdown-trigger,
-  .aw-canvas-controls.is-open > button,
-  .aw-canvas-controls.is-open > .aw-outline-button { box-sizing: border-box; max-width: 100%; }
+  .aw-toolbar .aw-toolbar-actions.is-open .choice-dropdown .choice-dropdown-trigger { box-sizing: border-box; max-width: 100%; }
 }

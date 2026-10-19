@@ -185,7 +185,7 @@
   padding: 6px;
   border-radius: 10px;
   border: 1px solid var(--border);
-  background: #1a1a1e;
+  background: var(--dropdown-bg);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
 }
 

@@ -39,7 +39,7 @@
   flex-direction: column;
   width: min(640px, 100%);
   max-height: min(72vh, 640px);
-  background: var(--panel-header);
+  background: var(--dropdown-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lg);

@@ -24,7 +24,7 @@ export const DEFAULT_CSS_VARS: Record<string, string> = {
   // Ducky yellow (the duck in the logo).
   accent: "#f8a800",
   "accent-hover": "#c48500",
-  "dropdown-bg": "#181818",
+  "dropdown-bg": "#0f0f0f",
   radius: "12px",
   "radius-sm": "8px",
   "font-ui": '"Inter", "Segoe UI", system-ui, sans-serif',

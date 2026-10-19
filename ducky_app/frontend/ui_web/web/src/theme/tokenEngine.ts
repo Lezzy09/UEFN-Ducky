@@ -92,11 +92,12 @@ export const COLOR_TOKENS: TokenDef[] = [
     color: true,
   },
   {
+    // Every popup, menu and tooltip: the same as the sidebar, so popups look like part of it.
     id: "dropdown-bg",
     name: "Dropdown Bg",
     cat: "surface",
-    base: "surface",
-    rule: (c) => c,
+    base: "bg",
+    rule: (c) => shiftColor(c, 0, 0, 2),
     color: true,
   },
   {

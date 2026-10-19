@@ -536,7 +536,7 @@
   padding: 4px;
   border: 1px solid var(--border, #3a3a3a);
   border-radius: 8px;
-  background: var(--card, #252525);
+  background: var(--dropdown-bg);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 .plugin-scope-bar__menu-item {

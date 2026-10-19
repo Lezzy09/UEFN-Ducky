@@ -57,7 +57,7 @@
   overflow: auto;
   padding: 14px 16px 12px;
   border-radius: 12px;
-  background: var(--surface, #1c1f26);
+  background: var(--dropdown-bg);
   color: var(--text, #f0f2f6);
   border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
