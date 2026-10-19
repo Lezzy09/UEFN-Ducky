@@ -214,7 +214,7 @@
 .workspace-dock-layout--default:not(.is-narrow) .dock-rail-inner {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 8px);
-  background: var(--panel-header);
+  background: var(--sidebar);
 }
 
 /* The window-side edge of each sidebar runs flush into the window: no gap, line or corner. */
