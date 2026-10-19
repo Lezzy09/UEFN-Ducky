@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from frontend.window_view import (
     bring_to_front,
     fortnite_roots_from_launcher_dat,
@@ -690,3 +694,26 @@ def test_wait_uefn_ready_times_out(monkeypatch) -> None:
     out = wv.wait_uefn_ready(timeout=1.0)
     assert out["ok"] is False
     assert "timed out" in out["error"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows monitors")
+def test_monitors_survive_another_modules_monitorinfo_argtypes():
+    """win_frameless sets the shared user32's GetMonitorInfoW argtypes to its own struct
+    when a window maximizes; the screen list read the same shared function and fell
+    back to one 1920x1080 screen."""
+    import ctypes
+    from ctypes import wintypes
+
+    import frontend.window_view as wv
+
+    class OtherInfo(ctypes.Structure):
+        _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT), ("dwFlags", ctypes.c_ulong)]
+
+    shared = ctypes.windll.user32.GetMonitorInfoW
+    before = shared.argtypes
+    shared.argtypes = [wintypes.HMONITOR, ctypes.POINTER(OtherInfo)]
+    try:
+        width = ctypes.windll.user32.GetSystemMetrics(0)  # SM_CXSCREEN: the primary's width
+        assert wv._monitors()[0][2] == width
+    finally:
+        shared.argtypes = before

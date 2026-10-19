@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import sys
+import threading
 from ctypes import wintypes
 
 _log = logging.getLogger(__name__)
@@ -12,9 +13,12 @@ _log = logging.getLogger(__name__)
 if sys.platform == "win32":
     user32 = ctypes.windll.user32
     shell32 = ctypes.windll.shell32
+    # Its own function table: argtypes set here never break another module's calls.
+    _user32_own = ctypes.WinDLL("user32")
 else:
     user32 = None
     shell32 = None
+    _user32_own = None
 
 _AUMID_SET = False
 
@@ -716,6 +720,191 @@ def begin_native_window_resize(window: object, edge: str, *, double_click: bool 
         return False
 
 
+_WS_MAXIMIZE = 0x01000000
+_SW_MAXIMIZE = 3
+_SW_MINIMIZE = 6
+_SW_RESTORE = 9
+_SWP_NOACTIVATE = 0x0010
+_SWP_SHOWWINDOW = 0x0040
+_SWP_NOOWNERZORDER = 0x0200
+_DWMWCP_DONOTROUND = 1
+# Full-screen windows: hwnd -> (style, window rect before, was maximized).
+_fullscreen: dict[int, tuple[int, tuple[int, int, int, int], bool]] = {}
+
+
+def fit_picture_bounds(
+    work: tuple[int, int, int, int],
+    frame: tuple[int, int],
+    pad: tuple[int, int],
+    picture: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    """Window bounds (x, y, w, h), centred on a work area (left, top, right, bottom), whose
+    client shows ``picture`` (w, h) as large as it fits plus ``pad`` (w, h) of bars around it.
+    ``frame`` is the window's invisible border (window size minus client size). Physical px."""
+    left, top, right, bottom = work
+    pw, ph = max(1, int(picture[0])), max(1, int(picture[1]))
+    room_w = right - left - frame[0] - pad[0]
+    room_h = bottom - top - frame[1] - pad[1]
+    scale = max(0.05, min(room_w / pw, room_h / ph))
+    w = round(pw * scale) + pad[0] + frame[0]
+    h = round(ph * scale) + pad[1] + frame[1]
+    return left + (right - left - w) // 2, top + (bottom - top - h) // 2, w, h
+
+
+def _window_rect(fn, hwnd: int) -> tuple[int, int, int, int] | None:
+    r = wintypes.RECT()
+    if not fn(hwnd, ctypes.byref(r)):
+        return None
+    return int(r.left), int(r.top), int(r.right), int(r.bottom)
+
+
+def _monitor_rects(hwnd: int) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]] | None:
+    """(whole monitor, work area) of the monitor the window is on."""
+    _user32_own.MonitorFromWindow.restype = wintypes.HMONITOR
+    _user32_own.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+    hmon = _user32_own.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+    if not hmon:
+        return None
+    mi = _MONITORINFO()
+    mi.cbSize = ctypes.sizeof(_MONITORINFO)
+    if not _user32_own.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+        return None
+    m, w = mi.rcMonitor, mi.rcWork
+    return (m.left, m.top, m.right, m.bottom), (w.left, w.top, w.right, w.bottom)
+
+
+def _style_long():
+    get_long = getattr(user32, "GetWindowLongPtrW", None) or user32.GetWindowLongW
+    set_long = getattr(user32, "SetWindowLongPtrW", None) or user32.SetWindowLongW
+    get_long.restype = ctypes.c_longlong
+    get_long.argtypes = [wintypes.HWND, ctypes.c_int]
+    set_long.restype = ctypes.c_longlong
+    set_long.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_longlong]
+    return get_long, set_long
+
+
+def _set_round_corners(hwnd: int, on: bool) -> None:
+    try:
+        pref = ctypes.c_int(_DWMWCP_ROUND if on else _DWMWCP_DONOTROUND)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, _DWMWA_WINDOW_CORNER_PREFERENCE, ctypes.byref(pref), ctypes.sizeof(pref)
+        )
+    except Exception:
+        pass
+
+
+def _set_page_class(window: object, name: str, on: bool) -> None:
+    from frontend.ui_web.ui_dispatch import schedule_evaluate_js
+
+    flag = "true" if on else "false"
+    schedule_evaluate_js(window, f'document.documentElement.classList.toggle("{name}", {flag});')
+
+
+def set_window_fullscreen(window: object, on: bool) -> bool:
+    """Borderless full screen over the whole monitor the window is on (taskbar too), or
+    back to where it was. The page gets ``window-fullscreen`` on <html> while it lasts."""
+    if sys.platform != "win32":
+        return False
+    hwnd = _hwnd_from_pywebview(window)
+    if not hwnd:
+        return False
+    saved = _fullscreen.get(hwnd)
+    if on and saved is None:
+        was_maximized = _is_maximized(hwnd)
+        # Marked first: the restore below must not get its old size put back (_keep_normal_size).
+        _fullscreen[hwnd] = (0, (0, 0, 0, 0), was_maximized)
+        normal = _normal_size(hwnd) if was_maximized else None
+        if was_maximized:
+            user32.ShowWindow(hwnd, _SW_RESTORE)
+        get_long, set_long = _style_long()
+        # Read once restored: a maximized window's style carries WS_MAXIMIZE, and setting
+        # that back would leave it "maximized" at whatever size it has.
+        style = int(get_long(hwnd, _GWL_STYLE)) & ~_WS_MAXIMIZE
+        rect = _window_rect(user32.GetWindowRect, hwnd)
+        rects = _monitor_rects(hwnd)
+        if rect is None or rects is None:
+            _fullscreen.pop(hwnd, None)
+            return False
+        if normal:
+            # Restoring shrank it by its frame (see _keep_normal_size): keep the real size.
+            rect = (rect[0], rect[1], rect[0] + normal[0], rect[1] + normal[1])
+        _fullscreen[hwnd] = (style, rect, was_maximized)
+        # No frame at all: the client is the whole window, so the whole monitor.
+        set_long(hwnd, _GWL_STYLE, style & ~(_WS_CAPTION | _WS_THICKFRAME))
+        _set_round_corners(hwnd, False)
+        left, top, right, bottom = rects[0]
+        user32.SetWindowPos(
+            hwnd, 0, left, top, right - left, bottom - top,
+            _SWP_FRAMECHANGED | _SWP_NOOWNERZORDER | _SWP_SHOWWINDOW,
+        )
+    elif not on and saved is not None:
+        _fullscreen.pop(hwnd, None)
+        style, (left, top, right, bottom), was_maximized = saved
+        _get_long, set_long = _style_long()
+        set_long(hwnd, _GWL_STYLE, style)
+        _set_round_corners(hwnd, True)
+        user32.SetWindowPos(
+            hwnd, 0, left, top, right - left, bottom - top,
+            _SWP_FRAMECHANGED | _SWP_NOZORDER | _SWP_NOOWNERZORDER,
+        )
+        if was_maximized:
+            user32.ShowWindow(hwnd, _SW_MAXIMIZE)
+    _set_page_class(window, "window-fullscreen", hwnd in _fullscreen)
+    return hwnd in _fullscreen
+
+
+def fit_window_to_picture(window: object, picture_w: float, picture_h: float, pad_w: float, pad_h: float) -> bool:
+    """Size the window so a picture (w, h) fills it, as large as the monitor's work area
+    allows, centred there. ``pad``: physical px of the page around the picture."""
+    if sys.platform != "win32" or picture_w <= 0 or picture_h <= 0:
+        return False
+    hwnd = _hwnd_from_pywebview(window)
+    if not hwnd or hwnd in _fullscreen:
+        return False
+    if _is_maximized(hwnd):
+        user32.ShowWindow(hwnd, _SW_RESTORE)
+    outer = _window_rect(user32.GetWindowRect, hwnd)
+    inner = _window_rect(user32.GetClientRect, hwnd)
+    rects = _monitor_rects(hwnd)
+    if outer is None or inner is None or rects is None:
+        return False
+    frame = ((outer[2] - outer[0]) - (inner[2] - inner[0]), (outer[3] - outer[1]) - (inner[3] - inner[1]))
+    pad = (max(0, round(pad_w)), max(0, round(pad_h)))
+    x, y, w, h = fit_picture_bounds(rects[1], frame, pad, (round(picture_w), round(picture_h)))
+    user32.SetWindowPos(hwnd, 0, x, y, w, h, _SWP_NOZORDER | _SWP_NOACTIVATE)
+    return True
+
+
+def window_chrome(window: object, op: str, args: list) -> None:
+    """A window's own title-bar buttons, for a page with no JS bridge (a window showing
+    another UEFN Ducky): minimize, maximize, full screen, fit to a picture, close.
+    Minimize/maximize/restore go straight to Windows, like the taskbar: pywebview's
+    restore of a frameless window came back smaller by the width of its frame."""
+    try:
+        hwnd = _hwnd_from_pywebview(window) if sys.platform == "win32" else None
+        if op == "minimize":
+            if hwnd:
+                user32.ShowWindow(hwnd, _SW_MINIMIZE)
+            else:
+                window.minimize()
+        elif op == "maximize":
+            on = bool(args and args[0])
+            if hwnd:
+                user32.ShowWindow(hwnd, _SW_MAXIMIZE if on else _SW_RESTORE)
+            elif on:
+                window.maximize()
+            else:
+                window.restore()
+        elif op == "fullscreen":
+            set_window_fullscreen(window, bool(args and args[0]))
+        elif op == "fit" and len(args) >= 4:
+            fit_window_to_picture(window, *(float(a) for a in args[:4]))
+        elif op == "close":
+            window.destroy()
+    except Exception:
+        _log.debug("window chrome %s failed", op, exc_info=True)
+
+
 # --- OS-level window subclass (bypasses pythonnet, which drops a sub-subclass WndProc) ---
 # LONG_PTR/UINT_PTR-sized ctypes so 64-bit WPARAM/LPARAM/LRESULT round-trip correctly.
 if sys.platform == "win32":
@@ -760,6 +949,7 @@ def _chrome_subclass_proc(hwnd, msg, wparam, lparam):
             _native_subclass.pop(hwnd, None)
             _native_subclass_orig.pop(hwnd, None)
             _window_min_track.pop(hwnd, None)
+            _fullscreen.pop(hwnd, None)
     try:
         if msg == _WM_NCCALCSIZE:
             # Both message forms start with the proposed RECT; wParam=0 has no
@@ -917,6 +1107,8 @@ def _make_chrome_browser_form():
                 # Set before forcing frame calculation; that call can synchronously
                 # re-enter Resize. A transition must refresh the frame only once.
                 self._chrome_state = cur
+                if cur != prev:
+                    _keep_normal_size(self, prev, cur, WinForms.FormWindowState.Normal)
                 if cur != prev and (
                     cur == WinForms.FormWindowState.Maximized
                     or prev == WinForms.FormWindowState.Maximized
@@ -934,6 +1126,66 @@ def _make_chrome_browser_form():
                     _sync_window_chrome_state(self.pywebview_window)
 
     return ChromeBrowserForm
+
+
+class _WINDOWPLACEMENT(ctypes.Structure):
+    _fields_ = [
+        ("length", ctypes.c_uint),
+        ("flags", ctypes.c_uint),
+        ("showCmd", ctypes.c_uint),
+        ("ptMinPosition", _POINT),
+        ("ptMaxPosition", _POINT),
+        ("rcNormalPosition", _RECT),
+    ]
+
+
+def _normal_size(hwnd: int) -> tuple[int, int] | None:
+    """The window's size when not maximized or minimized (Windows keeps it while it is)."""
+    wp = _WINDOWPLACEMENT()
+    wp.length = ctypes.sizeof(_WINDOWPLACEMENT)
+    if not _user32_own.GetWindowPlacement(hwnd, ctypes.byref(wp)):
+        return None
+    r = wp.rcNormalPosition
+    return int(r.right - r.left), int(r.bottom - r.top)
+
+
+def _keep_normal_size(form: object, prev: object, cur: object, normal: object) -> None:
+    """pywebview makes a frameless form border-less to WinForms while the window keeps its
+    resize frame, so WinForms brings it back from maximized or minimized at its old client
+    size: one frame (16x8 px at 100%) smaller every time. Note the size on the way out,
+    put it back on the way in."""
+    hwnd = _hwnd_from_pywebview(getattr(form, "pywebview_window", None))
+    if not hwnd:
+        return
+    if cur != normal:
+        if prev is None or prev == normal:
+            form._chrome_normal_size = _normal_size(hwnd)
+        return
+    size = getattr(form, "_chrome_normal_size", None)
+    form._chrome_normal_size = None
+    if not size:
+        return
+
+    def fix() -> None:
+        if hwnd in _fullscreen or _is_maximized(hwnd):
+            return
+        outer = _window_rect(_user32_own.GetWindowRect, hwnd)
+        inner = _window_rect(_user32_own.GetClientRect, hwnd)
+        if outer is None or inner is None:
+            return
+        w, h = outer[2] - outer[0], outer[3] - outer[1]
+        frame = (w - (inner[2] - inner[0]), h - (inner[3] - inner[1]))
+        # Only that one-frame shrink: any other size (Fit, a snap) was meant.
+        if frame != (0, 0) and (w, h) == (size[0] - frame[0], size[1] - frame[1]):
+            _user32_own.SetWindowPos(hwnd, None, 0, 0, size[0], size[1], _SWP_NOMOVE | _SWP_NOZORDER | _SWP_NOACTIVATE)
+
+    # After WinForms' own restore sizing, which runs once this resize returns.
+    try:
+        from System import Action
+
+        form.BeginInvoke(Action(fix))
+    except Exception:
+        fix()
 
 
 def _sync_window_chrome_state(window: object) -> None:
@@ -1109,6 +1361,14 @@ def install_sync_drag_bridge() -> None:
                     begin_native_window_resize(
                         window, param[0], double_click=len(param) > 1 and param[1] is True,
                     )
+                return
+            if func_name == "uefnWindowChrome":
+                if isinstance(param, (list, tuple)) and param and isinstance(param[0], str):
+                    # Off the WebView2 callback: resizing a window from inside it re-enters WebView2.
+                    threading.Thread(
+                        target=window_chrome, args=(window, param[0], list(param[1:])),
+                        daemon=True, name="window-chrome",
+                    ).start()
                 return
             original(_QueuedReturn(window, str(func_name or "")), func_name, param, value_id)
 

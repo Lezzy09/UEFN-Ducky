@@ -223,6 +223,132 @@ def test_maximized_client_matches_work_area_on_secondary_monitor(native):
     sc.CallWindowProcW.assert_not_called()
 
 
+def test_fit_fills_the_work_area_with_the_picture_and_its_bars():
+    # 1920x1080 picture, 66 px of bars above it, a 7/14 px invisible frame, 1040 px tall work area.
+    x, y, w, h = chrome.fit_picture_bounds((0, 0, 1920, 1040), (14, 7), (0, 66), (1920, 1080))
+    assert h == 1040, "as tall as the work area"
+    assert w - 14 == round(1920 * (1040 - 7 - 66) / 1080), "the picture keeps its shape"
+    assert (x, y) == ((1920 - w) // 2, 0)
+    # A wide picture on a monitor left of the primary one: limited by width, centred there.
+    x, y, w, h = chrome.fit_picture_bounds((-1920, 0, 0, 1080), (0, 0), (0, 32), (3840, 1080))
+    assert (w, x) == (1920, -1920)
+    assert h == 32 + 540 and y == (1080 - h) // 2
+
+
+@pytest.fixture
+def fullscreen_native(native, monkeypatch):
+    user32, _ = native
+    user32.ShowWindow = Mock()
+    user32.SetWindowPos = Mock()
+    user32.GetWindowRect = object()
+    # Maximized: the style still says so (a fake restore leaves it, the code must drop it).
+    styles = {101: chrome._WS_CAPTION | chrome._WS_THICKFRAME | chrome._WS_SYSMENU | chrome._WS_MAXIMIZE}
+    get_long = Mock(side_effect=lambda hwnd, _i: styles[hwnd])
+    set_long = Mock(side_effect=lambda hwnd, _i, value: styles.__setitem__(hwnd, value))
+    monkeypatch.setattr(chrome, "_style_long", lambda: (get_long, set_long))
+    monkeypatch.setattr(chrome, "_window_rect", lambda _fn, _hwnd: (100, 80, 1380, 900))
+    monkeypatch.setattr(chrome, "_monitor_rects", lambda _hwnd: ((-1920, 0, 0, 1080), (-1920, 0, 0, 1040)))
+    monkeypatch.setattr(chrome, "_set_round_corners", Mock())
+    monkeypatch.setattr(chrome, "_normal_size", lambda _hwnd: (1280, 820))
+    page = Mock()
+    monkeypatch.setattr(chrome, "_set_page_class", page)
+    monkeypatch.setattr(chrome, "_fullscreen", {})
+    return user32, styles, page
+
+
+def test_full_screen_covers_the_whole_monitor_and_comes_back(fullscreen_native, monkeypatch):
+    user32, styles, page = fullscreen_native
+    win = SimpleNamespace(hwnd=101)
+    monkeypatch.setattr(chrome, "_is_maximized", lambda hwnd: True)
+    assert chrome.set_window_fullscreen(win, True) is True
+    user32.ShowWindow.assert_called_once_with(101, chrome._SW_RESTORE)
+    assert styles[101] & (chrome._WS_CAPTION | chrome._WS_THICKFRAME) == 0, "no frame: the client is the monitor"
+    assert styles[101] & chrome._WS_MAXIMIZE == 0, "not 'maximized' at the monitor's size"
+    assert user32.SetWindowPos.call_args.args[:6] == (101, 0, -1920, 0, 1920, 1080), "the taskbar too"
+    page.assert_called_with(win, "window-fullscreen", True)
+    # Asked again (the page reloaded and lost its class): nothing moves, the page hears it is.
+    assert chrome.set_window_fullscreen(win, True) is True
+    assert user32.SetWindowPos.call_count == 1
+    assert chrome.set_window_fullscreen(win, False) is False
+    assert styles[101] & chrome._WS_THICKFRAME, "the frame is back"
+    assert styles[101] & chrome._WS_MAXIMIZE == 0, "Windows maximizes it again, at the right size"
+    assert user32.SetWindowPos.call_args.args[:6] == (101, 0, 100, 80, 1280, 820)
+    assert user32.ShowWindow.call_args.args == (101, chrome._SW_MAXIMIZE), "maximized before, maximized again"
+    page.assert_called_with(win, "window-fullscreen", False)
+
+
+@pytest.mark.parametrize("now,fixed", [((1248, 773), True), ((1719, 1032), False)])
+def test_back_from_maximized_keeps_its_size_not_one_frame_smaller(native, monkeypatch, now, fixed):
+    """WinForms thinks a frameless form has no border, so it brought the window back at
+    its old client size (16x8 px smaller at 100%). Only that shrink is undone."""
+    own = SimpleNamespace(GetWindowRect="outer", GetClientRect="inner", SetWindowPos=Mock())
+    monkeypatch.setattr(chrome, "_user32_own", own)
+    monkeypatch.setattr(chrome, "_normal_size", lambda _hwnd: (1264, 781))
+    monkeypatch.setattr(chrome, "_fullscreen", {})
+    rects = {"outer": (0, 0, *now), "inner": (0, 0, now[0] - 16, now[1] - 8)}
+    monkeypatch.setattr(chrome, "_window_rect", lambda fn, _hwnd: rects[fn])
+    form = SimpleNamespace(pywebview_window=SimpleNamespace(hwnd=101))
+    chrome._keep_normal_size(form, "Normal", "Maximized", "Normal")
+    chrome._keep_normal_size(form, "Maximized", "Normal", "Normal")
+    if fixed:
+        assert own.SetWindowPos.call_args.args[:6] == (101, None, 0, 0, 1264, 781)
+    else:
+        own.SetWindowPos.assert_not_called()
+
+
+def test_window_chrome_runs_each_button_on_its_own_window(native, monkeypatch):
+    user32, _ = native
+    user32.ShowWindow = Mock()
+    win = Mock(hwnd=303)
+    full, fit = Mock(), Mock()
+    monkeypatch.setattr(chrome, "set_window_fullscreen", full)
+    monkeypatch.setattr(chrome, "fit_window_to_picture", fit)
+    chrome.window_chrome(win, "minimize", [])
+    chrome.window_chrome(win, "maximize", [True])
+    chrome.window_chrome(win, "maximize", [False])
+    chrome.window_chrome(win, "fullscreen", [True])
+    chrome.window_chrome(win, "fit", [1920, 1080, 0, 66])
+    chrome.window_chrome(win, "close", [])
+    chrome.window_chrome(win, "evaluate_js", ["alert(1)"])
+    # Straight to Windows, like the taskbar: pywebview's restore came back a frame smaller.
+    assert [c.args for c in user32.ShowWindow.call_args_list] == [
+        (303, chrome._SW_MINIMIZE), (303, chrome._SW_MAXIMIZE), (303, chrome._SW_RESTORE),
+    ]
+    win.restore.assert_not_called()
+    full.assert_called_once_with(win, True)
+    fit.assert_called_once_with(win, 1920.0, 1080.0, 0.0, 66.0)
+    win.destroy.assert_called_once()
+    win.evaluate_js.assert_not_called()
+
+
+def test_bridge_runs_window_chrome_off_the_webview_callback(monkeypatch):
+    import threading
+
+    import webview.util
+
+    original = Mock()
+    edge = SimpleNamespace(js_bridge_call=original)
+    monkeypatch.setitem(sys.modules, "webview.platforms.edgechromium", edge)
+    monkeypatch.setattr(webview.util, "js_bridge_call", original)
+    monkeypatch.setattr(chrome.sys, "platform", "win32")
+    monkeypatch.setattr(chrome.install_sync_drag_bridge, "_installed", False, raising=False)
+    done = threading.Event()
+    seen: list = []
+
+    def run(window, op, args):
+        seen.append((window, op, args, threading.current_thread().name))
+        done.set()
+
+    monkeypatch.setattr(chrome, "window_chrome", run)
+    remote = object()
+    chrome.install_sync_drag_bridge()
+    edge.js_bridge_call(remote, "uefnWindowChrome", ["fullscreen", True], "uefnWindowChrome")
+    assert done.wait(5)
+    assert seen == [(remote, "fullscreen", [True], "window-chrome")]
+    edge.js_bridge_call(remote, "uefnWindowChrome", "bad", "uefnWindowChrome")
+    original.assert_not_called()
+
+
 def test_maximized_grips_state_targets_own_window(native, monkeypatch):
     from frontend.ui_web import ui_dispatch
 

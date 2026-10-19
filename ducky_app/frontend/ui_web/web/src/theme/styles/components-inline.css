@@ -5191,17 +5191,112 @@ html.window-maximized .window-resize-grip {
   height: auto;
 }
 
+:root {
+  --remote-ducky-bar-h: 32px;
+}
+
+/* The window's own title bar (it is frameless, like a focus window): drag it to move the
+   window, double-click to maximize; its buttons are the app's window controls. */
 .remote-ducky-bar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 30px;
-  padding: 4px 12px;
+  flex: none;
+  height: var(--remote-ducky-bar-h);
+  padding: 0 4px 0 12px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--panel-header, var(--surface));
   color: var(--fg);
   font-size: 12px;
   font-weight: 500;
+  cursor: default;
+  user-select: none;
+  -webkit-app-region: no-drag;
+}
+
+.remote-ducky-bar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.remote-ducky-bar__fill {
+  flex: 1 1 auto;
+  align-self: stretch;
+}
+
+.remote-ducky-bar__controls {
+  flex: none;
+}
+
+/* The top edge has no OS resize frame: thin grips over it start the OS resize. */
+.remote-ducky-bar__grip {
+  position: absolute;
+  top: 0;
+  z-index: 2;
+  height: 4px;
+}
+
+.remote-ducky-bar__grip--n {
+  left: 8px;
+  right: 8px;
+  cursor: n-resize;
+}
+
+.remote-ducky-bar__grip--nw {
+  left: 0;
+  width: 8px;
+  cursor: nw-resize;
+}
+
+.remote-ducky-bar__grip--ne {
+  right: 0;
+  width: 8px;
+  cursor: ne-resize;
+}
+
+/* Full screen: the window covers the whole monitor. The bar (and, while a PC picture
+   shows, the app's top bar with the View menu) slides down from the top edge. */
+html.window-fullscreen .remote-ducky-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100060;
+  transform: translateY(-100%);
+  transition: transform 0.18s ease;
+}
+
+.remote-ducky-reveal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100059;
+  height: 6px;
+}
+
+html.window-fullscreen .app-header--streaming {
+  position: fixed;
+  top: var(--remote-ducky-bar-h);
+  left: 0;
+  right: 0;
+  z-index: 100058;
+  background: var(--bg);
+  transform: translateY(calc(-100% - var(--remote-ducky-bar-h)));
+  transition: transform 0.18s ease;
+}
+
+html.window-fullscreen .remote-window-overlay {
+  inset: 0;
+}
+
+html.window-fullscreen:has(.remote-ducky-reveal:hover, .remote-ducky-bar:hover, .app-header--streaming:hover, .view-menu) .remote-ducky-bar,
+html.window-fullscreen:has(.remote-ducky-reveal:hover, .remote-ducky-bar:hover, .app-header--streaming:hover, .view-menu) .app-header--streaming {
+  transform: none;
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--bg) 40%, transparent);
 }
 
 .remote-ducky-bar__dot {

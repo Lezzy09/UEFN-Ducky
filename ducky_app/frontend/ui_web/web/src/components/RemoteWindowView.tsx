@@ -29,6 +29,7 @@ import {
   type ViewPanZoom,
 } from "./remoteWindowMath";
 import { getDirectTransport } from "../remote/directTransport";
+import { setRemotePicture } from "../remote/remotePicture";
 import { setVisibleInterval } from "../utils/visibleInterval";
 
 export { contentRect } from "./remoteWindowMath";
@@ -289,6 +290,21 @@ export function useIdlePause(
     setIdle(false);
   }, []);
   return { idle, resume };
+}
+
+const DESKTOP_POINTER = "(hover: hover) and (pointer: fine)";
+
+/** A mouse and a keyboard (a PC), not a phone: the picture takes keys straight, with no typing box. */
+export function useDesktopPointer(): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      const mq = window.matchMedia?.(DESKTOP_POINTER);
+      mq?.addEventListener("change", onChange);
+      return () => mq?.removeEventListener("change", onChange);
+    },
+    () => !!window.matchMedia?.(DESKTOP_POINTER).matches,
+    () => false,
+  );
 }
 
 /** Capture only while this tab is actually on screen — same idea as UE pausing when you tab away. */
@@ -860,10 +876,11 @@ function spawnRipple(host: HTMLElement, clientX: number, clientY: number, kind: 
 }
 
 /**
- * Pointer/key capture on the video. A mouse stays an immediate click/drag on the PC's
- * mouse. A finger is a finger on the PC (touch: the PC's pointer neither moves nor
- * shows), like Chrome Remote Desktop: tap = click, long press = double-click, slide =
- * drag, two fingers pan/zoom the local view.
+ * Pointer/key capture on the video. A mouse is the PC's mouse: it follows the pointer
+ * over the picture with no button held, and clicks, drags and scrolls there. A finger is
+ * a finger on the PC (touch: the PC's pointer neither moves nor shows), like Chrome
+ * Remote Desktop: tap = click, long press = double-click, slide = drag, two fingers
+ * pan/zoom the local view. Keys go to the PC, held keys repeat there.
  */
 function attachInput(
   video: HTMLVideoElement,
@@ -893,6 +910,12 @@ function attachInput(
     const n = norm(videoRect(video, viewport), p.x, p.y);
     lastRemotePoint = n;
     return n;
+  };
+  const onPicture = (clientX: number, clientY: number) => {
+    const vz = getViewPanZoom();
+    const p = mapViewPoint(clientX, clientY, viewBox(), vz.panX, vz.panY, vz.scale);
+    const r = videoRect(video, viewport);
+    return p.x >= r.left && p.x <= r.left + r.width && p.y >= r.top && p.y <= r.top + r.height;
   };
   const pts = new Map<number, { x: number; y: number }>();
   let holdTimer = 0;
@@ -1009,6 +1032,8 @@ function attachInput(
     ev.preventDefault();
     if (ev.pointerType === "mouse" && ignoreMouseAfterTouch(lastOverlayTouchAt, performance.now())) return;
     video.focus({ preventScroll: true });
+    // Back and forward buttons have no PC button to press.
+    if (ev.pointerType === "mouse" && ev.button > 2) return;
     pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
     if (ev.pointerType === "mouse") {
       capture(ev.pointerId);
@@ -1041,7 +1066,16 @@ function attachInput(
     }, HOLD_MS);
   };
   const onMove = (ev: PointerEvent) => {
-    if (!pts.has(ev.pointerId)) return;
+    if (!pts.has(ev.pointerId)) {
+      // No button held: a mouse over the picture moves the PC's mouse, while this window
+      // has the keyboard (a pointer passing over it in the background moves nothing).
+      if (ev.pointerType !== "mouse" || ev.buttons || dragId >= 0 || !document.hasFocus()) return;
+      if (ignoreMouseAfterTouch(lastOverlayTouchAt, performance.now())) return;
+      if (!onPicture(ev.clientX, ev.clientY)) return;
+      pendingMove = { ...point(ev.clientX, ev.clientY), button: 0 };
+      if (!raf) raf = requestAnimationFrame(flush);
+      return;
+    }
     pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
     if (pts.size >= 2) {
       syncPinch();
@@ -1078,16 +1112,22 @@ function attachInput(
     if (pts.size < 2) pinch = null;
     if (pts.size === 0) ignoreUntilClear = false;
   };
+  // The picture has the keyboard: this app's own shortcuts stay out of it.
   const onKeyDown = (ev: KeyboardEvent) => {
     ev.preventDefault();
-    if (ev.repeat) return;
+    ev.stopPropagation();
     send({ type: "keydown", key: ev.key });
   };
   const onKeyUp = (ev: KeyboardEvent) => {
     ev.preventDefault();
+    ev.stopPropagation();
     send({ type: "keyup", key: ev.key });
   };
   const onContext = (ev: Event) => ev.preventDefault();
+  // A middle click is the PC's, not this page's auto-scroll.
+  const onMouseDown = (ev: MouseEvent) => {
+    if (ev.button === 1) ev.preventDefault();
+  };
   video.addEventListener("wheel", onWheel, { passive: false });
   video.addEventListener("pointerdown", onDown);
   video.addEventListener("pointerup", onUp);
@@ -1096,6 +1136,7 @@ function attachInput(
   video.addEventListener("keydown", onKeyDown);
   video.addEventListener("keyup", onKeyUp);
   video.addEventListener("contextmenu", onContext);
+  video.addEventListener("mousedown", onMouseDown);
   return () => {
     if (raf) cancelAnimationFrame(raf);
     stopKeepAlive();
@@ -1109,6 +1150,7 @@ function attachInput(
     video.removeEventListener("keydown", onKeyDown);
     video.removeEventListener("keyup", onKeyUp);
     video.removeEventListener("contextmenu", onContext);
+    video.removeEventListener("mousedown", onMouseDown);
   };
 }
 function preferCodecs(transceiver: RTCRtpTransceiver) {
@@ -1625,6 +1667,7 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
   if (kind) kindRef.current = kind;
   const watchingUefn = (kind || kindRef.current) === "uefn";
   const onScreen = useViewerActive();
+  const desktop = useDesktopPointer();
   const { idle, resume } = useIdlePause(overlayRef, !!hwnd && onScreen);
   // Stream only while the page is on screen and someone has used it in the last few minutes.
   const viewing = onScreen && !idle;
@@ -1680,11 +1723,16 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    const check = () => setHasFrame(video.videoWidth > 0 && video.readyState >= 2);
+    const check = () => {
+      const frame = video.videoWidth > 0 && video.readyState >= 2;
+      setHasFrame(frame);
+      setRemotePicture(frame ? { w: video.videoWidth, h: video.videoHeight } : null);
+    };
     const kinds = ["loadeddata", "playing", "resize", "emptied"] as const;
     for (const k of kinds) video.addEventListener(k, check);
     return () => {
       for (const k of kinds) video.removeEventListener(k, check);
+      setRemotePicture(null);
     };
   }, []);
 
@@ -1949,17 +1997,23 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
     const view = viewRef.current;
     const overlay = overlayRef.current;
     if (!el || !view || !overlay || !hwnd || phase !== "live") return;
-    return attachInput(el, send, view, overlay, onStreamTap);
-  }, [hwnd, phase, attempt, send, onStreamTap]);
+    // On a PC the keyboard types there straight, so a text field there needs no typing box.
+    return attachInput(el, send, view, overlay, desktop ? undefined : onStreamTap);
+  }, [hwnd, phase, attempt, send, onStreamTap, desktop]);
 
   useEffect(() => {
     bindRemoteSend(phase === "live" ? send : null);
     return () => bindRemoteSend(null);
   }, [phase, send]);
 
+  const showing = !!hwnd && !idle && phase === "live" && hasFrame;
+  // On a PC the picture has the keyboard as soon as it shows.
+  useEffect(() => {
+    if (desktop && showing) videoRef.current?.focus({ preventScroll: true });
+  }, [desktop, showing]);
+
   if (!hwnd) return null;
 
-  const showing = !idle && phase === "live" && hasFrame;
   const loading = !idle && (phase === "connecting" || (phase === "live" && !hasFrame));
 
   return (
@@ -2014,7 +2068,7 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
           />
         ) : null}
       </div>
-      {!idle ? <RemoteTypeBar ref={typeBarRef} send={send} disabled={phase !== "live"} /> : null}
+      {!idle && !desktop ? <RemoteTypeBar ref={typeBarRef} send={send} disabled={phase !== "live"} /> : null}
     </div>
   );
 }

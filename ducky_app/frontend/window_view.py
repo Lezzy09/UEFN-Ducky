@@ -1102,7 +1102,10 @@ def _monitors() -> list[tuple[int, int, int, int]]:
             ("dwFlags", wintypes.DWORD),
         ]
 
-    user32 = ctypes.windll.user32
+    # Its own user32: the shared ctypes.windll one carries argtypes other modules set for
+    # their own MONITORINFO (win_frameless when a window maximizes, window_spotlight), and
+    # this struct then failed the type check, so every PC looked like one 1920x1080 screen.
+    user32 = ctypes.WinDLL("user32")
     MONITORENUMPROC = ctypes.WINFUNCTYPE(
         wintypes.BOOL, wintypes.HMONITOR, wintypes.HDC, ctypes.POINTER(wintypes.RECT), wintypes.LPARAM
     )

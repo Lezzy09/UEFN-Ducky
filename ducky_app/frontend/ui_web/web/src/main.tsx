@@ -1,3 +1,6 @@
+// First: a window showing another of your UEFN Duckies gets its own localStorage before
+// any module reads it.
+import "./remote/remoteDuckyStorage";
 import React from "react";
 import ReactDOM from "react-dom/client";
 // The app's fonts ship inside it (nothing is fetched from the internet at runtime).

@@ -10,6 +10,7 @@ other Ducky over the link. Only the handshake comes back here
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -51,6 +52,8 @@ def open_remote_ducky(key_id: str, name: str, chat_id: str = "") -> None:
         except Exception:
             with _lock:
                 _open.pop(key_id, None)
+    # Frameless like a focus window: the page draws its own title bar (RemoteDuckyBar),
+    # whose buttons reach this window through win_frameless's "uefnWindowChrome".
     window = webview.create_window(
         window_title(name),
         url=url,
@@ -58,17 +61,42 @@ def open_remote_ducky(key_id: str, name: str, chat_id: str = "") -> None:
         height=820,
         min_size=(520, 380),
         resizable=True,
+        frameless=True,
+        easy_drag=False,
         background_color="#0a0a0a",
     )
     with _lock:
         _open[key_id] = window
 
+    def _shown() -> None:
+        threading.Thread(target=_apply_chrome, args=(window,), daemon=True, name="remote-ducky-icon").start()
+
     def _closed() -> None:
         with _lock:
             if _open.get(key_id) is window:
                 _open.pop(key_id, None)
+        try:
+            from frontend.ui_web.ui_dispatch import drop_window
+
+            drop_window(window)
+        except Exception:
+            pass
 
     try:
+        window.events.shown += _shown
         window.events.closed += _closed
+    except Exception:
+        pass
+
+
+def _apply_chrome(window: Any) -> None:
+    """The app's icon and edge-to-edge frame, once the window has a handle."""
+    try:
+        from frontend.ui_web.win_frameless import refresh_window_chrome, set_window_icon_hwnd
+
+        for _ in range(20):
+            if refresh_window_chrome(window) and set_window_icon_hwnd(window):
+                return
+            time.sleep(0.05)
     except Exception:
         pass
