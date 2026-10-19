@@ -32,7 +32,7 @@ export function WhatsNewModal({ open, current, versions, onClose, onAllNotes }: 
       title="What's new"
       hideHeader
       hideClose
-      width={420}
+      width={500}
       className="whats-new"
       bodyClassName="whats-new-body"
       footer={
