@@ -187,7 +187,9 @@ def overview() -> dict[str, Any]:
                 st = p.stat()
             except OSError:
                 continue
-            snaps.append({"name": p.name, "bytes": st.st_size, "ts": st.st_mtime})
+            from backend.store.sealed_files import is_sealed_file
+
+            snaps.append({"name": p.name, "bytes": st.st_size, "ts": st.st_mtime, "sealed": is_sealed_file(p)})
     out["snapshots"] = snaps
     legacy_dir = root / "legacy"
     if legacy_dir.is_dir():
@@ -391,10 +393,17 @@ def stage_restore(snapshot_name: str) -> dict[str, Any]:
     src = db.snapshot_dir(root) / Path(snapshot_name).name
     if not src.is_file() or not src.name.startswith("ducky-") or src.suffix != ".db":
         return {"ok": False, "error": "unknown snapshot"}
-    result = db.check_db_file(src)
-    if result != "ok":
-        return {"ok": False, "error": f"snapshot fails integrity_check: {result}"}
-    shutil.copy2(src, root / RESTORE_PENDING_NAME)
+    from backend.store.sealed_files import WrongAccount
+    from backend.uefn_plugins.data_crypto import Locked
+
+    try:
+        result = db.check_db_file(src)
+        if result != "ok":
+            return {"ok": False, "error": f"snapshot fails integrity_check: {result}"}
+        db.copy_backup(src, root / RESTORE_PENDING_NAME)
+    except (WrongAccount, Locked) as exc:
+        # A backup from before chats were sealed is sealed for the account they belonged to.
+        return {"ok": False, "error": str(exc)}
     return {"ok": True, "staged": src.name, "restart_required": True}
 
 

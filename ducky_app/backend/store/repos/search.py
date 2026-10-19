@@ -142,11 +142,14 @@ def write_source(
 
 
 def missing_vectors(model: str, limit: int = 5000) -> list[Doc]:
-    """Rows with no vector for ``model`` (records added before the model loaded, a model change)."""
+    """Rows with no vector for ``model`` (a model change). Sealed plugin records are left
+    out: their text is sealed, ``sealed_records.fill_missing_vectors`` embeds those."""
+    from backend.search.sealed_records import SEALED_PREFIX
+
     rows = db.connect().execute(
         "SELECT d.* FROM search_docs d LEFT JOIN search_vecs v ON v.doc_id = d.id AND v.model = ? "
-        "WHERE v.doc_id IS NULL LIMIT ?",
-        (model, max(1, int(limit))),
+        f"WHERE v.doc_id IS NULL AND NOT (d.kind = 'record' AND substr(d.meta, 1, {len(SEALED_PREFIX)}) = ?) LIMIT ?",
+        (model, SEALED_PREFIX, max(1, int(limit))),
     ).fetchall()
     out: list[Doc] = []
     for r in rows:
@@ -421,13 +424,14 @@ def fts_query(text: str) -> str:
 
 
 def keyword(
-    text: str, kinds: Iterable[str] | None = None, limit: int = 50, *, source_key: str = ""
+    text: str, kinds: Iterable[str] | None = None, limit: int = 50, *, source_key: str = "", match: str | None = None
 ) -> list[tuple[int, float]]:
     """(doc id, bm25 score — lower is better) for the best keyword matches.
 
     ``source_key`` limits candidates to one source before the cut (a plugin's records in
-    one scope must not be crowded out by other plugins' rows)."""
-    match = fts_query(text)
+    one scope must not be crowded out by other plugins' rows). ``match`` is a ready FTS5
+    query in place of ``text``'s (sealed records match on blinded words)."""
+    match = fts_query(text) if match is None else match
     if not match:
         return []
     sql = (
@@ -451,20 +455,44 @@ def keyword(
     return [(int(r[0]), float(r[1])) for r in rows]
 
 
-def load_vectors(model: str) -> tuple[list[int], list[str], bytes]:
-    """Every vector of ``model``: (doc ids, kinds, concatenated float32 bytes) in id order."""
+def load_vectors(model: str, account: str = "", key: bytes | None = None) -> tuple[list[int], list[str], bytes]:
+    """Every vector of ``model``: (doc ids, kinds, concatenated float32 bytes) in id order.
+    Sealed record vectors are opened for ``account`` (the signed-in one) with its chat
+    ``key``; other accounts' (and all of them without a key) are left out."""
+    from backend.search import sealed_records
+
     rows = db.connect().execute(
-        "SELECT v.doc_id, d.kind, v.vec FROM search_vecs v JOIN search_docs d ON d.id = v.doc_id "
+        "SELECT v.doc_id, d.kind, d.scope, v.vec FROM search_vecs v JOIN search_docs d ON d.id = v.doc_id "
         "WHERE v.model = ? ORDER BY v.doc_id",
         (model,),
     ).fetchall()
-    return [int(r[0]) for r in rows], [str(r[1]) for r in rows], b"".join(bytes(r[2]) for r in rows)
+    ids: list[int] = []
+    kinds: list[str] = []
+    vecs: list[bytes] = []
+    for doc_id, kind, scope, raw in rows:
+        vec = bytes(raw)
+        if vec.startswith(sealed_records.VEC_MAGIC):
+            if not key or not account or sealed_records.owner(str(scope or "")) != account:
+                continue
+            try:
+                vec = sealed_records.open_vec(vec, key)
+            except Exception:  # noqa: BLE001 — sealed with a key restored away; re-embedded on its next write
+                continue
+        ids.append(int(doc_id))
+        kinds.append(str(kind))
+        vecs.append(vec)
+    return ids, kinds, b"".join(vecs)
 
 
-def get_docs(ids: Iterable[int]) -> dict[int, dict[str, Any]]:
+def get_docs(ids: Iterable[int], account: str | None = None) -> dict[int, dict[str, Any]]:
+    """Rows by id. A sealed plugin record is opened when it is ``account``'s (the
+    signed-in one by default) and comes back empty otherwise."""
+    from backend.search import sealed_records
+
     wanted = list(dict.fromkeys(int(i) for i in ids))
     out: dict[int, dict[str, Any]] = {}
     conn = db.connect()
+    me: str | None = account
     for start in range(0, len(wanted), 500):
         chunk = wanted[start : start + 500]
         rows = conn.execute(
@@ -474,10 +502,20 @@ def get_docs(ids: Iterable[int]) -> dict[int, dict[str, Any]]:
         ).fetchall()
         for r in rows:
             row = dict(r)
+            raw_meta = row.get("meta") or "{}"
             try:
-                row["meta"] = json.loads(row.get("meta") or "{}")
+                row["meta"] = json.loads(raw_meta)
             except ValueError:
                 row["meta"] = {}
+            if row.get("kind") == "record" and sealed_records.is_sealed_meta(raw_meta):
+                if me is None:
+                    from backend.store import account_rows
+
+                    me = account_rows.current()
+                try:
+                    row = sealed_records.open_row(row, me)
+                except Exception:  # noqa: BLE001 — locked for now: shown empty, never as ciphertext
+                    row = {**row, "title": "", "path": "", "body": "", "meta": {}}
             out[int(r["id"])] = row
     return out
 

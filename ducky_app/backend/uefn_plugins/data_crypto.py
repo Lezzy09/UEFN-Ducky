@@ -130,17 +130,19 @@ def migrate_if_ready(account: str) -> None:
 
 
 def prefetch() -> None:
-    """Sign-in: fetch (and cache) the new account's key off the UI thread, then seal
-    its old plaintext rows (plugin data, chats, duckies), so the first call doesn't wait."""
+    """Sign-in, sign-out or a switch: fetch (and cache) the new account's key off the UI
+    thread, then seal its old plaintext rows (plugin data, chats, duckies) and arrange chat
+    attachments for it (the other accounts' sealed), so the first call doesn't wait."""
     def _work() -> None:
         try:
             from backend.store import account_rows
             from backend.uefn_plugins.scopes import account_id
 
             account = account_id()
-            if account != _LOCAL and adk(account) is not None:
+            if account == _LOCAL or adk(account) is not None:
                 ensure_migrated(account)
-                account_rows.seal_pending(account)
+            # Locked still seals the other accounts' attachments; the rest waits for the key.
+            account_rows.seal_pending(account)
         except Exception:
             pass
 

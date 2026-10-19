@@ -23,6 +23,17 @@ _snapshot_version: dict[str, int] = {}  # db path -> data_version the snapshot w
 _history: dict[str, dict[int, dict[str, Any]]] = {}  # db path -> {data_version: rows}
 _HISTORY_KEEP = 8
 
+# Duckies lived in these fields before they got their own table (0014). They are no
+# longer saved: the first account's seal pass moves them, sealed, into ``meta``
+# (``account_rows``), and a stale in-memory copy must never write them back.
+LEGACY_DUCKY_KEYS = (
+    "agent_profiles",
+    "agent_profile_overrides",
+    "archived_agent_profile_ids",
+    "hidden_bundled_agent_profile_ids",
+    "agent_profile_visibility_explicit",
+)
+
 
 def _key() -> str:
     return str(db.db_path())
@@ -90,6 +101,8 @@ def save_fields(
         seen = dict(seen or {})
     changed: list[str] = []
     for name, value in new_values.items():
+        if name in LEGACY_DUCKY_KEYS:
+            continue
         before = seen.get(name, defaults.get(name))
         if value != before:
             changed.append(name)
@@ -126,6 +139,14 @@ def replace_all(values: dict[str, Any], defaults: dict[str, Any]) -> None:
                 "INSERT INTO settings(key, value, updated) VALUES (?, ?, ?)",
                 (name, json.dumps(value, ensure_ascii=False), now),
             )
+    with _lock:
+        _snapshot.pop(_key(), None)
+        _snapshot_version.pop(_key(), None)
+        _history.pop(_key(), None)
+
+
+def forget_snapshot() -> None:
+    """Rows changed outside :func:`save_fields` (the legacy ducky fields moved away)."""
     with _lock:
         _snapshot.pop(_key(), None)
         _snapshot_version.pop(_key(), None)

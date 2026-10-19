@@ -104,15 +104,16 @@ def chat_context(*, allowed_tools: set[str] | None = None) -> Context:
 # --------------------------------------------------------------------------- vectors
 
 
-def _matrix(model: str):
-    """(ids, kinds, matrix) for every vector of ``model``, cached per index revision.
+def _matrix(model: str, account: str = "", vec_key: bytes | None = None):
+    """(ids, kinds, matrix) for every vector of ``model``, cached per index revision and
+    signed-in account (whose sealed record vectors it opens with ``vec_key``).
 
     One thread loads a new revision while the others wait for it (single flight): after
     an index change, concurrent searches used to each read every vector.
     """
     import numpy as np
 
-    key = (model, repo.revision_token())
+    key = (model, repo.revision_token(), account if vec_key else "")
     with _cache_lock:
         if _cache.get("key") == key:
             return _cache["ids"], _cache["kinds"], _cache["matrix"]
@@ -120,7 +121,7 @@ def _matrix(model: str):
         with _cache_lock:
             if _cache.get("key") == key:
                 return _cache["ids"], _cache["kinds"], _cache["matrix"]
-        ids, kinds, blob = repo.load_vectors(model)
+        ids, kinds, blob = repo.load_vectors(model, account, vec_key)
         if ids:
             matrix = np.frombuffer(blob, dtype=np.float32).reshape(len(ids), -1)
         else:
@@ -132,7 +133,15 @@ def _matrix(model: str):
     return ids_arr, kinds_arr, matrix
 
 
-def _meaning(text: str, kinds: Iterable[str], limit: int, *, only: list[int] | None = None) -> list[tuple[int, float]]:
+def _meaning(
+    text: str,
+    kinds: Iterable[str],
+    limit: int,
+    *,
+    only: list[int] | None = None,
+    account: str = "",
+    vec_key: bytes | None = None,
+) -> list[tuple[int, float]]:
     """Top ``limit`` rows by cosine; ``only`` restricts candidates to these row ids first."""
     import numpy as np
 
@@ -141,7 +150,7 @@ def _meaning(text: str, kinds: Iterable[str], limit: int, *, only: list[int] | N
     emb = get_embedder()
     if emb is None:
         return []
-    ids, doc_kinds, matrix = _matrix(emb.model_id)
+    ids, doc_kinds, matrix = _matrix(emb.model_id, account, vec_key)
     if not len(ids) or matrix.shape[1] != emb.dim:
         return []
     q = emb.encode([text])[0]
@@ -267,8 +276,23 @@ def search(
     source = ""
     if kinds == ("record",) and ctx.record_plugin and ctx.record_scope:
         source = f"record:{ctx.record_plugin}:{ctx.record_scope}"
-    from backend.store import db
+    from backend.store import account_rows, db
 
+    # Plugin records are sealed for their account: its key is loaded before the read
+    # snapshot below (loading may write it), and their keywords match blinded words.
+    me = account_rows.current()
+    try:
+        # Every search, records or not: they share one cached vector matrix per account.
+        vec_key: bytes | None = account_rows.ready(me)
+    except Exception:  # noqa: BLE001 — locked: sealed records stay out of this search
+        vec_key = None
+    match: str | None = None
+    if source and vec_key:
+        from backend.search import sealed_records
+
+        plain, blind = repo.fts_query(text), sealed_records.blind_match(text, vec_key)
+        # Rows from before sealing still match on their words until the seal pass reaches them.
+        match = " OR ".join(f"({q})" for q in (plain, blind) if q)
     conn = db.connect()
     # One read transaction is one WAL snapshot: the keyword ids, the vector ids, the
     # pins and the rows they name all come from the same state of the index. Read
@@ -278,13 +302,15 @@ def search(
         conn.execute("BEGIN")
     try:
         try:
-            keyword = repo.keyword(text, kinds, CANDIDATES, source_key=source) if use_keywords else []
+            keyword = repo.keyword(text, kinds, CANDIDATES, source_key=source, match=match) if use_keywords else []
         except Exception:  # noqa: BLE001
             _log.debug("search: keyword query failed", exc_info=True)
             return []
         try:
             only = repo.source_ids(source) if source else None
-            meaning = _meaning(text, kinds, CANDIDATES, only=only) if use_meaning else []
+            meaning = (
+                _meaning(text, kinds, CANDIDATES, only=only, account=me, vec_key=vec_key) if use_meaning else []
+            )
         except Exception:  # noqa: BLE001
             _log.debug("search: meaning query failed", exc_info=True)
             meaning = []
@@ -303,7 +329,7 @@ def search(
         for i, doc_id in enumerate(pins):
             fused[doc_id] = top + (len(pins) - i)
         ordered = sorted(fused, key=lambda d: -fused[d])[: max(limit * 6, 60)]
-        docs = repo.get_docs(ordered)
+        docs = repo.get_docs(ordered, account=me)
     finally:
         if own_snapshot:
             try:

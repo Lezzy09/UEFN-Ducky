@@ -17,9 +17,19 @@ word (:func:`blind_text`), and a query becomes the same tokens (:func:`blind_que
 
 Rows from before (account ``''``) go whole to the first account that opens them
 (:func:`claim`, from ``scopes.account_id``) and are sealed in place (:func:`seal_pending`,
-at boot and at sign-in). Nothing is deleted. The space those rewrites free is zeroed;
-slack in pages written before 0024 keeps old fragments until the page is rewritten (only
-a VACUUM rebuilds every page), and backups made before the upgrade age out on their own.
+at boot and at sign-in), with what else held them in plaintext: the copies of old rows
+that account already had (parked), the duckies settings kept from before they had their
+own table (moved, sealed, into ``meta``), plugin search records
+(:mod:`backend.search.sealed_records`). Nothing is deleted. The space those rewrites free
+is zeroed, and once nothing of the account is left in plaintext:
+
+- ducky.db is rebuilt at the next start (``db.request_vacuum``), dropping old fragments
+  from free pages and page slack;
+- its backups from before (snapshots, files a restore replaced, corrupt copies) are sealed
+  for the account the rows went to (``sealed_files.seal_backups``).
+
+Chat attachments on disk are sealed for their owner while another account is signed in,
+and opened when the owner is back (``sealed_files.arrange_chat_files``).
 """
 
 from __future__ import annotations
@@ -27,6 +37,8 @@ from __future__ import annotations
 import base64
 import contextlib
 import hashlib
+import json
+import logging
 import os
 import re
 import threading
@@ -42,6 +54,11 @@ UNCLAIMED = ""
 # the account keeps its own, the old copy stays in the table under an owner nobody reads.
 PARKED = "_parked:"
 _KEY_META = "chat_key:"
+_CLAIMED_BY = "rows_claimed_by"  # the account the rows from before 0024 went to
+_SEALED_AT = "rows_sealed_at"  # when nothing of theirs was left in plaintext
+_VACUUM_WANTED = "vacuum_wanted"  # a seal pass rewrote plaintext: rebuild once it's done
+_DONE = "rows_sealed:"  # <account>: nothing of it was left in plaintext (checks skipped after)
+_LEGACY_SETTINGS = "legacy_duckies_settings:"
 _SEALED = "enc1:"  # data_crypto.PREFIX
 _SEALED_BLOB = b"UDE1"  # data_crypto.FILE_MAGIC
 
@@ -55,6 +72,7 @@ SEALED_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ducky_mirror_chats", ("title", "rows")),
 )
 
+_log = logging.getLogger("uefn_ducky.store.account_rows")
 _lock = threading.Lock()
 _chat_keys: dict[tuple[str, str], bytes] = {}
 _sealing: set[tuple[str, str]] = set()
@@ -170,10 +188,13 @@ def open_blob(raw: bytes, account: str) -> bytes:
 def forget() -> None:
     """Login funnel (``data_crypto.on_login_change``): opened values and keys go."""
     global _opened_chars
+    from backend.store import sealed_files
+
     with _lock:
         _chat_keys.clear()
         _opened.clear()
         _opened_chars = 0
+    sealed_files.forget()
 
 
 # --------------------------------------------------------------------------- search without the words
@@ -257,7 +278,16 @@ def claim(account: str) -> int:
             moved += conn.execute(f"UPDATE OR IGNORE {table} SET account_id=? WHERE account_id=''", (account,)).rowcount
             conn.execute(f"UPDATE {table} SET account_id=? || rowid WHERE account_id=''", (PARKED,))
         moved += conn.execute("UPDATE duckies_history SET account_id=? WHERE account_id=''", (account,)).rowcount
+        conn.execute(
+            "INSERT OR IGNORE INTO meta(key, value, updated) VALUES (?, ?, ?)", (_CLAIMED_BY, account, time.time())
+        )
     return moved
+
+
+def claimer() -> str:
+    """The account the rows from before 0024 went to (``''`` while nobody claimed any)."""
+    row = db.connect().execute("SELECT value FROM meta WHERE key=?", (_CLAIMED_BY,)).fetchone()
+    return "" if row is None else str(row[0])
 
 
 def owned_ids(account: str) -> tuple[list[str], list[str]]:
@@ -268,18 +298,24 @@ def owned_ids(account: str) -> tuple[list[str], list[str]]:
     return convs, folders
 
 
-def _seal_table(conn, table: str, cols: tuple[str, ...], account: str, batch: int) -> int:
+_PARKED_ROWS = "substr(account_id, 1, 8) = '" + PARKED + "'"
+_HAS_PARKED = ("folders", "duckies")
+
+
+def _seal_table(conn, table: str, cols: tuple[str, ...], account: str, batch: int, *, parked: bool = False) -> int:
     """Seal one table's plaintext values of ``account`` in place, a batch per transaction;
-    a value changed meanwhile is left to the save that changed it (it wrote it sealed)."""
+    a value changed meanwhile is left to the save that changed it (it wrote it sealed).
+    ``parked``: the parked copies instead, sealed for ``account`` (the one that claimed them)."""
     pending = " OR ".join(f"({c} <> '' AND substr({c}, 1, 5) <> ?)" for c in cols)
     sets = ", ".join(f"{c}=?" for c in cols)
     same = " AND ".join(f"{c}=?" for c in cols)
+    owner, owner_args = (_PARKED_ROWS, ()) if parked else ("account_id=?", (account,))
     sealed = cursor = 0
     while True:
         rows = conn.execute(
-            f"SELECT rowid, {', '.join(cols)} FROM {table} WHERE account_id=? AND rowid>? AND ({pending}) "
+            f"SELECT rowid, {', '.join(cols)} FROM {table} WHERE {owner} AND rowid>? AND ({pending}) "
             "ORDER BY rowid LIMIT ?",
-            (account, cursor, *[_SEALED] * len(cols), batch),
+            (*owner_args, cursor, *[_SEALED] * len(cols), batch),
         ).fetchall()
         if not rows:
             return sealed
@@ -293,10 +329,119 @@ def _seal_table(conn, table: str, cols: tuple[str, ...], account: str, batch: in
         cursor = int(rows[-1][0])
 
 
+def _set_meta(conn, key: str, value: str, *, replace: bool = True) -> None:
+    verb = "INSERT OR REPLACE" if replace else "INSERT OR IGNORE"
+    with db.write_txn(conn):
+        conn.execute(f"{verb} INTO meta(key, value, updated) VALUES (?, ?, ?)", (key, value, time.time()))
+
+
+def _get_meta(conn, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return None if row is None else str(row[0])
+
+
+def _plaintext_left(conn, account: str, *, claimer_pass: bool) -> bool:
+    """Anything of ``account`` ducky.db still holds in plaintext (with the parked copies
+    and the old duckies settings when it is the account that claimed the rows from before)."""
+    from backend.search import sealed_records
+    from backend.store.repos.settings import LEGACY_DUCKY_KEYS
+
+    for table, cols in SEALED_COLUMNS:
+        pending = " OR ".join(f"({c} <> '' AND substr({c}, 1, 5) <> ?)" for c in cols)
+        owner = "account_id=?" + (f" OR {_PARKED_ROWS}" if claimer_pass and table in _HAS_PARKED else "")
+        if conn.execute(
+            f"SELECT EXISTS(SELECT 1 FROM {table} WHERE ({owner}) AND ({pending}))", (account, *[_SEALED] * len(cols))
+        ).fetchone()[0]:
+            return True
+    if conn.execute(
+        "SELECT EXISTS(SELECT 1 FROM messages m JOIN conversations c ON c.id = m.conv_id "
+        "WHERE c.account_id=? AND m.body <> '' AND substr(m.body, 1, 5) <> ?)",
+        (account, _SEALED),
+    ).fetchone()[0]:
+        return True
+    if conn.execute(
+        "SELECT EXISTS(SELECT 1 FROM message_parts p WHERE substr(p.data, 1, 4) <> ? AND EXISTS ("
+        "SELECT 1 FROM message_part_refs r JOIN messages m ON m.id = r.message_id "
+        "JOIN conversations c ON c.id = m.conv_id WHERE r.hash = p.hash AND c.account_id=?))",
+        (_SEALED_BLOB, account),
+    ).fetchone()[0]:
+        return True
+    if sealed_records.plain_left(account):
+        return True
+    if claimer_pass:
+        marks = ", ".join("?" * len(LEGACY_DUCKY_KEYS))
+        if conn.execute(f"SELECT EXISTS(SELECT 1 FROM settings WHERE key IN ({marks}))", LEGACY_DUCKY_KEYS).fetchone()[0]:
+            return True
+    return False
+
+
+def move_legacy_settings(account: str) -> int:
+    """The duckies settings kept from before duckies had their own table (0014; copied into
+    it then): kept sealed for ``account`` in ``meta``, the plaintext rows go. Also out of
+    the old ``panel_settings.json`` copy. Returns how many rows moved."""
+    from backend.store.importers import duckies as duckies_import
+    from backend.store.repos import kv
+    from backend.store.repos import settings as settings_repo
+
+    duckies_import.ensure()  # they go into the duckies table first, if they never went
+    if kv.meta_get("imported:duckies") is None:
+        return 0
+    conn = db.connect()
+    keys = settings_repo.LEGACY_DUCKY_KEYS
+    marks = ", ".join("?" * len(keys))
+    rows = conn.execute(f"SELECT key, value FROM settings WHERE key IN ({marks})", keys).fetchall()
+    moved = 0
+    if rows:
+        sealed = seal(json.dumps({str(k): str(v) for k, v in rows}, ensure_ascii=False), account)
+        name = _LEGACY_SETTINGS + account
+        with _zeroing(conn), db.write_txn(conn):
+            if _get_meta(conn, name) is not None:
+                name = f"{name}:{int(time.time())}"  # moved before; this copy is kept beside it
+            conn.execute("INSERT INTO meta(key, value, updated) VALUES (?, ?, ?)", (name, sealed, time.time()))
+            moved = conn.execute(f"DELETE FROM settings WHERE key IN ({marks})", keys).rowcount
+        settings_repo.forget_snapshot()
+    _strip_settings_file(keys)
+    return moved
+
+
+def _strip_settings_file(keys: tuple[str, ...]) -> None:
+    """The old ``panel_settings.json`` (the files backend's copy) drops the duckies too."""
+    from backend.store.switch import use_db
+
+    path = db.app_root() / "panel_settings.json"
+    if not use_db("settings") or not path.is_file():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict) or not any(k in data for k in keys):
+        return
+    kept = {k: v for k, v in data.items() if k not in keys}
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(kept, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        _log.warning("could not take the duckies out of panel_settings.json", exc_info=True)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+class _AlreadySealed(Exception):
+    """Nothing of the account was left in plaintext at an earlier pass."""
+
+
 def seal_pending(account: str | None = None, *, batch: int = 40, pause_s: float = 0.05) -> dict[str, int]:
     """Seal every value of ``account`` still in plaintext (rows from before 0024, copies an
-    older build wrote). Resumable; does nothing while the account is locked. Never raises
-    ``Locked`` (the next boot or sign-in tries again)."""
+    older build wrote, the account's plugin search records; for the account that claimed
+    the rows from before, also their parked copies and the old duckies settings). Then,
+    once nothing of it is left in plaintext, ask for the one ducky.db rebuild and seal its
+    backups from before. Chat attachments are arranged for the signed-in account.
+    Resumable; does nothing while the account is locked. Never raises ``Locked`` (the next
+    boot or sign-in tries again)."""
+    from backend.search import sealed_records
+    from backend.store import sealed_files
     from backend.uefn_plugins import data_crypto
 
     account = account or current()
@@ -306,21 +451,67 @@ def seal_pending(account: str | None = None, *, batch: int = 40, pause_s: float 
             return {}
         _sealing.add(memo)
     conn = db.connect()
+    out: dict[str, int] = {}
     try:
         ready(account)
-        out: dict[str, int] = {}
+        sealed_files.ensure_keypair(account)
         from backend.store.repos import chats
 
+        claimer_pass = (claimer() or account) == account
+        # Once nothing of the account is left in plaintext, every writer seals what it
+        # writes (an older build can't open this schema): later passes skip the scans.
+        if _get_meta(conn, _DONE + account) is not None:
+            raise _AlreadySealed
+        # Asked before rewriting anything, so a pass cut short still rebuilds in the end.
+        if _plaintext_left(conn, account, claimer_pass=claimer_pass):
+            _set_meta(conn, _VACUUM_WANTED, "1")
         with _zeroing(conn):
             for table, cols in SEALED_COLUMNS:
                 n = _seal_table(conn, table, cols, account, batch)
+                if claimer_pass and table in _HAS_PARKED:
+                    n += _seal_table(conn, table, cols, account, batch, parked=True)
                 if n:
                     out[table] = n
+            if claimer_pass:
+                out["settings"] = move_legacy_settings(account)
             sealed = chats.seal_stored_messages(account, batch=batch, pause_s=pause_s)
-        out.update({k: v for k, v in sealed.items() if v})
-        return out
-    except data_crypto.Locked:
-        return {}
+            out.update({k: v for k, v in sealed.items() if v})
+            out["search_records"] = sealed_records.seal_existing(account, batch=batch)
+        if not _plaintext_left(conn, account, claimer_pass=claimer_pass):
+            _set_meta(conn, _DONE + account, str(time.time()))
+            if claimer_pass:
+                _set_meta(conn, _CLAIMED_BY, account, replace=False)
+                _set_meta(conn, _SEALED_AT, str(time.time()), replace=False)
+            if _get_meta(conn, _VACUUM_WANTED) is not None:
+                db.request_vacuum()
+                with db.write_txn(conn):
+                    conn.execute("DELETE FROM meta WHERE key=?", (_VACUUM_WANTED,))
+                out["rebuild_next_start"] = 1
+    except (data_crypto.Locked, _AlreadySealed):
+        pass
     finally:
         with _lock:
             _sealing.discard(memo)
+    out.update(_seal_backups(conn))
+    try:
+        out.update(sealed_files.arrange_chat_files(account))
+    except Exception:  # noqa: BLE001 — a folder in use: the next sign-in or start does it
+        _log.warning("arranging chat attachments for the signed-in account failed", exc_info=True)
+    return {k: v for k, v in out.items() if v}
+
+
+def _seal_backups(conn) -> dict[str, int]:
+    """ducky.db backups made before the claimed rows were all sealed, sealed for the account
+    they went to (its public key: it needn't be the one signed in)."""
+    from backend.store import sealed_files
+
+    owner, sealed_at = claimer(), _get_meta(conn, _SEALED_AT)
+    if not owner or sealed_at is None:
+        return {}
+    try:
+        # A snapshot started just before then may finish a little after.
+        n = sealed_files.seal_backups(owner, made_before=float(sealed_at) + 300.0)
+    except Exception:  # noqa: BLE001
+        _log.warning("sealing ducky.db backups from before failed", exc_info=True)
+        return {}
+    return {"backups": n} if n else {}

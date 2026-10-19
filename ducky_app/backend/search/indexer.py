@@ -316,12 +316,20 @@ def fill_missing_vectors() -> int:
     model = _model_id()
     if not model:
         return 0
+    filled = 0
     docs = repo.missing_vectors(model)
-    if not docs:
-        return 0
-    vectors, model = _embed(docs)
-    # Only rows that still hold the text the vectors were made from (see set_vectors).
-    return repo.set_vectors(vectors, model, {d.doc_key: d.content_hash for d in docs})
+    if docs:
+        vectors, model = _embed(docs)
+        # Only rows that still hold the text the vectors were made from (see set_vectors).
+        filled = repo.set_vectors(vectors, model, {d.doc_key: d.content_hash for d in docs})
+    try:
+        from backend.search import sealed_records
+        from backend.store import account_rows
+
+        filled += sealed_records.fill_missing_vectors(account_rows.current())
+    except Exception:  # noqa: BLE001 — the account's key isn't here yet: the next fill does them
+        _log.debug("search: sealed record vectors not filled yet", exc_info=True)
+    return filled
 
 
 def refresh_now(*, packs: bool = True, tools: bool = True) -> dict[str, Any]:

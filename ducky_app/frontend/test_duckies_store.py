@@ -35,7 +35,22 @@ def _ids(profiles) -> set[str]:
 
 
 def _legacy_rows(**values) -> None:
-    settings_repo.save_fields(values, PanelSettings().to_json_dict())
+    """The settings rows as a build from before the duckies table wrote them (a settings
+    save no longer writes these fields)."""
+    import json
+    import time
+
+    from backend.store import db
+
+    conn = db.connect()
+    with db.write_txn(conn):
+        for name, value in values.items():
+            conn.execute(
+                "INSERT INTO settings(key, value, updated) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+                (name, json.dumps(value), time.time()),
+            )
+    settings_repo.forget_snapshot()
 
 
 def test_a_fresh_install_lists_every_shipped_ducky() -> None:

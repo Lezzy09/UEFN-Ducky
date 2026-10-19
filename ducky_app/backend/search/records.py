@@ -2,7 +2,8 @@
 
 Records live in the same index as skills and tools (``kind = 'record'``), keyed by
 plugin, signed-in account and data scope, so a plugin sees only its own rows in the
-copy it is using (Local or one shared space) for the person signed in. They are deleted
+copy it is using (Local or one shared space) for the person signed in. Their text is
+sealed for that account (:mod:`backend.search.sealed_records`). They are deleted
 when the plugin is uninstalled (and refused from then on), when a shared copy is purged and
 when a plugin-test sandbox ends. Agents do not see records through ``skill_search``;
 the plugin exposes its own tool that calls :func:`query`.
@@ -47,11 +48,17 @@ def upsert(plugin_id: str, record_id: str, title: str, text: str, meta: dict[str
     if meta is not None and not isinstance(meta, dict):
         raise ValueError("meta must be a dict")
     key, sid = _scope(plugin_id)
-    doc = chunker.record_doc(
+    plain = chunker.record_doc(
         plugin_id, key, rid, str(title or rid)[:MAX_TITLE], str(text or "")[:MAX_TEXT], dict(meta or {})
     )
+    from backend.search import sealed_records
     from backend.search.embedder import get_embedder
+    from backend.store import account_rows
 
+    # Stored sealed for the account (raises Locked while its data key isn't here).
+    account = sealed_records.owner(key)
+    chat_key = account_rows.ready(account)
+    doc = sealed_records.seal_doc(plain, account, chat_key)
     emb = get_embedder()
     model = emb.model_id if emb is not None else ""
     state = repo.record_state(doc.doc_key, model)
@@ -59,7 +66,9 @@ def upsert(plugin_id: str, record_id: str, title: str, text: str, meta: dict[str
         return {"ok": True, "id": rid, "scope": sid}  # unchanged: no re-embed, no write
     if state is None and repo.count_source(_source(plugin_id, key)) >= MAX_RECORDS:
         raise ValueError(f"search holds at most {MAX_RECORDS} records per plugin; delete some first")
-    vec = emb.encode([chunker.embed_text(doc)])[0].tobytes() if emb is not None else None
+    vec = None
+    if emb is not None:
+        vec = sealed_records.seal_vec(emb.encode([chunker.embed_text(plain)])[0].tobytes(), chat_key)
     # The cap and the uninstalled-plugin check are repeated inside the write transaction.
     try:
         repo.upsert_one(doc, vec, model, max_in_source=MAX_RECORDS)

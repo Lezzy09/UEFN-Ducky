@@ -182,6 +182,7 @@ def hydrate_attachment_dict(
         return {"kind": "ignored", "name": str(raw.get("name") or "")}
     if not full.is_file():
         return raw
+    _open_if_sealed(conversation_attachments_dir(conv_id, None, conversations_dir), full)
     if kind == "image":
         data = base64.b64encode(full.read_bytes()).decode("ascii")
         return {**raw, "data_base64": data}
@@ -277,7 +278,23 @@ def resolve_chat_attachment_path(conv_id: str, filename: str) -> Path:
         raise ValueError("Path escapes chat attachments") from exc
     if not target.is_file():
         raise ValueError("Not a file")
+    _open_if_sealed(root, target)
     return target
+
+
+def _open_if_sealed(folder: Path, path: Path) -> None:
+    """A chat's attachments are sealed while another account is signed in; its owner is
+    back but the background pass hasn't reached this chat yet: open the chat's files now."""
+    from backend.store import sealed_files
+
+    if not sealed_files.is_sealed_file(path):
+        return
+    from backend.store import account_rows
+
+    try:
+        sealed_files.open_chat_folder(folder, account_rows.current())
+    except Exception:  # noqa: BLE001 — locked for now: shown once the account's key is here
+        pass
 
 
 def save_chat_screenshot(raw: bytes, *, prefix: str = "capture", conv_id: str = "") -> dict[str, Any]:

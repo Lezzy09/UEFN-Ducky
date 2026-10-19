@@ -112,12 +112,12 @@ def _note_login_change(before: dict[str, Any], after: dict[str, Any]) -> None:
     old login (plan §13); a new sign-in fetches the new account's key in the
     background. The panel drops account-scoped caches (Store catalog, prefs) and
     swaps chats and duckies, so one account never sees another's."""
-    signed_in = account_key(after) and account_key(after) != account_key(before)
+    switched = account_key(after) != account_key(before)
     try:
         from backend.uefn_plugins.data_crypto import on_login_change, prefetch
 
         on_login_change(before, after)
-        if signed_in:
+        if switched:
             prefetch()
     except Exception:
         pass

@@ -63,19 +63,81 @@ def test_uninstall_drops_the_plugins_records(scope) -> None:
     assert api.upsert("p2", "Again", "text")["ok"]
 
 
+def _sign_in_as(monkeypatch, who: dict) -> None:
+    """Signed in as ``who["key"]``, its data key from a fake server."""
+    import hashlib
+
+    from backend.uefn_plugins import data_crypto, scopes
+    from frontend import duckyos_account
+
+    monkeypatch.setattr(duckyos_account, "account_key", lambda blob=None: who["key"])
+    monkeypatch.setattr(data_crypto, "_fetch_adk", lambda: hashlib.sha256(b"adk/" + who["key"].encode()).digest())
+    monkeypatch.setattr(scopes, "active_scope", lambda plugin: {"account": scopes.account_id(), "id": "personal"})
+    data_crypto.reset_for_tests()
+
+
 def test_records_of_one_account_are_never_shown_to_another(monkeypatch) -> None:
     # Every account's Local scope is "personal"; the account is part of the key.
-    from backend.uefn_plugins import scopes
-
-    who = {"account": "a_alice"}
-    monkeypatch.setattr(scopes, "active_scope", lambda plugin: {"account": who["account"], "id": "personal"})
+    who = {"key": "https://uefnducky.org|alice@example.com"}
+    _sign_in_as(monkeypatch, who)
     api = records.SearchApi("wiki")
     assert api.upsert("p1", "Alice page", "storm circle notes")["scope"] == "personal"
-    who["account"] = "a_bob"
+    who["key"] = "https://uefnducky.org|bob@example.com"
     assert api.query("storm circle") == []
     assert api.clear() == 0  # Bob cannot clear Alice's records
-    who["account"] = "a_alice"
+    who["key"] = "https://uefnducky.org|alice@example.com"
     assert [r["title"] for r in api.query("storm circle")] == ["Alice page"]
+
+
+def test_a_record_is_sealed_for_its_account(monkeypatch) -> None:
+    from backend.search import sealed_records
+    from backend.store import db
+
+    who = {"key": "https://uefnducky.org|alice@example.com"}
+    _sign_in_as(monkeypatch, who)
+    api = records.SearchApi("wiki")
+    api.upsert("p1", "Storm guide", "storm circle notes", {"url": "/storm"})
+    title, body, meta = db.connect().execute(
+        "SELECT title, body, meta FROM search_docs WHERE kind='record'"
+    ).fetchone()
+    stored = title + body + meta
+    assert sealed_records.is_sealed_meta(meta)
+    assert "storm" not in stored.lower() and "/storm" not in stored and "guide" not in stored.lower()
+    # Found by its words and read back whole, for its account.
+    [row] = api.query("circle")
+    assert (row["title"], row["meta"]) == ("Storm guide", {"url": "/storm"}) and "storm circle" in row["snippet"]
+    assert api.upsert("p1", "Storm guide", "storm circle notes", {"url": "/storm"})["ok"]  # unchanged: no write
+    # Bob signs in on this PC: he finds nothing, by word or by meaning.
+    who["key"] = "https://uefnducky.org|bob@example.com"
+    assert api.query("storm circle notes") == []
+
+
+def test_records_from_before_are_sealed_by_the_seal_pass(monkeypatch) -> None:
+    import json
+
+    from backend.search import sealed_records
+    from backend.store import account_rows, db
+    from backend.uefn_plugins.scopes import account_id
+
+    who = {"key": "https://uefnducky.org|alice@example.com"}
+    _sign_in_as(monkeypatch, who)
+    me = account_id()
+    plain = repo.Doc(
+        doc_key=f"record:wiki:{me}~personal:old", source_key=f"record:wiki:{me}~personal", kind="record",
+        title="Old page", body="lava lake recipe", path="Old page", origin="plugin", plugin_id="wiki",
+        scope=f"{me}~personal", meta={"n": 1}, content_hash="h1",
+    )
+    repo.upsert_one(plain, b"\0" * 16, "m1")
+    assert sealed_records.plain_left(me) == 1
+    account_rows.seal_pending(me)
+    assert sealed_records.plain_left(me) == 0
+    body, meta = db.connect().execute("SELECT body, meta FROM search_docs WHERE doc_key=?", (plain.doc_key,)).fetchone()
+    assert "lava" not in body and sealed_records.is_sealed_meta(meta)
+    vec = db.connect().execute("SELECT vec FROM search_vecs").fetchone()[0]
+    assert bytes(vec).startswith(sealed_records.VEC_MAGIC)
+    [row] = repo.get_docs([repo.find_doc(plain.doc_key)]).values()
+    assert (row["title"], row["body"], row["meta"]) == ("Old page", "lava lake recipe", {"n": 1})
+    assert json.loads(meta)["sealed"].startswith("enc1:")
 
 
 def test_no_scope_no_records(monkeypatch) -> None:
