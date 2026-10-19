@@ -50,6 +50,10 @@ _PANEL_SETTLE_S = 4.0
 _TOOL_TIMEOUT_S = 30.0
 # How long a timed-out test call keeps the plugin's data on the test copy.
 _STRAGGLER_WAIT_S = 600.0
+# A tool or node that waits by design (it takes a timeout) gets this one in the test, so
+# it answers well inside _TOOL_TIMEOUT_S; one that ignores it still fails as a hang.
+_WAIT_TEST_S = 3
+_TIMEOUT_FIELDS = {"timeout": 1, "timeout_s": 1, "timeout_sec": 1, "timeout_seconds": 1, "timeout_ms": 1000}
 
 
 # --------------------------------------------------------------------------- recording
@@ -225,6 +229,21 @@ def sample_args(parameters: Any) -> dict[str, Any]:
     return {name: _sample(props.get(name)) for name in parameters.get("required") or [] if name in props}
 
 
+def short_timeouts(fields: Any) -> dict[str, Any]:
+    """The test's short value for each numeric timeout field (``fields``: name → its
+    JSON schema or workflow config field), so a wait-style tool or node answers in
+    seconds instead of waiting minutes for something the test never does."""
+    out: dict[str, Any] = {}
+    for name, spec in (fields or {}).items() if isinstance(fields, dict) else ():
+        scale = _TIMEOUT_FIELDS.get(str(name).lower())
+        kind = spec.get("type") if isinstance(spec, dict) else None
+        if isinstance(kind, list):
+            kind = next((k for k in kind if k != "null"), None)
+        if scale and kind in (None, "number", "integer"):
+            out[name] = _WAIT_TEST_S * scale
+    return out
+
+
 def _call(stragglers: list[threading.Thread], fn: Any, /, *args: Any, **kwargs: Any) -> Any:
     """Call a tool or node handler, sync or async, on a worker that carries this
     context and gives up after ``_TOOL_TIMEOUT_S`` (the worker goes on ``stragglers``:
@@ -291,17 +310,16 @@ def _check_tools(pid: str, checks: list[dict[str, Any]], stragglers: list[thread
         if tool is None:
             checks.append({"check": label, "status": "fail", "detail": "listed by the plugin but not on the MCP server"})
             continue
-        args = sample_args(getattr(tool, "parameters", None))
+        params = getattr(tool, "parameters", None)
+        args = sample_args(params)
+        waits = short_timeouts(params.get("properties") if isinstance(params, dict) else None)
+        args.update(waits)
         try:
             result = _call(stragglers, tool.fn, **args)
         except Exception as exc:  # noqa: BLE001 — that is what the check reports
             checks.append({"check": label, "status": "fail", "input": args, "detail": f"{type(exc).__name__}: {exc}"})
             continue
-        row = {"check": label, "status": "pass", "input": args, "result": _brief(result)}
-        said = _returned_error(result)
-        if said:
-            row["note"] = f"answered with an error for sample input: {said}"
-        checks.append(row)
+        checks.append(_answered(label, result, waits, "sample input", input=args))
 
 
 def _check_nodes(pid: str, manifest: dict[str, Any], checks: list[dict[str, Any]],
@@ -326,6 +344,8 @@ def _check_nodes(pid: str, manifest: dict[str, Any], checks: list[dict[str, Any]
             continue
         fields = (declared.get(ntype) or {}).get("config_fields") or []
         config = {f["id"]: f["default"] for f in fields if isinstance(f, dict) and "id" in f and "default" in f}
+        waits = short_timeouts({f["id"]: f for f in fields if isinstance(f, dict) and "id" in f})
+        config.update(waits)
         with tempfile.TemporaryDirectory(prefix="ducky-plugin-test-") as artifacts:
             ctx = {"config": config, "payload": {}, "node": {"id": "test", "type": ntype, "config": config},
                    "inputs": {}, "kind": "pipeline", "files": [], "artifact_dir": artifacts}
@@ -338,11 +358,28 @@ def _check_nodes(pid: str, manifest: dict[str, Any], checks: list[dict[str, Any]
             checks.append({"check": label, "status": "fail",
                            "detail": f"returned {type(result).__name__}; a node returns a dict like {{\"ok\": true}}"})
             continue
-        row = {"check": label, "status": "pass", "result": _brief(result)}
-        said = _returned_error(result)
-        if said:
-            row["note"] = f"answered with an error for an empty config: {said}"
-        checks.append(row)
+        checks.append(_answered(label, result, waits, "an empty config"))
+
+
+def _answered(label: str, result: Any, waits: dict[str, Any], given: str, **extra: Any) -> dict[str, Any]:
+    """The pass row of a call that answered. A waiter that gave up after the test's
+    short timeout answered cleanly: that is a pass, not an error."""
+    row = {"check": label, "status": "pass", **extra, "result": _brief(result)}
+    if waits:
+        row["detail"] = f"waits by design: tested with {_WAIT_TEST_S} s instead of its own timeout"
+    said = _returned_error(result)
+    if said and not (waits and _gave_up(result)):
+        row["note"] = f"answered with an error for {given}: {said}"
+    return row
+
+
+def _gave_up(result: Any) -> bool:
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            return False
+    return isinstance(result, dict) and bool(result.get("timed_out") or result.get("timeout"))
 
 
 def _check_panels(pid: str, manifest: dict[str, Any], started: float, checks: list[dict[str, Any]]) -> None:
