@@ -15,6 +15,8 @@ export type PluginSettingsTab = {
 export type PluginDockPanel = {
   id: string;
   title?: string;
+  /** The panel's own icon, else its plugin's (data URL or emoji). */
+  icon?: string;
   defaultSide?: string;
   ui?: string;
   css?: string;

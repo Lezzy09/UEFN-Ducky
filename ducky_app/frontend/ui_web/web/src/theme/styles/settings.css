@@ -2734,14 +2734,84 @@
   opacity: 0.4;
 }
 
+/* Left and right rail switches side by side, each with its layout under it. */
+.appearance-sidebar-rails {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
 .appearance-sidebar-rail {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--card) 65%, var(--bg));
+  padding-bottom: 14px;
+}
+
+.appearance-sidebar-rail .appearance-layout-control {
+  padding: 0 16px;
+}
+
+.appearance-sidebar-rail .appearance-layout-toggle {
+  max-width: none;
+}
+
+.appearance-layout-control.is-disabled {
+  opacity: 0.45;
 }
 
 .appearance-sidebar-panel-list {
   margin-top: 0;
+}
+
+/* One row per panel: icon, name, then Off / Left / Right. */
+.appearance-sidebar-panel-row {
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 8px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+/* Narrow settings: the name keeps its room and Off / Left / Right drops under it. */
+.appearance-sidebar-panel-row > .general-tab-toggle-row-text {
+  min-width: 110px;
+}
+
+.appearance-sidebar-panel-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--fg-dim);
+}
+
+.appearance-sidebar-panel-icon svg,
+.appearance-sidebar-panel-icon img {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: cover;
+}
+
+.appearance-sidebar-panel-sides {
+  flex: 0 1 196px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.appearance-sidebar-panel-sides .content-search-mode-btn:disabled {
+  opacity: 0.4;
+}
+
+.appearance-sidebar-panel-sides .content-search-mode-btn:disabled,
+.appearance-layout-control .content-search-mode-btn:disabled {
+  cursor: not-allowed;
 }
 
 .appearance-header-preview-bar {

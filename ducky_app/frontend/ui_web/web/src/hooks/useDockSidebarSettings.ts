@@ -14,8 +14,11 @@ import {
   type WorkspaceDockSnapshot,
 } from "../workspace/workspaceDockStorage";
 
-function isOnSide(snapshot: WorkspaceDockSnapshot, panelId: DockPanelId, side: DockSide): boolean {
-  return !snapshot.hiddenPanels.includes(panelId) && snapshot.panelSide[panelId] === side;
+/** Where a panel shows: its rail, or null when it is off (hidden or never placed). */
+function placementOf(snapshot: WorkspaceDockSnapshot, panelId: DockPanelId): DockSide | null {
+  if (snapshot.hiddenPanels.includes(panelId)) return null;
+  const side = snapshot.panelSide[panelId];
+  return side === "left" || side === "right" ? side : null;
 }
 
 /** Appearance → Sidebar reads/writes the dock snapshot directly (settings overlay has no dock provider). */
@@ -55,7 +58,7 @@ export function useDockSidebarSettings() {
     snapshot,
     leftRailEnabled: snapshot.leftRailEnabled !== false,
     rightRailEnabled: snapshot.rightRailEnabled !== false,
-    isOnSide: (panelId: DockPanelId, side: DockSide) => isOnSide(snapshot, panelId, side),
+    placementOf: (panelId: DockPanelId) => placementOf(snapshot, panelId),
     setRailEnabled,
     setPanelOnSide,
   };

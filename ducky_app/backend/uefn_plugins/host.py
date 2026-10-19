@@ -2544,6 +2544,12 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
         if isinstance(panel, dict) and panel.get("id"):
             entry = dict(panel)
             entry["plugin_id"] = pid
+            # Appearance → Sidebar shows it next to the panel: its own icon, else the plugin's.
+            resolved = _resolve_contrib_icon(entry.get("icon"), root)
+            if resolved:
+                entry["icon"] = resolved
+            else:
+                entry.pop("icon", None)
             _CONTRIBUTIONS["dock_panels"].append(entry)
 
     for kind in contributes.get("editor.kinds") or contributes.get("editor_kinds") or []:
