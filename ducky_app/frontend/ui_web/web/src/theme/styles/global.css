@@ -639,6 +639,33 @@ body.native-caption-input-ready .app-header .drag-region {
   font-size: 14px;
   line-height: 1;
 }
+/* The header's menus (Tools, Plugins, View, Controls) are bare icons like its other
+   buttons: no box, border, dot or chevron; the hover fill, and the accent while open. */
+.app-header .choice-dropdown--light .choice-dropdown-trigger {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  gap: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+.app-header .choice-dropdown--light .choice-dropdown-trigger:hover:not(:disabled) {
+  background: var(--tab-hover);
+  box-shadow: none;
+  color: var(--fg);
+}
+.app-header .choice-dropdown--light .choice-dropdown-trigger.is-open {
+  background: var(--tab-active);
+  box-shadow: none;
+  color: var(--accent);
+}
+.app-header .choice-dropdown--light .choice-dropdown-light {
+  display: none;
+}
 .app-header-center .plugin-header-menu,
 .app-header-center .header-tools-menu {
   flex-shrink: 0;
@@ -706,24 +733,15 @@ body.native-caption-input-ready .app-header .drag-region {
   min-width: 0;
 }
 .mobile-tabs-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  max-width: min(46vw, 220px);
-  height: 28px;
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--card);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+  flex-shrink: 0;
+  color: var(--fg-dim);
 }
-.mobile-tabs-trigger:hover,
 .mobile-tabs-trigger[aria-expanded="true"] {
-  background: var(--bg-hover);
+  background: var(--tab-active);
+  color: var(--accent);
+}
+.mobile-tabs-trigger .editor-tab-icon {
+  opacity: 1;
 }
 .mobile-tabs-name {
   min-width: 0;
@@ -880,7 +898,12 @@ body.native-caption-input-ready .app-header .drag-region {
 
 /* View menu (phone / web header): Ducky, UEFN, screens and windows as icon rows and tiles,
    with a check on what is showing instead of radio circles. */
+/* Its own raised surface, a step lighter than the sidebar cards it opens over. */
+.dropdown-panel:has(.view-menu) {
+  background: color-mix(in srgb, var(--bg-elevated) 60%, var(--dropdown-bg));
+}
 .view-menu {
+  --border: var(--border-light);
   display: flex;
   flex-direction: column;
   gap: 2px;

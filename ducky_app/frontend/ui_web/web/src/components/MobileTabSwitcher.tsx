@@ -38,11 +38,11 @@ export function MobileTabSwitcher({ tabs, activeTabId, onActivate, onClose }: {
   if (!active) return null;
   return (
     <div className="mobile-tabs no-drag">
-      <button ref={anchorRef} type="button" className="no-drag mobile-tabs-trigger" aria-haspopup="menu" aria-expanded={open}
-        aria-label={`Tabs: ${active.name}${tabs.length > 1 ? ` (${tabs.length} open)` : ""}`} title="Open tabs" onClick={() => setOpen((on) => !on)}>
+      {/* A bare icon like the header's other buttons: the open tab's own icon, no name or chevron. */}
+      <button ref={anchorRef} type="button" className="no-drag icon-btn mobile-tabs-trigger" aria-haspopup="menu" aria-expanded={open}
+        aria-label={`Tabs: ${active.name}${tabs.length > 1 ? ` (${tabs.length} open)` : ""}`} title={`${active.name} — open tabs`}
+        onClick={() => setOpen((on) => !on)}>
         <span className="editor-tab-icon" aria-hidden="true"><EditorTabGlyph tab={active} /></span>
-        <span className="mobile-tabs-name">{active.name}</span>
-        <span className="mobile-tabs-caret" aria-hidden="true"><Icons.ChevronDown /></span>
       </button>
       <DropdownPanel anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} placement="bottom" minWidth={240} width={300}>
         <div className="mobile-tabs-menu" role="menu" aria-label="Open tabs">
