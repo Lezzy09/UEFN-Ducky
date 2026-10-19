@@ -5,6 +5,7 @@ import { subscribePanelPush } from "./usePanelPushBus";
 import { observeProjectRoot } from "./projectSwitchController";
 import type { ProjectInfo } from "../types/panel";
 import { setProjectContentRoot } from "../verse-editor/utils/isVerseFile";
+import { setProjectFlavor } from "../components/ProjectFlavorIcon";
 import { setVisibleInterval } from "../utils/visibleInterval";
 
 const EMPTY: ProjectInfo = { path: "", name: "No project", slug: "_no_project" };
@@ -23,12 +24,14 @@ function applyProjectInfo(
   observeProjectRoot(info.path ?? "");
   // Before the tree re-renders: a folder project's Content pane is the folder itself.
   setProjectContentRoot(info.content_root);
+  // The Content pane's icon (an older backend sends only the kind).
+  setProjectFlavor(info.path ? info.flavor || info.kind || "uefn" : "");
   setProject(info);
 }
 
 function sameProjectInfo(a: ProjectInfo | null, b: ProjectInfo): boolean {
   return !!a && a.path === b.path && a.name === b.name && a.slug === b.slug
-    && a.kind === b.kind && a.content_root === b.content_root;
+    && a.kind === b.kind && a.flavor === b.flavor && a.content_root === b.content_root;
 }
 
 export function useProject(pollMs = 15000, refreshToken = 0, onRemoteChange?: () => void) {

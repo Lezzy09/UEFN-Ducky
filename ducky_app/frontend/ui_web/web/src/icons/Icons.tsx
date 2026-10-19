@@ -38,6 +38,22 @@ export const Icons = {
       <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
     </svg>
   ),
+  /** Roblox's tilted square with a square hole. */
+  Roblox: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+      <path
+        fillRule="evenodd"
+        d="M5.6 2 2 18.4 18.4 22 22 5.6 5.6 2zm4.6 7.2 4.6 1-1 4.6-4.6-1 1-4.6z"
+      />
+    </svg>
+  ),
+  /** Unreal Engine: a U in a ring. */
+  Unreal: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <circle cx="12" cy="12" r="9.5" />
+      <path d="M9 7.5v5.2a3 3 0 0 0 6 0V7.5M15 12.7V16" />
+    </svg>
+  ),
   FolderPlus: () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M12 10v6M9 13h6" />

@@ -415,3 +415,35 @@ def test_recent_project_rows_carry_the_mount_and_resolve_by_it(tmp_path: Path, m
     assert project_switch.resolve_panel_project_ref(name="MyProjectBJJJ") == str(island.resolve())
     with pytest.raises(ValueError):
         project_switch.resolve_panel_project_ref(name="aaaaaaaa-0000-0000-0000-000000000000")
+
+
+# --------------------------------------------------------------------------- flavor
+
+
+def test_flavor_names_what_a_project_is_for_its_icon(tmp_path: Path) -> None:
+    assert pk.project_flavor("") == ""
+    assert pk.project_flavor(_island(tmp_path)) == UEFN
+    plain = tmp_path / "notes"
+    plain.mkdir()
+    (plain / "todo.md").write_text("# hi\n", encoding="utf-8")
+    assert pk.project_flavor(plain) == FOLDER
+
+    rojo = tmp_path / "obby"
+    rojo.mkdir()
+    (rojo / "default.project.json").write_text("{}", encoding="utf-8")
+    assert pk.project_flavor(rojo) == pk.ROBLOX
+
+    place = tmp_path / "place"
+    place.mkdir()
+    (place / "Game.rbxlx").write_text("<roblox/>", encoding="utf-8")
+    assert pk.project_flavor(place) == pk.ROBLOX
+
+    unreal = tmp_path / "MyGame"
+    (unreal / "Content").mkdir(parents=True)
+    (unreal / "MyGame.uproject").write_text("{}", encoding="utf-8")
+    assert pk.project_flavor(unreal) == pk.UNREAL
+
+    unity = tmp_path / "UnityGame"
+    (unity / "Assets").mkdir(parents=True)
+    (unity / "ProjectSettings").mkdir()
+    assert pk.project_flavor(unity) == pk.UNITY

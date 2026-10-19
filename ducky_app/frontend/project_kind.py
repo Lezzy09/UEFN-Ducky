@@ -322,8 +322,58 @@ def forget_cached_kind(root: Path | str | None = None) -> None:
     with _cache_lock:
         if root is None:
             _kind_cache.clear()
+            _flavor_cache.clear()
         else:
             _kind_cache.pop(_key(root), None)
+            _flavor_cache.pop(_key(root), None)
+
+
+# --------------------------------------------------------------------------- flavor
+#
+# What a project is, for its icon only (the Content pane, the project list): a UEFN
+# island, or a folder that is a Roblox, Unreal or Unity project, or just a folder. It
+# never changes what Ducky does with the project; that is the kind's job.
+
+ROBLOX = "roblox"
+UNREAL = "unreal"
+UNITY = "unity"
+# Rojo's project file and the Roblox toolchain managers' manifests.
+_ROBLOX_MARKERS = ("default.project.json", "wally.toml", "aftman.toml", "rokit.toml", "foreman.toml")
+
+_flavor_cache: dict[str, str] = {}
+
+
+def _compute_flavor(root: Path) -> str:
+    try:
+        if any((root / name).is_file() for name in _ROBLOX_MARKERS) or _has_file(root, "*.rbxl") or _has_file(
+            root, "*.rbxlx"
+        ):
+            return ROBLOX
+        if has_uproject(root):
+            return UNREAL
+        if (root / "Assets").is_dir() and (root / "ProjectSettings").is_dir():
+            return UNITY
+    except OSError:
+        pass
+    return FOLDER
+
+
+def project_flavor(root: Path | str) -> str:
+    """``uefn``, ``roblox``, ``unreal``, ``unity`` or ``folder`` for a project root; empty without one."""
+    raw = str(root or "").strip()
+    if not raw:
+        return ""
+    if project_kind(raw) == UEFN:
+        return UEFN
+    key = _key(raw)
+    with _cache_lock:
+        cached = _flavor_cache.get(key)
+    if cached:
+        return cached
+    flavor = _compute_flavor(Path(raw))
+    with _cache_lock:
+        _flavor_cache[key] = flavor
+    return flavor
 
 
 def islands_inside(folder: Path | str, *, limit: int = 12) -> list[dict[str, str]]:

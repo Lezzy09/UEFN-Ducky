@@ -7,6 +7,7 @@ import { getApi, isRemote } from "../hooks/usePanelApi";
 import { useOptionalEditorWorkspaceFlush } from "../contexts/EditorWorkspaceBridge";
 import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { PROJECT_SELECTED_EVENT } from "../hooks/useProject";
+import { ProjectFlavorIcon, projectFlavorName } from "./ProjectFlavorIcon";
 
 interface ProjectSelectorProps {
   project: ProjectInfo;
@@ -259,9 +260,9 @@ export function ProjectSelector({
                   >
                     <span
                       className="project-selector-kind-icon"
-                      title={item.kind === "folder" ? "Folder project" : "UEFN island"}
+                      title={projectFlavorName(item.flavor || item.kind || "uefn")}
                     >
-                      {item.kind === "folder" ? <Icons.Folder /> : <Icons.Verse />}
+                      <ProjectFlavorIcon flavor={item.flavor || item.kind || "uefn"} />
                     </span>
                     <TruncatedText
                       className="ui-flex-1-min-block"

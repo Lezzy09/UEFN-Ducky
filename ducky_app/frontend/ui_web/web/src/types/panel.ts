@@ -1080,11 +1080,16 @@ export interface PluginConnectionRow {
 /** "uefn": an island (<Name>.uefnproject). "folder": any other folder, e.g. a code repo. */
 export type ProjectKind = "uefn" | "folder";
 
+/** What a project is, for its icon only: an island, or a folder that is a Roblox, Unreal or
+ * Unity project, or just a folder. */
+export type ProjectFlavor = "uefn" | "roblox" | "unreal" | "unity" | "folder";
+
 export interface ProjectInfo {
   path: string;
   name: string;
   slug: string;
   kind?: ProjectKind;
+  flavor?: ProjectFlavor;
   /** Content pane root: "Content" on an island, "." for a folder project. */
   content_root?: string;
   /** The island's content mount (its root plugin name) — what UEFN reports as the live

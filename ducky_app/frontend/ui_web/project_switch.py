@@ -19,6 +19,7 @@ from frontend.project_kind import (
     has_uefnproject,
     is_island_identity,
     island_mount_name,
+    project_flavor,
     project_kind,
     project_root_path,
     resolve_project_root,
@@ -72,6 +73,8 @@ def get_panel_project_info() -> dict[str, str]:
         "kind": kind,
         "content_root": content_root_for(kind),
         "mount": _mount_for(root, kind),
+        # What it is, for its icon: uefn, roblox, unreal, unity or folder.
+        "flavor": project_flavor(root),
     }
 
 
@@ -93,6 +96,7 @@ def list_panel_projects() -> list[dict[str, str | bool]]:
                 "active": norm == current,
                 "kind": kind,
                 "mount": _mount_for(norm, kind),
+                "flavor": project_flavor(norm),
             }
         )
     if current and current not in seen:
@@ -106,6 +110,7 @@ def list_panel_projects() -> list[dict[str, str | bool]]:
                 "active": True,
                 "kind": kind,
                 "mount": _mount_for(current, kind),
+                "flavor": project_flavor(current),
             },
         )
     return out

@@ -45,7 +45,8 @@ import { onApiReady } from "../hooks/onApiReady";
 import { emitDuckyProfileChanged, onDuckyProfileChanged } from "../navigation/duckyProfileChanged";
 import { SidebarStackedPanels } from "./sidebar/SidebarStackedPanels";
 import { OtherDuckiesChats } from "./sidebar/OtherDuckiesChats";
-import { canToggleStackedPanel, contentCollapsedWithoutProject } from "./sidebar/contentWithoutProject";
+import { canToggleStackedPanel, contentCollapsedWithoutProject, hasOpenProject } from "./sidebar/contentWithoutProject";
+import { ProjectFlavorIcon, useProjectFlavor } from "./ProjectFlavorIcon";
 import type { StackedPanelResizeSnapshot } from "../utils/stackedPanelFlex";
 import { SidebarPanelTabs } from "./sidebar/SidebarPanelTabs";
 import type { DockDropTarget } from "../utils/dockPanelDrag";
@@ -329,11 +330,16 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
   const panelMode = embedded && dock ? dock.panelModeForSide(dockSide) : legacyPanelMode;
   const legacyStackedLayout = useSidebarPanelLayout();
   const dockStack = dock?.stackForSide(dockSide);
-  const sideFilePanels = dock
-    ? (dockSide === "left" ? dock.leftPanels : dock.rightPanels).filter(
-        (id): id is SidebarPanelTab => id === "chats" || id === "files",
-      )
-    : (["chats", "files"] as SidebarPanelTab[]);
+  // With no project open there is nothing for Content to list, so it is left out of the rail
+  // (its place and fold are kept for when a project opens).
+  const sideFilePanels = (
+    dock
+      ? (dockSide === "left" ? dock.leftPanels : dock.rightPanels).filter(
+          (id): id is SidebarPanelTab => id === "chats" || id === "files",
+        )
+      : (["chats", "files"] as SidebarPanelTab[])
+  ).filter((id) => id !== "files" || hasOpenProject(projectSlug));
+  const projectFlavor = useProjectFlavor();
   const stackedLayout =
     embedded && dock && dockStack
       ? {
@@ -1425,7 +1431,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       },
       files: {
         title: "Content",
-        icon: <Icons.Verse />,
+        icon: <ProjectFlavorIcon flavor={projectFlavor || "uefn"} />,
         actions: contentActions,
         onContextMenu: openFilesHeaderMenu,
         searchMode: contentSearchMode === "text" && fileTreeSearchOpen,
@@ -1444,6 +1450,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       fileTreeSearchOpen,
       duckiesScroll,
       contentScroll,
+      projectFlavor,
     ],
   );
 
@@ -1676,7 +1683,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
               ]
             : []),
           ...(sideFilePanels.includes("files")
-            ? [{ id: "files" as const, title: "Verse", icon: <Icons.Verse /> }]
+            ? [{ id: "files" as const, title: "Content", icon: <ProjectFlavorIcon flavor={projectFlavor || "uefn"} /> }]
             : []),
         ]}
         activeTab={panelTab}
