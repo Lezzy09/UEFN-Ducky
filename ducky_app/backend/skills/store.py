@@ -1251,7 +1251,7 @@ def _write_pack_license_file(pack_id: str) -> None:
 
 # Skill packs that now ship inside a desktop plugin (not frontend/skill_packs/).
 # Drop leftover AppData copies so Store install of that plugin is not blocked.
-_MOVED_TO_PLUGIN_SKILLS = frozenset({"animation", "datatables", "islandsettings", "leveldesign", "materials", "modeling", "scenegraph", "tester", "uefn", "verse", "vfx"})
+_MOVED_TO_PLUGIN_SKILLS = frozenset({"animation", "datatables", "islandsettings", "leveldesign", "materials", "modeling", "npc-ai", "scenegraph", "tester", "uefn", "verse", "vfx"})
 
 
 def seed_skill_packs(*, force: bool = False) -> list[str]:
