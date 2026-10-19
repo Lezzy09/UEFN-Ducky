@@ -2175,3 +2175,18 @@ def test_a_big_units_later_part_that_fails_goes_again_as_it_was_so_its_group_clo
         assert ben.switch()["ok"]
         assert _read(ben.root / "MEGA" / "notes.txt") == "new"
         assert json.loads(_read(ben.root / "MEGA" / "scene.json"))["v"] == 2
+
+
+def test_an_ais_own_file_edit_in_a_team_folder_goes_out_as_the_ais(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Claude Code's Edit or Codex's apply_patch on a plugin's shared folder is the AI's
+    change, not the person's, even with no plugin call around it."""
+    from backend.uefn_plugins import store
+
+    monkeypatch.setattr(store, "get_enabled_plugin_ids", lambda: [PLUGIN])
+    env.root.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    assert tf._caller(PLUGIN, now) == ("user", "")
+    assert tf.note_ai_edit([env.tmp / "elsewhere.json"], ducky="Builder") == []
+    assert tf.note_ai_edit([env.root / "arena.json"], ducky="Builder", at=now) == [PLUGIN]
+    assert tf._caller(PLUGIN, now + 1) == ("agent", "Builder")
+    assert tf._caller(PLUGIN, now + tf.AGENT_WINDOW_S + 1) == ("user", "")  # long after: the person again

@@ -76,7 +76,7 @@ describe("plugin scope drawer", () => {
     expect(rows).toEqual([
       "MYou (Me)MainPCViewing",
       "AAnaANA-PCEditing MEGA_Duel_Stadium and Crate",
-      "BBenBEN-PCTheir ducky Builder is editing Arena",
+      "BBenBEN-PCAI (their ducky Builder) is editing Arena",
       "CCyCY-PCViewing",
       "DDeeDEE-PCNot in Forge",
     ]);
@@ -261,7 +261,7 @@ describe("plugin scope drawer", () => {
     drawer(status());
     fireEvent.click(screen.getByRole("button", { name: "Show history" }));
     await waitFor(() => expect(api.plugin_scope_history).toHaveBeenCalledWith("forge", { before: undefined, limit: 20 }));
-    expect(await screen.findByText("Ben's ducky Builder")).toBeTruthy();
+    expect(await screen.findByText("AI (Ben's ducky Builder)")).toBeTruthy();
     expect(screen.getByText("Balance pass")).toBeTruthy();
     expect(screen.getByText("BEN-PC")).toBeTruthy();
 

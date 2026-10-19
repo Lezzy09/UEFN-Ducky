@@ -734,6 +734,10 @@ def caller(default: str = "user") -> tuple[str, str]:
             return "agent", ""
     except Exception:  # noqa: BLE001
         pass
+    # The MCP bridge serves only AI clients (Claude Code, Codex, Cursor...): a write there
+    # is an AI's even when it brought no ducky's name, never the person's own.
+    if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1":
+        return "agent", ""
     return default, ""
 
 
@@ -812,10 +816,15 @@ def _locked_out(plugin: str, unit: str, held: dict[str, Any]) -> LockedOut:
     the app, so the plugin's bar and the alerts say who has it."""
     from backend.uefn_plugins.ledger import person
 
-    holder = person(held.get("holder_name"), held.get("holder_user"))
+    try:
+        from backend.uefn_plugins.vcs_engine import holder_of
+
+        holder, pc = holder_of(str(held.get("account_id") or ""), str(held.get("space_id") or ""), held)
+    except Exception:  # noqa: BLE001 — the refusal still names someone
+        holder, pc = person(held.get("holder_name"), held.get("holder_user")), ""
     name = str(held.get("name") or _unit_label(unit))
     since = float(held.get("since") or 0.0)
-    lock = {"unit": unit, "name": name, "holder": holder, "since": since}
+    lock = {"unit": unit, "name": name, "holder": holder, "elsewhere": pc, "since": since}
     group = open_group(plugin)
     if group is None or not group.panel:
         now = time.monotonic()
@@ -828,10 +837,14 @@ def _locked_out(plugin: str, unit: str, held: dict[str, Any]) -> LockedOut:
                 from frontend.ui_web.agent_modes import push_ui_event
 
                 push_ui_event({"type": "plugin_write_refused", "plugin_id": plugin, "unit": unit, "unit_name": name,
-                               "holder": holder, "since": since})
+                               "holder": holder, "elsewhere": pc, "since": since})
             except Exception:  # noqa: BLE001 — the refusal itself still says it
                 _log.debug("telling the app about a refused write failed", exc_info=True)
     when = f" since {_clock(since)}" if since else ""
+    if pc:
+        # The same account on another PC: still one PC at a time.
+        return LockedOut(f"{name} is open on your other PC, {pc}{when}, so it's locked on this PC. Close it there "
+                         "(or release it) to change it here. Your change wasn't saved.", lock)
     return LockedOut(f"{name} is locked by {holder}{when}. Your change wasn't saved.", lock)
 
 

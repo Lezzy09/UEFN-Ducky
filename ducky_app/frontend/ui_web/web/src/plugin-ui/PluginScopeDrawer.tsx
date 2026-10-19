@@ -29,6 +29,7 @@ import {
   notShared,
   outgoingStateText,
   presence,
+  historyWho,
   presenceText,
   refusedFolders,
   restoreConfirm,
@@ -58,11 +59,6 @@ type Versions = { kind: string; key: string; entries: PluginScopeHistoryEntry[] 
 function whenText(at?: number): string {
   if (!at) return "";
   return new Date(at * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-function whoText(entry: { by?: string; actor?: string; ducky?: string }): string {
-  const by = entry.by || "Someone";
-  return entry.actor === "agent" ? `${by}'s ducky ${entry.ducky || ""}`.trim() : by;
 }
 
 /** Changes not sent yet: the engine's list, else the ones a provider held back (refused, blocked). */
@@ -336,7 +332,7 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
                     <td>
                       <span className="plugin-scope-people__who">
                         <PresenceAvatar row={row} plugin={plugin} labelled={false} />
-                        <span>{row.me ? `You (${row.name})` : row.name}</span>
+                        <span>{row.me || row.self ? `You (${row.name})` : row.name}</span>
                       </span>
                     </td>
                     <td>{row.device}</td>
@@ -366,11 +362,12 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
               <tbody>
                 {locks.map((lock) => {
                   const name = lock.name || lock.unit;
-                  const holder = lock.holder || "someone";
+                  // This account on another PC: the buttons ask that PC by its name.
+                  const holder = lock.elsewhere || lock.holder || "someone";
                   return (
                     <tr key={lock.unit}>
                       <td>{name}</td>
-                      <td>{lock.mine ? "You" : holder}</td>
+                      <td>{lock.mine ? "You" : lock.elsewhere ? `You on ${lock.elsewhere}` : holder}</td>
                       <td>{lock.since ? clockText(lock.since) : ""}</td>
                       <td>{lock.leaseLeft != null ? (lock.leaseLeft > 0 ? durationText(lock.leaseLeft) : "Ran out") : ""}</td>
                       <td className="plugin-scope-drawer__actions">
@@ -579,7 +576,7 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
                   {versions.entries.map((v) => (
                     <tr key={v.seq}>
                       <td>#{v.seq}</td>
-                      <td>{whoText(v)}</td>
+                      <td>{historyWho(v)}</td>
                       <td>{whenText(v.at)}</td>
                       <td>{v.deleted ? "Deleted" : v.size ? formatBytes(v.size) : ""}</td>
                       <td className="plugin-scope-drawer__actions">
@@ -607,7 +604,7 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
                     {history.entries.map((e) => [
                       <tr key={e.seq}>
                         <td>#{e.seq}</td>
-                        <td>{whoText(e)}</td>
+                        <td>{historyWho(e)}</td>
                         <td>{e.device || ""}</td>
                         <td>{whenText(e.at)}</td>
                         <td>{e.message || ""}</td>
@@ -691,7 +688,7 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
               <tbody>
                 {folders.map((f) => {
                   const held = f.state === "quarantined";
-                  const holder = f.holder || "the holder";
+                  const holder = f.elsewhere || f.holder || "the holder";
                   const lockId = folderUnitLockId(f);
                   const mine = holdsFolderUnit(f, locks);
                   const theirs = !mine && (f.state === "locked" || f.state === "locked_by");
@@ -706,7 +703,7 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
                             {api?.plugin_scope_ask ? (
                               <button type="button" className="plugin-scope-bar__link" disabled={busy}
                                 aria-label={`Ask ${holder} to release ${f.name}`}
-                                onClick={() => void ask(lockId, f.holder || "them", f.name)}>
+                                onClick={() => void ask(lockId, f.elsewhere || f.holder || "them", f.name)}>
                                 Ask to release
                               </button>
                             ) : null}

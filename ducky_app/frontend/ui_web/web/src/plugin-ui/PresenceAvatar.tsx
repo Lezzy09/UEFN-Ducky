@@ -2,7 +2,7 @@ import { initials, personTone, presenceText, type Presence } from "./scopeBarTex
 
 /** "iliya kovachki · Laptop · Editing Untitled island 1". */
 export function presenceLabel(row: Presence, plugin?: string): string {
-  return [row.me ? "You" : row.name, row.device, presenceText(row, plugin)].filter(Boolean).join(" · ");
+  return [row.me || row.self ? "You" : row.name, row.device, presenceText(row, plugin)].filter(Boolean).join(" · ");
 }
 
 /**

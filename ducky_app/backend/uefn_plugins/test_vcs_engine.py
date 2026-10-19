@@ -171,7 +171,7 @@ def test_disjoint_edits_merge_and_go_out_as_merged(pc: PC, ben: Ben) -> None:
     assert out["state"] == "ok" and out["conflicts"] == 0
     assert pc.data.get("card.pip") == {"hp": 2, "name": "Pipo"}
     assert ben.doc("card.pip") == {"hp": 2, "name": "Pipo"} and ben.head() == 3
-    assert ben.client.history(SPACE, PLUGIN).entries[0].message == "Merged with Ben's change"
+    assert ben.client.history(SPACE, PLUGIN).entries[0].message == "Merged with a change by Ben"
     assert (pc.row("card.pip")["dirty"], pc.row("card.pip")["rev"]) == (0, 3)
 
 
@@ -1497,7 +1497,7 @@ def test_a_teammate_the_server_has_no_name_for_reads_as_a_teammate_never_as_a_us
     pc.data.put("card.pip", {"hp": 2, "name": "Pip"})  # merges
     pc.data.put("card.zed", {"hp": 2})  # clashes
     assert pc.run()["conflicts"] == 1
-    assert ben.client.history(SPACE, PLUGIN).entries[0].message == "Merged with a teammate's change"
+    assert ben.client.history(SPACE, PLUGIN).entries[0].message == "Merged with a change by a teammate"
     assert pc.row("card.zed")["sync_error"] == "A teammate changed this too."
     assert [c["by"] for c in vcs_engine.status(pc.account, SPACE, PLUGIN)["conflicts"]] == ["a teammate"]
 
@@ -1514,3 +1514,77 @@ def test_a_teammate_the_server_has_no_name_for_reads_as_a_teammate_never_as_a_us
     assert [(p["name"], p["user"]) for p in fields["people"]] == [("A teammate", uid)]  # the id only as an id
     shown = {**fields, "people": [{k: v for k, v in p.items() if k != "user"} for p in fields["people"]]}
     assert uid not in json.dumps([shown, events, vcs_engine.status(pc.account, SPACE, PLUGIN)["locks"]])
+
+
+def test_my_other_pc_holds_it_so_this_pc_is_locked_out_and_says_which_pc(
+        pc: PC, world: conf.FakeWorld, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One account on two PCs: a lock is one PC's, so this PC is locked out, and every
+    message says it's your other PC by its name (not "locked by Ana", your own name)."""
+    from backend.uefn_plugins import spaces
+    from frontend.ui_web import agent_modes
+
+    monkeypatch.setattr(vcs_engine, "my_user_id", lambda: "u_ana")
+    monkeypatch.setattr(agent_modes, "push_ui_event", lambda _e: None)
+    pc.run()  # on the new sync
+    main = world.server.client("u_ana", "d_mainpc", name="Ana")  # the same account on another PC
+    main.lock(SPACE, PLUGIN, [LockUnit("doc:card.lock", "Crate")], "best", {})
+    main.beat(SPACE, {"label": "MainPC"})
+    vcs_engine.refresh(pc.account, SPACE, [PLUGIN], pc.backend)
+    with pytest.raises(scopes.LockedOut, match="Crate is open on your other PC, MainPC.*locked on this PC") as got:
+        pc.data.put("card.lock", {"v": 1})
+    assert (got.value.lock["holder"], got.value.lock["elsewhere"]) == ("you on MainPC", "MainPC")
+    assert pc.row("card.lock") is None
+    fields = spaces.team_fields(pc.account, SPACE, PLUGIN)
+    assert [(lk["holder"], lk["elsewhere"]) for lk in fields["locks"]] == [("you on MainPC", "MainPC")]
+    assert [(p["self"], p["me"]) for p in fields["people"] if p["device"] == "MainPC"] == [(True, False)]
+    ans = vcs_engine.acquire(pc.account, SPACE, PLUGIN, pc.backend, [("doc:card.lock", "Crate")])["doc:card.lock"]
+    assert (ans["state"], ans["elsewhere"], ans["error"]) == ("locked", "MainPC",
+                                                             "It's open on your other PC, MainPC: locked there")
+
+
+def test_a_teammates_ai_change_says_ai_in_conflicts_and_update_now(pc: PC, ben: Ben) -> None:
+    from dataclasses import replace
+
+    pc.data.put("card.zed", {"hp": 1})
+    pc.run()
+    cs = conf.changeset(conf.put_item("doc", "card.zed", scopes.encode_doc({"hp": 3}), base=1))
+    assert isinstance(ben.client.push(SPACE, PLUGIN, replace(cs, actor="agent", ducky="Builder")), Committed)
+    pc.data.put("card.zed", {"hp": 2})  # clashes with Ben's ducky's change
+    assert pc.run()["conflicts"] == 1
+    assert [c["by"] for c in vcs_engine.status(pc.account, SPACE, PLUGIN)["conflicts"]] == ["AI (Ben's ducky Builder)"]
+
+
+def test_an_ai_write_outside_a_write_group_goes_out_as_the_ais_not_the_persons(pc: PC, ben: Ben) -> None:
+    """Under the person's own account: a ducky's change is the ducky's in the team history."""
+    from backend.workspace import identity
+
+    pc.run()  # on the new sync
+    token = identity.bind(identity.RunContext(run_id="r1", conv_id="c1", ducky_name="Builder"))
+    try:
+        assert scopes.caller() == ("agent", "Builder")
+        pc.data.put("card.ai", {"hp": 9})
+    finally:
+        identity.reset(token)
+    pc.data.put("card.me", {"hp": 1})  # the person, by hand
+    assert pc.run()["pushed"] == 2
+    by = sorted((e.actor, e.ducky) for e in ben.client.history(SPACE, PLUGIN).entries)
+    assert by == [("agent", "Builder"), ("user", "")]
+
+
+def test_a_write_in_the_mcp_bridge_is_an_ais_even_with_no_duckys_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UEFN_DUCKY_MCP_BRIDGE", "1")
+    assert scopes.caller() == ("agent", "")
+    monkeypatch.delenv("UEFN_DUCKY_MCP_BRIDGE")
+    assert scopes.caller() == ("user", "")
+
+
+def test_author_names_ais_and_my_other_pc(pc: PC, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vcs_engine, "my_user_id", lambda: "u_ana")
+    monkeypatch.setattr(vcs_engine, "device_names", lambda _a, _s: {"d_mainpc": "MainPC"})
+    a = (pc.account, SPACE)
+    assert vcs_engine.author(*a, "Ben") == "Ben"
+    assert vcs_engine.author(*a, "Ben", "d_ben", "agent", "Builder") == "AI (Ben's ducky Builder)"
+    assert vcs_engine.author(*a, "Ben", "d_ben", "agent") == "AI, for Ben"
+    assert vcs_engine.author(*a, "u_ana", "d_mainpc") == "you on MainPC"
+    assert vcs_engine.author(*a, "u_ana", "d_mainpc", "agent", "Builder") == "AI (your ducky Builder on MainPC)"
+    assert vcs_engine.other_pc(*a, "u_ana", vcs_engine.device_id()) == ""  # this PC is not "another"

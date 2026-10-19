@@ -424,6 +424,15 @@ def last_call(plugin: str) -> dict[str, Any]:
     return _doc(db.connect(), LAST_CALL_PREFIX + plugin)
 
 
+def last_call_put(plugin: str, *, actor: str, ducky: str = "", at: float | None = None) -> None:
+    """Note a change to the plugin's folders that no call of it made (an AI's own file tool):
+    a folder change soon after is that writer's, like a call's."""
+    conn = db.connect()
+    with db.write_txn(conn):
+        _doc_put(conn, LAST_CALL_PREFIX + plugin,
+                 {"at": time.time() if at is None else float(at), "actor": actor, "ducky": ducky})
+
+
 def reload_bump(plugin: str, why: str = "") -> int:
     """The plugin's folders now point at another copy: its epoch row moves on with a reload
     mark, so a process that loaded the plugin reloads it before its next call. The row is

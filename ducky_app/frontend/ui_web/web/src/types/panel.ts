@@ -2215,6 +2215,8 @@ export interface PanelPushEvent {
   unit?: string;
   unit_name?: string;
   holder?: string;
+  /** plugin_write_refused: the PC's name when this account holds it on another PC. */
+  elsewhere?: string;
   since?: number;
   kept?: boolean;
   /** duckyos_account_changed — the new account key ("" signed out). */
@@ -2405,6 +2407,8 @@ export interface PluginScopePerson {
   device?: string;
   /** This PC: never listed. */
   me?: boolean;
+  /** This account on another PC ("You on MainPC"): locked out here like anyone else. */
+  self?: boolean;
   /** viewing | editing | "" (in the space, not in this plugin). */
   doing?: string;
   unitName?: string;
@@ -2424,6 +2428,8 @@ export interface PluginScopeLock {
   /** The unit's name as people know it. */
   name?: string;
   holder?: string;
+  /** The PC's name when this account holds it on another PC (holder is "you on <PC>"). */
+  elsewhere?: string;
   /** Held by this PC. */
   mine?: boolean;
   /** Epoch seconds. */
@@ -2505,6 +2511,8 @@ export interface PluginScopeFolderUnit {
    * sent) | refused (`reason` says why); also synced / ok, changed, locked. */
   state: string;
   holder?: string;
+  /** The PC's name when this account holds it on another PC. */
+  elsewhere?: string;
   /** Held by this PC. */
   mine?: boolean;
   files?: number;

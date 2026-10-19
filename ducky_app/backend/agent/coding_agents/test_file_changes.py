@@ -401,3 +401,22 @@ def test_a_listed_folder_claims_nothing_and_a_shell_command_claims_what_it_wrote
     build = event("tool_done", "command_execution", {"command": "python build.py"}, id="build")
     tracker.process(build)
     assert [Path(e["path"][4:]).name for e in build["tool"]["fileEdits"]] == ["game.verse"]
+
+
+def test_an_edit_tool_tells_team_folders_before_and_after_it_runs(env, monkeypatch):
+    """A plugin's shared folder hears which files an outside AI edits, so the team sync
+    sends them as that AI's change. A read names files too and tells nothing."""
+    from backend.uefn_plugins import team_folders
+
+    root, ledger, _ = env
+    heard = []
+    monkeypatch.setattr(team_folders, "note_ai_edit", lambda paths, ducky="": heard.append(([str(p) for p in paths], ducky)))
+    ctx = RunContext(run_id="turn", conv_id="chat", coding_agent="claude", ducky_name="Builder")
+    tracker = TurnFileChanges(str(root), ctx, ledger)
+    tracker.process(event("tool", "Read", {"file_path": "file.txt"}))
+    assert heard == []
+    tracker.process(event("tool", "Edit", {"file_path": "file.txt", "old_string": "before", "new_string": "after"}))
+    (root / "file.txt").write_bytes(b"after\r\nkeep\r\n")
+    tracker.process(event("tool_done", "Edit", {"file_path": "file.txt", "old_string": "before", "new_string": "after"}))
+    target = str((root / "file.txt").resolve())
+    assert [(paths, ducky) for paths, ducky in heard] == [([str(root / "file.txt")], "Builder"), ([target], "Builder")]

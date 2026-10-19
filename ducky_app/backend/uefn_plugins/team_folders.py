@@ -1802,6 +1802,30 @@ def _foreign_units(account: str, space: str, plugin: str, units: Iterable[str],
     return out
 
 
+def note_ai_edit(paths: Iterable[Any], *, ducky: str = "", at: float | None = None) -> list[str]:
+    """An AI's own file tool (Codex's apply_patch, Claude Code's Edit or Write) is about to
+    change, or changed, ``paths`` outside any plugin call. Each plugin whose declared folder
+    holds one of them notes it, so the change goes out as the AI's, never the person's
+    (:func:`_caller`). Returns those plugins."""
+    from backend.uefn_plugins.store import get_enabled_plugin_ids
+
+    wanted = [p for p in paths if p]
+    if not wanted:
+        return []
+    project = current_project_root()
+    noted: list[str] = []
+    for plugin in get_enabled_plugin_ids():
+        roots: list[Any] = []
+        for folder in plugin_folders(plugin):
+            root = resolve_root(folder, project)
+            if root is not None:
+                roots += [root, *filter(None, [junction_target(root)])]
+        if roots and any(_inside(p, r) for p in wanted for r in roots):
+            repo.last_call_put(plugin, actor="agent", ducky=ducky, at=at)
+            noted.append(plugin)
+    return noted
+
+
 def _caller(plugin: str, now: float) -> tuple[str, str]:
     for doc in live_calls(plugin):
         return str(doc.get("actor") or "user"), str(doc.get("ducky") or "")
@@ -1971,7 +1995,13 @@ def scan(account: str, space: str, plugin: str, folder: Folder, *, project_id: s
 def _held_text(lock: dict[str, Any] | None) -> str:
     if not lock:
         return ""
-    return f"Changed here while {person(lock.get('holder_name'), lock.get('holder_user'))} holds it"
+    try:
+        from backend.uefn_plugins.vcs_engine import holder_of
+
+        who = holder_of(str(lock.get("account_id") or ""), str(lock.get("space_id") or ""), lock)[0]
+    except Exception:  # noqa: BLE001
+        who = person(lock.get("holder_name"), lock.get("holder_user"))
+    return f"Changed here while {who} holds it"
 
 
 def _note_activity(account: str, space: str, plugin: str, folder: Folder, changed: dict[str, int], now: float,
@@ -2876,7 +2906,12 @@ def units_table(account: str, space: str, plugin: str, folder: Folder, *, projec
         state = next((s for s in ("conflict", "quarantined", "refused") if s in states), "")
         if not state and unit in locked:
             state = "locked"
-            u["holder"] = person(locked[unit].get("holder_name"), locked[unit].get("holder_user"))
+            try:
+                from backend.uefn_plugins.vcs_engine import holder_of
+
+                u["holder"], u["elsewhere"] = holder_of(account, space, locked[unit])
+            except Exception:  # noqa: BLE001
+                u["holder"] = person(locked[unit].get("holder_name"), locked[unit].get("holder_user"))
         state = state or ("changed" if u["dirty"] else "synced")
         out.append({**u, "state": state})
     return out

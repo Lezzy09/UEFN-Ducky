@@ -301,6 +301,28 @@ class TurnFileChanges:
             if root not in self.repos:
                 self.repos[root] = _Repository(root)
 
+    def _absolute(self, arguments: Any) -> list[Path]:
+        """The files a tool call names (no folder keys), absolute."""
+        if not isinstance(arguments, dict):
+            return []
+        base = Path(str(arguments.get("cwd") or arguments.get("workdir") or self.cwd))
+        if not base.is_absolute():
+            base = self.cwd / base
+        names = _named_paths({k: v for k, v in arguments.items() if k not in _FOLDER_KEYS})
+        return [Path(n) if Path(n).is_absolute() else base / n for n in names]
+
+    def _note_team_folders(self, paths: list[Path]) -> None:
+        """An outside agent's edit in a plugin's shared folder goes to the team as the AI's
+        (its ducky's name), not as the person's own (team_folders.note_ai_edit)."""
+        if not paths:
+            return
+        try:
+            from backend.uefn_plugins.team_folders import note_ai_edit
+
+            note_ai_edit(paths, ducky=self.ctx.ducky_name)
+        except Exception:  # noqa: BLE001 — attribution never fails a turn
+            log.debug("noting an AI edit in a team folder failed", exc_info=True)
+
     def _reach(self, tool_name: str, arguments: Any):
         """Which changed files one tool call may claim as its own edits.
 
@@ -338,6 +360,7 @@ class TurnFileChanges:
                 project_root=str(root), abs_path=str(path),
             ))
         self.roots.add(str(root))
+        self._note_team_folders([path])
         # An absolute editor key works even when this repo is not the open project.
         return {"path": "abs:" + path.as_posix(), "before": before.text, "after": after.text,
                 "linesAdded": added, "linesRemoved": removed,
@@ -352,6 +375,10 @@ class TurnFileChanges:
         with self._lock:
             self.discover(tool.get("arguments") or {})
             if event["type"] != "tool_done":
+                # Before an edit tool runs: a file it names in a plugin's team folder is the
+                # AI's change (a read names files too, and changes nothing).
+                if str(tool.get("name") or "") in _NATIVE_EDIT_TOOLS:
+                    self._note_team_folders(self._absolute(tool.get("arguments") or {}))
                 return
             edits = []
             # Snapshots always advance; only what this call could have written is its edit.

@@ -16,6 +16,8 @@ export type RefusedWrite = {
   unit?: string;
   name?: string;
   holder?: string;
+  /** The PC's name when this account holds it on another PC. */
+  elsewhere?: string;
   since?: number;
   error?: string;
 };
@@ -97,7 +99,8 @@ export function installScopeAlerts(): void {
     const plugin = labels.get(pluginId) || pluginId;
     if (event.type === "plugin_write_refused") {
       alertRefusedWrite({
-        pluginId, unit: event.unit, name: event.unit_name, holder: event.holder, since: event.since, error: event.error,
+        pluginId, unit: event.unit, name: event.unit_name, holder: event.holder, elsewhere: event.elsewhere,
+        since: event.since, error: event.error,
       });
     } else if (event.type === "plugin_lock_asked" && event.unit) {
       upsertBackgroundJob({
@@ -136,13 +139,15 @@ export function _resetScopeAlertsForTests(): void {
 /** A panel's `data.*` / `files.*` answer that refused the write over a lock, or null. */
 export function refusedFromResult(pluginId: string, out: Record<string, unknown> | undefined): RefusedWrite | null {
   if (!out || out.ok !== false) return null;
-  const lock = (out.lock ?? null) as { unit?: string; name?: string; holder?: string; since?: number } | null;
+  const lock = (out.lock ?? null) as
+    { unit?: string; name?: string; holder?: string; elsewhere?: string; since?: number } | null;
   if (out.code !== "locked" && !(out.code === "read_only" && lock)) return null;
   return {
     pluginId,
     unit: lock?.unit,
     name: lock?.name,
     holder: lock?.holder,
+    elsewhere: lock?.elsewhere,
     since: lock?.since,
     error: String(out.error || ""),
   };

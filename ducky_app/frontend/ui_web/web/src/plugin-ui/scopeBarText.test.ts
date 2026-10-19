@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PluginScopeStatus } from "../types/panel";
 import {
+  aiText,
   bindingText,
   breakConfirm,
   clockText,
@@ -15,6 +16,7 @@ import {
   folderUnitLockId,
   folderUnitStateText,
   hereText,
+  historyWho,
   holdsFolderUnit,
   initials,
   listText,
@@ -233,7 +235,7 @@ describe("the bar's one status phrase", () => {
     // Ana's edits fold into one row, each unit once, since her oldest edit.
     expect(rows[1]).toMatchObject({ device: "ANA-PC", editing: ["MEGA_Duel_Stadium", "Crate"], since: 100 });
     expect(rows.map((r) => presenceText(r, "Forge"))).toEqual([
-      "Viewing", "Editing MEGA_Duel_Stadium and Crate", "Their ducky Builder is editing Arena", "Viewing", "Not in Forge",
+      "Viewing", "Editing MEGA_Duel_Stadium and Crate", "AI (their ducky Builder) is editing Arena", "Viewing", "Not in Forge",
     ]);
     expect(othersHere(rows).map((r) => r.name)).toEqual(["Ana", "Ben", "Cy"]);
     expect(hereText(rows)).toBe("Ana is editing MEGA_Duel_Stadium and Crate · 2 more here");
@@ -248,7 +250,7 @@ describe("the bar's one status phrase", () => {
     expect(at([viewing("Ana"), viewing("Ben")])).toBe("Ana and Ben are here");
     expect(at([viewing("Ana"), viewing("Ben"), viewing("Cy"), viewing("Di")])).toBe("Ana, Ben +2 are here");
     expect(at([{ user_name: "Ben", plugins: { forge: { editing: [{ unitName: "Arena", actor: "agent", ducky: "Builder" }] } } }]))
-      .toBe("Ben's ducky Builder is editing Arena");
+      .toBe("AI (Ben's ducky Builder) is editing Arena");
     expect(at([{ user_name: "Ana", plugins: { forge: { editing: [{ unitName: "A" }, { unitName: "B" }, { unitName: "C" }] } } }]))
       .toBe("Ana is editing A +2");
     // An older roster's activity rows say it themselves.
@@ -435,5 +437,30 @@ describe("declared folders", () => {
     expect(holdsFolderUnit(arena, [{ unit: "doc:Arena", name: "Arena", mine: true }])).toBe(false);
     expect(holdsFolderUnit({ unit: "tree:scenes/4", name: "Vault", state: "ok" }, [{ unit: "tree:scenes/4", mine: true }])).toBe(true);
   });
-});
 
+  it("one account on two PCs: the other PC holds it, and this PC says so", () => {
+    const at = new Date(2026, 9, 19, 15, 2).getTime() / 1000;
+    expect(refusedWriteText("Forge", { name: "Crate", holder: "you on MainPC", elsewhere: "MainPC", since: at }, "en-US"))
+      .toBe("Forge: Crate is open on your other PC, MainPC since 3:02 PM, so it's locked on this PC. Your change wasn't saved.");
+    const s = shared({ locks: [{ unit: "doc:crate", name: "Crate", holder: "you on MainPC", elsewhere: "MainPC" }] });
+    expect(statusPhrase(s, NOW).text).toBe("Open on your other PC, MainPC: Crate (read-only on this PC)");
+    const rows = presence([
+      { name: "tas", user: "u1", device: "Laptop", me: true },
+      { name: "tas", user: "u1", device: "MainPC", self: true, plugins: { forge: { editing: [{ unitName: "Crate" }] } } },
+    ], "forge");
+    expect(hereText(rows)).toBe("You on MainPC are editing Crate");
+  });
+
+  it("an AI's change says AI, never only the account it ran under", () => {
+    expect(historyWho({ by: "tas", actor: "agent", ducky: "Builder" })).toBe("AI (tas's ducky Builder)");
+    expect(historyWho({ by: "tas", actor: "agent" })).toBe("AI, for tas");
+    expect(historyWho({ by: "tas", actor: "user" })).toBe("tas");
+    expect(aiText("your", "Builder")).toBe("AI (your ducky Builder)");
+    expect(aiText("their")).toBe("AI");
+    const rows = presence([
+      { name: "Ana", user: "u2", device: "ANA-PC", plugins: { forge: { editing: [{ unitName: "Arena", actor: "agent", ducky: "Builder" }] } } },
+    ], "forge");
+    expect(hereText(rows)).toBe("AI (Ana's ducky Builder) is editing Arena");
+    expect(presenceText(rows[0], "Forge")).toBe("AI (their ducky Builder) is editing Arena");
+  });
+});

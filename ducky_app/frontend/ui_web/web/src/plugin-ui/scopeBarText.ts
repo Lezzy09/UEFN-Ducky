@@ -392,7 +392,9 @@ export function statusPhrase(status: PluginScopeStatus, nowMs: number): StatusPh
     const more = locked.length > 1 ? ` and ${locked.length - 1} more` : "";
     return {
       key: "locked",
-      text: `Locked by ${first.holder || "someone"}: ${first.name || first.unit}${more} (read-only for you)`,
+      text: first.elsewhere
+        ? `Open on your other PC, ${first.elsewhere}: ${first.name || first.unit}${more} (read-only on this PC)`
+        : `Locked by ${first.holder || "someone"}: ${first.name || first.unit}${more} (read-only for you)`,
       tone: "warn",
     };
   }
@@ -438,6 +440,8 @@ export type Presence = {
   device: string;
   /** This PC. */
   me: boolean;
+  /** This account on another PC: "You on MainPC". */
+  self: boolean;
   state: PresenceState;
   /** What they edit here themselves, by name, each once. */
   editing: string[];
@@ -459,7 +463,7 @@ export function presence(people: PluginScopePerson[] | undefined, pluginId: stri
     const device = p.device || "";
     const key = `${p.me ? "me" : p.user || name}:${device}`;
     const row: Presence = rows.get(key)
-      ?? { key, id: p.user || name, name, device, me: Boolean(p.me), state: "away", editing: [], duckies: [], since: 0 };
+      ?? { key, id: p.user || name, name, device, me: Boolean(p.me), self: Boolean(p.self) && !p.me, state: "away", editing: [], duckies: [], since: 0 };
     rows.set(key, row);
     const here = p.plugins ? p.plugins[pluginId] : undefined;
     const edits = p.plugins
@@ -494,6 +498,25 @@ function unitsText(units: string[]): string {
   return `${units[0]} +${units.length - 1}`;
 }
 
+/** An AI's work always says AI, even under the person's own account: "AI (your ducky
+ * Builder)", "AI (Ana's ducky Builder)", or "AI" for an outside AI with no ducky's name. */
+export function aiText(owner: string, ducky?: string): string {
+  return ducky ? `AI (${owner} ducky ${ducky})` : "AI";
+}
+
+/** A presence row's name in a sentence: "You on MainPC" for this account on another PC. */
+export function shownName(row: Presence): string {
+  return row.self ? `You on ${row.device || "your other PC"}` : row.name;
+}
+
+/** Who made a change in history: an AI's change says AI ("AI (tas's ducky Builder)",
+ * "AI, for tas"), never only the account it ran under. */
+export function historyWho(entry: { by?: string; actor?: string; ducky?: string }): string {
+  const by = entry.by || "Someone";
+  if (entry.actor !== "agent") return by;
+  return entry.ducky ? `AI (${by}'s ducky ${entry.ducky})` : `AI, for ${by}`;
+}
+
 /** What one person does here, for the drawer and an avatar's label: "Editing Untitled
  * island 1", "Their ducky Builder is editing Arena", "Viewing", "Not in Forge". */
 export function presenceText(row: Presence, plugin = "this plugin"): string {
@@ -501,7 +524,7 @@ export function presenceText(row: Presence, plugin = "this plugin"): string {
   if (row.editing.length) parts.push(`Editing ${unitsText(row.editing)}`);
   else if (row.state === "editing" && !row.duckies.length) parts.push("Editing");
   for (const d of row.duckies) {
-    const who = `${row.me ? "Your" : "Their"} ducky${d.ducky ? ` ${d.ducky}` : ""}`;
+    const who = aiText(row.me || row.self ? "your" : "their", d.ducky);
     parts.push(d.unitName ? `${who} is editing ${d.unitName}` : `${who} is editing`);
   }
   if (parts.length) return parts.join(" · ");
@@ -518,14 +541,14 @@ export function hereText(rows: Presence[]): string {
   if (editor) {
     const unit = editor.editing.length ? unitsText(editor.editing) : editor.duckies[0]?.unitName || "";
     const what = editor.editing.length || !editor.duckies.length
-      ? `${editor.name} is editing${unit ? ` ${unit}` : ""}`
-      : `${editor.name}'s ducky${editor.duckies[0].ducky ? ` ${editor.duckies[0].ducky}` : ""} is editing${unit ? ` ${unit}` : ""}`;
+      ? `${shownName(editor)} ${editor.self ? "are" : "is"} editing${unit ? ` ${unit}` : ""}`
+      : `${aiText(editor.self ? "your" : `${editor.name}'s`, editor.duckies[0].ducky)} is editing${unit ? ` ${unit}` : ""}${editor.self ? ` on ${editor.device || "your other PC"}` : ""}`;
     const more = others.length - 1;
     return more ? `${what} · ${more} more here` : what;
   }
-  if (others.length === 1) return `${others[0].name} is here`;
-  if (others.length === 2) return `${others[0].name} and ${others[1].name} are here`;
-  return `${others[0].name}, ${others[1].name} +${others.length - 2} are here`;
+  if (others.length === 1) return `${shownName(others[0])} ${others[0].self ? "are" : "is"} here`;
+  if (others.length === 2) return `${shownName(others[0])} and ${shownName(others[1])} are here`;
+  return `${shownName(others[0])}, ${shownName(others[1])} +${others.length - 2} are here`;
 }
 
 /** "IK" for "iliya kovachki", "A" for "Ana" or "ana@x.com". */
@@ -556,11 +579,15 @@ export function locksText(locks: PluginScopeLock[] | undefined): string {
  * Your change wasn't saved." Without a holder, the refusal's own reason. */
 export function refusedWriteText(
   plugin: string,
-  write: { name?: string; holder?: string; since?: number; error?: string },
+  write: { name?: string; holder?: string; elsewhere?: string; since?: number; error?: string },
   locale?: string,
 ): string {
   if (!write.holder) return `${plugin}: your change wasn't saved.${write.error ? ` ${write.error}` : ""}`;
   const since = write.since ? ` since ${clockText(write.since, locale)}` : "";
+  // The same account on another PC: still one PC at a time.
+  if (write.elsewhere) {
+    return `${plugin}: ${write.name || "it"} is open on your other PC, ${write.elsewhere}${since}, so it's locked on this PC. Your change wasn't saved.`;
+  }
   return `${plugin}: ${write.name || "it"} is locked by ${write.holder}${since}. Your change wasn't saved.`;
 }
 

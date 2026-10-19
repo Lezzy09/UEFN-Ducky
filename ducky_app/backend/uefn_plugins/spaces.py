@@ -498,6 +498,12 @@ def _people(account: str, space: str, plugin: str) -> list[dict[str, Any]]:
     roster = space_vcs.presence_get(account, space)["roster"]
     people = roster.get("people") if isinstance(roster, dict) else None
     me = space_vcs.device_id()
+    try:
+        from backend.uefn_plugins.vcs_engine import my_user_id
+
+        my_user = my_user_id()
+    except Exception:  # noqa: BLE001
+        my_user = ""
     out: list[dict[str, Any]] = []
     for p in people if isinstance(people, list) else []:
         if not isinstance(p, Mapping):
@@ -514,9 +520,25 @@ def _people(account: str, space: str, plugin: str) -> list[dict[str, Any]]:
             "user": str(p.get("user") or ""),
             "device": str(p.get("label") or ""),
             "me": str(p.get("device") or "") == me,
+            # This account on another PC: "You on MainPC", locked out here like anyone else.
+            "self": bool(my_user) and str(p.get("user") or "") == my_user and str(p.get("device") or "") != me,
             "plugins": {plugin: {"viewing": bool(here.get("viewing")), "editing": editing}},
         })
     return out
+
+
+def _lock_holder(account: str, space: str, lk: Mapping[str, Any]) -> dict[str, str]:
+    """``holder`` ('' for this PC's own lock) and ``elsewhere`` (the PC's name when this
+    account holds it on another PC: "you on MainPC")."""
+    if lk["mine"]:
+        return {"holder": "", "elsewhere": ""}
+    try:
+        from backend.uefn_plugins.vcs_engine import holder_of
+
+        who, pc = holder_of(account, space, lk)
+    except Exception:  # noqa: BLE001 — a name still shows
+        who, pc = person(lk["holder_name"], lk["holder_user"]), ""
+    return {"holder": who, "elsewhere": pc}
 
 
 def team_fields(account: str, space: str, plugin: str, *, state: str = "ok") -> dict[str, Any]:
@@ -563,7 +585,7 @@ def team_fields(account: str, space: str, plugin: str, *, state: str = "ok") -> 
             mode=head["mode"],
             people=_people(account, space, plugin),
             locks=[{"unit": lk["unit"], "name": lk["name"] or lk["unit"].split(":", 1)[-1],
-                    "holder": "" if lk["mine"] else person(lk["holder_name"], lk["holder_user"]),
+                    **_lock_holder(account, space, lk),
                     "mine": lk["mine"], "since": lk["since"],
                     "leaseLeft": lk["lease_left"]} for lk in space_vcs.locks(account, space, plugin, now=now)],
             nextTry=float(head["next_try"]) if float(head["next_try"]) > now else None,

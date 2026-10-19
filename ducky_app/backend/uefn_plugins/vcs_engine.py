@@ -253,6 +253,59 @@ def _who(*names: Any) -> str:
     return person(*names, fallback="A teammate")
 
 
+_ME = {"at": float("-inf"), "id": ""}
+ME_TTL_S = 30.0
+
+
+def my_user_id() -> str:
+    """The signed-in user as the server names lock holders and roster rows ('' signed out)."""
+    now = time.monotonic()
+    if now - _ME["at"] < ME_TTL_S:
+        return _ME["id"]
+    try:
+        from frontend.duckyos_account import get_status
+
+        uid = str(get_status().get("user_id") or "")
+    except Exception:  # noqa: BLE001 — a name still shows
+        uid = ""
+    _ME.update(at=now, id=uid)
+    return uid
+
+
+def other_pc(account: str, space: str, user: Any, device: Any) -> str:
+    """The PC's name when ``user`` is this account on another PC ('' otherwise). A lock
+    belongs to one PC: the same account on another PC is locked out here all the same."""
+    me = my_user_id()
+    device = str(device or "")
+    if not me or str(user or "") != me or not device or device == device_id():
+        return ""
+    return device_names(account, space).get(device) or "another PC"
+
+
+def holder(account: str, space: str, user: Any, name: Any, device: Any) -> tuple[str, str]:
+    """``(who, pc)`` of a lock's holder for every message: ``("you on MainPC", "MainPC")``
+    for this account on another PC, else ``(the person's name, "")``."""
+    pc = other_pc(account, space, user, device)
+    return (f"you on {pc}", pc) if pc else (person(name, user), "")
+
+
+def author(account: str, space: str, by: Any, device: Any = "", actor: Any = "user", ducky: Any = "") -> str:
+    """Who made a change, for conflicts, Update now and merges. An AI's change always says
+    AI, even under the person's own account: "AI (Ana's ducky Builder)", "AI, for Ana";
+    this account on another PC is "you on MainPC"."""
+    pc = other_pc(account, space, by, device)
+    if str(actor or "") != "agent":
+        return f"you on {pc}" if pc else str(by or "")  # a plain id stays an id: the reader names it
+    if ducky:
+        return f"AI (your ducky {ducky} on {pc})" if pc else f"AI ({person(by)}'s ducky {ducky})"
+    return f"AI, for {'you on ' + pc if pc else person(by)}"
+
+
+def holder_of(account: str, space: str, lk: Mapping[str, Any]) -> tuple[str, str]:
+    """:func:`holder` of a cached lock row."""
+    return holder(account, space, lk.get("holder_user"), lk.get("holder_name"), lk.get("holder_device"))
+
+
 # --------------------------------------------------------------------------- push
 
 
@@ -270,22 +323,28 @@ def _build(ctx: Ctx, *, message: str = "", now: float) -> int:
         return 0
     busy = space_vcs.cs_items_open(ctx.account, ctx.space, ctx.plugin) | _waiting(ctx)
     groups = space_vcs.groups(r["group_id"] for r in rows)
-    batches: dict[str, list[dict[str, Any]]] = {}
+    # (group id, actor, ducky): a write group says who made it; a row of no group goes by
+    # who changed it here last, so an AI's write outside a group is still the AI's.
+    batches: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    last_by = _actors(ctx, now)
     for r in rows:
         if (r["kind"], r["key"]) in busy:
             continue
         held = space_vcs.foreign_lock(ctx.account, ctx.space, ctx.plugin, unit_of(r["kind"], r["key"]), now=now)
         if held:
             repo.set_state(ctx.account, ctx.space, ctx.plugin, r["kind"], r["key"], "locked_out",
-                           f"Locked by {person(held['holder_name'], held['holder_user'])}")
+                           f"Locked by {holder_of(ctx.account, ctx.space, held)[0]}")
             continue
         info = groups.get(r["group_id"]) if r["group_id"] else None
         if info and info["open"]:
             continue  # the call that writes this group is still running
-        batches.setdefault(r["group_id"] if info else "", []).append(r)
+        if info:
+            batches.setdefault((r["group_id"], str(info.get("actor") or "user"), str(info.get("ducky") or "")), []).append(r)
+        else:
+            batches.setdefault(("", *last_by.get(unit_of(r["kind"], r["key"]), ("user", ""))), []).append(r)
     seq = int(space_vcs.head_get(ctx.account, ctx.space, ctx.plugin)["seq"])
     made = 0
-    for gid, batch in batches.items():
+    for (gid, actor, ducky), batch in batches.items():
         info = groups.get(gid) or {}
         parts = [batch[i:i + MAX_ITEMS] for i in range(0, len(batch), MAX_ITEMS)]
         for n, part in enumerate(parts, 1):
@@ -295,9 +354,18 @@ def _build(ctx: Ctx, *, message: str = "", now: float) -> int:
             space_vcs.cs_add(ctx.account, ctx.space, ctx.plugin, uuid.uuid4().hex, base_seq=seq,
                              items=[_snapshot(r) for r in part], group_id=gid, part=n if gid else 1,
                              last=n == len(parts) or not gid, message=message or str(info.get("message") or ""),
-                             actor=str(info.get("actor") or "user"), ducky=str(info.get("ducky") or ""))
+                             actor=actor, ducky=ducky)
             made += 1
     return made
+
+
+def _actors(ctx: Ctx, now: float) -> dict[str, tuple[str, str]]:
+    """Unit → (actor, ducky) of who changed it here last (the activity this PC noted)."""
+    out: dict[str, tuple[str, str]] = {}
+    for act in space_vcs.activity(ctx.account, ctx.space, now=now):
+        if act["plugin_id"] == ctx.plugin and act["unit"] not in out:
+            out[act["unit"]] = ("agent" if act["actor"] == "agent" else "user", str(act["ducky"] or ""))
+    return out
 
 
 def _waiting(ctx: Ctx) -> set[ItemId]:
@@ -444,7 +512,7 @@ def _push_cs(ctx: Ctx, cs: dict[str, Any], *, now: float, fresh: bool | None = N
             row = _row_of_unit(lk.unit)
             if row:
                 repo.set_state(ctx.account, ctx.space, ctx.plugin, *row, "locked_out",
-                               f"Locked by {person(lk.user_name, lk.user)}")
+                               f"Locked by {holder(ctx.account, ctx.space, lk.user, lk.user_name, lk.device)[0]}")
         return _Out("locked")
     if isinstance(res, Refused):
         space_vcs.cs_delete(ctx.account, ctx.space, cs["cs_id"])
@@ -867,7 +935,7 @@ class _Apply:
         if gid is None:
             gid = self._merge_groups[by] = f"merge-{uuid.uuid4().hex}"
             space_vcs.group_add_closed(self.conn, gid, self.ctx.plugin,
-                                       message=f"Merged with {person(by)}'s change" if by else "Merged with a change")
+                                       message=f"Merged with a change by {person(by)}" if by else "Merged with a change")
         return gid
 
     def one(self, it: IncomingItem, seq: int, by: str, at: float, prep: _Prep | None, *,
@@ -1091,6 +1159,13 @@ def _fetch_bases(ctx: Ctx, wanted: Iterable[tuple[str, int]]) -> dict[tuple[str,
     return out
 
 
+def _by(ctx: Ctx, it: IncomingItem, cs: IncomingChangeset) -> str:
+    """:func:`author` of an incoming item: its own author, else its changeset's."""
+    if it.by and it.by != cs.by:
+        return it.by
+    return author(ctx.account, ctx.space, cs.by, cs.device, cs.actor, cs.ducky)
+
+
 def _apply(ctx: Ctx, changesets: list[IncomingChangeset], *, force: bool = False) -> dict[str, Any]:
     """Download, then apply ``changesets`` in one transaction (the head moves to the last
     one's seq). ``force``: a clean row takes theirs even at the same or a newer rev (a
@@ -1106,12 +1181,12 @@ def _apply(ctx: Ctx, changesets: list[IncomingChangeset], *, force: bool = False
     for cs in changesets:
         for it in cs.items:
             if it.kind == TREE:
-                tree.append((it, int(it.seq or cs.seq), it.by or cs.by, float(it.at or cs.at)))
+                tree.append((it, int(it.seq or cs.seq), _by(ctx, it, cs), float(it.at or cs.at)))
                 continue
             if it.kind not in KINDS:
                 continue
             seq = int(it.seq or cs.seq)
-            latest[it.id] = (it, seq, it.by or cs.by, float(it.at or cs.at))
+            latest[it.id] = (it, seq, _by(ctx, it, cs), float(it.at or cs.at))
             unit = it.unit or unit_of(it.kind, it.key)
             units[unit] = max(units.get(unit, 0), seq)
     work = []
@@ -1833,7 +1908,8 @@ def _push_tree_cs(ctx: Ctx, cs: dict[str, Any], *, now: float, fresh: bool | Non
             if lk.unit in named:
                 fid, unit = named[lk.unit]
                 ff.unit_set_state(*a, fid, unit, "quarantined",
-                                  f"Changed here while {person(lk.user_name, lk.user)} holds it")
+                                  f"Changed here while "
+                                  f"{holder(ctx.account, ctx.space, lk.user, lk.user_name, lk.device)[0]} holds it")
         return _Out("locked")
     if isinstance(res, Refused):
         space_vcs.cs_delete(ctx.account, ctx.space, cs["cs_id"])
@@ -2095,7 +2171,7 @@ def _wait_behind_update(ctx: Ctx, waiting: list[IncomingChangeset]) -> None:
     read-only so nobody edits a stale base. An empty list clears it."""
     a = (ctx.account, ctx.space, ctx.plugin)
     before = space_vcs.incoming_queue_get(*a)
-    space_vcs.incoming_queue_put(*a, count=len(waiting), by=[cs.by for cs in waiting],
+    space_vcs.incoming_queue_put(*a, count=len(waiting), by=[author(ctx.account, ctx.space, cs.by, cs.device, cs.actor, cs.ducky) for cs in waiting],
                                  units=[i.unit for cs in waiting for i in cs.items if i.unit],
                                  seq=max((cs.seq for cs in waiting), default=0))
     if before["count"] or waiting:
@@ -2293,8 +2369,11 @@ def resolve_unit(account: str, space: str, plugin: str, backend: Any, folder_id:
     elif choice == "mine":
         held = space_vcs.foreign_lock(*a, tf.tree_unit(backend, space, folder.id, unit))
         if held and c is None:
-            return {"ok": False, "error": f"{_who(held['holder_name'], held['holder_user'])} still holds it. "
-                                          "Ask them to release it first."}
+            who, pc = holder_of(account, space, held)
+            if pc:
+                return {"ok": False, "error": f"It's still open on your other PC, {pc}. "
+                                              "Close it there (or release it) first."}
+            return {"ok": False, "error": f"{_who(who)} still holds it. Ask them to release it first."}
         out = _keep_mine(account, space, plugin, folder, unit, pid, _held_items(c), conflict=c is not None)
     elif choice in ("theirs", "both"):
         if backend is None:
@@ -2426,7 +2505,7 @@ def folder_rows(account: str, space: str, plugin: str, backend: Any = None) -> l
                 state = "incoming"
             out.append({"folder_id": folder.id, "unit": u["unit"], "unitId": uid(u["unit"]),
                         "name": _unit_display(folder, u["unit"]), "state": state, "holder": u.get("holder", ""),
-                        "mine": uid(u["unit"]) in mine, "files": u["files"], "bytes": u["bytes"],
+                        "elsewhere": u.get("elsewhere", ""), "mine": uid(u["unit"]) in mine, "files": u["files"], "bytes": u["bytes"],
                         "reason": u["reason"]})
     return out
 
@@ -2737,7 +2816,7 @@ def _tell_lock_lost(lk: Mapping[str, Any], *, kept: bool) -> None:
         _log.debug("telling about a lost lock failed", exc_info=True)
 
 
-def _lock_answer(unit: str, res: Any) -> dict[str, Any]:
+def _lock_answer(account: str, space: str, unit: str, res: Any) -> dict[str, Any]:
     if isinstance(res, (Granted, Held)):
         return {"unit": unit, "ok": True, "state": "granted" if isinstance(res, Granted) else "held",
                 "fence": res.fence, "leaseLeft": res.lease_left}
@@ -2745,9 +2824,10 @@ def _lock_answer(unit: str, res: Any) -> dict[str, Any]:
         return {"unit": unit, "ok": False, "state": "behind", "seq": res.seq, "by": person(res.by) if res.by else "",
                 "error": f"{_who(res.by)} changed this after your copy. Sync first."}
     if isinstance(res, LockInfo):
-        who = person(res.user_name, res.user)
-        return {"unit": unit, "ok": False, "state": "locked", "holder": who, "since": res.since,
-                "leaseLeft": res.lease_left, "error": f"Locked by {who}"}
+        who, pc = holder(account, space, res.user, res.user_name, res.device)
+        error = f"It's open on your other PC, {pc}: locked there" if pc else f"Locked by {who}"
+        return {"unit": unit, "ok": False, "state": "locked", "holder": who, "elsewhere": pc, "since": res.since,
+                "leaseLeft": res.lease_left, "error": error}
     return {"unit": unit, "ok": False, "state": "error", "error": "No answer for this unit."}
 
 
@@ -2791,7 +2871,7 @@ def acquire(account: str, space: str, plugin: str, backend: Any, units: list[tup
                                since=since, lease_left=r.lease_left, fence=r.fence, mine=True, reason=reason, now=now)
         elif isinstance(r, LockInfo):
             _cache_lock(ctx, r, now)
-        out[lu.unit] = _lock_answer(lu.unit, r)
+        out[lu.unit] = _lock_answer(account, space, lu.unit, r)
     return out
 
 
@@ -2936,6 +3016,15 @@ def with_devices(old: Any, roster: dict[str, Any]) -> dict[str, Any]:
     while len(known) > DEVICES_MAX:
         known.pop(next(iter(known)))
     return {**roster, "devices": known}
+
+
+def _lock_holder(account: str, space: str, lk: Mapping[str, Any]) -> dict[str, str]:
+    """A lock row's ``holder`` ('' when it is this PC's) and ``elsewhere`` (the PC's name
+    when this account holds it on another PC)."""
+    if lk["mine"]:
+        return {"holder": "", "elsewhere": ""}
+    who, pc = holder_of(account, space, lk)
+    return {"holder": who, "elsewhere": pc}
 
 
 def device_names(account: str, space: str) -> dict[str, str]:
@@ -3099,7 +3188,8 @@ def restore(account: str, space: str, plugin: str, backend: Any, *, items: Mappi
     got = _call(backend.revert, space, plugin, items=dict(items) if items is not None else None, to_seq=to_seq,
                 message=message, **extra)
     if isinstance(got, Locked):
-        who = ", ".join(sorted({person(lk.user_name, lk.user) for lk in got.units})) or person()
+        who = ", ".join(sorted({holder(account, space, lk.user, lk.user_name, lk.device)[0]
+                                for lk in got.units})) or person()
         return {"ok": False, "error": f"Locked by {who}"}
     if not isinstance(got, Committed):
         return {"ok": False, "error": reason_of(got) or "The server didn't restore it."}
@@ -3159,7 +3249,7 @@ def status(account: str, space: str, plugin: str, *, now: float | None = None) -
         "blocked": [{"kind": b["kind"], "key": b["key"], "error": b["error"], "attempts": int(b["attempts"]),
                      "nextTry": float(b["next_try"])} for b in space_vcs.blocked(account, space, plugin)],
         "locks": [{"unit": lk["unit"], "name": lk["name"] or _unit_name(lk["unit"]),
-                   "holder": "" if lk["mine"] else person(lk["holder_name"], lk["holder_user"]),
+                   **_lock_holder(account, space, lk),
                    "mine": lk["mine"], "since": lk["since"], "leaseLeft": lk["lease_left"]} for lk in locks],
         "people": list((roster or {}).get("people") or []) if isinstance(roster, dict) else [],
     }
