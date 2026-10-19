@@ -143,15 +143,23 @@
   transition: none;
 }
 
-.settings-view-sidebar-resize-handle {
-  width: 1px;
-  flex-shrink: 0;
-  background-color: var(--border);
+/* The left column floats as a card, like the app's sidebars: a gap of page background
+   around it, the gap is the resize grip, and grabbing it lights the card's edge. */
+.settings-view-sidebar-shell {
+  box-sizing: border-box;
+  padding: 6px 0 6px 6px;
 }
 
+.settings-view-sidebar-resize-handle,
 .settings-view-sidebar-resize-handle:hover,
 .settings-view-sidebar-resize-handle.is-dragging {
-  background-color: var(--accent);
+  width: 6px;
+  flex-shrink: 0;
+  background-color: transparent;
+}
+
+.settings-view-sidebar-shell:has(> .settings-view-sidebar-resize-handle:is(:hover, .is-dragging)) > .settings-view-sidebar {
+  border-right-color: var(--accent);
 }
 
 .settings-view-sidebar {
@@ -163,8 +171,11 @@
   flex-direction: column;
   gap: 8px;
   padding: 12px 10px;
+  box-sizing: border-box;
   background-color: var(--sidebar);
-  border-right: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  overflow: hidden;
   min-height: 0;
 }
 

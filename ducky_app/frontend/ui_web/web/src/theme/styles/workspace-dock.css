@@ -320,6 +320,13 @@ body.appearance-skin-active .workspace-dock-layout--default:not(.is-narrow) .doc
   border-left-color: var(--accent);
 }
 
+/* Tree rows inside a card are rounded and inset, so hover, selection and the blue focus ring
+   sit inside the card instead of running into its border or the window edge. */
+.workspace-dock-layout--default:not(.is-narrow) .dock-rail .sidebar-tree-row {
+  margin-inline: 4px;
+  border-radius: 6px;
+}
+
 /* The chat box ends level with the sidebar cards. */
 .workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .chat-pane-input-area {
   padding-bottom: var(--dock-gap);
