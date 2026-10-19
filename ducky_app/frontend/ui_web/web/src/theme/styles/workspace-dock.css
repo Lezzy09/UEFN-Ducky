@@ -217,6 +217,63 @@
   background: var(--panel-header);
 }
 
+/* The window-side edge of each sidebar runs flush into the window: no gap, line or corner. */
+.workspace-dock-layout--default:not(.is-narrow) .dock-rail--left {
+  padding-left: 0;
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .dock-rail--left .dock-rail-inner {
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .dock-rail--right {
+  padding-right: 0;
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .dock-rail--right .dock-rail-inner {
+  border-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* The editor's tab strip sits on the background too. The open tab is the same rounded pill
+   as a hovered one, a little stronger, instead of a Chrome-style tab cut out of a strip. */
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tabs-bar {
+  background-color: transparent;
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tab + .editor-tab {
+  border-left: none;
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tab.is-active {
+  background-color: transparent;
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tab.is-active > * {
+  position: relative;
+  z-index: 1;
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tab.is-active:not(.is-drop-before)::before {
+  top: calc(4px * var(--tab-scale, 1));
+  bottom: calc(4px * var(--tab-scale, 1));
+  left: calc(2px * var(--tab-scale, 1));
+  right: calc(2px * var(--tab-scale, 1));
+  width: auto;
+  height: auto;
+  background: var(--tab-active);
+  border-radius: calc(8px * var(--tab-scale, 1));
+  box-shadow: none;
+  z-index: 0;
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tab.is-active:not(.is-drop-after)::after {
+  display: none;
+}
+
 body.appearance-skin-active .workspace-dock-layout--default:not(.is-narrow) .dock-rail-inner {
   background: color-mix(in srgb, var(--bg-panel) 55%, transparent);
 }
