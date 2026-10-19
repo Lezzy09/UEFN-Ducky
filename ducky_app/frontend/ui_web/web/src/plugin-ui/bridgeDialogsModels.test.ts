@@ -13,7 +13,7 @@ vi.mock("./hostRecorder", () => ({ startRecording: host.rec.start, stopRecording
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => host.api, isRemote: () => false }));
 vi.mock("../contexts/ConfirmModalContext", () => ({ confirmFromHost: host.confirm, alertFromHost: host.alert }));
 
-import { handleBridgeRequest } from "./bridge";
+import { handleBridgeRequest, shouldForwardPluginPush } from "./bridge";
 import { BRIDGE_CHANNEL } from "./constants";
 
 afterEach(() => {
@@ -75,4 +75,13 @@ it("records from the microphone for a panel, scoped to that plugin", async () =>
   expect(host.rec.start).toHaveBeenCalledWith("island-media-kit");
   expect(await call("audio.recordStop", { id: "rec-1" })).toMatchObject({ ok: true, result: { mime: "audio/webm" } });
   expect(host.rec.stop).toHaveBeenCalledWith("island-media-kit", "rec-1");
+});
+
+it("never forwards the app's raw plugin_scope_changed push: the scope bar tells panels itself", async () => {
+  expect(await call("plugin.subscribe", { types: ["imk_project_changed", "plugin_scope_changed"] })).toMatchObject({ ok: true });
+  expect(shouldForwardPluginPush("plugin:imk:main", "island-media-kit", "imk_project_changed")).toBe(true);
+  expect(shouldForwardPluginPush("plugin:imk:main", "island-media-kit", "plugin_scope_changed")).toBe(false);
+  await call("plugin.subscribe", { types: [] }); // every type
+  expect(shouldForwardPluginPush("plugin:imk:main", "island-media-kit", "discord_message")).toBe(true);
+  expect(shouldForwardPluginPush("plugin:imk:main", "island-media-kit", "plugin_scope_changed")).toBe(false);
 });

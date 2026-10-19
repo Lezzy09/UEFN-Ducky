@@ -311,11 +311,18 @@ export const pluginPushSubscriptions = new Map<
   { pluginId: string; types: Set<string> }
 >();
 
+/** Events the host tells panels itself, in their documented shape: the scope bar sends
+ * `plugin_scope_changed` with `reason` and `keys`. The raw app push of that name (every
+ * sync round, lock and mode change, other plugins' too) carries no `reason`, so a panel
+ * that subscribed to it read each one as a switch and started over. */
+const HOST_TOLD_EVENTS = new Set(["plugin_scope_changed"]);
+
 export function shouldForwardPluginPush(
   tabId: string,
   pluginId: string,
   eventType: string,
 ): boolean {
+  if (HOST_TOLD_EVENTS.has(eventType)) return false;
   const sub = pluginPushSubscriptions.get(tabId);
   if (!sub || sub.pluginId !== pluginId) return false;
   if (sub.types.size === 0) return true;

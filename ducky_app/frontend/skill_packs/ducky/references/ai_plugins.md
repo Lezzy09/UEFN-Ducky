@@ -213,7 +213,7 @@ Panels are sandboxed iframes that talk to the host with `postMessage` on channel
 |---|---|
 | `plugin.call` | `{method, params}` → your RPC's return |
 | `plugin.info` | → `{pluginId, panelId, version, filePath}` (`filePath` in file editors) |
-| `plugin.subscribe` | `{types: [...]}`: host push events you want |
+| `plugin.subscribe` | `{types: [...]}`: host push events you want (`plugin_scope_changed` always comes from the host, with `reason`; subscribing to it adds nothing) |
 | `theme.get` | → `{vars}` (keys without `--`; the kit applies them) |
 | `prefs.get` / `prefs.set` | `{id}` / `{id, value}`: small per-plugin UI choices (follow the data scope) |
 | `scope.get` | → `{scope: {kind, label, spaceId, readOnly}}` |

@@ -56,7 +56,7 @@ await call("prefs.get", { id: "highScore" });
 |--------|--------|--------|
 | `plugin.info` | — | `{ pluginId, panelId, version }` |
 | `plugin.call` | `{ method, params? }` | result of `api.register_panel_rpc` |
-| `plugin.subscribe` | `{ types: string[] }` | `{ ok, types }` — host push events forwarded to iframe |
+| `plugin.subscribe` | `{ types: string[] }` | `{ ok, types }` — host push events forwarded to iframe (never `plugin_scope_changed`: the host sends that one itself, with `reason`) |
 | `theme.get` | — | `{ vars }` — Appearance CSS vars (keys without `--`) |
 | `prefs.get` | optional `{ id }` | `{ prefs }` or `{ id, value }` |
 | `prefs.set` | `{ id, value }` (bool/string/number/null) | `{ ok: true }` |
