@@ -1397,3 +1397,52 @@ def test_a_required_prefix_waits_for_its_lock_and_refuses_without_it(team_pc, mo
         assert space_vcs.lock_request_get(pc.account, "spaceT", "cards", "doc:card.pip")["state"] == "pending"
     finally:
         (folder / "plugin.json").unlink(missing_ok=True)
+
+
+def test_what_a_person_changes_locks_to_them_by_default(team_pc, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Owner, Oct 19 2026: in a shared plugin the item someone changes is theirs (hard lock)
+    until 5 minutes after their last change, with no plugin code: every plugin with a
+    manifest asks for the lock on the first change, named by the item's own name, and its bar
+    hears when the lock is granted. ``"data_locks": {"<prefix>": "none"}`` opts out."""
+    import json
+
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import store, vcs_engine
+    from backend.uefn_plugins.ledger import LockUnit
+
+    pc, ben, _ = team_pc
+    pushed: list[dict[str, Any]] = []
+    from frontend.ui_web import agent_modes
+
+    monkeypatch.setattr(agent_modes, "push_ui_event", pushed.append)
+    folder = store.plugin_dir("cards")
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "plugin.json").write_text(json.dumps({"id": "cards", "data_locks": {"log.": "none"}}))
+    try:
+        assert scopes.data_lock_policy("cards", "project.a") == "auto"
+        assert scopes.data_lock_policy("cards", "log.today") == ""
+        pc.data.put("project.a", {"name": "Untitled island 1", "clips": []})
+        pc.data.put("log.today", {"n": 1})
+        asked = space_vcs.lock_request_get(pc.account, "spaceT", "cards", "doc:project.a")
+        assert (asked["state"], asked["name"]) == ("pending", "Untitled island 1")
+        assert space_vcs.lock_request_get(pc.account, "spaceT", "cards", "doc:log.today") is None
+
+        assert vcs_engine.serve_lock_requests(pc.account, lambda space, plugin: pc.backend) == 1
+        mine = {lk["unit"]: lk["name"] for lk in space_vcs.locks(pc.account, "spaceT", "cards") if lk["mine"]}
+        assert mine == {"doc:project.a": "Untitled island 1"}
+        assert {"type": "plugin_scope_changed", "plugins": ["cards"], "status": True} in pushed
+
+        # Ben's own item: refused here with his name, and the bar was told when it showed up.
+        pushed.clear()
+        ben.client.lock("spaceT", "cards", [LockUnit("doc:project.b", "Crash Course")], "best", {})
+        vcs_engine.refresh(pc.account, "spaceT", ["cards"], pc.backend)
+        assert {"type": "plugin_scope_changed", "plugins": ["cards"], "status": True} in pushed
+        with pytest.raises(scopes.LockedOut, match="Crash Course is locked by Ben"):
+            pc.data.put("project.b", {"name": "Crash Course"})
+    finally:
+        (folder / "plugin.json").unlink(missing_ok=True)
+
+    # Ducky's own data (no plugin manifest) keeps its own rules.
+    assert scopes.data_lock_policy("ducky.automations", "graph.x") == ""
+    assert scopes.item_label({"title": " Trailer 1 "}, "seq.1") == "Trailer 1"
+    assert scopes.item_label(None, "art/logo.png") == "logo.png"

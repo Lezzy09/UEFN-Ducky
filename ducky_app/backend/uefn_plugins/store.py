@@ -77,11 +77,13 @@ def appdata_ai_plugins_dir() -> Path:
     return appdata_dir() / AI_PLUGINS_DIR
 
 
-# Manifest ``"data_locks": {"<key prefix>": "auto" | "required"}``: which of a plugin's
-# shared docs and files one person holds while they edit them. ``auto`` takes the lock on
-# the first change (the write goes ahead either way); ``required`` waits for it and refuses
-# the write without it. A prefix is the start of a doc key or file path ('' for all).
-DATA_LOCK_POLICIES = ("auto", "required")
+# Manifest ``"data_locks": {"<key prefix>": "auto" | "required" | "none"}``: how a plugin's
+# shared docs and files lock while one person edits them. Without an entry every item is
+# ``auto``: the first change takes the lock (the write goes ahead either way) and teammates
+# can't change the item until it's released. ``required`` waits for the lock and refuses the
+# write without it; ``none`` never locks. A prefix is the start of a doc key or file path
+# ('' for all).
+DATA_LOCK_POLICIES = ("auto", "required", "none")
 _DATA_LOCK_PREFIX_RE = re.compile(r"^[a-z0-9._/-]{0,256}$")
 # Manifest ``"data_local": ["<key prefix>", ...]``: docs and files that belong to this PC
 # (diagnostics, per-device state). They stay in the plugin's Local copy whatever copy it
@@ -125,8 +127,8 @@ def manifest_data_errors(manifest: dict[str, Any]) -> list[str]:
         return errors
     locks = manifest.get("data_locks")
     if not isinstance(locks, dict):
-        return [*errors, 'plugin.json "data_locks" must be an object: {"<doc key or file path prefix>": "auto" or '
-                         '"required"}.']
+        return [*errors, 'plugin.json "data_locks" must be an object: {"<doc key or file path prefix>": "auto", '
+                         '"required" or "none"}.']
     for prefix, policy in locks.items():
         if not _DATA_LOCK_PREFIX_RE.match(str(prefix)):
             errors.append(
@@ -134,7 +136,7 @@ def manifest_data_errors(manifest: dict[str, Any]) -> list[str]:
                 "and . _ / - (256 at most)."
             )
         elif policy not in DATA_LOCK_POLICIES:
-            errors.append(f'plugin.json "data_locks" {prefix!r} is {policy!r}: use "auto" or "required".')
+            errors.append(f'plugin.json "data_locks" {prefix!r} is {policy!r}: use "auto", "required" or "none".')
     if locks and sharing is False:
         errors.append('plugin.json has "data_locks" but "data_sharing": false: nothing is shared, so remove one.')
     return errors

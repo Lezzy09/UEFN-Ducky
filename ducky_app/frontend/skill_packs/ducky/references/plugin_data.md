@@ -101,13 +101,17 @@ code for it; these rules decide how well it works for people editing together.
   it after). While someone else holds an item, a write to it raises `PermissionError`
   ("card.pip is locked by Ana since 3:02 PM. Your change wasn't saved."). Catch it in
   tools and return `{"ok": False, "error": str(exc)}`, as for read-only copies.
-- A plugin whose items must be held while one person edits them declares
-  `"data_locks": {"<key prefix>": "auto" | "required"}` in `plugin.json` (the start of
-  a doc key or file path; the longest match wins; `""` is every item):
-  - `auto`: the first change takes the lock for this PC; the write goes ahead either
-    way. It is released 5 minutes after the last change went out.
+- **Every shared item locks to whoever changes it**, with no plugin code: the first change
+  takes the lock for this PC (the write goes ahead), teammates see "Locked by Ana: <the
+  item's name>" and can't change it until 5 minutes after Ana's last change went out, she
+  releases it, or they ask. The lock is named by the doc's own `name`, `title` or `label`
+  field (else the key), so give docs a `name`. Change it per prefix with
+  `"data_locks": {"<key prefix>": "auto" | "required" | "none"}` in `plugin.json` (the
+  start of a doc key or file path; the longest match wins; `""` is every item):
+  - `auto` (the default): as above.
   - `required`: the write waits up to 3 s for the lock and is refused without it.
-  Leave it out for data that merges well (most plugins).
+  - `none`: never locks, for data many people append to at once (logs, chat rows).
+  Items under `data_local` never lock: they never leave this PC.
 - **Conflicts.** Docs edited on two PCs at once merge field by field. Arrays of objects
   that all have an `id` merge by `id`; other arrays are replaced whole. When both sides
   changed the same field, the team's version stays and this PC's is kept as a conflict

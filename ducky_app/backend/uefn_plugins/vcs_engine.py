@@ -208,7 +208,6 @@ def _unit_name(unit: str) -> str:
     return unit.split(":", 1)[1] if unit.startswith(("doc:", "asset:")) else unit
 
 
-LABEL_FIELDS = ("name", "title", "label")  # a doc's own name, in this order
 _LABELS: dict[tuple[str, str, str, str], tuple[str, str]] = {}  # (account, space, plugin, key) → (sha256, label)
 _LABELS_MAX = 2000
 
@@ -228,12 +227,8 @@ def unit_label(account: str, space: str, plugin: str, unit: str) -> str:
     hit = _LABELS.get((account, space, plugin, key))
     if hit and hit[0] == row["sha256"]:
         return hit[1]
-    label = key
     try:
-        value = json.loads(data_crypto.open_text(row["value"], account))
-        if isinstance(value, Mapping):
-            label = next((str(value[f]).strip()[:80] for f in LABEL_FIELDS
-                          if isinstance(value.get(f), str) and value[f].strip()), key)
+        label = scopes.item_label(json.loads(data_crypto.open_text(row["value"], account)), key)
     except Exception:  # noqa: BLE001 — a doc that can't be read here is named by its key
         label = key
     if len(_LABELS) >= _LABELS_MAX:
@@ -2622,8 +2617,9 @@ def refresh(account: str, space: str, plugins: list[str], backend: Any, *, now: 
         incoming[plugin] = max(0, remote - int(head["seq"]))
     _locks_from(account, space, got.locks, now=now, asked_at=asked_at)
     roster = {"people": [dict(p) for p in got.people], "usage": dict(got.usage)}
-    space_vcs.presence_put(account, space, with_devices(space_vcs.presence_get(account, space)["roster"], roster),
-                           now=now)
+    old = space_vcs.presence_get(account, space)["roster"]
+    space_vcs.presence_put(account, space, with_devices(old, roster), now=now)
+    _tell_bars(_moved(_roster_marks(old), _roster_marks(roster)))
     return {"state": "reset" if reset else "ok", "error": "", "incoming": incoming, "epoch": got.epoch,
             "importing": dict(got.importing)}
 
@@ -2637,6 +2633,51 @@ def _cache_lock(ctx: Ctx, lk: LockInfo, now: float, reason: str = "") -> None:
                        fence=lk.fence, mine=lk.mine, reason=reason or lk.reason, now=now)
 
 
+def _tell_bars(plugins: Iterable[str]) -> None:
+    """These plugins' bars read their status again now (who holds what, who is here): a
+    status push, so their panels don't re-read any data."""
+    names = sorted({str(p) for p in plugins if p})
+    if not names:
+        return
+    try:
+        from frontend.ui_web.agent_modes import push_ui_event
+
+        push_ui_event({"type": "plugin_scope_changed", "plugins": names, "status": True})
+    except Exception:  # noqa: BLE001 — the bar's next read shows it
+        _log.debug("telling the bars failed", exc_info=True)
+
+
+def _lock_marks(account: str, space: str) -> dict[str, frozenset[tuple[str, bool, str]]]:
+    """Per plugin, which units are locked here and by whom: to tell its bar when that moves."""
+    marks: dict[str, set[tuple[str, bool, str]]] = {}
+    for lk in space_vcs.locks(account, space):
+        marks.setdefault(str(lk["plugin_id"]), set()).add(
+            (str(lk["unit"]), bool(lk["mine"]), str(lk.get("holder_user") or "")))
+    return {p: frozenset(v) for p, v in marks.items()}
+
+
+def _roster_marks(roster: Any) -> dict[str, frozenset[tuple[str, str, bool, tuple[str, ...]]]]:
+    """Per plugin, who is in it and what they edit (a roster's people): to tell its bar."""
+    marks: dict[str, set[tuple[str, str, bool, tuple[str, ...]]]] = {}
+    people = roster.get("people") if isinstance(roster, Mapping) else None
+    for p in people if isinstance(people, list) else []:
+        plugins = p.get("plugins") if isinstance(p, Mapping) else None
+        if not isinstance(plugins, Mapping):
+            continue
+        for plugin, here in plugins.items():
+            if not isinstance(here, Mapping):
+                continue
+            editing = tuple(sorted({str(e.get("unitName") or "") for e in here.get("editing") or []
+                                    if isinstance(e, Mapping)}))
+            marks.setdefault(str(plugin), set()).add(
+                (str(p.get("user") or ""), str(p.get("device") or ""), bool(here.get("viewing")), editing))
+    return {p: frozenset(v) for p, v in marks.items()}
+
+
+def _moved(before: Mapping[str, Any], after: Mapping[str, Any]) -> set[str]:
+    return {p for p in set(before) | set(after) if before.get(p) != after.get(p)}
+
+
 def _locks_from(account: str, space: str, live: Iterable[LockInfo], *, now: float,
                 asked_at: float | None = None) -> dict[str, Any]:
     """The server's live locks replace the cache. Rows locked out by a lock that went are
@@ -2644,7 +2685,9 @@ def _locks_from(account: str, space: str, live: Iterable[LockInfo], *, now: floa
     conflict (kept, never pushed over theirs without the person), and the person is told
     about every lock of theirs that went."""
     rows = [asdict(lk) for lk in live]
+    before = _lock_marks(account, space)
     change = space_vcs.locks_replace(account, space, rows, now=now, asked_at=asked_at)
+    _tell_bars(_moved(before, _lock_marks(account, space)))
     for lk in change["freed"]:
         row = _row_of_unit(lk["unit"])
         if row:
@@ -2847,8 +2890,10 @@ def ask(account: str, space: str, plugin: str, backend: Any, unit: str) -> dict[
 
 def serve_lock_requests(account: str, backend_for: Callable[[str, str], Any], *,
                         now: float | None = None) -> int:
-    """Answer writers waiting for a lock (``required`` prefixes). Returns how many."""
+    """Answer writers waiting for a lock (an item's first change, a ``required`` prefix).
+    The plugins' bars hear it at once. Returns how many."""
     served = 0
+    told: set[str] = set()
     for req in space_vcs.lock_requests_pending(account):
         backend = backend_for(req["space_id"], req["plugin_id"])
         if backend is None:
@@ -2860,6 +2905,8 @@ def serve_lock_requests(account: str, backend_for: Callable[[str, str], Any], *,
         space_vcs.lock_request_answer(account, req["space_id"], req["plugin_id"], req["unit"],
                                       "granted" if got["ok"] else "refused", got.get("error", ""))
         served += 1
+        told.add(str(req["plugin_id"]))
+    _tell_bars(told)
     return served
 
 
@@ -2947,6 +2994,7 @@ def beat(account: str, space: str, backend: Any, plugins: Iterable[str], *, forc
     roster = dict(last["roster"]) if isinstance(last["roster"], dict) else {}
     roster["people"] = [dict(p) for p in got.people]
     space_vcs.presence_put(account, space, with_devices(last["roster"], roster), sent_sha=sha, now=now)
+    _tell_bars(_moved(_roster_marks(last["roster"]), _roster_marks(roster)))
     _locks_from(account, space, got.locks, now=now, asked_at=asked_at)
     return {"ok": True, "people": len(got.people)}
 

@@ -231,9 +231,13 @@ _LOCKS: dict[str, tuple[float, dict[str, str]]] = {}  # manifest path → (mtime
 
 
 def data_lock_policy(plugin: str, key: str) -> str:
-    """``auto``, ``required`` or '' for a doc key or file path of ``plugin``: the manifest's
-    ``"data_locks": {"<key prefix>": "auto" | "required"}``, the longest prefix winning.
-    Entries that aren't valid are ignored (``ducky_plugin_validate`` names them)."""
+    """``auto``, ``required`` or '' for a doc key or file path of ``plugin``. Every plugin's
+    shared items lock by default (``auto``): the first change takes the lock, and the item
+    stays the person's until 5 minutes after their last change went out, so two people never
+    overwrite each other. The manifest's ``"data_locks": {"<key prefix>": "auto" |
+    "required" | "none"}`` changes that per prefix, the longest prefix winning (``none``:
+    no lock). '' for data no plugin manifest describes (Ducky's own workflows). Entries
+    that aren't valid are ignored (``ducky_plugin_validate`` names them)."""
     from backend.uefn_plugins.store import PLUGIN_MANIFEST, data_locks, load_plugin_manifest, plugin_dir
 
     try:
@@ -246,7 +250,21 @@ def data_lock_policy(plugin: str, key: str) -> str:
         hit = (mtime, data_locks(load_plugin_manifest(plugin) or {}))
         _LOCKS[str(path)] = hit
     matches = [prefix for prefix in hit[1] if key.startswith(prefix)]
-    return hit[1][max(matches, key=len)] if matches else ""
+    policy = hit[1][max(matches, key=len)] if matches else "auto"
+    return "" if policy == "none" else policy
+
+
+def item_label(value: Any, key: str) -> str:
+    """What people call an item: a doc's own ``name``, ``title`` or ``label`` field
+    ("Untitled island 1", not ``project.mvbtpazj``), a file's name, else its key."""
+    if isinstance(value, dict):
+        for field in ("name", "title", "label"):
+            text = value.get(field)
+            if isinstance(text, str) and text.strip():
+                return text.strip()[:80]
+    if "/" in key:
+        return key.rsplit("/", 1)[-1] or key
+    return key
 
 
 _LOCAL_PREFIXES: dict[str, tuple[float, tuple[str, ...]]] = {}  # manifest path → (mtime, its "data_local")
@@ -848,11 +866,12 @@ def _lock_wanted(scope: dict[str, Any], plugin: str, unit: str, name: str, *, wa
         time.sleep(0.1)
 
 
-def _team_write(scope: dict[str, Any], plugin: str, kind: str, key: str) -> str | None:
+def _team_write(scope: dict[str, Any], plugin: str, kind: str, key: str, name: str = "") -> str | None:
     """Before a write to a shared copy on the new sync (a team copy): refused while someone
-    else holds the item's lock; a ``data_locks`` prefix takes the lock first; the write
-    group, if one is open, is stored. Returns the group id ('' for none), or None for a
-    copy on the older sync (no locks, groups or presence there)."""
+    else holds the item's lock; the item's lock is asked for (:func:`data_lock_policy`,
+    named ``name`` so teammates read "Locked by Ana: Untitled island 1"); the write group,
+    if one is open, is stored. Returns the group id ('' for none), or None for a copy on
+    the older sync (no locks, groups or presence there)."""
     from backend.store.repos import space_vcs
 
     account, space = scope["account"], scope["id"]
@@ -868,7 +887,7 @@ def _team_write(scope: dict[str, Any], plugin: str, kind: str, key: str) -> str 
         raise _locked_out(plugin, unit, held)
     policy = data_lock_policy(plugin, key)
     if policy:
-        _lock_wanted(scope, plugin, unit, key, wait=policy == "required")
+        _lock_wanted(scope, plugin, unit, name or item_label(None, key), wait=policy == "required")
     group = open_group(plugin)
     if group is None or group.panel:
         return ""
@@ -1089,7 +1108,7 @@ class PluginData:
         if old and not old["deleted"] and old["sha256"] == sha:
             return {"ok": True, "key": key, "changed": False}
         shared = s["kind"] == "shared" and not sensitive
-        group = _team_write(s, self.plugin_id, "doc", key) if shared else None
+        group = _team_write(s, self.plugin_id, "doc", key, item_label(value, key)) if shared else None
         repo.put(s["account"], s["id"], self.plugin_id, "doc", key, value=seal_text(raw.decode("utf-8"), s["account"]),
                  size=len(raw), sha256=sha, dirty=shared, sensitive=sensitive, group_id=group or "")
         if group is not None:

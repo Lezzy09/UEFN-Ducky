@@ -148,11 +148,12 @@ def test_data_sharing_and_data_locks_must_say_something_valid() -> None:
         "Scene.": "auto", "card.": "always", "art/": "required"}}))
     assert "\"data_sharing\" is 'yes'" in text
     assert "key 'Scene.' isn't the start of a doc key or file path" in text
-    assert "'card.' is 'always': use \"auto\" or \"required\"" in text
+    assert "'card.' is 'always': use \"auto\", \"required\" or \"none\"" in text
     assert "'art/'" not in text  # a file path prefix
     assert len(text.splitlines()) == 3
     assert check_manifest({"data_locks": ["scene."]}) == [
-        'plugin.json "data_locks" must be an object: {"<doc key or file path prefix>": "auto" or "required"}.']
+        'plugin.json "data_locks" must be an object: {"<doc key or file path prefix>": "auto", "required" or "none"}.']
+    assert check_manifest({"data_locks": {"log.": "none"}}) == []
     both = check_manifest({"data_sharing": False, "data_locks": {"scene.": "auto"}})
     assert both == ['plugin.json has "data_locks" but "data_sharing": false: nothing is shared, so remove one.']
     assert data_locks({"data_sharing": False, "data_locks": {"scene.": "auto"}}) == {}
@@ -185,7 +186,7 @@ def test_a_plugin_with_bad_data_locks_does_not_install() -> None:
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("plugin.json", json.dumps({"id": "lockdemo", "data_locks": {"scene.": "always"}}))
     out = store.import_plugin_from_bytes(buf.getvalue(), source="local")
-    assert out == {"ok": False, "error": 'plugin.json "data_locks" \'scene.\' is \'always\': use "auto" or "required".'}
+    assert out == {"ok": False, "error": 'plugin.json "data_locks" \'scene.\' is \'always\': use "auto", "required" or "none".'}
     assert not store.plugin_dir("lockdemo").exists()
 
 
