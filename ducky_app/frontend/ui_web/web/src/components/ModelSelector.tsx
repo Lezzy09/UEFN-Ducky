@@ -790,11 +790,51 @@ export function ModelSelector({
         : null;
     const catalogPending = !catalogRows && !isModelsCatalogReady();
     const apiHasPick = !!apiSelected && viewApiRows.some((m) => m.id === apiSelected);
-    // "API", then one section per coding agent: every one an accordion the person can fold
-    // (an API list holds dozens of models), remembered per gateway. A search keeps every
-    // section open; the picked model never stops its section folding.
+    const agentSection = (agent: CodingAgentDto) => {
+      const rows = agentModels(agent.id);
+      const filtered = query ? rows.filter((m) => m.name.toLowerCase().includes(query)) : rows;
+      const unavailable = agentIsUnavailable(agent.id);
+      const hasPick = codingAgent === agent.id && filtered.some((m) => m.id === normalizedSelectedModel);
+      return (
+        <ModelSection
+          key={agent.id}
+          storageKey={`${gw.id}:${agent.id}`}
+          label={agent.label}
+          forceOpen={!!query}
+          holdsPick={hasPick}
+          disabled={unavailable}
+          meta={
+            agentsChecking ? (
+              <span className="model-selector-unavailable-tag">Checking…</span>
+            ) : unavailable ? (
+              <span className="model-selector-unavailable-tag">Unavailable</span>
+            ) : (
+              <span className="model-selector-provider-count">{filtered.length}</span>
+            )
+          }
+        >
+          {filtered.map((m) =>
+            renderRow(m, {
+              agentId: agent.id,
+              selected: codingAgent === agent.id && m.id === normalizedSelectedModel,
+              disabled: unavailable,
+            }),
+          )}
+          {filtered.length === 0 && !unavailable && !agentsChecking ? (
+            <div className="model-selector-empty">No models.</div>
+          ) : null}
+        </ModelSection>
+      );
+    };
+    const readyAgents = gw.nestedAgents.filter((a) => !agentIsUnavailable(a.id));
+    const otherAgents = gw.nestedAgents.filter((a) => agentIsUnavailable(a.id));
+    // Logged-in coding agents (Claude Code, Codex…), then "API", then agents that are not
+    // set up: every one an accordion the person can fold (an API list holds dozens of
+    // models), remembered per gateway. A search keeps every section open; the picked model
+    // never stops its section folding.
     return (
       <>
+        {readyAgents.map(agentSection)}
         {(viewApiRows.length > 0 || catalogPending || gw.nestedAgents.length === 0) && (
           <ModelSection
             storageKey={`${gw.id}:api`}
@@ -816,42 +856,7 @@ export function ModelSelector({
             )}
           </ModelSection>
         )}
-        {gw.nestedAgents.map((agent) => {
-          const rows = agentModels(agent.id);
-          const filtered = query ? rows.filter((m) => m.name.toLowerCase().includes(query)) : rows;
-          const unavailable = agentIsUnavailable(agent.id);
-          const hasPick = codingAgent === agent.id && filtered.some((m) => m.id === normalizedSelectedModel);
-          return (
-            <ModelSection
-              key={agent.id}
-              storageKey={`${gw.id}:${agent.id}`}
-              label={agent.label}
-              forceOpen={!!query}
-              holdsPick={hasPick}
-              disabled={unavailable}
-              meta={
-                agentsChecking ? (
-                  <span className="model-selector-unavailable-tag">Checking…</span>
-                ) : unavailable ? (
-                  <span className="model-selector-unavailable-tag">Unavailable</span>
-                ) : (
-                  <span className="model-selector-provider-count">{filtered.length}</span>
-                )
-              }
-            >
-              {filtered.map((m) =>
-                renderRow(m, {
-                  agentId: agent.id,
-                  selected: codingAgent === agent.id && m.id === normalizedSelectedModel,
-                  disabled: unavailable,
-                }),
-              )}
-              {filtered.length === 0 && !unavailable && !agentsChecking ? (
-                <div className="model-selector-empty">No models.</div>
-              ) : null}
-            </ModelSection>
-          );
-        })}
+        {otherAgents.map(agentSection)}
       </>
     );
   };
