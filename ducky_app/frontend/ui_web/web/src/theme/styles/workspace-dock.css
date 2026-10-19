@@ -320,13 +320,6 @@ body.appearance-skin-active .workspace-dock-layout--default:not(.is-narrow) .doc
   border-left-color: var(--accent);
 }
 
-/* Tree rows run the card's full width (hover and selection too, whatever the nesting). The
-   focused row is marked by a line above and below it, never on its sides, so nothing runs
-   into the card's border or the window edge. */
-.workspace-dock-layout--default:not(.is-narrow) .dock-rail .sidebar-tree-row.is-focused {
-  box-shadow: inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
-}
-
 /* The chat box ends level with the sidebar cards and runs the middle's full width (still
    centred at the chat column's width on a wide screen). */
 .workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .chat-pane-input-area {

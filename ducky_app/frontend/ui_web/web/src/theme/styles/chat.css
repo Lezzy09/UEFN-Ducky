@@ -783,11 +783,6 @@
   transition: none;
 }
 
-.chat-pane-input-box--focused {
-  border: 1px solid var(--border-focus);
-  box-shadow: none;
-}
-
 .chat-pane-input-box--voice {
   overflow: visible;
 }

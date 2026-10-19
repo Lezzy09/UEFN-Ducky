@@ -2762,10 +2762,10 @@ body.layout-sidebar-only .project-selector-title--sidebar-only {
   transition: background-color 0.15s ease, color 0.15s ease;
   color: var(--fg-dim);
 }
-.sidebar-tree-row:hover { background: var(--tab-hover); color: var(--fg); }
+/* Hover: the fill and a faint line above and below; a focused row has no ring of its own. */
+.sidebar-tree-row:hover { background: var(--tab-hover); color: var(--fg); box-shadow: inset 0 1px 0 var(--border), inset 0 -1px 0 var(--border); }
 .sidebar-tree-row.is-active { background: var(--tab-active); color: var(--fg); }
 .sidebar-tree-row.is-parent-selected { color: var(--fg); }
-.sidebar-tree-row.is-focused { box-shadow: inset 0 0 0 1px var(--accent); }
 .sidebar-tree-row-text {
   flex: 1;
   min-width: 0;
@@ -2853,9 +2853,15 @@ body.layout-sidebar-only .project-selector-title--sidebar-only {
     + var(--sidebar-tree-guide-inset, 9px)
   );
   width: 1px;
-  background: var(--border);
+  background: color-mix(in srgb, var(--fg) 22%, transparent);
+  opacity: 0;
+  transition: opacity 0.15s ease;
   pointer-events: none;
   z-index: 0;
+}
+/* Like VS Code: the guides show only while the tree is hovered. */
+:where(.file-tree, .ducky-tree, .sidebar-stacked-panel-body, .sidebar-panel-content):hover .sidebar-tree-children::before {
+  opacity: 1;
 }
 .sidebar-tree-branch-collapsed > .sidebar-tree-children-clip {
   grid-template-rows: 0fr;
