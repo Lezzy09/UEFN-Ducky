@@ -4150,7 +4150,8 @@ body.tree-dragging .editor-tab-hover-card { display: none !important; }
   --sidebar-tree-indent-level: 0px;
   --sidebar-tree-step: 16px;
   --sidebar-tree-pad-x: 14px;
-  --sidebar-tree-guide-inset: 9px;
+  /* Under the parent's chevron: the row's left padding plus half the 16px chevron. */
+  --sidebar-tree-guide-inset: calc(var(--sidebar-tree-pad-x) + 8px);
 }
 .file-tree {
   --sidebar-tree-leading: 22px;

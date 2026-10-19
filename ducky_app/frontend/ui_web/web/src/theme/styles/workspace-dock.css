@@ -320,11 +320,11 @@ body.appearance-skin-active .workspace-dock-layout--default:not(.is-narrow) .doc
   border-left-color: var(--accent);
 }
 
-/* Tree rows inside a card are rounded and inset, so hover, selection and the blue focus ring
-   sit inside the card instead of running into its border or the window edge. */
-.workspace-dock-layout--default:not(.is-narrow) .dock-rail .sidebar-tree-row {
-  margin-inline: 4px;
-  border-radius: 6px;
+/* Tree rows run the card's full width (hover and selection too, whatever the nesting). The
+   focused row is marked by a line above and below it, never on its sides, so nothing runs
+   into the card's border or the window edge. */
+.workspace-dock-layout--default:not(.is-narrow) .dock-rail .sidebar-tree-row.is-focused {
+  box-shadow: inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
 }
 
 /* The chat box ends level with the sidebar cards and runs the middle's full width (still
