@@ -103,8 +103,8 @@ code for it; these rules decide how well it works for people editing together.
   tools and return `{"ok": False, "error": str(exc)}`, as for read-only copies.
 - **Every shared item locks to whoever changes it**, with no plugin code: the first change
   takes the lock for this PC (the write goes ahead), teammates see "Locked by Ana: <the
-  item's name>" and can't change it until 5 minutes after Ana's last change went out, she
-  releases it, or they ask. The lock is named by the doc's own `name`, `title` or `label`
+  item's name>" and can't change it until 5 minutes after Ana's last change went out, Ana
+  closes the plugin's tab (once her changes went out), she releases it, or they ask. The lock is named by the doc's own `name`, `title` or `label`
   field (else the key), so give docs a `name`. Change it per prefix with
   `"data_locks": {"<key prefix>": "auto" | "required" | "none"}` in `plugin.json` (the
   start of a doc key or file path; the longest match wins; `""` is every item):

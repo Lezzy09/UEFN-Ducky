@@ -614,7 +614,8 @@ class Scheduler:
 
     def _side(self, account: str, space: str, plugins: list[str]) -> None:
         """An active team space: presence when it changed (or each minute), locks of mine
-        renewed each minute, auto locks released 5 minutes after their last change went out."""
+        renewed each minute, auto locks released 5 minutes after their last change went out
+        or once the plugin's tab closed."""
         from backend.uefn_plugins import spaces, vcs_engine
 
         try:

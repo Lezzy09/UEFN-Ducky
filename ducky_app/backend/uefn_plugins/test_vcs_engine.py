@@ -544,6 +544,27 @@ def test_auto_locks_go_five_minutes_after_their_last_change_went_out(pc: PC) -> 
     assert space_vcs.locks(pc.account, SPACE) == []
 
 
+def test_auto_locks_held_when_the_tab_closed_go_ten_seconds_later(pc: PC, monkeypatch) -> None:
+    now = time.time()
+    closed = {"at": 0.0}
+    monkeypatch.setattr(vcs_engine, "_tab_closed_at", lambda plugin: closed["at"])
+    pc.data.put("card.pip", {"hp": 1})
+    vcs_engine.acquire(pc.account, SPACE, PLUGIN, pc.backend, [("doc:card.pip", "card.pip")], reason="auto", now=now)
+    pc.run()
+    assert vcs_engine.idle_auto_locks(pc.account, SPACE, PLUGIN, now=now + 60) == []  # the tab is open
+    closed["at"] = now + 30
+    assert vcs_engine.idle_auto_locks(pc.account, SPACE, PLUGIN, now=now + 35) == []  # a re-layout reopens it
+    # A ducky working with no tab open: its lock, taken after the close, keeps the 5 minutes.
+    pc.data.put("card.zed", {"v": 1})
+    vcs_engine.acquire(pc.account, SPACE, PLUGIN, pc.backend, [("doc:card.zed", "card.zed")], reason="auto",
+                       now=now + 50)
+    pc.data.put("card.pip", {"hp": 2})  # not sent yet: kept until it is
+    assert vcs_engine.idle_auto_locks(pc.account, SPACE, PLUGIN, now=now + 60) == []
+    pc.run()
+    assert vcs_engine.release_idle(pc.account, SPACE, PLUGIN, pc.backend, now=now + 60) == ["doc:card.pip"]
+    assert [lk["unit"] for lk in space_vcs.locks(pc.account, SPACE, now=now + 60)] == ["doc:card.zed"]
+
+
 def test_a_broken_lock_turns_unsent_edits_into_a_conflict(pc: PC, ben: Ben, world: conf.FakeWorld) -> None:
     pc.data.put("card.pip", {"hp": 1})
     pc.run()

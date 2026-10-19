@@ -143,6 +143,7 @@ GROUP_WAIT_S = 24 * 3600.0
 FETCH_WORKERS = 4
 LOCK_RENEW_S = 60.0
 AUTO_RELEASE_S = 300.0
+TAB_CLOSED_RELEASE_S = 10.0  # the plugin's tab closed this long ago: its auto locks go
 BEAT_EVERY_S = 60.0
 BEAT_MIN_S = 10.0  # presence goes out at most this often (the server takes 6 a minute)
 MODES = ("auto", "manual")
@@ -2838,7 +2839,7 @@ def acquire(account: str, space: str, plugin: str, backend: Any, units: list[tup
     a change of the unit set aside); a unit this PC is behind on is pulled (a download of it
     set aside is tried again now) and asked for once more (not while the space is held:
     :func:`held_reason`). ``reason``: ``auto`` (released 5 minutes after its last change
-    went out), ``manual`` (kept until released), or '' to keep the reason each lock of mine
+    went out, or once the plugin's tab closed: :func:`idle_auto_locks`), ``manual`` (kept until released), or '' to keep the reason each lock of mine
     already has (a renewal). Returns ``{unit: {ok, state, ...}}``."""
     now = time.time() if now is None else now
     ctx = Ctx(account, space, plugin, backend)
@@ -2914,13 +2915,30 @@ def _tree_unsent(account: str, space: str, plugin: str, backend: Any) -> set[str
     return {tf.tree_unit(backend, space, fid, unit) for fid, unit in ff.dirty_units(account, space, plugin)}
 
 
+def _tab_closed_at(plugin: str) -> float:
+    """When the person closed the plugin's last open tab here (0: one is open, or none
+    closed since the app started)."""
+    try:
+        from backend.uefn_plugins.panel_presence import panel_state
+
+        state = panel_state(plugin)
+    except Exception:  # noqa: BLE001 — unsure: the 5-minute rule
+        return 0.0
+    return 0.0 if state["open"] else float(state.get("closed") or 0.0)
+
+
 def idle_auto_locks(account: str, space: str, plugin: str, *, now: float | None = None,
                     backend: Any = None) -> list[str]:
-    """Auto locks of mine whose unit's last change went out 5 minutes ago (nothing unsent;
-    a folder unit with changes here keeps its lock)."""
+    """Auto locks of mine whose unit's last change went out 5 minutes ago, or that were held
+    when the person closed the plugin's tab (10 s ago: moving a tab between panes reopens it
+    at once). A lock taken after the close (a ducky working with no tab open) keeps the 5
+    minutes. Nothing unsent; a folder unit with changes here keeps its lock."""
     now = time.time() if now is None else now
+    closed = _tab_closed_at(plugin)
+    left = bool(closed) and now - closed >= TAB_CLOSED_RELEASE_S
     idle = [lk["unit"] for lk in space_vcs.locks(account, space, plugin, now=now, live=False)
-            if lk["mine"] and lk["reason"] == "auto" and now - float(lk["touched"]) >= AUTO_RELEASE_S]
+            if lk["mine"] and lk["reason"] == "auto"
+            and (now - float(lk["touched"]) >= AUTO_RELEASE_S or (left and float(lk["since"]) <= closed))]
     tree = _tree_unsent(account, space, plugin, backend) if any(u.startswith("tree:") for u in idle) else set()
     return [u for u in idle if u not in tree and (u.startswith("tree:") or not _unit_unsent(account, space, plugin, u))]
 

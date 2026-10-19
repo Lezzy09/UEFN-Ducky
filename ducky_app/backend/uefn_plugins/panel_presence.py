@@ -42,12 +42,13 @@ def note_panel(window_id: str, tab_id: str, *, visible: bool, open_: bool = True
 
     doc = kv.get_doc(_TABLE, _key(plugin_id))
     tabs = dict(doc.get("tabs") or {}) if isinstance(doc, dict) else {}
+    closed = float(doc.get("closed") or 0.0) if isinstance(doc, dict) else 0.0
     slot = f"{window_id or 'main'}|{tab_id}"
     if open_:
         tabs[slot] = {"panel": panel_id, "visible": bool(visible), "at": time.time()}
-    else:
-        tabs.pop(slot, None)
-    kv.set_doc(_TABLE, _key(plugin_id), {"tabs": tabs})
+    elif tabs.pop(slot, None) is not None:
+        closed = time.time()
+    kv.set_doc(_TABLE, _key(plugin_id), {"tabs": tabs, "closed": closed})
 
 
 def forget_all() -> None:
@@ -59,7 +60,8 @@ def forget_all() -> None:
 
 
 def panel_state(plugin_id: str) -> dict[str, Any]:
-    """{open, visible, since}: ``since`` is when the last panel tab changed (0 = never opened)."""
+    """{open, visible, since, closed}: ``since`` is when the last panel tab changed (0 = never
+    opened), ``closed`` when a tab of it last closed (0 = none since the app started)."""
     try:
         from backend.store.repos import kv
 
@@ -72,7 +74,8 @@ def panel_state(plugin_id: str) -> dict[str, Any]:
         "open": bool(rows),
         "visible": any(row.get("visible") for row in rows),
         "since": max((float(row.get("at") or 0) for row in rows), default=0.0),
-        "panels": sorted({str(row.get("panel") or "") for row in rows if row.get("panel")}),
+        "closed": float((doc or {}).get("closed") or 0.0) if isinstance(doc, dict) else 0.0,
+        "panels":sorted({str(row.get("panel") or "") for row in rows if row.get("panel")}),
     }
 
 

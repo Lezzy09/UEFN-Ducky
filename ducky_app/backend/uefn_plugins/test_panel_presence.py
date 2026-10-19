@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -35,11 +36,17 @@ def _as_agent(monkeypatch, chat: str) -> None:
 def test_state_follows_the_window(docs) -> None:
     assert pp.panel_state("imk")["open"] is False
     pp.note_panel("main", "plugin:imk:main", visible=True)
-    assert pp.panel_state("imk") | {"since": 0} == {"open": True, "visible": True, "since": 0, "panels": ["main"]}
+    assert pp.panel_state("imk") | {"since": 0} == {"open": True, "visible": True, "since": 0, "closed": 0.0,
+                                                    "panels": ["main"]}
     pp.note_panel("main", "plugin:imk:main", visible=False)
     assert pp.panel_state("imk")["visible"] is False and pp.panel_state("imk")["open"] is True
+    before = time.time()
     pp.note_panel("main", "plugin:imk:main", visible=False, open_=False)
     assert pp.panel_state("imk")["open"] is False
+    closed = pp.panel_state("imk")["closed"]
+    assert closed >= before  # when its tab closed: the plugin's auto locks go soon after
+    pp.note_panel("main", "plugin:imk:main", visible=False, open_=False)  # closed twice: the first time stays
+    assert pp.panel_state("imk")["closed"] == closed
     pp.note_panel("main", "plugin:imk:main", visible=True)
     pp.forget_all()
     assert pp.panel_state("imk")["open"] is False
