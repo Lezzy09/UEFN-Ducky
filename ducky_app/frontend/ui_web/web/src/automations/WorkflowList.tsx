@@ -429,7 +429,8 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
     return (
     <li key={row.id} data-tree-node={rowNodeId(row.id)}>
       {renamingId === row.id ? (
-        <div className="aw-tree-folder aw-tree-folder--editing" style={{ "--aw-level": depth + 1 } as CSSProperties}>
+        <div className="aw-tree-folder aw-tree-folder--editing aw-tree-folder--leaf" style={{ "--aw-level": depth + 1 } as CSSProperties}>
+          <TriggerIcon row={row} />
           <NameInput label="Rename workflow" initial={row.name || ""} placeholder="Workflow name" maxLength={120}
             onDone={(name) => { setRenamingId(""); const clean = name.trim(); if (clean && clean !== row.name) onRenameWorkflow?.(row.id, clean); }}
             onCancel={() => setRenamingId("")} />
@@ -440,10 +441,11 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
           className={"aw-list-row" + (row.id === activeId ? " is-active" : "") + (picked.includes(row.id) ? " is-picked" : "")} aria-current={row.id === activeId ? "true" : undefined} aria-selected={picked.length ? picked.includes(row.id) : undefined}
           style={{ "--aw-level": depth + 1 } as CSSProperties} draggable={canFile && !owner.readOnly}
           onClick={(event) => clickRow(event, row)} onContextMenu={contextFor({ kind: "workflow", row, owner })}>
+          {/* What starts it is the row's icon, where the Duckies tree has a duck. */}
+          <TriggerIcon row={row} />
           <span className="aw-list-name">{row.name || "Untitled"}</span>
           {/* Laid over the end of the name, so the name gets the whole row. */}
           <span className="aw-row-end">
-            <TriggerIcon row={row} />
             <span className={`aw-list-state${row.enabled ? " is-on" : ""}`} role="img" aria-label={row.enabled ? "On" : "Off"} title={row.enabled ? "On: it runs when started" : "Off: it won't run"} />
           </span>
         </button>
@@ -455,6 +457,7 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
 
   const newFolderRow = (owner: WorkflowOwnerDto, parent: string, depth: number) => editing?.mode === "new" && editing.owner === owner.id && editing.path === parent ? (
     <li className="aw-tree-folder aw-tree-folder--editing" style={{ "--aw-level": depth + 1 } as CSSProperties}>
+      <span className="aw-accordion-chevron is-closed" aria-hidden="true"><Icons.ChevronDown /></span>
       <span className="aw-folder-icon" aria-hidden="true"><Icons.Folder /></span>
       <NameInput label="New folder name" initial="" onDone={(name) => commitName(owner, name)} onCancel={() => setEditing(null)} />
     </li>
@@ -467,11 +470,13 @@ export function WorkflowList({ listId, listRef, owners, rows, activeId, collapse
     const bodyId = `${listId}-${owner.id}-f-${folder.path}`;
     return (
       <li key={folder.path} className="aw-tree-item" data-tree-node={folderNodeId(owner.id, folder.path)}>
-        <div className="aw-tree-folder" style={{ "--aw-level": depth + 1 } as CSSProperties} data-tree-row={folderNodeId(owner.id, folder.path)}
+        <div className={"aw-tree-folder" + (renaming ? " aw-tree-folder--editing" : "")} style={{ "--aw-level": depth + 1 } as CSSProperties} data-tree-row={folderNodeId(owner.id, folder.path)}
           draggable={!!onMoveFolder && !owner.readOnly && !renaming}
           onContextMenu={renaming ? undefined : contextFor({ kind: "folder", folder, owner })}>
           {renaming ? (
             <>
+              {/* Like the Duckies tree: the chevron and icon stay, the box takes the name's place. */}
+              <span className={"aw-accordion-chevron" + (open ? "" : " is-closed")} aria-hidden="true"><Icons.ChevronDown /></span>
               <span className="aw-folder-icon" aria-hidden="true"><Icons.Folder /></span>
               <NameInput label="Folder name" initial={folder.name} onDone={(name) => commitName(owner, name)} onCancel={() => setEditing(null)} />
             </>
@@ -608,7 +613,7 @@ function NameInput({ label, initial, placeholder = "Folder name", maxLength = 64
     finished.current = true;
     if (save) onDone(text); else onCancel();
   };
-  return <input ref={input} className="aw-tree-input" aria-label={label} value={text} placeholder={placeholder} maxLength={maxLength}
+  return <input ref={input} className="aw-tree-input sidebar-rename-input" aria-label={label} value={text} placeholder={placeholder} maxLength={maxLength}
     onChange={(event) => setText(event.target.value)} onBlur={() => finish(true)}
     onKeyDown={(event) => {
       event.stopPropagation();

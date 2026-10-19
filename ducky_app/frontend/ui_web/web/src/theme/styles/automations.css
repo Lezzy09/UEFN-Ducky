@@ -834,23 +834,22 @@
 .aw-tree-item { list-style: none; }
 .aw-workflow-section > .aw-list-ul { position: relative; }
 .aw-tree-children { position: relative; padding: 0; }
-.aw-list-row { padding-left: calc(10px + var(--aw-level, 1) * 16px); }
-.aw-tree-folder { padding-left: calc(var(--aw-level, 1) * 16px); }
-.aw-tree-folder--editing, .aw-list-ul > .aw-section-empty, .aw-tree-children > .aw-section-empty { padding-left: calc(4px + var(--aw-level, 1) * 16px); }
-.aw-tree-folder { position: relative; display: flex; align-items: center; gap: 4px; min-height: 32px; padding-right: 2px; border-radius: 6px; }
-.aw-tree-folder:hover { background: var(--bg-hover); }
-.aw-tree-folder--editing { gap: 8px; padding-top: 2px; padding-bottom: 2px; }
-.aw-tree-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 6px; padding: 6px 4px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.aw-list-ul > .aw-section-empty, .aw-tree-children > .aw-section-empty { padding-left: calc(14px + var(--aw-level, 1) * 16px); }
+.aw-tree-folder { position: relative; display: flex; align-items: center; }
+.aw-tree-toggle { flex: 1; min-width: 0; display: flex; align-items: center; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .aw-tree-toggle .aw-list-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .aw-tree-toggle small { margin-left: auto; color: var(--text-muted); }
-.aw-tree-actions { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); display: flex; align-items: center; gap: 1px; padding: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--dropdown-bg); box-shadow: var(--shadow-md); opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
-.aw-tree-folder:hover .aw-tree-actions, .aw-tree-folder:focus-within .aw-tree-actions { pointer-events: auto; }
-.aw-tree-actions .aw-icon-button { width: 24px; height: 24px; }
-.aw-tree-folder:hover .aw-tree-actions, .aw-tree-folder:focus-within .aw-tree-actions { opacity: 1; }
-.aw-tree-input { flex: 1; min-width: 0; height: 26px; }
+/* Hover buttons like the Duckies tree's: plain icons that open up at the end of the row. */
+.aw-tree-actions { display: flex; flex-shrink: 0; align-items: center; gap: 4px; max-width: 0; overflow: hidden; opacity: 0; pointer-events: none; transition: opacity 0.15s ease, max-width 0.15s ease; }
+.aw-tree-folder:hover .aw-tree-actions, .aw-tree-folder:focus-within .aw-tree-actions,
+.aw-section-head:hover .aw-section-actions, .aw-section-head:focus-within .aw-section-actions { max-width: 100px; padding: 0 2px; opacity: 1; pointer-events: auto; }
+.aw-tree-actions .aw-icon-button { width: 22px; height: 22px; border-radius: 6px; color: var(--muted); }
+.aw-tree-actions .aw-icon-button:hover { background: var(--btn-hover); color: var(--fg); }
+.aw-tree-actions .aw-icon-button svg { width: 14px; height: 14px; }
+.aw-tree-input { flex: 1; min-width: 0; }
 .aw-list-row[draggable="true"] { cursor: grab; }
 @media (hover: none) {
-  .aw-tree-actions { opacity: 1; }
+  .aw-tree-actions { max-width: 100px; opacity: 1; pointer-events: auto; }
 }
 .aw-check { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
 .aw-check input { margin-top: 2px; }
@@ -1097,9 +1096,8 @@
   backdrop-filter: blur(var(--wf-panel-blur)) saturate(140%);
 }
 
-/* Local / shared row: its buttons float over the end of the row on hover, like a folder's. */
+/* Local / shared row: its buttons open up at the end of the row on hover, like a folder's. */
 .aw-section-head { position: relative; }
-.aw-section-head:hover .aw-section-actions, .aw-section-head:focus-within .aw-section-actions { opacity: 1; pointer-events: auto; }
 
 /* On/off switch inside a bottom-toolbar menu (Snap to grid). */
 .aw-canvas-menu > .aw-canvas-menu-toggle { gap: 14px; }
@@ -1281,33 +1279,70 @@
 .vtm-textarea { min-height: 56px; resize: vertical; font-family: inherit; }
 .vtm-form-error { margin: 0; color: var(--red); font-size: 12px; }
 
-/* The Workflows list reads exactly like the Content and Duckies trees: full-width square
-   rows, the list text size in the dim text color, the trees' own hover and selected
-   colors (selected, Ctrl/Shift-picked and the open one alike), no side bar, no bigger
-   text when nothing is open. */
+/* The Workflows list is the Duckies tree: the same columns (chevron, icon, name) at the
+   same places, 26px rows, its colors, hover lines, selection and rename box, and indent
+   guides under each folder's chevron that show while the list is hovered. Local / a
+   shared space is a top-level folder; --aw-level counts the folders above a row. */
+.aw-list { --aw-tree-pad-x: 14px; --aw-tree-step: 16px; }
 .aw-list-sections { padding: 2px 0 48px; }
 .aw-list-ul { padding: 0 0 2px; }
+.aw-section-head { gap: 0; padding: 0; }
 .aw-list-row, .aw-tree-folder, .aw-tree-toggle, .aw-section-toggle { border-radius: 0; }
 .aw-list-row,
+.aw-tree-folder,
+.aw-section-toggle,
 .aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-list-row {
-  min-height: 24px; padding-top: 1px; padding-bottom: 1px; padding-right: 9px;
-  color: var(--fg-dim); font-size: var(--wf-list-text-size); font-weight: 400; line-height: 22px;
+  min-height: 26px; gap: 4px;
+  padding: 2px 9px 2px calc(var(--aw-tree-pad-x) + var(--aw-level, 0) * var(--aw-tree-step));
+  color: var(--fg-dim); font: inherit; font-size: var(--wf-list-text-size); font-weight: 400; line-height: 22px;
   transition: none;
 }
+.aw-tree-toggle { gap: 4px; padding: 0; line-height: 22px; }
+.aw-section-toggle strong,
+.aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-section-toggle strong { font-size: var(--wf-list-text-size); font-weight: 400; }
+.aw-section-toggle small, .aw-tree-toggle small { color: var(--muted); font-size: 11px; }
+.aw-folder-lock { width: 22px; height: 26px; }
 .aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-list { font-size: var(--wf-list-text-size); }
-.aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-section-toggle strong { font-size: var(--wf-list-text-size); }
-.aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-trigger svg { width: 14px; height: 14px; }
 .aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-list-state { flex-basis: 8px; width: 8px; height: 8px; }
-.aw-tree-folder { min-height: 24px; color: var(--fg-dim); }
-.aw-tree-toggle { padding: 1px 4px; font-weight: 400; line-height: 22px; }
-.aw-section-toggle { min-height: 28px; padding: 3px 6px; }
-.aw-list-row:hover, .aw-tree-folder:hover, .aw-section-toggle:hover { background: var(--tab-hover); color: var(--fg); }
+/* 2px from chevron to icon, as in the Duckies tree's folder rows. */
+.aw-list-sections .aw-accordion-chevron { flex: 0 0 16px; width: 16px; height: 22px; margin-right: -2px; align-items: center; justify-content: center; color: var(--muted); transition: transform 0.2s ease; }
+.aw-list-sections .aw-accordion-chevron.is-closed { transform: rotate(-90deg); }
+/* The icon column: a 22px box with a 16px glyph, like a duck or a group in the Duckies tree. */
+.aw-list-sections .aw-folder-icon,
+.aw-list-row > .aw-trigger,
+.aw-tree-folder > .aw-trigger { flex: 0 0 22px; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; }
+.aw-list-sections .aw-folder-icon svg,
+.aw-list-row > .aw-trigger svg,
+.aw-tree-folder > .aw-trigger svg,
+.aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-list-row > .aw-trigger svg { width: 16px; height: 16px; }
+/* The end padding keeps the name clear of the on/off light; a section's buttons sit
+   inside its row like a folder's. */
+.aw-list-row, .aw-root:not(.has-workflow):not(.is-list-collapsed) .aw-list-row { padding-right: 26px; }
+.aw-section-head { padding-right: 9px; }
+.aw-section-toggle { padding-right: 0; }
+.aw-list-row > .aw-list-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; -webkit-mask-image: none; mask-image: none; }
+.aw-tree-folder--editing { padding-top: 2px; padding-bottom: 2px; }
+/* Hover: the fill and a faint line above and below; selected (open or Ctrl/Shift-picked)
+   is the trees' selected color, no side bar. */
+.aw-list-row.is-picked { box-shadow: none; }
+.aw-list-row:hover, .aw-tree-folder:not(.aw-tree-folder--editing):hover, .aw-section-head:hover { background: var(--tab-hover); color: var(--fg); box-shadow: inset 0 1px 0 var(--border), inset 0 -1px 0 var(--border); }
+.aw-section-head:hover .aw-section-toggle { color: var(--fg); }
+.aw-section-toggle:hover { background: transparent; }
 .aw-list-row.is-active,
 .aw-list-row.is-picked,
-.aw-list-row.is-picked:hover { background: var(--tab-active); color: var(--fg); box-shadow: none; }
-.aw-list-row.is-active .aw-trigger, .aw-list-row.is-picked .aw-trigger { color: var(--accent); }
-.aw-tree-actions .aw-icon-button { width: 20px; height: 20px; }
-.aw-tree-actions { padding: 1px; }
+.aw-list-row.is-picked:hover { background: var(--tab-active); color: var(--fg); }
+.aw-list-row:hover > .aw-trigger--manual, .aw-list-row.is-active > .aw-trigger, .aw-list-row.is-picked > .aw-trigger,
+.aw-tree-folder:hover .aw-folder-icon, .aw-section-head:hover .aw-folder-icon { color: var(--accent); }
+/* Indent guides, under the chevron of the folder they belong to. */
+.aw-workflow-section > .aw-list-ul::before,
+.aw-tree-children::before {
+  content: ""; position: absolute; top: 0; bottom: 0; z-index: 0;
+  left: calc(var(--aw-tree-pad-x) + var(--aw-level, 0) * var(--aw-tree-step) + 8px);
+  width: 1px; background: color-mix(in srgb, var(--fg) 22%, transparent);
+  opacity: 0; transition: opacity 0.15s ease; pointer-events: none;
+}
+.aw-list:hover .aw-workflow-section > .aw-list-ul::before,
+.aw-list:hover .aw-tree-children::before { opacity: 1; }
 
 /* No workflows yet: one obvious way in, plus a few ready-made pipelines one click away. */
 .aw-empty-hero { display: flex; flex-direction: column; align-items: center; gap: 8px; margin: 10px 12px 14px; padding: 22px 16px 18px; border: 1px dashed var(--border-light); border-radius: 12px; text-align: center; }
