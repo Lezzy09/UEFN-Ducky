@@ -50,6 +50,7 @@ import { resolvePluginHeaderIcon } from "../hooks/pluginHeaderActions";
 import { useSettingsSidebarWidth } from "./settings/useSettingsSidebarWidth";
 import { settingsTabTargetId, targetRef, useUiTarget } from "../ui-targets/registry";
 import { settingsTabTone } from "../components/quick-open/quickOpenRecents";
+import { SetupReminder } from "../components/GatewaySetupNotice";
 
 const AppearanceTab = lazy(() => import("./settings/AppearanceTab").then((m) => ({ default: m.AppearanceTab })));
 const AudioTab = lazy(() => import("./settings/AudioTab").then((m) => ({ default: m.AudioTab })));
@@ -90,6 +91,35 @@ const CORE_TAB_ICONS: Record<(typeof CORE_TABS)[number], () => JSX.Element> = {
   Audio: Icons.Speaker,
   Videos: Icons.Play,
 };
+
+/** The Feedback tab's icon: a speech bubble with a heart, drawn in a gradient. */
+function FeedbackIcon() {
+  return (
+    <svg
+      className="settings-feedback-icon"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <defs>
+        <linearGradient id="settings-feedback-gradient" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" className="settings-feedback-stop-start" />
+          <stop offset="100%" className="settings-feedback-stop-end" />
+        </linearGradient>
+      </defs>
+      <path stroke="url(#settings-feedback-gradient)" d="M21 11.5a8.5 8.5 0 0 1-12.4 7.6L3.5 20.5l1.4-4.6A8.5 8.5 0 1 1 21 11.5z" />
+      <path
+        fill="url(#settings-feedback-gradient)"
+        d="M12 15.2c-2.2-1.4-3.4-2.7-3.4-4a1.8 1.8 0 0 1 3.4-.9 1.8 1.8 0 0 1 3.4.9c0 1.3-1.2 2.6-3.4 4z"
+      />
+    </svg>
+  );
+}
 
 /** Sidebar label — Store tab is the Plugins page (catalog + installed). */
 function coreTabLabel(tab: (typeof CORE_TABS)[number]): string {
@@ -678,10 +708,10 @@ export const SettingsView = memo(function SettingsView({ version }: SettingsView
                 type="button"
                 className={`settings-view-sidebar-tab settings-view-sidebar-tab--support${activeTab === "Support" ? " is-active" : ""}`}
                 onClick={handleSupportClick}
-                title={sidebarIconsOnly ? "Support" : undefined}
+                title={sidebarIconsOnly ? "Feedback" : undefined}
               >
-                <Icons.Help />
-                <span>Support</span>
+                <FeedbackIcon />
+                <span>Feedback</span>
               </button>
               {visibleCoreTabs.map((tab) => {
                 const TabIcon = CORE_TAB_ICONS[tab];
@@ -972,6 +1002,7 @@ export const SettingsView = memo(function SettingsView({ version }: SettingsView
           ) : null}
 
           <section ref={contentTargetRef} className="settings-view-content selectable-text no-drag">
+            <SetupReminder />
             <Suspense fallback={<p role="status">Loading settings…</p>}>
               {content}
             </Suspense>

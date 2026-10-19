@@ -270,34 +270,30 @@
   box-shadow: inset 0 0 0 1px var(--border);
 }
 
+/* Feedback: a plain row like the others, bright text, and the gradient on its icon. */
 .settings-view-sidebar-tab--support {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 6px;
-  color: var(--fg-inverse);
+  color: var(--fg);
   font-weight: 600;
-  background: linear-gradient(135deg, var(--red) 0%, var(--accent-hover) 100%);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--red) 45%, transparent),
-    0 0 10px color-mix(in srgb, var(--red) 20%, transparent);
 }
 
 .settings-view-sidebar-tab--support:hover {
-  color: var(--fg-inverse);
-  background: linear-gradient(135deg, var(--red) 0%, var(--accent-hover) 100%);
-}
-
-.settings-view-sidebar-tab--support.is-active {
-  color: var(--fg-inverse);
-  background: linear-gradient(135deg, var(--red) 0%, var(--accent-hover) 100%);
-  box-shadow:
-    inset 0 0 0 2px color-mix(in srgb, var(--fg) 25%, transparent),
-    0 0 16px color-mix(in srgb, var(--red) 35%, transparent);
+  color: var(--fg);
 }
 
 .settings-view-sidebar-tab--support svg {
   flex-shrink: 0;
+}
+
+.settings-feedback-stop-start {
+  stop-color: var(--red);
+}
+
+.settings-feedback-stop-end {
+  stop-color: var(--accent-hover);
 }
 
 .settings-view-sidebar-plugins {
@@ -1689,13 +1685,20 @@
     width: 100%;
   }
 
+  /* The switch stays on the right, level with the title; the text wraps beside it. A wider
+     control (a stepper, a picker) drops under the text instead of squeezing it. */
   .general-tab-toggle-row {
-    flex-direction: column;
+    flex-wrap: wrap;
     gap: 12px;
+    padding: 14px;
+  }
+
+  .general-tab-toggle-row > .general-tab-toggle-row-text {
+    flex: 1 1 150px;
   }
 
   .general-tab-switch {
-    align-self: flex-end;
+    align-self: flex-start;
   }
 
   .general-tab-section-title {

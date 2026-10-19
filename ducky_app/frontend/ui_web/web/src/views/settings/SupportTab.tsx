@@ -81,7 +81,7 @@ export function SupportTab() {
 
   return (
     <div className="general-tab-shell support-tab">
-      <h2 className="general-tab-page-title">Support</h2>
+      <h2 className="general-tab-page-title">Feedback</h2>
       <section className="general-tab-section">
         <GeneralSectionHeader
           icon={<Icons.Chat />}

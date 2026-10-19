@@ -592,6 +592,11 @@
     flex-wrap: wrap;
   }
 
+  /* Wrapped onto two lines, the dividers would dangle at the ends. */
+  .ds-controls-sep {
+    display: none;
+  }
+
   .ds-cat {
     width: auto;
     flex: 1;

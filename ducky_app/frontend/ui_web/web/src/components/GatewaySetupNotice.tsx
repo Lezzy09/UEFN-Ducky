@@ -1,9 +1,11 @@
 /**
  * First-run setup (Welcome → starter plugins → connect an AI) and, once it is closed, the
- * corner card that waits until a gateway plugin is installed.
+ * corner card that waits until a gateway plugin is installed. Its pill can be hidden; the
+ * same reminder then stays at the top of Settings (SetupReminder) until setup is done.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import { Icons } from "../icons/Icons";
 import { onApiReady } from "../hooks/onApiReady";
 import {
   beginStoreInstall,
@@ -33,6 +35,59 @@ type SetupStatus = {
   gateway_ids?: string[];
   plugins?: StarterPluginDto[];
 };
+
+const PILL_HIDDEN_KEY = "ducky.setupPill.hidden";
+
+function readPillHidden(): boolean {
+  try {
+    return localStorage.getItem(PILL_HIDDEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+// Shared with Settings: whether setup still waits on a gateway, and a way to open it.
+let setupNeeded = false;
+const setupSubs = new Set<() => void>();
+let openSetupHandler: (() => void) | null = null;
+
+function publishSetupNeeded(next: boolean): void {
+  if (setupNeeded === next) return;
+  setupNeeded = next;
+  setupSubs.forEach((fn) => fn());
+}
+
+export function useSetupNeeded(): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      setupSubs.add(onChange);
+      return () => setupSubs.delete(onChange);
+    },
+    () => setupNeeded,
+    () => setupNeeded,
+  );
+}
+
+/** "Finish setting up Ducky" at the top of Settings while no AI gateway is installed. */
+export function SetupReminder() {
+  const needed = useSetupNeeded();
+  if (!needed) return null;
+  return (
+    <section className="gateway-setup-reminder" role="status">
+      <div className="gateway-setup-reminder-text">
+        <strong>Finish setting up Ducky</strong>
+        <span>Chats need an AI gateway plugin (OpenAI, Anthropic or Cursor).</span>
+      </div>
+      <button
+        type="button"
+        className="update-toast-btn update-toast-btn-primary"
+        onClick={() => openSetupHandler?.()}
+      >
+        Continue setup
+      </button>
+    </section>
+  );
+}
 
 function reflectStoreProgress(
   slug: string,
@@ -100,6 +155,7 @@ export function GatewaySetupNotice() {
   // The step to come back to after a "Show me how" tour.
   const [resume, setResume] = useState<SetupStep | null>(null);
   const [pill, setPill] = useState(false);
+  const [pillHidden, setPillHidden] = useState(readPillHidden);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const decided = useRef(false);
@@ -158,6 +214,27 @@ export function GatewaySetupNotice() {
       if (event.type === "uefn_plugins_changed" || event.type === "starter_plugins_progress") refresh();
     });
   }, [refresh]);
+
+  useEffect(() => {
+    publishSetupNeeded(ready && gatewayIds.length === 0);
+  }, [ready, gatewayIds]);
+
+  useEffect(() => {
+    openSetupHandler = () => setWizard("plugins");
+    return () => {
+      openSetupHandler = null;
+      publishSetupNeeded(false);
+    };
+  }, []);
+
+  const hidePill = useCallback(() => {
+    setPillHidden(true);
+    try {
+      localStorage.setItem(PILL_HIDDEN_KEY, "1");
+    } catch {
+      // A per-viewer convenience; the reminder in Settings stays either way.
+    }
+  }, []);
 
   // The Welcome tour of the app waits while the setup (or a tour it started) is in the way.
   useEffect(() => {
@@ -266,14 +343,25 @@ export function GatewaySetupNotice() {
     );
   }
 
-  if (gatewayIds.length > 0) return null;
+  if (gatewayIds.length > 0 || pillHidden) return null;
 
   if (pill) {
     return createPortal(
       <div className="gateway-setup gateway-setup--corner no-drag">
-        <button type="button" className="gateway-setup-pill" onClick={() => setPill(false)}>
-          Set up Ducky
-        </button>
+        <div className="gateway-setup-pill gateway-setup-pill--split">
+          <button type="button" className="gateway-setup-pill-open" onClick={() => setPill(false)}>
+            Set up Ducky
+          </button>
+          <button
+            type="button"
+            className="gateway-setup-pill-close"
+            aria-label="Hide setup reminder"
+            title="Hide — it stays at the top of Settings"
+            onClick={hidePill}
+          >
+            <Icons.Close />
+          </button>
+        </div>
       </div>,
       document.body,
     );

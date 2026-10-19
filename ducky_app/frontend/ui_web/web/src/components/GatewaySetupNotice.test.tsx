@@ -68,7 +68,7 @@ vi.mock("../walkthrough/WalkthroughService", () => ({
   },
 }));
 
-const { GatewaySetupNotice, mergeRows, rowForPhase } = await import("./GatewaySetupNotice");
+const { GatewaySetupNotice, SetupReminder, mergeRows, rowForPhase } = await import("./GatewaySetupNotice");
 
 const BUNDLE = [
   { slug: "openai", label: "OpenAI", group: "gateway", installed: false },
@@ -81,6 +81,7 @@ function setWalk(active: boolean) {
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
   fake.providers = [];
   fake.walk.active = false;
   fake.walk.listeners.clear();
@@ -193,6 +194,43 @@ describe("GatewaySetupNotice", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Back to setup" }));
     expect(screen.getByRole("dialog", { name: "Connect your AI" })).toBeTruthy();
+  });
+});
+
+describe("hiding the Set up Ducky pill", () => {
+  it("the X hides the corner reminder for good, and Settings keeps it until setup is done", async () => {
+    fake.status.mockResolvedValue({ pending_first_run: false, gateway_ids: [], plugins: BUNDLE });
+    const { unmount } = render(
+      <>
+        <GatewaySetupNotice />
+        <SetupReminder />
+      </>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Minimize" }));
+    fireEvent.click(screen.getByRole("button", { name: "Hide setup reminder" }));
+    expect(screen.queryByRole("button", { name: "Set up Ducky" })).toBeNull();
+    expect(screen.queryByText("Chats need an AI gateway plugin (OpenAI, Anthropic or Cursor). Setup installs it with the UEFN editor plugins, then helps you connect it.")).toBeNull();
+    // Settings' copy is still there and opens the setup.
+    fireEvent.click(screen.getByRole("button", { name: "Continue setup" }));
+    expect(screen.getByRole("dialog", { name: "Install the starter plugins" })).toBeTruthy();
+    unmount();
+
+    render(<GatewaySetupNotice />);
+    await waitFor(() => expect(fake.status).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("Finish setting up Ducky")).toBeNull(); // still hidden after a restart
+  });
+
+  it("Settings shows nothing once a gateway is installed", async () => {
+    fake.status.mockResolvedValue({ pending_first_run: false, gateway_ids: ["openai"], plugins: BUNDLE });
+    render(
+      <>
+        <GatewaySetupNotice />
+        <SetupReminder />
+      </>,
+    );
+    await waitFor(() => expect(fake.status).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByText("Finish setting up Ducky")).toBeNull();
   });
 });
 
