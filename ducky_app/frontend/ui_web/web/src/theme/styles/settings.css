@@ -449,7 +449,7 @@
 }
 
 .settings-view-header-tab.is-active {
-  border-bottom-color: var(--blue);
+  border-bottom-color: var(--accent);
   color: var(--fg);
   font-weight: 600;
 }
@@ -1204,7 +1204,7 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: var(--fg-inverse);
+  background: var(--fg);
   border: 1px solid var(--border);
   transition: transform 0.2s ease;
 }
@@ -1220,6 +1220,7 @@
 
 .general-tab-switch-input:checked + .general-tab-switch-track::after {
   transform: translateX(20px);
+  background: var(--fg-inverse);
 }
 
 .general-tab-switch-input:disabled + .general-tab-switch-track {
@@ -3741,7 +3742,7 @@
   border: 1px solid transparent;
   border-radius: 10px;
   background: var(--accent);
-  color: #fff;
+  color: var(--fg-inverse);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -4372,7 +4373,7 @@
 }
 
 .skills-mcp-section-tab.is-active {
-  border-bottom: 2px solid var(--blue);
+  border-bottom: 2px solid var(--accent);
   color: var(--fg);
   font-weight: 600;
 }
@@ -4506,8 +4507,8 @@
 }
 
 .skills-mcp-file-btn.is-active {
-  border: 1px solid var(--blue);
-  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .skills-mcp-file-btn-name {
@@ -6508,7 +6509,7 @@
 .plans-tab-action--primary {
   background: var(--accent);
   border-color: transparent;
-  color: #fff;
+  color: var(--fg-inverse);
 }
 
 .plans-tab-action--primary:hover:not(:disabled) {

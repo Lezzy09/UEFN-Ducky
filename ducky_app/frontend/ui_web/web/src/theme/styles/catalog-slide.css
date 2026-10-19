@@ -550,7 +550,7 @@
 .catalog-slide-action--primary {
   background: var(--accent);
   border-color: transparent;
-  color: #fff;
+  color: var(--fg-inverse);
 }
 
 .catalog-slide-action--primary:hover:not(:disabled) {

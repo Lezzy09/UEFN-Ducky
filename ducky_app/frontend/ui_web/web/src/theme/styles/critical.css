@@ -20,10 +20,10 @@
   --purple-dim: rgba(192, 132, 252, 0.15);
   --yellow: #facc15;
   --yellow-dim: rgba(250, 204, 21, 0.15);
-  --accent: #2563eb;
-  --accent-hover: #134dca;
-  --select: #1f49a4;
-  --border-focus: #2563eb;
+  --accent: #f8a800;
+  --accent-hover: #c58700;
+  --select: #9f700d;
+  --border-focus: #f8a800;
   --bg: #0a0a0a;
   --sidebar: #0f0f0f;
   --panel-header: #141414;
@@ -43,7 +43,7 @@
   --overlay-light: rgba(10, 10, 10, 0.35);
   --fg: #ededed;
   --fg-dim: #a0a0a0;
-  --fg-inverse: #ededed;
+  --fg-inverse: #0a0a0a;
   --muted: #7a7a7a;
   --border: #262626;
   --border-light: #3a3a3a;
@@ -52,7 +52,7 @@
   --terminal-bg: #0a0a0a;
   --terminal-fg: #ededed;
   --terminal-cursor: #ededed;
-  --terminal-selection: #1f49a4;
+  --terminal-selection: #9f700d;
   --groupchat-accent: #5865f2;
   --groupchat-bg: #0a0a0a;
   --groupchat-hover: rgba(237, 237, 237, 0.05);
@@ -61,7 +61,7 @@
   --shadow-sm: 0 1px 2px rgba(10, 10, 10, 0.5);
   --shadow-md: 0 8px 16px rgba(10, 10, 10, 0.6);
   --shadow-lg: 0 12px 40px rgba(10, 10, 10, 0.45);
-  --shadow-glow: 0 0 15px rgba(37, 99, 235, 0.15);
+  --shadow-glow: 0 0 15px rgba(248, 168, 0, 0.15);
   --shadow-dropdown: 0 10px 30px rgba(10, 10, 10, 0.9);
   --font-header: "Inter", "Segoe UI", system-ui, sans-serif;
   --font-sidebar: "Inter", "Segoe UI", system-ui, sans-serif;
@@ -91,9 +91,9 @@
   --verse-editor-line-number: #7a7a7a;
   --verse-editor-line-number-active: #a0a0a0;
   --verse-editor-cursor: #f9b52f;
-  --verse-editor-selection: rgba(37, 99, 235, 0.35);
-  --verse-editor-selection-inactive: rgba(37, 99, 235, 0.2);
-  --verse-editor-selection-highlight: rgba(37, 99, 235, 0.22);
+  --verse-editor-selection: rgba(248, 168, 0, 0.35);
+  --verse-editor-selection-inactive: rgba(248, 168, 0, 0.2);
+  --verse-editor-selection-highlight: rgba(248, 168, 0, 0.22);
   --verse-editor-line-highlight: #2c2c2c;
   --verse-editor-line-highlight-border: #3c3c3c;
   --verse-editor-indent: #262626;
@@ -120,7 +120,7 @@
   --chat-heading-color: #ededed;
   --chat-emphasis-color: #ededed;
   --chat-muted-color: #7a7a7a;
-  --chat-link-color: #2563eb;
+  --chat-link-color: #f8a800;
   --chat-border-color: #262626;
   --chat-surface: #181818;
   --chat-code-color: #c084fc;

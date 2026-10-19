@@ -1713,7 +1713,7 @@
 }
 
 .vtm-ide-file.is-active .vtm-ide-path {
-  color: var(--blue);
+  color: var(--accent);
 }
 
 .vtm-ide-remove {

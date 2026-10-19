@@ -1,6 +1,6 @@
 import type { FoundationKey } from "./defaultTokens";
 import { DEFAULT_CSS_VARS, defaultFoundation } from "./defaultTokens";
-import { colorToHexAndAlpha, formatColorWithAlpha, hexToHSL, hexToRgba, parseRgba, shiftColor } from "./colorUtils";
+import { colorToHexAndAlpha, contrastRatio, formatColorWithAlpha, hexToHSL, hexToRgba, parseRgba, shiftColor } from "./colorUtils";
 import { applyFontLibraryToCssVars } from "./fontLibrary";
 import { VERSE_COLOR_TOKENS, VERSE_TOKEN_IDS } from "./verseSyntaxTokens";
 import { applyChatAppearance, CHAT_APPEARANCE_TOKEN_IDS } from "./chatAppearanceTokens";
@@ -468,6 +468,15 @@ export function computeCssVars(state: AppearanceState): Record<string, string> {
   }
 
   applyOnSemantic(vars, state.overrides);
+
+  // Text on accent-filled controls: the page or the text color, whichever reads better on
+  // the accent (dark on a light accent like Ducky yellow, light on a dark one).
+  if (!state.overrides["fg-inverse"]) {
+    const accent = foundationHex(state.foundation, "accent");
+    const page = foundationHex(state.foundation, "bg");
+    const text = foundationHex(state.foundation, "text");
+    vars["fg-inverse"] = contrastRatio(accent, page) > contrastRatio(accent, text) ? page : text;
+  }
 
   applyShadows(vars, state.overrides);
 

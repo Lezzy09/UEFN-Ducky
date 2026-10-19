@@ -1305,7 +1305,7 @@
 .aw-list-row.is-active,
 .aw-list-row.is-picked,
 .aw-list-row.is-picked:hover { background: var(--tab-active); color: var(--fg); box-shadow: none; }
-.aw-list-row.is-active .aw-trigger, .aw-list-row.is-picked .aw-trigger { color: var(--blue); }
+.aw-list-row.is-active .aw-trigger, .aw-list-row.is-picked .aw-trigger { color: var(--accent); }
 .aw-tree-actions .aw-icon-button { width: 20px; height: 20px; }
 .aw-tree-actions { padding: 1px; }
 

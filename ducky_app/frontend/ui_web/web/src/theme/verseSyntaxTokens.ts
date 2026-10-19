@@ -12,6 +12,9 @@ export interface VerseTokenDef {
   colorKind?: "hex" | "rgba";
 }
 
+/** Keywords and types keep their hues whatever the accent (a yellow accent would turn them lime and red). */
+const SYNTAX_HUE_BASE = "#2563eb";
+
 function v(key: string, vars: Record<string, string>, fallback: string): string {
   return vars[key] || fallback;
 }
@@ -34,22 +37,22 @@ export const VERSE_COLOR_TOKENS: VerseTokenDef[] = [
     id: "verse-syntax-keyword",
     name: "Keywords",
     cat: "syntax",
-    base: "accent",
-    rule: (vars) => shiftColor(v("accent", vars, "#2563eb"), 58, 28, 12),
+    base: "text",
+    rule: () => shiftColor(SYNTAX_HUE_BASE, 58, 28, 12),
   },
   {
     id: "verse-syntax-type",
     name: "Types",
     cat: "syntax",
-    base: "accent",
-    rule: (vars) => shiftColor(v("accent", vars, "#2563eb"), -48, 22, 6),
+    base: "text",
+    rule: () => shiftColor(SYNTAX_HUE_BASE, -48, 22, 6),
   },
   {
     id: "verse-syntax-type-id",
     name: "Type names",
     cat: "syntax",
-    base: "accent",
-    rule: (vars) => shiftColor(v("accent", vars, "#2563eb"), -48, 22, 6),
+    base: "text",
+    rule: () => shiftColor(SYNTAX_HUE_BASE, -48, 22, 6),
   },
   {
     id: "verse-syntax-tag",
@@ -132,8 +135,8 @@ export const VERSE_COLOR_TOKENS: VerseTokenDef[] = [
     id: "verse-syntax-operator-logical",
     name: "Logical operators (and/or/not)",
     cat: "syntax",
-    base: "accent",
-    rule: (vars) => shiftColor(v("accent", vars, "#2563eb"), 58, 28, 12),
+    base: "text",
+    rule: () => shiftColor(SYNTAX_HUE_BASE, 58, 28, 12),
   },
   {
     id: "verse-syntax-bracket",

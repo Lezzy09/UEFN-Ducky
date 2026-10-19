@@ -133,7 +133,7 @@
   color: var(--fg);
 }
 .quick-open-palette-row.is-selected {
-  background: color-mix(in srgb, var(--blue) 22%, var(--panel-header));
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel-header));
   color: var(--fg);
 }
 .quick-open-palette-row.is-selected .quick-open-palette-row-sub,
@@ -201,7 +201,7 @@
 }
 .quick-open-palette-row.is-selected .quick-open-palette-recent-tag,
 .quick-open-palette-row:hover .quick-open-palette-recent-tag {
-  color: var(--blue);
+  color: var(--accent);
 }
 .quick-open-services-grid {
   display: grid;

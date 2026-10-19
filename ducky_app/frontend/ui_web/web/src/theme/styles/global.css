@@ -559,7 +559,7 @@ body.native-caption-input-ready .app-header .drag-region {
   color: var(--fg);
 }
 .app-header {
-  height: 40px;
+  height: 34px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -898,9 +898,9 @@ body.native-caption-input-ready .app-header .drag-region {
 
 /* View menu (phone / web header): Ducky, UEFN, screens and windows as icon rows and tiles,
    with a check on what is showing instead of radio circles. */
-/* Its own raised surface, a step lighter than the sidebar cards it opens over. */
+/* Dark like the sidebar cards. */
 .dropdown-panel:has(.view-menu) {
-  background: color-mix(in srgb, var(--bg-elevated) 60%, var(--dropdown-bg));
+  background: var(--sidebar);
 }
 .view-menu {
   --border: var(--border-light);
@@ -1164,7 +1164,7 @@ body.native-caption-input-ready .app-header .drag-region {
 }
 .remote-window-overlay {
   position: absolute;
-  inset: 40px 0 0 0; /* below .app-header */
+  inset: 34px 0 0 0; /* below .app-header */
   z-index: 20;
   background: #0b0b0d;
   display: flex;
@@ -2229,7 +2229,7 @@ body.layout-sidebar-only .project-selector-title--sidebar-only {
   font-size: 13px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: var(--fg-inverse);
+  color: var(--fg);
   background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--bg) 35%, transparent);
   opacity: 0;
@@ -2798,8 +2798,8 @@ body.layout-sidebar-only .project-selector-title--sidebar-only {
   height: 30px;
   color: var(--muted);
 }
-.sidebar-tree-row.is-active .sidebar-tree-row-icon { color: var(--blue); }
-.sidebar-tree-row:hover .sidebar-tree-row-icon { color: var(--blue); }
+.sidebar-tree-row.is-active .sidebar-tree-row-icon { color: var(--accent); }
+.sidebar-tree-row:hover .sidebar-tree-row-icon { color: var(--accent); }
 .file-tree .sidebar-tree-row-icon {
   flex-shrink: 0;
   display: flex;
@@ -3117,7 +3117,7 @@ button.sidebar-chat-nest-toggle {
   transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 .ducky-picker-tile:hover {
-  border-color: var(--blue);
+  border-color: var(--accent);
   background: var(--tab-hover);
 }
 .ducky-picker-tile--editor {
@@ -3295,7 +3295,7 @@ body.tree-dragging .editor-tab-hover-card { display: none !important; }
 }
 .tree-drag-preview-count {
   min-width: 18px; padding: 0 5px;
-  border-radius: 9px; background: var(--accent); color: #fff;
+  border-radius: 9px; background: var(--accent); color: var(--fg-inverse);
   font-size: 11px; font-weight: 600; text-align: center; line-height: 18px;
 }
 .sidebar-drag-overlay {
@@ -3369,7 +3369,7 @@ body.tree-dragging .editor-tab-hover-card { display: none !important; }
   opacity: 0.45;
 }
 .sidebar-panel-tab.is-swap-hint {
-  box-shadow: inset 0 0 0 1px var(--blue);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 .sidebar-shell {
   display: flex;
@@ -3697,14 +3697,14 @@ body.tree-dragging .editor-tab-hover-card { display: none !important; }
 /* Glowing insert line between stacked panels (works on collapsed headers too). */
 .sidebar-stacked-panel.is-drop-before {
   box-shadow:
-    inset 0 2px 0 0 var(--blue),
-    0 -2px 10px color-mix(in srgb, var(--blue) 55%, transparent);
+    inset 0 2px 0 0 var(--accent),
+    0 -2px 10px color-mix(in srgb, var(--accent) 55%, transparent);
   z-index: 2;
 }
 .sidebar-stacked-panel.is-drop-after {
   box-shadow:
-    inset 0 -2px 0 0 var(--blue),
-    0 2px 10px color-mix(in srgb, var(--blue) 55%, transparent);
+    inset 0 -2px 0 0 var(--accent),
+    0 2px 10px color-mix(in srgb, var(--accent) 55%, transparent);
   z-index: 2;
 }
 .dock-panel-drag-ghost {
@@ -4330,7 +4330,7 @@ body.tree-dragging .editor-tab-hover-card { display: none !important; }
   color: var(--fg);
   border-color: var(--border);
 }
-.header-tab.is-active .header-tab-icon { color: var(--blue); }
+.header-tab.is-active .header-tab-icon { color: var(--accent); }
 .header-tab-icon { display: flex; flex-shrink: 0; opacity: 0.75; }
 .header-tab.is-active .header-tab-icon { opacity: 1; }
 .header-tab-label {

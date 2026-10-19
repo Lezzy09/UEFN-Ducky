@@ -27,7 +27,7 @@
 
 .sps-btn--primary {
   background: var(--accent);
-  color: var(--fg);
+  color: var(--fg-inverse);
   border-color: var(--accent);
 }
 
