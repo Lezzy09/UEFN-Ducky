@@ -135,23 +135,21 @@ export interface ComposerPlaceholderInput {
 }
 
 function commandHint(mentionsEnabled?: boolean): string {
-  if (mentionsEnabled === false) return "  ·  / for commands · ~ to search inside";
-  return "  ·  @ to mention a ducky · / for commands · ~ to search inside";
+  if (mentionsEnabled === false) return " · / commands";
+  return " · @ duckies · / commands";
 }
 
-/** Idle composers mention `/` so the command palette is discoverable. */
+/** A few words: what to type, plus `@` and `/` so mentions and the command palette are discoverable. */
 export function composerPlaceholder(p: ComposerPlaceholderInput): string {
-  if (p.liveVoiceMuted) return "You're muted — type to chat (Shift+Enter for newline)";
+  if (p.liveVoiceMuted) return "Muted — type to chat";
   if (p.isGroup) {
-    if (p.groupEmpty) return "Invite a ducky above to start the roundtable…";
-    if (p.agentRunning) return "Add a follow-up… (Shift+Enter for newline)";
-    return `Message the group… (Shift+Enter for newline)${commandHint(p.mentionsEnabled)}`;
+    if (p.groupEmpty) return "Invite a ducky above to start";
+    if (p.agentRunning) return "Add a follow-up…";
+    return `Message the group${commandHint(p.mentionsEnabled)}`;
   }
-  if (p.noModelsAvailable) {
-    return "No models available — use the button below to open Settings → LLMs";
-  }
-  if (p.agentRunning) return "Add a follow-up… (Shift+Enter for newline)";
-  return `Ask ${p.modelLabel}... (Shift+Enter for newline)${commandHint(p.mentionsEnabled)}`;
+  if (p.noModelsAvailable) return "No models — open Settings → LLMs below";
+  if (p.agentRunning) return "Add a follow-up…";
+  return `Ask ${p.modelLabel}${commandHint(p.mentionsEnabled)}`;
 }
 
 /**

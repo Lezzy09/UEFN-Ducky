@@ -97,15 +97,17 @@ describe("composerPlaceholder", () => {
     modelLabel: "Ducky",
   };
 
-  it("tells the idle ask composer that / opens commands", () => {
-    expect(composerPlaceholder(idle)).toContain("/ for commands");
+  it("keeps the idle ask composer to a few words, with @ and / hints", () => {
+    expect(composerPlaceholder(idle)).toBe("Ask Ducky · @ duckies · / commands");
+    expect(composerPlaceholder({ ...idle, mentionsEnabled: false })).toBe("Ask Ducky · / commands");
+    expect(composerPlaceholder(idle)).toContain("/ commands");
     expect(composerPlaceholder(idle)).toContain("Ask Ducky");
   });
 
   it("does not tack the hint onto muted, no-models, or follow-up copy", () => {
-    expect(composerPlaceholder({ ...idle, liveVoiceMuted: true })).not.toContain("/ for commands");
-    expect(composerPlaceholder({ ...idle, noModelsAvailable: true })).not.toContain("/ for commands");
-    expect(composerPlaceholder({ ...idle, agentRunning: true })).not.toContain("/ for commands");
+    expect(composerPlaceholder({ ...idle, liveVoiceMuted: true })).not.toContain("/ commands");
+    expect(composerPlaceholder({ ...idle, noModelsAvailable: true })).not.toContain("/ commands");
+    expect(composerPlaceholder({ ...idle, agentRunning: true })).not.toContain("/ commands");
   });
 });
 

@@ -73,8 +73,12 @@
 
 .chat-column-shell {
   /* The same space on both sides of the messages, the plan bar and the chat box, from the chat
-     itself (never from the sidebars), in every pane of a split. */
-  --chat-column-pad-left: max(24px, calc((100% - var(--chat-column-width, 960px)) / 2 + 24px));
+     itself (never from the sidebars), in every pane of a split. The desktop editor area sets
+     --chat-edge-inset so the chat lines up with its tab pills. */
+  --chat-column-pad-left: max(
+    var(--chat-edge-inset, 12px),
+    calc((100% - var(--chat-column-width, 960px)) / 2 + var(--chat-edge-inset, 12px))
+  );
   flex: 1;
   display: flex;
   min-height: 0;
@@ -1057,9 +1061,42 @@
   max-width: 220px;
 }
 
+/* No toolbar button is squeezed below its icon (an icon-only model button used to shrink to 0px
+   and its picture slid over the context ring). */
+.chat-pane-input-toolbar-left > :not(.chat-pane-model-effort),
+.chat-pane-input-toolbar-left .chat-pane-model-effort:has(.model-selector-btn--icon) {
+  flex-shrink: 0;
+}
+
 @container chat-composer (max-width: 360px) {
   .chat-pane-toolbar-divider {
     display: none;
+  }
+
+  /* A narrow box (a split pane) keeps every button: smaller buttons, tighter gaps. */
+  .chat-pane-input-toolbar-left,
+  .chat-pane-input-toolbar-right,
+  .chat-pane-input-toolbar .voice-controls {
+    gap: 2px;
+  }
+
+  .chat-pane-input-toolbar :is(.mode-selector-btn, .chat-perm-btn, .snip-btn, .voice-btn) {
+    width: 28px;
+    height: 28px;
+  }
+
+  .chat-pane-input-toolbar .model-selector-btn--icon {
+    width: 24px;
+  }
+
+  .chat-pane-input-toolbar {
+    padding-left: 2px;
+    padding-right: 2px;
+  }
+
+  .chat-pane-input-toolbar :is(.chat-pane-send-btn, .chat-pane-stop-btn) {
+    width: 32px;
+    height: 32px;
   }
 
   .model-selector-btn {
@@ -2396,6 +2433,14 @@
      same distance from both edges, like the chat box below it. */
   padding-left: var(--chat-column-pad-left);
   padding-right: max(0px, calc(var(--chat-column-pad-left) - var(--chat-scrollbar-width, 0px)));
+}
+
+/* The app's 6px hover scrollbar (::-webkit-scrollbar in global.css) instead of the ~10px
+   "thin" one, so the text can sit as close to the right edge as to the left. */
+.virtual-chat-message-list-scroller,
+.virtual-chat-message-list-scroller:hover {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
   padding-top: 0;
   box-sizing: border-box;
   scroll-padding-top: 16px;

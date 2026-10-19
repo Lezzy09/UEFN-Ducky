@@ -271,7 +271,6 @@
 /* The tab strip's ⋯ menu: a rounded button on the background, lit like a hovered tab. */
 .workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tabs-shell .editor-tab-bar-actions {
   background-color: transparent;
-  padding-right: 4px;
 }
 
 .workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tab-bar-menu-btn {
@@ -316,6 +315,30 @@ body.appearance-skin-active .workspace-dock-layout--default:not(.is-narrow) .doc
    same as the messages above it, in every pane of a split. */
 .workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .chat-pane-input-area {
   padding-bottom: var(--dock-gap);
+}
+
+/* One edge for the whole editor area: the tab pills, the ⋯ button, the messages, the plan bar
+   and the chat box all sit one --dock-gap in from each pane's sides. */
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center {
+  --chat-edge-inset: var(--dock-gap);
+}
+
+/* The first tab's pill (tab margin 1px + pill inset 2px) starts at the edge. */
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tabs-bar {
+  padding-left: max(0px, calc(var(--dock-gap) - 1px - 2px * var(--tab-scale, 1)));
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tabs-shell .editor-tab-bar-actions {
+  padding-right: var(--dock-gap);
+}
+
+/* The turn ticks fit in that edge (they still grow while you use them). */
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .chat-scroll-peek-track {
+  left: 0;
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .chat-scroll-peek-tick {
+  width: calc(var(--dock-gap) - 1px);
 }
 
 .chat-view-layout .workspace-dock-layout {
