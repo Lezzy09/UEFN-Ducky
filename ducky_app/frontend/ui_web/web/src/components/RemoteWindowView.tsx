@@ -1,7 +1,7 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { getApi, isRemote } from "../hooks/usePanelApi";
-import { ChoiceDropdown, ChoiceTriggerFace } from "./ChoiceDropdown";
+import { ChoiceTriggerFace } from "./ChoiceDropdown";
 import { DropdownPanel } from "./DropdownPanel";
 import { Icons } from "../icons/Icons";
 import {
@@ -376,11 +376,7 @@ function useViewerActive(): boolean {
   return on;
 }
 
-const LAUNCH_UEFN_VALUE = "__launch_uefn__";
-const LAUNCH_UEFN_HUB_VALUE = "__launch_uefn_hub__";
-const CLOSE_UEFN_VALUE = "__close_uefn__";
 const LAUNCH_WAIT_MS = 120_000;
-const SKIP_VIEW_IDS = new Set([LAUNCH_UEFN_VALUE, LAUNCH_UEFN_HUB_VALUE, CLOSE_UEFN_VALUE]);
 
 let uefnLaunchLabel = "";
 const launchSubs = new Set<() => void>();
@@ -545,83 +541,330 @@ export function RemoteWindowSelect({
 
   if (!isRemote()) return null;
 
-  const uefnRows = rows.filter((row) => row.kind === "uefn");
-  const otherRows = rows.filter((row) => row.kind !== "uefn");
-  const uefnOpen = uefnRows.length > 0;
-
   return (
     <div className="remote-window-select no-drag" onPointerDown={() => void load()}>
-      <ChoiceDropdown
-        size="compact"
-        accordion
-        className="choice-dropdown--buttons"
-        aria-label="View"
+      <ViewMenu
+        rows={rows}
         value={value}
-        minWidth={280}
-        placeholder="View"
-        icon={<Icons.Monitor />}
-        onChange={(id) => {
-          if (SKIP_VIEW_IDS.has(id)) return;
-          onChange(id);
-        }}
-        options={[
-          { value: "", label: "Ducky" },
-          ...(uefnOpen
-            ? [
-                {
-                  value: CLOSE_UEFN_VALUE,
-                  label: "Close UEFN",
-                  group: "UEFN windows",
-                  disabled: true,
-                  action: {
-                    label: busy ? "…" : "Close",
-                    danger: true,
-                    onClick: () => void runUeFn("close"),
-                  },
-                },
-                ...uefnRows.map((row) => ({
-                  value: row.id,
-                  label: row.title,
-                  group: "UEFN windows",
-                  action: {
-                    label: busy ? "…" : "Restart",
-                    onClick: () => void runUeFn("restart"),
-                  },
-                })),
-              ]
-            : [
-                {
-                  value: LAUNCH_UEFN_VALUE,
-                  label: projectName.trim() ? `Launch ${projectName.trim()}` : "Launch UEFN",
-                  group: "UEFN windows",
-                  disabled: true,
-                  action: {
-                    label: busy ? "…" : "Launch",
-                    onClick: () => void runUeFn(projectName.trim() ? "project" : "hub"),
-                  },
-                },
-                ...(projectName.trim()
-                  ? [
-                      {
-                        value: LAUNCH_UEFN_HUB_VALUE,
-                        label: "Launch UEFN hub",
-                        group: "UEFN windows",
-                        disabled: true,
-                        action: {
-                          label: busy ? "…" : "Hub",
-                          onClick: () => void runUeFn("hub"),
-                        },
-                      },
-                    ]
-                  : []),
-              ]),
-          ...otherRows.map((row) => ({
-            value: row.id,
-            label: row.title,
-            group: "This desktop",
-          })),
-        ]}
+        busy={busy}
+        projectName={projectName.trim()}
+        onPick={onChange}
+        onUeFn={(kind) => void runUeFn(kind)}
       />
+    </div>
+  );
+}
+
+/** "Fleet - Google Chrome" → the window's own name, then the app's. */
+function splitWindowTitle(title: string): { name: string; app: string } {
+  const at = title.lastIndexOf(" - ");
+  if (at <= 0 || at >= title.length - 3) return { name: title, app: "" };
+  return { name: title.slice(0, at), app: title.slice(at + 3) };
+}
+
+/** "Display 2 (1920×1080)" → its label, size, and whether it is an ultrawide. */
+function screenParts(row: WindowViewRow): { label: string; size: string; wide: boolean } {
+  if (row.kind === "desktop") return { label: "All screens", size: "", wide: false };
+  const match = /^(.*?)\s*\((\d+)×(\d+)\)$/.exec(row.title);
+  if (!match) return { label: row.title, size: "", wide: false };
+  const [, label, w, h] = match;
+  return { label, size: `${w}×${h}`, wide: Number(w) / Math.max(1, Number(h)) > 2.2 };
+}
+
+function windowIcon(kind?: string) {
+  if (kind === "uefn") return <Icons.Mountain />;
+  if (kind === "blender") return <Icons.Box />;
+  return <Icons.Maximize />;
+}
+
+function ViewMenuItem({
+  icon,
+  title,
+  subtitle,
+  selected,
+  hero,
+  onPick,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  subtitle?: string;
+  selected: boolean;
+  hero?: boolean;
+  onPick: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div className={`view-menu-item${selected ? " is-selected" : ""}${hero ? " view-menu-item--hero" : ""}`}>
+      <button
+        type="button"
+        role="menuitemradio"
+        aria-checked={selected}
+        className="view-menu-item-main"
+        data-view-item
+        title={title}
+        onClick={onPick}
+      >
+        <span className="view-menu-icon" aria-hidden>
+          {icon}
+        </span>
+        <span className="view-menu-copy">
+          <span className="view-menu-title">{title}</span>
+          {subtitle ? <span className="view-menu-sub">{subtitle}</span> : null}
+        </span>
+        {selected ? (
+          <span className="view-menu-check" aria-hidden>
+            <Icons.Check />
+          </span>
+        ) : null}
+      </button>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The phone/web header's View menu: Ducky itself, UEFN (launch, restart, close), whole
+ * screens as tiles, and every other window with its app's name — icons and a check for
+ * what is showing, not radio circles.
+ */
+function ViewMenu({
+  rows,
+  value,
+  busy,
+  projectName,
+  onPick,
+  onUeFn,
+}: {
+  rows: WindowViewRow[];
+  value: string;
+  busy: boolean;
+  projectName: string;
+  onPick: (id: string) => void;
+  onUeFn: (kind: "hub" | "project" | "restart" | "close") => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const uefnRows = rows.filter((row) => row.kind === "uefn");
+  const screenRows = rows.filter((row) => row.kind === "desktop" || row.kind === "monitor");
+  const windowRows = rows.filter((row) => row.kind !== "uefn" && row.kind !== "desktop" && row.kind !== "monitor");
+  const current = value ? rows.find((row) => row.id === value)?.title || "a window" : "Ducky";
+
+  const close = () => {
+    setOpen(false);
+    anchorRef.current?.focus({ preventScroll: true });
+  };
+  const pick = (id: string) => {
+    onPick(id);
+    close();
+  };
+  const runUeFn = (kind: "hub" | "project" | "restart" | "close") => {
+    onUeFn(kind);
+    setOpen(false);
+  };
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const menu = menuRef.current;
+    const target =
+      menu?.querySelector<HTMLElement>('[data-view-item][aria-checked="true"]') ??
+      menu?.querySelector<HTMLElement>("[data-view-item]:not(:disabled)");
+    target?.focus({ preventScroll: true });
+  }, [open]);
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+    const edge = event.key === "Home" ? "first" : event.key === "End" ? "last" : "";
+    if (!step && !edge) return;
+    event.preventDefault();
+    const items = [...(menuRef.current?.querySelectorAll<HTMLElement>("[data-view-item]:not(:disabled)") ?? [])];
+    if (!items.length) return;
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    const next =
+      edge === "first" ? 0 : edge === "last" ? items.length - 1 : (at + step + items.length) % items.length;
+    items[next]?.focus();
+  };
+
+  return (
+    <div className="choice-dropdown choice-dropdown--compact choice-dropdown--icon choice-dropdown--light">
+      <button
+        ref={anchorRef}
+        type="button"
+        className={`choice-dropdown-trigger${open ? " is-open" : ""}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="View"
+        title={`View: ${current}`}
+        onClick={() => setOpen((on) => !on)}
+      >
+        <ChoiceTriggerFace icon={<Icons.Monitor />} />
+      </button>
+      <DropdownPanel
+        open={open}
+        anchorRef={anchorRef}
+        onClose={() => setOpen(false)}
+        placement="bottom"
+        minWidth={300}
+        width={320}
+        zIndex={100020}
+      >
+        <div
+          ref={menuRef}
+          className="view-menu"
+          role="menu"
+          aria-label="View"
+          data-dropdown-keep
+          onKeyDown={onKeyDown}
+          onPointerDown={(event) => event.stopPropagation()}
+          onWheel={(event) => event.stopPropagation()}
+        >
+          <ViewMenuItem
+            hero
+            icon={<img src="./OnlineMCPIcon.png" alt="" draggable={false} />}
+            title="Ducky"
+            subtitle="Chats, workflows and the editor"
+            selected={!value}
+            onPick={() => pick("")}
+          />
+
+          <section className="view-menu-section" aria-label="UEFN">
+            <div className="view-menu-section-title">UEFN</div>
+            {uefnRows.length ? (
+              uefnRows.map((row) => (
+                <ViewMenuItem
+                  key={row.id}
+                  icon={windowIcon("uefn")}
+                  title={row.title}
+                  subtitle={busy ? "Working…" : "Unreal Editor for Fortnite"}
+                  selected={value === row.id}
+                  onPick={() => pick(row.id)}
+                >
+                  <button
+                    type="button"
+                    className="view-menu-action"
+                    data-view-item
+                    disabled={busy}
+                    title="Restart UEFN"
+                    aria-label="Restart UEFN"
+                    onClick={() => runUeFn("restart")}
+                  >
+                    <Icons.Replay />
+                  </button>
+                  <button
+                    type="button"
+                    className="view-menu-action is-danger"
+                    data-view-item
+                    disabled={busy}
+                    title="Close UEFN"
+                    aria-label="Close UEFN"
+                    onClick={() => runUeFn("close")}
+                  >
+                    <Icons.Close />
+                  </button>
+                </ViewMenuItem>
+              ))
+            ) : (
+              <div className="view-menu-launch">
+                <span className="view-menu-icon" aria-hidden>
+                  {windowIcon("uefn")}
+                </span>
+                <span className="view-menu-copy">
+                  <span className="view-menu-title">{projectName || "UEFN"}</span>
+                  <span className="view-menu-sub">{busy ? "Starting…" : "Not open"}</span>
+                </span>
+                {projectName ? (
+                  <button
+                    type="button"
+                    className="view-menu-ghost-btn"
+                    data-view-item
+                    disabled={busy}
+                    title="Open the UEFN hub instead of this project"
+                    onClick={() => runUeFn("hub")}
+                  >
+                    Hub
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="view-menu-launch-btn"
+                  data-view-item
+                  disabled={busy}
+                  onClick={() => runUeFn(projectName ? "project" : "hub")}
+                >
+                  <Icons.Play />
+                  {busy ? "Starting" : "Launch"}
+                </button>
+              </div>
+            )}
+          </section>
+
+          {screenRows.length ? (
+            <section className="view-menu-section" aria-label="Screens">
+              <div className="view-menu-section-title">Screens</div>
+              <div className="view-menu-screens">
+                {screenRows.map((row) => {
+                  const { label, size, wide } = screenParts(row);
+                  const selected = value === row.id;
+                  return (
+                    <button
+                      key={row.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={selected}
+                      className={`view-menu-screen${selected ? " is-selected" : ""}`}
+                      data-view-item
+                      title={row.title}
+                      onClick={() => pick(row.id)}
+                    >
+                      <span
+                        className={`view-menu-screen-glyph${row.kind === "desktop" ? " view-menu-screen-glyph--all" : ""}${wide ? " view-menu-screen-glyph--wide" : ""}`}
+                        aria-hidden
+                      >
+                        <span />
+                        {row.kind === "desktop" ? <span /> : null}
+                      </span>
+                      <span className="view-menu-screen-label">{label}</span>
+                      {size ? <span className="view-menu-screen-sub">{size}</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+
+          <section className="view-menu-section" aria-label="Windows">
+            <div className="view-menu-section-title">
+              Windows
+              {windowRows.length ? <span className="view-menu-count">{windowRows.length}</span> : null}
+            </div>
+            {windowRows.length ? (
+              windowRows.map((row) => {
+                const { name, app } = splitWindowTitle(row.title);
+                return (
+                  <ViewMenuItem
+                    key={row.id}
+                    icon={windowIcon(row.kind)}
+                    title={name}
+                    subtitle={app}
+                    selected={value === row.id}
+                    onPick={() => pick(row.id)}
+                  />
+                );
+              })
+            ) : (
+              <div className="view-menu-empty">No other windows are open.</div>
+            )}
+          </section>
+        </div>
+      </DropdownPanel>
     </div>
   );
 }

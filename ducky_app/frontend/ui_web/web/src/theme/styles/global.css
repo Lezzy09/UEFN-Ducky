@@ -877,6 +877,268 @@ body.native-caption-input-ready .app-header .drag-region {
   width: auto;
   max-width: none;
 }
+
+/* View menu (phone / web header): Ducky, UEFN, screens and windows as icon rows and tiles,
+   with a check on what is showing instead of radio circles. */
+.view-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  max-height: min(72vh, 560px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.view-menu-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.view-menu-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 8px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.view-menu-count {
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.view-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+  border-radius: 8px;
+}
+.view-menu-item:hover {
+  background: var(--tab-hover);
+}
+.view-menu-item.is-selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.view-menu-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.view-menu-item--hero .view-menu-item-main {
+  padding: 8px;
+}
+.view-menu-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  color: var(--fg-dim);
+}
+.view-menu-item--hero .view-menu-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+}
+.view-menu-icon svg {
+  width: 15px;
+  height: 15px;
+}
+.view-menu-icon img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+.view-menu-item.is-selected .view-menu-icon {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: var(--accent);
+}
+.view-menu-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.view-menu-title {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.view-menu-sub {
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.view-menu-check {
+  flex: none;
+  display: inline-flex;
+  color: var(--accent);
+}
+.view-menu-action {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.view-menu-action svg {
+  width: 13px;
+  height: 13px;
+}
+.view-menu-action:hover:not(:disabled) {
+  background: var(--tab-active);
+  color: var(--fg);
+}
+.view-menu-action.is-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--red);
+}
+.view-menu-action:disabled,
+.view-menu-launch-btn:disabled,
+.view-menu-ghost-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.view-menu-launch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 6px 7px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+.view-menu-launch-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--fg-inverse);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.view-menu-launch-btn svg {
+  width: 11px;
+  height: 11px;
+}
+.view-menu-ghost-btn {
+  flex: none;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+.view-menu-ghost-btn:hover:not(:disabled) {
+  background: var(--tab-hover);
+  color: var(--fg);
+}
+.view-menu-screens {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 6px;
+  padding: 0 2px 2px;
+}
+.view-menu-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 10px 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.view-menu-screen:hover {
+  background: var(--tab-hover);
+}
+.view-menu-screen.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.view-menu-screen-glyph {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  color: var(--fg-dim);
+}
+.view-menu-screen-glyph > span {
+  width: 30px;
+  height: 19px;
+  border: 1.5px solid currentColor;
+  border-radius: 3px;
+}
+.view-menu-screen-glyph--wide > span {
+  width: 42px;
+  height: 12px;
+}
+.view-menu-screen-glyph--all > span {
+  width: 20px;
+  height: 14px;
+}
+.view-menu-screen.is-selected .view-menu-screen-glyph {
+  color: var(--accent);
+}
+.view-menu-screen-label {
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.view-menu-screen-sub {
+  margin-top: -3px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.view-menu-empty {
+  padding: 6px 8px 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.view-menu :is(.view-menu-item-main, .view-menu-action, .view-menu-screen, .view-menu-launch-btn, .view-menu-ghost-btn):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .remote-window-overlay {
   position: absolute;
   inset: 40px 0 0 0; /* below .app-header */
