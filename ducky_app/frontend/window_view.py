@@ -613,6 +613,135 @@ def _abs_xy(x: int, y: int) -> tuple[int, int]:
     return int((x - sl) * 65535 / max(1, sw - 1)), int((y - st) * 65535 / max(1, sh - 1))
 
 
+# A phone finger is a finger on the PC too (InjectTouchInput, Windows 8+): the mouse
+# pointer neither moves nor shows, so it is never in the stream. One contact at a time.
+_PT_TOUCH = 2
+_POINTER_FLAG_INRANGE = 0x00000002
+_POINTER_FLAG_INCONTACT = 0x00000004
+_POINTER_FLAG_DOWN = 0x00010000
+_POINTER_FLAG_UPDATE = 0x00020000
+_POINTER_FLAG_UP = 0x00040000
+_TOUCH_MASK_ALL = 0x1 | 0x2 | 0x4  # contact area, orientation, pressure
+_TOUCH_FEEDBACK_NONE = 0x3  # no Windows touch circles in the stream
+_DOUBLE_TAP_GAP_S = 0.04
+_touch_ready: bool | None = None
+_touch_at: tuple[int, int] | None = None  # the finger, while it is down
+
+
+def _touch_structs():
+    import ctypes
+    from ctypes import wintypes
+
+    class PointerInfo(ctypes.Structure):
+        _fields_ = [
+            ("pointerType", wintypes.DWORD),
+            ("pointerId", ctypes.c_uint32),
+            ("frameId", ctypes.c_uint32),
+            ("pointerFlags", ctypes.c_uint32),
+            ("sourceDevice", wintypes.HANDLE),
+            ("hwndTarget", wintypes.HWND),
+            ("ptPixelLocation", wintypes.POINT),
+            ("ptHimetricLocation", wintypes.POINT),
+            ("ptPixelLocationRaw", wintypes.POINT),
+            ("ptHimetricLocationRaw", wintypes.POINT),
+            ("dwTime", wintypes.DWORD),
+            ("historyCount", ctypes.c_uint32),
+            ("InputData", ctypes.c_int32),
+            ("dwKeyStates", wintypes.DWORD),
+            ("PerformanceCount", ctypes.c_uint64),
+            ("ButtonChangeType", ctypes.c_int),
+        ]
+
+    class PointerTouchInfo(ctypes.Structure):
+        _fields_ = [
+            ("pointerInfo", PointerInfo),
+            ("touchFlags", ctypes.c_uint32),
+            ("touchMask", ctypes.c_uint32),
+            ("rcContact", wintypes.RECT),
+            ("rcContactRaw", wintypes.RECT),
+            ("orientation", ctypes.c_uint32),
+            ("pressure", ctypes.c_uint32),
+        ]
+
+    return ctypes, PointerTouchInfo
+
+
+def _touch_available() -> bool:
+    global _touch_ready
+    if _touch_ready is None:
+        try:
+            import ctypes
+
+            _touch_ready = bool(ctypes.windll.user32.InitializeTouchInjection(1, _TOUCH_FEEDBACK_NONE))
+        except Exception:
+            _touch_ready = False
+    return _touch_ready
+
+
+def _inject_touch(x: int, y: int, flags: int) -> bool:
+    try:
+        ctypes, PointerTouchInfo = _touch_structs()
+        info = PointerTouchInfo()
+        info.pointerInfo.pointerType = _PT_TOUCH
+        info.pointerInfo.pointerId = 0
+        info.pointerInfo.pointerFlags = flags
+        info.pointerInfo.ptPixelLocation.x = int(x)
+        info.pointerInfo.ptPixelLocation.y = int(y)
+        info.touchMask = _TOUCH_MASK_ALL
+        info.rcContact.left, info.rcContact.top = int(x) - 2, int(y) - 2
+        info.rcContact.right, info.rcContact.bottom = int(x) + 2, int(y) + 2
+        info.orientation = 90
+        info.pressure = 32000
+        return bool(ctypes.windll.user32.InjectTouchInput(1, ctypes.byref(info)))
+    except Exception:
+        return False
+
+
+_TOUCH_DOWN = _POINTER_FLAG_DOWN | _POINTER_FLAG_INRANGE | _POINTER_FLAG_INCONTACT
+_TOUCH_MOVE = _POINTER_FLAG_UPDATE | _POINTER_FLAG_INRANGE | _POINTER_FLAG_INCONTACT
+
+
+def _touch_on_box(box: tuple[int, int, int, int], kind: str, nx: float, ny: float) -> bool:
+    """A finger down, moved, lifted or double-tapped. False when this PC can't take touch."""
+    global _touch_at, _touch_ready
+    if not _touch_available():
+        return False
+    x, y = map_norm_to_screen(box, nx, ny)
+    if kind == "down":
+        if _touch_at is not None:
+            _inject_touch(*_touch_at, _POINTER_FLAG_UP)
+        _touch_at = (x, y)
+        if _inject_touch(x, y, _TOUCH_DOWN):
+            return True
+        # Refused: the mouse takes over for the rest of the session, so its up lands too.
+        _touch_at = None
+        _touch_ready = False
+        return False
+    if kind == "move":
+        # No finger down: nothing to do, and never a mouse move.
+        if _touch_at is not None:
+            _touch_at = (x, y)
+            _inject_touch(x, y, _TOUCH_MOVE)
+        return True
+    if kind == "up":
+        if _touch_at is not None:
+            _touch_at = None
+            _inject_touch(x, y, _POINTER_FLAG_UP)
+        return True
+    if kind == "dblclick":
+        import time
+
+        for i in range(2):
+            if i:
+                time.sleep(_DOUBLE_TAP_GAP_S)
+            if not _inject_touch(x, y, _TOUCH_DOWN):
+                _touch_ready = False
+                return i > 0
+            _inject_touch(x, y, _POINTER_FLAG_UP)
+        return True
+    return False
+
+
 def _pointer_on_box(
     box: tuple[int, int, int, int] | None,
     kind: str,
@@ -623,9 +752,12 @@ def _pointer_on_box(
     delta: int = 0,
     dx: int | None = None,
     dy: int | None = None,
+    touch: bool = False,
 ) -> None:
     if kind == "move" and dx is not None:
         _send_mice([(int(dx), int(dy or 0), 0, 0x0001)])
+        return
+    if touch and box and kind in ("down", "move", "up", "dblclick") and _touch_on_box(box, kind, nx, ny):
         return
     down = _BUTTON_DOWN.get(int(button), 0x0002)
     up = _BUTTON_UP.get(int(button), 0x0004)
@@ -669,6 +801,7 @@ def inject_pointer(
     dx: int | None = None,
     dy: int | None = None,
     xy: bool = True,
+    touch: bool = False,
 ) -> None:
     if sys.platform != "win32" or hwnd <= 0 or _is_our_hwnd(hwnd):
         return
@@ -685,7 +818,7 @@ def inject_pointer(
     # Raise before a new press, never between down/up or the two clicks of a dblclick.
     if kind not in ("move", "up"):
         bring_to_front(hwnd)
-    _pointer_on_box(box, kind, nx, ny, button=button, delta=delta, dx=dx, dy=dy)
+    _pointer_on_box(box, kind, nx, ny, button=button, delta=delta, dx=dx, dy=dy, touch=touch)
 
 
 def inject_key(hwnd: int, key: str, *, down: bool = True) -> None:
@@ -769,6 +902,8 @@ def handle_stream_message(view: object, payload: bytes) -> None:
         ny = float(event.get("y") or 0) if has_xy else 0.0
         button = int(event.get("button") or 0)
         delta = int(event.get("delta") or 0)
+        # A phone finger: touch input, so the PC's mouse pointer stays where it is, hidden.
+        touch = bool(event.get("touch")) and has_xy and button == 0
         if screen:
             if sys.platform != "win32":
                 return
@@ -780,9 +915,9 @@ def handle_stream_message(view: object, payload: bytes) -> None:
                 desktop=_screen_metrics()[:4],
                 monitors=_monitors(),
             )
-            _pointer_on_box(box, kind, nx, ny, button=button, delta=delta, dx=dx, dy=dy)
+            _pointer_on_box(box, kind, nx, ny, button=button, delta=delta, dx=dx, dy=dy, touch=touch)
         else:
-            inject_pointer(hid, kind, nx, ny, button=button, delta=delta, dx=dx, dy=dy, xy=has_xy)
+            inject_pointer(hid, kind, nx, ny, button=button, delta=delta, dx=dx, dy=dy, xy=has_xy, touch=touch)
         return
     if kind == "text":
         # One raise, then the whole string. Newlines are dropped in _send_text

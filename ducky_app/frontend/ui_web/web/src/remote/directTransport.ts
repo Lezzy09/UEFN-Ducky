@@ -402,6 +402,14 @@ export class DirectTransport {
     void this.connect();
   }
 
+  /** The link froze (nothing arriving) or sat disconnected: drop it and dial again. */
+  restart(reason: string): void {
+    if (this.status.state === "idle") return;
+    this.mark(`restart: ${reason}`);
+    if (this.status.state !== "failed") this.fail(reason);
+    this.retry();
+  }
+
   private flushQueued() {
     const q = this.queuedInvokes.splice(0);
     for (const fn of q) fn();

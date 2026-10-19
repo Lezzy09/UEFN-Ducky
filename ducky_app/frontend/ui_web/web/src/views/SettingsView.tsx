@@ -51,6 +51,7 @@ import { useSettingsSidebarWidth } from "./settings/useSettingsSidebarWidth";
 import { settingsTabTargetId, targetRef, useUiTarget } from "../ui-targets/registry";
 import { settingsTabTone } from "../components/quick-open/quickOpenRecents";
 import { SetupReminder } from "../components/GatewaySetupNotice";
+import { DuckyParadeOverlay } from "../components/DuckyParade";
 
 const AppearanceTab = lazy(() => import("./settings/AppearanceTab").then((m) => ({ default: m.AppearanceTab })));
 const AudioTab = lazy(() => import("./settings/AudioTab").then((m) => ({ default: m.AudioTab })));
@@ -1003,7 +1004,7 @@ export const SettingsView = memo(function SettingsView({ version }: SettingsView
 
           <section ref={contentTargetRef} className="settings-view-content selectable-text no-drag">
             <SetupReminder />
-            <Suspense fallback={<p role="status">Loading settings…</p>}>
+            <Suspense fallback={<DuckyParadeOverlay size="sm" label="Loading settings…" />}>
               {content}
             </Suspense>
           </section>

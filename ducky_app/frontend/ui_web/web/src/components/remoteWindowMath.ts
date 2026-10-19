@@ -229,3 +229,29 @@ export function chordTap(keys: string[]): { type: "keydown" | "keyup"; key: stri
 export function buttonOnly(kind: "down" | "up", button: number): { type: "down" | "up"; button: number } {
   return { type: kind, button };
 }
+
+/** A live link that has received nothing at all (not even the sender's reports, which keep
+ *  coming on a still screen) for this long is frozen; one stuck "disconnected" this long
+ *  will not come back by itself. Either way the viewer dials again. */
+export const FREEZE_MS = 6000;
+
+export type LinkWatch = { bytes: number; at: number; downSince: number };
+
+export function newLinkWatch(): LinkWatch {
+  return { bytes: 0, at: 0, downSince: 0 };
+}
+
+export function linkFrozen(watch: LinkWatch, sample: { bytes: number; state: string }, now: number, ms = FREEZE_MS): boolean {
+  if (sample.state === "disconnected") {
+    if (!watch.downSince) watch.downSince = now;
+    return now - watch.downSince >= ms;
+  }
+  watch.downSince = 0;
+  if (sample.state !== "connected") return false;
+  if (!watch.at || sample.bytes > watch.bytes) {
+    watch.bytes = sample.bytes;
+    watch.at = now;
+    return false;
+  }
+  return now - watch.at >= ms;
+}

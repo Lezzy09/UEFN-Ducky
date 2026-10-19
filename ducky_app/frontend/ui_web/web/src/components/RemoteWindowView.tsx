@@ -3,6 +3,7 @@ import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { getApi, isRemote } from "../hooks/usePanelApi";
 import { ChoiceTriggerFace } from "./ChoiceDropdown";
 import { DropdownPanel } from "./DropdownPanel";
+import { DuckyParade } from "./DuckyParade";
 import { Icons } from "../icons/Icons";
 import {
   addViewPan,
@@ -13,7 +14,9 @@ import {
   ignoreMouseAfterTouch,
   isDoubleTap,
   keyDiff,
+  linkFrozen,
   mapViewPoint,
+  newLinkWatch,
   panZoomAround,
   pickUeFnFollow,
   pinchScale,
@@ -159,142 +162,74 @@ function useWindowViews(enabled: boolean): WindowViewRow[] {
   return rows;
 }
 
-export function RemoteViewControls({ hwnd }: { hwnd: string }) {
-  const [open, setOpen] = useState(false);
-  const anchorRef = useRef<HTMLButtonElement>(null);
-  const controls = useRemoteViewControls();
-  const rows = useWindowViews(isRemote() && !!hwnd);
-  const row = rows.find((r) => r.id === hwnd);
-  if (!isRemote() || !hwnd || row?.kind !== "uefn") return null;
+const CONTROL_MODES: { id: ControlMode; label: string }[] = [
+  { id: "editor", label: "Editor fly" },
+  { id: "play", label: "Play" },
+  { id: "editing", label: "Editing" },
+];
 
+const CONTROL_SLIDERS: { key: "look" | "deadzone" | "leftSize" | "rightSize"; label: string; min: number; max: number; step: number; digits: number }[] = [
+  { key: "look", label: "Look", min: 0.25, max: 3, step: 0.05, digits: 2 },
+  { key: "deadzone", label: "Deadzone", min: 0.1, max: 0.45, step: 0.01, digits: 2 },
+  { key: "leftSize", label: "Left stick", min: 88, max: 200, step: 1, digits: 0 },
+  { key: "rightSize", label: "Right stick", min: 88, max: 200, step: 1, digits: 0 },
+];
+
+/** Watching UEFN: the stick overlay's mode and sizes, in the View menu (the header shows
+ *  only Ducky and View while streaming). */
+function UefnControls() {
+  const controls = useRemoteViewControls();
   const tap = (key: string) => {
     remoteViewSend({ type: "keydown", key });
     window.setTimeout(() => remoteViewSend({ type: "keyup", key }), 80);
   };
-
   return (
-    <div className="remote-view-controls no-drag choice-dropdown choice-dropdown--compact choice-dropdown--icon choice-dropdown--light">
-      <button
-        ref={anchorRef}
-        type="button"
-        className={`choice-dropdown-trigger${open ? " is-open" : ""}`}
-        aria-haspopup="true"
-        aria-expanded={open}
-        aria-label="Controls"
-        title="Controls"
-        onClick={() => setOpen((v) => !v)}
-      >
-        <ChoiceTriggerFace icon={<Icons.Play />} />
-      </button>
-      <DropdownPanel open={open} anchorRef={anchorRef} onClose={() => setOpen(false)} minWidth={220}>
-        <div className="plugin-header-menu-list" role="menu">
+    <section className="view-menu-section" aria-label="UEFN controls">
+      <div className="view-menu-section-title">Controls</div>
+      <div className="view-menu-chips" role="group" aria-label="Controls mode">
+        {CONTROL_MODES.map((mode) => (
           <button
+            key={mode.id}
             type="button"
-            className={`plugin-header-menu-item${controls.mode === "editor" ? " is-active" : ""}`}
-            onClick={() => setRemoteViewControls({ mode: "editor" })}
+            className={`view-menu-chip${controls.mode === mode.id ? " is-selected" : ""}`}
+            aria-pressed={controls.mode === mode.id}
+            onClick={() => setRemoteViewControls({ mode: mode.id })}
           >
-            Editor fly
+            {mode.label}
           </button>
-          <button
-            type="button"
-            className={`plugin-header-menu-item${controls.mode === "play" ? " is-active" : ""}`}
-            onClick={() => setRemoteViewControls({ mode: "play" })}
-          >
-            Play
+        ))}
+      </div>
+      <div className="view-menu-chips">
+        <button type="button" className="view-menu-chip" onClick={() => setRemoteViewControls({ overlay: !controls.overlay })}>
+          {controls.overlay ? "Hide sticks" : "Show sticks"}
+        </button>
+        <button type="button" className="view-menu-chip" onClick={() => resetRemoteViewPanZoom()}>
+          Reset zoom
+        </button>
+        {COMMANDS.map((cmd) => (
+          <button key={cmd.key} type="button" className="view-menu-chip" onClick={() => tap(cmd.key)}>
+            {cmd.label}
           </button>
-          <button
-            type="button"
-            className={`plugin-header-menu-item${controls.mode === "editing" ? " is-active" : ""}`}
-            onClick={() => setRemoteViewControls({ mode: "editing" })}
-          >
-            Editing
-          </button>
-          <button
-            type="button"
-            className="plugin-header-menu-item"
-            onClick={() => setRemoteViewControls({ overlay: !controls.overlay })}
-          >
-            {controls.overlay ? "Hide sticks" : "Show sticks"}
-          </button>
-          <button type="button" className="plugin-header-menu-item" onClick={() => resetRemoteViewPanZoom()}>
-            Reset view
-          </button>
-          <label
-            className="remote-control-slider"
-            onPointerDown={(ev) => ev.stopPropagation()}
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <span>Look {controls.look.toFixed(2)}</span>
-            <input
-              type="range"
-              min={0.25}
-              max={3}
-              step={0.05}
-              value={controls.look}
-              onChange={(ev) => setRemoteViewControls({ look: Number(ev.target.value) })}
-            />
-          </label>
-          <label
-            className="remote-control-slider"
-            onPointerDown={(ev) => ev.stopPropagation()}
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <span>Deadzone {controls.deadzone.toFixed(2)}</span>
-            <input
-              type="range"
-              min={0.1}
-              max={0.45}
-              step={0.01}
-              value={controls.deadzone}
-              onChange={(ev) => setRemoteViewControls({ deadzone: Number(ev.target.value) })}
-            />
-          </label>
-          <label
-            className="remote-control-slider"
-            onPointerDown={(ev) => ev.stopPropagation()}
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <span>Left {Math.round(controls.leftSize)}</span>
-            <input
-              type="range"
-              min={88}
-              max={200}
-              step={1}
-              value={controls.leftSize}
-              onChange={(ev) => setRemoteViewControls({ leftSize: Number(ev.target.value) })}
-            />
-          </label>
-          <label
-            className="remote-control-slider"
-            onPointerDown={(ev) => ev.stopPropagation()}
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <span>Right {Math.round(controls.rightSize)}</span>
-            <input
-              type="range"
-              min={88}
-              max={200}
-              step={1}
-              value={controls.rightSize}
-              onChange={(ev) => setRemoteViewControls({ rightSize: Number(ev.target.value) })}
-            />
-          </label>
-          {COMMANDS.map((cmd) => (
-            <button
-              key={cmd.key}
-              type="button"
-              className="plugin-header-menu-item"
-              onClick={() => tap(cmd.key)}
-            >
-              {cmd.label}
-            </button>
-          ))}
-        </div>
-      </DropdownPanel>
-    </div>
+        ))}
+      </div>
+      {CONTROL_SLIDERS.map((slider) => (
+        <label key={slider.key} className="remote-control-slider">
+          <span>
+            {slider.label} <b>{controls[slider.key].toFixed(slider.digits)}</b>
+          </span>
+          <input
+            type="range"
+            min={slider.min}
+            max={slider.max}
+            step={slider.step}
+            value={controls[slider.key]}
+            onChange={(ev) => setRemoteViewControls({ [slider.key]: Number(ev.target.value) })}
+          />
+        </label>
+      ))}
+    </section>
   );
 }
-
 /**
  * Browser side of Remote View: WebRTC only. The tunnel WebSocket carries
  * SDP/ICE and the window-fit size; video and input are peer-to-peer.
@@ -404,10 +339,11 @@ export function useUeFnLaunching(): string {
 
 export function RemoteWindowLaunching({ label }: { label: string }) {
   return (
-    <div className="remote-window-overlay" role="status" aria-live="polite">
-      <div className="remote-window-status">
-        <span className="remote-window-spinner" aria-hidden />
-        <p className="remote-window-overlay-msg">Launching {label}…</p>
+    <div className="remote-window-overlay" aria-live="polite">
+      <div className="remote-window-screen">
+        <div className="remote-window-status">
+          <DuckyParade label={`Launching ${label}…`} />
+        </div>
       </div>
     </div>
   );
@@ -548,6 +484,7 @@ export function RemoteWindowSelect({
         value={value}
         busy={busy}
         projectName={projectName.trim()}
+        watchingUefn={rows.find((row) => row.id === value)?.kind === "uefn"}
         onPick={onChange}
         onUeFn={(kind) => void runUeFn(kind)}
       />
@@ -633,6 +570,7 @@ function ViewMenu({
   value,
   busy,
   projectName,
+  watchingUefn,
   onPick,
   onUeFn,
 }: {
@@ -640,6 +578,7 @@ function ViewMenu({
   value: string;
   busy: boolean;
   projectName: string;
+  watchingUefn: boolean;
   onPick: (id: string) => void;
   onUeFn: (kind: "hub" | "project" | "restart" | "close") => void;
 }) {
@@ -806,6 +745,8 @@ function ViewMenu({
             )}
           </section>
 
+          {watchingUefn ? <UefnControls /> : null}
+
           {screenRows.length ? (
             <section className="view-menu-section" aria-label="Screens">
               <div className="view-menu-section-title">Screens</div>
@@ -904,6 +845,8 @@ function overlaySize(el: HTMLElement | null): { w: number; h: number } | null {
 
 const HOLD_MS = 450;
 const TEXT_FOCUS_MS = 150;
+/** A finger held still on the PC needs a fresh position now and then, or Windows lets go. */
+const TOUCH_KEEPALIVE_MS = 100;
 
 function spawnRipple(host: HTMLElement, clientX: number, clientY: number, kind: "hold" | "tap"): HTMLSpanElement {
   const r = host.getBoundingClientRect();
@@ -917,9 +860,10 @@ function spawnRipple(host: HTMLElement, clientX: number, clientY: number, kind: 
 }
 
 /**
- * Pointer/key capture on the video. Mouse stays immediate click/drag.
- * Touch: tap at the down pixel (slop ignores jitter), double-tap = dblclick,
- * hold then move past slop = drag, two fingers pan/zoom the local view.
+ * Pointer/key capture on the video. A mouse stays an immediate click/drag on the PC's
+ * mouse. A finger is a finger on the PC (touch: the PC's pointer neither moves nor
+ * shows), like Chrome Remote Desktop: tap = click, long press = double-click, slide =
+ * drag, two fingers pan/zoom the local view.
  */
 function attachInput(
   video: HTMLVideoElement,
@@ -928,12 +872,14 @@ function attachInput(
   overlay: HTMLElement,
   onTap?: () => void,
 ) {
-  let pendingMove: { x: number; y: number; button: number } | null = null;
+  let pendingMove: { x: number; y: number; button: number; touch?: true } | null = null;
+  let lastMove: { x: number; y: number; button: number; touch?: true } | null = null;
   let raf = 0;
   const flush = () => {
     raf = 0;
     if (!pendingMove) return;
     send({ type: "move", ...pendingMove });
+    lastMove = pendingMove;
     pendingMove = null;
   };
   const viewBox = () => {
@@ -955,11 +901,12 @@ function attachInput(
   let held = false;
   let dragId = -1;
   let dragButton = 0;
+  let dragTouch = false;
+  let keepAlive = 0;
   let ignoreUntilClear = false;
   let pinch: { dist: number; cx: number; cy: number } | null = null;
   let downAt = { x: 0, y: 0 };
   let downMapped = { x: 0.5, y: 0.5 };
-  let downPointer = "mouse";
   let lastTap: { x: number; y: number; at: number; mapped: { x: number; y: number } } | null = null;
 
   const capture = (id: number) => {
@@ -968,6 +915,10 @@ function attachInput(
     } catch {
       /* ignore */
     }
+  };
+  const stopKeepAlive = () => {
+    if (keepAlive) window.clearInterval(keepAlive);
+    keepAlive = 0;
   };
   const clearHold = () => {
     if (holdTimer) {
@@ -982,37 +933,53 @@ function attachInput(
   const endDrag = (clientX: number, clientY: number) => {
     if (dragId < 0) return;
     flush();
-    send({ type: "up", ...point(clientX, clientY), button: dragButton });
+    stopKeepAlive();
+    send({ type: "up", ...point(clientX, clientY), button: dragButton, ...(dragTouch ? { touch: true } : {}) });
     dragId = -1;
+    dragTouch = false;
     holdRipple?.remove();
     holdRipple = null;
   };
   const tapAtDown = () => {
     spawnRipple(overlay, downAt.x, downAt.y, "tap");
     const now = performance.now();
-    const mapped = downMapped;
+    // A second tap lands where the first did, so the PC sees a double-click.
+    const second = !!lastTap && isDoubleTap(lastTap, { x: downAt.x, y: downAt.y, at: now });
+    const mapped = second && lastTap ? lastTap.mapped : downMapped;
     lastRemotePoint = mapped;
-    const prev = lastTap;
-    if (prev && isDoubleTap(prev, { x: downAt.x, y: downAt.y, at: now })) {
-      send({ type: "dblclick", ...prev.mapped, button: 0 });
-      lastTap = null;
-      return;
-    }
-    send({ type: "down", ...mapped, button: 0 });
-    send({ type: "up", ...mapped, button: 0 });
-    lastTap = { x: downAt.x, y: downAt.y, at: now, mapped };
-    if (downPointer !== "mouse") onTap?.();
+    send({ type: "down", ...mapped, button: 0, touch: true });
+    send({ type: "up", ...mapped, button: 0, touch: true });
+    lastTap = second ? null : { x: downAt.x, y: downAt.y, at: now, mapped };
+    onTap?.();
   };
-  const startDrag = () => {
+  const longPress = () => {
+    send({ type: "dblclick", ...downMapped, button: 0, touch: true });
+    lastTap = null;
+    holdRipple?.classList.add("is-locked");
+    const ripple = holdRipple;
+    holdRipple = null;
+    window.setTimeout(() => ripple?.remove(), 220);
+  };
+  const startTouchDrag = (clientX: number, clientY: number) => {
     if (pendingId < 0 || dragId >= 0) return;
-    capture(pendingId);
+    const id = pendingId;
+    if (holdTimer) window.clearTimeout(holdTimer);
+    holdTimer = 0;
+    capture(id);
     holdRipple?.classList.add("is-locked");
     flush();
-    send({ type: "down", ...downMapped, button: 0 });
+    send({ type: "down", ...downMapped, button: 0, touch: true });
     lastRemotePoint = downMapped;
-    dragId = pendingId;
+    dragId = id;
     dragButton = 0;
+    dragTouch = true;
     pendingId = -1;
+    lastTap = null;
+    pendingMove = { ...point(clientX, clientY), button: 0, touch: true };
+    if (!raf) raf = requestAnimationFrame(flush);
+    keepAlive = window.setInterval(() => {
+      if (!pendingMove && lastMove) send({ type: "move", ...lastMove });
+    }, TOUCH_KEEPALIVE_MS);
   };
   const syncPinch = () => {
     if (pts.size < 2) {
@@ -1042,15 +1009,14 @@ function attachInput(
     ev.preventDefault();
     if (ev.pointerType === "mouse" && ignoreMouseAfterTouch(lastOverlayTouchAt, performance.now())) return;
     video.focus({ preventScroll: true });
-    downPointer = ev.pointerType;
     pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
-    const mouse = ev.pointerType === "mouse";
-    if (mouse) {
+    if (ev.pointerType === "mouse") {
       capture(ev.pointerId);
       flush();
       send({ type: "down", ...point(ev.clientX, ev.clientY), button: ev.button });
       dragId = ev.pointerId;
       dragButton = ev.button;
+      dragTouch = false;
       return;
     }
     if (pts.size >= 2) {
@@ -1071,7 +1037,7 @@ function attachInput(
       holdTimer = 0;
       if (pendingId !== ev.pointerId) return;
       held = true;
-      holdRipple?.classList.add("is-locked");
+      longPress();
     }, HOLD_MS);
   };
   const onMove = (ev: PointerEvent) => {
@@ -1082,16 +1048,22 @@ function attachInput(
       return;
     }
     if (ev.pointerId === pendingId) {
+      if (held) return;
       if (holdRipple) {
         const box = overlay.getBoundingClientRect();
         holdRipple.style.left = `${ev.clientX - box.left}px`;
         holdRipple.style.top = `${ev.clientY - box.top}px`;
       }
-      if (held && !withinSlop(downAt.x, downAt.y, ev.clientX, ev.clientY)) startDrag();
+      if (!withinSlop(downAt.x, downAt.y, ev.clientX, ev.clientY)) startTouchDrag(ev.clientX, ev.clientY);
       return;
     }
     if (ev.pointerId !== dragId) return;
-    pendingMove = { ...point(ev.clientX, ev.clientY), button: dragButton };
+    if (dragTouch && holdRipple) {
+      const box = overlay.getBoundingClientRect();
+      holdRipple.style.left = `${ev.clientX - box.left}px`;
+      holdRipple.style.top = `${ev.clientY - box.top}px`;
+    }
+    pendingMove = { ...point(ev.clientX, ev.clientY), button: dragButton, ...(dragTouch ? { touch: true as const } : {}) };
     if (!raf) raf = requestAnimationFrame(flush);
   };
   const onUp = (ev: PointerEvent) => {
@@ -1099,8 +1071,9 @@ function attachInput(
     if (ev.pointerId === dragId) {
       endDrag(ev.clientX, ev.clientY);
     } else if (ev.pointerId === pendingId) {
+      const wasHeld = held;
       clearHold();
-      if (!ignoreUntilClear) tapAtDown();
+      if (!wasHeld && !ignoreUntilClear) tapAtDown();
     }
     if (pts.size < 2) pinch = null;
     if (pts.size === 0) ignoreUntilClear = false;
@@ -1125,6 +1098,8 @@ function attachInput(
   video.addEventListener("contextmenu", onContext);
   return () => {
     if (raf) cancelAnimationFrame(raf);
+    stopKeepAlive();
+    if (dragId >= 0 && dragTouch) send({ type: "up", ...lastRemotePoint, button: 0, touch: true });
     clearHold();
     video.removeEventListener("wheel", onWheel);
     video.removeEventListener("pointerdown", onDown);
@@ -1136,7 +1111,6 @@ function attachInput(
     video.removeEventListener("contextmenu", onContext);
   };
 }
-
 function preferCodecs(transceiver: RTCRtpTransceiver) {
   const caps = RTCRtpReceiver.getCapabilities?.("video");
   if (!caps) return;
@@ -1168,11 +1142,13 @@ type Stats = { codec: string; w: number; h: number; fps: number; kbps: number; r
 
 type StatsCursor = { bytes: number; at: number };
 
-async function sampleStats(pc: RTCPeerConnection, cursor: StatsCursor): Promise<Stats | null> {
+/** The picture's numbers, and everything the link has received (`link`, for the freeze check). */
+async function sampleStats(pc: RTCPeerConnection, cursor: StatsCursor): Promise<{ stats: Stats | null; link: number }> {
   const report = await pc.getStats();
   let inbound: Record<string, unknown> | null = null;
   const codecs = new Map<string, string>();
   let rtt = 0;
+  let link = 0;
   report.forEach((row) => {
     const r = row as Record<string, unknown>;
     if (r.type === "inbound-rtp" && r.kind === "video") inbound = r;
@@ -1180,9 +1156,10 @@ async function sampleStats(pc: RTCPeerConnection, cursor: StatsCursor): Promise<
     else if (r.type === "candidate-pair" && (r.nominated || r.state === "succeeded")) {
       const v = Number(r.currentRoundTripTime || 0);
       if (v > 0) rtt = v;
+      link = Math.max(link, Number(r.bytesReceived || 0));
     }
   });
-  if (!inbound) return null;
+  if (!inbound) return { stats: null, link };
   const row = inbound as Record<string, unknown>;
   const bytes = Number(row.bytesReceived || 0);
   const now = performance.now();
@@ -1192,12 +1169,15 @@ async function sampleStats(pc: RTCPeerConnection, cursor: StatsCursor): Promise<
   cursor.at = now;
   const mime = codecs.get(String(row.codecId || "")) || "";
   return {
-    codec: mime.split("/")[1] || "",
-    w: Number(row.frameWidth || 0),
-    h: Number(row.frameHeight || 0),
-    fps: Math.round(Number(row.framesPerSecond || 0)),
-    kbps: Math.round(kbps),
-    rtt: Math.round(rtt * 1000),
+    stats: {
+      codec: mime.split("/")[1] || "",
+      w: Number(row.frameWidth || 0),
+      h: Number(row.frameHeight || 0),
+      fps: Math.round(Number(row.framesPerSecond || 0)),
+      kbps: Math.round(kbps),
+      rtt: Math.round(rtt * 1000),
+    },
+    link,
   };
 }
 
@@ -1496,55 +1476,65 @@ function UefnStickOverlay({
   );
 }
 
-const TYPE_KEYS: { key: string; label: string }[] = [
-  { key: "Backspace", label: "Backspace" },
-  { key: "Enter", label: "Enter" },
-  { key: "Tab", label: "Tab" },
-  { key: "Escape", label: "Esc" },
-];
+const TYPE_MAX_PX = 112;
 
-type TypeBarHandle = { openFromTap: () => void; close: () => void };
+type TypeBarHandle = { focusFromTap: () => void; blur: () => void };
 
 /**
- * Local text field so a phone keyboard can type into the streamed PC.
- * Enter commits the field into the remote text box and does not press Enter there.
+ * Always under the stream, like our chat box: what you type goes to the PC on Send.
+ * Send with the box empty presses Enter there; Backspace in the empty box deletes there.
  */
-const RemoteTypeBar = forwardRef<TypeBarHandle, { send: SendFn }>(function RemoteTypeBar({ send }, ref) {
+const RemoteTypeBar = forwardRef<TypeBarHandle, { send: SendFn; disabled: boolean }>(function RemoteTypeBar({ send, disabled }, ref) {
   const barRef = useRef<HTMLFormElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [open, setOpen] = useState(false);
-  const [armed, setArmed] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const shiftEnter = useRef(false);
+  const [text, setText] = useState("");
 
-  const commit = useCallback(() => {
+  useLayoutEffect(() => {
     const el = inputRef.current;
     if (!el) return;
-    const text = el.value.slice(0, 2000);
-    el.value = "";
-    if (text) send({ type: "text", text });
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, TYPE_MAX_PX)}px`;
+  }, [text]);
+
+  const submit = useCallback(() => {
+    const value = (inputRef.current?.value ?? "").slice(0, 2000);
+    setText("");
+    if (value.trim()) send({ type: "text", text: value });
+    else tapSend(send, "Enter");
   }, [send]);
 
-  const close = useCallback(() => {
-    inputRef.current?.blur();
-    setArmed(false);
-    setOpen(false);
-  }, []);
+  useImperativeHandle(
+    ref,
+    () => ({
+      focusFromTap: () => inputRef.current?.focus({ preventScroll: true }),
+      blur: () => inputRef.current?.blur(),
+    }),
+    [],
+  );
 
-  const reveal = useCallback((fromTap: boolean) => {
-    barRef.current?.classList.remove("is-closed");
-    setArmed(fromTap);
-    setOpen(true);
-    inputRef.current?.focus({ preventScroll: true });
-  }, []);
+  // A phone keyboard's Enter, even mid-word, sends instead of starting a new line.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const onBeforeInput = (ev: InputEvent) => {
+      if (ev.inputType !== "insertLineBreak" && ev.inputType !== "insertParagraph") return;
+      if (shiftEnter.current) return;
+      ev.preventDefault();
+      submit();
+    };
+    el.addEventListener("beforeinput", onBeforeInput);
+    return () => el.removeEventListener("beforeinput", onBeforeInput);
+  }, [submit]);
 
-  useImperativeHandle(ref, () => ({ openFromTap: () => reveal(true), close }), [reveal, close]);
-
+  // Over the phone keyboard: the box rides up over the stream instead of resizing it.
   useEffect(() => {
     const vv = window.visualViewport;
     const sync = () => {
       const el = barRef.current;
       if (!el) return;
       const gap = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
-      el.style.bottom = `${gap}px`;
+      el.style.setProperty("--remote-kb", `${gap}px`);
     };
     sync();
     vv?.addEventListener("resize", sync);
@@ -1557,89 +1547,75 @@ const RemoteTypeBar = forwardRef<TypeBarHandle, { send: SendFn }>(function Remot
     };
   }, []);
 
+  const hasText = !!text.trim();
   return (
-    <>
-      {open ? null : (
-        <button
-          type="button"
-          className="remote-type-toggle"
-          aria-label="Keyboard"
-          onClick={(ev) => {
-            ev.stopPropagation();
-            reveal(false);
-          }}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-            <rect x="2" y="6" width="20" height="12" rx="2" />
-            <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8" />
-          </svg>
-        </button>
-      )}
-      <form
-        ref={barRef}
-        className={`remote-type-bar${open ? "" : " is-closed"}${armed ? " is-armed" : ""}`}
-        onSubmit={(ev) => {
-          ev.preventDefault();
-          commit();
-        }}
-        onPointerDown={(ev) => ev.stopPropagation()}
-      >
-        <input
+    <form
+      ref={barRef}
+      className="remote-type-bar"
+      onSubmit={(ev) => {
+        ev.preventDefault();
+        submit();
+      }}
+      onPointerDown={(ev) => ev.stopPropagation()}
+    >
+      <div className="remote-type-box">
+        <textarea
           ref={inputRef}
           className="remote-type-input"
-          enterKeyHint="done"
-          aria-label="Type on the desktop"
+          rows={1}
+          value={text}
+          disabled={disabled}
+          placeholder="Type on the PC"
+          aria-label="Type on the PC"
+          enterKeyHint="send"
           autoComplete="off"
-          onPointerDown={() => setArmed(false)}
+          onChange={(ev) => setText(ev.target.value)}
           onKeyDown={(ev) => {
-            if (ev.key !== "Enter" || ev.shiftKey) return;
+            shiftEnter.current = ev.key === "Enter" && ev.shiftKey;
             const native = ev.nativeEvent;
-            if (native.isComposing || ("keyCode" in native && native.keyCode === 229)) return;
-            ev.preventDefault();
-            commit();
+            if (native.isComposing || native.keyCode === 229) return;
+            if (ev.key === "Enter" && !ev.shiftKey) {
+              ev.preventDefault();
+              submit();
+            } else if (ev.key === "Backspace" && !ev.currentTarget.value) {
+              ev.preventDefault();
+              tapSend(send, "Backspace");
+            }
           }}
         />
-        {TYPE_KEYS.map((cmd) => (
-          <button
-            key={cmd.key}
-            type="button"
-            className="remote-type-key"
-            onPointerDown={(ev) => {
-              ev.preventDefault();
-              ev.stopPropagation();
-              tapSend(send, cmd.key);
-            }}
-          >
-            {cmd.label}
-          </button>
-        ))}
         <button
-          type="button"
-          className="remote-type-key"
-          onPointerDown={(ev) => {
-            ev.preventDefault();
-            ev.stopPropagation();
-            close();
-          }}
+          type="submit"
+          className={`remote-type-send${hasText ? " has-text" : ""}`}
+          disabled={disabled}
+          aria-label={hasText ? "Send to the PC" : "Press Enter on the PC"}
+          title={hasText ? "Send to the PC" : "Press Enter on the PC"}
+          // Keeps the box focused, so the phone keyboard stays up.
+          onPointerDown={(ev) => ev.preventDefault()}
         >
-          Hide
+          {hasText ? <Icons.Send /> : <Icons.Enter />}
         </button>
-      </form>
-    </>
+      </div>
+    </form>
   );
 });
 
 export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  const screenRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<HTMLDivElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const [phase, setPhase] = useState<Phase>("connecting");
+  const phaseRef = useRef<Phase>("connecting");
+  phaseRef.current = phase;
   const [reason, setReason] = useState("");
   const [stats, setStats] = useState<Stats | null>(null);
+  const [hasFrame, setHasFrame] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const attemptRef = useRef(0);
+  // Failures in a row; a stream that went live starts counting again.
+  const streakRef = useRef(0);
   const typeBarRef = useRef<TypeBarHandle>(null);
   const tapGen = useRef(0);
   const controls = useRemoteViewControls();
@@ -1671,6 +1647,11 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
     setAttempt(attemptRef.current);
   }, []);
 
+  const retryNow = useCallback(() => {
+    streakRef.current = 0;
+    retry();
+  }, [retry]);
+
   const onStreamTap = useCallback(() => {
     const gen = ++tapGen.current;
     window.setTimeout(() => {
@@ -1680,7 +1661,7 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
       void Promise.resolve(probe(hwnd))
         .then((focused) => {
           if (gen !== tapGen.current || !focused) return;
-          typeBarRef.current?.openFromTap();
+          typeBarRef.current?.focusFromTap();
         })
         .catch(() => {});
     }, TEXT_FOCUS_MS);
@@ -1688,41 +1669,77 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
 
   useEffect(() => {
     attemptRef.current = 0;
+    streakRef.current = 0;
     setAttempt(0);
     resetRemoteViewPanZoom();
-    typeBarRef.current?.close();
+    typeBarRef.current?.blur();
   }, [hwnd]);
+
+  // The first picture, not the connection, ends the loading screen — and an empty video is
+  // never on screen, so a browser's own play button never shows.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const check = () => setHasFrame(video.videoWidth > 0 && video.readyState >= 2);
+    const kinds = ["loadeddata", "playing", "resize", "emptied"] as const;
+    for (const k of kinds) video.addEventListener(k, check);
+    return () => {
+      for (const k of kinds) video.removeEventListener(k, check);
+    };
+  }, []);
+
+  // Back on a network (Wi-Fi to mobile data, out of a tunnel): dial straight away.
+  useEffect(() => {
+    const online = () => {
+      if (phaseRef.current !== "live") retryNow();
+    };
+    window.addEventListener("online", online);
+    return () => window.removeEventListener("online", online);
+  }, [retryNow]);
 
   useEffect(() => {
     if (!hwnd || !viewing) return;
     let closed = false;
     let live = false;
     let retryTimer = 0;
+    // Declared before fail(): the direct path calls it without ever setting a timer.
+    let connectTimer = 0;
     setPhase("connecting");
-    setReason("");
+    setReason(streakRef.current ? "Reconnecting…" : "");
     setStats(null);
+    setHasFrame(false);
 
     const fail = (why: string, kind: Phase = "failed") => {
       if (closed) return;
       closed = true;
+      window.clearTimeout(connectTimer);
+      // A few automatic retries in a row (the ducks keep running), then stop and say why:
+      // a viewer that retries forever makes the desktop re-capture and re-raise the window
+      // on every attempt.
+      if (kind === "failed" && streakRef.current < MAX_AUTO_RETRIES) {
+        const delay = RETRY_MS[Math.min(streakRef.current, RETRY_MS.length - 1)];
+        streakRef.current += 1;
+        setPhase("connecting");
+        setReason("Reconnecting…");
+        retryTimer = window.setTimeout(retry, delay);
+        return;
+      }
       setPhase(kind);
       setReason(why);
-      window.clearTimeout(connectTimer);
-      // A few automatic retries, then stop: a viewer that retries forever makes
-      // the desktop re-capture and re-raise the window on every attempt.
-      if (kind === "failed" && attemptRef.current < MAX_AUTO_RETRIES) {
-        const delay = RETRY_MS[Math.min(attemptRef.current, RETRY_MS.length - 1)];
-        retryTimer = window.setTimeout(retry, delay);
-      }
+    };
+    const wentLive = () => {
+      live = true;
+      streakRef.current = 0;
+      setPhase("live");
+      setReason("");
     };
 
     // Direct (tunnel-free) mode: the transport already owns the peer
     // connection; ask the desktop to attach the cropped window track.
     const direct = getDirectTransport();
     if (direct) {
-      const connectTimer = 0;
-      void connectTimer;
       const video = videoRef.current;
+      if (direct.status.state === "failed") direct.retry();
       const unsubVideo = direct.onVideo((stream) => {
         if (!video || closed) return;
         video.srcObject = stream;
@@ -1735,21 +1752,24 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
       void direct.invoke("watch_window", [{ hwnd }]).then(
         () => {
           if (closed) return;
-          live = true;
-          setPhase("live");
-          setReason("");
+          wentLive();
           for (const r of direct.peer?.getReceivers() ?? []) zeroPlayoutDelay(r);
-          const size = overlaySize(overlayRef.current);
+          const size = overlaySize(screenRef.current);
           if (size) direct.sendInput({ type: "size", ...size });
         },
         (err: unknown) => fail(`Desktop could not start screen capture: ${String((err as Error)?.message || err)}`),
       );
       const cursor: StatsCursor = { bytes: 0, at: 0 };
+      const watch = newLinkWatch();
       const statsTimer = window.setInterval(() => {
         const pc = direct.peer;
-        if (!pc || pc.connectionState !== "connected") return;
-        void sampleStats(pc, cursor).then((st) => {
-          if (st && !closed) setStats(st);
+        if (!pc || !live) return;
+        void sampleStats(pc, cursor).then(({ stats: st, link }) => {
+          if (closed) return;
+          if (st) setStats(st);
+          if (linkFrozen(watch, { bytes: link, state: pc.connectionState }, performance.now())) {
+            direct.restart("The stream froze. Reconnecting…");
+          }
         });
       }, 1000);
       return () => {
@@ -1770,7 +1790,7 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
     preferCodecs(transceiver);
     const dc = pc.createDataChannel("input", { ordered: true });
     dcRef.current = dc;
-    const connectTimer = window.setTimeout(
+    connectTimer = window.setTimeout(
       () => fail("No peer-to-peer path in time (network may block UDP)."),
       CONNECT_MS,
     );
@@ -1806,16 +1826,14 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
       const st = pc.connectionState;
       console.debug("[remote-view] connection", st);
       if (st === "connected") {
-        live = true;
         window.clearTimeout(connectTimer);
-        setPhase("live");
-        setReason("");
+        wentLive();
         return;
       }
       if (st === "failed") fail(live ? "Peer connection dropped." : "Peer connection failed (network may block UDP).");
     };
     ws.onopen = () => {
-      const size = overlaySize(overlayRef.current);
+      const size = overlaySize(screenRef.current);
       if (size) sendWs({ type: "size", ...size });
       void (async () => {
         try {
@@ -1874,10 +1892,15 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
     };
 
     const cursor: StatsCursor = { bytes: 0, at: 0 };
+    const watch = newLinkWatch();
     const statsTimer = window.setInterval(() => {
-      if (pc.connectionState !== "connected") return;
-      void sampleStats(pc, cursor).then((s) => {
-        if (s && !closed) setStats(s);
+      if (!live) return;
+      void sampleStats(pc, cursor).then(({ stats: s, link }) => {
+        if (closed) return;
+        if (s) setStats(s);
+        if (linkFrozen(watch, { bytes: link, state: pc.connectionState }, performance.now())) {
+          fail("The stream froze. Reconnecting…");
+        }
       });
     }, 1000);
 
@@ -1899,7 +1922,7 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
   }, [hwnd, attempt, retry, viewing]);
 
   useEffect(() => {
-    const el = overlayRef.current;
+    const el = screenRef.current;
     if (!el || !hwnd) return;
     let timer = 0;
     const ro = new ResizeObserver(() => {
@@ -1936,63 +1959,62 @@ export function RemoteWindowOverlay({ hwnd }: { hwnd: string }) {
 
   if (!hwnd) return null;
 
+  const showing = !idle && phase === "live" && hasFrame;
+  const loading = !idle && (phase === "connecting" || (phase === "live" && !hasFrame));
+
   return (
     <div className="remote-window-overlay" ref={overlayRef}>
-      <div className="remote-window-view" ref={viewRef}>
-        <div
-          className="remote-window-stage"
-          ref={(el) => {
-            bindViewStage(el);
-          }}
-        >
-          <video
-            ref={videoRef}
-            className={phase === "live" && !idle ? "remote-window-canvas" : "remote-window-canvas is-offscreen"}
-            autoPlay
-            muted
-            playsInline
-            disablePictureInPicture
-            tabIndex={0}
+      <div className="remote-window-screen" ref={screenRef}>
+        <div className="remote-window-view" ref={viewRef}>
+          <div
+            className="remote-window-stage"
+            ref={(el) => {
+              bindViewStage(el);
+            }}
+          >
+            <video
+              ref={videoRef}
+              className={showing ? "remote-window-canvas" : "remote-window-canvas is-offscreen"}
+              autoPlay
+              muted
+              playsInline
+              disablePictureInPicture
+              tabIndex={0}
+            />
+          </div>
+        </div>
+        {idle ? (
+          <div className="remote-window-status">
+            <p className="remote-window-overlay-msg">Paused after 5 minutes without use, to save battery and data.</p>
+            <button type="button" className="remote-window-retry" onClick={resume}>
+              Resume
+            </button>
+          </div>
+        ) : loading ? (
+          <div className="remote-window-status" aria-live="polite">
+            <DuckyParade label={phase === "live" ? "Starting the picture…" : reason || "Connecting to the PC…"} />
+          </div>
+        ) : phase !== "live" ? (
+          <div className="remote-window-status">
+            <p className="remote-window-overlay-msg">{reason}</p>
+            <button type="button" className="remote-window-retry" onClick={retryNow}>
+              {phase === "kicked" ? "Take over" : "Retry now"}
+            </button>
+          </div>
+        ) : null}
+        {showing && stats ? <span className="remote-window-stats">{statsLabel(stats)}</span> : null}
+        {showing && controls.overlay && watchingUefn ? (
+          <UefnStickOverlay
+            send={send}
+            mode={controls.mode}
+            look={controls.look}
+            deadzone={controls.deadzone}
+            leftSize={controls.leftSize}
+            rightSize={controls.rightSize}
           />
-        </div>
+        ) : null}
       </div>
-      {idle ? (
-        <div className="remote-window-status">
-          <p className="remote-window-overlay-msg">Paused after 5 minutes without use, to save battery and data.</p>
-          <button type="button" className="remote-window-retry" onClick={resume}>
-            Resume
-          </button>
-        </div>
-      ) : phase !== "live" ? (
-        <div className="remote-window-status">
-          <p className="remote-window-overlay-msg">
-            {phase === "connecting" ? "Connecting to desktop…" : reason}
-          </p>
-          {phase === "kicked" ? (
-            <button type="button" className="remote-window-retry" onClick={retry}>
-              Take over
-            </button>
-          ) : phase === "failed" ? (
-            <button type="button" className="remote-window-retry" onClick={retry}>
-              Retry now
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-      {!idle && phase === "live" && stats ? (
-        <span className="remote-window-stats">{statsLabel(stats)}</span>
-      ) : null}
-      {!idle && phase === "live" ? <RemoteTypeBar ref={typeBarRef} send={send} /> : null}
-      {!idle && phase === "live" && controls.overlay && watchingUefn ? (
-        <UefnStickOverlay
-          send={send}
-          mode={controls.mode}
-          look={controls.look}
-          deadzone={controls.deadzone}
-          leftSize={controls.leftSize}
-          rightSize={controls.rightSize}
-        />
-      ) : null}
+      {!idle ? <RemoteTypeBar ref={typeBarRef} send={send} disabled={phase !== "live"} /> : null}
     </div>
   );
 }

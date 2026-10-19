@@ -251,6 +251,12 @@ export const Icons = {
       <path d="M12 19V5M5 12l7-7 7 7" />
     </svg>
   ),
+  /** The return key. */
+  Enter: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 5v7a3 3 0 01-3 3H5M9 11l-4 4 4 4" />
+    </svg>
+  ),
   Mic: () => (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />

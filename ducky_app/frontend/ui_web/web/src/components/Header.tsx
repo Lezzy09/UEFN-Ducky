@@ -35,7 +35,7 @@ import { targetRef, useUiTarget } from "../ui-targets/registry";
 import { ChoiceTriggerFace } from "./ChoiceDropdown";
 import { DropdownPanel } from "./DropdownPanel";
 import { setHeaderTabsSlot } from "./MobileTabSwitcher";
-import { RemoteViewControls, RemoteWindowSelect } from "./RemoteWindowView";
+import { RemoteWindowSelect } from "./RemoteWindowView";
 import type { PluginHeaderButton } from "../hooks/usePluginContributions";
 
 interface HeaderProps {
@@ -470,6 +470,8 @@ export function Header({
   ) : null;
 
   const showWorkflow = !!(workflowAction?.connected && isOnline);
+  // Watching a PC window from the phone: only Ducky and the View menu stay up top.
+  const streaming = isRemote() && !!watchWindowId;
   const headerTargetRef = useUiTarget("shell.header", { kind: "button", label: "Top bar", route: "chat" });
   const settingsTargetRef = useUiTarget("header.settings", {
     kind: "button",
@@ -490,7 +492,7 @@ export function Header({
   return (
     <header
       ref={headerTargetRef}
-      className={`glass-panel app-header${isFocus ? " app-header--focus" : ""} drag-region app-drag-surface${compactHeader ? " app-header--compact" : ""}${isRemote() ? " app-header--remote" : ""}`}
+      className={`glass-panel app-header${isFocus ? " app-header--focus" : ""} drag-region app-drag-surface${compactHeader ? " app-header--compact" : ""}${isRemote() ? " app-header--remote" : ""}${streaming ? " app-header--streaming" : ""}`}
     >
       <div id="ducky-skin-header" className="ducky-skin-slot ducky-skin-slot--header" aria-hidden="true" />
       <div className="app-header-left">
@@ -500,7 +502,11 @@ export function Header({
                 status={connectionStatus}
                 projectName={project.path?.trim() ? project.name : undefined}
                 hasStoreUpdates={hasStoreUpdates}
-                onOpenSettings={() => void handleSettingsToggle()}
+                onOpenSettings={() => {
+                  // Settings is part of Ducky: show Ducky instead of the PC window.
+                  if (streaming) onWatchWindowId?.("");
+                  handleSettingsToggle();
+                }}
                 extra={
                   !isFocus && isRemote() ? (
                     <ProjectSelector
@@ -615,6 +621,8 @@ export function Header({
       ) : null}
 
       <div className="app-header-trailing">
+        {streaming ? null : (
+        <>
         <span className="app-header-editor-actions">
           {showWorkflow && workflowAction ? (
             <div
@@ -691,16 +699,15 @@ export function Header({
         <BackgroundActivityDropdown />
 
         <div className="app-header-divider" />
+        </>
+        )}
 
         {isRemote() && onWatchWindowId ? (
-          <>
-            <RemoteWindowSelect
-              value={watchWindowId}
-              onChange={onWatchWindowId}
-              projectName={project.path?.trim() ? project.name : undefined}
-            />
-            <RemoteViewControls hwnd={watchWindowId} />
-          </>
+          <RemoteWindowSelect
+            value={watchWindowId}
+            onChange={onWatchWindowId}
+            projectName={project.path?.trim() ? project.name : undefined}
+          />
         ) : null}
 
         {isRemote() ? null : (

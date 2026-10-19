@@ -1158,14 +1158,27 @@ body.native-caption-input-ready .app-header .drag-region {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+/* Watching a PC window from the phone: the picture over our own background, the typing
+   box under it, every color from the theme. */
+.app-header--streaming .app-header-center {
+  display: none;
+}
+.app-header--streaming .app-header-trailing {
+  margin-left: auto;
+}
 .remote-window-overlay {
   position: absolute;
   inset: 34px 0 0 0; /* below .app-header */
   z-index: 20;
-  background: #0b0b0d;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+.remote-window-screen {
+  position: relative;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 .remote-window-view {
@@ -1193,6 +1206,7 @@ body.native-caption-input-ready .app-header .drag-region {
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
+/* Until the first picture: never on screen, so no browser play button over our ducks. */
 .remote-window-canvas.is-offscreen {
   opacity: 0;
   pointer-events: none;
@@ -1200,135 +1214,155 @@ body.native-caption-input-ready .app-header .drag-region {
 .remote-window-status {
   position: absolute;
   inset: 0;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 12px;
   padding: 24px;
+  background: var(--bg);
   text-align: center;
 }
-.remote-window-spinner {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  border: 2px solid var(--border);
-  border-top-color: var(--amber, #e0af68);
-  animation: spin-slow 0.8s linear infinite;
-}
 .remote-window-overlay-msg {
-  color: var(--fg);
-  opacity: 0.7;
-  font-size: 13px;
+  max-width: 320px;
   margin: 0;
+  color: var(--fg-dim);
+  font-size: 13px;
+  line-height: 1.5;
 }
 .remote-window-retry {
-  background: var(--btn-bg);
+  min-height: 36px;
+  padding: 0 16px;
   border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--btn-bg);
   color: var(--fg);
-  border-radius: 6px;
-  padding: 8px 16px;
+  font: inherit;
   font-size: 13px;
   cursor: pointer;
 }
-.remote-type-toggle {
-  display: none;
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 5;
-  width: 44px;
-  height: 44px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 22px;
-  border: 1px solid var(--accent);
-  background: var(--bg);
-  color: var(--fg);
+.remote-window-retry:hover {
+  background: var(--btn-hover);
 }
-@media (pointer: coarse) {
-  .remote-type-toggle {
-    display: flex;
-  }
-}
+/* The typing box: always there, like the chat box. Over the phone keyboard it rides up
+   (--remote-kb) on top of the picture rather than resizing it. */
 .remote-type-bar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  position: relative;
   z-index: 6;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 8px;
-  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  flex: none;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
   background: var(--bg);
-  color: var(--fg);
-  border-top: 1px solid var(--accent);
+  transform: translateY(calc(-1 * var(--remote-kb, 0px)));
 }
-.remote-type-bar.is-closed {
-  opacity: 0;
-  pointer-events: none;
-  height: 44px;
-  overflow: hidden;
-  padding-top: 0;
-  padding-bottom: 0;
-}
-.remote-type-bar.is-armed .remote-type-input {
-  outline: 2px solid var(--accent);
+.remote-type-box {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 3px 3px 3px 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--input-bg);
 }
 .remote-type-input {
   flex: 1;
   min-width: 0;
-  min-height: 40px;
-  border-radius: 8px;
-  border: 1px solid var(--accent);
-  background: var(--bg);
+  max-height: 112px;
+  margin: 0;
+  padding: 7px 0;
+  border: 0;
+  outline: none;
+  background: transparent;
   color: var(--fg);
-  font-size: 16px;
-  padding: 8px 10px;
+  font: inherit;
+  font-size: 16px; /* 16px or more: phones don't zoom in on focus */
+  line-height: 22px;
+  resize: none;
+  overflow-y: auto;
 }
-.remote-type-key {
-  flex: 0 0 auto;
-  min-width: 44px;
-  min-height: 40px;
-  padding: 0 10px;
-  border-radius: 8px;
-  border: 1px solid var(--accent);
-  background: var(--bg);
-  color: var(--fg);
-  font-size: 12px;
-  font-weight: 600;
+.remote-type-input::placeholder {
+  color: var(--muted);
+}
+.remote-type-send {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.remote-type-send.has-text {
+  background: var(--accent);
+  color: var(--fg-inverse);
+}
+.remote-type-send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.remote-type-send svg {
+  width: 18px;
+  height: 18px;
 }
 .remote-window-stats {
   position: absolute;
   right: 8px;
   bottom: 6px;
+  z-index: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  color: var(--fg-dim);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-  color: #fff;
-  opacity: 0.55;
-  background: rgba(0, 0, 0, 0.45);
-  border-radius: 4px;
-  padding: 2px 6px;
   pointer-events: none;
 }
-.remote-view-controls {
+/* UEFN controls inside the View menu. */
+.view-menu-chips {
   display: flex;
-  align-items: center;
-  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 4px 6px;
+}
+.view-menu-chip {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.view-menu-chip:hover {
+  background: var(--tab-hover);
+  color: var(--fg);
+}
+.view-menu-chip.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--fg);
 }
 .remote-control-slider {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 8px 12px;
-  color: var(--fg);
+  padding: 6px 6px;
+  color: var(--fg-dim);
   font-size: 12px;
+}
+.remote-control-slider b {
+  color: var(--fg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .remote-control-slider input {
   width: 100%;
+  accent-color: var(--accent);
 }
 .remote-sticks {
   --stick-left: 128px;
@@ -1346,8 +1380,8 @@ body.native-caption-input-ready .app-header .drag-region {
   width: 88px;
   height: 88px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
   touch-action: none;
 }
 .remote-stick--left {
@@ -1375,7 +1409,7 @@ body.native-caption-input-ready .app-header .drag-region {
   height: 36px;
   margin: -18px 0 0 -18px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.32);
+  background: color-mix(in srgb, var(--fg) 32%, transparent);
 }
 .remote-stick-btns {
   pointer-events: auto;
@@ -1405,21 +1439,23 @@ body.native-caption-input-ready .app-header .drag-region {
   min-height: 44px;
   padding: 0 12px;
   border-radius: 22px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(0, 0, 0, 0.45);
-  color: #fff;
+  border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  color: var(--fg);
   font-size: 13px;
   font-weight: 600;
   touch-action: none;
 }
+/* Where the finger is: grows while you hold (long press = double-click), the accent once
+   it fires or drags. */
 .remote-touch-ripple {
   position: absolute;
   width: 48px;
   height: 48px;
   margin: -24px 0 0 -24px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.7);
-  background: rgba(255, 255, 255, 0.16);
+  border: 2px solid color-mix(in srgb, var(--fg) 70%, transparent);
+  background: color-mix(in srgb, var(--fg) 16%, transparent);
   pointer-events: none;
   z-index: 4;
   animation: remote-touch-hold 450ms ease-out forwards;
@@ -1427,8 +1463,8 @@ body.native-caption-input-ready .app-header .drag-region {
 .remote-touch-ripple.is-locked {
   animation: none;
   transform: scale(1.15);
-  background: rgba(180, 180, 180, 0.38);
-  border-color: rgba(220, 220, 220, 0.92);
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  border-color: var(--accent);
 }
 .remote-touch-ripple.is-tap {
   animation: remote-touch-tap 280ms ease-out forwards;
@@ -1452,8 +1488,7 @@ body.native-caption-input-ready .app-header .drag-region {
     transform: scale(1.7);
     opacity: 0;
   }
-}
-.app-header-trailing button {
+}.app-header-trailing button {
   -webkit-app-region: no-drag;
 }
 .app-header-save-btn {

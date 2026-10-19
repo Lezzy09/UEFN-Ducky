@@ -9,7 +9,9 @@ import {
   isDoubleTap,
   isUeFnHubTitle,
   keyDiff,
+  linkFrozen,
   mapViewPoint,
+  newLinkWatch,
   panZoomAround,
   pickUeFnFollow,
   pinchScale,
@@ -205,5 +207,25 @@ describe("look / undo overlay", () => {
     expect(ignoreMouseAfterTouch(0, 100)).toBe(false);
     expect(ignoreMouseAfterTouch(1000, 1300)).toBe(true);
     expect(ignoreMouseAfterTouch(1000, 1500)).toBe(false);
+  });
+});
+
+describe("linkFrozen", () => {
+  it("lets a still screen be, and calls a link with no packets for six seconds frozen", () => {
+    const watch = newLinkWatch();
+    expect(linkFrozen(watch, { bytes: 100, state: "connected" }, 0)).toBe(false);
+    // Reports keep trickling in on a still screen: never frozen.
+    expect(linkFrozen(watch, { bytes: 140, state: "connected" }, 5000)).toBe(false);
+    expect(linkFrozen(watch, { bytes: 180, state: "connected" }, 10_000)).toBe(false);
+    expect(linkFrozen(watch, { bytes: 180, state: "connected" }, 15_000)).toBe(false);
+    expect(linkFrozen(watch, { bytes: 180, state: "connected" }, 16_000)).toBe(true);
+  });
+
+  it("gives a disconnected link six seconds to come back", () => {
+    const watch = newLinkWatch();
+    expect(linkFrozen(watch, { bytes: 0, state: "disconnected" }, 1000)).toBe(false);
+    expect(linkFrozen(watch, { bytes: 0, state: "connected" }, 3000)).toBe(false);
+    expect(linkFrozen(watch, { bytes: 0, state: "disconnected" }, 4000)).toBe(false);
+    expect(linkFrozen(watch, { bytes: 0, state: "disconnected" }, 10_000)).toBe(true);
   });
 });

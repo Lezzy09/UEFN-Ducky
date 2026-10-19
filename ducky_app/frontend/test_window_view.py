@@ -159,6 +159,56 @@ def test_look_move_sends_relative_dx(monkeypatch) -> None:
     assert calls[-1][4]["button"] == 2
 
 
+def test_phone_finger_is_touch_and_never_moves_the_mouse(monkeypatch) -> None:
+    import frontend.window_view as wv
+
+    touches: list[tuple[int, int, int]] = []
+    mice: list[list] = []
+    monkeypatch.setattr(wv, "_touch_ready", True)
+    monkeypatch.setattr(wv, "_touch_at", None)
+    monkeypatch.setattr(wv, "_inject_touch", lambda x, y, flags: touches.append((x, y, flags)) or True)
+    monkeypatch.setattr(wv, "_send_mice", lambda events: mice.append(events))
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    box = (0, 0, 1000, 500)
+    wv._pointer_on_box(box, "move", 0.5, 0.5, touch=True)  # no finger down: nothing at all
+    wv._pointer_on_box(box, "down", 0.5, 0.5, touch=True)
+    wv._pointer_on_box(box, "move", 0.6, 0.5, touch=True)
+    wv._pointer_on_box(box, "up", 0.6, 0.5, touch=True)
+    wv._pointer_on_box(box, "dblclick", 0.2, 0.2, touch=True)
+    assert mice == []
+    flags = [f for _x, _y, f in touches]
+    assert flags[0] & wv._POINTER_FLAG_DOWN and flags[1] & wv._POINTER_FLAG_UPDATE
+    assert flags[2] == wv._POINTER_FLAG_UP
+    assert [f & wv._POINTER_FLAG_DOWN for f in flags[3:]] == [wv._POINTER_FLAG_DOWN, 0, wv._POINTER_FLAG_DOWN, 0]
+    assert wv._touch_at is None
+
+
+def test_refused_touch_falls_back_to_the_mouse_for_the_session(monkeypatch) -> None:
+    import frontend.window_view as wv
+
+    mice: list[list] = []
+    monkeypatch.setattr(wv, "_touch_ready", True)
+    monkeypatch.setattr(wv, "_touch_at", None)
+    monkeypatch.setattr(wv, "_inject_touch", lambda *_a: False)
+    monkeypatch.setattr(wv, "_screen_metrics", lambda: (0, 0, 1000, 500, 1000, 500))
+    monkeypatch.setattr(wv, "_send_mice", lambda events: mice.append(events))
+    box = (0, 0, 1000, 500)
+    wv._pointer_on_box(box, "down", 0.5, 0.5, touch=True)
+    wv._pointer_on_box(box, "up", 0.5, 0.5, touch=True)
+    assert len(mice) == 2  # the press and its release both reach the mouse
+    assert wv._touch_ready is False
+
+
+def test_stream_touch_flag_reaches_the_pointer(monkeypatch) -> None:
+    import frontend.window_view as wv
+
+    calls: list[dict] = []
+    monkeypatch.setattr(wv, "inject_pointer", lambda hwnd, kind, nx, ny, **kw: calls.append(kw))
+    handle_stream_message(9, b'{"type":"down","x":0.5,"y":0.5,"button":0,"touch":true}')
+    handle_stream_message(9, b'{"type":"down","x":0.5,"y":0.5,"button":0}')
+    assert [c["touch"] for c in calls] == [True, False]
+
+
 def test_inject_pointer_uses_window_box(monkeypatch) -> None:
     import frontend.window_view as wv
 
