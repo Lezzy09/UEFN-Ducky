@@ -703,7 +703,15 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
       const scroller = scrollerElRef.current;
       const content = contentElRef.current;
       if (!scroller || !content || typeof ResizeObserver === "undefined") return;
+      let gutter = -1;
       const observer = new ResizeObserver(() => {
+        // The scrollbar's real width (it varies by browser), so the CSS can keep the text the
+        // same distance from both edges of the pane.
+        const width = scroller.offsetWidth - scroller.clientWidth;
+        if (width !== gutter) {
+          gutter = width;
+          scroller.style.setProperty("--chat-scrollbar-width", `${width}px`);
+        }
         if (dockLayoutBusy() || scroller.clientHeight <= 0) return;
         if (followingRef.current) scrollToBottom();
         else {

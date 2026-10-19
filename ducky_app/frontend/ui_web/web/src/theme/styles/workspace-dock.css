@@ -196,10 +196,11 @@
 }
 
 /* Floating sidebars (like VS Code): each sidebar is a rounded card with a small gap of app
-   background around it, and the editor area is that background itself, with no frame. The
-   gap is the divider: the 1px line turns invisible but still drags, and lights up on hover.
-   Rail widths are unchanged — the gutter comes out of the rail's own width. Not for phones
-   (slide-over rails) or Focus. */
+   background above and below it, and the editor area is that background itself, with no
+   frame. No lines: the card's edge facing the editor lights up only while its resize grip is
+   hovered or dragged. The card meets the editor area with no gap, so the editor's content
+   keeps its own padding whether a sidebar is open or not. Rail widths are unchanged — the
+   gutter comes out of the rail's own width. Not for phones (slide-over rails) or Focus. */
 .workspace-dock-layout--default:not(.is-narrow) {
   --dock-gap: 6px;
 }
@@ -208,28 +209,21 @@
 .workspace-dock-layout--default:not(.is-narrow) .dock-rail {
   box-sizing: border-box;
   background: transparent;
-  padding: var(--dock-gap);
+  padding: var(--dock-gap) 0;
 }
 
 .workspace-dock-layout--default:not(.is-narrow) .dock-rail-inner {
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm, 8px);
   background: var(--sidebar);
 }
 
-/* The window-side edge of each sidebar runs flush into the window: no gap, line or corner. */
-.workspace-dock-layout--default:not(.is-narrow) .dock-rail--left {
-  padding-left: 0;
-}
+/* The window-side edge of each sidebar runs flush into the window: no corner. */
 
 .workspace-dock-layout--default:not(.is-narrow) .dock-rail--left .dock-rail-inner {
   border-left: 0;
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
-}
-
-.workspace-dock-layout--default:not(.is-narrow) .dock-rail--right {
-  padding-right: 0;
 }
 
 .workspace-dock-layout--default:not(.is-narrow) .dock-rail--right .dock-rail-inner {
@@ -296,20 +290,12 @@ body.appearance-skin-active .workspace-dock-layout--default:not(.is-narrow) .doc
   background: color-mix(in srgb, var(--bg-panel) 55%, transparent);
 }
 
-/* The resize grip covers the whole gap up to the card, and hovering or dragging it lights the
-   sidebar card's own edge instead of a line floating in the gap. */
+/* Hovering or dragging the resize grip lights the sidebar card's own edge instead of a line
+   beside it. */
 .workspace-dock-layout--default:not(.is-narrow) .dock-rail-resize-handle,
 .workspace-dock-layout--default:not(.is-narrow) .dock-rail-resize-handle:hover,
 .workspace-dock-layout--default:not(.is-narrow) .dock-rail-resize-handle.is-dragging {
   background-color: transparent;
-}
-
-.workspace-dock-layout--default:not(.is-narrow) .dock-rail-shell--left .dock-rail-resize-handle::before {
-  left: calc(-1 * var(--dock-gap));
-}
-
-.workspace-dock-layout--default:not(.is-narrow) .dock-rail-shell--right .dock-rail-resize-handle::before {
-  right: calc(-1 * var(--dock-gap));
 }
 
 .workspace-dock-layout--default:not(.is-narrow) .dock-rail-shell--left:has(> .dock-rail-resize-handle:is(:hover, .is-dragging)) .dock-rail-inner {
@@ -320,11 +306,16 @@ body.appearance-skin-active .workspace-dock-layout--default:not(.is-narrow) .doc
   border-left-color: var(--accent);
 }
 
-/* The chat box ends level with the sidebar cards and runs the middle's full width (still
-   centred at the chat column's width on a wide screen). */
+/* Split editor panes have no line between them: the divider shows only while hovered or
+   dragged, so it can still be grabbed. */
+.workspace-dock-center .split-layout-root .split-resize-handle:not(:hover, .is-dragging, .is-corner-hover) {
+  background-color: transparent;
+}
+
+/* The chat box ends level with the sidebar cards. Its sides keep the chat's own padding, the
+   same as the messages above it, in every pane of a split. */
 .workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .chat-pane-input-area {
   padding-bottom: var(--dock-gap);
-  padding-inline: max(0px, calc((100% - var(--chat-column-width, 960px)) / 2));
 }
 
 .chat-view-layout .workspace-dock-layout {

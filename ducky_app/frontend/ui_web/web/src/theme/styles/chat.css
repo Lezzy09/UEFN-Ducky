@@ -22,7 +22,6 @@
 }
 .chat-pane-root--popup .chat-column-shell {
   --chat-column-pad-left: 10px;
-  --chat-column-pad-right: 10px;
   --chat-column-width: 100%;
 }
 .chat-pane-content--popup {
@@ -73,10 +72,9 @@
 }
 
 .chat-column-shell {
-  /* The same space on both sides. The right pad is 6px less only where the message list's
-     6px scrollbar sits; the chat box and empty state use the left pad on both sides. */
+  /* The same space on both sides of the messages, the plan bar and the chat box, from the chat
+     itself (never from the sidebars), in every pane of a split. */
   --chat-column-pad-left: max(24px, calc((100% - var(--chat-column-width, 960px)) / 2 + 24px));
-  --chat-column-pad-right: max(18px, calc((100% - var(--chat-column-width, 960px)) / 2 + 18px));
   flex: 1;
   display: flex;
   min-height: 0;
@@ -2393,9 +2391,11 @@
   height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
-  /* Keep text at chat-column-width; padding (not a narrower scroller) leaves the scrollbar at the pane edge. */
+  /* Keep text at chat-column-width; padding (not a narrower scroller) leaves the scrollbar at the pane edge.
+     The right pad gives back the scrollbar's width (measured by the list), so the text sits the
+     same distance from both edges, like the chat box below it. */
   padding-left: var(--chat-column-pad-left);
-  padding-right: var(--chat-column-pad-right);
+  padding-right: max(0px, calc(var(--chat-column-pad-left) - var(--chat-scrollbar-width, 0px)));
   padding-top: 0;
   box-sizing: border-box;
   scroll-padding-top: 16px;
