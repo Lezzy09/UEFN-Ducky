@@ -165,6 +165,8 @@ _PUBLIC_METHODS = frozenset({
     'focus_tab',
     'get_agent_profile_editor_catalog',
     'get_app_patch_notes',
+    'get_whats_new',
+    'mark_whats_new_seen',
     'get_app_update_status',
     'get_appearance',
     'get_workflow_version',

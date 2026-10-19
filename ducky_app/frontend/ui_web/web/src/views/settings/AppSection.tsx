@@ -10,8 +10,10 @@ import {
   type AppUpdateState,
 } from "../../update/appUpdate";
 import { useUiTarget } from "../../ui-targets/registry";
+import { openWhatsNew } from "../../components/WhatsNewHost";
 import { GeneralSectionHeader } from "./GeneralSectionHeader";
 import { PatchNotesList } from "./store/PatchNotesList";
+import { formatPatchDate } from "./store/storeData";
 
 type AppActionPhase = "idle" | "checking" | "uninstalling";
 /** Result of the last manual update check. */
@@ -241,6 +243,17 @@ export function AppSection() {
     return <>v{localVersion}</>;
   })();
 
+  const currentNote = notes?.find((n) => n.version === localVersion);
+  const releasedOn = formatPatchDate(currentNote?.created_at);
+  const whatsNewLine = currentNote?.items?.length ? (
+    <span className="general-tab-whats-new">
+      {releasedOn ? <>Updated to v{localVersion} on {releasedOn} · </> : null}
+      <button type="button" className="general-tab-whats-new-link" onClick={openWhatsNew}>
+        What&apos;s new
+      </button>
+    </span>
+  ) : null;
+
   const appTargetRef = useUiTarget("settings.general.app", {
     kind: "settings_field",
     label: "App Info",
@@ -254,7 +267,12 @@ export function AppSection() {
           <GeneralSectionHeader
             icon={<AppInfoIcon />}
             title="App Info"
-            description={<span className="general-tab-app-version">{versionLine}</span>}
+            description={
+              <>
+                <span className="general-tab-app-version">{versionLine}</span>
+                {whatsNewLine}
+              </>
+            }
           />
         </div>
         <div className="general-tab-app-info-actions">

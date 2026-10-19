@@ -255,13 +255,76 @@ def first_sentences(subjects: list[str], limit: int = 700) -> str:
     return " ".join(reversed(picked))
 
 
-def notes_from_git() -> str:
-    """What changed since the last release: the commits after the last version bump."""
+def commit_subjects_since_release() -> list[str]:
+    """Subjects of the commits after the last version bump, oldest first."""
     def git(*args: str) -> str:
         return subprocess.run(["git", *args], cwd=str(ROOT), capture_output=True, text=True, check=True).stdout
 
     last = git("log", "-1", "--format=%H", "--", INIT_PY.relative_to(ROOT).as_posix()).strip()
-    return first_sentences(git("log", "--reverse", "--no-merges", "--format=%s", f"{last}..HEAD" if last else "-20").splitlines())
+    return git("log", "--reverse", "--no-merges", "--format=%s", f"{last}..HEAD" if last else "-20").splitlines()
+
+
+def notes_from_git() -> str:
+    """What changed since the last release: the commits after the last version bump."""
+    return first_sentences(commit_subjects_since_release())
+
+
+# The app's What's new window lists at most this many one-line changes per version
+# (the Store refuses more, or longer lines).
+MAX_NOTE_ITEMS = 5
+MAX_NOTE_ITEM_CHARS = 70
+_NOTE_KINDS = ("new", "improved", "fix")
+_FIX_WORDS = re.compile(r"\b(no longer|fixed|fixes|again|works now|now works)\b", re.IGNORECASE)
+_NEW_WORDS = re.compile(r"^(new\b|now you can\b|you can now\b|adds?\b)|\bnew\b", re.IGNORECASE)
+
+
+def note_item(subject: str) -> dict[str, str] | None:
+    """One short change from a commit subject: the first sentence up to its first
+    colon, semicolon or ", so", without the closing full stop."""
+    first = re.split(r"(?<=[.!?])\s", subject.strip(), maxsplit=1)[0]
+    text = re.split(r"[:;]\s|,\s+so\s|\s+—\s", first, maxsplit=1)[0].strip().rstrip(".")
+    if not text:
+        return None
+    kind = "fix" if _FIX_WORDS.search(text) else "new" if _NEW_WORDS.search(text) else "improved"
+    return {"kind": kind, "text": text}
+
+
+def short_note_items(subjects: list[str]) -> tuple[list[dict[str, str]], list[str]]:
+    """``(items, left_out)``: the newest commits' short changes that fit the What's new
+    window (oldest first), and the drafts too long or past the limit."""
+    drafts: list[dict[str, str]] = []
+    for subject in subjects:
+        item = note_item(subject)
+        if item and all(d["text"] != item["text"] for d in drafts):
+            drafts.append(item)
+    kept: list[dict[str, str]] = []
+    left_out: list[str] = []
+    for item in reversed(drafts):
+        if len(item["text"]) <= MAX_NOTE_ITEM_CHARS and len(kept) < MAX_NOTE_ITEMS:
+            kept.append(item)
+        else:
+            left_out.append(item["text"])
+    return list(reversed(kept)), list(reversed(left_out))
+
+
+def load_note_items(path: Path) -> list[dict[str, str]]:
+    """Hand-written short changes: a JSON list of ``{"kind", "text"}`` under the window's limits."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"--notes-file {path}: {exc}") from exc
+    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_NOTE_ITEMS:
+        raise SystemExit(f"--notes-file: a list of 1 to {MAX_NOTE_ITEMS} changes")
+    items: list[dict[str, str]] = []
+    for row in raw:
+        kind = str(row.get("kind") or "").strip() if isinstance(row, dict) else ""
+        text = str(row.get("text") or "").strip() if isinstance(row, dict) else ""
+        if kind not in _NOTE_KINDS:
+            raise SystemExit(f"--notes-file: kind must be one of {', '.join(_NOTE_KINDS)}")
+        if not text or "\n" in text or len(text) > MAX_NOTE_ITEM_CHARS:
+            raise SystemExit(f"--notes-file: \"{text}\" must be one line of at most {MAX_NOTE_ITEM_CHARS} characters")
+        items.append({"kind": kind, "text": text})
+    return items
 
 
 def write_version(version: str) -> None:
@@ -780,6 +843,14 @@ def main() -> None:
         action="store_true",
         help="Without --notes: the first sentence of each commit since the last release",
     )
+    parser.add_argument(
+        "--notes-file",
+        type=Path,
+        default=None,
+        help="JSON list of short changes for the What's new window: "
+        f'[{{"kind": "fix", "text": "…"}}], kind new|improved|fix, at most {MAX_NOTE_ITEMS}, '
+        f"each at most {MAX_NOTE_ITEM_CHARS} characters. Without it, --notes-from-git drafts them",
+    )
     parser.add_argument("--version", default="", help="Override version (only with --no-bump)")
     parser.add_argument(
         "--set-version",
@@ -834,6 +905,16 @@ def main() -> None:
     if args.notes_from_git and not args.notes.strip():
         args.notes = notes_from_git()
         print(f"notes: {args.notes or '(no commits since the last release)'}")
+
+    args.note_items = []
+    if args.notes_file is not None:
+        args.note_items = load_note_items(args.notes_file)
+    elif args.notes_from_git:
+        args.note_items, left_out = short_note_items(commit_subjects_since_release())
+        for text in left_out:
+            print(f"  not in What's new (over {MAX_NOTE_ITEM_CHARS} characters or past {MAX_NOTE_ITEMS}): {text}")
+    for item in args.note_items:
+        print(f"  What's new · {item['kind']}: {item['text']}")
 
     phase = args.phase
     if phase and (args.no_bump or args.exe is not None or args.build_only):
@@ -976,6 +1057,7 @@ def main() -> None:
             "fileId": file_id,
             "size": size,
             "notes": args.notes or "",
+            "items": getattr(args, "note_items", []),
         },
     )
     print(json.dumps(result, indent=2))

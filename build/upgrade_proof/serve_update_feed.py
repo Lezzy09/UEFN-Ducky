@@ -20,6 +20,7 @@ import hashlib
 import json
 import re
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -39,6 +40,12 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--version", default="", help="override the version parsed from the file name")
     ap.add_argument("--notes", default="Local update rehearsal.")
+    ap.add_argument(
+        "--notes-file",
+        type=Path,
+        default=None,
+        help="the short changes for What's new, as release/publish_app.py --notes-file takes them",
+    )
     args = ap.parse_args()
 
     installer = Path(args.installer).resolve()
@@ -53,6 +60,11 @@ def main() -> int:
         "installerSha256": digest,
         "releaseNotes": args.notes,
     }
+    if args.notes_file is not None:
+        items = json.loads(args.notes_file.read_text(encoding="utf-8"))
+        payload["versions"] = [
+            {"version": version, "changelog": args.notes, "created_at": str(int(time.time())), "items": items}
+        ]
     body = json.dumps({"handled": True, "payload": payload}).encode("utf-8")
     data = installer.read_bytes()
 

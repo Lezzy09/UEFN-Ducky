@@ -555,6 +555,16 @@ class PanelApiWindowMixin:
 
         return get_app_patch_notes()
 
+    def get_whats_new(self) -> dict[str, Any]:
+        from frontend.whats_new import get_whats_new
+
+        return get_whats_new()
+
+    def mark_whats_new_seen(self, version: str = "", dont_show_again: bool = False) -> dict[str, Any]:
+        from frontend.whats_new import mark_whats_new_seen
+
+        return mark_whats_new_seen(version, bool(dont_show_again))
+
     def get_install_info(self) -> dict[str, Any]:
         from frontend.install_info import get_install_info
 

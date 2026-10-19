@@ -90,6 +90,31 @@ def test_extract_release_versions() -> None:
     assert fallback == [{"version": "1.2.40", "changelog": "one", "created_at": None}]
 
 
+def test_extract_release_versions_keeps_short_changes() -> None:
+    rows = extract_release_versions(
+        {
+            "versions": [
+                {
+                    "version": "1.2.412",
+                    "changelog": "Long notes.",
+                    "items": [
+                        {"kind": "fix", "text": " Team plugins no longer reset by themselves "},
+                        {"kind": "odd", "text": "Faster start"},
+                        {"kind": "new", "text": ""},
+                        "junk",
+                    ],
+                },
+                {"version": "1.2.411", "changelog": "Old style only."},
+            ]
+        }
+    )
+    assert rows[0]["items"] == [
+        {"kind": "fix", "text": "Team plugins no longer reset by themselves"},
+        {"kind": "improved", "text": "Faster start"},
+    ]
+    assert "items" not in rows[1]
+
+
 def test_feed_is_paused() -> None:
     assert feed_is_paused({"downloadsPaused": True, "currentVersion": "1.2.133"}) is True
     assert feed_is_paused({"downloadsPaused": False, "currentVersion": "1.2.135"}) is False

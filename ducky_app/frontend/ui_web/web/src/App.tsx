@@ -42,6 +42,7 @@ import { installPanelPushBus, subscribePanelPush } from "./hooks/usePanelPushBus
 import { queuePluginTrustRequest } from "./hooks/pluginTrustRequest";
 import { UpdateAvailableModal } from "./components/UpdateAvailableModal";
 import { UpdateLockOverlay } from "./components/UpdateLockOverlay";
+import { WhatsNewHost } from "./components/WhatsNewHost";
 import {
   NavigationHistoryProvider,
   useNavigationHistoryOptional,
@@ -280,6 +281,7 @@ export default function App() {
         />
       )}
       <UpdateLockOverlay />
+      <WhatsNewHost />
       <MicPermissionModal />
       </UndoHistoryProvider>
       </NavigationHistoryProvider>

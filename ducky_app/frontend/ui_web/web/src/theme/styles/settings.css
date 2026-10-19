@@ -1091,6 +1091,25 @@
   line-height: 1.5;
 }
 
+.general-tab-whats-new {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.general-tab-whats-new-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.general-tab-whats-new-link:hover {
+  text-decoration: underline;
+}
+
 .general-tab-app-info {
   display: flex;
   align-items: flex-start;

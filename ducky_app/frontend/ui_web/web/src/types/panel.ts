@@ -1647,6 +1647,37 @@ export interface DuckyOSStorePatchNote {
   version?: string;
   changelog?: string;
   created_at?: string | null;
+  /** App versions only: the one-line changes the What's new window lists. */
+  items?: WhatsNewItem[];
+}
+
+export type WhatsNewKind = "new" | "improved" | "fix";
+
+export interface WhatsNewItem {
+  kind: WhatsNewKind;
+  text: string;
+}
+
+export interface WhatsNewVersion {
+  version: string;
+  created_at?: string | null;
+  items: WhatsNewItem[];
+}
+
+export interface WhatsNewStatus {
+  /** The running version. */
+  current: string;
+  last_seen?: string | null;
+  /** When the Store released the running version. */
+  released_at?: string | null;
+  enabled: boolean;
+  /** Open the window now with `versions`. */
+  show: boolean;
+  /** The versions not seen yet, newest first. */
+  versions: WhatsNewVersion[];
+  /** The latest versions with changes, newest first (Settings reopens these). */
+  recent: WhatsNewVersion[];
+  error?: string | null;
 }
 
 export interface DuckyOSStoreVersions {
@@ -3069,6 +3100,8 @@ export interface PanelApi {
     cached: boolean;
     error?: string | null;
   }>;
+  get_whats_new?(): Promise<WhatsNewStatus>;
+  mark_whats_new_seen?(version: string, dont_show_again?: boolean): Promise<{ ok: boolean; error?: string }>;
   get_install_info(): Promise<InstallInfo>;
   apply_update(): Promise<UpdaterResult>;
   get_update_progress(): Promise<UpdateProgress>;

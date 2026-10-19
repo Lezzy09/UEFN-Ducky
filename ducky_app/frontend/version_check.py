@@ -83,6 +83,21 @@ def _extract_str(payload: dict[str, Any], key: str) -> str | None:
     return text or None
 
 
+def _short_items(raw: Any) -> list[dict[str, str]]:
+    """A version's one-line changes for the What's new window (``kind`` new|improved|fix)."""
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        kind = str(item.get("kind") or "").strip()
+        if text:
+            out.append({"kind": kind if kind in ("new", "improved", "fix") else "improved", "text": text})
+    return out
+
+
 def extract_release_versions(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Public patch-note rows from collect/app-version (`versions` or current notes)."""
     raw = payload.get("versions")
@@ -95,13 +110,15 @@ def extract_release_versions(payload: dict[str, Any]) -> list[dict[str, Any]]:
             if not ver:
                 continue
             created = str(row.get("created_at") or "").strip()
-            out.append(
-                {
-                    "version": ver,
-                    "changelog": str(row.get("changelog") or row.get("notes") or "").strip(),
-                    "created_at": created or None,
-                }
-            )
+            note = {
+                "version": ver,
+                "changelog": str(row.get("changelog") or row.get("notes") or "").strip(),
+                "created_at": created or None,
+            }
+            items = _short_items(row.get("items"))
+            if items:
+                note["items"] = items
+            out.append(note)
     if out:
         return out
     ver = _extract_remote_version(payload)

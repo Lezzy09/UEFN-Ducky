@@ -1,0 +1,131 @@
+/* What's new after an update: short, theme tokens only, equal borders. */
+.whats-new .whats-new-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 20px 16px;
+  max-height: 360px;
+}
+
+.whats-new-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.whats-new-duck {
+  flex-shrink: 0;
+}
+
+.whats-new-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--fg);
+}
+
+.whats-new-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.whats-new-version {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.whats-new-version-line {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-dim);
+}
+
+.whats-new-date {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.whats-new-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.whats-new-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--fg) 3%, var(--card));
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--fg);
+}
+
+.whats-new-kind {
+  flex-shrink: 0;
+  min-width: 46px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  --kind: var(--accent);
+  color: var(--kind);
+  background: color-mix(in srgb, var(--kind) 14%, transparent);
+}
+
+.whats-new-kind--new {
+  --kind: var(--green);
+}
+
+.whats-new-kind--improved {
+  --kind: var(--blue);
+}
+
+.whats-new-kind--fix {
+  --kind: var(--accent);
+}
+
+.whats-new-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.whats-new-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.whats-new-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.whats-new-link:hover {
+  text-decoration: underline;
+}
+
+.whats-new-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
