@@ -59,7 +59,9 @@ free ones too. See `plugin_publishing`.
    (`<script src="../../_kit/ducky.js"></script>`) and colors only with Appearance
    variables (`var(--bg)`, `var(--fg)`, `var(--card)`, `var(--border)`,
    `var(--accent)`, `var(--font-ui)`, …). Never `#hex`, `rgb()`, `hsl()` or named
-   colors, never a made-up `var(--x)`: `ducky_plugin_validate` rejects them.
+   colors, never a made-up `var(--x)`: `ducky_plugin_validate` rejects them. Lay it
+   out like the app: side panels as floating cards, a frameless main area, pill tabs,
+   icon rows with a check instead of radio circles (`plugin_look` §3).
    Theme keys from `theme.get` / `appearance_theme` come **without** `--`. If the
    user specified colors, ship them as an Appearance theme (`appearance.profiles` /
    `appearance.css`) and keep the panel on the variables. Always tell the user the

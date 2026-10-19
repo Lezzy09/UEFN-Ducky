@@ -1,5 +1,5 @@
 ---
-description: "Plugin look and style: the Ducky UI kit, every Appearance variable, panel states, focus, hidden tabs and themes"
+description: "Plugin look and style: the Ducky UI kit, the app's layout (floating side panels, pill tabs, icon choice rows), every Appearance variable, panel states, focus, hidden tabs and themes"
 metadata:
   order: 4
   label: "Plugins: look and style"
@@ -31,10 +31,13 @@ rules cover it: **link the UI kit**, and **color only with Appearance variables*
 
 | Class | What |
 |-------|------|
+| `dk-layout` > `aside.dk-sidebar` (+ `--right`, `dk-sidebar__title`) + `main.dk-main` | Page layout: floating side panels, a frameless main area (§3) |
+| `dk-nav-item` (`aria-current="page"` on the open one) | Icon + label rows in a side panel |
 | `dk-btn` + `dk-btn--primary` / `--secondary` / `--ghost` / `--danger` / `--icon` | Buttons |
 | `dk-input`, `dk-select`, `dk-field` (+ `dk-field__label`, `dk-field__hint`) | Inputs, selects, labelled fields |
-| `dk-check` (a `<label>` around a checkbox or radio) | Checkboxes and radios |
-| `dk-tabs` > `button.dk-tab[aria-selected="true"]` | Tabs |
+| `dk-choice` (`role="radio"`, `aria-checked`; `dk-choice__icon`, `dk-choice__text`, `dk-choice__hint`) | Picking one of a few things: icon rows with a check, not radio circles |
+| `dk-check` (a `<label>` around a checkbox) | Checkboxes (and radios only in dense forms) |
+| `dk-tabs` > `button.dk-tab[aria-selected="true"]` | Tabs: rounded pills on the page background |
 | `dk-card` (+ `--interactive`, `dk-card__title`) | Cards |
 | `dk-table` | Tables |
 | `dk-badge` + `--accent` / `--success` / `--warn` / `--danger` / `--info` | Badges |
@@ -151,6 +154,34 @@ the same variables at draw time: `getComputedStyle(document.documentElement)
 
 ## 3. Panel UX every panel needs
 
+- **Layout, like the app:** side panels are floating cards (a 6px gap of page
+  background around them, `1px var(--border)`, `var(--radius-sm)` corners,
+  `var(--panel-header)` fill); the main area is the page background itself, with no
+  border, frame or fill. Use the kit's `dk-layout` / `dk-sidebar` / `dk-main`:
+
+  ```html
+  <div class="dk-layout">
+    <aside class="dk-sidebar">
+      <div class="dk-sidebar__title">Library</div>
+      <button class="dk-nav-item" aria-current="page"><svg>…</svg> Cards</button>
+      <button class="dk-nav-item"><svg>…</svg> Packs</button>
+    </aside>
+    <main class="dk-main dk-page">…</main>
+  </div>
+  ```
+
+  A **dock** panel already sits inside the app's sidebar card: don't draw another
+  outer border or card around it.
+- **Rows inside a card** are rounded and inset a few pixels from its edges, so hover,
+  selection and the focus ring stay inside the card and never touch its border.
+- **Icons:** nav rows, choice rows and list rows lead with a small icon; a bare text
+  list is the exception.
+- **Picking one of a few things** (a mode, a view, a target) is a column of
+  `dk-choice` rows (icon, title, short hint, a check on the picked one), or tiles for
+  visual things like screens or sizes. Not radio circles, and not collapsible
+  accordions just to group a short list: use a small uppercase section title instead.
+- **Tabs** are the kit's pills on the page background: no strip behind them and no
+  underline.
 - **States:** a loading state (`dk-loading`) while the first call runs, an empty
   state (`dk-empty` with one line saying what to do), and an error state
   (`dk-error` with the message the backend returned). Never a blank panel.

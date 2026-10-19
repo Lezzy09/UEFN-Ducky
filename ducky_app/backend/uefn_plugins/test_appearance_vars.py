@@ -31,7 +31,8 @@ def test_the_ui_kit_uses_only_appearance_variables_and_no_color_literals(tmp_pat
     assert plugin_lint.check_ui(tmp_path, {}) == []
     for part in ("dk-btn--primary", "dk-btn--secondary", "dk-btn--ghost", "dk-btn--danger", "dk-btn--icon",
                  "dk-input", "dk-select", "dk-check", "dk-tab", "dk-card", "dk-table", "dk-badge",
-                 "dk-empty", "dk-loading", "dk-error", ":focus-visible"):
+                 "dk-empty", "dk-loading", "dk-error", ":focus-visible", "dk-layout", "dk-sidebar",
+                 "dk-main", "dk-nav-item", "dk-choice"):
         assert part in ui_kit.CSS, part
 
 

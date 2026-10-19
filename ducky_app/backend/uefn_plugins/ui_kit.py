@@ -3,9 +3,10 @@
 - ``ducky.js``: the one tag a panel needs. It links ``ducky.css`` beside it, applies
   the app's Appearance variables (``theme.get`` on load, ``appearance_theme`` after)
   and marks the page hidden on ``panel.visibility`` so kit animations pause.
-- ``ducky.css``: buttons, inputs, selects, checkboxes, tabs, cards, tables, badges,
-  empty / loading / error states and a visible focus ring, built only from the
-  app's Appearance variables (:mod:`appearance_vars`), never a color literal.
+- ``ducky.css``: the page layout (floating side panels, a frameless main area), nav
+  rows, buttons, inputs, selects, checkboxes, choice rows, pill tabs, cards, tables,
+  badges, empty / loading / error states and a visible focus ring, built only from
+  the app's Appearance variables (:mod:`appearance_vars`), never a color literal.
 
 Also :data:`PANEL_ERROR_SCRIPT`, which :mod:`webview` puts at the top of every plugin
 HTML page: uncaught errors, rejected promises and ``console.error`` go to the host
@@ -126,13 +127,17 @@ CSS = """\
 }
 .dk-check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 
-/* Tabs: .dk-tabs > button.dk-tab[aria-selected="true"]. */
-.dk-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+/* Tabs: .dk-tabs > button.dk-tab[aria-selected="true"]. Rounded pills on the page
+   background, like the app's editor tabs; no strip, no underline. */
+.dk-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
 .dk-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   min-height: 0;
-  padding: 6px 12px;
+  padding: 5px 12px;
   border: 0;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--fg-dim);
   font: inherit;
@@ -140,7 +145,117 @@ CSS = """\
 }
 .dk-tab:hover { background: var(--tab-hover); color: var(--fg); }
 .dk-tab[aria-selected="true"],
-.dk-tab.is-active { background: var(--tab-active); color: var(--fg); box-shadow: inset 0 -2px 0 var(--accent); }
+.dk-tab.is-active { background: var(--tab-active); color: var(--fg); }
+
+/* Page layout, like the app: side panels are floating cards, the main area is the page
+   background itself (no frame). <div class="dk-layout"><aside class="dk-sidebar">…</aside>
+   <main class="dk-main">…</main></div>; .dk-sidebar--right for a panel on the right. */
+.dk-layout {
+  box-sizing: border-box;
+  display: flex;
+  gap: 6px;
+  height: 100vh;
+  padding: 6px;
+}
+.dk-sidebar {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 220px;
+  min-height: 0;
+  padding: 8px 4px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-header);
+}
+.dk-sidebar--right { order: 2; }
+.dk-sidebar__title {
+  padding: 4px 8px 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.dk-main { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; }
+
+/* Nav rows in a side panel: icon + label, rounded and inset, the open one lit.
+   <button class="dk-nav-item" aria-current="page"><svg…/> Label</button>. */
+.dk-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg-dim);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dk-nav-item svg { flex: none; width: 15px; height: 15px; }
+.dk-nav-item:hover { background: var(--tab-hover); color: var(--fg); }
+.dk-nav-item[aria-current="page"],
+.dk-nav-item.is-active { background: var(--tab-active); color: var(--fg); }
+
+/* Choice rows instead of radio circles: an icon tile, a title and hint, and a check on
+   the picked one. <button class="dk-choice" role="radio" aria-checked="true">
+   <span class="dk-choice__icon">…</span><span class="dk-choice__text"><b>Title</b>
+   <span class="dk-choice__hint">Hint</span></span></button>. */
+.dk-choice {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  min-height: 0;
+  padding: 7px 10px 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dk-choice:hover { background: var(--tab-hover); }
+.dk-choice[aria-checked="true"],
+.dk-choice.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.dk-choice__icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--tab-active);
+  color: var(--fg-dim);
+}
+.dk-choice[aria-checked="true"] .dk-choice__icon,
+.dk-choice.is-selected .dk-choice__icon {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: var(--accent);
+}
+.dk-choice__text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.dk-choice__hint { color: var(--muted); font-size: 11px; }
+.dk-choice[aria-checked="true"]::after,
+.dk-choice.is-selected::after {
+  content: "\\2713";
+  flex: none;
+  color: var(--accent);
+  font-weight: 700;
+}
 
 /* Cards. */
 .dk-card {

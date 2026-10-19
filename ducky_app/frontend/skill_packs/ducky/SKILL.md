@@ -181,7 +181,7 @@ rules and a complete plugin, and says which of these to load next:
 
 | Reference | When |
 |---|---|
-| `plugin_look` | Any panel, dock, editor or theme: the UI kit, every Appearance variable, panel states |
+| `plugin_look` | Any panel, dock, editor or theme: the UI kit, the app's layout (floating side panels, pill tabs, icon choice rows), every Appearance variable, panel states |
 | `plugin_data` | The plugin stores anything; Local or one shared space; `sensitive` |
 | `plugin_publishing` | Sharing through the Store, licenses, what compiles |
 | `plugin_testing` | After every change: validate, test, errors |
