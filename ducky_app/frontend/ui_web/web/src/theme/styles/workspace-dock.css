@@ -274,12 +274,55 @@
   display: none;
 }
 
+/* The tab strip's ⋯ menu: a rounded button on the background, lit like a hovered tab. */
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tabs-shell .editor-tab-bar-actions {
+  background-color: transparent;
+  padding-right: 4px;
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tab-bar-menu-btn {
+  height: calc(28px * var(--tab-scale, 1));
+  border-radius: calc(8px * var(--tab-scale, 1));
+  background-color: transparent;
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tab-bar-menu-btn:hover,
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .editor-tab-bar-menu-btn[aria-expanded="true"] {
+  color: var(--fg);
+  background-color: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
 body.appearance-skin-active .workspace-dock-layout--default:not(.is-narrow) .dock-rail-inner {
   background: color-mix(in srgb, var(--bg-panel) 55%, transparent);
 }
 
-.workspace-dock-layout--default:not(.is-narrow) .dock-rail-resize-handle:not(:hover):not(.is-dragging) {
+/* The resize grip covers the whole gap up to the card, and hovering or dragging it lights the
+   sidebar card's own edge instead of a line floating in the gap. */
+.workspace-dock-layout--default:not(.is-narrow) .dock-rail-resize-handle,
+.workspace-dock-layout--default:not(.is-narrow) .dock-rail-resize-handle:hover,
+.workspace-dock-layout--default:not(.is-narrow) .dock-rail-resize-handle.is-dragging {
   background-color: transparent;
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .dock-rail-shell--left .dock-rail-resize-handle::before {
+  left: calc(-1 * var(--dock-gap));
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .dock-rail-shell--right .dock-rail-resize-handle::before {
+  right: calc(-1 * var(--dock-gap));
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .dock-rail-shell--left:has(> .dock-rail-resize-handle:is(:hover, .is-dragging)) .dock-rail-inner {
+  border-right-color: var(--accent);
+}
+
+.workspace-dock-layout--default:not(.is-narrow) .dock-rail-shell--right:has(> .dock-rail-resize-handle:is(:hover, .is-dragging)) .dock-rail-inner {
+  border-left-color: var(--accent);
+}
+
+/* The chat box ends level with the sidebar cards. */
+.workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center .chat-pane-input-area {
+  padding-bottom: var(--dock-gap);
 }
 
 .chat-view-layout .workspace-dock-layout {
