@@ -167,6 +167,14 @@ def run() -> None:
             except Exception:
                 pass
             try:
+                # Passing a click on to the running Ducky is a good start of this version.
+                from frontend import __version__ as _forwarding_version
+                from frontend.app_versions import mark_ready
+
+                mark_ready(str(_forwarding_version))
+            except Exception:
+                pass
+            try:
                 from frontend.early_splash import dismiss as dismiss_early_splash
 
                 dismiss_early_splash()
