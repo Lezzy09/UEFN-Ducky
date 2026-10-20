@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getApi } from "../../hooks/usePanelApi";
 import { onApiReady } from "../../hooks/onApiReady";
 import { useConfirmModal } from "../../contexts/ConfirmModalContext";
-import type { AppUpdateStatus, DuckyOSStorePatchNote } from "../../types/panel";
+import type { AppUpdateStatus, AutoUpdateStatus, DuckyOSStorePatchNote } from "../../types/panel";
 import {
   getAppUpdateState,
   startAppUpdate,
@@ -77,9 +77,34 @@ export function AppSection() {
   const [checkResult, setCheckResult] = useState<CheckResult>("idle");
   const [errorText, setErrorText] = useState<string | null>(null);
   const [updateState, setUpdateState] = useState<AppUpdateState>(() => getAppUpdateState());
+  const [auto, setAuto] = useState<AutoUpdateStatus | null>(null);
   const { confirm } = useConfirmModal();
 
   useEffect(() => subscribeAppUpdate(setUpdateState), []);
+
+  // The background self-update (frontend/update_swap.py), while this section is open.
+  useEffect(() => {
+    let stopped = false;
+    let timer = 0;
+    const poll = async () => {
+      const api = getApi();
+      if (api && typeof api.get_auto_update_status === "function") {
+        try {
+          const next = await api.get_auto_update_status();
+          if (!stopped) setAuto(next);
+        } catch {
+          // next poll
+        }
+      }
+      if (!stopped) timer = window.setTimeout(() => void poll(), 3_000);
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, []);
+  const autoOn = Boolean(auto && auto.phase !== "off");
 
   useEffect(() => {
     if (updateState.stage === "error" && updateState.error) {
@@ -129,8 +154,21 @@ export function AppSection() {
     });
   };
 
+  const handleApplyDownloaded = async () => {
+    const api = getApi();
+    if (!api || typeof api.apply_auto_update_now !== "function") return;
+    setErrorText(null);
+    const result = await api.apply_auto_update_now().catch(() => null);
+    if (result && !result.ok) setErrorText(result.error || "The update could not start.");
+  };
+
   const handleCheckForUpdates = async () => {
-    if (checkResult === "update" && status?.update_available) {
+    if (auto?.phase === "ready") {
+      await handleApplyDownloaded();
+      return;
+    }
+    // A release with an update pack downloads in the background; Setup is for the rest.
+    if (checkResult === "update" && status?.update_available && !(status.update_pack && autoOn)) {
       handleUpdateNow();
       return;
     }
@@ -138,6 +176,10 @@ export function AppSection() {
     setPhase("checking");
     setErrorText(null);
     try {
+      const api = getApi();
+      if (autoOn && api && typeof api.check_auto_update_now === "function") {
+        void api.check_auto_update_now().then(setAuto).catch(() => {});
+      }
       const next = await refreshStatus();
       if (!next) {
         setCheckResult("error");
@@ -199,8 +241,17 @@ export function AppSection() {
         ? "settings-btn general-tab-btn-update"
         : "settings-btn";
 
+  const autoVersion = auto?.version ?? "";
+  const autoPercent =
+    auto?.phase === "downloading" && Number(auto.total) > 0
+      ? Math.min(100, Math.round(((Number(auto.done) || 0) / Number(auto.total)) * 100))
+      : null;
   const updateBtnLabel =
-    phase === "checking"
+    auto?.phase === "ready"
+      ? `Update now to v${autoVersion}`
+      : auto?.phase === "downloading" || auto?.phase === "switching"
+        ? `Getting v${autoVersion}…`
+        : phase === "checking"
       ? "Checking…"
       : checkResult === "latest"
         ? "You're on the latest"
@@ -222,6 +273,23 @@ export function AppSection() {
       : null;
 
   const versionLine = (() => {
+    if (auto?.phase === "downloading" || auto?.phase === "switching") {
+      return (
+        <>
+          v{localVersion} → getting <strong>v{autoVersion}</strong>
+          {autoPercent != null ? ` · ${autoPercent}%` : ""} in the background
+        </>
+      );
+    }
+    if (auto?.phase === "ready") {
+      const waiting = auto.waiting_for ?? [];
+      return (
+        <>
+          <strong>v{autoVersion}</strong> is downloaded and switches when Ducky is idle
+          {waiting.length ? ` (waits for ${waiting.join(", ")})` : ""}
+        </>
+      );
+    }
     if (updating && remoteVersion) {
       return (
         <>
@@ -279,8 +347,8 @@ export function AppSection() {
             <div className="general-tab-btn-row">
               <button
                 type="button"
-                className={updateBtnClass}
-                disabled={busy}
+                className={auto?.phase === "ready" ? "settings-btn general-tab-btn-update" : updateBtnClass}
+                disabled={busy || auto?.phase === "downloading" || auto?.phase === "switching"}
                 onClick={() => void handleCheckForUpdates()}
               >
                 {updateBtnLabel}

@@ -555,6 +555,27 @@ class PanelApiWindowMixin:
 
         return get_app_patch_notes()
 
+    def get_auto_update_status(self) -> dict[str, Any]:
+        from frontend.update_swap import status
+
+        return status()
+
+    def report_update_ui(self, state: dict[str, Any] | None = None) -> None:
+        from frontend.update_swap import report_ui
+
+        report_ui(state)
+
+    def apply_auto_update_now(self) -> dict[str, Any]:
+        from frontend.update_swap import apply_now
+
+        return apply_now()
+
+    def check_auto_update_now(self) -> dict[str, Any]:
+        from frontend.update_swap import check_soon, status
+
+        check_soon()
+        return status()
+
     def get_whats_new(self) -> dict[str, Any]:
         from frontend.whats_new import get_whats_new
 

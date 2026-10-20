@@ -1323,6 +1323,9 @@ RPC_ALLOWLIST = frozenset(
 
 REMOTE_DENY = frozenset(
     {
+        # Only this PC's own window says whether Ducky is in use, and only it updates Ducky.
+        "report_update_ui",
+        "apply_auto_update_now",
         "set_window_bounds",
         "get_window_bounds",
         "minimize_window",

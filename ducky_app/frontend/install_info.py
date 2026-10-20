@@ -53,8 +53,11 @@ def _exe_under_install_location(install_location: str) -> bool:
     Guards against a portable EXE run from Downloads while an install also exists
     on the machine — that process must behave as portable.
     """
+    from frontend.app_versions import launcher_exe
+
     try:
-        exe = Path(sys.executable).resolve()
+        # A version Ducky downloaded by itself counts by the EXE that was started.
+        exe = launcher_exe().resolve()
         return exe.is_relative_to(Path(install_location).resolve())
     except (OSError, ValueError):
         return False

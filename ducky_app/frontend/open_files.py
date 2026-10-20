@@ -224,10 +224,11 @@ def register_windows_open_with(exe: Path | str | None = None) -> None:
     """
     if sys.platform != "win32":
         return
+    from frontend.app_versions import stable_exe
     from frontend.frozen_process import is_uefn_ducky_executable
 
     try:
-        target = Path(exe or sys.executable).resolve()
+        target = Path(exe or stable_exe()).resolve()
     except (OSError, RuntimeError):
         return
     if not target.is_file() or not is_uefn_ducky_executable(target):
@@ -267,10 +268,11 @@ def register_windows_url_protocol(exe: Path | str | None = None) -> None:
     """
     if sys.platform != "win32":
         return
+    from frontend.app_versions import stable_exe
     from frontend.frozen_process import is_uefn_ducky_executable
 
     try:
-        target = Path(exe or sys.executable).resolve()
+        target = Path(exe or stable_exe()).resolve()
     except (OSError, RuntimeError):
         return
     if not target.is_file() or not is_uefn_ducky_executable(target):

@@ -61,6 +61,34 @@ def interval_due(seconds: float, last_run: float, now: float) -> bool:
     return (now - last_run) >= seconds
 
 
+def due_within(seconds: float, now: float | None = None) -> list[str]:
+    """Names of workflows whose schedule starts them on this PC within ``seconds``."""
+    now = time.time() if now is None else now
+    names: list[str] = []
+    for wf in all_workflows():
+        if not wf.get("enabled") or not runs_here(wf):
+            continue
+        last = float(wf.get("last_run") or 0.0)
+        for node in (wf.get("graph") or {}).get("nodes") or []:
+            if not isinstance(node, dict) or str(node.get("type") or "") != "start.cron":
+                continue
+            cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+            interval = float(cfg.get("interval_seconds") or 0)
+            cron = str(cfg.get("cron") or "").strip()
+            soon = False
+            if interval > 0:
+                soon = (last + interval if last > 0 else now) - now <= seconds
+            elif cron:
+                soon = any(
+                    cron_due(cron, datetime.fromtimestamp(now + step * 60), last)
+                    for step in range(int(seconds // 60) + 1)
+                )
+            if soon:
+                names.append(str(wf.get("name") or wf.get("id") or "a workflow"))
+            break
+    return names
+
+
 def _loop() -> None:
     while not _STOP.wait(_TICK_S):
         try:

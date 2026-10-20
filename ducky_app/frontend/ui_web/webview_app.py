@@ -449,6 +449,7 @@ def _run_panel(api_holder: dict[str, object]) -> None:
         if w is not None:
             try:
                 w.hide()
+                window_holder["hidden"] = True
             except Exception:
                 pass
 
@@ -457,6 +458,7 @@ def _run_panel(api_holder: dict[str, object]) -> None:
         if w is not None:
             try:
                 w.show()
+                window_holder["hidden"] = False
             except Exception:
                 pass
             try:
@@ -489,6 +491,11 @@ def _run_panel(api_holder: dict[str, object]) -> None:
     from frontend.ui_web import window_bounds
 
     saved = window_bounds.get_bounds("main")
+    # Just switched from an older version (frontend/update_swap.py): open the way it was left.
+    from frontend.app_versions import take_handover
+
+    handover = take_handover()
+    window_holder["hidden"] = bool(handover.get("hidden"))
     t_window = time.perf_counter()
     window = webview.create_window(
         title,
@@ -499,6 +506,8 @@ def _run_panel(api_holder: dict[str, object]) -> None:
         y=saved["y"] if saved else None,
         min_size=(700, 480),
         resizable=True,
+        hidden=bool(handover.get("hidden")),
+        maximized=bool(handover.get("maximized")) and not handover.get("hidden"),
         frameless=True,
         easy_drag=False,
         # Match boot splash / critical.css so the chrome never flashes white.
@@ -647,6 +656,14 @@ def _run_panel(api_holder: dict[str, object]) -> None:
 
     icon_path = resolve_app_icon_path()
     _boot_trace("ready_for_webview_start", time.perf_counter())
+    try:
+        from frontend import __version__ as _running_version
+        from frontend import app_versions, update_swap
+
+        app_versions.mark_ready(str(_running_version))
+        update_swap.start(api=api, tk_root_holder=tk_root_holder, window_holder=window_holder)
+    except Exception:
+        logging.getLogger(__name__).warning("auto-update did not start", exc_info=True)
     try:
         from frontend import usage_stats
 

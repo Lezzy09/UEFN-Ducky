@@ -107,7 +107,10 @@ def resolve_bridge_command() -> str:
     Dev: newest built exe in ``dist/``, else ``python`` + launcher.py.
     """
     if is_packaged_runtime():
-        running = Path(sys.executable).resolve()
+        from frontend.app_versions import stable_exe
+
+        # The started EXE, never a version folder Ducky downloaded (those get cleaned up).
+        running = stable_exe().resolve()
         return str(bridge_exe_for(running) or running)
     built = latest_built_exe()
     if built is not None:

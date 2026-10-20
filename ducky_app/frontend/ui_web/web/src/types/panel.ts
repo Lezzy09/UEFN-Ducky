@@ -34,7 +34,33 @@ export interface AppUpdateStatus {
   download_url: string;
   /** none | no_release | up_to_date | update_available | paused | error */
   feed_status?: string;
+  /** The feed offers an update pack: installed copies update in the background. */
+  update_pack?: boolean;
   error: string | null;
+}
+
+/** Background self-update (frontend/update_swap.py). */
+export type AutoUpdatePhase = "off" | "idle" | "checking" | "downloading" | "ready" | "switching" | "failed" | "updated";
+
+export interface AutoUpdateStatus {
+  phase: AutoUpdatePhase;
+  version: string;
+  done?: number;
+  total?: number;
+  error?: string;
+  /** Why it hasn't switched yet (phase ready). */
+  waiting_for?: string[];
+  /** The version it switched from (phase updated). */
+  previous?: string;
+}
+
+/** A window's word on being in use, for the switch's idle check. */
+export interface UpdateUiReport {
+  window: string;
+  visible: boolean;
+  idle_s: number;
+  dirty: number;
+  jobs: string[];
 }
 
 export interface SavedAgentPermissionDto {
@@ -3100,6 +3126,10 @@ export interface PanelApi {
     error?: string | null;
   }>;
   get_whats_new?(): Promise<WhatsNewStatus>;
+  get_auto_update_status?(): Promise<AutoUpdateStatus>;
+  report_update_ui?(state: UpdateUiReport): Promise<void>;
+  apply_auto_update_now?(): Promise<{ ok: boolean; error?: string; waiting_for?: string[] }>;
+  check_auto_update_now?(): Promise<AutoUpdateStatus>;
   mark_whats_new_seen?(version: string): Promise<{ ok: boolean; error?: string }>;
   get_install_info(): Promise<InstallInfo>;
   apply_update(): Promise<UpdaterResult>;

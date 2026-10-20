@@ -34,6 +34,7 @@ import { fileDiagnosticRegistry, type FileDiagnosticSummary } from "./lsp/fileDi
 import { useVerseDiagnosticsSync } from "./hooks/useVerseDiagnosticsSync";
 
 import { normPath, registryKey } from "./utils/isVerseFile";
+import { publishUnsavedFiles } from "../update/unsavedFiles";
 
 import {
   applyHistoryPreviewDecorations,
@@ -200,6 +201,8 @@ export function VerseEditorProvider({
   useEffect(() => () => fileSessions.dispose(), [fileSessions]);
 
   const [dirtyPaths, setDirtyPaths] = useState<Set<string>>(() => new Set());
+  const unsavedOwner = useMemo(() => Symbol("verse-editor"), []);
+  useEffect(() => publishUnsavedFiles(unsavedOwner, dirtyPaths.size), [unsavedOwner, dirtyPaths]);
 
   // Models live exactly as long as their file tab: closing a tab (in any group) frees
   // its model and clears its dirty mark.

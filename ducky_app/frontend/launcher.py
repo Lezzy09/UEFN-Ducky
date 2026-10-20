@@ -335,6 +335,36 @@ def is_bridge_exe() -> bool:
         return False
 
 
+def _hand_off_to_newest(*, bridge: bool) -> None:
+    """Start the newest version Ducky downloaded by itself instead of this EXE (see
+    ``frontend.app_versions``). Returns when this EXE is the newest; never blocks a start."""
+    try:
+        _ensure_repo_on_path()
+        from frontend import __version__
+        from frontend.app_versions import hand_off
+
+        hand_off(str(__version__), bridge=bridge)
+    except SystemExit:
+        raise
+    except Exception:
+        pass
+
+
+def _wait_for_previous_version() -> None:
+    """``--after-update <pid>``: the version that switched to this one is still closing."""
+    if "--after-update" not in sys.argv:
+        return
+    i = sys.argv.index("--after-update")
+    pid_text = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
+    del sys.argv[i : i + 2]
+    try:
+        from frontend.app_versions import wait_for_exit
+
+        wait_for_exit(int(pid_text))
+    except (ValueError, Exception):
+        pass
+
+
 def main() -> None:
     if len(sys.argv) == 3 and sys.argv[1] == "--verify-panel":
         _ensure_repo_on_path()
@@ -364,6 +394,7 @@ def main() -> None:
         pass
     _sweep_stale_extracts()
     if is_bridge_exe() or (len(sys.argv) > 1 and sys.argv[1] == "bridge"):
+        _hand_off_to_newest(bridge=True)
         run_bridge()
     elif len(sys.argv) > 1 and sys.argv[1] == "db":
         # ADR 0003: `UEFN-Ducky.exe db check|vacuum|snapshot|stats|export <table>` for support.
@@ -380,6 +411,8 @@ def main() -> None:
         # Wall clock from process entry — webview_app boot traces use this for total_ms.
         os.environ["UEFN_DUCKY_BOOT_T0"] = str(_time.perf_counter())
         _ensure_repo_on_path()
+        _wait_for_previous_version()
+        _hand_off_to_newest(bridge=False)
         # Before anything that could crash: send the last launch's crash report, if any,
         # and start recording this one.
         try:
@@ -415,6 +448,15 @@ def main() -> None:
                 from frontend.early_splash import dismiss as dismiss_early_splash
 
                 dismiss_early_splash()
+            except Exception:
+                pass
+            # A version Ducky downloaded that can't start: go back to the one before it.
+            try:
+                from frontend import __version__ as _failed_version
+                from frontend.app_versions import fall_back_after_failed_start
+
+                if fall_back_after_failed_start(str(_failed_version), f"{type(exc).__name__}: {exc}"):
+                    os._exit(1)
             except Exception:
                 pass
             from frontend.ui_web.shutdown import fatal_error_and_exit

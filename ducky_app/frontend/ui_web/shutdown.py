@@ -143,8 +143,12 @@ def _kill_sibling_processes() -> None:
         pass
 
 
-def hard_exit(*, api: Any = None) -> None:
-    """Kill this process immediately. Must not return."""
+def hard_exit(*, api: Any = None, keep_others: bool = False) -> None:
+    """Kill this process immediately. Must not return.
+
+    ``keep_others``: switching to a newer version, so the IDE bridges and the newer
+    Ducky this one just started keep running (a normal quit stops every Ducky process).
+    """
     global _exit_started
     with _exit_lock:
         if _exit_started:
@@ -165,8 +169,9 @@ def hard_exit(*, api: Any = None) -> None:
     release_panel_process()
     if api is not None:
         _stop_tray(api)
-    _kill_sibling_processes()
-    _spawn_kill_uefn_processes()
+    if not keep_others:
+        _kill_sibling_processes()
+        _spawn_kill_uefn_processes()
     _terminate_process()
 
 

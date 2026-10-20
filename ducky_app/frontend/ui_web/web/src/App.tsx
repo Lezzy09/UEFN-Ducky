@@ -43,6 +43,7 @@ import { queuePluginTrustRequest } from "./hooks/pluginTrustRequest";
 import { UpdateAvailableModal } from "./components/UpdateAvailableModal";
 import { UpdateLockOverlay } from "./components/UpdateLockOverlay";
 import { WhatsNewHost } from "./components/WhatsNewHost";
+import { AutoUpdateActivity } from "./components/AutoUpdateActivity";
 import {
   NavigationHistoryProvider,
   useNavigationHistoryOptional,
@@ -134,7 +135,12 @@ export default function App() {
   // Agent command cards (in their chat, or the header list) in every window, focus ones too.
   useEffect(() => { installTerminalApprovals(); }, []);
   if (focusId) {
-    return <FocusView focusId={focusId} />;
+    return (
+      <>
+        <FocusView focusId={focusId} />
+        <AutoUpdateActivity showActivity={false} />
+      </>
+    );
   }
   const [watchWindowId, setWatchWindowId] = useState("");
   const uefnLaunching = useUeFnLaunching();
@@ -273,7 +279,7 @@ export default function App() {
           <RemoteWindowLaunching label={uefnLaunching} />
         ) : null}
       </div>
-      {versionCheck.status?.remote_version && (
+      {versionCheck.status?.remote_version && !(versionCheck.status.update_pack && versionCheck.status.channel === "installed") && (
         <UpdateAvailableModal
           open={versionCheck.showModal}
           status={versionCheck.status}
@@ -282,6 +288,7 @@ export default function App() {
       )}
       <UpdateLockOverlay />
       <WhatsNewHost />
+      <AutoUpdateActivity showActivity />
       <MicPermissionModal />
       </UndoHistoryProvider>
       </NavigationHistoryProvider>

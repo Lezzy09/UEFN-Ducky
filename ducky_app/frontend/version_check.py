@@ -274,6 +274,8 @@ def get_app_update_status() -> dict[str, Any]:
         "installer_sha256": None,
         "release_notes": None,
         "versions": [],
+        # The feed offers an update pack: installed copies update in the background.
+        "update_pack": False,
         "download_url": download,
         # none | no_release | up_to_date | update_available | paused | error
         "feed_status": "none",
@@ -321,8 +323,11 @@ def get_app_update_status() -> dict[str, Any]:
         return result
 
     if is_remote_newer(__version__, str(remote)):
+        from frontend.app_stage import feed_update
+
         result["feed_status"] = "update_available"
         result["update_available"] = True
+        result["update_pack"] = feed_update(payload) is not None
         result["installer_url"] = absolute_installer_url(
             _extract_str(payload, "installerUrl") or _extract_str(payload, "installer_url"),
             base_url=update_base_url(),
