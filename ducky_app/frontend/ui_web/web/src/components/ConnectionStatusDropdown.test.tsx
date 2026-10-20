@@ -16,11 +16,6 @@ const status: ListenerStatus = {
 };
 
 describe("ConnectionStatusDropdown", () => {
-  afterEach(() => {
-    cleanup();
-    delete (window as unknown as { parent?: Window }).parent;
-  });
-
   it("lists plugin MCP rows and puts Settings above Connections", () => {
     render(
       <ConnectionStatusDropdown
@@ -114,5 +109,30 @@ describe("ConnectionStatusDropdown", () => {
     fireEvent.click(screen.getByRole("button", { name: /offline/i }));
     fireEvent.click(screen.getByRole("button", { name: "Close web view" }));
     expect(postMessage).toHaveBeenCalledWith({ type: "ud-remote-close" }, "*");
+  });
+
+  it("shows an Online tab and a green count when a plugin lists people online", () => {
+    const withPeople: ListenerStatus = {
+      ...status,
+      plugin_people: [{ id: "team", label: "Team", people: [
+        { id: "u1", name: "Ana", detail: "In BrainRot TCG", online: true },
+        { id: "u2", name: "Ben", detail: "", online: false },
+      ] }],
+    };
+    render(<ConnectionStatusDropdown status={withPeople} onOpenSettings={() => {}} />);
+    expect(screen.getByLabelText("1 online").textContent).toBe("1");
+    fireEvent.click(screen.getByRole("button", { name: /offline/i }));
+    expect(screen.getByText("Blender MCP")).toBeTruthy(); // Connections is the first tab
+    fireEvent.click(screen.getByRole("tab", { name: /online/i }));
+    expect(screen.getByText("Team")).toBeTruthy();
+    expect(screen.getByText("Ana")).toBeTruthy();
+    expect(screen.getByText("In BrainRot TCG")).toBeTruthy();
+    expect(screen.getByText("Ben")).toBeTruthy();
+    expect(screen.queryByText("Blender MCP")).toBeNull();
+  });
+
+  afterEach(() => {
+    cleanup();
+    delete (window as unknown as { parent?: Window }).parent;
   });
 });

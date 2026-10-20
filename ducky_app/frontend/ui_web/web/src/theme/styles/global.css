@@ -205,8 +205,16 @@ body.native-caption-input-ready .app-header .drag-region {
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
-.connection-status-btn.has-store-update {
-  position: relative;
+.connection-status-btn {
+  position: relative; /* the Store dot and the Online badge sit on its corners */
+}
+/* Who is online (your other Duckies + plugin people): green, the shared icon-btn-badge shape. */
+.icon-btn-badge--online {
+  top: -3px;
+  right: -4px;
+  background: var(--success, #3ecf8e);
+  color: var(--fg-inverse, #0b0b0b);
+  box-shadow: 0 0 0 1.5px var(--bg, #1a1a1a);
 }
 .store-update-dot {
   position: absolute;
@@ -329,33 +337,53 @@ body.native-caption-input-ready .app-header .drag-region {
   background: var(--danger, #e85d5d);
 }
 
-/* Header: your account's other UEFN Duckies (DuckiesDropdown). */
-.duckies-btn {
+/* Status menu tabs: Connections | Online (your other UEFN Duckies + plugin people). */
+.connection-status-tabs {
   display: flex;
+  gap: 2px;
+  margin: 4px 8px 6px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--btn-bg);
+}
+
+.connection-status-tab {
+  flex: 1;
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  height: 28px;
-  padding: 0 6px;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
   border: none;
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
-.duckies-btn:hover,
-.duckies-btn.is-active {
-  background: var(--tab-hover);
+.connection-status-tab:hover {
   color: var(--fg);
 }
 
-.duckies-btn svg {
-  width: 15px;
-  height: 15px;
+.connection-status-tab.is-active {
+  background: var(--tab-active, var(--tab-hover));
+  color: var(--fg);
+}
+
+.connection-status-tab-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--success, #3ecf8e);
+  color: var(--fg-inverse, #0b0b0b);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
 }
 
 .duckies-menu-row {

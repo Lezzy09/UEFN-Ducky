@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { othersLine, sortDuckies } from "./DuckiesDropdown";
+import { badgeText, onlineCount, othersLine, sortDuckies } from "./DuckiesDropdown";
 import { remoteDuckyLine } from "./RemoteDuckyBar";
 
 describe("sortDuckies", () => {
@@ -33,5 +33,20 @@ describe("remoteDuckyLine", () => {
       text: "Can't reach Laptop. It didn't answer.",
       tone: "off",
     });
+  });
+});
+
+describe("onlineCount and badgeText", () => {
+  it("counts your other online Duckies plus online people from plugins, capped at 9+", () => {
+    const me = { keyId: "a", name: "Desk", live: true, mine: true };
+    const laptop = { keyId: "b", name: "Laptop", live: true, mine: false };
+    const old = { keyId: "c", name: "Old", live: false, mine: false };
+    const team = { id: "team", label: "Team", people: [
+      { id: "1", name: "Ana", detail: "", online: true },
+      { id: "2", name: "Ben", detail: "", online: false },
+    ] };
+    expect(onlineCount([me, laptop, old], [team])).toBe(2);
+    expect(onlineCount([me])).toBe(0);
+    expect([0, 1, 9, 10, 42].map(badgeText)).toEqual(["", "1", "9", "9+", "9+"]);
   });
 });

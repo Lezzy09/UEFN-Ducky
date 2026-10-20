@@ -174,6 +174,7 @@ Optional `"data_sharing": false`: the plugin's data always stays Local (`plugin_
 | `api.emit_hook(hook_id, payload=None)` | Fire one of your `contributes.hooks`: the sound the user put on it plays. |
 | `api.set_appearance_profile(profile_id)` | Switch Appearance to one of your own `appearance.profiles` (its `id`), as if picked in Settings. |
 | `api.connection(fn, label=, program=)` | Header Connections row; `fn()` is cheap and returns `{online, detail}`. |
+| `api.people(fn, label=)` | A section in the header's Online tab; `fn()` is cheap (cached, no network wait) and returns `[{id, name, detail, online}]`. Online people count toward the header badge. |
 | `api.register_secret_test(secret_key, fn)` | Settings → Test for a key: `fn(api_key) -> {ok, detail}`. |
 | `api.spotlight(window=, box=, title=, body=, steps=, click=, wait=)` | Highlight a control in UEFN, Blender or any window (same as `ducky_ui_show`). |
 | `api.log(msg)`, `api.is_enabled()`, `api.plugin_id` | Logging, enabled check, your id. |

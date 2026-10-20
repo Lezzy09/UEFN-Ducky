@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { ConnectionStatusIcon } from "./ConnectionStatusIcon";
+import { DuckiesRows, badgeText, onlineCount, useAccountDuckies } from "./DuckiesDropdown";
 import { Icons } from "../icons/Icons";
 import type { ListenerStatus } from "../types/panel";
 import { useListenerUptimeSec } from "../hooks/useListenerStatus";
@@ -81,7 +82,11 @@ export interface ConnectionStatusDropdownProps {
   extra?: ReactNode;
 }
 
-/** Header duck icon: click toggles Ducky MCP + UEFN listener + Epic MCP connection panel. */
+/**
+ * Header duck icon: Settings, then two tabs. Connections: Ducky MCP, the UEFN listener,
+ * Epic MCP and plugin connections. Online: your other UEFN Duckies and the people plugins
+ * list (``api.people``); the icon's badge counts who is online there.
+ */
 export function ConnectionStatusDropdown({
   status,
   projectName,
@@ -91,7 +96,18 @@ export function ConnectionStatusDropdown({
   extra,
 }: ConnectionStatusDropdownProps) {
   const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<"connections" | "online">("connections");
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const { duckies, error: duckiesError, reload: reloadDuckies } = useAccountDuckies();
+  const peopleSections = (status.plugin_people ?? []).filter((s) => s.people.length);
+  const hasOnlineTab = duckies.some((d) => !d.mine) || peopleSections.length > 0;
+  const online = onlineCount(duckies, peopleSections);
+  const badge = badgeText(online);
+  const showOnline = hasOnlineTab && tab === "online";
+
+  useEffect(() => {
+    if (open && showOnline) reloadDuckies();
+  }, [open, showOnline, reloadDuckies]);
   const triggerRef = useRef<HTMLButtonElement | HTMLSpanElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -188,20 +204,61 @@ export function ConnectionStatusDropdown({
           </button>
         ) : null}
         {extra}
-        <div className="connection-status-menu-head">Connections</div>
-        <Row label="Ducky MCP" detail={duckyMcpDetail} ok />
-        <Row label="UEFN listener" detail={duckyDetail} ok={isOnline && !isWedged} warn={isWedged || race} />
-        <Row {...uefnMcpRow} />
-        <Row {...unrealMcpRow} />
-        {(status.plugin_connections ?? []).map((row) => (
-          <Row
-            key={row.id}
-            label={row.label}
-            detail={row.detail}
-            ok={row.online}
-            warn={row.warn}
-          />
-        ))}
+        {hasOnlineTab ? (
+          <div className="connection-status-tabs" role="tablist" aria-label="Status">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={!showOnline}
+              className={`connection-status-tab${!showOnline ? " is-active" : ""}`}
+              onClick={() => setTab("connections")}
+            >
+              Connections
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={showOnline}
+              className={`connection-status-tab${showOnline ? " is-active" : ""}`}
+              onClick={() => setTab("online")}
+            >
+              Online
+              {badge ? <span className="connection-status-tab-count">{badge}</span> : null}
+            </button>
+          </div>
+        ) : null}
+        {showOnline ? (
+          <>
+            <DuckiesRows duckies={duckies} error={duckiesError} onPicked={() => setOpen(false)} />
+            {peopleSections.map((section) => (
+              <div key={section.id}>
+                <div className="connection-status-menu-head">{section.label}</div>
+                {[...section.people]
+                  .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name))
+                  .map((p) => (
+                    <Row key={p.id} label={p.name} detail={p.detail || (p.online ? "Online" : "Offline")} ok={p.online} />
+                  ))}
+              </div>
+            ))}
+          </>
+        ) : (
+          <>
+            {hasOnlineTab ? null : <div className="connection-status-menu-head">Connections</div>}
+            <Row label="Ducky MCP" detail={duckyMcpDetail} ok />
+            <Row label="UEFN listener" detail={duckyDetail} ok={isOnline && !isWedged} warn={isWedged || race} />
+            <Row {...uefnMcpRow} />
+            <Row {...unrealMcpRow} />
+            {(status.plugin_connections ?? []).map((row) => (
+              <Row
+                key={row.id}
+                label={row.label}
+                detail={row.detail}
+                ok={row.online}
+                warn={row.warn}
+              />
+            ))}
+          </>
+        )}
       </div>
     ) : null;
 
@@ -227,6 +284,11 @@ export function ConnectionStatusDropdown({
       >
         <ConnectionStatusIcon isOnline={isOnline} isWedged={isWedged} />
         {hasStoreUpdates ? <span className="store-update-dot" aria-label="Store updates available" /> : null}
+        {badge ? (
+          <span className="icon-btn-badge icon-btn-badge--online" aria-label={`${online} online`}>
+            {badge}
+          </span>
+        ) : null}
       </button>
       {menu ? createPortal(menu, document.body) : null}
     </div>

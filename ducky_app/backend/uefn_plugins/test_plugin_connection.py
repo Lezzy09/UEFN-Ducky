@@ -82,3 +82,22 @@ def test_probe_error_shows_offline(monkeypatch) -> None:
     [row] = host.plugin_connection_rows()
     assert row["online"] is False
     assert "open Blender" in row["detail"]
+
+
+def test_people_sections_list_enabled_plugins_and_survive_a_broken_one(monkeypatch) -> None:
+    monkeypatch.setattr(host, "is_plugin_enabled", lambda pid: pid != "off")
+    host._PEOPLE_PROVIDERS.clear()
+    host._PEOPLE_CACHE.clear()
+    host.register_people_provider(
+        "team",
+        lambda: [{"id": "u1", "name": "Ana", "detail": "In BrainRot TCG", "online": True}, {"name": ""}, "junk"],
+        label="Team",
+    )
+    host.register_people_provider("off", lambda: [{"name": "Hidden", "online": True}])
+    host.register_people_provider("broken", lambda: 1 / 0, label="Broken")
+    sections = {s["id"]: s for s in host.attach_plugin_connections({})["plugin_people"]}
+    assert sections["team"] == {"id": "team", "label": "Team", "people": [
+        {"id": "u1", "name": "Ana", "detail": "In BrainRot TCG", "online": True}]}
+    assert "off" not in sections and sections["broken"]["people"] == []
+    host._PEOPLE_PROVIDERS.clear()
+    host._PEOPLE_CACHE.clear()

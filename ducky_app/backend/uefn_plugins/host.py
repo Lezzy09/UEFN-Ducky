@@ -155,6 +155,9 @@ _CONNECTION_PROBES: dict[str, dict[str, Any]] = {}
 # unused MCP sockets on every tick.
 _CONNECTION_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CONNECTION_CACHE_TTL_S = 30.0
+# plugin_id → {label, fn} — the header Online tab: who a plugin knows is around (api.people)
+_PEOPLE_PROVIDERS: dict[str, dict[str, Any]] = {}
+_PEOPLE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 # Per-run allowlist for UEFN app-plugin tools.
 # None = follow Store enable; [] = none; non-empty = those plugin ids only.
@@ -574,9 +577,58 @@ def plugin_connection_for_program(program: str) -> dict[str, Any] | None:
     return None
 
 
+def register_people_provider(plugin_id: str, fn: Any, *, label: str = "") -> None:
+    """Header Online tab section. ``fn()`` must be cheap (cached data, no network wait)."""
+    from backend.uefn_plugins.store import normalize_plugin_id
+
+    pid = normalize_plugin_id(plugin_id)
+    if not callable(fn):
+        raise TypeError("people provider must be callable")
+    with _LOCK:
+        _PEOPLE_PROVIDERS[pid] = {"label": str(label or "").strip() or pid, "fn": fn}
+        _PEOPLE_CACHE.pop(pid, None)
+
+
+def plugin_people_sections() -> list[dict[str, Any]]:
+    """``[{id, label, people: [{id, name, detail, online}]}]`` from enabled plugins. Never raises."""
+    now = time.monotonic()
+    with _LOCK:
+        items = list(_PEOPLE_PROVIDERS.items())
+    sections: list[dict[str, Any]] = []
+    for pid, spec in items:
+        if not is_plugin_enabled(pid):
+            continue
+        with _LOCK:
+            cached = _PEOPLE_CACHE.get(pid)
+        if cached and (now - cached[0]) < _CONNECTION_CACHE_TTL_S:
+            sections.append(cached[1])
+            continue
+        try:
+            raw = spec["fn"]()
+        except Exception:  # noqa: BLE001 — a dead plugin must not blank the menu
+            raw = []
+        people = []
+        for row in raw if isinstance(raw, list) else []:
+            name = str(row.get("name") or "").strip() if isinstance(row, Mapping) else ""
+            if name:
+                people.append({
+                    "id": str(row.get("id") or name)[:120],
+                    "name": name[:80],
+                    "detail": str(row.get("detail") or "")[:160],
+                    "online": bool(row.get("online")),
+                })
+        section = {"id": pid, "label": spec["label"], "people": people[:50]}
+        with _LOCK:
+            _PEOPLE_CACHE[pid] = (now, section)
+        sections.append(section)
+    return sections
+
+
 def attach_plugin_connections(status: Mapping[str, Any]) -> dict[str, Any]:
+    """The header status menu's plugin rows: Connections, and the Online tab's people."""
     out = dict(status)
     out["plugin_connections"] = plugin_connection_rows()
+    out["plugin_people"] = plugin_people_sections()
     return out
 
 
@@ -1013,6 +1065,8 @@ def _drop_plugin_runtime(pid: str, mod_name: str) -> None:
         _PANEL_RPC.pop(pid, None)
         _CONNECTION_PROBES.pop(pid, None)
         _CONNECTION_CACHE.pop(pid, None)
+        _PEOPLE_PROVIDERS.pop(pid, None)
+        _PEOPLE_CACHE.pop(pid, None)
         from backend.uefn_plugins.scopes import forget_change_listeners
 
         forget_change_listeners(pid)
@@ -4101,6 +4155,15 @@ class _PluginApi:
         """
         register_connection_probe(self.plugin_id, fn, label=label, program=program)
         self.log("connection probe registered")
+
+    def people(self, fn: Any, *, label: str = "") -> None:
+        """Show who this plugin knows is around in the header's Online tab, under ``label``.
+
+        ``fn()`` must be cheap (return cached data, never wait on the network). Return a
+        list of ``{id, name, detail, online}``; online people count toward the header badge.
+        """
+        register_people_provider(self.plugin_id, fn, label=label)
+        self.log("people provider registered")
 
     def register_secret_test(self, secret_key: str, test_fn: Any) -> None:
         """Register Settings → Test for a secret field (``test_fn(api_key) -> {ok, detail}``)."""

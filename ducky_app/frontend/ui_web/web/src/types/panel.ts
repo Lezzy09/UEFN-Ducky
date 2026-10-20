@@ -1092,6 +1092,14 @@ export interface ListenerStatus {
   listener_init_race?: boolean;
   beta_access_note?: string;
   plugin_connections?: PluginConnectionRow[];
+  /** The header Online tab: who each plugin knows is around (plugin ``api.people``). */
+  plugin_people?: PluginPeopleSection[];
+}
+
+export interface PluginPeopleSection {
+  id: string;
+  label: string;
+  people: Array<{ id: string; name: string; detail: string; online: boolean }>;
 }
 
 export interface PluginConnectionRow {
