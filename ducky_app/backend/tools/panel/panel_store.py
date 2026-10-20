@@ -199,6 +199,7 @@ def ducky_store_install(
             version=str(version or "").strip() or None,
             replace=True,
             is_update=False,
+            replace_old=True,  # asked for in chat: may replace the plugins it takes over
         )
     except DuckyOSAccountError as exc:
         return tool_json({"ok": False, "error": exc.message, "code": exc.code}, pretty=pretty)
@@ -245,6 +246,7 @@ def ducky_store_update(slug: str, version: str = "", pretty: bool = False) -> st
             version=str(version or "").strip() or None,
             replace=True,
             is_update=True,
+            replace_old=True,  # asked for in chat: may replace the plugins it takes over
         )
     except DuckyOSAccountError as exc:
         return tool_json({"ok": False, "error": exc.message, "code": exc.code}, pretty=pretty)

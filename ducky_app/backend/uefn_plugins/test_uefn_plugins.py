@@ -1338,3 +1338,28 @@ def test_plugin_api_crypto_seals_and_opens_with_aes_gcm() -> None:
             raise AssertionError(f"opened with {sorted(wrong)} changed")
         except InvalidTag:
             pass
+
+
+def test_a_refused_install_keeps_the_old_copy_and_uefn_replaces_only_when_asked() -> None:
+    from backend.uefn_plugins.store import import_plugin_from_bytes, list_plugin_owned_skills, plugin_dir
+
+    def install(pid: str, skill: str, version: str, **kw) -> dict:
+        return import_plugin_from_bytes(
+            _zip_plugin_with_skills(pid, skill_id=skill, version=version), source="local", replace=True, **kw
+        )
+
+    assert install("animation", "animation", "1.3.13")["ok"]
+    assert install("uefn", "uefn", "1.0.52")["ok"]
+
+    # A skill another plugin owns is refused, and the installed copy stays (it used to be deleted).
+    clash = install("uefn", "animation", "1.0.60")
+    assert not clash["ok"] and "already owned" in clash["error"]
+    assert json.loads((plugin_dir("uefn") / "plugin.json").read_text(encoding="utf-8"))["version"] == "1.0.52"
+
+    # UEFN 1.1 replaces Animation, but only on an install someone asked for.
+    auto = install("uefn", "animation", "1.1.0")
+    assert auto.get("code") == "replaces_plugins" and plugin_dir("animation").is_dir()
+    asked = install("uefn", "animation", "1.1.0", replace_old=True)
+    assert asked["ok"], asked
+    assert not plugin_dir("animation").is_dir()
+    assert {e["pack_id"]: e["plugin_id"] for e in list_plugin_owned_skills()}.get("animation") == "uefn"

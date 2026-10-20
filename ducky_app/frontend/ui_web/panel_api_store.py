@@ -407,6 +407,7 @@ class PanelApiStoreMixin:
                 version=str(version or "").strip() or None,
                 replace=True,
                 is_update=bool(is_update),
+                replace_old=True,  # the person clicked Install/Update
             )
             # Reload contributions in the live UI (no full app restart).
             if result.get("ok") and result.get("kind") == "plugin":

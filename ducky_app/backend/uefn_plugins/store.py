@@ -611,11 +611,18 @@ def list_plugin_owned_skills() -> list[dict[str, str]]:
     return out
 
 
-def validate_plugin_skills(plugin_root: Path, plugin_id: str) -> list[str]:
+def validate_plugin_skills(
+    plugin_root: Path,
+    plugin_id: str,
+    *,
+    replacing: tuple[list[str], list[str]] = ([], []),
+) -> list[str]:
     """Validate bundled skills under ``skills/``. Returns skill pack ids.
 
+    ``replacing`` is (plugins, standalone packs) this install removes: their skills don't clash.
     Raises ``ValueError`` on path/id/collision problems.
     """
+    gone_plugins, gone_packs = replacing
     from backend.skills.store import appdata_skill_packs_dir, normalize_pack_id
 
     pid = normalize_plugin_id(plugin_id)
@@ -633,7 +640,7 @@ def validate_plugin_skills(plugin_root: Path, plugin_id: str) -> list[str]:
     for entry in list_plugin_owned_skills():
         other = str(entry.get("plugin_id") or "")
         pack = str(entry.get("pack_id") or "")
-        if pack and other and other != pid:
+        if pack and other and other != pid and other not in gone_plugins:
             owned_elsewhere[pack] = other
 
     standalone = appdata_skill_packs_dir()
@@ -677,7 +684,7 @@ def validate_plugin_skills(plugin_root: Path, plugin_id: str) -> list[str]:
                 f"skill {pack_id!r} already owned by plugin {owned_elsewhere[pack_id]!r}"
             )
         standalone_dir = standalone / pack_id
-        if standalone_dir.is_dir() and (standalone_dir / PLUGIN_SKILL_FILE).is_file():
+        if pack_id not in gone_packs and standalone_dir.is_dir() and (standalone_dir / PLUGIN_SKILL_FILE).is_file():
             raise ValueError(
                 f"skill {pack_id!r} already installed as a standalone skill pack — "
                 "uninstall it before installing this plugin"
@@ -732,13 +739,14 @@ def _refresh_plugin_skills_async() -> None:
         _SKILL_REFRESH_THREAD.start()
 
 
-def uninstall_uefn_plugin(plugin_id: str, *, erase_data: bool = False) -> dict[str, Any]:
+def uninstall_uefn_plugin(plugin_id: str, *, erase_data: bool = False, wait: bool = False) -> dict[str, Any]:
     """Remove a Store plugin from disk and return quickly.
 
     Persistent work (disable + settings + ``rmtree``) runs on the caller thread.
     Runtime teardown (``unload`` / strip contribs / skill redeploy) runs on a
     daemon so a wedged ``register()`` / ``unload()`` cannot stick the UI on
-    ``Uninstalling…``.
+    ``Uninstalling…``. ``wait`` runs it inline: a plugin installed right after takes
+    over the same tool names, and a late teardown would strip them again.
     """
     pid = normalize_plugin_id(plugin_id)
     dest = plugin_dir(pid)
@@ -845,11 +853,14 @@ def uninstall_uefn_plugin(plugin_id: str, *, erase_data: bool = False) -> dict[s
         finally:
             _notify()
 
-    threading.Thread(
-        target=_teardown,
-        daemon=True,
-        name=f"uefn-plugin-uninstall-{pid}",
-    ).start()
+    if wait:
+        _teardown()
+    else:
+        threading.Thread(
+            target=_teardown,
+            daemon=True,
+            name=f"uefn-plugin-uninstall-{pid}",
+        ).start()
     return {
         "ok": True,
         "plugin_id": pid,
@@ -924,12 +935,35 @@ def _reload_in_app_process(pid: str) -> None:
     threading.Thread(target=run, daemon=True, name=f"plugin-app-reload-{pid}").start()
 
 
+# ponytail: one-time move. UEFN 1.1 holds these plugins and the NPC AI skill pack. Only an
+# install someone asked for (Store Install/Update, an agent's install tool) removes them;
+# automatic updates leave them installed and working.
+UEFN_REPLACES: frozenset[str] = frozenset({
+    "animation", "leveldesign", "materials", "modeling", "vfx", "scenegraph", "verse",
+    "tester", "uefn-physics", "uefn-virtualpointer", "metahuman", "uefn-logs",
+})
+UEFN_REPLACES_SKILL_PACKS: frozenset[str] = frozenset({"npc-ai"})
+
+
+def uefn_takes_over(plugin_id: str, version: object) -> tuple[list[str], list[str]]:
+    """(installed Store plugins, standalone skill packs) an install of this version replaces."""
+    from backend.skills.store import appdata_skill_packs_dir
+    from backend.uefn_plugins.plugin_version import plugin_version_newer
+
+    if plugin_id != "uefn" or plugin_version_newer("1.1.0", version):
+        return [], []
+    plugins = sorted(p for p in UEFN_REPLACES if plugin_dir(p).is_dir())
+    packs = sorted(s for s in UEFN_REPLACES_SKILL_PACKS if (appdata_skill_packs_dir() / s).is_dir())
+    return plugins, packs
+
+
 def import_plugin_from_bytes(
     data: bytes,
     *,
     source: str = "store",
     replace: bool = True,
     signed_record: dict[str, Any] | None = None,
+    replace_old: bool = False,
 ) -> dict[str, Any]:
     """Install a plugin zip into AppData. Secrets never live in the zip.
 
@@ -939,6 +973,9 @@ def import_plugin_from_bytes(
     ``signed_record`` is the Store's signed version record ({…fields, signature}).
     When present it is verified against the zip before any write and kept next to the
     installed plugin for the load-time license check; a tampered record is refused.
+
+    ``replace_old`` lets an install someone asked for remove the plugins it replaces
+    (``uefn_takes_over``); without it such an install is refused and nothing changes.
     """
     if len(data) > MAX_PLUGIN_ZIP_BYTES:
         return {"ok": False, "error": f"zip exceeds max size ({MAX_PLUGIN_ZIP_BYTES} bytes)"}
@@ -1049,6 +1086,34 @@ def import_plugin_from_bytes(
     if not planned:
         return {"ok": False, "error": "zip has no installable files"}
 
+    replacing = uefn_takes_over(pid, manifest.get("version"))
+    if (replacing[0] or replacing[1]) and not replace_old:
+        return {
+            "ok": False,
+            "code": "replaces_plugins",
+            "error": (
+                f"{manifest.get('label') or pid} {manifest.get('version')} replaces "
+                f"{', '.join(replacing[0] + replacing[1])}. Install it from Settings → Store to "
+                "switch over; until then they stay installed."
+            ),
+        }
+    # Check the bundled skills before anything installed is touched: a refused install
+    # used to delete the old copy first and leave the plugin gone.
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="ducky-plugin-skills-") as tmp:
+            root = Path(tmp)
+            for rel_parts, payload in planned:
+                if rel_parts[0] != PLUGIN_SKILLS_DIR or ".." in rel_parts:
+                    continue
+                target = root.joinpath(*rel_parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(payload)
+            skill_ids = validate_plugin_skills(root, pid, replacing=replacing)
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
+
     # A compiled backend keeps its .pyd mapped in-process (Windows locks the file),
     # which would block the folder overwrite below. Move any locked .pyd aside; the
     # new version installs under its own name and loads fresh.
@@ -1076,6 +1141,16 @@ def import_plugin_from_bytes(
         invalidate_plugin_runtime(pid)
     except Exception:
         pass
+
+    # Everything checked: the plugins this install replaces go now, just before it lands.
+    for other in replacing[0]:
+        uninstall_uefn_plugin(other, wait=True)
+    if replacing[1]:
+        from backend.skills.store import appdata_skill_packs_dir
+
+        for pack in replacing[1]:
+            shutil.rmtree(appdata_skill_packs_dir() / pack, ignore_errors=True)
+        invalidate_plugin_skill_caches()
 
     # Only wipe the old install after the new zip fully validated in memory.
     # Hold the tree lock so a sibling Update All / skill-sync cannot keep
@@ -1123,7 +1198,6 @@ def import_plugin_from_bytes(
                     signing.write_installed_record(dest, signed_record)
                 except Exception:
                     pass
-            skill_ids = validate_plugin_skills(dest, pid)
     except OSError as exc:
         with _PLUGIN_TREE_LOCK:
             if dest.exists():
