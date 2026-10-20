@@ -264,12 +264,6 @@ FIELD_META: dict[str, FieldMeta] = {
         settable=True,
         description="Counts which features you use and which errors happen, by code. Never your chats, files or project names.",
     ),
-    "whats_new_popup": FieldMeta(
-        "Show What's new after updates",
-        "General",
-        settable=True,
-        description="After Ducky updates, show a short list of what changed, once.",
-    ),
     "allow_settings_write": FieldMeta(
         "Change Ducky Settings", "Account", settable=True,
         description="Let the AI save Appearance, models, voice, and layout in this app.",

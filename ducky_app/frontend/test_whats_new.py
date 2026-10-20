@@ -22,7 +22,7 @@ FEED = [
 
 
 def _decide(**kw):
-    args = {"current": "1.2.412", "last_seen": "1.2.408", "fresh_install": False, "enabled": True}
+    args = {"current": "1.2.412", "last_seen": "1.2.408", "fresh_install": False}
     args.update(kw)
     return wn.whats_new(FEED, **args)
 
@@ -53,7 +53,7 @@ def test_no_last_seen_on_an_old_install_shows_only_the_running_version() -> None
 
 
 def test_offline_or_unlisted_build_waits_without_marking() -> None:
-    got = wn.whats_new(FEED[1:], current="1.2.412", last_seen="1.2.408", fresh_install=False, enabled=True)
+    got = wn.whats_new(FEED[1:], current="1.2.412", last_seen="1.2.408", fresh_install=False)
     assert got["show"] is False
     assert got["mark"] is None
 
@@ -64,32 +64,11 @@ def test_running_version_without_changes_is_marked_quietly() -> None:
     assert got["mark"] == "1.2.411"
 
 
-def test_turned_off_marks_seen_without_showing() -> None:
-    got = _decide(enabled=False)
-    assert got["show"] is False
-    assert got["mark"] == "1.2.412"
-    assert [v["version"] for v in got["recent"]][:2] == ["1.2.412", "1.2.410"]
-
-
-def test_mark_seen_never_moves_back_and_can_turn_the_window_off(monkeypatch) -> None:
+def test_mark_seen_never_moves_back(monkeypatch) -> None:
     store: dict[str, str] = {"whats_new.last_seen": "1.2.412"}
     monkeypatch.setattr(wn, "_meta_get", store.get)
     monkeypatch.setattr(wn, "_meta_set", store.__setitem__)
-    saved = []
-
-    class FakeSettings:
-        whats_new_popup = True
-
-        @classmethod
-        def load(cls):
-            return cls()
-
-        def save(self):
-            saved.append(self.whats_new_popup)
-
-    monkeypatch.setattr("frontend.settings.PanelSettings", FakeSettings)
     assert wn.mark_whats_new_seen("1.2.410")["ok"] is True
     assert store["whats_new.last_seen"] == "1.2.412"
-    wn.mark_whats_new_seen("1.2.413", dont_show_again=True)
+    wn.mark_whats_new_seen("1.2.413")
     assert store["whats_new.last_seen"] == "1.2.413"
-    assert saved == [False]

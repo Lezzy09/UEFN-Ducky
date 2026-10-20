@@ -41,15 +41,6 @@ def _fresh_install() -> bool:
         return False
 
 
-def _enabled() -> bool:
-    try:
-        from frontend.settings import PanelSettings
-
-        return bool(getattr(PanelSettings.load(), "whats_new_popup", True))
-    except Exception:
-        return True
-
-
 def _items(row: dict[str, Any]) -> list[dict[str, str]]:
     items = row.get("items")
     if not isinstance(items, list):
@@ -88,7 +79,6 @@ def whats_new(
     current: str,
     last_seen: str | None,
     fresh_install: bool,
-    enabled: bool,
 ) -> dict[str, Any]:
     """Decide what the window shows. ``mark`` is the version to save as seen without
     showing anything (a fresh install, or a running version with no short changes)."""
@@ -98,7 +88,6 @@ def whats_new(
         "current": current,
         "last_seen": last_seen,
         "released_at": released.get("created_at") if released else None,
-        "enabled": enabled,
         "show": False,
         "versions": [],
         "recent": _with_items(rows, current)[:MAX_VERSIONS],
@@ -120,10 +109,7 @@ def whats_new(
         result["mark"] = current
         return result
     result["versions"] = unseen
-    if enabled:
-        result["show"] = True
-    else:
-        result["mark"] = current
+    result["show"] = True
     return result
 
 
@@ -138,7 +124,6 @@ def get_whats_new() -> dict[str, Any]:
         current=__version__,
         last_seen=_meta_get(META_LAST_SEEN),
         fresh_install=_fresh_install(),
-        enabled=_enabled(),
     )
     if result["mark"]:
         _meta_set(META_LAST_SEEN, str(result["mark"]))
@@ -146,19 +131,10 @@ def get_whats_new() -> dict[str, Any]:
     return result
 
 
-def mark_whats_new_seen(version: str, dont_show_again: bool = False) -> dict[str, Any]:
-    """Save ``version`` as seen (never moving back), and turn the window off when asked."""
+def mark_whats_new_seen(version: str) -> dict[str, Any]:
+    """Save ``version`` as seen, never moving back."""
     version = str(version or "").strip() or __version__
     last = _meta_get(META_LAST_SEEN)
     if not last or is_remote_newer(last, version):
         _meta_set(META_LAST_SEEN, version)
-    if dont_show_again:
-        try:
-            from frontend.settings import PanelSettings
-
-            settings = PanelSettings.load()
-            settings.whats_new_popup = False
-            settings.save()
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
     return {"ok": True}

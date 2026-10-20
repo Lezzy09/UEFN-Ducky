@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { onApiReady } from "../hooks/onApiReady";
 import { getApi, isRemote } from "../hooks/usePanelApi";
-import { requestOpenSettings } from "../navigation/openSettingsTab";
 import type { WhatsNewVersion } from "../types/panel";
 import { WhatsNewModal } from "./WhatsNewModal";
 
@@ -75,24 +74,15 @@ export function WhatsNewHost() {
 
   if (!shown) return null;
 
-  const close = (dontShowAgain: boolean) => {
+  const close = () => {
     const api = getApi();
     if (api && typeof api.mark_whats_new_seen === "function") {
-      void api.mark_whats_new_seen(shown.current, dontShowAgain).catch(() => {});
+      void api.mark_whats_new_seen(shown.current).catch(() => {});
     }
     setShown(null);
   };
 
   return (
-    <WhatsNewModal
-      open
-      current={shown.current}
-      versions={shown.versions}
-      onClose={close}
-      onAllNotes={() => {
-        close(false);
-        requestOpenSettings("General");
-      }}
-    />
+    <WhatsNewModal open current={shown.current} versions={shown.versions} onClose={close} />
   );
 }

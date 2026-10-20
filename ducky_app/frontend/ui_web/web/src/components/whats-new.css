@@ -10,24 +10,17 @@
 .whats-new-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .whats-new-duck {
   flex-shrink: 0;
 }
 
-.whats-new-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 650;
-  color: var(--fg);
-}
-
 .whats-new-sub {
-  margin: 2px 0 0;
-  font-size: 12px;
-  color: var(--muted);
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-dim);
 }
 
 .whats-new-version {
@@ -98,34 +91,4 @@
 .whats-new-text {
   min-width: 0;
   overflow-wrap: anywhere;
-}
-
-.whats-new-footer {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.whats-new-link {
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  font-size: 12px;
-  color: var(--accent);
-  cursor: pointer;
-}
-
-.whats-new-link:hover {
-  text-decoration: underline;
-}
-
-.whats-new-check {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--muted);
-  cursor: pointer;
 }

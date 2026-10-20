@@ -259,9 +259,6 @@ class PanelSettings:
     usage_stats: bool = True
     """Send anonymous usage counts (features used, errors by code, time open) to the UEFN Ducky Store."""
 
-    whats_new_popup: bool = True
-    """After an update, show the What's new window once (its Don't show again turns this off)."""
-
     allow_settings_write: bool = True
     """When false, ducky_settings_set (agent-driven Ducky Settings writes) is refused."""
 

@@ -12,7 +12,6 @@ import {
 import { useUiTarget } from "../../ui-targets/registry";
 import { openWhatsNew } from "../../components/WhatsNewHost";
 import { GeneralSectionHeader } from "./GeneralSectionHeader";
-import { PatchNotesList } from "./store/PatchNotesList";
 import { formatPatchDate } from "./store/storeData";
 
 type AppActionPhase = "idle" | "checking" | "uninstalling";
@@ -244,8 +243,8 @@ export function AppSection() {
   })();
 
   const currentNote = notes?.find((n) => n.version === localVersion);
-  const releasedOn = formatPatchDate(currentNote?.created_at);
-  const whatsNewLine = currentNote?.items?.length ? (
+  const releasedOn = currentNote?.items?.length ? formatPatchDate(currentNote.created_at) : "";
+  const whatsNewLine = notes?.some((n) => n.items?.length) ? (
     <span className="general-tab-whats-new">
       {releasedOn ? <>Updated to v{localVersion} on {releasedOn} · </> : null}
       <button type="button" className="general-tab-whats-new-link" onClick={openWhatsNew}>
@@ -313,9 +312,6 @@ export function AppSection() {
       {errorText && !updating ? (
         <p className="general-tab-section-note general-tab-section-note--error">{errorText}</p>
       ) : null}
-      <div className="general-tab-app-notes">
-        <PatchNotesList notes={notes} />
-      </div>
     </section>
   );
 }

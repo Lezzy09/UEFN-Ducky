@@ -16,8 +16,6 @@ vi.mock("../hooks/onApiReady", () => ({
     return () => {};
   },
 }));
-const requestOpenSettings = vi.fn();
-vi.mock("../navigation/openSettingsTab", () => ({ requestOpenSettings }));
 vi.mock("./ducky/DuckyAvatars", () => ({ DuckyAvatar: () => <span data-testid="duck" /> }));
 
 const { WhatsNewHost, openWhatsNew } = await import("./WhatsNewHost");
@@ -38,7 +36,6 @@ function status(over: Partial<WhatsNewStatus> = {}): WhatsNewStatus {
   return {
     current: "1.2.412",
     last_seen: "1.2.409",
-    enabled: true,
     show: true,
     versions: VERSIONS,
     recent: VERSIONS,
@@ -56,7 +53,6 @@ afterEach(() => {
   cleanup();
   getWhatsNew.mockReset();
   markSeen.mockReset();
-  requestOpenSettings.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -64,7 +60,8 @@ describe("WhatsNewHost", () => {
   it("lists each unseen version's one-line changes with their marks", async () => {
     getWhatsNew.mockResolvedValue(status());
     render(<WhatsNewHost />);
-    expect(await screen.findByRole("dialog", { name: "What's new" })).toBeTruthy();
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "What's new" })).toBeTruthy();
     expect(screen.getByText("You're on 1.2.412")).toBeTruthy();
     expect(screen.getByRole("region", { name: "Version 1.2.412" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "Version 1.2.410" })).toBeTruthy();
@@ -74,23 +71,24 @@ describe("WhatsNewHost", () => {
     expect(screen.getByText("Better")).toBeTruthy();
   });
 
-  it("Got it saves the version as seen with the Don't show again choice", async () => {
+  it("Got it, the close button and Esc save the version as seen", async () => {
     getWhatsNew.mockResolvedValue(status());
     render(<WhatsNewHost />);
     await screen.findByRole("dialog");
-    fireEvent.click(screen.getByLabelText("Don't show again"));
+    expect(screen.queryByText("Don't show again")).toBeNull();
+    expect(screen.queryByText("All patch notes")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Got it" }));
-    expect(markSeen).toHaveBeenCalledWith("1.2.412", true);
+    expect(markSeen).toHaveBeenCalledWith("1.2.412");
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("All patch notes closes it and opens Settings > General", async () => {
+  it("uses Ducky's modal title bar with its close button", async () => {
     getWhatsNew.mockResolvedValue(status());
     render(<WhatsNewHost />);
     await screen.findByRole("dialog");
-    fireEvent.click(screen.getByRole("button", { name: "All patch notes" }));
-    expect(markSeen).toHaveBeenCalledWith("1.2.412", false);
-    expect(requestOpenSettings).toHaveBeenCalledWith("General");
+    expect(screen.getByRole("heading", { name: "What's new" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(markSeen).toHaveBeenCalledWith("1.2.412");
   });
 
   it("shows nothing when there is nothing new (seen, fresh install or offline)", async () => {

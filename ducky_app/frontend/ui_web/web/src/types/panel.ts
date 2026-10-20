@@ -1670,7 +1670,6 @@ export interface WhatsNewStatus {
   last_seen?: string | null;
   /** When the Store released the running version. */
   released_at?: string | null;
-  enabled: boolean;
   /** Open the window now with `versions`. */
   show: boolean;
   /** The versions not seen yet, newest first. */
@@ -3101,7 +3100,7 @@ export interface PanelApi {
     error?: string | null;
   }>;
   get_whats_new?(): Promise<WhatsNewStatus>;
-  mark_whats_new_seen?(version: string, dont_show_again?: boolean): Promise<{ ok: boolean; error?: string }>;
+  mark_whats_new_seen?(version: string): Promise<{ ok: boolean; error?: string }>;
   get_install_info(): Promise<InstallInfo>;
   apply_update(): Promise<UpdaterResult>;
   get_update_progress(): Promise<UpdateProgress>;

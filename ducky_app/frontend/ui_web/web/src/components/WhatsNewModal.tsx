@@ -1,8 +1,7 @@
-import { useState } from "react";
 import type { WhatsNewKind, WhatsNewVersion } from "../types/panel";
 import { formatPatchDate } from "../views/settings/store/storeData";
 import { DuckyAvatar } from "./ducky/DuckyAvatars";
-import { Modal } from "./Modal";
+import { Modal, ModalActions } from "./Modal";
 import "./whats-new.css";
 
 const KIND_LABEL: Record<WhatsNewKind, string> = {
@@ -15,51 +14,24 @@ interface WhatsNewModalProps {
   open: boolean;
   current: string;
   versions: WhatsNewVersion[];
-  /** Close with the "Don't show again" choice. */
-  onClose: (dontShowAgain: boolean) => void;
-  onAllNotes: () => void;
+  onClose: () => void;
 }
 
-/** After an update: each new version's one-line changes, in Ducky's own look. */
-export function WhatsNewModal({ open, current, versions, onClose, onAllNotes }: WhatsNewModalProps) {
-  const [dontShowAgain, setDontShowAgain] = useState(false);
-  const close = () => onClose(dontShowAgain);
-
+/** After an update: each new version's one-line changes, in Ducky's own modal. */
+export function WhatsNewModal({ open, current, versions, onClose }: WhatsNewModalProps) {
   return (
     <Modal
       open={open}
-      onClose={close}
+      onClose={onClose}
       title="What's new"
-      hideHeader
-      hideClose
       width={500}
       className="whats-new"
       bodyClassName="whats-new-body"
-      footer={
-        <div className="whats-new-footer">
-          <button type="button" className="whats-new-link" onClick={onAllNotes}>
-            All patch notes
-          </button>
-          <label className="whats-new-check">
-            <input
-              type="checkbox"
-              checked={dontShowAgain}
-              onChange={(e) => setDontShowAgain(e.target.checked)}
-            />
-            Don&apos;t show again
-          </label>
-          <button type="button" className="settings-btn modal-confirm-btn" onClick={close}>
-            Got it
-          </button>
-        </div>
-      }
+      footer={<ModalActions onCancel={onClose} onConfirm={onClose} confirmLabel="Got it" hideCancel />}
     >
       <div className="whats-new-head">
-        <DuckyAvatar size={40} className="whats-new-duck" title="Ducky" />
-        <div>
-          <h2 className="whats-new-title">What&apos;s new</h2>
-          <p className="whats-new-sub">You&apos;re on {current}</p>
-        </div>
+        <DuckyAvatar size={32} className="whats-new-duck" title="Ducky" />
+        <p className="whats-new-sub">You&apos;re on {current}</p>
       </div>
       {versions.map((v) => {
         const date = formatPatchDate(v.created_at);

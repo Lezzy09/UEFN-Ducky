@@ -1126,10 +1126,6 @@
   flex-shrink: 0;
 }
 
-.general-tab-app-notes {
-  margin-top: 16px;
-}
-
 .general-tab-toggle-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
