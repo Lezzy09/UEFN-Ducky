@@ -504,6 +504,10 @@ def find_setup_exe(version: str, override: Path | None) -> Path:
 # ---------------------------------------------------------------------------
 
 
+# The Store's app-release upload limit (duckyos-core files/app_release.rs MAX_APP_RELEASE_BYTES).
+MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+
+
 def upload_update_pack(base: str, api_key: str, version: str) -> dict | None:
     """Upload the update pack and its manifest like the Setup; the ``update`` field of
     uds_app_release, or ``None`` when this build has no pack (Setup-only release)."""
@@ -512,6 +516,12 @@ def upload_update_pack(base: str, api_key: str, version: str) -> dict | None:
     pack, manifest_zip = pack_paths(ROOT / "dist", version)
     if not pack.is_file() or not manifest_zip.is_file():
         print(f"  no update pack for {version}: installed copies update with Setup")
+        return None
+    if pack.stat().st_size > MAX_UPLOAD_BYTES:
+        print(
+            f"  WARNING: {pack.name} is {pack.stat().st_size} bytes, over the Store's {MAX_UPLOAD_BYTES}-byte "
+            "upload limit: released without a pack, so installed copies update with Setup"
+        )
         return None
     fields: dict = {}
     for path, prefix in ((pack, "pack"), (manifest_zip, "manifest")):

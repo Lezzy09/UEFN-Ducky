@@ -46,6 +46,13 @@ def main() -> int:
         default=None,
         help="the short changes for What's new, as release/publish_app.py --notes-file takes them",
     )
+    ap.add_argument(
+        "--pack",
+        type=Path,
+        default=None,
+        help="UEFN-Ducky-Update-<v>.zip from release/update_pack.py: offer it as the update pack "
+        "(its -files.zip beside it), unsigned, which only a loopback feed may be",
+    )
     args = ap.parse_args()
 
     installer = Path(args.installer).resolve()
@@ -65,8 +72,24 @@ def main() -> int:
         payload["versions"] = [
             {"version": version, "changelog": args.notes, "created_at": str(int(time.time())), "items": items}
         ]
+    files = {f"/{installer.name}": installer.read_bytes()}
+    if args.pack is not None:
+        pack = args.pack.resolve()
+        manifest = pack.with_name(pack.stem + "-files.zip")
+        files[f"/{pack.name}"] = pack.read_bytes()
+        files[f"/{manifest.name}"] = manifest.read_bytes()
+        payload["update"] = {
+            "version": version,
+            "packUrl": f"/{pack.name}",
+            "packSha256": hashlib.sha256(files[f"/{pack.name}"]).hexdigest(),
+            "packSize": len(files[f"/{pack.name}"]),
+            "manifestUrl": f"/{manifest.name}",
+            "manifestSha256": hashlib.sha256(files[f"/{manifest.name}"]).hexdigest(),
+            "signature": "",
+            "issuedAt": int(time.time()),
+        }
     body = json.dumps({"handled": True, "payload": payload}).encode("utf-8")
-    data = installer.read_bytes()
+    data = files[f"/{installer.name}"]
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code: int, content: bytes, ctype: str) -> None:
@@ -85,10 +108,23 @@ def main() -> int:
         def do_GET(self) -> None:  # noqa: N802
             if self.path == FEED_PATH:
                 self._send(200, body, "application/json")
-            elif self.path == f"/{installer.name}":
-                self._send(200, data, "application/octet-stream")
-            else:
+                return
+            content = files.get(self.path)
+            if content is None:
                 self._send(404, b"not found", "text/plain")
+                return
+            ranged = re.fullmatch(r"bytes=(\d+)-(\d+)", self.headers.get("Range") or "")
+            if not ranged:
+                self._send(200, content, "application/octet-stream")
+                return
+            start, end = int(ranged.group(1)), min(int(ranged.group(2)), len(content) - 1)
+            part = content[start : end + 1]
+            self.send_response(206)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(content)}")
+            self.send_header("Content-Length", str(len(part)))
+            self.end_headers()
+            self.wfile.write(part)
 
         def log_message(self, fmt: str, *a: object) -> None:  # noqa: D401
             sys.stderr.write("  feed: " + (fmt % a) + "\n")
