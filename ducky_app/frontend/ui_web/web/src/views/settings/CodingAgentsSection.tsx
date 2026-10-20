@@ -103,6 +103,10 @@ export function CodingAgentLoginModal({
   zIndex?: number;
 }) {
   const [authUrl, setAuthUrl] = useState("");
+  // What the link wants: a code pasted back here (Claude), the code shown here typed at the
+  // link on any device ("device_code", Codex), or only a browser sign-in on the PC ("browser").
+  const [loginUi, setLoginUi] = useState("");
+  const [userCode, setUserCode] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [starting, setStarting] = useState(true);
@@ -124,10 +128,12 @@ export function CodingAgentLoginModal({
       return;
     }
 
-    const applyUrl = (url?: string) => {
-      const next = String(url || "").trim();
+    const applyLink = (res: { auth_url?: string; login_ui?: string; user_code?: string }) => {
+      const next = String(res.auth_url || "").trim();
       if (next) {
         setAuthUrl(next);
+        setLoginUi(String(res.login_ui || ""));
+        setUserCode(String(res.user_code || "").trim());
         setError("");
       }
     };
@@ -145,7 +151,7 @@ export function CodingAgentLoginModal({
           setError(String(res.error || res.message || "Login failed"));
           return;
         }
-        applyUrl(res.auth_url);
+        applyLink(res);
       } catch (e) {
         if (!cancelled && gen === startGen.current) setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -164,7 +170,7 @@ export function CodingAgentLoginModal({
             onLoggedInRef.current();
             return;
           }
-          applyUrl(st.auth_url);
+          applyLink(st);
           if (st.error && !String(st.auth_url || "").trim()) {
             setError(String(st.error));
           }
@@ -187,6 +193,8 @@ export function CodingAgentLoginModal({
   const retry = () => {
     setError("");
     setAuthUrl("");
+    setLoginUi("");
+    setUserCode("");
     setCode("");
     setStarting(true);
     setAttempt((n) => n + 1);
@@ -225,6 +233,10 @@ export function CodingAgentLoginModal({
 
   const canRetry = loginCanRetry({ starting, authUrl, error });
   const linkPrompt = loginLinkPrompt({ starting, authUrl, error });
+  const deviceCode = loginUi === "device_code" && !!userCode;
+  // Nothing comes back to paste: the modal closes by itself once the CLI reports signed in.
+  const signInOnly = deviceCode || loginUi === "browser";
+  const copyCode = () => void getApi()?.copy_text?.(userCode);
 
   return (
     <Modal
@@ -236,16 +248,21 @@ export function CodingAgentLoginModal({
       footer={
         <ModalActions
           onCancel={onClose}
-          onConfirm={() => (canRetry ? retry() : void submit())}
+          onConfirm={() => (canRetry ? retry() : deviceCode ? copyCode() : signInOnly ? openLink() : void submit())}
           cancelLabel="Cancel"
-          confirmLabel={canRetry ? "Try again" : submitting ? "Submitting…" : "Submit"}
-          confirmDisabled={canRetry ? false : submitting || !code.trim() || !authUrl.trim()}
+          confirmLabel={
+            canRetry ? "Try again" : deviceCode ? "Copy code" : signInOnly ? "Open link" : submitting ? "Submitting…" : "Submit"
+          }
+          confirmDisabled={canRetry || signInOnly ? false : submitting || !code.trim() || !authUrl.trim()}
         />
       }
     >
       <p className="general-tab-section-desc" style={{ marginTop: 0 }}>
-        Click the link to sign in, then paste the code Claude shows you. The
-        Claude Login tab in the terminal list closes when you cancel or finish.
+        {deviceCode
+          ? "Open the link on any device (your phone works), sign in, and enter this code. This window closes by itself once you're signed in."
+          : loginUi === "browser"
+            ? "Open the link in a browser on the PC running Ducky and sign in. This window closes by itself once you're signed in."
+            : "Click the link to sign in, then paste the code Claude shows you. The Claude Login tab in the terminal list closes when you cancel or finish."}
       </p>
       {authUrl ? (
         <button
@@ -266,7 +283,16 @@ export function CodingAgentLoginModal({
       ) : linkPrompt ? (
         <p className="general-tab-section-desc">{linkPrompt}</p>
       ) : null}
-      {authUrl ? (
+      {deviceCode ? (
+        <div
+          className="settings-input"
+          aria-label="One-time code"
+          style={{ fontFamily: "monospace", fontSize: 22, letterSpacing: 2, textAlign: "center", userSelect: "all" }}
+        >
+          {userCode}
+        </div>
+      ) : null}
+      {authUrl && !signInOnly ? (
         <input
           ref={codeRef}
           className="settings-input"

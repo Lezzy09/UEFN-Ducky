@@ -3822,7 +3822,10 @@ export interface PanelApi {
     message?: string;
     error?: string;
     auth_url?: string;
+    /** "code_modal": paste back the code the link shows. "device_code": type `user_code`
+     *  at the link (any device). "browser": sign in at the link in a browser on the PC. */
     login_ui?: string;
+    user_code?: string;
     terminal_session_id?: string;
   }>;
   coding_agent_login_submit(
@@ -3844,6 +3847,7 @@ export interface PanelApi {
     auth_url?: string;
     error?: string;
     login_ui?: string;
+    user_code?: string;
     terminal_session_id?: string;
     session_alive?: boolean;
   }>;
