@@ -158,6 +158,9 @@ def test_a_call_wrapped_twice_runs_the_inner_tool(monkeypatch):
     try:
         asyncio.run(ducky_panel.ducky_call_tool(
             name="ducky_call_tool", arguments={"name": "find_workflows", "arguments": {"task": "trailer"}}))
+        # Oct 20 2026: the same wrap spelled {"tool", "args"} failed twice in one run.
+        asyncio.run(ducky_panel.ducky_call_tool(
+            name="ducky_call_tool", arguments={"tool": "list_workflows", "args": {}}))
     finally:
         reset_plan_only(token)
-    assert seen == [("find_workflows", {"task": "trailer"})]
+    assert seen == [("find_workflows", {"task": "trailer"}), ("list_workflows", {})]

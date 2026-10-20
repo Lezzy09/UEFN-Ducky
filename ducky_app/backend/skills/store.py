@@ -1078,7 +1078,44 @@ def skill_read_subskill(pack_id: str, subskill_id: str = "", section: str = "") 
             return f"ERROR: no section {section!r} in {pid}/{sid}. Sections:\n{listed}"
         title, text = found
         return f"{heading} > {title}\n\n{text.strip()}"
-    return f"{heading}\n\n{body.strip()}"
+    return f"{heading}\n\n{_fit_whole_sections(body.strip(), pid, sid)}"
+
+
+# What one agent tool result holds after escaping and the envelope
+# (agent.tool_result_compact.API_TOOL_RESULT_MAX is 16,000).
+_WHOLE_READ_MAX = 12_000
+
+
+def _fit_whole_sections(body: str, pid: str, sid: str) -> str:
+    """A file too big for one read: its leading whole sections, then the rest by name with
+    the call that reads each one. The verse core is 36k: cut by the result cap, its tail
+    was lost without a word."""
+    from backend.search.chunker import _FENCE, _HEADING, split_sections
+
+    lines = body.splitlines()
+    size, last_heading, current, in_code = 0, 0, "", False
+    for i, line in enumerate(lines):
+        m = None
+        if _FENCE.match(line):
+            in_code = not in_code
+        elif not in_code and (m := _HEADING.match(line)):
+            last_heading, current = i, m.group(2).strip()
+        size += len(line) + 1
+        if size > _WHOLE_READ_MAX:
+            cut = last_heading or i
+            break
+    else:
+        return body
+    rest = split_sections("\n".join(lines[cut:]))
+    names = [f"- {h} ({len(t):,} chars)" for h, t in rest[1]]
+    if rest[0] and current:  # one section alone is too long: it stops mid-way above
+        names.insert(0, f"- {current} (continues past this read)")
+    call = f'skill_read_subskill(pack_id="{pid}", subskill_id="{sid}", section="<name>")'
+    return (
+        "\n".join(lines[:cut]).rstrip()
+        + f"\n\n…This file is {len(body):,} chars, more than one read holds. Read each part "
+        f"below once, when you need it, with {call}:\n" + "\n".join(names)
+    )
 
 
 def list_skill_packs(*, include_text: bool = False) -> list[dict[str, Any]]:

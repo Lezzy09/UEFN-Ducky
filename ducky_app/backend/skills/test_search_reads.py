@@ -31,6 +31,20 @@ def test_section_read_returns_only_that_heading() -> None:
     assert "## not a heading" in flags
 
 
+def test_a_file_too_big_for_one_read_names_the_rest() -> None:
+    root = _pack()
+    parts = [f"## Part {n}\n" + f"Step {n} line.\n" * 400 for n in range(1, 6)]  # ~5.6k chars each
+    (root / "references" / "big.md").write_text(
+        "---\ndescription: Big\nmetadata:\n  label: Big\n---\n\n" + "\n".join(parts), encoding="utf-8")
+    store.invalidate_skills_revision()
+    text = store.skill_read_subskill("sky", "big")
+    assert "Step 2 line." in text and "Step 3 line." not in text  # two whole parts fit, never half of one
+    assert 'skill_read_subskill(pack_id="sky", subskill_id="big", section="<name>")' in text
+    assert "- Part 3 (" in text and "- Part 5 (" in text
+    assert "Step 5 line." in store.skill_read_subskill("sky", "big", section="Part 5")
+    assert "more than one read" not in store.skill_read_subskill("sky", "starfield")  # small files whole
+
+
 def test_unknown_section_lists_the_headings() -> None:
     _pack()
     text = store.skill_read_subskill("sky", "starfield", section="Nope")

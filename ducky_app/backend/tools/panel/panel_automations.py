@@ -56,13 +56,34 @@ def list_workflow_templates(pretty: bool = False) -> str:
 
 @mcp.tool()
 def list_workflows(pretty: bool = False) -> str:
-    """Saved workflows (id, name, enabled, folder, what starts them) and their owner:
-    Local (this PC only) or a shared space (synced to everyone in it). A reusable workflow
-    has a signature: the inputs a Run workflow node passes and the outputs it returns."""
+    """Saved workflows, one flat row each: id, name, folder, enabled, trigger, owner (an id
+    from `owners`: Local is this PC only, a shared space syncs to everyone in it), last_run,
+    nodes, the first 120 chars of the description, and for a reusable workflow its signature
+    ("inputs -> outputs"). get_workflow has the full description and graph."""
     from backend.automations.store import list_workflows as _list
     from backend.automations.shared import owners
 
-    return tool_json({"ok": True, "workflows": _list(), "owners": owners()["owners"]}, pretty=pretty)
+    return tool_json({"ok": True, "workflows": [_row(w) for w in _list()], "owners": owners()["owners"]}, pretty=pretty)
+
+
+def _row(w: dict[str, Any]) -> dict[str, Any]:
+    """A flat row (a TOON table) small enough that 30+ workflows fit one result: the full
+    rows (owner object per row, signature types) spilled at 22k chars for 32 workflows."""
+    desc = str(w.get("description") or "")
+    sig = w.get("signature") or {}
+    inputs = ",".join(str(i.get("name", "")) for i in sig.get("inputs") or [] if isinstance(i, dict))
+    return {
+        "id": w.get("id"),
+        "name": w.get("name"),
+        "folder": w.get("folder") or "",
+        "enabled": bool(w.get("enabled")),
+        "trigger": (w.get("trigger") or {}).get("label", ""),
+        "owner": (w.get("owner") or {}).get("id", ""),
+        "last_run": int(w.get("last_run") or 0),
+        "nodes": w.get("node_count") or 0,
+        "description": desc if len(desc) <= 120 else desc[:119] + "…",
+        "signature": f"{inputs} -> {','.join(map(str, sig.get('outputs') or []))}" if sig else "",
+    }
 
 
 @mcp.tool()

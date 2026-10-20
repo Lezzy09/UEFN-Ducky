@@ -21,7 +21,8 @@ PLAN_PROTOCOL = (
     "itself. Each leaf: `content` = a short title in plain words (under 80 characters); "
     "`body_markdown` = its description: what to do, Done when (name the check tool) and one "
     "concrete example of the result. Give each section a one-line description too. "
-    "`ducky_plan_update_node` `in_progress` BEFORE the work, "
+    "`ducky_plan_update_node` `in_progress` BEFORE the work, in the same turn ahead of the "
+    "work's calls (a turn's calls run in order), never a turn of its own; "
     "`completed` when Done-when is met. Mutators are blocked until a leaf is "
     "in_progress. If the approach changes, update the tree before more mutators — "
     "never thrash off-plan. Team plans: ONE main plan, the lead's, with one sub plan per agent "
@@ -1414,6 +1415,7 @@ def format_plan_prompt_block(
     lines.append(
         "Protocol (every tool round): mark the current leaf `in_progress` BEFORE the "
         "work, `completed` when Done-when is met, then mark the next leaf `in_progress`. "
+        "Send each tick in the same turn as the work it covers, before its calls (a turn's calls run in order). "
         "Re-read this outline constantly. Leaving finished work pending is a failure. "
         "If diagnosis changes the approach, update the tree first — never thrash off-plan."
     )

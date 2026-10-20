@@ -10,12 +10,14 @@ from pathlib import Path
 
 from frontend.app_paths import resolve_app_data_dir
 
+# Both must reach the model whole under tool_result_compact.API_TOOL_RESULT_MAX: a page
+# is a string (escaped, twice in the json format); an inline result is parsed structure.
+READ_MAX_CHARS = 8_000
 INLINE_MAX = 12_000
 PREVIEW_CHARS = 800
 FILE_MAX_BYTES = 2 * 1024 * 1024
 KEEP_FILES = 20
 DIR_MAX_BYTES = 32 * 1024 * 1024
-READ_MAX_CHARS = 8_000
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.txt$")
 
@@ -115,7 +117,7 @@ def resolve_spill_path(name: str) -> Path:
     return target
 
 
-def read_tool_spill(name: str, offset: int = 0, max_chars: int = 4000) -> dict[str, object]:
+def read_tool_spill(name: str, offset: int = 0, max_chars: int = READ_MAX_CHARS) -> dict[str, object]:
     path = resolve_spill_path(name)
     offset = max(0, int(offset))
     max_chars = max(1, min(int(max_chars), READ_MAX_CHARS))

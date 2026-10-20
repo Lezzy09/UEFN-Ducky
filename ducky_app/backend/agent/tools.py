@@ -74,6 +74,7 @@ class ToolCallRecord:
 
 
 from backend.agent.mcp_content import mcp_content_to_text as _content_to_text
+from backend.agent.tool_result_compact import API_TOOL_RESULT_MAX, tool_result_max  # noqa: F401  (re-exported)
 
 
 def _hint_for_error(tool: str, text: str) -> str:
@@ -279,14 +280,6 @@ def mcp_tool_to_gemini(tool: Tool) -> dict[str, Any]:
 
 
 MARKDOWN_TOOLS = frozenset({"uefn_skill"})
-API_TOOL_RESULT_MAX = 2200
-# Tools whose payload IS the deliverable get a bigger budget: capping the error
-# list to a stub left the model editing blind (it "fixed errors" it never saw).
-TOOL_RESULT_MAX_OVERRIDES = {
-    "workspace_list_verse_errors": 9000,
-    "web_search": 80_000,
-    "web_fetch": 80_000,
-}
 
 # User-paced panel tools (modal / walkthrough) need longer than the default 180s.
 # ducky_ask_user NEVER times out — the agent suspends until the user answers;
@@ -299,10 +292,6 @@ TOOL_TIMEOUT_OVERRIDES: dict[str, float] = {
     "ducky_ui_show": 930.0,
     "ducky_ask_user": float("inf"),
 }
-
-
-def tool_result_max(tool_name: str) -> int:
-    return TOOL_RESULT_MAX_OVERRIDES.get(tool_name, API_TOOL_RESULT_MAX)
 
 
 def tool_timeout(tool_name: str) -> float:

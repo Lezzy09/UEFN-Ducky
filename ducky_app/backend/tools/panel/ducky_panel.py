@@ -334,7 +334,8 @@ async def ducky_call_tool(
 ) -> str:
     """Invoke any flat UEFN-Ducky MCP tool by name (Cursor CallMcpTool-style).
     Desktop plugins (blender_*) and nested MCP ({prefix}__*) use the same bridge —
-    no server id. Discover schemas with ducky_get_tools first. Always pass arguments.
+    no server id. Arguments you already know (a skill's call line, an earlier call) go
+    straight here; ducky_get_tools only for a schema you don't have. Always pass arguments.
     """
     from backend.agent.run_context import current_mode
     from backend.agent.tools import execute_tool, list_mcp_tools
@@ -353,15 +354,19 @@ async def ducky_call_tool(
     tool_name = (name or "").strip()
     # A model that wraps the call twice (ducky_call_tool → ducky_call_tool → the tool) means the
     # inner tool: run it instead of refusing the turn.
+    # Models also spell the inner call {"tool": …, "args": …}.
     for _ in range(3):
         inner = arguments if isinstance(arguments, dict) else {}
-        if tool_name != "ducky_call_tool" or not str(inner.get("name") or "").strip():
+        inner_name = next((str(inner[k]).strip() for k in ("name", "tool", "tool_name") if str(inner.get(k) or "").strip()), "")
+        if tool_name != "ducky_call_tool" or not inner_name:
             break
-        tool_name, arguments = str(inner["name"]).strip(), inner.get("arguments")
+        tool_name, arguments = inner_name, next((inner[k] for k in ("arguments", "args", "input") if k in inner), None)
     if not tool_name:
         raise ValueError("name must not be empty")
+    if tool_name == "ducky_call_tool":
+        raise ValueError('ducky_call_tool takes the tool itself: ducky_call_tool(name="set_workflow_folder", arguments={"workflow_id": "…", "folder": "…"})')
     if tool_name in _DISPATCHER_BLOCKLIST:
-        raise ValueError(f"cannot dispatch meta-tool {tool_name}")
+        raise ValueError(f"{tool_name} is a direct tool: call {tool_name}(...) itself, not through ducky_call_tool")
     if tool_name in EXCLUDED_TOOLS:
         raise ValueError(f"tool excluded: {tool_name}")
     args = arguments if isinstance(arguments, dict) else {}
@@ -371,7 +376,7 @@ async def ducky_call_tool(
     if result.ok:
         from backend.agent.tool_spills import inline_or_spill
 
-        data = result.data if isinstance(result.data, str) else json.dumps(result.data)
+        data = result.data if isinstance(result.data, str) else tool_json(result.data)
         data = inline_or_spill(tool_name, data)
         if data.strip().startswith(("{", "[")):
             return data
@@ -2126,8 +2131,9 @@ def ducky_terminal_read_output(session_id: str, max_chars: int = 8000, pretty: b
 
 
 @mcp.tool()
-def ducky_read_tool_spill(name: str, offset: int = 0, max_chars: int = 4000, pretty: bool = False) -> str:
-    """Page a spilled nested-tool result under AppData tool_spills (basename only)."""
+def ducky_read_tool_spill(name: str, offset: int = 0, max_chars: int = 8000, pretty: bool = False) -> str:
+    """Page a spilled nested-tool result under AppData tool_spills (basename only).
+    One call returns one whole 8,000-char page; the next page starts at offset + 8000."""
     from backend.agent.tool_spills import read_tool_spill
 
     try:

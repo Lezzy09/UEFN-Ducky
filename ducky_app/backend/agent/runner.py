@@ -1210,6 +1210,8 @@ class AgentRunner:
             from backend.bridge.serial import BUSY_HINT, HEAVY_MCP_TOOLS
 
             heavy_executed = 0
+            # The rename unblocks the other task tools of the same turn (require_self_name).
+            pending_records.sort(key=lambda r: effective_tool_name(r.name, r.arguments) != "ducky_rename_self")
             for rec in pending_records:
                 if bridge.is_set():
                     yield _cancelled_event(assistant_blocks, assistant_text, turn_text, turn_thinking, total_usage)

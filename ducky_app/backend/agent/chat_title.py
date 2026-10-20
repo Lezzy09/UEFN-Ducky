@@ -67,7 +67,8 @@ def self_naming_instruction(title: str, conv_id: str = "") -> str:
         "Your FIRST tool call must be ducky_rename_self(title=...). Choose a concise "
         "2–4 word name describing the task in the user's first message. You choose "
         "the name yourself as part of this response; no other model names you. "
-        "Rename before researching, planning, asking questions or doing the task.\n"
+        "Send it in the same turn as your first real calls (it runs first), never as "
+        "a turn of its own.\n"
     )
 
 

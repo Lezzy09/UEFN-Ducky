@@ -238,22 +238,26 @@ names them; ask the user, and only after they agree pass
 
 ### Tools
 
-| Tool | Use |
+Each line is the exact call: pass it to `ducky_call_tool(name, arguments)` as is, no
+`ducky_get_tools` lookup first. `owner` is `"local"` or a space id from `list_workflows`.
+
+| Call | Use |
 | --- | --- |
-| `list_workflows` | every workflow (id, name, on/off, folder, what starts it) + owners |
-| `get_workflow` | one workflow's graph, owner and last run log |
-| `list_workflow_nodes` | node types, their settings and plugin nodes |
-| `save_workflow` | create, or update by `workflow_id` (left-out graph/name/description/enabled stay) |
-| `show_workflow` | point at nodes or a group with a caption; nothing saved |
-| `run_workflow` | run now (prompt, files, payload for a reusable one) |
-| `run_workflow_node` | run one node now, reusing what fed it last run |
-| `stop_workflow` | stop every run of it on this PC right away |
-| `set_workflow_folder` / `move_workflow_folder` | file a workflow / rename, move or remove a folder |
-| `copy_workflow` | copy or move to Local or a shared space |
-| `add_workflow_folder` | make a folder that holds nothing yet (a shared space's syncs to members) |
-| `copy_workflow_folder` | copy or move a whole folder tree to Local or a shared space; Run workflow steps inside it keep working |
-| `export_workflow_folder` / `import_workflow_bundle` | a folder tree as one bundle / make a copy of a bundle anywhere (new ids, calls re-pointed) |
-| `delete_workflow` | delete (for everyone, if it is shared) |
+| `list_workflows()` | one flat row per workflow: id, name, folder, enabled, trigger, owner, last_run, nodes, description (120 chars), signature; plus `owners` |
+| `get_workflow(workflow_id)` | one workflow's graph, owner and last run log (`include_code=true` for code nodes) |
+| `list_workflow_nodes()` | node types, their settings and plugin nodes |
+| `save_workflow(graph, name, description, enabled, workflow_id, owner, folder)` | create, or update by `workflow_id` (left-out graph/name/description/enabled stay) |
+| `show_workflow(workflow_id, node_ids, note)` | point at nodes or a group with a caption; nothing saved |
+| `run_workflow(workflow_id, prompt, files, payload)` | run now (`payload` for a reusable one) |
+| `run_workflow_node(workflow_id, node_id)` | run one node now, reusing what fed it last run |
+| `stop_workflow(workflow_id)` | stop every run of it on this PC right away |
+| `set_workflow_folder(workflow_id, folder)` | file a workflow: `folder="Play tests/Tycoon"`, `""` = top level |
+| `move_workflow_folder(owner, path, new_path)` | rename or move a folder with everything in it; `new_path` = its parent removes the folder and keeps its workflows |
+| `copy_workflow(workflow_id, owner, move)` | copy or move to Local or a shared space |
+| `add_workflow_folder(owner, path)` | make a folder that holds nothing yet (a shared space's syncs to members) |
+| `copy_workflow_folder(owner_from, path, owner_to, parent_path, move)` | copy or move a whole folder tree; Run workflow steps inside it keep working |
+| `export_workflow_folder(owner, path)` / `import_workflow_bundle(bundle, owner, parent_path)` | a folder tree as one bundle / make a copy of a bundle anywhere (new ids, calls re-pointed) |
+| `delete_workflow(workflow_id, confirmed=true)` | delete (for everyone, if it is shared), only after the user's yes |
 | `list_workflow_versions` / `restore_workflow_version` | History: saved versions, bring one back |
 | `clear_workflow_runs` | Clear log |
 | `emit_workflow_trigger` | fire a plugin trigger to test listeners |
@@ -359,3 +363,14 @@ running their own step; editing a node's code turns it into a **Custom code** no
   and icons on nodes make big graphs readable. A set of workflows that call each other
   lives in one folder; share it with `copy_workflow_folder` (not one
   `copy_workflow` per workflow), so the tree and its calls arrive whole.
+- **Tidy up ("clean up my workflows"), 4 turns, no plan, no `find_workflows`:**
+  1. `list_workflows()`. The rows are enough to judge: name, folder, enabled,
+     last_run (0 = never ran), nodes, description. `get_workflow` only for a row
+     you can't judge, all of those in one turn.
+  2. One `ducky_ask_user` with every proposed change as its own option: moves
+     (`Name` → `Folder`), renames, turning off, and deletes (disabled, never ran,
+     `Untitled`, a duplicate). Nothing changes before the answer.
+  3. One turn with every approved call: `set_workflow_folder`, `move_workflow_folder`,
+     `save_workflow(workflow_id, name=…)` for a rename, `save_workflow(workflow_id,
+     enabled=false)`, `delete_workflow(workflow_id, confirmed=true)`.
+  4. Report what changed, one line each.

@@ -6,6 +6,8 @@ import json
 import os
 from typing import Any, Literal
 
+from backend.agent.tool_result_compact import API_TOOL_RESULT_MAX as _API_TOOL_RESULT_MAX
+
 ToolResultFormat = Literal["toon", "json"]
 
 _DEFAULT_FORMAT: ToolResultFormat = "toon"
@@ -14,7 +16,6 @@ _FORMAT_OVERRIDE: ToolResultFormat | None = None
 _TOON_ENCODE_OPTS = {"delimiter": "\t", "indent": 2}
 
 _MARKDOWN_TOOLS = frozenset({"uefn_skill"})
-_API_TOOL_RESULT_MAX = 2200
 # The mark must NOT instruct a blind retry: tools without pagination/filters
 # (ping, status, most reads) return the identical oversized payload on retry,
 # which drove an infinite re-call loop. Tell the model to stop and adapt instead.
