@@ -878,31 +878,27 @@ def test_store_update_retries_start_once(monkeypatch) -> None:
     assert started == ["store-update-retries"]
 
 
-def test_old_uefn_plugins_go_only_once_uefn_1_1_holds_them() -> None:
-    import json
+def test_auto_update_never_installs_a_uefn_that_would_remove_plugins() -> None:
     from unittest.mock import patch
 
     from backend.uefn_plugins import store
     from frontend import duckyos_account as acc
 
-    def put(pid: str, version: str) -> None:
-        store.plugin_dir(pid).mkdir(parents=True, exist_ok=True)
-        (store.plugin_dir(pid) / "plugin.json").write_text(json.dumps({"id": pid, "version": version}), encoding="utf-8")
+    store.plugin_dir("materials").mkdir(parents=True)  # an old UEFN part is installed
+    calls: list[str] = []
 
-    put("materials", "1.0.32")
-    put("tester", "1.0.25")
-    put("uefn", "1.0.52")
-    removed: list[str] = []
-    with (
-        patch.object(store, "uninstall_uefn_plugin", side_effect=lambda pid: removed.append(pid)),
-        patch.object(store, "set_uefn_plugin_enabled"),
-        patch.object(acc, "store_download_and_install") as install,
-    ):
-        assert acc.fold_into_uefn([], []) == []  # old UEFN: the parts stay and keep working
-        put("uefn", "1.1.0")
-        assert acc.fold_into_uefn([], []) == ["materials", "tester"]
-    assert removed == ["materials", "tester"]
-    install.assert_not_called()  # UEFN was already installed
+    def run(latest: str) -> dict:
+        catalog = {"ok": True, "items": [
+            {"slug": "uefn", "kind": "plugin", "state": "update", "source": "store", "latest_version": latest},
+        ]}
+        with (
+            patch.object(acc, "store_catalog", return_value=catalog),
+            patch.object(acc, "store_download_and_install", side_effect=lambda s, **kw: calls.append(s) or {"ok": True}),
+        ):
+            return acc.auto_apply_store_updates(force=True)
+
+    assert run("1.1.0")["updated"] == [] and calls == []  # the person switches over in the Store
+    assert run("1.0.53")["updated"] == ["uefn"]  # a 1.0.x fix still updates by itself
 
 
 def test_auto_apply_records_an_activity_line(monkeypatch) -> None:
