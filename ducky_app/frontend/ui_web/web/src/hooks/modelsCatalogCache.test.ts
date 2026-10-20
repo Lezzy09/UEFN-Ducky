@@ -10,6 +10,17 @@ vi.mock("./usePanelPushBus", () => ({
 vi.mock("./bridgeJobAsync", () => ({
   runBridgeJob: vi.fn(),
 }));
+// The window for another UEFN Ducky: its link to that PC, starting out not up yet.
+const link = vi.hoisted(() => ({ status: null as ((s: { state: string }) => void) | null }));
+vi.mock("../remote/directTransport", () => ({
+  getDirectTransport: () => ({
+    onStatus: (fn: (s: { state: string }) => void) => {
+      link.status = fn;
+      fn({ state: "connecting" });
+      return () => {};
+    },
+  }),
+}));
 
 import { getApi } from "./usePanelApi";
 import { runBridgeJob } from "./bridgeJobAsync";
@@ -116,5 +127,26 @@ describe("models_updated push", () => {
     onPush!({ type: "key_test_done", ok: true } as never);
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(catalog).toHaveBeenLastCalledWith(true);
+  });
+});
+
+describe("window for another UEFN Ducky", () => {
+  it("reads the catalog once the link is live when the first ask came back empty", async () => {
+    vi.resetModules();
+    const fresh = await import("./modelsCatalogCache");
+    // Before the link is up the direct API answers nothing (desktop not connected / timeout).
+    const catalog = vi.fn(async (_refresh?: boolean): Promise<unknown> => undefined);
+    vi.mocked(getApi).mockReturnValue({ get_models_catalog: catalog } as never);
+    await fresh.loadModelsCatalog();
+    expect(fresh.isModelsCatalogReady()).toBe(false);
+
+    catalog.mockResolvedValue({
+      models: [{ provider: "UEFN Ducky", provider_key: "uefn-ducky", id: "auto", name: "Auto" }],
+      default_model: "uefn-ducky:auto",
+      agent_model: "",
+    });
+    link.status!({ state: "live" });
+    await vi.waitFor(() => expect(fresh.getCachedModels()?.[0]?.id).toBe("auto"));
+    expect(fresh.getCachedDefaultModel()).toBe("auto");
   });
 });

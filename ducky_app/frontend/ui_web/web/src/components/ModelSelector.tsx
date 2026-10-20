@@ -578,6 +578,7 @@ export function ModelSelector({
     histCountRef.current = 0;
     pushHist();
     if (!agents.length) void loadAgents();
+    if (!catalogRows && !isModelsCatalogReady()) void loadModels();
   };
 
   const openDropdownRef = useRef(openDropdown);

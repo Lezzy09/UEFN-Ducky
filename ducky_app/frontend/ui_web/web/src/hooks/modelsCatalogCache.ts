@@ -1,4 +1,5 @@
 import type { ThinkingMenu } from "../components/thinkingMenu";
+import { getDirectTransport } from "../remote/directTransport";
 import { getApi } from "./usePanelApi";
 import { installPanelPushBus, subscribePanelPush } from "./usePanelPushBus";
 
@@ -120,6 +121,12 @@ export function installModelsCatalogAutoRefresh(): void {
     if (event.type === "key_test_done" && event.ok) {
       scheduleModelsCatalogRefresh(true);
     }
+  });
+  // Window for another UEFN Ducky / phone: a load asked for before the link to that PC was
+  // up (or lost when it dropped) failed and nothing asked again, so its gateways said
+  // "Loading…" forever and the composer had no model. Read it once the link is live.
+  getDirectTransport()?.onStatus((s) => {
+    if (s.state === "live" && cachedModels === null) void loadModelsCatalog();
   });
 }
 
