@@ -1124,6 +1124,21 @@ def test_offline_restart_uses_the_device_wrapped_key_and_sign_out_drops_it(monke
         data_crypto.open_text(_raw_doc(ana, "card.pip"), ana)
 
 
+def test_a_sign_ins_key_prefetch_is_over_before_the_next_test(monkeypatch) -> None:
+    # Oct 20 2026: the prefetch a sign-in starts ran on in the next test's database (an extra
+    # DPAPI call in the big-docs test, a second seal_pending inside the old-database test).
+    import threading
+
+    import conftest
+    from backend.store import account_rows
+    from backend.uefn_plugins import data_crypto
+
+    monkeypatch.setattr(account_rows, "seal_pending", lambda account: time.sleep(0.5))
+    data_crypto.prefetch()
+    conftest._join_host_workers()  # what every test's teardown does
+    assert "account-data-key" not in {t.name for t in threading.enumerate()}
+
+
 def test_no_key_yet_is_read_only_and_never_writes_plaintext(who: _Who) -> None:
     from backend.store.repos import plugin_kv
     from backend.uefn_plugins import data_crypto

@@ -252,14 +252,16 @@ def _appdata_per_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def _join_host_workers(timeout: float = 5.0) -> None:
     """The plugin host's repair coordinator is a daemon thread kicked by store
     toggles. Left running past a test, it opened the *next* test's database and
-    wrote settings into it. Join it here; deliberately hung test fakes
-    (``uefn-plugin-repair-<id>``) are not waited for."""
+    wrote settings into it. So did the account data key prefetch every sign-in,
+    sign-out and switch starts (``data_crypto.prefetch``): its ``seal_pending`` ran
+    in the next test's database as that test's account. Join them here;
+    deliberately hung test fakes (``uefn-plugin-repair-<id>``) are not waited for."""
     import threading
 
     for t in threading.enumerate():
         if t is threading.current_thread():
             continue
-        if t.name in ("uefn-plugins-repair", "appdata-maintenance", "search-index"):
+        if t.name in ("uefn-plugins-repair", "appdata-maintenance", "search-index", "account-data-key"):
             if t.ident is None:
                 continue
             t.join(timeout)
