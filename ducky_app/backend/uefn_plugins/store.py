@@ -935,9 +935,9 @@ def _reload_in_app_process(pid: str) -> None:
     threading.Thread(target=run, daemon=True, name=f"plugin-app-reload-{pid}").start()
 
 
-# ponytail: one-time move. UEFN 1.1 holds these plugins and the NPC AI skill pack. Only an
-# install someone asked for (Store Install/Update, an agent's install tool) removes them;
-# automatic updates leave them installed and working.
+# ponytail: one-time move. UEFN 1.1 holds these plugins and the NPC AI skill pack. Installing
+# it (by hand, or the Store pass, which moves every PC over) removes them, only once it has
+# checked out and right before it lands; a refused install leaves them installed and working.
 UEFN_REPLACES: frozenset[str] = frozenset({
     "animation", "leveldesign", "materials", "modeling", "vfx", "scenegraph", "verse",
     "tester", "uefn-physics", "uefn-virtualpointer", "metahuman", "uefn-logs",
@@ -957,6 +957,11 @@ def uefn_takes_over(plugin_id: str, version: object) -> tuple[list[str], list[st
     return plugins, packs
 
 
+def uefn_parts_without_uefn() -> bool:
+    """True when an old UEFN part (plugin or standalone skill pack) is here but UEFN is not."""
+    return not plugin_dir("uefn").is_dir() and any(uefn_takes_over("uefn", "1.1.0"))
+
+
 def import_plugin_from_bytes(
     data: bytes,
     *,
@@ -974,8 +979,8 @@ def import_plugin_from_bytes(
     When present it is verified against the zip before any write and kept next to the
     installed plugin for the load-time license check; a tampered record is refused.
 
-    ``replace_old`` lets an install someone asked for remove the plugins it replaces
-    (``uefn_takes_over``); without it such an install is refused and nothing changes.
+    ``replace_old`` lets this install remove the plugins it replaces (``uefn_takes_over``),
+    right before it lands; without it such an install is refused and nothing changes.
     """
     if len(data) > MAX_PLUGIN_ZIP_BYTES:
         return {"ok": False, "error": f"zip exceeds max size ({MAX_PLUGIN_ZIP_BYTES} bytes)"}

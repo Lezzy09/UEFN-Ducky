@@ -878,27 +878,29 @@ def test_store_update_retries_start_once(monkeypatch) -> None:
     assert started == ["store-update-retries"]
 
 
-def test_auto_update_never_installs_a_uefn_that_would_remove_plugins() -> None:
+def test_the_store_pass_moves_a_pc_with_old_uefn_parts_onto_uefn() -> None:
     from unittest.mock import patch
 
     from backend.uefn_plugins import store
     from frontend import duckyos_account as acc
 
-    store.plugin_dir("materials").mkdir(parents=True)  # an old UEFN part is installed
-    calls: list[str] = []
+    store.plugin_dir("materials").mkdir(parents=True)  # an old UEFN part, and no UEFN
+    calls: list[tuple[str, dict]] = []
 
-    def run(latest: str) -> dict:
-        catalog = {"ok": True, "items": [
-            {"slug": "uefn", "kind": "plugin", "state": "update", "source": "store", "latest_version": latest},
-        ]}
+    def run(items: list) -> dict:
         with (
-            patch.object(acc, "store_catalog", return_value=catalog),
-            patch.object(acc, "store_download_and_install", side_effect=lambda s, **kw: calls.append(s) or {"ok": True}),
+            patch.object(acc, "store_catalog", return_value={"ok": True, "items": items}),
+            patch.object(acc, "store_download_and_install", side_effect=lambda s, **kw: calls.append((s, kw)) or {"ok": True}),
         ):
             return acc.auto_apply_store_updates(force=True)
 
-    assert run("1.1.0")["updated"] == [] and calls == []  # the person switches over in the Store
-    assert run("1.0.53")["updated"] == ["uefn"]  # a 1.0.x fix still updates by itself
+    # No UEFN yet: the pass installs it, allowed to take the parts' place (they go once it lands).
+    assert run([])["updated"] == ["uefn"]
+    assert calls[-1] == ("uefn", {"replace": True, "is_update": False, "replace_old": True})
+    # UEFN installed: an update to it may replace the parts too; nobody has to click anything.
+    store.plugin_dir("uefn").mkdir(parents=True)
+    update = {"slug": "uefn", "kind": "plugin", "state": "update", "source": "store", "latest_version": "1.1.1"}
+    assert run([update])["updated"] == ["uefn"] and calls[-1][1]["replace_old"] is True
 
 
 def test_auto_apply_records_an_activity_line(monkeypatch) -> None:

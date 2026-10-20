@@ -2412,8 +2412,8 @@ def store_download_and_install(
     their audience, server-enforced); anonymous otherwise.
 
     Pass ``is_update=True`` when the pack is already installed locally so the
-    Store does not increment ``install_count``. ``replace_old=True`` only for an install
-    someone asked for: it may remove the plugins this one replaces (``uefn_takes_over``).
+    Store does not increment ``install_count``. ``replace_old=True`` lets it remove the
+    plugins this one replaces (``uefn_takes_over``), only once the new copy checked out.
     """
     with _STORE_INSTALL_LOCK:
         result = _store_download_and_install_unlocked(
@@ -2660,12 +2660,9 @@ def auto_apply_store_updates(*, force: bool = False) -> dict[str, Any]:
             slug = str(item.get("slug") or "").strip()
             if not slug:
                 continue
-            from backend.uefn_plugins.store import uefn_takes_over
-
-            if any(uefn_takes_over(slug, item.get("latest_version"))):
-                continue  # replaces installed plugins: only the person decides (Settings → Store)
             try:
-                result = store_download_and_install(slug, replace=True, is_update=True)
+                # replace_old: UEFN 1.1 takes the old UEFN parts' place, which go only once it lands.
+                result = store_download_and_install(slug, replace=True, is_update=True, replace_old=True)
             except DuckyOSAccountError as exc:
                 errors.append({"slug": slug, "error": exc.message, "code": exc.code})
                 continue
@@ -2676,6 +2673,19 @@ def auto_apply_store_updates(*, force: bool = False) -> dict[str, Any]:
                 updated.append(slug)
             else:
                 errors.append({"slug": slug, "error": result.get("error")})
+        # The UEFN parts moved into one UEFN plugin, and people don't know: a PC that still
+        # has some of them but no UEFN gets UEFN, and the parts go only once it has landed.
+        from backend.uefn_plugins.store import uefn_parts_without_uefn
+
+        if uefn_parts_without_uefn():
+            try:
+                result = store_download_and_install("uefn", replace=True, is_update=False, replace_old=True)
+                if result.get("ok"):
+                    updated.append("uefn")
+                else:
+                    errors.append({"slug": "uefn", "error": result.get("error")})
+            except Exception as exc:
+                errors.append({"slug": "uefn", "error": getattr(exc, "message", None) or str(exc)})
         _auto_apply_ran = True
         if updated or errors:
             # One line in activity.jsonl, so "why is my plugin still old?" has an answer.
