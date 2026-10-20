@@ -318,7 +318,7 @@ def test_the_drawer_reads_people_locks_changes_conflicts_mode_and_head(team) -> 
     assert (out["head"], out["mode"], out["pending"], out["nextTry"], out["importing"]) == (2, "auto", 1, None, None)
     people = {p["name"]: p for p in out["people"]}
     assert people["Ana"]["me"] and not people["Ben"]["me"] and people["Ben"]["device"] == "Ben's PC"
-    assert people["Ben"]["plugins"][TEAM] == {"viewing": True, "editing": editing}
+    assert people["Ben"]["plugins"][TEAM] == {"viewing": True, "editing": editing, "live": ""}  # not live
     assert [(lk["unit"], lk["name"], lk["holder"], lk["mine"]) for lk in out["locks"]] == [
         ("doc:card.zed", "Zed", "Ben", False)]
     assert out["locks"][0]["leaseLeft"] > 200
