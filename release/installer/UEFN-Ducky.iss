@@ -405,6 +405,10 @@ begin
   if CurUninstallStep = usPostUninstall then
   begin
     RemoveDuckyFromUserPath();
+    // Versions Ducky downloaded and switched to by itself are app files, not data:
+    // they go with the app whatever the answer below.
+    if DirExists(ExpandConstant('{localappdata}\UEFN-Ducky\versions')) then
+      DelTree(ExpandConstant('{localappdata}\UEFN-Ducky\versions'), True, True, True);
     DataDir := ExpandConstant('{localappdata}\UEFN-Ducky');
     if DirExists(DataDir) then
     begin

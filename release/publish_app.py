@@ -413,6 +413,12 @@ def build_setup(*, require_sign: bool = False, bump: bool = True) -> str:
     cmd.extend(str(p) for p in payload_exes(version))
     print("=== Authenticode sign (payload) ===")
     subprocess.run(cmd, check=True, cwd=str(ROOT))
+    # The pack carries the signed EXEs, so it is made after signing.
+    from update_pack import build_update_pack
+
+    print("=== Update pack (installed copies update from it without Setup) ===")
+    pack, _, manifest = build_update_pack(ROOT / "dist" / f"UEFN-Ducky-{version}", version, ROOT / "dist")
+    print(f"  {pack.name}: {len(manifest['files'])} files, {manifest['pack']['size']} bytes")
     print("=== Inno Setup engine ===")
     ps1 = ROOT / "release" / "installer" / "make_release_installer.ps1"
     # With signing on, ISCC also signs the uninstaller it packs (unins000.exe)
@@ -496,6 +502,31 @@ def find_setup_exe(version: str, override: Path | None) -> Path:
 # ---------------------------------------------------------------------------
 # Store upload + release
 # ---------------------------------------------------------------------------
+
+
+def upload_update_pack(base: str, api_key: str, version: str) -> dict | None:
+    """Upload the update pack and its manifest like the Setup; the ``update`` field of
+    uds_app_release, or ``None`` when this build has no pack (Setup-only release)."""
+    from update_pack import pack_paths
+
+    pack, manifest_zip = pack_paths(ROOT / "dist", version)
+    if not pack.is_file() or not manifest_zip.is_file():
+        print(f"  no update pack for {version}: installed copies update with Setup")
+        return None
+    fields: dict = {}
+    for path, prefix in ((pack, "pack"), (manifest_zip, "manifest")):
+        digest = sha256_file(path)
+        print(f"  uploading {path.name} ({path.stat().st_size} bytes)")
+        uploaded = upload_app_release(base, api_key, path)
+        file_id = str(uploaded.get("fileId") or "")
+        remote_sha = str(uploaded.get("sha256") or "").lower()
+        if not file_id or (remote_sha and remote_sha != digest):
+            raise SystemExit(f"{path.name}: upload gave fileId={file_id!r} sha256={remote_sha!r}, expected {digest}")
+        fields[f"{prefix}FileId"] = file_id
+        fields[f"{prefix}Sha256"] = digest
+    fields["packSize"] = pack.stat().st_size
+    return fields
+
 
 
 def _presigned_put_file(upload_url: str, exe_path: Path, size: int) -> None:
@@ -1045,6 +1076,7 @@ def main() -> None:
     installer_url = f"/api/v1/files/{file_id}/content" if file_id else "/api/v1/files/app-release/latest"
     print(f"  uploaded fileId={file_id}")
     print(f"  installerUrl={installer_url}")
+    update = upload_update_pack(base, key, version)
 
     result = mcp_call(
         base,
@@ -1058,6 +1090,7 @@ def main() -> None:
             "size": size,
             "notes": args.notes or "",
             "items": getattr(args, "note_items", []),
+            **({"update": update} if update else {}),
         },
     )
     print(json.dumps(result, indent=2))
@@ -1072,6 +1105,11 @@ def main() -> None:
             raise SystemExit(
                 f"Refusing: predecessor {store} has no installer file_id in history"
             )
+    if update and not released.get("updatePack"):
+        print(
+            "WARNING: the Store kept no update pack (uefn-ducky-store older than 0.3.9?): "
+            "installed copies of this version update with Setup."
+        )
     print(f"ok — desktop apps will see {version} via collect/app-version")
     publish_panel_bundle(version)
 
