@@ -1,13 +1,16 @@
-import { getApi } from "./usePanelApi";
+import { getApi, isRemote } from "./usePanelApi";
 
 /**
  * The desktop window before pywebview has injected its bridge. pywebview only does that
  * once the page has finished loading, long after the app's first effects ran; until then
  * getApi() answers over HTTP. A phone or tunnel browser has no `window.chrome.webview`.
+ * The window showing another of your UEFN Duckies has one but never gets the bridge
+ * (hideDesktopBridge): waiting there left every caller dead, the dock's AppData load
+ * among them, so the header's sidebar buttons never opened a rail.
  */
 function awaitingDesktopBridge(): boolean {
   if (typeof window === "undefined" || window.pywebview) return false;
-  return !!(window as Window & { chrome?: { webview?: unknown } }).chrome?.webview;
+  return !isRemote();
 }
 
 /**
