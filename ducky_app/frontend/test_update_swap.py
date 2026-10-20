@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -41,7 +42,9 @@ def test_idle_when_nothing_runs_and_nobody_used_ducky_for_a_while() -> None:
 
 
 def test_each_kind_of_work_holds_the_switch(monkeypatch, _quiet) -> None:
-    monkeypatch.setattr("frontend.ui_web.agent_modes.list_running_agents", lambda: ["a", "b"])
+    # A plain chat carries over (the switch stops it, the new version continues it); a team chat can't.
+    monkeypatch.setattr("frontend.ui_web.agent_modes.list_running_agents", lambda: ["a", "team"])
+    monkeypatch.setattr("frontend.ui_web.project_chats.load_conversation_meta", lambda cid, root=None: SimpleNamespace(is_group=cid == "team"))
     monkeypatch.setattr("backend.automations.live_runs.runs", lambda workflow_id="": [{"state": "started"}])
     monkeypatch.setattr("backend.automations.scheduler.due_within", lambda seconds, now=None: ["Daily island check"])
     _quiet.sessions = [{"id": "t1"}]
@@ -50,7 +53,7 @@ def test_each_kind_of_work_holds_the_switch(monkeypatch, _quiet) -> None:
     us.report_ui({"window": "focus-1", "visible": True, "idle_s": 3600, "dirty": 2, "jobs": []})
     reasons = us.idle_reasons()
     assert reasons == [
-        "2 chats running",
+        "1 team chat running",
         "a workflow running",
         "1 terminal open",
         "3 unsaved files",
@@ -79,14 +82,15 @@ def test_a_window_that_stopped_answering_counts_as_busy(monkeypatch) -> None:
     assert us.idle_reasons(later) == []
 
 
-def test_update_now_refuses_while_work_would_be_cut_off(monkeypatch) -> None:
+def test_update_now_refuses_while_work_would_be_cut_off(monkeypatch, _quiet) -> None:
     assert us.apply_now() == {"ok": False, "error": "No update is ready yet."}
     us._set(phase="ready", version="1.2.412")
-    monkeypatch.setattr("frontend.ui_web.agent_modes.list_running_agents", lambda: ["a"])
+    _quiet.sessions = [{"id": "t1"}]
     got = us.apply_now()
-    assert got["ok"] is False and got["waiting_for"] == ["1 chat running"]
-    # Someone at the keyboard is fine: they asked for it.
-    monkeypatch.setattr("frontend.ui_web.agent_modes.list_running_agents", lambda: [])
+    assert got["ok"] is False and got["waiting_for"] == ["1 terminal open"]
+    # A running chat (it carries over) and someone at the keyboard are fine: they asked for it.
+    _quiet.sessions = []
+    monkeypatch.setattr("frontend.ui_web.agent_modes.list_running_agents", lambda: ["a"])
     us.report_ui({"window": "main", "visible": True, "idle_s": 1})
     called = []
     monkeypatch.setattr(us, "switch", lambda version: called.append(version) or {"ok": True})
@@ -104,10 +108,15 @@ def test_switch_starts_the_new_version_and_leaves_without_stopping_bridges(monke
         _maximized = True
 
     monkeypatch.setattr(us, "_holders", {"api": Api(), "window_holder": {"hidden": True}})
-    started, exits = [], []
+    started, exits, stopped = [], [], []
     monkeypatch.setattr(app_versions, "start_detached", lambda exe, args, env=None: started.append((exe, args, env)) or True)
     monkeypatch.setattr("frontend.ui_web.shutdown.hard_exit", lambda api=None, keep_others=False: exits.append(keep_others))
     monkeypatch.setattr("frontend.usage_stats.app_closing", lambda: None)
+    # A chat mid-turn is stopped (not by the user) and handed to the new version.
+    monkeypatch.setattr("frontend.ui_web.agent_modes.list_running_agents", lambda: ["c1"])
+    monkeypatch.setattr("frontend.ui_web.agent_modes.running_turn_settings", lambda cid: {"mode": "agent", "model": "ducky-ai"})
+    monkeypatch.setattr("frontend.ui_web.agent_modes.cancel_agent", lambda cid, by_user=True: stopped.append((cid, by_user)))
+    monkeypatch.setattr("frontend.ui_web.agent_modes.is_agent_running", lambda cid: False)
 
     assert us.switch("1.2.412") == {"ok": True}
     exe, args, env = started[0]
@@ -115,8 +124,23 @@ def test_switch_starts_the_new_version_and_leaves_without_stopping_bridges(monke
     assert args[0] == "--after-update" and args[1].isdigit()
     assert env[us.SWITCHED_FROM_ENV]
     assert exits == [True]
+    assert stopped == [("c1", False)]
     handover = app_versions.take_handover()
     assert handover["hidden"] is True and handover["maximized"] is True
+    assert handover["chats"] == [{"conv_id": "c1", "mode": "agent", "model": "ducky-ai"}]
+
+
+def test_the_new_version_continues_the_chats_the_switch_stopped(monkeypatch) -> None:
+    ran = []
+    monkeypatch.setattr("frontend.ui_web.agent_modes.get_panel_push", lambda: print)
+    monkeypatch.setattr(
+        "frontend.ui_web.agent_modes.run_message",
+        lambda cid, text, mode, model, resume=False: ran.append((cid, text, mode, model, resume)) or "run-1",
+    )
+    monkeypatch.setattr(us.threading, "Thread", lambda target, name, daemon: SimpleNamespace(start=target))
+    us.continue_chats([{"conv_id": "c1", "mode": "agent", "model": "ducky-ai"}, {"bad": 1}])
+    us.continue_chats(None)  # a handover without chats
+    assert ran == [("c1", "", "agent", "ducky-ai", True)]
 
 
 def test_switch_refuses_a_version_that_is_not_ready_or_bad(monkeypatch) -> None:

@@ -2,10 +2,11 @@
 
 A background thread checks the Store's update feed a couple of minutes after start and
 every 30 minutes, gets a newer version ready (``frontend.app_stage``, only the changed
-files), then waits until switching can't interrupt anything: no chat or workflow running
-or due within 5 minutes, no terminal open, no unsaved editor change, no plugin job, no
-phone or other PC connected, and either nobody has used Ducky for a while or every
-window is hidden. The switch closes this version without stopping the IDE bridges and
+files), then waits until switching can't interrupt anything: no workflow or team chat
+running or due within 5 minutes, no terminal open, no unsaved editor change, no plugin
+job, no phone or other PC connected, and either nobody has used Ducky for a while or every
+window is hidden. A running chat doesn't hold it: the switch stops it and the new version
+continues its turn. The switch closes this version without stopping the IDE bridges and
 starts the new one where the window was; nothing is forced, so if that moment never
 comes the next start runs the new version (``frontend.app_versions``).
 """
@@ -34,6 +35,11 @@ REMOTE_RECENT_S = 10 * 60.0
 # The new version shows "Updated to …" in background activity this long after a switch.
 UPDATED_NOTE_S = 10 * 60.0
 SWITCHED_FROM_ENV = "UEFN_DUCKY_SWITCHED_FROM"
+# A stopped chat finishes its current tool and saves its turn; past this it is cut off
+# (its last checkpoint still holds the turn).
+CHAT_STOP_WAIT_S = 10.0
+# The new version continues the carried chats once its panel can show them.
+PANEL_WAIT_S = 60.0
 
 _lock = threading.Lock()
 _thread: threading.Thread | None = None
@@ -76,15 +82,67 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
+def _running_chats() -> tuple[list[dict[str, str]], int]:
+    """Running chats a switch carries to the new version (``conv_id``, ``mode``, ``model``),
+    and how many team chats run: a team chat can't be continued, so it holds the switch."""
+    from frontend.ui_web.agent_modes import list_running_agents, running_turn_settings
+    from frontend.ui_web.project_chats import load_conversation_meta
+
+    carried: list[dict[str, str]] = []
+    teams = 0
+    for conv_id in list_running_agents():
+        if getattr(load_conversation_meta(conv_id), "is_group", False):
+            teams += 1
+        else:
+            carried.append({"conv_id": conv_id, **running_turn_settings(conv_id)})
+    return carried, teams
+
+
+def _stop_chats() -> list[dict[str, str]]:
+    """Stop the running chats so their turns are saved; the new version continues them."""
+    from frontend.ui_web.agent_modes import cancel_agent, is_agent_running
+
+    chats, _ = _running_chats()
+    for chat in chats:
+        cancel_agent(chat["conv_id"], by_user=False)
+    deadline = time.time() + CHAT_STOP_WAIT_S
+    while time.time() < deadline and any(is_agent_running(c["conv_id"]) for c in chats):
+        time.sleep(0.2)
+    return chats
+
+
+def continue_chats(chats: Any) -> None:
+    """Continue the chats a switch stopped, in the background once the panel is up (the new
+    version after a switch, or this one when the switch failed)."""
+    rows = [c for c in chats if isinstance(c, dict) and c.get("conv_id")] if isinstance(chats, list) else []
+    if not rows:
+        return
+
+    def run() -> None:
+        from frontend.ui_web import agent_modes
+
+        deadline = time.time() + PANEL_WAIT_S
+        while agent_modes.get_panel_push() is None and time.time() < deadline:
+            time.sleep(0.5)
+        for chat in rows:
+            try:
+                agent_modes.run_message(
+                    str(chat["conv_id"]), "", str(chat.get("mode") or "agent"), str(chat.get("model") or ""), resume=True
+                )
+            except Exception:
+                _log.warning("chat %s did not continue after the update", chat.get("conv_id"), exc_info=True)
+
+    threading.Thread(target=run, name="continue-chats", daemon=True).start()
+
+
 def work_reasons() -> list[str]:
-    """Work a switch would cut off (the Update now button refuses while any is left)."""
+    """Work a switch would cut off (the Update now button refuses while any is left). A
+    running chat isn't: the switch stops it and the new version continues it."""
     reasons: list[str] = []
     try:
-        from frontend.ui_web.agent_modes import list_running_agents
-
-        running = len(list_running_agents())
-        if running:
-            reasons.append(f"{_plural(running, 'chat')} running")
+        _, teams = _running_chats()
+        if teams:
+            reasons.append(f"{_plural(teams, 'team chat')} running")
     except Exception:
         reasons.append("chats (can't tell if one is running)")
     try:
@@ -203,19 +261,26 @@ def switch(version: str) -> dict[str, Any]:
         return {"ok": False, "error": f"{version} isn't ready."}
     api = _holders.get("api")
     window_holder = _holders.get("window_holder") or {}
+    if not app_versions.record_start(version):
+        _set(phase="failed", error=f"{version} didn't start before")
+        return {"ok": False, "error": f"{version} didn't start before."}
+    try:
+        chats = _stop_chats()
+    except Exception:
+        _log.warning("running chats could not be stopped for the switch", exc_info=True)
+        chats = []
     app_versions.write_handover(
         {
             "hidden": bool(window_holder.get("hidden")),
             "maximized": bool(getattr(api, "_maximized", False)),
             "from": __version__,
+            "chats": chats,
         }
     )
-    if not app_versions.record_start(version):
-        _set(phase="failed", error=f"{version} didn't start before")
-        return {"ok": False, "error": f"{version} didn't start before."}
     env = app_versions.hand_off_env()
     env[SWITCHED_FROM_ENV] = __version__
     if not app_versions.start_detached(exe, ["--after-update", str(os.getpid())], env=env):
+        continue_chats(chats)
         return {"ok": False, "error": f"{version} could not be started."}
     _set(phase="switching")
     _log.info("switching to %s", version)
@@ -232,7 +297,8 @@ def switch(version: str) -> dict[str, Any]:
 
 
 def apply_now() -> dict[str, Any]:
-    """The person asked to update now: switch unless it would cut off running work."""
+    """The person asked to update now: switch unless it would cut off running work (running
+    chats carry over)."""
     with _lock:
         phase, version = _state.get("phase"), str(_state.get("version") or "")
     if phase != "ready" or not version:

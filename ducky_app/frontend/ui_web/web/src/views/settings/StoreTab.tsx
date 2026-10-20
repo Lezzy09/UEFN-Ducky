@@ -1205,7 +1205,7 @@ export function StoreTab() {
               </div>
             </div>
 
-            {appUpdate.status?.update_available ? (
+            {appUpdate.status?.update_available && !appUpdate.inBackground ? (
               <div className="ds-app-update" role="status">
                 <div className="ds-app-update-copy">
                   <strong>

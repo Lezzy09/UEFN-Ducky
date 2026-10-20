@@ -670,6 +670,7 @@ def _run_panel(api_holder: dict[str, object]) -> None:
 
         app_versions.mark_ready(str(_running_version))
         update_swap.start(api=api, tk_root_holder=tk_root_holder, window_holder=window_holder)
+        update_swap.continue_chats(handover.get("chats"))  # the chats the switch stopped
     except Exception:
         logging.getLogger(__name__).warning("auto-update did not start", exc_info=True)
     try:

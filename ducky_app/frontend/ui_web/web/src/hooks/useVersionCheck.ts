@@ -42,11 +42,15 @@ export function useVersionCheck() {
     };
   }, [refresh]);
 
-  const showModal = !!status?.update_available && status.channel === "installed" && !dismissed;
+  // An installed copy gets a release with an update pack in the background and switches on
+  // its own (frontend/update_swap.py): never the Setup popup or banner, which reinstalled.
+  const inBackground = !!status?.update_pack && status?.channel === "installed";
+  const showModal = !!status?.update_available && status.channel === "installed" && !inBackground && !dismissed;
 
   return {
     status,
     showModal,
+    inBackground,
     refresh,
     dismiss: () => setDismissed(true),
   };
