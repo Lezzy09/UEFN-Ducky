@@ -1,4 +1,5 @@
-import { getApi, isRemote } from "./usePanelApi";
+import { isRemoteDuckyWindow } from "../remote/directTransport";
+import { getApi } from "./usePanelApi";
 
 /**
  * The desktop window before pywebview has injected its bridge. pywebview only does that
@@ -10,7 +11,8 @@ import { getApi, isRemote } from "./usePanelApi";
  */
 function awaitingDesktopBridge(): boolean {
   if (typeof window === "undefined" || window.pywebview) return false;
-  return !isRemote();
+  // Same as !isRemote() here, read from directTransport so a test's usePanelApi mock can't break it.
+  return !!(window as Window & { chrome?: { webview?: unknown } }).chrome?.webview && !isRemoteDuckyWindow();
 }
 
 /**
