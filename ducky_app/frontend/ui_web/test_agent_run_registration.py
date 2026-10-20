@@ -178,6 +178,28 @@ def test_a_message_to_a_chat_with_no_model_waits_and_runs_once_one_is_picked(ext
     assert agent_modes.release_held_for_model("member") == 0
 
 
+def test_a_model_on_a_gateway_that_isnt_connected_says_which_and_offers_connect(external_turns, monkeypatch):
+    # Oct 20 2026: the chat said "Interrupted: No API key configured", which meant nothing to
+    # someone who doesn't know what an API key is, and offered no way to fix it.
+    from backend.agent import model_pricing
+    from backend.uefn_plugins import host
+
+    external_turns.conv("chat", model="gpt-6-luna")
+    external_turns.chats["chat"].coding_agent = "ducky"
+    monkeypatch.setattr(model_pricing, "resolve_provider_for_model", lambda model, provider: "openai")
+    monkeypatch.setattr(host, "resolve_gateway_credential", lambda provider: None)
+    monkeypatch.setattr(host, "get_contributions", lambda: {"llm_providers": [{"id": "openai", "label": "OpenAI"}]})
+    monkeypatch.setattr(agent_modes, "save_conversation", lambda c: None)
+    pushed: list[dict] = []
+    assert agent_modes.run_message("chat", "hey", "agent", "", push=pushed.append) == ""
+    assert {"type": "provider_not_connected", "conv_id": "chat", "provider": "openai",
+            "label": "OpenAI", "model": "gpt-6-luna"} in pushed
+    errors = [e["text"] for e in pushed if e["type"] == "error"]
+    assert errors == ["OpenAI isn't connected yet, so gpt-6-luna can't answer. "
+                      "Connect OpenAI or pick another model below."]
+    assert external_turns.turns == [] and agent_modes.list_running_agents() == []
+
+
 def test_an_agent_waiting_on_a_reply_hears_the_chat_needs_a_model(external_turns):
     external_turns.conv("member", model="")
     out = agent_modes.run_message_and_wait("member", "build the parser", timeout_sec=5)

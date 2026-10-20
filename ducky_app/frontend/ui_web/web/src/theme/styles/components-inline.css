@@ -3629,6 +3629,11 @@ html.window-maximized .window-resize-grip {
   color: var(--amber);
 }
 
+.model-setup-notice-action {
+  margin-inline-end: 10px;
+  font-weight: 600;
+}
+
 .model-selector-vision-badge {
   margin-left: 6px;
   font-size: 11px;

@@ -73,7 +73,8 @@ it("with no model to take, the chat asks for a pick in the composer, not Setting
 it("says how many messages wait for a model", async () => {
   overrides.adopt_default_model = vi.fn(async () => ({ ok: false, error: "No Default Model is set.", held: 2 }));
   render(<Pane />);
-  await waitFor(() => expect(screen.getByText("2 messages are waiting. Pick a model below and they run.")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("2 messages are waiting and run once you pick a model.")).toBeTruthy());
+  expect(screen.getByText("Pick a model")).toBeTruthy();
 });
 
 it("a chat that took Ducky AI says nothing about the Default Model, and runs what waited", async () => {

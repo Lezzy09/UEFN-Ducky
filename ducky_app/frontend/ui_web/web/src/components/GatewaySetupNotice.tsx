@@ -57,6 +57,13 @@ function publishSetupNeeded(next: boolean): void {
   setupSubs.forEach((fn) => fn());
 }
 
+/** Open the setup that installs and connects an AI gateway (false when it is not mounted). */
+export function openGatewaySetup(): boolean {
+  if (!openSetupHandler) return false;
+  openSetupHandler();
+  return true;
+}
+
 export function useSetupNeeded(): boolean {
   return useSyncExternalStore(
     (onChange) => {

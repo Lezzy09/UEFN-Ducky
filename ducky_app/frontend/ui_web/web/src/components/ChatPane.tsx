@@ -73,7 +73,9 @@ import { isModelsCatalogReady, getCachedModels, subscribeModelsCatalog } from ".
 import { getCachedCodingAgents, subscribeCodingAgents } from "../hooks/codingAgentsCache";
 import { hasUsableModels } from "./ducky/duckyPickerIssue";
 import { parseFavoriteSelection } from "../hooks/favoriteModelsCatalog";
-import { openDefaultModelSettings } from "../navigation/openSettingsTab";
+import { openLlmsProviderSettings } from "../navigation/openSettingsTab";
+import { openGatewaySetup } from "./GatewaySetupNotice";
+import { ModelSetupNotice } from "./ModelSetupNotice";
 import { useMergedRef, useUiTarget } from "../ui-targets/registry";
 import {
   getWalkthroughState,
@@ -290,6 +292,8 @@ export function ChatPane({
   // model is picked (they run then), and whether the composer's text sends on that pick.
   const [noModelText, setNoModelText] = useState("");
   const [heldForModel, setHeldForModel] = useState(0);
+  // The chat's model is on a gateway that isn't connected (the last send said so).
+  const [notConnected, setNotConnected] = useState<{ provider: string; label: string } | null>(null);
   const sendAfterPickRef = useRef(false);
   const pickerContextRef = useRef({ visible, selectedModel: "" });
   const { chatPlan, chatPlanProgress, setChatPlan, setChatPlanProgress } = useChatPlan(chat.id);
@@ -674,6 +678,11 @@ export function ChatPane({
           if (shown && !(picked || "").trim()) setModelPickerSignal((n) => n + 1);
           return;
         }
+        if (event.type === "provider_not_connected") {
+          const provider = event.provider || "";
+          setNotConnected({ provider, label: event.label || provider });
+          return;
+        }
         if (event.type === "model_adopted") {
           if (!event.model) return;
           setCodingAgent(event.coding_agent || "ducky");
@@ -986,7 +995,7 @@ export function ChatPane({
   const paneFlex = flexGrow != null ? `${flexGrow} 1 0%` : "1 1 0%";
 
   const sendBtnTitle = showDefaultModelCta
-    ? "Set a Default Model in Settings → LLMs"
+    ? "Connect an AI in Settings → LLMs"
     : pickModelFirst
       ? "Pick a model — your message sends then"
       : canQueue
@@ -1196,7 +1205,9 @@ export function ChatPane({
     }
 
     if (showDefaultModelCta) {
-      openDefaultModelSettings();
+      // No AI connected: a Default Model can't be set yet, so connect one first.
+      if (!pluginContrib.llm_providers.length && openGatewaySetup()) return;
+      openLlmsProviderSettings();
       return;
     }
     if (pickModelFirst) {
@@ -1235,6 +1246,12 @@ export function ChatPane({
     if (!overrideText) clearAttachments();
     dispatchSend(text, apiAttachments, agentMode, selectedModel, codingAgent);
   };
+
+  // Another model, or a new turn running, answers "isn't connected".
+  useEffect(() => setNotConnected(null), [selectedModel]);
+  useEffect(() => {
+    if (agentRunning) setNotConnected(null);
+  }, [agentRunning]);
 
   // A model picked (or taken) for a chat that had none: run the messages Ducky kept for it,
   // and send the composer's text that was waiting on the pick.
@@ -1639,18 +1656,25 @@ export function ChatPane({
           </div>
 
           <div className="chat-pane-composer-pane chat-pane-composer-pane--type">
-            {(showDefaultModelCta || pickModelFirst || visionBlocked || attachmentError) && (
-              <div className={`composer-attach-warning${visionBlocked ? " is-vision-blocked" : ""}`}>
-                {showDefaultModelCta
-                  ? "This ducky has no model. Set a Default Model."
-                  : pickModelFirst
-                    ? heldForModel > 0
-                      ? `${heldForModel === 1 ? "A message is" : `${heldForModel} messages are`} waiting. Pick a model below and ${heldForModel === 1 ? "it runs" : "they run"}.`
-                      : noModelText || "This ducky has no model. Pick one below."
-                    : visionBlocked
-                      ? `${displayModelLabel} cannot use images — switch to a vision model or remove images.`
-                      : attachmentError}
-              </div>
+            {showDefaultModelCta || pickModelFirst || notConnected ? (
+              <ModelSetupNotice
+                state={
+                  showDefaultModelCta
+                    ? { kind: "no_ai", gateways: pluginContrib.llm_providers }
+                    : pickModelFirst
+                      ? { kind: "pick", held: heldForModel, why: noModelText }
+                      : { kind: "not_connected", ...notConnected! }
+                }
+                onPickModel={() => setModelPickerSignal((n) => n + 1)}
+              />
+            ) : (
+              (visionBlocked || attachmentError) && (
+                <div className={`composer-attach-warning${visionBlocked ? " is-vision-blocked" : ""}`}>
+                  {visionBlocked
+                    ? `${displayModelLabel} cannot use images — switch to a vision model or remove images.`
+                    : attachmentError}
+                </div>
+              )
             )}
             {slashStatus ? <div className="slash-command-status">{slashStatus}</div> : null}
             <ComposerAttachmentChips

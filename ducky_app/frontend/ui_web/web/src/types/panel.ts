@@ -2009,7 +2009,8 @@ export interface AgentEvent {
     | "live_peers"
     | "open_url"
     | "model_needed"
-    | "model_adopted";
+    | "model_adopted"
+    | "provider_not_connected";
   text?: string;
   /** assistant_done: a group note (a member's work posted to its group), not the end of a turn. */
   note?: boolean;
@@ -2120,6 +2121,8 @@ export interface AgentEvent {
   model?: string;
   coding_agent?: string;
   provider?: string;
+  /** provider_not_connected: the gateway's name as Settings → LLMs shows it. */
+  label?: string;
 }
 
 export interface WindowBox {

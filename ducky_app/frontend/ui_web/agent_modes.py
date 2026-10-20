@@ -519,6 +519,12 @@ def list_running_agents() -> list[str]:
         return [cid for cid in candidates if is_agent_running(cid)]
 
 
+def running_turn_settings(conv_id: str) -> dict[str, str]:
+    """The mode and model a running chat's turn uses, to continue it in another process."""
+    config = getattr(getattr(_sessions.get(conv_id), "_runner", None), "config", None)
+    return {"mode": str(getattr(config, "mode", "") or "agent"), "model": str(getattr(config, "model", "") or "")}
+
+
 def live_changeset_run_ids() -> frozenset[str]:
     """Run ids whose agent thread is still alive — the only ledgers that may stay ``running``."""
     with _sessions_lock:
@@ -1330,6 +1336,20 @@ def _take_chat_model(conv: Any, settings: PanelSettings, push: PushFn) -> tuple[
     return choice.model, choice.coding_agent, ""
 
 
+def _provider_label(provider: str) -> str:
+    """A gateway's name as Settings → LLMs shows it (OpenAI, not openai)."""
+    pid = (provider or "").strip().lower()
+    try:
+        from backend.uefn_plugins.host import get_contributions
+
+        for row in get_contributions().get("llm_providers") or []:
+            if str(row.get("id") or "").strip().lower() == pid:
+                return str(row.get("label") or "").strip() or provider
+    except Exception:
+        pass
+    return provider or "This model's AI service"
+
+
 def _hold_for_model(conv: Any, text: str, mode: str, attachments: list[dict[str, Any]] | None,
                     parent: str, started_by: str | None, why: str, push: PushFn) -> str:
     """Keep a message for a chat with no model, and ask the person to pick one."""
@@ -1618,13 +1638,19 @@ def run_message(
         try:
             from backend.uefn_plugins.host import resolve_gateway_credential
 
-            if not resolve_gateway_credential(provider_name):
-                push({"type": "error", "text": "No API key configured", "conv_id": conv_id})
-                return ""
+            connected = bool(resolve_gateway_credential(provider_name))
         except Exception:
-            if not get_key(provider_name):
-                push({"type": "error", "text": "No API key configured", "conv_id": conv_id})
-                return ""
+            connected = bool(get_key(provider_name))
+        if not connected:
+            # Said so a person can act on it ("No API key configured" meant nothing to most),
+            # and the composer shows Connect <gateway> / Pick another model for it.
+            label = _provider_label(provider_name)
+            push({"type": "provider_not_connected", "conv_id": conv_id, "provider": provider_name,
+                  "label": label, "model": turn_model})
+            push({"type": "error", "conv_id": conv_id,
+                  "text": f"{label} isn't connected yet, so {turn_model} can't answer. "
+                          f"Connect {label} or pick another model below."})
+            return ""
 
     if resume:
         clear_last_interrupt(conv)
