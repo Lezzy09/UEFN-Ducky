@@ -24,9 +24,11 @@ def test_real_focus_windows_repeated_open_close_and_same_name_chats(tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "FOCUS_CYCLES_OK=12" in result.stdout
+    assert "INTERPRETER_TEARDOWN" not in result.stdout, "the smoke must end like the app (see _smoke)"
 
 
 def _smoke():
+    import atexit
     import threading
     import time
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -107,10 +109,19 @@ def _smoke():
         finally:
             main.destroy()
 
+    atexit.register(print, "INTERPRETER_TEARDOWN", flush=True)
     webview.start(run, gui="edgechromium", private_mode=True)
     server.shutdown()
     if failures:
         raise failures[0]
+    # End like the app (shutdown.py), never through interpreter teardown. A focus window
+    # closed while its dispatch worker was inside WebView2's Invoke leaves that call
+    # waiting; WinForms throws into it once the UI thread is gone, and if that lands in
+    # teardown pythonnet can't convert the exception and the CLR ends the process with
+    # 0xE0434352 after every cycle passed (2 of 4 full runs on Oct 20 2026).
+    from frontend.ui_web.shutdown import _terminate_process
+
+    _terminate_process()
 
 
 if __name__ == "__main__":
