@@ -20,6 +20,8 @@ import {
   holdsFolderUnit,
   initials,
   listText,
+  livePathText,
+  liveText,
   locksText,
   lostText,
   notShared,
@@ -462,5 +464,21 @@ describe("declared folders", () => {
     ], "forge");
     expect(hereText(rows)).toBe("AI (Ana's ducky Builder) is editing Arena");
     expect(presenceText(rows[0], "Forge")).toBe("AI (their ducky Builder) is editing Arena");
+  });
+});
+
+describe("live wording", () => {
+  it("names who is live, at most three", () => {
+    expect(liveText({ on: true, peers: [] })).toBe("Live · nobody else yet");
+    expect(liveText({ on: true, peers: [{ name: "Alex" }] })).toBe("Live with Alex");
+    expect(liveText({ on: true, peers: [{ name: "Alex" }, { label: "SAM-PC" }, {}] })).toBe("Live with Alex, SAM-PC and A teammate");
+    expect(liveText({ on: true, peers: [{ name: "A" }, { name: "B" }, { name: "C" }, { name: "D" }] })).toBe("Live with A, B and 2 more");
+  });
+
+  it("says how each teammate is reached", () => {
+    expect(livePathText("direct")).toBe("Linked directly");
+    expect(livePathText("forwarded")).toBe("Linked through a teammate");
+    expect(livePathText("none")).toBe("Not linked: changes come with sync");
+    expect(livePathText(undefined)).toBe("Not linked: changes come with sync");
   });
 });

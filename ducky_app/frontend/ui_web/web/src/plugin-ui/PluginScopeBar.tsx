@@ -21,6 +21,7 @@ import {
   hasFolders,
   hereText,
   kindTitle,
+  liveText,
   locksText,
   notShared,
   othersHere,
@@ -48,7 +49,7 @@ const AVATARS_SHOWN = 4;
 /** What the panel is told (bridge event `plugin_scope_changed`). `switched`: whose data it
  * shows changed (account, Local or a space): start over. `synced`: a sync brought new data
  * into the same copy: re-read `keys` (every key when absent) and keep what is open. */
-export type ScopeChange = { reason: "switched" | "synced"; keys?: string[] };
+export type ScopeChange = { reason: "switched" | "synced"; keys?: string[]; live?: boolean };
 
 type Props = {
   pluginId: string;
@@ -56,7 +57,27 @@ type Props = {
   onScopeChanged: (status: PluginScopeStatus, change: ScopeChange) => void;
   /** False while the tab is kept but hidden: no sync and no status reads for a panel nobody sees. */
   active?: boolean;
+  /** Live editing went on or off (the pane tells the page's pointer script). */
+  onLiveState?: (on: boolean) => void;
 };
+
+/** Live, per plugin and per viewer: the bar goes live again on its own next time. */
+const liveKey = (pluginId: string) => `ducky.pluginLive.${pluginId}`;
+function readLiveChoice(pluginId: string): boolean {
+  try {
+    return localStorage.getItem(liveKey(pluginId)) === "1";
+  } catch {
+    return false;
+  }
+}
+function writeLiveChoice(pluginId: string, on: boolean): void {
+  try {
+    if (on) localStorage.setItem(liveKey(pluginId), "1");
+    else localStorage.removeItem(liveKey(pluginId));
+  } catch {
+    /* storage off: Go live again next time */
+  }
+}
 
 /** Data that changed for this plugin and isn't told yet; `keys` null: unknown, re-read all. */
 type Pending = { keys: Set<string> | null };
@@ -104,7 +125,7 @@ function writeDrawerOpen(pluginId: string, open: boolean): void {
  * opens the drawer under it. The plugin can't hide or restyle it. Renders nothing while the
  * account has no shared spaces to offer (normal members see no change).
  */
-export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Props) {
+export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLiveState }: Props) {
   const { confirm } = useConfirmModal();
   const [status, setStatus] = useState<PluginScopeStatus | null>(null);
   const [menu, setMenu] = useState<PluginScopeChoice[] | null>(null);
@@ -200,6 +221,16 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
       if (event.type === "plugin_scope_changed") {
         if (event.synced) setSyncing(false);
         const plugins = event.plugins ?? [];
+        // A teammate's live change: the panel hears it at once (no status read, no settle).
+        if (event.live && plugins.includes(pluginId)) {
+          const keys = event.keys?.[pluginId];
+          if (activeRef.current && last.current && !last.current.binding) {
+            notify.current(last.current, { reason: "synced", live: true, ...(keys ? { keys } : {}) });
+          } else {
+            untold.current = mergePending(untold.current, keys ?? null);
+          }
+          return;
+        }
         // Its data changed: a sync's pull (with the keys it changed), a resolve or restore,
         // or a change for every plugin (no list). A lock, the mode or a round that brought
         // nothing only moves the bar; a switch restarts the panel (the pane reloads it).
@@ -207,6 +238,8 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
           && (plugins.includes(pluginId) || (!event.synced && !plugins.length));
         refreshSoon(data ? event.keys?.[pluginId] ?? null : undefined);
       } else if (event.type === "duckyos_account_changed") {
+        refreshSoon(undefined);
+      } else if (event.type === "live_peers" && event.plugin === pluginId) {
         refreshSoon(undefined);
       }
     });
@@ -220,6 +253,21 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
       window.clearTimeout(tellTimer.current);
     };
   }, [refresh, refreshSoon, pluginId]);
+
+  // Live editing: the pane tells the page, and a remembered Live goes on again by itself.
+  const liveNotify = useRef(onLiveState);
+  liveNotify.current = onLiveState;
+  const liveOn = Boolean(status?.live?.on);
+  const liveSupported = Boolean(status?.live?.supported);
+  useEffect(() => {
+    liveNotify.current?.(liveOn);
+  }, [liveOn]);
+  const autoLive = useRef(false);
+  useEffect(() => {
+    if (!liveSupported || liveOn || autoLive.current || !readLiveChoice(pluginId)) return;
+    autoLive.current = true;
+    void getApi()?.plugin_live_join?.(pluginId, "")?.then(() => refreshSoon(undefined)).catch(() => {});
+  }, [liveSupported, liveOn, pluginId, refreshSoon]);
 
   // Shown again: what came while hidden is read once, and the panel hears it once.
   useEffect(() => {
@@ -353,6 +401,8 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
   const locks = shared ? locksText(status.locks) : "";
   const storage = shared ? storageLine(status.usage) : null;
   const manual = shared && status.mode === "manual" && Boolean(api?.plugin_scope_push || api?.plugin_scope_pull);
+  const live = shared ? status.live : undefined;
+  const canLive = Boolean(live?.supported && api?.plugin_live_join);
   const canSync = shared && !lost && !keyLocked && !reset;
 
   const toggleMenu = async () => {
@@ -445,6 +495,14 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
   const pull = () =>
     act(async () => (api?.plugin_scope_pull ? api.plugin_scope_pull(pluginId) : api?.plugin_scope_sync?.(pluginId, true)), true);
   const push = () => act(async () => api?.plugin_scope_push?.(pluginId));
+
+  /** Go live (everyone live in this plugin sees pointers and changes at once) or leave;
+   * the choice is remembered for this plugin on this PC. */
+  const goLive = async (on: boolean) => {
+    writeLiveChoice(pluginId, on);
+    autoLive.current = true;
+    await act(async () => (on ? api?.plugin_live_join?.(pluginId, "") : api?.plugin_live_leave?.(pluginId)));
+  };
 
   const askRelease = async () => {
     const write = refused?.write;
@@ -597,6 +655,21 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true }: Prop
           <span className="plugin-scope-bar__text plugin-scope-bar__text--error">{actionError}</span>
         ) : null}
         <span className="plugin-scope-bar__actions">
+          {canLive && live?.on ? (
+            <>
+              <span className="plugin-scope-bar__live" title="Pointers and changes reach everyone live here at once">
+                {liveText(live)}
+              </span>
+              <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void goLive(false)}>
+                Leave
+              </button>
+            </>
+          ) : canLive && canSync ? (
+            <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void goLive(true)}
+              title={`See everyone's pointers in ${plugin} and their changes as they make them`}>
+              Go live
+            </button>
+          ) : null}
           {canSync && manual ? (
             <>
               {api?.plugin_scope_push ? (

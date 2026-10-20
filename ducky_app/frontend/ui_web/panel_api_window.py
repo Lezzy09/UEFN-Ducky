@@ -303,6 +303,18 @@ class PanelApiWindowMixin:
 
         return sorted(REMOTE_DENY | OFF_PC_DENY)
 
+    # ── Live editing: the main window hosts the spaces provider's peer connections ──
+
+    def rtc_reply(self, request_id: str, result: object = None) -> bool:
+        from backend.uefn_plugins import rtc
+
+        return rtc.bridge().reply(str(request_id or ""), result)
+
+    def rtc_event(self, peer: str, kind: str, payload: object = None) -> None:
+        from backend.uefn_plugins import rtc
+
+        rtc.bridge().event(str(peer or ""), str(kind or ""), payload)
+
     def direct_rtc_report(self, payload: object = None) -> None:
         from frontend.remote_direct import note_report
 

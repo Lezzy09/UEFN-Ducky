@@ -26,6 +26,8 @@ import {
   hasFolders,
   holdsFolderUnit,
   listText,
+  livePathText,
+  livePeerName,
   notShared,
   outgoingStateText,
   presence,
@@ -348,6 +350,33 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
           {people.length && people.every((row) => row.me) ? (
             <p className="plugin-scope-drawer__empty">Nobody else is here right now.</p>
           ) : null}
+        </section>
+      ) : null}
+
+      {s.live?.on ? (
+        <section className="plugin-scope-drawer__section">
+          <h4 className="plugin-scope-drawer__title">Live</h4>
+          {s.live.peers?.length ? (
+            <table className="plugin-scope-drawer__table">
+              <thead>
+                <tr><th>Member</th><th>PC</th><th>Link</th></tr>
+              </thead>
+              <tbody>
+                {s.live.peers.map((peer) => (
+                  <tr key={`${peer.user}:${peer.device}`}>
+                    <td>{livePeerName(peer)}</td>
+                    <td>{peer.label}</td>
+                    <td>{livePathText(peer.path)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="plugin-scope-drawer__empty">Nobody else is live in {plugin} yet.</p>
+          )}
+          <p className="plugin-scope-drawer__note">
+            Pointers and changes go straight between your PCs. Saved changes still sync as usual.
+          </p>
         </section>
       ) : null}
 

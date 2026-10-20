@@ -121,6 +121,15 @@ code for it; these rules decide how well it works for people editing together.
 - **History.** Every change is kept with who made it and when. The bar's Details shows
   it; restoring an item, or the whole plugin to an earlier change, is a new change that
   everyone gets, never a rewrite.
+- **Live.** On a team copy, the scope bar's Go live links the PCs of teammates live in
+  the same plugin straight to each other (peer to peer). Each write then reaches them at
+  once, before its commit: panels get `plugin_scope_changed` with `live: true` and the
+  `keys`, and reads return the new value until the commit lands. Pointers, names and
+  selections show in every panel page with no code (`data-live-id` on elements people
+  point at keeps them on the same thing). For short-lived things that aren't data (a
+  playhead, a drag in progress) a backend uses `api.live.send(topic, data)` and
+  `api.live.on(topic, callback)`, a panel `live.send` (see `ai_plugins`). Data still
+  goes through `api.data`: the commit is the record.
 - `ducky_team_status(plugin)` says who is in the copy and what they do, what is locked,
   what waits to go out or come in, and the conflicts. `ducky_plugin_data_scope` gives
   the same for a shared copy.

@@ -920,6 +920,31 @@ class PanelApiStoreMixin:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    # -- live editing on a team copy (backend.uefn_plugins.live)
+
+    def plugin_live_join(self, plugin_id: str, room: str = "") -> dict[str, Any]:
+        from backend.uefn_plugins import live
+
+        return live.join(str(plugin_id or ""), str(room or ""))
+
+    def plugin_live_leave(self, plugin_id: str) -> dict[str, Any]:
+        from backend.uefn_plugins import live
+
+        return live.leave(str(plugin_id or ""))
+
+    def plugin_live_send(self, plugin_id: str, topic: str, data: object = None, to: str = "",
+                         fast: bool = False) -> dict[str, Any]:
+        from backend.uefn_plugins import live
+
+        if str(topic or "") == live.CHANGE:
+            return {"ok": False, "error": "ducky.change is the host's."}
+        return live.send(str(plugin_id or ""), str(topic or ""), data, to=str(to or ""), fast=bool(fast))
+
+    def plugin_live_status(self, plugin_id: str) -> dict[str, Any]:
+        from backend.uefn_plugins import live
+
+        return live.status(str(plugin_id or ""))
+
     def plugin_scope_status(self, plugin_id: str) -> dict[str, Any]:
         """Where one plugin's data lives (scope bar, Plugins page)."""
         from backend.uefn_plugins.spaces import scope_status

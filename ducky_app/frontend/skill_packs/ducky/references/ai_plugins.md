@@ -164,6 +164,7 @@ Optional `"data_sharing": false`: the plugin's data always stays Local (`plugin_
 | `api.register_panel_rpc(name, fn)` | Panel `plugin.call` target. `fn` is called with **keyword** arguments: `fn(**params)`. |
 | `api.call_tool(name, arguments=None)` | Call any Ducky MCP tool in-process, with the same approvals as the agent; returns the parsed result, raises `ValueError` on failure. |
 | `api.data` | Docs and files in the plugin's data scope (`plugin_data`). Tools of a plugin that uses it get `scope` (`local` or the space's name) added to their dict results. |
+| `api.live.join(room="")` / `.leave()` / `.send(topic, data, to="")` / `.on(topic, fn)` / `.state()` | Live editing on a team copy (`plugin_data`, Live): short messages to teammates live in the room, peer to peer (JSON ≤ 16 KB, ≤ 30/s; `ducky.*` is the host's). `fn(sender, data)`. Writes through `api.data` reach them by themselves. |
 | `api.search.upsert(id, title, text, meta=None)` / `.delete(id)` / `.clear()` / `.query(text, limit=10)` | Make the plugin's own records (pages, cards, entries) findable by meaning and keywords. Only this plugin's records in its data scope for the signed-in person; kept on an index rebuild, removed on uninstall. Upserting unchanged text is free, so re-sync everything on start. Expose them to agents through your own tool that calls `api.search.query`. One record per section of a long document. |
 | `api.changeset.record(command=, kind=, ident=, facet=, before=, inverse=, slot=)` | Changes ledger entry; never raises. |
 | `api.crypto.aead_seal(key, nonce, data, aad)` / `.aead_open(key, nonce, data, aad)` | AES-256-GCM from the app's own cryptography (32-byte key, 12-byte nonce, tag appended). Use it instead of importing `cryptography`, which the app may not bundle all of. A wrong key, nonce or `aad` raises `InvalidTag`. |
@@ -222,6 +223,7 @@ Panels are sandboxed iframes that talk to the host with `postMessage` on channel
 | `cache.get` / `cache.set` / `cache.clear` | Throwaway cache |
 | `files.pick` | `{accept?: "video"\|"audio"\|"image"\|"mesh"\|"pdf"\|"svg"\|"any", multiple?}` → `{files: [{kind, path, name, url}]}`; cancel → `{files: []}`. The PC's file picker. Big media stays where it is: pass `path` to your backend (ffprobe/ffmpeg read it in place) and play `url` (HTTP Range, seekable). `url` is "" for types a panel can't play (e.g. .avi): play a proxy instead. Never upload large files through `plugin.call` in chunks: a 7 GB video froze the app. A phone gets an error. |
 | `llm.complete` | `{system, user, model?}` → text from the user's chosen model |
+| `live.join` / `live.leave` / `live.state` / `live.send` | Live editing on a team copy: `{room?}`, `{topic, data, to?}`; pushes `live.state`, `live.message`, `live.peers` (pointers are the host's) |
 
 Backend: `api.media_url(path)` → the same seekable link for any local media file (a proxy your
 backend made, or a picked original); "" when a panel can't play that type. Loopback only.

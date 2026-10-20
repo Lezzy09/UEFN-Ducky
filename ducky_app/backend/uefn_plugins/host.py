@@ -1016,6 +1016,12 @@ def _drop_plugin_runtime(pid: str, mod_name: str) -> None:
         from backend.uefn_plugins.scopes import forget_change_listeners
 
         forget_change_listeners(pid)
+        try:
+            from backend.uefn_plugins import live
+
+            live.forget(pid)
+        except Exception:  # noqa: BLE001 — nothing live stays for an unloaded plugin's callbacks
+            _log.debug("live forget of %s failed", pid, exc_info=True)
         # Drop the plugin's MCP tools from the shared FastMCP server too, or a reinstall
         # keeps serving the old wrapper (which still calls the dropped module's code).
         tool_names = set(_API_TOOL_REGISTRY.pop(pid, set()) or set())
@@ -3864,6 +3870,15 @@ class _PluginApi:
         from backend.uefn_plugins.panel_presence import panel_state
 
         return panel_state(self.plugin_id)
+
+    @property
+    def live(self) -> Any:
+        """Live editing on a team copy: ``join(room)``, ``leave()``, ``send(topic, data,
+        to="")``, ``on(topic, callback)``, ``state()``. Changes made through ``api.data``
+        reach teammates live in the room by themselves. See ``backend.uefn_plugins.live``."""
+        from backend.uefn_plugins.live import LiveApi
+
+        return LiveApi(self.plugin_id)
 
     @property
     def data(self) -> Any:

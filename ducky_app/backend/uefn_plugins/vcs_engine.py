@@ -3074,6 +3074,15 @@ def presence_blob(account: str, space: str, plugins: Iterable[str], *, now: floa
                         and not scopes.is_local_key(plugin, _unit_name(a["unit"]))],
             "locks": sorted(lk["name"] or _unit_name(lk["unit"]) for lk in mine if lk["plugin_id"] == plugin),
         }
+    try:
+        from backend.uefn_plugins import live
+
+        for plugin, row in out.items():
+            room = live.room_of(plugin, account, space)
+            if room is not None:
+                row["live"] = room  # the provider connects this PC to teammates live in the same room
+    except Exception:  # noqa: BLE001 — presence never fails a beat
+        _log.debug("live rooms in presence failed", exc_info=True)
     # "label", never "device": a roster row's "device" is the device id the server adds.
     return {"label": device_label(), "app": "open", "plugins": out}
 

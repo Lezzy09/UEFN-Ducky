@@ -1,6 +1,8 @@
 /** Scope bar wording. Pure so the 80% / full rules have one test. */
 import type {
   PluginFolderShareUnit,
+  PluginLivePeer,
+  PluginLiveStatus,
   PluginScopeFolderUnit,
   PluginScopeLock,
   PluginScopePerson,
@@ -642,4 +644,23 @@ export function outgoingStateText(state: string, reason?: string, attempts?: num
   if (state === "quarantined") return reason || "Changed here while someone else holds it";
   if (state === "refetch") return "Getting the team's version again";
   return "Queued";
+}
+
+/** A live teammate's name on the bar and in the drawer. */
+export const livePeerName = (peer: PluginLivePeer) => peer.name || peer.label || "A teammate";
+
+/** The Live pill: who is live here. "Live with Alex and Sam", "Live · nobody else yet". */
+export function liveText(live: PluginLiveStatus | undefined): string {
+  const peers = live?.peers ?? [];
+  if (!peers.length) return "Live · nobody else yet";
+  const names = peers.map(livePeerName);
+  const shown = names.length > 3 ? [...names.slice(0, 2), `${names.length - 2} more`] : names;
+  return `Live with ${listText(shown)}`;
+}
+
+/** How this PC reaches a live teammate, for the drawer. */
+export function livePathText(path: PluginLivePeer["path"]): string {
+  if (path === "direct") return "Linked directly";
+  if (path === "forwarded") return "Linked through a teammate";
+  return "Not linked: changes come with sync";
 }

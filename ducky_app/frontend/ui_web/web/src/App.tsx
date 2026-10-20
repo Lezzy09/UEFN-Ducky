@@ -24,6 +24,7 @@ import { Header } from "./components/Header";
 import { RemoteWindowLaunching, RemoteWindowOverlay, useUeFnLaunching } from "./components/RemoteWindowView";
 import { RemoteWindowSender } from "./components/RemoteWindowSender";
 import { installDirectPeerOnDesktop } from "./remote/directPeer";
+import { installLivePeerHostOnDesktop } from "./rtc/peerHost";
 import { isRemote } from "./hooks/usePanelApi";
 import { onApiReady } from "./hooks/onApiReady";
 import { WindowDrag } from "./components/WindowDrag";
@@ -146,6 +147,8 @@ export default function App() {
   const uefnLaunching = useUeFnLaunching();
   // Desktop only: answer direct (tunnel-free) Remote View offers.
   useEffect(() => installDirectPeerOnDesktop(), []);
+  // Desktop main window only: the peer connections of live editing on a team copy.
+  useEffect(() => installLivePeerHostOnDesktop(), []);
   const { mode: layoutMode, setMode: setLayoutMode } = useChatLayoutMode();
   const [sidebarRefresh, setSidebarRefresh] = useState(0);
   const [projectRefresh, setProjectRefresh] = useState(0);

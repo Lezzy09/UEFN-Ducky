@@ -69,6 +69,10 @@ await call("prefs.get", { id: "highScore" });
 | `files.get` | `{ path }` | `{ ok, b64 }` |
 | `files.list` | `{ prefix? }` | `{ files: [{ path, size, sha256 }] }` |
 | `files.delete` | `{ path }` | `{ ok, deleted }` |
+| `live.join` | `{ room? }` | `{ ok, on, room, state, peers }` — go live on the team copy (the whole plugin when no room) |
+| `live.leave` | — | `{ ok }` |
+| `live.state` | — | `{ supported, reason, on, room, state, peers }` |
+| `live.send` | `{ topic, data, to? }` (JSON ≤ 16 KB, ≤ 30/s) | `{ ok, sent }` — to teammates live in the room (`to`: one PC's device id); `ducky.*` topics are the host's |
 
 ### Plugin data (host data service)
 
@@ -158,6 +162,28 @@ window.addEventListener("message", (ev) => {
   if (e?.type === "panel.visibility") e.visible ? resume() : pause();
 });
 ```
+
+### Live editing
+
+On a team copy, the scope bar's **Go live** (or `live.join`) links this PC straight to
+teammates live in the same plugin and room: peer to peer, through the desktop app's main
+window, nothing through a server but the first hello. With no plugin code:
+
+- every `data.*` / `files.*` write reaches them at once as
+  `{ type: "plugin_scope_changed", reason: "synced", live: true, keys }`; their reads
+  return the new value until its commit lands (or 30 s pass). Handle it like any synced
+  push: merge `keys`, keep what is open.
+- the host script at the top of every panel page sends this pointer and what was
+  clicked or focused, and draws teammates' pointers, names and selections over the page.
+  Give elements people point at a stable `data-live-id` (else `id`, else their place in
+  the page) so a pointer lands on the same thing on every PC.
+
+The host also pushes `{ type: "live.state", on }` on load and when live goes on or off,
+`{ type: "live.message", from: { name, user, device, label }, topic, data }` for each
+`live.send` of a teammate (short-lived things: a playhead, a drag in progress), and
+`{ type: "live.peers", on, peers }` when who is live changes (`path`: `direct`,
+`forwarded` through a teammate, or `none`: not linked, changes come with sync).
+Never rely on `live.message` for data: what matters goes through `data.*`.
 
 Floating (torn-off) windows are separate pages: theme changes, `plugin_scope_changed`
 and plugin changes reach panels there too, and a tab moved between windows keeps
