@@ -249,8 +249,8 @@ def _send(body: dict[str, Any]) -> bool:
     try:
         from frontend.duckyos_account import _store_collect
 
-        _store_collect("usage", body, allow_anonymous=True, timeout=20.0)
-        return True
+        # The Store answers a refused batch with 200 and {"error": ...}: keep it queued.
+        return not _store_collect("usage", body, allow_anonymous=True, timeout=20.0).get("error")
     except Exception:
         return False
 
