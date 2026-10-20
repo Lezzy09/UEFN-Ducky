@@ -212,6 +212,18 @@ def _rmtree_retry(path: Path, *, attempts: int = 10, ignore_final: bool = False)
         raise last
 
 
+def _rename_retry(src: Path, dst: Path, *, attempts: int = 10) -> None:
+    """Move a plugin folder; retry Windows sharing violations from skill-sync / AV."""
+    for i in range(max(1, attempts)):
+        try:
+            src.replace(dst)
+            return
+        except OSError as exc:
+            if not _is_win_lock_error(exc) or i == attempts - 1:
+                raise
+            time.sleep(0.05 * (2 ** min(i, 4)))
+
+
 def _write_bytes_retry(path: Path, payload: bytes, *, attempts: int = 8) -> None:
     for i in range(max(1, attempts)):
         try:
@@ -740,6 +752,16 @@ def _refresh_plugin_skills_async() -> None:
 
 
 def uninstall_uefn_plugin(plugin_id: str, *, erase_data: bool = False, wait: bool = False) -> dict[str, Any]:
+    """Remove a Store plugin (:func:`_uninstall_uefn_plugin`) holding the install lock."""
+    from backend.util.file_lock import held_file_lock
+
+    with held_file_lock(PLUGIN_INSTALL_LOCK, PLUGIN_INSTALL_WAIT_S) as got:
+        if not got:
+            return dict(_INSTALL_BUSY)
+        return _uninstall_uefn_plugin(plugin_id, erase_data=erase_data, wait=wait)
+
+
+def _uninstall_uefn_plugin(plugin_id: str, *, erase_data: bool, wait: bool) -> dict[str, Any]:
     """Remove a Store plugin from disk and return quickly.
 
     Persistent work (disable + settings + ``rmtree``) runs on the caller thread.
@@ -936,8 +958,8 @@ def _reload_in_app_process(pid: str) -> None:
 
 
 # ponytail: one-time move. UEFN 1.1 holds these plugins and the NPC AI skill pack. Installing
-# it (by hand, or the Store pass, which moves every PC over) removes them, only once it has
-# checked out and right before it lands; a refused install leaves them installed and working.
+# it (by hand, or the Store pass, which moves every PC over) removes them only once it has
+# landed; a refused or failed install leaves them installed and working.
 UEFN_REPLACES: frozenset[str] = frozenset({
     "animation", "leveldesign", "materials", "modeling", "vfx", "scenegraph", "verse",
     "tester", "uefn-physics", "uefn-virtualpointer", "metahuman", "uefn-logs",
@@ -958,8 +980,31 @@ def uefn_takes_over(plugin_id: str, version: object) -> tuple[list[str], list[st
 
 
 def uefn_parts_without_uefn() -> bool:
-    """True when an old UEFN part (plugin or standalone skill pack) is here but UEFN is not."""
-    return not plugin_dir("uefn").is_dir() and any(uefn_takes_over("uefn", "1.1.0"))
+    """True when an old UEFN part (plugin or standalone skill pack) is here but UEFN is not
+    (a UEFN folder without its plugin.json is an install that stopped halfway, not UEFN)."""
+    return load_plugin_manifest("uefn") is None and any(uefn_takes_over("uefn", "1.1.0"))
+
+
+def install_stopped_halfway(plugin_id: str) -> bool:
+    """True when a plugin is still on but has no plugin.json: an install stopped halfway
+    (older versions could, after removing what it replaced), and the folder it left may
+    since have been swept at launch. An uninstall turns the plugin off first, so it never counts."""
+    try:
+        pid = normalize_plugin_id(plugin_id)
+    except ValueError:
+        return False
+    return load_plugin_manifest(pid) is None and pid in get_enabled_plugin_ids()
+
+
+# One install or uninstall at a time across every Ducky process: the app and the MCP bridge
+# each installed UEFN at once, and each removed the old parts the other was replacing.
+PLUGIN_INSTALL_LOCK = "plugin-installs"
+PLUGIN_INSTALL_WAIT_S = 120.0
+_INSTALL_BUSY = {
+    "ok": False,
+    "code": "install_busy",
+    "error": "Another plugin install is still running. Try again once it's done.",
+}
 
 
 def import_plugin_from_bytes(
@@ -969,6 +1014,25 @@ def import_plugin_from_bytes(
     replace: bool = True,
     signed_record: dict[str, Any] | None = None,
     replace_old: bool = False,
+) -> dict[str, Any]:
+    """Install a plugin zip (:func:`_import_plugin_from_bytes`) holding the install lock."""
+    from backend.util.file_lock import held_file_lock
+
+    with held_file_lock(PLUGIN_INSTALL_LOCK, PLUGIN_INSTALL_WAIT_S) as got:
+        if not got:
+            return dict(_INSTALL_BUSY)
+        return _import_plugin_from_bytes(
+            data, source=source, replace=replace, signed_record=signed_record, replace_old=replace_old
+        )
+
+
+def _import_plugin_from_bytes(
+    data: bytes,
+    *,
+    source: str,
+    replace: bool,
+    signed_record: dict[str, Any] | None,
+    replace_old: bool,
 ) -> dict[str, Any]:
     """Install a plugin zip into AppData. Secrets never live in the zip.
 
@@ -980,7 +1044,7 @@ def import_plugin_from_bytes(
     installed plugin for the load-time license check; a tampered record is refused.
 
     ``replace_old`` lets this install remove the plugins it replaces (``uefn_takes_over``),
-    right before it lands; without it such an install is refused and nothing changes.
+    once it has landed; without it such an install is refused and nothing changes.
     """
     if len(data) > MAX_PLUGIN_ZIP_BYTES:
         return {"ok": False, "error": f"zip exceeds max size ({MAX_PLUGIN_ZIP_BYTES} bytes)"}
@@ -1119,9 +1183,65 @@ def import_plugin_from_bytes(
     except (OSError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
 
+    # Write the new version into a folder of its own first, in the plugins folder's .staging
+    # (one level down, so nothing lists it; the same drive, so it renames in). A write that
+    # fails leaves the installed copy, and the plugins this one replaces, as they were.
+    # ponytail: a crash mid-install leaves its folder in .staging; sweep it at launch if one shows up.
+    try:
+        staging_root = appdata_uefn_plugins_dir() / ".staging"
+        staging_root.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f"plugin-{pid}-", dir=staging_root))
+    except OSError as exc:
+        return {"ok": False, "error": f"Install failed: {exc}"}
+    try:
+        wrote_manifest = False
+        for rel_parts, payload in planned:
+            target = staging.joinpath(*rel_parts)
+            try:
+                if not target.resolve().is_relative_to(staging.resolve()):
+                    continue  # zip-slip / absolute — skip member, do not abort
+            except (OSError, ValueError):
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _write_bytes_retry(target, payload)
+            if rel_parts[-1] == PLUGIN_MANIFEST and len(rel_parts) == 1:
+                wrote_manifest = True
+        if not wrote_manifest and not (staging / PLUGIN_MANIFEST).is_file():
+            raise OSError("plugin.json missing after extract")
+        written = _read_json(staging / PLUGIN_MANIFEST) or dict(manifest)
+        written["id"] = pid
+        written["kind"] = str(written.get("kind") or "plugin")
+        written["source"] = source
+        # Record a private item's audience, so it can be paused when access to it is
+        # lost (and resumed when it returns).
+        if isinstance(signed_record, dict):
+            from backend.uefn_plugins.signing import AUDIENCE_FIELD
+
+            vis = str(signed_record.get("visibility") or "").strip()
+            audience = str(signed_record.get(AUDIENCE_FIELD) or "").strip()
+            if vis:
+                written["visibility"] = vis
+            if vis not in ("", "public") and audience:
+                written["audience"] = audience
+        _write_json(staging / PLUGIN_MANIFEST, written)
+        # Keep the signed record beside the plugin for the load-time license check.
+        if isinstance(signed_record, dict) and signed_record.get("signature"):
+            try:
+                from backend.uefn_plugins import signing
+
+                signing.write_installed_record(staging, signed_record)
+            except Exception:
+                pass
+    except OSError as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        return {"ok": False, "error": f"Install failed: {exc}"}
+    except ValueError as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        return {"ok": False, "error": str(exc)}
+
     # A compiled backend keeps its .pyd mapped in-process (Windows locks the file),
-    # which would block the folder overwrite below. Move any locked .pyd aside; the
-    # new version installs under its own name and loads fresh.
+    # which would block moving the installed folder aside. Move any locked .pyd out
+    # first; the new version installs under its own name and loads fresh.
     try:
         from backend.uefn_plugins.host import release_locked_compiled_backends
 
@@ -1129,8 +1249,8 @@ def import_plugin_from_bytes(
     except Exception:
         stuck = []
     if stuck:
-        # Wiping the folder now would delete everything around the locked file and
-        # leave the plugin broken; stop before touching it, old version still running.
+        # The folder can't move with the file locked in it; stop, old version still running.
+        shutil.rmtree(staging, ignore_errors=True)
         return {
             "ok": False,
             "error": (
@@ -1147,72 +1267,37 @@ def import_plugin_from_bytes(
     except Exception:
         pass
 
-    # Everything checked: the plugins this install replaces go now, just before it lands.
+    # Swap it in, holding the tree lock so a sibling Update All / skill-sync cannot keep
+    # modules.md open meanwhile (WinError 32). The installed folder moves aside whole (a
+    # file held open refuses the rename and nothing changes), then the new one moves in.
+    old = staging.with_name(staging.name + "-old")
+    try:
+        with _PLUGIN_TREE_LOCK:
+            if dest.exists():
+                _rename_retry(dest, old)
+            try:
+                _rename_retry(staging, dest)
+            except OSError:
+                if old.exists():
+                    _rename_retry(old, dest)
+                raise
+    except OSError as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        return {"ok": False, "error": f"Install failed: {exc}"}
+    shutil.rmtree(old, ignore_errors=True)
+
+    # It has landed: only now do the plugins it replaces go.
     for other in replacing[0]:
-        uninstall_uefn_plugin(other, wait=True)
+        try:
+            uninstall_uefn_plugin(other, wait=True)
+        except Exception:  # noqa: BLE001 — gone already, or the next UEFN install takes it
+            logging.getLogger(__name__).warning("could not remove %s after %s landed", other, pid, exc_info=True)
     if replacing[1]:
         from backend.skills.store import appdata_skill_packs_dir
 
         for pack in replacing[1]:
             shutil.rmtree(appdata_skill_packs_dir() / pack, ignore_errors=True)
         invalidate_plugin_skill_caches()
-
-    # Only wipe the old install after the new zip fully validated in memory.
-    # Hold the tree lock so a sibling Update All / skill-sync cannot keep
-    # modules.md open while we delete this plugin folder (WinError 32).
-    try:
-        with _PLUGIN_TREE_LOCK:
-            if dest.exists():
-                _rmtree_retry(dest)
-            dest.mkdir(parents=True, exist_ok=True)
-            wrote_manifest = False
-            for rel_parts, payload in planned:
-                target = dest.joinpath(*rel_parts)
-                try:
-                    if not target.resolve().is_relative_to(dest.resolve()):
-                        continue  # zip-slip / absolute — skip member, do not abort
-                except (OSError, ValueError):
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                _write_bytes_retry(target, payload)
-                if rel_parts[-1] == PLUGIN_MANIFEST and len(rel_parts) == 1:
-                    wrote_manifest = True
-            if not wrote_manifest and not (dest / PLUGIN_MANIFEST).is_file():
-                raise OSError("plugin.json missing after extract")
-            written = _read_json(dest / PLUGIN_MANIFEST) or dict(manifest)
-            written["id"] = pid
-            written["kind"] = str(written.get("kind") or "plugin")
-            written["source"] = source
-            # Record a private item's audience, so it can be paused when access to it is
-            # lost (and resumed when it returns).
-            if isinstance(signed_record, dict):
-                from backend.uefn_plugins.signing import AUDIENCE_FIELD
-
-                vis = str(signed_record.get("visibility") or "").strip()
-                audience = str(signed_record.get(AUDIENCE_FIELD) or "").strip()
-                if vis:
-                    written["visibility"] = vis
-                if vis not in ("", "public") and audience:
-                    written["audience"] = audience
-            _write_json(dest / PLUGIN_MANIFEST, written)
-            # Keep the signed record beside the plugin for the load-time license check.
-            if isinstance(signed_record, dict) and signed_record.get("signature"):
-                try:
-                    from backend.uefn_plugins import signing
-
-                    signing.write_installed_record(dest, signed_record)
-                except Exception:
-                    pass
-    except OSError as exc:
-        with _PLUGIN_TREE_LOCK:
-            if dest.exists():
-                _rmtree_retry(dest, ignore_final=True)
-        return {"ok": False, "error": f"Install failed: {exc}"}
-    except ValueError as exc:
-        with _PLUGIN_TREE_LOCK:
-            if dest.exists():
-                _rmtree_retry(dest, ignore_final=True)
-        return {"ok": False, "error": str(exc)}
 
     was_installed = existing is not None
     try:  # an uninstall refused this plugin's search records; installed again, it may write them

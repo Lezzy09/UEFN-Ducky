@@ -310,8 +310,9 @@ def test_rmtree_retry_recovers_from_winerror_32() -> None:
         assert hits["n"] >= 2
 
 
-def test_parallel_plugin_replaces_do_not_overlap_rmtree(monkeypatch) -> None:
-    """Update All used to rmtree plugin B while skill-sync still had B's files open."""
+def test_parallel_plugin_replaces_do_not_overlap_their_swaps(monkeypatch) -> None:
+    """Update All used to rmtree plugin B while skill-sync still had B's files open; now each
+    install moves its folder aside and the new one in, one install at a time."""
     from backend.uefn_plugins import store as st
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -327,12 +328,12 @@ def test_parallel_plugin_replaces_do_not_overlap_rmtree(monkeypatch) -> None:
             ).get("ok")
 
             order: list[str] = []
-            real = st._rmtree_retry
+            real = st._rename_retry
 
-            def slow_rmtree(path, **kwargs):
+            def slow_rename(src, dst, **kwargs):
                 order.append("start")
                 time.sleep(0.12)
-                real(path, **kwargs)
+                real(src, dst, **kwargs)
                 order.append("end")
 
             results: list[dict] = []
@@ -342,7 +343,7 @@ def test_parallel_plugin_replaces_do_not_overlap_rmtree(monkeypatch) -> None:
                     st.import_plugin_from_bytes(_zip_plugin(pid, 2), source="local", replace=True)
                 )
 
-            with patch.object(st, "_rmtree_retry", slow_rmtree):
+            with patch.object(st, "_rename_retry", slow_rename):
                 t1 = threading.Thread(target=_replace, args=("alpha",))
                 t2 = threading.Thread(target=_replace, args=("beta",))
                 t1.start()
@@ -351,7 +352,7 @@ def test_parallel_plugin_replaces_do_not_overlap_rmtree(monkeypatch) -> None:
                 t2.join(8)
 
         assert all(r.get("ok") for r in results), results
-        assert "".join(order) == "startendstartend", order
+        assert "".join(order) == "startend" * 4, order  # two renames per install, never interleaved
 
 
 def test_repair_thread_starts_only_when_a_repair_is_due(monkeypatch, tmp_path) -> None:

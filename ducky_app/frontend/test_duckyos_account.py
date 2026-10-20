@@ -899,8 +899,37 @@ def test_the_store_pass_moves_a_pc_with_old_uefn_parts_onto_uefn() -> None:
     assert calls[-1] == ("uefn", {"replace": True, "is_update": False, "replace_old": True})
     # UEFN installed: an update to it may replace the parts too; nobody has to click anything.
     store.plugin_dir("uefn").mkdir(parents=True)
+    (store.plugin_dir("uefn") / "plugin.json").write_text('{"id": "uefn", "version": "1.0.53"}', encoding="utf-8")
     update = {"slug": "uefn", "kind": "plugin", "state": "update", "source": "store", "latest_version": "1.1.1"}
     assert run([update])["updated"] == ["uefn"] and calls[-1][1]["replace_old"] is True
+
+
+def test_the_store_pass_puts_back_a_plugin_whose_install_stopped_halfway() -> None:
+    from unittest.mock import patch
+
+    from backend.uefn_plugins import store
+    from frontend import duckyos_account as acc
+
+    calls: list[tuple[str, dict]] = []
+    available = {"slug": "uefn", "kind": "plugin", "state": "available", "latest_version": "1.1.1"}
+
+    def run(enabled: list[str]) -> dict:
+        with (
+            patch.object(acc, "store_catalog", return_value={"ok": True, "items": [available]}),
+            patch.object(acc, "store_download_and_install", side_effect=lambda s, **kw: calls.append((s, kw)) or {"ok": True}),
+            patch.object(store, "get_enabled_plugin_ids", return_value=enabled),
+        ):
+            return acc.auto_apply_store_updates(force=True)
+
+    # Still on, but all that's left is the old .pyd an install died around (or nothing, once
+    # the launch sweep took that): the pass puts it back.
+    store.plugin_dir("uefn").mkdir(parents=True)
+    (store.plugin_dir("uefn") / "uefn_plugin_uefn.v1000053.cp313-win_amd64.pyd").write_bytes(b"")
+    assert run(["uefn"])["updated"] == ["uefn"]
+    assert calls[-1] == ("uefn", {"replace": True, "is_update": True, "replace_old": True})
+    # Uninstalled (an uninstall turns it off first): left alone.
+    calls.clear()
+    assert run([])["updated"] == [] and calls == []
 
 
 def test_auto_apply_records_an_activity_line(monkeypatch) -> None:

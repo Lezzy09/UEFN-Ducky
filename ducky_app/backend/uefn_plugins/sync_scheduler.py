@@ -53,7 +53,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator
+from typing import Any, Callable
 
 _log = logging.getLogger(__name__)
 
@@ -94,80 +94,16 @@ def _in_bridge() -> bool:
     return os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1"
 
 
-def _try_lock(handle: Any) -> bool:
-    try:
-        if os.name == "nt":
-            import msvcrt
-
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return False
-    return True
-
-
-_HELD = threading.local()  # (account, space) round locks this thread holds
-
-
-@contextlib.contextmanager
-def _round_lock(account: str, space: str, wait: float) -> Iterator[bool]:
+def _round_lock(account: str, space: str, wait: float) -> contextlib.AbstractContextManager[bool]:
     """The space's round lock: an OS file lock, so a round in the MCP bridge (a plugin
     tool asking for one) and one here never overlap, and a process that dies frees it.
     Yields False when another round still holds it after ``wait`` seconds. Before, the
     provider's lock was per process: two rounds pushed at once, and the one whose push
     went stale replaced an edit the other hadn't confirmed yet. A thread that already
     holds it gets it again at once (a round's own steps take it too)."""
-    held: set[tuple[str, str]] = getattr(_HELD, "spaces", None) or set()
-    _HELD.spaces = held
-    if (account, space) in held:
-        yield True
-        return
-    with _round_lock_file(account, space, wait) as got:
-        if got:
-            held.add((account, space))
-        try:
-            yield got
-        finally:
-            held.discard((account, space))
+    from backend.util.file_lock import held_file_lock
 
-
-@contextlib.contextmanager
-def _round_lock_file(account: str, space: str, wait: float) -> Iterator[bool]:
-    from frontend.app_paths import resolve_app_data_dir
-
-    try:
-        folder = resolve_app_data_dir() / "locks"
-        folder.mkdir(parents=True, exist_ok=True)
-        handle = open(folder / f"space-round-{account}-{space}.lock", "a+b")  # noqa: SIM115 — closed below
-    except OSError:
-        _log.debug("no round lock for %s; the round runs without it", space, exc_info=True)
-        handle = None
-    if handle is None:
-        yield True
-        return
-    with handle:
-        deadline = time.monotonic() + max(0.0, wait)
-        while not _try_lock(handle):
-            if time.monotonic() >= deadline:
-                yield False
-                return
-            time.sleep(0.2)
-        try:
-            yield True
-        finally:
-            if os.name == "nt":
-                import msvcrt
-
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    return held_file_lock(f"space-round-{account}-{space}", wait)
 
 
 def run_round(account: str, space: str, *, force: bool, pull: Any = (), push_only: bool = False) -> dict[str, Any]:

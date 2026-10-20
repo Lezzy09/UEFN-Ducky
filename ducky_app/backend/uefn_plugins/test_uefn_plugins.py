@@ -1359,7 +1359,61 @@ def test_a_refused_install_keeps_the_old_copy_and_uefn_replaces_only_when_asked(
     # UEFN 1.1 replaces Animation, but only on an install someone asked for.
     auto = install("uefn", "animation", "1.1.0")
     assert auto.get("code") == "replaces_plugins" and plugin_dir("animation").is_dir()
+
+    # An install that fails writing its files, or moving them in, leaves the installed UEFN
+    # and the parts it replaces as they were (both used to be gone, with nothing in their place).
+    from unittest.mock import patch
+
+    from backend.uefn_plugins import store
+
+    real_rename = store._rename_retry
+
+    def refuse_moving_in(src: Path, dst: Path, **kw) -> None:
+        if src.parent.name == ".staging" and not src.name.endswith("-old"):
+            raise PermissionError(13, "in use")
+        real_rename(src, dst, **kw)
+
+    for fault in (patch.object(store, "_write_bytes_retry", side_effect=OSError(28, "disk full")),
+                  patch.object(store, "_rename_retry", side_effect=refuse_moving_in)):
+        with fault:
+            failed = install("uefn", "animation", "1.1.0", replace_old=True)
+        assert not failed["ok"] and plugin_dir("animation").is_dir()
+        assert json.loads((plugin_dir("uefn") / "plugin.json").read_text(encoding="utf-8"))["version"] == "1.0.52"
+        assert not any((plugin_dir("uefn").parent / ".staging").iterdir())
+
     asked = install("uefn", "animation", "1.1.0", replace_old=True)
     assert asked["ok"], asked
     assert not plugin_dir("animation").is_dir()
     assert {e["pack_id"]: e["plugin_id"] for e in list_plugin_owned_skills()}.get("animation") == "uefn"
+
+
+def test_an_install_waits_for_one_running_in_another_process(monkeypatch) -> None:
+    # Windows byte-range locks hold per handle, so another thread's handle stands in for the
+    # other process (the app and the MCP bridge each installed UEFN at once).
+    import threading
+
+    from backend.uefn_plugins import store
+    from backend.util.file_lock import held_file_lock
+
+    held, release = threading.Event(), threading.Event()
+
+    def other_process() -> None:
+        with held_file_lock(store.PLUGIN_INSTALL_LOCK, 0) as got:
+            assert got
+            held.set()
+            release.wait(10)
+
+    worker = threading.Thread(target=other_process)
+    worker.start()
+    try:
+        assert held.wait(5)
+        monkeypatch.setattr(store, "PLUGIN_INSTALL_WAIT_S", 0.3)
+        busy = store.import_plugin_from_bytes(_zip_plugin("demo", 1), source="local", replace=True)
+        assert busy["code"] == "install_busy" and not store.plugin_dir("demo").is_dir()
+        assert store.uninstall_uefn_plugin("demo")["code"] == "install_busy"
+        monkeypatch.setattr(store, "PLUGIN_INSTALL_WAIT_S", 10.0)
+        threading.Timer(0.3, release.set).start()
+        assert store.import_plugin_from_bytes(_zip_plugin("demo", 1), source="local", replace=True)["ok"]
+    finally:
+        release.set()
+        worker.join(10)

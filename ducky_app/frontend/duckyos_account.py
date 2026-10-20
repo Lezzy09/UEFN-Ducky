@@ -2646,12 +2646,12 @@ def auto_apply_store_updates(*, force: bool = False) -> dict[str, Any]:
                 "error": cat.get("error"),
                 "code": cat.get("code"),
             }
+        from backend.uefn_plugins.store import install_stopped_halfway, uefn_parts_without_uefn
+
         updated: list[str] = []
         errors: list[dict[str, Any]] = []
         for item in cat.get("items") or []:
             if not isinstance(item, dict):
-                continue
-            if item.get("state") != "update":
                 continue
             if item.get("kind") not in ("plugin", "skill"):
                 continue
@@ -2659,6 +2659,12 @@ def auto_apply_store_updates(*, force: bool = False) -> dict[str, Any]:
                 continue
             slug = str(item.get("slug") or "").strip()
             if not slug:
+                continue
+            # A plugin still on that lost its plugin.json (an install that stopped halfway,
+            # before installs were staged) comes back the way an update does.
+            if item.get("state") != "update" and not (
+                item.get("state") == "available" and item.get("kind") == "plugin" and install_stopped_halfway(slug)
+            ):
                 continue
             try:
                 # replace_old: UEFN 1.1 takes the old UEFN parts' place, which go only once it lands.
@@ -2675,8 +2681,6 @@ def auto_apply_store_updates(*, force: bool = False) -> dict[str, Any]:
                 errors.append({"slug": slug, "error": result.get("error")})
         # The UEFN parts moved into one UEFN plugin, and people don't know: a PC that still
         # has some of them but no UEFN gets UEFN, and the parts go only once it has landed.
-        from backend.uefn_plugins.store import uefn_parts_without_uefn
-
         if uefn_parts_without_uefn():
             try:
                 result = store_download_and_install("uefn", replace=True, is_update=False, replace_old=True)
