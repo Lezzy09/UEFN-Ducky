@@ -276,3 +276,28 @@ def test_sensitive_plugin_data_is_encrypted_at_rest(tmp_path: Path) -> None:
     assert encrypted and "very-secret-token" not in value
     raw = db.db_path().read_bytes() + (db.db_path().parent / "ducky.db-wal").read_bytes()
     assert b"very-secret-token" not in raw
+
+
+def test_an_import_that_reaches_another_first_import_on_the_same_thread_finishes(monkeypatch) -> None:
+    import threading
+
+    # A lock of the same kind, just for this test: if it ever hangs again, the hang stays here
+    # and the fixture's reset_for_tests() (the real lock) still runs.
+    monkeypatch.setattr(phase1, "_lock", type(phase1._lock)())
+
+    order: list[str] = []
+
+    def inner(_root):
+        order.append("inner")
+        return {"ok": True}
+
+    def outer(_root):
+        phase1.once("phase1-test-inner", inner)  # the Duckies import asking for the account key
+        order.append("outer")
+        return {"ok": True}
+
+    t = threading.Thread(target=phase1.once, args=("phase1-test-outer", outer), daemon=True)
+    t.start()
+    t.join(10)
+    assert not t.is_alive(), "once() hung on its own lock"
+    assert order == ["inner", "outer"]

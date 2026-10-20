@@ -19,7 +19,10 @@ from typing import Any, Callable
 from backend.store import db
 from backend.store.repos import kv
 
-_lock = threading.Lock()
+# Re-entrant: an import can reach another store's first import on the same thread (the
+# Duckies import asks for the account key, which imports the secrets store). A plain Lock
+# hung that thread on itself, and every other first import waited on it forever.
+_lock = threading.RLock()
 LEGACY_DIR = "legacy"
 
 

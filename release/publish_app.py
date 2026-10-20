@@ -867,10 +867,13 @@ def run_regression_tests() -> None:
     print("=== vitest (panel) ===")
     subprocess.run([npm, "test"], check=True, cwd=str(web))
     # Every core, each test file on one worker (module state stays together): about 3
-    # minutes instead of 11 to 19 on one core.
+    # minutes instead of 11 to 19 on one core. A test stuck for 5 minutes fails with its
+    # stack instead of holding the release forever (a lock deadlock once hung it 45 minutes).
     print("=== pytest (required before Store publish) ===")
     full = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "--tb=short", "-n", "auto", "--dist", "loadfile"], cwd=str(ROOT)
+        [sys.executable, "-m", "pytest", "-q", "--tb=short", "-n", "auto", "--dist", "loadfile",
+         "--timeout", "300", "--timeout-method", "thread"],
+        cwd=str(ROOT),
     )
     if full.returncode != 0:
         # Release runs used to fail one different test that passes alone (timing, Windows
