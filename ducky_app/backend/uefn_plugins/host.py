@@ -3164,6 +3164,16 @@ def reload_moved_plugins(now: float | None = None) -> list[str]:
 
 
 def _restart_moved(pid: str) -> None:
+    # Live, a teammate's pull restarts only the backend: the panels keep what is open and
+    # merge it like any sync (backend.uefn_plugins.live); they reload once Live ends.
+    live_pull = False
+    try:
+        from backend.store.repos import folder_files
+        from backend.uefn_plugins import live
+
+        live_pull = live.is_live(pid) and folder_files.reload_reason(pid) == "pull"
+    except Exception:  # noqa: BLE001 — a full restart
+        _log.debug("live check of %s failed", pid, exc_info=True)
     try:
         reload_single_plugin(pid)
     except Exception:  # noqa: BLE001 — its next tool call reloads it
@@ -3171,7 +3181,13 @@ def _restart_moved(pid: str) -> None:
     try:
         from frontend.ui_web.agent_modes import push_ui_event
 
-        push_ui_event({"type": "plugin_scope_changed", "plugins": [pid], "switched": True})
+        if live_pull:
+            from backend.uefn_plugins import live
+
+            live.panels_kept(pid)
+            push_ui_event({"type": "plugin_scope_changed", "plugins": [pid], "synced": True, "live": True})
+        else:
+            push_ui_event({"type": "plugin_scope_changed", "plugins": [pid], "switched": True})
     except Exception:  # noqa: BLE001 — its panels read the new files on their next open
         _log.debug("telling %s's panels about its restart failed", pid, exc_info=True)
 

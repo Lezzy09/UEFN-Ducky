@@ -20,6 +20,7 @@ import {
   holdsFolderUnit,
   initials,
   listText,
+  liveCellText,
   livePathText,
   liveText,
   locksText,
@@ -476,9 +477,33 @@ describe("live wording", () => {
   });
 
   it("says how each teammate is reached", () => {
-    expect(livePathText("direct")).toBe("Linked directly");
-    expect(livePathText("forwarded")).toBe("Linked through a teammate");
-    expect(livePathText("none")).toBe("Not linked: changes come with sync");
-    expect(livePathText(undefined)).toBe("Not linked: changes come with sync");
+    expect(livePathText("direct")).toBe("Direct");
+    expect(livePathText("forwarded", "tas")).toBe("Through tas");
+    expect(livePathText("forwarded")).toBe("Through a teammate");
+    expect(livePathText("none")).toBe("Not linked (changes come with sync)");
+    expect(livePathText(undefined)).toBe("Not linked (changes come with sync)");
+  });
+
+  it("the People table: live with you and how, live elsewhere, here, or not in the plugin", () => {
+    const people = presence([
+      { name: "Me", me: true, deviceId: "d0", plugins: { imk: { viewing: true, live: "p:Island" } } },
+      { name: "Ana", deviceId: "d1", plugins: { imk: { viewing: true, live: "p:Island" } } },
+      { name: "Ben", deviceId: "d2", plugins: { imk: { viewing: true, live: "p:Island" } } },
+      { name: "Cy", deviceId: "d3", plugins: { imk: { viewing: true, live: "p:Island" } } },
+      { name: "Di", deviceId: "d4", plugins: { imk: { viewing: true, live: "p:Other" } } },
+      { name: "Ed", deviceId: "d5", plugins: { imk: { viewing: true } } },
+      { name: "Fay", deviceId: "d6", plugins: {} },
+    ], "imk");
+    const live = { on: true, peers: [
+      { device: "d1", path: "direct" as const }, { device: "d2", path: "forwarded" as const, via: "Ana" },
+      { device: "d3", path: "none" as const },
+    ] };
+    const cell = Object.fromEntries(people.map((row) => [row.name, liveCellText(row, live)]));
+    expect(cell).toEqual({
+      Me: "Live", Ana: "Live with you · Direct", Ben: "Live with you · Through Ana",
+      Cy: "Live with you · Not linked (changes come with sync)", Di: "Live", Ed: "Here", Fay: "",
+    });
+    expect(liveCellText(people[1], { on: false })).toBe("Live");  // live, this PC isn't
+    expect(liveCellText(people[0], { on: false })).toBe("Here");
   });
 });

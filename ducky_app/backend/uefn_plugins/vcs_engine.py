@@ -1658,9 +1658,17 @@ def _copy_units(ctx: Ctx, folder: tf.Folder, project_id: str) -> list[str]:
 
 
 def _holds_incoming(ctx: Ctx) -> bool:
-    """Incoming changes wait behind "Update now": a ``reload`` plugin whose panel is on screen."""
+    """Incoming changes wait behind "Update now": a ``reload`` plugin whose panel is on
+    screen, unless it is live (its panels stay loaded and merge them, ``live.panels_kept``)."""
     if not any(f.after_pull == "reload" for f in tf.plugin_folders(ctx.plugin)):
         return False
+    try:
+        from backend.uefn_plugins import live
+
+        if live.is_live(ctx.plugin):
+            return False
+    except Exception:  # noqa: BLE001 — not live: as before
+        _log.debug("live check failed", exc_info=True)
     try:
         from backend.uefn_plugins.panel_presence import panel_state
 

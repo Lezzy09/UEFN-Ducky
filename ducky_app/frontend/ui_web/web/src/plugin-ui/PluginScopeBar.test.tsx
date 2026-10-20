@@ -670,17 +670,42 @@ describe("plugin scope bar", () => {
       expect(api.plugin_scope_status).toHaveBeenCalledTimes(2);
     });
 
-    it("the drawer lists who is live and how each is reached", async () => {
-      api.plugin_scope_status.mockResolvedValue(live(true, [
-        { name: "Alex", label: "ALEX-PC", user: "u1", device: "d1", path: "direct" },
-        { name: "Sam", label: "SAM-PC", user: "u2", device: "d2", path: "none" },
-      ]));
+    it("the drawer's People table says who is live with you and how each is reached", async () => {
+      api.plugin_scope_status.mockResolvedValue({
+        ...live(true, [
+          { name: "Alex", label: "ALEX-PC", user: "u1", device: "d1", path: "direct" },
+          { name: "Bo", label: "BO-PC", user: "u3", device: "d3", path: "forwarded", via: "Alex" },
+          { name: "Sam", label: "SAM-PC", user: "u2", device: "d2", path: "none" },
+        ]),
+        people: [
+          { user_name: "Alex", user: "u1", device: "ALEX-PC", deviceId: "d1", plugins: { "brainrot-tcg": { viewing: true, live: "p:Island" } } },
+          { user_name: "Bo", user: "u3", device: "BO-PC", deviceId: "d3", plugins: { "brainrot-tcg": { viewing: true, live: "p:Island" } } },
+          { user_name: "Sam", user: "u2", device: "SAM-PC", deviceId: "d2", plugins: { "brainrot-tcg": { viewing: true, live: "p:Island" } } },
+          { user_name: "Cy", user: "u4", device: "CY-PC", deviceId: "d4", plugins: { "brainrot-tcg": { viewing: true } } },
+        ],
+      });
       bar();
       fireEvent.click(await screen.findByRole("button", { name: "Details ▾" }));
       const drawer = screen.getByRole("region", { name: "Sync details: Alpha Studio" });
-      expect(within(drawer).getByText("Linked directly")).toBeTruthy();
-      expect(within(drawer).getByText("Not linked: changes come with sync")).toBeTruthy();
-      expect(within(drawer).getByText("SAM-PC")).toBeTruthy();
+      expect(within(drawer).getByRole("columnheader", { name: "Live" })).toBeTruthy();
+      expect(within(drawer).getByText("Live with you · Direct")).toBeTruthy();
+      expect(within(drawer).getByText("Live with you · Through Alex")).toBeTruthy();
+      expect(within(drawer).getByText("Live with you · Not linked (changes come with sync)")).toBeTruthy();
+      expect(within(drawer).getByText("Here")).toBeTruthy();
+    });
+
+    it("after a switch to another team copy it goes live there too, once", async () => {
+      localStorage.setItem("ducky.pluginLive.brainrot-tcg", "1");
+      api.plugin_scope_status.mockResolvedValue(live(false));
+      api.plugin_live_join.mockResolvedValue({ ok: true });
+      bar();
+      await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledTimes(1));
+      api.plugin_scope_status.mockResolvedValue({ ...live(false), scope: { kind: "shared", label: "Beta", spaceId: "s2", readOnly: false } });
+      push.handlers.forEach((fn) => fn({ type: "plugin_scope_changed", plugins: ["brainrot-tcg"], switched: true }));
+      push.handlers.forEach((fn) => fn({ type: "duckyos_account_changed" }));
+      await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledTimes(2));
+      await new Promise((r) => setTimeout(r, 600));
+      expect(api.plugin_live_join).toHaveBeenCalledTimes(2);
     });
   });
 

@@ -78,8 +78,10 @@ def team(monkeypatch: pytest.MonkeyPatch):
     beats: list[tuple[str, str]] = []
     monkeypatch.setattr(live, "_push", pushed.append)
     monkeypatch.setattr(live, "_beat_soon", lambda a, s: beats.append((a, s)))
+    project = {"room": "p:Island"}
+    monkeypatch.setattr(live, "project_room", lambda: project["room"])
     live.reset_for_tests()
-    yield {"account": account, "impl": impl, "pushed": pushed, "beats": beats}
+    yield {"account": account, "impl": impl, "pushed": pushed, "beats": beats, "project": project}
     live.reset_for_tests()
     spaces.reset_for_tests()
     scopes.forget_change_listeners(PLUGIN)
@@ -171,8 +173,8 @@ def test_live_is_for_a_team_copy_with_a_provider_that_has_it(team: dict[str, Any
     repo.link_set(account, PLUGIN, SPACE)
     assert live.join(PLUGIN, "no spaces!")["ok"] is False
     got = live.join(PLUGIN)
-    assert got["ok"] and got["on"] and got["room"] == live.DEFAULT_ROOM and got["state"] == "live"
-    assert impl.joined == [(SPACE, PLUGIN, "all")]
+    assert got["ok"] and got["on"] and got["room"] == "p:Island" and got["state"] == "live"  # the open project's
+    assert impl.joined == [(SPACE, PLUGIN, "p:Island")]
     assert team["beats"] == [(account, SPACE)]  # presence says so now, not at the next beat
     assert team["pushed"][-1]["type"] == "live_peers" and team["pushed"][-1]["on"] is True
 
@@ -189,6 +191,31 @@ def test_presence_carries_the_room_and_leaving_drops_it(team: dict[str, Any]) ->
     live.leave(PLUGIN)
     assert "live" not in vcs_engine.presence_blob(account, SPACE, [PLUGIN])["plugins"][PLUGIN]
     assert spaces.scope_status(PLUGIN)["live"]["on"] is False
+
+
+def test_live_follows_the_open_project_unless_it_named_a_room(team: dict[str, Any]) -> None:
+    impl = team["impl"]
+    live.join(PLUGIN)
+    team["project"]["room"] = "p:Arena"
+    live.project_changed()
+    assert impl.joined[-2:] == [(SPACE, PLUGIN, None), (SPACE, PLUGIN, "p:Arena")]
+    assert live.status(PLUGIN)["room"] == "p:Arena"
+    live.project_changed()  # the same project again: nothing moves
+    assert len(impl.joined) == 3
+    live.join(PLUGIN, "lobby")  # a room the plugin named stays put
+    team["project"]["room"] = "p:Other"
+    live.project_changed()
+    assert live.status(PLUGIN)["room"] == "lobby"
+
+
+def test_the_project_room_is_its_name_the_same_on_every_pc(monkeypatch: pytest.MonkeyPatch) -> None:
+    from frontend.ui_web import project_switch
+
+    monkeypatch.setattr(project_switch, "get_panel_project_info",
+                        lambda: {"path": "C:/x/My Island 1", "name": "My Island 1", "mount": "My Island 1"})
+    assert live.project_room() == "p:My-Island-1"
+    monkeypatch.setattr(project_switch, "get_panel_project_info", lambda: {"path": "", "name": ""})
+    assert live.project_room() == live.DEFAULT_ROOM
 
 
 def test_switching_to_local_ends_live(team: dict[str, Any]) -> None:
@@ -321,6 +348,47 @@ def test_a_plugins_own_topics_reach_its_panels_and_backend(team: dict[str, Any])
     live.forget(PLUGIN)
     live.deliver(account, SPACE, PLUGIN, ALEX, "cursor", {"x": 4})
     assert len(heard) == 1
+
+
+# --------------------------------------------------------------------------- folder plugins
+
+
+def test_a_live_folder_plugin_restarts_for_a_pull_with_its_panels_kept(team: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.store.repos import folder_files
+    from backend.uefn_plugins import host
+    from frontend.ui_web import agent_modes
+
+    told: list[dict[str, Any]] = []
+    restarted: list[str] = []
+    monkeypatch.setattr(agent_modes, "push_ui_event", told.append)
+    monkeypatch.setattr(host, "reload_single_plugin", lambda pid: restarted.append(pid))
+    live.join(PLUGIN)
+    folder_files.reload_bump(PLUGIN, "pull")
+    host._restart_moved(PLUGIN)
+    assert restarted == [PLUGIN]
+    assert told == [{"type": "plugin_scope_changed", "plugins": [PLUGIN], "synced": True, "live": True}]
+    before = folder_files.reload_epoch(PLUGIN)
+    live.leave(PLUGIN)  # the reload it skipped happens once now
+    assert folder_files.reload_epoch(PLUGIN) == before + 1 and folder_files.reload_reason(PLUGIN) == "live ended"
+    told.clear()
+    host._restart_moved(PLUGIN)
+    assert told == [{"type": "plugin_scope_changed", "plugins": [PLUGIN], "switched": True}]
+    live.leave(PLUGIN)
+    assert folder_files.reload_epoch(PLUGIN) == before + 1  # nothing skipped: no more reloads
+
+
+def test_live_folder_changes_never_wait_behind_update_now(team: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from backend.uefn_plugins import panel_presence
+    from backend.uefn_plugins import team_folders as tf
+
+    monkeypatch.setattr(tf, "plugin_folders", lambda plugin: [SimpleNamespace(after_pull="reload")])
+    monkeypatch.setattr(panel_presence, "panel_state", lambda plugin: {"visible": True})
+    ctx = SimpleNamespace(plugin=PLUGIN)
+    assert vcs_engine._holds_incoming(ctx) is True  # on screen: they wait for Update now
+    live.join(PLUGIN)
+    assert vcs_engine._holds_incoming(ctx) is False  # live: they land and the panels merge them
 
 
 # --------------------------------------------------------------------------- the page

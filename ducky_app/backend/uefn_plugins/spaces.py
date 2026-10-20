@@ -562,14 +562,17 @@ def _people(account: str, space: str, plugin: str) -> list[dict[str, Any]]:
              "ducky": str(e.get("ducky") or ""), "since": float(e.get("since") or 0.0)}
             for e in here.get("editing") or [] if isinstance(e, Mapping)
         ]
+        room = here.get("live") if isinstance(here.get("live"), Mapping) else {}
         out.append({
             "name": person(p.get("user_name"), p.get("user"), fallback="A teammate"),
             "user": str(p.get("user") or ""),
             "device": str(p.get("label") or ""),
+            "deviceId": str(p.get("device") or ""),  # the live peers' ``device``
             "me": str(p.get("device") or "") == me,
             # This account on another PC: "You on MainPC", locked out here like anyone else.
             "self": bool(my_user) and str(p.get("user") or "") == my_user and str(p.get("device") or "") != me,
-            "plugins": {plugin: {"viewing": bool(here.get("viewing")), "editing": editing}},
+            "plugins": {plugin: {"viewing": bool(here.get("viewing")), "editing": editing,
+                                 "live": str(room.get("room") or "")}},
         })
     return out
 

@@ -69,7 +69,7 @@ await call("prefs.get", { id: "highScore" });
 | `files.get` | `{ path }` | `{ ok, b64 }` |
 | `files.list` | `{ prefix? }` | `{ files: [{ path, size, sha256 }] }` |
 | `files.delete` | `{ path }` | `{ ok, deleted }` |
-| `live.join` | `{ room? }` | `{ ok, on, room, state, peers }` — go live on the team copy (the whole plugin when no room) |
+| `live.join` | `{ room? }` | `{ ok, on, room, state, peers }` — go live on the team copy (no room: the open project's, which follows a project switch) |
 | `live.leave` | — | `{ ok }` |
 | `live.state` | — | `{ supported, reason, on, room, state, peers }` |
 | `live.send` | `{ topic, data, to? }` (JSON ≤ 16 KB, ≤ 30/s) | `{ ok, sent }` — to teammates live in the room (`to`: one PC's device id); `ducky.*` topics are the host's |
@@ -173,6 +173,8 @@ window, nothing through a server but the first hello. With no plugin code:
   `{ type: "plugin_scope_changed", reason: "synced", live: true, keys }`; their reads
   return the new value until its commit lands (or 30 s pass). Handle it like any synced
   push: merge `keys`, keep what is open.
+- people meet in a room: the open project's, so teammates on other projects of the same
+  team never see each other's pointers (`live.join({ room })` picks another).
 - the host script at the top of every panel page sends this pointer and what was
   clicked or focused, and draws teammates' pointers, names and selections over the page.
   Give elements people point at a stable `data-live-id` (else `id`, else their place in

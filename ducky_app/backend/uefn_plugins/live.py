@@ -11,6 +11,9 @@ Every plugin gets this with no plugin code:
   (``plugin_scope_changed``, ``reason: "synced"``, ``live: true``, the keys);
 - the host script in every panel page shows teammates' pointers, names and selections.
 
+A plugin is live in a room: the open project unless it names one, so teammates on other
+projects of the same team never see its pointers; a project switch moves it along.
+
 Plugins may add their own short-lived messages (``live.send`` / ``api.live.send``).
 Topics under ``ducky.`` are the host's.
 """
@@ -36,14 +39,15 @@ CHANGE = "ducky.change"
 HOST_TOPICS = frozenset({"ducky.pointer", "ducky.select"})
 _TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,39}$")
 _ROOM_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
-DEFAULT_ROOM = "all"
+DEFAULT_ROOM = "all"  # no project open
 
 
 class _State:
-    __slots__ = ("account", "space", "room", "since")
+    __slots__ = ("account", "follow", "room", "since", "space")
 
-    def __init__(self, account: str, space: str, room: str, since: float) -> None:
+    def __init__(self, account: str, space: str, room: str, since: float, follow: bool) -> None:
         self.account, self.space, self.room, self.since = account, space, room, since
+        self.follow = follow  # the room is the open project's: a switch moves it
 
 
 _lock = threading.Lock()
@@ -52,6 +56,7 @@ _live: dict[str, _State] = {}  # plugin -> where it is live on this PC
 _prov: dict[tuple[str, str, str, str], tuple[str | None, str, float]] = {}
 _sent: dict[tuple[str, bool], collections.deque[float]] = {}
 _listeners: dict[str, dict[str, list[Callable[..., Any]]]] = {}
+_kept: set[str] = set()  # folder plugins restarted while live with their panels kept loaded
 
 
 def _push(event: dict[str, Any]) -> None:
@@ -148,12 +153,26 @@ def _beat_soon(account: str, space: str) -> None:
     threading.Thread(target=work, name="live-beat", daemon=True).start()
 
 
+def project_room() -> str:
+    """The open project's room: its name, the same on every teammate's PC."""
+    try:
+        from frontend.ui_web.project_switch import get_panel_project_info
+
+        info = get_panel_project_info()
+        name = str(info.get("mount") or info.get("name") or "") if info.get("path") else ""
+    except Exception:  # noqa: BLE001 — no project: the whole plugin
+        name = ""
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.")[:62]
+    return f"p:{name}" if name else DEFAULT_ROOM
+
+
 def join(plugin: str, room: str = "") -> dict[str, Any]:
-    """``plugin`` goes live in ``room`` (default: the whole plugin). Joining another room
-    leaves the one it was in."""
+    """``plugin`` goes live in ``room`` (default: the open project's, which follows a
+    project switch). Joining another room leaves the one it was in."""
     from backend.uefn_plugins import spaces
 
-    room = str(room or DEFAULT_ROOM)
+    follow = not room
+    room = str(room or project_room())
     if not _ROOM_RE.match(room):
         return {"ok": False, "error": "A room name is letters, digits, . _ : - (up to 64)."}
     ok, why = supported(plugin)
@@ -163,11 +182,12 @@ def join(plugin: str, room: str = "") -> dict[str, Any]:
     with _lock:
         old = _live.get(plugin)
     if old is not None and (old.account, old.space, old.room) == (account, space, room):
+        old.follow = follow
         return {"ok": True, **status(plugin)}
     if old is not None:
         leave(plugin)
     with _lock:
-        _live[plugin] = _State(account, space, room, time.time())
+        _live[plugin] = _State(account, space, room, time.time(), follow)
     try:
         spaces.provider().live_join(account, space, plugin, room)
     except Exception as exc:  # noqa: BLE001 — not live after all; say why
@@ -179,6 +199,26 @@ def join(plugin: str, room: str = "") -> dict[str, Any]:
     return {"ok": True, **status(plugin)}
 
 
+def panels_kept(plugin: str) -> None:
+    """A folder plugin restarted for a teammate's pull while live, its panels kept loaded
+    (``host._restart_moved``): they reload once when Live ends."""
+    with _lock:
+        _kept.add(plugin)
+
+
+def _reload_kept(plugin: str) -> None:
+    with _lock:
+        if plugin not in _kept:
+            return
+        _kept.discard(plugin)
+    try:
+        from backend.store.repos import folder_files
+
+        folder_files.reload_bump(plugin, "live ended")  # the app restarts it with its panels
+    except Exception:  # noqa: BLE001 — its next pull or switch reloads them
+        _log.debug("reload after live of %s failed", plugin, exc_info=True)
+
+
 def leave(plugin: str) -> dict[str, Any]:
     from backend.uefn_plugins import spaces
 
@@ -186,6 +226,7 @@ def leave(plugin: str) -> dict[str, Any]:
         st = _live.pop(plugin, None)
         for k in [k for k in _prov if k[2] == plugin]:
             _prov.pop(k, None)
+    _reload_kept(plugin)
     if st is not None:
         try:
             spaces.provider().live_leave(st.account, st.space, plugin)
@@ -194,6 +235,22 @@ def leave(plugin: str) -> dict[str, Any]:
         _beat_soon(st.account, st.space)
         peers_changed(st.account, st.space, plugin)
     return {"ok": True}
+
+
+def project_changed() -> None:
+    """Another project is open: plugins live in the project's room move to the new one's
+    (or leave, when the plugin's data no longer shows that team)."""
+    with _lock:
+        moving = [p for p, st in _live.items() if st.follow]
+    room = project_room()
+    for plugin in moving:
+        with _lock:
+            st = _live.get(plugin)
+        if st is None or st.room == room:
+            continue
+        leave(plugin)
+        if supported(plugin)[0]:
+            join(plugin)
 
 
 def leave_all() -> None:
@@ -383,6 +440,7 @@ def reset_for_tests() -> None:
         _prov.clear()
         _sent.clear()
         _listeners.clear()
+        _kept.clear()
 
 
 class LiveApi:

@@ -262,12 +262,15 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
   useEffect(() => {
     liveNotify.current?.(liveOn);
   }, [liveOn]);
-  const autoLive = useRef(false);
+  // Once per team copy: after a switch (another team, or a project on another copy) it goes
+  // live again there too.
+  const autoLive = useRef("");
+  const liveCopy = scopeKey(status);
   useEffect(() => {
-    if (!liveSupported || liveOn || autoLive.current || !readLiveChoice(pluginId)) return;
-    autoLive.current = true;
+    if (!liveSupported || liveOn || autoLive.current === liveCopy || !readLiveChoice(pluginId)) return;
+    autoLive.current = liveCopy;
     void getApi()?.plugin_live_join?.(pluginId, "")?.then(() => refreshSoon(undefined)).catch(() => {});
-  }, [liveSupported, liveOn, pluginId, refreshSoon]);
+  }, [liveSupported, liveOn, liveCopy, pluginId, refreshSoon]);
 
   // Shown again: what came while hidden is read once, and the panel hears it once.
   useEffect(() => {
@@ -500,7 +503,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
    * the choice is remembered for this plugin on this PC. */
   const goLive = async (on: boolean) => {
     writeLiveChoice(pluginId, on);
-    autoLive.current = true;
+    autoLive.current = scopeKey(status);
     await act(async () => (on ? api?.plugin_live_join?.(pluginId, "") : api?.plugin_live_leave?.(pluginId)));
   };
 

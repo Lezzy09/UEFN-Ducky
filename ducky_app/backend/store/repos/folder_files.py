@@ -457,6 +457,11 @@ def reload_epoch(plugin: str) -> int:
     return int(_doc(db.connect(), EPOCH_PREFIX + plugin).get("reload") or 0)
 
 
+def reload_reason(plugin: str) -> str:
+    """Why the plugin's last reload mark was made (``pull``, ``reset``, ...)."""
+    return str(_doc(db.connect(), EPOCH_PREFIX + plugin).get("reload_why") or "")
+
+
 def sandbox_put(plugin: str, doc: dict[str, Any]) -> None:
     conn = db.connect()
     with db.write_txn(conn):

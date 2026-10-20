@@ -451,6 +451,9 @@ export type Presence = {
   duckies: { ducky: string; unitName: string }[];
   /** Epoch seconds: since when they edit (their oldest edit still going), else 0. */
   since: number;
+  /** Their PC's device id, and the live room they are in for this plugin ("" when not live). */
+  deviceId: string;
+  live: string;
 };
 
 const STATE_ORDER: Record<PresenceState, number> = { editing: 0, viewing: 1, away: 2 };
@@ -465,9 +468,11 @@ export function presence(people: PluginScopePerson[] | undefined, pluginId: stri
     const device = p.device || "";
     const key = `${p.me ? "me" : p.user || name}:${device}`;
     const row: Presence = rows.get(key)
-      ?? { key, id: p.user || name, name, device, me: Boolean(p.me), self: Boolean(p.self) && !p.me, state: "away", editing: [], duckies: [], since: 0 };
+      ?? { key, id: p.user || name, name, device, me: Boolean(p.me), self: Boolean(p.self) && !p.me, state: "away", editing: [], duckies: [], since: 0,
+        deviceId: p.deviceId || "", live: "" };
     rows.set(key, row);
     const here = p.plugins ? p.plugins[pluginId] : undefined;
+    if (here?.live) row.live = here.live;
     const edits = p.plugins
       ? here?.editing ?? []
       : p.doing === "editing" ? [{ unitName: p.unitName, actor: p.actor, ducky: p.ducky, since: p.since }] : [];
@@ -659,8 +664,18 @@ export function liveText(live: PluginLiveStatus | undefined): string {
 }
 
 /** How this PC reaches a live teammate, for the drawer. */
-export function livePathText(path: PluginLivePeer["path"]): string {
-  if (path === "direct") return "Linked directly";
-  if (path === "forwarded") return "Linked through a teammate";
-  return "Not linked: changes come with sync";
+export function livePathText(path: PluginLivePeer["path"], via?: string): string {
+  if (path === "direct") return "Direct";
+  if (path === "forwarded") return `Through ${via || "a teammate"}`;
+  return "Not linked (changes come with sync)";
+}
+
+/** One person's live state in the People table: "Live with you · Direct", "Live with you ·
+ * Through tas", "Live" (live elsewhere, or this PC isn't), "Here", "" (not in the plugin). */
+export function liveCellText(row: Presence, live: PluginLiveStatus | undefined): string {
+  if (row.me) return live?.on ? "Live" : row.state === "away" ? "" : "Here";
+  const peer = live?.on ? (live.peers ?? []).find((p) => p.device && p.device === row.deviceId) : undefined;
+  if (peer) return `Live with you · ${livePathText(peer.path, peer.via)}`;
+  if (row.live) return "Live";
+  return row.state === "away" ? "" : "Here";
 }

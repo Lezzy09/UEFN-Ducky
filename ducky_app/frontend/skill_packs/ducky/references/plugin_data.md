@@ -122,7 +122,7 @@ code for it; these rules decide how well it works for people editing together.
   it; restoring an item, or the whole plugin to an earlier change, is a new change that
   everyone gets, never a rewrite.
 - **Live.** On a team copy, the scope bar's Go live links the PCs of teammates live in
-  the same plugin straight to each other (peer to peer). Each write then reaches them at
+  the same plugin and project straight to each other (peer to peer). Each write then reaches them at
   once, before its commit: panels get `plugin_scope_changed` with `live: true` and the
   `keys`, and reads return the new value until the commit lands. Pointers, names and
   selections show in every panel page with no code (`data-live-id` on elements people

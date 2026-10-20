@@ -26,8 +26,7 @@ import {
   hasFolders,
   holdsFolderUnit,
   listText,
-  livePathText,
-  livePeerName,
+  liveCellText,
   notShared,
   outgoingStateText,
   presence,
@@ -326,7 +325,7 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
           {people.length ? (
             <table className="plugin-scope-drawer__table plugin-scope-drawer__table--people">
               <thead>
-                <tr><th>Member</th><th>PC</th><th>In {plugin}</th><th>Since</th></tr>
+                <tr><th>Member</th><th>PC</th><th>In {plugin}</th>{s.live?.supported ? <th>Live</th> : null}<th>Since</th></tr>
               </thead>
               <tbody>
                 {people.map((row) => (
@@ -339,6 +338,7 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
                     </td>
                     <td>{row.device}</td>
                     <td className="plugin-scope-people__doing">{presenceText(row, plugin)}</td>
+                    {s.live?.supported ? <td>{liveCellText(row, s.live)}</td> : null}
                     <td>{row.since ? clockText(row.since) : ""}</td>
                   </tr>
                 ))}
@@ -354,30 +354,9 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id }: Props) {
       ) : null}
 
       {s.live?.on ? (
-        <section className="plugin-scope-drawer__section">
-          <h4 className="plugin-scope-drawer__title">Live</h4>
-          {s.live.peers?.length ? (
-            <table className="plugin-scope-drawer__table">
-              <thead>
-                <tr><th>Member</th><th>PC</th><th>Link</th></tr>
-              </thead>
-              <tbody>
-                {s.live.peers.map((peer) => (
-                  <tr key={`${peer.user}:${peer.device}`}>
-                    <td>{livePeerName(peer)}</td>
-                    <td>{peer.label}</td>
-                    <td>{livePathText(peer.path)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <p className="plugin-scope-drawer__empty">Nobody else is live in {plugin} yet.</p>
-          )}
-          <p className="plugin-scope-drawer__note">
-            Pointers and changes go straight between your PCs. Saved changes still sync as usual.
-          </p>
-        </section>
+        <p className="plugin-scope-drawer__note">
+          Live: pointers and changes go straight between your PCs. Saved changes still sync as usual.
+        </p>
       ) : null}
 
       {s.locks !== undefined ? (

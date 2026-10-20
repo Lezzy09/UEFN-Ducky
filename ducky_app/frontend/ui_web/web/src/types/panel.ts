@@ -2362,6 +2362,8 @@ export interface PluginLivePeer {
   label?: string;
   /** `direct`: straight link; `forwarded`: through a teammate; `none`: not linked (changes come with sync). */
   path?: "direct" | "forwarded" | "none";
+  /** forwarded: the teammate it goes through. */
+  via?: string;
 }
 
 /** Live editing on a team copy (backend/uefn_plugins/live.py `status`). */
@@ -2502,6 +2504,8 @@ export interface PluginScopePerson {
   user_name?: string;
   /** The PC's label. */
   device?: string;
+  /** The PC's device id (a live peer's `device`). */
+  deviceId?: string;
   /** This PC: never listed. */
   me?: boolean;
   /** This account on another PC ("You on MainPC"): locked out here like anyone else. */
@@ -2517,6 +2521,8 @@ export interface PluginScopePerson {
   plugins?: Record<string, {
     viewing?: boolean;
     editing?: { unitName?: string; actor?: string; ducky?: string; since?: number }[];
+    /** The live room they are in for this plugin ("" when not live). */
+    live?: string;
   }>;
 }
 

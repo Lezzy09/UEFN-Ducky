@@ -189,6 +189,13 @@ def set_panel_project_root(path: str, *, push_ui: bool = True) -> dict[str, str]
         pass
     if s.uefn_project_root and s.uefn_project_root != before:
         _rebind_project_folders(s.uefn_project_root)
+    if s.uefn_project_root != before:
+        try:
+            from backend.uefn_plugins import live
+
+            live.project_changed()  # plugins live in the project's room go along
+        except Exception:
+            pass
     info = get_panel_project_info()
     if push_ui:
         _push_project_changed(info)
