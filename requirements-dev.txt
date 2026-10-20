@@ -1,5 +1,7 @@
 -r requirements.txt
 pytest>=7.0
+# The release runs the suite on every core (-n auto): about 3 minutes instead of 11 to 19.
+pytest-xdist>=3.6
 ruff>=0.6
 # Schema contracts under ducky_app/backend/workspace/schemas (MIT).
 jsonschema>=4.0

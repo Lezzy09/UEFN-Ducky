@@ -847,19 +847,35 @@ def run_regression_tests() -> None:
     every install crashed on boot.
     """
     # The build installs requirements.txt too, but only after this: a new
-    # dependency would fail the suite here first.
-    print("=== dependencies (requirements.txt) ===")
+    # dependency would fail the suite here first. requirements-dev.txt adds pytest-xdist.
+    print("=== dependencies (requirements-dev.txt) ===")
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-q", "-r", str(ROOT / "requirements.txt")],
+        [sys.executable, "-m", "pip", "install", "-q", "-r", str(ROOT / "requirements-dev.txt")],
         check=True,
         cwd=str(ROOT),
     )
+    web = ROOT / "ducky_app" / "frontend" / "ui_web" / "web"
+    npm = shutil.which("npm")
+    if not npm:
+        raise SystemExit("npm not found — panel vitest is required before Store publish")
+    # The panel suite goes first: it takes a couple of minutes, so a broken panel stops the
+    # release before pytest. The git-ignored generated sources (Verse language assets,
+    # bundled duckies, critical CSS) are made by predev/prebuild, never by `npm test`: a
+    # fresh checkout or worktree failed 34 test files on a missing import before this ran.
+    print("=== generated web sources (predev) ===")
+    subprocess.run([npm, "run", "-s", "predev"], check=True, cwd=str(web))
+    print("=== vitest (panel) ===")
+    subprocess.run([npm, "test"], check=True, cwd=str(web))
+    # Every core, each test file on one worker (module state stays together): about 3
+    # minutes instead of 11 to 19 on one core.
     print("=== pytest (required before Store publish) ===")
-    full = subprocess.run([sys.executable, "-m", "pytest", "-q", "--tb=short"], cwd=str(ROOT))
+    full = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--tb=short", "-n", "auto", "--dist", "loadfile"], cwd=str(ROOT)
+    )
     if full.returncode != 0:
-        # Six release runs in a row each failed one different test that passes alone (timing,
-        # Windows file locks, threads left by an earlier test). The failed tests run once more
-        # on their own; a real failure fails again and stops the release.
+        # Release runs used to fail one different test that passes alone (timing, Windows
+        # file locks, threads left by an earlier test, real windows opened side by side). The
+        # failed tests run once more, one at a time; a real failure fails again and stops it.
         print("=== pytest: running only the failed tests again ===")
         subprocess.run(
             [sys.executable, "-m", "pytest", "-q", "--tb=short", "--last-failed", "--last-failed-no-failures", "none"],
@@ -867,17 +883,6 @@ def run_regression_tests() -> None:
             cwd=str(ROOT),
         )
         print("The failed tests passed on their own: they only fail inside the full suite (see above).")
-    web = ROOT / "ducky_app" / "frontend" / "ui_web" / "web"
-    npm = shutil.which("npm")
-    if not npm:
-        raise SystemExit("npm not found — panel vitest is required before Store publish")
-    # The git-ignored generated sources (Verse language assets, bundled duckies, critical
-    # CSS) are made by predev/prebuild, never by `npm test`: a fresh checkout or worktree
-    # failed 34 test files on a missing import before this ran.
-    print("=== generated web sources (predev) ===")
-    subprocess.run([npm, "run", "-s", "predev"], check=True, cwd=str(web))
-    print("=== vitest (panel) ===")
-    subprocess.run([npm, "test"], check=True, cwd=str(web))
     print("regression tests ok")
 
 
