@@ -527,7 +527,13 @@ def upload_update_pack(base: str, api_key: str, version: str) -> dict | None:
     for path, prefix in ((pack, "pack"), (manifest_zip, "manifest")):
         digest = sha256_file(path)
         print(f"  uploading {path.name} ({path.stat().st_size} bytes)")
-        uploaded = upload_app_release(base, api_key, path)
+        try:
+            uploaded = upload_app_release(base, api_key, path)
+        except SystemExit as exc:
+            # The Setup is already up: a refused pack (e.g. a core whose upload scan
+            # predates update packs) must not stop the release.
+            print(f"  WARNING: {path.name} was not taken ({exc}): released without a pack, so installed copies update with Setup")
+            return None
         file_id = str(uploaded.get("fileId") or "")
         remote_sha = str(uploaded.get("sha256") or "").lower()
         if not file_id or (remote_sha and remote_sha != digest):
