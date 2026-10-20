@@ -16,6 +16,8 @@ const api = vi.hoisted(() => ({
   plugin_scope_push: vi.fn() as ReturnType<typeof vi.fn> | undefined,
   plugin_scope_pull: vi.fn() as ReturnType<typeof vi.fn> | undefined,
   plugin_scope_ask: vi.fn(),
+  plugin_live_join: vi.fn(),
+  plugin_live_leave: vi.fn(),
   notify_activity: vi.fn(),
 }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api, isRemote: () => false }));
@@ -585,6 +587,100 @@ describe("plugin scope bar", () => {
       await waitFor(() => expect(changed).toHaveBeenCalledTimes(1), { timeout: 3000 });
       expect(changed).toHaveBeenCalledWith(expect.anything(), { reason: "synced", keys: ["project.a", "project.b", "project.c"] });
       expect(api.plugin_scope_status).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("live", () => {
+    const live = (on: boolean, peers: Record<string, unknown>[] = []) =>
+      sharedStatus({ live: { supported: true, on, room: on ? "all" : "", state: on ? "live" : "off", peers } });
+
+    it("Go live joins and is remembered; the pill names who is live; Leave leaves and forgets", async () => {
+      api.plugin_scope_status.mockResolvedValue(live(false));
+      api.plugin_live_join.mockResolvedValue({ ok: true });
+      api.plugin_live_leave.mockResolvedValue({ ok: true });
+      bar();
+      const go = await screen.findByRole("button", { name: "Go live" });
+      api.plugin_scope_status.mockResolvedValue(live(true, [{ name: "Alex", path: "direct" }, { name: "Sam", path: "none" }]));
+      fireEvent.click(go);
+      await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledWith("brainrot-tcg", ""));
+      expect(localStorage.getItem("ducky.pluginLive.brainrot-tcg")).toBe("1");
+      expect(await screen.findByText("Live with Alex and Sam")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Go live" })).toBeNull();
+      api.plugin_scope_status.mockResolvedValue(live(false));
+      fireEvent.click(screen.getByRole("button", { name: "Leave" }));
+      await waitFor(() => expect(api.plugin_live_leave).toHaveBeenCalledWith("brainrot-tcg"));
+      expect(localStorage.getItem("ducky.pluginLive.brainrot-tcg")).toBeNull();
+      expect(await screen.findByRole("button", { name: "Go live" })).toBeTruthy();
+    });
+
+    it("goes live again by itself where it was left live, once", async () => {
+      localStorage.setItem("ducky.pluginLive.brainrot-tcg", "1");
+      api.plugin_scope_status.mockResolvedValue(live(false));
+      api.plugin_live_join.mockResolvedValue({ ok: true });
+      bar();
+      await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledWith("brainrot-tcg", ""));
+      await new Promise((r) => setTimeout(r, 600));
+      expect(api.plugin_live_join).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers no Live where the team service has none, or on Local", async () => {
+      api.plugin_scope_status.mockResolvedValue(sharedStatus({ live: { supported: false, on: false } }));
+      bar();
+      await screen.findByRole("button", { name: "Sync now" });
+      expect(screen.queryByRole("button", { name: "Go live" })).toBeNull();
+    });
+
+    it("tells the pane when live goes on and off", async () => {
+      api.plugin_scope_status.mockResolvedValue(live(true));
+      const told = vi.fn();
+      render(
+        <ConfirmModalProvider>
+          <PluginScopeBar pluginId="brainrot-tcg" onScopeChanged={() => {}} onLiveState={told} />
+        </ConfirmModalProvider>,
+      );
+      await waitFor(() => expect(told).toHaveBeenLastCalledWith(true));
+      expect(screen.getByText("Live · nobody else yet")).toBeTruthy();
+    });
+
+    it("a teammate's live change reaches the panel at once, with no status read", async () => {
+      api.plugin_scope_status.mockResolvedValue(live(true));
+      const changed = vi.fn();
+      render(
+        <ConfirmModalProvider>
+          <PluginScopeBar pluginId="island-media-kit" onScopeChanged={changed} />
+        </ConfirmModalProvider>,
+      );
+      await waitFor(() => expect(api.plugin_scope_status).toHaveBeenCalledTimes(1));
+      push.handlers.forEach((fn) => fn({ type: "plugin_scope_changed", plugins: ["island-media-kit"], synced: true,
+        live: true, keys: { "island-media-kit": ["project.a"] }, by: "Alex" }));
+      expect(changed).toHaveBeenCalledWith(expect.objectContaining({ ok: true }),
+        { reason: "synced", live: true, keys: ["project.a"] });
+      await new Promise((r) => setTimeout(r, 600));
+      expect(api.plugin_scope_status).toHaveBeenCalledTimes(1);
+    });
+
+    it("who is live moved: the bar reads its status again", async () => {
+      api.plugin_scope_status.mockResolvedValue(live(true));
+      bar();
+      await waitFor(() => expect(api.plugin_scope_status).toHaveBeenCalledTimes(1));
+      api.plugin_scope_status.mockResolvedValue(live(true, [{ name: "Alex", path: "forwarded" }]));
+      push.handlers.forEach((fn) => fn({ type: "live_peers", plugin: "brainrot-tcg", on: true, peers: [] }));
+      push.handlers.forEach((fn) => fn({ type: "live_peers", plugin: "other", on: true, peers: [] }));
+      expect(await screen.findByText("Live with Alex")).toBeTruthy();
+      expect(api.plugin_scope_status).toHaveBeenCalledTimes(2);
+    });
+
+    it("the drawer lists who is live and how each is reached", async () => {
+      api.plugin_scope_status.mockResolvedValue(live(true, [
+        { name: "Alex", label: "ALEX-PC", user: "u1", device: "d1", path: "direct" },
+        { name: "Sam", label: "SAM-PC", user: "u2", device: "d2", path: "none" },
+      ]));
+      bar();
+      fireEvent.click(await screen.findByRole("button", { name: "Details ▾" }));
+      const drawer = screen.getByRole("region", { name: "Sync details: Alpha Studio" });
+      expect(within(drawer).getByText("Linked directly")).toBeTruthy();
+      expect(within(drawer).getByText("Not linked: changes come with sync")).toBeTruthy();
+      expect(within(drawer).getByText("SAM-PC")).toBeTruthy();
     });
   });
 

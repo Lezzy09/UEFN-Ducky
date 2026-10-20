@@ -68,3 +68,22 @@ def test_every_file_reads_back_from_its_byte_range(tmp_path):
         assert len(body) == entry["size"], entry["path"]
         assert hashlib.sha256(body).hexdigest() == entry["sha256"], entry["path"]
         assert body == (app / entry["path"]).read_bytes()
+
+
+def test_a_refused_pack_upload_releases_without_a_pack(tmp_path, monkeypatch, capsys):
+    sys.path.insert(0, str(RELEASE))
+    spec = importlib.util.spec_from_file_location("publish_app_pack_test", RELEASE / "publish_app.py")
+    pub = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(pub)
+    root = tmp_path / "repo"
+    (root / "dist").mkdir(parents=True)
+    _load().build_update_pack(_app(tmp_path), "1.2.410", root / "dist")
+    monkeypatch.setattr(pub, "ROOT", root)
+
+    def refused(base, key, path):
+        raise SystemExit("process failed: bad request: security scan blocked upload: hidden_characters")
+
+    monkeypatch.setattr(pub, "upload_app_release", refused)
+    assert pub.upload_update_pack("https://uefnducky.org", "key", "1.2.410") is None
+    assert "released without a pack" in capsys.readouterr().out

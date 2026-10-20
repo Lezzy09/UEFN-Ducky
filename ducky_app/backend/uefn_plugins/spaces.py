@@ -136,6 +136,29 @@ class Provider:
         ``audienceNotes`` (per-audience notes), ``audienceCategoryLabel``."""
         return {}
 
+    # -- live editing (backend.uefn_plugins.live; peers through rtc_bridge)
+    def live_supported(self) -> bool:
+        """Teammates can go live together (no Live button without it)."""
+        return False
+
+    def live_join(self, account: str, space_id: str, plugin: str, room: str) -> None:
+        """This PC is live in ``room`` of ``plugin`` (presence already says so): connect to
+        the teammates live there and deliver what they send with :func:`live.deliver`."""
+
+    def live_leave(self, account: str, space_id: str, plugin: str) -> None:
+        """This PC left ``plugin``'s room."""
+
+    def live_send(self, account: str, space_id: str, plugin: str, topic: str, data: Any, *,
+                  to: str = "", fast: bool = False) -> int:
+        """``data`` (JSON) to the room, or to one Ducky (``to`` = its device id); ``fast``:
+        pointers, may drop. Returns how many Duckies it went to."""
+        return 0
+
+    def live_state(self, account: str, space_id: str, plugin: str) -> dict[str, Any]:
+        """``{state, peers}``: each peer's ``name``, ``user``, ``device``, ``label`` and
+        ``path`` (``direct``, ``forwarded`` or ``none``)."""
+        return {"state": "off", "peers": []}
+
 
 _NULL = Provider()
 _LOCK = threading.Lock()
@@ -188,8 +211,26 @@ def register(plugin_id: str, impl: Provider) -> None:
 def unregister(plugin_id: str) -> None:
     """The provider's plugin unloaded: back to Local only."""
     with _LOCK:
-        if _ACTIVE["plugin"] == plugin_id:
+        was = _ACTIVE["plugin"] == plugin_id
+        if was:
             _ACTIVE.update(plugin="", provider=_NULL)
+    if was:
+        try:
+            from backend.uefn_plugins import live
+
+            live.leave_all()
+        except Exception:  # noqa: BLE001 — nothing is live without a provider anyway
+            _log.debug("leaving live rooms failed", exc_info=True)
+
+
+def rtc_bridge(plugin_id: str) -> Any:
+    """The WebRTC bridge (:mod:`backend.uefn_plugins.rtc`) for the registered spaces
+    provider. Peer connections are the provider's alone: any other plugin is refused."""
+    if not plugin_id or plugin_id != _ACTIVE["plugin"]:
+        raise PermissionError("rtc is for the spaces provider")
+    from backend.uefn_plugins import rtc
+
+    return rtc.bridge()
 
 
 def reset_for_tests() -> None:
@@ -485,6 +526,12 @@ def scope_status(plugin: str) -> dict[str, Any]:
             out.update(provider().status(account, scope["id"], plugin) or {})
         except Exception:  # noqa: BLE001 — the bar still shows what core knows
             _log.debug("provider status failed for %s", plugin, exc_info=True)
+        try:
+            from backend.uefn_plugins import live
+
+            out["live"] = live.status(plugin)
+        except Exception:  # noqa: BLE001 — no Live button this read
+            _log.debug("live status failed for %s", plugin, exc_info=True)
     if out.get("binding"):  # a switch is getting a team's folder files first
         out["state"] = "binding"
     return out

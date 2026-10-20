@@ -413,6 +413,23 @@
 .plugin-scope-bar__change {
   position: relative;
 }
+/* Live: a pill with a dot that says pointers and changes travel at once. */
+.plugin-scope-bar__live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--success, #22c55e);
+  border-radius: 999px;
+  color: var(--fg, #e6e6e6);
+}
+.plugin-scope-bar__live::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success, #22c55e);
+}
 /* Who else is here: their avatars and one line; opens the drawer's People table. */
 .plugin-scope-bar__people {
   display: inline-flex;

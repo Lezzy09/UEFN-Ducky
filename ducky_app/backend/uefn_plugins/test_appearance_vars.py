@@ -36,10 +36,10 @@ def test_the_ui_kit_uses_only_appearance_variables_and_no_color_literals(tmp_pat
         assert part in ui_kit.CSS, part
 
 
-def test_panel_pages_get_the_error_reporter_after_head_never_before_the_doctype() -> None:
+def test_panel_pages_get_the_error_reporter_and_pointers_after_head_never_before_the_doctype() -> None:
     from backend.uefn_plugins.webview import with_panel_error_script
 
-    script = ui_kit.PANEL_ERROR_SCRIPT.encode()
+    script = (ui_kit.PANEL_ERROR_SCRIPT + ui_kit.LIVE_PRESENCE_SCRIPT).encode()
     page = b"<!doctype html><html><head><title>x</title></head><body></body></html>"
     out = with_panel_error_script(page)
     assert out.startswith(b"<!doctype html><html><head>" + script)

@@ -1003,6 +1003,30 @@ def deliver_data_changes(plugin: str) -> int:
     return len(keys)
 
 
+def _live_write(s: dict[str, Any], plugin: str, kind: str, key: str, text: str | None, sha: str) -> None:
+    """A write to a team copy goes to teammates live in the room at once (``text`` None: a
+    delete; a file goes as a ref the next pull brings)."""
+    try:
+        from backend.uefn_plugins import live
+
+        if live.is_live(plugin):
+            live.local_change(s["account"], s["id"], plugin, kind, key, text, sha)
+    except Exception:  # noqa: BLE001 — the commit brings it anyway
+        pass
+
+
+def _live_read(s: dict[str, Any], plugin: str, key: str, row: dict[str, Any] | None) -> tuple[bool, str | None]:
+    """A teammate's live value for ``key`` that reads return until its commit lands."""
+    if s["kind"] != "shared":
+        return False, None
+    try:
+        from backend.uefn_plugins import live
+
+        return live.provisional(s["account"], s["id"], plugin, key, row)
+    except Exception:  # noqa: BLE001 — the stored row
+        return False, None
+
+
 class PluginData:
     """One plugin's docs and files in the active scope (``api.data`` for backends,
     ``data.*`` / ``files.*`` for panels). Each call resolves the scope afresh, so a
@@ -1096,6 +1120,9 @@ class PluginData:
         if _closed(s):
             return default
         row = repo.get(s["account"], s["id"], self.plugin_id, "doc", key)
+        hit, live_text = _live_read(s, self.plugin_id, key, row)
+        if hit:
+            return default if live_text is None else json.loads(live_text)
         if not row or row["deleted"] or row["value"] is None:
             return default
         try:
@@ -1126,6 +1153,7 @@ class PluginData:
                  size=len(raw), sha256=sha, dirty=shared, sensitive=sensitive, group_id=group or "")
         if group is not None:
             _note_write(s, self.plugin_id, "doc", key)
+            _live_write(s, self.plugin_id, "doc", key, raw.decode("utf-8"), sha)
         return {"ok": True, "key": key, "changed": True}
 
     def keys(self, prefix: str = "") -> list[str]:
@@ -1136,12 +1164,34 @@ class PluginData:
         from backend.uefn_plugins.data_crypto import Locked, open_text
 
         out: dict[str, Any] = {}
+        shared: dict[str, Any] | None = None
         try:
             for s, r in self._rows("doc", prefix):
+                if s["kind"] == "shared":
+                    shared = s
+                    hit, live_text = _live_read(s, self.plugin_id, r["key"], r)
+                    if hit:
+                        if live_text is not None:
+                            out[r["key"]] = json.loads(live_text)
+                        continue
                 if not r["sensitive"] and r["value"] is not None:
                     out[r["key"]] = json.loads(open_text(r["value"], s["account"]))
         except Locked:
             return {}
+        if shared is None:
+            s = self._scope()
+            shared = s if s["kind"] == "shared" else None
+        if shared is not None:
+            try:
+                from backend.uefn_plugins import live
+
+                for key in live.provisional_keys(shared["account"], shared["id"], self.plugin_id, prefix):
+                    if key not in out:
+                        hit, live_text = _live_read(shared, self.plugin_id, key, None)
+                        if hit and live_text is not None:
+                            out[key] = json.loads(live_text)
+            except Exception:  # noqa: BLE001 — what is stored
+                pass
         return out
 
     def delete(self, key: str) -> bool:
@@ -1159,6 +1209,7 @@ class PluginData:
         repo.remove(s["account"], s["id"], self.plugin_id, "doc", key, tombstone=shared, group_id=group or "")
         if group is not None:
             _note_write(s, self.plugin_id, "doc", key)
+            _live_write(s, self.plugin_id, "doc", key, None, "")
         return True
 
     # -- files (assets)
@@ -1184,6 +1235,7 @@ class PluginData:
                      group_id=group or "")
         if group is not None:
             _note_write(s, self.plugin_id, "asset", path)
+            _live_write(s, self.plugin_id, "file", path, "", sha)
         return {"ok": True, "path": path, "changed": True, "size": len(data)}
 
     def has_file(self, path: str) -> bool:
@@ -1225,6 +1277,7 @@ class PluginData:
                     group_id=group or "")
         if group is not None:
             _note_write(s, self.plugin_id, "asset", path)
+            _live_write(s, self.plugin_id, "file", path, None, "")
         return True
 
 

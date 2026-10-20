@@ -1996,6 +1996,9 @@ export interface AgentEvent {
     | "files_reverted"
     | "window_rtc"
     | "direct_rtc"
+    | "rtc_cmd"
+    | "live_message"
+    | "live_peers"
     | "open_url"
     | "model_needed"
     | "model_adopted";
@@ -2236,7 +2239,11 @@ export interface PanelPushEvent {
     | "plugin_hook"
     | "appearance_profile_requested"
     /** A Windows notification was clicked: show this chat or workflow (`kind` + `id`). */
-    | "open_target";
+    | "open_target"
+    /** Live editing: a teammate's message for `plugin` (`from`, `topic`, `data`). */
+    | "live_message"
+    /** Live editing: who is live in `plugin` now (`on`, `peers`). */
+    | "live_peers";
   provider?: string;
   /** plugin_hook: the hook id; appearance_profile_requested: the plugin profile id. */
   id?: string;
@@ -2265,6 +2272,16 @@ export interface PanelPushEvent {
   status?: boolean;
   /** plugin_scope_changed from a sync: per plugin, the doc keys and file paths its pull changed. */
   keys?: Record<string, string[]>;
+  /** plugin_scope_changed for a teammate's live change (shown before the commit arrives). */
+  live?: boolean;
+  /** live_message / live_peers: the plugin it is for. */
+  plugin?: string;
+  /** live_message: what it is about (`from` carries who sent it: name, user, device). */
+  topic?: string;
+  data?: unknown;
+  /** live_peers: live in this plugin, and with whom. */
+  on?: boolean;
+  peers?: PluginLivePeer[];
   /** plugin_write_refused: the unit, its name, who holds it and since when (epoch seconds).
    * plugin_lock_asked: who asks. plugin_lock_lost: who has it now, and `kept` (unsent edits
    * kept as a conflict). */
@@ -2336,6 +2353,28 @@ export interface PluginScopeUsage {
   packagesBytes?: number;
 }
 
+/** A teammate live in the same room, and how this PC reaches them. */
+export interface PluginLivePeer {
+  name?: string;
+  user?: string;
+  device?: string;
+  /** Their PC's name. */
+  label?: string;
+  /** `direct`: straight link; `forwarded`: through a teammate; `none`: not linked (changes come with sync). */
+  path?: "direct" | "forwarded" | "none";
+}
+
+/** Live editing on a team copy (backend/uefn_plugins/live.py `status`). */
+export interface PluginLiveStatus {
+  supported?: boolean;
+  /** Why not, when not supported. */
+  reason?: string;
+  on?: boolean;
+  room?: string;
+  state?: string;
+  peers?: PluginLivePeer[];
+}
+
 export interface PluginScopeStatus {
   ok?: boolean;
   /** False while the account has no shared spaces to offer, or the plugin never shares
@@ -2387,6 +2426,8 @@ export interface PluginScopeStatus {
   unsentChosen?: boolean;
   /** Who else is in the space now (presence); never this PC. */
   people?: PluginScopePerson[];
+  /** Live editing: the Go live button and who is live with you. */
+  live?: PluginLiveStatus;
   /** Live locks on this plugin's units. */
   locks?: PluginScopeLock[];
   /** What goes out and comes in (team repo copies). */
@@ -4348,6 +4389,13 @@ export interface PanelApi {
   ): Promise<Record<string, unknown> & { ok?: boolean; error?: string; code?: string }>;
   /** Where one plugin's data lives: Local or one shared space (picked per plugin). */
   plugin_scope_status?(plugin_id: string): Promise<PluginScopeStatus>;
+  plugin_live_join?(plugin_id: string, room?: string): Promise<PluginLiveStatus & { ok?: boolean; error?: string }>;
+  plugin_live_leave?(plugin_id: string): Promise<{ ok?: boolean }>;
+  plugin_live_send?(plugin_id: string, topic: string, data: unknown, to?: string, fast?: boolean): Promise<{ ok?: boolean; error?: string; sent?: number }>;
+  plugin_live_status?(plugin_id: string): Promise<PluginLiveStatus>;
+  /** The main window answers the backend's rtc_cmd (backend/uefn_plugins/rtc.py). */
+  rtc_reply?(request_id: string, result: Record<string, unknown>): Promise<boolean>;
+  rtc_event?(peer: string, kind: string, payload: Record<string, unknown>): Promise<void>;
   /** Asks the spaces provider — only when a picker opens. */
   plugin_scope_choices?(): Promise<{ ok?: boolean; choices?: PluginScopeChoice[]; kindLabel?: string; emptyNote?: string; error?: string }>;
   /** Switches the plugin's copy; changes still queued for the shared space it leaves are

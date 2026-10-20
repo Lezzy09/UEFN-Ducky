@@ -314,8 +314,10 @@ export const pluginPushSubscriptions = new Map<
 /** Events the host tells panels itself, in their documented shape: the scope bar sends
  * `plugin_scope_changed` with `reason` and `keys`. The raw app push of that name (every
  * sync round, lock and mode change, other plugins' too) carries no `reason`, so a panel
- * that subscribed to it read each one as a switch and started over. */
-const HOST_TOLD_EVENTS = new Set(["plugin_scope_changed"]);
+ * that subscribed to it read each one as a switch and started over. Live messages and
+ * peers reach only their own plugin's panels (`live.message`, `live.peers`), and the peer
+ * connections' commands (`rtc_cmd`: offers and sealed bytes) never reach a panel. */
+const HOST_TOLD_EVENTS = new Set(["plugin_scope_changed", "live_message", "live_peers", "rtc_cmd"]);
 
 export function shouldForwardPluginPush(
   tabId: string,
@@ -327,6 +329,17 @@ export function shouldForwardPluginPush(
   if (!sub || sub.pluginId !== pluginId) return false;
   if (sub.types.size === 0) return true;
   return sub.types.has(eventType);
+}
+
+/** A pointer or selection from the host script: where it is (an anchor selector and the
+ * point's fraction of that element), sent to teammates live in the room. */
+function liveFast(ctx: BridgeContext, topic: "ducky.pointer" | "ducky.select", params: Record<string, unknown>) {
+  const anchor = typeof params.anchor === "string" ? params.anchor.slice(0, 400) : "";
+  if (!anchor) return { ok: false };
+  const frac = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0);
+  const data = topic === "ducky.pointer" ? { anchor, fx: frac(params.fx), fy: frac(params.fy) } : { anchor };
+  void getApi()?.plugin_live_send?.(ctx.pluginId, topic, data, "", true)?.catch(() => {});
+  return { ok: true };
 }
 
 /**
@@ -628,6 +641,27 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
         : {};
     return await api.plugin_call(ctx.pluginId, method, callParams);
   },
+  /** Live editing on a team copy (backend/uefn_plugins/live.py): go live in a room (the
+   * whole plugin by default), leave, and short messages to the teammates live there. */
+  "live.join": async (ctx, params) =>
+    (await getApi()?.plugin_live_join?.(ctx.pluginId, typeof params.room === "string" ? params.room : "")) ?? {
+      ok: false,
+      error: "live editing unavailable",
+    },
+  "live.leave": async (ctx) => (await getApi()?.plugin_live_leave?.(ctx.pluginId)) ?? { ok: true },
+  "live.state": async (ctx) => (await getApi()?.plugin_live_status?.(ctx.pluginId)) ?? { supported: false, on: false },
+  "live.send": async (ctx, params) => {
+    const topic = typeof params.topic === "string" ? params.topic : "";
+    if (topic.startsWith("ducky.")) throw new Error("ducky.* topics are the host's");
+    const to = typeof params.to === "string" ? params.to : "";
+    return (await getApi()?.plugin_live_send?.(ctx.pluginId, topic, params.data ?? null, to, false)) ?? {
+      ok: false,
+      error: "live editing unavailable",
+    };
+  },
+  // The host's pointer script in every panel page: fire and forget, so pointers stay quick.
+  "live.pointer": (ctx, params) => liveFast(ctx, "ducky.pointer", params),
+  "live.select": (ctx, params) => liveFast(ctx, "ducky.select", params),
   /**
    * Subscribe this pane to host push events (e.g. discord_message).
    * Events are forwarded as ``{ channel, event }`` postMessages (same as browser_pane_state).

@@ -48,6 +48,12 @@ function postVisibility(iframe: HTMLIFrameElement | null, visible: boolean): voi
   iframe?.contentWindow?.postMessage({ channel: BRIDGE_CHANNEL, event: { type: "panel.visibility", visible } }, "*");
 }
 
+/** Bridge event `live.state`: the plugin went live on its team copy or left (the host's
+ * pointer script in the page starts or stops). */
+function postLive(iframe: HTMLIFrameElement | null, on: boolean): void {
+  iframe?.contentWindow?.postMessage({ channel: BRIDGE_CHANNEL, event: { type: "live.state", on } }, "*");
+}
+
 function findPanel(
   panels: PluginUiPanel[],
   pluginId: string,
@@ -101,10 +107,14 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
   // and on each load (a reload starts the plugin over).
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
+  const liveRef = useRef(false);
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || !src) return;
-    const post = () => postVisibility(iframe, visibleRef.current);
+    const post = () => {
+      postVisibility(iframe, visibleRef.current);
+      postLive(iframe, liveRef.current);
+    };
     iframe.addEventListener("load", post);
     return () => iframe.removeEventListener("load", post);
   }, [src]);
@@ -153,6 +163,16 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
       if (!win) return;
       if (event.type === "browser_pane_state" && event.pane_id === tabId) {
         win.postMessage({ channel: BRIDGE_CHANNEL, event }, "*");
+        return;
+      }
+      // Live editing: a teammate's message or who is live, for this plugin's panels only.
+      if ((event.type === "live_message" || event.type === "live_peers") && parsed && event.plugin === parsed.pluginId) {
+        win.postMessage({
+          channel: BRIDGE_CHANNEL,
+          event: event.type === "live_message"
+            ? { type: "live.message", from: (event as { from?: unknown }).from, topic: event.topic, data: event.data }
+            : { type: "live.peers", on: Boolean(event.on), peers: event.peers ?? [] },
+        }, "*");
         return;
       }
       if (
@@ -220,6 +240,11 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
         <PluginScopeBar
           pluginId={parsed.pluginId}
           active={visible}
+          onLiveState={(on) => {
+            if (liveRef.current === on) return;
+            liveRef.current = on;
+            postLive(iframeRef.current, on);
+          }}
           onScopeChanged={(status, change) =>
             iframeRef.current?.contentWindow?.postMessage(
               { channel: BRIDGE_CHANNEL, event: { type: "plugin_scope_changed", scope: status.scope, ...change } },

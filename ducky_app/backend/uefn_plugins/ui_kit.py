@@ -398,6 +398,67 @@ PANEL_ERROR_SCRIPT = (
     "catch(e){return String(a)}}).join(' '))}catch(e){}return ce.apply(console,arguments)};})();</script>"
 )
 
+# Live editing in every panel, with no plugin code: while the host says the plugin is live
+# (bridge event ``live.state``), the pointer is reported about 20 times a second as the
+# element under it (``data-live-id``, else an id, else a short tag path from the nearest id)
+# and the point as a fraction of that element, so it lands on the same thing at any window
+# size; a click or focus reports a selection. Teammates' pointers (``live.message`` topic
+# ``ducky.pointer``) are drawn with their name in a click-through layer and fade after 5 s;
+# a pointer whose element isn't on this screen doesn't show. Selections get an outline in
+# the teammate's colour for 10 s.
+LIVE_PRESENCE_SCRIPT = (
+    "<script>(function(){var C='uefn-plugin-ui',on=false,n=0,last=0,cur={},sel={},L=null;"
+    "function req(m,p){try{parent.postMessage({channel:C,id:'ducky-live-'+(++n),method:m,params:p},'*')}catch(e){}}"
+    "function q(s){return String(s).replace(/[\"\\\\]/g,'\\\\$&')}"
+    "function anchor(el){var parts=[],e=el;for(var d=0;e&&e.nodeType===1&&e!==document.body&&d<8;d++,e=e.parentElement){"
+    "var lid=e.getAttribute('data-live-id');if(lid){parts.unshift('[data-live-id=\"'+q(lid)+'\"]');return parts.join('>')}"
+    "if(e.id){parts.unshift('[id=\"'+q(e.id)+'\"]');return parts.join('>')}"
+    "var i=1,s=e;while((s=s.previousElementSibling))if(s.tagName===e.tagName)i++;"
+    "parts.unshift(e.tagName.toLowerCase()+':nth-of-type('+i+')')}parts.unshift('body');return parts.join('>')}"
+    "function layer(){if(!L){L=document.createElement('div');L.setAttribute('data-ducky-live','');"
+    "L.style.cssText='position:fixed;left:0;top:0;width:0;height:0;pointer-events:none;z-index:2147483647';"
+    "document.documentElement.appendChild(L)}return L}"
+    "function ours(el){return L&&el&&(el===L||L.contains(el))}"
+    "function tone(k){var h=0;for(var i=0;i<k.length;i++)h=(h*31+k.charCodeAt(i))>>>0;return 'hsl('+(h%360)+',80%,58%)'}"
+    "function key(f){return String(f.device||f.user||'')}"
+    "function find(a){try{return a?document.querySelector(a):null}catch(e){return null}}"
+    "function pointer(f,d){var k=key(f);if(!k)return;var c=cur[k];if(!c){var el=document.createElement('div'),col=tone(k);"
+    "el.style.cssText='position:absolute;left:0;top:0;transition:transform 60ms linear,opacity .4s';"
+    "el.innerHTML='<svg width=\"16\" height=\"20\" viewBox=\"0 0 16 20\"><path d=\"M1 1l13 10-6 1-3 6z\" stroke=\"#000\" stroke-width=\"1\"/></svg><span></span>';"
+    "el.firstChild.firstChild.setAttribute('fill',col);var lab=el.lastChild;"
+    "lab.style.cssText='position:absolute;left:14px;top:14px;padding:1px 6px;border-radius:4px;font:600 11px system-ui,sans-serif;color:#000;white-space:nowrap';"
+    "lab.style.background=col;lab.textContent=String(f.name||'Teammate').slice(0,40);layer().appendChild(el);c=cur[k]={el:el,at:0}}"
+    "var t=find(d.anchor);if(!t){c.el.style.display='none';return}var r=t.getBoundingClientRect();"
+    "c.el.style.display='block';c.el.style.opacity='1';"
+    "c.el.style.transform='translate('+(r.left+(+d.fx||0)*r.width)+'px,'+(r.top+(+d.fy||0)*r.height)+'px)';c.at=Date.now()}"
+    "function select(f,d){var k=key(f);if(!k)return;var s=sel[k];if(!s){var el=document.createElement('div'),col=tone(k);"
+    "el.style.cssText='position:absolute;left:0;top:0;border:2px solid;border-radius:4px;box-sizing:border-box';"
+    "el.style.borderColor=col;var lab=document.createElement('span');"
+    "lab.style.cssText='position:absolute;left:-2px;top:-18px;padding:0 5px;border-radius:3px;font:600 10px system-ui,sans-serif;color:#000;white-space:nowrap';"
+    "lab.style.background=col;lab.textContent=String(f.name||'Teammate').slice(0,40);el.appendChild(lab);"
+    "layer().appendChild(el);s=sel[k]={el:el,at:0,a:''}}s.a=String(d.anchor||'');s.at=Date.now();place(s)}"
+    "function place(s){var t=find(s.a);if(!t){s.el.style.display='none';return}var r=t.getBoundingClientRect();"
+    "s.el.style.display='block';s.el.style.transform='translate('+r.left+'px,'+r.top+'px)';"
+    "s.el.style.width=r.width+'px';s.el.style.height=r.height+'px'}"
+    "function clear(){for(var k in cur)cur[k].el.remove();for(var j in sel)sel[j].el.remove();cur={};sel={}}"
+    "setInterval(function(){var t=Date.now();for(var k in cur)if(t-cur[k].at>5000)cur[k].el.style.opacity='0';"
+    "for(var j in sel){if(t-sel[j].at>10000){sel[j].el.remove();delete sel[j]}else place(sel[j])}},1000);"
+    "document.addEventListener('pointermove',function(e){if(!on||document.hidden)return;var t=Date.now();if(t-last<50)return;"
+    "var el=e.target;if(!el||el.nodeType!==1||ours(el))return;var r=el.getBoundingClientRect();if(!r.width||!r.height)return;last=t;"
+    "req('live.pointer',{anchor:anchor(el),fx:Math.round((e.clientX-r.left)/r.width*1e4)/1e4,"
+    "fy:Math.round((e.clientY-r.top)/r.height*1e4)/1e4})},true);"
+    "function picked(e){if(!on)return;var el=e.target;if(el&&el.nodeType===1&&!ours(el))req('live.select',{anchor:anchor(el)})}"
+    "document.addEventListener('pointerdown',picked,true);document.addEventListener('focusin',picked,true);"
+    "window.addEventListener('message',function(ev){if(ev.source&&ev.source!==parent)return;var d=ev.data;"
+    "if(!d||d.channel!==C||!d.event)return;var e=d.event;"
+    "if(e.type==='live.state'){on=!!e.on;if(!on)clear()}"
+    "else if(e.type==='live.message'&&e.topic==='ducky.pointer'&&on)pointer(e.from||{},e.data||{});"
+    "else if(e.type==='live.message'&&e.topic==='ducky.select'&&on)select(e.from||{},e.data||{});"
+    "else if(e.type==='live.peers'){var keep={};(e.peers||[]).forEach(function(p){keep[key(p)]=1});"
+    "for(var k in cur)if(!keep[k]){cur[k].el.remove();delete cur[k]}for(var j in sel)if(!keep[j]){sel[j].el.remove();delete sel[j]}}});"
+    "})();</script>"
+)
+
 FILES: dict[str, tuple[str, str]] = {
     "ducky.css": (CSS, "text/css; charset=utf-8"),
     "ducky.js": (JS, "text/javascript; charset=utf-8"),
