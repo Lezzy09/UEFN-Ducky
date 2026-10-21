@@ -4210,6 +4210,8 @@ export interface PanelApi {
   close_uefn?(): Promise<{ ok: boolean; killed?: boolean; graceful?: boolean }>;
   /** Close UEFN, then launch the current island again. */
   restart_uefn_project?(): Promise<{ ok: boolean; path?: string; killed?: boolean; graceful?: boolean }>;
+  /** Restart the UEFN listener; when it is offline, turn Python on in UEFN through Epic MCP. */
+  restart_listener?(): Promise<{ ok: boolean; action?: string; message?: string }>;
   rtc_signal?(session_id: string, payload: Record<string, unknown>): Promise<boolean>;
   /** Direct Remote View: the page posts its full-ICE answer for a viewer session. */
   direct_rtc_answer?(session: string, answer: { type: string; sdp: string } | null, fingerprint?: string, error?: string): Promise<boolean>;

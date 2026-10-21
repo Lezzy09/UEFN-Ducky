@@ -59,6 +59,32 @@ def _find_free_port() -> int:
     raise RuntimeError(f"No free port in range {lo}-{hi}")
 
 
+def _on_python_shutdown() -> None:
+    try:
+        cleanup()
+    except Exception:
+        pass
+
+
+def _close_on_python_shutdown() -> None:
+    """Close the socket when UEFN stops Python (it does on every in-editor island switch).
+
+    Left open, the socket outlives the interpreter with nothing serving it. The next
+    island's listener then binds the same port beside it (SO_REUSEADDR) and Windows hands
+    every connection to the dead one, so the listener reads offline until UEFN restarts.
+    Once per interpreter: a new interpreter comes with a fresh ``unreal`` module.
+    """
+    if getattr(unreal, "_mcp_shutdown_handle", None) is not None:
+        return
+    register = getattr(unreal, "register_python_shutdown_callback", None)
+    if register is None:
+        return
+    try:
+        unreal._mcp_shutdown_handle = register(_on_python_shutdown)
+    except Exception:
+        pass
+
+
 def start_listener(port: int = 0, show_status: bool = True) -> int:
     if unreal._mcp_server is not None:
         log_msg(f"Listener already running on port {unreal._mcp_bound_port}", "warning")
@@ -86,6 +112,7 @@ def start_listener(port: int = 0, show_status: bool = True) -> int:
 
     if unreal._mcp_tick_handle is None:
         unreal._mcp_tick_handle = unreal.register_slate_post_tick_callback(tick_handler)
+    _close_on_python_shutdown()
 
     metrics["started_at"] = time.time()
 

@@ -5,6 +5,7 @@ import { DuckiesRows, badgeText, onlineCount, useAccountDuckies } from "./Duckie
 import { Icons } from "../icons/Icons";
 import type { ListenerStatus } from "../types/panel";
 import { useListenerUptimeSec } from "../hooks/useListenerStatus";
+import { getApi } from "../hooks/usePanelApi";
 
 function isFramedWebView(): boolean {
   return typeof window !== "undefined" && !window.pywebview && window.parent !== window;
@@ -59,16 +60,50 @@ export function epicMcpRows(status: ListenerStatus): [RowProps, RowProps] {
   ];
 }
 
-function Row({ label, detail, ok, warn }: RowProps) {
+function Row({ label, detail, ok, warn, action }: RowProps & { action?: ReactNode }) {
   const state = warn ? "warn" : ok ? "ok" : "off";
   return (
     <div className={`connection-status-menu-row is-${state}`}>
       <span className="connection-status-menu-dot" aria-hidden />
       <div className="connection-status-menu-text">
-        <span className="connection-status-menu-label">{label}</span>
+        <span className="connection-status-menu-label">
+          {label}
+          {action}
+        </span>
         <span className="connection-status-menu-detail">{detail}</span>
       </div>
     </div>
+  );
+}
+
+/** Restart the UEFN listener; when it is down, Ducky turns Python on in UEFN so it starts. */
+function RestartListenerButton({ onResult }: { onResult: (message: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const api = getApi();
+  if (!api?.restart_listener) return null;
+  const restart = async () => {
+    setBusy(true);
+    onResult("Restarting…");
+    try {
+      const res = await api.restart_listener!();
+      onResult(res?.message || (res?.ok ? "Listener restarted." : "Listener restart failed."));
+    } catch (e) {
+      onResult(`Listener restart failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      className={`connection-status-menu-action${busy ? " is-busy" : ""}`}
+      title="Restart UEFN listener"
+      aria-label="Restart UEFN listener"
+      disabled={busy}
+      onClick={() => void restart()}
+    >
+      {busy ? <Icons.Spinner /> : <Icons.Refresh />}
+    </button>
   );
 }
 
@@ -98,6 +133,7 @@ export function ConnectionStatusDropdown({
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"connections" | "online">("connections");
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const [restartNote, setRestartNote] = useState("");
   const { duckies, error: duckiesError, reload: reloadDuckies } = useAccountDuckies();
   const peopleSections = (status.plugin_people ?? []).filter((s) => s.people.length);
   const hasOnlineTab = duckies.some((d) => !d.mine) || peopleSections.length > 0;
@@ -134,6 +170,14 @@ export function ConnectionStatusDropdown({
       window.removeEventListener("scroll", update, true);
     };
   }, [open]);
+
+  // A restart note is about that click: drop it on close, or once the listener comes up.
+  useEffect(() => {
+    if (!open) setRestartNote("");
+  }, [open]);
+  useEffect(() => {
+    if (isOnline) setRestartNote("");
+  }, [isOnline]);
 
   useEffect(() => {
     if (!open) return;
@@ -245,7 +289,13 @@ export function ConnectionStatusDropdown({
           <>
             {hasOnlineTab ? null : <div className="connection-status-menu-head">Connections</div>}
             <Row label="Ducky MCP" detail={duckyMcpDetail} ok />
-            <Row label="UEFN listener" detail={duckyDetail} ok={isOnline && !isWedged} warn={isWedged || race} />
+            <Row
+              label="UEFN listener"
+              detail={restartNote || duckyDetail}
+              ok={isOnline && !isWedged}
+              warn={isWedged || race}
+              action={<RestartListenerButton onResult={setRestartNote} />}
+            />
             <Row {...uefnMcpRow} />
             <Row {...unrealMcpRow} />
             {(status.plugin_connections ?? []).map((row) => (

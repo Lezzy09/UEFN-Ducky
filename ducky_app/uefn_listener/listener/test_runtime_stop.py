@@ -76,3 +76,22 @@ def test_restart_serves_on_same_port(runtime, monkeypatch):
 
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=3) as resp:
         assert json.load(resp)["status"] == "ok"
+
+
+def test_python_shutdown_closes_listening_socket(runtime, monkeypatch):
+    """UEFN stops Python on every in-editor island switch; the socket must go with it."""
+    unreal = sys.modules["unreal"]
+    callbacks: list = []
+    unreal.register_python_shutdown_callback = lambda fn: callbacks.append(fn) or len(callbacks)
+    port = _free_port()
+    monkeypatch.setenv("UEFN_DUCKY_LISTENER_PORT", str(port))
+    runtime.start_listener(show_status=False)
+    runtime.stop_listener()
+    runtime.start_listener(show_status=False)
+    assert len(callbacks) == 1  # once per interpreter, not per start
+
+    callbacks[0]()
+
+    assert unreal._mcp_server is None
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", port))
