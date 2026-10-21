@@ -10,6 +10,9 @@ namespace DuckySetup
         [STAThread]
         static int Main(string[] args)
         {
+            if (Array.Exists(args, a => a.Equals(Web.CheckSwitch, StringComparison.OrdinalIgnoreCase)))
+                return Web.CheckDownload();
+
             // In-app updates run Setup with /VERYSILENT and wait on this process.
             // That path must never show a window or a message box (nobody is
             // there to click it) and never load WebView2.
@@ -21,7 +24,9 @@ namespace DuckySetup
             AppDomain.CurrentDomain.AssemblyResolve += ResolveEmbedded;
             try
             {
-                Engine.ExtractEngine();
+                // The web installer has no engine inside: it downloads one when Install is pressed.
+                if (!Web.IsWeb)
+                    Engine.ExtractEngine();
                 Engine.ExtractWebView();
             }
             catch (Exception ex) when (ex is InvalidOperationException || ex is IOException || ex is UnauthorizedAccessException)
@@ -36,7 +41,7 @@ namespace DuckySetup
         {
             try
             {
-                return Engine.Run(args);
+                return Web.IsWeb ? Web.RunSilent(args) : Engine.Run(args);
             }
             catch (Exception ex)
             {

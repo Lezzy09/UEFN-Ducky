@@ -62,6 +62,45 @@ namespace DuckySetup
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateEventW")]
         public static extern IntPtr CreateEvent(IntPtr attributes, bool manualReset, bool initialState, string name);
+
+        // Authenticode check of the web installer's download (WINTRUST_ACTION_GENERIC_VERIFY_V2).
+        public static readonly Guid GenericVerifyV2 = new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
+        public const uint WtdUiNone = 2;
+        public const uint WtdRevokeNone = 0;
+        public const uint WtdChoiceFile = 1;
+        public const uint WtdStateActionVerify = 1;
+        public const uint WtdStateActionClose = 2;
+        public const uint WtdCacheOnlyUrlRetrieval = 0x1000;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct WinTrustFileInfo
+        {
+            public uint cbStruct;
+            [MarshalAs(UnmanagedType.LPWStr)] public string pcwszFilePath;
+            public IntPtr hFile;
+            public IntPtr pgKnownSubject;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct WinTrustData
+        {
+            public uint cbStruct;
+            public IntPtr pPolicyCallbackData;
+            public IntPtr pSIPClientData;
+            public uint dwUIChoice;
+            public uint fdwRevocationChecks;
+            public uint dwUnionChoice;
+            public IntPtr pFile;
+            public uint dwStateAction;
+            public IntPtr hWVTStateData;
+            public IntPtr pwszURLReference;
+            public uint dwProvFlags;
+            public uint dwUIContext;
+            public IntPtr pSignatureSettings;
+        }
+
+        [DllImport("wintrust.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
+        public static extern int WinVerifyTrust(IntPtr hwnd, [MarshalAs(UnmanagedType.LPStruct)] Guid actionId, ref WinTrustData data);
     }
 
     internal static class Embed

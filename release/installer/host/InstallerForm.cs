@@ -18,6 +18,12 @@ namespace DuckySetup
         ProcessHandle? _running;
         System.Windows.Forms.Timer? _poll;
         string _installDir = Engine.UserDir;
+        // Web installer only: the Store's latest release, the download's cancel switch,
+        // and the downloaded full Setup (deleted once it installed).
+        readonly bool _isWeb = Web.IsWeb;
+        Task<StoreRelease>? _release;
+        System.Threading.CancellationTokenSource? _download;
+        string? _downloaded;
 
         sealed class ProcessHandle
         {
@@ -71,6 +77,9 @@ namespace DuckySetup
         protected override async void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
+            // Ask the Store which version this installs while the page loads.
+            if (_isWeb)
+                _release = Task.Run(Web.FetchLatest);
             var scale = DeviceDpi / 96f;
             if (scale > 1.01f)
             {
@@ -136,14 +145,14 @@ namespace DuckySetup
             if (type == "minimize") { WindowState = FormWindowState.Minimized; return; }
             if (type == "quit")
             {
-                Engine.Cancel();
+                CancelRun();
                 Close();
                 return;
             }
             if (type == "pickFolder") { PickFolder(Str(msg, "path")); return; }
             if (type == "diskFree") { PostDisk(Str(msg, "path")); return; }
             if (type == "startInstall") { StartInstall(msg); return; }
-            if (type == "cancel") { Engine.Cancel(); return; }
+            if (type == "cancel") { CancelRun(); return; }
             if (type == "finish")
             {
                 if (Truthy(msg, "launch"))
@@ -152,14 +161,22 @@ namespace DuckySetup
             }
         }
 
-        void PostInit()
+        async void PostInit()
         {
             var detect = Engine.DetectInstall();
             _installDir = detect.location ?? Engine.UserDir;
+            // The web installer installs whatever the Store has now; no version shows
+            // when the Store can't be reached yet (Install then says why).
+            var version = _version;
+            if (_isWeb)
+            {
+                try { version = (await _release!).Version; }
+                catch (Exception) { version = ""; }
+            }
             Post(new
             {
                 type = "init",
-                version = _version,
+                version,
                 previousVersion = detect.installed ? Engine.InstalledVersion() : "",
                 license = Embed.ReadText("LICENSE"),
                 isUpgrade = detect.installed,
@@ -191,10 +208,11 @@ namespace DuckySetup
                 Post(new { type = "diskFree", text = "", low = false });
                 return;
             }
-            var need = 80UL * 1024 * 1024;
-            var low = info.Value.free < need;
+            // The installed app is about 400 MB; the web installer also keeps its download until done.
+            var needMb = _isWeb ? 650UL : 450UL;
+            var low = info.Value.free < needMb * 1024 * 1024;
             var text = Engine.FormatBytes(info.Value.free) + " free on this drive";
-            if (low) text += " — Setup needs about 80 MB";
+            if (low) text += " — Setup needs about " + needMb + " MB";
             Post(new { type = "diskFree", text, low });
         }
 
@@ -213,6 +231,11 @@ namespace DuckySetup
                 desktop,
                 nolaunch: true,
                 setTasks: !isUpgrade);
+            if (_isWeb)
+            {
+                StartWebInstall(args);
+                return;
+            }
             System.Diagnostics.Process proc;
             string path;
             try
@@ -239,11 +262,92 @@ namespace DuckySetup
             });
         }
 
+        // Web installer: download and check the Store's full Setup, then run it silently
+        // with the same switches and show its engine's progress after the download's.
+        async void StartWebInstall(string[] args)
+        {
+            var cancel = new System.Threading.CancellationTokenSource();
+            _download = cancel;
+            string path;
+            try
+            {
+                Post(new { type = "progress", percent = 0, status = "Connecting to the UEFN Ducky Store…" });
+                if (_release == null || _release.IsFaulted || _release.IsCanceled)
+                    _release = Task.Run(Web.FetchLatest);
+                var release = await _release;
+                path = await Task.Run(() => Web.Download(release, (got, total) => OnUi(() =>
+                {
+                    var status = got >= total ? "Checking the download…" : WebRelease.DownloadStatus(got, total);
+                    Post(new { type = "progress", percent = WebRelease.DownloadPercent(got, total), status });
+                }), cancel.Token));
+            }
+            catch (Exception ex)
+            {
+                _download = null;
+                var error = ex is OperationCanceledException || cancel.IsCancellationRequested
+                    ? "Setup was cancelled."
+                    : ex is InvalidOperationException || ex is UnauthorizedAccessException || ex is IOException
+                        ? ex.Message
+                        : "Setup couldn't download UEFN Ducky. Check your internet connection and try again.";
+                Post(new { type = "installDone", ok = false, error });
+                return;
+            }
+            _download = null;
+            if (cancel.IsCancellationRequested)
+            {
+                Post(new { type = "installDone", ok = false, error = "Setup was cancelled." });
+                return;
+            }
+            _downloaded = path;
+            System.Diagnostics.Process proc;
+            try
+            {
+                proc = Web.StartSetup(path, args);
+                _running = new ProcessHandle { Proc = proc };
+            }
+            catch (Exception ex)
+            {
+                Post(new { type = "installDone", ok = false, error = ex.Message });
+                return;
+            }
+            Post(new { type = "progress", percent = WebRelease.DownloadShare, status = "Installing…" });
+            _poll = new System.Windows.Forms.Timer { Interval = 250 };
+            _poll.Tick += (_, __) => PostProgress();
+            _poll.Start();
+            // The downloaded Setup waits for its engine (and the elevated copy after
+            // UAC Yes) itself and exits with the engine's exit code.
+            _ = Task.Run(() =>
+            {
+                proc.WaitForExit();
+                return proc.ExitCode;
+            }).ContinueWith(t => OnUi(() => FinishInstall(t.IsFaulted ? 1 : t.Result)));
+        }
+
+        void OnUi(Action action)
+        {
+            try { BeginInvoke(action); }
+            catch (InvalidOperationException) { /* window already closed */ }
+        }
+
+        // Stops a download, the downloaded Setup and its engine.
+        void CancelRun()
+        {
+            _download?.Cancel();
+            if (_isWeb && _running != null)
+            {
+                try { if (!_running.Proc.HasExited) _running.Proc.Kill(); }
+                catch (Exception) { /* already gone */ }
+            }
+            Engine.Cancel();
+        }
+
         void PostProgress()
         {
             var progress = Engine.ReadProgress();
-            if (progress != null)
-                Post(new { type = "progress", percent = progress.Value.percent, status = progress.Value.status });
+            if (progress == null)
+                return;
+            var percent = _isWeb ? WebRelease.InstallPercent(progress.Value.percent) : progress.Value.percent;
+            Post(new { type = "progress", percent, status = progress.Value.status });
         }
 
         void FinishInstall(int code)
@@ -251,6 +355,11 @@ namespace DuckySetup
             _poll?.Stop();
             PostProgress();
             _running = null;
+            if (code == 0 && _isWeb)
+            {
+                Web.Cleanup(_downloaded);
+                _downloaded = null;
+            }
             if (code == 0)
                 Post(new { type = "installDone", ok = true });
             else
@@ -283,8 +392,8 @@ namespace DuckySetup
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (_running != null)
-                Engine.Cancel();
+            if (_running != null || _download != null)
+                CancelRun();
             _poll?.Stop();
             base.OnFormClosing(e);
         }

@@ -24,6 +24,9 @@
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <AssemblyTitle>UEFN Ducky Setup</AssemblyTitle>
     <EngineExe Condition="'$(EngineExe)' == ''"></EngineExe>
+    <!-- true = the web installer: no Setup-engine.exe inside; it downloads the Store's
+         latest full Setup when Install is pressed (Web.cs). -->
+    <WebInstaller Condition="'$(WebInstaller)' == ''">false</WebInstaller>
     <UiDir Condition="'$(UiDir)' == ''">..\ui</UiDir>
     <PublicDir Condition="'$(PublicDir)' == ''">..\..\..\ducky_app\frontend\ui_web\web\public</PublicDir>
     <FontDir Condition="'$(FontDir)' == ''">..\..\..\ducky_app\frontend\ui_web\web\node_modules\@fontsource\inter\files</FontDir>
@@ -43,7 +46,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="$(EngineExe)" Condition="'$(EngineExe)' != '' and Exists('$(EngineExe)')" LogicalName="Setup-engine.exe" />
+    <EmbeddedResource Include="$(EngineExe)" Condition="'$(WebInstaller)' != 'true' and '$(EngineExe)' != '' and Exists('$(EngineExe)')" LogicalName="Setup-engine.exe" />
     <EmbeddedResource Include="$(UiDir)\index.html" LogicalName="ui/index.html" />
     <EmbeddedResource Include="$(UiDir)\styles.css" LogicalName="ui/styles.css" />
     <EmbeddedResource Include="$(UiDir)\app.js" LogicalName="ui/app.js" />
@@ -65,8 +68,8 @@
   </ItemGroup>
 
   <Target Name="RequireEngine" BeforeTargets="BeforeBuild">
-    <Error Condition="'$(EngineExe)' == '' or !Exists('$(EngineExe)')"
-           Text="Pass /p:EngineExe=path\to\Setup-engine.exe (run make_release_installer.ps1)." />
+    <Error Condition="'$(WebInstaller)' != 'true' and ('$(EngineExe)' == '' or !Exists('$(EngineExe)'))"
+           Text="Pass /p:EngineExe=path\to\Setup-engine.exe (run make_release_installer.ps1), or /p:WebInstaller=true." />
     <Error Condition="!Exists('wv2\Microsoft.Web.WebView2.WinForms.dll')"
            Text="Missing host/wv2 WebView2 DLLs — make_release_installer.ps1 stages them before this build." />
   </Target>

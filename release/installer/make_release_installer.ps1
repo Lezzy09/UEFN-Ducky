@@ -4,10 +4,21 @@
 #   powershell -File release/installer/make_release_installer.ps1
 #   powershell -File release/installer/make_release_installer.ps1 -EngineOnly
 #   powershell -File release/installer/make_release_installer.ps1 -HostOnly
+#   powershell -File release/installer/make_release_installer.ps1 -Web [-PublicDir <small images>]
+#
+# -Web builds dist\UEFN-Ducky-WebSetup.exe: the same host with no engine inside, which
+# downloads the Store's latest full Setup at install time (release/build_web_setup.py
+# runs this and signs it).
 param(
     [switch]$EngineOnly,
-    [switch]$HostOnly
+    [switch]$HostOnly,
+    [switch]$Web,
+    [string]$PublicDir = ""
 )
+if ($Web) {
+    $EngineOnly = $false
+    $HostOnly = $true
+}
 $ErrorActionPreference = "Stop"
 # Repo root is two levels up (this script lives in release/installer/).
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -33,6 +44,9 @@ $Version = $Match.Groups[1].Value
 $Dist = Join-Path $Root "dist"
 $EngineExe = Join-Path $Dist "Setup-engine.exe"
 $SetupExe = Join-Path $Dist "UEFN-Ducky-Setup-$Version.exe"
+if ($Web) {
+    $SetupExe = Join-Path $Dist "UEFN-Ducky-WebSetup.exe"
+}
 
 if ($DoEngine) {
     # build_exes.py bumps __version__ and writes the one-dir folder
@@ -114,7 +128,7 @@ if ($DoHost -and -not $HostOnly -and -not $SigningOn) {
 }
 
 if ($DoHost) {
-    if (-not (Test-Path $EngineExe)) {
+    if (-not $Web -and -not (Test-Path $EngineExe)) {
         Write-Error "Missing $EngineExe — run this script without -HostOnly first (or pass -EngineOnly then sign, then -HostOnly)."
     }
     $Dotnet = @(
@@ -146,12 +160,19 @@ if ($DoHost) {
         "build", (Join-Path $HostDir "DuckySetup.csproj"),
         "-c", "Release",
         "-t:Rebuild",
-        "-p:EngineExe=$EngineExe",
         "-p:AppVersion=$Version",
         "-p:UiDir=$UiDir",
         "-p:LicenseFile=$License",
         "-p:SetupOutput=$SetupExe"
     )
+    if ($Web) {
+        $buildArgs += "-p:WebInstaller=true"
+        if ($PublicDir) {
+            $buildArgs += "-p:PublicDir=$PublicDir"
+        }
+    } else {
+        $buildArgs += "-p:EngineExe=$EngineExe"
+    }
     if (Test-Path $Icon) {
         $buildArgs += "-p:AppIcon=$Icon"
     }

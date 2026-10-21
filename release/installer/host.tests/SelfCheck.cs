@@ -28,6 +28,8 @@ namespace DuckySetup.Tests
             Silent();
             Quoting();
             Waiting();
+            WebFeed();
+            WebDownload();
             Console.WriteLine($"host self-check: {_passed} passed, {_failed} failed");
             return _failed == 0 ? 0 : 1;
         }
@@ -143,6 +145,76 @@ namespace DuckySetup.Tests
             // An engine we may not inspect (other admin account) is assumed ours.
             var hidden = new FakeProbe { Engines = _ => new[] { new EngineProc { Pid = 77, Inspectable = false } }, Exit = _ => null };
             Check(EngineWait.AfterStubExit(10, 0, hidden) == 0 && hidden.Waited.SequenceEqual(new[] { 77 }), "uninspectable engine waited for");
+        }
+
+        const string Sha = "3c1ceecc4a5b557994218d15e35e249673e08372c1be7975c4255be4edcd5f74";
+
+        // collect/app-version as the Store sends it (1.2.417).
+        static Dictionary<string, object?> Feed(Action<Dictionary<string, object?>>? edit = null)
+        {
+            var payload = new Dictionary<string, object?>
+            {
+                ["currentVersion"] = "1.2.417",
+                ["installerUrl"] = "/api/v1/files/01a16029-491b-7231-a3b1-7e96195d04da/content",
+                ["installerSha256"] = Sha.ToUpperInvariant(),
+                ["size"] = 168584000,
+                ["downloadsPaused"] = false,
+                ["pauseReason"] = "",
+            };
+            edit?.Invoke(payload);
+            return new Dictionary<string, object?> { ["ok"] = true, ["payload"] = payload };
+        }
+
+        static bool Refused(Action act)
+        {
+            try { act(); return false; }
+            catch (InvalidOperationException) { return true; }
+        }
+
+        static void WebFeed()
+        {
+            var r = WebRelease.Parse(Feed());
+            Check(r.Version == "1.2.417" && r.Size == 168584000 && r.Sha256 == Sha && !r.Paused, "feed parsed, sha lower-cased");
+            Check(WebRelease.Absolute(WebRelease.DefaultBaseUrl, r.InstallerUrl) == "https://uefnducky.org/api/v1/files/01a16029-491b-7231-a3b1-7e96195d04da/content", "relative installer URL on the Store");
+            Check(Refused(() => WebRelease.Parse(Feed(p => p["installerSha256"] = "abc"))), "short sha refused");
+            Check(Refused(() => WebRelease.Parse(Feed(p => p["installerSha256"] = new string('z', 64)))), "non-hex sha refused");
+            Check(Refused(() => WebRelease.Parse(Feed(p => p["size"] = 0))), "no size refused");
+            Check(Refused(() => WebRelease.Parse(Feed(p => p.Remove("installerUrl")))), "no installer refused");
+            Check(Refused(() => WebRelease.Parse(new Dictionary<string, object?> { ["ok"] = false, ["error"] = "forbidden" })), "Store error refused");
+            var paused = WebRelease.Parse(Feed(p => { p["downloadsPaused"] = true; p["pauseReason"] = "Fixing a bug"; p.Remove("installerUrl"); }));
+            Check(paused.Paused && paused.PauseReason == "Fixing a bug", "paused downloads reported, not refused");
+
+            Check(WebRelease.BaseUrl(null) == "https://uefnducky.org" && WebRelease.BaseUrl("  ") == "https://uefnducky.org", "default Store");
+            Check(WebRelease.BaseUrl("http://127.0.0.1:8765/") == "http://127.0.0.1:8765", "loopback rehearsal feed allowed");
+            Check(WebRelease.BaseUrl("http://evil.example") == "https://uefnducky.org", "plain http elsewhere ignored");
+            Check(WebRelease.FeedUrl("https://uefnducky.org") == "https://uefnducky.org/api/v1/plugins/uefn-ducky-store/collect/app-version", "feed URL");
+            Check(Refused(() => WebRelease.Absolute(WebRelease.DefaultBaseUrl, "http://evil.example/setup.exe")), "absolute http installer refused");
+            Check(WebRelease.Absolute(WebRelease.DefaultBaseUrl, "https://cdn.example/a.exe") == "https://cdn.example/a.exe", "absolute https installer kept");
+        }
+
+        static void WebDownload()
+        {
+            Check(WebRelease.FileName("1.2.417") == "UEFN-Ducky-Setup-1.2.417.exe", "download name");
+            Check(WebRelease.FileName(@"..\..\x 1.2") == "UEFN-Ducky-Setup-....x1.2.exe", "no path characters in the name");
+            Check(WebRelease.FileName("") == "UEFN-Ducky-Setup-latest.exe", "empty version");
+
+            Check(WebRelease.ResumeFrom(0, 100) == 0 && WebRelease.ResumeFrom(40, 100) == 40 && WebRelease.ResumeFrom(100, 100) == 100, "resume from the part's length");
+            Check(WebRelease.ResumeFrom(101, 100) == 0, "a part longer than the file starts over");
+
+            Check(WebRelease.DownloadPercent(0, 100) == 0 && WebRelease.DownloadPercent(50, 100) == 35 && WebRelease.DownloadPercent(100, 100) == WebRelease.DownloadShare, "download fills the first part of the bar");
+            Check(WebRelease.DownloadPercent(5, 0) == 0 && WebRelease.DownloadPercent(200, 100) == WebRelease.DownloadShare, "download percent clamped");
+            Check(WebRelease.InstallPercent(0) == WebRelease.DownloadShare && WebRelease.InstallPercent(100) == 100 && WebRelease.InstallPercent(50) == 85, "install fills the rest");
+            Check(WebRelease.DownloadStatus(47185920, 168584000) == "Downloading UEFN Ducky · 45 of 161 MB", "download status in MB");
+
+            Check(WebRelease.SignerOk("CN=\"Mindful Path Company, LLC\", O=\"Mindful Path Company, LLC\", L=Hull, S=Georgia, C=US"), "our signer accepted");
+            Check(!WebRelease.SignerOk("CN=\"Mindful Path Company, LLC\", O=\"Someone Else\", C=US"), "our name only in CN refused");
+            Check(!WebRelease.SignerOk("CN=Evil, O=\"Mindful Path Company, LLC Ltd\""), "look-alike organization refused");
+            Check(!WebRelease.SignerOk(""), "unsigned refused");
+
+            Check(WebRelease.SameSha(Sha, Sha.ToUpperInvariant()) && !WebRelease.SameSha("", "") && !WebRelease.SameSha(Sha, Sha.Substring(1) + "0"), "sha compare");
+
+            var files = new[] { @"C:\d\UEFN-Ducky-Setup-1.2.416.exe", @"C:\d\UEFN-Ducky-Setup-1.2.417.exe", @"C:\d\UEFN-Ducky-Setup-1.2.417.exe.part", @"C:\d\UEFN-Ducky-Setup-1.2.415.exe.part" };
+            Check(WebRelease.Stale(files, "UEFN-Ducky-Setup-1.2.417.exe").SequenceEqual(new[] { files[0], files[3] }), "other versions' downloads swept, ours kept");
         }
     }
 }
