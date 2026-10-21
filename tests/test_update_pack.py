@@ -87,3 +87,27 @@ def test_a_refused_pack_upload_releases_without_a_pack(tmp_path, monkeypatch, ca
     monkeypatch.setattr(pub, "upload_app_release", refused)
     assert pub.upload_update_pack("https://uefnducky.org", "key", "1.2.410") is None
     assert "released without a pack" in capsys.readouterr().out
+
+
+def test_an_expired_upload_ticket_is_tried_again(tmp_path, monkeypatch):
+    sys.path.insert(0, str(RELEASE))
+    spec = importlib.util.spec_from_file_location("publish_app_ticket_test", RELEASE / "publish_app.py")
+    pub = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(pub)
+    root = tmp_path / "repo"
+    (root / "dist").mkdir(parents=True)
+    _load().build_update_pack(_app(tmp_path), "1.2.410", root / "dist")
+    monkeypatch.setattr(pub, "ROOT", root)
+    calls = []
+
+    def expires_once(base, key, path):
+        calls.append(path.name)
+        if len(calls) == 1:
+            raise SystemExit('POST /api/v1/files/app-release/complete HTTP 400: {"error":"ticket expired"}')
+        return {"fileId": f"id-{len(calls)}", "sha256": pub.sha256_file(path)}
+
+    monkeypatch.setattr(pub, "upload_app_release", expires_once)
+    update = pub.upload_update_pack("https://uefnducky.org", "key", "1.2.410")
+    assert update is not None and update["packFileId"] == "id-2" and update["manifestFileId"] == "id-3"
+    assert calls[0] == calls[1] == "UEFN-Ducky-Update-1.2.410.zip"

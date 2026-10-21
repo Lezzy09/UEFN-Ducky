@@ -10,9 +10,14 @@ rebuilt only when the host or its page changes, not on every release.
     py release/build_web_setup.py              # build + sign (signing must be set up)
     py release/build_web_setup.py --check      # then download + check the latest Setup with it
     py release/build_web_setup.py --no-sign    # local try-out only, never publish it
+    py release/build_web_setup.py --check --upload   # build, check, then put it on the site
 
 --check runs the built EXE with /CHECKDOWNLOAD: it downloads and verifies the Store's
 latest full Setup, prints "ok <version> <bytes> <sha256>", deletes it and installs nothing.
+
+--upload replaces web-setup/UEFN-Ducky-Setup.exe in the site's public storage (same file
+id, so the Download button's link /api/v1/files/<id>/content keeps working). It is kept
+out of app-releases/: an .exe uploaded there pushes out an old Setup restore slot.
 """
 
 from __future__ import annotations
@@ -73,11 +78,37 @@ def check(path: Path) -> None:
         raise SystemExit("The web Setup couldn't download and check the latest release.")
 
 
+def upload(path: Path) -> None:
+    import base64
+
+    sys.path.insert(0, str(ROOT / "release"))
+    import publish_app
+
+    print("=== Upload to the site (web-setup/UEFN-Ducky-Setup.exe) ===")
+    base, key = publish_app.ensure_store_env()
+    result = publish_app.mcp_call(base, key, "storage_upload", {
+        "filename": "UEFN-Ducky-Setup.exe",
+        "prefix": "web-setup",
+        "namespace": "media",
+        "public": True,
+        "replace": True,
+        "mimeType": "application/octet-stream",
+        "contentBase64": base64.b64encode(path.read_bytes()).decode("ascii"),
+    })
+    file = result.get("file") or {}
+    if not result.get("ok") or not file.get("id"):
+        raise SystemExit(f"Upload failed: {result}")
+    print(f"  {base}/api/v1/files/{file['id']}/content  ({file.get('sizeBytes')} bytes, sha256 {file.get('sha256')})")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--no-sign", action="store_true", help="Skip signing (local try-out; never publish it)")
     parser.add_argument("--check", action="store_true", help="Download and check the latest Setup with the built EXE")
+    parser.add_argument("--upload", action="store_true", help="Replace the web installer on the site (signed builds only)")
     args = parser.parse_args()
+    if args.upload and args.no_sign:
+        raise SystemExit("--upload needs a signed build: drop --no-sign.")
 
     print("=== Small page images ===")
     shrink_images(SMALL_PUBLIC)
@@ -99,6 +130,8 @@ def main() -> None:
     print(f"Built {OUT.name}: {OUT.stat().st_size:,} bytes")
     if args.check:
         check(OUT)
+    if args.upload:
+        upload(OUT)
 
 
 if __name__ == "__main__":
