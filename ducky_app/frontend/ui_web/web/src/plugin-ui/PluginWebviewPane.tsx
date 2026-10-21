@@ -14,6 +14,7 @@ import {
   shouldForwardPluginPush,
 } from "./bridge";
 import { usePluginThemePush } from "./pluginTheme";
+import { reloadIframe, useReloadOnPluginUpdate } from "./pluginReload";
 import { isBridgeRequest, parsePluginUiTabId, type PluginUiPanel } from "./types";
 import { usePluginContributions } from "../hooks/usePluginContributions";
 import { installPanelPushBus, subscribePanelPush } from "../hooks/usePanelPushBus";
@@ -86,19 +87,17 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
     isDucktactoeBoardTab(parsed.pluginId, parsed.panelId);
 
   usePluginThemePush(iframeRef, src);
+  useReloadOnPluginUpdate(iframeRef, panel?.version);
 
   // Data switched between Local and a shared space: the plugin restarted on the other copy,
-  // so the panel loads again too (nothing of the old copy stays on screen). Setting
-  // src again reloads the same iframe, so its theme and bridge listeners stay bound.
+  // so the panel loads again too (nothing of the old copy stays on screen).
   const pluginId = parsed?.pluginId ?? "";
   useEffect(() => {
     if (!pluginId) return;
     installPanelPushBus();
     return subscribePanelPush((event) => {
       if (event.type !== "plugin_scope_changed" || !event.switched || !event.plugins?.includes(pluginId)) return;
-      const iframe = iframeRef.current;
-      const current = iframe?.getAttribute("src");
-      if (iframe && current) iframe.setAttribute("src", current);
+      reloadIframe(iframeRef.current);
     });
   }, [pluginId]);
 

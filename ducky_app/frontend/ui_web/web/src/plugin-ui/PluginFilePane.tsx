@@ -18,6 +18,7 @@ import {
   shouldForwardPluginPush,
 } from "./bridge";
 import { usePluginThemePush } from "./pluginTheme";
+import { useReloadOnPluginUpdate } from "./pluginReload";
 import { isBridgeRequest, type PluginUiPanel } from "./types";
 import { usePluginContributions } from "../hooks/usePluginContributions";
 import { installPanelPushBus, subscribePanelPush } from "../hooks/usePanelPushBus";
@@ -57,6 +58,7 @@ export function PluginFilePane({ pluginId, panelId, relativePath }: Props) {
   }, [panel, pid, relativePath]);
 
   usePluginThemePush(iframeRef, src);
+  useReloadOnPluginUpdate(iframeRef, panel?.version);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {

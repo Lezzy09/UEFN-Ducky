@@ -6,6 +6,7 @@ import "./plugin-ui.css";
 import { BRIDGE_CHANNEL, PLUGIN_UI_ROUTE_PREFIX, PLUGIN_UI_SANDBOX } from "./constants";
 import { handleBridgeRequest, shouldForwardPluginPush } from "./bridge";
 import { usePluginThemePush } from "./pluginTheme";
+import { useReloadOnPluginUpdate } from "./pluginReload";
 import { isBridgeRequest } from "./types";
 import { usePluginContributions } from "../hooks/usePluginContributions";
 import { installPanelPushBus, subscribePanelPush } from "../hooks/usePanelPushBus";
@@ -34,6 +35,7 @@ export function PluginSettingsEmbed({ pluginId, panelId }: Props) {
   const tabId = `settings-plugin:${pid}:${panelId}`;
 
   usePluginThemePush(iframeRef, src);
+  useReloadOnPluginUpdate(iframeRef, panel?.version);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
