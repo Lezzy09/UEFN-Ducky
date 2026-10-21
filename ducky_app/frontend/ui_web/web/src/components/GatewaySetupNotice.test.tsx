@@ -4,18 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fake = vi.hoisted(() => {
   const push = { listener: null as null | ((event: Record<string, unknown>) => void) };
-  const walk = { active: false, listeners: new Set<() => void>() };
   return {
     push,
-    walk,
     providers: [] as unknown[],
     status: vi.fn(),
     ensurePopularPlugins: vi.fn(),
     markStarterPluginToursCompleted: vi.fn(),
     markTourCompleted: vi.fn(),
-    startTour: vi.fn(),
     reportFirstRunSetup: vi.fn(),
-    openLlmsProviderSettings: vi.fn(),
+    welcomeAfterSetup: vi.fn(),
   };
 });
 
@@ -30,6 +27,8 @@ vi.mock("../hooks/usePanelApi", () => ({
     duckyos_store_catalog: () => Promise.resolve({ ok: true, items: [] }),
     get_key_status: () => Promise.resolve({}),
     list_coding_agents: () => Promise.resolve({ agents: [] }),
+    get_settings: () => Promise.resolve({}),
+    get_ide_statuses: () => Promise.resolve({}),
   }),
 }));
 vi.mock("../hooks/usePanelPushBus", () => ({
@@ -48,46 +47,40 @@ vi.mock("../hooks/storeInstallJobs", () => ({
   patchStoreJob: () => {},
 }));
 vi.mock("../hooks/storeCatalogCache", () => ({ peekStoreCatalogCache: () => null, rememberStoreCatalog: () => {} }));
+vi.mock("../hooks/modelsCatalogCache", () => ({ refreshModelsCatalog: vi.fn() }));
 vi.mock("../hooks/usePluginContributions", () => ({
   usePluginContributions: () => ({ llm_providers: fake.providers, llm_coding_agents: [], ready: true }),
 }));
-vi.mock("../navigation/openSettingsTab", () => ({ openLlmsProviderSettings: fake.openLlmsProviderSettings }));
 vi.mock("../walkthrough/firstRunSetup", () => ({ reportFirstRunSetup: fake.reportFirstRunSetup }));
 vi.mock("../walkthrough/starterLlmGateways", () => ({
   ensurePopularPlugins: fake.ensurePopularPlugins,
   markStarterPluginToursCompleted: fake.markStarterPluginToursCompleted,
 }));
-vi.mock("../walkthrough/WalkthroughService", () => ({
-  getWalkthroughState: () => ({ tourId: null, stepIndex: 0, active: fake.walk.active }),
-  markTourCompleted: fake.markTourCompleted,
-  startTour: fake.startTour,
-  subscribeWalkthrough: (fn: () => void) => {
-    fake.walk.listeners.add(fn);
-    fn();
-    return () => fake.walk.listeners.delete(fn);
-  },
-}));
+vi.mock("../walkthrough/welcomeDucky", () => ({ welcomeAfterSetup: fake.welcomeAfterSetup }));
+vi.mock("../walkthrough/WalkthroughService", () => ({ markTourCompleted: fake.markTourCompleted }));
 
 const { GatewaySetupNotice, SetupReminder, mergeRows, rowForPhase } = await import("./GatewaySetupNotice");
 
 const BUNDLE = [
-  { slug: "openai", label: "OpenAI", group: "gateway", installed: false },
-  { slug: "verse", label: "Verse", group: "editor", installed: false },
+  { slug: "openai", label: "OpenAI", group: "ai", installed: false },
+  { slug: "uefn", label: "UEFN", group: "uefn", installed: false },
 ];
 
-function setWalk(active: boolean) {
-  fake.walk.active = active;
-  for (const fn of [...fake.walk.listeners]) fn();
-}
+// The wizard's main button ignores a click right after it changes (a double click):
+// pause() moves the clock past that.
+const realNow = Date.now.bind(Date);
+let skew = 0;
+vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+const pause = () => {
+  skew += 1000;
+};
 
 beforeEach(() => {
   window.localStorage.clear();
   fake.providers = [];
-  fake.walk.active = false;
-  fake.walk.listeners.clear();
   fake.status.mockResolvedValue({ pending_first_run: true, gateway_ids: [], plugins: BUNDLE });
   fake.ensurePopularPlugins.mockResolvedValue(undefined);
-  fake.startTour.mockResolvedValue(true);
+  fake.welcomeAfterSetup.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -96,24 +89,38 @@ afterEach(() => {
 });
 
 describe("GatewaySetupNotice", () => {
-  it("opens the setup on a new install and holds the Welcome tour", async () => {
+  it("opens the setup on a new install, holds the tours, and can't be closed", async () => {
     render(<GatewaySetupNotice />);
     expect(await screen.findByRole("dialog", { name: "Welcome to UEFN Ducky" })).toBeTruthy();
     expect(fake.reportFirstRunSetup).toHaveBeenCalledWith(true);
+    expect(screen.queryByRole("button", { name: "Close setup" })).toBeNull();
   });
 
-  it("lets an existing install through: corner card, no setup, no hold", async () => {
+  it("opens again after a restart part way through, even with the gateways already in", async () => {
+    fake.status.mockResolvedValue({
+      pending_first_run: true,
+      gateway_ids: ["openai"],
+      plugins: BUNDLE.map((p) => ({ ...p, installed: true })),
+    });
+    render(<GatewaySetupNotice />);
+    expect(await screen.findByRole("dialog", { name: "Welcome to UEFN Ducky" })).toBeTruthy();
+  });
+
+  it("lets an existing install through: corner card, no setup, no hold; reopened, it can close", async () => {
     fake.status.mockResolvedValue({ pending_first_run: false, gateway_ids: [], plugins: BUNDLE });
     render(<GatewaySetupNotice />);
     expect(await screen.findByText("Finish setting up Ducky")).toBeTruthy();
     expect(fake.reportFirstRunSetup).toHaveBeenCalledWith(false);
     fireEvent.click(screen.getByRole("button", { name: "Continue setup" }));
-    expect(screen.getByRole("dialog", { name: "Install the starter plugins" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Starter plugins" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close setup" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("installs the bundle and shows each plugin's progress", async () => {
     render(<GatewaySetupNotice />);
     fireEvent.click(await screen.findByRole("button", { name: /Get started/ }));
+    pause();
     fireEvent.click(screen.getByRole("button", { name: /Install 2 plugins/ }));
     expect(fake.ensurePopularPlugins).toHaveBeenCalledWith(true);
     act(() => {
@@ -122,78 +129,55 @@ describe("GatewaySetupNotice", () => {
     expect(document.querySelector(".setup-wizard-plugin.is-installing")?.textContent).toContain("OpenAI");
     act(() => {
       fake.push.listener?.({ type: "starter_plugins_progress", slug: "openai", label: "OpenAI", setup_phase: "installed" });
-      fake.push.listener?.({ type: "starter_plugins_progress", slug: "verse", label: "Verse", setup_phase: "error", detail: "Offline" });
+      fake.push.listener?.({ type: "starter_plugins_progress", slug: "uefn", label: "UEFN", setup_phase: "error", detail: "Offline" });
     });
     expect(document.querySelector(".setup-wizard-plugin.is-installed")?.textContent).toContain("OpenAI");
     expect(screen.getByText("Offline")).toBeTruthy();
   });
 
   it("marks a plugin failed from the job's result even when its progress event was missed", async () => {
-    fake.ensurePopularPlugins.mockResolvedValue({ ok: false, errors: [{ slug: "verse", error: "Store is offline" }] });
+    fake.ensurePopularPlugins.mockResolvedValue({ ok: false, errors: [{ slug: "uefn", error: "Store is offline" }] });
     render(<GatewaySetupNotice />);
     fireEvent.click(await screen.findByRole("button", { name: /Get started/ }));
+    pause();
     fireEvent.click(screen.getByRole("button", { name: /Install 2 plugins/ }));
     expect(await screen.findByText("Store is offline")).toBeTruthy();
-    expect(document.querySelector(".setup-wizard-plugin.is-error")?.textContent).toContain("Verse");
+    expect(document.querySelector(".setup-wizard-plugin.is-error")?.textContent).toContain("UEFN");
     expect(screen.getByRole("button", { name: /Try again/ })).toBeTruthy();
   });
 
-  it("stays open when the gateways land, and Finish closes it and skips the chained tours", async () => {
+  it("Finish closes it, skips the chained tours, and hands over to the welcome ducky", async () => {
+    let welcomed: () => void = () => {};
+    fake.welcomeAfterSetup.mockReturnValue(new Promise<void>((r) => (welcomed = r)));
     render(<GatewaySetupNotice />);
     fireEvent.click(await screen.findByRole("button", { name: /Get started/ }));
     fake.status.mockResolvedValue({
-      pending_first_run: false,
+      pending_first_run: true,
       gateway_ids: ["openai"],
       plugins: BUNDLE.map((p) => ({ ...p, installed: true })),
     });
     act(() => {
       fake.push.listener?.({ type: "uefn_plugins_changed" });
     });
-    fireEvent.click(await screen.findByRole("button", { name: /Next/ }));
+    const next = await screen.findByRole("button", { name: /Next/ });
+    pause();
+    fireEvent.click(next);
+    expect(screen.getByRole("dialog", { name: "Connect your AI" })).toBeTruthy();
+    pause();
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    expect(screen.getByRole("dialog", { name: "Your defaults" })).toBeTruthy();
+    pause();
     fireEvent.click(screen.getByRole("button", { name: /Finish/ }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(fake.markStarterPluginToursCompleted).toHaveBeenCalled();
     expect(fake.markTourCompleted).toHaveBeenCalledWith("settings.store");
     expect(fake.markTourCompleted).toHaveBeenCalledWith("llms.setup");
+    expect(fake.welcomeAfterSetup).toHaveBeenCalledOnce();
+    // The app's own tours keep waiting until the welcome has run.
+    expect(fake.reportFirstRunSetup).toHaveBeenLastCalledWith(true);
+    expect(screen.queryByText("Finish setting up Ducky")).toBeNull();
+    await act(async () => welcomed());
     await waitFor(() => expect(fake.reportFirstRunSetup).toHaveBeenLastCalledWith(false));
-  });
-
-  it("steps aside for a provider tour and comes back to Connect AI when it ends", async () => {
-    fake.providers = [{ id: "openai", label: "OpenAI", kind: "secret", secret_key: "openai", plugin_id: "openai" }];
-    fake.status.mockResolvedValue({
-      pending_first_run: true,
-      gateway_ids: [],
-      plugins: BUNDLE.map((p) => ({ ...p, installed: true })),
-    });
-    render(<GatewaySetupNotice />);
-    fireEvent.click(await screen.findByRole("button", { name: /Get started/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "Show me how" }));
-    expect(fake.startTour).toHaveBeenCalledWith("plugin.openai", { force: true });
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("button", { name: "Back to setup" })).toBeTruthy();
-    act(() => setWalk(true));
-    expect(screen.queryByRole("dialog")).toBeNull();
-    act(() => setWalk(false));
-    expect(await screen.findByRole("dialog", { name: "Connect your AI" })).toBeTruthy();
-  });
-
-  it("opens the provider's Settings page when its plugin has no tour", async () => {
-    fake.providers = [{ id: "openai", label: "OpenAI", kind: "secret", secret_key: "openai", plugin_id: "openai" }];
-    fake.startTour.mockResolvedValue(false);
-    fake.status.mockResolvedValue({
-      pending_first_run: true,
-      gateway_ids: [],
-      plugins: BUNDLE.map((p) => ({ ...p, installed: true })),
-    });
-    render(<GatewaySetupNotice />);
-    fireEvent.click(await screen.findByRole("button", { name: /Get started/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "Show me how" }));
-    await waitFor(() => expect(fake.openLlmsProviderSettings).toHaveBeenCalledWith("openai"));
-    expect(screen.queryByRole("dialog")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Back to setup" }));
-    expect(screen.getByRole("dialog", { name: "Connect your AI" })).toBeTruthy();
   });
 });
 
@@ -209,10 +193,10 @@ describe("hiding the Set up Ducky pill", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Minimize" }));
     fireEvent.click(screen.getByRole("button", { name: "Hide setup reminder" }));
     expect(screen.queryByRole("button", { name: "Set up Ducky" })).toBeNull();
-    expect(screen.queryByText("Chats need an AI gateway plugin (OpenAI, Anthropic or Cursor). Setup installs it with the UEFN editor plugins, then helps you connect it.")).toBeNull();
+    expect(screen.queryByText(/Setup installs it, then helps you connect it/)).toBeNull();
     // Settings' copy is still there and opens the setup.
     fireEvent.click(screen.getByRole("button", { name: "Continue setup" }));
-    expect(screen.getByRole("dialog", { name: "Install the starter plugins" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Starter plugins" })).toBeTruthy();
     unmount();
 
     render(<GatewaySetupNotice />);
@@ -244,9 +228,9 @@ describe("rows", () => {
 
   it("keeps a row that is installing or failed until it lands", () => {
     const plugins = [
-      { slug: "a", label: "A", group: "gateway" as const, installed: false },
-      { slug: "b", label: "B", group: "editor" as const, installed: false },
-      { slug: "c", label: "C", group: "editor" as const, installed: true },
+      { slug: "a", label: "A", group: "ai" as const, installed: false },
+      { slug: "b", label: "B", group: "uefn" as const, installed: false },
+      { slug: "c", label: "C", group: "uefn" as const, installed: true },
     ];
     const next = mergeRows({ a: { phase: "installing" }, b: { phase: "error", detail: "x" } }, plugins);
     expect(next).toEqual({ a: { phase: "installing" }, b: { phase: "error", detail: "x" }, c: { phase: "installed" } });

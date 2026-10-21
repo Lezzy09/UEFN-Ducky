@@ -17,6 +17,7 @@ import {
 } from "../../utils/stackedPanelDropHint";
 import { resolveStackedPanelFlex, type StackedPanelResizeSnapshot } from "../../utils/stackedPanelFlex";
 import type { DockSide } from "../../workspace/workspaceDockStorage";
+import { targetRef } from "../../ui-targets/registry";
 
 const DRAG_THRESHOLD_PX = 5;
 const HORIZONTAL_DRAG_THRESHOLD_PX = 12;
@@ -269,8 +270,10 @@ export function SidebarStackedPanel<TId extends string>({
     (el: HTMLDivElement | null) => {
       panelElRef.current = el;
       onPanelRef?.(el);
+      // The Duckies panel is what tours point at as the chat list, in the stacked layout too.
+      if (panelId === "chats") targetRef("shell.chat_history", { kind: "chat", label: "Chat history", route: "chat" })(el);
     },
-    [onPanelRef],
+    [onPanelRef, panelId],
   );
 
   const hintEdge = dropHint?.targetId === panelId ? dropHint.edge : null;

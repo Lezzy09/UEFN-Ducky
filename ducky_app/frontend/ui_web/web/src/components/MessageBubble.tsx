@@ -11,6 +11,7 @@ import { FileProtectionRecovery } from "./FileProtectionRecovery";
 import { AttachmentStrip } from "./EditableUserMessage";
 import { AttachmentPreviewModal } from "./AttachmentPreviewModal";
 import { TourOffer } from "../walkthrough/TourOffer";
+import { useIntroTyping } from "../walkthrough/introTyping";
 
 interface MessageBubbleProps {
   role: string;
@@ -66,8 +67,8 @@ function subscribeTts(onChange: () => void): () => void {
 // component now only renders assistant bubbles (streamed answers + reasoning).
 export const MessageBubble = memo(function MessageBubble({
   role,
-  text,
-  isStreaming,
+  text: fullText,
+  isStreaming: streaming,
   thinking,
   incomplete,
   error,
@@ -92,9 +93,13 @@ export const MessageBubble = memo(function MessageBubble({
   const selectTts = useCallback((): TtsProgress => {
     const p = ttsEngine.getProgress();
     if (p.state === "idle") return IDLE_TTS;
-    return mapReadAlong(text, p.spokenText, p.sourceText, p.charIndex) ? p : IDLE_TTS;
-  }, [text]);
+    return mapReadAlong(fullText, p.spokenText, p.sourceText, p.charIndex) ? p : IDLE_TTS;
+  }, [fullText]);
   const tts = useSyncExternalStore(subscribeTts, selectTts, selectTts);
+  // The welcome ducky's first message types itself out right after the setup.
+  const introShown = useIntroTyping(fullText, role !== "user" && !!tours?.length);
+  const text = introShown ?? fullText;
+  const isStreaming = introShown !== null || streaming;
 
   if (role === "user") return null;
 
@@ -114,7 +119,7 @@ export const MessageBubble = memo(function MessageBubble({
     <div
       className={`message-bubble-assistant-row${isStreaming ? " message-bubble-assistant-row--streaming" : ""}${
         ttsActive ? " message-bubble-assistant-row--tts-active" : ""
-      }`}
+      }${tours?.length ? " message-bubble-assistant-row--welcome" : ""}`}
     >
       <div className="message-bubble-assistant-content">
         {authorName ? (

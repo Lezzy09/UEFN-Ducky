@@ -1,4 +1,4 @@
-"""First-run Store install of popular gateways and UEFN editor plugins."""
+"""First-run Store install of the starter plugins (AI gateways, UEFN, art tools, extras)."""
 
 from __future__ import annotations
 
@@ -7,22 +7,40 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-STARTER_LLM_GATEWAY_SLUGS: tuple[str, ...] = ("anthropic", "cursor", "openai")
+# Signs this PC in to a Ducky account, which brings Ducky AI (the "UEFN Ducky" provider).
+STARTER_ACCOUNT_SLUG = "account"
 
-STARTER_UEFN_PLUGIN_SLUGS: tuple[str, ...] = ("uefn", "translation")
+STARTER_LLM_GATEWAY_SLUGS: tuple[str, ...] = ("anthropic", "openai", "google", "cursor")
 
-# Offline neural voices, so every ducky can read its replies in its own voice.
-STARTER_VOICE_PLUGIN_SLUGS: tuple[str, ...] = ("piper",)
+STARTER_UEFN_PLUGIN_SLUGS: tuple[str, ...] = ("uefn", "playtester", "typesafe")
 
+STARTER_CREATE_PLUGIN_SLUGS: tuple[str, ...] = ("blender", "meshy", "adobe", "island-media-kit")
+
+# Translation, and offline neural voices so every ducky can read its replies aloud.
+STARTER_EXTRA_PLUGIN_SLUGS: tuple[str, ...] = ("translation", "piper")
+
+# Install order: account and gateways first, so Connect AI can start while the rest land.
 POPULAR_PLUGIN_SLUGS: tuple[str, ...] = (
-    STARTER_LLM_GATEWAY_SLUGS + STARTER_UEFN_PLUGIN_SLUGS + STARTER_VOICE_PLUGIN_SLUGS
+    (STARTER_ACCOUNT_SLUG,)
+    + STARTER_LLM_GATEWAY_SLUGS
+    + STARTER_UEFN_PLUGIN_SLUGS
+    + STARTER_CREATE_PLUGIN_SLUGS
+    + STARTER_EXTRA_PLUGIN_SLUGS
 )
 
 STARTER_PLUGIN_LABELS: dict[str, str] = {
+    "account": "Ducky Account",
     "anthropic": "Anthropic",
-    "cursor": "Cursor",
     "openai": "OpenAI",
+    "google": "Google",
+    "cursor": "Cursor",
     "uefn": "UEFN",
+    "playtester": "Play Tester",
+    "typesafe": "TypeSafe",
+    "blender": "Blender",
+    "meshy": "Meshy",
+    "adobe": "Adobe",
+    "island-media-kit": "Island Media Kit",
     "translation": "Translation",
     "piper": "Pipe voices",
 }
@@ -136,44 +154,59 @@ def starter_llm_onboard_pending() -> dict[str, Any]:
         return {"ok": True, "pending": True}
 
 
-# The welcome ducky a fresh install opens on its first start: its first message offers
-# these walkthroughs (ids of the app's own tours) as buttons.
+# The welcome ducky the finished setup opens: its first message (typed out on screen, no
+# model call) offers these walkthroughs (ids of the app's own tours) as buttons.
 WELCOME_DUCKY_TITLE = "Welcome to Ducky"
 WELCOME_DUCKY_TOURS: tuple[str, ...] = (
-    "app.shell",
     "chat.composer",
+    "app.shell",
     "workflows.intro",
     "workflows.first_build",
-    "settings.store",
-    "llms.setup",
     "settings.duckies",
 )
 WELCOME_DUCKY_TEXT = (
-    "Hi, I'm Ducky! Right after setup, the Welcome walkthrough shows you around the app.\n\n"
-    "Every walkthrough is below. Press one to start it, now or any time later. "
-    "Once an AI is connected, ask me anything here."
+    "## Hi, I'm Ducky!\n\n"
+    "You're all set. I'm your first ducky: ask me about your island, Verse, or anything in UEFN.\n\n"
+    "Want a quick walkthrough? Pick one below, now or any time."
 )
 
 
-def claim_welcome_ducky() -> bool:
-    """True on a fresh install's first start, once per AppData: the caller makes the
-    welcome ducky. Any later call, or an install that already used Ducky, is False."""
+def setup_open() -> bool:
+    """Whether the first-run setup must show. A fresh install opens it once and it stays open
+    across restarts until Finish; an install that already used Ducky never sees it."""
     from frontend.settings import PanelSettings
 
     fresh = bool(starter_llm_onboard_pending().get("pending"))
     with _STATE:
         settings = PanelSettings.load()
-        if bool(getattr(settings, "welcome_ducky_offered", False)):
-            return False
-        settings.welcome_ducky_offered = True
+        if settings.first_run_setup == "" and fresh:
+            settings.first_run_setup = "open"
+            settings.save()
+        return settings.first_run_setup == "open"
+
+
+def finish_setup() -> bool:
+    """Close the first-run setup for good. True once, when it was open and the welcome
+    ducky is still to make: the caller makes it."""
+    from frontend.settings import PanelSettings
+
+    with _STATE:
+        settings = PanelSettings.load()
+        was_open = settings.first_run_setup == "open"
+        make_welcome = was_open and not settings.welcome_ducky_offered
+        settings.first_run_setup = "done"
+        if make_welcome:
+            settings.welcome_ducky_offered = True
         settings.save()
-    return fresh
+    return make_welcome
 
 
 def _group(slug: str) -> str:
-    if slug in STARTER_LLM_GATEWAY_SLUGS:
-        return "gateway"
-    return "voice" if slug in STARTER_VOICE_PLUGIN_SLUGS else "editor"
+    if slug == STARTER_ACCOUNT_SLUG or slug in STARTER_LLM_GATEWAY_SLUGS:
+        return "ai"
+    if slug in STARTER_UEFN_PLUGIN_SLUGS:
+        return "uefn"
+    return "create" if slug in STARTER_CREATE_PLUGIN_SLUGS else "extras"
 
 
 def starter_plugins() -> list[dict[str, Any]]:
@@ -192,11 +225,10 @@ def starter_plugins() -> list[dict[str, Any]]:
 
 
 def starter_setup_status() -> dict[str, Any]:
-    """Whether the first-run setup is pending, which gateway plugins exist, and the bundle."""
-    pending = starter_llm_onboard_pending()
+    """Whether the first-run setup is open, which gateway plugins exist, and the bundle."""
     return {
         "ok": True,
-        "pending_first_run": bool(pending.get("pending")),
+        "pending_first_run": setup_open(),
         "gateway_ids": installed_gateway_ids(),
         "plugins": starter_plugins(),
     }
@@ -317,12 +349,12 @@ def ensure_popular_plugins(
     force: bool = False,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Install gateways, then UEFN editor plugins, then Pipe voices.
+    """Install the bundle in :data:`POPULAR_PLUGIN_SLUGS` order (gateways first).
 
     The auto path (``force=False``) runs once and skips machines that already
-    used Ducky. The corner button passes ``force=True`` so a missing bundle
-    still downloads. The seed flag flips only after Anthropic, Cursor, and
-    OpenAI are all on disk.
+    used Ducky. The setup passes ``force=True`` so a missing bundle still
+    downloads. The seed flag flips only after every gateway in
+    :data:`STARTER_LLM_GATEWAY_SLUGS` is on disk.
     """
     global _ACTIVE
     from backend.uefn_plugins.store import is_plugin_installed

@@ -1,7 +1,7 @@
 /**
- * First-run setup (Welcome → starter plugins → connect an AI) and, once it is closed, the
- * corner card that waits until a gateway plugin is installed. Its pill can be hidden; the
- * same reminder then stays at the top of Settings (SetupReminder) until setup is done.
+ * First-run setup (Welcome → starter plugins → connect an AI → defaults) and, for an install
+ * that has no gateway outside the first run, the corner card that waits until one is installed.
+ * Its pill can be hidden; the same reminder then stays at the top of Settings (SetupReminder).
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
@@ -14,19 +14,12 @@ import {
   patchStoreJob,
 } from "../hooks/storeInstallJobs";
 import { installPanelPushBus, subscribePanelPush } from "../hooks/usePanelPushBus";
-import type { PluginLlmProvider } from "../hooks/usePluginContributions";
 import { usageTrack } from "../hooks/usageTrack";
-import { openLlmsProviderSettings } from "../navigation/openSettingsTab";
 import type { StarterPluginDto } from "../types/panel";
 import { reportFirstRunSetup } from "../walkthrough/firstRunSetup";
-import { pluginTourId } from "../walkthrough/pluginWalkthroughs";
 import { ensurePopularPlugins, markStarterPluginToursCompleted } from "../walkthrough/starterLlmGateways";
-import {
-  getWalkthroughState,
-  markTourCompleted,
-  startTour,
-  subscribeWalkthrough,
-} from "../walkthrough/WalkthroughService";
+import { welcomeAfterSetup } from "../walkthrough/welcomeDucky";
+import { markTourCompleted } from "../walkthrough/WalkthroughService";
 import { SetupWizard, type InstallRow, type SetupStep } from "./SetupWizard";
 import "./gateway-setup.css";
 
@@ -83,7 +76,7 @@ export function SetupReminder() {
     <section className="gateway-setup-reminder" role="status">
       <div className="gateway-setup-reminder-text">
         <strong>Finish setting up Ducky</strong>
-        <span>Chats need an AI gateway plugin (OpenAI, Anthropic or Cursor).</span>
+        <span>Chats need an AI plugin (Anthropic, OpenAI, Google or Cursor).</span>
       </div>
       <button
         type="button"
@@ -159,14 +152,16 @@ export function GatewaySetupNotice() {
   const [rows, setRows] = useState<Record<string, InstallRow>>({});
   // The step on screen, or null when the setup is closed.
   const [wizard, setWizard] = useState<SetupStep | null>(null);
-  // The step to come back to after a "Show me how" tour.
-  const [resume, setResume] = useState<SetupStep | null>(null);
+  // The first run's setup: it can't be skipped or closed, only finished.
+  const [firstRun, setFirstRun] = useState(false);
+  // After Finish: the welcome ducky is opening, so the app's own tours keep waiting.
+  const [welcoming, setWelcoming] = useState(false);
   const [pill, setPill] = useState(false);
   const [pillHidden, setPillHidden] = useState(readPillHidden);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const decided = useRef(false);
-  // Anonymous funnel: which setup step is on screen (welcome → plugins → connect_ai → done).
+  // Anonymous funnel: which setup step is on screen (welcome → plugins → connect_ai → defaults → done).
   useEffect(() => {
     if (!wizard) return;
     usageTrack("setup.step", { step: wizard === "ai" ? "connect_ai" : wizard });
@@ -181,9 +176,12 @@ export function GatewaySetupNotice() {
     setReady(true);
     if (!decided.current) {
       decided.current = true;
-      // A new install: no gateway yet and the first run not done.
-      const open = !!status?.pending_first_run && gateways.length === 0;
-      if (open) setWizard("welcome");
+      // A new install's setup, open until Finish (a restart part way through opens it again).
+      const open = !!status?.pending_first_run;
+      if (open) {
+        setFirstRun(true);
+        setWizard("welcome");
+      }
       reportFirstRunSetup(open);
     }
   }, []);
@@ -243,26 +241,10 @@ export function GatewaySetupNotice() {
     }
   }, []);
 
-  // The Welcome tour of the app waits while the setup (or a tour it started) is in the way.
+  // The app's own tours wait while the setup, or the welcome it hands over to, is on screen.
   useEffect(() => {
-    if (decided.current) reportFirstRunSetup(wizard !== null || resume !== null);
-  }, [wizard, resume]);
-
-  // Back to the setup when the provider tour it started ends (not before it has run).
-  const tourRan = useRef(false);
-  useEffect(() => {
-    if (!resume) return;
-    return subscribeWalkthrough(() => {
-      if (getWalkthroughState().active) {
-        tourRan.current = true;
-        return;
-      }
-      if (!tourRan.current) return;
-      tourRan.current = false;
-      setWizard(resume);
-      setResume(null);
-    });
-  }, [resume]);
+    if (decided.current) reportFirstRunSetup(wizard !== null || welcoming);
+  }, [wizard, welcoming]);
 
   const install = useCallback(() => {
     setBusy(true);
@@ -291,27 +273,21 @@ export function GatewaySetupNotice() {
       });
   }, [refresh]);
 
-  const close = useCallback((reason: "skip" | "finish") => {
-    usageTrack("setup.step", { step: reason === "finish" ? "done" : "skipped" });
-    if (reason === "finish") {
-      // The setup covered the Store and LLM tours the Welcome tour would chain into.
-      markStarterPluginToursCompleted();
-      markTourCompleted("settings.store");
-      markTourCompleted("llms.setup");
-    }
+  const finish = useCallback(() => {
+    usageTrack("setup.step", { step: "done" });
+    // The setup covered the Store and LLM tours the Welcome tour would chain into.
+    markStarterPluginToursCompleted();
+    markTourCompleted("settings.store");
+    markTourCompleted("llms.setup");
     setWizard(null);
-    setResume(null);
+    setFirstRun(false);
+    setWelcoming(true);
+    void welcomeAfterSetup().finally(() => setWelcoming(false));
   }, []);
 
-  const showMe = useCallback((provider: PluginLlmProvider) => {
-    tourRan.current = false;
-    setResume("ai");
+  const close = useCallback(() => {
+    usageTrack("setup.step", { step: "closed" });
     setWizard(null);
-    void startTour(pluginTourId(provider.plugin_id), { force: true }).then((started) => {
-      if (started) return;
-      // No tour for this gateway: open its Settings page and wait in the corner.
-      openLlmsProviderSettings(provider.id);
-    });
   }, []);
 
   if (!ready) return null;
@@ -326,31 +302,13 @@ export function GatewaySetupNotice() {
         installing={busy}
         installError={error}
         onInstall={install}
-        onClose={close}
-        onShowMe={showMe}
+        onFinish={finish}
+        onClose={firstRun ? undefined : close}
       />
     );
   }
 
-  if (resume) {
-    return createPortal(
-      <div className="gateway-setup gateway-setup--corner no-drag">
-        <button
-          type="button"
-          className="gateway-setup-pill"
-          onClick={() => {
-            setWizard(resume);
-            setResume(null);
-          }}
-        >
-          Back to setup
-        </button>
-      </div>,
-      document.body,
-    );
-  }
-
-  if (gatewayIds.length > 0 || pillHidden) return null;
+  if (gatewayIds.length > 0 || pillHidden || welcoming) return null;
 
   if (pill) {
     return createPortal(
@@ -384,8 +342,8 @@ export function GatewaySetupNotice() {
           </button>
         </header>
         <p>
-          Chats need an AI gateway plugin (OpenAI, Anthropic or Cursor). Setup installs it with the UEFN editor
-          plugins, then helps you connect it.
+          Chats need an AI plugin (Anthropic, OpenAI, Google or Cursor). Setup installs it, then helps you
+          connect it.
         </p>
         <button
           type="button"

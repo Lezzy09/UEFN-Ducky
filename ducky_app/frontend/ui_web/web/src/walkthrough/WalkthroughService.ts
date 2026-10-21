@@ -242,7 +242,7 @@ export async function prevStep(): Promise<void> {
 }
 
 const HOST_CHAIN = ["app.shell", "settings.store", "llms.setup"] as const;
-const STARTER_PLUGIN_TOURS = ["plugin.anthropic", "plugin.cursor", "plugin.openai"] as const;
+const STARTER_PLUGIN_TOURS = ["plugin.anthropic", "plugin.openai", "plugin.google", "plugin.cursor"] as const;
 
 async function finishTour(reason: "complete" | "skip"): Promise<void> {
   const id = activeTourId;

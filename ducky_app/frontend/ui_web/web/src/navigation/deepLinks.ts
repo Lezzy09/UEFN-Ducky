@@ -8,6 +8,8 @@
  *   uefn-ducky://store/<slug>              → Plugins details for that Store item
  *   uefn-ducky://plugin/<slug>             → same (alias for plugin authors)
  *   uefn-ducky://store/install/<slug>      → open detail + auto-install
+ *   uefn-ducky://connected                 → back to the app after the site's Connect page
+ *                                            (the link itself brings the window forward)
  */
 import { onApiReady } from "../hooks/onApiReady";
 import { emitAppHook } from "../sfx/appHooks";
@@ -52,6 +54,8 @@ export function parseStoreDeepLink(raw: string): StoreDeepLink | null {
 }
 
 export function handleDeepLink(raw: string): boolean {
+  // The sign-in already landed (the app was waiting on that code): only the window comes forward.
+  if (/^uefn-ducky:\/\/connected\/?(?:[?#].*)?$/i.test(String(raw || "").trim())) return true;
   if (parseLoginDeepLink(raw)) {
     try {
       sessionStorage.setItem(ACCOUNT_LOGIN_KEY, "1");

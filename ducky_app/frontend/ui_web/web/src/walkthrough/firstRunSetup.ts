@@ -1,12 +1,16 @@
 /**
- * The first-run setup (Welcome → plugins → AI) runs before the Welcome tour of the app.
- * GatewaySetupNotice reports whether it is showing; WalkthroughHost waits for it.
+ * The first-run setup (Welcome → plugins → AI → defaults) runs before any tour of the app.
+ * GatewaySetupNotice reports whether it (or the welcome after it) is showing; tours wait.
  */
+
+/** The tour the setup's Finish runs (builtinTours defines its steps). */
+export const FIRST_RUN_TOUR_ID = "first.run";
 
 type Listener = () => void;
 
 let decided = false;
 let open = false;
+let shown = false;
 const listeners = new Set<Listener>();
 
 function emit(): void {
@@ -18,7 +22,13 @@ export function reportFirstRunSetup(isOpen: boolean): void {
   if (decided && open === isOpen) return;
   decided = true;
   open = isOpen;
+  if (isOpen) shown = true;
   emit();
+}
+
+/** The first-run setup was on screen this session: its Finish runs the first tour itself. */
+export function didFirstRunSetupShow(): boolean {
+  return shown;
 }
 
 export function isFirstRunSetupOpen(): boolean {
@@ -53,5 +63,6 @@ export function whenFirstRunSetupDone(decideWithinMs = 8000): Promise<void> {
 export function _resetFirstRunSetupForTests(): void {
   decided = false;
   open = false;
+  shown = false;
   listeners.clear();
 }

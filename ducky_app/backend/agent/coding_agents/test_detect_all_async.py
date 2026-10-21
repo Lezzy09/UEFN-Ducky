@@ -135,3 +135,19 @@ def test_opening_chats_and_settings_does_not_reprobe_every_cli(monkeypatch):
     list_agents()
     list_agents()
     assert calls == {"a": 2, "b": 2}
+
+
+def test_a_checking_agent_already_names_its_gateway(monkeypatch) -> None:
+    """While its CLI probe runs, an agent shows under its gateway (setup, Settings → LLMs)."""
+    import backend.uefn_plugins.host as host
+
+    monkeypatch.setattr(base, "listed_external_coding_agents", lambda: ["claude_code"])
+    monkeypatch.setattr(
+        host,
+        "get_contributions",
+        lambda: {"llm_coding_agents": [{"id": "claude_code", "label": "Claude Code", "plugin_id": "Anthropic"}]},
+    )
+    rows = {a["id"]: a for a in base._instant_detect_payload()["agents"]}
+    assert rows["claude_code"]["status"] == "Checking…"
+    assert rows["claude_code"]["plugin_id"] == "anthropic"
+    assert rows["claude_code"]["label"] == "Claude Code"

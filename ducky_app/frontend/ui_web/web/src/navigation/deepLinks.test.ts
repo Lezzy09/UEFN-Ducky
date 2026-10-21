@@ -77,3 +77,12 @@ describe("store install handshake", () => {
     expect(peekStoreInstallRequest()).toBeNull();
   });
 });
+
+describe("uefn-ducky://connected", () => {
+  it("is the site's Connect page handing back: the window comes forward, nothing else opens", () => {
+    vi.mocked(requestOpenSettings).mockReset();
+    expect(handleDeepLink("uefn-ducky://connected")).toBe(true);
+    expect(handleDeepLink("uefn-ducky://connected/")).toBe(true);
+    expect(requestOpenSettings).not.toHaveBeenCalled();
+  });
+});

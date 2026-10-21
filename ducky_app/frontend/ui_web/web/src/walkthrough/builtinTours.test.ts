@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   APP_SHELL_TOUR,
   CHAT_COMPOSER_TOUR,
+  FIRST_RUN_TOUR,
   SETTINGS_GENERAL_TOUR,
   SETTINGS_DUCKIES_TOUR,
   SETTINGS_PLANS_TOUR,
@@ -12,24 +13,36 @@ import {
 import { _resetWalkthroughServiceForTests, HOST_TOUR_CATALOG_IDS, registerTour } from "./WalkthroughService";
 
 describe("CHAT_COMPOSER_TOUR", () => {
-  it("spotlights the composer and each toolbar control", () => {
+  it("spotlights each toolbar control and walks into the menus it opens", () => {
     const targets = CHAT_COMPOSER_TOUR.steps.map((s) => s.target);
     expect(targets).toEqual([
       "chat.composer",
-      "chat.composer.input",
       "chat.composer.mode",
+      "chat.composer.mode.menu",
+      "chat.composer.permissions",
       "chat.composer.usage",
       "chat.composer.model",
+      "chat.composer.model.menu",
       "chat.composer.changes",
       "chat.composer.snip",
       "chat.composer.mic",
       "chat.composer.live",
       "chat.composer.send",
     ]);
-    expect(CHAT_COMPOSER_TOUR.steps[0]?.advance).toBe("next");
-    for (const step of CHAT_COMPOSER_TOUR.steps.slice(1)) {
-      expect(step.advance, `${step.target} should require a press`).toBe("require_click");
-    }
+    // Only controls that open a menu wait for a click; the step after each is inside that menu.
+    const clicks = CHAT_COMPOSER_TOUR.steps.filter((s) => s.advance === "require_click").map((s) => s.target);
+    expect(clicks).toEqual(["chat.composer.mode", "chat.composer.model"]);
+    for (const id of clicks) expect(targets[targets.indexOf(id) + 1]).toBe(`${id}.menu`);
+  });
+});
+
+describe("FIRST_RUN_TOUR", () => {
+  it("starts on the duckies in the left dock, walks the chat box, and ends on Settings", () => {
+    const targets = FIRST_RUN_TOUR.steps.map((s) => s.target);
+    expect(targets[0]).toBe("shell.chat_history");
+    expect(targets.slice(1, -1)).toEqual(CHAT_COMPOSER_TOUR.steps.map((s) => s.target));
+    expect(targets.at(-1)).toBe("header.settings");
+    expect(FIRST_RUN_TOUR.steps.at(-1)?.advance).toBe("next");
   });
 });
 

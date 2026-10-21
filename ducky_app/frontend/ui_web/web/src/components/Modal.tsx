@@ -21,6 +21,8 @@ interface ModalProps {
   zIndex?: number;
   /** Portal here instead of document.body so the dialog stays inside one tab. */
   container?: HTMLElement | null;
+  /** False: a click beside the dialog does nothing (a sign-in a stray click must not cancel). */
+  closeOnBackdrop?: boolean;
 }
 
 export function Modal({
@@ -37,6 +39,7 @@ export function Modal({
   bodyClassName = "",
   zIndex,
   container,
+  closeOnBackdrop = true,
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const scopeClass = useScopedClass("modal-panel");
@@ -64,7 +67,7 @@ export function Modal({
     <div
       className={`modal-backdrop no-drag ${backdropClass}${container ? " modal-backdrop--contained" : ""}`}
       onMouseDown={(e) => {
-        if (e.button !== 0) return;
+        if (e.button !== 0 || !closeOnBackdrop) return;
         const target = e.target as Node;
         if (target instanceof Element && target.closest(".dropdown-panel, .context-menu")) return;
         if (panelRef.current && !panelRef.current.contains(target)) {

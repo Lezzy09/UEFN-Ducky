@@ -34,6 +34,8 @@ export function ModeSelector({
   const anchorRef = useRef<HTMLButtonElement>(null);
   const uiTargetRef = useUiTarget(uiTarget, { kind: "dropdown", label: "Mode", route: "chat" });
   const triggerRef = useMergedRef(anchorRef, uiTargetRef);
+  // The open menu, so a tour can walk into it.
+  const menuTargetRef = useUiTarget(uiTarget ? `${uiTarget}.menu` : "", { kind: "dropdown", label: "Mode menu", route: "chat" });
 
   const currentMode = MODES.find((m) => m.id === activeMode) ?? MODES[0];
   const ModeIcon = MODE_ICON[currentMode.id];
@@ -60,7 +62,7 @@ export function ModeSelector({
         minWidth={110}
         width={110}
       >
-        <div className="mode-selector-popup">
+        <div ref={menuTargetRef} className="mode-selector-popup">
           <div className="mode-selector-popup-label">Mode</div>
           {MODES.map((m) => {
             const isSel = m.id === currentMode.id;

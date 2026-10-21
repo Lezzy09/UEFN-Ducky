@@ -319,10 +319,14 @@ class PanelSettings:
     """Ducky's Show me plays right away. Off: it only leaves the Show me button in chat."""
 
     starter_llm_gateways_seeded: bool = False
-    """First-run Store install of Anthropic / Cursor / OpenAI already attempted."""
+    """First-run Store install of every starter gateway already attempted."""
 
     welcome_ducky_offered: bool = False
     """The first start decided on the welcome ducky (made on a fresh install): never again."""
+
+    first_run_setup: str = ""
+    """First-run setup: "" never needed, "open" a fresh install's setup until Finish (it
+    reopens after a restart), "done" finished."""
 
     shared_mcp: bool = False
     """Prototype: one FastMCP daemon for multiple IDE adapters. Off by default; env UEFN_DUCKY_SHARED_MCP wins."""
@@ -519,6 +523,7 @@ class PanelSettings:
             or bool(self.walkthrough_completed)
             or self.starter_llm_gateways_seeded
             or self.welcome_ducky_offered
+            or self.first_run_setup
             or self.shared_mcp
             or self.follow_code_enabled
             or self.follow_code_off_migrated

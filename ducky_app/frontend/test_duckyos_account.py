@@ -955,3 +955,55 @@ def test_auto_apply_records_an_activity_line(monkeypatch) -> None:
     assert out["updated"] == ["openai"]
     assert lines and lines[0][0] == "store"
     assert "updated openai" in lines[0][1] and "broken: zip missing" in lines[0][1]
+
+
+def test_a_test_bed_cache_keeps_linked_store_zips_by_hash(tmp_path, monkeypatch) -> None:
+    """DUCKY_STORE_CACHE (test beds only): a second fresh profile skips the download,
+    and a cached file that doesn't match still fails the hash check."""
+    import hashlib
+
+    import pytest
+
+    from frontend import duckyos_account as acc
+
+    cache = tmp_path / "zips"
+    raw = b"PK\x03\x04 plugin bytes"
+    sha = hashlib.sha256(raw).hexdigest()
+    payload = {"url": "https://example.test/p.zip", "size": len(raw), "sha256": sha}
+    fetched: list[str] = []
+    monkeypatch.setattr(acc, "_fetch_store_zip_url", lambda url, size: fetched.append(url) or raw)
+
+    monkeypatch.delenv("DUCKY_STORE_CACHE", raising=False)
+    assert acc.store_zip_bytes(payload) == raw and not cache.exists()  # off by default
+
+    monkeypatch.setenv("DUCKY_STORE_CACHE", str(cache))
+    assert acc.store_zip_bytes(payload) == raw
+    assert acc.store_zip_bytes(payload) == raw
+    assert len(fetched) == 2  # once uncached, once to fill the cache, never again
+    (cache / f"{sha}.zip").write_bytes(b"tampered!!!!!!!!!!!!!")
+    with pytest.raises(acc.DuckyOSAccountError):
+        acc.store_zip_bytes(payload)
+
+
+def test_the_catalog_gets_a_minute_and_a_test_bed_keeps_it(tmp_path, monkeypatch) -> None:
+    """The catalog carries every icon inline: a slow link needs more than 20 s (a new install
+    showed no icons). A test bed (DUCKY_STORE_CACHE) asks the Store once per hour."""
+    from frontend import duckyos_account as acc
+
+    calls: list[float] = []
+
+    def fake_collect(event, body, *, allow_anonymous=False, timeout=0.0):
+        assert event == "catalog"
+        calls.append(timeout)
+        return {"ok": True, "items": [{"slug": "openai", "icon_data_url": "data:image/png;base64,AA"}]}
+
+    monkeypatch.setattr(acc, "_store_collect", fake_collect)
+    monkeypatch.delenv("DUCKY_STORE_CACHE", raising=False)
+    acc._store_catalog_payload()
+    acc._store_catalog_payload()
+    assert calls == [60.0, 60.0]  # a real install always asks
+
+    monkeypatch.setenv("DUCKY_STORE_CACHE", str(tmp_path / "store"))
+    first = acc._store_catalog_payload()
+    again = acc._store_catalog_payload()
+    assert len(calls) == 3 and again == first and again["items"][0]["slug"] == "openai"

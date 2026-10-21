@@ -137,7 +137,7 @@ export function DropdownPanel({
             "--dropdown-width": `${coords.panelW}px`,
             "--dropdown-max-height": `${coords.maxHeight}px`,
             "--dropdown-transform-origin": coords.transformOrigin,
-            "z-index": String(zIndex),
+            "--dropdown-z": String(zIndex),
           }}
         />
       ) : null}

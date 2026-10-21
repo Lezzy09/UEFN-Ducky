@@ -787,7 +787,10 @@ def _include_in_workspace_tree_entry(name: str, is_dir: bool, show_hidden: bool 
 def list_project_file_paths() -> list[dict[str, str]]:
     """Flat list of project + workspace .verse files for sidebar filter / quick-open."""
     global _file_paths_cache
-    root = _project_root().resolve()
+    try:
+        root = _project_root().resolve()
+    except ValueError:
+        return []  # no island yet (a fresh install): nothing to list, not an error in the log
     try:
         content_mtime = _content_dir().stat().st_mtime
     except OSError:

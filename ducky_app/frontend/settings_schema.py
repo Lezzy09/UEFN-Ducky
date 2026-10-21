@@ -330,11 +330,15 @@ FIELD_META: dict[str, FieldMeta] = {
     ),
     "starter_llm_gateways_seeded": FieldMeta(
         "Starter LLM gateways seeded", "internal",
-        description="First-run Store install of Anthropic, Cursor, and OpenAI already ran once.",
+        description="First-run Store install of every starter gateway already ran once.",
     ),
     "welcome_ducky_offered": FieldMeta(
         "Welcome ducky offered", "internal",
         description="The first start already decided on the welcome ducky that offers the walkthroughs.",
+    ),
+    "first_run_setup": FieldMeta(
+        "First-run setup", "internal",
+        description='"open" while a fresh install\'s setup is not finished, "done" after Finish.',
     ),
     "shared_mcp": FieldMeta(
         "Shared MCP backend",

@@ -245,6 +245,7 @@ export function CodingAgentLoginModal({
       title={title}
       width={480}
       zIndex={zIndex}
+      closeOnBackdrop={false}
       footer={
         <ModalActions
           onCancel={onClose}

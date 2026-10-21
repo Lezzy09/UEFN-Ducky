@@ -1,7 +1,7 @@
 /**
  * Mounts the product walkthrough overlay, registers builtin + plugin tours,
- * hydrates completion flags, opens the welcome ducky on a fresh install, and
- * auto-starts `app.shell` on the first open.
+ * hydrates completion flags, and auto-starts `app.shell` on the first open.
+ * A fresh install's setup runs its own first tour on Finish (welcomeDucky).
  */
 import { useEffect, useRef, useState } from "react";
 import { usePluginContributions } from "../hooks/usePluginContributions";
@@ -17,8 +17,7 @@ import { isCompleted, registerTour, startAppShellIfNeeded, unregisterTour } from
 import { WalkthroughOverlay } from "./WalkthroughOverlay";
 import { openCodingAgentLoginUi } from "./openCodingAgentLogin";
 import { newlyEnabledForWalkthrough, rememberEnabledPlugin } from "./firstEnable";
-import { whenFirstRunSetupDone } from "./firstRunSetup";
-import { openWelcomeDuckyOnFirstRun } from "./welcomeDucky";
+import { didFirstRunSetupShow, FIRST_RUN_TOUR_ID, whenFirstRunSetupDone } from "./firstRunSetup";
 
 const registeredPluginTourIds = new Set<string>();
 
@@ -71,11 +70,6 @@ export function WalkthroughHost() {
     newlyEnabledForWalkthrough(contrib.enabled_ids);
   }, [contrib]);
 
-  // A fresh install's first start opens the welcome ducky, which offers every walkthrough.
-  useEffect(() => {
-    void openWelcomeDuckyOnFirstRun();
-  }, []);
-
   // First open starts Welcome even with no island. A failed start stays
   // unarmed so the next attempt can retry.
   useEffect(() => {
@@ -90,7 +84,8 @@ export function WalkthroughHost() {
       // Small delay so shell targets (header/docks) finish mounting.
       await new Promise((r) => window.setTimeout(r, 400));
       if (cancelled) return;
-      if (isCompleted("app.shell")) {
+      // Done, or a new install whose setup Finish runs the first-run tour instead.
+      if (isCompleted("app.shell") || isCompleted(FIRST_RUN_TOUR_ID) || didFirstRunSetupShow()) {
         shellArmed.current = true;
         return;
       }

@@ -1,6 +1,7 @@
 /**
- * Product walkthrough overlay: dim hole + coachmark (Skip / Back / Next).
+ * Product walkthrough overlay: dim hole + coachmark (End tour / Back / Next).
  * `require_click` steps punch a click-through hole; other steps block the page.
+ * Pressing the overlay never closes a menu the tour opened (`data-dropdown-keep`).
  */
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -119,12 +120,22 @@ export function WalkthroughOverlay() {
     if (!active || !stepTarget || stepAdvance !== "require_click") return;
     const el = resolveTarget(stepTarget);
     if (!el) return;
+    // Only the click this step asked for moves on: the next step can click the same control
+    // (to reopen its menu) before this listener is gone.
+    const at = state.stepIndex;
     const onClick = () => {
-      void nextStep();
+      if (getWalkthroughState().stepIndex === at) void nextStep();
     };
     el.addEventListener("click", onClick, { capture: true });
     return () => el.removeEventListener("click", onClick, { capture: true });
-  }, [active, stepTarget, stepAdvance, epoch]);
+  }, [active, stepTarget, stepAdvance, epoch, state.stepIndex]);
+
+  // A tour that ends on a menu step leaves no menu open behind it.
+  const wasActive = useRef(false);
+  useEffect(() => {
+    if (wasActive.current && !active) document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    wasActive.current = active;
+  }, [active]);
 
   useEffect(() => {
     if (!tipRef.current) return;
@@ -138,13 +149,20 @@ export function WalkthroughOverlay() {
   const requireClick = step.advance === "require_click";
 
   return createPortal(
-    <div ref={rootRef} className="walkthrough-overlay" role="dialog" aria-modal="true" aria-label={step.title}>
+    <div
+      ref={rootRef}
+      className="walkthrough-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label={step.title}
+      data-dropdown-keep
+    >
       <div className="walkthrough-blocker" aria-hidden />
       <div className="walkthrough-hole" aria-hidden />
       <div className="walkthrough-ring" aria-hidden />
       <div ref={tipRef} className="walkthrough-tooltip">
         <button type="button" className="walkthrough-tooltip-skip" onClick={() => void skipTour()}>
-          Skip
+          End tour
         </button>
         <h3 className="walkthrough-tooltip-title">{step.title}</h3>
         <div className="walkthrough-tooltip-body"><MarkdownContent text={step.body} /></div>
@@ -161,26 +179,14 @@ export function WalkthroughOverlay() {
                 Back
               </button>
             ) : null}
-            {requireClick ? (
-              <span className="walkthrough-tooltip-count">Click the highlight</span>
-            ) : null}
-            {requireClick ? (
-              <button
-                type="button"
-                className="walkthrough-btn"
-                onClick={() => void nextStep()}
-              >
-                Skip
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="walkthrough-btn walkthrough-btn-primary"
-                onClick={() => void nextStep()}
-              >
-                {isLast ? "Got it" : "Next"}
-              </button>
-            )}
+            {/* A click step moves on when the highlight is clicked; Next steps past it. */}
+            <button
+              type="button"
+              className={`walkthrough-btn${requireClick ? "" : " walkthrough-btn-primary"}`}
+              onClick={() => void nextStep()}
+            >
+              {isLast ? "Got it" : "Next"}
+            </button>
           </div>
         </div>
       </div>

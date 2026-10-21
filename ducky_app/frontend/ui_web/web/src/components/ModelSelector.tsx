@@ -122,6 +122,8 @@ interface ModelSelectorProps {
   onEffortChange?: (effort: string) => void;
   /** A full-width trigger that names the model and its gateway (forms), not just the logo. */
   labeled?: boolean;
+  /** Stacking for the menu when the picker sits in a layer above the app (the setup). */
+  menuZIndex?: number;
 }
 
 export function ModelSelector({
@@ -142,6 +144,7 @@ export function ModelSelector({
   thinkingEffort = "off",
   onEffortChange,
   labeled = false,
+  menuZIndex,
 }: ModelSelectorProps) {
   const contrib = usePluginContributions();
   const [isOpen, setIsOpen] = useState(false);
@@ -160,6 +163,8 @@ export function ModelSelector({
   const anchorRef = useRef<HTMLButtonElement>(null);
   const uiTargetRef = useUiTarget(uiTarget, { kind: "dropdown", label: "Model", route: "chat" });
   const triggerRef = useMergedRef(anchorRef, uiTargetRef);
+  // The open menu, so a tour can walk into it.
+  const menuTargetRef = useUiTarget(uiTarget ? `${uiTarget}.menu` : "", { kind: "dropdown", label: "Model menu", route: "chat" });
   const firstHitRef = useRef<HTMLDivElement>(null);
 
   const navGatewayRef = useRef<string | null>(null);
@@ -1027,9 +1032,10 @@ export function ModelSelector({
         clip
         fill
         idealHeight={560}
+        zIndex={menuZIndex}
       >
         {twoLevel ? (
-          <div className="model-selector-nav" data-level={navGateway ? 1 : 0}>
+          <div ref={menuTargetRef} className="model-selector-nav" data-level={navGateway ? 1 : 0}>
             <div className="model-selector-navhdr">
               {navGateway && activeGateway ? (
                 <button
@@ -1083,7 +1089,7 @@ export function ModelSelector({
         ) : (
           <>
             {searchBox()}
-            <div className="model-selector-scroll">
+            <div ref={menuTargetRef} className="model-selector-scroll">
               {renderFlatOrVendor(flatRows, singleAgent, normalizedSelectedModel)}
             </div>
             {pickerExtras}

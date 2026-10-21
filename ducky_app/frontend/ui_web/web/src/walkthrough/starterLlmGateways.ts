@@ -2,7 +2,7 @@ import { getApi } from "../hooks/usePanelApi";
 import { pluginTourId } from "./pluginWalkthroughs";
 import { markTourCompleted } from "./WalkthroughService";
 
-export const STARTER_LLM_SLUGS = ["anthropic", "cursor", "openai"] as const;
+export const STARTER_LLM_SLUGS = ["account", "anthropic", "openai", "google", "cursor"] as const;
 
 let suppressStarterPluginTours = false;
 

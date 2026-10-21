@@ -36,23 +36,33 @@ def _plugin_coding_agent_aliases() -> dict[str, str]:
     return out
 
 
-def coding_agent_label(agent_id: str) -> str:
-    aid = (agent_id or "").strip().lower().replace("-", "_")
-    if aid == "ducky":
-        return "Ducky"
+def _contributed_agent_row(aid: str) -> dict[str, Any]:
+    """The gateway plugin's contribution row for a coding agent ({} when none)."""
     try:
         from backend.uefn_plugins.host import get_contributions
 
         for row in get_contributions().get("llm_coding_agents") or []:
-            if not isinstance(row, dict):
-                continue
-            if str(row.get("id") or "").strip().lower().replace("-", "_") == aid:
-                label = str(row.get("label") or "").strip()
-                if label:
-                    return label
+            if isinstance(row, dict) and str(row.get("id") or "").strip().lower().replace("-", "_") == aid:
+                return row
     except Exception:
         pass
+    return {}
+
+
+def coding_agent_label(agent_id: str) -> str:
+    aid = (agent_id or "").strip().lower().replace("-", "_")
+    if aid == "ducky":
+        return "Ducky"
+    label = str(_contributed_agent_row(aid).get("label") or "").strip()
+    if label:
+        return label
     return aid.replace("_", " ").title() if aid else "Agent"
+
+
+def coding_agent_plugin_id(agent_id: str) -> str:
+    """The gateway plugin that registered a coding agent ("" for Ducky or unknown)."""
+    aid = (agent_id or "").strip().lower().replace("-", "_")
+    return str(_contributed_agent_row(aid).get("plugin_id") or "").strip().lower()
 
 
 # Back-compat for importers that still read these names.
@@ -430,7 +440,8 @@ def _instant_detect_payload() -> dict[str, Any]:
                 "default_args": "",
                 "install_help": "",
                 "shows_thinking_effort": False,
-                "plugin_id": "",
+                # Known before the probe ends, so the agent shows under its gateway meanwhile.
+                "plugin_id": coding_agent_plugin_id(key),
                 "capabilities": {},
                 "models": [],
             }

@@ -1901,7 +1901,7 @@ export interface CrashReportsState {
 export interface StarterPluginDto {
   slug: string;
   label: string;
-  group: "gateway" | "editor" | "voice";
+  group: "ai" | "uefn" | "create" | "extras";
   installed: boolean;
 }
 
@@ -3329,8 +3329,8 @@ export interface PanelApi {
     grandfathered?: boolean;
     error?: string;
   }>;
-  /** A fresh install's first start: makes the welcome ducky (once per AppData). */
-  welcome_ducky_first_run?(): Promise<{
+  /** Finish the first-run setup: makes the welcome ducky (once per AppData). */
+  finish_first_run_setup?(): Promise<{
     ok?: boolean;
     created?: boolean;
     id?: string;
@@ -3339,6 +3339,7 @@ export interface PanelApi {
   }>;
   starter_setup_status?(): Promise<{
     ok?: boolean;
+    /** The first-run setup is open: a fresh install's, until Finish. */
     pending_first_run?: boolean;
     gateway_ids?: string[];
     /** The first-run bundle, in install order, with what is on disk now. */

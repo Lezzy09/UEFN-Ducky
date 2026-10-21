@@ -2013,6 +2013,28 @@ def _store_audience_fields(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _store_catalog_payload() -> dict[str, Any]:
+    """The Store's catalog response. It carries every icon inline (1-2 MB), so on a slow link
+    (a phone tether) it gets a minute, not 20 s, which used to leave a new install with no icons.
+    A test bed (``DUCKY_STORE_CACHE``) reuses its last catalog for an hour per account, so each
+    fresh profile has them at once; real installs always ask the Store."""
+    cache = _store_cache_dir()
+    path = cache / f"catalog-{account_key(_load_blob()) or 'anonymous'}.json" if cache else None
+    if path and path.is_file() and time.time() - path.stat().st_mtime < 3600:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+    payload = _store_collect("catalog", {}, allow_anonymous=True, timeout=60.0)
+    if path:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload), encoding="utf-8")
+        except OSError:
+            pass  # a cache that can't be written only means asking again
+    return payload
+
+
 def store_catalog() -> dict[str, Any]:
     """Published store items + local install/update state for skills and UEFN plugins.
 
@@ -2021,14 +2043,14 @@ def store_catalog() -> dict[str, Any]:
     account show; signed out it is the anonymous public catalog.
     """
     try:
-        payload = _store_collect("catalog", {}, allow_anonymous=True, timeout=20.0)
+        payload = _store_catalog_payload()
     except DuckyOSAccountError as exc:
         # Transient 403 right after a large download — one quiet retry.
         msg = (exc.message or "").lower()
         if "forbidden" in msg or exc.code in ("store_error", "forbidden"):
             try:
                 __import__("time").sleep(0.45)
-                payload = _store_collect("catalog", {}, allow_anonymous=True, timeout=20.0)
+                payload = _store_catalog_payload()
             except DuckyOSAccountError as retry_exc:
                 return {
                     "ok": False,
@@ -2468,6 +2490,24 @@ def _fetch_store_zip_url(url: str, size: int, *, timeout: float = 120.0) -> byte
     return bytes(buf)
 
 
+def _store_cache_dir() -> Path | None:
+    """Test beds only: ``DUCKY_STORE_CACHE`` is a folder that outlives each fresh test profile,
+    holding Store zips and the catalog. Never set in a real install."""
+    import os
+
+    root = os.environ.get("DUCKY_STORE_CACHE", "").strip()
+    return Path(root) if root else None
+
+
+def _store_zip_cache(sha256: str) -> Path | None:
+    """A test bed's copy of a linked Store zip, by its sha256: a fresh profile installs without
+    downloading it again. The cached bytes still pass the same size and hash checks."""
+    root = _store_cache_dir()
+    if not root or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        return None
+    return root / f"{sha256}.zip"
+
+
 def store_zip_bytes(payload: dict[str, Any]) -> bytes:
     """The zip a Store response carries — inline ``zipB64`` (small) or a short-lived
     ``url`` (big, e.g. compiled plugins) — checked against the response's sha256 and size
@@ -2497,11 +2537,20 @@ def store_zip_bytes(payload: dict[str, Any]) -> bytes:
         except Exception as exc:
             raise DuckyOSAccountError(f"Invalid zip data: {exc}", code="store_bad_zip") from exc
     else:
-        raw = _fetch_store_zip_url(url, size)
+        cached = _store_zip_cache(expected)
+        raw = cached.read_bytes() if cached and cached.is_file() else _fetch_store_zip_url(url, size)
     if size and len(raw) != size:
         raise DuckyOSAccountError("Downloaded zip has the wrong size", code="store_hash_mismatch")
     if hashlib.sha256(raw).hexdigest() != expected:
         raise DuckyOSAccountError("Downloaded zip failed hash check", code="store_hash_mismatch")
+    if url:
+        cached = _store_zip_cache(expected)
+        if cached and not cached.is_file():
+            try:
+                cached.parent.mkdir(parents=True, exist_ok=True)
+                cached.write_bytes(raw)
+            except OSError:
+                pass  # a cache that can't be written only means downloading again
     return raw
 
 

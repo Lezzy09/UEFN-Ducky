@@ -135,11 +135,16 @@ def test_setup_status_lists_the_bundle_with_what_is_installed(isolated_appdata) 
     plugins = starter_setup_status()["plugins"]
     assert [p["slug"] for p in plugins] == list(POPULAR_PLUGIN_SLUGS)
     by_slug = {p["slug"]: p for p in plugins}
-    assert by_slug["openai"] == {"slug": "openai", "label": "OpenAI", "group": "gateway", "installed": True}
-    assert by_slug["anthropic"]["installed"] is False
-    assert by_slug["uefn"]["group"] == "editor" and by_slug["uefn"]["installed"] is True
+    assert by_slug["openai"] == {"slug": "openai", "label": "OpenAI", "group": "ai", "installed": True}
+    assert by_slug["anthropic"]["installed"] is False and by_slug["google"]["group"] == "ai"
+    assert by_slug["uefn"]["group"] == "uefn" and by_slug["uefn"]["installed"] is True
     assert by_slug["uefn"]["label"] == "UEFN" and "leveldesign" not in by_slug
-    assert by_slug["piper"]["group"] == "voice" and by_slug["piper"]["label"] == "Pipe voices"
+    assert by_slug["playtester"]["group"] == "uefn" and by_slug["typesafe"]["group"] == "uefn"
+    assert {s for s, p in by_slug.items() if p["group"] == "create"} == {"blender", "meshy", "adobe", "island-media-kit"}
+    assert by_slug["piper"]["group"] == "extras" and by_slug["piper"]["label"] == "Pipe voices"
+    # The account (Ducky AI) and the gateways install first, so Connect AI can start while the rest land.
+    assert [p["slug"] for p in plugins][:5] == ["account", "anthropic", "openai", "google", "cursor"]
+    assert {p["group"] for p in plugins[:5]} == {"ai"} and by_slug["account"]["label"] == "Ducky Account"
 
 
 def test_setup_turns_on_a_plugin_that_ships_off(isolated_appdata, monkeypatch) -> None:
@@ -168,28 +173,40 @@ def _welcome_api(monkeypatch):
     return PanelApiChatsMixin(), opened
 
 
-def test_a_fresh_install_makes_the_welcome_ducky_once(isolated_appdata, monkeypatch) -> None:
+def test_the_setup_stays_open_until_finish_then_makes_the_welcome_ducky_once(isolated_appdata, monkeypatch) -> None:
     from frontend.starter_llm_gateways import WELCOME_DUCKY_TITLE, WELCOME_DUCKY_TOURS
     from frontend.ui_web.panel_api import _messages_to_ui, load_conversation
 
+    def _fake_download(slug: str, **_kwargs):
+        _write_plugin(isolated_appdata, slug, {"llm.providers": [{"id": slug}]} if slug == "openai" else None)
+        return {"ok": True, "kind": "plugin", "id": slug}
+
+    monkeypatch.setattr("frontend.duckyos_account.store_download_and_install", _fake_download)
+    assert starter_setup_status()["pending_first_run"] is True  # a fresh install
+    ensure_starter_llm_gateways(force=True)
+    # Plugins in (and seeded) is not finished: quitting now reopens the setup on the next start.
+    assert starter_llm_onboard_pending()["pending"] is False
+    assert starter_setup_status()["pending_first_run"] is True
+
     api, opened = _welcome_api(monkeypatch)
-    made = api.welcome_ducky_first_run()
+    made = api.finish_first_run_setup()
     assert made["ok"] and made["created"] and made["title"] == WELCOME_DUCKY_TITLE
     assert opened == [made["id"]]  # announced (tab opens) with its message already in it
+    assert starter_setup_status()["pending_first_run"] is False
 
     conv = load_conversation(made["id"])
     rows = _messages_to_ui(conv)
     assert [r["role"] for r in rows] == ["assistant"]
-    assert rows[0]["tours"] == list(WELCOME_DUCKY_TOURS) and "app.shell" in rows[0]["tours"]
+    assert rows[0]["tours"] == list(WELCOME_DUCKY_TOURS) and "chat.composer" in rows[0]["tours"]
     assert "walkthrough" in rows[0]["text"].lower()
 
-    again = api.welcome_ducky_first_run()  # every later start
-    assert again == {"ok": True, "created": False}
+    assert api.finish_first_run_setup() == {"ok": True, "created": False}  # a second Finish
     assert opened == [made["id"]]
 
 
-def test_an_install_that_already_used_ducky_gets_no_welcome_ducky(isolated_appdata, monkeypatch) -> None:
+def test_an_install_that_already_used_ducky_gets_no_setup_and_no_welcome_ducky(isolated_appdata, monkeypatch) -> None:
     _write_plugin(isolated_appdata, "uefn")
+    assert starter_setup_status()["pending_first_run"] is False
     api, opened = _welcome_api(monkeypatch)
-    assert api.welcome_ducky_first_run() == {"ok": True, "created": False}
+    assert api.finish_first_run_setup() == {"ok": True, "created": False}
     assert opened == []

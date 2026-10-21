@@ -31,6 +31,7 @@ interface DuckyModelPickerProps {
   convId?: string;
   /** A full-width button naming the model and its gateway (forms) instead of the logo. */
   labeled?: boolean;
+  menuZIndex?: number;
 }
 
 function normalizeAgentModelId(_agentId: string, modelId: string): string {
@@ -74,6 +75,7 @@ export function DuckyModelPicker({
   onEffortChange,
   convId,
   labeled = false,
+  menuZIndex,
 }: DuckyModelPickerProps) {
   const value = (model || "").trim();
   const contrib = usePluginContributions();
@@ -135,6 +137,7 @@ export function DuckyModelPicker({
       onEffortChange={onEffortChange}
       convId={convId}
       labeled={labeled}
+      menuZIndex={menuZIndex}
     />
   );
 

@@ -83,6 +83,7 @@ import {
   startTour,
 } from "../walkthrough/WalkthroughService";
 import { whenWalkthroughHydrated } from "../walkthrough/persistence";
+import { whenFirstRunSetupDone } from "../walkthrough/firstRunSetup";
 import { isAutoTranslateChat } from "../navigation/tabTranslatePrefs";
 import { usePluginUiPrefs } from "../hooks/usePluginUiPrefs";
 import { requestChatTranslateWalk } from "../navigation/openTranslatedChat";
@@ -227,6 +228,8 @@ export function ChatPane({
     let cancelled = false;
     void (async () => {
       await whenWalkthroughHydrated();
+      // Never behind the first-run setup: its Finish runs the chat walkthrough itself.
+      await whenFirstRunSetupDone();
       if (cancelled) return;
       await new Promise((r) => window.setTimeout(r, 400));
       if (cancelled) return;

@@ -2,6 +2,7 @@ import { requestShowChatComposer } from "../navigation/openChatComposer";
 import { requestOpenDockSide } from "../navigation/openSidebarPanel";
 import { requestOpenSettings } from "../navigation/openSettingsTab";
 import { getTargetElement, settingsTabTargetId } from "../ui-targets/registry";
+import { FIRST_RUN_TOUR_ID } from "./firstRunSetup";
 import { listEnabledGatewayTours } from "./pluginWalkthroughs";
 import {
   markStarterPluginToursCompleted,
@@ -485,30 +486,72 @@ export const APP_SHELL_TOUR: WalkthroughDef = {
   ],
 };
 
+/** Close the menu a step opened (menus stay open while the tour card is pressed). */
+function closeMenus(): Promise<void> {
+  document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+  return wait(120);
+}
+
+/** A menu step: open the menu again when it closed (Back, or Next instead of a click). */
+function openMenu(trigger: string): () => Promise<void> {
+  return async () => {
+    // The click that brought us here is still opening it: give it a moment before deciding.
+    await wait(250);
+    if (getTargetElement(`${trigger}.menu`)) return;
+    getTargetElement(trigger)?.click();
+    await wait(200);
+  };
+}
+
+/** The chat box: menus open and walk through what is inside; everything else is look-only. */
+function chatComposerSteps(): WalkthroughStep[] {
+  return [
+    nextStep("chat.composer", "Chat box", "Type to your ducky here. The buttons under it are the rest of this tour.", async () => {
+      requestShowChatComposer();
+      await wait(400);
+    }),
+    clickStep("chat.composer.mode", "Mode", "How your ducky works. Click it to see the choices.", closeMenus),
+    nextStep(
+      "chat.composer.mode.menu",
+      "Ask, Plan, Agent",
+      "**Ask** answers questions. **Plan** writes a plan first. **Agent** does the work in your island.",
+      openMenu("chat.composer.mode"),
+    ),
+    nextStep("chat.composer.permissions", "Permissions", "What this chat may do without asking you first.", closeMenus),
+    nextStep("chat.composer.usage", "Memory", "How full this chat's memory is. Click it any time for details."),
+    clickStep("chat.composer.model", "Model", "Which AI answers this chat. Click it to see your choices.", closeMenus),
+    nextStep(
+      "chat.composer.model.menu",
+      "Your AIs",
+      "Every AI you connected. Open one to pick a model, or a coding agent that runs on your plan. The gear sets the default for new chats.",
+      openMenu("chat.composer.model"),
+    ),
+    nextStep("chat.composer.changes", "Changes", "Every file this chat changed, with undo for each turn.", closeMenus),
+    nextStep("chat.composer.snip", "Snip", "Grab part of your screen and drop it into the chat."),
+    nextStep("chat.composer.mic", "Mic", "Talk instead of typing."),
+    nextStep("chat.composer.live", "Live", "A spoken back-and-forth with your ducky."),
+    nextStep("chat.composer.send", "Send", "Send, or press Enter. Try it: say hi!"),
+  ];
+}
+
 export const CHAT_COMPOSER_TOUR: WalkthroughDef = {
   id: "chat.composer",
   title: "Chat",
-  description: "Composer, mode, usage, model, changes, snip, mic, live voice, and send.",
+  description: "Mode, permissions, memory, model, changes, snip, mic, live voice, and send.",
+  autoStart: "never",
+  steps: chatComposerSteps(),
+};
+
+/** Right after the first-run setup: the new ducky in the left dock, then its chat box. */
+export const FIRST_RUN_TOUR: WalkthroughDef = {
+  id: FIRST_RUN_TOUR_ID,
+  title: "First steps",
+  description: "Your duckies, the chat box, and where Settings are.",
   autoStart: "never",
   steps: [
-    nextStep(
-      "chat.composer",
-      "Chat box",
-      "Type here and send. The toolbar under the box is the rest of this tour.",
-      async () => {
-        requestShowChatComposer();
-        await wait(400);
-      },
-    ),
-    clickStep("chat.composer.input", "Message", "Click the text box — this is where you type to the ducky."),
-    clickStep("chat.composer.mode", "Mode", "Click Mode — Ask answers questions, Plan outlines work, Agent edits the island."),
-    clickStep("chat.composer.usage", "Usage", "Click the ring — context used, files in session, and a reset live here."),
-    clickStep("chat.composer.model", "Model", "Click the picker — choose a model or a coding agent for this chat."),
-    clickStep("chat.composer.changes", "Ledger", "Click Ledger — every file this chat wrote, with revert per turn."),
-    clickStep("chat.composer.snip", "Snip", "Click Snip — capture a screen region and drop it into the chat."),
-    clickStep("chat.composer.mic", "Mic", "Click the mic — dictate instead of typing."),
-    clickStep("chat.composer.live", "Live chat", "Click Live — talk back and forth with spoken replies."),
-    clickStep("chat.composer.send", "Enter", "Click Send (or press Enter) to run the prompt."),
+    nextStep("shell.chat_history", "Your duckies", "Each ducky is a chat. Your first one is here.", () => openDock("left")),
+    ...chatComposerSteps(),
+    nextStep("header.settings", "Settings", "Plugins, AI, voices, and every walkthrough live here.", closeMenus),
   ],
 };
 
@@ -686,6 +729,7 @@ export function registerBuiltinTours(register: (def: WalkthroughDef) => void): v
   for (const tour of WORKFLOWS_TOURS) register(tour);
   register(APP_SHELL_TOUR);
   register(CHAT_COMPOSER_TOUR);
+  register(FIRST_RUN_TOUR);
   register(SETTINGS_GENERAL_TOUR);
   register(SETTINGS_DUCKIES_TOUR);
   register(SETTINGS_PLANS_TOUR);

@@ -30,18 +30,35 @@ interface Entry {
   meta: UiTargetMeta;
 }
 
-const registry = new Map<string, Entry>();
+// Several components can carry one id (the docked Duckies list and a hidden copy of it), so an
+// id keeps every element that tagged it. One leaving must not take the id from the others.
+const registry = new Map<string, Entry[]>();
 
 export function registerTarget(id: string, el: HTMLElement, meta: UiTargetMeta = {}): void {
-  registry.set(id, { el, meta });
+  registry.set(id, [...(registry.get(id) || []).filter((e) => e.el !== el), { el, meta }]);
 }
 
-export function unregisterTarget(id: string): void {
-  registry.delete(id);
+function keepOnly(id: string, keep: (e: Entry) => boolean): void {
+  const left = (registry.get(id) || []).filter(keep);
+  if (left.length) registry.set(id, left);
+  else registry.delete(id);
+}
+
+/** Forget `el` for `id`, or the whole id when no element is named. */
+export function unregisterTarget(id: string, el?: HTMLElement): void {
+  if (el) keepOnly(id, (e) => e.el !== el);
+  else registry.delete(id);
+}
+
+/** The element an id means now: the newest visible one still on the page, else the newest on it. */
+function entryFor(id: string): Entry | null {
+  const live = (registry.get(id) || []).filter((e) => e.el.isConnected);
+  for (let i = live.length - 1; i >= 0; i--) if (isVisible(live[i]!.el)) return live[i]!;
+  return live[live.length - 1] ?? null;
 }
 
 export function getTargetElement(id: string): HTMLElement | null {
-  return registry.get(id)?.el ?? null;
+  return entryFor(id)?.el ?? null;
 }
 
 function isVisible(el: HTMLElement): boolean {
@@ -79,7 +96,9 @@ export interface UiTargetInfo {
 export function listTargets(routeHint = ""): UiTargetInfo[] {
   const hint = routeHint.trim();
   const out: UiTargetInfo[] = [];
-  for (const [id, entry] of registry) {
+  for (const id of registry.keys()) {
+    const entry = entryFor(id);
+    if (!entry) continue;
     const route = entry.meta.route ?? "";
     if (hint && route && !route.startsWith(hint) && !id.startsWith(hint)) continue;
     const rect = entry.el.getBoundingClientRect();
@@ -123,11 +142,17 @@ export function useMergedRef<T extends HTMLElement>(
 export function useUiTarget(id: string, meta: UiTargetMeta = {}) {
   const metaRef = useRef(meta);
   metaRef.current = meta;
+  const elRef = useRef<HTMLElement | null>(null);
   return useCallback(
     (el: HTMLElement | null) => {
       if (!id) return;
-      if (el) registerTarget(id, el, metaRef.current);
-      else unregisterTarget(id);
+      if (el) {
+        elRef.current = el;
+        registerTarget(id, el, metaRef.current);
+      } else if (elRef.current) {
+        unregisterTarget(id, elRef.current);
+        elRef.current = null;
+      }
     },
     [id],
   );
@@ -147,7 +172,13 @@ export function targetRef(id: string, meta: UiTargetMeta = {}) {
   if (!fn) {
     fn = (el: HTMLElement | null) => {
       if (el) registerTarget(id, el, metaCache.get(id) ?? {});
-      else unregisterTarget(id);
+      // One callback serves every copy, so React's null doesn't say which left: drop the ones
+      // off the page, now and once the commit has removed the old node.
+      else {
+        const prune = () => keepOnly(id, (e) => e.el.isConnected);
+        prune();
+        queueMicrotask(prune);
+      }
     };
     refCache.set(id, fn);
   }

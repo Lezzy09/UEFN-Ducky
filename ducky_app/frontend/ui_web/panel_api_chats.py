@@ -308,21 +308,22 @@ class PanelApiChatsMixin:
         _pa.notify_chats_changed(conv.id, conv.title, folder_id)
         return _conversation_row(conv)
 
-    def welcome_ducky_first_run(self) -> dict[str, Any]:
-        """A fresh install's first start: make the welcome ducky, whose first message offers
-        the walkthroughs. Once per AppData; every later call is ``created: False``."""
+    def finish_first_run_setup(self) -> dict[str, Any]:
+        """Finish the first-run setup and make the welcome ducky, whose first message offers
+        the walkthroughs. Made after the setup saved the Default Model, so the chat starts on
+        it. Once per AppData; every later call is ``created: False``."""
         import time
 
         from frontend.starter_llm_gateways import (
             WELCOME_DUCKY_TEXT,
             WELCOME_DUCKY_TITLE,
             WELCOME_DUCKY_TOURS,
-            claim_welcome_ducky,
+            finish_setup,
         )
         from frontend.ui_web.project_chats import append_message
 
         try:
-            if not claim_welcome_ducky():
+            if not finish_setup():
                 return {"ok": True, "created": False}
             conv = self._new_conversation("", None, None, {"title": WELCOME_DUCKY_TITLE})
             append_message(
