@@ -405,11 +405,14 @@ PANEL_ERROR_SCRIPT = (
 #   ``data-live-id``, else an id, else a short tag path from the nearest id), the point as a
 #   fraction of that element, and the screen it is on; a click on something that isn't a
 #   control reports a selection (an outline for 10 s);
-# - its screen (``live.view``: a view id and scroll positions) and its tab clicks
-#   (``live.nav``: ``role="tab"``, ``a[href^="#"]``, ``data-live-nav``) go to the group; a
-#   page following that PC (bridge event ``live.follow``) scrolls with it and clicks the
-#   same tabs. Teammates' pointers are drawn with their name in a click-through layer and
-#   fade after 5 s; one on another screen, or whose element isn't on this one, doesn't show.
+# - its screen (``live.view``: a view id, the plugin's ``data-live-view`` as ``at``, and
+#   scroll positions; again every 5 s, so a page that joins or reloads catches up) and its
+#   tab clicks (``live.nav``: ``role="tab"``, ``a[href^="#"]``, ``data-live-nav``) go to the
+#   group; a page following that PC (bridge event ``live.follow``) goes to the same screen
+#   (the window event ``ducky-live-goto`` with ``detail.view`` = the host's ``at``, which
+#   the plugin opens), scrolls with it once it shows that screen, and clicks the same tabs.
+#   Teammates' pointers are drawn with their name in a click-through layer and fade after
+#   5 s; one on another screen, or whose element isn't on this one, doesn't show.
 #
 # On a team copy (bridge event ``sync.state``), live or not:
 # - pressing a control holds it (``live.hold``): a text field, list or editable while it has
@@ -428,7 +431,8 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
   var C = "uefn-plugin-ui", on = false, n = 0, last = 0, cur = {}, sel = {}, L = null;
   var mine = {}, theirs = {}, far = [], boxes = {}, before = new WeakMap(), down = null, shared = false, incoming = 0, missing = [];
   var following = "", replaying = false, scrolled = [], sentView = "", viewAt = 0, holdsAsk = "";
-  var HOLD_AFTER_MS = 1500, HOLD_RENEW_MS = 10000, HOLD_STALE_MS = 30000, VIEW_GAP_MS = 250;
+  var lead = null, wentTo = "", wentFrom = "", wentAt = 0, scrolledTo = "";
+  var HOLD_AFTER_MS = 1500, HOLD_RENEW_MS = 10000, HOLD_STALE_MS = 30000, VIEW_GAP_MS = 250, VIEW_EVERY_MS = 5000;
   var CONTROL = 'input,textarea,select,button,[contenteditable=""],[contenteditable="true"],[role="button"],[role="slider"],' +
     '[role="checkbox"],[role="switch"],[role="textbox"],[role="spinbutton"],[role="combobox"],[role="option"],' +
     '[role="menuitem"],[draggable="true"],[data-live-lock]';
@@ -456,11 +460,15 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
     if (a === DOC) return document.scrollingElement || document.documentElement;
     try { return a ? document.querySelector(a) : null; } catch (e) { return null; }
   }
+  function marks() {  // the screen as the plugin names it (data-live-view)
+    var m = document.querySelectorAll("[data-live-view]"), parts = [];
+    for (var i = 0; i < m.length && i < 8; i++) parts.push(m[i].getAttribute("data-live-view"));
+    return parts;
+  }
   // The screen this page shows: the plugin's data-live-view marks, else its title, address
   // and selected tabs. A hold or pointer from another screen never shows on this one.
   function view() {
-    var marks = document.querySelectorAll("[data-live-view]"), parts = [], i;
-    for (i = 0; i < marks.length && i < 8; i++) parts.push(marks[i].getAttribute("data-live-view"));
+    var parts = marks(), i;
     if (!parts.length) {
       parts.push(document.title, location.hash);
       var picked = document.querySelectorAll('[aria-selected="true"],[aria-current]:not([aria-current="false"])');
@@ -633,14 +641,31 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
       var el = seen[i];
       if (el && (el === seen[0] || el.isConnected)) rows.push({ anchor: anchor(el), top: el.scrollTop || 0, left: el.scrollLeft || 0 });
     }
-    req("live.view", { v: v, scroll: rows });
+    req("live.view", { v: v, at: marks().join("|").slice(0, 400), scroll: rows });
   }
+  // The host's screen: this page goes there when the host moved (the plugin opens it), again
+  // every 5 s while this page is still where the last try left it (not there yet), never when
+  // the follower moved away by themselves; and scrolls with it once it shows the same screen.
   function follow(d) {
+    var at = typeof d.at === "string" ? d.at : "", mine = marks().join("|"), t = Date.now();
+    if (at && at !== mine && (at !== wentTo || (mine === wentFrom && t - wentAt >= VIEW_EVERY_MS))) {
+      wentTo = at; wentFrom = mine; wentAt = t;
+      window.dispatchEvent(new CustomEvent("ducky-live-goto", { detail: { view: at } }));
+    }
+    lead = d;
+    catchUp();
+  }
+  function catchUp() {
+    if (!lead || !here(lead.v)) return;
+    var rows = lead.scroll || [], s = JSON.stringify(rows);
+    lead = null;
+    if (s === scrolledTo) return;
+    scrolledTo = s;
     replaying = true;
     try {
-      (d.scroll || []).forEach(function (s) {
-        var el = find(s.anchor);
-        if (el) { el.scrollTop = +s.top || 0; el.scrollLeft = +s.left || 0; }
+      rows.forEach(function (r) {
+        var el = find(r.anchor);
+        if (el) { el.scrollTop = +r.top || 0; el.scrollLeft = +r.left || 0; }
       });
     } finally { setTimeout(function () { replaying = false; }, 50); }
   }
@@ -679,7 +704,8 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
       else if (t - h.sent >= HOLD_RENEW_MS) { h.sent = t; req("live.hold", { anchor: a, on: true, t: h.t, v: h.v }); }
     }
     for (var p in theirs) for (var b in theirs[p]) if (t - theirs[p][b].at > HOLD_STALE_MS) delete theirs[p][b];
-    if (on && view() !== sentView) sendView(true);
+    if (on && (view() !== sentView || t - viewAt >= VIEW_EVERY_MS)) sendView(true);
+    if (following) catchUp();
     paint();
   }, 1000);
   function replace() { for (var j in sel) over(sel[j].el, find(sel[j].a)); for (var b in boxes) over(boxes[b].el, boxes[b].t); }
@@ -747,7 +773,7 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
     else if (e.type === "live.message" && on && e.topic === "ducky.hold") theirHold(from, e.data || {});
     else if (e.type === "live.message" && on && e.topic === "ducky.view" && following && key(from) === following) follow(e.data || {});
     else if (e.type === "live.message" && on && e.topic === "ducky.nav" && following && key(from) === following) navigate(e.data || {});
-    else if (e.type === "live.follow") following = String(e.device || "");
+    else if (e.type === "live.follow") { following = String(e.device || ""); lead = null; wentTo = wentFrom = scrolledTo = ""; }
     else if (e.type === "live.holds") farHolds(e.holds);
     else if (e.type === "live.peers") {
       var keep = {};

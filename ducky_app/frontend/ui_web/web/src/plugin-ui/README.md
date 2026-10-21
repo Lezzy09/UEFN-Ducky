@@ -182,18 +182,23 @@ a server but the first hello. With no plugin code:
   once, everyone else within seconds through presence. The earlier of two presses keeps
   it. `data-live-lock` makes any element holdable, `data-live-nolock` opts a control out;
   links and tabs never hold.
-- **Follow** on the Live list: a member's page scrolls with the host's and clicks the same
-  tabs (`role="tab"`, `a[href^="#"]`, `data-live-nav`); nothing else is ever clicked for
-  them.
+- **Follow** on the Live list: a member's page goes to the host's screen, scrolls with it
+  there and clicks the same tabs (`role="tab"`, `a[href^="#"]`, `data-live-nav`); nothing
+  else is ever clicked for them. Going there is the plugin's: when the host's
+  `data-live-view` isn't this page's, the page gets the window event `ducky-live-goto`
+  (`detail.view`: the host's `data-live-view`, several joined with `|`) on joining, on a
+  reload and each time the host moves. Open that screen (check it: it came from another
+  PC); a page that ignores it stays where it is.
 - an `<img>` or `<video>` that fails to load on a team copy shows a placeholder the size
   of the picture ("Getting picture…" while teammates' changes come in) and loads again
   after each sync.
 
 Give elements people point at or press a stable `data-live-id` (else `id`, else their
 place in the page) so a pointer or a hold lands on the same thing on every PC, and mark
-what a screen shows with `data-live-view` (the open project's id, say) so holds and
-pointers never cross from one project to another. Without it, a screen is its title,
-address and selected tabs.
+what a screen shows with `data-live-view` (the open project's id and tab, say) so holds
+and pointers never cross from one screen to another: a teammate's pointer only shows
+while both pages show the same screen. Without it, a screen is its title, address and
+selected tabs.
 `live.join({ room })` joins a named room of the plugin's own.
 
 The host also pushes `{ type: "live.state", on }` on load and when live goes on or off,

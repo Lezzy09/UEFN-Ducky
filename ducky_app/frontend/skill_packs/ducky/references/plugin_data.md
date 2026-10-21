@@ -137,7 +137,11 @@ code for it; these rules decide how well it works for people editing together.
   held for them**: for every teammate on the same screen that control greys out with
   their name until they let go. A page that shows different things at one address names
   its screen with `data-live-view` on `<body>` (`<record id>:<tab>`), so a hold never
-  greys out a control on another record. Pictures and videos that are still syncing show
+  greys out a control on another record and a pointer only shows to people on the same
+  screen. A follower on another screen gets the window event `ducky-live-goto`
+  (`detail.view` = the host's `data-live-view`) on joining and whenever the host moves:
+  open that record and tab (check it first), so joining a group lands on the host's
+  screen. Pictures and videos that are still syncing show
   a placeholder and load when they arrive. For short-lived things that aren't data (a
   playhead, a drag in progress) a backend uses `api.live.send(topic, data)` and
   `api.live.on(topic, callback)`, a panel `live.send` (see `ai_plugins`). Data still

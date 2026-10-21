@@ -237,6 +237,7 @@ it("following the host: their scroll and tab clicks are replayed here, nobody el
   const clicks = vi.fn();
   tab.addEventListener("click", clicks);
   tell({ type: "live.state", on: true });
+  const v = sent.find((m) => m.method === "live.view")?.params.v as string;
   tell({ type: "live.follow", device: "d1" });
   tell({ type: "live.message", topic: "ducky.nav", from: { name: "Sam", device: "d2" }, data: { anchor: '[id="video-tab"]' } });
   expect(clicks).not.toHaveBeenCalled();
@@ -246,11 +247,57 @@ it("following the host: their scroll and tab clicks are replayed here, nobody el
   // A button that isn't a tab is never clicked for you.
   tell({ type: "live.message", topic: "ducky.nav", from: ALEX, data: { anchor: "body>button:nth-of-type(1)" } });
   const list = document.getElementById("list") as HTMLElement;
-  tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: { v: "x", scroll: [{ anchor: '[id="list"]', top: 120, left: 0 }] } });
+  tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: { v, scroll: [{ anchor: '[id="list"]', top: 120, left: 0 }] } });
   expect(list.scrollTop).toBe(120);
   tell({ type: "live.follow", device: "" });
-  tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: { v: "x", scroll: [{ anchor: '[id="list"]', top: 0, left: 0 }] } });
+  tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: { v, scroll: [{ anchor: '[id="list"]', top: 0, left: 0 }] } });
   expect(list.scrollTop).toBe(120);
+});
+
+it("following the host goes to their screen (the plugin opens it), then scrolls with it there", () => {
+  document.body.insertAdjacentHTML("beforeend", '<div id="list" style="overflow:auto"></div>');
+  const went: string[] = [];
+  const onGo = (e: Event) => went.push((e as CustomEvent<{ view: string }>).detail.view);
+  window.addEventListener("ducky-live-goto", onGo);
+  document.body.setAttribute("data-live-view", "p1:video");
+  tell({ type: "live.state", on: true });
+  // What this page sends names its screen the plugin's way, so a follower can open it.
+  const video = sent.find((m) => m.method === "live.view")?.params;
+  expect(video).toMatchObject({ at: "p1:video" });
+  const hostView = { v: video?.v, at: "p1:video", scroll: [{ anchor: '[id="list"]', top: 80, left: 0 }] };
+  document.body.setAttribute("data-live-view", "p1:thumbs");  // this page is on another tab
+  tell({ type: "live.follow", device: "d1" });
+  tell({ type: "live.message", topic: "ducky.view", from: { name: "Sam", device: "d2" }, data: hostView });
+  expect(went).toEqual([]);  // not the one followed
+  tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: hostView });
+  expect(went).toEqual(["p1:video"]);
+  const list = document.getElementById("list") as HTMLElement;
+  expect(list.scrollTop).toBe(0);  // another screen: its scroll waits
+  tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: hostView });
+  expect(went).toHaveLength(1);  // the same screen again at once (the host scrolled) asks nothing new
+  vi.advanceTimersByTime(5000);  // the plugin couldn't open it yet (still syncing): asked again
+  tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: hostView });
+  expect(went).toEqual(["p1:video", "p1:video"]);
+  document.body.setAttribute("data-live-view", "p1:video");  // the plugin opened it
+  vi.advanceTimersByTime(1000);
+  expect(list.scrollTop).toBe(80);
+  list.scrollTop = 0;  // the follower scrolls: a heartbeat never pulls it back
+  tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: hostView });
+  expect(list.scrollTop).toBe(0);
+  document.body.setAttribute("data-live-view", "p1:rules");  // nor when they open something else
+  vi.advanceTimersByTime(5000);
+  tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: hostView });
+  expect(went).toHaveLength(2);
+  tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: { ...hostView, at: "p1:submit", v: "vsubmit" } });
+  expect(went.at(-1)).toBe("p1:submit");  // the host moved: the follower goes too
+  // Live pages send their screen again every 5 s: one that joins or reloads catches up.
+  const views = () => sent.filter((m) => m.method === "live.view").length;
+  const before = views();
+  vi.advanceTimersByTime(5000);
+  expect(views()).toBeGreaterThan(before);
+  window.removeEventListener("ducky-live-goto", onGo);
+  document.body.removeAttribute("data-live-view");
+  tell({ type: "live.follow", device: "" });
 });
 
 it("while live, this page's tab clicks and screen go to the group", () => {
