@@ -90,6 +90,8 @@ def test_a_refused_pack_upload_releases_without_a_pack(tmp_path, monkeypatch, ca
 
 
 def test_an_expired_upload_ticket_is_tried_again(tmp_path, monkeypatch):
+    """The Setup and the pack alike: a fresh ticket after "ticket expired", any other
+    refusal at once, and the last expiry is the error."""
     sys.path.insert(0, str(RELEASE))
     spec = importlib.util.spec_from_file_location("publish_app_ticket_test", RELEASE / "publish_app.py")
     pub = importlib.util.module_from_spec(spec)
@@ -98,16 +100,35 @@ def test_an_expired_upload_ticket_is_tried_again(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     (root / "dist").mkdir(parents=True)
     _load().build_update_pack(_app(tmp_path), "1.2.410", root / "dist")
+    setup = root / "dist" / "UEFN-Ducky-Setup-1.2.410.exe"
+    setup.write_bytes(b"setup")
     monkeypatch.setattr(pub, "ROOT", root)
+    expired = 'POST /api/v1/files/app-release/complete HTTP 400: {"error":"ticket expired"}'
     calls = []
 
     def expires_once(base, key, path):
         calls.append(path.name)
-        if len(calls) == 1:
-            raise SystemExit('POST /api/v1/files/app-release/complete HTTP 400: {"error":"ticket expired"}')
+        if calls.count(path.name) == 1 and path.suffix in (".exe", ".zip") and "files" not in path.name:
+            raise SystemExit(expired)
         return {"fileId": f"id-{len(calls)}", "sha256": pub.sha256_file(path)}
 
-    monkeypatch.setattr(pub, "upload_app_release", expires_once)
+    monkeypatch.setattr(pub, "_upload_app_release_once", expires_once)
+    assert pub.upload_app_release("https://uefnducky.org", "key", setup)["fileId"] == "id-2"
     update = pub.upload_update_pack("https://uefnducky.org", "key", "1.2.410")
-    assert update is not None and update["packFileId"] == "id-2" and update["manifestFileId"] == "id-3"
-    assert calls[0] == calls[1] == "UEFN-Ducky-Update-1.2.410.zip"
+    assert update is not None and update["packFileId"] == "id-4" and update["manifestFileId"] == "id-5"
+    assert calls == ["UEFN-Ducky-Setup-1.2.410.exe"] * 2 + ["UEFN-Ducky-Update-1.2.410.zip"] * 2 + [
+        "UEFN-Ducky-Update-1.2.410-files.zip"]
+
+    def always(base, key, path):
+        calls.append(path.name)
+        raise SystemExit(expired)
+
+    monkeypatch.setattr(pub, "_upload_app_release_once", always)
+    calls.clear()
+    try:
+        pub.upload_app_release("https://uefnducky.org", "key", setup)
+    except SystemExit as exc:
+        assert "ticket expired" in str(exc)
+    else:
+        raise AssertionError("an upload that keeps expiring must fail")
+    assert len(calls) == pub.UPLOAD_TRIES

@@ -526,22 +526,14 @@ def upload_update_pack(base: str, api_key: str, version: str) -> dict | None:
     fields: dict = {}
     for path, prefix in ((pack, "pack"), (manifest_zip, "manifest")):
         digest = sha256_file(path)
-        uploaded = None
-        for attempt in range(3):
-            print(f"  uploading {path.name} ({path.stat().st_size} bytes)")
-            try:
-                uploaded = upload_app_release(base, api_key, path)
-                break
-            except SystemExit as exc:
-                # A slow 200 MB PUT can outlive its upload ticket ("ticket expired"):
-                # a fresh ticket usually goes through (1.2.418's first pack didn't).
-                if "ticket expired" in str(exc) and attempt < 2:
-                    print(f"  {path.name}: the upload ticket expired, trying again with a new one")
-                    continue
-                # The Setup is already up: a refused pack (e.g. a core whose upload scan
-                # predates update packs) must not stop the release.
-                print(f"  WARNING: {path.name} was not taken ({exc}): released without a pack, so installed copies update with Setup")
-                return None
+        print(f"  uploading {path.name} ({path.stat().st_size} bytes)")
+        try:
+            uploaded = upload_app_release(base, api_key, path)
+        except SystemExit as exc:
+            # The Setup is already up: a refused pack (e.g. a core whose upload scan
+            # predates update packs) must not stop the release.
+            print(f"  WARNING: {path.name} was not taken ({exc}): released without a pack, so installed copies update with Setup")
+            return None
         file_id = str(uploaded.get("fileId") or "")
         remote_sha = str(uploaded.get("sha256") or "").lower()
         if not file_id or (remote_sha and remote_sha != digest):
@@ -613,7 +605,24 @@ def _api_json(
     return payload
 
 
+UPLOAD_TRIES = 3
+
+
 def upload_app_release(base: str, api_key: str, exe_path: Path) -> dict:
+    """Upload the Setup, the update pack or its manifest. A slow PUT can outlive its
+    upload ticket (core's TICKET_TTL_SECS, 5 minutes: "ticket expired" at complete); a
+    fresh ticket usually goes through (1.2.418's first pack and 1.2.419's first Setup didn't)."""
+    for attempt in range(UPLOAD_TRIES):
+        try:
+            return _upload_app_release_once(base, api_key, exe_path)
+        except SystemExit as exc:
+            if "ticket expired" not in str(exc) or attempt == UPLOAD_TRIES - 1:
+                raise
+            print(f"  {exe_path.name}: the upload ticket expired, trying again with a new one")
+    raise AssertionError("unreachable")
+
+
+def _upload_app_release_once(base: str, api_key: str, exe_path: Path) -> dict:
     """Direct-to-S3: ticket → PUT file handle → complete → poll job status."""
     filename = exe_path.name
     size = exe_path.stat().st_size
