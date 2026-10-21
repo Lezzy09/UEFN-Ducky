@@ -5,10 +5,28 @@ import { afterEach, expect, it, vi } from "vitest";
 import { BackgroundActivityDropdown } from "./BackgroundActivityDropdown";
 import { _resetBackgroundActivityForTests, onBackgroundJobAction, upsertBackgroundJob } from "../hooks/backgroundActivity";
 import { resetWorkflowRunsForTests } from "../hooks/workflowRunsByChat";
+import { runAskUser } from "../ask-user";
+import { _resetAskUserForTests } from "../ask-user/runAskUser";
 
 const api = vi.hoisted(() => ({ stop_workflow: vi.fn(), workflow_run_snapshot: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
-afterEach(() => { cleanup(); _resetBackgroundActivityForTests(); resetWorkflowRunsForTests(); vi.resetAllMocks(); });
+afterEach(() => {
+  cleanup(); _resetBackgroundActivityForTests(); resetWorkflowRunsForTests(); _resetAskUserForTests(); vi.resetAllMocks();
+});
+
+it("opens by itself for a question no chat owns, so a publish confirm can't wait unseen", async () => {
+  render(<BackgroundActivityDropdown />);
+  expect(screen.queryByRole("dialog", { name: "Background activity" })).toBeNull();
+  act(() => {
+    void runAskUser([{ id: "ok", prompt: "Publish 'wiki-mde' to the team?",
+      options: [{ id: "yes", label: "Yes" }, { id: "no", label: "No" }] }], "Publish plugin");
+  });
+  await screen.findByRole("dialog", { name: "Background activity" });
+  expect(screen.getByText("Publish 'wiki-mde' to the team?")).toBeTruthy();
+  // Closed again, it stays closed for the same question.
+  fireEvent.click(screen.getByRole("button", { name: "Background activity" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Background activity" })).toBeNull());
+});
 
 it("stops a specific concurrent workflow from the header activity tray", async () => {
   api.stop_workflow.mockResolvedValue({ ok: true, stopped: true });

@@ -23,6 +23,7 @@ import { subscribePanelPush } from "../hooks/usePanelPushBus";
 import { refreshWorkflowRuns, stopWorkflowRun, subscribeWorkflowEvents } from "../hooks/workflowRunsByChat";
 import { requestOpenWorkflowsTab } from "../navigation/openWorkflowsTab";
 import { useWaitingItems } from "../hooks/waitingChats";
+import { getAskUserSession, subscribeAskUser } from "../ask-user";
 import { DropdownPanel } from "./DropdownPanel";
 import { WaitingForYouSection } from "./WaitingForYouSection";
 
@@ -59,6 +60,20 @@ export function BackgroundActivityDropdown() {
     } else openGraphJob(job);
   };
   const [open, setOpen] = useState(false);
+  // A question no chat owns (an agent in an IDE, a tool that asks before it publishes) is
+  // answered in this list: open it for each new one, or it waits behind a closed button.
+  useEffect(() => {
+    let shown = "";
+    const showNew = () => {
+      const ask = getAskUserSession();
+      if (ask && ask.id !== shown) {
+        shown = ask.id;
+        setOpen(true);
+      }
+    };
+    showNew();
+    return subscribeAskUser(showNew);
+  }, []);
   const [actionError, setActionError] = useState("");
   const cancel = async (job: BackgroundJob) => {
     setActionError("");
