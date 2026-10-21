@@ -872,6 +872,12 @@ def main() -> None:
             ":root{--x:1}\n",
         ).get("ok")
         assert validate_ai_plugin("ai_hello").get("ok")
+        # No team answer yet: the draft still installs, and validate says to ask; the scaffold takes the answer.
+        assert any('"data_sharing"' in w for w in validate_ai_plugin("ai_hello").get("warnings") or [])
+        assert scaffold_ai_plugin("ai_solo", data_sharing=False).get("ok")
+        solo = json.loads((appdata_ai_plugins_dir() / "ai_solo" / "plugin.json").read_text(encoding="utf-8"))
+        assert solo["data_sharing"] is False
+        assert delete_ai_plugin_draft("ai_solo", confirm=True).get("ok")
         ai_inst = install_ai_plugin("ai_hello")
         assert ai_inst.get("ok"), ai_inst
         assert ai_inst.get("source") == "ai"

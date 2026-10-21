@@ -261,7 +261,9 @@ def _register_stub(plugin_id: str) -> str:
     )
 
 
-def scaffold_ai_plugin(plugin_id: str, label: str = "", description: str = "") -> dict[str, Any]:
+def scaffold_ai_plugin(
+    plugin_id: str, label: str = "", description: str = "", data_sharing: bool | None = None
+) -> dict[str, Any]:
     from backend.uefn_plugins.store import (
         appdata_ai_plugins_dir,
         load_plugin_manifest,
@@ -292,6 +294,8 @@ def scaffold_ai_plugin(plugin_id: str, label: str = "", description: str = "") -
         }
     root.mkdir(parents=True, exist_ok=True)
     manifest = _minimal_manifest(pid, label, description)
+    if data_sharing is not None:
+        manifest["data_sharing"] = bool(data_sharing)
     _write_json(root / "plugin.json", manifest)
     backend = root / "backend"
     backend.mkdir(exist_ok=True)
@@ -540,6 +544,54 @@ def delete_ai_plugin_file(plugin_id: str, path: str, *, recursive: bool = False)
     return {"ok": True, "id": pid, "deleted": rel, "files": 1}
 
 
+ICON_PX = 512
+
+
+def set_ai_plugin_icon(plugin_id: str, image_path: str) -> dict[str, Any]:
+    """Make a picture the draft's Store icon: ``assets/icon.png`` (fitted into a 512 px
+    square, transparent around it), or ``assets/icon.svg`` for an SVG kept as it is."""
+    from PIL import Image, UnidentifiedImageError
+
+    from backend.uefn_plugins.plugin_lint import STORE_ICON_MAX_BYTES, STORE_ICONS, store_icon_problem
+
+    try:
+        root = _draft_root(plugin_id)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    if not (root / "plugin.json").is_file():
+        return {"ok": False, "error": f"draft not found: {root.name}"}
+    src = Path(str(image_path or "").strip())
+    if not src.is_file():
+        return {"ok": False, "error": f"no picture at {image_path!r}"}
+    if src.suffix.lower() == ".svg":
+        rel, data = "assets/icon.svg", src.read_bytes()
+    else:
+        try:
+            with Image.open(src) as im:
+                pic = im.convert("RGBA")
+        except (OSError, UnidentifiedImageError) as exc:
+            return {"ok": False, "error": f"{src.name} isn't a picture: {exc}"}
+        pic.thumbnail((ICON_PX, ICON_PX), Image.LANCZOS)
+        square = Image.new("RGBA", (ICON_PX, ICON_PX), (0, 0, 0, 0))
+        square.paste(pic, ((ICON_PX - pic.width) // 2, (ICON_PX - pic.height) // 2))
+        buf = io.BytesIO()
+        square.save(buf, "PNG", optimize=True)
+        if buf.tell() > STORE_ICON_MAX_BYTES:  # a busy photo: 256 colors still reads as an icon
+            buf = io.BytesIO()
+            square.quantize(256).save(buf, "PNG", optimize=True)
+        rel, data = "assets/icon.png", buf.getvalue()
+    if len(data) > STORE_ICON_MAX_BYTES:
+        return {"ok": False, "error": f"{src.name} is {len(data) // 1024} KB; the Store takes an icon up to 700 KB"}
+    # The Store takes the first icon file it finds: never hide this one behind another.
+    first = next((r for r in STORE_ICONS if (root / r).is_file()), "")
+    if first and STORE_ICONS.index(first) < STORE_ICONS.index(rel):
+        return {"ok": False, "error": f"{first} is the Store icon (the Store picks it first). Delete it with "
+                                      "ducky_plugin_delete_file, then set this picture again."}
+    (root / "assets").mkdir(exist_ok=True)
+    (root / rel).write_bytes(data)
+    return {"ok": True, "id": root.name, "icon": rel, "bytes": len(data), "store_ready": not store_icon_problem(root)}
+
+
 def validate_ai_plugin(plugin_id: str) -> dict[str, Any]:
     from backend.uefn_plugins.store import normalize_plugin_id, validate_plugin_skills
 
@@ -585,11 +637,14 @@ def validate_ai_plugin(plugin_id: str) -> dict[str, Any]:
     personal = shipped_personal_paths(root)
     # Not an error while building (installs keep working); publishing refuses it.
     warnings = [personal_path_message(personal)] if personal else []
-    from backend.uefn_plugins.plugin_lint import check_findability
+    from backend.uefn_plugins.plugin_lint import check_findability, check_store_ready
 
     find_errors, find_warnings = check_findability(root, pid)
     errors.extend(find_errors)
     warnings.extend(find_warnings)
+    # Not an error while building (installs keep working); a Store build refuses the errors.
+    store_errors, store_warnings = check_store_ready(root, manifest, pid)
+    warnings.extend(store_errors + store_warnings)
     if errors:
         return {"ok": False, "id": pid, "errors": errors, **({"warnings": warnings} if warnings else {})}
     return {
@@ -682,6 +737,7 @@ def ducky_plugin_scaffold(
     id: str,
     label: str = "",
     description: str = "",
+    data_sharing: bool | None = None,
     pretty: bool = False,
 ) -> str:
     """Create a shared AI plugin draft under AppData/ai_plugins/<id>/.
@@ -690,8 +746,14 @@ def ducky_plugin_scaffold(
     (tools with listener=False, panel RPCs that take the panel's params as keyword
     arguments) and skills/<id>/SKILL.md. Any duckie can edit it. Does not install — use
     ducky_plugin_validate, ducky_plugin_install, then ducky_plugin_test.
+
+    data_sharing: the user's answer to "should your team share this plugin's data (a team
+    copy with changes, locks, history and live editing)?", asked once before scaffolding.
+    Omit it only when you haven't asked yet: a Store build refuses a plugin without it.
     """
-    return tool_json(scaffold_ai_plugin(id, label=label, description=description), pretty=pretty)
+    return tool_json(
+        scaffold_ai_plugin(id, label=label, description=description, data_sharing=data_sharing), pretty=pretty
+    )
 
 
 @mcp.tool()
@@ -788,8 +850,21 @@ def ducky_plugin_validate(id: str, pretty: bool = False) -> str:
     the reference rules (an MCP tool per panel RPC, a handled workflow node + template,
     skills/<id>/SKILL.md, Appearance variables only and no color literals in UI files,
     :focus-visible styles for panels, no reading .py files by path). Each error says
-    how to fix it; then ducky_plugin_install, and ducky_plugin_test to run it."""
+    how to fix it; then ducky_plugin_install, and ducky_plugin_test to run it. Warnings
+    include what the Store would refuse (no icon, no "data_sharing", a team folder inside
+    the island): fix them before publishing."""
     return tool_json(validate_ai_plugin(id), pretty=pretty)
+
+
+@mcp.tool()
+def ducky_plugin_set_icon(id: str, image_path: str, pretty: bool = False) -> str:
+    """Make a picture the plugin draft's Store icon (assets/icon.png, 512 px; an .svg is kept as is).
+
+    The Store rejects a new plugin without an icon. image_path is a picture on this PC: one
+    ducky_ai_image made (ask the user first, it is billed), one from their own image model, or
+    a file they picked. Refuses when another icon file the Store would pick first is there.
+    """
+    return tool_json(set_ai_plugin_icon(id, image_path), pretty=pretty)
 
 
 @mcp.tool()

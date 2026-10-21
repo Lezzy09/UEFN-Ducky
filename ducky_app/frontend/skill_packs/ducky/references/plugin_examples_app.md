@@ -1,5 +1,5 @@
 ---
-description: "Worked plugin examples for app extensions: Text to Image backends, AI providers, sounds and hooks, walkthroughs"
+description: "Worked plugin examples for app extensions: Text to Image backends, AI providers, sounds and hooks, walkthroughs, voices (text to speech), coding agents, IDE hookups"
 metadata:
   order: 5
   label: "Plugin examples: images, AI, sounds, tours"
@@ -278,3 +278,65 @@ its Settings tab is `settings.tab.<tab id>`.
 - `auto_start`: `first_enable` or `never`.
 - To show something once in a chat instead, use `ducky_ui_show` with `steps`, or
   `ducky_walkthrough_run(steps)`.
+
+## 5. Voices (text to speech)
+
+A voice provider adds voices to the app's voice pickers (as `plugin:<id>:<voice id>`)
+and speaks for them. Fixed voices go in the manifest; voices that depend on the
+account (cloned voices) come from `register_tts_voices`, merged over the fixed ones.
+
+```json
+"secret_keys": ["voxly_api_key"],
+"contributes": {
+  "tts.voices": [ { "id": "aria", "label": "Aria (Voxly)" } ]
+}
+```
+
+plus a `secret` setting for `voxly_api_key` (`settings.tabs` + `settings.sections`, as in
+`plugin_examples_tools`).
+
+```python
+def register(api):
+    import base64
+    import json
+    import urllib.request
+
+    from backend.agent.secrets import get_key
+
+    BASE = "https://api.voxly.example/v1"
+
+    def _key() -> str:
+        key = get_key("voxly_api_key")
+        if not key:
+            raise ValueError("Add your Voxly API key in Settings → Voxly.")
+        return key
+
+    def synthesize(text: str, voice_id: str) -> dict:
+        req = urllib.request.Request(f"{BASE}/speak", method="POST",
+                                     data=json.dumps({"text": text, "voice": voice_id or "aria"}).encode(),
+                                     headers={"Authorization": f"Bearer {_key()}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as resp:  # audio bytes, not JSON
+            return {"audio_base64": base64.b64encode(resp.read()).decode("ascii"), "mime": "audio/mpeg"}
+
+    def list_voices() -> list:
+        out = api.http_json("GET", f"{BASE}/voices", headers={"Authorization": f"Bearer {_key()}"}, timeout=10)
+        return [{"id": v["id"], "label": v["name"]} for v in out.get("voices", [])]
+
+    api.register_tts(synthesize)
+    api.register_tts_voices(list_voices)  # runs when a voice menu opens: keep it fast
+    # + an @api.tool (e.g. voxly_voices), a workflow node and template, and the bundled skill.
+```
+
+`synthesize` runs on a worker. Voice plugins have nothing to share: `"data_sharing": false`.
+
+## 6. Coding agents, IDE hookups, `shell.boot`
+
+Only when the user asks for exactly that:
+- `contributes.llm.coding_agents` + `api.register_coding_agent(agent_id, factory, …)`:
+  a coding-agent CLI the app can detect and launch (`factory` builds its adapter;
+  options such as `test_key`, `install_help`, `settings_defaults`).
+- `contributes.ide.hookups` + `api.register_ide_hookup(kind, label=…, auto_apply=True)`:
+  an IDE whose MCP config and skills Ducky writes (Settings → LLMs → the gateway).
+- `contributes.shell.boot` `[{ "entry": "ui/boot.js" }]`: a script that runs in Ducky's
+  own window, not a sandboxed panel (the Translation plugin translates the app this
+  way). Prefer a panel; never use it for a plugin's own UI.

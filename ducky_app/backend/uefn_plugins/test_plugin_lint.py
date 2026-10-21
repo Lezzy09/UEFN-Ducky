@@ -258,3 +258,64 @@ def test_a_plugin_with_bad_team_folders_does_not_install() -> None:
     out = store.import_plugin_from_bytes(buf.getvalue(), source="local")
     assert out["ok"] is False and '"unit" is \'dir\'' in out["error"]
     assert not store.plugin_dir("folderdemo").exists()
+
+
+def test_a_plugin_ready_for_teams_says_whether_it_shares_and_keeps_its_files_shareable(tmp_path: Path) -> None:
+    from backend.uefn_plugins.plugin_lint import check_store_ready
+
+    _write(tmp_path, "backend/__init__.py", (
+        "import shutil, sqlite3\n"
+        "from pathlib import Path\n"
+        "def register(api):\n"
+        "    open('a.json')\n"
+        "    open('b.json', 'w').write('{}')\n"
+        "    Path('c.json').open(mode='a')\n"
+        "    Path('d.txt').write_text('x')\n"
+        "    shutil.copy2('e', 'f')\n"
+        "    sqlite3.connect('g.db')\n"
+        "    import os; os.open('h', 1)\n"
+    ))
+    _write(tmp_path, "backend/test_x.py", "open('t', 'w')\n")  # tests never ship
+    errors, _ = check_store_ready(tmp_path, {"data_sharing": False}, "demo")
+    assert len(errors) == 1 and errors[0].startswith("No Store icon") and "ducky_plugin_set_icon" in errors[0]
+    _write(tmp_path, "assets/icon.svg", "<svg xmlns='http://www.w3.org/2000/svg'/>")
+    errors, warnings = check_store_ready(tmp_path, {}, "demo")
+    assert len(errors) == 1 and 'no "data_sharing"' in errors[0] and "Store build refuses" in errors[0]
+    # Reads, os.open and tests aren't the plugin keeping files of its own.
+    assert len(warnings) == 1 and warnings[0].startswith(
+        "backend/__init__.py:5, backend/__init__.py:6, backend/__init__.py:7, backend/__init__.py:8, "
+        "backend/__init__.py:9: writes files of its own")
+    # Not shared, or shared through a team folder on this PC: ready.
+    assert check_store_ready(tmp_path, {"data_sharing": False}, "demo") == ([], [])
+    assert check_store_ready(tmp_path, {"data_sharing": True, "team_folders": [FORGE_FOLDER]}, "demo") == ([], [])
+    # A team folder inside the island never reaches a team.
+    island = {**FORGE_FOLDER, "root": "{PROJECT}/.ducky/demo", "unit": "."}
+    errors, _ = check_store_ready(tmp_path, {"data_sharing": True, "team_folders": [island]}, "demo")
+    assert len(errors) == 1 and "inside the island" in errors[0] and "{LOCALAPPDATA}/UEFN-Ducky/demo/" in errors[0]
+
+
+def test_the_store_icon_is_one_the_store_takes_and_set_icon_makes_one(tmp_path: Path, monkeypatch) -> None:
+    from PIL import Image
+
+    from backend.tools.panel import panel_ai_plugins
+    from backend.uefn_plugins.plugin_lint import store_icon_problem
+
+    _write(tmp_path, "assets/icon.png", "not a png")
+    assert "isn't a real PNG" in store_icon_problem(tmp_path)
+    (tmp_path / "assets/icon.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * (700 * 1024))
+    assert "the Store takes an icon up to 700 KB" in store_icon_problem(tmp_path)
+
+    draft = tmp_path / "drafts" / "demo"
+    _write(draft, "plugin.json", "{}")
+    monkeypatch.setattr(panel_ai_plugins, "_draft_root", lambda pid: draft)
+    wide = tmp_path / "wide.jpg"
+    Image.new("RGB", (1536, 1024), (200, 40, 40)).save(wide, "JPEG")
+    out = panel_ai_plugins.set_ai_plugin_icon("demo", str(wide))
+    assert out["ok"] and out["icon"] == "assets/icon.png" and out["store_ready"] is True
+    with Image.open(draft / "assets/icon.png") as icon:
+        assert icon.size == (512, 512) and icon.getpixel((0, 0))[3] == 0  # fitted, transparent around it
+    assert not panel_ai_plugins.set_ai_plugin_icon("demo", str(tmp_path / "missing.png"))["ok"]
+    # An SVG icon the Store picks first is never hidden behind a new PNG.
+    _write(draft, "assets/icon.svg", "<svg xmlns='http://www.w3.org/2000/svg'/>")
+    out = panel_ai_plugins.set_ai_plugin_icon("demo", str(wide))
+    assert not out["ok"] and "assets/icon.svg is the Store icon" in out["error"]

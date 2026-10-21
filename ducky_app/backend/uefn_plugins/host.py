@@ -3944,8 +3944,9 @@ class _PluginApi:
     @property
     def live(self) -> Any:
         """Live editing on a team copy: ``join(room)``, ``leave()``, ``send(topic, data,
-        to="")``, ``on(topic, callback)``, ``state()``. Changes made through ``api.data``
-        reach teammates live in the room by themselves. See ``backend.uefn_plugins.live``."""
+        to="")``, ``on(topic, callback)``, ``state()``. Changes made through ``api.data`` go
+        out with sync, and the group pulls each one as soon as it's committed. See
+        ``backend.uefn_plugins.live``."""
         from backend.uefn_plugins.live import LiveApi
 
         return LiveApi(self.plugin_id)

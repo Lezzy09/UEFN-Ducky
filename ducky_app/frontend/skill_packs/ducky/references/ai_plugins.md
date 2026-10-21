@@ -46,7 +46,9 @@ free ones too. See `plugin_publishing`.
    `ducky_find_tools(query)` (and `ducky_store_search` for whole plugins). When a
    tool exists (Meshy, Blender, UEFN import, workspace files, workflows, Store…),
    call it from your backend with `api.call_tool(name, arguments)` instead of rebuilding
-   it. It runs under the same approval rules the agent has.
+   it. It runs under the same approval rules the agent has. `ducky_store_get(slug)` reads
+   one Store plugin; installing or updating one (`ducky_store_install` /
+   `ducky_store_update`) is the user's call: ask first.
 4. **Every user action is an MCP tool and a workflow node.** `@api.tool()` for each
    action (list / get / create / update / delete, not a lone ping). Pass
    `listener=False` unless the tool talks to the UEFN editor (`api.listener` or a UEFN
@@ -71,11 +73,25 @@ free ones too. See `plugin_publishing`.
    tool and when to use it, so later chats know them. Not a `ducky_skills_*` pack.
 7. **Mutators record a changeset** (`api.changeset.record(…)` with an `inverse`, slot
    `{plugin_id}://{kind}/{id}/{facet}`) so Revert can undo them.
-8. **Data only through `api.data`** (panels: `data.*` / `files.*`). Never a folder or
-   file you pick. One doc per record. The user picks Local or one shared space per
-   plugin (never mixed; switching restarts the plugin on the other copy), and prefs
-   and cache follow that choice. Shared copies are encrypted per space and lock when
-   access is lost; `sensitive=True` docs stay on this PC. See `plugin_data`.
+8. **Ready for teams.** Before you scaffold, ask once (in the same `ducky_ask_user` as
+   your other questions): "Should your team share <plugin>'s data? A team copy gives
+   everyone the same records with changes, locks, history and live editing, like source
+   control." Pass the answer as `ducky_plugin_scaffold(…, data_sharing=true|false)`
+   (it becomes `"data_sharing"` in `plugin.json`). `false` only for nothing worth sharing:
+   personal tools, browsing, AI providers, per-PC state. Then:
+   - **Data only through `api.data`** (panels: `data.*` / `files.*`). One doc per
+     record, named (`name`/`title`), so locks and conflicts are per record. Never a
+     folder or file you pick, never inside the island folder.
+   - Files that must stay real files (an outside program reads them) go in a declared
+     `team_folders` folder under `{LOCALAPPDATA}/UEFN-Ducky/<id>/` (`plugin_data`).
+   - Items of this PC only (diagnostics, "last opened") go under `data_local`.
+   - Panels follow teammates' changes without closing what is open
+     (`plugin_scope_changed` reason `synced`).
+   `ducky_plugin_validate` warns about each gap, and a Store build (public or private)
+   refuses a plugin with no `data_sharing` or a team folder inside the island. The user
+   picks Local or one shared space per plugin; prefs and cache follow that choice.
+   Shared copies are encrypted per space and lock when access is lost;
+   `sensitive=True` docs stay on this PC. See `plugin_data`.
 9. **Write code that compiles.** Published backends are compiled: never read your own
    `.py` source, never load `.py` files by path, import your modules relatively
    (`from . import store`), keep data as `.json` next to the module or in `assets/`.
@@ -96,14 +112,23 @@ free ones too. See `plugin_publishing`.
     backend (`api.http_json`), never a panel `fetch`.
 13. **No personal data in logs or errors.** Never log or return the user's chat text,
     keys, emails or files in errors; keys live in `secret_keys`.
+14. **A Store icon**: `assets/icon.png` (or `.svg` / `.jpg`, up to 700 KB). The Store
+    rejects a new plugin without one, and `ducky_plugin_validate` warns. With none, ask
+    the user (in the same `ducky_ask_user` as rule 8) whether to make one or use a
+    picture they have. Make one only on their yes: `ducky_ai_image(prompt,
+    confirm_spend=true)` is billed to their Ducky AI credit (a Text to Image workflow
+    node with their own image model works too). A simple bold symbol on a plain
+    background reads best small. Then `ducky_plugin_set_icon(id, image_path)` with the
+    path it returned or they gave: it fits the picture into a 512 px PNG.
 
 ### Path (no forks)
 
 1. `ducky_plugin_list`: reuse an existing draft or id, or
-2. `ducky_plugin_scaffold(id, label, description)`: writes `plugin.json` (tools,
-   one node, a template graph), `backend/__init__.py` and `skills/<id>/SKILL.md`.
+2. `ducky_plugin_scaffold(id, label, description, data_sharing)`: writes `plugin.json`
+   (tools, one node, a template graph, the team answer from rule 8),
+   `backend/__init__.py` and `skills/<id>/SKILL.md`.
 3. `ducky_plugin_write_file` until every file below is right; `ducky_plugin_vendor`
-   for any library the panel needs (rule 12).
+   for any library the panel needs (rule 12); `ducky_plugin_set_icon` (rule 14).
 4. `ducky_plugin_validate(id)`: every error says how to fix it.
 5. `ducky_plugin_install(id)`, then `ducky_store_set_enabled(id, true)`. If it answers
    `needs_trust`, **stop**: the user confirms the plugin once.
@@ -138,7 +163,9 @@ can't reuse a Store or local plugin's id (uninstall first). No secrets in files
 Top level: `id`, `"kind": "plugin"`, `version`, `label`, `description`,
 `min_app_version`, `"default_enabled": false`, `secret_keys` (ids of `secret`
 settings), `contributes`, `"backend": {"entry": "backend", "register": "register"}`.
-Optional `"data_sharing": false`: the plugin's data always stays Local (`plugin_data`).
+`"data_sharing"`: `true` (teammates can share its data) or `false` (always Local); a
+Store build refuses a plugin without it (rule 8). Optional `data_locks`, `data_local`,
+`team_folders` (`plugin_data`).
 
 | `contributes` key | What | Example in |
 |---|---|---|
@@ -167,6 +194,12 @@ Optional `"data_sharing": false`: the plugin's data always stays Local (`plugin_
 | `api.live.join(room="")` / `.leave()` / `.send(topic, data, to="")` / `.on(topic, fn)` / `.state()` | Live editing on a team copy (`plugin_data`, Live): short messages to teammates live in the group, peer to peer (JSON ≤ 16 KB, ≤ 30/s; `ducky.*` is the host's). `fn(sender, data)`. No room hosts this PC's group. Writes through `api.data` go out with sync and the group pulls each one as soon as it's committed. |
 | `api.search.upsert(id, title, text, meta=None)` / `.delete(id)` / `.clear()` / `.query(text, limit=10)` | Make the plugin's own records (pages, cards, entries) findable by meaning and keywords. Only this plugin's records in its data scope for the signed-in person; kept on an index rebuild, removed on uninstall. Upserting unchanged text is free, so re-sync everything on start. Expose them to agents through your own tool that calls `api.search.query`. One record per section of a long document. |
 | `api.changeset.record(command=, kind=, ident=, facet=, before=, inverse=, slot=)` | Changes ledger entry; never raises. |
+| `api.panel_state()` | → `{open, visible, since, panels}`: whether its panel is open and on screen. Panel code runs only while its tab is visible: a tool that needs it says "open the tab first". |
+| `api.encode_image(path)` / `api.resolve_image(image)` | A local image → data URI; `resolve_image` passes http(s) and data URIs through and encodes local paths (for vision APIs). |
+| `api.chat_reference(trigger=, id=, label=, href=, group="", description="")` | Add one `@` / `/` row to the chat box at runtime (fixed ones: `contributes.chat.references`). |
+| `api.register_tts(synthesize)` / `api.register_tts_voices(list_voices)` | A voice provider: `synthesize(text, voice_id) -> {audio_base64, mime}`; `list_voices() -> [{id, label}]`, merged over `contributes.tts.voices` (keep it fast: it runs when a voice menu opens). |
+| `api.register_llm_provider(…)` / `api.register_coding_agent(agent_id, factory, …)` / `api.register_ide_hookup(kind, label=, auto_apply=True)` | AI providers, coding agents and IDE hookups, only when asked (`plugin_examples_app`). |
+| `api.provide_spaces(impl)` | Only the Ducky Account plugin: it offers the shared spaces every plugin syncs through. Never in yours. |
 | `api.crypto.aead_seal(key, nonce, data, aad)` / `.aead_open(key, nonce, data, aad)` | AES-256-GCM from the app's own cryptography (32-byte key, 12-byte nonce, tag appended). Use it instead of importing `cryptography`, which the app may not bundle all of. A wrong key, nonce or `aad` raises `InvalidTag`. |
 | `api.listener(command, params, timeout=None)` | One command to the live UEFN listener. |
 | `api.http_json(method, url, …)`, `api.poll(…)` | HTTP JSON and polling helpers. |
@@ -223,8 +256,16 @@ Panels are sandboxed iframes that talk to the host with `postMessage` on channel
 | `files.put` / `files.get` / `files.list` / `files.delete` | Base64 files (≤ 100 MB) |
 | `cache.get` / `cache.set` / `cache.clear` | Throwaway cache |
 | `files.pick` | `{accept?: "video"\|"audio"\|"image"\|"mesh"\|"pdf"\|"svg"\|"any", multiple?}` → `{files: [{kind, path, name, url}]}`; cancel → `{files: []}`. The PC's file picker. Big media stays where it is: pass `path` to your backend (ffprobe/ffmpeg read it in place) and play `url` (HTTP Range, seekable). `url` is "" for types a panel can't play (e.g. .avi): play a proxy instead. Never upload large files through `plugin.call` in chunks: a 7 GB video froze the app. A phone gets an error. |
+| `files.pickFolder` | `{}` → `{folder}` (`""` when cancelled): the PC's folder picker, e.g. where exports go. A phone gets an error. |
+| `files.dropped` | `{names?}` → `{files: [{path, name, kind, url}]}`: real paths of files just dropped from Explorer on the panel. A DOM `drop` only sees names: call this from your `drop` handler. |
+| `ui.confirm` | `{message, title?, confirm?, cancel?, danger?}` → `{confirmed}`: Ducky's own "are you sure?" dialog. Never `window.confirm` or a bar inside the panel. |
+| `ui.alert` | `{message, title?, ok?}` → `{ok}`: Ducky's own message dialog |
+| `ui.pickModel` | `{purpose?: "chat"\|"video", current?, title?}` → `{model, name}` (`model: ""` when cancelled): Ducky's own model picker |
+| `models.list` | → `{default_model, models: [{id, name, provider, provider_key, is_local, supports_vision}]}`: the chat models `llm.complete` accepts |
 | `llm.complete` | `{system, user, model?}` → text from the user's chosen model |
-| `live.join` / `live.leave` / `live.state` / `live.send` | Live editing on a team copy: `{room?}`, `{topic, data, to?}`; pushes `live.state`, `live.message`, `live.peers` (pointers are the host's) |
+| `audio.recordStart` / `audio.recordStop` / `audio.recordCancel` | → `{id}`; `{id}` → `{b64, mime, seconds, bytes}`; `{id}`: record from the microphone in the host window (panels have no microphone) |
+| `browser.open` / `browser.bounds` / `browser.navigate` / `browser.command` / `browser.state` / `browser.close` | A real Chromium pane pinned over part of your panel (sites that refuse iframes work): `{url}`; `{x, y, width, height, visible?}` in the panel's CSS px (send again on resize); `{url}`; `{command: "back"\|"forward"\|"reload"\|"stop"}`. `browser.ui_cover {cover}` hides it under your own popups. |
+| `live.join` / `live.leave` / `live.state` / `live.send` | Live editing on a team copy: `{room?}`, `{topic, data, to?}`; pushes `live.state`, `live.message`, `live.peers`. Pointers, selections, press holds, follow and picture placeholders are the host's own script in every page (`live.pointer`, `live.select`, `live.hold`, `live.holds`, `live.view`, `live.nav`, `panel.error`): never call those. |
 
 Backend: `api.media_url(path)` → the same seekable link for any local media file (a proxy your
 backend made, or a picked original); "" when a panel can't play that type. Loopback only.
@@ -254,6 +295,7 @@ page also reports its uncaught errors, rejected promises and `console.error` to
   "description": "Cards for the island's shop: list, add, edit, remove.",
   "min_app_version": "1.0.0",
   "default_enabled": false,
+  "data_sharing": true,
   "secret_keys": [],
   "contributes": {
     "agent.tools": {

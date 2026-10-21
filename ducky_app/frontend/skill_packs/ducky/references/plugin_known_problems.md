@@ -26,6 +26,10 @@ Check these before you tell the user a plugin works.
 | Logs, tool errors and node results end up in Settings → Errors and in Support feedback. `api.log` scrubs folders, emails and keys, but not what you put in a result. | Never put the user's chat text, keys or files in logs or errors; secrets go in `secret_keys`. |
 | `scripts/`, `deploy/`, `tests/`, `test_*.py`, `*.zip`, `*.bin` never ship. | Keep runtime files elsewhere. |
 | `api.data.put` over 1 MB raises. | One doc per record; big blobs go in `put_file`. |
+| Teammates on the same team copy don't see the data: the plugin wrote it to a file or folder of its own, or inside the island folder (UEFN revision control carries that, so the host never shares it). Validate warns. | Records in `api.data`; real files in a `team_folders` folder under `{LOCALAPPDATA}/UEFN-Ducky/<id>/` (`plugin_data`). |
+| No `"data_sharing"` in `plugin.json`: validate warns and every Store build refuses the plugin. | Ask the user whether their team shares its data, then set `true` or `false` (`ai_plugins` rule 8). |
+| The Store rejected a release: "plugin needs an icon". That version number is used up. | `ducky_plugin_set_icon` (ask first, `ai_plugins` rule 14), raise `version`, publish again. |
+| One big doc (`db.json`) for everything: two teammates editing different records lock and conflict on the whole thing. | One named doc per record (`card.pip` with a `name`). |
 | Writes raise `PermissionError` when the shared copy is read-only or access was lost. | Catch it in tools and return the message as `{"ok": False, "error": …}`. |
 | `api.data.delete(key)` doesn't remove a `sensitive=True` doc while the plugin uses a shared space. | `api.data.personal().delete(key)`. |
 | `api.call_tool` raises `ValueError` when the tool fails; a destructive tool it calls still waits for the user's Allow. | Catch and report; don't call destructive tools from nodes that run unattended. |

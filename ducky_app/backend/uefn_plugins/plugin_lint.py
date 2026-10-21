@@ -17,6 +17,10 @@ each problem with a message that says how to fix it.
   PC's own items, and each ``team_folders`` entry has an
   id, a root under ``{LOCALAPPDATA}/UEFN-Ducky/`` or ``{PROJECT}/``, a unit of ``*``, ``.``
   or ``file`` and relative globs.
+- Ready for the Store and for teams (:func:`check_store_ready`; validate warns, a Store
+  build refuses the errors): an icon the Store takes, ``data_sharing`` says whether
+  teammates share the plugin's data, no team folder lives inside the island, and a shared
+  plugin keeps no files of its own outside ``api.data`` without a team folder for them.
 """
 
 from __future__ import annotations
@@ -355,6 +359,7 @@ class _Backend:
         self.rpcs: set[str] = set()
         self.nodes: set[str] = set()
         self.source_reads: list[str] = []
+        self.file_writes: list[tuple[str, int]] = []  # (rel, line) of each call that writes a file of its own
 
     def scan(self, rel: str, tree: ast.AST) -> None:
         for node in ast.walk(tree):
@@ -381,6 +386,8 @@ class _Backend:
                 self.tools.add(_kw_str(node, "name") or node.args[0].id)
                 self.tool_funcs[_kw_str(node, "name") or node.args[0].id] = node.args[0].id
             self._source_read(rel, node, name)
+            if _writes_file(node, name):
+                self.file_writes.append((rel, getattr(node, "lineno", 0)))
 
     def _source_read(self, rel: str, call: ast.Call, name: str) -> None:
         line = getattr(call, "lineno", 0)
@@ -418,6 +425,20 @@ class _Backend:
                 "can be compiled and the .py files are gone then: import the module, or keep the data in a "
                 ".json file next to it."
             )
+
+
+def _writes_file(call: ast.Call, name: str) -> bool:
+    """``open(p, "w")`` / ``p.open("a")``, ``write_text`` / ``write_bytes``, ``shutil`` copies and
+    moves, ``sqlite3.connect``: a file the plugin keeps itself instead of through ``api.data``."""
+    owner = call.func.value.id if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name) else ""
+    if name == "open" and owner not in ("os", "io", "codecs"):
+        pos = 1 if isinstance(call.func, ast.Name) else 0  # open(path, mode) vs Path(...).open(mode)
+        mode = call.args[pos] if len(call.args) > pos else next((k.value for k in call.keywords if k.arg == "mode"), None)
+        return isinstance(mode, ast.Constant) and isinstance(mode.value, str) and any(c in mode.value for c in "wax+")
+    if name in ("write_text", "write_bytes"):
+        return True
+    return (owner == "shutil" and name in ("copy", "copy2", "copyfile", "copytree", "move")) or (
+        owner == "sqlite3" and name == "connect")
 
 
 def scan_backend(root: Path, *, skip_tests: bool = False) -> _Backend:
@@ -583,3 +604,74 @@ def lint_draft(root: Path, manifest: dict[str, Any], plugin_id: str) -> list[str
     """Every rule above, in the order a fix is easiest to follow."""
     return (check_manifest(manifest) + check_skill(root, plugin_id) + check_backend(root, manifest, plugin_id)
             + check_ui(root, manifest))
+
+
+# The Store's own rules (plugin-uefn-ducky-store icon.rs): the first of these it finds is
+# the listing's icon, up to 700 KB, and a new listing without one is rejected.
+STORE_ICONS = ("assets/icon.svg", "assets/icon.png", "assets/icon.jpg", "assets/icon.jpeg",
+               "icon.svg", "icon.png", "icon.jpg", "icon.jpeg")
+STORE_ICON_MAX_BYTES = 700 * 1024
+_ICON_MAGIC = {".png": b"\x89PNG\r\n\x1a\n", ".jpg": b"\xff\xd8\xff", ".jpeg": b"\xff\xd8\xff"}
+
+
+def store_icon_problem(root: Path) -> str:
+    """'' when the Store will find a usable icon in the plugin, else what to do about it."""
+    for rel in STORE_ICONS:
+        path = root / rel
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        if not data or len(data) > STORE_ICON_MAX_BYTES:
+            return (f"{rel} is {len(data) // 1024} KB: the Store takes an icon up to 700 KB. Set a smaller one with "
+                    "ducky_plugin_set_icon(id, image_path) (it makes a 512 px PNG).")
+        magic = _ICON_MAGIC.get(path.suffix.lower())
+        if magic and not data.startswith(magic):
+            return f"{rel} isn't a real {path.suffix[1:].upper()} file: set one with ducky_plugin_set_icon(id, image_path)."
+        return ""
+    return ("No Store icon: the Store rejects a new plugin without assets/icon.png (or .svg / .jpg, up to 700 KB). "
+            "Ask the user whether to make one (ducky_ai_image, or their own image model) or use a picture they "
+            "have, then ducky_plugin_set_icon(id, image_path).")
+
+
+def check_store_ready(root: Path, manifest: dict[str, Any], plugin_id: str) -> tuple[list[str], list[str]]:
+    """(errors, warnings): would the Store take this plugin, and is it ready for teams? A
+    draft still installs with them (validate shows them as warnings); a Store build refuses
+    the errors, so nothing the Store would reject is ever uploaded.
+
+    Errors: no ``data_sharing`` decision; a team folder inside the island (UEFN revision
+    control carries the island folder, so core never shares it); no usable icon. Warning: a
+    plugin whose data is shared writes files of its own and declares no team folder for them.
+    """
+    errors: list[str] = []
+    icon = store_icon_problem(root)
+    if icon:
+        errors.append(icon)
+    if "data_sharing" not in manifest:
+        errors.append(
+            'plugin.json has no "data_sharing": ask the user once whether their team should share this '
+            "plugin's data (a team copy with changes, locks, history and live editing, like source control), "
+            'then set "data_sharing": true (records go through api.data, the plugin\'s own files through '
+            '"team_folders") or false (nothing worth sharing: personal tools, browsing, AI providers). '
+            "A Store build refuses a plugin without it."
+        )
+    folders = manifest.get("team_folders") if isinstance(manifest.get("team_folders"), list) else []
+    for folder in folders:
+        root_s = str(folder.get("root") or "") if isinstance(folder, dict) else ""
+        if root_s.startswith("{PROJECT}"):
+            errors.append(
+                f"team folder {folder.get('id')!r} is inside the island ({root_s!r}): UEFN revision control carries "
+                "the island folder, so UEFN Ducky won't share it with a team. Keep it on this PC: "
+                f'"{{LOCALAPPDATA}}/UEFN-Ducky/{plugin_id}/...", one subfolder per island named by the lowercased '
+                "`mount` from ducky_get_local_project (the same on every PC)."
+            )
+    warnings: list[str] = []
+    if manifest.get("data_sharing") is not False and not folders:
+        spots = [f"{rel}:{line}" for rel, line in sorted(scan_backend(root, skip_tests=True).file_writes)]
+        if spots:
+            warnings.append(
+                f"{', '.join(spots[:5])}{' …' if len(spots) > 5 else ''}: writes files of its own, which teammates "
+                'never get. Keep records in api.data (put / put_file), declare the folder in "team_folders" when '
+                'they must stay real files, or set "data_sharing": false. Only this PC\'s caches belong in '
+                "api.local_dir(), and outputs in the artifact_dir / output_dir Ducky passes in."
+            )
+    return errors, warnings

@@ -42,10 +42,16 @@ encrypted on disk, and syncs shared copies.
   PC) or one **shared space** offered by an installed plugin: Plugins → the plugin →
   Data. A plugin never mixes the two and needs no code for either.
   With no shared spaces on offer, Local is the only choice and the Data page says so.
-- A plugin whose data must never reach a team (browsing, personal tools) sets
-  `"data_sharing": false` at the top of `plugin.json`: its data is always Local, it
-  gets no scope bar and no Data picker, and switching it to a space is refused.
-  `"data_sharing": true` offers a shared space before the plugin has stored anything.
+- Every plugin says whether teammates may share its data: `"data_sharing"` at the top
+  of `plugin.json`. Ask the user once before you scaffold ("Should your team share this
+  plugin's data? A team copy gives everyone the same records with changes, locks,
+  history and live editing, like source control.") and pass the answer to
+  `ducky_plugin_scaffold(…, data_sharing=…)`. `ducky_plugin_validate` warns while it's
+  missing, and a Store build (public or a team's private one) refuses the plugin.
+  - `true`: the scope bar and Data picker offer shared spaces from the start.
+  - `false` (browsing, personal tools, AI providers, nothing worth sharing): its data
+    is always Local, it gets no scope bar and no Data picker, and switching it to a
+    space is refused.
   Any other value is refused by `ducky_plugin_validate`.
 - `ducky_plugin_data_scope(id, scope="")`: empty `scope` tells you which copy a plugin
   uses; `"local"` or a space id switches it. Switch only when the user asks: it asks
@@ -103,7 +109,7 @@ code for it; these rules decide how well it works for people editing together.
   tools and return `{"ok": False, "error": str(exc)}`, as for read-only copies.
 - **Every shared item locks to whoever changes it**, with no plugin code: the first change
   takes the lock for this PC (the write goes ahead), teammates see "Locked by Ana: <the
-  item's name>" and can't change it until 5 minutes after Ana's last change went out, Ana
+  item's name>" and can't change it until 30 seconds after Ana's last change went out, Ana
   closes the plugin's tab (once her changes went out), she releases it, or they ask. The lock is named by the doc's own `name`, `title` or `label`
   field (else the key), so give docs a `name`. Change it per prefix with
   `"data_locks": {"<key prefix>": "auto" | "required" | "none"}` in `plugin.json` (the
@@ -121,18 +127,57 @@ code for it; these rules decide how well it works for people editing together.
 - **History.** Every change is kept with who made it and when. The bar's Details shows
   it; restoring an item, or the whole plugin to an earlier change, is a new change that
   everyone gets, never a rewrite.
-- **Live.** On a team copy, the scope bar's Go live links the PCs of teammates live in
-  the same plugin and project straight to each other (peer to peer). Each write then reaches them at
-  once, before its commit: panels get `plugin_scope_changed` with `live: true` and the
-  `keys`, and reads return the new value until the commit lands. Pointers, names and
-  selections show in every panel page with no code (`data-live-id` on elements people
-  point at keeps them on the same thing). For short-lived things that aren't data (a
+- **Live.** On a team copy, the bar's Live menu lists the live groups by host: a
+  teammate starts one, others join it (peer to peer). While a plugin is live its copy
+  syncs every few seconds, and each change a member commits makes the group pull it at
+  once (`plugin_scope_changed` reason `synced`, as above). With no plugin code, every
+  panel page then shows members' pointers, names and selections (`data-live-id` on
+  elements people point at keeps them on the same thing), a member can follow the
+  host's screen (scroll and tab clicks), and **anything someone presses or types in is
+  held for them**: for every teammate on the same screen that control greys out with
+  their name until they let go. A page that shows different things at one address names
+  its screen with `data-live-view` on `<body>` (`<record id>:<tab>`), so a hold never
+  greys out a control on another record. Pictures and videos that are still syncing show
+  a placeholder and load when they arrive. For short-lived things that aren't data (a
   playhead, a drag in progress) a backend uses `api.live.send(topic, data)` and
   `api.live.on(topic, callback)`, a panel `live.send` (see `ai_plugins`). Data still
   goes through `api.data`: the commit is the record.
 - `ducky_team_status(plugin)` says who is in the copy and what they do, what is locked,
   what waits to go out or come in, and the conflicts. `ducky_plugin_data_scope` gives
   the same for a shared copy.
+
+## The plugin's own folders (`team_folders`)
+
+Only when files must stay real files on disk (another program reads them, a scene
+folder, big binaries) declare the folder in `plugin.json`; the host shares it with
+the team like `api.data`, with no plugin code:
+
+```json
+"team_folders": [
+  {"id": "scenes", "root": "{LOCALAPPDATA}/UEFN-Ducky/<id>/scenes", "unit": "*", "lock": "unit",
+   "last": ["scene.json"], "ignore": ["*/scene.prev.json", "**/*.tmp"], "after_pull": "reload"}
+]
+```
+
+- `root`: under `{LOCALAPPDATA}/UEFN-Ducky/<id>/`. **Never inside the island folder**
+  (`{PROJECT}/…`): UEFN revision control already carries it, so the host won't share it
+  with a team, and a Store build refuses it. Per-island files go in one subfolder per
+  island named by the lowercased `mount` from `ducky_get_local_project`
+  (`api.call_tool("ducky_get_local_project")`): the same on every PC. Never the path or
+  `slug`, which differ per PC.
+- `unit` (what locks and presence are about): `*` each top-level folder and loose file
+  (one per island, scene, …); `.` the whole folder; `file` every file.
+- `lock`: `unit` (the first change takes the unit's lock) or `none`. `on_locked`:
+  `readonly` (default) or `quarantine` (writes are kept, never sent; the bar offers
+  Keep mine as a copy or Discard mine).
+- `last`: globs relative to the unit, written after its other files (the file that says
+  the unit is complete). `ignore`: globs relative to `root`, never shared (backups,
+  temp files). `merge`: globs relative to the unit; such JSON files merge three ways
+  instead of making the whole unit a conflict (≤ 32 MiB).
+- `after_pull`: `notify` or `reload` (the plugin reloads on the pulled files).
+- Write each file to a temp name and rename it into place: a unit goes out 3 s after its
+  last change with no `*.tmp` left.
+- The bar says why a folder can't be shared: a network or non-NTFS drive, or OneDrive.
 
 ## Sensitive data
 
@@ -148,10 +193,13 @@ personal tokens, private notes, anything that must not leave this PC.
 
 ## Don't
 
-- Don't write files with `open()`, `Path.write_*`, `sqlite3` or a folder of your own.
-  The one exception: files a workflow node or image generator makes go in the
-  `artifact_dir` / `output_dir` Ducky passes in. Project files go through
-  `api.call_tool("workspace_write_file", …)`.
+- Don't write files with `open()`, `Path.write_*`, `shutil`, `sqlite3` or a folder of
+  your own: teammates never get them (`ducky_plugin_validate` warns). The exceptions:
+  a declared `team_folders` folder; this PC's caches in `api.local_dir(name)`; files a
+  workflow node or image generator makes in the `artifact_dir` / `output_dir` Ducky
+  passes in. Project files go through `api.call_tool("workspace_write_file", …)`.
+- Don't keep anything inside the island folder (`.ducky/…` and the like): UEFN revision
+  control carries it, so it never reaches a team through the host.
 - Don't keep records in `prefs` (small UI choices only) or in page memory (panels
   reload when moved to a floating window).
 - Don't read another plugin's data; call its MCP tools instead (`api.call_tool`).

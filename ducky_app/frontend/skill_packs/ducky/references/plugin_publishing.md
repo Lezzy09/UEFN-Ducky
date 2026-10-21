@@ -31,10 +31,21 @@ Paid licenses are not available yet: don't promise a price or a sale.
 1. The draft passes `ducky_plugin_validate`, `ducky_plugin_test` and
    `ducky_plugin_errors` clean (`plugin_testing`). Plugins with Verse templates also
    pass `verse_template_verify` with UEFN open.
-2. Raise `version` in `plugin.json` (semver) so installs see an update. The build
+2. `ducky_plugin_validate` shows none of the Store's refusals in its warnings. Every
+   Store build (public or a team's private one) refuses, before anything uploads:
+   - no icon (`ai_plugins` rule 14: ask, then `ducky_plugin_set_icon`);
+   - no `"data_sharing"`, or a team folder inside the island (rule 8);
+   - a personal path in a shipped file;
+   - a build over 32 MB.
+   Fix the team warnings too: records in `api.data`, own files in a `team_folders`
+   folder outside the island.
+3. Raise `version` in `plugin.json` (semver) so installs see an update. The Store keeps
+   every version it was sent, a rejected one too: never send the same number twice.
+   Ducky Account's publish refuses a version the Store already has, and an update with
+   no release notes, before it builds. The build
    report lists skill files without a description and tools with a weak first docstring
    line: fix them first, or agents won't find the plugin (`ai_plugins` → Make it findable).
-3. Ask the user where it goes and for one line of release notes, then follow the
+4. Ask the user where it goes and for one line of release notes, then follow the
    Account skill.
 
 ## What compiles (write code that survives it)

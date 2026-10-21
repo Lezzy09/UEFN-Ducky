@@ -71,6 +71,8 @@ ESBUILD_SHA256 = "7286c3611b6f1f4c4d9ec90adcbc478407ff0d28ead96567f361d53e67613e
 # out with AVX-512 and BMI2 from the build PC, and Ducky crashed with an illegal
 # instruction (0xC000001D) on every CPU without them. Both steps get the baseline.
 BASELINE_CPU_FLAGS = "-mcpu=x86_64"
+# The Store refuses a bigger plugin zip (plugin-uefn-ducky-store MAX_ZIP_BYTES).
+STORE_MAX_ZIP_BYTES = 32 * 1024 * 1024
 
 # Never compiled, never shipped: repo internals and test code.
 _SKIP_DIR_NAMES = frozenset(
@@ -568,6 +570,12 @@ def build_plugin(
     if personal and release:
         # A published plugin would hand every user its author's account name and folders.
         raise CompileError(personal_path_message(personal))
+    from backend.uefn_plugins.plugin_lint import check_store_ready
+
+    store_errors, store_warnings = check_store_ready(src, manifest, pid)
+    if store_errors and release:
+        # Every Store build (public, a team's private one, a review): nothing the Store would reject.
+        raise CompileError(" ".join(store_errors))
 
     _progress(progress, 0.02, "Preparing build kit…")
     kit = ensure_build_kit(progress)
@@ -576,7 +584,7 @@ def build_plugin(
     esbuild = _kit_esbuild(kit)
 
     final_pyd_name = f"{mod_name}.v{verrank}.{PY_ABI}.pyd"
-    warnings: list[str] = [personal_path_message(personal)] if personal else []
+    warnings: list[str] = ([personal_path_message(personal)] if personal else []) + store_errors + store_warnings
     try:
         from backend.uefn_plugins.plugin_lint import check_findability
 
@@ -672,6 +680,11 @@ def build_plugin(
             bad = check.testzip()
             if bad:
                 raise CompileError(f"built zip failed CRC for {bad}")
+        if release and len(raw) > STORE_MAX_ZIP_BYTES:
+            raise CompileError(
+                f"The build is {len(raw) / 1048576:.1f} MB and the Store takes up to "
+                f"{STORE_MAX_ZIP_BYTES // 1048576} MB: move big media out of the plugin (users fetch or make it)."
+            )
         out_zip.parent.mkdir(parents=True, exist_ok=True)
         tmp = out_zip.with_suffix(out_zip.suffix + ".tmp")
         tmp.write_bytes(raw)
