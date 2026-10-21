@@ -937,9 +937,20 @@ class PanelApiStoreMixin:
                          fast: bool = False) -> dict[str, Any]:
         from backend.uefn_plugins import live
 
-        if str(topic or "") == live.CHANGE:
-            return {"ok": False, "error": "ducky.change is the host's."}
         return live.send(str(plugin_id or ""), str(topic or ""), data, to=str(to or ""), fast=bool(fast))
+
+    def plugin_live_hold(self, plugin_id: str, anchor: str, on: bool = True, t: float = 0.0,
+                         view: str = "") -> dict[str, Any]:
+        """The page's live script presses or lets go of a control (every teammate greys it out)."""
+        from backend.uefn_plugins import live
+
+        return live.hold(str(plugin_id or ""), str(anchor or ""), bool(on), t, str(view or ""))
+
+    def plugin_live_holds(self, plugin_id: str) -> dict[str, Any]:
+        """What teammates hold in this plugin now (a page that just loaded)."""
+        from backend.uefn_plugins import live
+
+        return {"ok": True, "holds": live.holds_now(str(plugin_id or ""))}
 
     def plugin_live_status(self, plugin_id: str) -> dict[str, Any]:
         from backend.uefn_plugins import live

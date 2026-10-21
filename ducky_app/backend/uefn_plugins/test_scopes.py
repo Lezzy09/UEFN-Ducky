@@ -1416,7 +1416,7 @@ def test_a_required_prefix_waits_for_its_lock_and_refuses_without_it(team_pc, mo
 
 def test_what_a_person_changes_locks_to_them_by_default(team_pc, monkeypatch: pytest.MonkeyPatch) -> None:
     """Owner, Oct 19 2026: in a shared plugin the item someone changes is theirs (hard lock)
-    until 5 minutes after their last change, with no plugin code: every plugin with a
+    until 30 s after their last change went out, with no plugin code: every plugin with a
     manifest asks for the lock on the first change, named by the item's own name, and its bar
     hears when the lock is granted. ``"data_locks": {"<prefix>": "none"}`` opts out."""
     import json

@@ -15,20 +15,18 @@ import {
   folderUnitKey,
   folderUnitLockId,
   folderUnitStateText,
-  hereText,
   historyWho,
   holdsFolderUnit,
   initials,
   listText,
-  liveCellText,
-  livePathText,
-  liveText,
-  locksText,
+  groupName,
+  liveButtonText,
   lostText,
   notShared,
   othersHere,
   outgoingStateText,
   personTone,
+  phraseTab,
   pickedText,
   presence,
   presenceText,
@@ -180,8 +178,9 @@ describe("the bar's one status phrase", () => {
   it("a state that stops syncing comes before everything else", () => {
     expect(say({ ...busy(), state: "lost" })).toMatch(/^You no longer have access to Alpha\./);
     expect(say({ ...busy(), state: "locked" })).toBe("Waiting for your account's data key. Read-only until you're back online.");
-    expect(say({ ...busy(), state: "error", error: "HTTP 502", nextTry: NOW / 1000 + 40 })).toBe("Not synced: HTTP 502 · retry in 40 s");
-    expect(say({ ...busy(), state: "offline" })).toBe("Not synced: offline");
+    // The raw reason stays off the bar: the Changes tab shows it.
+    expect(say({ ...busy(), state: "error", error: "HTTP 502", nextTry: NOW / 1000 + 40 })).toBe("Couldn't sync · 3 to send · retry in 40 s");
+    expect(say({ ...busy(), state: "offline", error: "Network error: <urlopen error [WinError 10060] ...>" })).toBe("Offline · 3 to send");
     expect(say({ ...busy(), state: "no_provider" })).toBe("Not connected: Ducky Account isn't running · 3 to send");
     expect(say({ ...busy(), state: "unavailable", error: "permission denied" })).toBe(
       "Alpha isn't available right now (permission denied). Read-only until it's back.");
@@ -207,7 +206,7 @@ describe("the bar's one status phrase", () => {
     s.refused = 1;
     expect(statusPhrase(s, NOW)).toMatchObject({ text: "1 can't be sent", tone: "warn" });
     s.refused = 0;
-    expect(say(s)).toBe("Up to date · #482 · 2 min ago");
+    expect(say(s)).toBe("Up to date · 2 min ago");
     expect(say({ ...s, state: "waiting" })).toBe("Waiting for Alpha's data…");
     expect(say({ ...s, state: "paused", scope: { ...s.scope!, readOnly: true } })).toBe("Alpha is paused. Read-only.");
     expect(say({ ...s, head: undefined, syncedAt: null })).toBe("Not synced yet");
@@ -241,23 +240,6 @@ describe("the bar's one status phrase", () => {
       "Viewing", "Editing MEGA_Duel_Stadium and Crate", "AI (their ducky Builder) is editing Arena", "Viewing", "Not in Forge",
     ]);
     expect(othersHere(rows).map((r) => r.name)).toEqual(["Ana", "Ben", "Cy"]);
-    expect(hereText(rows)).toBe("Ana is editing MEGA_Duel_Stadium and Crate · 2 more here");
-  });
-
-  it("the bar's line: whoever edits first, else who is here", () => {
-    const at = (people: Record<string, unknown>[]) => hereText(presence(people, "forge"));
-    const viewing = (name: string) => ({ user: name, user_name: name, plugins: { forge: { viewing: true } } });
-    expect(at([])).toBe("");
-    expect(at([{ user_name: "Me", me: true, plugins: { forge: { viewing: true } } }])).toBe("");
-    expect(at([viewing("Ana")])).toBe("Ana is here");
-    expect(at([viewing("Ana"), viewing("Ben")])).toBe("Ana and Ben are here");
-    expect(at([viewing("Ana"), viewing("Ben"), viewing("Cy"), viewing("Di")])).toBe("Ana, Ben +2 are here");
-    expect(at([{ user_name: "Ben", plugins: { forge: { editing: [{ unitName: "Arena", actor: "agent", ducky: "Builder" }] } } }]))
-      .toBe("AI (Ben's ducky Builder) is editing Arena");
-    expect(at([{ user_name: "Ana", plugins: { forge: { editing: [{ unitName: "A" }, { unitName: "B" }, { unitName: "C" }] } } }]))
-      .toBe("Ana is editing A +2");
-    // An older roster's activity rows say it themselves.
-    expect(at([{ name: "Ana", doing: "editing", unitName: "Arena" }, { name: "Ben", doing: "" }])).toBe("Ana is editing Arena");
   });
 
   it("avatars: initials and a colour that is the same for a person on every PC", () => {
@@ -270,12 +252,6 @@ describe("the bar's one status phrase", () => {
     const tones = new Set(["u1", "u2", "u3", "u4", "ana", "ben", "iliya", "tas"].map(personTone));
     expect([...tones].every((t) => t >= 0 && t < 12)).toBe(true);
     expect(tones.size).toBeGreaterThan(4);
-  });
-
-  it("counts locks: others' and mine", () => {
-    expect(locksText([ANA_LOCK, { unit: "doc:x", holder: "Ben" }, { unit: "doc:y", mine: true }])).toBe("2 locked · You hold 1");
-    expect(locksText([{ unit: "doc:y", mine: true }])).toBe("You hold 1");
-    expect(locksText([])).toBe("");
   });
 
   it("words a refused write, Break, restores, conflicts and outgoing states", () => {
@@ -338,7 +314,7 @@ describe("declared folders", () => {
     expect(statusPhrase(local, NOW)).toMatchObject({ key: "binding", text: "Getting Alpha's files… 40%" });
     expect(say(shared({ state: "error", binding: { team: "", pct: 0 }, conflicts: [{ kind: "doc", key: "deck" }] })))
       .toBe("Getting Alpha's files… 0%");
-    expect(say(shared({ binding: null }))).toBe("Up to date · #482 · 2 min ago");
+    expect(say(shared({ binding: null }))).toBe("Up to date · 2 min ago");
   });
 
   it("on Local, a folder that can't be shared says why; a folder plugin's files aren't called encrypted", () => {
@@ -451,7 +427,7 @@ describe("declared folders", () => {
       { name: "tas", user: "u1", device: "Laptop", me: true },
       { name: "tas", user: "u1", device: "MainPC", self: true, plugins: { forge: { editing: [{ unitName: "Crate" }] } } },
     ], "forge");
-    expect(hereText(rows)).toBe("You on MainPC are editing Crate");
+    expect(presenceText(rows[1], "Forge")).toBe("Editing Crate");
   });
 
   it("an AI's change says AI, never only the account it ran under", () => {
@@ -463,47 +439,36 @@ describe("declared folders", () => {
     const rows = presence([
       { name: "Ana", user: "u2", device: "ANA-PC", plugins: { forge: { editing: [{ unitName: "Arena", actor: "agent", ducky: "Builder" }] } } },
     ], "forge");
-    expect(hereText(rows)).toBe("AI (Ana's ducky Builder) is editing Arena");
     expect(presenceText(rows[0], "Forge")).toBe("AI (their ducky Builder) is editing Arena");
   });
 });
 
-describe("live wording", () => {
-  it("names who is live, at most three", () => {
-    expect(liveText({ on: true, peers: [] })).toBe("Live · nobody else yet");
-    expect(liveText({ on: true, peers: [{ name: "Alex" }] })).toBe("Live with Alex");
-    expect(liveText({ on: true, peers: [{ name: "Alex" }, { label: "SAM-PC" }, {}] })).toBe("Live with Alex, SAM-PC and A teammate");
-    expect(liveText({ on: true, peers: [{ name: "A" }, { name: "B" }, { name: "C" }, { name: "D" }] })).toBe("Live with A, B and 2 more");
+describe("the bar's status, tabs and live groups", () => {
+  it("the status opens the tab that explains it", () => {
+    expect(phraseTab("conflict")).toBe("conflicts");
+    expect(phraseTab("quarantined")).toBe("conflicts");
+    expect(phraseTab("locked")).toBe("locks");
+    expect(phraseTab("updates")).toBe("incoming");
+    expect(phraseTab("up_to_date")).toBe("history");
+    expect(phraseTab("paused")).toBe("settings");
+    expect(phraseTab("not_synced")).toBe("changes");
+    expect(phraseTab("queue")).toBe("changes");
   });
 
-  it("says how each teammate is reached", () => {
-    expect(livePathText("direct")).toBe("Direct");
-    expect(livePathText("forwarded", "tas")).toBe("Through tas");
-    expect(livePathText("forwarded")).toBe("Through a teammate");
-    expect(livePathText("none")).toBe("Not linked (changes come with sync)");
-    expect(livePathText(undefined)).toBe("Not linked (changes come with sync)");
+  it("names the Live button by the group you're in, else how many there are", () => {
+    const iliya = { room: "h:d1", host: "iliya", members: [{ name: "iliya", device: "d1" }] };
+    const mo = { room: "h:d2", host: "Mo", members: [{ name: "Mo", device: "d2" }] };
+    expect(liveButtonText(undefined)).toBe("Live");
+    expect(liveButtonText({ on: false, groups: [] })).toBe("Live");
+    expect(liveButtonText({ on: false, groups: [iliya, mo] })).toBe("Live · 2");
+    expect(liveButtonText({ on: true, groups: [{ ...iliya, mine: true }, mo] })).toBe("iliya");
+    expect(liveButtonText({ on: true, groups: [{ room: "h:me", host: "You", hostIsMe: true, mine: true, members: [{ name: "You", me: true }] }] }))
+      .toBe("You're live");
   });
 
-  it("the People table: live with you and how, live elsewhere, here, or not in the plugin", () => {
-    const people = presence([
-      { name: "Me", me: true, deviceId: "d0", plugins: { imk: { viewing: true, live: "p:Island" } } },
-      { name: "Ana", deviceId: "d1", plugins: { imk: { viewing: true, live: "p:Island" } } },
-      { name: "Ben", deviceId: "d2", plugins: { imk: { viewing: true, live: "p:Island" } } },
-      { name: "Cy", deviceId: "d3", plugins: { imk: { viewing: true, live: "p:Island" } } },
-      { name: "Di", deviceId: "d4", plugins: { imk: { viewing: true, live: "p:Other" } } },
-      { name: "Ed", deviceId: "d5", plugins: { imk: { viewing: true } } },
-      { name: "Fay", deviceId: "d6", plugins: {} },
-    ], "imk");
-    const live = { on: true, peers: [
-      { device: "d1", path: "direct" as const }, { device: "d2", path: "forwarded" as const, via: "Ana" },
-      { device: "d3", path: "none" as const },
-    ] };
-    const cell = Object.fromEntries(people.map((row) => [row.name, liveCellText(row, live)]));
-    expect(cell).toEqual({
-      Me: "Live", Ana: "Live with you · Direct", Ben: "Live with you · Through Ana",
-      Cy: "Live with you · Not linked (changes come with sync)", Di: "Live", Ed: "Here", Fay: "",
-    });
-    expect(liveCellText(people[1], { on: false })).toBe("Live");  // live, this PC isn't
-    expect(liveCellText(people[0], { on: false })).toBe("Here");
+  it("a group is named by its host, else by who's left in it", () => {
+    expect(groupName({ room: "h:d1", host: "iliya", members: [] })).toBe("iliya");
+    expect(groupName({ room: "h:me", host: "You", hostIsMe: true, members: [] })).toBe("You");
+    expect(groupName({ room: "h:gone", host: "", members: [{ name: "Mo" }] })).toBe("Mo's group");
   });
 });

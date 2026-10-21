@@ -1,6 +1,7 @@
 /** Scope bar wording. Pure so the 80% / full rules have one test. */
 import type {
   PluginFolderShareUnit,
+  PluginLiveGroup,
   PluginLivePeer,
   PluginLiveStatus,
   PluginScopeFolderUnit,
@@ -364,10 +365,10 @@ export function statusPhrase(status: PluginScopeStatus, nowMs: number): StatusPh
     return { key: "key", text: "Waiting for your account's data key. Read-only until you're back online.", tone: "warn" };
   }
   if (state === "offline" || state === "error") {
-    const reason = status.error || (state === "offline" ? "offline" : "");
+    // The reason (often a raw network error) is the Changes tab's, never the bar's.
     const wait = status.nextTry ? status.nextTry - nowMs / 1000 : 0;
     const retry = wait > 0 ? ` · retry in ${durationText(wait)}` : "";
-    return { key: "not_synced", text: `Not synced${reason ? `: ${reason}` : ""}${retry}`, tone: "error" };
+    return { key: "not_synced", text: `${state === "offline" ? "Offline" : "Couldn't sync"}${queued}${retry}`, tone: "error" };
   }
   if (state === "no_provider") {
     return { key: "no_provider", text: `${status.error || "Not connected: Ducky Account isn't running"}${queued}`, tone: "error" };
@@ -426,7 +427,35 @@ export function statusPhrase(status: PluginScopeStatus, nowMs: number): StatusPh
   }
   if (!status.syncedAt && !status.head) return { key: "up_to_date", text: "Not synced yet", tone: "" };
   const when = status.syncedAt ? agoText(nowMs / 1000 - status.syncedAt) : "";
-  return { key: "up_to_date", text: ["Up to date", status.head ? `#${status.head}` : "", when].filter(Boolean).join(" · "), tone: "" };
+  return { key: "up_to_date", text: ["Up to date", when].filter(Boolean).join(" · "), tone: "" };
+}
+
+/** The Source control panel's tabs. */
+export type ScopeTab = "changes" | "incoming" | "conflicts" | "locks" | "history" | "people" | "settings";
+
+/** The tab the bar's status opens: where what it says is explained and acted on. */
+export function phraseTab(key: string): ScopeTab {
+  if (key === "conflict" || key === "quarantined") return "conflicts";
+  if (key === "locked") return "locks";
+  if (key === "updates") return "incoming";
+  if (key === "up_to_date") return "history";
+  if (key === "local" || key === "folder_refused" || key === "paused" || key === "key") return "settings";
+  return "changes";
+}
+
+/** The live groups dropdown's button: "Live · 2" (groups to join), "Live" (none), the host's
+ * name while in their group, "You're live" while hosting. */
+export function liveButtonText(live: PluginLiveStatus | undefined): string {
+  const groups = live?.groups ?? [];
+  const mine = groups.find((g) => g.mine);
+  if (live?.on && mine) return mine.hostIsMe ? "You're live" : mine.host || "Live";
+  return groups.length ? `Live · ${groups.length}` : "Live";
+}
+
+/** A group's name in the dropdown: its host, else (the host left) its first member. */
+export function groupName(group: PluginLiveGroup): string {
+  if (group.hostIsMe) return "You";
+  return group.host || `${group.members[0]?.name || "A teammate"}'s group`;
 }
 
 /** editing: they (or one of their duckies) changed something here in the last 2 minutes;
@@ -511,11 +540,6 @@ export function aiText(owner: string, ducky?: string): string {
   return ducky ? `AI (${owner} ducky ${ducky})` : "AI";
 }
 
-/** A presence row's name in a sentence: "You on MainPC" for this account on another PC. */
-export function shownName(row: Presence): string {
-  return row.self ? `You on ${row.device || "your other PC"}` : row.name;
-}
-
 /** Who made a change in history: an AI's change says AI ("AI (tas's ducky Builder)",
  * "AI, for tas"), never only the account it ran under. */
 export function historyWho(entry: { by?: string; actor?: string; ducky?: string }): string {
@@ -538,26 +562,6 @@ export function presenceText(row: Presence, plugin = "this plugin"): string {
   return row.state === "viewing" ? "Viewing" : `Not in ${plugin}`;
 }
 
-/** The bar's line beside the avatars ("" when nobody else is here): whoever edits first,
- * "Ana is editing Untitled island 1 · 2 more here"; else "Ana is here", "Ana and Ben are
- * here", "Ana, Ben +2 are here". */
-export function hereText(rows: Presence[]): string {
-  const others = othersHere(rows);
-  if (!others.length) return "";
-  const editor = others.find((row) => row.state === "editing");
-  if (editor) {
-    const unit = editor.editing.length ? unitsText(editor.editing) : editor.duckies[0]?.unitName || "";
-    const what = editor.editing.length || !editor.duckies.length
-      ? `${shownName(editor)} ${editor.self ? "are" : "is"} editing${unit ? ` ${unit}` : ""}`
-      : `${aiText(editor.self ? "your" : `${editor.name}'s`, editor.duckies[0].ducky)} is editing${unit ? ` ${unit}` : ""}${editor.self ? ` on ${editor.device || "your other PC"}` : ""}`;
-    const more = others.length - 1;
-    return more ? `${what} · ${more} more here` : what;
-  }
-  if (others.length === 1) return `${shownName(others[0])} ${others[0].self ? "are" : "is"} here`;
-  if (others.length === 2) return `${shownName(others[0])} and ${shownName(others[1])} are here`;
-  return `${shownName(others[0])}, ${shownName(others[1])} +${others.length - 2} are here`;
-}
-
 /** "IK" for "iliya kovachki", "A" for "Ana" or "ana@x.com". */
 export function initials(name: string): string {
   const words = (name.split("@")[0] || name).split(/[\s._-]+/).filter(Boolean);
@@ -573,13 +577,6 @@ export function personTone(key: string): number {
   let h = 0;
   for (let i = 0; i < key.length; i += 1) h = (h * 31 + key.charCodeAt(i)) % 7919;
   return h % AVATAR_TONES;
-}
-
-/** "2 locked · You hold 1" ("" when there are none). */
-export function locksText(locks: PluginScopeLock[] | undefined): string {
-  const mine = (locks ?? []).filter((lock) => lock.mine).length;
-  const others = (locks ?? []).length - mine;
-  return [others ? `${others} locked` : "", mine ? `You hold ${mine}` : ""].filter(Boolean).join(" · ");
 }
 
 /** A refused write, for the alerts system: "Forge: MEGA_Duel_Stadium is locked by Ana since 3:02 PM.
@@ -654,28 +651,3 @@ export function outgoingStateText(state: string, reason?: string, attempts?: num
 /** A live teammate's name on the bar and in the drawer. */
 export const livePeerName = (peer: PluginLivePeer) => peer.name || peer.label || "A teammate";
 
-/** The Live pill: who is live here. "Live with Alex and Sam", "Live · nobody else yet". */
-export function liveText(live: PluginLiveStatus | undefined): string {
-  const peers = live?.peers ?? [];
-  if (!peers.length) return "Live · nobody else yet";
-  const names = peers.map(livePeerName);
-  const shown = names.length > 3 ? [...names.slice(0, 2), `${names.length - 2} more`] : names;
-  return `Live with ${listText(shown)}`;
-}
-
-/** How this PC reaches a live teammate, for the drawer. */
-export function livePathText(path: PluginLivePeer["path"], via?: string): string {
-  if (path === "direct") return "Direct";
-  if (path === "forwarded") return `Through ${via || "a teammate"}`;
-  return "Not linked (changes come with sync)";
-}
-
-/** One person's live state in the People table: "Live with you · Direct", "Live with you ·
- * Through tas", "Live" (live elsewhere, or this PC isn't), "Here", "" (not in the plugin). */
-export function liveCellText(row: Presence, live: PluginLiveStatus | undefined): string {
-  if (row.me) return live?.on ? "Live" : row.state === "away" ? "" : "Here";
-  const peer = live?.on ? (live.peers ?? []).find((p) => p.device && p.device === row.deviceId) : undefined;
-  if (peer) return `Live with you · ${livePathText(peer.path, peer.via)}`;
-  if (row.live) return "Live";
-  return row.state === "away" ? "" : "Here";
-}

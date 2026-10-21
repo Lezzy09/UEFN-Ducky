@@ -314,10 +314,11 @@ export const pluginPushSubscriptions = new Map<
 /** Events the host tells panels itself, in their documented shape: the scope bar sends
  * `plugin_scope_changed` with `reason` and `keys`. The raw app push of that name (every
  * sync round, lock and mode change, other plugins' too) carries no `reason`, so a panel
- * that subscribed to it read each one as a switch and started over. Live messages and
- * peers reach only their own plugin's panels (`live.message`, `live.peers`), and the peer
+ * that subscribed to it read each one as a switch and started over. Live messages, peers
+ * and holds reach only their own plugin's panels (`live.message`, `live.peers`,
+ * `live.holds`), and the peer
  * connections' commands (`rtc_cmd`: offers and sealed bytes) never reach a panel. */
-const HOST_TOLD_EVENTS = new Set(["plugin_scope_changed", "live_message", "live_peers", "rtc_cmd"]);
+const HOST_TOLD_EVENTS = new Set(["plugin_scope_changed", "live_message", "live_peers", "live_holds", "rtc_cmd"]);
 
 export function shouldForwardPluginPush(
   tabId: string,
@@ -331,14 +332,29 @@ export function shouldForwardPluginPush(
   return sub.types.has(eventType);
 }
 
-/** A pointer or selection from the host script: where it is (an anchor selector and the
- * point's fraction of that element), sent to teammates live in the room. */
-function liveFast(ctx: BridgeContext, topic: "ducky.pointer" | "ducky.select", params: Record<string, unknown>) {
+const viewId = (v: unknown) => (typeof v === "string" ? v.replace(/[^A-Za-z0-9._:-]/g, "").slice(0, 64) : "");
+
+/** A pointer, selection, view or tab click from the host script, sent to teammates live in
+ * the group: where it is (an anchor selector), a pointer's point as fractions of that
+ * element, a view's id and scroll positions. Pointers, selections and views may drop (the
+ * next replaces them); a tab click goes reliably. */
+function liveHost(ctx: BridgeContext, topic: "ducky.pointer" | "ducky.select" | "ducky.view" | "ducky.nav",
+  params: Record<string, unknown>) {
   const anchor = typeof params.anchor === "string" ? params.anchor.slice(0, 400) : "";
-  if (!anchor) return { ok: false };
   const frac = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0);
-  const data = topic === "ducky.pointer" ? { anchor, fx: frac(params.fx), fy: frac(params.fy) } : { anchor };
-  void getApi()?.plugin_live_send?.(ctx.pluginId, topic, data, "", true)?.catch(() => {});
+  let data: Record<string, unknown>;
+  if (topic === "ducky.view") {
+    const scroll = Array.isArray(params.scroll) ? params.scroll.slice(0, 8).flatMap((s) => {
+      const row = s as { anchor?: unknown; top?: unknown; left?: unknown };
+      return typeof row?.anchor === "string" && typeof row.top === "number" && typeof row.left === "number"
+        ? [{ anchor: row.anchor.slice(0, 400), top: Math.round(row.top), left: Math.round(row.left) }] : [];
+    }) : [];
+    data = { v: viewId(params.v), scroll };
+  } else {
+    if (!anchor) return { ok: false };
+    data = topic === "ducky.pointer" ? { anchor, fx: frac(params.fx), fy: frac(params.fy), v: viewId(params.v) } : { anchor };
+  }
+  void getApi()?.plugin_live_send?.(ctx.pluginId, topic, data, "", topic !== "ducky.nav")?.catch(() => {});
   return { ok: true };
 }
 
@@ -641,8 +657,8 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
         : {};
     return await api.plugin_call(ctx.pluginId, method, callParams);
   },
-  /** Live editing on a team copy (backend/uefn_plugins/live.py): go live in a room (the
-   * whole plugin by default), leave, and short messages to the teammates live there. */
+  /** Live editing on a team copy (backend/uefn_plugins/live.py): go live in a room (no room:
+   * host this PC's own group), leave, and short messages to the teammates live there. */
   "live.join": async (ctx, params) =>
     (await getApi()?.plugin_live_join?.(ctx.pluginId, typeof params.room === "string" ? params.room : "")) ?? {
       ok: false,
@@ -659,9 +675,21 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
       error: "live editing unavailable",
     };
   },
-  // The host's pointer script in every panel page: fire and forget, so pointers stay quick.
-  "live.pointer": (ctx, params) => liveFast(ctx, "ducky.pointer", params),
-  "live.select": (ctx, params) => liveFast(ctx, "ducky.select", params),
+  // The host's live script in every panel page: fire and forget, so pointers stay quick.
+  "live.pointer": (ctx, params) => liveHost(ctx, "ducky.pointer", params),
+  "live.select": (ctx, params) => liveHost(ctx, "ducky.select", params),
+  "live.view": (ctx, params) => liveHost(ctx, "ducky.view", params),
+  "live.nav": (ctx, params) => liveHost(ctx, "ducky.nav", params),
+  /** A control pressed or let go of: the group at once, every teammate through presence. */
+  "live.hold": (ctx, params) => {
+    const anchor = typeof params.anchor === "string" ? params.anchor.slice(0, 400) : "";
+    if (!anchor) return { ok: false };
+    void getApi()?.plugin_live_hold?.(ctx.pluginId, anchor, params.on !== false,
+      typeof params.t === "number" ? params.t : 0, viewId(params.v))?.catch(() => {});
+    return { ok: true };
+  },
+  /** What teammates hold now (the page just loaded); later changes come as `live.holds`. */
+  "live.holds": async (ctx) => (await getApi()?.plugin_live_holds?.(ctx.pluginId)) ?? { ok: true, holds: [] },
   /**
    * Subscribe this pane to host push events (e.g. discord_message).
    * Events are forwarded as ``{ channel, event }`` postMessages (same as browser_pane_state).

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { DropdownPanel } from "../components/DropdownPanel";
 import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { getApi } from "../hooks/usePanelApi";
 import { installPanelPushBus, subscribePanelPush } from "../hooks/usePanelPushBus";
@@ -10,8 +11,8 @@ import type {
   PluginScopeStatus,
 } from "../types/panel";
 import { FolderShareDialog } from "./FolderShareDialog";
+import { PluginLiveMenu } from "./PluginLiveMenu";
 import { PluginScopeDrawer } from "./PluginScopeDrawer";
-import { PresenceAvatar } from "./PresenceAvatar";
 import { installScopeAlerts, onRefusedWrite, rememberPluginLabel, type RefusedWrite } from "./scopeAlerts";
 import {
   bindingText,
@@ -19,18 +20,16 @@ import {
   folderRefusal,
   folderNote,
   hasFolders,
-  hereText,
   kindTitle,
-  liveText,
-  locksText,
+  liveButtonText,
   notShared,
-  othersHere,
-  presence,
+  phraseTab,
   resetConfirm,
   sharingText,
   statusPhrase,
   storageLine,
   switchConfirm,
+  type ScopeTab,
 } from "./scopeBarText";
 
 /** Sync now waits for its round's result; a round stuck longer than this frees the button. */
@@ -43,13 +42,11 @@ const REFRESH_SETTLE_MS = 400;
 const TELL_SETTLE_MS = 800;
 /** "Up to date · 12 s ago" moves on by itself while the panel is on screen. */
 const AGO_TICK_MS = 15_000;
-/** People shown as avatars on the bar before "+N". */
-const AVATARS_SHOWN = 4;
 
 /** What the panel is told (bridge event `plugin_scope_changed`). `switched`: whose data it
  * shows changed (account, Local or a space): start over. `synced`: a sync brought new data
  * into the same copy: re-read `keys` (every key when absent) and keep what is open. */
-export type ScopeChange = { reason: "switched" | "synced"; keys?: string[]; live?: boolean };
+export type ScopeChange = { reason: "switched" | "synced"; keys?: string[] };
 
 type Props = {
   pluginId: string;
@@ -57,25 +54,51 @@ type Props = {
   onScopeChanged: (status: PluginScopeStatus, change: ScopeChange) => void;
   /** False while the tab is kept but hidden: no sync and no status reads for a panel nobody sees. */
   active?: boolean;
-  /** Live editing went on or off (the pane tells the page's pointer script). */
+  /** Live editing went on or off (the pane tells the page's live script). */
   onLiveState?: (on: boolean) => void;
+  /** A team copy or not, and how many teammates' changes are on their way (the page's
+   * live script shows "Getting picture…" in a picture that isn't here yet). */
+  onSyncState?: (state: { shared: boolean; incoming: number }) => void;
+  /** Whose screen the page follows: the host's device while Follow is on in their group,
+   * else "". */
+  onFollow?: (device: string) => void;
 };
 
-/** Live, per plugin and per viewer: the bar goes live again on its own next time. */
+/** The live group to go back into, per plugin and per viewer: "host" (this PC's own) or a
+ * teammate's room; the bar goes back in by itself next time while that group is still live. */
 const liveKey = (pluginId: string) => `ducky.pluginLive.${pluginId}`;
-function readLiveChoice(pluginId: string): boolean {
+function readLiveChoice(pluginId: string): string {
   try {
-    return localStorage.getItem(liveKey(pluginId)) === "1";
+    return localStorage.getItem(liveKey(pluginId)) || "";
   } catch {
-    return false;
+    return "";
   }
 }
-function writeLiveChoice(pluginId: string, on: boolean): void {
+function writeLiveChoice(pluginId: string, room: string): void {
   try {
-    if (on) localStorage.setItem(liveKey(pluginId), "1");
+    if (room) localStorage.setItem(liveKey(pluginId), room);
     else localStorage.removeItem(liveKey(pluginId));
   } catch {
-    /* storage off: Go live again next time */
+    /* storage off: choose again next time */
+  }
+}
+
+/** Follow the host's screen in a group this PC joined, per plugin and per viewer (on until
+ * turned off). */
+const followKey = (pluginId: string) => `ducky.pluginFollow.${pluginId}`;
+function readFollow(pluginId: string): boolean {
+  try {
+    return localStorage.getItem(followKey(pluginId)) !== "0";
+  } catch {
+    return true;
+  }
+}
+function writeFollow(pluginId: string, on: boolean): void {
+  try {
+    if (on) localStorage.removeItem(followKey(pluginId));
+    else localStorage.setItem(followKey(pluginId), "0");
+  } catch {
+    /* storage off: following stays as it is for this session */
   }
 }
 
@@ -95,13 +118,10 @@ type ActionResult = { ok?: boolean; error?: string } | undefined;
 const scopeKey = (s: PluginScopeStatus | null) =>
   s ? `${s.email}:${s.scope?.kind}:${s.scope?.spaceId}:${s.scope?.readOnly}` : "";
 
-/** Phrases that already carry `status.error`, or say what it says (a reset, lost access). */
-const ERROR_IN_PHRASE = new Set(["not_synced", "no_provider", "unavailable", "reset", "lost"]);
-
 /** A first share waiting for the person to pick which Local units go into the team. */
 type FirstShare = { id: string; team: string; units: PluginFolderShareUnit[]; note: string; partial: boolean };
 
-/** The drawer's open state, per plugin and per viewer (a convenience: storage may be off). */
+/** The Source control panel's open state, per plugin and per viewer (a convenience: storage may be off). */
 const drawerKey = (pluginId: string) => `ducky.pluginScopeDrawer.${pluginId}`;
 function readDrawerOpen(pluginId: string): boolean {
   try {
@@ -115,31 +135,37 @@ function writeDrawerOpen(pluginId: string, open: boolean): void {
     if (open) localStorage.setItem(drawerKey(pluginId), "1");
     else localStorage.removeItem(drawerKey(pluginId));
   } catch {
-    /* storage off: the drawer just starts closed */
+    /* storage off: the panel just starts closed */
   }
 }
 
 /**
- * Host-rendered line above every plugin panel: whose data this is, one status phrase, who
- * else is here and what is locked, Sync now (Push and Pull in Manual mode) and Details, which
- * opens the drawer under it. The plugin can't hide or restyle it. Renders nothing while the
- * account has no shared spaces to offer (normal members see no change).
+ * Host-rendered bar above every plugin panel, one row of same-sized controls: whose data
+ * this is (a dropdown to change it), one status (it opens the Source control tab that explains
+ * it), Send and Get in Manual, the Live dropdown (groups to join, Start live) and Source
+ * control, which opens the tabs under the bar. Anything that needs a decision shows on one
+ * line under the bar. The plugin can't hide or restyle it. Renders nothing while the account
+ * has no shared spaces to offer (normal members see no change).
  */
-export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLiveState }: Props) {
+export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLiveState, onSyncState, onFollow }: Props) {
   const { confirm } = useConfirmModal();
   const [status, setStatus] = useState<PluginScopeStatus | null>(null);
   const [menu, setMenu] = useState<PluginScopeChoice[] | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [open, setOpen] = useState<"" | "copy" | "live">("");
   const [now, setNow] = useState(() => Date.now());
   const [syncing, setSyncing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(() => readDrawerOpen(pluginId));
+  const [tab, setTab] = useState<ScopeTab>("changes");
   const [refused, setRefused] = useState<{ write: RefusedWrite; text: string; asked?: boolean } | null>(null);
   /** A switch to this team is running: getting its files, and in a first share sending ours. */
   const [switching, setSwitching] = useState<{ team: string; sharing: boolean } | null>(null);
   const [share, setShare] = useState<FirstShare | null>(null);
   const [notice, setNotice] = useState("");
+  const [follow, setFollow] = useState(() => readFollow(pluginId));
+  const copyRef = useRef<HTMLButtonElement>(null);
+  const liveRef = useRef<HTMLButtonElement>(null);
   const notify = useRef(onScopeChanged);
   notify.current = onScopeChanged;
   const last = useRef<PluginScopeStatus | null>(null);
@@ -221,16 +247,6 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
       if (event.type === "plugin_scope_changed") {
         if (event.synced) setSyncing(false);
         const plugins = event.plugins ?? [];
-        // A teammate's live change: the panel hears it at once (no status read, no settle).
-        if (event.live && plugins.includes(pluginId)) {
-          const keys = event.keys?.[pluginId];
-          if (activeRef.current && last.current && !last.current.binding) {
-            notify.current(last.current, { reason: "synced", live: true, ...(keys ? { keys } : {}) });
-          } else {
-            untold.current = mergePending(untold.current, keys ?? null);
-          }
-          return;
-        }
         // Its data changed: a sync's pull (with the keys it changed), a resolve or restore,
         // or a change for every plugin (no list). A lock, the mode or a round that brought
         // nothing only moves the bar; a switch restarts the panel (the pane reloads it).
@@ -254,7 +270,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
     };
   }, [refresh, refreshSoon, pluginId]);
 
-  // Live editing: the pane tells the page, and a remembered Live goes on again by itself.
+  // Live editing: the pane tells the page, and a remembered group is joined again by itself.
   const liveNotify = useRef(onLiveState);
   liveNotify.current = onLiveState;
   const liveOn = Boolean(status?.live?.on);
@@ -262,15 +278,34 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
   useEffect(() => {
     liveNotify.current?.(liveOn);
   }, [liveOn]);
-  // Once per team copy: after a switch (another team, or a project on another copy) it goes
-  // live again there too.
+  const syncNotify = useRef(onSyncState);
+  syncNotify.current = onSyncState;
+  const shownShared = status?.scope?.kind === "shared";
+  const shownIncoming = status?.changes?.incoming ?? 0;
+  useEffect(() => {
+    syncNotify.current?.({ shared: shownShared, incoming: shownIncoming });
+  }, [shownShared, shownIncoming]);
+  // Follow: the page follows the host of the group this PC joined, while the host is in it.
+  const followNotify = useRef(onFollow);
+  followNotify.current = onFollow;
+  const joined = liveOn ? status?.live?.groups?.find((g) => g.mine && !g.hostIsMe) : undefined;
+  const hostDevice = joined?.room.startsWith("h:") ? joined.room.slice(2) : "";
+  const followDevice = follow && hostDevice && joined?.members.some((m) => m.device === hostDevice) ? hostDevice : "";
+  useEffect(() => {
+    followNotify.current?.(followDevice);
+  }, [followDevice]);
+  // Once per team copy: after a switch (another team, or a project on another copy) the
+  // remembered group is joined again, while it is still live (one's own always is).
   const autoLive = useRef("");
   const liveCopy = scopeKey(status);
+  const rooms = (status?.live?.groups ?? []).map((g) => g.room).join(",");
   useEffect(() => {
-    if (!liveSupported || liveOn || autoLive.current === liveCopy || !readLiveChoice(pluginId)) return;
+    const want = readLiveChoice(pluginId);
+    if (!liveSupported || liveOn || !want || autoLive.current === liveCopy) return;
+    if (want !== "host" && !rooms.split(",").includes(want)) return;
     autoLive.current = liveCopy;
-    void getApi()?.plugin_live_join?.(pluginId, "")?.then(() => refreshSoon(undefined)).catch(() => {});
-  }, [liveSupported, liveOn, liveCopy, pluginId, refreshSoon]);
+    void getApi()?.plugin_live_join?.(pluginId, want === "host" ? "" : want)?.then(() => refreshSoon(undefined)).catch(() => {});
+  }, [liveSupported, liveOn, liveCopy, rooms, pluginId, refreshSoon]);
 
   // Shown again: what came while hidden is read once, and the panel hears it once.
   useEffect(() => {
@@ -344,7 +379,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
     }
   };
 
-  /** One bar action; its error stays on the bar until the next one. True when it worked. */
+  /** One bar action; its error stays under the bar until the next one. True when it worked. */
   const act = async (run: () => Promise<ActionResult>, dataChanged = false): Promise<boolean> => {
     setActionError("");
     setBusy(true);
@@ -364,10 +399,12 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
     }
   };
 
-  const toggleDrawer = () => {
-    const open = !drawerOpen;
-    setDrawerOpen(open);
-    writeDrawerOpen(pluginId, open);
+  /** Open or close Source control (on a tab: open it there, or close it when it shows it). */
+  const showPanel = (want?: ScopeTab) => {
+    const next = want ? !(drawerOpen && tab === want) : !drawerOpen;
+    if (want) setTab(want);
+    setDrawerOpen(next);
+    writeDrawerOpen(pluginId, next);
   };
 
   if (!status?.visible || !status.scope) return null;
@@ -398,22 +435,24 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
   // the team this plugin is on, for a project opened since that it has no copy of.
   const offers = status.canChange && !refusal ? status.folderOffers ?? [] : [];
   const help = hasFolders(status) ? `${DATA_AT_REST} ${folderNote(status)}` : DATA_AT_REST;
-  const here = shared ? presence(status.people, pluginId) : [];
-  const others = othersHere(here);
-  const hereLine = hereText(here);
-  const locks = shared ? locksText(status.locks) : "";
   const storage = shared ? storageLine(status.usage) : null;
   const manual = shared && status.mode === "manual" && Boolean(api?.plugin_scope_push || api?.plugin_scope_pull);
   const live = shared ? status.live : undefined;
   const canLive = Boolean(live?.supported && api?.plugin_live_join);
   const canSync = shared && !lost && !keyLocked && !reset;
+  const failing = state === "offline" || state === "error";
+  const changes = status.changes ?? {};
+  const toSend = typeof status.pending === "number" ? status.pending : (changes.outgoing ?? []).length;
+  const conflicts = status.conflicts?.length || status.conflict || 0;
+  const badge = shared ? toSend + (changes.incoming ?? 0) + conflicts + notShared(status).count : 0;
+  const liveGroup = live?.groups?.find((g) => g.mine);
 
-  const toggleMenu = async () => {
-    if (menuOpen) {
-      setMenuOpen(false);
+  const toggleCopy = async () => {
+    if (open === "copy") {
+      setOpen("");
       return;
     }
-    setMenuOpen(true);
+    setOpen("copy");
     setMenu(null);
     if (!status.canChange) return;
     const res = await getApi()?.plugin_scope_choices?.();
@@ -456,7 +495,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
   };
 
   const choose = async (choice: PluginScopeChoice) => {
-    setMenuOpen(false);
+    setOpen("");
     if (choice.id === current) return;
     // Counts as of now: the background scheduler may have sent some since the last refresh.
     if (shared) await refresh();
@@ -478,6 +517,7 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
    * a project it has no copy of): the first share's picker lists the Local units the team
    * lacks, even when it has files. With none lacking it just switches (nothing to copy). */
   const copyInto = async (offer: { space: string; label: string }) => {
+    setOpen("");
     if (await switchTo(offer.space, offer.label, { pick: true })) {
       setNotice(`${offer.label} already has ${plugin}'s files, so nothing was copied. Your Local copy stays on this PC.`);
     }
@@ -494,17 +534,23 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
     await act(async () => getApi()?.space_reset_settle?.(scope.spaceId, action), action === "clear");
   };
 
-  /** Update now / Pull: bring everyone's changes in now. */
+  /** Update now / Get: bring everyone's changes in now. */
   const pull = () =>
     act(async () => (api?.plugin_scope_pull ? api.plugin_scope_pull(pluginId) : api?.plugin_scope_sync?.(pluginId, true)), true);
   const push = () => act(async () => api?.plugin_scope_push?.(pluginId));
 
-  /** Go live (everyone live in this plugin sees pointers and changes at once) or leave;
-   * the choice is remembered for this plugin on this PC. */
-  const goLive = async (on: boolean) => {
-    writeLiveChoice(pluginId, on);
+  /** Join a teammate's live group (its room), or start this PC's own; remembered for this
+   * plugin on this PC. */
+  const joinLive = async (room?: string) => {
+    setOpen("");
+    writeLiveChoice(pluginId, room || "host");
     autoLive.current = scopeKey(status);
-    await act(async () => (on ? api?.plugin_live_join?.(pluginId, "") : api?.plugin_live_leave?.(pluginId)));
+    await act(async () => api?.plugin_live_join?.(pluginId, room || ""));
+  };
+  const leaveLive = async () => {
+    setOpen("");
+    writeLiveChoice(pluginId, "");
+    await act(async () => api?.plugin_live_leave?.(pluginId));
   };
 
   const askRelease = async () => {
@@ -518,202 +564,160 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
   const variant = shared ? (scope.readOnly && !waiting && !keyLocked ? "paused" : "shared") : "personal";
   const storageNote = storage && storage.level !== "ok" ? (storage.level === "full" ? storage.note : `Storage ${storage.note}`) : "";
   const drawerId = `plugin-scope-drawer-${pluginId}`;
+  const phraseIcon = phrase.tone === "error" ? "!" : phrase.tone === "warn" ? "!" : syncing ? "↻" : phrase.key === "up_to_date" ? "✓" : "•";
+  // Lines under the bar: only what needs a decision or explains a refusal.
+  const notes = [
+    notice ? (
+      <div key="notice" className="plugin-scope-note">
+        <span>{notice}</span>
+        <button type="button" className="plugin-scope-btn plugin-scope-btn--ghost" onClick={() => setNotice("")}>Dismiss</button>
+      </div>
+    ) : null,
+    reset && canSettle ? (
+      <div key="reset" className="plugin-scope-note plugin-scope-note--warn">
+        <span>{scope.label}'s {kind} data was reset on the server. Your copy here is read-only until you choose.</span>
+        <button type="button" className="plugin-scope-btn" disabled={busy} onClick={() => void settle("upload")}>Upload my copy</button>
+        <button type="button" className="plugin-scope-btn" disabled={busy} onClick={() => void settle("clear")}>Clear my copy</button>
+      </div>
+    ) : null,
+    phrase.key === "paused" && status.pausedAction ? (
+      <div key="paused" className="plugin-scope-note plugin-scope-note--warn">
+        <span>{phrase.text}</span>
+        <button type="button" className="plugin-scope-btn"
+          onClick={() => void getApi()?.duckyos_open_site?.(status.pausedAction?.path || "/")}>
+          {status.pausedAction.label}
+        </button>
+      </div>
+    ) : null,
+    refused ? (
+      <div key="refused" className={`plugin-scope-note${refused.asked ? "" : " plugin-scope-note--error"}`}>
+        <span>{refused.text}</span>
+        {!refused.asked && refused.write.unit && refused.write.holder && api?.plugin_scope_ask ? (
+          <button type="button" className="plugin-scope-btn" disabled={busy} onClick={() => void askRelease()}>Ask to release</button>
+        ) : null}
+        <button type="button" className="plugin-scope-btn plugin-scope-btn--ghost" onClick={() => setRefused(null)}>Dismiss</button>
+      </div>
+    ) : null,
+    actionError && actionError !== status.error ? (
+      <div key="error" className="plugin-scope-note plugin-scope-note--error"><span>{actionError}</span></div>
+    ) : null,
+    storageNote ? <div key="storage" className="plugin-scope-note plugin-scope-note--warn"><span>{storageNote}</span></div> : null,
+  ].filter(Boolean);
+
   return (
     <div className="plugin-scope">
-      <div
-        className={`plugin-scope-bar plugin-scope-bar--${variant}`}
-        role="status"
-        aria-live="polite"
-        aria-label={shared ? `Plugin data: ${kind} ${scope.label}` : "Plugin data: local"}
-        title={help}
-      >
-        <span
-          className={`plugin-scope-bar__badge plugin-scope-bar__badge--${shared ? "shared" : "local"}`}
-          title={shared ? `${kindTitle(kind)} data: ${scope.label}` : "Local data: only on this PC"}
-        >
-          {shared ? scope.label : "Local"}
-        </span>
-        <span className="plugin-scope-bar__change">
-          <button
-            type="button"
-            className="plugin-scope-bar__link"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            disabled={Boolean(switching)}
-            onClick={() => void toggleMenu()}
-          >
-            Change ▾
-          </button>
-          {menuOpen ? (
-            <span className="plugin-scope-bar__menu" role="menu">
-              {!status.canChange ? (
-                <span className="plugin-scope-bar__menu-note">Open a project to choose whose data it shows.</span>
-              ) : menu === null ? (
-                <span className="plugin-scope-bar__menu-note">Loading…</span>
-              ) : (
-                <>
-                  {/* A folder that can't be shared from this PC: no team to offer, and why. */}
-                  {refusal && !shared ? <span className="plugin-scope-bar__menu-note">{refusal}</span> : null}
-                  {menu.filter((choice) => !(refusal && !shared && choice.kind === "shared")).map((choice) => (
-                    <button
-                      key={choice.id}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={choice.id === current}
-                      className="plugin-scope-bar__menu-item"
-                      onClick={() => void choose(choice)}
-                    >
-                      {choice.kind === "shared" ? `${kindTitle(kind)} · ${choice.label}` : "Local"}
-                    </button>
-                  ))}
-                </>
-              )}
-            </span>
-          ) : null}
-        </span>
-        <span className={`plugin-scope-bar__text plugin-scope-bar__phrase${phrase.tone ? ` plugin-scope-bar__text--${phrase.tone}` : ""}`}>
-          {phrase.text}
-        </span>
-        {phrase.action === "update" ? (
-          <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void pull()}>
-            Update now
-          </button>
-        ) : null}
-        {!switching && api?.plugin_scope_set
-          ? offers.map((offer) => (
-            <button key={offer.space} type="button" className="plugin-scope-bar__link" disabled={busy}
-              onClick={() => void copyInto(offer)}>
-              Copy Local into {offer.label}
-            </button>
-          ))
-          : null}
-        {notice ? (
+      <div className={`plugin-scope-bar plugin-scope-bar--${variant}`} title={help}
+        aria-label={shared ? `Plugin data: ${kind} ${scope.label}` : "Plugin data: local"}>
+        <button ref={copyRef} type="button" className="plugin-scope-btn plugin-scope-btn--copy" aria-haspopup="menu"
+          aria-expanded={open === "copy"} disabled={Boolean(switching)} onClick={() => void toggleCopy()}
+          title={shared ? `${kindTitle(kind)} data: ${scope.label}. Change whose data ${plugin} shows.` : `Local data: only on this PC. Change whose data ${plugin} shows.`}>
+          <span className={`plugin-scope-dot plugin-scope-dot--${shared ? variant : "local"}`} aria-hidden />
+          <span className="plugin-scope-btn__label">{shared ? scope.label : "Local"}</span>
+          <span className="plugin-scope-caret" aria-hidden>▾</span>
+        </button>
+        <DropdownPanel anchorRef={copyRef} open={open === "copy"} onClose={() => setOpen("")} width={280}>
+          <div className="plugin-scope-menu" role="menu" aria-label="Whose data">
+            <div className="plugin-scope-menu__head">Whose data {plugin} shows</div>
+            {!status.canChange ? (
+              <div className="plugin-scope-menu__empty">Open a project to choose whose data it shows.</div>
+            ) : menu === null ? (
+              <div className="plugin-scope-menu__empty">Loading…</div>
+            ) : (
+              <>
+                {/* A folder that can't be shared from this PC: no team to offer, and why. */}
+                {refusal && !shared ? <div className="plugin-scope-menu__note plugin-scope-menu__note--warn">{refusal}</div> : null}
+                {menu.filter((choice) => !(refusal && !shared && choice.kind === "shared")).map((choice) => (
+                  <button key={choice.id} type="button" role="menuitemradio" aria-checked={choice.id === current}
+                    className="plugin-scope-menu__row plugin-scope-menu__choice" onClick={() => void choose(choice)}>
+                    <span className={`plugin-scope-dot plugin-scope-dot--${choice.kind === "shared" ? "shared" : "local"}`} aria-hidden />
+                    <span className="plugin-scope-menu__text">
+                      <span className="plugin-scope-menu__name">{choice.kind === "shared" ? choice.label : "Local"}</span>
+                      <span className="plugin-scope-menu__sub">{choice.kind === "shared" ? `${kindTitle(kind)} copy` : "Only on this PC"}</span>
+                    </span>
+                    {choice.id === current ? <span className="plugin-scope-menu__check" aria-hidden>✓</span> : null}
+                  </button>
+                ))}
+                {!switching && api?.plugin_scope_set && offers.length ? (
+                  <>
+                    <div className="plugin-scope-menu__sep" />
+                    {offers.map((offer) => (
+                      <div key={offer.space} className="plugin-scope-menu__foot">
+                        <button type="button" role="menuitem" className="plugin-scope-btn plugin-scope-btn--block" disabled={busy}
+                          onClick={() => void copyInto(offer)}>
+                          Copy Local into {offer.label}
+                        </button>
+                      </div>
+                    ))}
+                  </>
+                ) : null}
+              </>
+            )}
+          </div>
+        </DropdownPanel>
+        <button type="button" className={`plugin-scope-btn plugin-scope-btn--ghost plugin-scope-status${phrase.tone ? ` plugin-scope-status--${phrase.tone}` : ""}`}
+          aria-live="polite" title={phrase.text} disabled={!shared && !refusal}
+          onClick={() => showPanel(phraseTab(phrase.key))}>
+          <span className="plugin-scope-status__icon" aria-hidden>{phraseIcon}</span>
+          <span className="plugin-scope-btn__label">{syncing ? "Syncing…" : phrase.text}</span>
+        </button>
+        {canSync && manual ? (
           <>
-            <span className="plugin-scope-bar__text">{notice}</span>
-            <button type="button" className="plugin-scope-bar__link" onClick={() => setNotice("")}>
-              Dismiss
-            </button>
-          </>
-        ) : null}
-        {reset && canSettle ? (
-          <>
-            <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void settle("upload")}>
-              Upload my copy
-            </button>
-            <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void settle("clear")}>
-              Clear my copy
-            </button>
-          </>
-        ) : null}
-        {phrase.key === "paused" && status.pausedAction ? (
-          <button
-            type="button"
-            className="plugin-scope-bar__link"
-            onClick={() => void getApi()?.duckyos_open_site?.(status.pausedAction?.path || "/")}
-          >
-            {status.pausedAction.label}
-          </button>
-        ) : null}
-        {others.length ? (
-          <button
-            type="button"
-            className="plugin-scope-bar__people"
-            aria-expanded={drawerOpen}
-            aria-controls={drawerId}
-            aria-label={`${hereLine}. ${drawerOpen ? "Hide" : "Show"} who is here.`}
-            onClick={toggleDrawer}
-          >
-            <span className="plugin-scope-bar__avatars">
-              {others.slice(0, AVATARS_SHOWN).map((row) => (
-                <PresenceAvatar key={row.key} row={row} plugin={plugin} labelled={false} />
-              ))}
-              {others.length > AVATARS_SHOWN ? (
-                <span className="plugin-scope-avatar plugin-scope-avatar--more" aria-hidden>
-                  +{others.length - AVATARS_SHOWN}
-                </span>
-              ) : null}
-            </span>
-            <span className="plugin-scope-bar__here">{hereLine}</span>
-          </button>
-        ) : null}
-        {locks ? <span className="plugin-scope-bar__text">{locks}</span> : null}
-        {storageNote ? <span className="plugin-scope-bar__text plugin-scope-bar__text--warn">{storageNote}</span> : null}
-        {status.error && !ERROR_IN_PHRASE.has(phrase.key) ? (
-          <span className="plugin-scope-bar__text plugin-scope-bar__text--error">{status.error}</span>
-        ) : null}
-        {refused ? (
-          <>
-            <span className={`plugin-scope-bar__text${refused.asked ? "" : " plugin-scope-bar__text--error"}`}>{refused.text}</span>
-            {!refused.asked && refused.write.unit && refused.write.holder && api?.plugin_scope_ask ? (
-              <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void askRelease()}>
-                Ask to release
+            {api?.plugin_scope_push ? (
+              <button type="button" className="plugin-scope-btn" disabled={busy} onClick={() => void push()}
+                title={`Send this PC's changes to ${scope.label} now`}>
+                Send
               </button>
             ) : null}
-            <button type="button" className="plugin-scope-bar__link" onClick={() => setRefused(null)}>
-              Dismiss
+            {api?.plugin_scope_pull ? (
+              <button type="button" className="plugin-scope-btn" disabled={busy} onClick={() => void pull()}
+                title={`Get everyone else's changes from ${scope.label} now`}>
+                Get
+              </button>
+            ) : null}
+          </>
+        ) : phrase.action === "update" ? (
+          <button type="button" className="plugin-scope-btn plugin-scope-btn--primary" disabled={busy} onClick={() => void pull()}>
+            Update now
+          </button>
+        ) : canSync && failing ? (
+          <button type="button" className="plugin-scope-btn" disabled={syncing} onClick={() => void syncNow()}>
+            Retry
+          </button>
+        ) : null}
+        <span className="plugin-scope-bar__spacer" />
+        {canLive && canSync ? (
+          <>
+            <button ref={liveRef} type="button" aria-haspopup="menu" aria-expanded={open === "live"}
+              className={`plugin-scope-btn plugin-scope-btn--live${live?.on ? " is-on" : ""}`}
+              onClick={() => setOpen(open === "live" ? "" : "live")}
+              title={live?.on ? "Who you're live with" : "Join someone live, or start live"}>
+              <span className={`plugin-scope-dot plugin-scope-dot--${live?.on || live?.groups?.length ? "live" : "off"}`} aria-hidden />
+              <span className="plugin-scope-btn__label">{liveButtonText(live)}</span>
+              {live?.on && liveGroup ? <span className="plugin-scope-btn__count">{liveGroup.members.length}</span> : null}
+              <span className="plugin-scope-caret" aria-hidden>▾</span>
             </button>
+            <DropdownPanel anchorRef={liveRef} open={open === "live"} onClose={() => setOpen("")} width={300}>
+              <PluginLiveMenu pluginId={pluginId} status={status} busy={busy} onJoin={(room) => void joinLive(room)}
+                onLeave={() => void leaveLive()} follow={follow}
+                onFollow={(on) => {
+                  setFollow(on);
+                  writeFollow(pluginId, on);
+                }} />
+            </DropdownPanel>
           </>
         ) : null}
-        {actionError && actionError !== status.error ? (
-          <span className="plugin-scope-bar__text plugin-scope-bar__text--error">{actionError}</span>
+        {shared ? (
+          <button type="button" className={`plugin-scope-btn${drawerOpen ? " is-on" : ""}`} aria-expanded={drawerOpen}
+            aria-controls={drawerId} onClick={() => showPanel()}>
+            Source control
+            {badge ? <span className={`plugin-scope-btn__count${conflicts ? " is-alert" : ""}`}>{badge}</span> : null}
+          </button>
         ) : null}
-        <span className="plugin-scope-bar__actions">
-          {canLive && live?.on ? (
-            <>
-              <span className="plugin-scope-bar__live" title="Pointers and changes reach everyone live here at once">
-                {liveText(live)}
-              </span>
-              <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void goLive(false)}>
-                Leave
-              </button>
-            </>
-          ) : canLive && canSync ? (
-            <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void goLive(true)}
-              title={`See everyone's pointers in ${plugin} and their changes as they make them`}>
-              Go live
-            </button>
-          ) : null}
-          {canSync && manual ? (
-            <>
-              {api?.plugin_scope_push ? (
-                <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void push()}
-                  title={`Send this PC's changes to ${scope.label} now`}>
-                  Push
-                </button>
-              ) : null}
-              {api?.plugin_scope_pull ? (
-                <button type="button" className="plugin-scope-bar__link" disabled={busy} onClick={() => void pull()}
-                  title={`Get everyone else's changes from ${scope.label} now`}>
-                  Pull
-                </button>
-              ) : null}
-            </>
-          ) : canSync ? (
-            <button
-              type="button"
-              className="plugin-scope-bar__link"
-              onClick={() => void syncNow()}
-              disabled={syncing}
-              title={`Send this PC's changes to ${scope.label} and get everyone else's now`}
-            >
-              {syncing ? "Syncing…" : "Sync now"}
-            </button>
-          ) : null}
-          {shared ? (
-            <button
-              type="button"
-              className="plugin-scope-bar__link"
-              aria-expanded={drawerOpen}
-              aria-controls={drawerId}
-              onClick={toggleDrawer}
-            >
-              Details ▾
-            </button>
-          ) : null}
-        </span>
       </div>
+      {notes.length ? <div className="plugin-scope-notes">{notes}</div> : null}
       {shared && drawerOpen ? (
-        <PluginScopeDrawer id={drawerId} pluginId={pluginId} status={status}
+        <PluginScopeDrawer id={drawerId} pluginId={pluginId} status={status} tab={tab} onTab={setTab}
+          onJoin={canLive ? (room) => void joinLive(room) : undefined}
           onChanged={(changed) => refresh(changed ? { keys: null } : null)} />
       ) : null}
       {share ? (

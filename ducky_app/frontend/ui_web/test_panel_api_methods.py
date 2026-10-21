@@ -370,6 +370,8 @@ _PUBLIC_METHODS = frozenset({
     'plugin_llm_complete',
     'plugin_llm_poll',
     'plugin_llm_start',
+    'plugin_live_hold',
+    'plugin_live_holds',
     'plugin_live_join',
     'plugin_live_leave',
     'plugin_live_send',

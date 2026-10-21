@@ -136,15 +136,16 @@ describe("Plugins page → Data", () => {
     expect(screen.queryByRole("button", { name: /Copy Local data/ })).toBeNull();
   });
 
-  it("a shared copy shows the scope bar's drawer, and its actions work here too", async () => {
+  it("a shared copy shows the scope bar's Source control tabs, and their actions work here too", async () => {
     api.plugin_scope_unlock.mockResolvedValue({ ok: true });
     api.plugin_scope_status.mockResolvedValue({
       ...SHARED, head: 4, locks: [{ unit: "doc:deck", name: "deck", mine: true }],
       changes: { outgoing: [{ kind: "doc", key: "deck", state: "queued" }] },
     });
     render(<PluginDataPanel pluginId="brainrot-tcg" name="BrainRot TCG" />);
-    const drawer = await screen.findByRole("region", { name: "Sync details: Alpha Studio" });
+    const drawer = await screen.findByRole("region", { name: "Source control: Alpha Studio" });
     expect(within(drawer).getByText("Queued")).toBeTruthy();
+    fireEvent.click(within(drawer).getByRole("tab", { name: /^Locks/ }));
     fireEvent.click(within(drawer).getByRole("button", { name: "Release deck" }));
     await waitFor(() => expect(api.plugin_scope_unlock).toHaveBeenCalledWith("brainrot-tcg", "doc:deck"));
     // The panel re-reads its status after the action.

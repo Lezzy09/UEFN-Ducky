@@ -142,7 +142,7 @@ MOVES_BACKOFF_S = (30.0, 120.0)
 GROUP_WAIT_S = 24 * 3600.0
 FETCH_WORKERS = 4
 LOCK_RENEW_S = 60.0
-AUTO_RELEASE_S = 300.0
+AUTO_RELEASE_S = 30.0  # an auto lock frees this long after its last change went out
 TAB_CLOSED_RELEASE_S = 10.0  # the plugin's tab closed this long ago: its auto locks go
 BEAT_EVERY_S = 60.0
 BEAT_MIN_S = 10.0  # presence goes out at most this often (the server takes 6 a minute)
@@ -2637,6 +2637,10 @@ def run(account: str, space: str, plugin: str, backend: Any, *, push: bool | Non
     if out["state"] == "ok":
         space_vcs.head_ok(account, space, plugin, now=now)
         repo.sync_put(account, space, synced_at=now)
+    if out["pushed"]:
+        from backend.uefn_plugins import live
+
+        live.committed(account, space, plugin)  # a live group pulls it now
     if out["tree"] and any(f.after_pull == "reload" for f in tf.plugin_folders(plugin)):
         out["reload"] = True
     return out
@@ -2707,7 +2711,7 @@ def refresh(account: str, space: str, plugins: list[str], backend: Any, *, now: 
     roster = {"people": [dict(p) for p in got.people], "usage": dict(got.usage)}
     old = space_vcs.presence_get(account, space)["roster"]
     space_vcs.presence_put(account, space, with_devices(old, roster), now=now)
-    _tell_bars(_moved(_roster_marks(old), _roster_marks(roster)))
+    _roster_came(account, space, old, roster)
     return {"state": "reset" if reset else "ok", "error": "", "incoming": incoming, "epoch": got.epoch,
             "importing": dict(got.importing)}
 
@@ -2764,6 +2768,18 @@ def _roster_marks(roster: Any) -> dict[str, frozenset[tuple[str, str, bool, tupl
 
 def _moved(before: Mapping[str, Any], after: Mapping[str, Any]) -> set[str]:
     return {p for p in set(before) | set(after) if before.get(p) != after.get(p)}
+
+
+def _roster_came(account: str, space: str, old: Any, roster: Mapping[str, Any]) -> None:
+    """A fresh roster: the bars of plugins whose people moved read their status again, and
+    panels hear what teammates hold now."""
+    _tell_bars(_moved(_roster_marks(old), _roster_marks(roster)))
+    try:
+        from backend.uefn_plugins import live
+
+        live.roster_holds(account, space, roster)
+    except Exception:  # noqa: BLE001 — the next roster tells them
+        _log.debug("teammates' holds failed", exc_info=True)
 
 
 def _locks_from(account: str, space: str, live: Iterable[LockInfo], *, now: float,
@@ -2846,7 +2862,7 @@ def acquire(account: str, space: str, plugin: str, backend: Any, units: list[tup
     it applied here (:func:`space_vcs.unit_seqs`: never the plugin's head, which can be past
     a change of the unit set aside); a unit this PC is behind on is pulled (a download of it
     set aside is tried again now) and asked for once more (not while the space is held:
-    :func:`held_reason`). ``reason``: ``auto`` (released 5 minutes after its last change
+    :func:`held_reason`). ``reason``: ``auto`` (released 30 s after its last change
     went out, or once the plugin's tab closed: :func:`idle_auto_locks`), ``manual`` (kept until released), or '' to keep the reason each lock of mine
     already has (a renewal). Returns ``{unit: {ok, state, ...}}``."""
     now = time.time() if now is None else now
@@ -2937,10 +2953,10 @@ def _tab_closed_at(plugin: str) -> float:
 
 def idle_auto_locks(account: str, space: str, plugin: str, *, now: float | None = None,
                     backend: Any = None) -> list[str]:
-    """Auto locks of mine whose unit's last change went out 5 minutes ago, or that were held
+    """Auto locks of mine whose unit's last change went out 30 s ago, or that were held
     when the person closed the plugin's tab (10 s ago: moving a tab between panes reopens it
-    at once). A lock taken after the close (a ducky working with no tab open) keeps the 5
-    minutes. Nothing unsent; a folder unit with changes here keeps its lock."""
+    at once). A lock taken after the close (a ducky working with no tab open) keeps its
+    30 s. Nothing unsent; a folder unit with changes here keeps its lock."""
     now = time.time() if now is None else now
     closed = _tab_closed_at(plugin)
     left = bool(closed) and now - closed >= TAB_CLOSED_RELEASE_S
@@ -3089,6 +3105,9 @@ def presence_blob(account: str, space: str, plugins: Iterable[str], *, now: floa
             room = live.room_of(plugin, account, space)
             if room is not None:
                 row["live"] = room  # the provider connects this PC to teammates live in the same room
+            holds = live.holds_of(plugin, now=now)
+            if holds:
+                row["holds"] = holds  # what this PC presses: teammates grey it out
     except Exception:  # noqa: BLE001 — presence never fails a beat
         _log.debug("live rooms in presence failed", exc_info=True)
     # "label", never "device": a roster row's "device" is the device id the server adds.
@@ -3118,7 +3137,7 @@ def beat(account: str, space: str, backend: Any, plugins: Iterable[str], *, forc
     roster = dict(last["roster"]) if isinstance(last["roster"], dict) else {}
     roster["people"] = [dict(p) for p in got.people]
     space_vcs.presence_put(account, space, with_devices(last["roster"], roster), sent_sha=sha, now=now)
-    _tell_bars(_moved(_roster_marks(last["roster"]), _roster_marks(roster)))
+    _roster_came(account, space, last["roster"], roster)
     _locks_from(account, space, got.locks, now=now, asked_at=asked_at)
     return {"ok": True, "people": len(got.people)}
 

@@ -50,9 +50,23 @@ function postVisibility(iframe: HTMLIFrameElement | null, visible: boolean): voi
 }
 
 /** Bridge event `live.state`: the plugin went live on its team copy or left (the host's
- * pointer script in the page starts or stops). */
+ * live script in the page starts or stops). */
 function postLive(iframe: HTMLIFrameElement | null, on: boolean): void {
   iframe?.contentWindow?.postMessage({ channel: BRIDGE_CHANNEL, event: { type: "live.state", on } }, "*");
+}
+
+type SyncState = { shared: boolean; incoming: number };
+
+/** Bridge event `sync.state`: a team copy or not, and teammates' changes on their way (the
+ * live script's placeholder for a picture that isn't here yet says "Getting picture…"). */
+function postSync(iframe: HTMLIFrameElement | null, state: SyncState): void {
+  iframe?.contentWindow?.postMessage({ channel: BRIDGE_CHANNEL, event: { type: "sync.state", ...state } }, "*");
+}
+
+/** Bridge event `live.follow`: the teammate whose screen this page follows (their device),
+ * or "" for nobody. */
+function postFollow(iframe: HTMLIFrameElement | null, device: string): void {
+  iframe?.contentWindow?.postMessage({ channel: BRIDGE_CHANNEL, event: { type: "live.follow", device } }, "*");
 }
 
 function findPanel(
@@ -107,12 +121,16 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
   const liveRef = useRef(false);
+  const syncRef = useRef<SyncState>({ shared: false, incoming: 0 });
+  const followRef = useRef("");
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || !src) return;
     const post = () => {
       postVisibility(iframe, visibleRef.current);
       postLive(iframe, liveRef.current);
+      postSync(iframe, syncRef.current);
+      postFollow(iframe, followRef.current);
     };
     iframe.addEventListener("load", post);
     return () => iframe.removeEventListener("load", post);
@@ -164,13 +182,17 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
         win.postMessage({ channel: BRIDGE_CHANNEL, event }, "*");
         return;
       }
-      // Live editing: a teammate's message or who is live, for this plugin's panels only.
-      if ((event.type === "live_message" || event.type === "live_peers") && parsed && event.plugin === parsed.pluginId) {
+      // Live editing: a teammate's message, who is live, or what teammates hold, for this
+      // plugin's panels only.
+      if ((event.type === "live_message" || event.type === "live_peers" || event.type === "live_holds")
+          && parsed && event.plugin === parsed.pluginId) {
         win.postMessage({
           channel: BRIDGE_CHANNEL,
           event: event.type === "live_message"
             ? { type: "live.message", from: (event as { from?: unknown }).from, topic: event.topic, data: event.data }
-            : { type: "live.peers", on: Boolean(event.on), peers: event.peers ?? [] },
+            : event.type === "live_holds"
+              ? { type: "live.holds", holds: (event as { holds?: unknown }).holds ?? [] }
+              : { type: "live.peers", on: Boolean(event.on), peers: event.peers ?? [] },
         }, "*");
         return;
       }
@@ -243,6 +265,14 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
             if (liveRef.current === on) return;
             liveRef.current = on;
             postLive(iframeRef.current, on);
+          }}
+          onSyncState={(state) => {
+            syncRef.current = state;
+            postSync(iframeRef.current, state);
+          }}
+          onFollow={(device) => {
+            followRef.current = device;
+            postFollow(iframeRef.current, device);
           }}
           onScopeChanged={(status, change) =>
             iframeRef.current?.contentWindow?.postMessage(

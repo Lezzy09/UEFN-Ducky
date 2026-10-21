@@ -69,7 +69,7 @@ await call("prefs.get", { id: "highScore" });
 | `files.get` | `{ path }` | `{ ok, b64 }` |
 | `files.list` | `{ prefix? }` | `{ files: [{ path, size, sha256 }] }` |
 | `files.delete` | `{ path }` | `{ ok, deleted }` |
-| `live.join` | `{ room? }` | `{ ok, on, room, state, peers }` — go live on the team copy (no room: the open project's, which follows a project switch) |
+| `live.join` | `{ room? }` | `{ ok, on, room, state, peers, groups }` — go live on the team copy (no room: host this PC's own group; a group's `room` joins it) |
 | `live.leave` | — | `{ ok }` |
 | `live.state` | — | `{ supported, reason, on, room, state, peers }` |
 | `live.send` | `{ topic, data, to? }` (JSON ≤ 16 KB, ≤ 30/s) | `{ ok, sent }` — to teammates live in the room (`to`: one PC's device id); `ducky.*` topics are the host's |
@@ -165,20 +165,36 @@ window.addEventListener("message", (ev) => {
 
 ### Live editing
 
-On a team copy, the scope bar's **Go live** (or `live.join`) links this PC straight to
-teammates live in the same plugin and room: peer to peer, through the desktop app's main
-window, nothing through a server but the first hello. With no plugin code:
+On a team copy, the scope bar's **Live** list starts a group (Start live) or joins
+someone's (Join): a group is a room named after its host's PC. It links this PC straight
+to the others in it: peer to peer, through the desktop app's main window, nothing through
+a server but the first hello. With no plugin code:
 
-- every `data.*` / `files.*` write reaches them at once as
-  `{ type: "plugin_scope_changed", reason: "synced", live: true, keys }`; their reads
-  return the new value until its commit lands (or 30 s pass). Handle it like any synced
-  push: merge `keys`, keep what is open.
-- people meet in a room: the open project's, so teammates on other projects of the same
-  team never see each other's pointers (`live.join({ room })` picks another).
+- changes never travel live: a `data.*` / `files.*` write goes out with sync (within a
+  second or two while live), and the moment it is committed the group pulls it. Panels
+  hear it as the usual `{ type: "plugin_scope_changed", reason: "synced", keys }`, always
+  whole (a doc lands with the files it names). Merge `keys`, keep what is open.
 - the host script at the top of every panel page sends this pointer and what was
-  clicked or focused, and draws teammates' pointers, names and selections over the page.
-  Give elements people point at a stable `data-live-id` (else `id`, else their place in
-  the page) so a pointer lands on the same thing on every PC.
+  clicked, and draws teammates' pointers, names and selections over the page.
+- pressing a control holds it, live or not: a text field, list or editable while it has
+  focus, a button or anything dragged until 1.5 s after the press. Every teammate on the
+  same screen sees that control greyed out (`inert`, with the holder's name): the group at
+  once, everyone else within seconds through presence. The earlier of two presses keeps
+  it. `data-live-lock` makes any element holdable, `data-live-nolock` opts a control out;
+  links and tabs never hold.
+- **Follow** on the Live list: a member's page scrolls with the host's and clicks the same
+  tabs (`role="tab"`, `a[href^="#"]`, `data-live-nav`); nothing else is ever clicked for
+  them.
+- an `<img>` or `<video>` that fails to load on a team copy shows a placeholder the size
+  of the picture ("Getting picture…" while teammates' changes come in) and loads again
+  after each sync.
+
+Give elements people point at or press a stable `data-live-id` (else `id`, else their
+place in the page) so a pointer or a hold lands on the same thing on every PC, and mark
+what a screen shows with `data-live-view` (the open project's id, say) so holds and
+pointers never cross from one project to another. Without it, a screen is its title,
+address and selected tabs.
+`live.join({ room })` joins a named room of the plugin's own.
 
 The host also pushes `{ type: "live.state", on }` on load and when live goes on or off,
 `{ type: "live.message", from: { name, user, device, label }, topic, data }` for each

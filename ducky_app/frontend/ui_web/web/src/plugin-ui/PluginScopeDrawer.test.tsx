@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ConfirmModalProvider } from "../contexts/ConfirmModalContext";
 import type { PluginScopeStatus } from "../types/panel";
 import { PluginScopeDrawer } from "./PluginScopeDrawer";
@@ -29,6 +29,7 @@ const onChanged = vi.fn();
 beforeEach(() => {
   for (const fn of Object.values(api)) fn?.mockResolvedValue({ ok: true });
   api.plugin_scope_activity?.mockResolvedValue({});
+  api.plugin_scope_history.mockResolvedValue({ ok: true, more: false, entries: [] });
 });
 afterEach(() => {
   cleanup();
@@ -42,12 +43,18 @@ const status = (extra: PluginScopeStatus = {}): PluginScopeStatus => ({
   scope: { kind: "shared", label: "Alpha", spaceId: "s1", readOnly: false, ...extra.scope },
 });
 
-const drawer = (s: PluginScopeStatus) =>
+const drawer = (s: PluginScopeStatus, onJoin?: (room: string) => void) =>
   render(
     <ConfirmModalProvider>
-      <PluginScopeDrawer pluginId="forge" status={s} onChanged={onChanged} />
+      <PluginScopeDrawer pluginId="forge" status={s} onChanged={onChanged} onJoin={onJoin} />
     </ConfirmModalProvider>,
   );
+
+/** Show one of the tabs. */
+const go = (tab: RegExp | string) => fireEvent.click(screen.getByRole("tab", { name: tab }));
+/** The rows of the tab shown: each row's name and its second line. */
+const rows = () => [...document.querySelectorAll(".plugin-scope-row")].map((r) =>
+  [r.querySelector(".plugin-scope-row__name")?.textContent ?? "", r.querySelector(".plugin-scope-row__sub")?.textContent ?? ""]);
 
 const NOTE = "This plugin's files are stored as it writes them on each member's PC; on the server and in transit they are encrypted.";
 const URC = "Carried by this island's UEFN revision control";
@@ -55,37 +62,66 @@ const URC = "Carried by this island's UEFN revision control";
 /** The confirm modal's main button ("Break lock (B)"). */
 const confirmButton = (label: string) => screen.getByRole("button", { name: new RegExp(`^${label} \\(`) });
 
-describe("plugin scope drawer", () => {
-  it("lists everyone in the space, one row each: you first, then who edits, views, the rest", async () => {
+describe("source control tabs", () => {
+  it("shows seven tabs with counts; a copy on the older sync has no Locks, History or People", () => {
+    const view = drawer(status({
+      changes: { outgoing: [{ kind: "doc", key: "deck", state: "queued" }], incoming: 2 },
+      conflicts: [{ kind: "doc", key: "pack", by: "Ben" }],
+      locks: [{ unit: "doc:x", name: "x", holder: "Ana" }],
+    }));
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(
+      ["Changes1", "Incoming2", "Conflicts1", "Locks1", "History", "People", "Settings"]);
+    expect(screen.getByRole("tab", { name: "Changes1" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: /^Conflicts/ }).querySelector(".is-alert")).toBeTruthy();
+    view.unmount();
+    drawer(status({ engine: "v1", head: 0, people: undefined, locks: undefined }));
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Changes", "Incoming", "Conflicts", "Settings"]);
+  });
+
+  it("the bar picks the tab: it shows the one asked for and says when another is picked", () => {
+    const picked = vi.fn();
+    render(
+      <ConfirmModalProvider>
+        <PluginScopeDrawer pluginId="forge" status={status()} onChanged={onChanged} tab="locks" onTab={picked} />
+      </ConfirmModalProvider>,
+    );
+    expect(screen.getByText("Nothing is locked.")).toBeTruthy();
+    go("Settings");
+    expect(picked).toHaveBeenCalledWith("settings");
+  });
+
+  it("People: you first, then who edits, views, the rest; who's hosting or in a group, with Join", async () => {
+    const join = vi.fn();
     drawer(status({
+      live: { supported: true, on: false, groups: [{ room: "h:d1", host: "Ana", members: [{ name: "Ana", device: "d1" }, { name: "Cy", device: "d3" }] }] },
       people: [
-        { user_name: "Dee", device: "DEE-PC", plugins: { other: { viewing: true } } },
-        { user_name: "Cy", device: "CY-PC", plugins: { forge: { viewing: true } } },
-        { user_name: "Ana", device: "ANA-PC", plugins: { forge: { editing: [
+        { user_name: "Dee", device: "DEE-PC", deviceId: "d4", plugins: { other: { viewing: true } } },
+        { user_name: "Cy", device: "CY-PC", deviceId: "d3", plugins: { forge: { viewing: true, live: "h:d1" } } },
+        { user_name: "Ana", device: "ANA-PC", deviceId: "d1", plugins: { forge: { live: "h:d1", editing: [
           { unitName: "MEGA_Duel_Stadium", actor: "user" }, { unitName: "Crate", actor: "user" },
         ] } } },
-        { user_name: "Ben", device: "BEN-PC", plugins: { forge: { editing: [{ unitName: "Arena", actor: "agent", ducky: "Builder" }] } } },
-        { user_name: "Me", me: true, device: "MainPC", plugins: { forge: { viewing: true } } },
+        { user_name: "Ben", device: "BEN-PC", deviceId: "d2", plugins: { forge: { editing: [{ unitName: "Arena", actor: "agent", ducky: "Builder" }] } } },
+        { user_name: "Me", me: true, device: "MainPC", deviceId: "d0", plugins: { forge: { viewing: true } } },
       ],
-    }));
-    expect(screen.getByText("People in Alpha")).toBeTruthy();
-    const table = screen.getAllByRole("table")[0];
-    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Member", "PC", "In Forge", "Since"]);
-    const rows = within(table).getAllByRole("row").slice(1).map((r) => r.textContent);
-    // Each name follows its avatar's initials.
-    expect(rows).toEqual([
-      "MYou (Me)MainPCViewing",
-      "AAnaANA-PCEditing MEGA_Duel_Stadium and Crate",
-      "BBenBEN-PCAI (their ducky Builder) is editing Arena",
-      "CCyCY-PCViewing",
-      "DDeeDEE-PCNot in Forge",
+    }), join);
+    go(/^People/);
+    expect(rows()).toEqual([
+      ["You (Me)", "MainPC · Viewing"],
+      ["Ana", "ANA-PC · Editing MEGA_Duel_Stadium and Crate"],
+      ["Ben", "BEN-PC · AI (their ducky Builder) is editing Arena"],
+      ["Cy", "CY-PC · Viewing"],
+      ["Dee", "DEE-PC · Not in Forge"],
     ]);
-    expect(screen.queryByText("Nobody else is here right now.")).toBeNull();
+    const live = [...document.querySelectorAll(".plugin-scope-row__side")].map((s) => s.textContent);
+    expect(live).toEqual(["Not live", "Hosting", "Not live", "In Ana's group", "Not live"]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Join Ana" })[0]);
+    expect(join).toHaveBeenCalledWith("h:d1");
     await waitFor(() => expect(api.plugin_scope_activity).toHaveBeenCalledWith("forge"));
   });
 
   it("has the space looked at once when it opens, never on each new status (each look is a round)", async () => {
     const view = drawer(status());
+    go(/^Locks/);
     expect(screen.getByText("Nothing is locked.")).toBeTruthy();
     await waitFor(() => expect(api.plugin_scope_activity).toHaveBeenCalledTimes(1));
     // The round's news comes back as a fresher status from the bar.
@@ -98,23 +134,26 @@ describe("plugin scope drawer", () => {
     expect(screen.getByRole("button", { name: "Ask Ana to release deck" })).toBeTruthy();
     expect(api.plugin_scope_activity).toHaveBeenCalledTimes(1);
 
-    // Without the call the drawer still shows the status.
+    // Without the call the panel still shows the status.
     view.unmount();
     api.plugin_scope_activity = undefined;
     drawer(status());
+    go(/^Locks/);
     expect(screen.getByText("Nothing is locked.")).toBeTruthy();
   });
 
   it("locks: Release mine, Ask to release, and Break only after its confirm", async () => {
     drawer(status({
       locks: [
-        { unit: "tree:scenes/ab12", name: "MEGA_Duel_Stadium", holder: "Ana", since: 1_800_000_000, leaseLeft: 240 },
+        { unit: "tree:scenes/ab12", name: "MEGA_Duel_Stadium", holder: "Ana", leaseLeft: 240 },
         { unit: "doc:pack", name: "pack", mine: true, leaseLeft: 0 },
       ],
     }));
-    expect(screen.getByText("4 min")).toBeTruthy();
-    expect(screen.getByText("Ran out")).toBeTruthy();
-    expect(screen.getByText("You")).toBeTruthy();
+    go(/^Locks/);
+    expect(rows()).toEqual([
+      ["MEGA_Duel_Stadium", "Locked by Ana · 4 min left"],
+      ["pack", "Locked by you · ran out"],
+    ]);
 
     fireEvent.click(screen.getByRole("button", { name: "Release pack" }));
     await waitFor(() => expect(api.plugin_scope_unlock).toHaveBeenCalledWith("forge", "doc:pack"));
@@ -138,16 +177,16 @@ describe("plugin scope drawer", () => {
     expect(onChanged).toHaveBeenCalled();
   });
 
-  it("a refused lock action says why in the drawer", async () => {
+  it("a refused lock action says why in the panel", async () => {
     api.plugin_scope_break.mockResolvedValue({ ok: false, error: "Only owners and admins can break a live lock." });
     drawer(status({ locks: [{ unit: "doc:deck", name: "deck", holder: "Ana" }] }));
+    go(/^Locks/);
     fireEvent.click(screen.getByRole("button", { name: "Break Ana's lock on deck" }));
     fireEvent.click(await screen.findByRole("button", { name: /^Break lock \(/ }));
-    expect(await screen.findByRole("alert")).toBeTruthy();
-    expect(screen.getByText("Only owners and admins can break a live lock.")).toBeTruthy();
+    expect((await screen.findByRole("alert")).textContent).toBe("Only owners and admins can break a live lock.");
   });
 
-  it("changes: Retry sends again, Retry all, Drop asks first, blocked incoming Re-download", async () => {
+  it("changes: each one's state, Retry sends again, Retry all, Drop asks first; Sync now forces a round", async () => {
     drawer(status({
       changes: {
         outgoing: [
@@ -156,16 +195,14 @@ describe("plugin scope drawer", () => {
           { kind: "doc", key: "deck", state: "locked_out", reason: "Locked by Ana" },
           { kind: "doc", key: "pack", state: "queued" },
         ],
-        incoming: 2, incomingBy: ["Ana"],
-        blocked: [{ kind: "asset", key: "art/sky.png", error: "a chunk failed its check", attempts: 2 }],
       },
     }));
-    expect(screen.getByText("Refused: too big for your plan")).toBeTruthy();
-    expect(screen.getByText("Couldn't be sent after 5 tries: file in use")).toBeTruthy();
-    expect(screen.getByText("Locked by Ana")).toBeTruthy();
-    expect(screen.getByText("Queued")).toBeTruthy();
-    expect(screen.getByText("3 MB")).toBeTruthy();
-    expect(screen.getByText("2 incoming from Ana")).toBeTruthy();
+    expect(rows()).toEqual([
+      ["art/big.png", "3 MB · Refused: too big for your plan"],
+      ["scene_1", "Couldn't be sent after 5 tries: file in use"],
+      ["deck", "Locked by Ana"],
+      ["pack", "Queued"],
+    ]);
     // Locked out and queued changes have no Retry or Drop.
     expect(screen.queryByRole("button", { name: "Retry deck" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Drop my change to pack" })).toBeNull();
@@ -184,8 +221,17 @@ describe("plugin scope drawer", () => {
     await waitFor(() => expect(api.plugin_scope_drop).toHaveBeenCalledWith("forge", "asset", "art/big.png"));
     expect(onChanged).toHaveBeenLastCalledWith(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "Re-download art/sky.png" }));
-    await waitFor(() => expect(api.plugin_scope_pull).toHaveBeenCalledWith("forge", "asset", "art/sky.png"));
+    api.plugin_scope_sync.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    await waitFor(() => expect(api.plugin_scope_sync).toHaveBeenCalledWith("forge", true));
+  });
+
+  it("a round that failed: the reason is in Changes, once, with Retry", async () => {
+    drawer(status({ state: "offline", error: "Network error: <urlopen error [WinError 10060] ...>" }));
+    expect(rows()[0]).toEqual(["Offline", "Network error: <urlopen error [WinError 10060] ...>"]);
+    expect(screen.getAllByText(/WinError 10060/)).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(api.plugin_scope_sync).toHaveBeenCalledWith("forge", true));
   });
 
   it("changes a provider held back (no engine list) show with their reasons", () => {
@@ -193,26 +239,36 @@ describe("plugin scope drawer", () => {
       head: undefined, mode: undefined, people: undefined, locks: undefined, refused: 3,
       items: [{ kind: "doc", key: "a", state: "refused", reason: "storage full" }],
     }));
-    expect(screen.getByText("Refused: storage full")).toBeTruthy();
-    expect(screen.getByText("2 more not listed")).toBeTruthy();
-    // No engine: no People, Locks, History or Mode.
-    expect(screen.queryByText("People")).toBeNull();
-    expect(screen.queryByText("Locks")).toBeNull();
-    expect(screen.queryByText("History")).toBeNull();
-    expect(screen.queryByText("Mode")).toBeNull();
+    expect(rows()).toEqual([["a", "Refused: storage full"]]);
+    expect(screen.getByText(/2 more not listed/)).toBeTruthy();
+    // No engine: no People, Locks or History, and no Sending choice.
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Changes1", "Incoming", "Conflicts", "Settings"]);
+    go("Settings");
+    expect(screen.queryByRole("radiogroup", { name: "Sending" })).toBeNull();
   });
 
-  it("a copy on the older sync shows its changes and conflicts, never History or Mode", () => {
-    drawer(status({
-      engine: "v1", head: 0, mode: "auto", people: undefined, locks: undefined,
-      changes: { outgoing: [{ kind: "doc", key: "deck", state: "queued" }] },
-      conflicts: [{ kind: "doc", key: "pack", by: "Ben", reason: "changed" }],
+  it("incoming: who it's from, held ones wait for Update now, blocked ones Download again", async () => {
+    const view = drawer(status({
+      changes: { incoming: 2, incomingBy: ["Ana", "Ben"], held: true,
+        blocked: [{ kind: "asset", key: "art/sky.png", error: "a chunk failed its check", attempts: 2 }] },
     }));
-    expect(screen.getByText("deck")).toBeTruthy();
-    expect(screen.getByText("Conflicts")).toBeTruthy();
-    expect(screen.queryByText("History")).toBeNull();
-    expect(screen.queryByText("Mode")).toBeNull();
-    expect(screen.queryByRole("radiogroup", { name: "Sync mode" })).toBeNull();
+    go(/^Incoming/);
+    expect(rows()).toEqual([
+      ["2 changes from Ana and Ben", "They wait until you update: Forge restarts to take them."],
+      ["art/sky.png", "a chunk failed its check (2 tries)"],
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Update now" }));
+    await waitFor(() => expect(api.plugin_scope_pull).toHaveBeenCalledWith("forge"));
+    expect(onChanged).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByRole("button", { name: "Download art/sky.png again" }));
+    await waitFor(() => expect(api.plugin_scope_pull).toHaveBeenCalledWith("forge", "asset", "art/sky.png"));
+    view.unmount();
+    // Changes that apply by themselves: Get now brings them sooner.
+    drawer(status({ changes: { incoming: 1, incomingBy: ["Ana"], held: false } }));
+    go(/^Incoming/);
+    expect(rows()).toEqual([["1 change from Ana", "Coming in now."]]);
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Get now" })).toBeTruthy();
   });
 
   it("conflicts: Keep mine, Keep theirs after a confirm, Keep both for folders, Compare", async () => {
@@ -225,6 +281,7 @@ describe("plugin scope drawer", () => {
         { kind: "tree", key: "tree:scenes/ab12", name: "MEGA_Duel_Stadium", by: "Ana" },
       ],
     }));
+    go(/^Conflicts/);
     expect(screen.getAllByText(/^Changed here and by Ana/).length).toBe(2);
     expect(screen.getByText(/^Ben deleted this; you changed it/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Keep both: deck" })).toBeNull();
@@ -245,10 +302,10 @@ describe("plugin scope drawer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Compare: deck" }));
     await waitFor(() => expect(api.plugin_scope_resolve).toHaveBeenCalledWith("forge", "doc", "deck", "compare"));
     expect((await screen.findByText(/- hp: 10/)).textContent).toBe("- hp: 10\n+ hp: 12");
-    expect(screen.getByRole("button", { name: "Compare: deck" }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: "Compare: deck" }).getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("history: Undo, Restore to here and Restore item, each confirmed in a modal", async () => {
+  it("history loads by itself: Undo, Restore to here and an item's Restore, each confirmed in a modal", async () => {
     api.plugin_scope_history.mockImplementation(async (_p: string, req: { key?: string; before?: number }) => req?.key
       ? { ok: true, entries: [{ seq: 9, by: "Ana", at: 1_800_000_000, kind: "doc", key: "deck", size: 2048 }] }
       : req?.before ? { ok: true, more: false, entries: [{ seq: 10, by: "Cy", count: 1 }] }
@@ -259,11 +316,13 @@ describe("plugin scope drawer", () => {
       ] });
     api.plugin_scope_restore.mockResolvedValue({ ok: true, seq: 13, skipped: [["doc", "pack"]] });
     drawer(status());
-    fireEvent.click(screen.getByRole("button", { name: "Show history" }));
+    go("History");
     await waitFor(() => expect(api.plugin_scope_history).toHaveBeenCalledWith("forge", { before: undefined, limit: 20 }));
-    expect(await screen.findByText("AI (Ben's ducky Builder)")).toBeTruthy();
-    expect(screen.getByText("Balance pass")).toBeTruthy();
-    expect(screen.getByText("BEN-PC")).toBeTruthy();
+    expect(await screen.findByText("Balance pass")).toBeTruthy();
+    expect(rows()).toEqual([
+      ["Balance pass", "AI (Ben's ducky Builder) · BEN-PC"],
+      ["1 item changed", "Ana"],
+    ]);
 
     fireEvent.click(screen.getByRole("button", { name: "Undo #12" }));
     expect(await screen.findByText("Undo change #12?")).toBeTruthy();
@@ -278,10 +337,10 @@ describe("plugin scope drawer", () => {
     fireEvent.click(confirmButton("Restore"));
     await waitFor(() => expect(api.plugin_scope_restore).toHaveBeenLastCalledWith("forge", { toSeq: 11 }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Older" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Older" }));
     await waitFor(() => expect(api.plugin_scope_history).toHaveBeenCalledWith("forge", { before: 11, limit: 20 }));
 
-    fireEvent.click(screen.getAllByRole("button", { name: "2" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "2 items" }));
     fireEvent.click(screen.getByRole("button", { name: "Versions of deck" }));
     await waitFor(() => expect(api.plugin_scope_history).toHaveBeenCalledWith("forge", { kind: "doc", key: "deck", limit: 20 }));
     expect(await screen.findByText("Versions of deck")).toBeTruthy();
@@ -289,7 +348,7 @@ describe("plugin scope drawer", () => {
     expect(await screen.findByText("Restore deck to #9?")).toBeTruthy();
     fireEvent.click(confirmButton("Restore"));
     await waitFor(() => expect(api.plugin_scope_restore).toHaveBeenLastCalledWith("forge", { items: [{ kind: "doc", key: "deck", seq: 9 }] }));
-    fireEvent.click(screen.getByRole("button", { name: "Back to history" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(await screen.findByRole("button", { name: "Undo #12" })).toBeTruthy();
   });
 
@@ -299,7 +358,7 @@ describe("plugin scope drawer", () => {
       { seq: 1, by: "Imported from team data", count: 40 },
     ] });
     drawer(status());
-    fireEvent.click(screen.getByRole("button", { name: "Show history" }));
+    go("History");
     expect(await screen.findByRole("button", { name: "Undo #2" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Undo #1" })).toBeNull();
     expect(screen.getByRole("button", { name: "Restore to #1" })).toBeTruthy();
@@ -307,7 +366,7 @@ describe("plugin scope drawer", () => {
 
   it("folder units show only when the plugin declares folders; Lock and Release", async () => {
     const view = drawer(status());
-    expect(screen.queryByText("Folder units")).toBeNull();
+    expect(screen.queryByText("Folders")).toBeNull();
     view.unmount();
     drawer(status({
       folders: [
@@ -317,11 +376,13 @@ describe("plugin scope drawer", () => {
         { unit: "tree:scenes/4", name: "Vault", state: "ok" },
       ],
     }));
-    expect(screen.getByText("Folder units")).toBeTruthy();
-    expect(screen.getByText("Changed here")).toBeTruthy();
-    expect(screen.getByText("Locked by Ana")).toBeTruthy();
-    expect(screen.getByText("Locked by you")).toBeTruthy();
-    expect(screen.getByText("Up to date")).toBeTruthy();
+    expect(screen.getByText("Folders")).toBeTruthy();
+    expect(rows().slice(-4)).toEqual([
+      ["MEGA_Duel_Stadium", "Changed here"],
+      ["Arena", "Locked by Ana"],
+      ["Lobby", "Locked by you"],
+      ["Vault", "Up to date"],
+    ]);
     expect(screen.queryByRole("button", { name: "Lock Arena" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Lock Vault" }));
     await waitFor(() => expect(api.plugin_scope_lock).toHaveBeenCalledWith("forge", "tree:scenes/4", "Vault"));
@@ -329,7 +390,7 @@ describe("plugin scope drawer", () => {
     await waitFor(() => expect(api.plugin_scope_unlock).toHaveBeenCalledWith("forge", "tree:scenes/3"));
   });
 
-  it("the folder units table: size, each state, and the plaintext note in the help", () => {
+  it("folder units: size and each state; the plaintext note is in Settings", () => {
     drawer(status({
       teamFolders: [{ id: "scenes" }], folderNote: NOTE,
       folders: [
@@ -339,33 +400,28 @@ describe("plugin scope drawer", () => {
           reason: "Lobby.json and lobby.json differ only by upper/lower case or accents. Rename one so the team can tell them apart." },
       ],
     }));
-    const table = screen.getByText("Folder units").parentElement as HTMLElement;
-    const rows = within(table).getAllByRole("row").slice(1).map((r) => [...r.querySelectorAll("td")].slice(0, 3).map((td) => td.textContent));
-    expect(rows).toEqual([
-      ["MEGA_Duel_Stadium", "12 files · 226 MB", "Up to date"],
-      ["Arena", "3 files · 2 KB", "Changed here and by someone else"],
-      ["Lobby", "2 files · 10 B",
-        "Lobby.json and lobby.json differ only by upper/lower case or accents. Rename one so the team can tell them apart."],
+    expect(rows().slice(-3)).toEqual([
+      ["MEGA_Duel_Stadium", "12 files · 226 MB · Up to date"],
+      ["Arena", "3 files · 2 KB · Changed here and by someone else"],
+      ["Lobby", "2 files · 10 B · Lobby.json and lobby.json differ only by upper/lower case or accents. Rename one so the team can tell them apart."],
     ]);
     // A refused unit can't be locked; the others can.
     expect(screen.queryByRole("button", { name: "Lock Lobby" })).toBeNull();
     expect(screen.getByRole("button", { name: "Lock Arena" })).toBeTruthy();
-    expect(screen.getByText(NOTE)).toBeTruthy();
+    go("Settings");
+    expect(screen.getByText(new RegExp(NOTE.replace(/[.;]/g, "\\$&")))).toBeTruthy();
   });
 
   it("says why a declared folder can't be shared from this PC", () => {
     drawer(status({ teamFolders: [{ id: "design", refused: URC }, { id: "noproject" }] }));
-    expect(screen.getByText("Folder units")).toBeTruthy();
-    expect(screen.getByText(URC)).toBeTruthy();
-    // The plaintext note says what the help says even without the host's words.
-    expect(screen.getByText(NOTE)).toBeTruthy();
+    expect(rows()).toContainEqual(["This folder can't be shared", URC]);
     cleanup();
     drawer(status({ teamFolders: [
       { id: "design", refused: URC },
       { id: "noproject", refused: "This folder is synced by OneDrive. Move it out of OneDrive to share it with a team." },
     ] }));
-    expect(screen.getByText(`design: ${URC}`)).toBeTruthy();
-    expect(screen.getByText("noproject: This folder is synced by OneDrive. Move it out of OneDrive to share it with a team.")).toBeTruthy();
+    expect(rows()).toContainEqual(["design", URC]);
+    expect(rows()).toContainEqual(["noproject", "This folder is synced by OneDrive. Move it out of OneDrive to share it with a team."]);
   });
 
   it("a unit changed while someone else holds it: Ask to release, Keep mine as a copy, Discard mine after a confirm", async () => {
@@ -373,7 +429,7 @@ describe("plugin scope drawer", () => {
       folders: [{ folder_id: "scenes", unit: "MEGA_Duel_Stadium", name: "MEGA_Duel_Stadium", state: "quarantined",
         reason: "Changed here while Ana holds it" }],
     }));
-    expect(screen.getByText("Changed here while Ana holds it")).toBeTruthy();
+    expect(rows()).toContainEqual(["MEGA_Duel_Stadium", "Changed here while Ana holds it"]);
     expect(screen.queryByRole("button", { name: "Lock MEGA_Duel_Stadium" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Ask the holder to release MEGA_Duel_Stadium" }));
@@ -398,12 +454,12 @@ describe("plugin scope drawer", () => {
       "forge", "tree", "scenes/MEGA_Duel_Stadium", "discard"));
   });
 
-  it("a {PROJECT} folder's unit goes by its folder and project id; a refusal from the host stays in the drawer", async () => {
+  it("a {PROJECT} folder's unit goes by its folder and project id; a refusal from the host stays in the panel", async () => {
     api.plugin_scope_resolve.mockResolvedValueOnce({ ok: false, error: "MEGA_Duel_Stadium is open in another program." });
     drawer(status({
       folders: [{ folder_id: "design", unit: "1f0c-guid", name: "design", state: "quarantined", holder: "Ben" }],
     }));
-    expect(screen.getByText("Changed here while Ben holds it")).toBeTruthy();
+    expect(rows()).toContainEqual(["design", "Changed here while Ben holds it"]);
     fireEvent.click(screen.getByRole("button", { name: "Keep mine as a copy: design" }));
     await waitFor(() => expect(api.plugin_scope_resolve).toHaveBeenCalledWith("forge", "tree", "design/1f0c-guid", "keep_copy"));
     expect((await screen.findByRole("alert")).textContent).toBe("MEGA_Duel_Stadium is open in another program.");
@@ -415,7 +471,7 @@ describe("plugin scope drawer", () => {
     Object.assign(api, { plugin_scope_resolve: undefined });
     try {
       drawer(status({ folders: [{ folder_id: "scenes", unit: "Arena", name: "Arena", state: "quarantined" }] }));
-      expect(screen.getByText("Changed here while someone else holds it")).toBeTruthy();
+      expect(rows()).toContainEqual(["Arena", "Changed here while someone else holds it"]);
       expect(screen.queryByRole("button", { name: "Keep mine as a copy: Arena" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Discard mine: Arena" })).toBeNull();
     } finally {
@@ -434,17 +490,15 @@ describe("plugin scope drawer", () => {
         { folder_id: "scenes", unit: "Pier", unitId: "tree:scenes/5e1a", name: "Pier", state: "incoming" },
       ],
     }));
-    const table = screen.getByText("Folder units").parentElement as HTMLElement;
-    const states = within(table).getAllByRole("row").slice(1).map((r) => r.querySelectorAll("td")[2].textContent);
-    expect(states).toEqual(["Up to date", "Changed here", "Up to date", "Locked by Ana", "Update waiting"]);
+    expect(rows().slice(-5).map(([, sub]) => sub)).toEqual(["Up to date", "Changed here", "Up to date", "Locked by Ana", "Update waiting"]);
     expect(screen.queryByRole("button", { name: "Lock Dock" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Lock Arena" }));
     await waitFor(() => expect(api.plugin_scope_lock).toHaveBeenCalledWith("forge", "tree:scenes/ab12", "Arena"));
     fireEvent.click(screen.getByRole("button", { name: "Lock Vault" }));
     await waitFor(() => expect(api.plugin_scope_lock).toHaveBeenLastCalledWith("forge", "scenes/Vault", "Vault"));
     // This PC holds Lobby: Release, never Lock.
-    expect(within(table).queryByRole("button", { name: "Lock Lobby" })).toBeNull();
-    fireEvent.click(within(table).getByRole("button", { name: "Release Lobby" }));
+    expect(screen.queryByRole("button", { name: "Lock Lobby" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Release Lobby" }));
     await waitFor(() => expect(api.plugin_scope_unlock).toHaveBeenCalledWith("forge", "tree:scenes/9f2c"));
   });
 
@@ -458,12 +512,10 @@ describe("plugin scope drawer", () => {
           reason: "Lobby.json and lobby.json differ only by upper/lower case or accents. Rename one." },
       ] },
     }));
-    const rows = within(screen.getByText("Changes").parentElement as HTMLElement).getAllByRole("row").slice(1)
-      .map((r) => [...r.querySelectorAll("td")].slice(0, 3).map((td) => td.textContent));
-    expect(rows).toEqual([
-      ["Arena", "3 files", "Changed here while Ana holds it"],
-      ["Vault", "1 file", "Queued"],
-      ["Lobby", "2 files", "Refused: Lobby.json and lobby.json differ only by upper/lower case or accents. Rename one."],
+    expect(rows()).toEqual([
+      ["Arena", "3 files · Changed here while Ana holds it"],
+      ["Vault", "1 file · Queued"],
+      ["Lobby", "2 files · Refused: Lobby.json and lobby.json differ only by upper/lower case or accents. Rename one."],
     ]);
     // Renaming fixes a name clash: Retry and Drop my change are for data items.
     expect(screen.queryByRole("button", { name: "Retry Lobby" })).toBeNull();
@@ -479,7 +531,7 @@ describe("plugin scope drawer", () => {
           reason: "bad request" },
       ] },
     }));
-    expect(screen.getAllByText("Couldn't be sent: bad request")).toHaveLength(2);
+    expect(rows().map(([, sub]) => sub)).toEqual(["2 files · Couldn't be sent: bad request", "1 file · Couldn't be sent: bad request"]);
     expect(screen.queryByRole("button", { name: "Drop my change to Arena" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry Arena" }));
     await waitFor(() => expect(api.plugin_scope_retry).toHaveBeenCalledWith("forge", "scenes/Arena"));
@@ -487,47 +539,45 @@ describe("plugin scope drawer", () => {
     await waitFor(() => expect(api.plugin_scope_retry).toHaveBeenLastCalledWith("forge"));
   });
 
-  it("updates held for a restart wait for Update now, which brings them in", async () => {
-    const view = drawer(status({ changes: { incoming: 2, incomingBy: ["Ana", "Ben"], held: true } }));
-    expect(screen.getByText("2 incoming from Ana and Ben · they wait until you update")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Update now" }));
-    await waitFor(() => expect(api.plugin_scope_pull).toHaveBeenCalledWith("forge"));
-    expect(onChanged).toHaveBeenLastCalledWith(true);
-    view.unmount();
-    // Changes that apply by themselves need no button.
-    drawer(status({ changes: { incoming: 1, incomingBy: ["Ana"], held: false } }));
-    expect(screen.getByText("1 incoming from Ana")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
-  });
-
-  it("mode: Auto or Manual; Manual pushes with an optional message and pulls", async () => {
+  it("Sending: Auto or Manual in Settings; Manual sends with an optional message, and gets in Incoming", async () => {
     const view = drawer(status());
+    go("Settings");
     expect(screen.getByRole("radio", { name: "Auto" }).getAttribute("aria-checked")).toBe("true");
-    expect(screen.queryByRole("button", { name: "Push" })).toBeNull();
     fireEvent.click(screen.getByRole("radio", { name: "Manual" }));
     await waitFor(() => expect(api.plugin_scope_mode).toHaveBeenCalledWith("forge", "manual"));
     view.unmount();
 
     drawer(status({ mode: "manual" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Push message (optional)" }), { target: { value: "  New arena  " } });
-    fireEvent.click(screen.getByRole("button", { name: "Push" }));
+    expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
+    fireEvent.change(screen.getByRole("textbox", { name: "Message (optional)" }), { target: { value: "  New arena  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(api.plugin_scope_push).toHaveBeenCalledWith("forge", "New arena"));
     await waitFor(() => expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe(""));
-    fireEvent.click(screen.getByRole("button", { name: "Pull" }));
+    go(/^Incoming/);
+    fireEvent.click(screen.getByRole("button", { name: "Get now" }));
     await waitFor(() => expect(api.plugin_scope_pull).toHaveBeenCalledWith("forge"));
+    go("Settings");
     fireEvent.click(screen.getByRole("radio", { name: "Auto" }));
     await waitFor(() => expect(api.plugin_scope_mode).toHaveBeenLastCalledWith("forge", "auto"));
   });
 
-  it("a lost space offers Save my unsent changes to Local until the person has chosen", async () => {
+  it("Settings: the copy, storage and who's signed in", () => {
+    drawer(status({ email: "ana@x.org", members: 4, usage: { usedBytes: 34 * 1024 ** 2, limitBytes: 5 * 1024 ** 3 } }));
+    go("Settings");
+    expect(screen.getByText("34 MB of 5 GB")).toBeTruthy();
+    expect(rows()).toContainEqual(["Account", "Signed in as ana@x.org · 4 members"]);
+    expect(rows()[0][1]).toMatch(/^Alpha's team copy\./);
+  });
+
+  it("a lost space offers to save the unsent changes to Local until the person has chosen", async () => {
     api.plugin_scope_save_unsent.mockResolvedValue({ ok: true, saved: [
       { plugin: "forge", kind: "doc", key: "deck", localKey: "deck-from-alpha" },
       { plugin: "forge", kind: "doc", key: "pack", localKey: "pack" },
     ] });
     const view = drawer(status({ state: "lost", unsent: 2 }));
     expect(screen.getByText(/^2 changes made here never reached Alpha\./)).toBeTruthy();
-    expect(screen.queryByText("Changes")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Save my unsent changes to Local" }));
+    expect(screen.queryByText(/^Your changes on this PC/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save to Local" }));
     await waitFor(() => expect(api.plugin_scope_save_unsent).toHaveBeenCalledWith("forge", "save"));
     expect(await screen.findByText("Saved 2 changes to Local.")).toBeTruthy();
 
@@ -539,6 +589,7 @@ describe("plugin scope drawer", () => {
     view.unmount();
 
     drawer(status({ state: "lost", unsent: 2, unsentChosen: true }));
-    expect(screen.queryByRole("button", { name: "Save my unsent changes to Local" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save to Local" })).toBeNull();
   });
 });
+

@@ -2,7 +2,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({
-  api: { plugin_live_join: vi.fn(), plugin_live_send: vi.fn(), plugin_live_status: vi.fn() },
+  api: { plugin_live_join: vi.fn(), plugin_live_send: vi.fn(), plugin_live_status: vi.fn(), plugin_live_hold: vi.fn(),
+    plugin_live_holds: vi.fn() },
 }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => host.api, isRemote: () => false }));
 
@@ -29,9 +30,31 @@ it("a panel goes live and sends its own topics as its own plugin, never the host
 it("pointers go fast and clamped, with an anchor no longer than 400", async () => {
   host.api.plugin_live_send.mockResolvedValue({ ok: true });
   expect(await call("live.pointer", { anchor: "x".repeat(900), fx: 3, fy: -1 })).toMatchObject({ ok: true });
-  expect(host.api.plugin_live_send).toHaveBeenCalledWith("imk", "ducky.pointer", { anchor: "x".repeat(400), fx: 1, fy: 0 }, "", true);
+  expect(host.api.plugin_live_send).toHaveBeenCalledWith("imk", "ducky.pointer", { anchor: "x".repeat(400), fx: 1, fy: 0, v: "" }, "", true);
   await call("live.select", { anchor: "[data-live-id=\"clip-3\"]", fx: 0.5 });
   expect(host.api.plugin_live_send).toHaveBeenLastCalledWith("imk", "ducky.select", { anchor: "[data-live-id=\"clip-3\"]" }, "", true);
   await call("live.pointer", { fx: 0.5 });
   expect(host.api.plugin_live_send).toHaveBeenCalledTimes(2);  // no anchor: nothing sent
+});
+
+it("holds go to the host's hold call, live or not; a view id keeps only safe characters", async () => {
+  host.api.plugin_live_hold.mockResolvedValue({ ok: true });
+  host.api.plugin_live_holds.mockResolvedValue({ ok: true, holds: [{ device: "d1", anchor: "body", t: 1, v: "v1", name: "Mo" }] });
+  expect(await call("live.hold", { anchor: "[id=\"title\"]", on: true, t: 12, v: "v1<script>" })).toMatchObject({ ok: true });
+  expect(host.api.plugin_live_hold).toHaveBeenCalledWith("imk", "[id=\"title\"]", true, 12, "v1script");
+  await call("live.hold", { anchor: "[id=\"title\"]", on: false });
+  expect(host.api.plugin_live_hold).toHaveBeenLastCalledWith("imk", "[id=\"title\"]", false, 0, "");
+  expect(await call("live.hold", { on: true })).toMatchObject({ result: { ok: false } });
+  expect(await call("live.holds", {})).toMatchObject({ ok: true, result: { holds: [{ name: "Mo" }] } });
+});
+
+it("a view and tab clicks go to the group: the view may drop, a tab click may not", async () => {
+  host.api.plugin_live_send.mockResolvedValue({ ok: true });
+  await call("live.view", { v: "v9", scroll: [{ anchor: "@doc", top: 10.4, left: 0 }, { anchor: 3 }, ...Array(10).fill({ anchor: "a", top: 1, left: 1 })] });
+  const [, topic, data, , fast] = host.api.plugin_live_send.mock.calls[0];
+  expect([topic, fast]).toEqual(["ducky.view", true]);
+  expect((data as { scroll: unknown[] }).scroll).toHaveLength(7);  // 8 at most, the bad one dropped
+  expect((data as { scroll: unknown[] }).scroll[0]).toEqual({ anchor: "@doc", top: 10, left: 0 });
+  await call("live.nav", { anchor: "[id=\"video-tab\"]" });
+  expect(host.api.plugin_live_send).toHaveBeenLastCalledWith("imk", "ducky.nav", { anchor: "[id=\"video-tab\"]" }, "", false);
 });

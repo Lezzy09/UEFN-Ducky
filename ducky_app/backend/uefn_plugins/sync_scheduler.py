@@ -5,8 +5,9 @@ minute) or the Workflows view was open: an agent's edits made with the panel clo
 never went out, and this PC never pulled. This daemon keeps every space in step:
 
 - a write to a shared copy starts a round 5 s after the last write, at most one round
-  per space every 30 s. Writes in any process count: the MCP bridge writes the same
-  database, and ``PRAGMA data_version``, read once a second, says when anyone did;
+  per space every 30 s (1 s and 3 s while a plugin is live there: its group pulls each
+  change as soon as it's committed). Writes in any process count: the MCP bridge writes
+  the same database, and ``PRAGMA data_version``, read once a second, says when anyone did;
 - a round every 60 s while a linked plugin's panel is visible or the Workflows view is
   open, every 15 minutes otherwise;
 - one round per linked space at start, and again when the account or the provider
@@ -60,6 +61,8 @@ _log = logging.getLogger(__name__)
 TICK_S = 1.0
 DEBOUNCE_S = 5.0  # a round this long after the last write to a space
 MIN_GAP_S = 30.0  # at most one round per space this often
+LIVE_DEBOUNCE_S = 1.0  # the same while a plugin is live in the space
+LIVE_GAP_S = 3.0
 ACTIVE_EVERY_S = 60.0  # while a linked plugin's panel or the Workflows view is on screen
 IDLE_EVERY_S = 15 * 60.0
 RETRY_AFTER_S = (60.0, 5 * 60.0, 15 * 60.0)  # after 1, 2, 3 or more failed rounds in a row
@@ -311,6 +314,7 @@ class _Space:
     pull: set[str] = field(default_factory=set)  # plugins an event says have new changesets
     side_at: float = float("-inf")  # last look at its presence and locks
     side_running: bool = False
+    live: bool = False  # a plugin is live there (live.spaces_live)
 
 
 _WAKES: dict[tuple[str, str], tuple[float, frozenset[str]]] = {}  # (account, space) → (when, plugins to pull)
@@ -371,7 +375,7 @@ class Scheduler:
         """Start every round that is due, and a team space's presence and lock look when
         due. Returns the spaces whose round started."""
         from backend.store import db
-        from backend.uefn_plugins import spaces
+        from backend.uefn_plugins import live, spaces
 
         now = self.clock() if now is None else now
         version = db.data_version(db.connect())
@@ -379,7 +383,10 @@ class Scheduler:
             self._version, self._stale = version, True
         provider = spaces.provider_plugin() if spaces.has_provider() else ""
         since = now - self._refreshed
-        if provider != self._who[1] or since >= REFRESH_EVERY_S or (self._stale and since >= REFRESH_MIN_S):
+        live_now = live.spaces_live()
+        # Live: a write is seen within a tick, so the group gets it in a few seconds.
+        soonest = TICK_S if live_now else REFRESH_MIN_S
+        if provider != self._who[1] or since >= REFRESH_EVERY_S or (self._stale and since >= soonest):
             self._refresh(now, provider)
         self._take_wakes()
         due: list[tuple[str, bool, frozenset[str]]] = []
@@ -387,6 +394,7 @@ class Scheduler:
         with self._lock:
             account = self._who[0]
             for space, rec in self.spaces.items():
+                rec.live = (account, space) in live_now
                 force = self._due(rec, now)
                 if force is not None:
                     rec.running, rec.owed, rec.started = True, False, now
@@ -538,19 +546,21 @@ class Scheduler:
         if rec.owed:
             return unsent
         last = max(rec.started, rec.called_at)
-        if rec.wake and now >= last + WAKE_GAP_S:  # a teammate's change, a lock, presence
+        gap = LIVE_GAP_S if rec.live else MIN_GAP_S
+        if rec.wake and now >= last + min(gap, WAKE_GAP_S):  # a teammate's change, a lock, presence
             return unsent
         failing = rec.fails > 0 or rec.state in RETRY_STATES
         wait = RETRY_AFTER_S[min(max(rec.fails, 1), len(RETRY_AFTER_S)) - 1] if failing else 0.0
         slow = rec.state in SLOW_STATES
-        if unsent and not slow and now >= max(rec.written + DEBOUNCE_S, last + MIN_GAP_S, last + wait):
+        debounce = LIVE_DEBOUNCE_S if rec.live else DEBOUNCE_S
+        if unsent and not slow and now >= max(rec.written + debounce, last + gap, last + wait):
             return True
         every = IDLE_EVERY_S if slow else wait or (ACTIVE_EVERY_S if rec.active or rec.hot else IDLE_EVERY_S)
         return False if now >= last + every else None
 
     def _side(self, account: str, space: str, plugins: list[str]) -> None:
         """An active team space: presence when it changed (or each minute), locks of mine
-        renewed each minute, auto locks released 5 minutes after their last change went out
+        renewed each minute, auto locks released 30 s after their last change went out
         or once the plugin's tab closed."""
         from backend.uefn_plugins import spaces, vcs_engine
 

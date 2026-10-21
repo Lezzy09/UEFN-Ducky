@@ -2254,7 +2254,9 @@ export interface PanelPushEvent {
     /** Live editing: a teammate's message for `plugin` (`from`, `topic`, `data`). */
     | "live_message"
     /** Live editing: who is live in `plugin` now (`on`, `peers`). */
-    | "live_peers";
+    | "live_peers"
+    /** What teammates hold in `plugin` now (`holds`), from their presence. */
+    | "live_holds";
   provider?: string;
   /** plugin_hook: the hook id; appearance_profile_requested: the plugin profile id. */
   id?: string;
@@ -2283,9 +2285,7 @@ export interface PanelPushEvent {
   status?: boolean;
   /** plugin_scope_changed from a sync: per plugin, the doc keys and file paths its pull changed. */
   keys?: Record<string, string[]>;
-  /** plugin_scope_changed for a teammate's live change (shown before the commit arrives). */
-  live?: boolean;
-  /** live_message / live_peers: the plugin it is for. */
+  /** live_message / live_peers / live_holds: the plugin it is for. */
   plugin?: string;
   /** live_message: what it is about (`from` carries who sent it: name, user, device). */
   topic?: string;
@@ -2293,6 +2293,8 @@ export interface PanelPushEvent {
   /** live_peers: live in this plugin, and with whom. */
   on?: boolean;
   peers?: PluginLivePeer[];
+  /** live_holds: the controls teammates are pressing. */
+  holds?: PluginLiveHold[];
   /** plugin_write_refused: the unit, its name, who holds it and since when (epoch seconds).
    * plugin_lock_asked: who asks. plugin_lock_lost: who has it now, and `kept` (unsent edits
    * kept as a conflict). */
@@ -2377,6 +2379,30 @@ export interface PluginLivePeer {
   via?: string;
 }
 
+/** One live group of a plugin (backend/uefn_plugins/live.py `groups`): a room named after
+ * its host's PC. */
+export interface PluginLiveGroup {
+  room: string;
+  /** The host's name ("" while the host is away). */
+  host: string;
+  hostIsMe?: boolean;
+  /** The first to come first; this PC is `me`. */
+  members: { name: string; user?: string; device?: string; label?: string; me?: boolean }[];
+  /** This PC is in it. */
+  mine?: boolean;
+}
+
+/** A control a teammate is pressing (backend/uefn_plugins/live.py `roster_holds`). */
+export interface PluginLiveHold {
+  device: string;
+  name: string;
+  anchor: string;
+  /** When it was pressed (ms). */
+  t: number;
+  /** The view it was pressed in. */
+  v: string;
+}
+
 /** Live editing on a team copy (backend/uefn_plugins/live.py `status`). */
 export interface PluginLiveStatus {
   supported?: boolean;
@@ -2386,6 +2412,8 @@ export interface PluginLiveStatus {
   room?: string;
   state?: string;
   peers?: PluginLivePeer[];
+  /** The plugin's live groups in the team, this PC's first. */
+  groups?: PluginLiveGroup[];
 }
 
 export interface PluginScopeStatus {
@@ -4414,6 +4442,10 @@ export interface PanelApi {
   plugin_live_leave?(plugin_id: string): Promise<{ ok?: boolean }>;
   plugin_live_send?(plugin_id: string, topic: string, data: unknown, to?: string, fast?: boolean): Promise<{ ok?: boolean; error?: string; sent?: number }>;
   plugin_live_status?(plugin_id: string): Promise<PluginLiveStatus>;
+  /** The page's live script presses (on) or lets go of a control; every teammate greys it out. */
+  plugin_live_hold?(plugin_id: string, anchor: string, on: boolean, t: number, view: string): Promise<{ ok?: boolean; error?: string }>;
+  /** What teammates hold in this plugin now. */
+  plugin_live_holds?(plugin_id: string): Promise<{ ok?: boolean; holds?: PluginLiveHold[] }>;
   /** The main window answers the backend's rtc_cmd (backend/uefn_plugins/rtc.py). */
   rtc_reply?(request_id: string, result: Record<string, unknown>): Promise<boolean>;
   rtc_event?(peer: string, kind: string, payload: Record<string, unknown>): Promise<void>;

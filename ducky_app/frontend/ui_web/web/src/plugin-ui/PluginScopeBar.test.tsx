@@ -55,7 +55,11 @@ const sharedStatus = (extra: Record<string, unknown> = {}, scope: Record<string,
   scope: { kind: "shared", label: "Alpha Studio", spaceId: "s1", readOnly: false, ...scope },
 });
 
-const line = () => screen.getByRole("status");
+/** The bar's row of controls. */
+const row = () => document.querySelector(".plugin-scope-bar") as HTMLElement;
+/** Source control's button ("Source control", then its count). */
+const panelButton = () => screen.getByRole("button", { name: /^Source control/ });
+const panel = () => screen.getByRole("region", { name: "Source control: Alpha Studio" });
 
 describe("plugin scope bar", () => {
   it("renders nothing while the account has no shared spaces", async () => {
@@ -77,59 +81,47 @@ describe("plugin scope bar", () => {
     expect(api.plugin_scope_sync).not.toHaveBeenCalled();
   });
 
-  it("is one line: scope and Change, one phrase, people, locks, Sync now and Details", async () => {
+  it("is one row: whose data, one status, then Source control with what needs looking at", async () => {
     api.plugin_scope_status.mockResolvedValue(sharedStatus({
-      head: 482, syncedAt: Date.now() / 1000 - 120,
-      people: [
-        { user_name: "Ana", plugins: { "brainrot-tcg": { editing: [{ unitName: "MEGA_Duel_Stadium", actor: "user" }] } } },
-        { user_name: "Ben", plugins: { "brainrot-tcg": { editing: [{ unitName: "Arena", actor: "agent", ducky: "Builder" }] } } },
-        { user_name: "Cy", plugins: { "brainrot-tcg": { viewing: true } } },
-        { user_name: "Me", me: true, plugins: { "brainrot-tcg": { viewing: true } } },
-      ],
+      head: 482, syncedAt: Date.now() / 1000 - 120, pending: 2, changes: { incoming: 1 },
       locks: [{ unit: "doc:deck", name: "deck", holder: "Ana", mine: false }, { unit: "doc:pack", name: "pack", mine: true }],
     }));
     bar();
-    expect(await screen.findByText("Locked by Ana: deck (read-only for you)")).toBeTruthy();
-    const status = line();
+    const status = await screen.findByRole("button", { name: "Locked by Ana: deck (read-only for you)" });
     expect(status.getAttribute("aria-live")).toBe("polite");
-    // Who else is here: their avatars and one line, a button that opens the drawer.
-    const here = within(status).getByRole("button", { name: "Ana is editing MEGA_Duel_Stadium · 2 more here. Show who is here." });
-    expect(here.textContent).toBe("ABCAna is editing MEGA_Duel_Stadium · 2 more here");
-    expect(here.getAttribute("aria-expanded")).toBe("false");
-    expect(within(status).getByText("1 locked · You hold 1")).toBeTruthy();
-    // Left to right: the scope, Change, then the phrase.
-    const text = status.textContent ?? "";
-    expect(text.indexOf("Alpha Studio")).toBeLessThan(text.indexOf("Change ▾"));
-    expect(text.indexOf("Change ▾")).toBeLessThan(text.indexOf("Locked by Ana"));
-    expect(within(status).getByRole("button", { name: "Sync now" })).toBeTruthy();
-    expect(within(status).getByRole("button", { name: "Details ▾" }).getAttribute("aria-expanded")).toBe("false");
-    // Nothing of the drawer until Details.
+    // Left to right: whose data, the status, Source control (2 to send + 1 coming in).
+    const buttons = within(row()).getAllByRole("button").map((b) => b.textContent);
+    expect(buttons).toEqual(["Alpha Studio▾", "!Locked by Ana: deck (read-only for you)", "Source control3"]);
+    expect(panelButton().getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByRole("region")).toBeNull();
+    // The status opens the tab that explains it.
+    fireEvent.click(status);
+    expect(within(panel()).getByRole("tab", { name: /^Locks/ }).getAttribute("aria-selected")).toBe("true");
   });
 
-  it("Details opens the drawer under the line and remembers it per plugin", async () => {
+  it("Source control opens the tabs under the bar and remembers it per plugin", async () => {
     api.plugin_scope_status.mockResolvedValue(sharedStatus({
       email: "ana@x.org", members: 4, usage: { usedBytes: 34 * 1024 ** 2, limitBytes: 5 * 1024 ** 3 },
     }));
     const view = bar();
-    fireEvent.click(await screen.findByRole("button", { name: "Details ▾" }));
-    const drawer = screen.getByRole("region", { name: "Sync details: Alpha Studio" });
-    expect(within(drawer).getByText("Signed in as ana@x.org · 4 members")).toBeTruthy();
-    expect(within(drawer).getByText("34 MB of 5 GB")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Details ▾" }).getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(await screen.findByRole("button", { name: /^Source control/ }));
+    fireEvent.click(within(panel()).getByRole("tab", { name: "Settings" }));
+    expect(within(panel()).getByText("Signed in as ana@x.org · 4 members")).toBeTruthy();
+    expect(within(panel()).getByText("34 MB of 5 GB")).toBeTruthy();
+    expect(panelButton().getAttribute("aria-expanded")).toBe("true");
     expect(localStorage.getItem("ducky.pluginScopeDrawer.brainrot-tcg")).toBe("1");
     view.unmount();
 
     // Open again for this plugin; another plugin starts closed.
     bar();
-    expect(await screen.findByRole("region", { name: "Sync details: Alpha Studio" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Source control: Alpha Studio" })).toBeTruthy();
     cleanup();
     bar("forge");
-    await screen.findByRole("button", { name: "Details ▾" });
+    await screen.findByRole("button", { name: /^Source control/ });
     expect(screen.queryByRole("region")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Details ▾" }));
-    fireEvent.click(screen.getByRole("button", { name: "Details ▾" }));
+    fireEvent.click(panelButton());
+    fireEvent.click(panelButton());
     expect(localStorage.getItem("ducky.pluginScopeDrawer.forge")).toBeNull();
   });
 
@@ -142,8 +134,8 @@ describe("plugin scope bar", () => {
     });
     api.plugin_scope_status.mockResolvedValue(sharedStatus());
     bar();
-    fireEvent.click(await screen.findByRole("button", { name: "Details ▾" }));
-    expect(screen.getByRole("region", { name: "Sync details: Alpha Studio" })).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: /^Source control/ }));
+    expect(panel()).toBeTruthy();
   });
 
   it("confirms before switching, counting the changes still to send as of the click", async () => {
@@ -159,8 +151,8 @@ describe("plugin scope bar", () => {
     api.plugin_scope_status.mockResolvedValue(sharedStatus({
       pending: 3, blocked: 1, items: [{ kind: "doc", key: "scene_1", state: "blocked", attempts: 5 }],
     }));
-    fireEvent.click(screen.getByRole("button", { name: "Change ▾" }));
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Alpha Studio" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /^Local/ }));
     expect(
       await screen.findByText(
         "3 changes not sent to Alpha Studio will be sent first. 1 change not shared stays in Alpha Studio's copy on this PC. " +
@@ -187,35 +179,30 @@ describe("plugin scope bar", () => {
     expect(api.plugin_scope_sync).toHaveBeenLastCalledWith("brainrot-tcg", false);
   });
 
-  it("Sync now forces a round and waits for its result; a failed round says why once", async () => {
-    api.plugin_scope_status.mockResolvedValue(sharedStatus({ pending: 9, syncedAt: Date.now() / 1000 - 3120 }));
+  it("a failed round says so in plain words; Retry forces a round and waits; the reason is in Changes", async () => {
+    const why = "Network error: <urlopen error [WinError 10060] A connection attempt failed>";
+    api.plugin_scope_status.mockResolvedValue(sharedStatus({ state: "offline", pending: 9, error: why, nextTry: Date.now() / 1000 + 40 }));
     api.plugin_scope_sync.mockResolvedValue({ ok: true, started: true });
     bar();
-    expect(await screen.findByText("9 to send")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    expect(await screen.findByText(/^Offline · 9 to send · retry in (39|40) s$/)).toBeTruthy();
+    // The raw reason never sits on the bar.
+    expect(screen.queryByText(/WinError/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(api.plugin_scope_sync).toHaveBeenCalledWith("brainrot-tcg", true));
-    expect((screen.getByRole("button", { name: "Syncing…" }) as HTMLButtonElement).disabled).toBe(true);
-
-    const why = "Sync failed: HTTPException: boom";
-    api.plugin_scope_status.mockResolvedValue(sharedStatus({
-      state: "error", pending: 9, error: why, nextTry: Date.now() / 1000 + 40,
-    }));
+    expect(await screen.findByText("Syncing…")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled).toBe(true);
     push.handlers.forEach((fn) => fn({ type: "plugin_scope_changed", plugins: [], synced: true }));
-    expect(await screen.findByRole("button", { name: "Sync now" })).toBeTruthy();
-    expect(await screen.findByText(new RegExp(`^Not synced: ${why} · retry in (39|40) s$`))).toBeTruthy();
-    expect(screen.getAllByText(new RegExp(why)).length).toBe(1);
+    await waitFor(() => expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled).toBe(false));
+    // The status opens Changes, which says why, once.
+    fireEvent.click(screen.getByRole("button", { name: /^Offline/ }));
+    expect(within(panel()).getAllByText(why)).toHaveLength(1);
   });
 
-  it("without a provider, says it isn't connected, keeps the queue count, and Sync now says why", async () => {
+  it("without a provider, says it isn't connected and keeps the queue count", async () => {
     const why = "Not connected: Ducky Account isn't running";
     api.plugin_scope_status.mockResolvedValue(sharedStatus({ state: "no_provider", pending: 2, error: why }));
-    api.plugin_scope_sync.mockResolvedValue({ ok: false, started: false, error: why });
     bar();
     expect(await screen.findByText(`${why} · 2 to send`)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
-    await waitFor(() => expect(api.plugin_scope_sync).toHaveBeenCalledWith("brainrot-tcg", true));
-    expect(((await screen.findByRole("button", { name: "Sync now" })) as HTMLButtonElement).disabled).toBe(false);
-    // The answer's reason is the one already on the bar: said once.
     expect(screen.getAllByText(new RegExp(why)).length).toBe(1);
   });
 
@@ -227,19 +214,17 @@ describe("plugin scope bar", () => {
       await screen.findByText(`Alpha Studio isn't available right now (${why}). Read-only until it's back.`),
     ).toBeTruthy();
     expect(screen.getAllByText(new RegExp(why)).length).toBe(1);
-    expect(screen.getByRole("button", { name: "Sync now" })).toBeTruthy();
   });
 
-  it("in Manual mode offers Push and Pull instead of Sync now", async () => {
+  it("in Manual mode the bar has Send and Get", async () => {
     api.plugin_scope_status.mockResolvedValue(sharedStatus({ mode: "manual", head: 3, pending: 2 }));
     api.plugin_scope_push?.mockResolvedValue({ ok: true, started: true });
     api.plugin_scope_pull?.mockResolvedValue({ ok: true, started: true });
     bar();
-    fireEvent.click(await screen.findByRole("button", { name: "Push" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Send" }));
     await waitFor(() => expect(api.plugin_scope_push).toHaveBeenCalledWith("brainrot-tcg"));
-    fireEvent.click(screen.getByRole("button", { name: "Pull" }));
+    fireEvent.click(screen.getByRole("button", { name: "Get" }));
     await waitFor(() => expect(api.plugin_scope_pull).toHaveBeenCalledWith("brainrot-tcg"));
-    expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
   });
 
   it("updates waiting for a restart say who from, and Update now brings them in", async () => {
@@ -256,7 +241,7 @@ describe("plugin scope bar", () => {
     api.plugin_scope_ask.mockResolvedValue({ ok: true });
     api.notify_activity.mockResolvedValue(true);
     bar("forge");
-    await screen.findByRole("button", { name: "Details ▾" });
+    await screen.findByRole("button", { name: /^Source control/ });
     push.handlers.forEach((fn) => fn({
       type: "plugin_write_refused", plugin_id: "forge", unit: "tree:scenes/ab12", unit_name: "MEGA_Duel_Stadium", holder: "Ana",
       since: new Date(2026, 9, 17, 15, 2).getTime() / 1000,
@@ -286,13 +271,13 @@ describe("plugin scope bar", () => {
     api.space_reset_settle?.mockResolvedValue({ ok: true });
     bar();
     expect(await screen.findByText("Alpha Studio's team data was reset on the server")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
-    // Retry all, Retry and Drop wait for the choice: Retry all once uploaded the whole copy unasked.
-    fireEvent.click(screen.getByRole("button", { name: "Details ▾" }));
-    expect(screen.getAllByText("Refused: storage full").length).toBe(2);
+    // Retry all, Retry, Drop and Sync now wait for the choice: Retry all once uploaded the whole copy unasked.
+    fireEvent.click(panelButton());
+    expect(within(panel()).getAllByText("Refused: storage full").length).toBe(2);
     expect(screen.queryByRole("button", { name: "Retry all" })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Retry / })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Drop my change to/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Upload my copy" }));
     expect(await screen.findByText("Upload your copy of Alpha Studio?")).toBeTruthy();
@@ -327,7 +312,7 @@ describe("plugin scope bar", () => {
       { folder: "scenes", unit: "Arena", name: "Arena", files: 3, bytes: 2 * 1024 ** 2 },
     ];
     const chooseAlpha = async () => {
-      fireEvent.click(await screen.findByRole("button", { name: "Change ▾" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Local" }));
       fireEvent.click(await screen.findByRole("menuitemradio", { name: /Alpha Studio/ }));
       fireEvent.click(await screen.findByRole("button", { name: /^Switch/ }));
     };
@@ -341,6 +326,11 @@ describe("plugin scope bar", () => {
       api.plugin_scope_set.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
       return (value: unknown) => answer(value);
     };
+    /** Copy Local into a team: in the whose-data dropdown. */
+    const copyInto = async (label: string) => {
+      fireEvent.click(await screen.findByRole("button", { name: label }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Copy Local into Alpha Studio" }));
+    };
 
     it("a switch says it is getting the team's files, reads how far it got, then asks which Local units to share", async () => {
       api.plugin_scope_status.mockResolvedValue(localStatus());
@@ -351,7 +341,7 @@ describe("plugin scope bar", () => {
       await chooseAlpha();
       await waitFor(() => expect(api.plugin_scope_set).toHaveBeenCalledWith("forge", "s1"));
       expect(await screen.findByText("Getting Alpha Studio's files…")).toBeTruthy();
-      expect((screen.getByRole("button", { name: "Change ▾" }) as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByRole("button", { name: "Local" }) as HTMLButtonElement).disabled).toBe(true);
       // The host notes its progress without telling the panel: the bar reads it while the switch runs.
       api.plugin_scope_status.mockResolvedValue(localStatus({ state: "binding", binding: { team: "Alpha Studio", pct: 40, at: 1 } }));
       expect(await screen.findByText("Getting Alpha Studio's files… 40%", undefined, { timeout: 3000 })).toBeTruthy();
@@ -414,7 +404,7 @@ describe("plugin scope bar", () => {
       expect(await screen.findByText("Alpha Studio's files didn't arrive (offline). Nothing changed.")).toBeTruthy();
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(screen.getByText("Only on this PC")).toBeTruthy();
-      expect((screen.getByRole("button", { name: "Change ▾" }) as HTMLButtonElement).disabled).toBe(false);
+      expect((screen.getByRole("button", { name: "Local" }) as HTMLButtonElement).disabled).toBe(false);
     });
 
     it("a folder that can't be shared from this PC says why and offers no team", async () => {
@@ -422,8 +412,8 @@ describe("plugin scope bar", () => {
       choices();
       bar("roguelike");
       expect(await screen.findByText(URC)).toBeTruthy();
-      fireEvent.click(screen.getByRole("button", { name: "Change ▾" }));
-      expect(await screen.findByRole("menuitemradio", { name: "Local" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Local" }));
+      expect(await screen.findByRole("menuitemradio", { name: /^Local/ })).toBeTruthy();
       expect(screen.queryByRole("menuitemradio", { name: /Alpha Studio/ })).toBeNull();
       expect(screen.getAllByText(URC).length).toBe(2);
       cleanup();
@@ -437,9 +427,10 @@ describe("plugin scope bar", () => {
 
     it("offers to copy Local into a team it was linked to before: the first share's picker", async () => {
       api.plugin_scope_status.mockResolvedValue(localStatus(declared(undefined, [{ space: "s1", label: "Alpha Studio" }])));
+      choices();
       api.plugin_scope_set.mockResolvedValueOnce({ ok: false, needs: "first_share", team: "Alpha Studio", units: UNITS });
       bar("forge");
-      fireEvent.click(await screen.findByRole("button", { name: "Copy Local into Alpha Studio" }));
+      await copyInto("Local");
       // It asks which units even when the team has files already.
       await waitFor(() => expect(api.plugin_scope_set).toHaveBeenCalledWith("forge", "s1", { pick: true }));
       const dialog = await screen.findByRole("dialog");
@@ -451,9 +442,10 @@ describe("plugin scope bar", () => {
 
     it("the offer, when the team already has the files, switches and says nothing was copied", async () => {
       api.plugin_scope_status.mockResolvedValue(localStatus(declared(undefined, [{ space: "s1", label: "Alpha Studio" }])));
+      choices();
       api.plugin_scope_set.mockResolvedValue({ ok: true });
       bar("forge");
-      fireEvent.click(await screen.findByRole("button", { name: "Copy Local into Alpha Studio" }));
+      await copyInto("Local");
       expect(await screen.findByText(
         "Alpha Studio already has Forge's files, so nothing was copied. Your Local copy stays on this PC.",
       )).toBeTruthy();
@@ -466,11 +458,12 @@ describe("plugin scope bar", () => {
       api.plugin_scope_status.mockResolvedValue(sharedStatus({
         pluginLabel: "Forge", ...declared(undefined, [{ space: "s1", label: "Alpha Studio" }]),
       }));
+      choices();
       api.plugin_scope_set.mockResolvedValueOnce({
         ok: false, needs: "first_share", team: "Alpha Studio", units: UNITS.slice(1), partial: true,
       });
       bar("forge");
-      fireEvent.click(await screen.findByRole("button", { name: "Copy Local into Alpha Studio" }));
+      await copyInto("Alpha Studio");
       await waitFor(() => expect(api.plugin_scope_set).toHaveBeenCalledWith("forge", "s1", { pick: true }));
       const dialog = await screen.findByRole("dialog");
       expect(within(dialog).getByText(
@@ -484,9 +477,12 @@ describe("plugin scope bar", () => {
 
     it("no offer while a folder can't be shared from this PC", async () => {
       api.plugin_scope_status.mockResolvedValue(localStatus(declared([{ id: "design", refused: URC }], [{ space: "s1", label: "Alpha Studio" }])));
+      choices();
       bar("roguelike");
       expect(await screen.findByText(URC)).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Copy Local into Alpha Studio" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Local" }));
+      await screen.findByRole("menuitemradio", { name: /^Local/ });
+      expect(screen.queryByRole("menuitem", { name: "Copy Local into Alpha Studio" })).toBeNull();
     });
 
     it("on a team: a unit changed while someone holds it, and updates waiting behind Update now", async () => {
@@ -497,7 +493,7 @@ describe("plugin scope bar", () => {
       }));
       bar("forge");
       expect(await screen.findByText("MEGA_Duel_Stadium: changed here while Ana holds it")).toBeTruthy();
-      expect(line().getAttribute("title")).toBe(`Plugin data on each PC is encrypted for the signed-in account. ${NOTE}`);
+      expect(row().getAttribute("title")).toBe(`Plugin data on each PC is encrypted for the signed-in account. ${NOTE}`);
       cleanup();
 
       api.plugin_scope_status.mockResolvedValue(sharedStatus({
@@ -588,50 +584,154 @@ describe("plugin scope bar", () => {
       expect(changed).toHaveBeenCalledWith(expect.anything(), { reason: "synced", keys: ["project.a", "project.b", "project.c"] });
       expect(api.plugin_scope_status).toHaveBeenCalledTimes(2);
     });
+
+    it("tells the pane whether it's a team copy and how many changes are on their way", async () => {
+      api.plugin_scope_status.mockResolvedValue(sharedStatus({ changes: { incoming: 2 } }));
+      const told = vi.fn();
+      render(
+        <ConfirmModalProvider>
+          <PluginScopeBar pluginId="island-media-kit" onScopeChanged={() => {}} onSyncState={told} />
+        </ConfirmModalProvider>,
+      );
+      await waitFor(() => expect(told).toHaveBeenLastCalledWith({ shared: true, incoming: 2 }));
+    });
   });
 
-  describe("live", () => {
-    const live = (on: boolean, peers: Record<string, unknown>[] = []) =>
-      sharedStatus({ live: { supported: true, on, room: on ? "all" : "", state: on ? "live" : "off", peers } });
+  describe("live groups", () => {
+    const ILIYA = { room: "h:d1", host: "iliya", members: [{ name: "iliya", user: "u1", device: "d1" }] };
+    const MO = { room: "h:d2", host: "Mo", members: [{ name: "Mo", user: "u2", device: "d2" }, { name: "Cy", user: "u3", device: "d3" }] };
+    const MINE = { room: "h:me", host: "You", hostIsMe: true, mine: true, members: [{ name: "You", device: "me", me: true }] };
+    const live = (on: boolean, groups: Record<string, unknown>[] = [], peers: Record<string, unknown>[] = []) =>
+      sharedStatus({ live: { supported: true, on, room: on ? "h:me" : "", state: on ? "live" : "off", peers, groups } });
+    /** The Live button: its name starts with the group's host, "Live" or "You're live". */
+    const liveButton = () => screen.getByRole("button", { name: /^(Live|You're live|iliya|Mo)/ });
 
-    it("Go live joins and is remembered; the pill names who is live; Leave leaves and forgets", async () => {
+    it("lists each group by its host with who's in it; Join goes into that group and is remembered", async () => {
+      api.plugin_scope_status.mockResolvedValue(live(false, [ILIYA, MO]));
+      api.plugin_live_join.mockResolvedValue({ ok: true });
+      bar();
+      expect((await screen.findByText("Live · 2"))).toBeTruthy();
+      fireEvent.click(liveButton());
+      const menu = await screen.findByRole("menu", { name: "Live in BrainRot TCG" });
+      expect(within(menu).getByText("iliya")).toBeTruthy();
+      expect(within(menu).getByText("2 people")).toBeTruthy();
+      api.plugin_scope_status.mockResolvedValue(live(true, [{ ...ILIYA, mine: true, members: [...ILIYA.members, { name: "You", me: true }] }, MO]));
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Join iliya" }));
+      await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledWith("brainrot-tcg", "h:d1"));
+      expect(localStorage.getItem("ducky.pluginLive.brainrot-tcg")).toBe("h:d1");
+      // In a group, the button names its host and how many are in it.
+      await waitFor(() => expect(liveButton().textContent).toBe("iliya2▾"));
+    });
+
+    it("Start live hosts this PC's group; End leaves it and forgets", async () => {
       api.plugin_scope_status.mockResolvedValue(live(false));
       api.plugin_live_join.mockResolvedValue({ ok: true });
       api.plugin_live_leave.mockResolvedValue({ ok: true });
       bar();
-      const go = await screen.findByRole("button", { name: "Go live" });
-      api.plugin_scope_status.mockResolvedValue(live(true, [{ name: "Alex", path: "direct" }, { name: "Sam", path: "none" }]));
-      fireEvent.click(go);
+      fireEvent.click(await screen.findByRole("button", { name: /^Live/ }));
+      expect(await screen.findByText("Nobody's live in BrainRot TCG yet.")).toBeTruthy();
+      api.plugin_scope_status.mockResolvedValue(live(true, [MINE]));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Start live" }));
       await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledWith("brainrot-tcg", ""));
-      expect(localStorage.getItem("ducky.pluginLive.brainrot-tcg")).toBe("1");
-      expect(await screen.findByText("Live with Alex and Sam")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Go live" })).toBeNull();
+      expect(localStorage.getItem("ducky.pluginLive.brainrot-tcg")).toBe("host");
+      expect(await screen.findByText("You're live")).toBeTruthy();
+      fireEvent.click(liveButton());
+      expect(screen.queryByRole("menuitem", { name: "Start live" })).toBeNull();
       api.plugin_scope_status.mockResolvedValue(live(false));
-      fireEvent.click(screen.getByRole("button", { name: "Leave" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "End" }));
       await waitFor(() => expect(api.plugin_live_leave).toHaveBeenCalledWith("brainrot-tcg"));
       expect(localStorage.getItem("ducky.pluginLive.brainrot-tcg")).toBeNull();
-      expect(await screen.findByRole("button", { name: "Go live" })).toBeTruthy();
     });
 
-    it("goes live again by itself where it was left live, once", async () => {
-      localStorage.setItem("ducky.pluginLive.brainrot-tcg", "1");
-      api.plugin_scope_status.mockResolvedValue(live(false));
+    it("lists who's here but not live, and says when a teammate's PC can't be reached", async () => {
+      api.plugin_scope_status.mockResolvedValue({
+        ...live(true, [{ ...ILIYA, mine: true }], [{ name: "iliya", device: "d1", path: "none" }]),
+        people: [
+          { user_name: "Ben", user: "u4", device: "BEN-PC", deviceId: "d4", plugins: { "brainrot-tcg": { viewing: true } } },
+          { user_name: "iliya", user: "u1", device: "Laptop", deviceId: "d1", plugins: { "brainrot-tcg": { viewing: true, live: "h:d1" } } },
+        ],
+      });
+      bar();
+      fireEvent.click(await screen.findByRole("button", { name: /^iliya/ }));
+      const menu = await screen.findByRole("menu", { name: "Live in BrainRot TCG" });
+      expect(within(menu).getByText("Here, not live")).toBeTruthy();
+      expect(within(menu).getByText("Ben")).toBeTruthy();
+      expect(within(menu).getByText(/^Can't reach iliya on this network/)).toBeTruthy();
+      expect(within(menu).getByRole("menuitem", { name: "Leave" })).toBeTruthy();
+    });
+
+    it("joins the remembered group again by itself while it's still live, once", async () => {
+      localStorage.setItem("ducky.pluginLive.brainrot-tcg", "h:d1");
+      api.plugin_scope_status.mockResolvedValue(live(false, [MO]));
       api.plugin_live_join.mockResolvedValue({ ok: true });
       bar();
-      await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledWith("brainrot-tcg", ""));
+      await screen.findByText("Live · 1");
+      await new Promise((r) => setTimeout(r, 300));
+      expect(api.plugin_live_join).not.toHaveBeenCalled();  // iliya's group ended
+      cleanup();
+      api.plugin_scope_status.mockResolvedValue(live(false, [ILIYA, MO]));
+      bar();
+      await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledWith("brainrot-tcg", "h:d1"));
       await new Promise((r) => setTimeout(r, 600));
       expect(api.plugin_live_join).toHaveBeenCalledTimes(1);
     });
 
-    it("offers no Live where the team service has none, or on Local", async () => {
+    it("this PC's own group comes back by itself; after a switch to another team copy, there too, once", async () => {
+      localStorage.setItem("ducky.pluginLive.brainrot-tcg", "host");
+      api.plugin_scope_status.mockResolvedValue(live(false));
+      api.plugin_live_join.mockResolvedValue({ ok: true });
+      bar();
+      await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledWith("brainrot-tcg", ""));
+      api.plugin_scope_status.mockResolvedValue({ ...live(false), scope: { kind: "shared", label: "Beta", spaceId: "s2", readOnly: false } });
+      push.handlers.forEach((fn) => fn({ type: "plugin_scope_changed", plugins: ["brainrot-tcg"], switched: true }));
+      push.handlers.forEach((fn) => fn({ type: "duckyos_account_changed" }));
+      await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledTimes(2));
+      await new Promise((r) => setTimeout(r, 600));
+      expect(api.plugin_live_join).toHaveBeenCalledTimes(2);
+    });
+
+    it("in a teammate's group the page follows the host's screen until Follow is turned off", async () => {
+      const inIliyas = live(true, [{ ...ILIYA, mine: true, members: [...ILIYA.members, { name: "You", device: "me", me: true }] }]);
+      api.plugin_scope_status.mockResolvedValue(inIliyas);
+      const followed = vi.fn();
+      render(
+        <ConfirmModalProvider>
+          <PluginScopeBar pluginId="brainrot-tcg" onScopeChanged={() => {}} onFollow={followed} />
+        </ConfirmModalProvider>,
+      );
+      await waitFor(() => expect(followed).toHaveBeenLastCalledWith("d1"));
+      fireEvent.click(liveButton());
+      const box = await screen.findByRole("checkbox", { name: /Follow iliya's screen/ });
+      expect((box as HTMLInputElement).checked).toBe(true);
+      fireEvent.click(box);
+      await waitFor(() => expect(followed).toHaveBeenLastCalledWith(""));
+      expect(localStorage.getItem("ducky.pluginFollow.brainrot-tcg")).toBe("0");
+    });
+
+    it("hosting, or with the host gone, there is nobody to follow", async () => {
+      const followed = vi.fn();
+      api.plugin_scope_status.mockResolvedValue(live(true, [{ room: "h:d1", host: "", mine: true, members: [{ name: "You", device: "me", me: true }] }]));
+      render(
+        <ConfirmModalProvider>
+          <PluginScopeBar pluginId="brainrot-tcg" onScopeChanged={() => {}} onFollow={followed} />
+        </ConfirmModalProvider>,
+      );
+      await waitFor(() => expect(followed).toHaveBeenCalled());
+      expect(followed).toHaveBeenLastCalledWith("");
+      fireEvent.click(await screen.findByRole("button", { name: /^Live/ }));
+      expect(await screen.findByText("The host left this group.")).toBeTruthy();
+      expect((screen.getByRole("checkbox") as HTMLInputElement).disabled).toBe(true);
+    });
+
+    it("offers no Live where the team service has none", async () => {
       api.plugin_scope_status.mockResolvedValue(sharedStatus({ live: { supported: false, on: false } }));
       bar();
-      await screen.findByRole("button", { name: "Sync now" });
-      expect(screen.queryByRole("button", { name: "Go live" })).toBeNull();
+      await screen.findByRole("button", { name: /^Source control/ });
+      expect(screen.queryByRole("button", { name: /^Live/ })).toBeNull();
     });
 
     it("tells the pane when live goes on and off", async () => {
-      api.plugin_scope_status.mockResolvedValue(live(true));
+      api.plugin_scope_status.mockResolvedValue(live(true, [MINE]));
       const told = vi.fn();
       render(
         <ConfirmModalProvider>
@@ -639,73 +739,31 @@ describe("plugin scope bar", () => {
         </ConfirmModalProvider>,
       );
       await waitFor(() => expect(told).toHaveBeenLastCalledWith(true));
-      expect(screen.getByText("Live · nobody else yet")).toBeTruthy();
-    });
-
-    it("a teammate's live change reaches the panel at once, with no status read", async () => {
-      api.plugin_scope_status.mockResolvedValue(live(true));
-      const changed = vi.fn();
-      render(
-        <ConfirmModalProvider>
-          <PluginScopeBar pluginId="island-media-kit" onScopeChanged={changed} />
-        </ConfirmModalProvider>,
-      );
-      await waitFor(() => expect(api.plugin_scope_status).toHaveBeenCalledTimes(1));
-      push.handlers.forEach((fn) => fn({ type: "plugin_scope_changed", plugins: ["island-media-kit"], synced: true,
-        live: true, keys: { "island-media-kit": ["project.a"] }, by: "Alex" }));
-      expect(changed).toHaveBeenCalledWith(expect.objectContaining({ ok: true }),
-        { reason: "synced", live: true, keys: ["project.a"] });
-      await new Promise((r) => setTimeout(r, 600));
-      expect(api.plugin_scope_status).toHaveBeenCalledTimes(1);
     });
 
     it("who is live moved: the bar reads its status again", async () => {
-      api.plugin_scope_status.mockResolvedValue(live(true));
+      api.plugin_scope_status.mockResolvedValue(live(false, [ILIYA]));
       bar();
       await waitFor(() => expect(api.plugin_scope_status).toHaveBeenCalledTimes(1));
-      api.plugin_scope_status.mockResolvedValue(live(true, [{ name: "Alex", path: "forwarded" }]));
+      api.plugin_scope_status.mockResolvedValue(live(false, [ILIYA, MO]));
       push.handlers.forEach((fn) => fn({ type: "live_peers", plugin: "brainrot-tcg", on: true, peers: [] }));
       push.handlers.forEach((fn) => fn({ type: "live_peers", plugin: "other", on: true, peers: [] }));
-      expect(await screen.findByText("Live with Alex")).toBeTruthy();
+      expect(await screen.findByText("Live · 2")).toBeTruthy();
       expect(api.plugin_scope_status).toHaveBeenCalledTimes(2);
     });
 
-    it("the drawer's People table says who is live with you and how each is reached", async () => {
+    it("People in Source control: Join a teammate's group from their row", async () => {
       api.plugin_scope_status.mockResolvedValue({
-        ...live(true, [
-          { name: "Alex", label: "ALEX-PC", user: "u1", device: "d1", path: "direct" },
-          { name: "Bo", label: "BO-PC", user: "u3", device: "d3", path: "forwarded", via: "Alex" },
-          { name: "Sam", label: "SAM-PC", user: "u2", device: "d2", path: "none" },
-        ]),
-        people: [
-          { user_name: "Alex", user: "u1", device: "ALEX-PC", deviceId: "d1", plugins: { "brainrot-tcg": { viewing: true, live: "p:Island" } } },
-          { user_name: "Bo", user: "u3", device: "BO-PC", deviceId: "d3", plugins: { "brainrot-tcg": { viewing: true, live: "p:Island" } } },
-          { user_name: "Sam", user: "u2", device: "SAM-PC", deviceId: "d2", plugins: { "brainrot-tcg": { viewing: true, live: "p:Island" } } },
-          { user_name: "Cy", user: "u4", device: "CY-PC", deviceId: "d4", plugins: { "brainrot-tcg": { viewing: true } } },
-        ],
+        ...live(false, [ILIYA]),
+        people: [{ user_name: "iliya", user: "u1", device: "Laptop", deviceId: "d1", plugins: { "brainrot-tcg": { viewing: true, live: "h:d1" } } }],
       });
-      bar();
-      fireEvent.click(await screen.findByRole("button", { name: "Details ▾" }));
-      const drawer = screen.getByRole("region", { name: "Sync details: Alpha Studio" });
-      expect(within(drawer).getByRole("columnheader", { name: "Live" })).toBeTruthy();
-      expect(within(drawer).getByText("Live with you · Direct")).toBeTruthy();
-      expect(within(drawer).getByText("Live with you · Through Alex")).toBeTruthy();
-      expect(within(drawer).getByText("Live with you · Not linked (changes come with sync)")).toBeTruthy();
-      expect(within(drawer).getByText("Here")).toBeTruthy();
-    });
-
-    it("after a switch to another team copy it goes live there too, once", async () => {
-      localStorage.setItem("ducky.pluginLive.brainrot-tcg", "1");
-      api.plugin_scope_status.mockResolvedValue(live(false));
       api.plugin_live_join.mockResolvedValue({ ok: true });
       bar();
-      await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledTimes(1));
-      api.plugin_scope_status.mockResolvedValue({ ...live(false), scope: { kind: "shared", label: "Beta", spaceId: "s2", readOnly: false } });
-      push.handlers.forEach((fn) => fn({ type: "plugin_scope_changed", plugins: ["brainrot-tcg"], switched: true }));
-      push.handlers.forEach((fn) => fn({ type: "duckyos_account_changed" }));
-      await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledTimes(2));
-      await new Promise((r) => setTimeout(r, 600));
-      expect(api.plugin_live_join).toHaveBeenCalledTimes(2);
+      fireEvent.click(await screen.findByRole("button", { name: /^Source control/ }));
+      fireEvent.click(within(panel()).getByRole("tab", { name: /^People/ }));
+      expect(within(panel()).getByText("Hosting")).toBeTruthy();
+      fireEvent.click(within(panel()).getByRole("button", { name: "Join iliya" }));
+      await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledWith("brainrot-tcg", "h:d1"));
     });
   });
 

@@ -1,9 +1,8 @@
 """Live editing in core: the WebRTC bridge to the main window (asks and answers, bytes in
-and out, only for the spaces provider), going live on a team copy only, what goes to the
-room (changes by themselves, the host's pointers, a plugin's own topics within limits),
-and a teammate's live change: reads show it until its commit lands or 30 s pass, the
-panel hears it at once, a write here wins. Presence carries the room; panel pages get
-the pointer script.
+and out, only for the spaces provider), going live on a team copy only, in groups named
+after their host, what goes to the group (the host's pointers and holds, a plugin's own
+topics within limits), and changes: never live, only a commit's "pull now", which pulls
+at once. Presence carries the room; panel pages get the live script.
 """
 
 from __future__ import annotations
@@ -78,10 +77,12 @@ def team(monkeypatch: pytest.MonkeyPatch):
     beats: list[tuple[str, str]] = []
     monkeypatch.setattr(live, "_push", pushed.append)
     monkeypatch.setattr(live, "_beat_soon", lambda a, s: beats.append((a, s)))
-    project = {"room": "p:Island"}
-    monkeypatch.setattr(live, "project_room", lambda: project["room"])
+    woke: list[tuple[str, str, str | None]] = []
+    from backend.uefn_plugins import sync_scheduler
+
+    monkeypatch.setattr(sync_scheduler, "wake", lambda a, s, p=None: woke.append((a, s, p)))
     live.reset_for_tests()
-    yield {"account": account, "impl": impl, "pushed": pushed, "beats": beats, "project": project}
+    yield {"account": account, "impl": impl, "pushed": pushed, "beats": beats, "woke": woke}
     live.reset_for_tests()
     spaces.reset_for_tests()
     scopes.forget_change_listeners(PLUGIN)
@@ -173,9 +174,11 @@ def test_live_is_for_a_team_copy_with_a_provider_that_has_it(team: dict[str, Any
     repo.link_set(account, PLUGIN, SPACE)
     assert live.join(PLUGIN, "no spaces!")["ok"] is False
     got = live.join(PLUGIN)
-    assert got["ok"] and got["on"] and got["room"] == "p:Island" and got["state"] == "live"  # the open project's
-    assert impl.joined == [(SPACE, PLUGIN, "p:Island")]
+    me = space_vcs.device_id()
+    assert got["ok"] and got["on"] and got["room"] == f"h:{me}" and got["state"] == "live"  # this PC hosts
+    assert impl.joined == [(SPACE, PLUGIN, f"h:{me}")]
     assert team["beats"] == [(account, SPACE)]  # presence says so now, not at the next beat
+    assert team["woke"] == [(account, SPACE, PLUGIN)]  # joined up to date: a pull now
     assert team["pushed"][-1]["type"] == "live_peers" and team["pushed"][-1]["on"] is True
 
 
@@ -193,29 +196,45 @@ def test_presence_carries_the_room_and_leaving_drops_it(team: dict[str, Any]) ->
     assert spaces.scope_status(PLUGIN)["live"]["on"] is False
 
 
-def test_live_follows_the_open_project_unless_it_named_a_room(team: dict[str, Any]) -> None:
-    impl = team["impl"]
+def _roster(account: str, *people: dict[str, Any]) -> None:
+    space_vcs.presence_put(account, SPACE, {"people": list(people)}, sent_sha="", now=time.time())
+
+
+def _on(device: str, name: str, room: str, since: float, plugin: str = PLUGIN) -> dict[str, Any]:
+    return {"device": device, "user": f"u_{name}", "user_name": name, "label": f"{name.upper()}-PC",
+            "plugins": {plugin: {"viewing": True, "live": {"room": room, "since": since}}}}
+
+
+def test_groups_are_named_by_their_host_with_who_is_in_them(team: dict[str, Any]) -> None:
+    account = team["account"]
+    _roster(account,
+            _on("d_iliya", "iliya", "h:d_iliya", 10), _on("d_cy", "Cy", "h:d_iliya", 20),
+            _on("d_mo", "Mo", "h:d_mo", 5), _on("d_ed", "Ed", "h:d_gone", 30),
+            _on("d_x", "Xi", "h:d_x", 1, plugin="other"),
+            {"device": "d_bo", "user_name": "Bo", "plugins": {PLUGIN: {"viewing": True}}})
+    got = live.status(PLUGIN)["groups"]
+    assert [(g["room"], g["host"], [m["name"] for m in g["members"]], g["mine"]) for g in got] == [
+        ("h:d_iliya", "iliya", ["iliya", "Cy"], False),  # the biggest first
+        ("h:d_gone", "", ["Ed"], False),  # its host left: no host
+        ("h:d_mo", "Mo", ["Mo"], False),
+    ]
+    # Joining iliya's group: this PC counts at once, before its next beat, and comes first.
+    assert live.join(PLUGIN, "h:d_iliya")["ok"]
+    mine = live.status(PLUGIN)["groups"][0]
+    assert mine["mine"] and mine["host"] == "iliya" and not mine["hostIsMe"]
+    assert [m["name"] for m in mine["members"]] == ["iliya", "Cy", "You"] and mine["members"][2]["me"]
+    # Hosting: this PC's own group.
+    assert live.join(PLUGIN)["ok"]
+    mine = live.status(PLUGIN)["groups"][0]
+    assert mine["room"] == live.host_room() and mine["hostIsMe"] and mine["host"] == "You"
+
+
+def test_a_space_is_live_while_one_of_its_plugins_is(team: dict[str, Any]) -> None:
+    assert live.spaces_live() == set()
     live.join(PLUGIN)
-    team["project"]["room"] = "p:Arena"
-    live.project_changed()
-    assert impl.joined[-2:] == [(SPACE, PLUGIN, None), (SPACE, PLUGIN, "p:Arena")]
-    assert live.status(PLUGIN)["room"] == "p:Arena"
-    live.project_changed()  # the same project again: nothing moves
-    assert len(impl.joined) == 3
-    live.join(PLUGIN, "lobby")  # a room the plugin named stays put
-    team["project"]["room"] = "p:Other"
-    live.project_changed()
-    assert live.status(PLUGIN)["room"] == "lobby"
-
-
-def test_the_project_room_is_its_name_the_same_on_every_pc(monkeypatch: pytest.MonkeyPatch) -> None:
-    from frontend.ui_web import project_switch
-
-    monkeypatch.setattr(project_switch, "get_panel_project_info",
-                        lambda: {"path": "C:/x/My Island 1", "name": "My Island 1", "mount": "My Island 1"})
-    assert live.project_room() == "p:My-Island-1"
-    monkeypatch.setattr(project_switch, "get_panel_project_info", lambda: {"path": "", "name": ""})
-    assert live.project_room() == live.DEFAULT_ROOM
+    assert live.spaces_live() == {(team["account"], SPACE)}
+    live.leave(PLUGIN)
+    assert live.spaces_live() == set()
 
 
 def test_switching_to_local_ends_live(team: dict[str, Any]) -> None:
@@ -239,7 +258,7 @@ def test_a_plugin_sends_its_own_topics_within_the_limits(team: dict[str, Any]) -
     impl = team["impl"]
     assert live.send(PLUGIN, "cursor", {"x": 1})["ok"] is False  # not live yet
     live.join(PLUGIN)
-    assert live.send(PLUGIN, "ducky.change", {})["ok"] is True  # the host's (from local_change)
+    assert live.send(PLUGIN, "ducky.change", {})["ok"] is False  # the host's, after a commit only
     assert live.send(PLUGIN, "ducky.secret", {})["ok"] is False
     assert live.send(PLUGIN, "Bad Topic", {})["ok"] is False
     assert live.send(PLUGIN, "chat", {"t": "x" * (live.LIMIT_BYTES + 1)})["ok"] is False
@@ -247,89 +266,41 @@ def test_a_plugin_sends_its_own_topics_within_the_limits(team: dict[str, Any]) -
     impl.sent.clear()
     assert live.send(PLUGIN, "chat", {"t": "hi"}, to="d_alex") == {"ok": True, "sent": 1}
     assert live.send(PLUGIN, "ducky.pointer", {"anchor": "body"})["ok"] is True
-    assert impl.sent == [(PLUGIN, "chat", {"t": "hi"}, "d_alex", False), (PLUGIN, "ducky.pointer", {"anchor": "body"}, "", True)]
+    assert live.send(PLUGIN, "ducky.hold", {"anchor": "body", "on": True, "t": 1})["ok"] is True
+    # Pointers may drop (the next replaces them); a hold, and its let-go, never may.
+    assert impl.sent == [(PLUGIN, "chat", {"t": "hi"}, "d_alex", False), (PLUGIN, "ducky.pointer", {"anchor": "body"}, "", True),
+                         (PLUGIN, "ducky.hold", {"anchor": "body", "on": True, "t": 1}, "", False)]
     results = [live.send(PLUGIN, "chat", {"n": n})["ok"] for n in range(live.LIMIT_PER_S + 5)]
     assert results.count(False) >= 5  # at most 30 a second
 
 
-def test_a_write_goes_to_the_room_by_itself(team: dict[str, Any]) -> None:
-    impl, data = team["impl"], PluginData(PLUGIN)
-    data.put("card.pip", {"hp": 1})
-    assert impl.sent == []  # not live: only the commit carries it
+def test_a_write_never_goes_live_a_commit_tells_the_group_to_pull(team: dict[str, Any]) -> None:
+    impl, account, data = team["impl"], team["account"], PluginData(PLUGIN)
     live.join(PLUGIN)
+    impl.sent.clear()
     data.put("card.pip", {"hp": 2})
-    plugin, topic, change, to, fast = impl.sent[-1]
-    assert (plugin, topic, to, fast) == (PLUGIN, live.CHANGE, "", False)
-    assert change["kind"] == "doc" and change["key"] == "card.pip" and json.loads(change["value"]) == {"hp": 2}
-    assert change["sha"] == _row(team["account"], "card.pip")["sha256"]
-    data.put("card.big", {"blob": "x" * (live.DOC_INLINE_MAX + 10)})
-    assert "value" not in impl.sent[-1][2]  # too big to travel live: a ref, the pull brings it
-    data.delete("card.pip")
-    assert impl.sent[-1][2]["deleted"] is True
     data.put_file("art/pip.png", b"\x89PNG")
-    assert impl.sent[-1][2]["kind"] == "file" and impl.sent[-1][2]["key"] == "art/pip.png"
+    data.delete("card.pip")
+    assert impl.sent == []  # half a change (a doc without its picture) never reaches anyone
+    live.committed(account, SPACE, PLUGIN)
+    assert impl.sent == [(PLUGIN, live.CHANGE, {}, "", False)]
+    live.leave(PLUGIN)
+    live.committed(account, SPACE, PLUGIN)  # not live: the group's next round brings it
+    assert len(impl.sent) == 1
 
 
-# --------------------------------------------------------------------------- what comes in
-
-
-def test_a_teammates_change_shows_at_once_until_its_commit_lands(team: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_teammates_commit_pulls_it_now_and_nothing_shows_before_it_lands(team: dict[str, Any]) -> None:
     account, data = team["account"], PluginData(PLUGIN)
     data.put("card.pip", {"hp": 1})
+    live.deliver(account, SPACE, PLUGIN, ALEX, live.CHANGE, {})
+    assert team["woke"] == []  # not live here: nothing comes in live
     live.join(PLUGIN)
+    team["woke"].clear()
     team["pushed"].clear()
-    theirs = scopes.encode_doc({"hp": 9}).decode()
-    sha = hashlib.sha256(theirs.encode()).hexdigest()
-    live.deliver(account, SPACE, PLUGIN, ALEX, live.CHANGE, {"kind": "doc", "key": "card.pip", "value": theirs, "sha": sha})
-    live.deliver(account, SPACE, PLUGIN, ALEX, live.CHANGE,
-                 {"kind": "doc", "key": "card.new", "value": scopes.encode_doc({"hp": 3}).decode(), "sha": "x"})
-    assert data.get("card.pip") == {"hp": 9}
-    assert data.items("card.") == {"card.pip": {"hp": 9}, "card.new": {"hp": 3}}
-    told = team["pushed"][0]
-    assert told == {"type": "plugin_scope_changed", "plugins": [PLUGIN], "synced": True, "live": True,
-                    "keys": {PLUGIN: ["card.pip"]}, "by": "Alex"}
-    # The commit lands (the pull writes the same content): the stored row is read again.
-    repo.put(account, SPACE, PLUGIN, "doc", "card.pip", value=data_crypto.seal_text(theirs, account),
-             size=len(theirs), sha256=sha, dirty=False)
-    assert data.get("card.pip") == {"hp": 9}
-    assert live.provisional_keys(account, SPACE, PLUGIN, "card.pip") == []
-    # Nothing landed for card.new: after 30 s it goes.
-    later = time.time() + live.PROVISIONAL_S + 1
-    monkeypatch.setattr(live.time, "time", lambda: later)
-    assert data.get("card.new") is None
-
-
-def test_a_write_here_wins_over_a_teammates_live_value(team: dict[str, Any]) -> None:
-    account, data = team["account"], PluginData(PLUGIN)
-    live.join(PLUGIN)
-    live.deliver(account, SPACE, PLUGIN, ALEX, live.CHANGE,
-                 {"kind": "doc", "key": "card.pip", "value": scopes.encode_doc({"hp": 9}).decode(), "sha": "s"})
-    data.put("card.pip", {"hp": 5})
-    assert data.get("card.pip") == {"hp": 5}
-
-
-def test_a_teammates_delete_and_a_big_change_or_file_wake_a_pull(team: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    from backend.uefn_plugins import sync_scheduler
-
-    account, data = team["account"], PluginData(PLUGIN)
-    woke: list[tuple[str, str, str | None]] = []
-    monkeypatch.setattr(sync_scheduler, "wake", lambda a, s, p=None: woke.append((a, s, p)))
-    data.put("card.pip", {"hp": 1})
-    live.join(PLUGIN)
-    live.deliver(account, SPACE, PLUGIN, ALEX, live.CHANGE, {"kind": "doc", "key": "card.pip", "deleted": True, "sha": ""})
-    assert data.get("card.pip") is None and "card.pip" not in data.items("card.")
-    live.deliver(account, SPACE, PLUGIN, ALEX, live.CHANGE, {"kind": "doc", "key": "card.big", "sha": "s"})
-    live.deliver(account, SPACE, PLUGIN, ALEX, live.CHANGE, {"kind": "file", "key": "art/a.png", "sha": "s"})
-    assert woke == [(account, SPACE, PLUGIN), (account, SPACE, PLUGIN)]
-    live.deliver(account, SPACE, PLUGIN, ALEX, live.CHANGE, {"kind": "weird", "key": "x"})
-    assert len(woke) == 2
-
-
-def test_nothing_comes_in_for_a_plugin_that_isnt_live_here(team: dict[str, Any]) -> None:
-    account, data = team["account"], PluginData(PLUGIN)
-    live.deliver(account, SPACE, PLUGIN, ALEX, live.CHANGE,
-                 {"kind": "doc", "key": "card.pip", "value": scopes.encode_doc({"hp": 9}).decode(), "sha": "s"})
-    assert data.get("card.pip") is None and team["pushed"] == []
+    live.deliver(account, SPACE, PLUGIN, ALEX, live.CHANGE, {"kind": "doc", "key": "card.pip", "value": "{}"})
+    assert team["woke"] == [(account, SPACE, PLUGIN)]
+    assert data.get("card.pip") == {"hp": 1}  # what is stored, until the pull lands it whole
+    assert team["pushed"] == []  # the pull tells the panel what it changed
 
 
 def test_a_plugins_own_topics_reach_its_panels_and_backend(team: dict[str, Any]) -> None:
@@ -348,6 +319,56 @@ def test_a_plugins_own_topics_reach_its_panels_and_backend(team: dict[str, Any])
     live.forget(PLUGIN)
     live.deliver(account, SPACE, PLUGIN, ALEX, "cursor", {"x": 4})
     assert len(heard) == 1
+
+
+# --------------------------------------------------------------------------- holds
+
+
+def test_a_hold_goes_to_the_group_at_once_and_to_everyone_in_presence(team: dict[str, Any]) -> None:
+    impl, account = team["impl"], team["account"]
+    assert live.hold(PLUGIN, '[id="title"]', True, 5, "vabc") == {"ok": True}
+    assert impl.sent == []  # not live: presence only
+    blob = vcs_engine.presence_blob(account, SPACE, [PLUGIN])
+    assert blob["plugins"][PLUGIN]["holds"] == [{"a": '[id="title"]', "t": 5.0, "v": "vabc"}]
+    live.join(PLUGIN)
+    impl.sent.clear()
+    live.hold(PLUGIN, "body>button:nth-of-type(1)", True, 7, "vabc")
+    assert impl.sent == [(PLUGIN, live.HOLD, {"anchor": "body>button:nth-of-type(1)", "on": True, "t": 7.0, "v": "vabc"}, "", False)]
+    live.hold(PLUGIN, '[id="title"]', False)
+    assert [h["a"] for h in live.holds_of(PLUGIN)] == ["body>button:nth-of-type(1)"]
+    # A hold the page stopped renewing goes; at most a few go in presence; bad ones never.
+    assert live.holds_of(PLUGIN, now=time.time() + live.HOLD_STALE_S + 1) == []
+    for i in range(live.HOLDS_MAX + 3):
+        live.hold(PLUGIN, f"body>div:nth-of-type({i + 1})", True, i, "v1")
+    assert len(live.holds_of(PLUGIN)) == live.HOLDS_MAX
+    assert live.hold(PLUGIN, "x" * 401, True)["ok"] is False
+    assert live.hold(PLUGIN, "body", True, 1, "bad view!")["ok"] is False
+    repo.link_set(account, PLUGIN, scopes.PERSONAL)
+    assert live.hold(PLUGIN, "body", True)["ok"] is False  # Local: nobody to tell
+
+
+def test_teammates_holds_from_their_presence_reach_the_panels_when_they_change(team: dict[str, Any]) -> None:
+    account = team["account"]
+    me = space_vcs.device_id()
+    mo = {"device": "d_mo", "user": "u_mo", "user_name": "Mo",
+          "plugins": {PLUGIN: {"viewing": True, "holds": [{"a": '[id="title"]', "t": 3, "v": "vx"}]}}}
+    mine = {"device": me, "user": "u_me", "user_name": "Me", "plugins": {PLUGIN: {"holds": [{"a": "body", "t": 1, "v": ""}]}}}
+    live.roster_holds(account, SPACE, {"people": [mo, mine]})
+    told = [e for e in team["pushed"] if e["type"] == "live_holds"]
+    assert told == [{"type": "live_holds", "plugin": PLUGIN,
+                     "holds": [{"device": "d_mo", "name": "Mo", "anchor": '[id="title"]', "t": 3, "v": "vx"}]}]
+    assert live.holds_now(PLUGIN) == told[0]["holds"]
+    live.roster_holds(account, SPACE, {"people": [mo, mine]})  # nothing moved: nothing told
+    assert len([e for e in team["pushed"] if e["type"] == "live_holds"]) == 1
+    live.roster_holds(account, SPACE, {"people": [mine]})  # Mo let go
+    assert [e for e in team["pushed"] if e["type"] == "live_holds"][-1] == {"type": "live_holds", "plugin": PLUGIN, "holds": []}
+
+
+def test_a_roster_from_heads_or_a_beat_tells_the_panels_what_teammates_hold(team: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    got: list[tuple[str, str, Any]] = []
+    monkeypatch.setattr(live, "roster_holds", lambda a, s, r: got.append((a, s, r)))
+    vcs_engine._roster_came(team["account"], SPACE, {}, {"people": []})
+    assert got == [(team["account"], SPACE, {"people": []})]
 
 
 # --------------------------------------------------------------------------- folder plugins
@@ -400,5 +421,6 @@ def test_panel_pages_get_the_pointer_script() -> None:
 
     out = with_panel_error_script(b"<!doctype html><html><head></head><body></body></html>")
     assert LIVE_PRESENCE_SCRIPT.encode() in out
-    for need in ("live.pointer", "live.select", "live.state", "live.message", "live.peers", "pointer-events:none"):
+    for need in ("live.pointer", "live.select", "live.hold", "ducky.hold", "live.state", "live.message", "live.peers",
+                 "sync.state", "pointer-events:none"):
         assert need in LIVE_PRESENCE_SCRIPT, need
