@@ -62,7 +62,11 @@ OutputDir=..\..\dist
 ; this file. Must NOT start with UEFN-Ducky: the panel's process sweep kills
 ; every UEFN-Ducky* image and would reap the engine mid-update.
 OutputBaseFilename=Setup-engine
-Compression=lzma2
+; ultra64 packs 1.2.417 into 125 MB instead of 166 MB (plain lzma2) and builds in about
+; a minute; the separate process gives the 64 MB dictionary its memory.
+Compression=lzma2/ultra64
+LZMAUseSeparateProcess=yes
+LZMANumBlockThreads=4
 SolidCompression=yes
 WizardStyle=modern
 ; Show the project's Ducky Source-Available License on the install wizard's
