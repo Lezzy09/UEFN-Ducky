@@ -12,8 +12,8 @@ import traceback
 from collections.abc import Callable
 from typing import Any
 
-from frontend.app_paths import kill_process_ps_filter
-from frontend.frozen_process import kill_uefn_ducky_processes, release_panel_process
+from frontend.app_paths import stop_bridges_ps
+from frontend.frozen_process import release_panel_process
 
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _exit_lock = threading.Lock()
@@ -89,23 +89,21 @@ def _terminate_process() -> None:
 
 
 def _spawn_kill_uefn_processes() -> None:
-    """Fire-and-forget reaper for sibling UEFN-Ducky processes (panel + IDE bridge workers).
+    """Fire-and-forget reaper for this Ducky's IDE bridge workers.
 
     Spawned **detached** so it outlives this panel's own termination. The old code spawned
     ``taskkill /F /PID <self> /T`` alongside the PowerShell reaper as siblings — the ``/T`` killed
     self's whole child tree, which includes the reaper, so the bridge workers often survived
     "Exit all". Now one detached PowerShell waits for the panel to die, then force-kills every
-    remaining matching process. (IDE-managed bridges may still be respawned by the IDE itself —
-    that is outside our control; close/disable the IDE's UEFN MCP to stop those for good.)
+    remaining bridge, never another Ducky window (app_paths.stop_bridges_ps). (IDE-managed
+    bridges may still be respawned by the IDE itself — that is outside our control;
+    close/disable the IDE's UEFN MCP to stop those for good.)
     """
     if sys.platform != "win32":
         return
     # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no console, and not reaped with the panel.
     flags = _CREATE_NO_WINDOW | 0x00000008 | 0x00000200
-    ps = (
-        "Start-Sleep -Milliseconds 300; "
-        f"Get-Process | Where-Object {{ {kill_process_ps_filter()} }} | Stop-Process -Force"
-    )
+    ps = "Start-Sleep -Milliseconds 300; " + stop_bridges_ps()
     try:
         subprocess.Popen(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
@@ -133,11 +131,14 @@ def _stop_tray(api: Any) -> None:
 
 
 def _kill_sibling_processes() -> None:
-    """Terminate other UEFN-Ducky bridge workers before this process exits."""
+    """Terminate this Ducky's bridge workers before this process exits."""
     if sys.platform != "win32":
         return
     try:
-        kill_uefn_ducky_processes(include_self=False, exclude_pid=os.getpid())
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", stop_bridges_ps(os.getpid())],
+            capture_output=True, timeout=10, creationflags=_CREATE_NO_WINDOW,
+        )
         time.sleep(0.12)
     except Exception:
         pass

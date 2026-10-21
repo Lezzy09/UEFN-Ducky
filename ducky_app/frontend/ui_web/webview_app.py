@@ -131,6 +131,42 @@ def _boot_trace(name: str, t0: float, **meta: object) -> None:
         pass
 
 
+_LIVING_PANEL_WAIT_S = 45.0
+
+
+def _ducky_process_alive(pid: int) -> bool:
+    """``pid`` is still a running Ducky (not a process that got its number since)."""
+    from frontend.open_files import panel_process_alive
+
+    if not panel_process_alive(pid):
+        return False
+    try:
+        import psutil
+
+        return psutil.Process(pid).name().lower().startswith("uefn-ducky")
+    except Exception:
+        return True  # alive by the check above; not knowing its name is no reason to kill it
+
+
+def _hand_off_to_living_panel(open_paths: list[str], deep_links: list[str]) -> bool:
+    """Pass this launch to the Ducky in panel.pid. True when it took it.
+
+    A first short try, so a stale panel.pid never stalls a cold start. A Ducky that is
+    alive but not answering is starting (its server is up ~10 s in) or busy: wait for it.
+    Oct 21 2026: opening Ducky while it started killed it as "wedged", and every click
+    after that killed the next one. Only a Ducky silent this long is stuck (reclaimed)."""
+    from frontend.open_files import read_living_panel_pid, try_handoff_to_running
+
+    living = read_living_panel_pid()
+    if living is None:
+        return False
+    handed = try_handoff_to_running(open_paths, links=deep_links)
+    deadline = time.monotonic() + _LIVING_PANEL_WAIT_S
+    while not handed and time.monotonic() < deadline and _ducky_process_alive(living):
+        handed = try_handoff_to_running(open_paths, links=deep_links, retries=1, timeout_s=2.0)
+    return bool(handed)
+
+
 def run() -> None:
     import sys
 
@@ -147,7 +183,6 @@ def run() -> None:
         read_living_panel_pid,
         register_windows_open_with,
         register_windows_url_protocol,
-        try_handoff_to_running,
     )
 
     open_paths = cli_open_paths(sys.argv)
@@ -156,9 +191,7 @@ def run() -> None:
     # to the living panel instead of killing it and starting a duplicate window.
     t_handoff = time.perf_counter()
     if read_living_panel_pid() is not None:
-        # Short budget only — stale panel.pid after update/force-kill must not stall
-        # cold start for tens of seconds on connect timeouts.
-        if try_handoff_to_running(open_paths, links=deep_links):
+        if _hand_off_to_living_panel(open_paths, deep_links):
             _boot_trace("handoff_exit", t_handoff)
             try:
                 from frontend import boot_report

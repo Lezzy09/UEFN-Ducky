@@ -117,3 +117,21 @@ def kill_process_ps_filter() -> str:
         f"($_.ProcessName -like '{EXE_PREFIX}*' "
         f"-and $_.ProcessName -notlike '{EXE_PREFIX}-Setup*')"
     )
+
+
+def stop_bridges_ps(exclude_pid: int = 0) -> str:
+    """PowerShell that ends Ducky's tool bridges (``UEFN-Ducky-Bridge``, or the app exe run
+    as ``bridge``), never another Ducky window: a second profile, a test bed or another
+    install is not this Ducky's to close. Oct 21 2026: a test copy that quit took the
+    person's Ducky down with it, with no crash trace."""
+    skip = f" -and $_.ProcessId -ne {int(exclude_pid)}" if exclude_pid else ""
+    return (
+        f"Get-CimInstance Win32_Process -Filter \"Name like '{EXE_PREFIX}%'\" | Where-Object {{ "
+        f"{bridge_ps_filter()}{skip} }} | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    )
+
+
+def bridge_ps_filter() -> str:
+    """``Where-Object`` test on a Win32_Process row: a Ducky tool bridge, not a Ducky window."""
+    return f"($_.Name -like '{EXE_PREFIX}-Bridge*' -or $_.CommandLine -match '\\sbridge(\\s|$)')"
