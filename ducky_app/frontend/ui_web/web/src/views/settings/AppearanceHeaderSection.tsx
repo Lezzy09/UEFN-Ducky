@@ -2,22 +2,12 @@ import { AppearanceAccordionSplit } from "./AppearanceAccordionSplit";
 import { SettingsToggleRow } from "./SettingsToggleRow";
 import { useHeaderVisibility } from "../../hooks/useHeaderVisibility";
 import { usePluginContributions } from "../../hooks/usePluginContributions";
-import {
-  resolvePluginHeaderAction,
-  sortPluginHeaderButtons,
-} from "../../hooks/pluginHeaderActions";
+import { listedPluginHeaderButtons } from "../../hooks/pluginHeaderActions";
 import {
   BUILTIN_HEADER_BUTTONS,
   headerButtonCatalog,
   type HeaderCatalogEntry,
 } from "../../workspace/headerVisibilityStorage";
-
-function listedPluginButtons(contrib: ReturnType<typeof usePluginContributions>) {
-  return sortPluginHeaderButtons(contrib.header_buttons).filter((btn) => {
-    const isTranslation = btn.plugin_id === "translation" || btn.id === "translation";
-    return isTranslation || !!resolvePluginHeaderAction(btn.action, btn.plugin_id);
-  });
-}
 
 function HeaderPreviewChip({ label, on }: { label: string; on: boolean }) {
   return (
@@ -74,7 +64,7 @@ function HeaderToggleList({
 
 export function AppearanceHeaderSectionBlock() {
   const contrib = usePluginContributions();
-  const catalog = headerButtonCatalog(listedPluginButtons(contrib));
+  const catalog = headerButtonCatalog(listedPluginHeaderButtons(contrib.header_buttons));
   const builtins = catalog.filter((row) => row.group === "builtin");
   const plugins = catalog.filter((row) => row.group === "plugin");
 

@@ -70,6 +70,14 @@ export function resolvePluginHeaderIcon(icon: string | undefined): ReactNode {
   );
 }
 
+/** Plugin header buttons that can show (sorted), shown or hidden. */
+export function listedPluginHeaderButtons(buttons: PluginHeaderButton[]): PluginHeaderButton[] {
+  return sortPluginHeaderButtons(buttons).filter((btn) => {
+    const isTranslation = btn.plugin_id === "translation" || btn.id === "translation";
+    return isTranslation || !!resolvePluginHeaderAction(btn.action, btn.plugin_id);
+  });
+}
+
 export function sortPluginHeaderButtons(buttons: PluginHeaderButton[]): PluginHeaderButton[] {
   return [...buttons].sort((a, b) => {
     const ao = typeof a.order === "number" ? a.order : 100;

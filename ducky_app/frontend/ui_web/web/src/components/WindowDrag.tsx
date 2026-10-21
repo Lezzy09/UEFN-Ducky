@@ -45,6 +45,8 @@ export function WindowDrag() {
 
     const onContextMenu = (e: MouseEvent) => {
       if (!isNativeWindowChrome() || !isHeaderDragTarget(e.target)) return;
+      // The header's icon area has its own menu: which buttons to show.
+      if ((e.target as Element).closest("[data-header-menu]")) return;
       if (showNativeWindowMenu()) e.preventDefault();
     };
 

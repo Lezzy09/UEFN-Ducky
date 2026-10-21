@@ -24,12 +24,17 @@ import { requestOpenWorkflowsTab } from "../navigation/openWorkflowsTab";
 import { usePluginContributions } from "../hooks/usePluginContributions";
 import { useHeaderVisibility } from "../hooks/useHeaderVisibility";
 import { useStoreUpdateBadge } from "../hooks/useStoreUpdateBadge";
-import { pluginHeaderButtonId, pluginHeaderTargetId } from "../workspace/headerVisibilityStorage";
 import {
+  headerButtonCatalog,
+  pluginHeaderButtonId,
+  pluginHeaderTargetId,
+} from "../workspace/headerVisibilityStorage";
+import {
+  listedPluginHeaderButtons,
   resolvePluginHeaderAction,
   resolvePluginHeaderIcon,
-  sortPluginHeaderButtons,
 } from "../hooks/pluginHeaderActions";
+import { ContextMenu, useContextMenuState, type ContextMenuItem } from "./ContextMenu";
 import { targetRef, useUiTarget } from "../ui-targets/registry";
 import { ChoiceTriggerFace } from "./ChoiceDropdown";
 import { DropdownPanel } from "./DropdownPanel";
@@ -377,22 +382,21 @@ export function Header({
     useRightRailOpen();
   const overlaySession = useOverlayRailSession();
   const pluginContrib = usePluginContributions();
-  const { isVisible: headerBtnVisible } = useHeaderVisibility();
+  const { isVisible: headerBtnVisible, setVisible: setHeaderBtnVisible } = useHeaderVisibility();
   const { hasUpdates: hasStoreUpdates } = useStoreUpdateBadge();
   const narrowHeader = useNarrowLayout();
-  const pluginHeaderButtons = useMemo(() => {
-    if (!hasProject || isFocus) return [];
-    return sortPluginHeaderButtons(pluginContrib.header_buttons).filter((btn) => {
-      const isTranslation = btn.plugin_id === "translation" || btn.id === "translation";
-      if (!isTranslation && !resolvePluginHeaderAction(btn.action, btn.plugin_id)) return false;
-      return headerBtnVisible(pluginHeaderButtonId(btn.plugin_id || btn.id, btn.id));
-    });
-  }, [
-    headerBtnVisible,
-    hasProject,
-    isFocus,
-    pluginContrib.header_buttons,
-  ]);
+  const listedHeaderButtons = useMemo(
+    () => (!hasProject || isFocus ? [] : listedPluginHeaderButtons(pluginContrib.header_buttons)),
+    [hasProject, isFocus, pluginContrib.header_buttons],
+  );
+  const pluginHeaderButtons = useMemo(
+    () =>
+      listedHeaderButtons.filter((btn) =>
+        headerBtnVisible(pluginHeaderButtonId(btn.plugin_id || btn.id, btn.id)),
+      ),
+    [headerBtnVisible, listedHeaderButtons],
+  );
+  const headerMenu = useContextMenuState<null>();
   const compactHeader = narrowHeader;
   const pluginHeader = compactHeader ? (
     <PluginHeaderMenu buttons={pluginHeaderButtons} />
@@ -422,6 +426,27 @@ export function Header({
   const showSearch = !!showQuickOpen && headerBtnVisible("search");
   const showLeftSidebarToggle = leftRailEnabled && headerBtnVisible("leftSidebar");
   const showRightSidebarToggle = rightRailEnabled && headerBtnVisible("rightSidebar");
+  // Right-click on the icon area: a switch per header button, hidden ones included,
+  // the same list as Appearance → Header. Built-ins that can't show here are left out.
+  const builtinApplies: Record<string, boolean> = {
+    nav: showNav,
+    leftSidebar: leftRailEnabled,
+    rightSidebar: rightRailEnabled,
+    search: !!showQuickOpen,
+  };
+  const headerMenuItems: ContextMenuItem[] = headerButtonCatalog(listedHeaderButtons)
+    .filter((row) => builtinApplies[row.id] ?? true)
+    .map((row) => {
+      const on = headerBtnVisible(row.id);
+      return {
+        id: row.id,
+        label: row.label,
+        switch: true,
+        checked: on,
+        keepOpen: true,
+        onClick: () => setHeaderBtnVisible(row.id, !on),
+      };
+    });
   const onCycleLayout = () => {
     if (compactHeader) {
       toggleOverlayRail("left");
@@ -543,7 +568,11 @@ export function Header({
       ) : null}
 
       {!isFocus ? (
-        <div className="app-header-center drag-region app-drag-surface">
+        <div
+          className="app-header-center drag-region app-drag-surface"
+          data-header-menu
+          onContextMenu={(e) => headerMenu.open(e, null)}
+        >
           {compactHeader ? (
             <>
             <span className="app-header-tabs-slot no-drag" ref={setHeaderTabsSlot} />
@@ -731,6 +760,14 @@ export function Header({
         </div>
         )}
       </div>
+      {headerMenu.menu ? (
+        <ContextMenu
+          x={headerMenu.menu.x}
+          y={headerMenu.menu.y}
+          items={headerMenuItems}
+          onClose={headerMenu.close}
+        />
+      ) : null}
     </header>
   );
 }
