@@ -935,11 +935,13 @@ class PanelApi(
         self._sidebar_only_layout = False
         self._sidebar_only_saved_bounds: dict[str, int | float] | None = None
         self._tk_root: Any = None
+        from backend.bridge.revive import AutoRevive
         from backend.bridge.status import ListenerStatusState
 
         self._listener_status_state = ListenerStatusState()
         self._last_listener_status: dict[str, Any] | None = None
         self._listener_status_lock = threading.Lock()
+        self._listener_auto_revive = AutoRevive()
         # Folder the sidebar reports an external OS-file drag is over; read by the
         # pywebview drop handler (see file_drop_import.py).
         self._import_drop_target = ""
@@ -1229,9 +1231,22 @@ class PanelApi(
                 result.setdefault("plugin_connections", [])
             self._last_listener_status = result
             self._maybe_ship_on_listener_online(result)
+            self._listener_auto_revive.observe(result, PANEL_LISTENER_PORT)
             return result
         finally:
             self._listener_status_lock.release()
+
+    def restart_listener(self) -> dict[str, Any]:
+        """Header menu button: restart the UEFN listener, or turn Python on in UEFN so it starts."""
+        from backend.bridge.revive import revive_listener
+
+        try:
+            result = revive_listener(PANEL_LISTENER_PORT)
+        except Exception as e:
+            result = {"ok": False, "action": "failed", "message": str(e)}
+        if not result.get("ok"):
+            record_error("listener", str(result.get("message") or "Listener restart failed"))
+        return result
 
     def _maybe_ship_on_listener_online(self, status: dict[str, Any]) -> None:
         """When UEFN listener flips offline→online, re-ship newest listener/skills/IDE bridges."""

@@ -440,6 +440,7 @@ _PUBLIC_METHODS = frozenset({
     'reset_context',
     'reset_skill',
     'reset_skill_pack',
+    'restart_listener',
     'restart_uefn_project',
     'restore_context',
     'restore_focus_windows',
