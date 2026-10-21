@@ -502,6 +502,46 @@ def approve_ducky_tool(
     return answer == _ALLOW_ONCE
 
 
+_FOLDER_RULE = "folder:"
+
+
+def approved_folders(conv_id: str) -> list[str]:
+    """Folders outside the person's projects this chat said to always allow."""
+    return [r[len(_FOLDER_RULE):] for r in _rules(conv_id) if r.startswith(_FOLDER_RULE)]
+
+
+def approve_outside_folder(conv_id: str, folder: str, path: str) -> str:
+    """Card for an agent reaching ``path`` in ``folder``, outside the person's Ducky projects.
+    "" when it may go ahead (asked now, or allowed before), else why not, for the agent.
+
+    Oct 21 2026: the file tools refused every such path outright, so agents told people
+    they had "no permission" for files the person had just asked them to change."""
+    if allows_everything(conv_id) or _FOLDER_RULE + folder in _rules(conv_id):
+        return ""
+    from backend.agent.coding_agents.base import coding_agent_label
+
+    card = {
+        "prompt": f"Allow {coding_agent_label(_chat_agent(conv_id))} to use files in this folder? "
+                  "It is outside your Ducky project.",
+        "detail": folder if os.path.normcase(path) == os.path.normcase(folder) else f"{folder}\n(for {path})",
+        "warning": "",
+        "risky": False,
+        "rule": _FOLDER_RULE + folder,
+        "rule_label": "this folder",
+    }
+    answer, note = _ask(card, "Folder outside your project")
+    if answer == _ALLOW_ALL:
+        _remember(conv_id, _ALL_RULE)
+    elif answer == _ALLOW_ALWAYS:
+        _remember(conv_id, card["rule"])
+    if answer in (_ALLOW_ALL, _ALLOW_ALWAYS, _ALLOW_ONCE):
+        return ""
+    if answer == _DENY:
+        said = f" and said: {note}" if note else ""
+        return f"The person said no to {folder}{said}. Don't retry it; ask them what to do instead."
+    return f"Couldn't ask the person about {folder} ({answer}). Tell them it is outside their Ducky projects."
+
+
 _DELETE_OPS = frozenset({"delete"})
 _MOVE_OPS = frozenset({"rename", "move"})
 

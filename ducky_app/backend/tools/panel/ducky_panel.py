@@ -1034,6 +1034,8 @@ def ducky_send_chat_message(
             # The wait ends; the agent does not. A coordinator checking on a builder
             # must never kill a long task just because it outlasted the wait.
             cancel_on_timeout=False,
+            # Another agent's message waits for a busy chat; only the person's replaces its turn.
+            queue_if_busy=bool(me),
         )
         if outcome.get("run_id"):
             _acknowledge_chat_message(conv_id)
@@ -1687,8 +1689,9 @@ def ducky_spawn_chat(
             timeout_sec=wait_timeout,
             cancel_on_timeout=False if is_external else (not caller),
             parent=caller or hub_id,
+            queue_if_busy=True,
         )
-        if outcome.get("status") == "timeout" and caller:
+        if outcome.get("status") in ("timeout", "queued") and caller:
             from backend.agent.a2a_client import on_agent_stopped, open_thread
             from frontend.ui_web.agent_modes import is_agent_running
 
@@ -1696,9 +1699,13 @@ def ducky_spawn_chat(
             if not is_agent_running(conv_id):
                 on_agent_stopped(conv_id, "done")
             outcome["response_id"] = rid
+            lead_in = (
+                "The member is busy with an earlier task; this one runs right after it."
+                if outcome.get("status") == "queued"
+                else f"No reply within {float(timeout_sec):.0f}s — the member is STILL WORKING."
+            )
             outcome["error"] = (
-                f"No reply within {float(timeout_sec):.0f}s — the member is STILL WORKING. "
-                f"Its result will arrive as a [ducky:agent-message] "
+                f"{lead_in} Its result will arrive as a [ducky:agent-message] "
                 f"(response_id {rid}). Do NOT re-spawn; finish your turn."
             )
         return tool_json({**base, **outcome}, pretty=pretty)
@@ -1708,8 +1715,10 @@ def ducky_spawn_chat(
         from backend.agent.a2a_client import open_thread
 
         response_id = open_thread(caller, conv_id, deliver_result=True)
-    run_message(conv_id, text, mode_norm, "", parent=caller or hub_id)
-    return tool_json({**base, "status": "running", "response_id": response_id}, pretty=pretty)
+    # Queue behind a busy member's turn, never cancel it.
+    started = run_message(conv_id, text, mode_norm, "", parent=caller or hub_id, queue_if_busy=True)
+    status = "queued" if started == "queued" else "running"
+    return tool_json({**base, "status": status, "response_id": response_id}, pretty=pretty)
 
 
 @mcp.tool()

@@ -673,6 +673,34 @@ def panel_exe_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+_WORKSPACE_FOLDERS_TTL_S = 10.0
+_workspace_folders_memo: dict[str, tuple[float, list[str]]] = {}
+
+
+def workspace_folders(project_root: str) -> list[str]:
+    """The folders Ducky's file tools reach for a project: its own root for a folder project
+    (a repo's *.code-workspace or content/ dir must not reroute writes); an island's Verse
+    workspace (Content, its digests, vproject). Kept for a few seconds: tool calls come in bursts."""
+    root = (project_root or "").strip()
+    if not root:
+        return []
+    import time as _time
+
+    from frontend.project_kind import is_folder_project
+
+    if is_folder_project(root):
+        return [root]
+    hit = _workspace_folders_memo.get(root)
+    if hit and _time.monotonic() - hit[0] < _WORKSPACE_FOLDERS_TTL_S:
+        return list(hit[1])
+    from frontend.ui_web.verse_editor.lsp.verse_workspace import discover_verse_workspace
+
+    ws = discover_verse_workspace(root, include_watch_files=False)
+    paths = [f["path"] for f in (ws.get("workspace_folders") or []) if isinstance(f, dict) and f.get("path")]
+    _workspace_folders_memo[root] = (_time.monotonic(), paths or [root])
+    return list(paths or [root])
+
+
 def apply_workspace_env(project_root: str) -> None:
     """Set UEFN_VSCODE_WORKSPACE_FOLDERS and project root for MCP + UEFN listener."""
     root = (project_root or "").strip()
@@ -682,20 +710,10 @@ def apply_workspace_env(project_root: str) -> None:
 
     from frontend.project_kind import is_folder_project
 
-    if is_folder_project(root):
-        # A folder project is its own single workspace root: no Verse workspace
-        # discovery (a repo's *.code-workspace or content/ dir must not reroute
-        # writes), and the island listener's config.json keeps the last island.
-        os.environ["UEFN_VSCODE_WORKSPACE_FOLDERS"] = _json.dumps([root])
-        os.environ["UEFN_DUCKY_PROJECT_ROOT"] = root
-        return
-
-    from frontend.ui_web.verse_editor.lsp.verse_workspace import discover_verse_workspace
-
-    ws = discover_verse_workspace(root, include_watch_files=False)
-    folder_paths = [f["path"] for f in (ws.get("workspace_folders") or []) if isinstance(f, dict) and f.get("path")]
-    os.environ["UEFN_VSCODE_WORKSPACE_FOLDERS"] = _json.dumps(folder_paths or [root])
+    os.environ["UEFN_VSCODE_WORKSPACE_FOLDERS"] = _json.dumps(workspace_folders(root))
     os.environ["UEFN_DUCKY_PROJECT_ROOT"] = root
+    if is_folder_project(root):
+        return  # the island listener's config.json keeps the last island
     try:
         from frontend.atomic_json import write_json_atomic
 

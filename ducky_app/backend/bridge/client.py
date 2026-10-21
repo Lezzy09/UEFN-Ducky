@@ -689,11 +689,62 @@ def _calling_agent_roots() -> list[str]:
     return list(dict.fromkeys(roots))
 
 
+def _started_by_ducky() -> bool:
+    """This process serves one agent Ducky started (its environment names the chat), so the
+    project in its environment is that agent's. An IDE's bridge or the shared tool server
+    got their environment when they started, which goes stale when the person switches."""
+    return bool((os.environ.get("DUCKY_CONV_ID") or os.environ.get("DUCKY_RUN_ID") or "").strip())
+
+
+def _open_project_setting() -> str:
+    try:
+        from frontend.settings import PanelSettings
+
+        return PanelSettings.load().uefn_project_root.strip()
+    except Exception:
+        return ""
+
+
+def _open_project_root() -> str:
+    root = _open_project_setting()
+    return _normalize_project_root(root) if root else ""
+
+
+def current_project_root() -> str:
+    """The project a call works in, spelled as Ducky stores it: the calling agent's own
+    (Ducky started it there), else the project open in Ducky now. Oct 21 2026: Claude Code's
+    Ducky tools kept reading and writing Roguelike, the project open when the shared tool
+    server started, after the person had switched to ExampleProject1."""
+    try:
+        from backend.workspace import identity
+
+        ctx = identity.current()
+    except Exception:
+        ctx = None
+    own = str((getattr(ctx, "extra", None) or {}).get("project_root") or "").strip()
+    if own:
+        return own
+    env_root = os.environ.get("UEFN_DUCKY_PROJECT_ROOT", "").strip()
+    if env_root and _started_by_ducky():
+        return env_root
+    return _open_project_setting() or env_root
+
+
 def _configured_project_roots() -> list[str]:
     """Project roots from the calling agent, env or panel settings (fallback when VS Code folders unset)."""
     calling = _calling_agent_roots()
     if calling:
         return calling
+    if not _started_by_ducky():
+        open_root = _open_project_root()
+        if open_root:
+            try:
+                from frontend.settings import workspace_folders
+
+                folders = workspace_folders(open_root)
+            except Exception:
+                folders = [open_root]
+            return list(dict.fromkeys(os.path.realpath(os.path.abspath(f)) for f in [*folders, open_root]))
     roots: list[str] = []
     for key in ("UEFN_VSCODE_WORKSPACE_FOLDERS",):
         raw = os.environ.get(key, "").strip()
@@ -803,18 +854,20 @@ def _resolve_workspace_path_unchecked(relative_or_absolute: str) -> str:
         for recent in recents:
             if _is_under_root(full, recent):
                 return full
-        from backend.workspace.run_folders import granted
+        from backend.workspace.run_folders import ask_to_lend, granted
 
-        lent = granted()  # folders the workflow step this agent is doing names
+        lent = granted()  # a workflow step's folders, and ones the person allowed this chat
         for folder in lent:
             if _is_under_root(full, folder):
                 return full
+        refusal = ask_to_lend(full)  # the person's Allow/Deny card for this folder
+        if not refusal:
+            return full
         allowed = list(dict.fromkeys([*roots, *recents, *lent]))
         # Name the allowed folders: a model told only "outside" retries the same path for turns.
         raise ValueError(
-            f"Path is outside allowed workspace folders: {relative_or_absolute!r}. Ducky's file tools "
-            f"reach only the person's Ducky projects: {'; '.join(allowed)}. Do not retry this path "
-            "in any spelling; tell the person their folder is outside their Ducky projects."
+            f"Path is outside allowed workspace folders: {relative_or_absolute!r}. {refusal} "
+            f"Ducky's file tools reach: {'; '.join(allowed)}. Do not retry this path in any spelling."
         )
     primary = roots[0]
     full = os.path.realpath(os.path.abspath(os.path.join(primary, p)))

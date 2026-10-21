@@ -73,3 +73,48 @@ def test_held_messages_are_handed_over_once(monkeypatch) -> None:
     monkeypatch.setattr(am, "_pending_agent_messages", {"c3": ["one", "two"]})
     assert am.take_pending_agent_messages("c3") == ["one", "two"]
     assert am.take_pending_agent_messages("c3") == []
+
+
+def test_an_agent_waiting_on_a_busy_chat_queues_instead_of_replacing_its_turn(monkeypatch) -> None:
+    # Oct 21 2026: a lead's sends cancelled its busy member's turn four times in a row.
+    monkeypatch.setattr(am, "is_agent_running", lambda cid: True)
+    sent: list[dict] = []
+    monkeypatch.setattr(am, "run_message", lambda cid, text, mode, model, **kw: sent.append(kw) or "queued")
+    out = am.run_message_and_wait("member", "next task", queue_if_busy=True, _local=True)
+    assert out["status"] == "queued" and out["error"] == am.BUSY_QUEUED
+    assert sent[0]["queue_if_busy"] is True and not sent[0].get("force")
+
+
+def test_the_bridge_asks_the_panel_which_chats_run_and_stops_them_there(monkeypatch, tmp_path) -> None:
+    # Oct 21 2026: from the MCP bridge a Codex lead saw its busy member as idle and sent all its
+    # parallel work into it, and ducky_agent_stop stopped nothing: the agents run in the panel.
+    from backend.panel import rpc
+    from frontend.ui_web import panel_httpd
+
+    monkeypatch.setattr(panel_httpd, "_server", None)
+    monkeypatch.setattr(panel_httpd, "_root", None)
+    monkeypatch.setattr(panel_httpd, "PANEL_UI_HTTP_PORT", 0)
+    monkeypatch.setattr(panel_httpd, "verify_panel_dist", lambda _root: None)
+    panel_httpd.start_panel_ui_server(tmp_path)
+    server = panel_httpd._server
+    monkeypatch.setattr(rpc, "_RPC_URL", f"http://127.0.0.1:{server.server_address[1]}/__panel_rpc")
+    asked: list[str] = []
+
+    def panel_state(cancel="", by_user=True):
+        asked.append(cancel)
+        return {"running": [] if cancel else ["member"], "parents": {"member": "lead"}}
+
+    monkeypatch.setattr(am, "run_state", panel_state)
+    monkeypatch.setattr(am, "_panel_runs_cache", (float("-inf"), None))
+    try:
+        assert not am.is_agent_running("member")  # not the bridge: this process's own runs
+        assert asked == []
+        monkeypatch.setenv("UEFN_DUCKY_MCP_BRIDGE", "1")
+        assert am.is_agent_running("member") and am.list_running_agents() == ["member"]
+        assert am.linked_children_of("lead") == ["member"] and am.linked_parent_of("member") == "lead"
+        assert asked == [""]  # one question, kept for a second
+        am.cancel_agent("member")
+        assert asked == ["", "member"] and not am.is_agent_running("member")
+    finally:
+        server.shutdown()
+        server.server_close()

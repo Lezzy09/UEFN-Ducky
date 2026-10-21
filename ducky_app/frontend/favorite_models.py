@@ -463,6 +463,25 @@ def _first_api_model() -> ResolveOk | None:
     return None
 
 
+def _same_agent_model(result: ResolveErr, settings: Any) -> ResolveOk | None:
+    """A Default Model its coding agent no longer offers: stay on that agent, whose own login
+    pays, with its Auto model (else the first it offers). Oct 21 2026: Codex stopped listing
+    gpt-6-astra and every new chat quietly moved to another gateway's fallback model."""
+    selection = parse_selection(result.requested or "")
+    if selection is None or not selection.is_coding_agent:
+        return None
+    models = _available_agent_models(settings, backend=selection.backend).get(selection.backend)
+    if not models:
+        return None  # the agent itself is gone: a gateway's fallback model it is
+    model = "auto" if "auto" in models else sorted(models)[0]
+    return ResolveOk(
+        coding_agent=selection.coding_agent,
+        model=model,
+        provider="",
+        selection=FavoriteSelection(backend=selection.backend, model_id=model),
+    )
+
+
 def chat_model_choice(settings: Any, keep_agent: bool = False) -> tuple[ResolveOk | None, str]:
     """The model a chat with none takes: the Default Model, else a gateway's fallback model.
 
@@ -475,6 +494,9 @@ def chat_model_choice(settings: Any, keep_agent: bool = False) -> tuple[ResolveO
     result = resolve_model_strict(None, settings)
     if isinstance(result, ResolveOk) and result.model and not (keep_agent and result.coding_agent != "ducky"):
         return result, ""
+    same_agent = None if keep_agent or not isinstance(result, ResolveErr) else _same_agent_model(result, settings)
+    if same_agent is not None:
+        return same_agent, ""
     fallback = fallback_selection() or (_first_api_model() if keep_agent else None)
     if fallback is not None:
         return fallback, ""

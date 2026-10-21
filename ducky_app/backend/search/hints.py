@@ -75,6 +75,27 @@ def _focus(text: str) -> str:
     return text
 
 
+_TEAMWORK = re.compile(r"\b(teams?|group|lead|leads|leader|swarm|together|parallel|same time|delegate|split)\b", re.I)
+
+
+def _duckies_named(text: str) -> str:
+    """A request about working together names ducky roles as duckies: "a team of 2 Verse
+    Coders" is a team of duckies, not Verse's game teams. Oct 21 2026: that hint sent a lead
+    to verse/sys_teams. A request with no teamwork in it ("as a level designer…") is left be."""
+    if not _TEAMWORK.search(text):
+        return text
+    try:
+        from frontend.agent_profiles import list_agent_profiles_available
+
+        names = {str(p.get("name") or "").strip() for p in list_agent_profiles_available()} - {""}
+    except Exception:  # noqa: BLE001
+        return text
+    if not names:
+        return text
+    roles = "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
+    return re.sub(rf"\b(?:{roles})s?\b", lambda m: f"ducky {m.group(0)}", text, flags=re.I)
+
+
 def _sent_by_ducky(text: str) -> bool:
     """A plan step or nudge Ducky sends ("[Ducky] Your task…"), or a workflow step's prompt.
 
@@ -96,6 +117,7 @@ def skill_hint(user_text: str, *, conv: Any = None, limit: int = 3) -> str:
     text = " ".join((user_text or "").split())
     if len(text) < MIN_TEXT or _sent_by_ducky(text):
         return ""
+    text = _duckies_named(text)
     try:
         from backend.search import indexer, query
 

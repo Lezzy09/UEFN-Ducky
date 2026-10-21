@@ -248,6 +248,18 @@ def test_no_hint_for_chit_chat(chat: str) -> None:
     assert hints.skill_hint(chat) == ""
 
 
+def test_a_team_of_ducky_roles_is_searched_as_duckies(monkeypatch) -> None:
+    # Oct 21 2026: "Make a small team of 2 Verse Coders and lead it" hinted verse/sys_teams
+    # (game teams), and the lead read it before building its team of duckies.
+    monkeypatch.setattr("frontend.agent_profiles.list_agent_profiles_available",
+                        lambda: [{"name": "Verse Coder"}, {"name": "Level Designer"}])
+    assert hints._duckies_named("Make a small team of 2 Verse Coders and lead it.") == (
+        "Make a small team of 2 ducky Verse Coders and lead it.")
+    assert hints._duckies_named("As a level designer I want a bigger arena") == (
+        "As a level designer I want a bigger arena")  # no teamwork: left be
+    assert hints._duckies_named("Create teams of 4 players in Verse") == "Create teams of 4 players in Verse"
+
+
 def test_hint_respects_the_chats_denied_packs() -> None:
     _pack()
 

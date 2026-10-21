@@ -139,8 +139,11 @@ class _Repository:
 # A folder outside git has no history to diff against, and Codex reports an apply_patch
 # edit only after it landed, so a file first seen then had no "before" (no card, no
 # Changes entry). Its text files are snapshotted when the turn starts instead.
+# Hidden folders (".git", ".ducky", ".venv" …) are never walked either: Oct 21 2026 a UEFN
+# island's ".lore/mutable" (Lore's store, ~20,000 binary files) filled the file cap and every
+# Codex turn opened each of them, 13 s before launch and 0.5 s again after every tool call.
 _FOLDER_SKIP_DIRS = frozenset({
-    ".git", ".ducky", "node_modules", "__pycache__", ".venv", "venv",
+    "node_modules", "__pycache__", "venv",
     "Intermediate", "Saved", "DerivedDataCache", "Binaries", "__ExternalActors__", "__ExternalObjects__",
 })
 _BINARY_SUFFIXES = frozenset({
@@ -184,7 +187,7 @@ class _Folder:
                     if entry.is_symlink():
                         continue
                     if entry.is_dir(follow_symlinks=False):
-                        if entry.name not in _FOLDER_SKIP_DIRS:
+                        if entry.name not in _FOLDER_SKIP_DIRS and not entry.name.startswith("."):
                             stack.append(Path(entry.path))
                         continue
                     if Path(entry.name).suffix.lower() in _BINARY_SUFFIXES:

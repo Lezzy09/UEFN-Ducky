@@ -65,8 +65,12 @@ def project_memory_get(name: str, project: str = "", pretty: bool = False) -> st
     root = _read_root(project)
     entry = read_entry(name, root)
     if entry is None:
-        known = ", ".join(e["name"] for e in list_entries(root)[:30]) or "(none)"
-        raise ValueError(f"No memory entry named {name!r} in this project. Known entries: {known}")
+        # An answer, not a failure: a missing entry raised, and models retried it in a loop.
+        known = [e["name"] for e in list_entries(root)[:30]]
+        return tool_json({
+            "found": False, "name": name, "known": known,
+            "hint": "No entry by that name. Use one of known, or go on without it; asking again won't find it.",
+        }, pretty=pretty)
     return tool_json(entry, pretty=pretty)
 
 

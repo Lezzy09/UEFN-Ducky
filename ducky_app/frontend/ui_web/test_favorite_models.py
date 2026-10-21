@@ -443,6 +443,18 @@ def test_chat_model_choice_prefers_the_default_then_a_gateway_fallback(monkeypat
     choice, error = fm.chat_model_choice(SimpleNamespace(default_model="codex:gpt-6-luna"))
     assert (choice.coding_agent, choice.model, error) == ("codex", "gpt-6-luna", "")
 
+    # Oct 21 2026: Codex stopped listing gpt-6-astra and new chats quietly moved to another
+    # gateway. A Default Model its agent no longer offers stays on that agent: Auto, else
+    # the first model it offers.
+    choice, error = fm.chat_model_choice(SimpleNamespace(default_model="codex:gpt-6-astra"))
+    assert (choice.coding_agent, choice.model, error) == ("codex", "gpt-6-luna", "")
+    monkeypatch.setattr("frontend.favorite_models._available_agent_models",
+                        lambda _s, **_k: {"codex": {"gpt-6-luna", "auto"}})
+    choice, _ = fm.chat_model_choice(SimpleNamespace(default_model="codex:gpt-6-astra"))
+    assert (choice.coding_agent, choice.model) == ("codex", "auto")
+
+    # Codex itself gone: a gateway's fallback model.
+    monkeypatch.setattr("frontend.favorite_models._available_agent_models", lambda _s, **_k: {})
     choice, error = fm.chat_model_choice(SimpleNamespace(default_model="codex:gpt-6-astra"))
     assert choice is fallback and error == ""
 

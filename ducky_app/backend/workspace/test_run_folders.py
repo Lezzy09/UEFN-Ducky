@@ -91,3 +91,44 @@ def test_the_step_s_agent_reads_and_writes_the_lent_folder_and_no_one_else(out: 
             identity.reset(token)
     finally:
         release()
+
+
+def test_an_agent_reaching_outside_the_projects_asks_the_person_for_that_folder(out: Path, monkeypatch) -> None:
+    # Oct 21 2026: agents told people they had "no permission" for a file the person had just
+    # asked them to change: the file tools refused every path outside the projects outright.
+    from backend.bridge import client
+    from backend.tools.panel import permission_prompt
+
+    project = out.parent / "Island"
+    project.mkdir()
+    (out.parent / ".hidden").mkdir()
+    monkeypatch.delenv("UEFN_VSCODE_WORKSPACE_FOLDERS", raising=False)
+    monkeypatch.setenv("UEFN_DUCKY_PROJECT_ROOT", str(project))
+    monkeypatch.setattr("frontend.ui_web.recent_projects.load_recent_projects", lambda: [])
+    monkeypatch.setattr(permission_prompt, "_chat_agent", lambda conv_id: "codex")
+    answers: list[tuple[str, str]] = [("always", "")]
+    cards: list[dict] = []
+
+    def ask(card, tool_name):
+        cards.append(card)
+        return answers.pop(0)
+
+    monkeypatch.setattr(permission_prompt, "_ask", ask)
+    new_file = out / "sub" / "notes.txt"  # sub is new: the card names the folder that exists
+    token = _as("chat-a")
+    try:
+        assert client.resolve_workspace_path(str(new_file)) == os.path.realpath(new_file)
+        assert client.resolve_workspace_path(str(out / "other.txt"))  # remembered for this chat
+        assert [c["rule"] for c in cards] == ["folder:" + os.path.realpath(out)]
+        with pytest.raises(ValueError, match="never opens"):  # never even asked
+            client.resolve_workspace_path(str(out.parent / ".hidden" / "key.txt"))
+        assert len(cards) == 1
+    finally:
+        identity.reset(token)
+    answers.append(("deny", "use the project"))
+    token = _as("chat-b")  # each chat asks for itself
+    try:
+        with pytest.raises(ValueError, match="said no .* use the project"):
+            client.resolve_workspace_path(str(new_file))
+    finally:
+        identity.reset(token)

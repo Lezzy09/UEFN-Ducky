@@ -75,3 +75,25 @@ def test_a_shared_server_call_uses_its_agents_project(monkeypatch, tmp_path: Pat
         identity.reset(token)
     # A call without an agent project (an older adapter) keeps the server's own roots.
     assert client.workspace_roots() == [str(started_in.resolve())]
+
+
+def test_an_ide_agent_follows_the_project_open_in_ducky(monkeypatch, tmp_path: Path) -> None:
+    # Oct 21 2026: Claude Code's Ducky tools kept reading and writing Roguelike, the project
+    # open when the shared tool server started, after the person had opened ExampleProject1.
+    from backend.memory.project import resolve_project_root
+
+    started_in, open_now = tmp_path / "Roguelike", tmp_path / "ExampleProject1"
+    started_in.mkdir()
+    open_now.mkdir()
+    monkeypatch.setenv("UEFN_DUCKY_PROJECT_ROOT", str(started_in))  # set when the server started
+    monkeypatch.setenv("UEFN_VSCODE_WORKSPACE_FOLDERS", f'["{started_in.as_posix()}"]')
+    monkeypatch.delenv("DUCKY_CONV_ID", raising=False)
+    monkeypatch.delenv("DUCKY_RUN_ID", raising=False)
+    monkeypatch.setattr(client, "_open_project_setting", lambda: str(open_now))  # Ducky's header
+    assert client.workspace_roots() == [str(open_now.resolve())]
+    assert client.resolve_workspace_path("notes.txt") == str((open_now / "notes.txt").resolve())
+    assert resolve_project_root() == str(open_now)  # its memory too
+    # An agent Ducky started keeps the project it was started in.
+    monkeypatch.setenv("DUCKY_CONV_ID", "member")
+    assert client.workspace_roots() == [str(started_in.resolve())]
+    assert resolve_project_root() == str(started_in)

@@ -835,6 +835,7 @@ def start_panel_ui_server(dist_root: Path) -> str:
                                 parent=str(payload.get("parent_conv_id") or ""),
                                 attachments=attachments,
                                 started_by=None if payload.get("started_by") is None else str(payload.get("started_by")),
+                                queue_if_busy=bool(payload.get("queue_if_busy")),
                                 _local=True,
                             )
                             self._send_json(200, outcome)
@@ -921,6 +922,14 @@ def start_panel_ui_server(dist_root: Path) -> str:
                         self._send_json(200, {"result": {
                             "blocked": ui_rpc.question_gate(conv_id, _RPC_HANDLER_WAIT_S)
                         }})
+                        return
+                    if method == "agent_runs":
+                        # The MCP bridge asks which chats run here (and may stop one).
+                        from frontend.ui_web.agent_modes import run_state
+
+                        self._send_json(200, {"result": run_state(
+                            str(params.get("cancel") or "").strip(), bool(params.get("by_user", True))
+                        )})
                         return
                     push = get_panel_push()
                     if push is None:

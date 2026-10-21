@@ -64,6 +64,9 @@ OLLAMA_STREAM_TIMEOUT_SEC = 1800
 # The model polling ducky_get_status 5x in a row is the pathology this stops.
 _MAX_IDENTICAL_RESULT_CALLS = 2  # block once this many prior calls returned the same result
 _MAX_SIGNATURE_CALLS = 4  # hard cap on identical (tool, args) calls even if results jitter
+# Steps in a row whose every call the guard blocked: the model is looping, so the turn ends.
+# Oct 21 2026: one agent made 604 blocked project_memory_get calls, a model call each.
+_MAX_BLOCKED_STEPS = 3
 _MAX_HEAVY_TOOLS_PER_STEP = 1  # one wire/spawn/save per LLM tool-call batch — editor freezes otherwise
 
 
@@ -125,6 +128,14 @@ def _repeat_guard_message(name: str, count: int) -> str:
         "If you were polling for the listener/editor to come online, it will not on its own — stop "
         "polling and proceed. If the blocker is something only the user can do (open or add a "
         "project, press a dialog, approve a change), call `ducky_ask_user` once and end the turn."
+    )
+
+
+def _looping_stop_message(name: str) -> str:
+    """What the person reads when a turn ends because the model only repeated blocked calls."""
+    return (
+        f"I stopped here: I kept repeating `{name}` and it kept giving the same answer, so going "
+        "on would only cost time. Tell me what to change or how you'd like me to go on."
     )
 
 
@@ -999,6 +1010,8 @@ class AgentRunner:
             pass
 
         turn = 0
+        blocked_steps = 0
+        turn_started = time.time()
         while True:
             if bridge.is_set():
                 yield _cancelled_event(assistant_blocks, assistant_text, turn_text, turn_thinking, total_usage)
@@ -1210,6 +1223,7 @@ class AgentRunner:
             from backend.bridge.serial import BUSY_HINT, HEAVY_MCP_TOOLS
 
             heavy_executed = 0
+            guarded: list[str] = []
             # The rename unblocks the other task tools of the same turn (require_self_name).
             pending_records.sort(key=lambda r: effective_tool_name(r.name, r.arguments) != "ducky_rename_self")
             for rec in pending_records:
@@ -1257,6 +1271,7 @@ class AgentRunner:
                 )
                 asked_again = asked.blocks(call_name)
                 if identical_tail or len(prior) >= _MAX_SIGNATURE_CALLS or asked_again:
+                    guarded.append(call_name)
                     if asked_again:
                         nudge, hint = asked.message(), "asked already"
                     else:
@@ -1380,6 +1395,21 @@ class AgentRunner:
                 except Exception:
                     pass
 
+            blocked_steps = blocked_steps + 1 if len(guarded) == len(pending_records) else 0
+            if blocked_steps >= _MAX_BLOCKED_STEPS:
+                stop = _looping_stop_message(guarded[-1])
+                assistant_blocks.append({"type": "text", "text": stop})
+                try:
+                    from frontend import usage_stats
+
+                    usage_stats.stuck("ducky", time.time() - turn_started)
+                except Exception:
+                    pass
+                yield AgentEvent(kind="done", usage=total_usage, assistant_message={
+                    "role": "assistant", "content": stop, "blocks": assistant_blocks,
+                    "ts": time.time(), "usage": total_usage,
+                })
+                return
             assistant_text = ""
             turn += 1
 

@@ -112,16 +112,20 @@ def grant(conv_id: str, folders: list[str], seconds: float) -> Callable[[], None
     return release
 
 
-def granted(conv_id: str = "") -> list[str]:
-    """Folders lent to this chat right now (the calling agent's chat when not given)."""
-    if not conv_id:
-        try:
-            from backend.workspace import identity
+def _calling_conv() -> str:
+    try:
+        from backend.workspace import identity
 
-            ctx = identity.resolve_context()
-        except Exception:
-            ctx = None
-        conv_id = str(getattr(ctx, "conv_id", "") or "")
+        ctx = identity.resolve_context()
+    except Exception:
+        ctx = None
+    return str(getattr(ctx, "conv_id", "") or "")
+
+
+def granted(conv_id: str = "") -> list[str]:
+    """Folders lent to this chat right now (the calling agent's chat when not given): a
+    workflow step's, and the ones the person allowed for it (ask_to_lend)."""
+    conv_id = conv_id or _calling_conv()
     if not conv_id:
         return []
     now = time.time()
@@ -129,7 +133,44 @@ def granted(conv_id: str = "") -> list[str]:
     for row in _load().values():
         if isinstance(row, dict) and row.get("conv_id") == conv_id and float(row.get("until") or 0) > now:
             out += [str(f) for f in row.get("folders") or [] if f and str(f) not in out]
+    try:
+        from backend.tools.panel.permission_prompt import approved_folders
+
+        out += [f for f in approved_folders(conv_id) if f not in out]
+    except Exception:
+        pass
     return out
+
+
+# "Allow once" lends the folder this long: the read and the write the agent asked for.
+_ASKED_LEND_S = 120.0
+
+
+def _nearest_folder(path: str) -> str:
+    """``path`` when it is a folder, else its closest existing parent: a new file in a new
+    subfolder asks for the folder that is already there."""
+    p = Path(path)
+    while not p.is_dir() and p.parent != p:
+        p = p.parent
+    return str(p)
+
+
+def ask_to_lend(path: str) -> str:
+    """An agent's file tool reached ``path``, outside the person's Ducky projects: ask the
+    person whether its chat may use that folder. "" when it may now, else why not."""
+    conv_id = _calling_conv()
+    if not conv_id:
+        return "Tell the person their folder is outside their Ducky projects."
+    folder = usable_folder(_nearest_folder(path))
+    if not folder:
+        return ("Ducky never opens system, app-data, hidden or whole-user folders. Ask the person to "
+                "put the file in one of their projects or a normal folder, such as one in Documents.")
+    from backend.tools.panel.permission_prompt import approve_outside_folder
+
+    refusal = approve_outside_folder(conv_id, folder, path)
+    if not refusal:
+        grant(conv_id, [folder], _ASKED_LEND_S)
+    return refusal
 
 
 def is_granted_root(root: str, conv_id: str = "") -> bool:

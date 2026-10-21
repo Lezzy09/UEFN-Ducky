@@ -105,6 +105,35 @@ def test_busy_member_or_caller_gets_a_numbered_copy(monkeypatch, busy, excluded)
     assert out["reused"] is False and out["member"]["member_conv_id"] == "m2"
 
 
+def test_an_agent_inviting_a_second_ducky_of_a_profile_gets_a_numbered_copy(monkeypatch):
+    # Oct 21 2026: a lead asked for 2 Verse Coders; the invite refused the second one.
+    member = {"member_conv_id": "m1", "profile_id": "verse-coder", "name": "Verse Coder", "ducky_name": "Verse Coder"}
+    group = SimpleNamespace(id="hub", is_group=True, leader_conv_id="m1", group_members=[member], folder_id="f1")
+    monkeypatch.setattr("frontend.agent_profiles.get_agent_profile", lambda pid: _PROFILE)
+    monkeypatch.setattr(pa, "load_conversation", lambda cid, *a, **k: group)
+    monkeypatch.setattr(pa.PanelSettings, "load", staticmethod(lambda: SimpleNamespace(agent_api_keys=[])))
+    monkeypatch.setattr(pa, "resolve_model_selection", lambda favorites, settings: None)
+    chosen = SimpleNamespace(model="gpt-6-luna", provider="", coding_agent="codex")
+    monkeypatch.setattr("frontend.favorite_models.allow_create_without_model", lambda result: chosen)
+    monkeypatch.setattr("frontend.favorite_models.refuse_paid_api_for_agent", lambda result, settings: chosen)
+    monkeypatch.setattr("frontend.ui_web.group_orchestrator._group_folder_id", lambda gid: "f1")
+    titles: list[str] = []
+
+    class Made(Exception):
+        pass
+
+    def create(settings, folder_id, **kw):
+        titles.append(kw["title"])
+        raise Made
+
+    monkeypatch.setattr(pa, "create_conversation", create)
+    api = _api()
+    assert api.group_invite("hub", "verse-coder")["error"] == "That ducky is already in this group"  # the UI
+    with pytest.raises(Made):
+        api.group_invite("hub", "verse-coder", for_agent=True)
+    assert titles == ["Verse Coder 2"]
+
+
 def test_spawn_from_a_group_member_joins_that_group(monkeypatch):
     from backend.tools.panel import ducky_panel
 

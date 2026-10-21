@@ -176,6 +176,8 @@ def test_a_message_to_a_chat_with_no_model_waits_and_runs_once_one_is_picked(ext
     assert _wait_for(lambda: external_turns.turns == [("member", "build the parser")])
     assert agent_modes.held_for_model("member") == 0
     assert agent_modes.release_held_for_model("member") == 0
+    # The run ends after its turn is recorded; a busy machine showed it to the next test.
+    assert _wait_for(lambda: agent_modes.list_running_agents() == [])
 
 
 def test_a_model_on_a_gateway_that_isnt_connected_says_which_and_offers_connect(external_turns, monkeypatch):

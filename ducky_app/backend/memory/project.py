@@ -34,7 +34,15 @@ _MAIN_FILE = "MEMORY.md"
 
 
 def resolve_project_root(explicit: str = "") -> str:
-    return (explicit or env_str("PROJECT_ROOT")).strip()
+    """``explicit``, else the project this call works in (backend.bridge.client)."""
+    if (explicit or "").strip():
+        return explicit.strip()
+    try:
+        from backend.bridge.client import current_project_root
+
+        return current_project_root()
+    except Exception:
+        return env_str("PROJECT_ROOT").strip()
 
 
 def memory_dir(project_root: str = "", *, for_write: bool = False) -> Path:

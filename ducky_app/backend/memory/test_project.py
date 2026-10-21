@@ -299,8 +299,8 @@ def test_writes_own_project_reads_any(two_projects):
     assert "team index 7" in got["content"]
 
     # Default read scope is the active project.
-    with pytest.raises(ValueError, match="Known entries"):
-        project_memory_get("projb-fact")
+    miss = json.loads(project_memory_get("projb-fact"))
+    assert miss["found"] is False and miss["known"] == ["proja-fact"]
 
 
 def test_tools_roundtrip_active_project(two_projects):
@@ -360,6 +360,20 @@ def test_read_chat_cross_project(two_projects):
         assert ctx["scope"] == "cross_project_summary"
         assert ctx["message_count"] == 1
         assert ctx["last_messages"][0]["content"] == "other-project knowledge"
+
+
+def test_get_of_a_missing_entry_answers_not_found(isolated_appdata, tmp_path, monkeypatch):
+    # Oct 21 2026: a missing entry raised, and one agent retried it 604 times.
+    from backend.memory.project import save_entry
+    from backend.tools.uefn.memory import project_memory_get
+
+    root = tmp_path / "Proj"
+    root.mkdir()
+    monkeypatch.setenv("UEFN_DUCKY_PROJECT_ROOT", str(root))
+    save_entry("device-naming", "Use kebab-case labels.", description="labels", project_root=str(root))
+    miss = json.loads(project_memory_get("device-namez"))
+    assert miss["found"] is False and miss["known"] == ["device-naming"]
+    assert "kebab-case" in json.loads(project_memory_get("device-naming"))["content"]
 
 
 def test_resolve_project_arg_unknown_raises(isolated_appdata, monkeypatch):

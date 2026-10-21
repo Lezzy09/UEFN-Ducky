@@ -142,6 +142,20 @@ def reclaim_stale_panel_process() -> bool:
     return reclaimed
 
 
+def _panel_answers(port: int, timeout_s: float = 3.0) -> bool:
+    """Whatever listens on the panel port answers HTTP (any status): it is alive, maybe busy."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=timeout_s):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def reclaim_panel_port(port: int) -> bool:
     """Close a stuck Ducky still listening on the panel port (not the one in ``panel.pid``).
 
@@ -160,6 +174,11 @@ def reclaim_panel_port(port: int) -> bool:
             if c.status == psutil.CONN_LISTEN and c.laddr and c.laddr.port == int(port) and c.pid
         ]
     except Exception:
+        return False
+    # Only a copy that doesn't answer is stuck. Oct 21 2026: a Ducky started with another
+    # AppData (no panel.pid of its own, so no hand-off) killed the person's live panel,
+    # busy for a few seconds, mid-run; it ended with no crash trace.
+    if listeners and _panel_answers(int(port)):
         return False
     closed = False
     for pid in listeners:

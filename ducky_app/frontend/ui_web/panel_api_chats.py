@@ -66,6 +66,16 @@ def _sync_composer_selection(conv_id: str, model: str, coding_agent: str = "") -
         _pa.save_conversation(conv)
 
 
+def _copy_name(profile: dict[str, Any], members: list[dict[str, Any]]) -> str:
+    """The next free copy name for a profile already seated in a group: "Verse Coder 2"."""
+    base = str(profile.get("name") or "").strip() or "Ducky"
+    taken = {str(m.get(key) or "").strip() for m in members for key in ("name", "ducky_name")}
+    n = 2
+    while f"{base} {n}" in taken:
+        n += 1
+    return f"{base} {n}"
+
+
 class PanelApiChatsMixin:
     @staticmethod
     def _folder_sidebar_row(
@@ -607,19 +617,7 @@ class PanelApiChatsMixin:
                     "group_members": members,
                     "leader_conv_id": (getattr(group, "leader_conv_id", None) or "").strip(),
                 }
-        base = str(profile.get("name") or "").strip() or "Ducky"
-        copy = ""
-        if same:
-            taken = {
-                str(m.get(key) or "").strip()
-                for m in members
-                for key in ("name", "ducky_name")
-            }
-            n = 2
-            copy = f"{base} {n}"
-            while copy in taken:
-                n += 1
-                copy = f"{base} {n}"
+        copy = _copy_name(profile, members) if same else ""
         seated = self.group_invite(
             group_id, pid, model=model, write_allowed=write_allowed, name=copy, for_agent=for_agent
         )
@@ -684,10 +682,13 @@ class PanelApiChatsMixin:
             return {"ok": False, "error": f"Unknown ducky profile: {profile_id}"}
         existing = group_members(group)
         pid = str(profile.get("id") or profile_id).strip()
-        # A copy name ("Verse Coder 2") is how a busy profile gets a second seat.
-        # The UI invite passes no name and still refuses a duplicate.
+        # A copy name ("Verse Coder 2") is how a profile gets a second seat. The UI invite
+        # passes no name and still refuses a duplicate; an agent asking for a second one
+        # gets the copy (Oct 21 2026: a lead asked for 2 Verse Coders and was refused).
         if not (name or "").strip() and any(m.get("profile_id") == pid for m in existing):
-            return {"ok": False, "error": "That ducky is already in this group"}
+            if not for_agent:
+                return {"ok": False, "error": "That ducky is already in this group"}
+            name = _copy_name(profile, existing)
         settings = _pa.PanelSettings.load()
         override = (model or "").strip()
         favorites = [override] if override else profile.get("favorite_models")

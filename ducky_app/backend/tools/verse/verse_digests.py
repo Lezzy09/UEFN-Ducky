@@ -120,35 +120,20 @@ _DISCOVERY_TTL_S = 30.0
 
 
 def _project_name() -> str:
-    for key in ("UEFN_DUCKY_PROJECT_ROOT",):
-        raw = (os.environ.get(key) or "").strip()
-        if raw:
-            return os.path.basename(os.path.realpath(raw).rstrip("\\/"))
-    try:
-        from frontend.settings import PanelSettings
-
-        root = PanelSettings.load().uefn_project_root.strip()
-        if root:
-            return os.path.basename(os.path.realpath(root).rstrip("\\/"))
-    except Exception:
-        pass
-    return ""
+    root = _current_root()
+    return os.path.basename(os.path.realpath(root).rstrip("\\/")) if root else ""
 
 
 def _project_root() -> str:
-    for key in ("UEFN_DUCKY_PROJECT_ROOT",):
-        raw = (os.environ.get(key) or "").strip()
-        if raw and os.path.isdir(raw):
-            return os.path.realpath(raw)
-    try:
-        from frontend.settings import PanelSettings
+    root = _current_root()
+    return os.path.realpath(root) if root and os.path.isdir(root) else ""
 
-        root = PanelSettings.load().uefn_project_root.strip()
-        if root and os.path.isdir(root):
-            return os.path.realpath(root)
-    except Exception:
-        pass
-    return ""
+
+def _current_root() -> str:
+    """The calling agent's project, else the one open in Ducky (backend.bridge.client)."""
+    from backend.bridge.client import current_project_root
+
+    return current_project_root()
 
 
 def _saved_verse_names(project_name: str = "") -> list[str]:

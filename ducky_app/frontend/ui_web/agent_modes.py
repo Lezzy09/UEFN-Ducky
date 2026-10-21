@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import time
 import uuid
@@ -495,7 +496,7 @@ def _with_admission(fn):
     return admitted
 
 
-def is_agent_running(conv_id: str) -> bool:
+def _running_here(conv_id: str) -> bool:
     with _admission_lock:
         if conv_id in _admissions:
             return True
@@ -505,18 +506,68 @@ def is_agent_running(conv_id: str) -> bool:
     return session._thread.is_alive()
 
 
+# The MCP bridge (Codex / Claude Code tool calls) runs no agents; the panel does. From the
+# bridge, "is it running", "stop it" and "who started it" ask the panel (Oct 21 2026: a
+# Codex lead saw its busy member as idle, sent all its parallel work into that one chat,
+# and ducky_agent_stop stopped nothing).
+_PANEL_RUNS_TTL_S = 1.0
+_NO_PANEL_TTL_S = 10.0
+_panel_runs_cache: tuple[float, dict[str, Any] | None] = (float("-inf"), None)
+
+
+def _panel_runs(cancel: str = "", by_user: bool = True) -> dict[str, Any] | None:
+    """The panel's runs ({running, parents}) asked from the MCP bridge; None = use this
+    process's own (it is the panel, or no panel is open and the bridge runs turns itself)."""
+    global _panel_runs_cache
+    if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") != "1" or not _in_bridge_process():
+        return None
+    at, state = _panel_runs_cache
+    if not cancel and time.monotonic() - at < (_PANEL_RUNS_TTL_S if state else _NO_PANEL_TTL_S):
+        return state
+    from backend.panel.rpc import panel_rpc
+
+    out = panel_rpc("agent_runs", {"cancel": cancel, "by_user": by_user}, timeout=5.0)
+    state = out if isinstance(out, dict) and isinstance(out.get("running"), list) else None
+    _panel_runs_cache = (time.monotonic(), state)
+    return state
+
+
+def run_state(cancel: str = "", by_user: bool = True) -> dict[str, Any]:
+    """This process's runs for the bridge's ``agent_runs`` request, after an optional stop."""
+    if cancel:
+        _cancel_here(cancel, by_user=by_user)
+    return {"running": _running_here_all(), "parents": dict(_linked_parents)}
+
+
+def _running_here_all() -> list[str]:
+    with _admission_lock:
+        candidates = set(_sessions) | set(_admissions)
+        return [cid for cid in candidates if _running_here(cid)]
+
+
+def is_agent_running(conv_id: str) -> bool:
+    panel = _panel_runs()
+    if panel is not None:
+        return conv_id in panel["running"]
+    return _running_here(conv_id)
+
+
+def _parents() -> dict[str, str]:
+    panel = _panel_runs()
+    return (panel.get("parents") or {}) if panel is not None else _linked_parents
+
+
 def linked_parent_of(conv_id: str) -> str | None:
-    return _linked_parents.get(conv_id)
+    return _parents().get(conv_id)
 
 
 def linked_children_of(conv_id: str) -> list[str]:
-    return [child for child, parent in _linked_parents.items() if parent == conv_id]
+    return [child for child, parent in _parents().items() if parent == conv_id]
 
 
 def list_running_agents() -> list[str]:
-    with _admission_lock:
-        candidates = set(_sessions) | set(_admissions)
-        return [cid for cid in candidates if is_agent_running(cid)]
+    panel = _panel_runs()
+    return list(panel["running"]) if panel is not None else _running_here_all()
 
 
 def running_turn_settings(conv_id: str) -> dict[str, str]:
@@ -740,6 +791,12 @@ def cancel_agent(conv_id: str | None = None, *, by_user: bool = True) -> None:
     not a Stop, so the chat stays free for automatic work and nobody is told it was stopped
     (Oct 12 2026: a recycle's fresh-session message told the lead "stopped by the user", and
     the lead stood its team down)."""
+    if conv_id and _panel_runs(cancel=conv_id, by_user=by_user) is not None:
+        return  # the panel runs it and stopped it
+    _cancel_here(conv_id, by_user=by_user)
+
+
+def _cancel_here(conv_id: str | None = None, *, by_user: bool = True) -> None:
     targets: list[str] = []
     if conv_id:
         targets.append(conv_id)
@@ -856,12 +913,17 @@ def _push_tool_done(push: PushFn, conv_id: str, rec: Any) -> None:
     except Exception:
         pass
     try:
+        from backend.agent.toolsets import effective_tool_name
         from frontend import usage_stats
 
-        usage_stats.tool_done(
-            str(rec.name or "tool"), ok=status in ("", "success", "ok"), duration_ms=float(ms),
-            conv_id=conv_id, args=args,
-        )
+        # A call the repeat guard blocked never ran: it is not a failed tool call (Oct 21
+        # 2026: 604 "failed" project_memory_get were one looping agent). ducky_call_tool counts
+        # as the tool it ran, so a failure names the tool that failed.
+        if str(raw_result.get("hint") or "") not in ("repeat-call guard", "asked already"):
+            usage_stats.tool_done(
+                effective_tool_name(str(rec.name or "tool"), args), ok=status in ("", "success", "ok"),
+                duration_ms=float(ms), conv_id=conv_id, args=args,
+            )
     except Exception:
         pass
     push(
@@ -1155,12 +1217,16 @@ def run_message_and_wait(
     parent: str = "",
     attachments: list[dict[str, Any]] | None = None,
     started_by: str | None = None,
+    queue_if_busy: bool = False,
     _local: bool = False,
 ) -> dict[str, Any]:
     """Send a message, run the target chat's agent, and block until done or timeout.
 
     started_by: the chat whose "Allow everything" covers this run ('' = none). None keeps
-    what the chat had, unless ``parent`` names the chat that sent the work."""
+    what the chat had, unless ``parent`` names the chat that sent the work.
+    queue_if_busy (another agent sends it): a busy chat keeps its turn and runs this message
+    after it ({"status": "queued"}). Without it the new message replaces the running turn,
+    as a person's follow-up does."""
     if not _local and _in_bridge_process():
         resp = _post_panel_run(
             {
@@ -1169,6 +1235,7 @@ def run_message_and_wait(
                 "mode": mode,
                 "model": model,
                 "wait": True,
+                "queue_if_busy": bool(queue_if_busy),
                 "timeout_sec": float(timeout_sec),
                 "cancel_on_timeout": bool(cancel_on_timeout),
                 # Carry the spawning chat so the panel nests the child under it.
@@ -1201,6 +1268,13 @@ def run_message_and_wait(
             "Cannot wait for a reply in the chat you are currently running in. "
             "Use wait_for_reply=false or target a different conv_id."
         )
+    # Oct 21 2026: a lead's sends cancelled its busy member's turn four times in a row.
+    if queue_if_busy and is_agent_running(conv_id):
+        started = run_message(conv_id, text, mode, model, parent=parent, started_by=started_by,
+                              attachments=attachments, queue_if_busy=True)
+        if started == "queued":
+            return {"status": "queued", "conv_id": conv_id, "error": BUSY_QUEUED}
+        return {"status": "running", "conv_id": conv_id, "run_id": started}
 
     done = threading.Event()
     result: dict[str, Any] = {"status": "pending", "conv_id": conv_id}
@@ -1310,6 +1384,8 @@ def run_message_and_wait(
 # Messages sent to a chat that had no model and none to take (no usable Default Model,
 # no gateway fallback model): kept until the person picks a model, then run in order.
 HELD_FOR_MODEL = "held_for_model"
+BUSY_QUEUED = ("That chat is still working on its own turn, so your message waits and runs right "
+               "after it. Don't send it again.")
 _held_messages: dict[str, list[dict[str, Any]]] = {}
 _held_lock = threading.Lock()
 _HELD_MAX = 10

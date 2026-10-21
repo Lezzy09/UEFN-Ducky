@@ -353,6 +353,18 @@ def test_binary_assets_and_ducky_or_build_folders_are_not_edits(env, tmp_path):
     assert ledger.list_runs(project_root=str(root)) == []
 
 
+def test_hidden_folders_like_lore_are_never_walked(env, tmp_path):
+    # Oct 21 2026: an island's .lore/mutable (Lore's store, ~20,000 binary files) filled the
+    # file cap, and every Codex turn opened each of them: 13 s before launch.
+    _, ledger, ctx = env
+    root = plain_project(tmp_path)
+    (root / ".lore" / "mutable").mkdir(parents=True)
+    (root / ".lore" / "mutable" / "a1b2c3").write_bytes(b"\x00lore object")
+    (root / ".lore" / "notes.txt").write_text("text, still hidden\n", encoding="utf-8")
+    tracker = TurnFileChanges(str(root), ctx, ledger)
+    assert set(tracker.folders[root.resolve()].stats) == {"Content/Verse/game.verse"}
+
+
 def test_the_whole_profile_or_a_drive_is_never_snapshotted():
     from backend.agent.coding_agents.file_changes import _folder_worth_snapshotting
 
