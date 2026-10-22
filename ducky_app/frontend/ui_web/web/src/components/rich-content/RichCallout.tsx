@@ -1,5 +1,6 @@
 import { Icons } from "../../icons/Icons";
 import type { OpenFileHandler, RichCalloutTone } from "../../types/richContent";
+import { RichCodeBlock } from "./RichCodeBlock";
 import { RichInline } from "./RichInline";
 
 interface RichCalloutProps {
@@ -29,7 +30,32 @@ export function RichCallout({ tone, text, title, onOpenFile }: RichCalloutProps)
         <CalloutIcon tone={tone} />
         {label}
       </div>
-      <div className="rich-callout-body"><RichInline text={text} onOpenFile={onOpenFile} /></div>
+      <div className="rich-callout-body">
+        {calloutParts(text).map((part, i) =>
+          part.code != null ? (
+            <RichCodeBlock key={i} text={part.code} language={part.language} />
+          ) : (
+            <RichInline key={i} text={part.text} onOpenFile={onOpenFile} />
+          ),
+        )}
+      </div>
     </div>
   );
+}
+
+/** A fenced block in a callout is a code block of its own, never one inline chip holding
+ *  every line (a "push from your terminal" tip showed both commands as one centred name). */
+function calloutParts(text: string): Array<{ text: string; code?: string; language?: string }> {
+  const out: Array<{ text: string; code?: string; language?: string }> = [];
+  const fence = /```([\w+#.-]*)[^\S\n]*\n([\s\S]*?)\n?```/g;
+  let at = 0;
+  for (const m of text.matchAll(fence)) {
+    const before = text.slice(at, m.index).trim();
+    if (before) out.push({ text: before });
+    out.push({ text: "", code: m[2], language: m[1] || undefined });
+    at = (m.index ?? 0) + m[0].length;
+  }
+  const rest = text.slice(at).trim();
+  if (rest || !out.length) out.push({ text: rest });
+  return out;
 }

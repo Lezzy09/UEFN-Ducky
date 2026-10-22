@@ -364,9 +364,9 @@ button.rich-ref:focus-visible,
 .rich-blockquote {
   margin: 0 0 14px;
   padding: 8px 14px;
-  border-left: 3px solid var(--blue);
+  border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--chat-border-color, var(--border)));
   background: color-mix(in srgb, var(--blue) 4%, transparent);
-  border-radius: 0 var(--chat-block-radius, var(--radius-sm)) var(--chat-block-radius, var(--radius-sm)) 0;
+  border-radius: var(--chat-block-radius, var(--radius-sm));
   color: var(--chat-body-color, var(--fg-dim));
 }
 
@@ -498,7 +498,6 @@ button.rich-ref:focus-visible,
   line-height: 1.7;
   border: 1px solid var(--chat-border-color, var(--border));
   background: color-mix(in srgb, var(--fg) 4%, transparent);
-  border-left: 3px solid var(--rich-callout-accent);
 }
 
 .rich-callout-title {

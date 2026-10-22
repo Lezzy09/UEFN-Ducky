@@ -133,6 +133,16 @@ describe("rich reply rendering", () => {
     expect(container.querySelector("pre")?.textContent).toContain("print('hello')");
   });
 
+  it("draws a fenced block inside a callout as a code block, not one name chip", () => {
+    const text = "> [!TIP] Push from your own terminal\n> ```powershell\n> cd A; git push\n> cd B; git push\n> ```";
+    const { container } = render(<MarkdownContent text={text} />);
+    const callout = container.querySelector(".rich-callout");
+    expect(callout?.querySelectorAll(".rich-code--block")).toHaveLength(1);
+    expect(callout?.querySelector("button.rich-ref")).toBeNull();
+    expect(callout?.textContent).toContain("cd A; git push");
+    expect(callout?.textContent).toContain("cd B; git push");
+  });
+
   it("opens a Verse chip and still shows hover info for names with no location", () => {
     const onOpenFile = vi.fn();
     const { container, getByLabelText } = render(
