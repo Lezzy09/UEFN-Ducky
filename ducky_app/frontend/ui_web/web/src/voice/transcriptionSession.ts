@@ -752,6 +752,8 @@ function createWindowsTranscriptionSession(kind: "batch" | "streaming"): Transcr
   /** stop() pressed — no interim, still deliver the last finals. */
   let stopping = false;
   let ended: (() => void) | null = null;
+  /** The last final, as plain words: a guess for that phrase that lands after it is stale. */
+  let lastFinal = "";
 
   const setState = (next: TranscriptionState) => handlers.onStateChange?.(next);
 
@@ -763,12 +765,20 @@ function createWindowsTranscriptionSession(kind: "batch" | "streaming"): Transcr
   const dispatch = (ev: WinSttEvent) => {
     if (closed) return;
     switch (ev.t) {
-      case "interim":
-        if (!stopping) handlers.onInterim?.(String(ev.text || ""));
+      case "interim": {
+        if (stopping) return;
+        const text = String(ev.text || "");
+        // Windows raises guesses and results on separate events, so a guess for the
+        // phrase just confirmed can arrive after it and would show those words twice.
+        if (lastFinal && lastFinal.startsWith(plainWords(text))) return;
+        lastFinal = "";
+        handlers.onInterim?.(text);
         return;
+      }
       case "final": {
         handlers.onInterim?.("");
         const text = String(ev.text || "").trim();
+        lastFinal = plainWords(text);
         if (text) handlers.onFinal?.(text);
         return;
       }
@@ -839,6 +849,7 @@ function createWindowsTranscriptionSession(kind: "batch" | "streaming"): Transcr
         void api.voice_win_stt_cancel?.(res.session);
         return;
       }
+      lastFinal = "";
       sid = res.session;
       cursor = typeof res.cursor === "number" ? res.cursor : 0;
       setState("listening");
@@ -871,6 +882,20 @@ function createWindowsTranscriptionSession(kind: "batch" | "streaming"): Transcr
       setState("idle");
     },
   };
+}
+
+/** Lowercase words without punctuation, so "make a door" matches the final "Make a door." */
+function plainWords(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s']/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Android's recognizer repeats earlier phrases in continuous mode; one phrase per run there. */
+function isAndroid(): boolean {
+  return typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent || "");
 }
 
 function webSpeechMessage(code: string): SpeechError {
@@ -912,7 +937,8 @@ function createWebSpeechTranscriptionSession(kind: "batch" | "streaming"): Trans
   };
 
   const bind = (speech: BrowserSpeechRec) => {
-    speech.continuous = true;
+    // Android: single-phrase runs; onend below starts the next one.
+    speech.continuous = !isAndroid();
     speech.interimResults = true;
     speech.lang = langTag();
     speech.onspeechstart = () => handlers.onSpeechStarted?.();

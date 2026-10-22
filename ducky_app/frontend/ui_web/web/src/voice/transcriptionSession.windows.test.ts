@@ -91,6 +91,28 @@ describe("Windows dictation session", () => {
     expect(states[states.length - 1]).toBe("idle");
   });
 
+  it("drops a guess that lands after its phrase was confirmed", async () => {
+    const interims: string[] = [];
+    const finals: string[] = [];
+    const session = createBatchTranscriptionSession();
+    queue.push({
+      ok: true,
+      events: [
+        { t: "interim", sid: "s1", text: "make a door" },
+        { t: "final", sid: "s1", text: "Make a door." },
+        { t: "interim", sid: "s1", text: "make a door" },
+        { t: "interim", sid: "s1", text: "that opens" },
+      ],
+      cursor: 4,
+      active: true,
+    });
+    await session.start({ onInterim: (t) => interims.push(t), onFinal: (t) => finals.push(t) });
+    await flush();
+    expect(finals).toEqual(["Make a door."]);
+    expect(interims).toEqual(["make a door", "", "that opens"]);
+    session.abort();
+  });
+
   it("turns the Windows privacy block into a fixable error", async () => {
     startResult = { ok: false, code: "speech_privacy", error: "Windows speech is off." };
     const session = createBatchTranscriptionSession();
