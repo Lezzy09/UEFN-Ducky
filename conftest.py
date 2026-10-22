@@ -44,6 +44,10 @@ os.environ["UEFN_DUCKY_PANEL_PORT"] = str(_panel_test_port + 1)  # panel server 
 # Skill search indexes in a background thread; tests index explicitly (backend/search/indexer.py).
 os.environ.setdefault("DUCKY_SEARCH_AUTOINDEX", "0")
 os.environ["UEFN_DUCKY_PORT"] = str(_panel_test_port)  # bridge's listener default
+# A suite run from a Ducky terminal inherits the running app's version hand-off
+# (its started EXE, the version it was switched from); tests describe their own.
+for _key in ("UEFN_DUCKY_LAUNCHER_EXE", "UEFN_DUCKY_SWITCHED_FROM"):
+    os.environ.pop(_key, None)
 
 
 def _refuse_live_address(address: object) -> None:
