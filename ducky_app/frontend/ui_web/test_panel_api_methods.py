@@ -334,6 +334,7 @@ _PUBLIC_METHODS = frozenset({
     'load_appearance_profile',
     'load_messages',
     'load_verse_diagnostics_cache',
+    'memory_report',
     'minimize_window',
     'move_chats_to_project',
     'move_conversation',
