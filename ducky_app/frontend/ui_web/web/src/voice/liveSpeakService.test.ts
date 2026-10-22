@@ -200,6 +200,17 @@ describe("liveSpeakService", () => {
     );
   });
 
+  it("reads nothing for a chat that is not in live voice", async () => {
+    const { startLiveChat } = await import("./liveSpeakService");
+    startLiveChat("chat-a", { voiceId: "v", speed: 1 });
+    eventHandler?.({ type: "text_delta", conv_id: "chat-b", text: "Found it. Now fixing the border." });
+    eventHandler?.({ type: "tool", conv_id: "chat-b", tool: { name: "workspace_edit_file", arguments: {} } });
+    eventHandler?.({ type: "assistant_done", conv_id: "chat-b", text: "Done." });
+    expect(enqueueAnswerSpeak).not.toHaveBeenCalled();
+    expect(enqueueProcessSpeak).not.toHaveBeenCalled();
+    expect(enqueueFinalSpeak).not.toHaveBeenCalled();
+  });
+
   it("flushes mid-turn assistant text before the next tool", async () => {
     const { startLiveChat } = await import("./liveSpeakService");
     startLiveChat("chat-a", { voiceId: "v", speed: 1 });

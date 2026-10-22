@@ -2723,8 +2723,14 @@
 .agent-activity-group-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 8px 0 4px 2px;
+  margin: 6px 0 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.agent-activity-group-body > * + * {
+  border-top: 1px solid var(--border);
 }
 
 .agent-activity-group-body .tool-execution-card-wrap {
@@ -2733,7 +2739,7 @@
 }
 
 .agent-activity-group-thought {
-  padding: 2px 0 4px;
+  padding: 5px 10px;
   color: var(--fg-dim);
   font-size: 12px;
   line-height: 1.45;
@@ -4538,20 +4544,46 @@
   font-family: var(--font-mono);
 }
 
-/* Thought-process nest: same category cards as standalone (prototype look). */
-.tool-execution-card-shell--embedded {
-  border-radius: 8px;
+/* Inside a tools group every tool is one flat row of a single table: no card of its own,
+   no tint, a line between rows; each row still opens in place. The extra class beats the
+   category colours (same specificity, declared further down). */
+.agent-activity-group-body .tool-execution-card-shell.tool-execution-card-shell--embedded {
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+  font-family: var(--font-ui);
 }
 
-.tool-execution-card-shell--embedded .tool-execution-card-toggle {
-  padding: 10px 12px;
-  gap: 12px;
+.agent-activity-group-body .tool-execution-card-shell--embedded .tool-execution-card-toggle {
+  padding: 5px 10px;
+  gap: 8px;
+  background-color: transparent;
 }
 
-.tool-execution-card-shell--embedded .tool-execution-card-body {
-  padding: 10px 12px 12px;
-  gap: 10px;
-  background: #050505;
+.agent-activity-group-body .tool-execution-card-shell--embedded .tool-execution-card-toggle:hover {
+  background-color: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+
+.agent-activity-group-body .tool-execution-card-shell--embedded .tool-execution-card-toggle-icon-badge {
+  padding: 0;
+  background: transparent;
+}
+
+.agent-activity-group-body .tool-execution-card-shell--embedded .tool-execution-card-toggle-icon-badge svg {
+  width: 13px;
+  height: 13px;
+}
+
+.agent-activity-group-body .tool-execution-card-shell--embedded .tool-execution-card-toggle-name {
+  color: var(--fg-dim);
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
+.agent-activity-group-body .tool-execution-card-shell--embedded .tool-execution-card-body {
+  padding: 8px 10px 10px;
+  gap: 8px;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
 }
 
 .tool-execution-card-shell--running {
