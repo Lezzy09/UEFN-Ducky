@@ -17,11 +17,13 @@ def _fresh_module():
     us._conv_run.clear()
     us._mem_queue.clear()
     us.send_override = None
+    us.registry_override = None
     us._last_uefn_mode = None
     us._install_fresh = False
     us._stop.set()
     yield
     us.send_override = None
+    us.registry_override = None
     us._enabled_cache = None
     us._stop.set()
 
@@ -33,6 +35,9 @@ SAMPLES: dict[str, dict[str, Any]] = {
     "update.installed": {"from": "1.2.400", "to": "1.2.401"},
     "setup.step": {"step": "connect_ai"},
     "setup.first_message": {"within": "later"},
+    "setup.plugin": {"plugin_id": "anthropic", "ok": False},
+    "setup.ai": {"provider": "gemini", "state": "not_logged_in"},
+    "tour.end": {"tour": "app.shell", "how": "skipped", "at": "3"},
     "uefn.connect": {"ok": False, "reason": "port_busy"},
     "uefn.popup_watchdog": {"kind": "save"},
     "agent.login": {"provider": "codex", "ok": True, "reason": "other"},
@@ -173,3 +178,51 @@ def test_debug_state_has_no_event_content() -> None:
     state = us.debug_state()
     assert set(state) == {"enabled", "queued", "thread_alive", "runs_open", "install_id_set"}
     assert state["queued"] == 1
+
+
+def test_setup_steps_and_connect_ai_values() -> None:
+    assert ev.validate("setup.step", {"step": "defaults"}) == {"step": "defaults"}
+    assert ev.validate("setup.step", {"step": "closed"}) == {"step": "closed"}
+    assert ev.validate("setup.ai", {"provider": "claude", "state": "plan"}) == {"provider": "claude", "state": "plan"}
+    assert ev.validate("setup.ai", {"provider": "claude", "state": "my key is sk-123"}) == {"provider": "claude"}
+    assert ev.validate("tour.end", {"tour": "App Shell!", "how": "done", "at": "2"}) == {"how": "done", "at": "2"}
+    assert us.ui_track("setup.ai", {"provider": "codex", "state": "key"})
+    assert us.ui_track("tour.end", {"tour": "chat.composer", "how": "done", "at": "4"})
+    assert us.ui_track("setup.plugin", {"plugin_id": "anthropic", "ok": "yes"}) is False, "backend-only"
+
+
+def test_first_start_takes_over_the_id_setup_made() -> None:
+    us.reset_install_id()
+    setup_id = "ab" * 16
+    us.registry_override = {"InstallId": setup_id, "InstallSince": "1700000000"}
+    assert us.install_id() == setup_id
+    assert us._install_fresh
+    assert us.install_age_s() > 0
+    # The app's id stays the app's from then on, whatever the key says later.
+    us.registry_override["InstallId"] = "cd" * 16
+    assert us.install_id() == setup_id
+
+
+def test_a_bad_setup_id_is_ignored() -> None:
+    us.reset_install_id()
+    us.registry_override = {"InstallId": r"C:\Users\someone"}
+    fresh = us.install_id()
+    assert len(fresh) == 32 and fresh != us.registry_override["InstallId"]
+
+
+def test_the_key_mirrors_the_id_and_the_switch() -> None:
+    us.registry_override = {}
+    us._mirror(True)
+    assert us.registry_override["UsageStats"] == 1
+    assert us.registry_override["InstallId"] == us.install_id()
+    assert int(us.registry_override["InstallSince"]) > 0
+    us.set_enabled(False)
+    assert us.registry_override["UsageStats"] == 0
+    us.set_enabled(True)
+    assert us.registry_override["UsageStats"] == 1
+
+
+def test_no_registry_outside_the_installed_app() -> None:
+    # Source runs and tests (not frozen) never read or write HKCU.
+    assert us._registry_on() is False
+    assert us._reg_read() == {}

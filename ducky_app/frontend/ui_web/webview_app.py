@@ -716,6 +716,12 @@ def _run_panel(api_holder: dict[str, object]) -> None:
         ).start()
     except Exception:
         pass
+    try:
+        from frontend import uninstaller_link
+
+        threading.Thread(target=uninstaller_link.ensure_quietly, name="uninstaller-link", daemon=True).start()
+    except Exception:
+        pass
     # Dev only: native Inspect menu + DevTools. Store EXE stays shipped; ErrorBoundary
     # still calls open_devtools() when someone actually wants Inspector.
     try:

@@ -12,6 +12,17 @@ using System.Web.Script.Serialization;
 
 namespace DuckySetup
 {
+    // A web install step that failed, with the code Setup's anonymous counts report.
+    internal sealed class SetupFailure : InvalidOperationException
+    {
+        public string Code { get; }
+
+        public SetupFailure(string code, string message, Exception? inner = null) : base(message, inner)
+        {
+            Code = code;
+        }
+    }
+
     // The web installer: a Setup built without Setup-engine.exe inside. It asks the
     // Store for the latest release, downloads that release's full Setup, checks its
     // size, SHA-256 and Authenticode signer, then runs it silently with the same
@@ -62,15 +73,23 @@ namespace DuckySetup
             }
             catch (Exception ex) when (ex is WebException || ex is IOException)
             {
-                throw new InvalidOperationException(
+                throw new SetupFailure(
+                    "store_unreachable",
                     "Can't reach the UEFN Ducky Store. Check your internet connection and try again. (" + ex.Message + ")", ex);
             }
-            if (!(new JavaScriptSerializer().DeserializeObject(json) is Dictionary<string, object> envelope))
-                throw new InvalidOperationException("The UEFN Ducky Store sent an answer Setup can't read.");
-            var release = WebRelease.Parse(envelope!);
-            if (!release.Paused)
-                release.InstallerUrl = WebRelease.Absolute(baseUrl, release.InstallerUrl);
-            return release;
+            try
+            {
+                if (!(new JavaScriptSerializer().DeserializeObject(json) is Dictionary<string, object> envelope))
+                    throw new InvalidOperationException("The UEFN Ducky Store sent an answer Setup can't read.");
+                var release = WebRelease.Parse(envelope!);
+                if (!release.Paused)
+                    release.InstallerUrl = WebRelease.Absolute(baseUrl, release.InstallerUrl);
+                return release;
+            }
+            catch (InvalidOperationException ex) when (!(ex is SetupFailure))
+            {
+                throw new SetupFailure("store_answer", ex.Message, ex);
+            }
         }
 
         // Downloads (or reuses) the release's full Setup and returns its path once it
@@ -78,7 +97,8 @@ namespace DuckySetup
         public static string Download(StoreRelease release, Action<long, long>? progress, CancellationToken ct)
         {
             if (release.Paused)
-                throw new InvalidOperationException(
+                throw new SetupFailure(
+                    "paused",
                     "Downloads are paused right now" + (release.PauseReason.Length > 0 ? ": " + release.PauseReason : ".") + " Try again later.");
             Directory.CreateDirectory(DownloadDir);
             var name = WebRelease.FileName(release.Version);
@@ -121,7 +141,8 @@ namespace DuckySetup
                 }
             }
             if (!File.Exists(part) || new FileInfo(part).Length != release.Size)
-                throw new InvalidOperationException(
+                throw new SetupFailure(
+                    "download_failed",
                     "The download didn't finish. Check your internet connection and try again."
                     + (last != null ? " (" + last.Message + ")" : ""), last);
             TryDelete(final);
@@ -186,16 +207,16 @@ namespace DuckySetup
         {
             var info = new FileInfo(path);
             if (!info.Exists || info.Length != release.Size)
-                throw new InvalidOperationException("The download isn't the size the Store said. Try again.");
+                throw new SetupFailure("verify_failed", "The download isn't the size the Store said. Try again.");
             if (!WebRelease.SameSha(Sha256(path), release.Sha256))
-                throw new InvalidOperationException("The download doesn't match the Store's checksum. Try again.");
+                throw new SetupFailure("verify_failed", "The download doesn't match the Store's checksum. Try again.");
             if (!SignatureValid(path))
-                throw new InvalidOperationException("The download isn't signed correctly, so Setup won't run it.");
+                throw new SetupFailure("verify_failed", "The download isn't signed correctly, so Setup won't run it.");
             string subject;
             try { subject = new X509Certificate2(X509Certificate.CreateFromSignedFile(path)).Subject; }
             catch (CryptographicException) { subject = ""; }
             if (!WebRelease.SignerOk(subject))
-                throw new InvalidOperationException("The download isn't signed by UEFN Ducky's publisher, so Setup won't run it.");
+                throw new SetupFailure("verify_failed", "The download isn't signed by UEFN Ducky's publisher, so Setup won't run it.");
         }
 
         static string Sha256(string path)

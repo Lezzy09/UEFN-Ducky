@@ -41,7 +41,7 @@ vi.mock("./ducky/DuckyModelPicker", () => ({
   ),
 }));
 
-const { SetupWizard } = await import("./SetupWizard");
+const { SetupWizard, aiResults } = await import("./SetupWizard");
 
 const PLUGINS: StarterPluginDto[] = [
   { slug: "openai", label: "OpenAI", group: "ai", installed: false },
@@ -384,5 +384,34 @@ describe("SetupWizard", () => {
     expect(screen.queryByRole("button", { name: "Pick a model" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Connect AI" }));
     expect(props.onStep).toHaveBeenCalledWith("ai");
+  });
+});
+
+describe("aiResults (Connect AI at Finish)", () => {
+  const provider = (plugin_id: string) => ({ id: plugin_id, label: plugin_id, kind: "secret" as const, secret_key: plugin_id + "_key", plugin_id });
+  const agent = (over: Record<string, unknown>) => ({ id: "a", label: "A", available: true, status: "", ...over }) as never;
+
+  it("names each AI and how it ended up connected", () => {
+    const providers = [provider("anthropic"), provider("openai"), provider("google"), provider("cursor"), provider("somegateway")];
+    const agents: Record<string, unknown[]> = {
+      anthropic: [agent({ logged_in: true })],
+      openai: [agent({ logged_in: false })],
+      google: [agent({ available: false })],
+      cursor: [],
+      somegateway: [],
+    };
+    const results = aiResults(providers, { cursor_key: true }, (p) => agents[p.plugin_id] as never, true);
+    expect(results).toEqual([
+      { provider: "claude", state: "plan" },
+      { provider: "codex", state: "not_logged_in" },
+      { provider: "gemini", state: "not_installed" },
+      { provider: "cursor", state: "key" },
+      { provider: "other", state: "none" },
+      { provider: "ducky_ai", state: "account" },
+    ]);
+  });
+
+  it("reports Ducky AI as not connected when the PC isn't signed in", () => {
+    expect(aiResults([], {}, () => [], false)).toEqual([{ provider: "ducky_ai", state: "none" }]);
   });
 });

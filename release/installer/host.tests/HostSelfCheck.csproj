@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Console self-check for the Setup host's pure logic (HostArgs.cs, WebRelease.cs).
+  <!-- Console self-check for the Setup host's pure logic (HostArgs.cs, WebRelease.cs, Stats.cs).
        Run: dotnet run with this folder as the project.
-       Never starts an installer or downloads: it only links those two files. -->
+       Never starts an installer or downloads: it only links those files. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
@@ -14,5 +14,6 @@
     <Compile Include="SelfCheck.cs" />
     <Compile Include="..\host\HostArgs.cs" Link="HostArgs.cs" />
     <Compile Include="..\host\WebRelease.cs" Link="WebRelease.cs" />
+    <Compile Include="..\host\Stats.cs" Link="Stats.cs" />
   </ItemGroup>
 </Project>

@@ -8,12 +8,14 @@
 #
 # -Web builds dist\UEFN-Ducky-WebSetup.exe: the same host with no engine inside, which
 # downloads the Store's latest full Setup at install time (release/build_web_setup.py
-# runs this and signs it).
+# runs this and signs it). The same build named "Uninstall UEFN Ducky.exe" (-Out <exe>)
+# is the app's uninstaller.
 param(
     [switch]$EngineOnly,
     [switch]$HostOnly,
     [switch]$Web,
-    [string]$PublicDir = ""
+    [string]$PublicDir = "",
+    [string]$Out = ""
 )
 if ($Web) {
     $EngineOnly = $false
@@ -45,7 +47,7 @@ $Dist = Join-Path $Root "dist"
 $EngineExe = Join-Path $Dist "Setup-engine.exe"
 $SetupExe = Join-Path $Dist "UEFN-Ducky-Setup-$Version.exe"
 if ($Web) {
-    $SetupExe = Join-Path $Dist "UEFN-Ducky-WebSetup.exe"
+    $SetupExe = if ($Out) { $Out } else { Join-Path $Dist "UEFN-Ducky-WebSetup.exe" }
 }
 
 if ($DoEngine) {

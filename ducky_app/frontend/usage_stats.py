@@ -54,6 +54,13 @@ _last_uefn_mode: str | None = None
 # Test seam: the sender; returns True when the batch landed.
 send_override: Callable[[dict[str, Any]], bool] | None = None
 
+# Setup, the web installer and the uninstaller (release/installer/host/Usage.cs) read this
+# PC's id and the switch here, so one PC counts once from download to uninstall. Setup
+# makes the id before the app's first start; the app takes it over and keeps it current.
+REG_KEY = r"Software\UEFN Ducky"
+# Test seam: a dict standing in for that key (None = the real key, frozen app only).
+registry_override: dict[str, Any] | None = None
+
 
 # ----------------------------------------------------------------------------- storage
 
@@ -84,18 +91,102 @@ def _meta_set(key: str, value: str) -> None:
         pass
 
 
+def _registry_on() -> bool:
+    """Only the installed app touches HKCU: never a source run, a test or a sandboxed build."""
+    if registry_override is not None:
+        return True
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return False
+    try:
+        from frontend.ide_apply import auto_apply_skip_reason
+
+        return not auto_apply_skip_reason()
+    except Exception:
+        return False
+
+
+def _reg_read() -> dict[str, Any]:
+    if registry_override is not None:
+        return dict(registry_override)
+    if not _registry_on():
+        return {}
+    import winreg
+
+    out: dict[str, Any] = {}
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_KEY) as key:
+            for name in ("InstallId", "InstallSince", "UsageStats"):
+                try:
+                    out[name] = winreg.QueryValueEx(key, name)[0]
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return out
+
+
+def _reg_write(values: dict[str, Any]) -> None:
+    if registry_override is not None:
+        registry_override.update(values)
+        return
+    if not _registry_on():
+        return
+    import winreg
+
+    try:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, REG_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            for name, value in values.items():
+                if isinstance(value, int):
+                    winreg.SetValueEx(key, name, 0, winreg.REG_DWORD, value)
+                else:
+                    winreg.SetValueEx(key, name, 0, winreg.REG_SZ, str(value))
+    except OSError:
+        pass
+
+
+def _setup_id() -> tuple[str, float] | None:
+    """The id (and its date) Setup made on this PC before the app's first start."""
+    reg = _reg_read()
+    rid = str(reg.get("InstallId") or "").strip().lower()
+    if len(rid) != 32 or any(c not in "0123456789abcdef" for c in rid):
+        return None
+    try:
+        since = float(reg.get("InstallSince") or 0)
+    except (TypeError, ValueError):
+        since = 0.0
+    return rid, since if 0 < since <= time.time() else time.time()
+
+
 def install_id() -> str:
-    """The random install id, made on first use. Never derived from the machine."""
+    """The random install id, made on first use (or Setup's). Never derived from the machine."""
     global _install_fresh
     with _lock:
         existing = _meta_get(META_INSTALL)
         if existing and len(existing) == 32:
             return existing
-        fresh = secrets.token_hex(16)
+        from_setup = _setup_id()
+        fresh, since = from_setup or (secrets.token_hex(16), time.time())
         _meta_set(META_INSTALL, fresh)
-        _meta_set(META_INSTALL_AT, str(time.time()))
+        _meta_set(META_INSTALL_AT, str(since))
         _install_fresh = True
         return fresh
+
+
+def _mirror(on: bool) -> None:
+    """Keep Setup and the uninstaller in step: the switch, and (on) this PC's id."""
+    try:
+        if not _registry_on():
+            return
+        values: dict[str, Any] = {"UsageStats": 1 if on else 0}
+        if on:
+            values["InstallId"] = install_id()
+            try:
+                values["InstallSince"] = str(int(float(_meta_get(META_INSTALL_AT) or time.time())))
+            except (TypeError, ValueError):
+                pass
+        _reg_write(values)
+    except Exception:
+        pass
 
 
 def install_age_s() -> float:
@@ -135,6 +226,7 @@ def set_enabled(flag: bool) -> None:
     _enabled_cache = (time.monotonic(), bool(flag))
     if not flag:
         clear_queue()
+    _mirror(bool(flag))
 
 
 # ----------------------------------------------------------------------------- queue
@@ -332,10 +424,12 @@ def app_opened(boot_total_ms: float | None = None) -> None:
         _opened_at = time.monotonic()
         _boot_total_ms = boot_total_ms
         if not enabled():
+            _mirror(False)
             return
         from frontend import __version__
 
         install_id()
+        _mirror(True)
         last = _meta_get(META_LAST_VERSION) or ""
         if last and last != __version__:
             track("update.installed", **{"from": last, "to": __version__})

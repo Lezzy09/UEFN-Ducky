@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Windows.Forms;
 
 namespace DuckySetup
@@ -12,6 +13,10 @@ namespace DuckySetup
         {
             if (Array.Exists(args, a => a.Equals(Web.CheckSwitch, StringComparison.OrdinalIgnoreCase)))
                 return Web.CheckDownload();
+
+            // "Uninstall UEFN Ducky.exe" (or /UNINSTALL): the uninstaller, run from its own temp copy.
+            if (Uninstall.Requested(args))
+                return RunUninstall(args);
 
             // In-app updates run Setup with /VERYSILENT and wait on this process.
             // That path must never show a window or a message box (nobody is
@@ -51,11 +56,42 @@ namespace DuckySetup
             }
         }
 
+        static int RunUninstall(string[] args)
+        {
+            if (!Uninstall.FromTemp(args))
+                return Uninstall.Relaunch(args);
+            // Its page, WebView2 and profile live in its temp folder, never in AppData.
+            Engine.WorkRoot = Path.GetDirectoryName(Application.ExecutablePath) ?? Path.GetTempPath();
+            if (HostArgs.IsSilent(args))
+                return Uninstall.RunSilent(args);
+            AppDomain.CurrentDomain.AssemblyResolve += ResolveEmbedded;
+            try
+            {
+                Engine.ExtractWebView();
+            }
+            catch (Exception ex) when (ex is InvalidOperationException || ex is IOException || ex is UnauthorizedAccessException)
+            {
+                MessageBox.Show(ex.Message, "Uninstall UEFN Ducky", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return 1;
+            }
+            return GoUninstall();
+        }
+
         static int Go(string[] args)
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new InstallerForm(VersionString()));
+            return Environment.ExitCode;
+        }
+
+        // Its own method, like Go: WebView2 must be on disk before this is compiled.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static int GoUninstall()
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new UninstallForm());
             return Environment.ExitCode;
         }
 

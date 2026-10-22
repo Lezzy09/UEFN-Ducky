@@ -406,6 +406,13 @@ def build_setup(*, require_sign: bool = False, bump: bool = True) -> str:
         cmd.append("--no-bump")
     subprocess.run(cmd, check=True, cwd=str(ROOT))
     version = read_version()
+    # UEFN Ducky's own uninstaller (the Setup host under its uninstall name) goes into the
+    # one-dir build, so Setup installs it and the update pack carries it. Signed builds
+    # only, like the Setup host: unsigned, its extract-and-load trips Defender.
+    if _signing_on():
+        from build_web_setup import build_uninstaller
+
+        build_uninstaller(ROOT / "dist" / f"UEFN-Ducky-{version}")
     # Sign the app EXEs before Inno packs them, so the installed copies are signed.
     cmd = [sys.executable, str(ROOT / "release" / "sign_windows.py")]
     if require_sign:

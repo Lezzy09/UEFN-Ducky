@@ -342,6 +342,19 @@ begin
   Result := True;
 end;
 
+// Apps & features' Uninstall opens UEFN Ducky's own uninstaller (the Setup host
+// installed as "Uninstall UEFN Ducky.exe"): it asks why, then runs this uninstaller
+// silently and shows its progress. QuietUninstallString stays this uninstaller, so
+// scripted uninstalls never see a window. Builds without it keep Inno's entry.
+procedure UseDuckyUninstaller();
+var
+  Exe: string;
+begin
+  Exe := ExpandConstant('{app}\Uninstall UEFN Ducky.exe');
+  if FileExists(Exe) then
+    RegWriteStringValue(HKA, UninstallRegKey, 'UninstallString', '"' + Exe + '"');
+end;
+
 // ssDone is SUCCESS ONLY (never after UAC No / abort). Launch when the
 // checkbox is ticked, or always for silent in-app updates — that is the only
 // relaunch path (frontend/updater.py must not start the panel on failure).
@@ -363,6 +376,7 @@ begin
       RaiseException('The installed panel is incomplete. Please run Setup again.');
     WriteProgress(98, 'Creating shortcuts...');
     AddDuckyToUserPath();
+    UseDuckyUninstaller();
   end;
   if CurStep = ssDone then
   begin

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <title>Uninstall UEFN Ducky</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app" class="app">
+    <div class="glow" aria-hidden="true"></div>
+
+    <div class="win-btns">
+      <button class="win-btn" id="btn-min" type="button" title="Minimize" aria-label="Minimize">
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1 5h8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" /></svg>
+      </button>
+      <button class="win-btn win-btn--close" id="btn-close" type="button" title="Close" aria-label="Close">
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" /></svg>
+      </button>
+    </div>
+
+    <section class="screen screen--form screen--ask" data-screen="ask">
+      <header class="ask-head">
+        <img class="logo logo--sm" src="logo.png" alt="" draggable="false" />
+        <div class="ask-title">
+          <h2>Uninstall UEFN Ducky <span class="pill" id="version"></span></h2>
+          <p class="sub">Sorry to see you go. What made you uninstall? <span class="muted">Optional</span></p>
+        </div>
+      </header>
+      <div class="reasons" id="reasons" role="radiogroup" aria-label="Why are you uninstalling?"></div>
+      <textarea class="ask-text" id="text" maxlength="500" rows="2" spellcheck="true"
+        placeholder="Anything else you'd like to tell us? (optional)"></textarea>
+      <label class="toggle">
+        <input type="checkbox" id="delete-data" />
+        <span class="switch" aria-hidden="true"></span>
+        <span>Also delete my chats, settings and project data</span>
+      </label>
+      <div class="actions actions--row ask-actions">
+        <p class="fine ask-note">Your answer is sent anonymously to the UEFN Ducky team.</p>
+        <button class="btn btn-secondary" id="keep" type="button">Keep UEFN Ducky</button>
+        <button class="btn btn-danger" id="uninstall" type="button">Uninstall</button>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="progress">
+      <div class="parade parade--away" aria-hidden="true">
+        <span class="parade-track">
+          <img class="duck duck--leader" src="duckies/Artist.png" alt="" draggable="false" />
+          <img class="duck duck--mom" src="duckies/cowboy.png" alt="" draggable="false" />
+          <img class="duck duck--boy" src="duckies/hacker.png" alt="" draggable="false" />
+          <img class="duck duck--girl" src="duckies/wizard.png" alt="" draggable="false" />
+        </span>
+      </div>
+      <h2>Uninstalling UEFN Ducky</h2>
+      <p class="sub" id="progress-version"></p>
+      <div class="progress" id="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+        <div class="progress-fill" id="bar"></div>
+        <div class="progress-sweep" aria-hidden="true"></div>
+      </div>
+      <div class="progress-meta">
+        <span id="status">Getting ready…</span>
+        <span class="progress-pct" id="percent"></span>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="done">
+      <div class="badge-wrap">
+        <img class="logo logo--dim" src="logo.png" alt="" draggable="false" />
+        <span class="badge badge--ok" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7.4l2.6 2.6L11 4.6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        </span>
+      </div>
+      <h2>UEFN Ducky is uninstalled</h2>
+      <p class="sub" id="done-sub"></p>
+      <p class="fine">You can install it again any time from uefnducky.org.</p>
+      <div class="actions">
+        <button class="btn btn-primary btn-lg" id="close-done" type="button">Close</button>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="error">
+      <div class="badge-wrap">
+        <img class="logo logo--dim" src="logo.png" alt="" draggable="false" />
+        <span class="badge badge--err" aria-hidden="true">!</span>
+      </div>
+      <h2 id="error-title">Uninstall didn't finish</h2>
+      <p class="sub sub--error" id="error"></p>
+      <div class="actions actions--row">
+        <button class="btn btn-secondary" id="close-error" type="button">Close</button>
+        <button class="btn btn-primary" id="retry" type="button">Try again</button>
+      </div>
+    </section>
+  </div>
+  <script src="uninstall.js"></script>
+</body>
+</html>

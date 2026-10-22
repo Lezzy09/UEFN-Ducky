@@ -243,6 +243,16 @@ def _emit(on_progress: Callable[[dict[str, Any]], None] | None, payload: dict[st
         pass
 
 
+def _count_plugin(slug: str, ok: bool) -> None:
+    """Anonymous count of one setup plugin install and whether it worked (never the error text)."""
+    try:
+        from frontend import usage_stats
+
+        usage_stats.track("setup.plugin", plugin_id=slug, ok=ok)
+    except Exception:
+        pass
+
+
 def _install_missing(on_progress: Callable[[dict[str, Any]], None] | None) -> tuple[list[str], list[str], list[dict[str, str]]]:
     from backend.uefn_plugins.store import is_plugin_installed
     from frontend.duckyos_account import DuckyOSAccountError, store_download_and_install
@@ -287,6 +297,7 @@ def _install_missing(on_progress: Callable[[dict[str, Any]], None] | None) -> tu
 
                     set_uefn_plugin_enabled(slug, True)
                 installed.append(slug)
+                _count_plugin(slug, True)
                 _emit(
                     on_progress,
                     {
@@ -301,6 +312,7 @@ def _install_missing(on_progress: Callable[[dict[str, Any]], None] | None) -> tu
             else:
                 err = str(result.get("error") or "install failed")
                 errors.append({"slug": slug, "error": err, "code": str(result.get("code") or "error")})
+                _count_plugin(slug, False)
                 _emit(
                     on_progress,
                     {
@@ -315,6 +327,7 @@ def _install_missing(on_progress: Callable[[dict[str, Any]], None] | None) -> tu
                 )
         except DuckyOSAccountError as exc:
             errors.append({"slug": slug, "error": exc.message, "code": exc.code or "error"})
+            _count_plugin(slug, False)
             _emit(
                 on_progress,
                 {
@@ -329,6 +342,7 @@ def _install_missing(on_progress: Callable[[dict[str, Any]], None] | None) -> tu
             )
         except Exception as exc:
             errors.append({"slug": slug, "error": str(exc), "code": "error"})
+            _count_plugin(slug, False)
             _emit(
                 on_progress,
                 {

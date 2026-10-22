@@ -5,6 +5,7 @@
  * Completion is persisted externally via setCompletedMap / markCompleted callbacks.
  */
 
+import { usageTrack } from "../hooks/usageTrack";
 import type { WalkthroughDef, WalkthroughRuntimeState, WalkthroughStep } from "./types";
 
 /** Settings list order — Welcome, Chat, then each Settings tour. */
@@ -249,6 +250,8 @@ async function finishTour(reason: "complete" | "skip"): Promise<void> {
   const def = id ? defs.get(id) : undefined;
   const chain = def?.onCompleteStart;
   const persist = def?.persist !== false;
+  // Anonymous count: which tour, finished or skipped, and on which step (1-based).
+  if (id) usageTrack("tour.end", { tour: id, how: reason === "complete" ? "done" : "skipped", at: String(stepIndex + 1) });
   activeTourId = null;
   stepIndex = 0;
   activeResolvedSteps = [];

@@ -30,6 +30,7 @@ namespace DuckySetup.Tests
             Waiting();
             WebFeed();
             WebDownload();
+            Counts();
             Console.WriteLine($"host self-check: {_passed} passed, {_failed} failed");
             return _failed == 0 ? 0 : 1;
         }
@@ -215,6 +216,31 @@ namespace DuckySetup.Tests
 
             var files = new[] { @"C:\d\UEFN-Ducky-Setup-1.2.416.exe", @"C:\d\UEFN-Ducky-Setup-1.2.417.exe", @"C:\d\UEFN-Ducky-Setup-1.2.417.exe.part", @"C:\d\UEFN-Ducky-Setup-1.2.415.exe.part" };
             Check(WebRelease.Stale(files, "UEFN-Ducky-Setup-1.2.417.exe").SequenceEqual(new[] { files[0], files[3] }), "other versions' downloads swept, ours kept");
+        }
+
+        // Stats.cs: what Setup and the uninstaller report; the Store checks the same names.
+        static void Counts()
+        {
+            Check(Stats.Kind(false, false) == "new" && Stats.Kind(false, true) == "reinstall" && Stats.Kind(true, true) == "update" && Stats.Kind(true, false) == "update", "run kinds");
+            Check(Stats.IsInstallId("0123456789abcdef0123456789abcdef"), "lowercase hex id");
+            Check(!Stats.IsInstallId("0123456789ABCDEF0123456789abcdef") && !Stats.IsInstallId("abc") && !Stats.IsInstallId(""), "bad ids refused");
+            var id = Stats.NewInstallId(Enumerable.Range(0, 16).Select(i => (byte)(i * 17)).ToArray());
+            Check(id == "00112233445566778899aabbccddeeff" && Stats.IsInstallId(id), "new id is 32 hex");
+
+            Check(Stats.AgeBucket(-1) == "unknown" && Stats.AgeBucket(3600) == "day0" && Stats.AgeBucket(3 * 86400) == "week1"
+                && Stats.AgeBucket(20 * 86400) == "month1" && Stats.AgeBucket(90 * 86400) == "older", "install age buckets");
+            Check(Stats.TookBucket(30) == "1m" && Stats.TookBucket(200) == "5m" && Stats.TookBucket(900) == "20m" && Stats.TookBucket(5000) == "more", "install time buckets");
+            Check(Stats.ExitCode(0) == "ok" && Stats.ExitCode(5) == "exit_5" && Stats.ExitCode(-2) == "exit_neg", "exit codes");
+            Check(Stats.Outcome(true, true) == "ok" && Stats.Outcome(false, true) == "cancel" && Stats.Outcome(false, false) == "fail", "outcomes");
+            Check(Stats.Reason("bugs") == "bugs" && Stats.Reason("  slow ") == "slow" && Stats.Reason("hacked") == "none" && Stats.Reason(null) == "none", "reasons");
+            Check(Stats.Screen("done") == "done" && Stats.Screen("<b>") == "welcome", "screens");
+            Check(Stats.Os(22631) == "win11" && Stats.Os(19045) == "win10", "Windows version");
+
+            Check(Stats.ExePath("\"C:\\Program Files\\UEFN Ducky\\unins000.exe\" /SILENT") ==@"C:\Program Files\UEFN Ducky\unins000.exe", "quoted uninstall command");
+            Check(Stats.ExePath(@"C:\Apps\unins000.exe /SILENT") == @"C:\Apps\unins000.exe" && Stats.ExePath("") == "" && Stats.ExePath("\"") == "", "plain and empty commands");
+
+            Check(Stats.CleanText("  hi\r\nthere\u0007 ") == "hi\nthere", "control characters dropped, line breaks kept");
+            Check(Stats.CleanText(new string('x', 900)).Length == Stats.TextMax && Stats.CleanText(null) == "", "text capped");
         }
     }
 }

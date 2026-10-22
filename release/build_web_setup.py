@@ -32,6 +32,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PUBLIC = ROOT / "ducky_app" / "frontend" / "ui_web" / "web" / "public"
 OUT = ROOT / "dist" / "UEFN-Ducky-WebSetup.exe"
 SMALL_PUBLIC = ROOT / "dist" / "web-setup-public"
+# The same host under this name is the uninstaller (host/Uninstall.cs); the Inno script
+# and frontend/uninstaller_link.py look for this name.
+UNINSTALLER_NAME = "Uninstall UEFN Ducky.exe"
 
 # The page shows the logo at 92 px and the ducks at up to 56 px; twice that covers
 # 200% displays. The panel's originals are ~350 KB each, most of the EXE.
@@ -101,6 +104,37 @@ def upload(path: Path) -> None:
     print(f"  {base}/api/v1/files/{file['id']}/content  ({file.get('sizeBytes')} bytes, sha256 {file.get('sha256')})")
 
 
+def build_host(out: Path) -> Path:
+    """The engine-less host with small page images, unsigned, written to ``out``."""
+    print("=== Small page images ===")
+    shrink_images(SMALL_PUBLIC)
+    print(f"=== Ducky Setup host (web) -> {out.name} ===")
+    try:
+        subprocess.run(
+            [
+                "powershell", "-ExecutionPolicy", "Bypass",
+                "-File", str(ROOT / "release" / "installer" / "make_release_installer.ps1"),
+                "-Web", "-PublicDir", str(SMALL_PUBLIC), "-Out", str(out),
+            ],
+            check=True,
+            cwd=str(ROOT),
+        )
+    finally:
+        shutil.rmtree(SMALL_PUBLIC, ignore_errors=True)
+    if not out.is_file():
+        raise SystemExit(f"The host build did not produce {out}")
+    return out
+
+
+def build_uninstaller(app_dir: Path) -> Path:
+    """The app's uninstaller: this host as ``Uninstall UEFN Ducky.exe`` in the one-dir build.
+
+    It sits beside UEFN-Ducky.exe, so Setup installs it and the update pack carries it;
+    the caller signs it with the payload EXEs.
+    """
+    return build_host(app_dir / UNINSTALLER_NAME)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--no-sign", action="store_true", help="Skip signing (local try-out; never publish it)")
@@ -110,23 +144,9 @@ def main() -> None:
     if args.upload and args.no_sign:
         raise SystemExit("--upload needs a signed build: drop --no-sign.")
 
-    print("=== Small page images ===")
-    shrink_images(SMALL_PUBLIC)
-    print("=== Ducky Setup host (web) ===")
-    subprocess.run(
-        [
-            "powershell", "-ExecutionPolicy", "Bypass",
-            "-File", str(ROOT / "release" / "installer" / "make_release_installer.ps1"),
-            "-Web", "-PublicDir", str(SMALL_PUBLIC),
-        ],
-        check=True,
-        cwd=str(ROOT),
-    )
-    if not OUT.is_file():
-        raise SystemExit(f"The host build did not produce {OUT}")
+    build_host(OUT)
     if not args.no_sign:
         sign(OUT)
-    shutil.rmtree(SMALL_PUBLIC, ignore_errors=True)
     print(f"Built {OUT.name}: {OUT.stat().st_size:,} bytes")
     if args.check:
         check(OUT)

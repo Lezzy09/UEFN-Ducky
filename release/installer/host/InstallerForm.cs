@@ -1,19 +1,13 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
 using System.IO;
 using System.Threading.Tasks;
-using System.Web.Script.Serialization;
 using System.Windows.Forms;
-using Microsoft.Web.WebView2.Core;
-using Microsoft.Web.WebView2.WinForms;
 
 namespace DuckySetup
 {
-    internal sealed class InstallerForm : Form
+    internal sealed class InstallerForm : DuckyWindow
     {
-        readonly WebView2 _web = new WebView2 { Dock = DockStyle.Fill };
-        readonly JavaScriptSerializer _json = new JavaScriptSerializer();
         readonly string _version;
         ProcessHandle? _running;
         System.Windows.Forms.Timer? _poll;
@@ -24,127 +18,39 @@ namespace DuckySetup
         Task<StoreRelease>? _release;
         System.Threading.CancellationTokenSource? _download;
         string? _downloaded;
+        // This run, for the anonymous counts: new PC / same PC again / over an install.
+        string _kind = "new";
+        string _scope = "user";
+        DateTime _installStarted;
+        bool _cancelled;
+        bool _reported;
+        bool _closeTracked;
+        string _screen = "welcome";
 
         sealed class ProcessHandle
         {
             public System.Diagnostics.Process Proc = null!;
         }
 
-        // Logical size; scaled to the monitor's DPI so the page never gets cramped.
-        static readonly Size BaseSize = new Size(720, 500);
-
-        public InstallerForm(string version)
+        public InstallerForm(string version) : base("UEFN Ducky Setup", "index.html")
         {
             _version = version;
-            Text = "UEFN Ducky Setup";
-            FormBorderStyle = FormBorderStyle.None;
-            MaximizeBox = false; // the page drags the window; a double-click must not maximize it
-            StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = BaseSize;
-            BackColor = Color.FromArgb(10, 10, 10);
-            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
-            catch (Exception) { /* keep the default taskbar icon */ }
-            Controls.Add(_web);
         }
 
-        protected override void OnHandleCreated(EventArgs e)
+        protected override void OnLoad(EventArgs e)
         {
-            base.OnHandleCreated(e);
-            // No title bar, no border: round the corners and drop DWM's 1px
-            // outline (Windows 11; both calls are no-ops on Windows 10).
-            var round = Native.DwmwcpRound;
-            Native.DwmSetWindowAttribute(Handle, Native.DwmwaWindowCornerPreference, ref round, sizeof(int));
-            var none = Native.DwmwaColorNone;
-            Native.DwmSetWindowAttribute(Handle, Native.DwmwaBorderColor, ref none, sizeof(int));
-        }
-
-        protected override void OnDpiChanged(DpiChangedEventArgs e)
-        {
-            base.OnDpiChanged(e);
-            Bounds = e.SuggestedRectangle;
-        }
-
-        protected override CreateParams CreateParams
-        {
-            get
-            {
-                var cp = base.CreateParams;
-                cp.ClassStyle |= 0x00020000; // CS_DROPSHADOW
-                return cp;
-            }
-        }
-
-        protected override async void OnLoad(EventArgs e)
-        {
-            base.OnLoad(e);
             // Ask the Store which version this installs while the page loads.
             if (_isWeb)
                 _release = Task.Run(Web.FetchLatest);
-            var scale = DeviceDpi / 96f;
-            if (scale > 1.01f)
-            {
-                ClientSize = new Size((int)Math.Round(BaseSize.Width * scale), (int)Math.Round(BaseSize.Height * scale));
-                CenterToScreen();
-            }
-            try
-            {
-                await InitWeb();
-            }
-            catch (Exception ex)
-            {
-                var text = ex.ToString();
-                try
-                {
-                    Directory.CreateDirectory(Engine.AppDataRoot);
-                    File.WriteAllText(Path.Combine(Engine.AppDataRoot, "setup-host.log"), text);
-                }
-                catch { /* ignore */ }
-                MessageBox.Show(
-                    this,
-                    "UEFN Ducky Setup could not start the installer window.\n\n" + ex.Message,
-                    "UEFN Ducky Setup",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
-                Environment.ExitCode = 1;
-                Close();
-            }
+            base.OnLoad(e);
         }
 
-        async Task InitWeb()
+        protected override void HandleMessage(string type, Dictionary<string, object> msg)
         {
-            Engine.ExtractUi();
-            var env = await CoreWebView2Environment.CreateAsync(
-                null,
-                Path.Combine(Engine.AppDataRoot, "setup-webview-" + System.Diagnostics.Process.GetCurrentProcess().Id));
-            await _web.EnsureCoreWebView2Async(env);
-            _web.DefaultBackgroundColor = Color.FromArgb(255, 10, 10, 10);
-            _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-            _web.CoreWebView2.Settings.AreDevToolsEnabled = false;
-            _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
-            _web.CoreWebView2.WebMessageReceived += OnMessage;
-            _web.CoreWebView2.SetVirtualHostNameToFolderMapping(
-                "ducky.setup",
-                Engine.UiDir,
-                CoreWebView2HostResourceAccessKind.Allow);
-            _web.CoreWebView2.Navigate("https://ducky.setup/index.html");
-        }
-
-        void OnMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
-        {
-            Dictionary<string, object> msg;
-            try { msg = _json.Deserialize<Dictionary<string, object>>(e.WebMessageAsJson); }
-            catch { return; }
-            var type = Str(msg, "type");
             if (type == "ready") { PostInit(); return; }
-            if (type == "drag")
-            {
-                Native.ReleaseCapture();
-                Native.SendMessage(Handle, Native.WmNcLButtonDown, Native.HtCaption, 0);
-                return;
-            }
-            if (type == "minimize") { WindowState = FormWindowState.Minimized; return; }
             if (type == "quit")
             {
+                TrackClose(Str(msg, "screen"), false);
                 CancelRun();
                 Close();
                 return;
@@ -152,10 +58,17 @@ namespace DuckySetup
             if (type == "pickFolder") { PickFolder(Str(msg, "path")); return; }
             if (type == "diskFree") { PostDisk(Str(msg, "path")); return; }
             if (type == "startInstall") { StartInstall(msg); return; }
-            if (type == "cancel") { CancelRun(); return; }
+            if (type == "cancel")
+            {
+                _cancelled = true;
+                CancelRun();
+                return;
+            }
             if (type == "finish")
             {
-                if (Truthy(msg, "launch"))
+                var launch = Truthy(msg, "launch");
+                TrackClose("done", launch);
+                if (launch)
                     Engine.LaunchApp(_installDir);
                 Close();
             }
@@ -165,6 +78,16 @@ namespace DuckySetup
         {
             var detect = Engine.DetectInstall();
             _installDir = detect.location ?? Engine.UserDir;
+            // An id is kept for a new PC only; over an install the app already has one.
+            Usage.Load(persist: !detect.installed);
+            _kind = Stats.Kind(detect.installed, Usage.HadId);
+            Usage.Track("setup.open", new Dictionary<string, string>
+            {
+                ["kind"] = _kind,
+                ["web"] = _isWeb ? "yes" : "no",
+                ["os"] = Stats.Os(Environment.OSVersion.Version.Build),
+            });
+            _ = Usage.Send();
             // The web installer installs whatever the Store has now; no version shows
             // when the Store can't be reached yet (Install then says why).
             var version = _version;
@@ -224,6 +147,17 @@ namespace DuckySetup
             var allUsers = Truthy(msg, "allUsers");
             var desktop = Truthy(msg, "desktopIcon");
             var isUpgrade = Truthy(msg, "isUpgrade");
+            _scope = allUsers ? "machine" : "user";
+            _screen = "progress";
+            _installStarted = DateTime.UtcNow;
+            _cancelled = false;
+            _reported = false;
+            Usage.Track("setup.install", new Dictionary<string, string>
+            {
+                ["kind"] = _kind,
+                ["scope"] = _scope,
+                ["web"] = _isWeb ? "yes" : "no",
+            });
             Engine.ClearProgress();
             var args = Engine.InteractiveArgs(
                 isUpgrade ? "" : dir,
@@ -246,6 +180,7 @@ namespace DuckySetup
             }
             catch (Exception ex)
             {
+                Report(false, "engine_start");
                 Post(new { type = "installDone", ok = false, error = ex.Message });
                 return;
             }
@@ -257,8 +192,7 @@ namespace DuckySetup
             Task.Run(() => Engine.Wait(proc, path)).ContinueWith(t =>
             {
                 var code = t.IsFaulted ? 1 : t.Result;
-                try { BeginInvoke((Action)(() => FinishInstall(code))); }
-                catch (InvalidOperationException) { /* window already closed */ }
+                OnUi(() => FinishInstall(code));
             });
         }
 
@@ -284,17 +218,20 @@ namespace DuckySetup
             catch (Exception ex)
             {
                 _download = null;
-                var error = ex is OperationCanceledException || cancel.IsCancellationRequested
+                var cancelled = ex is OperationCanceledException || cancel.IsCancellationRequested;
+                var error = cancelled
                     ? "Setup was cancelled."
                     : ex is InvalidOperationException || ex is UnauthorizedAccessException || ex is IOException
                         ? ex.Message
                         : "Setup couldn't download UEFN Ducky. Check your internet connection and try again.";
+                Report(false, cancelled ? "cancelled" : ex is SetupFailure f ? f.Code : "download_failed");
                 Post(new { type = "installDone", ok = false, error });
                 return;
             }
             _download = null;
             if (cancel.IsCancellationRequested)
             {
+                Report(false, "cancelled");
                 Post(new { type = "installDone", ok = false, error = "Setup was cancelled." });
                 return;
             }
@@ -307,6 +244,7 @@ namespace DuckySetup
             }
             catch (Exception ex)
             {
+                Report(false, "engine_start");
                 Post(new { type = "installDone", ok = false, error = ex.Message });
                 return;
             }
@@ -321,12 +259,6 @@ namespace DuckySetup
                 proc.WaitForExit();
                 return proc.ExitCode;
             }).ContinueWith(t => OnUi(() => FinishInstall(t.IsFaulted ? 1 : t.Result)));
-        }
-
-        void OnUi(Action action)
-        {
-            try { BeginInvoke(action); }
-            catch (InvalidOperationException) { /* window already closed */ }
         }
 
         // Stops a download, the downloaded Setup and its engine.
@@ -355,6 +287,7 @@ namespace DuckySetup
             _poll?.Stop();
             PostProgress();
             _running = null;
+            Report(code == 0, _cancelled ? "cancelled" : Stats.ExitCode(code));
             if (code == 0 && _isWeb)
             {
                 Web.Cleanup(_downloaded);
@@ -371,30 +304,48 @@ namespace DuckySetup
                 });
         }
 
-        void Post(object payload)
+        // How one install try ended, counted once per try.
+        void Report(bool ok, string code)
         {
-            if (_web.CoreWebView2 == null) return;
-            _web.CoreWebView2.PostWebMessageAsJson(_json.Serialize(payload));
+            if (_reported)
+                return;
+            _reported = true;
+            _screen = ok ? "done" : "error";
+            Usage.Track("setup.result", new Dictionary<string, string>
+            {
+                ["outcome"] = Stats.Outcome(ok, _cancelled || code == "cancelled"),
+                ["code"] = code,
+                ["kind"] = _kind,
+                ["web"] = _isWeb ? "yes" : "no",
+                ["took"] = Stats.TookBucket((DateTime.UtcNow - _installStarted).TotalSeconds),
+            });
+            _ = Usage.Send();
         }
 
-        static string Str(Dictionary<string, object> msg, string key)
+        // Which screen Setup was closed on, and whether "Open UEFN Ducky" was pressed.
+        void TrackClose(string screen, bool launch)
         {
-            return msg.TryGetValue(key, out var v) && v != null ? Convert.ToString(v) ?? "" : "";
-        }
-
-        static bool Truthy(Dictionary<string, object> msg, string key)
-        {
-            if (!msg.TryGetValue(key, out var v) || v == null) return false;
-            if (v is bool b) return b;
-            var s = Convert.ToString(v);
-            return s == "True" || s == "true" || s == "1";
+            if (_closeTracked)
+                return;
+            _closeTracked = true;
+            Usage.Track("setup.close", new Dictionary<string, string>
+            {
+                ["screen"] = Stats.Screen(screen),
+                ["launch"] = launch ? "yes" : "no",
+            });
+            Usage.SendNow(2000);
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             if (_running != null || _download != null)
+            {
+                _cancelled = true;
+                Report(false, "cancelled");
                 CancelRun();
+            }
             _poll?.Stop();
+            TrackClose(_screen, false);
             base.OnFormClosing(e);
         }
 

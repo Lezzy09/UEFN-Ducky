@@ -10,6 +10,7 @@ import { usePluginContributions, type PluginLlmProvider } from "../hooks/usePlug
 import { installPanelPushBus, subscribePanelPush } from "../hooks/usePanelPushBus";
 import { peekStoreCatalogCache, rememberStoreCatalog } from "../hooks/storeCatalogCache";
 import { refreshModelsCatalog } from "../hooks/modelsCatalogCache";
+import { usageTrack } from "../hooks/usageTrack";
 import { Icons } from "../icons/Icons";
 import type { CodingAgentDto, DuckyOSAccountStatus, DuckyOSStoreItemDto, StarterPluginDto } from "../types/panel";
 import { CodingAgentLoginModal } from "../views/settings/CodingAgentsSection";
@@ -366,6 +367,35 @@ const IDE_BY_PLUGIN: Record<string, { kind: string; label: string }> = {
 /** The Account plugin's provider: Ducky AI, connected by signing this PC in, not by a key. */
 const DUCKY_AI_PLUGIN = "account";
 
+/** A gateway plugin as the anonymous counts name its AI. */
+const AI_NAME: Record<string, string> = { anthropic: "claude", openai: "codex", google: "gemini", cursor: "cursor", ollama: "ollama" };
+
+export type AiResult = { provider: string; state: "plan" | "key" | "account" | "not_logged_in" | "not_installed" | "none" };
+
+/**
+ * How setup left each AI, for the anonymous counts sent at Finish: connected with a plan you
+ * pay for, an API key or the Ducky account, or why not (signed out, not installed, nothing).
+ */
+export function aiResults(
+  providers: PluginLlmProvider[],
+  keySaved: Record<string, boolean>,
+  agentsFor: (p: PluginLlmProvider) => CodingAgentDto[],
+  duckyAi: boolean,
+): AiResult[] {
+  const out: AiResult[] = providers.map((p) => {
+    const agents = agentsFor(p);
+    const states = agents.map(agentConnection);
+    const provider = AI_NAME[p.plugin_id.toLowerCase()] || "other";
+    if (states.some((s) => s === "logged_in" || s === "ready")) return { provider, state: "plan" };
+    if (keySaved[p.secret_key || p.id]) return { provider, state: "key" };
+    if (states.includes("logged_out")) return { provider, state: "not_logged_in" };
+    if (states.length && states.every((s) => s === "missing")) return { provider, state: "not_installed" };
+    return { provider, state: "none" };
+  });
+  out.push({ provider: "ducky_ai", state: duckyAi ? "account" : "none" });
+  return out;
+}
+
 /** Keys, coding agents, MCP hookups, the Ducky account, and the chat providers, kept current. */
 function useConnections() {
   const contrib = usePluginContributions();
@@ -426,7 +456,10 @@ function useConnections() {
     ...(account.logged_in ? ["Ducky AI"] : []),
     ...providers.filter(isConnected).map((p) => p.label),
   ];
-  return { providers, keySaved, agentsFor, ideFor, ides, account, setAccount, isConnected, otherAgents, connectedNames, refresh };
+  return {
+    providers, keySaved, agentsFor, ideFor, ides, account, setAccount, isConnected, otherAgents, connectedNames, refresh,
+    ai: () => aiResults(providers, keySaved, agentsFor, !!account.logged_in),
+  };
 }
 
 /**
@@ -847,8 +880,13 @@ function DefaultsStep({
   installing,
   onInstall,
   onStep,
-}: Pick<SetupWizardProps, "plugins" | "rows" | "installing" | "onInstall" | "onStep">) {
-  const { providers, ideFor, ides, connectedNames } = useConnections();
+  onAi,
+}: Pick<SetupWizardProps, "plugins" | "rows" | "installing" | "onInstall" | "onStep"> & { onAi: (results: AiResult[]) => void }) {
+  const { providers, ideFor, ides, connectedNames, ai } = useConnections();
+  // Kept current for Finish, which sends how each AI ended up.
+  useEffect(() => {
+    onAi(ai());
+  });
   const [model, setModel] = useState("");
   const [loaded, setLoaded] = useState(false);
 
@@ -948,6 +986,7 @@ function DefaultsStep({
 
 export function SetupWizard(props: SetupWizardProps) {
   const { step, onStep, plugins, rows, installing, onInstall, onFinish, onClose } = props;
+  const aiAtFinish = useRef<AiResult[]>([]);
   // Loaded from Welcome on: a fresh catalog (with its icons) can take a while to arrive.
   const items = useStoreItems();
   const missing = plugins.filter((p) => rows[p.slug]?.phase !== "installed");
@@ -1048,7 +1087,14 @@ export function SetupWizard(props: SetupWizardProps) {
     footer = (
       <>
         {back("ai")}
-        <button type="button" className="setup-wizard-btn is-primary" onClick={settled(onFinish)}>
+        <button
+          type="button"
+          className="setup-wizard-btn is-primary"
+          onClick={settled(() => {
+            for (const r of aiAtFinish.current) usageTrack("setup.ai", r);
+            onFinish();
+          })}
+        >
           Finish <Icons.Check />
         </button>
       </>
@@ -1085,7 +1131,14 @@ export function SetupWizard(props: SetupWizardProps) {
           ) : null}
           {step === "ai" ? <AiStep onInstallStep={() => onStep("plugins")} /> : null}
           {step === "defaults" ? (
-            <DefaultsStep plugins={plugins} rows={rows} installing={installing} onInstall={onInstall} onStep={onStep} />
+            <DefaultsStep
+              plugins={plugins}
+              rows={rows}
+              installing={installing}
+              onInstall={onInstall}
+              onStep={onStep}
+              onAi={(r) => (aiAtFinish.current = r)}
+            />
           ) : null}
         </div>
         <footer className="setup-wizard-foot">{footer}</footer>

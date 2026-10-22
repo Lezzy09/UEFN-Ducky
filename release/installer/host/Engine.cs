@@ -18,8 +18,12 @@ namespace DuckySetup
         public static string AppDataRoot =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UEFN-Ducky");
 
-        public static string EngineDir => Path.Combine(AppDataRoot, "setup-engine");
-        public static string UiDir => Path.Combine(AppDataRoot, "setup-ui");
+        // Where the window's page, WebView2 and its profile are unpacked: AppData for
+        // Setup, the uninstaller's own temp folder (so "delete my data" can take all of AppData).
+        public static string WorkRoot = AppDataRoot;
+
+        public static string EngineDir => Path.Combine(WorkRoot, "setup-engine");
+        public static string UiDir => Path.Combine(WorkRoot, "setup-ui");
         public static string ProgressPath => Path.Combine(AppDataRoot, "setup-progress.txt");
         public static string EnginePath => Path.Combine(EngineDir, ExeName);
 
@@ -88,8 +92,8 @@ namespace DuckySetup
         {
             try
             {
-                Directory.CreateDirectory(AppDataRoot);
-                File.WriteAllText(Path.Combine(AppDataRoot, "setup-host.log"), ex.ToString());
+                Directory.CreateDirectory(WorkRoot);
+                File.WriteAllText(Path.Combine(WorkRoot, "setup-host.log"), ex.ToString());
             }
             catch { /* ignore */ }
         }
@@ -239,7 +243,10 @@ namespace DuckySetup
         }
 
         // The installed copy's version ("" when none), shown as "v1.2.342 → v1.2.343".
-        public static string InstalledVersion()
+        public static string InstalledVersion() => UninstallValue("DisplayVersion");
+
+        // One value of the install's uninstall entry ("" when there is none).
+        public static string UninstallValue(string name)
         {
             foreach (var hive in new[] { RegistryHive.CurrentUser, RegistryHive.LocalMachine })
             {
@@ -249,9 +256,9 @@ namespace DuckySetup
                     {
                         using var baseKey = RegistryKey.OpenBaseKey(hive, view);
                         using var key = baseKey.OpenSubKey(UninstallKey);
-                        var version = (key?.GetValue("DisplayVersion") as string ?? "").Trim();
-                        if (version.Length > 0)
-                            return version;
+                        var value = (key?.GetValue(name) as string ?? "").Trim();
+                        if (value.Length > 0)
+                            return value;
                     }
                     catch (Exception)
                     {

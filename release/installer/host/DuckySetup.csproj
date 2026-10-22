@@ -50,6 +50,9 @@
     <EmbeddedResource Include="$(UiDir)\index.html" LogicalName="ui/index.html" />
     <EmbeddedResource Include="$(UiDir)\styles.css" LogicalName="ui/styles.css" />
     <EmbeddedResource Include="$(UiDir)\app.js" LogicalName="ui/app.js" />
+    <!-- The uninstaller's page: the same host started as "Uninstall UEFN Ducky.exe". -->
+    <EmbeddedResource Include="$(UiDir)\uninstall.html" LogicalName="ui/uninstall.html" />
+    <EmbeddedResource Include="$(UiDir)\uninstall.js" LogicalName="ui/uninstall.js" />
     <!-- Inter from the panel's @fontsource package, so Setup never fetches fonts. -->
     <EmbeddedResource Include="$(FontDir)\inter-latin-400-normal.woff2" LogicalName="ui/fonts/inter-latin-400-normal.woff2" />
     <EmbeddedResource Include="$(FontDir)\inter-latin-500-normal.woff2" LogicalName="ui/fonts/inter-latin-500-normal.woff2" />

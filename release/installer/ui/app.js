@@ -187,7 +187,7 @@
     show("error");
   }
 
-  const quit = () => send({ type: "quit" });
+  const quit = () => send({ type: "quit", screen: state.screen });
   const finish = (launch) => send({ type: "finish", launch });
 
   function back() {

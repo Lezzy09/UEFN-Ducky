@@ -31,6 +31,9 @@ MEMORY_MB: Buckets = ((500, "500mb"), (1024, "1gb"), (2048, "2gb"), (None, "more
 INSTALL_AGE_S: Buckets = ((86400, "day0"), (7 * 86400, "week1"), (30 * 86400, "month1"), (None, "older"))
 
 PROVIDERS = ("claude", "codex", "cursor", "ollama", "ducky_ai", "other")
+# The first-run setup's Connect AI step: which AI, and how it ended up connected (or not).
+SETUP_AI_PROVIDERS = ("claude", "codex", "gemini", "cursor", "ollama", "ducky_ai", "other")
+SETUP_AI_STATES = ("plan", "key", "account", "not_logged_in", "not_installed", "none")
 MODEL_FAMILIES = ("claude", "gpt", "gemini", "ollama", "ducky_ai", "other")
 YES_NO = ("yes", "no")
 WHERE = ("agent", "ui", "bridge", "uefn", "store", "sync", "workflow", "other")
@@ -47,8 +50,11 @@ EVENTS: dict[str, dict[str, Any]] = {
     "app.heartbeat": {"uefn_up": YES_NO},
     "app.close": {"uptime": ("bucket", UPTIME_S, "uptime_s")},
     "update.installed": {"from": ("version",), "to": ("version",)},
-    "setup.step": {"step": ("welcome", "plugins", "connect_ai", "done", "skipped")},
+    "setup.step": {"step": ("welcome", "plugins", "connect_ai", "defaults", "done", "closed", "skipped")},
     "setup.first_message": {"within": ("first_session", "later")},
+    "setup.plugin": {"plugin_id": ("slug",), "ok": YES_NO},
+    "setup.ai": {"provider": SETUP_AI_PROVIDERS, "state": SETUP_AI_STATES},
+    "tour.end": {"tour": ("slug",), "how": ("done", "skipped"), "at": ("slug",)},
     "uefn.connect": {"ok": YES_NO, "reason": ("lost", "port_busy", "not_running", "listener_missing", "timeout", "other")},
     "uefn.popup_watchdog": {"kind": ("save", "lone_ok", "other")},
     "agent.login": {"provider": PROVIDERS, "ok": YES_NO, "reason": ("no_cli", "auth", "network", "other")},
@@ -76,7 +82,12 @@ EVENTS: dict[str, dict[str, Any]] = {
 }
 
 # Events the panel UI may report through ``usage_track`` (everything else is backend-only).
-UI_EVENTS = frozenset({"feature.open", "setup.step"})
+UI_EVENTS = frozenset({"feature.open", "setup.step", "setup.ai", "tour.end"})
+
+# Setup, the web installer and the uninstaller (release/installer/host) report setup.open,
+# setup.install, setup.result, setup.close and uninstall.done under the same install id
+# (kept in HKCU\Software\UEFN Ducky, see usage_stats); the Store's list in
+# plugin-uefn-ducky-store src/usage.rs holds those too.
 
 
 def bucket(value: Any, buckets: Buckets) -> str | None:

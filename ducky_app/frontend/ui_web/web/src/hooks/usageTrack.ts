@@ -1,14 +1,16 @@
 import { getApi } from "./usePanelApi";
 
 /**
- * Anonymous usage stats from the UI, fire-and-forget. Only `feature.open` and
- * `setup.step` are accepted by the panel; values are enum labels, never text a
+ * Anonymous usage stats from the UI, fire-and-forget. Only `feature.open`, `setup.step`,
+ * `setup.ai` and `tour.end` are accepted by the panel; values are enum labels, never text a
  * person typed. The switch lives in Settings → Permissions → Anonymous usage stats.
  */
 let lastKey = "";
 let lastAt = 0;
 
-export function usageTrack(name: "feature.open" | "setup.step", props: Record<string, string>): void {
+export type UiUsageEvent = "feature.open" | "setup.step" | "setup.ai" | "tour.end";
+
+export function usageTrack(name: UiUsageEvent, props: Record<string, string>): void {
   try {
     // React may run a state updater twice in development: the same event within
     // half a second counts once.

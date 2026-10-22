@@ -564,6 +564,70 @@ h2 {
   to { transform: scale(1); }
 }
 
+/* ── uninstaller (uninstall.html): why, keep or delete data, then the same progress ── */
+.screen--ask { gap: 12px; padding: 20px 36px 22px; }
+
+.ask-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-right: 72px; /* clear the window buttons */
+}
+.logo--sm { width: 48px; height: 48px; filter: drop-shadow(0 6px 16px rgba(255, 199, 44, 0.18)); }
+.ask-title h2 { display: flex; align-items: center; gap: 8px; font-size: 18px; }
+.ask-title .pill { margin-top: 0; }
+.ask-title .sub { max-width: none; margin-top: 2px; }
+.muted { color: var(--muted); }
+
+.reasons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.reason {
+  align-items: center;
+  gap: 9px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.reason .radio { width: 14px; height: 14px; margin-top: 0; }
+.reason[aria-checked="true"] .radio::after { width: 6px; height: 6px; }
+
+.ask-text {
+  width: 100%;
+  height: 52px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  resize: none;
+  outline: none;
+  user-select: text;
+  transition: border-color 0.15s;
+}
+.ask-text::placeholder { color: var(--muted); }
+.ask-text:focus { border-color: var(--accent); }
+
+.ask-actions { align-items: center; gap: 10px; }
+.ask-note { margin-right: auto; }
+
+.btn-danger {
+  background: #b3261e;
+  border-color: color-mix(in srgb, var(--red) 55%, #b3261e);
+  color: #fff;
+  box-shadow: 0 0 16px color-mix(in srgb, var(--red) 25%, transparent);
+}
+.btn-danger:hover:not(:disabled) { background: #c42b1c; }
+.btn-danger:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+
+/* The ducks waddle the other way while UEFN Ducky is removed. */
+.parade--away { transform: scaleX(-1); }
+
 .hidden { display: none !important; }
 
 @media (prefers-reduced-motion: reduce) {
