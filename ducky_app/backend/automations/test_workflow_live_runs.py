@@ -187,6 +187,40 @@ def test_a_command_typed_into_a_local_workflow_runs_without_asking(events, monke
     assert not runner.typed_command_approved("py -3 -u release/publish_app.py")  # only while its step runs
 
 
+def test_the_terminal_a_run_opened_is_held_until_the_run_ends(events, monkeypatch):
+    """The idle reaper must not close it between steps (Oct 22 2026: closed while an
+    Agent step waited, so the release's next steps found no session)."""
+    from types import SimpleNamespace
+    from backend.tools.panel import ducky_panel
+    from frontend.ui_web.terminal import manager as terminal_manager
+
+    held: list[str] = []
+    released: list[str] = []
+    during: list[list[str]] = []
+
+    def hold(session_id):
+        held.append(session_id)
+        return lambda: released.append(session_id)
+
+    monkeypatch.setattr(terminal_manager, "get_terminal_manager", lambda: SimpleNamespace(hold=hold, kill=lambda *a, **k: {"ok": True}))
+    monkeypatch.setattr(ducky_panel, "_terminal_manager", lambda: SimpleNamespace(
+        run_agent_command=lambda session_id, command, **kw: during.append(list(released)) or {"ok": True, "exit_code": 0, "output_tail": ""},
+        spawn=lambda **kw: {"ok": True, "session_id": "t1"},
+        get_session=lambda _sid: None,
+    ))
+    graph = {"nodes": [
+        {"id": "s", "type": "start.manual", "config": {}},
+        {"id": "terminal", "type": "tool.call", "config": {"name": "ducky_terminal_open", "arguments": {"shell": "bash"}}},
+        _terminal_step("build", {"session_id": "{{nodes.terminal.result.data.session_id}}", "command": "echo build"}),
+        {"id": "e", "type": "flow.end", "config": {}},
+    ], "edges": [{"source": a, "target": b, "kind": "main"} for a, b in (("s", "terminal"), ("terminal", "build"), ("build", "e"))]}
+    wid = str(store.save_workflow({"name": "Held", "graph": graph})["id"])
+    assert runner.run_workflow(wid)["ok"]
+    assert held == ["t1"]
+    assert during == [[]]  # still held while the next step ran
+    assert released == ["t1"]
+
+
 def test_a_shared_workflow_or_a_wired_command_still_asks(monkeypatch):
     from types import SimpleNamespace
     from backend.server import mcp

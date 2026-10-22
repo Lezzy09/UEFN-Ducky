@@ -132,3 +132,15 @@ def test_an_agents_terminal_it_is_done_with_closes_by_itself(mgr, tmp_path):
     # Typing in it counts as use: a terminal someone is working in stays.
     mgr.get_session(working).last_activity = later
     assert mgr.close_idle_agent_terminals(now=later + 60, running=set()) == []
+
+
+def test_a_running_workflows_terminal_stays_until_the_run_lets_go(mgr, tmp_path):
+    # Oct 22 2026: the release workflow's terminal (its group hub's, not a running agent's)
+    # sat quiet while an Agent step waited 12 minutes, the reaper closed it, and every step
+    # after failed with "session not found".
+    release_terminal = _open(mgr, tmp_path, "release-hub")["session_id"]
+    let_go = mgr.hold(release_terminal)
+    later = mgr.get_session(release_terminal).last_activity + manager_module._AGENT_IDLE_CLOSE_S + 1
+    assert mgr.close_idle_agent_terminals(now=later, running=set()) == []
+    let_go()
+    assert mgr.close_idle_agent_terminals(now=later, running=set()) == [release_terminal]

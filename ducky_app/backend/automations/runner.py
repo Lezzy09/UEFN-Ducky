@@ -55,6 +55,8 @@ _END_TYPES = frozenset({"pipeline.finish", "flow.end", "flow.output"})
 _CANCEL: ContextVar[threading.Event | None] = ContextVar("workflow_cancel", default=None)
 _ACTIVE: dict[str, dict[str, threading.Event]] = {}
 _CANCEL_HOOKS: dict[threading.Event, set[Callable[[], None]]] = {}
+# Called when the run ends however it ends (lets go of the terminals it held open).
+_RUN_END: ContextVar[list[Callable[[], None]] | None] = ContextVar("workflow_run_end", default=None)
 _REGISTRY_RUNS: ContextVar[tuple[tuple[str, str], ...]] = ContextVar("workflow_registry_runs", default=())
 _ACTIVE_LOCK = threading.Lock()
 # Live view: the editor lights up the step running now and the wire it came along.
@@ -599,6 +601,8 @@ def run_workflow(
     stack_token = _CALL_STACK.set((*_CALL_STACK.get(), str(wf["id"])))
     cancel = _CANCEL.get() or threading.Event()
     cancel_token = _CANCEL.set(cancel)
+    end_hooks: list[Callable[[], None]] = []
+    end_token = _RUN_END.set(end_hooks)
     wid = str(wf["id"])
     run_id = uuid.uuid4().hex[:12]
     live_token = _LIVE.set((wid, run_id))
@@ -636,6 +640,12 @@ def run_workflow(
         _push({"type": "workflow_run", "id": wid, "run": run_id, "state": "stopped" if stopped else "done" if ok else "error", **({"error": error} if error else {})})
         _LIVE.reset(live_token)
         _CANCEL.reset(cancel_token)
+        _RUN_END.reset(end_token)
+        for hook in end_hooks:
+            try:
+                hook()
+            except Exception:
+                _log.debug("Workflow run-end cleanup failed", exc_info=True)
         if len(_REGISTRY_RUNS.get()) == 1:
             with _ACTIVE_LOCK:
                 _CANCEL_HOOKS.pop(cancel, None)
@@ -2388,6 +2398,11 @@ def _invoke_tool(name: str, arguments: dict[str, Any], node_id: str = "", typed:
         session_id = str(data.get("session_id") or "")
         if session_id:
             _cancel_on_stop(lambda: manager.kill(session_id, push_close=True))
+            # The run's later steps use it: the idle reaper closed it while an Agent step
+            # waited (Oct 22 2026), and every step after failed with "session not found".
+            run_end = _RUN_END.get()
+            if run_end is not None:
+                run_end.append(manager.hold(session_id))
     if isinstance(data, dict) and data.get("ok") is False:
         return {"ok": False, "error": str(data.get("error") or f"{name} failed"), "result": out}
     return {"ok": True, "result": out}

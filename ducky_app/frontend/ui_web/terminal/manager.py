@@ -49,6 +49,8 @@ class TerminalManager:
         self._decided: dict[str, PendingCommand] = {}
         self._reaper: threading.Thread | None = None
         self._reaper_stop = threading.Event()
+        # Terminals a running workflow still needs: never closed as idle until it lets go.
+        self._held: set[str] = set()
         self._push: Callable[[dict[str, Any]], None] | None = None
 
     def set_push(self, push: Callable[[dict[str, Any]], None] | None) -> None:
@@ -178,6 +180,18 @@ class TerminalManager:
             except Exception:
                 pass
 
+    def hold(self, session_id: str) -> Callable[[], None]:
+        """Keep this terminal from the idle reaper while a workflow run goes on; the run
+        calls the returned function when it ends."""
+        with self._lock:
+            self._held.add(session_id)
+
+        def release() -> None:
+            with self._lock:
+                self._held.discard(session_id)
+
+        return release
+
     def close_idle_agent_terminals(
         self,
         *,
@@ -186,8 +200,9 @@ class TerminalManager:
     ) -> list[str]:
         """Close agents' terminals they are done with: the agent is not working (or its chat
         is gone) and the terminal has been quiet for ``_AGENT_IDLE_CLOSE_S``. A terminal running
-        anything, waiting on an Allow card, or where the agent started a background command
-        (a dev server) is kept, and a person's own terminals (no chat) are never closed."""
+        anything, waiting on an Allow card, held by a running workflow, or where the agent
+        started a background command (a dev server) is kept, and a person's own terminals
+        (no chat) are never closed."""
         now = time.time() if now is None else now
         if running is None:
             from frontend.ui_web.agent_modes import list_running_agents
@@ -196,10 +211,12 @@ class TerminalManager:
         with self._lock:
             agents = [(e.session, e.chat) for e in self._sessions.values() if e.chat]
             asked = {p.session_id for p in self._pending.values()}
+            held = set(self._held)
         snapshot = functools.cache(_process_snapshot)
         closed: list[str] = []
         for session, chat in agents:
-            if (chat in running or session.id in asked or getattr(session, "ran_background", False)
+            if (chat in running or session.id in asked or session.id in held
+                    or getattr(session, "ran_background", False)
                     or session.has_running_command(snapshot)):
                 continue
             if now - float(getattr(session, "last_activity", now)) >= _AGENT_IDLE_CLOSE_S:
