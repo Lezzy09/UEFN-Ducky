@@ -103,6 +103,8 @@ _CONTRIBUTIONS: dict[str, Any] = {
     "ide_hookups": [],  # {kind, label, plugin_id}
     "agent_tools": {},  # plugin_id -> {category, tools, intent_pattern?}
     "walkthroughs": [],  # contributes.walkthrough rows (+ plugin_id)
+    # Tabs in the Projects window: {id, label, icon?, rpc, plugin_id}; rpc lists the projects.
+    "project_sources": [],
 }
 # plugin_id -> synthesize(text, voice_id) -> {ok?, audio_base64, mime}
 _TTS_SYNTHESIZERS: dict[str, Any] = {}
@@ -408,6 +410,13 @@ def get_ui_contributions() -> dict[str, Any]:
         if provider_visible(row.get("id"))
     ]
     return out
+
+
+def get_project_sources() -> list[dict[str, Any]]:
+    """Projects-window tabs from enabled plugins (``contributes['project.sources']``)."""
+    with _LOCK:
+        rows = list(_CONTRIBUTIONS.get("project_sources") or [])
+    return [r for r in rows if is_plugin_enabled(str(r.get("plugin_id") or ""))]
 
 
 def get_contributions() -> dict[str, Any]:
@@ -2673,6 +2682,17 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
         entry = normalize_chat_reference(row, pid) if isinstance(row, dict) else None
         if entry:
             _CONTRIBUTIONS["chat_references"].append(entry)
+
+    for source in contributes.get("project.sources") or contributes.get("project_sources") or []:
+        if isinstance(source, dict) and source.get("id") and source.get("rpc"):
+            entry = dict(source)
+            entry["plugin_id"] = pid
+            resolved = _resolve_contrib_icon(entry.get("icon"), root)
+            if resolved:
+                entry["icon"] = resolved
+            else:
+                entry.pop("icon", None)
+            _CONTRIBUTIONS["project_sources"].append(entry)
 
     wt = contributes.get("walkthrough")
     if isinstance(wt, dict) and isinstance(wt.get("steps"), list) and wt.get("steps"):

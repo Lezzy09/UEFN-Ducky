@@ -36,8 +36,8 @@ def test_absolute_path_under_a_recent_project_is_readable(monkeypatch, tmp_path:
     monkeypatch.delenv("UEFN_VSCODE_WORKSPACE_FOLDERS", raising=False)
     monkeypatch.setenv("UEFN_DUCKY_PROJECT_ROOT", str(active))
     monkeypatch.setattr(
-        "frontend.ui_web.recent_projects.load_recent_projects",
-        lambda: [str(active), str(other)],
+        "frontend.ui_web.recent_projects.load_saved_projects",
+        lambda: [(str(active), 0.0), (str(other), 0.0)],
     )
     assert client.resolve_workspace_path(str(verse)) == str(verse.resolve())
     try:

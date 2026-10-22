@@ -5,29 +5,33 @@ import { ProjectSelector } from "./ProjectSelector";
 
 const mocks = vi.hoisted(() => ({
   flush: vi.fn(),
-  api: { list_recent_projects: vi.fn(), set_project_root: vi.fn() },
+  api: { list_recent_projects: vi.fn(), list_known_projects: vi.fn(), set_project_root: vi.fn() },
 }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => mocks.api, isRemote: () => true }));
 vi.mock("../contexts/EditorWorkspaceBridge", () => ({ useOptionalEditorWorkspaceFlush: () => mocks.flush }));
 vi.mock("../contexts/ConfirmModalContext", () => ({ useConfirmModal: () => ({ confirm: vi.fn() }) }));
 vi.mock("./TruncatedText", () => ({ TruncatedText: ({ children }: { children: React.ReactNode }) => <span>{children}</span> }));
-vi.mock("./DropdownPanel", () => ({ DropdownPanel: ({ open, children }: { open: boolean; children: React.ReactNode }) => open ? <div>{children}</div> : null }));
 
 beforeEach(() => {
   mocks.flush.mockReset().mockResolvedValue(undefined);
   mocks.api.list_recent_projects.mockReset().mockResolvedValue(["B", "C", "D"].map((name) => ({ name, path: `C:/${name}`, slug: name, active: false })));
+  mocks.api.list_known_projects.mockReset().mockResolvedValue({
+    sources: [{ id: "uefn", label: "UEFN" }, { id: "other", label: "Other" }],
+    projects: ["B", "C"].map((name) => ({ name, path: `C:/${name}`, slug: name, kind: "uefn", source: "uefn", last_opened: 0, active: false })),
+  });
   mocks.api.set_project_root.mockReset().mockImplementation(async (path: string) => ({ path, name: path.slice(-1), slug: path.slice(-1) }));
 });
 afterEach(cleanup);
 
-it("closes the menu before waiting for the saved workspace", async () => {
+it("opens the Projects window and closes it before waiting for the saved workspace", async () => {
   let finish!: () => void;
   mocks.flush.mockReturnValue(new Promise<void>((resolve) => { finish = resolve; }));
   render(<ProjectSelector project={{ path: "C:/A", name: "A", slug: "A" }} />);
   fireEvent.pointerDown(screen.getByRole("button", { name: "A" }));
   await act(async () => {});
-  fireEvent.click(screen.getByRole("button", { name: "B" }));
-  expect(screen.queryByRole("button", { name: "B" })).toBeNull();
+  expect(mocks.api.list_known_projects).toHaveBeenCalledWith(true);
+  fireEvent.click(screen.getByTitle("C:/B"));
+  expect(screen.queryByTitle("C:/B")).toBeNull();
   expect(mocks.api.set_project_root).not.toHaveBeenCalled();
   await act(async () => { finish(); });
   expect(mocks.api.set_project_root).toHaveBeenCalledWith("C:/B");

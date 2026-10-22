@@ -73,7 +73,7 @@ def test_the_step_s_agent_reads_and_writes_the_lent_folder_and_no_one_else(out: 
     project.mkdir()
     monkeypatch.delenv("UEFN_VSCODE_WORKSPACE_FOLDERS", raising=False)
     monkeypatch.setenv("UEFN_DUCKY_PROJECT_ROOT", str(project))
-    monkeypatch.setattr("frontend.ui_web.recent_projects.load_recent_projects", lambda: [])
+    monkeypatch.setattr("frontend.ui_web.recent_projects.load_saved_projects", lambda: [])
     bible = out / "goblins_1430" / "bible.json"
     release = run_folders.grant("step-chat", [os.path.realpath(out)], 60)
     try:
@@ -104,7 +104,7 @@ def test_an_agent_reaching_outside_the_projects_asks_the_person_for_that_folder(
     (out.parent / ".hidden").mkdir()
     monkeypatch.delenv("UEFN_VSCODE_WORKSPACE_FOLDERS", raising=False)
     monkeypatch.setenv("UEFN_DUCKY_PROJECT_ROOT", str(project))
-    monkeypatch.setattr("frontend.ui_web.recent_projects.load_recent_projects", lambda: [])
+    monkeypatch.setattr("frontend.ui_web.recent_projects.load_saved_projects", lambda: [])
     monkeypatch.setattr(permission_prompt, "_chat_agent", lambda conv_id: "codex")
     answers: list[tuple[str, str]] = [("always", "")]
     cards: list[dict] = []

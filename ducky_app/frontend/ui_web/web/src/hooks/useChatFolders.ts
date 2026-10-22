@@ -208,14 +208,9 @@ export function useChatFolders(refreshToken: number, currentProjectSlug = "") {
       if (!slug) continue;
       ensure(slug, String((conv as { project_name?: string }).project_name || "").trim()).convs.push(conv);
     }
-    const recents = api.list_recent_projects
-      ? await api.list_recent_projects().catch(() => [])
-      : [];
-    for (const recent of recents) {
-      const slug = String(recent.slug || "").trim();
-      if (!slug) continue;
-      ensure(slug, String(recent.name || "").trim());
-    }
+    // Only projects with duckies or groups get a row (plus the open one): with dozens of
+    // islands found on disk, an empty row each would bury the duckies. The Projects window
+    // lists every project.
     if (currentProjectSlug) ensure(currentProjectSlug, "");
     ensure(GLOBAL_PROJECT_SLUG, "No project");
 

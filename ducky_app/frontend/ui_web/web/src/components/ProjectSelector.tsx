@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DropdownPanel } from "./DropdownPanel";
 import { Icons } from "../icons/Icons";
 import { TruncatedText } from "./TruncatedText";
 import type { ProjectFolderInspection, ProjectInfo, RecentProject } from "../types/panel";
@@ -8,6 +7,7 @@ import { useOptionalEditorWorkspaceFlush } from "../contexts/EditorWorkspaceBrid
 import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { PROJECT_SELECTED_EVENT } from "../hooks/useProject";
 import { ProjectFlavorIcon, projectFlavorName } from "./ProjectFlavorIcon";
+import { ProjectsModal } from "./projects/ProjectsModal";
 
 interface ProjectSelectorProps {
   project: ProjectInfo;
@@ -134,24 +134,26 @@ export function ProjectSelector({
   );
 
   const deleteProject = useCallback(
-    async (item: RecentProject) => {
+    async (item: { name: string; path: string }): Promise<boolean> => {
       const ok = await confirm({
         title: "Remove project?",
         message: `Remove "${item.name}" from UEFN-Ducky?\n\nThis deletes chat history, editor state, and the Ducky init script from the project. The project folder on disk is not deleted.`,
         confirmLabel: "Remove",
         danger: true,
       });
-      if (!ok) return;
+      if (ok !== true) return false;
 
       const api = getApi();
-      if (!api) return;
+      if (!api) return false;
       try {
         await flushFromBridge?.();
         await api.delete_recent_project(item.path);
         onProjectChanged?.();
         refreshRecent();
+        return true;
       } catch (e) {
         console.error("[project-selector] delete failed", e);
+        return false;
       }
     },
     [confirm, flushFromBridge, onProjectChanged, refreshRecent],
@@ -195,6 +197,11 @@ export function ProjectSelector({
     hasLiveProject && !isFolderProject && projectMatch === false && !isLiveProject(project, uefnName);
   const matchedRecent = mismatch ? recent.find((r) => isLiveProject(r, uefnName)) : undefined;
 
+  const onModalAdd = () => {
+    ignoreAnchorRef.current = false;
+    void addProject();
+  };
+
   const onAnchorPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (ignoreAnchorRef.current || pickingRef.current) {
       e.preventDefault();
@@ -212,9 +219,7 @@ export function ProjectSelector({
     void addProject();
   };
 
-  const menu = (
-    <>
-        {mismatch && (
+  const banner = mismatch ? (
           <div className="project-selector-mismatch-banner">
             <span className="project-selector-mismatch-banner-icon" aria-hidden="true">
               <Icons.AlertTriangle />
@@ -237,12 +242,16 @@ export function ProjectSelector({
                 </button>
               ) : (
                 <div className="project-selector-mismatch-hint">
-                  Add {uefnName} with “Add project…” below to switch to it.
+                  Add {uefnName} with “Add project” to switch to it.
                 </div>
               )}
             </div>
           </div>
-        )}
+  ) : null;
+
+  const menu = (
+    <>
+        {banner}
         {recent.length > 0 && (
           <>
             <div className="project-selector-section-label">
@@ -347,9 +356,16 @@ export function ProjectSelector({
         {mismatch && <span className="project-selector-mismatch-dot" aria-hidden="true" />}
       </button>
 
-      <DropdownPanel anchorRef={anchorRef} open={isOpen} onClose={close} minWidth={280}>
-        {menu}
-      </DropdownPanel>
+      <ProjectsModal
+        open={isOpen}
+        onClose={close}
+        project={project}
+        onOpenProject={(path) => void selectProject(path)}
+        onAddProject={onModalAdd}
+        onRemoveProject={deleteProject}
+        isLive={(row) => hasLiveProject && isLiveProject(row, uefnName)}
+        banner={banner}
+      />
     </div>
   );
 }

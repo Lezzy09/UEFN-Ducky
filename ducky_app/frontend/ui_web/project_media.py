@@ -23,8 +23,20 @@ _PROJECT_MEDIA_RE = re.compile(r"^project-media/(.+)$")
 _MODEL_FILES_RE = re.compile(r"^model-files/([^/]+)/(.+)$")
 
 
+_PROJECT_THUMB_RE = re.compile(r"^project-thumb/([A-Za-z0-9_.-]+)$")
+
+
 def project_media_re() -> re.Pattern[str]:
     return _PROJECT_MEDIA_RE
+
+
+def project_thumb_re() -> re.Pattern[str]:
+    return _PROJECT_THUMB_RE
+
+
+def build_project_thumb_url(slug: str) -> str:
+    """Loopback URL for a known project's key art (the Projects window card)."""
+    return f"http://127.0.0.1:{_PANEL_UI_HTTP_PORT}/project-thumb/{quote(slug, safe='')}"
 
 
 def model_files_re() -> re.Pattern[str]:

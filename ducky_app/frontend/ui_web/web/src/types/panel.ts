@@ -1132,6 +1132,23 @@ export interface ProjectInfo {
   mount?: string;
 }
 
+/** A row in the Projects window: a project Ducky opened, an island found on disk, or a
+ * project a plugin lists. */
+export interface KnownProject extends ProjectInfo {
+  /** Its tab: "uefn", "other", or a plugin source id. */
+  source: string;
+  /** Unix seconds; 0 when never opened in Ducky. */
+  last_opened: number;
+  has_thumbnail?: boolean;
+  thumbnail_url?: string;
+  active: boolean;
+}
+
+export interface KnownProjectsListing {
+  sources: { id: string; label: string; icon?: string }[];
+  projects: KnownProject[];
+}
+
 export interface ProjectFolderInspection {
   ok: boolean;
   error?: string;
@@ -3744,6 +3761,7 @@ export interface PanelApi {
     relative_path: string,
   ): Promise<{ ok: boolean; error?: string; asset_path?: string; opened?: boolean | null }>;
   list_recent_projects(): Promise<RecentProject[]>;
+  list_known_projects(rescan?: boolean): Promise<KnownProjectsListing>;
   inspect_project_folder(path: string): Promise<ProjectFolderInspection>;
   set_project_root(path: string): Promise<ProjectInfo>;
   delete_recent_project(path: string): Promise<ProjectInfo>;

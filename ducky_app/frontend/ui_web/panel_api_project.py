@@ -14,6 +14,22 @@ class PanelApiProjectMixin:
     def list_recent_projects(self) -> list[dict[str, str | bool]]:
         return _pa.list_panel_projects()
 
+    def list_known_projects(self, rescan: bool = False) -> dict[str, Any]:
+        """The Projects window: tabs (UEFN, Other, plugin sources) and every known project.
+        A rescan also sets up the listener on islands that appeared since boot."""
+        from frontend.project_kind import UEFN
+        from frontend.ui_web.known_projects import list_known_projects
+        from frontend.ui_web.project_media import build_project_thumb_url
+        from frontend.ui_web.project_switch import deploy_new_islands
+
+        listing = list_known_projects(rescan=bool(rescan))
+        for row in listing["projects"]:
+            if row.get("has_thumbnail"):
+                row["thumbnail_url"] = build_project_thumb_url(str(row["slug"]))
+        if rescan:
+            deploy_new_islands([r["path"] for r in listing["projects"] if r.get("kind") == UEFN])
+        return listing
+
     def inspect_project_folder(self, path: str) -> dict[str, Any]:
         """What Add project would open: root, kind, and any islands one level down."""
         from frontend.project_kind import FOLDER, islands_inside, resolve_project_root

@@ -825,7 +825,7 @@ def remove_project_init(project_root: Path) -> list[str]:
 
 
 def refresh_inits(project_root: Path | None = None) -> list[str]:
-    """Rewrite Ducky init on every recent island, Documents Python, and the Engine hook."""
+    """Rewrite Ducky init on every known island, Documents Python, and the Engine hook."""
     logs: list[str] = []
     roots: list[Path] = []
     seen: set[str] = set()
@@ -843,9 +843,9 @@ def refresh_inits(project_root: Path | None = None) -> list[str]:
     if project_root is not None:
         _add(Path(project_root))
     try:
-        from frontend.ui_web.recent_projects import load_recent_projects
+        from frontend.ui_web.known_projects import known_project_roots
 
-        for raw in load_recent_projects():
+        for raw in known_project_roots():
             _add(Path(raw))
     except Exception:
         pass

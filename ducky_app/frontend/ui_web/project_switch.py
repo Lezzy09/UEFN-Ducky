@@ -79,10 +79,13 @@ def get_panel_project_info() -> dict[str, str]:
 
 
 def list_panel_projects() -> list[dict[str, str | bool]]:
+    """Every known project, opened ones newest first, then islands found on disk."""
+    from frontend.ui_web.known_projects import known_project_roots
+
     current = normalize_project_path(PanelSettings.load().uefn_project_root)
     out: list[dict[str, str | bool]] = []
     seen: set[str] = set()
-    for path in load_recent_projects():
+    for path in known_project_roots():
         norm = normalize_project_path(path)
         if not norm or norm in seen:
             continue
@@ -210,6 +213,18 @@ def _run_project_deploy(root: str, on_log: Callable[[str], None] | None = None) 
         # Failed deploy: drop the flag so the next switch retries instead of skipping.
         with _deploy_lock:
             _deployed_roots.discard(root)
+
+
+def mark_deployed(root: str) -> None:
+    """Boot's all-islands deploy did ``root``: a switch or rescan this process skips it."""
+    with _deploy_lock:
+        _deployed_roots.add(root)
+
+
+def deploy_new_islands(roots: list[str]) -> None:
+    """Islands that showed up since boot (a rescan found them) get the listener now."""
+    for root in roots:
+        _deploy_project_once(root, background=True)
 
 
 def _deploy_project_once(

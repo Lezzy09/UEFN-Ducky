@@ -27,6 +27,20 @@ def recent_paths(limit: int = MAX_RECENT) -> list[str]:
     return [str(r[0]) for r in rows]
 
 
+def opened_rows() -> list[tuple[str, float]]:
+    """Every saved project (no recent cap), newest first: ``(path, last_opened)``."""
+    rows = db.connect().execute(
+        "SELECT path, last_opened FROM projects WHERE deleted=0 ORDER BY last_opened DESC, path"
+    ).fetchall()
+    return [(str(r[0]), float(r[1] or 0)) for r in rows]
+
+
+def removed_paths() -> list[str]:
+    """Projects the person removed: discovery keeps them out of the project list."""
+    rows = db.connect().execute("SELECT path FROM projects WHERE deleted=1").fetchall()
+    return [str(r[0]) for r in rows]
+
+
 def touch(path: str, *, name: str = "", when: float | None = None, kind: str = "") -> str:
     """Record an open; returns the slug.
 
@@ -56,10 +70,16 @@ def kind_for(path: str) -> str:
 
 
 def forget(path: str) -> None:
-    """Drop from the recent list (the row stays, marked deleted, so history keeps its FK)."""
+    """Drop from the recent list (the row stays, marked deleted, so history keeps its FK).
+    A discovered island never opened gets a deleted row so discovery leaves it out."""
     conn = db.connect()
+    now = time.time()
     with db.write_txn(conn):
-        conn.execute("UPDATE projects SET deleted=1 WHERE id=?", (slug_for(path),))
+        conn.execute(
+            "INSERT INTO projects(id, path, name, last_opened, created, deleted) VALUES (?, ?, '', 0, ?, 1) "
+            "ON CONFLICT(id) DO UPDATE SET deleted=1",
+            (slug_for(path), path, now),
+        )
 
 
 def replace_recent(paths: list[str]) -> None:

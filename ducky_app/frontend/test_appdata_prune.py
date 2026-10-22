@@ -18,8 +18,8 @@ def test_prune_empty_known_project_stub(tmp_path: Path, monkeypatch) -> None:
     stub.mkdir(parents=True)
     (stub / "conversations").mkdir()
     monkeypatch.setattr(
-        "frontend.appdata_maintenance.load_recent_projects",
-        lambda: [str(tmp_path / "Island")],
+        "frontend.appdata_maintenance.load_saved_projects",
+        lambda: [(str(tmp_path / "Island"), 0.0)],
     )
     monkeypatch.setattr(
         "frontend.appdata_maintenance.PanelSettings.load",

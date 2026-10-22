@@ -1189,8 +1189,29 @@ def start_panel_ui_server(dist_root: Path) -> str:
                     model_files_re,
                     project_media_re,
                     resolve_model_files_path,
+                    project_thumb_re,
                     resolve_project_media_path,
                 )
+
+                thumb_match = project_thumb_re().match(rel)
+                if thumb_match:
+                    from frontend.ui_web.known_projects import thumbnail_for_slug
+
+                    thumb = thumbnail_for_slug(unquote(thumb_match.group(1)))
+                    try:
+                        data = Path(thumb).read_bytes() if thumb else b""
+                    except OSError:
+                        data = b""
+                    if not data:
+                        self.send_error(404)
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", media_content_type(Path(thumb)))
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "private, max-age=300")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
 
                 media_match = project_media_re().match(rel)
                 if media_match:

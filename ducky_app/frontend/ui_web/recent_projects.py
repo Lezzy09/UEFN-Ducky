@@ -68,7 +68,7 @@ def _stored_kinds(data: dict) -> dict[str, str]:
 
 
 def _write_store(items: list[str], kinds: dict[str, str]) -> None:
-    kept = items[:_MAX_RECENT]
+    kept = items  # every project stays; readers cap the recent list themselves
     write_json_atomic(
         _store_path(),
         {"projects": kept, "kinds": {p: kinds[p] for p in kept if p in kinds}},
@@ -104,6 +104,44 @@ def load_recent_projects() -> list[str]:
     return out[:_MAX_RECENT]
 
 
+def load_saved_projects() -> list[tuple[str, float]]:
+    """Every project Ducky has opened (no recent cap), newest first: ``(path, last_opened)``.
+    The legacy JSON store keeps no times, so its rows answer 0."""
+    if _use_db():
+        try:
+            out: list[tuple[str, float]] = []
+            seen: set[str] = set()
+            for item, when in _repo().opened_rows():
+                norm = _normalize(item)
+                if norm and norm not in seen:
+                    seen.add(norm)
+                    out.append((norm, when))
+            return out
+        except (OSError, RuntimeError):
+            pass
+    raw = _read_store().get("projects")
+    if not isinstance(raw, list):
+        return []
+    out = []
+    seen = set()
+    for item in raw:
+        norm = _normalize(item) if isinstance(item, str) else ""
+        if norm and norm not in seen:
+            seen.add(norm)
+            out.append((norm, 0.0))
+    return out
+
+
+def load_removed_projects() -> list[str]:
+    """Projects the person removed from Ducky (database store only)."""
+    if not _use_db():
+        return []
+    try:
+        return [_normalize(p) for p in _repo().removed_paths()]
+    except (OSError, RuntimeError):
+        return []
+
+
 def load_project_kind(path: str) -> str:
     """Saved kind for *path*: 'uefn', 'folder', or '' when Ducky never recorded it."""
     norm = _normalize(path)
@@ -124,6 +162,15 @@ def load_project_kind(path: str) -> str:
     return ""
 
 
+def _forget_known() -> None:
+    try:
+        from frontend.ui_web.known_projects import forget_cache
+
+        forget_cache()
+    except Exception:
+        pass
+
+
 def add_recent_project(path: str, *, kind: str = "") -> None:
     norm = _normalize(path)
     if not norm:
@@ -142,10 +189,11 @@ def add_recent_project(path: str, *, kind: str = "") -> None:
             kind = previous or kind
         if kind:
             kinds[norm] = kind
-        items = [p for p in load_recent_projects() if p != norm]
+        items = [p for p, _ in load_saved_projects() if p != norm]
         items.insert(0, norm)
         _write_store(items, kinds)
     forget_cached_kind(norm)
+    _forget_known()
     try:
         from frontend.appdata_maintenance import prune_empty_project_dirs
 
@@ -158,6 +206,7 @@ def remove_recent_project(path: str) -> None:
     norm = _normalize(path)
     if not norm:
         return
+    _forget_known()
     if _use_db():
         try:
             _repo().forget(norm)
@@ -165,5 +214,5 @@ def remove_recent_project(path: str) -> None:
         except (OSError, RuntimeError):
             pass
     data = _read_store()
-    items = [p for p in load_recent_projects() if p != norm]
+    items = [p for p, _ in load_saved_projects() if p != norm]
     _write_store(items, _stored_kinds(data))

@@ -244,6 +244,15 @@ def _appdata_per_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     (root / "Roaming").mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("LOCALAPPDATA", str(root))
     monkeypatch.setenv("APPDATA", str(root / "Roaming"))
+    # Island discovery scans Documents/Fortnite Projects and the boot deploy writes into
+    # every island it finds: tests get an empty Documents, never the person's islands.
+    monkeypatch.setenv("UEFN_DUCKY_DOCUMENTS_DIR", str(tmp_path / ".ducky-documents"))
+    try:
+        from frontend.ui_web.known_projects import forget_cache
+
+        forget_cache()
+    except Exception:
+        pass
     # Starting the MCP bridge in-process (frontend.launcher) marks the whole process
     # as the bridge; without this every later test would run as if it were one.
     monkeypatch.delenv("UEFN_DUCKY_MCP_BRIDGE", raising=False)

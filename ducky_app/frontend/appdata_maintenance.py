@@ -17,14 +17,14 @@ from typing import Any
 from frontend.atomic_json import BACKUPS_DIR_NAME, MAX_BACKUP_AGE_SEC, prune_all_backups
 from frontend.settings import PanelSettings, default_app_data_dir
 from frontend.ui_web.project_chats import project_display_name, project_slug
-from frontend.ui_web.recent_projects import load_recent_projects
+from frontend.ui_web.recent_projects import load_saved_projects
 
 _log = logging.getLogger(__name__)
 
 
 def _known_project_slugs() -> set[str]:
     slugs: set[str] = set()
-    for path in load_recent_projects():
+    for path, _ in load_saved_projects():
         if path.strip():
             slugs.add(project_slug(path))
     current = PanelSettings.load().uefn_project_root.strip()
@@ -904,7 +904,7 @@ def appdata_clear_caches(app_root: Path | None = None) -> dict[str, Any]:
 def appdata_projects(app_root: Path | None = None) -> dict[str, Any]:
     root = (app_root or default_app_data_dir()).resolve()
     slug_to_path: dict[str, str] = {}
-    for project_path in load_recent_projects():
+    for project_path, _ in load_saved_projects():
         if project_path.strip():
             slug_to_path[project_slug(project_path)] = project_path
     current = PanelSettings.load().uefn_project_root.strip()

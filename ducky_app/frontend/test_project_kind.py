@@ -199,7 +199,7 @@ def test_refresh_inits_writes_islands_only(tmp_path: Path, monkeypatch) -> None:
     repo = _repo(tmp_path)
     island = _island(tmp_path)
     monkeypatch.setattr(
-        "frontend.ui_web.recent_projects.load_recent_projects", lambda: [str(repo), str(island)]
+        "frontend.ui_web.recent_projects.load_saved_projects", lambda: [(str(repo), 0.0), (str(island), 0.0)]
     )
     monkeypatch.setattr(deploy, "install_user_init_unreal", lambda: None)
     monkeypatch.setattr(deploy, "install_toolset_listener_boot", lambda: None)
@@ -215,11 +215,10 @@ def test_startup_deploy_skips_folders(tmp_path: Path, monkeypatch) -> None:
     repo = _repo(tmp_path)
     island = _island(tmp_path)
     deployed: list[str] = []
-    monkeypatch.setattr(project_deploy, "load_recent_projects", lambda: [str(repo), str(island)])
+    monkeypatch.setattr(project_deploy, "known_project_roots", lambda rescan=False: [str(repo), str(island)])
     monkeypatch.setattr(
         project_deploy, "deploy_listener", lambda root, _port, shared=True: deployed.append(str(root)) or []
     )
-    monkeypatch.setattr(project_deploy, "add_recent_project", lambda *_a, **_k: None)
     lines = project_deploy.deploy_all_recent_projects()
     assert deployed == [str(island.resolve())]
     assert not any("Deploy skipped" in line for line in lines)

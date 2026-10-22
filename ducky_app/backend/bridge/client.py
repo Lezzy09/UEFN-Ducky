@@ -797,14 +797,15 @@ def workspace_roots() -> list[str]:
 
 
 def _recent_project_roots() -> list[str]:
-    """Projects in the header dropdown. Extra roots for agents' Ducky tools: reads, and writes
-    journaled in that project (workspace.runtime); team lanes stay in the open one."""
+    """Every project Ducky knows (opened ones, no recent cap, plus every UEFN island on
+    disk). Extra roots for agents' Ducky tools: reads, and writes journaled in that
+    project (workspace.runtime); team lanes stay in the open one."""
     try:
-        from frontend.ui_web.recent_projects import load_recent_projects
+        from frontend.ui_web.known_projects import known_project_roots
     except Exception:
         return []
     out: list[str] = []
-    for item in load_recent_projects():
+    for item in known_project_roots():
         try:
             out.append(os.path.realpath(os.path.abspath(item)))
         except OSError:
@@ -863,11 +864,12 @@ def _resolve_workspace_path_unchecked(relative_or_absolute: str) -> str:
         refusal = ask_to_lend(full)  # the person's Allow/Deny card for this folder
         if not refusal:
             return full
-        allowed = list(dict.fromkeys([*roots, *recents, *lent]))
+        allowed = list(dict.fromkeys([*roots, *lent, *recents]))
         # Name the allowed folders: a model told only "outside" retries the same path for turns.
+        named = "; ".join(allowed[:12]) + (f"; and {len(allowed) - 12} more projects" if len(allowed) > 12 else "")
         raise ValueError(
             f"Path is outside allowed workspace folders: {relative_or_absolute!r}. {refusal} "
-            f"Ducky's file tools reach: {'; '.join(allowed)}. Do not retry this path in any spelling."
+            f"Ducky's file tools reach: {named}. Do not retry this path in any spelling."
         )
     primary = roots[0]
     full = os.path.realpath(os.path.abspath(os.path.join(primary, p)))

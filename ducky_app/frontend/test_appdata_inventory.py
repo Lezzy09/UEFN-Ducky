@@ -105,7 +105,7 @@ def test_project_delete_covers_memory_and_changesets(tmp_path: Path, monkeypatch
         (d / "x.bin").write_bytes(b"data")
 
     monkeypatch.setattr(
-        "frontend.appdata_maintenance.load_recent_projects",
+        "frontend.appdata_maintenance.load_saved_projects",
         lambda: [],
     )
     monkeypatch.setattr(

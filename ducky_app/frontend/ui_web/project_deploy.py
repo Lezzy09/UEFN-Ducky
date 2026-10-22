@@ -1,7 +1,9 @@
-"""Deploy listener hooks and quarantine island .py on every recently opened island.
+"""Deploy listener hooks and quarantine island .py on every UEFN island Ducky knows.
 
-Folder projects (no ``*.uefnproject``) are skipped outright: they get no listener init
-and keep every Python file they have.
+That is every island the person opened and every one found on disk
+(``known_projects``), so a new island is ready on the next boot without anyone adding
+it. Folder projects (no ``*.uefnproject``) are skipped outright: they get no listener
+init and keep every Python file they have.
 """
 
 from __future__ import annotations
@@ -13,16 +15,17 @@ from frontend.deploy import deploy_listener, resolve_uefn_project_root
 from frontend.error_log import record_error
 from frontend.project_kind import has_uefnproject
 from frontend.settings import PANEL_LISTENER_PORT, PanelSettings
-from frontend.ui_web.recent_projects import add_recent_project, load_recent_projects
+from frontend.ui_web.known_projects import known_project_roots
+from frontend.ui_web.project_switch import mark_deployed
 
 
 def deploy_all_recent_projects(*, log: Callable[[str], None] | None = None) -> list[str]:
-    """Refresh listener hooks and quarantine island .py on known project paths."""
+    """Refresh listener hooks and quarantine island .py on every known island."""
     lines: list[str] = []
     paths: list[str] = []
     seen: set[str] = set()
 
-    for path in load_recent_projects():
+    for path in known_project_roots(rescan=True):
         norm = _safe_normalize(path)
         if norm and norm not in seen:
             seen.add(norm)
@@ -37,11 +40,11 @@ def deploy_all_recent_projects(*, log: Callable[[str], None] | None = None) -> l
         try:
             root = resolve_uefn_project_root(Path(path))
             project_lines = deploy_listener(root, PANEL_LISTENER_PORT, shared=(i == 0))
+            mark_deployed(path)
             for ln in project_lines:
                 lines.append(ln)
                 if log:
                     log(ln)
-            add_recent_project(str(root), kind="uefn")
         except Exception as e:
             msg = f"Deploy skipped for {path}: {e}"
             lines.append(msg)

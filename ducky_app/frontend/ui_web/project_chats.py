@@ -276,10 +276,10 @@ def _would_create_cycle(folders: list[ChatFolder], folder_id: str, new_parent_id
 
 
 def _slug_display_names() -> dict[str, str]:
-    from frontend.ui_web.recent_projects import load_recent_projects
+    from frontend.ui_web.known_projects import known_project_roots
 
     names: dict[str, str] = {}
-    for path in load_recent_projects():
+    for path in known_project_roots():
         names[project_slug(path)] = project_display_name(path)
     current = (PanelSettings.load().uefn_project_root or "").strip()
     if current:
@@ -1682,16 +1682,16 @@ def create_project_root(target_slug: str, current_root: str) -> str | None:
 
 
 def project_root_for_slug(slug: str) -> str | None:
-    """Island path for a sidebar project row. Recents and the open island only."""
+    """Project path for a sidebar project row: the open project or any known one."""
     wanted = (slug or "").strip()
     if not wanted:
         return None
     current = (PanelSettings.load().uefn_project_root or "").strip()
     if current and project_slug(current) == wanted:
         return current
-    from frontend.ui_web.recent_projects import load_recent_projects
+    from frontend.ui_web.known_projects import known_project_roots
 
-    for path in load_recent_projects():
+    for path in known_project_roots():
         if project_slug(path) == wanted:
             return path
     return None
