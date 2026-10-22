@@ -86,6 +86,17 @@ it("sends this screen at once when someone new joins, not at the next 5 s beat",
   expect(sent.filter((m) => m.method === "live.view")).toHaveLength(1);
 });
 
+it("sends this screen when a joiner's link comes up, not while they are still unlinked", () => {
+  tell({ type: "live.state", on: true });
+  tell({ type: "live.peers", on: true, peers: [] });
+  vi.advanceTimersByTime(300);
+  sent.length = 0;
+  tell({ type: "live.peers", on: true, peers: [{ name: "Bo", device: "d7", path: "none" }] });  // in the group, no link
+  expect(sent.filter((m) => m.method === "live.view")).toEqual([]);
+  tell({ type: "live.peers", on: true, peers: [{ name: "Bo", device: "d7", path: "direct" }] });
+  expect(sent.filter((m) => m.method === "live.view")).toHaveLength(1);
+});
+
 it("a message from another window is ignored; off clears what it drew", () => {
   tell({ type: "live.state", on: true });
   window.dispatchEvent(new MessageEvent("message", {

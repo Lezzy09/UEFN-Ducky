@@ -50,6 +50,7 @@ HOST_TOPICS = FAST_TOPICS | {HOLD, NAV}
 HOLD_STALE_S = 30.0  # the page renews a hold every 10 s; one not renewed this long is gone
 HOLDS_MAX = 4  # holds per plugin a PC puts in its presence (the sealed blob is 8 KiB at most)
 LINK_GRACE_S = 10.0  # a group member with no link this long after both were live is unreachable
+JOIN_RELOAD_S = 60.0  # the first pull this soon after joining a teammate's group reloads the panels
 _ANCHOR_RE = re.compile(r"^[^\x00-\x1f]{1,400}$")
 _VIEW_RE = re.compile(r"^[A-Za-z0-9._:-]{0,64}$")
 _TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,39}$")
@@ -71,6 +72,7 @@ _told_holds: dict[tuple[str, str], list[dict[str, Any]]] = {}  # (space, plugin)
 _sent: dict[tuple[str, bool], collections.deque[float]] = {}
 _listeners: dict[str, dict[str, list[Callable[..., Any]]]] = {}
 _kept: set[str] = set()  # folder plugins restarted while live with their panels kept loaded
+_join_reload: dict[str, float] = {}  # plugin -> until when its join's pull reloads its panels
 
 
 def _push(event: dict[str, Any]) -> None:
@@ -204,8 +206,11 @@ def join(plugin: str, room: str = "") -> dict[str, Any]:
         return {"ok": True, **status(plugin)}
     if old is not None:
         leave(plugin)
+    teammates = room != host_room()
     with _lock:
         _live[plugin] = _State(account, space, room, time.time())
+        if teammates:
+            _join_reload[plugin] = time.time() + JOIN_RELOAD_S
     try:
         spaces.provider().live_join(account, space, plugin, room)
     except Exception as exc:  # noqa: BLE001 — not live after all; say why
@@ -223,6 +228,17 @@ def panels_kept(plugin: str) -> None:
     (``host._restart_moved``): they reload once when Live ends."""
     with _lock:
         _kept.add(plugin)
+
+
+def keeps_panels(plugin: str) -> bool:
+    """Whether a pull restarts ``plugin`` with its panels kept loaded (live: they merge it),
+    or reloads them. The first pull after joining a teammate's group reloads them, so the
+    page opens on the host's data instead of what it showed before the Join."""
+    with _lock:
+        if plugin not in _live:
+            return False
+        until = _join_reload.pop(plugin, 0.0)
+    return time.time() >= until
 
 
 def _reload_kept(plugin: str) -> None:
@@ -243,6 +259,7 @@ def leave(plugin: str) -> dict[str, Any]:
 
     with _lock:
         st = _live.pop(plugin, None)
+        _join_reload.pop(plugin, None)
     _reload_kept(plugin)
     if st is not None:
         try:
@@ -545,6 +562,7 @@ def reset_for_tests() -> None:
         _sent.clear()
         _listeners.clear()
         _kept.clear()
+        _join_reload.clear()
 
 
 class LiveApi:

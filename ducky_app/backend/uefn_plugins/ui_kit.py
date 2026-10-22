@@ -431,7 +431,7 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
   var C = "uefn-plugin-ui", on = false, n = 0, last = 0, cur = {}, sel = {}, L = null;
   var mine = {}, theirs = {}, far = [], boxes = {}, before = new WeakMap(), down = null, shared = false, incoming = 0, missing = [];
   var following = "", replaying = false, scrolled = [], sentView = "", viewAt = 0, holdsAsk = "";
-  var lead = null, wentTo = "", wentFrom = "", wentAt = 0, scrolledTo = "", peers = {};
+  var lead = null, wentTo = "", wentFrom = "", wentAt = 0, scrolledTo = "", peers = {}, reached = {};
   var HOLD_AFTER_MS = 1500, HOLD_RENEW_MS = 10000, HOLD_STALE_MS = 30000, VIEW_GAP_MS = 250, VIEW_EVERY_MS = 5000;
   var CONTROL = 'input,textarea,select,button,[contenteditable=""],[contenteditable="true"],[role="button"],[role="slider"],' +
     '[role="checkbox"],[role="switch"],[role="textbox"],[role="spinbutton"],[role="combobox"],[role="option"],' +
@@ -776,9 +776,13 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
     else if (e.type === "live.follow") { following = String(e.device || ""); lead = null; wentTo = wentFrom = scrolledTo = ""; }
     else if (e.type === "live.holds") farHolds(e.holds);
     else if (e.type === "live.peers") {
-      var keep = {}, fresh = false;
-      (e.peers || []).forEach(function (p) { var pk = key(p); keep[pk] = 1; if (pk && !peers[pk]) fresh = true; });
-      peers = keep;
+      var keep = {}, linked = {}, fresh = false;
+      (e.peers || []).forEach(function (p) {
+        var pk = key(p); keep[pk] = 1;
+        // Reachable ("none": in the group, no link yet; a view sent then reaches nobody).
+        if (pk && p.path !== "none") { linked[pk] = 1; if (!reached[pk]) fresh = true; }
+      });
+      peers = keep; reached = linked;
       if (fresh && on) sendView(true);  // someone new: they get this screen now, not in up to 5 s
       for (var k in cur) if (!keep[k]) { cur[k].el.remove(); delete cur[k]; }
       for (var j in sel) if (!keep[j]) { sel[j].el.remove(); delete sel[j]; }

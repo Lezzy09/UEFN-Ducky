@@ -426,6 +426,24 @@ def test_a_live_folder_plugin_restarts_for_a_pull_with_its_panels_kept(team: dic
     assert folder_files.reload_epoch(PLUGIN) == before + 1  # nothing skipped: no more reloads
 
 
+def test_joining_a_teammates_group_reloads_the_panels_on_its_first_pull(team: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.store.repos import folder_files
+    from backend.uefn_plugins import host
+    from frontend.ui_web import agent_modes
+
+    told: list[dict[str, Any]] = []
+    monkeypatch.setattr(agent_modes, "push_ui_event", told.append)
+    monkeypatch.setattr(host, "reload_single_plugin", lambda pid: None)
+    live.join(PLUGIN, "h:d_alex")
+    folder_files.reload_bump(PLUGIN, "pull")
+    host._restart_moved(PLUGIN)  # the join's pull: the page opens on the host's data
+    assert told == [{"type": "plugin_scope_changed", "plugins": [PLUGIN], "switched": True}]
+    told.clear()
+    folder_files.reload_bump(PLUGIN, "pull")
+    host._restart_moved(PLUGIN)  # later pulls: kept, the page merges them
+    assert told == [{"type": "plugin_scope_changed", "plugins": [PLUGIN], "synced": True, "live": True}]
+
+
 def test_live_folder_changes_never_wait_behind_update_now(team: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
 

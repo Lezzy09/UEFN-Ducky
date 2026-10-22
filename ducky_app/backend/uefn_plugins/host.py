@@ -3225,7 +3225,7 @@ def _restart_moved(pid: str) -> None:
         from backend.store.repos import folder_files
         from backend.uefn_plugins import live
 
-        live_pull = live.is_live(pid) and folder_files.reload_reason(pid) == "pull"
+        live_pull = folder_files.reload_reason(pid) == "pull" and live.keeps_panels(pid)
     except Exception:  # noqa: BLE001 — a full restart
         _log.debug("live check of %s failed", pid, exc_info=True)
     try:
