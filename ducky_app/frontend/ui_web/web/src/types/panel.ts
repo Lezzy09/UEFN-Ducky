@@ -2410,6 +2410,10 @@ export interface PluginLiveStatus {
   room?: string;
   state?: string;
   peers?: PluginLivePeer[];
+  /** Names of people in this PC's group with no link to this PC yet (just joined), and
+   * with none after that (pointers, follow and "pull now" never reach them). */
+  connecting?: string[];
+  unlinked?: string[];
   /** The plugin's live groups in the team, this PC's first. */
   groups?: PluginLiveGroup[];
 }

@@ -660,6 +660,16 @@ describe("plugin scope bar", () => {
       expect(within(menu).getByRole("menuitem", { name: "Leave" })).toBeTruthy();
     });
 
+    it("says when a group member has no link at all, and while one is still connecting", async () => {
+      const status = live(true, [{ ...MO, mine: true }]);
+      api.plugin_scope_status.mockResolvedValue({ ...status, live: { ...status.live, connecting: ["Cy"], unlinked: ["Mo"] } });
+      bar();
+      fireEvent.click(await screen.findByRole("button", { name: /^Mo/ }));
+      const menu = await screen.findByRole("menu", { name: "Live in BrainRot TCG" });
+      expect(within(menu).getByText(/^Can't reach Mo on this network/)).toBeTruthy();
+      expect(within(menu).getByText("Connecting to Cy…")).toBeTruthy();
+    });
+
     it("joins the remembered group again by itself while it's still live, once", async () => {
       localStorage.setItem("ducky.pluginLive.brainrot-tcg", "h:d1");
       api.plugin_scope_status.mockResolvedValue(live(false, [MO]));

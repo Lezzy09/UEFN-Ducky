@@ -75,6 +75,17 @@ it("draws a teammate's pointer with their name, and drops it when they leave", (
   expect(layer()?.children.length).toBe(0);
 });
 
+it("sends this screen at once when someone new joins, not at the next 5 s beat", () => {
+  tell({ type: "live.state", on: true });
+  tell({ type: "live.peers", on: true, peers: [ALEX] });
+  vi.advanceTimersByTime(300);
+  sent.length = 0;
+  tell({ type: "live.peers", on: true, peers: [ALEX] });  // nobody new: nothing extra
+  expect(sent.filter((m) => m.method === "live.view")).toEqual([]);
+  tell({ type: "live.peers", on: true, peers: [ALEX, { name: "You on Laptop", device: "d9" }] });
+  expect(sent.filter((m) => m.method === "live.view")).toHaveLength(1);
+});
+
 it("a message from another window is ignored; off clears what it drew", () => {
   tell({ type: "live.state", on: true });
   window.dispatchEvent(new MessageEvent("message", {

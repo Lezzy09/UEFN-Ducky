@@ -49,6 +49,7 @@ FAST_TOPICS = frozenset({"ducky.pointer", "ducky.select", "ducky.view"})  # may 
 HOST_TOPICS = FAST_TOPICS | {HOLD, NAV}
 HOLD_STALE_S = 30.0  # the page renews a hold every 10 s; one not renewed this long is gone
 HOLDS_MAX = 4  # holds per plugin a PC puts in its presence (the sealed blob is 8 KiB at most)
+LINK_GRACE_S = 10.0  # a group member with no link this long after both were live is unreachable
 _ANCHOR_RE = re.compile(r"^[^\x00-\x1f]{1,400}$")
 _VIEW_RE = re.compile(r"^[A-Za-z0-9._:-]{0,64}$")
 _TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,39}$")
@@ -307,6 +308,7 @@ def groups(plugin: str, account: str, space: str) -> list[dict[str, Any]]:
     beat. Its own group first, then the biggest."""
     from backend.store.repos import space_vcs
     from backend.uefn_plugins.ledger import person
+    from backend.uefn_plugins.vcs_engine import other_pc
 
     me = _device()
     roster = space_vcs.presence_get(account, space)["roster"]
@@ -324,8 +326,9 @@ def groups(plugin: str, account: str, space: str) -> list[dict[str, Any]]:
             since = float(live.get("since") or 0)
         except (TypeError, ValueError):
             since = 0.0
+        pc = other_pc(account, space, p.get("user"), p["device"])  # this account on another PC
         rooms.setdefault(room, []).append({
-            "name": person(p.get("user_name"), p.get("user"), fallback="A teammate"),
+            "name": f"You on {pc}" if pc else person(p.get("user_name"), p.get("user"), fallback="A teammate"),
             "user": str(p.get("user") or ""), "device": str(p["device"]), "label": str(p.get("label") or ""),
             "me": False, "since": since})
     mine = room_of(plugin, account, space)
@@ -338,7 +341,7 @@ def groups(plugin: str, account: str, space: str) -> list[dict[str, Any]]:
         host_device = room[len(HOST_PREFIX):] if room.startswith(HOST_PREFIX) else ""
         host = next((m for m in members if m["device"] == host_device), None)
         out.append({"room": room, "host": host["name"] if host else "", "hostIsMe": bool(host and host["me"]),
-                    "members": [{k: m[k] for k in ("name", "user", "device", "label", "me")} for m in members],
+                    "members": [{k: m[k] for k in ("name", "user", "device", "label", "me", "since")} for m in members],
                     "mine": mine is not None and mine["room"] == room})
     out.sort(key=lambda g: (not g["mine"], -len(g["members"]), g["host"].lower()))
     return out
@@ -370,7 +373,26 @@ def status(plugin: str) -> dict[str, Any]:
         got = {}
     out["state"] = str(got.get("state") or "live")
     out["peers"] = [dict(p) for p in got.get("peers") or [] if isinstance(p, dict)][:32]
+    out["connecting"], out["unlinked"] = _unlinked(st, out["peers"], out["groups"])
     return out
+
+
+def _unlinked(st: _State, peers: list[dict[str, Any]], groups_: list[dict[str, Any]],
+              now: float | None = None) -> tuple[list[str], list[str]]:
+    """Who in this PC's group the provider has no link to: ``(connecting, unlinked)`` by
+    name. Presence can show someone in the group while nothing reaches them; past the
+    grace they are unreachable, so the bar says so instead of showing nothing."""
+    now = time.time() if now is None else now
+    linked = {str(p.get("device") or "") for p in peers if p.get("path") in ("direct", "forwarded")}
+    mine = next((g for g in groups_ if g.get("mine")), None)
+    connecting: list[str] = []
+    unlinked: list[str] = []
+    for m in (mine or {}).get("members") or []:
+        if m.get("me") or not m.get("device") or m["device"] in linked:
+            continue
+        both_since = max(st.since, float(m.get("since") or 0))
+        (connecting if now - both_since < LINK_GRACE_S else unlinked).append(str(m.get("name") or "A teammate"))
+    return connecting, unlinked
 
 
 # --------------------------------------------------------------------------- holds
@@ -477,6 +499,14 @@ def deliver(account: str, space: str, plugin: str, sender: dict[str, Any], topic
     if st is None:
         return
     who = {k: str(sender.get(k) or "") for k in ("name", "user", "device", "label")}
+    try:
+        from backend.uefn_plugins.vcs_engine import other_pc
+
+        pc = other_pc(account, space, who["user"], who["device"])
+    except Exception:  # noqa: BLE001 — their own name then
+        pc = ""
+    if pc:  # this account on another PC: pointers say which PC, not the same name twice
+        who["name"] = f"You on {pc}"
     if topic == CHANGE:
         _pull_now(account, space, plugin)
         return

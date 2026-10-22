@@ -42,6 +42,8 @@ const REFRESH_SETTLE_MS = 400;
 const TELL_SETTLE_MS = 800;
 /** "Up to date · 12 s ago" moves on by itself while the panel is on screen. */
 const AGO_TICK_MS = 15_000;
+/** A little past live.py LINK_GRACE_S. */
+const LIVE_LINK_RECHECK_MS = 11_000;
 
 /** What the panel is told (bridge event `plugin_scope_changed`). `switched`: whose data it
  * shows changed (account, Local or a space): start over. `synced`: a sync brought new data
@@ -294,6 +296,13 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
   useEffect(() => {
     followNotify.current?.(followDevice);
   }, [followDevice]);
+  // "Connecting to …" turns into linked or "Can't reach" after the host's grace: read it again then.
+  const connecting = (status?.live?.connecting ?? []).join(",");
+  useEffect(() => {
+    if (!connecting) return;
+    const again = window.setTimeout(() => refreshSoon(undefined), LIVE_LINK_RECHECK_MS);
+    return () => window.clearTimeout(again);
+  }, [connecting, refreshSoon]);
   // Once per team copy: after a switch (another team, or a project on another copy) the
   // remembered group is joined again, while it is still live (one's own always is).
   const autoLive = useRef("");

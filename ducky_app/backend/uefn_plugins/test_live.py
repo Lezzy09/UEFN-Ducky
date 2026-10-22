@@ -251,6 +251,34 @@ def test_the_bar_shows_who_is_live_and_how_they_are_reached(team: dict[str, Any]
     assert [p["path"] for p in st["peers"]] == ["direct", "none"]
 
 
+def test_a_group_member_with_no_link_is_named_after_a_grace(team: dict[str, Any]) -> None:
+    now = time.time()
+    _roster(team["account"], _on("d_iliya", "iliya", "h:d_iliya", now - 60), _on("d_cy", "Cy", "h:d_iliya", now))
+    assert live.join(PLUGIN, "h:d_iliya")["ok"]
+    st = live.status(PLUGIN)
+    assert st["unlinked"] == []  # this PC just joined: still connecting to everyone
+    assert sorted(st["connecting"]) == ["Cy", "iliya"]
+    with live._lock:
+        live._live[PLUGIN].since = now - 60
+    team["impl"].peers = [{**ALEX, "device": "d_iliya", "path": "direct"}]
+    st = live.status(PLUGIN)
+    assert st["unlinked"] == [] and st["connecting"] == ["Cy"]  # Cy only just went live
+    team["impl"].peers = [{**ALEX, "device": "d_iliya", "path": "none"}]
+    assert live.status(PLUGIN)["unlinked"] == ["iliya"]  # presence has them, nothing reaches them
+
+
+def test_this_account_on_another_pc_is_you_on_that_pc(team: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    account = team["account"]
+    monkeypatch.setattr(vcs_engine, "my_user_id", lambda: "u_me")
+    laptop = {**_on("d_lap", "me", "h:d_lap", 10), "user": "u_me", "label": "Laptop"}
+    space_vcs.presence_put(account, SPACE, {"people": [laptop], "devices": {"d_lap": "Laptop"}}, sent_sha="", now=time.time())
+    assert live.status(PLUGIN)["groups"][0]["members"][0]["name"] == "You on Laptop"
+    live.join(PLUGIN, "h:d_lap")
+    team["pushed"].clear()
+    live.deliver(account, SPACE, PLUGIN, {"name": "me", "user": "u_me", "device": "d_lap"}, "ducky.pointer", {})
+    assert team["pushed"][-1]["from"]["name"] == "You on Laptop"  # pointers say which PC
+
+
 # --------------------------------------------------------------------------- what goes out
 
 

@@ -49,6 +49,12 @@ def _team_summary(pid: str) -> dict[str, Any]:
         notSent=[{"kind": o["kind"], "key": o["key"], "state": o["state"], "reason": o.get("reason") or ""}
                  for o in changes.get("outgoing") or [] if o["state"] not in ("queued", "sending")],
     )
+    live = st.get("live") or {}
+    if live.get("on"):  # who this PC reaches peer to peer: pointers, follow and "pull now" need it
+        out["live"] = {"room": live.get("room") or "", "state": live.get("state") or "",
+                       "peers": [{k: p.get(k) or "" for k in ("name", "label", "device", "path")}
+                                 for p in live.get("peers") or []],
+                       "connecting": list(live.get("connecting") or []), "unlinked": list(live.get("unlinked") or [])}
     if changes.get("blocked"):
         out["incomingBlocked"] = [{"kind": b["kind"], "key": b["key"], "error": b.get("error")}
                                   for b in changes["blocked"]]

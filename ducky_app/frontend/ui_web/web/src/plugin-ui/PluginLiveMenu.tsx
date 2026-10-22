@@ -37,7 +37,11 @@ export function PluginLiveMenu({ pluginId, status, busy, onJoin, onLeave, follow
   const hosting = Boolean(live?.on && mine?.hostIsMe);
   const plugin = status.pluginLabel || pluginId;
   const idle = othersHere(presence(status.people, pluginId)).filter((row) => !row.live);
-  const unreached = live?.on ? (live.peers ?? []).filter((p) => p.path === "none").map(livePeerName) : [];
+  // A peer the provider can't reach, or a group member it has no link to at all.
+  const unreached = live?.on
+    ? [...new Set([...(live.peers ?? []).filter((p) => p.path === "none").map(livePeerName), ...(live.unlinked ?? [])])]
+    : [];
+  const connecting = live?.on ? (live.connecting ?? []).filter((name) => !unreached.includes(name)) : [];
   const size = (g: PluginLiveGroup) => `${g.members.length} ${g.members.length === 1 ? "person" : "people"}`;
 
   return (
@@ -46,7 +50,7 @@ export function PluginLiveMenu({ pluginId, status, busy, onJoin, onLeave, follow
       {groups.length ? groups.map((g) => (
         <div key={g.room} className={`plugin-scope-menu__row${g.mine ? " is-mine" : ""}`}>
           <span className="plugin-scope-faces">
-            {g.members.slice(0, FACES).map((m) => <Face key={m.device || m.name} name={m.name} id={m.user || m.name} />)}
+            {g.members.slice(0, FACES).map((m) => <Face key={m.device || m.name} name={m.name} id={m.device || m.user || m.name} />)}
           </span>
           <span className="plugin-scope-menu__text">
             <span className="plugin-scope-menu__name">{groupName(g)}</span>
@@ -80,9 +84,12 @@ export function PluginLiveMenu({ pluginId, status, busy, onJoin, onLeave, follow
           </span>
         </label>
       ) : null}
+      {connecting.length ? (
+        <div className="plugin-scope-menu__note">Connecting to {listText(connecting)}…</div>
+      ) : null}
       {unreached.length ? (
         <div className="plugin-scope-menu__note plugin-scope-menu__note--warn">
-          Can't reach {listText(unreached)} on this network, so their pointers and locks don't show here.
+          Can't reach {listText(unreached)} on this network, so pointers, Follow and locks don't reach them.
           Changes still sync.
         </div>
       ) : null}
