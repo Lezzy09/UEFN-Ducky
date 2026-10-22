@@ -197,8 +197,8 @@
 
 /* Floating sidebars (like VS Code): each sidebar is a rounded card with a small gap of app
    background above and below it, and the editor area is that background itself, with no
-   frame. No lines: the card's edge facing the editor lights up only while its resize grip is
-   hovered or dragged. The card meets the editor area with no gap, so the editor's content
+   frame. The card has the chat box's light border; its edge facing the editor lights up while
+   its resize grip is hovered or dragged. The card meets the editor area with no gap, so the editor's content
    keeps its own padding whether a sidebar is open or not. Rail widths are unchanged — the
    gutter comes out of the rail's own width. Not for phones (slide-over rails) or Focus. */
 .workspace-dock-layout--default:not(.is-narrow) {
@@ -213,7 +213,7 @@
 }
 
 .workspace-dock-layout--default:not(.is-narrow) .dock-rail-inner {
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm, 8px);
   background: var(--sidebar);
 }
