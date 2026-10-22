@@ -47,6 +47,11 @@ function ProjectCard({ row, live, onOpen, onRemove }: ProjectCardProps) {
         <span className="projects-card-thumb">
           {thumb ? (
             <img src={thumb} alt="" loading="lazy" onError={() => setBroken(true)} />
+          ) : row.kind === "uefn" ? (
+            // No key art (or it failed to load): the UEFN mark instead of a blank tile.
+            <span className="projects-card-uefn-mark" aria-label="UEFN island">
+              UEFN
+            </span>
           ) : (
             <span className="projects-card-thumb-icon">
               <ProjectFlavorIcon flavor={row.flavor || row.kind} />

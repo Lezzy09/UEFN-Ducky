@@ -2147,6 +2147,15 @@ html.window-maximized .window-resize-grip {
   object-fit: cover;
 }
 
+.projects-card-uefn-mark {
+  color: var(--fg-dim);
+  font-size: 34px;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 0.04em;
+  opacity: 0.85;
+}
+
 .projects-card-thumb-icon {
   display: inline-flex;
   color: var(--muted);

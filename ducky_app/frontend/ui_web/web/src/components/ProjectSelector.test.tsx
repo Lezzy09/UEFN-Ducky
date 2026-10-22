@@ -30,6 +30,8 @@ it("opens the Projects window and closes it before waiting for the saved workspa
   fireEvent.pointerDown(screen.getByRole("button", { name: "A" }));
   await act(async () => {});
   expect(mocks.api.list_known_projects).toHaveBeenCalledWith(true);
+  // Islands with no key art show the UEFN mark, never a blank tile.
+  expect(screen.getAllByLabelText("UEFN island")).toHaveLength(2);
   fireEvent.click(screen.getByTitle("C:/B"));
   expect(screen.queryByTitle("C:/B")).toBeNull();
   expect(mocks.api.set_project_root).not.toHaveBeenCalled();
