@@ -11,12 +11,16 @@ same bytes) and B's History shows the change. The probe is deleted again afterwa
 live: B joins A's group; presence, hello (B's Hub got rtc commands), link path, a
 ``ducky.pointer`` from A reaches B's page events, a ``ducky.view`` from A reaches B
 (Follow), and B's panel hears a refresh on join. B goes back to the room it was in.
+imk: every team file reads back on B with the same bytes (no "Not on this PC yet"), Undo
+of B's own change from History lands on both, and a control A holds (live message and
+presence) and an item A locks show on B.
 Exit code 0 only when every check passed.
 """
 from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import struct
 import sys
@@ -286,12 +290,132 @@ def run_live(a: App, b: App, timeout: float) -> bool:
             print(f"note: live cleanup: {exc}")
 
 
+def run_imk(a: App, b: App, timeout: float) -> bool:
+    """The plugin's own team features across both apps: its pictures, Undo, locks."""
+    ok_all = True
+
+    def check(name: str, ok: bool, detail: str = "") -> bool:
+        nonlocal ok_all
+        ok_all &= ok
+        print(f"{name} {'ok' if ok else 'FAIL'}{(': ' + detail) if detail else ''}")
+        return ok
+
+    # Pictures: a page shows "Not on this PC yet" for a file the team has and this PC doesn't.
+    def missing_on_b() -> Any:
+        b.call("plugin_scope_sync", b.plugin, True)
+        fa = {f["path"]: f.get("sha256") for f in a.data("files.list", prefix="").get("files") or []}
+        fb = {f["path"]: f.get("sha256") for f in b.data("files.list", prefix="").get("files") or []}
+        gone = sorted(p for p, sha in fa.items() if fb.get(p) != sha)
+        return (fa, gone) if not gone else None
+
+    got, t = wait(missing_on_b, timeout, 3.0)
+    if t >= 0:
+        fa = got[0]
+        # Listed isn't enough: the page loads the bytes (team files carry no extension to pick pictures by).
+        unread = [p for p, sha in sorted(fa.items())
+                  if hashlib.sha256(base64.b64decode(b.data("files.get", path=p).get("b64") or "")).hexdigest() != sha]
+        check("pictures on B", not unread, f"all {len(fa)} team files read back on B with the same sha256, in {t:.1f} s"
+              if not unread else f"{len(unread)} of {len(fa)} listed but not readable on B: {unread[:4]}")
+    else:
+        fa = {f["path"]: f.get("sha256") for f in a.data("files.list", prefix="").get("files") or []}
+        fb = {f["path"]: f.get("sha256") for f in b.data("files.list", prefix="").get("files") or []}
+        gone = sorted(p for p, sha in fa.items() if fb.get(p) != sha)
+        check("pictures on B", False, f"{len(gone)} of {len(fa)} not on B: {gone[:4]} · {stuck(b.status())}")
+
+    # Undo from History on B: B's own change, undone on B, gone on A too.
+    key = f"e2e.undo.{time.strftime('%Y%m%d-%H%M%S')}"
+    try:
+        b.data("data.put", key=key, value={"probe": key})
+        b.call("plugin_scope_push", b.plugin, f"e2e undo probe {key}")
+        hist, t = wait(lambda: next((e for e in b.call("plugin_scope_history", b.plugin, {"limit": 20}).get("entries")
+                                     or [] if ["doc", key] in (e.get("items") or [])), None), timeout, 2.0)
+        if t < 0:
+            check("restore on B", False, f"B's change never reached History: {stuck(b.status())}")
+        else:
+            out = b.call("plugin_scope_restore", b.plugin, {"undoSeq": hist["seq"], "message": "e2e undo"})
+            if not out.get("ok", True):
+                check("restore on B", False, f"undo #{hist['seq']}: {out.get('error')}")
+            else:
+                def undone() -> Any:
+                    a.call("plugin_scope_pull", a.plugin)
+                    return (b.data("data.get", key=key).get("value") is None
+                            and a.data("data.get", key=key).get("value") is None) or None
+
+                _, t2 = wait(undone, timeout, 3.0)
+                check("restore on B", t2 >= 0, f"undo #{hist['seq']} on B, gone on A in {t2:.1f} s" if t2 >= 0 else
+                      f"undo #{hist['seq']} answered {json.dumps(out)[:160]}, value still on "
+                      f"{'B' if b.data('data.get', key=key).get('value') is not None else 'A'}")
+    finally:
+        try:
+            if b.data("data.get", key=key).get("value") is not None:
+                b.data("data.delete", key=key)
+        except Exception as exc:
+            print(f"note: undo probe cleanup on B: {exc}")
+
+    # Locks: a control A is pressing (live hold) and an item A locked both show on B.
+    la = a.live()
+    a_joined = not la.get("on")
+    if a_joined:
+        la = a.call("plugin_live_join", a.plugin, "")
+    room = str(la.get("room") or "")
+    lb = b.live()
+    b_was = str(lb.get("room") or "") if lb.get("on") else ""
+    anchor, unit = "e2e-probe-control", f"e2e-lock-{int(time.time())}"
+    try:
+        b.call("plugin_live_join", b.plugin, room)
+        b.mark()
+        # Greyed at once by the ducky.hold live message; kept by A's presence, which the
+        # page renews every 10 s (a hold not renewed for 30 s is gone), so renew here too.
+        a.call("plugin_live_hold", a.plugin, anchor, True, 0.0, "")
+        seen: list[dict[str, Any]] = []
+        renewed = [time.monotonic()]
+
+        def live_hold() -> Any:
+            seen.extend(b.events())
+            return next((e for e in seen if e.get("type") == "live_message" and e.get("topic") == "ducky.hold"
+                         and (e.get("data") or {}).get("anchor") == anchor), None)
+
+        def presence_hold() -> Any:
+            if time.monotonic() - renewed[0] >= 10:
+                a.call("plugin_live_hold", a.plugin, anchor, True, 0.0, "")
+                renewed[0] = time.monotonic()
+            return next((h for h in (b.call("plugin_live_holds", b.plugin).get("holds") or [])
+                         if h.get("anchor") == anchor), None)
+
+        _, t = wait(live_hold, 20, 0.5)
+        if t < 0:  # B may still be linking: one more press once it is
+            a.call("plugin_live_hold", a.plugin, anchor, True, 0.0, "")
+            _, t = wait(live_hold, 20, 0.5)
+        check("hold grey on B (live)", t >= 0, f"{t:.1f} s" if t >= 0 else "no ducky.hold from A on B's page in 40 s")
+        _, t = wait(presence_hold, timeout, 2.0)
+        check("hold grey on B (presence)", t >= 0, f"{t:.1f} s" if t >= 0 else
+              f"B's plugin_live_holds never had A's control in {timeout:.0f} s")
+        lk = a.call("plugin_scope_lock", a.plugin, unit, "e2e probe")
+        if not lk.get("ok", True):
+            check("lock on B", False, f"A lock: {lk.get('error')}")
+        else:
+            seen, t = wait(lambda: next((x for x in b.call("plugin_scope_activity", b.plugin).get("locks") or []
+                                         if unit in json.dumps(x)), None), timeout, 2.0)
+            check("lock on B", t >= 0, f"{t:.1f} s" if t >= 0 else "B's locks never had A's lock")
+    finally:
+        for step in (lambda: a.call("plugin_live_hold", a.plugin, anchor, False, 0.0, ""),
+                     lambda: a.call("plugin_scope_unlock", a.plugin, unit),
+                     lambda: b.call("plugin_live_join", b.plugin, b_was) if b_was and b_was != room
+                     else (b.call("plugin_live_leave", b.plugin) if not b_was else None),
+                     lambda: a.call("plugin_live_leave", a.plugin) if a_joined else None):
+            try:
+                step()
+            except Exception as exc:
+                print(f"note: lock cleanup: {exc}")
+    return ok_all
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--a", type=int, default=4199, help="app A's panel port")
     ap.add_argument("--b", type=int, default=4299, help="app B's panel port")
     ap.add_argument("--plugin", default="island-media-kit")
-    ap.add_argument("--only", choices=("sync", "live"), default="")
+    ap.add_argument("--only", choices=("sync", "live", "imk"), default="")
     ap.add_argument("--timeout", type=float, default=120.0, help="seconds per waiting stage")
     args = ap.parse_args()
     a, b = App("A", args.a, args.plugin), App("B", args.b, args.plugin)
@@ -310,6 +434,9 @@ def main() -> int:
     if args.only in ("", "live"):
         print("== live")
         ok &= run_live(a, b, args.timeout)
+    if args.only in ("", "imk"):
+        print("== imk")
+        ok &= run_imk(a, b, args.timeout)
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
 
