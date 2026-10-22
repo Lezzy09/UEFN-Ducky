@@ -672,6 +672,41 @@ def ducky_perf_report(clear: bool = False, pretty: bool = False) -> str:
     return tool_json(report, pretty=pretty)
 
 
+@mcp.tool()
+def ducky_memory_report(start_trace: bool = False, stop_trace: bool = False, collect: bool = True,
+                        top: int = 30, pretty: bool = False) -> str:
+    """What the UEFN Ducky app process holds in memory. Host-side; no UEFN listener.
+
+    Sections: ``process`` (RSS, private bytes, threads), ``gc`` (a full collection, then live
+    objects by type), ``containers`` (the biggest module globals and thread locals by
+    approximate deep size, the top ones broken down one level) and, once
+    ``start_trace=true``, ``tracemalloc`` (top allocation sites; ``grew``: what grew since
+    the previous call). ``stop_trace=true`` ends tracing. Takes a few to ~30 seconds.
+    """
+    from frontend.ui_web import agent_modes
+
+    args = {"start_trace": bool(start_trace), "stop_trace": bool(stop_trace), "collect": bool(collect),
+            "top": int(top)}
+    if not agent_modes._in_bridge_process():
+        from frontend.memory_report import report
+
+        return tool_json(report(**args), pretty=pretty)
+    import urllib.request
+
+    from frontend.settings import PANEL_LISTENER_PORT
+
+    # The app's memory is the window process's; this tool server is another process.
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{PANEL_LISTENER_PORT - 1}/__panel_api/memory_report",
+        data=json.dumps({"args": args}).encode("utf-8"), headers={"Content-Type": "application/json"},
+    )
+    try:
+        out = json.loads(urllib.request.urlopen(request, timeout=120).read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return tool_json({"ok": False, "error": f"Ducky's window did not answer: {exc}"}, pretty=pretty)
+    return tool_json(out.get("result") if isinstance(out.get("result"), dict) else out, pretty=pretty)
+
+
 def _tool_ids_from_conv(conv: Any) -> list[str] | None:
     ids: list[str] = []
     for x in getattr(conv, "builtin_toolsets", None) or []:

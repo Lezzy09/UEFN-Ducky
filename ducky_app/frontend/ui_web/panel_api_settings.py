@@ -1919,6 +1919,13 @@ class PanelApiSettingsMixin:
         _pa.clear_error_log()
         return []
 
+    def memory_report(self, start_trace: bool = False, stop_trace: bool = False, collect: bool = True,
+                      top: int = 30) -> dict[str, Any]:
+        """What this app process holds (``ducky_memory_report`` asks here from the tool server)."""
+        from frontend.memory_report import report
+
+        return report(start_trace=bool(start_trace), stop_trace=bool(stop_trace), collect=bool(collect), top=top)
+
     def copy_support_dump(self) -> str:
         from frontend.support_dump import format_support_dump
 
