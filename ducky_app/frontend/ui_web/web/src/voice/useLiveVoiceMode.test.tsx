@@ -46,6 +46,23 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
+describe("live turn end", () => {
+  it("waits for a real pause before ending the turn, and new speech restarts the wait", async () => {
+    const onTurnEnd = vi.fn();
+    renderHook(() => useLiveVoiceMode({ ...props, onTurnEnd }));
+    await act(async () => {});
+    act(() => mock.handlers.onFinal("make a door"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(onTurnEnd).not.toHaveBeenCalled();
+    act(() => mock.handlers.onSpeechStarted());
+    act(() => mock.handlers.onFinal("that opens"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(onTurnEnd).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(onTurnEnd).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("live mic recovery", () => {
   it("clears reconnect notice when the mic recovers and when muted", async () => {
     const { rerender } = renderHook((p) => useLiveVoiceMode(p), { initialProps: props });

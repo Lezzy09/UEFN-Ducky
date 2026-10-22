@@ -30,8 +30,9 @@ import { getVoiceSettings, resolveSpeed, resolveVoiceId, subscribeVoiceSettings 
 
 export type LiveVoiceStatus = "off" | "connecting" | "listening" | "thinking" | "speaking" | "error" | "muted";
 
-/** Quiet time after the last confirmed words before a spoken turn counts as finished. */
-const TURN_END_MS = 900;
+/** Quiet time after the last confirmed words before a spoken turn counts as finished.
+ *  Long enough for a thinking pause; any new speech restarts it. */
+const TURN_END_MS = 2000;
 /** Transient listen failures (network blips, helper restarts) retry this many times. */
 const MAX_RETRIES = 3;
 const RETRY_MS = 1200;
