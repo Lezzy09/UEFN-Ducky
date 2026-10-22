@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import { ChoiceDropdown } from "../ChoiceDropdown";
 import { Modal } from "../Modal";
 import { Icons } from "../../icons/Icons";
 import { getApi } from "../../hooks/usePanelApi";
@@ -30,50 +31,41 @@ function kindLabel(row: KnownProject): string {
   return projectFlavorName(row.flavor || "folder").replace(/ project$/, "");
 }
 
-interface ProjectCardProps {
-  row: KnownProject;
-  live: boolean;
-  onOpen: (row: KnownProject) => void;
-  onRemove: (row: KnownProject) => void;
-}
+const SORT_OPTIONS = [
+  { value: "recent", label: "Last opened" },
+  { value: "name", label: "Name" },
+];
 
-function ProjectCard({ row, live, onOpen, onRemove }: ProjectCardProps) {
+const CloseIcon = () => (
+  <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);
+
+const Check = () => (
+  <span className="vtm-card-check" aria-hidden>
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 6L9 17l-5-5" />
+    </svg>
+  </span>
+);
+
+/** The card's picture: the island's key art, else the UEFN mark, else the project's icon. */
+function CardArt({ row, active }: { row: KnownProject; active: boolean }) {
   const [broken, setBroken] = useState(false);
   const thumb = !broken ? row.thumbnail_url : "";
-  const opened = formatRelativeTime(row.last_opened);
   return (
-    <div className={`projects-card${row.active ? " is-active" : ""}`}>
-      <button type="button" className="projects-card-open" title={row.path} onClick={() => onOpen(row)}>
-        <span className="projects-card-thumb">
-          {thumb ? (
-            <img src={thumb} alt="" loading="lazy" onError={() => setBroken(true)} />
-          ) : row.kind === "uefn" ? (
-            // No key art (or it failed to load): the UEFN mark instead of a blank tile.
-            <span className="projects-card-uefn-mark" aria-label="UEFN island">
-              UEFN
-            </span>
-          ) : (
-            <span className="projects-card-thumb-icon">
-              <ProjectFlavorIcon flavor={row.flavor || row.kind} />
-            </span>
-          )}
-        </span>
-        <span className="projects-card-kind">
-          {kindLabel(row)}
-          {live ? <span className="project-selector-uefn-badge">Open in UEFN</span> : null}
-        </span>
-        <span className="projects-card-name">{row.name}</span>
-        <span className="projects-card-meta">{opened ? `Opened ${opened}` : "Never opened in Ducky"}</span>
-      </button>
-      <button
-        type="button"
-        className="project-selector-delete-btn projects-card-remove"
-        title={`Remove ${row.name}`}
-        onClick={() => onRemove(row)}
-      >
-        <Icons.Trash />
-      </button>
-    </div>
+    <span className={`vtm-card-icon${active ? " is-selected" : ""}${row.kind === "uefn" && !thumb ? " vtm-card-icon--uefn" : ""}`} aria-hidden={!!thumb}>
+      {thumb ? (
+        <img src={thumb} alt="" loading="lazy" onError={() => setBroken(true)} />
+      ) : row.kind === "uefn" ? (
+        // No key art (or it failed to load): the UEFN mark instead of a blank tile.
+        <span aria-label="UEFN island">UEFN</span>
+      ) : (
+        <ProjectFlavorIcon flavor={row.flavor || row.kind} />
+      )}
+    </span>
   );
 }
 
@@ -85,12 +77,12 @@ interface ProjectsModalProps {
   onAddProject: () => void;
   onRemoveProject: (row: KnownProject) => Promise<boolean>;
   isLive: (row: { name?: string; mount?: string }) => boolean;
-  /** Banner above the grid (UEFN has another island open). */
+  /** Banner above the cards (UEFN has another island open). */
   banner?: ReactNode;
 }
 
-/** Every project Ducky knows, like a launcher: UEFN islands (found on disk, no adding
- * needed), other folders, and a tab per plugin that lists projects. */
+/** Every project Ducky knows, in the same picker as New workflow: UEFN islands (found on
+ * disk, no adding needed), other folders, and a shelf per plugin that lists projects. */
 export function ProjectsModal({
   open,
   onClose,
@@ -102,6 +94,7 @@ export function ProjectsModal({
   banner,
 }: ProjectsModalProps) {
   const [listing, setListing] = useState<KnownProjectsListing>({ sources: [], projects: [] });
+  const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState("");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<ProjectSort>("recent");
@@ -109,87 +102,155 @@ export function ProjectsModal({
   const load = useCallback(async (rescan: boolean) => {
     const api = getApi();
     if (!api?.list_known_projects) return;
+    setLoading(true);
     try {
       setListing(await api.list_known_projects(rescan));
     } catch (e) {
       console.error("[projects] list failed", e);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     if (!open) return;
     setQuery("");
-    // Start on the open project's tab: an island opens on UEFN, a repo on Other.
+    // Start on the open project's shelf: an island opens on UEFN, a repo on Other.
     setTab(project.kind === "folder" ? "other" : "uefn");
     void load(true);
   }, [open, load, project.kind]);
 
   const rows = useMemo(() => visibleProjects(listing.projects, tab, query, sort), [listing.projects, tab, query, sort]);
-  const countFor = (id: string) => listing.projects.filter((r) => r.source === id).length;
   const sources = listing.sources.length ? listing.sources : [{ id: "uefn", label: "UEFN" }, { id: "other", label: "Other" }];
 
-  const remove = async (row: KnownProject) => {
+  const remove = async (row: KnownProject, e: MouseEvent) => {
+    e.stopPropagation();
     if (await onRemoveProject(row)) void load(false);
   };
 
+  const card = (row: KnownProject) => {
+    const opened = formatRelativeTime(row.last_opened);
+    return (
+      <button
+        key={row.path}
+        type="button"
+        role="option"
+        aria-selected={row.active}
+        className={`vtm-card${row.active ? " is-selected" : ""}`}
+        title={row.path}
+        onClick={() => onOpenProject(row.path)}
+      >
+        <CardArt row={row} active={row.active} />
+        <span className="vtm-card-body">
+          <span className="vtm-card-name">{row.name}</span>
+          <span className="vtm-card-desc">{opened ? `Opened ${opened}` : "Never opened in Ducky"}</span>
+          <span className={`vtm-badge${isLive(row) ? " vtm-badge--system" : ""}`}>
+            {isLive(row) ? `${kindLabel(row)} · Open in UEFN` : kindLabel(row)}
+          </span>
+        </span>
+        {row.active ? <Check /> : null}
+        <span className="vtm-card-actions">
+          <span
+            role="button"
+            tabIndex={0}
+            className="vtm-card-action vtm-card-action--danger"
+            aria-label={`Remove ${row.name}`}
+            title={`Remove ${row.name}`}
+            onClick={(e) => void remove(row, e)}
+          >
+            <Icons.Trash />
+          </span>
+        </span>
+      </button>
+    );
+  };
+
   return (
-    <Modal open={open} onClose={onClose} title="Projects" width={980} className="projects-modal" bodyClassName="projects-modal-body">
-      <div className="projects-toolbar">
-        <div className="projects-tabs" role="tablist">
-          {sources.map((source) => (
-            <button
-              key={source.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === source.id}
-              className={`projects-tab${tab === source.id ? " is-active" : ""}`}
-              onClick={() => setTab(source.id)}
-            >
-              {source.label}
-              <span className="projects-tab-count">{countFor(source.id)}</span>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Projects"
+      width={820}
+      hideHeader
+      hideClose
+      className="vtm-modal vtm-modal--workflows"
+      bodyClassName="vtm-modal-body"
+    >
+      <div className="vtm vtm--workflows">
+        <div className="vtm-view vtm-view--active">
+          <div className="vtm-header">
+            <div className="vtm-header-left">
+              <h2 className="vtm-title">Projects</h2>
+              <ChoiceDropdown
+                aria-label="Sort projects"
+                size="compact"
+                value={sort}
+                minWidth={160}
+                options={SORT_OPTIONS}
+                onChange={(value) => setSort(value as ProjectSort)}
+              />
+            </div>
+            <button type="button" className="vtm-icon-btn" onClick={onClose} aria-label="Close"><CloseIcon /></button>
+          </div>
+          <div className="vtm-search">
+            <div className="vtm-search-wrap">
+              <span className="vtm-search-icon" aria-hidden>
+                <svg className="vtm-search-svg" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </span>
+              <input
+                type="text"
+                className="vtm-input vtm-search-input"
+                placeholder="Search projects..."
+                aria-label="Search projects"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="vtm-shelves" role="tablist" aria-label="Project kinds">
+              {sources.map((source) => (
+                <button
+                  key={source.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === source.id}
+                  className={`vtm-shelf${tab === source.id ? " is-active" : ""}`}
+                  onClick={() => setTab(source.id)}
+                >
+                  {source.label}
+                  <span className="vtm-shelf-count">{listing.projects.filter((r) => r.source === source.id).length}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="vtm-body vtm-picker-body" role="listbox" aria-label="Projects">
+            {banner}
+            {loading && !listing.projects.length ? <div className="vtm-status">Loading projects…</div> : null}
+            {rows.length ? <div className="vtm-grid">{rows.map(card)}</div> : null}
+            {!loading && !rows.length ? (
+              <div className="vtm-empty">
+                <div className="vtm-empty-icon" aria-hidden>🔍</div>
+                <p className="vtm-empty-text">
+                  {query
+                    ? "No matching projects"
+                    : tab === "uefn"
+                      ? "No UEFN islands in Documents/Fortnite Projects yet"
+                      : "Add any folder to work on it as a project"}
+                </p>
+              </div>
+            ) : null}
+          </div>
+          <div className="vtm-footer">
+            <button type="button" className="vtm-btn vtm-btn--ghost" onClick={onClose}>Close</button>
+            <button type="button" className="vtm-btn vtm-btn--primary" onClick={onAddProject}>
+              <Icons.Plus />
+              Add project
             </button>
-          ))}
+          </div>
         </div>
-        <label className="projects-search">
-          <Icons.Search />
-          <input
-            type="search"
-            placeholder="Search projects"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label="Search projects"
-          />
-        </label>
-        <select
-          className="projects-sort"
-          value={sort}
-          onChange={(e) => setSort(e.target.value as ProjectSort)}
-          aria-label="Sort projects"
-        >
-          <option value="recent">Last opened</option>
-          <option value="name">Name</option>
-        </select>
-        <button type="button" className="settings-btn projects-add-btn" onClick={onAddProject}>
-          <Icons.Plus />
-          Add project
-        </button>
       </div>
-      {banner}
-      {rows.length ? (
-        <div className="projects-grid">
-          {rows.map((row) => (
-            <ProjectCard key={row.path} row={row} live={isLive(row)} onOpen={(r) => onOpenProject(r.path)} onRemove={remove} />
-          ))}
-        </div>
-      ) : (
-        <div className="projects-empty">
-          {query
-            ? "No project matches that search."
-            : tab === "uefn"
-              ? "No UEFN islands found in Documents/Fortnite Projects yet."
-              : "Add any folder to work on it as a project."}
-        </div>
-      )}
     </Modal>
   );
 }
