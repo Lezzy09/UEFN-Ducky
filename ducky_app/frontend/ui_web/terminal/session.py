@@ -188,10 +188,8 @@ class PendingCommand:
     timeout_s: float = 300.0
     # An Allow card was shown for it (not when the chat allows everything).
     asked: bool = False
-    # What the card offers: "Always allow <rule_label> in this chat" ('' = not offered),
-    # and no "Allow everything" for a push or publish of a local-only AI plugin.
+    # What the card offers: "Always allow <rule_label> in this chat" ('' = not offered).
     rule_label: str = ""
-    local_only: bool = False
     shell: str = ""
     cwd: str = ""
     # A team member's card also shows in its lead's chat (the chat that started its run),

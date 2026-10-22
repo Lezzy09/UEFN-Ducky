@@ -73,7 +73,7 @@ def test_the_card_names_its_chat_folder_and_what_always_allow_would_save(monkeyp
     card, worker = _ask(mgr, events, "npm test")
     assert card["type"] == "terminal_command_pending"
     assert card["conv_id"] == "c1" and card["cwd"] == "C:/repo" and card["shell"] == "powershell"
-    assert card["rule_label"] == "npm test" and card["local_only"] is False
+    assert card["rule_label"] == "npm test"
     # A window that reloads gets the same card back.
     assert [row["request_id"] for row in mgr.list_pending()] == [card["request_id"]]
     assert mgr.reject_command(card["request_id"])["ok"]
@@ -111,13 +111,14 @@ def test_allow_everything_turns_on_the_chats_switch(monkeypatch, chat_rules) -> 
     assert chat_rules == {"c1": ["*"]}
 
 
-def test_a_push_never_offers_always_and_a_local_only_plugin_never_offers_everything(monkeypatch, chat_rules) -> None:
+def test_a_push_never_offers_always_and_any_plugin_push_can_allow_everything(monkeypatch, chat_rules) -> None:
     mgr, _session, events = _manager(monkeypatch)
     card, worker = _ask(mgr, events, "git -C uefn-plugin-openai push")
-    assert card["rule_label"] == "" and card["local_only"] is True
+    assert card["rule_label"] == "" and "local_only" not in card
     out = mgr.approve_command(card["request_id"], scope="all")
     worker.join(5)
-    assert out["ok"] and out["saved"] == "once" and chat_rules == {}
+    assert out["ok"] and out["saved"] == "all" and chat_rules == {"c1": ["*"]}
+    chat_rules.clear()
 
     card, worker = _ask(mgr, events, "npm test && git push")
     assert card["rule_label"] == ""

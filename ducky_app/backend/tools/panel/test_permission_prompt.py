@@ -116,14 +116,15 @@ def test_a_remembered_command_rule_never_covers_a_risky_command(monkeypatch, con
     assert asked, "only Allow everything stops the card for a push"
 
 
-def test_allow_everything_still_refuses_to_push_a_local_only_ai_plugin(monkeypatch, conv) -> None:
+def test_allow_everything_pushes_an_ai_plugin_like_any_repo(monkeypatch, conv) -> None:
+    # Oct 22 2026: AI plugins are Store plugins (owner, Oct 9); the old local-only refusal
+    # stopped an agent pushing the Anthropic plugin's own fix.
     pp._remember("c1", "*")
-    asked = _answer(monkeypatch, ["once"])
-    out = pp.decide("Bash", {"command": "git push"}, conv_id="c1", project_root=r"C:\GitHub\uefn-plugins\uefn-plugin-anthropic")
-    assert out["behavior"] == "deny" and "local-only AI plugin" in out["message"]
+    asked = _answer(monkeypatch, ["deny"])
+    plugin = r"C:\GitHub\uefn-plugins\uefn-plugin-anthropic"
+    for command in ("git push", "git -C C:/x/uefn-plugin-openai push origin main", "cd C:/x/uefn-plugin-kimi && git push"):
+        assert pp.decide("Bash", {"command": command}, conv_id="c1", project_root=plugin)["behavior"] == "allow", command
     assert asked == []
-    assert pp.decide("Bash", {"command": "git status"}, conv_id="c1",
-                     project_root=r"C:\GitHub\uefn-plugins\uefn-plugin-anthropic")["behavior"] == "allow"
 
 
 def test_allow_everything_covers_the_runs_a_chat_starts(monkeypatch, conv) -> None:
@@ -144,17 +145,6 @@ def test_allow_everything_covers_the_runs_a_chat_starts(monkeypatch, conv) -> No
     assert pp.allow_state("member") == {"on": True, "own": False, "from_title": "the chat that started it"}
     pp.note_started_by("sub", "")  # its next run came from its own chat, a schedule or the Workflows screen
     assert not pp.allows_everything("sub") and not pp.allows_everything("member")
-
-
-def test_a_cd_into_a_local_only_plugin_then_push_is_refused(monkeypatch, conv) -> None:
-    pp._remember("c-cd", "*")
-    pp._SHELL_DIRS.pop("chat:c-cd", None)
-    repo = r"C:\GitHub\UEFN-Ducky-Release"
-    assert pp.decide("Bash", {"command": "cd C:/GitHub/uefn-plugins/uefn-plugin-anthropic"}, conv_id="c-cd", project_root=repo)["behavior"] == "allow"
-    out = pp.decide("Bash", {"command": "git push origin main"}, conv_id="c-cd", project_root=repo)
-    assert out["behavior"] == "deny" and "local-only AI plugin" in out["message"]
-    assert pp.decide("Bash", {"command": "cd C:/GitHub/UEFN-Ducky-Release"}, conv_id="c-cd", project_root=repo)["behavior"] == "allow"
-    assert pp.decide("Bash", {"command": "git push origin main"}, conv_id="c-cd", project_root=repo)["behavior"] == "allow"
 
 
 def test_who_started_a_run_is_kept_by_follow_ups(monkeypatch, conv) -> None:
@@ -187,38 +177,6 @@ def test_allow_everything_turns_off_and_goes_with_its_chat(monkeypatch, conv) ->
     assert pp.allows_everything("twin") and pp._started_by("twin") == "lead"
 
 
-def test_the_local_only_refusal_knows_every_push_and_publish(tmp_path) -> None:
-    (tmp_path / "uefn-plugin-anthropic").mkdir()
-    (tmp_path / "uefn-plugin-meshy").mkdir()
-    plugins, repo = str(tmp_path), r"C:\GitHub\UEFN-Ducky-Release"
-    for command, where in (
-        ("git -C C:/x/uefn-plugin-kimi push origin main", repo),
-        ("gh repo create me/uefn-plugin-anthropic --public --source . --push", repo),
-        ("cd C:/x/uefn-plugin-openai && gh release create v1.0.0", repo),
-        ("py scripts/release.py --publish", r"C:\x\uefn-plugin-google"),
-        ("npm publish", r"C:\x\uefn-plugin-ollama"),
-        ("git push origin main", plugins),  # a folder of plugins: the shell may sit in a local-only one
-        ('bash -c "cd ../uefn-plugins/uefn-plugin-anthropic && git push"', repo),  # wrapped in a quoted shell call
-        ('cmd /c "git -C C:\\x\\uefn-plugin-anthropic push"', repo),
-        ('powershell -Command "Set-Location ../uefn-plugin-kimi; git push origin main"', repo),
-        ("gh api -X POST repos/UEFN-Ducky/uefn-plugin-anthropic/releases", repo),
-        ("gh workflow run release.yml -R UEFN-Ducky/uefn-plugin-openai", repo),
-    ):
-        assert pp._never_runs(command, where), command
-    # A bare push after an earlier `cd` into a local-only plugin.
-    assert pp._never_runs("git push", repo, "C:/x/uefn-plugins/uefn-plugin-anthropic")
-    for command, where in (
-        ("git -C uefn-plugin-meshy push", plugins),  # another plugin, named
-        ("git push origin main", repo),
-        ('git commit -am "no publish step"', r"C:\x\uefn-plugin-anthropic"),
-        ('git commit -m "then git push it"', r"C:\x\uefn-plugin-anthropic"),
-        ('git log --grep="git push"', r"C:\x\uefn-plugin-anthropic"),
-        ("grep -rn publish backend/", r"C:\x\uefn-plugin-anthropic"),
-        ("git log --oneline -3", r"C:\x\uefn-plugin-anthropic"),
-    ):
-        assert not pp._never_runs(command, where), command
-
-
 @pytest.mark.parametrize("tool", ["Read", "Glob", "Grep", "LS"])
 def test_read_only_tools_never_ask(monkeypatch, conv, tool: str) -> None:
     asked = _answer(monkeypatch, ["deny"])
@@ -238,11 +196,12 @@ def test_deny_passes_the_users_reason(monkeypatch, conv) -> None:
     assert out == {"behavior": "deny", "message": "The user denied this and said: use the staging branch"}
 
 
-def test_push_in_local_only_ai_plugin_warns(monkeypatch, conv) -> None:
-    asked = _answer(monkeypatch, ["deny"])
-    pp.decide("Bash", {"command": "git push"}, conv_id="c1", project_root=r"C:\GitHub\uefn-plugins\uefn-plugin-anthropic")
-    assert "local-only AI plugin" in asked[0]["questions"][0]["warning"]
-    assert [o["id"] for o in asked[0]["questions"][0]["options"]] == ["once", "deny"]  # no Allow everything here
+def test_push_in_an_ai_plugin_asks_like_any_push(monkeypatch, conv) -> None:
+    asked = _answer(monkeypatch, ["once"])
+    out = pp.decide("Bash", {"command": "git push"}, conv_id="c1", project_root=r"C:\GitHub\uefn-plugins\uefn-plugin-anthropic")
+    assert out["behavior"] == "allow"
+    assert asked[0]["questions"][0]["warning"] == "Pushes commits to a remote."
+    assert [o["id"] for o in asked[0]["questions"][0]["options"]] == ["once", "all", "deny"]
 
 
 def test_panel_unreachable_denies(monkeypatch, conv) -> None:
@@ -317,7 +276,7 @@ def test_claude_code_asks_before_edits_only_when_the_chat_asks_before_changes(co
     assert pp.claude_permission_mode("c1", "bypassPermissions") == "bypassPermissions"
     pp.set_permission_mode("c1", "ask")
     assert pp.claude_permission_mode("c1", "acceptEdits") == "default"
-    pp.set_permission_mode("c1", "all")  # the approval card tool still refuses local-only plugin pushes
+    pp.set_permission_mode("c1", "all")
     assert pp.claude_permission_mode("c1", "acceptEdits") == "acceptEdits"
 
 

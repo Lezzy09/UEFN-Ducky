@@ -2085,19 +2085,11 @@ def ducky_terminal_run(
     card in this chat (no card when this chat said "Allow everything" or "Always allow" for
     this command, or when the command is typed into the Local workflow running it)."""
     mgr = _terminal_manager()
-    auto = False
     chat = _terminal_chat(conv_id)
     from backend.automations.runner import typed_command_approved
-    from backend.tools.panel.permission_prompt import _never_runs, _project_root, allows_everything, note_shell_dir, shell_dir
+    from backend.tools.panel.permission_prompt import allows_everything
 
-    shell = f"term:{session_id.strip()}"
-    if (chat and allows_everything(chat)) or typed_command_approved(command):
-        session = mgr.get_session(session_id.strip())
-        refused = _never_runs(command, getattr(session, "cwd", "") or _project_root(), shell_dir(shell))
-        if refused:
-            return tool_json({"ok": False, "error": refused}, pretty=pretty)
-        auto = True
-    note_shell_dir(shell, command)
+    auto = bool(chat and allows_everything(chat)) or typed_command_approved(command)
     result = mgr.run_agent_command(
         session_id.strip(),
         command,

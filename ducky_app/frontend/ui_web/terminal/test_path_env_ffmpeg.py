@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 
 def test_terminals_get_duckys_ffmpeg_after_the_persons_own(monkeypatch, tmp_path) -> None:
@@ -23,6 +22,18 @@ def test_terminals_get_duckys_ffmpeg_after_the_persons_own(monkeypatch, tmp_path
 
 def env_twice(path_env) -> str:
     return path_env.env_with_fresh_path(path_env.env_with_fresh_path({}))["PATH"]
+
+
+def test_a_terminal_gets_one_path_entry(monkeypatch, tmp_path) -> None:
+    # Oct 22 2026: "Path" and "PATH" both reached the terminal, and Git could not start its
+    # credential helper there: every push died with exit 128 and no message.
+    from frontend.ui_web.terminal import path_env
+
+    monkeypatch.setattr("backend.agent.video.ffmpeg_install.binaries", lambda: (tmp_path / "ffmpeg.exe", tmp_path / "ffprobe.exe"))
+    monkeypatch.setattr(path_env, "windows_merged_path", lambda: "C:/Windows")
+    env = path_env.env_with_fresh_path({"Path": "C:/old", "PATH": "C:/old", "HOME": "C:/me"})
+    assert [k for k in env if k.lower() == "path"] == ["PATH"]
+    assert env["PATH"] == os.pathsep.join(["C:/Windows", str(tmp_path)]) and env["HOME"] == "C:/me"
 
 
 def test_no_ffmpeg_no_change(monkeypatch) -> None:

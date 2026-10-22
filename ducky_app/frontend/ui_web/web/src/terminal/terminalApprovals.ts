@@ -48,7 +48,6 @@ function fromRow(row: Record<string, unknown>): PendingTerminalCommand | null {
     conv_id: String(row.conv_id ?? "").trim(),
     source: row.source ? String(row.source) : undefined,
     rule_label: String(row.rule_label ?? "").trim(),
-    local_only: Boolean(row.local_only),
     created_at: typeof row.created_at === "number" ? row.created_at : undefined,
     lead_conv_id: String(row.lead_conv_id ?? "").trim() || undefined,
     asked_by: String(row.asked_by ?? "").trim() || undefined,
@@ -124,12 +123,12 @@ export function terminalApprovalsForConv(convId: string): TerminalApproval[] {
   return snapshot.filter((item) => terminalApprovalShowsIn(item, convId));
 }
 
-/** The chat's options: Always/Everything only for a chat, and never for a local-only push. */
+/** The chat's options: Always/Everything only for a chat. */
 export function terminalApprovalChoices(item: PendingTerminalCommand): TerminalApprovalChoice[] {
   const inChat = Boolean((item.conv_id || "").trim());
   const out: TerminalApprovalChoice[] = ["once"];
   if (inChat && item.rule_label) out.push("always");
-  if (inChat && !item.local_only) out.push("all");
+  if (inChat) out.push("all");
   out.push("deny");
   return out;
 }

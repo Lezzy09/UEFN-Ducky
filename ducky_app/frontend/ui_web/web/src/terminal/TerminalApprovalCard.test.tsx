@@ -25,7 +25,6 @@ const pending = (request_id: string, conv_id: string, command = "npm test", extr
   cwd: "C:/repo",
   conv_id,
   rule_label: "npm test",
-  local_only: false,
   ...extra,
 });
 
@@ -132,13 +131,13 @@ describe("terminal command card in the chat that asked", () => {
     expect(api.terminal_approve_command).not.toHaveBeenCalled();
   });
 
-  it("offers no Always for a command it never remembers, and no Allow everything for a local-only plugin push", async () => {
+  it("offers no Always for a command it never remembers, and a push in any plugin can still allow everything", async () => {
     render(<ChatTerminalApprovals convId="c1" />);
-    act(() => pushLocalAgentEvent(pending("r1", "c1", "git -C uefn-plugin-openai push", { rule_label: "", local_only: true })));
+    act(() => pushLocalAgentEvent(pending("r1", "c1", "git -C uefn-plugin-openai push", { rule_label: "" })));
     await flush();
     const labels = [...document.querySelectorAll(".ask-user-option-label")].map((el) => el.textContent);
-    expect(labels).toEqual(["Allow once", "Deny"]);
-    expect(screen.getByRole("note").textContent).toContain("local-only AI plugin");
+    expect(labels).toEqual(["Allow once", "Allow everything in this chat", "Deny"]);
+    expect(screen.queryByRole("note")).toBeNull();
   });
 
   it("keeps the card and says so when Ducky cannot be reached", async () => {
@@ -154,7 +153,7 @@ describe("terminal command card in the chat that asked", () => {
   it("a window opened later shows the cards still waiting", async () => {
     _resetTerminalApprovalsForTests();
     api.terminal_pending_commands.mockResolvedValue([
-      { request_id: "late", session_id: "s1", command: "npm ci", conv_id: "c1", rule_label: "npm ci", local_only: false, created_at: 1 },
+      { request_id: "late", session_id: "s1", command: "npm ci", conv_id: "c1", rule_label: "npm ci", created_at: 1 },
     ]);
     render(<ChatTerminalApprovals convId="c1" />);
     await flush();

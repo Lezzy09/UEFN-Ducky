@@ -367,7 +367,6 @@ class TerminalManager:
             timeout_s=float(timeout_s),
             asked=bool(push_pending),
             rule_label=str(offers.get("rule_label") or ""),
-            local_only=bool(offers.get("local_only")),
             shell=str(getattr(session, "shell", "") or ""),
             cwd=cwd,
             lead_conv_id=lead,
@@ -569,7 +568,7 @@ def _card_offers(command: str, cwd: str) -> dict[str, Any]:
 
         return describe_command(command, cwd)
     except Exception:
-        return {"rule_label": "", "local_only": False}
+        return {"rule_label": ""}
 
 
 def _chat_always_allows(conv_id: str, command: str, cwd: str) -> bool:
@@ -590,7 +589,7 @@ def _remember_choice(pending: PendingCommand, scope: str, answered_in: str = "")
     try:
         from backend.tools.panel.terminal_approval import remember
 
-        return remember(chat, pending.command, scope, cwd=pending.cwd, local_only=pending.local_only)
+        return remember(chat, pending.command, scope, cwd=pending.cwd)
     except Exception:
         return "once"
 
@@ -644,7 +643,6 @@ def _pending_dict(pending: PendingCommand, source: str) -> dict[str, Any]:
         "conv_id": pending.conv_id,
         "source": source,
         "rule_label": pending.rule_label,
-        "local_only": pending.local_only,
         "created_at": pending.created_at,
         "lead_conv_id": pending.lead_conv_id,
         "asked_by": pending.asked_by,

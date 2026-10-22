@@ -2094,8 +2094,6 @@ export interface AgentEvent {
   source?: string;
   /** terminal_command_pending: what "Always allow … in this chat" names ('' = not offered). */
   rule_label?: string;
-  /** terminal_command_pending: a local-only AI plugin push (no "Allow everything"). */
-  local_only?: boolean;
   /** terminal_command_pending: unix seconds when the agent asked. */
   created_at?: number;
   channel_id?: string;

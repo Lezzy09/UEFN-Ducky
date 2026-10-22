@@ -21,8 +21,6 @@ export interface PendingTerminalCommand {
   source?: string;
   /** What "Always allow … in this chat" names; empty = not offered (pushes, deletes, chains). */
   rule_label?: string;
-  /** Pushes or publishes a local-only AI plugin: no "Allow everything". */
-  local_only?: boolean;
   /** Unix seconds when the agent asked. */
   created_at?: number;
   /** A team member's card also shows in its lead's chat (the chat that started its run). */

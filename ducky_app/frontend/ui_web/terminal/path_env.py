@@ -42,13 +42,24 @@ def windows_merged_path() -> str:
         return os.environ.get("Path") or os.environ.get("PATH") or ""
 
 
+def _set_path(env: dict[str, str], value: str) -> None:
+    """One PATH entry, whatever casing the copy had.
+
+    Oct 22 2026: both "Path" and "PATH" went into the terminal's environment block, and Git
+    then couldn't start its credential helper: every `git push` in a Ducky terminal died with
+    exit 128 and no message, while the same push worked in Codex, Cursor or a normal console.
+    """
+    for key in [k for k in env if k.lower() == "path"]:
+        del env[key]
+    env["PATH"] = value
+
+
 def env_with_fresh_path(base: dict[str, str] | None = None) -> dict[str, str]:
     """Copy env and replace Path with the current User+Machine PATH."""
     env = dict(base if base is not None else os.environ)
     merged = windows_merged_path()
     if merged:
-        env["Path"] = merged
-        env["PATH"] = merged
+        _set_path(env, merged)
     _add_ducky_ffmpeg(env)
     # Claude Code / OAuth: embedded ConPTY often fails to open the default
     # browser ("about" link). Point BROWSER at a real Chrome/Edge if present.
@@ -78,10 +89,9 @@ def _add_ducky_ffmpeg(env: dict[str, str]) -> None:
     ffmpeg, ffprobe = (str(p) for p in pair)
     env["DUCKY_FFMPEG"], env["DUCKY_FFPROBE"] = ffmpeg, ffprobe
     folder = os.path.dirname(ffmpeg)
-    current = env.get("PATH") or env.get("Path") or ""
+    current = next((v for k, v in env.items() if k.lower() == "path"), "")
     if folder.lower() not in (part.strip().lower() for part in current.split(os.pathsep)):
-        joined = f"{current}{os.pathsep}{folder}" if current else folder
-        env["Path"] = env["PATH"] = joined
+        _set_path(env, f"{current}{os.pathsep}{folder}" if current else folder)
 
 
 def _windows_browser_exe() -> str:
@@ -106,6 +116,5 @@ def refresh_process_path() -> str:
     """Update this process's Path so which()/child tools see new installs."""
     merged = windows_merged_path()
     if merged:
-        os.environ["Path"] = merged
-        os.environ["PATH"] = merged
+        os.environ["PATH"] = merged  # one key on Windows: os.environ ignores the casing
     return merged

@@ -76,12 +76,6 @@ export function TerminalApprovalCard({ item, compact = false, inConv = "" }: Pro
       <h2 className="ask-user-prompt">
         {inLead && item.asked_by ? `${item.asked_by} wants to run a terminal command` : "Allow this terminal command?"}
       </h2>
-      {item.local_only ? (
-        <p className="ask-user-warning" role="note">
-          <Icons.AlertTriangle />
-          <span>This is a local-only AI plugin. It must never be pushed or published.</span>
-        </p>
-      ) : null}
       <pre className="ask-user-detail">{item.command}</pre>
       {where ? <p className="terminal-approval-where">Runs in {where}</p> : null}
       <div className="ask-user-options" aria-label="Answer">

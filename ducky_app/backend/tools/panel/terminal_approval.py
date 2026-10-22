@@ -4,8 +4,7 @@ The card sits in the chat that asked (Allow once / Always allow this command in 
 Allow everything in this chat / Deny). "Always allow" saves a ``Terminal:<command>`` rule on
 the chat, next to the rules Claude Code's approval cards save, and only for plain commands:
 a chained command, a push, a delete or a publish always asks (the same list
-``permission_prompt`` uses). "Allow everything" is the chat's own switch, never offered for a
-push or publish of a local-only AI plugin.
+``permission_prompt`` uses). "Allow everything" is the chat's own switch.
 """
 
 from __future__ import annotations
@@ -23,22 +22,20 @@ def _prompts():
 
 
 def describe_command(command: str, cwd: str = "") -> dict[str, Any]:
-    """``rule_label``: what "Always allow ... in this chat" names ('' = never remembered).
-    ``local_only``: pushes or publishes a local-only AI plugin (no "Allow everything")."""
+    """``rule_label``: what "Always allow ... in this chat" names ('' = never remembered)."""
     cmd = (command or "").strip()
     if not cmd:
-        return {"rule_label": "", "local_only": False}
+        return {"rule_label": ""}
     try:
         prompts = _prompts()
         card = prompts.describe("Bash", {"command": cmd}, project_root=cwd or prompts._project_root())
     except Exception:
-        return {"rule_label": "", "local_only": False}
-    local_only = bool(card.get("local_only"))
+        return {"rule_label": ""}
     label = str(card.get("rule_label") or "") if card.get("rule") else ""
     # A push in any form (git -C <folder> push too) always asks.
-    if local_only or prompts._REMOTE_CHANGE_RE.search(cmd):
+    if prompts._REMOTE_CHANGE_RE.search(cmd):
         label = ""
-    return {"rule_label": label, "local_only": local_only}
+    return {"rule_label": label}
 
 
 def rule_for(command: str, cwd: str = "") -> str:
@@ -60,7 +57,7 @@ def allows(conv_id: str, command: str, cwd: str = "") -> bool:
         return False
 
 
-def remember(conv_id: str, command: str, scope: str, *, cwd: str = "", local_only: bool = False) -> str:
+def remember(conv_id: str, command: str, scope: str, *, cwd: str = "") -> str:
     """Save the chat's answer. Returns what was saved: once, always or all."""
     conv_id = (conv_id or "").strip()
     scope = scope if scope in _SCOPES else "once"
@@ -69,8 +66,6 @@ def remember(conv_id: str, command: str, scope: str, *, cwd: str = "", local_onl
     try:
         prompts = _prompts()
         if scope == "all":
-            if local_only:
-                return "once"
             prompts.set_allow_everything(conv_id, True)
             return "all"
         rule = rule_for(command, cwd)
