@@ -279,6 +279,11 @@ def _fake_build(pub, tmp_path, monkeypatch):
     _touch(app / "UEFN-Ducky-Bridge.exe")
     calls: list[tuple[list[str], dict | None]] = []
 
+    import build_web_setup
+
+    # The uninstaller's small page images are made by PIL from the real panel; not here.
+    monkeypatch.setattr(build_web_setup, "shrink_images", lambda dest: None)
+
     def run(cmd, *args, **kwargs):
         cmd = [str(c) for c in cmd]
         calls.append((cmd, kwargs.get("env")))
@@ -286,6 +291,8 @@ def _fake_build(pub, tmp_path, monkeypatch):
             (tmp_path / "dist" / "Setup-engine.exe").write_bytes(b"MZ inno engine")
         if "-HostOnly" in cmd:
             (tmp_path / "dist" / "UEFN-Ducky-Setup-1.2.3.exe").write_bytes(b"MZ ducky host")
+        if "-Web" in cmd and "-Out" in cmd:
+            Path(cmd[cmd.index("-Out") + 1]).write_bytes(b"MZ uninstaller")
 
         class Done:
             returncode = 0
@@ -309,7 +316,12 @@ def test_signed_build_signs_app_exes_engine_and_ships_custom_host(pub, tmp_path,
 
     signs = _signed(calls)
     app = tmp_path / "dist" / "UEFN-Ducky-1.2.3"
-    assert signs[0][2:] == ["--require", str(app / "UEFN-Ducky-Bridge.exe"), str(app / "UEFN-Ducky.exe")]
+    # The uninstaller is built into the app folder first, so it is signed with the app's EXEs.
+    uninstaller = app / "Uninstall UEFN Ducky.exe"
+    built = next(i for i, (c, _) in enumerate(calls) if "-Web" in c)
+    assert calls[built][0][calls[built][0].index("-Out") + 1] == str(uninstaller)
+    assert built < next(i for i, (c, _) in enumerate(calls) if c[1].endswith("sign_windows.py"))
+    assert signs[0][2:] == ["--require", str(app / "UEFN-Ducky-Bridge.exe"), str(app / "UEFN-Ducky.exe"), str(uninstaller)]
     assert signs[1][-1] == str(tmp_path / "dist" / "Setup-engine.exe")
     assert signs[2][-1] == str(tmp_path / "dist" / "UEFN-Ducky-Setup-1.2.3.exe")
     assert all("--require" in s for s in signs)
@@ -328,6 +340,7 @@ def test_unsigned_build_ships_the_inno_stub_never_the_custom_host(pub, tmp_path,
     pub.build_setup(require_sign=False, bump=False)
 
     assert not any("-HostOnly" in c for c, _ in calls)
+    assert not any("-Web" in c for c, _ in calls), "no unsigned uninstaller either"
     engine_env = next(env for c, env in calls if "-EngineOnly" in c)
     assert "DUCKY_SIGN_PYTHON" not in engine_env
     assert (tmp_path / "dist" / "UEFN-Ducky-Setup-1.2.3.exe").read_bytes() == b"MZ inno engine"

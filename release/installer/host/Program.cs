@@ -56,6 +56,14 @@ namespace DuckySetup
             }
         }
 
+        static int Go(string[] args)
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new InstallerForm(VersionString()));
+            return Environment.ExitCode;
+        }
+
         static int RunUninstall(string[] args)
         {
             if (!Uninstall.FromTemp(args))
@@ -75,14 +83,6 @@ namespace DuckySetup
                 return 1;
             }
             return GoUninstall();
-        }
-
-        static int Go(string[] args)
-        {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new InstallerForm(VersionString()));
-            return Environment.ExitCode;
         }
 
         // Its own method, like Go: WebView2 must be on disk before this is compiled.
