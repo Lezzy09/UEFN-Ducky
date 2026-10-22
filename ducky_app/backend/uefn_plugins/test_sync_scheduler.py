@@ -500,6 +500,22 @@ def test_an_agent_write_with_the_panel_closed_makes_the_space_active_sends_a_bea
 
 
 @dpapi
+def test_a_live_space_with_its_panel_hidden_keeps_beating(team, events, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Live with the panel off screen and nothing written: presence still goes out and a
+    round comes each minute, or the presence lease runs out and the group drops the links."""
+    from backend.uefn_plugins import live, vcs_engine
+
+    clock, start = team.clock, team.clock.now
+    monkeypatch.setattr(live, "spaces_live", lambda: {(team.aid, "spaceT")})
+    sched = scheduler(clock)
+    assert sched.tick() == ["spaceT"]
+    rec = sched.spaces["spaceT"]
+    assert rec.live and not rec.hot and not rec.active
+    assert ("u_ana", vcs_engine.device_id()) in team.world.server.space("spaceT").presence
+    assert ticks(sched, clock, start + 30, start + 61) == [[], ["spaceT"]]  # active rounds, not 15 minutes
+
+
+@dpapi
 def test_a_head_event_pulls_within_seconds(team, events) -> None:
     from backend.uefn_plugins import ledger_conformance as conf
     from backend.uefn_plugins.scopes import PluginData

@@ -400,7 +400,9 @@ class Scheduler:
                     rec.running, rec.owed, rec.started = True, False, now
                     due.append((space, force, frozenset(rec.pull)))
                     rec.pull, rec.wake = set(), False
-                if rec.team and rec.hot and not rec.side_running and now >= rec.side_at + SIDE_EVERY_S:
+                # Live counts as in use: a live PC whose panel is hidden still beats, or its
+                # presence runs out and the group drops its links.
+                if rec.team and (rec.hot or rec.live) and not rec.side_running and now >= rec.side_at + SIDE_EVERY_S:
                     rec.side_running, rec.side_at = True, now
                     side.append((space, sorted(rec.team)))
             teams = any(rec.team for rec in self.spaces.values())
@@ -555,7 +557,7 @@ class Scheduler:
         debounce = LIVE_DEBOUNCE_S if rec.live else DEBOUNCE_S
         if unsent and not slow and now >= max(rec.written + debounce, last + gap, last + wait):
             return True
-        every = IDLE_EVERY_S if slow else wait or (ACTIVE_EVERY_S if rec.active or rec.hot else IDLE_EVERY_S)
+        every = IDLE_EVERY_S if slow else wait or (ACTIVE_EVERY_S if rec.active or rec.hot or rec.live else IDLE_EVERY_S)
         return False if now >= last + every else None
 
     def _side(self, account: str, space: str, plugins: list[str]) -> None:
