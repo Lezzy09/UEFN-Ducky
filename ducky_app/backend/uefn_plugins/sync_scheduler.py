@@ -315,6 +315,7 @@ class _Space:
     side_at: float = float("-inf")  # last look at its presence and locks
     side_running: bool = False
     live: bool = False  # a plugin is live there (live.spaces_live)
+    holding: bool = False  # this PC holds a control there (live.spaces_holding)
 
 
 _WAKES: dict[tuple[str, str], tuple[float, frozenset[str]]] = {}  # (account, space) → (when, plugins to pull)
@@ -384,6 +385,7 @@ class Scheduler:
         provider = spaces.provider_plugin() if spaces.has_provider() else ""
         since = now - self._refreshed
         live_now = live.spaces_live()
+        holding = live.spaces_holding()
         # Live: a write is seen within a tick, so the group gets it in a few seconds.
         soonest = TICK_S if live_now else REFRESH_MIN_S
         if provider != self._who[1] or since >= REFRESH_EVERY_S or (self._stale and since >= soonest):
@@ -395,14 +397,16 @@ class Scheduler:
             account = self._who[0]
             for space, rec in self.spaces.items():
                 rec.live = (account, space) in live_now
+                rec.holding = (account, space) in holding
                 force = self._due(rec, now)
                 if force is not None:
                     rec.running, rec.owed, rec.started = True, False, now
                     due.append((space, force, frozenset(rec.pull)))
                     rec.pull, rec.wake = set(), False
                 # Live counts as in use: a live PC whose panel is hidden still beats, or its
-                # presence runs out and the group drops its links.
-                if rec.team and (rec.hot or rec.live) and not rec.side_running and now >= rec.side_at + SIDE_EVERY_S:
+                # presence runs out and the group drops its links. So does a held control:
+                # presence is how a teammate whose page opens later greys it out.
+                if rec.team and (rec.hot or rec.live or rec.holding) and not rec.side_running and now >= rec.side_at + SIDE_EVERY_S:
                     rec.side_running, rec.side_at = True, now
                     side.append((space, sorted(rec.team)))
             teams = any(rec.team for rec in self.spaces.values())

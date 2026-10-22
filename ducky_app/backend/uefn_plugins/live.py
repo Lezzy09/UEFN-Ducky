@@ -439,6 +439,15 @@ def hold(plugin: str, anchor: str, on: bool, t: float = 0.0, view: str = "") -> 
     return {"ok": True}
 
 
+def spaces_holding(*, now: float | None = None) -> set[tuple[str, str]]:
+    """``(account, space)`` of every team copy this PC holds a control in now: its presence
+    carries the holds, so the scheduler keeps beating there (live or not)."""
+    now = time.time() if now is None else now
+    with _lock:
+        plugins = [p for p, mine in _holds.items() if any(now - at <= HOLD_STALE_S for _, _, at in mine.values())]
+    return {team for team in map(_team, plugins) if team is not None}
+
+
 def holds_of(plugin: str, *, now: float | None = None) -> list[dict[str, Any]]:
     """What this PC holds in ``plugin`` (for its presence): ``a`` anchor, ``t``, ``v``."""
     now = time.time() if now is None else now

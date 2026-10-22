@@ -516,6 +516,24 @@ def test_a_live_space_with_its_panel_hidden_keeps_beating(team, events, monkeypa
 
 
 @dpapi
+def test_a_held_control_goes_out_in_presence_with_the_panel_hidden_and_not_live(team, events) -> None:
+    """A teammate whose page opens later greys a control out from this PC's presence: a PC
+    that holds one keeps beating even when nothing else makes the space in use."""
+    from backend.uefn_plugins import live, vcs_engine
+
+    sched = scheduler(team.clock)
+    assert sched.tick() == ["spaceT"]
+    assert not sched.spaces["spaceT"].hot and not sched.spaces["spaceT"].live
+    try:
+        assert live.hold(TEAM, "e2e-probe-control", True)["ok"]
+        sched.tick(team.clock.now + 61)
+        blob, _ = team.world.server.space("spaceT").presence[("u_ana", vcs_engine.device_id())]
+        assert blob["plugins"][TEAM]["holds"] == [{"a": "e2e-probe-control", "t": 0.0, "v": ""}]
+    finally:
+        live.reset_for_tests()
+
+
+@dpapi
 def test_a_head_event_pulls_within_seconds(team, events) -> None:
     from backend.uefn_plugins import ledger_conformance as conf
     from backend.uefn_plugins.scopes import PluginData
