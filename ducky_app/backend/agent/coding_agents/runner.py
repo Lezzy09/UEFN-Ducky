@@ -235,6 +235,19 @@ def record_coding_agent_usage(
     model = str(usage.get("model") or selected_model or "").strip()
     cost = usage.get("cost_usd")
     cost_usd = float(cost) if isinstance(cost, (int, float)) else None
+    # Claude Code's total_cost_usd is the session's running total: a resumed session reports
+    # every earlier turn again (Oct 22 2026: an Opus lead's six turns cost $1.87 and were booked
+    # as $8.62). Keep what this turn added; a new session, or a total that went down, starts over.
+    cost_cursor = previous_stats.get("cost_cursor")
+    session = str(getattr(result, "upstream_session_id", "") or "").strip() if result is not None else ""
+    if agent_id == "claude_code" and cost_usd is not None and session:
+        if isinstance(cost_cursor, dict) and cost_cursor.get("session") == session and \
+                cost_usd >= float(cost_cursor.get("total") or 0.0):
+            turn_cost = cost_usd - float(cost_cursor.get("total") or 0.0)
+        else:
+            turn_cost = cost_usd
+        cost_cursor = {"session": session, "total": cost_usd}
+        cost_usd = round(turn_cost, 6)
     inp = int(usage.get("input_tokens") or 0)
     out = int(usage.get("output_tokens") or 0)
     cache_read = int(usage.get("cache_read_tokens") or 0)
@@ -282,6 +295,8 @@ def record_coding_agent_usage(
         stats["context_limit"] = limit
     if isinstance(cursor, dict):
         stats["usage_cursor"] = cursor
+    if isinstance(cost_cursor, dict):
+        stats["cost_cursor"] = cost_cursor
     conv.coding_agent_stats = stats
     if push is not None:
         report = token_usage_report(conv)
@@ -462,6 +477,13 @@ class _TurnCheckpoint:
                 self.blocks.append({"type": "text", "text": text})
         elif t == "tool":
             tool = ev.get("tool") if isinstance(ev.get("tool"), dict) else {}
+            try:
+                from frontend import usage_stats
+
+                # The tool server (another process) counts each call; the turn's own count is here.
+                usage_stats.turn_tool(self.run_id)
+            except Exception:
+                pass
             self.blocks.append(
                 {
                     "type": "tool_call",

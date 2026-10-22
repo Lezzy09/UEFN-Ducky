@@ -503,7 +503,8 @@ def _apply_status_gate(node: dict[str, Any], status: str, chat_id: str = "", *, 
             raise ValueError(
                 "cannot complete a Verify leaf until a check tool returned ok this turn: run one now, "
                 "then tick it in the same turn (ducky_plugin_validate or ducky_plugin_test for a plugin, "
-                "ducky_terminal_run with passing tests, workspace_compile_verse for Verse)"
+                "ducky_terminal_run with passing tests, workspace_compile_verse for Verse; with UEFN "
+                "closed, workspace_list_verse_errors)"
             )
     return st
 

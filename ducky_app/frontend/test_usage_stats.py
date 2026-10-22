@@ -226,3 +226,48 @@ def test_no_registry_outside_the_installed_app() -> None:
     # Source runs and tests (not frozen) never read or write HKCU.
     assert us._registry_on() is False
     assert us._reg_read() == {}
+
+
+def test_a_coding_agent_turn_counts_the_tools_its_cli_ran() -> None:
+    # Oct 22 2026: Claude Code / Codex calls are counted by the shared tool server, a process
+    # with no turns, so 86% of turns (20-minute ones included) said "0 tool calls".
+    us.run_begin("run-cli", "conv-cli", coding_agent="claude_code", model="claude-sonnet-5-5")
+    for _ in range(7):
+        us.turn_tool("run-cli")
+    us.turn_tool("some-other-run")
+    us.run_end("run-cli", "done")
+    rows, _ = us._take(100)
+    turns = [r["props"] for r in rows if r["name"] == "chat.turn"]
+    assert turns == [{"provider": "claude", "model_family": "claude", "outcome": "ok", "duration": "10s", "tool_calls": "6-20"}]
+    assert not [r for r in rows if r["name"] == "tool.call"]  # the tool server counts those
+
+
+def test_a_failed_tool_call_is_not_counted_again_as_an_error(monkeypatch, tmp_path) -> None:
+    # Ducky's agent logged each failed call to Settings → Errors as "agent": the top error code
+    # (511 in a week) was the same failures tool.call already counted.
+    from frontend import error_log
+
+    monkeypatch.setattr(error_log, "_use_db", lambda: False)
+    monkeypatch.setattr(error_log, "_path", lambda name: tmp_path / name)
+    monkeypatch.setattr(error_log, "_trim_file", lambda name: None)
+    error_log.record_error("agent", "spawn_actor: no such class", count=False)
+    error_log.record_error("agent", "turn crashed after 3.0s")
+    rows, _ = us._take(100)
+    assert [r["props"] for r in rows if r["name"] == "error.code"] == [{"code": "agent", "where": "agent"}]
+    assert ev.where_of("chat_slow") == ev.where_of("chat_timeout") == "ui"
+
+
+def test_outside_agents_refusals_fail_and_ducky_call_tool_counts_as_its_tool(monkeypatch) -> None:
+    from backend.bridge import shared_mcp
+
+    def result(text: str) -> dict[str, Any]:
+        return {"content": [{"type": "text", "text": text}], "isError": False}
+
+    assert shared_mcp._refused(result('{"ok":false,"error":"cannot complete a Verify leaf"}'))
+    assert shared_mcp._refused(result('ERROR: pack_id is required'))
+    assert not shared_mcp._refused(result('{"ok":true,"plan":{}}'))
+    assert not shared_mcp._refused(result('{"found": false, "known": []}'))
+    seen: list[tuple[str, bool]] = []
+    monkeypatch.setattr(us, "tool_done", lambda name, *, ok, **_: seen.append((name, ok)))
+    shared_mcp._usage_tool_done("ducky_call_tool", False, 0.0, None, {"name": "set_actor_label", "arguments": {}})
+    assert seen == [("set_actor_label", False)]

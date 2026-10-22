@@ -71,3 +71,24 @@ def test_existing_inflated_history_is_not_rewritten(recorder):
     conv.token_usage = dict(total_input=4760000, total_output=20, total_cache_read=10, total_cache_write=0, calls=[])
     record(40,60,5)
     assert conv.token_usage["total_input"] == 4760040
+
+
+def test_claude_codes_running_session_cost_is_booked_per_turn(monkeypatch):
+    # Claude Code's total_cost_usd is the resumed session's running total (Oct 22 2026: an Opus
+    # lead's six turns, $1.87 in all, were booked as $8.62). A new session starts over.
+    rows = []
+    monkeypatch.setattr(provider_usage_log, "log_call", lambda **kw: rows.append(kw))
+    conv = SimpleNamespace(id="lead", token_usage=None, coding_agent_stats={}, messages=[])
+
+    def turn(total, session="s1"):
+        usage = dict(input_tokens=10, cache_read_tokens=1000, output_tokens=50, cost_usd=total)
+        record_coding_agent_usage(conv, "claude_code", "claude-opus-5-5",
+                                  SimpleNamespace(usage=usage, upstream_session_id=session))
+        return rows[-1]["cost_usd"]
+
+    assert turn(0.91) == 0.91
+    assert turn(1.18) == pytest.approx(0.27)
+    assert turn(1.87) == pytest.approx(0.69)
+    assert turn(0.12, session="s2") == 0.12  # fresh session
+    assert turn(0.05, session="s2") == 0.05  # a total that went down starts over
+    assert sum(c["cost_usd"] for c in conv.token_usage["calls"]) == pytest.approx(1.87 + 0.17)

@@ -12,6 +12,7 @@ import contextvars
 import hashlib
 import json
 import os
+import re
 import secrets
 import socket
 import struct
@@ -588,13 +589,30 @@ def _report_stuck(name: str, seconds: float, work: Any, thread: dict[str, int], 
         pass
 
 
+_REFUSED = re.compile(r'^\s*(?:\{\s*"ok"\s*:\s*false\b|ERROR\b)')
+
+
+def _refused(result: dict[str, Any]) -> bool:
+    """A call that answered {"ok": false, …} or "ERROR: …" without isError: Ducky's plan,
+    memory and skill tools refuse that way, and every such refusal counted as a call that
+    worked (Oct 22 2026: a Verify tick refused three times showed as three successes)."""
+    for block in result.get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            return bool(_REFUSED.match(str(block.get("text") or "")[:200]))
+    return False
+
+
 def _usage_tool_done(name: str, ok: bool, t0: float, ident: Any, arguments: dict[str, Any] | None) -> None:
     """One anonymous tool.call count for an outside agent's call; never raises."""
     try:
+        from backend.agent.toolsets import effective_tool_name
         from frontend import usage_stats
 
+        # ducky_call_tool counts as the tool it ran (as for Ducky's own agent), so a failure
+        # names the tool that failed.
+        args = arguments if isinstance(arguments, dict) else {}
         usage_stats.tool_done(
-            name, ok=ok, duration_ms=(time.monotonic() - t0) * 1000.0,
+            effective_tool_name(name, args), ok=ok, duration_ms=(time.monotonic() - t0) * 1000.0,
             conv_id=str(getattr(ident, "conv_id", "") or ""), args=arguments if isinstance(arguments, dict) else None,
         )
     except Exception:
@@ -645,7 +663,7 @@ async def _call_tool(mcp: Any, name: str, arguments: dict[str, Any], ident: Any)
             _usage_tool_done(name, False, t0, ident, arguments)
             return {"content": [{"type": "text", "text": str(exc)}], "isError": True}
         result = _call_result(raw)
-        _usage_tool_done(name, not bool(result.get("isError")), t0, ident, arguments)
+        _usage_tool_done(name, not bool(result.get("isError")) and not _refused(result), t0, ident, arguments)
         return result
     finally:
         hammer_guard.reset_conversation(hammer)

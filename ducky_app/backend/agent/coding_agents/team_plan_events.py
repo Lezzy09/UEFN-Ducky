@@ -18,6 +18,10 @@ def completion_reports(before: dict, after: dict) -> list[dict[str, str]]:
     context = resolve_context()
     actor = getattr(context, "conv_id", "") or str(after.get("chat_id") or "")
     who = getattr(context, "ducky_name", "") or actor
+    # The lead's own change is no news to the lead (Oct 22 2026: an Opus lead cancelled a step
+    # after reporting and was woken to answer "nothing has changed since"). A tick in the plan
+    # view (no calling agent) still goes to it.
+    own = {"quiet": True} if getattr(context, "conv_id", "") and actor == str(after.get("chat_id") or "") else {}
     old = {n["id"]: n for n, _ in assigned_nodes(before.get("nodes"))}
     done = {"completed", "cancelled"}
     newly = {node["id"] for node, _ in assigned_nodes(after.get("nodes"))
@@ -45,7 +49,7 @@ def completion_reports(before: dict, after: dict) -> list[dict[str, str]]:
                 continue
             kind = "section" if node.get("children") else "step"
             body = f"{who} {status} {kind} {node['content']} ({node['id']}).\n{node.get('body_markdown', '')}"
-            report = {"sender": actor, "body": body}
+            report = {"sender": actor, "body": body, **own}
             if status == "completed" and inside_open_sub_plan(node["id"]):
                 # Kept on the plan (the keeper's wake lists it), not a lead turn: on Oct 15 2026 a
                 # nested team woke its lead seven times, four of them for inner sub plans.
@@ -55,7 +59,8 @@ def completion_reports(before: dict, after: dict) -> list[dict[str, str]]:
     reports = steps + sections[::-1]
     if (any(owner for _, owner in assigned_nodes(after.get("nodes")))
             and after.get("status") == "finished" and before.get("status") != "finished"):
-        reports.append({"sender": actor, "body": f"{who} finished plan {after.get('title', 'Plan')}.\n{after.get('body_markdown', '')}"})
+        reports.append({"sender": actor, "body": f"{who} finished plan {after.get('title', 'Plan')}.\n{after.get('body_markdown', '')}",
+                        **own})
     return reports
 
 

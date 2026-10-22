@@ -14,7 +14,6 @@ from backend.memory.project import (
     append_entry,
     delete_entry,
     list_entries,
-    memory_dir,
     read_entry,
     save_entry,
 )
@@ -42,9 +41,10 @@ def project_memory_list(project: str = "", pretty: bool = False) -> str:
     """
     root = _read_root(project)
     entries = list_entries(root)
+    # No folder path: entries live in Ducky's database, and an agent handed the app-data
+    # folder tried to read the entry's file there and was refused (Oct 22 2026, an Opus lead).
     return tool_json(
         {
-            "dir": str(memory_dir(root)),
             "count": len(entries),
             "entries": entries
             or "(empty — record facts this project's duckies should know with project_memory_save)",

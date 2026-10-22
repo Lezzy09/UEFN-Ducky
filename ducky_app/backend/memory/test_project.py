@@ -295,6 +295,8 @@ def test_writes_own_project_reads_any(two_projects):
     # Cross-project READ works by project name.
     listed = json.loads(project_memory_list(project="ProjB"))
     assert listed["count"] == 1
+    # No app-data folder: an agent given it read the entry's file there and was refused.
+    assert "dir" not in listed
     got = json.loads(project_memory_get("projb-fact", project="ProjB"))
     assert "team index 7" in got["content"]
 

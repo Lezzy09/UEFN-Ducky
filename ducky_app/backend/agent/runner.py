@@ -1391,7 +1391,8 @@ class AgentRunner:
                     from frontend.error_log import record_error
 
                     if not result.ok:
-                        record_error("agent", f"{rec.name}: {result.error[:500]}")
+                        # Settings → Errors shows it; the usage counts have it as a failed tool.call.
+                        record_error("agent", f"{rec.name}: {result.error[:500]}", count=False)
                 except Exception:
                     pass
 

@@ -216,7 +216,7 @@ def where_of(source: str) -> str:
         return "sync"
     if has("workflow", "automation"):
         return "workflow"
-    if has("ui", "panel", "webview", "window"):
+    if has("ui", "panel", "webview", "window", "chat"):
         return "ui"
     return "other"
 

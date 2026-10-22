@@ -243,11 +243,17 @@ def workspace_list_dir(relative_path: str = ".", path: str = "", pretty: bool = 
         rel = path.strip()
     rel = rel or "."
     dir_path = resolve_workspace_path(rel)
-    if not os.path.isdir(dir_path):
-        raise ValueError(f"Not a directory: {dir_path}")
     from backend.workspace.ai_ignore import current_policy
 
     policy = current_policy()
+    if not os.path.exists(dir_path):
+        # An answer, not a failure: agents list the folder they are about to create first
+        # (Oct 22 2026, a Sonnet 5.5 member before its first write) and the error cost a turn.
+        policy.require(dir_path)
+        return tool_json({"path": dir_path, "exists": False, "entries": [],
+                          "hint": "Nothing here yet. Writing a file under it creates the folder."}, pretty=pretty)
+    if not os.path.isdir(dir_path):
+        raise ValueError(f"Not a directory: {dir_path} is a file; read it with workspace_read_file")
     policy.require(dir_path)
     names = sorted(n for n in os.listdir(dir_path) if _workspace_entry_allowed(n)
                    and not policy.denied(os.path.join(dir_path, n)))

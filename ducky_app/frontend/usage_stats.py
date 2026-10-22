@@ -518,6 +518,19 @@ def run_end(run_id: str, reason: str) -> None:
         pass
 
 
+def turn_tool(run_id: str) -> None:
+    """One more tool call in a Claude Code / Codex / Cursor turn. Their calls are counted as
+    tool.call by the shared tool server, a process with no turns, so every such chat.turn
+    said "0 tool calls" (Oct 22 2026: 86% of turns, 20-minute ones included)."""
+    try:
+        with _lock:
+            meta = _run_meta.get(run_id or "")
+            if meta is not None:
+                meta["tools"] = int(meta["tools"]) + 1
+    except Exception:
+        pass
+
+
 def tool_done(name: str, *, ok: bool, duration_ms: float, conv_id: str = "", args: dict[str, Any] | None = None) -> None:
     try:
         if not enabled():

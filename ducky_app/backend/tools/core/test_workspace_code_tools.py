@@ -450,3 +450,24 @@ def test_git_reads_status_log_and_branches(project) -> None:
     assert "first" in _call(wc.workspace_git, "log", ["--oneline", "-5"])["output"]
     assert "-import os" in _call(wc.workspace_git, "diff", ["--", "src/app.py"])["output"]
     assert _call(wc.workspace_git, "branch", ["--show-current"])["exit_code"] == 0
+
+
+def test_multi_edit_takes_claudes_old_string_new_string(project) -> None:
+    # Oct 22 2026: a Sonnet 5.5 member wrote its edits the way Claude's own Edit tool takes them
+    # and the whole multi-edit failed with "old_text is required".
+    root, _ = project
+    path = root / "src" / "pkg" / "util.ts"
+    out = _call(wc.workspace_multi_edit, "src/pkg/util.ts", edits=[
+        {"old_string": "x + 1", "new_string": "x + 5"}, {"old_text": "a: number", "new_text": "a: bigint"}])
+    text = path.read_text(encoding="utf-8")
+    assert "x + 5" in text and "a: bigint" in text and out["replacements"] == 2
+
+
+def test_listing_a_folder_that_is_not_there_yet_is_an_answer(project) -> None:
+    # Agents list the folder they are about to write into; the error cost a turn.
+    root, _ = project
+    out = _call(system.workspace_list_dir, "Content/Verse/DailyStreak")
+    assert out["exists"] is False and out["entries"] == []
+    with pytest.raises(ValueError, match="is a file"):
+        system.workspace_list_dir("README.md")
+    assert "util.ts" in _call(system.workspace_list_dir, "src/pkg")["entries"]

@@ -242,3 +242,24 @@ def test_an_inner_sub_plan_done_is_kept_on_the_plan_not_a_lead_turn(notices):
     assert len(notices) == 1
     body = notices[0]["body"]
     assert "step Integrate" in body and "section Core" in body and "finished plan Ledger" in body
+
+
+def test_the_leads_own_change_does_not_wake_the_lead(notices, monkeypatch):
+    # Oct 22 2026: an Opus lead cancelled a step after its report and was woken by a notice about
+    # its own cancel, to answer "nothing has changed since". A tick in the plan view still goes.
+    from backend.workspace import identity
+
+    def doc(status):
+        return {"chat_id": "coord", "title": "Streak", "status": "open",
+                "nodes": [{"id": "hud", "content": "HUD", "assignee": "member", "status": "in_progress", "children": [
+                    {"id": "verify", "content": "Verify", "status": status}, {"id": "draw", "content": "Draw", "status": "pending"}]}]}
+
+    monkeypatch.setattr(identity, "resolve_context", lambda: SimpleNamespace(conv_id="coord", ducky_name="Lead"))
+    reports = events.completion_reports(doc("pending"), doc("cancelled"))
+    assert reports and all(r.get("quiet") for r in reports)
+    events.deliver_reports(doc("cancelled"), reports)
+    assert notices == []
+    monkeypatch.setattr(identity, "resolve_context", lambda: None)  # the person, in the plan view
+    reports = events.completion_reports(doc("pending"), doc("cancelled"))
+    events.deliver_reports(doc("cancelled"), reports)
+    assert len(notices) == 1 and "cancelled step Verify" in notices[0]["body"]

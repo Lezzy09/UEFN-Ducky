@@ -257,3 +257,28 @@ def test_corrupt_receipt_cannot_unlock_plan(checks):
         assert not ve.has_evidence()
     finally:
         identity.reset(token)
+
+
+@pytest.mark.parametrize("uefn_open,complete,ticks", [
+    (False, None, True),    # UEFN closed: the complete offline scan is the check
+    (False, False, False),  # a scan that ran out of time checked nothing
+    (True, None, False),    # UEFN open: the real compile is the check
+])
+def test_offline_verse_scan_ticks_verify_only_while_uefn_is_closed(checks, monkeypatch, uefn_open, complete, ticks):
+    # Oct 22 2026: a Claude 5.5 team with UEFN closed. workspace_list_verse_errors showed 0 errors,
+    # the compile could not run, the tick was refused three times, the member ended "BLOCKED: needs
+    # UEFN" and the lead cancelled a step whose done-when was met.
+    @checks.tool(name="workspace_list_verse_errors")
+    def scan(result: dict) -> str:
+        return json.dumps(result)
+
+    monkeypatch.setattr(ve, "verse_build_available", lambda: uefn_open)
+    payload = {"files": [{"path": "Content/Verse/Shop/shop.verse", "errors": 1}]}
+    if complete is not None:
+        payload["complete"] = complete
+    call(checks, "workspace_list_verse_errors", {"result": payload}, shared=True)
+    if ticks:
+        assert "completed" in text(call(checks, "ducky_plan_update_node", {"chat_id": "same-name-a"}))
+    else:
+        with pytest.raises(Exception, match="workspace_list_verse_errors"):
+            call(checks, "ducky_plan_update_node", {"chat_id": "same-name-a"})

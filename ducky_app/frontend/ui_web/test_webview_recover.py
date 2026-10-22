@@ -169,3 +169,14 @@ if __name__ == "__main__":
     import pytest
 
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_the_error_says_which_window_died_and_how() -> None:
+    # Oct 22 2026: "webview" on 13 PCs in a week could not tell a dead app window from a
+    # website that crashed in the browser pane.
+    assert wr.error_source("main:RenderProcessExited") == "webview_render_exit"
+    assert wr.error_source("main:0") == "webview_browser_exit"
+    assert wr.error_source("pane:b3:1") == "webview_pane_render_exit"
+    assert wr.error_source("pane:b3:renderprocessunresponsive") == "webview_pane_hung"
+    assert wr.error_source("focus:Plan: Streak:1") == "webview_window_render_exit"
+    assert wr.error_source("main") == wr.error_source("") == "webview"

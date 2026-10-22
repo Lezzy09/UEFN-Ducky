@@ -663,7 +663,11 @@ def workspace_multi_edit(
     for n, edit in enumerate(edits, start=1):
         if not isinstance(edit, dict):
             raise ValueError(f"edit {n} must be an object with old_text and new_text")
-        updated, count = _apply_edit(updated, str(edit.get("old_text") or ""), str(edit.get("new_text") or ""),
+        # Claude models write each edit the way their own Edit tool takes it (old_string /
+        # new_string); Oct 22 2026 a Sonnet 5.5 member's multi-edit failed on that alone.
+        old = edit.get("old_text", edit.get("old_string"))
+        new = edit.get("new_text", edit.get("new_string"))
+        updated, count = _apply_edit(updated, str(old or ""), str(new or ""),
                                      bool(edit.get("replace_all")), label=f"edit {n}: ")
         total += count
     return _write_edit(relative_path, text, updated, "workspace_multi_edit", {"edits": len(edits), "replacements": total}, pretty)

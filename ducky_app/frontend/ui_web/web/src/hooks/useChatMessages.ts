@@ -95,14 +95,16 @@ export function useChatMessages(chatId: string, visible: boolean, isAgentRunning
     const startedAt = performance.now();
     // Settings → Errors gets a line for loads that fail or crawl, so a chat stuck on
     // Loading always leaves a trace (the chat's short id and timing, never its text).
-    const report = (text: string) => {
-      void Promise.resolve(api.report_ui_error?.("chat", text)).catch(() => undefined);
+    // The source says which (slow, timed out, failed): it is also the anonymous error code,
+    // and "chat" alone (102 in a week on 7 PCs) could not tell a slow load from a broken one.
+    const report = (source: "chat_slow" | "chat_timeout" | "chat_failed", text: string) => {
+      void Promise.resolve(api.report_ui_error?.(source, text)).catch(() => undefined);
     };
     try {
       const rows = await fetchChatRows(chatId);
       const tookMs = performance.now() - startedAt;
       if (tookMs > SLOW_CHAT_LOAD_MS) {
-        report(`Chat ${chatId.slice(0, 8)} took ${(tookMs / 1000).toFixed(1)}s to load (${rows.length} messages).`);
+        report("chat_slow", `Chat ${chatId.slice(0, 8)} took ${(tookMs / 1000).toFixed(1)}s to load (${rows.length} messages).`);
       }
       if (seq !== loadSeqRef.current) return; // a newer load superseded this one
       lastLoadedAtRef.current = Date.now();
@@ -111,6 +113,7 @@ export function useChatMessages(chatId: string, visible: boolean, isAgentRunning
     } catch (err) {
       const timedOut = err instanceof ChatLoadTimeout;
       report(
+        timedOut ? "chat_timeout" : "chat_failed",
         `Chat ${chatId.slice(0, 8)} didn't load: ${
           timedOut ? `no reply after ${Math.round(CHAT_LOAD_TIMEOUT_MS / 1000)}s` : err instanceof Error ? err.message : String(err)
         }.`,

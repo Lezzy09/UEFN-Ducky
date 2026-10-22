@@ -179,12 +179,36 @@ def evidence_names() -> list[str]:
 def has_evidence(chat_id: str = "") -> bool:
     if chat_id and chat_id != current_conversation():
         return False
-    return bool(evidence_names())
+    names = evidence_names()
+    if any(n != OFFLINE_VERSE_CHECK for n in names):
+        return True
+    # The Problems-panel scan stands in for the compile only while the compile can't run.
+    return OFFLINE_VERSE_CHECK in names and not verse_build_available()
+
+
+def verse_build_available() -> bool:
+    """True when workspace_compile_verse could run now: the Verse Workflow Server (UEFN)
+    answers, probed the way the compile tool does. Never raises."""
+    try:
+        from frontend.ui_web.verse_editor.workflow.client import get_workflow_client
+
+        client = get_workflow_client()
+        if not client.connected:
+            client.start(timeout_s=1.0)
+        return bool(client.connected)
+    except Exception:  # noqa: BLE001 — unreachable is the answer, not an error
+        return False
 
 
 # Checks that count only when their result says ok. Plugin teams could not tick any Verify
 # step (Oct 12 2026): none of the plugin checks counted.
-_RESULT_CHECKS = frozenset({"run_workflow", "ducky_terminal_run", "ducky_plugin_validate", "ducky_plugin_test"})
+_RESULT_CHECKS = frozenset({"run_workflow", "ducky_terminal_run", "ducky_plugin_validate", "ducky_plugin_test",
+                            "workspace_list_verse_errors"})
+# A complete offline Verse scan (verse-lsp, no UEFN). It proves a Verify step only while
+# UEFN is closed: then the compile can't run, and members were refused their tick, sent
+# back to work, ended "BLOCKED: needs UEFN" and their lead cancelled a step whose done-when
+# was met (Oct 22 2026, a Claude 5.5 team with UEFN closed).
+OFFLINE_VERSE_CHECK = "workspace_list_verse_errors"
 
 
 def _result_payloads(raw: Any) -> tuple[bool, list[dict[str, Any]]]:
@@ -239,6 +263,11 @@ def record_result(name: str, arguments: dict[str, Any] | None, raw: Any) -> None
         return
     failed, payloads = _result_payloads(raw)
     if failed or any(_failed_payload(p) for p in payloads):
+        return
+    if key == OFFLINE_VERSE_CHECK:
+        # The scan is proof once it checked every file (complete is False when it ran out of time).
+        if payloads and not any(p.get("complete") is False for p in payloads):
+            _record_key(key)
         return
     if key in _RESULT_CHECKS:
         # Starting background work or merely accepting a command is not proof.

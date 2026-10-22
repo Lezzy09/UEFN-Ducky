@@ -28,14 +28,17 @@ def activity_path() -> Path:
     return default_app_data_dir() / _ACTIVITY_NAME
 
 
-def record_error(source: str, message: str) -> None:
-    """Append one error. Skips if identical to the most recent entry (dedupe spam)."""
-    _append(_ERRORS_NAME, source, message, dedupe=True)
+def record_error(source: str, message: str, *, count: bool = True) -> None:
+    """Append one error. Skips if identical to the most recent entry (dedupe spam).
+
+    ``count=False``: the anonymous usage counts already have it some other way (a failed
+    tool call is a ``tool.call`` with ok=no), so it is not an ``error.code`` as well."""
+    _append(_ERRORS_NAME, source, message, dedupe=True, count=count)
 
 
 def record_activity(source: str, message: str) -> None:
     """Append one activity line (panel / plugin log)."""
-    _append(_ACTIVITY_NAME, source, message, dedupe=False)
+    _append(_ACTIVITY_NAME, source, message, dedupe=False, count=False)
 
 
 def read_errors(limit: int = MAX_ENTRIES) -> list[dict]:
@@ -133,11 +136,11 @@ def _ingest_listener_file(name: str) -> None:
         pass
 
 
-def _append(name: str, source: str, message: str, *, dedupe: bool) -> None:
+def _append(name: str, source: str, message: str, *, dedupe: bool, count: bool) -> None:
     message = _scrub((message or "").strip())
     if not message:
         return
-    if name == _ERRORS_NAME:
+    if name == _ERRORS_NAME and count:
         try:
             from frontend import usage_stats
 

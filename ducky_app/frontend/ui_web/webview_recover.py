@@ -103,6 +103,24 @@ def hung_long_enough(key: int, now: float, *, label: str = "") -> bool:
     return True
 
 
+_KIND_CODES = {"0": "browser_exit", "browserprocessexited": "browser_exit",
+               "1": "render_exit", "renderprocessexited": "render_exit",
+               "2": "hung", "renderprocessunresponsive": "hung"}
+
+
+def error_source(reason: str) -> str:
+    """The Errors-tab source (and anonymous error code) for a ``label:kind`` reason: which
+    window died and how, e.g. ``webview_render_exit`` for the app window, ``webview_pane_hung``
+    for a browser pane. All were "webview" (Oct 22 2026: 13 PCs in a week, no way to tell a
+    dead app window from a website that crashed in the browser pane)."""
+    label, _, kind = (reason or "").rpartition(":")
+    if not label:  # a bare label, no kind
+        label, kind = kind, ""
+    where = "" if label in ("", "main") else "_pane" if label.startswith("pane") else "_window"
+    how = _KIND_CODES.get(kind.strip().lower(), "")
+    return "webview" + where + (f"_{how}" if how else "")
+
+
 def recover_core_webview(core: Any, *, reason: str = "") -> dict[str, Any]:
     """Reload (or re-Navigate) a live CoreWebView2. Debounced per instance."""
     if core is None:
@@ -115,7 +133,7 @@ def recover_core_webview(core: Any, *, reason: str = "") -> dict[str, Any]:
     try:
         from frontend.error_log import record_error
 
-        record_error("webview", f"WebView2 process failed ({reason or 'unknown'}); reloading")
+        record_error(error_source(reason), f"WebView2 process failed ({reason or 'unknown'}); reloading")
     except Exception:
         pass
     try:
