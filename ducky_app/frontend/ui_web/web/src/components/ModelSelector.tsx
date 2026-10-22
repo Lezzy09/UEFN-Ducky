@@ -33,6 +33,9 @@ import { openCodingAgentLoginUi } from "../walkthrough/openCodingAgentLogin";
 import { openDefaultModelSettings, openLlmsProviderSettings } from "../navigation/openSettingsTab";
 import { LlmPluginSlot } from "../plugin-ui/llmPluginSlots";
 
+/** Same as the backend usage cache (model_fetch._USAGE_TTL_S). */
+const USAGE_RECHECK_MS = 60_000;
+
 function formatContext(n: number): string {
   if (!n || n <= 0) return "";
   if (n >= 1_000_000) {
@@ -387,9 +390,9 @@ export function ModelSelector({
     ""
   ).trim();
   const glow = effortGlow(selectedMenu, thinkingEffort);
-  const usageByProviderRef = useRef<Record<string, { windows: UsageWindow[]; notice: UsageNotice | null }>>(
-    {},
-  );
+  const usageByProviderRef = useRef<
+    Record<string, { windows: UsageWindow[]; notice: UsageNotice | null; at: number }>
+  >({});
 
   useEffect(() => {
     if (!isOpen || !usageProvider) return;
@@ -402,7 +405,8 @@ export function ModelSelector({
       setUsageWindows(cached.windows);
       setUsageNotice(cached.notice);
       setUsageBusy(false);
-      if (!refresh) return;
+      // Reopening shows the last bars at once and asks again once they are a minute old.
+      if (!refresh && Date.now() - cached.at < USAGE_RECHECK_MS) return;
     }
     let cancelled = false;
     if (!cached) setUsageBusy(true);
@@ -417,7 +421,7 @@ export function ModelSelector({
             : null;
         const nextWindows = windows.length ? windows : cached?.windows ?? [];
         const nextNotice = nextWindows.length ? null : (notice ?? cached?.notice ?? null);
-        usageByProviderRef.current[usageProvider] = { windows: nextWindows, notice: nextNotice };
+        usageByProviderRef.current[usageProvider] = { windows: nextWindows, notice: nextNotice, at: Date.now() };
         setUsageWindows(nextWindows);
         setUsageNotice(nextNotice);
         setUsageBusy(false);

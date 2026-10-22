@@ -8,7 +8,7 @@ from dataclasses import dataclass, fields
 from typing import Any
 
 _CACHE_MAX = 512
-_USAGE_TTL_S = 120.0
+_USAGE_TTL_S = 60.0
 
 _CAPABILITY_CACHE: dict[tuple[str, str], ModelInfo] = {}
 _USAGE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
