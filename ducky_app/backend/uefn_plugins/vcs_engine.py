@@ -25,7 +25,8 @@ lock are ``locked_out`` and stay here. The answer:
   is ``blocked`` with the reason after the last (Retry, Drop my change). When it answered
   none, or two fail in a row, the server is taken to refuse the plugin: no try counts and
   the round backs off. An error to a resend (its first answer got lost) or to a later part
-  of a write group backs the round off too, and that changeset goes again as it is;
+  of a write group backs the round off too, and that changeset goes again as it is; the
+  pull still comes in meanwhile, and a resend's commit found in it is settled as a replay;
 - retry, offline: the round backs off (30 s, 2 min, 5 min, 15 min).
 
 Pull. Changesets apply in seq order; a grouped one waits for its last part (24 h at
@@ -1289,8 +1290,35 @@ def _pull_round(ctx: Ctx, *, now: float, apply_now: bool = False,
 def _pull_pages(ctx: Ctx, changed: list[str], *, now: float, apply_now: bool = False,
                 progress: Callable[[int, int], None] | None = None) -> dict[str, Any]:
     settled = _settle_in_flight(ctx, now=now)
+    mine: dict[str, dict[str, Any]] = {}
     if settled is not None:
-        return {"state": settled.state, "error": settled.error, "changed": [], "pulled": 0, "conflicts": 0}
+        # A resend got no answer. Its commit, if it landed, comes back in the pull under its
+        # cs_id and is settled there, so the team's changes still come in meanwhile (else
+        # one resend the server keeps failing holds every incoming change).
+        mine = {cs["cs_id"]: cs for cs in space_vcs.cs_open(ctx.account, ctx.space, ctx.plugin)
+                if cs["state"] == "pushing"}
+        if not mine or any(_is_tree_cs(cs) for cs in mine.values()):
+            return {"state": settled.state, "error": settled.error, "changed": [], "pulled": 0, "conflicts": 0}
+    out = _pull_from(ctx, changed, mine, now=now, apply_now=apply_now, progress=progress)
+    if settled is not None and mine and out["state"] == "ok":
+        out = {**out, "state": settled.state, "error": settled.error}  # still unanswered: the round backs off
+    return out
+
+
+def _own_commit(ctx: Ctx, cs: dict[str, Any], seq: int) -> None:
+    """A changeset sent from here whose answer never came, found committed in the pull:
+    settled as a replay is (:func:`_push_cs`), so it never lands as someone else's change."""
+    snaps = cs["items"]
+    space_vcs.mark_committed(ctx.account, ctx.space, ctx.plugin, seq, snaps,
+                             units=sorted({str(s.get("unit") or unit_of(str(s["kind"]), str(s["key"])))
+                                           for s in snaps}))
+    space_vcs.cs_set(ctx.account, ctx.space, cs["cs_id"], state="committed", seq=seq)
+
+
+def _pull_from(ctx: Ctx, changed: list[str], mine: dict[str, dict[str, Any]], *, now: float,
+               apply_now: bool = False, progress: Callable[[int, int], None] | None = None) -> dict[str, Any]:
+    """Pull to the head. ``mine``: changesets sent from here still unanswered (cs_id → row);
+    each one found in the pull is settled as this PC's own commit and taken out."""
     head = space_vcs.head_get(ctx.account, ctx.space, ctx.plugin)
     cursor = int(head["seq"])
     hold = not apply_now and _holds_incoming(ctx)
@@ -1305,10 +1333,16 @@ def _pull_pages(ctx: Ctx, changed: list[str], *, now: float, apply_now: bool = F
             return {"state": out.state, "error": out.error, "changed": changed, "pulled": pulled,
                     "conflicts": conflicts, "tree": tree}
         if page.resync:
+            if mine:  # a resync lists items, not changesets: an unanswered one of mine can't be told apart
+                out = _stop(ctx, Error("A change sent from here is still unanswered."), now=now)
+                return {"state": out.state, "error": out.error, "changed": changed, "pulled": pulled,
+                        "conflicts": conflicts, "tree": tree}
             return _resync(ctx, page.head, changed, now=now)
         space_vcs.head_put(ctx.account, ctx.space, ctx.plugin, remote_seq=page.head)
         for cs in page.changesets:
             cursor = max(cursor, cs.seq)
+            if cs.cs_id and cs.cs_id in mine:
+                _own_commit(ctx, mine.pop(cs.cs_id), cs.seq)
             if hold and (waiting or cs.device != me):
                 waiting.append(cs)  # behind Update now (this PC's own commits still land)
                 continue

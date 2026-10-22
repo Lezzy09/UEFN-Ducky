@@ -813,12 +813,62 @@ def test_an_error_to_a_resend_keeps_it_so_its_lost_commit_is_answered_never_pull
     pc.data.put("card.pip", {"hp": 2})  # edited meanwhile
     limited = _Pushes(pc.backend, limit=0)  # a rate limit answers before the server looks at the changeset
     out = pc.run(backend=limited)
-    assert (out["state"], limited.calls) == ("error", 1)
-    assert [cs["state"] for cs in space_vcs.cs_open(pc.account, SPACE)] == ["pushing"]  # kept to be answered
-    assert pc.row("card.pip")["attempts"] == 0 and space_vcs.conflicts(pc.account, SPACE) == []
-    out = pc.run()  # answered (replay) before anything is pulled: no change of "a teammate" to merge
+    # The resend got no answer, but its commit came back in the pull under its id: settled as
+    # mine, never a change of "a teammate" to merge. The later edit then went and was refused.
+    assert (out["state"], limited.calls) == ("error", 2)
+    assert space_vcs.conflicts(pc.account, SPACE) == [] and pc.row("card.pip")["attempts"] == 0
+    assert "pushing" not in [cs["state"] for cs in space_vcs.cs_open(pc.account, SPACE)]
+    assert (pc.row("card.pip")["dirty"], pc.row("card.pip")["rev"]) == (1, 1)
+    out = pc.run()
     assert (out["state"], out["conflicts"]) == ("ok", 0) and space_vcs.conflicts(pc.account, SPACE) == []
     assert ben.doc("card.pip") == {"hp": 2} and pc.row("card.pip")["dirty"] == 0
+
+
+class _NeverSent:
+    """The first push dies before it reaches the server (no commit); later ones go."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner, self.sent = inner, False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    def push(self, space: str, plugin: str, cs: Any) -> Any:
+        if not self.sent:
+            self.sent = True
+            return Offline("timed out")
+        return self.inner.push(space, plugin, cs)
+
+
+def test_a_resend_the_server_keeps_failing_never_holds_the_teams_changes(pc: PC, ben: Ben) -> None:
+    """The Laptop's 24 incoming: every resend drew a storage 408, the round stopped before
+    its pull, and nothing came in for hours."""
+    pc.run()
+    failing = _Pushes(pc.backend, limit=0)  # every resend: "S3 HEAD failed: HTTP 408"
+    # A resend that never reached the server: the team's changes come in, it waits.
+    with scopes.write_group(PLUGIN, message="Tool put_docs"):
+        PluginData(PLUGIN).put("card.new", {"hp": 9})
+    assert pc.run(backend=_NeverSent(pc.backend))["state"] == "offline"
+    ben.put_doc("card.zed", {"hp": 3})
+    ben.put_file("img/zed.png", b"Z")
+    out = pc.run(backend=failing)
+    assert (out["state"], failing.calls) == ("error", 1)
+    assert pc.data.get("card.zed") == {"hp": 3} and pc.data.get_file("img/zed.png") == b"Z"  # they came in
+    assert space_vcs.head_get(pc.account, SPACE, PLUGIN)["seq"] == ben.head() == 2
+    assert [cs["state"] for cs in space_vcs.cs_open(pc.account, SPACE)] == ["pushing"]  # still to be answered
+    assert pc.run()["state"] == "ok" and ben.doc("card.new") == {"hp": 9}
+    # A resend whose commit landed but whose answer got lost: found in the pull, settled as mine.
+    with scopes.write_group(PLUGIN, message="Tool put_docs"):
+        PluginData(PLUGIN).put("card.pip", {"hp": 1})
+    assert pc.run(backend=_AnswerLost(pc.backend))["state"] == "offline"
+    pip_seq = ben.head()
+    ben.put_doc("card.zed", {"hp": 4})
+    failing.calls = 0
+    out = pc.run(backend=failing)
+    assert (out["state"], failing.calls) == ("ok", 1)  # its answer came with the pull: nothing left unanswered
+    assert pc.data.get("card.zed") == {"hp": 4} and space_vcs.conflicts(pc.account, SPACE) == []
+    assert (pc.row("card.pip")["dirty"], pc.row("card.pip")["rev"]) == (0, pip_seq)
+    assert space_vcs.cs_open(pc.account, SPACE) == [] and ben.head() == pip_seq + 1
 
 
 class _FailsOnce:
