@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from frontend.ui_web.terminal.session import _DONE_RE, TerminalSession, agent_command_output
+from frontend.ui_web.terminal.session import _DONE_RE, TerminalSession, agent_command_output, plain_terminal_text
 
 POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
 needs_powershell = pytest.mark.skipif(
@@ -188,26 +188,66 @@ def test_git_log_and_a_commit_without_a_message_never_wait_on_a_pager_or_editor(
         session.kill()
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="needs Git Bash on Windows")
-def test_ctrl_c_from_the_person_ends_the_agents_wait(tmp_path):
-    # Bash drops the rest of the line on Ctrl+C, done marker included: the agent used to
-    # wait out its whole timeout after the person had stopped its command.
+@pytest.fixture
+def ducky_ignores_ctrl_c():
+    """This process ignores Ctrl+C, as Ducky does: its launchers start it with
+    CREATE_NEW_PROCESS_GROUP, and every terminal shell inherited that."""
+    import ctypes
+
+    from frontend.ui_web.terminal.session import _ignores_ctrl_c
+
+    was = _ignores_ctrl_c()
+    ctypes.windll.kernel32.SetConsoleCtrlHandler(None, True)
+    yield
+    ctypes.windll.kernel32.SetConsoleCtrlHandler(None, was)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console flags")
+def test_a_shell_starts_with_ctrl_c_on_and_ducky_keeps_its_own(ducky_ignores_ctrl_c):
+    from frontend.ui_web.terminal.session import _ignores_ctrl_c, ctrl_c_on_for_children
+
+    with ctrl_c_on_for_children():
+        assert not _ignores_ctrl_c()
+    assert _ignores_ctrl_c()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="needs Windows terminals")
+@pytest.mark.parametrize(
+    "shell,command",
+    [
+        ("powershell", "ping -n 60 127.0.0.1"),
+        ("powershell", "Start-Sleep -Seconds 60"),
+        ("bash", "ping -n 60 127.0.0.1"),
+        ("bash", "sleep 60"),
+    ],
+)
+def test_ctrl_c_from_the_person_stops_the_command_and_ends_the_agents_wait(tmp_path, monkeypatch, ducky_ignores_ctrl_c, shell, command):
+    # Oct 22 2026: Ctrl+C never stopped a PowerShell command (nor a Windows program under Git
+    # Bash), and when the shell dropped the rest of the line, done marker included, the agent
+    # waited out its whole timeout after the person had stopped its command.
     import threading
     import time
 
-    session = TerminalSession(shell="bash", cwd=str(tmp_path))
+    monkeypatch.delenv("GIT_PAGER", raising=False)
+    session = TerminalSession(shell=shell, cwd=str(tmp_path))
     try:
         session.spawn()
-    except Exception as exc:  # noqa: BLE001 - no Git Bash here
-        pytest.skip(f"cannot start a bash terminal here: {exc}")
+    except Exception as exc:  # noqa: BLE001 - no console host or Git Bash here
+        pytest.skip(f"cannot start a {shell} terminal here: {exc}")
     try:
         assert session.run_command("echo ready", timeout_s=60)["ok"]
-        threading.Timer(2.0, lambda: session.write("\x03")).start()
+        threading.Timer(3.0, lambda: session.write("\x03")).start()
         started = time.time()
-        result = session.run_command("sleep 60", timeout_s=120)
+        result = session.run_command(command, timeout_s=120)
         assert time.time() - started < 15, result
-        assert not result["ok"] and "Ctrl+C" in result["error"], result
+        stopped = not result["ok"] and "Ctrl+C" in result["error"]
+        assert stopped or result.get("exit_code") not in (None, 0), result
         assert session.run_command("echo after", timeout_s=60)["output_tail"] == "after"
+        if shell == "powershell":
+            # The person's own settings are back after a line Ctrl+C cut short.
+            session.write('Write-Output "pager=[$env:GIT_PAGER]"\r')
+            time.sleep(3)
+            assert "\npager=[]" in plain_terminal_text(session.read_output_tail(4000))
     finally:
         session.kill()
 

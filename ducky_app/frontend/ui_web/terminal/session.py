@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import threading
 import time
 import uuid
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -45,12 +47,17 @@ _AGENT_OUTPUT_CHARS = 8000
 # a console, so this never happens there. Only the agent's command gets these; what the person
 # types in the same terminal keeps their own settings.
 _AGENT_ENV = (("GIT_PAGER", "cat"), ("GH_PAGER", "cat"), ("GIT_EDITOR", "true"), ("GH_PROMPT_DISABLED", "1"))
+# The person's values are kept until a restore runs: a line stopped with Ctrl+C never reaches
+# its restore, and the next agent command must not save the agent's values as theirs.
 _PS_SET_AGENT_ENV = (
-    "$__duckyWas = @{}; foreach ($__k in " + ",".join(f"'{k}'" for k, _ in _AGENT_ENV) + ") "
-    "{ $__duckyWas[$__k] = [Environment]::GetEnvironmentVariable($__k) }; "
+    "if ($null -eq $__duckyWas) { $__duckyWas = @{}; foreach ($__k in " + ",".join(f"'{k}'" for k, _ in _AGENT_ENV) + ") "
+    "{ $__duckyWas[$__k] = [Environment]::GetEnvironmentVariable($__k) } }; "
     + " ".join(f"$env:{k} = '{v}';" for k, v in _AGENT_ENV) + " "
 )
-_PS_RESTORE_ENV = "foreach ($__k in @($__duckyWas.Keys)) { [Environment]::SetEnvironmentVariable($__k, $__duckyWas[$__k]) }; "
+_PS_RESTORE_ENV = (
+    "foreach ($__k in @($__duckyWas.Keys)) { [Environment]::SetEnvironmentVariable($__k, $__duckyWas[$__k]) }; "
+    "$__duckyWas = $null; "
+)
 _BASH_AGENT_ENV = " ".join(f"{k}={v}" for k, v in _AGENT_ENV)
 # PowerShell reads the curly single quotes as quotes too, so they are doubled like ' is.
 _PS_QUOTE_RE = re.compile("(['‘’‚‛])")
@@ -180,6 +187,61 @@ def kill_process_tree(pid: int) -> None:
         pass
 
 
+_CTRL_C_LOCK = threading.Lock()
+
+
+def _ignores_ctrl_c() -> bool:
+    """This process ignores Ctrl+C: bit 0 of its RTL_USER_PROCESS_PARAMETERS.ConsoleFlags."""
+    import ctypes
+
+    class _BasicInfo(ctypes.Structure):
+        _fields_ = [
+            ("ExitStatus", ctypes.c_void_p),
+            ("PebBaseAddress", ctypes.c_void_p),
+            ("AffinityMask", ctypes.c_void_p),
+            ("BasePriority", ctypes.c_void_p),
+            ("UniqueProcessId", ctypes.c_void_p),
+            ("InheritedFromUniqueProcessId", ctypes.c_void_p),
+        ]
+
+    query = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p)(
+        ("NtQueryInformationProcess", ctypes.windll.ntdll)
+    )
+    info = _BasicInfo()
+    if ctypes.sizeof(ctypes.c_void_p) != 8 or query(ctypes.c_void_p(-1), 0, ctypes.byref(info), ctypes.sizeof(info), None):
+        raise OSError("cannot read this process's parameters")
+    params = ctypes.c_void_p.from_address(info.PebBaseAddress + 0x20).value
+    return bool(ctypes.c_uint32.from_address(params + 0x18).value & 1)
+
+
+@contextmanager
+def ctrl_c_on_for_children():
+    """Start a child with Ctrl+C on, whatever this process has.
+
+    Oct 22 2026: Ctrl+C never stopped anything in a PowerShell terminal (nor a Windows program
+    under Git Bash). Ducky's launchers start it with CREATE_NEW_PROCESS_GROUP, which makes a
+    process ignore Ctrl+C, and every shell it started inherited that. It is switched on only
+    while the child starts, then put back, so Ducky itself behaves as before.
+    """
+    if os.name != "nt":
+        yield
+        return
+    import ctypes
+
+    with _CTRL_C_LOCK:
+        try:
+            ignoring = _ignores_ctrl_c()
+            if ignoring:
+                ctypes.windll.kernel32.SetConsoleCtrlHandler(None, False)
+        except Exception:
+            ignoring = False
+        try:
+            yield
+        finally:
+            if ignoring:
+                ctypes.windll.kernel32.SetConsoleCtrlHandler(None, True)
+
+
 def normalize_exit_code(code: int) -> int:
     """Map Windows NTSTATUS-style exits to familiar Unix-style codes for display."""
     if code == 0:
@@ -273,8 +335,6 @@ class TerminalSession:
         self._stopped = False
 
     def spawn(self) -> None:
-        import os
-
         from winpty import PtyProcess
 
         from frontend.ui_web.terminal.path_env import env_with_fresh_path
@@ -292,12 +352,13 @@ class TerminalSession:
         env = env_with_fresh_path()
         if self.env_extra:
             env.update(self.env_extra)
-        self._pty = PtyProcess.spawn(
-            argv,
-            cwd=self.cwd,
-            env=env,
-            dimensions=(self._rows, self._cols),
-        )
+        with ctrl_c_on_for_children():
+            self._pty = PtyProcess.spawn(
+                argv,
+                cwd=self.cwd,
+                env=env,
+                dimensions=(self._rows, self._cols),
+            )
         self._stop.clear()
         self._read_thread = threading.Thread(target=self._read_loop, daemon=True, name=f"pty-{self.id}")
         self._read_thread.start()
@@ -389,13 +450,11 @@ class TerminalSession:
             self._interrupted()
 
     def _interrupted(self) -> None:
-        """Ctrl+C while an agent command runs. Bash drops the rest of the typed line, done
-        marker included, so the agent waited out its whole timeout after the person had
-        stopped it. A command that still finishes in time reports its own exit code.
-        Ctrl+C never reaches a PowerShell command in this terminal (ConPTY): it keeps
-        running and reports done itself, so nothing is said for it here."""
+        """Ctrl+C while an agent command runs. The shell drops the rest of the typed line,
+        done marker included, so the agent waited out its whole timeout after the person had
+        stopped it. A command that still finishes in time reports its own exit code."""
         done = self._pending_done
-        if self.shell == "powershell" or done is None or done.is_set():
+        if done is None or done.is_set():
             return
 
         def stopped() -> None:
