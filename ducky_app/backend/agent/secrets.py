@@ -26,7 +26,10 @@ def _dpapi_available() -> bool:
     return sys.platform == "win32"
 
 
-def _protect(plaintext: bytes, entropy: bytes = b"") -> bytes:
+def _dpapi(data: bytes, entropy: bytes, *, protect: bool) -> bytes:
+    """One CryptProtectData / CryptUnprotectData call. Windows hands the result back in a
+    LocalAlloc buffer the caller must LocalFree: kept, every sealed chat save and read
+    leaked its whole ciphertext or plaintext into the process heap (GBs an hour)."""
     if not _dpapi_available():
         raise OSError("Credential persist requires Windows DPAPI")
     import ctypes
@@ -35,20 +38,21 @@ def _protect(plaintext: bytes, entropy: bytes = b"") -> bytes:
     class DATA_BLOB(ctypes.Structure):
         _fields_ = [
             ("cbData", ctypes.wintypes.DWORD),
-            ("pbData", ctypes.POINTER(ctypes.c_byte)),
+            ("pbData", ctypes.c_void_p),
         ]
 
-    def _bytes_to_blob(data: bytes) -> DATA_BLOB:
-        buf = (ctypes.c_byte * len(data))(*data)
+    def _blob(raw: bytes) -> tuple[DATA_BLOB, Any]:
+        buf = ctypes.create_string_buffer(raw, len(raw))  # one copy, not one int per byte
         blob = DATA_BLOB()
-        blob.cbData = len(data)
-        blob.pbData = ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte))
-        return blob
+        blob.cbData = len(raw)
+        blob.pbData = ctypes.addressof(buf)  # cast() would tie buf into a cycle only gc frees
+        return blob, buf  # the buffer must outlive the call
 
-    in_blob = _bytes_to_blob(plaintext)
-    ent_blob = _bytes_to_blob(_ENTROPY + entropy)
+    in_blob, _in_buf = _blob(data)
+    ent_blob, _ent_buf = _blob(_ENTROPY + entropy)
     out_blob = DATA_BLOB()
-    if not ctypes.windll.crypt32.CryptProtectData(
+    fn = ctypes.windll.crypt32.CryptProtectData if protect else ctypes.windll.crypt32.CryptUnprotectData
+    if not fn(
         ctypes.byref(in_blob),
         None,
         ctypes.byref(ent_blob),
@@ -57,43 +61,21 @@ def _protect(plaintext: bytes, entropy: bytes = b"") -> bytes:
         0x01,  # CRYPTPROTECT_UI_FORBIDDEN
         ctypes.byref(out_blob),
     ):
-        raise OSError("CryptProtectData failed")
-    return bytes(ctypes.string_at(out_blob.pbData, out_blob.cbData))
+        raise OSError("CryptProtectData failed" if protect else "CryptUnprotectData failed")
+    try:
+        return ctypes.string_at(out_blob.pbData, out_blob.cbData)
+    finally:
+        local_free = ctypes.windll.kernel32.LocalFree
+        local_free.argtypes = [ctypes.c_void_p]
+        local_free(out_blob.pbData)
+
+
+def _protect(plaintext: bytes, entropy: bytes = b"") -> bytes:
+    return _dpapi(plaintext, entropy, protect=True)
 
 
 def _unprotect(ciphertext: bytes, entropy: bytes = b"") -> bytes:
-    if not _dpapi_available():
-        raise OSError("Credential persist requires Windows DPAPI")
-    import ctypes
-    import ctypes.wintypes
-
-    class DATA_BLOB(ctypes.Structure):
-        _fields_ = [
-            ("cbData", ctypes.wintypes.DWORD),
-            ("pbData", ctypes.POINTER(ctypes.c_byte)),
-        ]
-
-    def _bytes_to_blob(data: bytes) -> DATA_BLOB:
-        buf = (ctypes.c_byte * len(data))(*data)
-        blob = DATA_BLOB()
-        blob.cbData = len(data)
-        blob.pbData = ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte))
-        return blob
-
-    in_blob = _bytes_to_blob(ciphertext)
-    ent_blob = _bytes_to_blob(_ENTROPY + entropy)
-    out_blob = DATA_BLOB()
-    if not ctypes.windll.crypt32.CryptUnprotectData(
-        ctypes.byref(in_blob),
-        None,
-        ctypes.byref(ent_blob),
-        None,
-        None,
-        0x01,
-        ctypes.byref(out_blob),
-    ):
-        raise OSError("CryptUnprotectData failed")
-    return bytes(ctypes.string_at(out_blob.pbData, out_blob.cbData))
+    return _dpapi(ciphertext, entropy, protect=False)
 
 
 def protect_text(value: str) -> bytes:

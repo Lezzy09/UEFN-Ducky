@@ -4,6 +4,7 @@ containers, and tracemalloc's diff showing an allocation made between two calls.
 from __future__ import annotations
 
 import json
+import sys
 
 from frontend import memory_report
 
@@ -22,6 +23,9 @@ def test_the_report_has_every_section_and_names_a_big_global() -> None:
     row = next(r for r in got["containers"]["top"] if r["name"].endswith("test_memory_report.BIG"))
     assert row["len"] == 4096 and row["mb"] >= 4
     assert "tracemalloc" not in got  # only once asked for
+    if sys.platform == "win32":  # native memory no Python object accounts for (DPAPI, C libraries)
+        native = got["native"]
+        assert native["heaps_allocated_mb"] > 0 and native["private_committed_mb"] >= native["heaps_committed_mb"] * 0.5
     json.dumps(got)  # the tool answers it as JSON
 
 

@@ -67,6 +67,82 @@ def _process() -> dict[str, Any]:
     return out
 
 
+def _native(top: int = 12) -> dict[str, Any]:
+    """Memory no Python object accounts for (Windows): committed private regions grouped by
+    the allocation they belong to (a heap, a .NET GC segment, a big buffer), the process
+    heaps' own totals, and the .NET runtime's GC heap when pythonnet hosts one."""
+    out: dict[str, Any] = {}
+    if sys.platform != "win32":
+        return out
+    import ctypes
+    from ctypes import wintypes
+
+    class MBI(ctypes.Structure):
+        _fields_ = [("BaseAddress", ctypes.c_void_p), ("AllocationBase", ctypes.c_void_p),
+                    ("AllocationProtect", wintypes.DWORD), ("PartitionId", wintypes.WORD),
+                    ("RegionSize", ctypes.c_size_t), ("State", wintypes.DWORD), ("Protect", wintypes.DWORD),
+                    ("Type", wintypes.DWORD)]
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.VirtualQuery.argtypes = [ctypes.c_void_p, ctypes.POINTER(MBI), ctypes.c_size_t]
+    k32.VirtualQuery.restype = ctypes.c_size_t
+    mem_commit, mem_private = 0x1000, 0x20000
+    by_base: dict[int, int] = {}
+    addr, mbi = 0, MBI()
+    while k32.VirtualQuery(ctypes.c_void_p(addr), ctypes.byref(mbi), ctypes.sizeof(mbi)):
+        if mbi.State == mem_commit and mbi.Type == mem_private:
+            base = int(mbi.AllocationBase or 0)
+            by_base[base] = by_base.get(base, 0) + int(mbi.RegionSize)
+        nxt = int(mbi.BaseAddress or 0) + int(mbi.RegionSize)
+        if nxt <= addr:
+            break
+        addr = nxt
+    sizes = sorted(by_base.values(), reverse=True)
+    out["private_committed_mb"] = _mb(sum(sizes))
+    out["allocations"] = len(sizes)
+    out["biggest_allocations_mb"] = [_mb(s) for s in sizes[:top]]
+    buckets = {"<1MB": 0, "1-16MB": 0, "16-256MB": 0, ">=256MB": 0}
+    for s in sizes:
+        key = "<1MB" if s < MB else "1-16MB" if s < 16 * MB else "16-256MB" if s < 256 * MB else ">=256MB"
+        buckets[key] += s
+    out["by_allocation_size_mb"] = {k: _mb(v) for k, v in buckets.items()}
+
+    class HeapSummary(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("cbAllocated", ctypes.c_size_t), ("cbCommitted", ctypes.c_size_t),
+                    ("cbReserved", ctypes.c_size_t), ("cbMaxReserve", ctypes.c_size_t)]
+
+    try:
+        k32.GetProcessHeaps.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+        n = k32.GetProcessHeaps(0, None)
+        heaps = (wintypes.HANDLE * max(n, 1))()
+        n = k32.GetProcessHeaps(n, heaps)
+        k32.HeapSummary.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(HeapSummary)]
+        rows = []
+        for h in heaps[:n]:
+            s = HeapSummary()
+            s.cb = ctypes.sizeof(s)
+            if k32.HeapSummary(h, 0, ctypes.byref(s)):
+                rows.append((s.cbCommitted, s.cbAllocated))
+        rows.sort(reverse=True)
+        out["heaps"] = len(rows)
+        out["heaps_committed_mb"] = _mb(sum(c for c, _ in rows))
+        out["heaps_allocated_mb"] = _mb(sum(a for _, a in rows))
+        out["biggest_heaps_mb"] = [{"committed": _mb(c), "allocated": _mb(a)} for c, a in rows[:5]]
+    except Exception as exc:  # noqa: BLE001
+        out["heaps_error"] = str(exc)
+    if "clr" in sys.modules or "pythonnet" in sys.modules:
+        try:
+            from System import GC  # type: ignore[import-not-found]
+
+            info = GC.GetGCMemoryInfo()
+            out["dotnet"] = {"total_memory_mb": _mb(GC.GetTotalMemory(False)),
+                             "heap_size_mb": _mb(info.HeapSizeBytes), "committed_mb": _mb(info.TotalCommittedBytes),
+                             "fragmented_mb": _mb(info.FragmentedBytes), "gen2_collections": GC.CollectionCount(2)}
+        except Exception as exc:  # noqa: BLE001
+            out["dotnet_error"] = str(exc)[:200]
+    return out
+
+
 def _gc(collect: bool, top: int) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if collect:
@@ -225,7 +301,7 @@ def report(*, start_trace: bool = False, stop_trace: bool = False, collect: bool
            top: int = TOP, walk_budget_s: float = WALK_BUDGET_S) -> dict[str, Any]:
     started = time.monotonic()
     top = max(1, min(int(top or TOP), 200))
-    out: dict[str, Any] = {"process": _process(), "gc": _gc(collect, top),
+    out: dict[str, Any] = {"process": _process(), "native": _native(), "gc": _gc(collect, top),
                            "containers": _containers(top, max(1.0, float(walk_budget_s)))}
     traced = _trace(bool(start_trace), bool(stop_trace), min(top, TRACE_TOP))
     if traced is not None:
