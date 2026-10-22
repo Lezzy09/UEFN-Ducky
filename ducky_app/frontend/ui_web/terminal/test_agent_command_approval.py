@@ -85,6 +85,27 @@ def test_a_failing_command_is_not_ok(monkeypatch) -> None:
     assert out["output_tail"] == "npm test finished"
 
 
+def test_a_command_that_printed_nothing_reports_nothing(monkeypatch) -> None:
+    # Oct 22 2026: a silent failed push came back as the raw screen (escape codes and the
+    # agent's own echoed command) instead of an empty output.
+    mgr, _session, _events = _manager(monkeypatch)
+    session = _Exits(128)
+    session.run_command = lambda command, **kw: {"ok": True, "exit_code": 128, "output_tail": ""}  # type: ignore[method-assign]
+    session.read_output_tail = lambda **kw: "\x1b[93mgit\x1b[39;49m push; $__duckyOk = $?"  # type: ignore[method-assign]
+    monkeypatch.setattr(mgr, "get_session", lambda _sid: session)
+    out = mgr.run_agent_command("s1", "git push", auto_approve=True, command_timeout_s=5)
+    assert out["ok"] is False and out["output_tail"] == "" and "exit code 128" in out["error"]
+
+
+def test_why_a_terminal_refused_reaches_the_agent(monkeypatch) -> None:
+    mgr, _session, _events = _manager(monkeypatch)
+    session = _Exits(0)
+    session.run_command = lambda command, **kw: {"ok": False, "error": "still running (vim.exe)", "hint": "open a new one"}  # type: ignore[method-assign]
+    monkeypatch.setattr(mgr, "get_session", lambda _sid: session)
+    out = mgr.run_agent_command("s1", "git status", auto_approve=True, command_timeout_s=5)
+    assert out["ok"] is False and out["error"] == "still running (vim.exe)" and out["hint"] == "open a new one"
+
+
 def test_allow_on_the_popup_runs_it_once_for_the_waiting_agent(monkeypatch) -> None:
     import threading
 

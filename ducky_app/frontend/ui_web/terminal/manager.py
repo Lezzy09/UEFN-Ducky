@@ -17,6 +17,7 @@ from frontend.ui_web.terminal.session import (
     ProcessSnapshot,
     TerminalSession,
     _process_snapshot,
+    agent_command_output,
 )
 from frontend.ui_web.terminal.shells import shell_label
 
@@ -495,14 +496,17 @@ class TerminalManager:
                 "status": "running",
             }
         ran = session.run_command(command.strip(), background=False, timeout_s=command_timeout_s)
+        # A command that printed nothing reports nothing. Falling back to the raw screen gave
+        # the agent escape codes and its own echoed command instead (a silent failed push).
+        tail = ran["output_tail"] if "output_tail" in ran else agent_command_output(session.read_output_tail(max_chars=_OUTPUT_RING_CHARS))
         out: dict[str, Any] = {
             "ok": bool(ran.get("ok")),
             "request_id": request_id,
             "session_id": session_id,
-            "output_tail": str(ran.get("output_tail") or session.read_output_tail()),
+            "output_tail": str(tail),
         }
         if not out["ok"]:
-            return {**out, "error": str(ran.get("error") or "command failed")}
+            return {**out, "error": str(ran.get("error") or "command failed"), **({"hint": ran["hint"]} if ran.get("hint") else {})}
         code = ran.get("exit_code")
         out["exit_code"] = code
         if code not in (None, 0):

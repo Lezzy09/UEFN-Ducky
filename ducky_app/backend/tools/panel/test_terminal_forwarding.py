@@ -111,6 +111,11 @@ def test_allow_everything_runs_a_push_in_an_ai_plugin(forwarded, monkeypatch):
     assert [c[0] for c in forwarded.calls] == ["terminal_request_command"]
 
 
+def test_an_agent_reads_plain_terminal_text(forwarded):
+    forwarded.session.read_output_tail.return_value = "\x1b[32mbuilt\x1b[0m\r\n 10%\r100%\r\n"
+    assert json.loads(tools.ducky_terminal_read_output("s1"))["output"] == "built\n100%\n"
+
+
 def test_window_unavailable_never_creates_local_terminal(forwarded, monkeypatch):
     def unavailable(*a, **kw):
         raise urllib.error.URLError("connection refused")

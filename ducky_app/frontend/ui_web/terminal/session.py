@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import threading
 import time
 import uuid
@@ -38,6 +39,25 @@ _ESCAPE_SEQ_RE = re.compile(
     r"|\x1b[@-Z\\-_]"
 )
 _AGENT_OUTPUT_CHARS = 8000
+# An agent's command never waits on a pager or an editor. This terminal is a real console, so
+# `git log` opened less and `git commit` opened vim: the agent waited out its timeout and its
+# next commands were typed into them (Oct 22 2026). Codex and Claude Code run commands without
+# a console, so this never happens there. Only the agent's command gets these; what the person
+# types in the same terminal keeps their own settings.
+_AGENT_ENV = (("GIT_PAGER", "cat"), ("GH_PAGER", "cat"), ("GIT_EDITOR", "true"), ("GH_PROMPT_DISABLED", "1"))
+_PS_SET_AGENT_ENV = (
+    "$__duckyWas = @{}; foreach ($__k in " + ",".join(f"'{k}'" for k, _ in _AGENT_ENV) + ") "
+    "{ $__duckyWas[$__k] = [Environment]::GetEnvironmentVariable($__k) }; "
+    + " ".join(f"$env:{k} = '{v}';" for k, v in _AGENT_ENV) + " "
+)
+_PS_RESTORE_ENV = "foreach ($__k in @($__duckyWas.Keys)) { [Environment]::SetEnvironmentVariable($__k, $__duckyWas[$__k]) }; "
+_BASH_AGENT_ENV = " ".join(f"{k}={v}" for k, v in _AGENT_ENV)
+# PowerShell reads the curly single quotes as quotes too, so they are doubled like ' is.
+_PS_QUOTE_RE = re.compile("(['‘’‚‛])")
+
+
+def _ps_literal(text: str) -> str:
+    return "'" + _PS_QUOTE_RE.sub(r"\1\1", text) + "'"
 # Escape sequences that ask the terminal to REPLY (device attributes ESC[c,
 # status reports ESC[5n/6n, window/cell size reports ESC[14t…21t). Replaying
 # them makes xterm.js answer again, and the answer reaches the shell as typed
@@ -48,6 +68,7 @@ _QUERY_SEQ_RE = re.compile(
     r"|\x1b\[(?:1[4689]|2[01])(?:;[0-9;]*)?t"
 )
 _APPROVAL_TIMEOUT_S = 120.0
+_STOP_GRACE_S = 2.0
 
 
 def plain_terminal_text(raw: str) -> str:
@@ -246,6 +267,10 @@ class TerminalSession:
         # a quiet one can't be told from an idle shell).
         self.last_activity = time.time()
         self.ran_background = False
+        # Processes a timed-out agent command started: {pid: exe name}.
+        self._timed_out: dict[int, str] = {}
+        # The person pressed Ctrl+C and the agent's command never reported done.
+        self._stopped = False
 
     def spawn(self) -> None:
         import os
@@ -360,6 +385,27 @@ class TerminalSession:
         with self._write_lock:
             pty.write(data)
         self.last_activity = time.time()
+        if "\x03" in data:
+            self._interrupted()
+
+    def _interrupted(self) -> None:
+        """Ctrl+C while an agent command runs. Bash drops the rest of the typed line, done
+        marker included, so the agent waited out its whole timeout after the person had
+        stopped it. A command that still finishes in time reports its own exit code.
+        Ctrl+C never reaches a PowerShell command in this terminal (ConPTY): it keeps
+        running and reports done itself, so nothing is said for it here."""
+        done = self._pending_done
+        if self.shell == "powershell" or done is None or done.is_set():
+            return
+
+        def stopped() -> None:
+            if self._pending_done is done and not done.is_set():
+                self._stopped = True
+                done.set()
+
+        timer = threading.Timer(_STOP_GRACE_S, stopped)
+        timer.daemon = True
+        timer.start()
 
     def resize(self, cols: int, rows: int) -> None:
         self._cols = max(20, min(int(cols), 500))
@@ -425,11 +471,16 @@ class TerminalSession:
 
     def _wrap_agent_command(self, command: str, background: bool) -> str:
         cmd = command.rstrip("\r\n")
-        if background:
-            if self.shell == "powershell":
-                return f"{cmd}\r"
-            return f"({cmd}) &\r\n"
         if self.shell == "powershell":
+            # As one quoted string, a trailing "# comment" can't eat the done marker; it runs
+            # in this scope, so a `cd` or a variable it sets stays.
+            if background:
+                return f"{_PS_SET_AGENT_ENV}Invoke-Expression {_ps_literal(cmd)}; {_PS_RESTORE_ENV}\r"
+            # $? after Invoke-Expression misses a failed cmdlet inside it: the command's own $?
+            # is taken on the next line of the same text (which also ends a trailing comment).
+            # A parse error never gets there and stays a failure. No try/catch: inside one, a
+            # failed statement skips the ones after it, which typing the command never does.
+            run = f'$__duckyOk = $false; Invoke-Expression ({_ps_literal(cmd)} + "`n`$__duckyOk = `$?")'
             # "$LASTEXITCODE__" inside a string is a variable named LASTEXITCODE__ (an
             # underscore is a name character), so the marker printed no code and every
             # PowerShell command waited until it timed out. A cmdlet sets no
@@ -438,11 +489,45 @@ class TerminalSession:
             # ">>" continuation prompt behind.
             return (
                 'Write-Output ("__DUCKY_{0}__" -f "BEGIN"); '
-                f"$global:LASTEXITCODE = 0; {cmd}; $__duckyOk = $?; "
+                f"{_PS_SET_AGENT_ENV}$global:LASTEXITCODE = 0; {run}; {_PS_RESTORE_ENV}"
                 'Write-Output ("__DUCKY_DONE__{0}__" -f $(if ($LASTEXITCODE) { $LASTEXITCODE } '
                 "elseif ($__duckyOk) { 0 } else { 1 }))\r"
             )
-        return f"printf '__DUCKY_%s__\\n' BEGIN; {cmd}; echo __DUCKY_DONE__$?__\r\n"
+        # Variables in front of eval last for that command only, while a `cd` or an assignment
+        # in it stays. Quoted, a trailing "# comment" or a "!" can't eat the done marker.
+        run = f"{_BASH_AGENT_ENV} eval {shlex.quote(cmd)}"
+        if background:
+            return f"({run}) &\r\n"
+        return f"printf '__DUCKY_%s__\\n' BEGIN; {run}; echo __DUCKY_DONE__$?__\r\n"
+
+    def _descendants(self) -> dict[int, str]:
+        """Every process under this terminal's shell: {pid: exe name}."""
+        pty = self._pty
+        pid = getattr(pty, "pid", None) if pty is not None else None
+        if not pid:
+            return {}
+        try:
+            children, names = _process_snapshot()
+        except Exception:
+            return {}
+        found: dict[int, str] = {}
+        todo = [int(pid)]
+        while todo:
+            for kid in children.get(todo.pop(), []):
+                if kid not in found:
+                    found[kid] = names.get(kid, "")
+                    todo.append(kid)
+        return found
+
+    def _left_running(self) -> str:
+        """What a timed-out agent command left running here ('' when it has ended)."""
+        if not self._timed_out:
+            return ""
+        alive = self._descendants()
+        left = sorted({name for pid, name in self._timed_out.items() if alive.get(pid) == name})
+        if not left:
+            self._timed_out = {}
+        return ", ".join(left)
 
     def run_command(
         self,
@@ -453,11 +538,22 @@ class TerminalSession:
     ) -> dict[str, Any]:
         if self.is_busy() and not background:
             return {"ok": False, "error": "session busy", "hint": "Wait for the current command or open another terminal."}
+        left = self._left_running()
+        if left:
+            # Typing on would answer whatever it waits on (a prompt, an editor), not run a command.
+            return {
+                "ok": False,
+                "error": f"The last command in this terminal timed out and is still running ({left}).",
+                "hint": "Read its output with ducky_terminal_read_output, ask the person to finish it in "
+                "Ducky's Terminal tab, or close this terminal with ducky_terminal_close and open a new one.",
+            }
+        before = {} if background else self._descendants()
         wrapped = self._wrap_agent_command(command, background)
         self.ran_background = self.ran_background or background
         self.set_busy(not background)
         self._pending_done = None if background else threading.Event()
         self._pending_exit_code = None
+        self._stopped = False
         try:
             self.write(wrapped)
         except Exception as exc:
@@ -472,12 +568,19 @@ class TerminalSession:
         wait_timeout = None if float(timeout_s) <= 0 else max(1.0, float(timeout_s))
         if not done.wait(timeout=wait_timeout):
             self.set_busy(False)
+            self._timed_out = {pid: name for pid, name in self._descendants().items() if pid not in before}
             return {
                 "ok": False,
                 "error": "command timed out",
                 "output_tail": agent_command_output(self.read_output_tail(_OUTPUT_RING_CHARS)),
             }
         self.set_busy(False)
+        if self._stopped:
+            return {
+                "ok": False,
+                "error": "The person stopped this command (Ctrl+C in Ducky's Terminal tab) before it finished.",
+                "output_tail": agent_command_output(self.read_output_tail(_OUTPUT_RING_CHARS)),
+            }
         return {
             "ok": True,
             "exit_code": self._pending_exit_code,

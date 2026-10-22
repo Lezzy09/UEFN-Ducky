@@ -2126,9 +2126,15 @@ def _terminal_chat(conv_id: str) -> str:
 @mcp.tool()
 def ducky_terminal_read_output(session_id: str, max_chars: int = 8000, pretty: bool = False) -> str:
     """Read recent output from a terminal session (for wait=false / parallel workflows)."""
+    from frontend.ui_web.terminal.session import plain_terminal_text
+
     mgr = _terminal_manager()
     max_chars = max(500, min(int(max_chars), 32000))
-    return tool_json(mgr.read_output(session_id.strip(), max_chars=max_chars), pretty=pretty)
+    result = mgr.read_output(session_id.strip(), max_chars=max_chars)
+    if isinstance(result.get("output"), str):
+        # Plain text, as an agent reads it: no escape codes, progress redraws resolved.
+        result["output"] = plain_terminal_text(result["output"])
+    return tool_json(result, pretty=pretty)
 
 
 @mcp.tool()
