@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
@@ -1275,6 +1275,38 @@ def test_the_move_from_the_older_sync_reconciles_each_row(pc: PC, ben: Ben) -> N
     assert gone["reason"] == "deleted" and pc.row("card.edited_gone")["dirty"] == 1
     assert ben.doc("card.edited_gone") is None
     assert space_vcs.unit_seqs(pc.account, SPACE, PLUGIN, ["doc:card.same"]) == {"doc:card.same": 1}
+
+
+class _CommitsMidListing:
+    """Ben commits ``commit`` just before the full listing's second page is read."""
+
+    def __init__(self, inner: Any, commit: Callable[[], Any]) -> None:
+        self.inner, self.commit = inner, commit
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    def pull(self, space: str, plugin: str, since: int, limit: int, **kw: Any) -> Any:
+        if kw.get("full") and kw.get("after") and self.commit:
+            self.commit, commit = None, self.commit
+            commit()
+        return self.inner.pull(space, plugin, since, limit, **kw)
+
+
+def test_a_changeset_landing_during_the_first_pull_keeps_its_docs(pc: PC, ben: Ben,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sandbox's first pull: a doc committed while the full listing paged past its key
+    was never listed, yet the head moved past it, so it never came."""
+    monkeypatch.setattr(vcs_engine, "PULL_LIMIT", 1)  # one item a listing page
+    _v1_doc(pc, "card.a", {"v": 1}, rev=1, dirty=False)  # a copy from the older sync: the move lists everything
+    ben.put_doc("card.a", {"v": 1})
+    ben.put_doc("card.b", {"v": 2})
+    late = _CommitsMidListing(pc.backend, lambda: ben.put_doc("card.0", {"probe": True}))  # sorts before card.a
+    assert pc.run(backend=late)["state"] == "ok"
+    assert ben.head() == 3 and pc.data.get("card.b") == {"v": 2}
+    assert pc.run()["state"] == "ok"
+    assert pc.data.get("card.0") == {"probe": True}  # the head never went past it unpulled
+    assert space_vcs.head_get(pc.account, SPACE, PLUGIN)["seq"] == 3
 
 
 def test_undo_never_deletes_an_item_whose_earlier_version_is_no_longer_kept(pc: PC, ben: Ben,

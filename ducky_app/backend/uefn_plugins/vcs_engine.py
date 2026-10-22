@@ -1422,17 +1422,20 @@ def _retry_blocked(ctx: Ctx, *, now: float) -> dict[str, Any]:
 
 def _listing(ctx: Ctx, *, now: float,
              kinds: tuple[str, ...] = KINDS) -> tuple[dict[ItemId, IncomingItem], int] | dict[str, Any]:
-    """Every item's current version on the server (``pull(full=True)``, paged) and the head;
-    or why the round stops."""
+    """Every item's current version on the server (``pull(full=True)``, paged) and the head
+    the listing surely covers: the first page's. A commit landing while it pages moves later
+    pages' head, but pages already read never list it, so the head stays before it and a
+    pull brings it (rows already at its seq are skipped). Or why the round stops."""
     listing: dict[ItemId, IncomingItem] = {}
     after = ""
-    head = 0
+    head = -1
     while True:
         page = _call(ctx.backend.pull, ctx.space, ctx.plugin, 0, PULL_LIMIT, full=True, after=after)
         if not isinstance(page, PullPage):
             out = _stop(ctx, page, now=now)
             return {"state": out.state, "error": out.error, "changed": [], "pulled": 0, "conflicts": 0}
-        head = max(head, int(page.head))
+        if head < 0:
+            head = int(page.head)
         for it in page.items:
             if it.kind in kinds:
                 listing[it.id] = it
