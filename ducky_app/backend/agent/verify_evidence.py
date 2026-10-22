@@ -265,8 +265,15 @@ def record_result(name: str, arguments: dict[str, Any] | None, raw: Any) -> None
     if failed or any(_failed_payload(p) for p in payloads):
         return
     if key == OFFLINE_VERSE_CHECK:
-        # The scan is proof once it checked every file (complete is False when it ran out of time).
-        if payloads and not any(p.get("complete") is False for p in payloads):
+        # Proof only when it checked every Verse file of an island (complete is False when it ran
+        # out of time; a folder project has no Verse, so "no files" checked nothing) and found no
+        # errors: a scan listing errors is the opposite of a passing check.
+        if payloads and not any(
+            p.get("complete") is False
+            or p.get("folder_project")
+            or any(int((f or {}).get("errors") or 0) > 0 for f in p.get("files") or [] if isinstance(f, dict))
+            for p in payloads
+        ):
             _record_key(key)
         return
     if key in _RESULT_CHECKS:
