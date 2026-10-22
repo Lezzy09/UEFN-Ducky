@@ -253,6 +253,23 @@ interface ComposerDraftProps {
   onBlur?: () => void;
 }
 
+/** A repaint (a paste, Shift+Enter) replaces the box's content and keeps its scroll where it
+ *  was, so a long paste left the caret below the visible lines. Bring the caret back on
+ *  screen; a caret with no box of its own (the end of a text node) at the very end of the
+ *  text scrolls to the bottom. */
+export function scrollCaretIntoView(root: HTMLElement, atEnd: boolean): void {
+  if (root.scrollHeight <= root.clientHeight) return;
+  const sel = window.getSelection();
+  const rect = sel && sel.rangeCount ? sel.getRangeAt(0).getClientRects?.()[0] : undefined;
+  if (!rect || (!rect.top && !rect.bottom)) {
+    if (atEnd) root.scrollTop = root.scrollHeight;
+    return;
+  }
+  const box = root.getBoundingClientRect();
+  if (rect.bottom > box.bottom) root.scrollTop += rect.bottom - box.bottom;
+  else if (rect.top < box.top) root.scrollTop -= box.top - rect.top;
+}
+
 /** Phones: Return starts a new line. Send stays on the button. Desktop Enter still sends. */
 export function enterInsertsNewline(): boolean {
   return typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
@@ -284,7 +301,10 @@ export function ComposerDraft({
     const focused = document.activeElement === root;
     paint(root, value);
     painted.current = value;
-    if (focused) composerSetCaret(root, caret);
+    if (focused) {
+      composerSetCaret(root, caret);
+      scrollCaretIntoView(root, caret >= value.length);
+    }
   }, [value, caret]);
 
   useLayoutEffect(() => {
