@@ -6,7 +6,7 @@ import http.client
 import ssl
 import urllib.error
 
-ATTEMPTS = 3
+ATTEMPTS = 5
 
 
 def retryable(exc: BaseException) -> bool:
@@ -14,6 +14,8 @@ def retryable(exc: BaseException) -> bool:
         return exc.code in (408, 429, 500, 502, 503, 504)
     if isinstance(exc, urllib.error.URLError):
         return retryable(exc.reason) if isinstance(exc.reason, BaseException) else False
+    if isinstance(exc, (ssl.SSLEOFError, ssl.SSLZeroReturnError)):
+        return True  # The connection dropped mid-TLS; nothing about the certificate failed.
     if isinstance(exc, ssl.SSLError):
         return False  # Certificate/security failures must never be bypassed.
     if isinstance(exc, OSError) and (

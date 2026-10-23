@@ -7,7 +7,7 @@ import urllib.error
 import pytest
 
 from frontend import updater, version_check
-from frontend.update_network import retryable
+from frontend.update_network import ATTEMPTS, retryable
 
 
 class Response(io.BytesIO):
@@ -59,7 +59,7 @@ def test_failed_retries_remove_partial_file(tmp_path, monkeypatch):
     monkeypatch.setattr(updater.urllib.request, "urlopen", reset_connection)
     dest = tmp_path / "Setup.exe"
     assert "forcibly closed" in updater._download("https://example.test/setup", dest)
-    assert len(calls) == 3
+    assert len(calls) == ATTEMPTS
     assert not dest.exists()
     assert not dest.with_suffix(".exe.part").exists()
     assert updater._active_download_resp is None
@@ -96,6 +96,13 @@ def test_certificate_errors_never_retry():
     assert not retryable(urllib.error.URLError(ssl.SSLCertVerificationError("bad certificate")))
     assert retryable(OSError(10054, "forcibly closed"))
     assert not retryable(PermissionError("cannot write"))
+
+
+def test_dropped_tls_connection_retries():
+    eof = ssl.SSLEOFError(8, "EOF occurred in violation of protocol (_ssl.c:1032)")
+    assert retryable(eof)
+    assert retryable(urllib.error.URLError(eof))
+    assert retryable(ssl.SSLZeroReturnError(6, "TLS/SSL connection has been closed"))
 
 
 def test_update_feed_recovers_reset_while_reading(monkeypatch):
