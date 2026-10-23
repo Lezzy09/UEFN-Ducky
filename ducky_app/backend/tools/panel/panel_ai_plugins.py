@@ -378,7 +378,9 @@ def list_ai_plugin_drafts(plugin_id: str = "") -> dict[str, Any]:
     return {"ok": True, "id": pid, "path": str(draft), "files": files}
 
 
-def write_ai_plugin_file(plugin_id: str, path: str, content: str) -> dict[str, Any]:
+def write_ai_plugin_file(plugin_id: str, path: str, content: str, *, max_chars: int | None = _MAX_FILE_CHARS) -> dict[str, Any]:
+    """``max_chars``: the most an agent may write in one go (None: an edit of a file the
+    draft already has, judged by what it adds instead)."""
     from backend.uefn_plugins.store import normalize_plugin_id
 
     try:
@@ -393,8 +395,8 @@ def write_ai_plugin_file(plugin_id: str, path: str, content: str) -> dict[str, A
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     text = content if isinstance(content, str) else str(content)
-    if len(text) > _MAX_FILE_CHARS:
-        return {"ok": False, "error": f"content exceeds {_MAX_FILE_CHARS} chars"}
+    if max_chars is not None and len(text) > max_chars:
+        return {"ok": False, "error": f"content exceeds {max_chars} chars"}
     if target.suffix.lower() in _SECRET_SUFFIXES:
         return {"ok": False, "error": f"refusing secret-looking file: {target.name}"}
     root_res = root.resolve()
@@ -482,7 +484,11 @@ def edit_ai_plugin_file(plugin_id: str, path: str, old_string: str, new_string: 
         return {"ok": False, "error": "old_string was not found: read those lines again (start_line/end_line) and copy them exactly"}
     if count > 1 and not replace_all:
         return {"ok": False, "error": f"old_string is in the file {count} times: add surrounding lines so it is unique, or pass replace_all=true"}
-    result = write_ai_plugin_file(pid, path, text.replace(old_string, new_string))
+    if len(new_string) > _MAX_FILE_CHARS:
+        return {"ok": False, "error": f"new_string exceeds {_MAX_FILE_CHARS} chars"}
+    # An edit is judged by what it adds: a file already past the limit (Island Media Kit's
+    # plugin.json is 17k lines) could otherwise never be changed by a line.
+    result = write_ai_plugin_file(pid, path, text.replace(old_string, new_string), max_chars=None)
     if result.get("ok"):
         result["replacements"] = count if replace_all else 1
     return result

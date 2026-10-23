@@ -43,3 +43,19 @@ def test_editing_part_of_a_file_replaces_one_exact_snippet(draft) -> None:
     assert p.edit_ai_plugin_file("imk", "ui/x.js", "b = 1;", "b = 3;", replace_all=True)["replacements"] == 2
     assert (draft / "ui" / "x.js").read_text(encoding="utf-8") == "a = 2;\nb = 3;\nb = 3;\n"
     assert not p.edit_ai_plugin_file("imk", "../escape.js", "a", "b")["ok"]  # still path-jailed
+
+
+def test_a_file_past_the_write_limit_still_takes_a_one_line_edit(draft) -> None:
+    # Oct 22 2026: Island Media Kit's plugin.json is 17k lines (over 512 KB), so adding one
+    # manifest line failed with "content exceeds 524288 chars".
+    import json
+
+    manifest = {"id": "imk", "data_sharing": True, "contributes": {"blob": ["x" * 80] * 8000}}
+    (draft / "plugin.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    assert (draft / "plugin.json").stat().st_size > p._MAX_FILE_CHARS
+    done = p.edit_ai_plugin_file("imk", "plugin.json", '"data_sharing": true,', '"data_sharing": true,\n  "data_live": true,')
+    assert done["ok"], done
+    assert json.loads((draft / "plugin.json").read_text(encoding="utf-8"))["data_live"] is True
+    huge = "y" * (p._MAX_FILE_CHARS + 1)
+    assert "new_string exceeds" in p.edit_ai_plugin_file("imk", "plugin.json", '"data_live": true', huge)["error"]
+    assert "content exceeds" in p.write_ai_plugin_file("imk", "ui/big.js", huge)["error"]  # whole writes stay capped
