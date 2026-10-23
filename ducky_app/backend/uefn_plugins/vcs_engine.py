@@ -871,10 +871,26 @@ def _holds_mine(c: Mapping[str, Any] | None) -> bool:
     return bool(c) and not int(c["mine_deleted"]) and (c["mine_value"] is not None or bool(c["mine_path"]))
 
 
+HELD_OPEN = "The file is open in another program here; it is tried again soon."
+# A lock request that finds this PC behind on a unit tries its set-aside downloads again at
+# once only this often; then they wait their backoff (space_vcs.blocked_put, up to an hour).
+AUTO_RETRIES = 3
+
+
 def _why(exc: BaseException) -> str:
     if isinstance(exc, PermissionError):
-        return "The file is open in another program here; it is tried again soon."
+        return HELD_OPEN
     return f"{type(exc).__name__}: {exc}"
+
+
+def _retry_soon(b: Mapping[str, Any]) -> bool:
+    """A set-aside download a lock request may try again now: one that failed only a few
+    times, or for a passing reason (a file held open). One failing the same way every time
+    (a path too long, a bad copy) waits its turn and keeps its reason; it is never dropped,
+    so a fix or an update still lands it. Before, every auto lock on its unit retried it."""
+    # ponytail: tries since its last success stand in for "the same error N times"; the
+    # table keeps only the last error.
+    return int(b["attempts"]) < AUTO_RETRIES or str(b["error"]) == HELD_OPEN
 
 
 class _Files:
@@ -2913,7 +2929,7 @@ def acquire(account: str, space: str, plugin: str, backend: Any, units: list[tup
     if behind and not held_reason(account, space):
         late = {lu.unit for lu in behind}
         for b in space_vcs.blocked(account, space, plugin):
-            if b["unit"] in late:
+            if b["unit"] in late and _retry_soon(b):
                 space_vcs.blocked_retry_now(account, space, plugin, b["kind"], b["key"])
         with _lock(account, space, 30.0) as held:
             if held:

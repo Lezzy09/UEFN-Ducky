@@ -456,6 +456,33 @@ def test_a_bad_download_is_set_aside_and_the_cursor_moves_on(pc: PC, ben: Ben, w
     assert pc.data.get("card.a") == {"v": 1} and space_vcs.blocked(pc.account, SPACE) == []
 
 
+def test_a_download_failing_the_same_way_backs_off_and_still_lands_later(pc: PC, ben: Ben,
+                                                                          world: conf.FakeWorld) -> None:
+    """The owner's 24 files showed 51 tries within minutes: every auto lock on their unit
+    found this PC behind and tried the download again at once, past its backoff."""
+    pc.data.put("card.pip", {"hp": 1})
+    pc.run()
+    ben.put_doc("card.pip", {"hp": 2})
+    world.server.bad.add((SPACE, PLUGIN, "doc", "card.pip", 2))  # fails the same way every time
+    pc.run()
+
+    def tries() -> int:
+        return int(space_vcs.blocked(pc.account, SPACE, PLUGIN)[0]["attempts"])
+
+    assert tries() == 1
+    for _ in range(10):  # the plugin locks the unit again and again (auto locks)
+        assert not vcs_engine.acquire(pc.account, SPACE, PLUGIN, pc.backend, [("doc:card.pip", "card.pip")],
+                                      reason="auto")["doc:card.pip"]["ok"]
+        pc.run()
+    assert tries() == vcs_engine.AUTO_RETRIES  # a few at once, then it waits its backoff
+    b = space_vcs.blocked(pc.account, SPACE, PLUGIN)[0]
+    assert b["next_try"] > time.time() + 60 and "verify" in b["error"]  # its reason still shows
+    world.server.bad.clear()  # fixed (an update, the server)
+    conn_now = b["next_try"] + 1
+    pc.run(now=conn_now)  # its turn comes: it lands, nothing was dropped
+    assert pc.data.get("card.pip") == {"hp": 2} and space_vcs.blocked(pc.account, SPACE) == []
+
+
 # --------------------------------------------------------------------------- locks
 
 
