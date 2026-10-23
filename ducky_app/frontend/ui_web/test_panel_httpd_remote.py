@@ -357,6 +357,34 @@ def test_a_plugins_media_link_streams_ranges_and_lets_the_panel_read_frames(pane
         assert resp.read() == bytes(range(10, 20))
 
 
+def test_the_pc_link_gets_plugin_pages_and_the_ui_kit_from_the_panel_server(panel_server, monkeypatch, tmp_path):
+    # Oct 22 2026: the phone panel framed plugin pages by URL, which resolved on the site
+    # (404, frame-ancestors 'none'). Now it builds them from what the PC's end of the link
+    # fetches here (directPeer -> fetch("/plugin-ui/...")): the page with the host's
+    # scripts first, and the shared UI kit its <script src="../../_kit/ducky.js"> names.
+    import urllib.request
+
+    from backend.uefn_plugins import webview
+
+    page = tmp_path / "index.html"
+    page.write_text('<!doctype html><html><head><script src="../../_kit/ducky.js"></script></head>'
+                    '<body>Account</body></html>', encoding="utf-8")
+    monkeypatch.setattr(webview, "resolve_plugin_ui_file", lambda pid, rel: page if (pid, rel) == ("account", "ui/index.html") else None)
+
+    def get(path: str) -> tuple[int, str, str]:
+        req = urllib.request.Request(f"http://127.0.0.1:{panel_server}{path}", headers={"Host": "127.0.0.1"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, resp.headers["Content-Type"], resp.read().decode("utf-8")
+
+    status, kind, html = get("/plugin-ui/account/ui/index.html")
+    assert status == 200 and kind.startswith("text/html")
+    assert "Account" in html and html.index("<script>") < html.index('src="../../_kit/ducky.js"')
+    status, kind, kit = get("/plugin-ui/_kit/ducky.js")
+    assert status == 200 and "javascript" in kind and kit
+    protocol = Path(httpd.__file__).resolve().parent / "web" / "src" / "remote" / "protocol.ts"
+    assert '"/plugin-ui/"' in protocol.read_text(encoding="utf-8")  # the blob channel may carry them
+
+
 def test_app_scripts_keep_their_type_when_the_registry_says_text_plain(panel_server, monkeypatch, tmp_path):
     # Oct 17 2026: a PC whose registry maps .js to text/plain never got past the boot
     # splash, because WebView2 refuses a module script that isn't served as JavaScript.
