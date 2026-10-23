@@ -3,6 +3,7 @@
  * Spoken-summary skips chats that are currently live.
  */
 
+import { onNativeLiveVoiceStop, syncNativeKeepAlive } from "./nativeKeepAlive";
 import type { SpeechErrorAction } from "./speechErrors";
 
 export type LiveVoiceUiStatus =
@@ -72,8 +73,16 @@ export function setLiveVoiceChat(chatId: string, on: boolean): void {
     live.delete(id);
     states.set(id, { ...EMPTY });
   }
+  syncNativeKeepAlive(live.size);
   notify();
 }
+
+// Phone notification's Stop: end every live chat the same way End does.
+onNativeLiveVoiceStop(() => {
+  const ids = [...live];
+  void import("./liveSpeakService").then(({ stopLiveChat }) => ids.forEach((id) => stopLiveChat(id)));
+  return ids.length;
+});
 
 export function getLiveVoiceChatIds(): ReadonlySet<string> {
   return live;
