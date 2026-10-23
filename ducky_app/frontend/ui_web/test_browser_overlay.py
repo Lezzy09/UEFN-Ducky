@@ -233,3 +233,48 @@ def test_second_pane_queues_while_ensure_inflight() -> None:
         assert second in bo._pending_env_panes
     finally:
         _reset_overlay_env_state(bo)
+
+
+def _evaluate_pane(reply: object) -> object:
+    from types import SimpleNamespace
+
+    class _Task:
+        def __init__(self, value: object) -> None:
+            self.value = value
+
+        def GetAwaiter(self) -> object:
+            return SimpleNamespace(GetResult=lambda: self.value)
+
+    calls: list[tuple[str, str]] = []
+
+    def call(method: str, params: str) -> _Task:
+        calls.append((method, params))
+        return _Task(reply)
+
+    core = SimpleNamespace(CallDevToolsProtocolMethodAsync=call)
+    window = SimpleNamespace(native=None)
+    return calls, SimpleNamespace(window=window, control=SimpleNamespace(CoreWebView2=core))
+
+
+def test_evaluate_awaits_the_page_promise_over_devtools() -> None:
+    """Plugins read a page (a video frame) through the control's own DevTools channel."""
+    import json
+
+    from frontend.ui_web import browser_overlay as bo
+
+    calls, fake = _evaluate_pane(json.dumps({"result": {"type": "object", "value": {"ok": True, "w": 1080}}}))
+    pane = bo._Pane(pane_id="ev", window=fake.window, control=fake.control, ready=True)
+    bo._panes["ev"] = pane
+    try:
+        assert bo.evaluate("ev", "(async () => ({ok: true}))()") == {"ok": True, "value": {"ok": True, "w": 1080}}
+        method, params = calls[0]
+        assert method == "Runtime.evaluate"
+        assert json.loads(params) == {"expression": "(async () => ({ok: true}))()", "awaitPromise": True,
+                                      "returnByValue": True}
+        bo._panes["ev"] = bo._Pane(pane_id="ev", window=fake.window, control=_evaluate_pane(json.dumps(
+            {"exceptionDetails": {"text": "Uncaught", "exception": {"description": "ReferenceError: x"}}}))[1].control,
+            ready=True)
+        assert bo.evaluate("ev", "x") == {"ok": False, "error": "ReferenceError: x"}
+        assert bo.evaluate("missing", "1")["error"] == "pane not open"
+    finally:
+        bo._panes.pop("ev", None)

@@ -54,6 +54,9 @@ CORE_TOOLS = frozenset(
 
 EXTENDED_TOOLS = frozenset(
     {
+        # web_fetch on a video link already reads it; frames and GitHub go via ducky_call_tool.
+        "web_video",
+        "web_github",
         "ducky_get_local_project",
         "ducky_list_projects",
         "ducky_set_project",
@@ -119,6 +122,8 @@ PLAN_TOOLS = frozenset(
         "ducky_rename_self",
         "web_search",
         "web_fetch",
+        "web_video",
+        "web_github",
         "ducky_create_plan",
         "ducky_update_plan",
         "ducky_get_plan",

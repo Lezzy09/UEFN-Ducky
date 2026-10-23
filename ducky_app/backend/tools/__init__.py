@@ -9,6 +9,8 @@ from backend.tools.core import hints  # noqa: F401
 from backend.tools.core import system  # noqa: F401
 from backend.tools.core import workspace_code  # noqa: F401
 from backend.tools.core import web_lookup  # noqa: F401
+from backend.tools.core import web_video  # noqa: F401
+from backend.tools.core import web_github  # noqa: F401
 from backend.tools.panel import ducky_panel  # noqa: F401
 from backend.tools.panel import panel_ai_plugins  # noqa: F401
 from backend.tools.panel import panel_automations  # noqa: F401

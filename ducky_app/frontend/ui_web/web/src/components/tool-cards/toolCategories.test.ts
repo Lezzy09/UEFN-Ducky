@@ -37,6 +37,10 @@ describe("resolveToolCategory", () => {
     expect(resolveToolCategory("web_search").Body).toBeTruthy();
     expect(isStandaloneToolCard("web_search")).toBe(true);
     expect(isStandaloneToolCard("web_fetch")).toBe(true);
+    expect(isStandaloneToolCard("web_video")).toBe(true);
+    expect(isStandaloneToolCard("web_github")).toBe(true);
+    expect(resolveToolCategory("web_video").id).toBe("web");
+    expect(resolveToolCategory("web_github").id).toBe("web");
     expect(isStandaloneToolCard("take_high_res_screenshot")).toBe(true);
     expect(isStandaloneToolCard("uefn_window_capture")).toBe(true);
     expect(resolveToolCategory("search_assets").id).toBe("search");

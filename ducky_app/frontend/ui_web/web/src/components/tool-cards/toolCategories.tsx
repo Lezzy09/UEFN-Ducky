@@ -1,5 +1,5 @@
 import { Icons } from "../../icons/Icons";
-import { humanToolLabel } from "../../utils/agentActivity";
+import { humanToolLabel, isWebLookupTool } from "../../utils/agentActivity";
 import type { ToolCategory } from "./toolCardTypes";
 import { SkillBody } from "./bodies/SkillBody";
 import { TerminalBody } from "./bodies/TerminalBody";
@@ -116,8 +116,7 @@ export function isStandaloneToolCard(toolName: string): boolean {
     isFileWriteTool(toolName) ||
     isCaptureTool(toolName) ||
     toolName === "ducky_ask_user" ||
-    toolName === "web_search" ||
-    toolName === "web_fetch"
+    isWebLookupTool(toolName)
   );
 }
 
@@ -186,7 +185,7 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     id: "web",
     icon: () => <Icons.Globe />,
     label: (name) => humanToolLabel(name),
-    match: (name) => name === "web_search" || name === "web_fetch",
+    match: (name) => isWebLookupTool(name),
     Body: WebSearchBody,
   },
   {

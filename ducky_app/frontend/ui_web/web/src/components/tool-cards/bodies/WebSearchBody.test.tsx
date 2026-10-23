@@ -27,6 +27,39 @@ describe("web completion details", () => {
     expect(container.querySelector("a")?.href).toBe("https://developers.openai.com/codex/mcp");
   });
 
+  it("shows a video's channel, length, contact sheet and frames saved in the chat", () => {
+    const media = (name: string) => `http://127.0.0.1:4199/chat-attachments/abc-123/${name}`;
+    const { container } = card(JSON.stringify({
+      ok: true,
+      kind: "video_frames",
+      url: "https://www.youtube.com/watch?v=FBs--2nSPLQ",
+      title: "I challenged Rust Developers",
+      channel: "Arjay McCandless",
+      length: "1:38",
+      sheet: { media_url: media("video_FBs--2nSPLQ_sheet12.jpg") },
+      frames: [
+        { t: 13, time: "0:13", media_url: media("video_FBs--2nSPLQ_000130.jpg") },
+        { t: 30, time: "0:30", media_url: "https://evil.example/x.jpg" },
+      ],
+    }), { url: "https://www.youtube.com/watch?v=FBs--2nSPLQ", frames: [13, 30] }, "web_video");
+    expect(container.textContent).toContain("Arjay McCandless · 1:38");
+    const srcs = Array.from(container.querySelectorAll("img")).map((img) => img.getAttribute("src"));
+    expect(srcs).toEqual([media("video_FBs--2nSPLQ_sheet12.jpg"), media("video_FBs--2nSPLQ_000130.jpg")]);
+    expect(container.textContent).toContain("0:13");
+    expect(container.textContent).not.toContain("0:30");
+  });
+
+  it("lists GitHub search results like web results", () => {
+    const { container } = card(JSON.stringify({
+      ok: true,
+      action: "search",
+      query: "\"twelve-dollar-server-challenge\"",
+      results: [{ title: "arjaythedev/twelve-dollar-server-challenge", url: "https://github.com/arjaythedev/twelve-dollar-server-challenge", snippet: "★ 900" }],
+    }), { action: "search", query: "\"twelve-dollar-server-challenge\"" }, "web_github");
+    expect(container.querySelector("a")?.href).toBe("https://github.com/arjaythedev/twelve-dollar-server-challenge");
+    expect(container.textContent).toContain("★ 900");
+  });
+
   it("preserves successful plain text without calling it empty", () => {
     const { container } = card("MCP server configuration reference", { url: "https://example.com" }, "web_fetch");
     expect(container.textContent).toContain("MCP server configuration reference");

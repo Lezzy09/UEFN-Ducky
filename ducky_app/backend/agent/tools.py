@@ -603,6 +603,8 @@ HOST_ONLY_TOOLS = frozenset(
         "ducky_read_tool_spill",
         "web_search",
         "web_fetch",
+        "web_video",
+        "web_github",
     }
 )
 

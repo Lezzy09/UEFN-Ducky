@@ -10,6 +10,8 @@ API_TOOL_RESULT_MAX = 16_000
 TOOL_RESULT_MAX_OVERRIDES = {
     "web_search": 80_000,
     "web_fetch": 80_000,
+    "web_video": 80_000,
+    "web_github": 80_000,
 }
 
 

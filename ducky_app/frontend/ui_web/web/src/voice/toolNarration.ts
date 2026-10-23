@@ -52,6 +52,8 @@ const TOOL_PURPOSE: Record<string, string> = {
   file_change: "editing files",
   web_search: "searching the web",
   web_fetch: "reading a page",
+  web_video: "watching a video",
+  web_github: "reading GitHub",
   duplicate_asset: "duplicating an asset",
   create_anim_preset: "creating an animation preset",
   create_character_blueprint: "creating a character blueprint",

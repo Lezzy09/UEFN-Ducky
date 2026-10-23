@@ -26,7 +26,7 @@ import {
   linkedAgentFromToolResult,
   pendingLinkedFromChatTool,
 } from "../utils/linkedAgents";
-import { formatToolDuration, humanToolLabel, webToolLabel } from "../utils/agentActivity";
+import { formatToolDuration, humanToolLabel, isWebLookupTool, webToolLabel } from "../utils/agentActivity";
 import { fmtCompactTokens } from "../utils/contextFormat";
 import { unwrapCodingAgentTool } from "../utils/unwrapCodingAgentTool";
 
@@ -124,7 +124,7 @@ export const ToolExecutionCard = memo(function ToolExecutionCard({
   const CategoryIcon = category.icon;
   const Body = category.Body ?? DefaultBody;
   const isAskUser = meta.name === "ducky_ask_user";
-  const isWebLookup = meta.name === "web_search" || meta.name === "web_fetch";
+  const isWebLookup = isWebLookupTool(meta.name);
   const isCapture = category.id === "screenshot";
   const [askSession, setAskSession] = useState(() =>
     convId ? getAskUserSessionForConv(convId) : null,

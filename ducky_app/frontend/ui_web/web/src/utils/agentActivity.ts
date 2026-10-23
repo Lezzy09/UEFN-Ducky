@@ -83,6 +83,8 @@ const TOOL_ACTIVITY_LABELS: Record<string, string> = {
   file_change: "Editing files",
   web_search: "Searching the web",
   web_fetch: "Reading a page",
+  web_video: "Watching a video",
+  web_github: "Reading GitHub",
 };
 
 // While a step runs the status line says what it is doing to what: "Reading ChatPane.tsx".
@@ -144,12 +146,25 @@ export function humanToolLabel(toolName: string): string {
   return TOOL_ACTIVITY_LABELS[toolName] ?? TOOL_ACTIVITY_LABELS[bare] ?? bare.replace(/_/g, " ");
 }
 
+const WEB_LOOKUP_TOOLS = new Set(["web_search", "web_fetch", "web_video", "web_github"]);
+
+/** Ducky's web tools: each gets its own card (results, pictures, frames). */
+export function isWebLookupTool(name: string): boolean {
+  return WEB_LOOKUP_TOOLS.has(name);
+}
+
 export function webToolLabel(name: string, args: Record<string, unknown>, running: boolean): string {
   const action = args.action;
   const type = action && typeof action === "object" && !Array.isArray(action)
     ? (action as Record<string, unknown>).type : undefined;
   if (type === "open_page" || name === "web_fetch") return running ? "Opening page" : "Open page";
   if (type === "find_in_page") return running ? "Finding in page" : "Find in page";
+  if (name === "web_video") {
+    const looking = Array.isArray(args.frames) || Number(args.overview) > 0;
+    if (looking) return running ? "Looking at video frames" : "Video frames";
+    return running ? "Watching a video" : "Watch video";
+  }
+  if (name === "web_github") return running ? "Reading GitHub" : "GitHub";
   if (type === "search") return running ? "Searching the web" : "Search web";
   // Legacy native events lack the action, even for open/find operations.
   return "Web lookup";
@@ -196,7 +211,7 @@ function toolLineText(msg: ChatMessage, completed = false): string {
   const name = unwrapped.name;
   const args = unwrapped.arguments;
   if (name) {
-    const label = name === "web_search" || name === "web_fetch"
+    const label = isWebLookupTool(name)
       ? webToolLabel(name, args, !completed) : humanToolLabel(name);
     const path = args.relative_path ?? args.path;
     if (typeof path === "string" && path.trim()) {
@@ -249,7 +264,7 @@ export function buildActivityLines(
     const hasResult = next && (next.role === "success" || next.role === "error");
     lines.push({
       id: String(msg.id),
-      text: prefixSpeaker(msg.author, toolLineText(hasResult && next.tool && (msg.tool?.name === "web_search" || msg.tool?.name === "web_fetch")
+      text: prefixSpeaker(msg.author, toolLineText(hasResult && next.tool && isWebLookupTool(msg.tool?.name ?? "")
         ? { ...msg, tool: next.tool } : msg, Boolean(hasResult))),
       status: hasResult ? (next.role === "success" ? "success" : "error") : "pending",
     });

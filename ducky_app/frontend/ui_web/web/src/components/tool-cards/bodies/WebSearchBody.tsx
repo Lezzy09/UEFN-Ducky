@@ -2,6 +2,7 @@ import type { ToolCardBodyProps } from "../toolCardTypes";
 
 type WebRow = { title: string; url: string; snippet: string };
 type WebImage = { title: string; url: string; thumb: string };
+type VideoFrame = { t?: number; time?: string; media_url?: string };
 
 type WebPayload = {
   ok?: boolean;
@@ -15,6 +16,11 @@ type WebPayload = {
   results?: WebRow[];
   sources?: WebRow[];
   images?: WebImage[];
+  kind?: string;
+  channel?: string;
+  length?: string;
+  frames?: VideoFrame[];
+  sheet?: VideoFrame | null;
 };
 
 function parsePayload(resultText: string): WebPayload | null {
@@ -55,6 +61,12 @@ export function safeWebHref(raw: string): string {
 export function safeImageSrc(raw: string): string {
   const href = safeWebHref(raw);
   return href.startsWith("https:") ? href : "";
+}
+
+/** A frame web_video saved in this chat: served by Ducky itself, never a web address. */
+export function safeChatMediaSrc(raw: string): string {
+  const text = (raw || "").trim();
+  return /^http:\/\/127\.0\.0\.1:\d+\/chat-attachments\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(text) ? text : "";
 }
 
 function hostOf(href: string): string {
@@ -135,9 +147,26 @@ export function WebSearchBody({
   const images = (Array.isArray(payload?.images) ? payload.images : []).filter((image) =>
     safeImageSrc(String(image?.thumb || "")),
   );
+  const frames = (Array.isArray(payload?.frames) ? payload.frames : []).filter((frame) =>
+    safeChatMediaSrc(String(frame?.media_url || "")),
+  );
+  const sheetSrc = safeChatMediaSrc(String(payload?.sheet?.media_url || ""));
+  const videoMeta = [payload?.channel, payload?.length].map((v) => String(v || "").trim()).filter(Boolean).join(" · ");
   return (
     <div className="tool-card-web">
       {isFetch ? <ResultLink url={url} title={title} /> : null}
+      {videoMeta ? <div className="tool-card-web-host">{videoMeta}</div> : null}
+      {sheetSrc ? <img className="tool-card-web-sheet" src={sheetSrc} alt="Contact sheet of the video" loading="lazy" /> : null}
+      {frames.length > 0 ? (
+        <div className="tool-card-web-images">
+          {frames.map((frame, index) => (
+            <figure key={`${frame.media_url}-${index}`} className="tool-card-web-frame">
+              <img className="tool-card-web-thumb" src={safeChatMediaSrc(String(frame.media_url))} alt={`Frame at ${frame.time || ""}`} loading="lazy" />
+              {frame.time ? <figcaption className="tool-card-web-host">{frame.time}</figcaption> : null}
+            </figure>
+          ))}
+        </div>
+      ) : null}
       {isFind && pattern ? <div className="tool-card-web-query">Find in page: <strong>{pattern}</strong></div> : null}
       {query && !isFetch ? (
         <div className="tool-card-web-query">
@@ -153,7 +182,7 @@ export function WebSearchBody({
       ) : null}
       {excerpt ? <p className="tool-card-web-snippet">{excerpt}</p> : null}
       {rows.length === 0 ? (
-        !excerpt && images.length === 0 ? (
+        !excerpt && images.length === 0 && frames.length === 0 ? (
           <div className="tool-card-web-note">
             {!isFetch && Array.isArray(payload?.results) ? "No results." : "Result details unavailable."}
           </div>

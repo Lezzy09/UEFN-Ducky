@@ -384,6 +384,63 @@ def _on_ui_thread(window: Any) -> bool:
         return False
 
 
+def _await_task(task: Any, timeout_s: float, name: str) -> tuple[Any, str]:
+    """(result, error) of a WebView2 Task, waited for on a helper thread, never the UI thread."""
+    box: dict[str, Any] = {"v": None, "e": ""}
+    done = threading.Event()
+
+    def worker() -> None:
+        try:
+            box["v"] = task.GetAwaiter().GetResult() if hasattr(task, "GetAwaiter") else getattr(task, "Result", None)
+        except Exception as exc:
+            box["e"] = str(exc)
+        finally:
+            done.set()
+
+    threading.Thread(target=worker, name=name, daemon=True).start()
+    if not done.wait(timeout_s):
+        return None, f"timed out after {timeout_s:.0f} s"
+    return box["v"], box["e"]
+
+
+def evaluate(pane_id: str, expression: str, timeout_s: float = 30.0) -> dict[str, Any]:
+    """Run a JavaScript expression in a pane's page and await its promise (DevTools Runtime.evaluate).
+
+    Uses the control's own DevTools channel, so remote debugging stays off. For plugin code
+    with fixed scripts only — never pass text from a page, a chat or a tool argument.
+    Returns {"ok": True, "value": <JSON value>} or {"ok": False, "error": ...}.
+    """
+    import json
+
+    with _lock:
+        pane = _panes.get((pane_id or "").strip())
+    if pane is None or not pane.ready or pane.control is None:
+        return {"ok": False, "error": "pane not open"}
+    if _on_ui_thread(pane.window):
+        return {"ok": False, "error": "evaluate cannot wait on the UI thread"}
+    params = json.dumps({"expression": expression, "awaitPromise": True, "returnByValue": True})
+
+    def start() -> Any:
+        return pane.control.CoreWebView2.CallDevToolsProtocolMethodAsync("Runtime.evaluate", params)
+
+    try:
+        task = _ui_sync(pane.window, start, timeout_s=5.0)
+    except Exception as exc:
+        return {"ok": False, "error": f"could not start the script: {exc}"}
+    raw, err = _await_task(task, timeout_s, "browser-evaluate")
+    if err:
+        return {"ok": False, "error": err}
+    try:
+        reply = json.loads(str(raw or "{}"))
+    except ValueError:
+        return {"ok": False, "error": "the page sent back something that isn't JSON"}
+    if reply.get("exceptionDetails"):
+        details = reply["exceptionDetails"]
+        text = (details.get("exception") or {}).get("description") or details.get("text") or "script error"
+        return {"ok": False, "error": str(text)[:500]}
+    return {"ok": True, "value": (reply.get("result") or {}).get("value")}
+
+
 def _await_cookie_task(task: Any, timeout_s: float = 2.0) -> tuple[list[dict[str, Any]], str]:
     """Wait for GetCookiesAsync off the UI thread.
 

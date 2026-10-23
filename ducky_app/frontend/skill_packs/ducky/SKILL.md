@@ -4,7 +4,7 @@ description: "UEFN-Ducky control panel — setup, IDE hookup, Skills studio, cha
 license: Ducky Source-Available License v1.0
 metadata:
   label: UEFN Ducky
-  version: 41
+  version: 42
   managed_by: uefn-ducky
   author: UEFN-Ducky
   copyright: Copyright 2026 UEFN-Ducky
@@ -160,6 +160,14 @@ plugin, a button, a workflow node), or you tell them what to click: show it with
 keeps a Show me button); several things in order go in one call's `steps` (Back /
 Next in one popup). Load `skill_read_subskill("ducky", "guided_ui")` for the
 routes and target ids (Settings tabs, Store plugins, Workflows, chat box).
+
+## Videos and the code behind them
+
+A YouTube link: `web_video(url)` reads its transcript, chapters and description;
+`overview=12` and `frames=[seconds]` save frames you open with `view_image`. Never ask
+the person to paste a transcript. Names, repos and PR numbers seen on screen lead to
+the real code with `web_github` (search, repo, pr, read). Load
+`skill_read_subskill("ducky", "web_research")` for the full recipe.
 
 ## Workflows
 
