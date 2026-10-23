@@ -41,6 +41,8 @@ export type LiveVoiceUiHandlers = {
   autoSend: boolean;
   setAutoSend: (value: boolean) => void;
   muted: boolean;
+  /** Mic off — type only; replies still speak. */
+  setMuted: (value: boolean) => void;
   voiceId: string;
   speed: number;
   setVoiceId: (value: string) => void;
@@ -331,6 +333,7 @@ export function VoiceControls({
         autoSend,
         setAutoSend,
         muted,
+        setMuted,
         voiceId: sessionVoice,
         speed: sessionSpeed,
         setVoiceId,

@@ -47,6 +47,8 @@ export type VoiceOverlayProps = {
   codingAgent?: string;
   setCodingAgent?: (value: string) => void;
   showChatModel?: boolean;
+  /** Back to the full-screen voice view (shown when the chat was brought back). */
+  onShowVoiceView?: () => void;
 };
 
 function statusLabel(status: LiveVoiceUiStatus, loadingVoice: boolean, muted: boolean): string {
@@ -91,6 +93,7 @@ export function VoiceOverlay({
   codingAgent,
   setCodingAgent,
   showChatModel = false,
+  onShowVoiceView,
 }: VoiceOverlayProps) {
   const [state, setState] = useState<LiveVoiceState>(() => getLiveVoiceState(chatId));
   const [tts, setTts] = useState<TtsProgress>(() => ttsEngine.getProgress());
@@ -242,6 +245,17 @@ export function VoiceOverlay({
               </button>
             ) : null}
             <span className="voice-overlay-transport-split" aria-hidden />
+            {onShowVoiceView ? (
+              <button
+                type="button"
+                className="voice-btn voice-btn--tiny"
+                title="Voice view"
+                aria-label="Voice view"
+                onClick={onShowVoiceView}
+              >
+                <Icons.Headphones />
+              </button>
+            ) : null}
             {setAutoSend ? (
               <button
                 type="button"
