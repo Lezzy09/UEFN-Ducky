@@ -255,6 +255,8 @@ class TerminalManager:
             candidates = [e.session for e in self._sessions.values() if e.reuse_key == reuse_key]
         for session in candidates:
             if session.is_alive() and not session.has_running_command():
+                # Handed out again: in use, so the idle-terminal reaper must not close it now.
+                session.last_activity = time.time()
                 return session
         return None
 

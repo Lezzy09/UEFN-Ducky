@@ -186,3 +186,17 @@ def test_a_sandbox_reuses_its_own_shell_and_never_a_plain_one(mgr, tmp_path):
                       env_extra={**env, "PATH": "node;a;b"}, reuse_idle=True)
     assert newer["session_id"] not in (first["session_id"], plain["session_id"])
     assert mgr.spawn(shell="powershell", cwd=str(tmp_path), conv_id="chat-a", reuse_idle=True)["session_id"] == plain["session_id"]
+
+
+def test_a_shell_handed_out_again_is_not_closed_as_idle(mgr, tmp_path):
+    # Oct 23 2026: a sandbox_run picked the chat's quiet shell just as the idle cleanup
+    # closed it ("session not found").
+    import time as _time
+
+    env = {"PATH": "a"}
+    first = mgr.spawn(shell="powershell", cwd=str(tmp_path), conv_id="chat-a", env_extra=env, reuse_idle=True)
+    shell = mgr.get_session(first["session_id"])
+    shell.last_activity = _time.time() - manager_module._AGENT_IDLE_CLOSE_S - 5
+    again = mgr.spawn(shell="powershell", cwd=str(tmp_path), conv_id="chat-a", env_extra=env, reuse_idle=True)
+    assert again["session_id"] == first["session_id"]
+    assert mgr.close_idle_agent_terminals(now=_time.time() + 1, running=set()) == []

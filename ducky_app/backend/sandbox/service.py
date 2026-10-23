@@ -168,14 +168,18 @@ def run_command(conv_id: str, command: str, shell: str = "bash", timeout_s: floa
         mgr.set_push(push)
     env = sandbox_env(box)
     changed = {k: v for k, v in env.items() if os.environ.get(k) != v}
-    opened = mgr.spawn(shell=shell, cwd=str(box / "work"), title="sandbox", push_open=True, conv_id=conv_id,
-                       env_extra=changed, activate=False, reuse_idle=True)
-    session = str(opened.get("session_id") or "")
-    if not session:
-        return {"ok": False, "error": str(opened.get("error") or "The sandbox terminal did not open.")}
     manifest.record(box, "run", command=command)
-    result = mgr.run_agent_command(session, command, source="sandbox_run", conv_id=conv_id, wait=True,
-                                   command_timeout_s=max(5.0, min(float(timeout_s), 3600.0)), auto_approve=True)
+    for reuse in (True, False):
+        opened = mgr.spawn(shell=shell, cwd=str(box / "work"), title="sandbox", push_open=True, conv_id=conv_id,
+                           env_extra=changed, activate=False, reuse_idle=reuse)
+        session = str(opened.get("session_id") or "")
+        if not session:
+            return {"ok": False, "error": str(opened.get("error") or "The sandbox terminal did not open.")}
+        result = mgr.run_agent_command(session, command, source="sandbox_run", conv_id=conv_id, wait=True,
+                                       command_timeout_s=max(5.0, min(float(timeout_s), 3600.0)), auto_approve=True)
+        # The idle-terminal cleanup can close a reused shell just as it is handed out: once more in a new one.
+        if not (isinstance(result, dict) and result.get("error") == "session not found"):
+            break
     paths.touch(box)
     _sizes.pop(conv_id, None)
     return {"session_id": session, **result} if isinstance(result, dict) else {"ok": False, "error": "no result"}
@@ -198,7 +202,11 @@ def launch(conv_id: str, program: str, args: list[str] | None = None, cwd: str =
                                           "Stop some with sandbox_stop first."}
     workdir = Path(cwd) if cwd else box / "work"
     if not workdir.is_absolute():
-        workdir = box / "work" / workdir
+        # Relative to the work folder ("app"), or to the sandbox itself ("work/app", "downloads/x").
+        rel = workdir
+        workdir = box / "work" / rel
+        if not workdir.is_dir() and (box / rel).is_dir():
+            workdir = box / rel
     if not paths.is_sandbox_path(str(workdir), conv_id) or not workdir.is_dir():
         return {"ok": False, "error": f"cwd must be a folder inside this chat's sandbox: {workdir}"}
     exe = Path(program)

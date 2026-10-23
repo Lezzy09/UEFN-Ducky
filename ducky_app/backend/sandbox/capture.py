@@ -92,6 +92,23 @@ def _blank(image: Any) -> bool:
     return extrema[0] == extrema[1]
 
 
+def _visible_frame(hwnd: int, rect: dict[str, int]) -> dict[str, int]:
+    """The window's visible frame. GetWindowRect also counts the invisible resize borders
+    (about 7 px left, right and bottom), which captured whatever was behind the window."""
+    from ctypes import wintypes
+
+    frame = wintypes.RECT()
+    try:
+        failed = ctypes.WinDLL("dwmapi").DwmGetWindowAttribute(
+            wintypes.HWND(hwnd), 9, ctypes.byref(frame), ctypes.sizeof(frame))  # DWMWA_EXTENDED_FRAME_BOUNDS
+    except (OSError, AttributeError):
+        return rect
+    if failed or frame.right <= frame.left or frame.bottom <= frame.top:
+        return rect
+    return {"left": max(frame.left, rect["left"]), "top": max(frame.top, rect["top"]),
+            "right": min(frame.right, rect["right"]), "bottom": min(frame.bottom, rect["bottom"])}
+
+
 def capture(window: dict[str, Any], conv_id: str) -> dict[str, Any]:
     """Save a PNG of ``window`` in the chat's attachments folder (view_image opens it)."""
     rect = window.get("rect") or {}
@@ -99,19 +116,26 @@ def capture(window: dict[str, Any], conv_id: str) -> dict[str, Any]:
     height = int(rect.get("bottom", 0)) - int(rect.get("top", 0))
     if width <= 0 or height <= 0:
         return {"ok": False, "error": "That window has no size on screen (minimized?)."}
+    full = {k: int(rect[k]) for k in ("left", "top", "right", "bottom")}
+    frame = _visible_frame(int(window["hwnd"]), full) if _WIN else full
+    crop = (frame["left"] - full["left"], frame["top"] - full["top"],
+            frame["right"] - full["left"], frame["bottom"] - full["top"])
     image = None
     try:
         image = _print_window(int(window["hwnd"]), width, height)
     except Exception:
         image = None
-    if image is None or _blank(image):
+    if image is not None and not _blank(image):
+        image = image.crop(crop)
+    else:
         try:
             from PIL import ImageGrab
 
-            box = (int(rect["left"]), int(rect["top"]), int(rect["right"]), int(rect["bottom"]))
+            box = (frame["left"], frame["top"], frame["right"], frame["bottom"])
             image = ImageGrab.grab(bbox=box, all_screens=True)
         except Exception as exc:
             return {"ok": False, "error": f"Could not capture the window: {exc}"}
+    width, height = image.size
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     from frontend.ui_web.tool_captures import save_capture_for_agents

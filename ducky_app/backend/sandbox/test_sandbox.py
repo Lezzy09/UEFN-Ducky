@@ -194,6 +194,45 @@ def test_launch_refuses_what_never_runs_and_folders_outside_the_sandbox(tmp_path
     assert out["ok"] is False
 
 
+def test_cwd_may_name_the_work_folder_or_not():
+    # A live agent passed cwd="work/app" (relative to the sandbox) and got "work/work/app".
+    box = paths.sandbox_dir(CONV, create=True)
+    (box / "work" / "app").mkdir(parents=True, exist_ok=True)
+    for cwd in ("app", "work/app"):
+        out = service.launch(CONV, sys.executable, ["-c", "import time; time.sleep(30)"], cwd=cwd)
+        assert out["ok"], (cwd, out)
+        service.stop(CONV, out["pid"])
+    out = service.launch(CONV, sys.executable, ["-c", "print(1)"], cwd="../../elsewhere")
+    assert out["ok"] is False
+
+
+@needs_windows
+def test_a_window_capture_is_only_the_window():
+    """GetWindowRect counts the invisible resize borders: captures showed what was behind them."""
+    pytest.importorskip("tkinter")
+    from backend.sandbox import capture
+
+    box = paths.sandbox_dir(CONV, create=True)
+    out = service.launch(CONV, sys.executable, ["-c", "import tkinter as t; r = t.Tk(); r.title('cap-test'); "
+                                                      "r.geometry('320x200'); r.mainloop()"])
+    assert out["ok"], out
+    try:
+        wins = []
+        deadline = time.time() + 15
+        while not wins and time.time() < deadline:
+            wins = [w for w in capture.windows_of(service._programs[out["pid"]].run.tree()) if w["title"] == "cap-test"]
+            time.sleep(0.2)
+        assert wins, "the Tk window never showed"
+        rect = wins[0]["rect"]
+        shot = capture.capture(wins[0], CONV)
+        assert shot["ok"], shot
+        assert shot["width"] <= rect["right"] - rect["left"] and shot["height"] <= rect["bottom"] - rect["top"]
+        assert shot["width"] >= 200 and shot["height"] >= 150
+    finally:
+        service.stop(CONV, out["pid"])
+    assert box.exists()
+
+
 def test_files_are_written_inside_the_sandbox_only():
     out = service.launch(CONV, sys.executable, ["-c", "print(1)"], files={"../../escape.txt": "x"})
     assert out["ok"] is False and "inside the sandbox" in out["error"]
