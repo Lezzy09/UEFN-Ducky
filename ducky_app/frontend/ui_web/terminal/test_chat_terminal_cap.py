@@ -124,14 +124,28 @@ def test_an_agents_terminal_it_is_done_with_closes_by_itself(mgr, tmp_path):
     mgr.running[mgr.get_session(server)._pty.pid] = [9999]  # a dev server it left running
     mgr.get_session(quiet_job).ran_background = True  # a PowerShell job runs inside the console
     start = mgr.get_session(done).last_activity
-    assert mgr.close_idle_agent_terminals(now=start + 60, running={"busy-agent"}) == []  # not quiet long enough
+    assert mgr.close_idle_agent_terminals(now=start + 30, running={"busy-agent"}) == []  # not quiet long enough
     later = start + manager_module._AGENT_IDLE_CLOSE_S + 1
     assert mgr.close_idle_agent_terminals(now=later, running={"busy-agent"}) == [done]
     assert {"type": "terminal_close", "session_id": done} in mgr.events  # its tab closes too
     assert set(mgr._sessions) == {mine, working, server, quiet_job}
     # Typing in it counts as use: a terminal someone is working in stays.
     mgr.get_session(working).last_activity = later
-    assert mgr.close_idle_agent_terminals(now=later + 60, running=set()) == []
+    assert mgr.close_idle_agent_terminals(now=later + 30, running=set()) == []
+
+
+def test_a_ducky_closes_its_terminal_a_minute_after_it_finishes_and_names_it(mgr, tmp_path, monkeypatch):
+    # Oct 22 2026: finished duckies' shells piled up in the header for ten minutes with no
+    # sign of whose they were.
+    monkeypatch.setattr(manager_module, "_chat_title", lambda cid: {"chat-a": "Fix Group Leader Moves"}.get(cid, ""))
+    ducky = _open(mgr, tmp_path)
+    mine = mgr.spawn(shell="powershell", cwd=str(tmp_path))
+    assert ducky["owner"] == "Fix Group Leader Moves" and mine["owner"] == ""
+    assert manager_module._AGENT_IDLE_CLOSE_S <= 60
+    later = mgr.get_session(ducky["session_id"]).last_activity + 61
+    assert mgr.close_idle_agent_terminals(now=later, running={"chat-a"}) == []  # still working
+    assert mgr.close_idle_agent_terminals(now=later, running=set()) == [ducky["session_id"]]
+    assert set(mgr._sessions) == {mine["session_id"]}
 
 
 def test_a_running_workflows_terminal_stays_until_the_run_lets_go(mgr, tmp_path):

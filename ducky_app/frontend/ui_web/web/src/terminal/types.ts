@@ -6,6 +6,8 @@ export interface TerminalSessionDto {
   cwd: string;
   title: string;
   ws_url: string;
+  /** Title of the ducky (chat) that opened it; empty for the person's own. */
+  owner?: string;
   busy?: boolean;
   alive?: boolean;
   tab_id?: string;

@@ -34,6 +34,18 @@ it("selects bash without dismissing the terminal menu and closes both menus outs
   expect(screen.queryByRole("button", { name: "New terminal" })).toBeNull();
 });
 
+it("names the ducky that opened each terminal, and none on the person's own", () => {
+  const base = { shell: "bash", active: false, running: false, runner: null };
+  render(<TerminalHeaderDropdown defaultShell="bash" onShellChange={vi.fn()} onGotoTerminal={vi.fn()}
+    onCloseTerminal={vi.fn()} onNewTerminal={vi.fn()} terminals={[
+      { ...base, id: "terminal:a", sessionId: "a", name: "wrap-up", owner: "Fix Group Leader Moves" },
+      { ...base, id: "terminal:b", sessionId: "b", name: "bash" },
+    ]} />);
+  press(screen.getByRole("button", { name: "2 terminals" }));
+  expect(screen.getByTitle("Opened by Fix Group Leader Moves").textContent).toBe("Fix Group Leader Moves");
+  expect(screen.getAllByTitle(/^Opened by/)).toHaveLength(1);
+});
+
 it.each(["radio", "checkbox"] as const)("keeps a portaled %s choice inside a DropdownPanel usable", (mode) => {
   const changed = vi.fn();
   function Nested() {

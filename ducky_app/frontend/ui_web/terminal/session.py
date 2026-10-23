@@ -301,6 +301,8 @@ class TerminalSession:
         self.cwd = cwd
         self.title = (title or f"{self.shell}").strip()[:80]
         self.hidden = bool(hidden)
+        # The chat (ducky) that opened it; "" = the person's own.
+        self.owner = ""
         self.spawn_argv = [str(a) for a in spawn_argv] if spawn_argv else None
         self.env_extra = {str(k): str(v) for k, v in (env_extra or {}).items() if k}
         self.port = 0
@@ -657,4 +659,5 @@ class TerminalSession:
             "alive": self.is_alive(),
             "exit_code": self._exit_code,
             "hidden": self.hidden,
+            "owner": self.owner,
         }

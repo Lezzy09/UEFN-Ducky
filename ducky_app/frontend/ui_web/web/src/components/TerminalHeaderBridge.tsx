@@ -148,6 +148,7 @@ export function TerminalHeaderBridge({
         id: t.id,
         sessionId,
         name: t.name,
+        owner: t.terminalOwner || "",
         shell: t.terminalShell ?? "bash",
         active: isOpen && t.id === focusedActiveTabId,
         parked: !isOpen,

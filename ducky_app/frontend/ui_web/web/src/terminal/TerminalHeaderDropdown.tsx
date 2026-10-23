@@ -134,6 +134,11 @@ export function TerminalHeaderDropdown({
                     }}
                   >
                     <span className="terminal-header-item-name">{term.name}</span>
+                    {term.owner ? (
+                      <span className="terminal-header-item-owner" title={`Opened by ${term.owner}`}>
+                        {term.owner}
+                      </span>
+                    ) : null}
                     <span className="terminal-header-item-meta">
                       <span className="terminal-header-item-shell">{term.shell}</span>
                       {term.parked ? (

@@ -23,12 +23,14 @@ function dtoToTab(dto: TerminalSessionDto): EditorTab {
     terminalShell: dto.shell,
     terminalWsUrl: dto.ws_url,
     terminalCwd: dto.cwd,
+    terminalOwner: dto.owner || "",
   };
 }
 
 function sameParkedTab(a: EditorTab, b: EditorTab): boolean {
   return a.id === b.id && a.name === b.name && a.terminalSessionId === b.terminalSessionId
-    && a.terminalShell === b.terminalShell && a.terminalWsUrl === b.terminalWsUrl && a.terminalCwd === b.terminalCwd;
+    && a.terminalShell === b.terminalShell && a.terminalWsUrl === b.terminalWsUrl && a.terminalCwd === b.terminalCwd
+    && a.terminalOwner === b.terminalOwner;
 }
 
 function sessionRecordToDto(session: Record<string, unknown>): TerminalSessionDto | null {
@@ -42,6 +44,7 @@ function sessionRecordToDto(session: Record<string, unknown>): TerminalSessionDt
     cwd: String(session.cwd || ""),
     title: String(session.title || shell),
     ws_url: wsUrl,
+    owner: String(session.owner || ""),
   };
 }
 
@@ -70,6 +73,7 @@ export function useTerminalTabs(
       cwd: tab.terminalCwd || "",
       title: tab.name,
       ws_url: tab.terminalWsUrl,
+      owner: tab.terminalOwner,
     };
     rememberSession(dto);
     setParkedTabs((prev) => {
@@ -258,6 +262,7 @@ export function useTerminalTabs(
           cwd: event.cwd || "",
           title: event.title || event.shell || "terminal",
           ws_url: event.ws_url,
+          owner: event.owner || "",
         };
         // Login must stay on Settings: focusing this tab unmounts the popup.
         if (event.activate === false || dto.title === "Claude Login") {

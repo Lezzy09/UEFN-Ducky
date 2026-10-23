@@ -28,8 +28,10 @@ _MAX_CHAT_SHELLS = 6
 # An agent's terminal with no output, no typing and nothing running for this long, while its
 # agent is not working, is closed. Agents never closed theirs: a team left one shell (a
 # shell, a conhost and a socket bridge) per member open until Ducky quit (Oct 15 2026).
-_AGENT_IDLE_CLOSE_S = 10 * 60.0
-_REAP_EVERY_S = 60.0
+# Oct 22 2026: ten minutes still left a header full of finished duckies' shells; a ducky's
+# terminal now closes about a minute after it finishes.
+_AGENT_IDLE_CLOSE_S = 60.0
+_REAP_EVERY_S = 15.0
 _manager: "TerminalManager | None" = None
 _manager_lock = threading.Lock()
 
@@ -37,6 +39,18 @@ _manager_lock = threading.Lock()
 def _default_cwd() -> str:
     root = PanelSettings.load().uefn_project_root.strip()
     return root or "."
+
+
+def _chat_title(conv_id: str) -> str:
+    """The ducky (chat) a terminal belongs to, as the header list names it."""
+    if not conv_id:
+        return ""
+    try:
+        from frontend.ui_web.project_chats import conversation_title
+
+        return conversation_title(conv_id)
+    except Exception:
+        return ""
 
 
 class TerminalManager:
@@ -149,6 +163,7 @@ class TerminalManager:
                 else:
                     bridge.stop()
                     return {"ok": False, "error": str(exc)}
+            session.owner = _chat_title(conv_id)
             entry = _SessionEntry(session=session, bridge=bridge, reuse_key=reuse_key, chat=conv_id)
             self._sessions[session.id] = entry
 
@@ -263,6 +278,7 @@ class TerminalManager:
                 "cwd": session.cwd,
                 "ws_url": session.ws_url,
                 "conv_id": conv_id,
+                "owner": session.owner,
                 "activate": bool(activate),
             }
         )

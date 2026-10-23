@@ -260,6 +260,8 @@ export interface EditorTab {
   terminalShell?: "bash" | "powershell";
   terminalWsUrl?: string;
   terminalCwd?: string;
+  /** The ducky (chat) that opened this terminal; empty for the person's own. */
+  terminalOwner?: string;
 }
 
 export function chatTabId(chatId: string): string {
@@ -2110,6 +2112,8 @@ export interface AgentEvent {
   cwd?: string;
   /** terminal_open: false parks in the header list without focusing the editor tab. */
   activate?: boolean;
+  /** terminal_open: title of the ducky (chat) that opened it. */
+  owner?: string;
   request_id?: string;
   command?: string;
   source?: string;

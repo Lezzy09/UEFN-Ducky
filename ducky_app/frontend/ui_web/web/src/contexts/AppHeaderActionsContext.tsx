@@ -63,6 +63,8 @@ export interface HeaderTerminalItem {
   id: string;
   sessionId: string;
   name: string;
+  /** The ducky (chat) that opened it; empty for the person's own. */
+  owner?: string;
   shell: string;
   active: boolean;
   /** True when the tab is closed but the shell is still alive (reopen from header). */
