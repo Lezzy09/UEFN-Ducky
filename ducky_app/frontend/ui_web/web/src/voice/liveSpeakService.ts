@@ -399,6 +399,16 @@ export function updateLiveChatVoice(chatId: string, voiceId: string, speed: numb
   session.speed = speed;
 }
 
+/** Speak a voice-lane reply now, in the chat's voice. */
+export function speakLiveReply(chatId: string, text: string): void {
+  const session = sessions.get((chatId || "").trim());
+  const line = (text || "").trim();
+  if (!session || !line) return;
+  session.speakingAfterDone = true;
+  enqueueFinalSpeak(line, speakOpts(session, null));
+  publish(session, { status: "speaking", spokenText: line });
+}
+
 export function claimMic(chatId: string): boolean {
   const id = (chatId || "").trim();
   if (!id || !sessions.has(id)) return false;

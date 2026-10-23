@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { getApi } from "../hooks/usePanelApi";
 import { getLiveVoiceState, patchLiveVoiceState } from "./liveChats";
+import { cancelLiveTurnTimer, markLiveFirstAudio, markLiveTurnEnd } from "./liveLatency";
 import {
   claimMic,
   interruptLiveSpeak,
   isLiveChat,
   releaseMic,
+  speakLiveReply,
   updateLiveChatVoice,
 } from "./liveSpeakService";
 import {
@@ -19,6 +22,7 @@ import {
 } from "./liveSpeakQueue";
 import { appendLiveUtterance } from "./liveUtterance";
 import { isLikelyEcho, shouldAcceptLiveFinal, shouldReturnToListeningAfterAnswer } from "./liveTurnGates";
+import { routeLiveTurn, voiceLaneAsker } from "./liveTurnRouter";
 import { toSpeechError } from "./speechErrors";
 import {
   createStreamingTranscriptionSession,
@@ -87,6 +91,7 @@ export function useLiveVoiceMode(opts: {
   const speedRef = useRef(opts.speed);
   const chatIdRef = useRef(opts.chatId);
   const mutedRef = useRef(Boolean(opts.muted));
+  const agentRunningRef = useRef(Boolean(opts.agentRunning));
   const pendingTextRef = useRef("");
   onInterimRef.current = opts.onInterim;
   onTranscriptRef.current = opts.onTranscript;
@@ -95,6 +100,7 @@ export function useLiveVoiceMode(opts: {
   speedRef.current = opts.speed;
   chatIdRef.current = opts.chatId;
   mutedRef.current = Boolean(opts.muted);
+  agentRunningRef.current = Boolean(opts.agentRunning);
 
   const publish = useCallback((patch: Parameters<typeof patchLiveVoiceState>[1]) => {
     patchLiveVoiceState(chatIdRef.current, patch);
@@ -215,13 +221,36 @@ export function useLiveVoiceMode(opts: {
           setPending(next);
           publish({ userInterim: "", lastUserText: next, status: "listening", notice: "" });
           setStatus("listening");
-          onTranscriptRef.current(trimmed);
+          // Auto-send holds the words until the voice lane decides who answers the turn.
+          const routed = Boolean(getVoiceSettings().liveAutoSend);
+          if (!routed) onTranscriptRef.current(trimmed);
           clearTurnTimer();
           turnTimerRef.current = window.setTimeout(() => {
             turnTimerRef.current = null;
             if (!mine()) return;
+            const turn = pendingTextRef.current;
             setPending("");
-            onTurnEndRef.current?.();
+            const chatId = chatIdRef.current;
+            markLiveTurnEnd(chatId);
+            if (!routed) {
+              onTurnEndRef.current?.();
+              return;
+            }
+            void routeLiveTurn(
+              turn,
+              { agentRunning: agentRunningRef.current },
+              {
+                askLane: voiceLaneAsker(chatId),
+                speak: (line) => speakLiveReply(chatId, line),
+                cancel: () => void getApi()?.cancel_agent?.(chatId),
+                deliver: (words) => {
+                  onTranscriptRef.current(words);
+                  onTurnEndRef.current?.();
+                },
+              },
+            ).then((outcome) => {
+              if (outcome === "stopped" || outcome === "empty") cancelLiveTurnTimer();
+            });
           }, TURN_END_MS);
         },
         onSpeechStarted: () => {
@@ -339,6 +368,14 @@ export function useLiveVoiceMode(opts: {
   useEffect(() => {
     return subscribeLiveSpeakTransport(() => setTransport(getLiveSpeakTransport()));
   }, []);
+
+  // Speech-end → first audio for each live turn.
+  useEffect(() => {
+    if (!opts.enabled) return;
+    return ttsEngine.onStateChange((s) => {
+      if (s === "speaking") markLiveFirstAudio();
+    });
+  }, [opts.enabled]);
 
   /** Retry after a fixable error (e.g. after turning Windows speech on). */
   const retry = useCallback(() => {
