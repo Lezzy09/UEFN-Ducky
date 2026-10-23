@@ -1068,11 +1068,27 @@
   flex-shrink: 0;
 }
 
-@container chat-composer (max-width: 360px) {
-  .chat-pane-toolbar-divider {
-    display: none;
+/* Phone-width composer: every button on one evenly spaced row (the left and right groups
+   melt into the toolbar), Stop the same size as the rest. */
+@container chat-composer (max-width: 520px) {
+  .chat-pane-input-toolbar-left,
+  .chat-pane-input-toolbar-right,
+  .chat-pane-input-toolbar .voice-controls {
+    display: contents;
   }
 
+  .chat-pane-input-toolbar {
+    justify-content: space-between;
+    gap: 2px;
+  }
+
+  /* An empty send slot (a run going, nothing typed) must not take a share of the spacing. */
+  .chat-pane-send-target:empty {
+    display: none;
+  }
+}
+
+@container chat-composer (max-width: 360px) {
   /* A narrow box (a split pane) keeps every button: smaller buttons, tighter gaps. */
   .chat-pane-input-toolbar-left,
   .chat-pane-input-toolbar-right,
@@ -1109,20 +1125,14 @@
   }
 }
 
-.chat-pane-toolbar-divider {
-  width: 1px;
-  height: 20px;
-  background-color: var(--border);
-  margin: 0 4px;
-}
-
 .chat-pane-stop-btn {
+  flex-shrink: 0;
   background: transparent;
   color: var(--red);
   border: none;
   border-radius: 8px;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -2970,17 +2980,48 @@
   }
 }
 
+/* Title first; the quiet note and timer sit beside it, or wrap under it when it is long. */
+.agent-activity-panel-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .agent-activity-panel-title {
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 12px;
+  line-height: 1.4;
   color: var(--muted);
   font-weight: 400;
+  overflow-wrap: anywhere;
+  /* Two lines at most; the full text is the hover title. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.agent-activity-panel-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .agent-activity-panel-quiet {
+  min-width: 0;
   font-size: 11px;
   color: var(--muted);
   opacity: 0.75;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: help;
 }
 
@@ -3013,7 +3054,7 @@
 }
 
 .elapsed-timer--footer {
-  margin-left: 6px;
+  margin-left: 0;
 }
 
 .elapsed-timer--hover {
@@ -6556,7 +6597,7 @@
 .virtual-chat-message-list-root .rich-paragraph,
 .virtual-chat-message-list-root .rich-list,
 .virtual-chat-message-list-root .rich-code--inline,
-.virtual-chat-message-list-root button.rich-ref,
+.virtual-chat-message-list-root .rich-ref,
 .virtual-chat-message-list-root .rich-file-link,
 .virtual-chat-message-list-root .rich-key-value-row,
 .virtual-chat-message-list-root .rich-key-value-val,

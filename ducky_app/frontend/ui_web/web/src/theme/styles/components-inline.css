@@ -3515,6 +3515,9 @@ html.window-maximized .window-resize-grip {
   right: 0;
   z-index: 20;
   width: 300px;
+  /* A phone is narrower than the menu; AttachMenuButton slides it back inside the screen. */
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
   background: var(--dropdown-bg);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -3607,6 +3610,47 @@ html.window-maximized .window-resize-grip {
 .chat-perm-btn:not(.is-open):hover { background: var(--tab-hover); color: var(--fg); }
 .chat-perm-btn[data-mode="ask"] { color: var(--green); }
 .chat-perm-btn[data-mode="all"] { color: var(--amber); }
+/* One button for mode + permissions: the mode's icon in its colour, a small shield in the
+   permission's colour at its corner. */
+.chat-perm-btn--combined { position: relative; }
+.chat-perm-btn--combined[data-agent-mode="ask"] { color: var(--green); }
+.chat-perm-btn--combined[data-agent-mode="plan"] { color: var(--amber); }
+.chat-perm-btn--combined[data-agent-mode="agent"] { color: var(--red); }
+.chat-perm-badge {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--input-bg, var(--bg));
+  color: var(--muted);
+}
+.chat-perm-badge svg { width: 12px; height: 12px; }
+.chat-perm-btn--combined[data-mode="ask"] .chat-perm-badge { color: var(--green); }
+.chat-perm-btn--combined[data-mode="all"] .chat-perm-badge { color: var(--amber); }
+.chat-perm-modes { display: flex; gap: 4px; padding: 2px 6px 4px; }
+.chat-perm-mode {
+  flex: 1 1 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-perm-mode svg { width: 14px; height: 14px; }
+.chat-perm-mode:hover { background: var(--bg-hover); }
+.chat-perm-mode.is-active { background: var(--btn-bg); border-color: currentColor; }
+.chat-perm-mode[data-agent-mode="ask"].is-active { color: var(--green); }
+.chat-perm-mode[data-agent-mode="plan"].is-active { color: var(--amber); }
+.chat-perm-mode[data-agent-mode="agent"].is-active { color: var(--red); }
 .chat-perm-menu { display: flex; flex-direction: column; }
 .chat-perm-caption {
   padding: 6px 10px 4px;

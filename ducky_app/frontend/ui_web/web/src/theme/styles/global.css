@@ -339,6 +339,10 @@ body.native-caption-input-ready .app-header .drag-region {
 
 /* Status menu tabs: Connections | Online (your other UEFN Duckies + plugin people). */
 .connection-status-tabs {
+  /* Stays in view while a long project list scrolls under it. */
+  position: sticky;
+  top: -6px;
+  z-index: 1;
   display: flex;
   gap: 2px;
   margin: 4px 8px 6px;

@@ -10,6 +10,7 @@ import { RichBlockView } from "./RichBlockList";
 import { RichCodeBlock } from "./RichCodeBlock";
 import { RichHeading } from "./RichHeading";
 import { RichParagraph } from "./RichParagraph";
+import { RichTableWrap } from "./RichTable";
 import { RichEmphasis } from "./RichEmphasis";
 import { richNodeText, richTextClass, richUrlTransform } from "./richTextColors";
 
@@ -45,11 +46,7 @@ function MarkdownChunk({ text, onOpenFile }: MarkdownContentProps) {
           language={child.props.className?.replace("language-", "")}
         />;
       },
-      table: ({ children }) => (
-        <div className="rich-table-wrap">
-          <table className="rich-table">{children}</table>
-        </div>
-      ),
+      table: ({ children }) => <RichTableWrap>{children}</RichTableWrap>,
       thead: ({ children }) => <thead>{children}</thead>,
       tbody: ({ children }) => <tbody>{children}</tbody>,
       tr: ({ children }) => <tr>{children}</tr>,

@@ -28,7 +28,7 @@ export function RichCallout({ tone, text, title, onOpenFile }: RichCalloutProps)
     <div className={`rich-callout rich-callout--${tone}`}>
       <div className="rich-callout-title">
         <CalloutIcon tone={tone} />
-        {label}
+        <span className="rich-callout-label">{title ? <RichInline text={title} onOpenFile={onOpenFile} /> : label}</span>
       </div>
       <div className="rich-callout-body">
         {calloutParts(text).map((part, i) =>

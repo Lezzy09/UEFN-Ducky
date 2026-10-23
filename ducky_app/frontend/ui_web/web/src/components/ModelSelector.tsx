@@ -4,6 +4,7 @@ import { billingKind } from "../utils/billing";
 import { DropdownPanel } from "./DropdownPanel";
 import { Icons } from "../icons/Icons";
 import { getApi } from "../hooks/usePanelApi";
+import { skipAutoFocus } from "../hooks/useNarrowLayout";
 import { setCachedCodingAgents } from "../hooks/codingAgentsCache";
 import { hasUsableModels } from "./ducky/duckyPickerIssue";
 import { onApiReady } from "../hooks/onApiReady";
@@ -879,7 +880,8 @@ export function ModelSelector({
         placeholder="Search models…"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        autoFocus
+        // A phone would pop its keyboard over the list; there a tap on the box starts a search.
+        autoFocus={!skipAutoFocus()}
       />
     </div>
   );

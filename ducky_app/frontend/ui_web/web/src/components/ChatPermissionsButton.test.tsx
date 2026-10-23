@@ -147,6 +147,19 @@ describe("ChatPermissionsButton", () => {
     delete (api as Record<string, unknown>).update_agent_plugin;
   });
 
+  it("in the composer, the same button picks Ask / Plan / Agent above the permissions", async () => {
+    const setAgentMode = vi.fn();
+    render(<ChatPermissionsButton convId="c1" codingAgent="claude_code" agentMode="plan" setAgentMode={setAgentMode} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Mode: Plan · Permissions: Accept edits" }));
+    const modes = screen.getAllByRole("radio");
+    expect(modes.map((el) => el.textContent)).toEqual(["Ask", "Plan", "Agent"]);
+    expect(modes[1].getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "Agent" }));
+    expect(setAgentMode).toHaveBeenCalledWith("agent");
+    // The permission modes are still in the same pop-up.
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(3);
+  });
+
   it("says a local copy of the plugin is not updated from the Store", async () => {
     const old = state("edits", { update: { plugin_id: "anthropic", label: "Anthropic", version: "1.0.54", from_store: false } });
     old.modes[0] = { ...old.modes[0], available: false, reason: "Needs a newer Anthropic plugin (this PC has 1.0.54)." };

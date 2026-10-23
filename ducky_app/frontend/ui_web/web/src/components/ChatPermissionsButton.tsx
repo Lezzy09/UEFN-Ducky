@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { getApi } from "../hooks/usePanelApi";
 import { Icons } from "../icons/Icons";
-import type { ChatPermissionModeId, ChatPermissionsDto } from "../types/panel";
+import type { AgentMode, ChatPermissionModeId, ChatPermissionsDto } from "../types/panel";
 import { useMergedRef, useUiTarget } from "../ui-targets/registry";
 import { announceChatPermissions, subscribeChatPermissions } from "./chatPermissionsSync";
 import { DropdownPanel } from "./DropdownPanel";
@@ -11,17 +11,38 @@ interface ChatPermissionsButtonProps {
   convId: string;
   /** The agent the chat's next turn runs on (the composer's pick). */
   codingAgent: string;
+  /** With both set, the same button also picks Ask / Plan / Agent (one composer button). */
+  agentMode?: AgentMode;
+  setAgentMode?: (mode: AgentMode) => void;
 }
 
-/** Composer button: this chat's approval mode and the rules it allowed (like Claude Code's mode menu). */
-export function ChatPermissionsButton({ convId, codingAgent }: ChatPermissionsButtonProps) {
+const AGENT_MODES: { id: AgentMode; name: string; Icon: () => JSX.Element }[] = [
+  { id: "ask", name: "Ask", Icon: Icons.Chat },
+  { id: "plan", name: "Plan", Icon: Icons.Plan },
+  { id: "agent", name: "Agent", Icon: Icons.Sparkles },
+];
+
+/** Composer button: this chat's mode (Ask / Plan / Agent), its approval mode and the rules
+ *  it allowed (like Claude Code's mode menu). */
+export function ChatPermissionsButton({ convId, codingAgent, agentMode, setAgentMode }: ChatPermissionsButtonProps) {
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<ChatPermissionsDto | null>(null);
   const [error, setError] = useState("");
   const anchorRef = useRef<HTMLButtonElement>(null);
   const selfRef = useRef({});
+  const combined = Boolean(agentMode && setAgentMode);
   const uiTargetRef = useUiTarget("chat.composer.permissions", { kind: "dropdown", label: "Permissions", route: "chat" });
-  const triggerRef = useMergedRef(anchorRef, uiTargetRef);
+  // Tours that point at the old Mode button land on this one.
+  const modeTargetRef = useUiTarget(combined ? "chat.composer.mode" : "", { kind: "dropdown", label: "Mode", route: "chat" });
+  const modeMenuTargetRef = useUiTarget(combined ? "chat.composer.mode.menu" : "", { kind: "dropdown", label: "Mode menu", route: "chat" });
+  const bothTargetsRef = useCallback(
+    (el: HTMLButtonElement | null) => {
+      uiTargetRef(el);
+      modeTargetRef(el);
+    },
+    [uiTargetRef, modeTargetRef],
+  );
+  const triggerRef = useMergedRef(anchorRef, bothTargetsRef);
 
   const load = useCallback(async () => {
     const api = getApi();
@@ -101,7 +122,9 @@ export function ChatPermissionsButton({ convId, codingAgent }: ChatPermissionsBu
     }
   }, [apply, convId, codingAgent]);
 
-  const title = state ? (state.asks ? `Permissions: ${state.label}` : `Permissions: ${state.agent_label} never asks`) : "Permissions";
+  const permTitle = state ? (state.asks ? `Permissions: ${state.label}` : `Permissions: ${state.agent_label} never asks`) : "Permissions";
+  const currentMode = AGENT_MODES.find((m) => m.id === agentMode) ?? AGENT_MODES[2];
+  const title = combined ? `Mode: ${currentMode.name} · ${permTitle}` : permTitle;
   const rules = state?.rules ?? [];
   // An agent that never stops for a card gets one honest line, not modes it would ignore.
   const neverAsks = Boolean(state && !state.asks);
@@ -112,18 +135,50 @@ export function ChatPermissionsButton({ convId, codingAgent }: ChatPermissionsBu
       <button
         ref={triggerRef}
         type="button"
-        className={`chat-perm-btn${open ? " is-open" : ""}`}
+        className={`chat-perm-btn${combined ? " chat-perm-btn--combined" : ""}${open ? " is-open" : ""}`}
         data-mode={state?.asks ? state.mode : "none"}
+        data-agent-mode={combined ? currentMode.id : undefined}
         title={title}
         aria-label={title}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <Icons.Shield />
+        {combined ? (
+          <>
+            <currentMode.Icon />
+            <span className="chat-perm-badge" aria-hidden>
+              <Icons.Shield />
+            </span>
+          </>
+        ) : (
+          <Icons.Shield />
+        )}
       </button>
       <DropdownPanel anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} placement="top" width={300} idealHeight={460}>
         <div className="chat-perm-menu" role="menu" aria-label="Permissions">
+          {combined ? (
+            <>
+              <div ref={modeMenuTargetRef} className="chat-perm-caption">Mode</div>
+              <div className="chat-perm-modes" role="radiogroup" aria-label="Mode">
+                {AGENT_MODES.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={m.id === currentMode.id}
+                    className={`chat-perm-mode${m.id === currentMode.id ? " is-active" : ""}`}
+                    data-agent-mode={m.id}
+                    onClick={() => setAgentMode?.(m.id)}
+                  >
+                    <m.Icon />
+                    <span>{m.name}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="chat-perm-divider" role="separator" />
+            </>
+          ) : null}
           <div className="chat-perm-caption">Permissions</div>
           {neverAsks ? (
             <>

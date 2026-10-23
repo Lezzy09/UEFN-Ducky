@@ -89,8 +89,10 @@ export const AgentActivityPanel = memo(function AgentActivityPanel({
   const quietMs = live && !lines.some((line) => line.status === "pending") ? Math.max(0, now - changedAt) : 0;
   const quiet = quietMs >= QUIET_AFTER_MS;
 
+  // Quiet: the model is reasoning about what to do next. Say so, and what it did last.
+  const lastDone = [...lines].reverse().find((line) => line.status === "success" || line.status === "error");
   const liveTitle = quiet
-    ? "Working on the next step"
+    ? "Thinking about the next step"
     : activityPanelTitle(lines, isWaitingOnLinked, waitingCount, waitingTitle, statusText);
   const title = showIdleTimer ? "Done" : liveTitle;
   const showBody = !headerOnly && !showIdleTimer && lines.length > 0;
@@ -160,25 +162,34 @@ export const AgentActivityPanel = memo(function AgentActivityPanel({
               className="ducky-avatar--22"
             />
           </div>
-          <span className="agent-activity-panel-title">
-            {title}
-            {showThinkingDots || quiet ? (
-              <span className="agent-activity-panel-thinking-dots" aria-hidden="true" />
-            ) : null}
-          </span>
-          {quiet ? (
-            <span className="agent-activity-panel-quiet" title={QUIET_HINT}>
-              still working · {formatElapsedMs(quietMs)} since the last step
+          {/* Title, then the quiet note and timer; they wrap under a long title instead of
+              squeezing it into a narrow column. */}
+          <div className="agent-activity-panel-text">
+            <span className="agent-activity-panel-title" title={title}>
+              {title}
+              {showThinkingDots || quiet ? (
+                <span className="agent-activity-panel-thinking-dots" aria-hidden="true" />
+              ) : null}
             </span>
-          ) : null}
-          {chatId ? (
-            <ElapsedTimer
-              chatId={chatId}
-              when={showIdleTimer ? "idle" : "live"}
-              idlePrefix="Took"
-              className="elapsed-timer--footer"
-            />
-          ) : null}
+            {quiet || chatId ? (
+              <span className="agent-activity-panel-meta">
+                {quiet ? (
+                  <span className="agent-activity-panel-quiet" title={QUIET_HINT}>
+                    {formatElapsedMs(quietMs)} quiet
+                    {lastDone ? ` · last: ${lastDone.text}` : ""}
+                  </span>
+                ) : null}
+                {chatId ? (
+                  <ElapsedTimer
+                    chatId={chatId}
+                    when={showIdleTimer ? "idle" : "live"}
+                    idlePrefix="Took"
+                    className="elapsed-timer--footer"
+                  />
+                ) : null}
+              </span>
+            ) : null}
+          </div>
         </div>
         {showBody ? (
           <span

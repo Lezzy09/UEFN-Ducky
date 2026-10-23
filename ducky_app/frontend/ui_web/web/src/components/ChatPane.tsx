@@ -2,8 +2,8 @@ import { subscribeLatestChatActivity } from "../navigation/latestChatActivity";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Icons } from "../icons/Icons";
 import { ScopedCss, useScopedClass } from "../utils/scopedCss";
-import { ModeSelector } from "./ModeSelector";
 import { ChatPermissionsButton } from "./ChatPermissionsButton";
+import { skipAutoFocus } from "../hooks/useNarrowLayout";
 import { isDucktactoeChat } from "../plugin-ui/ducktactoeBoardChat";
 import { ModelSelector } from "./ModelSelector";
 import { usePluginContributions } from "../hooks/usePluginContributions";
@@ -573,14 +573,15 @@ export function ChatPane({
       const draft = takeComposerDraft(chat.id);
       if (!draft) return;
       setInputText((prev) => (prev.trim() ? `${prev}\n\n${draft}` : draft));
-      requestAnimationFrame(() => textareaRef.current?.focus());
+      if (!skipAutoFocus()) requestAnimationFrame(() => textareaRef.current?.focus());
     };
     applyDraft();
     return subscribeComposerDraft(chat.id, applyDraft);
   }, [visible, chat.id]);
 
   useEffect(() => {
-    if (!visible) return;
+    // On a phone, opening a chat must not pop up the keyboard; a tap on the box does that.
+    if (!visible || skipAutoFocus()) return;
     requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
   }, [visible, chat.id]);
 
@@ -1779,14 +1780,15 @@ export function ChatPane({
 
           <div className="chat-pane-input-toolbar">
             <div className="chat-pane-input-toolbar-left">
+              {/* One button for the chat's mode (Ask / Plan / Agent) and its permissions. */}
               {!chat.isGroup ? (
-                <ModeSelector
-                  activeMode={agentMode}
-                  setMode={setAgentMode}
-                  uiTarget="chat.composer.mode"
+                <ChatPermissionsButton
+                  convId={chat.id}
+                  codingAgent={codingAgent}
+                  agentMode={agentMode}
+                  setAgentMode={setAgentMode}
                 />
               ) : null}
-              {!chat.isGroup ? <ChatPermissionsButton convId={chat.id} codingAgent={codingAgent} /> : null}
               {!chat.isGroup ? (
                 <ContextMeter
                   usedTokens={contextUsage.used_tokens}
@@ -1813,7 +1815,6 @@ export function ChatPane({
               ) : null}
               {!chat.isGroup ? (
                 <>
-                  <div className="chat-pane-toolbar-divider" />
                   <div className="chat-pane-model-effort">
                     <ModelSelector
                       selectedModel={selectedModel}

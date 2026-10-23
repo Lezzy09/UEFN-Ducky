@@ -58,7 +58,7 @@ describe("rich reply rendering", () => {
     for (const color of ["purple", "green", "amber", "yellow", "blue", "red"]) {
       expect(container.querySelector(`h2.rich-tone--${color}`)).not.toBeNull();
       expect(container.querySelector(`strong.rich-tone--${color}`)).not.toBeNull();
-      if (color !== "red") expect(container.querySelector("button.rich-ref")).not.toBeNull();
+      if (color !== "red") expect(container.querySelector(".rich-ref[role=button]")).not.toBeNull();
     }
   });
 
@@ -68,7 +68,7 @@ describe("rich reply rendering", () => {
       { type: "callout", tone: "info", text: "[**Verified**](ducky:green); [**pending**](ducky:amber)." },
     ] })} />);
     expect(container.querySelector(".rich-tone--purple strong")?.textContent).toBe("Verse");
-    expect(container.querySelector(".rich-text-accent.rich-tone--amber button.rich-ref")?.textContent).toBe("Props");
+    expect(container.querySelector(".rich-text-accent.rich-tone--amber .rich-ref[role=button]")?.textContent).toBe("Props");
     expect(container.querySelector(".rich-callout .rich-text-accent.rich-tone--green")?.textContent).toBe("Verified");
     expect(container.textContent).not.toContain("ducky:");
   });
@@ -105,7 +105,7 @@ describe("rich reply rendering", () => {
       ],
     })} />);
     expect(container.querySelectorAll("strong")).toHaveLength(6);
-    expect(container.querySelectorAll("button.rich-ref")).toHaveLength(6);
+    expect(container.querySelectorAll(".rich-ref[role=button]")).toHaveLength(6);
     expect(container.textContent).not.toContain("**");
     const links = getAllByRole("button", { name: "the device" });
     expect(links).toHaveLength(5);
@@ -121,8 +121,27 @@ describe("rich reply rendering", () => {
     } />);
     expect(container.querySelector("ol")?.start).toBe(3);
     expect(container.querySelectorAll("li strong")).toHaveLength(2);
-    expect(container.querySelector(".rich-callout--warn button.rich-ref")?.textContent).toBe("Props");
+    expect(container.querySelector(".rich-callout--warn .rich-ref[role=button]")?.textContent).toBe("Props");
     expect(container.querySelector(".rich-callout--warn strong")?.textContent).toBe("verification");
+  });
+
+  it("lays out names, table cells and callout titles for a phone", () => {
+    // Oct 22 2026: on a phone, names wrapped inside their own centred box, table cells broke
+    // mid-word and a callout title showed its backticks.
+    const onOpenFile = vi.fn();
+    const { container } = render(<MarkdownContent onOpenFile={onOpenFile} text={
+      "| Fix | Where |\n|---|---|\n| Sync | `group_orchestrator.py` |\n\n> [!WARNING] `47781135` is still there\n> Archive later."
+    } />);
+    const chip = container.querySelector(".rich-ref[role=button]") as HTMLElement;
+    expect(chip.tagName).toBe("SPAN");
+    fireEvent.keyDown(chip, { key: "Enter" });
+    expect(onOpenFile).toHaveBeenCalledTimes(1);
+    const cells = container.querySelectorAll("tbody td");
+    expect(cells[0].getAttribute("data-label")).toBe("Fix");
+    expect(cells[1].getAttribute("data-label")).toBe("Where");
+    const title = container.querySelector(".rich-callout-title");
+    expect(title?.textContent).toBe("47781135 is still there");
+    expect(title?.querySelector(".rich-code--inline")?.textContent).toBe("47781135");
   });
 
   it.each(["", "python"])("keeps fenced code with language '%s' in a code block", (language) => {
@@ -138,7 +157,7 @@ describe("rich reply rendering", () => {
     const { container } = render(<MarkdownContent text={text} />);
     const callout = container.querySelector(".rich-callout");
     expect(callout?.querySelectorAll(".rich-code--block")).toHaveLength(1);
-    expect(callout?.querySelector("button.rich-ref")).toBeNull();
+    expect(callout?.querySelector(".rich-ref[role=button]")).toBeNull();
     expect(callout?.textContent).toContain("cd A; git push");
     expect(callout?.textContent).toContain("cd B; git push");
   });
@@ -165,7 +184,7 @@ describe("rich reply rendering", () => {
       __rich: true, blocks: [{ type: "paragraph", text: "<script>alert(1)</script>\n\n[unsafe](javascript:alert(1)) and `safe`" }],
     })} />);
     expect(container.querySelector("script, a[href^='javascript:']")).toBeNull();
-    expect(container.querySelector("button.rich-ref")?.textContent).toBe("safe");
+    expect(container.querySelector(".rich-ref[role=button]")?.textContent).toBe("safe");
   });
 
   it("renders the Appearance chat preview as the ledger dashboard widgets", () => {

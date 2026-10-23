@@ -147,13 +147,13 @@
   overflow-wrap: anywhere;
 }
 
-button.rich-ref {
+.rich-ref {
   display: inline;
-  margin: 0;
-  border: 0;
   font: inherit;
+  text-align: start;
   cursor: pointer;
-  vertical-align: baseline;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 .rich-ref--verse { --rich-text-accent: var(--chat-ref-verse, var(--purple)); }
@@ -170,8 +170,8 @@ button.rich-ref {
 .rich-ref--umg { --rich-text-accent: var(--chat-ref-umg, var(--yellow)); }
 .rich-ref--name { --rich-text-accent: var(--chat-ref-name, var(--muted)); }
 
-button.rich-ref:hover,
-button.rich-ref:focus-visible,
+.rich-ref:hover,
+.rich-ref:focus-visible,
 .rich-code--inline:hover {
   background: color-mix(in srgb, var(--rich-text-accent, var(--chat-code-color, var(--purple))) var(--chat-code-tint, 16%), var(--chat-surface, var(--card)));
   box-shadow: none;
@@ -345,7 +345,14 @@ button.rich-ref:focus-visible,
   color: var(--chat-link-color, var(--accent));
   text-decoration: underline;
   text-underline-offset: 2px;
+  text-align: start;
+  overflow-wrap: anywhere;
   cursor: pointer;
+}
+
+/* Nothing in a reply is centred: a wrapped button, link or chip starts at the left. */
+.rich-content :is(button, a, [role="button"]) {
+  text-align: start;
 }
 
 .rich-md-link:hover {
@@ -405,8 +412,10 @@ button.rich-ref:focus-visible,
   padding: 7px 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--chat-border-color, var(--border)) 60%, transparent);
   color: var(--fg);
+  text-align: left;
   vertical-align: top;
-  word-break: break-word;
+  /* Wrap at spaces; a column never squeezes below its longest word (the box scrolls instead). */
+  overflow-wrap: break-word;
 }
 
 .rich-table tbody tr:last-child .rich-table-td {
@@ -415,6 +424,72 @@ button.rich-ref:focus-visible,
 
 .rich-table tbody tr:nth-child(even) {
   background: color-mix(in srgb, var(--fg) 2%, transparent);
+}
+
+/* Phone-width chat: each row becomes a card, every cell labelled with its column. */
+@container (max-width: 520px) {
+  .rich-table-wrap {
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .rich-table,
+  .rich-table tbody,
+  .rich-table tr,
+  .rich-table-td {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .rich-table {
+    font-size: 13px;
+  }
+
+  .rich-table thead {
+    display: none;
+  }
+
+  .rich-table tr {
+    margin: 0 0 10px;
+    border: 1px solid var(--chat-border-color, var(--border));
+    border-radius: var(--chat-block-radius, var(--radius-sm));
+    overflow: hidden;
+  }
+
+  .rich-table tr:last-child {
+    margin-bottom: 0;
+  }
+
+  .rich-table tbody tr:nth-child(even) {
+    background: transparent;
+  }
+
+  .rich-table-td {
+    padding: 8px 12px;
+    line-height: 1.55;
+  }
+
+  .rich-table tbody tr .rich-table-td:last-child {
+    border-bottom: none;
+  }
+
+  .rich-table tbody tr .rich-table-td:first-child {
+    background: var(--chat-table-heading-background, color-mix(in srgb, var(--blue) 8%, var(--chat-surface, var(--card))));
+    font-weight: 600;
+  }
+
+  .rich-table-td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--chat-table-heading-color, var(--blue));
+  }
 }
 
 /* Key-value — stacked (label above value) so long JSON never sits in a sideways column */
@@ -520,6 +595,18 @@ button.rich-ref:focus-visible,
   width: 1.2em;
   height: 1.2em;
   flex-shrink: 0;
+}
+
+.rich-callout-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A name in a title keeps its own spelling and size, not the title's capitals. */
+.rich-callout-label .rich-code--inline {
+  font-size: 1.15em;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .rich-callout strong {

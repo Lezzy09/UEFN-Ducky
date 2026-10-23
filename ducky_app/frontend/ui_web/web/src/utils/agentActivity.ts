@@ -85,6 +85,46 @@ const TOOL_ACTIVITY_LABELS: Record<string, string> = {
   web_fetch: "Reading a page",
 };
 
+// While a step runs the status line says what it is doing to what: "Reading ChatPane.tsx".
+const TOOL_RUNNING_VERBS: Record<string, string> = {
+  workspace_read_file: "Reading",
+  workspace_read_files: "Reading",
+  read: "Reading",
+  workspace_file_outline: "Skimming",
+  view_image: "Looking at",
+  workspace_tree: "Looking through",
+  workspace_list_dir: "Looking through",
+  ls: "Looking through",
+  workspace_search: "Searching",
+  workspace_find: "Finding files in",
+  workspace_edit_file: "Editing",
+  workspace_multi_edit: "Editing",
+  workspace_replace_lines: "Editing",
+  edit: "Editing",
+  workspace_write_file: "Writing",
+  write: "Writing",
+  workspace_move_file: "Moving",
+  workspace_delete_file: "Deleting",
+  workspace_git: "Checking git in",
+};
+
+const SHORT_NAME_MAX = 36;
+
+/** A path as just its file name (a status line never shows a long path), and a very long
+ *  name with its middle cut out. */
+export function shortPathName(path: string): string {
+  const parts = path.trim().replace(/\\/g, "/").replace(/\/+$/, "").split("/");
+  const name = parts[parts.length - 1] || path.trim();
+  if (name.length <= SHORT_NAME_MAX) return name;
+  const keep = Math.floor((SHORT_NAME_MAX - 1) / 2);
+  return `${name.slice(0, keep)}…${name.slice(-keep)}`;
+}
+
+function shortText(text: string, max = 60): string {
+  const t = text.trim().replace(/\s+/g, " ");
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+
 export function formatToolDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "0ms";
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -160,7 +200,9 @@ function toolLineText(msg: ChatMessage, completed = false): string {
       ? webToolLabel(name, args, !completed) : humanToolLabel(name);
     const path = args.relative_path ?? args.path;
     if (typeof path === "string" && path.trim()) {
-      return `${label} · ${path.trim().replace(/\\/g, "/")}`;
+      const bare = name.replace(/^mcp__uefn__/i, "").replace(/^mcp__[^_]+__/i, "");
+      const verb = completed ? "" : TOOL_RUNNING_VERBS[bare];
+      return verb ? `${verb} ${shortPathName(path)}` : `${label} · ${shortPathName(path)}`;
     }
     const command = args.command ?? args.cmd;
     if (typeof command === "string" && command.trim()) {
@@ -171,7 +213,7 @@ function toolLineText(msg: ChatMessage, completed = false): string {
     }
     const query = args.query ?? args.q;
     if (typeof query === "string" && query.trim()) {
-      return `${label} · ${query.trim()}`;
+      return `${label} · ${shortText(query)}`;
     }
     return label;
   }

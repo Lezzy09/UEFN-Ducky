@@ -278,7 +278,6 @@ export const EditableUserMessage = memo(function EditableUserMessage({
             <div className="msg-edit-toolbar">
               <div className="msg-edit-toolbar-left">
                 <ModeSelector activeMode={editMode} setMode={setEditMode} />
-                <div className="chat-pane-toolbar-divider" />
                 <ModelSelector
                   selectedModel={editModel}
                   setSelectedModel={setEditModel}

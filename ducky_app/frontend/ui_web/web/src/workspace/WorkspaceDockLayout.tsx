@@ -219,6 +219,28 @@ export const WorkspaceDockLayout = forwardRef<ChatSidebarHandle, WorkspaceDockLa
       if (overlay) resetOverlayRailSession();
     }, [overlay]);
 
+    // Phone/narrow: picking a chat or a file in Duckies or Content closes every drawer so
+    // the pick is what you see (both drawers cover the page).
+    const railSidebarProps = useMemo(() => {
+      if (!overlay) return sidebarProps;
+      const closing = <A extends unknown[]>(fn?: (...args: A) => void) =>
+        fn
+          ? (...args: A) => {
+              resetOverlayRailSession();
+              fn(...args);
+            }
+          : undefined;
+      return {
+        ...sidebarProps,
+        onChatSelect: closing(sidebarProps.onChatSelect)!,
+        onFileSelect: closing(sidebarProps.onFileSelect)!,
+        onChatOpenPermanent: closing(sidebarProps.onChatOpenPermanent),
+        onFileOpenPermanent: closing(sidebarProps.onFileOpenPermanent),
+        onOpenChatInEditor: closing(sidebarProps.onOpenChatInEditor),
+        onOpenFileInEditor: closing(sidebarProps.onOpenFileInEditor),
+      };
+    }, [overlay, sidebarProps]);
+
     useImperativeHandle(
       ref,
       () => ({
@@ -329,7 +351,7 @@ export const WorkspaceDockLayout = forwardRef<ChatSidebarHandle, WorkspaceDockLa
         side={side}
         panelIds={ids}
         versePanels={versePanels}
-        sidebarProps={sidebarProps}
+        sidebarProps={railSidebarProps}
         sidebarRef={sidebarRef}
         onDockDropZoneChange={setDragOverlay}
         onDockDragChange={setIsDockPanelDragging}
@@ -360,7 +382,7 @@ export const WorkspaceDockLayout = forwardRef<ChatSidebarHandle, WorkspaceDockLa
         panels: undefined,
         children: buildRailChildren(leftVersePanels, "left", leftVerseIds, leftSidebarRef),
       };
-    }, [leftPanelIds, leftSidebarOnLeft, leftVerseIds, leftVersePanels, sidebarProps, verseOnLeft]);
+    }, [leftPanelIds, leftSidebarOnLeft, leftVerseIds, leftVersePanels, railSidebarProps, verseOnLeft]);
 
     const rightMixed = useMemo(() => {
       if (!leftSidebarOnRight && !verseOnRight) return null;
@@ -383,7 +405,7 @@ export const WorkspaceDockLayout = forwardRef<ChatSidebarHandle, WorkspaceDockLa
         panels: undefined,
         children: buildRailChildren(rightVersePanels, "right", rightVerseIds, rightSidebarRef),
       };
-    }, [leftSidebarOnRight, rightPanelIds, rightVerseIds, rightVersePanels, sidebarProps, verseOnRight]);
+    }, [leftSidebarOnRight, rightPanelIds, rightVerseIds, rightVersePanels, railSidebarProps, verseOnRight]);
 
     const dragTargetSide = dockDropTargetSide(dragOverlay);
     const leftPeek =

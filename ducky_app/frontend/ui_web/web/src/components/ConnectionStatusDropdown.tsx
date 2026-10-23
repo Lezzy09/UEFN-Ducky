@@ -118,7 +118,8 @@ export interface ConnectionStatusDropdownProps {
 }
 
 /**
- * Header duck icon: Settings, then two tabs. Connections: Ducky MCP, the UEFN listener,
+ * Header duck icon: Settings, then tabs. Projects (phone/remote only, from ``extra``): the
+ * recent projects list. Connections: Ducky MCP, the UEFN listener,
  * Epic MCP and plugin connections. Online: your other UEFN Duckies and the people plugins
  * list (``api.people``); the icon's badge counts who is online there.
  */
@@ -131,7 +132,8 @@ export function ConnectionStatusDropdown({
   extra,
 }: ConnectionStatusDropdownProps) {
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<"connections" | "online">("connections");
+  // A phone or remote view puts the project list here too, as its own first tab.
+  const [tab, setTab] = useState<"projects" | "connections" | "online">(extra ? "projects" : "connections");
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [restartNote, setRestartNote] = useState("");
   const { duckies, error: duckiesError, reload: reloadDuckies } = useAccountDuckies();
@@ -140,6 +142,9 @@ export function ConnectionStatusDropdown({
   const online = onlineCount(duckies, peopleSections);
   const badge = badgeText(online);
   const showOnline = hasOnlineTab && tab === "online";
+  const showProjects = Boolean(extra) && tab === "projects";
+  const showConnections = !showOnline && !showProjects;
+  const hasTabs = hasOnlineTab || Boolean(extra);
 
   useEffect(() => {
     if (open && showOnline) reloadDuckies();
@@ -247,31 +252,45 @@ export function ConnectionStatusDropdown({
             <span>Close web view</span>
           </button>
         ) : null}
-        {extra}
-        {hasOnlineTab ? (
+        {hasTabs ? (
           <div className="connection-status-tabs" role="tablist" aria-label="Status">
+            {extra ? (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={showProjects}
+                className={`connection-status-tab${showProjects ? " is-active" : ""}`}
+                onClick={() => setTab("projects")}
+              >
+                Projects
+              </button>
+            ) : null}
             <button
               type="button"
               role="tab"
-              aria-selected={!showOnline}
-              className={`connection-status-tab${!showOnline ? " is-active" : ""}`}
+              aria-selected={showConnections}
+              className={`connection-status-tab${showConnections ? " is-active" : ""}`}
               onClick={() => setTab("connections")}
             >
               Connections
             </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={showOnline}
-              className={`connection-status-tab${showOnline ? " is-active" : ""}`}
-              onClick={() => setTab("online")}
-            >
-              Online
-              {badge ? <span className="connection-status-tab-count">{badge}</span> : null}
-            </button>
+            {hasOnlineTab ? (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={showOnline}
+                className={`connection-status-tab${showOnline ? " is-active" : ""}`}
+                onClick={() => setTab("online")}
+              >
+                Online
+                {badge ? <span className="connection-status-tab-count">{badge}</span> : null}
+              </button>
+            ) : null}
           </div>
         ) : null}
-        {showOnline ? (
+        {showProjects ? (
+          extra
+        ) : showOnline ? (
           <>
             <DuckiesRows duckies={duckies} error={duckiesError} onPicked={() => setOpen(false)} />
             {peopleSections.map((section) => (
@@ -287,7 +306,7 @@ export function ConnectionStatusDropdown({
           </>
         ) : (
           <>
-            {hasOnlineTab ? null : <div className="connection-status-menu-head">Connections</div>}
+            {hasTabs ? null : <div className="connection-status-menu-head">Connections</div>}
             <Row label="Ducky MCP" detail={duckyMcpDetail} ok />
             <Row
               label="UEFN listener"

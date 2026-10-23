@@ -48,6 +48,24 @@ describe("ConnectionStatusDropdown", () => {
     expect(screen.queryByText("RECENT PROJECTS")).toBeNull();
   });
 
+  it("on a phone shows the project list as a Projects tab beside Connections", () => {
+    render(
+      <ConnectionStatusDropdown
+        status={status}
+        onOpenSettings={() => {}}
+        extra={<div>RECENT PROJECTS</div>}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /offline/i }));
+    const tabs = screen.getAllByRole("tab").map((el) => el.textContent);
+    expect(tabs).toEqual(["Projects", "Connections"]);
+    expect(screen.getByText("RECENT PROJECTS")).toBeTruthy();
+    expect(screen.queryByText("Ducky MCP")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Connections" }));
+    expect(screen.queryByText("RECENT PROJECTS")).toBeNull();
+    expect(screen.getByText("Ducky MCP")).toBeTruthy();
+  });
+
   it("shows UEFN MCP and Unreal MCP by the editor holding Epic's port", () => {
     const url = "http://127.0.0.1:8000/mcp";
     const rows = (extra: Partial<ListenerStatus>) =>
@@ -74,23 +92,6 @@ describe("ConnectionStatusDropdown", () => {
       "Port taken by another program",
       "Port taken by another program",
     ]);
-  });
-
-  it("renders extra (recent projects) above Connections on remote", () => {
-    render(
-      <ConnectionStatusDropdown
-        status={status}
-        projectName="ExampleProject1"
-        onOpenSettings={() => {}}
-        extra={<div className="project-selector-section-label">RECENT PROJECTS</div>}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /offline/i }));
-    const dialog = screen.getByRole("dialog", { name: "Connection status" });
-    const extra = dialog.querySelector(".project-selector-section-label");
-    const head = dialog.querySelector(".connection-status-menu-head");
-    expect(extra?.textContent).toBe("RECENT PROJECTS");
-    expect(extra && head && extra.compareDocumentPosition(head) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("posts ud-remote-close from Close web view only when framed", () => {

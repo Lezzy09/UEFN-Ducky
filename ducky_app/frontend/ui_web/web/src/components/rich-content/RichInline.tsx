@@ -5,6 +5,7 @@ import type { OpenFileHandler } from "../../types/richContent";
 import { basename } from "../../verse-editor/utils/isVerseFile";
 import { isWorkspaceFilePath, normalizeWorkspacePath } from "./isWorkspacePath";
 import { RichCodeBlock } from "./RichCodeBlock";
+import { onActivateKey } from "./RichCodeChip";
 import { RichEmphasis } from "./RichEmphasis";
 import { richColorFromHref, richUrlTransform } from "./richTextColors";
 import { parseChatRefHref } from "../chatReferences";
@@ -42,21 +43,30 @@ export function RichLink({ href = "", children, onOpenFile }: {
     return id ? <span className="plan-md-anchor" data-plan-node-id={id} title="Linked plan step">{children}</span> : null;
   }
   const login = parseCodingAgentLoginHref(href);
+  // Inline spans, not <button>s, so a long link wraps left-aligned with its sentence.
   if (login) {
+    const run = () => void openCodingAgentLoginUi({ providerId: login.providerId });
     return (
-      <button
-        type="button"
+      <span
+        role="button"
+        tabIndex={0}
         className="rich-md-link"
         title="Open Settings → LLMs and highlight Log in"
-        onClick={() => void openCodingAgentLoginUi({ providerId: login.providerId })}
+        onClick={run}
+        onKeyDown={onActivateKey(run)}
       >
         {children}
-      </button>
+      </span>
     );
   }
   if (onOpenFile && isWorkspaceFilePath(href)) {
     const path = normalizeWorkspacePath(href);
-    return <button type="button" className="rich-md-link" title={path} onClick={() => onOpenFile(path, basename(path))}>{children}</button>;
+    const run = () => onOpenFile(path, basename(path));
+    return (
+      <span role="button" tabIndex={0} className="rich-md-link" title={path} onClick={run} onKeyDown={onActivateKey(run)}>
+        {children}
+      </span>
+    );
   }
   if (/^https?:\/\//i.test(href)) {
     const remoteHttps = isRemote() && /^https:\/\//i.test(href);

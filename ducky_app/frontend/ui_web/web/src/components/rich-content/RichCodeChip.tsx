@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { getApi } from "../../hooks/usePanelApi";
 import { copyText } from "../../utils/copyText";
@@ -20,6 +20,15 @@ function openChip(text: string, onOpenFile?: OpenFileHandler): void {
     return;
   }
   void copyText(ref.text);
+}
+
+/** Enter or Space runs an inline role="button" span the way a real button would. */
+export function onActivateKey(run: () => void) {
+  return (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    run();
+  };
 }
 
 export function RichCodeChip({ text, onOpenFile }: { text: string; onOpenFile?: OpenFileHandler }) {
@@ -52,10 +61,14 @@ export function RichCodeChip({ text, onOpenFile }: { text: string; onOpenFile?: 
       )
     : null;
 
+  // A span, not a <button>: a button is always its own box, so a long name wrapped inside it
+  // with centred lines on a phone. An inline span flows and wraps with the sentence.
+  const run = () => openChip(text, onOpenFile);
   return (
     <>
-      <button
-        type="button"
+      <span
+        role="button"
+        tabIndex={0}
         className={`rich-code rich-code--inline rich-ref rich-ref--${ref.kind} ${ref.open ? "rich-ref--open" : "rich-ref--copy"}`}
         aria-describedby={pos ? tipId : undefined}
         aria-label={`${ref.label}: ${ref.text}. ${ref.hint}`}
@@ -63,10 +76,11 @@ export function RichCodeChip({ text, onOpenFile }: { text: string; onOpenFile?: 
         onMouseLeave={() => setPos(null)}
         onFocus={(e) => show(e.currentTarget)}
         onBlur={() => setPos(null)}
-        onClick={() => openChip(text, onOpenFile)}
+        onClick={run}
+        onKeyDown={onActivateKey(run)}
       >
         {text}
-      </button>
+      </span>
       {tip}
     </>
   );

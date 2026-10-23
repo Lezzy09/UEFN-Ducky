@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { getApi } from "../hooks/usePanelApi";
 import { Icons } from "../icons/Icons";
 import { requestOpenSettings } from "../navigation/openSettingsTab";
@@ -78,6 +78,7 @@ export function AttachMenuButton({ disabled, onAddFiles }: AttachMenuButtonProps
   const [cameraError, setCameraError] = useState("");
   const [limits, setLimits] = useState<VideoSettingsDto | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const flyoutRef = useRef<HTMLDivElement>(null);
   const mediaRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -119,6 +120,19 @@ export function AttachMenuButton({ disabled, onAddFiles }: AttachMenuButtonProps
       document.removeEventListener("keydown", onKey);
     };
   }, [open, close]);
+
+  // The menu opens leftwards from the paperclip; on a phone that ran off the left edge.
+  // Slide it sideways until it sits 8 px inside the screen.
+  useLayoutEffect(() => {
+    const el = flyoutRef.current;
+    if (!open || !el) return;
+    el.style.transform = "";
+    const box = el.getBoundingClientRect();
+    const pad = 8;
+    const right = window.innerWidth - pad;
+    const shift = box.left < pad ? pad - box.left : box.right > right ? right - box.right : 0;
+    if (shift) el.style.transform = `translateX(${Math.round(shift)}px)`;
+  }, [open, stream, cameraError]);
 
   // The limits under each row come from Settings → Videos; read them each time the menu opens.
   useEffect(() => {
@@ -206,7 +220,7 @@ export function AttachMenuButton({ disabled, onAddFiles }: AttachMenuButtonProps
         <Icons.Paperclip />
       </button>
       {open ? (
-        <div className="attach-menu-flyout" role="menu" aria-label="Attach">
+        <div ref={flyoutRef} className="attach-menu-flyout" role="menu" aria-label="Attach">
           {cameraError ? <div className="attach-menu-error">{cameraError}</div> : null}
           {stream ? (
             <>
