@@ -317,6 +317,12 @@ body.appearance-skin-active .workspace-dock-layout--default:not(.is-narrow) .doc
   padding-bottom: var(--dock-gap);
 }
 
+/* Phones: the chat box sits on the bottom edge (the desktop's 24px gap left it floating),
+   clear of the phone's gesture bar. */
+.workspace-dock-layout.is-narrow .chat-pane-input-area {
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+}
+
 /* One edge for the whole editor area: the tab pills, the ⋯ button, the messages, the plan bar
    and the chat box all sit one --dock-gap in from each pane's sides. */
 .workspace-dock-layout--default:not(.is-narrow) .workspace-dock-center {

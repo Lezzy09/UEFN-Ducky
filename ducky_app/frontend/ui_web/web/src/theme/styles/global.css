@@ -1237,7 +1237,7 @@ body.native-caption-input-ready .app-header .drag-region {
 }
 .remote-window-overlay {
   position: absolute;
-  inset: 34px 0 0 0; /* below .app-header */
+  inset: var(--app-header-height) 0 0 0; /* below .app-header */
   z-index: 20;
   display: flex;
   flex-direction: column;
@@ -1608,6 +1608,41 @@ body.native-caption-input-ready .app-header .drag-region {
   }
   .app-header-trailing {
     flex: 0 0 auto;
+  }
+}
+/* Phones and touch screens (and watching a PC window from the phone): a taller top bar
+   whose buttons are finger-sized — the ducky, the open tab, Tools, Plugins, View,
+   background activity and the window buttons are 36px with 20px icons. */
+@media (max-width: 720px), (pointer: coarse) {
+  :root {
+    --app-header-height: 44px;
+  }
+  .app-header :is(.icon-btn, .window-control-btn, .connection-status-btn:not(.bg-activity-trigger)),
+  .app-header .choice-dropdown--light .choice-dropdown-trigger {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    border-radius: 8px;
+  }
+  .app-header .connection-status-btn.bg-activity-trigger {
+    min-width: 36px;
+    height: 36px;
+    border-radius: 8px;
+  }
+  .app-header :is(.icon-btn, .window-control-btn, .connection-status-btn, .choice-dropdown-trigger-icon) > svg {
+    width: 20px;
+    height: 20px;
+  }
+  .app-header .connection-status-icon {
+    width: 28px;
+    height: 28px;
+  }
+  .app-header-center .plugin-header-btn :is(img.plugin-contrib-icon, .plugin-contrib-emoji) {
+    width: 20px;
+    height: 20px;
+  }
+  .app-header .mobile-tabs-trigger {
+    --tab-scale: 1.25;
   }
 }
 body.layout-sidebar-only .app-header-save-btn {
