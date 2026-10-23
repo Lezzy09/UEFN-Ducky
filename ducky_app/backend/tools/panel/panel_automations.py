@@ -691,7 +691,9 @@ async def run_workflow(
     From chat: pass the user's request after a workflow reference as prompt, and
     their files. caller_conv_id defaults to the chat running this tool, which gets
     the files and the Return to user result. A reusable workflow takes its inputs
-    in payload and gives its Return values back as outputs.
+    in payload and gives its Return values back as outputs. Its Agent steps' duckies
+    join your group (else one group named after the workflow, made when an Agent step
+    first runs); a run never makes a nested or empty group.
     """
     from backend.automations.runner import public_payload
     from backend.automations.runner import run_workflow as _run

@@ -466,6 +466,9 @@ class _FakeGroups:
         self.invited.append((group_id, profile_id))
         return {"ok": True, "member": {"member_conv_id": f"mem-{profile_id}"}}
 
+    def group_seat_profile(self, group_id: str, profile_id: str, model: str = ""):
+        return self.group_invite(group_id, profile_id, model=model)
+
 
 def test_wait_pipeline_skips_group(monkeypatch):
     from backend.automations import runner
@@ -492,70 +495,101 @@ def test_wait_pipeline_skips_group(monkeypatch):
     assert fake.added == []
 
 
-def test_pipeline_group_seats_solo_caller(monkeypatch):
+def _agent_graph(name: str, *, reached: bool) -> dict:
+    """Start → wait → Agent; the Agent step runs only when ``reached``."""
+    edges = [{"source": "s", "target": "w", "kind": "main"}]
+    if reached:
+        edges.append({"source": "w", "target": "a", "kind": "main"})
+    return {
+        "name": name,
+        "graph": {
+            "nodes": [
+                {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
+                {"id": "w", "type": "flow.wait", "x": 40, "y": 0, "config": {"seconds": 0}},
+                {"id": "a", "type": "pipeline.agent", "x": 80, "y": 0, "config": {"ducky": "artist", "prompt": "fix it"}},
+            ],
+            "edges": edges,
+        },
+    }
+
+
+def _fake_agent_step(monkeypatch, runner) -> None:
+    monkeypatch.setattr(runner, "_resolve_profile", lambda d: {"id": "artist", "name": "Artist"})
+    monkeypatch.setattr(runner, "_agent_spawn_kwargs", lambda p: {"ducky_name": "Artist", "profile_id": "artist"})
+    monkeypatch.setattr(
+        runner,
+        "_run_message_and_wait",
+        lambda conv_id, text, mode, model, **kw: {"status": "done", "assistant_text": "fixed", "conv_id": conv_id},
+    )
+
+
+def test_an_agent_step_that_never_runs_makes_no_group(monkeypatch):
+    # Oct 23 2026: every run of a workflow with a fix step left an empty group behind.
     from backend.automations import runner
     from backend.automations.store import save_workflow
-    from frontend.ui_web.project_chats import load_conversation, save_conversation
 
     fake = _FakeGroups()
     monkeypatch.setattr("backend.tools.panel.ducky_panel._panel_api", lambda: fake)
     caller = create_conversation(PanelSettings.load(), "", title="Solo")
-    caller.parent_conv_id = ""
-    save_conversation(caller)
-    wf = save_workflow(
-        {
-            "name": "Clustered",
-            "graph": {
-                "nodes": [
-                    {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
-                    {"id": "w", "type": "flow.wait", "x": 40, "y": 0, "config": {"seconds": 0}},
-                    {"id": "a", "type": "pipeline.agent", "x": 80, "y": 0, "config": {}},
-                ],
-                "edges": [{"source": "s", "target": "w", "kind": "main"}],
-            },
-        }
-    )
-    out = runner.run_workflow(wf["id"], prompt="go", caller_conv_id=caller.id)
-    assert out["ok"] is True
-    assert fake.created and fake.created[0].get("open_tab") is False
-    assert fake.added == []
-    hub = load_conversation(fake.created[0]["id"])
-    if hub is not None:
-        assert getattr(hub, "leader_conv_id", "") == caller.id
+    wf = save_workflow(_agent_graph("Release", reached=False))
+    assert runner.run_workflow(wf["id"], prompt="go", caller_conv_id=caller.id)["ok"] is True
+    assert fake.created == [] and fake.invited == []
 
 
-def test_pipeline_group_does_not_move_grouped_caller(monkeypatch):
+def test_a_solo_ducky_s_agent_step_gets_one_group_named_after_the_workflow(monkeypatch):
     from backend.automations import runner
     from backend.automations.store import save_workflow
-    from frontend.ui_web.project_chats import load_conversation, save_conversation
+    from frontend.ui_web.project_chats import load_conversation
 
     fake = _FakeGroups()
     monkeypatch.setattr("backend.tools.panel.ducky_panel._panel_api", lambda: fake)
-    hub = create_conversation(PanelSettings.load(), "", title="Existing swarm")
+    _fake_agent_step(monkeypatch, runner)
+    caller = create_conversation(PanelSettings.load(), "", title="Solo")
+    wf = save_workflow(_agent_graph("Release", reached=True))
+    assert runner.run_workflow(wf["id"], prompt="go", caller_conv_id=caller.id)["ok"] is True
+    assert [(g["name"], g["folder_id"], g["open_tab"]) for g in fake.created] == [("Release", caller.folder_id, False)]
+    assert fake.invited == [(fake.created[0]["id"], "artist")]
+    hub = load_conversation(fake.created[0]["id"])
+    if hub is not None:
+        assert getattr(hub, "leader_conv_id", "") == caller.id  # a pointer: the caller's chat is not moved
+    assert fake.added == []
+
+
+def test_a_grouped_ducky_s_agent_step_joins_its_own_group_not_a_nested_one(monkeypatch):
+    # Oct 23 2026: a deploy ducky running two release workflows got two empty groups nested in its group.
+    from backend.automations import runner
+    from backend.automations.store import save_workflow
+    from frontend.ui_web.project_chats import save_conversation
+
+    fake = _FakeGroups()
+    monkeypatch.setattr("backend.tools.panel.ducky_panel._panel_api", lambda: fake)
+    _fake_agent_step(monkeypatch, runner)
+    hub = create_conversation(PanelSettings.load(), "", title="Deploy")
     hub.is_group = True
     save_conversation(hub)
     caller = create_conversation(PanelSettings.load(), "", title="Member", parent_conv_id=hub.id)
     save_conversation(caller)
-    wf = save_workflow(
-        {
-            "name": "Nested",
-            "graph": {
-                "nodes": [
-                    {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
-                    {"id": "w", "type": "flow.wait", "x": 40, "y": 0, "config": {"seconds": 0}},
-                    {"id": "a", "type": "pipeline.agent", "x": 80, "y": 0, "config": {}},
-                ],
-                "edges": [{"source": "s", "target": "w", "kind": "main"}],
-            },
-        }
-    )
-    out = runner.run_workflow(wf["id"], caller_conv_id=caller.id)
-    assert out["ok"] is True
-    assert fake.created and fake.created[0].get("open_tab") is False
+    for name in ("UEFN Ducky Release", "Deploy core to Fly"):
+        wf = save_workflow(_agent_graph(name, reached=True))
+        assert runner.run_workflow(wf["id"], caller_conv_id=caller.id)["ok"] is True
+    assert fake.created == []
+    assert fake.invited == [(hub.id, "artist"), (hub.id, "artist")]
     assert fake.added == []
-    hub_run = load_conversation(fake.created[0]["id"])
-    if hub_run is not None:
-        assert getattr(hub_run, "leader_conv_id", "") == caller.id
+
+
+def test_spawn_ducky_from_a_chat_makes_no_group(monkeypatch):
+    from backend.automations import runner
+    from backend.automations.store import save_workflow
+
+    fake = _FakeGroups()
+    monkeypatch.setattr("backend.tools.panel.ducky_panel._panel_api", lambda: fake)
+    caller = create_conversation(PanelSettings.load(), "", title="Solo")
+    wf = save_workflow({"name": "Spawn", "graph": {"nodes": [
+        {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
+        {"id": "d", "type": "ducky.spawn", "x": 40, "y": 0, "config": {"title": "Helper"}},
+    ], "edges": [{"source": "s", "target": "d", "kind": "main"}]}})
+    assert runner.run_workflow(wf["id"], caller_conv_id=caller.id)["ok"] is True
+    assert fake.created == []
 
 
 def test_pipeline_agent_forwards_image_attachments(monkeypatch, tmp_path):

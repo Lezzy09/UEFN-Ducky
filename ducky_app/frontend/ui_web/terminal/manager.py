@@ -197,9 +197,14 @@ class TerminalManager:
 
     def hold(self, session_id: str) -> Callable[[], None]:
         """Keep this terminal from the idle reaper while a workflow run goes on; the run
-        calls the returned function when it ends."""
+        calls the returned function when it ends, and the terminal then closes when idle
+        like an agent's (a run with no Agent step has no chat to own it)."""
         with self._lock:
             self._held.add(session_id)
+            entry = self._sessions.get(session_id)
+            if entry is not None:
+                entry.run_owned = True
+        self._ensure_reaper()
 
         def release() -> None:
             with self._lock:
@@ -217,14 +222,14 @@ class TerminalManager:
         is gone) and the terminal has been quiet for ``_AGENT_IDLE_CLOSE_S``. A terminal running
         anything, waiting on an Allow card, held by a running workflow, or where the agent
         started a background command (a dev server) is kept, and a person's own terminals
-        (no chat) are never closed."""
+        (no chat, not opened by a workflow run) are never closed."""
         now = time.time() if now is None else now
         if running is None:
             from frontend.ui_web.agent_modes import list_running_agents
 
             running = set(list_running_agents())
         with self._lock:
-            agents = [(e.session, e.chat) for e in self._sessions.values() if e.chat]
+            agents = [(e.session, e.chat) for e in self._sessions.values() if e.chat or e.run_owned]
             asked = {p.session_id for p in self._pending.values()}
             held = set(self._held)
         snapshot = functools.cache(_process_snapshot)
@@ -687,7 +692,7 @@ def _pending_dict(pending: PendingCommand, source: str) -> dict[str, Any]:
 
 
 class _SessionEntry:
-    __slots__ = ("session", "bridge", "reuse_key", "chat")
+    __slots__ = ("session", "bridge", "reuse_key", "chat", "run_owned")
 
     def __init__(
         self,
@@ -703,6 +708,8 @@ class _SessionEntry:
         self.reuse_key = reuse_key
         # The chat whose agent opened it; "" for a terminal a person opened.
         self.chat = chat
+        # A workflow run opened it: closed like an agent's once the run lets go, chat or not.
+        self.run_owned = False
 
 
 def get_terminal_manager() -> TerminalManager:

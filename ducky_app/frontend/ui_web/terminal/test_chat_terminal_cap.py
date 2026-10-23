@@ -158,3 +158,15 @@ def test_a_running_workflows_terminal_stays_until_the_run_lets_go(mgr, tmp_path)
     assert mgr.close_idle_agent_terminals(now=later, running=set()) == []
     let_go()
     assert mgr.close_idle_agent_terminals(now=later, running=set()) == [release_terminal]
+
+
+def test_a_run_s_terminal_with_no_ducky_still_closes_after_the_run(mgr, tmp_path):
+    # A workflow with no Agent step has no group chat to own its terminal; it piled up.
+    mine = mgr.spawn(shell="powershell", cwd=str(tmp_path))["session_id"]  # a person's own
+    run_terminal = mgr.spawn(shell="bash", cwd=str(tmp_path))["session_id"]
+    let_go = mgr.hold(run_terminal)
+    later = mgr.get_session(run_terminal).last_activity + manager_module._AGENT_IDLE_CLOSE_S + 1
+    assert mgr.close_idle_agent_terminals(now=later, running=set()) == []
+    let_go()
+    assert mgr.close_idle_agent_terminals(now=later, running=set()) == [run_terminal]
+    assert mine in mgr._sessions

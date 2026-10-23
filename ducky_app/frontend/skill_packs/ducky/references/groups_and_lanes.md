@@ -18,7 +18,8 @@ there are no separate subagents.
 1. `ducky_list_duckies`: pick the specialist by `when_to_use`.
 2. A swarm: `ducky_group_create(name)` (reused if it exists), then
    `ducky_group_add_member(group_id, <your chat id>, as_leader=true)` to lead it.
-   Nest a group inside another with `ducky_group_create(name, parent_folder_id=…)`.
+   Nest a group inside another (`ducky_group_create(name, parent_folder_id=…)`) only for
+   a sub-team with its own lead; one more helper joins your own group instead.
 3. **Reuse:** `ducky_group_members(group_id)` (or `ducky_agent_list` →
    `my_group_members`). If that specialist is already seated for this work, follow up
    with `ducky_send_chat_message(conv_id, message)`; don't add a duplicate.
@@ -34,6 +35,18 @@ there are no separate subagents.
 Delegate when a task clearly fits another ducky's specialty, not for every small step.
 For multi-step or multi-ducky work make a plan first (`ducky_create_plan`); leaders
 give each member its own plan before handing work over.
+
+## How groups are organized
+
+- **One group per job.** Your helpers join the group you are in or lead. Never make a
+  group just to hold one ducky, and never leave an empty one.
+- **Workflows you run** (`run_workflow`): an Agent step's ducky joins your group. Run from a
+  chat with no group, or from the Run button or a schedule, it joins one group named after
+  the workflow (beside that chat, else at the top level), made when an Agent step first
+  runs and reused every run. A run never makes a nested or empty group.
+- **Before you make a group,** look for one that already does this job
+  (`ducky_list_chats`: groups and their `parent_conv_id`) and reuse it.
+- **When the job is done,** archive the whole group; its members and nested groups go with it.
 
 A member can run on an external coding agent: `ducky_spawn_chat(…,
 coding_agent="claude_code" | "codex" | "cursor")`, or automatically when the

@@ -1857,8 +1857,13 @@ def _prepare_run_ctx(ctx: dict[str, Any], wf: dict[str, Any]) -> None:
         ctx["pipeline_run_id"] = run_id
         ctx["artifact_dir"] = str(caller_run_dir(caller, run_id))
     ctx.setdefault("files", [])
-    if _needs_group(wf, caller):
-        _ensure_pipeline_group(ctx, wf)
+    # No group yet: an Agent step makes one when it first runs (_seat_agent_cluster), so a
+    # run whose Agent step never starts leaves no empty group. A ducky already in a group
+    # works in that group, so its runs never nest a group of their own inside it.
+    if _needs_group(wf, caller) and not str(ctx.get("group_id") or "").strip():
+        own = _caller_group(caller)
+        if own:
+            ctx["group_id"], ctx["group_folder_id"] = own
 
 
 def _bind_hub_identity(ctx: dict[str, Any]):
@@ -1877,42 +1882,57 @@ def _bind_hub_identity(ctx: dict[str, Any]):
     )
 
 
-def _caller_group_home(caller: str) -> tuple[str, bool]:
-    """Return (folder_id, already_grouped)."""
+def _caller_group(caller: str) -> tuple[str, str] | None:
+    """(hub id, hub folder) of the group the calling chat leads or sits in, else None."""
     if not caller:
-        return "", False
+        return None
     from frontend.ui_web.group_orchestrator import is_group_conversation
     from frontend.ui_web.project_chats import load_conversation
 
     conv = load_conversation(caller)
     if conv is None:
-        return "", False
-    folder = str(getattr(conv, "folder_id", "") or "")
+        return None
     if is_group_conversation(conv):
-        return folder, True
+        return conv.id, str(getattr(conv, "folder_id", "") or "")
     parent_id = str(getattr(conv, "parent_conv_id", "") or "").strip()
     if parent_id:
         parent = load_conversation(parent_id)
         if parent is not None and is_group_conversation(parent):
-            return str(getattr(parent, "folder_id", "") or folder), True
-    return folder, False
+            return parent.id, str(getattr(parent, "folder_id", "") or "")
+    return None
+
+
+def _caller_folder(caller: str) -> str:
+    if not caller:
+        return ""
+    from frontend.ui_web.project_chats import load_conversation
+
+    conv = load_conversation(caller)
+    return str(getattr(conv, "folder_id", "") or "") if conv is not None else ""
 
 
 def _needs_group(wf: dict[str, Any], caller: str) -> bool:
-    """Only swarm tiles need a hub: Agent nodes always, Spawn ducky only when run
-    from a chat (a scheduled spawn must not open a group every tick). Image/device
-    graphs must not kidnap the chat."""
+    """Only Agent steps seat duckies in a group. Image/device graphs and Spawn ducky
+    (its chat stands alone) must not kidnap the calling chat's group."""
+    del caller
     types = {str(n.get("type") or "") for n in (wf.get("graph") or {}).get("nodes") or [] if isinstance(n, dict)}
-    return "pipeline.agent" in types or (bool(caller) and "ducky.spawn" in types)
+    return "pipeline.agent" in types
 
 
 def _ensure_pipeline_group(ctx: dict[str, Any], wf: dict[str, Any]) -> None:
+    """The group an Agent step's ducky joins: the calling ducky's own group when it has one,
+    else one group named after the workflow beside the calling chat (top level when no chat
+    started the run), reused every run. Never a group nested inside the caller's group."""
     if str(ctx.get("group_id") or "").strip():
         return
     from frontend.ui_web.project_chats import load_conversation, save_conversation
 
     caller = str(ctx.get("caller_conv_id") or "").strip()
-    parent_folder, _already_grouped = _caller_group_home(caller)
+    own = _caller_group(caller)
+    if own:
+        ctx["group_id"], ctx["group_folder_id"] = own
+        return
+    parent_folder = _caller_folder(caller)
     try:
         from backend.tools.panel.ducky_panel import _panel_api
 
@@ -2096,6 +2116,7 @@ def _create_pipeline_ducky(cfg: dict[str, Any], payload: dict[str, Any]) -> dict
     from frontend.ui_web.panel_api import resolve_model_selection
     from frontend.ui_web.project_chats import create_conversation
 
+    _ensure_pipeline_group(payload, {"name": str(payload.get("workflow_name") or "Workflow")})
     settings = PanelSettings.load()
     model = str(cfg.get("model") or "").strip()
     # A stale Default Model still creates the ducky: its first message takes a gateway's fallback model or waits for a pick.
