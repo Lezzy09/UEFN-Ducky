@@ -35,10 +35,12 @@ describe("resolveToolCategory", () => {
     expect(resolveToolCategory("web_search").id).toBe("web");
     expect(resolveToolCategory("web_fetch").id).toBe("web");
     expect(resolveToolCategory("web_search").Body).toBeTruthy();
-    expect(isStandaloneToolCard("web_search")).toBe(true);
-    expect(isStandaloneToolCard("web_fetch")).toBe(true);
-    expect(isStandaloneToolCard("web_video")).toBe(true);
-    expect(isStandaloneToolCard("web_github")).toBe(true);
+    // Web lookups fold into the tools list; a picture search keeps its pictures in the chat.
+    expect(isStandaloneToolCard("web_search")).toBe(false);
+    expect(isStandaloneToolCard("web_fetch")).toBe(false);
+    expect(isStandaloneToolCard("web_video")).toBe(false);
+    expect(isStandaloneToolCard("web_github")).toBe(false);
+    expect(isStandaloneToolCard("web_search", { query: "flags", images: true })).toBe(true);
     expect(resolveToolCategory("web_video").id).toBe("web");
     expect(resolveToolCategory("web_github").id).toBe("web");
     expect(isStandaloneToolCard("take_high_res_screenshot")).toBe(true);
@@ -46,12 +48,12 @@ describe("resolveToolCategory", () => {
     expect(resolveToolCategory("search_assets").id).toBe("search");
   });
 
-  it("file writes, captures, ask-user, and web lookup stay standalone", () => {
+  it("file writes, captures and ask-user stay standalone; web lookups fold", () => {
     expect(isStandaloneToolCard("workspace_write_file")).toBe(true);
     expect(isStandaloneToolCard("Write")).toBe(true);
     expect(isStandaloneToolCard("Edit")).toBe(true);
     expect(isStandaloneToolCard("ducky_ask_user")).toBe(true);
-    expect(isStandaloneToolCard("web_search")).toBe(true);
+    expect(isStandaloneToolCard("web_search")).toBe(false);
     expect(isStandaloneToolCard("workspace_read_file")).toBe(false);
     expect(isStandaloneToolCard("Read")).toBe(false);
     expect(isStandaloneToolCard("Bash")).toBe(false);

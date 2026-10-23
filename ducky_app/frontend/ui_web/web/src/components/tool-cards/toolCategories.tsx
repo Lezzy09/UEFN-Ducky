@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Icons } from "../../icons/Icons";
 import { humanToolLabel, isWebLookupTool } from "../../utils/agentActivity";
 import type { ToolCategory } from "./toolCardTypes";
@@ -106,18 +107,31 @@ function isFileWriteTool(name: string): boolean {
   return nameIncludes(name, "workspace_write", "create_project");
 }
 
+/** A picture search: its pictures are the answer, so its card stays open in the chat. */
+export function isPictureSearch(toolName: string, args?: Record<string, unknown>): boolean {
+  return toolName === "web_search" && Boolean(args?.images);
+}
+
 /**
- * File writes, captures, ask-user, and web lookup stay as standalone rows.
- * Reads / search / bash / verse diagnostics fold into the "N tools" accordion
- * so they don't sit between chat bubbles.
+ * File writes, captures, ask-user and picture searches stay as standalone rows.
+ * Reads / search / bash / web lookups / verse diagnostics fold into the "N tools"
+ * accordion so they don't sit between chat bubbles.
  */
-export function isStandaloneToolCard(toolName: string): boolean {
+export function isStandaloneToolCard(toolName: string, args?: Record<string, unknown>): boolean {
   return (
     isFileWriteTool(toolName) ||
     isCaptureTool(toolName) ||
     toolName === "ducky_ask_user" ||
-    isWebLookupTool(toolName)
+    isPictureSearch(toolName, args)
   );
+}
+
+/** Each web tool keeps the web blue but gets its own icon (and shade, see chat.css). */
+export function webToolIcon(toolName: string): () => ReactNode {
+  if (toolName === "web_fetch") return () => <Icons.File />;
+  if (toolName === "web_video") return () => <Icons.Play />;
+  if (toolName === "web_github") return () => <Icons.GitBranch />;
+  return () => <Icons.Globe />;
 }
 
 /**

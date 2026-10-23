@@ -43,7 +43,7 @@ function isThinkingOnlyBubble(row: ChatRow): row is Extract<ChatRow, { kind: "bu
   );
 }
 
-function toolNameFromRow(row: Extract<ChatRow, { kind: "tool" }>): string {
+function toolFromRow(row: Extract<ChatRow, { kind: "tool" }>): { name: string; arguments: Record<string, unknown> } {
   const rawName = row.intent.tool?.name ?? row.result?.tool?.name ?? "";
   const rawArgs = row.intent.tool?.arguments ?? row.result?.tool?.arguments ?? {};
   return unwrapCodingAgentTool(
@@ -51,7 +51,7 @@ function toolNameFromRow(row: Extract<ChatRow, { kind: "tool" }>): string {
     rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
       ? (rawArgs as Record<string, unknown>)
       : {},
-  ).name;
+  );
 }
 
 /** File-edit diffs must never fold into the "N tools" accordion. */
@@ -65,7 +65,8 @@ function isGroupableRow(row: ChatRow): boolean {
   if (isThinkingOnlyBubble(row)) return true;
   if (row.kind !== "tool") return false;
   if (toolHasFileEdit(row)) return false;
-  return !isStandaloneToolCard(toolNameFromRow(row));
+  const tool = toolFromRow(row);
+  return !isStandaloneToolCard(tool.name, tool.arguments);
 }
 
 function activityAuthorOf(item: ActivityItem): ChatMessage["author"] | undefined {

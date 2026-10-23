@@ -234,13 +234,8 @@ export function ProjectsModal({
           value={view}
           minWidth={140}
           hideChevron
-          trigger={
-            <>
-              <Icons.Grid />
-              <Icons.ChevronDown />
-            </>
-          }
-          triggerClassName="pl-pill"
+          trigger={view === "list" ? <Icons.List /> : <Icons.Grid />}
+          triggerClassName="pl-round"
           options={VIEW_OPTIONS}
           onChange={(value) => setView(value as ProjectView)}
         />
@@ -250,17 +245,12 @@ export function ProjectsModal({
           value={sort}
           minWidth={180}
           hideChevron
-          trigger={
-            <>
-              <Icons.Filter />
-              Filter and sort
-            </>
-          }
-          triggerClassName="pl-pill"
+          trigger={<Icons.Filter />}
+          triggerClassName="pl-round"
           options={SORT_OPTIONS}
           onChange={(value) => setSort(value as ProjectSort)}
         />
-        <button type="button" className="pl-icon-btn" onClick={onClose} aria-label="Close">
+        <button type="button" className="pl-round" onClick={onClose} aria-label="Close" title="Close">
           <Icons.Close />
         </button>
       </div>

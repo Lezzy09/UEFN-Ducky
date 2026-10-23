@@ -94,7 +94,7 @@ describe("unwrapCodingAgentTool", () => {
       name: "web_search",
       arguments: { query: "brainrot tukut", images: true },
     });
-    expect(isStandaloneToolCard(unwrapped.name)).toBe(true);
+    expect(isStandaloneToolCard(unwrapped.name, unwrapped.arguments)).toBe(true);
   });
 
   it("keeps generic tool when there is no inner MCP name", () => {

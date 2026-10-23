@@ -153,6 +153,32 @@ export function isWebLookupTool(name: string): boolean {
   return WEB_LOOKUP_TOOLS.has(name);
 }
 
+/** A few words saying what a web tool looked at: the query, the page's site, the repo. */
+export function webToolDetail(name: string, args: Record<string, unknown>): string {
+  const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const site = (u: string) => {
+    try {
+      return new URL(u).host.replace(/^www\./, "");
+    } catch {
+      return "";
+    }
+  };
+  if (name === "web_github") {
+    const number = Number(args.number) > 0 ? `#${Number(args.number)}` : "";
+    return [text(args.action), text(args.repo) || text(args.query), text(args.path), number]
+      .filter(Boolean).join(" · ").slice(0, 90);
+  }
+  if (name === "web_video") {
+    const count = (Array.isArray(args.frames) ? args.frames.length : 0) + (Number(args.overview) || 0);
+    return [site(text(args.url)), count ? `${count} frames` : ""].filter(Boolean).join(" · ");
+  }
+  const action = args.action && typeof args.action === "object" && !Array.isArray(args.action)
+    ? args.action as Record<string, unknown> : {};
+  const queries = Array.isArray(action.queries) ? action.queries.filter((q) => typeof q === "string").join(" · ") : "";
+  const query = text(args.query) || text(action.query) || queries;
+  return (query ? `"${query}"` : site(text(args.url) || text(action.url))).slice(0, 90);
+}
+
 export function webToolLabel(name: string, args: Record<string, unknown>, running: boolean): string {
   const action = args.action;
   const type = action && typeof action === "object" && !Array.isArray(action)

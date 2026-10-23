@@ -2019,6 +2019,8 @@ html.window-maximized .window-resize-grip {
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
+  /* The old base .modal-body keeps an 18px bottom margin: the details bar sits on the edge. */
+  margin: 0;
   padding: 0;
   overflow: hidden;
   color: var(--fg);
@@ -2069,22 +2071,41 @@ html.window-maximized .window-resize-grip {
   background: var(--border-light);
 }
 
-.pl-pill.choice-dropdown-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 40px;
-  padding: 0 14px;
-  border: 1px solid var(--border-light);
-  border-radius: 999px;
-  background: var(--card);
-  color: var(--fg);
-  font-size: 14px;
+.pl-search {
+  flex: 0 1 auto;
 }
 
-.pl-pill.choice-dropdown-trigger:hover,
-.pl-pill.choice-dropdown-trigger.is-open {
+/* View, filter/sort and close: one row of round icon buttons, the search field's height.
+   Beats the 28px icon-dropdown trigger (.choice-dropdown--icon). */
+.pl-toolbar .pl-round,
+.pl-toolbar .choice-dropdown-trigger.pl-round {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+
+.pl-toolbar .pl-round:hover,
+.pl-toolbar .choice-dropdown-trigger.pl-round.is-open {
   background: var(--card-hover);
+  color: var(--fg);
+}
+
+.pl-toolbar .pl-round svg {
+  width: 16px;
+  height: 16px;
+}
+
+.pl-toolbar .choice-dropdown {
+  flex: none;
 }
 
 .pl-icon-btn,

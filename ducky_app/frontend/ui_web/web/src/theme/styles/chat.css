@@ -5019,6 +5019,80 @@
   opacity: 1;
 }
 
+/* Every web tool is web blue, each in a shade of its own. */
+.tool-execution-card-shell--web-search {
+  --tool-cat-web: #38bdf8;
+}
+
+.tool-execution-card-shell--web-fetch {
+  --tool-cat-web: #60a5fa;
+}
+
+.tool-execution-card-shell--web-video {
+  --tool-cat-web: #0ea5e9;
+}
+
+.tool-execution-card-shell--web-github {
+  --tool-cat-web: #93c5fd;
+}
+
+/* What a web row looked at (query, site, repo): one muted line, cut with an ellipsis. */
+.tool-execution-card-toggle-detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Opened web row: compact results, small thumbnails, frames whole (not cropped). */
+.tool-execution-card-body--web .tool-card-web {
+  gap: 6px;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+}
+
+.tool-execution-card-body--web .tool-card-web-images {
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 6px;
+}
+
+.tool-execution-card-body--web .tool-card-web-thumb {
+  height: 64px;
+  border-radius: 6px;
+}
+
+.tool-execution-card-body--web .tool-card-web-frame .tool-card-web-thumb {
+  height: 120px;
+  object-fit: contain;
+}
+
+.tool-execution-card-body--web .tool-card-web-frame figcaption {
+  font-size: 11px;
+  text-align: center;
+}
+
+.tool-execution-card-body--web .tool-card-web-sheet {
+  max-height: 240px;
+  border-radius: 6px;
+}
+
+.tool-execution-card-body--web .tool-card-web-list {
+  gap: 6px;
+}
+
+.tool-execution-card-body--web .tool-card-web-snippet {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
 .tool-execution-card-shell--success.tool-execution-card-shell--cat-generic,
 .tool-execution-card-shell--running.tool-execution-card-shell--cat-generic {
   --tool-accent: var(--tool-cat-generic);

@@ -1,16 +1,52 @@
 // @vitest-environment jsdom
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
+import { ChatCollapseScopeProvider } from "../hooks/useChatCollapseState";
 import type { ChatMessage } from "../types/panel";
 import { ToolExecutionCard } from "./ToolExecutionCard";
 
 afterEach(cleanup);
 
-function card(status: "pending" | "success" | "error" | "cancelled", result = "", args: Record<string, unknown> = {}) {
-  const intent = { id: 1, role: "tool", text: "", tool: { name: "web_search", arguments: args, status: "pending" } } as ChatMessage;
-  const done = { id: 2, role: status === "success" ? "success" : "error", text: "", tool: { name: "web_search", arguments: args, status, result } } as ChatMessage;
-  return render(<ToolExecutionCard intent={intent} result={status === "pending" ? null : done} externalAgent />);
+// Open/closed is remembered per chat scope across renders: every card gets its own scope.
+let nextId = 100;
+
+function renderCard(intent: ChatMessage, result: ChatMessage | null) {
+  nextId += 2;
+  return render(
+    <ChatCollapseScopeProvider scope={`web-test-${nextId}`}>
+      <ToolExecutionCard intent={intent} result={result} externalAgent />
+    </ChatCollapseScopeProvider>,
+  );
 }
+
+function card(status: "pending" | "success" | "error" | "cancelled", result = "", args: Record<string, unknown> = {}, name = "web_search") {
+  nextId += 2;
+  const intent = { id: nextId, role: "tool", text: "", tool: { name, arguments: args, status: "pending" } } as ChatMessage;
+  const done = { id: nextId + 1, role: status === "success" ? "success" : "error", text: "", tool: { name, arguments: args, status, result } } as ChatMessage;
+  const view = renderCard(intent, status === "pending" ? null : done);
+  // Web rows open like any tool row; the result shows once opened.
+  const toggle = view.container.querySelector(".tool-execution-card-toggle");
+  if (toggle) fireEvent.click(toggle);
+  return view;
+}
+
+it("keeps a web row folded to one line with its own shade, icon and what it looked at", () => {
+  const intent = { id: 1, role: "tool", text: "", tool: { name: "web_video", arguments: { url: "https://www.youtube.com/watch?v=FBs--2nSPLQ", frames: [13, 62] }, status: "pending" } } as ChatMessage;
+  const done = { ...intent, id: 2, role: "success", tool: { ...intent.tool!, status: "success", result: '{"ok":true,"title":"I challenged Rust Developers","excerpt":"Hidden until opened"}' } } as ChatMessage;
+  const { container } = renderCard(intent, done);
+  expect(container.querySelector(".tool-execution-card-shell--web-video")).not.toBeNull();
+  expect(container.querySelector(".tool-execution-card-toggle-detail")?.textContent).toBe("youtube.com · 2 frames");
+  expect(container.textContent).not.toContain("Hidden until opened");
+  fireEvent.click(container.querySelector(".tool-execution-card-toggle")!);
+  expect(container.textContent).toContain("Hidden until opened");
+});
+
+it("shows a picture search's pictures without opening it", () => {
+  const intent = { id: 1, role: "tool", text: "", tool: { name: "web_search", arguments: { query: "flags", images: true }, status: "pending" } } as ChatMessage;
+  const done = { ...intent, id: 2, role: "success", tool: { ...intent.tool!, status: "success", result: JSON.stringify({ ok: true, results: [], images: [{ title: "Flag", url: "https://example.com/f", thumb: "https://example.com/f.jpg" }] }) } } as ChatMessage;
+  const { container } = renderCard(intent, done);
+  expect(container.querySelector('img[src="https://example.com/f.jpg"]')).not.toBeNull();
+})
 
 it("renders query-only native completion as unavailable details, not an empty search", () => {
   const { container } = card("success", "Codex MCP", { query: "Codex MCP" });

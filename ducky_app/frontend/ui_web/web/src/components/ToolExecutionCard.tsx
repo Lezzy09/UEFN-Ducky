@@ -13,7 +13,7 @@ import { DefaultBody } from "./tool-cards/bodies/DefaultBody";
 import { FileProtectionRecovery } from "./FileProtectionRecovery";
 import { walkthroughStepsFromTool } from "./tool-cards/bodies/WalkthroughBody";
 import { replayShowMe, showMeLabel, showMeRequestFromTool } from "./tool-cards/bodies/ShowMeBody";
-import { resolveToolCategory } from "./tool-cards/toolCategories";
+import { isPictureSearch, resolveToolCategory, webToolIcon } from "./tool-cards/toolCategories";
 import { runAgentWalkthrough } from "../walkthrough/agentWalkthrough";
 import type { ChatMessage, ChatTab, LinkedAgent, ToolCallData } from "../types/panel";
 import {
@@ -26,7 +26,7 @@ import {
   linkedAgentFromToolResult,
   pendingLinkedFromChatTool,
 } from "../utils/linkedAgents";
-import { formatToolDuration, humanToolLabel, isWebLookupTool, webToolLabel } from "../utils/agentActivity";
+import { formatToolDuration, humanToolLabel, isWebLookupTool, webToolDetail, webToolLabel } from "../utils/agentActivity";
 import { fmtCompactTokens } from "../utils/contextFormat";
 import { unwrapCodingAgentTool } from "../utils/unwrapCodingAgentTool";
 
@@ -121,10 +121,12 @@ export const ToolExecutionCard = memo(function ToolExecutionCard({
   const isSuccess = meta.status === "success" || result?.role === "success";
   const isChatTool = isChatToolName(meta.name);
   const category = useMemo(() => resolveToolCategory(meta.name), [meta.name]);
-  const CategoryIcon = category.icon;
+  const isWebLookup = isWebLookupTool(meta.name);
+  // A picture search shows its pictures folded too; other web rows open like any tool.
+  const webInline = isPictureSearch(meta.name, meta.arguments || {});
+  const CategoryIcon = isWebLookup ? webToolIcon(meta.name) : category.icon;
   const Body = category.Body ?? DefaultBody;
   const isAskUser = meta.name === "ducky_ask_user";
-  const isWebLookup = isWebLookupTool(meta.name);
   const isCapture = category.id === "screenshot";
   const [askSession, setAskSession] = useState(() =>
     convId ? getAskUserSessionForConv(convId) : null,
@@ -217,8 +219,8 @@ export const ToolExecutionCard = memo(function ToolExecutionCard({
     [expanded, isAskUser, meta.arguments],
   );
   const resultText = useMemo(
-    () => (expanded || isAskUser || isWebLookup || isCapture ? formatPayload(meta.result) : ""),
-    [expanded, isAskUser, isWebLookup, isCapture, meta.result],
+    () => (expanded || isAskUser || isCapture || webInline ? formatPayload(meta.result) : ""),
+    [expanded, isAskUser, isCapture, webInline, meta.result],
   );
   const llmTokens = meta.llmTokens ?? 0;
   const tokenSuffix =
@@ -238,6 +240,7 @@ export const ToolExecutionCard = memo(function ToolExecutionCard({
     isWebLookup
       ? webToolLabel(meta.name, meta.arguments || {}, isRunning)
       : category.label?.(meta.name) ?? humanToolLabel(meta.name);
+  const webDetail = isWebLookup ? webToolDetail(meta.name, meta.arguments || {}) : "";
 
   // Chat tools + inline file diffs keep their specialized chrome; category accent
   // only applies to ordinary tool cards.
@@ -258,6 +261,7 @@ export const ToolExecutionCard = memo(function ToolExecutionCard({
           "no-drag selectable-text tool-execution-card-shell",
           `tool-execution-card-shell--${shellTone}`,
           useCategoryChrome ? `tool-execution-card-shell--cat-${category.id}` : "",
+          useCategoryChrome && isWebLookup ? `tool-execution-card-shell--${meta.name.replace(/_/g, "-")}` : "",
           showInlineDiff ? "tool-execution-card-shell--compact" : "",
           embedded ? "tool-execution-card-shell--embedded" : "",
         ]
@@ -286,6 +290,7 @@ export const ToolExecutionCard = memo(function ToolExecutionCard({
             <span className="tool-execution-card-toggle-name">
               {displayName}
             </span>
+            {webDetail ? <span className="tool-execution-card-toggle-detail">{webDetail}</span> : null}
             <span className="tool-execution-card-toggle-status">
               {isRunning && isChatTool && linkedAgent
                 ? `waiting for ${linkedAgent.title}…`
@@ -405,8 +410,8 @@ export const ToolExecutionCard = memo(function ToolExecutionCard({
           </div>
         ) : null}
 
-        {isWebLookup && !isCancelled && !isGuardBlocked && !isRunning ? (
-          <div className="tool-execution-card-body">
+        {webInline && !isCancelled && !isGuardBlocked && !isRunning ? (
+          <div className="tool-execution-card-body tool-execution-card-body--web">
             <Body
               toolName={meta.name}
               args={meta.arguments}
@@ -423,7 +428,25 @@ export const ToolExecutionCard = memo(function ToolExecutionCard({
         ) : null}
 
         <div className={`tool-card-collapse${expanded ? " is-open" : ""}`}>
-          {expanded && !isAskUser && !isWebLookup && !isCapture ? (
+          {expanded && isWebLookup && !webInline && !isCancelled && !isGuardBlocked && !isRunning ? (
+          <div className="tool-card-collapse-inner">
+            <div className="tool-execution-card-body tool-execution-card-body--web">
+              <Body
+                toolName={meta.name}
+                args={meta.arguments}
+                argsText=""
+                resultText={resultText}
+                isSuccess={isSuccess}
+                isError={!isSuccess}
+                showResult
+                hideArgs={false}
+                hint={meta.hint}
+                onOpenFile={onOpenFile}
+              />
+            </div>
+          </div>
+          ) : null}
+          {expanded && !isAskUser && !(isWebLookup && !isCancelled && !isGuardBlocked && !isRunning) && !isCapture ? (
           <div className="tool-card-collapse-inner">
             {(chatList || listedChat) && onOpenChat && !isRunning ? (
               <div className="tool-execution-card-chat-list-wrap">
