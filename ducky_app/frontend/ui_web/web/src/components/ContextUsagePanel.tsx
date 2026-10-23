@@ -4,6 +4,7 @@ import { ChangesetPanel } from "./ChangesetPanel";
 import { announceChatPermissions, subscribeChatPermissions } from "./chatPermissionsSync";
 import { Modal } from "./Modal";
 import { getApi } from "../hooks/usePanelApi";
+import { SandboxSection } from "./SandboxSection";
 import { Icons } from "../icons/Icons";
 import type {
   AgentMode,
@@ -496,6 +497,8 @@ export function ContextUsagePanel({
           onFileCount={setFilesCount}
         />
       </AccordionSection>
+
+      <SandboxSection convId={convId} />
 
       {viewer ? (
         <Modal open onClose={() => setViewer(null)} title={viewer.title} width={640} zIndex={100020}>

@@ -139,6 +139,13 @@ def granted(conv_id: str = "") -> list[str]:
         out += [f for f in approved_folders(conv_id) if f not in out]
     except Exception:
         pass
+    try:
+        from backend.sandbox import paths as sandbox_paths
+
+        if sandbox_paths.exists(conv_id):
+            out.append(os.path.realpath(str(sandbox_paths.sandbox_dir(conv_id))))
+    except Exception:
+        pass
     return out
 
 

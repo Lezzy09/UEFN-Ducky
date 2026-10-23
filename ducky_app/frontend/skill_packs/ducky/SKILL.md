@@ -4,7 +4,7 @@ description: "UEFN-Ducky control panel — setup, IDE hookup, Skills studio, cha
 license: Ducky Source-Available License v1.0
 metadata:
   label: UEFN Ducky
-  version: 42
+  version: 43
   managed_by: uefn-ducky
   author: UEFN-Ducky
   copyright: Copyright 2026 UEFN-Ducky
@@ -168,6 +168,21 @@ A YouTube link: `web_video(url)` reads its transcript, chapters and description;
 the person to paste a transcript. Names, repos and PR numbers seen on screen lead to
 the real code with `web_github` (search, repo, pr, read). Load
 `skill_read_subskill("ducky", "web_research")` for the full recipe.
+
+## Sandbox: try, build, run, verify
+
+Every chat has a sandbox (`sandbox_open`): its own work folder and profile folders where you
+download, install, build, run and study programs without touching the project or the person's
+profile. All scratch work goes there. "Done" means verified: build and run the change in the
+sandbox, check it (`sandbox_look`, `browser_open` + `browser_capture`, `sandbox_mcp`), report with
+evidence, then commit and push from the project. Never deploy. Load
+`skill_read_subskill("ducky", "sandbox")` for the recipes (a Ducky test build included).
+
+## Ducky feels slow
+
+When the person says Ducky, the PC or UEFN is slow or laggy: `ducky_health()` first, explain its
+findings in plain words (say when it is not Ducky), then `ducky_self_care(action=...)` for what
+Ducky can fix. `skill_read_subskill("ducky", "self_care")`.
 
 ## Workflows
 

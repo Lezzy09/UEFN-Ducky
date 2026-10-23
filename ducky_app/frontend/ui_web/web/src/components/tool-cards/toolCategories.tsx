@@ -196,6 +196,18 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     match: (name) => PYTHON_TOOLS.has(name) || nameIncludes(name, "python"),
   },
   {
+    id: "sandbox",
+    icon: () => <Icons.Box />,
+    label: (name) => humanToolLabel(name),
+    match: (name) => name.startsWith("sandbox_"),
+  },
+  {
+    id: "health",
+    icon: () => <Icons.Monitor />,
+    label: (name) => humanToolLabel(name),
+    match: (name) => name === "ducky_health" || name === "ducky_self_care",
+  },
+  {
     id: "web",
     icon: () => <Icons.Globe />,
     label: (name) => humanToolLabel(name),

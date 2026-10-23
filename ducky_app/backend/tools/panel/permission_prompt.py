@@ -544,10 +544,27 @@ def approve_agent_change(conv_id: str, agent: str, op: str, paths: tuple[str, ..
     return approve_ducky_tool(conv_id, tool, args, agent_label=coding_agent_label(agent))
 
 
+SANDBOX_RULE = "sandbox:commands"
+
+
+def allows_sandbox(conv_id: str) -> bool:
+    """This chat runs sandbox commands without a card: "Allow everything", or its own
+    "Allow sandbox commands in this chat"."""
+    conv_id = (conv_id or "").strip()
+    return bool(conv_id) and (allows_everything(conv_id) or SANDBOX_RULE in _rules(conv_id))
+
+
+def allow_sandbox(conv_id: str) -> None:
+    if (conv_id or "").strip():
+        _remember(conv_id.strip(), SANDBOX_RULE)
+
+
 def rule_label(rule: str) -> str:
     """How a remembered rule reads in the permissions pop-up ("Bash: git status")."""
     if rule == _DUCKY_EDIT_RULE:
         return "Ducky: file edits"
+    if rule == SANDBOX_RULE:
+        return "Sandbox: commands"
     tool, sep, rest = rule.partition(":")
     return f"{tool}: {rest}" if sep and rest else rule
 

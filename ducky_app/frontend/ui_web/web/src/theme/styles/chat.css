@@ -4868,6 +4868,8 @@
   --tool-cat-landscape: #34d399;
   --tool-cat-walkthrough: #fbbf24;
   --tool-cat-web: #38bdf8;
+  --tool-cat-sandbox: #2dd4bf;
+  --tool-cat-health: #a3e635;
   --tool-cat-generic: #d4d4d8;
 }
 
@@ -4939,6 +4941,20 @@
   --tool-accent: var(--tool-cat-web);
   border-color: color-mix(in srgb, var(--tool-cat-web) 40%, transparent);
   background-color: color-mix(in srgb, var(--tool-cat-web) 10%, transparent);
+}
+
+.tool-execution-card-shell--success.tool-execution-card-shell--cat-sandbox,
+.tool-execution-card-shell--running.tool-execution-card-shell--cat-sandbox {
+  --tool-accent: var(--tool-cat-sandbox);
+  border-color: color-mix(in srgb, var(--tool-cat-sandbox) 35%, transparent);
+  background-color: color-mix(in srgb, var(--tool-cat-sandbox) 8%, transparent);
+}
+
+.tool-execution-card-shell--success.tool-execution-card-shell--cat-health,
+.tool-execution-card-shell--running.tool-execution-card-shell--cat-health {
+  --tool-accent: var(--tool-cat-health);
+  border-color: color-mix(in srgb, var(--tool-cat-health) 35%, transparent);
+  background-color: color-mix(in srgb, var(--tool-cat-health) 8%, transparent);
 }
 
 .tool-card-web {
@@ -6046,6 +6062,98 @@
 
 .context-usage-panel-accordion-body {
   padding: 0 4px 8px;
+}
+
+/* The chat's sandbox: programs with Stop and their ports, evidence pictures, actions. */
+.sandbox-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.sandbox-section-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sandbox-section-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sandbox-section-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sandbox-section-meta {
+  flex: 1;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sandbox-section-chip {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--fg-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sandbox-section-chip:hover:not(:disabled) {
+  background: var(--card-hover);
+  color: var(--fg);
+}
+
+.sandbox-section-empty,
+.sandbox-section-warning {
+  color: var(--muted);
+}
+
+.sandbox-section-warning {
+  color: var(--amber);
+}
+
+.sandbox-section-pictures {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 6px;
+}
+
+.sandbox-section-pictures img {
+  width: 100%;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.sandbox-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sandbox-section-actions .settings-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .context-usage-panel-stats-hint,

@@ -194,6 +194,17 @@ def delete_custom(template_id: str) -> bool:
     return True
 
 
+_SANDBOX_VERIFY_PROMPT = (
+    "Verify the change the person describes, end to end, in this chat's sandbox. First "
+    "skill_read_subskill(pack_id=\"ducky\", subskill_id=\"sandbox\") and follow 'Verify a change before you push' "
+    "(for UEFN Ducky itself, 'Ducky test build'). sandbox_worktree of the project at HEAD, install and build "
+    "with sandbox_run, start it with sandbox_launch, then check exactly what the person asked: "
+    "browser_open('localhost:<port>') + browser_capture + browser_read for a web app, sandbox_look(capture=true) "
+    "for a window, sandbox_http / sandbox_mcp for an API or tools, the tests with sandbox_run. Open every picture "
+    "with view_image. Reply with what you checked, each with its evidence (picture path, output lines), and "
+    "what failed. Then sandbox_stop. Commit, push, release and deploy nothing."
+)
+
 _PRIVATE_PROMPT = (
     "Load skill_read_subskill('ducky', 'publish_private'). Do only Upload to "
     "Private Version. When 'Private version has been created!' is up, copy the "
@@ -471,6 +482,34 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             "edges": [
                 {"source": "s", "target": "w", "kind": "main"},
                 {"source": "w", "target": "a", "kind": "main"},
+                {"source": "a", "target": "f", "kind": "main"},
+            ],
+        },
+    },
+    {
+        "id": "builtin:sandbox-verify",
+        "name": "Verify a change in a sandbox",
+        "label": "Verify a change in a sandbox",
+        "description": (
+            "A ducky builds the project's current commit in its sandbox, runs it, checks what you describe "
+            "(Browser tab, windows, tools, tests) and reports with pictures. It commits and deploys nothing."
+        ),
+        "icon": "🧪",
+        "kind": "builtin",
+        "graph": {
+            "nodes": [
+                {"id": "s", "type": "start.chat", "x": 0, "y": 0, "config": {}},
+                {
+                    "id": "a",
+                    "type": "pipeline.agent",
+                    "x": 240,
+                    "y": 0,
+                    "config": {"ducky": "verse-coder", "timeout_sec": 3600, "prompt": _SANDBOX_VERIFY_PROMPT},
+                },
+                {"id": "f", "type": "pipeline.finish", "x": 480, "y": 0, "config": {}},
+            ],
+            "edges": [
+                {"source": "s", "target": "a", "kind": "main"},
                 {"source": "a", "target": "f", "kind": "main"},
             ],
         },

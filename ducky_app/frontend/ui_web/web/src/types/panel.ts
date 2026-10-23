@@ -1150,6 +1150,29 @@ export interface KnownProject extends ProjectInfo {
   listener_ready?: boolean;
 }
 
+export interface SandboxProgram {
+  pid: number;
+  name: string;
+  started: number;
+  ports?: Record<string, number>;
+  alive?: boolean;
+  command?: string[];
+  memory_mb?: number;
+  cpu_percent?: number;
+  listening?: number[];
+}
+
+export interface SandboxStatus {
+  ok: boolean;
+  exists?: boolean;
+  path?: string;
+  size_mb?: number;
+  size_warning?: boolean;
+  programs?: SandboxProgram[];
+  pictures?: { path: string; media_url: string }[];
+  error?: string;
+}
+
 export interface KnownProjectsListing {
   sources: { id: string; label: string; icon?: string }[];
   projects: KnownProject[];
@@ -4564,6 +4587,11 @@ export interface PanelApi {
     plugin_id: string,
     prefs: Record<string, unknown>,
   ): Promise<{ ok: boolean; prefs?: Record<string, Record<string, unknown>>; error?: string }>;
+  /** The chat's sandbox (programs, size, evidence pictures) for its context panel. */
+  sandbox_status?(conv_id: string): Promise<SandboxStatus>;
+  sandbox_stop_program?(conv_id: string, pid?: number): Promise<{ ok: boolean; error?: string }>;
+  sandbox_delete?(conv_id: string): Promise<{ ok: boolean; error?: string }>;
+  sandbox_open_folder?(conv_id: string): Promise<{ ok: boolean; path?: string; error?: string }>;
   /** Dispatch a plugin panel RPC registered via ``api.register_panel_rpc``. */
   plugin_call?(
     plugin_id: string,

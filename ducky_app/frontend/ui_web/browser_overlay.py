@@ -403,13 +403,10 @@ def _await_task(task: Any, timeout_s: float, name: str) -> tuple[Any, str]:
     return box["v"], box["e"]
 
 
-def evaluate(pane_id: str, expression: str, timeout_s: float = 30.0) -> dict[str, Any]:
-    """Run a JavaScript expression in a pane's page and await its promise (DevTools Runtime.evaluate).
-
-    Uses the control's own DevTools channel, so remote debugging stays off. For plugin code
-    with fixed scripts only — never pass text from a page, a chat or a tool argument.
-    Returns {"ok": True, "value": <JSON value>} or {"ok": False, "error": ...}.
-    """
+def devtools(pane_id: str, method: str, params: dict[str, Any] | None = None, timeout_s: float = 30.0) -> dict[str, Any]:
+    """Call one DevTools method on a pane's page (e.g. Page.captureScreenshot) and return its
+    JSON reply as {"ok": True, "reply": {...}}. The control's own channel: remote debugging stays
+    off. For plugin code with fixed methods only, never a method or text from a page or a chat."""
     import json
 
     with _lock:
@@ -417,23 +414,38 @@ def evaluate(pane_id: str, expression: str, timeout_s: float = 30.0) -> dict[str
     if pane is None or not pane.ready or pane.control is None:
         return {"ok": False, "error": "pane not open"}
     if _on_ui_thread(pane.window):
-        return {"ok": False, "error": "evaluate cannot wait on the UI thread"}
-    params = json.dumps({"expression": expression, "awaitPromise": True, "returnByValue": True})
+        return {"ok": False, "error": "a DevTools call cannot wait on the UI thread"}
+    body = json.dumps(params or {})
 
     def start() -> Any:
-        return pane.control.CoreWebView2.CallDevToolsProtocolMethodAsync("Runtime.evaluate", params)
+        return pane.control.CoreWebView2.CallDevToolsProtocolMethodAsync(method, body)
 
     try:
         task = _ui_sync(pane.window, start, timeout_s=5.0)
     except Exception as exc:
-        return {"ok": False, "error": f"could not start the script: {exc}"}
-    raw, err = _await_task(task, timeout_s, "browser-evaluate")
+        return {"ok": False, "error": f"could not start {method}: {exc}"}
+    raw, err = _await_task(task, timeout_s, "browser-devtools")
     if err:
         return {"ok": False, "error": err}
     try:
         reply = json.loads(str(raw or "{}"))
     except ValueError:
         return {"ok": False, "error": "the page sent back something that isn't JSON"}
+    return {"ok": True, "reply": reply if isinstance(reply, dict) else {}}
+
+
+def evaluate(pane_id: str, expression: str, timeout_s: float = 30.0) -> dict[str, Any]:
+    """Run a JavaScript expression in a pane's page and await its promise (DevTools Runtime.evaluate).
+
+    Uses the control's own DevTools channel, so remote debugging stays off. For plugin code
+    with fixed scripts only — never pass text from a page, a chat or a tool argument.
+    Returns {"ok": True, "value": <JSON value>} or {"ok": False, "error": ...}.
+    """
+    got = devtools(pane_id, "Runtime.evaluate",
+                   {"expression": expression, "awaitPromise": True, "returnByValue": True}, timeout_s=timeout_s)
+    if not got.get("ok"):
+        return got
+    reply = got["reply"]
     if reply.get("exceptionDetails"):
         details = reply["exceptionDetails"]
         text = (details.get("exception") or {}).get("description") or details.get("text") or "script error"

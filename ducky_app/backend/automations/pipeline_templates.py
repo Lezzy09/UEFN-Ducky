@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CATEGORY_ORDER = ("Images", "3D", "Characters", "Text & AI", "Documents", "Play tests", "UEFN")
+CATEGORY_ORDER = ("Images", "3D", "Characters", "Text & AI", "Documents", "Play tests", "UEFN", "Development")
 
 
 def _n(nid: str, ntype: str, left: int, top: int, label: str = "", inputs: dict[str, Any] | None = None, **config: Any) -> dict[str, Any]:
@@ -206,4 +206,5 @@ BUILTIN_CATEGORIES = {
     "builtin:tycoon-first-purchase": "Play tests",
     "builtin:tycoon-income-loop": "Play tests",
     "builtin:tycoon-ducky-playtest": "Play tests",
+    "builtin:sandbox-verify": "Development",
 }

@@ -12,6 +12,10 @@ TOOL_RESULT_MAX_OVERRIDES = {
     "web_fetch": 80_000,
     "web_video": 80_000,
     "web_github": 80_000,
+    "sandbox_run": 60_000,
+    "sandbox_look": 40_000,
+    "sandbox_mcp": 60_000,
+    "ducky_health": 40_000,
 }
 
 

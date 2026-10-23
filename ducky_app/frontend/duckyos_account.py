@@ -1402,6 +1402,15 @@ OFF_PC_DENY = frozenset(
         # may answer for them or feed them messages.
         "rtc_reply",
         "rtc_event",
+        # Sandboxes start programs on this PC and self-care stops them: never from a phone
+        # or the website.
+        "sandbox_call",
+        "sandbox_status",
+        "sandbox_stop_program",
+        "sandbox_delete",
+        "sandbox_open_folder",
+        "ducky_health_snapshot",
+        "ducky_self_care_run",
     }
 )
 

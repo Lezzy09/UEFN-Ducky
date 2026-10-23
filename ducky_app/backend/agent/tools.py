@@ -605,6 +605,20 @@ HOST_ONLY_TOOLS = frozenset(
         "web_fetch",
         "web_video",
         "web_github",
+        "sandbox_open",
+        "sandbox_fetch",
+        "sandbox_clone",
+        "sandbox_worktree",
+        "sandbox_setup",
+        "sandbox_run",
+        "sandbox_launch",
+        "sandbox_look",
+        "sandbox_http",
+        "sandbox_mcp",
+        "sandbox_stop",
+        "sandbox_clear",
+        "ducky_health",
+        "ducky_self_care",
     }
 )
 

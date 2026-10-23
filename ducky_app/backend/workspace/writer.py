@@ -194,6 +194,15 @@ class WriteObserver(Protocol):
     def on_write(self, record: WriteRecord, result: WriteResult) -> None: ...
 
 
+def _in_own_sandbox(paths: tuple[str, ...], conv_id: str) -> bool:
+    try:
+        from backend.sandbox.paths import is_sandbox_path
+
+        return bool(paths) and all(is_sandbox_path(p, conv_id) for p in paths if p)
+    except Exception:
+        return False
+
+
 def _ask_first(request: WriteRequest) -> None:
     """"Ask before changes" for a coding agent that changes files through Ducky's tools
     (Codex, Claude Code, Cursor): it waits for the person's OK on a card in its chat.
@@ -202,6 +211,8 @@ def _ask_first(request: WriteRequest) -> None:
     ctx = request.ctx
     if ctx is None or ctx.source != identity.SOURCE_AGENT or not ctx.conv_id:
         return
+    if _in_own_sandbox(request.paths, ctx.conv_id):
+        return  # the agent's own scratch space: never a card, like a scratch folder
     agent = (ctx.coding_agent or "ducky").strip().lower()
     if agent == "ducky":
         return
@@ -637,6 +648,13 @@ class ProjectWriter:
             raise
 
     def _journal_and_notify(self, record: WriteRecord, result: WriteResult) -> None:
+        try:
+            from backend.sandbox.paths import is_sandbox_path
+
+            if is_sandbox_path(record.abs_path or record.project_root):
+                return  # sandbox scratch is not a project change: no Changes tab, no file-tree push
+        except Exception:
+            pass
         try:
             info = self._journal.record(record) or {}
             result.changeset = {k: v for k, v in info.items() if k != "warning"}

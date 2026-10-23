@@ -1926,6 +1926,54 @@ class PanelApiSettingsMixin:
 
         return report(start_trace=bool(start_trace), stop_trace=bool(stop_trace), collect=bool(collect), top=top)
 
+    def ducky_health_snapshot(self, detail: bool = False) -> dict[str, Any]:
+        """ducky_health from an agent's tool server: the numbers are this window process's."""
+        from frontend import self_health
+
+        return self_health.snapshot(detail=bool(detail))
+
+    def ducky_self_care_run(self, action: str, target: str = "") -> dict[str, Any]:
+        from frontend import self_health
+
+        return self_health.self_care(str(action or ""), str(target or ""))
+
+    def sandbox_call(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+        """A sandbox_* tool from an agent's tool server: the window owns sandbox programs."""
+        from backend.sandbox import service
+
+        return service.call(str(name or ""), dict(args or {}))
+
+    def sandbox_status(self, conv_id: str) -> dict[str, Any]:
+        """The chat panel's Sandbox section."""
+        from backend.sandbox import service
+
+        return service.call("status", {"conv_id": conv_id})
+
+    def sandbox_stop_program(self, conv_id: str, pid: int = 0) -> dict[str, Any]:
+        from backend.sandbox import service
+
+        return service.call("stop", {"conv_id": conv_id, "pid": int(pid or 0)})
+
+    def sandbox_delete(self, conv_id: str) -> dict[str, Any]:
+        from backend.sandbox import service
+
+        return service.call("clear", {"conv_id": conv_id})
+
+    def sandbox_open_folder(self, conv_id: str) -> dict[str, Any]:
+        from backend.sandbox import paths
+
+        try:
+            folder = paths.sandbox_dir(conv_id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not folder.is_dir():
+            return {"ok": False, "error": "This chat has no sandbox yet."}
+        import os
+
+        if hasattr(os, "startfile"):
+            os.startfile(str(folder))  # noqa: S606 - Explorer on the sandbox folder, a path Ducky made
+        return {"ok": True, "path": str(folder)}
+
     def copy_support_dump(self) -> str:
         from frontend.support_dump import format_support_dump
 

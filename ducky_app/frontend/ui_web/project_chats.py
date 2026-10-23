@@ -1432,6 +1432,15 @@ def delete_conversation(conv_id: str, project_root: str | None = None) -> None:
             _repo().conv_delete(target_id)
         if forget_chat is not None:
             forget_chat(target_id)  # its "Allow everything" must not outlive it
+        try:
+            from backend.sandbox import paths as sandbox_paths
+
+            if sandbox_paths.exists(target_id):
+                from backend.sandbox import service as sandbox_service
+
+                sandbox_service.clear(target_id)  # its sandbox, programs and worktrees go too
+        except Exception:
+            pass
         conv_folder = conversation_dir(target_id, project_root, _conversations_dir(project_root))
         if not conv_folder.is_dir():
             meta = _find_conversation_meta(target_id, project_root)
