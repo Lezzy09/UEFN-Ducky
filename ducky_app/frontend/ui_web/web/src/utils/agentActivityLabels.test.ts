@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityPanelTitle, buildActivityLines, formatToolDuration, humanToolLabel, shellActivityText } from "./agentActivity";
+import { activityPanelTitle, buildActivityLines, formatToolDuration, humanToolLabel, shellActivityText, shortPathName } from "./agentActivity";
 import type { ChatMessage } from "../types/panel";
 
 it("uses completion action details in the activity feed", () => {
@@ -57,6 +57,18 @@ describe("shell commands in the running status", () => {
     const title = activityPanelTitle(buildActivityLines([tool], ""), false, 0);
     expect(title).toBe("Running tests");
     expect(title).not.toContain("powershell.exe");
+  });
+
+  it("names a file by its short name, never its full path", () => {
+    // Oct 22 2026: the live line showed "Look at picture · C:/Users/.../attachments/1792…jpg".
+    const path = "C:/Users/tas13/AppData/Local/UEFN-Ducky/chats/projects/x/attachments/1792723505876_0_1000008873.jpg";
+    const pending = { id: 1, role: "tool", text: "", tool: { name: "mcp__uefn__view_image", arguments: { path }, status: "pending" } } as unknown as ChatMessage;
+    const done = { id: 2, role: "success", text: "" } as unknown as ChatMessage;
+    expect(activityPanelTitle(buildActivityLines([pending], ""), false, 0)).toBe("Looking at 1792723505876_0_1000008873.jpg");
+    expect(buildActivityLines([pending, done], "")[0].text).toBe("Look at picture · 1792723505876_0_1000008873.jpg");
+    const read = { ...pending, tool: { name: "workspace_read_file", arguments: { relative_path: "src/components/ChatPane.tsx" }, status: "pending" } } as unknown as ChatMessage;
+    expect(buildActivityLines([read], "")[0].text).toBe("Reading ChatPane.tsx");
+    expect(shortPathName("a/" + "x".repeat(80) + ".tsx").length).toBeLessThanOrEqual(36);
   });
 
   it("names the new file tools", () => {
