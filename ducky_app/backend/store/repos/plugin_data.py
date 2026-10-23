@@ -155,6 +155,17 @@ def remove(
             Path(target_path).unlink(missing_ok=True)
 
 
+def written_since(account: str, scope: str, plugin: str, since: float) -> list[dict[str, Any]]:
+    """This PC's own changes of ``plugin`` written after ``since`` (dirty rows, deletes
+    included; never sensitive ones), oldest first: what a live group hears at once."""
+    out = db.connect().execute(
+        f"SELECT {_COLS} FROM plugin_data WHERE account_id=? AND scope_id=? AND plugin_id=? AND dirty=1 "
+        "AND sensitive=0 AND updated>? ORDER BY updated",
+        (account, scope, plugin, since),
+    ).fetchall()
+    return [_row(r) for r in out]
+
+
 def delete_row(conn: Any, account: str, scope: str, plugin: str, kind: str, key: str) -> None:
     """A row goes (no tombstone), inside a transaction the caller holds."""
     conn.execute(f"DELETE FROM plugin_data WHERE {_WHERE}", (account, scope, plugin, kind, key))

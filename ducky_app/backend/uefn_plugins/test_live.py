@@ -458,6 +458,134 @@ def test_live_folder_changes_never_wait_behind_update_now(team: dict[str, Any], 
     assert vcs_engine._holds_incoming(ctx) is False  # live: they land and the panels merge them
 
 
+# --------------------------------------------------------------------------- live data ("data_live")
+
+
+@pytest.fixture
+def live_data(team: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """``cards`` shares its data live; the outbox runs only when the test asks."""
+    monkeypatch.setattr(scopes, "data_live", lambda plugin: plugin == PLUGIN)
+    monkeypatch.setattr(live, "_outbox_start", lambda: None)
+    return team
+
+
+def _data_sent(team: dict[str, Any]) -> list[dict[str, Any]]:
+    return [data for plugin, topic, data, _to, _fast in team["impl"].sent if topic == live.DATA]
+
+
+def _item(key: str, value: Any, at: float) -> dict[str, Any]:
+    raw = scopes.encode_doc(value)
+    return {"k": "doc", "key": key, "op": "put", "at": at, "sha": hashlib.sha256(raw).hexdigest(),
+            "v": raw.decode("utf-8")}
+
+
+def test_a_live_plugins_writes_go_to_the_group_at_once(live_data: dict[str, Any]) -> None:
+    data = PluginData(PLUGIN)
+    data.put("card.old", {"hp": 0})  # before going live: that goes with sync only
+    live.join(PLUGIN)
+    data.put("card.pip", {"hp": 1})
+    assert live.send_changes() == 1
+    sent = _data_sent(live_data)
+    assert [(d["k"], d["key"], d["op"]) for d in sent] == [("doc", "card.pip", "put")]
+    assert json.loads(sent[0]["v"]) == {"hp": 1} and sent[0]["sha"] == _row(live_data["account"], "card.pip")["sha256"]
+    assert live.send_changes() == 0  # each write goes once
+    data.delete("card.pip")
+    data.put_file("art/pip.png", b"PNG")
+    assert live.send_changes() == 2
+    gone, art = _data_sent(live_data)[1:]
+    assert (gone["key"], gone["op"]) == ("card.pip", "del")
+    assert (art["k"], art["key"], base64.b64decode(art["b"])) == ("asset", "art/pip.png", b"PNG")
+    assert _row(live_data["account"], "card.old")["dirty"] == 1  # still on its way with sync
+
+
+def test_a_groupmates_change_lands_at_once_as_a_pulled_copy(live_data: dict[str, Any]) -> None:
+    account = live_data["account"]
+    heard: list[list[str]] = []
+    scopes.add_change_listener(PLUGIN, heard.append)
+    live.join(PLUGIN, "h:d_alex")
+    live.deliver(account, SPACE, PLUGIN, ALEX, live.DATA, _item("card.pip", {"hp": 7}, time.time()))
+    assert PluginData(PLUGIN).get("card.pip") == {"hp": 7}
+    assert _row(account, "card.pip")["dirty"] == 0  # theirs: sync records it from their PC, not this one
+    assert heard == [["card.pip"]]  # the plugin's backend hears it like a pull
+    assert {"type": "plugin_scope_changed", "plugins": [PLUGIN], "synced": True,
+            "keys": {PLUGIN: ["card.pip"]}} in live_data["pushed"]
+    assert live.send_changes() == 0  # never sent back to the group
+    assert not [p for p in live_data["pushed"] if p.get("type") == "live_message"]  # not a page message
+    live.deliver(account, SPACE, PLUGIN, ALEX, live.DATA, {"k": "doc", "key": "card.pip", "op": "del", "at": time.time()})
+    assert PluginData(PLUGIN).get("card.pip") is None
+
+
+def test_the_newest_change_of_an_item_wins_inside_the_group(live_data: dict[str, Any]) -> None:
+    account = live_data["account"]
+    live.join(PLUGIN, "h:d_alex")
+    then = time.time() - 60
+    PluginData(PLUGIN).put("card.pip", {"hp": 1})  # mine, written after their change was made
+    assert not live._apply_data(account, SPACE, PLUGIN, ALEX, _item("card.pip", {"hp": 2}, then))
+    assert PluginData(PLUGIN).get("card.pip") == {"hp": 1} and _row(account, "card.pip")["dirty"] == 1
+    assert live._apply_data(account, SPACE, PLUGIN, ALEX, _item("card.pip", {"hp": 3}, time.time() + 1))
+    assert PluginData(PLUGIN).get("card.pip") == {"hp": 3} and _row(account, "card.pip")["dirty"] == 0
+
+
+def test_a_change_too_big_to_carry_is_pulled_instead(live_data: dict[str, Any]) -> None:
+    account = live_data["account"]
+    live.join(PLUGIN, "h:d_alex")
+    live_data["woke"].clear()
+    item = _item("card.big", {"x": 1}, time.time())
+    del item["v"]
+    assert not live._apply_data(account, SPACE, PLUGIN, ALEX, item)
+    assert (account, SPACE, PLUGIN) in live_data["woke"]
+    bad = _item("card.pip", {"hp": 1}, time.time())
+    bad["sha"] = "0" * 64  # damaged: never lands
+    assert not live._apply_data(account, SPACE, PLUGIN, ALEX, bad) and PluginData(PLUGIN).get("card.pip") is None
+
+
+def test_members_of_a_live_group_never_lock_each_other_out(live_data: dict[str, Any]) -> None:
+    account = live_data["account"]
+    unit = "doc:card.pip"
+    space_vcs.lock_put(account, SPACE, PLUGIN, unit, name="Pip", holder_user="u_alex", holder_name="Alex",
+                       holder_device="d_alex", lease_left=60)
+    with pytest.raises(scopes.LockedOut):  # not live: Alex's lock holds as before
+        PluginData(PLUGIN).put("card.pip", {"hp": 1})
+    live.join(PLUGIN, "h:d_alex")
+    _roster(account, _on("d_alex", "Alex", "h:d_alex", 1.0))
+    assert live.group_devices(PLUGIN, account, SPACE) == {"d_alex"}
+    assert PluginData(PLUGIN).put("card.pip", {"hp": 1})["changed"]  # Alex is in the group
+    PluginData(PLUGIN).put("card.zed", {"hp": 2})
+    assert space_vcs.lock_request_get(account, SPACE, PLUGIN, "doc:card.zed") is None  # no auto lock asked for
+    space_vcs.lock_put(account, SPACE, PLUGIN, "doc:card.ben", name="Ben", holder_user="u_ben", holder_name="Ben",
+                       holder_device="d_ben", lease_left=60)
+    with pytest.raises(scopes.LockedOut):  # Ben isn't in the group: his lock still holds
+        PluginData(PLUGIN).put("card.ben", {"hp": 3})
+
+
+def test_every_process_sees_where_the_app_is_live(live_data: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    from backend.store.repos import kv
+
+    account = live_data["account"]
+    live.join(PLUGIN, "h:d_alex")
+    assert live.room_anywhere(PLUGIN, account, SPACE) == "h:d_alex"
+    doc = kv.get_doc("workspace_state", live.ROOM_KEY + PLUGIN)
+    assert doc["room"] == "h:d_alex" and doc["pid"] == os.getpid()
+    with live._lock:
+        live._live.clear()  # another process: nothing live in it, the app's room is read
+    kv.set_doc("workspace_state", live.ROOM_KEY + PLUGIN, {**doc, "pid": os.getppid()})  # a running app
+    assert live.room_anywhere(PLUGIN, account, SPACE) == "h:d_alex"
+    kv.set_doc("workspace_state", live.ROOM_KEY + PLUGIN, {**doc, "pid": 2 ** 31 - 7})  # an app that is gone
+    assert live.room_anywhere(PLUGIN, account, SPACE) == ""
+    assert live.group_devices(PLUGIN, account, SPACE) is None
+
+
+def test_data_live_is_checked_in_the_manifest() -> None:
+    from backend.uefn_plugins.store import data_live, manifest_data_errors
+
+    assert data_live({"data_live": True}) and not data_live({"data_live": True, "data_sharing": False})
+    assert any('"data_live"' in e for e in manifest_data_errors({"data_live": "yes"}))
+    assert any('"data_live"' in e for e in manifest_data_errors({"data_live": True, "data_sharing": False}))
+    assert not manifest_data_errors({"data_live": True, "data_sharing": True})
+
+
 # --------------------------------------------------------------------------- the page
 
 

@@ -227,6 +227,40 @@ def _data_sharing(plugin: str) -> Any:
     return flag
 
 
+_LIVE_DATA: dict[str, tuple[float, bool]] = {}  # manifest path → (mtime, its "data_live")
+
+
+def data_live(plugin: str) -> bool:
+    """The manifest's ``"data_live": true`` (:func:`store.data_live`): changes go to the live
+    group at once over its link. Read per write, so cached by the manifest's mtime."""
+    from backend.uefn_plugins.store import PLUGIN_MANIFEST, data_live as manifest_live, load_plugin_manifest, plugin_dir
+
+    try:
+        path = plugin_dir(plugin) / PLUGIN_MANIFEST
+        mtime = path.stat().st_mtime
+    except (OSError, ValueError):
+        return False
+    hit = _LIVE_DATA.get(str(path))
+    if hit is None or hit[0] != mtime:
+        hit = (mtime, manifest_live(load_plugin_manifest(plugin) or {}))
+        _LIVE_DATA[str(path)] = hit
+    return hit[1]
+
+
+def _live_group(scope: dict[str, Any], plugin: str) -> set[str] | None:
+    """The other PCs of this PC's live group in ``plugin`` on this team copy (any process:
+    the app publishes its room), when the plugin shares its data live; else None."""
+    if not data_live(plugin):
+        return None
+    try:
+        from backend.uefn_plugins import live
+
+        return live.group_devices(plugin, scope["account"], scope["id"])
+    except Exception:  # noqa: BLE001 — not live as far as anyone can tell
+        _log.debug("live group of %s unknown", plugin, exc_info=True)
+        return None
+
+
 _LOCKS: dict[str, tuple[float, dict[str, str]]] = {}  # manifest path → (mtime, its valid "data_locks")
 
 
@@ -901,10 +935,15 @@ def _team_write(scope: dict[str, Any], plugin: str, kind: str, key: str, name: s
         why = head["error"] or f"{scope.get('label') or 'This space'} is paused"
         raise ReadOnlyScope(f"{why}. Read-only.")
     unit = f"{kind}:{key}"
+    group_pcs = _live_group(scope, plugin)
     held = space_vcs.foreign_lock(account, space, plugin, unit)
-    if held:
+    # Live in one group with "data_live": the newest change wins and members never lock
+    # each other out (a lock one of them took before joining lapses by itself).
+    if held and not (group_pcs is not None and str(held.get("holder_device") or "") in group_pcs):
         raise _locked_out(plugin, unit, held)
     policy = data_lock_policy(plugin, key)
+    if policy == "auto" and group_pcs is not None:
+        policy = ""
     if policy:
         _lock_wanted(scope, plugin, unit, name or item_label(None, key), wait=policy == "required")
     group = open_group(plugin)

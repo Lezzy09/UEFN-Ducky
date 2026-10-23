@@ -3,10 +3,12 @@ other's pointers, what each one is pressing (held controls grey out for the othe
 short messages, straight from PC to PC. The spaces provider carries them peer to peer
 (:meth:`spaces.Provider.live_send`).
 
-Changes never travel live: they go out with sync like any other change, and the moment one
-is committed this PC tells its group (``ducky.change``), whose PCs pull it at once. So a
-teammate's PC only ever shows a change whole (a doc with the files it names, landed in one
-transaction), never half of it.
+Changes go out with sync like any other change, and the moment one is committed this PC
+tells its group (``ducky.change``), whose PCs pull it at once. A plugin with
+``"data_live": true`` goes further: inside the group each change to its docs and files
+travels at once over the link and lands as a pulled copy would (``ducky.data``, see "live
+data" below), the newest change of an item wins and members never lock each other out;
+sync still records every change, and teammates outside the group get it that way.
 
 Every plugin gets this with no plugin code: the host script in every panel page
 (``ui_kit.LIVE_PRESENCE_SCRIPT``) sends the pointer, selections and holds, and draws the
@@ -51,6 +53,12 @@ HOLD_STALE_S = 30.0  # the page renews a hold every 10 s; one not renewed this l
 HOLDS_MAX = 4  # holds per plugin a PC puts in its presence (the sealed blob is 8 KiB at most)
 LINK_GRACE_S = 10.0  # a group member with no link this long after both were live is unreachable
 JOIN_RELOAD_S = 60.0  # the first pull this soon after joining a teammate's group reloads the panels
+# Live data (manifest "data_live"): each change of the plugin's docs and files goes to the
+# group at once over its link, and lands there as a pulled copy would (not this PC's to send).
+DATA = "ducky.data"
+DATA_INLINE_MAX = 36 * 1024  # bytes of a doc or file carried in the message; bigger ones are pulled
+OUTBOX_EVERY_S = 0.25  # this PC's new writes are looked for this often while live
+ROOM_KEY = "live_room:"  # workspace_state: where each plugin is live here (read by every process)
 _ANCHOR_RE = re.compile(r"^[^\x00-\x1f]{1,400}$")
 _VIEW_RE = re.compile(r"^[A-Za-z0-9._:-]{0,64}$")
 _TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,39}$")
@@ -73,6 +81,8 @@ _sent: dict[tuple[str, bool], collections.deque[float]] = {}
 _listeners: dict[str, dict[str, list[Callable[..., Any]]]] = {}
 _kept: set[str] = set()  # folder plugins restarted while live with their panels kept loaded
 _join_reload: dict[str, float] = {}  # plugin -> until when its join's pull reloads its panels
+_marks: dict[tuple[str, str, str], float] = {}  # (account, space, plugin) -> newest write sent live
+_outbox: list[threading.Thread] = []
 
 
 def _push(event: dict[str, Any]) -> None:
@@ -217,6 +227,8 @@ def join(plugin: str, room: str = "") -> dict[str, Any]:
         with _lock:
             _live.pop(plugin, None)
         return {"ok": False, "error": f"Couldn't go live: {exc}"}
+    _publish_room(plugin, _live.get(plugin))
+    _outbox_start()
     _pull_now(account, space, plugin)
     _beat_soon(account, space)
     peers_changed(account, space, plugin)
@@ -262,6 +274,9 @@ def leave(plugin: str) -> dict[str, Any]:
         _join_reload.pop(plugin, None)
     _reload_kept(plugin)
     if st is not None:
+        _publish_room(plugin, None)
+        with _lock:
+            _marks.pop((st.account, st.space, plugin), None)
         try:
             spaces.provider().live_leave(st.account, st.space, plugin)
         except Exception:  # noqa: BLE001 — the room lease runs out by itself
@@ -536,6 +551,9 @@ def deliver(account: str, space: str, plugin: str, sender: dict[str, Any], topic
     if topic == CHANGE:
         _pull_now(account, space, plugin)
         return
+    if topic == DATA:
+        _apply_data(account, space, plugin, who, data)
+        return
     _push({"type": "live_message", "plugin": plugin, "from": who, "topic": topic, "data": data})
     with _lock:
         callbacks = list(_listeners.get(plugin, {}).get(topic, ()))
@@ -544,6 +562,219 @@ def deliver(account: str, space: str, plugin: str, sender: dict[str, Any], topic
             cb(who, data)
         except Exception:  # noqa: BLE001 — a plugin's callback never breaks delivery
             _log.warning("%s: live callback for %s failed", plugin, topic, exc_info=True)
+
+
+# --------------------------------------------------------------------------- live data
+#
+# A plugin with "data_live": while this PC is live in a group, every change it makes to the
+# plugin's docs and files (a panel's, the person's, an agent's in the MCP bridge: they all
+# land as rows here) goes to the group at once, and a teammate's lands here at once, as a
+# pulled copy (not this PC's to send). Sync still records each change from the PC that made
+# it; when that commit comes down it finds the same content here and nothing conflicts.
+# Inside the group the newest change of an item wins and nobody locks anyone out
+# (scopes._team_write); teammates outside the group get it with sync as before.
+
+
+def _publish_room(plugin: str, st: _State | None) -> None:
+    """Where ``plugin`` is live here, for every process (an agent's write in the MCP bridge
+    takes no lock in the group either)."""
+    import os
+
+    from backend.store.repos import kv
+
+    try:
+        if st is None:
+            kv.delete_doc("workspace_state", ROOM_KEY + plugin)
+        else:
+            kv.set_doc("workspace_state", ROOM_KEY + plugin, {"account": st.account, "space": st.space,
+                                                              "room": st.room, "pid": os.getpid()})
+    except Exception:  # noqa: BLE001 — the app process still knows; others lock as before
+        _log.debug("publishing the live room of %s failed", plugin, exc_info=True)
+
+
+def room_anywhere(plugin: str, account: str, space: str) -> str:
+    """The room ``plugin`` is live in on this PC for that team copy, from any process ('' when
+    not live). A room left by an app that is gone (it crashed) doesn't count."""
+    here = room_of(plugin, account, space)
+    if here is not None:
+        return str(here["room"])
+    import os
+
+    from backend.store.repos import kv
+
+    doc = kv.get_doc("workspace_state", ROOM_KEY + plugin)
+    if not isinstance(doc, dict) or (doc.get("account"), doc.get("space")) != (account, space):
+        return ""
+    pid = int(doc.get("pid") or 0)
+    if pid == os.getpid() or not pid:
+        return ""  # this process is the app and isn't live there
+    try:
+        import psutil
+
+        alive = psutil.pid_exists(pid)
+    except Exception:  # noqa: BLE001
+        alive = False
+    return str(doc.get("room") or "") if alive else ""
+
+
+def group_devices(plugin: str, account: str, space: str) -> set[str] | None:
+    """The other PCs live in this PC's group for ``plugin`` (from the team's last roster),
+    or None when this PC isn't live there."""
+    room = room_anywhere(plugin, account, space)
+    if not room:
+        return None
+    from backend.store.repos import space_vcs
+
+    roster = space_vcs.presence_get(account, space)["roster"]
+    people = roster.get("people") if isinstance(roster, dict) else None
+    me = _device()
+    out: set[str] = set()
+    for p in people if isinstance(people, list) else []:
+        row = (p.get("plugins") or {}).get(plugin) if isinstance(p, dict) and isinstance(p.get("plugins"), dict) else None
+        live = row.get("live") if isinstance(row, dict) else None
+        device = str(p.get("device") or "") if isinstance(p, dict) else ""
+        if device and device != me and isinstance(live, dict) and live.get("room") == room:
+            out.add(device)
+    return out
+
+
+def _outbox_start() -> None:
+    with _lock:
+        if _outbox and _outbox[0].is_alive():
+            return
+        thread = threading.Thread(target=_outbox_loop, name="live-outbox", daemon=True)
+        _outbox[:] = [thread]
+    thread.start()
+
+
+def _outbox_loop() -> None:
+    while True:
+        time.sleep(OUTBOX_EVERY_S)
+        with _lock:
+            if not _live:
+                _outbox.clear()
+                return
+        try:
+            send_changes()
+        except Exception:  # noqa: BLE001 — the next turn tries again; sync carries it anyway
+            _log.debug("sending live changes failed", exc_info=True)
+
+
+def _data_item(account: str, space: str, plugin: str, r: dict[str, Any]) -> dict[str, Any] | None:
+    """One written row as a live message: the doc or file itself when it is small enough,
+    else just what changed (the group pulls it)."""
+    import base64
+
+    from backend.uefn_plugins import data_crypto, scopes
+
+    item: dict[str, Any] = {"k": r["kind"], "key": r["key"], "at": float(r["updated"]), "sha": str(r["sha256"] or ""),
+                            "op": "del" if int(r["deleted"]) else "put"}
+    if item["op"] == "del" or r["kind"] not in ("doc", "asset"):
+        return item
+    try:
+        if r["kind"] == "doc" and r["value"] is not None:
+            raw = data_crypto.open_text(r["value"], account)
+            if len(raw.encode("utf-8")) <= DATA_INLINE_MAX:
+                item["v"] = raw
+        elif r["kind"] == "asset" and int(r["size"] or 0) <= DATA_INLINE_MAX * 3 // 4:
+            sealed = scopes.asset_file(scopes.shared_scope(account, space), plugin, r["key"]).read_bytes()
+            item["b"] = base64.b64encode(data_crypto.open_bytes(sealed, account)).decode("ascii")
+    except Exception:  # noqa: BLE001 — sent without its content: the group pulls it
+        _log.debug("reading %s %s for the live group failed", r["kind"], r["key"], exc_info=True)
+    return item
+
+
+def send_changes() -> int:
+    """This PC's writes since the last turn, to each live group of a ``data_live`` plugin.
+    Returns how many went."""
+    from backend.store.repos import plugin_data as repo
+    from backend.uefn_plugins import scopes, spaces
+
+    with _lock:
+        live_now = list(_live.items())
+    sent = 0
+    for plugin, st in live_now:
+        if not scopes.data_live(plugin):
+            continue
+        mark = (st.account, st.space, plugin)
+        with _lock:
+            since = _marks.setdefault(mark, st.since)  # what was written before joining goes with sync
+        for r in repo.written_since(st.account, st.space, plugin, since):
+            if not scopes.is_local_key(plugin, r["key"]):
+                item = _data_item(st.account, st.space, plugin, r)
+                if item is not None:
+                    spaces.provider().live_send(st.account, st.space, plugin, DATA, item, to="", fast=False)
+                    sent += 1
+            with _lock:
+                _marks[mark] = max(_marks.get(mark, 0.0), float(r["updated"]))
+    return sent
+
+
+def _apply_data(account: str, space: str, plugin: str, who: dict[str, str], data: Any) -> bool:
+    """A groupmate's change: it lands here as a pulled copy would, unless this PC changed the
+    same item later (the newest change wins; this PC's goes to them). Returns whether it
+    landed."""
+    import base64
+    import hashlib
+
+    from backend.store import db
+    from backend.store.repos import plugin_data as repo
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import data_crypto, scopes
+
+    if not scopes.data_live(plugin) or not isinstance(data, dict):
+        return False
+    kind, key, op = str(data.get("k") or ""), str(data.get("key") or ""), str(data.get("op") or "")
+    valid = scopes.valid_doc_key(key) if kind == "doc" else scopes.valid_asset_path(key) if kind == "asset" else False
+    if not valid or op not in ("put", "del") or scopes.is_local_key(plugin, key):
+        return False
+    try:
+        at = float(data.get("at") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    cur = repo.get(account, space, plugin, kind, key)
+    if cur is not None and int(cur["sensitive"]):
+        return False
+    if cur is not None and int(cur["dirty"]) and (float(cur["updated"]), _device()) > (at, who.get("device", "")):
+        return False  # changed here later: mine wins, and goes to them
+    sha = str(data.get("sha") or "")
+    if op == "put":
+        if cur is not None and not int(cur["deleted"]) and cur["sha256"] == sha:
+            return False
+        payload = data.get("v") if kind == "doc" else data.get("b")
+        if not isinstance(payload, str):
+            _pull_now(account, space, plugin)  # too big to carry: sync brings it
+            return False
+        try:
+            raw = payload.encode("utf-8") if kind == "doc" else base64.b64decode(payload, validate=True)
+        except ValueError:
+            return False
+        if hashlib.sha256(raw).hexdigest() != sha or len(raw) > (scopes.DOC_MAX_BYTES if kind == "doc" else scopes.ASSET_MAX_BYTES):
+            return False
+        if kind == "doc":
+            conn = db.connect()
+            with db.write_txn(conn):
+                repo.upsert(conn, account, space, plugin, "doc", key, value=data_crypto.seal_text(payload, account),
+                            size=len(raw), sha256=sha, dirty=False)
+                space_vcs.change_log_bump(conn, plugin, [key])
+        else:
+            scopes._write_asset(scopes.shared_scope(account, space), plugin, key, data_crypto.seal_bytes(raw, account),
+                                size=len(raw), sha256=sha, dirty=False)
+            conn = db.connect()
+            with db.write_txn(conn):
+                space_vcs.change_log_bump(conn, plugin, [key])
+    else:
+        if cur is None or int(cur["deleted"]):
+            return False
+        conn = db.connect()
+        with db.write_txn(conn):
+            repo.delete_row(conn, account, space, plugin, kind, key)
+            space_vcs.change_log_bump(conn, plugin, [key])
+        if kind == "asset":
+            scopes.asset_file(scopes.shared_scope(account, space), plugin, key).unlink(missing_ok=True)
+    scopes.deliver_data_changes(plugin)  # the plugin's backend hears it like a pull
+    _push({"type": "plugin_scope_changed", "plugins": [plugin], "synced": True, "keys": {plugin: [key]}})
+    return True
 
 
 def peers_changed(account: str, space: str, plugin: str) -> None:
@@ -572,6 +803,7 @@ def reset_for_tests() -> None:
         _listeners.clear()
         _kept.clear()
         _join_reload.clear()
+        _marks.clear()
 
 
 class LiveApi:
