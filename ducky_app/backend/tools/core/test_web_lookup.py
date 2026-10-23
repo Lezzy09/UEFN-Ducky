@@ -323,6 +323,17 @@ def test_web_search_deny_does_not_search_again(monkeypatch):
     assert out["error"] == "Web search is off for this chat."
 
 
+def test_turn_saving_its_older_copy_keeps_the_web_allow():
+    from frontend.chat_store import Conversation
+    from frontend.ui_web.project_chats import _keep_newer_settings
+
+    turn_copy = Conversation(id="chat-1")
+    stored = {**turn_copy.to_dict(), "web_access_allowed": True, "web_fetch_urls": ["https://a.example/"], "settings_edited": 5.0}
+    _keep_newer_settings(turn_copy, stored)
+    assert turn_copy.web_access_allowed is True
+    assert turn_copy.web_fetch_urls == ["https://a.example/"]
+
+
 def test_prompt_mentions_web_search():
     from backend.agent.prompt import _rules_body
 

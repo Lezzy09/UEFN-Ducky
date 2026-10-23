@@ -19,6 +19,7 @@ import re
 import secrets
 import socket
 import ssl
+import time
 import unicodedata
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -599,6 +600,8 @@ def _conversation() -> Any:
 def _save_conv(conv: Any) -> None:
     from frontend.chat_store import save_conversation
 
+    # The running turn saves its older copy after this; a newer stamp keeps these fields.
+    conv.settings_edited = time.time()
     save_conversation(conv)
 
 

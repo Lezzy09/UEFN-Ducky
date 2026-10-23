@@ -868,7 +868,7 @@ def sync_skill_snapshot(
     return changed
 
 
-# What apply_ducky_config sets. A turn holds a copy loaded before the edit.
+# What apply_ducky_config and the web tools set. A turn holds a copy loaded before the edit.
 _DUCKY_SETTINGS = (
     "ducky_style",
     "ducky_name",
@@ -877,6 +877,9 @@ _DUCKY_SETTINGS = (
     "tts_voice",
     "tts_speed",
     "thinking_effort",
+    "web_access_allowed",
+    "web_access_denied",
+    "web_fetch_urls",
 )
 
 
