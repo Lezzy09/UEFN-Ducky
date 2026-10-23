@@ -4277,6 +4277,8 @@ export interface PanelApi {
   window_box?(hwnd: string | number): Promise<WindowBox>;
   /** True when the watched window's thread is showing a text caret. */
   window_text_focus?(hwnd: string | number): Promise<boolean>;
+  /** Blank our window titles (on) while getDisplayMedia lists windows; nested, restores itself after a minute. */
+  capture_list_shield?(on: boolean): Promise<boolean>;
   pick_project_path(): Promise<string | null>;
   deploy(project_path?: string): Promise<string[]>;
   deploy_all_projects(): Promise<string[]>;

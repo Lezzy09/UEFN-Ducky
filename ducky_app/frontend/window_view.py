@@ -15,6 +15,7 @@ import json
 import os
 import shlex
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -1175,6 +1176,128 @@ def _is_our_hwnd(hwnd: int) -> bool:
         return _hwnd_pid(hwnd) == os.getpid()
     except Exception:
         return True
+
+
+# getDisplayMedia makes Chromium list every titled window and thumbnail each one with
+# PrintWindow on its own thread. On our window that call needs the WebView2 browser's
+# UI thread (it owns the page's HWND inside our window), and that UI thread waits for
+# the thumbnail thread to stop once the screen is picked: a deadlock. The window keeps
+# animating but takes no clicks, and the browser grows ~10 MB/s until it dies out of
+# memory (0xE0000008 on Oct 22 and Oct 23 2026, both while a phone stream reconnected).
+# WebRTC never lists an untitled window, so our titles are blank while a capture starts.
+_SHIELD_MAX_S = 60.0
+_shield_lock = threading.Lock()
+_shield_titles: dict[int, str] = {}
+_shield_holds = 0
+_shield_timer: threading.Timer | None = None
+_user32_private = None
+
+
+def shield_capture_list(on: bool) -> bool:
+    """Blank (on) or restore (off) the titles of our visible windows. Holds nest; the
+    titles come back on their own after a minute if the page never says off."""
+    global _shield_holds, _shield_timer
+    if sys.platform != "win32":
+        return False
+    with _shield_lock:
+        if not on:
+            _shield_holds = max(0, _shield_holds - 1)
+            if not _shield_holds:
+                _restore_titles_locked()
+            return True
+        _shield_holds += 1
+        for hwnd, title in _our_titled_windows():
+            if hwnd not in _shield_titles and _set_title(hwnd, ""):
+                _shield_titles[hwnd] = title
+        if _shield_timer is not None:
+            _shield_timer.cancel()
+        _shield_timer = threading.Timer(_SHIELD_MAX_S, _shield_expire)
+        _shield_timer.daemon = True
+        _shield_timer.start()
+        return True
+
+
+def _shield_expire() -> None:
+    global _shield_holds
+    with _shield_lock:
+        _shield_holds = 0
+        _restore_titles_locked()
+
+
+def _restore_titles_locked() -> None:
+    global _shield_timer
+    if _shield_timer is not None:
+        _shield_timer.cancel()
+        _shield_timer = None
+    for hwnd, title in _shield_titles.items():
+        # A title the app set in the meantime wins.
+        if not _window_title(hwnd):
+            _set_title(hwnd, title)
+    _shield_titles.clear()
+
+
+def _user32():
+    """Its own user32 with the argtypes these calls need (see _monitors)."""
+    global _user32_private
+    if _user32_private is None:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32")
+        user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        user32.InternalGetWindowText.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.SendMessageTimeoutW.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPCWSTR,
+            wintypes.UINT,
+            wintypes.UINT,
+            ctypes.POINTER(ctypes.c_size_t),
+        ]
+        user32.SendMessageTimeoutW.restype = ctypes.c_size_t
+        _user32_private = user32
+    return _user32_private
+
+
+def _our_titled_windows() -> list[tuple[int, str]]:
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = _user32()
+    proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    me = os.getpid()
+    out: list[tuple[int, str]] = []
+
+    def _cb(hwnd, _lparam):
+        h = int(hwnd or 0)
+        if h and user32.IsWindowVisible(h) and _hwnd_pid(h) == me:
+            title = _window_title(h)
+            if title:
+                out.append((h, title))
+        return True
+
+    user32.EnumWindows(proc(_cb), 0)
+    return out
+
+
+def _window_title(hwnd: int) -> str:
+    # Not GetWindowText: for our own windows that sends WM_GETTEXT to the UI thread.
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(512)
+    n = int(_user32().InternalGetWindowText(hwnd, buf, 512) or 0)
+    return buf.value[:n]
+
+
+def _set_title(hwnd: int, text: str) -> bool:
+    """WM_SETTEXT with a timeout, so a busy UI thread can't hang the caller."""
+    import ctypes
+
+    result = ctypes.c_size_t(0)
+    # WM_SETTEXT, SMTO_ABORTIFHUNG, 2 s
+    sent = _user32().SendMessageTimeoutW(hwnd, 0x000C, 0, text, 0x0002, 2000, ctypes.byref(result))
+    return bool(sent) and bool(result.value)
 
 
 def _input_structs():

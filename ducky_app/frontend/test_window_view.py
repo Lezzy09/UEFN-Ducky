@@ -116,6 +116,92 @@ def test_window_box_empty_for_bad_hwnd() -> None:
     assert window_box(0) == {}
 
 
+@pytest.fixture
+def fake_titles(monkeypatch):
+    """Our windows' titles, with the Win32 calls swapped for a dict."""
+    import frontend.window_view as wv
+
+    titles = {10: "UEFN Ducky", 11: "Remote Ducky"}
+
+    def _set(hwnd: int, text: str) -> bool:
+        titles[hwnd] = text
+        return True
+
+    monkeypatch.setattr(wv.sys, "platform", "win32")
+    monkeypatch.setattr(wv, "_our_titled_windows", lambda: [(h, t) for h, t in titles.items() if t])
+    monkeypatch.setattr(wv, "_window_title", lambda hwnd: titles.get(hwnd, ""))
+    monkeypatch.setattr(wv, "_set_title", _set)
+    monkeypatch.setattr(wv, "_shield_holds", 0)
+    monkeypatch.setattr(wv, "_shield_titles", {})
+    yield titles
+    if wv._shield_timer is not None:
+        wv._shield_timer.cancel()
+        wv._shield_timer = None
+
+
+def test_capture_shield_blanks_our_titles_until_the_last_hold_ends(fake_titles) -> None:
+    """Oct 22 + 23 2026: Chromium's screen picker thumbnailed the Ducky window with
+    PrintWindow while WebView2's UI thread waited on that thumbnail thread. Clicks died,
+    the page kept animating, and the browser ran out of memory 20 minutes later. WebRTC
+    never lists an untitled window, so a capture starts with our titles blank."""
+    from frontend.window_view import shield_capture_list
+
+    assert shield_capture_list(True) is True
+    assert fake_titles == {10: "", 11: ""}
+    assert shield_capture_list(True) is True
+    shield_capture_list(False)
+    assert fake_titles == {10: "", 11: ""}
+    fake_titles[11] = "Renamed meanwhile"
+    shield_capture_list(False)
+    assert fake_titles == {10: "UEFN Ducky", 11: "Renamed meanwhile"}
+    shield_capture_list(False)
+    assert fake_titles == {10: "UEFN Ducky", 11: "Renamed meanwhile"}
+
+
+def test_capture_shield_restores_itself_when_the_page_never_says_off(fake_titles) -> None:
+    import frontend.window_view as wv
+
+    wv.shield_capture_list(True)
+    assert wv._shield_timer is not None and wv._shield_timer.interval == wv._SHIELD_MAX_S
+    wv._shield_expire()
+    assert fake_titles == {10: "UEFN Ducky", 11: "Remote Ducky"}
+    assert wv._shield_holds == 0 and wv._shield_timer is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 window titles")
+def test_capture_shield_on_a_real_window() -> None:
+    """The real Win32 calls: a visible window of this process loses its title and gets it back."""
+    import ctypes
+    from ctypes import wintypes
+
+    import frontend.window_view as wv
+
+    user32 = ctypes.WinDLL("user32")
+    user32.CreateWindowExW.restype = wintypes.HWND
+    user32.CreateWindowExW.argtypes = [
+        wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID,
+    ]
+    user32.DestroyWindow.argtypes = [wintypes.HWND]
+    # A "Static" control as a top-level popup: visible, never activated, off-screen.
+    hwnd = user32.CreateWindowExW(
+        0x08000000 | 0x00000080, "Static", "Ducky shield probe", 0x80000000 | 0x10000000,
+        -32000, -32000, 120, 120, None, None, None, None,
+    )
+    assert hwnd
+    try:
+        h = int(hwnd)
+        assert (h, "Ducky shield probe") in wv._our_titled_windows()
+        assert wv.shield_capture_list(True)
+        assert wv._window_title(h) == ""
+        assert all(win != h for win, _t in wv._our_titled_windows())
+        assert wv.shield_capture_list(False)
+        assert wv._window_title(h) == "Ducky shield probe"
+    finally:
+        user32.DestroyWindow(hwnd)
+
+
 def test_stream_text_is_unicode_without_enter(monkeypatch) -> None:
     import frontend.window_view as wv
 

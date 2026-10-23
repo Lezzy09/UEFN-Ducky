@@ -339,6 +339,12 @@ class PanelApiWindowMixin:
 
         return bool(text_focus(hwnd))
 
+    def capture_list_shield(self, on: bool = True) -> bool:
+        """Our window titles blank while getDisplayMedia builds its window list."""
+        from frontend.window_view import shield_capture_list
+
+        return shield_capture_list(bool(on))
+
     # ── Browser panes (native WebView2 pinned inside a window; plugin web panes) ──
 
     def browser_pane_open(self, pane_id: str, url: str = "", wid: str = "") -> dict[str, Any]:

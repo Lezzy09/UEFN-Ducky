@@ -1368,6 +1368,7 @@ REMOTE_DENY = frozenset(
         "rtc_signal",
         "window_input",
         "window_box",
+        "capture_list_shield",
         "snip_screen",
         # Windows speech listens on the PC's mic — a phone must use its own browser speech.
         "voice_win_stt_prewarm",

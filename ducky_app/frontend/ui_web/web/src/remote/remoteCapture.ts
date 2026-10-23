@@ -17,6 +17,10 @@ const BOX_POLL_MS = 250;
  * 45s left the encoder + Windows capture process running after you left.
  */
 export const IDLE_RELEASE_MS = 1_500;
+/** Our windows stay untitled this long after the pick, past the picker list's teardown. */
+export const SHIELD_HOLD_MS = 3_000;
+/** A busy desktop gets this long to blank the titles before the capture starts anyway. */
+const SHIELD_WAIT_MS = 3_000;
 
 type CropCtx = { onmessage: ((ev: { data: CropMessage }) => void) | null };
 type CropMessage =
@@ -58,6 +62,10 @@ export function releaseScreenTrack(): void {
   if (holders === 0) releaseScreenWhenIdle();
 }
 
+function shieldCaptureList(on: boolean): Promise<unknown> {
+  return Promise.resolve(getApi()?.capture_list_shield?.(on)).catch(() => false);
+}
+
 function screenTrack(): Promise<MediaStreamTrack> {
   if (screenPromise) {
     return screenPromise.then((track) => {
@@ -75,7 +83,14 @@ function screenTrack(): Promise<MediaStreamTrack> {
     monitorTypeSurfaces: "include",
     preferCurrentTab: false,
   } as unknown as DisplayMediaStreamOptions;
-  screenPromise = navigator.mediaDevices.getDisplayMedia(opts).then((stream) => {
+  // Chromium thumbnails every titled window while getDisplayMedia builds its picker list,
+  // and doing that to our own window deadlocks WebView2 (window_view.shield_capture_list).
+  // Untitled windows are never listed, so our titles stay blank until the pick is done.
+  const shielded = Promise.race([
+    shieldCaptureList(true),
+    new Promise((resolve) => window.setTimeout(resolve, SHIELD_WAIT_MS)),
+  ]);
+  screenPromise = shielded.then(() => navigator.mediaDevices.getDisplayMedia(opts)).then((stream) => {
     const track = stream.getVideoTracks()[0];
     if (!track) throw new Error("no screen track");
     try {
@@ -89,6 +104,8 @@ function screenTrack(): Promise<MediaStreamTrack> {
     });
     return track;
   });
+  const unshield = () => window.setTimeout(() => void shieldCaptureList(false), SHIELD_HOLD_MS);
+  screenPromise.then(unshield, unshield);
   screenPromise.catch(() => {
     screenPromise = null;
   });
