@@ -851,7 +851,7 @@ def _prepare(ctx: Ctx, it: IncomingItem, got: Any) -> _Prep:
                                                                                          ctx.account))
         target = _asset_path(ctx, it.key)
         target.parent.mkdir(parents=True, exist_ok=True)
-        temp = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
+        temp = target.with_name(f"{target.name}.{uuid.uuid4().hex[:8]}.tmp")
         temp.write_bytes(data_crypto.seal_bytes(raw, ctx.account))
         return _Prep(sha256=sha, size=len(raw), temp=temp, target=target)
     except data_crypto.Locked:
@@ -894,7 +894,7 @@ class _Files:
         """``path`` out of the way of what replaces it (a file held open raises here, before
         anything changed)."""
         if path.exists():
-            self.move(path, path.with_name(f"{path.name}.{uuid.uuid4().hex}.old"), keep=False)
+            self.move(path, path.with_name(f"{path.name}.{uuid.uuid4().hex[:8]}.old"), keep=False)
 
     def undo(self, mark: int = 0) -> None:
         """Every move since ``mark`` back, newest first."""
@@ -3404,7 +3404,7 @@ def save_unsent_to_local(account: str, space: str, *, label: str = "") -> dict[s
                 continue
             dst = scopes.asset_file({"account": account, "id": scopes.PERSONAL}, plugin, new_key)
             dst.parent.mkdir(parents=True, exist_ok=True)
-            temp = dst.with_name(f"{dst.name}.{uuid.uuid4().hex}.tmp")
+            temp = dst.with_name(f"{dst.name}.{uuid.uuid4().hex[:8]}.tmp")
             shutil.copyfile(src, temp)
             repo.put_file_row(account, scopes.PERSONAL, plugin, new_key, temp_path=temp, target_path=dst,
                               size=int(size), sha256=sha, dirty=False)

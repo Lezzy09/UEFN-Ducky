@@ -571,9 +571,15 @@ def copy_local_into(plugin: str, space: str) -> dict[str, Any]:
 
 
 def scopes_root(account: str) -> Path:
+    """``%LOCALAPPDATA%/UEFN-Ducky/scopes/{account}``, on Windows as an extended-length
+    (``\\\\?\\``) path: a team file's key folders and temp name run past MAX_PATH (260), and
+    every path under here works then whatever the registry or the EXE's manifest says.
+    Paths stored before (unprefixed) name the same files; compare them as team_folders
+    does (``_key``)."""
+    from backend.uefn_plugins.team_folders import _lp
     from frontend.app_paths import resolve_app_data_dir
 
-    return resolve_app_data_dir() / "scopes" / account
+    return Path(_lp(resolve_app_data_dir() / "scopes" / account))
 
 
 def plugin_dir(scope: dict[str, Any], plugin: str) -> Path:
@@ -667,7 +673,7 @@ def _write_asset(scope: dict[str, Any], plugin: str, path: str, sealed: bytes, *
 
     target = asset_file(scope, plugin, path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    temp = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
+    temp = target.with_name(f"{target.name}.{uuid.uuid4().hex[:8]}.tmp")
     try:
         temp.write_bytes(sealed)
     except BaseException:

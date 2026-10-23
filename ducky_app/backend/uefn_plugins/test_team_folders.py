@@ -558,7 +558,8 @@ def test_project_roots_keep_one_copy_per_project_id(env: Env, tmp_path: Path) ->
         '{"rooms": 2}'
     assert tf._key(tf.junction_target(one / ".ducky" / "roguelike-design")) == tf._key(pc / GUID.lower())
     team = tf.team_copy(env.account, "spaceT", "rogue", design, GUID.lower())
-    assert team == tf.app_root() / "scopes" / env.account / "spaceT" / "rogue" / "folders" / "design" / GUID.lower()
+    assert tf._key(team) == tf._key(tf.app_root() / "scopes" / env.account / "spaceT" / "rogue" / "folders" / "design"
+                                    / GUID.lower())  # long-path form on Windows: the same folder
     _write(team / "store.json", "{}")
     _write(team / "store.prev.json", "{}")  # ignored
     out = tf.scan(env.account, "spaceT", "rogue", design, project_id=GUID.lower(), now=time.time() + 5)

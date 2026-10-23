@@ -213,6 +213,26 @@ def test_a_file_changed_on_both_sides_keeps_both(pc: PC, ben: Ben) -> None:
     assert pc.data.get_file("art/a.png") == b"theirs"
 
 
+def test_incoming_file_past_max_path_lands(pc: PC, ben: Ben) -> None:
+    """Island Media Kit's 24 stuck files: a key under its folders plus the download's temp
+    name ran past Windows' 260 characters, so every try failed with FileNotFoundError."""
+    from backend.uefn_plugins import team_folders
+
+    key = "media/" + "p" * 120 + "/0-" + hashlib.sha256(b"thumb").hexdigest() + ".bin"
+    target = scopes.asset_file({"account": pc.account, "id": SPACE}, PLUGIN, key)
+    assert len(team_folders._plain(target)) + len(".12345678.tmp") > 300
+    if os.name == "nt":  # works whatever LongPathsEnabled or the EXE's manifest say (the app's isn't long-path aware)
+        assert str(target).startswith("\\\\?\\")
+    ben.put_file(key, b"\x89PNG-thumb")
+    out = pc.run()
+    assert (out["state"], out["pulled"]) == ("ok", 1)
+    assert pc.data.get_file(key) == b"\x89PNG-thumb"
+    assert (pc.row(key, "asset")["rev"], space_vcs.blocked(pc.account, SPACE, PLUGIN)) == (1, [])
+    assert not [p for p in target.parent.iterdir() if p.name.endswith(".tmp")]
+    pc.data.put_file(key, b"\x89PNG-mine")  # a local write past MAX_PATH too, and it goes out
+    assert pc.run()["pushed"] == 1 and ben.server.space(SPACE).repo(PLUGIN).items[("asset", key)].content == b"\x89PNG-mine"
+
+
 def test_an_edit_against_a_delete_waits_for_the_person(pc: PC, ben: Ben) -> None:
     pc.data.put("card.pip", {"hp": 1})
     pc.data.put("card.zed", {"hp": 1})
