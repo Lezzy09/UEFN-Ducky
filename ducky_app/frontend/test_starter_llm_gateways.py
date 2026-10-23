@@ -142,6 +142,9 @@ def test_setup_status_lists_the_bundle_with_what_is_installed(isolated_appdata) 
     assert by_slug["playtester"]["group"] == "uefn" and by_slug["typesafe"]["group"] == "uefn"
     assert {s for s, p in by_slug.items() if p["group"] == "create"} == {"blender", "meshy", "adobe", "island-media-kit"}
     assert by_slug["piper"]["group"] == "extras" and by_slug["piper"]["label"] == "Pipe voices"
+    # New users always get the in-app browser and the in-game play tester.
+    assert by_slug["browser"]["group"] == "extras" and by_slug["browser"]["label"] == "Web Browser"
+    assert by_slug["playtester"]["label"] == "Play Tester"
     # The account (Ducky AI) and the gateways install first, so Connect AI can start while the rest land.
     assert [p["slug"] for p in plugins][:5] == ["account", "anthropic", "openai", "google", "cursor"]
     assert {p["group"] for p in plugins[:5]} == {"ai"} and by_slug["account"]["label"] == "Ducky Account"

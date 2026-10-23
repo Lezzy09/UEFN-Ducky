@@ -211,7 +211,7 @@ const GROUPS: Array<{ id: StarterPluginDto["group"]; title: string; tip: string 
   { id: "ai", title: "AI models", tip: "Gateways connect Ducky to AI models. You connect one in the next step." },
   { id: "uefn", title: "UEFN", tip: "Work the UEFN editor, play test your island in Fortnite, and judge automations." },
   { id: "create", title: "Art & 3D", tip: "3D models, pictures, Adobe apps, and trailers and artwork for your island." },
-  { id: "extras", title: "Extras", tip: "Translate the app, and offline voices that read replies aloud." },
+  { id: "extras", title: "Extras", tip: "A web browser inside Ducky, translation for the app, and offline voices that read replies aloud." },
 ];
 
 function StatusIcon({ row, name }: { row: InstallRow | undefined; name: string }) {

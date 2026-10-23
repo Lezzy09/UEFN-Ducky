@@ -16,8 +16,9 @@ STARTER_UEFN_PLUGIN_SLUGS: tuple[str, ...] = ("uefn", "playtester", "typesafe")
 
 STARTER_CREATE_PLUGIN_SLUGS: tuple[str, ...] = ("blender", "meshy", "adobe", "island-media-kit")
 
-# Translation, and offline neural voices so every ducky can read its replies aloud.
-STARTER_EXTRA_PLUGIN_SLUGS: tuple[str, ...] = ("translation", "piper")
+# The in-app web browser, translation, and offline neural voices so every ducky can read
+# its replies aloud.
+STARTER_EXTRA_PLUGIN_SLUGS: tuple[str, ...] = ("browser", "translation", "piper")
 
 # Install order: account and gateways first, so Connect AI can start while the rest land.
 POPULAR_PLUGIN_SLUGS: tuple[str, ...] = (
@@ -41,6 +42,7 @@ STARTER_PLUGIN_LABELS: dict[str, str] = {
     "meshy": "Meshy",
     "adobe": "Adobe",
     "island-media-kit": "Island Media Kit",
+    "browser": "Web Browser",
     "translation": "Translation",
     "piper": "Pipe voices",
 }
