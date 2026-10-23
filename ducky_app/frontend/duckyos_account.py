@@ -1283,6 +1283,12 @@ _PRESENCE_STOP = __import__("threading").Event()
 _PRESENCE_THREAD: Any = None
 _PRESENCE_LOCK = __import__("threading").Lock()
 _PRESENCE_INTERVAL_S = 90.0
+# While nothing it reports has changed, a PC reports less often, up to this,
+# and never past what the site's plugins say still counts as online
+# (``liveSeconds``); a site that doesn't say keeps the 90 s beat.
+_PRESENCE_QUIET_MAX_S = 300.0
+_PRESENCE_LIVE_S: dict[str, float] = {}
+_PRESENCE_LAST: dict[str, Any] = {"fingerprint": None, "at": 0.0}
 _RPC_STOP = __import__("threading").Event()
 _RPC_THREAD: Any = None
 _RPC_LOCK = __import__("threading").Lock()
@@ -1437,8 +1443,37 @@ def _remote_direct_report() -> dict[str, Any]:
         return {}
 
 
-def send_presence_heartbeat() -> bool:
-    """POST this PC's presence to the account's Store hub. Returns False if not logged in / skipped."""
+def _note_live_seconds(which: str, answer: Any) -> None:
+    """Remember how long the site counts this PC online after a report; an older plugin doesn't say."""
+    payload = answer.get("payload") if isinstance(answer, dict) else None
+    source = payload if isinstance(payload, dict) else answer
+    live = source.get("liveSeconds") if isinstance(source, dict) else None
+    if isinstance(live, (int, float)) and not isinstance(live, bool) and live > 0:
+        _PRESENCE_LIVE_S[which] = float(live)
+    else:
+        _PRESENCE_LIVE_S.pop(which, None)
+
+
+def _presence_quiet_s() -> float:
+    """How long a PC whose report hasn't changed may wait before the next one."""
+    if not {"store", "device"} <= _PRESENCE_LIVE_S.keys():
+        return _PRESENCE_INTERVAL_S
+    window = min(_PRESENCE_LIVE_S["store"], _PRESENCE_LIVE_S["device"]) - 30.0
+    return max(_PRESENCE_INTERVAL_S, min(_PRESENCE_QUIET_MAX_S, window))
+
+
+def _presence_fingerprint(body: dict[str, Any]) -> str:
+    keep = {k: body.get(k) for k in ("email", "projectLabel", "uefnOnline", "appVersion", "remoteDirect")}
+    keep["remoteAccess"] = _remote_access_on()
+    return json.dumps(keep, sort_keys=True, default=str)
+
+
+def send_presence_heartbeat(*, only_if_changed: bool = False) -> bool:
+    """POST this PC's presence to the account's Store hub. Returns False if not logged in / skipped.
+
+    only_if_changed: skip it (True) while the report is unchanged and the site
+    still counts the last one as online.
+    """
     blob = _load_blob()
     if not (blob.get("device_key") or blob.get("session_value")):
         return False
@@ -1460,8 +1495,15 @@ def send_presence_heartbeat() -> bool:
             body["installId"] = usage_stats.install_id()
     except Exception:
         pass
+    fingerprint = _presence_fingerprint(body)
+    if (
+        only_if_changed
+        and fingerprint == _PRESENCE_LAST["fingerprint"]
+        and time.monotonic() - _PRESENCE_LAST["at"] < _presence_quiet_s()
+    ):
+        return True
     try:
-        status, _parsed, _raw = api_request(
+        status, parsed, _raw = api_request(
             "POST",
             "/api/v1/plugins/uefn-ducky-store/collect/presence",
             body,
@@ -1473,7 +1515,10 @@ def send_presence_heartbeat() -> bool:
         return False
     except Exception:
         return False
+    _note_live_seconds("store", parsed if ok else None)
     publish_device_presence()
+    if ok:
+        _PRESENCE_LAST.update(fingerprint=fingerprint, at=time.monotonic())
     return ok
 
 
@@ -1498,7 +1543,7 @@ def publish_device_presence(*, live: bool | None = None) -> None:
     if not live:
         body["live"] = False
     try:
-        _plugin_collect(
+        answer = _plugin_collect(
             "uefn-ducky",
             "desktop-device-heartbeat",
             body,
@@ -1507,8 +1552,9 @@ def publish_device_presence(*, live: bool | None = None) -> None:
             error_code="device_heartbeat_failed",
             timeout=12.0,
         )
+        _note_live_seconds("device", answer)
     except Exception:
-        pass
+        _note_live_seconds("device", None)
 
 
 def start_presence_heartbeat() -> None:
@@ -1522,9 +1568,11 @@ def start_presence_heartbeat() -> None:
         _PRESENCE_STOP.clear()
 
         def _loop() -> None:
+            # A change goes out within 90 s; an unchanged PC reports less often.
+            _PRESENCE_LAST.update(fingerprint=None, at=0.0)
             while not _PRESENCE_STOP.is_set():
                 try:
-                    send_presence_heartbeat()
+                    send_presence_heartbeat(only_if_changed=True)
                 except Exception:
                     pass
                 _PRESENCE_STOP.wait(_PRESENCE_INTERVAL_S)

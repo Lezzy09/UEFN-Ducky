@@ -318,6 +318,52 @@ def test_publish_device_presence_offline_when_remote_off() -> None:
     assert seen[2]["body"]["live"] is False
 
 
+def test_unchanged_presence_waits_only_where_the_site_allows() -> None:
+    from unittest.mock import patch
+
+    from frontend import duckyos_account as acc
+
+    posts: list[str] = []
+    live = {"value": None}
+
+    def _request(_method: str, path: str, _body=None, **_kw):
+        posts.append(path)
+        payload = {"ok": True} if live["value"] is None else {"liveSeconds": live["value"]}
+        return 200, {"payload": payload}, b""
+
+    def _collect(*_a, **_kw):
+        return {} if live["value"] is None else {"liveSeconds": live["value"]}
+
+    acc._PRESENCE_LIVE_S.clear()
+    acc._PRESENCE_LAST.update(fingerprint=None, at=0.0)
+    with (
+        patch.object(acc, "_load_blob", return_value={"device_key": "dk", "device_key_id": "k1", "email": "a@b.c"}),
+        patch.object(acc, "api_request", side_effect=_request),
+        patch.object(acc, "_plugin_collect", side_effect=_collect),
+        patch.object(acc, "_presence_project_label", return_value="Island"),
+        patch.object(acc, "_presence_uefn_online", return_value=True),
+        patch.object(acc, "_remote_access_on", return_value=True),
+    ):
+        # Older plugins say nothing: every 90 s beat still reports.
+        acc.send_presence_heartbeat(only_if_changed=True)
+        assert acc._presence_quiet_s() == acc._PRESENCE_INTERVAL_S
+        # The next beat, 90 s on, meets plugins that count a PC online for 330 s;
+        # from then on an unchanged report waits.
+        live["value"] = 330
+        acc._PRESENCE_LAST["at"] -= 100.0
+        acc.send_presence_heartbeat(only_if_changed=True)
+        assert acc._presence_quiet_s() == 300.0
+        sent = len(posts)
+        assert acc.send_presence_heartbeat(only_if_changed=True) is True
+        assert len(posts) == sent, "unchanged and still online: skipped"
+        # A change goes out at once.
+        with patch.object(acc, "_presence_project_label", return_value="Other island"):
+            acc.send_presence_heartbeat(only_if_changed=True)
+        assert len(posts) == sent + 1
+    acc._PRESENCE_LIVE_S.clear()
+    acc._PRESENCE_LAST.update(fingerprint=None, at=0.0)
+
+
 def test_rpc_waiter_idle_while_remote_access_off() -> None:
     from unittest.mock import patch
 
@@ -819,6 +865,7 @@ if __name__ == "__main__":
     test_call_panel_method_maps_kwargs_and_positional()
     test_remote_deny_covers_native_and_secret_paths()
     test_publish_device_presence_offline_when_remote_off()
+    test_unchanged_presence_waits_only_where_the_site_allows()
     test_plugin_collect_posts_v1_only()
     test_list_account_pcs_marks_mine()
     test_revoke_account_pc_clears_this_device()
