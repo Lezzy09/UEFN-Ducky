@@ -58,7 +58,7 @@ describe("rich reply rendering", () => {
     for (const color of ["purple", "green", "amber", "yellow", "blue", "red"]) {
       expect(container.querySelector(`h2.rich-tone--${color}`)).not.toBeNull();
       expect(container.querySelector(`strong.rich-tone--${color}`)).not.toBeNull();
-      if (color !== "red") expect(container.querySelector(".rich-ref[role=button]")).not.toBeNull();
+      if (color !== "red") expect(container.querySelector(".rich-ref")).not.toBeNull();
     }
   });
 
@@ -68,7 +68,7 @@ describe("rich reply rendering", () => {
       { type: "callout", tone: "info", text: "[**Verified**](ducky:green); [**pending**](ducky:amber)." },
     ] })} />);
     expect(container.querySelector(".rich-tone--purple strong")?.textContent).toBe("Verse");
-    expect(container.querySelector(".rich-text-accent.rich-tone--amber .rich-ref[role=button]")?.textContent).toBe("Props");
+    expect(container.querySelector(".rich-text-accent.rich-tone--amber .rich-ref")?.textContent).toBe("Props");
     expect(container.querySelector(".rich-callout .rich-text-accent.rich-tone--green")?.textContent).toBe("Verified");
     expect(container.textContent).not.toContain("ducky:");
   });
@@ -105,7 +105,7 @@ describe("rich reply rendering", () => {
       ],
     })} />);
     expect(container.querySelectorAll("strong")).toHaveLength(6);
-    expect(container.querySelectorAll(".rich-ref[role=button]")).toHaveLength(6);
+    expect(container.querySelectorAll(".rich-ref")).toHaveLength(6);
     expect(container.textContent).not.toContain("**");
     const links = getAllByRole("button", { name: "the device" });
     expect(links).toHaveLength(5);
@@ -121,7 +121,7 @@ describe("rich reply rendering", () => {
     } />);
     expect(container.querySelector("ol")?.start).toBe(3);
     expect(container.querySelectorAll("li strong")).toHaveLength(2);
-    expect(container.querySelector(".rich-callout--warn .rich-ref[role=button]")?.textContent).toBe("Props");
+    expect(container.querySelector(".rich-callout--warn .rich-ref")?.textContent).toBe("Props");
     expect(container.querySelector(".rich-callout--warn strong")?.textContent).toBe("verification");
   });
 
@@ -157,24 +157,32 @@ describe("rich reply rendering", () => {
     const { container } = render(<MarkdownContent text={text} />);
     const callout = container.querySelector(".rich-callout");
     expect(callout?.querySelectorAll(".rich-code--block")).toHaveLength(1);
-    expect(callout?.querySelector(".rich-ref[role=button]")).toBeNull();
+    expect(callout?.querySelector(".rich-ref")).toBeNull();
     expect(callout?.textContent).toContain("cd A; git push");
     expect(callout?.textContent).toContain("cd B; git push");
   });
 
-  it("opens a Verse chip and still shows hover info for names with no location", () => {
+  it("opens a Verse chip, and a name with no location is plain text a click never copies", () => {
     const onOpenFile = vi.fn();
-    const { container, getByLabelText } = render(
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const { getByLabelText, getByText } = render(
       <MarkdownContent onOpenFile={onOpenFile} text="See `ledger_full_test_device.verse` and `EntryTrigger`." />,
     );
     fireEvent.click(getByLabelText(/Verse file: ledger_full_test_device\.verse/i));
     expect(onOpenFile).toHaveBeenCalledWith("Content/Verse/ledger_full_test_device.verse", "ledger_full_test_device.verse");
+    const chip = getByText("EntryTrigger");
+    expect(chip.getAttribute("role")).toBeNull();
+    expect(chip.tabIndex).toBe(-1);
+    fireEvent.click(chip);
+    fireEvent.keyDown(chip, { key: "Enter" });
+    expect(writeText).not.toHaveBeenCalled();
+    expect(onOpenFile).toHaveBeenCalledTimes(1);
     // The tooltip is portalled to document.body (0dec2e7) so it escapes the
     // message list's overflow clipping — it is never inside `container`.
-    const chip = getByLabelText(/Field \/ label: EntryTrigger/i);
     fireEvent.mouseEnter(chip);
     expect(document.body.querySelector(".rich-ref-tip-name")?.textContent).toBe("EntryTrigger");
-    expect(document.body.querySelector(".rich-ref-tip-hint")?.textContent).toMatch(/copies the name/i);
+    expect(document.body.querySelector(".rich-ref-tip-hint")).toBeNull();
     fireEvent.mouseLeave(chip);
     expect(document.body.querySelector(".rich-ref-tip")).toBeNull();
   });
@@ -184,7 +192,7 @@ describe("rich reply rendering", () => {
       __rich: true, blocks: [{ type: "paragraph", text: "<script>alert(1)</script>\n\n[unsafe](javascript:alert(1)) and `safe`" }],
     })} />);
     expect(container.querySelector("script, a[href^='javascript:']")).toBeNull();
-    expect(container.querySelector(".rich-ref[role=button]")?.textContent).toBe("safe");
+    expect(container.querySelector(".rich-ref")?.textContent).toBe("safe");
   });
 
   it("renders the Appearance chat preview as the ledger dashboard widgets", () => {

@@ -716,6 +716,34 @@ def test_team_traffic_reaches_the_hub_saying_who_really_asked(monkeypatch):
         assert briefed == []
 
 
+def test_a_note_never_turns_a_reply_into_one_giant_heading(monkeypatch):
+    # Oct 23 2026: a reply opening with "## Daily Streak is built" became one huge heading in
+    # the group chat once its lines were joined, with "> [!SUCCESS]", "- " and table pipes mid-line.
+    reply = "\n".join([
+        "## Daily Streak is built",
+        "> [!SUCCESS] Checked",
+        "> - Verse: `workspace_list_verse_errors` shows 0 errors.",
+        "",
+        "| Sub plan | Owner |",
+        "|---|---|",
+        "| Streak rules | Streak Logic |",
+        "1. **Place** the device.",
+    ])
+    go, posted, _briefed = _team(
+        monkeypatch, [{"role": "user", "content": "[Team plan] # Logic done"}, {"role": "assistant", "content": reply}]
+    )
+    assert go.announce_private_member_talk("m1") is True
+    lead, body = posted[0].split("\n\n", 1)
+    assert lead == "*Team plan update:* Logic done:"
+    assert body == (
+        "Daily Streak is built: Checked Verse: `workspace_list_verse_errors` shows 0 errors. "
+        "Sub plan, Owner Streak rules, Streak Logic **Place** the device."
+    )
+    # Cut short, a note never leaves a code chip or bold run open.
+    cut = go._note_preview("Wrote " + "x" * 40 + " `daily_streak_device.verse` **done**", 52)
+    assert cut.endswith("…") and cut.count("`") % 2 == 0 and cut.count("**") % 2 == 0
+
+
 def test_a_note_goes_up_to_every_group_above(monkeypatch):
     go, posted, _briefed = _team(
         monkeypatch, [{"role": "user", "content": "check frames"}, {"role": "assistant", "content": "ok"}]

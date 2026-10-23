@@ -71,14 +71,15 @@ function uefnToContent(path: string): string {
 function withOpen(base: Omit<RichRef, "hint">, open?: RichRefOpen): RichRef {
   if (open?.type === "file") return { ...base, open, hint: "Open in the editor" };
   if (open?.type === "asset") return { ...base, open, hint: "Reveal in UEFN" };
-  return { ...base, hint: "No live location — click copies the name" };
+  // Nothing to open: the chip is only a name. Clicking it does nothing (it never copies).
+  return { ...base, hint: "" };
 }
 
 /** Classify a chat code chip so hover/click know what that token is. */
 export function classifyRichRef(raw: string): RichRef {
   const text = raw.trim();
   if (!text) {
-    return { text: raw, kind: "name", label: "Name", hint: "No live location — click copies the name" };
+    return { text: raw, kind: "name", label: "Name", hint: "" };
   }
   if (text.startsWith("@") || text === "Props") {
     return withOpen({ text, kind: "keyword", label: text.startsWith("@") ? "Verse specifier" : "Editable field" });

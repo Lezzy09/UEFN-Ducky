@@ -156,6 +156,11 @@
   box-decoration-break: clone;
 }
 
+/* A name with nothing to open: plain text to select, not a button. */
+.rich-ref--plain {
+  cursor: text;
+}
+
 .rich-ref--verse { --rich-text-accent: var(--chat-ref-verse, var(--purple)); }
 .rich-ref--keyword { --rich-text-accent: var(--chat-ref-keyword, var(--purple)); }
 .rich-ref--file { --rich-text-accent: var(--chat-ref-file, var(--blue)); }

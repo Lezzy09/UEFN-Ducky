@@ -1,25 +1,17 @@
-import { useId, useState, type KeyboardEvent } from "react";
+import { useId, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { getApi } from "../../hooks/usePanelApi";
-import { copyText } from "../../utils/copyText";
 import type { OpenFileHandler } from "../../types/richContent";
 import { basename } from "../../verse-editor/utils/isVerseFile";
-import { classifyRichRef } from "./classifyRichRef";
+import { classifyRichRef, type RichRefOpen } from "./classifyRichRef";
 
-function openChip(text: string, onOpenFile?: OpenFileHandler): void {
-  const ref = classifyRichRef(text);
-  if (ref.open?.type === "file") {
-    const path = ref.open.path;
-    const name = basename(path);
-    if (onOpenFile) onOpenFile(path, name);
-    else void getApi()?.open_project_file(path);
+function openChip(open: RichRefOpen, onOpenFile?: OpenFileHandler): void {
+  if (open.type === "file") {
+    if (onOpenFile) onOpenFile(open.path, basename(open.path));
+    else void getApi()?.open_project_file(open.path);
     return;
   }
-  if (ref.open?.type === "asset") {
-    void getApi()?.open_asset_in_uefn?.(ref.open.path);
-    return;
-  }
-  void copyText(ref.text);
+  void getApi()?.open_asset_in_uefn?.(open.path);
 }
 
 /** Enter or Space runs an inline role="button" span the way a real button would. */
@@ -55,25 +47,42 @@ export function RichCodeChip({ text, onOpenFile }: { text: string; onOpenFile?: 
         >
           <div className="rich-ref-tip-kind">{ref.label}</div>
           <div className="rich-ref-tip-name">{ref.text}</div>
-          <div className="rich-ref-tip-hint">{ref.hint}</div>
+          {ref.hint ? <div className="rich-ref-tip-hint">{ref.hint}</div> : null}
         </div>,
         document.body,
       )
     : null;
 
+  const hover = {
+    "aria-describedby": pos ? tipId : undefined,
+    onMouseEnter: (e: MouseEvent<HTMLElement>) => show(e.currentTarget),
+    onMouseLeave: () => setPos(null),
+  };
+  const open = ref.open;
+  if (!open) {
+    // Only a name, not a link: pressing it does nothing, so a click never copies or
+    // selects-and-copies over what the person was doing.
+    return (
+      <>
+        <span className={`rich-code rich-code--inline rich-ref rich-ref--${ref.kind} rich-ref--plain`} {...hover}>
+          {text}
+        </span>
+        {tip}
+      </>
+    );
+  }
+
   // A span, not a <button>: a button is always its own box, so a long name wrapped inside it
   // with centred lines on a phone. An inline span flows and wraps with the sentence.
-  const run = () => openChip(text, onOpenFile);
+  const run = () => openChip(open, onOpenFile);
   return (
     <>
       <span
         role="button"
         tabIndex={0}
-        className={`rich-code rich-code--inline rich-ref rich-ref--${ref.kind} ${ref.open ? "rich-ref--open" : "rich-ref--copy"}`}
-        aria-describedby={pos ? tipId : undefined}
+        className={`rich-code rich-code--inline rich-ref rich-ref--${ref.kind} rich-ref--open`}
         aria-label={`${ref.label}: ${ref.text}. ${ref.hint}`}
-        onMouseEnter={(e) => show(e.currentTarget)}
-        onMouseLeave={() => setPos(null)}
+        {...hover}
         onFocus={(e) => show(e.currentTarget)}
         onBlur={() => setPos(null)}
         onClick={run}

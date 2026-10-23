@@ -567,6 +567,41 @@ def _truncate_brief(text: str, limit: int = 1200) -> str:
     return t[: limit - 1] + "…"
 
 
+_MD_TABLE_RULE = re.compile(r"^\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?$")
+_MD_BLOCK_MARK = re.compile(r"^(?:#{1,6}\s+|>\s?|\[![A-Za-z]+\]\s*|[-*+]\s+|\d+[.)]\s+)+")
+
+
+def _note_preview(text: str, limit: int) -> str:
+    """A reply squeezed onto one line for a group-chat note.
+
+    A reply that opened with ``## Title`` used to render as one giant heading once its
+    lines were joined, and quotes, callouts, bullets and tables showed their marks mid-line.
+    Block marks go; inline bold and code stay, never cut open by the limit.
+    """
+    parts: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("```") or _MD_TABLE_RULE.match(line):
+            continue
+        heading = line.startswith("#")
+        line = _MD_BLOCK_MARK.sub("", line).strip()
+        if line.startswith("|"):
+            line = ", ".join(cell.strip() for cell in line.strip("|").split("|") if cell.strip())
+        if not line:
+            continue
+        if heading and line[-1] not in ".:!?…":
+            line += ":"
+        parts.append(line)
+    out = " ".join(parts)
+    if len(out) <= limit:
+        return out
+    out = out[: limit - 1].rstrip()
+    for mark in ("`", "**"):
+        if out.count(mark) % 2:
+            out = out[: out.rfind(mark)].rstrip()
+    return out + "…"
+
+
 def is_group_turn_prompt(text: str) -> bool:
     """True for orchestrator-injected member turns (not a private user DM)."""
     t = (text or "").strip()
@@ -695,7 +730,7 @@ def post_team_message(sender_id: str, receiver_id: str, body: str, *, push: Push
     if not speaker.get("tts_voice"):
         speaker["tts_voice"] = str(getattr(sender, "tts_voice", None) or "")
     to = str(getattr(receiver, "ducky_name", None) or getattr(receiver, "title", None) or "a teammate")
-    note = f"*To {to}:* {_truncate_brief(text, 600)}"
+    note = f"*To {to}:* {_note_preview(text, 600)}"
     push = push or _panel_push()
     for hub_id, path, id_path in shared:
         hub = load_conversation(hub_id)
@@ -793,8 +828,8 @@ def _announce_private_member_talk(
         speaker["tts_voice"] = str(getattr(member, "tts_voice", None) or "")
         speaker["tts_speed"] = float(getattr(member, "tts_speed", None) or 0.0)
 
-    lead = f"*{origin}:* {_truncate_brief(asked, 240)}" if asked else f"*{origin}*"
-    note = f"{lead}\n\n{_truncate_brief(reply, 600)}"
+    lead = f"*{origin}:* {_note_preview(asked, 240)}" if asked else f"*{origin}*"
+    note = f"{lead}\n\n{_note_preview(reply, 600)}"
     for hub_id, path, id_path in _hub_chain(group_id, project_root):
         hub = group if hub_id == group_id else load_conversation(hub_id, project_root=project_root)
         if hub is None or not is_group_conversation(hub):
