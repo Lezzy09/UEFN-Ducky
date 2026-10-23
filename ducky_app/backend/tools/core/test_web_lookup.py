@@ -264,6 +264,35 @@ def test_web_search_asks_then_searches(monkeypatch):
     assert out["images"][0]["title"] == "Flag"
 
 
+def test_web_fetch_asks_before_any_request(monkeypatch):
+    from types import SimpleNamespace
+
+    order: list[str] = []
+    conv = SimpleNamespace(
+        id="chat-1",
+        messages=[{"role": "user", "content": "read https://example.com/page"}],
+        web_fetch_urls=[],
+        web_access_allowed=False,
+        web_access_denied=False,
+    )
+    monkeypatch.setattr(web, "_conversation", lambda: conv)
+    monkeypatch.setattr(web, "_access_mode", lambda: "ask")
+    monkeypatch.setattr(web, "_allows_everything", lambda conv: False)
+    monkeypatch.setattr(web, "reject_url", lambda url, resolve=None: None)
+    monkeypatch.setattr(web, "exchange", lambda *a, **k: (order.append("net"), (None, "offline"))[1])
+    answer = {"value": "deny"}
+    monkeypatch.setattr(web, "_ask_web_access", lambda: (order.append("ask"), answer["value"])[1])
+
+    out = json.loads(web.web_fetch("https://example.com/page"))
+    assert order == ["ask"]
+    assert out["error"] == "Web search is off for this chat."
+
+    order.clear()
+    answer["value"] = "once"
+    json.loads(web.web_fetch("https://example.com/page"))
+    assert order == ["ask", "net"]
+
+
 def test_web_search_once_searches_and_does_not_remember(monkeypatch):
     calls = {"n": 0, "granted": False}
 
