@@ -274,7 +274,10 @@ def test_many_runs_leave_no_processes_handles_or_threads_behind():
 def test_programs_that_exit_on_their_own_leave_the_registry():
     out = service.launch(CONV, sys.executable, ["-c", "import time; time.sleep(1.5)"])
     assert out["ok"]
-    time.sleep(3)
+    # On a loaded PC the interpreter alone can take seconds to start: wait for the exit, don't guess.
+    deadline = time.time() + 30
+    while service.look(CONV)["programs"] and time.time() < deadline:
+        time.sleep(0.5)
     assert service.look(CONV)["programs"] == []
 
 

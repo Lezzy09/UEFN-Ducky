@@ -58,6 +58,7 @@ _PUBLIC_METHODS = frozenset({
     'cache_font',
     'cancel_agent',
     'cancel_update',
+    'capture_list_shield',
     'claim_tab',
     'get_tab_owner',
     'classify_project_file',
