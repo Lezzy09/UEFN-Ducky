@@ -3,11 +3,8 @@ import { isArchiveFolderId } from "./archiveFolder";
 
 export const PROJECT_FOLDER_PREFIX = "project:";
 
-/** Chats with no island open. The Duckies tree shows these as Global Agents. */
+/** The project slug of the one Duckies list (chats with no island). */
 export const GLOBAL_PROJECT_SLUG = "_no_project";
-
-/** What the no-island bucket is called in the Duckies tree. */
-export const GLOBAL_AGENTS_LABEL = "Global Agents";
 
 export function isProjectFolderId(id: string): boolean {
   return id.startsWith(PROJECT_FOLDER_PREFIX);
@@ -15,20 +12,6 @@ export function isProjectFolderId(id: string): boolean {
 
 export function projectFolderId(slug: string): string {
   return `${PROJECT_FOLDER_PREFIX}${slug}`;
-}
-
-export function isGlobalProjectFolderId(id: string): boolean {
-  return id === projectFolderId(GLOBAL_PROJECT_SLUG);
-}
-
-/** Global Agents is drawn at the top of the tree, not in the project list. */
-export function duckiesFoldersForDisplay(folders: FolderItem[]): FolderItem[] {
-  return folders.filter((folder) => !isGlobalProjectFolderId(folder.id));
-}
-
-/** The Global Agents folder (the no-island bucket), when the tree has it. */
-export function globalAgentsFolder(folders: FolderItem[]): FolderItem | null {
-  return folders.find((folder) => isGlobalProjectFolderId(folder.id)) ?? null;
 }
 
 export function findFolderById(folders: FolderItem[], id: string): FolderItem | null {
@@ -59,57 +42,6 @@ export function findChatAncestorFolderIds(
 
   if (rootChats.some((chat) => chat.id === chatId)) return [];
   return walk(folders, []) ?? [];
-}
-
-/** Ancestors the open chat may force open. Project rows stay where the user left them. */
-export function foldersToAutoExpand(ancestorIds: readonly string[]): string[] {
-  return ancestorIds.filter((id) => !isProjectFolderId(id));
-}
-
-function stampFolderProject(folders: FolderItem[], slug: string): FolderItem[] {
-  return folders.map((folder) => ({
-    ...folder,
-    projectSlug: slug,
-    chats: folder.chats.map((chat) => ({ ...chat, projectSlug: chat.projectSlug || slug })),
-    children: stampFolderProject(folder.children, slug),
-  }));
-}
-
-export function wrapProjectsAsFolders(
-  projects: Array<{
-    slug: string;
-    name: string;
-    folders: FolderItem[];
-    rootChats: FolderItem["chats"];
-  }>,
-  currentSlug: string,
-  expandedById: Map<string, boolean>,
-): FolderItem[] {
-  const ordered = [...projects].sort((a, b) => {
-    const rank = (slug: string) => (slug === currentSlug ? 0 : slug === GLOBAL_PROJECT_SLUG ? 1 : 2);
-    const byRank = rank(a.slug) - rank(b.slug);
-    if (byRank) return byRank;
-    return a.name.localeCompare(b.name) || a.slug.localeCompare(b.slug);
-  });
-  return ordered.map((project, index) => {
-    const id = projectFolderId(project.slug);
-    const expanded = expandedById.has(id)
-      ? expandedById.get(id)!
-      : project.slug === currentSlug || project.slug === GLOBAL_PROJECT_SLUG;
-    return {
-      id,
-      name: project.name,
-      parentId: "",
-      sortOrder: index,
-      expanded,
-      chats: project.rootChats.map((chat) => ({
-        ...chat,
-        projectSlug: chat.projectSlug || project.slug,
-      })),
-      children: stampFolderProject(project.folders, project.slug),
-      projectSlug: project.slug,
-    };
-  });
 }
 
 export function expandFoldersById(folders: FolderItem[], folderIds: ReadonlySet<string>): FolderItem[] {
@@ -162,7 +94,7 @@ export function toggleChatFolderLevels(folders: FolderItem[]): FolderItem[] {
 }
 
 export function chatFolderSiblingNames(folders: FolderItem[], parentId: string): string[] {
-  if (!parentId) return folders.filter((f) => !isProjectFolderId(f.id)).map((f) => f.name);
+  if (!parentId) return folders.map((f) => f.name);
   const parent = findFolderById(folders, parentId);
   return parent ? parent.children.map((c) => c.name) : folders.map((f) => f.name);
 }
@@ -178,7 +110,7 @@ export function insertChatFolder(
 ): FolderItem[] {
   const asChildOf = (parent: string, siblings: FolderItem[]): FolderItem => ({
     ...folder,
-    parentId: isProjectFolderId(parent) ? "" : parent,
+    parentId: parent,
     sortOrder: siblings.reduce((max, f) => Math.max(max, f.sortOrder), 0) + 1,
   });
 
@@ -191,9 +123,7 @@ export function insertChatFolder(
       );
     return walk(folders);
   }
-  const own = folders.filter((f) => !isProjectFolderId(f.id));
-  const wrappers = folders.filter((f) => isProjectFolderId(f.id));
-  return [...own, asChildOf("", own), ...wrappers];
+  return [...folders, asChildOf("", folders)];
 }
 
 export function chatNamesInFolder(
@@ -269,8 +199,7 @@ export function buildFolderTree(
   return roots;
 }
 
-/** One project's order and nesting, as saved by apply_sidebar_layout. Project rows
- *  themselves are never part of it. */
+/** One project's order and nesting, as saved by apply_sidebar_layout. */
 export function flattenLayout(roots: FolderItem[], rootChats: FolderItem["chats"] = []): SidebarLayoutPatch {
   const folders: SidebarLayoutPatch["folders"] = [];
   const chats: SidebarLayoutPatch["chats"] = [];
@@ -282,7 +211,6 @@ export function flattenLayout(roots: FolderItem[], rootChats: FolderItem["chats"
 
   const walkSiblings = (siblings: FolderItem[], parentId: string) => {
     siblings.forEach((folder, index) => {
-      if (isProjectFolderId(folder.id)) return;
       folder.parentId = parentId;
       folder.sortOrder = index;
       folders.push({ id: folder.id, parent_id: parentId, sort_order: index });
@@ -302,10 +230,6 @@ export function flattenFoldersForSelect(roots: FolderItem[], depth = 0): { id: s
   const out: { id: string; label: string }[] = [];
   for (const folder of roots) {
     if (isArchiveFolderId(folder.id)) continue;
-    if (isProjectFolderId(folder.id)) {
-      out.push(...flattenFoldersForSelect(folder.children, depth));
-      continue;
-    }
     const prefix = depth > 0 ? `${"— ".repeat(depth)}` : "";
     out.push({ id: folder.id, label: `${prefix}${folder.name}` });
     out.push(...flattenFoldersForSelect(folder.children, depth + 1));

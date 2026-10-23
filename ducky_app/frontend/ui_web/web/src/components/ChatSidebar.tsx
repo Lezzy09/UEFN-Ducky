@@ -69,12 +69,9 @@ import {
   expandFoldersById,
   findChatAncestorFolderIds,
   findFolderById,
-  foldersToAutoExpand,
   GLOBAL_PROJECT_SLUG,
   insertChatFolder,
-  isProjectFolderId,
   maxExpandedFolderDepth,
-  projectFolderId,
   toggleChatFolderLevels,
 } from "../utils/sidebarTree";
 import { duckiesCreateTarget, removeFromDuckies } from "../utils/duckiesTreeModel";
@@ -463,7 +460,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
     if (activeChats.length === 0) return;
     const folderIds = new Set<string>();
     for (const chatId of activeChats) {
-      for (const folderId of foldersToAutoExpand(findChatAncestorFolderIds(folders, rootChats, chatId))) {
+      for (const folderId of findChatAncestorFolderIds(folders, rootChats, chatId)) {
         folderIds.add(folderId);
       }
     }
@@ -612,10 +609,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
     async (parentId: string, targetSlug?: string) => {
       const api = getApi();
       if (!api?.group_create) return;
-      const slug = targetSlug || GLOBAL_PROJECT_SLUG;
-      const insertParent =
-        parentId || (findFolderById(foldersRef.current, projectFolderId(slug)) ? projectFolderId(slug) : "");
-      const siblings = chatFolderSiblingNames(foldersRef.current, insertParent);
+      const siblings = chatFolderSiblingNames(foldersRef.current, parentId);
       const name = numberedEntryName("Group", siblings);
       const res = await api.group_create(name, parentId);
       if (!res?.ok || !res.id) return;
@@ -624,7 +618,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       if (folderId) {
         // Show the row straight away — load() below only reconciles it, so the
         // group no longer waits on two extra bridge round-trips to appear.
-        const next = insertChatFolder(foldersRef.current, insertParent, {
+        const next = insertChatFolder(foldersRef.current, parentId, {
           id: folderId,
           name: title,
           expanded: true,
@@ -925,7 +919,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
     // Remember where it lived so Ctrl+Z returns it there, not just to the root.
     const ancestors = findChatAncestorFolderIds(foldersRef.current, rootChatsRef.current, chatId);
     const lastAncestor = ancestors.length ? ancestors[ancestors.length - 1] : "";
-    const prevFolderId = isProjectFolderId(lastAncestor) ? "" : lastAncestor;
+    const prevFolderId = lastAncestor;
     const release = duckiesLayoutHold.hold();
     pruneDuckies({ chatIds: [chatId] });
     try {

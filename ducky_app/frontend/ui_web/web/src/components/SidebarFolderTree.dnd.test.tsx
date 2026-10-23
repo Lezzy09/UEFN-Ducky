@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
-import { act, cleanup, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, waitFor } from "@testing-library/react";
 import { createRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FolderItem } from "../types/panel";
-import { projectFolderId, wrapProjectsAsFolders } from "../utils/sidebarTree";
 import { SidebarFolderTree } from "./SidebarFolderTree";
 
 vi.mock("./ducky/DuckyAvatars", () => ({ DuckyAvatar: () => null, DUCKY_AVATAR_SIZES: { sidebar: 22 } }));
@@ -26,24 +25,22 @@ const api = {
   move_chats_to_project: vi.fn().mockResolvedValue(undefined),
 };
 
+/** The one Duckies list: a group, a group with a sub-folder still tagged with another
+ *  project, and two single chats. */
 function initial() {
-  const global = wrapProjectsAsFolders(
-    [{
-      slug: "_no_project",
-      name: "No project",
-      folders: [folder("ga-group", [chat("ga-member")], [folder("ga-sub", [chat("ga-deep")])], { groupHubId: "ga-hub" })],
-      rootChats: [chat("ga-loose")],
-    }],
-    "here",
-    new Map(),
-  );
   return {
-    folders: [folder("squad", [chat("m1")], [], { groupHubId: "hub" }), ...global],
+    folders: [
+      folder("squad", [chat("m1")], [], { groupHubId: "hub" }),
+      folder("ga-group", [chat("ga-member")], [folder("ga-sub", [chat("ga-deep")], [], { projectSlug: "other" })], {
+        groupHubId: "ga-hub",
+        projectSlug: "other",
+      }),
+    ],
     rootChats: [chat("c1"), chat("c2")],
   };
 }
 
-function Harness({ showGlobalAgents = true }: { showGlobalAgents?: boolean }) {
+function Harness() {
   const start = initial();
   const [folders, setFolders] = useState(start.folders);
   const [rootChats, setRootChats] = useState(start.rootChats);
@@ -76,7 +73,6 @@ function Harness({ showGlobalAgents = true }: { showGlobalAgents?: boolean }) {
       onCreateDucky={() => {}}
       onCreateGroup={() => {}}
       currentProjectSlug="here"
-      showGlobalAgents={showGlobalAgents}
     />
   );
 }
@@ -162,25 +158,21 @@ describe("Duckies tree on the shared drag engine", () => {
   });
 });
 
-describe("Global Agents is a real folder", () => {
-  it("shows groups with their members, sub-folders and single chats", () => {
+describe("one list: no project rows", () => {
+  it("shows groups with their members, sub-folders and single chats, and no Global Agents row", () => {
     render(<Harness />);
-    expect(screen.getByRole("button", { name: "Global Agents" })).toBeTruthy();
-    for (const id of ["folder:ga-group", "chat:ga-member", "folder:ga-sub", "chat:ga-deep", "chat:ga-loose"]) {
+    for (const id of ["folder:squad", "chat:m1", "folder:ga-group", "chat:ga-member", "folder:ga-sub", "chat:ga-deep", "chat:c1"]) {
       expect(row(id)).toBeTruthy();
     }
-    // Inside the Global Agents block, not loose in the island's list.
-    const block = document.querySelector(`[data-tree-node="folder:${projectFolderId("_no_project")}"]`)!;
-    expect(block.contains(row("chat:ga-member"))).toBe(true);
+    expect(document.querySelector("[data-tree-row^='folder:project:']")).toBeNull();
+    expect(document.body.textContent).not.toContain("Global Agents");
   });
 
-  it("takes a chat into one of its groups from the open island (one project move)", async () => {
+  it("takes a chat into a group of another project (one project move)", async () => {
     render(<Harness />);
     dragTo(row("chat:c1"), row("folder:ga-group"), 10);
     await waitFor(() => expect(api.move_chats_to_project).toHaveBeenCalledTimes(1));
-    expect(api.move_chats_to_project).toHaveBeenCalledWith(["c1"], [], "_no_project", "ga-group");
-    await waitFor(() => expect(api.apply_sidebar_layout).toHaveBeenCalledTimes(1));
-    expect(api.apply_sidebar_layout.mock.calls[0][0].project_slug).toBe("_no_project");
+    expect(api.move_chats_to_project).toHaveBeenCalledWith(["c1"], [], "other", "ga-group");
     // Shown there right away.
     const group = document.querySelector("[data-tree-node='folder:ga-group']")!;
     expect(group.contains(row("chat:c1"))).toBe(true);
@@ -188,28 +180,12 @@ describe("Global Agents is a real folder", () => {
 
   it("takes a whole group, members and all", async () => {
     render(<Harness />);
-    dragTo(row("folder:squad"), row(`folder:${projectFolderId("_no_project")}`), 2);
+    dragTo(row("folder:squad"), row("folder:ga-group"), 10);
     await waitFor(() => expect(api.move_chats_to_project).toHaveBeenCalledTimes(1));
-    expect(api.move_chats_to_project).toHaveBeenCalledWith([], ["squad"], "_no_project", "");
-    const global = document.querySelector(`[data-tree-node="folder:${projectFolderId("_no_project")}"]`)!;
-    expect(global.contains(row("folder:squad"))).toBe(true);
-    expect(global.contains(row("chat:m1"))).toBe(true);
-  });
-
-  it("reorders inside itself with a plain layout save of that folder", async () => {
-    render(<Harness />);
-    dragTo(row("folder:ga-sub"), row(`folder:${projectFolderId("_no_project")}`), 10);
-    await waitFor(() => expect(api.apply_sidebar_layout).toHaveBeenCalledTimes(1));
-    const patch = api.apply_sidebar_layout.mock.calls[0][0];
-    expect(patch.project_slug).toBe("_no_project");
-    expect(patch.folders).toEqual(expect.arrayContaining([{ id: "ga-sub", parent_id: "", sort_order: 1 }]));
-    expect(api.move_chats_to_project).not.toHaveBeenCalled();
-  });
-
-  it("can be hidden from the header menu", () => {
-    render(<Harness showGlobalAgents={false} />);
-    expect(screen.queryByRole("button", { name: "Global Agents" })).toBeNull();
-    expect(row("chat:c1")).toBeTruthy();
+    expect(api.move_chats_to_project).toHaveBeenCalledWith([], ["squad"], "other", "ga-group");
+    const group = document.querySelector("[data-tree-node='folder:ga-group']")!;
+    expect(group.contains(row("folder:squad"))).toBe(true);
+    expect(group.contains(row("chat:m1"))).toBe(true);
   });
 });
 

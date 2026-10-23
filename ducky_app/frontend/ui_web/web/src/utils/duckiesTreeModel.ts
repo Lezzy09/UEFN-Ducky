@@ -1,7 +1,7 @@
 /**
- * The Duckies tree as a shared tree model (see tree-dnd/treeMove): every project row,
- * Global Agents, folders, groups and chats. Moves, undo and the saved layout all go
- * through here so a group always moves with its members and nothing can nest into itself.
+ * The Duckies tree as a shared tree model (see tree-dnd/treeMove): the one list of
+ * folders, groups and chats. Moves, undo and the saved layout all go through here so a
+ * group always moves with its members and nothing can nest into itself.
  */
 import type { FolderItem, SidebarLayoutPatch } from "../types/panel";
 import {
@@ -19,7 +19,6 @@ import {
   dragId,
   findFolderById,
   flattenLayout,
-  GLOBAL_PROJECT_SLUG,
   isProjectFolderId,
   parseDragId,
   projectFolderId,
@@ -36,12 +35,10 @@ export interface DuckiesTreeData {
 export interface DuckiesTreeIndex {
   model: TreeModel;
   currentSlug: string;
-  /** Where a drop on blank space lands: the open project's own root. */
+  /** The list's root: its chats and folders sit at the top level, with no row of their
+   *  own; the model wraps them in this synthetic root, where a drop on blank space lands. */
   currentRootId: string;
-  /** One-project view: the open project's chats and folders sit at the top level, with
-   *  no project row; the model wraps them in this synthetic root. */
-  syntheticCurrent: boolean;
-  /** Node id → folder (project rows, Global Agents, folders, groups). */
+  /** Node id → folder (folders, groups). */
   folders: Map<string, FolderItem>;
   /** Node id → chat. */
   chats: Map<string, Chat>;
@@ -49,7 +46,7 @@ export interface DuckiesTreeIndex {
 
 export type DuckiesLayoutPatch = SidebarLayoutPatch & { project_slug: string };
 
-/** Node id of a project row (Global Agents is the `_no_project` one). */
+/** Node id of a project's synthetic root. */
 export function projectNodeId(slug: string): string {
   return dragId("folder", projectFolderId(slug));
 }
@@ -77,47 +74,32 @@ export function buildDuckiesIndex(data: DuckiesTreeData, currentSlug: string): D
     for (const child of folder.children) walkFolder(child, nodeId, depth + 1);
   };
 
-  const wrappers = data.folders.filter((folder) => isProjectFolderId(folder.id));
-  const own = data.folders.filter((folder) => !isProjectFolderId(folder.id));
-  const currentWrapper = wrappers.find((folder) => folder.id === projectFolderId(currentSlug));
-  const syntheticCurrent = !currentWrapper;
-  const currentRootId = currentWrapper ? dragId("folder", currentWrapper.id) : projectNodeId(currentSlug);
-
-  // Display order: Global Agents first, then the open project, then the other islands.
-  const global = wrappers.find((folder) => folder.id === projectFolderId(GLOBAL_PROJECT_SLUG));
-  if (global) walkFolder(global, TREE_ROOT, 0);
-  if (syntheticCurrent) {
-    entries.push({ id: currentRootId, parentId: TREE_ROOT, branch: true });
-    for (const chat of data.rootChats) {
-      const chatId = dragId("chat", chat.id);
-      entries.push({ id: chatId, parentId: currentRootId, branch: false });
-      chats.set(chatId, chat);
-    }
-    for (const folder of own) walkFolder(folder, currentRootId, 1);
+  const currentRootId = projectNodeId(currentSlug);
+  entries.push({ id: currentRootId, parentId: TREE_ROOT, branch: true });
+  for (const chat of data.rootChats) {
+    const chatId = dragId("chat", chat.id);
+    entries.push({ id: chatId, parentId: currentRootId, branch: false });
+    chats.set(chatId, chat);
   }
-  for (const wrapper of wrappers) {
-    if (wrapper === global) continue;
-    walkFolder(wrapper, TREE_ROOT, 0);
-  }
+  for (const folder of data.folders) walkFolder(folder, currentRootId, 1);
   return {
     model: buildTreeModel(entries),
     currentSlug,
     currentRootId,
-    syntheticCurrent,
     folders,
     chats,
   };
 }
 
-/** Duckies keep the order people give them; chats sit above folders; project rows
- *  (and Global Agents) only take drops into them. */
+/** Duckies keep the order people give them; chats sit above folders; the synthetic
+ *  root only takes drops into it. */
 export function duckiesDropPolicy(index: DuckiesTreeIndex, filtering = false): DropPolicy {
   return {
     ordered: true,
     leavesFirst: true,
     isExpanded: (id) => {
       if (filtering) return true;
-      if (index.syntheticCurrent && id === index.currentRootId) return true;
+      if (id === index.currentRootId) return true;
       return index.folders.get(id)?.expanded ?? false;
     },
     intoOnly: (id) => isProjectNode(id),
@@ -166,39 +148,29 @@ export function rebuildDuckiesTree(
   const buildFolder = (nodeId: string, parentId: string, depth: number): FolderItem => {
     const base = index.folders.get(nodeId)!;
     const kids = depth > 64 ? [] : childIds(model, nodeId);
-    const own = isProjectFolderId(base.id) ? "" : base.id;
     const built: FolderItem = {
       ...base,
       parentId,
       chats: kids.filter((kid) => index.chats.has(kid)).map(chatOf),
-      children: kids.filter((kid) => index.folders.has(kid)).map((kid) => buildFolder(kid, own, depth + 1)),
+      children: kids.filter((kid) => index.folders.has(kid)).map((kid) => buildFolder(kid, base.id, depth + 1)),
     };
     const slug = restamp.get(nodeId);
     return slug ? stampProject(built, slug) : built;
   };
-  const wrappers = data.folders
-    .filter((folder) => isProjectFolderId(folder.id))
-    .map((folder) => buildFolder(dragId("folder", folder.id), "", 0));
-  if (!index.syntheticCurrent || !model.parent.has(index.currentRootId)) {
-    return { folders: wrappers, rootChats: data.rootChats.map((chat) => ({ ...chat })) };
+  if (!model.parent.has(index.currentRootId)) {
+    return { folders: [], rootChats: data.rootChats.map((chat) => ({ ...chat })) };
   }
   const kids = childIds(model, index.currentRootId);
   return {
-    folders: [
-      ...kids.filter((kid) => index.folders.has(kid)).map((kid) => buildFolder(kid, "", 1)),
-      ...wrappers,
-    ],
+    folders: kids.filter((kid) => index.folders.has(kid)).map((kid) => buildFolder(kid, "", 1)),
     rootChats: kids.filter((kid) => index.chats.has(kid)).map(chatOf),
   };
 }
 
 /** The saved layout for one project, or null when this view does not show it. */
 export function duckiesLayoutFor(data: DuckiesTreeData, slug: string, currentSlug: string): DuckiesLayoutPatch | null {
-  const wrapper = data.folders.find((folder) => folder.id === projectFolderId(slug));
-  if (wrapper) return { ...flattenLayout(wrapper.children, wrapper.chats), project_slug: slug };
   if (slug !== currentSlug) return null;
-  const own = data.folders.filter((folder) => !isProjectFolderId(folder.id));
-  return { ...flattenLayout(own, data.rootChats), project_slug: slug };
+  return { ...flattenLayout(data.folders, data.rootChats), project_slug: slug };
 }
 
 export interface DuckiesMovePlan {
@@ -321,17 +293,13 @@ export function removeFromDuckies(
 }
 
 /** Where "new ducky" / "new group" in this folder goes: its folder, and its project
- *  when that is not the open one (Global Agents, another island). */
+ *  when that is not the list's own. */
 export function duckiesCreateTarget(
   folderId: string,
   currentSlug: string,
   folders: FolderItem[],
 ): { folderId: string; projectSlug?: string } {
   if (!folderId) return { folderId: "" };
-  if (isProjectFolderId(folderId)) {
-    const slug = folderId.slice(PROJECT_FOLDER_PREFIX.length);
-    return slug && slug !== currentSlug ? { folderId: "", projectSlug: slug } : { folderId: "" };
-  }
   const folder = findFolderById(folders, folderId);
   if (!folder) return { folderId: "" };
   if (folder.projectSlug && folder.projectSlug !== currentSlug) return { folderId, projectSlug: folder.projectSlug };

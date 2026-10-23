@@ -26,14 +26,8 @@ import {
 } from "../utils/sidebarContextMenuItems";
 import {
   dragId,
-  duckiesFoldersForDisplay,
   expandFoldersById,
   findFolderById,
-  GLOBAL_AGENTS_LABEL,
-  GLOBAL_PROJECT_SLUG,
-  globalAgentsFolder,
-  isGlobalProjectFolderId,
-  isProjectFolderId,
   parseDragId,
 } from "../utils/sidebarTree";
 import {
@@ -42,7 +36,6 @@ import {
   duckiesDropPolicy,
   duckiesLayoutFor,
   duckiesPlaces,
-  isProjectNode,
   planDuckiesDrop,
   planDuckiesRestore,
   type DuckiesMovePlan,
@@ -89,7 +82,6 @@ import {
 
 const ChatTreeHoverPlacementContext = createContext<EditorTabHoverCardPlacement>("right");
 const DuckiesCompactContext = createContext(false);
-const DuckiesCurrentProjectContext = createContext("");
 
 /** A row's view of the tree-wide multi-selection, so it can offer "Delete ALL". */
 type RowSelectionCtx = {
@@ -501,13 +493,9 @@ function FolderHeader({
   onCreateGroup?: () => void;
 }) {
   const id = dragId("folder", folder.id);
-  const isProjectWrap = isProjectFolderId(folder.id);
-  const isGlobalAgents = isGlobalProjectFolderId(folder.id);
-  const dragDisabled = isProjectWrap;
   const rowSelection = useContext(RowSelectionContext);
   const deleteLabel = useRowDeleteCount(id) > 1 ? "Delete ALL" : "Delete";
   const { menu, open, close } = useContextMenuState<void>();
-  const label = isGlobalAgents ? GLOBAL_AGENTS_LABEL : folder.name;
 
   const hoverPlacement = useContext(ChatTreeHoverPlacementContext);
 
@@ -545,44 +533,24 @@ function FolderHeader({
             )}
           </span>
         }
-        label={label}
+        label={folder.name}
         isEditing={isEditing}
         renameInput={
           <input {...renameInputProps(editing, setEditing, editInputRef, onCommitRename, onCancelRename)} />
         }
-        actions={
-          isProjectWrap ? (
-            <button
-              type="button"
-              className="sidebar-action-btn sidebar-project-add"
-              title={isGlobalAgents ? "Add a ducky with no project" : "Add a ducky"}
-              onClick={(e) => {
-                e.stopPropagation();
-                onCreateDucky();
-              }}
-            >
-              <Icons.Plus />
-            </button>
-          ) : (
-            <SidebarHoverActions onRename={onRename} onDelete={onDelete} deleteTitle={deleteLabel} />
-          )
-        }
+        actions={<SidebarHoverActions onRename={onRename} onDelete={onDelete} deleteTitle={deleteLabel} />}
         contextMenu={
           menu ? (
             <ContextMenu
               x={menu.x}
               y={menu.y}
               onClose={close}
-              items={
-                isProjectWrap
-                  ? duckyTreeCreateItems(onCreateDucky, onCreateGroup)
-                  : [
-                      ...duckyTreeCreateItems(onCreateDucky, onCreateGroup),
-                      contextMenuSeparator("folder-sep"),
-                      { id: "rename", label: "Rename", onClick: onRename },
-                      { id: "delete", label: deleteLabel, danger: true, onClick: onDelete },
-                    ]
-              }
+              items={[
+                ...duckyTreeCreateItems(onCreateDucky, onCreateGroup),
+                contextMenuSeparator("folder-sep"),
+                { id: "rename", label: "Rename", onClick: onRename },
+                { id: "delete", label: deleteLabel, danger: true, onClick: onDelete },
+              ]}
             />
           ) : null
         }
@@ -591,7 +559,7 @@ function FolderHeader({
         isFocused={isFocused}
         dataAttr="data-sidebar-id"
         dataId={id}
-        draggable={!dragDisabled}
+        draggable
         onClick={(e) => {
           if ((e.target as HTMLElement).closest("button")) return;
           if (e.button !== 0) return;
@@ -712,9 +680,6 @@ const FolderGroup = memo(function FolderGroupImpl({
         ? firstUnderFolder(folder, waitingIds, childrenByParent)
         : "";
 
-  const projectEmpty =
-    isProjectFolderId(folder.id) && !filtering && childChats.length === 0 && childFolders.length === 0;
-
   return (
     <div
       className={`sidebar-tree-branch ${!expanded ? "sidebar-tree-branch-collapsed" : ""} ${isNewFolder ? "sidebar-item-enter" : ""}`}
@@ -743,11 +708,6 @@ const FolderGroup = memo(function FolderGroupImpl({
       />
 
       <SidebarTreeChildren>
-        {projectEmpty ? (
-          <button type="button" className="sidebar-project-empty" onClick={() => onCreateDuckyIn(folder.id)}>
-            No duckies — add one
-          </button>
-        ) : null}
           {childChats.map((chat) =>
             filtering ? (
             <ChatRow
@@ -888,12 +848,10 @@ interface SidebarFolderTreeProps {
   onSelectionCountChange?: (count: number) => void;
   /** Dense rows: hide chat meta line and shrink duck/group height. */
   compact?: boolean;
-  /** Active island slug — duckies can be dragged onto another project or Global Agents. */
+  /** Project the one Duckies list belongs to (moves and saved layouts use it). */
   currentProjectSlug?: string;
-  /** New ducky in a project (and folder): Global Agents, another island, or this one. */
+  /** New ducky in a folder (and its project, when that is not the list's own). */
   onCreateInProject?: (projectSlug: string, folderId?: string) => void;
-  /** Show the Global Agents folder (duckies with no island) at the top. */
-  showGlobalAgents?: boolean;
 }
 
 export function SidebarFolderTree({
@@ -933,7 +891,6 @@ export function SidebarFolderTree({
   compact = false,
   currentProjectSlug = "",
   onCreateInProject,
-  showGlobalAgents = false,
 }: SidebarFolderTreeProps) {
   const hoverPlacement: EditorTabHoverCardPlacement = dockSide === "right" ? "left" : "right";
   const [selection, setSelection] = useState<ExplorerSelection>(emptySelection);
@@ -953,21 +910,12 @@ export function SidebarFolderTree({
     [filtering, rootChats, filterQuery, visibleChatIds],
   );
 
-  const filteredFolders = useMemo(() => {
-    const shown = duckiesFoldersForDisplay(folders);
-    return filtering
-      ? shown.filter((folder) => shouldShowFolder(folder, filterQuery, visibleChatIds, visibleFolderIds))
-      : shown;
-  }, [filtering, folders, filterQuery, visibleChatIds, visibleFolderIds]);
-
-  // Global Agents: duckies with no island, shown on every island as a real folder
-  // (chats, groups with their members, sub-folders). With no island open it holds them all.
-  const globalFolder = useMemo(() => globalAgentsFolder(folders), [folders]);
-  const currentIsGlobal = currentProjectSlug === GLOBAL_PROJECT_SLUG;
-  const globalVisible = Boolean(
-    globalFolder &&
-      (showGlobalAgents || currentIsGlobal) &&
-      (!filtering || shouldShowFolder(globalFolder, filterQuery, visibleChatIds, visibleFolderIds)),
+  const filteredFolders = useMemo(
+    () =>
+      filtering
+        ? folders.filter((folder) => shouldShowFolder(folder, filterQuery, visibleChatIds, visibleFolderIds))
+        : folders,
+    [filtering, folders, filterQuery, visibleChatIds, visibleFolderIds],
   );
 
   // Map each spawning chat → the sub-agents it spawned, so the sidebar can nest
@@ -1121,7 +1069,7 @@ export function SidebarFolderTree({
     };
     const walk = (items: FolderItem[]) => {
       for (const folder of items) {
-        names.set(dragId("folder", folder.id), isGlobalProjectFolderId(folder.id) ? GLOBAL_AGENTS_LABEL : folder.name);
+        names.set(dragId("folder", folder.id), folder.name);
         addChats(folder.chats);
         walk(folder.children);
       }
@@ -1242,7 +1190,7 @@ export function SidebarFolderTree({
       if (!selected.has(id)) setSelection(selectOnly(id));
       return [id];
     },
-    canDrag: (id) => !isProjectNode(id) && (treeIndexRef.current.chats.has(id) || treeIndexRef.current.folders.has(id)),
+    canDrag: (id) => treeIndexRef.current.chats.has(id) || treeIndexRef.current.folders.has(id),
     dragData: () => "duckies",
     labelFor: (id) => rowNameByIdRef.current.get(id) ?? "",
     expand: (id) => {
@@ -1293,7 +1241,7 @@ export function SidebarFolderTree({
     return () => window.cancelAnimationFrame(frame);
   }, [activeChats]);
 
-  if (filtering && filteredRootChats.length === 0 && filteredFolders.length === 0 && !globalVisible) {
+  if (filtering && filteredRootChats.length === 0 && filteredFolders.length === 0) {
     return (
       <>
         {treeMenu ? (
@@ -1361,12 +1309,6 @@ export function SidebarFolderTree({
         }}
       >
         <DuckiesCompactContext.Provider value={compact}>
-        <DuckiesCurrentProjectContext.Provider value={currentProjectSlug}>
-          {globalVisible && globalFolder ? (
-            <div className="sidebar-global-agents">
-              <FolderGroup folder={globalFolder} {...groupProps} />
-            </div>
-          ) : null}
           {rootChatsToRender.map((chat) =>
             filtering ? (
             <ChatRow
@@ -1422,12 +1364,11 @@ export function SidebarFolderTree({
           {filteredFolders.map((folder) => (
             <FolderGroup key={folder.id} folder={folder} {...groupProps} />
           ))}
-          {projectEmpty && !(globalVisible && currentIsGlobal) ? (
+          {projectEmpty ? (
             <div className="ui-status-sidebar-muted file-tree-empty">
               No duckies yet — right-click to create one.
             </div>
           ) : null}
-        </DuckiesCurrentProjectContext.Provider>
         </DuckiesCompactContext.Provider>
       </div>
     </>
