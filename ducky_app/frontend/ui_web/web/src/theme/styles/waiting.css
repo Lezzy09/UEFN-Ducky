@@ -93,19 +93,20 @@
 .bg-activity-waiting-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   margin: 4px 10px 8px;
-  padding: 10px 12px;
+  overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--input-bg, var(--bg-elevated, var(--bg))) 94%, transparent);
+  border-radius: 8px;
+  background: var(--sidebar, var(--card));
+}
+
+/* The card brings its own header bar; the "Asked outside a chat" line sits above it. */
+.bg-activity-waiting-card > .connection-status-menu-detail {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
 }
 
 /* Terminal command card */
-.terminal-approval-badge {
-  min-width: 1.75rem;
-}
-
 .terminal-approval-badge svg {
   width: 13px;
   height: 13px;
@@ -135,7 +136,7 @@
 .terminal-approval-error {
   margin: 0;
   font-size: 12px;
-  color: var(--danger, #e55);
+  color: var(--red);
 }
 
 .terminal-approval-card--compact {
@@ -150,6 +151,3 @@
   max-height: 120px;
 }
 
-.terminal-approval-card--compact .ask-user-option {
-  padding: 7px 10px;
-}

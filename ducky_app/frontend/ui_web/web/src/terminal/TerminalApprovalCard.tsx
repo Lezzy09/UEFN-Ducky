@@ -71,7 +71,13 @@ export function TerminalApprovalCard({ item, compact = false, inConv = "" }: Pro
         <span className="ask-user-badge terminal-approval-badge" aria-hidden="true">
           <Icons.Terminal />
         </span>
-        {compact ? null : <span className="ask-user-pause-hint">Agent paused until you answer</span>}
+        <span className="ask-user-heading">Command</span>
+        {compact ? null : (
+          <span className="ask-user-pause-hint" title="The agent waits until you answer">
+            <Icons.Pause />
+            Agent paused
+          </span>
+        )}
       </div>
       <h2 className="ask-user-prompt">
         {inLead && item.asked_by ? `${item.asked_by} wants to run a terminal command` : "Allow this terminal command?"}

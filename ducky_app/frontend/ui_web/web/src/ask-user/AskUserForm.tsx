@@ -52,7 +52,9 @@ function OptionControl({
         selected ? " is-checked" : ""
       }`}
       aria-hidden="true"
-    />
+    >
+      {multiple && selected ? <Icons.Check /> : null}
+    </span>
   );
 }
 
@@ -287,10 +289,9 @@ export const AskUserForm = memo(function AskUserForm({
       onDrop={canAttach ? onDropFiles : undefined}
     >
       <div className="ask-user-top">
-        <span className="ask-user-badge" aria-label={`Question ${index + 1} of ${total}`}>
-          {index + 1}/{total}
+        <span className="ask-user-badge" aria-hidden="true">
+          <Icons.Help />
         </span>
-        {queueAhead > 0 ? <span className="ask-user-queue">+{queueAhead} waiting</span> : null}
         {author?.name?.trim() ? (
           <span
             className="ask-user-author"
@@ -298,18 +299,22 @@ export const AskUserForm = memo(function AskUserForm({
           >
             {author.name.trim()}
           </span>
+        ) : (
+          <span className="ask-user-heading">Question</span>
+        )}
+        {total > 1 ? (
+          <span className="ask-user-count" aria-label={`Question ${index + 1} of ${total}`}>
+            {index + 1}/{total}
+          </span>
         ) : null}
-        <span className="ask-user-pause-hint">
-          {late ? "The agent moved on: Submit sends your answer to its chat" : "Agent paused until Submit"}
+        {queueAhead > 0 ? <span className="ask-user-queue">+{queueAhead} waiting</span> : null}
+        <span className="ask-user-pause-hint" title={late ? "The agent moved on: Submit sends your answer to its chat" : "The agent waits until you Submit"}>
+          <Icons.Pause />
+          {late ? "Agent moved on: Submit sends to its chat" : "Agent paused"}
         </span>
         {showDismiss && questions.every((q) => !q.required) ? (
-          <button
-            type="button"
-            className="ask-user-dismiss"
-            aria-label="Dismiss"
-            onClick={handleClose}
-          >
-            ×
+          <button type="button" className="icon-btn ask-user-dismiss" aria-label="Dismiss" title="Dismiss" onClick={handleClose}>
+            <Icons.Close />
           </button>
         ) : null}
       </div>
@@ -320,13 +325,8 @@ export const AskUserForm = memo(function AskUserForm({
           {questions.map((q, i) => {
             const done = committed[i];
             const current = i === index;
-            const summary = done
-              ? draftToAnswer(drafts[i]).skipped
-                ? "Skipped"
-                : draftSummary(q, drafts[i]) || "Answered"
-              : current
-                ? "Answering…"
-                : "Not answered";
+            const skipped = done && draftToAnswer(drafts[i]).skipped;
+            const summary = done ? (skipped ? "Skipped" : draftSummary(q, drafts[i]) || "Answered") : "";
             return (
               <li
                 key={q.id}
@@ -334,13 +334,16 @@ export const AskUserForm = memo(function AskUserForm({
                   "ask-user-batch-item",
                   done ? "is-done" : "",
                   current ? "is-current" : "",
-                  done && draftToAnswer(drafts[i]).skipped ? "is-skipped" : "",
+                  skipped ? "is-skipped" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
               >
+                <span className="ask-user-batch-mark" aria-hidden="true">
+                  {done && !skipped ? <Icons.Check /> : null}
+                </span>
                 <span className="ask-user-batch-prompt">{q.prompt}</span>
-                <span className="ask-user-batch-status">{summary}</span>
+                {summary ? <span className="ask-user-batch-status">{summary}</span> : null}
               </li>
             );
           })}
@@ -379,7 +382,7 @@ export const AskUserForm = memo(function AskUserForm({
                   <span className="ask-user-option-desc">{opt.description}</span>
                 ) : null}
               </div>
-              <span className="ask-user-option-key">{i + 1}</span>
+              <kbd className="ask-user-option-key">{i + 1}</kbd>
             </button>
           );
         })}
@@ -394,7 +397,7 @@ export const AskUserForm = memo(function AskUserForm({
             >
               <OptionControl multiple={multiple} selected={draft.other} />
               <span className="ask-user-option-label">Other</span>
-              <span className="ask-user-option-key">{question.options.length + 1}</span>
+              <kbd className="ask-user-option-key">{question.options.length + 1}</kbd>
             </button>
             {draft.other ? (
               <input
@@ -461,9 +464,10 @@ export const AskUserForm = memo(function AskUserForm({
             />
             {(draft.files ?? []).map((f) => (
               <span key={f.path} className="ask-user-attach-file" title={f.path}>
+                <Icons.Paperclip />
                 {f.name}
                 <button type="button" aria-label={`Remove ${f.name}`} onClick={() => removeFile(f.path)}>
-                  ×
+                  <Icons.Close />
                 </button>
               </span>
             ))}
@@ -476,9 +480,14 @@ export const AskUserForm = memo(function AskUserForm({
         ) : null}
       </div>
       <div className="ask-user-footer">
-        <button type="button" className="settings-btn" onClick={handleBack} disabled={index === 0}>
-          Back
-        </button>
+        {total > 1 ? (
+          <button type="button" className="settings-btn ask-user-back" onClick={handleBack} disabled={index === 0}>
+            <Icons.ChevronLeft />
+            Back
+          </button>
+        ) : (
+          <span />
+        )}
         <div className="ask-user-footer-right">
           {canSkip ? (
             <button type="button" className="settings-btn" onClick={handleSkip}>
@@ -487,11 +496,14 @@ export const AskUserForm = memo(function AskUserForm({
           ) : null}
           <button
             type="button"
-            className={`settings-btn modal-confirm-btn${canSubmit ? "" : " is-disabled"}`}
+            className={`settings-btn modal-confirm-btn ask-user-submit${canSubmit ? "" : " is-disabled"}`}
             onClick={handleSubmit}
             disabled={!canSubmit}
           >
-            {isLast ? "Submit Enter" : "Next Enter"}
+            {isLast ? "Submit" : "Next"}
+            <kbd className="ask-user-submit-key" aria-label="Enter">
+              <Icons.Enter />
+            </kbd>
           </button>
         </div>
       </div>
