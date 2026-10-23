@@ -13,8 +13,11 @@ import { windowsSpeechUsable } from "./transcriptionSession";
 import {
   getVoiceSettings,
   loadVoiceSettings,
+  normalizeReplyLength,
   normalizeSttProvider,
+  REPLY_LENGTH_OPTIONS,
   saveVoiceSettings,
+  type ReplyLength,
   type SpokenStyle,
   type SttProvider,
   subscribeVoiceSettings,
@@ -34,6 +37,8 @@ export function VoiceSettingsSection() {
   const [processTalk, setProcessTalk] = useState(0.7);
   const [sttProvider, setSttProvider] = useState<SttProvider>("");
   const [autoSend, setAutoSend] = useState(false);
+  const [liveModel, setLiveModel] = useState("");
+  const [replyLength, setReplyLength] = useState<ReplyLength>("short");
   const voices = useTtsVoiceOptions();
   const systemListen = windowsSpeechUsable() ? "Windows speech" : "Browser speech";
 
@@ -47,6 +52,8 @@ export function VoiceSettingsSection() {
       setProcessTalk(s.processTalk);
       setSttProvider(s.sttProvider);
       setAutoSend(s.liveAutoSend);
+      setLiveModel(s.liveModel);
+      setReplyLength(s.replyLength);
     });
     return subscribeVoiceSettings(() => {
       const s = getVoiceSettings();
@@ -58,6 +65,8 @@ export function VoiceSettingsSection() {
       setProcessTalk(s.processTalk);
       setSttProvider(s.sttProvider);
       setAutoSend(s.liveAutoSend);
+      setLiveModel(s.liveModel);
+      setReplyLength(s.replyLength);
     });
   }, []);
 
@@ -176,6 +185,37 @@ export function VoiceSettingsSection() {
                 const value = normalizeSttProvider(next);
                 setSttProvider(value);
                 void saveVoiceSettings({ sttProvider: value });
+              }}
+            />
+          </div>
+          <div className="voice-settings-row">
+            <label className="voice-settings-label">Live voice model</label>
+            <DuckyModelPicker
+              model={liveModel}
+              onChange={(next) => {
+                setLiveModel(next);
+                void saveVoiceSettings({ liveModel: next });
+              }}
+              allowClear
+              requireTools={false}
+              placeholder="The chat's model"
+              hint="Fast model that answers live talk right away while the chat's agent keeps working. Empty = the chat's model."
+            />
+          </div>
+          <div className="voice-settings-row">
+            <label className="voice-settings-label" htmlFor="voice-reply-length">
+              Spoken reply length
+            </label>
+            <ChoiceDropdown
+              id="voice-reply-length"
+              aria-label="Spoken reply length"
+              mode="radio"
+              value={replyLength}
+              options={REPLY_LENGTH_OPTIONS}
+              onChange={(next) => {
+                const value = normalizeReplyLength(next);
+                setReplyLength(value);
+                void saveVoiceSettings({ replyLength: value });
               }}
             />
           </div>

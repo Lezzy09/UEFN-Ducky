@@ -301,6 +301,14 @@ FIELD_META: dict[str, FieldMeta] = {
         "Process talk", "Audio", settable=True,
         description="How much live voice narrates tools/thinking (0 = mute, 1 = full).",
     ),
+    "voice_live_model": FieldMeta(
+        "Live voice model", "Audio", settable=True,
+        description='Qualified model for live voice quick replies ("backend:model_id"). Empty = the chat\'s model.',
+    ),
+    "voice_reply_length": FieldMeta(
+        "Spoken reply length", "Audio", settable=True, enum=("short", "normal", "detailed"),
+        description="Sentence cap for live voice quick replies: short = 1-2, normal = 3-4, detailed = up to 6.",
+    ),
     "voice_stt_provider": FieldMeta(
         "Listen backend", "Audio", settable=True, enum=("", "openai", "webspeech"),
         description="Empty = system speech (Windows speech in the app, browser speech on a phone). openai = OpenAI Realtime when a key is saved.",

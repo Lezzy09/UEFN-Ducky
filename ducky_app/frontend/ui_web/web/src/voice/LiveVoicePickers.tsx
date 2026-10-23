@@ -10,19 +10,30 @@ import {
   saveAudioSettings,
   subscribeAudioSettings,
 } from "./audioSettings";
+import { getLiveVoiceChatIds } from "./liveChats";
 import { listMicDevices, listOutputDevices } from "./micPermission";
 import { clampProcessTalk } from "./processNarration";
 import { useTtsVoiceOptions } from "./pluginVoices";
 import { SpeedDropdown } from "./SpeedDropdown";
 import { browserSpeechUsable, windowsSpeechUsable } from "./transcriptionSession";
 import {
+  getChatVoiceModel,
   getVoiceSettings,
   loadVoiceSettings,
   normalizeSttProvider,
   saveVoiceSettings,
+  setChatVoiceModel,
   subscribeVoiceSettings,
   type SttProvider,
 } from "./voiceSettings";
+
+/** The chat the voice-model chip edits: the given one, else the only live chat. */
+export function voiceModelChatId(chatId?: string): string {
+  const given = (chatId || "").trim();
+  if (given) return given;
+  const live = [...getLiveVoiceChatIds()];
+  return live.length === 1 ? live[0] : "";
+}
 
 export type LiveVoicePickersProps = {
   voiceId: string;
@@ -36,6 +47,8 @@ export type LiveVoicePickersProps = {
   codingAgent?: string;
   setCodingAgent?: (value: string) => void;
   showChatModel?: boolean;
+  /** Live chat whose voice model the chip sets; without one it sets the global Live voice model. */
+  chatId?: string;
 };
 
 export function LiveVoicePickers({
@@ -50,7 +63,11 @@ export function LiveVoicePickers({
   codingAgent = "ducky",
   setCodingAgent,
   showChatModel = false,
+  chatId,
 }: LiveVoicePickersProps) {
+  const modelChat = voiceModelChatId(chatId);
+  const readVoiceModel = () => (modelChat ? getChatVoiceModel(modelChat) : "") || getVoiceSettings().liveModel;
+  const [voiceModel, setVoiceModelState] = useState(readVoiceModel);
   const voices = useTtsVoiceOptions();
   const talk = clampProcessTalk(processTalk);
   const talkPct = Math.round(talk * 100);
@@ -77,8 +94,21 @@ export function LiveVoicePickers({
   useEffect(() => {
     void loadVoiceSettings();
     void loadAudioSettings();
-    return subscribeVoiceSettings(() => setSttProvider(getVoiceSettings().sttProvider));
-  }, []);
+    return subscribeVoiceSettings(() => {
+      setSttProvider(getVoiceSettings().sttProvider);
+      setVoiceModelState(readVoiceModel());
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelChat]);
+
+  const setVoiceModel = useCallback(
+    (next: string) => {
+      setVoiceModelState(next);
+      if (modelChat) setChatVoiceModel(modelChat, next);
+      else void saveVoiceSettings({ liveModel: next });
+    },
+    [modelChat],
+  );
 
   useEffect(() => subscribeAudioSettings(() => {
     const s = getAudioSettings();
@@ -149,6 +179,17 @@ export function LiveVoicePickers({
           />
         </div>
       ) : null}
+      <div className="live-voice-model live-voice-model--voice" title="Voice model: answers live talk right away">
+        <ModelSelector
+          selectedModel={voiceModel}
+          setSelectedModel={setVoiceModel}
+          requireTools={false}
+          preserveSelection
+          menuPlacement="top"
+          placeholder="Voice: chat's model"
+          uiTarget="live-voice.voice-model"
+        />
+      </div>
       <ChoiceDropdown
         id="live-voice-listen"
         icon={<Icons.Headphones />}

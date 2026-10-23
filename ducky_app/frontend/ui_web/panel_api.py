@@ -886,6 +886,7 @@ from frontend.ui_web.panel_api_project import PanelApiProjectMixin  # noqa: E402
 from frontend.ui_web.panel_api_settings import PanelApiSettingsMixin  # noqa: E402
 from frontend.ui_web.panel_api_automations import PanelApiAutomationsMixin  # noqa: E402
 from frontend.ui_web.panel_api_video import PanelApiVideoMixin  # noqa: E402
+from backend.voice.panel_mixin import PanelApiVoiceLaneMixin  # noqa: E402
 
 # Whether the UEFN listener was online at the last status check, for the whole app. HTTP,
 # phone and website requests each build a new PanelApi; kept per instance, every one of
@@ -926,6 +927,7 @@ class PanelApi(
     PanelApiSettingsMixin,
     PanelApiAutomationsMixin,
     PanelApiVideoMixin,
+    PanelApiVoiceLaneMixin,
 ):
     def __init__(self) -> None:
         self._window: Any = None

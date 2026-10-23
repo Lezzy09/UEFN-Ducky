@@ -11,6 +11,20 @@ export function normalizeSttProvider(raw: unknown): SttProvider {
   return "";
 }
 
+/** Sentence cap for live voice quick replies. */
+export type ReplyLength = "short" | "normal" | "detailed";
+
+export function normalizeReplyLength(raw: unknown): ReplyLength {
+  const s = String(raw || "").trim().toLowerCase();
+  return s === "normal" || s === "detailed" ? s : "short";
+}
+
+export const REPLY_LENGTH_OPTIONS: { value: ReplyLength; label: string }[] = [
+  { value: "short", label: "Short: 1-2 sentences" },
+  { value: "normal", label: "Normal: 3-4 sentences" },
+  { value: "detailed", label: "Detailed: up to 6 sentences" },
+];
+
 export type VoiceSettings = {
   enabled: boolean;
   spokenStyle: SpokenStyle;
@@ -27,7 +41,20 @@ export type VoiceSettings = {
   processTalk: number;
   /** Listen backend. Empty = system speech; openai needs an OpenAI key. */
   sttProvider: SttProvider;
+  /** Live voice quick-reply model ("backend:model_id"). Empty = the chat's model. */
+  liveModel: string;
+  /** How long live voice's quick replies are. */
+  replyLength: ReplyLength;
 };
+
+type VoiceLaneApi = {
+  voice_lane_settings?: () => Promise<{ voice_live_model?: string; voice_reply_length?: string }>;
+  save_voice_lane_settings?: (patch: Record<string, unknown>) => Promise<unknown>;
+};
+
+function laneApi(): VoiceLaneApi | null {
+  return (getApi() as unknown as VoiceLaneApi | null) ?? null;
+}
 
 const DEFAULTS: VoiceSettings = {
   enabled: false,
@@ -38,6 +65,8 @@ const DEFAULTS: VoiceSettings = {
   liveAutoSend: false,
   processTalk: 0.7,
   sttProvider: "",
+  liveModel: "",
+  replyLength: "short",
 };
 
 /** Preset talking-speed choices for the ChoiceDropdown pickers (value is a number string). */
@@ -94,6 +123,7 @@ export async function loadVoiceSettings(): Promise<VoiceSettings> {
   const api = getApi();
   if (!api?.get_settings) return cache;
   const s = await api.get_settings();
+  const lane = await Promise.resolve(laneApi()?.voice_lane_settings?.()).catch(() => undefined);
   cache = {
     enabled: Boolean(s.voice_enabled),
     spokenStyle: s.voice_spoken_style === "speak_along" ? "speak_along" : "summary",
@@ -103,6 +133,8 @@ export async function loadVoiceSettings(): Promise<VoiceSettings> {
     liveAutoSend: Boolean(s.voice_live_auto_send),
     processTalk: clampProcessTalk(s.voice_process_talk ?? 0.7),
     sttProvider: normalizeSttProvider(s.voice_stt_provider),
+    liveModel: String(lane?.voice_live_model || "").trim(),
+    replyLength: normalizeReplyLength(lane?.voice_reply_length),
   };
   notify();
   return cache;
@@ -118,9 +150,18 @@ export async function saveVoiceSettings(patch: Partial<VoiceSettings>): Promise<
     liveAutoSend: patch.liveAutoSend ?? cache.liveAutoSend,
     processTalk: patch.processTalk != null ? clampProcessTalk(patch.processTalk) : cache.processTalk,
     sttProvider: patch.sttProvider != null ? normalizeSttProvider(patch.sttProvider) : cache.sttProvider,
+    liveModel: patch.liveModel != null ? String(patch.liveModel).trim() : cache.liveModel,
+    replyLength: patch.replyLength != null ? normalizeReplyLength(patch.replyLength) : cache.replyLength,
   };
+  const laneChanged = next.liveModel !== cache.liveModel || next.replyLength !== cache.replyLength;
   cache = next;
   notify();
+  if (laneChanged) {
+    await laneApi()?.save_voice_lane_settings?.({
+      voice_live_model: next.liveModel,
+      voice_reply_length: next.replyLength,
+    });
+  }
   const api = getApi();
   if (api?.save_agent_settings) {
     await api.save_agent_settings({
@@ -141,6 +182,54 @@ export function resolveVoiceId(duckyVoice?: string | null): string {
   const ducky = (duckyVoice || "").trim();
   if (ducky) return ducky;
   return cache.defaultVoice || "";
+}
+
+// Per-chat live voice model, kept on this device like the chat's voice and speed.
+const CHAT_MODEL_KEY = "ducky.voice.chatLiveModels";
+let chatModels: Record<string, string> | null = null;
+
+function readChatModels(): Record<string, string> {
+  if (chatModels) return chatModels;
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(CHAT_MODEL_KEY) : null;
+    const parsed = raw ? (JSON.parse(raw) as unknown) : {};
+    chatModels = parsed && typeof parsed === "object" ? { ...(parsed as Record<string, string>) } : {};
+  } catch {
+    chatModels = {};
+  }
+  return chatModels;
+}
+
+export function getChatVoiceModel(chatId: string): string {
+  const id = (chatId || "").trim();
+  return id ? readChatModels()[id] || "" : "";
+}
+
+/** Set (or clear with "") this chat's voice model override. */
+export function setChatVoiceModel(chatId: string, model: string): void {
+  const id = (chatId || "").trim();
+  if (!id) return;
+  const map = readChatModels();
+  const value = (model || "").trim();
+  if (value) map[id] = value;
+  else delete map[id];
+  try {
+    localStorage.setItem(CHAT_MODEL_KEY, JSON.stringify(map));
+  } catch {
+    /* storage full or blocked: the override still holds for this session */
+  }
+  notify();
+}
+
+/** This chat's voice model, else the global Live voice model, else "" (the chat's own model). */
+export function resolveVoiceModel(chatId?: string | null): string {
+  return getChatVoiceModel(chatId || "") || cache.liveModel || "";
+}
+
+/** Test helper. */
+export function _resetVoiceSettingsCache(): void {
+  cache = { ...DEFAULTS };
+  chatModels = null;
 }
 
 /** Per-ducky speed (>0) wins; otherwise fall back to the global default speed. */

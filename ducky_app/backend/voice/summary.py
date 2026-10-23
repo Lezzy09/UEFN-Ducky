@@ -35,6 +35,41 @@ def build_spoken_summary_prompt(assistant_text: str) -> tuple[str, str] | None:
     return _SYSTEM, user
 
 
+_NO_API_MODEL = (
+    "Voice summary needs an API model (Settings → LLMs gateway). "
+    "Pick a cheap model in Settings → LLMs → Voice."
+)
+
+
+def complete_voice_text(system: str, user: str, model: str = "") -> dict[str, Any]:
+    """One cheap voice-model completion. Shared by spoken summaries and the live voice lane."""
+    model_t = (model or "").strip()
+    try:
+        from frontend.ui_web.plugin_llm import _complete_text, _resolve_api_model
+        import asyncio
+
+        from backend.agent.batch_backends import supports_batch_complete
+
+        provider_name, model_id = _resolve_api_model(model=model_t)
+        if not supports_batch_complete(provider_name):
+            return {"ok": False, "error": _NO_API_MODEL}
+        text = asyncio.run(
+            _complete_text(
+                provider_name=provider_name,
+                model=model_id,
+                system=system,
+                user=user,
+                usage_agent="voice",
+            )
+        )
+        text = (text or "").strip()
+        if not text:
+            return {"ok": False, "error": "empty voice reply"}
+        return {"ok": True, "text": text, "provider": provider_name, "model": model_id}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc) or "voice model call failed"}
+
+
 def summarize_for_speech(assistant_text: str, model: str = "") -> dict[str, Any]:
     """Produce text to speak. Short plain replies pass through; longer/codey ones use the voice model."""
     text = (assistant_text or "").strip()
@@ -45,40 +80,9 @@ def summarize_for_speech(assistant_text: str, model: str = "") -> dict[str, Any]
         return {"ok": True, "text": text, "verbatim": True}
 
     system_t, user_t = prompt
-    model_t = (model or "").strip()
-    try:
-        from frontend.ui_web.plugin_llm import _complete_text, _resolve_api_model
-        import asyncio
-
-        from backend.agent.batch_backends import supports_batch_complete
-
-        provider_name, model_id = _resolve_api_model(model=model_t)
-        if not supports_batch_complete(provider_name):
-            return {
-                "ok": False,
-                "error": (
-                    "Voice summary needs an API model (Settings → LLMs gateway). "
-                    "Pick a cheap model in Settings → LLMs → Voice."
-                ),
-            }
-        spoken = asyncio.run(
-            _complete_text(
-                provider_name=provider_name,
-                model=model_id,
-                system=system_t,
-                user=user_t,
-                usage_agent="voice",
-            )
-        )
-        spoken = (spoken or "").strip()
-        if not spoken:
+    out = complete_voice_text(system_t, user_t, model)
+    if not out.get("ok"):
+        if out.get("error") == "empty voice reply":
             return {"ok": False, "error": "empty spoken summary"}
-        return {
-            "ok": True,
-            "text": spoken,
-            "verbatim": False,
-            "provider": provider_name,
-            "model": model_id,
-        }
-    except Exception as exc:
-        return {"ok": False, "error": str(exc) or "spoken summary failed"}
+        return out
+    return {**out, "verbatim": False}

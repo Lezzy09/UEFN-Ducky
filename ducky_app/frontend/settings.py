@@ -290,6 +290,12 @@ class PanelSettings:
     voice_process_talk: float = 0.7
     """How much live voice narrates tools/thinking (0 = mute process chatter, 1 = full)."""
 
+    voice_live_model: str = ""
+    """Live voice quick-reply model ("backend:model_id"). Empty = the chat's model."""
+
+    voice_reply_length: str = "short"
+    """How long live voice's quick replies are: short | normal | detailed."""
+
     voice_stt_provider: str = ""
     """Live/dictation listen backend: empty = system default (Windows speech in the app, browser speech
     on a phone), openai = OpenAI Realtime when a key is saved."""
@@ -386,6 +392,9 @@ class PanelSettings:
             self.voice_process_talk = max(0.0, min(1.0, float(self.voice_process_talk)))
         except (TypeError, ValueError):
             self.voice_process_talk = 0.7
+        self.voice_live_model = str(self.voice_live_model or "").strip()
+        if self.voice_reply_length not in ("short", "normal", "detailed"):
+            self.voice_reply_length = "short"
         stt = str(self.voice_stt_provider or "").strip().lower()
         self.voice_stt_provider = stt if stt in ("openai", "webspeech") else ""
         self.mic_device_id = str(self.mic_device_id or "").strip()
