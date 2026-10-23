@@ -6,7 +6,13 @@ import type { EditorTab } from "../types/panel";
 
 const api = vi.hoisted(() => ({ terminal_list: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
-vi.mock("../hooks/useAgentEventBus", () => ({ subscribeAgentEvents: () => () => {} }));
+const bus = vi.hoisted(() => ({ handler: null as null | ((event: Record<string, unknown>) => void) }));
+vi.mock("../hooks/useAgentEventBus", () => ({
+  subscribeAgentEvents: (handler: (event: Record<string, unknown>) => void) => {
+    bus.handler = handler;
+    return () => {};
+  },
+}));
 vi.mock("../contexts/TerminalsSettingsContext", () => ({ getTerminalsEnabled: () => true }));
 
 import { useTerminalTabs } from "./useTerminalTabs";
@@ -14,7 +20,7 @@ import { useTerminalTabs } from "./useTerminalTabs";
 const editor = {
   openTab: vi.fn(),
   closeTabInLayout: vi.fn(),
-  openTabsRef: { current: [] },
+  openTabsRef: { current: [] as EditorTab[] },
   remapTabId: vi.fn(),
   setOpenTabs: vi.fn(),
 };
@@ -30,6 +36,23 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   api.terminal_list.mockReset();
+  editor.openTab.mockReset();
+  editor.openTabsRef.current = [];
+});
+
+it("lists an agent's terminal in the header instead of opening it over the chat", async () => {
+  api.terminal_list.mockResolvedValue({ sessions: [] });
+  const { result } = renderHook(() => useTerminalTabs(editor));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  act(() => bus.handler?.({ type: "terminal_open", ...session("agent"), activate: false }));
+  expect(editor.openTab).not.toHaveBeenCalled();
+  expect(result.current.parkedTabs.map((t) => t.terminalSessionId)).toEqual(["agent"]);
+
+  // Already open as a tab (an agent reused it): left as it is, never listed twice.
+  editor.openTabsRef.current = [{ id: "terminal:open", kind: "terminal", name: "open", terminalSessionId: "open" }];
+  act(() => bus.handler?.({ type: "terminal_open", ...session("open"), activate: false }));
+  expect(editor.openTab).not.toHaveBeenCalled();
+  expect(result.current.parkedTabs.map((t) => t.terminalSessionId)).toEqual(["agent"]);
 });
 
 it("does not re-render the chat view when the parked shells are unchanged", async () => {

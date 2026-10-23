@@ -178,7 +178,9 @@ def test_reopening_in_a_chat_reuses_its_idle_terminal(monkeypatch, tmp_path):
 
     assert {open_id() for _ in range(5)} == {"t1"}
     assert len(spawned) == 1
-    assert [e["type"] for e in events] == ["terminal_open"] * 5  # each call still shows the tab
+    assert [e["type"] for e in events] == ["terminal_open"] * 5  # each call still lists it
+    # Listed in the header, never opened as a tab over the chat the person is reading.
+    assert all(e["activate"] is False for e in events)
     # Busy, dead, another shell, folder or chat: a new terminal, as before.
     spawned[0].running = True
     assert open_id() == "t2"

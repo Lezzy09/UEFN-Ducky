@@ -76,6 +76,8 @@ def run_cli_in_terminal(
         title=title,
         push_open=True,
         conv_id=conv_id,
+        # In the header's terminal list, not a tab: the chat stays in front.
+        activate=False,
     )
     if not spawn.get("ok"):
         return CodingAgentLaunchResult(ok=False, error=str(spawn.get("error") or "failed to open terminal"))

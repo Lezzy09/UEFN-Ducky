@@ -2091,16 +2091,17 @@ def ducky_terminal_open(
     conv_id: str = "",
     pretty: bool = False,
 ) -> str:
-    """Open a visible integrated terminal tab (bash or powershell) in the Ducky panel.
+    """Open an integrated terminal (bash or powershell) in the Ducky panel. It shows in the
+    header's terminal list, never as a tab: the person stays on the chat they are reading.
 
     In a chat, an idle terminal it already opened with the same shell and folder is
-    shown again instead of a new one (the result says reused=true). Close it with
+    used again instead of a new one (the result says reused=true). Close it with
     ducky_terminal_close when you are done with it; Ducky closes a chat's terminal itself
     about a minute after that chat's agent finishes (unless a command still runs in it)."""
     mgr = _terminal_manager()
     result = mgr.spawn(
         shell=shell, cwd=cwd or None, title=title, push_open=True,
-        conv_id=_terminal_chat(conv_id), reuse_idle=True,
+        conv_id=_terminal_chat(conv_id), reuse_idle=True, activate=False,
     )
     return tool_json(result, pretty=pretty)
 

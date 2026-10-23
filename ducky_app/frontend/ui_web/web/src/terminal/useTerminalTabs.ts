@@ -264,9 +264,12 @@ export function useTerminalTabs(
           ws_url: event.ws_url,
           owner: event.owner || "",
         };
-        // Login must stay on Settings: focusing this tab unmounts the popup.
+        // An agent's terminal and the login one wait in the header list: opening them as a
+        // tab took the person away from the chat (and unmounted the Settings login popup).
         if (event.activate === false || dto.title === "Claude Login") {
-          parkTab(dtoToTab(dto));
+          // Already open as a tab (the person opened it, an agent reused it): leave it be.
+          const tabId = terminalTabId(dto.session_id);
+          if (!editor.openTabsRef.current.some((t) => t.id === tabId)) parkTab(dtoToTab(dto));
           return;
         }
         openTerminalTab(dto);
