@@ -51,10 +51,7 @@ def _conversation_lock(conv_id: str) -> threading.RLock:
 
 
 def _conversation_migrate_lock(project_root: str | None) -> threading.Lock:
-    root = project_root
-    if root is None:
-        root = PanelSettings.load().uefn_project_root
-    slug = project_slug(root)
+    slug = _project_id(project_root)
     with _migrate_lock_guard:
         lock = _migrate_locks.get(slug)
         if lock is None:
@@ -89,11 +86,7 @@ def _chats_root() -> Path:
 
 
 def _project_root(project_root: str | None = None, *, create: bool = False) -> Path:
-    root = project_root
-    if root is None:
-        root = PanelSettings.load().uefn_project_root
-    slug = project_slug(root)
-    d = _chats_root() / slug
+    d = _chats_root() / _project_id(project_root)
     if create or not _use_db():
         d.mkdir(parents=True, exist_ok=True)
     return d
@@ -120,11 +113,15 @@ def _use_db() -> bool:
     return use_db("chats")
 
 
+# Every ducky, group and folder lives in one list (Oct 23 2026, the owner: duckies work on
+# any project, and the selected project only drives the Content tab). A project a caller
+# names is no longer where a chat is stored; merge_into_one_list moves older rows here.
+ONE_LIST_SLUG = "_no_project"
+
+
 def _project_id(project_root: str | None = None) -> str:
-    root = project_root
-    if root is None:
-        root = PanelSettings.load().uefn_project_root
-    return project_slug(root)
+    del project_root
+    return ONE_LIST_SLUG
 
 
 def _repo():
@@ -241,10 +238,7 @@ def _load_all_conversations(
 
 def _maybe_migrate_conversation_sort_orders(project_root: str | None = None) -> None:
     """One-shot per process/project: fix zeroed sort_order without running on every list."""
-    root = project_root
-    if root is None:
-        root = PanelSettings.load().uefn_project_root
-    slug = project_slug(root)
+    slug = _project_id(project_root)
     if slug in _sort_migrated_slugs:
         return
     with _conversation_migrate_lock(project_root):
@@ -1889,6 +1883,108 @@ def _write_folders_slug(slug: str, folders: list[ChatFolder]) -> None:
     path = _chats_root() / slug / "folders.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     write_json_atomic(path, {"folders": [folder.to_dict() for folder in folders]})
+
+
+_one_list_lock = threading.Lock()
+_one_list_done: set[str] = set()
+
+
+def _one_list_key() -> str:
+    if _use_db():
+        from backend.store import account_rows, db
+
+        return f"{db.db_path()}|{account_rows.current()}"
+    return str(_chats_root())
+
+
+def merge_into_one_list() -> int:
+    """Move every project's duckies, groups and folders into the one list, once per process
+    and account. Nothing is deleted: folders keep their nesting and their duckies, Archive
+    merges into one, and each project's rows go after the ones already in the list, the
+    open project's first. Returns how many chats moved."""
+    key = _one_list_key()
+    if key in _one_list_done:
+        return 0
+    with _one_list_lock:
+        if key in _one_list_done:
+            return 0
+        try:
+            return _merge_into_one_list()
+        finally:
+            _one_list_done.add(key)  # a failed project is tried again on the next start
+
+
+def _merge_into_one_list() -> int:
+    import logging
+
+    folders_by_slug = {slug: list(rows) for slug, rows in iter_folders_by_project()}
+    convs_by_slug: dict[str, list[Conversation]] = {}
+    for slug, conv in iter_conversations_by_project():
+        convs_by_slug.setdefault(slug, []).append(conv)
+    current = project_slug(PanelSettings.load().uefn_project_root or "")
+    sources = [
+        slug
+        for slug in dict.fromkeys([current, *folders_by_slug, *convs_by_slug])
+        if slug != ONE_LIST_SLUG
+        and (convs_by_slug.get(slug) or any(not is_archive_folder_id(f.id) for f in folders_by_slug.get(slug, [])))
+    ]
+    if not sources:
+        return 0
+    load_folders("")  # the list's Archive folder exists before archived duckies arrive
+    here_folders = [f for f in folders_by_slug.get(ONE_LIST_SLUG, []) if not is_archive_folder_id(f.id)]
+    here_ids = {f.id for f in here_folders}
+    tops = [f.sort_order for f in here_folders if (f.parent_id or "") not in here_ids]
+    tops += [c.sort_order for c in convs_by_slug.get(ONE_LIST_SLUG, []) if not (c.folder_id or "")]
+    next_order = max(tops, default=-1.0) + 1.0
+    layout_folders: list[dict[str, Any]] = []
+    layout_chats: list[dict[str, Any]] = []
+    moved = 0
+    for slug in sources:
+        folders = [f for f in folders_by_slug.get(slug, []) if not is_archive_folder_id(f.id)]
+        ids = {f.id for f in folders}
+        convs = convs_by_slug.get(slug, [])
+        archived = [c.id for c in convs if is_archive_folder_id(c.folder_id or "")]
+        top_folders = sorted((f for f in folders if (f.parent_id or "") not in ids), key=lambda f: f.sort_order)
+        top_convs = sorted(
+            (c for c in convs if not is_archive_folder_id(c.folder_id or "") and (c.folder_id or "") not in ids),
+            key=lambda c: c.sort_order,
+        )
+        try:
+            if top_convs or top_folders:
+                move_chats_to_project([c.id for c in top_convs], [f.id for f in top_folders], ONE_LIST_SLUG, "")
+            if archived:
+                _move_archived_to_one_list(slug, archived)
+        except Exception:  # noqa: BLE001 - that project's rows stay where they are, whole
+            logging.getLogger(__name__).exception("could not move the duckies of %s into the one list", slug)
+            continue
+        layout_folders += [{"id": f.id, "parent_id": "", "sort_order": next_order + i} for i, f in enumerate(top_folders)]
+        layout_chats += [{"id": c.id, "folder_id": "", "sort_order": next_order + i} for i, c in enumerate(top_convs)]
+        next_order += float(max(len(top_folders), len(top_convs)))
+        moved += len(convs)
+    if layout_folders or layout_chats:
+        apply_sidebar_layout(folders=layout_folders, chats=layout_chats, project_root="")
+    return moved
+
+
+def _move_archived_to_one_list(slug: str, conv_ids: list[str]) -> None:
+    """Archived duckies of ``slug`` go to the list's Archive (their disk folders too)."""
+    relocated: list[tuple[Path, Path]] = []
+    try:
+        for cid in conv_ids:
+            src = _conversation_disk_dir(slug, cid)
+            dest = _conversation_disk_dir(ONE_LIST_SLUG, cid)
+            if not src.exists() or dest.exists():
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest))
+            relocated.append((dest, src))
+        _commit_project_move(ONE_LIST_SLUG, [], conv_ids, lambda _cid: ARCHIVE_FOLDER_ID)
+    except Exception:
+        for dest, src in reversed(relocated):
+            if dest.exists() and not src.exists():
+                src.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(dest), str(src))
+        raise
 
 
 def adopt_group_project(conv: Conversation, group_id: str) -> None:

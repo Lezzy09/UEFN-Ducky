@@ -51,6 +51,19 @@ def _project_root() -> str:
     return PanelSettings.load().uefn_project_root.strip()
 
 
+def _island_arg(project: str) -> str | None:
+    """A launch/restart ``project``: None for the selected island, a path as given, else
+    the root of a known project's name, slug or content mount."""
+    import os
+
+    key = (project or "").strip()
+    if not key:
+        return None
+    if os.path.exists(key):
+        return key
+    return _resolve_project_root_arg(key)
+
+
 def _resolve_project_root_arg(project: str) -> str:
     """Resolve a project reference (path, display name, or slug) to its root.
 
@@ -436,21 +449,24 @@ def ducky_get_local_project(pretty: bool = False) -> str:
 
 @mcp.tool()
 def ducky_list_projects(pretty: bool = False) -> str:
-    """Recent projects in the panel header dropdown (path, name, active flag, kind).
+    """Every project Ducky knows (path, name, active flag, kind): opened ones and every
+    island found on disk. Duckies work in all of them, selected or not: pass full paths.
 
     kind is 'uefn' for an island (<Name>.uefnproject) or 'folder' for any other folder.
+    active marks the person's selected project (their Content tab).
     """
     return tool_json({"projects": list_panel_projects()}, pretty=pretty)
 
 
 @mcp.tool()
 def ducky_set_project(path: str = "", name: str = "", pretty: bool = False) -> str:
-    """Switch the panel's active project — same as picking one in the header dropdown.
+    """Switch the person's selected project — same as picking one in the header dropdown.
 
+    Only when the person asks to switch: it changes their Content tab. Working in another
+    project needs no switch (full paths reach every project).
     Provide `path` (full folder) or `name` (display name from ducky_list_projects, e.g. MCPTest).
     Any folder works: a UEFN island, or a plain folder such as a code repo (a folder project
-    gets no listener init and keeps every file it has). Use when workspace tools target the
-    wrong project or UEFN has a different map open.
+    gets no listener init and keeps every file it has).
     """
     from frontend.ui_web.project_switch import switch_panel_project
 
@@ -467,12 +483,13 @@ def ducky_launch_uefn(project: str = "", pretty: bool = False) -> str:
 
     Host-side Windows launch. Passes ``-ValkyrieProject=<path>`` — a bare
     ``.uefnproject`` path is ignored and the hub opens the last island instead.
-    ``project`` is a folder or ``.uefnproject``; empty uses the panel's current island.
+    ``project`` is a folder, ``.uefnproject`` or a project name from ducky_list_projects;
+    empty uses the selected island. The selected project does not change.
     Use when UEFN is closed. Does not restart a running editor.
     """
     from frontend.window_view import launch_uefn_project
 
-    return tool_json(launch_uefn_project(project or None), pretty=pretty)
+    return tool_json(launch_uefn_project(_island_arg(project)), pretty=pretty)
 
 
 @mcp.tool()
@@ -491,14 +508,15 @@ def ducky_close_uefn(pretty: bool = False) -> str:
 def ducky_restart_uefn(project: str = "", timeout: float = 180, pretty: bool = False) -> str:
     """Close UEFN, reopen it in the project, and wait until the listener matches.
 
-    ``project`` empty uses the panel's current island. ``timeout`` caps the wait
-    (max 300s). Requires the island to have been connected before — the listener
-    boots from the project's init_unreal.py.
+    ``project`` is a folder, ``.uefnproject`` or a project name from ducky_list_projects;
+    empty uses the selected island. Opening another island leaves the selected project
+    as it is. ``timeout`` caps the wait (max 300s). Requires the island to have been
+    connected before — the listener boots from the project's init_unreal.py.
     """
     from frontend.window_view import restart_uefn_project
 
     return tool_json(
-        restart_uefn_project(project or None, wait=True, timeout=timeout),
+        restart_uefn_project(_island_arg(project), wait=True, timeout=timeout),
         pretty=pretty,
     )
 
@@ -524,16 +542,15 @@ def ducky_wait_uefn_ready(timeout: float = 180, project: str = "", pretty: bool 
 
 @mcp.tool()
 def ducky_sync_project_to_uefn(pretty: bool = False) -> str:
-    """Point the panel's active project at whatever project UEFN currently has open.
+    """Switch the person's selected project to the island UEFN currently has open.
 
-    Reads the live editor's project via the listener and switches the panel to the matching
-    recent project, so file/workspace tools and the live UEFN map are the same project. Use
-    this ONCE when `ducky_get_status` reports `project_match: false`. UEFN names the live
-    project by its content mount (the island's root plugin, sometimes a GUID), so the match
-    is made against each recent island's own descriptors, not its folder name.
-    `already_synced` means the panel project IS the open island: continue working. On an
-    error, do not retry, re-check status or switch projects: call `ducky_ask_user` once with
-    the two options in the error text and end the turn.
+    Only when the person asks for it: it changes their Content tab. Duckies never need it
+    to work, because file tools reach every project. UEFN names the live project by its
+    content mount (the island's root plugin, sometimes a GUID), so the match is made
+    against each known island's own descriptors, not its folder name.
+    `already_synced` means the selected project IS the open island. On an error, do not
+    retry, re-check status or switch projects: call `ducky_ask_user` once with the two
+    options in the error text and end the turn.
     """
     from backend.bridge import post_command_to_listener
     from backend.bridge.status import _normalize_project_path, _same_or_nested
@@ -1914,11 +1931,11 @@ def ducky_get_chat_context(
 ) -> str:
     """Read token breakdown and omitted segments for any panel chat.
 
-    The chat's stored owning project determines the context: chats in the active
-    project get a live token breakdown; other chats get a stored-context summary
-    labeled with their own project. This never switches the active project.
+    Every ducky is in the one list, so each gets a live token breakdown; a chat an
+    older Ducky still keeps under a project gets a stored-context summary labeled with
+    that project. This never switches the selected project.
     Optional `project` (path, name, or slug from ducky_list_projects) is only a
-    lookup hint, as in ducky_read_chat; it cannot override the chat's owner.
+    lookup hint, as in ducky_read_chat; it cannot override where the chat is kept.
     """
     conv_id = conv_id.strip()
     root = _resolve_project_root_arg(project)
@@ -1930,7 +1947,7 @@ def ducky_get_chat_context(
     if home_slug is None:
         raise ValueError(f"Conversation not found: {conv_id!r}")
 
-    if home_slug != project_slug(_project_root()):
+    if home_slug not in (project_slug(""), project_slug(_project_root())):
         total_chars = sum(len(str(m.get("content") or "")) for m in conv.messages)
         return tool_json(
             {

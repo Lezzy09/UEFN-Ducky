@@ -57,7 +57,7 @@ def test_emit_runs_matching_workflows(monkeypatch):
     assert logged and logged["runs"]
 
 
-def test_spawn_stays_on_current_island(tmp_path, monkeypatch):
+def test_spawn_keeps_the_selected_project_and_lands_in_the_one_list(tmp_path, monkeypatch):
     from backend.automations import runner
     from backend.automations.store import save_workflow
 
@@ -101,7 +101,8 @@ def test_spawn_stays_on_current_island(tmp_path, monkeypatch):
     if _use_db():
         from frontend.ui_web.project_chats import _repo
 
-        assert _repo().conv_project_id(conv_id) == project_slug(str(home))
+        # Duckies are one list, in no project; the selected project did not move.
+        assert _repo().conv_project_id(conv_id) == project_slug("")
 
 
 def test_cron_does_not_steal_project(tmp_path, monkeypatch):

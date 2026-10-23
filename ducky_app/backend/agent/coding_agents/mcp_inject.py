@@ -206,9 +206,13 @@ FILE_TOOLS_RULE = (
     "\n## Ducky tools only\n"
     "Do every action with the `uefn` tools. Your own shell, file, edit, web, picture, "
     "sub-agent and question tools are switched off here: never look for them or ask for "
-    "them, and never edit a file with Codex `apply_patch`. The tools work in the open project "
-    "(relative paths) and in every other folder you were given, the person's other Ducky "
-    "projects (absolute paths, e.g. path=\"C:/Users/.../OtherRepo\"). In a code runner call "
+    "them, and never edit a file with Codex `apply_patch`. The tools work in the person's selected "
+    "project (relative paths) and, selected or not, in all their other Ducky projects (absolute "
+    "paths, e.g. path=\"C:/Users/.../OtherRepo\"; `ducky_list_projects` gives every path). A folder "
+    "in no project asks the person once. Never call `ducky_set_project` or "
+    "`ducky_sync_project_to_uefn` unless the person asked to switch their selected project: it "
+    "changes what they are looking at. Live UEFN tools act on the island UEFN has open; for live "
+    "work on another island open it with `ducky_restart_uefn(project=...)`. In a code runner call "
     "them as `tools.mcp__uefn__workspace_search({...})`.\n"
     '- find files: `workspace_find` ("*.py", "src/**/mcp*"); a folder tree: `workspace_tree`\n'
     '- search text: `workspace_search` (output_mode="files" first on a broad search, then "content" with context)\n'
@@ -405,8 +409,9 @@ def bootstrap_system_prompt(
         "`project_memory_save(name, content, description, author=\"<your ducky name>\")` (the "
         "description says WHEN to pull it); when a topic grows, split it like a skill into "
         "sub-entries (`name=\"topic/sub\"`, one level); extend with `project_memory_append`. "
-        "You WRITE only to your own project's memory; other projects have their own — survey them "
-        "with `ducky_memory_overview`, then READ via `project_memory_list/get(project=…)`. Read "
+        "Other projects have their own memory — survey them with `ducky_memory_overview`, read via "
+        "`project_memory_list/get(project=…)`, and save a fact about another project there with "
+        "`project_memory_save(..., project=…)`. Read "
         "another ducky's context with `ducky_read_chat(conv_id, project=…)`.\n"
     )
 

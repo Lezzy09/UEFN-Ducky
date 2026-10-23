@@ -203,7 +203,8 @@ def test_group_create_in_global_agents(backend: str, tmp_path: Path, monkeypatch
     folders = {f.id: f for f in pc.load_folders("")}
     assert folders[res["folder_id"]].group_hub_id == res["id"]
     assert pc.conversation_project_slug(res["id"]) == "_no_project"
-    assert res["folder_id"] not in {f.id for f in pc.load_folders(island)}
+    # One list: naming the open island shows the same folders.
+    assert res["folder_id"] in {f.id for f in pc.load_folders(island)}
 
 
 def test_deletes_tell_every_window_which_rows_to_drop(backend: str, tmp_path: Path, monkeypatch, pushes) -> None:
@@ -223,25 +224,6 @@ def test_deletes_tell_every_window_which_rows_to_drop(backend: str, tmp_path: Pa
     assert pushes[-1]["removed_folder_ids"] == [folder.id]
     assert hub.id in pushes[-1]["removed_conv_ids"]
     assert member.id in pushes[-1]["removed_conv_ids"]
-
-
-def test_project_list_tags_no_island_rows_for_global_agents(monkeypatch) -> None:
-    def row(cid: str):
-        return types.SimpleNamespace(
-            id=cid, title=cid, sort_order=0, updated=0, ducky_style="", ducky_name="", profile_id="",
-            ducky_personality="", tts_voice="", tts_speed=0, file_path="", model="", provider="",
-            coding_agent="ducky", thinking_effort="", terminal_session_id="", folder_id="", parent_conv_id="",
-            is_group=False, leader_conv_id="", group_members=[], tool_call_count=0, file_count=0,
-        )
-
-    monkeypatch.setattr(pa, "list_all_conversation_metadata", lambda root=None: [row("outside")] if root == "" else [row("island")])
-    monkeypatch.setattr(pa.PanelSettings, "load", staticmethod(lambda: types.SimpleNamespace(uefn_project_root="C:/island")))
-    monkeypatch.setattr("frontend.ui_web.project_chats.project_slug", lambda root: "_no_project" if not (root or "").strip() else "Island_abc")
-    monkeypatch.setattr(pa.PanelApi, "_sidebar_context_tokens", staticmethod(lambda _c: 0))
-
-    rows = PanelApiChatsMixin().list_all_conversations(False)
-
-    assert [(r["id"], r.get("project_slug")) for r in rows] == [("island", None), ("outside", "_no_project")]
 
 
 def test_a_late_save_never_brings_a_deleted_chat_back(tmp_path: Path, monkeypatch, pushes) -> None:

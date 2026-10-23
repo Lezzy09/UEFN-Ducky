@@ -191,6 +191,7 @@ def test_delete_project_rows_and_project_listing(tmp_path: Path) -> None:
     conv = pc.create_conversation(title="t", project_root=project, skill_snapshot="x")
     pc.append_message(conv, {"role": "user", "content": "hi", "text": "hi", "ts": time.time()}, project)
     slug = pc.project_slug(project)
+    pc.move_chats_to_project([conv.id], [], slug, "")  # an older Ducky kept chats per project
     listing = appdata_projects()
     mine = next(p for p in listing["projects"] if p["slug"] == slug)
     assert mine["rows"]["conversations"] == 1 and mine["rows"]["messages"] == 1

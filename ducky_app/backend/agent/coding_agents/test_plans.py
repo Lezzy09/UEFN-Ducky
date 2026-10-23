@@ -207,7 +207,8 @@ class PlansStoreTests(unittest.TestCase):
         ):
             listed = plans.list_plans()
         self.assertTrue(any(r["chat_id"] == "chat-src" for r in listed))
-        self.assertFalse(any(r["chat_id"] == "chat-other" for r in listed))
+        # The database keeps plans with their duckies: every one is listed, whatever project.
+        self.assertEqual(any(r["chat_id"] == "chat-other" for r in listed), plans._use_db())
         src_row = next(r for r in listed if r["chat_id"] == "chat-src")
         self.assertEqual(src_row["progress"]["completed"], 1)
         self.assertNotIn("nest_path", src_row)

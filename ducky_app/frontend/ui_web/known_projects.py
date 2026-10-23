@@ -135,7 +135,7 @@ def _plugin_rows() -> tuple[list[dict], list[dict]]:
 def list_known_projects(*, rescan: bool = False) -> dict:
     """The Projects window: ``{sources, projects}``. Each project row has path, name, slug,
     kind, flavor, mount, source ('uefn' / 'other' / a plugin source id), last_opened,
-    has_thumbnail and active."""
+    has_thumbnail, active and listener_ready."""
     from frontend.settings import PanelSettings
     from frontend.ui_web.project_chats import project_display_name, project_slug
     from frontend.ui_web.project_switch import _mount_for, normalize_project_path
@@ -146,7 +146,6 @@ def list_known_projects(*, rescan: bool = False) -> dict:
     paths = known_project_roots(rescan=rescan)
     if current and current not in paths:
         paths.insert(0, current)
-    duckies = _duckies_by_slug()
     rows: list[dict] = []
     for path in paths:
         kind = project_kind(path)
@@ -163,9 +162,8 @@ def list_known_projects(*, rescan: bool = False) -> dict:
                 "last_opened": opened.get(path, 0.0),
                 "has_thumbnail": bool(kind == UEFN and thumbnail_path(path)),
                 "active": path == current,
-                # The details bar: how many duckies work here, and whether the island
-                # already has Ducky's listener (boot sets it up on every island).
-                "duckies": duckies.get(slug, 0),
+                # The details bar: whether the island already has Ducky's listener (boot
+                # sets it up on every island). Duckies are one list, in no project.
                 "listener_ready": kind == UEFN and (Path(path) / "Content" / "Python" / "init_unreal.py").is_file(),
             }
         )
@@ -182,20 +180,6 @@ def list_known_projects(*, rescan: bool = False) -> dict:
             continue
         rows.append(row)
     return {"sources": sources, "projects": rows}
-
-
-def _duckies_by_slug() -> dict[str, int]:
-    """Duckies (chats) per project slug, in one query; {} when chats aren't in the database."""
-    try:
-        from backend.store import db
-        from backend.store.switch import use_db
-
-        if not use_db("chats"):
-            return {}
-        rows = db.connect().execute("SELECT project_id, count(*) FROM conversations GROUP BY project_id").fetchall()
-        return {str(r[0]): int(r[1]) for r in rows}
-    except Exception:
-        return {}
 
 
 def thumbnail_for_slug(slug: str) -> str:

@@ -97,7 +97,7 @@ function FocusViewContent({ focusId }: FocusViewProps) {
   useConnectionIcon(listener);
   const hasProject = !!projectPath.trim();
   const runningChatIds = useRunningAgents();
-  const { folders, rootChats, load } = useChatFolders(0, project.slug);
+  const { folders, rootChats, load } = useChatFolders(0);
   const handleCloseWindow = useFocusCloseWindow();
 
   // The header's background tray and chat links open chats here too; without an opener

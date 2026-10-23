@@ -838,15 +838,17 @@ def resolve_workspace_path(relative_or_absolute: str) -> str:
 def _resolve_workspace_path_unchecked(relative_or_absolute: str) -> str:
     """Map user path to an absolute path confined to workspace roots."""
     roots = workspace_roots()
-    if not roots:
-        raise ValueError(
-            "No workspace root configured. Set the project in UEFN-Ducky Settings → Agent, "
-            "or set UEFN_VSCODE_WORKSPACE_FOLDERS / UEFN_DUCKY_PROJECT_ROOT."
-        )
     p = (relative_or_absolute or "").strip()
+    is_abs = bool(p) and (os.path.isabs(p) or (len(p) > 2 and p[1] == ":"))
+    if not roots and not is_abs:
+        # A full path needs no selected project: it reaches the project that holds it.
+        raise ValueError(
+            "No project is selected, so a relative path has nowhere to go. Pass a full path "
+            "(ducky_list_projects gives every project's folder)."
+        )
     if not p:
         raise ValueError("Path must not be empty.")
-    if os.path.isabs(p) or (len(p) > 2 and p[1] == ":"):
+    if is_abs:
         full = os.path.realpath(os.path.abspath(p))
         for r in roots:
             if _is_under_root(full, r):

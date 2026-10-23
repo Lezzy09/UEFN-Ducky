@@ -47,7 +47,11 @@ def test_two_group_shared_plan_workflow(team, monkeypatch, backend, tmp_path):
     edited = plans.update_node('builder', 'a1', body_markdown='Started on core', project_root=root)
     assert edited['id'] == master['id']
     assert plans.load_plan('builder', root) is None
-    assert plans.load_plan_view('builder', str(tmp_path / 'other-project')) is None
+    elsewhere = plans.load_plan_view('builder', str(tmp_path / 'other-project'))
+    if backend == 'db':  # a plan follows its ducky: another project still finds the team's plan
+        assert elsewhere['id'] == master['id']
+    else:
+        assert elsewhere is None
 
     race(monkeypatch,
          lambda: plans.update_node('coord', 'a1', status='completed', project_root=root),

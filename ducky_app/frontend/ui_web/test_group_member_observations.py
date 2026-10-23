@@ -41,13 +41,13 @@ def test_stored_project_assignment_and_runtime(roster, tmp_path):
     settings = PanelSettings.load()
     settings.uefn_project_root = str(tmp_path / "unrelated-active")
     settings.save()
-    plans.create_plan(members[0].id, title="Wrong project", project_root=settings.uefn_project_root)
     rows = api.group_members(group.id)["members"]
     assert [r["observation"]["runtime"] for r in rows] == ["running", "idle"]
     assert [r["observation"]["role"] for r in rows] == ["leader", "member"]
     for row in rows:
         o = row["observation"]
-        assert o["group_id"] == group.id and o["project_slug"] == chats.project_slug(root)
+        # Duckies are one list: the plan is found whatever project is selected.
+        assert o["group_id"] == group.id and o["project_slug"] == chats.ONE_LIST_SLUG
         assert o["assignment"] == {"plan_id": plan["id"], "chat_id": plan["chat_id"], "node_id": "original", "title": "Original task", "status": "in_progress"}
         assert o["observed_at"] > 0
         assert "body_markdown" not in str(o)
@@ -73,6 +73,8 @@ def test_unknown_observations(roster, monkeypatch, problem):
     elif problem == "deleted":
         monkeypatch.setattr("frontend.ui_web.panel_api.load_conversation", lambda cid: group if cid == group.id else None)
     elif problem == "unresolved_project":
+        # An older Ducky's team, kept under a project Ducky no longer knows.
+        chats.move_chats_to_project([group.id, *[m.id for m in members]], [], "Gone_0123456789abcdef", "")
         monkeypatch.setattr(chats, "project_root_for_slug", lambda slug: None)
     elif problem == "wrong_parent":
         for member in members:

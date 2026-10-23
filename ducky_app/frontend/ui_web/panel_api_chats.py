@@ -96,40 +96,23 @@ class PanelApiChatsMixin:
             row["project_name"] = project_name or project_slug
         return row
 
-    def _on_outside_project(self) -> bool:
-        from frontend.ui_web.project_chats import project_slug
+    @staticmethod
+    def _one_list() -> None:
+        """Duckies are one list, whatever project is selected; older per-project rows move
+        into it the first time the sidebar loads."""
+        from frontend.ui_web.project_chats import merge_into_one_list
 
-        root = getattr(_pa.PanelSettings.load(), "uefn_project_root", "") or ""
-        return project_slug(root) == "_no_project"
+        try:
+            merge_into_one_list()
+        except Exception:  # noqa: BLE001 - the list still shows what is already in it
+            pass
 
     def list_folders(self, all_projects: bool = False) -> list[dict[str, str | float]]:
+        """The one Duckies list's folders (``all_projects`` is ignored: there is one list)."""
+        del all_projects
+        self._one_list()
         _pa.ensure_group_folder_hubs()
-        if not all_projects:
-            rows = [self._folder_sidebar_row(f) for f in _pa.load_folders()]
-            # Duckies made with no island stay visible on every island, tagged so the
-            # tree shows them in the Global Agents folder.
-            if self._on_outside_project():
-                return rows
-            seen = {str(row.get("id") or "") for row in rows}
-            for folder in _pa.load_folders(""):
-                if folder.id in seen:
-                    continue
-                rows.append(
-                    self._folder_sidebar_row(
-                        folder,
-                        project_slug=GLOBAL_SLUG,
-                        project_name=_pa.project_slug_display_name(GLOBAL_SLUG),
-                    )
-                )
-            return rows
-        rows: list[dict[str, str | float]] = []
-        for slug, folders in _pa.iter_folders_by_project():
-            name = _pa.project_slug_display_name(slug)
-            rows.extend(
-                self._folder_sidebar_row(f, project_slug=slug, project_name=name)
-                for f in folders
-            )
-        return rows
+        return [self._folder_sidebar_row(f) for f in _pa.load_folders()]
 
     def list_conversations(self, folder_id: str) -> list[dict[str, str | float | int]]:
         return [
@@ -138,36 +121,12 @@ class PanelApiChatsMixin:
         ]
 
     def list_all_conversations(self, all_projects: bool = False) -> list[dict[str, str | float | int | bool]]:
-        """All project chats in one call (metadata only) for sidebar grouping."""
-        if not all_projects:
-            convs = list(_pa.list_all_conversation_metadata())
-            outside: list[Any] = []
-            if not self._on_outside_project():
-                seen = {c.id for c in convs}
-                outside = [conv for conv in _pa.list_all_conversation_metadata("") if conv.id not in seen]
-            group_ids = {c.id for c in [*convs, *outside] if getattr(c, "is_group", False)}
-            global_name = _pa.project_slug_display_name(GLOBAL_SLUG)
-            return [
-                *(self._conversation_sidebar_row(c, group_ids=group_ids) for c in convs),
-                # No-island duckies: the Global Agents folder on every island.
-                *(
-                    self._conversation_sidebar_row(
-                        c, group_ids=group_ids, project_slug=GLOBAL_SLUG, project_name=global_name
-                    )
-                    for c in outside
-                ),
-            ]
-        tagged = list(_pa.iter_conversations_by_project())
-        group_ids = {c.id for _, c in tagged if getattr(c, "is_group", False)}
-        return [
-            self._conversation_sidebar_row(
-                c,
-                group_ids=group_ids,
-                project_slug=slug,
-                project_name=_pa.project_slug_display_name(slug),
-            )
-            for slug, c in tagged
-        ]
+        """Every ducky in the one list, in one call (metadata only) for the sidebar."""
+        del all_projects
+        self._one_list()
+        convs = list(_pa.list_all_conversation_metadata())
+        group_ids = {c.id for c in convs if getattr(c, "is_group", False)}
+        return [self._conversation_sidebar_row(c, group_ids=group_ids) for c in convs]
 
     def list_conversations_for_file(self, file_path: str) -> list[dict[str, str | float | int]]:
         return [

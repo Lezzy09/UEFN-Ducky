@@ -96,7 +96,7 @@ describe("first-run Store → LLM setup", () => {
     expect(bodies).toMatch(/Gateways/);
     expect(bodies).toMatch(/Skills/);
     expect(bodies).toMatch(/MCP/);
-    expect(bodies).toMatch(/All projects/);
+    expect(bodies).toMatch(/any project/);
     expect(APP_SHELL_TOUR.steps.find((s) => s.target === "shell.duckies.menu")?.onEnter).toBeTypeOf(
       "function",
     );

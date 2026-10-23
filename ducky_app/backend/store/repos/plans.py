@@ -8,10 +8,58 @@ from typing import Any
 from backend.store import db
 
 TEMPLATE_PROJECT = ""
+# A chat's plan lives with its ducky, in the one list, not in a project (Oct 23 2026: duckies
+# work on any project, so switching the selected project must not hide a ducky's plan).
+ONE_LIST_PROJECT = "_no_project"
+_merged: set[str] = set()
 
 
 def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def merge_into_one_list(*, again: bool = False) -> int:
+    """Move chat plans saved under a project into the one list: once per database, or
+    ``again`` after a legacy import added some. A chat with plans in several places keeps
+    the newest there; the others stay where they are. Nothing is deleted."""
+    key = str(db.db_path())
+    if key in _merged and not again:
+        return 0
+    conn = db.connect()
+    rows = conn.execute(
+        "SELECT project_id, key, updated_at FROM plans WHERE kind='project' AND project_id NOT IN (?, ?) "
+        "ORDER BY updated_at DESC",
+        (ONE_LIST_PROJECT, TEMPLATE_PROJECT),
+    ).fetchall()
+    moved = 0
+    with db.write_txn(conn):
+        for project_id, plan_key, updated in rows:
+            have = conn.execute(
+                "SELECT updated_at FROM plans WHERE project_id=? AND key=?", (ONE_LIST_PROJECT, plan_key)
+            ).fetchone()
+            if have is not None:
+                if float(have[0] or 0) >= float(updated or 0):
+                    continue
+                # The project's plan is newer: the two swap places, both kept.
+                conn.execute(
+                    "UPDATE plans SET project_id=? WHERE project_id=? AND key=?",
+                    ("\x00swap", ONE_LIST_PROJECT, plan_key),
+                )
+                conn.execute(
+                    "UPDATE plans SET project_id=? WHERE project_id=? AND key=?",
+                    (ONE_LIST_PROJECT, project_id, plan_key),
+                )
+                conn.execute(
+                    "UPDATE plans SET project_id=? WHERE project_id=? AND key=?", (project_id, "\x00swap", plan_key)
+                )
+            else:
+                conn.execute(
+                    "UPDATE plans SET project_id=? WHERE project_id=? AND key=?",
+                    (ONE_LIST_PROJECT, project_id, plan_key),
+                )
+            moved += 1
+    _merged.add(key)
+    return moved
 
 
 def plan_get(project_id: str, key: str) -> dict[str, Any] | None:

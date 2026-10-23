@@ -60,7 +60,6 @@ import {
   contextMenuSeparator,
   fileTreeCreateItems,
   duckyTreeAllProjectsItem,
-  duckyTreeGlobalAgentsItem,
   duckyTreeCompactItem,
   duckyTreeCreateItems,
   showHiddenProjectFilesItem,
@@ -71,6 +70,7 @@ import {
   findChatAncestorFolderIds,
   findFolderById,
   foldersToAutoExpand,
+  GLOBAL_PROJECT_SLUG,
   insertChatFolder,
   isProjectFolderId,
   maxExpandedFolderDepth,
@@ -80,12 +80,6 @@ import {
 import { duckiesCreateTarget, removeFromDuckies } from "../utils/duckiesTreeModel";
 import { duckiesLayoutHold } from "../utils/duckiesLayoutHold";
 import { keepTreeFocus } from "../tree-dnd/treeFocus";
-import {
-  readDuckiesAllProjects,
-  readDuckiesGlobalAgents,
-  rememberDuckiesAllProjects,
-  rememberDuckiesGlobalAgents,
-} from "../utils/duckiesTreePrefs";
 import {
   readContentAllProjects,
   rememberContentAllProjects,
@@ -379,7 +373,8 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
   rootChatsRef.current = rootChats;
   const groupCreateQueueRef = useRef<{ chain: Promise<void> }>({ chain: Promise.resolve() });
 
-  const createTarget = duckiesCreateTarget(selectedChatFolderId ?? "", projectSlug, folders);
+  // Every ducky is in one list, whatever project is selected (that only drives Content).
+  const createTarget = duckiesCreateTarget(selectedChatFolderId ?? "", GLOBAL_PROJECT_SLUG, folders);
   const createFolderId = createTarget.projectSlug ? "" : createTarget.folderId;
   const createProjectSlug = createTarget.projectSlug;
   const { createDucky } = useCreateDucky({
@@ -398,16 +393,6 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
     setDuckiesCompact(value);
     rememberDuckiesCompact(value);
   }, []);
-  const [duckiesAllProjects, setDuckiesAllProjects] = useState(readDuckiesAllProjects);
-  const toggleDuckiesAllProjects = useCallback(
-    (value: boolean) => {
-      setDuckiesAllProjects(value);
-      rememberDuckiesAllProjects(value);
-      void load();
-    },
-    [load],
-  );
-  const [duckiesGlobalAgents, setDuckiesGlobalAgents] = useState(readDuckiesGlobalAgents);
   const [archivedAgents, setArchivedAgents] = useState<AgentProfileDto[]>([]);
   const reloadArchivedAgents = useCallback(async () => {
     const api = getApi();
@@ -416,15 +401,11 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       const res = await api.list_agent_profiles();
       setArchivedAgents(res.archived_profiles ?? []);
     } catch {
-      /* the Global Agents folder reports its own load error */
+      /* the archive list keeps what it had */
     }
   }, []);
   useEffect(() => onApiReady(() => { void reloadArchivedAgents(); }), [reloadArchivedAgents]);
   useEffect(() => onDuckyProfileChanged(() => { void reloadArchivedAgents(); }), [reloadArchivedAgents]);
-  const toggleDuckiesGlobalAgents = useCallback((value: boolean) => {
-    setDuckiesGlobalAgents(value);
-    rememberDuckiesGlobalAgents(value);
-  }, []);
   const [contentAllProjects, setContentAllProjects] = useState(readContentAllProjects);
   const toggleContentAllProjects = useCallback((value: boolean) => {
     setContentAllProjects(value);
@@ -631,15 +612,12 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
     async (parentId: string, targetSlug?: string) => {
       const api = getApi();
       if (!api?.group_create) return;
-      // A group in Global Agents or another island sits under that project row.
-      const slug = targetSlug || projectSlug;
+      const slug = targetSlug || GLOBAL_PROJECT_SLUG;
       const insertParent =
         parentId || (findFolderById(foldersRef.current, projectFolderId(slug)) ? projectFolderId(slug) : "");
       const siblings = chatFolderSiblingNames(foldersRef.current, insertParent);
       const name = numberedEntryName("Group", siblings);
-      const res = targetSlug && targetSlug !== projectSlug
-        ? await api.group_create(name, parentId, true, targetSlug)
-        : await api.group_create(name, parentId);
+      const res = await api.group_create(name, parentId);
       if (!res?.ok || !res.id) return;
       const folderId = String((res as { folder_id?: string }).folder_id || "").trim();
       const title = res.title || name;
@@ -678,21 +656,21 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       else setEditing({ kind: "chat", id: res.id, value: title });
       void load();
     },
-    [load, markNew, onChatSelect, projectSlug, setFolders],
+    [load, markNew, onChatSelect, setFolders],
   );
 
   const createGroupFlow = useCallback(
     (folderId?: string, targetSlug?: string) => {
       const target = targetSlug
         ? { folderId: folderId ?? "", projectSlug: targetSlug }
-        : duckiesCreateTarget(folderId ?? selectedChatFolderId ?? "", projectSlug, foldersRef.current);
+        : duckiesCreateTarget(folderId ?? selectedChatFolderId ?? "", GLOBAL_PROJECT_SLUG, foldersRef.current);
       // Serialized: each create names itself from the tree the previous one left,
       // instead of every click in a fast burst racing to the same "Group1".
       const queue = groupCreateQueueRef.current;
       queue.chain = queue.chain.then(() => createGroup(target.folderId, target.projectSlug)).catch(() => undefined);
       return queue.chain;
     },
-    [createGroup, projectSlug, selectedChatFolderId],
+    [createGroup, selectedChatFolderId],
   );
 
   const revealFileInSidebar = useCallback(
@@ -767,19 +745,8 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       ),
       contextMenuSeparator("duckies-sep-compact"),
       duckyTreeCompactItem(duckiesCompact, toggleDuckiesCompact),
-      duckyTreeAllProjectsItem(duckiesAllProjects, toggleDuckiesAllProjects),
-      duckyTreeGlobalAgentsItem(duckiesGlobalAgents, toggleDuckiesGlobalAgents),
     ],
-    [
-      createChatFlow,
-      createGroupFlow,
-      duckiesAllProjects,
-      duckiesCompact,
-      duckiesGlobalAgents,
-      toggleDuckiesAllProjects,
-      toggleDuckiesCompact,
-      toggleDuckiesGlobalAgents,
-    ],
+    [createChatFlow, createGroupFlow, duckiesCompact, toggleDuckiesCompact],
   );
 
   const { menu: filesHeaderMenu, open: openFilesHeaderMenu, close: closeFilesHeaderMenu } =
@@ -995,7 +962,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
   };
 
   const openArchivedAgent = async (profile: AgentProfileDto) => {
-    const chat = await openLibraryAgent(profile, folders, rootChats, projectSlug);
+    const chat = await openLibraryAgent(profile, folders, rootChats, GLOBAL_PROJECT_SLUG);
     if (!chat) return;
     onChatSelect(chat);
     void load();
@@ -1015,7 +982,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       !(await confirm({
         title: "Delete permanently",
         message: bundled
-          ? `Permanently delete "${profile.name}"? It leaves Global Agents and Archive. Existing chats will be kept, and you can still start a new agent from this template.`
+          ? `Permanently delete "${profile.name}"? It leaves Archive. Existing chats will be kept, and you can still start a new agent from this template.`
           : `Permanently delete "${profile.name}"? Existing chats will be kept.`,
         confirmLabel: "Delete permanently",
         danger: true,
@@ -1308,7 +1275,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
               if (onRequestCreateDucky) {
                 onRequestCreateDucky({
                   folderId: folderId ?? "",
-                  projectSlug: slug && slug !== projectSlug ? slug : undefined,
+                  projectSlug: slug && slug !== GLOBAL_PROJECT_SLUG ? slug : undefined,
                 });
                 return;
               }
@@ -1320,8 +1287,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
             dockSide={dockSide}
             onSelectionCountChange={setDuckySelectionCount}
             compact={duckiesCompact}
-            currentProjectSlug={projectSlug}
-            showGlobalAgents={duckiesGlobalAgents}
+            currentProjectSlug={GLOBAL_PROJECT_SLUG}
           />
           {/* Chats of your other UEFN Duckies, copied by sync: this PC's windows only. */}
           {!isRemote() ? <OtherDuckiesChats /> : null}

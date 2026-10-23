@@ -1,4 +1,4 @@
-"""Project-only Duckies lists still include chats made with no island open."""
+"""The Duckies list is one list, whatever project is selected."""
 
 from __future__ import annotations
 
@@ -36,26 +36,24 @@ def _conv(cid: str):
     )
 
 
-def test_project_list_includes_outside_duckies(monkeypatch):
+def test_the_list_is_the_one_list_on_any_project(monkeypatch):
     roots: list[str | None] = []
+    merged: list[bool] = []
 
     def fake_list(root=None):
         roots.append(root)
-        if root == "":
-            return [_conv("outside")]
-        return [_conv("island")]
+        return [_conv("helper")]
 
     monkeypatch.setattr(pa, "list_all_conversation_metadata", fake_list)
-    monkeypatch.setattr(
-        "frontend.ui_web.project_chats.project_slug",
-        lambda root: "_no_project" if not (root or "").strip() else "Island_abc",
-    )
+    monkeypatch.setattr("frontend.ui_web.project_chats.merge_into_one_list", lambda: merged.append(True) or 0)
     monkeypatch.setattr(pa.PanelSettings, "load", staticmethod(lambda: types.SimpleNamespace(uefn_project_root="C:/island")))
     monkeypatch.setattr(pa.PanelApi, "_sidebar_context_tokens", staticmethod(lambda _c: 0))
 
-    rows = PanelApiChatsMixin().list_all_conversations(False)
-    assert [row["id"] for row in rows] == ["island", "outside"]
-    assert "" in roots
+    rows = PanelApiChatsMixin().list_all_conversations(True)
+    assert [row["id"] for row in rows] == ["helper"]
+    assert "project_slug" not in rows[0]
+    # Older per-project rows move into the list first; one read, no project named.
+    assert merged == [True] and roots == [None]
 
 
 def test_global_agents_create_has_no_island(monkeypatch):
@@ -71,23 +69,3 @@ def test_global_agents_create_has_no_island(monkeypatch):
         assert "Unknown project" in str(exc)
     else:
         raise AssertionError("missing project should fail")
-
-
-def test_outside_project_does_not_duplicate(monkeypatch):
-    roots: list[str | None] = []
-
-    def fake_list(root=None):
-        roots.append(root)
-        return [_conv("outside")]
-
-    monkeypatch.setattr(pa, "list_all_conversation_metadata", fake_list)
-    monkeypatch.setattr(
-        "frontend.ui_web.project_chats.project_slug",
-        lambda root: "_no_project" if not (root or "").strip() else "Island_abc",
-    )
-    monkeypatch.setattr(pa.PanelSettings, "load", staticmethod(lambda: types.SimpleNamespace(uefn_project_root="")))
-    monkeypatch.setattr(pa.PanelApi, "_sidebar_context_tokens", staticmethod(lambda _c: 0))
-
-    rows = PanelApiChatsMixin().list_all_conversations(False)
-    assert [row["id"] for row in rows] == ["outside"]
-    assert "" not in roots

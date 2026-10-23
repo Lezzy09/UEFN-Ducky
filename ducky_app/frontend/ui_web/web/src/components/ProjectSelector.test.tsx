@@ -35,7 +35,8 @@ it("opens the Projects window and closes it before waiting for the saved workspa
   // A click selects and shows what Ducky knows; Open switches.
   fireEvent.click(screen.getByTitle("C:/B"));
   expect(screen.getByText("UEFN island", { selector: "dd" })).toBeTruthy();
-  expect(screen.getByText("None yet")).toBeTruthy();
+  // Duckies are one list, in no project: the details show no duckies count.
+  expect(screen.queryByText("Duckies", { selector: "dt" })).toBeNull();
   expect(mocks.api.set_project_root).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Open" }));
   expect(screen.queryAllByTitle("C:/B")).toHaveLength(0);

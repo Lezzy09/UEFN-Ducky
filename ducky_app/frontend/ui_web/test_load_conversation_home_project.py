@@ -1,4 +1,5 @@
-"""Opening another project's chat must not steal it onto the active island."""
+"""Opening or saving a chat through any project keeps it where it is kept: the one list,
+or (an older Ducky's row) its project."""
 
 from __future__ import annotations
 
@@ -7,17 +8,19 @@ from pathlib import Path
 
 from frontend.settings import PanelSettings
 from frontend.ui_web.project_chats import (
+    ONE_LIST_SLUG,
     _use_db,
     adopt_group_project,
     conversation_path,
     create_conversation,
     load_conversation,
+    move_chats_to_project,
     project_slug,
     save_conversation,
 )
 
 
-def test_load_and_save_keep_home_project():
+def test_load_and_save_keep_the_chat_in_the_one_list():
     with tempfile.TemporaryDirectory() as tmp:
         home = str(Path(tmp) / "HomeIsland")
         other = str(Path(tmp) / "OtherIsland")
@@ -39,10 +42,10 @@ def test_load_and_save_keep_home_project():
         if _use_db():
             from frontend.ui_web.project_chats import _repo
 
-            assert _repo().conv_project_id(conv.id) == project_slug(home)
+            assert _repo().conv_project_id(conv.id) == ONE_LIST_SLUG
         else:
-            assert conversation_path(conv.id, home).is_file()
-            assert not conversation_path(conv.id, other).is_file()
+            assert conversation_path(conv.id, home) == conversation_path(conv.id, other)
+            assert conversation_path(conv.id, "").is_file()
 
 
 def test_adopt_group_project_moves_member_onto_the_group_island():
@@ -50,13 +53,12 @@ def test_adopt_group_project_moves_member_onto_the_group_island():
         return
     with tempfile.TemporaryDirectory() as tmp:
         home = str(Path(tmp) / "HomeIsland")
-        other = str(Path(tmp) / "OtherIsland")
         Path(home).mkdir()
-        Path(other).mkdir()
-        group = create_conversation(PanelSettings.load(), "", title="Group", project_root=home)
+        group = create_conversation(PanelSettings.load(), "", title="Group")
         group.is_group = True
-        save_conversation(group, home)
-        member = create_conversation(PanelSettings.load(), "", title="Coder", project_root=other)
+        save_conversation(group)
+        move_chats_to_project([group.id], [], project_slug(home), "")  # an older Ducky's group
+        member = create_conversation(PanelSettings.load(), "", title="Coder")
         adopt_group_project(member, group.id)
         from frontend.ui_web.project_chats import _repo
 
@@ -71,24 +73,27 @@ def test_sync_rehomes_a_member_invited_from_another_island():
 
     with tempfile.TemporaryDirectory() as tmp:
         home = str(Path(tmp) / "HomeIsland")
-        other = str(Path(tmp) / "OtherIsland")
         Path(home).mkdir()
-        Path(other).mkdir()
-        group = create_conversation(PanelSettings.load(), "", title="Group", project_root=home)
+        group = create_conversation(PanelSettings.load(), "", title="Group")
         group.is_group = True
-        folder = create_folder("Group1", project_root=home)
-        folders = load_folders(home)
+        folder = create_folder("Group1")
+        folders = load_folders()
         for item in folders:
             if item.id == folder.id:
                 item.group_hub_id = group.id
-        save_folders(folders, home)
+        save_folders(folders)
         group.folder_id = folder.id
-        member = create_conversation(PanelSettings.load(), "", title="Coder", project_root=other)
-        member.folder_id = folder.id
+        save_conversation(group)
+        member = create_conversation(PanelSettings.load(), "", title="Coder")
+        # An older Ducky's group, kept under its island; the member was made in the one list.
+        move_chats_to_project([], [folder.id], project_slug(home), "")
+        _repo().move_to_project(ONE_LIST_SLUG, [], [(member.id, folder.id)])
+        member = load_conversation(member.id)
         member.parent_conv_id = group.id
-        save_conversation(member, other)
+        save_conversation(member)
+        group = load_conversation(group.id)
         group.group_members = [{"member_conv_id": member.id, "name": "Coder"}]
-        save_conversation(group, home)
+        save_conversation(group)
 
         rows = sync_group_members_from_folder(group)
 

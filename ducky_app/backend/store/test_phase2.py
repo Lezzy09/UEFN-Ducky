@@ -128,7 +128,7 @@ def test_descendants_and_cascade_delete(backend: str, project: str) -> None:
     assert pc.load_conversation(grand.id, project) is None
 
 
-def test_global_chat_lookup_preserves_project_listing_and_ownership(backend: str, project: str, tmp_path: Path) -> None:
+def test_a_chat_is_in_the_one_list_whatever_project_is_named(backend: str, project: str, tmp_path: Path) -> None:
     from frontend.ui_web import project_chats as pc
 
     other = str(tmp_path / "Other")
@@ -142,13 +142,13 @@ def test_global_chat_lookup_preserves_project_listing_and_ownership(backend: str
     pc.save_conversation(loaded, other)
 
     assert pc.load_conversation(conv.id, project).title == loaded.title
-    assert pc.conversation_project_slug(conv.id, other) == pc.project_slug(project)
-    assert pc.list_all_conversation_metadata(other) == []
+    assert pc.conversation_project_slug(conv.id, other) == pc.ONE_LIST_SLUG
+    # One list: naming either project lists the same duckies.
+    assert [c.id for c in pc.list_all_conversation_metadata(other)] == [conv.id]
     assert [c.id for c in pc.list_all_conversation_metadata(project)] == [conv.id]
     assert pc.conversation_project_slug("missing-chat", other) is None
     if backend == "files":
-        assert pc.conversation_path(conv.id, project).is_file()
-        assert not pc.conversation_path(conv.id, other).is_file()
+        assert pc.conversation_path(conv.id, "").is_file()
 
 
 # --------------------------------------------------------------------------- db-only behaviour
@@ -215,10 +215,16 @@ def test_import_from_legacy_chat_tree(tmp_path: Path, project: str) -> None:
     loaded = pc.load_conversation("c1", project)
     assert loaded is not None and loaded.title == "Legacy" and len(loaded.messages) == 2
     assert loaded.disabled_packs == [] and loaded.enabled_packs is None  # tri-state survives
-    assert {f.id for f in pc.load_folders(project)} >= {"f1", "archive"}
+    assert {f.id for f in pc._load_folders_for_slug(slug)} >= {"f1"}
     rep = phase2.report()
     assert rep["conversations"] == 2 and rep["messages"] == 2 and rep["folders"] == 1
     assert not (proj / "conversations" / "c1" / "conversation.json").exists()
     assert (root / "legacy" / "chats" / "projects" / slug / "conversations" / "c1" / "conversation.json").exists()
     assert (proj / "conversations" / "c1" / "attachments" / "shot.png").exists()  # attachments stay
     assert repo.conv_get("old", project_id=phase2.LEGACY_FLAT_PROJECT) is not None
+    # The first sidebar load moves the imported rows into the one list, attachments too.
+    pc._one_list_done.clear()
+    assert pc.merge_into_one_list() == 1
+    assert "f1" in {f.id for f in pc.load_folders(project)}
+    assert pc.conversation_project_slug("c1") == pc.ONE_LIST_SLUG
+    assert (root / "chats" / "projects" / pc.ONE_LIST_SLUG / "conversations" / "c1" / "attachments" / "shot.png").exists()

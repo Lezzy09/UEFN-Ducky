@@ -487,11 +487,46 @@ def approve_ducky_tool(
 
 
 _FOLDER_RULE = "folder:"
+# Folders the person always allowed, for every ducky: one ducky's yes never makes the next
+# one ask again (Oct 23 2026, the owner: duckies work on any project, no barriers).
+_SHARED_FOLDERS_KEY = "agent_allow_folders"
+
+
+def _shared_folders() -> list[str]:
+    if not _rules_in_db():
+        return []
+    try:
+        from backend.store.repos import kv
+
+        doc = kv.get_doc(_RULES_TABLE, _SHARED_FOLDERS_KEY)
+    except Exception:
+        return []
+    return [str(f) for f in doc if str(f).strip()] if isinstance(doc, list) else []
+
+
+def _store_shared_folders(folders: list[str]) -> None:
+    if not _rules_in_db():
+        return
+    from backend.store.repos import kv
+
+    kv.set_doc(_RULES_TABLE, _SHARED_FOLDERS_KEY, folders[-200:])
+
+
+def _share_folder(folder: str) -> bool:
+    """Allow ``folder`` for every ducky. False when there is no shared store (files store)."""
+    if not _rules_in_db():
+        return False
+    folders = _shared_folders()
+    if folder not in folders:
+        _store_shared_folders([*folders, folder])
+    return True
 
 
 def approved_folders(conv_id: str) -> list[str]:
-    """Folders outside the person's projects this chat said to always allow."""
-    return [r[len(_FOLDER_RULE):] for r in _rules(conv_id) if r.startswith(_FOLDER_RULE)]
+    """Folders outside the person's projects that were always allowed: for every ducky,
+    and the ones this chat allowed before they were shared."""
+    own = [r[len(_FOLDER_RULE):] for r in _rules(conv_id) if r.startswith(_FOLDER_RULE)]
+    return list(dict.fromkeys([*_shared_folders(), *own]))
 
 
 def approve_outside_folder(conv_id: str, folder: str, path: str) -> str:
@@ -500,23 +535,25 @@ def approve_outside_folder(conv_id: str, folder: str, path: str) -> str:
 
     Oct 21 2026: the file tools refused every such path outright, so agents told people
     they had "no permission" for files the person had just asked them to change."""
-    if allows_everything(conv_id) or _FOLDER_RULE + folder in _rules(conv_id):
+    if allows_everything(conv_id) or folder in approved_folders(conv_id):
         return ""
     from backend.agent.coding_agents.base import coding_agent_label
 
     card = {
         "prompt": f"Allow {coding_agent_label(_chat_agent(conv_id))} to use files in this folder? "
-                  "It is outside your Ducky project.",
+                  "It is outside your Ducky projects.",
         "detail": folder if os.path.normcase(path) == os.path.normcase(folder) else f"{folder}\n(for {path})",
         "warning": "",
         "risky": False,
         "rule": _FOLDER_RULE + folder,
         "rule_label": "this folder",
+        "always_label": "Always allow this folder",
+        "always_description": "Every ducky may use it. Don't ask again.",
     }
-    answer, note = _ask(card, "Folder outside your project")
+    answer, note = _ask(card, "Folder outside your projects")
     if answer == _ALLOW_ALL:
         _remember(conv_id, _ALL_RULE)
-    elif answer == _ALLOW_ALWAYS:
+    elif answer == _ALLOW_ALWAYS and not _share_folder(folder):
         _remember(conv_id, card["rule"])
     if answer in (_ALLOW_ALL, _ALLOW_ALWAYS, _ALLOW_ONCE):
         return ""
@@ -570,14 +607,22 @@ def rule_label(rule: str) -> str:
 
 
 def allowed_rules(conv_id: str) -> list[dict[str, str]]:
-    """What this chat said to always allow, apart from Allow everything (that is the mode)."""
-    return [{"rule": r, "label": rule_label(r)} for r in _rules(conv_id) if r != _ALL_RULE]
+    """What this chat may do without asking, apart from Allow everything (that is the
+    mode): its own rules and the folders allowed for every ducky."""
+    rules = [r for r in _rules(conv_id) if r != _ALL_RULE]
+    rules += [_FOLDER_RULE + f for f in _shared_folders() if _FOLDER_RULE + f not in rules]
+    return [{"rule": r, "label": rule_label(r)} for r in rules]
 
 
 def forget_rule(conv_id: str, rule: str) -> None:
     rules = _rules(conv_id)
     if rule in rules:
         _store_rules(conv_id, [r for r in rules if r != rule])
+    if rule.startswith(_FOLDER_RULE):
+        shared = _shared_folders()
+        folder = rule[len(_FOLDER_RULE):]
+        if folder in shared:
+            _store_shared_folders([f for f in shared if f != folder])
 
 
 def clear_rules(conv_id: str) -> None:
@@ -849,8 +894,8 @@ def _ask(card: dict[str, Any], tool_name: str) -> tuple[str, str]:
         options.append(
             {
                 "id": _ALLOW_ALWAYS,
-                "label": f"Always allow {card['rule_label']} in this chat",
-                "description": "Don't ask again for this in this chat.",
+                "label": card.get("always_label") or f"Always allow {card['rule_label']} in this chat",
+                "description": card.get("always_description") or "Don't ask again for this in this chat.",
             }
         )
     options.append(

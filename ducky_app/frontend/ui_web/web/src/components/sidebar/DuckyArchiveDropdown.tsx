@@ -4,7 +4,6 @@ import { DuckyAvatar, DUCKY_AVATAR_SIZES } from "../ducky/DuckyAvatars";
 import { Icons } from "../../icons/Icons";
 import type { AgentProfileDto, FolderItem } from "../../types/panel";
 import { duckyNameMatches } from "../../utils/duckyTreeFilter";
-import { GLOBAL_PROJECT_SLUG } from "../../utils/sidebarTree";
 import { TruncatedText } from "../TruncatedText";
 
 type ArchiveChat = FolderItem["chats"][number];
@@ -12,8 +11,9 @@ type ArchiveChat = FolderItem["chats"][number];
 /** An archived chat and what was archived with it (a group's duckies and nested groups). */
 export type ArchiveNode = { chat: ArchiveChat; children: ArchiveNode[] };
 
-/** Archive rows per project, each group with its duckies and nested groups under it. */
-export function buildArchiveTree(chats: ArchiveChat[]): { project: string; nodes: ArchiveNode[] }[] {
+/** Archive rows (one list, like the Duckies tree), each group with its duckies and
+ *  nested groups under it. */
+export function buildArchiveTree(chats: ArchiveChat[]): ArchiveNode[] {
   const ids = new Set(chats.map((c) => c.id));
   const children = new Map<string, ArchiveChat[]>();
   for (const chat of chats) {
@@ -32,24 +32,13 @@ export function buildArchiveTree(chats: ArchiveChat[]): { project: string; nodes
     kids.sort((a, b) => Number(Boolean(a.isGroup)) - Number(Boolean(b.isGroup)));
     return { chat, children: kids.map(node) };
   };
-  const order: string[] = [];
-  const buckets = new Map<string, ArchiveNode[]>();
+  const out: ArchiveNode[] = [];
   for (const chat of chats) {
     const parent = (chat.parentConvId || "").trim();
     if (parent && ids.has(parent)) continue;
-    // Duckies with no island sit in Global Agents, the same name the sidebar uses.
-    const project =
-      chat.projectSlug === GLOBAL_PROJECT_SLUG
-        ? "Global Agents"
-        : (chat.projectName || chat.projectSlug || "This project").trim() || "This project";
-    const bucket = buckets.get(project) ?? [];
-    if (!buckets.has(project)) {
-      buckets.set(project, bucket);
-      order.push(project);
-    }
-    bucket.push(node(chat));
+    out.push(node(chat));
   }
-  return order.map((project) => ({ project, nodes: buckets.get(project) ?? [] }));
+  return out;
 }
 
 /** Every chat under a node (what Delete permanently and Return to active take along). */
@@ -67,11 +56,7 @@ export function archivedInsideCount(chats: ArchiveChat[], id: string): number {
     }
     return -1;
   };
-  for (const section of buildArchiveTree(chats)) {
-    const hit = find(section.nodes);
-    if (hit >= 0) return hit;
-  }
-  return 0;
+  return Math.max(0, find(buildArchiveTree(chats)));
 }
 
 /** Keep the rows whose name matches, with the groups they sit in. */
@@ -123,15 +108,13 @@ export function DuckyArchiveDropdown({
   buttonRef: buttonRefProp,
 }: DuckyArchiveDropdownProps) {
   const [open, setOpen] = useState(false);
-  /** Folded projects and opened groups (groups start folded, projects open). */
-  const [foldedProjects, setFoldedProjects] = useState<Record<string, boolean>>({});
+  /** Opened groups (groups start folded). */
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const localButtonRef = useRef<HTMLButtonElement>(null);
   const buttonRef = buttonRefProp ?? localButtonRef;
   const filtering = Boolean(filterQuery.trim());
-  const sections = buildArchiveTree(archiveChats)
-    .map((s) => ({ ...s, nodes: filtering ? filterNodes(s.nodes, filterQuery) : s.nodes }))
-    .filter((s) => s.nodes.length > 0);
+  const archived = buildArchiveTree(archiveChats);
+  const nodes = filtering ? filterNodes(archived, filterQuery) : archived;
   const visibleAgents = filtering
     ? archivedAgents.filter((profile) => duckyNameMatches(filterQuery, profile.name))
     : archivedAgents;
@@ -258,33 +241,17 @@ export function DuckyArchiveDropdown({
       >
         <div className="sidebar-archive-dropdown">
           <div className="sidebar-archive-dropdown-title">Archive</div>
-          {sections.length === 0 && visibleAgents.length === 0 ? (
+          {nodes.length === 0 && visibleAgents.length === 0 ? (
             <div className="ui-status-sidebar-muted sidebar-archive-dropdown-empty">
               {filtering ? "No archived duckies match" : "No archived duckies"}
             </div>
           ) : null}
-          {sections.map((section) => {
-            const folded = !filtering && Boolean(foldedProjects[section.project]);
-            return (
-              <div key={section.project}>
-                <button
-                  type="button"
-                  className="sidebar-archive-dropdown-project"
-                  aria-expanded={!folded}
-                  onClick={() => setFoldedProjects((prev) => ({ ...prev, [section.project]: !folded }))}
-                >
-                  {folded ? <Icons.ChevronRight /> : <Icons.ChevronDown />}
-                  <span className="sidebar-archive-dropdown-project-name">{section.project}</span>
-                </button>
-                {folded ? null : (
-                  <ul className="sidebar-archive-dropdown-list">{section.nodes.map((node) => renderNode(node, 0))}</ul>
-                )}
-              </div>
-            );
-          })}
+          {nodes.length > 0 ? (
+            <ul className="sidebar-archive-dropdown-list">{nodes.map((node) => renderNode(node, 0))}</ul>
+          ) : null}
           {visibleAgents.length > 0 ? (
             <div>
-              <div className="sidebar-archive-dropdown-project sidebar-archive-dropdown-project--static">Global Agents</div>
+              <div className="sidebar-archive-dropdown-project sidebar-archive-dropdown-project--static">Ducky profiles</div>
               <ul className="sidebar-archive-dropdown-list">
                 {visibleAgents.map((profile) => {
                   const openAgent = () => {

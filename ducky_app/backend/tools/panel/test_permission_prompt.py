@@ -221,6 +221,21 @@ def test_file_tool_card_shows_path(monkeypatch, conv) -> None:
     assert question["warning"] == "Outside the project folder."
 
 
+def test_a_folder_always_allowed_once_is_allowed_for_every_ducky(monkeypatch, conv) -> None:
+    asked = _answer(monkeypatch, ["always"])
+    monkeypatch.setattr(pp, "_chat_agent", lambda _cid: "ducky")
+    assert pp.approve_outside_folder("c1", r"D:\Work\Repo", r"D:\Work\Repo\a.py") == ""
+    assert asked[0]["questions"][0]["options"][1]["label"] == "Always allow this folder"
+    # Another ducky reaches it with no card; it shows in any chat's permissions and goes from there.
+    asked.clear()
+    assert pp.approve_outside_folder("c2", r"D:\Work\Repo", r"D:\Work\Repo\b.py") == ""
+    assert asked == []
+    assert r"D:\Work\Repo" in pp.approved_folders("c2")
+    assert {"rule": r"folder:D:\Work\Repo", "label": r"folder: D:\Work\Repo"} in pp.allowed_rules("c2")
+    pp.forget_rule("c2", r"folder:D:\Work\Repo")
+    assert pp.approved_folders("c1") == []
+
+
 def test_tool_returns_claude_code_json(monkeypatch, conv) -> None:
     _answer(monkeypatch, ["once"])
     monkeypatch.setattr(pp, "_conv_id", lambda: "c1")

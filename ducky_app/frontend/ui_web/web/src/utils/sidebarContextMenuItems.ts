@@ -82,20 +82,6 @@ export function duckyTreeCompactItem(
   };
 }
 
-export function duckyTreeGlobalAgentsItem(
-  show: boolean,
-  onToggle: (value: boolean) => void,
-): ContextMenuItem {
-  return {
-    id: "ducky-global-agents",
-    label: "Global Agents",
-    switch: true,
-    checked: show,
-    keepOpen: true,
-    onClick: () => onToggle(!show),
-  };
-}
-
 export function duckyTreeAllProjectsItem(
   allProjects: boolean,
   onToggle: (value: boolean) => void,

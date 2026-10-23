@@ -325,6 +325,16 @@ def test_tools_roundtrip_active_project(two_projects):
         project_memory_delete("team-fact")
 
 
+def test_tools_write_another_projects_memory(two_projects):
+    from backend.tools.uefn.memory import project_memory_append, project_memory_get, project_memory_save
+
+    project_memory_save("b-only", "spawn pads face north", description="Pads", project="ProjB")
+    project_memory_append("b-only", "and west", project="ProjB")
+    assert "and west" in json.loads(project_memory_get("b-only", project="ProjB"))["content"]
+    # The selected project (ProjA) did not get it.
+    assert json.loads(project_memory_get("b-only"))["found"] is False
+
+
 def test_memory_overview_spans_projects(two_projects):
     from frontend.ui_web.project_chats import create_conversation
     from backend.memory.project import save_entry
@@ -339,7 +349,9 @@ def test_memory_overview_spans_projects(two_projects):
     by_path = {p["path"]: p for p in out["projects"]}
     assert by_path[proj_a]["memory"]["index"][0]["name"] == "a-fact"
     assert by_path[proj_b]["memory"]["index"][0]["name"] == "b-fact"
-    assert any(c["id"] == conv.id for c in by_path[proj_b]["chats"])
+    # Duckies are one list, in no project: listed once.
+    assert any(c["id"] == conv.id for c in out["chats"])
+    assert "chats" not in by_path[proj_b]
 
 
 def test_read_chat_cross_project(two_projects):
@@ -358,10 +370,9 @@ def test_read_chat_cross_project(two_projects):
         out = json.loads(ducky_read_chat(conv.id, project=project))
         assert out["messages"][0]["content"] == "other-project knowledge"
 
+        # Every ducky is in the one list: its context is the live breakdown.
         ctx = json.loads(ducky_get_chat_context(conv.id, project=project))
-        assert ctx["scope"] == "cross_project_summary"
-        assert ctx["message_count"] == 1
-        assert ctx["last_messages"][0]["content"] == "other-project knowledge"
+        assert ctx["conv_id"] == conv.id and ctx.get("scope") != "cross_project_summary"
 
 
 def test_get_of_a_missing_entry_answers_not_found(isolated_appdata, tmp_path, monkeypatch):

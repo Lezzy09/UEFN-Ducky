@@ -125,10 +125,15 @@ def test_an_agent_reaching_outside_the_projects_asks_the_person_for_that_folder(
         assert len(cards) == 1
     finally:
         identity.reset(token)
+    other = out.parent / "Elsewhere"
+    other.mkdir()
     answers.append(("deny", "use the project"))
-    token = _as("chat-b")  # each chat asks for itself
+    token = _as("chat-b")
     try:
+        # "Always" counts for every ducky: another chat reaches that folder with no card.
+        assert client.resolve_workspace_path(str(new_file)) == os.path.realpath(new_file)
+        assert len(cards) == 1
         with pytest.raises(ValueError, match="said no .* use the project"):
-            client.resolve_workspace_path(str(new_file))
+            client.resolve_workspace_path(str(other / "a.txt"))
     finally:
         identity.reset(token)

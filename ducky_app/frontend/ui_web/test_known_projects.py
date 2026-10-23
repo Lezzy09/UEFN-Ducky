@@ -56,7 +56,7 @@ def test_islands_in_fortnite_projects_and_beside_saved_ones_are_known(docs: Path
     assert by_path[str(repo.resolve())]["source"] == "other"
     assert by_path[str(saved)]["last_opened"] > 0 and by_path[str(a)]["last_opened"] == 0
     # The details bar: no duckies yet, and the listener isn't there until boot sets it up.
-    assert by_path[str(a)]["duckies"] == 0 and by_path[str(a)]["listener_ready"] is False
+    assert "duckies" not in by_path[str(a)] and by_path[str(a)]["listener_ready"] is False
     (a / "Content" / "Python").mkdir()
     (a / "Content" / "Python" / "init_unreal.py").write_text("", encoding="utf-8")
     assert next(r for r in known_projects.list_known_projects()["projects"] if r["path"] == str(a))["listener_ready"]

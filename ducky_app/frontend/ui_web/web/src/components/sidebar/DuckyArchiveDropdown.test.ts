@@ -12,16 +12,14 @@ const chats = [
   { id: "orphan", name: "Helper", projectName: "Roguelike", parentConvId: "still-active-group" },
 ];
 
-it("groups archived duckies per project, each group with what was archived with it", () => {
-  const sections = buildArchiveTree(chats);
-  expect(sections.map((s) => s.project)).toEqual(["Roguelike", "other-island"]);
-  const [rogue, other] = sections;
-  expect(rogue.nodes.map((n) => n.chat.id)).toEqual(["a", "g", "orphan"]);
-  const group = rogue.nodes[1];
+it("lists archived duckies as one list, each group with what was archived with it", () => {
+  const nodes = buildArchiveTree(chats);
+  // No project sections: duckies from any project sit together, in order.
+  expect(nodes.map((n) => n.chat.id)).toEqual(["a", "g", "c", "orphan"]);
+  const group = nodes[1];
   // Duckies first, nested groups after them, like the sidebar.
   expect(group.children.map((n) => n.chat.id)).toEqual(["m1", "inner"]);
   expect(group.children[1].children.map((n) => n.chat.id)).toEqual(["m2"]);
-  expect(other.nodes.map((n) => n.chat.id)).toEqual(["c"]);
 });
 
 it("counts everything a group takes along", () => {
@@ -31,7 +29,3 @@ it("counts everything a group takes along", () => {
   expect(archivedInsideCount(chats, "missing")).toBe(0);
 });
 
-it("files no-island duckies under Global Agents, like the sidebar", () => {
-  const [section] = buildArchiveTree([{ id: "x", name: "Lead", projectSlug: "_no_project", projectName: "No project" }]);
-  expect(section.project).toBe("Global Agents");
-});

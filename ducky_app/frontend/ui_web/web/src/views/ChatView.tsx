@@ -170,7 +170,7 @@ function ChatViewBody({ layoutMode, sidebarRefresh, projectSlug, projectPath }: 
     load,
     foldersLoaded,
     removeRows,
-  } = useChatFolders(sidebarRefresh, projectSlug);
+  } = useChatFolders(sidebarRefresh);
   const runningChatIds = useRunningAgents();
   // Brand-new duckies open before list_all_conversations returns — keep them in
   // allChats so ChatPane gets model/codingAgent on first paint (sidebar uses folders).

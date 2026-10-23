@@ -1,8 +1,7 @@
 """Project memory tools — named entries per project, shared by that project's duckies.
 
-Writes ALWAYS target the active project (a ducky only writes its own project's
-memory). Reads take an optional ``project`` argument so any ducky can pull another
-project's memory on demand.
+Every tool takes an optional ``project`` (path, name or slug): empty is the person's
+selected project. Duckies work in any project, so they keep each project's memory too.
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from backend.tools.support.plugin_gate import plugin_mcp_tool
 
 
 def _read_root(project: str) -> str:
-    """Resolve the read-scope root: '' = active project, else path/name/slug."""
+    """Resolve the project root: '' = the selected project, else path/name/slug."""
     if not (project or "").strip():
         return ""
     from backend.tools.panel.ducky_panel import _resolve_project_root_arg
@@ -80,11 +79,13 @@ def project_memory_save(
     content: str,
     description: str = "",
     author: str = "",
+    project: str = "",
     pretty: bool = False,
 ) -> str:
-    """Create or replace ONE named entry in YOUR project's memory (one fact/topic per entry).
+    """Create or replace ONE named entry in a project's memory (one fact/topic per entry).
 
-    Writes always land in the ACTIVE project — you never write another project's memory.
+    Lands in the selected project; pass `project` (path, name, or slug from
+    ducky_list_projects) when the fact belongs to the project you worked in.
     Use for facts this project's duckies need across sessions: device label conventions,
     wiring quirks, field names that worked, coding standards, decisions made — document
     hard-won solutions while solving them, like building a skill. `name` becomes the file
@@ -94,28 +95,31 @@ def project_memory_save(
     index — make it say when to pull the entry. Pass `author` (your ducky name). Only
     replace an existing entry to update the same topic — never to erase another ducky's.
     """
-    result = save_entry(name, content, description=description, author=author)
+    result = save_entry(name, content, description=description, author=author, project_root=_read_root(project))
     return tool_json({**result, "ok": True}, pretty=pretty)
 
 
 @plugin_mcp_tool("uefn")
-def project_memory_append(name: str, text: str, author: str = "", pretty: bool = False) -> str:
-    """Append a timestamped note to an entry in YOUR project's memory (created if missing).
+def project_memory_append(
+    name: str, text: str, author: str = "", project: str = "", pretty: bool = False
+) -> str:
+    """Append a timestamped note to an entry in a project's memory (created if missing).
 
     Use to extend an existing topic without rewriting it. Keep notes short and factual.
+    `project` as in project_memory_save (empty = the selected project).
     """
-    result = append_entry(name, text, author=author)
+    result = append_entry(name, text, author=author, project_root=_read_root(project))
     return tool_json({**result, "ok": True}, pretty=pretty)
 
 
 @plugin_mcp_tool("uefn")
-def project_memory_delete(name: str, pretty: bool = False) -> str:
-    """Delete ONE entry from YOUR project's memory — only for facts that are wrong or obsolete.
+def project_memory_delete(name: str, project: str = "", pretty: bool = False) -> str:
+    """Delete ONE entry from a project's memory — only for facts that are wrong or obsolete.
 
     Never delete another ducky's entry just because it is unfamiliar; when unsure, ask the
-    user or update the entry instead.
+    user or update the entry instead. `project` as in project_memory_save.
     """
-    removed = delete_entry(name)
+    removed = delete_entry(name, _read_root(project))
     if not removed:
         raise ValueError(f"No memory entry named {name!r} in this project")
     return tool_json({"deleted": name, "ok": True}, pretty=pretty)
@@ -126,12 +130,12 @@ _OVERVIEW_MAX_CHATS = 20
 
 @plugin_mcp_tool("uefn")
 def ducky_memory_overview(include_chats: bool = True, pretty: bool = False) -> str:
-    """Survey every known project's memory index and chats (each chat = a ducky's context).
+    """Survey every known project's memory index, and the duckies' chats (one list for
+    every project; each chat = a ducky's context).
 
-    Use this to find what duckies in other projects know before starting cross-project
-    work. Pull an entry with `project_memory_get(name, project=...)`; read a chat with
-    `ducky_read_chat(conv_id, project=...)` or summarize its context with
-    `ducky_get_chat_context(conv_id, project=...)`.
+    Use this to find what is known about other projects before cross-project work. Pull
+    an entry with `project_memory_get(name, project=...)`; read a chat with
+    `ducky_read_chat(conv_id)` or summarize its context with `ducky_get_chat_context(conv_id)`.
     """
     from frontend.ui_web.project_switch import list_panel_projects
 
@@ -154,17 +158,15 @@ def ducky_memory_overview(include_chats: bool = True, pretty: bool = False) -> s
             }
         except Exception as exc:  # a broken project dir must not sink the survey
             entry["memory_error"] = str(exc)
-        if include_chats:
-            try:
-                from frontend.ui_web.project_chats import list_conversations
-
-                convs = list_conversations(None, project_root=path)
-                convs.sort(key=lambda c: c.updated or 0.0, reverse=True)
-                entry["chats"] = [
-                    {"id": c.id, "title": c.title, "updated": c.updated}
-                    for c in convs[:_OVERVIEW_MAX_CHATS]
-                ]
-            except Exception as exc:
-                entry["chats_error"] = str(exc)
         projects_out.append(entry)
-    return tool_json({"projects": projects_out}, pretty=pretty)
+    out: dict[str, Any] = {"projects": projects_out}
+    if include_chats:
+        try:
+            from frontend.ui_web.project_chats import list_conversations
+
+            convs = list_conversations(None)
+            convs.sort(key=lambda c: c.updated or 0.0, reverse=True)
+            out["chats"] = [{"id": c.id, "title": c.title, "updated": c.updated} for c in convs[:_OVERVIEW_MAX_CHATS]]
+        except Exception as exc:
+            out["chats_error"] = str(exc)
+    return tool_json(out, pretty=pretty)

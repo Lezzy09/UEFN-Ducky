@@ -164,23 +164,23 @@ def _use_db() -> bool:
 
 
 def _repo(project_root: str | None):
-    """The plans repo, after folding this project's legacy .ducky/plans once."""
+    """The plans repo, after folding this project's legacy .ducky/plans once and moving
+    chat plans into the one list (a ducky's plan follows the ducky, not a project)."""
     from backend.store.importers import phase4
     from backend.store.repos import plans as repo
 
     root = _resolve_project_root(project_root)
-    if root:
-        phase4.ensure_project(root)
+    imported = phase4.ensure_project(root) if root else None
+    repo.merge_into_one_list(again=bool(imported))
     return repo
 
 
 def _project_id(project_root: str | None) -> str:
-    from frontend.ui_web.project_chats import project_slug
+    """Where chat plans are stored: the one list, whatever project is selected."""
+    del project_root
+    from backend.store.repos.plans import ONE_LIST_PROJECT
 
-    root = _resolve_project_root(project_root)
-    if not root:
-        raise ValueError("project_root required for project plans")
-    return project_slug(root)
+    return ONE_LIST_PROJECT
 
 
 def _plan_path(chat_id: str, project_root: str | None = None) -> Path:
@@ -692,7 +692,7 @@ def save_plan(plan: dict[str, Any], project_root: str | None = None) -> dict[str
     chat_id = str(plan.get("chat_id") or "").strip()
     if not chat_id:
         raise ValueError("chat_id required")
-    if not _resolve_project_root(project_root):
+    if not _use_db() and not _resolve_project_root(project_root):
         raise ValueError("project_root required for project plans")
     from frontend.ui_web.project_chats import load_conversation
 
@@ -1741,11 +1741,12 @@ def _two_plans_message(chat_id: str, by_plan: dict[str, tuple[dict[str, Any], li
 
 
 def list_plans(project_root: str | None = None) -> list[dict[str, Any]]:
-    """List project plans for the active (or given) project only."""
+    """List chat plans: every one in the database (they follow their duckies, not a
+    project); the files store lists the active (or given) project's."""
     from frontend.ui_web.project_chats import conversation_title
 
     root = _resolve_project_root(project_root)
-    if not root:
+    if not root and not _use_db():
         return []
 
     rows: list[dict[str, Any]] = []

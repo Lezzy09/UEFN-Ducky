@@ -1,7 +1,8 @@
-"""Moving duckies and group folders between islands."""
+"""Older per-project duckies, groups and folders move into the one Duckies list."""
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from frontend.ui_web import project_chats as pc
 @pytest.fixture(params=["db", "files"])
 def backend(request, monkeypatch) -> str:
     monkeypatch.setenv("DUCKY_STORE_BACKEND", request.param)
+    pc._one_list_done.clear()
     return request.param
 
 
@@ -21,78 +23,95 @@ def _island(tmp_path: Path, name: str) -> str:
     return str(root)
 
 
-def test_move_one_chat_updates_project_folder_and_directory(backend: str, tmp_path: Path) -> None:
-    src = _island(tmp_path, "Src")
-    dest = _island(tmp_path, "Dest")
-    dest_folder = pc.create_folder("Inbox", project_root=dest)
-    conv = pc.create_conversation(title="Moved", project_root=src)
-    shot = pc.get_conversations_dir(src, create=True) / conv.id / "attachments" / "shot.png"
-    shot.parent.mkdir(parents=True, exist_ok=True)
-    shot.write_bytes(b"png")
-
-    pc.move_chats_to_project([conv.id], [], pc.project_slug(dest), dest_folder.id)
-
-    assert pc.conversation_project_slug(conv.id) == pc.project_slug(dest)
-    loaded = pc.load_conversation(conv.id, dest)
-    assert loaded is not None and loaded.folder_id == dest_folder.id
-    assert not shot.exists()
-    moved = pc.get_conversations_dir(dest) / conv.id / "attachments" / "shot.png"
-    assert moved.is_file() and moved.read_bytes() == b"png"
-    assert pc.load_conversation(conv.id, src) is not None
+def _to_project(slug: str, conv_ids=(), folder_ids=(), archived=()) -> None:
+    """Put rows where an older Ducky kept them: in their project, not the one list."""
+    if conv_ids or folder_ids:
+        pc.move_chats_to_project(list(conv_ids), list(folder_ids), slug, "")
+    for cid in archived:
+        src = pc._conversation_disk_dir(pc.ONE_LIST_SLUG, cid)
+        if src.exists():
+            dest = pc._conversation_disk_dir(slug, cid)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest))
+        pc._commit_project_move(slug, [], [cid], lambda _cid: pc.ARCHIVE_FOLDER_ID)
 
 
-def test_move_group_folder_moves_hub_member_and_attachment(backend: str, tmp_path: Path) -> None:
-    src = _island(tmp_path, "Src")
-    dest = _island(tmp_path, "Dest")
-    folder = pc.create_folder("Squad", project_root=src)
-    hub = pc.create_conversation(title="Squad", folder_id=folder.id, project_root=src)
+def _select(root: str) -> None:
+    settings = pc.PanelSettings.load()
+    settings.uefn_project_root = root
+    settings.save()
+
+
+def test_new_duckies_go_in_the_one_list_whatever_project_is_named(backend: str, tmp_path: Path) -> None:
+    island = _island(tmp_path, "Island")
+    _select(island)
+    conv = pc.create_conversation(title="Helper", project_root=island)
+    folder = pc.create_folder("Team", project_root=island)
+    assert pc.conversation_project_slug(conv.id) == pc.ONE_LIST_SLUG
+    assert any(f.id == folder.id for f in pc.load_folders(""))
+    assert [c.id for c in pc.list_conversations(None, "")] == [conv.id]
+
+
+def test_every_projects_duckies_move_into_the_one_list(backend: str, tmp_path: Path) -> None:
+    a, b = _island(tmp_path, "IslandA"), _island(tmp_path, "IslandB")
+    a_slug, b_slug = pc.project_slug(a), pc.project_slug(b)
+    kept = pc.create_conversation(title="Global")
+    b1 = pc.create_conversation(title="B1")
+    a1 = pc.create_conversation(title="A1")
+    squad = pc.create_folder("Squad")
+    hub = pc.create_conversation(title="Squad", folder_id=squad.id)
     hub.is_group = True
-    pc.save_conversation(hub, src)
-    rows = pc.load_folders(src)
+    pc.save_conversation(hub)
+    rows = pc.load_folders()
     for row in rows:
-        if row.id == folder.id:
+        if row.id == squad.id:
             row.group_hub_id = hub.id
-    pc.save_folders(rows, src)
-    member = pc.create_conversation(title="Member", folder_id=folder.id, project_root=src)
+    pc.save_folders(rows)
+    member = pc.create_conversation(title="Member", folder_id=squad.id)
     member.parent_conv_id = hub.id
-    pc.save_conversation(member, src)
-    shot = pc.get_conversations_dir(src, create=True) / member.id / "attachments" / "shot.png"
+    pc.save_conversation(member)
+    old = pc.create_conversation(title="Old")
+    shot = pc.get_conversations_dir(None, create=True) / member.id / "attachments" / "shot.png"
     shot.parent.mkdir(parents=True, exist_ok=True)
     shot.write_bytes(b"png")
+    _to_project(a_slug, [a1.id], [squad.id], archived=[old.id])
+    _to_project(b_slug, [b1.id])
+    assert pc.conversation_project_slug(member.id) == a_slug
+    assert (pc._conversation_disk_dir(a_slug, member.id) / "attachments" / "shot.png").is_file()
+    _select(a)
 
-    pc.move_chats_to_project([], [folder.id], pc.project_slug(dest), "")
+    assert pc.merge_into_one_list() == 5
 
-    dest_slug = pc.project_slug(dest)
-    assert pc.conversation_project_slug(hub.id) == dest_slug
-    assert pc.conversation_project_slug(member.id) == dest_slug
-    moved_folder = next(row for row in pc.load_folders(dest) if row.id == folder.id)
-    assert moved_folder.group_hub_id == hub.id
-    assert moved_folder.parent_id == ""
-    assert all(row.id != folder.id for row in pc.load_folders(src))
-    assert (pc.get_conversations_dir(dest) / member.id / "attachments" / "shot.png").is_file()
-    assert not shot.exists()
+    for conv in (kept, a1, b1, hub, member, old):
+        assert pc.conversation_project_slug(conv.id) == pc.ONE_LIST_SLUG
+    moved = next(f for f in pc.load_folders("") if f.id == squad.id)
+    assert moved.group_hub_id == hub.id and moved.parent_id == ""
+    assert pc.load_conversation(member.id).folder_id == squad.id
+    assert pc.load_conversation(old.id).folder_id == pc.ARCHIVE_FOLDER_ID
+    assert (pc._conversation_disk_dir(pc.ONE_LIST_SLUG, member.id) / "attachments" / "shot.png").read_bytes() == b"png"
+    # The list's own duckies first, then the open project's, then the others'.
+    top = [c.title for c in pc.list_conversations("", "")]
+    assert top == ["Global", "A1", "B1"]
+    assert pc.merge_into_one_list() == 0
 
 
-def test_failed_move_leaves_the_source_group_intact(backend: str, tmp_path: Path) -> None:
-    src = _island(tmp_path, "Src")
-    dest = _island(tmp_path, "Dest")
-    folder = pc.create_folder("Squad", project_root=src)
-    first = pc.create_conversation(title="One", folder_id=folder.id, project_root=src)
-    second = pc.create_conversation(title="Two", folder_id=folder.id, project_root=src)
-    src_dir = pc.get_conversations_dir(src, create=True)
-    (src_dir / first.id).mkdir(parents=True, exist_ok=True)
-    (src_dir / first.id / "conversation.json").write_text("{}", encoding="utf-8")
-    (src_dir / second.id).mkdir(parents=True, exist_ok=True)
-    blocking = pc.get_conversations_dir(dest, create=True) / second.id
-    blocking.mkdir(parents=True, exist_ok=True)
+def test_a_project_that_cannot_move_stays_whole(backend: str, tmp_path: Path) -> None:
+    a = _island(tmp_path, "IslandA")
+    a_slug = pc.project_slug(a)
+    folder = pc.create_folder("Squad")
+    first = pc.create_conversation(title="One", folder_id=folder.id)
+    second = pc.create_conversation(title="Two", folder_id=folder.id)
+    for conv in (first, second):
+        d = pc._conversation_disk_dir(pc.ONE_LIST_SLUG, conv.id)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "note.txt").write_text("x", encoding="utf-8")
+    _to_project(a_slug, folder_ids=[folder.id])
+    # Something already sits where the second chat's folder would go.
+    pc._conversation_disk_dir(pc.ONE_LIST_SLUG, second.id).mkdir(parents=True, exist_ok=True)
 
-    with pytest.raises(ValueError, match="already exists"):
-        pc.move_chats_to_project([], [folder.id], pc.project_slug(dest), "")
+    assert pc.merge_into_one_list() == 0
 
-    src_slug = pc.project_slug(src)
-    assert pc.conversation_project_slug(first.id) == src_slug
-    assert pc.conversation_project_slug(second.id) == src_slug
-    assert (src_dir / first.id).is_dir()
-    assert not (pc.get_conversations_dir(dest) / first.id).exists()
-    assert any(row.id == folder.id for row in pc.load_folders(src))
-    assert all(row.id != folder.id for row in pc.load_folders(dest))
+    assert pc.conversation_project_slug(first.id) == a_slug
+    assert pc.conversation_project_slug(second.id) == a_slug
+    assert (pc._conversation_disk_dir(a_slug, first.id) / "note.txt").is_file()
+    assert any(f.id == folder.id for f in pc._load_folders_for_slug(a_slug))

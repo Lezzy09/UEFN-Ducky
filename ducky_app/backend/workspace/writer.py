@@ -515,8 +515,8 @@ class ProjectWriter:
         rel = normalize_rel(rel_in)
         if not rel:
             raise ValueError("Path must not be empty.")
-        root = self._root_resolver()
-        if os.path.basename(os.path.realpath(root)).lower() == "content" and rel.lower().startswith("content/"):
+        root = self._active_root(rel)
+        if root and os.path.basename(os.path.realpath(root)).lower() == "content" and rel.lower().startswith("content/"):
             rel = rel[8:]
         require_not_digest_path(rel)
         full = self._path_resolver(rel)
@@ -528,9 +528,19 @@ class ProjectWriter:
             raise ValueError(f"Path is outside the active project: {rel_in!r}")
         return canonical, full, root
 
+    def _active_root(self, rel: str) -> str:
+        """The open project, or "" for a full path when none is open: that path still
+        reaches the project (or lent folder) that holds it."""
+        try:
+            return self._root_resolver()
+        except ValueError:
+            if os.path.isabs(rel) or (len(rel) > 2 and rel[1] == ":"):
+                return ""
+            raise
+
     def _owning_root(self, full: str, active: str) -> str:
         """The open project, or the person's other Ducky project that holds ``full``."""
-        if rel_from_root(full, active):
+        if active and rel_from_root(full, active):
             return active
         try:
             others = list(self._other_roots())
@@ -543,7 +553,11 @@ class ProjectWriter:
 
     def _other_project(self, root: str) -> str:
         """``root`` when it is not the open project, else ""."""
-        return "" if os.path.normcase(root) == os.path.normcase(self._root_resolver()) else root
+        try:
+            active = self._root_resolver()
+        except ValueError:
+            return root
+        return "" if os.path.normcase(root) == os.path.normcase(active) else root
 
     def _resolve_for_read(self, rel_in: str) -> tuple[str, str, str]:
         rel = normalize_rel(rel_in)
@@ -551,7 +565,7 @@ class ProjectWriter:
             raise ValueError("Path must not be empty.")
         from backend.workspace.ai_ignore import require_ai_access
 
-        root = self._root_resolver()
+        root = self._active_root(rel)
         ctx = identity.resolve_context()
         guarded = ctx is not None and ctx.source == identity.SOURCE_AGENT
         if guarded:

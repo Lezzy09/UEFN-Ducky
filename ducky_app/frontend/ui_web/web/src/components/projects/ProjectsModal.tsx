@@ -313,10 +313,6 @@ export function ProjectsModal({
                 <dd>{openedLabel(picked.last_opened).replace(/^Opened /, "")}</dd>
               </div>
               <div>
-                <dt>Duckies</dt>
-                <dd>{!picked.duckies ? "None yet" : picked.duckies === 1 ? "1 ducky" : `${picked.duckies} duckies`}</dd>
-              </div>
-              <div>
                 <dt>Listener</dt>
                 <dd className={picked.listener_ready ? "is-ok" : ""}>
                   {picked.kind !== "uefn" ? "Not needed" : picked.listener_ready ? "Ready" : "Sets up at next start"}

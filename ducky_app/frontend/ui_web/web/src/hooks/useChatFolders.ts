@@ -3,8 +3,7 @@ import type { FolderDto, FolderItem } from "../types/panel";
 import { getApi } from "./usePanelApi";
 import { onApiReady } from "./onApiReady";
 import { ARCHIVE_FOLDER_ID, isArchiveFolderId } from "../utils/archiveFolder";
-import { readDuckiesAllProjects } from "../utils/duckiesTreePrefs";
-import { buildFolderTree, GLOBAL_PROJECT_SLUG, wrapProjectsAsFolders } from "../utils/sidebarTree";
+import { buildFolderTree } from "../utils/sidebarTree";
 import { duckiesLayoutHold } from "../utils/duckiesLayoutHold";
 import { removeFromDuckies } from "../utils/duckiesTreeModel";
 
@@ -108,8 +107,7 @@ function assembleOneProject(
     }
   }
 
-  // The all-islands list comes back grouped by island, not in saved order: a reorder
-  // at an island's (or Global Agents') top level must show as saved. Ties keep host order.
+  // Top-level rows show in saved order (a reorder must show as saved). Ties keep host order.
   const rootRaw = [...(chatsByFolder.get("") ?? [])].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
   return {
     folders: buildFolderTree(folderRows, chatsByFolder, expandedById),
@@ -119,7 +117,7 @@ function assembleOneProject(
   };
 }
 
-export function useChatFolders(refreshToken: number, currentProjectSlug = "") {
+export function useChatFolders(refreshToken: number) {
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [rootChats, setRootChats] = useState<FolderItem["chats"]>([]);
   /** Group hub chats hidden from the sidebar tree but still needed for ChatPane lookup. */
@@ -141,99 +139,23 @@ export function useChatFolders(refreshToken: number, currentProjectSlug = "") {
     const seq = ++loadSeqRef.current;
     const epoch = duckiesLayoutHold.epoch();
     const stale = () => seq !== loadSeqRef.current || duckiesLayoutHold.held() || duckiesLayoutHold.epoch() !== epoch;
-    const allProjects = readDuckiesAllProjects();
+    // Every ducky is one list: no project rows and no Global Agents header, just the
+    // duckies, groups and folders people made. The selected project only drives Content.
     const [folderRows, allConvs] = await Promise.all([
-      api.list_folders(allProjects).then((rows) => (Array.isArray(rows) ? rows : []).filter((f) => !isArchiveFolderId(f.id))),
-      api.list_all_conversations(allProjects).then((rows) => (Array.isArray(rows) ? rows : [])),
+      api.list_folders().then((rows) => (Array.isArray(rows) ? rows : []).filter((f) => !isArchiveFolderId(f.id))),
+      api.list_all_conversations().then((rows) => (Array.isArray(rows) ? rows : [])),
     ]);
 
     const expandedById = new Map<string, boolean>();
     collectExpanded(foldersRef.current, expandedById);
-
-    const archiveSource = allProjects
-      ? allConvs
-      : await api.list_all_conversations(true).then((rows) => (Array.isArray(rows) ? rows : [])).catch(() => [] as ConvRow[]);
-    const archivedRows = archiveSource.filter((c) => {
-      const storedFid = (c.folder_id || "").trim();
-      return isArchiveFolderId(storedFid) || storedFid === ARCHIVE_FOLDER_ID;
-    });
-    const everyArchive = mapConversations(archivedRows);
-
-    if (!allProjects) {
-      if (stale()) return;
-      // Duckies with no island come tagged "_no_project": they are the Global Agents
-      // folder, a real folder shown on every island (with no island open it holds all).
-      const currentIsGlobal = currentProjectSlug === GLOBAL_PROJECT_SLUG;
-      const isGlobal = (slug: unknown) => currentIsGlobal || String(slug || "").trim() === GLOBAL_PROJECT_SLUG;
-      const ownFolders = folderRows.filter((row) => !isGlobal(row.project_slug));
-      const ownConvs = allConvs.filter((conv) => !isGlobal((conv as { project_slug?: string }).project_slug));
-      const globalFolderRows = folderRows.filter((row) => isGlobal(row.project_slug));
-      const globalConvs = allConvs.filter((conv) => isGlobal((conv as { project_slug?: string }).project_slug));
-      const one = assembleOneProject(ownFolders, ownConvs, expandedById);
-      // Always there (even empty) so duckies and groups can be dropped into it.
-      const global = assembleOneProject(globalFolderRows, globalConvs, expandedById);
-      const globalWrap = wrapProjectsAsFolders(
-        [{ slug: GLOBAL_PROJECT_SLUG, name: "No project", folders: global.folders, rootChats: global.rootChats }],
-        currentProjectSlug,
-        expandedById,
-      );
-      setArchiveChats(everyArchive);
-      setHubChats([...one.hubChats, ...global.hubChats]);
-      setRootChats(one.rootChats);
-      setFolders([...one.folders, ...globalWrap]);
-      setFoldersLoaded(true);
-      return;
-    }
-
-    type Group = { name: string; folderRows: FolderDto[]; convs: ConvRow[] };
-    const bySlug = new Map<string, Group>();
-    const ensure = (slug: string, name: string): Group => {
-      const existing = bySlug.get(slug);
-      if (existing) {
-        if (name && existing.name === slug) existing.name = name;
-        return existing;
-      }
-      const created: Group = { name: name || slug, folderRows: [], convs: [] };
-      bySlug.set(slug, created);
-      return created;
-    };
-
-    for (const row of folderRows) {
-      const slug = String(row.project_slug || "").trim();
-      if (!slug) continue;
-      ensure(slug, String(row.project_name || "").trim()).folderRows.push(row);
-    }
-    for (const conv of allConvs) {
-      const slug = String((conv as { project_slug?: string }).project_slug || "").trim();
-      if (!slug) continue;
-      ensure(slug, String((conv as { project_name?: string }).project_name || "").trim()).convs.push(conv);
-    }
-    // Only projects with duckies or groups get a row (plus the open one): with dozens of
-    // islands found on disk, an empty row each would bury the duckies. The Projects window
-    // lists every project.
-    if (currentProjectSlug) ensure(currentProjectSlug, "");
-    ensure(GLOBAL_PROJECT_SLUG, "No project");
-
-    const projects: Array<{
-      slug: string;
-      name: string;
-      folders: FolderItem[];
-      rootChats: FolderItem["chats"];
-      hubChats: FolderItem["chats"];
-      archiveChats: FolderItem["chats"];
-    }> = [];
-    for (const [slug, group] of bySlug) {
-      const one = assembleOneProject(group.folderRows, group.convs, expandedById);
-      projects.push({ slug, name: group.name, ...one });
-    }
-
+    const one = assembleOneProject(folderRows, allConvs, expandedById);
     if (stale()) return;
-    setHubChats(projects.flatMap((p) => p.hubChats));
-    setArchiveChats(everyArchive);
-    setRootChats([]);
-    setFolders(wrapProjectsAsFolders(projects, currentProjectSlug, expandedById));
+    setArchiveChats(one.archiveChats);
+    setHubChats(one.hubChats);
+    setRootChats(one.rootChats);
+    setFolders(one.folders);
     setFoldersLoaded(true);
-  }, [currentProjectSlug]);
+  }, []);
 
   useEffect(() => {
     setFoldersLoaded(false);

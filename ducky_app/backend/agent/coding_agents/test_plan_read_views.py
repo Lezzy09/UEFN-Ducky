@@ -42,7 +42,8 @@ def test_mcp_assignment_read_preserves_raw_ownership(team, monkeypatch, backend,
     monkeypatch.setattr(chat_title, 'self_naming_instruction', lambda *a: '')
     runtime = prompt.get_system_prompt_parts(listener_online=False, listener_port=0,
         project_root=root, conv_id='builder')['plan']
-    if state in ('assigned', 'archived', 'own'):
+    # The database keeps plans with their duckies, so another project finds them too.
+    if state in ('assigned', 'archived', 'own') or (state == 'other_project' and backend == 'db'):
         # Open steps in the team's plan outrank a personal plan (Oct 12 2026).
         assert result['plan']['assigned_from']['node_id'] == 'a'
         assert result['plan']['id'] == plans.load_plan('coord', team)['id']

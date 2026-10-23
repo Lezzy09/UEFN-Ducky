@@ -1,4 +1,4 @@
-"""Chat context follows persisted ownership, including All-projects lookups."""
+"""Chat context: every ducky is in the one list and gets a live breakdown."""
 
 from __future__ import annotations
 
@@ -52,27 +52,19 @@ def live_context(monkeypatch):
     return calls
 
 
+def _kept_under(root, conv):
+    """Where an older Ducky kept a chat: under its project, not in the one list."""
+    pc.move_chats_to_project([conv.id], [], pc.project_slug(root), "")
+    return conv
+
+
 @pytest.mark.parametrize("requested", ["", "ActiveIsland", "HomeIsland", "ThirdIsland", "path", "slug"])
-def test_foreign_chat_context_uses_its_home_project(projects, live_context, requested):
+def test_every_ducky_gets_live_context_whatever_project_is_named(projects, live_context, requested):
     home = projects["HomeIsland"]
     conv = _chat(home)
     project = home if requested == "path" else pc.project_slug(home) if requested == "slug" else requested
 
-    result = json.loads(panel.ducky_get_chat_context(conv.id, project=project))
-
-    assert result["scope"] == "cross_project_summary"
-    assert result["project"] == "HomeIsland"
-    assert result["conv_id"] == conv.id
-    assert result["last_messages"][0]["content"] == "Home knowledge"
-    assert result["message_count"] == 1
-    assert live_context == []
-    assert PanelSettings.load().uefn_project_root == projects["ActiveIsland"]
-
-
-@pytest.mark.parametrize("requested", ["", "HomeIsland", "ThirdIsland"])
-def test_active_chat_keeps_live_context_with_another_project_hint(projects, live_context, requested):
-    conv = _chat(projects["ActiveIsland"])
-    result = json.loads(panel.ducky_get_chat_context(conv.id, project=requested, model="test-model", mode="ask"))
+    result = json.loads(panel.ducky_get_chat_context(conv.id, project=project, model="test-model", mode="ask"))
 
     assert result["used_tokens"] == 123
     assert result["conv_id"] == conv.id
@@ -81,43 +73,32 @@ def test_active_chat_keeps_live_context_with_another_project_hint(projects, live
     assert PanelSettings.load().uefn_project_root == projects["ActiveIsland"]
 
 
-def test_chat_owner_does_not_depend_on_recent_project_roster(projects, live_context):
+def test_a_chat_still_kept_under_a_project_gets_its_stored_summary(projects, live_context):
     home = projects["HomeIsland"]
-    conv = _chat(home)
-    remove_recent_project(home)
+    conv = _kept_under(home, _chat(""))
 
     result = json.loads(panel.ducky_get_chat_context(conv.id, project="ThirdIsland"))
 
     assert result["scope"] == "cross_project_summary"
+    assert result["project"] == "HomeIsland"
+    assert result["last_messages"][0]["content"] == "Home knowledge"
+    assert live_context == []
+    # The label does not depend on the recent-project roster.
+    remove_recent_project(home)
+    result = json.loads(panel.ducky_get_chat_context(conv.id, project="ThirdIsland"))
     assert result["project"] == pc.project_slug(home)
-    assert live_context == []
 
 
-def test_projectless_chat_is_not_labeled_with_the_selected_project(projects, live_context):
-    conv = _chat("")
-    result = json.loads(panel.ducky_get_chat_context(conv.id))
-
-    assert result["scope"] == "cross_project_summary"
-    assert result["project"] == "No project"
-    assert live_context == []
-
-
-@pytest.mark.parametrize("projectless", [False, True])
-def test_context_with_no_selected_project(projects, live_context, projectless):
+def test_context_with_no_selected_project(projects, live_context):
     settings = PanelSettings.load()
     settings.uefn_project_root = ""
     settings.save()
-    conv = _chat("" if projectless else projects["HomeIsland"])
+    conv = _chat(projects["HomeIsland"])
 
     result = json.loads(panel.ducky_get_chat_context(conv.id))
 
-    if projectless:
-        assert result["used_tokens"] == 123
-        assert len(live_context) == 1
-    else:
-        assert result["scope"] == "cross_project_summary"
-        assert result["project"] == "HomeIsland"
-        assert live_context == []
+    assert result["used_tokens"] == 123
+    assert len(live_context) == 1
 
 
 def test_missing_chat_does_not_compute_context(projects, live_context):

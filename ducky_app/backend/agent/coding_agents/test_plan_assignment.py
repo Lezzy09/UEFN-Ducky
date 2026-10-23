@@ -182,7 +182,11 @@ print(json.dumps(plans.assigned_plan_view('builder', sys.argv[1])))
     assert json.loads(restarted.stdout)['assigned_from'] == view['assigned_from']
     assert json.loads(restarted.stdout)['id'] == master['id']
     assert plans.load_plan('builder', team) is None
-    assert plans.assigned_plan_view('builder', str(tmp_path / 'other-project')) is None
+    elsewhere = plans.assigned_plan_view('builder', str(tmp_path / 'other-project'))
+    if backend == 'db':  # a plan follows its ducky: naming another project still finds it
+        assert elsewhere['id'] == master['id']
+    else:
+        assert elsewhere is None
     plans.update_node('coord', 'a2', assignee='', project_root=team)
     db.close_thread_connections()
     assert plans.assigned_plan_view('builder', team)['assigned_from']['node_id'] == 'a'
@@ -334,10 +338,11 @@ def test_archived_personal_reference_never_masks_canonical_assignment(team, monk
     if binding == 'archived_master':
         plans.update_plan('coord', status='archived', project_root=team)
     root = str(tmp_path / 'separate-project') if binding == 'other_project' else team
-    if binding == 'other_project':
+    if binding == 'other_project' and backend == 'files':  # the database keeps one per ducky
         plans.save_plan(archived, root)
     result = PanelApiSettingsMixin().get_plan('builder', project_root=root)
-    if binding == 'valid':
+    # The database keeps plans with their duckies: another project finds the same one.
+    if binding == 'valid' or (binding == 'other_project' and plans._use_db()):
         assert result['plan']['id'] == master['id']
         assert result['plan']['assigned_from']['node_id'] == 'a'
     else:
