@@ -14,12 +14,22 @@ every few seconds while a long script runs or the PC is busy (UEFN compiling,
 Fortnite running) and the page usually answers again on its own. Reloading on
 the first one threw the whole UI away mid-work — "it freezes, then reloads
 everything". Only a page that stays unresponsive for a full minute is reloaded.
+
+A dead *browser* process is different: the WebView is closed for good, Reload and
+Navigate do nothing, and the window stayed black until Ducky was killed (Oct 22 + 23
+2026, after a WebView2 deadlock ran the browser out of memory). That window gets a
+new WebView2 control instead; Python, agents and chats never stopped.
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import threading
 import time
 from typing import Any, Callable
+
+_log = logging.getLogger(__name__)
 
 _DEBOUNCE_S = 3.0
 _last_recover: dict[int, float] = {}
@@ -77,6 +87,11 @@ def should_recover_process_fail(kind: str | int | None) -> bool:
 def is_unresponsive_kind(kind: str | int | None) -> bool:
     k = _kind_key(kind)
     return k == _UNRESPONSIVE_KIND_INT or k == _UNRESPONSIVE_KIND
+
+
+def is_browser_exit_kind(kind: str | int | None) -> bool:
+    k = _kind_key(kind)
+    return k == 0 or k == "browserprocessexited"
 
 
 def hung_long_enough(key: int, now: float, *, label: str = "") -> bool:
@@ -155,8 +170,11 @@ def attach_process_failed(
     *,
     label: str = "main",
     on_fail: Callable[[str], None] | None = None,
+    on_browser_exit: Callable[[str], None] | None = None,
 ) -> Any | None:
-    """Subscribe ``ProcessFailed`` once. Keep the returned handler referenced."""
+    """Subscribe ``ProcessFailed`` once. Keep the returned handler referenced.
+
+    ``on_browser_exit`` replaces the Reload when the browser process itself died."""
     if core is None:
         return None
     key = id(core)
@@ -172,6 +190,18 @@ def attach_process_failed(
             return
         _unresponsive.pop(key, None)
         reason = f"{label}:{kind}" if kind else label
+        if on_browser_exit is not None and is_browser_exit_kind(kind):
+            try:
+                from frontend.error_log import record_error
+
+                record_error(error_source(reason), f"WebView2 browser stopped ({reason}); starting a new one")
+            except Exception:
+                pass
+            try:
+                on_browser_exit(reason)
+            except Exception:
+                _log.exception("WebView2 rebuild request failed")
+            return
         # Overlay panes: hide first so a dead control cannot cover the app.
         if on_fail is not None:
             try:
@@ -185,7 +215,248 @@ def attach_process_failed(
         _attached.add(key)
     except Exception:
         return None
+    _on_fail.core_key = key  # type: ignore[attr-defined]
     return _on_fail
+
+
+def forget_process_failed(handler: Any) -> None:
+    """A replaced control's core: its id may be reused by the next core's wrapper."""
+    key = getattr(handler, "core_key", None)
+    if key is None:
+        return
+    _attached.discard(key)
+    _last_recover.pop(key, None)
+    _unresponsive.pop(key, None)
+
+
+# ── A new WebView2 control after the browser process died ─────────────────────
+
+# Give the dead browser's children a moment to exit before the profile is opened again.
+_REBUILD_DELAY_S = 1.5
+_REBUILD_RETRY_S = 3.0
+_REBUILD_TRIES = 6
+# A control whose CoreWebView2InitializationCompleted never comes counts as a failed try.
+_REBUILD_INIT_TIMEOUT_S = 30.0
+
+
+class _Rebuild:
+    __slots__ = ("form", "attempt", "waiting")
+
+    def __init__(self, form: Any) -> None:
+        self.form = form
+        self.attempt = 0
+        self.waiting = False
+
+
+_rebuild_lock = threading.Lock()
+# One window at a time, the main window first: overlapping WebView2 boots on one
+# profile freeze WinForms (see browser_overlay).
+_rebuild_queue: list[_Rebuild] = []
+_rebuild_busy = False
+
+
+def _form_label(form: Any) -> str:
+    window = getattr(form, "pywebview_window", None)
+    try:
+        from frontend.ui_web.focus_windows import is_main_window
+
+        if is_main_window(window):
+            return "main"
+    except Exception:
+        pass
+    return f"window:{getattr(window, 'title', '') or '?'}"
+
+
+def request_browser_rebuild(form: Any) -> None:
+    """Queue a new WebView2 control for this pywebview form (any thread)."""
+    global _rebuild_busy
+    with _rebuild_lock:
+        if any(job.form is form for job in _rebuild_queue):
+            return
+        _rebuild_queue.append(_Rebuild(form))
+        _rebuild_queue.sort(key=lambda job: _form_label(job.form) != "main")
+        if _rebuild_busy:
+            return
+        _rebuild_busy = True
+    _schedule_next_rebuild(_REBUILD_DELAY_S)
+
+
+def _later(delay_s: float, fn: Callable[..., None], *args: Any) -> None:
+    timer = threading.Timer(delay_s, fn, args=args)
+    timer.daemon = True
+    timer.start()
+
+
+def _invoke_on_form(form: Any, fn: Callable[[], Any]) -> None:
+    from System import Action
+
+    form.Invoke(Action(fn))
+
+
+def _schedule_next_rebuild(delay_s: float) -> None:
+    global _rebuild_busy
+    with _rebuild_lock:
+        if not _rebuild_queue:
+            _rebuild_busy = False
+            return
+    _later(delay_s, _run_next_rebuild)
+
+
+def _run_next_rebuild() -> None:
+    with _rebuild_lock:
+        if not _rebuild_queue:
+            return
+        job = _rebuild_queue[0]
+        job.attempt += 1
+        job.waiting = True
+        form, attempt = job.form, job.attempt
+    try:
+        if bool(getattr(form, "IsDisposed", False)):
+            raise RuntimeError("window closed")
+        _invoke_on_form(form, lambda: rebuild_browser(form, attempt))
+    except Exception:
+        _log.exception("WebView2 rebuild failed (%s, try %s)", _form_label(form), attempt)
+        _rebuild_settled(form, attempt, False)
+        return
+    _later(_REBUILD_INIT_TIMEOUT_S, _rebuild_settled, form, attempt, False)
+
+
+def rebuild_browser(form: Any, attempt: int = 0) -> Any:
+    """WinForms UI thread: swap the form's dead WebView2 control for a new one.
+
+    pywebview's EdgeChrome (with Ducky's patches) builds it, so the page, the JS
+    bridge and the ProcessFailed hook come back exactly as at startup."""
+    from webview.platforms import edgechromium, winforms
+
+    old = getattr(form, "browser", None)
+    release_js_waiters(old)
+    forget_process_failed(getattr(old, "_ducky_process_failed_handler", None))
+    old_control = getattr(form, "webview", None)
+    if old_control is not None:
+        try:
+            form.Controls.Remove(old_control)
+        except Exception:
+            pass
+        try:
+            old_control.Dispose()
+        except Exception:
+            pass
+    window = getattr(form, "pywebview_window", None)
+    browser = edgechromium.EdgeChrome(form, window, winforms.cache_dir)
+    form.browser = browser
+    form.webview = browser.webview
+    try:
+        # Browser panes hosted on this form stay above the page.
+        browser.webview.SendToBack()
+    except Exception:
+        pass
+
+    def _ready(_sender: Any, args: Any) -> None:
+        _rebuild_settled(form, attempt, bool(getattr(args, "IsSuccess", False)))
+
+    browser._ducky_rebuild_ready = _ready
+    browser.webview.CoreWebView2InitializationCompleted += _ready
+    try:
+        from frontend.ui_web.win_frameless import reset_webview_pin
+
+        reset_webview_pin(window)
+    except Exception:
+        pass
+    return browser
+
+
+def _rebuild_settled(form: Any, attempt: int, ok: bool) -> None:
+    """One try's outcome. A late or repeated outcome of the same try is ignored."""
+    with _rebuild_lock:
+        job = next((j for j in _rebuild_queue if j.form is form), None)
+        if job is None or job.attempt != attempt or not job.waiting:
+            return
+        job.waiting = False
+        closed = bool(getattr(form, "IsDisposed", False))
+        final = ok or closed or attempt >= _REBUILD_TRIES
+        if final:
+            _rebuild_queue.remove(job)
+    if not final:
+        _schedule_next_rebuild(_REBUILD_RETRY_S)
+        return
+    label = _form_label(form)
+    try:
+        from frontend.error_log import record_activity, record_error
+
+        if ok:
+            record_activity("webview", f"WebView2 started again after its browser stopped ({label})")
+        elif not closed:
+            record_error(error_source(f"{label}:0"), f"WebView2 could not start again ({label}); restart Ducky")
+    except Exception:
+        pass
+    _schedule_next_rebuild(0.2)
+
+
+# ── evaluate_js that never waits forever ─────────────────────────────────────
+
+
+def release_js_waiters(browser: Any) -> None:
+    """Free every evaluate_js still waiting on this browser (it answers None)."""
+    for done in list(getattr(browser, "_ducky_js_waiters", None) or ()):
+        try:
+            done.release()
+        except Exception:
+            pass
+
+
+def _net_types() -> tuple[Any, Any, Any, Any, Any]:
+    from System import Action, Func, Object, String
+    from System.Threading.Tasks import Task
+
+    return Action, Func, Object, String, Task
+
+
+def install_evaluate_js_release(edge_chrome_cls: Any) -> None:
+    """pywebview's EdgeChrome.evaluate_js, except no caller waits forever: a script whose
+    task faults (dead browser) answers None, and release_js_waiters frees the rest. Its
+    callback read ``task.Result`` unguarded, so a faulted task never released the wait and
+    the window's whole dispatch queue stopped behind it."""
+    if getattr(edge_chrome_cls, "_ducky_js_release", False):
+        return
+
+    def evaluate_js(self: Any, script: str, parse_json: bool) -> Any:
+        Action, Func, Object, String, Task = _net_types()
+        done = threading.Semaphore(0)
+        out: list[Any] = [None]
+
+        def _callback(task: Any) -> None:
+            try:
+                res = json.loads(task.Result)
+                if parse_json and res is not None:
+                    try:
+                        res = json.loads(res)
+                    except Exception:
+                        pass
+                out[0] = res
+            except Exception:
+                pass
+            finally:
+                done.release()
+
+        waiters = self.__dict__.setdefault("_ducky_js_waiters", set())
+        waiters.add(done)
+        try:
+            self.webview.Invoke(
+                Func[Object](
+                    lambda: self.webview.ExecuteScriptAsync(script).ContinueWith(
+                        Action[Task[String]](_callback), self.syncContextTaskScheduler
+                    )
+                )
+            )
+            done.acquire()
+        except Exception:
+            _log.exception("Error occurred in script")
+        finally:
+            waiters.discard(done)
+        return out[0]
+
+    edge_chrome_cls.evaluate_js = evaluate_js
+    edge_chrome_cls._ducky_js_release = True
 
 
 def nudge_webview_visible(window: Any) -> None:
