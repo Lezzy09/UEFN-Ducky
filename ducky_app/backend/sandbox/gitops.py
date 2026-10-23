@@ -41,7 +41,11 @@ def _git(args: list[str], *, cwd: str, env: dict[str, str], timeout: float = 600
     except subprocess.TimeoutExpired as exc:
         raise GitError(f"git {args[0]} took longer than {int(timeout)} s") from exc
     if proc.returncode != 0:
-        raise GitError((proc.stderr or proc.stdout or f"git {args[0]} failed").strip()[-1500:])
+        said = (proc.stderr or proc.stdout or f"git {args[0]} failed").strip()[-1500:]
+        if "' too big" in said or "Filename too long" in said:
+            said += (f"\nThe folder path is too long for git on Windows ({len(cwd)} characters before the repo's "
+                     "own folders). Give the clone a short name.")
+        raise GitError(said)
     return (proc.stdout or "").strip()
 
 

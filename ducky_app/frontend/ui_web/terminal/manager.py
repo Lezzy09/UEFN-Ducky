@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import functools
+import hashlib
+import json
 import os
 import threading
 import time
@@ -101,7 +103,11 @@ class TerminalManager:
             workdir = os.getcwd()
         argv = [str(a) for a in command] if command else None
         extra = {str(k): str(v) for k, v in (env_extra or {}).items() if k} or None
-        reuse_key = (conv_id, shell_norm, workdir) if conv_id and not argv and not hidden and not extra else None
+        # The environment is part of the key: a sandbox's shells (their own PATH, profile and
+        # temp) are reused by its next command, never handed to a plain one, and a changed
+        # PATH (a runtime just installed) gets a fresh shell.
+        env_key = hashlib.sha1(json.dumps(sorted(extra.items())).encode("utf-8")).hexdigest() if extra else ""
+        reuse_key = (conv_id, shell_norm, workdir, env_key) if conv_id and not argv and not hidden else None
         if reuse_idle and reuse_key is not None:
             idle = self._idle_session(reuse_key)
             if idle is not None:
@@ -244,7 +250,7 @@ class TerminalManager:
                     closed.append(session.id)
         return closed
 
-    def _idle_session(self, reuse_key: tuple[str, str, str]) -> TerminalSession | None:
+    def _idle_session(self, reuse_key: tuple[str, ...]) -> TerminalSession | None:
         with self._lock:
             candidates = [e.session for e in self._sessions.values() if e.reuse_key == reuse_key]
         for session in candidates:
@@ -699,7 +705,7 @@ class _SessionEntry:
         *,
         session: TerminalSession,
         bridge: TerminalBridge,
-        reuse_key: tuple[str, str, str] | None = None,
+        reuse_key: tuple[str, ...] | None = None,
         chat: str = "",
     ) -> None:
         self.session = session

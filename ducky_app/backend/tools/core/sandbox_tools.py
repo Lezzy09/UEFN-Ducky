@@ -28,21 +28,22 @@ def _chat() -> str:
         return ""
 
 
-def _forward(name: str, **args: Any) -> dict[str, Any]:
+def _forward(call: str, /, **args: Any) -> dict[str, Any]:
+    """Hand ``call`` to the window. Positional-only: several tools have their own ``name`` argument."""
     from frontend.ui_web import agent_modes
 
     args["conv_id"] = args.get("conv_id") or _chat()
     if not agent_modes._in_bridge_process():
         from backend.sandbox import service
 
-        return service.call(name, args)
+        return service.call(call, args)
     from frontend.settings import PANEL_LISTENER_PORT
 
-    body = json.dumps({"args": {"name": name, "args": args}}).encode("utf-8")
+    body = json.dumps({"args": {"name": call, "args": args}}).encode("utf-8")
     req = urllib.request.Request(f"http://127.0.0.1:{PANEL_LISTENER_PORT - 1}/__panel_api/sandbox_call", data=body,
                                  headers={"Content-Type": "application/json"}, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUTS.get(name, 180.0)) as resp:
+        with urllib.request.urlopen(req, timeout=_TIMEOUTS.get(call, 180.0)) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"Ducky's window didn't answer ({exc}). Is Ducky open?"}

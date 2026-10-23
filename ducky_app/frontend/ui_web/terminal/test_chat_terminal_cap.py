@@ -170,3 +170,19 @@ def test_a_run_s_terminal_with_no_ducky_still_closes_after_the_run(mgr, tmp_path
     let_go()
     assert mgr.close_idle_agent_terminals(now=later, running=set()) == [run_terminal]
     assert mine in mgr._sessions
+
+
+def test_a_sandbox_reuses_its_own_shell_and_never_a_plain_one(mgr, tmp_path):
+    # Oct 23 2026: shells opened with their own environment were never reused, so each
+    # sandbox_run started a new PowerShell (5 of them, 555 MB, after one live test).
+    env = {"USERPROFILE": str(tmp_path / "home"), "PATH": "a;b"}
+    plain = mgr.spawn(shell="powershell", cwd=str(tmp_path), conv_id="chat-a", reuse_idle=True)
+    first = mgr.spawn(shell="powershell", cwd=str(tmp_path), conv_id="chat-a", env_extra=env, reuse_idle=True)
+    again = mgr.spawn(shell="powershell", cwd=str(tmp_path), conv_id="chat-a", env_extra=dict(env), reuse_idle=True)
+    assert first["session_id"] != plain["session_id"]
+    assert again["session_id"] == first["session_id"] and again.get("reused")
+    # A runtime installed in between changes PATH: that needs a fresh shell.
+    newer = mgr.spawn(shell="powershell", cwd=str(tmp_path), conv_id="chat-a",
+                      env_extra={**env, "PATH": "node;a;b"}, reuse_idle=True)
+    assert newer["session_id"] not in (first["session_id"], plain["session_id"])
+    assert mgr.spawn(shell="powershell", cwd=str(tmp_path), conv_id="chat-a", reuse_idle=True)["session_id"] == plain["session_id"]

@@ -56,6 +56,11 @@ def sandbox_env(sandbox: Path, extra: dict[str, str] | None = None) -> dict[str,
         "CARGO_HOME": str(sandbox / "home" / ".cargo"),
         "GOPATH": str(sandbox / "home" / "go"),
         "GIT_CONFIG_NOSYSTEM": "1",
+        # Deep node_modules trees pass Windows' 260-character path limit; git refuses them
+        # unless told otherwise.
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "core.longpaths",
+        "GIT_CONFIG_VALUE_0": "true",
         "DUCKY_SANDBOX": str(sandbox),
         # A Ducky started in here must never update itself, re-point IDE configs or
         # install CLIs into the person's PATH.

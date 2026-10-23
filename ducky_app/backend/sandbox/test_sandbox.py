@@ -382,6 +382,62 @@ def test_tools_refuse_before_asking_and_hand_off_in_the_window(monkeypatch):
     assert asked and called[-1][0] == "run"
 
 
+@pytest.mark.parametrize("in_window", [True, False])
+def test_every_tool_hands_off_all_its_arguments(monkeypatch, in_window):
+    """A live Claude Code run: sandbox_clone, sandbox_fetch and sandbox_launch all failed with
+    "_forward() got multiple values for argument 'name'" (their own ``name`` argument)."""
+    import json
+    import urllib.request
+
+    from backend.tools.core import sandbox_tools
+
+    monkeypatch.setattr("backend.sandbox.policy.ask_to_run", lambda *a: "once")
+    monkeypatch.setattr(sandbox_tools, "_chat", lambda: CONV)
+    monkeypatch.setattr("frontend.ui_web.agent_modes._in_bridge_process", lambda: not in_window)
+    called: list[tuple[str, dict]] = []
+    monkeypatch.setattr(service, "call", lambda call, args: called.append((call, args)) or {"ok": True})
+
+    class _Answer:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return self.body
+
+    def fake_urlopen(req, timeout=0):
+        sent = json.loads(req.data.decode("utf-8"))["args"]
+        called.append((sent["name"], sent["args"]))
+        return _Answer(b'{"ok": true, "result": {"ok": true}}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    calls = [
+        ("fetch", lambda: sandbox_tools.sandbox_fetch("https://example.com/a.zip", name="a.zip", sha256="0" * 64)),
+        ("clone", lambda: sandbox_tools.sandbox_clone("owner/repo", ref="main", name="repo")),
+        ("worktree", lambda: sandbox_tools.sandbox_worktree("C:/p", commit="HEAD", name="wt", copy=["a.json"])),
+        ("setup", lambda: sandbox_tools.sandbox_setup("node")),
+        ("run", lambda: sandbox_tools.sandbox_run("npm ci", shell="powershell", timeout_s=60)),
+        ("launch", lambda: sandbox_tools.sandbox_launch("node", args=["index.js"], cwd="app", name="web",
+                                                       ports=["PORT"], env={"A": "1"}, files={"x.txt": "y"})),
+        ("look", lambda: sandbox_tools.sandbox_look(pid=5, capture=False)),
+        ("http", lambda: sandbox_tools.sandbox_http(8080, method="POST", path="/x", body={"a": 1})),
+        ("mcp", lambda: sandbox_tools.sandbox_mcp(command="node", args=["s.js"], list_tools=True)),
+        ("stop", lambda: sandbox_tools.sandbox_stop(pid=5)),
+        ("clear", lambda: sandbox_tools.sandbox_clear()),
+    ]
+    for call, fn in calls:
+        fn()
+        assert called and called[-1][0] == call, (call, called[-1:])
+        assert called[-1][1]["conv_id"] == CONV
+    names = {c: a.get("name") for c, a in called}
+    assert names["clone"] == "repo" and names["launch"] == "web" and names["fetch"] == "a.zip"
+
+
 def test_workflow_template_verifies_in_a_sandbox():
     from backend.automations.pipeline_templates import BUILTIN_CATEGORIES
     from backend.automations.templates import BUILTIN_TEMPLATES
