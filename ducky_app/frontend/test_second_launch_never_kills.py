@@ -35,6 +35,37 @@ def test_a_dead_or_stale_panel_pid_is_not_waited_on(monkeypatch) -> None:
     assert len(tries) == 1  # one short try, then a normal cold start
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 process handles")
+def test_an_exited_ducky_is_not_alive_while_a_handle_to_it_is_open() -> None:
+    """Oct 22 + 23 2026: after a frozen Ducky was force-closed, its process could still be
+    opened (another process held a handle), so the next launch called it alive and spent
+    45 s trying to hand off to it, then ~5 s taskkilling it."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])  # Popen keeps a handle to it
+    assert proc.wait(timeout=30) == 0
+    assert open_files.panel_process_alive(proc.pid) is False
+    import os
+
+    assert open_files.panel_process_alive(os.getpid()) is True
+
+
+def test_reclaim_skips_a_panel_pid_that_already_exited(monkeypatch, tmp_path) -> None:
+    from frontend import frozen_process
+
+    pid_file = tmp_path / "panel.pid"
+    pid_file.write_text("4242", encoding="utf-8")
+    killed: list[int] = []
+    monkeypatch.setattr(frozen_process.sys, "platform", "win32")
+    monkeypatch.setattr(frozen_process, "panel_pid_path", lambda: pid_file)
+    monkeypatch.setattr(frozen_process, "_kill_pid_tree", lambda pid: killed.append(pid) or True)
+    monkeypatch.setattr(open_files, "panel_process_alive", lambda pid: False)
+    assert frozen_process.reclaim_stale_panel_process() is False
+    assert killed == [] and not pid_file.exists()
+    pid_file.write_text("4242", encoding="utf-8")
+    monkeypatch.setattr(open_files, "panel_process_alive", lambda pid: True)
+    assert frozen_process.reclaim_stale_panel_process() is True
+    assert killed == [4242]
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="PowerShell filter")
 def test_quitting_reaps_bridges_never_another_ducky_window() -> None:
     from frontend.app_paths import bridge_ps_filter

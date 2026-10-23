@@ -306,13 +306,23 @@ def panel_process_alive(pid: int) -> bool:
         except OSError:
             return False
     import ctypes
+    from ctypes import wintypes
 
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    kernel32 = ctypes.WinDLL("kernel32")
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    handle = kernel32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
     if not handle:
         return False
-    ctypes.windll.kernel32.CloseHandle(handle)
-    return True
+    try:
+        # An exited process still opens while anything holds a handle to it: a force-closed
+        # Ducky stayed "alive" and the next launch waited 45 s to hand off to it (Oct 22, 23).
+        code = wintypes.DWORD()
+        return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def read_living_panel_pid() -> int | None:

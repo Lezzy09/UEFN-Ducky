@@ -128,7 +128,10 @@ def reclaim_stale_panel_process() -> bool:
         except OSError:
             pass
         return False
-    if old_pid <= 0 or old_pid == os.getpid():
+    from frontend.open_files import panel_process_alive
+
+    # Nothing to kill when it already exited (taskkill on it still cost ~5 s).
+    if old_pid <= 0 or old_pid == os.getpid() or not panel_process_alive(old_pid):
         try:
             path.unlink(missing_ok=True)
         except OSError:
