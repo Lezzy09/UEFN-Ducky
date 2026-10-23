@@ -31,6 +31,27 @@ def test_same_name_group_is_reused(monkeypatch):
     assert out["reused"] is True and out["id"] == "hub" and out["folder_id"] == "f1"
 
 
+def test_same_name_group_is_reused_after_the_caller_moved(monkeypatch):
+    # Oct 22 2026: the caller's folder changed between runs and "Deploy core to Fly" was made 3 times.
+    folders = [
+        SimpleNamespace(id="lead-team", name="Lead team", parent_id="", group_hub_id="hub-lead"),
+        SimpleNamespace(id="f1", name="Deploy core to Fly", parent_id="", group_hub_id="hub"),
+    ]
+    hub = SimpleNamespace(
+        id="hub", title="Deploy core to Fly", is_group=True, leader_conv_id="", group_members=[], folder_id="f1"
+    )
+    monkeypatch.setattr("frontend.ui_web.project_chats.folder_project_slug", lambda fid: "")
+    monkeypatch.setattr("frontend.ui_web.project_chats.conversation_project_slug", lambda cid: "")
+    monkeypatch.setattr(pa, "load_folders", lambda *a, **k: folders)
+    monkeypatch.setattr(pa, "load_conversation", lambda cid, *a, **k: hub if cid == "hub" else None)
+    api = _api()
+    api.group_create = lambda *a, **k: (_ for _ in ()).throw(AssertionError("created a duplicate"))  # type: ignore[method-assign]
+
+    out = api.group_find_or_create("Deploy core to Fly", "lead-team", caller_conv_id="caller")
+
+    assert out["reused"] is True and out["id"] == "hub" and out["folder_id"] == "f1"
+
+
 def test_idle_member_is_reused(monkeypatch):
     member = {
         "member_conv_id": "m1",

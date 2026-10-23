@@ -335,8 +335,6 @@ def sync_group_members_from_folder(group: Any, project_root: str | None = None) 
     if leader_id and leader_id != group_id:
         present = {str(r.get("member_conv_id") or "") for r in new_rows}
         if leader_id not in present:
-            from frontend.ui_web.project_chats import move_conversation
-
             leader = by_id.get(leader_id) or load_conversation(leader_id, project_root=project_root)
             if leader is not None:
                 prev = existing.get(leader_id) or {}
@@ -362,14 +360,8 @@ def sync_group_members_from_folder(group: Any, project_root: str | None = None) 
                         ),
                     )
                 else:
-                    # Never pull a lead out of the outer group it leads (see stays_with_outer_group).
-                    if not stays_with_outer_group(leader, folder_id, folders, by_id):
-                        if (getattr(leader, "folder_id", None) or "") != folder_id:
-                            move_conversation(leader_id, folder_id, project_root)
-                            leader = load_conversation(leader_id, project_root=project_root) or leader
-                        if (getattr(leader, "parent_conv_id", None) or "").strip() != group_id:
-                            leader.parent_conv_id = group_id
-                            save_conversation(leader, project_root)
+                    # A designated leader is a pointer, not a folder member to move.
+                    # It may lead multiple groups, so keep its folder and parent untouched.
                     name = (
                         str(prev.get("name") or "").strip()
                         or str(getattr(leader, "ducky_name", None) or "").strip()

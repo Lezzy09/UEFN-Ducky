@@ -285,3 +285,26 @@ def test_a_group_made_inside_another_sits_in_it_and_is_deleted_with_it(monkeypat
     api.delete_conversation(outer["id"])
     for cid in (outer["id"], inner["id"], member.id):
         assert load_conversation(cid, project_root=str(tmp_path)) is None, cid
+
+
+def test_a_lead_added_to_a_new_group_stays_in_its_old_group(monkeypatch, tmp_path):
+    # Oct 22 2026: as_leader moved the lead into the new group's folder, leaving its old group empty.
+    import frontend.ui_web.panel_api as pa
+    from frontend.ui_web.panel_api_chats import PanelApiChatsMixin
+
+    root = str(tmp_path)
+    settings = PanelSettings.load()
+    settings.uefn_project_root = root
+    monkeypatch.setattr(pa.PanelSettings, "load", classmethod(lambda cls: settings))
+    monkeypatch.setattr(pa, "notify_chats_changed", lambda *a, **k: None)
+    api = PanelApiChatsMixin()
+    old = api.group_create("Old Team", "", False)
+    new = api.group_create("New Team", "", False)
+    lead = create_conversation(settings, old["folder_id"], title="Lead", parent_conv_id=old["id"], project_root=root)
+
+    out = api.group_add_member(new["id"], lead.id, as_leader=True)
+
+    assert out["ok"] and out["leader_conv_id"] == lead.id
+    assert lead.id in [m["member_conv_id"] for m in out["group_members"]]
+    fresh = load_conversation(lead.id, project_root=root)
+    assert fresh.folder_id == old["folder_id"] and fresh.parent_conv_id == old["id"]

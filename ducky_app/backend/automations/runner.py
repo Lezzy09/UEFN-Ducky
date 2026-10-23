@@ -1920,6 +1920,7 @@ def _ensure_pipeline_group(ctx: dict[str, Any], wf: dict[str, Any]) -> None:
             name=str(wf.get("name") or "Workflow"),
             folder_id=parent_folder,
             open_tab=False,
+            caller_conv_id=caller,
         )
     except Exception as exc:
         _log.warning("workflow group_create failed: %s", exc)

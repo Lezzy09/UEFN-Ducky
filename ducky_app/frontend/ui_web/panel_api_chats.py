@@ -530,25 +530,39 @@ class PanelApiChatsMixin:
             "folder_id": hub_folder.id,
         }
 
-    def group_find_or_create(self, name: str = "", folder_id: str = "", open_tab: bool = False) -> dict[str, Any]:
-        """Reuse a live group of this name inside ``folder_id``, or create one.
+    def group_find_or_create(
+        self, name: str = "", folder_id: str = "", open_tab: bool = False, caller_conv_id: str = ""
+    ) -> dict[str, Any]:
+        """Reuse a live group of this name anywhere on the caller's island, or create one there.
 
+        The island comes from ``folder_id`` or ``caller_conv_id`` (the open island when
+        neither is known). A same-name group inside ``folder_id`` wins over one elsewhere.
         Archived groups are skipped. The sidebar's own new-group button stays on
         ``group_create``, so a person can still make a duplicate on purpose.
         """
         from frontend.archive_folder import is_archive_folder_id
+        from frontend.ui_web.project_chats import conversation_project_slug, folder_project_slug
 
         title = (name or "").strip() or "Group"
         parent = (folder_id or "").strip()
-        for folder in _pa.load_folders():
-            if (getattr(folder, "name", "") or "").strip() != title:
-                continue
-            if (getattr(folder, "parent_id", "") or "").strip() != parent:
-                continue
+        # Oct 22 2026: matching only inside the caller's folder made "Deploy core to Fly" 3 times
+        # once the caller's chat had moved.
+        slug = folder_project_slug(parent) or conversation_project_slug((caller_conv_id or "").strip())
+        project_root: str | None = None
+        if slug:
+            from frontend.ui_web.project_chats import create_project_root
+
+            project_root = create_project_root(slug, _pa.PanelSettings.load().uefn_project_root or "")
+        candidates = [
+            f for f in _pa.load_folders(project_root) if (getattr(f, "name", "") or "").strip() == title
+        ]
+        candidates.sort(key=lambda f: (getattr(f, "parent_id", "") or "").strip() != parent)
+        for folder in candidates:
             hub_id = (getattr(folder, "group_hub_id", None) or "").strip()
-            if not hub_id or is_archive_folder_id(folder.id) or is_archive_folder_id(parent):
+            outer = (getattr(folder, "parent_id", "") or "").strip()
+            if not hub_id or is_archive_folder_id(folder.id) or is_archive_folder_id(outer):
                 continue
-            hub = _pa.load_conversation(hub_id)
+            hub = _pa.load_conversation(hub_id, project_root=project_root)
             if hub is None or not getattr(hub, "is_group", False):
                 continue
             if is_archive_folder_id(getattr(hub, "folder_id", "") or ""):
@@ -563,7 +577,7 @@ class PanelApiChatsMixin:
                 "folder_id": folder.id,
                 "reused": True,
             }
-        created = self.group_create(name=title, folder_id=parent, open_tab=open_tab)
+        created = self.group_create(name=title, folder_id=parent, open_tab=open_tab, project_slug=slug)
         if created.get("ok"):
             created["reused"] = False
         return created
@@ -836,7 +850,9 @@ class PanelApiChatsMixin:
         _convs, folders = island_for_conversation(group_id)
         # The lead of an outer group joins its subgroups' rosters but stays filed on top of
         # its own group; only other chats move into the group's folder.
-        if not stays_with_outer_group(member, folder_id, folders):
+        # A designated leader is a pointer; never move it from its existing chat location.
+        # Non-leaders still join the group's folder as before.
+        if not as_leader and not stays_with_outer_group(member, folder_id, folders):
             _pa.move_conversation(cid, folder_id)
             member = _pa.load_conversation(cid) or member
             member.parent_conv_id = group_id

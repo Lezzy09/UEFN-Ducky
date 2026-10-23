@@ -258,10 +258,11 @@ def test_sync_keeps_orphaned_leader_on_roster():
         assert leader.id == ids[0]
         assert child_hub.id in ids
 
+        # The leader is a pointer: one chat can lead several groups, so sync never moves it.
         fresh_leader = load_conversation(leader.id, project_root=root)
         assert fresh_leader is not None
-        assert fresh_leader.folder_id == folder.id
-        assert fresh_leader.parent_conv_id == hub.id
+        assert fresh_leader.folder_id == ""
+        assert (fresh_leader.parent_conv_id or "") == ""
 
 
 def test_is_subagent_conversation():
