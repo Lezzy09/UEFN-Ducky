@@ -53,6 +53,21 @@ def test_patterns_are_root_relative_and_absolute(tmp_path):
     assert not policy.denied(str(root / "other/config/private.json"))
 
 
+def test_roots_are_resolved_once_per_policy(tmp_path, monkeypatch):
+    """Opening a chat checks every attachment against every known project: resolving each
+    root on every check made a chat with 3 pictures and ~45 projects take 3 s to open."""
+    roots = [tmp_path / f"p{i}" for i in range(40)]
+    policy = guard.IgnorePolicy(("config/private.json",), tuple(map(str, roots)))
+    resolved = []
+    real = os.path.realpath
+    monkeypatch.setattr(guard.os.path, "realpath", lambda p, *a, **k: resolved.append(p) or real(p, *a, **k))
+    for _ in range(5):
+        assert policy.denied(str(roots[7] / "config/private.json"))
+        assert not policy.denied(str(roots[7] / "config/public.json"))
+        assert policy.denied_hint("config/private.json")
+    assert len(resolved) < 10 * len(roots)  # each root once, plus each checked path
+
+
 def test_symlink_and_hardlink_aliases(protected):
     alias = protected / "alias.txt"
     try:

@@ -7,6 +7,7 @@ No negation rules: an AI must never be able to unignore a protected path.
 from __future__ import annotations
 
 import fnmatch
+import functools
 import ntpath
 import os
 import threading
@@ -81,23 +82,37 @@ def _matches(path: str, rule: str) -> bool:
     return any(fnmatch.fnmatchcase(p, v) for p in prefixes for v in variants)
 
 
+def _inside(path: str, root: str) -> str | None:
+    """``path`` relative to ``root`` when it is inside it, else None. Both are already absolute
+    and normalized, so a prefix check does what os.path.relpath did at a fraction of the cost."""
+    folded, base = os.path.normcase(path), os.path.normcase(root).rstrip("\\/")
+    if folded == base:
+        return "."
+    if folded.startswith(base + os.sep):
+        return path[len(base) + 1:]
+    return None
+
+
 @dataclass(frozen=True)
 class IgnorePolicy:
     rules: tuple[str, ...]
     roots: tuple[str, ...] = ()
     strict: bool = False
 
+    @functools.cached_property
+    def _real_roots(self) -> tuple[str, ...]:
+        # Resolved once per policy: every check used to resolve every known project again
+        # (two file-system calls each), so opening a chat with 3 pictures took 3 s.
+        return tuple(dict.fromkeys(os.path.realpath(root) for root in self.roots if root))
+
     def denied(self, path: str) -> bool:
         lexical = os.path.abspath(os.fspath(path))
         canonical = os.path.realpath(lexical)
         candidates = {lexical, canonical}
-        for root in self.roots:
+        for root in self._real_roots:
             for candidate in (lexical, canonical):
-                try:
-                    rel = os.path.relpath(candidate, os.path.realpath(root))
-                except ValueError:
-                    continue
-                if rel != ".." and not rel.startswith(".." + os.sep):
+                rel = _inside(candidate, root)
+                if rel is not None:
                     candidates.add(rel)
         # ADS syntax can alias a protected file (e.g. .env::$DATA).
         for candidate in tuple(candidates):
