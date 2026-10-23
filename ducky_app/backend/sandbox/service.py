@@ -72,7 +72,8 @@ def _reap() -> None:
                     pass
 
 
-def _program_row(pid: int, prog: _Program, *, detail: bool = False) -> dict[str, Any]:
+def _program_row(pid: int, prog: _Program, *, detail: bool = False, procs: Any = None,
+                 listening: dict[int, set[int]] | None = None, cpu: dict[int, float] | None = None) -> dict[str, Any]:
     row: dict[str, Any] = {
         "pid": pid, "name": prog.name, "started": round(prog.started, 1), "ports": prog.ports,
         "alive": prog.run.alive(), "log": str(prog.run.log),
@@ -80,31 +81,37 @@ def _program_row(pid: int, prog: _Program, *, detail: bool = False) -> dict[str,
     if detail:
         row["command"] = prog.argv
         row["cwd"] = prog.cwd
-        row.update(_usage(prog.run.tree()))
+        row.update(_usage(prog.run.tree(), procs=procs, listening=listening, cpu=cpu))
     return row
 
 
-def _usage(pids: list[int]) -> dict[str, Any]:
+def _listening() -> dict[int, set[int]]:
+    """Listening TCP ports by process: one system-wide table read, not one per process."""
     try:
         import psutil
-    except ImportError:
-        return {"processes": len(pids)}
-    mem = 0
-    cpu = 0.0
-    listening: list[int] = []
-    for pid in pids:
-        try:
-            p = psutil.Process(pid)
-            with p.oneshot():
-                mem += p.memory_info().rss
-                cpu += p.cpu_percent(interval=None)
-                for conn in p.net_connections(kind="tcp"):
-                    if conn.status == psutil.CONN_LISTEN and conn.laddr:
-                        listening.append(int(conn.laddr.port))
-        except (psutil.Error, OSError):
-            continue
-    return {"processes": len(pids), "memory_mb": round(mem / 1024**2, 1), "cpu_percent": round(cpu, 1),
-            "listening": sorted(set(listening))}
+
+        conns = psutil.net_connections(kind="tcp")
+    except Exception:  # noqa: BLE001 - no psutil, or AccessDenied on some systems
+        return {}
+    out: dict[int, set[int]] = {}
+    for conn in conns:
+        if conn.status == "LISTEN" and conn.laddr and conn.pid:
+            out.setdefault(int(conn.pid), set()).add(int(conn.laddr.port))
+    return out
+
+
+def _usage(pids: list[int], *, procs: Any = None, listening: dict[int, set[int]] | None = None,
+           cpu: dict[int, float] | None = None) -> dict[str, Any]:
+    from backend.util import proc_table
+
+    procs = proc_table.table() if procs is None else procs
+    listening = _listening() if listening is None else listening
+    mem = sum(procs[p].rss for p in pids if p in procs)
+    out: dict[str, Any] = {"processes": len(pids), "memory_mb": round(mem / 1024**2, 1),
+                           "listening": sorted({port for p in pids for port in listening.get(p, ())})}
+    if cpu is not None:
+        out["cpu_percent"] = round(sum(cpu.get(p, 0.0) for p in pids), 1)
+    return out
 
 
 def size_of(conv_id: str) -> int:
@@ -243,7 +250,7 @@ def look(conv_id: str, pid: int = 0, capture_window: bool = False, hwnd: int = 0
     with _lock:
         mine = {p: prog for p, prog in _programs.items() if prog.conv_id == conv_id}
     if not pid:
-        return {"ok": True, "programs": [_program_row(p, prog, detail=True) for p, prog in mine.items()]}
+        return {"ok": True, "programs": _rows(mine.items())}
     prog = mine.get(int(pid))
     if prog is None:
         return {"ok": False, "error": f"No running sandbox program {pid} in this chat (it may have exited; see sandbox_open)."}
@@ -312,9 +319,11 @@ def owned_ports(conv_id: str = "") -> set[int]:
     ports: set[int] = set()
     with _lock:
         progs = [p for p in _programs.values() if not conv_id or p.conv_id == conv_id]
+    listening = _listening() if progs else {}
     for prog in progs:
         ports.update(int(v) for v in prog.ports.values())
-        ports.update(_usage(prog.run.tree()).get("listening") or [])
+        for pid in prog.run.tree():
+            ports.update(listening.get(pid, ()))
     return ports
 
 
@@ -358,7 +367,8 @@ def status(conv_id: str) -> dict[str, Any]:
     box = paths.sandbox_dir(conv_id)
     _reap()
     with _lock:
-        progs = [_program_row(p, prog, detail=True) for p, prog in _programs.items() if prog.conv_id == conv_id]
+        mine = [(p, prog) for p, prog in _programs.items() if prog.conv_id == conv_id]
+    progs = _rows(mine)
     events = manifest.summary(box, last=40)
     from frontend.ui_web.conversation_attachments import build_chat_attachment_url
 
@@ -370,11 +380,25 @@ def status(conv_id: str) -> dict[str, Any]:
             "pictures": pictures[-8:]}
 
 
-def all_programs() -> list[dict[str, Any]]:
-    """Every running sandbox program (for ducky_health)."""
+def _rows(progs: Any, procs: Any = None, cpu: dict[int, float] | None = None) -> list[dict[str, Any]]:
+    """Detailed rows for several programs from one process table and one port table, built
+    outside the registry lock."""
+    progs = list(progs)
+    if not progs:
+        return []
+    from backend.util import proc_table
+
+    procs = proc_table.table() if procs is None else procs
+    listening = _listening()
+    return [_program_row(p, prog, detail=True, procs=procs, listening=listening, cpu=cpu) for p, prog in progs]
+
+
+def all_programs(procs: Any = None, cpu: dict[int, float] | None = None) -> list[dict[str, Any]]:
+    """Every running sandbox program (for ducky_health, which passes its own process table and CPU)."""
     _reap()
     with _lock:
-        return [{"conv_id": prog.conv_id, **_program_row(p, prog, detail=True)} for p, prog in _programs.items()]
+        progs = list(_programs.items())
+    return [{"conv_id": prog.conv_id, **row} for (_, prog), row in zip(progs, _rows(progs, procs, cpu))]
 
 
 def prune(chat_exists: Any = None) -> list[str]:

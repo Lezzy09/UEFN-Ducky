@@ -2,8 +2,10 @@
 the app may feel slow, and the safe fixes (``ducky_health`` / ``ducky_self_care``).
 
 Runs in the Ducky window's process (agents' tool servers ask over the panel API), so the
-numbers are the app's own. One snapshot samples CPU over one second; nothing here keeps
-history or a thread, so looking never becomes a cost itself.
+numbers are the app's own. One snapshot reads the whole process table twice, one second
+apart (CPU), and asks only Ducky's own few processes for their command lines: a busy PC
+answers in about a second. Nothing here keeps history or a thread, so looking never
+becomes a cost itself.
 """
 
 from __future__ import annotations
@@ -48,106 +50,94 @@ def _role(cmdline: list[str]) -> str:
     return "app"
 
 
-def _sample(procs: list[Any]) -> dict[int, float]:
-    """CPU % per process over one second (one sleep for all of them)."""
+def _cmdline(pid: int) -> tuple[list[str], str]:
+    """A process's command line and exe; only ever asked for Ducky's own few processes."""
     import psutil
 
-    for p in procs:
-        try:
-            p.cpu_percent(interval=None)
-        except psutil.Error:
-            pass
-    time.sleep(1.0)
-    out: dict[int, float] = {}
-    for p in procs:
-        try:
-            out[p.pid] = p.cpu_percent(interval=None)
-        except psutil.Error:
-            pass
-    return out
+    try:
+        p = psutil.Process(pid)
+        return list(p.cmdline()), str(p.exe() or "")
+    except (psutil.Error, OSError):
+        return [], ""
+
+
+def _terminate(pid: int, name: str) -> bool:
+    import psutil
+
+    try:
+        p = psutil.Process(pid)
+        if p.name().lower() != name.lower():  # the pid went to another program meanwhile
+            return False
+        p.terminate()
+        return True
+    except psutil.Error:
+        return False
+
+
+def _ducky_named(proc: Any) -> bool:
+    return proc.name.lower().startswith(_DUCKY_NAMES)
 
 
 def snapshot(detail: bool = False) -> dict[str, Any]:
     import psutil
 
-    me = psutil.Process(os.getpid())
-    try:
-        children = me.children(recursive=True)
-    except psutil.Error:
-        children = []
-    every = list(psutil.process_iter(["name", "memory_info", "create_time", "ppid", "cmdline", "exe"]))
-    ducky = [p for p in every if str(p.info.get("name") or "").lower().startswith(_DUCKY_NAMES)]
-    uefn = [p for p in every if str(p.info.get("name") or "").lower().startswith(_UEFN_NAMES)]
-    cpu = _sample([me, *children, *ducky, *uefn])
+    from backend.util import proc_table
+
+    procs, cpu = proc_table.sample(1.0)
     ncpu = psutil.cpu_count() or 1
+    me_pid = os.getpid()
+    me = procs.get(me_pid) or proc_table.Proc(me_pid, 0, "", 0, 0, 0, 0, 0.0, time.time())
 
-    def info(p: Any) -> dict[str, Any]:
-        try:
-            mem = p.memory_info()
-            row = {"pid": p.pid, "name": p.name(), "memory_mb": _mb(mem.rss), "cpu_percent": round(cpu.get(p.pid, 0.0), 1)}
-            if hasattr(mem, "private"):
-                row["private_mb"] = _mb(mem.private)
-            return row
-        except psutil.Error:
-            return {"pid": p.pid, "gone": True}
+    def info(proc: Any) -> dict[str, Any]:
+        return {"pid": proc.pid, "name": proc.name, "memory_mb": _mb(proc.rss), "private_mb": _mb(proc.private),
+                "cpu_percent": cpu.get(proc.pid, 0.0)}
 
-    with me.oneshot():
-        mem = me.memory_info()
-        app = {
-            "pid": me.pid,
-            "memory_mb": _mb(mem.rss),
-            "private_mb": _mb(getattr(mem, "private", 0)),
-            "threads": me.num_threads(),
-            "handles": me.num_handles() if hasattr(me, "num_handles") else None,
-            "cpu_percent": round(cpu.get(me.pid, 0.0), 1),
-            "uptime_min": round((time.time() - me.create_time()) / 60, 1),
-        }
+    app = {
+        "pid": me_pid,
+        "memory_mb": _mb(me.rss),
+        "private_mb": _mb(me.private),
+        "threads": me.threads,
+        "handles": me.handles or None,
+        "cpu_percent": cpu.get(me_pid, 0.0),
+        "uptime_min": round((time.time() - me.started) / 60, 1) if me.started else None,
+    }
     by_name: dict[str, dict[str, Any]] = {}
-    for p in children:
-        row = info(p)
-        if row.get("gone"):
-            continue
+    for pid in proc_table.tree(procs, me_pid)[1:]:
+        row = info(procs[pid])
         slot = by_name.setdefault(row["name"], {"name": row["name"], "count": 0, "memory_mb": 0.0, "cpu_percent": 0.0})
         slot["count"] += 1
         slot["memory_mb"] = round(slot["memory_mb"] + row["memory_mb"], 1)
         slot["cpu_percent"] = round(slot["cpu_percent"] + row["cpu_percent"], 1)
     helpers = sorted(by_name.values(), key=lambda r: -r["memory_mb"])
 
-    alive = {p.pid for p in every}
     ducky_rows: list[dict[str, Any]] = []
-    for p in ducky:
-        if p.pid == me.pid:
-            continue
-        row = info(p)
-        if row.get("gone"):
-            continue
-        cmd = list(p.info.get("cmdline") or [])
-        ppid = int(p.info.get("ppid") or 0)
-        row.update({"role": _role(cmd), "exe": str(p.info.get("exe") or ""),
-                    "orphan": _role(cmd) not in ("app", "shared tool server") and ppid not in alive})
+    for proc in sorted((p for p in procs.values() if _ducky_named(p) and p.pid != me_pid), key=lambda p: -p.rss)[:20]:
+        cmd, exe = _cmdline(proc.pid)
+        role = _role(cmd)
+        row = info(proc)
+        row.update({"role": role, "exe": exe,
+                    "orphan": role not in ("app", "shared tool server") and proc_table.orphan(procs, proc.pid)})
         ducky_rows.append(row)
 
-    vm = psutil.virtual_memory()
-    top = sorted(
-        ({"name": str(p.info.get("name") or "?"), "memory_mb": _mb(getattr(p.info.get("memory_info"), "rss", 0) or 0)}
-         for p in every if p.info.get("memory_info")),
-        key=lambda r: -r["memory_mb"],
-    )
     merged: dict[str, float] = {}
-    for row in top:
-        merged[row["name"]] = merged.get(row["name"], 0.0) + row["memory_mb"]
-    top_apps = sorted(({"name": k, "memory_mb": round(v, 1)} for k, v in merged.items()), key=lambda r: -r["memory_mb"])[:8]
+    for proc in procs.values():
+        if proc.pid:
+            merged[proc.name or "?"] = merged.get(proc.name or "?", 0.0) + proc.rss
+    top_apps = [{"name": k, "memory_mb": _mb(v)} for k, v in sorted(merged.items(), key=lambda kv: -kv[1])[:8]]
+    busy = sum(v for pid, v in cpu.items() if pid)  # pid 0 is the idle process
+    vm = psutil.virtual_memory()
+    uefn = sorted((p for p in procs.values() if p.name.lower().startswith(_UEFN_NAMES)), key=lambda p: -p.private)
 
     out: dict[str, Any] = {
         "ok": True,
         "app": app,
         "helpers": helpers[:12],
-        "other_ducky_processes": ducky_rows[:20],
-        "uefn": [info(p) for p in uefn][:3],
+        "other_ducky_processes": ducky_rows,
+        "uefn": [info(p) for p in uefn[:3]],
         "pc": {"memory_used_percent": vm.percent, "memory_total_gb": round(vm.total / _GB, 1),
-               "memory_free_gb": round(vm.available / _GB, 1), "cpu_percent": round(psutil.cpu_percent(None), 1),
-               "cpus": ncpu, "top_apps": top_apps},
-        "sandboxes": _sandboxes(),
+               "memory_free_gb": round(vm.available / _GB, 1), "cpu_percent": round(min(100.0, busy / ncpu), 1),
+               "cpus": ncpu, "processes": len(procs), "top_apps": top_apps},
+        "sandboxes": _sandboxes(procs, cpu),
         "terminals": _terminals(),
         "storage": _storage(),
         "running_agents": _running_agents(),
@@ -158,11 +148,11 @@ def snapshot(detail: bool = False) -> dict[str, Any]:
     return out
 
 
-def _sandboxes() -> dict[str, Any]:
+def _sandboxes(procs: Any = None, cpu: dict[int, float] | None = None) -> dict[str, Any]:
     try:
         from backend.sandbox import paths, service
 
-        progs = service.all_programs()
+        progs = service.all_programs(procs=procs, cpu=cpu)
         return {"count": len(paths.list_sandboxes()), "programs": progs[:20],
                 "programs_memory_mb": round(sum(float(p.get("memory_mb") or 0) for p in progs), 1)}
     except Exception as exc:  # noqa: BLE001
@@ -188,11 +178,20 @@ def _running_agents() -> int:
         return 0
 
 
+_STORAGE_TTL_S = 600.0
+_storage_seen: dict[str, Any] = {"at": 0.0, "folders": {}}
+
+
 def _storage() -> dict[str, Any]:
+    """Folder sizes (walked at most every ten minutes: tens of thousands of chat files take
+    seconds on a busy disk) and the database files (one stat each, always fresh)."""
     base = _app_dir()
-    out: dict[str, Any] = {}
-    for name in ("chats", "sandboxes", "cache", "perf", "logs", "tools"):
-        out[f"{name}_mb"] = _folder_mb(base / name)
+    now = time.monotonic()
+    if not _storage_seen["folders"] or now - _storage_seen["at"] > _STORAGE_TTL_S:
+        _storage_seen["folders"] = {f"{name}_mb": _folder_mb(base / name)
+                                    for name in ("chats", "sandboxes", "cache", "perf", "logs", "tools")}
+        _storage_seen["at"] = now
+    out: dict[str, Any] = dict(_storage_seen["folders"])
     for name in ("ducky.db", "ducky.db-wal"):
         try:
             out[name.replace(".", "_").replace("-", "_") + "_mb"] = _mb((base / name).stat().st_size)
@@ -313,21 +312,18 @@ def self_care(action: str, target: str = "") -> dict[str, Any]:
         # running ones, ones waiting on a card and the person's own stay.
         done["closed"] = mgr.close_idle_agent_terminals(now=time.time() + 24 * 3600)
     elif act == "stop_orphan_bridges":
-        me = os.getpid()
-        alive = {p.pid for p in psutil.process_iter()}
+        from backend.util import proc_table
+
+        procs = proc_table.table()
         stopped = []
-        for p in psutil.process_iter(["name", "ppid", "cmdline"]):
-            name = str(p.info.get("name") or "").lower()
-            if p.pid == me or not name.startswith(_DUCKY_NAMES):
+        for proc in procs.values():
+            if proc.pid == os.getpid() or not _ducky_named(proc) or not proc_table.orphan(procs, proc.pid):
                 continue
-            role = _role(list(p.info.get("cmdline") or []))
-            if role in ("app", "shared tool server") or int(p.info.get("ppid") or 0) in alive:
+            role = _role(_cmdline(proc.pid)[0])
+            if role in ("app", "shared tool server"):
                 continue
-            try:
-                p.terminate()
-                stopped.append({"pid": p.pid, "role": role})
-            except psutil.Error:
-                pass
+            if _terminate(proc.pid, proc.name):
+                stopped.append({"pid": proc.pid, "role": role})
         done["stopped"] = stopped
     elif act == "trim_caches":
         from backend.tools.core.web_video import cache_dir
