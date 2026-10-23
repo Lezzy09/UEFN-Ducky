@@ -17,12 +17,13 @@ import {
   parkLiveSpeakQueue,
   subscribeLiveSpeakTransport,
 } from "./liveSpeakQueue";
-import { shouldNarrateTool, shouldNarrateToolResult, speakableThinkingLine } from "./processNarration";
+import { shouldNarrateToolResult, speakableThinkingLine } from "./processNarration";
 import { pullSentences } from "./sentenceQueue";
 import { loadLastAssistantText, prepareSpokenText, summarizeForSpeech } from "./speakReply";
-import { needsLlmSummary, spokenToolResult, spokenToolStart } from "./toolNarration";
+import { needsLlmSummary, spokenToolResult } from "./toolNarration";
 import { ttsEngine, type TtsVoiceInfo } from "./ttsEngine";
 import { getVoiceSettings } from "./voiceSettings";
+import { clearWorkStatus, endWorkTurn, recordToolDone, recordToolStart } from "./workStatus";
 
 export type LiveChatOpts = {
   voiceId: string;
@@ -225,15 +226,19 @@ function onAgentEvent(event: AgentEvent) {
   if (event.type === "tool") {
     flushThinking(session);
     flushAssistant(session);
-    if (shouldNarrateTool(getVoiceSettings().processTalk)) {
-      enqueueProcessSpeak(spokenToolStart(event.tool), speakOpts(session, author ?? session.replyAuthor));
+    const step = recordToolStart(session.chatId, event.tool, getVoiceSettings().processTalk);
+    if (step.speak) {
+      enqueueProcessSpeak(step.line, speakOpts(session, author ?? session.replyAuthor));
     }
     publish(session, { status: "thinking", error: "" });
     return;
   }
 
   if (event.type === "tool_done") {
-    enqueueToolResult(session, event.tool, author ?? session.replyAuthor);
+    // A step whose start stayed quiet keeps its result quiet too.
+    if (recordToolDone(session.chatId, event.tool)) {
+      enqueueToolResult(session, event.tool, author ?? session.replyAuthor);
+    }
     return;
   }
 
@@ -255,6 +260,7 @@ function onAgentEvent(event: AgentEvent) {
   if (speaker && !session.replyAuthor) session.replyAuthor = speaker;
   flushThinking(session);
   flushAssistant(session);
+  endWorkTurn(session.chatId);
   session.replyOpen = false;
   session.replyAuthor = null;
   session.speakingAfterDone = true;
@@ -376,6 +382,7 @@ export function stopLiveChat(chatId: string): void {
   if (session?.thinkingTimer != null) window.clearTimeout(session.thinkingTimer);
   sessions.delete(id);
   clearLiveSpeakQueueForChat(id);
+  clearWorkStatus(id);
   if (micOwner === id) micOwner = null;
   setLiveVoiceChat(id, false);
   tearDownBusIfIdle();

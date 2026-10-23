@@ -16,6 +16,17 @@ export function shouldNarrateTool(processTalk: number): boolean {
   return clampProcessTalk(processTalk) > 0;
 }
 
+/**
+ * Whether tool step `index` (0-based, per turn) is spoken: about `processTalk` of the
+ * steps, starting with the first. 10 steps at 0.3 speak 3 lines; at 1 every step.
+ */
+export function shouldSpeakToolStep(index: number, processTalk: number): boolean {
+  const talk = clampProcessTalk(processTalk);
+  if (talk <= 0 || index < 0) return false;
+  const upTo = (n: number) => Math.ceil(n * talk - 1e-9);
+  return upTo(index + 1) > upTo(index);
+}
+
 /** Thinking — only at mid/high processTalk (tools alone at low). */
 export function shouldNarrateThinking(processTalk: number): boolean {
   return clampProcessTalk(processTalk) >= 0.4;
