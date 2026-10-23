@@ -1142,6 +1142,10 @@ export interface KnownProject extends ProjectInfo {
   has_thumbnail?: boolean;
   thumbnail_url?: string;
   active: boolean;
+  /** Duckies (chats) in this project. */
+  duckies?: number;
+  /** An island that already has Ducky's listener set up. */
+  listener_ready?: boolean;
 }
 
 export interface KnownProjectsListing {

@@ -32,8 +32,13 @@ it("opens the Projects window and closes it before waiting for the saved workspa
   expect(mocks.api.list_known_projects).toHaveBeenCalledWith(true);
   // Islands with no key art show the UEFN mark, never a blank tile.
   expect(screen.getAllByLabelText("UEFN island")).toHaveLength(2);
+  // A click selects and shows what Ducky knows; Open switches.
   fireEvent.click(screen.getByTitle("C:/B"));
-  expect(screen.queryByTitle("C:/B")).toBeNull();
+  expect(screen.getByText("UEFN island", { selector: "dd" })).toBeTruthy();
+  expect(screen.getByText("None yet")).toBeTruthy();
+  expect(mocks.api.set_project_root).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Open" }));
+  expect(screen.queryAllByTitle("C:/B")).toHaveLength(0);
   expect(mocks.api.set_project_root).not.toHaveBeenCalled();
   await act(async () => { finish(); });
   expect(mocks.api.set_project_root).toHaveBeenCalledWith("C:/B");

@@ -146,14 +146,16 @@ def list_known_projects(*, rescan: bool = False) -> dict:
     paths = known_project_roots(rescan=rescan)
     if current and current not in paths:
         paths.insert(0, current)
+    duckies = _duckies_by_slug()
     rows: list[dict] = []
     for path in paths:
         kind = project_kind(path)
+        slug = project_slug(path)
         rows.append(
             {
                 "path": path,
                 "name": project_display_name(path),
-                "slug": project_slug(path),
+                "slug": slug,
                 "kind": kind,
                 "flavor": project_flavor(path),
                 "mount": _mount_for(path, kind),
@@ -161,6 +163,10 @@ def list_known_projects(*, rescan: bool = False) -> dict:
                 "last_opened": opened.get(path, 0.0),
                 "has_thumbnail": bool(kind == UEFN and thumbnail_path(path)),
                 "active": path == current,
+                # The details bar: how many duckies work here, and whether the island
+                # already has Ducky's listener (boot sets it up on every island).
+                "duckies": duckies.get(slug, 0),
+                "listener_ready": kind == UEFN and (Path(path) / "Content" / "Python" / "init_unreal.py").is_file(),
             }
         )
     sources = [{"id": "uefn", "label": "UEFN"}, {"id": "other", "label": "Other"}]
@@ -176,6 +182,20 @@ def list_known_projects(*, rescan: bool = False) -> dict:
             continue
         rows.append(row)
     return {"sources": sources, "projects": rows}
+
+
+def _duckies_by_slug() -> dict[str, int]:
+    """Duckies (chats) per project slug, in one query; {} when chats aren't in the database."""
+    try:
+        from backend.store import db
+        from backend.store.switch import use_db
+
+        if not use_db("chats"):
+            return {}
+        rows = db.connect().execute("SELECT project_id, count(*) FROM conversations GROUP BY project_id").fetchall()
+        return {str(r[0]): int(r[1]) for r in rows}
+    except Exception:
+        return {}
 
 
 def thumbnail_for_slug(slug: str) -> str:
