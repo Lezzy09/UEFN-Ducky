@@ -14,6 +14,9 @@ live: B joins A's group; presence, hello (B's Hub got rtc commands), link path, 
 imk: every team file reads back on B with the same bytes (no "Not on this PC yet"), Undo
 of B's own change from History lands on both, and a control A holds (live message and
 presence) and an item A locks show on B.
+stream: Live's host stream (Follow's ``ducky.view``; Live sends no video): B joins A's
+group (offer), the link comes up both ways, A lists B (watching), 20 numbered view frames
+from A reach B's page in order, then B leaves and A stops and each side drops the other.
 Exit code 0 only when every check passed.
 """
 from __future__ import annotations
@@ -410,12 +413,129 @@ def run_imk(a: App, b: App, timeout: float) -> bool:
     return ok_all
 
 
+def run_stream(a: App, b: App, timeout: float, frames: int = 20, fps: float = 5.0) -> bool:
+    """Live together's stream: the host's screen (``ducky.view``) going out to a follower.
+    Live has no video track; Follow is this view stream (screen, scroll), so the stage
+    streams numbered view frames from A and counts what reaches B's page events."""
+    ok_all = True
+
+    def check(name: str, ok: bool, detail: str = "") -> bool:
+        nonlocal ok_all
+        ok_all &= ok
+        print(f"{name} {'ok' if ok else 'FAIL'}{(': ' + detail) if detail else ''}")
+        return ok
+
+    def me(st: dict[str, Any]) -> str:
+        return next((m["device"] for g in st.get("groups") or [] for m in g.get("members") or [] if m.get("me")), "")
+
+    def members(app: App, room: str) -> set[str]:
+        return {str(m.get("device")) for g in app.live().get("groups") or [] if g.get("room") == room
+                for m in g.get("members") or [] if not m.get("me")}
+
+    def path(app: App, device: str) -> str:
+        return next((str(p.get("path")) for p in app.live().get("peers") or [] if p.get("device") == device), "absent")
+
+    la = a.live()
+    if not la.get("supported"):
+        return check("setup", False, f"A: {la.get('reason')}")
+    a_was = str(la.get("room") or "") if la.get("on") else ""
+    if not la.get("on"):
+        la = a.call("plugin_live_join", a.plugin, "")
+    room, a_dev = str(la.get("room") or ""), me(la)
+    lb = b.live()
+    b_was = str(lb.get("room") or "") if lb.get("on") else ""
+
+    b.mark()
+    t0 = time.monotonic()
+    a_stopped = False
+    try:
+        b.call("plugin_live_join", b.plugin, room)
+        b_dev = me(b.live())
+        _, t = wait(lambda: a_dev in members(b, room) or None, timeout, 0.5)
+        if not check("offer", t >= 0, f"B sees A's group {room[:14]} in {t:.1f} s" if t >= 0
+                     else f"B never saw A in {room} (presence)"):
+            return False
+
+        def linked() -> Any:
+            pb, pa = path(b, a_dev), path(a, b_dev)
+            return (pb, pa) if pb in ("direct", "forwarded") and pa in ("direct", "forwarded") else None
+
+        _, t = wait(linked, timeout, 0.5)
+        if not check("link", t >= 0, f"both ways in {time.monotonic() - t0:.1f} s from join" if t >= 0 else
+                     f"B sees A {path(b, a_dev)}, A sees B {path(a, b_dev)} (rtc link)"):
+            return False
+        watching = b_dev in members(a, room) and path(a, b_dev) in ("direct", "forwarded")
+        check("watching seen", watching, f"A lists B ({b_dev[:8]}) in its group, {path(a, b_dev)}, "
+              f"{time.monotonic() - t0:.1f} s from join" if watching else "A doesn't list B in its group")
+
+        probe = f"e2e-stream-{time.time():.0f}"
+        got: list[int] = []
+        first = -1.0
+        sent_on: set[int] = set()
+        start = time.monotonic()
+        for seq in range(frames):  # 5 a second, well inside the 25/s fast budget
+            out = a.call("plugin_live_send", a.plugin, "ducky.view",
+                         {"v": "e2e-stream", "at": f"e2e|{seq}", "scroll": [{"anchor": "e2e", "top": seq, "left": 0}],
+                          "probe": probe, "seq": seq})
+            sent_on.add(int(out.get("sent") or 0))
+            for e in b.events():
+                d = e.get("data") or {}
+                if (e.get("type") == "live_message" and e.get("topic") == "ducky.view"
+                        and (e.get("from") or {}).get("device") == a_dev and d.get("probe") == probe):
+                    got.append(int(d.get("seq", -1)))
+                    if first < 0:
+                        first = time.monotonic() - start
+            time.sleep(1.0 / fps)
+
+        def tail() -> Any:
+            for e in b.events():
+                d = e.get("data") or {}
+                if e.get("type") == "live_message" and d.get("probe") == probe:
+                    got.append(int(d.get("seq", -1)))
+            return len(set(got)) >= frames or None
+
+        wait(tail, 5, 0.5)
+        uniq = sorted(set(got))
+        ordered = got == sorted(got)
+        check("frames", len(uniq) >= frames * 0.9 and first >= 0,
+              f"{len(uniq)}/{frames} at {fps:.0f}/s, first in {first:.1f} s, {'in order' if ordered else 'OUT OF ORDER'}, "
+              f"sent on {sorted(sent_on)} link(s)" if first >= 0 else
+              f"0/{frames} reached B's page (A sent on {sorted(sent_on)} link(s)): delivery")
+
+        b.call("plugin_live_leave", b.plugin)
+        _, t = wait(lambda: (b_dev not in members(a, room) and path(a, b_dev) == "absent") or None, timeout, 1.0)
+        check("B leaves clean", t >= 0, f"A dropped B in {t:.1f} s" if t >= 0 else
+              f"A still has B: in group {b_dev in members(a, room)}, path {path(a, b_dev)}")
+
+        b.call("plugin_live_join", b.plugin, room)  # back in to watch the host stop
+        wait(lambda: a_dev in members(b, room) or None, timeout, 0.5)
+        a.call("plugin_live_leave", a.plugin)
+        a_stopped = True
+        _, t = wait(lambda: (a_dev not in members(b, room) and path(b, a_dev) in ("absent", "none")) or None,
+                    timeout, 1.0)
+        check("A stops clean", t >= 0, f"B saw A's stream end in {t:.1f} s" if t >= 0 else
+              f"B still has A: in group {a_dev in members(b, room)}, path {path(b, a_dev)}")
+        return ok_all
+    finally:
+        try:
+            if b_was and b_was != room:
+                b.call("plugin_live_join", b.plugin, b_was)
+            else:
+                b.call("plugin_live_leave", b.plugin)
+            if a_was and (a_stopped or a_was != room):
+                a.call("plugin_live_join", a.plugin, a_was)  # A goes back to where it was live
+            elif not a_was and not a_stopped:
+                a.call("plugin_live_leave", a.plugin)
+        except Exception as exc:
+            print(f"note: stream cleanup: {exc}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--a", type=int, default=4199, help="app A's panel port")
     ap.add_argument("--b", type=int, default=4299, help="app B's panel port")
     ap.add_argument("--plugin", default="island-media-kit")
-    ap.add_argument("--only", choices=("sync", "live", "imk"), default="")
+    ap.add_argument("--only", choices=("sync", "live", "imk", "stream"), default="")
     ap.add_argument("--timeout", type=float, default=120.0, help="seconds per waiting stage")
     args = ap.parse_args()
     a, b = App("A", args.a, args.plugin), App("B", args.b, args.plugin)
@@ -437,6 +557,9 @@ def main() -> int:
     if args.only in ("", "imk"):
         print("== imk")
         ok &= run_imk(a, b, args.timeout)
+    if args.only in ("", "stream"):
+        print("== stream")
+        ok &= run_stream(a, b, args.timeout)
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
 
