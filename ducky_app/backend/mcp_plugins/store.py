@@ -692,9 +692,12 @@ _SECRET_REF_ANY_RE = re.compile(r"\$\{SECRET:([A-Za-z0-9_]+)\}")
 
 
 def _secret_value(name: str) -> str:
-    from backend.agent.secrets import get_key
+    # Fresh, not this process's cache: nested MCP sessions run in the shared tool daemon,
+    # which kept the key it read at start after Settings saved a new one in the app
+    # (Oct 22 2026: duckyos.org answered the old key with 401 until the daemon restarted).
+    from backend.agent.secrets import get_key_fresh
 
-    return get_key(name) or os.environ.get(name, "")
+    return get_key_fresh(name) or os.environ.get(name, "")
 
 
 def _resolve_env_value(value: str) -> str:

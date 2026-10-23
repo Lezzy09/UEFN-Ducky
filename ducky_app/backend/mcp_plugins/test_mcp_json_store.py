@@ -395,7 +395,7 @@ def test_connection_editor_masks_keys_and_saves_new_ones_as_secrets(monkeypatch)
     _no_catalog(monkeypatch)
     secrets: dict[str, str] = {}
     monkeypatch.setattr("backend.agent.secrets.set_key", lambda name, value: secrets.__setitem__(name, value))
-    monkeypatch.setattr("backend.agent.secrets.get_key", lambda name: secrets.get(name))
+    monkeypatch.setattr("backend.agent.secrets.get_key_fresh", lambda name: secrets.get(name))
     store.create_mcp_server("site", "Site", transport="http", url="https://old.example/mcp",
                             headers={"Authorization": "Bearer sk-live-1234567890abcd", "X-Team": "ducks"})
     view = store.connection_view("site")
@@ -421,9 +421,20 @@ def test_connection_editor_masks_keys_and_saves_new_ones_as_secrets(monkeypatch)
     assert store.update_connection("site", transport="http", url=" ", values=[])["ok"] is False
 
 
+def test_a_key_saved_by_another_process_is_used_on_the_next_connection(monkeypatch) -> None:
+    # Oct 22 2026: Settings saved a new duckyos.org key in the app, but the shared tool daemon
+    # kept sending the one it had cached at start, so the server kept answering 401.
+    stored = {"MCP_SITE_AUTHORIZATION": "Bearer old"}
+    monkeypatch.setattr("backend.agent.secrets.get_key", lambda name: "Bearer old")  # this process's cache
+    monkeypatch.setattr("backend.agent.secrets.get_key_fresh", lambda name: stored.get(name))
+    assert store._resolve_env_value("${SECRET:MCP_SITE_AUTHORIZATION}") == "Bearer old"
+    stored["MCP_SITE_AUTHORIZATION"] = "Bearer new"  # the app's Settings wrote it
+    assert store._resolve_env_value("${SECRET:MCP_SITE_AUTHORIZATION}") == "Bearer new"
+
+
 def test_secret_refs_resolve_inside_a_header_and_stdio_edits(monkeypatch) -> None:
     _no_catalog(monkeypatch)
-    monkeypatch.setattr("backend.agent.secrets.get_key", lambda name: {"TOKEN": "abc"}.get(name))
+    monkeypatch.setattr("backend.agent.secrets.get_key_fresh", lambda name: {"TOKEN": "abc"}.get(name))
     assert store._resolve_env_value("Bearer ${SECRET:TOKEN}") == "Bearer abc"
     assert store._resolve_env_value("${SECRET:TOKEN}") == "abc"
     store.create_mcp_server("tool", "Tool", command="uvx", args=["tool-mcp"], env={"API_KEY": "${SECRET:TOKEN}"})
