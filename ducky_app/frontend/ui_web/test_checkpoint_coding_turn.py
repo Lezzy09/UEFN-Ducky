@@ -5,7 +5,10 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from backend.agent.coding_agents.runner import _TurnCheckpoint, checkpoint_coding_turn
+import time
+
+from backend.agent.coding_agents import runner
+from backend.agent.coding_agents.runner import _CHECKPOINT_EVERY_S, _TurnCheckpoint, checkpoint_coding_turn
 from frontend.settings import PanelSettings
 from frontend.ui_web.project_chats import (
     KILLED_TURN_ERROR,
@@ -78,6 +81,7 @@ def test_turn_checkpoint_flushes_on_tool_done():
                 "tool": {"name": "Read", "status": "success", "durationMs": 12, "result": "ok"},
             }
         )
+        time.sleep(_CHECKPOINT_EVERY_S + 0.4)  # the done lands with the burst's trailing save
         fresh = load_conversation(conv.id, project_root=root)
         assert fresh is not None
         last = fresh.messages[-1]
@@ -85,6 +89,45 @@ def test_turn_checkpoint_flushes_on_tool_done():
         assert last["blocks"][-1]["status"] == "success"
         assert last["blocks"][-1]["result"]["data"] == "ok"
         assert [e["type"] for e in events] == ["tool", "tool_done"]
+
+
+def _counting(monkeypatch) -> list[int]:
+    saves: list[int] = []
+    real = runner.checkpoint_coding_turn
+
+    def counted(conv, **kw):
+        saves.append(sum(1 for b in kw.get("blocks") or [] if b.get("type") == "tool_call"))
+        real(conv, **kw)
+
+    monkeypatch.setattr(runner, "checkpoint_coding_turn", counted)
+    return saves
+
+
+def test_a_tool_burst_saves_twice_and_the_last_save_has_every_tool(tmp_path, monkeypatch):
+    root = str(tmp_path)
+    conv = create_conversation(PanelSettings.load(), "", title="Burst", project_root=root)
+    saves = _counting(monkeypatch)
+    push = _TurnCheckpoint(conv, "claude", "burst", project_root=root).wrap(lambda _ev: None)
+    for i in range(10):
+        push({"type": "tool", "tool": {"id": f"t{i}", "name": "Grep", "status": "pending"}})
+        push({"type": "tool_done", "tool": {"id": f"t{i}", "name": "Grep", "status": "success", "result": "x"}})
+    time.sleep(_CHECKPOINT_EVERY_S + 0.4)
+    assert len(saves) == 2 and saves[-1] == 10  # the first tool at once, the rest together
+    stored = load_conversation(conv.id, project_root=root).messages[-1]["blocks"]
+    assert [b["status"] for b in stored] == ["success"] * 10
+
+
+def test_close_drops_a_pending_trailing_save(tmp_path, monkeypatch):
+    root = str(tmp_path)
+    conv = create_conversation(PanelSettings.load(), "", title="Final", project_root=root)
+    saves = _counting(monkeypatch)
+    ckpt = _TurnCheckpoint(conv, "claude", "final", project_root=root)
+    push = ckpt.wrap(lambda _ev: None)
+    push({"type": "tool", "tool": {"id": "a", "name": "Read", "status": "pending"}})
+    push({"type": "tool", "tool": {"id": "b", "name": "Read", "status": "pending"}})
+    ckpt.close()  # the turn's final message is written next; nothing may land after it
+    time.sleep(_CHECKPOINT_EVERY_S + 0.4)
+    assert saves == [1]
 
 
 def test_same_named_tools_complete_by_call_id(tmp_path):

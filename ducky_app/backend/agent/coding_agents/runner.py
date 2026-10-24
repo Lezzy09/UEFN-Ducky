@@ -405,8 +405,12 @@ def checkpoint_coding_turn(
         pass
 
 
+_CHECKPOINT_EVERY_S = 0.8
+
+
 class _TurnCheckpoint:
-    """Rebuild persisted blocks from live push events; flush after every tool."""
+    """Rebuild persisted blocks from live push events; save them at most every
+    ``_CHECKPOINT_EVERY_S`` while tools run, with one trailing save after a burst."""
 
     def __init__(
         self,
@@ -426,13 +430,43 @@ class _TurnCheckpoint:
         self.effective_mode = effective_mode
         self.blocks: list[dict[str, Any]] = []
         self._last = 0.0
+        # One lock for the blocks and every save: a trailing save never reads a block
+        # list mid-change, and close() waits out a save already under way.
+        self._lock = threading.RLock()
+        self._timer: threading.Timer | None = None
+        self._closed = False
 
     def wrap(self, push: PushFn) -> PushFn:
         def wrapped(ev: dict[str, Any]) -> None:
-            self._ingest(ev if isinstance(ev, dict) else {})
+            with self._lock:
+                self._ingest(ev if isinstance(ev, dict) else {})
             push(ev)
 
         return wrapped
+
+    def close(self) -> None:
+        """The turn's own final save follows: no trailing checkpoint may land after it."""
+        with self._lock:
+            self._closed = True
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
+
+    def _flush_soon(self) -> None:
+        """Save now if the last save is old enough, else once when the window ends."""
+        wait = _CHECKPOINT_EVERY_S - (time.monotonic() - self._last)
+        if wait <= 0:
+            self.flush(force=True)
+        elif self._timer is None and not self._closed:
+            self._timer = threading.Timer(wait, self._trailing)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _trailing(self) -> None:
+        with self._lock:
+            self._timer = None
+            if not self._closed:
+                self.flush(force=True)
 
     def seed(self) -> None:
         checkpoint_coding_turn(
@@ -447,9 +481,12 @@ class _TurnCheckpoint:
 
     def flush(self, *, error: str = "", force: bool = True) -> None:
         now = time.monotonic()
-        if not force and now - self._last < 0.8:
+        if not force and now - self._last < _CHECKPOINT_EVERY_S:
             return
         self._last = now
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
         checkpoint_coding_turn(
             self.conv,
             agent_id=self.agent_id,
@@ -499,7 +536,7 @@ class _TurnCheckpoint:
                     "result": {"ok": False, "data": "", "hint": ""},
                 }
             )
-            self.flush(force=True)
+            self._flush_soon()
         elif t == "tool_done":
             tool = ev.get("tool") if isinstance(ev.get("tool"), dict) else {}
             name = str(tool.get("name") or "")
@@ -548,7 +585,7 @@ class _TurnCheckpoint:
                         **({"file_edits": tool["fileEdits"]} if isinstance(tool.get("fileEdits"), list) else {}),
                     }
                 )
-            self.flush(force=True)
+            self._flush_soon()
 
 
 def _emit_assistant(
@@ -784,6 +821,7 @@ def _run_coding_agent_message(
     push = ckpt.wrap(push)
 
     def emit_assistant(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        ckpt.close()
         # Hooks cannot supply their own identity for this core-owned request.
         return _emit_assistant(*args, **{**kwargs, "requested_mode": mode,
                                        "effective_mode": effective_mode})
@@ -980,6 +1018,7 @@ def _run_coding_agent_message(
         ckpt.flush(error="Interrupted", force=True)
         raise
     finally:
+        ckpt.close()
         steer.end_run(conv.id)
         file_changes.close("done" if "result" in locals() and getattr(result, "ok", False) else "error")
         for path in (mcp_path, prompt_path):
