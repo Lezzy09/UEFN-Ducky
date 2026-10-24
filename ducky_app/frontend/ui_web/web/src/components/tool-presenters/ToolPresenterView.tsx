@@ -1,7 +1,7 @@
 import type { OpenFileHandler } from "../../types/richContent";
 import { autoFormatToolJson } from "../rich-content/autoFormatToolJson";
 import { RichBlockList } from "../rich-content/RichBlockList";
-import { resolveToolPresenterBlocks } from "./resolveToolPresenter";
+import { resolveToolPresenterBlocks, resolveToolPresenterView } from "./resolveToolPresenter";
 
 interface ToolPresenterViewProps {
   toolName: string;
@@ -17,6 +17,14 @@ export function ToolPresenterView({
   resultText,
   onOpenFile,
 }: ToolPresenterViewProps) {
+  const View = resolveToolPresenterView(toolName, resultText);
+  if (View) {
+    return (
+      <div className="tool-result-rich-view">
+        <View toolName={toolName} arguments={args} resultText={resultText} isSuccess onOpenFile={onOpenFile} />
+      </div>
+    );
+  }
   const custom = resolveToolPresenterBlocks({
     toolName,
     arguments: args,

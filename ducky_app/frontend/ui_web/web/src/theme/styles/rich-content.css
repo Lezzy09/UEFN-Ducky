@@ -310,6 +310,66 @@
   background: var(--rich-c);
 }
 
+/* Swarm card (ducky_swarm_create): preview tree, build reveal, live progress. */
+.swarm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--chat-code-background, var(--card));
+}
+
+.swarm-card-title { color: var(--fg); font-weight: 600; }
+.swarm-card-summary { color: var(--muted); font-size: 0.9em; }
+.swarm-card-tree .rich-chart { margin: 0; }
+.swarm-card-actions { display: flex; gap: 8px; }
+
+.swarm-card-btn {
+  padding: 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.swarm-card-btn:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.swarm-card-btn--primary { border-color: var(--accent); background: var(--accent); color: var(--accent-fg, var(--bg)); }
+.swarm-card-btn--primary:hover { background: color-mix(in srgb, var(--accent) 85%, var(--fg)); }
+
+.swarm-card .swarm-node,
+.swarm-card .swarm-edge { transition: opacity 0.2s; }
+.swarm-card .swarm-node--pending,
+.swarm-card .swarm-edge--pending { opacity: 0; }
+
+.swarm-card .swarm-node--animate {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: swarm-node-in 250ms ease-out both;
+}
+
+.swarm-card .swarm-edge--animate { animation: swarm-edge-in 250ms ease-out backwards; }
+
+@keyframes swarm-node-in {
+  from { opacity: 0; transform: scale(0.85); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes swarm-edge-in {
+  from { stroke-dasharray: 1000; stroke-dashoffset: 1000; }
+  to { stroke-dasharray: 1000; stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swarm-card .swarm-node,
+  .swarm-card .swarm-edge { transition: none; }
+  .swarm-card .swarm-node--animate,
+  .swarm-card .swarm-edge--animate { animation: none; }
+}
+
 .live-code-preview {
   width: 100%;
   min-width: 0;

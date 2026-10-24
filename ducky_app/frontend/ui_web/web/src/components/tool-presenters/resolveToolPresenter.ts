@@ -1,5 +1,7 @@
 import type { OpenFileHandler } from "../../types/richContent";
 import type { RichBlock } from "../../types/richContent";
+import type { ComponentType } from "react";
+import { SwarmCard, countSeats, parseSwarmResult } from "./SwarmCard";
 
 export interface ToolPresenterContext {
   toolName: string;
@@ -192,7 +194,34 @@ const verseErrorsPresenter: ToolPresenter = ({ resultText, onOpenFile }) => {
   return blocks;
 };
 
+/** Plain-block fallback (search cards, copies); the chat draws SwarmCard via TOOL_VIEWS. */
+const swarmPresenter: ToolPresenter = ({ resultText }) => {
+  const data = parseSwarmResult(resultText);
+  if (!data) return null;
+  const spec = { type: "tree", root: { label: data.goal ? `Lead · ${data.goal}` : "Lead", children: [
+    ...data.groups.map((g) => ({ label: `${g.name} · ${countSeats(g)} agents${g.muted ? " · MUTED" : ""}`, color: g.muted ? "amber" : "purple" })),
+    ...data.seats.map((s) => ({ label: [s.name, s.profile, s.model].filter(Boolean).join(" · "), color: "green" })),
+  ] } };
+  return [{ type: "code", language: "chart", text: JSON.stringify(spec) }];
+};
+
+const TOOL_VIEWS: Record<string, { view: ComponentType<ToolPresenterContext>; accepts: (resultText: string) => boolean }> = {
+  ducky_swarm_create: { view: SwarmCard, accepts: (text) => parseSwarmResult(text) !== null },
+};
+
+function bareToolName(name: string): string {
+  const cut = name.lastIndexOf("__");
+  return cut >= 0 ? name.slice(cut + 2) : name;
+}
+
+/** A tool result drawn as its own React card (it can animate and send replies); null → blocks. */
+export function resolveToolPresenterView(toolName: string, resultText: string): ComponentType<ToolPresenterContext> | null {
+  const entry = TOOL_VIEWS[bareToolName(toolName)];
+  return entry && entry.accepts(resultText) ? entry.view : null;
+}
+
 const PRESENTERS: Record<string, ToolPresenter> = {
+  ducky_swarm_create: swarmPresenter,
   find_devices: deviceListPresenter,
   get_all_actors: deviceListPresenter,
   inspect_verse_device: inspectPresenter,
@@ -204,7 +233,7 @@ const PRESENTERS: Record<string, ToolPresenter> = {
 };
 
 export function resolveToolPresenterBlocks(ctx: ToolPresenterContext): RichBlock[] | null {
-  const presenter = PRESENTERS[ctx.toolName];
+  const presenter = PRESENTERS[ctx.toolName] ?? PRESENTERS[bareToolName(ctx.toolName)];
   if (!presenter) return null;
   return presenter(ctx);
 }
