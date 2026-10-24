@@ -33,6 +33,7 @@ MAX_PROGRAMS_PER_CHAT = 8
 MAX_PROGRAMS = 24
 _SIZE_TTL_S = 30.0
 _HTTP_MAX = 200_000
+_LOCK_POLL_S = 2.0
 
 
 @dataclass
@@ -169,20 +170,93 @@ def run_command(conv_id: str, command: str, shell: str = "bash", timeout_s: floa
     env = sandbox_env(box)
     changed = {k: v for k, v in env.items() if os.environ.get(k) != v}
     manifest.record(box, "run", command=command)
+    from frontend.ui_web.terminal import repo_lock
+
+    lock = _source_repo(box, command) if repo_lock.is_heavy(command) else ""
+    waited: list[str] = []
+
+    def waiting(holder: str) -> None:
+        waited.append(f"Waiting for {holder}'s test run in this repo")
+        manifest.record(box, "waiting", note=waited[0])
+
+    if lock:
+        # Sandboxes of one repo in different chats share the person's CPU and memory: one
+        # test or build run per source repo, as in a project terminal.
+        repo_lock.acquire(lock, _chat_label(conv_id), on_wait=waiting)
+    session, result = "", None
+    try:
+        session, result = _run_in_terminal(mgr, box, conv_id, command, shell, timeout_s, changed)
+    finally:
+        if lock:
+            _release_when_done(mgr, session, lock, result)
+    paths.touch(box)
+    _sizes.pop(conv_id, None)
+    if not isinstance(result, dict):
+        return {"ok": False, "error": "no result"}
+    return {"session_id": session, **result, **({"waited": waited[0]} if waited else {})}
+
+
+def _run_in_terminal(mgr: Any, box: Path, conv_id: str, command: str, shell: str, timeout_s: float,
+                     changed: dict[str, str]) -> tuple[str, Any]:
+    session, result = "", None
     for reuse in (True, False):
         opened = mgr.spawn(shell=shell, cwd=str(box / "work"), title="sandbox", push_open=True, conv_id=conv_id,
                            env_extra=changed, activate=False, reuse_idle=reuse)
         session = str(opened.get("session_id") or "")
         if not session:
-            return {"ok": False, "error": str(opened.get("error") or "The sandbox terminal did not open.")}
+            return "", {"ok": False, "error": str(opened.get("error") or "The sandbox terminal did not open.")}
         result = mgr.run_agent_command(session, command, source="sandbox_run", conv_id=conv_id, wait=True,
                                        command_timeout_s=max(5.0, min(float(timeout_s), 3600.0)), auto_approve=True)
         # The idle-terminal cleanup can close a reused shell just as it is handed out: once more in a new one.
         if not (isinstance(result, dict) and result.get("error") == "session not found"):
             break
-    paths.touch(box)
-    _sizes.pop(conv_id, None)
-    return {"session_id": session, **result} if isinstance(result, dict) else {"ok": False, "error": "no result"}
+    return session, result
+
+
+def _source_repo(box: Path, command: str) -> str:
+    """The person's repo a sandbox test run tests: its worktree's source (the one named in
+    the command when there are several). '' when the sandbox has no worktree."""
+    from backend.sandbox import gitops
+    from frontend.ui_web.terminal import repo_lock
+
+    rows = [r for r in gitops._records(box) if r.get("repo")]
+    repos = {repo_lock.repo_of(r["repo"]) for r in rows}
+    if len(repos) == 1:
+        return repos.pop()
+    named = [r for r in rows if r.get("path") and Path(r["path"]).name in command]
+    return repo_lock.repo_of(named[0]["repo"]) if len(named) == 1 else ""
+
+
+def _chat_label(conv_id: str) -> str:
+    try:
+        from frontend.ui_web.terminal.manager import _chat_title
+
+        return _chat_title(conv_id) or "another sandbox"
+    except Exception:
+        return "another sandbox"
+
+
+def _release_when_done(mgr: Any, session: str, repo: str, result: Any) -> None:
+    """Release now, or, for a run that came back early (still_running), once its terminal
+    is no longer busy: the program still runs and still holds the repo."""
+    from frontend.ui_web.terminal import repo_lock
+
+    if not (isinstance(result, dict) and result.get("still_running") and session):
+        repo_lock.release(repo)
+        return
+
+    def watch() -> None:
+        # ponytail: polls every 2 s; a done event from the manager would be exact.
+        try:
+            while True:
+                s = mgr.get_session(session)
+                if s is None or not s.is_busy():
+                    return
+                time.sleep(_LOCK_POLL_S)
+        finally:
+            repo_lock.release(repo)
+
+    threading.Thread(target=watch, daemon=True, name=f"sandbox-lock-{session}").start()
 
 
 def launch(conv_id: str, program: str, args: list[str] | None = None, cwd: str = "", name: str = "",
