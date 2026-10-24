@@ -534,8 +534,8 @@ def _owner_has_evidence(owners: set[str], project_root: str | None) -> bool:
     return bool(owners & set(_chat_and_group_ids(actor, project_root))) and has_evidence(actor)
 
 
-def _owners_of(roots: list[dict[str, Any]], node_id: str) -> set[str]:
-    """Assignees on ``node_id`` and on every section above it."""
+def _path_to(roots: list[dict[str, Any]], node_id: str) -> list[dict[str, Any]]:
+    """``node_id`` and every section above it, outermost first ([] when absent)."""
     def path(items: Any, trail: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
         for item in items or []:
             if not isinstance(item, dict):
@@ -548,7 +548,12 @@ def _owners_of(roots: list[dict[str, Any]], node_id: str) -> set[str]:
                 return found
         return None
 
-    return {str(n.get("assignee")) for n in path(roots, []) or [] if n.get("assignee")}
+    return path(roots, []) or []
+
+
+def _owners_of(roots: list[dict[str, Any]], node_id: str) -> set[str]:
+    """Assignees on ``node_id`` and on every section above it."""
+    return {str(n.get("assignee")) for n in _path_to(roots, node_id) if n.get("assignee")}
 
 
 def _walk_find(
@@ -919,13 +924,21 @@ def add_node(
         sibs, _, parent_node = _walk_find(roots, parent)
         if parent_node is None:
             raise ValueError("parent node not found")
-        if playing and _is_done_node(parent_node):
+        # A fix for a finished section goes back to the same seat: the section (and any finished
+        # section above it) is in progress again, so its owner is woken; its old steps stay frozen.
+        # Every follow-up as a new top-level section grew one plan to 22 sections.
+        reopen = str(parent_node.get("status")) == "completed" and bool(parent_node.get("children"))
+        if playing and _is_done_node(parent_node) and not reopen:
             raise ValueError("completed steps stay frozen while the plan plays: add the new step beside it")
         kids = list(parent_node.get("children") or [])
         idx = len(kids) if index is None else max(0, min(int(index), len(kids)))
         kids.insert(idx, node)
         parent_node["children"] = kids
-        if str(parent_node.get("status")) == "completed":
+        if reopen:
+            for up in _path_to(roots, parent):
+                if str(up.get("status")) == "completed":
+                    up["status"] = "in_progress"
+        elif str(parent_node.get("status")) == "completed":
             parent_node["status"] = "pending"
         if str(parent_node.get("kind") or "") == "step":
             parent_node["kind"] = "subplan"

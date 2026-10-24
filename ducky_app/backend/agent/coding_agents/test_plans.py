@@ -67,6 +67,30 @@ class PlansStoreTests(unittest.TestCase):
         node = plans._walk_find(plans.load_plan("chat-notes", self.root)["nodes"], "s1")[2]
         self.assertEqual(node["body_markdown"], "Done: tests pass.")
 
+    def test_fix_for_a_finished_section_reopens_it_for_its_seat(self) -> None:
+        from frontend.ui_web import project_chats
+
+        with patch.object(project_chats, "load_conversation_meta", return_value=object()):
+            plans.create_plan("chat-fix", nodes=[
+                {"id": "ui", "content": "UI: tab shell", "assignee": "seat-ui", "children": [
+                    {"id": "u1", "content": "Tabs"}, {"id": "u2", "content": "List"}]},
+                {"id": "other", "content": "Other work"},
+            ], project_root=self.root)
+            for sid in ("u1", "u2"):
+                plans.update_node("chat-fix", sid, status="completed", project_root=self.root, by_user=True)
+            ui = plans._walk_find(plans.load_plan("chat-fix", self.root)["nodes"], "ui")[2]
+            self.assertEqual(ui["status"], "completed")
+
+            doc = plans.add_node("chat-fix", content="Fix list.js separator", parent_id="ui", project_root=self.root)
+        ui = plans._walk_find(doc["nodes"], "ui")[2]
+        self.assertEqual(ui["status"], "in_progress")
+        self.assertEqual(ui["assignee"], "seat-ui")
+        self.assertEqual([(c["content"], c["status"]) for c in ui["children"]], [
+            ("Tabs", "completed"), ("List", "completed"), ("Fix list.js separator", "pending")])
+        # Finished steps stay frozen: nothing goes under a finished leaf.
+        with self.assertRaises(ValueError):
+            plans.add_node("chat-fix", content="Under a leaf", parent_id="u1", project_root=self.root)
+
     def test_create_update_merge_get(self) -> None:
         # Legacy on-disk contract (<project>/.ducky/plans/*.json); rows are covered by
         # backend/store/test_phase4.py.
