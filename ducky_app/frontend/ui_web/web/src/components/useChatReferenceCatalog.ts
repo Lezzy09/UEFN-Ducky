@@ -5,6 +5,7 @@ import { usePluginContributions } from "../hooks/usePluginContributions";
 import { chatMentionGroup, dedupeChatRefs, filterChatRefs, orderChatMentions, type ChatRef } from "./chatReferences";
 import { noteChatRefFaces } from "./chatRefFaces";
 import { resolvePluginIconContent } from "../hooks/pluginHeaderActions";
+import { ensureLoaded, useChatReferenceStore } from "./chatReferenceStore";
 import { isAbsEncodedPath, isFolderProject } from "../verse-editor/utils/isVerseFile";
 
 interface ConvRow {
@@ -91,152 +92,145 @@ export function useFileRefMatches(query: string, enabled: boolean, files: ChatRe
   );
 }
 
+/**
+ * Ranks the shared catalog (chatReferenceStore) for *chatId*. It never fetches by itself
+ * unless *active*: the composer passes `active` once its text has an '@' or '/', or calls
+ * `ensureLoaded()` itself, so mounting or switching chats costs no calls. `loading` is true
+ * while the first load runs (show "Loading…" rows).
+ */
 export function useChatReferenceCatalog(
   active: boolean,
   chatId: string,
-): { mentions: ChatRef[]; slashRefs: ChatRef[]; files: ChatRef[] } {
+): { mentions: ChatRef[]; slashRefs: ChatRef[]; files: ChatRef[]; loading: boolean } {
   const contrib = usePluginContributions();
-  const [builtinMentions, setBuiltinMentions] = useState<ChatRef[]>([]);
-  const [builtinSlash, setBuiltinSlash] = useState<ChatRef[]>([]);
-  const [contentFiles, setContentFiles] = useState<ChatRef[]>([]);
+  const { status, data } = useChatReferenceStore();
 
   useEffect(() => {
-    if (!active) return;
-    let cancelled = false;
-    void (async () => {
-      const api = getApi();
-      if (!api) return;
-      const [convs, profiles, skills, mcp, recents, paths, workflows] = await Promise.all([
-        api.list_all_conversations(true).catch(() => []),
-        api.list_agent_profiles().catch(() => null),
-        api.get_skill_info().catch(() => null),
-        api.list_mcp_servers?.().catch(() => null) ?? null,
-        api.list_recent_projects().catch(() => []),
-        api.list_project_file_paths().catch(() => null),
-        api.list_workflows?.().catch(() => null) ?? null,
-      ]);
-      if (cancelled) return;
-      const openSlug = String(
-        (convs as ConvRow[]).find((row) => row.id === chatId)?.project_slug
-          || recents.find((row) => row.active)?.slug
-          || "",
-      ).trim();
-      const thisProject: ChatRef[] = [];
-      const otherProjects = new Map<string, ChatRef[]>();
-      const globalMentions: ChatRef[] = [];
-      for (const conv of (convs || []) as ConvRow[]) {
-        if (!conv.id || isArchived(conv)) continue;
-        const slug = String(conv.project_slug || "").trim();
-        const title = String(conv.title || "Ducky").trim() || "Ducky";
-        const face = { duckyStyle: String(conv.ducky_style || "").trim() || undefined };
-        const group = chatMentionGroup(slug, openSlug, String(conv.project_name || ""));
-        const row = chatRef("@", `chat:${conv.id}`, title, group, `ducky:${conv.id}`, undefined, face);
-        if (group === "This project") thisProject.push(row);
-        else if (group === "Global") globalMentions.push(row);
-        else {
-          const list = otherProjects.get(group) ?? [];
-          list.push(row);
-          otherProjects.set(group, list);
-        }
-      }
-      for (const profile of profiles?.profiles ?? []) {
-        const id = String(profile.id || "").trim();
-        if (!id || id === "__blank__") continue;
-        globalMentions.push(chatRef("@", `profile:${id}`, profile.name || id, "Global", `profile:${id}`, profile.when_to_use, {
-          duckyStyle: profile.ducky_style,
-        }));
-      }
-      const mentions = orderChatMentions([
-        ...thisProject,
-        ...[...otherProjects.values()].flat(),
-        ...globalMentions,
-      ]);
+    if (active) ensureLoaded();
+  }, [active]);
 
-      const slash: ChatRef[] = [];
-      for (const workflow of workflows?.workflows || []) {
-        const owner = workflow.owner?.kind === "shared" ? `${kindTitle(workflow.owner.kindLabel)} ${workflow.owner.label}` : "Local";
-        const about = workflow.description || "Run this workflow with the request you type after it";
-        slash.push(chatRef("/", `workflow:${workflow.id}`, workflow.name || "Untitled workflow", "Workflows", `workflow:${workflow.id}`, `${owner} · ${about}`));
+  const builtinMentions = useMemo(() => {
+    const convs = (data.convs ?? []) as ConvRow[];
+    const openSlug = String(
+      convs.find((row) => row.id === chatId)?.project_slug
+        || (data.recents ?? []).find((row) => row.active)?.slug
+        || "",
+    ).trim();
+    const thisProject: ChatRef[] = [];
+    const otherProjects = new Map<string, ChatRef[]>();
+    const globalMentions: ChatRef[] = [];
+    for (const conv of convs) {
+      if (!conv.id || isArchived(conv)) continue;
+      const slug = String(conv.project_slug || "").trim();
+      const title = String(conv.title || "Ducky").trim() || "Ducky";
+      const face = { duckyStyle: String(conv.ducky_style || "").trim() || undefined };
+      const group = chatMentionGroup(slug, openSlug, String(conv.project_name || ""));
+      const row = chatRef("@", `chat:${conv.id}`, title, group, `ducky:${conv.id}`, undefined, face);
+      if (group === "This project") thisProject.push(row);
+      else if (group === "Global") globalMentions.push(row);
+      else {
+        const list = otherProjects.get(group) ?? [];
+        list.push(row);
+        otherProjects.set(group, list);
       }
-      for (const pack of skills?.packs ?? []) {
-        const id = String(pack.id || "").trim();
-        if (!id) continue;
-        slash.push(chatRef("/", `skill:${id}`, pack.label || id, "Skills", `skill:${id}`, pack.description));
-        for (const sub of pack.subskills ?? []) {
-          const subId = String(sub.id || "").trim();
-          if (!subId || subId === "core") continue;
-          slash.push(
-            chatRef(
-              "/",
-              `subskill:${id}/${subId}`,
-              sub.label || subId,
-              "Subskills",
-              `subskill:${id}/${subId}`,
-              pack.label || id,
-            ),
-          );
-        }
-      }
-      for (const server of mcp?.plugins ?? []) {
-        const id = String(server.id || "").trim();
-        if (!id) continue;
-        slash.push(chatRef("/", `mcp:${id}`, server.label || id, "MCP", `mcp:${id}`, server.description));
-      }
-      for (const panel of contrib.ui_panels ?? []) {
-        const pluginId = String(panel.plugin_id || "").trim();
-        const panelId = String(panel.id || "").trim();
-        if (!pluginId || !panelId) continue;
+    }
+    for (const profile of data.profiles?.profiles ?? []) {
+      const id = String(profile.id || "").trim();
+      if (!id || id === "__blank__") continue;
+      globalMentions.push(chatRef("@", `profile:${id}`, profile.name || id, "Global", `profile:${id}`, profile.when_to_use, {
+        duckyStyle: profile.ducky_style,
+      }));
+    }
+    return orderChatMentions([
+      ...thisProject,
+      ...[...otherProjects.values()].flat(),
+      ...globalMentions,
+    ]);
+  }, [data.convs, data.recents, data.profiles, chatId]);
+
+  const builtinSlash = useMemo(() => {
+    const slash: ChatRef[] = [];
+    for (const workflow of data.workflows?.workflows || []) {
+      const owner = workflow.owner?.kind === "shared" ? `${kindTitle(workflow.owner.kindLabel)} ${workflow.owner.label}` : "Local";
+      const about = workflow.description || "Run this workflow with the request you type after it";
+      slash.push(chatRef("/", `workflow:${workflow.id}`, workflow.name || "Untitled workflow", "Workflows", `workflow:${workflow.id}`, `${owner} · ${about}`));
+    }
+    for (const pack of data.skills?.packs ?? []) {
+      const id = String(pack.id || "").trim();
+      if (!id) continue;
+      slash.push(chatRef("/", `skill:${id}`, pack.label || id, "Skills", `skill:${id}`, pack.description));
+      for (const sub of pack.subskills ?? []) {
+        const subId = String(sub.id || "").trim();
+        if (!subId || subId === "core") continue;
         slash.push(
           chatRef(
             "/",
-            `plugin:${pluginId}/${panelId}`,
-            panel.title || panelId,
-            "Plugins",
-            `plugin:${pluginId}/${panelId}`,
-            undefined,
-            {
-              iconUrl: (() => {
-                const icon = resolvePluginIconContent(panel.icon);
-                return icon.kind === "image" ? icon.src : icon.emoji;
-              })(),
-            },
+            `subskill:${id}/${subId}`,
+            sub.label || subId,
+            "Subskills",
+            `subskill:${id}/${subId}`,
+            pack.label || id,
           ),
         );
       }
-      const files = fileRefsOf(filePathsOf(paths));
-      noteChatRefFaces([...mentions, ...slash]);
-      setBuiltinMentions(mentions);
-      setBuiltinSlash(slash);
-      setContentFiles(files);
-    })();
-    return () => {
-      cancelled = true;
+    }
+    for (const server of data.mcp?.plugins ?? []) {
+      const id = String(server.id || "").trim();
+      if (!id) continue;
+      slash.push(chatRef("/", `mcp:${id}`, server.label || id, "MCP", `mcp:${id}`, server.description));
+    }
+    // Plugin panels come from contributions: they show even before the catalog loads.
+    for (const panel of contrib.ui_panels ?? []) {
+      const pluginId = String(panel.plugin_id || "").trim();
+      const panelId = String(panel.id || "").trim();
+      if (!pluginId || !panelId) continue;
+      slash.push(
+        chatRef(
+          "/",
+          `plugin:${pluginId}/${panelId}`,
+          panel.title || panelId,
+          "Plugins",
+          `plugin:${pluginId}/${panelId}`,
+          undefined,
+          {
+            iconUrl: (() => {
+              const icon = resolvePluginIconContent(panel.icon);
+              return icon.kind === "image" ? icon.src : icon.emoji;
+            })(),
+          },
+        ),
+      );
+    }
+    return slash;
+  }, [data.workflows, data.skills, data.mcp, contrib.ui_panels]);
+
+  const files = useMemo(() => fileRefsOf(filePathsOf(data.paths)), [data.paths]);
+
+  const { mentions, slashRefs } = useMemo(() => {
+    const extra: ChatRef[] = [];
+    for (const row of contrib.chat_references ?? []) {
+      const trigger = row.trigger === "@" ? "@" : row.trigger === "/" ? "/" : null;
+      const id = String(row.id || "").trim();
+      const label = String(row.label || "").trim();
+      const href = String(row.href || "").trim();
+      if (!trigger || !id || !label || !href) continue;
+      extra.push({
+        trigger,
+        id,
+        label,
+        href,
+        group: String(row.group || "Plugins").trim() || "Plugins",
+        description: row.description,
+      });
+    }
+    return {
+      mentions: dedupeChatRefs([...builtinMentions, ...extra.filter((row) => row.trigger === "@")]),
+      slashRefs: dedupeChatRefs([...builtinSlash, ...extra.filter((row) => row.trigger === "/")]),
     };
-  }, [active, chatId, contrib.ui_panels]);
+  }, [builtinMentions, builtinSlash, contrib.chat_references]);
 
-  const extra: ChatRef[] = [];
-  for (const row of contrib.chat_references ?? []) {
-    const trigger = row.trigger === "@" ? "@" : row.trigger === "/" ? "/" : null;
-    const id = String(row.id || "").trim();
-    const label = String(row.label || "").trim();
-    const href = String(row.href || "").trim();
-    if (!trigger || !id || !label || !href) continue;
-    extra.push({
-      trigger,
-      id,
-      label,
-      href,
-      group: String(row.group || "Plugins").trim() || "Plugins",
-      description: row.description,
-    });
-  }
-  const extraMentions = extra.filter((row) => row.trigger === "@");
-  const extraSlash = extra.filter((row) => row.trigger === "/");
-
-  const mentions = dedupeChatRefs([...builtinMentions, ...extraMentions]);
-  const slashRefs = dedupeChatRefs([...builtinSlash, ...extraSlash]);
   useEffect(() => {
     noteChatRefFaces([...mentions, ...slashRefs]);
   }, [mentions, slashRefs]);
-  return { mentions, slashRefs, files: contentFiles };
+  return { mentions, slashRefs, files, loading: status === "loading" };
 }
