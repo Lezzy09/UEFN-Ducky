@@ -89,7 +89,12 @@ def test_structure_gate_checks_latest_started_state(store, monkeypatch, operatio
         return ''
     _, refusal = race(monkeypatch,
         lambda: plans.update_node('owner', 'a', status='in_progress', project_root=store), mutate)
-    assert refusal == ('plan is playing — pause it to edit, move or delete unfinished steps '
-                       '(adding a step needs no pause)')
+    if operation == 'edit':
+        # An unstarted step is reworded while the plan plays.
+        assert refusal == ''
+        assert plans.load_plan('owner', store)['nodes'][1]['content'] == 'Changed'
+    else:
+        assert refusal == ('plan is playing — pause it to edit, move or delete unfinished steps '
+                           '(adding a step needs no pause)')
     assert [(n['id'], n['status']) for n in plans.load_plan('owner', store)['nodes']] == [
         ('a', 'in_progress'), ('b', 'pending')]

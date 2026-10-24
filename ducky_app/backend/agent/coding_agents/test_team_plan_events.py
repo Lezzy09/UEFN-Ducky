@@ -34,8 +34,9 @@ def test_notes_and_tick_while_playing_freeze_finished_nodes(team, notices, statu
     for kwargs in ({"body_markdown": "overwrite"}, {"status": "pending"}, {"assignee": "builder"}):
         with pytest.raises(ValueError):
             plans.update_node("coord", "a1", project_root=team, **kwargs)
-    with pytest.raises(ValueError):
-        plans.update_node("coord", "a2", content="structural change", project_root=team)
+    # An unstarted step is reworded while the plan plays.
+    doc = plans.update_node("coord", "a2", content="structural change", project_root=team)
+    assert plans._walk_find(doc["nodes"], "a2")[2]["content"] == "structural change"
     with pytest.raises(ValueError):
         plans.add_node("coord", content="under a finished step", parent_id="a1", project_root=team)
     plans.add_node("coord", content="new step", project_root=team)  # adding needs no pause

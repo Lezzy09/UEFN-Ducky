@@ -119,6 +119,25 @@ class PlansStoreTests(unittest.TestCase):
             plans.drain_after_save()
         self.assertFalse([p for p in pushes if p.get("type") == "plan_assignment_changed"], pushes)
 
+    def test_unstarted_steps_edit_while_the_plan_plays(self) -> None:
+        plans.create_plan("chat-play", nodes=[
+            {"id": "a", "content": "Started"},
+            {"id": "b", "content": "Store step"},
+        ], project_root=self.root)
+        plans.update_node("chat-play", "a", status="in_progress", project_root=self.root)
+        self.assertTrue(plans.plan_structure_locked(plans.load_plan("chat-play", self.root)))
+        # A pending step is reworded and split without pausing; the plan keeps playing.
+        plans.update_node("chat-play", "b", content="Store: list", project_root=self.root)
+        plans.add_node("chat-play", content="Store: detail page", parent_id="b", project_root=self.root)
+        loaded = plans.load_plan("chat-play", self.root)
+        b = plans._walk_find(loaded["nodes"], "b")[2]
+        self.assertEqual(b["content"], "Store: list")
+        self.assertEqual([c["content"] for c in b["children"]], ["Store: detail page"])
+        self.assertNotEqual(loaded["status"], "paused")
+        # A started step stays frozen.
+        with self.assertRaises(ValueError):
+            plans.update_node("chat-play", "a", content="Renamed", project_root=self.root)
+
     def test_create_update_merge_get(self) -> None:
         # Legacy on-disk contract (<project>/.ducky/plans/*.json); rows are covered by
         # backend/store/test_phase4.py.

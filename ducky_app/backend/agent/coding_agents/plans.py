@@ -425,6 +425,12 @@ def _refuse_if_structure_locked(plan: dict[str, Any]) -> None:
                          "(adding a step needs no pause)")
 
 
+def _unstarted(node: dict[str, Any]) -> bool:
+    """``node`` and everything inside it are still pending."""
+    return all(str(n.get("status") or "pending") == "pending"
+               for n in [node, *_flatten_nodes(node.get("children") or [])])
+
+
 def _is_done_node(node: dict[str, Any] | None) -> bool:
     return isinstance(node, dict) and str(node.get("status") or "") in _DONE
 
@@ -1000,7 +1006,10 @@ def update_node(
             node.pop("planned_assignee", None)
     structure_touch = content is not None or kind is not None
     if structure_touch and doc.get("kind") != "template":
-        _refuse_if_structure_locked(doc)
+        # A step nobody has started can be reworded while the plan plays: pausing to split one
+        # oversized step stopped every seat of the team.
+        if not _unstarted(node):
+            _refuse_if_structure_locked(doc)
         _refuse_if_done_node(node)
     if content is not None:
         text = (content or "").strip()
