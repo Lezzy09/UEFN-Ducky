@@ -10,7 +10,7 @@
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--sidebar, var(--card));
 }
 
@@ -381,17 +381,20 @@
   box-sizing: border-box;
   width: calc(100% - 16px);
   margin: 0 8px 8px;
-  padding: 6px 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  min-height: 3.6em;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
   background: var(--input-bg, var(--bg));
   color: var(--fg);
-  font-size: 13px;
+  font-family: var(--chat-text-font);
+  font-size: var(--chat-text-size, 14px);
+  line-height: 1.5;
+  resize: vertical;
 }
 
 .ask-user-text:focus {
   outline: none;
-  border-color: var(--accent);
 }
 
 .ask-user-text--solo {

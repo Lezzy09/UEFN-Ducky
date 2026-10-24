@@ -326,7 +326,7 @@
   max-height: 260px;
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-sm);
   background: var(--card);
   font-size: 12.5px;
 }
@@ -472,7 +472,7 @@
   max-height: var(--plan-open-max, min(70vh, 560px));
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--radius-sm);
   background: var(--card);
   box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
 }
@@ -509,7 +509,7 @@
   margin: 0 0 8px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--input-bg) 88%, transparent);
   min-width: 0;
 }
@@ -604,7 +604,7 @@
   width: 100%;
   background-color: var(--input-bg);
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--radius-sm);
   display: flex;
   flex-direction: column;
   position: relative;
@@ -1485,7 +1485,7 @@
   width: max-content;
   max-width: min(420px, 80vw);
   padding: 8px 8px 8px 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   line-height: 1.35;
   color: var(--fg);
@@ -1614,7 +1614,7 @@
   backdrop-filter: none;
   box-shadow: none;
   padding: 12px 16px;
-  border-radius: 16px 16px 0 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   gap: 12px;
 }
 
@@ -1624,7 +1624,7 @@
   flex-direction: column;
   gap: 12px;
   padding: 12px 16px;
-  border-radius: 16px;
+  border-radius: var(--radius-sm);
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   background: #18181b;
 }
@@ -2029,7 +2029,7 @@
   justify-content: center;
   gap: 8px;
   padding: 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
   font-size: 14px;
   min-height: 48px;
   cursor: pointer;
@@ -2099,7 +2099,7 @@
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   font-size: 14px;
   min-height: 52px;
   cursor: pointer;
@@ -3230,7 +3230,7 @@
 .chat-scroll-peek-card {
   width: min(300px, calc(100vw - 80px));
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: #2a2a2a;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   color: #fff;
@@ -6843,7 +6843,7 @@
 .plan-todo-card {
   border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
   background: var(--bg-elevated, rgba(30, 30, 30, 0.95));
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 
@@ -7339,7 +7339,7 @@
   display: flex;
   align-items: center;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--radius-sm);
   background: var(--dropdown-bg);
   color: var(--fg);
   padding-right: 4px;

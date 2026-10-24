@@ -43,3 +43,16 @@ it("names the asking ducky instead of Question, and hides Back for one question"
   expect(screen.queryByText("Question")).toBeNull();
   expect(screen.queryByRole("button", { name: /Back/ })).toBeNull();
 });
+
+it("a typed answer is a textarea: Shift+Enter keeps typing, Enter sends", () => {
+  const done = vi.fn();
+  const solo = parseAskUserQuestions([{ id: "n", prompt: "Notes?" }]);
+  render(<AskUserForm questions={solo} title="" captureKeys={false} onComplete={done} />);
+  const box = screen.getByPlaceholderText("Type your answer here");
+  expect(box.tagName).toBe("TEXTAREA");
+  fireEvent.change(box, { target: { value: "line one" } });
+  fireEvent.keyDown(box, { key: "Enter", shiftKey: true });
+  expect(done).not.toHaveBeenCalled();
+  fireEvent.keyDown(box, { key: "Enter" });
+  expect(done).toHaveBeenCalledOnce();
+});

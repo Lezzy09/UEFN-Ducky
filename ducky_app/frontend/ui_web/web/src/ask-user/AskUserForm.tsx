@@ -400,9 +400,9 @@ export const AskUserForm = memo(function AskUserForm({
               <kbd className="ask-user-option-key">{question.options.length + 1}</kbd>
             </button>
             {draft.other ? (
-              <input
+              <textarea
                 className="ask-user-text"
-                type="text"
+                rows={2}
                 placeholder="Type your own answer here"
                 value={draft.text}
                 autoFocus
@@ -410,10 +410,12 @@ export const AskUserForm = memo(function AskUserForm({
                 onKeyDown={(e) => {
                   if (
                     e.key === "Enter" &&
+                    !e.shiftKey &&
+                    !e.nativeEvent.isComposing &&
                     canSubmitQuestion(question, {
                       ...draft,
                       other: true,
-                      text: (e.target as HTMLInputElement).value,
+                      text: (e.target as HTMLTextAreaElement).value,
                     })
                   ) {
                     e.preventDefault();
@@ -425,15 +427,15 @@ export const AskUserForm = memo(function AskUserForm({
           </div>
         ) : null}
         {freeTextOnly ? (
-          <input
+          <textarea
             className="ask-user-text ask-user-text--solo"
-            type="text"
+            rows={2}
             placeholder="Type your answer here"
             value={draft.text}
             autoFocus
             onChange={(e) => setDraft({ text: e.target.value })}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && canSubmit) {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && canSubmit) {
                 e.preventDefault();
                 handleSubmit();
               }
