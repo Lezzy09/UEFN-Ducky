@@ -222,6 +222,25 @@ def test_a_row_another_process_rewrote_is_checked_and_saved_again() -> None:
     assert _json(repo.messages_get("c8")) == _json(messages)
 
 
+def test_a_load_opens_only_rows_it_has_not_seen(monkeypatch) -> None:
+    messages = _transcript(12)
+    repo.conv_save(PROJECT, _doc("c10"), messages=messages)
+    opened: list[str] = []
+    real = repo._message
+    monkeypatch.setattr(repo, "_message", lambda body, *a: opened.append(body) or real(body, *a))
+    first = repo.messages_get("c10")
+    assert _json(first) == _json(messages) and opened == []  # the save remembered every row
+    first[3]["text"] = "edited by the caller"  # a loaded copy is the caller's own
+    assert _json(repo.messages_get("c10")) == _json(messages)
+    conn = db.connect()
+    with db.write_txn(conn):  # another process rewrote one row
+        conn.execute("UPDATE messages SET hash='elsewhere', body=?, fmt=0 WHERE conv_id='c10' AND seq=4",
+                     (account_rows.seal(_json(_user("theirs")), account_rows.current()),))
+    assert repo.messages_get("c10")[4]["text"] == "theirs" and len(opened) == 1
+    repo.messages_get("c10")
+    assert len(opened) == 1  # and that row is remembered too
+
+
 def test_values_a_copy_cannot_track_are_serialised_every_time() -> None:
     class Tag:
         def __init__(self) -> None:

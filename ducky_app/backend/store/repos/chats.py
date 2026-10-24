@@ -770,7 +770,13 @@ def _sync_messages(
 
 
 def _messages(conn, conv_id: str, account: str) -> list[dict[str, Any]]:
-    rows = conn.execute("SELECT body, fmt FROM messages WHERE conv_id=? ORDER BY seq", (conv_id,)).fetchall()
+    """The transcript. A row whose hash is the one remembered for its seq is copied from
+    memory: opening every row (a DPAPI call each, plus its parts) on every load made a
+    running agent's checkpoints cost the whole chat, about a core on a long chat."""
+    rows = conn.execute(
+        "SELECT seq, hash, body, fmt FROM messages WHERE conv_id=? ORDER BY seq", (conv_id,)
+    ).fetchall()
+    known = _saved_rows(conv_id)
     reader: list[Callable[[str], str | None]] = []
 
     def parts() -> Callable[[str], str | None]:
@@ -779,11 +785,25 @@ def _messages(conn, conv_id: str, account: str) -> list[dict[str, Any]]:
         return reader[0]
 
     out: list[dict[str, Any]] = []
-    for body, fmt in rows:
+    remembered: dict[int, tuple[str, Any, int]] = {}
+    chars = 0
+    for seq, h, body, fmt in rows:
+        last = known.get(int(seq))
+        if last is not None and last[0] == str(h):
+            out.append(_copy_containers(last[1]))
+            remembered[int(seq)] = last
+            chars += last[2]
+            continue
         try:
-            out.append(_message(str(body), int(fmt), account, parts))
+            message = _message(str(body), int(fmt), account, parts)
         except ValueError:
             continue
+        out.append(message)
+        shell = _shell(message)
+        if shell is not None:
+            remembered[int(seq)] = (str(h), shell, len(str(body)))
+            chars += len(str(body))
+    _remember_rows(conv_id, remembered, chars)
     return out
 
 
