@@ -11,6 +11,14 @@ from backend.tools.uefn.assets import _fortnite_ui_gallery_hint
 from backend.tools.uefn.device_focused import _filter_settings, _resolve_actor_path
 
 
+def _tool_source(rel: str, name: str) -> str:
+    """Source of one tool (signature + docstring + body), for rules that live in tool docs."""
+    src = (Path(__file__).resolve().parents[1] / rel).read_text(encoding="utf-8")
+    start = src.index(f"def {name}(")
+    end = src.find("\n@", start)
+    return src[start : end if end != -1 else len(src)]
+
+
 def test_verse_device_spawn_hint_teleporter():
     hint = _verse_device_spawn_hint("teleporter_device")
     assert hint is not None
@@ -23,6 +31,28 @@ def test_verse_device_spawn_hint_teleporter():
 def test_verse_device_spawn_hint_ignores_normal_class():
     assert _verse_device_spawn_hint("BP_Creative_Trigger_C") is None
     assert _verse_device_spawn_hint("") is None
+
+
+def test_set_actor_transform_refuses_creative_device_scale(monkeypatch):
+    from backend.tools.uefn import actors as actors_mod
+
+    sent: list = []
+    monkeypatch.setattr(actors_mod, "send_command", lambda *a, **k: sent.append(a) or {"ok": True})
+    set_transform = getattr(actors_mod.set_actor_transform, "fn", actors_mod.set_actor_transform)
+    for path in (
+        "BP_Creative_Button",
+        "/Game/Island.Island:PersistentLevel.BP_Creative_Button_C_3",
+        "PersistentLevel.FortCreativeDeviceProp_1",
+        "teleporter_device_C_2",
+    ):
+        out = set_transform(path, scale=[2, 2, 2])
+        assert actors_mod.CREATIVE_DEVICE_SCALE_REFUSED in out
+    assert sent == []
+    # Props still scale; devices still move; identity scale is not a rescale.
+    set_transform("PersistentLevel.SM_Rock_C_1", scale=[2, 2, 2])
+    set_transform("BP_Creative_Button_C_3", location=[0, 0, 100])
+    set_transform("BP_Creative_Button_C_3", scale=[1, 1, 1])
+    assert len(sent) == 3
 
 
 def test_resolve_actor_path_label_alias():
@@ -68,7 +98,10 @@ def test_fortnite_directory_hint():
     assert _fortnite_ui_gallery_hint("/Fortnite") is not None
     assert "/Game/Creative" in (_fortnite_ui_gallery_hint("/Fortnite/") or "")
     assert _fortnite_ui_gallery_hint("/Game/Creative") is None
-    assert "content_catalog" in AGENT_HARD_RULES
+    # The search= / content_catalog rule lives only in search_assets' docstring.
+    doc = _tool_source("uefn/assets.py", "search_assets")
+    assert "search=" in doc and "content_catalog" in doc and "/Fortnite" in doc
+    assert "search_assets" not in AGENT_HARD_RULES
 
 
 def test_hard_rules_place_like_content_drawer():
@@ -84,8 +117,9 @@ def test_hard_rules_place_like_content_drawer():
 def test_hard_rules_never_scale_fortnite_devices():
     assert "Never scale Fortnite Creative devices" in AGENT_HARD_RULES
     assert "SetDeviceProperty" in AGENT_HARD_RULES
-    assert "set_actor_scale3d" in AGENT_HARD_RULES
     assert "Width" in AGENT_HARD_RULES
+    # Enforced in code: the MCP tool refuses named devices, the listener checks the class.
+    assert "CREATIVE_DEVICE_SCALE_REFUSED" in _tool_source("uefn/actors.py", "set_actor_transform")
     actors = (
         Path(__file__).resolve().parents[3]
         / "uefn_listener"
@@ -164,14 +198,16 @@ def test_hard_rules_epic_mcp_nested():
     assert "unreal__" in AGENT_HARD_RULES
     assert "epic_mcp_setup_steps" in AGENT_HARD_RULES
     assert "XYZ" in AGENT_HARD_RULES
-    assert "perInstanceSMData" in AGENT_HARD_RULES
-    assert "ArrayAdd" in AGENT_HARD_RULES
+    # perInstanceSMData is split in code (mcp_plugins/epic_array_set.py), not a prompt rule.
+    assert "perInstanceSMData" not in AGENT_HARD_RULES
+    from backend.mcp_plugins import epic_array_set
+
+    assert "perinstancesmdata" in epic_array_set._INSTANCE_ARRAYS
 
 
 def test_hard_rules_save_modal_host_dismiss():
     assert "dismiss_uefn_modal" in AGENT_HARD_RULES
-    assert "Save popup" in AGENT_HARD_RULES
-    assert "Slate thread" in AGENT_HARD_RULES
+    assert "Save/Checkout prompt" in AGENT_HARD_RULES
 
 
 def test_get_verse_editables_skips_uasset_walk():
@@ -225,11 +261,14 @@ def test_hard_rules_42_20_chat_unarmed_marketplace():
 
 
 def test_hard_rules_verse_build_lifecycle():
-    assert "WinError 10054" in AGENT_HARD_RULES
-    assert "VERSE_DEAD" in AGENT_HARD_RULES
-    assert "9002" in AGENT_HARD_RULES
-    assert "verse_build_lifecycle" in AGENT_HARD_RULES
-    assert "never retry" in AGENT_HARD_RULES.lower()
+    doc = _tool_source("verse/verse_diagnostics.py", "workspace_compile_verse")
+    assert "WinError 10054" in doc
+    assert "VERSE_DEAD" in doc
+    assert "9002" in doc
+    assert "verse_build_lifecycle" in doc
+    assert "never retry" in doc.lower()
+    assert "workspace_list_verse_errors" in doc and "set_verse_editable" in doc
+    assert "WinError 10054" not in AGENT_HARD_RULES
 
 
 def test_hard_rules_agent_does_the_editor_work():
@@ -243,17 +282,16 @@ def test_hard_rules_agent_does_the_editor_work():
 
 def test_hard_rules_never_hand_verse_wiring_to_user():
     assert "Never ask the user to Build Verse" in AGENT_HARD_RULES
-    assert "__verse_0x" in AGENT_HARD_RULES
-    assert "STOP is advisory" in AGENT_HARD_RULES
-    assert "refuses another wire" in AGENT_HARD_RULES
     assert "tell user to Build Verse" not in AGENT_HARD_RULES
+    editables = _tool_source("verse/verse_editable.py", "get_verse_editables")
+    assert "__verse_0x" in editables
+    assert "`STOP` is advisory" in editables
+    assert "refuses another wire" in _tool_source("verse/verse_editable.py", "set_verse_editable")
+    for wire in ("set_verse_editable", "wire_verse_device_ref", "wire_verse_device_array"):
+        assert "workspace_compile_verse succeeded" in _tool_source("verse/verse_editable.py", wire)
     from backend.agent.prompt import _rules_body
-    from backend.server import mcp
 
-    mcp_text = mcp.instructions or ""
-    for text in (AGENT_HARD_RULES, mcp_text):
-        assert "tell user to Build Verse" not in text
-        assert "Never ask the user to Build Verse" in text or "never ask the user to Build Verse" in text.lower()
+    # The MCP server instructions no longer repeat the rules (backend/test_server_instructions.py).
     assert "tell user to Build Verse" not in _rules_body(4200)
 
 
@@ -268,12 +306,22 @@ def test_hard_rules_ai_made_plugins():
     assert "AI-made plugins" in AGENT_HARD_RULES
     assert "ducky_plugin_*" in AGENT_HARD_RULES
     assert "ducky_plugin_list" in AGENT_HARD_RULES
-    assert "@api.tool()" in AGENT_HARD_RULES
     assert "ai_plugins" in AGENT_HARD_RULES
-    assert "var(--" in AGENT_HARD_RULES
-    assert "hardcode" in AGENT_HARD_RULES
-    assert "pipeline" in AGENT_HARD_RULES
-    assert "automations" in AGENT_HARD_RULES
+    doc = _tool_source("panel/panel_ai_plugins.py", "ducky_plugin_scaffold")
+    for word in ("@api.tool()", "var(--", "hardcode", "pipeline", "automations", "ducky_plugin_publish"):
+        assert word in doc
+
+
+def test_hard_rules_show_me_lives_in_ducky_ui_show():
+    assert "ducky_ui_show" in AGENT_HARD_RULES
+    assert "ducky_ui_list_targets(route, query)" not in AGENT_HARD_RULES
+    doc = _tool_source("panel/panel_ui.py", "ducky_ui_show")
+    assert "asks" in doc and "settings.store" in doc and "tour_workflow" in doc
+
+
+def test_hard_rules_at_least_40_percent_shorter():
+    # 21,630 chars at ac726856, before single-tool rules moved into tool docstrings.
+    assert len(AGENT_HARD_RULES) <= 21_630 * 0.6
 
 
 def test_hard_rules_fix_unless_user_asked_to_delete():
@@ -431,15 +479,13 @@ def test_hard_rules_require_ask_user_questionnaire():
     assert "questionnaire" in text.lower() or "composer" in text.lower()
 
 
-def test_mcp_instructions_require_followable_plans():
+def test_plan_protocol_requires_followable_plans():
+    from backend.agent.coding_agents.plans import PLAN_PROTOCOL
     from backend.agent.prompt import _rules_body
-    from backend.server import mcp
 
-    text = mcp.instructions or ""
-    assert "ducky_create_plan" in text
-    assert "Followable" in text or "followable" in text
-    assert "thrash" in text
-    # Ask-user is enforced in the embedded prompt; plans are in MCP instructions.
+    # Plans travel in the coding-agent prompt, not the MCP server instructions.
+    assert "Followable" in PLAN_PROTOCOL or "followable" in PLAN_PROTOCOL
+    assert "thrash" in PLAN_PROTOCOL
     assert "ducky_ask_user" in _rules_body(4200)
 
 

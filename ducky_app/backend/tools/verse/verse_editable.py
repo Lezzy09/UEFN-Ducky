@@ -35,7 +35,8 @@ def get_verse_editables(
     `wiring.can_wire`, `verse_source`. `mangled_name` is computed from the field
     name (`__verse_0x<CRC32>_<Field>`). `readable: false` means the compiled class
     lacks that field — compile once, wait, re-inspect the SAME device. Never ask
-    the user to Build Verse, paste T3D, or drag Details. Scalar device refs
+    the user to Build Verse, paste T3D, or drag Details. `STOP` is advisory: the
+    @editable is always yours to wire. Scalar device refs
     (e.g. NPCSpawner1) use wire_verse_device_ref — not wire_verse_device_array.
     Never assume field names; only use keys returned here.
     """
@@ -71,6 +72,10 @@ def set_verse_editable(
     pretty: bool = False,
 ) -> str:
     """Set a Verse @editable field. Device refs: pass target_path (label). Scalars: pass value.
+
+    Only after workspace_compile_verse succeeded. STALE REFLECTION: stop — the host
+    already compiled + reloaded + retried once and refuses another wire on that field;
+    get_verse_editables on the SAME device, then wire once. Never place a second copy.
 
     Value fields (int / float / string / logic / []int / []float) wire the same way
     as refs — pass value=. There is no extra "scalar slot" treatment; arrays and
@@ -166,7 +171,8 @@ def wire_verse_device_ref(
     Creative devices: sets SavedActor on the inner Script wrapper.
     Verse-to-Verse refs (e.g. ?player_manager): auto-routes to set_verse_editable.
 
-    Call get_verse_editables first. If the result is STALE REFLECTION, stop —
+    Only after workspace_compile_verse succeeded; call get_verse_editables first.
+    If the result is STALE REFLECTION, stop —
     the host already compiled + retried once and will refuse another wire on
     this field until get_verse_editables shows mangled_name. Never abort to
     the user. Example:
@@ -195,6 +201,7 @@ def wire_verse_device_array(
 ) -> str:
     """Wire creative devices / props into an array @editable on THIS device.
 
+    Only after workspace_compile_verse succeeded.
     First item (empty field): target_paths=[one] — do not spawn a second Verse device.
     Rewrite the list: replace=True with the full new list (same actor_path).
     Default appends. Scalar fields (NPCSpawner1) use wire_verse_device_ref.

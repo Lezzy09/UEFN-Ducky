@@ -221,6 +221,16 @@ def workspace_compile_verse(pretty: bool = False) -> str:
 
     Fail-fast when the Workflow Server is unreachable — use workspace_list_verse_errors
     for Problems-panel diagnostics (offline OK) instead of retrying compile.
+
+    Verification is two steps: workspace_list_verse_errors (offline LSP, syntax only),
+    then this (the real build). Never wire_verse_* / set_verse_editable /
+    set_npc_definition_behavior / workspace_push_verse_changes before this succeeded.
+    Build lifecycle: ``[WinError 10054]`` means the build started — wait, poll
+    list_verse_types, never retry. A class_path under /Engine/Transient with
+    VERSE_DEAD_* is stale: rebuild, then destroy and recreate the entity. Digest
+    deadlock (Script error 9002 cascading to 9000): comment out the problem Verse →
+    rebuild and wait → confirm the digest is fresh → uncomment → rebuild; never patch
+    the digest. Recipe: skill_read_subskill("uefn", "verse_build_lifecycle").
     """
     from frontend.ui_web.verse_editor.workflow.client import get_workflow_client
 

@@ -753,6 +753,15 @@ def ducky_plugin_scaffold(
     arguments) and skills/<id>/SKILL.md. Any duckie can edit it. Does not install — use
     ducky_plugin_validate, ducky_plugin_install, then ducky_plugin_test.
 
+    Before authoring: skill_read_subskill("ducky", "ai_plugins"), and reuse existing tools
+    (skill_search(kind="tools")) with api.call_tool. Every user action is an @api.tool()
+    (listener=False unless it calls UEFN) and an automations/pipeline node with a template;
+    bundled skills/<id>/SKILL.md; changeset on mutators. Panels link the UI kit
+    (../../_kit/ducky.js) and use Appearance vars only (var(--bg) / --fg / --accent): never
+    hardcode colors (no hex, rgb(), named colors; ducky_plugin_validate rejects them). After
+    every change: ducky_plugin_validate → ducky_plugin_test → ducky_plugin_errors until
+    clean. Share only through the Store (ducky_plugin_publish).
+
     data_sharing: the user's answer to "should your team share this plugin's data (a team
     copy with changes, locks, history and live editing)?", asked once before scaffolding.
     Omit it only when you haven't asked yet: a Store build refuses a plugin without it.

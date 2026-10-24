@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from backend.bridge import send_command
@@ -9,6 +10,13 @@ from backend.util.json_util import tool_json
 from backend.tools.support.plugin_gate import plugin_mcp_tool
 
 DEFAULT_QUERY_LIMIT = 200
+
+CREATIVE_DEVICE_SCALE_REFUSED = (
+    "Refused: Creative devices break when scaled. "
+    "Resize with SetDeviceProperty Width/Height/Depth."
+)
+# Last path segment, minus the Blueprint ``_C`` and Outliner ``_N`` suffixes.
+_ACTOR_SUFFIX = re.compile(r"(_C)?(_\d+)?$", re.IGNORECASE)
 
 
 @plugin_mcp_tool("uefn")
@@ -66,6 +74,25 @@ def _verse_device_spawn_hint(actor_class: str) -> str | None:
         f'then spawn_actor(asset_path="…BP_….BP_…_C"). '
         f'For API members: get_verse_api(name="{name}").'
     )
+
+
+def _is_creative_device_name(actor_path: str) -> bool:
+    """True when an actor path or class names a Creative device (FortCreative*, BP_Creative_*, *_device)."""
+    name = re.split(r"[/.:]", (actor_path or "").strip())[-1]
+    lower = name.lower()
+    if lower.startswith("fortcreative") or lower.startswith("bp_creative_"):
+        return True
+    return _ACTOR_SUFFIX.sub("", name).lower().endswith("_device")
+
+
+def _is_rescale(scale: Optional[list[float]]) -> bool:
+    """Scale [1,1,1] rides along on move/revert snapshots; only a real change counts."""
+    if scale is None:
+        return False
+    try:
+        return any(abs(float(v) - 1.0) > 1e-3 for v in list(scale)[:3])
+    except (TypeError, ValueError):
+        return True
 
 
 @plugin_mcp_tool("uefn")
@@ -151,6 +178,9 @@ def set_actor_transform(
     Settings) refuse scale — resize those via Details Width/Height/zone
     with SetDeviceProperty. Location and rotation are fine on devices.
     """
+    # The listener checks the real class too; this catches the named cases without a round-trip.
+    if _is_rescale(scale) and _is_creative_device_name(actor_path):
+        return tool_json({"error": CREATIVE_DEVICE_SCALE_REFUSED}, pretty=pretty)
     params: dict[str, Any] = {"actor_path": actor_path}
     if location is not None:
         params["location"] = location
