@@ -713,6 +713,16 @@ _last_tabs: dict[str, list[str]] = {}
 _restore_tabs: dict[str, list[str]] = {}
 
 
+def _drop_stale_call_caches(event: dict[str, Any]) -> None:
+    """A push (chats_changed, settings, plugins) makes the 1 s list caches stale."""
+    try:
+        from frontend.ui_web.call_pools import on_push
+
+        on_push(str(event.get("type") or ""))
+    except Exception:
+        pass
+
+
 def mark_crash_reload() -> None:
     """The window process crashed and is reloading: its next get_restore_tabs gets its tabs."""
     with _tabs_lock:
@@ -875,6 +885,7 @@ class PanelApi(
             pass
 
     def _push(self, event: dict[str, Any]) -> None:
+        _drop_stale_call_caches(event)
         if not self._all_windows():
             return
         stamped = dict(event)
@@ -955,6 +966,7 @@ class PanelApi(
         return (UI stuck on Uninstalling… / install at ~14% until app restart). Agent
         streaming already uses the loopback HTTP bus for the same reason — join it.
         """
+        _drop_stale_call_caches(event)
         try:
             from frontend.ui_web.panel_httpd import publish_panel_events
 
