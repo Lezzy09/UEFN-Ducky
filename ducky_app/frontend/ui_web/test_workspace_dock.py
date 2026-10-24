@@ -42,6 +42,19 @@ def test_header_visibility_round_trip(backend: str, tmp_path: Path) -> None:
     assert wd.load_header() == {"hidden": ["search", "nav"]}
 
 
+def test_each_sidebar_switch_saves_only_its_side(backend: str, tmp_path: Path) -> None:
+    wd.save_window("_rails", {"rightRailEnabled": False})
+    # Another window switches the left one: the right one stays off.
+    wd.save_window("_rails", {"leftRailEnabled": False})
+    assert wd.load_window("_rails") == {"rightRailEnabled": False, "leftRailEnabled": False}
+    wd.save_window("_rails", {"rightRailEnabled": True})
+    assert wd.load_window("_rails") == {"rightRailEnabled": True, "leftRailEnabled": False}
+    # Other windows' records are still replaced whole.
+    wd.save_window("main", {"leftWidth": 280})
+    wd.save_window("main", {"rightWidth": 320})
+    assert wd.load_window("main") == {"rightWidth": 320}
+
+
 def test_save_window_ignores_non_dict(backend: str, tmp_path: Path) -> None:
     wd.save_window("main", "nope")  # type: ignore[arg-type]
     assert wd.load_window("main") is None

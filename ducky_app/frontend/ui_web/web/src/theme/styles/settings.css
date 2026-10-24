@@ -2781,6 +2781,16 @@
   padding-bottom: 14px;
 }
 
+.appearance-sidebar-rail-empty {
+  margin: 0 16px 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm, 6px);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  color: var(--fg-dim, var(--fg));
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .appearance-sidebar-rail .appearance-layout-control {
   padding: 0 16px;
 }

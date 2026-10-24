@@ -63,10 +63,18 @@ def save_header(snapshot: dict[str, Any]) -> None:
         save_window("_header", snapshot)
 
 
+RAILS_KEY = "_rails"
+
+
 def save_window(window_id: str, snapshot: dict[str, Any]) -> None:
     if not isinstance(snapshot, dict):
         return
     key = (window_id or "main").strip() or "main"
+    if key == RAILS_KEY:
+        # The Appearance sidebar switches: each switch sends only its own side, merged in.
+        # Sending both from one window's copy let a stale other side flip it (turn the left
+        # sidebar off in one window and the right one came back on).
+        snapshot = {**(load_window(key) or {}), **snapshot}
     if _use_db():
         try:
             _kv().set_doc("workspace_state", f"dock:{key}", snapshot)

@@ -134,9 +134,11 @@ function AppearanceSidebarPreview({
 }
 
 /** A rail's on switch with its layout under it; the layout cannot change while the rail is off. */
-function SidebarRailBlock({ side }: { side: DockSide }) {
-  const { setRailEnabled, leftRailEnabled, rightRailEnabled } = useDockSidebarSettings();
+function SidebarRailBlock({ side, catalog }: { side: DockSide; catalog: DockPanelId[] }) {
+  const { snapshot, setRailEnabled, leftRailEnabled, rightRailEnabled } = useDockSidebarSettings();
   const enabled = side === "left" ? leftRailEnabled : rightRailEnabled;
+  // On, but nothing to show (every panel Off or on the other side): its header button stays grey.
+  const empty = enabled && !panelsOnSide(snapshot, side).some((id) => catalog.includes(id));
 
   return (
     <div className="appearance-sidebar-rail">
@@ -147,6 +149,12 @@ function SidebarRailBlock({ side }: { side: DockSide }) {
         checked={enabled}
         onChange={(on) => setRailEnabled(side, on)}
       />
+      {empty ? (
+        <p className="appearance-sidebar-rail-empty" role="note">
+          Nothing is on this sidebar, so its header button is greyed out. Set a panel to {SIDE_NAME[side]} under
+          Panels below.
+        </p>
+      ) : null}
       <PanelSideLayoutControl side={side} disabled={!enabled} />
     </div>
   );
@@ -233,8 +241,8 @@ export function AppearanceSidebarSectionBlock() {
     <AppearanceAccordionSplit preview={<AppearanceSidebarPreview catalog={catalog} titles={titles} />}>
       <div className="appearance-layout-controls">
         <div className="appearance-sidebar-rails">
-          <SidebarRailBlock side="left" />
-          <SidebarRailBlock side="right" />
+          <SidebarRailBlock side="left" catalog={catalog} />
+          <SidebarRailBlock side="right" catalog={catalog} />
         </div>
         <div className="appearance-sidebar-panels">
           <h4 className="appearance-category-title">Panels</h4>

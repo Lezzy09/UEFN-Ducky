@@ -172,9 +172,11 @@ describe("workspace dock sidebar snapshot", () => {
 });
 
 describe("Appearance rail switches", () => {
-  it("are saved in their own record when switched", () => {
+  it("are saved in their own record when switched, one side only", () => {
+    // This window's copy says the left sidebar is off; switching the right one must not send that.
+    mem.set(dockStorageKey("main"), JSON.stringify(withRailEnabled(defaultDockSnapshot(), "left", false)));
     saveRailSwitch("right", false, "main");
-    expect(saveWorkspaceDock).toHaveBeenCalledWith({ window_id: RAIL_SWITCHES_WINDOW, snapshot: { leftRailEnabled: true, rightRailEnabled: false } });
+    expect(saveWorkspaceDock).toHaveBeenCalledWith({ window_id: RAIL_SWITCHES_WINDOW, snapshot: { rightRailEnabled: false } });
   });
 
   it("win over any dock copy, including one that says on (a phone or a wiped window)", () => {

@@ -359,13 +359,14 @@ export function applyDiskDockSnapshot(raw: unknown, windowId: string): Workspace
  *  update), would otherwise turn a rail you switched off back on. */
 export const RAIL_SWITCHES_WINDOW = "_rails";
 
-export function saveRailSwitch(side: DockSide, enabled: boolean, windowId = "main"): void {
-  const local = readDockSnapshot(windowId);
-  const switches = withRailEnabled(local, side, enabled);
+export function saveRailSwitch(side: DockSide, enabled: boolean, _windowId = "main"): void {
+  // Only the side that was switched: the record is merged on save. Sending both from this
+  // window's copy let a stale other side flip that sidebar too.
+  const key = side === "left" ? "leftRailEnabled" : "rightRailEnabled";
   try {
     void getApi()?.save_workspace_dock?.({
       window_id: RAIL_SWITCHES_WINDOW,
-      snapshot: { leftRailEnabled: switches.leftRailEnabled, rightRailEnabled: switches.rightRailEnabled },
+      snapshot: { [key]: enabled },
     });
   } catch {
     // ignore bridge errors
