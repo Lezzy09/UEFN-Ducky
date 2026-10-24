@@ -78,6 +78,17 @@ def note_peer(account: str, ducky: str, name: str) -> None:
         )
 
 
+def forget_peer(account: str, ducky: str) -> int:
+    """Drop one other Ducky and all its copies here. Returns how many chats went."""
+    conn = db.connect()
+    with db.write_txn(conn):
+        gone = conn.execute(
+            "DELETE FROM ducky_mirror_chats WHERE account_id=? AND ducky=?", (account, ducky)
+        ).rowcount
+        conn.execute("DELETE FROM ducky_mirror_peers WHERE account_id=? AND ducky=?", (account, ducky))
+    return int(gone or 0)
+
+
 def peers(account: str) -> list[dict[str, Any]]:
     """Every other Ducky with copies here, its chats newest first (rows left out)."""
     conn = db.connect()

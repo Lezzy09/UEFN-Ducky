@@ -829,6 +829,58 @@ def ducky_list_chats(folder_id: str | None = None, project: str = "", pretty: bo
     return tool_json({"folders": folders, "conversations": conversations}, pretty=pretty)
 
 
+def archive_tree(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Archived chats as a tree: each group with what was archived with it under ``inside``."""
+    ids = {r["id"] for r in rows}
+    kids: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        parent = r.get("parent_conv_id") or ""
+        if parent and parent != r["id"] and parent in ids:
+            kids.setdefault(parent, []).append(r)
+    seen: set[str] = set()
+
+    def node(r: dict[str, Any]) -> dict[str, Any]:
+        seen.add(r["id"])
+        inside = [node(k) for k in kids.get(r["id"], []) if k["id"] not in seen]
+        count = sum(1 + n["inside_count"] for n in inside)
+        return {**r, "inside_count": count, "inside": inside}
+
+    return [node(r) for r in rows if not (r.get("parent_conv_id") and r["parent_conv_id"] in ids)]
+
+
+@mcp.tool()
+def ducky_list_archive(project: str = "", pretty: bool = False) -> str:
+    """What is in the Duckies Archive: archived chats and groups (each group with the
+    duckies and nested groups archived with it, under ``inside``) and archived ducky
+    profiles. Read-only. Read a chat with ducky_read_chat(conv_id).
+
+    Pass `project` (path, name, or slug from ducky_list_projects) for another project.
+    """
+    from frontend.agent_profiles import list_archived_agent_profiles
+
+    root = _resolve_project_root_arg(project)
+    rows = [
+        {
+            "id": c.id,
+            "title": c.title,
+            "is_group": bool(getattr(c, "is_group", False)),
+            "updated": c.updated,
+            "parent_conv_id": (getattr(c, "parent_conv_id", None) or "").strip(),
+        }
+        for c in list_conversations(project_root=root)
+        if is_archive_folder_id(c.folder_id)
+    ]
+    profiles = [
+        {"id": p.get("id"), "name": p.get("name"), "kind": p.get("kind")}
+        for p in (list_archived_agent_profiles() or [])
+        if isinstance(p, dict)
+    ]
+    return tool_json(
+        {"chat_count": len(rows), "chats": archive_tree(rows), "profiles": profiles},
+        pretty=pretty,
+    )
+
+
 @mcp.tool()
 def ducky_read_chat(conv_id: str, project: str = "", pretty: bool = False) -> str:
     """Read message history from any panel chat by id (including user-created chats).

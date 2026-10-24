@@ -22,7 +22,7 @@ ASK_READ_TOOLS = frozenset({
     "code_list_errors", "ducky_get_errors", "ducky_read_tool_spill",
     # Ducky state: each reads settings, chats or terminal buffers and changes nothing.
     "ducky_get_status", "ducky_get_local_project", "ducky_list_projects",
-    "ducky_list_chats", "ducky_read_chat", "ducky_terminal_list",
+    "ducky_list_chats", "ducky_list_archive", "ducky_read_chat", "ducky_terminal_list",
     "ducky_terminal_read_output",
     # Level and assets: each sends one listener read command (no save, select or spawn).
     "ping", "get_project_info", "get_level_info", "get_viewport_camera",

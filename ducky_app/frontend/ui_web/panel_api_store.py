@@ -298,6 +298,19 @@ class PanelApiStoreMixin:
         ducky_sync.sync_now()
         return {"ok": True}
 
+    def ducky_sync_forget(self, key_id: str = "") -> dict[str, Any]:
+        """Remove one of your other UEFN Duckies: sign that PC out of the account and drop
+        its chat copies here. Its own chats stay on that PC."""
+        from frontend.ducky_sync import forget
+
+        key = str(key_id or "").strip()
+        if not key:
+            return {"ok": False, "error": "Pick one of your UEFN Duckies."}
+        revoked = self.duckyos_revoke_pc(key)
+        dropped = forget(key)
+        # Already gone from the account still clears the copies; report the revoke error otherwise.
+        return {"ok": True, "dropped": dropped, "revoke_error": "" if revoked.get("ok", True) else str(revoked.get("error") or "")}
+
     def duckyos_revoke_pc(self, key_id: str = "") -> dict[str, Any]:
         from frontend.duckyos_account import DuckyOSAccountError, revoke_account_pc
 

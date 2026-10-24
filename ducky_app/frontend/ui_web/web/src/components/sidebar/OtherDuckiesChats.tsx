@@ -1,10 +1,38 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useConfirmModal } from "../../contexts/ConfirmModalContext";
 import { getApi } from "../../hooks/usePanelApi";
 import { Icons } from "../../icons/Icons";
+import { ContextMenu, useContextMenuState } from "../ContextMenu";
 import { Modal, ModalActions } from "../Modal";
+import { SplitResizeHandle } from "../SplitResizeHandle";
 import type { DuckySyncPeer } from "../../types/panel";
 
 const REFRESH_MS = 60_000;
+const COLLAPSED_KEY = "ducky.otherDuckies.collapsed";
+const HEIGHT_KEY = "ducky.otherDuckies.height";
+const MIN_HEIGHT = 60;
+const DEFAULT_HEIGHT = 160;
+
+function readStored(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    /* storage off: it just isn't remembered */
+  }
+}
+
+/** Body height after dragging the handle above it by ``delta`` px (up = taller). */
+export function resizedHeight(start: number, delta: number, max: number): number {
+  return Math.round(Math.max(MIN_HEIGHT, Math.min(Math.max(MIN_HEIGHT, max), start - delta)));
+}
 
 /** "just now", "5 min ago", "3 h ago", "2 d ago". */
 export function agoText(secs: number, now = Date.now() / 1000): string {
@@ -42,6 +70,13 @@ export function OtherDuckiesChats() {
   const [live, setLive] = useState<Record<string, boolean>>({});
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [copy, setCopy] = useState<CopyView | null>(null);
+  const [collapsed, setCollapsed] = useState(() => readStored(COLLAPSED_KEY) === "1");
+  const [height, setHeight] = useState(() => Number(readStored(HEIGHT_KEY)) || DEFAULT_HEIGHT);
+  const heightRef = useRef(height);
+  const dragRef = useRef({ start: height, delta: 0, max: 600 });
+  const rootRef = useRef<HTMLDivElement>(null);
+  const { confirm, alert } = useConfirmModal();
+  const { menu, open: openMenu, close: closeMenu } = useContextMenuState<DuckySyncPeer & { live: boolean }>();
 
   const load = useCallback(async () => {
     const api = getApi();
@@ -65,6 +100,36 @@ export function OtherDuckiesChats() {
 
   const shown = withLive(peers, live);
   if (!shown.length) return null;
+  const anyLive = shown.some((p) => p.live);
+
+  const toggleCollapsed = () => {
+    setCollapsed((c) => {
+      writeStored(COLLAPSED_KEY, c ? "0" : "1");
+      return !c;
+    });
+  };
+
+  const removePeer = async (peer: DuckySyncPeer & { live: boolean }) => {
+    const ok = await confirm({
+      title: "Remove UEFN Ducky",
+      message: `Remove "${peer.name}"? It is signed out of your account and its chat copies here are deleted. Its own chats stay on that PC; sign in there again to bring it back.`,
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (ok !== true) return;
+    const res = await getApi()?.ducky_sync_forget?.(peer.ducky);
+    if (res?.ok === false) {
+      await alert({ title: "Couldn't remove it", message: res.error || "Try again in a moment." });
+      return;
+    }
+    setPeers((list) => list.filter((p) => p.ducky !== peer.ducky));
+    if (res?.revoke_error) {
+      await alert({
+        title: "Removed here",
+        message: `Its copies are gone, but signing it out failed: ${res.revoke_error}`,
+      });
+    }
+  };
 
   const openChat = async (peer: DuckySyncPeer & { live: boolean }, chat: DuckySyncPeer["chats"][number]) => {
     const api = getApi();
@@ -83,15 +148,57 @@ export function OtherDuckiesChats() {
   };
 
   return (
-    <div className="other-duckies" aria-label="Chats on your other UEFN Duckies">
-      <div className="other-duckies__head">
-        <span>On your other Duckies</span>
+    <div ref={rootRef} className={`other-duckies${collapsed ? " is-collapsed" : ""}`} aria-label="Chats on your other UEFN Duckies">
+      {!collapsed ? (
+        <SplitResizeHandle
+          className="other-duckies__split"
+          orientation="vertical"
+          ariaLabel="Resize Duckies and your other Duckies"
+          onDragStart={() => {
+            // Leave the Duckies list at least its minimum above.
+            const panel = rootRef.current?.parentElement?.getBoundingClientRect().height ?? 600;
+            dragRef.current = { start: heightRef.current, delta: 0, max: panel - 120 };
+          }}
+          onDrag={(delta) => {
+            const d = dragRef.current;
+            d.delta += delta;
+            const next = resizedHeight(d.start, d.delta, d.max);
+            heightRef.current = next;
+            setHeight(next);
+          }}
+          onDragEnd={() => writeStored(HEIGHT_KEY, String(heightRef.current))}
+        />
+      ) : null}
+      <div
+        className="other-duckies__head"
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        title={collapsed ? "Show your other Duckies" : "Hide your other Duckies"}
+        onClick={toggleCollapsed}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          toggleCollapsed();
+        }}
+      >
+        <span className={`other-duckies__chev${collapsed ? "" : " is-open"}`} aria-hidden="true">
+          <Icons.ChevronRight />
+        </span>
+        <span
+          className={`other-duckies__dot${anyLive ? " is-live" : ""}`}
+          title={anyLive ? "One or more is online" : "All offline"}
+          aria-hidden="true"
+        />
+        <span className="other-duckies__title">On your other Duckies</span>
+        <span className="other-duckies__count">{shown.length}</span>
         <button
           type="button"
           className="other-duckies__sync"
           title="Sync now"
           aria-label="Sync now with your other UEFN Duckies"
-          onClick={() => {
+          onClick={(e) => {
+            e.stopPropagation();
             void getApi()?.ducky_sync_now?.();
             window.setTimeout(() => void load(), 8_000);
           }}
@@ -99,6 +206,8 @@ export function OtherDuckiesChats() {
           <Icons.Refresh />
         </button>
       </div>
+      {!collapsed ? (
+      <div className="other-duckies__body" style={{ height }}>
       {shown.map((peer) => {
         const expanded = !!open[peer.ducky];
         return (
@@ -107,7 +216,9 @@ export function OtherDuckiesChats() {
               type="button"
               className="other-duckies__peer-row"
               aria-expanded={expanded}
+              title="Right-click to remove"
               onClick={() => setOpen((o) => ({ ...o, [peer.ducky]: !expanded }))}
+              onContextMenu={(e) => openMenu(e, peer)}
             >
               <span className={`other-duckies__chev${expanded ? " is-open" : ""}`} aria-hidden="true">
                 <Icons.ChevronRight />
@@ -133,6 +244,24 @@ export function OtherDuckiesChats() {
           </div>
         );
       })}
+      </div>
+      ) : null}
+      {menu ? (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={closeMenu}
+          items={[
+            {
+              id: "open",
+              label: menu.data.live ? `Open ${menu.data.name}` : `${menu.data.name} is offline`,
+              disabled: !menu.data.live,
+              onClick: () => void getApi()?.ducky_link_open?.(menu.data.ducky, menu.data.name, ""),
+            },
+            { id: "remove", label: "Remove (disconnect)", danger: true, onClick: () => void removePeer(menu.data) },
+          ]}
+        />
+      ) : null}
       <Modal
         open={!!copy}
         onClose={() => setCopy(null)}

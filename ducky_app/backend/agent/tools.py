@@ -571,6 +571,7 @@ HOST_ONLY_TOOLS = frozenset(
         "ducky_launch_uefn",
         "ducky_get_errors",
         "ducky_list_chats",
+        "ducky_list_archive",
         "ducky_read_chat",
         "ducky_create_chat",
         "ducky_create_folder",

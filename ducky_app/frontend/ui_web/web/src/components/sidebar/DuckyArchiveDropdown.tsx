@@ -89,6 +89,8 @@ interface DuckyArchiveDropdownProps {
   onOpenAgent?: (profile: AgentProfileDto) => void;
   onReturnAgent?: (profile: AgentProfileDto) => void;
   onDeleteArchivedAgent?: (profile: AgentProfileDto) => void;
+  /** Delete everything in Archive (asks first). */
+  onEmptyArchive?: () => void;
   buttonRef?: RefObject<HTMLButtonElement>;
 }
 
@@ -105,6 +107,7 @@ export function DuckyArchiveDropdown({
   onOpenAgent,
   onReturnAgent,
   onDeleteArchivedAgent,
+  onEmptyArchive,
   buttonRef: buttonRefProp,
 }: DuckyArchiveDropdownProps) {
   const [open, setOpen] = useState(false);
@@ -240,7 +243,21 @@ export function DuckyArchiveDropdown({
         zIndex={ARCHIVE_DROPDOWN_Z_INDEX}
       >
         <div className="sidebar-archive-dropdown">
-          <div className="sidebar-archive-dropdown-title">Archive</div>
+          <div className="sidebar-archive-dropdown-title">
+            <span>Archive</span>
+            {onEmptyArchive && archiveCount > 0 ? (
+              <button
+                type="button"
+                className="sidebar-action-btn sidebar-delete-btn sidebar-archive-dropdown-empty-all"
+                title="Delete everything in Archive"
+                aria-label="Delete everything in Archive"
+                onClick={onEmptyArchive}
+              >
+                <Icons.Trash />
+                <span>Empty</span>
+              </button>
+            ) : null}
+          </div>
           {nodes.length === 0 && visibleAgents.length === 0 ? (
             <div className="ui-status-sidebar-muted sidebar-archive-dropdown-empty">
               {filtering ? "No archived duckies match" : "No archived duckies"}

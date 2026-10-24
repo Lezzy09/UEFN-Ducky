@@ -104,9 +104,13 @@ export function ConfirmModalProvider({ children }: { children: ReactNode }) {
   const message = dialog?.options.message ?? "";
   const confirmLabel = dialog?.type === "confirm" ? (dialog.options.confirmLabel ?? "OK") : "";
   const confirmKey = dialog?.type === "confirm" ? confirmShortcutKey(confirmLabel) : null;
+  const extraLabel = dialog?.type === "confirm" ? (dialog.options.extraLabel ?? "") : "";
+  // The second action gets its own letter too (Archive (A) · Delete (D)), unless it clashes.
+  const extraKeyRaw = extraLabel ? confirmShortcutKey(extraLabel) : null;
+  const extraKey = extraKeyRaw && extraKeyRaw !== "c" && extraKeyRaw !== confirmKey ? extraKeyRaw : null;
 
   useEffect(() => {
-    if (!dialog || dialog.type !== "confirm" || !confirmKey) return;
+    if (!dialog || dialog.type !== "confirm" || (!confirmKey && !extraKey)) return;
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -127,12 +131,16 @@ export function ConfirmModalProvider({ children }: { children: ReactNode }) {
         e.preventDefault();
         dialog.resolve(true);
         setDialog(null);
+      } else if (key === extraKey) {
+        e.preventDefault();
+        dialog.resolve("extra");
+        setDialog(null);
       }
     };
 
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [dialog, confirmKey]);
+  }, [dialog, confirmKey, extraKey]);
 
   return (
     <ConfirmModalContext.Provider value={{ confirm, alert }}>
@@ -147,7 +155,7 @@ export function ConfirmModalProvider({ children }: { children: ReactNode }) {
             dialog.type === "confirm" ? (
               <ModalActions
                 cancelLabel={`${dialog.options.cancelLabel ?? "Cancel"} (C)`}
-                extraLabel={dialog.options.extraLabel}
+                extraLabel={extraKey ? `${extraLabel} (${extraKey.toUpperCase()})` : extraLabel}
                 confirmLabel={
                   confirmKey
                     ? `${confirmLabel} (${confirmKey.toUpperCase()})`

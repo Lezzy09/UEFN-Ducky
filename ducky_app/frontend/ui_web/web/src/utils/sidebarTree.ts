@@ -23,6 +23,12 @@ export function findFolderById(folders: FolderItem[], id: string): FolderItem | 
   return null;
 }
 
+/** Duckies and nested groups inside a group (its own hub chat not counted). */
+export function groupInsideCount(folder: FolderItem): number {
+  const own = folder.chats.filter((c) => c.id !== folder.groupHubId).length;
+  return folder.children.reduce((sum, child) => sum + 1 + groupInsideCount(child), own);
+}
+
 /** Folder ids that must be expanded to reveal a chat in the duckies tree. */
 export function findChatAncestorFolderIds(
   folders: FolderItem[],

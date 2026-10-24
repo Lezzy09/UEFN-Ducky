@@ -1511,10 +1511,18 @@ class PanelApiChatsMixin:
         # Archived chats leave every open window's tree at once; a restore reloads them.
         _pa.notify_chats_changed(open_tab=False, removed_conv_ids=leaving)
 
-    def delete_conversation(self, conv_id: str) -> None:
+    def delete_conversation(self, conv_id: str, keep_inside: bool = False) -> None:
         from frontend.ui_web.agent_modes import cancel_agent, is_agent_running
 
         root = self._chat_root(conv_id)
+        if keep_inside:
+            # Only the group goes: what was in it stays where it is, on its own.
+            for child_id in _pa.conversation_descendant_ids(conv_id, root):
+                child = _pa.load_conversation(child_id, root)
+                if child is not None and (child.parent_conv_id or "").strip() == conv_id:
+                    child.parent_conv_id = ""
+                    child.leader_conv_id = ""
+                    _pa.save_conversation(child, root)
         # Its sub-agent chats (an archived group's duckies and nested groups too) are found
         # on its own island (Global Agents or another one).
         doomed = [conv_id, *_pa.conversation_descendant_ids(conv_id, root)]

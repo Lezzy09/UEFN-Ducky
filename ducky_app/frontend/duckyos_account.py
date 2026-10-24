@@ -1399,6 +1399,7 @@ OFF_PC_DENY = frozenset(
         "ducky_sync_list",
         "ducky_sync_copy",
         "ducky_sync_now",
+        "ducky_sync_forget",
         # Live editing's peer connections live in this PC's window: nothing outside it
         # may answer for them or feed them messages.
         "rtc_reply",

@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { agoText, withLive } from "./OtherDuckiesChats";
+import { agoText, resizedHeight, withLive } from "./OtherDuckiesChats";
+import { groupInsideCount } from "../../utils/sidebarTree";
+import type { FolderItem } from "../../types/panel";
+
+describe("resizedHeight", () => {
+  it("grows when the handle goes up and stays between the minimum and the room left", () => {
+    expect(resizedHeight(160, -40, 600)).toBe(200);
+    expect(resizedHeight(160, 500, 600)).toBe(60);
+    expect(resizedHeight(160, -900, 300)).toBe(300);
+  });
+});
+
+describe("groupInsideCount", () => {
+  it("counts duckies and nested groups, not the group's own hub", () => {
+    const folder = (id: string, chats: string[], children: FolderItem[] = [], hub = ""): FolderItem =>
+      ({ id, name: id, parentId: "", sortOrder: 0, expanded: true, groupHubId: hub, children,
+         chats: chats.map((c) => ({ id: c, name: c })) }) as unknown as FolderItem;
+    const nested = folder("g2", ["h2", "m3"], [], "h2");
+    expect(groupInsideCount(folder("g1", ["h1", "m1", "m2"], [nested], "h1"))).toBe(4);
+    expect(groupInsideCount(folder("g3", ["h3"], [], "h3"))).toBe(0);
+  });
+});
 
 describe("agoText", () => {
   it("says how long ago a copy was made", () => {

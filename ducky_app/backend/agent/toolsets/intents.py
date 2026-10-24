@@ -321,6 +321,7 @@ _PANEL_CHAT_TOOLS = frozenset(
     {
         "ducky_list_duckies",
         "ducky_list_chats",
+        "ducky_list_archive",
         "ducky_read_chat",
         "ducky_create_chat",
         "ducky_create_folder",

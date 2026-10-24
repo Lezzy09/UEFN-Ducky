@@ -494,7 +494,8 @@ function FolderHeader({
 }) {
   const id = dragId("folder", folder.id);
   const rowSelection = useContext(RowSelectionContext);
-  const deleteLabel = useRowDeleteCount(id) > 1 ? "Delete ALL" : "Delete";
+  // A group goes to Archive first (its popup still offers Delete); a plain folder is just removed.
+  const deleteLabel = useRowDeleteCount(id) > 1 ? "Delete ALL" : folder.groupHubId ? "Archive" : "Delete";
   const { menu, open, close } = useContextMenuState<void>();
 
   const hoverPlacement = useContext(ChatTreeHoverPlacementContext);

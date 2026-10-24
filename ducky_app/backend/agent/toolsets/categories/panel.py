@@ -80,6 +80,7 @@ EXTENDED_TOOLS = frozenset(
         "ducky_agent_transcript",
         "ducky_agent_stop",
         "ducky_list_chats",
+        "ducky_list_archive",
         "ducky_create_chat",
         "ducky_create_folder",
         "ducky_rename_chat",

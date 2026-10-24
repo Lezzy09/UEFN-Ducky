@@ -140,6 +140,15 @@ def test_a_round_copies_the_duckies_and_the_changed_chats(peer: _Peer) -> None:
     assert ducky_sync.mirror_rows("k2", "x2") is not None, "the copy stays, out of the list"
 
 
+def test_forget_drops_that_duckys_copies_only(peer: _Peer) -> None:
+    ducky_sync.sync_with(LAPTOP)
+    mirrors.note_peer(ACCOUNT, "k3", "Desk")
+    mirrors.note_chat(ACCOUNT, "k3", "d1", "Desk chat", 1.0)
+    assert ducky_sync.forget("k2") == 2
+    assert [p["ducky"] for p in ducky_sync.mirror_list()] == ["k3"]
+    assert ducky_sync.mirror_rows("k2", "x1") is None
+
+
 def test_a_failed_pull_is_tried_again_next_round(peer: _Peer) -> None:
     peer.fail_rows = {"x1"}
     ducky_sync.sync_with(LAPTOP)

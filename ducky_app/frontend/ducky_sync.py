@@ -218,6 +218,14 @@ def mirror_list() -> list[dict[str, Any]]:
     return mirrors.peers(account) if account else []
 
 
+def forget(ducky: str) -> int:
+    """Drop every copy of one other Ducky's chats. Returns how many chats went."""
+    from backend.store.repos import ducky_mirrors as mirrors
+
+    account = _account()
+    return mirrors.forget_peer(account, str(ducky or "")) if account else 0
+
+
 def mirror_rows(ducky: str, conv_id: str) -> dict[str, Any] | None:
     from backend.store.repos import ducky_mirrors as mirrors
 

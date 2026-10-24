@@ -5808,21 +5808,58 @@ html.window-fullscreen:has(.remote-ducky-reveal:hover, .remote-ducky-bar:hover, 
 
 /* ── OtherDuckiesChats: chats copied from your other UEFN Duckies (sidebar) ── */
 .other-duckies {
-  margin-top: 8px;
-  padding-top: 6px;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-height: 0;
   border-top: 1px solid var(--border);
+}
+
+.other-duckies__split {
+  flex-shrink: 0;
 }
 
 .other-duckies__head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 2px 10px 4px;
+  gap: 6px;
+  padding: 4px 10px;
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+}
+
+.other-duckies__head:hover {
+  background: var(--tab-hover);
+}
+
+.other-duckies__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.other-duckies__count {
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg-dim);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.other-duckies__head .other-duckies__sync {
+  margin-left: auto;
+}
+
+.other-duckies__body {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .other-duckies__sync {

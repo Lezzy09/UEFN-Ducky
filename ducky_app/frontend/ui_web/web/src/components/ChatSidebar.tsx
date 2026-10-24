@@ -51,7 +51,7 @@ import type { StackedPanelResizeSnapshot } from "../utils/stackedPanelFlex";
 import { SidebarPanelTabs } from "./sidebar/SidebarPanelTabs";
 import type { DockDropTarget } from "../utils/dockPanelDrag";
 import { insertIndexForTabDrop } from "../workspace/dockTabInsertIndex";
-import { archivedInsideCount, DuckyArchiveDropdown } from "./sidebar/DuckyArchiveDropdown";
+import { archivedInsideCount, buildArchiveTree, DuckyArchiveDropdown } from "./sidebar/DuckyArchiveDropdown";
 import { openLibraryAgent } from "./sidebar/openLibraryAgent";
 import { ContextMenu, useContextMenuState } from "./ContextMenu";
 import { formatSelectionBadge } from "../utils/fileTreeSelection";
@@ -70,6 +70,7 @@ import {
   findChatAncestorFolderIds,
   findFolderById,
   GLOBAL_PROJECT_SLUG,
+  groupInsideCount,
   insertChatFolder,
   maxExpandedFolderDepth,
   toggleChatFolderLevels,
@@ -991,38 +992,97 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
   };
 
   const deleteArchivedChat = async (chatId: string, chatName: string) => {
-    // An archived group goes with everything archived with it.
+    // An archived group: delete everything archived with it, or only the group.
     const inside = archivedInsideCount(archiveChats, chatId);
-    if (
-      !(await confirm({
-        message: inside
-          ? `Permanently delete "${chatName}" and the ${inside} ${inside === 1 ? "chat" : "chats"} archived with it? This cannot be undone.`
-          : `Permanently delete "${chatName}"? This cannot be undone.`,
-        confirmLabel: "Delete permanently",
-        danger: true,
-      }))
-    )
-      return;
+    const choice = await confirm(
+      inside
+        ? {
+            title: "Delete group",
+            message: `"${chatName}" has ${inside} ${inside === 1 ? "chat" : "chats"} archived with it. Delete everything inside too, or only the group? With only the group, its chats stay in Archive. This cannot be undone.`,
+            confirmLabel: "Everything inside",
+            extraLabel: "Only the group",
+            danger: true,
+          }
+        : {
+            title: "Delete permanently",
+            message: `Permanently delete "${chatName}"? This cannot be undone.`,
+            confirmLabel: "Delete permanently",
+            danger: true,
+          },
+    );
+    if (choice === false) return;
     const api = getApi();
     if (!api) return;
-    await api.delete_conversation(chatId);
+    await api.delete_conversation(chatId, choice === "extra");
     onChatDeleted?.(chatId);
     void load();
+  };
+
+  const emptyArchive = async () => {
+    const roots = buildArchiveTree(archiveChats);
+    const profiles = archivedAgents.length;
+    if (!roots.length && !profiles) return;
+    const parts = [
+      archiveChats.length ? `${archiveChats.length} ${archiveChats.length === 1 ? "chat" : "chats"}` : "",
+      profiles ? `${profiles} ducky ${profiles === 1 ? "profile" : "profiles"}` : "",
+    ].filter(Boolean);
+    const ok = await confirm({
+      title: "Empty Archive",
+      message: `Permanently delete everything in Archive (${parts.join(" and ")})? This cannot be undone.`,
+      confirmLabel: "Delete everything",
+      danger: true,
+    });
+    if (ok !== true) return;
+    const api = getApi();
+    if (!api) return;
+    // Top rows only: a group takes what was archived with it.
+    for (const node of roots) {
+      try {
+        await api.delete_conversation(node.chat.id);
+        onChatDeleted?.(node.chat.id);
+      } catch {
+        /* one that won't go doesn't stop the rest */
+      }
+    }
+    for (const profile of archivedAgents) {
+      try {
+        const result = await api.delete_agent_profile(profile.id);
+        if (result?.ok) emitDuckyProfileChanged({ type: "deleted", profileId: profile.id });
+      } catch {
+        /* keep going */
+      }
+    }
+    void load();
+    void reloadArchivedAgents();
   };
 
   const deleteFolder = async (folderId: string, folderName: string) => {
     const folder = findFolderById(foldersRef.current, folderId);
     const hubId = (folder?.groupHubId || "").trim();
-    // A group goes to Archive whole: its duckies and nested groups with it.
-    const archiveMembers = Boolean(hubId);
+    let archiveMembers = false;
+    let forGood = false;
     if (hubId) {
-      const choice = await confirm({
-        title: "Delete group",
-        message: `Move group "${folderName}" to Archive with everything in it (its duckies and nested groups)? From Archive you can return the group or delete it for good.`,
-        confirmLabel: "Move to Archive",
-        danger: true,
+      const action = await confirm({
+        title: "Archive group",
+        message: `Archive group "${folderName}"? From Archive you can return it or delete it for good. Delete removes it now and cannot be undone.`,
+        confirmLabel: "Archive",
+        extraLabel: "Delete",
       });
-      if (choice === false) return;
+      if (action === false) return;
+      forGood = action === "extra";
+      const inside = folder ? groupInsideCount(folder) : 0;
+      if (inside > 0) {
+        const verb = forGood ? "Delete" : "Archive";
+        const scope = await confirm({
+          title: `${verb} group`,
+          message: `"${folderName}" has ${inside} ${inside === 1 ? "ducky" : "duckies"} in it. ${verb} everything inside too, or only the group? With only the group, its duckies stay in your list.`,
+          confirmLabel: "Everything inside",
+          extraLabel: "Only the group",
+          danger: forGood,
+        });
+        if (scope === false) return;
+        archiveMembers = scope === true;
+      }
     } else if (!(await confirm({
       message: `Delete folder "${folderName}"? Duckies inside will move to the root.`,
       confirmLabel: "Delete",
@@ -1037,6 +1097,8 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
     let deletedHubIds: string[] = [];
     try {
       deletedHubIds = (await api.delete_folder(folderId, archiveMembers)) ?? [];
+      // Delete: the group just went to Archive; take it (and what went with it) out for good.
+      if (forGood) await api.delete_conversation(hubId);
     } finally {
       release();
     }
@@ -1161,6 +1223,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
         onOpenAgent={(profile) => void openArchivedAgent(profile)}
         onReturnAgent={(profile) => void returnArchivedAgent(profile)}
         onDeleteArchivedAgent={(profile) => void deleteArchivedAgent(profile)}
+        onEmptyArchive={() => void emptyArchive()}
       />
       <SectionIconButton
         title={chatTreeHasExpansion ? "Collapse one level" : "Expand one level"}
@@ -1283,11 +1346,12 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
             compact={duckiesCompact}
             currentProjectSlug={GLOBAL_PROJECT_SLUG}
           />
-          {/* Chats of your other UEFN Duckies, copied by sync: this PC's windows only. */}
-          {!isRemote() ? <OtherDuckiesChats /> : null}
           </>
         )}
       </div>
+      {/* Chats of your other UEFN Duckies, copied by sync: this PC's windows only. Pinned
+          under the list with its own resize handle, like UEFN Core under Content. */}
+      {!isRemote() && !(duckySearchMode === "text" && duckyTreeSearchOpen) ? <OtherDuckiesChats /> : null}
     </>
   );
 

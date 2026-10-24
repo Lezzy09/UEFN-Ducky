@@ -3349,6 +3349,8 @@ export interface PanelApi {
   ducky_link_open?(key_id: string, name?: string, chat_id?: string): Promise<{ ok?: boolean; error?: string }>;
   /** Your other UEFN Duckies' chats as copied here by sync (no rows). */
   ducky_sync_list?(): Promise<{ ok?: boolean; error?: string; duckies?: DuckySyncPeer[] }>;
+  /** Remove another UEFN Ducky: signs that PC out of the account and drops its copies here. */
+  ducky_sync_forget?(key_id: string): Promise<{ ok?: boolean; error?: string; dropped?: number; revoke_error?: string }>;
   /** The read-only copy of one of another Ducky's chats. */
   ducky_sync_copy?(key_id: string, chat_id: string): Promise<{
     ok?: boolean;
@@ -3633,7 +3635,8 @@ export interface PanelApi {
     target_slug: string,
     folder_id?: string,
   ): Promise<void>;
-  delete_conversation(conv_id: string): Promise<void>;
+  /** keepInside: only this group goes; what was in it stays, on its own. */
+  delete_conversation(conv_id: string, keepInside?: boolean): Promise<void>;
   load_messages(conv_id: string): Promise<ChatMessage[]>;
   get_settings(): Promise<PanelSettingsDto>;
   get_appearance(): Promise<AppearanceDto>;
