@@ -290,11 +290,14 @@ def workspace_read_file(
     start_line: int = 0,
     end_line: int = 0,
     line_numbers: bool = False,
+    format: str = "text",
     pretty: bool = False,
 ) -> str:
-    """Read a text file: relative to the open project, an absolute path in any of the
-    person's other Ducky projects, or a file attached to a chat (the path the chat gives).
-    Use this instead of a shell cat / Get-Content.
+    """Read one text file; use instead of shell cat / Get-Content, never to list a folder.
+
+    The path is relative to the open project, an absolute path in any of the person's
+    other Ducky projects, or a file attached to a chat (the path the chat gives).
+    Returns a 'path  lines a-b of N' header, then the text; format="json" gives the dict.
 
     start_line / end_line (1-based, inclusive) read just those lines; without them the first
     2000 lines come back, with a note where the rest starts. line_numbers=true prefixes each
@@ -305,7 +308,7 @@ def workspace_read_file(
     if not rel_in:
         raise ValueError("relative_path is required (path= also accepted)")
     relative_path = rel_in
-    from backend.tools.core.workspace_code import chat_file_path, read_lines
+    from backend.tools.core.workspace_code import chat_file_path, format_read, read_lines
 
     attached = chat_file_path(relative_path)
     if attached:
@@ -313,6 +316,8 @@ def workspace_read_file(
             raise ValueError(f"Not a file: {attached}")
         part = read_lines(attached, start_line, end_line, line_numbers)
         part.pop("_full_text", None)
+        if format != "json":
+            return format_read(attached, part)
         return tool_json({"path": attached, **part}, pretty=pretty)
     file_path = resolve_workspace_path(relative_path)
     from backend.workspace.ai_ignore import current_policy
@@ -338,8 +343,6 @@ def workspace_read_file(
             except OSError:
                 pass
         raise ValueError(f"Not a file: {file_path}. {hint}")
-    from backend.tools.core.workspace_code import read_lines
-
     part = read_lines(file_path, start_line, end_line, line_numbers)
     text = part.pop("_full_text")
     rel = relative_path.strip().replace("\\", "/")
@@ -356,12 +359,14 @@ def workspace_read_file(
         emit_for_bridge_tool("workspace_read_file", {"relative_path": rel}, {"data": payload})
     except Exception:
         pass
+    if format != "json":
+        return format_read(rel, part)
     return tool_json(payload, pretty=pretty)
 
 
 @mcp.tool()
 def workspace_write_file(relative_path: str = "", *, content: str, pretty: bool = False, path: str = "") -> str:
-    """Write a text file under the VS Code workspace on host disk.
+    """Create or replace a whole text file; never for a small change (use workspace_edit_file).
 
     Goes through the shared write pipeline: atomic replace, history snapshot with
     your identity, change journal, and write-lane policy when you are a laned

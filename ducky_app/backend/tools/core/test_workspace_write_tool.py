@@ -80,11 +80,30 @@ def test_read_tool_notes_the_base_for_conflicts(project, monkeypatch) -> None:
     (root / "Content" / "Verse" / "a.verse").write_text("base\n", encoding="utf-8")
     monkeypatch.setattr(system, "tool_json", lambda payload, pretty=False: json.dumps(payload))
     monkeypatch.setattr("frontend.ui_web.verse_editor.agent_sync.emit_for_bridge_tool", lambda *a, **k: None)
-    out = _payload(system.workspace_read_file("Content/Verse/a.verse"))
+    out = _payload(system.workspace_read_file("Content/Verse/a.verse", format="json"))
     assert out["content"] == "base\n"
     from backend.workspace.paths import content_hash
 
     assert journal.reads == [("Content/Verse/a.verse", content_hash("base\n"))]
+
+
+def test_read_tool_returns_plain_text_like_read_files(project, monkeypatch) -> None:
+    root, _ = project
+    (root / "Content" / "a.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    monkeypatch.setattr("frontend.ui_web.verse_editor.agent_sync.emit_for_bridge_tool", lambda *a, **k: None)
+    text = system.workspace_read_file("Content/a.txt")
+    assert text == "Content/a.txt  lines 1-3 of 3\none\ntwo\nthree\n"
+    part = system.workspace_read_file("Content/a.txt", start_line=2, end_line=2, line_numbers=True)
+    head, body = part.split("\n", 1)
+    assert head == "Content/a.txt  lines 2-2 of 3"
+    assert "2" in body and "two" in body and "one" not in body
+
+
+def test_read_and_write_tools_say_what_they_are_for_first() -> None:
+    for fn, words in ((system.workspace_read_file, "Read one text file"),
+                      (system.workspace_write_file, "Create or replace a whole text file")):
+        first = (fn.__doc__ or "").strip().splitlines()[0]
+        assert first.startswith(words) and "never" in first and len(first) < 120
 
 
 def test_write_tool_takes_path_like_the_read_tool(project, monkeypatch) -> None:
