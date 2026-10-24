@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
+from pathlib import Path
 
 GROUPS = (
     "workspace_", "uefn_", "verse_", "ducky_", "web_", "sandbox_", "skill_",
@@ -26,7 +29,7 @@ ALLOWED_UNPREFIXED = frozenset({
     "listener_command", "ping", "reload_listener", "search_verse_digest", "shutdown",
     # IDE helpers
     "clipboard_get_text", "code_detect_project", "code_list_errors", "code_open_file", "view_image",
-    # Renamed later by the UEFN tools work (sp-rules).
+    # UEFN editor tool that registers in core; editor tools keep their names (skills and plugins call them).
     "get_actor_properties",
 })
 
@@ -38,12 +41,20 @@ def _registered() -> set[str]:
     return set(mcp._tool_manager._tools)
 
 
+def _core_registered() -> set[str]:
+    # A fresh process: other tests import editor tool modules into the shared server.
+    code = "import backend.tools\nfrom backend.server import mcp\nprint('\\n'.join(mcp._tool_manager._tools))"
+    out = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[2],
+                         capture_output=True, text=True, timeout=120, check=True)
+    return {line.strip() for line in out.stdout.splitlines() if line.strip()}
+
+
 def unprefixed(names: set[str]) -> list[str]:
     return sorted(n for n in names if not n.startswith(GROUPS) and n not in ALLOWED_UNPREFIXED)
 
 
 def test_every_core_tool_name_starts_with_a_group() -> None:
-    assert unprefixed(_registered()) == [], "prefix new tools with a group (see GROUPS)"
+    assert unprefixed(_core_registered()) == [], "prefix new tools with a group (see GROUPS)"
 
 
 def test_a_new_unprefixed_tool_fails() -> None:

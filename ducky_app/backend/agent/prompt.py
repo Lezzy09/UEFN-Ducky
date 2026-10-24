@@ -365,9 +365,12 @@ def get_system_prompt_parts(
         f"{runtime_context}"
     )
     # Lazy: FastMCP pulls ~800ms+; only needed when building a live agent prompt.
+    from backend.agent.hard_rules import AGENT_HARD_RULES
     from backend.server import mcp
 
-    mcp_block = mcp.instructions or ""
+    # The server instructions are only a pointer now; the hard rules travel here once
+    # (the plan protocol is already in the Plans rule of _rules_body).
+    mcp_block = f"{(mcp.instructions or '').strip()}\n\n{AGENT_HARD_RULES}".strip()
     try:
         from backend.agent.toolsets.desktop_plugins import enabled_desktop_plugins_prompt_block
 

@@ -38,3 +38,9 @@ from backend.tools.verse import verse_diagnostics as _verse_diagnostics  # noqa:
 # Domain editor tools (actors, niagara, …) still register via uefn-plugin-* only.
 # translation_tools / materials register via their plugins.
 # Discord tools live entirely in uefn-plugin-discord (api.tool).
+
+# Coding agents get the core file/terminal/plan tools without a ToolSearch step.
+from backend.agent.coding_agents.core_tools import mark_always_load as _mark_always_load
+from backend.server import mcp as _mcp
+
+_mark_always_load(_mcp)

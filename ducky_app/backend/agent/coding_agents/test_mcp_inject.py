@@ -78,6 +78,62 @@ def test_every_agent_bootstrap_uses_ducky_tools_only(native_skills, listener_onl
     assert "your own edit" not in text
 
 
+def test_core_tools_load_up_front_and_the_rest_stay_deferred() -> None:
+    # Claude Code's per-tool switch: _meta["anthropic/alwaysLoad"] in tools/list.
+    import asyncio
+
+    import backend.tools  # noqa: F401 - registers every core tool and marks them
+    from backend.agent.coding_agents.core_tools import ALWAYS_LOAD_META_KEY, CORE_TOOLS
+    from backend.bridge.shared_mcp import _snapshot_tools, _tool_row
+    from backend.server import mcp
+
+    assert len(CORE_TOOLS) == 15
+    # Dedicated stdio (FastMCP tools/list) and the shared daemon both carry the flag.
+    listed = {t.name: t for t in asyncio.run(mcp.list_tools())}
+    rows = {row["name"]: row for row in (_tool_row(t) for t in _snapshot_tools(mcp))}
+    for name in CORE_TOOLS:
+        assert (listed[name].meta or {}).get(ALWAYS_LOAD_META_KEY) is True, name
+        assert rows[name]["_meta"][ALWAYS_LOAD_META_KEY] is True, name
+    for name in ("workspace_tree", "workspace_delete_file", "ping"):
+        if name in rows:
+            assert ALWAYS_LOAD_META_KEY not in (rows[name].get("_meta") or {}), name
+
+
+def test_mark_always_load_keeps_existing_meta_and_is_idempotent() -> None:
+    from types import SimpleNamespace
+
+    from backend.agent.coding_agents.core_tools import ALWAYS_LOAD_META_KEY, mark_always_load
+
+    tool = SimpleNamespace(meta={"connection_state": "ok"})
+    mcp = SimpleNamespace(_tool_manager=SimpleNamespace(_tools={"view_image": tool}))
+    assert mark_always_load(mcp) == ["view_image"]
+    first = tool.meta
+    assert first == {"connection_state": "ok", ALWAYS_LOAD_META_KEY: True}
+    mark_always_load(mcp)
+    assert tool.meta is first  # unchanged object: the catalog watcher sees no change
+
+
+def test_uefn_server_config_leaves_server_level_always_load_unset(monkeypatch) -> None:
+    from backend.agent.coding_agents import mcp_inject
+
+    monkeypatch.setattr(
+        mcp_inject,
+        "build_uefn_server_block",
+        lambda _s: {"type": "stdio", "command": "node", "args": [], "alwaysLoad": False},
+    )
+    servers = mcp_inject.build_uefn_mcp_servers(settings=object())
+    assert "alwaysLoad" not in servers["uefn"]
+
+
+def test_bootstrap_names_the_up_front_tools() -> None:
+    from backend.agent.coding_agents.core_tools import CORE_TOOLS
+
+    text = bootstrap_system_prompt(project_root="/tmp/p", listener_online=False, conv_id="chat-a")
+    assert "load up front, with no ToolSearch" in text
+    for name in CORE_TOOLS:
+        assert f"`{name}`" in text
+
+
 def test_team_plan_skill_requires_the_same_tools() -> None:
     app_root = Path(__file__).resolve().parents[3]
     skill = (app_root / "frontend/skill_packs/ducky/SKILL.md").read_text(encoding="utf-8")

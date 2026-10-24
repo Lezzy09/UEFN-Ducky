@@ -319,6 +319,39 @@ def test_hard_rules_show_me_lives_in_ducky_ui_show():
     assert "asks" in doc and "settings.store" in doc and "tour_workflow" in doc
 
 
+def test_built_in_agent_prompt_has_the_hard_rules_once():
+    # The server instructions shrank to a pointer, so the in-panel agent gets the rules here.
+    from backend.agent.prompt import get_system_prompt
+
+    text = get_system_prompt(listener_online=False, listener_port=4200, skill_override="")
+    assert text.count(AGENT_HARD_RULES) == 1
+    for rule in ("Separate systems", "Check off the plan"):
+        assert text.count(rule) == 1, rule
+
+
+def test_uefn_tool_first_lines_say_use_for_and_never():
+    # The first docstring line is what tool search and short tool lists show.
+    import ast
+    import re
+
+    checked = 0
+    for path in sorted(Path(__file__).parent.glob("*.py")):
+        if path.name.startswith("test_"):
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            if not any("plugin_mcp_tool" in ast.unparse(d) for d in node.decorator_list):
+                continue
+            first = (ast.get_docstring(node) or "").splitlines()[0].strip() if ast.get_docstring(node) else ""
+            where = f"{path.name}:{node.name}"
+            assert first, where
+            assert len(first) < 120, (where, len(first))
+            assert re.search(r"\b(never|not)\b", first, re.I), where
+            checked += 1
+    assert checked >= 60
+
+
 def test_hard_rules_at_least_40_percent_shorter():
     # 21,630 chars at ac726856, before single-tool rules moved into tool docstrings.
     assert len(AGENT_HARD_RULES) <= 21_630 * 0.6

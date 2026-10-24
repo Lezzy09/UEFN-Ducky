@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from backend.agent.coding_agents.core_tools import CORE_TOOLS
 from backend.agent.coding_agents.plans import PLAN_PROTOCOL
 from backend.agent.hard_rules import AGENT_HARD_RULES
 from backend.agent.prompt import CHAT_REPORT_RULE
@@ -65,6 +66,9 @@ def _windows_hidden_bridge_block(base: dict[str, Any]) -> dict[str, Any]:
 def build_uefn_mcp_servers(settings: PanelSettings | None = None) -> dict[str, Any]:
     s = settings or PanelSettings.load()
     block = build_uefn_server_block(s)
+    # Server-level alwaysLoad: true would load all ~1,000 tools; false would defer
+    # the CORE_TOOLS the bridge marks per tool (core_tools.py). Leave it unset.
+    block = {k: v for k, v in block.items() if k != "alwaysLoad"}
     return {"uefn": _windows_hidden_bridge_block(block)}
 
 
@@ -324,7 +328,8 @@ def bootstrap_system_prompt(
         "\n## Chat replies\n"
         f"{CHAT_REPORT_RULE}"
         "\n## UEFN tools\n"
-        "Ducky tools are `mcp__uefn__<name>`. If Claude says the uefn server is still "
+        "Ducky tools are `mcp__uefn__<name>`. These load up front, with no ToolSearch: "
+        f"{', '.join(f'`{n}`' for n in CORE_TOOLS)}. If Claude says the uefn server is still "
         "connecting, call ToolSearch with query `select:mcp__uefn__<tool>` (that call waits). "
         "Do not tell the user the tools are missing, and do not send them to Settings, "
         "until that search returns.\n"
