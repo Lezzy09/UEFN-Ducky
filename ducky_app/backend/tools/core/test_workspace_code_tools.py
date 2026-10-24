@@ -68,10 +68,10 @@ def _call(fn, *args, **kwargs) -> dict:
 
 
 def test_read_file_returns_only_the_lines_asked_for(project) -> None:
-    out = _call(system.workspace_read_file, "src/app.py", start_line=4, end_line=6, line_numbers=True)
+    out = _call(system.workspace_read_file, "src/app.py", start_line=4, end_line=6, line_numbers=True, format="json")
     assert out["content"] == "4| class Store:\n5|     def load(self):\n6|         return 1"
     assert out["total_lines"] == 13 and (out["start_line"], out["end_line"]) == (4, 6)
-    whole = _call(system.workspace_read_file, "src/app.py")
+    whole = _call(system.workspace_read_file, "src/app.py", format="json")
     assert whole["content"].startswith("import os") and "start_line" not in whole and "more" not in whole
 
 
@@ -79,7 +79,7 @@ def test_read_without_range_stops_at_the_cap(project, monkeypatch) -> None:
     root, _ = project
     (root / "big.txt").write_text("".join(f"line {n}\n" for n in range(1, 11)), encoding="utf-8")
     monkeypatch.setattr(wc, "READ_LINE_CAP", 4)
-    out = _call(system.workspace_read_file, "big.txt")
+    out = _call(system.workspace_read_file, "big.txt", format="json")
     assert out["content"].splitlines() == ["line 1", "line 2", "line 3", "line 4"]
     assert "start_line=5" in out["more"]
 
@@ -88,11 +88,11 @@ def test_one_read_never_floods_the_model(project, monkeypatch) -> None:
     root, _ = project
     monkeypatch.setattr(wc, "READ_CHAR_CAP", 25)
     (root / "lines.txt").write_text("".join(f"line {n}\n" for n in range(1, 11)), encoding="utf-8")
-    out = _call(system.workspace_read_file, "lines.txt")
+    out = _call(system.workspace_read_file, "lines.txt", format="json")
     assert out["content"].splitlines() == ["line 1", "line 2", "line 3"]
     assert out["end_line"] == 3 and "start_line=4" in out["more"]
     (root / "min.js").write_text("x" * 100 + "\nnext\n", encoding="utf-8")
-    one = _call(system.workspace_read_file, "min.js")
+    one = _call(system.workspace_read_file, "min.js", format="json")
     assert one["content"] == "x" * 25 and "Line 1 is longer" in one["more"] and "start_line=2" in one["more"]
 
 
@@ -104,7 +104,7 @@ def test_reads_a_file_attached_to_a_chat(project, tmp_path, monkeypatch) -> None
     att.mkdir(parents=True)
     kit = att / "1_0_Kit.html.readable.txt"
     kit.write_text("a\nb\nc\n", encoding="utf-8")
-    out = _call(system.workspace_read_file, path=str(kit), start_line=2, end_line=3)
+    out = _call(system.workspace_read_file, path=str(kit), start_line=2, end_line=3, format="json")
     assert out["content"] == "b\nc"
     outside = tmp_path / "elsewhere.txt"
     outside.write_text("secret", encoding="utf-8")

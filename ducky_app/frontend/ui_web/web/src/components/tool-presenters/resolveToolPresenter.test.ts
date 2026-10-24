@@ -85,4 +85,15 @@ describe("resolveToolPresenterBlocks", () => {
     expect(blocks?.some((b) => b.type === "file_link")).toBe(true);
     expect(blocks?.some((b) => b.type === "code")).toBe(true);
   });
+
+  it("shows a plain-text read's file text without its header line", () => {
+    const blocks = resolveToolPresenterBlocks({
+      toolName: "workspace_read_file",
+      arguments: { relative_path: "Verse/Foo.verse" },
+      resultText: "Verse/Foo.verse  lines 1-2 of 2\nusing { /Verse.org/Verse }\nfoo := 1",
+      isSuccess: true,
+    });
+    const code = blocks?.find((b) => b.type === "code") as { text?: string } | undefined;
+    expect(code?.text).toBe("using { /Verse.org/Verse }\nfoo := 1");
+  });
 });

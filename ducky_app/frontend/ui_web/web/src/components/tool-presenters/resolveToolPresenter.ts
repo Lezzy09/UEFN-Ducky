@@ -116,6 +116,10 @@ const fileContentPresenter: ToolPresenter = ({ resultText, arguments: args }) =>
   else if (data && typeof data === "object" && !Array.isArray(data)) {
     const obj = data as Record<string, unknown>;
     content = String(obj.content ?? obj.text ?? obj.data ?? "");
+  } else if (data === null && resultText.trim()) {
+    // Plain-text reads: "path  lines a-b of N" header, then the file text.
+    const [first, ...rest] = resultText.split("\n");
+    content = /\slines \d+-\d+ of \d+/.test(first) ? rest.join("\n") : resultText;
   }
   if (content) {
     const lang = rel.toLowerCase().endsWith(".verse") ? "verse" : undefined;
