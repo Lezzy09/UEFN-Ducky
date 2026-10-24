@@ -342,8 +342,24 @@ export function swarmBuildPrompt(detail?: number): string {
 
 type SwarmAction = "build" | "change" | "detail";
 
-function defaultSend(action: SwarmAction, text: string): void {
-  window.dispatchEvent(new CustomEvent("ducky:swarm-card", { detail: { action, text } }));
+/** Bubbles from the card to the chat pane that shows it; that pane alone sends the text. */
+export const SWARM_CARD_EVENT = "ducky:swarm-card";
+
+/** The chat pane side: send a card's text through this pane's own send path. */
+export function useSwarmCardSend(host: HTMLElement | null, send: (text: string) => void): void {
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  useEffect(() => {
+    if (!host) return;
+    const onCard = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: unknown }>).detail?.text;
+      if (typeof text !== "string" || !text.trim()) return;
+      e.stopPropagation();
+      sendRef.current(text);
+    };
+    host.addEventListener(SWARM_CARD_EVENT, onCard);
+    return () => host.removeEventListener(SWARM_CARD_EVENT, onCard);
+  }, [host]);
 }
 
 export interface SwarmCardProps {
@@ -352,7 +368,12 @@ export interface SwarmCardProps {
   onSend?: (action: SwarmAction, text: string) => void;
 }
 
-export function SwarmCard({ resultText = "", data: dataProp, onSend = defaultSend }: SwarmCardProps) {
+export function SwarmCard({ resultText = "", data: dataProp, onSend: onSendProp }: SwarmCardProps) {
+  const cardRef = useRef<HTMLElement>(null);
+  const onSend = (action: SwarmAction, text: string) => {
+    if (onSendProp) onSendProp(action, text);
+    else cardRef.current?.dispatchEvent(new CustomEvent(SWARM_CARD_EVENT, { detail: { action, text }, bubbles: true }));
+  };
   const data = useMemo(() => dataProp ?? parseSwarmResult(resultText), [dataProp, resultText]);
   const reduced = usePrefersReducedMotion();
   const tree = useMemo(() => (data ? drawTree(data) : null), [data]);
@@ -434,7 +455,7 @@ export function SwarmCard({ resultText = "", data: dataProp, onSend = defaultSen
   const detail = picked ?? data.detail ?? levels[0]?.detail;
 
   return (
-    <section className={`swarm-card swarm-card--${status.replace("_", "-")}`} aria-label={title}>
+    <section ref={cardRef} className={`swarm-card swarm-card--${status.replace("_", "-")}`} aria-label={title}>
       <header className="swarm-card-title">{title}</header>
       {levels.length ? (
         <div className="swarm-card-detail">

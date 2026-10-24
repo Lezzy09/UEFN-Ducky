@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SWARM_BUILD_PROMPT,
+  SWARM_CARD_EVENT,
   SWARM_CHANGE_PROMPT,
   SWARM_DETAIL_DEBOUNCE_MS,
   SWARM_REVEAL_MS,
@@ -10,6 +12,7 @@ import {
   parseSwarmResult,
   swarmDetailPrompt,
   swarmRollup,
+  useSwarmCardSend,
 } from "./SwarmCard";
 import { resolveToolPresenterBlocks, resolveToolPresenterView } from "./resolveToolPresenter";
 
@@ -178,6 +181,35 @@ describe("SwarmCard detail slider", () => {
   it("no levels → no slider", () => {
     render(<SwarmCard resultText={preview} />);
     expect(screen.queryByRole("slider")).toBeNull();
+  });
+});
+
+describe("SwarmCard sends through its own chat pane", () => {
+  function Pane({ send, children }: { send: (text: string) => void; children?: ReactNode }) {
+    const [host, setHost] = useState<HTMLDivElement | null>(null);
+    useSwarmCardSend(host, send);
+    return <div ref={setHost}>{children}</div>;
+  }
+
+  it("Build bubbles one event to the pane showing the card; another pane sends nothing", () => {
+    const mine = vi.fn();
+    const other = vi.fn();
+    const onWindow = vi.fn();
+    window.addEventListener(SWARM_CARD_EVENT, onWindow);
+    render(
+      <>
+        <Pane send={mine}>
+          <SwarmCard resultText={preview} />
+        </Pane>
+        <Pane send={other} />
+      </>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+    window.removeEventListener(SWARM_CARD_EVENT, onWindow);
+    expect(mine).toHaveBeenCalledTimes(1);
+    expect(mine).toHaveBeenCalledWith(SWARM_BUILD_PROMPT);
+    expect(other).not.toHaveBeenCalled();
+    expect(onWindow).not.toHaveBeenCalled();
   });
 });
 

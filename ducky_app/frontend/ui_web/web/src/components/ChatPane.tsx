@@ -8,6 +8,7 @@ import { useHeaderVisibility } from "../hooks/useHeaderVisibility";
 import { skipAutoFocus } from "../hooks/useNarrowLayout";
 import { isDucktactoeChat } from "../plugin-ui/ducktactoeBoardChat";
 import { ModelSelector } from "./ModelSelector";
+import { useSwarmCardSend } from "./tool-presenters/SwarmCard";
 import { usePluginContributions } from "../hooks/usePluginContributions";
 import { ComposerAttachmentChips } from "./ComposerAttachmentChips";
 import { AttachmentPreviewModal } from "./AttachmentPreviewModal";
@@ -1306,6 +1307,9 @@ export function ChatPane({
     if (!overrideText) clearAttachments();
     dispatchSend(text, apiAttachments, agentMode, selectedModel, codingAgent);
   };
+
+  // Swarm card buttons (Build / Change / detail) in this pane send here.
+  useSwarmCardSend(paneHost, handleSend);
 
   // Another model, or a new turn running, answers "isn't connected".
   useEffect(() => setNotConnected(null), [selectedModel]);
