@@ -229,7 +229,7 @@ def _wake(chat_id: str, text: str) -> None:
     run_message(chat_id, text, "agent", model, queue_if_busy=True)
 
 
-def _team_context(plan: dict[str, Any]) -> tuple[set[str], str]:
+def _team_context(plan: dict[str, Any], *, busy: set[str] = frozenset()) -> tuple[set[str], str]:
     from backend.agent.coding_agents.plans import _chat_and_group_ids
     from backend.agent.coding_agents.team_plan_events import assigned_nodes
     from frontend.ui_web.project_chats import list_all_conversation_metadata
@@ -248,7 +248,10 @@ def _team_context(plan: dict[str, Any]) -> tuple[set[str], str]:
     reports = [r["body"] for r in plan.get("team_reports", [])]
     reports += [r["body"] for r in unanswered_reports(str(plan.get("chat_id") or ""))]
     detail = "\nOpen steps: " + ("; ".join(open_names) or "see plan")
-    detail += "\nIdle members: " + ("; ".join(f"{name} ({cid})" for cid, name in members.items()) or "none listed")
+    # Oct 24 2026: every member was listed as idle, so a stall wake told the lead a busy team sat idle.
+    working = "; ".join(f"{name} ({cid})" for cid, name in members.items() if cid in busy) or "none"
+    idle = "; ".join(f"{name} ({cid})" for cid, name in members.items() if cid not in busy) or "none"
+    detail += f"\nWorking: {working} · Idle: {idle}"
     if reports:
         detail += "\nReports awaiting next dispatch:\n" + "\n".join(reports)
     return set(members) | owners, detail
@@ -291,7 +294,7 @@ def tick(
             done = _done(plan)
             if "done" not in st or done > st["done"]:
                 st["done"], st["progress_at"], st["next_stall"] = done, now, 0.0
-            member_ids, details = _team_context(plan)
+            member_ids, details = _team_context(plan, busy=busy)
             team_busy = busy.intersection(member_ids | {cid}) if member_ids else busy
             if team_busy:
                 st["quiet_since"] = now
@@ -443,8 +446,19 @@ def _points(nodes: list[dict[str, Any]], *, bodies: bool) -> str:
 
 
 def _section_title(work: dict[str, Any]) -> str:
-    section = work.get("section") or {}
-    return str(section.get("content") or "your steps") if section.get("children") else "your steps"
+    return str((work.get("section") or {}).get("content") or "your steps")
+
+
+def _section_text(work: dict[str, Any]) -> str:
+    """The sub plan's shape: added, renamed or reordered points change it; a tick doesn't (nor the
+    notes a member writes when it ticks, so bodies stay out)."""
+    rows, stack = [], [work.get("section") or {}]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            rows.append(f"{node.get('id')}\0{node.get('content') or ''}\0{','.join(map(str, node.get('after') or []))}")
+            stack.extend(node.get("children") or [])
+    return f"{zlib.crc32(chr(1).join(rows).encode('utf-8', 'replace')):08x}"
 
 
 _SPEC_CHARS = 1200
@@ -608,15 +622,21 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
                 st["idle_since"] = now
             if automatic_work_blocked(member):
                 continue
-            task = f"{plan.get('id') or plan.get('plan_id') or lead}:{(work.get('section') or {}).get('id') or owner}"
+            # The sub plan's text is in the key: a member first woken before its steps existed gets
+            # the whole task again once they do, not "continue".
+            task = (f"{plan.get('id') or plan.get('plan_id') or lead}:"
+                    f"{(work.get('section') or {}).get('id') or owner}:{_section_text(work)}")
             if st["task"] != task:
                 _inherit_lead(member, lead)
                 try:
                     wake(member, _task_text(plan, work))
                 except Exception:
                     continue
-                st.update(task=task, tries=0, idle_since=now, next=now + _MEMBER_IDLE_S, blocked="", cleared="",
-                          told_done=None)
+                # The same sub plan, rewritten: an answered block stays answered and a repeat
+                # block still goes to the person.
+                same = st["task"].rsplit(":", 1)[0] == task.rsplit(":", 1)[0]
+                st.update(task=task, tries=0, idle_since=now, next=now + _MEMBER_IDLE_S, blocked="",
+                          cleared=st["cleared"] if same else "", told_done=st["told_done"] if same else None)
                 woke.append(member)
                 movable.add(lead)
                 continue

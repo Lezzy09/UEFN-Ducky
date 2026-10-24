@@ -710,6 +710,9 @@ def save_plan(plan: dict[str, Any], project_root: str | None = None) -> dict[str
     for node in _flatten_nodes(plan.get("nodes")):
         assignee = node.get("assignee")
         if assignee and previous_assignments.get(node["id"]) != assignee:
+            # A sub plan only starts once its steps exist; a plain step is assignable as is.
+            if node.get("kind") == "subplan" and not node.get("children"):
+                raise ValueError(f"sub plan `{node['id']}` has no steps. Add its steps first, then assign it.")
             if load_conversation(assignee, project_root=project_root) is None:
                 raise ValueError("assignee must identify an existing chat or group")
     plan["updated_at"] = time.time()

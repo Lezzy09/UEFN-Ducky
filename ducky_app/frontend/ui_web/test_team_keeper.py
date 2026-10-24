@@ -234,7 +234,7 @@ def test_a_finished_step_restarts_the_circle_clock() -> None:
 def test_each_member_gets_its_sub_plan_as_one_task_and_the_lead_waits(monkeypatch) -> None:
     # Oct 12 2026 owner: leads dispatched, resumed and chased members by message; members
     # reported back and waited. Like sub-agents, each member now gets its sub plan as one task.
-    monkeypatch.setattr(keeper, "_team_context", lambda plan: ({"builder", "builder2"}, ""))
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder", "builder2"}, ""))
     monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
     woke: list[tuple[str, str]] = []
     _run(0, [], woke, plans=[SUB])
@@ -252,7 +252,7 @@ def test_a_members_task_carries_the_leads_spec_and_says_not_to_search(monkeypatc
     # Oct 15 2026: members given only their own points put files at the project root instead of
     # the spec's pocket_ledger/ and renamed a field; most of their tool calls went to
     # find_workflows, skill reads and folder listings.
-    monkeypatch.setattr(keeper, "_team_context", lambda plan: ({"builder", "builder2"}, ""))
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder", "builder2"}, ""))
     monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
     spec = "Package pocket_ledger/ with models.py. Transaction keeps amount_cents (int)."
     woke: list[tuple[str, str]] = []
@@ -277,7 +277,7 @@ def test_the_spec_is_read_from_the_plan_and_capped(monkeypatch) -> None:
 
 
 def test_a_member_whose_turn_ends_with_points_left_is_started_again(monkeypatch) -> None:
-    monkeypatch.setattr(keeper, "_team_context", lambda plan: ({"builder", "builder2"}, ""))
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder", "builder2"}, ""))
     monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
     woke: list[tuple[str, str]] = []
     member = lambda: [cid for cid, _ in woke if cid == "builder"]  # noqa: E731
@@ -301,7 +301,7 @@ def test_a_member_whose_turn_ends_with_points_left_is_started_again(monkeypatch)
 
 
 def test_a_blocked_member_is_left_alone_and_its_lead_told_once(monkeypatch, _world) -> None:
-    monkeypatch.setattr(keeper, "_team_context", lambda plan: ({"builder", "builder2"}, ""))
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder", "builder2"}, ""))
     monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
     said = {"text": ""}
     monkeypatch.setattr(keeper, "_blocked_reason", lambda member: said["text"])
@@ -325,7 +325,7 @@ def test_a_blocked_member_is_left_alone_and_its_lead_told_once(monkeypatch, _wor
 def test_a_member_blocked_again_goes_to_the_person_not_the_lead(monkeypatch, _world) -> None:
     # Oct 12 2026: a lead answered each block with one more step asking for the same live-panel
     # evidence; the worker blocked again, and the lead was woken again, for an hour.
-    monkeypatch.setattr(keeper, "_team_context", lambda plan: ({"builder", "builder2"}, ""))
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder", "builder2"}, ""))
     monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
     asked: list[tuple[str, str]] = []
     monkeypatch.setattr(keeper, "_ask_person", lambda plan, member, work, reason: asked.append((member, reason)))
@@ -351,7 +351,7 @@ def test_a_member_blocked_again_goes_to_the_person_not_the_lead(monkeypatch, _wo
 def test_members_run_under_their_leads_approvals(monkeypatch, _links) -> None:
     # Oct 15 2026: Ducky started members with no "started by" link, so a lead's Allow everything
     # never reached them and a member's test command waited on a card nobody saw.
-    monkeypatch.setattr(keeper, "_team_context", lambda plan: ({"builder", "builder2"}, ""))
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder", "builder2"}, ""))
     monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
     woke: list[tuple[str, str]] = []
     _run(0, [], woke, plans=[SUB])  # its task
@@ -365,7 +365,7 @@ def test_members_run_under_their_leads_approvals(monkeypatch, _links) -> None:
 def test_a_lead_that_rewrites_a_blocked_point_starts_the_member_again(monkeypatch, _world, _links) -> None:
     # Oct 15 2026: the lead answered a block by rewriting the member's point without changing its
     # status; that was "no change", so the member never ran again and the team sat idle.
-    monkeypatch.setattr(keeper, "_team_context", lambda plan: ({"builder", "builder2"}, ""))
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder", "builder2"}, ""))
     monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
     said = {"text": ""}
     monkeypatch.setattr(keeper, "_blocked_reason", lambda member: said["text"])
@@ -386,7 +386,7 @@ def test_a_lead_that_rewrites_a_blocked_point_starts_the_member_again(monkeypatc
 def test_a_team_left_waiting_after_its_lead_had_the_block_tells_the_person_once(monkeypatch, _world, _links) -> None:
     # The lead heard of the block and ended its turn without changing the plan: nothing can
     # move until the person acts, and before this nobody told them.
-    monkeypatch.setattr(keeper, "_team_context", lambda plan: ({"builder", "builder2"}, ""))
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder", "builder2"}, ""))
     monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
     said = {"text": ""}
     monkeypatch.setattr(keeper, "_blocked_reason", lambda member: said["text"])
@@ -407,7 +407,7 @@ def test_a_block_said_while_waiting_on_a_teammate_is_over_when_the_teammate_fini
     # Oct 15 2026: the reports member finished its first point and ended "BLOCKED: needs the CLI"
     # while its second point waited on the CLI. When the CLI was done, Ducky read that old line
     # as a new block, told the lead, and parked the member.
-    monkeypatch.setattr(keeper, "_team_context", lambda plan: ({"reports", "cli"}, ""))
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"reports", "cli"}, ""))
     monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
     said = {"text": ""}
     monkeypatch.setattr(keeper, "_blocked_reason", lambda member: said["text"] if member == "reports" else "")
@@ -435,7 +435,7 @@ def test_a_block_said_while_waiting_on_a_teammate_is_over_when_the_teammate_fini
 def test_a_group_leader_with_its_own_sub_plan_gets_one_task(monkeypatch, _links) -> None:
     # The group's sub plan goes to the group's leader, who also owns a sub plan of its own:
     # two owners, one chat. The task used to switch between them on every tick.
-    monkeypatch.setattr(keeper, "_team_context", lambda plan: ({"leader"}, ""))
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"leader"}, ""))
     monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
     monkeypatch.setattr(keeper, "_member_chat", lambda owner, root: "leader" if owner in ("core", "leader") else owner)
     plan = {**PLAN, "id": "p2", "title": "Ledger", "nodes": [
@@ -490,3 +490,48 @@ def test_a_team_in_another_project_is_kept_even_with_no_project_open(monkeypatch
     kept = keeper.kept_plans()
     assert [(p["chat_id"], p["project_root"]) for p in kept] == [("lead", "C:/Repo")]
     assert leaders_read == ["C:/Repo"]  # a project with no live plan isn't read
+
+
+def test_steps_added_after_the_first_wake_resend_the_whole_task(monkeypatch) -> None:
+    # A member woken on a bare step got "continue" (and "the sub plan “your steps”") once its
+    # lead filled the step with points.
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder"}, ""))
+    monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
+    bare = {**PLAN, "id": "p1", "title": "Ship it", "nodes": [
+        {"id": "hud", "content": "UI: HUD", "assignee": "builder", "status": "pending"}]}
+    woke: list[tuple[str, str]] = []
+    _run(0, [], woke, plans=[bare])
+    assert "Your task: the sub plan “UI: HUD”" in woke[-1][1]
+    points = [{"id": f"p{i}", "content": f"Point {i}", "status": "pending"} for i in range(3)]
+    filled = {**bare, "nodes": [{**bare["nodes"][0], "children": points}]}
+    _run(10, [], woke, plans=[filled])
+    task = woke[-1][1]
+    assert len(woke) == 2 and "Your task: the sub plan “UI: HUD”" in task and "your steps" not in task
+    assert all(f"`p{i}` Point {i} (pending)" in task for i in range(3))
+    # A tick (with its notes) is not a new task: the next start is "continue".
+    ticked = {**filled, "nodes": [{**filled["nodes"][0], "children": [
+        {**points[0], "status": "completed", "body_markdown": "done"}, *points[1:]]}]}
+    _run(20, [], woke, plans=[ticked])
+    _run(20 + 2 * keeper._MEMBER_IDLE_S, [], woke, plans=[ticked])
+    assert woke[-1][1].startswith("[Ducky] Points left in your sub plan “UI: HUD”")
+
+
+def test_a_stall_wake_lists_working_and_idle_members_apart(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from frontend.ui_web import project_chats
+    from backend.agent.coding_agents import plans
+
+    names = {"verse": "Verse lead", "ui": "UI Engineer", "test": "Tester",
+             "model": "Modeling lead", "game": "Gameplay lead"}
+    monkeypatch.setattr(project_chats, "list_all_conversation_metadata", lambda _: [
+        SimpleNamespace(id=cid, ducky_name=name, is_group=False) for cid, name in names.items()])
+    monkeypatch.setattr(plans, "_chat_and_group_ids", lambda cid, root: [cid])
+    monkeypatch.setattr(keeper, "_member_chat", lambda owner, root: "")  # no member dispatch here
+    plan = {**PLAN, "nodes": [{"id": cid, "content": name, "assignee": cid, "children": [
+        {"id": f"{cid}-1", "content": "Work", "status": "pending"}]} for cid, name in names.items()]}
+    woke: list[tuple[str, str]] = []
+    for minute in range(0, 21):
+        _run(minute * MIN, ["verse", "ui", "test"], woke, plans=[plan])
+    assert len(woke) == 1 and woke[0][0] == "coord"
+    assert ("Working: Verse lead (verse); UI Engineer (ui); Tester (test) · "
+            "Idle: Modeling lead (model); Gameplay lead (game)") in woke[0][1]

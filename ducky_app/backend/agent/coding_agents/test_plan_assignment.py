@@ -81,6 +81,21 @@ def test_the_coordinators_own_plan_is_never_replaced(team) -> None:
     assert plans.assigned_plan_view("coord", project_root=team) is None
 
 
+def test_a_sub_plan_without_steps_cannot_be_assigned(team) -> None:
+    plans.add_node("coord", content="UI", kind="subplan", project_root=team)
+    ui = plans.load_plan("coord", team)["nodes"][-1]["id"]
+    with pytest.raises(ValueError, match="Add its steps first, then assign it"):
+        plans.update_node("coord", ui, assignee="builder", project_root=team)
+    with pytest.raises(ValueError, match="Add its steps first"):
+        plans.add_node("coord", content="Art", kind="subplan", assignee="builder", project_root=team)
+    for step in ("HUD", "Menu"):
+        plans.add_node("coord", content=step, parent_id=ui, project_root=team)
+    plan = plans.update_node("coord", ui, assignee="builder", project_root=team)
+    assert plans._walk_find(plan["nodes"], ui)[2]["assignee"] == "builder"
+    plan = plans.update_node("coord", "b", assignee="builder", project_root=team)  # a leaf step
+    assert plans._walk_find(plan["nodes"], "b")[2]["assignee"] == "builder"
+
+
 def test_unknown_assignee_is_rejected_without_changing_plan(team):
     before = plans.load_plan("coord", project_root=team)
     with pytest.raises(ValueError, match="assignee"):
