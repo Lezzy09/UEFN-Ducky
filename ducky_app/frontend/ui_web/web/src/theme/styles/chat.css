@@ -7919,3 +7919,70 @@
   top: 0;
   right: 2px;
 }
+
+/* ── Chat rhythm: one left/right edge, one gap, one row height, one text size ──
+   Tool groups, tool cards and file cards had their own indents (4 / 8 px), gaps
+   (4 / 6 / 15 px), row heights (~25 vs ~38 px) and sizes (12 / 12.5 / 13 px). Here every
+   block lines up with the same edges, sits the same gap apart, and rows read like the
+   chat text. Declared last so it wins over the per-component rules above. */
+.virtual-chat-message-list-root {
+  --chat-block-gap: 8px;
+  --chat-row-height: 36px;
+}
+
+.virtual-chat-message-list-root .agent-activity-group,
+.virtual-chat-message-list-root .tool-execution-card-wrap {
+  padding-left: 0;
+  margin: 0 0 var(--chat-block-gap);
+}
+
+.virtual-chat-message-list-root .tool-execution-card-wrap > .tool-file-edit-diff,
+.virtual-chat-message-list-root .tool-execution-card-wrap > .tool-execution-card-shell {
+  margin: 0;
+}
+
+.virtual-chat-message-list-root .tool-execution-card-wrap > * + * {
+  margin-top: var(--chat-block-gap);
+}
+
+.virtual-chat-message-list-root .agent-activity-group-body {
+  margin: var(--chat-block-gap) 0 0;
+}
+
+.virtual-chat-message-list-root .agent-activity-group-body .tool-execution-card-wrap {
+  margin: 0;
+}
+
+/* Same size as the chat text everywhere: group headers, tool names, file names, stats. */
+.virtual-chat-message-list-root .agent-activity-group-header,
+.virtual-chat-message-list-root .agent-activity-group-thought,
+.virtual-chat-message-list-root .tool-execution-card-toggle-name,
+.virtual-chat-message-list-root .agent-activity-group-body .tool-execution-card-toggle-name,
+.virtual-chat-message-list-root .tool-execution-card-toggle-status,
+.virtual-chat-message-list-root .tool-file-edit-diff-filename,
+.virtual-chat-message-list-root .tool-file-edit-diff-stats,
+.virtual-chat-message-list-root .tool-file-edit-diff-replay {
+  font-size: inherit;
+}
+
+.virtual-chat-message-list-root .tool-file-edit-diff-filename {
+  font-weight: 400;
+}
+
+/* One row height: a file card, a tool card and a row of a tools table are the same. */
+.virtual-chat-message-list-root .tool-file-edit-diff-header-toggle,
+.virtual-chat-message-list-root .tool-execution-card-toggle,
+.virtual-chat-message-list-root .agent-activity-group-body .tool-execution-card-shell--embedded .tool-execution-card-toggle {
+  box-sizing: border-box;
+  min-height: var(--chat-row-height);
+  padding: 4px 10px;
+}
+
+.virtual-chat-message-list-root .agent-activity-group-body .tool-execution-card-shell--embedded .tool-execution-card-toggle-icon-badge svg {
+  width: 14px;
+  height: 14px;
+}
+
+.virtual-chat-message-list-root .tool-execution-card-shell--compact {
+  margin-top: 0;
+}

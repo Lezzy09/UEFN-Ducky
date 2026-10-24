@@ -30,6 +30,9 @@ import { formatToolDuration, humanToolLabel, isWebLookupTool, webToolDetail, web
 import { fmtCompactTokens } from "../utils/contextFormat";
 import { unwrapCodingAgentTool } from "../utils/unwrapCodingAgentTool";
 
+/** Shell commands that may change files: their row stays above the file cards. */
+const COMMAND_TOOL = /(^|__)(command_execution|bash|shell|powershell|run_terminal_cmd|ducky_terminal_run|sandbox_run)$/i;
+
 interface ToolExecutionCardProps {
   intent: ChatMessage;
   result: ChatMessage | null;
@@ -200,9 +203,10 @@ export const ToolExecutionCard = memo(function ToolExecutionCard({
   // note (no presenter, no raw toggle, no token badge) instead of a full result card.
   const isGuardBlocked = !isRunning && meta.hint === "repeat-call guard";
   // Successful writes already have the full diff card — the empty "Edit file 32ms"
-  // accordion is a duplicate. Keep the shell for errors / cancel / guard skips.
+  // accordion is a duplicate. Keep the shell for errors / cancel / guard skips, and for a
+  // command that changed files (its row shows the command).
   const hideShellForFileEdit =
-    showInlineDiff && isSuccess && !isGuardBlocked && !isCancelled && !meta.fileEdits;
+    showInlineDiff && isSuccess && !isGuardBlocked && !isCancelled && !COMMAND_TOOL.test(meta.name);
   // Guard-blocked calls are benign skips, not failures — render them muted, not red.
   const shellTone = isRunning
     ? "running"

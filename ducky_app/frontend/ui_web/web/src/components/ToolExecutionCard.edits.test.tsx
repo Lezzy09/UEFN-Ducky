@@ -12,7 +12,12 @@ const edit: FileEditData = {
   linesAdded: 1, linesRemoved: 1, kind: "write",
 };
 
-it.each(["file_change", "command_execution", "Edit"])("shows %s changes as file cards under one tool row", (name) => {
+it.each([
+  ["file_change", 0],
+  ["command_execution", 1],
+  ["Edit", 0],
+  ["mcp__uefn__workspace_edit_file", 0],
+])("shows %s changes as file cards, with the tool row only for a command", (name, shells) => {
   const intent: ChatMessage = { id: 1, role: "tool", text: "", tool: { name, arguments: {}, status: "pending" } };
   const done: ChatMessage = { id: 2, role: "success", text: "", tool: {
     name, arguments: {}, status: "success", fileEdit: edit,
@@ -22,7 +27,8 @@ it.each(["file_change", "command_execution", "Edit"])("shows %s changes as file 
     <ToolExecutionCard intent={intent} result={done} externalAgent />
   </ChatCollapseScopeProvider>);
   expect(container.querySelectorAll(".tool-execution-card-wrap")).toHaveLength(1);
-  expect(container.querySelectorAll(".tool-execution-card-shell")).toHaveLength(1);
+  // A second "Edit file" row under the file cards says nothing new.
+  expect(container.querySelectorAll(".tool-execution-card-shell")).toHaveLength(shells);
   expect(container.querySelectorAll(".tool-file-edit-diff")).toHaveLength(2);
   expect(container.textContent).toContain("first.txt");
   expect(container.textContent).toContain("second.txt");
