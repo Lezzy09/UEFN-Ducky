@@ -33,6 +33,8 @@ import { useLinkedAgents } from "../hooks/useLinkedAgents";
 import { useChatMessages } from "../hooks/useChatMessages";
 import { useChatTurnTimerState } from "../hooks/useChatTurnTimer";
 import { useAgentEventSubscription } from "../hooks/useAgentEventBus";
+import { useRunningAgents } from "../hooks/useRunningAgents";
+import { runningTeamNames } from "./team/teamRoster";
 import { useHasApiKey } from "../hooks/useHasApiKey";
 import { buildActivityLines, splitTurnMessages } from "../utils/agentActivity";
 import { getCachedChatComposer, setCachedChatComposer, subscribeComposerDraft, takeComposerDraft } from "../hooks/chatComposerCache";
@@ -422,6 +424,12 @@ export function ChatPane({
     ? []
     : linkedAgents.filter((a) => a.status === "running");
   const isWaitingOnLinked = !chat.isGroup && agentRunning && waitingLinked.length > 0;
+  // A leader whose turn ended while its team still works: name who it waits on.
+  const runningIds = useRunningAgents();
+  const waitingOnAgents = useMemo(
+    () => (agentRunning ? [] : runningTeamNames(chat.id, folders, runningIds)),
+    [agentRunning, chat.id, folders, runningIds],
+  );
   const [groupMembers, setGroupMembers] = useState<GroupMemberDto[]>(
     () => chat.groupMembers || [],
   );
@@ -1754,6 +1762,12 @@ export function ChatPane({
               )
             )}
             {slashStatus ? <div className="slash-command-status">{slashStatus}</div> : null}
+            {waitingOnAgents.length ? (
+              <div className="slash-command-status" role="status">
+                Waiting on {waitingOnAgents.length === 1 ? "agent" : `${waitingOnAgents.length} agents`}:{" "}
+                {waitingOnAgents.join(", ")}
+              </div>
+            ) : null}
             <ComposerAttachmentChips
               attachments={attachments}
               readInParts={readInParts}

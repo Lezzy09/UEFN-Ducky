@@ -11,6 +11,21 @@ import type {
 import { modelFromFavorites } from "../ducky/duckyProfileForm";
 import { resolveNestedGroupHoverRows, shortModelLabel } from "../groupMemberHover";
 
+/** Names of the running agents a leader's team holds (its group and nested groups), or []
+ * when `chatId` leads no group in the sidebar tree. */
+export function runningTeamNames(chatId: string, folders: FolderItem[], running: ReadonlySet<string>): string[] {
+  const names = (f: FolderItem): string[] => [
+    ...f.chats.filter((c) => c.id !== chatId && running.has(c.id)).map((c) => c.name),
+    ...f.children.flatMap(names),
+  ];
+  for (const f of folders) {
+    if (f.groupHubId && f.chats.some((c) => c.id === chatId && c.isLeader)) return names(f);
+    const nested = runningTeamNames(chatId, f.children, running);
+    if (nested.length) return nested;
+  }
+  return [];
+}
+
 /** One row of a group chat's team: an agent, or a nested group with its own rows. */
 export type RosterNode = {
   /** Unique in the tree: the group it sits in + its chat id. */
