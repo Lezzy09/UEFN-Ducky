@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { kindTitle } from "../plugin-ui/scopeBarText";
 import { getApi } from "../hooks/usePanelApi";
 import { usePluginContributions } from "../hooks/usePluginContributions";
-import { chatMentionGroup, dedupeChatRefs, orderChatMentions, type ChatRef } from "./chatReferences";
+import { chatMentionGroup, dedupeChatRefs, filterChatRefs, orderChatMentions, type ChatRef } from "./chatReferences";
 import { noteChatRefFaces } from "./chatRefFaces";
 import { resolvePluginIconContent } from "../hooks/pluginHeaderActions";
 import { isAbsEncodedPath, isFolderProject } from "../verse-editor/utils/isVerseFile";
@@ -35,6 +35,62 @@ function chatRef(
 
 const CONTENT_TEXT = /\.(verse|versetest|vson|json|md|txt|toml|cfg)$/i;
 
+/** `list_project_file_paths` replies `{paths, total, truncated}` (first 2,000 paths only). */
+export function filePathsOf(reply: unknown): string[] {
+  const paths = (reply as { paths?: unknown } | null)?.paths;
+  return Array.isArray(paths) ? paths.map((path) => String(path || "")) : [];
+}
+
+/** Text files a chat can reference; the name is the last path segment. */
+export function fileRefsOf(paths: string[]): ChatRef[] {
+  const files: ChatRef[] = [];
+  for (const raw of paths) {
+    const path = raw.replace(/\\/g, "/");
+    const name = path.split("/").pop() || "";
+    const inContent = isFolderProject() ? !isAbsEncodedPath(path) : path.startsWith("Content/");
+    if (!name || !inContent || !CONTENT_TEXT.test(name)) continue;
+    if (path.includes(".digest.verse")) continue;
+    files.push(chatRef("/", `file:${path}`, name, "Content", `file:${path}`, path));
+  }
+  return files;
+}
+
+const DEEP_FILE_MIN_HITS = 10;
+
+// ponytail: the reply type in types/panel.ts still says the old row list; read it as unknown here.
+type FilePathsApi = { list_project_file_paths(query?: string, limit?: number): Promise<unknown> };
+
+/**
+ * Files matching *query*: the local list first; under 10 hits, the server search
+ * (`list_project_file_paths(query, 50)`, debounced 200 ms) finds files past the first 2,000.
+ */
+export function useFileRefMatches(query: string, enabled: boolean, files: ChatRef[]): ChatRef[] {
+  const q = enabled ? query.trim() : "";
+  const local = useMemo(() => (q ? filterChatRefs(files, q) : []), [q, files]);
+  const [deep, setDeep] = useState<{ q: string; rows: ChatRef[] }>({ q: "", rows: [] });
+  const needDeep = !!q && local.length < DEEP_FILE_MIN_HITS;
+  useEffect(() => {
+    if (!needDeep) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (getApi() as unknown as FilePathsApi | null)
+        ?.list_project_file_paths(q, 50)
+        .then((reply) => {
+          if (!cancelled) setDeep({ q, rows: fileRefsOf(filePathsOf(reply)) });
+        })
+        .catch(() => {});
+    }, 200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [q, needDeep]);
+  return useMemo(
+    () => (needDeep && deep.q === q ? dedupeChatRefs([...local, ...deep.rows]) : local),
+    [needDeep, deep, q, local],
+  );
+}
+
 export function useChatReferenceCatalog(
   active: boolean,
   chatId: string,
@@ -56,7 +112,7 @@ export function useChatReferenceCatalog(
         api.get_skill_info().catch(() => null),
         api.list_mcp_servers?.().catch(() => null) ?? null,
         api.list_recent_projects().catch(() => []),
-        api.list_project_file_paths().catch(() => []),
+        api.list_project_file_paths().catch(() => null),
         api.list_workflows?.().catch(() => null) ?? null,
       ]);
       if (cancelled) return;
@@ -147,15 +203,7 @@ export function useChatReferenceCatalog(
           ),
         );
       }
-      const files: ChatRef[] = [];
-      for (const row of paths || []) {
-        const path = String(row.path || "").replace(/\\/g, "/");
-        const name = String(row.name || "").trim();
-        const inContent = isFolderProject() ? !isAbsEncodedPath(path) : path.startsWith("Content/");
-        if (!name || !inContent || !CONTENT_TEXT.test(name)) continue;
-        if (path.includes(".digest.verse")) continue;
-        files.push(chatRef("/", `file:${path}`, name, "Content", `file:${path}`, path));
-      }
+      const files = fileRefsOf(filePathsOf(paths));
       noteChatRefFaces([...mentions, ...slash]);
       setBuiltinMentions(mentions);
       setBuiltinSlash(slash);

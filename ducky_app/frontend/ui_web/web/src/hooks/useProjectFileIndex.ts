@@ -11,8 +11,11 @@ export function useProjectFileIndex(enabled: boolean, refreshToken = 0) {
     if (!api?.list_project_file_paths) return;
     setLoading(true);
     try {
-      const rows = await api.list_project_file_paths();
-      setFiles(Array.isArray(rows) ? rows : []);
+      // Reply is {paths, total, truncated}: the first 2,000 paths only.
+      const reply: unknown = await api.list_project_file_paths();
+      const raw = (reply as { paths?: unknown } | null)?.paths;
+      const paths = Array.isArray(raw) ? raw.map((path) => String(path || "")).filter(Boolean) : [];
+      setFiles(paths.map((path) => ({ path, name: path.replace(/\\/g, "/").split("/").pop() || path })));
       loadedRef.current = true;
     } catch {
       setFiles([]);
