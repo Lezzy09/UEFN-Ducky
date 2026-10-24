@@ -456,6 +456,114 @@ def _catalog_marker(tools: list[Any]) -> tuple[list[Any], tuple[int, ...]]:
     return objects, tuple(map(id, objects))
 
 
+# Catalog watchers sleep until a registered tool changes. Oct 24 2026: one thread per
+# connected agent rebuilt the snapshot and marker (~15k objects) twice a second, a whole
+# core with 16 agents. Every add/remove bumps this revision (the registry dict below),
+# and so do in-place edits (plugin_gate.clear_mcp_tool_cache) and AI-ignore policy saves.
+CATALOG_SAFETY_S = 30.0
+_catalog_cond = threading.Condition()
+_catalog_rev = 0
+
+
+def bump_catalog_revision() -> None:
+    global _catalog_rev
+    with _catalog_cond:
+        _catalog_rev += 1
+        _catalog_cond.notify_all()
+
+
+def catalog_revision() -> int:
+    return _catalog_rev
+
+
+def wait_catalog_change(seen: int, stop: threading.Event | None = None,
+                        timeout: float | None = None) -> int:
+    """Block until the revision moves past ``seen`` (or ``stop``, or the safety timeout)."""
+    with _catalog_cond:
+        _catalog_cond.wait_for(lambda: _catalog_rev != seen or bool(stop and stop.is_set()),
+                               CATALOG_SAFETY_S if timeout is None else timeout)
+        return _catalog_rev
+
+
+def wake_catalog_watchers() -> None:
+    with _catalog_cond:
+        _catalog_cond.notify_all()
+
+
+class _NotifyingTools(dict):
+    """The tool registry: any key change bumps the catalog revision."""
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        super().__setitem__(key, value)
+        bump_catalog_revision()
+
+    def __delitem__(self, key: Any) -> None:
+        super().__delitem__(key)
+        bump_catalog_revision()
+
+    def pop(self, *args: Any) -> Any:
+        try:
+            return super().pop(*args)
+        finally:
+            bump_catalog_revision()
+
+    def popitem(self) -> Any:
+        try:
+            return super().popitem()
+        finally:
+            bump_catalog_revision()
+
+    def setdefault(self, key: Any, default: Any = None) -> Any:
+        value = super().setdefault(key, default)
+        bump_catalog_revision()
+        return value
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        super().update(*args, **kwargs)
+        bump_catalog_revision()
+
+    def clear(self) -> None:
+        super().clear()
+        bump_catalog_revision()
+
+
+def watch_registry(mcp: Any) -> None:
+    """Make ``mcp``'s tool registry bump the catalog revision on every add and remove."""
+    tm = getattr(mcp, "_tool_manager", None)
+    tools = getattr(tm, "_tools", None)
+    if type(tools) is dict:
+        tm._tools = _NotifyingTools(tools)
+        bump_catalog_revision()
+
+
+_snapshot_lock = threading.Lock()
+_snapshots: dict[int, tuple[Any, int, tuple[int, ...], list[Any], str]] = {}
+catalog_rebuilds = 0  # rows rebuilt and hashed (tests count them)
+
+
+def catalog_digest(mcp: Any, *, recheck: bool = False) -> str:
+    """The shared catalog's revision hash: one rebuild per revision for every watcher.
+    ``recheck`` (the safety timeout) compares object identities before rebuilding."""
+    global catalog_rebuilds
+    rev = _catalog_rev
+    with _snapshot_lock:
+        entry = _snapshots.get(id(mcp))
+        if entry is not None and entry[0] is not mcp:
+            entry = None
+        if entry is not None and entry[1] == rev and not recheck:
+            return entry[4]
+        tools = _policy_filtered(_snapshot_tools(mcp))
+        objects, ids = _catalog_marker(tools)
+        if entry is not None and entry[2] == ids:
+            digest = entry[4]
+        else:
+            catalog_rebuilds += 1
+            digest = _catalog_revision([_tool_row(t) for t in tools])
+        # Holding the marked objects keeps them alive, so their ids stay unique.
+        _snapshots[id(mcp)] = (mcp, rev, ids, objects, digest)
+        return digest
+
+
 async def _async_list_tools(mcp: Any) -> list[Any]:
     listed = await mcp.list_tools()
     return list(listed or [])
@@ -803,28 +911,25 @@ def _client_loop(mcp: Any, handle: int, token: str, key: dict[str, str], conn_id
         nonlocal last_revision
         # Observe only the local registry. Never probe/reconnect providers or wait
         # on the tool execution loop; unavailable registered rows stay visible.
-        # Holding the marked objects keeps them alive, so their ids stay unique.
-        marked: tuple[list[Any], tuple[int, ...]] | None = None
-        while not closed.wait(0.5):
+        seen = -1
+        while not closed.is_set():
+            rev = wait_catalog_change(seen, closed)
+            timed_out, seen = rev == seen, rev
+            if closed.is_set():
+                return
             try:
                 with catalog_lock:
                     if last_revision is None:
                         continue
-                    tools = _policy_filtered(_snapshot_tools(mcp))
-                    marker = _catalog_marker(tools)
-                    if marked is not None and marker[1] == marked[1]:
-                        continue
-                    rows = [_tool_row(t) for t in tools]
-                    revision = _catalog_revision(rows)
+                    revision = catalog_digest(mcp, recheck=timed_out)
                     if revision != last_revision:
                         _send({"op": "mcp", "method": "notifications/tools/list_changed",
                                "params": {"_meta": {"revision": revision}}})
                         last_revision = revision
-                    marked = marker
             except (OSError, EOFError):
                 return
             except (ValueError, TypeError, RuntimeError):
-                continue  # a concurrent registration is retried on the next tick
+                seen = -1  # a concurrent registration: look again at once
 
     try:
         hello = read_frame(handle)
@@ -860,6 +965,7 @@ def _client_loop(mcp: Any, handle: int, token: str, key: dict[str, str], conn_id
         return
     finally:
         closed.set()
+        wake_catalog_watchers()
         close_handle(handle)
 
 
@@ -908,6 +1014,7 @@ def serve_daemon(mcp: Any) -> None:
         return  # a daemon is already serving; the adapter will find it via state
     _shared_serving = True
     _stop.clear()
+    watch_registry(mcp)
     token = secrets.token_hex(16)
     key = daemon_key()
     listen = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -40,6 +40,9 @@ def _returns_str(fn) -> bool:
 class ProtectedFastMCP(FastMCP):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        from backend.bridge.shared_mcp import watch_registry
+
+        watch_registry(self)  # every tool add/remove wakes the catalog watchers
         # SDK lifespan runs once per connection, including dedicated stdio.
         # Preserve caller lifespan data and keep all watcher tasks inside it.
         self._catalog_watch = ContextVar("catalog_watch", default=None)
@@ -91,13 +94,16 @@ class ProtectedFastMCP(FastMCP):
     async def _watch_catalog(self, session, revision):
         from backend.bridge.shared_mcp import (
             _catalog_marker, _catalog_revision, _policy_filtered, _snapshot_tools, _tool_row,
+            catalog_revision, wait_catalog_change,
         )
 
         # Holding the marked objects keeps them alive, so their ids stay unique.
         marked = None
+        seen = catalog_revision()
         try:
             while True:
-                await anyio.sleep(0.5)
+                # Sleep until a tool is added, removed or edited (30 s safety net).
+                seen = await anyio.to_thread.run_sync(wait_catalog_change, seen, abandon_on_cancel=True)
                 # Rebuild and hash the rows only when a registered tool moved.
                 marker = _catalog_marker(_policy_filtered(_snapshot_tools(self)))
                 if marked is not None and marker[1] == marked[1]:

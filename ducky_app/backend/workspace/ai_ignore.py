@@ -40,6 +40,9 @@ def save_user_policy(patch: dict) -> str:
             settings.ai_ignore_strict = patch["ai_ignore_strict"]
         settings.validate()
         settings.save()
+    from backend.bridge.shared_mcp import bump_catalog_revision
+
+    bump_catalog_revision()  # strict protection changes which tools are listed
     return "Saved AI ignore list."
 
 

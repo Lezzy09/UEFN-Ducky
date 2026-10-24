@@ -68,11 +68,18 @@ def test_existing_stdio_client_receives_changes_and_updated_catalog(monkeypatch,
     try:
         first = request(1)
         registry = mcp._tool_manager._tools
+        from backend.bridge.plugin_gate import clear_mcp_tool_cache
+
+        def edited(attr, value):
+            # In-place edits go through clear_mcp_tool_cache, as bridge_proxy's do.
+            setattr(registry["late"], attr, value)
+            clear_mcp_tool_cache(mcp)
+
         for n, change in enumerate((
             lambda: registry.update(late=SimpleNamespace(name="late", description="late", inputSchema={"type": "object"})),
-            lambda: setattr(registry["late"], "inputSchema", {"oneOf": [{"required": ["path"]}]}),
-            lambda: setattr(registry["late"], "annotations", ToolAnnotations(readOnlyHint=True, destructiveHint=False)),
-            lambda: setattr(registry["late"], "_meta", {"connection_state": "unavailable", "reason": "disconnected"}),
+            lambda: edited("inputSchema", {"oneOf": [{"required": ["path"]}]}),
+            lambda: edited("annotations", ToolAnnotations(readOnlyHint=True, destructiveHint=False)),
+            lambda: edited("_meta", {"connection_state": "unavailable", "reason": "disconnected"}),
             lambda: registry.pop("late"),
             lambda: registry.clear(),
         ), 2):
@@ -108,7 +115,9 @@ def test_existing_stdio_client_receives_changes_and_updated_catalog(monkeypatch,
 
 def test_shared_watchers_skip_an_unchanged_catalog(monkeypatch, tmp_path):
     """Each connected adapter rebuilt and hashed the whole catalog twice a second
-    (~13 ms a tick at 1,000 tools) even when nothing had changed."""
+    (~13 ms a tick at 1,000 tools) even when nothing had changed. Oct 24 2026: 16 agents
+    kept a core busy. Now 16 idle clients rebuild nothing, and one change is one shared
+    rebuild and one notice per client."""
     import socket
     import time
 
@@ -124,21 +133,25 @@ def test_shared_watchers_skip_an_unchanged_catalog(monkeypatch, tmp_path):
         return real_row(tool)
 
     monkeypatch.setattr(shared_mcp, "_tool_row", counting_row)
-    clients = [_hello(f"run-{n}") for n in range(3)]
+    clients = [_hello(f"run-{n}") for n in range(16)]
     try:
         for sock in clients:
             _rpc(sock, "tools/list")
-        time.sleep(1.2)  # every watcher has looked at least once
+        time.sleep(1.0)  # every watcher has looked once
         rows.clear()
-        time.sleep(1.6)  # three more ticks per client, nothing changed
+        rebuilt = shared_mcp.catalog_rebuilds
+        time.sleep(10.0)  # idle: nothing changed
         assert rows == [], f"{len(rows)} rows rebuilt for an unchanged catalog"
+        assert shared_mcp.catalog_rebuilds == rebuilt
 
         mcp._tool_manager._tools["late"] = SimpleNamespace(
             name="late", description="late", inputSchema={"type": "object"}
         )
         for sock in clients:
+            sock.settimeout(5)
             notice = shared_mcp.read_frame(sock)
             assert notice["method"] == "notifications/tools/list_changed"
+        assert shared_mcp.catalog_rebuilds == rebuilt + 1  # one rebuild shared by 16 watchers
         for sock in clients:
             sock.settimeout(1.2)
             try:
@@ -158,6 +171,8 @@ def test_shared_watchers_skip_an_unchanged_catalog(monkeypatch, tmp_path):
 
 
 def test_dedicated_watcher_skips_an_unchanged_catalog(monkeypatch):
+    import time
+
     import anyio
 
     from backend.server import ProtectedFastMCP
@@ -170,31 +185,54 @@ def test_dedicated_watcher_skips_an_unchanged_catalog(monkeypatch):
     initial = shared_mcp._catalog_revision(
         [shared_mcp._tool_row(t) for t in asyncio.run(mcp.list_tools())]
     )
-    ticks: list[float] = []
-    rebuilt_at: list[int] = []
-    sent: list[int] = []
+    rebuilt: list[float] = []
+    sent: list[float] = []
     real_revision = shared_mcp._catalog_revision
-    real_sleep = anyio.sleep
 
     def counting_revision(rows):
-        rebuilt_at.append(len(ticks))
+        rebuilt.append(time.monotonic())
         return real_revision(rows)
-
-    async def fake_sleep(delay):
-        ticks.append(delay)
-        if len(ticks) == 21:
-            mcp.add_tool(lambda other=0: other, name="late")
-        if len(ticks) > 25:
-            raise anyio.ClosedResourceError
-        await real_sleep(0)
 
     class Session:
         async def send_tool_list_changed(self):
-            sent.append(len(ticks))
+            sent.append(time.monotonic())
 
     monkeypatch.setattr(shared_mcp, "_catalog_revision", counting_revision)
-    monkeypatch.setattr(anyio, "sleep", fake_sleep)
-    anyio.run(mcp._watch_catalog, Session(), initial)
-    idle = [tick for tick in rebuilt_at if tick <= 20]
-    assert len(idle) <= 1, f"rebuilt on {len(idle)} of 20 idle ticks"
-    assert sent == [21]
+
+    async def scenario():
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(mcp._watch_catalog, Session(), initial)
+            await anyio.sleep(1.5)
+            assert rebuilt == [] and sent == []  # idle: no rebuild
+            added = time.monotonic()
+            mcp.add_tool(lambda other=0: other, name="late")
+            with anyio.fail_after(3):
+                while not sent:
+                    await anyio.sleep(0.02)
+            assert len(rebuilt) == 1 and sent[0] - added < 1.0
+            await anyio.sleep(0.5)
+            assert len(sent) == 1
+            tasks.cancel_scope.cancel()
+
+    anyio.run(scenario)
+
+
+def test_catalog_revision_moves_on_every_registration_path():
+    from backend.bridge.plugin_gate import clear_mcp_tool_cache
+    from backend.server import ProtectedFastMCP
+
+    mcp = ProtectedFastMCP("revision-test")
+    moves = []
+    for change in (
+        lambda: mcp.add_tool(lambda value=0: value, name="a"),
+        lambda: mcp._tool_manager._tools.__setitem__("b", SimpleNamespace(name="b")),
+        lambda: mcp._tool_manager._tools.pop("b"),
+        lambda: mcp.remove_tool("a"),
+        lambda: clear_mcp_tool_cache(mcp),  # in-place edits (bridge_proxy)
+    ):
+        before = shared_mcp.catalog_revision()
+        change()
+        moves.append(shared_mcp.catalog_revision() > before)
+    assert moves == [True] * 5
+    seen = shared_mcp.catalog_revision()
+    assert shared_mcp.wait_catalog_change(seen, timeout=0.05) == seen  # nothing moved: timeout

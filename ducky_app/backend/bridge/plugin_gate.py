@@ -32,6 +32,11 @@ def clear_mcp_tool_cache(mcp: Any) -> None:
     cache = getattr(server, "_tool_cache", None) if server is not None else None
     if isinstance(cache, dict):
         cache.clear()
+    # Callers clear after editing registered tools in place (bridge_proxy's descriptions,
+    # annotations, availability): the catalog watchers must look again.
+    from backend.bridge.shared_mcp import bump_catalog_revision
+
+    bump_catalog_revision()
 
 
 def install_bridge_plugin_gate(mcp: Any, *, timeout: float = _DEFAULT_TIMEOUT_S) -> None:
