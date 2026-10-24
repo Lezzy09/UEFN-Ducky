@@ -91,6 +91,34 @@ class PlansStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             plans.add_node("chat-fix", content="Under a leaf", parent_id="u1", project_root=self.root)
 
+    def test_planned_assignee_is_set_and_cleared_without_starting_anyone(self) -> None:
+        from frontend.ui_web import agent_modes, project_chats
+
+        pushes: list[dict] = []
+        with patch.object(project_chats, "load_conversation_meta", return_value=object()), \
+                patch.object(agent_modes, "_resolve_push", return_value=pushes.append):
+            plans.create_plan("chat-planned", nodes=[
+                {"id": "top", "content": "Top", "assignee": "seat-top", "children": [
+                    {"id": "mid", "content": "Mid", "children": [
+                        {"id": "deep", "content": "Deep", "children": [{"id": "leaf", "content": "Leaf"}]}]}]},
+                {"id": "go", "content": "Started"},
+            ], project_root=self.root)
+            plans.update_node("chat-planned", "go", status="in_progress", project_root=self.root)  # playing
+            plans.drain_after_save()
+            pushes.clear()
+            doc = plans.update_node("chat-planned", "deep", planned_assignee="swarm-speed-developer",
+                                    project_root=self.root)
+            deep = plans._walk_find(doc["nodes"], "deep")[2]
+            self.assertEqual(deep["planned_assignee"], "swarm-speed-developer")
+            self.assertNotIn("assignee", deep)
+            loaded = plans.load_plan("chat-planned", self.root)
+            self.assertEqual(plans._walk_find(loaded["nodes"], "deep")[2]["planned_assignee"],
+                             "swarm-speed-developer")
+            doc = plans.update_node("chat-planned", "deep", planned_assignee="", project_root=self.root)
+            self.assertNotIn("planned_assignee", plans._walk_find(doc["nodes"], "deep")[2])
+            plans.drain_after_save()
+        self.assertFalse([p for p in pushes if p.get("type") == "plan_assignment_changed"], pushes)
+
     def test_create_update_merge_get(self) -> None:
         # Legacy on-disk contract (<project>/.ducky/plans/*.json); rows are covered by
         # backend/store/test_phase4.py.

@@ -236,6 +236,9 @@ def _normalize_node(raw: Any, *, fallback_id: str | None = None) -> dict[str, An
     assignee = str(raw.get("assignee") or "").strip()
     if assignee:
         node["assignee"] = assignee  # exact chat or group identity
+    planned = str(raw.get("planned_assignee") or "").strip()
+    if planned:
+        node["planned_assignee"] = planned  # who launching the plan seats here; starts nobody
     after = _normalize_after(raw.get("after"), own_id=nid)
     if after:
         node["after"] = after  # steps that must finish before this one starts
@@ -960,6 +963,7 @@ def update_node(
     assignee: str | None = None,
     after: list[str] | str | None = None,
     by_user: bool = False,
+    planned_assignee: str | None = None,
 ) -> dict[str, Any]:
     doc, save = _load_editable(chat_id, project_root=project_root, template_id=template_id)
     roots = list(doc.get("nodes") or [])
@@ -968,7 +972,7 @@ def update_node(
         raise ValueError("node not found")
     if doc.get("kind") != "template" and _is_done_node(node):
         if (content is not None or kind is not None or body_markdown is not None
-                or assignee is not None or after is not None
+                or assignee is not None or after is not None or planned_assignee is not None
                 or (status is not None and status != node.get("status"))):
             if node.get("children") and node.get("status") == "completed":
                 raise ValueError(
@@ -986,6 +990,14 @@ def update_node(
     # So is what a step waits for: a lead orders the work without pausing the team.
     if after is not None:
         _set_after(doc, node, after)
+    # The agent the owner picked for a sub plan (a ducky profile id or a chat id). Unlike
+    # assignee it starts nobody: launching the plan seats it later.
+    if planned_assignee is not None:
+        planned = planned_assignee.strip()
+        if planned:
+            node["planned_assignee"] = planned
+        else:
+            node.pop("planned_assignee", None)
     structure_touch = content is not None or kind is not None
     if structure_touch and doc.get("kind") != "template":
         _refuse_if_structure_locked(doc)
