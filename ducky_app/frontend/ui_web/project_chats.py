@@ -9,6 +9,8 @@ import shutil
 import threading
 import time
 import uuid
+from concurrent.futures import Future
+from copy import copy as _shallow
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +35,62 @@ _migrate_locks: dict[str, threading.Lock] = {}
 _conv_lock_guard = threading.Lock()
 _conv_locks: dict[str, threading.RLock] = {}
 _sort_migrated_slugs: set[str] = set()
+_writer_guard = threading.Lock()
+_WRITER: Any = None  # the chat-writer (row store only), made on the first save
+
+
+def _writer():
+    global _WRITER
+    with _writer_guard:
+        if _WRITER is None:
+            from backend.store import db
+            from frontend.ui_web.chat_writer import ChatWriter
+
+            _WRITER = ChatWriter(_write_queued, connect=db.connect, root=db.app_root)
+        return _WRITER
+
+
+def flush_chat_saves(conv_id: str | None = None, timeout: float = 30.0) -> bool:
+    """Write queued chat saves now (one chat's or all); True once written. Cheap when
+    nothing waits. Called before a direct row write and before /__panel_rpc answers."""
+    writer = _WRITER
+    return True if writer is None else writer.flush(conv_id, timeout)
+
+
+def _forget_saved(conv_id: str | None = None) -> None:
+    if _WRITER is not None:
+        _WRITER.forget(conv_id)
+
+
+def _queued(conv_id: str) -> Conversation | None:
+    """This chat's copy still waiting for the writer, if any."""
+    writer = _WRITER
+    item = writer.peek(conv_id) if writer is not None else None
+    return item[0] if item else None
+
+
+def _write_queued(conv_id: str, item: tuple[Conversation, str | None]) -> dict[str, Any]:
+    del conv_id
+    conv, project_root = item
+    return _save_conversation_rows(conv, project_root)
+
+
+def _is_assistant(message: Any) -> bool:
+    return isinstance(message, dict) and message.get("role") == "assistant"
+
+
+def _from_queue(conv: Conversation, *, with_messages: bool) -> Conversation:
+    """A reader's own copy of a queued save, with the transcript the writer will keep."""
+    out = Conversation.from_dict({**conv.to_dict(), "messages": []})
+    if not with_messages:
+        return out
+    mine = list(conv.messages or [])
+    if not mine or not any(_is_assistant(m) for m in mine):
+        stored = _repo().messages_get(conv.id)  # a stub save never blanks the stored rows
+        if stored and (not mine or any(_is_assistant(m) for m in stored)):
+            mine = stored
+    out.messages = mine
+    return out
 
 
 def release_conversation_lock(conv_id: str) -> None:
@@ -823,6 +881,9 @@ def conversation_project_slug(conv_id: str, project_root: str | None = None) -> 
 def load_conversation(conv_id: str, project_root: str | None = None) -> Conversation | None:
     """Load a globally unique chat ID; project_root is only a lookup hint."""
     if _use_db():
+        queued = _queued(conv_id)
+        if queued is not None:
+            return _held(_from_queue(queued, with_messages=True))
         # Ids are globally unique — don't filter by the active island slug.
         doc = _repo().conv_get(conv_id, with_messages=True)
         return _held(Conversation.from_dict(doc)) if doc is not None else None
@@ -842,6 +903,9 @@ def load_conversation_meta(conv_id: str, project_root: str | None = None) -> Con
     """The chat for its names and settings; the row store skips its messages. A
     coordinator's chat can hold hundreds; parsing them all to read a title took tens of ms."""
     if _use_db():
+        queued = _queued(conv_id)
+        if queued is not None:
+            return _held(_from_queue(queued, with_messages=False))
         doc = _repo().conv_get(conv_id, with_messages=False)
         return _held(Conversation.from_dict(doc)) if doc is not None else None
     return load_conversation(conv_id, project_root)
@@ -850,6 +914,9 @@ def load_conversation_meta(conv_id: str, project_root: str | None = None) -> Con
 def conversation_title(conv_id: str, project_root: str | None = None) -> str:
     """The sidebar title only; never loads message bodies on the row store."""
     if _use_db():
+        queued = _queued(conv_id)
+        if queued is not None:
+            return str(queued.title or "").strip()
         doc = _repo().conv_get(conv_id, with_messages=False)
         return str((doc or {}).get("title") or "").strip()
     conv = load_conversation(conv_id, project_root)
@@ -933,8 +1000,32 @@ _HELD_ATTR = "_placement_held"
 
 def _held(conv: Conversation) -> Conversation:
     """Remember this copy's placement as loaded (see :func:`_keep_newer_placement`)."""
-    setattr(conv, _HELD_ATTR, {name: getattr(conv, name) for name in _PLACEMENT})
+    held = {name: getattr(conv, name) for name in _PLACEMENT}
+    held["settings_edited"] = conv.settings_edited
+    setattr(conv, _HELD_ATTR, held)
     return conv
+
+
+def _placement_changed(conv: Conversation) -> bool:
+    """A new chat, a move, rename, mute or settings edit: other processes read these at
+    once (D23), so such a save waits until it is written."""
+    held = getattr(conv, _HELD_ATTR, None)
+    if not held:
+        return True
+    if conv.settings_edited != held.get("settings_edited"):
+        return True
+    return any(getattr(conv, name) != held.get(name) for name in _PLACEMENT)
+
+
+def _reload_if_stale(conv: Conversation) -> None:
+    """A copy without the assistant rows another writer stored is given them, so its later
+    saves build on them. A metadata stub (no messages) is never reloaded."""
+    incoming = conv.messages or []
+    if not incoming or any(_is_assistant(m) for m in incoming):
+        return
+    count, has_assistant = _repo().conv_message_summary(conv.id)
+    if count and has_assistant and count != len(incoming):
+        conv.messages = _repo().messages_get(conv.id)
 
 
 def _keep_newer_placement(conv: Conversation, stored: dict[str, Any] | None) -> None:
@@ -950,23 +1041,42 @@ def _keep_newer_placement(conv: Conversation, stored: dict[str, Any] | None) -> 
             setattr(conv, name, theirs)
 
 
-def save_conversation(conv: Conversation, project_root: str | None = None, *, touch_updated: bool = True) -> None:
+def save_conversation(
+    conv: Conversation, project_root: str | None = None, *, touch_updated: bool = True, wait: bool = False
+) -> Future | None:
+    """Row store: the save is queued for the chat-writer thread and its future returned.
+    ``wait=True`` (and any save that creates, moves, renames or re-settings a chat) returns
+    once it is written, so other processes see it at once."""
     with _conversation_lock(conv.id):
         # A self-rename is made through the bridge while this runner owns an older
         # conversation object. Never save its placeholder over the chosen name.
         if is_placeholder_title(conv.title):
-            stored = load_conversation(conv.id, project_root)
+            stored = load_conversation_meta(conv.id, project_root)
             if stored is not None and not is_placeholder_title(stored.title):
                 conv.title = stored.title
         if touch_updated:
             conv.updated = time.time()
         if _use_db():
-            _keep_newer_settings(conv, _repo().conv_if_settings_newer(conv.id, conv.settings_edited))
+            wait = wait or _placement_changed(conv)
+            queued = _queued(conv.id)
+            if queued is None:
+                newer = _repo().conv_if_settings_newer(conv.id, conv.settings_edited)
+            else:
+                newer_edit = float(queued.settings_edited or 0.0) > float(conv.settings_edited or 0.0)
+                newer = queued.to_dict() if newer_edit else None
+            _keep_newer_settings(conv, newer)
             if getattr(conv, _HELD_ATTR, None):
-                _keep_newer_placement(conv, _repo().conv_get(conv.id, with_messages=False))
-            _save_conversation_rows(conv, project_root)
+                stored_doc = queued.to_dict() if queued is not None else _repo().conv_get(conv.id, with_messages=False)
+                _keep_newer_placement(conv, stored_doc)
+            if queued is None:
+                _reload_if_stale(conv)
+            snapshot = _shallow(conv)
+            snapshot.messages = list(conv.messages or [])
+            fut = _writer().submit(conv.id, (snapshot, project_root))
             _held(conv)
-            return
+            if wait:
+                fut.result(timeout=60.0)
+            return fut
         path = conversation_path(conv.id, project_root)
         home = _find_conversation_meta(conv.id, project_root)
         if home is not None:
@@ -1008,18 +1118,19 @@ def save_conversation(conv: Conversation, project_root: str | None = None, *, to
             pass
 
 
-def _save_conversation_rows(conv: Conversation, project_root: str | None) -> None:
+def _save_conversation_rows(conv: Conversation, project_root: str | None) -> dict[str, Any]:
     """ADR 0003: one row per message. A metadata stub (no messages) or a stub that
     lost the assistant row never blanks a stored transcript — same guard as the
-    file store, without reading the transcript back."""
+    file store, without reading the transcript back. Runs on the chat-writer thread
+    with a snapshot, so ``conv.messages`` is never reloaded here."""
     t0 = time.perf_counter()
     repo = _repo()
     project_id = repo.conv_project_id(conv.id) or _project_id(project_root)
     incoming = list(getattr(conv, "messages", None) or [])
     stored_count, stored_has_assistant = repo.conv_message_summary(conv.id)
     messages: list[dict[str, Any]] | None = incoming
-    if stored_count and not incoming:
-        messages = None
+    if not incoming:
+        messages = None  # nothing to sync (a stub, or a new chat): a metadata save
     elif stored_count and stored_has_assistant and not any(
         isinstance(m, dict) and m.get("role") == "assistant" for m in incoming
     ):
@@ -1034,11 +1145,18 @@ def _save_conversation_rows(conv: Conversation, project_root: str | None) -> Non
         if current is not None:
             doc["tool_call_count"] = current.get("tool_call_count", doc["tool_call_count"])
             doc["file_count"] = current.get("file_count", doc["file_count"])
+    from frontend.ui_web.chat_writer import doc_key
+
+    writer = _WRITER
+    key = doc_key(project_id, doc)
+    if writer is not None and writer.unchanged(conv.id, key, messages):
+        return {"unchanged": 1}
     result = repo.conv_save(project_id, doc, messages=messages)
     if result.get("skipped"):
-        return  # the chat was deleted meanwhile; it stays deleted
-    if messages is None:
-        conv.messages = repo.messages_get(conv.id)
+        _forget_saved(conv.id)
+        return result  # the chat was deleted meanwhile; it stays deleted
+    if writer is not None:
+        writer.remember(conv.id, key)
     try:
         from frontend.perf_trace import trace
 
@@ -1047,11 +1165,12 @@ def _save_conversation_rows(conv: Conversation, project_root: str | None) -> Non
             conv.id,
             (time.perf_counter() - t0) * 1000.0,
             bytes=int(result.get("bytes", 0)),
-            message_count=len(conv.messages or []),
+            message_count=len(messages) if messages is not None else stored_count,
             rows=int(result.get("inserted", 0)) + int(result.get("updated", 0)),
         )
     except Exception:
         pass
+    return result
 
 
 def all_available_tool_ids() -> list[str]:
@@ -1207,6 +1326,8 @@ def opt_in_uefn_plugin_all_chats(plugin_id: str) -> int:
     n = 0
     if _use_db():
         repo = _repo()
+        flush_chat_saves()
+        _forget_saved()
         for project_id, data in repo.conv_list_all_projects(with_messages=False):
             uefn = data.get("uefn_plugins")
             if uefn is None or not isinstance(uefn, list):
@@ -1243,6 +1364,8 @@ def invalidate_all_projects_conversation_caches() -> None:
     """Clear frozen prompt snapshots for every chat across all projects."""
     if _use_db():
         repo = _repo()
+        flush_chat_saves()
+        _forget_saved()
         for project_id, data in repo.conv_list_all_projects(with_messages=False):
             if data.get("prompt_cache_snapshot") is None:
                 continue
@@ -1488,7 +1611,9 @@ def delete_conversation(conv_id: str, project_root: str | None = None) -> None:
         forget_chat = None
     for target_id in reversed(ids):
         if _use_db():
+            flush_chat_saves(target_id)
             _repo().conv_delete(target_id)
+            _forget_saved(target_id)
         if forget_chat is not None:
             forget_chat(target_id)  # its "Allow everything" must not outlive it
         try:
@@ -1645,6 +1770,7 @@ def _upsert_run_row(conv: Conversation, payload: dict[str, Any], rid: str, proje
         idx = len(msgs)
         msgs.append(payload)
     now = time.time()
+    flush_chat_saves(conv.id)  # a queued older copy must not land over this row
     result = _repo().upsert_run_message(
         conv.id, rid, payload, updated=now, stats=_stats_for(msgs)
     )
@@ -1959,6 +2085,8 @@ def _commit_project_move(
     dest_folder_for,
 ) -> None:
     if _use_db():
+        flush_chat_saves()
+        _forget_saved()
         _repo().move_to_project(
             target,
             [(source, folder.id, folder.parent_id or "") for source, folder in moved_folders],
@@ -2107,9 +2235,11 @@ def adopt_group_project(conv: Conversation, group_id: str) -> None:
     if not gid:
         return
     home = _repo().conv_project_id(gid)
+    flush_chat_saves(conv.id)
     if not home or home == _repo().conv_project_id(conv.id):
         return
     _repo().conv_save(home, conv.to_dict(), messages=None)
+    _forget_saved(conv.id)
 
 
 def _folder_is_known(folder_id: str, project_root: str | None) -> bool:

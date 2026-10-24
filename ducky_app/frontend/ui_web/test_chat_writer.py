@@ -1,0 +1,273 @@
+"""The chat-writer: one thread, batched saves, read-your-writes, skips and WAL upkeep."""
+
+from __future__ import annotations
+
+import sqlite3
+import threading
+import time
+
+import pytest
+
+from backend.store import db
+from backend.store.repos import chats as repo
+from frontend.settings import PanelSettings
+from frontend.ui_web import chat_writer, project_chats
+from frontend.ui_web.chat_writer import ChatWriter
+from frontend.ui_web.project_chats import (
+    create_conversation,
+    flush_chat_saves,
+    load_conversation,
+    load_conversation_meta,
+    save_conversation,
+)
+
+
+@pytest.fixture(autouse=True)
+def _flushed():
+    yield
+    flush_chat_saves()
+
+
+def _msgs(n: int) -> list[dict]:
+    return [{"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}", "text": f"m{i}", "ts": i} for i in range(n)]
+
+
+def _chat(root: str, title: str = "chat"):
+    conv = create_conversation(PanelSettings.load(), "", title=title, project_root=root)
+    return load_conversation(conv.id, root)
+
+
+def _stored_count(conv_id: str) -> int:
+    """Read through a second connection, as another process would."""
+    other = sqlite3.connect(str(db.db_path()))
+    try:
+        row = other.execute("SELECT message_count FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        return int(row[0]) if row else -1
+    finally:
+        other.close()
+
+
+def test_a_save_with_wait_is_visible_to_another_connection_at_once(tmp_path) -> None:
+    root = str(tmp_path)
+    conv = _chat(root)
+    conv.messages = _msgs(3)
+    save_conversation(conv, root, wait=True)
+    assert _stored_count(conv.id) == 3
+
+
+def test_a_new_chat_is_written_before_create_returns(tmp_path) -> None:
+    conv = create_conversation(PanelSettings.load(), "", title="new", project_root=str(tmp_path))
+    assert _stored_count(conv.id) == 0  # the row is there (-1 would mean missing)
+
+
+def test_flush_writes_what_waits(tmp_path) -> None:
+    """What the HTTP server calls before answering /__panel_rpc and /__panel_run."""
+    root = str(tmp_path)
+    conv = _chat(root)
+    conv.messages = _msgs(4)
+    save_conversation(conv, root)
+    assert flush_chat_saves() is True
+    assert _stored_count(conv.id) == 4
+    assert flush_chat_saves() is True  # nothing waits: returns at once
+
+
+def test_a_load_right_after_a_save_returns_the_saved_state(tmp_path) -> None:
+    root = str(tmp_path)
+    conv = _chat(root)
+    conv.messages = _msgs(6)
+    save_conversation(conv, root)
+    loaded = load_conversation(conv.id, root)
+    assert loaded is not None and [m["content"] for m in loaded.messages] == [f"m{i}" for i in range(6)]
+    meta = load_conversation_meta(conv.id, root)
+    assert meta is not None and meta.messages == [] and meta.title == conv.title
+
+
+def test_100_saves_of_10_chats_take_at_most_10_transactions(tmp_path) -> None:
+    root = str(tmp_path)
+    chats = [_chat(root, f"c{i}") for i in range(10)]
+    flush_chat_saves()
+    writer = project_chats._writer()
+    before = writer.transactions
+    t0 = time.monotonic()
+    for i in range(100):
+        conv = chats[i % 10]
+        conv.messages = _msgs(i // 10 + 1)
+        save_conversation(conv, root)
+    elapsed = time.monotonic() - t0
+    flush_chat_saves()
+    assert writer.transactions - before <= max(10, int(elapsed / chat_writer.INTERVAL_S) + 2)
+    for conv in chats:
+        assert _stored_count(conv.id) == 10  # the last save of each chat won
+
+
+def test_saves_of_one_chat_merge_latest_wins() -> None:
+    written: list[tuple[str, int]] = []
+    writer = ChatWriter(lambda cid, item: written.append((cid, item)), connect=db.connect, interval=0.3)
+    try:
+        for n in range(1, 11):
+            writer.submit("a", n)
+        assert writer.peek("a") == 10
+        assert writer.flush() is True
+        assert written == [("a", 10)]
+        assert writer.peek("a") is None
+    finally:
+        writer.close()
+
+
+def test_exit_flush_writes_everything() -> None:
+    written: list[str] = []
+
+    def write(cid: str, item: int) -> None:
+        time.sleep(0.01)
+        written.append(cid)
+
+    writer = ChatWriter(write, connect=db.connect, interval=5.0)
+    futures = [writer.submit(f"c{i}", i) for i in range(5)]
+    writer.close()
+    assert sorted(written) == [f"c{i}" for i in range(5)]
+    assert all(f.done() and f.exception() is None for f in futures)
+    writer.submit("late", 1).result(timeout=1)  # after exit a save writes in the caller
+    assert written[-1] == "late"
+
+
+def test_a_failed_save_fails_only_its_own_future() -> None:
+    def write(cid: str, item: int) -> None:
+        if cid == "bad":
+            raise ValueError("nope")
+
+    writer = ChatWriter(write, connect=db.connect)
+    try:
+        good, bad = writer.submit("good", 1), writer.submit("bad", 1)
+        writer.flush()
+        assert good.exception() is None
+        assert isinstance(bad.exception(), ValueError)
+    finally:
+        writer.close()
+
+
+# --------------------------------------------------------------- p6-noreload
+
+
+def _count_message_reads(monkeypatch) -> list[int]:
+    reads: list[int] = []
+    real_get, real_messages = repo.messages_get, repo._messages
+    monkeypatch.setattr(repo, "messages_get", lambda *a, **k: reads.append(1) or real_get(*a, **k))
+    monkeypatch.setattr(repo, "_messages", lambda *a, **k: reads.append(1) or real_messages(*a, **k))
+    return reads
+
+
+def test_a_metadata_save_reads_no_messages(tmp_path, monkeypatch) -> None:
+    root = str(tmp_path)
+    conv = _chat(root)
+    conv.messages = _msgs(40)
+    save_conversation(conv, root, wait=True)
+    meta = load_conversation_meta(conv.id, root)
+    reads = _count_message_reads(monkeypatch)
+    meta.title = "renamed"
+    save_conversation(meta, root, wait=True)
+    assert reads == []
+    assert meta.messages == []  # kept as it was, not reloaded
+    assert _stored_count(conv.id) == 40
+
+
+def test_a_stale_copy_reloads_once_after_another_writer_added_rows(tmp_path, monkeypatch) -> None:
+    root = str(tmp_path)
+    conv = _chat(root)
+    conv.messages = _msgs(1)  # just the user's question
+    save_conversation(conv, root, wait=True)
+    other = load_conversation(conv.id, root)
+    other.messages.append({"role": "assistant", "content": "answer", "text": "answer", "ts": 2})
+    save_conversation(other, root, wait=True)
+    reads = _count_message_reads(monkeypatch)
+    save_conversation(conv, root, wait=True)
+    assert len(reads) == 1
+    assert [m["content"] for m in conv.messages] == ["m0", "answer"]
+    assert _stored_count(conv.id) == 2
+
+
+# ------------------------------------------------------------------ p6-skip
+
+
+def test_identical_saves_write_once_and_a_title_change_writes(tmp_path, monkeypatch) -> None:
+    root = str(tmp_path)
+    conv = _chat(root)
+    flush_chat_saves()
+    writes: list[str] = []
+    real_save = repo.conv_save
+    monkeypatch.setattr(repo, "conv_save", lambda p, doc, **k: writes.append(doc["id"]) or real_save(p, doc, **k))
+    meta = load_conversation_meta(conv.id, root)
+    for _ in range(10):
+        save_conversation(meta, root, wait=True)
+    assert len(writes) <= 1
+    meta.title = "a new title"
+    save_conversation(meta, root, wait=True)
+    assert len(writes) <= 2 and writes[-1] == conv.id
+    assert load_conversation_meta(conv.id, root).title == "a new title"
+
+
+def test_the_key_ignores_the_timestamp_and_the_transcript() -> None:
+    doc = {"id": "x", "title": "t", "updated": 1.0, "messages": [{"role": "user"}]}
+    same = {**doc, "updated": 2.0, "messages": []}
+    assert chat_writer.doc_key("p", doc) == chat_writer.doc_key("p", same)
+    assert chat_writer.doc_key("p", doc) != chat_writer.doc_key("p", {**doc, "title": "u"})
+    assert chat_writer.doc_key("p", doc) != chat_writer.doc_key("q", doc)
+
+
+def test_a_message_save_is_never_skipped() -> None:
+    writer = ChatWriter(lambda cid, item: None, connect=db.connect)
+    writer.remember("x", "k")
+    assert writer.unchanged("x", "k", None) is True
+    assert writer.unchanged("x", "k", []) is False
+    writer.forget("x")
+    assert writer.unchanged("x", "k", None) is False
+
+
+# ------------------------------------------------------------------- p6-wal
+
+
+def test_a_big_batch_runs_a_passive_checkpoint() -> None:
+    writer = ChatWriter(lambda cid, item: {"bytes": 2000 * chat_writer.PAGE_BYTES}, connect=db.connect)
+    try:
+        writer.submit("big", 1)
+        writer.flush()
+        assert writer.checkpoints["PASSIVE"] == 1
+    finally:
+        writer.close()
+
+
+def test_a_small_batch_runs_none() -> None:
+    writer = ChatWriter(lambda cid, item: {"bytes": 10 * chat_writer.PAGE_BYTES}, connect=db.connect)
+    try:
+        writer.submit("small", 1)
+        writer.flush()
+        assert writer.checkpoints["PASSIVE"] == 0
+    finally:
+        writer.close()
+
+
+def test_30_idle_seconds_truncate_the_wal_once() -> None:
+    now = [100.0]
+    writer = ChatWriter(lambda cid, item: None, connect=db.connect, clock=lambda: now[0])
+    try:
+        assert writer.idle_checkpoint() is False  # nothing written yet
+        writer.submit("a", 1)
+        writer.flush()
+        now[0] += 10
+        assert writer.idle_checkpoint() is False
+        now[0] += 21
+        assert writer.idle_checkpoint() is True
+        assert writer.checkpoints["TRUNCATE"] == 1
+        assert writer.idle_checkpoint() is False  # once per quiet spell
+        conn = db.connect()
+        assert int(conn.execute("PRAGMA busy_timeout").fetchone()[0]) == db.BUSY_TIMEOUT_MS
+    finally:
+        writer.close()
+
+
+def test_the_writer_thread_is_named() -> None:
+    writer = ChatWriter(lambda cid, item: None, connect=db.connect)
+    try:
+        writer.submit("a", 1)
+        assert any(t.name == "chat-writer" for t in threading.enumerate())
+    finally:
+        writer.close()
