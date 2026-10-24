@@ -238,6 +238,8 @@ _PUBLIC_METHODS = frozenset({
     'group_seat_profile',
     'group_members',
     'group_remove',
+    'group_stop',
+    'set_muted',
     'group_set_leader',
     'group_set_member_model',
     'group_set_member_lane',
