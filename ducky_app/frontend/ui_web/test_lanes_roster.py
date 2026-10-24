@@ -130,3 +130,54 @@ def test_group_invite_refuses_an_overlapping_lane_before_making_a_chat(panel, mo
     res = api.group_invite("hub", "builder", write_allowed=["Content/Verse/**"], name="Second")
     assert not res["ok"] and "overlaps" in res["error"]
     assert made == [] and saved == [] and len(hub.group_members) == 3
+
+
+@pytest.fixture
+def store(monkeypatch):
+    """A chat store that hands out copies, like the real one: a caller holding an older
+    copy of the hub and saving it is how teammates' lanes got lost (Oct 24 2026)."""
+    import copy
+
+    from frontend.ui_web import project_chats
+
+    hub, _ = _world()
+    docs = {"hub": copy.deepcopy(hub)}
+    load = lambda cid, *a, **k: copy.deepcopy(docs.get(cid))  # noqa: E731
+    monkeypatch.setattr(_pa, "load_conversation", load)
+    monkeypatch.setattr(project_chats, "load_conversation_meta", load)
+    monkeypatch.setattr(_pa, "save_conversation", lambda conv, *a, **k: docs.__setitem__(conv.id, copy.deepcopy(conv)))
+    monkeypatch.setattr(_pa, "notify_chats_changed", lambda *a, **k: None)
+
+    def lanes_now():
+        return {m["member_conv_id"]: (m.get("write_allowed"), m.get("lane_set_by")) for m in docs["hub"].group_members}
+
+    return PanelApiChatsMixin(), load, lanes_now
+
+
+def test_an_older_roster_copy_never_loosens_a_teammates_lane(store) -> None:
+    api, load, lanes_now = store
+    stale = load("hub")  # an invite / folder sync / group turn that loaded the hub earlier
+    assert api.group_set_member_lane("hub", "artist", [], set_by="lead")["ok"]
+    assert api.group_set_member_lane("hub", "hacker", ["Content/Verse/Hub"], set_by="lead")["ok"]
+    assert lanes_now()["artist"] == ([], "lead")
+    # The stale copy saves with a new member (an invite), then again (a second invite).
+    api._save_roster(stale, [*stale.group_members, {"member_conv_id": "c", "name": "C"}])
+    api._save_roster(load("hub"), [*load("hub").group_members, {"member_conv_id": "d", "name": "D"}])
+    now = lanes_now()
+    assert now["artist"] == ([], "lead") and now["hacker"] == (["Content/Verse/Hub/**"], "lead")
+    assert now["lead"] == (None, "") and now["c"] == (None, "") and now["d"] == (None, "")  # None stays None
+    # Setting one member again leaves the others as they are.
+    assert api.group_set_member_lane("hub", "hacker", ["Content/Verse/Shop"], set_by="lead")["ok"]
+    now = lanes_now()
+    assert now["artist"] == ([], "lead") and now["hacker"] == (["Content/Verse/Shop/**"], "lead")
+
+
+def test_a_fresh_read_only_lane_survives_a_members_refresh(store) -> None:
+    api, load, lanes_now = store
+    refresh = load("hub")  # group_members() loaded the roster, then set_lane ran
+    assert api.group_set_member_lane("hub", "hacker", [], set_by="lead")["ok"]
+    api._save_roster(refresh, refresh.group_members)
+    assert lanes_now()["hacker"] == ([], "lead")
+    # Clearing through set_lane still opens it: the member being set always wins.
+    assert api.group_set_member_lane("hub", "hacker", None, set_by="lead")["ok"]
+    assert lanes_now()["hacker"] == (None, "lead")

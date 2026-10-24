@@ -88,6 +88,10 @@ def test_only_the_member_being_set_changes_its_lane() -> None:
     with lanes.setting_lane("a"):
         kept = lanes.keep_stored_lanes(rows, stored)
     assert kept[0]["write_allowed"] == ["src/x/**"] and kept[1]["write_allowed"] == []
-    # Outside the block nobody's lane moves, and a new member keeps what it brings.
+    # Outside the block the newer lane_set_at wins (A's fresh lane, B's stored one), and a
+    # new member keeps what it brings.
     kept = lanes.keep_stored_lanes([*rows, {"member_conv_id": "c", "write_allowed": ["docs"]}], stored)
-    assert kept[0]["write_allowed"] is None and kept[1]["write_allowed"] == [] and kept[2]["write_allowed"] == ["docs"]
+    assert kept[0]["write_allowed"] == ["src/x/**"] and kept[1]["write_allowed"] == [] and kept[2]["write_allowed"] == ["docs"]
+    # An older copy never wins over a newer stored lane, even when it carries a lane.
+    older = [{"member_conv_id": "b", "write_allowed": ["Content"], "lane_set_by": "user", "lane_set_at": 1.0}]
+    assert lanes.keep_stored_lanes(older, stored)[0]["write_allowed"] == []

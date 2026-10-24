@@ -103,6 +103,33 @@ def group_members(conv: Any) -> list[dict[str, Any]]:
     return out
 
 
+def save_group_roster(
+    group: Any,
+    rows: list[dict[str, Any]],
+    project_root: str | None = None,
+    *,
+    load: Callable[[str], Any] | None = None,
+    save: Callable[[Any], Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Save a hub's roster without putting back an older lane: each member's lane fields
+    come from the newer of ``rows`` and the stored roster (see ``keep_stored_lanes``).
+    Every roster save goes through here; ``load`` / ``save`` default to the chat store."""
+    from backend.workspace.lanes import keep_stored_lanes
+    from frontend.ui_web.project_chats import _conversation_lock, load_conversation_meta
+
+    with _conversation_lock(group.id):
+        stored = (load or (lambda cid: load_conversation_meta(cid, project_root)))(group.id)
+        if stored is not None and stored is not group:
+            rows = keep_stored_lanes(rows, getattr(stored, "group_members", None) or [])
+        rows = [normalize_member(row, index=i) if isinstance(row, dict) else row for i, row in enumerate(rows)]
+        group.group_members = rows
+        if save is None:
+            save_conversation(group, project_root)
+        else:
+            save(group)
+    return rows
+
+
 def group_and_nested_ids(group_id: str, project_root: str | None = None) -> list[str]:
     """This group, then every group inside it at any depth (cycle-safe).
 
@@ -410,9 +437,7 @@ def sync_group_members_from_folder(group: Any, project_root: str | None = None) 
             lead_row = next(r for r in new_rows if r.get("member_conv_id") == leader_id)
             new_rows = [lead_row, *[r for r in new_rows if r.get("member_conv_id") != leader_id]]
 
-    group.group_members = new_rows
-    save_conversation(group, project_root)
-    return new_rows
+    return save_group_roster(group, new_rows, project_root)
 
 
 def reconcile_group_rosters_from_folders(project_root: str | None = None) -> list[str]:

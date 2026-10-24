@@ -366,12 +366,14 @@ def setting_lane(member_conv_id: str):
 def keep_stored_lanes(
     incoming: Sequence[Any], stored: Sequence[Any]
 ) -> list[Any]:
-    """Roster rows about to be saved, with each member's lane fields as stored.
+    """Roster rows about to be saved, each member's lane fields from the newer of the two
+    copies (``lane_set_at``; the stored one on a tie).
 
-    Only a save inside ``setting_lane(member)`` changes that member's lane: any other
-    roster write (an invite, a folder sync, a rename, a group turn) saved a copy loaded
+    Roster writes (an invite, a folder sync, a rename, a group turn) saved a copy loaded
     earlier and wrote a teammate's old lane back (Oct 24 2026: a read-only ``[]`` became
-    unrestricted). New members (not stored yet) keep what they bring.
+    unrestricted, and a fresh ``[]`` reverted to an older lane seconds later). A save
+    inside ``setting_lane(member)`` always writes that member's lane; new members (not
+    stored yet) keep what they bring.
     """
     setting = _setting.get()
     by_id = {
@@ -381,11 +383,18 @@ def keep_stored_lanes(
     for row in incoming or ():
         mid = str(row.get("member_conv_id") or "") if isinstance(row, Mapping) else ""
         old = by_id.get(mid) if mid else None
-        if old is None or mid in setting:
+        if old is None or mid in setting or _set_at(row) > _set_at(old):
             out.append(row)
         else:
             out.append({**row, **{k: old.get(k) for k in LANE_KEYS}})
     return out
+
+
+def _set_at(row: Mapping[str, Any]) -> float:
+    try:
+        return float(row.get("lane_set_at") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 # ------------------------------------------------------------- resolution

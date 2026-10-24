@@ -726,11 +726,10 @@ class PanelApiChatsMixin:
             },
             index=len(existing),
         )
-        group.group_members = [*existing, row]
         # First invited member becomes leader when none set yet.
         if not (getattr(group, "leader_conv_id", None) or "").strip():
             group.leader_conv_id = member.id
-        _pa.save_conversation(group)
+        self._save_roster(group, [*existing, row])
         if write_allowed is not None:
             laned = self.group_set_member_lane(group_id, member.id, write_allowed)
             if not laned.get("ok"):
@@ -860,10 +859,10 @@ class PanelApiChatsMixin:
                 },
                 index=len(existing),
             )
-            group.group_members = [*existing, row]
+            existing = [*existing, row]
         if as_leader or not (getattr(group, "leader_conv_id", None) or "").strip():
             group.leader_conv_id = cid
-        _pa.save_conversation(group)
+        self._save_roster(group, existing)
         _pa.notify_chats_changed(group.id, group.title, group.folder_id, open_tab=False)
         out: dict[str, Any] = {
             "ok": True,
@@ -938,10 +937,16 @@ class PanelApiChatsMixin:
                 row["model"] = result.selection.qualified
                 row["coding_agent"] = result.coding_agent
             next_members.append(normalize_member(row, index=i))
-        group.group_members = next_members
-        _pa.save_conversation(group)
+        next_members = self._save_roster(group, next_members)
         _pa.notify_chats_changed(group.id, group.title, group.folder_id, open_tab=False)
         return {"ok": True, "group_members": next_members}
+
+    @staticmethod
+    def _save_roster(group: Any, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Every roster save: never puts back a teammate's older lane (Oct 24 2026)."""
+        from frontend.ui_web.group_orchestrator import save_group_roster
+
+        return save_group_roster(group, rows, save=_pa.save_conversation)
 
     # -- write lanes ------------------------------------------------------------
 
@@ -957,7 +962,7 @@ class PanelApiChatsMixin:
         import time
 
         from backend.workspace import events, lanes as lane_engine
-        from frontend.ui_web.group_orchestrator import group_members, normalize_member
+        from frontend.ui_web.group_orchestrator import group_members
 
         from frontend.ui_web.project_chats import _conversation_lock
 
@@ -974,10 +979,8 @@ class PanelApiChatsMixin:
                 )
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
-            next_members = [normalize_member(row, index=i) for i, row in enumerate(rows)]
-            group.group_members = next_members
             with lane_engine.setting_lane(mid):
-                _pa.save_conversation(group)
+                next_members = self._save_roster(group, rows)
             lane_engine.invalidate_lane_cache(mid)
         _pa.notify_chats_changed(group.id, group.title, group.folder_id, open_tab=False)
         lane = next((m.get("write_allowed") for m in next_members if m.get("member_conv_id") == mid), None)
@@ -1049,12 +1052,11 @@ class PanelApiChatsMixin:
             return {"ok": False, "error": "Not a group chat"}
         mid = (member_conv_id or "").strip()
         kept = [m for m in group_members(group) if m.get("member_conv_id") != mid]
-        group.group_members = kept
         leader = (getattr(group, "leader_conv_id", None) or "").strip()
         if leader and leader == mid:
             group.leader_conv_id = str(kept[0].get("member_conv_id") or "") if kept else ""
         # Persist leader/roster first so a later folder-sync cannot pull this member back.
-        _pa.save_conversation(group)
+        self._save_roster(group, kept)
         evict_member_from_group(mid)
         _pa.notify_chats_changed(group.id, group.title, group.folder_id, open_tab=False)
         return {
