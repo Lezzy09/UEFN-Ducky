@@ -363,13 +363,21 @@ def tick(
     return woke
 
 
+# Oct 24 2026: members ticked all their points in one burst at the end, so the plan bars sat
+# still for an hour and then jumped.
+_ONE_AT_A_TIME = (
+    "Work one point at a time: mark it in_progress when you start it, and tick it completed with "
+    "its notes the moment its change and tests are done, before starting the next point. Never "
+    "save ticks for the end."
+)
+UNTICKED_TEXT = "You finished work without ticking: tick the points you completed now."
 TASK_TEXT = (
     "[Ducky] Your task: the sub plan “{section}” in the plan “{plan}”.\n{spec}{about}"
     "Points:\n{points}\n\n"
     "Work like a sub-agent: alone, writing the code, until every point is ticked. Send no messages "
     "to teammates or your lead (Ducky refuses them). Everything you need is above: don't search "
     "workflows or skills (find_workflows, skill reads) for this task and don't browse folders; open "
-    "only the files you change or use. A point is done when its change is made and its "
+    "only the files you change or use. " + _ONE_AT_A_TIME + " A point is done when its change is made and its "
     "tests pass: tick it then with ducky_plan_update_node(node_id=..., status=\"completed\", "
     "body_markdown=\"<what you changed and how you tested it>\"). Never stop for bookkeeping or for "
     "checks your tools can't do (change-ledger read-backs, live panel captures, the person's own "
@@ -380,8 +388,8 @@ TASK_TEXT = (
     "BLOCKED: <what you need>."
 )
 CONTINUE_TEXT = (
-    "[Ducky] Points left in your sub plan “{section}”:\n{points}\nContinue with the code. Tick a "
-    "point when its change is made and its tests pass; note checks your tools can't do and tick it "
+    "[Ducky] Points left in your sub plan “{section}”:\n{points}\nContinue with the code. "
+    + _ONE_AT_A_TIME + " Tick a point when its change is made and its tests pass; note checks your tools can't do and tick it "
     "anyway. Ticking the last one tells your lead. Only if the code can't go on, end your turn with "
     "one line: BLOCKED: <what you need>."
 )
@@ -396,6 +404,9 @@ BLOCKED_TEXT = (
 )
 _MEMBER_IDLE_S = 90.0  # a member idle this long with points left gets its next turn
 _MEMBER_TRIES = 2  # turns that move nothing in the plan: wait for the plan to move
+# ponytail: reads the member's last reply for a commit and its hash, not git; members are told
+# to report their commit, so this holds until one commits silently.
+_COMMITTED_RE = re.compile(r"(?is)\bcommit\w*\b.*?\b[0-9a-f]{7,40}\b")
 _BLOCKED_RE = re.compile(r"(?im)^[\s>*_`-]*BLOCKED\s*[:\-]\s*(.+)$")
 _members: dict[str, dict[str, Any]] = {}
 _lead_told: dict[str, str] = {}  # lead -> plan fingerprint when a block was last handled
@@ -515,6 +526,13 @@ def _blocked_reason(member: str) -> str:
 
     found = _BLOCKED_RE.search(_last_assistant_text(member) or "")
     return found.group(1).strip()[:500] if found else ""
+
+
+def _said_committed(member: str) -> bool:
+    """Its last reply reports a commit (a commit word and a hash)."""
+    from backend.agent.a2a_broker import _last_assistant_text
+
+    return bool(_COMMITTED_RE.search(_last_assistant_text(member) or ""))
 
 
 def _tell_lead(plan: dict[str, Any], member: str, work: dict[str, Any], reason: str) -> None:
@@ -649,7 +667,8 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
                 # block still goes to the person.
                 same = st["task"].rsplit(":", 1)[0] == task.rsplit(":", 1)[0]
                 st.update(task=task, tries=0, idle_since=now, next=now + _MEMBER_IDLE_S, blocked="",
-                          cleared=st["cleared"] if same else "", told_done=st["told_done"] if same else None)
+                          cleared=st["cleared"] if same else "", told_done=st["told_done"] if same else None,
+                          done_at_wake=_done_points(work.get("section")))
                 woke.append(member)
                 movable.add(lead)
                 continue
@@ -677,11 +696,15 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
             if now - st["idle_since"] < _MEMBER_IDLE_S or now < st["next"]:
                 continue
             _inherit_lead(member, lead)
+            done = _done_points(work.get("section"))
+            text = CONTINUE_TEXT.format(section=_section_title(work), points=_points(work["points"], bodies=False))
+            if st.get("done_at_wake") is not None and done <= st["done_at_wake"] and _said_committed(member):
+                text = text.replace("[Ducky] ", f"[Ducky] {UNTICKED_TEXT}\n", 1)
             try:
-                wake(member, CONTINUE_TEXT.format(section=_section_title(work),
-                                                  points=_points(work["points"], bodies=False)))
+                wake(member, text)
             except Exception:
                 continue
+            st["done_at_wake"] = done
             st["tries"] += 1
             st["idle_since"] = now
             st["next"] = now + _MEMBER_IDLE_S * 2

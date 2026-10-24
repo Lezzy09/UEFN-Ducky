@@ -38,7 +38,9 @@ def team(tmp_path, monkeypatch):
     root = str(tmp_path)
     plans.create_plan("coord", title="Repair modes", nodes=NODES, project_root=root)
     plans.update_node("coord", "a1", status="in_progress", project_root=root)  # the plan is playing
-    return root
+    plans.drain_after_save()
+    yield root
+    plans.drain_after_save()  # a save's side work never runs into the next test
 
 
 def test_an_owner_can_be_set_while_the_plan_plays(team) -> None:
@@ -129,21 +131,78 @@ def test_assignment_invalidation_is_scoped_and_contains_no_plan_body(team, monke
 
     events = []
     monkeypatch.setattr(agent_modes, "_resolve_push", lambda _: events.append)
+    parents = {"builder": "group-a", "group-a": "team", "coord": "team", "outsider": ""}
     monkeypatch.setattr(project_chats, "list_all_conversation_metadata", lambda root: [
-        SimpleNamespace(id=cid) for cid in ("builder", "group-a", "coord", "outsider")
+        SimpleNamespace(id=cid, parent_conv_id=parent) for cid, parent in parents.items()
     ])
     plans.update_node("coord", "a", assignee="group-a", project_root=team)
+    plans.drain_after_save()
     assert events == [
         {"type": "plan_assignment_changed", "conv_id": "builder"},
         {"type": "plan_assignment_changed", "conv_id": "group-a"},
     ]
     events.clear()
     plans.update_node("coord", "a", assignee="outsider", project_root=team)
+    plans.drain_after_save()
     assert {e["conv_id"] for e in events} == {"builder", "group-a", "outsider"}
     assert all(set(e) == {"type", "conv_id"} for e in events)
     events.clear()
     plans.update_node("coord", "a", assignee="", project_root=team)
+    plans.drain_after_save()
     assert events == [{"type": "plan_assignment_changed", "conv_id": "outsider"}]
+
+
+def test_a_tick_refreshes_every_owners_plan_bar(team, monkeypatch):
+    # Oct 24 2026: only the lead got plan_updated, so a member's "Your sub plan" bar sat at 0/9.
+    from frontend.ui_web import agent_modes
+
+    plans.update_node("coord", "a", assignee="group-a", project_root=team)
+    plans.update_node("coord", "b", assignee="outsider", project_root=team)
+    plans.drain_after_save()
+    events = []
+    monkeypatch.setattr(agent_modes, "_resolve_push", lambda _: events.append)
+    monkeypatch.setattr(project_chats, "list_all_conversation_metadata", lambda root: [
+        SimpleNamespace(id="builder", parent_conv_id=""),  # seated with as_leader: filed elsewhere
+        SimpleNamespace(id="group-a", parent_conv_id="team", is_group=True, leader_conv_id="builder",
+                        group_members=[{"member_conv_id": "builder"}]),
+        SimpleNamespace(id="coord", parent_conv_id="team"), SimpleNamespace(id="outsider", parent_conv_id="")])
+    plan = plans.update_node("coord", "a2", status="completed", project_root=team)
+    plans.push_plan_updated(plan)  # the lead's own event, sent by the plan tool
+    plans.drain_after_save()
+    updated = {e["conv_id"] for e in events if e["type"] == "plan_updated"}
+    assert updated == {"coord", "builder", "group-a", "outsider"}
+    assert len([e for e in events if e["conv_id"] == "builder"]) == 1  # deduped
+    assert all("plan" not in e for e in events if e["conv_id"] != "coord")  # no copy of the lead's plan
+    assert {e.get("plan_id") for e in events if e["conv_id"] != "coord"} == {plan["id"]}
+
+
+def test_a_tick_on_a_big_team_plan_returns_fast(team, monkeypatch):
+    # Oct 24 2026: a tick took 4-15 s. Each save walked every chat of the project with
+    # load_conversation (whole histories) under the plan lock, to tell the members.
+    import time as clock
+    from frontend.ui_web import agent_modes
+
+    seats = [f"m{i}" for i in range(6)]
+    convs = {cid: SimpleNamespace(parent_conv_id="team") for cid in [*seats, "coord", "team"]}
+    monkeypatch.setattr(project_chats, "load_conversation", lambda cid, project_root=None: convs.get(cid))
+    nodes = [{"id": f"s{i}", "content": f"Part {i}", "assignee": seat, "children": [
+        {"id": f"s{i}-{j}", "content": f"Step {j}"} for j in range(8)]} for i, seat in enumerate(seats)]
+    plans.create_plan("lead", title="Big", nodes=nodes, project_root=team, team_check=False)
+    plans.drain_after_save()
+    events = []
+    monkeypatch.setattr(agent_modes, "_resolve_push", lambda _: events.append)
+
+    def slow_listing(root):
+        clock.sleep(1.0)  # a big project's chat list
+        return [SimpleNamespace(id=cid, parent_conv_id="team") for cid in convs]
+
+    monkeypatch.setattr(project_chats, "list_all_conversation_metadata", slow_listing)
+    started = clock.perf_counter()
+    for j in range(4):
+        plans.update_node("lead", f"s0-{j}", status="completed", project_root=team)
+    assert (clock.perf_counter() - started) / 4 < 0.3
+    plans.drain_after_save()
+    assert {e["conv_id"] for e in events} == set(seats)  # the side work still happened
 
 
 def test_create_plan_rejects_invalid_assignment(team):

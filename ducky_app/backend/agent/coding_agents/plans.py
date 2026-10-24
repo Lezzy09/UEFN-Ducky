@@ -6,6 +6,7 @@ import json
 import re
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -731,7 +732,8 @@ def save_plan(plan: dict[str, Any], project_root: str | None = None) -> dict[str
         _repo(project_root).plan_put(_project_id(project_root), _safe_id(chat_id), "project", plan)
     else:
         write_json_atomic(_plan_path(chat_id, project_root), plan)
-    _push_assignment_invalidated(previous, plan, project_root)
+    # Who to tell reads the project's chat list: off the call path, so a tick returns at once.
+    _after_save(_push_assignment_invalidated, previous, plan, project_root)
     from backend.agent.a2a_client import acknowledge_saved_plan
     acknowledge_saved_plan(previous, plan, project_root)
     deliver_reports(plan, reports)
@@ -2148,25 +2150,69 @@ def save_plan_as_template(chat_id: str, project_root: str | None = None) -> dict
     )
 
 
+_AFTER_SAVE = ThreadPoolExecutor(max_workers=1, thread_name_prefix="plan-after-save")
+
+
+def _after_save(fn, *args) -> None:
+    """Side work of a save, in save order, after the call returns."""
+    _AFTER_SAVE.submit(fn, *args)
+
+
+def drain_after_save(timeout: float = 10.0) -> None:
+    """Wait for the side work queued so far (tests, and callers that need it done)."""
+    _AFTER_SAVE.submit(lambda: None).result(timeout)
+
+
+def _section_audience(owners: set[str], project_root: str | None) -> set[str]:
+    """Every chat that owns a part of the plan: the owners, chats filed under an owning group
+    at any depth, and an owning group's roster and leader (a lead seated with as_leader stays
+    filed in the outer group). Reads chat metadata only: walking parents with load_conversation
+    loaded every chat's whole history on each tick (4-15 s per tick on Oct 24 2026)."""
+    from frontend.ui_web.group_orchestrator import group_members
+    from frontend.ui_web.project_chats import list_all_conversation_metadata
+
+    convs = {str(getattr(c, "id", "")): c for c in list_all_conversation_metadata(project_root)}
+    out = set(owners)
+    for cid in convs:
+        cur, seen = cid, set()
+        while cur and cur not in seen and cur in convs:
+            if cur in owners:
+                out.add(cid)
+                break
+            seen.add(cur)
+            cur = str(getattr(convs[cur], "parent_conv_id", "") or "").strip()
+    for gid in owners.intersection(convs):
+        group = convs[gid]
+        if getattr(group, "is_group", False):
+            out.add(str(getattr(group, "leader_conv_id", "") or ""))
+            out.update(m["member_conv_id"] for m in group_members(group))
+    out.discard("")
+    return out
+
+
 def _push_assignment_invalidated(before: dict[str, Any], after: dict[str, Any],
                                  project_root: str | None) -> None:
-    """Invalidate affected panes without sending the owner's private plan body."""
-    assigned = {str(n.get("assignee")) for doc in (before, after)
-                for n in _flatten_nodes(doc.get("nodes")) if n.get("assignee")}
-    if not assigned:
+    """Tell every chat that owns a part of this plan to re-read its section of the ONE plan,
+    without sending the lead's plan body: ``plan_assignment_changed`` when owners changed, else
+    ``plan_updated`` (a tick), so each member's plan bar moves with the lead's."""
+    def owners(doc: dict[str, Any]) -> dict[str, str]:
+        return {str(n["id"]): str(n["assignee"]) for n in _flatten_nodes(doc.get("nodes")) if n.get("assignee")}
+
+    was, now = owners(before), owners(after)
+    if not was and not now:
         return
     try:
-        from frontend.ui_web.project_chats import list_all_conversation_metadata
         from frontend.ui_web.agent_modes import _resolve_push
 
-        recipients = set(assigned)
-        for conv in list_all_conversation_metadata(project_root):
-            cid = str(getattr(conv, "id", ""))
-            if assigned.intersection(_chat_and_group_ids(cid, project_root)):
-                recipients.add(cid)
+        changed = was != now
+        recipients = _section_audience(set(was.values()) | set(now.values()) if changed else set(now.values()),
+                                       project_root)
         push = _resolve_push(None)
         for cid in sorted(recipients - {str(after.get("chat_id") or "")}):
-            push({"type": "plan_assignment_changed", "conv_id": cid})
+            if changed:
+                push({"type": "plan_assignment_changed", "conv_id": cid})
+            else:
+                push({"type": "plan_updated", "conv_id": cid, "plan_id": str(after.get("id") or "")})
     except Exception:
         # Saving the authoritative document must not depend on a UI connection.
         pass

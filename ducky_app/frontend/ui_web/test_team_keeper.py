@@ -28,6 +28,7 @@ def _world(monkeypatch):
     told: list[tuple[str, str]] = []
     monkeypatch.setattr(keeper, "_member_chat", lambda owner, root: owner)
     monkeypatch.setattr(keeper, "_blocked_reason", lambda member: "")
+    monkeypatch.setattr(keeper, "_said_committed", lambda member: False)
     monkeypatch.setattr(keeper, "_tell_lead", lambda plan, member, work, reason: told.append((member, reason)))
     return told
 
@@ -514,6 +515,35 @@ def test_steps_added_after_the_first_wake_resend_the_whole_task(monkeypatch) -> 
     _run(20, [], woke, plans=[ticked])
     _run(20 + 2 * keeper._MEMBER_IDLE_S, [], woke, plans=[ticked])
     assert woke[-1][1].startswith("[Ducky] Points left in your sub plan “UI: HUD”")
+
+
+def test_members_tick_as_they_go_and_are_told_when_they_committed_without_ticking(monkeypatch) -> None:
+    # Oct 24 2026: members ticked all their points in one burst at the end of a turn.
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder", "builder2"}, ""))
+    monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
+    committed = {"said": False}
+    monkeypatch.setattr(keeper, "_said_committed", lambda member: committed["said"])
+    rule = "Work one point at a time: mark it in_progress when you start it"
+    woke: list[tuple[str, str]] = []
+    _run(0, [], woke, plans=[SUB])
+    assert rule in woke[-1][1] and "Never save ticks for the end." in woke[-1][1]
+    _run(60, ["builder"], woke, plans=[SUB])
+    committed["said"] = True  # its turn ended: "Committed as 1a2b3c4", nothing ticked
+    _run(120, [], woke, plans=[SUB])
+    _run(215, [], woke, plans=[SUB])
+    text = woke[-1][1]
+    assert text.startswith("[Ducky] You finished work without ticking: tick the points you completed now.")
+    assert rule in text and "`blur` Blur (pending)" in text
+    # It ticked one point in its next turn: no reminder.
+    ticked = {**SUB, "nodes": [{**SUB["nodes"][0], "children": [
+        {**SUB["nodes"][0]["children"][0], "status": "completed"}, SUB["nodes"][0]["children"][1]]},
+        SUB["nodes"][1]]}
+    _run(300, ["builder"], woke, plans=[ticked])
+    _run(400, [], woke, plans=[ticked])
+    _run(500, [], woke, plans=[ticked])
+    assert woke[-1][0] == "builder" and "without ticking" not in woke[-1][1]
+    assert keeper._COMMITTED_RE.search("Committed and pushed as `6181ecdd`.")
+    assert not keeper._COMMITTED_RE.search("Nothing committed yet.")
 
 
 def test_a_stall_wake_lists_working_and_idle_members_apart(monkeypatch) -> None:
