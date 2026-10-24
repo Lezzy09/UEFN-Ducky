@@ -2,8 +2,12 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatPlan, GroupMemberDto } from "../types/panel";
-const api = vi.hoisted(() => ({ group_members: vi.fn(), get_plan: vi.fn(), get_settings: vi.fn(), set_muted: vi.fn() }));
+const api = vi.hoisted(() => ({
+  group_members: vi.fn(), get_plan: vi.fn(), get_settings: vi.fn(), set_muted: vi.fn(), group_stop: vi.fn(),
+}));
+const running = vi.hoisted(() => ({ ids: new Set<string>() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
+vi.mock("../hooks/useRunningAgents", () => ({ useRunningAgents: () => running.ids }));
 vi.mock("../hooks/useAgentEventBus", () => ({ subscribeAgentEvents: () => () => undefined }));
 import {
   GroupMemberStrip, laneCellLabel, laneModeOf, progressStep, progressText, subPlanProgress, sumProgress,
@@ -42,7 +46,7 @@ const member = (name: string, node_id: string | null | "none", plan_id = "team-p
     assignment: node_id === "none" ? null : { plan_id, chat_id: "lead", node_id, title: name, status: "in_progress" } },
 });
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); running.ids = new Set(); });
 const openTeam = () => fireEvent.click(screen.getByRole("button", { name: /^Team/ }));
 
 describe("subPlanProgress", () => {
@@ -166,6 +170,42 @@ describe("team bar progress", () => {
     expect(screen.queryByRole("button", { name: "Details for Searcher" })).toBeNull();
     expect(screen.queryByTitle("Change Searcher's model")).toBeNull();
     expect(screen.getByRole("button", { name: "Unmute Searcher" })).toBeTruthy();
+  });
+
+  it("Stop on a group row asks once, then stops that group and its sub-groups", async () => {
+    const group: GroupMemberDto = { ...member("Art", "sp-tools"), member_conv_id: "art-group", is_group: true };
+    const art = (name: string): GroupMemberDto => ({
+      ...member(name, "sp-search"), observation: { ...member(name, "sp-search").observation!, group_id: "art-group" },
+    });
+    api.group_members.mockImplementation(async (id: string) =>
+      ({ ok: true, members: id === "art-group" ? [art("Modeler"), art("Texturer")] : [group] }));
+    api.get_plan.mockResolvedValue({ ok: true, plan: plan(), progress: {} });
+    api.group_stop.mockResolvedValue({ ok: true, stopped: 2, groups: 1 });
+    running.ids = new Set(["modeler", "texturer"]);
+    render(<GroupMemberStrip groupId="group" members={[group]} onMembersChange={() => {}} onOpenMember={() => {}} />);
+    openTeam();
+    await screen.findByText("Modeler");
+    const stop = screen.getByRole("button", { name: "Stop Art" });
+    expect((stop as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(stop);
+    expect(screen.getByText("Stop 2 running agents in Art and its sub-groups?")).toBeTruthy();
+    expect(api.group_stop).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await screen.findByText("Stopped 2");
+    expect(api.group_stop).toHaveBeenCalledTimes(1);
+    expect(api.group_stop).toHaveBeenCalledWith("art-group");
+  });
+
+  it("Stop is disabled when nothing in the group runs", async () => {
+    const group: GroupMemberDto = { ...member("Art", "sp-tools"), member_conv_id: "art-group", is_group: true };
+    api.group_members.mockImplementation(async (id: string) =>
+      ({ ok: true, members: id === "art-group" ? [] : [group] }));
+    api.get_plan.mockResolvedValue({ ok: true, plan: plan(), progress: {} });
+    render(<GroupMemberStrip groupId="group" members={[group]} onMembersChange={() => {}} onOpenMember={() => {}} />);
+    openTeam();
+    const stop = await screen.findByRole("button", { name: "Stop Art" });
+    expect((stop as HTMLButtonElement).disabled).toBe(true);
+    expect(stop.getAttribute("title")).toBe("Nothing in Art is running");
   });
 
   it("shows no progress for an assignment into a different plan", async () => {

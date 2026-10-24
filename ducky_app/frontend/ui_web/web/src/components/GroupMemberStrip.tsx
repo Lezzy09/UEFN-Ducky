@@ -170,7 +170,12 @@ function writeOpen(groupId: string, open: boolean): void {
   }
 }
 
-type Editor = { key: string; kind: "model" | "lane" | "details" };
+type Editor = { key: string; kind: "model" | "lane" | "details" | "stop" };
+
+/** The one-line confirm before a whole group is stopped. */
+export function stopGroupQuestion(running: number, name: string): string {
+  return `Stop ${running} running agent${running === 1 ? "" : "s"} in ${name} and its sub-groups?`;
+}
 
 /**
  * A group chat's team: one compact bar (who is in, who is running or waiting, Add) and,
@@ -636,6 +641,17 @@ export function GroupMemberStrip({
   // Mute flags set here win over the sidebar's until its next reload brings them in.
   const [mutedNow, setMutedNow] = useState<Record<string, boolean>>({});
   const isMuted = (node: RosterNode): boolean => mutedNow[node.id] ?? node.muted;
+  const [stoppedNote, setStoppedNote] = useState<Record<string, string>>({});
+  const runningIn = (node: RosterNode) => rosterAgents(node.children).filter((a) => runningIds.has(a.id)).length;
+  const stopGroup = async (node: RosterNode) => {
+    setEditor(null);
+    const res = await getApi()?.group_stop?.(node.id).catch(() => null);
+    if (!res?.ok) {
+      setError(res?.error || `Could not stop ${node.name}`);
+      return;
+    }
+    setStoppedNote((prev) => ({ ...prev, [node.key]: `Stopped ${res.stopped ?? 0}` }));
+  };
   const toggleMute = async (node: RosterNode) => {
     const next = !isMuted(node);
     const res = await getApi()?.set_muted?.(node.id, next).catch(() => null);
@@ -666,6 +682,15 @@ export function GroupMemberStrip({
 
   const renderEditor = (node: RosterNode) => {
     if (!editor || editor.key !== node.key) return null;
+    if (editor.kind === "stop") {
+      return (
+        <div className="team-roster-editor team-roster-stop-confirm" ref={editorRef} style={{ ["--depth" as string]: node.depth }}>
+          <span className="team-roster-editor-label">{stopGroupQuestion(runningIn(node), node.name)}</span>
+          <button type="button" className="group-member-lane-btn team-roster-stop-yes" onClick={() => void stopGroup(node)}>Stop</button>
+          <button type="button" className="group-member-lane-btn" onClick={() => setEditor(null)}>Cancel</button>
+        </div>
+      );
+    }
     if (editor.kind === "model") {
       return (
         <div className="team-roster-editor" ref={editorRef} style={{ ["--depth" as string]: node.depth }}>
@@ -894,6 +919,19 @@ export function GroupMemberStrip({
             ) : null}
           </span>
           <span className="team-roster-cell team-roster-actions" role="cell">
+            {stoppedNote[node.key] ? <span className="team-roster-muted">{stoppedNote[node.key]}</span> : null}
+            {node.isGroup ? (
+              <button
+                type="button"
+                className="team-roster-icon team-roster-icon--stop"
+                aria-label={`Stop ${node.name}`}
+                title={runningIn(node) ? `Stop everything running in ${node.name} and its sub-groups` : `Nothing in ${node.name} is running`}
+                disabled={busy || runningIn(node) === 0}
+                onClick={() => { setStoppedNote((prev) => ({ ...prev, [node.key]: "" })); setEditor({ key: node.key, kind: "stop" }); }}
+              >
+                <Icons.Stop />
+              </button>
+            ) : null}
             {node.member ? (
               <button
                 type="button"

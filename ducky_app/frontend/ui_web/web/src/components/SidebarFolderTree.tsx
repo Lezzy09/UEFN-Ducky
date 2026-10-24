@@ -110,6 +110,14 @@ function useMutedProgress(
   return progress;
 }
 
+/** Running chats in a folder and every folder inside it (a group's sub-groups). */
+function runningInFolder(folder: FolderItem, running: ReadonlySet<string>): number {
+  return (
+    folder.chats.filter((c) => running.has(c.id)).length +
+    folder.children.reduce((n, child) => n + runningInFolder(child, running), 0)
+  );
+}
+
 /** Mute or unmute a chat or group hub; the sidebar reloads from the change notice. */
 function setMuted(convId: string, muted: boolean) {
   void getApi()?.set_muted?.(convId, muted)?.catch(() => undefined);
@@ -505,6 +513,7 @@ function FolderHeader({
   hasRunningInside,
   waitingChatId = "",
   muted = false,
+  runningCount = 0,
   editing,
   setEditing,
   editInputRef,
@@ -528,6 +537,8 @@ function FolderHeader({
   waitingChatId?: string;
   /** A muted group: one row (name · NN% · MUTED) that opens its hub and never expands. */
   muted?: boolean;
+  /** Running agents in this group and its sub-groups: the hover Stop is live only above 0. */
+  runningCount?: number;
   editing: EditTarget | null;
   setEditing: React.Dispatch<React.SetStateAction<EditTarget | null>>;
   editInputRef: React.RefObject<HTMLInputElement>;
@@ -551,6 +562,13 @@ function FolderHeader({
   const hubId = (folder.groupHubId || "").trim();
   const progress = useMutedProgress(muted && hubId ? { id: hubId, name: folder.name, isGroup: true } : null);
   const label = muted ? [folder.name, progress ? `${progress.pct}%` : "", "MUTED"].filter(Boolean).join(" · ") : folder.name;
+  const [confirmStop, setConfirmStop] = useState(false);
+  const [stoppedNote, setStoppedNote] = useState("");
+  const stopGroup = async () => {
+    setConfirmStop(false);
+    const res = await getApi()?.group_stop?.(hubId).catch(() => null);
+    setStoppedNote(res?.ok ? `Stopped ${res.stopped ?? 0}` : res?.error || "Could not stop");
+  };
 
   const handleChevronToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -558,6 +576,7 @@ function FolderHeader({
   };
 
   return (
+    <>
     <FolderTabHoverCard folder={folder} placement={hoverPlacement}>
       <SidebarTreeRow
         leading={
@@ -595,7 +614,27 @@ function FolderHeader({
         renameInput={
           <input {...renameInputProps(editing, setEditing, editInputRef, onCommitRename, onCancelRename)} />
         }
-        actions={<SidebarHoverActions onRename={onRename} onDelete={onDelete} deleteTitle={deleteLabel} />}
+        actions={
+          <>
+            {hubId ? (
+              <button
+                type="button"
+                className="sidebar-group-stop"
+                aria-label={`Stop ${folder.name}`}
+                title={runningCount ? `Stop everything running in ${folder.name} and its sub-groups` : `Nothing in ${folder.name} is running`}
+                disabled={runningCount === 0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setStoppedNote("");
+                  setConfirmStop(true);
+                }}
+              >
+                <Icons.Stop />
+              </button>
+            ) : null}
+            <SidebarHoverActions onRename={onRename} onDelete={onDelete} deleteTitle={deleteLabel} />
+          </>
+        }
         contextMenu={
           menu ? (
             <ContextMenu
@@ -637,6 +676,20 @@ function FolderHeader({
         }}
       />
     </FolderTabHoverCard>
+      {confirmStop || stoppedNote ? (
+        <div className="sidebar-group-stop-confirm" role={confirmStop ? "alertdialog" : "status"}>
+          {confirmStop ? (
+            <>
+              <span>{`Stop ${runningCount} running agent${runningCount === 1 ? "" : "s"} in ${folder.name} and its sub-groups?`}</span>
+              <button type="button" onClick={() => void stopGroup()}>Stop</button>
+              <button type="button" onClick={() => setConfirmStop(false)}>Cancel</button>
+            </>
+          ) : (
+            <span>{stoppedNote}</span>
+          )}
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -756,6 +809,7 @@ const FolderGroup = memo(function FolderGroupImpl({
         hasRunningInside={hasRunningInside}
         waitingChatId={waitingChatId}
         muted={muted}
+        runningCount={hubId ? runningInFolder(folder, runningChatIds) : 0}
         editing={editing}
         setEditing={setEditing}
         editInputRef={editInputRef}

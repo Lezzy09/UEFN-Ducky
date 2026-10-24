@@ -44,10 +44,11 @@ const api = {
   group_members: vi.fn(async (id: string) => ({ ok: true, members: rosters[id] || [] })),
   get_plan: vi.fn(async () => ({ ok: true, plan })),
   set_muted: vi.fn(async (id: string, muted: boolean) => ({ ok: true, id, muted })),
+  group_stop: vi.fn(async () => ({ ok: true, stopped: 2, groups: 2 })),
 };
 
 /** A muted group (Art), and an open group (Team) holding a muted chat and a muted sub-group (Code). */
-function Harness({ onChatSelect }: { onChatSelect: (c: { id: string }) => void }) {
+function Harness({ onChatSelect, running = new Set() }: { onChatSelect: (c: { id: string }) => void; running?: Set<string> }) {
   const [folders, setFolders] = useState<FolderItem[]>([
     folder("Art", [{ id: "art-m1", name: "art-m1" }], [], { groupHubId: "art-hub", muted: true }),
     folder("Team", [{ id: "narr", name: "Narrative lead", muted: true, parentConvId: "team-hub" }], [
@@ -59,7 +60,7 @@ function Harness({ onChatSelect }: { onChatSelect: (c: { id: string }) => void }
   return (
     <SidebarFolderTree
       folders={folders} setFolders={setFolders} rootChats={rootChats} setRootChats={setRootChats}
-      archiveChats={[]} load={async () => {}} activeChats={[]} runningChatIds={new Set()}
+      archiveChats={[]} load={async () => {}} activeChats={[]} runningChatIds={running}
       onChatSelect={onChatSelect} newlyCreatedIds={new Set()} editing={editing} setEditing={setEditing}
       editInputRef={createRef<HTMLInputElement>()} onCommitRename={() => {}} onCancelRename={() => {}}
       onRenameFolder={() => {}} onDeleteFolder={() => {}} onRenameChat={() => {}} onDeleteChat={() => {}}
@@ -103,6 +104,20 @@ describe("muted rows in the Duckies tree", () => {
     expect(screen.queryByText("Verse lead")).toBeNull();
     expect(screen.getByText("Team")).toBeTruthy();
     expect(screen.getByText("Narrative lead")).toBeTruthy();
+  });
+
+  it("a group row's Stop asks once, then stops that group by its hub; disabled when nothing runs", async () => {
+    render(<Harness onChatSelect={() => {}} running={new Set(["narr", "verse"])} />);
+    const stop = await screen.findByRole("button", { name: "Stop Team" });
+    expect((stop as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Stop Art" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(stop);
+    expect(screen.getByText("Stop 2 running agents in Team and its sub-groups?")).toBeTruthy();
+    expect(api.group_stop).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await screen.findByText("Stopped 2");
+    expect(api.group_stop).toHaveBeenCalledTimes(1);
+    expect(api.group_stop).toHaveBeenCalledWith("team-hub");
   });
 
   it("right-click Unmute and Mute call set_muted on the hub or the chat", async () => {
