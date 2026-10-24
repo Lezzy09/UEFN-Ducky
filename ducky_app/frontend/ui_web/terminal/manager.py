@@ -12,6 +12,7 @@ import uuid
 from typing import Any, Callable
 
 from frontend.settings import PanelSettings
+from frontend.ui_web.terminal import repo_lock
 from frontend.ui_web.terminal.bridge import TerminalBridge
 from frontend.ui_web.terminal.session import (
     _OUTPUT_RING_CHARS,
@@ -34,6 +35,18 @@ _MAX_CHAT_SHELLS = 6
 # terminal now closes about a minute after it finishes.
 _AGENT_IDLE_CLOSE_S = 60.0
 _REAP_EVERY_S = 15.0
+# A waited command (or its Allow card) stops waiting when the person writes: checked after
+# the first 10 s, then every 2 s. The command keeps running (Oct 24 2026: 16 runs over 120 s
+# in 3 h held the person's message until each ended).
+_STEER_FIRST_S = 10.0
+_STEER_EVERY_S = 2.0
+_SO_FAR_CHARS = 4096
+# terminal_busy pushes per session: at most one per half second (the last value always goes).
+_BUSY_PUSH_GAP_S = 0.5
+_STEER_NOTE = ("The person sent a message. Read it in this result, then check the command later "
+               "with ducky_terminal_read_output.")
+_STEER_NOTE_APPROVAL = ("The person sent a message. Read it in this result. The command runs once its "
+                        "Allow/Deny card is answered; check it later with ducky_terminal_read_output.")
 _manager: "TerminalManager | None" = None
 _manager_lock = threading.Lock()
 
@@ -68,6 +81,8 @@ class TerminalManager:
         # Terminals a running workflow still needs: never closed as idle until it lets go.
         self._held: set[str] = set()
         self._push: Callable[[dict[str, Any]], None] | None = None
+        # session id -> {"value", "sent", "at", "timer"}: coalesced terminal_busy pushes.
+        self._busy_push: dict[str, dict[str, Any]] = {}
 
     def set_push(self, push: Callable[[dict[str, Any]], None] | None) -> None:
         self._push = push
@@ -150,6 +165,7 @@ class TerminalManager:
 
             session._on_output = on_output  # type: ignore[attr-defined]
             session._on_exit = on_exit  # type: ignore[attr-defined]
+            session._on_busy = lambda busy, sid=session.id: self._busy_changed(sid, busy)  # type: ignore[attr-defined]
             shell_fallback = False
             try:
                 session.spawn()
@@ -318,8 +334,44 @@ class TerminalManager:
         ids = dict.fromkeys(str(sid).strip() for sid in session_ids or [] if str(sid).strip())
         return {"ok": True, "states": {sid: self.busy_state(sid, snapshot) for sid in ids}}
 
+    def _busy_changed(self, session_id: str, busy: bool) -> None:
+        """Push terminal_busy when a session's busy flag flips, so the web needs no polling;
+        flips closer than _BUSY_PUSH_GAP_S are joined and the latest value goes after the gap."""
+        with self._lock:
+            if session_id not in self._sessions:
+                return  # closed: its shell ending flips busy off, nobody needs that
+            state = self._busy_push.setdefault(session_id, {"sent": False, "at": 0.0, "timer": None})
+            state["value"] = bool(busy)
+            if state["timer"] is not None:
+                return
+            wait = state["at"] + _BUSY_PUSH_GAP_S - time.monotonic()
+            if wait > 0:
+                timer = threading.Timer(wait, self._flush_busy, args=(session_id,))
+                timer.daemon = True
+                state["timer"] = timer
+                timer.start()
+                return
+        self._flush_busy(session_id)
+
+    def _flush_busy(self, session_id: str) -> None:
+        with self._lock:
+            state = self._busy_push.get(session_id)
+            if state is None:
+                return
+            state["timer"] = None
+            value = state["value"]
+            if value == state["sent"]:
+                return
+            state["sent"] = value
+            state["at"] = time.monotonic()
+        self._emit({"type": "terminal_busy", "session_id": session_id, "busy": value})
+
     def kill(self, session_id: str, *, push_close: bool = True) -> dict[str, Any]:
         entry = self._pop_session(session_id)
+        with self._lock:
+            state = self._busy_push.pop(session_id, None)
+        if state and state.get("timer") is not None:
+            state["timer"].cancel()
         if entry is None:
             return {"ok": False, "error": "session not found"}
         if push_close:
@@ -458,9 +510,9 @@ class TerminalManager:
         else:
             # Run after signaling approval so agent waiters unblock; avoid blocking UI on completion.
             threading.Thread(
-                target=session.run_command,
-                args=(pending.command,),
-                kwargs={"background": False, "timeout_s": pending.timeout_s},
+                target=self._run_command,
+                args=(session, pending.command),
+                kwargs={"timeout_s": pending.timeout_s, "conv_id": pending.conv_id},
                 daemon=True,
                 name=f"terminal-run-{request_id}",
             ).start()
@@ -476,12 +528,29 @@ class TerminalManager:
         pending.decided.set()
         return {"ok": True, "request_id": request_id, "approved": False, "reason": reason}
 
-    def wait_for_approval(self, request_id: str, timeout_s: float = _APPROVAL_TIMEOUT_S) -> dict[str, Any]:
+    def wait_for_approval(
+        self,
+        request_id: str,
+        timeout_s: float = _APPROVAL_TIMEOUT_S,
+        *,
+        steer: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        """steer: says the person wrote; the card then stays up and Allow runs the command
+        with nobody waiting here ({"waiting_for_approval": True})."""
         with self._lock:
             pending = self._pending.get(request_id) or self._decided.pop(request_id, None)
         if pending is None:
             return {"ok": False, "error": "request not found"}
-        if not pending.decided.wait(timeout=max(1.0, float(timeout_s))):
+        outcome = _wait_or_steer(pending.decided, max(1.0, float(timeout_s)), steer)
+        if outcome == "steer":
+            with self._lock:
+                left = request_id in self._pending
+                if left:
+                    pending.runner_waits = False
+            if left:
+                return {"ok": False, "waiting_for_approval": True}
+            pending.decided.wait(5.0)  # answered just now: carry on as if waited
+        elif outcome == "timeout":
             self.reject_command(request_id, reason="command not approved (timed out)")
             return {"ok": False, "error": "command not approved (timed out)"}
         if not pending.approved:
@@ -502,13 +571,17 @@ class TerminalManager:
         approval_timeout_s: float = _APPROVAL_TIMEOUT_S,
         command_timeout_s: float = 300.0,
         auto_approve: bool = False,
+        steer_pending: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """auto_approve: the chat said "Allow everything", so no Allow/Deny card. A command
         the chat said "Always allow" for runs without one too.
 
-        wait (not background): the command runs on this thread and the result is its
-        exit code; a command that fails is ok=False."""
+        wait (not background): the result is the command's exit code; a command that fails
+        is ok=False. When the person writes first (steer_pending, default: the chat's steer
+        inbox) it comes back early with still_running (or waiting_for_approval) and the
+        command goes on as a background one would."""
         runs_here = wait and not background
+        steer = steer_pending if steer_pending is not None else _steer_check(conv_id)
         if not auto_approve and conv_id:
             known = self.get_session(session_id)
             auto_approve = _chat_always_allows(conv_id, command, str(getattr(known, "cwd", "") or ""))
@@ -528,7 +601,16 @@ class TerminalManager:
         if auto_approve:
             approval = self.approve_command(request_id)
         else:
-            approval = self.wait_for_approval(request_id, timeout_s=approval_timeout_s)
+            approval = self.wait_for_approval(request_id, timeout_s=approval_timeout_s, steer=steer)
+        if approval.get("waiting_for_approval"):
+            return {
+                "ok": True,
+                "waiting_for_approval": True,
+                "request_id": request_id,
+                "session_id": session_id,
+                "command_id": request_id,
+                "note": _STEER_NOTE_APPROVAL,
+            }
         if not approval.get("ok"):
             return approval
         session = self.get_session(session_id)
@@ -541,7 +623,29 @@ class TerminalManager:
                 "session_id": session_id,
                 "status": "running",
             }
-        ran = session.run_command(command.strip(), background=False, timeout_s=command_timeout_s)
+        done = threading.Event()
+        ran: dict[str, Any] = {}
+
+        def work() -> None:
+            try:
+                ran.update(self._run_command(session, command.strip(), timeout_s=command_timeout_s, conv_id=conv_id))
+            except Exception as exc:
+                ran.update({"ok": False, "error": str(exc)})
+            finally:
+                done.set()
+
+        threading.Thread(target=work, daemon=True, name=f"terminal-run-{request_id}").start()
+        if _wait_or_steer(done, None, steer) == "steer":
+            so_far = agent_command_output(session.read_output_tail(max_chars=_OUTPUT_RING_CHARS))
+            return {
+                "ok": True,
+                "still_running": True,
+                "request_id": request_id,
+                "session_id": session_id,
+                "command_id": request_id,
+                "output_so_far": so_far[-_SO_FAR_CHARS:],
+                "note": _STEER_NOTE,
+            }
         # A command that printed nothing reports nothing. Falling back to the raw screen gave
         # the agent escape codes and its own echoed command instead (a silent failed push).
         tail = ran["output_tail"] if "output_tail" in ran else agent_command_output(session.read_output_tail(max_chars=_OUTPUT_RING_CHARS))
@@ -558,6 +662,25 @@ class TerminalManager:
         if code not in (None, 0):
             return {**out, "ok": False, "error": f"Command failed (exit code {code})."}
         return out
+
+    def _run_command(self, session: TerminalSession, command: str, *, timeout_s: float, conv_id: str = "") -> dict[str, Any]:
+        """session.run_command (waited); a test or build run holds its repo's lock until it
+        really ends (an early-returned one too), so a second one in that repo waits."""
+        # ponytail: background commands are never locked; their end can't be seen.
+        if not repo_lock.is_heavy(command):
+            return session.run_command(command, background=False, timeout_s=timeout_s)
+        repo = repo_lock.repo_of(str(getattr(session, "cwd", "") or "."))
+
+        def waiting(holder: str) -> None:
+            note = getattr(session, "note", None)
+            if note:
+                note(f"Waiting for {holder}'s test run in this repo")
+
+        repo_lock.acquire(repo, _chat_title(conv_id) or "another terminal", on_wait=waiting)
+        try:
+            return session.run_command(command, background=False, timeout_s=timeout_s)
+        finally:
+            repo_lock.release(repo)
 
     def read_output(self, session_id: str, max_chars: int = 8000) -> dict[str, Any]:
         session = self.get_session(session_id)
@@ -610,6 +733,38 @@ class TerminalManager:
         entry.session.kill()
         entry.bridge.stop()
         return entry
+
+
+def _steer_check(conv_id: str) -> Callable[[], bool] | None:
+    if not conv_id:
+        return None
+
+    def queued() -> bool:
+        from frontend.ui_web.steer import has_queued
+
+        return has_queued(conv_id)
+
+    return queued
+
+
+def _wait_or_steer(event: threading.Event, timeout_s: float | None, steer: Callable[[], bool] | None) -> str:
+    """'done' when the event is set, 'timeout' past timeout_s (None: never), 'steer' when
+    steer() says the person wrote: asked after _STEER_FIRST_S, then every _STEER_EVERY_S."""
+    deadline = None if timeout_s is None else time.monotonic() + timeout_s
+    step = _STEER_FIRST_S
+    while True:
+        if deadline is not None:
+            step = min(step, max(0.0, deadline - time.monotonic()))
+        if event.wait(step if steer or deadline is not None else None):
+            return "done"
+        if deadline is not None and time.monotonic() >= deadline:
+            return "timeout"
+        try:
+            if steer and steer():
+                return "steer"
+        except Exception:
+            pass
+        step = _STEER_EVERY_S
 
 
 def _card_offers(command: str, cwd: str) -> dict[str, Any]:

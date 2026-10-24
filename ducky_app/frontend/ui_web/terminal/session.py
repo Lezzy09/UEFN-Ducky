@@ -320,6 +320,8 @@ class TerminalSession:
         self._rows = 30
         self._busy = False
         self._busy_lock = threading.Lock()
+        # Called with the new value when busy flips (TerminalManager pushes terminal_busy).
+        self._on_busy: Callable[[bool], None] | None = None
         self._exit_code: int | None = None
         self._error = ""
         self._pending_done: threading.Event | None = None
@@ -408,8 +410,7 @@ class TerminalSession:
         except Exception:
             code = 1
         self._exit_code = normalize_exit_code(code)
-        with self._busy_lock:
-            self._busy = False
+        self.set_busy(False)
         if self._pending_done is not None and not self._pending_done.is_set():
             self._pending_exit_code = code
             self._pending_done.set()
@@ -504,7 +505,13 @@ class TerminalSession:
 
     def set_busy(self, busy: bool) -> None:
         with self._busy_lock:
+            changed = self._busy != busy
             self._busy = busy
+        if changed and self._on_busy:
+            try:
+                self._on_busy(busy)
+            except Exception:
+                pass
 
     def _keep_output(self, text: str) -> None:
         """Add to the kept history (caller holds _output_cond); the oldest chunks go past the cap."""
@@ -521,6 +528,18 @@ class TerminalSession:
             self._output_chars += len(text)
         while self._output_chars > _OUTPUT_RING_CHARS and len(ring) > 1:
             self._output_chars -= len(ring.popleft())
+
+    def note(self, text: str) -> None:
+        """A line from Ducky in the terminal (shown in its tab and in the kept history)."""
+        line = f"\r\n[Ducky] {text}\r\n"
+        with self._output_cond:
+            self._keep_output(line)
+            self._output_cond.notify_all()
+        if self._on_output:
+            try:
+                self._on_output(line)
+            except Exception:
+                pass
 
     def read_output_tail(self, max_chars: int = 8000) -> str:
         with self._output_cond:
