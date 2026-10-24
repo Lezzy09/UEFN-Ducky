@@ -263,7 +263,8 @@ def test_evaluate_awaits_the_page_promise_over_devtools() -> None:
     from frontend.ui_web import browser_overlay as bo
 
     calls, fake = _evaluate_pane(json.dumps({"result": {"type": "object", "value": {"ok": True, "w": 1080}}}))
-    pane = bo._Pane(pane_id="ev", window=fake.window, control=fake.control, ready=True)
+    pane = bo._Pane(pane_id="ev", window=fake.window, control=fake.control, ready=True,
+                    url="http://127.0.0.1:8123/")
     bo._panes["ev"] = pane
     try:
         assert bo.evaluate("ev", "(async () => ({ok: true}))()") == {"ok": True, "value": {"ok": True, "w": 1080}}
@@ -273,8 +274,35 @@ def test_evaluate_awaits_the_page_promise_over_devtools() -> None:
                                       "returnByValue": True}
         bo._panes["ev"] = bo._Pane(pane_id="ev", window=fake.window, control=_evaluate_pane(json.dumps(
             {"exceptionDetails": {"text": "Uncaught", "exception": {"description": "ReferenceError: x"}}}))[1].control,
-            ready=True)
+            ready=True, url="https://www.youtube.com/watch?v=x")
         assert bo.evaluate("ev", "x") == {"ok": False, "error": "ReferenceError: x"}
         assert bo.evaluate("missing", "1")["error"] == "pane not open"
+    finally:
+        bo._panes.pop("ev", None)
+
+
+def test_devtools_refuses_sites_the_person_uses(monkeypatch) -> None:
+    """No script or capture on a signed-in site (Gmail, X) until the person allows it."""
+    from frontend.ui_web import browser_overlay as bo
+    from frontend.ui_web.panel_httpd import PANEL_UI_HTTP_PORT
+
+    calls, fake = _evaluate_pane("{}")
+    monkeypatch.setattr(bo, "agent_sites", lambda: [])
+    try:
+        for url in ("https://mail.google.com/", "https://x.com/home", "https://evilyoutube.com/",
+                    f"http://127.0.0.1:{PANEL_UI_HTTP_PORT}/", "about:blank", ""):
+            bo._panes["ev"] = bo._Pane(pane_id="ev", window=fake.window, control=fake.control, ready=True, url=url)
+            assert "only runs on" in bo.evaluate("ev", "document.cookie")["error"], url
+        assert calls == []
+        assert bo.script_allowed("https://consent.youtube.com/m")
+        assert bo.script_allowed("http://localhost:3000/")
+        monkeypatch.setattr(bo, "agent_sites", lambda: ["x.com"])
+        assert bo.script_allowed("https://x.com/home") and not bo.script_allowed("https://mail.google.com/")
+        assert bo.site_of("https://www.x.com/home") == "x.com"
+        monkeypatch.setattr(bo, "agent_sites", lambda: ["*"])
+        assert bo.script_allowed("https://www.linkedin.com/feed/")
+        assert not bo.script_allowed("https://accounts.google.com/signin")  # account pages stay the person's
+        assert not bo.script_allowed("https://myaccount.google.com/security")
+        assert not bo.script_allowed(f"http://127.0.0.1:{PANEL_UI_HTTP_PORT}/")  # never Ducky's own UI
     finally:
         bo._panes.pop("ev", None)

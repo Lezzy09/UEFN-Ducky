@@ -139,6 +139,67 @@ def sane_scale(sx: float, sy: float) -> tuple[float, float]:
     return (sx, sy)
 
 
+# Pages Ducky's own code may script or capture over DevTools: sandbox dev servers on loopback,
+# the YouTube player (video frames) and the sites the person let agents use (browser pref
+# ``agentSites``, comma-separated hosts or ``*`` for every site, only ever written from their
+# answer in a chat).
+_SCRIPT_DOMAINS = ("youtube.com",)
+
+
+def agent_sites() -> list[str]:
+    try:
+        from frontend.ui_web.plugin_host_api import prefs_plugin_get
+
+        raw = str(prefs_plugin_get("browser").get("agentSites") or "")
+    except Exception:
+        return []
+    return [h for h in (part.strip().lower() for part in raw.split(",")) if h]
+
+
+# Account and payment pages agents never script, even with every site allowed: there an
+# agent fooled by a page could change a password, 2-step, recovery email or card.
+_NEVER_AGENT_HOSTS = (
+    "accounts.google.com", "myaccount.google.com", "passwords.google.com", "pay.google.com",
+    "payments.google.com", "login.live.com", "account.live.com", "account.microsoft.com",
+    "login.microsoftonline.com", "appleid.apple.com", "account.apple.com", "www.paypal.com",
+)
+
+
+def sensitive_site(url: str) -> bool:
+    try:
+        host = (urlparse((url or "").strip()).hostname or "").lower()
+    except ValueError:
+        return False
+    return host in _NEVER_AGENT_HOSTS
+
+
+def site_of(url: str) -> str:
+    """The host a site grant is for: ``https://www.x.com/home`` -> ``x.com``."""
+    try:
+        host = (urlparse((url or "").strip()).hostname or "").lower()
+    except ValueError:
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def script_allowed(url: str) -> bool:
+    try:
+        parsed = urlparse((url or "").strip())
+    except ValueError:
+        return False
+    if (parsed.scheme or "").lower() not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if host in ("127.0.0.1", "localhost", "::1"):
+        return not is_app_ui_url(url)
+    if sensitive_site(url):
+        return False
+    sites = agent_sites()
+    if "*" in sites:
+        return True
+    return any(host == d or host.endswith("." + d) for d in (*_SCRIPT_DOMAINS, *sites))
+
+
 def _is_allowed_url(url: str) -> bool:
     low = (url or "").strip().lower()
     if not low.startswith(("http://", "https://", "about:")):
@@ -325,6 +386,8 @@ def runtime_info() -> dict[str, Any]:
         "App UI self-embed / Droste navigations blocked",
         "Bad TLS certificates cancelled (not auto-trusted)",
         "Only http(s) and about: navigations allowed",
+        "Password saving off",
+        "Plugin scripts and captures only on sandbox localhost pages, YouTube and sites you let agents use",
     ]
     if cdp_on:
         protections.append(
@@ -342,7 +405,7 @@ def runtime_info() -> dict[str, Any]:
         "user_agent": user_agent,
         "secure_profile": True,
         "isolation": "Separate UserDataFolder — not your system Chrome profile",
-        "https_only_nav": True,
+        "https_only_nav": False,  # http is allowed; the toolbar marks it Not secure
         "self_embed_blocked": True,
         "host_objects": False,
         "web_message": False,
@@ -413,6 +476,9 @@ def devtools(pane_id: str, method: str, params: dict[str, Any] | None = None, ti
         pane = _panes.get((pane_id or "").strip())
     if pane is None or not pane.ready or pane.control is None:
         return {"ok": False, "error": "pane not open"}
+    # ponytail: checks the last SourceChanged url; a navigation in flight can race it.
+    if not script_allowed(pane.url):
+        return {"ok": False, "error": "DevTools only runs on sandbox localhost pages, YouTube and sites the person allowed"}
     if _on_ui_thread(pane.window):
         return {"ok": False, "error": "a DevTools call cannot wait on the UI thread"}
     body = json.dumps(params or {})
@@ -1038,6 +1104,10 @@ def _create_control(pane: _Pane) -> None:
                 try:
                     core.Settings.AreHostObjectsAllowed = False
                     core.Settings.IsWebMessageEnabled = False
+                except Exception:
+                    pass
+                try:
+                    core.Settings.IsPasswordAutosaveEnabled = False
                 except Exception:
                     pass
                 core.SourceChanged += on_source_changed
