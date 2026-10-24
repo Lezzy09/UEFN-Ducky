@@ -430,6 +430,8 @@ function ChatViewBody({ layoutMode, sidebarRefresh, projectSlug, projectPath }: 
     installPanelPushBus();
     return subscribePanelPush((event) => {
       if (event.type !== "browser_pane_new_window") return;
+      // A page tab's popup (`<tab>::<page tab>`) opens as a page tab in that Browser tab.
+      if ((event.pane_id ?? "").includes("::")) return;
       const source = parsePluginUiTabId(event.pane_id ?? "");
       const url = event.url ?? "";
       if (!source || !url) return;

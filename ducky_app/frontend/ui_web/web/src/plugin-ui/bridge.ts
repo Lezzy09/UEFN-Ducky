@@ -73,9 +73,19 @@ function writePluginPref(pluginId: string, id: string, value: unknown): void {
   }
 }
 
-/** Pane identity is ALWAYS the plugin tab id — a plugin can only drive its own pane. */
-function browserPaneId(ctx: BridgeContext): string {
-  return ctx.tabId || pluginUiTabId(ctx.pluginId, ctx.panelId);
+const PAGE_TAB = /^[A-Za-z0-9_-]{1,24}$/;
+
+/** Pane identity is ALWAYS under the plugin tab id — a plugin can only drive its own panes.
+ * `params.tab` picks one of the page tabs inside it: `<tab id>::<page tab>`. */
+function browserPaneId(ctx: BridgeContext, params?: Record<string, unknown>): string {
+  const base = ctx.tabId || pluginUiTabId(ctx.pluginId, ctx.panelId);
+  const tab = typeof params?.tab === "string" ? params.tab : "";
+  return PAGE_TAB.test(tab) ? `${base}::${tab}` : base;
+}
+
+/** The editor tab's own panes: its id, or its page tabs `<tab id>::<page tab>`. */
+export function ownsBrowserPane(tabId: string, paneId: string): boolean {
+  return paneId === tabId || paneId.startsWith(`${tabId}::`);
 }
 
 /** "Open in new tab": ChatView stashes the popup URL for the freshly opened
@@ -206,6 +216,91 @@ if (typeof window !== "undefined") {
   window.__duckyScrubPluginShell = scrubPluginShellInterference;
 }
 
+/** Anything of Ducky's own UI drawn over a pane (a dialog and its dim layer, a menu, a
+ * tooltip or hover card): the native pane can't go under HTML, so it hides while a
+ * snapshot of the page stands in for it. */
+const FLOATING_SELECTOR =
+  '[role="dialog"],[role="alertdialog"],[role="tooltip"],[role="menu"],[role="listbox"],' +
+  '[aria-modal="true"],[data-radix-popper-content-wrapper],.modal-backdrop';
+const COVER_CHECK_MS = 120;
+/** How long the live page may stay up while its snapshot is on the way. */
+const SNAPSHOT_WAIT_MS = 300;
+
+type CoverState = { covered: boolean; checkedAt: number; since: number; shot: "none" | "pending" | "shown" };
+const coverStates = new Map<string, CoverState>();
+
+export function paneCoveredByHtml(
+  iframe: HTMLIFrameElement, x: number, y: number, w: number, h: number,
+): boolean {
+  if (w < 8 || h < 8) return false;
+  for (const px of [x + 3, x + w * 0.25, x + w / 2, x + w * 0.75, x + w - 3]) {
+    for (const py of [y + 3, y + h / 2, y + h - 3]) {
+      const hit = document.elementFromPoint(px, py);
+      if (hit && hit !== iframe && !hit.contains(iframe)) return true;
+    }
+  }
+  for (const el of document.querySelectorAll<HTMLElement>(FLOATING_SELECTOR)) {
+    if (el.contains(iframe)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2 || r.right <= x || r.left >= x + w || r.bottom <= y || r.top >= y + h) continue;
+    const st = getComputedStyle(el);
+    if (st.visibility === "hidden" || st.display === "none" || Number(st.opacity) < 0.05) continue;
+    return true;
+  }
+  return false;
+}
+
+function postPaneSnapshot(iframe: HTMLIFrameElement, paneId: string, data: string): void {
+  iframe.contentWindow?.postMessage(
+    { channel: BRIDGE_CHANNEL, event: { type: "browser_pane_snapshot", pane_id: paneId, data } }, "*");
+}
+
+/** False while HTML covers the pane and its snapshot is up (or took too long). */
+function showPaneUncovered(paneId: string, iframe: HTMLIFrameElement, x: number, y: number, w: number, h: number): boolean {
+  const now = Date.now();
+  let st = coverStates.get(paneId);
+  if (!st) {
+    st = { covered: false, checkedAt: 0, since: 0, shot: "none" };
+    coverStates.set(paneId, st);
+  }
+  if (now - st.checkedAt >= COVER_CHECK_MS) {
+    st.checkedAt = now;
+    const covered = paneCoveredByHtml(iframe, x, y, w, h);
+    if (covered && !st.covered) {
+      st.since = now;
+      st.shot = "pending";
+      const state = st;
+      void getApi()?.browser_pane_snapshot?.(paneId)
+        .then((res) => {
+          if (state.covered && res?.ok && res.data) {
+            postPaneSnapshot(iframe, paneId, res.data);
+            state.shot = "shown";
+            lastSentBounds.delete(paneId);
+          }
+        })
+        .catch(() => undefined);
+    } else if (!covered && st.covered) {
+      if (st.shot === "shown") setTimeout(() => postPaneSnapshot(iframe, paneId, ""), 80);
+      st.shot = "none";
+    }
+    st.covered = covered;
+  }
+  if (!st.covered) return true;
+  return st.shot === "pending" && now - st.since < SNAPSHOT_WAIT_MS;
+}
+
+/** Re-pin every pane this editor tab owns (its page tabs, or its one pane). */
+export function pushOwnBrowserPanes(tabId: string, iframe?: HTMLIFrameElement | null): void {
+  let any = false;
+  for (const id of paneInsets.keys()) {
+    if (id !== tabId && ownsBrowserPane(tabId, id)) {
+      any = true;
+      pushBrowserPaneBounds(id, iframe);
+    }
+  }
+  if (!any) pushBrowserPaneBounds(tabId, iframe);
+}
+
 /** Re-pin the native pane from the current iframe rect + last reported inset. */
 export function pushBrowserPaneBounds(tabId: string, iframe?: HTMLIFrameElement | null): void {
   if (isRemote()) return;
@@ -230,11 +325,11 @@ export function pushBrowserPaneBounds(tabId: string, iframe?: HTMLIFrameElement 
   const ih = el.clientHeight || rect.height;
   if (iw < 4 || ih < 4) return;
   const { left, top, right, bottom, visible: insetVisible } = entry.inset;
-  const visible = browserUiCoverDepth > 0 ? false : insetVisible;
   const x = rect.x + left;
   const y = rect.y + top;
   const w = Math.max(iw - left - right, 0);
   const h = Math.max(ih - top - bottom, 0);
+  const visible = browserUiCoverDepth > 0 ? false : insetVisible && showPaneUncovered(tabId, el, x, y, w, h);
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const key = [x, y, w, h, vw, vh, visible ? 1 : 0]
@@ -269,40 +364,62 @@ export function beginBrowserPaneMount(tabId: string): void {
   if (isRemote()) return;
   // Immediately hide every other native pane so a stale YouTube layer cannot
   // sit on top of this tab's toolbar while we wait for the first bounds tick.
+  // Page tabs that were on screen when this tab was left come back on screen.
+  for (const id of shownBeforeUnmount.get(tabId) ?? []) {
+    const own = paneInsets.get(id);
+    if (own) own.inset.visible = true;
+    lastSentBounds.delete(id);
+  }
+  shownBeforeUnmount.delete(tabId);
   const api = getApi();
   if (api?.browser_pane_list) {
     void api.browser_pane_list().then((res) => {
       for (const p of res?.panes ?? []) {
         const id = p.pane_id;
-        if (!id || id === tabId) continue;
+        if (!id || ownsBrowserPane(tabId, id)) continue;
         void api.browser_pane_set_bounds?.(id, 0, 0, 0, 0, 0, 0, false);
       }
     });
   }
 }
 
+/** Page tabs (`<tab>::<page tab>`) that were visible when their editor tab was left. */
+const shownBeforeUnmount = new Map<string, string[]>();
+
 /** Unmount (tab switch): hide native pane, but ignore the hide if we remounted. */
 export function hideBrowserPaneOnUnmount(tabId: string): void {
   const hideGen = paneMountGen.get(tabId) ?? 0;
-  lastSentBounds.delete(tabId);
-  const entry = paneInsets.get(tabId);
-  if (entry) entry.inset.visible = false;
+  const subs = [...paneInsets.keys()].filter((id) => id !== tabId && ownsBrowserPane(tabId, id));
+  shownBeforeUnmount.set(tabId, subs.filter((id) => paneInsets.get(id)?.inset.visible));
+  for (const id of [tabId, ...subs]) {
+    lastSentBounds.delete(id);
+    const entry = paneInsets.get(id);
+    if (entry) entry.inset.visible = false;
+  }
   if (isRemote()) return;
-  void getApi()
-    ?.browser_pane_set_bounds?.(tabId, 0, 0, 0, 0, 0, 0, false)
-    ?.finally(() => {
-      // Late hide after remount would leave a blank/brown pane — re-pin.
-      if ((paneMountGen.get(tabId) ?? 0) !== hideGen) {
-        pushBrowserPaneBounds(tabId);
-      }
-    });
+  for (const id of [tabId, ...subs]) {
+    void getApi()
+      ?.browser_pane_set_bounds?.(id, 0, 0, 0, 0, 0, 0, false)
+      ?.finally(() => {
+        // Late hide after remount would leave a blank/brown pane — re-pin.
+        if ((paneMountGen.get(tabId) ?? 0) !== hideGen) {
+          pushBrowserPaneBounds(id);
+        }
+      });
+  }
 }
 
 /** Forget all tracking state (tab actually closed). */
 export function clearBrowserPaneBounds(tabId: string): void {
-  paneInsets.delete(tabId);
+  for (const id of [...paneInsets.keys(), ...coverStates.keys()]) {
+    if (!ownsBrowserPane(tabId, id)) continue;
+    paneInsets.delete(id);
+    lastSentBounds.delete(id);
+    coverStates.delete(id);
+  }
   lastSentBounds.delete(tabId);
   paneMountGen.delete(tabId);
+  shownBeforeUnmount.delete(tabId);
 }
 
 /** tabId → push subscription for plugin iframes */
@@ -418,7 +535,7 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
   "browser.open": async (ctx, params) => {
     const api = getApi();
     if (!api?.browser_pane_open) throw new Error("browser panes unavailable");
-    const paneId = browserPaneId(ctx);
+    const paneId = browserPaneId(ctx, params);
     // A pending "open in new tab" URL wins over the plugin's own start URL.
     const url = takeBrowserPaneInitialUrl(paneId) || (typeof params.url === "string" ? params.url : "");
     lastSentBounds.delete(paneId);
@@ -427,7 +544,7 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
   "browser.bounds": (ctx, params) => {
     // Params are CSS px in the IFRAME's coordinate space. Store as edge insets so
     // pushBrowserPaneBounds can re-derive the absolute rect every frame.
-    const tabId = browserPaneId(ctx);
+    const tabId = browserPaneId(ctx, params);
     const iframe = ctx.iframe;
     if (!iframe) throw new Error("browser panes unavailable");
     const x = asFiniteNumber(params.x);
@@ -454,23 +571,31 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
     if (!api?.browser_pane_navigate) throw new Error("browser panes unavailable");
     const url = typeof params.url === "string" ? params.url : "";
     if (!url) throw new Error("browser.navigate requires url");
-    return await api.browser_pane_navigate(browserPaneId(ctx), url);
+    return await api.browser_pane_navigate(browserPaneId(ctx, params), url);
   },
   "browser.command": async (ctx, params) => {
     const api = getApi();
     if (!api?.browser_pane_command) throw new Error("browser panes unavailable");
     const command = typeof params.command === "string" ? params.command : "";
-    return await api.browser_pane_command(browserPaneId(ctx), command);
+    return await api.browser_pane_command(browserPaneId(ctx, params), command);
   },
-  "browser.state": async (ctx) => {
+  "browser.state": async (ctx, params) => {
     const api = getApi();
     if (!api?.browser_pane_state) throw new Error("browser panes unavailable");
-    return await api.browser_pane_state(browserPaneId(ctx));
+    return await api.browser_pane_state(browserPaneId(ctx, params));
   },
-  "browser.close": async (ctx) => {
+  /** This tab's open page tabs (after a reload the page reattaches to them). */
+  "browser.tabs": async (ctx) => {
+    const api = getApi();
+    if (!api?.browser_pane_list) throw new Error("browser panes unavailable");
+    const base = browserPaneId(ctx);
+    const res = await api.browser_pane_list();
+    return { ok: true, panes: (res?.panes ?? []).filter((p) => p.pane_id && ownsBrowserPane(base, p.pane_id)) };
+  },
+  "browser.close": async (ctx, params) => {
     const api = getApi();
     if (!api?.browser_pane_close) throw new Error("browser panes unavailable");
-    const paneId = browserPaneId(ctx);
+    const paneId = browserPaneId(ctx, params);
     clearBrowserPaneBounds(paneId);
     return await api.browser_pane_close(paneId);
   },
@@ -489,10 +614,10 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
     if (!api?.browser_runtime_info) throw new Error("browser_runtime_info unavailable");
     return await api.browser_runtime_info();
   },
-  "browser.site_security": async (ctx) => {
+  "browser.site_security": async (ctx, params) => {
     const api = getApi();
     if (!api?.browser_site_security) throw new Error("browser_site_security unavailable");
-    return await api.browser_site_security(browserPaneId(ctx));
+    return await api.browser_site_security(browserPaneId(ctx, params));
   },
   "prefs.get": (ctx, params) => {
     const prefs = readPluginPrefs(ctx.pluginId);
@@ -713,6 +838,7 @@ const BRIDGE_FAST_TIMEOUT_MS: Record<string, number> = {
   "browser.site_security": 2500,
   "browser.runtime_info": 2500,
   "browser.state": 2500,
+  "browser.tabs": 2500,
   "browser.ui_cover": 1000,
 };
 

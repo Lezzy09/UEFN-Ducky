@@ -18,6 +18,7 @@ const PANEL_PUSH_TYPES = new Set<string>([
   "uefn_plugin_trust_request",
   "browser_pane_state",
   "browser_pane_new_window",
+  "browser_tab_command",
   "background_job",
   "graphs_changed",
   "graph_focus",

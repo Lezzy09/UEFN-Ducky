@@ -385,6 +385,11 @@ class PanelApiWindowMixin:
 
         return browser_overlay.get_state(str(pane_id or ""))
 
+    def browser_pane_snapshot(self, pane_id: str) -> dict[str, Any]:
+        from frontend.ui_web import browser_overlay
+
+        return browser_overlay.snapshot(str(pane_id or ""))
+
     def browser_pane_close(self, pane_id: str) -> dict[str, Any]:
         from frontend.ui_web import browser_overlay
 

@@ -292,17 +292,29 @@ def list_panes() -> list[dict[str, Any]]:
         return [_state_dict(p) for p in _panes.values()]
 
 
+def _owned(app_tab: str, pane_id: str) -> bool:
+    """A Browser tab's own panes: its id, or ``<tab>::<page tab>`` for the tabs inside it."""
+    return pane_id == app_tab or pane_id.startswith(app_tab + "::")
+
+
 def pick_pane_id(preferred: str = "", *, allow_fallback: bool = True) -> str:
+    """A pane id: *preferred* itself, else the page tab on screen inside the Browser tab
+    *preferred* names, else (fallback) the page tab on screen, else any pane."""
     pid = (preferred or "").strip()
     with _lock:
         if pid and pid in _panes:
             return pid
+        pool = [p for p in _panes.values() if _owned(pid, p.pane_id)] if pid else []
         # Caller asked for a specific pane that is not open — do not silently
         # return a sibling (that made every padlock show the same YouTube tab).
-        if pid and not allow_fallback:
+        if pid and not pool and not allow_fallback:
             return ""
-        if _panes:
-            return next(iter(_panes))
+        pool = pool or list(_panes.values())
+        for p in pool:
+            if p.visible and p.css_bounds[2] > 0:
+                return p.pane_id
+        if pool:
+            return pool[0].pane_id
     return ""
 
 
@@ -834,6 +846,7 @@ def _state_dict(pane: _Pane) -> dict[str, Any]:
         "failed": pane.failed,
         "connection": kind,
         "cert_error": pane.cert_error,
+        "visible": bool(pane.visible and pane.css_bounds[2] > 0),
     }
 
 
@@ -1385,12 +1398,66 @@ def _destroy_pane_control(pane: _Pane) -> None:
 
 
 def close_pane(pane_id: str) -> dict[str, Any]:
+    """Close a pane; closing a Browser tab also closes the page tabs inside it."""
+    pid = (pane_id or "").strip()
     with _lock:
-        pane = _panes.pop((pane_id or "").strip(), None)
-    if pane is None:
-        return {"ok": True, "closed": False}
-    _destroy_pane_control(pane)
-    return {"ok": True, "closed": True}
+        gone = [_panes.pop(k) for k in list(_panes) if pid and _owned(pid, k)]
+    for pane in gone:
+        _destroy_pane_control(pane)
+    return {"ok": True, "closed": bool(gone)}
+
+
+def snapshot(pane_id: str, timeout_s: float = 3.0) -> dict[str, Any]:
+    """A JPEG of what a pane shows (data URL), for the host to paint in its place while
+    HTML (a dialog, menu or tooltip) sits over it: the native pane can't go under HTML.
+    Pixels only, for Ducky's own UI; never sent to an agent."""
+    import base64
+
+    with _lock:
+        pane = _panes.get((pane_id or "").strip())
+    if pane is None or not pane.ready or pane.control is None:
+        return {"ok": False, "error": "pane not open"}
+    if _on_ui_thread(pane.window):
+        return {"ok": False, "error": "a snapshot cannot wait on the UI thread"}
+    box: dict[str, Any] = {}
+
+    def start() -> Any:
+        from Microsoft.Web.WebView2.Core import CoreWebView2CapturePreviewImageFormat
+        from System.IO import MemoryStream
+
+        box["stream"] = MemoryStream()
+        return pane.control.CoreWebView2.CapturePreviewAsync(
+            CoreWebView2CapturePreviewImageFormat.Jpeg, box["stream"])
+
+    try:
+        task = _ui_sync(pane.window, start, timeout_s=2.0)
+    except Exception as exc:
+        return {"ok": False, "error": f"could not start the snapshot: {exc}"}
+    _done, err = _await_task(task, timeout_s, "browser-snapshot")
+    if err:
+        return {"ok": False, "error": err}
+    data = bytes(box["stream"].ToArray())
+    if not data:
+        return {"ok": False, "error": "empty snapshot"}
+    return {"ok": True, "data": "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")}
+
+
+def push_tab_command(app_tab: str, action: str, **data: Any) -> dict[str, Any]:
+    """Ask the Browser tab ``app_tab``'s page to open / switch / close one of its page tabs
+    (the page owns its tab strip and pane layout)."""
+    import json
+
+    from frontend.ui_web.ui_dispatch import schedule_evaluate_js
+
+    with _lock:
+        window = next((p.window for p in _panes.values() if _owned(app_tab, p.pane_id)), None)
+    window = window or _main_window
+    if window is None:
+        return {"ok": False, "error": "Ducky's window isn't open"}
+    payload = json.dumps({"type": "browser_tab_command", "pane_id": app_tab, "action": action, **data},
+                         ensure_ascii=False)
+    schedule_evaluate_js(window, f"window.__uefnPanelPush && window.__uefnPanelPush({payload})")
+    return {"ok": True}
 
 
 def hide_all_panes() -> dict[str, Any]:

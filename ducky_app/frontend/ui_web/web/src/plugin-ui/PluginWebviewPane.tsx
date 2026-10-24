@@ -9,7 +9,8 @@ import {
   beginBrowserPaneMount,
   handleBridgeRequest,
   hideBrowserPaneOnUnmount,
-  pushBrowserPaneBounds,
+  ownsBrowserPane,
+  pushOwnBrowserPanes,
   shouldForwardPluginPush,
 } from "./bridge";
 import { usePluginThemePush } from "./pluginTheme";
@@ -207,7 +208,12 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
     return subscribePanelPush((event) => {
       const win = iframeRef.current?.contentWindow;
       if (!win) return;
-      if (event.type === "browser_pane_state" && event.pane_id === tabId) {
+      // Its own panes' state, popups and tab commands (page tabs are `<tab>::<page tab>`).
+      if (
+        (event.type === "browser_pane_state" || event.type === "browser_pane_new_window"
+          || event.type === "browser_tab_command")
+        && typeof event.pane_id === "string" && ownsBrowserPane(tabId, event.pane_id)
+      ) {
         win.postMessage({ channel: BRIDGE_CHANNEL, event }, "*");
         return;
       }
@@ -245,7 +251,7 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
     if (!visible) return;
     let raf = 0;
     const tick = () => {
-      pushBrowserPaneBounds(tabId, iframeRef.current);
+      pushOwnBrowserPanes(tabId, iframeRef.current);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);

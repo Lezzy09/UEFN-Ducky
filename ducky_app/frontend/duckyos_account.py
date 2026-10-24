@@ -1356,6 +1356,7 @@ REMOTE_DENY = frozenset(
         "browser_pane_close",
         "browser_pane_list",
         "browser_pane_hide_all",
+        "browser_pane_snapshot",
         "browser_clear_browsing_data",
         "open_devtools",
         "burst_desktop_confetti",

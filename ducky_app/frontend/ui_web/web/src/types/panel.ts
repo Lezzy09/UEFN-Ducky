@@ -2285,6 +2285,8 @@ export interface PanelPushEvent {
     | "uefn_plugin_trust_request"
     | "browser_pane_state"
     | "browser_pane_new_window"
+    /** An agent asks a Browser tab's page to open / switch / close a page tab. */
+    | "browser_tab_command"
     | "background_job"
     | "graphs_changed"
     | "graph_focus"
@@ -3172,6 +3174,8 @@ export interface PanelApi {
   browser_pane_command?(pane_id: string, command: string): Promise<{ ok?: boolean; error?: string }>;
   browser_pane_state?(pane_id: string): Promise<BrowserPaneState>;
   browser_pane_close?(pane_id: string): Promise<{ ok?: boolean; closed?: boolean }>;
+  /** JPEG data URL of what the pane shows, painted in its place under HTML overlays. */
+  browser_pane_snapshot?(pane_id: string): Promise<{ ok?: boolean; data?: string; error?: string }>;
   browser_pane_list?(): Promise<{
     ok?: boolean;
     panes?: BrowserPaneState[];

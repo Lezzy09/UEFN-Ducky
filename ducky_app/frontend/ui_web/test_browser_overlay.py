@@ -281,6 +281,31 @@ def test_evaluate_awaits_the_page_promise_over_devtools() -> None:
         bo._panes.pop("ev", None)
 
 
+def test_page_tabs_belong_to_their_browser_tab() -> None:
+    """Agents get the page tab on screen; closing the Browser tab closes its page tabs."""
+    from frontend.ui_web import browser_overlay as bo
+
+    app = "plugin:browser:browser"
+    panes = {
+        f"{app}::t1": bo._Pane(pane_id=f"{app}::t1", window=None, visible=False),
+        f"{app}::t2": bo._Pane(pane_id=f"{app}::t2", window=None, visible=True, css_bounds=(0, 0, 800, 600)),
+        "plugin:other:x": bo._Pane(pane_id="plugin:other:x", window=None),
+    }
+    saved = dict(bo._panes)
+    bo._panes.clear()
+    bo._panes.update(panes)
+    try:
+        assert bo.pick_pane_id(app, allow_fallback=False) == f"{app}::t2"
+        assert bo.pick_pane_id(f"{app}::t1") == f"{app}::t1"
+        assert bo.pick_pane_id("plugin:browser:gone", allow_fallback=False) == ""
+        assert bo._state_dict(panes[f"{app}::t2"])["visible"] is True
+        assert bo.close_pane(app) == {"ok": True, "closed": True}
+        assert list(bo._panes) == ["plugin:other:x"]
+    finally:
+        bo._panes.clear()
+        bo._panes.update(saved)
+
+
 def test_devtools_refuses_sites_the_person_uses(monkeypatch) -> None:
     """No script or capture on a signed-in site (Gmail, X) until the person allows it."""
     from frontend.ui_web import browser_overlay as bo

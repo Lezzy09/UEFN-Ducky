@@ -50,6 +50,7 @@ _PUBLIC_METHODS = frozenset({
     'browser_pane_navigate',
     'browser_pane_open',
     'browser_pane_set_bounds',
+    'browser_pane_snapshot',
     'browser_pane_state',
     'browser_runtime_info',
     'browser_site_security',
