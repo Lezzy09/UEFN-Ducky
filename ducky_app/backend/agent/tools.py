@@ -291,6 +291,7 @@ TOOL_TIMEOUT_OVERRIDES: dict[str, float] = {
     # Show me answers once it is on screen; wait=true holds until the close button.
     "ducky_ui_show": 930.0,
     "ducky_ask_user": float("inf"),
+    "ducky_archive_chats": float("inf"),  # waits on the person's Yes/No card
 }
 
 

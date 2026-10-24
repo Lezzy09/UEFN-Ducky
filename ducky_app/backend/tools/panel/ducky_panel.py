@@ -1152,13 +1152,70 @@ def ducky_rename_chat(conv_id: str, title: str, seat_name: str = "", pretty: boo
 
 @mcp.tool()
 def ducky_move_chat(conv_id: str, folder_id: str, pretty: bool = False) -> str:
-    """Move a chat into a folder (use after ducky_create_folder)."""
+    """Move a chat into a folder (use after ducky_create_folder). To archive, use ducky_archive_chats."""
+    if is_archive_folder_id(folder_id):
+        raise ValueError("Archiving asks the person first: use ducky_archive_chats.")
     root = _project_root()
     move_conversation(conv_id.strip(), folder_id.strip(), project_root=root)
     conv = load_conversation(conv_id.strip(), project_root=root)
     if conv is None:
         raise ValueError(f"Conversation not found: {conv_id!r}")
     return tool_json({"id": conv.id, "title": conv.title, "folder_id": conv.folder_id}, pretty=pretty)
+
+
+def _chats_leaving_with(conv: Any, root: str) -> set[str]:
+    """Every chat that goes with ``conv``: its sub-agents, and for a group everything filed in its folder."""
+    from frontend.ui_web.project_chats import conversation_descendant_ids, folder_subtree_ids
+
+    out = {conv.id, *conversation_descendant_ids(conv.id, root)}
+    if getattr(conv, "is_group", False):
+        own = next((f for f in load_folders(root) if (getattr(f, "group_hub_id", None) or "") == conv.id), None)
+        if own is not None:
+            folders = set(folder_subtree_ids(own.id, root))
+            out |= {c.id for c in list_conversations(project_root=root) if c.folder_id in folders}
+    return out
+
+
+@mcp.tool()
+def ducky_archive_chats(conv_ids: list[str], delete: bool = False, pretty: bool = False) -> str:
+    """Archive chats and groups, or with delete=true delete them for good. The person always says yes first.
+
+    The tool itself shows the person a Yes/No card naming every chat, even when the chat
+    allows everything; nothing changes on No. A group goes with its duckies and nested
+    groups, and their running agents are stopped. Archived chats can be restored from the
+    sidebar's Archive; deleted ones can't. Never archives the chat calling it. Use only when
+    the person asked to clean up chats, never on your own.
+    """
+    from backend.tools.panel.panel_plugin_data import _confirm
+    from backend.tools.panel.panel_ui import _resolve_ask_user_conv_id
+    from frontend.archive_folder import ARCHIVE_FOLDER_ID
+
+    root = _project_root()
+    me = str(_resolve_ask_user_conv_id() or "").strip()
+    targets = []
+    for cid in dict.fromkeys(str(c).strip() for c in conv_ids or [] if str(c).strip()):
+        conv = load_conversation(cid, project_root=root)
+        if conv is None:
+            return tool_json({"ok": False, "error": f"Chat not found: {cid!r}"}, pretty=pretty)
+        if me and me in _chats_leaving_with(conv, root):
+            return tool_json({"ok": False, "error": f"“{conv.title or cid}” holds this chat; archive it from the sidebar "
+                              "or move this chat out first."}, pretty=pretty)
+        targets.append(conv)
+    if not targets:
+        return tool_json({"ok": False, "error": "conv_ids is empty"}, pretty=pretty)
+    names = ", ".join(f"“{c.title or c.id[:8]}”" + (" (group, with its duckies)" if getattr(c, "is_group", False) else "")
+                      for c in targets)
+    verb = "Delete" if delete else "Archive"
+    note = " This can't be undone." if delete else " You can restore them from Archive."
+    if not _confirm(f"{verb} {names}?{note}", title=f"{verb} chats"):
+        return tool_json({"ok": False, "error": f"The person said no: nothing was {verb.lower()}d."}, pretty=pretty)
+    api = _panel_api()
+    for c in targets:
+        if delete:
+            api.delete_conversation(c.id)
+        else:
+            api.move_conversation(c.id, ARCHIVE_FOLDER_ID)
+    return tool_json({"ok": True, "deleted" if delete else "archived": [c.id for c in targets]}, pretty=pretty)
 
 
 @mcp.tool()
