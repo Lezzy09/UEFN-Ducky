@@ -1,0 +1,206 @@
+"""Stored conversation → flat chat rows for the web UI."""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+
+def _tool_result_text(result: dict[str, Any] | None) -> str:
+    if not result:
+        return ""
+    if result.get("data"):
+        return str(result["data"])
+    if result.get("error"):
+        return str(result["error"])
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _messages_to_ui(conv, project_root: str | None = None, *, live: bool = False) -> list[dict[str, Any]]:
+    """Stored conversation → flat UI rows.
+
+    ``live``: the conversation's run is still going. The checkpoint with a
+    matching live run id is a turn in progress, not an
+    interrupted one: no "Interrupted" flag, and tool calls without a result yet stay
+    running instead of showing as failed ``· pending ·`` rows.
+    """
+    from frontend.settings import PanelSettings
+    from frontend.ui_web.conversation_attachments import hydrate_attachment_dicts
+    from frontend.ui_web.project_chats import get_conversations_dir
+
+    root = project_root if project_root is not None else PanelSettings.load().uefn_project_root
+    conv_dir = get_conversations_dir(root)
+    out: list[dict[str, Any]] = []
+    i = 0
+    from frontend.ui_web.live_agent_runs import get_live_run_ids
+    live_runs = get_live_run_ids() if live else frozenset()
+    last_index = len(conv.messages) - 1
+    for index, m in enumerate(conv.messages):
+        role = m.get("role", "user")
+        if role == "user":
+            row: dict[str, Any] = {"id": i, "role": "user", "text": m.get("text", m.get("content", ""))}
+            attachments = m.get("attachments")
+            if attachments:
+                row["attachments"] = hydrate_attachment_dicts(attachments, conv.id, conv_dir, root)
+            out.append(row)
+            i += 1
+            continue
+        if role == "assistant":
+            in_flight = (
+                live
+                and bool(m.get("incomplete"))
+                and (m.get("run_id") in live_runs if m.get("run_id") else index == last_index)
+            )
+            for block in m.get("blocks") or []:
+                btype = block.get("type")
+                if btype == "thinking":
+                    # Per-step reasoning, shown inline between tools (Cursor-style).
+                    seg = str(block.get("text") or "")
+                    if seg.strip():
+                        out.append({"id": i, "role": "assistant", "text": "", "thinking": seg})
+                        i += 1
+                    continue
+                if btype == "text":
+                    # Narration the model spoke between tool calls — kept in order.
+                    seg = str(block.get("text") or "")
+                    if seg.strip():
+                        out.append({"id": i, "role": "assistant", "text": seg})
+                        i += 1
+                    continue
+                if btype == "user":
+                    # A message the person sent into this turn (steer.py), where it landed.
+                    seg = str(block.get("text") or "")
+                    if seg.strip():
+                        out.append({"id": i, "role": "user", "text": seg, "steered": True})
+                        i += 1
+                    continue
+                if btype != "tool_call":
+                    continue
+                name = block.get("name", "?")
+                args = block.get("arguments") or {}
+                args_short = json.dumps(args, ensure_ascii=False)
+                if len(args_short) > 120:
+                    args_short = args_short[:117] + "..."
+                tool_line = f"⚙ {name}({args_short})"
+                out.append(
+                    {
+                        "id": i,
+                        "role": "tool",
+                        "text": tool_line,
+                        "tool": {
+                            "id": str(block.get("id") or ""),
+                            "name": name,
+                            "arguments": args,
+                            "status": "pending",
+                        },
+                    }
+                )
+                i += 1
+                status = block.get("status", "?")
+                if in_flight and status == "pending":
+                    continue  # still running: the tool row above shows it in progress
+                ms = int(block.get("duration_ms", 0) or 0)
+                done_role = "success" if status == "success" else "error"
+                block_result = block.get("result") if isinstance(block.get("result"), dict) else {}
+                tool_done: dict[str, Any] = {
+                    "id": str(block.get("id") or ""),
+                    "name": name,
+                    "arguments": args,
+                    "status": status,
+                    "durationMs": ms,
+                    "result": _tool_result_text(block_result),
+                    "hint": str(block_result.get("hint") or ""),
+                }
+                exit_code = block_result.get("exit_code", block.get("exit_code"))
+                if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+                    tool_done["exitCode"] = exit_code
+                llm_tokens_val = block.get("llm_tokens")
+                if isinstance(llm_tokens_val, int) and llm_tokens_val > 0:
+                    tool_done["llmTokens"] = llm_tokens_val
+                stored_edit = block.get("file_edit")
+                stored_edits = block.get("file_edits")
+                if isinstance(stored_edits, list):
+                    tool_done["fileEdits"] = stored_edits
+                    if stored_edits:
+                        tool_done["fileEdit"] = stored_edits[0]
+                elif isinstance(stored_edit, dict):
+                    tool_done["fileEdit"] = stored_edit
+                else:
+                    try:
+                        from frontend.ui_web.verse_editor.agent_sync import build_file_edit_meta
+
+                        file_edit = build_file_edit_meta(name, args, block_result)
+                        if file_edit:
+                            tool_done["fileEdit"] = file_edit
+                    except Exception:
+                        pass
+                out.append(
+                    {
+                        "id": i,
+                        "role": done_role,
+                        "text": f"⚙ {tool_line[2:]} · {status} · {ms}ms",
+                        "tool": tool_done,
+                    }
+                )
+                i += 1
+            content = m.get("content", "")
+            thinking = m.get("thinking")
+            author = m.get("author") if isinstance(m.get("author"), dict) else None
+            pictures = m.get("attachments") if isinstance(m.get("attachments"), list) else []
+            if content or pictures or (isinstance(thinking, str) and thinking.strip()):
+                row_asst: dict[str, Any] = {"id": i, "role": "assistant", "text": content}
+                if pictures:
+                    # Pictures the agent made this turn show under its reply.
+                    row_asst["attachments"] = hydrate_attachment_dicts(pictures, conv.id, conv_dir, root)
+                if isinstance(thinking, str) and thinking.strip():
+                    row_asst["thinking"] = thinking
+                if author:
+                    row_asst["author"] = {
+                        "name": str(author.get("name") or "").strip(),
+                        "member_conv_id": str(author.get("member_conv_id") or "").strip(),
+                        "tts_voice": str(author.get("tts_voice") or "").strip(),
+                        "tts_speed": float(author.get("tts_speed") or 0.0),
+                        "color": str(author.get("color") or "").strip(),
+                        "profile_id": str(author.get("profile_id") or "").strip(),
+                    }
+                tours = m.get("tours")
+                if isinstance(tours, list) and tours:
+                    # Walkthroughs this message offers as buttons (the welcome ducky).
+                    row_asst["tours"] = [str(t) for t in tours if str(t).strip()]
+                if m.get("incomplete") and not in_flight:
+                    row_asst["incomplete"] = True
+                    if isinstance(m.get("error"), str) and m["error"].strip():
+                        row_asst["error"] = m["error"]
+                if m.get("incomplete"):
+                    row_asst["checkpoint"] = True
+                    row_asst["run_id"] = m.get("run_id")
+                    row_asst["live_run"] = in_flight
+                out.append(row_asst)
+                i += 1
+            elif m.get("incomplete"):
+                # Crashed turn whose final step produced no answer/reasoning of
+                # its own (it's all in the interleaved blocks above) — still show
+                # the interruption so it never silently disappears.
+                err = m.get("error")
+                row_inc: dict[str, Any] = {
+                    "id": i,
+                    "role": "assistant",
+                    "text": "",
+                    "incomplete": not in_flight,
+                    "checkpoint": True,
+                    "run_id": m.get("run_id"),
+                    "live_run": in_flight,
+                    **({"error": err} if isinstance(err, str) and err.strip() else {}),
+                }
+                if author:
+                    row_inc["author"] = {
+                        "name": str(author.get("name") or "").strip(),
+                        "member_conv_id": str(author.get("member_conv_id") or "").strip(),
+                        "tts_voice": str(author.get("tts_voice") or "").strip(),
+                        "tts_speed": float(author.get("tts_speed") or 0.0),
+                        "color": str(author.get("color") or "").strip(),
+                        "profile_id": str(author.get("profile_id") or "").strip(),
+                    }
+                out.append(row_inc)
+                i += 1
+    return out
