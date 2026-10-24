@@ -54,6 +54,7 @@ class Host:
         self.agents: set[str] = set()
         self.started = self.idle_since = time.monotonic()
         self.stopping = False
+        self.dead = False
 
     @property
     def pid(self) -> int:
@@ -231,13 +232,52 @@ class Supervisor:
         self._send_visible(host)
 
     def _closed(self, host: Host, reason: str) -> None:
+        if host.stopping:
+            with self._lock:
+                self._drop(host)
+            return
+        self._died(host, reason)
+
+    def _drop(self, host: Host) -> list[str]:
+        """Forget a host and its seats (call under the lock); returns the chats it had."""
+        if self._hosts.get(host.slot) is host:
+            del self._hosts[host.slot]
+        convs = sorted(host.agents)
+        for conv in convs:
+            if self._by_conv.get(conv) is host:
+                del self._by_conv[conv]
+        return convs
+
+    def _died(self, host: Host, reason: str) -> None:
+        """A host crashed (pipe EOF, no heartbeat, process gone): only its own chats stop. Its
+        turns are marked dead once, a fresh host starts warm, and those chats' next messages land
+        there (least-busy pick), where the runner resumes each from its stored session id."""
         with self._lock:
-            if self._hosts.get(host.slot) is host:
-                del self._hosts[host.slot]
-            for conv in list(host.agents):
-                self._by_conv.pop(conv, None)
-        if self._on_host_closed and not host.stopping:
-            self._on_host_closed(host, reason)
+            if host.dead:
+                return
+            host.dead = True
+            convs = self._drop(host)
+        threading.Thread(target=host.stop, name=f"agent-host-kill-{host.slot}", daemon=True).start()
+        try:
+            from frontend.agent_host import turns
+
+            mark = getattr(turns, "mark_host_dead", None)
+            if callable(mark):
+                mark(host.slot)
+        except Exception:  # noqa: BLE001 - a failing hook never stops the restart
+            pass
+        if self._on_host_closed:
+            try:
+                self._on_host_closed(host, reason)
+            except Exception:  # noqa: BLE001
+                pass
+        if convs and not self._stopped.is_set():
+            with self._lock:
+                if len(self._hosts) < self.max_hosts:
+                    try:
+                        self._start(self._free_slot())
+                    except Exception:  # noqa: BLE001 - the next assign tries again
+                        pass
 
     def _reap_loop(self) -> None:
         while not self._stopped.wait(self._reap_s):
@@ -257,14 +297,14 @@ class Supervisor:
                     reason = "idle"
                 else:
                     continue
-                del self._hosts[host.slot]
-                for conv in list(host.agents):
-                    self._by_conv.pop(conv, None)
+                if reason == "idle":
+                    self._drop(host)  # under the same lock as the check: no seat can sneak in
                 doomed.append((host, reason))
         for host, reason in doomed:
-            host.stop()
-            if reason != "idle" and self._on_host_closed:
-                self._on_host_closed(host, reason)
+            if reason == "idle":
+                host.stop()
+            else:
+                self._died(host, reason)
 
 
 _SUPERVISOR: Supervisor | None = None

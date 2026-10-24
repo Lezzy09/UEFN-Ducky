@@ -147,6 +147,37 @@ def test_sixteen_chats_one_visible_stay_under_26_events_a_second():
         app.close()
 
 
+def test_a_host_crash_only_stops_its_own_chats(tmp_path, monkeypatch):
+    from frontend.agent_host import turns
+
+    marked: list[int] = []
+    monkeypatch.setattr(turns, "mark_host_dead", marked.append, raising=False)
+    closed: list[str] = []
+    sup = supervisor.Supervisor(log_dir=tmp_path, on_host_closed=lambda h, r: closed.append(r))
+    try:
+        for i in range(6):
+            sup.assign(f"c{i}")
+        a, b = sorted(sup.hosts(), key=lambda h: h.slot)
+        assert a.ready.wait(60) and b.ready.wait(60)
+        b_pid, b_chats = b.pid, set(b.agents)
+        a.launched.proc.kill()  # the crash, mid-turn
+
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not (marked and len(sup.hosts()) == 2):
+            time.sleep(0.05)
+        assert marked == [a.slot]  # once, though EOF and the reaper may both see it
+        assert len(closed) == 1
+        fresh = next(h for h in sup.hosts() if h is not b)
+        assert fresh is not a and fresh.ready.wait(60)
+        assert b.alive() and b.pid == b_pid and b.agents == b_chats  # the other host never noticed
+        assert all(sup.host_for(c) is b for c in b_chats)
+        assert sup.assign("c0") is fresh  # the dead host's chats land on the fresh host
+        time.sleep(0.3)
+        assert marked == [a.slot]
+    finally:
+        sup.stop_all()
+
+
 def test_idle_host_exits_after_timeout(tmp_path):
     sup = supervisor.Supervisor(log_dir=tmp_path, idle_exit_s=0.5, reap_s=0.1)
     try:
