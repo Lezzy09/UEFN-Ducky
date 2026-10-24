@@ -18,6 +18,11 @@ export interface FileEditDiffSummary {
 }
 
 const CONTEXT_LINES = 2;
+/**
+ * The line-matching table is changed-lines-before × changed-lines-after cells. Past this, a
+ * whole-file rewrite shows as removed-then-added instead of freezing the chat on a huge table.
+ */
+const MAX_LCS_CELLS = 4_000_000;
 
 function fileNameFromPath(path: string): string {
   const norm = path.replace(/\\/g, "/");
@@ -36,37 +41,67 @@ export function buildFileEditDiff(
 ): FileEditDiffSummary {
   const beforeLines = before.split("\n");
   const afterLines = after.split("\n");
-  const n = beforeLines.length;
-  const m = afterLines.length;
-
-  const dp: number[][] = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i -= 1) {
-    for (let j = m - 1; j >= 0; j -= 1) {
-      if (beforeLines[i] === afterLines[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
-      else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
-    }
+  if (kind === "create") {
+    return {
+      path,
+      fileName: fileNameFromPath(path),
+      linesAdded,
+      linesRemoved,
+      hunks: [{ id: "hunk-0", lines: afterLines.map((text, idx) => ({ kind: "add" as const, line: idx + 1, text })) }],
+      isCreate: true,
+    };
   }
 
+  // Lines the edit didn't touch at the top and bottom need no matching.
+  let top = 0;
+  while (top < beforeLines.length && top < afterLines.length && beforeLines[top] === afterLines[top]) top += 1;
+  let bottom = 0;
+  while (
+    bottom < beforeLines.length - top &&
+    bottom < afterLines.length - top &&
+    beforeLines[beforeLines.length - 1 - bottom] === afterLines[afterLines.length - 1 - bottom]
+  ) bottom += 1;
+  const n = beforeLines.length - bottom;
+  const m = afterLines.length - bottom;
+
   const raw: FileDiffLine[] = [];
-  let i = 0;
-  let j = 0;
-  let afterLine = 1;
-  let beforeLine = 1;
-  while (i < n && j < m) {
-    if (beforeLines[i] === afterLines[j]) {
-      raw.push({ kind: "context", line: afterLine, text: afterLines[j] });
-      i += 1;
-      j += 1;
-      afterLine += 1;
-      beforeLine += 1;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      raw.push({ kind: "remove", line: beforeLine, text: beforeLines[i] });
-      i += 1;
-      beforeLine += 1;
-    } else {
-      raw.push({ kind: "add", line: afterLine, text: afterLines[j] });
-      j += 1;
-      afterLine += 1;
+  for (let k = 0; k < top; k += 1) raw.push({ kind: "context", line: k + 1, text: afterLines[k] });
+  let i = top;
+  let j = top;
+  let afterLine = top + 1;
+  let beforeLine = top + 1;
+
+  const rows = n - top;
+  const cols = m - top;
+  if (rows > 0 && cols > 0 && rows * cols <= MAX_LCS_CELLS) {
+    // dp[(i-top) * (cols+1) + (j-top)] = longest common run from i, j to the end of the middle.
+    const w = cols + 1;
+    const dp = new Uint32Array((rows + 1) * w);
+    for (let a = rows - 1; a >= 0; a -= 1) {
+      for (let b = cols - 1; b >= 0; b -= 1) {
+        dp[a * w + b] = beforeLines[top + a] === afterLines[top + b]
+          ? dp[(a + 1) * w + b + 1] + 1
+          : Math.max(dp[(a + 1) * w + b], dp[a * w + b + 1]);
+      }
+    }
+    while (i < n && j < m) {
+      const a = i - top;
+      const b = j - top;
+      if (beforeLines[i] === afterLines[j]) {
+        raw.push({ kind: "context", line: afterLine, text: afterLines[j] });
+        i += 1;
+        j += 1;
+        afterLine += 1;
+        beforeLine += 1;
+      } else if (dp[(a + 1) * w + b] >= dp[a * w + b + 1]) {
+        raw.push({ kind: "remove", line: beforeLine, text: beforeLines[i] });
+        i += 1;
+        beforeLine += 1;
+      } else {
+        raw.push({ kind: "add", line: afterLine, text: afterLines[j] });
+        j += 1;
+        afterLine += 1;
+      }
     }
   }
   while (i < n) {
@@ -79,6 +114,7 @@ export function buildFileEditDiff(
     j += 1;
     afterLine += 1;
   }
+  for (let k = 0; k < bottom; k += 1) raw.push({ kind: "context", line: afterLine + k, text: afterLines[m + k] });
 
   const changeIdx = raw
     .map((line, idx) => (line.kind === "context" ? -1 : idx))
@@ -112,7 +148,7 @@ export function buildFileEditDiff(
     fileName: fileNameFromPath(path),
     linesAdded,
     linesRemoved,
-    hunks: kind === "create" ? [{ id: "hunk-0", lines: afterLines.map((text, idx) => ({ kind: "add" as const, line: idx + 1, text })) }] : hunks,
-    isCreate: kind === "create",
+    hunks,
+    isCreate: false,
   };
 }

@@ -28,8 +28,10 @@ it.each(["file_change", "command_execution", "Edit"])("shows %s changes as file 
   expect(container.textContent).toContain("second.txt");
   expect(container.querySelector(".tool-file-edit-diff-stats")?.textContent).toBe("+1-1");
   fireEvent.click(container.querySelector(".tool-file-edit-diff-header-toggle")!);
-  expect(container.querySelector(".tool-file-edit-diff-code")?.textContent).toContain("before");
-  expect(container.querySelector(".tool-file-edit-diff-code")?.textContent).toContain("after");
+  // The diff opens in a popup over the chat, not inside the card.
+  const popup = document.querySelector("[role=dialog] .tool-file-edit-diff-code");
+  expect(popup?.textContent).toContain("before");
+  expect(popup?.textContent).toContain("after");
 });
 
 it("preserves legacy single-file cards", () => {

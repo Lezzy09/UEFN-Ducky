@@ -5830,6 +5830,62 @@
   line-height: 1.45;
 }
 
+/* 200 lines a block: blocks scrolled out of view skip layout and paint, so huge diffs scroll smoothly.
+   max-content keeps long lines from being clipped by the block's paint containment. */
+.tool-file-edit-diff-chunk {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 290em;
+  width: max-content;
+  min-width: 100%;
+}
+
+/* The diff popup from a chat card: wide, tall, scrolls on its own, code at a readable size. */
+.tool-file-edit-diff-modal {
+  max-width: calc(100vw - 48px);
+}
+
+.tool-file-edit-diff-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 0;
+}
+
+.tool-file-edit-diff-modal-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tool-file-edit-diff-modal-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-file-edit-diff-modal-scroll {
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.tool-file-edit-diff-modal-scroll .tool-file-edit-diff-code {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.tool-file-edit-diff-modal-scroll .tool-file-edit-diff-chunk {
+  contain-intrinsic-size: auto 320em;
+}
+
 .tool-file-edit-diff-line {
   display: flex;
   min-height: 1.45em;
