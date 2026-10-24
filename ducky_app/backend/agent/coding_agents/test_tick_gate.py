@@ -75,6 +75,43 @@ def test_non_git_lane_ticks(project: Path) -> None:
     assert tick_gate.check_tick(MEMBER, {"id": "s1"}) is None
 
 
+def _plugin(root: Path, backend_src: str) -> None:
+    plugin = root / "pkg" / "myplugin"
+    (plugin / "backend").mkdir(parents=True)
+    (plugin / "plugin.json").write_text('{"id": "myplugin", "data_sharing": false, "contributes": {}}', encoding="utf-8")
+    (plugin / "backend" / "gmail_send.py").write_text(backend_src, encoding="utf-8")
+
+
+def test_plugin_file_loading_by_path_refuses(project: Path) -> None:
+    _git(project, "init", "-q")
+    _plugin(project, "import importlib.util\nspec = importlib.util.spec_from_file_location('x', 'x.py')\n")
+    _commit_all(project)
+    refusal = tick_gate.check_tick(MEMBER, {"id": "s1"})
+    assert refusal and refusal.startswith("Can't tick: plugin checks failed")
+    assert "backend/gmail_send.py:2" in refusal and "spec_from_file_location" in refusal
+    assert "from . import" in refusal
+
+
+def test_clean_plugin_file_ticks(project: Path) -> None:
+    _git(project, "init", "-q")
+    _plugin(project, "from . import helpers\n")
+    _commit_all(project)
+    assert tick_gate.check_tick(MEMBER, {"id": "s1"}) is None
+
+
+def test_plugin_draft_outside_git_checks_hidden_characters_and_manifest_refs(project: Path) -> None:
+    if tick_gate._toplevel(project) is not None:
+        pytest.skip("temp folder sits inside a git repo")
+    _plugin(project, "x = 1​\n")
+    (project / "pkg" / "myplugin" / "plugin.json").write_text(
+        '{"id": "myplugin", "data_sharing": false, "contributes": {"ui.panels": [{"entry": "ui/panel.html"}]}}',
+        encoding="utf-8",
+    )
+    refusal = tick_gate.check_tick(MEMBER, {"id": "s1"}) or ""
+    assert "backend/gmail_send.py:1: hidden character U+200B" in refusal
+    assert "ui/panel.html" in refusal
+
+
 def test_lead_and_solo_chats_are_never_gated(project: Path) -> None:
     _git(project, "init", "-q")
     (project / "pkg" / "a.py").write_text("x = 1\n", encoding="utf-8")
