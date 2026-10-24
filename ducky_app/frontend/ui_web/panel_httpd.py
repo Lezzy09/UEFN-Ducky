@@ -298,6 +298,28 @@ def _peek_rfile(handler: Any) -> bytes:
             pass
 
 
+# Positional ``args`` names for the steer RPCs (they also take ``params``).
+_STEER_ARGS: dict[str, tuple[str, ...]] = {
+    "steer_take": ("conv_id",),
+    "steer_ack": ("conv_id", "lease_id"),
+    "steer_pending": ("conv_id",),
+}
+
+
+def _steer_rpc(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    """A tool call leases the person's held messages (nothing shows yet), acks once
+    it attached them (each shows as their bubble then), or asks if any wait."""
+    from frontend.ui_web import steer
+
+    conv_id = str(params.get("conv_id") or "").strip()
+    if method == "steer_take":
+        return {"result": steer.take(conv_id)}
+    if method == "steer_ack":
+        steer.ack(conv_id, str(params.get("lease_id") or ""))
+        return {"ok": True, "result": {"ok": True}}
+    return {"result": {"pending": steer.has_queued(conv_id)}}
+
+
 def _route_name(raw_path: str) -> str:
     """In-flight label: app routes by path, every page file as ``static``."""
     path = urlparse(raw_path or "/").path
@@ -1169,6 +1191,8 @@ def start_panel_ui_server(dist_root: Path) -> str:
                         return
                     method = str(payload.get("method") or "").strip()
                     params = payload.get("params")
+                    if method in _STEER_ARGS and params is None and isinstance(payload.get("args"), list):
+                        params = dict(zip(_STEER_ARGS[method], payload["args"]))
                     if not method or not isinstance(params, dict):
                         self._send_json(400, {"error": "method and params required"})
                         return
@@ -1181,11 +1205,8 @@ def start_panel_ui_server(dist_root: Path) -> str:
                             "blocked": ui_rpc.question_gate(conv_id, _RPC_HANDLER_WAIT_S)
                         }})
                         return
-                    if method == "steer_take":
-                        from frontend.ui_web import steer
-
-                        conv_id = str(params.get("conv_id") or "").strip()
-                        self._send_json(200, {"result": {"texts": steer.take(conv_id)}})
+                    if method in _STEER_ARGS:
+                        self._send_json(200, _steer_rpc(method, params))
                         return
                     if method == "agent_runs":
                         # The MCP bridge asks which chats run here (and may stop one).
