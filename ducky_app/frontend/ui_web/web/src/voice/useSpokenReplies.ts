@@ -35,6 +35,12 @@ export function useSpokenReplies(opts?: {
   useEffect(() => {
     installAgentEventBus();
     return subscribeAgentEvents((event) => {
+      // An agent or tool changed settings: drop the cached voice settings, or a
+      // reply right after "turn spoken replies off" is still read aloud.
+      if (event.type === "settings_changed") {
+        void loadVoiceSettings();
+        return;
+      }
       if (event.type !== "assistant_done" || event.note) return;
       const convId = event.conv_id?.trim();
       if (!convId) return;
