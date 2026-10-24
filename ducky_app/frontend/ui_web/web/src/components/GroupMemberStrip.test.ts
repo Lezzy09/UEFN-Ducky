@@ -30,12 +30,15 @@ describe("lane badge", () => {
     expect(laneTitle(null)).toContain("No write lane");
   });
 
-  it("describes configured permissions without claiming native-shell enforcement", () => {
-    expect(laneTitle([])).not.toContain("cannot write project files");
-    for (const lane of [null, [], ["a/**"]]) {
-      expect(laneTitle(lane)).toContain("enforcement");
-      expect(laneTitle(lane)).toContain("native shells");
+  it("says whether a lane blocks or only warns, and that native shells are not checked", () => {
+    for (const lane of [[], ["a/**"]]) {
+      expect(laneTitle(lane, "enforce")).toContain("Blocks: Ducky's file tools refuse a write outside the lane");
+      expect(laneTitle(lane, "shadow")).toContain("Warns only: a write outside the lane still goes through");
+      expect(laneTitle(lane)).toContain("native shells are not checked");
+      expect(laneTitle(lane)).not.toContain("coverage");
     }
+    expect(laneTitle([], "enforce", false)).toContain("did not report its lane setting; Blocks is the default");
+    expect(laneTitle(null)).toBe("No write lane: this agent may write any file.");
   });
 });
 

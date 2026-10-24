@@ -73,7 +73,7 @@ describe("team bar and roster", () => {
     const onMembersChange = setup();
     openTeam();
     const builderRow = (await screen.findByTitle("Open Builder's work")).closest<HTMLElement>("[role=row]")!;
-    fireEvent.click(within(builderRow).getByRole("button", { name: "No lane" }));
+    fireEvent.click(within(builderRow).getByRole("button", { name: "Any file" }));
     fireEvent.change(screen.getByLabelText("Write lane for Builder"), { target: { value: "Content/Verse/**" } });
     api.group_set_member_lane.mockResolvedValue({ ok: true, group_members: [{ ...crew[0], write_allowed: ["Content/Verse/**"] }, crew[1]] });
     await act(async () => {
@@ -81,7 +81,8 @@ describe("team bar and roster", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(api.group_set_member_lane).toHaveBeenCalledWith("Crew", "Builder", ["Content/Verse/**"], false));
-    await screen.findByRole("button", { name: "Verse/" });
+    // The lane cell: the glob, then what the mode does with a write outside it.
+    await screen.findByRole("button", { name: /^Verse\/\s*Blocks$/ });
     expect(onMembersChange).not.toHaveBeenCalled();
   });
 

@@ -4264,7 +4264,7 @@
 }
 .team-roster-row {
   display: grid;
-  grid-template-columns: minmax(150px, 1.6fr) 96px minmax(110px, 1.2fr) minmax(90px, 1fr) 64px 50px;
+  grid-template-columns: minmax(150px, 1.6fr) 96px minmax(120px, 1.4fr) minmax(110px, 1.2fr) minmax(90px, 1fr) 64px 50px;
   align-items: center;
   gap: 8px;
   min-height: 32px;
@@ -4345,6 +4345,34 @@
 .team-roster-pick:hover:not(:disabled) { border-color: var(--border); background: var(--bg); color: var(--fg); }
 .team-roster-pick svg { flex: none; width: 10px; height: 10px; color: var(--muted); }
 .team-roster-pick-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-roster-plan { flex-direction: column; align-items: stretch; gap: 1px; }
+.team-roster-plan-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.team-roster-plan-meter {
+  flex: 1 1 auto;
+  min-width: 24px;
+  max-width: 64px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+.team-roster-plan-meter > span { display: block; width: var(--pct, 0%); height: 100%; background: var(--green); }
+.team-roster-plan-count { flex: none; color: var(--fg-dim, var(--fg)); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.team-roster-plan-step { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.team-roster-plan-step--waiting { color: var(--amber); }
+.team-bar-stat--progress { color: var(--green); }
+.team-roster-lane-mode {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 14px;
+  opacity: 0.85;
+}
+.team-roster-lane-mode--enforce { color: var(--green); }
+.team-roster-lane-mode--shadow { color: var(--amber); }
+.team-roster-lane-mode--off { color: var(--muted); }
 .team-roster-lane--set { color: var(--accent); }
 .team-roster-lane--readonly { color: var(--amber); }
 .team-roster-lane--none { color: var(--muted); }
@@ -4397,16 +4425,17 @@
 @container (max-width: 640px) {
   .team-roster-row {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr) 56px 50px;
-    grid-template-areas: "name name name tokens actions" "status model lane lane lane";
+    grid-template-areas: "name name name tokens actions" "status model lane lane lane" "plan plan plan plan plan";
     row-gap: 2px;
     padding: 4px 8px;
   }
   .team-roster-row > :nth-child(1) { grid-area: name; }
   .team-roster-row > :nth-child(2) { grid-area: status; padding-left: calc(22px + var(--depth, 0) * 18px); }
-  .team-roster-row > :nth-child(3) { grid-area: model; }
-  .team-roster-row > :nth-child(4) { grid-area: lane; }
-  .team-roster-row > :nth-child(5) { grid-area: tokens; }
-  .team-roster-row > :nth-child(6) { grid-area: actions; }
+  .team-roster-row > :nth-child(3) { grid-area: plan; padding-left: calc(22px + var(--depth, 0) * 18px); }
+  .team-roster-row > :nth-child(4) { grid-area: model; }
+  .team-roster-row > :nth-child(5) { grid-area: lane; }
+  .team-roster-row > :nth-child(6) { grid-area: tokens; }
+  .team-roster-row > :nth-child(7) { grid-area: actions; }
   .team-roster-row--head { display: none; }
   .team-bar-count { display: none; }
 }

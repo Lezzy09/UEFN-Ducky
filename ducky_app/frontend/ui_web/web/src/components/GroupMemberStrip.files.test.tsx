@@ -9,7 +9,7 @@ import { GroupMemberStrip } from "./GroupMemberStrip";
 import { memberFileLines } from "./groupMemberHover";
 const members = ["Builder", "Designer"].map(name => ({ name, profile_id: "", member_conv_id: name.toLowerCase(), write_allowed: [] as string[] }));
 const props = { groupId: "project-a-group", members, onMembersChange: vi.fn(), onOpenMember: vi.fn() };
-const run = (group = props.groupId): ChangesetRunDto => ({ schema_version: 1, group_id: group, conv_id: "builder", run_id: "recorded-run", started: 1, status: "running", entries: [{ seq: 1, ts: 2, path: "src/file.ts", op: "write", tool: "write", before_hash: "", after_hash: "", in_lane: false, conflict: { kind: "concurrent_writer" }, outcome: "blocked" }] });
+const run = (group = props.groupId): ChangesetRunDto => ({ schema_version: 1, group_id: group, conv_id: "builder", run_id: "recorded-run", started: 1, status: "running", entries: [{ seq: 1, ts: 2, path: "src/file.ts", op: "write", tool: "write", before_hash: "", after_hash: "", in_lane: false, conflict: { kind: "concurrent_writer" }, outcome: "ok" }] });
 afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); });
 const openTeam = () => fireEvent.click(screen.getByRole("button", { name: /^Team/ }));
 const details = (name: string) => fireEvent.click(screen.getByRole("button", { name: `Details for ${name}` }));
@@ -19,14 +19,15 @@ it("shows recorded evidence for its member, configured lane changes and existing
   openTeam();
   details("Builder");
   await screen.findByText("Recorded owner: builder · run recorded-run");
-  expect(screen.getByText("Recorded path: src/file.ts · write · outcome blocked")).toBeTruthy();
+  // A conflict counts when the write landed (outcome ok); a refused write changed nothing.
+  expect(screen.getByText("Recorded path: src/file.ts · write · outcome ok")).toBeTruthy();
   expect(screen.getByTitle(/1 recorded file conflict/)).toBeTruthy();
   expect(screen.getAllByTitle(/native shells/)).toHaveLength(2);
   fireEvent.click(screen.getByTitle("Open Builder's work"));
   expect(props.onOpenMember).toHaveBeenCalledWith(expect.objectContaining({ id: "builder" }));
   view.rerender(<GroupMemberStrip {...props} members={[{ ...members[0], write_allowed: ["src/**"] }, members[1]]} />);
   expect(screen.getByText("src/")).toBeTruthy();
-  expect(screen.getByText("src/").closest("button")?.getAttribute("title")).toContain("Configured lane:\nsrc/**");
+  expect(screen.getByText("src/").closest("button")?.getAttribute("title")).toContain("Lane:\nsrc/**");
   details("Designer");
   const designerHistory = await screen.findByText("File history: no records returned");
   expect(designerHistory.parentElement?.textContent).not.toContain("Recorded owner:");

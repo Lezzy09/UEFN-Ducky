@@ -9,7 +9,17 @@ import { useRunningAgents } from "../hooks/useRunningAgents";
 import { useWaitingChatIds } from "../hooks/waitingChats";
 import { WaitingMarker } from "./WaitingMarker";
 import { requestOpenSettings } from "../navigation/openSettingsTab";
-import type { AgentProfileDto, ChatTab, ChangesetRunDto, FolderItem, GroupMemberDto, LaneCheckResult } from "../types/panel";
+import type {
+  AgentProfileDto,
+  ChatPlan,
+  ChatTab,
+  ChangesetRunDto,
+  FolderItem,
+  GroupMemberDto,
+  GroupMemberObservation,
+  LaneCheckResult,
+  PlanNode,
+} from "../types/panel";
 import { conflictCountsByConv } from "../utils/changesetGrouping";
 import { fmtCompactTokens } from "../utils/contextFormat";
 import { parseLaneText, shortLaneLabel, validateLaneGlobs } from "../utils/laneGlob";
@@ -33,11 +43,136 @@ import {
 export { shortModelLabel } from "./groupMemberHover";
 export { parseLaneText, shortLaneLabel, validateLaneGlobs } from "../utils/laneGlob";
 
-/** Tooltip for the lane button. */
-export function laneTitle(lane: string[] | null | undefined): string {
-  const configured = lane == null ? "No write lane configured" : lane.length === 0
-    ? "Configured lane: Read-only" : `Configured lane:\n${lane.join("\n")}`;
-  return `${configured}\nCurrent enforcement coverage: unknown; native shells are not guaranteed to honor this lane.`;
+/** Settings → write lanes: enforce refuses out-of-lane writes, shadow only flags them. */
+export type LaneMode = "enforce" | "shadow" | "off";
+
+/** The app's lane mode from its settings; the backend default (enforce) when it is not reported. */
+export function laneModeOf(settings: unknown): { mode: LaneMode; reported: boolean } {
+  const raw = String((settings as { write_lanes_mode?: unknown } | null)?.write_lanes_mode ?? "").trim().toLowerCase();
+  return raw === "enforce" || raw === "shadow" || raw === "off"
+    ? { mode: raw, reported: true }
+    : { mode: "enforce", reported: false };
+}
+
+/** The badge next to a lane: what happens to a write outside it. */
+export function laneModeBadge(mode: LaneMode): string {
+  return mode === "enforce" ? "Blocks" : mode === "shadow" ? "Warns only" : "Off";
+}
+
+/** What a lane does in this mode, in plain words. */
+export function laneModeText(mode: LaneMode, reported = true): string {
+  const what =
+    mode === "enforce"
+      ? "Blocks: Ducky's file tools refuse a write outside the lane, and the agent is told to stay inside it."
+      : mode === "shadow"
+        ? "Warns only: a write outside the lane still goes through and is flagged in Changes."
+        : "Off: lanes are not checked at all.";
+  const source = reported ? "" : " (The app did not report its lane setting; Blocks is the default.)";
+  return `${what}${source} Commands run in native shells are not checked.`;
+}
+
+/** The lane cell's label: "Any file", "Read-only", or the first glob with a +N suffix. */
+export function laneCellLabel(lane: string[] | null | undefined): string {
+  return lane == null ? "Any file" : shortLaneLabel(lane);
+}
+
+/** Tooltip for the lane button: every glob, then what the mode does with a write outside them. */
+export function laneTitle(lane: string[] | null | undefined, mode: LaneMode = "enforce", reported = true): string {
+  if (lane == null) return "No write lane: this agent may write any file.";
+  const configured = lane.length === 0 ? "Lane: Read-only (no file may be written)" : `Lane:\n${lane.join("\n")}`;
+  return `${configured}\n${laneModeText(mode, reported)}`;
+}
+
+export type SubPlanProgress = {
+  /** The sub plan (or step) the agent is assigned. */
+  title: string;
+  done: number;
+  /** Steps that count: cancelled ones are left out. */
+  total: number;
+  pct: number;
+  /** The step in progress, else the next one waiting; empty when all are done. */
+  current: string;
+  /** The unfinished step the next step waits for (its ``after``), when nothing is in progress. */
+  waitingOn?: string;
+};
+
+/** Plan rows carry ``after`` (ids of steps that must finish first). */
+type PlanNodeWithAfter = PlanNode & { after?: string[] };
+
+function findPlanNode(nodes: PlanNode[] | undefined, id: string): PlanNode | undefined {
+  for (const node of nodes || []) {
+    if (node.id === id) return node;
+    const inside = findPlanNode(node.children, id);
+    if (inside) return inside;
+  }
+  return undefined;
+}
+
+function planLeaves(node: PlanNode): PlanNode[] {
+  const kids = node.children || [];
+  return kids.length ? kids.flatMap(planLeaves) : [node];
+}
+
+/**
+ * An agent's progress through its assigned part of the team plan: steps done of total, %, and the
+ * current step. Null when the plan is not the one the assignment names (an old or moved plan).
+ */
+export function subPlanProgress(
+  plan: ChatPlan | null | undefined,
+  assignment: GroupMemberObservation["assignment"] | undefined,
+): SubPlanProgress | null {
+  if (!plan || !assignment || plan.id !== assignment.plan_id) return null;
+  const root = assignment.node_id ? findPlanNode(plan.nodes, assignment.node_id) : undefined;
+  if (assignment.node_id && !root) return null;
+  const leaves = root ? planLeaves(root) : (plan.nodes || []).flatMap(planLeaves);
+  const counted = leaves.filter((n) => n.status !== "cancelled");
+  if (counted.length === 0) return null;
+  const done = counted.filter((n) => n.status === "completed").length;
+  const running = counted.find((n) => n.status === "in_progress");
+  const current = running ?? counted.find((n) => n.status === "pending");
+  let waitingOn: string | undefined;
+  if (!running && current) {
+    const blocker = ((current as PlanNodeWithAfter).after || [])
+      .map((id) => findPlanNode(plan.nodes, id))
+      .find((n) => n && n.status !== "completed" && n.status !== "cancelled");
+    if (blocker) waitingOn = blocker.content;
+  }
+  return {
+    title: root?.content || plan.title || assignment.title,
+    done,
+    total: counted.length,
+    pct: Math.round((done / counted.length) * 100),
+    current: current?.content || "",
+    ...(waitingOn ? { waitingOn } : {}),
+  };
+}
+
+/** The short current-step line under a row's count. */
+export function progressStep(p: SubPlanProgress): string {
+  if (!p.current) return "Done";
+  return p.waitingOn ? `Waiting on ${p.waitingOn}` : p.current;
+}
+
+/** Several agents' parts added up; a part shared by two agents counts once. */
+export function sumProgress(parts: SubPlanProgress[], title: string): SubPlanProgress | null {
+  const done = parts.reduce((n, p) => n + p.done, 0);
+  const total = parts.reduce((n, p) => n + p.total, 0);
+  if (!total) return null;
+  const open = parts.filter((p) => p.current);
+  return {
+    title,
+    done,
+    total,
+    pct: Math.round((done / total) * 100),
+    current: open.length === 1 ? open[0].current : open.length ? `${open.length} parts open` : "",
+  };
+}
+
+/** "3/5 · 60%" plus the current step, for titles and details. */
+export function progressText(p: SubPlanProgress): string {
+  const head = `${p.title}: ${p.done}/${p.total} steps (${p.pct}%)`;
+  if (!p.current) return `${head} · all done`;
+  return p.waitingOn ? `${head} · next: ${p.current}, waiting on ${p.waitingOn}` : `${head} · now: ${p.current}`;
 }
 
 type Props = {
@@ -189,6 +324,54 @@ export function GroupMemberStrip({
       void refreshObservations();
     }
   }), [groupId, members, observedMembers, refreshObservations]);
+
+  // Whether lanes block or only warn is an app setting, read once.
+  const [laneMode, setLaneMode] = useState(() => laneModeOf(null));
+  useEffect(() => {
+    let live = true;
+    void Promise.resolve(getApi()?.get_settings?.())
+      .then((settings) => { if (live && settings) setLaneMode(laneModeOf(settings)); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, []);
+
+  /** Team plans by the chat that owns them (where members' assignments point), read with get_plan. */
+  const [plans, setPlans] = useState<Record<string, ChatPlan | null>>({});
+  const planRequest = useRef(0);
+  const planChats = useMemo(() => {
+    const ids = new Set<string>();
+    const add = (rows?: GroupMemberDto[]) => {
+      for (const row of rows || []) {
+        const owner = row.observation?.assignment?.chat_id;
+        if (owner) ids.add(owner);
+      }
+    };
+    if (observedMembers?.groupId === groupId) add(observedMembers.rows);
+    for (const rows of Object.values(rosters)) add(rows);
+    return [...ids].sort().join("|");
+  }, [observedMembers, groupId, rosters]);
+  // Read again with every observation refresh: plan events refresh those.
+  useEffect(() => {
+    const api = getApi();
+    const ids = planChats ? planChats.split("|") : [];
+    const request = ++planRequest.current;
+    if (!api?.get_plan || ids.length === 0) {
+      setPlans({});
+      return;
+    }
+    void Promise.all(
+      ids.map(async (id) => {
+        try {
+          const res = await api.get_plan(id);
+          return [id, res?.ok ? res.plan ?? null : null] as const;
+        } catch {
+          return [id, null] as const;
+        }
+      }),
+    ).then((rows) => {
+      if (request === planRequest.current) setPlans(Object.fromEntries(rows));
+    });
+  }, [planChats, observedMembers, rosters]);
 
   const refreshProfiles = useCallback(() => {
     const api = getApi();
@@ -528,6 +711,23 @@ export function GroupMemberStrip({
     return rosters[node.hubId]?.find((row) => row.member_conv_id === node.id);
   };
 
+  /** The agent's progress through its sub plan, from the plan its observed assignment names. */
+  const progressOf = (node: RosterNode): SubPlanProgress | null => {
+    if (node.isGroup) {
+      const parts = new Map<string, SubPlanProgress>();
+      for (const agent of rosterAgents(node.children)) {
+        const p = progressOf(agent);
+        const assignment = observed(agent)?.observation?.assignment;
+        if (p && assignment) parts.set(`${assignment.plan_id}:${assignment.node_id ?? ""}`, p);
+      }
+      return sumProgress([...parts.values()], node.name);
+    }
+    const observation = observed(node)?.observation;
+    const assignment = observation?.assignment;
+    if (!observation || !assignment || observation.group_id !== node.hubId) return null;
+    return subPlanProgress(plans[assignment.chat_id], assignment);
+  };
+
   const statusOf = (node: RosterNode): { label: string; cls: string } => {
     if (node.isGroup) {
       const inside = rosterAgents(node.children);
@@ -574,7 +774,9 @@ export function GroupMemberStrip({
             aria-label={`Write lane for ${node.name}`}
           />
           <div className="group-member-lane-hint">
-            One glob per line; a bare folder means folder/**. Save with no lines = configured read-only. Clear = no configured restriction. Enforcement coverage is unknown; native shells may bypass lanes.
+            A lane is the set of files {node.name} may write: one glob per line, a bare folder means everything in it.
+            {" "}{laneModeText(laneMode.mode, laneMode.reported)} Only the group lead or you can change a lane.
+            Save with no lines = read-only; Clear lane = any file.
           </div>
           {laneCheck?.errors.length ? (
             <ul className="group-member-lane-problems group-member-lane-problems--error">
@@ -606,8 +808,10 @@ export function GroupMemberStrip({
       );
     }
     const member = node.member;
+    const progress = progressOf(node);
     const lines = member
       ? [
+          ...(progress ? [`Progress: ${progressText(progress)}`] : []),
           ...memberObservationLines({ ...member, observation: observed(node)?.observation }, node.hubId, observationNow),
           ...memberFileLines(scopedFiles?.runs ?? null, node.id, scopedFiles?.readAt ?? 0, observationNow),
         ]
@@ -638,6 +842,7 @@ export function GroupMemberStrip({
     const laneKind = lane == null ? "none" : lane.length === 0 ? "readonly" : "set";
     const editable = Boolean(node.member) && !node.isGroup;
     const foldedNow = node.isGroup && isFolded(node.key);
+    const progress = progressOf(node);
     return (
       <Fragment key={node.key}>
         <div
@@ -683,6 +888,29 @@ export function GroupMemberStrip({
           <span className={`team-roster-cell team-roster-status team-roster-status--${status.cls}`} role="cell">
             {status.label}
           </span>
+          <span
+            className="team-roster-cell team-roster-plan"
+            role="cell"
+            title={progress ? progressText(progress) : node.isGroup ? undefined : "No assigned sub plan seen"}
+          >
+            {progress ? (
+              <>
+                <span className="team-roster-plan-top">
+                  <span className="team-roster-plan-meter" aria-hidden>
+                    <span style={{ ["--pct" as string]: `${progress.pct}%` }} />
+                  </span>
+                  <span className="team-roster-plan-count">
+                    {progress.done}/{progress.total} · {progress.pct}%
+                  </span>
+                </span>
+                <span className={`team-roster-plan-step${progress.waitingOn ? " team-roster-plan-step--waiting" : ""}`}>
+                  {progressStep(progress)}
+                </span>
+              </>
+            ) : node.isGroup ? null : (
+              <span className="team-roster-muted">—</span>
+            )}
+          </span>
           <span className="team-roster-cell" role="cell">
             {editable ? (
               <button
@@ -709,10 +937,15 @@ export function GroupMemberStrip({
                 type="button"
                 className={`team-roster-pick team-roster-lane team-roster-lane--${laneKind}`}
                 disabled={busy}
-                title={laneTitle(lane)}
+                title={laneTitle(lane, laneMode.mode, laneMode.reported)}
                 onClick={() => (editor?.key === node.key && editor.kind === "lane" ? setEditor(null) : openLaneEditor(node))}
               >
-                <span className="team-roster-pick-text">{shortLaneLabel(lane)}</span>
+                <span className="team-roster-pick-text">{laneCellLabel(lane)}</span>
+                {lane != null ? (
+                  <span className={`team-roster-lane-mode team-roster-lane-mode--${laneMode.mode}`}>
+                    {laneModeBadge(laneMode.mode)}
+                  </span>
+                ) : null}
                 <Icons.ChevronDown />
               </button>
             ) : null}
@@ -759,6 +992,22 @@ export function GroupMemberStrip({
     );
   };
 
+  // Team progress: each assigned part counted once, however many agents share it.
+  const teamProgress = (() => {
+    const parts = new Map<string, SubPlanProgress>();
+    for (const a of agents) {
+      const p = progressOf(a);
+      const assignment = observed(a)?.observation?.assignment;
+      if (p && assignment) parts.set(`${assignment.plan_id}:${assignment.node_id ?? ""}`, p);
+    }
+    let done = 0;
+    let total = 0;
+    for (const p of parts.values()) {
+      done += p.done;
+      total += p.total;
+    }
+    return total ? { done, total, pct: Math.round((done / total) * 100), parts: [...parts.values()] } : null;
+  })();
   const barAgents = agents.slice(0, BAR_AVATARS);
   const more = agents.length - barAgents.length;
   const groupCount = rosterGroupIds(roster).length;
@@ -782,6 +1031,11 @@ export function GroupMemberStrip({
           </span>
           {runningCount ? <span className="team-bar-stat team-bar-stat--running">{runningCount} running</span> : null}
           {waitingCount ? <span className="team-bar-stat team-bar-stat--waiting">{waitingCount} waiting</span> : null}
+          {teamProgress ? (
+            <span className="team-bar-stat team-bar-stat--progress" title={teamProgress.parts.map(progressText).join("\n")}>
+              {teamProgress.done}/{teamProgress.total} steps · {teamProgress.pct}%
+            </span>
+          ) : null}
           {conflictTotal ? (
             <span className="team-bar-stat team-bar-stat--conflict">
               {conflictTotal} file {conflictTotal === 1 ? "conflict" : "conflicts"}
@@ -792,12 +1046,13 @@ export function GroupMemberStrip({
         <div className="team-bar-avatars" aria-label="Agents">
           {barAgents.map((a) => {
             const state = waitingIds.has(a.id) ? "waiting" : runningIds.has(a.id) ? "running" : "idle";
+            const progress = progressOf(a);
             return (
               <button
                 key={a.key}
                 type="button"
                 className={`team-bar-avatar team-bar-avatar--${state}`}
-                title={`${a.name} · ${aiTypeLabel(a.model, a.codingAgent)} · ${fmtCompactTokens(a.contextTokens)}${state === "idle" ? "" : ` · ${state}`}`}
+                title={`${a.name} · ${aiTypeLabel(a.model, a.codingAgent)} · ${fmtCompactTokens(a.contextTokens)}${state === "idle" ? "" : ` · ${state}`}${progress ? `\n${progressText(progress)}` : ""}`}
                 aria-label={`Open ${a.name}`}
                 onClick={() => openNode(a)}
               >
@@ -926,6 +1181,7 @@ export function GroupMemberStrip({
               <div className="team-roster-row team-roster-row--head" role="row">
                 <span className="team-roster-cell" role="columnheader">Agent</span>
                 <span className="team-roster-cell" role="columnheader">Status</span>
+                <span className="team-roster-cell" role="columnheader">Sub plan</span>
                 <span className="team-roster-cell" role="columnheader">Model</span>
                 <span className="team-roster-cell" role="columnheader">Write lane</span>
                 <span className="team-roster-cell team-roster-tokens" role="columnheader">Context</span>
