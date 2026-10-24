@@ -376,11 +376,11 @@ def workspace_write_file(relative_path: str = "", *, content: str, pretty: bool 
     relative_path = path_arg(relative_path, path)
     result = get_writer().write_text(relative_path, content, tool="workspace_write_file")
     file_path = result.abs_path
+    # The old text stays with the writer (history + Changes tab); echoing it here
+    # resent the whole file to the model on every write.
     payload: dict[str, Any] = {
-        "path": file_path,
         "relative_path": result.path,
         "bytes_written": result.bytes_written,
-        "before_content": result.before_content,
         "lines_added": result.lines_added,
         "lines_removed": result.lines_removed,
     }
@@ -404,7 +404,7 @@ def workspace_write_file(relative_path: str = "", *, content: str, pretty: bool 
                 )
         except Exception:
             pass
-    return tool_json(payload, pretty=pretty)
+    return tool_json(payload, pretty=pretty, drop_empty=True)
 
 
 @mcp.tool()

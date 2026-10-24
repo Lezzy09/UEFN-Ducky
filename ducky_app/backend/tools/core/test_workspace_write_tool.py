@@ -44,14 +44,25 @@ def _payload(text: str) -> dict:
 
 def test_write_tool_uses_pipeline_and_reports_changeset(project, monkeypatch) -> None:
     root, journal = project
-    monkeypatch.setattr(system, "tool_json", lambda payload, pretty=False: json.dumps(payload))
     out = _payload(system.workspace_write_file("Content/Verse/a.verse", content="one\ntwo\n"))
     assert (root / "Content" / "Verse" / "a.verse").read_text(encoding="utf-8") == "one\ntwo\n"
     assert out["relative_path"] == "Content/Verse/a.verse"
-    assert out["lines_added"] == 2 and out["before_content"] == ""
+    assert out["lines_added"] == 2
     assert out["changeset"] == {"run_id": "r", "seq": 1}
-    assert Path(out["path"]).is_absolute()
     assert len(journal.records) == 1 and journal.records[0].tool == "workspace_write_file"
+
+
+def test_write_tool_result_is_small_and_never_echoes_the_old_file(project) -> None:
+    root, _ = project
+    old = "x = 1\n" * 2000
+    (root / "Content" / "a.txt").write_text(old, encoding="utf-8")
+    text = system.workspace_write_file("Content/a.txt", content="y\n" * 450)
+    out = _payload(text)
+    assert "before_content" not in out and "x = 1" not in text
+    assert "path" not in out  # relative_path only, no absolute twin
+    assert all(v not in (None, "", [], {}) for v in out.values())
+    assert out["bytes_written"] == 900 and out["lines_added"] == 450
+    assert len(text.encode("utf-8")) < 400
 
 
 def test_write_tool_refuses_guarded_paths(project, monkeypatch) -> None:
@@ -78,7 +89,7 @@ def test_read_tool_notes_the_base_for_conflicts(project, monkeypatch) -> None:
 
 def test_write_tool_takes_path_like_the_read_tool(project, monkeypatch) -> None:
     root, _ = project
-    monkeypatch.setattr(system, "tool_json", lambda payload, pretty=False: json.dumps(payload))
+    monkeypatch.setattr(system, "tool_json", lambda payload, pretty=False, **_: json.dumps(payload))
     _payload(system.workspace_write_file(path="Content/Verse/b.verse", content="x\n"))
     assert (root / "Content" / "Verse" / "b.verse").read_text(encoding="utf-8") == "x\n"
 

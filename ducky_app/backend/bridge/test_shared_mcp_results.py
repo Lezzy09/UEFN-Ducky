@@ -1,4 +1,7 @@
-"""Shared-daemon tools/call results match the stdio server's, structuredContent included."""
+"""Shared-daemon tools/call results match the stdio server's, structuredContent included.
+
+str tools return their text as plain content: no outputSchema, no {"result": "<escaped json>"}.
+"""
 
 import asyncio
 from types import SimpleNamespace
@@ -18,7 +21,7 @@ def _server():
     server._ducky_skip_plugin_wait = True
 
     @server.tool(name="ducky_get_status")
-    def status() -> str:  # str tools (tool_json) get FastMCP's {"result": string} schema
+    def status() -> str:  # str tools (tool_json) are plain text content, no schema
         return '{"listener":"online"}'
 
     @server.tool(name="workspace_delete_file")
@@ -85,8 +88,9 @@ def test_shared_result_matches_stdio_result(server, name, args):
         # MCP: a tool that declares outputSchema must return matching structuredContent.
         jsonschema.validate(shared["structuredContent"], schema)
     else:
-        # An error result, or a tool with no schema, carries none.
-        assert name in ("no_schema_tool", "own_result_tool", "own_error_tool")
+        # An error result, a str tool or a tool with no schema carries none.
+        assert name in ("ducky_get_status", "workspace_delete_file", "no_schema_tool",
+                        "own_result_tool", "own_error_tool")
         assert "structuredContent" not in shared
     if name == "dict_tool":
         assert shared["structuredContent"] == {"count": 2}
@@ -97,12 +101,13 @@ def test_str_tool_result_over_the_daemon_socket(server, monkeypatch, tmp_path):
     sock = _hello("run-shape")
     try:
         rows = {row["name"]: row for row in _rpc(sock, "tools/list")["tools"]}
-        assert rows["ducky_get_status"]["outputSchema"]["required"] == ["result"]
+        assert "outputSchema" not in rows["ducky_get_status"]
+        assert rows["dict_tool"]["outputSchema"]["type"] == "object"
         result = _rpc(sock, "tools/call", {"name": "ducky_get_status", "arguments": {}}, req_id=2)
         assert result["isError"] is False
-        assert result["structuredContent"] == {"result": '{"listener":"online"}'}
+        assert "structuredContent" not in result
         assert result["content"] == [{"type": "text", "text": '{"listener":"online"}'}]
-        # A raising tool is still a JSON-RPC error, never a success without structuredContent.
+        # A raising tool is still a JSON-RPC error, never a success.
         with pytest.raises(RuntimeError, match="listener offline"):
             _rpc(sock, "tools/call", {"name": "failing_tool", "arguments": {}}, req_id=3)
     finally:

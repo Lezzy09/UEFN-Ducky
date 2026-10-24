@@ -3,11 +3,17 @@
 from mcp.server.fastmcp import FastMCP
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+import inspect
 
 import anyio
 
-from backend.agent.coding_agents.plans import PLAN_PROTOCOL
-from backend.agent.hard_rules import AGENT_HARD_RULES
+
+def _returns_str(fn) -> bool:
+    try:
+        annotation = inspect.signature(fn).return_annotation
+    except (TypeError, ValueError):
+        return False
+    return annotation is str or annotation == "str"
 
 
 class ProtectedFastMCP(FastMCP):
@@ -39,6 +45,13 @@ class ProtectedFastMCP(FastMCP):
             return options
 
         self._mcp_server.create_initialization_options = initialization_options
+
+    def add_tool(self, fn, *args, structured_output=None, **kwargs):
+        # A str tool's text is the result: FastMCP would otherwise wrap it again as
+        # structuredContent {"result": "<escaped json>"} with a matching outputSchema.
+        if structured_output is None and _returns_str(fn):
+            structured_output = False
+        return super().add_tool(fn, *args, structured_output=structured_output, **kwargs)
 
     async def _catalog_tools(self):
         from backend.workspace.ai_ignore import current_policy, SAFE_TOOLS
@@ -130,22 +143,13 @@ class ProtectedFastMCP(FastMCP):
 
 mcp = ProtectedFastMCP(
     "uefn-ducky",
+    # The agent rules and plan protocol travel in the coding-agent prompt; repeating
+    # them here sent them twice every session.
     instructions=(
-        "UEFN Ducky — MCP server for UEFN (Unreal Editor for Fortnite) plus Store desktop "
-        "plugins (e.g. blender_*). Desktop-plugin tools do NOT need the UEFN listener.\n\n"
-        f"{AGENT_HARD_RULES}\n"
-        "**Plans (HARD):** A diagnose/fix/build of 4+ separate changes or checks, or work "
-        "shared with other duckies, MUST use `ducky_create_plan`; a short job gets no plan. "
-        f"Never substitute a chat prose Fix plan. {PLAN_PROTOCOL}\n\n"
-        "**Blender (Store plugin):** when blender tools are enabled and the Blender MCP "
-        "socket is up, call blender_* immediately — never wait for UEFN / the Fortnite "
-        "listener. Teach Connect only when blender_status reports disconnected.\n\n"
-        "**Store plugins:** enabled plugins may register extra tools on this same MCP "
-        "server (e.g. discord_*, blender_*). If those tools are listed, call them — do "
-        "not claim the integration is unavailable.\n\n"
-        "Performance: use compact responses (pretty=false), pagination (offset/limit/fields) on "
-        "get_all_actors, list_assets, and search_assets.\n\n"
-        "Workspace file tools use UEFN_VSCODE_WORKSPACE_FOLDERS. For tkinter via execute_python, "
-        "use get_tk_root() and tk.Toplevel — never tk.Tk()."
+        "UEFN Ducky — tools for UEFN (Unreal Editor for Fortnite), project files and the Ducky app.\n"
+        "Store plugins add more tools here (blender_*, discord_*, …): if listed, call them.\n"
+        "Desktop-plugin tools do not need the UEFN listener.\n"
+        "Keep responses compact (pretty=false) and page big lists (offset/limit/fields).\n"
+        "Not sure which tool fits? skill_search, or ducky_get_tools."
     ),
 )

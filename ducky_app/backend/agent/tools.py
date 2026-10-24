@@ -393,11 +393,6 @@ def compact_json_value(tool_name: str, value: Any) -> Any:
                 "devices_truncated": len(devices) - 8,
                 "count": value.get("count", len(devices)),
             }
-    if tool_name in ("workspace_write_file", "create_project_verse_file"):
-        slim = dict(value)
-        slim.pop("before_content", None)
-        slim.pop("path", None)
-        return slim
     if tool_name == "workspace_list_verse_errors":
         files = value.get("files")
         if isinstance(files, list):
