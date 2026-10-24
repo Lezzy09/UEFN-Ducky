@@ -188,14 +188,41 @@ def wait(request_id: str, timeout: float) -> dict[str, Any] | None:
     return None
 
 
-def respond(request_id: str, payload: dict[str, Any]) -> bool:
-    """Deliver the panel's answer. Returns ``False`` if the id is unknown/expired."""
+FREE_TEXT_NOTE = "The person replied in their own words instead of picking an option."
+
+
+def _with_free_text(questions: list[dict[str, Any]], payload: dict[str, Any], text: str) -> dict[str, Any]:
+    """The person typed a reply in the composer: it answers every question still open.
+
+    A question that takes free text gets it as its text; an options-only one gets it as an
+    ``other`` answer. The agent sees the words plus a note that no option was picked.
+    """
+    answers = dict(payload.get("answers") or {}) if isinstance(payload.get("answers"), dict) else {}
+    reply = {"selected": [], "text": text, "free_text": True}
+    for question in questions or [{"id": "reply"}]:
+        qid = question.get("id")
+        if isinstance(answers.get(qid), dict) and not answers[qid].get("skipped"):
+            continue
+        takes_text = question.get("allow_free_text", True) or not question.get("options")
+        answers[qid] = dict(reply) if takes_text else {**reply, "selected": ["other"]}
+    return {**payload, "ok": True, "answers": answers, "free_text": text, "note": FREE_TEXT_NOTE}
+
+
+def respond(request_id: str, payload: dict[str, Any], free_text: str = "") -> bool:
+    """Deliver the panel's answer. Returns ``False`` if the id is unknown/expired.
+
+    ``free_text`` (or ``payload["free_text"]``): the person answered an ask_user question by
+    typing in the composer instead of the card.
+    """
     with _lock:
         _restore_questions_locked()
         slot = _pending.get(request_id)
         if slot is None or slot.event.is_set():
             return False  # first answer wins: another window's late close can't overwrite it
         if slot.method == "ask_user":
+            text = str(free_text or (payload or {}).get("free_text") or "").strip()
+            if text:
+                payload = _with_free_text(slot.params.get("questions") or [], dict(payload or {}), text)
             answers = (payload or {}).get("answers")
             # Window shutdowns, transport errors and empty responses are not answers.
             if not (payload or {}).get("ok") or not isinstance(answers, dict) or not answers:

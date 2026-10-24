@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from backend.agent.coding_agents.runner import merge_steered_blocks
 from backend.server import _with_steer
 from frontend.ui_web import steer
@@ -17,13 +19,75 @@ def test_post_take_and_end(monkeypatch):
         assert steer.post("busy", "q1", "use blue") is True  # Send now twice: held once
         assert steer.post("busy", "q2", "and red") is True
         steer.post("busy", "q2", "")  # deleted from the queue before a tool call took it
-        assert steer.take("busy") == ["use blue"]
+        lease = steer.take("busy")
+        assert lease["texts"] == ["use blue"] and lease["steer_ids"] == ["q1"] and lease["lease_id"]
+        assert events == []  # not delivered until the tool server confirms
+        assert steer.ack("busy", lease["lease_id"]) == ["use blue"]
         assert events == [{"type": "user_steered", "conv_id": "busy", "steer_id": "q1", "text": "use blue"}]
-        assert steer.take("busy") == []
+        assert steer.ack("busy", lease["lease_id"]) == []  # pushed once
+        assert steer.take("busy")["texts"] == []
         steer.post("busy", "q3", "late")
     finally:
         steer.end_run("busy")
-    assert steer.take("busy") == []  # the turn ended: its queue runs it next instead
+    assert steer.take("busy")["texts"] == []  # the turn ended: its queue runs it next instead
+
+
+def _clock(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(steer, "_now", lambda: now[0])
+    monkeypatch.setattr("frontend.ui_web.agent_modes.is_agent_running", lambda cid: True)
+    return now
+
+
+def test_unconfirmed_lease_comes_back(monkeypatch):
+    now = _clock(monkeypatch)
+    events = []
+    steer.bind_run("c", events.append)
+    try:
+        steer.post("c", "q1", "also update the README")
+        first = steer.take("c")
+        assert first["texts"] == ["also update the README"]
+        steer.post("c", "q2", "and the docs")
+        assert steer.take("c")["texts"] == []  # the first lease is still open
+        now[0] += 11.9
+        assert steer.take("c")["texts"] == []
+        now[0] += 0.2  # 12 s without an ack: back in the queue
+        second = steer.take("c")
+        assert second["texts"] == ["also update the README", "and the docs"]
+        assert steer.ack("c", first["lease_id"]) == []  # the stale lease confirms nothing
+        assert steer.ack("c", second["lease_id"]) == ["also update the README", "and the docs"]
+        assert [e["steer_id"] for e in events] == ["q1", "q2"]
+    finally:
+        steer.end_run("c")
+
+
+def test_has_queued(monkeypatch):
+    now = _clock(monkeypatch)
+    try:
+        assert steer.has_queued("c") is False
+        steer.post("c", "q1", "x")
+        assert steer.has_queued("c") is True
+        steer.take("c")
+        assert steer.has_queued("c") is False  # leased items don't count
+        now[0] += steer.LEASE_S
+        assert steer.has_queued("c") is True  # lease expired back to queued
+        t = time.perf_counter()
+        for _ in range(10_000):
+            steer.has_queued("c")
+        assert time.perf_counter() - t < 0.5  # ~10 ms here; loose for slow CI
+    finally:
+        steer.end_run("c")
+
+
+def test_taken_back_drops_leased_copy(monkeypatch):
+    _clock(monkeypatch)
+    try:
+        steer.post("c", "q1", "x")
+        lease = steer.take("c")
+        steer.post("c", "q1", "")
+        assert steer.ack("c", lease["lease_id"]) == []
+    finally:
+        steer.end_run("c")
 
 
 def test_steer_note_rides_on_every_result_shape():
