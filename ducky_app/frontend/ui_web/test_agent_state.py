@@ -20,17 +20,17 @@ class _Terminals:
 @pytest.fixture
 def seed(monkeypatch):
     facts = {"question": None, "approval": [], "tool": None, "output_age_s": None}
-    monkeypatch.setattr(ui_rpc, "pending_question", lambda cid: facts["question"], raising=False)
+    monkeypatch.setattr(ui_rpc, "pending_question", lambda cid: facts["question"])
     monkeypatch.setattr(ui_rpc, "has_pending_for_conv", lambda cid: facts["question"] is not None)
     monkeypatch.setattr("frontend.ui_web.terminal.get_terminal_manager", lambda: _Terminals(facts["approval"]))
-    monkeypatch.setattr(agent_modes, "running_tool", lambda cid: facts["tool"], raising=False)
-    monkeypatch.setattr(agent_modes, "last_output_age_s", lambda cid: facts["output_age_s"], raising=False)
+    monkeypatch.setattr(agent_modes, "running_tool", lambda cid: facts["tool"])
+    monkeypatch.setattr(agent_modes, "last_output_age_s", lambda cid: facts["output_age_s"])
     monkeypatch.setattr(agent_modes, "list_running_agents", lambda: ["c1"])
     return facts
 
 
 def test_pending_question_needs_an_answer(seed):
-    seed.update(question={"prompt": "Which folder?", "age_s": 62}, output_age_s=5)
+    seed.update(question={"request_id": "r1", "text": "Which folder?", "since": time.time() - 62}, output_age_s=5)
     assert agent_state.agent_state("c1") == {"state": "needs_answer", "since_s": 62, "detail": "Which folder?"}
 
 
@@ -41,12 +41,12 @@ def test_pending_approval_needs_approval(seed):
 
 
 def test_a_tool_running_40_s_is_a_running_command(seed):
-    seed.update(tool={"tool": "workspace_search", "age_s": 40}, output_age_s=40)
+    seed.update(tool={"name": "workspace_search", "started_at": time.time() - 40}, output_age_s=40)
     assert agent_state.agent_state("c1") == {"state": "running_command", "since_s": 40, "detail": "workspace_search"}
 
 
 def test_output_10_s_ago_is_working(seed):
-    seed.update(tool={"tool": "workspace_read_file", "age_s": 2}, output_age_s=10)
+    seed.update(tool={"name": "workspace_read_file", "started_at": time.time() - 2}, output_age_s=10)
     assert agent_state.agent_state("c1")["state"] == "working"
 
 
@@ -56,5 +56,5 @@ def test_output_15_min_ago_is_silent(seed):
 
 
 def test_running_agents_lists_each_with_its_state(seed):
-    seed.update(question={"prompt": "Which folder?", "age_s": 3})
+    seed.update(question={"request_id": "r1", "text": "Which folder?", "since": time.time() - 3})
     assert agent_state.running_agents() == [{"id": "c1", "state": "needs_answer", "since_s": 3, "detail": "Which folder?"}]

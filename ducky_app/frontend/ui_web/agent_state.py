@@ -16,7 +16,7 @@ OUTPUT_FRESH_S = 60.0
 
 
 def _call(module: Any, name: str, *args: Any) -> Any:
-    """An accessor of another lane; None while it does not exist yet or fails."""
+    """An accessor of another lane; None when it fails (a meter never breaks ducky_health)."""
     fn = getattr(module, name, None)
     if fn is None:
         return None
@@ -29,17 +29,12 @@ def _call(module: Any, name: str, *args: Any) -> Any:
 def _question(conv_id: str) -> dict[str, Any] | None:
     from frontend.ui_web import ui_rpc
 
-    found = _call(ui_rpc, "pending_question", conv_id)  # {"prompt", "age_s"}
+    found = _call(ui_rpc, "pending_question", conv_id)  # {request_id, text, since}
     if found:
-        return found
-    if not _call(ui_rpc, "has_pending_for_conv", conv_id):
-        return None
-    for row in _call(ui_rpc, "pending_questions") or []:
-        params = row.get("params") or {}
-        if str(params.get("conv_id") or "") == conv_id:
-            first = (params.get("questions") or [{}])[0]
-            return {"prompt": str(first.get("prompt") or ""), "age_s": None}
-    return {"prompt": "", "age_s": None}
+        return {"prompt": found.get("text") or "", "age_s": time.time() - float(found.get("since") or time.time())}
+    if _call(ui_rpc, "has_pending_for_conv", conv_id):  # another kind of window request
+        return {"prompt": "", "age_s": None}
+    return None
 
 
 def _approval(conv_id: str) -> dict[str, Any] | None:
@@ -77,9 +72,10 @@ def agent_state(conv_id: str) -> dict[str, Any]:
     from frontend.ui_web import agent_modes
 
     cid = (conv_id or "").strip()
-    return classify(_question(cid), _approval(cid),
-                    _call(agent_modes, "running_tool", cid),  # {"tool", "age_s"}
-                    _call(agent_modes, "last_output_age_s", cid))
+    running = _call(agent_modes, "running_tool", cid)  # {name, started_at}
+    tool = {"tool": running.get("name"), "age_s": time.time() - float(running.get("started_at") or time.time())} \
+        if running else None
+    return classify(_question(cid), _approval(cid), tool, _call(agent_modes, "last_output_age_s", cid))
 
 
 def running_agents() -> list[dict[str, Any]]:
