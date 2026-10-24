@@ -96,9 +96,35 @@ def _load_blob() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+# (db path, login_version, account key) of the stored login. Every repo call asks who is
+# signed in; the login row bumps meta.login_version on each write (any process), so one
+# tiny meta read replaces the secrets read + json parse + DPAPI check.
+_KEY_CACHE: tuple[str, str, str] | None = None
+
+
 def account_key(blob: dict[str, Any] | None = None) -> str:
     """Who this PC is signed in as (``""`` signed out). Keys account-scoped caches."""
-    b = _load_blob() if blob is None else blob
+    global _KEY_CACHE
+    if blob is not None:
+        return _key_of(blob)
+    from backend.agent.secrets import login_stamp
+
+    # Stamp first: a login written between the stamp and the read is seen on the next call.
+    stamp = login_stamp()
+    hit = _KEY_CACHE
+    if stamp is not None and hit is not None and hit[:2] == stamp:
+        return hit[2]
+    key = _key_of(_load_blob())
+    _KEY_CACHE = None if stamp is None else (*stamp, key)
+    return key
+
+
+def forget_account_key() -> None:
+    global _KEY_CACHE
+    _KEY_CACHE = None
+
+
+def _key_of(b: dict[str, Any]) -> str:
     if not (b.get("device_key") or b.get("session_value")):
         return ""
     who = str(b.get("email") or b.get("user_id") or "").strip().lower()
@@ -112,6 +138,13 @@ def _note_login_change(before: dict[str, Any], after: dict[str, Any]) -> None:
     old login (plan §13); a new sign-in fetches the new account's key in the
     background. The panel drops account-scoped caches (Store catalog, prefs) and
     swaps chats and duckies, so one account never sees another's."""
+    forget_account_key()
+    try:
+        from backend.uefn_plugins.scopes import forget_claims
+
+        forget_claims()
+    except Exception:
+        pass
     switched = account_key(after) != account_key(before)
     try:
         from backend.uefn_plugins.data_crypto import on_login_change, prefetch

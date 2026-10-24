@@ -383,13 +383,13 @@ def test_finished_threads_do_not_leave_connections_open(monkeypatch) -> None:
         # that can trail the join by a moment (a real leak never settles).
         deadline = time.monotonic() + 2.0
         still_open = sum(1 for c in made if _is_open(c))
-        while still_open > 5 and time.monotonic() < deadline:
+        while still_open > db._IDLE_KEEP + 1 and time.monotonic() < deadline:
             time.sleep(0.05)
             still_open = sum(1 for c in made if _is_open(c))
     finally:
         gc.enable()
     # A handful stay open for reuse by the next new thread; the rest are closed.
-    assert still_open <= 5, f"{still_open} connections of finished threads are still open"
+    assert still_open <= db._IDLE_KEEP + 1, f"{still_open} connections of finished threads are still open"
 
 
 def test_short_lived_threads_reuse_a_configured_connection(monkeypatch) -> None:
@@ -406,6 +406,61 @@ def test_short_lived_threads_reuse_a_configured_connection(monkeypatch) -> None:
     # Each thread is joined before the next starts, so one connection serves them all;
     # in a full run another test's leftover thread can adopt the spare first.
     assert len(calls) <= 3, f"50 short-lived threads opened {len(calls)} connections"
+
+
+def _burst(fn, n: int = 500) -> float:
+    barrier = threading.Barrier(n + 1)
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            barrier.wait(timeout=30)
+            fn()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(n)]
+    for t in threads:
+        t.start()
+    barrier.wait(timeout=30)
+    started = time.perf_counter()
+    for t in threads:
+        t.join(timeout=30)
+    assert not errors
+    return time.perf_counter() - started
+
+
+def test_500_new_threads_connect_at_once_as_fast_as_sqlite_opens() -> None:
+    """74 threads sat in connect()'s scan of every owned connection in one freeze.
+    The floor is SQLite's own open (~1 s for 500 on a loaded PC, Oct 24 2026), so the
+    store's part is measured against a burst of plain opens of the same file."""
+    path = str(db.db_path())
+    db.connect()
+    raw = _burst(lambda: sqlite3.connect(path, check_same_thread=False).execute("SELECT 1").fetchone())
+    took = _burst(lambda: db.connect().execute("SELECT 1").fetchone())
+    assert took < raw * 1.5 + 0.25, f"500 threads took {took:.2f} s to connect (plain opens {raw:.2f} s)"
+
+
+def test_a_pooled_thread_opens_no_new_connection(monkeypatch) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    db.connect()
+    with ThreadPoolExecutor(4) as pool:
+        list(pool.map(lambda _: db.connect().execute("SELECT 1").fetchone(), range(8)))  # warm
+        calls: list[int] = []
+        real_connect = db.sqlite3.connect
+        monkeypatch.setattr(db.sqlite3, "connect", lambda *a, **k: (calls.append(1), real_connect(*a, **k))[1])
+        list(pool.map(lambda _: db.connect().execute("SELECT 1").fetchone(), range(200)))
+    assert calls == []
+
+
+def test_a_finished_thread_hands_its_connection_back() -> None:
+    db.connect()
+    mine: list[sqlite3.Connection] = []
+    _run_in_thread(lambda: mine.append(db.connect()))
+    got: list[sqlite3.Connection] = []
+    _run_in_thread(lambda: got.append(db.connect()))
+    assert got[0] is mine[0]
 
 
 def test_reused_connection_is_never_handed_over_mid_transaction() -> None:

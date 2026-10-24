@@ -350,6 +350,9 @@ def test_parked_copies_are_sealed_for_the_account_that_claimed_them(who: _Who) -
             "INSERT INTO duckies(id, ducky_id, kind, data, created, updated) VALUES "
             "('material-artist', 'material-artist', 'bundled', '{\"name\": \"stale pelican\"}', 0, 0)"
         )
+    from backend.uefn_plugins.scopes import forget_claims
+
+    forget_claims()  # this process found nothing left to claim already; the next start looks again
     account_rows.current()
     account_rows.seal_pending(alice, pause_s=0)
     [(data,)] = conn.execute(

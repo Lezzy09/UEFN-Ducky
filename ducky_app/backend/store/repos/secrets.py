@@ -2,6 +2,9 @@
 
 The caller (``backend/agent/secrets.py``) owns encryption; this module only
 stores and returns the ciphertext bytes it is handed.
+
+A write or delete of the DuckyOS login row bumps ``meta.login_version`` in the same
+transaction, so every process can tell with one tiny read that the login changed.
 """
 
 from __future__ import annotations
@@ -9,6 +12,23 @@ from __future__ import annotations
 import time
 
 from backend.store import db
+
+LOGIN_NAME = "duckyos_account"  # frontend.duckyos_account._CREDENTIALS_KEY
+LOGIN_VERSION_KEY = "login_version"
+
+
+def _bump_login_version(conn) -> None:
+    conn.execute(
+        "INSERT INTO meta(key, value, updated) VALUES (?, '1', ?) ON CONFLICT(key) DO UPDATE SET "
+        "value=CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated=excluded.updated",
+        (LOGIN_VERSION_KEY, time.time()),
+    )
+
+
+def login_version() -> str:
+    """Changes whenever the login row is written or deleted; ``"0"`` before the first write."""
+    row = db.connect().execute("SELECT value FROM meta WHERE key=?", (LOGIN_VERSION_KEY,)).fetchone()
+    return "0" if row is None else str(row[0])
 
 
 def get_blob(name: str) -> bytes | None:
@@ -29,12 +49,16 @@ def set_blob(name: str, blob: bytes) -> None:
             "ON CONFLICT(name) DO UPDATE SET blob=excluded.blob, updated=excluded.updated",
             (name, blob, time.time()),
         )
+        if name == LOGIN_NAME:
+            _bump_login_version(conn)
 
 
 def delete(name: str) -> None:
     conn = db.connect()
     with db.write_txn(conn):
         conn.execute("DELETE FROM secrets WHERE name=?", (name,))
+        if name == LOGIN_NAME:
+            _bump_login_version(conn)
 
 
 def replace_all(blobs: dict[str, bytes]) -> None:
@@ -44,6 +68,7 @@ def replace_all(blobs: dict[str, bytes]) -> None:
         conn.execute("DELETE FROM secrets")
         for name, blob in blobs.items():
             conn.execute("INSERT INTO secrets(name, blob, updated) VALUES (?, ?, ?)", (name, blob, now))
+        _bump_login_version(conn)  # an import or restore may change the login
 
 
 def has_rows() -> bool:

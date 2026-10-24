@@ -91,8 +91,11 @@ def import_chats(root: Path) -> dict[str, Any]:
 
 
 def ensure() -> None:
-    from backend.store import account_rows
+    from backend.store import account_rows, db
+    from backend.store.importers.phase1 import _done
 
+    if (str(db.db_path()), "chats") in _done:
+        return
     # The account id first, outside once(): it reads the login from secrets, another
     # importer, and once()'s lock is not re-entrant.
     account_rows.current()

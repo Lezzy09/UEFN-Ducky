@@ -22,6 +22,7 @@ import sqlite3
 import sys
 import threading
 import time
+from collections import deque
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Iterator
@@ -38,10 +39,12 @@ BUSY_TIMEOUT_MS = 5000
 # ducky.db-wal is reused, never shrunk, while any process keeps the file open; one big
 # transaction (a re-index, an import) left it at its high-water mark for good.
 WAL_SIZE_LIMIT = 64 * 1024 * 1024
-# Connections of finished threads kept open for the next new thread to adopt.
-_IDLE_KEEP = 4
+# Connections of finished threads kept open for the next new thread to adopt. Pooled
+# threads keep their own connection for life; this only covers threads that end.
+_IDLE_KEEP = 16
 # Page cache per connection, KiB. Worker threads get a small one: each kept its
-# own copy of every page it read, so the same chats sat in memory once per thread.
+# own copy of every page it read, so the same chats sat in memory once per thread
+# (62 pool threads x 2 MB = at most 124 MB).
 _MAIN_CACHE_KIB = 32768
 _WORKER_CACHE_KIB = 2048
 
@@ -70,8 +73,32 @@ _guard = threading.Lock()
 _log = logging.getLogger("uefn_ducky.store")
 _migrated: set[str] = set()
 _conn_keys: dict[str, str] = {}  # str(path) -> resolved connection-cache key
-_owned_lock = threading.Lock()
-_owned: list[tuple[threading.Thread, str, sqlite3.Connection]] = []  # (owner, key, conn)
+_owned_lock = threading.Lock()  # guards _idle
+# Connections handed back by threads that ended (filled from a finalizer, so lock-free).
+_returned: deque[tuple[str, sqlite3.Connection]] = deque()
+_idle: list[tuple[str, sqlite3.Connection]] = []  # (key, conn), free for the next new thread
+
+
+class _ThreadConns(dict):
+    """One thread's connections by key. Python drops a thread's locals when it ends, and
+    this hands its connections back then: nothing ever scans the live threads."""
+
+    def __del__(self) -> None:
+        _returned.extend(self.items())
+
+
+# Bumped by a first open (a staged or snapshot restore may have swapped the file in) and
+# by an import: memos of "nothing left to do in these rows" (claims) key on it.
+_generation = 0
+
+
+def generation() -> int:
+    return _generation
+
+
+def bump_generation() -> None:
+    global _generation
+    _generation += 1
 
 
 # --------------------------------------------------------------------------- paths
@@ -150,6 +177,11 @@ VACUUM_MAX_FAILURES = 3
 # Only the panel process rebuilds (webview_app calls allow_rebuild before its first open):
 # an IDE/agent bridge starts on every agent turn, while the app holds the file.
 _rebuild_here = False
+
+
+def rebuilds_here() -> bool:
+    """True in the panel (app) process, the one :func:`allow_rebuild` marked."""
+    return _rebuild_here
 
 
 def allow_rebuild() -> None:
@@ -458,31 +490,37 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
     """
     path = db_path(root)
     raw = str(path)
-    cache: dict[str, sqlite3.Connection] = getattr(_thread_local, "conns", None) or {}
+    cache: _ThreadConns | None = getattr(_thread_local, "conns", None)
+    if cache is None:
+        cache = _thread_local.conns = _ThreadConns()
     key = _conn_keys.get(raw)
     if key is not None:
         conn = cache.get(key)
         if conn is not None:
             return conn
 
-    _refuse_network_path(path)
-    _refuse_real_appdata_under_pytest(path)
-    # Resolve only after the guards have passed and the directory exists, so the
-    # key is the settled one from the very first call. Keying the first call on
-    # the pre-mkdir spelling and later calls on the resolved one opened a second
-    # connection to the same file.
-    path.parent.mkdir(parents=True, exist_ok=True)
-    key = str(path.resolve())
-    _conn_keys[raw] = key
-    conn = cache.get(key)
-    if conn is not None:
-        return conn
+    # A spelling already resolved to a migrated database (a new pooled thread) skips the
+    # guards, mkdir and resolve: they passed for it before.
+    if key is None or key not in _migrated:
+        _refuse_network_path(path)
+        _refuse_real_appdata_under_pytest(path)
+        # Resolve only after the guards have passed and the directory exists, so the
+        # key is the settled one from the very first call. Keying the first call on
+        # the pre-mkdir spelling and later calls on the resolved one opened a second
+        # connection to the same file.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        key = str(path.resolve())
+        _conn_keys[raw] = key
+        conn = cache.get(key)
+        if conn is not None:
+            return conn
     conn = _reclaim_finished(key if key in _migrated else None)
     if conn is not None:
         cache[key] = conn
-        _thread_local.conns = cache
         return conn
-    with _guard:
+    # Only a first open takes the process-wide lock; 500 new threads open side by side.
+    first = key not in _migrated
+    with _guard if first else nullcontext():
         # This process's first open of the file (staged restore, WAL switch, migrations)
         # runs under the cross-process open lock; later connections only configure.
         first = key not in _migrated
@@ -500,25 +538,16 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
             if os.environ.get("DUCKY_DB_TRACE"):
                 _install_trace(conn, path)
             try:
-                _configure(conn)
+                _configure(conn, first)
                 if first:
                     migrate(conn)
                     _migrated.add(key)
+                    bump_generation()
             except BaseException:
                 conn.close()  # never leave a corrupt file held open (restore must rename it)
                 raise
     cache[key] = conn
-    _thread_local.conns = cache
-    with _owned_lock:
-        _owned.append((threading.current_thread(), key, conn))
     return conn
-
-
-def _thread_alive(thread: threading.Thread) -> bool:
-    try:
-        return thread.is_alive()
-    except RuntimeError:  # a finished thread Python did not start (dummy thread)
-        return False
 
 
 def _reusable(conn: sqlite3.Connection) -> bool:
@@ -538,37 +567,32 @@ def _close_quietly(conn: sqlite3.Connection) -> None:
 def _reclaim_finished(key: str | None, *, keep: int = _IDLE_KEEP) -> sqlite3.Connection | None:
     """Close or reuse the connections of threads that have finished.
 
-    A thread's connection is never closed when the thread ends, and it sits in
-    a reference cycle, so it stayed open (three file handles plus its page
-    cache) until a full garbage collection. Panel requests, pywebview calls and
-    model warms each run on a new thread, so an idle panel piled up hundreds an
-    hour, and each new thread paid for a fresh open and PRAGMA setup.
+    A thread's connection is never closed when the thread ends, and it sat in a
+    reference cycle, so it stayed open (three file handles plus its page cache)
+    until a full garbage collection. Panel requests, pywebview calls and model
+    warms each run on a new thread, so an idle panel piled up hundreds an hour,
+    and each new thread paid for a fresh open and PRAGMA setup. A finished
+    thread's :class:`_ThreadConns` hands them back (``_returned``); this only
+    sorts what came back, never the live threads.
 
     Returns a finished thread's connection to *key*, now owned by the calling
     thread, when one is free. Up to *keep* others stay open for the next new
     thread; the rest, and any left mid-transaction, are closed.
     """
-    me = threading.current_thread()
     picked: sqlite3.Connection | None = None
     stale: list[sqlite3.Connection] = []
     with _owned_lock:
-        live: list[tuple[threading.Thread, str, sqlite3.Connection]] = []
-        idle: list[tuple[threading.Thread, str, sqlite3.Connection]] = []
-        for entry in _owned:
-            if _thread_alive(entry[0]):
-                live.append(entry)
-            elif _reusable(entry[2]):
-                idle.append(entry)
-            else:
-                stale.append(entry[2])
-        for i in range(len(idle) - 1, -1, -1):
-            if key is not None and idle[i][1] == key:
-                picked = idle.pop(i)[2]
-                live.append((me, key, picked))
-                break
-        cut = max(len(idle) - keep, 0)
-        stale.extend(entry[2] for entry in idle[:cut])
-        _owned[:] = live + idle[cut:]
+        while _returned:
+            entry = _returned.popleft()
+            (_idle.append(entry) if _reusable(entry[1]) else stale.append(entry[1]))
+        if key is not None:
+            for i in range(len(_idle) - 1, -1, -1):
+                if _idle[i][0] == key:
+                    picked = _idle.pop(i)[1]
+                    break
+        cut = max(len(_idle) - keep, 0)
+        stale.extend(conn for _, conn in _idle[:cut])
+        del _idle[:cut]
     for conn in stale:
         _close_quietly(conn)
     return picked
@@ -587,7 +611,7 @@ def _install_trace(conn: sqlite3.Connection, path: Path) -> None:
     conn.set_trace_callback(_trace)
 
 
-def _configure(conn: sqlite3.Connection) -> None:
+def _configure(conn: sqlite3.Connection, first: bool = True) -> None:
     conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     # Switching to WAL upgrades a read lock to a write lock, and SQLite never runs the
     # busy handler for that upgrade: it fails at once ("database is locked") while
@@ -608,13 +632,13 @@ def _configure(conn: sqlite3.Connection) -> None:
         if time.monotonic() > deadline:
             raise sqlite3.OperationalError("database is locked: ducky.db could not be switched to WAL")
         time.sleep(0.02)
-    conn.execute(f"PRAGMA journal_size_limit={WAL_SIZE_LIMIT}")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA temp_store=MEMORY")
     main = threading.current_thread() is threading.main_thread()
-    conn.execute(f"PRAGMA cache_size=-{_MAIN_CACHE_KIB if main else _WORKER_CACHE_KIB}")
-    assert_capabilities(conn)
+    conn.executescript(
+        f"PRAGMA journal_size_limit={WAL_SIZE_LIMIT}; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; "
+        f"PRAGMA temp_store=MEMORY; PRAGMA cache_size=-{_MAIN_CACHE_KIB if main else _WORKER_CACHE_KIB};"
+    )
+    if first:  # the SQLite library is the same for every later connection
+        assert_capabilities(conn)
 
 
 def assert_capabilities(conn: sqlite3.Connection) -> None:
@@ -628,11 +652,11 @@ def assert_capabilities(conn: sqlite3.Connection) -> None:
 
 
 def close_thread_connections() -> None:
-    cache: dict[str, sqlite3.Connection] = getattr(_thread_local, "conns", None) or {}
-    closing = {id(conn) for conn in cache.values()}
-    with _owned_lock:
-        _owned[:] = [entry for entry in _owned if id(entry[2]) not in closing]
-    for conn in cache.values():
+    cache = getattr(_thread_local, "conns", None)
+    conns = list(cache.values()) if cache else []
+    if cache:
+        cache.clear()  # closed here, so its finalizer hands nothing back
+    for conn in conns:
         try:
             # Drop the WAL while we still own it. Closing alone leaves ducky.db-wal
             # locked on Windows long enough for the next unlink/replace to fail.
@@ -643,7 +667,6 @@ def close_thread_connections() -> None:
             conn.close()
         except Exception:
             pass
-    _thread_local.conns = {}
 
 
 def reset_for_tests() -> None:

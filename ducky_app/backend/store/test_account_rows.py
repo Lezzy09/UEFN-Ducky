@@ -11,7 +11,7 @@ import pytest
 
 from backend.store import account_rows, db
 from backend.store.repos import chats, duckies, ducky_mirrors
-from backend.uefn_plugins import data_crypto
+from backend.uefn_plugins import data_crypto, scopes
 from backend.uefn_plugins.scopes import LOCAL, account_id_for
 
 PROJECT = "proj_accounts"
@@ -393,11 +393,37 @@ def test_an_old_copy_the_account_already_has_is_kept_aside(who: _Who) -> None:
             "INSERT INTO duckies(id, ducky_id, kind, data, created, updated) VALUES "
             "('material-artist', 'material-artist', 'bundled', '{\"name\": \"stale\"}', 0, 0)"
         )
+    scopes.forget_claims()  # this process found nothing left to claim already; the next start looks again
     account_rows.current()
     assert duckies.get("material-artist")["data"]["name"] == "Alice's edit"
     owners = [a for (a,) in conn.execute("SELECT account_id FROM duckies WHERE ducky_id='material-artist' ORDER BY created DESC")]
     assert owners[0] == alice and owners[1].startswith(account_rows.PARKED), "kept, never deleted"
     assert conn.execute("SELECT count(*) FROM duckies WHERE account_id=''").fetchone()[0] == 0
+
+
+def _statements_of(fn) -> list[str]:
+    conn = db.connect()
+    seen: list[str] = []
+    conn.set_trace_callback(seen.append)
+    try:
+        fn()
+    finally:
+        conn.set_trace_callback(None)
+    return seen
+
+
+def _looks_for_old_rows(statements: list[str]) -> bool:
+    return any(t in s for s in statements for t in ("conversations", "folders", "duckies"))
+
+
+def test_old_rows_are_looked_for_once_per_account_and_again_after_a_restore(who: _Who) -> None:
+    assert _looks_for_old_rows(_statements_of(lambda: who.be(ALICE)))
+    assert not _looks_for_old_rows(_statements_of(lambda: who.be(ALICE)))
+    assert not _looks_for_old_rows(_statements_of(account_rows.current))
+    # A restore swaps the file in on the next first open: the old rows may be back.
+    db.reset_for_tests()
+    assert _looks_for_old_rows(_statements_of(account_rows.current))
+    assert not _looks_for_old_rows(_statements_of(account_rows.current))
 
 
 def test_search_tokens_match_like_the_words_did() -> None:

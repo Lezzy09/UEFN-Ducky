@@ -48,6 +48,7 @@ def once(name: str, fn: Callable[[Path], dict[str, Any]]) -> dict[str, Any] | No
         report = fn(root)
         kv.meta_set(_flag(name), json.dumps(report, ensure_ascii=False))
         _done.add(memo)
+        db.bump_generation()  # imported rows may be unclaimed
         return report
 
 

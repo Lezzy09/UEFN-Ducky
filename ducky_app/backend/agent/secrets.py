@@ -261,6 +261,22 @@ def get_key_fresh(provider: str) -> str | None:
     return value
 
 
+def login_stamp() -> tuple[str, str] | None:
+    """``(ducky.db path, meta login_version)``: changes whenever the login row is written,
+    in any process. None when keys don't live in ducky.db (then nothing may be cached)."""
+    if not (_dpapi_available() and _use_db()):
+        return None
+    try:
+        from backend.store import db
+        from backend.store.importers import phase1
+        from backend.store.repos import secrets as repo
+
+        phase1.ensure("secrets")
+        return str(db.db_path()), repo.login_version()
+    except (OSError, RuntimeError):
+        return None
+
+
 def has_key(provider: str) -> bool:
     return bool(get_key(provider))
 

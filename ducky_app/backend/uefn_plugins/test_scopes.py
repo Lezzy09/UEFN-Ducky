@@ -556,6 +556,54 @@ def test_a_bridge_process_follows_an_account_switch_made_in_the_app(monkeypatch)
     assert repo.get(ana, "personal", "brainrot-tcg", "doc", "card.b") is None
 
 
+def _in_other_connection(fn) -> None:
+    """Run *fn* on a new thread: its own ducky.db connection, like another process."""
+    import threading
+
+    t = threading.Thread(target=fn)
+    t.start()
+    t.join()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DPAPI")
+def test_the_account_is_read_once_until_the_login_row_changes(monkeypatch) -> None:
+    import json
+
+    from backend.agent import secrets as sec
+    from backend.store.repos import secrets as secrets_repo
+    from frontend import duckyos_account
+
+    login = lambda email: json.dumps({"base_url": "https://uefnducky.org", "email": email, "device_key": "dky_v1_x"})  # noqa: E731
+    sec.set_key("duckyos_account", login("ana@x.org"))
+    duckyos_account.forget_account_key()
+    reads = {"n": 0}
+    real_get = secrets_repo.get_blob
+
+    def counted(name: str):
+        reads["n"] += 1
+        return real_get(name)
+
+    monkeypatch.setattr(secrets_repo, "get_blob", counted)
+    ana = scopes.account_id()
+    for _ in range(999):
+        assert scopes.account_id() == ana
+    assert reads["n"] == 1
+
+    # Another connection commits something else: still cached, no secrets read.
+    _in_other_connection(lambda: secrets_repo.set_blob("openai", sec.protect_text("sk-x")))
+    assert scopes.account_id() == ana
+    assert reads["n"] == 1
+
+    # Another connection signs in as Bo: the next call follows.
+    _in_other_connection(lambda: secrets_repo.set_blob("duckyos_account", sec.protect_text(login("bo@x.org"))))
+    bo = scopes.account_id()
+    assert bo == scopes.account_id_for("https://uefnducky.org|bo@x.org") and bo != ana
+
+    # The login is deleted elsewhere: signed out.
+    _in_other_connection(lambda: secrets_repo.delete("duckyos_account"))
+    assert scopes.account_id() == scopes.LOCAL
+
+
 # --------------------------------------------------------------------------- sync bookkeeping
 
 

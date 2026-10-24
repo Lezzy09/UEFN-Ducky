@@ -11,12 +11,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
-from typing import Any
+from typing import Any, Iterable
 
 from backend.store import db
 
 _RUN_DOC_EXCLUDED = ("entries", "seen")
+# Every run this process starts goes through this module, so a run older than its import
+# was left ``running`` by an earlier start of the app.
+_PROCESS_START = time.time()
+_stale_closed: set[str] = set()  # db paths already swept in this process
+_stale_lock = threading.Lock()
 
 
 def _dumps(value: Any) -> str:
@@ -30,6 +36,49 @@ def _hash(text: str) -> str:
 # --------------------------------------------------------------------------- runs
 
 
+def close_stale_runs(
+    now: float | None = None, *, started_before: float | None = None, run_ids: Iterable[str] | None = None
+) -> int:
+    """Runs still ``running`` that nobody will finish become ``interrupted`` with
+    ``ended = now``: those started before *started_before* (default: this process's
+    start), or exactly *run_ids* (a dead agent host's runs). Returns how many."""
+    now = time.time() if now is None else now
+    ids = None if run_ids is None else [str(r) for r in run_ids]
+    if ids == []:
+        return 0
+    where = "status='running'"
+    args: list[Any] = []
+    if ids is None:
+        where += " AND started < ?"
+        args.append(_PROCESS_START if started_before is None else started_before)
+    else:
+        where += f" AND run_id IN ({','.join('?' * len(ids))})"
+        args.extend(ids)
+    conn = db.connect()
+    with db.write_txn(conn):
+        cur = conn.execute(
+            "UPDATE runs SET status='interrupted', ended=?, "
+            "doc=json_set(doc, '$.status', 'interrupted', '$.ended', ?) WHERE " + where,  # noqa: S608 — placeholders only
+            (now, now, *args),
+        )
+    return max(cur.rowcount, 0)
+
+
+def _close_stale_once() -> None:
+    """First ledger use in the app process sweeps runs an earlier start left open. Bridges
+    and agent hosts start while the app's runs are live, so only the app process does it."""
+    if not db.rebuilds_here():
+        return
+    key = str(db.db_path())
+    if key in _stale_closed:
+        return
+    with _stale_lock:
+        if key in _stale_closed:
+            return
+        _stale_closed.add(key)
+    close_stale_runs()
+
+
 def _assemble(conn, row) -> dict[str, Any]:
     run = json.loads(row["doc"])
     run["run_id"] = row["run_id"]
@@ -41,6 +90,7 @@ def _assemble(conn, row) -> dict[str, Any]:
 
 
 def run_get(project_id: str, run_id: str) -> dict[str, Any] | None:
+    _close_stale_once()
     conn = db.connect()
     row = conn.execute("SELECT * FROM runs WHERE run_id=? AND project_id=?", (run_id, project_id)).fetchone()
     return None if row is None else _assemble(conn, row)
@@ -50,6 +100,7 @@ def runs_with_status(project_id: str, statuses: tuple[str, ...]) -> list[dict[st
     """``{run_id, conv_id}`` of the runs in *statuses*, without loading their entries."""
     if not statuses:
         return []
+    _close_stale_once()
     marks = ",".join("?" * len(statuses))
     rows = db.connect().execute(
         f"SELECT run_id, conv_id FROM runs WHERE project_id=? AND status IN ({marks}) ORDER BY started DESC",  # noqa: S608 — placeholders only
@@ -60,6 +111,7 @@ def runs_with_status(project_id: str, statuses: tuple[str, ...]) -> list[dict[st
 
 def runs_docs(project_id: str) -> list[dict[str, Any]]:
     """Every run document in a project (the old ``glob('runs/*.json')``)."""
+    _close_stale_once()
     conn = db.connect()
     rows = conn.execute("SELECT * FROM runs WHERE project_id=? ORDER BY started DESC", (project_id,)).fetchall()
     return [_assemble(conn, r) for r in rows]
@@ -67,6 +119,7 @@ def runs_docs(project_id: str) -> list[dict[str, Any]]:
 
 def run_put(project_id: str, run: dict[str, Any]) -> None:
     """Upsert the run row; sync entries by content hash; replace the seen map."""
+    _close_stale_once()
     conn = db.connect()
     doc = {k: v for k, v in run.items() if k not in _RUN_DOC_EXCLUDED}
     run_id = str(run["run_id"])

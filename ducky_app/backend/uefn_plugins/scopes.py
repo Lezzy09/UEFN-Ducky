@@ -130,8 +130,8 @@ def account_id_for(key: str) -> str:
 
 def account_id() -> str:
     """Stable per-account id for rows and folders; ``_local`` when signed out.
-    Read fresh per call (the login row, not a process cache), so the MCP bridge
-    follows an account switch made in the app."""
+    ``account_key()`` re-reads the login only when ``meta.login_version`` changed (one
+    meta read per call), so the MCP bridge still follows an account switch made in the app."""
     from frontend.duckyos_account import account_key
 
     aid = account_id_for(account_key())
@@ -139,18 +139,33 @@ def account_id() -> str:
     return aid
 
 
+# (db path, db generation, account) found with nothing left to claim. A restore or an
+# import bumps the generation, a login change clears it: then the next call checks again.
+_CLAIMED: set[tuple[str, int, str]] = set()
+
+
+def forget_claims() -> None:
+    _CLAIMED.clear()
+
+
 def _claim_legacy(aid: str) -> None:
     """Rows from before scopes (migration 0009) join the first account that opens them,
-    and so do chats and duckies from before they were per account (migration 0024)."""
-    from backend.store import account_rows
+    and so do chats and duckies from before they were per account (migration 0024).
+    Checked once per account and database generation, not on every call."""
+    from backend.store import account_rows, db
     from backend.store.repos import plugin_kv
 
+    memo = (str(db.db_path()), db.generation(), aid)
+    if memo in _CLAIMED:
+        return
     if plugin_kv.has_unclaimed():
         plugin_kv.claim_unclaimed(aid)
     try:
         account_rows.claim(aid)
     except Exception:  # noqa: BLE001 — never in the way of the account id; the next call tries again
         _log.exception("claiming chats and duckies from before accounts failed")
+        return
+    _CLAIMED.add(memo)
 
 
 def _locked(account: str) -> bool:
