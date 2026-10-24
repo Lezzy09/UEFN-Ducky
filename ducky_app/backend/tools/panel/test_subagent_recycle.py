@@ -47,6 +47,7 @@ def test_recycle_preserves_identity_history_membership_and_assignments(member, m
     from frontend.ui_web import project_chats
     monkeypatch.setenv("DUCKY_STORE_BACKEND_PLANS", "files")
     monkeypatch.setattr(project_chats, "load_conversation", lambda cid, project_root=None: {"builder":conv,"group":group,"coord":SimpleNamespace(id="coord", title="Coordinator")}.get(cid))
+    monkeypatch.setattr(project_chats, "load_conversation_meta", project_chats.load_conversation)
     monkeypatch.setattr(agent_modes, "_resolve_push", lambda _: lambda event: None)
     plans.create_plan("coord", nodes=[{"id":"section", "content":"Assigned work", "assignee":"group"}], project_root=str(tmp_path))
     assignments = plans.load_plan("coord", project_root=str(tmp_path))

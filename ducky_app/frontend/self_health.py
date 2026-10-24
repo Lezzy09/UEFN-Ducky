@@ -27,6 +27,13 @@ def _mb(value: float) -> float:
     return round(float(value) / _MB, 1)
 
 
+def _in_stdlib(filename: str) -> bool:
+    import sysconfig
+
+    stdlib = os.path.normcase(sysconfig.get_paths()["stdlib"])
+    return os.path.normcase(filename).startswith(stdlib + os.sep)
+
+
 def _app_dir() -> Path:
     from frontend.settings import default_app_data_dir
 
@@ -106,6 +113,9 @@ def hot_threads(before: dict[int, float], after: dict[int, float], seconds: floa
         thread = by_native.get(tid)
         stack: list[str] = []
         frame = frames.get(thread.ident) if thread is not None and thread.ident is not None else None
+        # Start at the caller, not the stdlib helper it is inside (Event.is_set, queue.get, ...).
+        while frame is not None and frame.f_back is not None and _in_stdlib(frame.f_code.co_filename):
+            frame = frame.f_back
         while frame is not None and len(stack) < 8:
             stack.append(f"{frame.f_code.co_name} ({Path(frame.f_code.co_filename).name}:{frame.f_lineno})")
             frame = frame.f_back

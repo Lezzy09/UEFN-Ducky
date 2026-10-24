@@ -19,6 +19,7 @@ def test_dispatch_waits_before_tool_body(monkeypatch):
 
     monkeypatch.setattr(ai_ignore, "require_safe_tool", lambda _name: None)
     monkeypatch.setattr(rpc, "wait_for_question_answers", ui_rpc.wait_for_answers)
+    monkeypatch.setattr(rpc, "take_steer_messages", lambda _conv_id: [])
     from backend.agent import chat_title
     monkeypatch.setattr(chat_title, "require_self_name", lambda *_args: None)
     request_id, _ = ui_rpc.submit("ask_user", {"conv_id": "dispatch-gate", "questions": [{"id": "q"}]})

@@ -75,6 +75,8 @@ def test_on_demand_server_is_not_listed_but_still_callable(monkeypatch):
     monkeypatch.setattr(bridge_proxy, "_clear_list_tools_cache", lambda: None)
     monkeypatch.setattr(registry, "_PREFIX_TO_PLUGIN", {"site": "site", "demo": "demo"})
     monkeypatch.setattr("backend.mcp_plugins.store.ensure_plugin_prefix_cache", lambda: None)
+    # Bound at import: once loaded, its real rebuild would drop the "site" prefix above.
+    monkeypatch.setattr("backend.agent.toolsets.mcp_plugins.ensure_plugin_prefix_cache", lambda: None)
     schema = {"type": "object"}
     listed = Tool(name="demo__ping", description="ping", inputSchema=schema)
     hidden = Tool(name="site__ops_health", description="health", inputSchema=schema)
