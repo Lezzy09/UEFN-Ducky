@@ -417,6 +417,24 @@ body.appearance-skin-active .workspace-dock-layout--default:not(.is-narrow) .doc
   transform: translateX(0);
 }
 
+/* While a finger drags a drawer it follows the finger (no easing); letting go eases it the
+   rest of the way open or shut with the transition above. */
+.workspace-dock-layout.is-narrow .dock-rail-shell.is-overlay.is-swiping .dock-rail {
+  transform: translateX(var(--dock-swipe-tx, 0px));
+  transition: none;
+}
+
+/* A drawer on a phone never covers the whole screen: the chat stays visible beside it
+   (tap it to close). The swipe uses the same cap (overlayDrawerWidth). */
+.workspace-dock-layout.is-narrow .dock-rail-shell.is-overlay {
+  max-width: 85vw;
+}
+
+.workspace-dock-layout.is-narrow .dock-rail-shell.is-overlay .dock-rail {
+  width: min(var(--dock-rail-width, 240px), 85vw);
+  max-width: 85vw;
+}
+
 .workspace-dock-layout.is-narrow .dock-rail-shell.is-overlay.is-open .dock-rail,
 .workspace-dock-layout.is-narrow .dock-rail-shell.is-overlay.is-swiping .dock-rail {
   box-shadow: 8px 0 24px var(--overlay);

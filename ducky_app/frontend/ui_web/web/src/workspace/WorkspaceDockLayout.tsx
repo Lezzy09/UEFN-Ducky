@@ -13,6 +13,7 @@ import { useFocusWindow } from "../hooks/useFocusWindow";
 import { useNarrowLayout } from "../hooks/useNarrowLayout";
 import { useOverlayRailSession } from "../hooks/useOverlayRailSession";
 import { useRailEdgeSwipe } from "../hooks/useRailEdgeSwipe";
+import { overlayDrawerWidth } from "../utils/railEdgeSwipe";
 import { useChatLayoutMode } from "../hooks/useChatLayoutMode";
 import {
   dockPanelPluginUi,
@@ -469,8 +470,8 @@ export const WorkspaceDockLayout = forwardRef<ChatSidebarHandle, WorkspaceDockLa
       rightOpen,
       leftEnabled: leftRailAllowed && !!leftMixed,
       rightEnabled: rightRailAllowed && !!rightMixed,
-      leftWidth: dock.leftWidth,
-      rightWidth: dock.rightWidth,
+      leftWidth: overlayDrawerWidth(dock.leftWidth),
+      rightWidth: overlayDrawerWidth(dock.rightWidth),
       setLeftOpen,
       setRightOpen,
     });

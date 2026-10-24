@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { swipeShouldOpen, swipeSideFromPoint, swipeTranslateX, RAIL_EDGE_PX } from "./railEdgeSwipe";
+import { overlayDrawerWidth, swipeShouldOpen, swipeSideFromPoint, swipeTranslateX, RAIL_EDGE_PX } from "./railEdgeSwipe";
 
 describe("railEdgeSwipe", () => {
+  it("never lets a phone drawer cover the whole screen", () => {
+    expect(overlayDrawerWidth(420, 375)).toBe(319); // 85% of a 375px phone
+    expect(overlayDrawerWidth(240, 375)).toBe(240); // already narrow enough
+    expect(overlayDrawerWidth(420, 1600)).toBe(420);
+  });
+
   it("slides a closed left rail from -width toward 0", () => {
     expect(swipeTranslateX("left", false, 0, 200)).toBe(-200);
     expect(swipeTranslateX("left", false, 80, 200)).toBe(-120);

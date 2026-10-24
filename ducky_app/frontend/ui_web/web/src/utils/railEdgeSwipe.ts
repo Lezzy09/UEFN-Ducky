@@ -1,5 +1,13 @@
 export const RAIL_EDGE_PX = 24;
 
+/** Share of a phone screen a drawer may cover (the CSS caps it at 85vw too). */
+export const OVERLAY_DRAWER_MAX_SHARE = 0.85;
+
+/** A drawer's width on a phone: its desktop width, never more than 85% of the screen. */
+export function overlayDrawerWidth(width: number, viewportWidth = typeof window === "undefined" ? Infinity : window.innerWidth): number {
+  return Math.min(width, Math.round(viewportWidth * OVERLAY_DRAWER_MAX_SHARE));
+}
+
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }

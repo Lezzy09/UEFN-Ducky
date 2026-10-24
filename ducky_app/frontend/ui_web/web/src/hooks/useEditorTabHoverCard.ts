@@ -12,6 +12,30 @@ export type { EditorTabHoverCardPlacement };
 
 const SHOW_DELAY_MS = 180;
 const HIDE_DELAY_MS = 120;
+/** A tap also sends mouseenter and focus; a card opened by one has no mouseleave to close it. */
+const TOUCH_WINDOW_MS = 1000;
+
+let lastTouchAt = 0;
+let touchWatch = false;
+
+function watchTouches(): void {
+  if (touchWatch || typeof window === "undefined") return;
+  touchWatch = true;
+  window.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (e.pointerType === "touch" || e.pointerType === "pen") lastTouchAt = Date.now();
+    },
+    { capture: true, passive: true },
+  );
+}
+
+/** Phones and tablets never show hover cards: there is no hover, only a tap that opens the row. */
+export function hoverCardsOff(now = Date.now()): boolean {
+  if (typeof window === "undefined") return true;
+  if (window.matchMedia?.("(hover: none)").matches) return true;
+  return now - lastTouchAt < TOUCH_WINDOW_MS;
+}
 
 export function useEditorTabHoverCard(
   disabled = false,
@@ -52,12 +76,15 @@ export function useEditorTabHoverCard(
   }, [placement, cardHeight]);
 
   const showCard = useCallback(() => {
+    if (hoverCardsOff()) return;
     updatePosition();
     setOpen(true);
   }, [updatePosition]);
 
+  useEffect(() => watchTouches(), []);
+
   const scheduleShow = useCallback(() => {
-    if (disabled) return;
+    if (disabled || hoverCardsOff()) return;
     clearTimers();
     showTimerRef.current = window.setTimeout(showCard, SHOW_DELAY_MS);
   }, [disabled, showCard]);
