@@ -41,6 +41,9 @@ _IDENTITY_ENV = (
     # project was open then; without these an agent in another project wrote there.
     ("UEFN_DUCKY_PROJECT_ROOT", "project_root"),
     ("UEFN_VSCODE_WORKSPACE_FOLDERS", "workspace_folders"),
+    # The agent host this agent runs in: steer and question checks go to it, not the app.
+    ("DUCKY_AGENT_HOST_PIPE", "host_pipe"),
+    ("DUCKY_AGENT_HOST_KEY", "host_key"),
 )
 
 

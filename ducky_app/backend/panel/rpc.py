@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import os
 import socket
 import time
 import urllib.error
@@ -119,11 +120,59 @@ def _panel_rpc(method: str, params: dict[str, Any] | None, timeout: float, holde
     return result if isinstance(result, dict) else resp
 
 
+# D20: a chat whose agent runs in an agent-host process asks that host, not the app (whose
+# window thread may be jammed). The host's pipe and key reach the tool server in the
+# adapter's hello identity (extra host_pipe / host_key), or in this process's env for a
+# dedicated bridge. Contract the host serves: one connection per call, the request
+# ``{"method": ..., "params": {...}}`` and one reply, the same result dict the panel's
+# /__panel_rpc gives (steer_take {lease_id, texts}, steer_ack {ok}, question_gate {blocked}).
+HOST_PIPE_ENV = "DUCKY_AGENT_HOST_PIPE"
+HOST_KEY_ENV = "DUCKY_AGENT_HOST_KEY"
+
+
+def _host_target() -> tuple[str, bytes]:
+    from backend.workspace.identity import current
+
+    extra = getattr(current(), "extra", None) or {}
+    pipe = str(extra.get("host_pipe") or os.environ.get(HOST_PIPE_ENV) or "").strip()
+    key = str(extra.get("host_key") or os.environ.get(HOST_KEY_ENV) or "").strip()
+    try:
+        return pipe, bytes.fromhex(key)
+    except ValueError:
+        return pipe, b""
+
+
+def host_rpc(pipe: str, authkey: bytes, method: str, params: dict[str, Any], timeout: float) -> dict[str, Any]:
+    """One request to the agent host over its pipe; raises OSError/EOFError/TimeoutError."""
+    from multiprocessing.connection import Client
+
+    conn = Client(pipe, authkey=authkey or None)
+    try:
+        conn.send_bytes(json.dumps({"method": method, "params": params}).encode("utf-8"))
+        if not conn.poll(None if timeout == float("inf") else timeout):
+            raise TimeoutError(f"agent host did not answer {method}")
+        reply = json.loads(conn.recv_bytes())
+    finally:
+        conn.close()
+    return reply if isinstance(reply, dict) else {}
+
+
+def _agent_rpc(method: str, params: dict[str, Any], timeout: float) -> dict[str, Any]:
+    """The steer and question checks: the chat's agent host when it has one, else the app."""
+    pipe, key = _host_target()
+    if pipe:
+        try:
+            return host_rpc(pipe, key, method, params, timeout)
+        except (OSError, EOFError, ValueError):
+            pass  # ponytail: host gone or unreadable → the app path, which still knows non-host chats
+    return panel_rpc(method, params, timeout=timeout)
+
+
 def take_steer_messages(conv_id: str) -> tuple[str, list[str]]:
     """Lease the messages the person sent into this chat's running turn: ``(lease_id, texts)``
     (frontend/ui_web/steer.py). They stay the panel's until :func:`ack_steer`; an unconfirmed
     lease returns to the queue by itself, so a slow or failed answer never loses one."""
-    response = panel_rpc("steer_take", {"conv_id": conv_id}, timeout=10.0)
+    response = _agent_rpc("steer_take", {"conv_id": conv_id}, 10.0)
     texts = response.get("texts")
     texts = [str(t) for t in texts if str(t).strip()] if isinstance(texts, list) else []
     return str(response.get("lease_id") or ""), texts
@@ -132,13 +181,13 @@ def take_steer_messages(conv_id: str) -> tuple[str, list[str]]:
 def ack_steer(conv_id: str, lease_id: str) -> None:
     """The leased messages are in a tool result the agent gets: the panel drops them."""
     if lease_id:
-        panel_rpc("steer_ack", {"conv_id": conv_id, "lease_id": lease_id}, timeout=5.0)
+        _agent_rpc("steer_ack", {"conv_id": conv_id, "lease_id": lease_id}, 5.0)
 
 
 def wait_for_question_answers(conv_id: str) -> None:
     """Check the owning panel, including when this bridge is a separate process."""
     while True:
-        response = panel_rpc("question_gate", {"conv_id": conv_id}, timeout=float("inf"))
+        response = _agent_rpc("question_gate", {"conv_id": conv_id}, float("inf"))
         if "error" in response or "blocked" not in response:
             raise RuntimeError("Cannot verify the user's answers: panel unavailable. Task tools remain blocked.")
         if response["blocked"] is False:
