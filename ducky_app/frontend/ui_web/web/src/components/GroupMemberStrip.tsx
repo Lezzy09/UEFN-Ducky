@@ -16,9 +16,7 @@ import type {
   ChangesetRunDto,
   FolderItem,
   GroupMemberDto,
-  GroupMemberObservation,
   LaneCheckResult,
-  PlanNode,
 } from "../types/panel";
 import { conflictCountsByConv } from "../utils/changesetGrouping";
 import { fmtCompactTokens } from "../utils/contextFormat";
@@ -34,13 +32,16 @@ import { aiTypeLabel, memberFileLines, memberObservationLines } from "./groupMem
 import {
   buildRoster,
   filterRoster,
+  rollupProgress,
   rosterAgents,
   rosterGroupIds,
   rosterTokens,
   type RosterNode,
+  type SubPlanProgress,
 } from "./team/teamRoster";
 
 export { shortModelLabel } from "./groupMemberHover";
+export { subPlanProgress, sumProgress, type SubPlanProgress } from "./team/teamRoster";
 export { parseLaneText, shortLaneLabel, validateLaneGlobs } from "../utils/laneGlob";
 
 /** Settings → write lanes: enforce refuses out-of-lane writes, shadow only flags them. */
@@ -83,89 +84,10 @@ export function laneTitle(lane: string[] | null | undefined, mode: LaneMode = "e
   return `${configured}\n${laneModeText(mode, reported)}`;
 }
 
-export type SubPlanProgress = {
-  /** The sub plan (or step) the agent is assigned. */
-  title: string;
-  done: number;
-  /** Steps that count: cancelled ones are left out. */
-  total: number;
-  pct: number;
-  /** The step in progress, else the next one waiting; empty when all are done. */
-  current: string;
-  /** The unfinished step the next step waits for (its ``after``), when nothing is in progress. */
-  waitingOn?: string;
-};
-
-/** Plan rows carry ``after`` (ids of steps that must finish first). */
-type PlanNodeWithAfter = PlanNode & { after?: string[] };
-
-function findPlanNode(nodes: PlanNode[] | undefined, id: string): PlanNode | undefined {
-  for (const node of nodes || []) {
-    if (node.id === id) return node;
-    const inside = findPlanNode(node.children, id);
-    if (inside) return inside;
-  }
-  return undefined;
-}
-
-function planLeaves(node: PlanNode): PlanNode[] {
-  const kids = node.children || [];
-  return kids.length ? kids.flatMap(planLeaves) : [node];
-}
-
-/**
- * An agent's progress through its assigned part of the team plan: steps done of total, %, and the
- * current step. Null when the plan is not the one the assignment names (an old or moved plan).
- */
-export function subPlanProgress(
-  plan: ChatPlan | null | undefined,
-  assignment: GroupMemberObservation["assignment"] | undefined,
-): SubPlanProgress | null {
-  if (!plan || !assignment || plan.id !== assignment.plan_id) return null;
-  const root = assignment.node_id ? findPlanNode(plan.nodes, assignment.node_id) : undefined;
-  if (assignment.node_id && !root) return null;
-  const leaves = root ? planLeaves(root) : (plan.nodes || []).flatMap(planLeaves);
-  const counted = leaves.filter((n) => n.status !== "cancelled");
-  if (counted.length === 0) return null;
-  const done = counted.filter((n) => n.status === "completed").length;
-  const running = counted.find((n) => n.status === "in_progress");
-  const current = running ?? counted.find((n) => n.status === "pending");
-  let waitingOn: string | undefined;
-  if (!running && current) {
-    const blocker = ((current as PlanNodeWithAfter).after || [])
-      .map((id) => findPlanNode(plan.nodes, id))
-      .find((n) => n && n.status !== "completed" && n.status !== "cancelled");
-    if (blocker) waitingOn = blocker.content;
-  }
-  return {
-    title: root?.content || plan.title || assignment.title,
-    done,
-    total: counted.length,
-    pct: Math.round((done / counted.length) * 100),
-    current: current?.content || "",
-    ...(waitingOn ? { waitingOn } : {}),
-  };
-}
-
 /** The short current-step line under a row's count. */
 export function progressStep(p: SubPlanProgress): string {
   if (!p.current) return "Done";
   return p.waitingOn ? `Waiting on ${p.waitingOn}` : p.current;
-}
-
-/** Several agents' parts added up; a part shared by two agents counts once. */
-export function sumProgress(parts: SubPlanProgress[], title: string): SubPlanProgress | null {
-  const done = parts.reduce((n, p) => n + p.done, 0);
-  const total = parts.reduce((n, p) => n + p.total, 0);
-  if (!total) return null;
-  const open = parts.filter((p) => p.current);
-  return {
-    title,
-    done,
-    total,
-    pct: Math.round((done / total) * 100),
-    current: open.length === 1 ? open[0].current : open.length ? `${open.length} parts open` : "",
-  };
 }
 
 /** "3/5 · 60%" plus the current step, for titles and details. */
@@ -711,22 +633,9 @@ export function GroupMemberStrip({
     return rosters[node.hubId]?.find((row) => row.member_conv_id === node.id);
   };
 
-  /** The agent's progress through its sub plan, from the plan its observed assignment names. */
-  const progressOf = (node: RosterNode): SubPlanProgress | null => {
-    if (node.isGroup) {
-      const parts = new Map<string, SubPlanProgress>();
-      for (const agent of rosterAgents(node.children)) {
-        const p = progressOf(agent);
-        const assignment = observed(agent)?.observation?.assignment;
-        if (p && assignment) parts.set(`${assignment.plan_id}:${assignment.node_id ?? ""}`, p);
-      }
-      return sumProgress([...parts.values()], node.name);
-    }
-    const observation = observed(node)?.observation;
-    const assignment = observation?.assignment;
-    if (!observation || !assignment || observation.group_id !== node.hubId) return null;
-    return subPlanProgress(plans[assignment.chat_id], assignment);
-  };
+  /** A row's rolled-up progress, from the plans its rows' observed assignments name. */
+  const progressOf = (node: RosterNode): SubPlanProgress | null =>
+    rollupProgress(node, plans, (row) => observed(row)?.observation);
 
   const statusOf = (node: RosterNode): { label: string; cls: string } => {
     if (node.isGroup) {
@@ -881,7 +790,7 @@ export function GroupMemberStrip({
                   <span className="sidebar-leader-badge" title="Group leader" aria-label="Group leader"><Icons.Star /></span>
                 ) : null}
               </span>
-              <span className="team-roster-name">{node.name}</span>
+              <span className="team-roster-name" title={node.hover || undefined}>{node.name}</span>
               {waiting ? <WaitingMarker convId={node.id} variant="chip" interactive={false} /> : null}
             </button>
           </span>
@@ -900,7 +809,7 @@ export function GroupMemberStrip({
                     <span style={{ ["--pct" as string]: `${progress.pct}%` }} />
                   </span>
                   <span className="team-roster-plan-count">
-                    {progress.done}/{progress.total} · {progress.pct}%
+                    {node.isGroup ? `${progress.pct}%` : `${progress.done}/${progress.total}`}
                   </span>
                 </span>
                 <span className={`team-roster-plan-step${progress.waitingOn ? " team-roster-plan-step--waiting" : ""}`}>

@@ -99,15 +99,33 @@ describe("team bar progress", () => {
     expect(api.get_plan).toHaveBeenCalledTimes(1);
     openTeam();
     expect(screen.getByRole("columnheader", { name: "Sub plan" })).toBeTruthy();
-    expect(screen.getAllByText("1/3 · 33%")).toHaveLength(2);
+    expect(screen.getAllByText("1/3")).toHaveLength(2);
     expect(screen.getAllByText("Prune the walk")).toHaveLength(2);
-    expect(screen.getByText("2/2 · 100%")).toBeTruthy();
+    expect(screen.getByText("2/2")).toBeTruthy();
     expect(screen.getByText("Done")).toBeTruthy();
     // The unassigned agent shows a dash, not a made-up count.
     expect(screen.getAllByTitle("No assigned sub plan seen")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Details for Searcher" }));
     expect(screen.getByText("Progress: Search: 1/3 steps (33%) · now: Prune the walk")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open Searcher" }).getAttribute("title")).toContain("now: Prune the walk");
+  });
+
+  it("a nested group row shows its rolled-up % and its agents n/m", async () => {
+    const group: GroupMemberDto = { ...member("Verse", "sp-tools"), member_conv_id: "verse-group", is_group: true };
+    const lead: GroupMemberDto = {
+      ...member("Verse lead", "sp-search"),
+      observation: { ...member("Verse lead", "sp-search").observation!, group_id: "verse-group" },
+    };
+    api.group_members.mockImplementation(async (id: string) =>
+      ({ ok: true, members: id === "verse-group" ? [lead] : [group] }));
+    api.get_plan.mockResolvedValue({ ok: true, plan: plan(), progress: {} });
+    render(<GroupMemberStrip groupId="group" members={[group]} onMembersChange={() => {}} onOpenMember={() => {}} />);
+    openTeam();
+    // The group's own part (3/5) plus its agent's (1/3): 4/8.
+    await screen.findByText("50%");
+    expect(screen.getByText("Verse lead")).toBeTruthy();
+    expect(screen.getByText("1/3")).toBeTruthy();
+    expect(screen.getByText("Prune the walk")).toBeTruthy();
   });
 
   it("shows no progress for an assignment into a different plan", async () => {

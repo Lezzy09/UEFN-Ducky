@@ -1,4 +1,12 @@
-import type { AgentProfileDto, ChatTab, FolderItem, GroupMemberDto } from "../../types/panel";
+import type {
+  AgentProfileDto,
+  ChatPlan,
+  ChatTab,
+  FolderItem,
+  GroupMemberDto,
+  GroupMemberObservation,
+  PlanNode,
+} from "../../types/panel";
 import { modelFromFavorites } from "../ducky/duckyProfileForm";
 import { resolveNestedGroupHoverRows, shortModelLabel } from "../groupMemberHover";
 
@@ -12,6 +20,8 @@ export type RosterNode = {
   member: GroupMemberDto | null;
   id: string;
   name: string;
+  /** Hover for the name: the library profile and the model ("Verse Coder · gpt-5"). */
+  hover?: string;
   styleId?: string;
   model: string;
   codingAgent: string;
@@ -39,7 +49,7 @@ export type RosterInput = {
   labelFor: (styleId?: string | null) => string;
 };
 
-/** Library profile title (Verse Coder), then the role, then the duck name; never the avatar style. */
+/** The seat name (Search lead), then the duck name, then the library profile title; the avatar style last. */
 export function memberDisplayName(
   m: GroupMemberDto,
   profile: AgentProfileDto | undefined,
@@ -47,11 +57,16 @@ export function memberDisplayName(
 ): string {
   if (m.is_group) return (m.name || m.ducky_name || "Group").trim() || "Group";
   return (
-    (profile?.name || "").trim() ||
     (m.name || "").trim() ||
     (m.ducky_name || "").trim() ||
+    (profile?.name || "").trim() ||
     labelFor(m.ducky_style || profile?.ducky_style)
   );
+}
+
+/** The name's hover: which library profile fills the seat, and its model. */
+export function memberHover(profile: AgentProfileDto | undefined, model: string): string {
+  return [(profile?.name || "").trim(), shortModelLabel(model)].filter(Boolean).join(" · ");
 }
 
 const MAX_DEPTH = 4;
@@ -65,14 +80,16 @@ export function buildRoster(input: RosterInput): RosterNode[] {
     const chat = chatById.get(m.member_conv_id);
     const profile = input.profileById.get(m.profile_id);
     const isGroup = Boolean(m.is_group);
+    const model = (m.model || "").trim() || (chat?.model || "").trim() || modelFromFavorites(profile?.favorite_models);
     const node: RosterNode = {
       key: `${hubId}/${m.member_conv_id}`,
       hubId,
       member: m,
       id: m.member_conv_id,
       name: memberDisplayName(m, profile, input.labelFor),
+      ...(isGroup ? {} : { hover: memberHover(profile, model) }),
       styleId: m.ducky_style || profile?.ducky_style || chat?.duckyStyle,
-      model: (m.model || "").trim() || (chat?.model || "").trim() || modelFromFavorites(profile?.favorite_models),
+      model,
       codingAgent: (m.coding_agent || "").trim() || (chat?.codingAgent || "").trim() || "ducky",
       provider: (chat?.provider || "").trim(),
       contextTokens: Math.max(0, Number(chat?.contextTokens) || 0),
@@ -157,6 +174,151 @@ export function filterRoster(nodes: RosterNode[], query: string): RosterNode[] {
     }
   }
   return out;
+}
+
+export type SubPlanProgress = {
+  /** The sub plan (or step) the agent is assigned. */
+  title: string;
+  done: number;
+  /** Steps that count: cancelled ones are left out. */
+  total: number;
+  pct: number;
+  /** The step in progress, else the next one waiting; empty when all are done. */
+  current: string;
+  /** The unfinished step the next step waits for (its ``after``), when nothing is in progress. */
+  waitingOn?: string;
+};
+
+type Assignment = NonNullable<GroupMemberObservation["assignment"]>;
+
+/** Plan rows carry ``after`` (ids of steps that must finish first). */
+type PlanNodeWithAfter = PlanNode & { after?: string[] };
+
+function findPlanNode(nodes: PlanNode[] | undefined, id: string): PlanNode | undefined {
+  for (const node of nodes || []) {
+    if (node.id === id) return node;
+    const inside = findPlanNode(node.children, id);
+    if (inside) return inside;
+  }
+  return undefined;
+}
+
+function planLeaves(node: PlanNode): PlanNode[] {
+  const kids = node.children || [];
+  return kids.length ? kids.flatMap(planLeaves) : [node];
+}
+
+/** The leaves an assignment covers (cancelled left out); null when its plan or node is gone. */
+function assignedLeaves(plan: ChatPlan | null | undefined, assignment: Assignment | null | undefined) {
+  if (!plan || !assignment || plan.id !== assignment.plan_id) return null;
+  const root = assignment.node_id ? findPlanNode(plan.nodes, assignment.node_id) : undefined;
+  if (assignment.node_id && !root) return null;
+  const leaves = root ? planLeaves(root) : (plan.nodes || []).flatMap(planLeaves);
+  return { root, leaves: leaves.filter((n) => n.status !== "cancelled") };
+}
+
+/**
+ * An agent's progress through its assigned part of the team plan: steps done of total, %, and the
+ * current step. Null when the plan is not the one the assignment names (an old or moved plan).
+ */
+export function subPlanProgress(
+  plan: ChatPlan | null | undefined,
+  assignment: GroupMemberObservation["assignment"] | undefined,
+): SubPlanProgress | null {
+  const found = assignedLeaves(plan, assignment);
+  if (!plan || !assignment || !found || found.leaves.length === 0) return null;
+  const { root, leaves: counted } = found;
+  const done = counted.filter((n) => n.status === "completed").length;
+  const running = counted.find((n) => n.status === "in_progress");
+  const current = running ?? counted.find((n) => n.status === "pending");
+  let waitingOn: string | undefined;
+  if (!running && current) {
+    const blocker = ((current as PlanNodeWithAfter).after || [])
+      .map((id) => findPlanNode(plan.nodes, id))
+      .find((n) => n && n.status !== "completed" && n.status !== "cancelled");
+    if (blocker) waitingOn = blocker.content;
+  }
+  return {
+    title: root?.content || plan.title || assignment.title,
+    done,
+    total: counted.length,
+    pct: Math.round((done / counted.length) * 100),
+    current: current?.content || "",
+    ...(waitingOn ? { waitingOn } : {}),
+  };
+}
+
+/** Several agents' parts added up; a part shared by two agents counts once. */
+export function sumProgress(parts: SubPlanProgress[], title: string): SubPlanProgress | null {
+  const done = parts.reduce((n, p) => n + p.done, 0);
+  const total = parts.reduce((n, p) => n + p.total, 0);
+  if (!total) return null;
+  const open = parts.filter((p) => p.current);
+  return {
+    title,
+    done,
+    total,
+    pct: Math.round((done / total) * 100),
+    current: open.length === 1 ? open[0].current : open.length ? `${open.length} parts open` : "",
+  };
+}
+
+/** Where a row's assignment comes from: by default the observation on its own member row. */
+export type ObservationOf = (node: RosterNode) => GroupMemberObservation | undefined;
+
+const ownObservation: ObservationOf = (node) => node.member?.observation;
+
+/** The row's own assignment; a lead with none (the plan's owner) covers its whole plan. */
+function rowAssignment(
+  node: RosterNode,
+  plans: Record<string, ChatPlan | null | undefined>,
+  observationOf: ObservationOf,
+): Assignment | null {
+  const observation = observationOf(node);
+  const assignment = observation && observation.group_id === node.hubId ? observation.assignment : null;
+  if (assignment || !node.isLeader) return assignment;
+  const plan = plans[node.id];
+  return plan ? { plan_id: plan.id, chat_id: node.id, node_id: null, title: plan.title, status: "" } : null;
+}
+
+/**
+ * Rolled-up progress of a row: an agent's own sub plan; a group's own sub plans plus every row
+ * inside it, each plan step counted once even when two rows share (or nest) a sub plan; the lead
+ * row covers the whole plan. Null when nothing in it is assigned.
+ */
+export function rollupProgress(
+  node: RosterNode,
+  plans: Record<string, ChatPlan | null | undefined>,
+  observationOf: ObservationOf = ownObservation,
+): SubPlanProgress | null {
+  if (!node.isGroup) {
+    const assignment = rowAssignment(node, plans, observationOf);
+    return assignment ? subPlanProgress(plans[assignment.chat_id], assignment) : null;
+  }
+  const leaves = new Map<string, PlanNode>();
+  const parts = new Map<string, SubPlanProgress>();
+  const walk = (row: RosterNode) => {
+    const assignment = rowAssignment(row, plans, observationOf);
+    const plan = assignment ? plans[assignment.chat_id] : undefined;
+    const found = assignedLeaves(plan, assignment);
+    if (assignment && found) {
+      for (const leaf of found.leaves) leaves.set(`${assignment.plan_id}:${leaf.id}`, leaf);
+      const p = subPlanProgress(plan, assignment);
+      if (p) parts.set(`${assignment.plan_id}:${assignment.node_id ?? ""}`, p);
+    }
+    row.children.forEach(walk);
+  };
+  walk(node);
+  if (leaves.size === 0) return null;
+  const done = [...leaves.values()].filter((n) => n.status === "completed").length;
+  const open = [...parts.values()].filter((p) => p.current);
+  return {
+    title: node.name,
+    done,
+    total: leaves.size,
+    pct: Math.round((done / leaves.size) * 100),
+    current: open.length === 1 ? open[0].current : open.length ? `${open.length} parts open` : "",
+  };
 }
 
 /** Nested group ids anywhere in the tree (to fetch their rosters). */
