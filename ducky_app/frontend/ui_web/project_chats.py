@@ -791,14 +791,14 @@ def load_conversation(conv_id: str, project_root: str | None = None) -> Conversa
     if _use_db():
         # Ids are globally unique — don't filter by the active island slug.
         doc = _repo().conv_get(conv_id, with_messages=True)
-        return Conversation.from_dict(doc) if doc is not None else None
+        return _held(Conversation.from_dict(doc)) if doc is not None else None
     meta = _find_conversation_meta(conv_id, project_root)
     if meta is None:
         return None
     try:
         data = json.loads(meta.read_text(encoding="utf-8"))
         if isinstance(data, dict):
-            return Conversation.from_dict(data)
+            return _held(Conversation.from_dict(data))
     except (json.JSONDecodeError, OSError):
         pass
     return None
@@ -809,7 +809,7 @@ def load_conversation_meta(conv_id: str, project_root: str | None = None) -> Con
     coordinator's chat can hold hundreds; parsing them all to read a title took tens of ms."""
     if _use_db():
         doc = _repo().conv_get(conv_id, with_messages=False)
-        return Conversation.from_dict(doc) if doc is not None else None
+        return _held(Conversation.from_dict(doc)) if doc is not None else None
     return load_conversation(conv_id, project_root)
 
 
@@ -890,6 +890,31 @@ def _keep_newer_settings(conv: Conversation, stored: dict[str, Any] | None) -> N
     conv.settings_edited = edited
 
 
+# Where a chat sits and what it's called. A running turn holds a copy loaded before a
+# move into a group, a drag between folders or a rename; saving it must not undo them.
+_PLACEMENT = ("title", "folder_id", "sort_order", "parent_conv_id", "leader_conv_id")
+_HELD_ATTR = "_placement_held"
+
+
+def _held(conv: Conversation) -> Conversation:
+    """Remember this copy's placement as loaded (see :func:`_keep_newer_placement`)."""
+    setattr(conv, _HELD_ATTR, {name: getattr(conv, name) for name in _PLACEMENT})
+    return conv
+
+
+def _keep_newer_placement(conv: Conversation, stored: dict[str, Any] | None) -> None:
+    """A field this copy didn't change but someone else did since it was loaded keeps
+    their value. Copies never loaded through load_conversation save as they are."""
+    held = getattr(conv, _HELD_ATTR, None)
+    if not held or not stored:
+        return
+    fresh = Conversation.from_dict({**stored, "id": conv.id, "messages": []})
+    for name in _PLACEMENT:
+        mine, theirs = getattr(conv, name), getattr(fresh, name)
+        if mine == held.get(name) and theirs != mine:
+            setattr(conv, name, theirs)
+
+
 def save_conversation(conv: Conversation, project_root: str | None = None, *, touch_updated: bool = True) -> None:
     with _conversation_lock(conv.id):
         # A self-rename is made through the bridge while this runner owns an older
@@ -902,7 +927,10 @@ def save_conversation(conv: Conversation, project_root: str | None = None, *, to
             conv.updated = time.time()
         if _use_db():
             _keep_newer_settings(conv, _repo().conv_if_settings_newer(conv.id, conv.settings_edited))
+            if getattr(conv, _HELD_ATTR, None):
+                _keep_newer_placement(conv, _repo().conv_get(conv.id, with_messages=False))
             _save_conversation_rows(conv, project_root)
+            _held(conv)
             return
         path = conversation_path(conv.id, project_root)
         home = _find_conversation_meta(conv.id, project_root)
@@ -918,6 +946,7 @@ def save_conversation(conv: Conversation, project_root: str | None = None, *, to
                 existing = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(existing, dict):
                     _keep_newer_settings(conv, existing)
+                    _keep_newer_placement(conv, existing)
                 disk_msgs = existing.get("messages") if isinstance(existing, dict) else None
                 if isinstance(disk_msgs, list) and disk_msgs:
                     if not incoming_msgs:
@@ -928,6 +957,7 @@ def save_conversation(conv: Conversation, project_root: str | None = None, *, to
                 pass
         data = conv.to_dict()
         write_json_atomic(path, data)
+        _held(conv)
         try:
             from frontend.perf_trace import trace
 

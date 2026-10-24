@@ -89,6 +89,26 @@ export function composerAttachmentsFromDto(items: MessageAttachmentDto[]): Compo
   });
 }
 
+function toApiRow(a: ComposerAttachment): MessageAttachmentDto {
+  if (a.kind === "image") {
+    const row: MessageAttachmentDto = {
+      kind: "image",
+      name: a.name,
+      mime: a.mime,
+      data_base64: a.dataUrl.replace(/^data:[^;]+;base64,/, ""),
+    };
+    if (a.projectPath) row.project_path = a.projectPath;
+    return row;
+  }
+  if (a.kind === "video") {
+    const row: MessageAttachmentDto = { kind: "video", name: a.name, mime: a.mime, size_bytes: a.sizeBytes };
+    if (a.stagedId) row.staged_id = a.stagedId;
+    if (a.absPath) row.abs_path = a.absPath;
+    return row;
+  }
+  return { kind: "file", name: a.name, mime: a.mime, text: a.text };
+}
+
 export function useComposerAttachments(
   initial: MessageAttachmentDto[] = [],
   hookOpts: { convId?: string; model?: string; modelLabel?: string; codingAgent?: string } = {},
@@ -378,28 +398,20 @@ export function useComposerAttachments(
     return ids;
   }, [attachments, limits.fileInlineTokens]);
 
-  const toApiAttachments = useCallback((): MessageAttachmentDto[] => {
+  // Each attachment becomes its API row once: the composer cache and every undo step are
+  // saved on each keystroke, and a fresh base64 copy per picture each time piled up
+  // megabytes per key until the app lagged.
+  const apiRows = useRef(new WeakMap<ComposerAttachment, MessageAttachmentDto>());
+  const apiAttachments = useMemo((): MessageAttachmentDto[] => {
     return attachments.map((a) => {
-      if (a.kind === "image") {
-        const base64 = a.dataUrl.replace(/^data:[^;]+;base64,/, "");
-        const row: MessageAttachmentDto = {
-          kind: "image",
-          name: a.name,
-          mime: a.mime,
-          data_base64: base64,
-        };
-        if (a.projectPath) row.project_path = a.projectPath;
-        return row;
-      }
-      if (a.kind === "video") {
-        const row: MessageAttachmentDto = { kind: "video", name: a.name, mime: a.mime, size_bytes: a.sizeBytes };
-        if (a.stagedId) row.staged_id = a.stagedId;
-        if (a.absPath) row.abs_path = a.absPath;
-        return row;
-      }
-      return { kind: "file", name: a.name, mime: a.mime, text: a.text };
+      const known = apiRows.current.get(a);
+      if (known) return known;
+      const row = toApiRow(a);
+      apiRows.current.set(a, row);
+      return row;
     });
   }, [attachments]);
+  const toApiAttachments = useCallback((): MessageAttachmentDto[] => apiAttachments, [apiAttachments]);
 
   return {
     attachments,

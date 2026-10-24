@@ -27,6 +27,40 @@ def test_save_conversation_does_not_blank_existing_messages():
         assert fresh.messages[0]["text"] == "hello"
 
 
+def test_a_running_turn_keeps_a_move_and_rename_made_while_it_works():
+    from frontend.ui_web.project_chats import (
+        append_message,
+        create_folder,
+        move_conversation,
+        rename_conversation,
+        upsert_in_flight_assistant,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = str(Path(tmp))
+        conv = create_conversation(PanelSettings.load(), "", title="Verse Coder 6", project_root=root)
+        runner = load_conversation(conv.id, project_root=root)  # the copy a turn holds
+        assert runner is not None
+        coders = create_folder("Coders", "", root)
+        move_conversation(conv.id, coders.id, root)  # dragged into a group while it works
+        rename_conversation(conv.id, "Verse Coder 6b", root)
+
+        append_message(runner, {"role": "user", "text": "go", "content": "go", "ts": 1}, root)
+        upsert_in_flight_assistant(runner, {"role": "assistant", "content": "on it"}, run_id="r1", project_root=root)
+        runner.token_usage = {"total_input": 5}  # a mid-turn usage save
+        save_conversation(runner, root)
+
+        fresh = load_conversation(conv.id, project_root=root)
+        assert fresh is not None
+        assert (fresh.folder_id, fresh.title) == (coders.id, "Verse Coder 6b")
+        assert [m["role"] for m in fresh.messages] == ["user", "assistant"]
+
+        # The turn's own change still lands.
+        runner.folder_id = ""
+        save_conversation(runner, root)
+        assert load_conversation(conv.id, project_root=root).folder_id == ""
+
+
 def test_save_conversation_does_not_drop_assistant_for_user_only_stub():
     with tempfile.TemporaryDirectory() as tmp:
         root = str(Path(tmp))

@@ -37,6 +37,21 @@ describe("restoring queued attachments", () => {
     expect(result.current.toApiAttachments()).toEqual([queued[1], draft]);
   });
 
+  it("makes each attachment's API row once, so keystrokes never copy pictures again", () => {
+    const { result } = renderHook(() => useComposerAttachments());
+    act(() => result.current.restoreAttachments([
+      { kind: "image", name: "a.png", mime: "image/png", data_base64: "QUFB" },
+      { kind: "image", name: "b.png", mime: "image/png", data_base64: "QkJC" },
+    ]));
+    const first = result.current.toApiAttachments();
+    expect(result.current.toApiAttachments()).toBe(first);
+    // Another attachment: the rows already made are the same objects, not new copies.
+    act(() => result.current.restoreAttachments([{ kind: "file", name: "n.txt", mime: "text/plain", text: "x" }]));
+    const next = result.current.toApiAttachments();
+    expect(next[1]).toBe(first[0]);
+    expect(next[2]).toBe(first[1]);
+  });
+
   it("restores an image-only prompt and allows clearing it after resend", () => {
     const { result } = renderHook(() => useComposerAttachments());
     act(() => result.current.restoreAttachments([

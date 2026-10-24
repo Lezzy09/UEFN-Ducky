@@ -150,6 +150,7 @@ _PUBLIC_METHODS = frozenset({
     'ducky_link_open',
     'ducky_link_rtc_connect',
     'ducky_sync_copy',
+    'ducky_sync_forget',
     'ducky_sync_list',
     'ducky_sync_now',
     'ducky_health_snapshot',

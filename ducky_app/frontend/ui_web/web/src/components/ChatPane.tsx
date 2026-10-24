@@ -1,5 +1,5 @@
 import { subscribeLatestChatActivity } from "../navigation/latestChatActivity";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Icons } from "../icons/Icons";
 import { ScopedCss, useScopedClass } from "../utils/scopedCss";
 import { ChatPermissionsButton } from "./ChatPermissionsButton";
@@ -847,6 +847,26 @@ export function ChatPane({
     const h = liveTextareaHeightRef.current;
     if (h != null) setTextareaHeight(h);
   }, []);
+
+  // Shift+Enter (or a long line wrapping) grows the box to show what's written, up to the
+  // same cap the handle has; after a send it goes back to the height it had before.
+  const heightBeforeGrowRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el || isPopup || inputResizingRef.current) return;
+    if (!inputText) {
+      const before = heightBeforeGrowRef.current;
+      heightBeforeGrowRef.current = null;
+      if (before != null) applyTextareaHeight(before, true);
+      return;
+    }
+    const overflow = el.scrollHeight - el.clientHeight;
+    if (overflow <= 1) return;
+    refreshMaxTextareaHeight();
+    const current = liveTextareaHeightRef.current ?? el.offsetHeight;
+    if (heightBeforeGrowRef.current == null) heightBeforeGrowRef.current = current;
+    applyTextareaHeight(current + overflow, true);
+  }, [inputText, isPopup, applyTextareaHeight, refreshMaxTextareaHeight]);
 
   const onInputResizeTap = useCallback(() => {
     refreshMaxTextareaHeight();
