@@ -41,7 +41,8 @@ _BINARY_SUFFIXES = (
     ".wav", ".mp3", ".mp4", ".ogg", ".ttf", ".otf", ".woff", ".woff2", ".pyc", ".sqlite", ".db",
 )
 _MAX_FILE_BYTES = 2 * 1024 * 1024
-_SEARCH_SECONDS = 10.0
+#: One search or find call, git and folder walk together, returns what it has by then.
+_SEARCH_SECONDS = 20.0
 _LINE_CHARS = 300
 _GIT_OUTPUT_CHARS = 60_000
 #: A read without a range stops here; the rest is a start_line away.
@@ -208,11 +209,18 @@ class _GitIgnore:
         return False
 
 
-def _walk_files(start: str, base: str = "", globs: Optional[list[str]] = None, policy: Any = None):
+class _TimeUp(Exception):
+    """The search's time limit passed."""
+
+
+def _walk_files(start: str, base: str = "", globs: Optional[list[str]] = None, policy: Any = None,
+                deadline: Optional[float] = None):
     """Files under ``start`` (or ``start`` itself) that ``globs`` (relative to ``base``) can
     match, skipping heavy dirs, binaries, .gitignore'd paths (base's and start's) and folders
     no glob can reach. AI-ignore is checked once per folder; callers check each file they
-    return or read (a file rule, a link)."""
+    return or read (a file rule, a link). Past ``deadline`` (monotonic) it raises _TimeUp,
+    checked per entry: a walk through folders whose files no glob matches yields nothing
+    for minutes, so a check between yielded files alone never fires."""
     policy = policy or current_policy()
     policy.require(start)
     if os.path.isfile(start):
@@ -234,6 +242,8 @@ def _walk_files(start: str, base: str = "", globs: Optional[list[str]] = None, p
             continue
         subdirs: list[str] = []
         for entry in entries:
+            if deadline is not None and time.monotonic() > deadline:
+                raise _TimeUp
             try:
                 is_dir = entry.is_dir()
             except OSError:
@@ -676,6 +686,7 @@ class _Found:
         self.counts: dict[str, int] = {}
         self.note = ""
         self.files_searched: Optional[int] = None
+        self.timed_out = False
 
     def row(self, path: str, line: int, text: str, is_match: bool) -> None:
         rows = self.rows.setdefault(path, {})
@@ -686,16 +697,16 @@ class _Found:
         self.counts[path] = self.counts.get(path, 0) + n
 
 
-_GIT_GREP_SECONDS = 20.0
 _GIT_ROW = re.compile(r"(\d+)([:=-])(.*)\Z", re.S)
 
 
 def _git_search(
     scope: tuple[str, str], start: str, base: str, root: str, globs: list[str], pattern: str,
     regex: bool, case_sensitive: bool, context: int, mode: str, limit: int, policy: Any,
+    deadline: float,
 ) -> Optional[_Found]:
-    """``git grep`` over tracked and untracked, not-ignored files. None when git can't run it
-    (the caller walks instead)."""
+    """``git grep`` over tracked and untracked, not-ignored files, killed at ``deadline``.
+    None when git can't run it (the caller walks instead)."""
     top, srel = scope
     flags = ["-I", "--untracked", "--no-color", "-n"]
     if not case_sensitive:
@@ -713,7 +724,7 @@ def _git_search(
         except OSError:
             return None
         fired: list[bool] = []
-        timer = threading.Timer(_GIT_GREP_SECONDS, lambda: (fired.append(True), proc.kill()))
+        timer = threading.Timer(max(0.0, deadline - time.monotonic()), lambda: (fired.append(True), proc.kill()))
         timer.start()
         try:
             found, read_any = _read_git_grep(proc, top, start, base, root, globs, mode, limit, policy)
@@ -730,8 +741,9 @@ def _git_search(
         if found.note:
             return found
         if fired:
-            found.note = (f"INCOMPLETE: git grep took over {int(_GIT_GREP_SECONDS)} s and was stopped "
-                          "— narrow path or glob.")
+            found.timed_out = True
+            found.note = (f"INCOMPLETE: time limit {int(_SEARCH_SECONDS)} s, git grep was stopped "
+                          "— narrow path or pattern.")
             return found
         if proc.returncode in (0, 1):  # 1: nothing matched
             return found
@@ -830,19 +842,27 @@ def _git_pathspecs(top: str, srel: str, start: str, base: str, globs: list[str])
 
 def _walk_search(
     start: str, base: str, root: str, globs: list[str], rx: re.Pattern[str], context: int,
-    mode: str, limit: int, policy: Any,
+    mode: str, limit: int, policy: Any, deadline: float,
 ) -> _Found:
     found = _Found()
     found.files_searched = 0
-    deadline = time.monotonic() + _SEARCH_SECONDS
-    walker = _walk_files(start, base, globs, policy)
+    try:
+        _walk_search_files(found, _walk_files(start, base, globs, policy, deadline), root, rx, context, mode, limit,
+                           policy, deadline)
+    except _TimeUp:
+        found.timed_out = True
+        found.note = (f"INCOMPLETE: time limit {int(_SEARCH_SECONDS)} s, searched {found.files_searched} files "
+                      "— narrow path or pattern.")
+    return found
+
+
+def _walk_search_files(
+    found: _Found, walker: Any, root: str, rx: re.Pattern[str], context: int, mode: str, limit: int,
+    policy: Any, deadline: float,
+) -> None:
     for full in walker:
         if time.monotonic() > deadline:
-            more, done = _count_rest(walker)
-            about = "about" if done else "over"
-            found.note = (f"INCOMPLETE: searched {found.files_searched} of {about} "
-                          f"{found.files_searched + 1 + more} files in {int(_SEARCH_SECONDS)} s — narrow path or glob.")
-            break
+            raise _TimeUp
         if not ai_access_allowed(full, policy=policy):
             continue
         text = _read_text(full, checked=True)
@@ -869,17 +889,15 @@ def _walk_search(
                 found.row(rel, j + 1, lines[j], j == i)
         if found.note:
             break
-    return found
 
 
-def _count_rest(walker: Any, seconds: float = 1.0) -> tuple[int, bool]:
-    """How many more files the walk would have searched (counted for ``seconds`` at most)."""
-    stop, count = time.monotonic() + seconds, 0
-    for _ in walker:
-        count += 1
-        if time.monotonic() > stop:
-            return count, False
-    return count, True
+def _time_limit(searched: Optional[int]) -> dict[str, Any]:
+    """The fields a search or find adds when its time limit cut it short."""
+    out: dict[str, Any] = {"truncated": True, "reason": f"time limit {int(_SEARCH_SECONDS)} s"}
+    if searched is not None:
+        out["searched_files"] = searched
+    out["hint"] = "narrow path or pattern"
+    return out
 
 
 def _plural(n: int, word: str) -> str:
@@ -894,6 +912,8 @@ def _search_output(found: _Found, mode: str, context: int, fmt: str, pretty: boo
             out["note"] = found.note
         if found.files_searched is not None:
             out["files_searched"] = found.files_searched
+        if found.timed_out:
+            out.update(_time_limit(found.files_searched))
         if mode == "content":
             matches: list[dict[str, Any]] = []
             for path, rows in found.rows.items():
@@ -971,22 +991,25 @@ def workspace_search(
     limit = max(1, min(int(max_results or 100), 1000))
     policy = current_policy()
     policy.require(start)
+    deadline = time.monotonic() + _SEARCH_SECONDS
     scope = _git_scope(start, policy)
     found = None
     if scope:
-        found = _git_search(scope, start, base, root, globs, pattern, regex, case_sensitive, context, mode, limit, policy)
+        found = _git_search(scope, start, base, root, globs, pattern, regex, case_sensitive, context, mode, limit,
+                            policy, deadline)
     if found is None:
-        found = _walk_search(start, base, root, globs, rx, context, mode, limit, policy)
+        found = _walk_search(start, base, root, globs, rx, context, mode, limit, policy, deadline)
     return _search_output(found, mode, context, (format or "text").strip().lower(), pretty)
 
 
-def _git_list(start: str, policy: Any) -> Optional[list[str]]:
+def _git_list(start: str, policy: Any, timeout: float = _SEARCH_SECONDS) -> Optional[list[str]]:
     """Tracked and untracked, not-ignored files under ``start`` (git ls-files), or None outside git."""
     scope = _git_scope(start, policy)
     if not scope:
         return None
     top, srel = scope
-    proc = _git(["ls-files", "-co", "--exclude-standard", "-z", "--", f":(literal){srel}" if srel else "."], top, 20)
+    proc = _git(["ls-files", "-co", "--exclude-standard", "-z", "--", f":(literal){srel}" if srel else "."], top,
+                max(0.1, timeout))
     if proc is None or proc.returncode != 0:
         return None
     names = sorted({n for n in proc.stdout.decode("utf-8", errors="replace").split("\0") if n})
@@ -1009,8 +1032,10 @@ def workspace_find(pattern: str = "*", path: str = ".", max_results: int = 200, 
     pat = pattern or "*"
     policy = current_policy()
     policy.require(start)
+    deadline = time.monotonic() + _SEARCH_SECONDS
     found: list[str] = []
     note = ""
+    seen: Optional[int] = None
 
     def take(full: str) -> bool:
         """Add ``full``; False once the limit is passed (so a full page really has more)."""
@@ -1023,30 +1048,32 @@ def workspace_find(pattern: str = "*", path: str = ".", max_results: int = 200, 
         found.append(_rel(full, root))
         return True
 
-    listed = _git_list(start, policy)
-    if listed is not None:
-        for full in listed:
-            if (full.lower().endswith(_BINARY_SUFFIXES) or not _path_matches(_relto(full, base), pat)
-                    or not os.path.isfile(full)):
-                continue
-            if not take(full):
-                break
-    else:
-        deadline = time.monotonic() + _SEARCH_SECONDS
-        walker = _walk_files(start, base, [pat], policy)
-        seen = 0
-        for full in walker:
-            if time.monotonic() > deadline:
-                more, done = _count_rest(walker)
-                note = (f"INCOMPLETE: looked at {seen} of {'about' if done else 'over'} {seen + 1 + more} "
-                        f"files in {int(_SEARCH_SECONDS)} s — narrow path or pattern.")
-                break
-            seen += 1
-            if not take(full):
-                break
+    timed_out = False
+    listed = _git_list(start, policy, deadline - time.monotonic())
+    try:
+        if listed is not None:
+            for full in listed:
+                if time.monotonic() > deadline:
+                    raise _TimeUp
+                if (full.lower().endswith(_BINARY_SUFFIXES) or not _path_matches(_relto(full, base), pat)
+                        or not os.path.isfile(full)):
+                    continue
+                if not take(full):
+                    break
+        else:
+            seen = 0
+            for full in _walk_files(start, base, [pat], policy, deadline):
+                seen += 1
+                if not take(full):
+                    break
+    except _TimeUp:
+        timed_out = True
+        note = f"INCOMPLETE: time limit {int(_SEARCH_SECONDS)} s — narrow path or pattern."
     out: dict[str, Any] = {"complete": not note}
     if note:
         out["note"] = note
+    if timed_out:
+        out.update(_time_limit(seen))
     out["files"], out["count"] = found, len(found)
     return tool_json(out, pretty=pretty)
 

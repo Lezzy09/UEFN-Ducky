@@ -616,10 +616,60 @@ def test_search_that_runs_out_of_time_says_incomplete(project, monkeypatch) -> N
     out = _call(wc.workspace_search, "Store", format="json")
     assert list(out)[:2] == ["complete", "note"]
     assert out["complete"] is False and out["matches"] == []
-    assert out["note"].startswith("INCOMPLETE: searched 0 of about ") and "narrow path or glob" in out["note"]
-    assert wc.workspace_search("Store").startswith("INCOMPLETE: searched 0 of about ")
+    assert out["note"].startswith("INCOMPLETE: time limit -1 s, searched 0 files") and "narrow path or pattern" in out["note"]
+    assert out["truncated"] is True and out["searched_files"] == 0 and out["hint"] == "narrow path or pattern"
+    assert wc.workspace_search("Store").startswith("INCOMPLETE: time limit -1 s, searched 0 files")
     found = _call(wc.workspace_find, "*.py")
-    assert found["complete"] is False and found["note"].startswith("INCOMPLETE:")
+    assert found["complete"] is False and found["note"].startswith("INCOMPLETE:") and found["truncated"] is True
+
+
+def _slow_folders(root: Path, monkeypatch, delay: float = 0.05) -> None:
+    """Forty folders of files no glob matches, each listed slowly."""
+    for i in range(40):
+        (root / "deep" / f"d{i:02}").mkdir(parents=True)
+        (root / "deep" / f"d{i:02}" / "a.txt").write_text("Store\n", encoding="utf-8")
+    real_scandir = wc.os.scandir
+
+    def slow(path):
+        import time
+        time.sleep(delay)
+        return real_scandir(path)
+
+    monkeypatch.setattr(wc.os, "scandir", slow)
+
+
+def test_a_slow_walk_returns_at_the_time_limit_with_what_it_found(project, monkeypatch) -> None:
+    """Searches ran past 120 s (Oct 24 2026): folders whose files no glob matched yielded
+    nothing, so the clock check between yielded files never ran."""
+    import time
+
+    root, _ = project
+    _slow_folders(root, monkeypatch)
+    monkeypatch.setattr(wc, "_SEARCH_SECONDS", 0.5)
+    started = time.monotonic()
+    out = _call(wc.workspace_search, "Store", glob="*.zz", format="json")
+    assert time.monotonic() - started < 1.5
+    assert out["truncated"] is True and out["reason"] == "time limit 0 s" and out["complete"] is False
+    started = time.monotonic()
+    hits = _call(wc.workspace_search, "Store", format="json")
+    assert time.monotonic() - started < 1.5
+    assert hits["truncated"] is True and hits["matches"] and hits["searched_files"] >= 1
+    started = time.monotonic()
+    found = _call(wc.workspace_find, "*.zz")
+    assert time.monotonic() - started < 1.5
+    assert found["truncated"] is True and found["complete"] is False
+
+
+def test_a_small_tree_searches_everything_within_the_limit(project, monkeypatch) -> None:
+    root, _ = project
+    _slow_folders(root, monkeypatch, delay=0.0)
+    out = _call(wc.workspace_search, "Store", format="json")
+    assert out["complete"] is True and "truncated" not in out
+    assert {m["path"] for m in out["matches"]} >= {"src/app.py", "deep/d00/a.txt", "deep/d39/a.txt"}
+    assert not any(m["path"].startswith("node_modules/") for m in out["matches"])
+    found = _call(wc.workspace_find, "*.txt")
+    assert found["complete"] is True and found["count"] == 40 and "truncated" not in found
+    assert _call(wc.workspace_find, "*.js", path="node_modules")["files"] == ["node_modules/dep/index.js"]
 
 
 def test_search_limit_in_a_plain_folder_is_loud(project) -> None:
