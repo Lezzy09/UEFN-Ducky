@@ -111,6 +111,43 @@ function chatNameById(
   return walk(folders);
 }
 
+/**
+ * Opens the ancestor folders of each focused chat once per focus change. Folder
+ * reloads never re-open a folder the person collapsed after that reveal; a chat
+ * not in the tree yet is revealed on the first load that has it.
+ */
+export function useRevealFocusedChats(
+  activeChats: string[],
+  folders: FolderItem[],
+  rootChats: FolderItem["chats"],
+  setFolders: React.Dispatch<React.SetStateAction<FolderItem[]>>,
+): void {
+  const revealedRef = useRef(new Set<string>());
+  useEffect(() => {
+    const revealed = revealedRef.current;
+    for (const chatId of revealed) {
+      if (!activeChats.includes(chatId)) revealed.delete(chatId);
+    }
+    const folderIds = new Set<string>();
+    for (const chatId of activeChats) {
+      if (revealed.has(chatId) || chatNameById(folders, rootChats, chatId) === null) continue;
+      revealed.add(chatId);
+      for (const folderId of findChatAncestorFolderIds(folders, rootChats, chatId)) {
+        folderIds.add(folderId);
+      }
+    }
+    if (folderIds.size === 0) return;
+    setFolders((prev) => {
+      const needsExpand = [...folderIds].some((id) => {
+        const folder = findFolderById(prev, id);
+        return folder && !folder.expanded;
+      });
+      if (!needsExpand) return prev;
+      return expandFoldersById(prev, folderIds);
+    });
+  }, [activeChats, folders, rootChats, setFolders]);
+}
+
 const SIDEBAR_HANDLE_WIDTH = 1;
 
 export interface ChatSidebarHandle {
@@ -457,24 +494,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
     return () => window.removeEventListener(OPEN_SIDEBAR_PANEL_EVENT, onOpen);
   }, [panelMode, embedded, dockSide, dockSetFocusedPanel, legacySetFocusedPanel]);
 
-  useEffect(() => {
-    if (activeChats.length === 0) return;
-    const folderIds = new Set<string>();
-    for (const chatId of activeChats) {
-      for (const folderId of findChatAncestorFolderIds(folders, rootChats, chatId)) {
-        folderIds.add(folderId);
-      }
-    }
-    if (folderIds.size === 0) return;
-    setFolders((prev) => {
-      const needsExpand = [...folderIds].some((id) => {
-        const folder = findFolderById(prev, id);
-        return folder && !folder.expanded;
-      });
-      if (!needsExpand) return prev;
-      return expandFoldersById(prev, folderIds);
-    });
-  }, [activeChats, folders, rootChats, setFolders]);
+  useRevealFocusedChats(activeChats, folders, rootChats, setFolders);
 
   useEffect(() => {
     const chatId = activeChats[0];
