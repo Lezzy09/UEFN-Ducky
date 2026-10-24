@@ -25,32 +25,79 @@ def _base() -> dict:
             "helpers": [], "other_ducky_processes": [], "uefn": [], "sandboxes": {}, "terminals": {}, "storage": {}}
 
 
-def _spin(stop) -> None:
-    n = 0
+def _spin(stop, busy_ms: float = 100.0) -> None:
+    import time
+
     while not stop.is_set():
-        n += 1
+        end = time.perf_counter() + busy_ms / 1000
+        while time.perf_counter() < end:
+            pass
+        if busy_ms < 100:
+            time.sleep((100 - busy_ms) / 1000)
 
 
-def test_a_busy_thread_is_named_with_its_function():
+def test_a_quarter_busy_thread_is_named_and_a_tenth_is_not():
     import threading
     import time
 
     stop = threading.Event()
-    busy = threading.Thread(target=_spin, args=(stop,), name="ca-stdout-test", daemon=True)
-    busy.start()
+    threads = [threading.Thread(target=_spin, args=(stop, ms), name=name, daemon=True)
+               for name, ms in (("ca-stdout-test", 25.0), ("quiet-test", 10.0))]
+    for t in threads:
+        t.start()
     try:
         before, t0 = self_health._thread_times(), time.monotonic()
-        time.sleep(1.0)
+        time.sleep(2.0)
         hot = self_health.hot_threads(before, self_health._thread_times(), time.monotonic() - t0)
     finally:
         stop.set()
-        busy.join()
-    row = next(r for r in hot if r["thread"] == "ca-stdout-test")
-    assert row["core_percent"] >= 50 and row["stack"][0].startswith("_spin (test_self_health.py:")
+        for t in threads:
+            t.join()
+    row = next(r for r in hot if r["name"] == "ca-stdout-test")
+    assert 0.2 <= row["share"] <= 0.5 and row["where"] == "test_self_health.py:_spin"
+    assert row["stack"][0].startswith("_spin (test_self_health.py:")
+    assert all(r["name"] != "quiet-test" for r in hot) and len(hot) <= 5
     snap = _base()
     snap["app"]["hot_threads"] = [row]
+    warm = [f for f in self_health.findings(snap) if "ca-stdout-test" in f["what"]]
+    assert [f["severity"] for f in warm] == ["medium"]
+    snap["app"]["hot_threads"] = [dict(row, share=0.8)]
     first = self_health.findings(snap)[0]
     assert first["severity"] == "high" and "ca-stdout-test" in first["what"] and "_spin" in first["what"]
+
+
+def test_core_wait_percentiles():
+    stats = self_health.core_wait_stats([float(v) for v in range(100, 0, -1)])
+    assert stats == {"p50": 50.0, "p95": 95.0, "max": 100.0, "samples": 100}
+    assert self_health.core_wait_stats([])["samples"] == 0
+
+
+def test_core_wait_findings():
+    def severity(p95):
+        snap = _base()
+        snap["app"]["core_wait_ms"] = {"p50": 1, "p95": p95, "max": p95, "samples": 6000}
+        return [f["severity"] for f in self_health.findings(snap) if "Python core" in f["what"]]
+
+    assert severity(60) == ["high"] and severity(30) == ["medium"] and severity(5) == []
+
+
+def test_piled_up_window_calls_are_named():
+    snap = _base()
+    snap["app"]["inflight"] = [{"source": "bridge", "method": "group_members", "count": 25, "oldest_s": 3.9},
+                               {"source": "bridge", "method": "get_version", "count": 1, "oldest_s": 0.1}]
+    piled = [f for f in self_health.findings(snap) if "piling up" in f["what"]]
+    assert len(piled) == 1 and piled[0]["severity"] == "medium"
+    assert "group_members ×25" in piled[0]["what"] and "get_version" not in piled[0]["what"]
+
+
+def test_snapshot_shows_the_registry(monkeypatch):
+    from frontend.ui_web import inflight
+
+    monkeypatch.setattr(inflight, "top", lambda n=5: [{"source": "bridge", "method": "group_members", "count": 25,
+                                                        "oldest_s": 1.0}])
+    monkeypatch.setattr(inflight, "total", lambda: 25)
+    app = self_health.snapshot()["app"]
+    assert app["inflight_total"] == 25 and app["inflight"][0]["method"] == "group_members" and app["threads"] > 0
 
 
 def test_a_healthy_app_says_nothing_is_wrong():

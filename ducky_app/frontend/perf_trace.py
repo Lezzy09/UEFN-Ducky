@@ -382,6 +382,83 @@ def write_report() -> dict[str, Any]:
     return report
 
 
+PER_PROCESS_ROW_CAP = 20_000
+
+
+def _process_role(pid: int) -> str:
+    """app window / tool server / other, from a live pid's command line; gone when it ended."""
+    from frontend.self_health import _cmdline, _role
+
+    cmd, exe = _cmdline(pid)
+    if not cmd and not exe:
+        return "gone"
+    role = _role(cmd)
+    return "app window" if role == "app" else "tool server" if "tool server" in role else "other"
+
+
+def _pid_of(session_id: str) -> int:
+    tail = str(session_id or "").rsplit("-", 1)[-1]
+    return int(tail) if tail.isdigit() else 0
+
+
+def _p(vals: list[float], p: float) -> float:
+    return round(_percentile(sorted(vals), p), 1)
+
+
+def per_process_block(rows: list[dict[str, Any]], minutes: float) -> dict[str, Any]:
+    """One process's numbers from its perf rows (``payload`` = the traced entry)."""
+    loads: list[float] = []
+    saves: list[float] = []
+    stalls: list[float] = []
+    js_bytes: dict[str, float] = {}
+    for row in rows:
+        e = row.get("payload") or {}
+        kind, ms = e.get("kind"), float(e.get("duration_ms") or 0)
+        if "load_messages" in (e.get("name"), e.get("method")):
+            loads.append(ms)
+        if kind == "conv_save":
+            saves.append(ms)
+        elif kind == "ui_stall":
+            stalls.append(ms)
+        elif kind == "ui_js":
+            src = str(e.get("source") or e.get("name") or "?")
+            js_bytes[src] = js_bytes.get(src, 0.0) + float(e.get("js_bytes") or 0)
+    mb = 1024 * 1024
+    return {
+        "chat_load_p50_s": round(_p(loads, 50) / 1000, 2), "chat_load_p95_s": round(_p(loads, 95) / 1000, 2),
+        "chat_loads": len(loads),
+        "conv_save_p50_ms": _p(saves, 50), "conv_save_p95_ms": _p(saves, 95),
+        "conv_save_max_ms": round(max(saves), 1) if saves else 0.0, "conv_saves": len(saves),
+        "ui_js_mb_per_min": round(sum(js_bytes.values()) / mb / max(minutes, 1.0), 2),
+        "top_ui_js": [[src, round(b / mb, 1)] for src, b in sorted(js_bytes.items(), key=lambda kv: -kv[1])[:10]],
+        "ui_stalls": len(stalls), "ui_stall_p95_ms": _p(stalls, 95),
+    }
+
+
+def per_process_report(hours: float = 2.0) -> dict[str, Any]:
+    """Chat load / save times and UI traffic per Ducky process over the last ``hours``
+    (the app window and the tool servers each trace into their own session)."""
+    since = time.time() - hours * 3600
+    try:
+        rows = _events().newest("perf", limit=PER_PROCESS_ROW_CAP, since=since)
+        errors = _events().newest("error", limit=PER_PROCESS_ROW_CAP, since=since)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+    by_pid: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_pid.setdefault(_pid_of(row.get("source", "")), []).append(row)
+    chat_errors = {src: sum(1 for e in errors if e.get("source") == src) for src in ("chat_slow", "chat_timeout")}
+    processes: list[dict[str, Any]] = []
+    for pid, mine in sorted(by_pid.items(), key=lambda kv: -len(kv[1])):
+        role = _process_role(pid)
+        block = {"pid": pid, "role": role, "rows": len(mine), **per_process_block(mine, hours * 60)}
+        if role == "app window":  # the window reports chats that load slowly or never
+            block.update(chat_slow_2h=chat_errors["chat_slow"], chat_timeouts_2h=chat_errors["chat_timeout"])
+        processes.append(block)
+    return {"ok": True, "hours": hours, "rows": len(rows), "capped": len(rows) >= PER_PROCESS_ROW_CAP,
+            "chat_errors": chat_errors, "processes": processes}
+
+
 def read_latest_report() -> dict[str, Any] | None:
     """Load ``latest-report.json`` from disk (survives process death)."""
     if _use_db():

@@ -4,15 +4,19 @@ the app may feel slow, and the safe fixes (``ducky_health`` / ``ducky_self_care`
 Runs in the Ducky window's process (agents' tool servers ask over the panel API), so the
 numbers are the app's own. One snapshot reads the whole process table twice, one second
 apart (CPU), and asks only Ducky's own few processes for their command lines: a busy PC
-answers in about a second. Nothing here keeps history or a thread, so looking never
-becomes a cost itself.
+answers in about a second. The one thing kept is the core-wait meter: a thread that
+sleeps 10 ms at a time and records how late Python lets it wake up (the GIL queue).
 """
 
 from __future__ import annotations
 
+import collections
 import gc
 import json
+import math
 import os
+import statistics
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -85,7 +89,54 @@ def _ducky_named(proc: Any) -> bool:
     return proc.name.lower().startswith(_DUCKY_NAMES)
 
 
-_HOT_THREAD_SHARE = 0.5  # of one core
+class _CoreWait:
+    """How long Python work waits for the core: lateness of a 10 ms sleep beyond the idle
+    baseline (median of the first 200 wakes), last ~60 s."""
+
+    samples: collections.deque[float] = collections.deque(maxlen=6000)
+    baseline: float | None = None
+    thread: threading.Thread | None = None
+    start_lock = threading.Lock()
+
+
+def _core_wait_loop() -> None:
+    # No logging, no locks: one deque append per wake, so the meter never adds to the wait.
+    perf, sleep, push = time.perf_counter, time.sleep, _CoreWait.samples.append
+    first: list[float] = []
+    while True:
+        t = perf()
+        sleep(0.010)
+        late = (perf() - t - 0.010) * 1000
+        if _CoreWait.baseline is None:
+            first.append(late)
+            if len(first) >= 200:
+                _CoreWait.baseline = statistics.median(first)
+            continue
+        push(max(0.0, late - _CoreWait.baseline))
+
+
+def start_core_wait() -> None:
+    """Start the core-wait meter (one daemon thread per process; later calls do nothing)."""
+    with _CoreWait.start_lock:
+        if _CoreWait.thread is None or not _CoreWait.thread.is_alive():
+            _CoreWait.thread = threading.Thread(target=_core_wait_loop, name="core-wait", daemon=True)
+            _CoreWait.thread.start()
+
+
+def core_wait_stats(samples: list[float] | None = None) -> dict[str, Any]:
+    """p50 / p95 / max lateness in ms over the meter's window (or the samples given)."""
+    vals = sorted(list(_CoreWait.samples) if samples is None else samples)
+    if not vals:
+        return {"p50": None, "p95": None, "max": None, "samples": 0}
+
+    def pct(q: float) -> float:
+        return round(vals[max(0, math.ceil(q * len(vals)) - 1)], 1)
+
+    return {"p50": pct(0.50), "p95": pct(0.95), "max": round(vals[-1], 1), "samples": len(vals)}
+
+
+_HOT_THREAD_SHARE = 0.2  # of one core: named from here
+_SPINNING_SHARE = 0.5  # a finding of its own from here
 
 
 def _thread_times() -> dict[int, float]:
@@ -98,8 +149,8 @@ def _thread_times() -> dict[int, float]:
 
 
 def hot_threads(before: dict[int, float], after: dict[int, float], seconds: float) -> list[dict[str, Any]]:
-    """Threads of this process that used more than half a core between two
-    :func:`_thread_times` reads, each with its Python thread name and stack."""
+    """The (at most 5) busiest threads of this process above a fifth of a core between two
+    :func:`_thread_times` reads: ``{name, share, where, stack}``, busiest first."""
     import sys
     import threading
 
@@ -116,12 +167,13 @@ def hot_threads(before: dict[int, float], after: dict[int, float], seconds: floa
         # Start at the caller, not the stdlib helper it is inside (Event.is_set, queue.get, ...).
         while frame is not None and frame.f_back is not None and _in_stdlib(frame.f_code.co_filename):
             frame = frame.f_back
+        where = f"{Path(frame.f_code.co_filename).name}:{frame.f_code.co_name}" if frame is not None else "native code"
         while frame is not None and len(stack) < 8:
             stack.append(f"{frame.f_code.co_name} ({Path(frame.f_code.co_filename).name}:{frame.f_lineno})")
             frame = frame.f_back
-        out.append({"thread": thread.name if thread is not None else f"native thread {tid}",
-                    "core_percent": round(share * 100), "stack": stack})
-    return sorted(out, key=lambda r: -r["core_percent"])
+        out.append({"name": thread.name if thread is not None else f"native thread {tid}",
+                    "share": round(share, 2), "where": where, "stack": stack})
+    return sorted(out, key=lambda r: -r["share"])[:5]
 
 
 def snapshot(detail: bool = False) -> dict[str, Any]:
@@ -129,6 +181,7 @@ def snapshot(detail: bool = False) -> dict[str, Any]:
 
     from backend.util import proc_table
 
+    start_core_wait()
     started, threads_before = time.monotonic(), _thread_times()
     procs, cpu = proc_table.sample(1.0)
     hot = hot_threads(threads_before, _thread_times(), time.monotonic() - started)
@@ -149,6 +202,8 @@ def snapshot(detail: bool = False) -> dict[str, Any]:
         "cpu_percent": cpu.get(me_pid, 0.0),
         "uptime_min": round((time.time() - me.started) / 60, 1) if me.started else None,
         "hot_threads": hot,
+        "core_wait_ms": core_wait_stats(),
+        **_inflight(),
     }
     by_name: dict[str, dict[str, Any]] = {}
     for pid in proc_table.tree(procs, me_pid)[1:]:
@@ -197,6 +252,15 @@ def snapshot(detail: bool = False) -> dict[str, Any]:
     return out
 
 
+def _inflight() -> dict[str, Any]:
+    try:
+        from frontend.ui_web import inflight
+
+        return {"inflight": inflight.top(5), "inflight_total": inflight.total()}
+    except Exception as exc:  # noqa: BLE001
+        return {"inflight": [], "inflight_total": 0, "inflight_error": str(exc)}
+
+
 def _sandboxes(procs: Any = None, cpu: dict[int, float] | None = None) -> dict[str, Any]:
     try:
         from backend.sandbox import paths, service
@@ -218,13 +282,14 @@ def _terminals() -> dict[str, Any]:
         return {"error": str(exc)}
 
 
-def _running_agents() -> int:
+def _running_agents() -> dict[str, Any]:
     try:
-        from frontend.ui_web.agent_modes import list_running_agents
+        from frontend.ui_web.agent_state import running_agents
 
-        return len(list(list_running_agents()))
-    except Exception:
-        return 0
+        rows = running_agents()
+        return {"count": len(rows), "agents": rows}
+    except Exception as exc:  # noqa: BLE001
+        return {"count": 0, "agents": [], "error": str(exc)}
 
 
 _STORAGE_TTL_S = 600.0
@@ -269,11 +334,30 @@ def findings(snap: dict[str, Any]) -> list[dict[str, str]]:
     pc = snap.get("pc") or {}
     ncpu = int(pc.get("cpus") or 1)
     app_cpu_pc = float(app.get("cpu_percent") or 0) / ncpu
-    for hot in app.get("hot_threads") or []:
-        where = (hot.get("stack") or ["native code"])[0]
-        out.append({"severity": "high", "what": f"Ducky's thread {hot['thread']} used {hot['core_percent']}% of a core in {where}.",
+    wait_p95 = float((app.get("core_wait_ms") or {}).get("p95") or 0)
+    if wait_p95 > 20:
+        out.append({"severity": "high" if wait_p95 > 50 else "medium",
+                    "what": f"Ducky's Python core is overloaded: work waits {wait_p95:.0f} ms",
+                    "why": "Too many threads want Python at once (the GIL)",
+                    "fix": "ducky_perf_report names the busiest calls; fewer running agents"})
+    busy_threads = app.get("hot_threads") or []
+    for hot in (h for h in busy_threads if float(h.get("share") or 0) > _SPINNING_SHARE):
+        where = (hot.get("stack") or [hot.get("where") or "native code"])[0]
+        out.append({"severity": "high", "what": f"Ducky's thread {hot['name']} used {round(float(hot['share']) * 100)}% of a core in {where}.",
                     "why": "One thread busy all the time: work repeated per event, or a loop that never waits.",
                     "fix": "Stack, innermost first: " + " < ".join(hot.get("stack") or ["(no Python frames)"])})
+    warm = [h for h in busy_threads if float(h.get("share") or 0) <= _SPINNING_SHARE]
+    if warm:
+        names = ", ".join(f"{h['name']} {round(float(h['share']) * 100)}% in {h.get('where')}" for h in warm)
+        out.append({"severity": "medium", "what": f"Busy Ducky threads: {names}.",
+                    "why": "Each takes a fifth of a core or more; together they make other work wait for Python.",
+                    "fix": "ducky_perf_report names the busiest calls; fewer running agents"})
+    piled = [r for r in app.get("inflight") or [] if int(r.get("count") or 0) > 20 or float(r.get("oldest_s") or 0) > 10]
+    if piled:
+        names = ", ".join(f"{r['method']} ×{r['count']}" for r in piled)
+        out.append({"severity": "medium", "what": f"Window calls are piling up: {names}",
+                    "why": "The window asks faster than Python answers (or one call hangs), so the UI shows Loading.",
+                    "fix": "ducky_perf_report names the slow calls; fewer running agents"})
     if app_cpu_pc > 15:
         out.append({"severity": "high", "what": f"Ducky's window process uses {app_cpu_pc:.0f}% of the PC's CPU.",
                     "why": "Something in the app is busy while it should idle (a stuck loop, a flood of UI updates).",
