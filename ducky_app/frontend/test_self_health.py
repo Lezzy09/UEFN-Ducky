@@ -25,6 +25,34 @@ def _base() -> dict:
             "helpers": [], "other_ducky_processes": [], "uefn": [], "sandboxes": {}, "terminals": {}, "storage": {}}
 
 
+def _spin(stop) -> None:
+    n = 0
+    while not stop.is_set():
+        n += 1
+
+
+def test_a_busy_thread_is_named_with_its_function():
+    import threading
+    import time
+
+    stop = threading.Event()
+    busy = threading.Thread(target=_spin, args=(stop,), name="ca-stdout-test", daemon=True)
+    busy.start()
+    try:
+        before, t0 = self_health._thread_times(), time.monotonic()
+        time.sleep(1.0)
+        hot = self_health.hot_threads(before, self_health._thread_times(), time.monotonic() - t0)
+    finally:
+        stop.set()
+        busy.join()
+    row = next(r for r in hot if r["thread"] == "ca-stdout-test")
+    assert row["core_percent"] >= 50 and row["stack"][0].startswith("_spin (test_self_health.py:")
+    snap = _base()
+    snap["app"]["hot_threads"] = [row]
+    first = self_health.findings(snap)[0]
+    assert first["severity"] == "high" and "ca-stdout-test" in first["what"] and "_spin" in first["what"]
+
+
 def test_a_healthy_app_says_nothing_is_wrong():
     out = self_health.findings(_base())
     assert [f["severity"] for f in out] == ["ok"]

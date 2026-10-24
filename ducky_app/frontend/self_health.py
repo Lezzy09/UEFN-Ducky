@@ -78,12 +78,50 @@ def _ducky_named(proc: Any) -> bool:
     return proc.name.lower().startswith(_DUCKY_NAMES)
 
 
+_HOT_THREAD_SHARE = 0.5  # of one core
+
+
+def _thread_times() -> dict[int, float]:
+    import psutil
+
+    try:
+        return {t.id: t.user_time + t.system_time for t in psutil.Process().threads()}
+    except (psutil.Error, OSError):
+        return {}
+
+
+def hot_threads(before: dict[int, float], after: dict[int, float], seconds: float) -> list[dict[str, Any]]:
+    """Threads of this process that used more than half a core between two
+    :func:`_thread_times` reads, each with its Python thread name and stack."""
+    import sys
+    import threading
+
+    by_native = {t.native_id: t for t in threading.enumerate() if t.native_id is not None}
+    frames = sys._current_frames()
+    out: list[dict[str, Any]] = []
+    for tid, total in after.items():
+        share = (total - before.get(tid, total)) / max(seconds, 1e-3)
+        if share < _HOT_THREAD_SHARE:
+            continue
+        thread = by_native.get(tid)
+        stack: list[str] = []
+        frame = frames.get(thread.ident) if thread is not None and thread.ident is not None else None
+        while frame is not None and len(stack) < 8:
+            stack.append(f"{frame.f_code.co_name} ({Path(frame.f_code.co_filename).name}:{frame.f_lineno})")
+            frame = frame.f_back
+        out.append({"thread": thread.name if thread is not None else f"native thread {tid}",
+                    "core_percent": round(share * 100), "stack": stack})
+    return sorted(out, key=lambda r: -r["core_percent"])
+
+
 def snapshot(detail: bool = False) -> dict[str, Any]:
     import psutil
 
     from backend.util import proc_table
 
+    started, threads_before = time.monotonic(), _thread_times()
     procs, cpu = proc_table.sample(1.0)
+    hot = hot_threads(threads_before, _thread_times(), time.monotonic() - started)
     ncpu = psutil.cpu_count() or 1
     me_pid = os.getpid()
     me = procs.get(me_pid) or proc_table.Proc(me_pid, 0, "", 0, 0, 0, 0, 0.0, time.time())
@@ -100,6 +138,7 @@ def snapshot(detail: bool = False) -> dict[str, Any]:
         "handles": me.handles or None,
         "cpu_percent": cpu.get(me_pid, 0.0),
         "uptime_min": round((time.time() - me.started) / 60, 1) if me.started else None,
+        "hot_threads": hot,
     }
     by_name: dict[str, dict[str, Any]] = {}
     for pid in proc_table.tree(procs, me_pid)[1:]:
@@ -220,6 +259,11 @@ def findings(snap: dict[str, Any]) -> list[dict[str, str]]:
     pc = snap.get("pc") or {}
     ncpu = int(pc.get("cpus") or 1)
     app_cpu_pc = float(app.get("cpu_percent") or 0) / ncpu
+    for hot in app.get("hot_threads") or []:
+        where = (hot.get("stack") or ["native code"])[0]
+        out.append({"severity": "high", "what": f"Ducky's thread {hot['thread']} used {hot['core_percent']}% of a core in {where}.",
+                    "why": "One thread busy all the time: work repeated per event, or a loop that never waits.",
+                    "fix": "Stack, innermost first: " + " < ".join(hot.get("stack") or ["(no Python frames)"])})
     if app_cpu_pc > 15:
         out.append({"severity": "high", "what": f"Ducky's window process uses {app_cpu_pc:.0f}% of the PC's CPU.",
                     "why": "Something in the app is busy while it should idle (a stuck loop, a flood of UI updates).",
