@@ -56,6 +56,10 @@ FIELD_META: dict[str, FieldMeta] = {
         "Default model", "LLMs", settable=True,
         description='Qualified "backend:model_id" default for chats/duckies.',
     ),
+    "swarm_job_models": FieldMeta(
+        "Swarm model per job", "LLMs", settable=False,
+        description="Swarm job kind → model; a kind with none uses its template ducky's model.",
+    ),
     "agent_api_keys": FieldMeta(
         "API keys agents may use", "LLMs", settable=False,
         description="Providers whose per-token API key agents may start chats on. User-only setting.",

@@ -247,6 +247,10 @@ class PanelSettings:
     coding_agents: dict[str, Any] = field(default_factory=dict)
     """BYOA coding-agent config: claude_code / codex / cursor → enabled, cli_path, default_args."""
 
+    swarm_job_models: dict[str, str] = field(default_factory=dict)
+    """Swarm job kind → model ("backend:model_id" or a bare id) for the seats that job gets.
+    A kind with no entry uses its template profile's own model (frontend.swarm_routing)."""
+
     default_coding_agent: str = "ducky"
     """Default coding-agent path for new chats: ducky | claude_code | codex | cursor."""
 
@@ -425,6 +429,14 @@ class PanelSettings:
             self.default_coding_agent = raw_agent or "ducky"
         if self.coding_agents is None or not isinstance(self.coding_agents, dict):
             self.coding_agents = {}
+        if not isinstance(self.swarm_job_models, dict):
+            self.swarm_job_models = {}
+        else:
+            self.swarm_job_models = {
+                str(k).strip().lower(): str(v).strip()
+                for k, v in self.swarm_job_models.items()
+                if str(k).strip() and isinstance(v, str) and v.strip()
+            }
         if not isinstance(self.walkthrough_completed, dict):
             self.walkthrough_completed = {}
         else:
