@@ -72,11 +72,248 @@ def _alert_question(params: dict[str, Any]) -> None:
     threading.Thread(target=send, daemon=True, name="ask-alert").start()
 
 
+_HTTP_QUEUE_TRACE_S = 2.0
+_PEEK_TIMEOUT_S = 2.0
+_MAX_PARKED = 480
+# Endless and long-wait routes get their own pools so they never hold the normal one.
+_STREAM_ROUTES = frozenset({b"/__window_stream"})
+_LONG_ROUTES = frozenset({b"/__panel_events", b"/__panel_rpc", b"/__panel_run"})
+
+
+def _pool_kind(head: bytes) -> str:
+    """``normal`` / ``streams`` / ``long`` from a request's first line (peeked, not read)."""
+    parts = head.split(b"\r\n", 1)[0].split(b" ")
+    if len(parts) < 2:
+        return "normal"
+    method, target = parts[0], parts[1].split(b"?", 1)[0]
+    if method == b"GET" and target in _STREAM_ROUTES:
+        return "streams"
+    if target in _LONG_ROUTES:
+        return "long"
+    if target.startswith(b"/__panel_api/"):
+        from frontend.ui_web.call_pools import lane_for
+
+        name = unquote(target[len(b"/__panel_api/"):].decode("latin-1")).strip("/")
+        if lane_for(name) == "block":
+            return "long"
+    return "normal"
+
+
 class _PanelServer(ThreadingHTTPServer):
+    """Requests run on fixed pools (call_pools.http_pool), not a thread each.
+
+    The accept thread only hands a connection to one selector thread
+    (``_Parker``). When bytes arrive, a normal-pool worker peeks at the request
+    line and picks the pool that serves it. Between keep-alive requests the
+    connection waits in the selector again, not on a worker, and every request
+    on it is routed again, so a long-poll that follows a page load on the same
+    connection still goes to the long pool."""
+
     # Default backlog is 5; cloudflared + a React mount burst overflows it
     # (connection refused → Cloudflare 502). 128 holds the SYN queue.
     request_queue_size = 128
     daemon_threads = True
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        # A new connection waits for its first bytes in the selector too: a client
+        # that connects and sends nothing never holds a worker.
+        _parker().park(self, request, client_address, None)
+
+    def _dispatch(self, request: Any, client_address: Any, handler: Any) -> None:
+        from frontend.ui_web.call_pools import http_pool
+
+        http_pool("normal").submit(self._route, request, client_address, handler, time.monotonic())
+
+    def _route(self, request: Any, client_address: Any, handler: Any, queued: float) -> None:
+        waited = time.monotonic() - queued
+        if waited > _HTTP_QUEUE_TRACE_S:
+            try:
+                from frontend.perf_trace import trace
+
+                trace("http_queue_wait", "http", waited * 1000.0, wait_ms=round(waited * 1000.0))
+            except Exception:
+                pass
+        kind = "normal"
+        try:
+            if handler is not None:
+                # Keep-alive: the bytes may already sit in rfile's buffer.
+                head = _peek_rfile(handler)
+            else:
+                old = request.gettimeout()
+                request.settimeout(_PEEK_TIMEOUT_S)
+                try:
+                    head = request.recv(1024, socket.MSG_PEEK)
+                finally:
+                    request.settimeout(old)
+            kind = _pool_kind(head)
+        except Exception:
+            pass
+        if kind == "normal":
+            self._serve(request, client_address, handler)
+        else:
+            from frontend.ui_web.call_pools import http_pool
+
+            http_pool(kind).submit(self._serve, request, client_address, handler)
+
+    def _serve(self, request: Any, client_address: Any, handler: Any) -> None:
+        """One request; then the connection parks or closes (shutdown_request,
+        as ThreadingMixIn.process_request_thread does in its finally)."""
+        try:
+            if handler is None:
+                handler = self.RequestHandlerClass(request, client_address, self)
+            else:
+                handler.serve_next()
+                handler.finish()
+        except Exception:
+            self.handle_error(request, client_address)
+            handler = None
+        if handler is not None and not handler.close_connection:
+            _parker().park(self, request, client_address, handler)
+            return
+        self.shutdown_request(request)
+
+
+class _PooledHandler(BaseHTTPRequestHandler):
+    """Serves one request per ``serve_next``; a keep-alive connection then parks
+    in _PanelServer (no worker held while idle) instead of looping here."""
+
+    def handle(self) -> None:
+        self.serve_next()
+
+    def serve_next(self) -> None:
+        self.close_connection = True
+        self.handle_one_request()
+
+    def finish(self) -> None:
+        if self.close_connection:
+            super().finish()
+            return
+        try:
+            self.wfile.flush()
+        except Exception:
+            self.close_connection = True
+            super().finish()
+
+    def close_files(self) -> None:
+        try:
+            super().finish()
+        except Exception:
+            pass
+
+
+class _Parker:
+    """Idle keep-alive connections wait here (one thread, one selector) until the
+    next request arrives, then go back to the server's normal pool."""
+
+    def __init__(self) -> None:
+        import selectors
+
+        self._sel = selectors.DefaultSelector()
+        self._lock = threading.Lock()
+        self._adds: list[tuple[Any, Any, Any, Any, float]] = []
+        self._wake_r, self._wake_w = socket.socketpair()
+        self._wake_r.setblocking(False)
+        self._sel.register(self._wake_r, 1, None)
+        threading.Thread(target=self._run, name="http-keepalive", daemon=True).start()
+
+    def park(self, server: _PanelServer, request: Any, client_address: Any, handler: Any) -> None:
+        if handler is not None and _peek_rfile(handler):
+            server._dispatch(request, client_address, handler)
+            return
+        idle = float(getattr(handler or server.RequestHandlerClass, "timeout", None) or 30.0)
+        with self._lock:
+            self._adds.append((server, request, client_address, handler, time.monotonic() + idle))
+        try:
+            self._wake_w.send(b"x")
+        except OSError:
+            pass
+
+    def _run(self) -> None:
+        import selectors
+
+        while True:
+            try:
+                events = self._sel.select(timeout=1.0)
+                with self._lock:
+                    adds, self._adds = self._adds, []
+                for item in adds:
+                    if len(self._sel.get_map()) >= _MAX_PARKED:
+                        # select() on Windows takes 512 sockets at most: past that a
+                        # connection waits on a worker as before.
+                        item[0]._dispatch(item[1], item[2], item[3])
+                        continue
+                    try:
+                        self._sel.register(item[1], selectors.EVENT_READ, item)
+                    except Exception:
+                        _close_parked(item)
+                for key, _mask in events:
+                    if key.data is None:
+                        try:
+                            while self._wake_r.recv(512):
+                                pass
+                        except OSError:
+                            pass
+                        continue
+                    self._sel.unregister(key.fileobj)
+                    server, request, client_address, handler, _deadline = key.data
+                    server._dispatch(request, client_address, handler)
+                now = time.monotonic()
+                for key in list(self._sel.get_map().values()):
+                    if key.data is not None and key.data[4] <= now:
+                        self._sel.unregister(key.fileobj)
+                        _close_parked(key.data)
+            except Exception:
+                time.sleep(0.05)
+
+
+def _close_parked(item: tuple[Any, Any, Any, Any, float]) -> None:
+    server, request, _addr, handler, _deadline = item
+    if handler is not None:
+        handler.close_files()
+    try:
+        server.shutdown_request(request)
+    except Exception:
+        pass
+
+
+def _peek_rfile(handler: Any) -> bytes:
+    """The next request's first bytes from a keep-alive handler's rfile, without
+    blocking: a pipelined request may already sit in its buffer, where neither the
+    selector nor a socket peek can see it. Non-blocking, never a timeout: a
+    timed-out SocketIO refuses every later read."""
+    rfile = getattr(handler, "rfile", None)
+    conn = getattr(handler, "connection", None)
+    if rfile is None or conn is None or not hasattr(rfile, "peek"):
+        return b""
+    old = conn.gettimeout()
+    try:
+        conn.setblocking(False)
+        return bytes(rfile.peek(1024) or b"")[:1024]
+    except Exception:
+        return b""
+    finally:
+        try:
+            conn.settimeout(old)
+        except Exception:
+            pass
+
+
+def _route_name(raw_path: str) -> str:
+    """In-flight label: app routes by path, every page file as ``static``."""
+    path = urlparse(raw_path or "/").path
+    return path if path.startswith("/__") else "static"
+
+
+_parker_obj: _Parker | None = None
+_parker_lock = threading.Lock()
+
+
+def _parker() -> _Parker:
+    global _parker_obj
+    with _parker_lock:
+        if _parker_obj is None:
+            _parker_obj = _Parker()
+        return _parker_obj
 
 
 _server: ThreadingHTTPServer | None = None
@@ -616,7 +853,7 @@ def start_panel_ui_server(dist_root: Path) -> str:
 
         _root = root
 
-        class Handler(BaseHTTPRequestHandler):
+        class Handler(_PooledHandler):
             protocol_version = _HTTP_PROTOCOL
             timeout = 30
 
@@ -658,8 +895,27 @@ def start_panel_ui_server(dist_root: Path) -> str:
                 peer = self.client_address[0]
                 if peer not in ("127.0.0.1", "::1"):
                     self.send_error(403)
+                    self.close_connection = True
                     return
-                super().handle()
+                self.serve_next()
+
+            def do_POST(self) -> None:
+                from frontend.ui_web import inflight
+
+                token = inflight.enter("http", "POST " + _route_name(self.path))
+                try:
+                    self._do_post()
+                finally:
+                    inflight.leave(token)
+
+            def do_GET(self) -> None:
+                from frontend.ui_web import inflight
+
+                token = inflight.enter("http", "GET " + _route_name(self.path))
+                try:
+                    self._do_get()
+                finally:
+                    inflight.leave(token)
 
             def _close_if_chunked(self) -> None:
                 # We only read Content-Length bodies. Leftover chunked bytes
@@ -692,7 +948,7 @@ def start_panel_ui_server(dist_root: Path) -> str:
                 self.end_headers()
                 self.wfile.write(data)
 
-            def do_POST(self) -> None:
+            def _do_post(self) -> None:
                 self._close_if_chunked()
                 path = urlparse(self.path).path
                 if not self._remote_authorized(path):
@@ -976,7 +1232,7 @@ def start_panel_ui_server(dist_root: Path) -> str:
 
                 self.send_error(404)
 
-            def do_GET(self) -> None:
+            def _do_get(self) -> None:
                 parsed = urlparse(self.path)
                 if not self._remote_authorized(parsed.path):
                     self.send_error(403)

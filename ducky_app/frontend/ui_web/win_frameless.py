@@ -1332,6 +1332,77 @@ def install_chrome_refresh_hooks() -> None:
     install_pywebview_chrome_patches()
 
 
+_JS_BIG_BYTES = 64 * 1024
+
+
+class _QueuedReturn:
+    """pywebview returns every JS→Python result with a blocking
+    ``window.evaluate_js`` (Invoke + semaphore, no timeout) on a fresh
+    thread per call. When the WinForms UI thread stops pumping (WebView2
+    cross-process hang) those threads never exit — the panel hit ~5000
+    of them. Route returns through the per-window ui_dispatch worker
+    instead: one thread waits, the rest finish, and the ui_js_stall
+    watchdog records every thread stack for the post-mortem."""
+
+    __slots__ = ("_w", "_api", "_token")
+
+    def __init__(self, w: object, api: str = "", token: int | None = None) -> None:
+        self._w = w
+        self._api = api
+        self._token = token
+
+    def __getattr__(self, name: str):
+        return getattr(self._w, name)
+
+    def evaluate_js(self, script: str, *_args, **_kwargs) -> None:
+        from frontend.ui_web import inflight
+        from frontend.ui_web.ui_dispatch import schedule_evaluate_js
+
+        inflight.leave(self._token)
+        self._token = None
+        js_bytes = len(script) if isinstance(script, str) else 0
+        if js_bytes > _JS_BIG_BYTES:
+            try:
+                from frontend.perf_trace import trace
+
+                trace("ui_js_big", self._api, 0.0, source=self._api, js_bytes=js_bytes)
+            except Exception:
+                pass
+        schedule_evaluate_js(self._w, script, source=self._api)
+
+
+def _js_api_func(window: object, func_name: str):
+    """The Python callable pywebview would run for ``func_name``, or None for its
+    own internals (events, async callbacks), which never return a value."""
+    functions = getattr(window, "_functions", None)
+    func = functions.get(func_name) if isinstance(functions, dict) else None
+    if func is not None:
+        return func
+    obj = getattr(window, "_js_api", None)
+    for attr in str(func_name or "").split("."):
+        if obj is None or attr.startswith("_"):
+            return None
+        obj = getattr(obj, attr, None)
+    return obj if callable(obj) else None
+
+
+def _bridge_call(window: object, func_name: str, func, param: object, value_id: str) -> None:
+    """One JS→Python call on its lane (call_pools) instead of a Thread per call."""
+    from frontend.ui_web import call_pools, inflight
+
+    token = inflight.enter("bridge", func_name)
+
+    def run() -> None:
+        try:
+            script = call_pools.bridge_script(func_name, func, param, value_id)
+        except BaseException:
+            inflight.leave(token)
+            raise
+        _QueuedReturn(window, func_name, token).evaluate_js(script)
+
+    call_pools.submit(func_name, run)
+
+
 def install_sync_drag_bridge() -> None:
     """Route chrome input directly from WebView2 to its owning window's UI thread."""
     if sys.platform != "win32":
@@ -1342,29 +1413,6 @@ def install_sync_drag_bridge() -> None:
         if getattr(install_sync_drag_bridge, "_installed", False):
             return
         original = webview_util.js_bridge_call
-
-        class _QueuedReturn:
-            """pywebview returns every JS→Python result with a blocking
-            ``window.evaluate_js`` (Invoke + semaphore, no timeout) on a fresh
-            thread per call. When the WinForms UI thread stops pumping (WebView2
-            cross-process hang) those threads never exit — the panel hit ~5000
-            of them. Route returns through the per-window ui_dispatch worker
-            instead: one thread waits, the rest finish, and the ui_js_stall
-            watchdog records every thread stack for the post-mortem."""
-
-            __slots__ = ("_w", "_api")
-
-            def __init__(self, w: object, api: str = "") -> None:
-                self._w = w
-                self._api = api
-
-            def __getattr__(self, name: str):
-                return getattr(self._w, name)
-
-            def evaluate_js(self, script: str, *_args, **_kwargs) -> None:
-                from frontend.ui_web.ui_dispatch import schedule_evaluate_js
-
-                schedule_evaluate_js(self._w, script, source=self._api)
 
         def patched(window: object, func_name: str, param: object, value_id: str) -> None:
             if func_name == "uefnNativeWindowMenu":
@@ -1393,7 +1441,12 @@ def install_sync_drag_bridge() -> None:
                         daemon=True, name="window-chrome",
                     ).start()
                 return
-            original(_QueuedReturn(window, str(func_name or "")), func_name, param, value_id)
+            name = str(func_name or "")
+            func = _js_api_func(window, name)
+            if func is not None:
+                _bridge_call(window, name, func, param, value_id)
+                return
+            original(_QueuedReturn(window, name), func_name, param, value_id)
 
         webview_util.js_bridge_call = patched
         # EdgeChrome imports the function by value before this hook is installed.
