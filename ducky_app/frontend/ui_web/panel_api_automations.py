@@ -36,10 +36,12 @@ def _approve_typed_code(before: dict[str, Any] | None, saved: dict[str, Any]) ->
 
 
 class PanelApiAutomationsMixin:
-    def list_workflow_nodes(self) -> dict[str, Any]:
+    def list_workflow_nodes(self, plugin: str = "", fields: str = "") -> dict[str, Any]:
+        """The full catalog (the editor needs it); ``plugin`` / ``fields`` give small rows like the tool."""
         from backend.automations.catalog import list_nodes
+        from backend.tools.panel.panel_automations import filter_nodes
 
-        return {"ok": True, "nodes": list_nodes()}
+        return {"ok": True, "nodes": filter_nodes(list_nodes(), plugin, fields)}
 
     def get_workflow_tools_catalog(self) -> dict[str, Any]:
         """Host tools a Call tool node can run. Never connects nested MCP plugins
