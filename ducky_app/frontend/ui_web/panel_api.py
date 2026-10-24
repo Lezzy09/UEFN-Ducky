@@ -723,6 +723,30 @@ def _drop_stale_call_caches(event: dict[str, Any]) -> None:
         pass
 
 
+# Chats each viewer (window id) shows. Until a viewer reports, every chat streams live text.
+# Once one does, agent events go through one Batcher: chats some viewer shows get live text
+# (10 batches/s), the rest one status line per second (running tool + elapsed).
+_visible_lock = threading.Lock()
+_visible_by_viewer: dict[str, set[str]] = {}
+_live_batcher: Any = None
+_live_wake = threading.Event()
+
+
+def _visible_union() -> set[str]:
+    with _visible_lock:
+        return set().union(*_visible_by_viewer.values()) if _visible_by_viewer else set()
+
+
+def _live_tick_loop(batcher: Any) -> None:
+    while True:
+        _live_wake.wait()
+        time.sleep(0.05)
+        batcher.flush_due()
+        # ponytail: reads Batcher._chats to sleep when no chat runs; add Batcher.idle() if it grows.
+        if not batcher._chats:
+            _live_wake.clear()
+
+
 def mark_crash_reload() -> None:
     """The window process crashed and is reloading: its next get_restore_tabs gets its tabs."""
     with _tabs_lock:
@@ -890,8 +914,16 @@ class PanelApi(
             return
         stamped = dict(event)
         stamped["_push_ts"] = time.time()
+        batcher = _live_batcher
+        if batcher is not None and stamped.get("conv_id"):
+            batcher.feed(stamped)
+            _live_wake.set()
+            return
+        self._queue_agent_pushes([stamped])
+
+    def _queue_agent_pushes(self, events: list[dict[str, Any]]) -> None:
         with self._agent_push_lock:
-            self._agent_push_pending.append(stamped)
+            self._agent_push_pending.extend(events)
             if self._agent_push_timer is not None:
                 return
             timer = threading.Timer(_AGENT_PUSH_BATCH_DELAY_S, self._flush_agent_pushes)
@@ -918,6 +950,40 @@ class PanelApi(
             level="error" if failed else "ok",
             detail=str(raw.get("detail") or ""),
         )
+
+    def set_visible_chats(self, ids: list | None = None, viewer_id: str = "") -> bool:
+        """The chats a viewer shows now. Live text goes only to shown chats; the rest get
+        one status line per second. Also tells the agent-host supervisor, when there is one."""
+        global _live_batcher
+        with _visible_lock:
+            _visible_by_viewer[viewer_id or "main"] = {str(i) for i in (ids or []) if i}
+        union = _visible_union()
+        if _live_batcher is None:
+            from frontend.agent_host.batching import Batcher
+
+            def emit(conv_id: str, events: list[dict[str, Any]]) -> None:
+                with _visible_lock:
+                    viewers = sorted(v for v, shown in _visible_by_viewer.items() if conv_id in shown)
+                for ev in events:
+                    if ev.get("type") in ("text_delta", "thinking"):
+                        ev["viewers"] = viewers  # the windows that show this chat
+                self._queue_agent_pushes(events)
+
+            batcher = Batcher(emit)
+            batcher.set_visible(union)
+            _live_batcher = batcher
+            threading.Thread(target=_live_tick_loop, args=(batcher,), daemon=True, name="live-text").start()
+        else:
+            _live_batcher.set_visible(union)
+        try:
+            from frontend.agent_host import supervisor
+
+            sup = supervisor.get()
+            if sup is not None and hasattr(sup, "set_visible"):
+                sup.set_visible(sorted(union))
+        except Exception:
+            pass
+        return True
 
     def report_open_tabs(self, window_id: str = "", tab_ids: list | None = None) -> None:
         wid = window_id or "main"
