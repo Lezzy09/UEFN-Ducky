@@ -1,4 +1,4 @@
-"""Pick the fastest H.264 encoder this PC's ffmpeg offers (hardware first, software last)."""
+"""Pick the fastest H.264 encoder that actually works with this PC's ffmpeg (hardware first)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,10 @@ import threading
 
 from backend.agent.video import ffmpeg_install
 
-PREFERRED = ("h264_nvenc", "h264_amf", "h264_qsv")
-FALLBACK = "libx264"
+# Hardware first, then software. The bundled ffmpeg has no libx264, only libopenh264.
+CANDIDATES = ("h264_nvenc", "h264_amf", "h264_qsv", "libx264", "libopenh264")
+FALLBACK = "libopenh264"
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _lock = threading.Lock()
 _cached: str | None = None
@@ -25,22 +27,33 @@ def parse_encoders(output: str) -> set[str]:
     return names
 
 
+def _trial(ffmpeg: str, enc: str) -> bool:
+    """One-frame encode: a listed encoder can still fail (no GPU, no driver)."""
+    try:
+        return subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+             "-i", "color=s=64x64:d=0.04", "-frames:v", "1", "-c:v", enc, "-f", "null", "-"],
+            capture_output=True, text=True, timeout=30, check=False, creationflags=_NO_WINDOW,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _probe() -> str:
-    ffmpeg, _ = ffmpeg_install.ensure_installed()
+    ffmpeg = str(ffmpeg_install.ensure_installed()[0])
     try:
         out = subprocess.run(
-            [str(ffmpeg), "-hide_banner", "-encoders"],
-            capture_output=True, text=True, timeout=30, check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            [ffmpeg, "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=30, check=False, creationflags=_NO_WINDOW,
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return FALLBACK
     have = parse_encoders(out)
-    return next((e for e in PREFERRED if e in have), FALLBACK)
+    return next((e for e in CANDIDATES if e in have and _trial(ffmpeg, e)), FALLBACK)
 
 
 def pick_encoder() -> str:
-    """Best available H.264 encoder; ffmpeg is probed once and the answer cached."""
+    """First H.264 encoder that is listed and passes a trial encode; probed once, cached."""
     global _cached
     with _lock:
         if _cached is None:
