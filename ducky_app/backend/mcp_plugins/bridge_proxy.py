@@ -2,6 +2,9 @@
 
 Enabled servers from ducky.db are proxied as ``prefix__tool`` on the shared
 ``uefn-ducky`` server so Cursor/Claude only need one MCP connection.
+
+A server row with ``on_demand: true`` is not listed: its tools stay findable via
+``ducky_get_tools`` and callable via ``ducky_call_tool`` (both reach the pool directly).
 """
 
 from __future__ import annotations
@@ -60,6 +63,45 @@ def _remove_proxy_tool(name: str) -> None:
     _PROXY_TOOL_NAMES.discard(name)
 
 
+def on_demand_server_ids() -> set[str]:
+    """Enabled nested servers whose row says ``on_demand: true``."""
+    from backend.mcp_plugins.store import load_mcp_config
+
+    servers = load_mcp_config().get("mcpServers") or {}
+    return {sid for sid, block in servers.items() if isinstance(block, dict) and block.get("on_demand") is True}
+
+
+def set_server_on_demand(server_id: str, on_demand: bool) -> dict[str, Any]:
+    """Server setting: list this server's tools (False, default) or keep them on demand."""
+    from backend.mcp_plugins.store import load_mcp_config, normalize_server_id, save_mcp_config
+
+    sid = normalize_server_id(server_id)
+    cfg = load_mcp_config()
+    block = (cfg.get("mcpServers") or {}).get(sid)
+    if not isinstance(block, dict):
+        return {"ok": False, "error": f"unknown MCP server: {sid}"}
+    if on_demand:
+        block["on_demand"] = True
+    else:
+        block.pop("on_demand", None)
+    save_mcp_config(cfg)
+    schedule_sync_nested_proxies()
+    return {"ok": True, "server_id": sid, "on_demand": bool(on_demand)}
+
+
+def _listed_tools(tools: list[Any]) -> list[Any]:
+    """Drop tools of on-demand servers from the bridge's tools/list."""
+    try:
+        hidden = on_demand_server_ids()
+    except Exception:
+        return list(tools)
+    if not hidden:
+        return list(tools)
+    from backend.mcp_plugins.registry import parse_plugin_tool
+
+    return [t for t in tools if (parse_plugin_tool(t.name) or ("",))[0] not in hidden]
+
+
 def _make_proxy(namespaced_name: str, description: str) -> Callable[..., str]:
     async def _tool(params: dict[str, Any] | None = None, pretty: bool = False) -> str:
         del pretty
@@ -88,7 +130,7 @@ async def sync_nested_mcp_proxies_async() -> list[str]:
         ensure_plugin_prefix_cache()
         pool = get_plugin_pool()
         try:
-            wanted_tools = await pool.list_all_plugin_tools()
+            wanted_tools = _listed_tools(await pool.list_all_plugin_tools())
         except Exception as exc:
             _log.warning("nested MCP list failed: %s", exc)
             return []  # An outage is not an authoritative empty inventory.

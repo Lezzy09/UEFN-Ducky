@@ -402,8 +402,12 @@ def _show_fields(
 
 
 def _finish_show(out: dict[str, Any], count: int) -> dict[str, Any]:
-    if not out.get("error"):
-        return {**out, "ok": out.get("ok", True), "steps": count}
+    """shown:false always says why (the panel's reason, else the error, else unknown)."""
+    if out.get("error"):
+        return {**out, "shown": False, "reason": str(out.get("reason") or out["error"])}
+    out = {**out, "ok": out.get("ok", True), "steps": count}
+    if out.get("shown") is False and not out.get("reason"):
+        out["reason"] = str(out.get("note") or "the panel gave no reason (an older panel build)")
     return out
 
 
@@ -413,14 +417,14 @@ def _show_on_window(plan: list[dict[str, Any]], window: str, wait: bool) -> dict
 
     prepared = prepare_window_show(plan, (window or "uefn").strip() or "uefn")
     if prepared.get("error"):
-        return {"error": str(prepared["error"])}
+        return _finish_show({"error": str(prepared["error"])}, len(plan))
     rpc = dict(prepared.get("rpc") or {})
     rpc["wait"] = bool(wait)
     out = panel_rpc("window_show", rpc, timeout=_SHOW_CLOSE_WAIT_S if wait else _SHOW_WAIT_S)
     if not isinstance(out, dict):
-        return {"error": "spotlight failed"}
+        return _finish_show({"error": "spotlight failed"}, len(plan))
     if out.get("error"):
-        return out
+        return _finish_show(out, len(plan))
     preview = prepared.get("preview") if isinstance(prepared.get("preview"), dict) else {}
     return _finish_show({**preview, **out}, len(plan))
 
@@ -483,7 +487,7 @@ def show(
     params["wait"] = bool(wait)
     out = panel_rpc("show", params, timeout=_SHOW_CLOSE_WAIT_S if wait else _SHOW_WAIT_S)
     if not isinstance(out, dict):
-        return {"error": "show failed"}
+        out = {"error": "show failed"}
     return _finish_show(out, len(plan))
 
 
@@ -512,8 +516,12 @@ def ducky_ui_show(
     Opens the view it is in (navigate / workflow_id / action), brings it into sight,
     dims everything else and puts a popup above it with `title` and `body` (short
     markdown). Only the popup's close button closes it, so the user stays on that UI.
-    The chat keeps a **Show me** button that plays it again. Use it whenever you tell the
-    user where something is or what to click — don't only describe it.
+    The chat keeps a **Show me** button that plays it again. Use it whenever the user asks
+    where something is or how to open it (a setting, a Settings tab, a plugin, a workflow
+    node, a button), and whenever you tell them what to click — don't only describe it.
+    Keep the reply to a line or two; the popup explains. Routes: settings.audio, … ;
+    settings.store + item_id=<slug> for a plugin's Store page; settings.tab +
+    item_id=<tab> for a plugin's own Settings tab. A whole workflow: tour_workflow.
 
     target: an id from ducky_ui_list_targets ("workflows.toolbar.run",
       "workflows.node.<node_id>", "settings.tab.store"). With `role` it is a name
@@ -546,7 +554,8 @@ def ducky_ui_show(
     wait: true returns only when the user closes the popup (window: also ``reason``
     of done, close or esc, and ``step``).
     Returns {ok, shown, missing, target, steps}; missing=true means the first step
-    wasn't found on screen. A window show returns path (the annotated screenshot).
+    wasn't found on screen. shown=false always has ``reason`` (window hidden or
+    minimized, route didn't open, target or text not found, panel not open). A window show returns path (the annotated screenshot).
     """
     out = show(
         target=target, title=title, body=body, workflow_id=workflow_id, navigate=navigate,

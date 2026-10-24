@@ -35,6 +35,7 @@ def test_sync_adds_and_removes_proxies() -> None:
 
     with (
         patch.object(bridge_proxy, "mcp", fake_mcp),
+        patch.object(bridge_proxy, "on_demand_server_ids", return_value=set()),
         patch("backend.mcp_plugins.store.ensure_plugin_prefix_cache"),
         patch("backend.mcp_plugins.client_pool.get_plugin_pool", return_value=pool),
     ):
@@ -61,6 +62,45 @@ def test_sync_adds_and_removes_proxies() -> None:
     bridge_proxy._PROXY_TOOL_NAMES.clear()
 
 
+def test_on_demand_server_is_not_listed_but_still_callable(monkeypatch):
+    from mcp.server.fastmcp import FastMCP
+    from mcp.types import Tool
+
+    from backend.agent import tools as agent_tools
+    from backend.mcp_plugins import registry
+
+    server = FastMCP("test")
+    monkeypatch.setattr(bridge_proxy, "mcp", server)
+    monkeypatch.setattr(bridge_proxy, "_PROXY_TOOL_NAMES", set())
+    monkeypatch.setattr(bridge_proxy, "_clear_list_tools_cache", lambda: None)
+    monkeypatch.setattr(registry, "_PREFIX_TO_PLUGIN", {"site": "site", "demo": "demo"})
+    monkeypatch.setattr("backend.mcp_plugins.store.ensure_plugin_prefix_cache", lambda: None)
+    schema = {"type": "object"}
+    listed = Tool(name="demo__ping", description="ping", inputSchema=schema)
+    hidden = Tool(name="site__ops_health", description="health", inputSchema=schema)
+    pool = MagicMock()
+    pool.list_all_plugin_tools = AsyncMock(return_value=[listed, hidden])
+    pool.call_tool = AsyncMock(return_value='{"ok": true}')
+    monkeypatch.setattr("backend.mcp_plugins.client_pool.get_plugin_pool", lambda: pool)
+
+    # Default: every enabled server is listed.
+    monkeypatch.setattr(bridge_proxy, "on_demand_server_ids", lambda: set())
+    asyncio.run(bridge_proxy.sync_nested_mcp_proxies_async())
+    assert bridge_proxy._PROXY_TOOL_NAMES == {"demo__ping", "site__ops_health"}
+
+    # On demand: the server's tools leave tools/list ...
+    monkeypatch.setattr(bridge_proxy, "on_demand_server_ids", lambda: {"site"})
+    asyncio.run(bridge_proxy.sync_nested_mcp_proxies_async())
+    assert bridge_proxy._PROXY_TOOL_NAMES == {"demo__ping"}
+    assert "site__ops_health" not in server._tool_manager._tools
+
+    # ... but ducky_call_tool's dispatcher still routes the name to the pool.
+    monkeypatch.setattr(agent_tools, "_mode_denial", AsyncMock(return_value=None))
+    result = asyncio.run(agent_tools._execute_tool_inner("site__ops_health", {}))
+    assert result.ok, result.error
+    pool.call_tool.assert_awaited_with("site__ops_health", {})
+
+
 def test_real_proxy_availability_updates_preserve_annotations(monkeypatch):
     from mcp.server.fastmcp import FastMCP
     from mcp.types import Tool, ToolAnnotations
@@ -68,6 +108,7 @@ def test_real_proxy_availability_updates_preserve_annotations(monkeypatch):
     monkeypatch.setattr(bridge_proxy, "mcp", server)
     monkeypatch.setattr(bridge_proxy, "_PROXY_TOOL_NAMES", set())
     monkeypatch.setattr(bridge_proxy, "_clear_list_tools_cache", lambda: None)
+    monkeypatch.setattr(bridge_proxy, "on_demand_server_ids", lambda: set())
     tool = Tool(name="demo__ping", description="ping", inputSchema={"type": "object"},
                 annotations=ToolAnnotations(readOnlyHint=True),
                 _meta={"ducky_availability": {"state": "available"}})

@@ -51,7 +51,8 @@ async function handleShow(params: Record<string, unknown>): Promise<RpcResult> {
   const request = parseShowMeRequest(params);
   if (!request) return { error: "show needs a target and a title or body" };
   if (!(await showMeAutoplay())) {
-    return { ok: true, shown: false, missing: false, deferred: true, note: "The user plays Show me from its chat button (Settings: Let Ducky show me things is off)." };
+    const note = "The user plays Show me from its chat button (Settings: Let Ducky show me things is off).";
+    return { ok: true, shown: false, missing: false, deferred: true, note, reason: note };
   }
   const result = await playShowMe(request);
   // Not waiting, or replaced before it showed: answer now. Else wait for the close button.

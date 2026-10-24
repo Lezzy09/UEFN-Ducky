@@ -211,3 +211,43 @@ describe("Show me requests", () => {
     expect(parseShowMeRequest({ target: [], title: "x" })).toBeNull();
   });
 });
+
+describe("Show me says why nothing was shown", () => {
+  const play = async (request: Parameters<typeof playShowMe>[0]) => {
+    let result: Awaited<ReturnType<typeof playShowMe>> | undefined;
+    await act(async () => { result = await playShowMe(request); });
+    return result!;
+  };
+
+  it("text not found on the route it opened", async () => {
+    const out = await play({ target: { text: "Enable spoken replies" }, navigate: "settings.audio", title: "Voice", body: "" });
+    expect(out).toMatchObject({ shown: false, reason: 'text "Enable spoken replies" not found on settings.audio' });
+  });
+
+  it("target not found on the current view", async () => {
+    expect((await play({ target: "not.on.screen", title: "Nowhere", body: "" })).reason).toBe("not.on.screen not found on the current view");
+  });
+
+  it("the route didn't open", async () => {
+    const out = await play({ target: "chat.composer", navigate: "chat", item_id: "c1", title: "Chat", body: "" });
+    expect(out.reason).toMatch(/^route chat didn't open/);
+  });
+
+  it("the Ducky window is hidden or minimized", async () => {
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    try {
+      expect((await play({ target: "demo.x", title: "X", body: "" })).reason).toBe("the Ducky window is hidden or minimized");
+    } finally {
+      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    }
+  });
+
+  it("a newer Show me replaced it", async () => {
+    let first: Promise<Awaited<ReturnType<typeof playShowMe>>> | undefined;
+    await act(async () => {
+      first = playShowMe({ target: "slow.one", title: "One", body: "" });
+      await playShowMe({ target: "slow.two", title: "Two", body: "" });
+    });
+    expect(await first).toMatchObject({ shown: false, missing: false, reason: "replaced by a newer Show me before it showed" });
+  });
+});

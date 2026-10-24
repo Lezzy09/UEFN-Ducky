@@ -126,9 +126,13 @@ def _serialize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 _DESC_TRUNC = 200
-_DISPATCHER_BLOCKLIST = frozenset(
-    {"ducky_call_tool", "ducky_get_tools", "ducky_find_tools"}
-)
+_DISPATCHER_BLOCKLIST = frozenset({"ducky_call_tool", "ducky_get_tools"})
+# Old names kept callable through ducky_call_tool only; they are not registered, so
+# tools/list stays one name per job. Value = the tool that serves the call.
+HIDDEN_ALIAS_TOOLS: dict[str, str] = {
+    "ducky_find_tools": "ducky_get_tools",
+    "ducky_recycle_subagent": "ducky_recycle_member",
+}
 
 
 def _mode_discovery(name: str, catalog: dict[str, Any]) -> dict[str, Any]:
@@ -376,6 +380,13 @@ async def ducky_call_tool(
         tool_name, arguments = inner_name, next((inner[k] for k in ("arguments", "args", "input") if k in inner), None)
     if not tool_name:
         raise ValueError("name must not be empty")
+    if tool_name == "ducky_find_tools":
+        a = arguments if isinstance(arguments, dict) else {}
+        return await ducky_find_tools(
+            query=str(a.get("query") or a.get("pattern") or ""),
+            limit=int(a.get("limit") or 20), offset=int(a.get("offset") or 0), pretty=pretty,
+        )
+    tool_name = HIDDEN_ALIAS_TOOLS.get(tool_name, tool_name)
     if tool_name == "ducky_call_tool":
         raise ValueError('ducky_call_tool takes the tool itself: ducky_call_tool(name="set_workflow_folder", arguments={"workflow_id": "…", "folder": "…"})')
     if tool_name in _DISPATCHER_BLOCKLIST:
@@ -405,9 +416,8 @@ async def ducky_call_tool(
     )
 
 
-@mcp.tool()
 async def ducky_find_tools(query: str, limit: int = 20, pretty: bool = False, offset: int = 0) -> str:
-    """Alias for ducky_get_tools(pattern=query). Prefer ducky_get_tools."""
+    """Hidden alias (HIDDEN_ALIAS_TOOLS) for ducky_get_tools(pattern=query)."""
     return await ducky_get_tools(pattern=query, limit=limit, pretty=pretty, offset=offset)
 
 
@@ -1840,7 +1850,7 @@ def ducky_recycle_member(
     Never delete or replace the chat. Preserve every message, group membership,
     approvals and plan assignment; the next task starts a fresh agent session.
     Target must be a group member (parent = group hub). For ordinary follow-ups use
-    ``ducky_send_chat_message``. Alias: ``ducky_recycle_subagent``.
+    ``ducky_send_chat_message``.
     """
     old_id = (conv_id or "").strip()
     if not old_id:
@@ -1929,7 +1939,6 @@ def ducky_recycle_member(
     return tool_json({**base, "status": status, "response_id": response_id}, pretty=pretty)
 
 
-@mcp.tool()
 def ducky_recycle_subagent(
     conv_id: str,
     continue_message: str = "",
@@ -1939,7 +1948,7 @@ def ducky_recycle_subagent(
     sender: str = "",
     pretty: bool = False,
 ) -> str:
-    """Alias for ``ducky_recycle_member`` (subagents retired — group members only)."""
+    """Hidden alias (HIDDEN_ALIAS_TOOLS) for ``ducky_recycle_member``."""
     return ducky_recycle_member(
         conv_id=conv_id,
         continue_message=continue_message,

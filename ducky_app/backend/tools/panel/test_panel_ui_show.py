@@ -53,6 +53,24 @@ def test_show_me_sends_what_to_show_and_where(rpc):
     assert rpc[-1][1]["item_id"] == "meshy"
 
 
+@pytest.mark.parametrize(("reply", "reason"), [
+    ({"ok": True, "shown": False, "missing": True, "reason": 'text "Enable spoken replies" not found on settings.audio'},
+     'text "Enable spoken replies" not found on settings.audio'),
+    ({"ok": True, "shown": False, "missing": True, "reason": "the Ducky window is hidden or minimized"},
+     "the Ducky window is hidden or minimized"),
+    ({"ok": True, "shown": False, "missing": True, "reason": "route chat didn't open: chats aren't ready yet"},
+     "route chat didn't open: chats aren't ready yet"),
+    ({"ok": True, "shown": False, "deferred": True, "note": "Settings: Let Ducky show me things is off"},
+     "Settings: Let Ducky show me things is off"),
+    ({"error": "panel not open"}, "panel not open"),
+    ({"ok": True, "shown": False, "missing": True}, "the panel gave no reason (an older panel build)"),
+])
+def test_show_me_not_shown_always_says_why(monkeypatch, reply, reason):
+    monkeypatch.setattr(panel_ui, "panel_rpc", lambda *_a, **_k: dict(reply))
+    out = json.loads(panel_ui.ducky_ui_show(target="settings.tab.audio", title="Audio", navigate="settings.audio"))
+    assert out["shown"] is False and out["reason"] == reason
+
+
 def test_show_me_refuses_what_it_cant_show(rpc):
     assert "error" in json.loads(panel_ui.ducky_ui_show(target="", title="x"))
     assert "error" in json.loads(panel_ui.ducky_ui_show(target=" ", role="button", title="x"))

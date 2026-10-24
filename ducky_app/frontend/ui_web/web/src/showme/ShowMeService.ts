@@ -57,7 +57,13 @@ export interface ShowMeResult {
   steps?: number;
   closed?: boolean;
   error?: string;
+  /** Why nothing was shown (always set when shown is false). */
+  reason?: string;
 }
+
+/** The Ducky window can't show anything while it is hidden or minimized. */
+const HIDDEN_REASON = "the Ducky window is hidden or minimized";
+const windowHidden = () => typeof document !== "undefined" && document.visibilityState === "hidden";
 
 type Listener = (state: ShowMeState) => void;
 
@@ -146,7 +152,7 @@ let findTimeoutMs = 5000;
 /** Go there, highlight, explain. Resolves once the first step is on screen (or can't be found). */
 export async function playShowMe(request: ShowMeRequest): Promise<ShowMeResult> {
   const list = stepsOf(request);
-  if (!targetsOf(list[0]).length) return { ok: false, shown: false, missing: true, target: "", error: "no target" };
+  if (!targetsOf(list[0]).length) return { ok: false, shown: false, missing: true, target: "", error: "no target", reason: "no target" };
   // A new Show me replaces the one on screen (its waiter hears it closed).
   if (state.request) settleClosed();
   steps = list;
@@ -158,12 +164,18 @@ async function playStep(index: number): Promise<ShowMeResult> {
   const step = steps[index];
   const targets = step ? targetsOf(step) : [];
   const key = targets.map(targetKey).join(", ");
-  if (!step || !targets.length) return { ok: false, shown: false, missing: true, target: key, error: "no target" };
+  if (!step || !targets.length) return { ok: false, shown: false, missing: true, target: key, error: "no target", reason: "no target" };
+  const where = step.navigate || (step.workflow_id ? `workflow ${step.workflow_id}` : "the current view");
+  const replaced = { ok: true, shown: false, missing: false, target: key, reason: "replaced by a newer Show me before it showed" };
+  let routeError = "";
   state = { request: step, phase: "going", key: state.key + 1, index, total: steps.length };
   const myKey = state.key;
   emit();
   try {
-    if (step.navigate) openPanelRoute(step.navigate, step.item_id || "");
+    if (step.navigate) {
+      const opened = openPanelRoute(step.navigate, step.item_id || "");
+      if (opened && opened.ok === false) routeError = `route ${step.navigate} didn't open${opened.error ? `: ${opened.error}` : ""}`;
+    }
     if (step.workflow_id) {
       const nodes = workflowNodes(targets);
       requestOpenWorkflowsTab();
@@ -177,22 +189,25 @@ async function playStep(index: number): Promise<ShowMeResult> {
     }
     // Found = on screen (or just scrolled away); something mounted in a hidden layer is not.
     const found = (await Promise.all(targets.map((t) => waitForTarget(t, findTimeoutMs)))).map((el) => (el && isShown(el) ? el : null));
-    if (state.key !== myKey) return { ok: true, shown: false, missing: false, target: key };
+    if (state.key !== myKey) return replaced;
     if (found.some(Boolean)) {
       await revealTarget(targets[found.findIndex(Boolean)]);
       await wait(step.workflow_id ? 450 : 200);  // let a canvas glide land before the ring settles
     }
-    if (state.key !== myKey) return { ok: true, shown: false, missing: false, target: key };
+    if (state.key !== myKey) return replaced;
     const missing = !found.some(Boolean);
     state = { ...state, phase: missing ? "missing" : "shown" };
     emit();
-    return { ok: true, shown: !missing, missing, target: key };
+    if (!missing) return { ok: true, shown: true, missing, target: key };
+    const reason = windowHidden() ? HIDDEN_REASON : routeError || `${key} not found on ${where}`;
+    return { ok: true, shown: false, missing, target: key, reason };
   } catch (err) {
     if (state.key === myKey) {
       state = { ...state, phase: "missing" };
       emit();
     }
-    return { ok: false, shown: false, missing: true, target: key, error: err instanceof Error ? err.message : String(err) };
+    const error = err instanceof Error ? err.message : String(err);
+    return { ok: false, shown: false, missing: true, target: key, error, reason: routeError || error };
   }
 }
 
