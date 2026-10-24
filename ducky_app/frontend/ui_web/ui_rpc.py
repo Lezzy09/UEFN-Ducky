@@ -44,13 +44,14 @@ WINDOW_METHODS = frozenset({"show", "walkthrough_run", "tour_workflow", "navigat
 
 
 class _Pending:
-    __slots__ = ("event", "acked", "result", "created", "conv_id", "method", "params")
+    __slots__ = ("event", "acked", "result", "created", "asked_at", "conv_id", "method", "params")
 
     def __init__(self, conv_id: str = "", method: str = "", params: dict | None = None) -> None:
         self.event = threading.Event()
         self.acked = threading.Event()
         self.result: dict[str, Any] | None = None
         self.created = time.monotonic()
+        self.asked_at = time.time()  # wall clock; ``created`` is reset by every poll
         self.conv_id = conv_id
         self.method = method
         self.params = dict(params or {})
@@ -275,6 +276,23 @@ def has_pending_for_conv(conv_id: str) -> bool:
         _restore_questions_locked()
         return any(slot.conv_id == cid and not slot.event.is_set() for slot in _pending.values())
 
+
+
+def pending_question(conv_id: str) -> dict[str, Any] | None:
+    """The chat's oldest unanswered ask_user: ``{request_id, text, since}`` (since = wall time)."""
+    cid = (conv_id or "").strip()
+    if not cid:
+        return None
+    with _lock:
+        _restore_questions_locked()
+        open_ = [(rid, slot) for rid, slot in _pending.items()
+                 if slot.conv_id == cid and slot.method == "ask_user" and not slot.event.is_set()]
+    if not open_:
+        return None
+    rid, slot = min(open_, key=lambda item: item[1].asked_at)
+    first = (slot.params.get("questions") or [{}])[0] or {}
+    return {"request_id": rid, "text": str(first.get("prompt") or slot.params.get("title") or ""),
+            "since": slot.asked_at}
 
 
 def question_gate(conv_id: str, timeout: float) -> bool:

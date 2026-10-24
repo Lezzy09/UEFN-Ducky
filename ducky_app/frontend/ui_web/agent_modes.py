@@ -605,6 +605,51 @@ def live_changeset_run_ids() -> frozenset[str]:
         )
 
 
+# Per chat: the live run's last output time and its Ducky tools started but not done
+# ({tool id: (name, started_at)}), for ducky_health's agent states. Written by the run's
+# own push; plain dict swaps, so readers never wait on a turn.
+_turn_activity: dict[str, dict[str, Any]] = {}
+
+
+def _note_activity(conv_id: str, run_id: str, event: dict[str, Any]) -> None:
+    act = _turn_activity.get(conv_id)
+    if act is None or act["run_id"] != run_id:
+        act = _turn_activity[conv_id] = {"run_id": run_id, "last_output": 0.0, "tools": {}}
+    now = time.time()
+    act["last_output"] = now
+    kind, tool = event.get("type"), event.get("tool") or {}
+    if kind == "tool" and tool.get("status") == "pending":
+        act["tools"][str(tool.get("id") or tool.get("name") or "")] = (str(tool.get("name") or ""), now)
+    elif kind == "tool_done":
+        act["tools"].pop(str(tool.get("id") or tool.get("name") or ""), None)
+
+
+def _live_activity(conv_id: str) -> dict[str, Any] | None:
+    act = _turn_activity.get(conv_id)
+    with _sessions_lock:
+        session = _sessions.get(conv_id)
+    if act is None or session is None or session.run_id != act["run_id"] or not _running_here(conv_id):
+        return None
+    return act
+
+
+def running_tool(conv_id: str) -> dict[str, Any] | None:
+    """The Ducky tool the chat's live turn is in (last started, not done): ``{name, started_at}``."""
+    act = _live_activity(conv_id)
+    if act is None or not act["tools"]:
+        return None
+    name, started = max(list(act["tools"].values()), key=lambda t: t[1])
+    return {"name": name, "started_at": started}
+
+
+def last_output_age_s(conv_id: str) -> float | None:
+    """Seconds since the chat's live turn last sent anything (text, tool, status)."""
+    act = _live_activity(conv_id)
+    if act is None or not act["last_output"]:
+        return None
+    return max(0.0, time.time() - act["last_output"])
+
+
 def _make_run_scoped_push(push: PushFn, session: AgentSession, conv_id: str, run_id: str) -> PushFn:
     def scoped(event: dict[str, Any]) -> None:
         if session.run_id != run_id:
@@ -612,6 +657,10 @@ def _make_run_scoped_push(push: PushFn, session: AgentSession, conv_id: str, run
         out = dict(event)
         out.setdefault("conv_id", conv_id)
         out["run_id"] = run_id
+        try:
+            _note_activity(conv_id, run_id, out)
+        except Exception:  # noqa: BLE001 - a meter never stops a turn
+            pass
         push(out)
 
     return scoped
