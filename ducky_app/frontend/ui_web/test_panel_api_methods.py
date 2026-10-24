@@ -444,6 +444,7 @@ _PUBLIC_METHODS = frozenset({
     'replace_workspace',
     'reload_uefn_plugin',
     'report_plugin_panel',
+    'get_restore_tabs',
     'remote_set_enabled',
     'remote_sign_out_all',
     'remote_status',

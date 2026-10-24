@@ -706,6 +706,18 @@ _listener_was_online = False
 _shared_api_lock = threading.Lock()
 _shared_api: PanelApi | None = None
 
+# Each window's last tab report, and the snapshot a WebView2 crash reload hands back once.
+# Module-wide: HTTP and phone calls may run on another PanelApi than the window's.
+_tabs_lock = threading.Lock()
+_last_tabs: dict[str, list[str]] = {}
+_restore_tabs: dict[str, list[str]] = {}
+
+
+def mark_crash_reload() -> None:
+    """The window process crashed and is reloading: its next get_restore_tabs gets its tabs."""
+    with _tabs_lock:
+        _restore_tabs.update({wid: list(tabs) for wid, tabs in _last_tabs.items()})
+
 
 def shared_panel_api() -> PanelApi:
     """The one PanelApi of this process: the Ducky window's own, or, in a process without
@@ -895,6 +907,17 @@ class PanelApi(
             level="error" if failed else "ok",
             detail=str(raw.get("detail") or ""),
         )
+
+    def report_open_tabs(self, window_id: str = "", tab_ids: list | None = None) -> None:
+        wid = window_id or "main"
+        with _tabs_lock:
+            _last_tabs[wid] = [t for t in (tab_ids or []) if isinstance(t, str) and t]
+        super().report_open_tabs(wid, tab_ids)
+
+    def get_restore_tabs(self, window_id: str = "") -> list[str]:
+        """Tabs to reopen after a crash reload (once); [] on a normal load."""
+        with _tabs_lock:
+            return _restore_tabs.pop(window_id or "main", [])
 
     def report_ui_perf(self, entries: list[dict[str, Any]] | None = None) -> bool:
         """Receive longtask / frame-stall samples from the React perf monitor."""
