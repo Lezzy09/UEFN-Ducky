@@ -40,12 +40,34 @@ export interface SwarmGroup {
   groups: SwarmGroup[];
 }
 
+export interface SwarmLevel {
+  detail: number;
+  label: string;
+  agents: number;
+}
+
 export interface SwarmCardData {
   status: string;
   goal: string;
   agents: number;
   groups: SwarmGroup[];
   seats: SwarmSeat[];
+  detail?: number;
+  levels: SwarmLevel[];
+}
+
+export const SWARM_DETAIL_LABELS = ["Areas", "Jobs", "Parts", "Parts in sub-groups"];
+
+/** preview.levels as a list or keyed by level; each needs an agent count. */
+function parseLevels(v: unknown): SwarmLevel[] {
+  const rows = Array.isArray(v) ? v : Object.entries(obj(v) ?? {}).map(([k, x]) => ({ detail: Number(k), ...(obj(x) ?? { agents: x }) }));
+  return rows.flatMap((r, i) => {
+    const o: Raw = obj(r) ?? { agents: r };
+    const detail = num(o.detail) ?? num(o.level) ?? i + 1;
+    const agents = num(o.agents);
+    if (agents === undefined || detail < 1 || detail > SWARM_DETAIL_LABELS.length) return [];
+    return [{ detail, label: str(o.label) || SWARM_DETAIL_LABELS[detail - 1], agents }];
+  });
 }
 
 type Raw = Record<string, unknown>;
@@ -182,7 +204,8 @@ export function parseSwarmResult(text: string): SwarmCardData | null {
   });
   const goal = str(top.goal) || str(preview?.goal) || str(top.name);
   const agents = num(preview?.agents) ?? num(top.agents) ?? countSeats({ seats, groups });
-  return { status, goal, agents, groups, seats };
+  const detail = num(preview?.detail) ?? num(top.detail);
+  return { status, goal, agents, groups, seats, detail, levels: parseLevels(preview?.levels ?? top.levels) };
 }
 
 /** Done/total over every sub plan under a node; a sub plan shared by two rows counts once. */
@@ -305,14 +328,28 @@ export const SWARM_BUILD_PROMPT =
 export const SWARM_CHANGE_PROMPT =
   "Change the swarm preview: ask me with one ducky_ask_user what to change (rename or drop a job, a seat's model, mute or unmute a group), then call ducky_swarm_create with those edits and show the new preview.";
 
-function defaultSend(action: "build" | "change", text: string): void {
+export const SWARM_DETAIL_DEBOUNCE_MS = 400;
+
+export function swarmDetailPrompt(detail: number): string {
+  return `Show the swarm preview at detail level ${detail} (${SWARM_DETAIL_LABELS[detail - 1]}): call ducky_swarm_create again with the same arguments and detail=${detail}, without confirm.`;
+}
+
+export function swarmBuildPrompt(detail?: number): string {
+  return detail === undefined
+    ? SWARM_BUILD_PROMPT
+    : `Build the swarm exactly as previewed: call ducky_swarm_create again with the same arguments, detail=${detail} and confirm=true.`;
+}
+
+type SwarmAction = "build" | "change" | "detail";
+
+function defaultSend(action: SwarmAction, text: string): void {
   window.dispatchEvent(new CustomEvent("ducky:swarm-card", { detail: { action, text } }));
 }
 
 export interface SwarmCardProps {
   resultText?: string;
   data?: SwarmCardData | null;
-  onSend?: (action: "build" | "change", text: string) => void;
+  onSend?: (action: SwarmAction, text: string) => void;
 }
 
 export function SwarmCard({ resultText = "", data: dataProp, onSend = defaultSend }: SwarmCardProps) {
@@ -338,6 +375,16 @@ export function SwarmCard({ resultText = "", data: dataProp, onSend = defaultSen
     const timer = window.setTimeout(() => setRevealed((r) => (r.includes(nextKey) ? r : [...r, nextKey])), SWARM_REVEAL_MS);
     return () => window.clearTimeout(timer);
   }, [nextKey, reduced]);
+
+  // Dragging across stops sends only where it settles.
+  const [picked, setPicked] = useState<number | undefined>();
+  const sendTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(sendTimer.current), []);
+  const pickDetail = (n: number) => {
+    setPicked(n);
+    window.clearTimeout(sendTimer.current);
+    sendTimer.current = window.setTimeout(() => onSend("detail", swarmDetailPrompt(n)), SWARM_DETAIL_DEBOUNCE_MS);
+  };
 
   const hostRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -383,17 +430,44 @@ export function SwarmCard({ resultText = "", data: dataProp, onSend = defaultSen
         ? `Building ${builtSeats}/${data.agents} agents…`
         : `Built ${data.agents} agents · ${roll.done}/${roll.total} steps`;
   const spec: ChartSpec = { type: "tree", title: "", root: toTreeNode(tree) };
+  const levels = status === "needs_confirm" ? data.levels : [];
+  const detail = picked ?? data.detail ?? levels[0]?.detail;
 
   return (
     <section className={`swarm-card swarm-card--${status.replace("_", "-")}`} aria-label={title}>
       <header className="swarm-card-title">{title}</header>
+      {levels.length ? (
+        <div className="swarm-card-detail">
+          <input
+            type="range"
+            className="swarm-card-detail-range"
+            aria-label="Detail"
+            min={1}
+            max={SWARM_DETAIL_LABELS.length}
+            step={1}
+            value={detail ?? 1}
+            aria-valuetext={SWARM_DETAIL_LABELS[(detail ?? 1) - 1]}
+            onChange={(e) => pickDetail(Number(e.currentTarget.value))}
+          />
+          <div className="swarm-card-detail-stops">
+            {SWARM_DETAIL_LABELS.map((label, i) => {
+              const level = levels.find((l) => l.detail === i + 1);
+              return (
+                <span key={label} className={`swarm-card-detail-stop${detail === i + 1 ? " swarm-card-detail-stop--on" : ""}`}>
+                  {level ? `${level.label} · ${level.agents} agents` : label}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
       <div ref={hostRef} className="swarm-card-tree">
         <RichChart spec={spec} />
       </div>
       <div className="swarm-card-summary">{summary}</div>
       {status === "needs_confirm" ? (
         <div className="swarm-card-actions">
-          <button type="button" className="swarm-card-btn swarm-card-btn--primary" onClick={() => onSend("build", SWARM_BUILD_PROMPT)}>
+          <button type="button" className="swarm-card-btn swarm-card-btn--primary" onClick={() => onSend("build", swarmBuildPrompt(levels.length ? detail : undefined))}>
             Build
           </button>
           <button type="button" className="swarm-card-btn" onClick={() => onSend("change", SWARM_CHANGE_PROMPT)}>

@@ -1,7 +1,16 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SWARM_BUILD_PROMPT, SWARM_CHANGE_PROMPT, SWARM_REVEAL_MS, SwarmCard, parseSwarmResult, swarmRollup } from "./SwarmCard";
+import {
+  SWARM_BUILD_PROMPT,
+  SWARM_CHANGE_PROMPT,
+  SWARM_DETAIL_DEBOUNCE_MS,
+  SWARM_REVEAL_MS,
+  SwarmCard,
+  parseSwarmResult,
+  swarmDetailPrompt,
+  swarmRollup,
+} from "./SwarmCard";
 import { resolveToolPresenterBlocks, resolveToolPresenterView } from "./resolveToolPresenter";
 
 const preview = JSON.stringify({
@@ -126,6 +135,49 @@ describe("SwarmCard preview", () => {
     expect(resolveToolPresenterView("find_devices", preview)).toBeNull();
     const blocks = resolveToolPresenterBlocks({ toolName: "ducky_swarm_create", arguments: {}, resultText: preview, isSuccess: true });
     expect(blocks?.[0]).toMatchObject({ type: "code", language: "chart" });
+  });
+});
+
+describe("SwarmCard detail slider", () => {
+  const withLevels = (() => {
+    const r = JSON.parse(preview);
+    r.preview.detail = 2;
+    r.preview.levels = [
+      { detail: 1, agents: 3 },
+      { detail: 2, agents: 6 },
+      { detail: 3, agents: 7 },
+      { detail: 4, agents: 9 },
+    ];
+    return JSON.stringify(r);
+  })();
+
+  it("shows 4 stops with agent counts, starts at preview.detail, sends detail once, then builds that level", () => {
+    vi.useFakeTimers();
+    const onSend = vi.fn();
+    render(<SwarmCard resultText={withLevels} onSend={onSend} />);
+
+    const slider = screen.getByRole("slider", { name: "Detail" }) as HTMLInputElement;
+    expect(slider.value).toBe("2");
+    for (const stop of ["Areas · 3 agents", "Jobs · 6 agents", "Parts · 7 agents", "Parts in sub-groups · 9 agents"]) {
+      expect(screen.getByText(stop)).toBeTruthy();
+    }
+
+    fireEvent.change(slider, { target: { value: "3" } });
+    expect(onSend).not.toHaveBeenCalled();
+    act(() => void vi.advanceTimersByTime(SWARM_DETAIL_DEBOUNCE_MS));
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend).toHaveBeenCalledWith("detail", swarmDetailPrompt(3));
+    expect(swarmDetailPrompt(3)).toContain("detail=3");
+    expect(swarmDetailPrompt(3)).not.toContain("confirm=true");
+    expect(slider.value).toBe("3");
+
+    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+    expect(onSend).toHaveBeenLastCalledWith("build", expect.stringMatching(/detail=3 and confirm=true/));
+  });
+
+  it("no levels → no slider", () => {
+    render(<SwarmCard resultText={preview} />);
+    expect(screen.queryByRole("slider")).toBeNull();
   });
 });
 
