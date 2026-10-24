@@ -11,9 +11,12 @@ change journal, write rules) like ``workspace_write_file``.
 from __future__ import annotations
 
 import fnmatch
+import functools
 import os
 import re
+import shutil
 import subprocess
+import threading
 import time
 from typing import Any, Optional
 
@@ -91,20 +94,44 @@ def _match_base(start: str, root: str) -> str:
     return start if os.path.isdir(start) else os.path.dirname(start)
 
 
-def _walk_files(start: str):
-    """Every file under ``start`` (or ``start`` itself), skipping heavy dirs and binaries."""
-    policy = current_policy()
-    policy.require(start)
-    if os.path.isfile(start):
-        yield start
-        return
-    for dirpath, dirnames, filenames in os.walk(start):
-        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS
-                             and ai_access_allowed(os.path.join(dirpath, d), policy=policy))
-        for name in sorted(filenames):
-            if (not name.lower().endswith(_BINARY_SUFFIXES)
-                    and ai_access_allowed(os.path.join(dirpath, name), policy=policy)):
-                yield os.path.join(dirpath, name)
+def _relto(full: str, base: str) -> str:
+    """``full`` relative to ``base`` with / separators; absolute when it is not under it."""
+    try:
+        rel = os.path.relpath(full, base)
+    except ValueError:
+        return full.replace("\\", "/")
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return full.replace("\\", "/")
+    return "." if rel == os.curdir else rel.replace("\\", "/")
+
+
+@functools.lru_cache(maxsize=256)
+def _glob_regex(pat: str) -> re.Pattern[str]:
+    """A lower-case folder glob read the way git reads one: ``*`` and ``?`` stay inside a
+    folder, ``**`` crosses folders and ``**/`` also matches no folder (src/**/*.py covers src/a.py)."""
+    out, i = [], 0
+    while i < len(pat):
+        if pat.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pat.startswith("/**", i) and i + 3 == len(pat):
+            out.append("(?:/.*)?")
+            i += 3
+        elif pat.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pat[i] in "*?":
+            out.append("[^/]*" if pat[i] == "*" else "[^/]")
+            i += 1
+        elif pat[i] == "[" and pat.find("]", i + 2) > 0:
+            end = pat.find("]", i + 2)
+            body = pat[i + 1:end]
+            out.append("[" + ("^" + body[1:] if body.startswith("!") else body).replace("\\", "\\\\") + "]")
+            i = end + 1
+        else:
+            out.append(re.escape(pat[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
 
 
 def _globs(spec: str) -> list[str]:
@@ -120,17 +147,158 @@ def _path_matches(rel: str, pattern: str) -> bool:
     if not any(ch in pat for ch in "*?["):
         return low_pat in low_rel
     if "/" not in pat:
-        return fnmatch.fnmatch(low_rel.rsplit("/", 1)[-1], low_pat)
-    # ``**/`` also matches no folder at all: src/**/*.py covers src/a.py.
-    variants = {low_pat, low_pat.replace("/**/", "/")}
-    if low_pat.startswith("**/"):
-        variants.add(low_pat[3:])
-    return any(fnmatch.fnmatch(low_rel, v) for v in variants)
+        return fnmatch.fnmatchcase(low_rel.rsplit("/", 1)[-1], low_pat)
+    return bool(_glob_regex(low_pat.lstrip("/")).match(low_rel))
 
 
-def _read_text(full: str) -> Optional[str]:
-    """A text file's contents (None for binary or over 2 MB)."""
-    require_ai_access(full)
+def _folder_may_hold(rel_dir: str, globs: list[str]) -> bool:
+    """False when no glob can match a file under ``rel_dir`` (relative to the glob base), so
+    the walk skips that folder without listing it."""
+    if not globs or rel_dir in ("", ".") or os.path.isabs(rel_dir) or rel_dir.startswith(".."):
+        return True
+    parts = rel_dir.lower().split("/")
+    for g in globs:
+        pat = g.lower().lstrip("/")
+        if "/" not in pat or not any(ch in pat for ch in "*?["):
+            return True  # a name glob or a plain word can match in any folder
+        folders = pat.split("/")[:-1]
+        for i, part in enumerate(parts):
+            if i >= len(folders) or ("**" not in folders[i] and not fnmatch.fnmatchcase(part, folders[i])):
+                break
+            if "**" in folders[i]:
+                return True
+        else:
+            return True
+    return False
+
+
+class _GitIgnore:
+    """One folder's .gitignore. ``!`` re-includes are skipped, so this can only hide more."""
+
+    def __init__(self, folder: str) -> None:
+        self.folder = folder
+        self.rules: list[tuple[str, bool, bool]] = []  # (pattern, anchored, folders only)
+        try:
+            with open(os.path.join(folder, ".gitignore"), encoding="utf-8", errors="replace") as fh:
+                lines = fh.read().splitlines()
+        except OSError:
+            return
+        for raw in lines:
+            line = raw.strip()
+            if not line or line.startswith(("#", "!")):
+                continue
+            dir_only = line.endswith("/")
+            line = line.rstrip("/")
+            if line:
+                self.rules.append((line.lstrip("/").lower(), "/" in line, dir_only))
+
+    def ignored(self, full: str, is_dir: bool) -> bool:
+        if not self.rules:
+            return False
+        rel = _relto(full, self.folder)
+        if os.path.isabs(rel) or rel == ".":
+            return False
+        low = rel.lower()
+        name = low.rsplit("/", 1)[-1]
+        for pat, anchored, dir_only in self.rules:
+            if dir_only and not is_dir:
+                continue
+            if _glob_regex(pat).match(low) if anchored else fnmatch.fnmatchcase(name, pat):
+                return True
+        return False
+
+
+def _walk_files(start: str, base: str = "", globs: Optional[list[str]] = None, policy: Any = None):
+    """Files under ``start`` (or ``start`` itself) that ``globs`` (relative to ``base``) can
+    match, skipping heavy dirs, binaries, .gitignore'd paths (base's and start's) and folders
+    no glob can reach. AI-ignore is checked once per folder; callers check each file they
+    return or read (a file rule, a link)."""
+    policy = policy or current_policy()
+    policy.require(start)
+    if os.path.isfile(start):
+        yield start
+        return
+    base = base or start
+    globs = globs or []
+    ignores = [_GitIgnore(base)]
+    if os.path.normcase(os.path.normpath(start)) != os.path.normcase(os.path.normpath(base)):
+        ignores.append(_GitIgnore(start))
+    ignores = [ig for ig in ignores if ig.rules]
+    stack = [start]
+    while stack:
+        folder = stack.pop()
+        try:
+            with os.scandir(folder) as it:
+                entries = sorted(it, key=lambda e: e.name)
+        except OSError:
+            continue
+        subdirs: list[str] = []
+        for entry in entries:
+            try:
+                is_dir = entry.is_dir()
+            except OSError:
+                continue
+            full = entry.path
+            if is_dir:
+                if (entry.name in _SKIP_DIRS or any(ig.ignored(full, True) for ig in ignores)
+                        or not _folder_may_hold(_relto(full, base), globs)
+                        or not ai_access_allowed(full, policy=policy)):
+                    continue
+                subdirs.append(full)
+            elif not entry.name.lower().endswith(_BINARY_SUFFIXES) and not any(ig.ignored(full, False) for ig in ignores):
+                if not globs or any(_path_matches(_relto(full, base), g) for g in globs):
+                    yield full
+        stack.extend(reversed(subdirs))
+
+
+def _git_env() -> dict[str, str]:
+    return {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "PAGER": "cat", "GIT_OPTIONAL_LOCKS": "0"}
+
+
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _git(argv: list[str], cwd: str, timeout: float) -> Optional[subprocess.CompletedProcess]:
+    try:
+        return subprocess.run(["git", "-c", "core.quotepath=off", "--no-pager", *argv], cwd=cwd, env=_git_env(),
+                              stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout, creationflags=_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _git_scope(start: str, policy: Any) -> Optional[tuple[str, str]]:
+    """(work tree root, ``start`` relative to it) when git can list ``start``: inside a work
+    tree and not git-ignored. None outside git, in strict protection (git bypasses path
+    rules), or when git is missing; callers walk the folder instead."""
+    if policy.strict or shutil.which("git") is None:
+        return None
+    # The nearest folder holding .git (a folder, or a file in a worktree): a git rev-parse
+    # costs a process start, 0.2 s on Windows.
+    top = os.path.normpath(os.path.abspath(start if os.path.isdir(start) else os.path.dirname(start)))
+    while not os.path.exists(os.path.join(top, ".git")):
+        parent = os.path.dirname(top)
+        if parent == top:
+            return None
+        top = parent
+    srel = _relto(start, top)
+    if os.path.isabs(srel):
+        return None
+    srel = "" if srel == "." else srel
+    if srel:
+        if ".git" in srel.lower().split("/"):
+            return None
+        # An explicit ignored folder (Saved/, node_modules/) holds nothing git would grep.
+        ignored = _git(["check-ignore", "-q", "--", srel], top, 10)
+        if ignored is None or ignored.returncode == 0:
+            return None
+    return top, srel
+
+
+def _read_text(full: str, checked: bool = False) -> Optional[str]:
+    """A text file's contents (None for binary or over 2 MB). ``checked``: the caller already
+    ran the AI-ignore check on this path."""
+    if not checked:
+        require_ai_access(full)
     try:
         if os.path.getsize(full) > _MAX_FILE_BYTES:
             return None
@@ -227,20 +395,40 @@ def read_lines(full: str, start_line: int = 0, end_line: int = 0, line_numbers: 
     return out
 
 
+def format_read(display: str, part: dict[str, Any]) -> str:
+    """A ``read_lines`` result as text: a header line ``path  lines a-b of N``, then the lines,
+    then the note on what is not shown."""
+    total = int(part.get("total_lines") or 0)
+    first, last = int(part.get("start_line", 1)), int(part.get("end_line", total))
+    if total == 0:
+        head = f"{display}  empty file"
+    elif first > total:
+        head = f"{display}  no lines: start_line {first} is past the end ({total} lines)"
+    else:
+        head = f"{display}  lines {first}-{last} of {total}"
+    text = head + "\n" + str(part.get("content") or "")
+    if part.get("more"):
+        text = text.rstrip("\n") + f"\n[{part['more']}]"
+    return text
+
+
 @mcp.tool()
 def workspace_read_files(
     paths: list[str],
     start_line: int = 0,
     end_line: int = 0,
     line_numbers: bool = False,
+    format: str = "text",
     pretty: bool = False,
 ) -> str:
-    """Read several text files in one call (up to 20). Use this instead of a shell cat / Get-Content loop.
+    """Read up to 20 text files in one call. Never use a shell cat / Get-Content loop for this.
 
     start_line / end_line (1-based, inclusive) apply to every file; without them each file
     shows its first 2000 lines. line_numbers=true prefixes each line with its number.
+    Each file starts with a line "path  lines a-b of N", then its text.
     Read a big file's outline first (workspace_file_outline), then only the lines you need.
     Paths are relative to the open project, or absolute in any of the person's other Ducky projects.
+    format="json" returns {files: [{path, content, total_lines, ...}]}.
     """
     if not paths:
         raise ValueError("paths is required: a list of file paths (project-relative or absolute)")
@@ -254,10 +442,16 @@ def workspace_read_files(
             files.append({"path": _rel(full, root), **part})
         except (ValueError, OSError) as exc:
             files.append({"path": str(path), "error": str(exc)})
-    out: dict[str, Any] = {"files": files}
-    if len(paths) > 20:
-        out["more"] = f"Only the first 20 of {len(paths)} paths were read."
-    return tool_json(out, pretty=pretty)
+    more = f"Only the first 20 of {len(paths)} paths were read." if len(paths) > 20 else ""
+    if (format or "text").strip().lower() == "json":
+        out: dict[str, Any] = {"files": files}
+        if more:
+            out["more"] = more
+        return tool_json(out, pretty=pretty)
+    blocks = [f"{f['path']}  ERROR: {f['error']}" if "error" in f else format_read(f["path"], f) for f in files]
+    if more:
+        blocks.append(f"[{more}]")
+    return "\n\n".join(b.rstrip("\n") for b in blocks)
 
 
 # Definitions per language: (regex, kind). The name is the last group that matched.
@@ -303,8 +497,9 @@ _OUTLINE_RULES: dict[tuple[str, ...], list[tuple[re.Pattern[str], str]]] = {
 
 @mcp.tool()
 def workspace_file_outline(path: str, pretty: bool = False) -> str:
-    """A file's outline: its classes, functions, methods and types (or a Markdown file's
-    headings) with the lines each spans. Read this first, then only the lines you need
+    """List a file's classes, functions, types or headings with their line spans. Never returns the file's text.
+
+    Read this first, then only the lines you need
     with workspace_read_file(start_line, end_line), instead of reading a whole big file.
     Covers Python, TypeScript/JavaScript, Rust, Go, C#/Java/Kotlin/Swift, C/C++, Verse and Markdown.
     """
@@ -377,9 +572,10 @@ def view_image(path: str, pretty: bool = False) -> Any:
 
 @mcp.tool()
 def workspace_tree(path: str = ".", depth: int = 3, max_entries: int = 400, pretty: bool = False) -> str:
-    """A folder tree (folders end with /), down to ``depth`` levels. Use this instead of
-    shell tree / dir /s / Get-ChildItem -Recurse. Skips .git, node_modules, build output,
-    Saved/Intermediate. Folders deeper than ``depth`` show how many entries they hold.
+    """Show a folder tree down to ``depth`` levels. Never lists .git, node_modules, build output or Saved.
+
+    Folders end with /. Use this instead of shell tree / dir /s / Get-ChildItem -Recurse.
+    Folders deeper than ``depth`` show how many entries they hold.
     path: a folder in the open project, or an absolute path in any of the person's other Ducky projects.
     """
     start = resolve_workspace_path(path or ".")
@@ -428,6 +624,267 @@ def workspace_tree(path: str = ".", depth: int = 3, max_entries: int = 400, pret
     return tool_json(out, pretty=pretty)
 
 
+class _Found:
+    """What a search found: rows per file (line -> [text, is_match]), hits per file, and why
+    it stopped early (``note``; empty means it searched everything it was asked to)."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, dict[int, list[Any]]] = {}
+        self.counts: dict[str, int] = {}
+        self.note = ""
+        self.files_searched: Optional[int] = None
+
+    def row(self, path: str, line: int, text: str, is_match: bool) -> None:
+        rows = self.rows.setdefault(path, {})
+        prev = rows.get(line)
+        rows[line] = [text[:_LINE_CHARS], is_match or bool(prev and prev[1])]
+
+    def hit(self, path: str, n: int = 1) -> None:
+        self.counts[path] = self.counts.get(path, 0) + n
+
+
+_GIT_GREP_SECONDS = 20.0
+_GIT_ROW = re.compile(r"(\d+)([:=-])(.*)\Z", re.S)
+
+
+def _git_search(
+    scope: tuple[str, str], start: str, base: str, root: str, globs: list[str], pattern: str,
+    regex: bool, case_sensitive: bool, context: int, mode: str, limit: int, policy: Any,
+) -> Optional[_Found]:
+    """``git grep`` over tracked and untracked, not-ignored files. None when git can't run it
+    (the caller walks instead)."""
+    top, srel = scope
+    flags = ["-I", "--untracked", "--no-color", "-n"]
+    if not case_sensitive:
+        flags.append("-i")
+    if mode == "content":
+        flags += ["--heading", "--break"] + (["-C", str(context)] if context else [])
+    else:
+        flags += ["-c", "--null"]
+    specs = _git_pathspecs(top, srel, start, base, globs)
+    for syntax in (["-P"], ["-E"]) if regex else (["-F"],):
+        argv = ["git", "-c", "core.quotepath=off", "--no-pager", "grep", *flags, *syntax, "-e", pattern, "--", *specs]
+        try:
+            proc = subprocess.Popen(argv, cwd=top, env=_git_env(), stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_NO_WINDOW)
+        except OSError:
+            return None
+        fired: list[bool] = []
+        timer = threading.Timer(_GIT_GREP_SECONDS, lambda: (fired.append(True), proc.kill()))
+        timer.start()
+        try:
+            found, read_any = _read_git_grep(proc, top, start, base, root, globs, mode, limit, policy)
+            if found.note:
+                proc.kill()
+            # stderr is only read after stdout ends: git writes little there, never enough to block.
+            err = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
+            proc.wait()
+        finally:
+            timer.cancel()
+            for stream in (proc.stdout, proc.stderr):
+                if stream:
+                    stream.close()
+        if found.note:
+            return found
+        if fired:
+            found.note = (f"INCOMPLETE: git grep took over {int(_GIT_GREP_SECONDS)} s and was stopped "
+                          "— narrow path or glob.")
+            return found
+        if proc.returncode in (0, 1):  # 1: nothing matched
+            return found
+        if read_any:
+            found.note = f"INCOMPLETE: git grep failed part way (exit {proc.returncode}) — narrow path or glob."
+            return found
+        # -P needs git built with PCRE; anything else wrong with git: walk instead.
+        if not (regex and syntax == ["-P"] and re.search(r"perl|pcre", err, re.I)):
+            return None
+    return None
+
+
+def _read_git_grep(
+    proc: subprocess.Popen, top: str, start: str, base: str, root: str, globs: list[str],
+    mode: str, limit: int, policy: Any,
+) -> tuple[_Found, bool]:
+    found = _Found()
+    allowed: dict[str, Optional[str]] = {}
+    scope = os.path.normcase(os.path.normpath(start))
+
+    def shown(path: str) -> Optional[str]:
+        """The path to show for a git path, or None when the search must not report it."""
+        if path not in allowed:
+            full = os.path.normpath(os.path.join(top, path))
+            folded = os.path.normcase(full)
+            ok = (folded == scope or folded.startswith(scope.rstrip("\\/") + os.sep))
+            ok = ok and not full.lower().endswith(_BINARY_SUFFIXES)
+            ok = ok and (not globs or any(_path_matches(_relto(full, base), g) for g in globs))
+            allowed[path] = _rel(full, root) if ok and ai_access_allowed(full, policy=policy) else None
+        return allowed[path]
+
+    read_any = False
+    current: Optional[str] = None
+    expect_heading = True
+    assert proc.stdout is not None
+    for raw in proc.stdout:
+        read_any = True
+        line = raw.decode("utf-8", errors="replace").rstrip("\n").rstrip("\r")
+        if mode != "content":
+            path, _, count = line.partition("\0")
+            rel = shown(path)
+            if rel is None or not count.isdigit():
+                continue
+            if mode == "files" and len(found.counts) >= limit:
+                found.note = f"INCOMPLETE: stopped at {limit} files — narrow path or glob, or raise max_results."
+                break
+            found.hit(rel, int(count))
+            continue
+        if not line:
+            expect_heading = True
+            continue
+        if expect_heading:
+            current, expect_heading = shown(line), False
+            continue
+        if line == "--" or current is None:
+            continue
+        m = _GIT_ROW.match(line)
+        if not m:
+            continue
+        is_match = m.group(2) == ":"
+        if is_match:
+            if sum(found.counts.values()) >= limit:
+                found.note = f"INCOMPLETE: stopped at {limit} matches — narrow path or glob, or raise max_results."
+                break
+            found.hit(current)
+        found.row(current, int(m.group(1)), m.group(3), is_match)
+    return found, read_any
+
+
+def _glob_escape(path: str) -> str:
+    return re.sub(r"([*?\[])", r"[\1]", path)
+
+
+def _git_pathspecs(top: str, srel: str, start: str, base: str, globs: list[str]) -> list[str]:
+    """Pathspecs that cover what the globs can match inside ``srel``. The hits are matched
+    against the globs again afterwards, so a broader pathspec is only slower, never wrong."""
+    scope = [f":(literal){srel}" if srel else "."]
+    if not globs or os.path.isfile(start):
+        return scope
+    base_rel = _relto(base, top)
+    specs: list[str] = []
+    for g in globs:
+        pat = g.lstrip("/")
+        if not any(ch in pat for ch in "*?["):
+            return scope  # a plain word matches anywhere in the path
+        if "/" not in pat:
+            prefix = _glob_escape(srel) + "/" if srel else ""
+            specs.append(f":(glob,icase){prefix}**/{pat}")
+        elif os.path.isabs(base_rel) or base_rel.startswith(".."):
+            return scope
+        else:
+            prefix = "" if base_rel in ("", ".") else _glob_escape(base_rel) + "/"
+            specs.append(f":(glob,icase){prefix}{pat}")
+    return specs
+
+
+def _walk_search(
+    start: str, base: str, root: str, globs: list[str], rx: re.Pattern[str], context: int,
+    mode: str, limit: int, policy: Any,
+) -> _Found:
+    found = _Found()
+    found.files_searched = 0
+    deadline = time.monotonic() + _SEARCH_SECONDS
+    walker = _walk_files(start, base, globs, policy)
+    for full in walker:
+        if time.monotonic() > deadline:
+            more, done = _count_rest(walker)
+            about = "about" if done else "over"
+            found.note = (f"INCOMPLETE: searched {found.files_searched} of {about} "
+                          f"{found.files_searched + 1 + more} files in {int(_SEARCH_SECONDS)} s — narrow path or glob.")
+            break
+        if not ai_access_allowed(full, policy=policy):
+            continue
+        text = _read_text(full, checked=True)
+        if text is None:
+            continue
+        found.files_searched += 1
+        if not rx.search(text):
+            continue
+        rel = _rel(full, root)
+        if mode == "files" and len(found.counts) >= limit:
+            found.note = f"INCOMPLETE: stopped at {limit} files — narrow path or glob, or raise max_results."
+            break
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            if not rx.search(line):
+                continue
+            if mode == "content" and sum(found.counts.values()) >= limit:
+                found.note = f"INCOMPLETE: stopped at {limit} matches — narrow path or glob, or raise max_results."
+                break
+            found.hit(rel)
+            if mode != "content":
+                continue
+            for j in range(max(0, i - context), min(len(lines), i + context + 1)):
+                found.row(rel, j + 1, lines[j], j == i)
+        if found.note:
+            break
+    return found
+
+
+def _count_rest(walker: Any, seconds: float = 1.0) -> tuple[int, bool]:
+    """How many more files the walk would have searched (counted for ``seconds`` at most)."""
+    stop, count = time.monotonic() + seconds, 0
+    for _ in walker:
+        count += 1
+        if time.monotonic() > stop:
+            return count, False
+    return count, True
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else ('es' if word.endswith('ch') else 's')}"
+
+
+def _search_output(found: _Found, mode: str, context: int, fmt: str, pretty: bool) -> str:
+    total, nfiles = sum(found.counts.values()), len(found.counts)
+    if fmt == "json":
+        out: dict[str, Any] = {"complete": not found.note}
+        if found.note:
+            out["note"] = found.note
+        if found.files_searched is not None:
+            out["files_searched"] = found.files_searched
+        if mode == "content":
+            matches: list[dict[str, Any]] = []
+            for path, rows in found.rows.items():
+                for n in sorted(rows):
+                    if not rows[n][1]:
+                        continue
+                    hit: dict[str, Any] = {"path": path, "line": n, "text": rows[n][0]}
+                    if context:
+                        hit["before"] = [rows[k][0] for k in range(n - context, n) if k in rows]
+                        hit["after"] = [rows[k][0] for k in range(n + 1, n + 1 + context) if k in rows]
+                    matches.append(hit)
+            out["matches"] = matches
+        elif mode == "files":
+            out["files"] = [{"path": p, "hits": c} for p, c in found.counts.items()]
+        out["total_hits"], out["files_with_hits"] = total, nfiles
+        return tool_json(out, pretty=pretty)
+    what = f"{_plural(total, 'match')} in {_plural(nfiles, 'file')}" if total else "no matches"
+    searched = f" ({found.files_searched} files searched)" if found.files_searched is not None else ""
+    head = f"{found.note} Found so far: {what}." if found.note else f"complete: {what}{searched}"
+    lines = [head]
+    if mode == "files":
+        lines += [f"{p}  {c}" for p, c in found.counts.items()]
+    elif mode == "content":
+        for path, rows in found.rows.items():
+            prev = None
+            for n in sorted(rows):
+                if context and prev is not None and n != prev + 1:
+                    lines.append("--")
+                text, is_match = rows[n]
+                lines.append(f"{path}:{n}: {text}" if is_match else f"{path}-{n}- {text}")
+                prev = n
+    return "\n".join(lines)
+
+
 @mcp.tool()
 def workspace_search(
     pattern: str,
@@ -438,9 +895,10 @@ def workspace_search(
     context: int = 0,
     output_mode: str = "content",
     max_results: int = 100,
+    format: str = "text",
     pretty: bool = False,
 ) -> str:
-    """Search text in project files (like ripgrep). Use this instead of a shell grep, Select-String or git grep.
+    """Search text in project files (git grep in a repo). Never searches .git, ignored, node_modules or binary files.
 
     pattern: the text to find (regex=true for a regular expression). path: a folder or file
     in the open project (default: all of it), or an absolute path in any of the person's
@@ -448,7 +906,9 @@ def workspace_search(
     "src/**/*.ts" (comma-separated for several). context: lines shown before and after each hit.
     output_mode: "content" (matching lines), "files" (just the files, with hit counts) or
     "count" (totals) — "files" first is cheapest on a broad search.
-    Skips .git, node_modules, build output, Saved/Intermediate and binary files.
+    The first line says "complete: ..." or "INCOMPLETE: ..." (stopped early: narrow and search
+    again before trusting a miss). Then one "path:line: text" per hit ("path-line- text" for
+    context lines). format="json" returns {complete, note, matches/files, total_hits}.
     """
     if not (pattern or "").strip():
         raise ValueError("pattern is required")
@@ -466,85 +926,85 @@ def workspace_search(
     globs = _globs(glob)
     context = max(0, min(int(context or 0), 10))
     limit = max(1, min(int(max_results or 100), 1000))
-    deadline = time.monotonic() + _SEARCH_SECONDS
-    matches: list[dict[str, Any]] = []
-    files: list[dict[str, Any]] = []
-    total_hits = files_searched = 0
-    truncated = ""
-    for full in _walk_files(start):
-        if time.monotonic() > deadline:
-            truncated = f"Stopped after {int(_SEARCH_SECONDS)} s: narrow path or glob."
-            break
-        rel = _rel(full, root)
-        if globs and not any(_path_matches(_rel(full, base), g) for g in globs):
-            continue
-        text = _read_text(full)
-        if text is None:
-            continue
-        files_searched += 1
-        if not rx.search(text):
-            continue
-        lines = text.splitlines()
-        hits_here = 0
-        for i, line in enumerate(lines):
-            if not rx.search(line):
-                continue
-            hits_here += 1
-            if mode != "content":
-                continue
-            hit: dict[str, Any] = {"path": rel, "line": i + 1, "text": line[:_LINE_CHARS]}
-            if context:
-                hit["before"] = [ln[:_LINE_CHARS] for ln in lines[max(0, i - context):i]]
-                hit["after"] = [ln[:_LINE_CHARS] for ln in lines[i + 1:i + 1 + context]]
-            matches.append(hit)
-            if len(matches) >= limit:
-                truncated = f"Stopped at {limit} matches: narrow path or glob, or raise max_results."
-                break
-        total_hits += hits_here
-        if hits_here:
-            files.append({"path": rel, "hits": hits_here})
-        if truncated or (mode == "files" and len(files) >= limit):
-            truncated = truncated or f"Stopped at {limit} files: narrow path or glob, or raise max_results."
-            break
-    out: dict[str, Any] = {"files_searched": files_searched}
-    if mode == "content":
-        out["matches"] = matches
-    elif mode == "files":
-        out["files"] = files
-    out["total_hits"], out["files_with_hits"] = total_hits, len(files)
-    if truncated:
-        out["truncated"] = truncated
-    return tool_json(out, pretty=pretty)
+    policy = current_policy()
+    policy.require(start)
+    scope = _git_scope(start, policy)
+    found = None
+    if scope:
+        found = _git_search(scope, start, base, root, globs, pattern, regex, case_sensitive, context, mode, limit, policy)
+    if found is None:
+        found = _walk_search(start, base, root, globs, rx, context, mode, limit, policy)
+    return _search_output(found, mode, context, (format or "text").strip().lower(), pretty)
+
+
+def _git_list(start: str, policy: Any) -> Optional[list[str]]:
+    """Tracked and untracked, not-ignored files under ``start`` (git ls-files), or None outside git."""
+    scope = _git_scope(start, policy)
+    if not scope:
+        return None
+    top, srel = scope
+    proc = _git(["ls-files", "-co", "--exclude-standard", "-z", "--", f":(literal){srel}" if srel else "."], top, 20)
+    if proc is None or proc.returncode != 0:
+        return None
+    names = sorted({n for n in proc.stdout.decode("utf-8", errors="replace").split("\0") if n})
+    return [os.path.normpath(os.path.join(top, n)) for n in names]
 
 
 @mcp.tool()
 def workspace_find(pattern: str = "*", path: str = ".", max_results: int = 200, pretty: bool = False) -> str:
-    """Find files by name or path pattern (like a glob or git ls-files). Use this instead of shell dir / Get-ChildItem listings.
+    """Find files by name or path glob (git ls-files in a repo). Never lists .git, ignored or binary files.
 
     pattern: "*.py", "**/test_*.py", "src/**/mcp*", or a plain word (any path containing it).
     path: a folder in the open project (default: all of it), or an absolute path in any of the
     person's other Ducky projects. Returns paths relative to the open project, absolute elsewhere.
-    Skips .git, node_modules, build output, Saved/Intermediate and binary files.
+    "complete": false means it stopped early (see "note"): narrow it before trusting a miss.
     """
     root = _project_root()
     start = resolve_workspace_path(path or ".")
     base = _match_base(start, root)
     limit = max(1, min(int(max_results or 200), 2000))
-    deadline = time.monotonic() + _SEARCH_SECONDS
+    pat = pattern or "*"
+    policy = current_policy()
+    policy.require(start)
     found: list[str] = []
-    truncated = ""
-    for full in _walk_files(start):
-        if time.monotonic() > deadline:
-            truncated = f"Stopped after {int(_SEARCH_SECONDS)} s: narrow path or pattern."
-            break
-        if _path_matches(_rel(full, base), pattern or "*"):
-            found.append(_rel(full, root))
-            if len(found) >= limit:
-                truncated = f"Stopped at {limit} files: narrow path or pattern, or raise max_results."
+    note = ""
+
+    def take(full: str) -> bool:
+        """Add ``full``; False once the limit is passed (so a full page really has more)."""
+        nonlocal note
+        if not ai_access_allowed(full, policy=policy):
+            return True
+        if len(found) >= limit:
+            note = f"INCOMPLETE: stopped at {limit} files — narrow path or pattern, or raise max_results."
+            return False
+        found.append(_rel(full, root))
+        return True
+
+    listed = _git_list(start, policy)
+    if listed is not None:
+        for full in listed:
+            if (full.lower().endswith(_BINARY_SUFFIXES) or not _path_matches(_relto(full, base), pat)
+                    or not os.path.isfile(full)):
+                continue
+            if not take(full):
                 break
-    out: dict[str, Any] = {"files": found, "count": len(found)}
-    if truncated:
-        out["truncated"] = truncated
+    else:
+        deadline = time.monotonic() + _SEARCH_SECONDS
+        walker = _walk_files(start, base, [pat], policy)
+        seen = 0
+        for full in walker:
+            if time.monotonic() > deadline:
+                more, done = _count_rest(walker)
+                note = (f"INCOMPLETE: looked at {seen} of {'about' if done else 'over'} {seen + 1 + more} "
+                        f"files in {int(_SEARCH_SECONDS)} s — narrow path or pattern.")
+                break
+            seen += 1
+            if not take(full):
+                break
+    out: dict[str, Any] = {"complete": not note}
+    if note:
+        out["note"] = note
+    out["files"], out["count"] = found, len(found)
     return tool_json(out, pretty=pretty)
 
 
@@ -624,7 +1084,7 @@ def workspace_edit_file(
     pretty: bool = False,
     path: str = "",
 ) -> str:
-    """Replace exact text in a project file (an editor's find and replace). Use this instead of rewriting the whole file or editing through a shell.
+    """Replace exact text in a project file (find and replace). Never rewrites the whole file or edits via a shell.
 
     old_text must match the file exactly, spaces and line breaks included, and appear once
     (add surrounding lines to make it unique, or pass replace_all=true). An empty old_text
@@ -650,7 +1110,7 @@ def workspace_edit_file(
 def workspace_multi_edit(
     relative_path: str = "", *, edits: list[dict[str, Any]], pretty: bool = False, path: str = ""
 ) -> str:
-    """Several exact-text replacements in one file, applied in order and saved together (all or none).
+    """Several exact-text replacements in one file, saved together. Never saves part of them: all or none.
 
     edits: [{"old_text": "...", "new_text": "...", "replace_all": false}, ...]. Each old_text
     must match the file as the earlier edits left it. One history entry for the whole change.
@@ -677,8 +1137,10 @@ def workspace_multi_edit(
 def workspace_replace_lines(
     relative_path: str = "", *, start_line: int, end_line: int, new_text: str, pretty: bool = False, path: str = ""
 ) -> str:
-    """Replace lines start_line..end_line (1-based, inclusive) of a project file with new_text,
-    without repeating the old text. To insert before line N, pass start_line=N and end_line=N-1
+    """Replace, insert or delete a line range in a project file. Never needs the old text repeated.
+
+    Replaces lines start_line..end_line (1-based, inclusive) with new_text. To insert before
+    line N, pass start_line=N and end_line=N-1
     (to add at the end of a file with L lines: start_line=L+1, end_line=L, so 1 and 0 for an
     empty file); to delete lines, pass new_text="". Read the lines first (workspace_read_file
     with line_numbers=true) so the numbers are current.
@@ -702,10 +1164,10 @@ def workspace_replace_lines(
 
 @mcp.tool()
 def workspace_move_file(source: str, destination: str, pretty: bool = False) -> str:
-    """Move or rename a project file or folder (destination: the new project-relative path).
-    Undoable from the Changes view like an edit; never overwrites an existing destination.
-    With UEFN open, .verse files move through Epic's VerseToolset so the Verse build follows
-    them (via: "uefn"). A Verse folder moved in a shell breaks every later build with
+    """Move or rename a project file or folder (undoable). Never overwrites an existing destination.
+
+    destination: the new project-relative path. With UEFN open, .verse files move through
+    Epic's VerseToolset so the Verse build follows them (via: "uefn"). A Verse folder moved in a shell breaks every later build with
     Script error 3000, so use this.
     """
     from frontend.ui_web import project_files
@@ -738,8 +1200,9 @@ def workspace_move_file(source: str, destination: str, pretty: bool = False) -> 
 
 @mcp.tool()
 def workspace_delete_file(relative_path: str = "", pretty: bool = False, path: str = "") -> str:
-    """Delete a project file or folder. It goes to Ducky's undo trash (restorable from the
-    Changes view), so prefer this to a shell rm / Remove-Item. With UEFN open, .verse files
+    """Delete a project file or folder into Ducky's undo trash. Never deletes for good: restorable from Changes.
+
+    Prefer this to a shell rm / Remove-Item. With UEFN open, .verse files
     are deleted through Epic's VerseToolset so the Verse build drops them (via: "uefn").
     """
     from frontend.ui_web import project_files
@@ -795,14 +1258,18 @@ def _git_args_refused(command: str, args: list[str]) -> str:
 
 
 @mcp.tool()
-def workspace_git(command: str, args: Optional[list[str]] = None, path: str = ".", pretty: bool = False) -> str:
-    """Read-only git in the project: status, diff, log, show, ls-files, blame, branch, grep, rev-parse, shortlog, describe, tag. Use this instead of running git through a shell.
+def workspace_git(
+    command: str, args: Optional[list[str]] = None, path: str = ".", format: str = "text", pretty: bool = False
+) -> str:
+    """Read-only git in the project (status, diff, log, show, blame, grep...). Never commits, pushes or changes the repo.
 
+    command: status, diff, log, show, ls-files, blame, branch, grep, rev-parse, shortlog, describe, tag.
     path: where to run it, in the open project (default) or an absolute path in any of the
     person's other Ducky projects (that folder's repository).
     args: the rest of the command line as a list, e.g. command="log", args=["--oneline", "-20"]
-    or command="diff", args=["HEAD", "--", "src/app.py"]. Commits, pushes and other changes
-    stay in the shell, where they ask first.
+    or command="diff", args=["HEAD", "--", "src/app.py"]. Returns git's own output; a first line
+    "exit N" and git's error text only when it fails. format="json" returns
+    {exit_code, output, stderr}. Commits, pushes and other changes stay in the shell, where they ask first.
     """
     # Git objects/history and external diff helpers bypass path denials. Never
     # run git on behalf of AI in strict mode; use guarded workspace tools.
@@ -821,12 +1288,11 @@ def workspace_git(command: str, args: Optional[list[str]] = None, path: str = ".
     cwd = resolve_workspace_path(path or ".")
     if os.path.isfile(cwd):
         cwd = os.path.dirname(cwd)
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "PAGER": "cat", "GIT_OPTIONAL_LOCKS": "0"}
     try:
         proc = subprocess.run(
             ["git", "-c", "core.quotepath=off", "--no-pager", cmd, *argv],
-            cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            cwd=cwd, env=_git_env(), stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
+            creationflags=_NO_WINDOW,
         )
     except FileNotFoundError as exc:
         raise ValueError("git is not installed on this PC (or not on PATH).") from exc
@@ -834,9 +1300,19 @@ def workspace_git(command: str, args: Optional[list[str]] = None, path: str = ".
         raise ValueError(f"git {cmd} took over 30 s: narrow it (a path, -n, a range).") from exc
     out = proc.stdout.decode("utf-8", errors="replace")
     err = proc.stderr.decode("utf-8", errors="replace").strip()
-    payload: dict[str, Any] = {"exit_code": proc.returncode, "output": out[:_GIT_OUTPUT_CHARS]}
-    if len(out) > _GIT_OUTPUT_CHARS:
-        payload["truncated"] = f"Output cut at {_GIT_OUTPUT_CHARS} characters: narrow it (a path, -n, --stat)."
-    if err:
-        payload["stderr"] = err[:4000]
-    return tool_json(payload, pretty=pretty)
+    cut = f"Output cut at {_GIT_OUTPUT_CHARS} characters: narrow it (a path, -n, --stat)." if len(out) > _GIT_OUTPUT_CHARS else ""
+    if (format or "text").strip().lower() == "json":
+        payload: dict[str, Any] = {"exit_code": proc.returncode, "output": out[:_GIT_OUTPUT_CHARS]}
+        if cut:
+            payload["truncated"] = cut
+        if err:
+            payload["stderr"] = err[:4000]
+        return tool_json(payload, pretty=pretty)
+    text = out[:_GIT_OUTPUT_CHARS].rstrip("\n")
+    if proc.returncode != 0:
+        text = "\n".join(part for part in (f"exit {proc.returncode}", err[:4000], text) if part)
+    elif not text:
+        text = "(no output)"
+    if cut:
+        text += f"\n[{cut}]"
+    return text

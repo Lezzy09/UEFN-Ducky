@@ -112,7 +112,8 @@ def test_reads_a_file_attached_to_a_chat(project, tmp_path, monkeypatch) -> None
 
 
 def test_read_files_reads_several_and_reports_missing(project) -> None:
-    out = _call(wc.workspace_read_files, ["src/app.py", "nope.py", "README.md"], start_line=1, end_line=1)
+    out = _call(wc.workspace_read_files, ["src/app.py", "nope.py", "README.md"], start_line=1, end_line=1,
+                format="json")
     by_path = {f["path"]: f for f in out["files"]}
     assert by_path["src/app.py"]["content"] == "import os"
     assert by_path["README.md"]["content"] == "# Title"
@@ -143,19 +144,20 @@ def test_tree_skips_dependencies(project) -> None:
 
 
 def test_search_finds_text_and_skips_binaries_and_dependencies(project) -> None:
-    out = _call(wc.workspace_search, "store")
+    out = _call(wc.workspace_search, "store", format="json")
     assert {(m["path"], m["line"]) for m in out["matches"]} == {("src/app.py", 4), ("src/app.py", 13)}
     assert out["total_hits"] == 2 and out["files_with_hits"] == 1
 
 
 def test_search_modes_glob_regex_and_context(project) -> None:
-    files = _call(wc.workspace_search, "return", output_mode="files")["files"]
+    files = _call(wc.workspace_search, "return", output_mode="files", format="json")["files"]
     assert {f["path"] for f in files} == {"src/app.py", "src/pkg/util.ts"}
-    only_ts = _call(wc.workspace_search, "return", glob="*.ts")
+    only_ts = _call(wc.workspace_search, "return", glob="*.ts", format="json")
     assert [m["path"] for m in only_ts["matches"]] == ["src/pkg/util.ts"]
-    hit = _call(wc.workspace_search, r"def \w+\(self\)", regex=True, context=1, case_sensitive=True)["matches"][0]
+    hit = _call(wc.workspace_search, r"def \w+\(self\)", regex=True, context=1, case_sensitive=True,
+                format="json")["matches"][0]
     assert hit["line"] == 5 and hit["before"] == ["class Store:"] and hit["after"] == ["        return 1"]
-    assert _call(wc.workspace_search, "return", output_mode="count")["total_hits"] == 3
+    assert _call(wc.workspace_search, "return", output_mode="count", format="json")["total_hits"] == 3
     with pytest.raises(ValueError):
         wc.workspace_search("(", regex=True)
 
@@ -399,10 +401,10 @@ def test_reads_reach_another_of_the_persons_projects_by_absolute_path(project, m
     monkeypatch.setattr(wc, "resolve_workspace_path", resolve)
     monkeypatch.setattr(system, "resolve_workspace_path", resolve)
     want = str(other / "lib" / "media.py").replace("\\", "/")
-    hits = _call(wc.workspace_search, "AGENT_BACKEND", path=str(other), glob="lib/*.py")
+    hits = _call(wc.workspace_search, "AGENT_BACKEND", path=str(other), glob="lib/*.py", format="json")
     assert {(m["path"], m["line"]) for m in hits["matches"]} == {(want, 1), (want, 4)}
     assert _call(wc.workspace_find, "lib/*.py", path=str(other))["files"] == [want]
-    read = _call(wc.workspace_read_files, [want], start_line=3, end_line=4)["files"][0]
+    read = _call(wc.workspace_read_files, [want], start_line=3, end_line=4, format="json")["files"][0]
     assert read["path"] == want and read["content"] == "def pick():\n    return AGENT_BACKEND"
     # The open project's own paths stay relative.
     assert _call(wc.workspace_find, "*.ts")["files"] == ["src/pkg/util.ts"]
@@ -445,11 +447,15 @@ def test_git_reads_status_log_and_branches(project) -> None:
                  ["add", "src/app.py"], ["commit", "-q", "-m", "first"]):
         subprocess.run(["git", *argv], cwd=root, check=True, capture_output=True)
     (root / "src" / "app.py").write_text("changed\n", encoding="utf-8")
-    status = _call(wc.workspace_git, "status", ["--short"])
+    status = _call(wc.workspace_git, "status", ["--short"], format="json")
     assert status["exit_code"] == 0 and "M src/app.py" in status["output"]
-    assert "first" in _call(wc.workspace_git, "log", ["--oneline", "-5"])["output"]
-    assert "-import os" in _call(wc.workspace_git, "diff", ["--", "src/app.py"])["output"]
-    assert _call(wc.workspace_git, "branch", ["--show-current"])["exit_code"] == 0
+    # Plain text by default: git's own output, an exit header only on failure.
+    assert wc.workspace_git("status", ["--short"]).startswith(" M src/app.py")
+    assert "first" in wc.workspace_git("log", ["--oneline", "-5"])
+    assert "-import os" in wc.workspace_git("diff", ["--", "src/app.py"])
+    assert not wc.workspace_git("branch", ["--show-current"]).startswith("exit ")
+    failed = wc.workspace_git("show", ["no-such-ref"])
+    assert failed.startswith("exit 128\n") and "no-such-ref" in failed
 
 
 def test_multi_edit_takes_claudes_old_string_new_string(project) -> None:
@@ -471,3 +477,231 @@ def test_listing_a_folder_that_is_not_there_yet_is_an_answer(project) -> None:
     with pytest.raises(ValueError, match="is a file"):
         system.workspace_list_dir("README.md")
     assert "util.ts" in _call(system.workspace_list_dir, "src/pkg")["entries"]
+
+
+# ---------------------------------------------------------------- git-aware search / find
+
+
+def _git(root: Path, *argv: str) -> None:
+    subprocess.run(["git", *argv], cwd=root, check=True, capture_output=True)
+
+
+@pytest.fixture
+def git_project(project):
+    if shutil.which("git") is None:
+        pytest.skip("git not installed")
+    from frontend.settings import PanelSettings
+    settings = PanelSettings.load()
+    settings.ai_ignore_strict = False
+    settings.save()
+    root, journal = project
+    (root / ".gitignore").write_text("ignored/\n*.log\n", encoding="utf-8")
+    (root / "ignored").mkdir()
+    (root / "ignored" / "skip.py").write_text("needle = 'ignored'\n", encoding="utf-8")
+    (root / "debug.log").write_text("needle in a log\n", encoding="utf-8")
+    (root / "src" / "app.py").write_text("needle = 1\n\ndef find():\n    return needle\n", encoding="utf-8")
+    for argv in (["init", "-q"], ["config", "user.email", "t@example.com"], ["config", "user.name", "t"],
+                 ["add", "src/app.py", ".gitignore"], ["commit", "-q", "-m", "first"]):
+        _git(root, *argv)
+    # Untracked but not ignored: git grep --untracked still finds it.
+    (root / "src" / "pkg" / "new.ts").write_text("export const needle = 2;\n", encoding="utf-8")
+    yield root, journal
+
+
+def test_search_in_a_git_repo_uses_git_grep(git_project, monkeypatch) -> None:
+    def no_walk(*_a, **_k):
+        raise AssertionError("searched by walking instead of git grep")
+
+    monkeypatch.setattr(wc, "_walk_search", no_walk)
+    out = _call(wc.workspace_search, "needle", format="json")
+    assert out["complete"] is True and list(out)[0] == "complete"
+    assert "files_searched" not in out  # git grep, not the walk
+    assert {(m["path"], m["line"]) for m in out["matches"]} == {
+        ("src/app.py", 1), ("src/app.py", 4), ("src/pkg/new.ts", 1)}
+    only_ts = _call(wc.workspace_search, "needle", glob="src/**/*.ts", format="json")
+    assert [m["path"] for m in only_ts["matches"]] == ["src/pkg/new.ts"]
+    hit = _call(wc.workspace_search, r"def \w+\(\)", regex=True, context=1, format="json")["matches"]
+    assert hit == [{"path": "src/app.py", "line": 3, "text": "def find():", "before": [""],
+                    "after": ["    return needle"]}]
+    assert _call(wc.workspace_search, "NEEDLE", case_sensitive=True, format="json")["matches"] == []
+    files = _call(wc.workspace_search, "needle", output_mode="files", format="json")
+    assert {f["path"]: f["hits"] for f in files["files"]} == {"src/app.py": 2, "src/pkg/new.ts": 1}
+    # A folder inside the repo is searched by git too, paths stay project-relative.
+    sub = _call(wc.workspace_search, "needle", path="src/pkg", format="json")
+    assert [m["path"] for m in sub["matches"]] == ["src/pkg/new.ts"]
+
+
+def test_git_search_text_lists_hits_and_context(git_project) -> None:
+    text = wc.workspace_search("return needle", context=1)
+    assert text.splitlines() == [
+        "complete: 1 match in 1 file",
+        "src/app.py-3- def find():",
+        "src/app.py:4:     return needle",
+    ]
+    assert wc.workspace_search("nothing like this").startswith("complete: no matches")
+    assert wc.workspace_search("needle", output_mode="files").splitlines()[1:] == ["src/app.py  2", "src/pkg/new.ts  1"]
+
+
+def test_git_search_stops_loudly_at_the_limit(git_project) -> None:
+    out = _call(wc.workspace_search, "needle", max_results=2, format="json")
+    assert out["complete"] is False and out["note"].startswith("INCOMPLETE: stopped at 2 matches")
+    assert len(out["matches"]) == 2
+    # Exactly the limit is not cut short.
+    assert _call(wc.workspace_search, "needle", max_results=3, format="json")["complete"] is True
+
+
+def test_git_search_keeps_ai_ignore_rules(git_project, monkeypatch) -> None:
+    from backend.workspace import ai_ignore
+    root, _ = git_project
+    real = ai_ignore.IgnorePolicy.denied
+    monkeypatch.setattr(ai_ignore.IgnorePolicy, "denied",
+                        lambda self, p: str(p).replace("\\", "/").endswith("new.ts") or real(self, p))
+    out = _call(wc.workspace_search, "needle", format="json")
+    assert {m["path"] for m in out["matches"]} == {"src/app.py"}
+    assert "src/pkg/new.ts" not in _call(wc.workspace_find, "*.ts")["files"]
+
+
+def test_ignored_folder_given_explicitly_is_walked(git_project) -> None:
+    out = _call(wc.workspace_search, "needle", path="ignored", format="json")
+    assert [m["path"] for m in out["matches"]] == ["ignored/skip.py"] and "files_searched" in out
+
+
+def test_find_in_a_git_repo_uses_ls_files(git_project, monkeypatch) -> None:
+    def no_walk(*_a, **_k):
+        raise AssertionError("listed by walking instead of git ls-files")
+
+    monkeypatch.setattr(wc, "_walk_files", no_walk)
+    out = _call(wc.workspace_find, "*.py")
+    assert out["complete"] is True and out["files"] == ["src/app.py"]  # ignored/skip.py stays out
+    assert _call(wc.workspace_find, "*.ts")["files"] == ["src/pkg/new.ts", "src/pkg/util.ts"]
+    assert _call(wc.workspace_find, "*.log")["files"] == []
+    capped = _call(wc.workspace_find, "src/**", max_results=1)
+    assert capped["complete"] is False and capped["note"].startswith("INCOMPLETE: stopped at 1 files")
+
+
+def test_walk_prunes_by_glob_and_gitignore(project, monkeypatch) -> None:
+    root, _ = project
+    (root / "other").mkdir()
+    (root / "other" / "x.ts").write_text("needle\n", encoding="utf-8")
+    (root / "src" / "pkg" / "b.ts").write_text("needle\n", encoding="utf-8")
+    (root / "gen").mkdir()
+    (root / "gen" / "c.ts").write_text("needle\n", encoding="utf-8")
+    (root / "src" / "pkg" / "out.ts").write_text("needle\n", encoding="utf-8")
+    (root / ".gitignore").write_text("# build output\n/gen/\nout.ts\n", encoding="utf-8")
+    listed, read = [], []
+    real_scandir, real_read = wc.os.scandir, wc._read_text
+    monkeypatch.setattr(wc.os, "scandir", lambda p: listed.append(Path(p)) or real_scandir(p))
+    monkeypatch.setattr(wc, "_read_text", lambda p, **k: read.append(Path(p)) or real_read(p, **k))
+    out = _call(wc.workspace_search, "needle", glob="src/**/*.ts", format="json")
+    assert [m["path"] for m in out["matches"]] == ["src/pkg/b.ts"]
+    assert all(root / "src" in p.parents for p in read), read
+    assert root / "other" not in listed and root / "node_modules" not in listed
+    # .gitignore at the root hides /gen/ and out.ts from the walk too.
+    everywhere = _call(wc.workspace_search, "needle", format="json")
+    assert {m["path"] for m in everywhere["matches"]} == {"other/x.ts", "src/pkg/b.ts"}
+    assert _call(wc.workspace_find, "*.ts")["files"] == ["other/x.ts", "src/pkg/b.ts", "src/pkg/util.ts"]
+
+
+def test_glob_star_stays_inside_one_folder() -> None:
+    assert wc._path_matches("lib/a.py", "lib/*.py")
+    assert not wc._path_matches("lib/sub/a.py", "lib/*.py")
+    assert wc._path_matches("src/a.py", "src/**/*.py") and wc._path_matches("src/x/y/a.py", "src/**/*.py")
+    assert wc._path_matches("a/b/c.ts", "**/*.ts") and wc._path_matches("c.ts", "**/*.ts")
+    assert wc._folder_may_hold("src/pkg", ["src/**/*.ts"]) and not wc._folder_may_hold("other", ["src/**/*.ts"])
+    assert not wc._folder_may_hold("lib/sub", ["lib/*.py"]) and wc._folder_may_hold("anything", ["*.py"])
+
+
+def test_search_that_runs_out_of_time_says_incomplete(project, monkeypatch) -> None:
+    monkeypatch.setattr(wc, "_SEARCH_SECONDS", -1.0)
+    out = _call(wc.workspace_search, "Store", format="json")
+    assert list(out)[:2] == ["complete", "note"]
+    assert out["complete"] is False and out["matches"] == []
+    assert out["note"].startswith("INCOMPLETE: searched 0 of about ") and "narrow path or glob" in out["note"]
+    assert wc.workspace_search("Store").startswith("INCOMPLETE: searched 0 of about ")
+    found = _call(wc.workspace_find, "*.py")
+    assert found["complete"] is False and found["note"].startswith("INCOMPLETE:")
+
+
+def test_search_limit_in_a_plain_folder_is_loud(project) -> None:
+    out = _call(wc.workspace_search, "return", max_results=1, format="json")
+    assert out["complete"] is False and "stopped at 1 matches" in out["note"] and len(out["matches"]) == 1
+    assert _call(wc.workspace_search, "store", format="json")["complete"] is True
+
+
+REPO = Path(__file__).resolve().parents[4]
+
+
+@pytest.mark.skipif(shutil.which("git") is None or not (REPO / ".git").exists(), reason="needs this git checkout")
+def test_search_and_find_on_this_repo_are_fast(monkeypatch) -> None:
+    import time
+
+    def resolve(rel: str) -> str:
+        rel = (rel or ".").replace("\\", "/").strip("/")
+        return str(REPO if rel in ("", ".") else REPO / rel)
+
+    monkeypatch.setattr(wc, "resolve_workspace_path", resolve)
+    began = time.monotonic()
+    out = json.loads(wc.workspace_search("settings_changed", output_mode="files", format="json"))
+    took = time.monotonic() - began
+    assert out["complete"] is True
+    assert any(f["path"].endswith("web/src/types/panel.ts") for f in out["files"]), out
+    began = time.monotonic()
+    found = json.loads(wc.workspace_find("*.verse", max_results=2000))
+    took_find = time.monotonic() - began
+    assert found["complete"] is True and found["count"] > 0
+    # 1 s on a dev PC; the margin is for slow CI runners.
+    assert took < 3 and took_find < 3, (took, took_find)
+
+
+# ---------------------------------------------------------------- plain text
+
+
+def test_read_files_returns_plain_text_with_a_header(project) -> None:
+    text = wc.workspace_read_files(["src/app.py", "nope.py"], start_line=4, end_line=5, line_numbers=True)
+    assert text.splitlines() == [
+        "src/app.py  lines 4-5 of 13",
+        "4| class Store:",
+        "5|     def load(self):",
+        "",
+        "nope.py  ERROR: Not a file: nope.py. Find it with workspace_find.",
+    ]
+    whole = wc.workspace_read_files(["README.md"])
+    assert whole == "README.md  lines 1-7 of 7\n# Title\n\nIntro\n\n## Setup\n\nRun it."
+
+
+def test_plain_text_read_is_much_smaller_than_json(project, monkeypatch) -> None:
+    # What a client receives: FastMCP wraps a str result as {"result": "<the string>"}.
+    monkeypatch.setattr(wc, "resolve_workspace_path", lambda rel: str(Path(wc.__file__)))
+    real_json = json.dumps
+    as_json = wc.workspace_read_files(["workspace_code.py"], start_line=1, end_line=300, format="json")
+    as_text = wc.workspace_read_files(["workspace_code.py"], start_line=1, end_line=300)
+    wire_json, wire_text = len(real_json({"result": as_json})), len(real_json({"result": as_text}))
+    # Still wrapped: no JSON escaping inside the string (about 8% on this file). Sent as the
+    # text itself, without the wrapper: about 13%.
+    assert wire_text <= 0.95 * wire_json and len(as_text) <= 0.9 * wire_json, (wire_text, len(as_text), wire_json)
+
+
+def test_format_read_marks_what_is_not_shown() -> None:
+    part = {"content": "a\nb", "total_lines": 9, "start_line": 1, "end_line": 2,
+            "more": "Lines 3-9 not shown: read them with start_line=3."}
+    assert wc.format_read("x.py", part) == "x.py  lines 1-2 of 9\na\nb\n[Lines 3-9 not shown: read them with start_line=3.]"
+    assert wc.format_read("e.txt", {"content": "", "total_lines": 0}) == "e.txt  empty file\n"
+
+
+# ---------------------------------------------------------------- descriptions
+
+
+WORKSPACE_TOOLS = (
+    "workspace_read_files", "workspace_file_outline", "workspace_tree", "workspace_search", "workspace_find",
+    "workspace_edit_file", "workspace_multi_edit", "workspace_replace_lines", "workspace_move_file",
+    "workspace_delete_file", "workspace_git",
+)
+
+
+@pytest.mark.parametrize("name", WORKSPACE_TOOLS)
+def test_first_description_line_says_what_for_and_never(name) -> None:
+    import inspect
+
+    first = inspect.getdoc(getattr(wc, name)).splitlines()[0]
+    assert len(first) < 120, first
+    assert "never" in first.lower(), first
