@@ -35,7 +35,7 @@ def list_assets(
     fields: Optional[list[str]] = None,
     pretty: bool = False,
 ) -> str:
-    """List assets in a directory (paginated; default limit 200).
+    """List assets in one content directory (paged, limit 200). Not a name search (use search_assets).
 
     Fortnite Creative props/devices: use ``/Game/Creative/...`` — not ``/Fortnite``.
     """
@@ -67,21 +67,21 @@ def list_assets(
 
 @plugin_mcp_tool("uefn")
 def get_asset_info(asset_path: str, pretty: bool = False) -> str:
-    """Get detailed info about an asset."""
+    """Read one asset's details by path. Read-only: never modifies it."""
     result = send_command("get_asset_info", {"asset_path": asset_path})
     return tool_json(result, pretty=pretty)
 
 
 @plugin_mcp_tool("uefn")
 def get_selected_assets(pretty: bool = False) -> str:
-    """Get assets selected in the Content Browser."""
+    """List the assets selected in the Content Browser. Never changes the selection."""
     result = send_command("get_selected_assets")
     return tool_json(result, pretty=pretty)
 
 
 @plugin_mcp_tool("uefn")
 def rename_asset(old_path: str, new_path: str, pretty: bool = False) -> str:
-    """Rename or move an asset."""
+    """Rename or move one project asset. Not for Engine, Fortnite or /Game/Creative assets."""
     result = send_command("rename_asset", {"old_path": old_path, "new_path": new_path})
     return tool_json(result, pretty=pretty)
 
@@ -108,7 +108,7 @@ def _lore_after_gone(asset_path: str) -> dict:
 
 @plugin_mcp_tool("uefn")
 def delete_asset(asset_path: str, pretty: bool = False) -> str:
-    """Delete one unreferenced project asset. Call only when the user asked to delete it.
+    """Delete one unreferenced project asset. Never call it unless the user asked to delete it.
 
     Fix / reimport / relink otherwise. Refuses Engine / Fortnite / catalog
     paths and anything still referenced (including mesh/skel/mat siblings).
@@ -123,7 +123,7 @@ def delete_asset(asset_path: str, pretty: bool = False) -> str:
 
 @plugin_mcp_tool("uefn")
 def delete_project_folder(directory: str, pretty: bool = False) -> str:
-    """Delete one project folder the user asked to remove (character/unit).
+    """Delete one project folder the user asked to remove (a character or unit). Never for unasked cleanup.
 
     Lore-drops pending adds under that tree first, then removes the folder
     when nothing outside it still references it. ``delete_directory`` stays refused.
@@ -148,28 +148,28 @@ def delete_project_folder(directory: str, pretty: bool = False) -> str:
 
 @plugin_mcp_tool("uefn")
 def duplicate_asset(source_path: str, dest_path: str, pretty: bool = False) -> str:
-    """Duplicate an asset."""
+    """Copy one asset to dest_path. Does not place it in the level (spawn_actor does)."""
     result = send_command("duplicate_asset", {"source_path": source_path, "dest_path": dest_path})
     return tool_json(result, pretty=pretty)
 
 
 @plugin_mcp_tool("uefn")
 def does_asset_exist(asset_path: str, pretty: bool = False) -> str:
-    """Check if an asset exists."""
+    """Check whether an asset path exists. Never loads or creates it."""
     result = send_command("does_asset_exist", {"asset_path": asset_path})
     return tool_json(result, pretty=pretty)
 
 
 @plugin_mcp_tool("uefn")
 def save_asset(asset_path: str, pretty: bool = False) -> str:
-    """Save a modified asset."""
+    """Save one modified asset. Not the level (use save_current_level)."""
     result = send_command("save_asset", {"asset_path": asset_path})
     return tool_json(result, pretty=pretty)
 
 
 @plugin_mcp_tool("uefn")
 def open_asset_in_uefn(asset_path: str, open_editor: bool = True, pretty: bool = False) -> str:
-    """Reveal an asset in the Content Browser and optionally open its editor."""
+    """Reveal an asset in the Content Browser and optionally open its editor. Never edits it."""
     result = send_command(
         "open_asset_in_uefn",
         {"asset_path": asset_path, "open_editor": open_editor},
@@ -188,7 +188,7 @@ def search_assets(
     fields: Optional[list[str]] = None,
     pretty: bool = False,
 ) -> str:
-    """Find assets in the Content Browser by name/path substring (search=) or exact class (class_name=).
+    """Find assets by name/path (search=) or class (class_name=). Never directory=/Fortnite: use /Game/Creative.
 
     Use ``search=`` (not query/name_filter). Fortnite Creative props/devices/kits:
     ``directory="/Game/Creative"`` (or BuildingActors / Sets / Devices) — never

@@ -145,13 +145,13 @@ def _screenshot_mcp_payload(result: dict[str, Any], *, pretty: bool) -> Any:
 
 @plugin_mcp_tool("uefn")
 def exec_console_command(command: str, pretty: bool = False) -> str:
-    """Run an editor console command (e.g. 'stat fps')."""
+    """Run one editor console command (e.g. 'stat fps'). Not for Python (execute_python)."""
     return tool_json(send_command("exec_console_command", {"command": command}), pretty=pretty)
 
 
 @plugin_mcp_tool("uefn")
 def save_all_dirty(content: bool = True, maps: bool = True, pretty: bool = False) -> str:
-    """Save all dirty content packages and/or maps without prompting."""
+    """Save all dirty content packages and/or maps without prompting. Not behind an open Save popup."""
     return tool_json(send_command("save_all_dirty", {"content": content, "maps": maps}), pretty=pretty)
 
 
@@ -159,7 +159,7 @@ def save_all_dirty(content: bool = True, maps: bool = True, pretty: bool = False
 def take_high_res_screenshot(
     width: int = 1280, height: int = 720, filename: str = "", pretty: bool = False
 ) -> Any:
-    """Capture the active viewport for visual verify (does not freeze UEFN).
+    """Capture the active viewport into this chat to check a layout. Does not freeze UEFN.
 
     Uses a fast viewport-buffer capture on the listener (not Unreal's high-res
     offscreen path, which stalls the editor on dense levels). Returns ``path``
@@ -191,7 +191,7 @@ def take_high_res_screenshot(
 def set_object_property(
     asset_path: str, property_name: str, value: Any, save: bool = True, pretty: bool = False
 ) -> str:
-    """Set an editor property on a loaded asset object, then optionally save it."""
+    """Set an editor property on a loaded asset, optionally saving it. Not placed actors (set_actor_properties)."""
     return tool_json(
         send_command(
             "set_object_property",
@@ -208,5 +208,5 @@ def set_object_property(
 
 @plugin_mcp_tool("uefn")
 def get_editor_stats(pretty: bool = False) -> str:
-    """Lightweight editor/world summary (world name, actor count, engine version)."""
+    """Light editor/world summary (world name, actor count, engine version). Not an actor list."""
     return tool_json(send_command("get_editor_stats", {}), pretty=pretty)

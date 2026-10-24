@@ -54,7 +54,7 @@ def project_memory_list(project: str = "", pretty: bool = False) -> str:
 
 @plugin_mcp_tool("uefn")
 def project_memory_get(name: str, project: str = "", pretty: bool = False) -> str:
-    """Pull ONE memory entry's full content by name (from the index).
+    """Pull ONE memory entry's full content by name (from the index). Never bulk-read entries.
 
     `name` is an entry (`coding-standards` — returns its body plus a sub-entry index)
     or a sub-entry (`coding-standards/error-handling`). Use after the index shows an
@@ -82,7 +82,7 @@ def project_memory_save(
     project: str = "",
     pretty: bool = False,
 ) -> str:
-    """Create or replace ONE named entry in a project's memory (one fact/topic per entry).
+    """Create or replace ONE named entry (one fact/topic) in a project's memory. Never erase another's.
 
     Lands in the selected project; pass `project` (path, name, or slug from
     ducky_list_projects) when the fact belongs to the project you worked in.
@@ -103,7 +103,7 @@ def project_memory_save(
 def project_memory_append(
     name: str, text: str, author: str = "", project: str = "", pretty: bool = False
 ) -> str:
-    """Append a timestamped note to an entry in a project's memory (created if missing).
+    """Append a timestamped note to a memory entry (created if missing). Does not rewrite the entry.
 
     Use to extend an existing topic without rewriting it. Keep notes short and factual.
     `project` as in project_memory_save (empty = the selected project).
@@ -114,10 +114,9 @@ def project_memory_append(
 
 @plugin_mcp_tool("uefn")
 def project_memory_delete(name: str, project: str = "", pretty: bool = False) -> str:
-    """Delete ONE entry from a project's memory — only for facts that are wrong or obsolete.
+    """Delete ONE wrong or obsolete memory entry. Never another ducky's just because it is unfamiliar.
 
-    Never delete another ducky's entry just because it is unfamiliar; when unsure, ask the
-    user or update the entry instead. `project` as in project_memory_save.
+    When unsure, ask the user or update the entry instead. `project` as in project_memory_save.
     """
     removed = delete_entry(name, _read_root(project))
     if not removed:
@@ -130,8 +129,9 @@ _OVERVIEW_MAX_CHATS = 20
 
 @plugin_mcp_tool("uefn")
 def ducky_memory_overview(include_chats: bool = True, pretty: bool = False) -> str:
-    """Survey every known project's memory index, and the duckies' chats (one list for
-    every project; each chat = a ducky's context).
+    """Survey every project's memory index and the duckies' chats. Read-only: never pulls entry bodies.
+
+    One list for every project; each chat = a ducky's context.
 
     Use this to find what is known about other projects before cross-project work. Pull
     an entry with `project_memory_get(name, project=...)`; read a chat with

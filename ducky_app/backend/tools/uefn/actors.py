@@ -29,7 +29,7 @@ def get_all_actors(
     fields: Optional[list[str]] = None,
     pretty: bool = False,
 ) -> str:
-    """List level actors (paginated). Find by Outliner name via label_filter='wallet'.
+    """List level actors (paged; label_filter='wallet' finds an Outliner name). Not a device census (use Epic).
 
     Never class_prefix='Fort' for devices — that only returns player starts.
     No filters = full inventory.
@@ -50,7 +50,7 @@ def get_all_actors(
 
 @plugin_mcp_tool("uefn")
 def get_selected_actors(pretty: bool = False) -> str:
-    """Get currently selected actors in the UEFN viewport."""
+    """List the actors selected in the UEFN viewport. Never changes the selection (select_actors does)."""
     result = send_command("get_selected_actors")
     return tool_json(result, pretty=pretty)
 
@@ -107,7 +107,7 @@ def spawn_actor(
     tags: Optional[list[str]] = None,
     pretty: bool = False,
 ) -> str:
-    """Place an actor, prop or Creative device in the level (asset_path or actor_class): meshes, Blueprints, Verse devices.
+    """Place a prop, mesh, Blueprint or device by asset_path (…_C). Never a Verse *_device name as actor_class.
 
     Prefer ``label`` + ``folder`` here (same tick) instead of separate
     set_actor_label / set_actor_folder calls. New actor is selected by default.
@@ -158,7 +158,7 @@ def spawn_actor(
 
 @plugin_mcp_tool("uefn")
 def delete_actors(actor_paths: list[str], pretty: bool = False) -> str:
-    """Delete named Outliner actors. Call only when the user asked to delete them."""
+    """Delete named Outliner actors. Never call it unless the user asked to delete them."""
     result = send_command("delete_actors", {"actor_paths": actor_paths})
     return tool_json(result, pretty=pretty)
 
@@ -171,7 +171,7 @@ def set_actor_transform(
     scale: Optional[list[float]] = None,
     pretty: bool = False,
 ) -> str:
-    """Set an actor location, rotation, and/or scale.
+    """Move, rotate or scale an actor. Never scales Creative devices (resize with SetDeviceProperty).
 
     Scale is for props, meshes, and custom assets only. Fortnite Creative
     devices (buttons, triggers, volumes, barriers, pads, granters, Island
@@ -194,14 +194,19 @@ def set_actor_transform(
 
 @plugin_mcp_tool("uefn")
 def get_actor_properties(actor_path: str, properties: list[str], pretty: bool = False) -> str:
-    """Read specific properties from an actor. See uefn_editor_python_hints for Fort* quirks."""
+    """Read named properties from a placed actor. Not for Verse @editables (use get_verse_editables).
+
+    See uefn_editor_python_hints for Fort* quirks.
+    """
     result = send_command("get_actor_properties", {"actor_path": actor_path, "properties": properties})
     return tool_json(result, pretty=pretty)
 
 
 @plugin_mcp_tool("uefn")
 def set_actor_properties(actor_path: str, properties: dict[str, Any], pretty: bool = False) -> str:
-    """Change property values on an existing actor such as a light, mesh or prop (set_editor_property).
+    """Change property values on a placed light, mesh or prop. Not for Verse @editables or device settings.
+
+    Uses set_editor_property.
 
     See uefn_editor_python_hints for Fort* quirks.
     """
@@ -211,13 +216,13 @@ def set_actor_properties(actor_path: str, properties: dict[str, Any], pretty: bo
 
 @plugin_mcp_tool("uefn")
 def select_actors(actor_paths: list[str], add_to_selection: bool = False, pretty: bool = False) -> str:
-    """Select actors in the viewport."""
+    """Select actors in the viewport. Never moves or edits them."""
     result = send_command("select_actors", {"actor_paths": actor_paths, "add_to_selection": add_to_selection})
     return tool_json(result, pretty=pretty)
 
 
 @plugin_mcp_tool("uefn")
 def focus_selected(pretty: bool = False) -> str:
-    """Focus viewport on selected actors."""
+    """Point the viewport camera at the selected actors. Does not change the selection."""
     result = send_command("focus_selected")
     return tool_json(result, pretty=pretty)

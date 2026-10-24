@@ -261,32 +261,39 @@ def client_move(key: str = "W", seconds: float = 1.5) -> dict[str, Any]:
 
 @plugin_mcp_tool("uefn")
 def fortnite_client_status(pretty: bool = False) -> str:
-    """Find the real Fortnite client a UEFN session launched (window titled "Fortnite",
-    never the editor or launcher) and whether it has loaded into play mode. No input."""
+    """Find the Fortnite client a UEFN session launched and whether it is in play mode. Never sends input.
+
+    The window titled "Fortnite", never the editor or launcher.
+    """
     return tool_json(client_status(), pretty=pretty)
 
 
 @plugin_mcp_tool("uefn")
 def fortnite_client_wait(timeout: float = 120.0, pretty: bool = False) -> str:
-    """Wait (max 120 s) until the Fortnite client is open AND has loaded into play mode
-    (from its log, plus 15 s to settle) — without focusing it or sending input. Then
-    fortnite_client_capture to check the island with your own eyes."""
+    """Wait (max 120 s) until the Fortnite client has loaded into play mode. Never focuses it or sends input.
+
+    Read from its log, plus 15 s to settle. Then fortnite_client_capture to check the
+    island with your own eyes.
+    """
     return tool_json(client_wait(timeout), pretty=pretty)
 
 
 @plugin_mcp_tool("uefn")
 def fortnite_client_capture(pretty: bool = False) -> str:
-    """Bring the loaded Fortnite client to the front and capture it into this chat.
-    Refuses while it is still loading. Confirm the island, a controllable player and no
-    menu or loading screen before moving."""
+    """Bring the loaded Fortnite client to the front and capture it into this chat. Not while it loads.
+
+    Confirm the island, a controllable player and no menu or loading screen before moving.
+    """
     return tool_json(client_capture(), pretty=pretty)
 
 
 @plugin_mcp_tool("uefn")
 def fortnite_client_move(key: str = "W", seconds: float = 1.5, pretty: bool = False) -> str:
-    """Hold W/A/S/D in the loaded Fortnite client for 0.1–3 s (always released, stops if
-    the client loses focus) with before/after captures. input_sent is not proof: prove
-    the move from the two images against fixed landmarks, else report FAIL."""
+    """Hold W/A/S/D in the loaded Fortnite client for 0.1–3 s, with before/after captures. Never left held.
+
+    Always released; stops if the client loses focus. input_sent is not proof: prove
+    the move from the two images against fixed landmarks, else report FAIL.
+    """
     return tool_json(client_move(key, seconds), pretty=pretty)
 
 

@@ -83,7 +83,7 @@ def _command_catalog() -> dict:
 
 @plugin_mcp_tool("uefn")
 def ai_generate_python(goal: str, run: bool = False, topic: str = "all", model: str = "", pretty: bool = False) -> str:
-    """Generate editor-side Python for a goal (and optionally execute it).
+    """Generate editor-side Python for a goal (run=true executes it). Never for placing or layout.
 
     Injects the uefn_editor_python_hints for the given topic so the generated code
     avoids common reflection mistakes. Requires ANTHROPIC_API_KEY.
