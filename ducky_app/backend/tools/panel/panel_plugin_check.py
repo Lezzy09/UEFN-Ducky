@@ -12,6 +12,8 @@
   agents' calls and other plugins untouched), so nothing it does reaches the user's
   data or hides it from anyone. An AI plugin the user
   hasn't confirmed answers ``needs_trust`` like turning it on does; it never runs.
+  A draft linked to a repo (``repo=`` once, remembered) is first synced from the
+  repo's working tree, so the test never runs on files that fell behind.
 
 The recorders (:func:`record_tool_error`, :func:`record_node_error`,
 :func:`record_panel_error`) are what the MCP server, the workflow runner and the
@@ -24,11 +26,13 @@ import asyncio
 import contextvars
 import inspect
 import json
+import subprocess
 import tempfile
 import threading
 import time
 from collections import Counter
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from backend.server import mcp
@@ -198,6 +202,93 @@ def plugin_errors(plugin_id: str, *, since: float = 0.0, limit: int = 50) -> dic
     rows.sort(key=lambda r: r["ts"], reverse=True)
     rows = rows[:limit]
     return {"ok": True, "id": pid, "since": since, "errors": rows, "counts": dict(Counter(r["source"] for r in rows))}
+
+
+# --------------------------------------------------------------------------- repo sync
+
+_LINKS = ".repo_links.json"  # beside the drafts: a file, so draft listings skip it
+
+
+def _links_path() -> Path:
+    from backend.uefn_plugins.store import appdata_ai_plugins_dir
+
+    return appdata_ai_plugins_dir() / _LINKS
+
+
+def _links() -> dict[str, str]:
+    try:
+        data = json.loads(_links_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+
+def linked_repo(plugin_id: str) -> str:
+    """The repo folder a draft was last tested from ("" when none)."""
+    return _links().get(str(plugin_id or "").strip().lower(), "")
+
+
+def _repo_files(repo: Path) -> list[str]:
+    """The repo's working-tree files (tracked + untracked, .gitignore respected), as
+    posix paths; a folder that isn't a git repo is walked."""
+    from backend.tools.panel.panel_ai_plugins import _SECRET_SUFFIXES, _SKIP_DIR_NAMES
+
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            cwd=repo, capture_output=True, timeout=30, check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout.decode("utf-8", "replace")
+        rels = [r for r in out.split("\0") if r]
+    except (OSError, subprocess.SubprocessError):
+        rels = [p.relative_to(repo).as_posix() for p in repo.rglob("*") if p.is_file()]
+    return sorted(
+        r for r in rels
+        if not any(part in _SKIP_DIR_NAMES for part in r.split("/"))
+        and (Path(r).suffix or Path(r).name).lower() not in _SECRET_SUFFIXES  # ".env" has no suffix
+        and (repo / r).is_file()  # deleted in the working tree but still tracked
+    )
+
+
+def sync_from_repo(plugin_id: str, repo: str = "") -> dict[str, Any]:
+    """Copy every repo file whose bytes differ into the draft (``repo``: a folder with
+    this plugin's plugin.json; empty = the linked one). Draft files the repo doesn't
+    have are listed, never deleted. A given ``repo`` becomes the link."""
+    from backend.tools.panel.panel_ai_plugins import _draft_root
+    from backend.uefn_plugins.store import normalize_plugin_id
+
+    pid = normalize_plugin_id(plugin_id)
+    raw = str(repo or "").strip() or linked_repo(pid)
+    if not raw:
+        return {"ok": True, "repo": "", "synced": []}
+    src = Path(raw).expanduser().resolve()
+    try:
+        theirs = json.loads((src / "plugin.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"ok": False, "error": f"no plugin.json in the repo folder {src}"}
+    if str((theirs or {}).get("id") or "").strip().lower() != pid:
+        return {"ok": False, "error": f"{src} holds plugin {theirs.get('id')!r}, not {pid!r}"}
+    draft = _draft_root(pid)
+    files = _repo_files(src)
+    synced: list[str] = []
+    for rel in files:
+        data = (src / rel).read_bytes()
+        dst = draft / rel
+        if dst.is_file() and dst.read_bytes() == data:
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(data)
+        synced.append(rel)
+    have = set(files)
+    draft_only = sorted(
+        p.relative_to(draft).as_posix() for p in draft.rglob("*")
+        if p.is_file() and "__pycache__" not in p.parts and p.relative_to(draft).as_posix() not in have
+    )
+    if str(repo or "").strip() and linked_repo(pid) != str(src):
+        links = {**_links(), pid: str(src)}
+        _links_path().parent.mkdir(parents=True, exist_ok=True)
+        _links_path().write_text(json.dumps(links, indent=2), encoding="utf-8")
+    return {"ok": True, "repo": str(src), "synced": synced, **({"draft_only": draft_only} if draft_only else {})}
 
 
 # --------------------------------------------------------------------------- test run
@@ -420,8 +511,9 @@ def _check_panels(pid: str, manifest: dict[str, Any], started: float, checks: li
             checks.append({"check": f"panel {panel_id}", "status": "pass", "detail": "opened with no errors"})
 
 
-def test_plugin(plugin_id: str) -> dict[str, Any]:
-    """Install the draft, then check its tools, nodes, panels and UI files."""
+def test_plugin(plugin_id: str, repo: str = "") -> dict[str, Any]:
+    """Sync the draft from its repo (if linked), install it, then check its tools,
+    nodes, panels and UI files."""
     from backend.tools.panel.panel_ai_plugins import _draft_root, install_ai_plugin
     from backend.uefn_plugins import scopes
     from backend.uefn_plugins.host import is_plugin_enabled, set_active_uefn_agent_plugin_ids, wait_plugin_toggles
@@ -434,6 +526,15 @@ def test_plugin(plugin_id: str) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
     started = time.time()
     checks: list[dict[str, Any]] = []
+    synced = sync_from_repo(pid, repo)
+    if not synced.get("ok"):
+        return {"ok": False, "id": pid, "error": synced["error"]}
+    if synced["repo"]:
+        n = len(synced["synced"])
+        checks.append({"check": "repo sync", "status": "pass",
+                       "detail": f"synced {n} file{'' if n == 1 else 's'} from {Path(synced['repo']).name} before testing",
+                       "files": synced["synced"][:100],
+                       **({"draft_only": synced["draft_only"][:50]} if synced.get("draft_only") else {})})
     root = _draft_root(pid)
     try:
         manifest = json.loads((root / "plugin.json").read_text(encoding="utf-8"))
@@ -615,8 +716,11 @@ def ducky_plugin_errors(id: str, since: float = 0, limit: int = 50, pretty: bool
 
 
 @mcp.tool()
-def ducky_plugin_test(id: str, pretty: bool = False) -> str:
-    """Test an AI plugin draft end to end: validate + install it (same path as
+def ducky_plugin_test(id: str, repo: str = "", pretty: bool = False) -> str:
+    """Test an AI plugin draft end to end. `repo`: the plugin's repo folder (its
+    plugin.json at the root); given once it is remembered, and every test first copies
+    the repo's working-tree files that differ into the draft (the "repo sync" row lists
+    them), so never copy files into the draft by hand. Then validate + install it (same path as
     ducky_plugin_install), call each of its MCP tools with safe sample input (tools in
     agent.tools.destructive_tools are skipped), run each workflow node it registers with
     a minimal ctx, open each of its panels and collect the errors that showed up, and
@@ -630,4 +734,4 @@ def ducky_plugin_test(id: str, pretty: bool = False) -> str:
     finished work; the others check their own work with ducky_plugin_validate and live
     calls, in parallel, never taking turns.
     """
-    return tool_json(test_plugin(id), pretty=pretty)
+    return tool_json(test_plugin(id, repo=repo), pretty=pretty)

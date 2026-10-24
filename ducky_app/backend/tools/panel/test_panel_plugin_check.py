@@ -99,3 +99,38 @@ def test_a_waiting_node_gets_a_short_timeout_in_its_config(quick, monkeypatch: p
 
     assert seen == [{"pattern": "arrived", "timeout_sec": check._WAIT_TEST_S}]
     assert checks[0]["status"] == "pass" and "waits by design" in checks[0]["detail"], checks
+
+
+def test_the_test_syncs_the_draft_from_its_repo_first(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    from backend.tools.panel import panel_ai_plugins
+    from backend.uefn_plugins import store
+
+    drafts = tmp_path / "drafts"
+    monkeypatch.setattr(store, "appdata_ai_plugins_dir", lambda: drafts)
+    monkeypatch.setattr(panel_ai_plugins, "install_ai_plugin", lambda pid: {"ok": False, "error": "stop here"})
+    repo = tmp_path / "uefn-plugin-demo"
+    (repo / "backend").mkdir(parents=True)
+    (repo / "plugin.json").write_text(json.dumps({"id": "demo"}), encoding="utf-8")
+    (repo / "backend" / "drive.py").write_text("V = 1\n", encoding="utf-8")
+    (repo / ".env").write_text("SECRET=1", encoding="utf-8")
+    draft = drafts / "demo"
+    (draft / "ui").mkdir(parents=True)
+    (draft / "plugin.json").write_text(json.dumps({"id": "demo"}), encoding="utf-8")
+    (draft / "ui" / "old.html").write_text("old shell", encoding="utf-8")
+
+    first = check.test_plugin("demo", repo=str(repo))
+    row = next(c for c in first["checks"] if c["check"] == "repo sync")
+    assert row["files"] == ["backend/drive.py"] and row["draft_only"] == ["ui/old.html"], row
+    assert "synced 1 file from uefn-plugin-demo" in row["detail"]
+    assert not (draft / ".env").exists()
+
+    # The link is remembered: a changed repo file reaches the draft on the next plain run.
+    (repo / "backend" / "drive.py").write_text("V = 2\n", encoding="utf-8")
+    second = check.test_plugin("demo")
+    assert (draft / "backend" / "drive.py").read_text(encoding="utf-8") == "V = 2\n"
+    assert next(c for c in second["checks"] if c["check"] == "repo sync")["files"] == ["backend/drive.py"]
+
+    (repo / "plugin.json").write_text(json.dumps({"id": "other"}), encoding="utf-8")
+    assert check.test_plugin("demo")["ok"] is False
