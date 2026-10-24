@@ -979,6 +979,8 @@ export interface ChatMessage {
   author?: MessageAuthorDto;
   /** Walkthrough ids this message offers as Start buttons (the welcome ducky). */
   tours?: string[];
+  /** A user message sent into a running turn (Send now): it sits inside that turn, not before it. */
+  steered?: boolean;
 }
 
 export interface VideoFrameDto {
@@ -2056,8 +2058,11 @@ export interface AgentEvent {
     | "open_url"
     | "model_needed"
     | "model_adopted"
-    | "provider_not_connected";
+    | "provider_not_connected"
+    | "user_steered";
   text?: string;
+  /** user_steered: id of the queued prompt the running turn took in. */
+  steer_id?: string;
   /** assistant_done: a group note (a member's work posted to its group), not the end of a turn. */
   note?: boolean;
   /** ui_rpc_request: which panel method to run and its params. */
@@ -4246,6 +4251,8 @@ export interface PanelApi {
   restore_context(conv_id: string, segments: string[], mode?: AgentMode, model?: string): Promise<ContextControlResult>;
   get_session_files(conv_id: string): Promise<SessionFile[]>;
   cancel_agent(conv_id?: string): Promise<boolean>;
+  /** Send now while a turn runs: it takes the message at its next tool call. ok false = no turn runs. */
+  steer_message?(conv_id: string, steer_id: string, text: string): Promise<{ ok?: boolean }>;
   /** Wait until the agent thread for this chat is gone (e.g. after Stop). */
   wait_for_agent_idle?(conv_id: string, timeout?: number): Promise<boolean>;
   report_ui_perf(entries: Array<Record<string, unknown>>): Promise<boolean>;

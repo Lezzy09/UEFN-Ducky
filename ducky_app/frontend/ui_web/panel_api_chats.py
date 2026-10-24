@@ -1843,6 +1843,13 @@ class PanelApiChatsMixin:
         _pa.cancel_agent(conv_id or None)
         return True
 
+    def steer_message(self, conv_id: str, steer_id: str, text: str) -> dict[str, Any]:
+        """Send now on a queued message: the running turn takes it at its next tool call
+        (frontend/ui_web/steer.py). ok False: no turn runs, send it as a normal message."""
+        from frontend.ui_web import steer
+
+        return {"ok": steer.post(conv_id, steer_id, text)}
+
     def list_running_agents(self) -> list[str]:
         from frontend.ui_web.group_orchestrator import list_group_running_ids
 

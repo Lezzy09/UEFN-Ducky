@@ -1,5 +1,6 @@
 import type { AgentEvent } from "../../types/panel";
 import { getCachedChatMessages, setCachedChatMessages, type CachedChatMessagesState } from "../chatMessagesCache";
+import { getPromptQueue, removePrompt, setPromptQueue } from "../promptQueue";
 import { subscribeAgentEvents } from "../useAgentEventBus";
 import { chatRunReducer, type RunState } from "./chatRunReducer";
 
@@ -33,6 +34,12 @@ export function snapshotOf(run: RunState): CachedChatMessagesState {
 
 function onEvent(event: AgentEvent): void {
   const chatId = event.conv_id;
+  // The running turn took a queued prompt (Send now): it must not run again as the next turn,
+  // whether or not this chat's pane is on screen.
+  if (chatId && event.type === "user_steered" && event.steer_id) {
+    const queue = getPromptQueue(chatId);
+    if (queue.some((p) => p.id === event.steer_id)) setPromptQueue(chatId, removePrompt(queue, event.steer_id));
+  }
   if (!chatId || mounted.has(chatId)) return;
   const run = getCachedChatMessages(chatId)?.run;
   if (!run) return;

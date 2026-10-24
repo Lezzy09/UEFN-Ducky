@@ -923,6 +923,12 @@ def start_panel_ui_server(dist_root: Path) -> str:
                             "blocked": ui_rpc.question_gate(conv_id, _RPC_HANDLER_WAIT_S)
                         }})
                         return
+                    if method == "steer_take":
+                        from frontend.ui_web import steer
+
+                        conv_id = str(params.get("conv_id") or "").strip()
+                        self._send_json(200, {"result": {"texts": steer.take(conv_id)}})
+                        return
                     if method == "agent_runs":
                         # The MCP bridge asks which chats run here (and may stop one).
                         from frontend.ui_web.agent_modes import run_state

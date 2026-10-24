@@ -8,6 +8,27 @@ import inspect
 import anyio
 
 
+def _with_steer(result, texts: list[str]):
+    """Hand the person's mid-turn messages to the agent with this tool's result."""
+    import json
+
+    from mcp.types import TextContent
+
+    note = TextContent(type="text", text=(
+        "[The person just sent this while you were working. Take it into account now; it may "
+        "change what you do next. Keep the turn going unless it asks you to stop.]\n" + "\n\n".join(texts)
+    ))
+    if hasattr(result, "content"):  # a protocol CallToolResult
+        result.content = [*result.content, note]
+        return result
+    if isinstance(result, tuple) and len(result) == 2:
+        content, structured = result
+        return [*content, note], structured
+    if isinstance(result, dict):  # structured only: keep it, add its text form
+        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False)), note], result
+    return [*result, note]
+
+
 def _returns_str(fn) -> bool:
     try:
         annotation = inspect.signature(fn).return_annotation
@@ -138,6 +159,12 @@ class ProtectedFastMCP(FastMCP):
             import logging
 
             logging.getLogger(__name__).exception("Could not persist verification evidence")
+        if ctx is not None and ctx.conv_id:
+            from backend.panel.rpc import take_steer_messages
+
+            texts = await asyncio.to_thread(take_steer_messages, ctx.conv_id)
+            if texts:
+                result = _with_steer(result, texts)
         return result
 
 

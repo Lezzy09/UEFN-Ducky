@@ -627,3 +627,37 @@ describe("chatRunReducer — status / thinking footer", () => {
     expect(withThink.statusAuthor).toBeNull();
   });
 });
+
+describe("chatRunReducer — Send now into a running turn", () => {
+  it("user_steered commits the stream, adds the user bubble and keeps running", () => {
+    const s = run(
+      initialRunState,
+      { type: "send", text: "build it" },
+      { type: "sendAccepted", runId: "r1" },
+      ev({ type: "text_delta", text: "Working on" }),
+      ev({ type: "user_steered", text: "use blue too", steer_id: "q1", run_id: "r1" }),
+      ev({ type: "text_delta", text: "Blue it is" }),
+    );
+    expect(s.status).toBe("running");
+    expect(isRunActive(s)).toBe(true);
+    expect(texts(s)).toEqual(["build it", "Working on", "use blue too"]);
+    expect(s.messages.at(-1)?.steered).toBe(true);
+    expect(s.stream).toBe("Blue it is");
+    expect(s.messages.some((m) => m.error)).toBe(false);
+  });
+
+  it("a live reload keeps the turn's prompt as its anchor, not the steered row", () => {
+    const live = run(
+      initialRunState,
+      { type: "send", text: "build it" },
+      { type: "sendAccepted", runId: "r1" },
+      ev({ type: "user_steered", text: "use blue too" }),
+    );
+    const rows: ChatMessage[] = [
+      { id: 0, role: "user", text: "build it" },
+      { id: 1, role: "user", text: "use blue too", steered: true },
+    ];
+    const s = chatRunReducer(live, { type: "loaded", rows });
+    expect(texts(s)).toEqual(["build it", "use blue too"]);
+  });
+});

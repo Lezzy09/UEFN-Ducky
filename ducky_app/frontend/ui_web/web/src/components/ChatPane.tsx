@@ -1295,6 +1295,11 @@ export function ChatPane({
       });
       if (!item) return;
       enqueuePrompt(chat.id, item);
+      // Text sent mid-turn goes into that turn at its next tool call (it stays queued
+      // until then, and runs as the next turn if this one ends first).
+      if (agentRunning && item.text && !item.attachments.length) {
+        void getApi()?.steer_message?.(chat.id, item.id, item.text);
+      }
       setInputText("");
       if (!overrideText) clearAttachments();
       return;
@@ -1637,6 +1642,8 @@ export function ChatPane({
           onEdit={(id) => {
             const item = takePromptForEdit(chat.id, id);
             if (!item) return;
+            // Back in the composer: the running turn must not take the old text any more.
+            if (agentRunning) void getApi()?.steer_message?.(chat.id, id, "");
             setInputText((draft) =>
               item.text && draft.trim() ? `${item.text}\n\n${draft}` : item.text || draft,
             );
@@ -1647,11 +1654,16 @@ export function ChatPane({
             requestAnimationFrame(() => textareaRef.current?.focus());
           }}
           onSendNow={(id) => {
-            // Promote this prompt, then stop the live turn so the idle drain
-            // picks it up next — same end state as Stop, without a second click.
+            // Promote this prompt. A running turn takes it in at its next tool call
+            // (user_steered drops it from the queue) and keeps going — never Stop and
+            // re-run. If the turn ends first, the idle drain sends it as the next turn.
             setPromptQueue(chat.id, movePromptToFront(promptQueue, id));
             if (agentRunning) {
-              handleStop();
+              const item = promptQueue.find((p) => p.id === id);
+              // Pictures/files need a turn of their own; they run right after this one.
+              if (item?.text && !item.attachments.length) {
+                void getApi()?.steer_message?.(chat.id, item.id, item.text);
+              }
               return;
             }
             // Idle: force-drain this prompt (clear a stuck lock if needed).
@@ -1659,7 +1671,10 @@ export function ChatPane({
             const next = takeNextPromptForDrain(chat.id);
             if (next) dispatchSend(next.text, next.attachments, next.mode, next.model, next.codingAgent);
           }}
-          onDelete={(id) => setPromptQueue(chat.id, removePrompt(promptQueue, id))}
+          onDelete={(id) => {
+            setPromptQueue(chat.id, removePrompt(promptQueue, id));
+            if (agentRunning) void getApi()?.steer_message?.(chat.id, id, "");
+          }}
         />
         <ChatWorkflowRunCard chatId={chat.id} />
         {chatPlan != null && !planAllDone ? (

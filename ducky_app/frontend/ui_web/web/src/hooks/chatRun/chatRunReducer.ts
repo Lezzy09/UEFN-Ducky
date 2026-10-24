@@ -128,7 +128,8 @@ export function mergeCommitted(existing: ChatMessage[], incoming: ChatMessage[])
 
   let lastUser = -1;
   for (let i = incoming.length - 1; i >= 0; i--) {
-    if (incoming[i].role === "user") {
+    // A message sent into the turn (Send now) belongs to that turn, not its prompt.
+    if (incoming[i].role === "user" && !incoming[i].steered) {
       lastUser = i;
       break;
     }
@@ -318,6 +319,25 @@ function applyAgentEvent(state: RunState, event: AgentEvent): RunState {
         stream: "",
         thinking: "",
         statusText: "",
+        idSeq: seq,
+        hasNewBelow: markNewBelow(state),
+      });
+    }
+
+    case "user_steered": {
+      // The person's Send now, taken in by the running turn: their bubble goes where the
+      // turn is now (after what streamed so far) and the run keeps going.
+      const text = (event.text ?? "").trim();
+      if (!text) return state;
+      const rows: ChatMessage[] = [];
+      let seq = state.idSeq;
+      if (state.thinking.trim()) rows.push({ id: optId(seq++), role: "assistant", text: "", thinking: state.thinking });
+      if (state.stream.trim()) rows.push({ id: optId(seq++), role: "assistant", text: state.stream });
+      rows.push({ id: optId(seq++), role: "user", text, steered: true });
+      return reset(state, {
+        messages: [...state.messages, ...rows],
+        stream: "",
+        thinking: "",
         idSeq: seq,
         hasNewBelow: markNewBelow(state),
       });

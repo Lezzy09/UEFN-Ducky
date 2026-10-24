@@ -470,6 +470,11 @@ class _TurnCheckpoint:
             else:
                 self.blocks.append({"type": "thinking", "text": text})
             # ponytail: keep tokens in RAM. Disk flush during generate stalls Ollama/MCP.
+        elif t == "user_steered" and text:
+            # The person's message, handed over with the last tool's result (steer.py).
+            after = next((b.get("id") for b in reversed(self.blocks) if b.get("type") == "tool_call"), "")
+            self.blocks.append({"type": "user", "text": text, "after": str(after or "")})
+            self.flush(force=True)
         elif t in ("text_delta", "text") and text:
             if self.blocks and self.blocks[-1].get("type") == "text":
                 self.blocks[-1]["text"] = (self.blocks[-1].get("text") or "") + text
@@ -660,6 +665,20 @@ def _emit_assistant(
         "status": status,
         **mode_metadata,
     }
+
+
+def merge_steered_blocks(final: list[dict[str, Any]], live: list[dict[str, Any]]) -> None:
+    """Put the person's mid-turn messages into the adapter's final blocks, after the tool
+    call that handed them over (the adapter's own blocks never carry them)."""
+    for block in live:
+        if block.get("type") != "user":
+            continue
+        after = block.get("after") or ""
+        at = next((i + 1 for i, b in enumerate(final)
+                   if after and b.get("type") == "tool_call" and b.get("id") == after), len(final))
+        while at < len(final) and final[at].get("type") == "user":
+            at += 1
+        final.insert(at, dict(block))
 
 
 def run_coding_agent_message(
@@ -876,6 +895,9 @@ def _run_coding_agent_message(
 
     file_changes = TurnFileChanges(cwd, run_ctx, build_journal())
     push = file_changes.wrap(push)
+    from frontend.ui_web import steer
+
+    steer.bind_run(conv.id, push)
     from frontend.ui_web.live_agent_runs import set_live_writer
 
     # Native Edit/Write hits disk outside the writer pipeline. The watcher
@@ -930,6 +952,8 @@ def _run_coding_agent_message(
         if not isinstance(result, CodingAgentLaunchResult):
             raise ValueError("Coding agent returned an invalid launch result")
         file_changes.enrich_blocks(result.blocks)
+        if result.blocks is not None:
+            merge_steered_blocks(result.blocks, ckpt.blocks)
         result.requested_mode = mode
         # Compatibility inference only, not proof of enforced permissions.
         # Restricted requests and nonempty mismatches never receive a fallback.
@@ -956,6 +980,7 @@ def _run_coding_agent_message(
         ckpt.flush(error="Interrupted", force=True)
         raise
     finally:
+        steer.end_run(conv.id)
         file_changes.close("done" if "result" in locals() and getattr(result, "ok", False) else "error")
         for path in (mcp_path, prompt_path):
             try:

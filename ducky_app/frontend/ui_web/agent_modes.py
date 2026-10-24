@@ -1529,6 +1529,10 @@ def _make_broker_tap(push: PushFn, conv_id: str) -> PushFn:
             if rid in seen:
                 return
             seen.add(rid)
+        # Messages no tool call picked up: the composer's queue sends them as the next turn.
+        from frontend.ui_web import steer
+
+        steer.end_run(conv_id)
         try:
             from backend.agent.a2a_broker import on_agent_stopped, automatic_work_blocked, stats
 

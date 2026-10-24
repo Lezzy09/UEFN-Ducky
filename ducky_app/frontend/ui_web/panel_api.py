@@ -561,6 +561,13 @@ def _messages_to_ui(conv, project_root: str | None = None, *, live: bool = False
                         out.append({"id": i, "role": "assistant", "text": seg})
                         i += 1
                     continue
+                if btype == "user":
+                    # A message the person sent into this turn (steer.py), where it landed.
+                    seg = str(block.get("text") or "")
+                    if seg.strip():
+                        out.append({"id": i, "role": "user", "text": seg, "steered": True})
+                        i += 1
+                    continue
                 if btype != "tool_call":
                     continue
                 name = block.get("name", "?")

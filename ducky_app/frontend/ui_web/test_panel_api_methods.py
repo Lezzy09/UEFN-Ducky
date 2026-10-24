@@ -521,6 +521,7 @@ _PUBLIC_METHODS = frozenset({
     'starter_setup_status',
     'stage_video_attachment',
     'stat_project_file',
+    'steer_message',
     'stop_verse_diagnostics_scan',
     'stop_verse_lsp',
     'terminal_approve_command',

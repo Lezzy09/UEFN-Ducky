@@ -91,6 +91,13 @@ def panel_rpc(method: str, params: dict[str, Any] | None = None, *, timeout: flo
     return result if isinstance(result, dict) else resp
 
 
+def take_steer_messages(conv_id: str) -> list[str]:
+    """Messages the person sent into this chat's running turn (frontend/ui_web/steer.py)."""
+    response = panel_rpc("steer_take", {"conv_id": conv_id}, timeout=5.0)
+    texts = response.get("texts")
+    return [str(t) for t in texts if str(t).strip()] if isinstance(texts, list) else []
+
+
 def wait_for_question_answers(conv_id: str) -> None:
     """Check the owning panel, including when this bridge is a separate process."""
     while True:
