@@ -32,6 +32,9 @@ class _PanelTerminalManager:
         return result if isinstance(result, dict) else {"ok": False, "error": "Invalid terminal result"}
 
     def spawn(self, **kwargs) -> dict:
+        # ponytail: the window's terminal_spawn has no from_agent yet, so a chat-less
+        # terminal opened from here isn't run_owned; add it there to close those too.
+        kwargs.pop("from_agent", None)
         return self._call("terminal_spawn", {**kwargs, "cwd": kwargs.get("cwd") or ""})
 
     def get_session(self, session_id: str):
@@ -98,7 +101,7 @@ def ducky_terminal_open(
     mgr = _terminal_manager()
     result = mgr.spawn(
         shell=shell, cwd=cwd or None, title=title, push_open=True,
-        conv_id=_terminal_chat(conv_id), reuse_idle=True, activate=False,
+        conv_id=_terminal_chat(conv_id), reuse_idle=True, activate=False, from_agent=True,
     )
     return tool_json(result, pretty=pretty)
 
@@ -153,7 +156,11 @@ def early_return_hint(result: dict) -> dict:
 
 
 def _terminal_chat(conv_id: str) -> str:
-    """The chat running this tool: the run's own (bound) chat, else the one it named."""
+    """The chat running this tool: the run's own (bound) chat, else the one it named, else
+    the dedicated tool server's chat (DUCKY_CONV_ID). Empty: no identity at all, and the
+    manager treats the terminal as run-owned (from_agent)."""
+    import os
+
     try:
         from backend.workspace import identity as run_identity
 
@@ -163,7 +170,7 @@ def _terminal_chat(conv_id: str) -> str:
             return bound
     except Exception:
         pass
-    return (conv_id or "").strip()
+    return (conv_id or "").strip() or (os.environ.get("DUCKY_CONV_ID") or "").strip()
 
 
 @mcp.tool()

@@ -45,6 +45,49 @@ def test_a_finished_run_is_unchanged(monkeypatch) -> None:
     assert out == done
 
 
+class _Spawner:
+    def __init__(self) -> None:
+        self.kw: dict = {}
+
+    def spawn(self, **kw) -> dict:
+        self.kw = kw
+        return {"ok": True, "session_id": "t9"}
+
+
+def _open(monkeypatch, bound: str, env: str = "") -> dict:
+    from types import SimpleNamespace
+
+    mgr = _Spawner()
+    monkeypatch.setattr(term, "_terminal_manager", lambda: mgr)
+    monkeypatch.setattr("backend.workspace.identity.current",
+                        lambda: SimpleNamespace(conv_id=bound) if bound else None)
+    if env:
+        monkeypatch.setenv("DUCKY_CONV_ID", env)
+    else:
+        monkeypatch.delenv("DUCKY_CONV_ID", raising=False)
+    term.ducky_terminal_open(shell="powershell")
+    return mgr.kw
+
+
+def test_open_without_conv_id_takes_the_callers_chat(monkeypatch) -> None:
+    kw = _open(monkeypatch, "chat-7")
+    assert kw["conv_id"] == "chat-7" and kw["from_agent"] is True
+    assert _open(monkeypatch, "", env="chat-8")["conv_id"] == "chat-8"  # dedicated tool server
+
+
+def test_open_with_no_identity_owns_nothing_and_is_run_owned(monkeypatch) -> None:
+    kw = _open(monkeypatch, "")
+    assert kw["conv_id"] == "" and kw["from_agent"] is True  # the manager marks it run_owned
+
+
+def test_the_window_proxy_drops_from_agent(monkeypatch) -> None:
+    sent = []
+    proxy = term._PanelTerminalManager()
+    monkeypatch.setattr(proxy, "_call", lambda method, args, timeout=30.0: sent.append(args) or {"ok": True})
+    proxy.spawn(shell="bash", cwd=None, conv_id="c", from_agent=True)
+    assert "from_agent" not in sent[0] and sent[0]["conv_id"] == "c"
+
+
 def test_sandbox_run_carries_the_early_return(monkeypatch) -> None:
     from backend.tools.core import sandbox_tools
 
