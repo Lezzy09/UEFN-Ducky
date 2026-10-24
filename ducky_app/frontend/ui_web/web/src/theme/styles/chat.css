@@ -8079,7 +8079,9 @@
   margin: 0;
 }
 
-.virtual-chat-message-list-root .tool-execution-card-wrap > * + * {
+.virtual-chat-message-list-root .tool-execution-card-wrap > * + *,
+.virtual-chat-message-list-root .tool-execution-card-wrap > * + .tool-file-edit-diff,
+.virtual-chat-message-list-root .tool-execution-card-wrap > * + .tool-execution-card-shell {
   margin-top: var(--chat-block-gap);
 }
 
