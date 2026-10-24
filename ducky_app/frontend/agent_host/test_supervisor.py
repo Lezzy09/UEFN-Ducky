@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import threading
 import time
+import uuid
 from pathlib import Path
 
 import psutil
 import pytest
 
-from frontend.agent_host import supervisor
+from frontend.agent_host import main as host_main
+from frontend.agent_host import protocol, supervisor
 
 _DUCKY_APP = str(Path(__file__).resolve().parents[2])
 _FAKE_APP = """
@@ -66,6 +70,81 @@ def test_killing_the_app_kills_its_hosts(tmp_path):
     finally:
         app.kill()
         app.wait(10)
+
+
+class _Recorder:
+    closed = False
+
+    def __init__(self):
+        self.sent = []
+
+    def send(self, op, **fields):
+        self.sent.append((op, fields))
+        return True
+
+
+class _Proc:
+    pid = 0
+
+    def alive(self):
+        return True
+
+
+def test_set_visible_tells_each_host_only_its_chats(tmp_path):
+    sup = supervisor.Supervisor(log_dir=tmp_path, reap_s=3600)
+    a, b = (supervisor.Host(i, f"p{i}", b"k", _Proc()) for i in range(2))
+    for host, convs in ((a, {"c1", "c2"}), (b, {"c3"})):
+        host.channel = _Recorder()
+        host.agents = set(convs)
+        sup._hosts[host.slot] = host
+    sup.set_visible(["c2", "c3", "elsewhere"])
+    assert a.channel.sent == [("visible_chats", {"conv_ids": ["c2"]})]
+    assert b.channel.sent == [("visible_chats", {"conv_ids": ["c3"]})]
+    sup.assign("c4")  # joins a host with a free seat and that host hears its list again
+    assert any(h.channel.sent[-1] == ("visible_chats", {"conv_ids": ["c2"] if h is a else ["c3"]}) for h in (a, b))
+    sup._stopped.set()
+
+
+def test_sixteen_chats_one_visible_stay_under_26_events_a_second():
+    tag = f"t-{uuid.uuid4().hex[:8]}"
+    key = os.urandom(16)
+    listener = protocol.listen(tag, key)
+    frames: list[tuple[float, dict]] = []
+    done = threading.Event()
+    host = threading.Thread(target=host_main.serve, args=(protocol.pipe_name(tag), key, done), daemon=True)
+    host.start()
+    conn = listener.accept()
+    listener.close()
+    app = protocol.Channel(conn, send_ops=supervisor.APP_OPS, recv_ops=protocol.HOST_OPS,
+                           on_frame=lambda f: frames.append((time.monotonic(), f))).start()
+    try:
+        deadline = time.monotonic() + 5
+        while host_main._batcher is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        app.send("visible_chats", conv_ids=["c0"])
+        time.sleep(0.2)
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 3.0:
+            for i in range(16):
+                host_main.feed({"conv_id": f"c{i}", "run_id": f"r{i}", "type": "text_delta", "text": "tok "})
+            time.sleep(0.002)
+        time.sleep(0.2)
+        window = [f for ts, f in frames if t0 + 0.5 <= ts < t0 + 2.5 and f["op"] == "event"]
+        assert len(window) / 2.0 <= 26, len(window)
+        texts = {f["conv_id"] for f in window if any(e["type"] == "text_delta" for e in f["events"])}
+        assert texts == {"c0"}  # hidden chats only get status lines
+
+        app.send("visible_chats", conv_ids=["c0", "c5"])  # the person opened c5
+        time.sleep(0.2)
+        mark = len(frames)
+        host_main.feed({"conv_id": "c5", "run_id": "r5", "type": "text_delta", "text": "now live"})
+        time.sleep(0.3)
+        assert any(f["conv_id"] == "c5" and e["type"] == "text_delta" and e["text"] == "now live"
+                   for _, f in frames[mark:] if f["op"] == "event" for e in f["events"])
+    finally:
+        done.set()
+        host.join(5)
+        app.close()
 
 
 def test_idle_host_exits_after_timeout(tmp_path):

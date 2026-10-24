@@ -29,6 +29,8 @@ IDLE_EXIT_S = 300.0
 CONNECT_S = 60.0
 _REAP_S = 5.0
 _DUCKY_APP = str(Path(__file__).resolve().parents[2])
+# ponytail: visible_chats is added here, not in protocol.APP_OPS (another lane); fold it in there later.
+APP_OPS = protocol.APP_OPS | {"visible_chats"}
 
 OnFrame = Callable[["Host", dict[str, Any]], None]
 
@@ -112,6 +114,7 @@ class Supervisor:
         self._lock = threading.Lock()
         self._hosts: dict[int, Host] = {}
         self._by_conv: dict[str, Host] = {}
+        self._visible: set[str] | None = None  # None: never told, every chat gets live text
         self._stopped = threading.Event()
         threading.Thread(target=self._reap_loop, name="agent-host-reaper", daemon=True).start()
 
@@ -133,7 +136,8 @@ class Supervisor:
                 host = min(live, key=lambda h: len(h.agents))
             host.agents.add(conv_id)
             self._by_conv[conv_id] = host
-            return host
+        self._send_visible(host)
+        return host
 
     def release(self, conv_id: str) -> None:
         with self._lock:
@@ -142,6 +146,22 @@ class Supervisor:
                 host.agents.discard(conv_id)
                 if not host.agents:
                     host.idle_since = time.monotonic()
+
+    def set_visible(self, conv_ids: list[str] | None) -> None:
+        """The chats on screen (panel_api.set_visible_chats). Each host hears which of its chats
+        those are; the window loads a newly shown chat's full text itself (load_messages)."""
+        with self._lock:
+            self._visible = None if conv_ids is None else {str(c) for c in conv_ids}
+            hosts = list(self._hosts.values())
+        for host in hosts:
+            self._send_visible(host)
+
+    def _send_visible(self, host: Host) -> None:
+        with self._lock:
+            if self._visible is None:
+                return
+            mine = sorted(self._visible & host.agents)
+        host.send("visible_chats", conv_ids=mine)
 
     def host_for(self, conv_id: str) -> Host | None:
         with self._lock:
@@ -197,16 +217,18 @@ class Supervisor:
 
     def _accept(self, host: Host, listener: Any) -> None:
         try:
-            host.channel = protocol.accept_host(
-                listener,
-                lambda frame: self._on_frame(host, frame) if self._on_frame else None,
-                lambda reason: self._closed(host, reason),
-            )
+            conn = listener.accept()
         except Exception:  # noqa: BLE001 - the host died before connecting
             return
         finally:
             listener.close()
+        host.channel = protocol.Channel(
+            conn, send_ops=APP_OPS, recv_ops=protocol.HOST_OPS,
+            on_frame=lambda frame: self._on_frame(host, frame) if self._on_frame else None,
+            on_closed=lambda reason: self._closed(host, reason), dead_after_s=protocol.DEAD_AFTER_S,
+        ).start()
         host.ready.set()
+        self._send_visible(host)
 
     def _closed(self, host: Host, reason: str) -> None:
         with self._lock:
