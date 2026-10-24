@@ -1177,12 +1177,18 @@ def _chats_leaving_with(conv: Any, root: str) -> set[str]:
 
 
 @mcp.tool()
-def ducky_archive_chats(conv_ids: list[str], delete: bool = False, pretty: bool = False) -> str:
-    """Archive chats and groups, or with delete=true delete them for good. The person always says yes first.
+def ducky_archive_chats(
+    conv_ids: list[str] | None = None,
+    delete: bool = False,
+    folder_ids: list[str] | None = None,
+    pretty: bool = False,
+) -> str:
+    """Archive chats, groups and folders, or with delete=true delete them for good. The person always says yes first.
 
     The tool itself shows the person a Yes/No card naming every chat, even when the chat
     allows everything; nothing changes on No. A group goes with its duckies and nested
-    groups, and their running agents are stopped. Archived chats can be restored from the
+    groups, and their running agents are stopped. ``folder_ids`` (from ducky_list_chats)
+    take plain folders with everything inside them; folders left empty go too. Archived chats can be restored from the
     sidebar's Archive; deleted ones can't. Never archives the chat calling it. Use only when
     the person asked to clean up chats, never on your own.
     """
@@ -1201,10 +1207,27 @@ def ducky_archive_chats(conv_ids: list[str], delete: bool = False, pretty: bool 
             return tool_json({"ok": False, "error": f"“{conv.title or cid}” holds this chat; archive it from the sidebar "
                               "or move this chat out first."}, pretty=pretty)
         targets.append(conv)
-    if not targets:
-        return tool_json({"ok": False, "error": "conv_ids is empty"}, pretty=pretty)
-    names = ", ".join(f"“{c.title or c.id[:8]}”" + (" (group, with its duckies)" if getattr(c, "is_group", False) else "")
-                      for c in targets)
+    from frontend.ui_web.project_chats import folder_subtree_ids
+
+    folders = {f.id: f for f in load_folders(root)} if folder_ids else {}
+    folder_targets = []
+    for fid in dict.fromkeys(str(f).strip() for f in folder_ids or [] if str(f).strip()):
+        folder = folders.get(fid)
+        if folder is None or is_archive_folder_id(fid):
+            return tool_json({"ok": False, "error": f"Folder not found: {fid!r}"}, pretty=pretty)
+        inside = set(folder_subtree_ids(fid, root))
+        held = {c.id for c in list_conversations(project_root=root) if c.folder_id in inside}
+        if me and me in held:
+            return tool_json({"ok": False, "error": f"“{folder.name}” holds this chat; move this chat out first."},
+                             pretty=pretty)
+        folder_targets.append((folder, held))
+    if not targets and not folder_targets:
+        return tool_json({"ok": False, "error": "conv_ids and folder_ids are empty"}, pretty=pretty)
+    names = ", ".join(
+        [f"“{c.title or c.id[:8]}”" + (" (group, with its duckies)" if getattr(c, "is_group", False) else "")
+         for c in targets]
+        + [f"folder “{f.name}” (with everything in it)" for f, _held in folder_targets]
+    )
     verb = "Delete" if delete else "Archive"
     note = " This can't be undone." if delete else " You can restore them from Archive."
     if not _confirm(f"{verb} {names}?{note}", title=f"{verb} chats"):
@@ -1215,7 +1238,18 @@ def ducky_archive_chats(conv_ids: list[str], delete: bool = False, pretty: bool 
             api.delete_conversation(c.id)
         else:
             api.move_conversation(c.id, ARCHIVE_FOLDER_ID)
-    return tool_json({"ok": True, "deleted" if delete else "archived": [c.id for c in targets]}, pretty=pretty)
+    for folder, held in folder_targets:
+        if folder.id not in {f.id for f in load_folders(root)}:
+            continue  # already went with a folder or group above
+        api.delete_folder(folder.id, True)
+        if delete:
+            for cid in held:
+                if load_conversation(cid, project_root=root) is not None:
+                    api.delete_conversation(cid)
+    out = {"ok": True, "deleted" if delete else "archived": [c.id for c in targets]}
+    if folder_targets:
+        out["folders"] = [f.id for f, _held in folder_targets]
+    return tool_json(out, pretty=pretty)
 
 
 @mcp.tool()

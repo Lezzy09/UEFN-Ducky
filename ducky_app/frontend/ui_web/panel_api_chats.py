@@ -228,8 +228,6 @@ class PanelApiChatsMixin:
 
         archive_members also archives duckies in the group. Otherwise they stay.
         """
-        from frontend.ui_web.project_chats import mark_folders_deleted
-
         root = self._folder_root(folder_id)
         subtree = _pa.folder_subtree_ids(folder_id, root)
         # Stop runners that are about to leave the active tree.
@@ -247,8 +245,8 @@ class PanelApiChatsMixin:
                 for target_id in targets:
                     if is_agent_running(target_id):
                         _pa.cancel_agent(target_id)
+        # Marks every folder it removes deleted, so a stale folder list can't bring them back.
         removed = _pa.delete_folder(folder_id, root, archive_members=bool(archive_members))
-        mark_folders_deleted(subtree or [folder_id], root)
         # Every open window drops the group (and what went with it) right away.
         _pa.notify_chats_changed(
             open_tab=False,

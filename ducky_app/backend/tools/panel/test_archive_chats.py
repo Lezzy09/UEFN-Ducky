@@ -21,6 +21,10 @@ class _Api:
     def delete_conversation(self, conv_id):
         self.calls.append(("delete", conv_id))
 
+    def delete_folder(self, folder_id, archive_members=False):
+        self.calls.append(("folder", folder_id, archive_members))
+        return []
+
 
 @pytest.fixture
 def env(monkeypatch):
@@ -64,6 +68,18 @@ def test_never_archives_the_calling_chat(env):
     out = json.loads(ducky_panel.ducky_archive_chats(["team"]))
     assert not out["ok"] and "holds this chat" in out["error"]
     assert env.asked == [] and env.api.calls == []
+
+
+def test_folder_goes_to_archive_with_everything_inside(env, monkeypatch):
+    folder = SimpleNamespace(id="f1", name="Engine", parent_id="")
+    monkeypatch.setattr(ducky_panel, "load_folders", lambda root=None: [folder])
+    monkeypatch.setattr("frontend.ui_web.project_chats.folder_subtree_ids", lambda fid, root=None: [fid])
+    monkeypatch.setattr(ducky_panel, "list_conversations",
+                        lambda project_root=None: [SimpleNamespace(id="c1", folder_id="f1")])
+    out = json.loads(ducky_panel.ducky_archive_chats(folder_ids=["f1"]))
+    assert out["ok"] and out["folders"] == ["f1"]
+    assert env.api.calls == [("folder", "f1", True)]
+    assert "folder “Engine” (with everything in it)" in env.asked[0]
 
 
 def test_move_chat_refuses_archive():

@@ -525,16 +525,50 @@ def delete_folder(
     """Delete a folder. Returns group hub ids that moved to Archive.
 
     A group itself always goes to Archive. ``archive_members`` also sends its
-    duckies (and nested groups) to Archive; otherwise those duckies stay active
-    and nested groups move up to the deleted group's parent.
+    duckies (and nested groups) to Archive — for a plain folder too; otherwise those
+    duckies stay active and nested groups move up to the deleted folder's parent.
+    Plain folders left empty around an archived group go with it, and every removed
+    folder is marked deleted so a stale folder list can't bring it back.
     """
     assert_not_archive_folder(folder_id, action="delete")
     folders = load_folders(project_root)
     target = next((f for f in folders if f.id == folder_id), None)
     if target is None:
         return []
+    subtree = folder_subtree_ids(folder_id, project_root)
+    archived = _remove_folder(target, folders, project_root, archive_members)
+    if archived or archive_members:
+        subtree += _drop_emptied_parents((target.parent_id or "").strip(), project_root)
+    mark_folders_deleted(subtree, project_root)
+    return archived
 
-    if not (getattr(target, "group_hub_id", None) or "").strip():
+
+def _drop_emptied_parents(parent_id: str, project_root: str | None) -> list[str]:
+    """Plain folders that held only what was just archived: removed, nearest first."""
+    dropped: list[str] = []
+    while parent_id and not is_archive_folder_id(parent_id):
+        folders = load_folders(project_root)
+        parent = next((f for f in folders if f.id == parent_id), None)
+        if parent is None or (getattr(parent, "group_hub_id", None) or "").strip():
+            break
+        if any((f.parent_id or "") == parent_id for f in folders):
+            break
+        if any((c.folder_id or "") == parent_id for c in _load_all_conversations(project_root, include_messages=False)):
+            break
+        save_folders([f for f in folders if f.id != parent_id], project_root)
+        dropped.append(parent_id)
+        parent_id = (parent.parent_id or "").strip()
+    return dropped
+
+
+def _remove_folder(
+    target: ChatFolder,
+    folders: list[ChatFolder],
+    project_root: str | None,
+    archive_members: bool,
+) -> list[str]:
+    folder_id = target.id
+    if not (getattr(target, "group_hub_id", None) or "").strip() and not archive_members:
         # Plain folder: its contents surface at the root rather than being deleted.
         for folder in folders:
             if folder.parent_id == folder_id:

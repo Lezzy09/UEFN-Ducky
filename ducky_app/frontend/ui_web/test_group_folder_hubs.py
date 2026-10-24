@@ -168,6 +168,41 @@ def test_delete_plain_folder_still_moves_chats_to_root():
         assert moved.folder_id == ""
 
 
+def test_archive_plain_folder_takes_everything_inside():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = str(Path(tmp))
+        settings = PanelSettings.load()
+        folder = create_folder("Engine", "", root)
+        chat = create_conversation(settings, folder.id, title="Notes", project_root=root)
+        group, hub = _make_group(settings, "Shaders", folder.id, root)
+
+        assert delete_folder(folder.id, root, archive_members=True) == [hub.id]
+
+        assert all(f.id not in {folder.id, group.id} for f in load_folders(root))
+        for conv_id in (chat.id, hub.id):
+            assert load_conversation(conv_id, project_root=root).folder_id == ARCHIVE_FOLDER_ID
+        # Each group comes back on its own; a loose chat is no group's member.
+        assert load_conversation(hub.id, project_root=root).parent_conv_id == ""
+        assert load_conversation(chat.id, project_root=root).parent_conv_id == ""
+
+
+def test_archiving_a_group_drops_the_plain_folders_it_left_empty():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = str(Path(tmp))
+        settings = PanelSettings.load()
+        keep = create_folder("Keep", "", root)
+        create_conversation(settings, keep.id, title="Stays", project_root=root)
+        wrapper = create_folder("Wrapper", keep.id, root)
+        _group, hub = _make_group(settings, "Team", wrapper.id, root)
+
+        move_conversation(hub.id, ARCHIVE_FOLDER_ID, root)
+
+        ids = {f.id for f in load_folders(root)}
+        assert wrapper.id not in ids  # held only the group
+        assert keep.id in ids  # still has a chat
+        assert load_conversation(hub.id, project_root=root).folder_id == ARCHIVE_FOLDER_ID
+
+
 def _archived_squad(settings, root: str):
     outer, outer_hub = _make_group(settings, "Squad", "", root)
     member = create_conversation(settings, outer.id, title="Builder", parent_conv_id=outer_hub.id, project_root=root)

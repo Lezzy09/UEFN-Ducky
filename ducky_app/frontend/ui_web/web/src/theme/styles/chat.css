@@ -4398,22 +4398,26 @@
 .team-roster-row:hover .team-roster-icon--stop,
 .team-roster-icon--stop:focus-visible { visibility: visible; }
 .team-roster-icon--stop:disabled { color: var(--muted); }
-.team-roster-icon--stop svg, .sidebar-group-stop svg { width: 12px; height: 12px; }
+.team-roster-icon--stop svg { width: 12px; height: 12px; }
+.sidebar-group-stop svg { width: 16px; height: 16px; }
 .team-roster-stop-confirm { display: flex; align-items: center; gap: 6px; }
 .team-roster-stop-yes, .sidebar-group-stop-confirm button:first-of-type { color: var(--red); }
 .sidebar-group-stop {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  flex-shrink: 0;
+  width: 28px;
+  height: 26px;
+  margin-left: 4px;
   border: none;
-  border-radius: 4px;
-  background: transparent;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--red) 14%, transparent);
   color: var(--red);
   cursor: pointer;
 }
-.sidebar-group-stop:disabled { color: var(--muted); cursor: default; }
+.sidebar-group-stop:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 26%, transparent); }
+.sidebar-group-stop:disabled { background: transparent; color: var(--muted); cursor: default; }
 .sidebar-group-stop-confirm {
   display: flex;
   flex-wrap: wrap;

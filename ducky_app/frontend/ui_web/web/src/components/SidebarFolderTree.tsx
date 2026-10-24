@@ -616,6 +616,8 @@ function FolderHeader({
         }
         actions={
           <>
+            {/* Rename/trash grow in on hover to the left; Stop keeps the far right. */}
+            <SidebarHoverActions onRename={onRename} onDelete={onDelete} deleteTitle={deleteLabel} />
             {hubId ? (
               <button
                 type="button"
@@ -632,7 +634,6 @@ function FolderHeader({
                 <Icons.Stop />
               </button>
             ) : null}
-            <SidebarHoverActions onRename={onRename} onDelete={onDelete} deleteTitle={deleteLabel} />
           </>
         }
         contextMenu={

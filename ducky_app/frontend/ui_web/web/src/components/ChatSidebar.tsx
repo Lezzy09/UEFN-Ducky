@@ -1083,12 +1083,25 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
         if (scope === false) return;
         archiveMembers = scope === true;
       }
-    } else if (!(await confirm({
-      message: `Delete folder "${folderName}"? Duckies inside will move to the root.`,
-      confirmLabel: "Delete",
-      danger: true,
-    }))) {
-      return;
+    } else {
+      const inside = folder ? groupInsideCount(folder) : 0;
+      if (inside > 0) {
+        // A plain folder can go to Archive with its groups and duckies, like a group.
+        const scope = await confirm({
+          title: "Delete folder",
+          message: `"${folderName}" has ${inside} ${inside === 1 ? "item" : "items"} in it. Move everything inside to Archive with the folder, or delete only the folder? With only the folder, what's inside moves to the root.`,
+          confirmLabel: "Archive everything inside",
+          extraLabel: "Only the folder",
+        });
+        if (scope === false) return;
+        archiveMembers = scope === true;
+      } else if (!(await confirm({
+        message: `Delete empty folder "${folderName}"?`,
+        confirmLabel: "Delete",
+        danger: true,
+      }))) {
+        return;
+      }
     }
     const api = getApi();
     if (!api) return;
