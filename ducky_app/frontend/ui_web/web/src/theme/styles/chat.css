@@ -7084,12 +7084,8 @@
   min-width: 0;
 }
 
-.plan-todo-row--d1 { padding-left: 20px; }
-.plan-todo-row--d2 { padding-left: 34px; }
-.plan-todo-row--d3 { padding-left: 48px; }
-.plan-todo-row--d4 { padding-left: 62px; }
-.plan-todo-row--d5 { padding-left: 76px; }
-.plan-todo-row--d6 { padding-left: 90px; }
+/* ponytail: indent capped at 60% of the row so very deep plans keep room for text */
+.plan-todo-row--nested { padding-left: min(calc(6px + var(--plan-depth) * 14px), 60%); }
 
 .plan-todo-row.is-clickable {
   cursor: pointer;

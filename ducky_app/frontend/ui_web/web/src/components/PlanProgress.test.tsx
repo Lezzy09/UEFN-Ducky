@@ -35,4 +35,12 @@ describe("non-cancelled plan progress", () => {
     expect(screen.getByText("1 of 1 steps completed")).toBeTruthy();
     expect(screen.getByText("Finished")).toBeTruthy();
   });
+  it("indents every nesting level, past the old cap of 6", () => {
+    let deep: PlanNode = { id: "n9", content: "Level 9", status: "pending" };
+    for (let i = 8; i >= 1; i--) deep = { id: `n${i}`, content: `Level ${i}`, status: "pending", children: [deep] };
+    const { container } = render(<PlanTodoCard plan={{ ...plan, nodes: [deep] }} />);
+    const row = container.querySelector<HTMLElement>('[data-plan-node-id="n9"]');
+    expect(row?.className).toContain("plan-todo-row--nested");
+    expect(row?.style.getPropertyValue("--plan-depth")).toBe("8");
+  });
 });

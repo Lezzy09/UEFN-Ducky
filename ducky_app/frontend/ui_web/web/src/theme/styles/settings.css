@@ -6706,12 +6706,7 @@
   padding: 6px 6px;
 }
 
-.plan-detail-aside .plan-todo-row--d1 { padding-left: 14px; }
-.plan-detail-aside .plan-todo-row--d2 { padding-left: 22px; }
-.plan-detail-aside .plan-todo-row--d3 { padding-left: 30px; }
-.plan-detail-aside .plan-todo-row--d4 { padding-left: 38px; }
-.plan-detail-aside .plan-todo-row--d5 { padding-left: 46px; }
-.plan-detail-aside .plan-todo-row--d6 { padding-left: 54px; }
+.plan-detail-aside .plan-todo-row--nested { padding-left: min(calc(6px + var(--plan-depth) * 8px), 60%); }
 
 .plan-detail-aside .plan-todo-outline-n {
   flex: 0 0 auto;

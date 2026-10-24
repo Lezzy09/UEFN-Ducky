@@ -228,6 +228,19 @@ class PlansStoreTests(unittest.TestCase):
         self.assertTrue(plans.delete_plan("chat-src", project_root=self.root))
         self.assertIsNone(plans.load_plan("chat-src", project_root=self.root))
 
+    def test_sub_plans_nest_without_a_depth_limit(self) -> None:
+        plans.create_plan("chat-deep", title="Deep", nodes=[{"id": "d1", "content": "Level 1"}],
+                          project_root=self.root)
+        parent = "d1"
+        for level in range(2, 11):
+            added = plans.add_node("chat-deep", content=f"Level {level}", parent_id=parent, project_root=self.root)
+            parent = plans._flatten_nodes(added["nodes"])[-1]["id"]
+        loaded = plans.load_plan("chat-deep", project_root=self.root)
+        assert loaded is not None
+        labels = [lab for lab, _ in plans.outline_numbers(loaded["nodes"])]
+        self.assertEqual(labels[-1], ".".join(["1"] * 10))
+        self.assertEqual(sum(n["kind"] == "subplan" for n in plans._flatten_nodes(loaded["nodes"])), 9)
+
     def test_outline_tree_move_delete_gate(self) -> None:
         plans.create_plan(
             "chat-tree",

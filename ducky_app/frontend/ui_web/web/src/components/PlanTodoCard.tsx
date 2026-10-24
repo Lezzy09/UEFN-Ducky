@@ -1,5 +1,5 @@
 import { PlanOwnerChips } from "./PlanOwnerChips";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import type { ChatPlan, PlanNode, PlanProgress, PlanTodoStatus } from "../types/panel";
 import { progressForPlan } from "../utils/planOutlineNav";
 import { nodeKind } from "../utils/planLock";
@@ -107,12 +107,15 @@ function TodoRow({
       <span className="plan-todo-text">{content}</span>
     </>
   );
-  const depthClass = depth ? ` plan-todo-row--d${Math.min(depth, 6)}` : "";
+  // Plans nest without limit: the indent follows the real depth (CSS --plan-depth).
+  const depthClass = depth ? " plan-todo-row--nested" : "";
+  const depthStyle = depth ? ({ "--plan-depth": depth } as CSSProperties) : undefined;
   if (clickable && onSelect) {
     return (
       <button
         type="button"
         className={`${className}${depthClass}`}
+        style={depthStyle}
         data-plan-node-id={nodeId}
         data-status={status}
         onClick={onSelect}
@@ -123,7 +126,7 @@ function TodoRow({
     );
   }
   return (
-    <div className={`${className}${depthClass}`} data-plan-node-id={nodeId} data-status={status}>
+    <div className={`${className}${depthClass}`} style={depthStyle} data-plan-node-id={nodeId} data-status={status}>
       {body}
     </div>
   );
