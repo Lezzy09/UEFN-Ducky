@@ -954,16 +954,16 @@ def ducky_group_create(name: str, parent_folder_id: str = "", pretty: bool = Fal
 
 
 def _require_lane_authority(group_id: str) -> str:
-    """Only the user or the group's leader may assign lanes. Returns the caller id ('' = user)."""
+    """Only the user, the group's leader or the leader of a group it is nested in may assign
+    lanes. Returns the caller id ('' = user)."""
     from backend.workspace import identity as run_identity
 
     ctx = run_identity.resolve_context()
     if ctx is None:
         return ""
-    api = _panel_api()
-    info = api.group_members(group_id.strip())
-    leader = str(info.get("leader_conv_id") or "").strip()
-    if ctx.conv_id and ctx.conv_id == leader:
+    authorities = _panel_api().group_lane_authorities(group_id.strip())
+    leader = authorities[0] if authorities else ""
+    if ctx.conv_id and ctx.conv_id in authorities:
         return ctx.conv_id
     raise ValueError(
         "Only the group leader (or the user) can set write lanes. "
@@ -2618,7 +2618,7 @@ def ducky_plan_add_node(
     not woken until they finish. A member blocked by a teammate's work: the lead adds
     the fix as a step for that teammate and sets the blocked step's ``after`` to it.
     """
-    from backend.agent.coding_agents.plans import add_node, outline_numbers, push_plan_updated, todo_progress
+    from backend.agent.coding_agents.plans import add_node, push_plan_updated
 
     cid = _resolve_plan_chat_id(chat_id) if not (template_id or "").strip() else ""
     try:
@@ -2638,20 +2638,11 @@ def ducky_plan_add_node(
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     if plan.get("kind") != "template":
         push_plan_updated(plan)
-    from backend.agent.coding_agents.plans import with_plan_review
+    from backend.agent.coding_agents.plans import attach_next_tick, with_plan_review
 
-    return tool_json(
-        with_plan_review(
-            {
-                "ok": True,
-                "plan": plan,
-                "progress": todo_progress(plan) if plan.get("kind") != "template" else None,
-                "outline": [{"n": lab, "id": n["id"], "content": n["content"], "status": n["status"]} for lab, n in outline_numbers(plan.get("nodes"))],
-            },
-            plan,
-        ),
-        pretty=pretty,
-    )
+    added = next((n for n in reversed(list(_walk_nodes(plan.get("nodes")))) if n.get("content") == content), None)
+    result = with_plan_review(_plan_edit_result(plan, added), plan)
+    return tool_json(attach_next_tick(result, plan if plan.get("kind") != "template" else None), pretty=pretty)
 
 
 @mcp.tool()
@@ -2693,13 +2684,7 @@ def ducky_plan_update_node(
     not woken until they finish. A member blocked by a teammate's work: the lead adds
     the fix as a step for that teammate and sets the blocked step's ``after`` to it.
     """
-    from backend.agent.coding_agents.plans import (
-        attach_next_tick,
-        outline_numbers,
-        push_plan_updated,
-        todo_progress,
-        update_node,
-    )
+    from backend.agent.coding_agents.plans import attach_next_tick, push_plan_updated, update_node
 
     cid = _resolve_plan_chat_id(chat_id) if not (template_id or "").strip() else ""
     try:
@@ -2722,13 +2707,7 @@ def ducky_plan_update_node(
     # The changed step, the outline and the progress: not the whole plan with every step's
     # text (8.5 KB per tick; one team ticked 67 times in 50 minutes). ducky_get_plan reads it all.
     changed = next((n for n in _walk_nodes(plan.get("nodes")) if n.get("id") == node_id), None)
-    result: dict[str, Any] = {
-        "ok": True,
-        "plan": {key: plan.get(key) for key in ("id", "chat_id", "title", "status", "kind")},
-        "node": {key: value for key, value in (changed or {}).items() if key != "children"},
-        "progress": todo_progress(plan) if plan.get("kind") != "template" else None,
-        "outline": [{"n": lab, "id": n["id"], "content": n["content"], "status": n["status"]} for lab, n in outline_numbers(plan.get("nodes"))],
-    }
+    result = _plan_edit_result(plan, changed)
     closed = _sections_closed_by(plan.get("nodes"), node_id) if status in ("completed", "cancelled") else []
     if closed:
         # Members then tried to tick or annotate their finished section and were refused.
@@ -2737,6 +2716,21 @@ def ducky_plan_update_node(
         result["note"] = (f"{names} completed itself with this step. The note on this step is its "
                           "record: do not tick or annotate the section.")
     return tool_json(attach_next_tick(result, plan if plan.get("kind") != "template" else None), pretty=pretty)
+
+
+def _plan_edit_result(plan: dict[str, Any], node: dict[str, Any] | None) -> dict[str, Any]:
+    """The changed step, the outline and the progress: never the whole plan with every
+    step's notes (63 KB on a 30-step team plan). ducky_get_plan reads it all."""
+    from backend.agent.coding_agents.plans import outline_numbers, todo_progress
+
+    return {
+        "ok": True,
+        "plan": {key: plan.get(key) for key in ("id", "chat_id", "title", "status", "kind")},
+        "node": {key: value for key, value in (node or {}).items() if key != "children"},
+        "progress": todo_progress(plan) if plan.get("kind") != "template" else None,
+        "outline": [{"n": lab, "id": n["id"], "content": n["content"], "status": n["status"]}
+                    for lab, n in outline_numbers(plan.get("nodes"))],
+    }
 
 
 def _walk_nodes(nodes: Any):
@@ -2771,7 +2765,7 @@ def ducky_plan_delete_node(
     pretty: bool = False,
 ) -> str:
     """Delete a subplan node and its nested children."""
-    from backend.agent.coding_agents.plans import delete_node, outline_numbers, push_plan_updated, todo_progress
+    from backend.agent.coding_agents.plans import delete_node, push_plan_updated
 
     cid = _resolve_plan_chat_id(chat_id) if not (template_id or "").strip() else ""
     try:
@@ -2785,15 +2779,7 @@ def ducky_plan_delete_node(
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     if plan.get("kind") != "template":
         push_plan_updated(plan)
-    return tool_json(
-        {
-            "ok": True,
-            "plan": plan,
-            "progress": todo_progress(plan) if plan.get("kind") != "template" else None,
-            "outline": [{"n": lab, "id": n["id"], "content": n["content"], "status": n["status"]} for lab, n in outline_numbers(plan.get("nodes"))],
-        },
-        pretty=pretty,
-    )
+    return tool_json(_plan_edit_result(plan, {"id": node_id, "deleted": True}), pretty=pretty)
 
 
 @mcp.tool()
@@ -2806,7 +2792,7 @@ def ducky_plan_move_node(
     pretty: bool = False,
 ) -> str:
     """Move a subplan under parent_id (empty = root) at index. Renumbers the outline."""
-    from backend.agent.coding_agents.plans import move_node, outline_numbers, push_plan_updated, todo_progress
+    from backend.agent.coding_agents.plans import move_node, push_plan_updated
 
     cid = _resolve_plan_chat_id(chat_id) if not (template_id or "").strip() else ""
     try:
@@ -2822,15 +2808,8 @@ def ducky_plan_move_node(
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     if plan.get("kind") != "template":
         push_plan_updated(plan)
-    return tool_json(
-        {
-            "ok": True,
-            "plan": plan,
-            "progress": todo_progress(plan) if plan.get("kind") != "template" else None,
-            "outline": [{"n": lab, "id": n["id"], "content": n["content"], "status": n["status"]} for lab, n in outline_numbers(plan.get("nodes"))],
-        },
-        pretty=pretty,
-    )
+    moved = next((n for n in _walk_nodes(plan.get("nodes")) if n.get("id") == node_id), None)
+    return tool_json(_plan_edit_result(plan, moved), pretty=pretty)
 
 
 @mcp.tool()

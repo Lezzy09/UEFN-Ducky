@@ -261,6 +261,29 @@ def test_reports_carry_progress_computed_from_the_plan(notices):
     assert [r["body"].split("\n")[1] for r in last if "section Rules" in r["body"]] == ["All 5 steps done"]
 
 
+def test_plan_edit_tools_return_the_node_not_the_whole_plan(team, notices, monkeypatch):
+    # Oct 23 2026: add_node returned the whole 63 KB plan with every note on each edit.
+    import json as _json
+
+    from backend.tools.panel import ducky_panel
+
+    monkeypatch.setattr(ducky_panel, "_project_root", lambda: team)
+    for i in range(30):
+        plans.add_node("coord", content=f"Step {i}", body_markdown="Long notes. " * 150, project_root=team)
+    assert len(_json.dumps(plans.load_plan("coord", project_root=team))) > 50_000
+    added = ducky_panel.ducky_plan_add_node(content="One more step", body_markdown="Do it.", chat_id="coord")
+    assert len(added) < 6_000
+    out = _json.loads(added)
+    assert out["ok"] and out["node"]["content"] == "One more step" and out["node"]["body_markdown"] == "Do it."
+    assert "nodes" not in out["plan"] and out["progress"]["total"] >= 31
+    assert any(row["content"] == "One more step" for row in out["outline"])
+    node_id = out["node"]["id"]
+    assert len(ducky_panel.ducky_plan_move_node(node_id=node_id, index=0, chat_id="coord")) < 6_000
+    deleted = _json.loads(ducky_panel.ducky_plan_delete_node(node_id=node_id, chat_id="coord"))
+    if deleted["ok"]:
+        assert "nodes" not in deleted["plan"] and deleted["node"] == {"id": node_id, "deleted": True}
+
+
 def test_the_leads_own_change_does_not_wake_the_lead(notices, monkeypatch):
     # Oct 22 2026: an Opus lead cancelled a step after its report and was woken by a notice about
     # its own cancel, to answer "nothing has changed since". A tick in the plan view still goes.
