@@ -65,6 +65,7 @@ class FakeApi:
 
 
 def _create(names, model="m1", **kw):
+    kw.setdefault("detail", 2)
     return sw.swarm_create("Shop island", _jobs(names, model), **kw)
 
 
@@ -76,17 +77,17 @@ def test_missing_answers_asks_agents_limits_and_each_model():
                           api=api)
     assert out["status"] == "needs_answers"
     ids = [q["id"] for q in out["questions"]]
-    assert ids == ["agents", "size_limits", "model:0", "model:1", "model:2"]
-    limits = out["questions"][1]
+    assert ids == ["detail", "agents", "size_limits", "model:0", "model:1", "model:2"]
+    limits = out["questions"][2]
     assert limits["options"][0]["id"] == "8/5" and "Art: assets" in limits["options"][0]["description"]
-    assert "Modeling" in out["questions"][3]["prompt"]
+    assert "Modeling" in out["questions"][4]["prompt"]
     assert api.calls == []
 
 
 def test_given_model_is_not_asked_and_all_answers_go_on():
     jobs = _jobs(["Narrative: story", "Modeling: props"], "")
     jobs[0]["model"] = "claude-opus-5-5"
-    out = sw.swarm_create("Shop island", jobs, agents="auto", max_agents=8, per_group=5)
+    out = sw.swarm_create("Shop island", jobs, agents="auto", max_agents=8, per_group=5, detail=2)
     assert [q["id"] for q in out["questions"]] == ["model:1"]
     out = _create(["Narrative: story", "Modeling: props"], agents="auto", max_agents=8, per_group=5)
     assert out["status"] == "needs_confirm"
@@ -218,6 +219,64 @@ def test_build_failure_reports_partial_tree():
 
     out = _create(GAME8, agents="auto", max_agents=8, per_group=5, confirm=True, api=Broken())
     assert out["status"] == "error" and "lane overlaps" in out["error"]
+
+
+# ---- detail level -------------------------------------------------------------------------
+
+SHOP = ["Modeling: props", "Texture: props", "Verse: combat", "Narrative: story"]
+
+
+def test_no_detail_asks_it_with_agent_counts_per_level():
+    out = sw.swarm_create("Shop island", _jobs(SHOP), agents="auto", max_agents=8, per_group=5)
+    assert out["status"] == "needs_answers" and [q["id"] for q in out["questions"]] == ["detail"]
+    q = out["questions"][0]
+    assert q["prompt"] == "How finely should the work be split?"
+    assert [o["id"] for o in q["options"]] == ["1", "2", "3", "4"]
+    assert q["options"][1]["label"] == "2 Jobs (suggested)"
+    assert [o["description"] for o in q["options"]] == [
+        "3 agents", "4 agents", "8 agents in 1 sub-group", "8 agents in 3 sub-groups"]
+
+
+def test_detail_3_previews_parts_and_every_level():
+    api = FakeApi()
+    out = _create(SHOP, agents="auto", max_agents=8, per_group=5, detail=3, api=api)
+    p = out["preview"]
+    assert out["status"] == "needs_confirm" and api.calls == []
+    assert p["detail"] == 3
+    assert [(lv["detail"], lv["agents"], lv["groups"]) for lv in p["levels"]] == [
+        (1, 3, 0), (2, 4, 0), (3, 8, 1), (4, 8, 3)]
+    seats = {s["name"]: s for s in sw.walk_seats(p["tree"])}
+    assert seats["Blockout lead"]["job"] == "Modeling: blockout"
+    assert seats["Blockout lead"]["profile"] == "3d-modeler" and seats["Blockout lead"]["paths"] == ["src/modeling/**"]
+    blockout = next(s for s in sw.build_preview("g", sw.normalize_jobs(_jobs(SHOP)), "auto", 8, 5, None, 3)["jobs"]
+                    .items() if s[0] == "Blockout lead")[1]
+    assert [s["content"] for s in blockout["steps"]] == ["blockout: Modeling: props step 1",
+                                                        "blockout: Modeling: props step 2"]
+
+
+def test_detail_change_is_a_new_preview_and_limits_still_cap():
+    api = FakeApi()
+    one = _create(SHOP, agents="auto", max_agents=8, per_group=5, detail=1, api=api)["preview"]
+    assert [s["name"] for s in sw.walk_seats(one["tree"])] == ["Art lead", "Code lead", "Story lead"]
+    art = next(s for s in sw.walk_seats(one["tree"]) if s["name"] == "Art lead")
+    assert art["sub_plan"]["total"] == 4  # Modeling's and Texture's steps both kept
+    four = _create(SHOP, agents="auto", max_agents=8, per_group=5, detail=4, api=api)["preview"]
+    assert sorted(g["group"] for g in sw.walk_groups(four["tree"])) == [
+        "Modeling: parts", "Texture: parts", "Verse: parts"]
+    assert four["muted"] and api.calls == []
+    capped = _create(SHOP, agents="auto", max_agents=5, per_group=5, detail=3)["preview"]
+    assert capped["agents"] == 5
+
+
+def test_confirm_builds_the_chosen_level():
+    api = FakeApi()
+    out = _create(SHOP, agents="auto", max_agents=8, per_group=5, detail=4, confirm=True, api=api)
+    assert out["status"] == "done" and out["agents"] == 8
+    made = [c[1] for c in api.calls if c[0] == "group_create"]
+    assert made == ["Shop island", "Modeling: parts", "Texture: parts", "Verse: parts"]
+    assert [c[1] for c in api.calls if c[0] == "plan_add_node" and c[3] == "subplan"][:3] == [
+        "Modeling: blockout", "Modeling: hero props", "Modeling: set dressing"]
+    assert len([c for c in api.calls if c[0] == "set_muted"]) == 3
 
 
 # ---- suggest_swarm ------------------------------------------------------------------------

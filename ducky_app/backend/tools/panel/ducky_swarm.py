@@ -80,13 +80,38 @@ def normalize_jobs(jobs: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
             "name": name,
             "purpose": purpose,
             "task": task,
-            "steps": _steps(raw.get("steps")),
+            # A sub plan without steps can't be assigned: a job with none gets itself as its step.
+            "steps": _steps(raw.get("steps")) or _steps([{"content": name, "body_markdown": task}]),
             "paths": [str(p).strip() for p in raw.get("paths") or [] if str(p).strip()],
             "kind": routed["kind"],
             "profile": routed["profile_id"],
             "suggested_model": routed["model"],
             "model": str(raw.get("model") or "").strip(),
         })
+    return out
+
+
+DETAILS = {1: "Areas", 2: "Jobs", 3: "Parts", 4: "Parts in sub-groups"}
+SUGGESTED_DETAIL = 2
+
+
+def apply_detail(jobs: list[dict[str, Any]], detail: int) -> list[dict[str, Any]]:
+    """swarm_routing.split_jobs for *detail*, with the steps each reshaped job really owns:
+    an area job gets every merged job's steps, a part gets its parent's steps marked with the
+    part (split_jobs copies only the first job's / the whole parent's)."""
+    from frontend.swarm_routing import area_of, split_jobs
+
+    out = split_jobs(jobs, detail)
+    for job in out:
+        if job.get("part"):
+            part = str(job["part"])
+            # ponytail: each part runs every parent step for its slice; real per-part steps need the lead.
+            job["steps"] = [{"content": f"{part}: {s['content']}", "body_markdown": s["body_markdown"]}
+                            for s in job["steps"]] or _steps([job["name"]])
+        elif "kinds" in job and job.get("area"):
+            same = [j for j in jobs if area_of(j["kind"]) == job["area"]]
+            job["steps"] = [s for j in same for s in j["steps"]]
+            job["purpose"] = "; ".join(j["purpose"] for j in same if j["purpose"])
     return out
 
 
@@ -104,9 +129,33 @@ def _parse_agents(agents: Any) -> str | int:
     return int(text) if text.isdigit() and int(text) > 0 else ""
 
 
-def questions_for(jobs: list[dict[str, Any]], agents: Any, max_agents: int, per_group: int) -> list[dict[str, Any]]:
+def detail_levels(jobs: list[dict[str, Any]], agents: Any, max_agents: int, per_group: int) -> list[dict[str, Any]]:
+    """[{detail, agents, groups}] for every detail level; unanswered limits count as the suggested ones."""
+    max_agents = max_agents if max_agents > 0 else SUGGESTED_MAX_AGENTS
+    per_group = per_group if per_group > 0 else SUGGESTED_PER_GROUP
+    out = []
+    for d in DETAILS:
+        tree = plan_tree(apply_detail(jobs, d), agents, max_agents, per_group)
+        out.append({"detail": d, "name": DETAILS[d], "agents": len(list(walk_seats(tree))),
+                    "groups": len(list(walk_groups(tree)))})
+    return out
+
+
+def questions_for(jobs: list[dict[str, Any]], agents: Any, max_agents: int, per_group: int,
+                  detail: int = SUGGESTED_DETAIL) -> list[dict[str, Any]]:
     """The ducky_ask_user questions still unanswered (empty = go on)."""
     qs: list[dict[str, Any]] = []
+    if detail not in DETAILS:
+        qs.append({
+            "id": "detail",
+            "prompt": "How finely should the work be split?",
+            "options": [
+                {"id": str(lv["detail"]),
+                 "label": f"{lv['detail']} {lv['name']}" + (" (suggested)" if lv["detail"] == SUGGESTED_DETAIL else ""),
+                 "description": f"{lv['agents']} agents" + (f" in {lv['groups']} sub-group{'s' if lv['groups'] > 1 else ''}" if lv["groups"] else "")}
+                for lv in detail_levels(jobs, agents, max_agents, per_group)
+            ],
+        })
     if _parse_agents(agents) == "":
         qs.append({
             "id": "agents",
@@ -178,7 +227,9 @@ def capped_jobs(jobs: list[dict[str, Any]], agents: Any, max_agents: int) -> lis
 
 
 def _seat_name(job: dict[str, Any], taken: set[str]) -> str:
-    base = _TOP_KINDS.get(job["kind"]) or f"{job['name'].split(':', 1)[0].split(' + ', 1)[0].strip()} lead"
+    part = str(job.get("part") or "").strip()
+    head = part[:1].upper() + part[1:] if part else job["name"].split(":", 1)[0].split(" + ", 1)[0].strip()
+    base = _TOP_KINDS.get(job["kind"]) or f"{head} lead"
     name, n = base, 2
     while name in taken:
         name, n = f"{base} {n}", n + 1
@@ -218,14 +269,21 @@ def plan_tree(jobs: list[dict[str, Any]], agents: Any, max_agents: int, per_grou
     per_group = max(per_group, 1)
     taken: set[str] = set()
     seated = [(job, _seat(job, taken)) for job in capped_jobs(jobs, agents, max_agents)]
+    # Detail 4: the parts of one job (split_jobs tags them with group = the parent) form its sub-group.
+    parts: dict[str, list[dict[str, Any]]] = {}
+    for job, seat in seated:
+        if job.get("group"):
+            parts.setdefault(str(job["group"]).split(":", 1)[0].strip(), []).append(seat)
+    groups: list[dict[str, Any]] = [_group(parent, "parts", seats, per_group, 2) for parent, seats in parts.items()]
+    in_parts = [s for seats in parts.values() for s in seats]
+    seated = [(j, s) for j, s in seated if s not in in_parts]
     top = [s for _j, s in seated]
     if len(top) <= per_group:
-        return top
+        return [*groups, *top]
     areas: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for job, seat in seated:
         if job["kind"] not in _TOP_KINDS:
             areas.setdefault(_AREAS.get(job["kind"], ("Team", "jobs")), []).append(seat)
-    groups: list[dict[str, Any]] = []
     for (area, purpose), seats in sorted(areas.items(), key=lambda kv: -len(kv[1])):
         if len(top) <= per_group or len(seats) < 2:
             break
@@ -288,14 +346,16 @@ def _tree_edits(tree: list[dict[str, Any]], edits: list[dict[str, Any]]) -> None
 
 
 def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents: int, per_group: int,
-                  edits: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                  edits: list[dict[str, Any]] | None = None, detail: int = SUGGESTED_DETAIL) -> dict[str, Any]:
     edits = [e for e in edits or [] if isinstance(e, dict)]
-    kept = capped_jobs(_job_edits(jobs, edits), agents, max_agents)
+    kept = capped_jobs(_job_edits(apply_detail(jobs, detail), edits), agents, max_agents)
     tree = plan_tree(kept, agents, max_agents, per_group)
     _tree_edits(tree, edits)
     seats = list(walk_seats(tree))
     return {
         "goal": goal,
+        "detail": detail,
+        "levels": detail_levels(jobs, agents, max_agents, per_group),
         "agents": len(seats),
         "max_agents": max_agents,
         "per_group": per_group,
@@ -432,26 +492,27 @@ def build_swarm(preview: dict[str, Any], api: Any) -> dict[str, Any]:
 
 def swarm_create(goal: str, jobs: list[dict[str, Any]] | None, agents: Any = "", max_agents: int = 0,
                  per_group: int = 0, edits: list[dict[str, Any]] | None = None, confirm: bool = False,
-                 api: Any = None) -> dict[str, Any]:
+                 api: Any = None, detail: int = 0) -> dict[str, Any]:
     goal = (goal or "").strip()
     if not goal:
         raise ValueError("goal is required")
     routed = normalize_jobs(jobs)
     if not routed:
         raise ValueError("jobs is required: [{name, purpose, task, steps[], paths[], kind?, model?}]")
-    questions = questions_for(routed, agents, int(max_agents or 0), int(per_group or 0))
+    detail = int(detail or 0)
+    questions = questions_for(routed, agents, int(max_agents or 0), int(per_group or 0), detail)
     if questions:
         return {
             "status": "needs_answers",
             "goal": goal,
             "questions": questions,
             "next": ("Ask these with ONE ducky_ask_user(questions=...), then call ducky_swarm_create again "
-                     "with agents='auto' or a number, max_agents and per_group, and each job's chosen model "
-                     "in jobs[i].model. Nothing was built."),
+                     "with detail (1-4), agents='auto' or a number, max_agents and per_group, and each job's "
+                     "chosen model in jobs[i].model. Nothing was built."),
             "routes": [{"job": j["name"], "kind": j["kind"], "profile": j["profile"],
                         "suggested_model": j["suggested_model"]} for j in routed],
         }
-    preview = build_preview(goal, routed, agents, int(max_agents), int(per_group), edits)
+    preview = build_preview(goal, routed, agents, int(max_agents), int(per_group), edits, detail)
     public = {k: v for k, v in preview.items() if k != "jobs"}
     if not confirm:
         return {
@@ -459,7 +520,8 @@ def swarm_create(goal: str, jobs: list[dict[str, Any]] | None, agents: Any = "",
             "goal": goal,
             "preview": public,
             "next": ("Show the person this preview. Build: same call with confirm=true. Change: same call "
-                     "with edits=[{drop}, {rename, to}, {seat, model}, {mute}|{unmute}] (keep earlier edits)."),
+                     "with another detail (1-4) or edits=[{drop}, {rename, to}, {seat, model}, {mute}|{unmute}] "
+                     "(keep earlier edits)."),
         }
     try:
         built = build_swarm(preview, api or PanelSwarmApi())
@@ -478,13 +540,15 @@ def ducky_swarm_create(
     per_group: int = 0,
     edits: list[dict[str, Any]] | None = None,
     confirm: bool = False,
+    detail: int = 0,
     pretty: bool = False,
 ) -> str:
     """Make a swarm: jobs=[{name, purpose, task, steps[], paths[], kind?, model?}] → routed seats.
-    status needs_answers: ask its questions with ONE ducky_ask_user, call again with the answers;
+    status needs_answers: ask its questions (detail 1-4 too) with ONE ducky_ask_user, call again;
     needs_confirm: show the preview, then confirm=true builds it (plan first). Never seat by hand.
     """
-    return tool_json(swarm_create(goal, jobs, agents, max_agents, per_group, edits, confirm), pretty=pretty)
+    return tool_json(swarm_create(goal, jobs, agents, max_agents, per_group, edits, confirm, detail=detail),
+                     pretty=pretty)
 
 
 # ---- suggest a swarm for a big plan -------------------------------------------------------
