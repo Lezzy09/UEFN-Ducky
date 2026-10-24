@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
+PAUSED_TICK_NOW = "Plan paused — do not start or tick steps until the owner resumes it."
+
+
+def _paused(plan: dict[str, Any] | None) -> bool:
+    from backend.agent.coding_agents.plans import plan_is_paused
+
+    return plan_is_paused(plan)
+
 
 def next_tick_dict(plan: dict[str, Any] | None) -> dict[str, Any] | None:
     """Exact ducky_plan_update_node call the agent should make next."""
@@ -33,6 +41,9 @@ def next_tick_dict(plan: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def format_plan_tick_nudge(plan: dict[str, Any] | None) -> str:
+    # ponytail: next_tick_dict stays unguarded so the mutator gate still blocks work on a paused plan.
+    if _paused(plan):
+        return ""
     tick = next_tick_dict(plan)
     if not tick:
         return ""
@@ -48,6 +59,10 @@ def attach_next_tick(payload: dict[str, Any], plan: dict[str, Any] | None) -> di
     out = dict(payload)
     if plan and plan.get("assigned_from"):
         return out  # Read-only views must not suggest implicit own-chat writes.
+    if _paused(plan):
+        out["next_tick"] = None
+        out["tick_now"] = PAUSED_TICK_NOW
+        return out
     tick = next_tick_dict(plan)
     if tick:
         out["next_tick"] = tick
