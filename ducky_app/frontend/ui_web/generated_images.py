@@ -200,6 +200,31 @@ def _as_dict(result: Any) -> dict[str, Any]:
     return result
 
 
+def _paths_in(data: dict[str, Any]) -> list[str]:
+    """File paths a tool result names: ``downloaded: [path, …]``, ``path`` and friends, ``media: {path}``."""
+    paths: list[str] = []
+    for item in data.get("downloaded") or []:
+        if isinstance(item, dict):
+            item = item.get("path") or item.get("file") or ""
+        paths.append(str(item or ""))
+    paths += [str(data.get(key) or "") for key in ("path", "output_path", "file", "saved_path")]
+    if isinstance(data.get("media"), dict):
+        paths.append(str(data["media"].get("path") or ""))
+    return list(dict.fromkeys(p for p in paths if p))
+
+
+def _media_paths_in(result: Any) -> list[Path]:
+    """Videos, sounds and motion scenes a tool result names. Pictures stay with image tools;
+    an .html only counts as ``*.motion.html`` (any tool may return a report page)."""
+    out = []
+    for raw_path in _paths_in(_as_dict(result)):
+        path = Path(raw_path)
+        kind = media_kind(path.name)
+        if kind in ("video", "audio") or (kind == "motion" and path.name.lower().endswith(".motion.html")):
+            out.append(path)
+    return out
+
+
 def _images_in(result: Any) -> list[tuple[str, bytes, str]]:
     """(file name, bytes, mime) for each picture a tool result names or carries.
 
@@ -207,18 +232,8 @@ def _images_in(result: Any) -> list[tuple[str, bytes, str]]:
     or base64 bytes, sometimes under ``data``.
     """
     data = _as_dict(result)
-    paths: list[str] = []
-    for item in data.get("downloaded") or []:
-        if isinstance(item, dict):
-            item = item.get("path") or item.get("file") or ""
-        paths.append(str(item or ""))
-    paths += [str(data.get(key) or "") for key in ("path", "output_path", "file", "saved_path")]
     out: list[tuple[str, bytes, str]] = []
-    seen: set[str] = set()
-    for raw_path in paths:
-        if not raw_path or raw_path in seen:
-            continue
-        seen.add(raw_path)
+    for raw_path in _paths_in(data):
         path = Path(raw_path)
         if path.suffix.lower() in _IMAGE_SUFFIXES and path.is_file():
             out.append((path.name, path.read_bytes(), _mime_for(path)))
@@ -242,21 +257,28 @@ def _chat_of_caller() -> str:
 
 
 def note_tool_images(tool_name: str, result: Any, *, conv_id: str = "") -> list[dict[str, Any]]:
-    """Keep the pictures an image tool made in a chat, so that turn's reply shows them.
+    """Keep the media a tool made in a chat, so that turn's reply shows it as a card.
 
-    Runs for every plugin tool and every agent (Ducky, Codex, Claude Code, Cursor). Only
-    image tools called from a chat save anything: a workflow keeps its own outputs.
+    Runs for every plugin tool and every agent (Ducky, Codex, Claude Code, Cursor). Pictures
+    come from image tools; a video, sound or motion scene from any tool. Only calls from a
+    chat save anything: a workflow keeps its own outputs.
     """
-    if not is_image_tool(tool_name):
+    image_tool = is_image_tool(tool_name)
+    media = _media_paths_in(result)
+    if not image_tool and not media:
         return []
     chat = conv_id or _chat_of_caller()
     if not chat:
         return []
     meta = _as_dict(result)
-    return [
+    prompt = str(meta.get("prompt") or meta.get("revised_prompt") or "")
+    kept = [row for row in (note_media_file(p, conv_id=chat, gateway=str(tool_name), prompt=prompt) for p in media) if row]
+    if not image_tool:
+        return kept
+    return kept + [
         save_generated_image(
             raw,
-            prompt=str(meta.get("prompt") or meta.get("revised_prompt") or ""),
+            prompt=prompt,
             gateway=str(tool_name),
             model=str(meta.get("model") or ""),
             filename=name,

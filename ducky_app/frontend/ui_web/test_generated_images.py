@@ -86,6 +86,28 @@ def test_video_audio_and_motion_are_kept_by_kind_and_reach_the_reply_by_url(gi, 
         gi.resolve_generated_image_path("run.exe")
 
 
+def test_any_tool_that_returns_video_audio_or_motion_shows_a_card_in_its_chat(gi, tmp_path):
+    for name in ("promo.mp4", "loop.webm", "tune.wav", "vo.mp3", "intro.motion.html", "report.html"):
+        (tmp_path / name).write_bytes(b"payload")
+    results = {
+        "imk_motion_render": {"path": str(tmp_path / "promo.mp4")},
+        "imk_record_stop": json.dumps({"ok": True, "data": {"output_path": str(tmp_path / "loop.webm")}}),
+        "imk_music_generate": {"media": {"path": str(tmp_path / "tune.wav")}, "prompt": "upbeat"},
+        "imk_voiceover_generate": {"downloaded": [str(tmp_path / "vo.mp3")]},
+        "imk_motion_generate": {"path": str(tmp_path / "intro.motion.html")},
+    }
+    assert gi.note_tool_images("imk_motion_render", results["imk_motion_render"]) == []  # no chat
+    assert gi.note_tool_images("site_report", {"path": str(tmp_path / "report.html")}, conv_id="chat-v") == []
+    assert gi.note_tool_images("imk_motion_render", {"path": str(tmp_path / "gone.mp4")}, conv_id="chat-v") == []
+    for tool, result in results.items():
+        rows = gi.note_tool_images(tool, result, conv_id="chat-v")
+        assert len(rows) == 1 and rows[0]["gateway"] == tool
+    cards = {a["name"]: a["kind"] for a in gi.turn_attachments("chat-v", 0)}
+    assert cards == {"promo.mp4": "video", "loop.webm": "video", "tune.wav": "audio", "vo.mp3": "audio",
+                     "intro.motion.html": "motion"}
+    assert gi.turn_attachments("other", 0) == []
+
+
 def test_a_reply_with_a_picture_loads_with_it(gi, tmp_path):
     from frontend.ui_web.panel_api import _messages_to_ui
 
