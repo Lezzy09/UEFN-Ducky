@@ -15,11 +15,13 @@ there are no separate subagents.
 
 ## Make a swarm
 
-Make a swarm: `ducky_swarm_create(goal, jobs)`. Never seat a whole team by hand.
+Make a swarm: write the jobs from the request → `ducky_swarm_create(goal, jobs)` → answer the
+one card (agents, size limits, detail, models) → preview → Build. Never seat a whole team by hand.
 
-1. Call it with the goal and its jobs, each `{name, purpose, task, steps[], paths[], kind?, model?}`.
-   Jobs come from the goal: a game might get Narrative, Modeling, Texture, Research; a movie
-   Script, Storyboard, Editing.
+1. First write every job from the person's request, each `{name, purpose, task, steps[],
+   paths[], kind?, model?}`: a game might get Narrative, Modeling, Texture, Research; a movie
+   Script, Storyboard, Editing. Then call it **without `detail`**, so the question card asks
+   it: never pick the detail level yourself.
 2. `status: needs_answers` → ask its `questions` with ONE `ducky_ask_user` (how finely to
    split the work, how many agents, the size limits, a model per job), then call again with
    `detail`, `agents`, `max_agents`, `per_group` and each `jobs[i].model`. These are asked
@@ -27,9 +29,12 @@ Make a swarm: `ducky_swarm_create(goal, jobs)`. Never seat a whole team by hand.
    3 Parts (a job splits into its parts, e.g. Modeling → blockout, hero props, set dressing),
    4 Parts in sub-groups (each split job becomes a sub-group of its parts). Each option
    says how many agents it makes; the size limits still cap it.
-3. `status: needs_confirm` → the preview card shows the tree and `levels` (agents per detail).
-   The person builds it as is (same call + `confirm=true`) or changes it: another `detail`,
-   or `edits=[{drop}, {rename, to}, {seat, model}, {mute}|{unmute}]`; each returns a new preview.
+3. `status: needs_confirm` → show the preview card: the tree, every seat's steps
+   (`preview.plan`) and a detail slider (`levels`). Let the person move the slider and look
+   before Build; they build it as is (same call + `confirm=true`) or change it: another
+   `detail`, or `edits=[{drop}, {rename, to}, {seat, model}, {seat, add_step},
+   {seat, drop_step}, {seat, rename_step, to}, {mute}|{unmute}]`; each returns a new preview.
+   Build makes exactly the previewed sub plans and steps.
 4. On confirm it builds plan-first: a root group named after the goal with you as lead, one
    sub plan per job with its steps, then the groups and seats (write lanes from `paths`),
    then assigns each sub plan to its seat, which starts it.

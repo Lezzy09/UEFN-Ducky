@@ -245,7 +245,8 @@ def _seat(job: dict[str, Any], taken: set[str]) -> dict[str, Any]:
         "profile": job["profile"],
         "model": job["model"] or job["suggested_model"],
         "paths": job["paths"],
-        "sub_plan": {"title": job["name"], "done": 0, "total": len(job["steps"])},
+        "sub_plan": {"title": job["name"], "done": 0, "total": len(job["steps"]),
+                     "steps": [dict(s) for s in job["steps"]]},
     }
 
 
@@ -331,10 +332,27 @@ def _tree_edits(tree: list[dict[str, Any]], edits: list[dict[str, Any]]) -> None
     groups = {g["group"]: g for g in walk_groups(tree)}
     seats = {s["name"]: s for s in walk_seats(tree)}
     for e in edits:
-        if "seat" in e and e.get("model"):
-            seat = seats.get(str(e["seat"]).strip())
-            if seat is None:
-                raise ValueError(f"No seat called {e['seat']!r}; seats: {', '.join(seats)}")
+        seat = seats.get(str(e.get("seat") or "").strip())
+        if "seat" in e and seat is None:
+            raise ValueError(f"No seat called {e['seat']!r}; seats: {', '.join(seats)}")
+        if seat is not None and any(k in e for k in ("add_step", "drop_step", "rename_step")):
+            steps = seat["sub_plan"]["steps"]
+            if "add_step" in e:
+                steps.extend(_steps([e["add_step"]]))
+            else:
+                key = str(e.get("drop_step") or e.get("rename_step") or "").strip()
+                hit = next((s for s in steps if s["content"] == key), None)
+                if hit is None:
+                    raise ValueError(f"{seat['name']} has no step {key!r}; steps: "
+                                     + "; ".join(s["content"] for s in steps))
+                if "drop_step" in e:
+                    if len(steps) == 1:
+                        raise ValueError(f"{seat['name']}'s sub plan needs at least one step: drop the job instead.")
+                    steps.remove(hit)
+                else:
+                    hit["content"] = str(e.get("to") or "").strip() or hit["content"]
+            seat["sub_plan"]["total"] = len(steps)
+        elif seat is not None and e.get("model"):
             seat["model"] = str(e["model"]).strip()
         elif "mute" in e or "unmute" in e or ("group" in e and "muted" in e):
             key = str(e.get("mute") or e.get("unmute") or e.get("group")).strip()
@@ -362,6 +380,9 @@ def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents
         "tree": tree,
         "muted": [g["group"] for g in walk_groups(tree) if g["muted"]],
         "lanes": {s["name"]: s["paths"] for s in seats},
+        # The plan Build makes, as one outline: the person approves it with the tree.
+        "plan": {"title": goal, "sections": [{"seat": s["name"], "title": s["sub_plan"]["title"],
+                                               "steps": s["sub_plan"]["steps"]} for s in seats]},
         "jobs": {s["name"]: next(j for j in kept if j["name"] == s["job"]) for s in seats},
     }
 
@@ -457,8 +478,8 @@ def build_swarm(preview: dict[str, Any], api: Any) -> dict[str, Any]:
         job = preview["jobs"][seat["name"]]
         body = "\n".join(x for x in (job["purpose"], job["task"],
                                      f"Files: {', '.join(job['paths'])}" if job["paths"] else "", DONE_LINE) if x)
-        sid = api.plan_add_node(lead, job["name"], kind="subplan", body_markdown=body)
-        for step in job["steps"]:
+        sid = api.plan_add_node(lead, seat["sub_plan"]["title"], kind="subplan", body_markdown=body)
+        for step in seat["sub_plan"]["steps"]:  # exactly the previewed steps, edits included
             api.plan_add_node(lead, step["content"], parent_id=sid, body_markdown=step["body_markdown"])
         sections[seat["name"]] = sid
         seat["sub_plan"]["id"] = sid
@@ -543,9 +564,9 @@ def ducky_swarm_create(
     detail: int = 0,
     pretty: bool = False,
 ) -> str:
-    """Make a swarm: jobs=[{name, purpose, task, steps[], paths[], kind?, model?}] → routed seats.
-    status needs_answers: ask its questions (detail 1-4 too) with ONE ducky_ask_user, call again;
-    needs_confirm: show the preview, then confirm=true builds it (plan first). Never seat by hand.
+    """Make a swarm: write every job from the request ({name, purpose, task, steps[], paths[]}), call
+    WITHOUT detail; needs_answers: ask its questions (detail too) in ONE ducky_ask_user, call again;
+    needs_confirm: show the preview (tree, steps, detail slider), confirm=true builds exactly it.
     """
     return tool_json(swarm_create(goal, jobs, agents, max_agents, per_group, edits, confirm, detail=detail),
                      pretty=pretty)

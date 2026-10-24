@@ -279,6 +279,47 @@ def test_confirm_builds_the_chosen_level():
     assert len([c for c in api.calls if c[0] == "set_muted"]) == 3
 
 
+# ---- the plan in the preview --------------------------------------------------------------
+
+def test_preview_lists_each_seats_steps_and_the_plan():
+    out = _create(["Verse: combat", "Tester: playtest"], agents="auto", max_agents=8, per_group=5)
+    p = out["preview"]
+    verse = next(s for s in sw.walk_seats(p["tree"]) if s["name"] == "Verse lead")
+    assert [s["content"] for s in verse["sub_plan"]["steps"]] == ["Verse: combat step 1", "Verse: combat step 2"]
+    assert all("Done when" in s["body_markdown"] for s in verse["sub_plan"]["steps"])
+    assert p["plan"]["title"] == "Shop island"
+    first = p["plan"]["sections"][0]
+    assert (first["seat"], first["title"]) == ("Verse lead", "Verse: combat")
+    assert [s["content"] for s in first["steps"]] == ["Verse: combat step 1", "Verse: combat step 2"]
+
+
+def test_step_edits_show_in_preview_and_build_makes_exactly_them():
+    edits = [{"seat": "Verse lead", "add_step": "Tests"},
+             {"seat": "Verse lead", "rename_step": "Verse: combat step 1", "to": "Damage system"},
+             {"seat": "Verse lead", "drop_step": "Verse: combat step 2"}]
+    p = _create(["Verse: combat", "Tester: playtest"], agents="auto", max_agents=8, per_group=5, edits=edits)["preview"]
+    section = p["plan"]["sections"][0]
+    assert [s["content"] for s in section["steps"]] == ["Damage system", "Tests"]
+    assert next(s for s in sw.walk_seats(p["tree"]) if s["name"] == "Verse lead")["sub_plan"]["total"] == 2
+
+    api = FakeApi()
+    _create(["Verse: combat", "Tester: playtest"], agents="auto", max_agents=8, per_group=5, edits=edits,
+            confirm=True, api=api)
+    adds = [c for c in api.calls if c[0] == "plan_add_node"]
+    assert [c[1] for c in adds[:3]] == ["Verse: combat", "Damage system", "Tests"]
+    assert adds[1][2] == adds[2][2] == "n2" and adds[3][1] == "Tester: playtest"  # n2 = the Verse section
+
+
+def test_bad_step_edits_name_the_steps():
+    with pytest.raises(ValueError, match="has no step"):
+        _create(["Verse: combat"], agents="auto", max_agents=8, per_group=5,
+                edits=[{"seat": "Verse lead", "drop_step": "nope"}])
+    with pytest.raises(ValueError, match="at least one step"):
+        _create(["Verse: combat"], agents="auto", max_agents=8, per_group=5,
+                edits=[{"seat": "Verse lead", "drop_step": "Verse: combat step 1"},
+                       {"seat": "Verse lead", "drop_step": "Verse: combat step 2"}])
+
+
 # ---- suggest_swarm ------------------------------------------------------------------------
 
 def _section(name, files, n=2):
