@@ -25,6 +25,7 @@ import {
   isModelFilePath,
   isVideoFilePath,
 } from "../verse-editor/utils/fileKind";
+import { useContentRoot } from "../verse-editor/hooks/useContentRoot";
 
 import { AudioFilePane } from "./AudioFilePane";
 import { CtrlWheelZoomRoot } from "./CtrlWheelZoomRoot";
@@ -274,6 +275,8 @@ export function FileEditorPane({ relativePath }: FileEditorPaneProps) {
   const contrib = usePluginContributions();
   const [verseEnabled, setVerseEnabled] = useState<boolean | null>(null);
   const [projectRoot, setProjectRoot] = useState("");
+  // A restored tab can render before project info sets the content root; re-render then.
+  useContentRoot();
 
   useEffect(() => {
     return onApiReady((api) => {

@@ -85,10 +85,23 @@ export const UEFN_CONTENT_ROOT = "Content";
 export const FOLDER_CONTENT_ROOT = ".";
 let activeContentRoot: string = UEFN_CONTENT_ROOT;
 let contentRootKnown = false;
+const contentRootListeners = new Set<() => void>();
 
 export function setProjectContentRoot(root: string | null | undefined): void {
-  activeContentRoot = root === FOLDER_CONTENT_ROOT ? FOLDER_CONTENT_ROOT : UEFN_CONTENT_ROOT;
+  const next = root === FOLDER_CONTENT_ROOT ? FOLDER_CONTENT_ROOT : UEFN_CONTENT_ROOT;
+  const changed = next !== activeContentRoot || !contentRootKnown;
+  activeContentRoot = next;
   contentRootKnown = true;
+  if (changed) for (const listener of [...contentRootListeners]) listener();
+}
+
+/** Notified when the content root is set or changes. Anything that derived a lock or a
+ * path from it before project info arrived (a restored editor tab) must re-check. */
+export function subscribeContentRoot(listener: () => void): () => void {
+  contentRootListeners.add(listener);
+  return () => {
+    contentRootListeners.delete(listener);
+  };
 }
 
 /** False until project info has arrived once (the tree waits for it on first load). */
