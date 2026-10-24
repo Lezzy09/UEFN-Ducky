@@ -78,7 +78,15 @@ class ProtectedFastMCP(FastMCP):
         from backend.workspace.ai_ignore import current_policy, SAFE_TOOLS
 
         available = await super().list_tools()
-        return [t for t in available if t.name in SAFE_TOOLS] if current_policy().strict else available
+        if current_policy().strict:
+            return [t for t in available if t.name in SAFE_TOOLS]
+        try:
+            from backend.uefn_plugins.host import sensitive_tool_block_reason
+
+            # A client whose run names its model never sees sensitive tools it may not call.
+            return [t for t in available if not sensitive_tool_block_reason(t.name, listing=True)]
+        except Exception:
+            return available
 
     async def _watch_catalog(self, session, revision):
         from backend.bridge.shared_mcp import (

@@ -1364,6 +1364,7 @@ REMOTE_DENY = frozenset(
         "get_mcp_config",
         "set_mcp_config",
         "set_uefn_plugin_secret",
+        "set_uefn_plugin_allowed_models",
         "test_uefn_plugin_secret",
         "test_key",
         "rtc_signal",

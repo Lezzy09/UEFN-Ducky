@@ -37,6 +37,7 @@ import { AppearanceProfileHeader } from "./settings/AppearanceProfileBar";
 import type { AudioSectionTab } from "./settings/AudioTab";
 import { SupportTab } from "./settings/SupportTab";
 import { PluginSettingsSections } from "./settings/PluginSettingsSections";
+import { PluginAllowedModels } from "./settings/PluginAllowedModels";
 import { INSTALLED_CATEGORY } from "./settings/storeFilters";
 import {
   countWorkingStoreJobs,
@@ -649,6 +650,7 @@ export const SettingsView = memo(function SettingsView({ version }: SettingsView
         return (
           <div className="general-tab-shell plugin-settings-tab-shell">
             <PluginSettingsSections tabId={tab.id} />
+            <PluginAllowedModels pluginId={tab.plugin_id} />
             <PluginSettingsEmbed pluginId={tab.plugin_id} panelId={panel.panelId} />
           </div>
         );
@@ -656,6 +658,7 @@ export const SettingsView = memo(function SettingsView({ version }: SettingsView
       return (
         <div className="general-tab-shell">
           <PluginSettingsSections tabId={tab.id} />
+          {tab.plugin_id ? <PluginAllowedModels pluginId={tab.plugin_id} /> : null}
         </div>
       );
     };

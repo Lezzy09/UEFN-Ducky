@@ -4452,6 +4452,15 @@ export interface PanelApi {
     key: string,
     value: string,
   ): Promise<{ ok: boolean; plugin_id?: string; key?: string; set?: boolean; error?: string }>;
+  /** Models whose chats may use a plugin's sensitive tools (`agent.tools.sensitive`). */
+  get_uefn_plugin_allowed_models?(
+    plugin_id: string,
+  ): Promise<{ ok: boolean; plugin_id?: string; sensitive?: boolean; models?: string[]; error?: string }>;
+  /** Save a plugin's Allowed models list (host Settings only; plugin panels cannot reach it). */
+  set_uefn_plugin_allowed_models?(
+    plugin_id: string,
+    models: string[],
+  ): Promise<{ ok: boolean; plugin_id?: string; models?: string[]; error?: string }>;
   /** Which of a plugin's secret keys are set (never returns the values). */
   get_uefn_plugin_secret_status?(
     plugin_id: string,

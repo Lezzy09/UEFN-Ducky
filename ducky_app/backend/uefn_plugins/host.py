@@ -1374,6 +1374,30 @@ def plugin_destructive_desktop_tools() -> frozenset[str]:
     return frozenset(out)
 
 
+def sensitive_tool_plugin(name: str) -> str:
+    """Owning plugin id when ``name`` is one of its ``agent.tools.sensitive`` tools, else ''."""
+    n = (name or "").strip()
+    with _LOCK:
+        pid = _PLUGIN_TOOL_OWNER.get(n, "")
+        meta = _CONTRIBUTIONS.get("agent_tools", {}).get(pid) if pid else None
+    if not isinstance(meta, dict):
+        return ""
+    sensitive = meta.get("sensitive")
+    if sensitive is True or (isinstance(sensitive, list) and n in sensitive):
+        return pid
+    return ""
+
+
+def sensitive_tool_block_reason(name: str, *, listing: bool = False) -> str:
+    """Why the calling run's model may not use this sensitive plugin tool ('' = it may)."""
+    pid = sensitive_tool_plugin(name)
+    if not pid:
+        return ""
+    from backend.uefn_plugins.model_gate import block_reason
+
+    return block_reason(pid, name, label=_plugin_label(pid), listing=listing)
+
+
 def filter_uefn_plugin_tools(tools: list[Any]) -> list[Any]:
     """Drop UEFN app-plugin tools that are Store-disabled or not in the run allowlist.
 
@@ -1417,6 +1441,8 @@ def filter_uefn_plugin_tools(tools: list[Any]) -> list[Any]:
                 pass
             continue
         if active is not None and pid not in active:
+            continue
+        if sensitive_tool_block_reason(name, listing=True):
             continue
         out.append(t)
     return out
@@ -3115,8 +3141,15 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
     plan_names: set[str] = set()
     destructive_names: set[str] = set()
     declared_tools: set[str] = set()
+    # agent.tools.sensitive: true (every tool) or a list of names → model-gated.
+    sensitive: bool | list[str] = False
     intent_re = None
     if isinstance(tools_meta, dict):
+        raw_sensitive = tools_meta.get("sensitive")
+        if raw_sensitive is True:
+            sensitive = True
+        elif isinstance(raw_sensitive, list):
+            sensitive = sorted({n.strip() for n in raw_sensitive if isinstance(n, str) and n.strip()})
         for name in tools_meta.get("tools") or []:
             if isinstance(name, str) and name.strip():
                 declared_tools.add(name.strip())
@@ -3156,6 +3189,7 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
             "tools": sorted(tool_names),
             "plan_tools": sorted(plan_names),
             "destructive_tools": sorted(destructive_names),
+            "sensitive": sensitive,
         }
     if plan_names:
         _PLUGIN_PLAN_TOOLS.update(plan_names)
@@ -4222,6 +4256,9 @@ class _PluginApi:
                     raise ValueError(
                         f"Plugin '{pid}' tools are disabled — enable it in Settings → Store"
                     )
+                blocked = sensitive_tool_block_reason(tool_name)
+                if blocked:
+                    raise ValueError(blocked)
                 if pid in _DATA_PLUGINS:
                     try:  # a sync in the app process changed its data: its on_change hears it first
                         from backend.uefn_plugins.scopes import deliver_data_changes

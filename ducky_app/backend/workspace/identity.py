@@ -112,6 +112,11 @@ def reset_shared(token: Token) -> None:
     _shared.reset(token)
 
 
+def is_shared_call() -> bool:
+    """True inside a shared-daemon tool call (an MCP client, never the person)."""
+    return _shared.get()
+
+
 def current() -> RunContext | None:
     """The context bound on this task/thread, or None."""
     return _ctx.get()

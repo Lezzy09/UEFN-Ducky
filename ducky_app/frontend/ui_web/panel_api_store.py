@@ -817,6 +817,38 @@ class PanelApiStoreMixin:
         status = {k: (k in allowed and has_key(k)) for k in want}
         return {"ok": True, "plugin_id": pid, "status": status}
 
+    def get_uefn_plugin_allowed_models(self, plugin_id: str) -> dict[str, Any]:
+        """The models whose chats may use this plugin's sensitive tools (Settings picker)."""
+        from backend.uefn_plugins.host import get_contributions
+        from backend.uefn_plugins.model_gate import allowed_models
+        from backend.uefn_plugins.store import normalize_plugin_id
+
+        try:
+            pid = normalize_plugin_id(str(plugin_id or ""))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "models": []}
+        meta = (get_contributions().get("agent_tools") or {}).get(pid) or {}
+        sensitive = meta.get("sensitive") if isinstance(meta, dict) else False
+        return {
+            "ok": True,
+            "plugin_id": pid,
+            "sensitive": bool(sensitive),
+            "models": allowed_models(pid),
+        }
+
+    def set_uefn_plugin_allowed_models(self, plugin_id: str, models: list[str] | None = None) -> dict[str, Any]:
+        """Save the person's Allowed models list. Host UI only: plugin panels cannot reach it."""
+        from backend.uefn_plugins.model_gate import set_allowed_models
+        from backend.uefn_plugins.store import normalize_plugin_id
+
+        try:
+            pid = normalize_plugin_id(str(plugin_id or ""))
+            saved = set_allowed_models(pid, list(models or []))
+        except (ValueError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
+        self._push_panel({"type": "uefn_plugins_changed"})
+        return {"ok": True, "plugin_id": pid, "models": saved}
+
     def test_uefn_plugin_secret(
         self, plugin_id: str, key: str, value: str = ""
     ) -> dict[str, Any]:
