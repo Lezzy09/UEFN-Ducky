@@ -16,6 +16,7 @@ the panel answers or the overall ``timeout`` budget runs out.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import socket
 import time
@@ -57,6 +58,20 @@ def _http(method: str, url: str, body: bytes | None, timeout: float) -> dict[str
     return json.loads(raw) if raw else {}
 
 
+# A tool call's "what am I waiting on" record (shared_mcp's stuck report reads it): the
+# panel method this call's thread is waiting for, and its pending request id.
+_WAITING: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar("panel_rpc_waiting", default=None)
+
+
+def track_waits(holder: dict[str, Any]) -> contextvars.Token:
+    """Record this context's panel waits in ``holder`` (threads and tasks it starts share it)."""
+    return _WAITING.set(holder)
+
+
+def untrack_waits(token: contextvars.Token) -> None:
+    _WAITING.reset(token)
+
+
 def panel_rpc(method: str, params: dict[str, Any] | None = None, *, timeout: float = 30.0) -> dict[str, Any]:
     """Invoke a panel UI method and return its result dict.
 
@@ -65,6 +80,18 @@ def panel_rpc(method: str, params: dict[str, Any] | None = None, *, timeout: flo
     (``"panel not open"`` or ``"timeout"``) — callers should surface it rather
     than raise.
     """
+    holder = _WAITING.get()
+    if holder is None:
+        return _panel_rpc(method, params, timeout, {})
+    holder["panel_rpc"] = str(method)
+    try:
+        return _panel_rpc(method, params, timeout, holder)
+    finally:
+        holder.pop("panel_rpc", None)
+        holder.pop("request_id", None)
+
+
+def _panel_rpc(method: str, params: dict[str, Any] | None, timeout: float, holder: dict[str, Any]) -> dict[str, Any]:
     body = json.dumps({"method": str(method), "params": dict(params or {})}).encode("utf-8")
     deadline = time.monotonic() + max(1.0, float(timeout))
     try:
@@ -74,6 +101,7 @@ def panel_rpc(method: str, params: dict[str, Any] | None = None, *, timeout: flo
 
     while resp.get("pending"):
         request_id = str(resp.get("request_id") or "")
+        holder["request_id"] = request_id
         remaining = deadline - time.monotonic()
         if not request_id or remaining <= 0:
             return {"error": "timeout", "timed_out": True}

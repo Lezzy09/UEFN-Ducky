@@ -489,7 +489,7 @@ class _CallTimedOut(Exception):
     """A quick tool did not answer within its limit: the agent gets this text as an error."""
 
 
-def _in_own_thread(fn: Any, thread: dict[str, int], name: str) -> asyncio.Future[Any]:
+def _in_own_thread(fn: Any, thread: dict[str, Any], name: str) -> asyncio.Future[Any]:
     """Run ``fn`` on a new thread with this call's context (identity, mode); its result
     settles the returned future on this loop. ``thread['id']`` names the thread."""
     loop = asyncio.get_running_loop()
@@ -519,7 +519,8 @@ def _in_own_thread(fn: Any, thread: dict[str, int], name: str) -> asyncio.Future
     return fut
 
 
-async def _watched(work: asyncio.Future[Any], name: str, thread: dict[str, int], ident: Any) -> Any:
+async def _watched(work: asyncio.Future[Any], name: str, thread: dict[str, Any], ident: Any,
+                   waits: dict[str, Any] | None = None) -> Any:
     """Await one tool call. A quick tool past :data:`QUICK_TOOL_LIMIT_S` is stopped and
     raises :class:`_CallTimedOut`; any call past the first check is recorded where it waits."""
     limit = QUICK_TOOL_LIMIT_S if name in QUICK_TOOLS else None
@@ -527,7 +528,7 @@ async def _watched(work: asyncio.Future[Any], name: str, thread: dict[str, int],
     try:
         done, _ = await asyncio.wait({work}, timeout=first)
         if not done:
-            _report_stuck(name, first, work, thread, ident)
+            _report_stuck(name, first, work, thread, ident, waits)
             if limit is not None:
                 work.cancel()
                 raise _CallTimedOut(
@@ -557,18 +558,48 @@ def _await_chain(work: Any) -> list[str]:
     return lines
 
 
-def _report_stuck(name: str, seconds: float, work: Any, thread: dict[str, int], ident: Any) -> None:
+_LOOP_FILES = (f"{os.sep}asyncio{os.sep}", f"{os.sep}selectors.py")
+
+
+def _idle_in_loop(lines: list[str]) -> bool:
+    """The stack ends in an event loop waiting for work (``windows_events.py _poll``)."""
+    last = lines[-1] if lines else ""
+    return any(part in last for part in _LOOP_FILES)
+
+
+def _call_stack(work: Any, thread: dict[str, Any]) -> list[str]:
+    """Where one call waits. A sync tool runs on a thread with its own loop: while its
+    coroutine awaits (a ``to_thread``, a question gate) that thread only sits in the loop's
+    ``_poll``, which every Oct 24 2026 report showed. Then the coroutine's await chain and
+    the loop's worker threads name the wait."""
+    import sys
+    import traceback
+
+    frames = sys._current_frames()
+    tid = thread.get("id")
+    lines = traceback.format_stack(frames[tid]) if tid and tid in frames else []
+    if lines and not _idle_in_loop(lines):
+        return lines
+    task = thread.get("task")
+    chain = _await_chain(task if isinstance(task, asyncio.Task) else work)
+    executor = getattr(thread.get("loop"), "_default_executor", None)
+    for worker in list(getattr(executor, "_threads", None) or ()):
+        stack = traceback.format_stack(frames[worker.ident]) if worker.ident in frames else []
+        # A busy worker runs a work item; an idle one waits on its queue.
+        if any("futures" in line and ", in run" in line for line in stack):
+            chain += [f"{worker.name}:\n", *stack[-12:]]
+    return chain or lines
+
+
+def _report_stuck(name: str, seconds: float, work: Any, thread: dict[str, Any], ident: Any,
+                  waits: dict[str, Any] | None = None) -> None:
     """One events row (kind ``tool_stuck``) with where the call waits. Never raises."""
     try:
         import sys
         import traceback
 
         frames = sys._current_frames()
-        tid = thread.get("id")
-        if tid and tid in frames:
-            lines = traceback.format_stack(frames[tid])
-        else:
-            lines = _await_chain(work)
+        lines = _call_stack(work, thread)
         # A wait on another loop (nested MCP servers) continues on that loop's thread.
         for t in threading.enumerate():
             if t.name == "mcp-plugin-pool" and t.ident in frames:
@@ -578,9 +609,19 @@ def _report_stuck(name: str, seconds: float, work: Any, thread: dict[str, int], 
 
         now = time.time()
         stack = scrub("".join(lines))[-8000:]
-        events.insert("tool_stuck", ts=now, source=name, message=f"{name} still running after {seconds:.0f} s",
-                      payload={"tool": name, "seconds": seconds, "conv_id": str(getattr(ident, "conv_id", "") or ""),
-                               "coding_agent": str(getattr(ident, "coding_agent", "") or ""), "stack": stack})
+        conv_id = str(getattr(ident, "conv_id", "") or "")
+        payload: dict[str, Any] = {"tool": name, "seconds": seconds, "conv_id": conv_id,
+                                   "coding_agent": str(getattr(ident, "coding_agent", "") or ""), "stack": stack}
+        waiting = dict(waits or {})
+        if waiting:
+            payload["waiting_on"] = waiting
+        if name == "ducky_terminal_run":
+            # Root cause 11: a run that waits on the person's approval card looks like a stuck command.
+            payload["phase"] = "approval card" if waiting.get("panel_rpc") == "ask_user" else "running command"
+        what = payload.get("phase") or (f"panel_rpc {waiting['panel_rpc']}" if waiting.get("panel_rpc") else "")
+        message = (f"{name}: waiting_on {what} (conv {conv_id[:8]}, {seconds:.0f} s)" if what
+                   else f"{name} still running after {seconds:.0f} s")
+        events.insert("tool_stuck", ts=now, source=name, message=message, payload=payload)
         events.trim("tool_stuck", older_than=now - 30 * 86400, keep=200)
         from frontend import usage_stats
 
@@ -647,7 +688,11 @@ async def _call_tool(mcp: Any, name: str, arguments: dict[str, Any], ident: Any)
             reason = mode_tool_block_reason(mode, name, arguments, catalog)
             if reason:
                 return {"content": [{"type": "text", "text": reason}], "isError": True}
-        thread: dict[str, int] = {}
+        thread: dict[str, Any] = {}
+        from backend.panel import rpc
+
+        waits: dict[str, Any] = {}
+        waits_token = rpc.track_waits(waits)  # before the work starts: its context copies it
         if _is_sync_tool(mcp, name):
             # A sync tool runs on a thread of its own. On this loop it held up every agent
             # sharing the daemon, and one that waits on another agent (run_workflow,
@@ -656,12 +701,17 @@ async def _call_tool(mcp: Any, name: str, arguments: dict[str, Any], ident: Any)
             # the loop's pool either: calls that wait for minutes (or were given up) kept
             # its threads, and every later call queued behind them at its first step.
             # Listener POSTs stay serialized by bridge.client._listener_lock.
-            work = _in_own_thread(lambda: asyncio.run(mcp.call_tool(name, arguments or {})), thread, name)
+            async def _main() -> Any:
+                thread["task"], thread["loop"] = asyncio.current_task(), asyncio.get_running_loop()
+                return await mcp.call_tool(name, arguments or {})
+
+            work = _in_own_thread(lambda: asyncio.run(_main()), thread, name)
         else:
             work = asyncio.ensure_future(mcp.call_tool(name, arguments or {}))
+        rpc.untrack_waits(waits_token)
         t0 = time.monotonic()
         try:
-            raw = await _watched(work, name, thread, ident)
+            raw = await _watched(work, name, thread, ident, waits)
         except _CallTimedOut as exc:
             _usage_tool_done(name, False, t0, ident, arguments)
             return {"content": [{"type": "text", "text": str(exc)}], "isError": True}
