@@ -1751,3 +1751,20 @@ def test_author_names_ais_and_my_other_pc(pc: PC, monkeypatch: pytest.MonkeyPatc
     assert vcs_engine.author(*a, "u_ana", "d_mainpc") == "you on MainPC"
     assert vcs_engine.author(*a, "u_ana", "d_mainpc", "agent", "Builder") == "AI (your ducky Builder on MainPC)"
     assert vcs_engine.other_pc(*a, "u_ana", vcs_engine.device_id()) == ""  # this PC is not "another"
+
+
+def test_a_duckys_lock_names_the_ducky_not_only_its_person(pc: PC, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vcs_engine, "my_user_id", lambda: "u_ana")
+    roster = {"people": [{"user": "u_ben", "device": "d_ben", "plugins": {PLUGIN: {"editing": [
+        {"unitName": "Pip", "actor": "agent", "ducky": "Builder"}]}}}]}
+    monkeypatch.setattr(space_vcs, "presence_get", lambda _a, _s: {"roster": roster})
+    monkeypatch.setattr(space_vcs, "activity", lambda _a, _s, **_k: [
+        {"plugin_id": PLUGIN, "unit": "doc:card.zed", "actor": "agent", "ducky": "Verse Coder"}])
+    a = (pc.account, SPACE)
+    ben = {"plugin_id": PLUGIN, "unit": "doc:card.pip", "name": "Pip", "holder_user": "u_ben",
+           "holder_name": "Ben", "holder_device": "d_ben", "mine": False}
+    assert vcs_engine.holder_of(*a, ben)[0] == "AI (Ben's ducky Builder)"
+    assert vcs_engine.holder_of(*a, {**ben, "name": "Zed", "unit": "doc:card.zed"})[0] == "Ben"  # Ben, by hand
+    mine = {"plugin_id": PLUGIN, "unit": "doc:card.zed", "name": "Zed", "mine": True}
+    assert vcs_engine.holder_of(*a, mine)[0] == "AI (your ducky Verse Coder)"
+    assert vcs_engine.lock_ducky(*a, {**mine, "unit": "doc:card.other"}) is None

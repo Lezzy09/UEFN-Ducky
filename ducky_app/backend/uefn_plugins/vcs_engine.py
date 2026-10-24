@@ -303,9 +303,47 @@ def author(account: str, space: str, by: Any, device: Any = "", actor: Any = "us
     return f"AI, for {'you on ' + pc if pc else person(by)}"
 
 
+def lock_ducky(account: str, space: str, lk: Mapping[str, Any]) -> str | None:
+    """The ducky behind a cached lock row ('' for an AI with no name), None for a person.
+    A lock carries no actor on the wire: its holder PC's presence (or, for this PC's own,
+    the activity here) says who changed the unit, so a ducky's lock never reads as its
+    person's alone."""
+    plugin, unit, name = str(lk.get("plugin_id") or ""), str(lk.get("unit") or ""), str(lk.get("name") or "")
+    try:
+        if lk.get("mine"):
+            for a in space_vcs.activity(account, space):
+                if a["plugin_id"] == plugin and a["unit"] == unit and a["actor"] == "agent":
+                    return str(a["ducky"] or "")
+            return None
+        roster = space_vcs.presence_get(account, space)["roster"]
+        people = roster.get("people") if isinstance(roster, Mapping) else None
+        for p in people if isinstance(people, list) else []:
+            if not isinstance(p, Mapping) or str(p.get("user") or "") != str(lk.get("holder_user") or "") \
+                    or str(p.get("device") or "") != str(lk.get("holder_device") or ""):
+                continue
+            plugins = p.get("plugins") if isinstance(p.get("plugins"), Mapping) else {}
+            here = plugins.get(plugin) if isinstance(plugins.get(plugin), Mapping) else {}
+            for e in here.get("editing") or []:
+                if isinstance(e, Mapping) and e.get("actor") == "agent" and str(e.get("unitName") or "") in (
+                        name, unit.split(":", 1)[-1]):
+                    return str(e.get("ducky") or "")
+    except Exception:  # noqa: BLE001 — attribution never fails a lock
+        return None
+    return None
+
+
 def holder_of(account: str, space: str, lk: Mapping[str, Any]) -> tuple[str, str]:
-    """:func:`holder` of a cached lock row."""
-    return holder(account, space, lk.get("holder_user"), lk.get("holder_name"), lk.get("holder_device"))
+    """:func:`holder` of a cached lock row; a ducky's lock says so, like :func:`author`:
+    "AI (Ana's ducky Builder)", "AI (your ducky Builder on MainPC)"."""
+    who, pc = holder(account, space, lk.get("holder_user"), lk.get("holder_name"), lk.get("holder_device"))
+    ducky = lock_ducky(account, space, lk)
+    if ducky is None:
+        return who, pc
+    if lk.get("mine") or pc:
+        on = f" on {pc}" if pc else ""
+        return (f"AI (your ducky {ducky}{on})" if ducky else f"AI, for you{on}"), pc
+    name = person(lk.get("holder_name"), lk.get("holder_user"))
+    return (f"AI ({name}'s ducky {ducky})" if ducky else f"AI, for {name}"), pc
 
 
 # --------------------------------------------------------------------------- push

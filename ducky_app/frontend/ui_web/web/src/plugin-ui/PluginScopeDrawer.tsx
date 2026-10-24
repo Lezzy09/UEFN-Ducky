@@ -503,7 +503,8 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id, tab: shownT
         const name = lock.name || lock.unit;
         // This account on another PC: the buttons ask that PC by its name.
         const holder = lock.elsewhere || lock.holder || "someone";
-        const who = lock.mine ? "You" : lock.elsewhere ? `You on ${lock.elsewhere}` : holder;
+        // A ducky's lock names the ducky ("AI (your ducky Builder)"), never just its person.
+        const who = lock.mine ? (lock.holder || "You") : lock.elsewhere && !lock.holder?.startsWith("AI") ? `You on ${lock.elsewhere}` : holder;
         const lease = lock.leaseLeft != null ? (lock.leaseLeft > 0 ? `${durationText(lock.leaseLeft)} left` : "ran out") : "";
         return (
           <Row key={lock.unit} name={name}

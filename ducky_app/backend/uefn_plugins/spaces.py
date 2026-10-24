@@ -578,10 +578,17 @@ def _people(account: str, space: str, plugin: str) -> list[dict[str, Any]]:
 
 
 def _lock_holder(account: str, space: str, lk: Mapping[str, Any]) -> dict[str, str]:
-    """``holder`` ('' for this PC's own lock) and ``elsewhere`` (the PC's name when this
-    account holds it on another PC: "you on MainPC")."""
+    """``holder`` ('' for this PC's own lock, "AI (your ducky Builder)" when a ducky here
+    holds it) and ``elsewhere`` (the PC's name when this account holds it on another PC:
+    "you on MainPC")."""
     if lk["mine"]:
-        return {"holder": "", "elsewhere": ""}
+        try:
+            from backend.uefn_plugins.vcs_engine import holder_of, lock_ducky
+
+            return {"holder": holder_of(account, space, lk)[0] if lock_ducky(account, space, lk) is not None
+                    else "", "elsewhere": ""}
+        except Exception:  # noqa: BLE001
+            return {"holder": "", "elsewhere": ""}
     try:
         from backend.uefn_plugins.vcs_engine import holder_of
 
