@@ -1041,6 +1041,17 @@ def _keep_newer_placement(conv: Conversation, stored: dict[str, Any] | None) -> 
             setattr(conv, name, theirs)
 
 
+def _keep_stored_lanes(conv: Conversation, stored: dict[str, Any] | None) -> None:
+    """A group roster's write lanes never go back to an older copy's (Oct 24 2026)."""
+    if not getattr(conv, "is_group", False) or not isinstance(stored, dict):
+        return
+    from backend.workspace.lanes import keep_stored_lanes
+
+    conv.group_members = keep_stored_lanes(
+        getattr(conv, "group_members", None) or [], stored.get("group_members") or []
+    )
+
+
 def save_conversation(
     conv: Conversation, project_root: str | None = None, *, touch_updated: bool = True, wait: bool = False
 ) -> Future | None:
@@ -1065,9 +1076,12 @@ def save_conversation(
                 newer_edit = float(queued.settings_edited or 0.0) > float(conv.settings_edited or 0.0)
                 newer = queued.to_dict() if newer_edit else None
             _keep_newer_settings(conv, newer)
-            if getattr(conv, _HELD_ATTR, None):
+            held = getattr(conv, _HELD_ATTR, None)
+            if held or getattr(conv, "is_group", False):
                 stored_doc = queued.to_dict() if queued is not None else _repo().conv_get(conv.id, with_messages=False)
-                _keep_newer_placement(conv, stored_doc)
+                if held:
+                    _keep_newer_placement(conv, stored_doc)
+                _keep_stored_lanes(conv, stored_doc)
             if queued is None:
                 _reload_if_stale(conv)
             snapshot = _shallow(conv)
@@ -1092,6 +1106,7 @@ def save_conversation(
                 if isinstance(existing, dict):
                     _keep_newer_settings(conv, existing)
                     _keep_newer_placement(conv, existing)
+                    _keep_stored_lanes(conv, existing)
                 disk_msgs = existing.get("messages") if isinstance(existing, dict) else None
                 if isinstance(disk_msgs, list) and disk_msgs:
                     if not incoming_msgs:
