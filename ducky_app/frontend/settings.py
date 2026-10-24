@@ -95,7 +95,7 @@ class PanelSettings:
     changeset_journal_enabled: bool = True
     """When true, every project write is ledgered per run (AppData/changesets) so runs can be reverted."""
 
-    write_lanes_mode: str = "shadow"
+    write_lanes_mode: str = "enforce"
     """Group write lanes: off | shadow (flag out-of-lane writes) | enforce (refuse them)."""
 
     editor_tracking_enabled: bool = True
@@ -483,7 +483,7 @@ class PanelSettings:
             or not self.verse_diagnostics_cache_enabled
             or not self.verse_diagnostics_auto_check
             or not self.changeset_journal_enabled
-            or self.write_lanes_mode != "shadow"
+            or self.write_lanes_mode != "enforce"
             or not self.editor_tracking_enabled
             or self.editor_tracking_mode != "full"
             or self.ai_ignore_patterns

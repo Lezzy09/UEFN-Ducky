@@ -38,7 +38,8 @@ MODES = (MODE_OFF, MODE_SHADOW, MODE_ENFORCE)
 POLICY_NAME = "lane"
 
 def _default_mode() -> str:
-    return MODE_SHADOW
+    # Shadow only flagged: members wrote outside their lanes and nothing stopped them.
+    return MODE_ENFORCE
 
 
 _mode_source: Callable[[], str] = _default_mode
@@ -55,7 +56,7 @@ def current_mode() -> str:
         mode = str(_mode_source() or "").strip().lower()
     except Exception:  # noqa: BLE001 - never let a settings read block a write
         return MODE_SHADOW
-    return mode if mode in MODES else MODE_SHADOW
+    return mode if mode in MODES else _default_mode()
 
 _WILDCARDS = set("*?[")
 

@@ -308,3 +308,83 @@ def test_a_lead_added_to_a_new_group_stays_in_its_old_group(monkeypatch, tmp_pat
     assert lead.id in [m["member_conv_id"] for m in out["group_members"]]
     fresh = load_conversation(lead.id, project_root=root)
     assert fresh.folder_id == old["folder_id"] and fresh.parent_conv_id == old["id"]
+
+
+def _two_teams(monkeypatch, tmp_path):
+    import frontend.ui_web.panel_api as pa
+    from frontend.ui_web.panel_api_chats import PanelApiChatsMixin
+
+    root = str(tmp_path)
+    settings = PanelSettings.load()
+    settings.uefn_project_root = root
+    monkeypatch.setattr(pa.PanelSettings, "load", classmethod(lambda cls: settings))
+    monkeypatch.setattr(pa, "notify_chats_changed", lambda *a, **k: None)
+    api = PanelApiChatsMixin()
+    old = api.group_create("Old Team", "", False)
+    new = api.group_create("New Team", "", False)
+    return api, settings, root, old, new
+
+
+def _lane(out, cid):
+    return next(m for m in out["group_members"] if m["member_conv_id"] == cid).get("write_allowed")
+
+
+def test_a_member_moved_to_another_group_keeps_its_lane(monkeypatch, tmp_path):
+    # Oct 23 2026: the move rebuilt the roster row from the new group and the bar said "No lane".
+    api, settings, root, old, new = _two_teams(monkeypatch, tmp_path)
+    member = create_conversation(settings, old["folder_id"], title="Coder", parent_conv_id=old["id"], project_root=root)
+    assert api.group_add_member(old["id"], member.id)["ok"]
+    assert api.group_set_member_lane(old["id"], member.id, ["ducky_app/backend/workspace"], set_by="lead")["ok"]
+
+    out = api.group_add_member(new["id"], member.id)
+
+    assert out["ok"] and "lane_warning" not in out
+    assert _lane(out, member.id) == ["ducky_app/backend/workspace/**"]
+    assert api.group_get_lanes(new["id"])["lanes"][member.id]["write_allowed"] == ["ducky_app/backend/workspace/**"]
+
+
+def test_an_outer_lead_sets_lanes_in_its_nested_groups_but_a_sibling_lead_cannot(monkeypatch, tmp_path):
+    # Oct 23 2026: the outer lead made the workstream groups, then ducky_group_set_lane refused it.
+    import pytest
+
+    from backend.tools.panel import ducky_panel
+    from backend.workspace import identity
+    from backend.workspace.identity import RunContext
+
+    api, settings, root, outer, _new = _two_teams(monkeypatch, tmp_path)
+    inner = api.group_create("Surface", outer["folder_id"], False)
+    sibling = api.group_create("Search", outer["folder_id"], False)
+    lead = create_conversation(settings, outer["folder_id"], title="Lead", parent_conv_id=outer["id"], project_root=root)
+    worker = create_conversation(settings, inner["folder_id"], title="Worker", parent_conv_id=inner["id"], project_root=root)
+    other = create_conversation(settings, sibling["folder_id"], title="Other", parent_conv_id=sibling["id"], project_root=root)
+    api.group_add_member(outer["id"], lead.id, as_leader=True)
+    api.group_add_member(inner["id"], worker.id, as_leader=True)
+    api.group_add_member(sibling["id"], other.id, as_leader=True)
+    monkeypatch.setattr(ducky_panel, "_panel_api", lambda: api)
+
+    assert api.group_lane_authorities(inner["id"]) == [worker.id, lead.id]
+    for caller, allowed in ((lead.id, True), (worker.id, True), (other.id, False)):
+        token = identity.bind(RunContext(run_id="r", conv_id=caller))
+        try:
+            if allowed:
+                assert ducky_panel._require_lane_authority(inner["id"]) == caller
+            else:
+                with pytest.raises(ValueError, match="Only the group leader"):
+                    ducky_panel._require_lane_authority(inner["id"])
+        finally:
+            identity.reset(token)
+
+
+def test_a_moved_lane_that_overlaps_the_new_team_is_reported_not_forced(monkeypatch, tmp_path):
+    api, settings, root, old, new = _two_teams(monkeypatch, tmp_path)
+    mover = create_conversation(settings, old["folder_id"], title="Mover", parent_conv_id=old["id"], project_root=root)
+    owner = create_conversation(settings, new["folder_id"], title="Owner", parent_conv_id=new["id"], project_root=root)
+    api.group_add_member(old["id"], mover.id)
+    api.group_add_member(new["id"], owner.id)
+    assert api.group_set_member_lane(old["id"], mover.id, ["ducky_app/frontend"])["ok"]
+    assert api.group_set_member_lane(new["id"], owner.id, ["ducky_app/frontend"])["ok"]
+
+    out = api.group_add_member(new["id"], mover.id)
+
+    assert out["ok"] and out["lane_warning"].startswith("Lane not kept: Lane overlaps")
+    assert _lane(out, mover.id) is None and _lane(out, owner.id) == ["ducky_app/frontend/**"]

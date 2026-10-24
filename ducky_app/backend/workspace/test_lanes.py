@@ -150,6 +150,17 @@ def test_policy_modes() -> None:
     assert not enforce.check(_request("Content/Verse/Hub/a.verse", ctx=read_only)).allow
 
 
+def test_lanes_hold_by_default() -> None:
+    # Oct 23 2026: shadow was the default, so out-of-lane writes were only flagged.
+    from frontend.settings import PanelSettings
+
+    assert lanes.current_mode() == "enforce" and PanelSettings().write_lanes_mode == "enforce"
+    laned = RunContext(run_id="r", conv_id="hacker", lane=("Content/Verse/Shop/**",))
+    assert not lanes.LanePolicy(mode=lanes.current_mode).check(_request("Content/Verse/Hub/a.verse", ctx=laned)).allow
+    lanes.set_mode_source(lambda: "bogus")
+    assert lanes.current_mode() == "enforce"
+
+
 def test_policy_resolves_lane_from_provider_when_context_has_none() -> None:
     lanes.register_lane_provider(StaticProvider({"hacker": ("Content/Verse/Shop/**",)}))
     ctx = RunContext(run_id="r", conv_id="hacker")

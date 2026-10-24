@@ -240,6 +240,7 @@ _PUBLIC_METHODS = frozenset({
     'group_set_member_model',
     'group_set_member_lane',
     'group_get_lanes',
+    'group_lane_authorities',
     'group_check_lane',
     'has_any_api_key',
     'hide_window',

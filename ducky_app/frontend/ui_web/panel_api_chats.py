@@ -816,6 +816,9 @@ class PanelApiChatsMixin:
         if not folder_id:
             return {"ok": False, "error": "Group has no folder"}
         _convs, folders = island_for_conversation(group_id)
+        # A member moved from another group keeps its lane: the new group's roster row is
+        # built fresh from the folder and would otherwise drop it ("No lane").
+        old_row = self._lane_row_in_other_group(member, group_id)
         # The lead of an outer group joins its subgroups' rosters but stays filed on top of
         # its own group; only other chats move into the group's folder.
         # A designated leader is a pointer; never move it from its existing chat location.
@@ -856,11 +859,35 @@ class PanelApiChatsMixin:
             group.leader_conv_id = cid
         _pa.save_conversation(group)
         _pa.notify_chats_changed(group.id, group.title, group.folder_id, open_tab=False)
-        return {
+        out: dict[str, Any] = {
             "ok": True,
             "leader_conv_id": (getattr(group, "leader_conv_id", None) or "").strip(),
             "group_members": group_members(group),
         }
+        now_row = next((m for m in out["group_members"] if m.get("member_conv_id") == cid), {})
+        if old_row and now_row.get("write_allowed") is None:
+            kept = self.group_set_member_lane(
+                group_id, cid, old_row["write_allowed"], set_by=str(old_row.get("lane_set_by") or "user")
+            )
+            if kept.get("ok"):
+                out["group_members"] = kept["group_members"]
+            else:
+                out["lane_warning"] = f"Lane not kept: {kept.get('error')}"
+        return out
+
+    @staticmethod
+    def _lane_row_in_other_group(member: Any, group_id: str) -> dict[str, Any] | None:
+        """The member's roster row in the group it is leaving, when that row has a lane."""
+        from frontend.ui_web.group_orchestrator import group_members
+
+        old_id = (getattr(member, "parent_conv_id", None) or "").strip()
+        if not old_id or old_id == group_id:
+            return None
+        old = _pa.load_conversation(old_id)
+        if not old or not getattr(old, "is_group", False):
+            return None
+        row = next((m for m in group_members(old) if m.get("member_conv_id") == member.id), None)
+        return row if row and row.get("write_allowed") is not None else None
 
     def group_set_member_model(
         self, group_id: str, member_conv_id: str, model: str = ""
@@ -945,6 +972,30 @@ class PanelApiChatsMixin:
             "warnings": warnings,
             "lanes": lane_engine.lane_set_view(group.id, next_members),
         }
+
+    def group_lane_authorities(self, group_id: str) -> list[str]:
+        """Who may set lanes in this group: its leader, then the leader of every group it
+        is nested in (an outer lead seats its subgroups' workers)."""
+        from frontend.ui_web.group_orchestrator import _group_folder_id
+        from frontend.ui_web.project_chats import island_for_conversation
+
+        gid = (group_id or "").strip()
+        group = _pa.load_conversation(gid)
+        if not group or not getattr(group, "is_group", False):
+            return []
+        leaders = [(getattr(group, "leader_conv_id", None) or "").strip()]
+        _convs, folders = island_for_conversation(gid)
+        rows = {f.id: f for f in folders}
+        seen: set[str] = set()
+        cur = (getattr(rows.get(_group_folder_id(gid)), "parent_id", None) or "").strip()
+        while cur and cur not in seen:
+            seen.add(cur)
+            hub_id = (getattr(rows.get(cur), "group_hub_id", None) or "").strip()
+            hub = _pa.load_conversation(hub_id) if hub_id else None
+            if hub is not None and getattr(hub, "is_group", False):
+                leaders.append((getattr(hub, "leader_conv_id", None) or "").strip())
+            cur = (getattr(rows.get(cur), "parent_id", None) or "").strip()
+        return [lid for lid in leaders if lid]
 
     def group_get_lanes(self, group_id: str) -> dict[str, Any]:
         from backend.workspace import lanes as lane_engine
