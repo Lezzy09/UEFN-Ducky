@@ -50,6 +50,7 @@ _VALUE_FLAGS = frozenset({
 _WORDS = ("the plan step reads the file then checks its tests and writes the change "
           "before the next tool call lands in the fixture repo while the swarm keeps working").split()
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_MSG_RE = re.compile(r"SOAKMSG-\d+")
 
 
 def log_event(kind: str, **fields: Any) -> None:
@@ -175,6 +176,15 @@ class Turn:
         self.repo = Path(os.environ.get("STUB_FIXTURE_REPO") or os.getcwd())
         self.terminal_session = ""
         self.mcp: Mcp | None = None
+        self.conv = os.environ.get("DUCKY_CONV_ID") or ""
+
+    def log(self, kind: str, **fields: Any) -> None:
+        log_event(kind, session=self.session_id, conv=self.conv, **fields)
+
+    def saw_messages(self, text: str, path: str) -> None:
+        """Log every soak message id (SOAKMSG-<n>) that reached this agent, and how."""
+        for msg_id in sorted(set(_MSG_RE.findall(text or ""))):
+            self.log("message", id=msg_id, path=path)
 
     # ── input ──────────────────────────────────────────────────────────
 
@@ -268,16 +278,18 @@ class Turn:
             self.steers += steers
             self.counts["messages_read"] += len(steers)
             for text in steers:
-                log_event("message", session=self.session_id, text=text[:200])
+                self.saw_messages(text, "stdin")
             words = ["Got your message:", *(" ".join(s.split()) for s in steers), "-", *words]
         return " ".join(words)
 
     def tool(self, name: str, arguments: dict[str, Any]) -> str:
         """One tool_use block, the real MCP call, and its tool_result. Returns the result text."""
+        expect_s = float(arguments.pop("expect_s", 0) or 0)
         if not self.stream_text(self.step_text()):
             return ""
         self.counts["tool_calls"] += 1
-        log_event("tool", session=self.session_id, tool=name)
+        self.log("tool", tool=name)
+        called = time.monotonic()
         if name == "ducky_ask_user":
             self.counts["ask_user"] += 1
         tool_id = f"toolu_stub_{uuid.uuid4().hex[:20]}"
@@ -308,7 +320,15 @@ class Turn:
         self.out.line({"type": "user", "session_id": self.session_id, "parent_tool_use_id": None, "message": {
             "role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": content,
                                          "is_error": failed}]}})
-        return "\n".join(str(b.get("text") or "") for b in content if isinstance(b, dict))
+        text = "\n".join(str(b.get("text") or "") for b in content if isinstance(b, dict))
+        if name == "ducky_ask_user":
+            path = "answer"
+        elif name == "ducky_terminal_run" and time.monotonic() - called < expect_s - 5:
+            path = "early return + steer"
+        else:
+            path = "steer"
+        self.saw_messages(text, path)
+        return text
 
     # ── scenarios ──────────────────────────────────────────────────────
 
@@ -321,15 +341,18 @@ class Turn:
                 break
         return files or [self.repo / "README.md"]
 
-    def terminal(self, command: str, timeout_s: int) -> None:
+    def terminal(self, command: str, timeout_s: int, expect_s: float = 0) -> None:
         if not self.terminal_session:
             text = self.tool("ducky_terminal_open", {"shell": "powershell", "cwd": str(self.repo),
                                                      "title": "stub"})
             found = re.search(r'"session_id"\s*:\s*"([^"]+)"', text)
             self.terminal_session = found.group(1) if found else ""
         if self.terminal_session and not self.interrupted.is_set():
-            self.tool("ducky_terminal_run", {"session_id": self.terminal_session, "command": command,
-                                             "command_timeout_s": timeout_s})
+            args: dict[str, Any] = {"session_id": self.terminal_session, "command": command,
+                                    "command_timeout_s": timeout_s}
+            if expect_s:
+                args["expect_s"] = expect_s  # stripped before the call; marks an early return
+            self.tool("ducky_terminal_run", args)
 
     def gap(self) -> bool:
         low, _, high = (os.environ.get("STUB_GAP_S") or "3-8").partition("-")
@@ -363,11 +386,19 @@ class Turn:
                                                    "content": self.step_text()})
 
     def interrupt_scenario(self, deadline: float) -> None:
-        """A long command, a real git commit in the fixture repo (in this process tree), then wait."""
+        """Phases the harness sends messages and presses Stop in (each logged as ``phase``):
+        streaming text, a long terminal command, a real git commit in the fixture repo (in
+        this process tree; the harness's pre-commit hook makes it slow), an ask_user wait,
+        an approval-card wait. Then the turn ends."""
         seconds = int(float(os.environ.get("STUB_COMMAND_S") or 180))
-        self.terminal(f'python -c "import time; time.sleep({seconds})"', seconds + 120)
+        self.log("phase", phase="streaming")
+        if not self.stream_text(" ".join(random.choice(_WORDS) for _ in range(1500))):
+            return
+        self.log("phase", phase="command")
+        self.terminal(f'python -c "import time; time.sleep({seconds})"', seconds + 120, expect_s=seconds)
         if self.interrupted.is_set():
             return
+        self.log("phase", phase="git")
         note = self.repo / "stub_out" / f"commit-{self.session_id[:8]}-{int(time.time())}.txt"
         note.parent.mkdir(parents=True, exist_ok=True)
         note.write_text("stub commit\n", encoding="utf-8")
@@ -375,9 +406,17 @@ class Turn:
         subprocess.run([*git, "add", "--", str(note)], capture_output=True, creationflags=_NO_WINDOW)
         subprocess.run([*git, "commit", "-q", "-m", "stub commit", "--", str(note)], capture_output=True,
                        creationflags=_NO_WINDOW)
-        self.stream_text("Committed the stub change. Waiting for the next message.")
-        while time.monotonic() < deadline and self.wait(0.5):
-            pass
+        if self.interrupted.is_set() or time.monotonic() >= deadline:
+            return
+        self.log("phase", phase="ask")
+        self.tool("ducky_ask_user", {"questions": [{"id": "stub_q", "prompt": "Stub question: go on?",
+                                                    "required": True}]})
+        if self.interrupted.is_set():
+            return
+        self.log("phase", phase="approval")
+        self.tool("ducky_permission_prompt", {"tool_name": "Bash", "input": {"command": "git push"}})
+        if not self.interrupted.is_set():
+            self.stream_text("Committed the stub change.")
 
     # ── the turn ───────────────────────────────────────────────────────
 
@@ -397,8 +436,10 @@ class Turn:
                        "apiKeySource": "none", "claude_code_version": VERSION,
                        "tools": [f"mcp__uefn__{t}" for t in tools],
                        "mcp_servers": [{"name": "uefn", "status": status}]})
+        self.conv = self.conv or str((server.get("env") or {}).get("DUCKY_CONV_ID") or "")
         prompt = self.first_prompt()
-        log_event("turn_start", session=self.session_id, connected=status == "connected")
+        self.log("turn_start", connected=status == "connected")
+        self.saw_messages(prompt, "turn")
         if status == "connected":
             deadline = started + float(os.environ.get("STUB_TURN_S") or 600)
             scenario = os.environ.get("STUB_SCENARIO") or "swarm"
@@ -409,7 +450,7 @@ class Turn:
         if self.mcp is not None:
             self.mcp.close()
         interrupted = self.interrupted.is_set()
-        log_event("turn_end", session=self.session_id, interrupted=interrupted, **self.counts)
+        self.log("turn_end", interrupted=interrupted, **self.counts)
         self.out.line({
             "type": "result", "subtype": "error_during_execution" if interrupted else
             ("success" if status == "connected" else "error_during_execution"),

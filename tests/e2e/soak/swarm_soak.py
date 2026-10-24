@@ -76,6 +76,22 @@ class ChatOpen:
 
 
 @dataclass
+class MessageSend:
+    id: str  # SOAKMSG-<n>, the stub logs it when it reaches the agent
+    moment: str
+    conv: str
+    sent_at: float
+
+
+@dataclass
+class StopPress:
+    moment: str
+    conv: str
+    pressed_at: float
+    stopped_at: float | None = None  # when the chat left list_running_agents
+
+
+@dataclass
 class Run:
     started: float
     ended: float
@@ -86,6 +102,9 @@ class Run:
     conv_save_p95_ms: float | None = None
     questions_answered: int = 0
     messages_sent: int = 0
+    sends: list[MessageSend] = field(default_factory=list)
+    stops: list[StopPress] = field(default_factory=list)
+    index_lock_left: bool | None = None
 
 
 def percentile(values: list[float], pct: float) -> float | None:
@@ -155,6 +174,78 @@ def summarize(run: Run) -> dict[str, Any]:
         "messages_delivered": len(messages),
         "questions_answered": run.questions_answered,
     }
+
+
+DELIVER_LIMIT_S = 15.0
+STOP_LIMIT_S = 15.0
+
+
+def interrupt_table(run: Run) -> dict[str, Any]:
+    """Per typed message: when it reached the agent and how; late (>15 s), lost, duplicated.
+    Per Stop: how long until the chat stopped. Plus whether a git index.lock was left."""
+    seen: dict[str, list[dict[str, Any]]] = {}
+    for e in run.stub_events:
+        if e.get("kind") == "message" and e.get("id"):
+            seen.setdefault(str(e["id"]), []).append(e)
+    rows = []
+    for send in run.sends:
+        hits = sorted(seen.get(send.id, []), key=lambda e: float(e.get("t") or 0))
+        first = hits[0] if hits else None
+        took = float(first["t"]) - send.sent_at if first else None
+        rows.append({"id": send.id, "moment": send.moment, "conv": send.conv, "sent_at": send.sent_at,
+                     "delivered_at": float(first["t"]) if first else None, "seconds": _r(took),
+                     "path": " + ".join(dict.fromkeys(str(h.get("path") or "?") for h in hits)) or None,
+                     "deliveries": len(hits), "late": took is not None and took > DELIVER_LIMIT_S,
+                     "lost": first is None, "duplicate": len(hits) > 1})
+    stops = []
+    for stop in run.stops:
+        took = None if stop.stopped_at is None else stop.stopped_at - stop.pressed_at
+        stops.append({"moment": stop.moment, "conv": stop.conv, "pressed_at": stop.pressed_at,
+                      "stopped_at": stop.stopped_at, "seconds": _r(took),
+                      "late": took is None or took > STOP_LIMIT_S})
+    on_time = sum(1 for r in rows if not (r["late"] or r["lost"]))
+    return {"messages": rows, "stops": stops, "on_time": on_time, "sent": len(rows),
+            "late": sum(r["late"] for r in rows), "lost": sum(r["lost"] for r in rows),
+            "duplicated": sum(r["duplicate"] for r in rows), "stops_late": sum(s["late"] for s in stops),
+            "index_lock_left": run.index_lock_left,
+            "ok": bool(rows) and on_time == len(rows) and not any(r["duplicate"] for r in rows)
+            and not any(s["late"] for s in stops) and run.index_lock_left is not True}
+
+
+def memory_table(summary: dict[str, Any], memory_mb: int, free_before_gb: float | None) -> dict[str, Any]:
+    return {"agents": summary["agents"], "memory_per_agent_mb": memory_mb,
+            "agents_running_max": summary["agents_running_max"], "min_free_gb": summary["min_free_gb"],
+            "free_before_gb": free_before_gb,
+            "held_gb_max": _r((summary["agents_running_max"] or 0) * memory_mb / 1024, 2)}
+
+
+def _clock(t: float | None) -> str:
+    return time.strftime("%H:%M:%S", time.localtime(t)) if t else "-"
+
+
+def render_interrupt_md(table: dict[str, Any]) -> str:
+    lines = ["## Typed messages", "", f"{table['on_time']}/{table['sent']} within {DELIVER_LIMIT_S:g} s; "
+             f"late {table['late']}, lost {table['lost']}, duplicated {table['duplicated']}", "",
+             "| Moment | Sent | Delivered | Seconds | Path |", "| --- | --- | --- | --- | --- |"]
+    for r in table["messages"]:
+        flag = " LOST" if r["lost"] else (" LATE" if r["late"] else "") + (" DUPLICATE" if r["duplicate"] else "")
+        lines.append(f"| {r['moment']} | {_clock(r['sent_at'])} | {_clock(r['delivered_at'])} | "
+                     f"{r['seconds'] if r['seconds'] is not None else '-'}{flag} | {r['path'] or '-'} |")
+    lines += ["", "## Stop", "", "| Moment | Pressed | Stopped | Seconds |", "| --- | --- | --- | --- |"]
+    for s in table["stops"]:
+        lines.append(f"| {s['moment']} | {_clock(s['pressed_at'])} | {_clock(s['stopped_at'])} | "
+                     f"{s['seconds'] if s['seconds'] is not None else 'never'}{' LATE' if s['late'] else ''} |")
+    lock = table["index_lock_left"]
+    lines += ["", f"git index.lock left behind: {'unknown' if lock is None else ('YES' if lock else 'no')}"]
+    return "\n".join(lines) + "\n"
+
+
+def render_memory_md(table: dict[str, Any]) -> str:
+    return "\n".join(["## Memory admission", "", "| Measure | Value |", "| --- | --- |",
+                      f"| Agents / memory each | {table['agents']} / {table['memory_per_agent_mb']} MB |",
+                      f"| Agents running at once (max) | {table['agents_running_max']} |",
+                      f"| Held by agents (max) | {table['held_gb_max']} GB |",
+                      f"| Free memory before / min | {table['free_before_gb']} GB / {table['min_free_gb']} GB |"]) + "\n"
 
 
 def render_md(summary: dict[str, Any], extra: dict[str, Any] | None = None) -> str:
@@ -236,7 +327,7 @@ def sandbox_env(box: Path, extra: dict[str, str]) -> dict[str, str]:
     return env
 
 
-def make_fixture_repo(repo: Path, files: int = 200) -> None:
+def make_fixture_repo(repo: Path, files: int = 200, slow_commit_s: int = 0) -> None:
     for i in range(files):
         sub = repo / f"pkg{i % 10}"
         sub.mkdir(parents=True, exist_ok=True)
@@ -247,6 +338,9 @@ def make_fixture_repo(repo: Path, files: int = 200) -> None:
     subprocess.run([*git, "init", "-q"], check=True)
     subprocess.run([*git, "add", "-A"], check=True)
     subprocess.run([*git, "commit", "-q", "-m", "fixture"], check=True)
+    if slow_commit_s:  # the interrupt scenario presses Stop while a commit holds index.lock
+        hook = repo / ".git" / "hooks" / "pre-commit"
+        hook.write_text(f"#!/bin/sh\nsleep {slow_commit_s}\n", encoding="utf-8", newline="\n")
 
 
 def write_launcher(box: Path) -> Path:
@@ -459,7 +553,87 @@ def seed(panel: Panel, box: Path, launcher: Path | None, agents: int) -> list[di
     return chats
 
 
-def run_soak(panel: Panel, app_pid: int, chats: list[dict[str, str]], minutes: float, stub_log: Path) -> Run:
+def interrupt_director(panel: Panel, chats: list[dict[str, str]], stub_log: Path, run: Run,
+                       stop: threading.Event) -> None:
+    """Interrupt scenario: 10 typed messages at set moments for the first two agents, and two
+    Stops for the third (during its git commit, then during streaming of its next turn)."""
+    moments = {"streaming": "during streaming text", "command": "during a 3-minute command",
+               "ask": "during an ask_user wait", "approval": "during an approval-card wait",
+               "after_turn": "right after a turn ends"}
+    talkers = {c["id"] for c in chats[:2]}
+    stopper = chats[2]["id"] if len(chats) > 2 else ""
+    done: set[tuple[str, str]] = set()
+    due: list[tuple[float, str, str]] = []  # (at, conv, what)
+    offset = 0
+    counter = [0]
+
+    def send(conv: str, what: str) -> None:
+        counter[0] += 1
+        msg_id = f"SOAKMSG-{counter[0]}"
+        try:
+            panel.call("send_message", conv_id=conv, text=f"{msg_id}: soak message ({moments[what]}).",
+                       mode="agent", model=MODEL, coding_agent="claude_code")
+            run.sends.append(MessageSend(id=msg_id, moment=moments[what], conv=conv, sent_at=time.time()))
+            run.messages_sent += 1
+        except Exception as exc:  # noqa: BLE001
+            print(f"send {msg_id} failed: {exc}", flush=True)
+
+    def press_stop(conv: str, moment: str) -> None:
+        press = StopPress(moment=moment, conv=conv, pressed_at=time.time())
+        run.stops.append(press)
+        try:
+            panel.call("cancel_agent", conv_id=conv)
+        except Exception as exc:  # noqa: BLE001
+            print(f"stop failed: {exc}", flush=True)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not stop.is_set():
+            try:
+                if conv not in (panel.call("list_running_agents", timeout=10) or []):
+                    press.stopped_at = time.time()
+                    return
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(0.5)
+
+    while not stop.wait(1.0):
+        events = read_stub_log(stub_log)
+        for e in events[offset:]:
+            conv, kind = str(e.get("conv") or ""), e.get("kind")
+            what = "after_turn" if kind == "turn_end" and not e.get("interrupted") else (
+                e.get("phase") if kind == "phase" else None)
+            if not what:
+                continue
+            if conv in talkers and what in moments and (conv, what) not in done:
+                done.add((conv, what))
+                due.append((time.monotonic() + (2.0 if what == "after_turn" else 3.0), conv, what))
+            elif conv == stopper:
+                if what == "git" and (conv, "stop_git") not in done:
+                    done.add((conv, "stop_git"))
+                    due.append((time.monotonic() + 3.0, conv, "stop_git"))
+                elif what == "streaming" and (conv, "stop_git") in done and (conv, "stop_stream") not in done:
+                    done.add((conv, "stop_stream"))
+                    due.append((time.monotonic() + 3.0, conv, "stop_stream"))
+        offset = len(events)
+        now = time.monotonic()
+        for item in [d for d in due if d[0] <= now]:
+            due.remove(item)
+            _, conv, what = item
+            if what == "stop_git":
+                press_stop(conv, "during a git commit")
+                time.sleep(2.0)
+                try:  # a plain message (no id) starts the turn the second Stop lands in
+                    panel.call("send_message", conv_id=conv, text="Go again.", mode="agent", model=MODEL,
+                               coding_agent="claude_code")
+                except Exception:  # noqa: BLE001
+                    pass
+            elif what == "stop_stream":
+                press_stop(conv, "during streaming text")
+            else:
+                send(conv, what)
+
+
+def run_soak(panel: Panel, app_pid: int, chats: list[dict[str, str]], minutes: float, stub_log: Path,
+             director: Any = None) -> Run:
     run = Run(started=time.time(), ended=0.0, agents=len(chats))
     stop = threading.Event()
     for chat in chats:
@@ -527,6 +701,9 @@ def run_soak(panel: Panel, app_pid: int, chats: list[dict[str, str]], minutes: f
                     pass
 
     workers = [threading.Thread(target=f, name=f.__name__, daemon=True) for f in (sampler, opener, answerer)]
+    if director is not None:
+        workers.append(threading.Thread(target=director, args=(panel, chats, stub_log, run, stop),
+                                        name="director", daemon=True))
     for w in workers:
         w.start()
     end = time.monotonic() + minutes * 60
@@ -559,8 +736,9 @@ def main() -> int:
     ap.add_argument("--out", default=str(Path(os.environ.get("TEMP", ".")) / "swarm-soak"))
     ap.add_argument("--box", default=str(Path(os.environ.get("TEMP", ".")) / "dsbx"), help="sandbox folder")
     ap.add_argument("--plugin-repo", default="", help="overlay this anthropic plugin repo's backend/*.py")
-    ap.add_argument("--scenario", default="swarm", help="STUB_SCENARIO for the stub agents")
-    ap.add_argument("--memory-mb", type=int, default=0, help="STUB_MEMORY_MB for each stub agent")
+    ap.add_argument("--scenario", default="swarm", choices=("swarm", "interrupt", "memory"),
+                    help="interrupt: 3 agents, 10 timed messages and 2 Stops; memory: agents hold --memory-mb")
+    ap.add_argument("--memory-mb", type=int, default=0, help="STUB_MEMORY_MB per agent (memory scenario: 300)")
     args = ap.parse_args()
     try:
         import psutil  # noqa: F401
@@ -569,6 +747,10 @@ def main() -> int:
         return 2
 
     exe, box, out = Path(args.exe).resolve(), Path(args.box), Path(args.out)
+    if args.scenario == "interrupt":
+        args.agents = 3
+    if args.scenario == "memory" and not args.memory_mb:
+        args.memory_mb = 300
     why = refuse_reason(exe, box)
     if why:
         print("REFUSED:", why, file=sys.stderr)
@@ -585,10 +767,10 @@ def main() -> int:
     copy_plugin(box, args.plugin_repo)
     launcher = None if args.real else write_launcher(box)
     repo = box / "repo"
-    make_fixture_repo(repo)
+    make_fixture_repo(repo, slow_commit_s=20 if args.scenario == "interrupt" else 0)
     stub_log = box / "stub_log.jsonl"
     extra = {"STUB_SANDBOX": "1", "STUB_FIXTURE_REPO": str(repo), "STUB_LOG": str(stub_log),
-             "STUB_SCENARIO": args.scenario}
+             "STUB_SCENARIO": "interrupt" if args.scenario == "interrupt" else "swarm"}
     if args.memory_mb:
         extra["STUB_MEMORY_MB"] = str(args.memory_mb)
     env = sandbox_env(box, extra)
@@ -601,19 +783,34 @@ def main() -> int:
         panel = Panel(PANEL_PORT - 1)
         panel.wait_ready(60.0)
         chats = seed(panel, box, launcher, args.agents)
-        run = run_soak(panel, proc.pid, chats, args.minutes, stub_log)
+        run = run_soak(panel, proc.pid, chats, args.minutes, stub_log,
+                       director=interrupt_director if args.scenario == "interrupt" else None)
+        run.index_lock_left = (repo / ".git" / "index.lock").exists()
         after = pc_state(exclude_root=proc.pid)
-        results = {"summary": summarize(run), "pc_before": before, "pc_after": after,
+        summary = summarize(run)
+        results = {"summary": summary, "pc_before": before, "pc_after": after,
                    "db": db_rows(box / "Local" / "UEFN-Ducky" / "ducky.db"),
                    "samples": [asdict(s) for s in run.samples], "opens": [asdict(o) for o in run.opens],
                    "exe": str(exe), "real": bool(args.real), "scenario": args.scenario}
+        if args.scenario == "interrupt":
+            results["interrupt"] = interrupt_table(run)
+        if args.scenario == "memory":
+            results["memory"] = memory_table(summary, args.memory_mb, before.get("free_gb"))
     finally:
         stop_tree(proc.pid)
         for crash in (box / "Local" / "CrashDumps", *(box / "Local" / "UEFN-Ducky").glob("crash*")):
             shutil.rmtree(crash, ignore_errors=True)
     (out / "results.json").write_text(json.dumps(results, indent=1, default=str), encoding="utf-8")
-    md = render_md(results["summary"], {"PC before": results["pc_before"], "PC after": results["pc_after"],
-                                        "Database rows": results["db"]})
+    if not results:
+        print("the run failed before it finished; nothing measured", file=sys.stderr)
+        return 1
+    md = render_md(results["summary"])
+    if "interrupt" in results:
+        md += "\n" + render_interrupt_md(results["interrupt"])
+    if "memory" in results:
+        md += "\n" + render_memory_md(results["memory"])
+    for key, label in (("pc_before", "PC before"), ("pc_after", "PC after"), ("db", "Database rows")):
+        md += f"\n## {label}\n\n```json\n{json.dumps(results[key], indent=1, default=str)[:6000]}\n```\n"
     (out / "results.md").write_text(md, encoding="utf-8")
     print(md)
     print(f"wrote {out / 'results.md'}")

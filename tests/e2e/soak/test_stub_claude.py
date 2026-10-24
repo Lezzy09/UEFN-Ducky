@@ -28,7 +28,7 @@ claude_auth = importlib.import_module(_pkg.__name__ + ".claude_auth")
 cli_update = importlib.import_module(_pkg.__name__ + ".cli_update")
 
 FAKE_MCP = textwrap.dedent("""
-    import json, sys, time
+    import json, os, sys, time
     log = open(sys.argv[1], "a", encoding="utf-8")
     TOOLS = ["ducky_get_plan", "workspace_read_file", "workspace_search", "ducky_terminal_open",
              "ducky_terminal_run", "workspace_write_file", "ducky_ask_user"]
@@ -48,6 +48,8 @@ FAKE_MCP = textwrap.dedent("""
             if name == "ducky_terminal_run" and "sleep(999)" in msg["params"]["arguments"].get("command", ""):
                 time.sleep(30)
             text = json.dumps({"ok": True, "session_id": "term-1"} if name == "ducky_terminal_open" else {"ok": True, "tool": name})
+            if name == "ducky_terminal_run" and os.environ.get("FAKE_INJECT"):
+                text += "\\n[message from the person] " + os.environ["FAKE_INJECT"]
             result = {"content": [{"type": "text", "text": text}], "isError": False}
         else:
             result = {}
@@ -175,6 +177,26 @@ def test_interrupt_scenario_commits_in_the_fixture_repo(world):
     assert proc.returncode == 0, proc.stderr
     log = subprocess.run(["git", "-C", str(world.repo), "log", "--oneline"], capture_output=True, text=True).stdout
     assert "stub commit" in log
+
+
+def test_interrupt_scenario_logs_phases_and_where_messages_landed(world):
+    log = world.tmp / "stub_log.jsonl"
+    env = {**world.env, "STUB_SCENARIO": "interrupt", "STUB_TURN_S": "30", "STUB_COMMAND_S": "60",
+           "STUB_LOG": str(log), "FAKE_INJECT": "SOAKMSG-7: hello", "DUCKY_CONV_ID": "conv-abc"}
+    proc = subprocess.run(world.argv, input=_user_line("SOAKMSG-1: start"), capture_output=True, text=True,
+                          encoding="utf-8", env=env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    events = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()]
+    assert all(e["conv"] == "conv-abc" for e in events)
+    assert [e["phase"] for e in events if e["kind"] == "phase"] == ["streaming", "command", "git", "ask", "approval"]
+    got = {(e["id"], e["path"]) for e in events if e["kind"] == "message"}
+    # The 60 s command came back at once with the message in it: an early return.
+    assert got == {("SOAKMSG-1", "turn"), ("SOAKMSG-7", "early return + steer")}
+    calls = [json.loads(x) for x in world.log.read_text(encoding="utf-8").splitlines()]
+    run = next(c["params"]["arguments"] for c in calls if c.get("method") == "tools/call"
+               and c["params"]["name"] == "ducky_terminal_run")
+    assert "expect_s" not in run  # the stub's own marker never reaches the tool
+    assert any(c["params"]["name"] == "ducky_permission_prompt" for c in calls if c.get("method") == "tools/call")
 
 
 def test_plain_text_stdin(world):

@@ -92,6 +92,58 @@ def test_refuses_installed_app_and_real_appdata(tmp_path, monkeypatch):
     assert soak.refuse_reason(built, tmp_path / "dsbx") == ""
 
 
+def _interrupt_run(lock=False):
+    run = soak.Run(started=0.0, ended=600.0, agents=3, index_lock_left=lock)
+    moments = ["during a 3-minute command", "during streaming text", "during an ask_user wait",
+               "during an approval-card wait", "right after a turn ends"]
+    for i in range(10):
+        run.sends.append(soak.MessageSend(id=f"SOAKMSG-{i + 1}", moment=moments[i % 5], conv=f"c{i % 2}",
+                                          sent_at=100.0 + i * 30))
+    # 1-7 on time; 8 late (20 s); 9 delivered twice; 10 never arrives
+    for i in range(7):
+        run.stub_events.append({"kind": "message", "id": f"SOAKMSG-{i + 1}", "t": 100.0 + i * 30 + 3,
+                                "path": "early return + steer" if i == 0 else "steer"})
+    run.stub_events.append({"kind": "message", "id": "SOAKMSG-8", "t": 310.0 + 20, "path": "steer"})
+    run.stub_events += [{"kind": "message", "id": "SOAKMSG-9", "t": 340.0 + 2, "path": "answer"},
+                        {"kind": "message", "id": "SOAKMSG-9", "t": 340.0 + 9, "path": "turn"}]
+    run.stops = [soak.StopPress(moment="during a git commit", conv="c2", pressed_at=500.0, stopped_at=516.0),
+                 soak.StopPress(moment="during streaming text", conv="c2", pressed_at=560.0, stopped_at=562.5)]
+    return run
+
+
+def test_interrupt_table_counts_late_lost_and_duplicates():
+    t = soak.interrupt_table(_interrupt_run())
+    assert (t["sent"], t["on_time"], t["late"], t["lost"], t["duplicated"]) == (10, 8, 1, 1, 1)
+    rows = {r["id"]: r for r in t["messages"]}
+    assert rows["SOAKMSG-1"]["seconds"] == 3.0 and rows["SOAKMSG-1"]["path"] == "early return + steer"
+    assert rows["SOAKMSG-8"]["late"] and rows["SOAKMSG-10"]["lost"] and rows["SOAKMSG-10"]["seconds"] is None
+    assert rows["SOAKMSG-9"]["duplicate"] and rows["SOAKMSG-9"]["path"] == "answer + turn"
+    assert [s["late"] for s in t["stops"]] == [True, False] and t["stops_late"] == 1
+    assert not t["ok"]
+
+
+def test_a_clean_interrupt_run_is_ok_and_a_left_lock_is_not():
+    run = _interrupt_run()
+    run.sends = run.sends[:7]
+    run.stops = run.stops[1:]
+    assert soak.interrupt_table(run)["ok"]
+    run.index_lock_left = True
+    assert not soak.interrupt_table(run)["ok"]
+    run.stops.append(soak.StopPress(moment="x", conv="c2", pressed_at=1.0))  # never stopped
+    assert soak.interrupt_table(run)["stops"][-1]["late"]
+
+
+def test_interrupt_and_memory_tables_render():
+    md = soak.render_interrupt_md(soak.interrupt_table(_interrupt_run(lock=True)))
+    assert "| during a 3-minute command |" in md and "early return + steer" in md
+    assert "LOST" in md and "LATE" in md and "DUPLICATE" in md and "index.lock left behind: YES" in md
+    summary = soak.summarize(_run())
+    mem = soak.memory_table(summary, 300, 12.5)
+    assert mem == {"agents": 16, "memory_per_agent_mb": 300, "agents_running_max": 15, "min_free_gb": 2.2,
+                   "free_before_gb": 12.5, "held_gb_max": 4.39}
+    assert "| Agents running at once (max) | 15 |" in soak.render_memory_md(mem)
+
+
 def test_panel_client_refuses_the_live_ports():
     for port in (4199, 4200):
         try:
