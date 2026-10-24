@@ -180,10 +180,10 @@ export function BackgroundActivityDropdown() {
               >
                 <span className="connection-status-menu-dot" aria-hidden />
                 <div className="connection-status-menu-text">
-                  <span className="connection-status-menu-label">{job.title}</span>
+                  <span className="connection-status-menu-label" title={job.title}>{job.title}</span>
                   <span className="connection-status-menu-detail">
                     {job.percent != null ? `${Math.round(job.percent)}% · ` : ""}
-                    {job.detail || job.source}{job.startedAt ? ` \u00b7 ${formatElapsedMs(Math.max(0, now - job.startedAt))}` : ""}
+                    {job.detail || job.source}{job.startedAt ? ` · ${formatElapsedMs(Math.max(0, now - job.startedAt))}` : ""}
                   </span>
                   {job.percent != null ? (
                     <progress
@@ -192,8 +192,10 @@ export function BackgroundActivityDropdown() {
                       value={Math.max(0, Math.min(100, job.percent))}
                     />
                   ) : null}
+                </div>
+                <div className="bg-activity-row-actions">
                   {job.action ? (
-                    <button type="button" className="bg-activity-link"
+                    <button type="button" className="bg-activity-chip"
                       onClick={(event) => { event.stopPropagation(); requestBackgroundJobAction(job.id); }}>
                       {job.action}
                     </button>
@@ -201,25 +203,24 @@ export function BackgroundActivityDropdown() {
                   {job.cancelable || (job.source === "agent" && job.convId) ? (
                     <button
                       type="button"
-                      className="bg-activity-link"
+                      className="bg-activity-chip bg-activity-chip--stop"
                       title={job.source === "agent" ? "Stops this chat's turn" : undefined}
                       onClick={(event) => { event.stopPropagation(); void cancel(job); }}
                     >
                       {job.source === "agent" || workflowIdFromJobId(job.id) ? "Stop" : "Cancel"}
                     </button>
-                  ) : null}
+                  ) : (
+                    <button
+                      type="button"
+                      className="bg-activity-dismiss"
+                      title="Hide from this list. It cannot be stopped from here and may still be running."
+                      aria-label="Hide"
+                      onClick={(event) => { event.stopPropagation(); dismissBackgroundJob(job.id); }}
+                    >
+                      <Icons.Close />
+                    </button>
+                  )}
                 </div>
-                {job.cancelable || (job.source === "agent" && job.convId) ? null : (
-                  <button
-                    type="button"
-                    className="bg-activity-dismiss"
-                    title="Hide from this list. It cannot be stopped from here and may still be running."
-                    aria-label="Hide"
-                    onClick={(event) => { event.stopPropagation(); dismissBackgroundJob(job.id); }}
-                  >
-                    ×
-                  </button>
-                )}
               </div>
             ))
           )}
@@ -241,24 +242,26 @@ export function BackgroundActivityDropdown() {
                 onKeyDown={(event) => { if (job.convId && event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); openJob(job); } }}>
                 <span className="connection-status-menu-dot" aria-hidden />
                 <div className="connection-status-menu-text">
-                  <span className="connection-status-menu-label">{job.title}</span>
+                  <span className="connection-status-menu-label" title={job.title}>{job.title}</span>
                   <span className="connection-status-menu-detail">{job.detail || job.phase}</span>
+                </div>
+                <div className="bg-activity-row-actions">
                   {job.action ? (
-                    <button type="button" className="bg-activity-link"
+                    <button type="button" className="bg-activity-chip"
                       onClick={(event) => { event.stopPropagation(); requestBackgroundJobAction(job.id); }}>
                       {job.action}
                     </button>
                   ) : null}
+                  <button
+                    type="button"
+                    className="bg-activity-dismiss"
+                    title="Dismiss"
+                    aria-label="Dismiss"
+                    onClick={(event) => { event.stopPropagation(); dismissBackgroundJob(job.id); }}
+                  >
+                    <Icons.Close />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  className="bg-activity-dismiss"
-                  title="Dismiss"
-                  aria-label="Dismiss"
-                  onClick={(event) => { event.stopPropagation(); dismissBackgroundJob(job.id); }}
-                >
-                  ×
-                </button>
               </div>
             ))
           )}

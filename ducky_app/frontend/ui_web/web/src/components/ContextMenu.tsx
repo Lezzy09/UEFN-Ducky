@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { ScopedCss, useScopedClass } from "../utils/scopedCss";
 import { useMergedRef, useUiTarget } from "../ui-targets/registry";
@@ -16,6 +16,8 @@ export interface ContextMenuItem {
   switch?: boolean;
   /** Keep menu open after click (e.g. checkbox toggles). */
   keepOpen?: boolean;
+  /** Small icon before the label (the button or thing the row is about). */
+  icon?: ReactNode;
   onClick?: () => void;
 }
 
@@ -56,10 +58,14 @@ export function ContextMenu({ x, y, items, onClose, tourTarget }: ContextMenuPro
 
   const panelW = 220;
   const rowCount = items.filter((item) => !item.separator).length;
+  // A long list scrolls inside the window instead of running off it.
+  const maxHeight = Math.max(120, window.innerHeight - 16);
+  const height = Math.min(rowCount * 32 + 8, maxHeight);
   let left = x;
   let top = y;
   if (left + panelW > window.innerWidth - 8) left = Math.max(8, window.innerWidth - panelW - 8);
-  if (top + rowCount * 32 > window.innerHeight - 8) top = Math.max(8, top - rowCount * 32);
+  if (top + height > window.innerHeight - 8) top = Math.max(8, window.innerHeight - height - 8);
+  const withIcons = items.some((item) => item.icon);
 
   return createPortal(
     <>
@@ -69,6 +75,7 @@ export function ContextMenu({ x, y, items, onClose, tourTarget }: ContextMenuPro
           "--context-menu-left": `${left}px`,
           "--context-menu-top": `${top}px`,
           "--context-menu-min-width": `${panelW}px`,
+          "--context-menu-max-height": `${maxHeight}px`,
         }}
       />
       <div ref={setPanelRef} className={`context-menu is-positioned ${scopeClass}`} role="menu">
@@ -94,7 +101,14 @@ export function ContextMenu({ x, y, items, onClose, tourTarget }: ContextMenuPro
                   {item.checked ? "✓" : ""}
                 </span>
               )}
-              <span className="context-menu-label">{item.label}</span>
+              {withIcons ? (
+                <span className="context-menu-icon" aria-hidden="true">
+                  {item.icon}
+                </span>
+              ) : null}
+              <span className="context-menu-label" title={item.label}>
+                {item.label}
+              </span>
               {item.switch ? (
                 <span
                   className={`context-menu-switch${item.checked ? " is-on" : ""}`}

@@ -144,16 +144,8 @@ export function ChatPermissionsButton({ convId, codingAgent, agentMode, setAgent
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        {combined ? (
-          <>
-            <currentMode.Icon />
-            <span className="chat-perm-badge" aria-hidden>
-              <Icons.Shield />
-            </span>
-          </>
-        ) : (
-          <Icons.Shield />
-        )}
+        {/* Just the shield: the mode shows in the tooltip and the menu. */}
+        <Icons.Shield />
       </button>
       <DropdownPanel anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} placement="top" width={300} idealHeight={460}>
         <div className="chat-perm-menu" role="menu" aria-label="Permissions">

@@ -3,6 +3,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { Icons } from "../icons/Icons";
 import { ScopedCss, useScopedClass } from "../utils/scopedCss";
 import { ChatPermissionsButton } from "./ChatPermissionsButton";
+import { ContextMenu, useContextMenuState, type ContextMenuItem } from "./ContextMenu";
+import { useHeaderVisibility } from "../hooks/useHeaderVisibility";
 import { skipAutoFocus } from "../hooks/useNarrowLayout";
 import { isDucktactoeChat } from "../plugin-ui/ducktactoeBoardChat";
 import { ModelSelector } from "./ModelSelector";
@@ -188,6 +190,17 @@ export function useChatPlan(chatId: string) {
 
   return { chatPlan, chatPlanProgress, setChatPlan, setChatPlanProgress };
 }
+
+/** The composer buttons its right-click menu can hide (Send and Stop always stay). */
+export const COMPOSER_BUTTONS: { id: string; label: string; Icon: () => JSX.Element }[] = [
+  { id: "permissions", label: "Mode and permissions", Icon: Icons.Shield },
+  { id: "context", label: "Context", Icon: Icons.Brain },
+  { id: "model", label: "Model", Icon: Icons.Sparkles },
+  { id: "changes", label: "Changes", Icon: Icons.Clock },
+  { id: "snip", label: "Snip", Icon: Icons.Crop },
+  { id: "attach", label: "Attach", Icon: Icons.Paperclip },
+  { id: "voice", label: "Voice", Icon: Icons.Mic },
+];
 
 export function ChatPane({
   chat,
@@ -847,6 +860,24 @@ export function ChatPane({
     const h = liveTextareaHeightRef.current;
     if (h != null) setTextareaHeight(h);
   }, []);
+
+  // Right-click the composer's buttons: a switch per button, hidden ones included (saved
+  // with the header's, ids `composer:<button>`). Send and Stop always stay.
+  const composerMenu = useContextMenuState<null>();
+  const { isVisible: barBtnVisible, setVisible: setBarBtnVisible } = useHeaderVisibility();
+  const composerBtnShown = (id: string) => barBtnVisible(`composer:${id}`);
+  const composerMenuItems: ContextMenuItem[] = COMPOSER_BUTTONS.map((btn) => {
+    const on = composerBtnShown(btn.id);
+    return {
+      id: btn.id,
+      label: btn.label,
+      icon: <btn.Icon />,
+      switch: true,
+      checked: on,
+      keepOpen: true,
+      onClick: () => setBarBtnVisible(`composer:${btn.id}`, !on),
+    };
+  });
 
   // Shift+Enter (or a long line wrapping) grows the box to show what's written, up to the
   // same cap the handle has; after a send it goes back to the height it had before.
@@ -1824,10 +1855,10 @@ export function ChatPane({
             />
           </div>
 
-          <div className="chat-pane-input-toolbar">
+          <div className="chat-pane-input-toolbar" onContextMenu={(e) => composerMenu.open(e, null)}>
             <div className="chat-pane-input-toolbar-left">
               {/* One button for the chat's mode (Ask / Plan / Agent) and its permissions. */}
-              {!chat.isGroup ? (
+              {!chat.isGroup && composerBtnShown("permissions") ? (
                 <ChatPermissionsButton
                   convId={chat.id}
                   codingAgent={codingAgent}
@@ -1835,7 +1866,7 @@ export function ChatPane({
                   setAgentMode={setAgentMode}
                 />
               ) : null}
-              {!chat.isGroup ? (
+              {!chat.isGroup && composerBtnShown("context") ? (
                 <ContextMeter
                   usedTokens={contextUsage.used_tokens}
                   contextLimit={contextUsage.context_limit}
@@ -1859,7 +1890,7 @@ export function ChatPane({
                   }}
                 />
               ) : null}
-              {!chat.isGroup ? (
+              {!chat.isGroup && composerBtnShown("model") ? (
                 <>
                   <div className="chat-pane-model-effort">
                     <ModelSelector
@@ -1878,26 +1909,31 @@ export function ChatPane({
                   </div>
                 </>
               ) : null}
-              {!chat.isGroup ? (
+              {!chat.isGroup && composerBtnShown("changes") ? (
                 <ChatChangesButton open={changesOpen} onClick={() => setChangesOpen((v) => !v)} />
               ) : null}
             </div>
 
             <div className="chat-pane-input-toolbar-right">
-              <SnipButton
-                chatId={chat.id}
-                disabled={modelsUnavailable}
-                onCaptured={(file, meta) =>
-                  void addFiles([file], {
-                    imagesOnly: true,
-                    projectPath: meta?.projectPath,
-                  })
-                }
-              />
-              <AttachMenuButton
-                disabled={modelsUnavailable}
-                onAddFiles={(files) => void addFiles(files)}
-              />
+              {composerBtnShown("snip") ? (
+                <SnipButton
+                  chatId={chat.id}
+                  disabled={modelsUnavailable}
+                  onCaptured={(file, meta) =>
+                    void addFiles([file], {
+                      imagesOnly: true,
+                      projectPath: meta?.projectPath,
+                    })
+                  }
+                />
+              ) : null}
+              {composerBtnShown("attach") ? (
+                <AttachMenuButton
+                  disabled={modelsUnavailable}
+                  onAddFiles={(files) => void addFiles(files)}
+                />
+              ) : null}
+              {composerBtnShown("voice") ? (
               <VoiceControls
                 chatId={chat.id}
                 disabled={
@@ -1918,6 +1954,7 @@ export function ChatPane({
                 isGroup={Boolean(chat.isGroup)}
                 onLiveChange={handleLiveVoiceChange}
               />
+              ) : null}
               <span ref={sendTargetRef} className="chat-pane-send-target">
                 {agentRunning ? (
                   hasContent ? (
@@ -1950,6 +1987,14 @@ export function ChatPane({
               ) : null}
             </div>
           </div>
+          {composerMenu.menu ? (
+            <ContextMenu
+              x={composerMenu.menu.x}
+              y={composerMenu.menu.y}
+              items={composerMenuItems}
+              onClose={composerMenu.close}
+            />
+          ) : null}
         </div>
         </div>
           </div>

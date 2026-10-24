@@ -464,7 +464,7 @@ body.native-caption-input-ready .app-header .drag-region {
   accent-color: var(--accent);
 }
 .bg-activity-link {
-  margin-top: 4px;
+  margin-top: 0;
   padding: 0;
   border: 0;
   background: none;
@@ -473,15 +473,94 @@ body.native-caption-input-ready .app-header .drag-region {
   font-size: 12px;
   cursor: pointer;
 }
+/* One row: dot · title and detail (one line each, fading out when long) · actions on the right. */
+.bg-activity-menu .connection-status-menu-row {
+  align-items: center;
+  margin: 0 4px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm, 6px);
+  transition: background-color 0.12s ease;
+}
+.bg-activity-menu .connection-status-menu-row[role="button"] {
+  cursor: pointer;
+}
+.bg-activity-menu .connection-status-menu-row:hover {
+  background: var(--tab-hover);
+}
+.bg-activity-menu .connection-status-menu-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.bg-activity-menu .connection-status-menu-dot {
+  align-self: flex-start;
+  margin-top: 5px;
+}
+.bg-activity-menu .connection-status-menu-text {
+  flex: 1;
+}
+.bg-activity-menu :is(.connection-status-menu-label, .connection-status-menu-detail) {
+  overflow: hidden;
+  white-space: nowrap;
+  word-break: normal;
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+}
+.bg-activity-menu .connection-status-menu-detail {
+  font-variant-numeric: tabular-nums;
+}
+.bg-activity-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.bg-activity-chip {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--btn-bg, transparent);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.bg-activity-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.bg-activity-chip--stop:hover {
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red);
+}
 .bg-activity-dismiss {
-  margin-left: auto;
-  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   border: 0;
+  border-radius: var(--radius-sm, 6px);
   background: none;
   color: var(--muted);
-  font-size: 16px;
-  line-height: 1;
   cursor: pointer;
+  opacity: 0.7;
+  transition: background-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+}
+.bg-activity-dismiss svg {
+  width: 12px;
+  height: 12px;
+}
+.connection-status-menu-row:hover .bg-activity-dismiss {
+  opacity: 1;
+}
+.bg-activity-dismiss:hover {
+  background: var(--hover, var(--tab-hover));
+  color: var(--fg);
 }
 
 .connection-status-menu-text {
@@ -4727,6 +4806,9 @@ body.focus-window .focus-content {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  max-height: var(--context-menu-max-height, calc(100vh - 16px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .context-menu-item {
   display: flex;
@@ -4742,7 +4824,29 @@ body.focus-window .focus-content {
   font-size: 12px;
   cursor: pointer;
 }
-.context-menu-label { flex: 1; min-width: 0; }
+.context-menu-item { flex-shrink: 0; }
+.context-menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  /* A long name fades out instead of wrapping or cutting off mid-letter. */
+  mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+}
+.context-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+.context-menu-icon :is(svg, img) {
+  width: 14px;
+  height: 14px;
+}
+.context-menu-item:hover:not(:disabled) .context-menu-icon { color: var(--fg); }
 .context-menu-check {
   flex: 0 0 14px;
   width: 14px;

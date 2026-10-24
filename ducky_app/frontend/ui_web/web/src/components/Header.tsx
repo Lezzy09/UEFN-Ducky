@@ -434,6 +434,15 @@ export function Header({
     rightSidebar: rightRailEnabled,
     search: !!showQuickOpen,
   };
+  const builtinIcons: Record<string, JSX.Element> = {
+    nav: <Icons.ChevronLeft />,
+    leftSidebar: <Icons.PanelLeft />,
+    rightSidebar: <Icons.PanelRight />,
+    search: <Icons.Search />,
+  };
+  const pluginIcons = new Map(
+    listedHeaderButtons.map((btn) => [pluginHeaderButtonId(btn.plugin_id || btn.id, btn.id), btn.icon]),
+  );
   const headerMenuItems: ContextMenuItem[] = headerButtonCatalog(listedHeaderButtons)
     .filter((row) => builtinApplies[row.id] ?? true)
     .map((row) => {
@@ -441,6 +450,7 @@ export function Header({
       return {
         id: row.id,
         label: row.label,
+        icon: builtinIcons[row.id] ?? (pluginIcons.has(row.id) ? resolvePluginHeaderIcon(pluginIcons.get(row.id)) : <Icons.Puzzle />),
         switch: true,
         checked: on,
         keepOpen: true,
