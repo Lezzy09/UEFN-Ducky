@@ -112,9 +112,24 @@ def test_a_tool_burst_saves_twice_and_the_last_save_has_every_tool(tmp_path, mon
         push({"type": "tool", "tool": {"id": f"t{i}", "name": "Grep", "status": "pending"}})
         push({"type": "tool_done", "tool": {"id": f"t{i}", "name": "Grep", "status": "success", "result": "x"}})
     time.sleep(_CHECKPOINT_EVERY_S + 0.4)
-    assert len(saves) == 2 and saves[-1] == 10  # the first tool at once, the rest together
+    assert 1 <= len(saves) <= 2 and saves[-1] == 10  # the first tool soon, the rest together
     stored = load_conversation(conv.id, project_root=root).messages[-1]["blocks"]
     assert [b["status"] for b in stored] == ["success"] * 10
+
+
+def test_the_thread_reading_the_agent_never_saves(tmp_path, monkeypatch):
+    import threading
+
+    root = str(tmp_path)
+    conv = create_conversation(PanelSettings.load(), "", title="Reader", project_root=root)
+    saved_on: list[str] = []
+    monkeypatch.setattr(runner, "checkpoint_coding_turn",
+                        lambda *a, **kw: saved_on.append(threading.current_thread().name))
+    push = _TurnCheckpoint(conv, "claude", "reader", project_root=root).wrap(lambda _ev: None)
+    for i in range(5):
+        push({"type": "tool", "tool": {"id": f"t{i}", "name": "Read", "status": "pending"}})
+    time.sleep(_CHECKPOINT_EVERY_S + 0.4)
+    assert saved_on and threading.current_thread().name not in saved_on
 
 
 def test_close_drops_a_pending_trailing_save(tmp_path, monkeypatch):
@@ -126,8 +141,9 @@ def test_close_drops_a_pending_trailing_save(tmp_path, monkeypatch):
     push({"type": "tool", "tool": {"id": "a", "name": "Read", "status": "pending"}})
     push({"type": "tool", "tool": {"id": "b", "name": "Read", "status": "pending"}})
     ckpt.close()  # the turn's final message is written next; nothing may land after it
+    landed = len(saves)
     time.sleep(_CHECKPOINT_EVERY_S + 0.4)
-    assert saves == [1]
+    assert len(saves) == landed
 
 
 def test_same_named_tools_complete_by_call_id(tmp_path):
@@ -166,6 +182,7 @@ def test_turn_checkpoint_does_not_flush_on_text_delta():
         assert mid is not None
         assert (mid.messages[-1].get("blocks") or []) == seed_hash
         push({"type": "tool", "tool": {"name": "ping", "status": "pending"}})
+        time.sleep(0.4)  # saved on the checkpoint's own thread
         done = load_conversation(conv.id, project_root=root)
         assert done is not None
         blocks = done.messages[-1].get("blocks") or []

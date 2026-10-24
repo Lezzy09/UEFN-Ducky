@@ -453,11 +453,11 @@ class _TurnCheckpoint:
                 self._timer = None
 
     def _flush_soon(self) -> None:
-        """Save now if the last save is old enough, else once when the window ends."""
-        wait = _CHECKPOINT_EVERY_S - (time.monotonic() - self._last)
-        if wait <= 0:
-            self.flush(force=True)
-        elif self._timer is None and not self._closed:
+        """Save on the timer thread, at most once per window, with the blocks as they are
+        when it fires (latest wins). The thread reading the agent's output never waits
+        on the database or DPAPI, so a slow write can't back up the agent's pipe."""
+        if self._timer is None and not self._closed:
+            wait = max(0.0, _CHECKPOINT_EVERY_S - (time.monotonic() - self._last))
             self._timer = threading.Timer(wait, self._trailing)
             self._timer.daemon = True
             self._timer.start()
