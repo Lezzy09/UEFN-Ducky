@@ -976,7 +976,8 @@ class PanelApiChatsMixin:
                 return {"ok": False, "error": str(exc)}
             next_members = [normalize_member(row, index=i) for i, row in enumerate(rows)]
             group.group_members = next_members
-            _pa.save_conversation(group)
+            with lane_engine.setting_lane(mid):
+                _pa.save_conversation(group)
             lane_engine.invalidate_lane_cache(mid)
         _pa.notify_chats_changed(group.id, group.title, group.folder_id, open_tab=False)
         lane = next((m.get("write_allowed") for m in next_members if m.get("member_conv_id") == mid), None)

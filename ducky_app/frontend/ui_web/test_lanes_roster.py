@@ -27,7 +27,8 @@ def test_normalize_member_keeps_and_normalizes_lane() -> None:
     assert row["write_allowed"] == ["Content/Verse/Shop/**"] and row["lane_set_by"] == "" and row["lane_set_at"] == 0.0
     assert normalize_member({"member_conv_id": "c1"})["write_allowed"] is None
     assert normalize_member({"member_conv_id": "c1", "write_allowed": []})["write_allowed"] == []
-    assert normalize_member({"member_conv_id": "c1", "write_allowed": ["../x"]})["write_allowed"] is None
+    # A lane that no longer parses turns read-only, never unrestricted.
+    assert normalize_member({"member_conv_id": "c1", "write_allowed": ["../x"]})["write_allowed"] == []
     assert normalize_member({"member_conv_id": "c1", "write_allowed": "a/b, a/c"})["write_allowed"] == ["a/b/**", "a/c/**"]
 
 
