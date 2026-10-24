@@ -5313,23 +5313,30 @@
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  line-height: 1.4;
+  gap: 12px;
+  font-family: var(--chat-text-font);
+  font-size: var(--chat-text-size, 14px);
+  line-height: var(--chat-line-height, 1.8);
 }
 
 .tool-card-ask-user-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 2px 6px;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tool-card-ask-user-row + .tool-card-ask-user-row {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }
 
 .tool-card-ask-user-q {
-  color: var(--muted);
+  color: var(--text);
 }
 
 .tool-card-ask-user-a {
-  color: var(--text);
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .tool-card-ask-user-row--waiting .tool-card-ask-user-a {

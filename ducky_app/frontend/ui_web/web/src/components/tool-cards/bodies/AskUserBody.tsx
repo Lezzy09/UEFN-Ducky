@@ -78,10 +78,14 @@ export function rowsFromAskUser(
   let questions = questionsFromArgs(args);
   let answers: Record<string, unknown> | null = null;
   try {
-    const parsed = JSON.parse(resultText || "{}") as {
+    let parsed = JSON.parse(resultText || "{}") as {
       answers?: Record<string, unknown>;
       questions?: unknown;
+      result?: unknown;
     };
+    // The tool server wraps a string return as {"result": "<json>"}; without this the
+    // card never saw the answers and said Waiting… after the user had answered.
+    if (typeof parsed?.result === "string" && !parsed.answers) parsed = JSON.parse(parsed.result);
     if (parsed?.answers && typeof parsed.answers === "object") {
       answers = parsed.answers;
     }
@@ -142,7 +146,7 @@ export function AskUserBody({ args, resultText, showResult, isError }: ToolCardB
             {rows.map((row) => (
               <li key={row.id} className="tool-card-ask-user-row tool-card-ask-user-row--failed">
                 <span className="tool-card-ask-user-q">{row.prompt}</span>
-                <span className="tool-card-ask-user-a">→ {row.summary}</span>
+                <span className="tool-card-ask-user-a">{row.summary}</span>
               </li>
             ))}
           </ul>
@@ -166,7 +170,7 @@ export function AskUserBody({ args, resultText, showResult, isError }: ToolCardB
         {rows.map((row) => (
           <li key={row.id} className={`tool-card-ask-user-row tool-card-ask-user-row--${row.status}`}>
             <span className="tool-card-ask-user-q">{row.prompt}</span>
-            <span className="tool-card-ask-user-a">→ {row.summary}</span>
+            <span className="tool-card-ask-user-a">{row.summary}</span>
           </li>
         ))}
       </ul>

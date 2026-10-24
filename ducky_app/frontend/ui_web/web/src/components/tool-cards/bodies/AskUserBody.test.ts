@@ -32,6 +32,15 @@ describe("AskUserBody rows", () => {
     expect(rows[1].status).toBe("skipped");
   });
 
+  it("reads answers wrapped by the tool server as {result: json}", () => {
+    const inner = JSON.stringify({ ok: true, answers: { a: { selected: ["x"], text: "", skipped: false } } });
+    const rows = rowsFromAskUser(
+      { questions: [{ id: "a", prompt: "Path?", options: [{ id: "x", label: "Option X" }] }] },
+      JSON.stringify({ result: inner }),
+    );
+    expect(rows).toEqual([{ id: "a", prompt: "Path?", summary: "Option X", status: "answered" }]);
+  });
+
   it("shows waiting rows while the agent is paused", () => {
     const rows = rowsFromAskUser(
       {
