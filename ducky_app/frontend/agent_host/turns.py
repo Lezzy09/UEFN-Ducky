@@ -101,6 +101,12 @@ def run_in_host(
     try:
         if not host.send("start_turn", conv_id=conv_id, run_id=run_id, text=text, model=model, mode=mode):
             return None
+        try:
+            from frontend.ui_web import ui_rpc
+
+            ui_rpc.tell_host(conv_id)  # a question already open blocks its tools in the host too
+        except Exception:  # noqa: BLE001
+            pass
         asked = False
         while not turn.done.wait(_POLL_S):
             if cancel.is_set() and not asked:
@@ -115,6 +121,10 @@ def run_in_host(
             if _by_conv.get(conv_id) is turn:
                 _by_conv.pop(conv_id, None)
         sup.release(conv_id)
+        from frontend.ui_web import steer
+
+        # A dead host took its inbox with it: what the person sent goes back to the app's.
+        steer.host_turn_ended(conv_id, reclaim=not host.alive())
 
 
 def kill(conv_id: str) -> bool:
@@ -132,6 +142,10 @@ def on_app_frame(host: Any, frame: dict[str, Any]) -> None:
         for event in frame.get("events") or []:
             with _lock:
                 turn = _by_run.get(str(event.get("run_id") or "")) or _by_conv.get(conv_id)
+            if turn is not None and event.get("type") == "user_steered":
+                from frontend.ui_web import steer
+
+                steer.delivered(turn.conv_id, str(event.get("steer_id") or ""))
             if turn is not None:
                 # ponytail: runs on the host's reader thread; a slow push delays that host's
                 # other chats. Hand off to a queue if that ever shows in the meters.
@@ -218,14 +232,25 @@ def _host_turn(channel: Any, frame: dict[str, Any]) -> None:
                 pass
     finally:
         _cancels.pop(run_id, None)
+        from frontend.agent_host import steer_host
+
+        steer_host.set_question(conv_id, False)
         _flush()
         channel.send("turn_ended", conv_id=conv_id, run_id=run_id, error=error)
 
 
 def on_frame(channel: Any, frame: dict[str, Any]) -> None:
     """Host main loop's handler for app frames other than ``shutdown``."""
+    from frontend.agent_host import steer_host
+
     op = frame.get("op")
-    if op == "start_turn":
+    if op == "steer_post":
+        steer_host.post(str(frame.get("conv_id") or ""), str(frame.get("steer_id") or ""),
+                        str(frame.get("text") or ""))
+    elif op == "question_answer":
+        steer_host.set_question(str(frame.get("conv_id") or ""), bool(frame.get("open")))
+    elif op == "start_turn":
+        steer_host.enable()
         run_id = str(frame.get("run_id") or "")
         if not run_id or run_id in _cancels:
             return

@@ -161,6 +161,8 @@ def submit(method: str, params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         _pending[request_id] = _Pending(conv_id, method, params)
         if method == "ask_user":
             _save_questions_locked()
+    if method == "ask_user":
+        _tell_host(conv_id)
     payload = {
         "type": "ui_rpc_request",
         "request_id": request_id,
@@ -241,7 +243,36 @@ def respond(request_id: str, payload: dict[str, Any], free_text: str = "") -> bo
             _save_questions_locked(exclude=request_id)
         slot.result = dict(payload or {})
         slot.event.set()
+    if slot.method == "ask_user":
+        _tell_host(slot.conv_id)
     return True
+
+
+def _question_open(conv_id: str) -> bool:
+    with _lock:
+        return any(slot.conv_id == conv_id and slot.method == "ask_user" and not slot.event.is_set()
+                   for slot in _pending.values())
+
+
+def _tell_host(conv_id: str) -> None:
+    """A chat whose turn runs in an agent host: that host answers its question_gate (D20)."""
+    if not conv_id:
+        return
+    try:
+        from frontend.agent_host import turns
+
+        host = turns.owns(conv_id)
+        if host is not None:
+            host.send("question_answer", conv_id=conv_id, open=_question_open(conv_id))
+    except Exception:  # noqa: BLE001 - a gone host: its tool server falls back to the app
+        pass
+
+
+def tell_host(conv_id: str) -> None:
+    """Send the chat's question state to its host now (a turn just started there)."""
+    with _lock:
+        _restore_questions_locked()
+    _tell_host(conv_id)
 
 
 def cancel(request_id: str) -> None:

@@ -25,6 +25,8 @@ _lock = threading.Lock()
 # Each item: {"id", "text", "lease": lease id or "" while queued, "at": lease time}.
 _inbox: dict[str, list[dict[str, Any]]] = {}
 _run_push: dict[str, PushFn] = {}
+# App side, per chat whose turn runs in an agent host: {steer id: text} sent there, not attached yet.
+_forwarded: dict[str, dict[str, str]] = {}
 _now = time.monotonic
 
 
@@ -44,24 +46,61 @@ def post(conv_id: str, steer_id: str, text: str) -> bool:
     cid = str(conv_id or "").strip()
     body = str(text or "").strip()
     sid = str(steer_id or "").strip()
+    host = _host_of(cid)
     if not body:  # taken back out of the queue (edited or deleted), leased copies too
         with _lock:
             if cid in _inbox:
                 _inbox[cid] = [m for m in _inbox[cid] if m["id"] != sid]
+            _forwarded.get(cid, {}).pop(sid, None)
+        if host is not None:
+            host.send("steer_post", conv_id=cid, steer_id=sid, text="")
         return False
     if not cid or not sid or not is_agent_running(cid):
         return False
-    with _lock:
-        box = _inbox.setdefault(cid, [])
-        _expire(box)
-        if not any(m["id"] == sid for m in box):
-            box.append({"id": sid, "text": body, "lease": "", "at": 0.0})
+    if host is not None and host.send("steer_post", conv_id=cid, steer_id=sid, text=body):
+        # The chat's turn runs in an agent host, whose tool server asks that host (D20).
+        with _lock:
+            _forwarded.setdefault(cid, {})[sid] = body
+        return True
+    hold(cid, sid, body)
     return True
+
+
+def hold(conv_id: str, steer_id: str, text: str) -> None:
+    """Queue the message in this process's inbox (the agent host calls it for its turns)."""
+    with _lock:
+        box = _inbox.setdefault(conv_id, [])
+        _expire(box)
+        if not any(m["id"] == steer_id for m in box):
+            box.append({"id": steer_id, "text": str(text).strip(), "lease": "", "at": 0.0})
+
+
+def _host_of(conv_id: str) -> Any:
+    from frontend.agent_host import turns
+
+    return turns.owns(conv_id)
+
+
+def delivered(conv_id: str, steer_id: str) -> None:
+    """The host attached a forwarded message (its ``user_steered`` event reached the app)."""
+    with _lock:
+        _forwarded.get(conv_id, {}).pop(steer_id, None)
+
+
+def host_turn_ended(conv_id: str, *, reclaim: bool = False) -> None:
+    """Forget what went to the chat's host; ``reclaim`` (the host died) queues it here first."""
+    with _lock:
+        items = _forwarded.pop(conv_id, {})
+    if reclaim:
+        for sid, text in items.items():
+            hold(conv_id, sid, text)
 
 
 def has_queued(conv_id: str) -> bool:
     """Whether the person wrote something no tool call holds yet (cheap: long tools poll it)."""
     with _lock:
+        if _forwarded.get(conv_id):
+            return True  # ponytail: sent to the host, not attached yet; host leases look queued
         box = _inbox.get(conv_id)
         if not box:
             return False

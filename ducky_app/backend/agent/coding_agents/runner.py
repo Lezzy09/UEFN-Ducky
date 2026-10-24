@@ -719,6 +719,20 @@ def _emit_assistant(
     }
 
 
+def _add_agent_host_env(mcp_path: Any) -> None:
+    """In an agent host: the ``uefn`` server asks this host for steer and question checks (D20)."""
+    from frontend.agent_host import steer_host
+
+    env = steer_host.mcp_env()
+    if not env:
+        return
+    data = json.loads(Path(mcp_path).read_text(encoding="utf-8"))
+    uefn = (data.get("mcpServers") or {}).get("uefn")
+    if isinstance(uefn, dict):
+        uefn["env"] = {**(uefn.get("env") or {}), **env}
+        Path(mcp_path).write_text(json.dumps(data), encoding="utf-8")
+
+
 def merge_steered_blocks(final: list[dict[str, Any]], live: list[dict[str, Any]]) -> None:
     """Put the person's mid-turn messages into the adapter's final blocks, after the tool
     call that handed them over (the adapter's own blocks never carry them)."""
@@ -957,6 +971,7 @@ def _run_coding_agent_message(
     # must pin those files to this duck, not "You".
     set_live_writer(rid, run_ctx.as_writer())
     mcp_path = write_uefn_mcp_config(conv_id=conv.id, settings=settings, identity=run_ctx)
+    _add_agent_host_env(mcp_path)
     prompt_path = write_prompt_file(prompt_text, conv_id=conv.id)
     env = launch_env(
         prompt=prompt_text,
