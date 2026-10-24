@@ -242,6 +242,30 @@ def _normalize_node(raw: Any, *, fallback_id: str | None = None) -> dict[str, An
     return node
 
 
+_NOTES_MAX = 2048  # bytes of notes kept on a step; the whole text goes to a linked note file
+
+
+def _cap_notes(doc: dict[str, Any], node: dict[str, Any], text: str | None, project_root: str | None) -> str:
+    """A step's notes, at most ~2 KB: longer notes are saved whole as a note file and linked.
+
+    A swarm plan reached 151K characters from logs pasted into step notes, and every read
+    of the plan then cost the lead's context.
+    """
+    text = (text or "").strip()
+    if len(text.encode("utf-8")) <= _NOTES_MAX or doc.get("kind") == "template":
+        return text
+    plan_dir = _safe_id(str(doc.get("id") or ""), fallback="plan")
+    name = f"{_safe_id(str(node.get('id') or ''), fallback='step')}.md"
+    root = _resolve_project_root(project_root)
+    rel = Path(".ducky") / "plans" / plan_dir / "notes" / name
+    path = Path(root) / rel if root else default_app_data_dir() / "plan_notes" / plan_dir / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    link = f"\n\n…full notes: {rel.as_posix() if root else path.as_posix()}"
+    head = text.encode("utf-8")[:_NOTES_MAX - len(link.encode("utf-8"))].decode("utf-8", "ignore")
+    return head.rstrip() + link
+
+
 def _normalize_after(raw: Any, *, own_id: str = "") -> list[str]:
     """Step ids this step waits for: a list (or one id / comma list), deduped, never itself."""
     if isinstance(raw, str):
@@ -879,6 +903,7 @@ def add_node(
     if not node:
         raise ValueError("content required")
     doc, save = _load_editable(chat_id, project_root=project_root, template_id=template_id)
+    node["body_markdown"] = _cap_notes(doc, node, node.get("body_markdown"), project_root)
     playing = doc.get("kind") != "template" and plan_structure_locked(doc)
     if playing and str(doc.get("status") or "").strip().lower() == "finished":
         _refuse_if_structure_locked(doc)
@@ -960,7 +985,7 @@ def update_node(
     if kind is not None:
         node["kind"] = _normalize_kind(kind, children=list(node.get("children") or []))
     if body_markdown is not None:
-        node["body_markdown"] = (body_markdown or "").strip()
+        node["body_markdown"] = _cap_notes(doc, node, body_markdown, project_root)
     if status is not None:
         if status == "in_progress" and node.get("status") != "in_progress" and not by_user:
             _refuse_if_waiting(doc, node)

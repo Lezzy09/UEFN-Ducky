@@ -48,6 +48,25 @@ class PlansStoreTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
+    def test_long_step_notes_are_capped_and_linked(self) -> None:
+        plan = plans.create_plan("chat-notes", nodes=[{"id": "s1", "content": "Step"}], project_root=self.root)
+        log = "".join(f"line {i}: build output\n" for i in range(500))  # ~10 KB
+        self.assertGreater(len(log), 10_000)
+        plans.update_node("chat-notes", "s1", body_markdown=log, project_root=self.root)
+        added = plans.add_node("chat-notes", content="Split", body_markdown=log, project_root=self.root)
+        self.assertEqual(len(added["nodes"]), 2)
+        for node in added["nodes"]:
+            body = node["body_markdown"]
+            link = f".ducky/plans/{plan['id']}/notes/{node['id']}.md"
+            self.assertLessEqual(len(body.encode("utf-8")), 2048)
+            self.assertTrue(body.startswith("line 0: build output"))
+            self.assertTrue(body.endswith(f"…full notes: {link}"), body[-120:])
+            self.assertEqual((Path(self.root) / link).read_text(encoding="utf-8"), log.strip())
+        # Short notes stay as written.
+        plans.update_node("chat-notes", "s1", body_markdown="Done: tests pass.", project_root=self.root)
+        node = plans._walk_find(plans.load_plan("chat-notes", self.root)["nodes"], "s1")[2]
+        self.assertEqual(node["body_markdown"], "Done: tests pass.")
+
     def test_create_update_merge_get(self) -> None:
         # Legacy on-disk contract (<project>/.ducky/plans/*.json); rows are covered by
         # backend/store/test_phase4.py.
