@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { AgentEvent } from "../types/panel";
 import { installAgentEventBus, subscribeAgentEvents } from "./useAgentEventBus";
 
@@ -9,6 +9,8 @@ export interface RemoteConversation {
 }
 
 const RELOAD_DUCKIES_EVENT = "uefn-reload-duckies";
+/** A swarm sends chats_changed per member event: one tree load per window, at its end. */
+export const RELOAD_BATCH_MS = 400;
 
 /** Ask the Duckies tree to reload after a group roster change. */
 export function requestReloadDuckies(): void {
@@ -21,34 +23,47 @@ export function shouldOpenCreatedChat(event: AgentEvent): boolean {
 }
 
 /** Reload sidebar when MCP tools or linked agents create conversations. Chats and
- * groups deleted anywhere leave the tree at once (`onRemoved`), before the reload. */
+ * groups deleted anywhere leave the tree at once (`onRemoved`), before the reload.
+ * Reloads are batched: the first change starts a RELOAD_BATCH_MS window and one load
+ * runs when it ends, however many changes came in it. */
 export function useChatsChanged(
   load: () => Promise<void>,
   onCreated?: (conv: RemoteConversation) => void,
   onRemoved?: (convIds: string[], folderIds: string[]) => void,
 ) {
+  const latest = useRef({ load, onCreated, onRemoved });
+  latest.current = { load, onCreated, onRemoved };
+
   useEffect(() => {
     installAgentEventBus();
+    let timer: number | undefined;
+    const scheduleLoad = () => {
+      if (timer !== undefined) return;
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        void latest.current.load();
+      }, RELOAD_BATCH_MS);
+    };
     const handler = (event: AgentEvent) => {
       if (event.type !== "chats_changed") return;
       const removedConvs = event.removed_conv_ids ?? [];
       const removedFolders = event.removed_folder_ids ?? [];
-      if (removedConvs.length || removedFolders.length) onRemoved?.(removedConvs, removedFolders);
-      void load();
+      if (removedConvs.length || removedFolders.length) latest.current.onRemoved?.(removedConvs, removedFolders);
+      scheduleLoad();
       if (shouldOpenCreatedChat(event) && event.conv_id) {
-        onCreated?.({
+        latest.current.onCreated?.({
           id: event.conv_id,
           title: event.title ?? "New ducky",
           folder_id: event.folder_id,
         });
       }
     };
-    const onReload = () => { void load(); };
-    window.addEventListener(RELOAD_DUCKIES_EVENT, onReload);
+    window.addEventListener(RELOAD_DUCKIES_EVENT, scheduleLoad);
     const unsubscribe = subscribeAgentEvents(handler);
     return () => {
-      window.removeEventListener(RELOAD_DUCKIES_EVENT, onReload);
+      window.clearTimeout(timer);
+      window.removeEventListener(RELOAD_DUCKIES_EVENT, scheduleLoad);
       unsubscribe();
     };
-  }, [load, onCreated, onRemoved]);
+  }, []);
 }
