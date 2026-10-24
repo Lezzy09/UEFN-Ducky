@@ -159,7 +159,7 @@ def test_a_command_typed_into_a_local_workflow_runs_without_asking(events, monke
     """Saving the command in the workflow approved it; one filled in while it runs still asks.
     The steps are one straight line: each reads the terminal the run opened."""
     from types import SimpleNamespace
-    from backend.tools.panel import ducky_panel
+    from backend.tools.panel import ducky_panel_terminal
 
     asked: list[tuple[str, str, bool]] = []
 
@@ -167,7 +167,7 @@ def test_a_command_typed_into_a_local_workflow_runs_without_asking(events, monke
         asked.append((session_id, command, kw["auto_approve"]))
         return {"ok": True, "exit_code": 0, "output_tail": ""} if kw["auto_approve"] else {"ok": False, "error": "command not approved (timed out)"}
 
-    monkeypatch.setattr(ducky_panel, "_terminal_manager", lambda: SimpleNamespace(
+    monkeypatch.setattr(ducky_panel_terminal, "_terminal_manager", lambda: SimpleNamespace(
         run_agent_command=run_agent_command,
         spawn=lambda **kw: {"ok": True, "session_id": "t1"},
         get_session=lambda _sid: None,
@@ -191,7 +191,7 @@ def test_the_terminal_a_run_opened_is_held_until_the_run_ends(events, monkeypatc
     """The idle reaper must not close it between steps (Oct 22 2026: closed while an
     Agent step waited, so the release's next steps found no session)."""
     from types import SimpleNamespace
-    from backend.tools.panel import ducky_panel
+    from backend.tools.panel import ducky_panel_terminal
     from frontend.ui_web.terminal import manager as terminal_manager
 
     held: list[str] = []
@@ -203,7 +203,7 @@ def test_the_terminal_a_run_opened_is_held_until_the_run_ends(events, monkeypatc
         return lambda: released.append(session_id)
 
     monkeypatch.setattr(terminal_manager, "get_terminal_manager", lambda: SimpleNamespace(hold=hold, kill=lambda *a, **k: {"ok": True}))
-    monkeypatch.setattr(ducky_panel, "_terminal_manager", lambda: SimpleNamespace(
+    monkeypatch.setattr(ducky_panel_terminal, "_terminal_manager", lambda: SimpleNamespace(
         run_agent_command=lambda session_id, command, **kw: during.append(list(released)) or {"ok": True, "exit_code": 0, "output_tail": ""},
         spawn=lambda **kw: {"ok": True, "session_id": "t1"},
         get_session=lambda _sid: None,

@@ -103,9 +103,13 @@ def test_lifecycle_calls_once_per_run(monkeypatch, reason, detail):
 
 def test_team_plan_tool_and_skill_documentation():
     root = Path(__file__).resolve().parents[3]
-    tree = ast.parse((root / "backend/tools/panel/ducky_panel.py").read_text(encoding="utf-8"))
     names = {"ducky_create_plan", "ducky_plan_add_node", "ducky_plan_update_node"}
-    docs = [ast.get_docstring(n) for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
+    docs = [
+        ast.get_docstring(n)
+        for module in ("ducky_panel.py", "ducky_panel_plans.py")
+        for n in ast.parse((root / "backend/tools/panel" / module).read_text(encoding="utf-8")).body
+        if isinstance(n, ast.FunctionDef) and n.name in names
+    ]
     assert len(docs) == 3
     for doc in docs:
         assert "Team plans:" in doc and "one sub plan per agent" in doc

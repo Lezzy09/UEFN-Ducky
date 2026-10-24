@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from backend.tools.panel import ducky_panel as tools
+from backend.tools.panel import ducky_panel_terminal as tools
 from backend.tools.panel import permission_prompt as permissions
 from frontend.ui_web import agent_modes, terminal
 from frontend.ui_web.panel_api import PanelApi
