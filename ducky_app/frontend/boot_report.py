@@ -56,7 +56,10 @@ STUCK_AFTER_S = 60.0
 STUCK_HEADING = "UEFN Ducky got stuck while starting"
 
 _state: dict[str, Any] = {}
+_state_lock = threading.Lock()  # stage(), mark() and the heartbeat thread share boot.tmp
 _native_file: Any = None
+HEARTBEAT_S = 30.0
+_heartbeat: dict[str, Any] = {"thread": None}
 # The window's page: started = its main script ran; errors = what it hit before that.
 _page: dict[str, Any] = {"started": False, "watching": False, "errors": []}
 
@@ -86,11 +89,12 @@ def _scrub(text: str) -> str:
 
 def _write_state() -> None:
     try:
-        path = _boot_path()
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(_state), encoding="utf-8")
-        tmp.replace(path)
-    except OSError:
+        with _state_lock:
+            path = _boot_path()
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(_state), encoding="utf-8")
+            tmp.replace(path)
+    except (OSError, RuntimeError, ValueError):
         pass
 
 
@@ -222,11 +226,85 @@ def _pc_restarted_since(when: float) -> bool:
     return booted > when
 
 
-def build_report(previous: dict[str, Any], native: str, *, restarted: bool = False) -> dict[str, str] | None:
+def _webview_dumps_dir() -> Path:
+    """Where WebView2's Crashpad keeps its dumps (the profile is ``storage_path`` in webview_app)."""
+    return _dir().parent / "webview" / "EBWebView" / "Crashpad" / "reports"
+
+
+def _dump_folders() -> list[tuple[Path, str, bool]]:
+    """(folder, pattern, is the app's own dump)."""
+    return [(_webview_dumps_dir(), "*.dmp", False), (_dir(), "ducky-*.dmp", True)]
+
+
+def crash_dumps(since: float) -> list[dict[str, Any]]:
+    """Dumps written since *since* (the previous launch's start), each read down to one line.
+    The dump files themselves never leave the PC."""
+    try:
+        from frontend import minidump
+    except Exception:
+        return []
+    out: list[dict[str, Any]] = []
+    for folder, pattern, app in _dump_folders():
+        for path in minidump.dumps_since(folder, since, pattern):
+            info = minidump.read(path)
+            try:
+                at = path.stat().st_mtime
+            except OSError:
+                at = 0.0
+            out.append({"name": path.name, "at": at, "summary": minidump.summary(info), "cause": minidump.cause(info, app=app)})
+    return sorted(out, key=lambda d: d["at"])
+
+
+def prune_dumps() -> None:
+    try:
+        from frontend import minidump
+    except Exception:
+        return
+    for folder, pattern, _app in _dump_folders():
+        minidump.prune(folder, pattern=pattern)
+
+
+def _heartbeat_lines(beat: dict[str, Any], ended: float | None) -> list[str]:
+    """The last memory heartbeat, and a cause line when the PC was nearly out of memory."""
+    at = float(beat.get("at") or 0.0)
+    secs = f"{max(0.0, ended - at):.0f} s" if ended else ""
+    age = f"{secs} before the end" if secs else f"at most {HEARTBEAT_S:.0f} s before the end"
+    parts = []
+    free, total = beat.get("free_gb"), beat.get("total_gb")
+    if free is not None:
+        parts.append(f"{float(free):.1f} GB free" + (f" of {float(total):.0f} GB" if total else ""))
+    if beat.get("commit_gb") is not None:
+        parts.append(f"commit {float(beat['commit_gb']):.0f} of {float(beat.get('commit_limit_gb') or 0):.0f} GB")
+    if beat.get("app_gb") is not None:
+        parts.append(f"app {float(beat['app_gb']):.1f} GB")
+    if beat.get("webview_gb") is not None:
+        parts.append(f"WebView2 {float(beat['webview_gb']):.1f} GB")
+    if beat.get("agents") is not None:
+        parts.append(f"{int(beat['agents'])} agents")
+    if beat.get("threads") is not None:
+        parts.append(f"{int(beat['threads'])} threads")
+    lines = [f"Last heartbeat {age}: " + ", ".join(parts) + "."]
+    if free is not None and float(free) < 1.0:
+        when = f"{secs} before" if secs else f"less than {HEARTBEAT_S:.0f} s before"
+        lines.append(f"Why: The PC had {float(free):.1f} GB free {when} Ducky closed.")
+    return lines
+
+
+def build_report(
+    previous: dict[str, Any],
+    native: str,
+    *,
+    restarted: bool = False,
+    dumps: list[dict[str, Any]] | None = None,
+    ended: float | None = None,
+) -> dict[str, str] | None:
     """The form body for a launch that crashed or never finished starting; None if it was fine.
 
     A launch still at ``ok`` never exited on purpose (every exit marks ``closed``): it
-    ended in a crash Python never saw, unless the PC restarted (*restarted*)."""
+    ended in a crash Python never saw, unless the PC restarted (*restarted*). *dumps* are
+    the crash dumps written since it started (``crash_dumps``); *ended* is when it ended,
+    if a dump or the native log says so."""
+    dumps = list(dumps or [])
     state = str(previous.get("state") or "")
     native = (native or "").strip()
     if not previous or (state in _CLEAN_ENDS and not native):
@@ -260,9 +338,17 @@ def build_report(previous: dict[str, Any], native: str, *, restarted: bool = Fal
         lines.append("Loading when it closed: " + ", ".join(plugins))
     if previous.get("error"):
         lines += ["", "Error:", str(previous["error"])]
+    for dump in dumps[-3:]:
+        lines.append(f"Crash dump {dump.get('name')}: {dump.get('summary')}")
+    causes = [str(d["cause"]) for d in dumps if d.get("cause")]
+    if causes:
+        lines.append("Why: " + causes[-1])
+    beat = previous.get("heartbeat")
+    if isinstance(beat, dict) and beat.get("at"):
+        lines += _heartbeat_lines(beat, ended)
     if native:
         lines += ["", "Crash traceback:", trim_native(native)]
-    elif state == "ok":
+    elif state == "ok" and not dumps:
         lines.append(NO_TRACE)
     return {
         "formId": FORM_ID,
@@ -284,6 +370,7 @@ def why_summary(body: dict[str, Any]) -> str:
     """Two or three plain lines for the pop-up: what happened and the likely cause."""
     log = str(body.get("error_log") or "").splitlines()
     out = [log[0] if log else "Ducky closed unexpectedly."]
+    out += [line[len("Why: "):] for line in log if line.startswith("Why: ")][:2]
     for line in log:
         if line.startswith("Loading when it closed: "):
             out.append("It was loading the plugin " + line.split(": ", 1)[1] + ".")
@@ -489,7 +576,15 @@ def begin(version: str) -> None:
         _state.clear()
         return
     restarted = _pc_restarted_since(float(previous.get("started") or 0.0)) if previous else False
-    body = build_report(previous, native, restarted=restarted) if previous else None
+    dumps = crash_dumps(float(previous.get("started") or 0.0)) if previous.get("started") else []
+    ends = [float(d["at"]) for d in dumps if d.get("at")]
+    if native.strip():
+        try:
+            ends.append(_native_path().stat().st_mtime)
+        except OSError:
+            pass
+    body = build_report(previous, native, restarted=restarted, dumps=dumps, ended=max(ends) if ends else None) if previous else None
+    prune_dumps()
     if body:
         # Clear the record first: if the pop-up itself fails, the next launch must not ask again.
         try:
@@ -520,6 +615,78 @@ def begin(version: str) -> None:
         faulthandler.enable(file=_native_file, all_threads=True)
     except Exception:
         _native_file = None
+
+
+def _memory_sample(agents: Callable[[], int] | None) -> dict[str, Any]:
+    """PC free memory and commit charge, the app's and its WebView2's private bytes,
+    agents and threads. Anything that can't be read is left out."""
+    beat: dict[str, Any] = {"at": round(time.time(), 1)}
+    gb = 1024**3
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD),
+                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        stat = MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if ctypes.WinDLL("kernel32").GlobalMemoryStatusEx(ctypes.byref(stat)):
+            beat.update(
+                free_gb=round(stat.ullAvailPhys / gb, 2),
+                total_gb=round(stat.ullTotalPhys / gb, 1),
+                commit_gb=round((stat.ullTotalPageFile - stat.ullAvailPageFile) / gb, 1),
+                commit_limit_gb=round(stat.ullTotalPageFile / gb, 1),
+            )
+    except (AttributeError, OSError):
+        pass
+    try:
+        from backend.util import proc_table
+
+        procs = proc_table.table()
+        me = procs.get(os.getpid())
+        if me is not None:
+            beat.update(app_gb=round(me.private / gb, 2), threads=me.threads)
+            beat["webview_gb"] = round(
+                sum(procs[p].private for p in proc_table.tree(procs, me.pid) if procs[p].name.lower() == "msedgewebview2.exe") / gb, 2
+            )
+    except Exception:
+        beat.setdefault("threads", threading.active_count())
+    if agents is not None:
+        try:
+            beat["agents"] = int(agents())
+        except Exception:
+            pass
+    return beat
+
+
+def heartbeat(agents: Callable[[], int] | None = None) -> None:
+    """Write one memory heartbeat into boot.json (the next launch's best clue when a
+    crash leaves no dump)."""
+    if not _state:
+        return
+    _state["heartbeat"] = _memory_sample(agents)
+    _write_state()
+
+
+def start_heartbeat(agents: Callable[[], int] | None = None, every_s: float = HEARTBEAT_S) -> None:
+    """One daemon thread writing a heartbeat every *every_s* (never more often). Later calls do nothing."""
+    if not _state or _heartbeat["thread"] is not None:
+        return
+
+    def loop() -> None:
+        while _state.get("state") not in _CLEAN_ENDS:
+            heartbeat(agents)
+            time.sleep(max(HEARTBEAT_S, every_s))
+
+    _heartbeat["thread"] = threading.Thread(target=loop, daemon=True, name="boot-heartbeat")
+    _heartbeat["thread"].start()
 
 
 def stage(name: str) -> None:

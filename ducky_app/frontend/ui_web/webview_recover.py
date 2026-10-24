@@ -136,6 +136,17 @@ def error_source(reason: str) -> str:
     return "webview" + where + (f"_{how}" if how else "")
 
 
+def _mark_crash_reload() -> None:
+    """The page is about to load again after its process died: its next
+    get_restore_tabs answers the chats it had open."""
+    try:
+        from frontend.ui_web.panel_api import mark_crash_reload
+
+        mark_crash_reload()
+    except Exception:
+        _log.debug("mark_crash_reload failed", exc_info=True)
+
+
 def recover_core_webview(core: Any, *, reason: str = "") -> dict[str, Any]:
     """Reload (or re-Navigate) a live CoreWebView2. Debounced per instance."""
     if core is None:
@@ -151,6 +162,8 @@ def recover_core_webview(core: Any, *, reason: str = "") -> dict[str, Any]:
         record_error(error_source(reason), f"WebView2 process failed ({reason or 'unknown'}); reloading")
     except Exception:
         pass
+    if should_recover_process_fail(reason.rpartition(":")[2]):
+        _mark_crash_reload()
     try:
         core.Reload()
         return {"ok": True, "action": "reload"}
@@ -197,6 +210,7 @@ def attach_process_failed(
                 record_error(error_source(reason), f"WebView2 browser stopped ({reason}); starting a new one")
             except Exception:
                 pass
+            _mark_crash_reload()  # the new control loads the page from scratch
             try:
                 on_browser_exit(reason)
             except Exception:

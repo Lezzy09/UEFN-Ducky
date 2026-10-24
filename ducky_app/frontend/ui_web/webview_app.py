@@ -103,6 +103,36 @@ def _poll_listener(api: object) -> None:
         time.sleep(8)
 
 
+def _start_boot_meters() -> None:
+    """Once the main window exists: the core-wait meter and the crash report's memory
+    heartbeat. A failure here never blocks boot."""
+    try:
+        from frontend import self_health
+
+        self_health.start_core_wait()
+    except Exception:
+        logging.getLogger(__name__).warning("core-wait meter did not start", exc_info=True)
+    try:
+        from frontend import boot_report
+        from frontend.ui_web.agent_modes import list_running_agents
+
+        boot_report.start_heartbeat(lambda: len(list_running_agents()))
+    except Exception:
+        logging.getLogger(__name__).warning("crash heartbeat did not start", exc_info=True)
+
+
+def _install_crash_dumps() -> None:
+    """The window is up, so pythonnet and WinForms are loaded and .NET has set its own
+    exception filter: now set the one that writes a dump, and keep it set."""
+    try:
+        from frontend import native_crash
+
+        if native_crash.install():
+            native_crash.start_watch()
+    except Exception:
+        logging.getLogger(__name__).warning("crash dump filter not installed", exc_info=True)
+
+
 def _boot_trace(name: str, t0: float, **meta: object) -> None:
     """Record one cold-start phase; never raises."""
     try:
@@ -562,6 +592,7 @@ def _run_panel(api_holder: dict[str, object]) -> None:
     window_holder["window"] = window
     api.bind_window(window, on_hide=on_hide, on_exit=on_exit)
     _boot_trace("create_window", t_window)
+    _start_boot_meters()
 
     # Copy files dropped from Explorer onto the Content tree (hooks window.events.loaded).
     try:
@@ -612,6 +643,7 @@ def _run_panel(api_holder: dict[str, object]) -> None:
 
     def _on_shown() -> None:
         threading.Thread(target=_apply_window_icon, daemon=True, name="window-icon").start()
+        _install_crash_dumps()
         try:
             from frontend import boot_report
 

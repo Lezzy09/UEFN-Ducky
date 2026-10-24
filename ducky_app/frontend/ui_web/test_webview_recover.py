@@ -224,6 +224,44 @@ def test_forgetting_a_replaced_core_lets_its_id_be_hooked_again(monkeypatch) -> 
     assert wr.attach_process_failed(core, label="main") is not None
 
 
+# ── After a crash the page reopens the chats it had ──────────────────────────
+
+
+def _marking(monkeypatch) -> list[str]:
+    monkeypatch.setattr(wr, "_last_recover", {})
+    monkeypatch.setattr(wr, "_attached", set())
+    monkeypatch.setattr(wr, "_unresponsive", {})
+    order: list[str] = []
+    monkeypatch.setattr(wr, "_mark_crash_reload", lambda: order.append("mark"))
+    return order
+
+
+def test_a_dead_process_marks_the_tabs_before_the_reload(monkeypatch) -> None:
+    order = _marking(monkeypatch)
+    core = _Core()
+    core.Reload = lambda: order.append("reload")
+    handler = wr.attach_process_failed(core, label="pane:x")
+    handler(None, SimpleNamespace(ProcessFailedKind=0))
+    assert order == ["mark", "reload"]
+
+
+def test_a_dead_browser_marks_the_tabs_before_the_new_control(monkeypatch) -> None:
+    order = _marking(monkeypatch)
+    monkeypatch.setattr("frontend.error_log.record_error", lambda _s, _m: None)
+    handler = wr.attach_process_failed(_Core(), label="main", on_browser_exit=lambda _r: order.append("rebuild"))
+    handler(None, SimpleNamespace(ProcessFailedKind="BrowserProcessExited"))
+    assert order == ["mark", "rebuild"]
+
+
+def test_a_reload_that_is_not_a_crash_marks_nothing(monkeypatch) -> None:
+    order = _marking(monkeypatch)
+    core = _Core()
+    assert wr.recover_core_webview(core, reason="gpu")["action"] == "reload"
+    wr._last_recover.clear()
+    wr.recover_core_webview(core, reason="main:renderprocessunresponsive")  # hung a minute: alive
+    assert core.reloads == 2 and order == []
+
+
 class _Form:
     def __init__(self, label: str) -> None:
         self.label = label
