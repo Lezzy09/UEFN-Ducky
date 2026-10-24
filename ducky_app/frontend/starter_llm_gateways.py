@@ -14,7 +14,7 @@ STARTER_LLM_GATEWAY_SLUGS: tuple[str, ...] = ("anthropic", "openai", "google", "
 
 STARTER_UEFN_PLUGIN_SLUGS: tuple[str, ...] = ("uefn", "playtester", "typesafe")
 
-STARTER_CREATE_PLUGIN_SLUGS: tuple[str, ...] = ("blender", "meshy", "adobe", "island-media-kit")
+STARTER_CREATE_PLUGIN_SLUGS: tuple[str, ...] = ("blender", "forge", "meshy", "tripo", "adobe", "island-media-kit")
 
 # The in-app web browser, translation, and offline neural voices so every ducky can read
 # its replies aloud.
@@ -39,7 +39,9 @@ STARTER_PLUGIN_LABELS: dict[str, str] = {
     "playtester": "Play Tester",
     "typesafe": "TypeSafe",
     "blender": "Blender",
+    "forge": "Ducky Forge",
     "meshy": "Meshy",
+    "tripo": "Tripo",
     "adobe": "Adobe",
     "island-media-kit": "Island Media Kit",
     "browser": "Web Browser",
