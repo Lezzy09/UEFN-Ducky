@@ -12,6 +12,13 @@ from unittest.mock import patch
 from backend.agent.coding_agents import plans
 
 
+def test_plans_read_chat_metadata_only() -> None:
+    # A plan read loaded every owner's whole chat to see that it exists or find its parent:
+    # on a 22 MB chat each get_plan cost a full decode (Oct 24 2026).
+    source = Path(plans.__file__).read_text(encoding="utf-8")
+    assert "load_conversation(" not in source
+
+
 class PlansStoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()

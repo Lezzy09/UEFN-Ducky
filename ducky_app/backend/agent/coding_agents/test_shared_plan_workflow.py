@@ -117,7 +117,7 @@ from types import SimpleNamespace
 from backend.agent.coding_agents import plans
 from frontend.ui_web import project_chats
 parents = json.loads(sys.argv[2])
-project_chats.load_conversation = lambda cid, project_root=None: (
+project_chats.load_conversation = project_chats.load_conversation_meta = lambda cid, project_root=None: (
     SimpleNamespace(parent_conv_id=parents[cid]) if cid in parents else None)
 print(json.dumps(plans.load_plan_view('builder', sys.argv[1])))
 ''', root, json.dumps(parents)], env=env, capture_output=True, text=True, timeout=20, check=True)

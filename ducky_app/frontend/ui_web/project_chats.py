@@ -1557,6 +1557,10 @@ def upsert_in_flight_assistant(
     payload = dict(message)
     if rid:
         payload["run_id"] = rid
+    if _use_db():
+        with _conversation_lock(conv.id):
+            _upsert_run_row(conv, payload, rid, project_root)
+        return
     with _conversation_lock(conv.id):
         fresh = load_conversation(conv.id, project_root)
         if fresh is not None:
@@ -1580,6 +1584,45 @@ def upsert_in_flight_assistant(
             msgs.append(payload)
         conv.messages = msgs
         save_conversation(conv, project_root, touch_updated=True)
+
+
+def _run_row_index(msgs: list[Any], rid: str) -> int:
+    """Index of the run's assistant after the last user message, or -1."""
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i]
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") == "user":
+            break
+        if rid and m.get("role") == "assistant" and str(m.get("run_id") or "") == rid:
+            return i
+    return -1
+
+
+def _upsert_run_row(conv: Conversation, payload: dict[str, Any], rid: str, project_root: str | None) -> None:
+    """Row store: write only this turn's row. ``conv.messages`` is patched the same way;
+    when it no longer matches the stored chat (someone else added a row) it is reloaded,
+    so a later full save of this copy never writes over their rows."""
+    msgs = list(conv.messages or [])
+    idx = _run_row_index(msgs, rid)
+    if idx >= 0:
+        msgs[idx] = payload
+    else:
+        idx = len(msgs)
+        msgs.append(payload)
+    now = time.time()
+    result = _repo().upsert_run_message(
+        conv.id, rid, payload, updated=now, stats=_stats_for(msgs)
+    )
+    if result.get("skipped"):
+        return
+    conv.updated = now
+    if result.get("seq") == idx and result.get("count") == len(msgs):
+        conv.messages = msgs
+        return
+    fresh = load_conversation(conv.id, project_root)
+    if fresh is not None:
+        conv.messages = list(fresh.messages)
 
 
 def heal_usage_orphaned_turn(

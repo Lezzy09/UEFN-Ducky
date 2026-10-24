@@ -695,7 +695,7 @@ def save_plan(plan: dict[str, Any], project_root: str | None = None) -> dict[str
         raise ValueError("chat_id required")
     if not _use_db() and not _resolve_project_root(project_root):
         raise ValueError("project_root required for project plans")
-    from frontend.ui_web.project_chats import load_conversation
+    from frontend.ui_web.project_chats import load_conversation_meta
 
     # Read without load_plan's repair-and-save path: saving a healed document
     # must not recursively try to heal the previous stored version again.
@@ -714,7 +714,7 @@ def save_plan(plan: dict[str, Any], project_root: str | None = None) -> dict[str
             # A sub plan only starts once its steps exist; a plain step is assignable as is.
             if node.get("kind") == "subplan" and not node.get("children"):
                 raise ValueError(f"sub plan `{node['id']}` has no steps. Add its steps first, then assign it.")
-            if load_conversation(assignee, project_root=project_root) is None:
+            if load_conversation_meta(assignee, project_root=project_root) is None:
                 raise ValueError("assignee must identify an existing chat or group")
     plan["updated_at"] = time.time()
     _rollup_completed_parents(plan.get("nodes"))
@@ -1430,7 +1430,7 @@ def format_plan_prompt_block(
 
 def _chat_and_group_ids(chat_id: str, project_root: str | None) -> list[str]:
     """This chat, then the group it sits in, then that group's group, and so on."""
-    from frontend.ui_web.project_chats import load_conversation
+    from frontend.ui_web.project_chats import load_conversation_meta
 
     ids: list[str] = []
     cur = (chat_id or "").strip()
@@ -1438,7 +1438,7 @@ def _chat_and_group_ids(chat_id: str, project_root: str | None) -> list[str]:
         if not cur or cur in ids:
             break
         try:
-            conv = load_conversation(cur, project_root=project_root)
+            conv = load_conversation_meta(cur, project_root=project_root)
         except Exception:
             conv = None
         if conv is None:
@@ -1460,21 +1460,21 @@ def team_plan_for(chat_id: str, project_root: str | None = None) -> dict[str, An
     plan: a member made its own private plan, the lead's plan never showed that work, and
     a teammate reported the same "blocked" for an hour while the fix sat out of sight.
     """
-    from frontend.ui_web.project_chats import load_conversation
+    from frontend.ui_web.project_chats import load_conversation_meta
 
     ids = _chat_and_group_ids(chat_id, project_root)
     if not ids:
         return None
     for gid in ids[1:]:
         try:
-            group = load_conversation(gid, project_root=project_root)
+            group = load_conversation_meta(gid, project_root=project_root)
         except Exception:
             group = None
         lead = str(getattr(group, "leader_conv_id", "") or "").strip() if group is not None else ""
         if not lead or lead == ids[0]:
             continue
         try:
-            alive = load_conversation(lead, project_root=project_root) is not None
+            alive = load_conversation_meta(lead, project_root=project_root) is not None
         except Exception:
             alive = False
         plan = load_plan(lead, project_root) if alive else None
@@ -1509,14 +1509,14 @@ def _refuse_if_lead_has_no_plan(chat_id: str, project_root: str | None) -> None:
 
     Oct 15 2026: a lead handed out work by message before writing its plan, a member wrote a
     plan of its own, and Ducky's keeper then woke that member as the team's lead."""
-    from frontend.ui_web.project_chats import load_conversation
+    from frontend.ui_web.project_chats import load_conversation_meta
 
     ids = _chat_and_group_ids(chat_id, project_root)
     for gid in ids[1:]:
         try:
-            group = load_conversation(gid, project_root=project_root)
+            group = load_conversation_meta(gid, project_root=project_root)
             lead = str(getattr(group, "leader_conv_id", "") or "").strip() if group is not None else ""
-            alive = bool(lead) and lead != ids[0] and load_conversation(lead, project_root=project_root) is not None
+            alive = bool(lead) and lead != ids[0] and load_conversation_meta(lead, project_root=project_root) is not None
         except Exception:
             alive = False
         if not alive:
@@ -1573,7 +1573,7 @@ def with_team_links(plan: dict[str, Any] | None, chat_id: str,
     if not plan or plan.get("assigned_from"):
         return plan
     try:
-        from frontend.ui_web.project_chats import island_for_conversation, load_conversation
+        from frontend.ui_web.project_chats import island_for_conversation, load_conversation_meta
 
         convs, _folders = island_for_conversation(chat_id, project_root)
     except Exception:
@@ -1582,7 +1582,7 @@ def with_team_links(plan: dict[str, Any] | None, chat_id: str,
     by_id = {c.id: c for c in convs}
     ids = _chat_and_group_ids(chat_id, project_root)
     for hub_id in ids[1:]:
-        hub = by_id.get(hub_id) or load_conversation(hub_id, project_root=project_root)
+        hub = by_id.get(hub_id) or load_conversation_meta(hub_id, project_root=project_root)
         lead = (getattr(hub, "leader_conv_id", "") or "").strip() if hub is not None else ""
         if not lead or lead == chat_id:
             continue
@@ -1624,7 +1624,7 @@ def assigned_plan_view(chat_id: str, project_root: str | None = None, *,
     the coordinator's plan held their work. The view is read-only: edits go to the
     plan's own chat (``assigned_from.chat_id``).
     """
-    from frontend.ui_web.project_chats import load_conversation
+    from frontend.ui_web.project_chats import load_conversation_meta
 
     ids = _chat_and_group_ids(chat_id, project_root)
     if not ids:
@@ -1634,7 +1634,7 @@ def assigned_plan_view(chat_id: str, project_root: str | None = None, *,
     plans = [p for p in list_plans(project_root)
              if str(p.get("chat_id") or "") != ids[0]
              and p.get("status") != "archived"
-             and load_conversation(str(p.get("chat_id") or ""), project_root=project_root) is not None]
+             and load_conversation_meta(str(p.get("chat_id") or ""), project_root=project_root) is not None]
     for wanted in ids:  # the most specific owner wins
         matches = [(p, n) for p in plans for n in _flatten_nodes(p.get("nodes"))
                    if str(n.get("assignee") or "") == wanted]
@@ -1717,12 +1717,12 @@ def _outermost(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _team_leads(ids: list[str], project_root: str | None) -> set[str]:
     """Leaders of the groups this chat sits in (``ids``: the chat, then its groups)."""
-    from frontend.ui_web.project_chats import load_conversation
+    from frontend.ui_web.project_chats import load_conversation_meta
 
     leads: set[str] = set()
     for gid in ids[1:]:
         try:
-            group = load_conversation(gid, project_root=project_root)
+            group = load_conversation_meta(gid, project_root=project_root)
         except Exception:
             group = None
         lead = str(getattr(group, "leader_conv_id", "") or "").strip() if group is not None else ""

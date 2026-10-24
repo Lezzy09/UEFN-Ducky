@@ -735,38 +735,112 @@ def _sync_messages(
         if row is not None and row[0] == h:
             continue
         nbytes += len(body)
-        body, fmt, parts = _compact(source, body, digest_of)
-        params = (
-            h,
-            str(source.get("role") or "") if isinstance(source, dict) else "",
-            float(source.get("ts") or 0.0) if isinstance(source, dict) else 0.0,
-            str(source.get("run_id") or "") if isinstance(source, dict) else "",
-            account_rows.blind_text(message_search_text(source), key) if isinstance(source, dict) else "",
-            account_rows.seal(body, account),
-            fmt,
-        )
+        _write_row(conn, conv_id, seq, row, source, body, h, account, key, digest_of)
         if row is not None:
-            message_id = row[1]
-            conn.execute(
-                "UPDATE messages SET hash=?, role=?, ts=?, run_id=?, text=?, body=?, fmt=? WHERE id=?",
-                (*params, message_id),
-            )
             updated += 1
         else:
-            cur = conn.execute(
-                "INSERT INTO messages(conv_id, seq, hash, role, ts, run_id, text, body, fmt, account_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (conv_id, seq, *params, account),
-            )
-            message_id = int(cur.lastrowid)
             inserted += 1
-        if parts or row is not None:
-            _write_parts(conn, message_id, parts, account)
     if len(existing) > len(messages):
         conn.execute("DELETE FROM messages WHERE conv_id=? AND seq>=?", (conv_id, len(messages)))
         deleted = len(existing) - len(messages)
     counts = {"inserted": inserted, "updated": updated, "deleted": deleted, "bytes": nbytes}
     return counts, remembered, chars
+
+
+def _write_row(
+    conn, conv_id: str, seq: int, row: tuple[str, int] | None, source: Any, body: str, h: str,
+    account: str, key: bytes, digest_of: Callable[[str], str],
+) -> None:
+    """Write one message row (sealed, big fields as parts, search text); *row* is the
+    existing (hash, id) at *seq*, or None to insert."""
+    body, fmt, parts = _compact(source, body, digest_of)
+    params = (
+        h,
+        str(source.get("role") or "") if isinstance(source, dict) else "",
+        float(source.get("ts") or 0.0) if isinstance(source, dict) else 0.0,
+        str(source.get("run_id") or "") if isinstance(source, dict) else "",
+        account_rows.blind_text(message_search_text(source), key) if isinstance(source, dict) else "",
+        account_rows.seal(body, account),
+        fmt,
+    )
+    if row is not None:
+        message_id = row[1]
+        conn.execute(
+            "UPDATE messages SET hash=?, role=?, ts=?, run_id=?, text=?, body=?, fmt=? WHERE id=?",
+            (*params, message_id),
+        )
+    else:
+        cur = conn.execute(
+            "INSERT INTO messages(conv_id, seq, hash, role, ts, run_id, text, body, fmt, account_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (conv_id, seq, *params, account),
+        )
+        message_id = int(cur.lastrowid)
+    if parts or row is not None:
+        _write_parts(conn, message_id, parts, account)
+
+
+def upsert_run_message(
+    conv_id: str, run_id: str, message: dict[str, Any], *, updated: float, stats: dict[str, int] | None = None
+) -> dict[str, Any]:
+    """Write a turn's in-flight assistant as ONE row: the run's last assistant after the
+    last user row is replaced, else the message is appended. Checkpoints used to load
+    and re-save the whole chat on every tool, a cost that grew with the chat.
+
+    Returns ``{"seq", "count"}`` (``skipped`` when the chat is gone or not this
+    account's). *stats* sets ``tool_call_count`` / ``file_count`` when given.
+    """
+    account = account_rows.current()
+    key = account_rows.ready(account)
+    conn = db.connect()
+    digest_of = functools.partial(account_rows.part_digest, key=key)
+    shell = _shell(message)
+    source = message if shell is None else shell
+    body = _dumps(source)
+    h = _hash(body)
+    with db.write_txn(conn):
+        owner = conn.execute("SELECT account_id FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        if owner is None or str(owner[0]) != account or _was_deleted(conn, conv_id):
+            return {"skipped": 1}
+        last_user = conn.execute(
+            "SELECT coalesce(max(seq), -1) FROM messages WHERE conv_id=? AND role='user'", (conv_id,)
+        ).fetchone()[0]
+        hit = conn.execute(
+            "SELECT seq, hash, id FROM messages WHERE conv_id=? AND seq>? AND role='assistant' AND run_id=? "
+            "ORDER BY seq DESC LIMIT 1",
+            (conv_id, int(last_user), run_id),
+        ).fetchone() if run_id else None
+        count = int(conn.execute("SELECT count(*) FROM messages WHERE conv_id=?", (conv_id,)).fetchone()[0])
+        if hit is not None:
+            seq, row = int(hit[0]), (str(hit[1]), int(hit[2]))
+        else:
+            seq, row = count, None
+            count += 1
+        if row is None or row[0] != h:
+            _write_row(conn, conv_id, seq, row, source, body, h, account, key, digest_of)
+        conn.execute("UPDATE conversations SET updated=?, message_count=? WHERE id=?", (float(updated), count, conv_id))
+        if stats:
+            conn.execute(
+                "UPDATE conversations SET tool_call_count=?, file_count=? WHERE id=?",
+                (int(stats.get("tool_call_count") or 0), int(stats.get("file_count") or 0), conv_id),
+            )
+    _remember_row(conv_id, seq, (h, shell, len(body)) if shell is not None else None)
+    return {"seq": seq, "count": count}
+
+
+def _remember_row(conv_id: str, seq: int, entry: tuple[str, Any, int] | None) -> None:
+    """Keep the save cache true for one row written outside :func:`_sync_messages`."""
+    with _saved_lock:
+        cached = _saved.get(conv_id)
+        if cached is None:
+            return
+        rows, chars = cached
+        dropped = rows.pop(seq, None)
+        chars -= dropped[2] if dropped else 0
+        if entry is not None:
+            rows[seq] = entry
+            chars += entry[2]
+        _saved[conv_id] = (rows, chars)
 
 
 def _messages(conn, conv_id: str, account: str) -> list[dict[str, Any]]:
