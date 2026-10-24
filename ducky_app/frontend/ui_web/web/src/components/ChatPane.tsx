@@ -92,7 +92,6 @@ import { requestChatTranslateWalk } from "../navigation/openTranslatedChat";
 import { readTranslationUiLang } from "../navigation/openVerseTranslatedTab";
 import { isEnglishLang } from "../views/settings/translationLanguages";
 import { VoiceControls, type LiveVoiceUiHandlers } from "../voice/VoiceControls";
-import { LiveVoiceView } from "../voice/LiveVoiceView";
 import { VoiceOverlay } from "../voice/VoiceOverlay";
 import { noteUserTurn } from "../voice/spokenReplyGate";
 import { SnipButton } from "./SnipButton";
@@ -428,8 +427,6 @@ export function ChatPane({
   const [leaderConvId, setLeaderConvId] = useState(chat.leaderConvId || "");
   const [liveVoice, setLiveVoice] = useState(false);
   const [liveVoiceHandlers, setLiveVoiceHandlers] = useState<LiveVoiceUiHandlers | null>(null);
-  // Live voice opens the full-screen voice view; "Show chat" brings the transcript back.
-  const [liveChatShown, setLiveChatShown] = useState(false);
   const [promptQueue, setPromptQueueState] = useState<QueuedPrompt[]>(() => getPromptQueue(chat.id));
   useEffect(() => {
     setPromptQueueState(getPromptQueue(chat.id));
@@ -438,7 +435,6 @@ export function ChatPane({
   const handleLiveVoiceChange = useCallback((live: boolean, handlers: LiveVoiceUiHandlers | null) => {
     setLiveVoice(live);
     setLiveVoiceHandlers(handlers);
-    if (!live) setLiveChatShown(false);
   }, []);
   useEffect(() => {
     setGroupMembers(chat.isGroup ? chat.groupMembers || [] : []);
@@ -1528,28 +1524,9 @@ export function ChatPane({
         onDragLeave={handleAttachDragLeave}
         onDrop={handleDrop}
       >
-      <div ref={shellRef} className="chat-column-shell live-voice-host">
-        {liveVoice && liveVoiceHandlers && !liveChatShown ? (
-          <LiveVoiceView
-            chatId={chat.id}
-            onEnd={liveVoiceHandlers.onClose}
-            onShowChat={() => setLiveChatShown(true)}
-            muted={liveVoiceHandlers.muted}
-            setMuted={liveVoiceHandlers.setMuted}
-            onRetry={liveVoiceHandlers.onRetry}
-            voiceId={liveVoiceHandlers.voiceId}
-            speed={liveVoiceHandlers.speed}
-            setVoiceId={liveVoiceHandlers.setVoiceId}
-            setSpeed={liveVoiceHandlers.setSpeed}
-            processTalk={liveVoiceHandlers.processTalk}
-            setProcessTalk={liveVoiceHandlers.setProcessTalk}
-            chatModel={selectedModel}
-            setChatModel={setSelectedModel}
-            codingAgent={codingAgent}
-            setCodingAgent={setCodingAgent}
-            showChatModel={!chat.isGroup}
-          />
-        ) : null}
+      {/* Live voice stays in the chat box (orb + buttons above the composer): the chat
+          remains visible behind it, never a full-screen view. */}
+      <div ref={shellRef} className="chat-column-shell">
         <div className="chat-column-gutter chat-column-gutter--left">
         </div>
         <div className="chat-column">
@@ -1740,12 +1717,12 @@ export function ChatPane({
                   processTalk={liveVoiceHandlers.processTalk}
                   setProcessTalk={liveVoiceHandlers.setProcessTalk}
                   muted={liveVoiceHandlers.muted}
+                  setMuted={liveVoiceHandlers.setMuted}
                   chatModel={selectedModel}
                   setChatModel={setSelectedModel}
                   codingAgent={codingAgent}
                   setCodingAgent={setCodingAgent}
                   showChatModel={!chat.isGroup}
-                  onShowVoiceView={() => setLiveChatShown(false)}
                 />
               ) : null}
             </div>

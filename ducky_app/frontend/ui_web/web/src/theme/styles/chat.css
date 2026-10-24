@@ -1654,6 +1654,18 @@
   justify-content: center;
 }
 
+/* The live orb (listening / thinking / speaking) in the chat box's voice bar. */
+.voice-overlay-orb-wrap--live {
+  width: 44px;
+  height: 44px;
+}
+
+.voice-overlay-orb-wrap--live .voice-orb {
+  --orb-size: 40px;
+  max-width: none;
+  max-height: none;
+}
+
 .voice-overlay-orb-ping {
   position: absolute;
   inset: 0;
@@ -1923,6 +1935,12 @@
 
 .tts-readalong-rest {
   color: var(--muted);
+}
+
+/* The word being read aloud, marked inside the formatted reply (markSpokenWord). */
+::highlight(ducky-tts-word) {
+  background-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  color: var(--fg);
 }
 
 .voice-settings-row {

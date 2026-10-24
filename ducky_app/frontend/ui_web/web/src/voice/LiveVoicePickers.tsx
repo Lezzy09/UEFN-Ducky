@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChoiceDropdown, type ChoiceOption } from "../components/ChoiceDropdown";
 import { ModelSelector } from "../components/ModelSelector";
 import { Icons } from "../icons/Icons";
 import { getApi, isRemote } from "../hooks/usePanelApi";
+import { getCachedModels } from "../hooks/modelsCatalogCache";
 import {
   getAudioSettings,
   loadAudioSettings,
@@ -26,6 +27,28 @@ import {
   subscribeVoiceSettings,
   type SttProvider,
 } from "./voiceSettings";
+
+type CatalogLookup = Array<{ id: string; providerKey?: string }> | null;
+
+/** The voice model is saved as "backend:model_id"; a bare id reads as unset on the backend
+ *  (it fell back to the default model, so only Cursor's already-prefixed ids stuck).
+ *  A coding agent's pick is "agent:id", a Ducky API pick "provider:id" from the catalog. */
+export function qualifyVoiceModel(id: string, agent: string, catalog: CatalogLookup = getCachedModels()): string {
+  const model = (id || "").trim();
+  if (!model || model.includes(":")) return model;
+  const by = (agent || "").trim();
+  if (by && by !== "ducky") return `${by}:${model}`;
+  const provider = catalog?.find((row) => row.id === model)?.providerKey?.trim();
+  return provider ? `${provider}:${model}` : model;
+}
+
+/** The coding agent a saved voice model belongs to ("ducky" for an API provider). */
+export function voiceModelAgent(saved: string, catalog: CatalogLookup = getCachedModels()): string {
+  const at = (saved || "").indexOf(":");
+  if (at <= 0) return "ducky";
+  const prefix = saved.slice(0, at);
+  return catalog?.some((row) => row.providerKey === prefix) ? "ducky" : prefix;
+}
 
 /** The chat the voice-model chip edits: the given one, else the only live chat. */
 export function voiceModelChatId(chatId?: string): string {
@@ -68,6 +91,13 @@ export function LiveVoicePickers({
   const modelChat = voiceModelChatId(chatId);
   const readVoiceModel = () => (modelChat ? getChatVoiceModel(modelChat) : "") || getVoiceSettings().liveModel;
   const [voiceModel, setVoiceModelState] = useState(readVoiceModel);
+  // The picker names the agent first, then the model: keep it to qualify the saved id.
+  const [voiceAgent, setVoiceAgentState] = useState(() => voiceModelAgent(readVoiceModel()));
+  const voiceAgentRef = useRef(voiceAgent);
+  const setVoiceAgent = useCallback((agent: string) => {
+    voiceAgentRef.current = agent;
+    setVoiceAgentState(agent);
+  }, []);
   const voices = useTtsVoiceOptions();
   const talk = clampProcessTalk(processTalk);
   const talkPct = Math.round(talk * 100);
@@ -96,13 +126,16 @@ export function LiveVoicePickers({
     void loadAudioSettings();
     return subscribeVoiceSettings(() => {
       setSttProvider(getVoiceSettings().sttProvider);
-      setVoiceModelState(readVoiceModel());
+      const saved = readVoiceModel();
+      setVoiceModelState(saved);
+      setVoiceAgent(voiceModelAgent(saved));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelChat]);
 
   const setVoiceModel = useCallback(
-    (next: string) => {
+    (picked: string) => {
+      const next = qualifyVoiceModel(picked, voiceAgentRef.current);
       setVoiceModelState(next);
       if (modelChat) setChatVoiceModel(modelChat, next);
       else void saveVoiceSettings({ liveModel: next });
@@ -181,8 +214,10 @@ export function LiveVoicePickers({
       ) : null}
       <div className="live-voice-model live-voice-model--voice" title="Voice model: answers live talk right away">
         <ModelSelector
-          selectedModel={voiceModel}
+          selectedModel={voiceAgent === "ducky" ? voiceModel.slice(voiceModel.indexOf(":") + 1) : voiceModel}
           setSelectedModel={setVoiceModel}
+          codingAgent={voiceAgent}
+          setCodingAgent={setVoiceAgent}
           requireTools={false}
           preserveSelection
           menuPlacement="top"

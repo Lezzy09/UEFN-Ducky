@@ -14,7 +14,11 @@ vi.mock("./rich-content/RichContentRenderer", () => ({
 }));
 vi.mock("./ThinkingBlock", () => ({ ThinkingBlock: () => null }));
 vi.mock("../voice/VoiceControls", () => ({ SpeakMessageButton: () => null }));
-vi.mock("../voice/TtsReadAlong", () => ({ TtsReadAlong: () => null, mapReadAlong: () => null }));
+vi.mock("../voice/TtsReadAlong", () => ({
+  mapReadAlong: () => null,
+  markSpokenWord: () => false,
+  clearSpokenWord: () => {},
+}));
 vi.mock("../voice/ttsEngine", () => ({
   ttsEngine: {
     onProgress: () => () => {},

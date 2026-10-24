@@ -1,8 +1,8 @@
-import { memo, useCallback, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { MessageAttachmentDto, MessageAuthorDto } from "../types/panel";
 import type { OpenFileHandler } from "../types/richContent";
 import { SpeakMessageButton } from "../voice/VoiceControls";
-import { mapReadAlong, TtsReadAlong } from "../voice/TtsReadAlong";
+import { clearSpokenWord, mapReadAlong, markSpokenWord } from "../voice/TtsReadAlong";
 import { ttsEngine, type TtsProgress } from "../voice/ttsEngine";
 import { ModelSelector } from "./ModelSelector";
 import { RichContentRenderer } from "./rich-content/RichContentRenderer";
@@ -101,11 +101,27 @@ export const MessageBubble = memo(function MessageBubble({
   const text = introShown ?? fullText;
   const isStreaming = introShown !== null || streaming;
 
-  if (role === "user") return null;
-
   const readAlong =
     tts.state !== "idle" ? mapReadAlong(text, tts.spokenText, tts.sourceText, tts.charIndex) : null;
   const ttsActive = Boolean(readAlong);
+  // Read-aloud keeps the formatted reply on screen and marks the spoken word in it
+  // (it used to swap to the raw markdown text with ## and ** while speaking).
+  const richRef = useRef<HTMLDivElement>(null);
+  const markedRef = useRef(false);
+  useEffect(() => {
+    if (!readAlong) {
+      if (markedRef.current) clearSpokenWord();
+      markedRef.current = false;
+      return;
+    }
+    markedRef.current = markSpokenWord(richRef.current, readAlong.spokenText, readAlong.charIndex);
+  }, [readAlong?.spokenText, readAlong?.charIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => {
+    if (markedRef.current) clearSpokenWord();
+  }, []);
+
+  if (role === "user") return null;
+
   const speakVoice = author?.tts_voice || voiceId;
   const speakSpeed = author?.tts_speed ?? speed;
   // Group chats: which group (outer to inner) the speaking member works in.
@@ -141,15 +157,13 @@ export const MessageBubble = memo(function MessageBubble({
             onStop={isStreaming ? onStop : undefined}
           />
         ) : null}
-        {readAlong ? (
-          <TtsReadAlong spokenText={readAlong.spokenText} charIndex={readAlong.charIndex} />
-        ) : (
+        <div ref={richRef} className="message-bubble-rich">
           <RichContentRenderer
             text={text}
             onOpenFile={onOpenFile}
             mode={isStreaming ? "streaming" : "full"}
           />
-        )}
+        </div>
         {isStreaming && text ? <span className="message-bubble-stream-cursor" aria-hidden="true" /> : null}
         {attachments?.length ? <ReplyPictures attachments={attachments} /> : null}
         {tours?.length && !isStreaming ? <TourOffer ids={tours} /> : null}

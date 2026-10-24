@@ -12,6 +12,8 @@ import { isAudioMuted, saveAudioSettings, subscribeAudioSettings } from "./audio
 import { LiveVoicePickers } from "./LiveVoicePickers";
 import { runSpeechErrorAction, speechErrorActionLabel } from "./speechErrors";
 import { ttsEngine, type TtsProgress } from "./ttsEngine";
+import { VoiceOrb, type VoiceOrbStatus } from "./VoiceOrb";
+import "../theme/styles/live-voice.css";
 
 export type VoiceOverlayProps = {
   chatId: string;
@@ -42,14 +44,21 @@ export type VoiceOverlayProps = {
   showPickers?: boolean;
   /** Mic off — type only; replies still speak. */
   muted?: boolean;
+  /** Mute / unmute the mic from the bar. */
+  setMuted?: (value: boolean) => void;
   chatModel?: string;
   setChatModel?: (value: string) => void;
   codingAgent?: string;
   setCodingAgent?: (value: string) => void;
   showChatModel?: boolean;
-  /** Back to the full-screen voice view (shown when the chat was brought back). */
-  onShowVoiceView?: () => void;
 };
+
+/** The bar's status as the orb's state (connecting / loading a voice read as thinking). */
+export function orbStatusFor(status: string): VoiceOrbStatus {
+  if (status === "connecting") return "thinking";
+  if (status === "thinking" || status === "speaking" || status === "muted" || status === "error") return status;
+  return "listening";
+}
 
 function statusLabel(status: LiveVoiceUiStatus, loadingVoice: boolean, muted: boolean): string {
   if (status === "error") return "Mic problem";
@@ -88,12 +97,12 @@ export function VoiceOverlay({
   inline = false,
   showPickers = true,
   muted = false,
+  setMuted,
   chatModel,
   setChatModel,
   codingAgent,
   setCodingAgent,
   showChatModel = false,
-  onShowVoiceView,
 }: VoiceOverlayProps) {
   const [state, setState] = useState<LiveVoiceState>(() => getLiveVoiceState(chatId));
   const [tts, setTts] = useState<TtsProgress>(() => ttsEngine.getProgress());
@@ -150,9 +159,8 @@ export function VoiceOverlay({
       <div className={`voice-overlay-card voice-overlay-card--${orbStatus}`}>
         <div className="voice-overlay-top">
           <div className="voice-overlay-identity">
-            <div className={`voice-overlay-orb-wrap voice-overlay-orb-wrap--${orbStatus}`} aria-hidden>
-              <span className="voice-overlay-orb-ping" />
-              <span className={`voice-overlay-orb voice-overlay-orb--${orbStatus}`} />
+            <div className="voice-overlay-orb-wrap voice-overlay-orb-wrap--live" aria-hidden>
+              <VoiceOrb status={orbStatusFor(orbStatus)} size="small" />
             </div>
             <div className="voice-overlay-copy">
               <div
@@ -245,15 +253,16 @@ export function VoiceOverlay({
               </button>
             ) : null}
             <span className="voice-overlay-transport-split" aria-hidden />
-            {onShowVoiceView ? (
+            {setMuted ? (
               <button
                 type="button"
-                className="voice-btn voice-btn--tiny"
-                title="Voice view"
-                aria-label="Voice view"
-                onClick={onShowVoiceView}
+                className={`voice-btn voice-btn--tiny${micMuted ? " is-on" : ""}`}
+                aria-pressed={micMuted}
+                title={micMuted ? "Unmute mic" : "Mute mic — keep hearing replies"}
+                aria-label={micMuted ? "Unmute microphone" : "Mute microphone"}
+                onClick={() => setMuted(!micMuted)}
               >
-                <Icons.Headphones />
+                {micMuted ? <Icons.MicOff /> : <Icons.Mic />}
               </button>
             ) : null}
             {setAutoSend ? (
