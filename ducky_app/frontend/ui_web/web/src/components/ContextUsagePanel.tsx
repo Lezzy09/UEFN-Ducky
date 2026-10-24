@@ -19,7 +19,8 @@ import { fmtCompactTokens, fmtCostUsd, fmtPercent, fmtTokens } from "../utils/co
 
 interface ContextUsagePanelProps {
   convId: string;
-  usage: ContextUsage;
+  /** Missing until the first metering answers: the panel shows "—" instead of numbers. */
+  usage?: ContextUsage;
   sessionFiles: SessionFile[];
   /** Group hub: the Files section lists every member's runs. */
   isGroup?: boolean;
@@ -32,6 +33,8 @@ interface ContextUsagePanelProps {
   onContextChanged?: () => void;
   onClearDraft?: () => void;
 }
+
+const NO_USAGE: ContextUsage = { used_tokens: 0, context_limit: 1, input_tokens: 0, output_tokens: 0 };
 
 const STATIC_OMIT_IDS = new Set(["system", "personality", "mcp_tools", "rules", "skill"]);
 
@@ -195,7 +198,7 @@ function BarSegment({ widthPct, color, title }: { widthPct: number; color: strin
 
 export function ContextUsagePanel({
   convId,
-  usage,
+  usage: usageProp,
   sessionFiles,
   isGroup = false,
   omitted = [],
@@ -208,6 +211,7 @@ export function ContextUsagePanel({
   onClearDraft,
 }: ContextUsagePanelProps) {
   const { confirm } = useConfirmModal();
+  const usage = usageProp ?? NO_USAGE;
   const [filesCount, setFilesCount] = useState(sessionFiles.length);
   const [usageExpanded, setUsageExpanded] = useState(true);
   const [apiExpanded, setApiExpanded] = useState(false);
@@ -337,11 +341,15 @@ export function ContextUsagePanel({
       <AccordionSection
         expanded={usageExpanded}
         onToggle={() => setUsageExpanded((v) => !v)}
-        title={<span className="context-usage-panel-stats-pct">{pct}% Full</span>}
+        title={<span className="context-usage-panel-stats-pct">{usageProp ? `${pct}% Full` : "— Full"}</span>}
         summary={
-          <>
-            ~{fmtCompactTokens(used)} / {fmtCompactTokens(limit)} Tokens
-          </>
+          usageProp ? (
+            <>
+              ~{fmtCompactTokens(used)} / {fmtCompactTokens(limit)} Tokens
+            </>
+          ) : (
+            "— tokens"
+          )
         }
       >
         <p className="context-usage-panel-stats-hint">

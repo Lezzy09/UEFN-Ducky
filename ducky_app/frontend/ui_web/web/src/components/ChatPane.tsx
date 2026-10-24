@@ -437,7 +437,8 @@ export function ChatPane({
     if (!model) return;
     try {
       const usage = await api.get_context_usage(chat.id, model, agentMode, inputTextRef.current);
-      setContextUsage(usage);
+      // An empty answer keeps the last reading: undefined here crashed the screen on used_tokens.
+      if (usage) setContextUsage(usage);
     } catch (err) {
       console.error("get_context_usage failed", err);
     }

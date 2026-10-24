@@ -31,6 +31,12 @@ const show = (allow: { on: boolean; own: boolean; from_title?: string }, approva
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
+it("shows — instead of crashing when the chat has no usage yet", () => {
+  render(<ConfirmModalProvider><ContextUsagePanel convId="c1" usage={undefined} sessionFiles={[]} onClose={() => undefined} /></ConfirmModalProvider>);
+  expect(screen.getByText("— tokens")).toBeTruthy();
+  expect(screen.getByText("— Full")).toBeTruthy();
+});
+
 describe("Approvals row", () => {
   it("shows Allow everything set in this chat and turns it off", async () => {
     show({ on: true, own: true });
