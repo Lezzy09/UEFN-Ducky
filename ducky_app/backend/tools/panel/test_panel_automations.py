@@ -276,3 +276,53 @@ def test_a_team_members_new_workflow_is_filed_under_its_team_never_loose(monkeyp
     finally:
         for wid in made:
             delete_workflow(wid)
+
+
+def _plugin_folder(folder, plugin_id, *, origin=""):
+    import subprocess
+
+    folder.mkdir(parents=True)
+    (folder / "plugin.json").write_text(json.dumps({"id": plugin_id}), encoding="utf-8")
+    if origin is not None:
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(folder)]
+        subprocess.run([*git, "init", "-q", "-b", "main"], check=True, capture_output=True)
+        subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], check=True, capture_output=True)
+        if origin:
+            subprocess.run([*git, "remote", "add", "origin", origin], check=True, capture_output=True)
+    return folder
+
+
+def test_plugin_repo_found_in_ai_plugins_draft_with_origin(tmp_path):
+    from backend.tools.panel.panel_automations import resolve_plugin_repo
+
+    drafts = tmp_path / "ai_plugins"
+    repo = _plugin_folder(drafts / "island-media-kit", "island-media-kit", origin="https://example.com/imk.git")
+    out = resolve_plugin_repo("island-media-kit", roots=[str(tmp_path / "GitHub")], drafts=drafts)
+    assert out["ok"] and out["source"] == "ai_plugins" and out["repo"] == repo.as_posix()
+    assert out["origin"] == "https://example.com/imk.git" and out["summary"].endswith("(git, origin main)")
+
+
+def test_plugin_repo_found_in_a_project_by_manifest_id(tmp_path):
+    from backend.tools.panel.panel_automations import resolve_plugin_repo
+
+    github = tmp_path / "GitHub"
+    # Folder name differs from the id: found through plugin.json, and a git origin beats a bare draft.
+    repo = _plugin_folder(github / "uefn-plugins" / "imk-clone", "island-media-kit", origin="git@x:imk.git")
+    _plugin_folder(tmp_path / "ai_plugins" / "island-media-kit", "island-media-kit", origin=None)
+    out = resolve_plugin_repo("island-media-kit", roots=[str(github)], drafts=tmp_path / "ai_plugins")
+    assert out["ok"] and out["source"] == "project" and out["repo"] == repo.as_posix()
+    # A project that is the plugin itself.
+    alone = _plugin_folder(tmp_path / "solo", "solo-plugin", origin="")
+    solo = resolve_plugin_repo("solo-plugin", roots=[str(alone)], drafts=tmp_path / "none")
+    assert solo["ok"] and solo["repo"] == alone.as_posix() and solo["summary"].endswith("(git, no origin)")
+
+
+def test_plugin_repo_missing_or_not_git_is_a_clear_error(tmp_path):
+    from backend.tools.panel.panel_automations import resolve_plugin_repo
+
+    out = resolve_plugin_repo("island-media-kit", roots=[str(tmp_path)], drafts=tmp_path / "ai_plugins")
+    assert out["ok"] is False and "No repo for plugin 'island-media-kit'" in out["error"]
+    _plugin_folder(tmp_path / "ai_plugins" / "island-media-kit", "island-media-kit", origin=None)
+    bare = resolve_plugin_repo("island-media-kit", roots=[], drafts=tmp_path / "ai_plugins")
+    assert bare["ok"] is False and "isn't a git repo" in bare["error"]
+    assert resolve_plugin_repo(" ", roots=[], drafts=None)["ok"] is False
