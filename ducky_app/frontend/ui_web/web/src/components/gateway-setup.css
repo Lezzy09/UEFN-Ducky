@@ -891,6 +891,31 @@
   margin-bottom: 10px;
 }
 
+/* One row per job: what it is and what to pick, then its model picker. */
+.setup-wizard-jobs {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-wizard-job {
+  display: grid;
+  gap: 6px;
+}
+
+.setup-wizard-job + .setup-wizard-job {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.setup-wizard-job-text {
+  display: grid;
+  gap: 2px;
+  line-height: 1.45;
+}
+
 .setup-wizard-overview {
   display: grid;
   gap: 8px;

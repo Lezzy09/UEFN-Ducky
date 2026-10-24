@@ -21,8 +21,10 @@ const fake = vi.hoisted(() => {
     duckyos_login: vi.fn(),
     duckyos_open_site: vi.fn(),
     duckyos_cancel_login: vi.fn(),
+    get_memory_settings: vi.fn(),
+    set_memory_settings: vi.fn(),
   };
-  return { api, runBridgeJob: vi.fn(), providers: [] as unknown[] };
+  return { api, runBridgeJob: vi.fn(), providers: [] as unknown[], saveVoice: vi.fn() };
 });
 
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => fake.api }));
@@ -33,10 +35,14 @@ vi.mock("../hooks/usePluginContributions", () => ({
   usePluginContributions: () => ({ llm_providers: fake.providers, llm_coding_agents: [], ready: true }),
 }));
 vi.mock("../hooks/modelsCatalogCache", () => ({ refreshModelsCatalog: vi.fn(), rereadModelsCatalog: vi.fn() }));
+vi.mock("../voice/voiceSettings", () => ({
+  loadVoiceSettings: () => Promise.resolve({ liveModel: "openai:gpt-mini", summaryModel: "" }),
+  saveVoiceSettings: fake.saveVoice,
+}));
 vi.mock("./ducky/DuckyModelPicker", () => ({
-  DuckyModelPicker: ({ model, onChange }: { model: string; onChange: (m: string) => void }) => (
+  DuckyModelPicker: ({ model, onChange, placeholder }: { model: string; onChange: (m: string) => void; placeholder?: string }) => (
     <button type="button" onClick={() => onChange("anthropic:claude-sonnet")}>
-      {model || "Pick a model"}
+      {model || placeholder}
     </button>
   ),
 }));
@@ -339,6 +345,13 @@ describe("SetupWizard", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Pick a model" }));
     expect(fake.api.save_agent_settings).toHaveBeenCalledWith({ default_model: "anthropic:claude-sonnet" });
+    // Every job has its own picker with a suggestion, saved where Settings keeps it.
+    expect(within(screen.getByRole("listitem", { name: "Live voice" })).getByText(/Haiku/)).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "openai:gpt-mini" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Chats model" }));
+    expect(fake.saveVoice).toHaveBeenCalledWith({ summaryModel: "anthropic:claude-sonnet" });
+    fireEvent.click(screen.getByRole("button", { name: "Spoken summaries model" }));
+    expect(fake.api.set_memory_settings).toHaveBeenCalledWith({ memory_summary_model: "anthropic:claude-sonnet" });
     expect(screen.getByText("Default AI: claude-sonnet")).toBeTruthy();
     expect(screen.getByText("AI: OpenAI")).toBeTruthy();
     expect(screen.getByText("Plugins: 2 of 2")).toBeTruthy();

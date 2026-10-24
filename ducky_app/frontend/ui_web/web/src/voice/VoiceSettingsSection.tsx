@@ -110,6 +110,8 @@ export function VoiceSettingsSection() {
               allowClear
               requireTools={false}
               placeholder="Default model"
+              label=""
+              labeled
               hint="Cheap model for spoken summaries only. Leave empty for Default Model."
             />
           </div>
@@ -199,6 +201,8 @@ export function VoiceSettingsSection() {
               allowClear
               requireTools={false}
               placeholder="The chat's model"
+              label=""
+              labeled
               hint="Fast model that answers live talk right away while the chat's agent keeps working. Empty = the chat's model."
             />
           </div>

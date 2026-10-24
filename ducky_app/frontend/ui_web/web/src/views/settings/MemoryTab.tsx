@@ -343,6 +343,7 @@ export function MemoryTab({ sectionTab = "entries" }: MemoryTabProps) {
                 model={memSettings.memory_summary_model || ""}
                 onChange={(next) => void patchMemSettings({ memory_summary_model: next })}
                 label="Summary model"
+                labeled
                 placeholder="Voice / Default model"
                 hint="Used when compressing older turns. Leave empty to use Voice summary model, then Default Model."
                 allowClear
