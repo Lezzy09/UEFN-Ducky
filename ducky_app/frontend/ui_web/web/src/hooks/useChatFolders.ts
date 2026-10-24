@@ -4,6 +4,7 @@ import { getApi } from "./usePanelApi";
 import { onApiReady } from "./onApiReady";
 import { ARCHIVE_FOLDER_ID, isArchiveFolderId } from "../utils/archiveFolder";
 import { buildFolderTree } from "../utils/sidebarTree";
+import { saveFolderOpenState } from "../utils/folderOpenState";
 import { duckiesLayoutHold } from "../utils/duckiesLayoutHold";
 import { removeFromDuckies } from "../utils/duckiesTreeModel";
 
@@ -117,6 +118,12 @@ function assembleOneProject(
   };
 }
 
+/** Same rows, same order, same fields: a reload with no change paints nothing.
+ * ponytail: JSON compare of ~100 plain rows is sub-ms; key on a revision if the tree grows huge. */
+function sameRows(a: unknown, b: unknown): boolean {
+  return a === b || JSON.stringify(a) === JSON.stringify(b);
+}
+
 export function useChatFolders(refreshToken: number) {
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [rootChats, setRootChats] = useState<FolderItem["chats"]>([]);
@@ -126,8 +133,14 @@ export function useChatFolders(refreshToken: number) {
   const [foldersLoaded, setFoldersLoaded] = useState(false);
   const foldersRef = useRef(folders);
   foldersRef.current = folders;
+  // Every expand/collapse goes through setFolders, so this keeps it across reloads.
+  useEffect(() => saveFolderOpenState(folders), [folders]);
   const rootChatsRef = useRef(rootChats);
   rootChatsRef.current = rootChats;
+  const hubChatsRef = useRef(hubChats);
+  hubChatsRef.current = hubChats;
+  const archiveChatsRef = useRef(archiveChats);
+  archiveChatsRef.current = archiveChats;
   // Only the newest load paints, and never while a move or delete is being saved:
   // a slow, older answer must not put back a row that was just moved or deleted.
   const loadSeqRef = useRef(0);
@@ -150,10 +163,10 @@ export function useChatFolders(refreshToken: number) {
     collectExpanded(foldersRef.current, expandedById);
     const one = assembleOneProject(folderRows, allConvs, expandedById);
     if (stale()) return;
-    setArchiveChats(one.archiveChats);
-    setHubChats(one.hubChats);
-    setRootChats(one.rootChats);
-    setFolders(one.folders);
+    if (!sameRows(archiveChatsRef.current, one.archiveChats)) setArchiveChats(one.archiveChats);
+    if (!sameRows(hubChatsRef.current, one.hubChats)) setHubChats(one.hubChats);
+    if (!sameRows(rootChatsRef.current, one.rootChats)) setRootChats(one.rootChats);
+    if (!sameRows(foldersRef.current, one.folders)) setFolders(one.folders);
     setFoldersLoaded(true);
   }, []);
 

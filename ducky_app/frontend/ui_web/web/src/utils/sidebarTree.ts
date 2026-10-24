@@ -1,5 +1,6 @@
 import type { FolderDto, FolderItem, SidebarLayoutPatch } from "../types/panel";
 import { isArchiveFolderId } from "./archiveFolder";
+import { loadFolderOpenState } from "./folderOpenState";
 
 export const PROJECT_FOLDER_PREFIX = "project:";
 
@@ -173,7 +174,7 @@ export function buildFolderTree(
       name: row.name,
       parentId: row.parent_id || "",
       sortOrder: Number(row.sort_order) || 0,
-      expanded: expandedById.has(row.id) ? expandedById.get(row.id)! : true,
+      expanded: true, // set below once the depth is known
       chats,
       children: [],
       groupHubId: hubId || undefined,
@@ -189,6 +190,17 @@ export function buildFolderTree(
       roots.push(node);
     }
   }
+
+  // On screen state first, then the saved state; a folder never seen opens at the top
+  // level only, so a new swarm's sub-groups start closed.
+  const saved = loadFolderOpenState();
+  const setExpanded = (list: FolderItem[], depth: number) => {
+    for (const item of list) {
+      item.expanded = expandedById.get(item.id) ?? saved[item.id] ?? depth === 0;
+      setExpanded(item.children, depth + 1);
+    }
+  };
+  setExpanded(roots, 0);
 
   const sortFolderList = (list: FolderItem[]) => {
     list.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
