@@ -1,6 +1,7 @@
 import type { PanelApi } from "../types/panel";
 import { getDirectTransport, isRemoteDuckyWindow } from "../remote/directTransport";
 import { openHttpsOnThisDevice } from "../remote/openHttps";
+import { callOverHttp, canCallOverHttp } from "./panelHttp";
 
 /**
  * True in a phone, tunnel or panel-host browser: anything but the desktop's WebView2.
@@ -130,10 +131,50 @@ function directApi(): PanelApi {
   return _directApi;
 }
 
+/**
+ * Methods whose replies run to hundreds of KB. Over the bridge each comes back as one
+ * injected script, copied several times and parsed on the window thread (ui_js 270 MB
+ * in 2 h); in the desktop window they go over `/__panel_api` instead, bridge as fallback.
+ */
+export const HTTP_ROUTED_METHODS: ReadonlySet<string> = new Set([
+  "get_skill_info",
+  "list_project_file_paths",
+  "get_uefn_plugin_contributions",
+  "list_all_conversations",
+  "list_coding_agents",
+  "workflow_run_snapshot",
+  "list_agent_profiles",
+  "get_plan",
+]);
+
+const _routed = new WeakMap<PanelApi, PanelApi>();
+
+/** `api` with HTTP_ROUTED_METHODS sent over HTTP; one wrapper per bridge object. */
+function routedApi(api: PanelApi): PanelApi {
+  const hit = _routed.get(api);
+  if (hit) return hit;
+  const wrapped = new Proxy(api, {
+    get(target, prop) {
+      const value = Reflect.get(target, prop, target) as unknown;
+      if (typeof prop !== "string" || typeof value !== "function" || !HTTP_ROUTED_METHODS.has(prop)) return value;
+      const bridge = value as (...args: unknown[]) => Promise<unknown>;
+      return async (...args: unknown[]) => {
+        if (canCallOverHttp()) {
+          const http = await callOverHttp(prop, args);
+          if (http.ok) return http.result;
+        }
+        return bridge.apply(target, args);
+      };
+    },
+  });
+  _routed.set(api, wrapped);
+  return wrapped;
+}
+
 export function getApi(): PanelApi | null {
   const w = typeof window !== "undefined" ? window : undefined;
   const api = w?.pywebview?.api;
-  if (isPanelApiReady(api)) return api;
+  if (isPanelApiReady(api)) return routedApi(api);
   if (!w?.pywebview) {
     // No pywebview: a browser (tunnel host, panel host, or a node test).
     if (getDirectTransport()) return directApi();

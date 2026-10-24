@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../types/panel";
+import { callOverHttp, canCallOverHttp } from "./panelHttp";
 import { getApi } from "./usePanelApi";
 
 /** Longest a chat load may take before the pane stops waiting and offers Retry. */
@@ -38,27 +39,11 @@ export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 export async function fetchChatRows(chatId: string, timeoutMs = CHAT_LOAD_TIMEOUT_MS): Promise<ChatMessage[]> {
   const api = getApi();
   if (!api) return [];
-  if (typeof window !== "undefined" && window.pywebview && window.location.protocol.startsWith("http")) {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch("/__panel_api/load_messages", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ args: [chatId] }),
-        signal: controller.signal,
-      });
-      if (res.ok) {
-        const json = (await res.json()) as { ok?: boolean; result?: unknown };
-        if (json.ok !== false && Array.isArray(json.result)) return json.result as ChatMessage[];
-      }
-    } catch {
-      if (controller.signal.aborted) throw new ChatLoadTimeout();
-      // Any other failure: fall through to the bridge.
-    } finally {
-      window.clearTimeout(timer);
-    }
+  if (canCallOverHttp()) {
+    const http = await callOverHttp("load_messages", [chatId], timeoutMs);
+    if (http.ok && Array.isArray(http.result)) return http.result as ChatMessage[];
+    if (!http.ok && http.timedOut) throw new ChatLoadTimeout();
+    // Any other failure: fall through to the bridge.
   }
   const rows: unknown = await withTimeout(api.load_messages(chatId), timeoutMs);
   // On a phone a relay blip or a 502 answers with nothing at all: that is a failed load
