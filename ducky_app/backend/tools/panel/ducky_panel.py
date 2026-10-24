@@ -2521,6 +2521,14 @@ def ducky_create_plan(
             "plan has 0 steps — pass nodes=[{id, content, children}] as a JSON array "
             "argument (not inside overview). UI Steps stay empty until nodes are set."
         )
+    try:
+        from backend.tools.panel.ducky_swarm import suggest_swarm
+
+        suggestion = suggest_swarm(plan)
+    except Exception:  # a suggestion never breaks plan creation
+        suggestion = None
+    if suggestion:
+        out["swarm_suggestion"] = suggestion
     from backend.agent.coding_agents.plans import attach_next_tick, with_plan_review
 
     return tool_json(with_plan_review(attach_next_tick(out, plan), plan), pretty=pretty)

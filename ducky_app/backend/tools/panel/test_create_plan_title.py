@@ -57,6 +57,33 @@ def test_group_tools_pass_model_mute_and_stop_to_the_panel(monkeypatch):
     assert api.calls[3] == ("group_stop", ("g1",), {})
 
 
+def _plan_result(monkeypatch, nodes):
+    from backend.agent.coding_agents import plans
+    from backend.tools.panel import ducky_panel
+
+    monkeypatch.setattr(ducky_panel, "_resolve_plan_chat_id", lambda _cid: "chat-1")
+    monkeypatch.setattr(ducky_panel, "_project_root", lambda: "")
+    monkeypatch.setattr(plans, "create_plan", lambda cid, **kw: {"id": "p1", "title": kw["title"], "nodes": plans._normalize_nodes(kw["nodes"])})
+    monkeypatch.setattr(plans, "push_plan_updated", lambda _p: None)
+    return json.loads(ducky_panel.ducky_create_plan(title="Shop island", nodes=nodes))
+
+
+def test_a_big_plan_result_carries_a_swarm_suggestion(monkeypatch):
+    names = ["Verse: combat", "UI: HUD", "Modeling: props", "Texture: props", "Sound: shop"]
+    nodes = [
+        {"id": f"s{i}", "content": n, "kind": "subplan", "body_markdown": f"Files: Content/Area{i}/**",
+         "children": [{"id": f"s{i}a", "content": "Do it"}]}
+        for i, n in enumerate(names)
+    ]
+    out = _plan_result(monkeypatch, nodes)
+    assert out["swarm_suggestion"]["agents"] == 5
+
+
+def test_a_small_plan_result_has_no_swarm_suggestion(monkeypatch):
+    out = _plan_result(monkeypatch, [{"id": f"t{i}", "content": f"Step {i}"} for i in range(3)])
+    assert out["ok"] is True and "swarm_suggestion" not in out
+
+
 def test_mute_and_group_stop_are_in_the_panel_toolset():
     from backend.agent.toolsets.categories import panel
 
