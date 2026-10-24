@@ -123,6 +123,8 @@ def ducky_terminal_run(
     from backend.tools.panel.permission_prompt import allows_everything
 
     auto = bool(chat and allows_everything(chat)) or typed_command_approved(command)
+    # The manager's steer check comes from conv_id (the chat's steer inbox), in this
+    # process or in the window's: a person's message returns the run early.
     result = mgr.run_agent_command(
         session_id.strip(),
         command,
@@ -139,7 +141,15 @@ def ducky_terminal_run(
         # nobody saw, and the bare "timed out" didn't show why (Oct 12 2026).
         result["asked_in_chat"] = chat or "(no chat: the call carried no chat identity)"
         result["chat_allows_everything"] = bool(chat) and allows_everything(chat)
-    return tool_json(result, pretty=pretty)
+    return tool_json(early_return_hint(result), pretty=pretty)
+
+
+def early_return_hint(result: dict) -> dict:
+    """A run that came back early (still_running / waiting_for_approval) stays as the manager
+    sent it, plus the exact call that reads the rest of its output."""
+    if isinstance(result, dict) and (result.get("still_running") or result.get("waiting_for_approval")):
+        result.setdefault("read_with", f'ducky_terminal_read_output(session_id="{result.get("session_id", "")}")')
+    return result
 
 
 def _terminal_chat(conv_id: str) -> str:

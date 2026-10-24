@@ -136,7 +136,12 @@ def sandbox_run(command: str, shell: str = "bash", timeout_s: float = 600.0, pre
     why = _refused(command) or _approved("Run a command", command)
     if why:
         return tool_json({"ok": False, "error": why}, pretty=pretty)
-    return tool_json(_forward("run", command=command, shell=shell, timeout_s=timeout_s), pretty=pretty)
+    from backend.tools.panel.ducky_panel_terminal import early_return_hint
+
+    # ponytail: the read hint is ducky_terminal_read_output, not sandbox_look: look reads
+    # launched programs only, a sandbox_run lives in a terminal session.
+    return tool_json(early_return_hint(_forward("run", command=command, shell=shell, timeout_s=timeout_s)),
+                     pretty=pretty)
 
 
 @mcp.tool()
