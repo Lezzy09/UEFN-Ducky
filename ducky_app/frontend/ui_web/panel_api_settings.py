@@ -61,6 +61,8 @@ class PanelApiSettingsMixin:
             "chat_mentions_enabled": bool(getattr(s, "chat_mentions_enabled", True)),
             "chat_slash_references_enabled": bool(getattr(s, "chat_slash_references_enabled", True)),
             "chat_title_model": getattr(s, "chat_title_model", "") or "",
+            "default_image_provider": getattr(s, "default_image_provider", "") or "",
+            "default_mesh_provider": getattr(s, "default_mesh_provider", "") or "",
             "web_access": (
                 s.web_access if getattr(s, "web_access", "ask") in ("off", "ask", "on") else "ask"
             ),
@@ -624,6 +626,9 @@ class PanelApiSettingsMixin:
             s.chat_slash_references_enabled = bool(patch.get("chat_slash_references_enabled"))
         if "chat_title_model" in patch:
             s.chat_title_model = str(patch.get("chat_title_model") or "").strip()
+        for key in ("default_image_provider", "default_mesh_provider"):
+            if key in patch:
+                setattr(s, key, str(patch.get(key) or "").strip())
         if "web_access" in patch:
             access = str(patch.get("web_access") or "ask").strip().lower()
             s.web_access = access if access in ("off", "ask", "on") else "ask"

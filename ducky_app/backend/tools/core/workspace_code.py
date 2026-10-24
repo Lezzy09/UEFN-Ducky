@@ -571,6 +571,49 @@ def view_image(path: str, pretty: bool = False) -> Any:
 
 
 @mcp.tool()
+def ducky_generate_image(prompt: str, confirm_spend: bool = False, backend: str = "", size: str = "",
+                         pretty: bool = False) -> Any:
+    """Make a picture from a text prompt and show it in this chat. Uses the person's default
+    picture maker (Settings > LLMs: Ducky AI, OpenAI, Google, Meshy...); backend= one backend id
+    picks another. It is billed: ask the person first, then call with confirm_spend=true.
+    size: e.g. "1024x1024" when the maker takes one. Returns the picture, so you see it."""
+    import tempfile
+    from pathlib import Path
+
+    from backend.automations import media
+    from frontend.ui_web import generated_images as gen
+
+    text = str(prompt or "").strip()
+    if not text:
+        raise ValueError("Say what the picture shows (prompt).")
+    row = media.pick_backend("image.generate", str(backend or "").strip())
+    cfg: dict[str, Any] = {"backend": row["id"], "spend": bool(confirm_spend)}
+    if size:
+        cfg["gateway_config"] = {row["id"]: {"size": str(size)}}
+    chat = gen._chat_of_caller()
+    started = time.time()
+    with tempfile.TemporaryDirectory(prefix="ducky-image-") as folder:
+        step = media.run_media("image.generate", cfg, {"prompt": text}, Path(folder))
+        if not step.get("ok"):
+            if step.get("gate") and not confirm_spend:
+                raise ValueError(f"{row['label']} costs {media.cost_text(row)} a picture. Ask the person, "
+                                 "then call again with confirm_spend=true.")
+            raise ValueError(str(step.get("error") or "No picture came back."))
+        made = Path(step["outputs"]["image"]["path"])
+        # A plugin tool already keeps its pictures for the chat that called it; never twice.
+        kept = next((r for r in gen.list_generated_images()
+                     if chat and r.get("conv_id") == chat and float(r.get("created") or 0) >= started), None)
+        if kept is None:
+            kept = gen.save_generated_image(made.read_bytes(), prompt=text, gateway=row["id"],
+                                            filename=made.name, mime=gen._mime_for(made), conv_id=chat)
+    from mcp.server.fastmcp import Image
+
+    out = {"path": str(kept["path"]).replace("\\", "/"), "backend": row["label"], "maker": row.get("plugin"),
+           "cost": media.cost_text(row)}
+    return [tool_json(out, pretty=pretty), Image(path=str(kept["path"]))]
+
+
+@mcp.tool()
 def workspace_tree(path: str = ".", depth: int = 3, max_entries: int = 400, pretty: bool = False) -> str:
     """Show a folder tree down to ``depth`` levels. Never lists .git, node_modules, build output or Saved.
 

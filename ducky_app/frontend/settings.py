@@ -214,6 +214,12 @@ class PanelSettings:
     chat_title_model: str = ""
     """Cheap API model that refines the auto role title (empty = keyword names only)."""
 
+    default_image_provider: str = ""
+    """Plugin id that makes pictures when nothing else is picked (empty = first one set up)."""
+
+    default_mesh_provider: str = ""
+    """Plugin id that makes 3D models when nothing else is picked (empty = first one set up)."""
+
     video_max_mb: int = 100
     """Largest video a chat message may carry (Settings → Videos, 10–200)."""
 
@@ -528,6 +534,8 @@ class PanelSettings:
             or not self.chat_mentions_enabled
             or not self.chat_slash_references_enabled
             or self.chat_title_model.strip()
+            or self.default_image_provider.strip()
+            or self.default_mesh_provider.strip()
             or self.web_access != "ask"
             or not self.prompt_caching_enabled
             or not self.freeze_prompt_prefix

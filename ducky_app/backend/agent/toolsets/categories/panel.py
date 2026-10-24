@@ -73,6 +73,7 @@ EXTENDED_TOOLS = frozenset(
         "sandbox_clear",
         "ducky_health",
         "ducky_self_care",
+        "ducky_generate_image",
         "ducky_get_local_project",
         "ducky_list_projects",
         "ducky_set_project",

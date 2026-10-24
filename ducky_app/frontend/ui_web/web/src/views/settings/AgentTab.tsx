@@ -20,6 +20,7 @@ import { PluginSettingsSections } from "./PluginSettingsSections";
 import { SettingsToggleRow } from "./SettingsToggleRow";
 import { AgentApiKeyToggle } from "./AgentApiKeyToggle";
 import { DuckyModelPicker } from "../../components/ducky/DuckyModelPicker";
+import { MediaMakerPicker } from "../../components/MediaMakerPicker";
 import { unsetDefaultGatewayIcons, type GatewayIcon } from "./defaultModelGateways";
 import {
   usePluginContributions,
@@ -303,6 +304,24 @@ function ChatTitleSection() {
         }}
       />
       <p className="general-tab-toggle-desc">The working AI chooses a task name as its first tool call. No separate naming model is used.</p>
+    </div>
+  );
+}
+
+function MediaMakersSection() {
+  return (
+    <div className="general-tab-toggle-card">
+      {([["image", "Pictures"], ["mesh", "3D models"]] as const).map(([kind, label]) => (
+        <div key={kind} className="general-tab-toggle-row">
+          <div className="general-tab-toggle-row-text">
+            <span className="general-tab-toggle-label">{label}</span>
+          </div>
+          <MediaMakerPicker kind={kind} label={label} />
+        </div>
+      ))}
+      <p className="general-tab-toggle-desc">
+        Who makes them when a workflow node or a ducky does not pick one. A ducky asks before it spends.
+      </p>
     </div>
   );
 }
@@ -747,6 +766,8 @@ export function AgentTab() {
             <h2 className="general-tab-page-title">LLMs</h2>
 
             <DefaultModelSection />
+
+            <MediaMakersSection />
 
             <section className="general-tab-section">
               <GeneralSectionHeader icon={<KeyIcon />} title="Providers" />

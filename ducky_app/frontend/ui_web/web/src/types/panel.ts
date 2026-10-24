@@ -381,6 +381,8 @@ export interface AutomationBackendDto {
   label: string;
   /** The installed plugin's own name for itself. */
   plugin: string;
+  /** The plugin's id (what default_image_provider / default_mesh_provider save). */
+  plugin_id?: string;
   credits: number;
   /** "~5 credits", "Your own API key" on an AI gateway, or the plugin's own words ("Ducky AI credit"). */
   cost?: string;
@@ -396,6 +398,8 @@ export interface AutomationBackendDto {
   own_key?: boolean;
   /** Spends even at 0 credits (billed to an account), so it needs the Spend credits switch. */
   paid?: boolean;
+  /** What runs when nothing is picked: the person's default maker, else the first set up. */
+  default?: boolean;
 }
 
 export interface AutomationGraphGroupDto {
@@ -1562,6 +1566,9 @@ export interface PanelSettingsDto {
   chat_slash_references_enabled?: boolean;
   /** Cheap model that refines the auto role title (empty = keyword names only). */
   chat_title_model?: string;
+  /** Plugin id that makes pictures / 3D models when nothing else is picked (empty = first one set up). */
+  default_image_provider?: string;
+  default_mesh_provider?: string;
   /** Public web lookup: off, ask once per chat, or on. */
   web_access?: "off" | "ask" | "on" | string;
   /** Follow agent file edits in the editor (walkthrough). */

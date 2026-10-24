@@ -352,6 +352,8 @@ describe("SetupWizard", () => {
     expect(fake.saveVoice).toHaveBeenCalledWith({ summaryModel: "anthropic:claude-sonnet" });
     fireEvent.click(screen.getByRole("button", { name: "Spoken summaries model" }));
     expect(fake.api.set_memory_settings).toHaveBeenCalledWith({ memory_summary_model: "anthropic:claude-sonnet" });
+    expect(screen.getByRole("listitem", { name: "Pictures" })).toBeTruthy();
+    expect(screen.getByRole("listitem", { name: "3D models" })).toBeTruthy();
     expect(screen.getByText("Default AI: claude-sonnet")).toBeTruthy();
     expect(screen.getByText("AI: OpenAI")).toBeTruthy();
     expect(screen.getByText("Plugins: 2 of 2")).toBeTruthy();

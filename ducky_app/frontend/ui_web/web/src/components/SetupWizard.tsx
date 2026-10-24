@@ -15,6 +15,7 @@ import { Icons } from "../icons/Icons";
 import type { CodingAgentDto, DuckyOSAccountStatus, DuckyOSStoreItemDto, StarterPluginDto } from "../types/panel";
 import { CodingAgentLoginModal } from "../views/settings/CodingAgentsSection";
 import { DuckyModelPicker } from "./ducky/DuckyModelPicker";
+import { MediaMakerPicker, type MediaKind } from "./MediaMakerPicker";
 import { loadVoiceSettings, saveVoiceSettings } from "../voice/voiceSettings";
 
 export type SetupStep = "welcome" | "plugins" | "ai" | "defaults";
@@ -904,6 +905,11 @@ export const MODEL_JOBS: ModelJob[] = [
   },
 ];
 
+export const MAKER_JOBS: { kind: MediaKind; title: string; suggest: string }[] = [
+  { kind: "image", title: "Pictures", suggest: "Makes the pictures duckies and workflows ask for: Ducky AI, or your own OpenAI or Google key." },
+  { kind: "mesh", title: "3D models", suggest: "Makes 3D models from text or a picture: Meshy, Tripo or 3D AI Studio." },
+];
+
 function saveJobModel(id: ModelJob["id"], next: string) {
   const api = getApi();
   if (id === "chat") void api?.save_agent_settings({ default_model: next });
@@ -1006,6 +1012,27 @@ function DefaultsStep({
             </button>
           </p>
         )}
+      </section>
+
+      <section className="setup-wizard-card" aria-label="Pictures and 3D models">
+        <h3>
+          Pictures and 3D models{" "}
+          <HelpTip
+            label="About pictures and 3D models"
+            text="Each costs credits or your own API key a run, and a ducky asks you before it spends. Change these any time in Settings → LLMs."
+          />
+        </h3>
+        <ul className="setup-wizard-jobs">
+          {MAKER_JOBS.map((job) => (
+            <li key={job.kind} className="setup-wizard-job" aria-label={job.title}>
+              <span className="setup-wizard-job-text">
+                <strong>{job.title}</strong>
+                <span className="setup-wizard-muted">{job.suggest}</span>
+              </span>
+              <MediaMakerPicker kind={job.kind} label={job.title} />
+            </li>
+          ))}
+        </ul>
       </section>
 
       <section className="setup-wizard-card" aria-label="Overview">

@@ -617,6 +617,7 @@ HOST_ONLY_TOOLS = frozenset(
         "sandbox_clear",
         "ducky_health",
         "ducky_self_care",
+        "ducky_generate_image",
     }
 )
 

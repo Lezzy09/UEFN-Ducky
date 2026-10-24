@@ -191,6 +191,18 @@ FIELD_META: dict[str, FieldMeta] = {
         settable=True,
         description="Cheap API model that refines the auto role title (empty = keyword names only).",
     ),
+    "default_image_provider": FieldMeta(
+        "Default picture maker",
+        "LLMs",
+        settable=True,
+        description="Plugin id that makes pictures when nothing else is picked (account, openai, google…; empty = first one set up).",
+    ),
+    "default_mesh_provider": FieldMeta(
+        "Default 3D maker",
+        "LLMs",
+        settable=True,
+        description="Plugin id that makes 3D models when nothing else is picked (meshy, studio3d, tripo…; empty = first one set up).",
+    ),
     "video_max_mb": FieldMeta(
         "Max video size (MB)", "Videos", settable=True,
         description="Largest video a chat message may carry (10–200).",

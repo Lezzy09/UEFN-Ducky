@@ -1141,3 +1141,17 @@ def test_tool_failure_stops_workflow_and_resolves_nested_arguments(monkeypatch, 
 def test_finish_interpolates_result_in_report():
     result = runner._pipeline_finish({"message": "Release failed: {{error}}"}, {"error": "upload rejected"})
     assert result["result"]["text"] == "Release failed: upload rejected"
+
+
+def test_a_node_with_no_pick_runs_the_saved_default_maker(tools, monkeypatch):
+    saved = {"image": "meshy", "mesh": "studio3d"}
+    monkeypatch.setattr(media, "default_provider", lambda ntype: saved.get(ntype.split(".")[0], ""))
+    assert media.pick_backend("image.generate", "")["id"] == "meshy_text_to_image"
+    assert media.pick_backend("mesh.generate", "")["id"] == "tripo"  # first 3D AI Studio row
+    assert media.pick_backend("mesh.generate", "meshy_text_to_3d")["id"] == "meshy_text_to_3d"  # a pick still wins
+    rows = media.backends_for("mesh.generate")
+    assert [row["id"] for row in rows if row.get("default")] == ["tripo"] and rows[1]["plugin_id"] == "studio3d"
+    tools.off.add("studio3d_tripo")  # the default's backend isn't set up: its next one, then the first that runs
+    assert media.pick_backend("mesh.generate", "")["id"] == "tencent_rapid"
+    saved["mesh"] = "nobody"
+    assert media.pick_backend("mesh.generate", "")["id"] == "meshy_text_to_3d"

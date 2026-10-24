@@ -548,23 +548,50 @@ def backends_for(ntype: str) -> list[dict[str, Any]]:
     name), what it costs, and whether it can run here (if not, why). Image gateway
     controls come from the plugin's direct image handler."""
     out: list[dict[str, Any]] = []
-    for row in table(ntype):
+    rows = table(ntype)
+    first = _default_row(ntype, rows) if rows else None  # what runs with nothing picked
+    for row in rows:
         ready = is_ready(row)
         label = plugin_label(row)
         setup = None if ready else setup_for(row, label)
         out.append({
-            "id": row["id"], "label": row["label"], "plugin": label, "credits": row["credits"], "cost": cost_text(row),
+            "id": row["id"], "label": row["label"], "plugin": label, "plugin_id": str(row.get("plugin_id") or ""),
+            "credits": row["credits"], "cost": cost_text(row),
             "available": ready, **({} if ready else {"reason": why_not(row, label)}),
             **({"setup": setup} if setup else {}),
             **({"config_fields": row["config_fields"], "model": row["model"], "own_key": True} if row.get("node")
                else {"config_fields": row["config_fields"]} if row.get("config_fields") else {}),
             **({"paid": True} if row.get("paid") is True else {}),
+            **({"default": True} if row is first else {}),
         })
     return out
 
 
+_DEFAULT_SETTING = {"image": "default_image_provider", "mesh": "default_mesh_provider"}
+
+
+def default_provider(ntype: str) -> str:
+    """The plugin the person picked to make pictures or 3D models (welcome setup, Settings > LLMs)."""
+    key = _DEFAULT_SETTING.get(ntype.split(".", 1)[0])
+    if not key:
+        return ""
+    try:
+        from frontend.settings import PanelSettings
+
+        return str(getattr(PanelSettings.load(), key, "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _default_row(ntype: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    mine = default_provider(ntype)
+    preferred = next((row for row in rows if mine and row.get("plugin_id") == mine and is_ready(row)), None)
+    return preferred or next((row for row in rows if is_ready(row)), rows[0])
+
+
 def pick_backend(ntype: str, wanted: Any) -> dict[str, Any]:
-    """The picked backend; with none picked, the first one that can run here."""
+    """The picked backend; with none picked, the person's default maker when it can run
+    here, else the first one that can."""
     rows = table(ntype)
     if ntype == "image.generate" and wanted == "agent":
         raise ValueError("Choose a direct image backend in this node's details. The saved agent backend cannot generate images directly.")
@@ -577,7 +604,7 @@ def pick_backend(ntype: str, wanted: Any) -> dict[str, Any]:
         return picked
     if ntype == "image.generate" and wanted:
         raise ValueError(f"Image backend {wanted} is unavailable. Choose a direct image backend in this node's details.")
-    return next((row for row in rows if is_ready(row)), rows[0])
+    return _default_row(ntype, rows)
 
 
 def _parse(raw: Any) -> dict[str, Any]:

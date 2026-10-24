@@ -74,7 +74,7 @@ function NodeField({ field, node, pluginId, backends, backendKey, onChange }: { 
 
 /** The backend picked for this run; none picked = the first that can run here (as the runner does). */
 function pickedBackend(node: AutomationGraphNodeDto, backends: AutomationBackendDto[], key = "backend") {
-  return backends.find((row) => row.id === String(node.config[key] || "")) || backends.find((row) => row.available) || backends[0];
+  return backends.find((row) => row.id === String(node.config[key] || "")) || backends.find((row) => row.default) || backends.find((row) => row.available) || backends[0];
 }
 
 function costOf(row: AutomationBackendDto) {
