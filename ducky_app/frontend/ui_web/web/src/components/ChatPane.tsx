@@ -23,6 +23,7 @@ import { useChatTurnTimerState } from "../hooks/useChatTurnTimer";
 import { useAgentEventSubscription } from "../hooks/useAgentEventBus";
 import { useRunningAgents } from "../hooks/useRunningAgents";
 import { runningTeamNames } from "./team/teamRoster";
+import { setRoster, useRoster } from "./team/rosterStore";
 import { useHasApiKey } from "../hooks/useHasApiKey";
 import { getCachedChatComposer, setCachedChatComposer, subscribeComposerDraft, takeComposerDraft } from "../hooks/chatComposerCache";
 import { composerHistoryKey, recordComposer, redoComposer, sameAttachments, undoComposer } from "../hooks/composerHistory";
@@ -273,10 +274,15 @@ export function ChatPane({
     () => (agentRunning ? [] : runningTeamNames(chat.id, folders, runningIds)),
     [agentRunning, chat.id, folders, runningIds],
   );
-  const [groupMembers, setGroupMembers] = useState<GroupMemberDto[]>(
-    () => chat.groupMembers || [],
+  // One cached roster per group (shared with the team bar and sidebar); the chat's own
+  // copy shows until the store answers.
+  const roster = useRoster(chat.isGroup ? chat.id : "");
+  const groupMembers = useMemo<GroupMemberDto[]>(
+    () => (chat.isGroup ? roster?.members ?? chat.groupMembers ?? [] : []),
+    [chat.isGroup, roster, chat.groupMembers],
   );
-  const [leaderConvId, setLeaderConvId] = useState(chat.leaderConvId || "");
+  const leaderConvId = chat.isGroup ? roster?.leaderConvId ?? chat.leaderConvId ?? "" : "";
+  const handleMembersChange = useCallback((members: GroupMemberDto[]) => setRoster(chat.id, members), [chat.id]);
   const [liveVoice, setLiveVoice] = useState(false);
   const [liveVoiceHandlers, setLiveVoiceHandlers] = useState<LiveVoiceUiHandlers | null>(null);
   const [promptQueue, setPromptQueueState] = useState<QueuedPrompt[]>(() => getPromptQueue(chat.id));
@@ -288,27 +294,6 @@ export function ChatPane({
     setLiveVoice(live);
     setLiveVoiceHandlers(handlers);
   }, []);
-  useEffect(() => {
-    setGroupMembers(chat.isGroup ? chat.groupMembers || [] : []);
-    setLeaderConvId(chat.isGroup ? chat.leaderConvId || "" : "");
-  }, [chat.id, chat.isGroup, chat.leaderConvId]);
-
-  useEffect(() => {
-    if (!chat.isGroup) return;
-    const api = getApi();
-    if (!api?.group_members) return;
-    const convId = chat.id;
-    let cancelled = false;
-    void api.group_members(convId).then((res) => {
-      if (cancelled || !res?.ok || !Array.isArray(res.members)) return;
-      setGroupMembers(res.members);
-      setLeaderConvId(res.leader_conv_id || "");
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [chat.id, chat.isGroup]);
-
   const { rows, editableRowId, hasInlineTurnContent, activityLines } = useChatRowModel({
     messages,
     agentRunning,
@@ -522,17 +507,6 @@ export function ChatPane({
           setCodingAgent(event.coding_agent || "ducky");
           setSelectedModel(event.model);
           setSelectedModelDisplayName(event.model);
-          return;
-        }
-        if (event.type === "chats_changed") {
-          const api = getApi();
-          if (!chat.isGroup || !api?.group_members) return;
-          void api.group_members(chat.id).then((res) => {
-            if (res?.ok && Array.isArray(res.members)) {
-              setGroupMembers(res.members);
-              setLeaderConvId(res.leader_conv_id || "");
-            }
-          });
           return;
         }
         if (event.type === "context_changed") {
@@ -976,7 +950,7 @@ export function ChatPane({
               leaderConvId={leaderConvId}
               folders={folders}
               allChats={allChats}
-              onMembersChange={setGroupMembers}
+              onMembersChange={handleMembersChange}
               onOpenMember={onOpenChat}
             />
           ) : null}
