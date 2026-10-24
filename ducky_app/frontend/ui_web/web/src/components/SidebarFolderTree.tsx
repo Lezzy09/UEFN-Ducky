@@ -55,7 +55,7 @@ import {
   shouldShowFolder,
 } from "../utils/duckyTreeFilter";
 import { anyRunningUnderFolder, firstUnderFolder } from "../utils/duckyTreeBusy";
-import { useChatWaiting, useWaitingChatIds } from "../hooks/waitingChats";
+import { openWaitingChat, useChatWaiting, useNeedsYou, useWaitingChatIds } from "../hooks/waitingChats";
 import { WaitingMarker } from "./WaitingMarker";
 import type { EditorDropZone } from "../types/panel";
 import { formatRelativeTime } from "../utils/formatRelativeTime";
@@ -110,11 +110,36 @@ function useMutedProgress(
   return progress;
 }
 
-/** Running chats in a folder and every folder inside it (a group's sub-groups). */
-function runningInFolder(folder: FolderItem, running: ReadonlySet<string>): number {
+/** Chats in `ids` in a folder and every folder inside it (a group's sub-groups). */
+function countInFolder(folder: FolderItem, ids: ReadonlySet<string>): number {
   return (
-    folder.chats.filter((c) => running.has(c.id)).length +
-    folder.children.reduce((n, child) => n + runningInFolder(child, running), 0)
+    folder.chats.filter((c) => ids.has(c.id)).length +
+    folder.children.reduce((n, child) => n + countInFolder(child, ids), 0)
+  );
+}
+
+const stopRowClick = (event: React.SyntheticEvent) => event.stopPropagation();
+
+/** "Needs you" on a row: opens that chat at its unanswered card. */
+function NeedsYouBadge({ convId, name = "", label }: { convId: string; name?: string; label: string }) {
+  return (
+    <button
+      type="button"
+      className="no-drag sidebar-search-group-badge sidebar-needs-you"
+      title="Waiting for your answer. Click to answer it."
+      data-needs-you={convId}
+      draggable={false}
+      onPointerDown={stopRowClick}
+      onMouseDown={stopRowClick}
+      onDoubleClick={stopRowClick}
+      onClick={(event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        openWaitingChat(convId, name);
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -257,6 +282,7 @@ const ChatRow = memo(function ChatRow({
   const live = useIsLiveChat(chat.id);
   // A question or command card waiting here: a marker instead of the spinner.
   const waiting = useChatWaiting(chat.id);
+  const needsYou = useNeedsYou(archived ? null : chat.id);
   // Muted: a small progress row that doesn't open the chat (its agent keeps working).
   const muted = Boolean(chat.muted) && !archived;
   const progress = useMutedProgress(
@@ -324,12 +350,15 @@ const ChatRow = memo(function ChatRow({
           <input {...renameInputProps(editing, setEditing, editInputRef, onCommitRename, onCancelRename)} />
         }
         actions={
-          <SidebarHoverActions
-            onRename={onRename}
-            onDelete={onDelete}
-            activeChat={isActive}
-            deleteTitle={deleteLabel}
-          />
+          <>
+            {needsYou ? <NeedsYouBadge convId={chat.id} name={chat.name} label="Needs you" /> : null}
+            <SidebarHoverActions
+              onRename={onRename}
+              onDelete={onDelete}
+              activeChat={isActive}
+              deleteTitle={deleteLabel}
+            />
+          </>
         }
         contextMenu={
           menu ? (
@@ -514,6 +543,8 @@ function FolderHeader({
   waitingChatId = "",
   muted = false,
   runningCount = 0,
+  foldedRunning = 0,
+  foldedNeedYou = 0,
   editing,
   setEditing,
   editInputRef,
@@ -539,6 +570,10 @@ function FolderHeader({
   muted?: boolean;
   /** Running agents in this group and its sub-groups: the hover Stop is live only above 0. */
   runningCount?: number;
+  /** Collapsed: running chats inside, shown as "N running" on the row. */
+  foldedRunning?: number;
+  /** Collapsed: chats inside waiting on the user, shown as "N need you". */
+  foldedNeedYou?: number;
   editing: EditTarget | null;
   setEditing: React.Dispatch<React.SetStateAction<EditTarget | null>>;
   editInputRef: React.RefObject<HTMLInputElement>;
@@ -616,6 +651,14 @@ function FolderHeader({
         }
         actions={
           <>
+            {foldedRunning ? (
+              <span className="sidebar-search-group-badge" data-folder-running={folder.id}>
+                {`${foldedRunning} running`}
+              </span>
+            ) : null}
+            {foldedNeedYou && waitingChatId ? (
+              <NeedsYouBadge convId={waitingChatId} label={`${foldedNeedYou} need${foldedNeedYou === 1 ? "s" : ""} you`} />
+            ) : null}
             {/* Rename/trash grow in on hover to the left; Stop keeps the far right. */}
             <SidebarHoverActions onRename={onRename} onDelete={onDelete} deleteTitle={deleteLabel} />
             {hubId ? (
@@ -810,7 +853,9 @@ const FolderGroup = memo(function FolderGroupImpl({
         hasRunningInside={hasRunningInside}
         waitingChatId={waitingChatId}
         muted={muted}
-        runningCount={hubId ? runningInFolder(folder, runningChatIds) : 0}
+        runningCount={hubId ? countInFolder(folder, runningChatIds) : 0}
+        foldedRunning={expanded ? 0 : countInFolder(folder, runningChatIds)}
+        foldedNeedYou={expanded ? 0 : countInFolder(folder, waitingIds)}
         editing={editing}
         setEditing={setEditing}
         editInputRef={editInputRef}
