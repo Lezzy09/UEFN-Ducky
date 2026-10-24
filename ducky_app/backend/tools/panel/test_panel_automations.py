@@ -326,3 +326,30 @@ def test_plugin_repo_missing_or_not_git_is_a_clear_error(tmp_path):
     bare = resolve_plugin_repo("island-media-kit", roots=[], drafts=tmp_path / "ai_plugins")
     assert bare["ok"] is False and "isn't a git repo" in bare["error"]
     assert resolve_plugin_repo(" ", roots=[], drafts=None)["ok"] is False
+
+
+def test_list_workflow_nodes_for_one_plugin_is_small(monkeypatch):
+    from backend.automations import catalog
+    from backend.tools.panel.panel_automations import list_workflow_nodes
+
+    schema = [{"id": f"f{i}", "label": "x" * 200, "type": "string"} for i in range(30)]
+    nodes = [{"id": f"googledrive.n{i}", "plugin_id": "googledrive", "label": f"Node {i}", "config_fields": schema}
+             for i in range(8)] + [{"id": "googledrive.gmail_send", "plugin_id": "googledrive", "config_fields": schema},
+                                   {"id": "other.thing", "plugin_id": "other", "config_fields": schema}]
+    triggers = [{"id": "gmail.received", "plugin_id": "googledrive", "label": "Email received"}]
+    monkeypatch.setattr(catalog, "_contributions", lambda: (
+        {"automations_nodes": nodes, "automations_triggers": triggers}, {"googledrive", "other"}))
+    monkeypatch.setattr("backend.uefn_plugins.store.plugin_icon_data_url", lambda pid: "data:image/png;base64," + "A" * 200_000)
+
+    raw = list_workflow_nodes(plugin="googledrive")
+    rows = json.loads(raw)["nodes"]
+    assert len(raw) < 10_000 and len(rows) == 10
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["googledrive.gmail_send"]["kind"] == "node" and "other.thing" not in by_id
+    assert by_id["gmail.received"]["kind"] == "trigger" and by_id["gmail.received"]["label"] == "Email received"
+    assert all("config_fields" not in r and "icon" not in r for r in rows)
+    with_schema = json.loads(list_workflow_nodes(plugin="googledrive", fields="config_fields"))["nodes"]
+    assert len({r["id"]: r for r in with_schema}["googledrive.gmail_send"]["config_fields"]) == 30
+    full = json.loads(list_workflow_nodes(plugin="googledrive", fields="all"))["nodes"]
+    assert len(full) == 10 and full[0]["icon"].startswith("data:") and full[0]["plugin_id"] == "googledrive"
+    assert any(n["type"] == "tool.call" for n in json.loads(list_workflow_nodes())["nodes"])  # no filter: unchanged

@@ -36,12 +36,37 @@ def _reveal_graph(workflow_id: str, action: str, *, nodes: list[str] | None = No
         pass
 
 
+def _node_kind(node: dict[str, Any]) -> str:
+    if node.get("role") == "starter":
+        return "trigger" if node.get("plugin_id") else "starter"
+    return "node"
+
+
+def filter_nodes(nodes: list[dict[str, Any]], plugin: str = "", fields: str = "") -> list[dict[str, Any]]:
+    """``plugin`` keeps only that plugin's nodes and triggers. Rows are compact (id, kind, label,
+    group) when a plugin is named or ``fields`` lists extra keys ("config_fields,inputs");
+    ``fields="all"`` (or no filter at all) keeps the full catalog rows."""
+    pid = (plugin or "").strip()
+    if pid:
+        nodes = [n for n in nodes if str(n.get("plugin_id") or "") == pid]
+    want = [f.strip() for f in (fields or "").split(",") if f.strip()]
+    if "all" in want or (not pid and not want):
+        return nodes
+    return [{"id": n.get("type"), "kind": _node_kind(n), "label": n.get("label"), "group": n.get("group"),
+             **{k: n[k] for k in want if k in n}} for n in nodes]
+
+
 @mcp.tool()
-def list_workflow_nodes(pretty: bool = False) -> str:
-    """Catalog of builtin + enabled-plugin workflow nodes (starters, triggers, actions)."""
+def list_workflow_nodes(plugin: str = "", fields: str = "", pretty: bool = False) -> str:
+    """Catalog of builtin + enabled-plugin workflow nodes (starters, triggers, actions).
+
+    plugin="googledrive" returns only that plugin's nodes and triggers as small rows
+    {id, kind: node|trigger, label, group}. fields adds keys to those rows
+    ("config_fields,inputs,outputs,description") or "all" for the full rows. With neither,
+    the full catalog (large: icons and every schema)."""
     from backend.automations.catalog import list_nodes
 
-    return tool_json({"ok": True, "nodes": list_nodes()}, pretty=pretty)
+    return tool_json({"ok": True, "nodes": filter_nodes(list_nodes(), plugin, fields)}, pretty=pretty)
 
 
 @mcp.tool()
