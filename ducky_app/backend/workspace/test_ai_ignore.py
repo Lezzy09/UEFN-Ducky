@@ -86,7 +86,7 @@ def test_reads_searches_and_listings_never_return_secrets(protected):
     for fn in (system.workspace_read_file, wc.workspace_file_outline):
         with pytest.raises(ValueError, match="AI_FILE_IGNORED"):
             fn(path=".env")
-    rows = json.loads(wc.workspace_read_files([".env", "public.txt"]))
+    rows = json.loads(wc.workspace_read_files([".env", "public.txt"], format="json"))
     assert "error" in rows["files"][0]
     assert rows["files"][1]["content"] == "public text"
     for output in (system.workspace_list_dir(), wc.workspace_tree(), wc.workspace_find("*"),
