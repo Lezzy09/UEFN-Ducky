@@ -298,6 +298,17 @@ def _peek_rfile(handler: Any) -> bytes:
             pass
 
 
+def _flush_chat_saves() -> None:
+    """The tool server is another process: it must read a chat save made just before
+    it asked (D23). Cheap when nothing waits; never holds a request past 5 s."""
+    try:
+        from frontend.ui_web.project_chats import flush_chat_saves
+
+        flush_chat_saves(timeout=5.0)
+    except Exception:
+        pass
+
+
 # Positional ``args`` names for the steer RPCs (they also take ``params``).
 _STEER_ARGS: dict[str, tuple[str, ...]] = {
     "steer_take": ("conv_id",),
@@ -1077,6 +1088,7 @@ def start_panel_ui_server(dist_root: Path) -> str:
                 # (running dot, native streaming, reconcile). _local=True stops
                 # run_message from delegating back to us (no loop).
                 if path == "/__panel_run":
+                    _flush_chat_saves()
                     try:
                         payload = self._read_json_body()
                     except Exception:
@@ -1181,6 +1193,7 @@ def start_panel_ui_server(dist_root: Path) -> str:
                 # _RPC_HANDLER_WAIT_S for its reply; if the user hasn't answered
                 # yet (e.g. require_click), reply {pending} so the caller re-polls.
                 if path == "/__panel_rpc":
+                    _flush_chat_saves()
                     try:
                         payload = self._read_json_body()
                     except Exception:
