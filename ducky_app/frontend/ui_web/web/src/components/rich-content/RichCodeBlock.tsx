@@ -2,6 +2,7 @@ import type { OpenFileHandler } from "../../types/richContent";
 import { LiveCodePreview } from "../../verse-editor/components/LiveCodePreview";
 import { monacoLanguageForFence } from "../../verse-editor/utils/isVerseFile";
 import { RichCodeChip } from "./RichCodeChip";
+import { useRichGraphic } from "./RichChart";
 
 interface RichCodeBlockProps {
   text: string;
@@ -11,9 +12,11 @@ interface RichCodeBlockProps {
 }
 
 export function RichCodeBlock({ text, language, inline, onOpenFile }: RichCodeBlockProps) {
+  const graphic = useRichGraphic(inline ? "" : text, inline ? undefined : language);
   if (inline) {
     return <RichCodeChip text={text} onOpenFile={onOpenFile} />;
   }
+  if (graphic) return graphic;
   return (
     <LiveCodePreview
       className="rich-code rich-code--block"

@@ -227,6 +227,89 @@
   overflow: hidden;
 }
 
+/* ```chart / ```svg fences */
+.rich-chart {
+  margin: 0 0 14px;
+  padding: 12px 14px 10px;
+  border-radius: var(--chat-block-radius, var(--radius-sm));
+  background: var(--chat-code-background, var(--card));
+  border: 1px solid var(--chat-border-color, var(--border));
+}
+
+.rich-chart svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  overflow: visible;
+  font-family: inherit;
+}
+
+/* Data charts stretch; diagrams keep their natural size and only shrink. */
+.rich-chart svg:not(.rich-chart-fit) {
+  width: 100%;
+  max-width: 760px;
+}
+
+.rich-chart-title {
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.rich-c-blue { --rich-c: var(--blue); }
+.rich-c-purple { --rich-c: var(--purple); }
+.rich-c-green { --rich-c: var(--green); }
+.rich-c-amber { --rich-c: var(--amber); }
+.rich-c-yellow { --rich-c: var(--yellow); }
+.rich-c-red { --rich-c: var(--red); }
+
+.rich-chart-grid { stroke: var(--border); stroke-dasharray: 3 4; }
+.rich-chart-axis { stroke: var(--muted); }
+.rich-chart-tick { fill: var(--muted); font-size: 11px; }
+.rich-chart-total { fill: var(--fg); font-size: 22px; font-weight: 600; }
+.rich-chart-mark { transition: opacity 0.12s; }
+.rich-chart-mark:hover { opacity: 0.75; }
+.rich-chart-bar,
+.rich-chart-head { fill: var(--rich-c); }
+.rich-chart-slice { fill: var(--rich-c); stroke: var(--chat-code-background, var(--card)); stroke-width: 2; }
+.rich-chart-area { fill: var(--rich-c); fill-opacity: 0.16; }
+.rich-chart-line { fill: none; stroke: var(--rich-c); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.rich-chart-dot { fill: var(--bg); stroke: var(--rich-c); stroke-width: 2; }
+.rich-chart-msg { fill: none; stroke: var(--rich-c); stroke-width: 1.8; }
+.rich-chart-lifeline { stroke: var(--border); stroke-dasharray: 4 4; }
+.rich-chart-lane { fill: var(--bg); stroke: var(--rich-c); stroke-width: 1.5; }
+.rich-chart-lane-label { fill: var(--fg); font-size: 13px; font-weight: 600; }
+.rich-chart-step { fill: var(--fg-dim, var(--fg)); font-size: 12px; }
+.rich-chart-node { fill: color-mix(in srgb, var(--rich-c) 16%, var(--bg)); stroke: var(--rich-c); stroke-width: 1.5; }
+.rich-chart-node-rim { fill: none; stroke: var(--rich-c); stroke-width: 1.5; }
+.rich-chart-node-label { fill: var(--fg); font-size: 12.5px; font-weight: 600; }
+.rich-chart-group { fill: color-mix(in srgb, var(--rich-c) 6%, transparent); stroke: var(--rich-c); stroke-width: 1.2; stroke-dasharray: 6 4; }
+.rich-chart-group-label { fill: var(--rich-c); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.rich-chart-edge { fill: none; stroke: var(--muted); stroke-width: 1.6; }
+.rich-chart-edge-head { fill: var(--muted); }
+.rich-chart-edge-bg { fill: var(--chat-code-background, var(--card)); }
+.rich-chart-edge-label { fill: var(--fg-dim, var(--fg)); font-size: 11px; }
+
+.rich-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 8px;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.rich-chart-legend-item i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 3px;
+  vertical-align: -1px;
+  background: var(--rich-c);
+}
+
 .live-code-preview {
   width: 100%;
   min-width: 0;
