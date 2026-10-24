@@ -11,6 +11,25 @@ def assigned_nodes(nodes, owner=""):
         yield from assigned_nodes(node.get("children"), assigned)
 
 
+def _leaves(node):
+    kids = node.get("children") or []
+    if not kids:
+        yield node
+    for kid in kids:
+        yield from _leaves(kid)
+
+
+def progress_line(section: dict) -> str:
+    """How far a sub plan is, counted from the plan itself (never written by the AI)."""
+    steps = list(_leaves(section))
+    done = [s for s in steps if s.get("status") in {"completed", "cancelled"}]
+    if len(done) == len(steps):
+        return f"All {len(steps)} steps done"
+    following = next(s for s in steps if s not in done)
+    return (f"Progress: {len(done)}/{len(steps)} steps ({round(100 * len(done) / len(steps))}%)"
+            f" · next: {following['content']}")
+
+
 def completion_reports(before: dict, after: dict) -> list[dict[str, str]]:
     if not before.get("nodes"):
         return []
@@ -48,7 +67,12 @@ def completion_reports(before: dict, after: dict) -> list[dict[str, str]]:
                 # A point of an agent's sub plan: the lead hears once, when the whole sub plan is done.
                 continue
             kind = "section" if node.get("children") else "step"
-            body = f"{who} {status} {kind} {node['content']} ({node['id']}).\n{node.get('body_markdown', '')}"
+            # The member's sub plan: this section itself, or the nearest assigned section above.
+            sub = node if node.get("children") else parent.get(node["id"])
+            while sub is not None and not sub.get("assignee"):
+                sub = parent.get(sub["id"])
+            progress = f"{progress_line(sub)}\n" if sub is not None else ""
+            body = f"{who} {status} {kind} {node['content']} ({node['id']}).\n{progress}{node.get('body_markdown', '')}"
             report = {"sender": actor, "body": body, **own}
             if status == "completed" and inside_open_sub_plan(node["id"]):
                 # Kept on the plan (the keeper's wake lists it), not a lead turn: on Oct 15 2026 a

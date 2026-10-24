@@ -244,6 +244,23 @@ def test_an_inner_sub_plan_done_is_kept_on_the_plan_not_a_lead_turn(notices):
     assert "step Integrate" in body and "section Core" in body and "finished plan Ledger" in body
 
 
+def test_reports_carry_progress_computed_from_the_plan(notices):
+    titles = ["Enforce", "Move rules", "Prompt rules", "Core tools", "Descriptions"]
+
+    def doc(statuses, section="in_progress"):
+        steps = [{"id": f"s{i}", "content": t, "status": s} for i, (t, s) in enumerate(zip(titles, statuses))]
+        return {"chat_id": "coord", "title": "Tools", "status": "open",
+                "nodes": [{"id": "rules", "content": "Rules", "assignee": "builder", "status": section, "children": steps}]}
+
+    # Mid-plan: a cancelled point is news for the lead, with how far the sub plan is.
+    (mid,) = events.completion_reports(doc(["completed", "pending", "pending", "pending", "pending"]),
+                                       doc(["completed", "cancelled", "pending", "pending", "pending"]))
+    assert "Progress: 2/5 steps (40%) · next: Prompt rules" in mid["body"]
+    # Final: the last point closes the sub plan; the section report says it is all done.
+    last = events.completion_reports(doc(["completed"] * 4 + ["pending"]), doc(["completed"] * 5, "completed"))
+    assert [r["body"].split("\n")[1] for r in last if "section Rules" in r["body"]] == ["All 5 steps done"]
+
+
 def test_the_leads_own_change_does_not_wake_the_lead(notices, monkeypatch):
     # Oct 22 2026: an Opus lead cancelled a step after its report and was woken by a notice about
     # its own cancel, to answer "nothing has changed since". A tick in the plan view still goes.
