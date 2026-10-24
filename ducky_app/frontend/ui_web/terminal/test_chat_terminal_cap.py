@@ -122,7 +122,9 @@ def test_an_agents_terminal_it_is_done_with_closes_by_itself(mgr, tmp_path):
     server = _open(mgr, tmp_path, "server-agent")["session_id"]
     quiet_job = _open(mgr, tmp_path, "job-agent")["session_id"]
     mgr.running[mgr.get_session(server)._pty.pid] = [9999]  # a dev server it left running
-    mgr.get_session(quiet_job).ran_background = True  # a PowerShell job runs inside the console
+    job = mgr.get_session(quiet_job)
+    job.ran_background = True  # a background job it started still runs
+    mgr.running[job._pty.pid] = [9998]
     start = mgr.get_session(done).last_activity
     assert mgr.close_idle_agent_terminals(now=start + 30, running={"busy-agent"}) == []  # not quiet long enough
     later = start + manager_module._AGENT_IDLE_CLOSE_S + 1
@@ -170,6 +172,70 @@ def test_a_run_s_terminal_with_no_ducky_still_closes_after_the_run(mgr, tmp_path
     let_go()
     assert mgr.close_idle_agent_terminals(now=later, running=set()) == [run_terminal]
     assert mine in mgr._sessions
+
+
+def test_a_finished_background_command_no_longer_keeps_its_terminal(mgr, tmp_path):
+    # Oct 24 2026: ran_background stayed True after the dev server ended; the shell never closed.
+    server = _open(mgr, tmp_path, "server-agent")["session_id"]
+    shell = mgr.get_session(server)
+    shell.ran_background = True
+    mgr.running[shell._pty.pid] = [9998]  # the dev server
+    later = shell.last_activity + manager_module._AGENT_IDLE_CLOSE_S + 1
+    assert mgr.close_idle_agent_terminals(now=later, running=set()) == []
+    mgr.running.pop(shell._pty.pid)  # it exits
+    assert mgr.close_idle_agent_terminals(now=later, running=set()) == [server]
+
+
+def test_an_agents_terminal_with_no_chat_closes_when_idle(mgr, tmp_path):
+    # An MCP call with no chat id used to count as the person's own terminal.
+    mine = mgr.spawn(shell="powershell", cwd=str(tmp_path))["session_id"]
+    agents = mgr.spawn(shell="powershell", cwd=str(tmp_path), from_agent=True)["session_id"]
+    later = mgr.get_session(agents).last_activity + manager_module._AGENT_IDLE_CLOSE_S + 1
+    assert mgr.close_idle_agent_terminals(now=later, running=set()) == [agents]
+    assert mgr.close_idle_agent_terminals(now=later + 3600, running=set()) == []
+    assert mine in mgr._sessions
+
+
+def test_a_running_leads_long_idle_shell_closes(mgr, tmp_path):
+    lead = _open(mgr, tmp_path, "lead")["session_id"]
+    stuck = _open(mgr, tmp_path, "member")["session_id"]
+    mgr.running[mgr.get_session(stuck)._pty.pid] = [9999]  # a hung pager
+    start = mgr.get_session(lead).last_activity
+    assert mgr.close_idle_agent_terminals(now=start + 120, running={"lead"}) == []
+    stale = start + manager_module._AGENT_STALE_CLOSE_S + 1
+    assert sorted(mgr.close_idle_agent_terminals(now=stale, running={"lead"})) == sorted([lead, stuck])
+
+
+def test_an_agent_command_or_allow_card_is_never_closed_as_stale(mgr, tmp_path):
+    waiting = _open(mgr, tmp_path, "lead")["session_id"]
+    asking = _open(mgr, tmp_path, "lead")["session_id"]
+    mgr.get_session(waiting).set_busy(True)
+    mgr.request_command(asking, "npm test", conv_id="lead")
+    stale = mgr.get_session(waiting).last_activity + manager_module._AGENT_STALE_CLOSE_S + 1
+    assert mgr.close_idle_agent_terminals(now=stale, running=set()) == []
+
+
+def test_close_chat_terminals_kills_a_hung_child_and_keeps_the_rest(mgr, tmp_path, monkeypatch):
+    killed: list[int] = []
+    monkeypatch.setattr(session_module, "kill_process_tree", killed.append)
+    mine = mgr.spawn(shell="powershell", cwd=str(tmp_path))["session_id"]  # a person's own
+    other = _open(mgr, tmp_path, "other-team")["session_id"]
+    hung = _open(mgr, tmp_path, "member-a")["session_id"]
+    idle = _open(mgr, tmp_path, "member-b")["session_id"]
+    asking = _open(mgr, tmp_path, "member-b")["session_id"]
+    printing = _open(mgr, tmp_path, "member-b")["session_id"]
+    hung_pid = mgr.get_session(hung)._pty.pid
+    mgr.running[hung_pid] = [9999]  # a hung git, quiet for minutes
+    mgr.running[mgr.get_session(printing)._pty.pid] = [9997]  # a test run still printing
+    mgr.request_command(asking, "npm test", conv_id="member-b")
+    now = mgr.get_session(hung).last_activity + manager_module._AGENT_IDLE_CLOSE_S + 1
+    mgr.get_session(printing).last_activity = now - 5
+    closed = mgr.close_chat_terminals(["member-a", "member-b"], now=now)
+    assert sorted(closed) == sorted([hung, idle])
+    assert hung_pid in killed
+    assert {"type": "terminal_close", "session_id": hung} in mgr.events
+    assert {mine, other, asking, printing} <= set(mgr._sessions)
+    assert mgr.close_chat_terminals([]) == []
 
 
 def test_a_sandbox_reuses_its_own_shell_and_never_a_plain_one(mgr, tmp_path):

@@ -329,10 +329,13 @@ class TerminalSession:
         # The end of the last chunk: the done marker can be split across two reads.
         self._done_scan = ""
         # Last output or input: an agent's terminal idle this long is closed (TerminalManager),
-        # unless it ever ran a background command (a PowerShell one runs inside the console, so
-        # a quiet one can't be told from an idle shell).
+        # unless a background command it started still runs (background_alive).
         self.last_activity = time.time()
         self.ran_background = False
+        # Processes under the shell before its first background command: any other one alive
+        # later is that command's (a dev server). Oct 24 2026: ran_background alone kept six
+        # finished duckies' shells open for good.
+        self._bg_before: set[int] = set()
         # Processes a timed-out agent command started: {pid: exe name}.
         self._timed_out: dict[int, str] = {}
         # The person pressed Ctrl+C and the agent's command never reported done.
@@ -580,14 +583,24 @@ class TerminalSession:
             return f"({run}) &\r\n"
         return f"printf '__DUCKY_%s__\\n' BEGIN; {run}; echo __DUCKY_DONE__$?__\r\n"
 
-    def _descendants(self) -> dict[int, str]:
+    def background_alive(self, snapshot: ProcessSnapshot | None = None) -> bool:
+        """Whether a background command started here still runs; once none does, the terminal
+        counts as idle again."""
+        if not self.ran_background or not self.is_alive():
+            return False
+        if any(pid not in self._bg_before for pid in self._descendants(snapshot)):
+            return True
+        self.ran_background = False
+        return False
+
+    def _descendants(self, snapshot: ProcessSnapshot | None = None) -> dict[int, str]:
         """Every process under this terminal's shell: {pid: exe name}."""
         pty = self._pty
         pid = getattr(pty, "pid", None) if pty is not None else None
         if not pid:
             return {}
         try:
-            children, names = _process_snapshot()
+            children, names = (snapshot or _process_snapshot)()
         except Exception:
             return {}
         found: dict[int, str] = {}
@@ -629,6 +642,8 @@ class TerminalSession:
             }
         before = {} if background else self._descendants()
         wrapped = self._wrap_agent_command(command, background)
+        if background and not self.ran_background:
+            self._bg_before = set(self._descendants())
         self.ran_background = self.ran_background or background
         self.set_busy(not background)
         self._pending_done = None if background else threading.Event()

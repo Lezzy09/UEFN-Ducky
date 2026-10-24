@@ -34,6 +34,9 @@ _MAX_CHAT_SHELLS = 6
 # Oct 22 2026: ten minutes still left a header full of finished duckies' shells; a ducky's
 # terminal now closes about a minute after it finishes.
 _AGENT_IDLE_CLOSE_S = 60.0
+# Oct 24 2026: a lead that stays running, or a hung child (git, a pager), kept shells open all
+# day. Quiet this long with no agent command waiting, an agent's terminal closes anyway.
+_AGENT_STALE_CLOSE_S = 600.0
 _REAP_EVERY_S = 15.0
 # A waited command (or its Allow card) stops waiting when the person writes: checked after
 # the first 10 s, then every 2 s. The command keeps running (Oct 24 2026: 16 runs over 120 s
@@ -108,10 +111,14 @@ class TerminalManager:
         env_extra: dict[str, str] | None = None,
         activate: bool = True,
         reuse_idle: bool = False,
+        from_agent: bool = False,
     ) -> dict[str, Any]:
         """``reuse_idle``: hand back this chat's idle live terminal with the same shell
         and folder instead of a new one. Agents that open a terminal every turn used
-        to stack a shell, a conhost and a socket bridge per call."""
+        to stack a shell, a conhost and a socket bridge per call.
+
+        ``from_agent``: an agent's tool call opened it. With no chat (``conv_id``) to own it,
+        it still closes when idle, like a workflow run's; only the person's own stay."""
         shell_norm = shell_label(shell)
         workdir = (cwd or _default_cwd()).strip() or "."
         if not os.path.isdir(workdir):
@@ -187,6 +194,7 @@ class TerminalManager:
                     return {"ok": False, "error": str(exc)}
             session.owner = _chat_title(conv_id)
             entry = _SessionEntry(session=session, bridge=bridge, reuse_key=reuse_key, chat=conv_id)
+            entry.run_owned = bool(from_agent and not conv_id)
             self._sessions[session.id] = entry
 
         result = {
@@ -199,7 +207,7 @@ class TerminalManager:
             result["closed"] = closed
         if push_open and not session.hidden:
             self._emit_open(session, conv_id, activate)
-        if conv_id:
+        if conv_id or from_agent:
             self._ensure_reaper()
         return result
 
@@ -241,10 +249,12 @@ class TerminalManager:
         running: set[str] | None = None,
     ) -> list[str]:
         """Close agents' terminals they are done with: the agent is not working (or its chat
-        is gone) and the terminal has been quiet for ``_AGENT_IDLE_CLOSE_S``. A terminal running
-        anything, waiting on an Allow card, held by a running workflow, or where the agent
-        started a background command (a dev server) is kept, and a person's own terminals
-        (no chat, not opened by a workflow run) are never closed."""
+        is gone), nothing runs in it and it has been quiet for ``_AGENT_IDLE_CLOSE_S``. Quiet
+        for ``_AGENT_STALE_CLOSE_S`` it closes even while its agent works or a leftover child
+        (a hung git, a pager) sits in it. Always kept: one waiting on an Allow card, held by a
+        running workflow, running an agent command, or whose background command (a dev
+        server) still runs; a person's own terminals (no chat, not opened by an agent or a
+        workflow run) are never closed."""
         now = time.time() if now is None else now
         if running is None:
             from frontend.ui_web.agent_modes import list_running_agents
@@ -257,13 +267,38 @@ class TerminalManager:
         snapshot = functools.cache(_process_snapshot)
         closed: list[str] = []
         for session, chat in agents:
-            if (chat in running or session.id in asked or session.id in held
-                    or getattr(session, "ran_background", False)
-                    or session.has_running_command(snapshot)):
+            quiet = now - float(getattr(session, "last_activity", now))
+            if (quiet < _AGENT_IDLE_CLOSE_S or session.id in asked or session.id in held
+                    or session.is_busy() or session.background_alive(snapshot)):
                 continue
-            if now - float(getattr(session, "last_activity", now)) >= _AGENT_IDLE_CLOSE_S:
-                if self.kill(session.id).get("ok"):
-                    closed.append(session.id)
+            if quiet < _AGENT_STALE_CLOSE_S and (chat in running or session.has_running_command(snapshot)):
+                continue
+            if self.kill(session.id).get("ok"):
+                closed.append(session.id)
+        return closed
+
+    def close_chat_terminals(self, chat_ids: list[str] | set[str], *, now: float | None = None) -> list[str]:
+        """Close every terminal these chats opened (team stop, archive, plan done), stuck
+        children and all (the shell's tree is killed). Kept: one waiting on an Allow card, and
+        one whose command printed in the last ``_AGENT_IDLE_CLOSE_S`` (the idle reaper closes it
+        once it is quiet). Each close sends terminal_close."""
+        ids = {str(c) for c in chat_ids or [] if c}
+        if not ids:
+            return []
+        now = time.time() if now is None else now
+        with self._lock:
+            mine = [e.session for e in self._sessions.values() if e.chat in ids]
+            asked = {p.session_id for p in self._pending.values()}
+        snapshot = functools.cache(_process_snapshot)
+        closed: list[str] = []
+        for session in mine:
+            if session.id in asked:
+                continue
+            recent = now - float(getattr(session, "last_activity", now)) < _AGENT_IDLE_CLOSE_S
+            if recent and session.has_running_command(snapshot):
+                continue
+            if self.kill(session.id).get("ok"):
+                closed.append(session.id)
         return closed
 
     def _idle_session(self, reuse_key: tuple[str, ...]) -> TerminalSession | None:
