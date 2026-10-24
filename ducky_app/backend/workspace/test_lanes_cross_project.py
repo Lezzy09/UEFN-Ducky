@@ -1,0 +1,93 @@
+"""Lanes that name paths in the person's other Ducky projects, and stored lanes on roster saves."""
+
+from __future__ import annotations
+
+import pytest
+
+from backend.workspace import lanes
+from backend.workspace.identity import RunContext
+from backend.workspace.policy import WriteRequest
+
+HOME = "C:/Repos/Core"
+DUCKYOS = "C:/Repos/DuckyOS"
+OTHER = "C:/Repos/OtherRepo"
+
+
+@pytest.fixture(autouse=True)
+def _roots():
+    lanes.reset_for_tests()
+    lanes.set_project_roots_source(lambda: [HOME, DUCKYOS.replace("/", "\\"), OTHER])
+    yield
+    lanes.reset_for_tests()
+
+
+def _check(lane, path, other_project=""):
+    ctx = RunContext(run_id="r", conv_id="store", lane=tuple(lane))
+    request = WriteRequest(op="write", paths=(path,), tool="workspace_write_file", ctx=ctx, other_project=other_project)
+    return lanes.LanePolicy(mode=lambda: "enforce").check(request)
+
+
+def test_a_full_path_inside_a_ducky_project_is_a_lane() -> None:
+    assert lanes.normalize_lane([f"{DUCKYOS}\\plugins\\x"]) == [f"{DUCKYOS}/plugins/x/**"]
+    assert lanes.normalize_glob("c:/repos/duckyos/plugins/a.rs") == "C:/repos/duckyos/plugins/a.rs"
+
+
+@pytest.mark.parametrize("pattern", ["C:/Elsewhere/x", "/etc/passwd", f"{DUCKYOS}/../Secrets", "C:/Repos/DuckyOSX/a"])
+def test_a_full_path_outside_every_project_is_refused(pattern) -> None:
+    with pytest.raises(lanes.LaneGlobError):
+        lanes.normalize_glob(pattern)
+    with pytest.raises(ValueError):
+        lanes.set_member_lane([{"member_conv_id": "store"}], "store", [pattern], set_by="lead", now=1.0)
+
+
+def test_writes_in_the_named_project_pass_and_other_repos_are_refused() -> None:
+    lane = lanes.normalize_lane([f"{DUCKYOS}/plugins/x", "src/app.py"])
+    assert _check(lane, "plugins/x/src/asset_packs.rs", other_project=DUCKYOS).allow
+    assert _check(lane, f"{DUCKYOS}/plugins/x/lib.rs").allow  # a full path from the agent's tool call
+    assert not _check(lane, "plugins/y/lib.rs", other_project=DUCKYOS).allow
+    assert not _check(lane, "plugins/x/lib.rs", other_project=OTHER).allow
+    # Project-relative globs still cover the open project only.
+    assert _check(lane, "src/app.py").allow
+    assert not _check(lane, "src/app.py", other_project=OTHER).allow
+    assert not _check(lane, "src/other.py").allow
+
+
+def test_a_full_path_lane_into_the_open_project_covers_it() -> None:
+    lane = lanes.normalize_lane([f"{HOME}/ducky_app/backend"])
+    assert _check(lane, "ducky_app/backend/x.py").allow
+    assert not _check(lane, "ducky_app/frontend/x.py").allow
+
+
+def test_a_project_that_left_the_list_covers_nothing() -> None:
+    lane = lanes.normalize_lane([f"{OTHER}/a"])
+    lanes.reset_for_tests()  # no project roots any more
+    assert not _check(lane, "a/b.txt", other_project=OTHER).allow
+
+
+# ------------------------------------------------- stored lanes on roster saves
+
+
+def test_read_only_lane_survives_a_stale_roster_save() -> None:
+    stored, _ = lanes.set_member_lane(
+        [{"member_conv_id": "a"}, {"member_conv_id": "b"}], "b", [], set_by="lead", now=5.0
+    )
+    stale = [{"member_conv_id": "a", "write_allowed": None}, {"member_conv_id": "b", "write_allowed": None, "lane_set_by": ""}]
+    kept = lanes.keep_stored_lanes(stale, stored)
+    assert kept[1]["write_allowed"] == [] and kept[1]["lane_set_by"] == "lead" and kept[1]["lane_set_at"] == 5.0
+    assert kept[0]["write_allowed"] is None  # None stays None
+
+
+def test_only_the_member_being_set_changes_its_lane() -> None:
+    stored = [
+        {"member_conv_id": "a", "write_allowed": None},
+        {"member_conv_id": "b", "write_allowed": [], "lane_set_by": "lead", "lane_set_at": 5.0},
+    ]
+    rows, _ = lanes.set_member_lane(
+        [{**stored[0]}, {**stored[1], "write_allowed": None}], "a", ["src/x"], set_by="lead", now=6.0
+    )
+    with lanes.setting_lane("a"):
+        kept = lanes.keep_stored_lanes(rows, stored)
+    assert kept[0]["write_allowed"] == ["src/x/**"] and kept[1]["write_allowed"] == []
+    # Outside the block nobody's lane moves, and a new member keeps what it brings.
+    kept = lanes.keep_stored_lanes([*rows, {"member_conv_id": "c", "write_allowed": ["docs"]}], stored)
+    assert kept[0]["write_allowed"] is None and kept[1]["write_allowed"] == [] and kept[2]["write_allowed"] == ["docs"]

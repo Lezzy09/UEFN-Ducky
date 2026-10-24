@@ -7,6 +7,8 @@ public contract (ADR 0001, ``schemas/lane_set.schema.json``):
 - a bare directory (``Content/Verse/Shop``) means ``Content/Verse/Shop/**``
 - matching is case-insensitive (UEFN projects live on Windows)
 - ``None`` = unrestricted, ``[]`` = read-only
+- a full path (``C:/Repos/DuckyOS/plugins/x``) names files in another of the person's
+  Ducky projects; one outside every project is refused
 
 Storage of lanes is the group roster (frontend); this module only knows how to
 match, compare and enforce them. A ``LaneProvider`` supplies the lane for a
@@ -23,6 +25,8 @@ from __future__ import annotations
 import re
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
@@ -61,6 +65,40 @@ def current_mode() -> str:
 _WILDCARDS = set("*?[")
 
 
+def _default_project_roots() -> list[str]:
+    """The open project first, then the person's other Ducky projects (as the writer sees them)."""
+    from backend.bridge import workspace_roots
+    from backend.bridge.client import _recent_project_roots
+
+    return [*workspace_roots(), *_recent_project_roots()]
+
+
+_roots_source: Callable[[], Iterable[str]] = _default_project_roots
+
+
+def set_project_roots_source(getter: Callable[[], Iterable[str]]) -> None:
+    """Install the reader for Ducky project roots (open project first)."""
+    global _roots_source
+    _roots_source = getter
+
+
+def project_roots() -> list[str]:
+    try:
+        roots = list(_roots_source())
+    except Exception:  # noqa: BLE001 - no project list: full-path lanes match nothing
+        return []
+    return [r.replace("\\", "/").rstrip("/") for r in roots if r and str(r).strip()]
+
+
+def _is_abs(path: str) -> bool:
+    return path.startswith("/") or (len(path) > 1 and path[1] == ":")
+
+
+def _inside(path: str, root: str) -> bool:
+    p, r = path.lower(), root.lower()
+    return p == r or p.startswith(r + "/")
+
+
 # ------------------------------------------------------------------- globs
 
 
@@ -75,10 +113,9 @@ def normalize_glob(pattern: str) -> str:
         p = p[2:]
     if not p:
         raise LaneGlobError("empty lane pattern")
-    if p.startswith("/") or (len(p) > 1 and p[1] == ":"):
-        raise LaneGlobError(f"lane pattern must be project-relative: {pattern!r}")
     if any(seg == ".." for seg in p.split("/")):
         raise LaneGlobError(f"lane pattern must not contain '..': {pattern!r}")
+    absolute = _is_abs(p)
     p = p.rstrip("/")
     while "//" in p:
         p = p.replace("//", "/")
@@ -87,6 +124,18 @@ def normalize_glob(pattern: str) -> str:
     p = "/".join(seg for seg in p.split("/") if seg != ".")
     if not p:
         raise LaneGlobError("empty lane pattern")
+    if absolute:
+        if p[1:2] == ":":
+            p = p[0].upper() + p[1:]
+        kept: list[str] = []
+        for seg in p.split("/"):
+            if any(ch in _WILDCARDS for ch in seg):
+                break
+            kept.append(seg)
+        if not any(_inside("/".join(kept), root) for root in project_roots()):
+            raise LaneGlobError(
+                f"lane pattern must be project-relative or inside one of your Ducky projects: {pattern!r}"
+            )
     last = p.rsplit("/", 1)[-1]
     looks_like_dir = not any(ch in _WILDCARDS for ch in p) and "." not in last
     if looks_like_dir:
@@ -136,6 +185,10 @@ _compiled: dict[str, re.Pattern[str]] = {}
 
 
 def compile_glob(pattern: str) -> re.Pattern[str]:
+    # Raw key first: a full-path lane's normalize looks up the project list.
+    cached = _compiled.get(pattern)
+    if cached is not None:
+        return cached
     norm = normalize_glob(pattern)
     cached = _compiled.get(norm)
     if cached is None:
@@ -146,6 +199,7 @@ def compile_glob(pattern: str) -> re.Pattern[str]:
             body = f"(?:{body})|(?:{head})"
         cached = re.compile(f"^(?:{body})$", re.IGNORECASE)
         _compiled[norm] = cached
+    _compiled[pattern] = cached
     return cached
 
 
@@ -295,6 +349,45 @@ def set_member_lane(
     return rows, verdict["warnings"]
 
 
+LANE_KEYS = ("write_allowed", "lane_set_by", "lane_set_at")
+_setting: ContextVar[frozenset[str]] = ContextVar("lane_setting", default=frozenset())
+
+
+@contextmanager
+def setting_lane(member_conv_id: str):
+    """Roster saves inside this block may change this member's lane fields."""
+    token = _setting.set(_setting.get() | {(member_conv_id or "").strip()})
+    try:
+        yield
+    finally:
+        _setting.reset(token)
+
+
+def keep_stored_lanes(
+    incoming: Sequence[Any], stored: Sequence[Any]
+) -> list[Any]:
+    """Roster rows about to be saved, with each member's lane fields as stored.
+
+    Only a save inside ``setting_lane(member)`` changes that member's lane: any other
+    roster write (an invite, a folder sync, a rename, a group turn) saved a copy loaded
+    earlier and wrote a teammate's old lane back (Oct 24 2026: a read-only ``[]`` became
+    unrestricted). New members (not stored yet) keep what they bring.
+    """
+    setting = _setting.get()
+    by_id = {
+        str(r.get("member_conv_id") or ""): r for r in stored or () if isinstance(r, Mapping)
+    }
+    out: list[Any] = []
+    for row in incoming or ():
+        mid = str(row.get("member_conv_id") or "") if isinstance(row, Mapping) else ""
+        old = by_id.get(mid) if mid else None
+        if old is None or mid in setting:
+            out.append(row)
+        else:
+            out.append({**row, **{k: old.get(k) for k in LANE_KEYS}})
+    return out
+
+
 # ------------------------------------------------------------- resolution
 
 
@@ -357,11 +450,13 @@ def resolve_lane(conv_id: str, *, now: float | None = None) -> tuple[str, ...] |
 
 
 def reset_for_tests() -> None:
-    global _mode_source
+    global _mode_source, _roots_source
     with _providers_lock:
         _providers.clear()
         _cache.clear()
     _mode_source = _default_mode
+    _roots_source = tuple
+    _compiled.clear()
 
 
 # ----------------------------------------------------------------- policy
@@ -384,8 +479,7 @@ class LanePolicy:
         lane = ctx.lane if ctx.lane is not None else resolve_lane(ctx.conv_id)
         if lane is None:
             return ALLOW
-        # A lane is a part of the open project: another project is never inside it.
-        outside = list(request.paths) if request.other_project else [p for p in request.paths if not any_match(lane, p)]
+        outside = [p for p in request.paths if not in_lane(lane, p, request.other_project)]
         if not outside:
             return Decision(policy=self.name)
         reason = denial_text(outside[0], lane, ctx.leader_conv_id)
@@ -405,6 +499,32 @@ class LanePolicy:
                 details=details,
             )
         return Decision(policy=self.name, shadow_violation=True, reason=reason, details=details)
+
+
+def in_lane(lane: Sequence[str], path: str, other_project: str = "") -> bool:
+    """Project-relative globs cover the open project; full-path globs cover the file's
+    full path in whichever Ducky project holds it (``other_project`` or the open one)."""
+    rel = [g for g in lane if not _is_abs(g)]
+    full_globs = [g for g in lane if _is_abs(g)]
+    p = path.replace("\\", "/")
+    if not other_project and not _is_abs(p) and any_match(rel, p):
+        return True
+    if not full_globs:
+        return False
+    if _is_abs(p):
+        full = p
+    else:
+        root = other_project.replace("\\", "/").rstrip("/") if other_project else next(iter(project_roots()), "")
+        if not root:
+            return False
+        full = f"{root}/{normalize_rel(p)}"
+    for g in full_globs:
+        try:
+            if compile_glob(g).match(full) is not None:
+                return True
+        except LaneGlobError:  # its project left the list: that glob covers nothing now
+            continue
+    return False
 
 
 def denial_text(path: str, lane: Sequence[str], leader_conv_id: str = "") -> str:

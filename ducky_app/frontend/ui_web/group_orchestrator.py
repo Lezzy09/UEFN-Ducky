@@ -77,13 +77,21 @@ def _normalize_lane_field(raw: Any) -> list[str] | None:
     if raw is None or isinstance(raw, bool):
         return None
     if not isinstance(raw, (list, tuple, str)):
-        return None
+        return []
     from backend.workspace.lanes import LaneGlobError, normalize_lane
 
     try:
         return normalize_lane(list(raw) if not isinstance(raw, str) else raw)
     except LaneGlobError:
-        return None
+        # A lane that no longer parses (its project left the list) keeps what still
+        # does; it never turns into unrestricted.
+        kept: list[str] = []
+        for item in [raw] if isinstance(raw, str) else raw:
+            try:
+                kept += normalize_lane(item) or []
+            except LaneGlobError:
+                continue
+        return sorted(set(kept))
 
 
 def group_members(conv: Any) -> list[dict[str, Any]]:
