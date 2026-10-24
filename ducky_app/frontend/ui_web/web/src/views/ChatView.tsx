@@ -105,6 +105,25 @@ import { shouldSplitFollowTabs } from "../verse-editor/queue/followCodeSettings"
 import { VerseEditorProvider, useVerseEditorOptional } from "../verse-editor";
 import { useUiTarget } from "../ui-targets/registry";
 
+type RemoteConversation = { id: string; title: string; folder_id?: string };
+
+/**
+ * A chat created or touched elsewhere (an agent, a group member): open its tab or not.
+ * Takes no folder state on purpose — remote activity never expands a sidebar folder.
+ */
+export function shouldOpenRemoteConversation(
+  conv: RemoteConversation,
+  chats: ChatTab[],
+  archived: FolderItem["chats"] = [],
+): boolean {
+  // Group members / spawn children already live under a parent — opening them
+  // steals focus from the live group tab. Sidebar still reloads via load().
+  const known = chats.find((c) => c.id === conv.id) || archived.find((c) => c.id === conv.id);
+  if (known?.parentConvId) return false;
+  // Duck-Tac-Toe board creates its chat for the in-tab popup — don't steal focus.
+  return !shouldSuppressRemoteChatOpen(conv);
+}
+
 function flattenChats(folders: FolderItem[], rootChats: FolderItem["chats"] = []): ChatTab[] {
   const out: ChatTab[] = [...rootChats];
   const walk = (items: FolderItem[]) => {
@@ -964,38 +983,16 @@ function ChatViewBody({ layoutMode, sidebarRefresh, projectSlug, projectPath }: 
     });
   }, [allChats, setOpenTabs]);
 
-  const expandFolder = useCallback(
-    (folderId: string) => {
-      if (!folderId) return;
-      const walk = (items: FolderItem[]): FolderItem[] =>
-        items.map((f) => ({ ...f, expanded: f.id === folderId ? true : f.expanded, children: walk(f.children) }));
-      setFolders((prev) => walk(prev));
-    },
-    [setFolders],
-  );
-
+  // Member activity never opens folders: a collapsed folder shows it on its row instead.
   const handleRemoteConversation = useCallback(
-    (conv: { id: string; title: string; folder_id?: string }) => {
-      // Group members / spawn children already live under a parent — opening them
-      // steals focus from the live group tab. Sidebar still reloads via load().
-      const known =
-        allChats.find((c) => c.id === conv.id) || archiveChats.find((c) => c.id === conv.id);
-      if (known?.parentConvId) {
-        if (conv.folder_id) expandFolder(conv.folder_id);
-        return;
-      }
-      // Duck-Tac-Toe board creates its chat for the in-tab popup — don't steal focus.
-      if (shouldSuppressRemoteChatOpen(conv)) {
-        if (conv.folder_id) expandFolder(conv.folder_id);
-        return;
-      }
+    (conv: RemoteConversation) => {
+      if (!shouldOpenRemoteConversation(conv, allChats, archiveChats)) return;
       // Registry-checked: a chat living in a focus window must not be re-opened
       // (and claimed) here — that closed the focus window on every model change.
       const id = chatTabId(conv.id);
       void openOrFocusTab(id, () => openTab({ id, kind: "chat", name: conv.title, chatId: conv.id }));
-      if (conv.folder_id) expandFolder(conv.folder_id);
     },
-    [openTab, expandFolder, allChats, archiveChats],
+    [openTab, allChats, archiveChats],
   );
 
   useChatsChanged(load, handleRemoteConversation, removeRows);
