@@ -18,6 +18,7 @@ Env:
   STUB_FIXTURE_REPO     repo the tools read/search/write (default: the cwd)
   STUB_MEMORY_MB        allocate and hold this many MB for the whole run
   STUB_COMMAND_S        interrupt scenario: length of the long command (default 180)
+  STUB_LOG              append one JSON line per turn start/end, tool call and message read
 
 A ``control_request`` interrupt on stdin (with ``--input-format stream-json``) or
 Ctrl+Break ends the turn with a ``result`` marked ``interrupted``.
@@ -49,6 +50,18 @@ _VALUE_FLAGS = frozenset({
 _WORDS = ("the plan step reads the file then checks its tests and writes the change "
           "before the next tool call lands in the fixture repo while the swarm keeps working").split()
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def log_event(kind: str, **fields: Any) -> None:
+    """One line in STUB_LOG (the soak harness counts tool calls and delivered messages)."""
+    path = os.environ.get("STUB_LOG")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"t": time.time(), "pid": os.getpid(), "kind": kind, **fields}) + "\n")
+    except OSError:
+        pass
 
 
 def parse_argv(args: list[str]) -> dict[str, Any]:
@@ -254,6 +267,8 @@ class Turn:
         if steers:
             self.steers += steers
             self.counts["messages_read"] += len(steers)
+            for text in steers:
+                log_event("message", session=self.session_id, text=text[:200])
             words = ["Got your message:", *(" ".join(s.split()) for s in steers), "-", *words]
         return " ".join(words)
 
@@ -262,6 +277,7 @@ class Turn:
         if not self.stream_text(self.step_text()):
             return ""
         self.counts["tool_calls"] += 1
+        log_event("tool", session=self.session_id, tool=name)
         if name == "ducky_ask_user":
             self.counts["ask_user"] += 1
         tool_id = f"toolu_stub_{uuid.uuid4().hex[:20]}"
@@ -382,6 +398,7 @@ class Turn:
                        "tools": [f"mcp__uefn__{t}" for t in tools],
                        "mcp_servers": [{"name": "uefn", "status": status}]})
         prompt = self.first_prompt()
+        log_event("turn_start", session=self.session_id, connected=status == "connected")
         if status == "connected":
             deadline = started + float(os.environ.get("STUB_TURN_S") or 600)
             scenario = os.environ.get("STUB_SCENARIO") or "swarm"
@@ -392,6 +409,7 @@ class Turn:
         if self.mcp is not None:
             self.mcp.close()
         interrupted = self.interrupted.is_set()
+        log_event("turn_end", session=self.session_id, interrupted=interrupted, **self.counts)
         self.out.line({
             "type": "result", "subtype": "error_during_execution" if interrupted else
             ("success" if status == "connected" else "error_during_execution"),
