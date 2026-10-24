@@ -28,11 +28,15 @@ def parse_encoders(output: str) -> set[str]:
 
 
 def _trial(ffmpeg: str, enc: str) -> bool:
-    """One-frame encode: a listed encoder can still fail (no GPU, no driver)."""
+    """One-frame encode: a listed encoder can still fail (no GPU, no driver).
+
+    256x256 yuv420p: NVENC and friends reject tiny frames (64x64 failed on a working NVENC).
+    """
     try:
         return subprocess.run(
             [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
-             "-i", "color=s=64x64:d=0.04", "-frames:v", "1", "-c:v", enc, "-f", "null", "-"],
+             "-i", "color=s=256x256:d=0.04", "-frames:v", "1", "-pix_fmt", "yuv420p",
+             "-c:v", enc, "-f", "null", "-"],
             capture_output=True, text=True, timeout=30, check=False, creationflags=_NO_WINDOW,
         ).returncode == 0
     except (OSError, subprocess.SubprocessError):

@@ -58,7 +58,8 @@ def test_listed_nvenc_whose_trial_fails_moves_on(fake_ffmpeg):
     state["fail"] = {"h264_nvenc"}
     assert encoder.pick_encoder() == "h264_amf"
     trial = runs[1]
-    assert trial[trial.index("-i") + 1] == "color=s=64x64:d=0.04"
+    assert trial[trial.index("-i") + 1] == "color=s=256x256:d=0.04"  # NVENC rejects 64x64
+    assert trial[trial.index("-pix_fmt") + 1] == "yuv420p"
     assert trial[-3:] == ["-f", "null", "-"]
 
 
