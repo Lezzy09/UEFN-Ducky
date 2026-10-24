@@ -120,9 +120,9 @@ describe("SwarmCard preview", () => {
     // Muted group: one amber row, its seats not drawn.
     const art = nodeByText("Art: assets · 2 agents · MUTED");
     expect(art.getAttribute("class")).toContain("rich-c-amber");
-    expect(screen.queryByText(/Modeling lead/)).toBeNull();
+    expect(document.querySelector("svg")?.textContent).not.toContain("Modeling lead");
 
-    expect(screen.getByText(/6 agents · 3 groups · models: claude-sonnet-5-5 ×2, codex:gpt-5-mini ×3, claude-opus-5-5$/)).toBeTruthy();
+    expect(screen.getByText(/^6 agents · 0 steps · models: claude-sonnet-5-5 ×2, codex:gpt-5-mini ×3, claude-opus-5-5$/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
     fireEvent.click(screen.getByRole("button", { name: "Change" }));
@@ -138,6 +138,57 @@ describe("SwarmCard preview", () => {
     expect(resolveToolPresenterView("find_devices", preview)).toBeNull();
     const blocks = resolveToolPresenterBlocks({ toolName: "ducky_swarm_create", arguments: {}, resultText: preview, isSuccess: true });
     expect(blocks?.[0]).toMatchObject({ type: "code", language: "chart" });
+  });
+});
+
+describe("SwarmCard plan", () => {
+  const withPlan = JSON.stringify({
+    status: "needs_confirm",
+    goal: "Shop island",
+    preview: {
+      agents: 4,
+      tree: [
+        {
+          group: "Code: gameplay",
+          muted: false,
+          seats: [
+            { name: "Verse lead", sub_plan: { title: "Verse: combat", total: 3, steps: ["Damage system", { content: "Spawner wiring" }, "Tests"] } },
+            { name: "UI lead", sub_plan: { title: "UI: HUD", total: 4 } },
+          ],
+        },
+        {
+          group: "Art: assets",
+          muted: true,
+          seats: [{ name: "Modeling lead", sub_plan: { title: "Modeling: props", total: 2 } }],
+        },
+        { name: "Tester", sub_plan: { title: "Tests", total: 1 } },
+      ],
+      plan: { sections: [{ title: "Modeling: props", steps: [{ content: "Blockout" }, { content: "Hero props" }] }] },
+    },
+  });
+
+  it("lists each seat's steps under its group, collapses muted groups, and totals the steps", () => {
+    render(<SwarmCard resultText={withPlan} />);
+    expect(screen.getByText("Verse lead:").parentElement?.textContent).toBe("Verse lead: Damage system · Spawner wiring · Tests");
+    expect(screen.getByText("UI lead:").parentElement?.textContent).toBe("UI lead: 4 steps");
+    expect(screen.getByText("Modeling lead:").parentElement?.textContent).toBe("Modeling lead: Blockout · Hero props");
+    expect(screen.getByText("Tester:").parentElement?.textContent).toBe("Tester: 1 step");
+
+    const code = screen.getByText("Code: gameplay (2 agents · 7 steps)").closest("details") as HTMLDetailsElement;
+    const art = screen.getByText("Art: assets (1 agent · 2 steps) · MUTED").closest("details") as HTMLDetailsElement;
+    expect(code.open).toBe(true);
+    expect(art.open).toBe(false);
+    fireEvent.click(art.querySelector("summary")!);
+    expect(art.open).toBe(true);
+    fireEvent.click(code.querySelector("summary")!);
+    expect(code.open).toBe(false);
+
+    expect(screen.getByText(/^4 agents · 10 steps/)).toBeTruthy();
+  });
+
+  it("is only on the preview", () => {
+    render(<SwarmCard resultText={done} />);
+    expect(screen.queryByLabelText("Plan")).toBeNull();
   });
 });
 

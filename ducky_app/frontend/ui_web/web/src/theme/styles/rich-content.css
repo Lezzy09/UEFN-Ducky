@@ -329,6 +329,12 @@
 .swarm-card-detail-range { width: 100%; accent-color: var(--accent); }
 .swarm-card-detail-stops { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; color: var(--muted); font-size: 0.8em; text-align: center; }
 .swarm-card-detail-stop--on { color: var(--fg); font-weight: 600; }
+.swarm-card-plan { display: flex; flex-direction: column; gap: 4px; font-size: 0.9em; }
+.swarm-card-plan-title { color: var(--fg); font-weight: 600; }
+.swarm-card-plan-group { padding-left: 10px; }
+.swarm-card-plan-group > summary { color: var(--fg); cursor: pointer; }
+.swarm-card-plan-seat { padding-left: 14px; color: var(--muted); }
+.swarm-card-plan-seat-name { color: var(--fg); }
 
 .swarm-card-btn {
   padding: 4px 14px;

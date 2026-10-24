@@ -25,6 +25,7 @@ export interface SwarmSeat {
   created: boolean;
   plan: string;
   progress?: SwarmProgress;
+  steps: string[];
 }
 
 export interface SwarmGroup {
@@ -106,7 +107,7 @@ function wasCreated(raw: Raw, allDone: boolean): boolean {
 
 function toSeat(v: unknown, key: string, allDone: boolean): SwarmSeat | null {
   if (typeof v === "string") {
-    return v.trim() ? { kind: "seat", key, name: v.trim(), profile: "", model: "", created: allDone, plan: "" } : null;
+    return v.trim() ? { kind: "seat", key, name: v.trim(), profile: "", model: "", created: allDone, plan: "", steps: [] } : null;
   }
   const raw = obj(v);
   if (!raw) return null;
@@ -121,7 +122,17 @@ function toSeat(v: unknown, key: string, allDone: boolean): SwarmSeat | null {
     created: wasCreated(raw, allDone),
     plan: planName(raw),
     progress: progressOf(raw),
+    steps: stepTitles(obj(raw.sub_plan)?.steps ?? raw.steps),
   };
+}
+
+function stepTitles(v: unknown): string[] {
+  return arr(v).map((x) => (typeof x === "string" ? x.trim() : str(obj(x)?.content) || str(obj(x)?.title))).filter(Boolean);
+}
+
+/** A seat's step count: its listed steps, else its sub plan's total. */
+export function seatStepCount(s: SwarmSeat): number {
+  return s.steps.length || s.progress?.total || 0;
 }
 
 function isGroup(raw: Raw): boolean {
@@ -205,6 +216,14 @@ export function parseSwarmResult(text: string): SwarmCardData | null {
   const goal = str(top.goal) || str(preview?.goal) || str(top.name);
   const agents = num(preview?.agents) ?? num(top.agents) ?? countSeats({ seats, groups });
   const detail = num(preview?.detail) ?? num(top.detail);
+  // Seats without their own step list take it from preview.plan.sections (matched by sub plan title).
+  const sections = new Map<string, string[]>();
+  arr(obj(preview?.plan ?? top.plan)?.sections).forEach((s) => {
+    const o = obj(s);
+    const title = o ? str(o.title) || str(o.name) || str(o.job) : "";
+    if (title) sections.set(title, stepTitles(o?.steps ?? o?.children));
+  });
+  if (sections.size) allSeats({ seats, groups }).forEach((s) => !s.steps.length && (s.steps = sections.get(s.plan) ?? []));
   return { status, goal, agents, groups, seats, detail, levels: parseLevels(preview?.levels ?? top.levels) };
 }
 
@@ -321,6 +340,46 @@ function usePrefersReducedMotion(): boolean {
     return () => mq.removeEventListener?.("change", onChange);
   }, []);
   return reduced;
+}
+
+function groupSteps(g: SwarmGroup): number {
+  return allSeats(g).reduce((n, s) => n + seatStepCount(s), 0);
+}
+
+function SeatSteps({ seat }: { seat: SwarmSeat }) {
+  const n = seatStepCount(seat);
+  return (
+    <div className="swarm-card-plan-seat">
+      <span className="swarm-card-plan-seat-name">{seat.name}:</span>{" "}
+      {seat.steps.length ? seat.steps.join(" · ") : `${n} step${n === 1 ? "" : "s"}`}
+    </div>
+  );
+}
+
+function GroupSteps({ group }: { group: SwarmGroup }) {
+  const n = countSeats(group);
+  const steps = groupSteps(group);
+  // ponytail: native <details> is the collapse; muted groups start closed.
+  return (
+    <details className="swarm-card-plan-group" open={!group.muted}>
+      <summary>
+        {group.name} ({n} agent{n === 1 ? "" : "s"} · {steps} step{steps === 1 ? "" : "s"}){group.muted ? " · MUTED" : ""}
+      </summary>
+      {group.groups.map((g) => <GroupSteps key={g.key} group={g} />)}
+      {group.seats.map((s) => <SeatSteps key={s.key} seat={s} />)}
+    </details>
+  );
+}
+
+/** The plan Build approves with the tree: every seat's steps, in tree order. */
+function SwarmPlan({ data }: { data: SwarmCardData }) {
+  return (
+    <div className="swarm-card-plan" aria-label="Plan">
+      <div className="swarm-card-plan-title">Plan</div>
+      {data.groups.map((g) => <GroupSteps key={g.key} group={g} />)}
+      {data.seats.map((s) => <SeatSteps key={s.key} seat={s} />)}
+    </div>
+  );
 }
 
 export const SWARM_BUILD_PROMPT =
@@ -444,9 +503,10 @@ export function SwarmCard({ resultText = "", data: dataProp, onSend: onSendProp 
         ? `Building swarm: ${goal}`
         : `Swarm built: ${goal}`;
   const builtSeats = allSeats(data).filter((s) => s.created).length;
+  const stepTotal = allSeats(data).reduce((n, s) => n + seatStepCount(s), 0);
   const summary =
     status === "needs_confirm"
-      ? [`${data.agents} agents`, `${groupCount} groups`, modelText && `models: ${modelText}`].filter(Boolean).join(" · ")
+      ? [`${data.agents} agents`, `${stepTotal} steps`, modelText && `models: ${modelText}`].filter(Boolean).join(" · ")
       : status === "building"
         ? `Building ${builtSeats}/${data.agents} agents…`
         : `Built ${data.agents} agents · ${roll.done}/${roll.total} steps`;
@@ -485,6 +545,7 @@ export function SwarmCard({ resultText = "", data: dataProp, onSend: onSendProp 
       <div ref={hostRef} className="swarm-card-tree">
         <RichChart spec={spec} />
       </div>
+      {status === "needs_confirm" ? <SwarmPlan data={data} /> : null}
       <div className="swarm-card-summary">{summary}</div>
       {status === "needs_confirm" ? (
         <div className="swarm-card-actions">
