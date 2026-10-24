@@ -111,6 +111,9 @@ _TTS_SYNTHESIZERS: dict[str, Any] = {}
 # plugin_id -> list_voices() -> [{id, label}]  (dynamic voices fetched at runtime,
 # e.g. an account's cloned voices — on top of the static manifest tts.voices).
 _TTS_VOICE_LISTERS: dict[str, Any] = {}
+# (kind, plugin_id) -> {fn, describe}; kind is one of MEDIA_KINDS (gateway media makers).
+_MEDIA_GENERATORS: dict[tuple[str, str], dict[str, Any]] = {}
+MEDIA_KINDS = ("image", "image_edit", "video", "music")
 # provider_id -> {plugin_id, factory, fetch_models?, test_key_model?, test_key?}
 _LLM_PROVIDER_FACTORIES: dict[str, dict[str, Any]] = {}
 # coding_agent_id -> {plugin_id, factory, complete_one_shot?, test_key?, resolve_api_fallback?}
@@ -473,6 +476,42 @@ def register_tts_voices_lister(plugin_id: str, fn: Any) -> None:
         raise TypeError("TTS voices lister must be callable")
     with _LOCK:
         _TTS_VOICE_LISTERS[pid] = fn
+
+
+def register_media_generator(
+    plugin_id: str, kind: str, fn: Any, describe: dict[str, Any] | None = None
+) -> None:
+    """Host-side register for ``api.register_media_generator(kind, fn, describe)``.
+
+    ``fn(prompt, **options)`` returns the made media (``{path|url|b64, mime}``).
+    ``describe``: ``{label, secret_key?, models?, ...}``; ``secret_key`` names the saved
+    credential that must exist for the maker to be offered (none = always offered).
+    """
+    from backend.uefn_plugins.store import normalize_plugin_id
+
+    pid = normalize_plugin_id(plugin_id)
+    if kind not in MEDIA_KINDS:
+        raise ValueError(f"media kind must be one of {', '.join(MEDIA_KINDS)}")
+    if not callable(fn):
+        raise TypeError("media generator must be callable")
+    with _LOCK:
+        _MEDIA_GENERATORS[(kind, pid)] = {"fn": fn, "describe": dict(describe or {})}
+
+
+def media_generators(kind: str) -> list[dict[str, Any]]:
+    """Makers for ``kind`` whose plugin is enabled and whose saved key is present."""
+    from backend.agent.secrets import get_key
+
+    with _LOCK:
+        rows = [(pid, dict(r)) for (k, pid), r in _MEDIA_GENERATORS.items() if k == kind]
+    out: list[dict[str, Any]] = []
+    for pid, row in sorted(rows, key=lambda x: x[0]):
+        desc = row["describe"]
+        secret = str(desc.get("secret_key") or "").strip()
+        if not is_plugin_enabled(pid) or (secret and not (get_key(secret) or "").strip()):
+            continue
+        out.append({"plugin_id": pid, "kind": kind, "fn": row["fn"], **desc})
+    return out
 
 
 def register_connection_probe(
@@ -1069,6 +1108,8 @@ def _drop_plugin_runtime(pid: str, mod_name: str) -> None:
         _clear_node_handlers(pid)
         _TTS_SYNTHESIZERS.pop(pid, None)
         _TTS_VOICE_LISTERS.pop(pid, None)
+        for key in [k for k in _MEDIA_GENERATORS if k[1] == pid]:
+            _MEDIA_GENERATORS.pop(key, None)
         for key in [k for k, v in _LLM_PROVIDER_FACTORIES.items() if v.get("plugin_id") == pid]:
             _LLM_PROVIDER_FACTORIES.pop(key, None)
         for key in [k for k, v in _CODING_AGENT_FACTORIES.items() if v.get("plugin_id") == pid]:
@@ -4228,6 +4269,15 @@ class _PluginApi:
         """Register ``synthesize(text, voice_id) -> {audio_base64, mime}`` for this plugin."""
         register_tts_synthesizer(self.plugin_id, synthesize_fn)
         self.log("TTS synthesizer registered")
+
+    def register_media_generator(self, kind: str, fn: Any, describe: dict[str, Any] | None = None) -> None:
+        """Register a ``kind`` (image | image_edit | video | music) maker: ``fn(prompt, **options)``.
+
+        ``describe`` = ``{label, secret_key?}``; it is listed by ``media_generators(kind)``
+        only while ``secret_key`` has a saved credential.
+        """
+        register_media_generator(self.plugin_id, kind, fn, describe)
+        self.log(f"{kind} generator registered")
 
     def connection(self, fn: Any, *, label: str = "", program: str = "") -> None:
         """Show this plugin in the header Connections menu.
