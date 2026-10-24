@@ -1,30 +1,18 @@
 import { subscribeLatestChatActivity } from "../navigation/latestChatActivity";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Icons } from "../icons/Icons";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ScopedCss, useScopedClass } from "../utils/scopedCss";
-import { ChatPermissionsButton } from "./ChatPermissionsButton";
-import { ContextMenu, useContextMenuState, type ContextMenuItem } from "./ContextMenu";
-import { useHeaderVisibility } from "../hooks/useHeaderVisibility";
 import { skipAutoFocus } from "../hooks/useNarrowLayout";
 import { isDucktactoeChat } from "../plugin-ui/ducktactoeBoardChat";
-import { ModelSelector } from "./ModelSelector";
 import { useSwarmCardSend } from "./tool-presenters/SwarmCard";
 import { usePluginContributions } from "../hooks/usePluginContributions";
-import { ComposerAttachmentChips } from "./ComposerAttachmentChips";
-import { AttachmentPreviewModal } from "./AttachmentPreviewModal";
-import { ContextMeter } from "./ContextMeter";
-import { ChatPaneEmptyState } from "./ChatPaneEmptyState";
-import { DuckyParadeOverlay } from "./DuckyParade";
-import { VirtualChatMessageList, type VirtualChatMessageListHandle } from "./VirtualChatMessageList";
+import type { VirtualChatMessageListHandle } from "./VirtualChatMessageList";
 import { useComposerAttachments } from "../hooks/useComposerAttachments";
 import type {
   AgentMode,
-  ChatPlan,
   ChatTab,
   ContextUsage,
   FolderItem,
   MessageAttachmentDto,
-  PlanProgress,
   SessionFile,
 } from "../types/panel";
 import { getApi } from "../hooks/usePanelApi";
@@ -36,15 +24,11 @@ import { useAgentEventSubscription } from "../hooks/useAgentEventBus";
 import { useRunningAgents } from "../hooks/useRunningAgents";
 import { runningTeamNames } from "./team/teamRoster";
 import { useHasApiKey } from "../hooks/useHasApiKey";
-import { buildActivityLines, splitTurnMessages } from "../utils/agentActivity";
 import { getCachedChatComposer, setCachedChatComposer, subscribeComposerDraft, takeComposerDraft } from "../hooks/chatComposerCache";
 import { composerHistoryKey, recordComposer, redoComposer, sameAttachments, undoComposer } from "../hooks/composerHistory";
 import { nextComposerFromChat } from "../hooks/chatComposerHydrate";
 import {
-  enqueuePrompt,
   getPromptQueue,
-  isPromptDrainLocked,
-  makeQueuedPrompt,
   movePromptToFront,
   removePrompt,
   setPromptQueue,
@@ -55,14 +39,7 @@ import {
   type QueuedPrompt,
 } from "../hooks/promptQueue";
 import { PromptQueueBar } from "./PromptQueueBar";
-import {
-  appendStreamRow,
-  buildCommittedChatRows,
-  coalesceActivityRows,
-} from "../utils/chatMessageGroups";
 import { basename } from "../verse-editor/utils/isVerseFile";
-import { ChatInputResizeHandle } from "./ChatInputResizeHandle";
-import { ChatPlanPopup } from "./ChatPlanPopup";
 import { ChatWorkflowRunCard } from "./ChatWorkflowRunCard";
 import {
   getAskUserSessionForConv,
@@ -71,17 +48,11 @@ import {
   type AskUserSession,
 } from "../ask-user";
 import { useHasTerminalApprovals } from "../terminal/TerminalApprovalCard";
-import { useConfirmModal } from "../contexts/ConfirmModalContext";
-import { CtrlWheelZoomRoot } from "./CtrlWheelZoomRoot";
 import { useChatColumnWidth } from "../hooks/useChatColumnWidth";
 import { isModelsCatalogReady, getCachedModels, subscribeModelsCatalog } from "../hooks/modelsCatalogCache";
 import { getCachedCodingAgents, subscribeCodingAgents } from "../hooks/codingAgentsCache";
 import { hasUsableModels } from "./ducky/duckyPickerIssue";
 import { parseFavoriteSelection } from "../hooks/favoriteModelsCatalog";
-import { openLlmsProviderSettings } from "../navigation/openSettingsTab";
-import { openGatewaySetup } from "./GatewaySetupNotice";
-import { ModelSetupNotice } from "./ModelSetupNotice";
-import { useMergedRef, useUiTarget } from "../ui-targets/registry";
 import {
   getWalkthroughState,
   isCompleted,
@@ -94,33 +65,9 @@ import { usePluginUiPrefs } from "../hooks/usePluginUiPrefs";
 import { requestChatTranslateWalk } from "../navigation/openTranslatedChat";
 import { readTranslationUiLang } from "../navigation/openVerseTranslatedTab";
 import { isEnglishLang } from "../views/settings/translationLanguages";
-import { VoiceControls, type LiveVoiceUiHandlers } from "../voice/VoiceControls";
-import { VoiceOverlay } from "../voice/VoiceOverlay";
+import type { LiveVoiceUiHandlers } from "../voice/VoiceControls";
 import { noteUserTurn } from "../voice/spokenReplyGate";
-import { SnipButton } from "./SnipButton";
-import { AttachMenuButton } from "./AttachMenuButton";
-import { ChatChangesButton, ChatChangesSlide, useLedgerOpen } from "./ChatChangesDrawer";
-import { captureSnipFile } from "./snipCapture";
-import { ComposerDraft, composerCaret, composerSetCaret, enterInsertsNewline } from "./ComposerDraft";
-import { SlashCommandMenu } from "./SlashCommandMenu";
-import {
-  filterChatRefs,
-  insertChatRef,
-  instantInnerRefs,
-  mergeInnerRefs,
-  readCaretToken,
-  type ChatRef,
-} from "./chatReferences";
-import { useChatReferenceCatalog } from "./useChatReferenceCatalog";
-import { useInnerRefSearch } from "./useInnerRefSearch";
-import {
-  commandsForScope,
-  composerPlaceholder,
-  filterCommands,
-  matchSlashCommand,
-  readSlashQuery,
-  type SlashCommand,
-} from "./slashCommands";
+import { useLedgerOpen } from "./ChatChangesDrawer";
 import { GroupMemberStrip } from "./GroupMemberStrip";
 import type { GroupMemberDto } from "../types/panel";
 import {
@@ -128,6 +75,18 @@ import {
   CHAT_ATTACH_TARGET,
   dragHasOsFiles,
 } from "../utils/osFileDrag";
+import { ChatComposer, composerSend, useSlashCommands } from "./ChatComposer";
+import { ChatRows, useChatRowModel } from "./ChatRows";
+import {
+  ChatPlanCard,
+  applyPlanToolDone,
+  useChatPlan,
+  useChatPlanActions,
+  usePlanAllDone,
+} from "./ChatPlanCard";
+
+export { useChatPlan } from "./ChatPlanCard";
+export { COMPOSER_BUTTONS } from "./ChatComposer";
 
 interface ChatPaneProps {
   chat: ChatTab;
@@ -143,66 +102,6 @@ interface ChatPaneProps {
   isAgentRunning: boolean;
   onEngage?: () => void;
 }
-
-/** Live plan state shared by the chat dock and its finished-plan card. */
-export function useChatPlan(chatId: string) {
-  const [chatPlan, setChatPlan] = useState<ChatPlan | null>(null);
-  const [chatPlanProgress, setChatPlanProgress] = useState<PlanProgress | null>(null);
-  const request = useRef(0);
-  const reloadPlan = useCallback(async () => {
-    const version = ++request.current;
-    const api = getApi();
-    if (!api?.get_plan) return;
-    try {
-      const res = await api.get_plan(chatId);
-      if (version !== request.current) return;
-      setChatPlan(res.plan ?? null);
-      setChatPlanProgress(res.progress ?? null);
-    } catch {
-      // Keep the last resolved view until a later event can refresh it.
-    }
-  }, [chatId]);
-
-  useEffect(() => {
-    setChatPlan(null);
-    setChatPlanProgress(null);
-    void reloadPlan();
-    return () => { request.current += 1; };
-  }, [reloadPlan]);
-
-  useAgentEventSubscription(chatId, (event) => {
-    if (event.conv_id !== chatId) return;
-    if (event.type === "plan_assignment_changed") void reloadPlan();
-    if (event.type === "plan_updated") {
-      if (chatPlan?.assigned_from?.chat_id) {
-        void reloadPlan();
-      } else {
-        request.current += 1;
-        setChatPlan(event.plan ?? null);
-        setChatPlanProgress(event.progress ?? null);
-      }
-    }
-  }, [reloadPlan, chatPlan?.assigned_from?.chat_id]);
-
-  const sourceChatId = chatPlan?.assigned_from?.chat_id || "";
-  useAgentEventSubscription(sourceChatId, (event) => {
-    if (!sourceChatId || sourceChatId === chatId || event.conv_id !== sourceChatId) return;
-    if (event.type === "plan_updated" || event.type === "plan_assignment_changed") void reloadPlan();
-  }, [chatId, reloadPlan]);
-
-  return { chatPlan, chatPlanProgress, setChatPlan, setChatPlanProgress };
-}
-
-/** The composer buttons its right-click menu can hide (Send and Stop always stay). */
-export const COMPOSER_BUTTONS: { id: string; label: string; Icon: () => JSX.Element }[] = [
-  { id: "permissions", label: "Mode and permissions", Icon: Icons.Shield },
-  { id: "context", label: "Context", Icon: Icons.Brain },
-  { id: "model", label: "Model", Icon: Icons.Sparkles },
-  { id: "changes", label: "Changes", Icon: Icons.Clock },
-  { id: "snip", label: "Snip", Icon: Icons.Crop },
-  { id: "attach", label: "Attach", Icon: Icons.Paperclip },
-  { id: "voice", label: "Voice", Icon: Icons.Mic },
-];
 
 export function ChatPane({
   chat,
@@ -283,8 +182,6 @@ export function ChatPane({
   const [modelsCount, setModelsCount] = useState(() => getCachedModels()?.length ?? 0);
   const pluginContrib = usePluginContributions();
   const hasApiKey = useHasApiKey();
-  const { confirm } = useConfirmModal();
-  const [isFocused, setIsFocused] = useState(false);
   const [contextPanelOpen, setContextPanelOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useLedgerOpen();
   const [sessionFiles, setSessionFiles] = useState<SessionFile[]>([]);
@@ -300,13 +197,9 @@ export function ChatPane({
     initialComposer?.selectedModelDisplayName ?? chat.model ?? "",
   );
   const [isDragOver, setIsDragOver] = useState(false);
-  const [slashActiveIndex, setSlashActiveIndex] = useState(0);
-  const [slashDismissed, setSlashDismissed] = useState(false);
   const [caret, setCaret] = useState(0);
-  const [mentionsOn, setMentionsOn] = useState(true);
-  const [slashRefsOn, setSlashRefsOn] = useState(true);
-  const [slashStatus, setSlashStatus] = useState("");
   const [modelPickerSignal, setModelPickerSignal] = useState(0);
+  const openModelPicker = useCallback(() => setModelPickerSignal((n) => n + 1), []);
   // A chat with no model: why (noModelText), how many messages Ducky keeps for it until a
   // model is picked (they run then), and whether the composer's text sends on that pick.
   const [noModelText, setNoModelText] = useState("");
@@ -316,43 +209,11 @@ export function ChatPane({
   const sendAfterPickRef = useRef(false);
   const pickerContextRef = useRef({ visible, selectedModel: "" });
   const { chatPlan, chatPlanProgress, setChatPlan, setChatPlanProgress } = useChatPlan(chat.id);
-  const planAllDone = useMemo(() => {
-    if (!chatPlan) return true;
-    if (chatPlanProgress) {
-      return chatPlanProgress.total > 0 && chatPlanProgress.completed >= chatPlanProgress.total;
-    }
-    const todos = chatPlan.todos || [];
-    return todos.length > 0 && todos.every((t) => t.status === "completed" || t.status === "cancelled");
-  }, [chatPlan, chatPlanProgress]);
+  const planAllDone = usePlanAllDone(chatPlan, chatPlanProgress);
   const listRef = useRef<VirtualChatMessageListHandle>(null);
   const [paneHost, setPaneHost] = useState<HTMLDivElement | null>(null);
-  const inputBoxRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLDivElement>(null);
-  const composerTargetRef = useUiTarget("chat.composer", {
-    kind: "chat",
-    label: "Chat composer",
-    route: "chat",
-  });
-  const inputTargetRef = useUiTarget("chat.composer.input", {
-    kind: "input",
-    label: "Message",
-    route: "chat",
-  });
-  const sendTargetRef = useUiTarget("chat.composer.send", {
-    kind: "button",
-    label: "Send",
-    route: "chat",
-  });
-  const inputBoxMergedRef = useMergedRef(inputBoxRef, composerTargetRef);
-  const textareaMergedRef = useMergedRef(textareaRef, inputTargetRef);
   const loadedChatIdRef = useRef(chat.id);
-  const minTextareaHeight = useRef(60);
-  const maxTextareaHeightRef = useRef(Infinity);
-  const liveTextareaHeightRef = useRef<number | null>(null);
-  const inputResizingRef = useRef(false);
-  const [textareaHeight, setTextareaHeight] = useState<number | null>(null);
-  const TOP_RESIZE_MARGIN = 16;
-  const MIN_MESSAGE_AREA_HEIGHT = 100;
   const paneScopeClass = useScopedClass("chat-pane");
   const { shellRef, setZoomScale } = useChatColumnWidth();
   const handleChatZoomChange = useCallback((zoom: number) => {
@@ -377,24 +238,6 @@ export function ChatPane({
   } = useComposerAttachments(initialComposer?.attachments ?? [], {
     convId: chat.id, model: selectedModel, modelLabel: selectedModelDisplayName, codingAgent,
   });
-
-  const [previewAttachmentId, setPreviewAttachmentId] = useState<string | null>(null);
-  const previewAttachment = useMemo((): MessageAttachmentDto | null => {
-    const att = attachments.find((a) => a.id === previewAttachmentId);
-    if (!att) return null;
-    if (att.kind === "image") {
-      return {
-        kind: "image",
-        name: att.name,
-        mime: att.mime,
-        data_base64: att.dataUrl.replace(/^data:[^;]+;base64,/, ""),
-      };
-    }
-    if (att.kind === "video") {
-      return { kind: "video", name: att.name, mime: att.mime, media_url: att.previewUrl };
-    }
-    return { kind: "file", name: att.name, mime: att.mime, text: att.text };
-  }, [attachments, previewAttachmentId]);
 
   const {
     messages,
@@ -466,49 +309,13 @@ export function ChatPane({
     };
   }, [chat.id, chat.isGroup]);
 
-  const { committed, turnMessages } = useMemo(
-    () => splitTurnMessages(messages, agentRunning),
-    [messages, agentRunning],
-  );
-
-  // Regroup history only when messages change — not on every text/thinking delta.
-  const committedRows = useMemo(
-    () => buildCommittedChatRows(committed, turnMessages, agentRunning, activeRunId),
-    [committed, turnMessages, agentRunning, activeRunId],
-  );
-
-  const rows = useMemo(
-    () =>
-      agentRunning
-        ? coalesceActivityRows(
-            appendStreamRow(committedRows, streamBuffer, true, streamThinking),
-          )
-        : committedRows,
-    [committedRows, streamBuffer, streamThinking, agentRunning],
-  );
-
-  // Only the most recent user message is editable/resendable (Cursor: edit mid-answer).
-  const editableRowId = useMemo(() => {
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const r = rows[i];
-      if (r.kind === "bubble" && r.role === "user") return r.id;
-    }
-    return null;
-  }, [rows]);
-
-  const hasInlineTurnContent =
-    turnMessages.length > 0 || !!streamBuffer.trim() || !!streamThinking.trim();
-
-  const activityLines = useMemo(
-    () =>
-      buildActivityLines(
-        turnMessages,
-        agentRunning ? streamBuffer : "",
-        agentRunning ? streamThinking : "",
-      ),
-    [turnMessages, streamBuffer, streamThinking, agentRunning],
-  );
-
+  const { rows, editableRowId, hasInlineTurnContent, activityLines } = useChatRowModel({
+    messages,
+    agentRunning,
+    activeRunId,
+    streamBuffer,
+    streamThinking,
+  });
   // Keep the footer clock after the turn ends so we can see how long it took.
   const showIdleTurnTimer = !agentRunning && turnTimer.hasTimer && !turnTimer.running;
   const showFooterActivity = agentRunning || showIdleTurnTimer;
@@ -752,24 +559,7 @@ export function ChatPane({
           if (contextPanelOpen) void refreshContextUsage();
           const toolName = event.tool?.name || "";
           if (toolName === "ducky_create_plan" || toolName === "ducky_update_plan") {
-            // Prefer the plan payload from the event (member plans in a group).
-            if (event.plan) {
-              setChatPlan(event.plan);
-              setChatPlanProgress(event.progress ?? null);
-              return;
-            }
-            const api = getApi();
-            if (api?.get_plan) {
-              void api
-                .get_plan(chat.id)
-                .then((res) => {
-                  setChatPlan(res.plan ?? null);
-                  setChatPlanProgress(res.progress ?? null);
-                })
-                .catch(() => {
-                  /* keep existing plan state */
-                });
-            }
+            applyPlanToolDone(event, chat.id, { setChatPlan, setChatPlanProgress });
           }
         }
       },
@@ -782,176 +572,6 @@ export function ChatPane({
     if (!contextPanelOpen) return;
     void refreshSessionFiles();
   }, [contextPanelOpen, messages, refreshSessionFiles]);
-
-  const computeMaxTextareaHeight = useCallback(() => {
-    const inputBox = inputBoxRef.current;
-    const textarea = textareaRef.current;
-    if (!inputBox || !textarea) return Infinity;
-
-    const inputArea = inputBox.parentElement;
-    if (!inputArea) return Infinity;
-
-    const column = inputArea.closest(".chat-column");
-    if (!column) return Infinity;
-
-    const chromeHeight = inputBox.offsetHeight - textarea.offsetHeight;
-    const columnHeight = column.clientHeight;
-    const areaStyle = getComputedStyle(inputArea);
-    const areaPadY = parseFloat(areaStyle.paddingTop) + parseFloat(areaStyle.paddingBottom);
-
-    let reservedAboveInput = 0;
-    for (const child of Array.from(column.children)) {
-      if (child === inputArea) break;
-      const el = child as HTMLElement;
-      if (el.classList.contains("chat-pane-content")) {
-        reservedAboveInput += MIN_MESSAGE_AREA_HEIGHT;
-      } else {
-        reservedAboveInput += el.offsetHeight;
-      }
-    }
-
-    const max = columnHeight - reservedAboveInput - areaPadY - chromeHeight - TOP_RESIZE_MARGIN;
-
-    return Math.max(minTextareaHeight.current, max);
-  }, []);
-
-  const refreshMaxTextareaHeight = useCallback(() => {
-    const max = computeMaxTextareaHeight();
-    maxTextareaHeightRef.current = max;
-    const el = textareaRef.current;
-    if (el) {
-      el.style.maxHeight = Number.isFinite(max) ? `${max}px` : "";
-    }
-    return max;
-  }, [computeMaxTextareaHeight]);
-
-  const applyTextareaHeight = useCallback((height: number, commit: boolean) => {
-    const max = maxTextareaHeightRef.current;
-    const clamped = Math.max(
-      minTextareaHeight.current,
-      Math.min(Number.isFinite(max) ? max : height, height),
-    );
-    liveTextareaHeightRef.current = clamped;
-    const el = textareaRef.current;
-    if (el) {
-      el.style.height = `${clamped}px`;
-      el.style.minHeight = `${minTextareaHeight.current}px`;
-      if (Number.isFinite(max)) el.style.maxHeight = `${max}px`;
-    }
-    if (commit) {
-      setTextareaHeight((prev) => (prev === clamped ? prev : clamped));
-    }
-    return clamped;
-  }, []);
-
-  const onInputResizeStart = useCallback(() => {
-    inputResizingRef.current = true;
-    refreshMaxTextareaHeight();
-    if (liveTextareaHeightRef.current == null) {
-      liveTextareaHeightRef.current = textareaHeight ?? minTextareaHeight.current;
-    }
-  }, [refreshMaxTextareaHeight, textareaHeight]);
-
-  const onInputResize = useCallback(
-    (deltaY: number) => {
-      const current = liveTextareaHeightRef.current ?? minTextareaHeight.current;
-      applyTextareaHeight(current + deltaY, false);
-    },
-    [applyTextareaHeight],
-  );
-
-  const onInputResizeEnd = useCallback(() => {
-    inputResizingRef.current = false;
-    const h = liveTextareaHeightRef.current;
-    if (h != null) setTextareaHeight(h);
-  }, []);
-
-  // Right-click the composer's buttons: a switch per button, hidden ones included (saved
-  // with the header's, ids `composer:<button>`). Send and Stop always stay.
-  const composerMenu = useContextMenuState<null>();
-  const { isVisible: barBtnVisible, setVisible: setBarBtnVisible } = useHeaderVisibility();
-  const composerBtnShown = (id: string) => barBtnVisible(`composer:${id}`);
-  const composerMenuItems: ContextMenuItem[] = COMPOSER_BUTTONS.map((btn) => {
-    const on = composerBtnShown(btn.id);
-    return {
-      id: btn.id,
-      label: btn.label,
-      icon: <btn.Icon />,
-      switch: true,
-      checked: on,
-      keepOpen: true,
-      onClick: () => setBarBtnVisible(`composer:${btn.id}`, !on),
-    };
-  });
-
-  // Shift+Enter (or a long line wrapping) grows the box to show what's written, up to the
-  // same cap the handle has; after a send it goes back to the height it had before.
-  const heightBeforeGrowRef = useRef<number | null>(null);
-  useLayoutEffect(() => {
-    const el = textareaRef.current;
-    if (!el || isPopup || inputResizingRef.current) return;
-    if (!inputText) {
-      const before = heightBeforeGrowRef.current;
-      heightBeforeGrowRef.current = null;
-      if (before != null) applyTextareaHeight(before, true);
-      return;
-    }
-    const overflow = el.scrollHeight - el.clientHeight;
-    if (overflow <= 1) return;
-    refreshMaxTextareaHeight();
-    const current = liveTextareaHeightRef.current ?? el.offsetHeight;
-    if (heightBeforeGrowRef.current == null) heightBeforeGrowRef.current = current;
-    applyTextareaHeight(current + overflow, true);
-  }, [inputText, isPopup, applyTextareaHeight, refreshMaxTextareaHeight]);
-
-  const onInputResizeTap = useCallback(() => {
-    refreshMaxTextareaHeight();
-    const current =
-      liveTextareaHeightRef.current ?? textareaHeight ?? minTextareaHeight.current;
-    const isCollapsed = current <= minTextareaHeight.current + 2;
-    const next = isCollapsed ? maxTextareaHeightRef.current : minTextareaHeight.current;
-    applyTextareaHeight(next, true);
-  }, [applyTextareaHeight, refreshMaxTextareaHeight, textareaHeight]);
-
-  useEffect(() => {
-    if (!visible || isPopup) return;
-    const el = textareaRef.current;
-    if (!el) return;
-    // The floor comes from the stylesheet, never from a height set here: re-measuring
-    // offsetHeight each time the tab showed again raised the floor to the current
-    // height, so after one expand the composer filled the pane and hid every message.
-    const inlineMin = el.style.minHeight;
-    el.style.minHeight = "";
-    const cssMin = parseFloat(getComputedStyle(el).minHeight);
-    el.style.minHeight = inlineMin;
-    const measured = cssMin > 0 ? cssMin : el.offsetHeight;
-    if (measured > 0) {
-      minTextareaHeight.current = measured;
-      refreshMaxTextareaHeight();
-      applyTextareaHeight(liveTextareaHeightRef.current ?? measured, true);
-    }
-  }, [visible, isPopup, refreshMaxTextareaHeight, applyTextareaHeight]);
-
-  useEffect(() => {
-    // Popup overlay is height-capped; ResizeObserver + setState here oscillates
-    // (React #185 maximum update depth) when the composer fights the card size.
-    if (!visible || isPopup) return;
-    const column = inputBoxRef.current?.closest(".chat-column");
-    if (!column) return;
-
-    const clampToPane = () => {
-      refreshMaxTextareaHeight();
-      // Mid-drag height is written imperatively; committing here would re-render every move.
-      if (inputResizingRef.current) return;
-      const current = liveTextareaHeightRef.current;
-      if (current == null) return;
-      applyTextareaHeight(current, false); // RO must not commit setState (React #185)
-    };
-
-    const ro = new ResizeObserver(clampToPane);
-    ro.observe(column);
-    return () => ro.disconnect();
-  }, [visible, isPopup, refreshMaxTextareaHeight, applyTextareaHeight]);
 
   const handleModelMetaChange = useCallback(
     ({ supportsVision, name }: { supportsVision: boolean; name: string }) => {
@@ -1047,36 +667,7 @@ export function ChatPane({
   const canQueue = canCompose && agentRunning;
   const isEmpty = messages.length === 0 && !streamBuffer && !agentRunning;
 
-  useEffect(() => {
-    if (isPopup) return;
-    refreshMaxTextareaHeight();
-    const current = liveTextareaHeightRef.current;
-    if (current == null) return;
-    // Imperative only — commit:true here can ResizeObserver↔setState loop (React #185).
-    applyTextareaHeight(current, false);
-  }, [isPopup, attachments.length, visionBlocked, attachmentError, refreshMaxTextareaHeight, applyTextareaHeight]);
-
   const paneFlex = flexGrow != null ? `${flexGrow} 1 0%` : "1 1 0%";
-
-  const sendBtnTitle = showDefaultModelCta
-    ? "Connect an AI in Settings → LLMs"
-    : pickModelFirst
-      ? "Pick a model — your message sends then"
-      : canQueue
-      ? "Queue follow-up (runs when this turn finishes)"
-      : canSend
-        ? externalAgent
-          ? `Send via ${codingAgent}`
-          : "Send"
-        : "Add API key, model, and message or attachments";
-
-  const sendBtnClass = showDefaultModelCta
-    ? "chat-pane-send-btn chat-pane-send-btn--settings-cta"
-    : hasContent
-      ? canSend || canQueue || pickModelFirst
-        ? "chat-pane-send-btn chat-pane-send-btn--has-text-can-send"
-        : "chat-pane-send-btn chat-pane-send-btn--has-text-no-send"
-      : "chat-pane-send-btn";
 
   useEffect(() => subscribeLatestChatActivity(chat.id, () => {
     requestAnimationFrame(() => {
@@ -1127,195 +718,46 @@ export function ChatPane({
     ],
   );
 
-  const availableCommands = useMemo(
-    () => commandsForScope({ codingAgent, isGroup: Boolean(chat.isGroup) }),
-    [codingAgent, chat.isGroup],
-  );
-  const slashQuery = readSlashQuery(inputText);
-  const slashMatches = useMemo(
-    () => (slashQuery === null ? [] : filterCommands(availableCommands, slashQuery)),
-    [availableCommands, slashQuery],
-  );
-  const caretToken = readCaretToken(inputText, caret);
-  const { mentions, slashRefs, files } = useChatReferenceCatalog(true, chat.id);
-  const showMentions = mentionsOn && caretToken?.trigger === "@";
-  const showSlashRefs = slashRefsOn && caretToken?.trigger === "/";
-  const showSearch = (mentionsOn || slashRefsOn) && caretToken?.trigger === "~";
-  const searchQuery = showSearch ? caretToken?.query ?? "" : "";
-  const searchHits = useInnerRefSearch(searchQuery, showSearch, files, slashRefs);
-  const refMatches = useMemo(() => {
-    if (showSearch) return mergeInnerRefs(instantInnerRefs(searchQuery, mentions, slashRefs, files), searchHits);
-    const pool = showMentions ? mentions : showSlashRefs ? slashRefs : [];
-    const named = filterChatRefs(pool, caretToken?.query ?? "");
-    if (!showSlashRefs || !(caretToken?.query ?? "").trim()) return named;
-    return [...named, ...filterChatRefs(files, caretToken?.query ?? "").slice(0, 12)];
-  }, [showSearch, searchQuery, searchHits, showMentions, showSlashRefs, mentions, slashRefs, files, caretToken?.query]);
-  const pickerCommands = slashQuery === null ? [] : slashMatches;
-  const pickerCount = pickerCommands.length + refMatches.length;
-  const slashMenuOpen = !slashDismissed && pickerCount > 0;
-  const pickerKind = caretToken?.trigger ?? "";
-
-  useEffect(() => {
-    setSlashDismissed(false);
-  }, [pickerKind]);
-
-  useEffect(() => {
-    setSlashActiveIndex(0);
-  }, [pickerKind, slashQuery, caretToken?.query]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void getApi()
-      ?.get_settings()
-      .then((settings) => {
-        if (cancelled || !settings) return;
-        if (typeof settings.chat_mentions_enabled === "boolean") {
-          setMentionsOn(settings.chat_mentions_enabled);
-        }
-        if (typeof settings.chat_slash_references_enabled === "boolean") {
-          setSlashRefsOn(settings.chat_slash_references_enabled);
-        }
-      })
-      .catch(() => {});
-    const onToggle = (event: Event) => {
-      const detail = (event as CustomEvent<{ mentions?: boolean; slashRefs?: boolean }>).detail;
-      if (typeof detail?.mentions === "boolean") setMentionsOn(detail.mentions);
-      if (typeof detail?.slashRefs === "boolean") setSlashRefsOn(detail.slashRefs);
-    };
-    window.addEventListener("ducky:chat-ref-toggles", onToggle);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("ducky:chat-ref-toggles", onToggle);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!slashStatus) return;
-    const t = window.setTimeout(() => setSlashStatus(""), 5000);
-    return () => window.clearTimeout(t);
-  }, [slashStatus]);
-
-  const runSlashCommand = useCallback(
-    (command: SlashCommand, argument: string) => {
-      void command.run({
-        chatId: chat.id,
-        argument,
-        setAgentMode,
-        openModelPicker: () => setModelPickerSignal((n) => n + 1),
-        captureSnip: () => {
-          void (async () => {
-            const snip = await captureSnipFile(chat.id);
-            if (!snip) {
-              setSlashStatus("Snip cancelled — nothing captured.");
-              return;
-            }
-            await addFiles([snip.file], { imagesOnly: true, projectPath: snip.projectPath });
-          })();
-        },
-        // Re-opening the bare prefix lists everything this chat supports.
-        showHelp: () => setInputText("/"),
-        report: setSlashStatus,
-      });
-    },
-    [chat.id, addFiles],
-  );
-
-  const insertChatReference = useCallback(
-    (ref: ChatRef) => {
-      const el = textareaRef.current;
-      const caretNow = el && document.activeElement === el ? composerCaret(el) : caret;
-      const token = readCaretToken(inputText, caretNow);
-      if (!token || token.trigger !== ref.trigger) return;
-      const next = insertChatRef(inputText, token, ref.label, ref.href);
-      setInputText(next.text);
-      setCaret(next.caret);
-      requestAnimationFrame(() => {
-        const node = textareaRef.current;
-        node?.focus();
-        composerSetCaret(node, next.caret);
-      });
-    },
-    [inputText, caret],
-  );
-
-  /** Menu pick: commands taking an argument only get completed, not run. */
-  const completeSlashCommand = useCallback(
-    (command: SlashCommand) => {
-      if (command.requiresArgument) {
-        setInputText(`/${command.name} `);
-        textareaRef.current?.focus();
-        return;
-      }
-      setInputText("");
-      runSlashCommand(command, "");
-    },
-    [runSlashCommand],
-  );
-
+  const { availableCommands, runSlashCommand, slashStatus, setSlashStatus } = useSlashCommands({
+    chatId: chat.id,
+    codingAgent,
+    isGroup: Boolean(chat.isGroup),
+    setAgentMode,
+    openModelPicker,
+    addFiles,
+    setInputText,
+  });
   // keepDraft: a message sent from elsewhere (a swarm card button) leaves the composer as it is.
-  const handleSend = (overrideText?: string, { keepDraft = false }: { keepDraft?: boolean } = {}) => {
-    const text = (overrideText ?? inputText).trim();
-
-    // A recognised command acts on the panel — it never reaches the ducky, so
-    // it runs before the "no models" gate (that is when /model matters most).
-    const slash = overrideText ? null : matchSlashCommand(text, availableCommands);
-    if (slash) {
-      if (slash.command.requiresArgument && !slash.argument) {
-        setSlashStatus(`/${slash.command.name} needs ${slash.command.args ?? "an argument"}.`);
-        return;
-      }
-      setInputText("");
-      runSlashCommand(slash.command, slash.argument);
-      return;
-    }
-
-    if (showDefaultModelCta) {
-      // No AI connected: a Default Model can't be set yet, so connect one first.
-      if (!pluginContrib.llm_providers.length && openGatewaySetup()) return;
-      openLlmsProviderSettings();
-      return;
-    }
-    if (pickModelFirst) {
-      // The text stays and sends the moment a model is picked, or a model set since is taken.
-      sendAfterPickRef.current = hasContent;
-      void adoptDefaultModel().then((adopted) => {
-        if (!adopted) setModelPickerSignal((n) => n + 1);
-      });
-      return;
-    }
-    const apiAttachments = overrideText ? [] : toApiAttachments();
-    if (!text && apiAttachments.length === 0) return;
-
-    // Busy / draining → queue (Cursor-like FIFO). Do NOT cancel the live run —
-    // cancel+drain made follow-ups feel like an instant resend and the queue
-    // never sat. Drain when the turn goes idle (or the user hits Stop).
-    const draining = isPromptDrainLocked(chat.id) || getPromptQueue(chat.id).length > 0;
-    if (agentRunning || draining) {
-      if (agentRunning && !overrideText && !canQueue) return;
-      if (!agentRunning && !overrideText && !canCompose) return;
-      const item = makeQueuedPrompt(text, {
-        attachments: apiAttachments,
-        mode: agentMode,
-        model: selectedModel,
+  const handleSend = (overrideText?: string, opts?: { keepDraft?: boolean }) =>
+    composerSend(
+      {
+        chatId: chat.id,
+        inputText,
+        setInputText,
+        availableCommands,
+        runSlashCommand,
+        setSlashStatus,
+        showDefaultModelCta,
+        hasLlmProviders: pluginContrib.llm_providers.length > 0,
+        pickModelFirst,
+        hasContent,
+        sendAfterPickRef,
+        adoptDefaultModel,
+        openModelPicker,
+        toApiAttachments,
+        clearAttachments,
+        agentRunning,
+        canQueue,
+        canCompose,
+        canSend,
+        agentMode,
+        selectedModel,
         codingAgent,
-      });
-      if (!item) return;
-      enqueuePrompt(chat.id, item);
-      // Text sent mid-turn goes into that turn at its next tool call (it stays queued
-      // until then, and runs as the next turn if this one ends first).
-      if (agentRunning && item.text && !item.attachments.length) {
-        void getApi()?.steer_message?.(chat.id, item.id, item.text);
-      }
-      if (!keepDraft) setInputText("");
-      if (!overrideText) clearAttachments();
-      return;
-    }
-
-    if (!overrideText && !canSend) return;
-    if (!keepDraft) setInputText("");
-    if (!overrideText) clearAttachments();
-    dispatchSend(text, apiAttachments, agentMode, selectedModel, codingAgent);
-  };
+        dispatchSend,
+      },
+      overrideText,
+      opts,
+    );
 
   // Swarm card buttons (Build / Change / detail) in this pane send here.
   useSwarmCardSend(paneHost, (text) => handleSend(text, { keepDraft: true }));
@@ -1352,31 +794,14 @@ export function ChatPane({
     dispatchSend(next.text, next.attachments, next.mode, next.model, next.codingAgent);
   }, [agentRunning, chat.id, promptQueue.length, dispatchSend]);
 
-  const handleOpenPlanTab = useCallback(() => {
-    // In group chats, the visible plan may belong to a member (plan.chat_id).
-    const planChatId = (chatPlan?.chat_id || "").trim() || chat.id;
-    onOpenPlan?.(planChatId, chatPlan?.title || chat.name || "Plan");
-  }, [onOpenPlan, chat.id, chat.name, chatPlan?.chat_id, chatPlan?.title]);
-
-  const handleStopTrackingPlan = useCallback(async () => {
-    const title = chatPlan?.title || "Plan";
-    const planChatId = (chatPlan?.chat_id || "").trim() || chat.id;
-    if (
-      !(await confirm({
-        message: `Stop tracking “${title}”? Removes the plan from this chat (plan file deleted). The chat stays.`,
-        confirmLabel: "Stop tracking",
-        danger: true,
-      }))
-    ) {
-      return;
-    }
-    const api = getApi();
-    if (!api?.delete_plan) return;
-    const res = await api.delete_plan(planChatId);
-    if (!res.ok) return;
-    setChatPlan(null);
-    setChatPlanProgress(null);
-  }, [chat.id, chatPlan?.chat_id, chatPlan?.title, confirm]);
+  const { handleOpenPlanTab, handleStopTrackingPlan } = useChatPlanActions({
+    chatId: chat.id,
+    chatName: chat.name,
+    chatPlan,
+    onOpenPlan,
+    setChatPlan,
+    setChatPlanProgress,
+  });
 
   const handleStop = useCallback(() => {
     const api = getApi();
@@ -1554,78 +979,68 @@ export function ChatPane({
               onOpenMember={onOpenChat}
             />
           ) : null}
-          <div
-            className={`selectable-text chat-pane-content${isFocus ? " chat-pane-content--focus" : ""}${isPopup ? " chat-pane-content--popup" : ""}`}
-          >
-            <CtrlWheelZoomRoot
-              className={`chat-pane-inner${isEmpty || !hydrated ? " chat-pane-inner--empty" : ""}`}
-              storageKey={`uefn-panel-chat-zoom:${chat.id}`}
-              onZoomChange={handleChatZoomChange}
-            >
-              {!hydrated ? (
-                <DuckyParadeOverlay label="Loading" />
-              ) : loadError && messages.length === 0 ? (
-                <div className="chat-pane-load-error" role="alert">
-                  <p>{loadError}</p>
-                  <button type="button" className="settings-btn general-tab-btn-primary" onClick={() => void reloadMessages()}>
-                    Retry
-                  </button>
-                </div>
-              ) : isEmpty && !(askSession && visible) && !hasCommandCards ? (
-                <ChatPaneEmptyState
-                  hasApiKey={externalAgent || hasApiKey}
-                  selectedModel={selectedModel}
-                  modelManagedByAgent={externalAgent}
-                  modelsLoading={modelsLoading && !externalAgent}
-                  noModelsAvailable={noModelsAvailable}
-                  agentMode={agentMode}
-                  duckyStyle={chat.duckyStyle}
-                  isGroup={Boolean(chat.isGroup)}
-                  allowWindowDrag={isFocus}
-                />
-              ) : (
-                <VirtualChatMessageList
-                  ref={listRef}
-                  rows={rows}
-                  showActivityPanel={showFooterActivity}
-                  activityHeaderOnly={hasInlineTurnContent}
-                  activityStatusText={agentRunning ? streamStatus : ""}
-                  showIdleTurnTimer={showIdleTurnTimer}
-                  isWaitingOnLinked={isWaitingOnLinked}
-                  waitingLinked={waitingLinked}
-                  isAtBottom={isAtBottom}
-                  hasNewBelow={hasNewBelow}
-                  editableRowId={editableRowId}
-                  composerMode={agentMode}
-                  composerModel={selectedModel}
-                  setComposerModel={setSelectedModel}
-                  composerCodingAgent={codingAgent}
-                  setComposerCodingAgent={setCodingAgent}
-                  convId={chat.id}
-                  captureAskKeys={visible}
-                  askSession={askSession && visible ? askSession : null}
-                  onResend={handleResend}
-                  onStop={agentRunning ? handleStop : undefined}
-                  onContinue={!agentRunning && !chat.isGroup ? handleContinue : undefined}
-                  onAtBottomChange={onAtBottomChange}
-                  onJumpToLatest={handleJumpToLatest}
-                  onOpenChat={onOpenChat}
-                  onStopLinked={handleStopLinked}
-                  onOpenFile={handleOpenFile}
-                  allChats={allChats}
-                  linkedAgents={linkedAgents}
-                  duckyStyle={chat.duckyStyle}
-                  activityLines={activityLines}
-                  chatPlan={chatPlan}
-                  translateMessages={translateMessages}
-                  chatPlanProgress={chatPlanProgress}
-                  planAllDone={planAllDone}
-                  onOpenPlan={handleOpenPlanTab}
-                  onStopTrackingPlan={handleStopTrackingPlan}
-                />
-              )}
-            </CtrlWheelZoomRoot>
-          </div>
+          <ChatRows
+            chatId={chat.id}
+            isFocus={isFocus}
+            isPopup={isPopup}
+            hydrated={hydrated}
+            loadError={loadError}
+            messageCount={messages.length}
+            onRetry={() => void reloadMessages()}
+            isEmpty={isEmpty}
+            showEmptyState={isEmpty && !(askSession && visible) && !hasCommandCards}
+            emptyState={{
+              hasApiKey: externalAgent || hasApiKey,
+              selectedModel,
+              modelManagedByAgent: externalAgent,
+              modelsLoading: modelsLoading && !externalAgent,
+              noModelsAvailable,
+              agentMode,
+              duckyStyle: chat.duckyStyle,
+              isGroup: Boolean(chat.isGroup),
+              allowWindowDrag: isFocus,
+            }}
+            onZoomChange={handleChatZoomChange}
+            listRef={listRef}
+            list={{
+              rows,
+              showActivityPanel: showFooterActivity,
+              activityHeaderOnly: hasInlineTurnContent,
+              activityStatusText: agentRunning ? streamStatus : "",
+              showIdleTurnTimer,
+              isWaitingOnLinked,
+              waitingLinked,
+              isAtBottom,
+              hasNewBelow,
+              editableRowId,
+              composerMode: agentMode,
+              composerModel: selectedModel,
+              setComposerModel: setSelectedModel,
+              composerCodingAgent: codingAgent,
+              setComposerCodingAgent: setCodingAgent,
+              convId: chat.id,
+              captureAskKeys: visible,
+              askSession: askSession && visible ? askSession : null,
+              onResend: handleResend,
+              onStop: agentRunning ? handleStop : undefined,
+              onContinue: !agentRunning && !chat.isGroup ? handleContinue : undefined,
+              onAtBottomChange,
+              onJumpToLatest: handleJumpToLatest,
+              onOpenChat,
+              onStopLinked: handleStopLinked,
+              onOpenFile: handleOpenFile,
+              allChats,
+              linkedAgents,
+              duckyStyle: chat.duckyStyle,
+              activityLines,
+              chatPlan,
+              translateMessages,
+              chatPlanProgress,
+              planAllDone,
+              onOpenPlan: handleOpenPlanTab,
+              onStopTrackingPlan: handleStopTrackingPlan,
+            }}
+          />
           <div className="chat-pane-input-area">
         <PromptQueueBar
           items={promptQueue}
@@ -1667,347 +1082,83 @@ export function ChatPane({
           }}
         />
         <ChatWorkflowRunCard chatId={chat.id} />
-        {chatPlan != null && !planAllDone ? (
-          <div className="chat-pane-plan-dock">
-            <ChatPlanPopup
-              plan={chatPlan}
-              progress={chatPlanProgress}
-              onOpenPlan={handleOpenPlanTab}
-              onStopTracking={handleStopTrackingPlan}
-              onOpenFile={handleOpenFile}
-            />
-          </div>
-        ) : null}
-        <div className="chat-pane-composer-host">
-          {slashMenuOpen ? (
-            <SlashCommandMenu
-              commands={pickerCommands}
-              refs={refMatches}
-              activeIndex={slashActiveIndex}
-              onHover={setSlashActiveIndex}
-              onSelect={completeSlashCommand}
-              onSelectRef={insertChatReference}
-            />
-          ) : null}
-        <div
-          ref={inputBoxMergedRef}
-          className={`no-drag chat-pane-input-box${isFocused ? " chat-pane-input-box--focused" : ""}${isDragOver ? " chat-pane-input-box--drag-over" : ""}${liveVoice ? " chat-pane-input-box--voice" : ""}${changesOpen && !chat.isGroup ? " chat-pane-input-box--ledger" : ""}`}
-        >
-          {!chat.isGroup ? (
-            <ChatChangesSlide
-              open={changesOpen}
-              convId={chat.id}
-              allChats={allChats}
-              onOpenFile={handleOpenFile}
-              onOpenChat={onOpenChat}
-              host={paneHost}
-              onClose={() => setChangesOpen(false)}
-            />
-          ) : null}
-          <div className={`voice-panel-wrapper${liveVoice ? " is-open" : ""}`}>
-            <div className="voice-panel-inner">
-              {liveVoice && liveVoiceHandlers ? (
-                <VoiceOverlay
-                  chatId={chat.id}
-                  open
-                  inline
-                  showPickers
-                  onClose={liveVoiceHandlers.onClose}
-                  onBack={liveVoiceHandlers.onBack}
-                  onForward={liveVoiceHandlers.onForward}
-                  onNewest={liveVoiceHandlers.onNewest}
-                  onStopSpeaking={liveVoiceHandlers.onStopSpeaking}
-                  onRetry={liveVoiceHandlers.onRetry}
-                  autoSend={liveVoiceHandlers.autoSend}
-                  setAutoSend={liveVoiceHandlers.setAutoSend}
-                  hasPrev={liveVoiceHandlers.hasPrev}
-                  hasNext={liveVoiceHandlers.hasNext}
-                  hasNewer={liveVoiceHandlers.hasNewer}
-                  voiceId={liveVoiceHandlers.voiceId}
-                  speed={liveVoiceHandlers.speed}
-                  setVoiceId={liveVoiceHandlers.setVoiceId}
-                  setSpeed={liveVoiceHandlers.setSpeed}
-                  processTalk={liveVoiceHandlers.processTalk}
-                  setProcessTalk={liveVoiceHandlers.setProcessTalk}
-                  muted={liveVoiceHandlers.muted}
-                  setMuted={liveVoiceHandlers.setMuted}
-                  chatModel={selectedModel}
-                  setChatModel={setSelectedModel}
-                  codingAgent={codingAgent}
-                  setCodingAgent={setCodingAgent}
-                  showChatModel={!chat.isGroup}
-                />
-              ) : null}
-            </div>
-          </div>
-
-          <div className="chat-pane-composer-pane chat-pane-composer-pane--type">
-            {showDefaultModelCta || pickModelFirst || notConnected ? (
-              <ModelSetupNotice
-                state={
-                  showDefaultModelCta
-                    ? { kind: "no_ai", gateways: pluginContrib.llm_providers }
-                    : pickModelFirst
-                      ? { kind: "pick", held: heldForModel, why: noModelText }
-                      : { kind: "not_connected", ...notConnected! }
-                }
-                onPickModel={() => setModelPickerSignal((n) => n + 1)}
-              />
-            ) : (
-              (visionBlocked || attachmentError) && (
-                <div className={`composer-attach-warning${visionBlocked ? " is-vision-blocked" : ""}`}>
-                  {visionBlocked
-                    ? `${displayModelLabel} cannot use images — switch to a vision model or remove images.`
-                    : attachmentError}
-                </div>
-              )
-            )}
-            {slashStatus ? <div className="slash-command-status">{slashStatus}</div> : null}
-            {waitingOnAgents.length ? (
-              <div className="slash-command-status" role="status">
-                Waiting on {waitingOnAgents.length === 1 ? "agent" : `${waitingOnAgents.length} agents`}:{" "}
-                {waitingOnAgents.join(", ")}
-              </div>
-            ) : null}
-            <ComposerAttachmentChips
-              attachments={attachments}
-              readInParts={readInParts}
-              onRemove={removeAttachment}
-              onPreview={(att) => setPreviewAttachmentId(att.id)}
-              onRetry={retryVideo}
-            />
-            <AttachmentPreviewModal
-              open={previewAttachment !== null}
-              attachment={previewAttachment}
-              onClose={() => setPreviewAttachmentId(null)}
-              onSaveDrawing={(dataUrl) => {
-                if (previewAttachmentId) updateAttachmentImage(previewAttachmentId, dataUrl);
-              }}
-            />
-            <ChatInputResizeHandle
-              onDrag={onInputResize}
-              onDragStart={onInputResizeStart}
-              onDragEnd={onInputResizeEnd}
-              onTap={onInputResizeTap}
-            />
-            <ComposerDraft
-              inputRef={textareaMergedRef}
-              value={inputText}
-              caret={caret}
-              onChange={(value, nextCaret) => {
-                setInputText(value);
-                setCaret(nextCaret);
-              }}
-              onCaret={setCaret}
-              onFocus={() => setIsFocused(true)}
-              onBlur={() => setIsFocused(false)}
-              onKeyDown={(e) => {
-                if (handleComposerHistoryKey(e)) return;
-                if (slashMenuOpen) {
-                  const count = pickerCount;
-                  if (e.key === "ArrowDown") {
-                    e.preventDefault();
-                    setSlashActiveIndex((i) => (i + 1) % count);
-                    return;
-                  }
-                  if (e.key === "ArrowUp") {
-                    e.preventDefault();
-                    setSlashActiveIndex((i) => (i - 1 + count) % count);
-                    return;
-                  }
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    setSlashDismissed(true);
-                    return;
-                  }
-                  if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
-                    e.preventDefault();
-                    if (slashActiveIndex < pickerCommands.length) {
-                      const picked = pickerCommands[slashActiveIndex];
-                      if (picked) completeSlashCommand(picked);
-                    } else {
-                      const picked = refMatches[slashActiveIndex - pickerCommands.length];
-                      if (picked) insertChatReference(picked);
-                    }
-                    return;
-                  }
-                }
-                if (e.key === "Tab") {
-                  e.preventDefault();
-                  return;
-                }
-                if (e.key === "Enter" && !e.shiftKey) {
-                  if (enterInsertsNewline()) return;
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              placeholder={composerPlaceholder({
-                liveVoiceMuted: Boolean(liveVoice && liveVoiceHandlers?.muted),
-                isGroup: Boolean(chat.isGroup),
-                groupEmpty: groupMembers.length === 0,
-                agentRunning,
-                noModelsAvailable,
-                modelLabel: displayModelLabel,
-                mentionsEnabled: mentionsOn,
-              })}
-              className="chat-pane-textarea"
-              style={
-                textareaHeight != null
-                  ? {
-                      height: textareaHeight,
-                      minHeight: minTextareaHeight.current,
-                      maxHeight: Number.isFinite(maxTextareaHeightRef.current)
-                        ? maxTextareaHeightRef.current
-                        : undefined,
-                    }
-                  : undefined
-              }
-            />
-          </div>
-
-          <div className="chat-pane-input-toolbar" onContextMenu={(e) => composerMenu.open(e, null)}>
-            <div className="chat-pane-input-toolbar-left">
-              {/* One button for the chat's mode (Ask / Plan / Agent) and its permissions. */}
-              {!chat.isGroup && composerBtnShown("permissions") ? (
-                <ChatPermissionsButton
-                  convId={chat.id}
-                  codingAgent={codingAgent}
-                  agentMode={agentMode}
-                  setAgentMode={setAgentMode}
-                />
-              ) : null}
-              {!chat.isGroup && composerBtnShown("context") ? (
-                <ContextMeter
-                  usedTokens={contextUsage.used_tokens}
-                  contextLimit={contextUsage.context_limit}
-                  inputTokens={contextUsage.input_tokens}
-                  outputTokens={contextUsage.output_tokens}
-                  usage={contextUsage}
-                  sessionFiles={sessionFiles}
-                  convId={chat.id}
-                  omitted={contextUsage.omitted}
-                  agentMode={agentMode}
-                  model={selectedModel}
-                  agentRunning={agentRunning}
-                  panelOpen={contextPanelOpen}
-                  onTogglePanel={handleToggleContextPanel}
-                  onClosePanel={() => setContextPanelOpen(false)}
-                  onOpenFile={handleOpenFile}
-                  onContextChanged={handleContextChanged}
-                  onClearDraft={() => {
-                    setInputText("");
-                    clearAttachments();
-                  }}
-                />
-              ) : null}
-              {!chat.isGroup && composerBtnShown("model") ? (
-                <>
-                  <div className="chat-pane-model-effort">
-                    <ModelSelector
-                      selectedModel={selectedModel}
-                      setSelectedModel={setSelectedModel}
-                      codingAgent={codingAgent}
-                      setCodingAgent={setCodingAgent}
-                      convId={chat.id}
-                      preserveSelection
-                      openSignal={modelPickerSignal}
-                      onModelMetaChange={handleModelMetaChange}
-                      uiTarget="chat.composer.model"
-                      thinkingEffort={thinkingEffort}
-                      onEffortChange={setThinkingEffort}
-                    />
-                  </div>
-                </>
-              ) : null}
-              {!chat.isGroup && composerBtnShown("changes") ? (
-                <ChatChangesButton open={changesOpen} onClick={() => setChangesOpen((v) => !v)} />
-              ) : null}
-            </div>
-
-            <div className="chat-pane-input-toolbar-right">
-              {composerBtnShown("snip") ? (
-                <SnipButton
-                  chatId={chat.id}
-                  disabled={modelsUnavailable}
-                  onCaptured={(file, meta) =>
-                    void addFiles([file], {
-                      imagesOnly: true,
-                      projectPath: meta?.projectPath,
-                    })
-                  }
-                />
-              ) : null}
-              {composerBtnShown("attach") ? (
-                <AttachMenuButton
-                  disabled={modelsUnavailable}
-                  onAddFiles={(files) => void addFiles(files)}
-                />
-              ) : null}
-              {composerBtnShown("voice") ? (
-              <VoiceControls
-                chatId={chat.id}
-                disabled={
-                  modelsUnavailable ||
-                  (Boolean(chat.isGroup) && groupMembers.length === 0)
-                }
-                inputText={inputText}
-                setInputText={setInputText}
-                onSend={(text) => handleSend(text)}
-                onDictationEnd={(text) => {
-                  setCaret(text.length);
-                  requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
-                }}
-                streamText={streamBuffer}
-                agentRunning={agentRunning}
-                duckyVoice={chat.ttsVoice}
-                duckySpeed={chat.ttsSpeed}
-                isGroup={Boolean(chat.isGroup)}
-                onLiveChange={handleLiveVoiceChange}
-              />
-              ) : null}
-              <span ref={sendTargetRef} className="chat-pane-send-target">
-                {agentRunning ? (
-                  hasContent ? (
-                    <button
-                      type="button"
-                      onClick={() => handleSend()}
-                      disabled={!canQueue}
-                      title={sendBtnTitle}
-                      className={sendBtnClass}
-                    >
-                      <Icons.Send />
-                    </button>
-                  ) : null
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => handleSend()}
-                    disabled={!showDefaultModelCta && !pickModelFirst && !canSend}
-                    title={sendBtnTitle}
-                    className={sendBtnClass}
-                  >
-                    {showDefaultModelCta ? <Icons.Settings /> : <Icons.Send />}
-                  </button>
-                )}
-              </span>
-              {agentRunning ? (
-                <button type="button" onClick={handleStop} className="chat-pane-stop-btn">
-                  <div className="chat-pane-stop-btn-icon" />
-                </button>
-              ) : null}
-            </div>
-          </div>
-          {composerMenu.menu ? (
-            <ContextMenu
-              x={composerMenu.menu.x}
-              y={composerMenu.menu.y}
-              items={composerMenuItems}
-              onClose={composerMenu.close}
-            />
-          ) : null}
-        </div>
-        </div>
+        <ChatPlanCard
+          plan={chatPlan}
+          progress={chatPlanProgress}
+          allDone={planAllDone}
+          onOpenPlan={handleOpenPlanTab}
+          onStopTracking={handleStopTrackingPlan}
+          onOpenFile={handleOpenFile}
+        />
+        <ChatComposer
+          chat={chat}
+          allChats={allChats}
+          visible={visible}
+          isPopup={isPopup}
+          paneHost={paneHost}
+          textareaRef={textareaRef}
+          inputText={inputText}
+          setInputText={setInputText}
+          caret={caret}
+          setCaret={setCaret}
+          onHistoryKey={handleComposerHistoryKey}
+          isDragOver={isDragOver}
+          changesOpen={changesOpen}
+          onToggleChanges={() => setChangesOpen((v) => !v)}
+          onCloseChanges={() => setChangesOpen(false)}
+          liveVoice={liveVoice}
+          liveVoiceHandlers={liveVoiceHandlers}
+          onLiveVoiceChange={handleLiveVoiceChange}
+          agentMode={agentMode}
+          setAgentMode={setAgentMode}
+          selectedModel={selectedModel}
+          setSelectedModel={setSelectedModel}
+          codingAgent={codingAgent}
+          setCodingAgent={setCodingAgent}
+          thinkingEffort={thinkingEffort}
+          setThinkingEffort={setThinkingEffort}
+          modelPickerSignal={modelPickerSignal}
+          onPickModel={openModelPicker}
+          onModelMetaChange={handleModelMetaChange}
+          showDefaultModelCta={showDefaultModelCta}
+          pickModelFirst={pickModelFirst}
+          notConnected={notConnected}
+          llmProviders={pluginContrib.llm_providers}
+          heldForModel={heldForModel}
+          noModelText={noModelText}
+          visionBlocked={visionBlocked}
+          attachmentError={attachmentError}
+          displayModelLabel={displayModelLabel}
+          slashStatus={slashStatus}
+          availableCommands={availableCommands}
+          runSlashCommand={runSlashCommand}
+          waitingOnAgents={waitingOnAgents}
+          attachments={attachments}
+          readInParts={readInParts}
+          removeAttachment={removeAttachment}
+          retryVideo={retryVideo}
+          updateAttachmentImage={updateAttachmentImage}
+          addFiles={addFiles}
+          clearAttachments={clearAttachments}
+          contextUsage={contextUsage}
+          sessionFiles={sessionFiles}
+          contextPanelOpen={contextPanelOpen}
+          onToggleContextPanel={handleToggleContextPanel}
+          onCloseContextPanel={() => setContextPanelOpen(false)}
+          onContextChanged={handleContextChanged}
+          onOpenFile={handleOpenFile}
+          onOpenChat={onOpenChat}
+          groupMemberCount={groupMembers.length}
+          agentRunning={agentRunning}
+          noModelsAvailable={noModelsAvailable}
+          modelsUnavailable={modelsUnavailable}
+          streamBuffer={streamBuffer}
+          hasContent={hasContent}
+          canQueue={canQueue}
+          canSend={canSend}
+          onSend={(text) => handleSend(text)}
+          onStop={handleStop}
+        />
           </div>
         </div>
         <div className="chat-column-gutter chat-column-gutter--right">
