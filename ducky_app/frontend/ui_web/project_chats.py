@@ -892,7 +892,8 @@ def _keep_newer_settings(conv: Conversation, stored: dict[str, Any] | None) -> N
 
 # Where a chat sits and what it's called. A running turn holds a copy loaded before a
 # move into a group, a drag between folders or a rename; saving it must not undo them.
-_PLACEMENT = ("title", "folder_id", "sort_order", "parent_conv_id", "leader_conv_id")
+# Mute rides along: muting a running member must survive its turn's save.
+_PLACEMENT = ("title", "folder_id", "sort_order", "parent_conv_id", "leader_conv_id", "muted")
 _HELD_ATTR = "_placement_held"
 
 

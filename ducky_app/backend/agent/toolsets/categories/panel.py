@@ -12,6 +12,8 @@ _DELEGATION_TOOLS = frozenset(
         "ducky_read_chat",
         "ducky_group_create",
         "ducky_group_invite",
+        "ducky_set_muted",
+        "ducky_group_stop",
         "ducky_group_members",
         "ducky_group_set_leader",
         "ducky_group_add_member",

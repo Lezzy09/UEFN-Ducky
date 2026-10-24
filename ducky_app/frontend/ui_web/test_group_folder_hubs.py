@@ -447,6 +447,14 @@ def test_mute_is_stored_on_chats_and_groups_and_never_stops_an_agent(monkeypatch
     assert load_conversation(member.id, project_root=root).muted is False
     assert api.set_muted("missing", True)["ok"] is False
 
+    # A running turn holds a copy loaded before the mute; saving it keeps the mute.
+    stale = load_conversation(member.id, project_root=root)
+    assert stale.muted is False
+    api.set_muted(member.id, True)
+    stale.title = "Modeler (turn done)"
+    save_conversation(stale, root)
+    assert load_conversation(member.id, project_root=root).muted is True
+
 
 def test_stopping_a_group_stops_its_nested_groups_too(monkeypatch, tmp_path):
     import frontend.ui_web.panel_api as pa

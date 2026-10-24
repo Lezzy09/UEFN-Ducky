@@ -55,3 +55,9 @@ def test_group_tools_pass_model_mute_and_stop_to_the_panel(monkeypatch):
     assert api.calls[1] == ("group_add_member", ("g1", "c1"), {"as_leader": True, "move_folder": True})
     assert api.calls[2] == ("set_muted", ("g1", True), {})
     assert api.calls[3] == ("group_stop", ("g1",), {})
+
+
+def test_mute_and_group_stop_are_in_the_panel_toolset():
+    from backend.agent.toolsets.categories import panel
+
+    assert {"ducky_set_muted", "ducky_group_stop"} <= panel._DELEGATION_TOOLS
