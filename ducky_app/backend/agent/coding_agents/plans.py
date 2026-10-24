@@ -11,30 +11,20 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from backend.agent.coding_agents import plan_hooks
+# Moved out of this file; re-exported so every `plans.<name>` import keeps working.
+from backend.agent.coding_agents.plan_hooks import _push_assignment_invalidated, _section_audience  # noqa: F401
+from backend.agent.coding_agents.plan_review import (  # noqa: F401
+    _BIG_STEP_RE,
+    _REVIEW_MAX,
+    _TITLE_MAX,
+    PLAN_PROTOCOL,
+    plan_review,
+    with_plan_review,
+)
+from backend.agent.coding_agents.plan_ticks import attach_next_tick, format_plan_tick_nudge, next_tick_dict  # noqa: F401
 from frontend.atomic_json import write_json_atomic
 from frontend.settings import PanelSettings, default_app_data_dir
-
-# Single copy of the Diagnose→Fix→Verify protocol (prompt / MCP / BYOA / modes).
-PLAN_PROTOCOL = (
-    "Followable `nodes`: Diagnose → Fix → Verify. Size each leaf as ONE outcome one agent "
-    "finishes in about 15–30 minutes; a step covering several features or checks (all, every, "
-    "end to end) becomes one step per feature or check, so progress shows and a blocker names "
-    "itself. Each leaf: `content` = a short title in plain words (under 80 characters); "
-    "`body_markdown` = its description: what to do, Done when (name the check tool) and one "
-    "concrete example of the result. Give each section a one-line description too. "
-    "`ducky_plan_update_node` `in_progress` BEFORE the work, in the same turn ahead of the "
-    "work's calls (a turn's calls run in order), never a turn of its own; "
-    "`completed` when Done-when is met. Mutators are blocked until a leaf is "
-    "in_progress. If the approach changes, update the tree before more mutators — "
-    "never thrash off-plan. Team plans: ONE main plan, the lead's, with one sub plan per agent "
-    "(a section whose `assignee` is that agent) holding that agent's points; members never make "
-    "plans of their own. The agent ticks its points; ticking the last one checks its sub plan off "
-    "in the main plan and tells the lead, so nobody sends reports. A sub plan's description says "
-    "Files (what it may change), Done when (the change and its tests, never evidence files, "
-    "read-backs or live checks only the person can do) and Not yours (what to leave to others); `after` = ids "
-    "of steps or sub plans that must finish first. Templates: `ducky_create_plan_template` / "
-    "`ducky_instantiate_plan_template`. Plan mode: create/update then stop."
-)
 
 _NODE_STATUSES = frozenset({"pending", "in_progress", "completed", "cancelled"})
 _DONE = frozenset({"completed", "cancelled"})
@@ -719,9 +709,7 @@ def save_plan(plan: dict[str, Any], project_root: str | None = None) -> dict[str
     plan["updated_at"] = time.time()
     _rollup_completed_parents(plan.get("nodes"))
     _roll_plan_status(plan)
-    from backend.agent.coding_agents.team_plan_events import completion_reports, deliver_reports
-
-    reports = completion_reports(previous, plan)
+    reports = plan_hooks.completion_reports(previous, plan)
     previous_nodes = {n["id"]: n for n in _flatten_nodes(previous.get("nodes"))}
     started = any(n.get("status") == "in_progress" and
                   previous_nodes.get(n["id"], {}).get("status") != "in_progress"
@@ -734,9 +722,7 @@ def save_plan(plan: dict[str, Any], project_root: str | None = None) -> dict[str
         write_json_atomic(_plan_path(chat_id, project_root), plan)
     # Who to tell reads the project's chat list: off the call path, so a tick returns at once.
     _after_save(_push_assignment_invalidated, previous, plan, project_root)
-    from backend.agent.a2a_client import acknowledge_saved_plan
-    acknowledge_saved_plan(previous, plan, project_root)
-    deliver_reports(plan, reports)
+    plan_hooks.after_save(previous, plan, reports, project_root)
     return plan
 
 
@@ -978,6 +964,8 @@ def update_node(
     if status is not None:
         if status == "in_progress" and node.get("status") != "in_progress" and not by_user:
             _refuse_if_waiting(doc, node)
+        if status == "completed" and node.get("status") != "completed" and doc.get("kind") != "template":
+            plan_hooks.before_complete(doc, node, chat_id)
         node["status"] = _apply_status_gate(node, status, chat_id, by_user=by_user,
                                             owners=_owners_of(roots, node_id), project_root=project_root)
     doc["nodes"] = roots
@@ -1178,42 +1166,6 @@ def next_open_leaf(plan: dict[str, Any] | None) -> tuple[str, dict[str, Any]] | 
     return pending
 
 
-def next_tick_dict(plan: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Exact ducky_plan_update_node call the agent should make next."""
-    leaf = next_open_leaf(plan)
-    if not leaf:
-        return None
-    lab, node = leaf
-    nid = str(node.get("id") or "")
-    status = str(node.get("status") or "pending")
-    content = str(node.get("content") or "").strip().replace("\n", " ")[:160]
-    if status == "in_progress":
-        action = "completed"
-        call = f'ducky_plan_update_node(node_id="{nid}", status="completed")'
-    else:
-        action = "in_progress"
-        call = f'ducky_plan_update_node(node_id="{nid}", status="in_progress")'
-    return {
-        "n": lab,
-        "id": nid,
-        "status": status,
-        "content": content,
-        "action": action,
-        "call": call,
-    }
-
-
-def format_plan_tick_nudge(plan: dict[str, Any] | None) -> str:
-    tick = next_tick_dict(plan)
-    if not tick:
-        return ""
-    return (
-        f"[PLAN TICK] CHECK OFF NOW: {tick['n']} `{tick['id']}` [{tick['status']}] "
-        f"— {tick['content']}. Call {tick['call']} this turn. "
-        "Re-check the plan every step; never leave done work pending."
-    )
-
-
 def active_plan_chat_id() -> str:
     try:
         from frontend.ui_web.agent_modes import get_active_conv_id
@@ -1277,80 +1229,6 @@ def format_plan_tick_nudge_for_tool(tool_name: str) -> str:
     except Exception:
         pass
     return format_plan_tick_nudge(load_active_plan())
-
-
-_TITLE_MAX = 100
-_BIG_STEP_RE = re.compile(r"\b(all|every|everything|end[ -]to[ -]end|whole)\b", re.IGNORECASE)
-_REVIEW_MAX = 8
-
-
-def plan_review(plan: dict[str, Any] | None) -> list[dict[str, str]]:
-    """Open steps a person can't follow: too big to show progress, or with no description.
-
-    A team kept one step ("check all original feature paths end to end") open for two hours
-    while fifteen checks inside it passed one by one; the plan read 15/19 the whole time.
-    """
-    issues: list[dict[str, str]] = []
-    flat = _flatten_nodes((plan or {}).get("nodes"))
-    known = {str(n.get("id")) for n in flat}
-    # A team plan (any step has an owner): an open step nobody owns is work nobody does.
-    team = any(n.get("assignee") for n in flat)
-    owned_sections = {str(c.get("id")) for n in flat if n.get("assignee")
-                      for c in _flatten_nodes(n.get("children") or [])}
-    # An agent with several loose steps at the top: they belong in one sub plan assigned to it,
-    # so the agent works through its points and the lead hears once, when the sub plan is done.
-    loose: dict[str, int] = {}
-    for node in (plan or {}).get("nodes") or []:
-        if node.get("assignee") and not node.get("children") and node.get("status") not in _DONE:
-            loose[str(node["assignee"])] = loose.get(str(node["assignee"]), 0) + 1
-    for owner, count in loose.items():
-        if count > 1:
-            issues.append({"n": "-", "issue": f"{count} top-level steps are assigned to {owner}: put them in one "
-                                              "sub plan assigned to that agent (its points inside)."})
-    for label, node in outline_numbers((plan or {}).get("nodes")):
-        if node.get("status") in _DONE:
-            continue
-        unknown = [sid for sid in node.get("after") or [] if sid not in known]
-        if unknown:
-            issues.append({"n": label, "issue": f"Waits for steps that don't exist ({', '.join(unknown)}): use ids from the outline."})
-        if team and not node.get("children") and not node.get("assignee") and str(node.get("id")) not in owned_sections:
-            issues.append({"n": label, "issue": "No owner: set its assignee to the member who does it."})
-        content = str(node.get("content") or "").strip()
-        described = bool(str(node.get("body_markdown") or "").strip())
-        if node.get("children"):
-            if not described:
-                issues.append({"n": label, "issue": "Section has no description: add one line saying what it delivers."})
-            continue
-        if _BIG_STEP_RE.search(content):
-            issues.append({"n": label, "issue": "Too big for one step: split it into one step per feature or check."})
-        elif len(content) > _TITLE_MAX:
-            issues.append({"n": label, "issue": "Title too long: keep it short and move the details into its description."})
-        if not described:
-            issues.append({"n": label, "issue": "No description: say what to do, Done when, and one example of the result."})
-        if len(issues) >= _REVIEW_MAX:
-            break
-    return issues
-
-
-def with_plan_review(payload: dict[str, Any], plan: dict[str, Any] | None) -> dict[str, Any]:
-    """Add ``plan_review`` to a tool result that wrote steps, when any step needs fixing."""
-    issues = plan_review(plan)
-    if not issues:
-        return payload
-    return {**payload, "plan_review": issues,
-            "plan_review_hint": "Fix these with ducky_update_plan or ducky_plan_update_node before starting the work."}
-
-
-def attach_next_tick(payload: dict[str, Any], plan: dict[str, Any] | None) -> dict[str, Any]:
-    """Add next_tick + tick_now onto a plan-tool JSON payload."""
-    out = dict(payload)
-    if plan and plan.get("assigned_from"):
-        return out  # Read-only views must not suggest implicit own-chat writes.
-    tick = next_tick_dict(plan)
-    if tick:
-        out["next_tick"] = tick
-        out["tick_now"] = format_plan_tick_nudge(plan)
-    return out
 
 
 def _waiting_note(node: dict[str, Any]) -> str:
@@ -2161,61 +2039,6 @@ def _after_save(fn, *args) -> None:
 def drain_after_save(timeout: float = 10.0) -> None:
     """Wait for the side work queued so far (tests, and callers that need it done)."""
     _AFTER_SAVE.submit(lambda: None).result(timeout)
-
-
-def _section_audience(owners: set[str], project_root: str | None) -> set[str]:
-    """Every chat that owns a part of the plan: the owners, chats filed under an owning group
-    at any depth, and an owning group's roster and leader (a lead seated with as_leader stays
-    filed in the outer group). Reads chat metadata only: walking parents with load_conversation
-    loaded every chat's whole history on each tick (4-15 s per tick on Oct 24 2026)."""
-    from frontend.ui_web.group_orchestrator import group_members
-    from frontend.ui_web.project_chats import list_all_conversation_metadata
-
-    convs = {str(getattr(c, "id", "")): c for c in list_all_conversation_metadata(project_root)}
-    out = set(owners)
-    for cid in convs:
-        cur, seen = cid, set()
-        while cur and cur not in seen and cur in convs:
-            if cur in owners:
-                out.add(cid)
-                break
-            seen.add(cur)
-            cur = str(getattr(convs[cur], "parent_conv_id", "") or "").strip()
-    for gid in owners.intersection(convs):
-        group = convs[gid]
-        if getattr(group, "is_group", False):
-            out.add(str(getattr(group, "leader_conv_id", "") or ""))
-            out.update(m["member_conv_id"] for m in group_members(group))
-    out.discard("")
-    return out
-
-
-def _push_assignment_invalidated(before: dict[str, Any], after: dict[str, Any],
-                                 project_root: str | None) -> None:
-    """Tell every chat that owns a part of this plan to re-read its section of the ONE plan,
-    without sending the lead's plan body: ``plan_assignment_changed`` when owners changed, else
-    ``plan_updated`` (a tick), so each member's plan bar moves with the lead's."""
-    def owners(doc: dict[str, Any]) -> dict[str, str]:
-        return {str(n["id"]): str(n["assignee"]) for n in _flatten_nodes(doc.get("nodes")) if n.get("assignee")}
-
-    was, now = owners(before), owners(after)
-    if not was and not now:
-        return
-    try:
-        from frontend.ui_web.agent_modes import _resolve_push
-
-        changed = was != now
-        recipients = _section_audience(set(was.values()) | set(now.values()) if changed else set(now.values()),
-                                       project_root)
-        push = _resolve_push(None)
-        for cid in sorted(recipients - {str(after.get("chat_id") or "")}):
-            if changed:
-                push({"type": "plan_assignment_changed", "conv_id": cid})
-            else:
-                push({"type": "plan_updated", "conv_id": cid, "plan_id": str(after.get("id") or "")})
-    except Exception:
-        # Saving the authoritative document must not depend on a UI connection.
-        pass
 
 
 def push_plan_updated(plan: dict[str, Any]) -> None:

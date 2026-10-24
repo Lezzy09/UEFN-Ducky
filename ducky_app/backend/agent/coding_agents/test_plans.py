@@ -15,8 +15,21 @@ from backend.agent.coding_agents import plans
 def test_plans_read_chat_metadata_only() -> None:
     # A plan read loaded every owner's whole chat to see that it exists or find its parent:
     # on a 22 MB chat each get_plan cost a full decode (Oct 24 2026).
-    source = Path(plans.__file__).read_text(encoding="utf-8")
-    assert "load_conversation(" not in source
+    for name in ("plans.py", "plan_ticks.py", "plan_review.py", "plan_hooks.py"):
+        source = (Path(plans.__file__).parent / name).read_text(encoding="utf-8")
+        assert "load_conversation(" not in source, name
+
+
+def test_moved_names_are_re_exported() -> None:
+    from backend.agent.coding_agents import plan_hooks, plan_review, plan_ticks
+
+    for module, names in (
+        (plan_ticks, ("attach_next_tick", "next_tick_dict", "format_plan_tick_nudge")),
+        (plan_review, ("PLAN_PROTOCOL", "plan_review", "with_plan_review", "_BIG_STEP_RE", "_REVIEW_MAX")),
+        (plan_hooks, ("_push_assignment_invalidated", "_section_audience")),
+    ):
+        for name in names:
+            assert getattr(plans, name) is getattr(module, name), name
 
 
 class PlansStoreTests(unittest.TestCase):
