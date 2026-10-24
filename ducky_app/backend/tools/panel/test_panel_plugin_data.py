@@ -67,7 +67,7 @@ def test_team_status_says_who_does_what_what_is_locked_waiting_and_in_conflict(t
         True, TEAM, "ok", "shared", "auto")
     assert out["people"] == [{"name": "Ben", "device": "Ben's PC", "doing": ["ducky Builder editing Zed"]}]
     (lock,) = out["locks"]
-    assert (lock["unit"], lock["name"], lock["holder"]) == ("doc:card.zed", "Zed", "Ben")
+    assert (lock["unit"], lock["name"], lock["holder"]) == ("doc:card.zed", "Zed", "AI (Ben's ducky Builder)")
     assert 290 <= lock["leaseLeft"] <= 300
     assert (out["head"], out["pending"], out["incoming"]) == (2, 1, 1)
     assert out["conflicts"] == [{"kind": "doc", "key": "card.pip", "reason": "changed", "by": "Ben"}]

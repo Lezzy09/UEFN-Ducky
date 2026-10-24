@@ -320,7 +320,7 @@ def test_the_drawer_reads_people_locks_changes_conflicts_mode_and_head(team) -> 
     assert people["Ana"]["me"] and not people["Ben"]["me"] and people["Ben"]["device"] == "Ben's PC"
     assert people["Ben"]["plugins"][TEAM] == {"viewing": True, "editing": editing, "live": ""}  # not live
     assert [(lk["unit"], lk["name"], lk["holder"], lk["mine"]) for lk in out["locks"]] == [
-        ("doc:card.zed", "Zed", "Ben", False)]
+        ("doc:card.zed", "Zed", "AI (Ben's ducky Builder)", False)]  # Ben's ducky edits Zed
     assert out["locks"][0]["leaseLeft"] > 200
     assert [(c["kind"], c["key"], c["reason"], c["by"], c["theirsSeq"]) for c in out["conflicts"]] == [
         ("doc", "card.pip", "changed", "Ben", 2)]
