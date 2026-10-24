@@ -105,6 +105,21 @@ def test_person_send_while_idle_starts_a_turn(admissions, monkeypatch):
     assert "c" not in am._pending_agent_messages
 
 
+def test_a_second_stop_kills_at_once(admissions, monkeypatch):
+    from backend.agent.coding_agents import proc_exec
+    from backend.agent import a2a_broker
+
+    monkeypatch.setattr(a2a_broker, "on_agent_cancelled_by_user", lambda cid: None)
+    killed = []
+    monkeypatch.setattr(proc_exec, "terminate_conv_process", lambda cid: killed.append(cid) or True)
+    session = am.AgentSession("c")
+    am._sessions["c"] = session
+    am._cancel_here("c")  # first Stop: the turn is asked to stop
+    assert session._cancel.is_set() and killed == []
+    am._cancel_here("c")  # the person insists
+    assert killed == ["c"]
+
+
 def test_reserved_turn_is_listed_before_session_exists(admissions):
     am._reserve_admission("c")
     assert am.list_running_agents() == ["c"]

@@ -837,10 +837,16 @@ def _cancel_here(conv_id: str | None = None, *, by_user: bool = True) -> None:
             _admissions[cid] = cancelling
             session = _sessions.get(cid)
             runner = None
+            insist = False
             if session is not None:
+                insist = by_user and session._cancel.is_set()
                 session._cancel.set()
                 runner = session._runner
         try:
+            if insist:  # a second Stop while the agent is asked to stop: kill now
+                from backend.agent.coding_agents import proc_exec
+
+                proc_exec.terminate_conv_process(cid)
             if runner is not None:
                 try:
                     runner.cancel()

@@ -35,6 +35,21 @@ PushFn = Callable[[dict[str, Any]], None]
 _HISTORY_PREFIX_MAX_CHARS = 6000
 
 
+def _register_stop(adapter: Any, conv_id: str, run_id: str, push: PushFn) -> None:
+    """Stop asks the adapter first (``request_stop(conv_id)``, plugin-owned) and kills after
+    proc_exec.STOP_GRACE_S; adapters without it keep the immediate kill."""
+    request_stop = getattr(adapter, "request_stop", None)
+    if not callable(request_stop):
+        return
+    from backend.agent.coding_agents import proc_exec
+
+    def ask() -> object:
+        push({"type": "status", "text": "Stopping…", "conv_id": conv_id, "run_id": run_id})
+        return request_stop(conv_id)
+
+    proc_exec.set_stop_requester(conv_id, ask)
+
+
 def permission_note(conv_id: str) -> str:
     """A line before this turn's message when the person turned on Allow everything for the
     chat: a team lead that didn't know kept asking them to approve commands already allowed."""
@@ -969,6 +984,8 @@ def _run_coding_agent_message(
         ckpt.seed()
         from backend.agent.coding_agents.readiness import launch_with_ready_tools
 
+        _register_stop(adapter, conv.id, rid, push)
+
         result = launch_with_ready_tools(adapter,
             prompt=prompt_text,
             system_prompt=system_prompt,
@@ -1018,6 +1035,9 @@ def _run_coding_agent_message(
         ckpt.flush(error="Interrupted", force=True)
         raise
     finally:
+        from backend.agent.coding_agents import proc_exec
+
+        proc_exec.set_stop_requester(conv.id, None)
         ckpt.close()
         steer.end_run(conv.id)
         file_changes.close("done" if "result" in locals() and getattr(result, "ok", False) else "error")

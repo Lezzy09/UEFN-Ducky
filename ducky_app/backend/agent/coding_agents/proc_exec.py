@@ -18,6 +18,10 @@ from typing import Callable
 _procs: dict[str, subprocess.Popen] = {}
 _procs_lock = threading.Lock()
 _writers: dict[str, "StdinWriter"] = {}
+# conv id -> the adapter's polite stop (request_stop). Stop asks it first, kills after STOP_GRACE_S.
+_stop_requesters: dict[str, Callable[[], object]] = {}
+
+STOP_GRACE_S = 15.0
 
 _STDERR_TAIL_CHARS = 8000
 _STDOUT_TAIL_CHARS = 4000
@@ -147,8 +151,39 @@ def unregister_process(conv_id: str, proc: subprocess.Popen) -> None:
             _procs.pop(conv_id, None)
 
 
+def set_stop_requester(conv_id: str, request_stop: Callable[[], object] | None) -> None:
+    """Register (or with None clear) the adapter's ``request_stop`` for this chat's turn."""
+    with _procs_lock:
+        if request_stop is None:
+            _stop_requesters.pop(conv_id, None)
+        else:
+            _stop_requesters[conv_id] = request_stop
+
+
+def _stop(conv_id: str, proc: subprocess.Popen) -> None:
+    """Cancel: ask the adapter to stop, give the turn ``STOP_GRACE_S`` to end, then tree-kill.
+
+    A tree kill at once could cut a git commit or a file write in half. Adapters without
+    ``request_stop`` (or whose request fails / returns False) are killed at once, as before.
+    A second Stop (``terminate_conv_process``) kills during the wait.
+    """
+    with _procs_lock:
+        ask = _stop_requesters.get(conv_id)
+    asked = False
+    if ask is not None:
+        try:
+            asked = ask() is not False
+        except Exception:
+            asked = False
+    if asked:
+        deadline = time.monotonic() + STOP_GRACE_S
+        while proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.1)
+    _terminate_process_tree(proc)
+
+
 def terminate_conv_process(conv_id: str) -> bool:
-    """Kill the running coding-agent process for a chat (cancel path)."""
+    """Kill the running coding-agent process for a chat now (a second Stop)."""
     with _procs_lock:
         proc = _procs.get(conv_id)
     if proc is None or proc.poll() is not None:
@@ -335,7 +370,7 @@ def run_streaming_process(
         while proc.poll() is None:
             if cancel is not None and cancel.is_set():
                 result.cancelled = True
-                _terminate_process_tree(proc)
+                _stop(conv_id, proc)
                 break
             if deadline is not None and time.time() > deadline:
                 result.timed_out = True
