@@ -1252,7 +1252,8 @@ export function ChatPane({
     [runSlashCommand],
   );
 
-  const handleSend = (overrideText?: string) => {
+  // keepDraft: a message sent from elsewhere (a swarm card button) leaves the composer as it is.
+  const handleSend = (overrideText?: string, { keepDraft = false }: { keepDraft?: boolean } = {}) => {
     const text = (overrideText ?? inputText).trim();
 
     // A recognised command acts on the panel — it never reaches the ducky, so
@@ -1305,19 +1306,19 @@ export function ChatPane({
       if (agentRunning && item.text && !item.attachments.length) {
         void getApi()?.steer_message?.(chat.id, item.id, item.text);
       }
-      setInputText("");
+      if (!keepDraft) setInputText("");
       if (!overrideText) clearAttachments();
       return;
     }
 
     if (!overrideText && !canSend) return;
-    setInputText("");
+    if (!keepDraft) setInputText("");
     if (!overrideText) clearAttachments();
     dispatchSend(text, apiAttachments, agentMode, selectedModel, codingAgent);
   };
 
   // Swarm card buttons (Build / Change / detail) in this pane send here.
-  useSwarmCardSend(paneHost, handleSend);
+  useSwarmCardSend(paneHost, (text) => handleSend(text, { keepDraft: true }));
 
   // Another model, or a new turn running, answers "isn't connected".
   useEffect(() => setNotConnected(null), [selectedModel]);
