@@ -87,7 +87,9 @@ def test_edit_create_delete_in_a_folder_project(repo: Path) -> None:
 
 
 def test_quick_open_index_is_root_relative(repo: Path) -> None:
-    paths = {row["path"] for row in pf.list_project_file_paths()}
+    reply = pf.list_project_file_paths()
+    assert reply["truncated"] is False and reply["total"] == len(reply["paths"])
+    paths = set(reply["paths"])
     assert {"src/app.py", "Content/notes.md", ".gitignore", "level.umap"} <= paths
     assert not any(p.startswith(("node_modules/", ".git/")) for p in paths)
 

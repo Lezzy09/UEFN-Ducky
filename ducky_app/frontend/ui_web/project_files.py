@@ -784,8 +784,37 @@ def _include_in_workspace_tree_entry(name: str, is_dir: bool, show_hidden: bool 
     return not _should_skip(name, is_dir, show_hidden)
 
 
-def list_project_file_paths() -> list[dict[str, str]]:
-    """Flat list of project + workspace .verse files for sidebar filter / quick-open."""
+_FILE_PATHS_REPLY_MAX = 2000
+
+
+def list_project_file_paths(limit: int = _FILE_PATHS_REPLY_MAX) -> dict[str, object]:
+    """Quick-open / mention index: the first *limit* paths only, so the reply stays small.
+
+    Deeper files are found with :func:`search_project_file_paths`.
+    """
+    rows = _project_file_rows()
+    cap = max(0, min(int(limit), _FILE_PATHS_REPLY_MAX))
+    return {"paths": [row["path"] for row in rows[:cap]], "total": len(rows), "truncated": len(rows) > cap}
+
+
+def search_project_file_paths(query: str, limit: int = 50) -> dict[str, object]:
+    """Paths whose text contains every word of *query* (case-insensitive), file-name hits first."""
+    words = (query or "").lower().split()
+    cap = max(1, min(int(limit), _FILE_PATHS_REPLY_MAX))
+    if not words:
+        return {"paths": [], "truncated": False}
+    by_name: list[str] = []
+    by_path: list[str] = []
+    for row in _project_file_rows():
+        path = row["path"].lower()
+        if all(w in path for w in words):
+            (by_name if words[-1] in row["name"].lower() else by_path).append(row["path"])
+    hits = by_name + by_path
+    return {"paths": hits[:cap], "truncated": len(hits) > cap}
+
+
+def _project_file_rows() -> list[dict[str, str]]:
+    """Flat list of project + workspace .verse files (cached per Content mtime)."""
     global _file_paths_cache
     try:
         root = _project_root().resolve()

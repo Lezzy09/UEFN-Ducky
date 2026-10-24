@@ -585,8 +585,6 @@ class PanelApiStoreMixin:
         from frontend.settings import default_app_data_dir
         from backend.skills.store import (
             appdata_skill_packs_dir,
-            build_skill_prompt,
-            default_selection_from_settings,
             list_skill_packs,
             seed_skill_packs,
         )
@@ -597,12 +595,12 @@ class PanelApiStoreMixin:
             seed_skill_packs()
             # Catalog only — full markdown loads via get_skill_pack_files when a pack opens.
             packs = list_skill_packs(include_text=False)
-            sel = default_selection_from_settings(settings)
-            combined_text = build_skill_prompt(sel)
         except Exception as exc:
             packs = []
-            combined_text = ""
             error = str(exc)
+        # ponytail: the *_text / catalog keys stay (empty) for old readers; the combined
+        # prompt was ~690 KB per call and nothing on screen read it.
+        combined_text = ""
         try:
             from backend.mcp_plugins.store import seed_mcp_plugins
 
@@ -629,7 +627,7 @@ class PanelApiStoreMixin:
             "files": [],
             "packs": packs,
             "primary_filename": "uefn",
-            "catalog": packs,
+            "catalog": [],
             "default_disabled_packs": list(settings.default_disabled_packs or []) if not error else [],
             "default_enabled_packs": (
                 [str(p.get("id")) for p in packs if p.get("id")]

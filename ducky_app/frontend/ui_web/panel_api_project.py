@@ -74,7 +74,12 @@ class PanelApiProjectMixin:
     def list_workspace_roots(self) -> list[dict[str, object]]:
         return _pa.list_workspace_roots()
 
-    def list_project_file_paths(self) -> list[dict[str, str]]:
+    def list_project_file_paths(self, query: str = "", limit: int = 50) -> dict[str, object]:
+        """``{paths, total, truncated}`` capped at 2,000; with *query*, ``search_project_file_paths``."""
+        if (query or "").strip():
+            from frontend.ui_web.project_files import search_project_file_paths
+
+            return search_project_file_paths(query, limit)
         return _pa.list_project_file_paths()
 
     def search_workspace(

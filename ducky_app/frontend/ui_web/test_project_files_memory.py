@@ -64,7 +64,39 @@ def test_file_list_replaces_obsolete_directory_versions(tmp_path, monkeypatch):
         (content / f"file{index}.verse").write_text("", encoding="utf-8")
         stamp = 1_700_000_000 + index
         os.utime(content, (stamp, stamp))
-        rows = pf.list_project_file_paths()
+        rows = pf._project_file_rows()
         assert len(rows) == index + 1
-        assert pf.list_project_file_paths() is rows
+        assert pf._project_file_rows() is rows
     assert len(pf._file_paths_cache) == 1
+
+
+def test_file_list_reply_is_capped_and_search_finds_deep_files(tmp_path, monkeypatch):
+    import json
+
+    content = tmp_path / "Content"
+    content.mkdir()
+    for d in range(200):
+        folder = content / f"Area{d:03d}"
+        folder.mkdir()
+        for f in range(100):
+            (folder / f"prop_{f:03d}.verse").touch()
+    deep = content / "Area199" / "a" / "b" / "c"
+    deep.mkdir(parents=True)
+    (deep / "hidden_boss.verse").touch()
+    monkeypatch.setattr(pf, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(pf, "_content_dir", lambda: content)
+    monkeypatch.setattr(pf, "_workspace_folders", lambda: [])
+    monkeypatch.setattr(pf, "_show_hidden_project_files", lambda: False)
+    monkeypatch.setattr(pf, "_file_paths_cache", {})
+
+    reply = pf.list_project_file_paths()
+    assert reply["total"] == 20_001
+    assert reply["truncated"] is True
+    assert len(reply["paths"]) == 2000
+    assert len(json.dumps(reply)) < 100_000
+
+    found = pf.search_project_file_paths("hidden boss")
+    assert found == {"paths": ["Content/Area199/a/b/c/hidden_boss.verse"], "truncated": False}
+    many = pf.search_project_file_paths("prop_00", limit=50)
+    assert len(many["paths"]) == 50 and many["truncated"] is True
+    assert pf.search_project_file_paths("  ") == {"paths": [], "truncated": False}
