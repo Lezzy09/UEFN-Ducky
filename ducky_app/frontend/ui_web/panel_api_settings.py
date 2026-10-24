@@ -36,6 +36,7 @@ class PanelApiSettingsMixin:
             "duckyos_base_url": s.duckyos_base_url or "",
             "remote_access": bool(getattr(s, "remote_access", False)),
             "usage_stats": bool(getattr(s, "usage_stats", True)),
+            "write_lanes_mode": str(getattr(s, "write_lanes_mode", "") or ""),
             "voice_enabled": bool(s.voice_enabled),
             "voice_spoken_style": s.voice_spoken_style or "summary",
             "voice_summary_model": s.voice_summary_model or "",
