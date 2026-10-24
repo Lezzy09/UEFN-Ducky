@@ -4322,6 +4322,10 @@
 .team-avatar .sidebar-leader-badge { position: absolute; right: -4px; bottom: -4px; }
 .team-roster-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .team-roster-row--group .team-roster-name { font-weight: 600; }
+.team-roster-row--muted .team-roster-name { color: var(--muted); }
+.team-roster-row--muted .team-roster-open { cursor: default; }
+.team-roster-muted-badge { flex: none; color: var(--amber); font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; }
+.team-roster-icon--mute { width: auto; padding: 0 6px; font-size: 11px; }
 .team-roster-status { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
 .team-roster-status::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .team-roster-status--idle::before { opacity: 0.5; }

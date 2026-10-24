@@ -5,6 +5,7 @@ import type {
   FolderItem,
   GroupMemberDto,
   GroupMemberObservation,
+  PanelApi,
   PlanNode,
 } from "../../types/panel";
 import { modelFromFavorites } from "../ducky/duckyProfileForm";
@@ -30,6 +31,8 @@ export type RosterNode = {
   contextTokens: number;
   isGroup: boolean;
   isLeader: boolean;
+  /** Collapsed to one progress row; a muted group hides its rows. */
+  muted: boolean;
   color?: string;
   /** Short "when to use" from the ducky's profile. */
   blurb: string;
@@ -95,6 +98,7 @@ export function buildRoster(input: RosterInput): RosterNode[] {
       contextTokens: Math.max(0, Number(chat?.contextTokens) || 0),
       isGroup,
       isLeader: !isGroup && Boolean(leaderId) && m.member_conv_id === leaderId,
+      muted: Boolean(chat?.muted),
       color: m.color,
       blurb: isGroup ? "" : (profile?.when_to_use || profile?.ducky_personality || chat?.duckyPersonality || "").trim(),
       depth,
@@ -127,6 +131,7 @@ export function buildRoster(input: RosterInput): RosterNode[] {
         contextTokens: row.contextTokens,
         isGroup: row.isGroup,
         isLeader: false,
+        muted: Boolean(chatById.get(row.id)?.muted),
         blurb: "",
         depth,
         children: [],
@@ -319,6 +324,62 @@ export function rollupProgress(
     pct: Math.round((done / leaves.size) * 100),
     current: open.length === 1 ? open[0].current : open.length ? `${open.length} parts open` : "",
   };
+}
+
+type ProgressApi = Partial<Pick<PanelApi, "group_members" | "get_plan">>;
+
+/**
+ * A sidebar row's progress read from the bridge: a chat's own sub plan (from its group's roster),
+ * or a group's rollup over every agent in it and its nested groups.
+ */
+export async function loadRowProgress(
+  api: ProgressApi | null | undefined,
+  row: { id: string; name: string; isGroup: boolean; parentHubId?: string },
+): Promise<SubPlanProgress | null> {
+  if (!api?.group_members || !api.get_plan) return null;
+  const membersOf = async (id: string) => {
+    const res = await api.group_members!(id).catch(() => null);
+    return res?.ok ? res.members || [] : [];
+  };
+  const rosters: Record<string, GroupMemberDto[]> = {};
+  let members: GroupMemberDto[] = [];
+  if (row.isGroup) {
+    members = await membersOf(row.id);
+    const queue = members.filter((m) => m.is_group).map((m) => m.member_conv_id);
+    for (let i = 0; i < queue.length && i < 50; i++) {
+      const id = queue[i];
+      if (rosters[id]) continue;
+      rosters[id] = await membersOf(id);
+      queue.push(...rosters[id].filter((m) => m.is_group).map((m) => m.member_conv_id));
+    }
+  } else if (row.parentHubId) {
+    members = (await membersOf(row.parentHubId)).filter((m) => m.member_conv_id === row.id);
+  }
+  const owners = new Set(
+    [members, ...Object.values(rosters)].flat().map((m) => m.observation?.assignment?.chat_id || "").filter(Boolean),
+  );
+  const plans: Record<string, ChatPlan | null> = {};
+  for (const id of owners) {
+    const res = await api.get_plan(id).catch(() => null);
+    plans[id] = res?.ok ? (res as { plan?: ChatPlan | null }).plan ?? null : null;
+  }
+  const nodes = buildRoster({
+    groupId: row.isGroup ? row.id : row.parentHubId || "",
+    members,
+    leaderConvId: "",
+    rosters,
+    folders: [],
+    allChats: [],
+    profileById: new Map(),
+    labelFor: () => "",
+  });
+  if (!row.isGroup) return nodes[0] ? rollupProgress(nodes[0], plans) : null;
+  // ponytail: the group's own sub plan lives in its parent's roster; the team bar counts it, the sidebar row doesn't.
+  return rollupProgress(
+    { key: row.id, hubId: "", member: null, id: row.id, name: row.name, model: "", codingAgent: "", contextTokens: 0,
+      isGroup: true, isLeader: false, muted: true, blurb: "", depth: 0, children: nodes },
+    plans,
+  );
 }
 
 /** Nested group ids anywhere in the tree (to fetch their rosters). */

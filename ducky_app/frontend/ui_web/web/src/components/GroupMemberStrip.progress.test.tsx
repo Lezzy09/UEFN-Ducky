@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatPlan, GroupMemberDto } from "../types/panel";
-const api = vi.hoisted(() => ({ group_members: vi.fn(), get_plan: vi.fn(), get_settings: vi.fn() }));
+const api = vi.hoisted(() => ({ group_members: vi.fn(), get_plan: vi.fn(), get_settings: vi.fn(), set_muted: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
 vi.mock("../hooks/useAgentEventBus", () => ({ subscribeAgentEvents: () => () => undefined }));
 import {
@@ -126,6 +126,46 @@ describe("team bar progress", () => {
     expect(screen.getByText("Verse lead")).toBeTruthy();
     expect(screen.getByText("1/3")).toBeTruthy();
     expect(screen.getByText("Prune the walk")).toBeTruthy();
+  });
+
+  it("muting a nested group folds it to one row with its rollup; unmute brings its rows back", async () => {
+    const group: GroupMemberDto = { ...member("Verse", "sp-tools"), member_conv_id: "verse-group", is_group: true };
+    const lead: GroupMemberDto = {
+      ...member("Verse lead", "sp-search"),
+      observation: { ...member("Verse lead", "sp-search").observation!, group_id: "verse-group" },
+    };
+    api.group_members.mockImplementation(async (id: string) =>
+      ({ ok: true, members: id === "verse-group" ? [lead] : [group] }));
+    api.get_plan.mockResolvedValue({ ok: true, plan: plan(), progress: {} });
+    api.set_muted.mockImplementation(async (id: string, muted: boolean) => ({ ok: true, id, muted }));
+    render(<GroupMemberStrip groupId="group" members={[group]} onMembersChange={() => {}} onOpenMember={() => {}} />);
+    openTeam();
+    await screen.findByText("Verse lead");
+    fireEvent.click(screen.getByRole("button", { name: "Mute Verse" }));
+    await waitFor(() => expect(screen.queryByText("Verse lead")).toBeNull());
+    expect(api.set_muted).toHaveBeenCalledWith("verse-group", true);
+    expect(screen.getByText("MUTED")).toBeTruthy();
+    expect(screen.getByText("50%")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /agents$/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Unmute Verse" }));
+    await screen.findByText("Verse lead");
+    expect(api.set_muted).toHaveBeenLastCalledWith("verse-group", false);
+    expect(screen.queryByText("MUTED")).toBeNull();
+  });
+
+  it("a muted agent row is name and progress only, from the chat's muted flag", async () => {
+    const rows = [member("Searcher", "sp-search")];
+    api.group_members.mockResolvedValue({ ok: true, members: rows });
+    api.get_plan.mockResolvedValue({ ok: true, plan: plan(), progress: {} });
+    render(<GroupMemberStrip groupId="group" members={rows} allChats={[{ id: "searcher", name: "Searcher", muted: true }]}
+      onMembersChange={() => {}} onOpenMember={() => {}} />);
+    openTeam();
+    await screen.findByText("1/3");
+    expect(screen.getByText("MUTED")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open Searcher" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Details for Searcher" })).toBeNull();
+    expect(screen.queryByTitle("Change Searcher's model")).toBeNull();
+    expect(screen.getByRole("button", { name: "Unmute Searcher" })).toBeTruthy();
   });
 
   it("shows no progress for an assignment into a different plan", async () => {

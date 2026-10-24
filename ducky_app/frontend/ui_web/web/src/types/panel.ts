@@ -225,6 +225,8 @@ export interface ChatTab {
   projectSlug?: string;
   /** Home project name for the archive list. */
   projectName?: string;
+  /** Collapsed to a progress row in the sidebar and the team bar; the agent keeps working. */
+  muted?: boolean;
 }
 
 export type EditorTabKind =
@@ -909,6 +911,8 @@ export interface FolderItem {
   children: FolderItem[];
   /** When set, clicking the folder opens this group hub chat. */
   groupHubId?: string;
+  /** The group hub is muted: the folder is one progress row that never expands. */
+  muted?: boolean;
   /** Home project slug for synthetic all-projects wraps and their children. */
   projectSlug?: string;
 }
@@ -3601,6 +3605,10 @@ export interface PanelApi {
   group_check_lane?(group_id: string, member_conv_id: string, write_allowed: string[] | null): Promise<LaneCheckResult>;
   group_remove?(group_id: string, member_conv_id: string): Promise<{ ok?: boolean; group_members?: GroupMemberDto[]; leader_conv_id?: string; error?: string }>;
   group_members?(group_id: string): Promise<{ ok?: boolean; is_group?: boolean; leader_conv_id?: string; members?: GroupMemberDto[]; error?: string }>;
+  /** Mute or unmute a chat or a group hub; only the flag, the agent keeps running. */
+  set_muted?(conv_id: string, muted: boolean): Promise<{ ok?: boolean; id?: string; muted?: boolean; is_group?: boolean; error?: string }>;
+  /** Stop every running member of this group and its nested groups. */
+  group_stop?(group_id: string): Promise<{ ok?: boolean; stopped?: number; groups?: number; stopped_ids?: string[]; error?: string }>;
   group_add_member?(
     group_id: string,
     conv_id: string,

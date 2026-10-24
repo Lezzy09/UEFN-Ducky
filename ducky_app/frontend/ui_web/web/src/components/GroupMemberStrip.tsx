@@ -633,6 +633,19 @@ export function GroupMemberStrip({
     return rosters[node.hubId]?.find((row) => row.member_conv_id === node.id);
   };
 
+  // Mute flags set here win over the sidebar's until its next reload brings them in.
+  const [mutedNow, setMutedNow] = useState<Record<string, boolean>>({});
+  const isMuted = (node: RosterNode): boolean => mutedNow[node.id] ?? node.muted;
+  const toggleMute = async (node: RosterNode) => {
+    const next = !isMuted(node);
+    const res = await getApi()?.set_muted?.(node.id, next).catch(() => null);
+    if (!res?.ok) {
+      setError(res?.error || `Could not ${next ? "mute" : "unmute"} ${node.name}`);
+      return;
+    }
+    setMutedNow((prev) => ({ ...prev, [node.id]: Boolean(res.muted ?? next) }));
+  };
+
   /** A row's rolled-up progress, from the plans its rows' observed assignments name. */
   const progressOf = (node: RosterNode): SubPlanProgress | null =>
     rollupProgress(node, plans, (row) => observed(row)?.observation);
@@ -749,18 +762,37 @@ export function GroupMemberStrip({
     const conflictCount = node.isGroup ? 0 : conflicts[node.id] ?? 0;
     const lane = node.member?.write_allowed;
     const laneKind = lane == null ? "none" : lane.length === 0 ? "readonly" : "set";
-    const editable = Boolean(node.member) && !node.isGroup;
+    const muted = isMuted(node);
+    // A muted row is name + progress only: no open, no editors, a muted group hides its rows.
+    const editable = Boolean(node.member) && !node.isGroup && !muted;
     const foldedNow = node.isGroup && isFolded(node.key);
     const progress = progressOf(node);
+    const face = (
+      <>
+        <span className="team-avatar" style={{ ["--member-color" as string]: node.color || "transparent" }}>
+          {node.isGroup ? (
+            <span className="team-avatar-group" aria-hidden><Icons.Users /></span>
+          ) : (
+            <DuckyAvatar styleId={node.styleId} size={DUCKY_AVATAR_SIZES.compact} title={node.name} />
+          )}
+          {node.isLeader ? (
+            <span className="sidebar-leader-badge" title="Group leader" aria-label="Group leader"><Icons.Star /></span>
+          ) : null}
+        </span>
+        <span className="team-roster-name" title={node.hover || undefined}>{node.name}</span>
+        {muted ? <span className="team-roster-muted-badge">MUTED</span> : null}
+        {waiting ? <WaitingMarker convId={node.id} variant="chip" interactive={false} /> : null}
+      </>
+    );
     return (
       <Fragment key={node.key}>
         <div
-          className={`team-roster-row${node.isGroup ? " team-roster-row--group" : ""}`}
+          className={`team-roster-row${node.isGroup ? " team-roster-row--group" : ""}${muted ? " team-roster-row--muted" : ""}`}
           style={{ ["--depth" as string]: node.depth }}
           role="row"
         >
           <span className="team-roster-cell team-roster-cell--name" role="cell">
-            {node.isGroup ? (
+            {node.isGroup && !muted ? (
               <button
                 type="button"
                 className="team-roster-fold"
@@ -773,26 +805,19 @@ export function GroupMemberStrip({
             ) : (
               <span className="team-roster-fold team-roster-fold--leaf" aria-hidden />
             )}
-            <button
-              type="button"
-              className="team-roster-open"
-              disabled={busy}
-              onClick={() => openNode(node)}
-              title={node.isGroup ? `Open group ${node.name}` : `Open ${node.name}'s work`}
-            >
-              <span className="team-avatar" style={{ ["--member-color" as string]: node.color || "transparent" }}>
-                {node.isGroup ? (
-                  <span className="team-avatar-group" aria-hidden><Icons.Users /></span>
-                ) : (
-                  <DuckyAvatar styleId={node.styleId} size={DUCKY_AVATAR_SIZES.compact} title={node.name} />
-                )}
-                {node.isLeader ? (
-                  <span className="sidebar-leader-badge" title="Group leader" aria-label="Group leader"><Icons.Star /></span>
-                ) : null}
-              </span>
-              <span className="team-roster-name" title={node.hover || undefined}>{node.name}</span>
-              {waiting ? <WaitingMarker convId={node.id} variant="chip" interactive={false} /> : null}
-            </button>
+            {muted ? (
+              <span className="team-roster-open">{face}</span>
+            ) : (
+              <button
+                type="button"
+                className="team-roster-open"
+                disabled={busy}
+                onClick={() => openNode(node)}
+                title={node.isGroup ? `Open group ${node.name}` : `Open ${node.name}'s work`}
+              >
+                {face}
+              </button>
+            )}
           </span>
           <span className={`team-roster-cell team-roster-status team-roster-status--${status.cls}`} role="cell">
             {status.label}
@@ -833,7 +858,7 @@ export function GroupMemberStrip({
                 <span className="team-roster-pick-text">{aiTypeLabel(node.model, node.codingAgent)}</span>
                 <Icons.ChevronDown />
               </button>
-            ) : !node.isGroup ? (
+            ) : !node.isGroup && !muted ? (
               <span className="team-roster-muted">
                 <BillingBadge kind={billingKind(node.codingAgent, node.provider)} />
                 {aiTypeLabel(node.model, node.codingAgent)}
@@ -869,7 +894,20 @@ export function GroupMemberStrip({
             ) : null}
           </span>
           <span className="team-roster-cell team-roster-actions" role="cell">
-            {!node.isGroup ? (
+            {node.member ? (
+              <button
+                type="button"
+                className="team-roster-icon team-roster-icon--mute"
+                aria-label={`${muted ? "Unmute" : "Mute"} ${node.name}`}
+                aria-pressed={muted}
+                title={muted ? "Unmute: show this row in full again" : "Mute: collapse to a progress row (it keeps working)"}
+                disabled={busy}
+                onClick={() => void toggleMute(node)}
+              >
+                {muted ? "Unmute" : "Mute"}
+              </button>
+            ) : null}
+            {!node.isGroup && !muted ? (
               <button
                 type="button"
                 className="team-roster-icon"
@@ -881,7 +919,7 @@ export function GroupMemberStrip({
                 i
               </button>
             ) : null}
-            {node.member ? (
+            {node.member && !muted ? (
               <button
                 type="button"
                 className="team-roster-icon team-roster-icon--remove"
@@ -896,7 +934,7 @@ export function GroupMemberStrip({
           </span>
         </div>
         {renderEditor(node)}
-        {node.isGroup && !foldedNow ? node.children.map(renderRow) : null}
+        {node.isGroup && !foldedNow && !muted ? node.children.map(renderRow) : null}
       </Fragment>
     );
   };
@@ -962,7 +1000,8 @@ export function GroupMemberStrip({
                 type="button"
                 className={`team-bar-avatar team-bar-avatar--${state}`}
                 title={`${a.name} · ${aiTypeLabel(a.model, a.codingAgent)} · ${fmtCompactTokens(a.contextTokens)}${state === "idle" ? "" : ` · ${state}`}${progress ? `\n${progressText(progress)}` : ""}`}
-                aria-label={`Open ${a.name}`}
+                aria-label={isMuted(a) ? `${a.name}, muted` : `Open ${a.name}`}
+                disabled={isMuted(a)}
                 onClick={() => openNode(a)}
               >
                 <DuckyAvatar styleId={a.styleId} size={DUCKY_AVATAR_SIZES.compact} />

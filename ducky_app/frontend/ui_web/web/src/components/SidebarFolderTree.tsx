@@ -3,6 +3,8 @@ import { DuckyAvatar, DUCKY_AVATAR_SIZES } from "./ducky/DuckyAvatars";
 import { Icons } from "../icons/Icons";
 import type { FolderItem } from "../types/panel";
 import { getApi } from "../hooks/usePanelApi";
+import { subscribeAgentEvents } from "../hooks/useAgentEventBus";
+import { loadRowProgress, type SubPlanProgress } from "./team/teamRoster";
 import type { EditorTabHoverCardPlacement } from "../hooks/useEditorTabHoverCard";
 import {
   pluginContributesSettingsTab,
@@ -79,6 +81,39 @@ import {
   toggleSelection,
   type ExplorerSelection,
 } from "../utils/fileTreeSelection";
+
+/** A muted row's progress, read when it is muted and again on every plan change. */
+function useMutedProgress(
+  row: { id: string; name: string; isGroup: boolean; parentHubId?: string } | null,
+): SubPlanProgress | null {
+  const [progress, setProgress] = useState<SubPlanProgress | null>(null);
+  const [tick, setTick] = useState(0);
+  const key = row ? `${row.id}|${row.isGroup}|${row.parentHubId ?? ""}` : "";
+  const rowRef = useRef(row);
+  rowRef.current = row;
+  useEffect(() => {
+    if (!key) return undefined;
+    return subscribeAgentEvents((event) => {
+      if (event.type === "plan_updated" || event.type === "plan_assignment_changed") setTick((t) => t + 1);
+    });
+  }, [key]);
+  useEffect(() => {
+    const current = rowRef.current;
+    if (!key || !current) {
+      setProgress(null);
+      return undefined;
+    }
+    let live = true;
+    void loadRowProgress(getApi(), current).then((p) => { if (live) setProgress(p); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [key, tick]);
+  return progress;
+}
+
+/** Mute or unmute a chat or group hub; the sidebar reloads from the change notice. */
+function setMuted(convId: string, muted: boolean) {
+  void getApi()?.set_muted?.(convId, muted)?.catch(() => undefined);
+}
 
 const ChatTreeHoverPlacementContext = createContext<EditorTabHoverCardPlacement>("right");
 const DuckiesCompactContext = createContext(false);
@@ -214,6 +249,12 @@ const ChatRow = memo(function ChatRow({
   const live = useIsLiveChat(chat.id);
   // A question or command card waiting here: a marker instead of the spinner.
   const waiting = useChatWaiting(chat.id);
+  // Muted: a small progress row that doesn't open the chat (its agent keeps working).
+  const muted = Boolean(chat.muted) && !archived;
+  const progress = useMutedProgress(
+    muted ? { id: chat.id, name: chat.name, isGroup: false, parentHubId: chat.parentConvId } : null,
+  );
+  const mutedMeta = progress ? `${progress.done}/${progress.total} · ${progress.current || "Done"}` : "Muted";
 
   return (
     <ChatTabHoverCard
@@ -262,7 +303,9 @@ const ChatRow = memo(function ChatRow({
         }
         label={chat.name}
         meta={
-          compact
+          muted
+            ? mutedMeta
+            : compact
             ? undefined
             : chat.isLeader
               ? `Leader · ${chatMetaLine(chat, agentLabels) || "Group"}`
@@ -307,6 +350,9 @@ const ChatRow = memo(function ChatRow({
                   ? []
                   : [{ id: "change-duchy", label: "Change ducky", onClick: () => { close(); onEditDucky(); } }]),
                 ...(archived ? [] : [{ id: "focus", label: "Focus", onClick: onFocus }]),
+                ...(archived
+                  ? []
+                  : [{ id: "mute", label: muted ? "Unmute" : "Mute", onClick: () => { close(); setMuted(chat.id, !muted); } }]),
                 ...(!archived && chat.parentConvId && !chat.isLeader
                   ? [
                       {
@@ -339,9 +385,9 @@ const ChatRow = memo(function ChatRow({
             onModSelect({ ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey });
             return;
           }
-          onSelect();
+          if (!muted) onSelect();
         }}
-        onDoubleClick={() => !isEditing && onSelectPersistent?.()}
+        onDoubleClick={() => !isEditing && !muted && onSelectPersistent?.()}
         onContextMenu={(e) => {
           rowSelection.onContextSelect(id);
           open(e, undefined);
@@ -458,6 +504,7 @@ function FolderHeader({
   isFocused = false,
   hasRunningInside,
   waitingChatId = "",
+  muted = false,
   editing,
   setEditing,
   editInputRef,
@@ -479,6 +526,8 @@ function FolderHeader({
   hasRunningInside: boolean;
   /** A chat it stands for (a group's hub, or one hidden inside) waits on the user: open that one. */
   waitingChatId?: string;
+  /** A muted group: one row (name · NN% · MUTED) that opens its hub and never expands. */
+  muted?: boolean;
   editing: EditTarget | null;
   setEditing: React.Dispatch<React.SetStateAction<EditTarget | null>>;
   editInputRef: React.RefObject<HTMLInputElement>;
@@ -499,6 +548,9 @@ function FolderHeader({
   const { menu, open, close } = useContextMenuState<void>();
 
   const hoverPlacement = useContext(ChatTreeHoverPlacementContext);
+  const hubId = (folder.groupHubId || "").trim();
+  const progress = useMutedProgress(muted && hubId ? { id: hubId, name: folder.name, isGroup: true } : null);
+  const label = muted ? [folder.name, progress ? `${progress.pct}%` : "", "MUTED"].filter(Boolean).join(" · ") : folder.name;
 
   const handleChevronToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -510,15 +562,19 @@ function FolderHeader({
       <SidebarTreeRow
         leading={
           <span className="sidebar-folder-leading">
-            <button
-              type="button"
-              className="chevron-icon sidebar-chat-nest-toggle"
-              title={folder.expanded ? "Collapse" : "Expand"}
-              aria-expanded={folder.expanded}
-              onClick={handleChevronToggle}
-            >
-              <Icons.ChevronDown />
-            </button>
+            {muted ? (
+              <span className="sidebar-chat-nest-toggle" aria-hidden />
+            ) : (
+              <button
+                type="button"
+                className="chevron-icon sidebar-chat-nest-toggle"
+                title={folder.expanded ? "Collapse" : "Expand"}
+                aria-expanded={folder.expanded}
+                onClick={handleChevronToggle}
+              >
+                <Icons.ChevronDown />
+              </button>
+            )}
             {waitingChatId ? (
               <WaitingMarker convId={waitingChatId} variant="folder" />
             ) : hasRunningInside ? (
@@ -534,7 +590,7 @@ function FolderHeader({
             )}
           </span>
         }
-        label={folder.name}
+        label={label}
         isEditing={isEditing}
         renameInput={
           <input {...renameInputProps(editing, setEditing, editInputRef, onCommitRename, onCancelRename)} />
@@ -549,6 +605,9 @@ function FolderHeader({
               items={[
                 ...duckyTreeCreateItems(onCreateDucky, onCreateGroup),
                 contextMenuSeparator("folder-sep"),
+                ...(hubId
+                  ? [{ id: "mute", label: muted ? "Unmute" : "Mute", onClick: () => { close(); setMuted(hubId, !muted); } }]
+                  : []),
                 { id: "rename", label: "Rename", onClick: onRename },
                 { id: "delete", label: deleteLabel, danger: true, onClick: onDelete },
               ]}
@@ -649,7 +708,9 @@ const FolderGroup = memo(function FolderGroupImpl({
   childIds: Set<string>;
 }) {
   const filtering = Boolean(filterQuery.trim());
-  const expanded = filtering || folder.expanded;
+  // A muted group is one row that never expands (a search still looks inside it).
+  const muted = Boolean(folder.groupHubId && folder.muted) && !filtering;
+  const expanded = !muted && (filtering || folder.expanded);
   const showAllChildren =
     filtering && visibleFolderIds.has(folder.id) && duckyNameMatches(filterQuery, folder.name);
   const childFolders = showAllChildren
@@ -694,10 +755,11 @@ const FolderGroup = memo(function FolderGroupImpl({
         isFocused={focusId === folderRowId}
         hasRunningInside={hasRunningInside}
         waitingChatId={waitingChatId}
+        muted={muted}
         editing={editing}
         setEditing={setEditing}
         editInputRef={editInputRef}
-        onToggle={() => onToggle(folder.id)}
+        onToggle={() => { if (!muted) onToggle(folder.id); }}
         onSelectFolder={() => onSelectChatFolder(folder.id)}
         onModSelect={(mods) => onModSelectFolder(folder.id, mods)}
         onCommitRename={onCommitRename}
@@ -708,6 +770,7 @@ const FolderGroup = memo(function FolderGroupImpl({
         onCreateGroup={() => onCreateGroupIn(folder.id)}
       />
 
+      {muted ? null : (
       <SidebarTreeChildren>
           {childChats.map((chat) =>
             filtering ? (
@@ -799,6 +862,7 @@ const FolderGroup = memo(function FolderGroupImpl({
             />
           ))}
       </SidebarTreeChildren>
+      )}
     </div>
   );
 });
