@@ -1,4 +1,5 @@
 import type { DuckyOSStoreItemDto, UefnPluginDto } from "../../../types/panel";
+import { compareVersions } from "../../../remote/protocol";
 import {
   categoryLabel,
   groupByAudience,
@@ -118,8 +119,11 @@ export function patchItemFromLocalPlugin(
   // back — the row visibly flip-flopped on each toggle.
   const local = plug.version === "" || plug.version == null ? null : plug.version;
   const installedVersion = local ?? item.installed_version ?? null;
-  // Preserve "update" when the catalog already knows a newer remote build.
-  const nextState = item.state === "update" ? "update" : "installed";
+  // Keep "update" only while the catalog's build is still newer than what's on disk:
+  // after updating to it the row kept offering the same version forever.
+  const remote = item.latest_version || "";
+  const stillNewer = !remote || local == null || compareVersions(String(remote), String(local)) > 0;
+  const nextState = item.state === "update" && stillNewer ? "update" : "installed";
   if (
     item.enabled === enabled &&
     item.state === nextState &&

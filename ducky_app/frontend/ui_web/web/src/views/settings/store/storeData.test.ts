@@ -247,6 +247,15 @@ describe("patchItemFromLocalPlugin", () => {
     expect(next.state).toBe("update");
   });
 
+  it("drops the update state once the installed build is the latest", () => {
+    const next = patchItemFromLocalPlugin(
+      { ...item, installed_version: "1.0.12", latest_version: "1.0.13", state: "update" },
+      { id: "scenegraph", version: "1.0.13", enabled: true },
+    );
+    expect(next.state).toBe("installed");
+    expect(next.installed_version).toBe("1.0.13");
+  });
+
   it("returns the same reference when nothing changed", () => {
     expect(patchItemFromLocalPlugin(item, { id: "scenegraph", version: "1.0.13", enabled: true })).toBe(
       item,
