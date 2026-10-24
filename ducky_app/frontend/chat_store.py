@@ -140,6 +140,9 @@ class Conversation:
     is_group: bool = False
     """True when this conversation is a multi-ducky group chat tab."""
 
+    muted: bool = False
+    """The person muted this chat or group: no alerts from it. Never stops its agent."""
+
     leader_conv_id: str = ""
     """Group hub only: member_conv_id of the designated leader (empty = first leaf)."""
 
@@ -210,6 +213,7 @@ class Conversation:
             "terminal_session_id": (self.terminal_session_id or "").strip(),
             "parent_conv_id": (self.parent_conv_id or "").strip(),
             "is_group": bool(self.is_group),
+            "muted": bool(self.muted),
             "leader_conv_id": (self.leader_conv_id or "").strip(),
             "group_members": list(self.group_members or []),
             "tool_call_count": int(self.tool_call_count or 0),
@@ -302,6 +306,7 @@ class Conversation:
             terminal_session_id=str(d.get("terminal_session_id", "") or ""),
             parent_conv_id=str(d.get("parent_conv_id", "") or ""),
             is_group=bool(d.get("is_group", False)),
+            muted=bool(d.get("muted", False)),
             leader_conv_id=str(d.get("leader_conv_id", "") or "").strip(),
             group_members=(
                 [dict(x) for x in d["group_members"] if isinstance(x, dict)]

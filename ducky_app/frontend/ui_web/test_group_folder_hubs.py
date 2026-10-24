@@ -289,6 +289,7 @@ def test_a_group_made_inside_another_sits_in_it_and_is_deleted_with_it(monkeypat
 
 def test_a_lead_added_to_a_new_group_stays_in_its_old_group(monkeypatch, tmp_path):
     # Oct 22 2026: as_leader moved the lead into the new group's folder, leaving its old group empty.
+    # A chat that leads the group it sits in keeps its place (a plain member would move).
     import frontend.ui_web.panel_api as pa
     from frontend.ui_web.panel_api_chats import PanelApiChatsMixin
 
@@ -301,6 +302,7 @@ def test_a_lead_added_to_a_new_group_stays_in_its_old_group(monkeypatch, tmp_pat
     old = api.group_create("Old Team", "", False)
     new = api.group_create("New Team", "", False)
     lead = create_conversation(settings, old["folder_id"], title="Lead", parent_conv_id=old["id"], project_root=root)
+    api.group_add_member(old["id"], lead.id, as_leader=True)
 
     out = api.group_add_member(new["id"], lead.id, as_leader=True)
 
@@ -373,6 +375,102 @@ def test_an_outer_lead_sets_lanes_in_its_nested_groups_but_a_sibling_lead_cannot
                     ducky_panel._require_lane_authority(inner["id"])
         finally:
             identity.reset(token)
+
+
+def test_a_workstream_lead_is_filed_in_the_group_it_leads_and_the_root_lead_stays(monkeypatch, tmp_path):
+    api, settings, root, outer, _new = _two_teams(monkeypatch, tmp_path)
+    verse = api.group_create("Verse", outer["folder_id"], False)
+    boss = create_conversation(settings, outer["folder_id"], title="Lead", parent_conv_id=outer["id"], project_root=root)
+    vlead = create_conversation(settings, outer["folder_id"], title="Verse lead", parent_conv_id=outer["id"], project_root=root)
+    assert api.group_add_member(outer["id"], boss.id, as_leader=True)["ok"]
+    assert api.group_add_member(outer["id"], vlead.id)["ok"]
+    assert api.group_set_member_lane(outer["id"], vlead.id, ["Content/Verse"], set_by=boss.id)["ok"]
+
+    out = api.group_add_member(verse["id"], vlead.id, as_leader=True)
+
+    assert out["ok"] and out["leader_conv_id"] == vlead.id and out["folder_id"] == verse["folder_id"]
+    fresh = load_conversation(vlead.id, project_root=root)
+    assert fresh.folder_id == verse["folder_id"] and fresh.parent_conv_id == verse["id"]
+    assert _lane(out, vlead.id) == ["Content/Verse/**"]
+    # The root lead joins the nested roster but stays on top of its own group.
+    joined = api.group_add_member(verse["id"], boss.id)
+    assert joined["ok"] and joined["folder_id"] == outer["folder_id"]
+    fresh = load_conversation(boss.id, project_root=root)
+    assert fresh.folder_id == outer["folder_id"] and fresh.parent_conv_id == outer["id"]
+    # move_folder=False keeps the old pointer-only leader.
+    other = api.group_create("Art", outer["folder_id"], False)
+    kept = api.group_add_member(other["id"], vlead.id, as_leader=True, move_folder=False)
+    assert kept["ok"] and kept["folder_id"] == verse["folder_id"]
+
+
+def test_a_seat_gets_the_model_it_was_invited_with(monkeypatch, tmp_path):
+    import frontend.agent_profiles as profiles
+    import frontend.ui_web.panel_api as pa
+    from frontend.favorite_models import FavoriteSelection, ResolveOk
+
+    api, settings, root, team, _new = _two_teams(monkeypatch, tmp_path)
+    monkeypatch.setattr(profiles, "get_agent_profile", lambda pid: {"id": "tester", "name": "Tester"})
+    asked = []
+
+    def resolve(favorites, _settings):
+        asked.append(favorites)
+        backend, model_id = favorites[0].split(":", 1)
+        return ResolveOk(coding_agent=backend, model=model_id, provider="",
+                         selection=FavoriteSelection(backend=backend, model_id=model_id))
+
+    monkeypatch.setattr(pa, "resolve_model_selection", resolve)
+    monkeypatch.setattr("frontend.favorite_models.refuse_paid_api_for_agent", lambda result, _s: result)
+    out = api.group_invite(team["id"], "tester", model="codex:gpt-5-mini", name="Tester", for_agent=True)
+    assert out["ok"], out
+    assert out["member"]["model"] == "codex:gpt-5-mini"
+    chat = load_conversation(out["member"]["member_conv_id"], project_root=root)
+    assert chat.model == "gpt-5-mini"
+    assert asked == [["codex:gpt-5-mini"]]
+
+
+def test_mute_is_stored_on_chats_and_groups_and_never_stops_an_agent(monkeypatch, tmp_path):
+    import frontend.ui_web.panel_api as pa
+    from frontend.ui_web import agent_modes
+
+    api, settings, root, team, _new = _two_teams(monkeypatch, tmp_path)
+    member = create_conversation(settings, team["folder_id"], title="Modeler", parent_conv_id=team["id"], project_root=root)
+    api.group_add_member(team["id"], member.id)
+    monkeypatch.setattr(agent_modes, "is_agent_running", lambda cid: True)
+    monkeypatch.setattr(pa, "cancel_agent", lambda *a: (_ for _ in ()).throw(AssertionError("stopped")))
+
+    for cid in (member.id, team["id"]):
+        assert api.set_muted(cid, True)["muted"] is True
+        fresh = load_conversation(cid, project_root=root)
+        assert fresh.muted is True
+        assert api._conversation_sidebar_row(fresh)["muted"] is True
+    assert api.set_muted(member.id, False)["muted"] is False
+    assert load_conversation(member.id, project_root=root).muted is False
+    assert api.set_muted("missing", True)["ok"] is False
+
+
+def test_stopping_a_group_stops_its_nested_groups_too(monkeypatch, tmp_path):
+    import frontend.ui_web.panel_api as pa
+    from frontend.ui_web import agent_modes
+
+    api, settings, root, outer, _new = _two_teams(monkeypatch, tmp_path)
+    inner = api.group_create("Modeling", outer["folder_id"], False)
+    seats = {}
+    for name, gid, fid in (("A", outer["id"], outer["folder_id"]), ("B", outer["id"], outer["folder_id"]),
+                           ("Idle", outer["id"], outer["folder_id"]), ("C", inner["id"], inner["folder_id"])):
+        seats[name] = create_conversation(settings, fid, title=name, parent_conv_id=gid, project_root=root).id
+        api.group_add_member(gid, seats[name])
+    running = {seats["A"], seats["B"], seats["C"]}
+    stopped = []
+    monkeypatch.setattr(agent_modes, "is_agent_running", lambda cid: cid in running)
+    monkeypatch.setattr(pa, "cancel_agent", lambda cid=None: stopped.append(cid))
+
+    out = api.group_stop(outer["id"])
+
+    assert out["ok"] and out["stopped"] == 3 and out["groups"] == 2
+    assert sorted(stopped) == sorted(running)
+    for cid in seats.values():
+        assert load_conversation(cid, project_root=root) is not None
+    assert api.group_stop(seats["A"])["ok"] is False
 
 
 def test_a_moved_lane_that_overlaps_the_new_team_is_reported_not_forced(monkeypatch, tmp_path):

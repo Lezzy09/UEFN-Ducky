@@ -53,6 +53,22 @@ def test_stored_project_assignment_and_runtime(roster, tmp_path):
         assert "body_markdown" not in str(o)
 
 
+def test_a_leader_filed_in_its_outer_group_is_still_observed(roster):
+    # Oct 24 2026: an as_leader lead stays filed in the outer group, so its row read
+    # runtime 'unknown' and no assignment in the group it leads.
+    api, group, members, root, plan = roster
+    outer = chats.create_conversation(PanelSettings.load(), "", title="Outer", project_root=root)
+    outer.is_group = True
+    chats.save_conversation(outer, root)
+    members[0].parent_conv_id = outer.id
+    chats.save_conversation(members[0], root)
+    rows = api.group_members(group.id)["members"]
+    lead = rows[0]["observation"]
+    assert lead["role"] == "leader" and lead["runtime"] == "running"
+    assert lead["assignment"]["node_id"] == "original" and lead["assignment"]["title"] == "Original task"
+    assert rows[1]["observation"]["runtime"] == "idle"
+
+
 def test_agent_read_uses_same_roster_payload(roster, monkeypatch):
     from backend.tools.panel import ducky_panel
     api, group, members, root, plan = roster

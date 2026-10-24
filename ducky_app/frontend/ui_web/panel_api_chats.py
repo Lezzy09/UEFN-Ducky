@@ -191,6 +191,7 @@ class PanelApiChatsMixin:
             "folder_id": getattr(c, "folder_id", None) or "",
             "parent_conv_id": parent_id,
             "is_group": bool(getattr(c, "is_group", False)),
+            "muted": bool(getattr(c, "muted", False)),
             # Subagents retired — group members nest under hubs, never parent-linked seats.
             "is_subagent": False,
             "leader_conv_id": (getattr(c, "leader_conv_id", None) or "").strip(),
@@ -790,9 +791,14 @@ class PanelApiChatsMixin:
         return {"ok": True, "leader_conv_id": mid, "group_members": members}
 
     def group_add_member(
-        self, group_id: str, conv_id: str, as_leader: bool = False
+        self, group_id: str, conv_id: str, as_leader: bool = False, move_folder: bool = True
     ) -> dict[str, Any]:
-        """Move an existing chat into a group folder and roster (optional as_leader)."""
+        """Move an existing chat into a group folder and roster (optional as_leader).
+
+        ``move_folder`` (default) files an as_leader chat in the group's folder too, so a
+        workstream lead sits in the group it leads. A chat that leads the group it is filed
+        in (the root lead, or a lead joining a sibling team) keeps its place.
+        """
         from frontend.ui_web.group_orchestrator import (
             group_members,
             member_color_for_index,
@@ -820,10 +826,12 @@ class PanelApiChatsMixin:
         # built fresh from the folder and would otherwise drop it ("No lane").
         old_row = self._lane_row_in_other_group(member, group_id)
         # The lead of an outer group joins its subgroups' rosters but stays filed on top of
-        # its own group; only other chats move into the group's folder.
-        # A designated leader is a pointer; never move it from its existing chat location.
-        # Non-leaders still join the group's folder as before.
-        if not as_leader and not stays_with_outer_group(member, folder_id, folders):
+        # its own group; a chat leading the group it sits in is never pulled out of it
+        # (Oct 22 2026: that left the old group empty). Everyone else moves in.
+        move = not as_leader or move_folder
+        if move and as_leader and self._leads_home_group(member, folders):
+            move = False
+        if move and not stays_with_outer_group(member, folder_id, folders):
             _pa.move_conversation(cid, folder_id)
             member = _pa.load_conversation(cid) or member
             member.parent_conv_id = group_id
@@ -863,6 +871,7 @@ class PanelApiChatsMixin:
             "ok": True,
             "leader_conv_id": (getattr(group, "leader_conv_id", None) or "").strip(),
             "group_members": group_members(group),
+            "folder_id": (getattr(member, "folder_id", None) or "").strip(),
         }
         now_row = next((m for m in out["group_members"] if m.get("member_conv_id") == cid), {})
         if old_row and now_row.get("write_allowed") is None:
@@ -874,6 +883,14 @@ class PanelApiChatsMixin:
             else:
                 out["lane_warning"] = f"Lane not kept: {kept.get('error')}"
         return out
+
+    @staticmethod
+    def _leads_home_group(member: Any, folders: list[Any]) -> bool:
+        """True when ``member`` is the leader of the group whose folder it sits in."""
+        home = (getattr(member, "folder_id", None) or "").strip()
+        hub_id = next((str(getattr(f, "group_hub_id", "") or "").strip() for f in folders if f.id == home), "")
+        hub = _pa.load_conversation(hub_id) if hub_id else None
+        return hub is not None and (getattr(hub, "leader_conv_id", None) or "").strip() == member.id
 
     @staticmethod
     def _lane_row_in_other_group(member: Any, group_id: str) -> dict[str, Any] | None:
@@ -1091,7 +1108,7 @@ class PanelApiChatsMixin:
             try:
                 cid = str(member.get("member_conv_id") or "")
                 conv = _pa.load_conversation(cid)
-                if conv is None or getattr(conv, "parent_conv_id", "") != group.id:
+                if conv is None or not self._filed_with_group(conv, group.id):
                     continue
                 slug = conversation_project_slug(cid)
                 if not slug or slug != conversation_project_slug(group.id):
@@ -1103,7 +1120,12 @@ class PanelApiChatsMixin:
                 root = "" if slug == "_no_project" else project_root_for_slug(slug)
                 if root is None:
                     continue  # Unknown stored project: never use the active island.
-                plan = load_plan_view(cid, project_root=root)
+                # Plans are found up the chat's parent chain; a member filed in another
+                # group (an outer lead) shows this group's assignment instead.
+                filed_here = (getattr(conv, "parent_conv_id", None) or "").strip() == group.id
+                plan = load_plan_view(cid if filed_here else group.id, project_root=root)
+                if not plan and not filed_here:
+                    plan = load_plan_view(cid, project_root=root)
                 if not plan:
                     continue
                 source = plan.get("assigned_from") or {}
@@ -1125,6 +1147,58 @@ class PanelApiChatsMixin:
             "leader_conv_id": (getattr(group, "leader_conv_id", None) or "").strip(),
             "members": enriched,
         }
+
+    @staticmethod
+    def _filed_with_group(conv: Any, group_id: str) -> bool:
+        """A roster member counts wherever it is filed: in this group, or in another live
+        group (a lead that stays on top of its outer group). A parent that no longer exists
+        is a stale row."""
+        parent_id = (getattr(conv, "parent_conv_id", None) or "").strip()
+        if parent_id == group_id:
+            return True
+        parent = _pa.load_conversation(parent_id) if parent_id else None
+        return parent is not None and bool(getattr(parent, "is_group", False))
+
+    def set_muted(self, conv_id: str, muted: bool) -> dict[str, Any]:
+        """Mute or unmute a chat or a group hub. Only stores the flag: its agent keeps running."""
+        cid = (conv_id or "").strip()
+        conv = _pa.load_conversation(cid)
+        if conv is None:
+            return {"ok": False, "error": "Conversation not found"}
+        conv.muted = bool(muted)
+        _pa.save_conversation(conv)
+        _pa.notify_chats_changed(conv.id, conv.title, conv.folder_id, open_tab=False)
+        return {"ok": True, "id": conv.id, "muted": conv.muted, "is_group": bool(getattr(conv, "is_group", False))}
+
+    def group_stop(self, group_id: str) -> dict[str, Any]:
+        """Stop every running member's turn in this group and every group nested in it.
+        Nothing is deleted; members can be started again."""
+        from frontend.ui_web.agent_modes import is_agent_running
+        from frontend.ui_web.group_orchestrator import (
+            cancel_group_run,
+            group_and_nested_ids,
+            group_members,
+            is_group_conversation,
+        )
+
+        gid = (group_id or "").strip()
+        group = _pa.load_conversation(gid)
+        if group is None or not is_group_conversation(group):
+            return {"ok": False, "error": "Not a group chat"}
+        ids = group_and_nested_ids(gid)
+        stopped: list[str] = []
+        for hub_id in ids:
+            cancel_group_run(hub_id)
+            hub = _pa.load_conversation(hub_id)
+            if hub is None:
+                continue
+            for row in group_members(hub):
+                cid = str(row.get("member_conv_id") or "").strip()
+                if not cid or row.get("is_group") or cid in stopped or not is_agent_running(cid):
+                    continue
+                self.cancel_agent(cid)
+                stopped.append(cid)
+        return {"ok": True, "stopped": len(stopped), "groups": len(ids), "stopped_ids": stopped}
 
     def list_agent_profiles(self) -> dict[str, Any]:
         profiles = _pa.list_agent_profiles()

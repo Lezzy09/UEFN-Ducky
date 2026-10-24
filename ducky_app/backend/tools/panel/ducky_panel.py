@@ -974,7 +974,7 @@ def _require_lane_authority(group_id: str) -> str:
 @mcp.tool()
 def ducky_group_invite(
     group_id: str, ducky: str, write_allowed: Optional[list[str]] = None, name: str = "",
-    pretty: bool = False,
+    model: str = "", pretty: bool = False,
 ) -> str:
     """Invite a ducky profile into a group as a lasting swarm member (not a parent-linked subagent).
 
@@ -984,6 +984,9 @@ def ducky_group_invite(
     ``write_allowed`` (leader/user only) seats the member with a write lane: gitignore-style
     globs such as ["Content/Verse/Shop/**"]; [] = read-only. Overlapping another member's
     lane is refused. Omit for an unrestricted member.
+
+    ``model`` seats it on that model (e.g. "codex:gpt-5-mini") instead of the profile's own;
+    a pay-per-token API key the person has not opened to agents is still refused.
     """
     profile = _resolve_ducky_profile(ducky)
     if profile is None:
@@ -994,7 +997,9 @@ def ducky_group_invite(
     if write_allowed is not None:
         _require_lane_authority(group_id)
     api = _panel_api()
-    res = api.group_invite(group_id.strip(), pid, write_allowed=write_allowed, name=name.strip(), for_agent=True)
+    res = api.group_invite(
+        group_id.strip(), pid, model=model.strip(), write_allowed=write_allowed, name=name.strip(), for_agent=True
+    )
     if not res.get("ok"):
         raise ValueError(str(res.get("error") or "group_invite failed"))
     return tool_json(res, pretty=pretty)
@@ -1057,13 +1062,45 @@ def ducky_group_set_leader(group_id: str, member_conv_id: str, pretty: bool = Fa
 
 @mcp.tool()
 def ducky_group_add_member(
-    group_id: str, conv_id: str, as_leader: bool = False, pretty: bool = False
+    group_id: str, conv_id: str, as_leader: bool = False, move_folder: bool = True, pretty: bool = False
 ) -> str:
-    """Move an existing chat into a group (pass as_leader=true to own/lead that swarm)."""
+    """Move an existing chat into a group (pass as_leader=true to own/lead that swarm).
+
+    With ``move_folder`` (default) a lead is also filed in the group's folder, so a
+    workstream lead sits in the group it leads; a chat that leads the group it is filed in
+    (you, the root lead) keeps its place. Returns ``folder_id`` = where the chat is filed.
+    """
     api = _panel_api()
-    res = api.group_add_member(group_id.strip(), conv_id.strip(), as_leader=bool(as_leader))
+    res = api.group_add_member(
+        group_id.strip(), conv_id.strip(), as_leader=bool(as_leader), move_folder=bool(move_folder)
+    )
     if not res.get("ok"):
         raise ValueError(str(res.get("error") or "group_add_member failed"))
+    return tool_json(res, pretty=pretty)
+
+
+@mcp.tool()
+def ducky_set_muted(conv_id: str, muted: bool = True, pretty: bool = False) -> str:
+    """Mute (or unmute with muted=false) a chat or a whole group in the sidebar.
+
+    Muting only quiets it for the person; the agent keeps working.
+    """
+    res = _panel_api().set_muted(conv_id.strip(), bool(muted))
+    if not res.get("ok"):
+        raise ValueError(str(res.get("error") or "set_muted failed"))
+    return tool_json(res, pretty=pretty)
+
+
+@mcp.tool()
+def ducky_group_stop(group_id: str, pretty: bool = False) -> str:
+    """Stop every running member of a group and of every group nested in it.
+
+    Nothing is deleted: members keep their chats and plans and can be started again.
+    Returns how many turns were stopped and how many groups were walked.
+    """
+    res = _panel_api().group_stop(group_id.strip())
+    if not res.get("ok"):
+        raise ValueError(str(res.get("error") or "group_stop failed"))
     return tool_json(res, pretty=pretty)
 
 
@@ -1700,9 +1737,13 @@ def ducky_spawn_chat(
     sender: str = "",
     write_allowed: Optional[list[str]] = None,
     name: str = "",
+    model: str = "",
     pretty: bool = False,
 ) -> str:
     """Invite a specialist into a Group swarm and send the first message.
+
+    ``model`` seats a new member on that model instead of the profile's own (an idle seat
+    that is reused keeps its model).
 
     ``name`` names the seat by its role ("Search lead"): an idle seat of that name gets the
     message, otherwise a new seat is made with that name.
@@ -1786,7 +1827,7 @@ def ducky_spawn_chat(
         _require_lane_authority(hub_id)
     seated = _panel_api().group_seat_profile(
         hub_id, str(profile.get("id") or "").strip(), write_allowed=write_allowed, for_agent=True,
-        exclude_conv_id=caller, **({"name": name.strip()} if name.strip() else {}),
+        exclude_conv_id=caller, model=model.strip(), **({"name": name.strip()} if name.strip() else {}),
     )
     if not seated.get("ok"):
         raise ValueError(str(seated.get("error") or "group_invite failed"))
