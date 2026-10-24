@@ -173,11 +173,14 @@ class ProtectedFastMCP(FastMCP):
 
             logging.getLogger(__name__).exception("Could not persist verification evidence")
         if ctx is not None and ctx.conv_id:
-            from backend.panel.rpc import take_steer_messages
+            from backend.panel.rpc import ack_steer, take_steer_messages
 
-            texts = await asyncio.to_thread(take_steer_messages, ctx.conv_id)
+            lease_id, texts = await asyncio.to_thread(take_steer_messages, ctx.conv_id)
             if texts:
                 result = _with_steer(result, texts)
+                # Only now is the message in what the agent gets. A failed ack is harmless:
+                # the lease runs out and the next tool call carries the message.
+                await asyncio.to_thread(ack_steer, ctx.conv_id, lease_id)
         return result
 
 

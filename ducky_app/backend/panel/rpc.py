@@ -119,11 +119,20 @@ def _panel_rpc(method: str, params: dict[str, Any] | None, timeout: float, holde
     return result if isinstance(result, dict) else resp
 
 
-def take_steer_messages(conv_id: str) -> list[str]:
-    """Messages the person sent into this chat's running turn (frontend/ui_web/steer.py)."""
-    response = panel_rpc("steer_take", {"conv_id": conv_id}, timeout=5.0)
+def take_steer_messages(conv_id: str) -> tuple[str, list[str]]:
+    """Lease the messages the person sent into this chat's running turn: ``(lease_id, texts)``
+    (frontend/ui_web/steer.py). They stay the panel's until :func:`ack_steer`; an unconfirmed
+    lease returns to the queue by itself, so a slow or failed answer never loses one."""
+    response = panel_rpc("steer_take", {"conv_id": conv_id}, timeout=10.0)
     texts = response.get("texts")
-    return [str(t) for t in texts if str(t).strip()] if isinstance(texts, list) else []
+    texts = [str(t) for t in texts if str(t).strip()] if isinstance(texts, list) else []
+    return str(response.get("lease_id") or ""), texts
+
+
+def ack_steer(conv_id: str, lease_id: str) -> None:
+    """The leased messages are in a tool result the agent gets: the panel drops them."""
+    if lease_id:
+        panel_rpc("steer_ack", {"conv_id": conv_id, "lease_id": lease_id}, timeout=5.0)
 
 
 def wait_for_question_answers(conv_id: str) -> None:
