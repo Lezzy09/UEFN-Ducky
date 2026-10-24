@@ -147,6 +147,11 @@ _FOLDER_MOVED: dict[str, tuple[int, float]] = {}  # app: epoch seen moved, and s
 _FOLDER_RELOAD_LOCKS: dict[str, threading.Lock] = {}
 _FOLDER_RELOAD_GUARD = threading.Lock()
 FOLDER_RELOAD_GRACE_S = 3.0  # an explicit restart (a switch) gets this long to start first
+# plugin id → its plugin.json mtime when this process registered it. The agents' tool server
+# reloads a plugin whose files another process installed since (reload_plugins_changed_on_disk).
+_LOADED_SIGNATURE: dict[str, int] = {}
+PLUGIN_FILES_POLL_S = 3.0
+_FILES_WATCH_STARTED = False
 # secret_key → {plugin_id, test_fn} — Settings "Test" for plugin API keys (e.g. Meshy).
 _SECRET_TESTERS: dict[str, dict[str, Any]] = {}
 # plugin_id → {method_name → callable} — PanelApi.plugin_call / bridge plugin.call
@@ -1058,6 +1063,7 @@ _INVALIDATE_WAIT_S = 30.0
 def _drop_plugin_runtime(pid: str, mod_name: str) -> None:
     with _LOCK:
         _REGISTERED.discard(pid)
+        _LOADED_SIGNATURE.pop(pid, None)
         _FOLDER_EPOCH.pop(pid, None)
         _FOLDER_MOVED.pop(pid, None)
         _clear_node_handlers(pid)
@@ -1822,6 +1828,59 @@ def reload_single_plugin(plugin_id: str) -> None:
     _spawn_toggle_thread(_reload_bg, name=f"uefn-plugin-reload-{pid}")
 
 
+def _manifest_signature(root: Path) -> int:
+    """An install writes plugin.json again: its mtime names the copy on disk (0: none)."""
+    try:
+        return (root / "plugin.json").stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def reload_plugins_changed_on_disk() -> list[str]:
+    """The agents' tool server: a plugin it loaded that another process installed again
+    (a Store update or reinstall in the app) or removed loads its new files here, so agents
+    see its new tools and its old code stops running. An install still writing is waited
+    out. Returns the plugins reloading.
+
+    Oct 23 2026: the app updated Web Browser to 1.0.34 and the tool server kept the 1.0.33
+    tools until the plugin was turned off and on (browser_video_frames never appeared)."""
+    from backend.uefn_plugins.store import PLUGIN_INSTALL_LOCK, plugin_dir
+    from backend.util.file_lock import held_file_lock
+
+    stale = [pid for pid, sig in list(_LOADED_SIGNATURE.items()) if _manifest_signature(plugin_dir(pid)) != sig]
+    if not stale:
+        return []
+    with held_file_lock(PLUGIN_INSTALL_LOCK, 0.0) as free:
+        if not free:
+            return []  # an install is still writing: the next look reloads
+    for pid in stale:
+        _LOADED_SIGNATURE.pop(pid, None)  # one reload; its register() records the new files
+        try:
+            reload_single_plugin(pid)
+        except Exception:  # noqa: BLE001 — the others still reload
+            _log.warning("Plugin %s: reloading its new files failed", pid, exc_info=True)
+    return stale
+
+
+def _start_files_watch() -> None:
+    """Only the agents' tool server: the app reloads plugins itself on its own installs, and
+    an install in the tool server asks the app to reload (store._reload_in_app_process)."""
+    global _FILES_WATCH_STARTED
+    if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") != "1" or _FILES_WATCH_STARTED:
+        return
+    _FILES_WATCH_STARTED = True
+
+    def _watch() -> None:
+        while True:
+            time.sleep(PLUGIN_FILES_POLL_S)
+            try:
+                reload_plugins_changed_on_disk()
+            except Exception:  # noqa: BLE001 — the next look tries again
+                _log.debug("plugin files check failed", exc_info=True)
+
+    threading.Thread(target=_watch, name="uefn-plugin-files-watch", daemon=True).start()
+
+
 def reload_plugins() -> None:
     # Let Store toggle workers finish so we don't invalidate mid-register().
     wait_plugin_toggles()
@@ -2473,6 +2532,7 @@ def _run_first_plugin_load() -> None:
     except Exception:
         _log.debug("private-plugin reevaluation at boot failed", exc_info=True)
     _start_crash_heal()
+    _start_files_watch()
     _log.info(
         "UEFN plugins ready: register phase %.0fms%s",
         (time.perf_counter() - t_register) * 1000.0,
@@ -3080,6 +3140,7 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
     try:
         if pid in _REGISTERED:
             return
+        signature = _manifest_signature(root)  # before the import: a change during it reloads again
         version = str(manifest.get("version") or "")
         from backend.uefn_plugins.store import app_too_old_for
 
@@ -3126,6 +3187,7 @@ def _load_one(pid: str, root: Path, manifest: dict[str, Any], *, register: bool 
             # leaves the marker for the next launch to find.
             _load_marker_end(marker)
         _REGISTERED.add(pid)
+        _LOADED_SIGNATURE[pid] = signature
         _LOAD_FAILURES.pop(pid, None)
         if folder_epoch is not None:
             _FOLDER_EPOCH[pid] = folder_epoch

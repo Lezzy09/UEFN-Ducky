@@ -162,6 +162,45 @@ def test_the_app_restarts_a_plugin_whose_folders_moved_once_its_calls_are_done(m
     assert host.reload_moved_plugins(200.0) == []
 
 
+# --------------------------------------------------------------------------- an install in the app reaches the tool server
+
+
+def test_the_tool_server_reloads_a_plugin_the_app_installed_again(monkeypatch) -> None:
+    """Oct 23 2026: the app updated Web Browser to 1.0.34 and the agents' tool server kept
+    listing 1.0.33's tools, so browser_video_frames never appeared."""
+    from backend.uefn_plugins import host
+    from backend.util.file_lock import held_file_lock
+
+    pid = "files-probe"
+    root = store.plugin_dir(pid)
+    root.mkdir(parents=True)
+    manifest = root / "plugin.json"
+    manifest.write_text("{}", encoding="utf-8")
+    reloaded: list[str] = []
+    monkeypatch.setattr(host, "reload_single_plugin", reloaded.append)
+    monkeypatch.setitem(host._LOADED_SIGNATURE, pid, host._manifest_signature(root))
+    assert host.reload_plugins_changed_on_disk() == []  # nothing installed since
+    os.utime(manifest, ns=(1, 1))  # installed again by another process
+    writing, done = threading.Event(), threading.Event()
+
+    def installing() -> None:
+        with held_file_lock(store.PLUGIN_INSTALL_LOCK, 5.0):
+            writing.set()
+            done.wait(5)
+
+    other = threading.Thread(target=installing)
+    other.start()
+    assert writing.wait(5)
+    try:
+        assert host.reload_plugins_changed_on_disk() == []  # never mid-install
+    finally:
+        done.set()
+        other.join(5)
+    assert host.reload_plugins_changed_on_disk() == [pid]
+    assert reloaded == [pid]
+    assert host.reload_plugins_changed_on_disk() == []  # once
+
+
 # --------------------------------------------------------------------------- two processes install at once
 
 
