@@ -236,11 +236,24 @@ def _team_context(plan: dict[str, Any], *, busy: set[str] = frozenset()) -> tupl
 
     nodes = list(assigned_nodes(plan.get("nodes")))
     owners = {owner for _, owner in nodes if owner}
+    from frontend.ui_web.group_orchestrator import group_members
+
+    convs = list(list_all_conversation_metadata(plan.get("project_root"))) if owners else []
+    names = {str(getattr(c, "id", "")): getattr(c, "ducky_name", "") or getattr(c, "title", "") or str(getattr(c, "id", ""))
+             for c in convs}
+    groups = {str(getattr(c, "id", "")): c for c in convs if getattr(c, "is_group", False)}
     members = {}
-    for conv in list_all_conversation_metadata(plan.get("project_root")) if owners else []:
+    for conv in convs:
         cid = str(getattr(conv, "id", ""))
-        if not getattr(conv, "is_group", False) and owners.intersection(_chat_and_group_ids(cid, plan.get("project_root"))):
-            members[cid] = getattr(conv, "ducky_name", "") or getattr(conv, "title", "") or cid
+        if cid not in groups and owners.intersection(_chat_and_group_ids(cid, plan.get("project_root"))):
+            members[cid] = names[cid]
+    # The owning group's roster too: a lead seated with as_leader stays filed in the outer group.
+    for gid in owners.intersection(groups):
+        group = groups[gid]
+        seated = [str(getattr(group, "leader_conv_id", "") or ""), *(m["member_conv_id"] for m in group_members(group))]
+        for cid in seated:
+            if cid and cid not in groups:
+                members.setdefault(cid, names.get(cid) or cid)
     open_names = [f"{n['content']} ({n['id']})" for n, _ in nodes
                   if n.get("status") not in {"completed", "cancelled"} and not n.get("children")]
     from backend.agent.a2a_broker import unanswered_reports

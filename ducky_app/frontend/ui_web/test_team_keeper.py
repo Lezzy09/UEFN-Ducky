@@ -535,3 +535,25 @@ def test_a_stall_wake_lists_working_and_idle_members_apart(monkeypatch) -> None:
     assert len(woke) == 1 and woke[0][0] == "coord"
     assert ("Working: Verse lead (verse); UI Engineer (ui); Tester (test) · "
             "Idle: Modeling lead (model); Gameplay lead (game)") in woke[0][1]
+
+
+def test_a_nested_groups_leader_filed_in_the_outer_group_is_a_member(monkeypatch) -> None:
+    # A workstream lead seated with as_leader stays filed in the outer group: its parent chain
+    # never reaches the group that owns the sub plan, so the keeper took a busy team for idle.
+    from types import SimpleNamespace
+    from frontend.ui_web import project_chats
+    from backend.agent.coding_agents import plans
+
+    monkeypatch.setattr(project_chats, "list_all_conversation_metadata", lambda _: [
+        SimpleNamespace(id="root", title="Swarm", is_group=True, leader_conv_id="coord", group_members=[]),
+        SimpleNamespace(id="combat", title="Verse: combat", is_group=True, leader_conv_id="verse",
+                        group_members=[{"member_conv_id": "verse"}]),
+        SimpleNamespace(id="verse", ducky_name="Verse lead", is_group=False)])
+    monkeypatch.setattr(plans, "_chat_and_group_ids", lambda cid, root: [cid, "root"])
+    monkeypatch.setattr(keeper, "_member_chat", lambda owner, root: "")  # no member dispatch here
+    plan = {**PLAN, "nodes": [{"id": "combat-sec", "content": "Combat", "assignee": "combat", "children": [
+        {"id": "c1", "content": "Damage", "status": "pending"}]}]}
+    woke: list[tuple[str, str]] = []
+    for minute in range(0, 21):
+        _run(minute * MIN, ["verse"], woke, plans=[plan])
+    assert len(woke) == 1 and "Working: Verse lead (verse) · Idle: none" in woke[0][1]
