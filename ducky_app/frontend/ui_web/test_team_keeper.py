@@ -14,6 +14,7 @@ PLAN = {"chat_id": "coord", "status": "open", "progress": {"pending": 3, "in_pro
 def _fresh(monkeypatch):
     keeper.reset_for_tests()
     monkeypatch.setattr(keeper, "_tell_person", lambda cid, minutes: None)
+    monkeypatch.setattr(keeper, "_long_job_chats", lambda: set())  # no real terminals or workflow runs
     saved: dict[str, str] = {}  # stands in for the app database across "restarts"
     monkeypatch.setattr(keeper, "_load_parked", lambda cid: saved.get(cid))
     monkeypatch.setattr(keeper, "_save_parked",
@@ -587,3 +588,62 @@ def test_a_nested_groups_leader_filed_in_the_outer_group_is_a_member(monkeypatch
     for minute in range(0, 21):
         _run(minute * MIN, ["verse"], woke, plans=[plan])
     assert len(woke) == 1 and "Working: Verse lead (verse) · Idle: none" in woke[0][1]
+
+
+@pytest.mark.parametrize("jobs", [{"builder"}, {"coord"}, {"*"}])
+def test_a_long_background_job_is_never_a_circle(jobs) -> None:
+    # Oct 24 2026: "74 of 82 done, busy without finishing" while the Store release ran.
+    # A member's or the lead's background command, or a workflow run ("*"), holds both clocks.
+    woke: list[tuple[str, str]] = []
+    for minute in range(0, 31):
+        keeper.tick(now=minute * MIN, plans=[PLAN], running=["builder"] if minute % 2 else [],
+                    wake=lambda cid, text: woke.append((cid, text)), jobs=jobs)
+    assert woke == []
+    # The release ends: the circle clock starts from there, not from minute 0.
+    later = [m for m in range(31, 60) if keeper.tick(now=m * MIN, plans=[PLAN], running=["builder"],
+                                                       wake=lambda c, t: woke.append((c, t)), jobs=set())]
+    assert later == [50]
+
+
+def test_an_unrelated_chats_background_job_does_not_hide_a_circle(monkeypatch) -> None:
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, busy=frozenset(): ({"builder"}, ""))
+    woke: list[tuple[str, str]] = []
+    times = [m for m in range(0, 25) if keeper.tick(now=m * MIN, plans=[PLAN], running=["builder"],
+                                                      wake=lambda c, t: woke.append((c, t)), jobs={"elsewhere"})]
+    assert times == [20]
+
+
+def test_open_steps_only_the_person_can_do_wake_the_lead_once(monkeypatch) -> None:
+    # Oct 24 2026: owner-only Google Cloud steps got "nothing can move" again and again.
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, busy=frozenset(): (set(), ""))
+    plan = {**PLAN, "nodes": [
+        {"id": "done", "content": "Build", "assignee": "builder", "status": "completed"},
+        {"id": "gcp", "content": "Create the Google Cloud key", "assignee": "person", "status": "pending"}]}
+    woke: list[tuple[str, str]] = []
+    assert [m for m in range(0, 240) if _run(m * MIN, [], woke, plans=[plan])] == [2]
+    # The person does it (the plan changes): one more wake for the lead, then quiet again.
+    moved = {**plan, "nodes": [plan["nodes"][0], {**plan["nodes"][1], "status": "in_progress"}]}
+    assert [m for m in range(240, 480) if _run(m * MIN, [], woke, plans=[moved])] == [240]
+
+
+def test_stopping_a_team_never_stops_its_lead(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from frontend.ui_web import agent_modes, group_orchestrator, project_chats
+
+    convs = {
+        "team": SimpleNamespace(id="team", is_group=True, leader_conv_id="coord"),
+        "sub": SimpleNamespace(id="sub", is_group=True, leader_conv_id="sublead"),
+    }
+    rows = {"team": [{"member_conv_id": "coord"}, {"member_conv_id": "a"}, {"member_conv_id": "sub", "is_group": True}],
+            "sub": [{"member_conv_id": "sublead"}, {"member_conv_id": "b"}, {"member_conv_id": "coord"}]}
+    monkeypatch.setattr(project_chats, "load_conversation", lambda cid, **kw: convs.get(cid))
+    monkeypatch.setattr(group_orchestrator, "is_group_conversation", lambda conv: conv.is_group)
+    monkeypatch.setattr(group_orchestrator, "group_and_nested_ids", lambda gid: [gid, "sub"])
+    monkeypatch.setattr(group_orchestrator, "group_members", lambda conv: rows[conv.id])
+    monkeypatch.setattr(group_orchestrator, "cancel_group_run", lambda gid: None)
+    monkeypatch.setattr(agent_modes, "is_agent_running", lambda cid: True)
+    cancelled: list[str] = []
+    res = keeper.stop_team("team", cancelled.append)
+    assert res["ok"] and "coord" not in cancelled  # the lead's turn keeps running
+    assert cancelled == ["a", "sublead", "b"]  # members and nested leads stop
+    assert keeper.stop_team("a", cancelled.append)["ok"] is False

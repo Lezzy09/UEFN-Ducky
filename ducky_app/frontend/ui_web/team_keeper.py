@@ -21,7 +21,10 @@ each wake re-read the coordinator's whole thread.
 A team can also go in circles while busy: on Oct 11 2026 six agents worked for an hour,
 sent 292 messages, and finished no step, all waiting on one export the plugin's own gate
 would never start. A team that stays busy for ``_STALL_S`` without finishing a step gets
-one circle notice for its coordinator, and the person is alerted.
+one circle notice for its coordinator, and the person is alerted. A long job is not a circle:
+while a team chat's background terminal command or a workflow run is still running (a
+25-minute release), the clocks wait. A plan whose open steps only the person can do (assigned
+to the person, or their members are BLOCKED) wakes its lead once, then waits for a change.
 """
 
 from __future__ import annotations
@@ -95,6 +98,47 @@ def _tell_person(cid: str, minutes: int) -> None:
               kind="chat", target_id=cid)
     except Exception:
         pass
+
+
+def _long_job_chats() -> set[str]:
+    """Chats with a background terminal command still running, and "*" while any workflow run
+    runs. Oct 24 2026: the keeper called a 25-minute Store release a circle."""
+    out: set[str] = set()
+    try:
+        import functools
+
+        from frontend.ui_web.terminal.manager import _process_snapshot, get_terminal_manager
+
+        mgr = get_terminal_manager()
+        with mgr._lock:
+            entries = [(e.session, e.chat) for e in mgr._sessions.values() if e.chat]
+        snapshot = functools.cache(_process_snapshot)
+        out.update(chat for session, chat in entries if session.background_alive(snapshot))
+    except Exception:
+        pass
+    try:
+        from backend.automations import live_runs
+
+        # ponytail: runs carry no chat or step id, so any live run counts for every team;
+        # tie runs to steps when an unrelated workflow hides a real circle.
+        if any(run.get("state") == "started" for run in live_runs.runs()):
+            out.add("*")
+    except Exception:
+        pass
+    return out
+
+
+_PERSON = {"person", "user", "owner", "you", "me", "human"}
+
+
+def _person_only(plan: dict[str, Any]) -> bool:
+    """Every open step that can start now is the person's: assigned to them, or owned by a
+    member that ended BLOCKED. Oct 24 2026: owner-only Google Cloud steps woke the lead with
+    "nothing can move" again and again."""
+    lead = str(plan.get("chat_id") or "")
+    blocked = {st.get("owner") for st in _members.values() if st.get("lead") == lead and st.get("blocked")}
+    owners = [owner for _, owner, _ in _open_leaves(plan)]
+    return bool(owners) and all(owner.lower() in _PERSON or owner in blocked for owner in owners)
 
 
 def _moves(plan: dict[str, Any]) -> str:
@@ -276,6 +320,7 @@ def tick(
     plans: list[dict[str, Any]] | None = None,
     running: list[str] | None = None,
     wake: Callable[[str, str], None] | None = None,
+    jobs: set[str] | None = None,
 ) -> list[str]:
     """One check. Returns the coordinator chats it woke (arguments are for tests)."""
     from backend.agent.a2a_broker import automatic_work_blocked
@@ -287,6 +332,8 @@ def tick(
         from frontend.ui_web.agent_modes import list_running_agents
 
         running = list(list_running_agents())
+    if jobs is None:
+        jobs = _long_job_chats()
     wake = wake or _wake
     busy = set(running)
     woke: list[str] = []
@@ -309,11 +356,14 @@ def tick(
                 st["done"], st["progress_at"], st["next_stall"] = done, now, 0.0
             member_ids, details = _team_context(plan, busy=busy)
             team_busy = busy.intersection(member_ids | {cid}) if member_ids else busy
-            if team_busy:
+            long_job = "*" in jobs or bool(jobs.intersection(member_ids | {cid}) if member_ids else jobs)
+            if long_job:
+                st["progress_at"] = now  # time spent on a release or a workflow is not a circle
+            if team_busy or long_job:
                 st["quiet_since"] = now
                 if team_busy - {cid}:
                     _unpark(cid, st)  # the team is working again: drop the backoff
-                if now - st["progress_at"] >= _STALL_S and now >= st["next_stall"]:
+                if not long_job and now - st["progress_at"] >= _STALL_S and now >= st["next_stall"]:
                     minutes = int((now - st["progress_at"]) // 60)
                     try:
                         wake(cid, STALL_TEXT.format(minutes=minutes, done=done, total=_total(plan)) + details)
@@ -342,7 +392,9 @@ def tick(
             if st.get("moves") != moves:
                 st["moves"] = moves
                 _unpark(cid, st)  # a step moved: the next quiet spell wakes it again
-            if st["wakes"] >= _PARK_AFTER:
+            # Only the person can move it: one wake, then quiet until the plan changes.
+            limit = 1 if _person_only(plan) else _PARK_AFTER
+            if st["wakes"] >= limit:
                 continue
             if automatic_work_blocked(cid) or now - st["quiet_since"] < _IDLE_S or now < st["next_wake"]:
                 continue
@@ -353,7 +405,8 @@ def tick(
             except Exception:
                 continue
             st["wakes"] += 1
-            if st["wakes"] >= _PARK_AFTER:
+            if st["wakes"] >= limit:
+                st["wakes"] = float(_PARK_AFTER)
                 _save_parked(cid, moves)
             # A wake that starts no work waits longer each time: 2, 4, 8, 16, 32, 60 minutes.
             st["next_wake"] = now + min(_IDLE_S * (2 ** (st["wakes"] - 1)), _MAX_WAIT_S)
@@ -420,9 +473,18 @@ def _work_by_member(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     The owner comes down from the sub plan to its points. Steps (and sub plans) whose ``after``
     steps are unfinished are left out: a builder told to "continue" with a step that runs last
     checked it and said "waiting" every few minutes."""
+    out: dict[str, dict[str, Any]] = {}
+    for node, owner, section in _open_leaves(plan):
+        if owner:
+            out.setdefault(owner, {"section": section, "points": []})["points"].append(node)
+    return out
+
+
+def _open_leaves(plan: dict[str, Any]) -> list[tuple[dict[str, Any], str, Any]]:
+    """Open steps that can start now, in plan order: (step, owner from it or above, sub plan)."""
     from backend.agent.coding_agents.plans import waiting_on
 
-    out: dict[str, dict[str, Any]] = {}
+    out: list[tuple[dict[str, Any], str, Any]] = []
     stack: list[tuple[Any, bool, str, Any]] = [(node, False, "", None) for node in plan.get("nodes") or []]
     while stack:
         node, held, above, section = stack.pop(0)
@@ -435,8 +497,8 @@ def _work_by_member(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
             section = node
         kids = node.get("children") or []
         stack[:0] = [(kid, held, owner, section) for kid in kids]
-        if owner and not kids and not held and node.get("status") in ("pending", "in_progress"):
-            out.setdefault(owner, {"section": section, "points": []})["points"].append(node)
+        if not kids and not held and node.get("status") in ("pending", "in_progress"):
+            out.append((node, owner, section))
     return out
 
 
@@ -621,6 +683,8 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
         # between them on every tick (each switch also reset the member's tries).
         by_member: dict[str, tuple[str, dict[str, Any]]] = {}
         for owner, work in _work_by_member(plan).items():
+            if owner.lower() in _PERSON:
+                continue  # the person's own steps: no chat works them
             member = _member_chat(owner, plan.get("project_root"))
             if not member or member == lead:
                 continue
@@ -631,7 +695,7 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
         for member, (owner, work) in by_member.items():
             st = _members.setdefault(member, {"idle_since": now, "tries": 0, "next": 0.0, "moves": moves,
                                               "task": "", "blocked": "", "cleared": "", "told_done": None})
-            st["lead"] = lead
+            st["lead"], st["owner"] = lead, owner
             with_work.add(member)
             if member not in _had_work and st["task"]:
                 # Its points only now became startable. A BLOCKED it ended with while it waited
@@ -712,6 +776,40 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
     _had_work.clear()
     _had_work.update(with_work)
     return woke, movable
+
+
+def stop_team(group_id: str, cancel: Callable[[str], Any]) -> dict[str, Any]:
+    """Stop every running member's turn in a group and the groups nested in it, never the
+    group's lead (it is often the one stopping its team). Oct 24 2026: stopping a team also
+    stopped its lead. Nothing is deleted; members can be started again."""
+    from frontend.ui_web.agent_modes import is_agent_running
+    from frontend.ui_web.group_orchestrator import (
+        cancel_group_run,
+        group_and_nested_ids,
+        group_members,
+        is_group_conversation,
+    )
+    from frontend.ui_web.project_chats import load_conversation
+
+    gid = (group_id or "").strip()
+    group = load_conversation(gid)
+    if group is None or not is_group_conversation(group):
+        return {"ok": False, "error": "Not a group chat"}
+    lead = str(getattr(group, "leader_conv_id", "") or "").strip()
+    ids = group_and_nested_ids(gid)
+    stopped: list[str] = []
+    for hub_id in ids:
+        cancel_group_run(hub_id)
+        hub = load_conversation(hub_id)
+        if hub is None:
+            continue
+        for row in group_members(hub):
+            cid = str(row.get("member_conv_id") or "").strip()
+            if not cid or cid == lead or row.get("is_group") or cid in stopped or not is_agent_running(cid):
+                continue
+            cancel(cid)
+            stopped.append(cid)
+    return {"ok": True, "stopped": len(stopped), "groups": len(ids), "stopped_ids": stopped, "lead_kept": lead}
 
 
 def _unpark(cid: str, st: dict[str, Any]) -> None:
