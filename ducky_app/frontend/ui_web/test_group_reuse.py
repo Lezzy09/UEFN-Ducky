@@ -155,6 +155,60 @@ def test_an_agent_inviting_a_second_ducky_of_a_profile_gets_a_numbered_copy(monk
     assert titles == ["Verse Coder 2"]
 
 
+def _seat_env(monkeypatch, members):
+    group = SimpleNamespace(id="hub", is_group=True, leader_conv_id="m1", group_members=members, folder_id="f1")
+    monkeypatch.setattr("frontend.agent_profiles.get_agent_profile", lambda pid: _PROFILE)
+    monkeypatch.setattr(pa, "load_conversation", lambda cid, *a, **k: group if cid == "hub" else SimpleNamespace(id=cid))
+    monkeypatch.setattr("frontend.ui_web.agent_modes.is_agent_running", lambda cid: False)
+    return group
+
+
+def test_a_named_seat_is_made_with_its_role_name(monkeypatch):
+    # Oct 23 2026: a lead seated 5 members and could only get "Verse Coder 2..6".
+    _seat_env(monkeypatch, [{"member_conv_id": "m1", "profile_id": "verse-coder", "name": "Verse Coder"}])
+    seated: dict[str, str] = {}
+
+    def invite(group_id, profile_id, model="", write_allowed=None, name="", for_agent=False):
+        seated["name"] = name
+        return {"ok": True, "member": {"member_conv_id": "m2", "name": name}}
+
+    api = _api()
+    api.group_invite = invite  # type: ignore[method-assign]
+    out = api.group_seat_profile("hub", "verse-coder", name="Search lead")
+    assert seated == {"name": "Search lead"} and out["reused"] is False
+
+
+def test_an_idle_seat_with_that_role_name_is_reused(monkeypatch):
+    _seat_env(monkeypatch, [
+        {"member_conv_id": "m1", "profile_id": "verse-coder", "name": "Verse Coder"},
+        {"member_conv_id": "m2", "profile_id": "verse-coder", "name": "Search lead"},
+    ])
+    api = _api()
+    api.group_invite = lambda *a, **k: (_ for _ in ()).throw(AssertionError("made a new seat"))  # type: ignore[method-assign]
+    out = api.group_seat_profile("hub", "verse-coder", name="Search lead")
+    assert out["reused"] is True and out["member"]["member_conv_id"] == "m2"
+
+
+def test_two_seats_never_share_a_name(monkeypatch):
+    _seat_env(monkeypatch, [{"member_conv_id": "m1", "profile_id": "verse-coder", "name": "Search lead"}])
+    out = _api().group_invite("hub", "verse-coder", name="Search lead", for_agent=True)
+    assert out["ok"] is False and "already called 'Search lead'" in out["error"]
+
+
+def test_profile_rename_keeps_role_names(monkeypatch):
+    chats = {
+        "a": SimpleNamespace(id="a", profile_id="verse-coder", ducky_name="Verse Coder", title="a", folder_id=""),
+        "b": SimpleNamespace(id="b", profile_id="verse-coder", ducky_name="Verse Coder 2", title="b", folder_id=""),
+        "c": SimpleNamespace(id="c", profile_id="verse-coder", ducky_name="Search lead", title="c", folder_id=""),
+    }
+    monkeypatch.setattr(pa, "list_all_conversation_metadata", lambda: list(chats.values()))
+    monkeypatch.setattr(pa, "load_conversation", lambda cid, *a, **k: chats[cid])
+    monkeypatch.setattr(pa, "save_conversation", lambda conv, **k: None)
+    monkeypatch.setattr(pa, "notify_chats_changed", lambda *a, **k: None)
+    _api()._sync_chats_for_profile({"id": "verse-coder", "name": "Code Ducky"}, "Verse Coder")
+    assert [c.ducky_name for c in chats.values()] == ["Code Ducky", "Code Ducky 2", "Search lead"]
+
+
 def test_spawn_from_a_group_member_joins_that_group(monkeypatch):
     from backend.tools.panel import ducky_panel
 

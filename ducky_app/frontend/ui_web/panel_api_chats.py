@@ -549,11 +549,13 @@ class PanelApiChatsMixin:
         write_allowed: list[str] | None = None,
         for_agent: bool = False,
         exclude_conv_id: str = "",
+        name: str = "",
     ) -> dict[str, Any]:
         """Seat a ducky in a group, reusing its idle chat instead of a new group.
 
-        A busy copy (another node still running) gets the next name, "Verse Coder 2",
-        in the same group. ``for_agent``: an agent is seating it, so it never lands on a
+        ``name`` names the seat by its role ("Search lead"): an idle seat of that name is
+        reused, otherwise a new seat gets it. Without one, a busy copy (another node still
+        running) gets the next name, "Verse Coder 2", in the same group. ``for_agent``: an agent is seating it, so it never lands on a
         pay-per-token API key the person has not opened to agents.
         """
         from frontend.agent_profiles import get_agent_profile
@@ -569,6 +571,9 @@ class PanelApiChatsMixin:
         pid = str(profile.get("id") or profile_id).strip()
         members = group_members(group)
         same = [m for m in members if m.get("profile_id") == pid and not m.get("is_group")]
+        wanted = (name or "").strip()
+        if wanted:
+            same = [m for m in same if str(m.get("name") or m.get("ducky_name") or "").strip() == wanted]
         for member in same:
             cid = str(member.get("member_conv_id") or "").strip()
             # The MCP bridge cannot see the caller's panel-process session.
@@ -591,7 +596,7 @@ class PanelApiChatsMixin:
                     "group_members": members,
                     "leader_conv_id": (getattr(group, "leader_conv_id", None) or "").strip(),
                 }
-        copy = _copy_name(profile, members) if same else ""
+        copy = wanted or (_copy_name(profile, members) if same else "")
         seated = self.group_invite(
             group_id, pid, model=model, write_allowed=write_allowed, name=copy, for_agent=for_agent
         )
@@ -656,6 +661,10 @@ class PanelApiChatsMixin:
             return {"ok": False, "error": f"Unknown ducky profile: {profile_id}"}
         existing = group_members(group)
         pid = str(profile.get("id") or profile_id).strip()
+        wanted = (name or "").strip()
+        if wanted and any(wanted in (str(m.get("name") or "").strip(), str(m.get("ducky_name") or "").strip())
+                          for m in existing):
+            return {"ok": False, "error": f"A member of this group is already called {wanted!r}"}
         # A copy name ("Verse Coder 2") is how a profile gets a second seat. The UI invite
         # passes no name and still refuses a duplicate; an agent asking for a second one
         # gets the copy (Oct 21 2026: a lead asked for 2 Verse Coders and was refused).
@@ -1086,22 +1095,35 @@ class PanelApiChatsMixin:
     def save_agent_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(profile, dict):
             raise ValueError("profile must be an object")
+        old = self._profile_name(str(profile.get("id") or ""))
         saved = _pa.save_agent_profile(profile)
-        self._sync_chats_for_profile(saved)
+        self._sync_chats_for_profile(saved, old)
         return {"ok": True, "profile": saved}
 
     def save_agent_profile_override(self, bundled_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(patch, dict):
             raise ValueError("patch must be an object")
+        old = self._profile_name(bundled_id)
         saved = _pa.save_agent_profile_override(bundled_id, patch)
-        self._sync_chats_for_profile(saved)
+        self._sync_chats_for_profile(saved, old)
         return {"ok": True, "profile": saved}
 
-    def _sync_chats_for_profile(self, profile: dict[str, Any]) -> None:
-        """Keep chat ducky_name in sync when a library profile is renamed (by profile_id)."""
+    @staticmethod
+    def _profile_name(profile_id: str) -> str:
+        from frontend.agent_profiles import get_agent_profile
+
+        try:
+            return str((get_agent_profile(profile_id) or {}).get("name") or "").strip() if profile_id else ""
+        except Exception:  # noqa: BLE001 - a new profile has no old name
+            return ""
+
+    def _sync_chats_for_profile(self, profile: dict[str, Any], old_name: str = "") -> None:
+        """A renamed library profile renames the chats still called by its old name (and its
+        numbered copies, "Verse Coder 2"). Seats named by role ("Search lead") keep their name."""
         pid = str(profile.get("id") or "").strip()
         name = str(profile.get("name") or "").strip()
-        if not pid or not name:
+        old = (old_name or "").strip()
+        if not pid or not name or not old or old == name:
             return
         try:
             from frontend.ui_web.project_chats import (
@@ -1113,12 +1135,14 @@ class PanelApiChatsMixin:
             for meta in _pa.list_all_conversation_metadata():
                 if str(getattr(meta, "profile_id", "") or "").strip() != pid:
                     continue
-                if str(getattr(meta, "ducky_name", "") or "").strip() == name:
+                current = str(getattr(meta, "ducky_name", "") or "").strip()
+                suffix = current[len(old):]
+                if not current.startswith(old) or (suffix and not suffix.strip().isdigit()):
                     continue
                 conv = _pa.load_conversation(meta.id)
                 if conv is None:
                     continue
-                conv.ducky_name = name
+                conv.ducky_name = name + suffix
                 _pa.save_conversation(conv, touch_updated=False)
                 _pa.notify_chats_changed(conv.id, conv.title, conv.folder_id, open_tab=False)
         except Exception:

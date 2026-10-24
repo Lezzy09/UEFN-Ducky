@@ -973,9 +973,13 @@ def _require_lane_authority(group_id: str) -> str:
 
 @mcp.tool()
 def ducky_group_invite(
-    group_id: str, ducky: str, write_allowed: Optional[list[str]] = None, pretty: bool = False
+    group_id: str, ducky: str, write_allowed: Optional[list[str]] = None, name: str = "",
+    pretty: bool = False,
 ) -> str:
     """Invite a ducky profile into a group as a lasting swarm member (not a parent-linked subagent).
+
+    ``name`` names the seat by its role ("Search lead", "Bench lead"); without it a second
+    seat of the same profile is called "Verse Coder 2". Name every team seat by its role.
 
     ``write_allowed`` (leader/user only) seats the member with a write lane: gitignore-style
     globs such as ["Content/Verse/Shop/**"]; [] = read-only. Overlapping another member's
@@ -990,7 +994,7 @@ def ducky_group_invite(
     if write_allowed is not None:
         _require_lane_authority(group_id)
     api = _panel_api()
-    res = api.group_invite(group_id.strip(), pid, write_allowed=write_allowed, for_agent=True)
+    res = api.group_invite(group_id.strip(), pid, write_allowed=write_allowed, name=name.strip(), for_agent=True)
     if not res.get("ok"):
         raise ValueError(str(res.get("error") or "group_invite failed"))
     return tool_json(res, pretty=pretty)
@@ -1081,14 +1085,32 @@ def ducky_rename_self(title: str, pretty: bool = False) -> str:
 
 
 @mcp.tool()
-def ducky_rename_chat(conv_id: str, title: str, pretty: bool = False) -> str:
-    """Rename any chat by conversation id."""
+def ducky_rename_chat(conv_id: str, title: str, seat_name: str = "", pretty: bool = False) -> str:
+    """Rename any chat by conversation id.
+
+    ``seat_name`` also renames a group member's seat: the ducky name its group shows
+    ("Verse Coder 2" -> "Search lead").
+    """
     root = _project_root()
     rename_conversation(conv_id.strip(), title, project_root=root)
     conv = load_conversation(conv_id.strip(), project_root=root)
     if conv is None:
         raise ValueError(f"Conversation not found: {conv_id!r}")
-    return tool_json({"id": conv.id, "title": conv.title, "folder_id": conv.folder_id}, pretty=pretty)
+    seat = seat_name.strip()
+    if seat:
+        conv.ducky_name = seat
+        save_conversation(conv, root)
+        hub_id = (getattr(conv, "parent_conv_id", None) or "").strip()
+        hub = load_conversation(hub_id, project_root=root) if hub_id else None
+        if hub is not None and getattr(hub, "is_group", False):
+            rows = [dict(r) for r in (getattr(hub, "group_members", None) or []) if isinstance(r, dict)]
+            for row in rows:
+                if row.get("member_conv_id") == conv.id:
+                    row["name"] = row["ducky_name"] = seat
+            hub.group_members = rows
+            save_conversation(hub, root)
+    return tool_json({"id": conv.id, "title": conv.title, "folder_id": conv.folder_id,
+                      "ducky_name": getattr(conv, "ducky_name", "") or ""}, pretty=pretty)
 
 
 @mcp.tool()
@@ -1677,9 +1699,13 @@ def ducky_spawn_chat(
     coding_agent: str = "ducky",
     sender: str = "",
     write_allowed: Optional[list[str]] = None,
+    name: str = "",
     pretty: bool = False,
 ) -> str:
     """Invite a specialist into a Group swarm and send the first message.
+
+    ``name`` names the seat by its role ("Search lead"): an idle seat of that name gets the
+    message, otherwise a new seat is made with that name.
 
     ``write_allowed`` (leader/user only) gives the member a write lane — gitignore-style
     globs like ["Content/Verse/Shop/**"] — so parallel members never edit the same files.
@@ -1760,7 +1786,7 @@ def ducky_spawn_chat(
         _require_lane_authority(hub_id)
     seated = _panel_api().group_seat_profile(
         hub_id, str(profile.get("id") or "").strip(), write_allowed=write_allowed, for_agent=True,
-        exclude_conv_id=caller,
+        exclude_conv_id=caller, **({"name": name.strip()} if name.strip() else {}),
     )
     if not seated.get("ok"):
         raise ValueError(str(seated.get("error") or "group_invite failed"))
