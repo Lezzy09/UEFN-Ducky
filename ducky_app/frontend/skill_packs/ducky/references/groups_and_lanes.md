@@ -13,6 +13,35 @@ Each ducky is a saved profile (skills, tools, model, personality) with a
 `when_to_use` hint. Other duckies work for you as **members of a group swarm**;
 there are no separate subagents.
 
+## Make a swarm
+
+Make a swarm: `ducky_swarm_create(goal, jobs)`. Never seat a whole team by hand.
+
+1. Call it with the goal and its jobs, each `{name, purpose, task, steps[], paths[], kind?, model?}`.
+   Jobs come from the goal: a game might get Narrative, Modeling, Texture, Research; a movie
+   Script, Storyboard, Editing.
+2. `status: needs_answers` → ask its `questions` with ONE `ducky_ask_user` (how many agents,
+   the size limits, a model per job), then call again with `agents`, `max_agents`,
+   `per_group` and each `jobs[i].model`. These are asked every time a swarm is made.
+3. `status: needs_confirm` → the preview card shows the tree. The person builds it as is
+   (same call + `confirm=true`) or changes it: `edits=[{drop}, {rename, to}, {seat, model},
+   {mute}|{unmute}]`, which returns a new preview.
+4. On confirm it builds plan-first: a root group named after the goal with you as lead, one
+   sub plan per job with its steps, then the groups and seats (write lanes from `paths`),
+   then assigns each sub plan to its seat, which starts it.
+
+Tree rules: `auto` = one agent per job, capped at the most agents in the swarm (jobs over the
+cap merge into a related job, never dropped). When the lead has more than `per_group` seats,
+related jobs nest into `<Area>: <purpose>` sub-groups (Modeling + Texture → `Art: assets`),
+at most 3 levels deep. Tester and Reviewer stay directly under the lead. Seats are named by
+role (`Verse lead`, `Tester`). Every sub-group starts muted; the person can unmute any.
+
+Each point's Done when ends with: the change and its tests pass; commit your files and push.
+
+A new plan with 3+ sections or 10+ steps whose Files don't overlap comes back with a
+`swarm_suggestion`: offer it with one `ducky_ask_user` ("Run this as a swarm of N?") instead
+of working alone.
+
 ## Delegate: reuse first, add second, recycle when bloated
 
 1. `ducky_list_duckies`: pick the specialist by `when_to_use`.

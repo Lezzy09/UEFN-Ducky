@@ -14,6 +14,7 @@ from backend.tools.core import web_github  # noqa: F401
 from backend.tools.core import sandbox_tools  # noqa: F401
 from backend.tools.core import self_care_tools  # noqa: F401
 from backend.tools.panel import ducky_panel  # noqa: F401
+from backend.tools.panel import ducky_swarm  # noqa: F401
 from backend.tools.panel import panel_ai_plugins  # noqa: F401
 from backend.tools.panel import panel_automations  # noqa: F401
 from backend.tools.panel import panel_i18n  # noqa: F401
