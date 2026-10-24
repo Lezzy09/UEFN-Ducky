@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from typing import Any
 
@@ -11,8 +12,11 @@ PLAN_PROTOCOL = (
     "finishes in about 15–30 minutes; a step covering several features or checks (all, every, "
     "end to end) becomes one step per feature or check, so progress shows and a blocker names "
     "itself. Each leaf: `content` = a short title in plain words (under 80 characters); "
-    "`body_markdown` = its description: what to do, Done when (name the check tool) and one "
-    "concrete example of the result. Give each section a one-line description too. "
+    "`body_markdown` = a description someone can build from without asking anyone: **Why** (the "
+    "problem), **Files** (exact paths, the functions to change, line numbers when known), **Do** "
+    "(numbered), **Watch out** (only for a real trap), **Tests**, **Done when** (name the check "
+    "tool) and **Example** (one concrete result). Read the code first and name real functions. "
+    "Give each section a one-line description too. "
     "`ducky_plan_update_node` `in_progress` BEFORE the work, in the same turn ahead of the "
     "work's calls (a turn's calls run in order), never a turn of its own; "
     "`completed` when Done-when is met. Mutators are blocked until a leaf is "
@@ -21,19 +25,59 @@ PLAN_PROTOCOL = (
     "(a section whose `assignee` is that agent) holding that agent's points; members never make "
     "plans of their own. The agent ticks its points; ticking the last one checks its sub plan off "
     "in the main plan and tells the lead, so nobody sends reports. A sub plan's description says "
-    "Files (what it may change), Done when (the change and its tests, never evidence files, "
-    "read-backs or live checks only the person can do) and Not yours (what to leave to others); `after` = ids "
-    "of steps or sub plans that must finish first. Templates: `ducky_create_plan_template` / "
+    "**Files** (what it owns), **Done when** (the change and its tests, never evidence files, "
+    "read-backs or live checks only the person can do), **Not yours** (what to leave to others) "
+    "and **Hands over:** when its files pass to another section; `after` = ids "
+    "of steps or sub plans that must finish first. Team rules: every file has exactly one owner "
+    "section and a step's Files stay inside its section's Files; a change needed in another lane "
+    "is a separate \"Hand-off:\" step in the owner's section with `after`. Balance the seats: one "
+    "seat per group of files that can be worked at the same time; split a seat with more than "
+    "about 2× the median work, merge a seat that would only wait; seats whose work can't start in "
+    "the first wave start later, never seated idle. A hot shared file (many steps need it) gets a "
+    "first \"Split:\" step that moves parts into new modules, each handed to its own seat. "
+    "Templates: `ducky_create_plan_template` / "
     "`ducky_instantiate_plan_template`. Plan mode: create/update then stop."
 )
 
 _TITLE_MAX = 100
 _BIG_STEP_RE = re.compile(r"\b(all|every|everything|end[ -]to[ -]end|whole)\b", re.IGNORECASE)
 _REVIEW_MAX = 8
+_THIN_MIN = 200
+_FILES_RE = re.compile(r"\bFiles:\**([^\n]*)")
+_DONE_WHEN_RE = re.compile(r"\bdone[ -]when\b", re.IGNORECASE)
+_HANDS_OVER_RE = re.compile(r"\bhands over:", re.IGNORECASE)
+_TICKED_RE = re.compile(r"`([^`\s(]+)`")
+_FILE_EXT_RE = re.compile(r"\.[A-Za-z]\w{0,5}$")
+
+
+def _files(body: str) -> list[str] | None:
+    """Paths named on the first ``Files:`` line (backticked, with a slash or an extension); None without one."""
+    m = _FILES_RE.search(body)
+    if not m:
+        return None
+    return [p.replace("\\", "/").removeprefix("./") for p in _TICKED_RE.findall(m.group(1))
+            if "/" in p or _FILE_EXT_RE.search(p)]
+
+
+def _same(a: str, b: str) -> bool:
+    # Paths are written relative to different roots (`ducky_app/backend/x.py` vs `backend/x.py`).
+    a, b = a.rstrip("/"), b.rstrip("/")
+    return a == b or a.endswith("/" + b) or b.endswith("/" + a)
+
+
+def _inside(path: str, lane: list[str]) -> bool:
+    for own in lane:
+        if fnmatch.fnmatch(path, own) or _same(path, own):
+            return True
+        folder = own.rstrip("/") + "/"
+        if (own.endswith("/") or not _FILE_EXT_RE.search(own)) and (path.startswith(folder) or "/" + folder in path):
+            return True
+    return False
 
 
 def plan_review(plan: dict[str, Any] | None) -> list[dict[str, str]]:
-    """Open steps a person can't follow: too big to show progress, or with no description.
+    """Open steps a person can't follow: too big to show progress, too thin to build from, or
+    files with two owners.
 
     A team kept one step ("check all original feature paths end to end") open for two hours
     while fifteen checks inside it passed one by one; the plan read 15/19 the whole time.
@@ -43,9 +87,10 @@ def plan_review(plan: dict[str, Any] | None) -> list[dict[str, str]]:
     issues: list[dict[str, str]] = []
     flat = _flatten_nodes((plan or {}).get("nodes"))
     known = {str(n.get("id")) for n in flat}
+    parent = {str(c.get("id")): n for n in flat for c in n.get("children") or []}
     # A team plan (any step has an owner): an open step nobody owns is work nobody does.
-    team = any(n.get("assignee") for n in flat)
-    owned_sections = {str(c.get("id")) for n in flat if n.get("assignee")
+    team = any(n.get("assignee") or n.get("planned_assignee") for n in flat)
+    owned_sections = {str(c.get("id")) for n in flat if n.get("assignee") or n.get("planned_assignee")
                       for c in _flatten_nodes(n.get("children") or [])}
     # An agent with several loose steps at the top: they belong in one sub plan assigned to it,
     # so the agent works through its points and the lead hears once, when the sub plan is done.
@@ -57,29 +102,60 @@ def plan_review(plan: dict[str, Any] | None) -> list[dict[str, str]]:
         if count > 1:
             issues.append({"n": "-", "issue": f"{count} top-level steps are assigned to {owner}: put them in one "
                                               "sub plan assigned to that agent (its points inside)."})
+    lanes: list[tuple[str, dict[str, Any], list[str]]] = []  # open sub plans: (label, node, Files)
     for label, node in outline_numbers((plan or {}).get("nodes")):
         if node.get("status") in _DONE:
             continue
         unknown = [sid for sid in node.get("after") or [] if sid not in known]
         if unknown:
             issues.append({"n": label, "issue": f"Waits for steps that don't exist ({', '.join(unknown)}): use ids from the outline."})
-        if team and not node.get("children") and not node.get("assignee") and str(node.get("id")) not in owned_sections:
+        if (team and not node.get("children") and not (node.get("assignee") or node.get("planned_assignee"))
+                and str(node.get("id")) not in owned_sections):
             issues.append({"n": label, "issue": "No owner: set its assignee to the member who does it."})
         content = str(node.get("content") or "").strip()
-        described = bool(str(node.get("body_markdown") or "").strip())
+        body = str(node.get("body_markdown") or "").strip()
         if node.get("children"):
-            if not described:
+            if not body:
                 issues.append({"n": label, "issue": "Section has no description: add one line saying what it delivers."})
+            # A sub plan holds steps directly; in a team plan it says which files it owns.
+            if team and any(not c.get("children") for c in node["children"]):
+                lane = _files(body)
+                if lane is None:
+                    issues.append({"n": label, "issue": "Sub plan has no Files: name the files it owns, so no file has two owners."})
+                else:
+                    lanes.append((label, node, lane))
             continue
         if _BIG_STEP_RE.search(content):
             issues.append({"n": label, "issue": "Too big for one step: split it into one step per feature or check."})
         elif len(content) > _TITLE_MAX:
             issues.append({"n": label, "issue": "Title too long: keep it short and move the details into its description."})
-        if not described:
-            issues.append({"n": label, "issue": "No description: say what to do, Done when, and one example of the result."})
+        if not body:
+            issues.append({"n": label, "issue": "No description: write Why, Files, Do, Tests, Done when and Example."})
+        else:
+            step_files = _files(body)
+            missing = [name for name, ok in (("Files:", step_files is not None),
+                                             ("Done when", _DONE_WHEN_RE.search(body))) if not ok]
+            if missing or len(body) < _THIN_MIN:
+                need = f"needs {' and '.join(missing)}" if missing else "too short"
+                issues.append({"n": label, "issue": f"Too thin to build from ({need}): write Why, Files (exact paths and "
+                                                    "functions), Do, Tests, Done when and Example."})
+            section = parent.get(str(node.get("id")))
+            lane = _files(str((section or {}).get("body_markdown") or "")) if section and team else None
+            for path in (step_files or []) if lane else []:
+                if not _inside(path, lane):
+                    issues.append({"n": label, "issue": f"Outside its lane: {path} is not in its sub plan's Files; "
+                                                        "make it a Hand-off: step in the owner's section."})
         if len(issues) >= _REVIEW_MAX:
             break
-    return issues
+    for i, (_, a, a_files) in enumerate(lanes):
+        for b_label, b, b_files in lanes[i + 1:]:
+            if _HANDS_OVER_RE.search(str(a.get("body_markdown") or "")) or _HANDS_OVER_RE.search(str(b.get("body_markdown") or "")):
+                continue
+            for path in a_files:
+                if any(_same(path, other) for other in b_files):
+                    issues.append({"n": b_label, "issue": f"Two owners: {path} in {a.get('content')} and {b.get('content')}"})
+                    break
+    return issues[:_REVIEW_MAX]
 
 
 def with_plan_review(payload: dict[str, Any], plan: dict[str, Any] | None) -> dict[str, Any]:
