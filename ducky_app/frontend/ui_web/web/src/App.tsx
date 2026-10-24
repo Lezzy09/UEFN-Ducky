@@ -67,6 +67,7 @@ import { installModelsCatalogAutoRefresh } from "./hooks/modelsCatalogCache";
 import { UiRpcBridge } from "./ui-targets/UiRpcBridge";
 import { WalkthroughHost } from "./walkthrough";
 import { ShowMeLayer } from "./showme/ShowMeLayer";
+import { NativeTextMenu } from "./components/NativeTextMenu";
 import { GatewaySetupNotice } from "./components/GatewaySetupNotice";
 // App-level ErrorBoundary lives in main.tsx.
 
@@ -253,6 +254,7 @@ export default function App() {
       <UiRpcBridge />
       <WalkthroughHost />
       <ShowMeLayer />
+      <NativeTextMenu />
       <GatewaySetupNotice />
       <div className="app-container">
         <div id="ducky-skin-frame" className="ducky-skin-slot ducky-skin-slot--frame" aria-hidden="true" />

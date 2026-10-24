@@ -151,6 +151,7 @@ _PUBLIC_METHODS = frozenset({
     'ducky_link_rtc_connect',
     'ducky_sync_copy',
     'ducky_sync_forget',
+    'native_menu_pick',
     'ducky_sync_list',
     'ducky_sync_now',
     'ducky_health_snapshot',

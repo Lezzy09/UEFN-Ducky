@@ -3349,6 +3349,8 @@ export interface PanelApi {
   ducky_link_open?(key_id: string, name?: string, chat_id?: string): Promise<{ ok?: boolean; error?: string }>;
   /** Your other UEFN Duckies' chats as copied here by sync (no rows). */
   ducky_sync_list?(): Promise<{ ok?: boolean; error?: string; duckies?: DuckySyncPeer[] }>;
+  /** Answer the right-click menu over typed text: run WebView2's command (a spelling fix...) or -1 for none. */
+  native_menu_pick?(token: string, command_id: number): Promise<{ ok?: boolean }>;
   /** Remove another UEFN Ducky: signs that PC out of the account and drops its copies here. */
   ducky_sync_forget?(key_id: string): Promise<{ ok?: boolean; error?: string; dropped?: number; revoke_error?: string }>;
   /** The read-only copy of one of another Ducky's chats. */

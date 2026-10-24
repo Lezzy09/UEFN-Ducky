@@ -636,6 +636,17 @@ class PanelApiWindowMixin:
 
         webbrowser.open(download_page_url())
 
+    def native_menu_pick(self, token: str = "", command_id: int = -1) -> dict[str, Any]:
+        """The Ducky-styled right-click menu over typed text answered: run WebView2's own
+        command ``command_id`` (a spelling fix, Paste...) or nothing (-1)."""
+        from frontend.ui_web.webview_native_menu import pick
+
+        try:
+            cid = int(command_id)
+        except (TypeError, ValueError):
+            cid = -1
+        return {"ok": pick(str(token or ""), cid)}
+
     def open_devtools(self) -> dict[str, Any]:
         """Open WebView2 DevTools (Inspector) even in production builds."""
         w = self._resolve_window()

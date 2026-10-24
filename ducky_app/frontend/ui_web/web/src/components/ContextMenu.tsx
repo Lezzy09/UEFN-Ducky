@@ -28,9 +28,11 @@ interface ContextMenuProps {
   onClose: () => void;
   /** Spotlight id while this menu is the Duckies header menu. */
   tourTarget?: string;
+  /** Clicking a row leaves focus (and the caret) where it was: a text box's own menu. */
+  keepFocus?: boolean;
 }
 
-export function ContextMenu({ x, y, items, onClose, tourTarget }: ContextMenuProps) {
+export function ContextMenu({ x, y, items, onClose, tourTarget, keepFocus }: ContextMenuProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const scopeClass = useScopedClass("context-menu");
   const tourRef = useUiTarget(tourTarget || "", {
@@ -90,6 +92,7 @@ export function ContextMenu({ x, y, items, onClose, tourTarget }: ContextMenuPro
               aria-checked={item.switch || item.checked !== undefined ? Boolean(item.checked) : undefined}
               className={`context-menu-item${item.danger ? " is-danger" : ""}${item.switch ? " is-switch" : item.checked !== undefined ? " is-checkable" : ""}`}
               disabled={item.disabled}
+              onMouseDown={keepFocus ? (e) => e.preventDefault() : undefined}
               onClick={() => {
                 if (item.disabled) return;
                 item.onClick?.();

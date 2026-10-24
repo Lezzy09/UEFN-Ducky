@@ -1404,6 +1404,8 @@ OFF_PC_DENY = frozenset(
         # may answer for them or feed them messages.
         "rtc_reply",
         "rtc_event",
+        # The right-click menu over typed text answers this PC's own WebView2 menu.
+        "native_menu_pick",
         # Sandboxes start programs on this PC and self-care stops them: never from a phone
         # or the website.
         "sandbox_call",

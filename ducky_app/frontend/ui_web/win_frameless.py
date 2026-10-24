@@ -1223,9 +1223,23 @@ def install_pywebview_chrome_patches() -> None:
                     # rate by under 2% (39,327/s -> 38,605/s). Do not re-suspect it
                     # without new evidence.
                     sender.CoreWebView2.Settings.IsNonClientRegionSupportEnabled = True
-                    from frontend.ui_web.webview_ship import apply_shipped_webview2_settings
+                    from frontend.ui_web.webview_ship import apply_shipped_webview2_settings, hides_native_menu
 
-                    apply_shipped_webview2_settings(sender.CoreWebView2.Settings)
+                    # Right-click in text you type: the spell checker's suggestions in
+                    # Ducky's menu (it also hides the browser menu everywhere else in
+                    # the Store EXE). If it can't attach, no native menu at all, as before.
+                    try:
+                        from frontend.ui_web.webview_native_menu import attach as attach_native_menu
+
+                        self._ducky_native_menu = attach_native_menu(
+                            sender.CoreWebView2,
+                            getattr(self, "pywebview_window", None),
+                            self.form,
+                            hide_others=hides_native_menu(),
+                        )
+                    except Exception:
+                        _log.exception("WebView2 native menu hook failed")
+                        apply_shipped_webview2_settings(sender.CoreWebView2.Settings)
                 except Exception:
                     _log.exception("WebView2 ship settings failed")
                 try:
