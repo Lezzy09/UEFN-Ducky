@@ -39,6 +39,7 @@ import {
   type RosterNode,
   type SubPlanProgress,
 } from "./team/teamRoster";
+import { refreshRoster, setRoster, useRoster, useRosters } from "./team/rosterStore";
 
 export { shortModelLabel } from "./groupMemberHover";
 export { subPlanProgress, sumProgress, type SubPlanProgress } from "./team/teamRoster";
@@ -214,43 +215,27 @@ export function GroupMemberStrip({
   const [leaderId, setLeaderId] = useState(leaderConvId);
   useEffect(() => setLeaderId(leaderConvId), [leaderConvId]);
   const [error, setError] = useState("");
+  /** Nested group ids the roster shows; their members come from the shared roster store. */
+  const [nestedKey, setNestedKey] = useState("");
+  const nestedList = useMemo(() => (nestedKey ? nestedKey.split("|") : []), [nestedKey]);
   /** Nested group id → its members from the bridge (model, lane and observation per agent). */
-  const [rosters, setRosters] = useState<Record<string, GroupMemberDto[]>>({});
+  const rosters = useRosters(nestedList);
   const inviteWrapRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
-  const [observedMembers, setObservedMembers] = useState<{ groupId: string; rows: GroupMemberDto[] } | null>(null);
+  // This group's rows as the bridge last observed them: one cached roster shared with every
+  // other view, refreshed by the store on roster and activity pushes (never per render).
+  const ownRoster = useRoster(groupId);
+  const observedMembers = useMemo(
+    () => (ownRoster ? { groupId, rows: ownRoster.members } : null),
+    [ownRoster, groupId],
+  );
   const [observationNow, setObservationNow] = useState(Date.now());
-  const observationRequest = useRef(0);
-
-  const refreshObservations = useCallback(async () => {
-    const request = ++observationRequest.current;
-    try {
-      const result = await getApi()?.group_members?.(groupId);
-      if (request !== observationRequest.current) return;
-      setObservedMembers({ groupId, rows: result?.ok ? result.members || [] : [] });
-    } catch {
-      if (request === observationRequest.current) setObservedMembers({ groupId, rows: [] });
-    }
-    setObservationNow(Date.now());
-  }, [groupId]);
+  const refreshObservations = useCallback(() => refreshRoster(groupId), [groupId]);
+  useEffect(() => setObservationNow(Date.now()), [ownRoster]);
   useEffect(() => {
-    void refreshObservations();
     const tick = window.setInterval(() => setObservationNow(Date.now()), 15000);
-    return () => { observationRequest.current += 1; window.clearInterval(tick); };
-  }, [refreshObservations, members]);
-  useEffect(() => subscribeAgentEvents(event => {
-    const ids = new Set([groupId, ...members.map(m => m.member_conv_id)]);
-    if (observedMembers?.groupId === groupId) {
-      for (const row of observedMembers.rows) {
-        const owner = row.observation?.assignment?.chat_id;
-        if (owner) ids.add(owner);
-      }
-    }
-    if (event.conv_id && ids.has(event.conv_id) &&
-        ["plan_updated", "plan_assignment_changed", "agent_started", "agent_stopped"].includes(event.type)) {
-      void refreshObservations();
-    }
-  }), [groupId, members, observedMembers, refreshObservations]);
+    return () => window.clearInterval(tick);
+  }, []);
 
   // Whether lanes block or only warn is an app setting, read once.
   const [laneMode, setLaneMode] = useState(() => laneModeOf(null));
@@ -323,42 +308,9 @@ export function GroupMemberStrip({
   );
 
   // Every nested group's roster, as deep as it goes, so all agents can be read and adjusted here.
+  // Each id is fetched once by the store; a roster push for a nested group refreshes only that one.
   const nestedIds = useMemo(() => rosterGroupIds(roster).join("|"), [roster]);
-  useEffect(() => {
-    const api = getApi();
-    const ids = nestedIds ? nestedIds.split("|") : [];
-    if (!api?.group_members || ids.length === 0) return;
-    let cancelled = false;
-    const missing = ids.filter((id) => !rosters[id]);
-    if (missing.length === 0) return;
-    void Promise.all(
-      missing.map(async (id) => {
-        try {
-          const res = await api.group_members!(id);
-          return [id, res?.ok ? res.members || [] : []] as const;
-        } catch {
-          return [id, []] as const;
-        }
-      }),
-    ).then((rows) => {
-      if (cancelled) return;
-      setRosters((prev) => {
-        const next = { ...prev };
-        for (const [id, list] of rows) next[id] = [...list];
-        return next;
-      });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [nestedIds, rosters]);
-  // A roster change at this level can move agents between nested groups: read them again.
-  const rosterBase = useRef({ members, groupId });
-  useEffect(() => {
-    if (rosterBase.current.members === members && rosterBase.current.groupId === groupId) return;
-    rosterBase.current = { members, groupId };
-    setRosters({});
-  }, [members, groupId]);
+  useEffect(() => setNestedKey(nestedIds), [nestedIds]);
 
   const agents = useMemo(() => rosterAgents(roster), [roster]);
   const runningCount = agents.filter((a) => runningIds.has(a.id)).length;
@@ -456,11 +408,10 @@ export function GroupMemberStrip({
   /** A roster answer for this group or a nested one: keep each in its own place. */
   const applyRoster = useCallback(
     (hubId: string, next: GroupMemberDto[] | undefined, leader?: string) => {
+      setRoster(hubId, next || [], leader);
       if (hubId === groupId) {
         onMembersChange(next || []);
         if (leader !== undefined) setLeaderId(leader || "");
-      } else {
-        setRosters((prev) => ({ ...prev, [hubId]: next || [] }));
       }
     },
     [groupId, onMembersChange],
@@ -529,8 +480,8 @@ export function GroupMemberStrip({
           return;
         }
         // Sync the roster so the new nested group shows up.
-        const latest = api.group_members ? await api.group_members(groupId) : null;
-        if (latest?.ok) onMembersChange(latest.members || []);
+        const latest = await refreshRoster(groupId);
+        if (latest.members.length > 0) onMembersChange(latest.members);
         setPickerOpen(false);
         requestReloadDuckies();
         onOpenMember({ id: res.id, name: (res.title || name).trim() || "Group", isGroup: true, groupMembers: res.group_members || [] });
@@ -773,7 +724,7 @@ export function GroupMemberStrip({
         <button
           type="button"
           className="group-member-lane-btn"
-          onClick={() => { void refreshObservations(); void refreshConflicts(); setRosters({}); }}
+          onClick={() => { void refreshObservations(); void refreshConflicts(); for (const id of nestedList) void refreshRoster(id); }}
         >
           Refresh observation
         </button>

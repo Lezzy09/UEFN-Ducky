@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { setVisibleInterval } from "../utils/visibleInterval";
+import { subscribeAgentEvents } from "../hooks/useAgentEventBus";
 import { getApi } from "../hooks/usePanelApi";
+import type { AgentEvent } from "../types/panel";
 
 export type TerminalRunner = "mcp" | "user";
 
@@ -9,9 +10,8 @@ export interface TerminalBusyStatus {
   runner: TerminalRunner | null;
 }
 
-const POLL_MS = 2000;
-/** A parked terminal (tab closed, shell alive) is only a dot in the header list: every 10 s. */
-const PARKED_EVERY_TICKS = 5;
+/** Busy pushes for many shells within this window become one terminal_busy_many call. */
+const COALESCE_MS = 1000;
 
 function deriveRunner(busy?: boolean, running?: boolean): TerminalRunner | null {
   if (!running) return null;
@@ -19,58 +19,53 @@ function deriveRunner(busy?: boolean, running?: boolean): TerminalRunner | null 
 }
 
 /**
- * One poller for every component that shows terminal activity (the header list and each
- * editor group's tab strip). Each used to poll on its own, every session one bridge call
- * and one walk of every process on the PC, so an open terminal was asked twice every 2 s.
+ * One store for every component that shows terminal activity (the header list and each
+ * editor group's tab strip). A session is asked about once when first watched, then only
+ * after Terminal pushes `terminal_busy` for it (a command started or ended); nothing polls.
  */
 interface Watcher {
   ids: string[];
-  parked: ReadonlySet<string>;
   notify: () => void;
 }
 
 const watchers = new Set<Watcher>();
 const statuses = new Map<string, TerminalBusyStatus>();
 const NOT_RUNNING: TerminalBusyStatus = { running: false, runner: null };
-let stopPolling: (() => void) | null = null;
-let tick = 0;
+let unsubscribe: (() => void) | null = null;
 let inFlight = false;
-/** Which sessions a poll asks about: only new ones, the open tabs, or the parked ones too. */
-const DUE_NEW = 0;
-const DUE_OPEN = 1;
-const DUE_ALL = 2;
-type Due = typeof DUE_NEW | typeof DUE_OPEN | typeof DUE_ALL;
-let pollAgain: Due | null = null;
+/** Sessions to ask about on the next call (pushed, or new while a call was out). */
+const pending = new Set<string>();
+let timer: ReturnType<typeof setTimeout> | null = null;
 
-async function poll(scope: Due): Promise<void> {
+function watchedIds(): Set<string> {
+  return new Set([...watchers].flatMap((watcher) => watcher.ids));
+}
+
+function notifyAll(): void {
+  for (const watcher of watchers) watcher.notify();
+}
+
+async function ask(ids: string[]): Promise<void> {
   if (inFlight) {
-    pollAgain = Math.max(pollAgain ?? scope, scope) as Due;
+    for (const id of ids) pending.add(id);
     return;
   }
-  const open = new Set<string>();
-  const parked = new Set<string>();
-  for (const watcher of watchers) {
-    for (const id of watcher.ids) (watcher.parked.has(id) ? parked : open).add(id);
-  }
-  // A session never asked about yet is always due, parked or not.
-  const due = [...new Set([...open, ...parked])].filter((id) =>
-    !statuses.has(id) || scope === DUE_ALL || (scope === DUE_OPEN && open.has(id)));
   const api = getApi();
-  if (!api || due.length === 0) return;
+  if (!api || ids.length === 0) return;
   inFlight = true;
   let states: Record<string, { ok: boolean; busy?: boolean; running?: boolean }> = {};
   try {
-    const result = await api.terminal_busy_many(due);
+    const result = await api.terminal_busy_many(ids);
     states = result?.states ?? {};
   } catch {
     // Same as a session the backend no longer knows: shown as not running.
   } finally {
     inFlight = false;
   }
-  const watched = new Set([...watchers].flatMap((watcher) => watcher.ids));
+  const watched = watchedIds();
   let changed = false;
-  for (const id of due) {
-    if (!watched.has(id)) continue; // its tab closed while the poll was out
+  for (const id of ids) {
+    if (!watched.has(id)) continue; // its tab closed while the call was out
     const state = states[id];
     const running = !!state?.ok && !!state.running;
     const runner = running ? deriveRunner(state?.busy, running) : null;
@@ -79,31 +74,49 @@ async function poll(scope: Due): Promise<void> {
     statuses.set(id, running ? { running, runner } : NOT_RUNNING);
     changed = true;
   }
-  if (changed) for (const watcher of watchers) watcher.notify();
-  if (pollAgain !== null) {
-    const again = pollAgain;
-    pollAgain = null;
-    void poll(again);
+  if (changed) notifyAll();
+  if (pending.size > 0 && timer === null) flushSoon();
+}
+
+function flushSoon(): void {
+  if (timer !== null) return;
+  timer = setTimeout(() => {
+    timer = null;
+    const watched = watchedIds();
+    const ids = [...pending].filter((id) => watched.has(id));
+    pending.clear();
+    void ask(ids);
+  }, COALESCE_MS);
+}
+
+function onPush(event: AgentEvent): void {
+  const id = String((event as { session_id?: unknown }).session_id || "");
+  if (!id || !watchedIds().has(id)) return;
+  if (event.type === "terminal_close" || (event.type as string) === "terminal_exit") {
+    if (statuses.get(id) === NOT_RUNNING) return;
+    statuses.set(id, NOT_RUNNING);
+    notifyAll();
+    return;
   }
+  if ((event.type as string) !== "terminal_busy") return;
+  pending.add(id);
+  flushSoon();
 }
 
 function watch(watcher: Watcher): () => void {
   watchers.add(watcher);
-  void poll(DUE_NEW);
-  if (!stopPolling) {
-    tick = 0;
-    stopPolling = setVisibleInterval(() => {
-      tick = (tick + 1) % PARKED_EVERY_TICKS;
-      void poll(tick === 0 ? DUE_ALL : DUE_OPEN);
-    }, POLL_MS);
-  }
+  void ask(watcher.ids.filter((id) => !statuses.has(id)));
+  if (!unsubscribe) unsubscribe = subscribeAgentEvents(onPush);
   return () => {
     watchers.delete(watcher);
-    const watched = new Set([...watchers].flatMap((w) => w.ids));
+    const watched = watchedIds();
     for (const id of [...statuses.keys()]) if (!watched.has(id)) statuses.delete(id);
-    if (watchers.size === 0 && stopPolling) {
-      stopPolling();
-      stopPolling = null;
+    if (watchers.size === 0) {
+      unsubscribe?.();
+      unsubscribe = null;
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      pending.clear();
     }
   };
 }
@@ -123,17 +136,19 @@ function sameStatuses(prev: Map<string, TerminalBusyStatus>, next: Map<string, T
   return true;
 }
 
-/** Busy state per session. `parkedSessionIds` (closed tabs whose shell lives on) are asked less often. */
+/**
+ * Busy state per session. Parked sessions (closed tabs whose shell lives on) are pushed
+ * like open ones now, so the second argument is kept only for existing callers.
+ */
 export function useTerminalBusyStatuses(
   sessionIds: string[],
   parkedSessionIds: readonly string[] = [],
 ): Map<string, TerminalBusyStatus> {
   const [statusMap, setStatusMap] = useState<Map<string, TerminalBusyStatus>>(() => new Map());
-  const idsKey = sessionIds.filter(Boolean).sort().join("\0");
-  const parkedKey = parkedSessionIds.filter(Boolean).sort().join("\0");
+  const idsKey = [...sessionIds, ...parkedSessionIds].filter(Boolean).sort().join("\0");
 
   useEffect(() => {
-    const ids = idsKey ? idsKey.split("\0") : [];
+    const ids = idsKey ? [...new Set(idsKey.split("\0"))] : [];
     // Only a value that changed re-renders: an idle poll used to re-render the tab strip
     // and, through the header actions, the whole header every 2 s.
     const update = () => setStatusMap((prev) => {
@@ -142,8 +157,8 @@ export function useTerminalBusyStatuses(
     });
     update();
     if (ids.length === 0) return;
-    return watch({ ids, parked: new Set(parkedKey ? parkedKey.split("\0") : []), notify: update });
-  }, [idsKey, parkedKey]);
+    return watch({ ids, notify: update });
+  }, [idsKey]);
 
   return statusMap;
 }

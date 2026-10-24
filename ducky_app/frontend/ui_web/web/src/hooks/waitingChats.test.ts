@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { _resetAskUserForTests, listAskUserSessions, runAskUser, settleAskUser } from "../ask-user/runAskUser";
@@ -14,6 +14,7 @@ import {
   listWaitingItems,
   openWaitingChat,
   subscribeWaitingChats,
+  useNeedsYou,
   waitingChatIds,
 } from "./waitingChats";
 
@@ -100,6 +101,40 @@ describe("chats waiting on the user", () => {
     expect(listWaitingItems()).toHaveLength(1);
     expect(listWaitingItems()[0].convId).toBe("");
     expect(waitingChatIds().size).toBe(0);
+  });
+
+  it("useNeedsYou gives a row the card kind and seconds waited, and clears when answered", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-24T12:00:00Z"));
+      void runAskUser(question, "", "Stub 07", { groupIds: ["hub"] });
+      act(() => pushLocalAgentEvent(command("r8", "Stub 08")));
+      await flush();
+      vi.setSystemTime(new Date("2026-10-24T12:01:02Z"));
+
+      const stub7 = renderHook(() => useNeedsYou("Stub 07"));
+      const hub = renderHook(() => useNeedsYou("hub"));
+      const stub8 = renderHook(() => useNeedsYou("Stub 08"));
+      const idle = renderHook(() => useNeedsYou("Stub 09"));
+      expect(stub7.result.current).toEqual({ kind: "question", since: 62 });
+      expect(hub.result.current?.kind).toBe("question");
+      expect(stub8.result.current?.kind).toBe("command");
+      expect(idle.result.current).toBeNull();
+
+      // Another chat's card changing does not hand this row a new object.
+      const before = stub7.result.current;
+      act(() => pushLocalAgentEvent({ type: "terminal_command_decided", request_id: "r8", conv_id: "Stub 08" }));
+      await flush();
+      expect(stub8.result.current).toBeNull();
+      expect(stub7.result.current).toBe(before);
+
+      const ask = listAskUserSessions()[0];
+      act(() => settleAskUser({ ok: true, answers: { q: { selected: ["a"], text: "", skipped: false } } }, ask.id));
+      expect(stub7.result.current).toBeNull();
+      expect(hub.result.current).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("opens the chat and asks it to scroll to the card", () => {

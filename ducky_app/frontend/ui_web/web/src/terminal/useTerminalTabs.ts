@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { setVisibleInterval } from "../utils/visibleInterval";
 import { subscribeAgentEvents } from "../hooks/useAgentEventBus";
 import { getApi } from "../hooks/usePanelApi";
 import { getTerminalsEnabled } from "../contexts/TerminalsSettingsContext";
@@ -48,6 +47,10 @@ function sessionRecordToDto(session: Record<string, unknown>): TerminalSessionDt
   };
 }
 
+/** Pushes after which the live shell list may differ (Terminal emits these on every change). */
+const TERMINAL_PUSHES = new Set(["terminal_open", "terminal_close", "terminal_busy", "terminal_exit"]);
+const SYNC_COALESCE_MS = 1000;
+
 export function useTerminalTabs(
   editor: Pick<EditorLayoutApi, "openTab" | "closeTabInLayout" | "openTabsRef" | "remapTabId" | "setOpenTabs">,
 ) {
@@ -56,7 +59,7 @@ export function useTerminalTabs(
   const [, bump] = useState(0);
 
   // Nothing renders from the session map, so remembering one needs no re-render (the
-  // parked-shell poll remembers every live shell every few seconds).
+  // parked-shell sync remembers every live shell on each terminal push).
   const rememberSession = useCallback((dto: TerminalSessionDto) => {
     sessionsRef.current.set(dto.session_id, dto);
   }, []);
@@ -204,9 +207,11 @@ export function useTerminalTabs(
 
   const getSession = useCallback((sessionId: string) => sessionsRef.current.get(sessionId), []);
 
-  // Recover live sessions that aren't open as tabs (e.g. parked after focus-window close).
+  // Recover live sessions that aren't open as tabs (e.g. parked after focus-window close):
+  // once on mount, then again after terminal open/close/busy pushes, at most once per second.
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const syncParked = async () => {
       if (!getTerminalsEnabled()) return;
       const api = getApi();
@@ -245,10 +250,17 @@ export function useTerminalTabs(
       });
     };
     void syncParked();
-    const stopPoll = setVisibleInterval(() => void syncParked(), 4000);
+    const unsubscribe = subscribeAgentEvents((event: AgentEvent) => {
+      if (!TERMINAL_PUSHES.has(event.type) || timer !== null) return;
+      timer = setTimeout(() => {
+        timer = null;
+        void syncParked();
+      }, SYNC_COALESCE_MS);
+    });
     return () => {
       cancelled = true;
-      stopPoll();
+      unsubscribe();
+      if (timer !== null) clearTimeout(timer);
     };
   }, [editor, rememberSession]);
 

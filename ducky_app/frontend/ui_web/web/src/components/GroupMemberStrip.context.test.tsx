@@ -12,10 +12,12 @@ vi.mock("../hooks/useAgentEventBus", () => ({
 }));
 
 const { GroupMemberStrip } = await import("./GroupMemberStrip");
+const { resetRosterStore } = await import("./team/rosterStore");
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  resetRosterStore();
 });
 
 function folder(partial: Partial<FolderItem> & Pick<FolderItem, "id" | "name">): FolderItem {

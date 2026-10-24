@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { getApi } from "./usePanelApi";
 
@@ -52,6 +52,80 @@ function notifyMainFocusTabActive(focusId: string, title: string): void {
   void getApi()?.notify_focus_tab_active(focusId, title);
 }
 
+/** Window methods newer than the typed panel API (Chat API steps 003a08f5f6, 61ee7f6545). */
+type WindowViewApi = {
+  set_visible_chats?: (ids: string[], viewer_id: string) => Promise<unknown>;
+  get_restore_tabs?: (window_id: string) => Promise<string[] | null | undefined>;
+};
+const viewApi = () => getApi() as unknown as WindowViewApi | null;
+
+/** The chats on screen: each editor group's (pane's) active tab when it is a chat. */
+export function visibleChatIds(layout: EditorLayoutState, tabs: readonly EditorTab[]): string[] {
+  const byId = new Map(tabs.map((t) => [t.id, t]));
+  const out = new Set<string>();
+  for (const group of Object.values(layout.groups || {})) {
+    const tab = group?.activeTabId ? byId.get(group.activeTabId) : undefined;
+    if (tab?.kind === "chat" && tab.chatId) out.add(tab.chatId);
+  }
+  return [...out].sort();
+}
+
+const lastVisibleKey = new Map<string, string>();
+const shownByViewer = new Map<string, string[]>();
+let visibilityListener = false;
+
+function sendVisible(viewerId: string): void {
+  const ids = typeof document !== "undefined" && document.hidden ? [] : shownByViewer.get(viewerId) ?? [];
+  const key = ids.join("\0");
+  if (lastVisibleKey.get(viewerId) === key) return;
+  lastVisibleKey.set(viewerId, key);
+  void viewApi()?.set_visible_chats?.(ids, viewerId);
+}
+
+/**
+ * Tell the app which chats this viewer shows, so live text streams only to them. Sends only
+ * when the set changes (never on a timer); a hidden or minimised window shows none.
+ * The main window and the phone/remote views call it too, with their own viewer id.
+ */
+export function reportVisibleChats(ids: readonly string[], viewerId: string = WINDOW_ID): void {
+  shownByViewer.set(viewerId, [...new Set(ids)].sort());
+  if (!visibilityListener && typeof document !== "undefined") {
+    visibilityListener = true;
+    document.addEventListener("visibilitychange", () => {
+      for (const viewer of shownByViewer.keys()) sendVisible(viewer);
+    });
+  }
+  sendVisible(viewerId);
+}
+
+/** Report this window's visible chats whenever the set changes (a re-render alone sends nothing). */
+export function useReportVisibleChats(layout: EditorLayoutState, tabs: readonly EditorTab[], viewerId: string = WINDOW_ID): void {
+  const key = useMemo(() => visibleChatIds(layout, tabs).join("\0"), [layout, tabs]);
+  useEffect(() => reportVisibleChats(key ? key.split("\0") : [], viewerId), [key, viewerId]);
+}
+
+/**
+ * After a crash reload, reopen the tabs this window had, in order (once per page load; a normal
+ * load gets [] and does nothing). Returns the tab ids it opened.
+ */
+export async function restoreTabsAfterCrash(open: (tabId: string) => void, windowId: string = WINDOW_ID): Promise<string[]> {
+  let tabs: string[] = [];
+  try {
+    tabs = (await viewApi()?.get_restore_tabs?.(windowId)) || [];
+  } catch {
+    return [];
+  }
+  const ids = tabs.filter((id): id is string => typeof id === "string" && id.length > 0);
+  for (const id of ids) open(id);
+  return ids;
+}
+
+/** Test helper. */
+export function _resetVisibleChatsForTests(): void {
+  lastVisibleKey.clear();
+  shownByViewer.clear();
+}
+
 
 export function useFocusWindowTabs(initialFocusId: string, initialTitle: string) {
   const birthFocusId = decodeFocusParam(initialFocusId);
@@ -86,6 +160,8 @@ export function useFocusWindowTabs(initialFocusId: string, initialTitle: string)
 
   const openTabsRef = useRef(editor.openTabs);
   openTabsRef.current = editor.openTabs;
+
+  useReportVisibleChats(editor.layout, editor.openTabs);
 
   useEffect(() => {
     const defer = (fn: () => void) => window.setTimeout(fn, 0);
@@ -230,6 +306,14 @@ export function useFocusWindowTabs(initialFocusId: string, initialTitle: string)
   }, [hydrateTerminalTab]);
 
 
+
+  // A crash reload (WebView2 process died) reopens the tabs this window had, once.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    void restoreTabsAfterCrash((tabId) => addTab(tabId, ""));
+  }, [addTab]);
 
   const activateTab = useCallback((focusId: string, title = "") => {
     // Ghost ownership: Python still lists the tab but React already dropped it.

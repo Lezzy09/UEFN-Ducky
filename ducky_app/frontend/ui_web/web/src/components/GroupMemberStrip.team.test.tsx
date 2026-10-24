@@ -18,6 +18,7 @@ vi.mock("../hooks/useRunningAgents", () => ({ useRunningAgents: () => state.runn
 vi.mock("../hooks/waitingChats", () => ({ useWaitingChatIds: () => state.waiting }));
 
 const { GroupMemberStrip } = await import("./GroupMemberStrip");
+const { resetRosterStore } = await import("./team/rosterStore");
 
 const member = (id: string, extra: Partial<GroupMemberDto> = {}): GroupMemberDto => ({
   member_conv_id: id, profile_id: "", name: id, ...extra,
@@ -45,6 +46,7 @@ afterEach(() => {
   localStorage.clear();
   state.running = new Set();
   state.waiting = new Set();
+  resetRosterStore();
 });
 
 describe("team bar and roster", () => {

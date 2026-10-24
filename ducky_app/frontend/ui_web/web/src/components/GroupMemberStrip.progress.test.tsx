@@ -12,6 +12,7 @@ vi.mock("../hooks/useAgentEventBus", () => ({ subscribeAgentEvents: () => () => 
 import {
   GroupMemberStrip, laneCellLabel, laneModeOf, progressStep, progressText, subPlanProgress, sumProgress,
 } from "./GroupMemberStrip";
+import { resetRosterStore } from "./team/rosterStore";
 
 const plan = (): ChatPlan => ({
   id: "team-plan", chat_id: "lead", title: "Faster tools", todos: [],
@@ -46,7 +47,7 @@ const member = (name: string, node_id: string | null | "none", plan_id = "team-p
     assignment: node_id === "none" ? null : { plan_id, chat_id: "lead", node_id, title: name, status: "in_progress" } },
 });
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); running.ids = new Set(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); running.ids = new Set(); resetRosterStore(); });
 const openTeam = () => fireEvent.click(screen.getByRole("button", { name: /^Team/ }));
 
 describe("subPlanProgress", () => {

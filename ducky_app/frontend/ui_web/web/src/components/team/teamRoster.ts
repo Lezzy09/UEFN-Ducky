@@ -10,6 +10,7 @@ import type {
 } from "../../types/panel";
 import { modelFromFavorites } from "../ducky/duckyProfileForm";
 import { resolveNestedGroupHoverRows, shortModelLabel } from "../groupMemberHover";
+import { loadRoster } from "./rosterStore";
 
 /** Names of the running agents a leader's team holds (its group and nested groups), or []
  * when `chatId` leads no group in the sidebar tree. */
@@ -352,10 +353,8 @@ export async function loadRowProgress(
   row: { id: string; name: string; isGroup: boolean; parentHubId?: string },
 ): Promise<SubPlanProgress | null> {
   if (!api?.group_members || !api.get_plan) return null;
-  const membersOf = async (id: string) => {
-    const res = await api.group_members!(id).catch(() => null);
-    return res?.ok ? res.members || [] : [];
-  };
+  // The shared roster store: a sidebar row, the team bar and the chat read one cached copy.
+  const membersOf = async (id: string) => (await loadRoster(id, api)).members;
   const rosters: Record<string, GroupMemberDto[]> = {};
   let members: GroupMemberDto[] = [];
   if (row.isGroup) {

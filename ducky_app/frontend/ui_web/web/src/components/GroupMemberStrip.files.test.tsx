@@ -7,10 +7,11 @@ vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
 vi.mock("../hooks/useAgentEventBus", () => ({ subscribeAgentEvents: () => () => {} }));
 import { GroupMemberStrip } from "./GroupMemberStrip";
 import { memberFileLines } from "./groupMemberHover";
+import { resetRosterStore } from "./team/rosterStore";
 const members = ["Builder", "Designer"].map(name => ({ name, profile_id: "", member_conv_id: name.toLowerCase(), write_allowed: [] as string[] }));
 const props = { groupId: "project-a-group", members, onMembersChange: vi.fn(), onOpenMember: vi.fn() };
 const run = (group = props.groupId): ChangesetRunDto => ({ schema_version: 1, group_id: group, conv_id: "builder", run_id: "recorded-run", started: 1, status: "running", entries: [{ seq: 1, ts: 2, path: "src/file.ts", op: "write", tool: "write", before_hash: "", after_hash: "", in_lane: false, conflict: { kind: "concurrent_writer" }, outcome: "ok" }] });
-afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); resetRosterStore(); });
 const openTeam = () => fireEvent.click(screen.getByRole("button", { name: /^Team/ }));
 const details = (name: string) => fireEvent.click(screen.getByRole("button", { name: `Details for ${name}` }));
 it("shows recorded evidence for its member, configured lane changes and existing navigation", async () => {

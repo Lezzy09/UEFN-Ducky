@@ -4,7 +4,7 @@
  * it clears the moment a card is answered in any window. Tabs, sidebar rows, group rows
  * and the header's background activity list show it instead of the running spinner.
  */
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 import { listAskUserSessions, subscribeAskUser } from "../ask-user/runAskUser";
 import { requestPendingCard } from "../navigation/pendingCard";
@@ -25,16 +25,26 @@ export type WaitingItem = {
   id: string;
 };
 
+/** A chat's oldest unanswered card: what it waits on and since when (ms epoch). */
+export type ChatWait = { kind: WaitingItem["kind"]; at: number };
+
+/** What a row shows: the card kind and how many seconds it has waited. */
+export type NeedsYou = { kind: WaitingItem["kind"]; since: number };
+
 type Snapshot = {
   items: WaitingItem[];
   /** Every chat with a card waiting (the asking chat and the hubs that show it). */
   chatIds: ReadonlySet<string>;
+  /** Per chat id, its oldest card (same object until that changes, so rows don't re-render). */
+  byChat: ReadonlyMap<string, ChatWait>;
 };
 
-const EMPTY: Snapshot = { items: [], chatIds: new Set() };
+const EMPTY: Snapshot = { items: [], chatIds: new Set(), byChat: new Map() };
 let snapshot: Snapshot = EMPTY;
 let signature = "";
 const firstSeen = new Map<string, number>();
+/** When each card was first seen (ms epoch). */
+const firstSeenAt = new Map<string, number>();
 const listeners = new Set<() => void>();
 let stopSources: (() => void) | null = null;
 let seq = 0;
@@ -66,19 +76,35 @@ function collect(): WaitingItem[] {
 
 function recompute(): void {
   const items = collect();
-  for (const item of items) if (!firstSeen.has(item.key)) firstSeen.set(item.key, ++seq);
+  for (const item of items) {
+    if (firstSeen.has(item.key)) continue;
+    firstSeen.set(item.key, ++seq);
+    firstSeenAt.set(item.key, Date.now());
+  }
   const live = new Set(items.map((item) => item.key));
-  for (const key of [...firstSeen.keys()]) if (!live.has(key)) firstSeen.delete(key);
+  for (const key of [...firstSeen.keys()]) {
+    if (live.has(key)) continue;
+    firstSeen.delete(key);
+    firstSeenAt.delete(key);
+  }
   items.sort((a, b) => (firstSeen.get(a.key) ?? 0) - (firstSeen.get(b.key) ?? 0));
   const next = items.map((item) => `${item.key}@${item.convId}>${item.alsoIn.join(",")}`).join("|");
   if (next === signature) return;
   signature = next;
   const chatIds = new Set<string>();
+  const byChat = new Map<string, ChatWait>();
   for (const item of items) {
-    if (item.convId) chatIds.add(item.convId);
-    for (const id of item.alsoIn) chatIds.add(id);
+    // Oldest first, so the first card per chat is the one it has waited on longest.
+    for (const id of [item.convId, ...item.alsoIn]) {
+      if (!id) continue;
+      chatIds.add(id);
+      if (byChat.has(id)) continue;
+      const at = firstSeenAt.get(item.key) ?? Date.now();
+      const prev = snapshot.byChat.get(id);
+      byChat.set(id, prev && prev.kind === item.kind && prev.at === at ? prev : { kind: item.kind, at });
+    }
   }
-  snapshot = items.length ? { items, chatIds } : EMPTY;
+  snapshot = items.length ? { items, chatIds, byChat } : EMPTY;
   for (const cb of listeners) cb();
 }
 
@@ -135,6 +161,26 @@ export function useWaitingItems(): WaitingItem[] {
   return useSyncExternalStore(subscribeWaitingChats, readItems, readItems);
 }
 
+/** This chat's oldest unanswered card, or null (no store read needed by callers outside React). */
+export function chatWait(convId: string | undefined | null): ChatWait | null {
+  ensureSources();
+  return snapshot.byChat.get(String(convId || "")) ?? null;
+}
+
+/**
+ * "Needs you" for a row anywhere (sidebar, tabs, team bar): what the chat waits on and for how
+ * many seconds, or null. Re-renders only when that chat's card changes; `since` is as of render.
+ */
+export function useNeedsYou(convId: string | undefined | null): NeedsYou | null {
+  const id = String(convId || "");
+  const read = () => (id ? snapshot.byChat.get(id) ?? null : null);
+  const wait = useSyncExternalStore(subscribeWaitingChats, read, read);
+  return useMemo(
+    () => (wait ? { kind: wait.kind, since: Math.max(0, Math.round((Date.now() - wait.at) / 1000)) } : null),
+    [wait],
+  );
+}
+
 /** Open that chat and scroll to its unanswered card. */
 export function openWaitingChat(convId: string, name = ""): boolean {
   const cid = (convId || "").trim();
@@ -150,5 +196,6 @@ export function _resetWaitingChatsForTests(): void {
   snapshot = EMPTY;
   signature = "";
   firstSeen.clear();
+  firstSeenAt.clear();
   listeners.clear();
 }

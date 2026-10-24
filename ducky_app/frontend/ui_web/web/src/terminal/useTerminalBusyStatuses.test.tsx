@@ -6,6 +6,14 @@ import type { EditorLayoutState, EditorTab } from "../types/panel";
 
 const api = vi.hoisted(() => ({ terminal_busy: vi.fn(), terminal_busy_many: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
+const bus = vi.hoisted(() => ({ handlers: new Set<(event: Record<string, unknown>) => void>() }));
+vi.mock("../hooks/useAgentEventBus", () => ({
+  subscribeAgentEvents: (handler: (event: Record<string, unknown>) => void) => {
+    bus.handlers.add(handler);
+    return () => bus.handlers.delete(handler);
+  },
+}));
+const push = (event: Record<string, unknown>) => { for (const h of [...bus.handlers]) h(event); };
 vi.mock("../contexts/TerminalsSettingsContext", () => ({ useTerminalsSettings: () => ({ enabled: true }) }));
 
 import { TerminalHeaderBridge } from "../components/TerminalHeaderBridge";
@@ -73,30 +81,48 @@ const askedFor = (id: string) =>
   api.terminal_busy.mock.calls.filter(([sid]) => sid === id).length
   + api.terminal_busy_many.mock.calls.filter(([ids]) => (ids as string[]).includes(id)).length;
 
-it("asks once per tick for all terminals and re-renders nothing while nothing changes", async () => {
+it("asks once on mount, then nothing for 10 idle minutes and no re-renders", async () => {
   const view = render(<App />);
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
   expect(view.getByTestId("running").textContent).toBe("s2");
   const settled = calls();
   expect(settled).toBeLessThanOrEqual(2);
+  expect(askedFor("s4")).toBeGreaterThanOrEqual(1);
   const header = headerRenders;
   const strip = stripRenders;
 
-  for (let i = 0; i < 10; i += 1) await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
 
-  // Two pollers used to ask for every session one by one: 7 bridge calls each tick.
-  expect(calls() - settled).toBeLessThanOrEqual(10);
-  // The parked terminal is only a dot in the header list: every 10 s.
-  expect(askedFor("s4") - 1).toBeLessThanOrEqual(2);
-  expect(askedFor("s1") - 1).toBe(10);
+  expect(calls()).toBe(settled);
   expect(headerRenders).toBe(header);
   expect(stripRenders).toBe(strip);
 });
 
-it("shows a change on the next tick", async () => {
+it("a busy push asks once, a second later, for every shell pushed in that second", async () => {
   const view = render(<App />);
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-  runningIds = new Set(["s3"]);
-  await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
-  expect(view.getByTestId("running").textContent).toBe("s3");
+  const settled = api.terminal_busy_many.mock.calls.length;
+  runningIds = new Set(["s3", "s4"]);
+  act(() => {
+    push({ type: "terminal_busy", session_id: "s3", busy: true });
+    push({ type: "terminal_busy", session_id: "s4", busy: true });
+    push({ type: "terminal_busy", session_id: "s2", busy: false });
+    push({ type: "terminal_busy", session_id: "unknown", busy: true });
+  });
+  await act(async () => { await vi.advanceTimersByTimeAsync(999); });
+  expect(api.terminal_busy_many.mock.calls.length).toBe(settled);
+  await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+  expect(api.terminal_busy_many.mock.calls.length).toBe(settled + 1);
+  expect((api.terminal_busy_many.mock.calls.at(-1)![0] as string[]).sort()).toEqual(["s2", "s3", "s4"]);
+  expect(view.getByTestId("running").textContent).toBe("s3,s4");
+});
+
+it("a close push shows the shell idle without a call", async () => {
+  const view = render(<App />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  const settled = calls();
+  act(() => push({ type: "terminal_close", session_id: "s2" }));
+  expect(view.getByTestId("running").textContent).toBe("");
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+  expect(calls()).toBe(settled);
 });

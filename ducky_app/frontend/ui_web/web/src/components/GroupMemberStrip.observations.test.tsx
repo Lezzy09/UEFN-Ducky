@@ -10,6 +10,7 @@ vi.mock("../hooks/useAgentEventBus", () => ({ subscribeAgentEvents: (fn: (event:
 } }));
 import { GroupMemberStrip } from "./GroupMemberStrip";
 import { memberObservationLines } from "./groupMemberHover";
+import { resetRosterStore } from "./team/rosterStore";
 
 const rows = (): GroupMemberDto[] => ["Builder", "Designer"].map((name, index) => ({
   name, profile_id: "", member_conv_id: name.toLowerCase(),
@@ -18,7 +19,7 @@ const rows = (): GroupMemberDto[] => ["Builder", "Designer"].map((name, index) =
     assignment: { plan_id: "canonical", chat_id: "coord", node_id: "original", title: "Original task", status: "in_progress" },
   },
 }));
-afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.useRealTimers(); localStorage.clear(); resetRosterStore(); });
 const openTeam = () => fireEvent.click(screen.getByRole("button", { name: /^Team/ }));
 const details = (name: string) => fireEvent.click(screen.getByRole("button", { name: `Details for ${name}` }));
 const props = { groupId: "group", members: rows(), onMembersChange: () => {}, onOpenMember: () => {} };
@@ -64,6 +65,7 @@ describe("member observations", () => {
   });
 
   it("refreshes canonical-owner events but ignores unrelated projects and stale requests", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     api.group_members.mockResolvedValue({ ok: true, members: rows() });
     render(<GroupMemberStrip {...props} />);
     openTeam();
@@ -71,10 +73,15 @@ describe("member observations", () => {
     await screen.findByText(/Assignment: Original task/);
     api.group_members.mockClear();
     act(() => { for (const fn of listeners) fn({ type: "plan_updated", conv_id: "unrelated" }); });
+    act(() => { vi.advanceTimersByTime(10_000); });
     expect(api.group_members).not.toHaveBeenCalled();
     let finish!: (value: unknown) => void;
     api.group_members.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    act(() => { for (const fn of listeners) fn({ type: "plan_updated", conv_id: "coord" }); });
+    // A burst of activity for the plan owner is one read, 5 s later.
+    act(() => { for (let i = 0; i < 3; i++) for (const fn of listeners) fn({ type: "plan_updated", conv_id: "coord" }); });
+    expect(api.group_members).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(api.group_members).toHaveBeenCalledTimes(1);
     expect(api.group_members).toHaveBeenCalledWith("group");
     api.group_members.mockResolvedValue({ ok: false });
     fireEvent.click(screen.getByText("Refresh observation"));

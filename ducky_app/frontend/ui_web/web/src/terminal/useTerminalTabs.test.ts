@@ -6,13 +6,14 @@ import type { EditorTab } from "../types/panel";
 
 const api = vi.hoisted(() => ({ terminal_list: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
-const bus = vi.hoisted(() => ({ handler: null as null | ((event: Record<string, unknown>) => void) }));
+const bus = vi.hoisted(() => ({ handlers: new Set<(event: Record<string, unknown>) => void>() }));
 vi.mock("../hooks/useAgentEventBus", () => ({
   subscribeAgentEvents: (handler: (event: Record<string, unknown>) => void) => {
-    bus.handler = handler;
-    return () => {};
+    bus.handlers.add(handler);
+    return () => bus.handlers.delete(handler);
   },
 }));
+const push = (event: Record<string, unknown>) => { for (const h of [...bus.handlers]) h(event); };
 vi.mock("../contexts/TerminalsSettingsContext", () => ({ getTerminalsEnabled: () => true }));
 
 import { useTerminalTabs } from "./useTerminalTabs";
@@ -44,13 +45,13 @@ it("lists an agent's terminal in the header instead of opening it over the chat"
   api.terminal_list.mockResolvedValue({ sessions: [] });
   const { result } = renderHook(() => useTerminalTabs(editor));
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-  act(() => bus.handler?.({ type: "terminal_open", ...session("agent"), activate: false }));
+  act(() => push({ type: "terminal_open", ...session("agent"), activate: false }));
   expect(editor.openTab).not.toHaveBeenCalled();
   expect(result.current.parkedTabs.map((t) => t.terminalSessionId)).toEqual(["agent"]);
 
   // Already open as a tab (an agent reused it): left as it is, never listed twice.
   editor.openTabsRef.current = [{ id: "terminal:open", kind: "terminal", name: "open", terminalSessionId: "open" }];
-  act(() => bus.handler?.({ type: "terminal_open", ...session("open"), activate: false }));
+  act(() => push({ type: "terminal_open", ...session("open"), activate: false }));
   expect(editor.openTab).not.toHaveBeenCalled();
   expect(result.current.parkedTabs.map((t) => t.terminalSessionId)).toEqual(["agent"]);
 });
@@ -74,9 +75,12 @@ it("does not re-render the chat view when the parked shells are unchanged", asyn
   const first = parked;
   const rendersAfterFirst = childRenders;
 
-  for (let i = 0; i < 5; i++) await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+  for (let i = 0; i < 5; i++) {
+    act(() => push({ type: "terminal_busy", session_id: "a", busy: i % 2 === 0 }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  }
 
-  expect(api.terminal_list.mock.calls.length).toBeGreaterThanOrEqual(6);
+  expect(api.terminal_list.mock.calls.length).toBe(6);
   expect(childRenders).toBe(rendersAfterFirst);
   expect(parked).toBe(first);
 });
@@ -86,10 +90,29 @@ it("still picks up a shell that started or ended elsewhere", async () => {
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
 
   api.terminal_list.mockResolvedValue({ sessions: [session("b"), session("c")] });
-  await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+  act(() => push({ type: "terminal_close", session_id: "a" }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
   expect(result.current.parkedTabs.map((t) => t.terminalSessionId).sort()).toEqual(["b", "c"]);
 
   api.terminal_list.mockResolvedValue({ sessions: [session("b"), { ...session("c"), title: "Renamed" }] });
-  await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+  act(() => push({ type: "terminal_busy", session_id: "c", busy: true }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
   expect(result.current.parkedTabs.find((t) => t.terminalSessionId === "c")?.name).toContain("Renamed");
+});
+
+it("lists shells once on mount, never while idle, once per burst of pushes", async () => {
+  renderHook(() => useTerminalTabs(editor));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(api.terminal_list).toHaveBeenCalledTimes(1);
+
+  await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
+  expect(api.terminal_list).toHaveBeenCalledTimes(1);
+
+  act(() => {
+    push({ type: "terminal_open", ...session("c"), activate: false });
+    push({ type: "terminal_busy", session_id: "c", busy: true });
+    push({ type: "text_delta", conv_id: "x" });
+  });
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(api.terminal_list).toHaveBeenCalledTimes(2);
 });
