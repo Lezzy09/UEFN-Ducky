@@ -234,6 +234,72 @@ def test_public_qualified_mutator_refusal_followup(public, dispatch, monkeypatch
     json.dumps(public.conv.messages, allow_nan=False)
 
 
+@pytest.mark.parametrize("mode", ["ask", "plan"])
+def test_claude_ask_reads_through_the_shared_tool_server(monkeypatch, mode):
+    """Oct 24 2026 replay: Claude Code (plan permission mode) asks ducky_permission_prompt
+    before each Ducky tool; the reads it asks about go ahead, writes stay refused."""
+    import json
+    from backend.bridge import shared_mcp
+
+    class Server:
+        _ducky_skip_plugin_wait = True
+
+        def __init__(self, names):
+            self.calls = []
+            self._tool_manager = NS(_tools={n: NS(name=n, is_async=True, inputSchema={}) for n in names})
+
+        async def list_tools(self):
+            return list(self._tool_manager._tools.values())
+
+        async def call_tool(self, name, arguments):
+            self.calls.append(name)
+            return [{"type": "text", "text": "plan 7df73ab45675"}]
+
+    server = Server(["ducky_permission_prompt", "ducky_get_plan", "ducky_list_plans", "workspace_search",
+                     "workspace_write_file", "ducky_terminal_run", "execute_python"])
+    conv = NS(messages=[{"role": "assistant", "run_id": "run", "requested_mode": mode}])
+    monkeypatch.setattr("frontend.ui_web.project_chats.load_conversation", lambda cid: conv)
+    ident = shared_mcp.identity_from_payload({"conv_id": "b47c8c50-efa4-4371-a191-f80e323a4a9f", "run_id": "run",
+                                              "coding_agent": "claude_code"})
+    reads = [("ducky_get_plan", {"chat_id": "b47c8c50-efa4-4371-a191-f80e323a4a9f"}), ("ducky_list_plans", {}),
+             ("workspace_search", {"pattern": "7df73ab45675", "output_mode": "files"}),
+             ("workspace_search", {"pattern": "7df73ab45675", "output_mode": "files", "path": "ducky_app"})]
+
+    async def replay():
+        for name, args in reads:
+            asked = await shared_mcp._call_tool(server, "ducky_permission_prompt",
+                                                {"tool_name": "mcp__uefn__" + name, "input": args}, ident)
+            assert json.loads(asked["content"][0]["text"]) == {"behavior": "allow", "updatedInput": args}
+            result = await shared_mcp._call_tool(server, name, args, ident)
+            assert not result.get("isError") and "7df73ab45675" in result["content"][0]["text"]
+        for name in ("workspace_write_file", "ducky_terminal_run", "execute_python"):
+            asked = await shared_mcp._call_tool(server, "ducky_permission_prompt",
+                                                {"tool_name": "mcp__uefn__" + name, "input": {}}, ident)
+            assert json.loads(asked["content"][0]["text"])["behavior"] == "deny"
+            assert (await shared_mcp._call_tool(server, name, {}, ident))["isError"]
+    asyncio.run(replay())
+    assert server.calls == [name for name, _ in reads]
+    assert run_context.current_mode() == "agent"
+
+
+@pytest.mark.parametrize("target,behavior", [("mcp__uefn__ducky_get_plan", "allow"), ("mcp__uefn__workspace_write_file", "deny")])
+def test_dedicated_server_answers_the_permission_prompt(target, behavior):
+    import json
+    from backend.server import ProtectedFastMCP
+
+    server = ProtectedFastMCP("ask-permission-prompt")
+    for name in ("ducky_get_plan", "workspace_write_file", "ducky_permission_prompt"):
+        def operation() -> str:
+            raise AssertionError("the mode answers the prompt; no tool runs")
+        server.add_tool(operation, name=name)
+    token = run_context.set_mode("ask")
+    try:
+        rows = asyncio.run(server.call_tool("ducky_permission_prompt", {"tool_name": target, "input": {}}))
+    finally:
+        run_context.reset_mode(token)
+    assert json.loads(rows[0].text)["behavior"] == behavior
+
+
 @pytest.mark.parametrize("name", ["docs__read_page", "mcp__uefn__workspace_read_file"])
 @pytest.mark.parametrize("route", ["direct", "nested"])
 def test_public_literal_qualified_read_transport_followup(public, dispatch, monkeypatch, name, route):

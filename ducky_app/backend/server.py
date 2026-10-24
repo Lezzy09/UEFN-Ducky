@@ -126,7 +126,7 @@ class ProtectedFastMCP(FastMCP):
 
     async def call_tool(self, name, arguments):
         from backend.agent.run_context import current_mode
-        from backend.agent.toolsets.plan_safe import mode_tool_block_reason
+        from backend.agent.toolsets.plan_safe import mode_permission_answer, mode_tool_block_reason
         from mcp.server.fastmcp.exceptions import ToolError
 
         # This context is bound by the host, never by tool arguments or DUCKY_*
@@ -135,6 +135,11 @@ class ProtectedFastMCP(FastMCP):
         mode = current_mode()
         if mode != "agent":
             catalog = {tool.name: tool for tool in await super().list_tools()}
+            answer = mode_permission_answer(mode, name, arguments, catalog)
+            if answer is not None:
+                from mcp.types import TextContent
+
+                return [TextContent(type="text", text=answer)]
             reason = mode_tool_block_reason(mode, name, arguments, catalog)
             if reason:
                 raise ToolError(reason)

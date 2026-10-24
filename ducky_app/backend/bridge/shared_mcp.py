@@ -624,7 +624,7 @@ async def _call_tool(mcp: Any, name: str, arguments: dict[str, Any], ident: Any)
     from backend.workspace import identity
 
     from backend.agent.run_context import set_mode, reset_mode
-    from backend.agent.toolsets.plan_safe import mode_tool_block_reason
+    from backend.agent.toolsets.plan_safe import mode_permission_answer, mode_tool_block_reason
 
     mode = await asyncio.to_thread(_calling_mode, ident)
     mode_token = set_mode(mode)
@@ -641,6 +641,9 @@ async def _call_tool(mcp: Any, name: str, arguments: dict[str, Any], ident: Any)
                 pass
         if mode != "agent":
             catalog = {tool.name: tool for tool in await _async_list_tools(mcp)}
+            answer = mode_permission_answer(mode, name, arguments, catalog)
+            if answer is not None:
+                return {"content": [{"type": "text", "text": answer}], "isError": False}
             reason = mode_tool_block_reason(mode, name, arguments, catalog)
             if reason:
                 return {"content": [{"type": "text", "text": reason}], "isError": True}

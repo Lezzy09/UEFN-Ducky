@@ -135,6 +135,62 @@ def test_ask_answers_questions_about_the_level_and_ducky_but_changes_nothing():
             assert mode_tool_block_reason(mode, name, {}, catalog), (mode, name)
 
 
+def test_real_catalog_reads_pass_in_ask_and_plan():
+    """The Oct 24 refusals, replayed against the real registry the tool server lists."""
+    import asyncio
+
+    from backend.server import mcp
+    import backend.tools  # noqa: F401 — registers the core tools
+    from backend.agent.toolsets.plan_safe import mode_tool_block_reason
+
+    catalog = {t.name: t for t in asyncio.run(mcp.list_tools())}
+    calls = [("ducky_get_plan", {"chat_id": "b47c8c50-efa4-4371-a191-f80e323a4a9f"}), ("ducky_list_plans", {}),
+             ("workspace_search", {"pattern": "7df73ab45675", "output_mode": "files"}),
+             ("workspace_search", {"pattern": "7df73ab45675", "path": "ducky_app"}),
+             ("workspace_read_file", {"path": "README.md"})]
+    for mode in ("ask", "plan"):
+        for name, args in calls:
+            for spelling in (name, "mcp__uefn__" + name):
+                assert mode_tool_block_reason(mode, spelling, args, catalog) == "", (mode, spelling)
+            nested = {"name": name, "arguments": args}
+            assert mode_tool_block_reason(mode, "ducky_call_tool", nested, catalog) == "", (mode, name)
+        for name in ("workspace_write_file", "ducky_terminal_run", "execute_python"):
+            for spelling in (name, "mcp__uefn__" + name):
+                assert mode_tool_block_reason(mode, spelling, {}, catalog), (mode, spelling)
+    assert mode_tool_block_reason("ask", "ducky_plan_update_node", {}, catalog)
+
+
+def test_permission_prompt_answers_from_the_mode_policy():
+    """Claude Code (plan permission mode) asks ducky_permission_prompt before each MCP call."""
+    import json
+
+    from backend.agent.toolsets.plan_safe import mode_permission_answer
+
+    catalog = {n: _T(n) for n in ("ducky_permission_prompt", "ducky_get_plan", "workspace_search",
+                                  "workspace_read_file", "workspace_write_file", "ducky_plan_update_node",
+                                  "ducky_terminal_run", "execute_python", "ducky_call_tool")}
+
+    def answer(mode, target, args=None):
+        raw = mode_permission_answer(mode, "ducky_permission_prompt", {"tool_name": target, "input": args or {}}, catalog)
+        return json.loads(raw)
+
+    for mode in ("ask", "plan"):
+        for name in ("ducky_get_plan", "workspace_search", "workspace_read_file"):
+            for spelling in (name, "mcp__uefn__" + name):
+                assert answer(mode, spelling, {"pattern": "x"}) == {"behavior": "allow", "updatedInput": {"pattern": "x"}}
+        assert answer(mode, "Read")["behavior"] == "allow"
+        for name in ("workspace_write_file", "ducky_terminal_run", "execute_python", "ducky_permission_prompt", "Bash", "nope"):
+            for spelling in (name, "mcp__uefn__" + name):
+                denied = answer(mode, spelling)
+                assert denied["behavior"] == "deny" and f"{mode.title()} mode" in denied["message"], (mode, spelling)
+        nested = answer(mode, "mcp__uefn__ducky_call_tool", {"name": "workspace_write_file", "arguments": {}})
+        assert nested["behavior"] == "deny"
+    assert answer("ask", "mcp__uefn__ducky_plan_update_node")["behavior"] == "deny"
+    assert answer("plan", "mcp__uefn__ducky_plan_update_node")["behavior"] == "allow"
+    assert mode_permission_answer("agent", "ducky_permission_prompt", {"tool_name": "Bash"}, catalog) is None
+    assert mode_permission_answer("ask", "ducky_get_plan", {}, catalog) is None
+
+
 def test_read_only_tools_never_wait_for_a_plan_tick(monkeypatch):
     """Reading a long tool result, a chat or a terminal is never gated on ticking a plan step."""
     from backend.agent.coding_agents import plans

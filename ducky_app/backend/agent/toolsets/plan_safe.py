@@ -131,6 +131,31 @@ def mode_tool_block_reason(mode: str, name: str, arguments: Any, catalog: Mappin
         return "blocked: invalid agent mode"
     return ""
 
+
+PERMISSION_PROMPT_TOOL = "ducky_permission_prompt"
+# Claude Code's own tools that only read (permission_prompt._READ_ONLY_TOOLS).
+_NATIVE_READ_TOOLS = frozenset({"Read", "Glob", "Grep", "LS", "NotebookRead"})
+
+
+def mode_permission_answer(mode: str, name: str, arguments: Any, catalog: Mapping[str, Any]) -> str | None:
+    """Claude Code's permission prompt, answered from the Ask/Plan policy; None = not one.
+
+    Ducky's Ask and Plan run Claude Code in its ``plan`` permission mode, which calls
+    ``ducky_permission_prompt`` before every MCP tool. That prompt is no read, so the mode
+    gate refused it and Claude reported every read as blocked (Oct 24 2026: ducky_get_plan,
+    ducky_list_plans, workspace_search). The prompt's target is the real call: a target the
+    mode allows goes ahead without a card, any other is denied with the mode's reason.
+    """
+    if mode not in ("ask", "plan") or canonical_tool_name(name, catalog) != PERMISSION_PROMPT_TOOL:
+        return None
+    args = arguments if isinstance(arguments, dict) else {}
+    target = str(args.get("tool_name") or "")
+    tool_input = args.get("input") if isinstance(args.get("input"), dict) else {}
+    reason = "" if target in _NATIVE_READ_TOOLS else mode_tool_block_reason(mode, target, tool_input, catalog)
+    if reason:
+        return json.dumps({"behavior": "deny", "message": reason})
+    return json.dumps({"behavior": "allow", "updatedInput": tool_input})
+
 # Leaf-name stems that look like read/discover (after nested ``prefix__``).
 _ALLOW_SUBSTRINGS: tuple[str, ...] = (
     "_status",
