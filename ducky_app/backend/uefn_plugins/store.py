@@ -1081,6 +1081,12 @@ def _import_plugin_from_bytes(
                  if '"data_locks"' in e or '"data_local"' in e or '"team_folders"' in e]
     if bad_locks:
         return {"ok": False, "error": " ".join(bad_locks)}
+    from backend.uefn_plugins import asset_packs
+
+    try:
+        asset_packs.manifest_packs(manifest)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
 
     # Refuse a Store zip whose signature does not match it (tamper check before write).
     try:
@@ -1225,6 +1231,8 @@ def _import_plugin_from_bytes(
         written["id"] = pid
         written["kind"] = str(written.get("kind") or "plugin")
         written["source"] = source
+        if isinstance(signed_record, dict) and str(signed_record.get("slug") or "").strip():
+            written["store_slug"] = str(signed_record["slug"]).strip()  # asset packs are fetched by it
         # Record a private item's audience, so it can be paused when access to it is
         # lost (and resumed when it returns).
         if isinstance(signed_record, dict):
@@ -1339,6 +1347,10 @@ def _import_plugin_from_bytes(
     if skill_ids:
         _refresh_plugin_skills_async()
     _reload_in_app_process(pid)
+    # Big files this version carries download after the zip landed (the plugin asks
+    # api.asset_packs() for progress and api.asset_pack_path(id) once ready).
+    if source == "store":
+        asset_packs.start_install(pid, written, str(written.get("store_slug") or ""))
     return {
         "ok": True,
         "id": pid,

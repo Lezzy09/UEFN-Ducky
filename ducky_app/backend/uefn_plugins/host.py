@@ -4279,6 +4279,32 @@ class _PluginApi:
         register_media_generator(self.plugin_id, kind, fn, describe)
         self.log(f"{kind} generator registered")
 
+    def asset_pack_path(self, pack_id: str) -> str | None:
+        """Folder of this plugin's unpacked asset pack ``pack_id`` (plugin.json
+        ``asset_packs``), or None until it has downloaded, passed its sha256 and unpacked."""
+        from backend.uefn_plugins.asset_packs import asset_pack_path
+
+        path = asset_pack_path(self.plugin_id, pack_id)
+        return str(path) if path else None
+
+    def asset_packs(self) -> list[dict[str, Any]]:
+        """Progress of this plugin's asset packs for its panel: one
+        ``{id, bytes, state, done, total, error, path?}`` per pack this PC needs."""
+        from backend.uefn_plugins.asset_packs import status
+
+        return status(self.plugin_id)
+
+    def ensure_asset_packs(self) -> bool:
+        """Fetch missing packs from the Store in the background (resuming a partial
+        download). False when none are missing or a fetch is already running."""
+        from backend.uefn_plugins.asset_packs import start_install
+        from backend.uefn_plugins.store import load_plugin_manifest
+
+        manifest = load_plugin_manifest(self.plugin_id) or {}
+        if all(row["state"] == "ready" for row in self.asset_packs()):
+            return False
+        return start_install(self.plugin_id, manifest, str(manifest.get("store_slug") or ""))
+
     def connection(self, fn: Any, *, label: str = "", program: str = "") -> None:
         """Show this plugin in the header Connections menu.
 
