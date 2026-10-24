@@ -896,6 +896,9 @@ def _cancel_here(conv_id: str | None = None, *, by_user: bool = True) -> None:
                 from backend.agent.coding_agents import proc_exec
 
                 proc_exec.terminate_conv_process(cid)
+                from frontend.agent_host import turns as host_turns
+
+                host_turns.kill(cid)
             if runner is not None:
                 try:
                     runner.cancel()
@@ -2056,34 +2059,47 @@ def run_message(
 
             try:
                 from backend.agent.coding_agents.runner import run_coding_agent_message
+                from frontend.agent_host import turns as host_turns
 
-                # Reload conv so append_message in runner sees the user turn we just saved.
-                fresh = load_conversation(conv_id) or conv
                 # The whole message, not just the typed words: attached files, picture
                 # paths and video notes live in ``content``.
-                run_coding_agent_message(
-                    fresh,
-                    (
-                        "Continue."
-                        if resume
-                        else ((content if isinstance(content, str) else str(content)) or user_text)
-                    ),
-                    model=turn_model,
-                    push=watched_push,
-                    run_id=run_id,
-                    cancel=cancel_event,
-                    mode=m,
+                turn_text = (
+                    "Continue."
+                    if resume
+                    else ((content if isinstance(content, str) else str(content)) or user_text)
                 )
+                # The CLI and its reader threads run in an agent-host process when one starts.
+                outcome = (
+                    host_turns.run_in_host(conv_id, run_id, turn_text, model=turn_model, mode=m,
+                                           push=watched_push, cancel=cancel_event)
+                    if host_turns.enabled() else None
+                )
+                if outcome:
+                    raise host_turns.HostTurnError(outcome)
+                if outcome is None:
+                    # Reload conv so append_message in runner sees the user turn we just saved.
+                    fresh = load_conversation(conv_id) or conv
+                    run_coding_agent_message(
+                        fresh,
+                        turn_text,
+                        model=turn_model,
+                        push=watched_push,
+                        run_id=run_id,
+                        cancel=cancel_event,
+                        mode=m,
+                    )
             except Exception as e:
                 from backend.agent.coding_agents.runner import checkpoint_coding_turn
+                from frontend.agent_host.turns import HostTurnError
 
                 partial = next((msg for msg in reversed(fresh.messages)
                                 if msg.get("role") == "assistant" and msg.get("run_id") == run_id), {})
-                checkpoint_coding_turn(
-                    fresh, agent_id=coding_agent, run_id=run_id,
-                    blocks=partial.get("blocks"), reply=partial.get("text", ""),
-                    error=str(e), requested_mode=m, effective_mode="",
-                )
+                if not isinstance(e, HostTurnError):  # the host kept its own partial reply
+                    checkpoint_coding_turn(
+                        fresh, agent_id=coding_agent, run_id=run_id,
+                        blocks=partial.get("blocks"), reply=partial.get("text", ""),
+                        error=str(e), requested_mode=m, effective_mode="",
+                    )
                 error_push = lambda event: push({**event, "requested_mode": m, "effective_mode": ""})
                 error_push({"type": "error", "text": str(e), "conv_id": conv_id, "run_id": run_id})
                 _push_agent_stopped(error_push, conv_id, run_id, "error")
