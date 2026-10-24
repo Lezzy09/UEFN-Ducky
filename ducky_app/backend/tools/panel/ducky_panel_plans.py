@@ -22,8 +22,13 @@ def _project_root() -> str:
 
 
 @mcp.tool()
-def ducky_get_plan(chat_id: str = "", pretty: bool = False) -> str:
-    """Load the project Plan for this conversation (or chat_id). Returns outline numbering 1, 1.1, 1.1.1, …"""
+def ducky_get_plan(chat_id: str = "", pretty: bool = False, section: str = "", outline: bool = False) -> str:
+    """Load the project Plan for this conversation (or chat_id). Returns outline numbering 1, 1.1, 1.1.1, …
+
+    ``section=<node id>`` returns only that sub plan, its steps and their notes.
+    ``outline=true`` returns titles, status and owner per step, no notes and no full plan:
+    read a big plan that way, then the part you need with ``section=``.
+    """
     from backend.agent.coding_agents.plans import attach_next_tick, load_plan_view, outline_numbers, todo_progress
 
     cid = _resolve_plan_chat_id(chat_id)
@@ -37,6 +42,28 @@ def ducky_get_plan(chat_id: str = "", pretty: bool = False) -> str:
     if not plan:
         return tool_json(
             {"ok": True, "plan": None, "progress": todo_progress(None), "outline": []},
+            pretty=pretty,
+        )
+    head = {key: plan.get(key) for key in ("id", "chat_id", "title", "status", "kind", "assigned_from") if plan.get(key)}
+    if (section or "").strip():
+        found = next((n for n in _walk_nodes(plan.get("nodes")) if n.get("id") == section.strip()), None)
+        if found is None:
+            return tool_json({"ok": False, "error": f"no step {section.strip()!r} in this plan"}, pretty=pretty)
+        label = next((lab for lab, n in outline_numbers(plan.get("nodes")) if n is found), "")
+        return tool_json(
+            attach_next_tick({"ok": True, "plan": head, "n": label, "section": found,
+                              "progress": todo_progress({"nodes": [found]})}, plan),
+            pretty=pretty,
+        )
+    if outline:
+        rows = []
+        for lab, n in outline_numbers(plan.get("nodes")):
+            row = {"n": lab, "id": n["id"], "content": n["content"], "status": n["status"]}
+            if n.get("assignee"):
+                row["owner"] = n["assignee"]
+            rows.append(row)
+        return tool_json(
+            attach_next_tick({"ok": True, "plan": head, "progress": todo_progress(plan), "outline": rows}, plan),
             pretty=pretty,
         )
     return tool_json(
@@ -125,10 +152,14 @@ def ducky_plan_update_node(
     pretty: bool = False,
     assignee: str | None = None,
     after: list[str] | None = None,
+    planned_assignee: str | None = None,
 ) -> str:
     """Update a node's content, status, kind, body_markdown, assignee and/or after.
 
     ``after`` = ids of the steps this one waits for (``[]`` clears); allowed while playing.
+
+    ``planned_assignee`` = the ducky profile or chat id picked to own this sub plan later
+    (``""`` clears it). It never starts anyone: Launch seats the planned owners.
 
     Status, notes and assignee updates are allowed after start. ``assignee`` is the chat or
     group id that owns this part (``""`` clears it): that group's chats then show this
@@ -167,15 +198,20 @@ def ducky_plan_update_node(
             template_id=(template_id or "").strip() or None,
             assignee=assignee,
             after=after,
+            planned_assignee=planned_assignee,
         )
     except ValueError as exc:
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     if plan.get("kind") != "template":
         push_plan_updated(plan)
-    # The changed step, the outline and the progress: not the whole plan with every step's
-    # text (8.5 KB per tick; one team ticked 67 times in 50 minutes). ducky_get_plan reads it all.
+    from backend.agent.coding_agents.plans import with_plan_review
+
+    # The changed step and the progress: not the whole plan with every step's text (8.5 KB per
+    # tick; one team ticked 67 times in 50 minutes). ducky_get_plan reads it all.
     changed = next((n for n in _walk_nodes(plan.get("nodes")) if n.get("id") == node_id), None)
     result = _plan_edit_result(plan, changed)
+    if content or kind or after is not None or assignee is not None:
+        result = with_plan_review(result, plan)
     closed = _sections_closed_by(plan.get("nodes"), node_id) if status in ("completed", "cancelled") else []
     if closed:
         # Members then tried to tick or annotate their finished section and were refused.
@@ -186,18 +222,23 @@ def ducky_plan_update_node(
     return tool_json(attach_next_tick(result, plan if plan.get("kind") != "template" else None), pretty=pretty)
 
 
-def _plan_edit_result(plan: dict[str, Any], node: dict[str, Any] | None) -> dict[str, Any]:
-    """The changed step, the outline and the progress: never the whole plan with every
-    step's notes (63 KB on a 30-step team plan). ducky_get_plan reads it all."""
-    from backend.agent.coding_agents.plans import outline_numbers, todo_progress
+_NOTES_IN_REPLY = 400
 
+
+def _plan_edit_result(plan: dict[str, Any], node: dict[str, Any] | None) -> dict[str, Any]:
+    """The changed step and the progress: never the whole plan or its outline (25k characters
+    on a 260-step plan, every tick). ducky_get_plan(outline=true / section=) reads the rest."""
+    from backend.agent.coding_agents.plans import todo_progress
+
+    slim = {key: value for key, value in (node or {}).items() if key != "children"}
+    notes = str(slim.get("body_markdown") or "")
+    if len(notes) > _NOTES_IN_REPLY:
+        slim["body_markdown"] = notes[:_NOTES_IN_REPLY] + "… (ducky_get_plan(section=…) has the rest)"
     return {
         "ok": True,
         "plan": {key: plan.get(key) for key in ("id", "chat_id", "title", "status", "kind")},
-        "node": {key: value for key, value in (node or {}).items() if key != "children"},
+        "node": slim,
         "progress": todo_progress(plan) if plan.get("kind") != "template" else None,
-        "outline": [{"n": lab, "id": n["id"], "content": n["content"], "status": n["status"]}
-                    for lab, n in outline_numbers(plan.get("nodes"))],
     }
 
 
@@ -247,7 +288,10 @@ def ducky_plan_delete_node(
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     if plan.get("kind") != "template":
         push_plan_updated(plan)
-    return tool_json(_plan_edit_result(plan, {"id": node_id, "deleted": True}), pretty=pretty)
+    from backend.agent.coding_agents.plans import attach_next_tick
+
+    result = _plan_edit_result(plan, {"id": node_id, "deleted": True})
+    return tool_json(attach_next_tick(result, plan if plan.get("kind") != "template" else None), pretty=pretty)
 
 
 @mcp.tool()
@@ -276,5 +320,8 @@ def ducky_plan_move_node(
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     if plan.get("kind") != "template":
         push_plan_updated(plan)
+    from backend.agent.coding_agents.plans import attach_next_tick
+
     moved = next((n for n in _walk_nodes(plan.get("nodes")) if n.get("id") == node_id), None)
-    return tool_json(_plan_edit_result(plan, moved), pretty=pretty)
+    result = _plan_edit_result(plan, moved)
+    return tool_json(attach_next_tick(result, plan if plan.get("kind") != "template" else None), pretty=pretty)
