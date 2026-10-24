@@ -208,26 +208,11 @@ def plugin_errors(plugin_id: str, *, since: float = 0.0, limit: int = 50) -> dic
 
 # --------------------------------------------------------------------------- repo sync
 
-_LINKS = ".repo_links.json"  # beside the drafts: a file, so draft listings skip it
-
-
-def _links_path() -> Path:
-    from backend.uefn_plugins.store import appdata_ai_plugins_dir
-
-    return appdata_ai_plugins_dir() / _LINKS
-
-
-def _links() -> dict[str, str]:
-    try:
-        data = json.loads(_links_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
-
-
 def linked_repo(plugin_id: str) -> str:
     """The repo folder a draft was last tested from ("" when none)."""
-    return _links().get(str(plugin_id or "").strip().lower(), "")
+    from backend.uefn_plugins.store import ai_draft_repo_links
+
+    return ai_draft_repo_links().get(str(plugin_id or "").strip().lower(), "")
 
 
 def _repo_files(repo: Path) -> list[str]:
@@ -255,9 +240,10 @@ def _repo_files(repo: Path) -> list[str]:
 def sync_from_repo(plugin_id: str, repo: str = "") -> dict[str, Any]:
     """Copy every repo file whose bytes differ into the draft (``repo``: a folder with
     this plugin's plugin.json; empty = the linked one). Draft files the repo doesn't
-    have are listed, never deleted. A given ``repo`` becomes the link."""
+    have are listed, never deleted. A given ``repo`` becomes the link. The draft is
+    AppData, not a project: store.py writes it, outside the project write pipeline."""
     from backend.tools.panel.panel_ai_plugins import _draft_root
-    from backend.uefn_plugins.store import normalize_plugin_id
+    from backend.uefn_plugins.store import link_ai_draft_repo, normalize_plugin_id, write_ai_draft_bytes
 
     pid = normalize_plugin_id(plugin_id)
     raw = str(repo or "").strip() or linked_repo(pid)
@@ -278,8 +264,7 @@ def sync_from_repo(plugin_id: str, repo: str = "") -> dict[str, Any]:
         dst = draft / rel
         if dst.is_file() and dst.read_bytes() == data:
             continue
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_bytes(data)
+        write_ai_draft_bytes(pid, rel, data)
         synced.append(rel)
     have = set(files)
     draft_only = sorted(
@@ -287,9 +272,7 @@ def sync_from_repo(plugin_id: str, repo: str = "") -> dict[str, Any]:
         if p.is_file() and "__pycache__" not in p.parts and p.relative_to(draft).as_posix() not in have
     )
     if str(repo or "").strip() and linked_repo(pid) != str(src):
-        links = {**_links(), pid: str(src)}
-        _links_path().parent.mkdir(parents=True, exist_ok=True)
-        _links_path().write_text(json.dumps(links, indent=2), encoding="utf-8")
+        link_ai_draft_repo(pid, str(src))
     return {"ok": True, "repo": str(src), "synced": synced, **({"draft_only": draft_only} if draft_only else {})}
 
 

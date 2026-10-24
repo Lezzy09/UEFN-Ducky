@@ -446,6 +446,36 @@ def set_swarm_draft_trust(group_ids: list[str], on: bool) -> dict[str, Any]:
     return {"ok": True, "groups": data["groups"]}
 
 
+def write_ai_draft_bytes(plugin_id: str, rel: str, data: bytes) -> None:
+    """One file of an AI plugin draft (AppData, not a project: no write pipeline),
+    exactly these bytes. ``rel`` must stay inside the draft."""
+    root = (appdata_ai_plugins_dir() / normalize_plugin_id(plugin_id)).resolve()
+    target = (root / rel).resolve()
+    if not target.is_relative_to(root) or target == root:
+        raise ValueError(f"path escapes draft: {rel!r}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+
+
+_DRAFT_LINKS_FILE = ".repo_links.json"  # beside the drafts: a file, so draft listings skip it
+
+
+def ai_draft_repo_links() -> dict[str, str]:
+    """plugin id → the repo folder its draft is synced from (ducky_plugin_test repo=)."""
+    try:
+        data = json.loads((appdata_ai_plugins_dir() / _DRAFT_LINKS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+
+def link_ai_draft_repo(plugin_id: str, repo: str) -> None:
+    links = {**ai_draft_repo_links(), normalize_plugin_id(plugin_id): str(repo)}
+    path = appdata_ai_plugins_dir() / _DRAFT_LINKS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(links, indent=2), encoding="utf-8")
+
+
 def _caller_group() -> str:
     try:
         from backend.workspace.identity import resolve_context
