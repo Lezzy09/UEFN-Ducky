@@ -454,14 +454,18 @@ def _launch_setup_until_handoff(
 
 
 def _download(url: str, dest: Path, *, timeout: float = 120.0) -> str | None:
-    """Retry interrupted transfers; expose a complete file only after an atomic move."""
-    from frontend.update_network import ATTEMPTS, retryable, retry_delay
+    """Retry interrupted transfers, resuming from the bytes already on disk; expose a
+    complete file only after an atomic move."""
+    from frontend.update_network import ATTEMPTS, MAX_TRIES, retryable, retry_delay
 
     partial = dest.with_suffix(dest.suffix + ".part")
+    _unlink_quiet(partial)
+    misses = 0
     try:
-        for attempt in range(ATTEMPTS):
+        for _ in range(MAX_TRIES):
             if _cancelled():
                 return _CANCELLED
+            before = partial.stat().st_size if partial.exists() else 0
             try:
                 _download_once(url, partial, timeout=timeout)
                 if _cancelled():
@@ -471,50 +475,45 @@ def _download(url: str, dest: Path, *, timeout: float = 120.0) -> str | None:
             except (OSError, ValueError, http.client.HTTPException) as exc:
                 if _cancelled():
                     return _CANCELLED
-                if attempt + 1 == ATTEMPTS or not retryable(exc):
+                # A try that got new bytes doesn't count: a link that keeps dropping
+                # still finishes, a dead one stops after ATTEMPTS empty tries.
+                got = partial.stat().st_size if partial.exists() else 0
+                misses = 0 if got > before else misses + 1
+                if misses >= ATTEMPTS or not retryable(exc):
                     return str(exc)
-                _set_progress(error=None, downloaded_bytes=0)
-                if _cancel.wait(retry_delay(attempt)):
+                if _cancel.wait(retry_delay(misses)):
                     return _CANCELLED
         return "Update download failed."
     finally:
         _unlink_quiet(partial)
 
 
-def _download_once(url: str, dest: Path, *, timeout: float) -> None:
+def _track_response(resp: Any | None) -> None:
     global _active_download_resp
-    req = urllib.request.Request(url, headers={"User-Agent": f"UEFN-Ducky/{__version__}"})
+    with _active_download_lock:
+        _active_download_resp = resp
+
+
+def _download_once(url: str, dest: Path, *, timeout: float) -> None:
+    from frontend.update_network import fetch_into
+
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(req, timeout=timeout) as resp, dest.open("wb") as out:
-        with _active_download_lock:
-            _active_download_resp = resp
+    with dest.open("ab") as out:
+        _set_progress(stage="download", downloaded_bytes=out.tell(), error=None)
+        fetch_into(
+            url,
+            out,
+            headers={"User-Agent": f"UEFN-Ducky/{__version__}"},
+            timeout=timeout,
+            on_chunk=lambda done, total: _set_progress(downloaded_bytes=done, total_bytes=total),
+            cancelled=_cancelled,
+            on_open=_track_response,
+        )
+        out.flush()
         try:
-            total = 0
-            try:
-                total = int(resp.headers.get("Content-Length") or 0)
-            except (TypeError, ValueError):
-                total = 0
-            downloaded = 0
-            _set_progress(stage="download", downloaded_bytes=0, total_bytes=total, error=None)
-            while True:
-                if _cancelled():
-                    return
-                chunk = resp.read(1024 * 256)
-                if not chunk:
-                    break
-                out.write(chunk)
-                downloaded += len(chunk)
-                _set_progress(downloaded_bytes=downloaded, total_bytes=total)
-            if total and downloaded != total:
-                raise http.client.IncompleteRead(b"", total - downloaded)
-            out.flush()
-            try:
-                os.fsync(out.fileno())
-            except OSError:
-                pass
-        finally:
-            with _active_download_lock:
-                _active_download_resp = None
+            os.fsync(out.fileno())
+        except OSError:
+            pass
 
 
 def _verify_sha256(path: Path, expected_hex: str) -> str | None:

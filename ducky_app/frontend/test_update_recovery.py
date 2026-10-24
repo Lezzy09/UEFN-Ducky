@@ -51,6 +51,59 @@ def test_interrupted_transfer_restarts_and_exposes_only_complete_file(tmp_path, 
     assert updater._verify_sha256(dest, hashlib.sha256(dest.read_bytes()).hexdigest()) is None
 
 
+@pytest.fixture
+def cutting_server():
+    """A local HTTP server that honours Range but drops every connection after 300 KB,
+    like the PC whose storage downloads died at 14% and never finished."""
+    import http.server
+    import threading
+
+    body = bytes(range(256)) * 8192  # 2 MB
+    requests = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            start = 0
+            rng = self.headers.get("Range")
+            if rng:
+                start = int(rng.split("=")[1].split("-")[0])
+            requests.append(start)
+            self.send_response(206 if rng else 200)
+            self.send_header("Content-Length", str(len(body) - start))
+            if rng:
+                self.send_header("Content-Range", f"bytes {start}-{len(body) - 1}/{len(body)}")
+            self.end_headers()
+            self.wfile.write(body[start:start + 300 * 1024])
+            self.close_connection = True
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}/file", body, requests
+    server.shutdown()
+
+
+def test_download_resumes_through_a_link_that_keeps_dropping(cutting_server):
+    from frontend.update_network import download_resumable
+
+    url, body, requests = cutting_server
+    buf = io.BytesIO()
+    download_resumable(url, buf, timeout=5)
+    assert buf.getvalue() == body
+    assert requests[0] == 0 and requests[1] == 300 * 1024  # resumed, never restarted
+    assert len(requests) == 7
+
+
+def test_updater_resumes_a_link_that_keeps_dropping(tmp_path, cutting_server):
+    url, body, _requests = cutting_server
+    dest = tmp_path / "Setup.exe"
+    assert updater._download(url, dest, timeout=5) is None
+    assert dest.read_bytes() == body
+    assert updater._active_download_resp is None
+
+
 def test_failed_retries_remove_partial_file(tmp_path, monkeypatch):
     calls = []
     def reset_connection(*args, **kwargs):

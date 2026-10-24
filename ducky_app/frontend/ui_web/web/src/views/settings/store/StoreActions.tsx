@@ -63,7 +63,8 @@ export function StoreActions({ item, handlers, busy, size }: Props) {
           {busy ? "Working…" : state === "update" ? "Update" : "Install"}
         </button>
       ) : null}
-      {state === "installed" ? (
+      {/* Also while an update waits: a plugin whose update keeps failing must stay removable. */}
+      {installed ? (
         <div className="ds-actions-pair">
           <button
             type="button"

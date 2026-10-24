@@ -2526,31 +2526,41 @@ def _fetch_store_zip_url(url: str, size: int, *, timeout: float = 120.0) -> byte
     """Fetch a big Store zip from the short-lived link the Store answered with.
 
     Sent with the app's own User-Agent (the site's CDN refuses urllib's default),
-    streamed, and capped at the announced size so a wrong link can't fill the disk.
+    resumed with Range after every dropped connection (some networks cut storage
+    downloads every few hundred KB), and capped at the announced size so a wrong
+    link can't fill the disk.
     """
+    import io
     from urllib.parse import urlparse
+
+    from frontend.update_network import download_resumable
 
     if urlparse(url).scheme not in ("https", "http"):
         raise DuckyOSAccountError("Store download link is not a web address", code="store_bad_url")
     cap = size if 0 < size <= _STORE_ZIP_MAX_BYTES else _STORE_ZIP_MAX_BYTES
-    req = urllib.request.Request(
-        url, headers={"User-Agent": _USER_AGENT, "Accept": "application/zip, application/octet-stream, */*"}
-    )
-    buf = bytearray()
+
+    def check_cap(done: int, _total: int) -> None:
+        if done > cap:
+            raise DuckyOSAccountError("Store download is bigger than announced", code="store_too_big")
+
+    buf = io.BytesIO()
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            while True:
-                chunk = resp.read(1 << 20)
-                if not chunk:
-                    break
-                buf.extend(chunk)
-                if len(buf) > cap:
-                    raise DuckyOSAccountError("Store download is bigger than announced", code="store_too_big")
+        download_resumable(
+            url,
+            buf,
+            headers={"User-Agent": _USER_AGENT, "Accept": "application/zip, application/octet-stream, */*"},
+            timeout=timeout,
+            on_chunk=check_cap,
+        )
     except urllib.error.HTTPError as exc:
         raise DuckyOSAccountError(f"Store download failed (HTTP {exc.code})", code="store_download") from exc
-    except (OSError, urllib.error.URLError) as exc:
-        raise DuckyOSAccountError(f"Store download failed: {exc}", code="network") from exc
-    return bytes(buf)
+    except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
+        host = urlparse(url).netloc
+        got = buf.tell()
+        raise DuckyOSAccountError(
+            f"Store download from {host} kept dropping ({got:,} of {size:,} bytes): {exc}", code="network"
+        ) from exc
+    return buf.getvalue()
 
 
 def _store_cache_dir() -> Path | None:
