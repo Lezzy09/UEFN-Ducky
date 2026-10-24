@@ -176,6 +176,32 @@ def test_concurrent_writer_conflict_only_while_other_run_is_open(env) -> None:
     assert res2.changeset["conflict"] is None
 
 
+def test_only_conflicts_that_can_lose_work_are_flagged(env) -> None:
+    root, _, _, writer, clock = env
+    path = "Content/Verse/shared.verse"
+
+    def write(run_id: str, text: str, tool: str = "workspace_write_file", read_first: bool = False):
+        token = as_run(run_id)
+        try:
+            if read_first:
+                writer.note_read(path, (root / path).read_text(encoding="utf-8"))
+            return writer.write_text(path, text, tool=tool).changeset["conflict"]
+        finally:
+            identity.reset(token)
+
+    write("a", "a1\n")
+    # Exact-text edits apply to the file on disk: they merge, even over a stale read.
+    assert write("b", "b1\n", tool="workspace_multi_edit") is None
+    assert write("a", "a2\n", tool="workspace_edit_file") is None
+    # Reading the current version first means nothing of theirs is lost.
+    assert write("b", "b2\n", read_first=True) is None
+    # A blind overwrite right after another chat's write is concurrent...
+    assert write("c", "c1\n")["kind"] == "concurrent_writer"
+    # ...but not once their write is old, even though their team run is still open.
+    clock["now"] += 601
+    assert write("d", "d1\n") is None
+
+
 @pytest.mark.parametrize("conv_a,conv_b,expected", [
     ("same-chat", "same-chat", None),
     ("chat-a", "chat-b", "concurrent_writer"),

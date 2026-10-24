@@ -277,6 +277,22 @@ describe("summaries", () => {
     expect(conflictCountsByConv([running, done])).toEqual({ hacker: 1 });
   });
 
+  it("conflict counts are one per file and clear after a later clean write", () => {
+    const stale = { kind: "stale_base" } as const;
+    const r = withEntries(
+      [
+        { path: "a.verse", ts: 1, conflict: stale },
+        { path: "a.verse", ts: 2, conflict: stale },
+        { path: "b.verse", ts: 3, conflict: stale },
+        { path: "b.verse", ts: 4, conflict: null },
+        { path: "c.verse", ts: 5, conflict: stale },
+        { path: "c.verse", ts: 6, conflict: null, outcome: "blocked" },
+      ],
+      { status: "running", conv_id: "lead" },
+    );
+    expect(conflictCountsByConv([r])).toEqual({ lead: 2 });
+  });
+
   it("status labels", () => {
     expect(statusLabel("partially_reverted")).toBe("Partly reverted");
     expect(statusLabel("cancelled")).toBe("Stopped");

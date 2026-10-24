@@ -47,6 +47,11 @@ CONFLICT_STALE_BASE = "stale_base"
 CONFLICT_CONCURRENT = "concurrent_writer"
 
 _TEXT_OPS = frozenset({"write", "create"})
+#: Exact-text edits are applied to the file as it is on disk (hash-checked), so they
+#: merge with another chat's write instead of replacing it: never a conflict.
+_MERGING_TOOLS = frozenset({"workspace_edit_file", "workspace_multi_edit"})
+#: Another chat's write counts as "right now" only this long; team runs stay open for hours.
+_CONCURRENT_WINDOW_S = 600.0
 #: Editor mutations (actors, assets, devices, Verse wiring). Their "path" is a
 #: target slot such as ``uefn://actor/<guid>/transform``, not a file on disk.
 OP_EDITOR = "editor"
@@ -1892,7 +1897,7 @@ class FileChangeJournal:
     def _detect_conflict(
         self, storage: Path, index: dict[str, Any], run: dict[str, Any], record: WriteRecord
     ) -> dict[str, Any] | None:
-        if record.op not in _TEXT_OPS or record.outcome != OUTCOME_OK:
+        if record.op not in _TEXT_OPS or record.outcome != OUTCOME_OK or record.tool in _MERGING_TOOLS:
             return None
         prev = index.get(record.path)
         if not isinstance(prev, dict) or prev.get("deleted"):
@@ -1912,6 +1917,11 @@ class FileChangeJournal:
         # Keep stale-read checks above; only another chat is a concurrent writer.
         conv_id = str(run.get("conv_id") or "")
         if conv_id and conv_id == other["other_conv_id"]:
+            return None
+        # This chat read the version it overwrote: nothing of theirs was lost.
+        if base is not None:
+            return None
+        if self._clock() - float(prev.get("ts") or 0) > _CONCURRENT_WINDOW_S:
             return None
         if prev_run:
             other_run = self._load_run(storage, prev_run)

@@ -447,13 +447,27 @@ export function changesetFilePaths(runs: ChangesetRunDto[]): string[] {
   return out;
 }
 
-/** Live conflicts per conversation (running runs only) — the red dot on a member chip. */
+/** Live conflicts per conversation (running runs only) — the red dot on a member chip.
+ * One per file, and only while that chat's latest write to the file is the conflicted one:
+ * a later clean write (re-read and fixed) clears it. */
 export function conflictCountsByConv(runs: ChangesetRunDto[]): Record<string, number> {
-  const counts: Record<string, number> = {};
+  const latest = new Map<string, { seq: number; ts: number; conflicted: boolean }>();
   for (const run of runs) {
     if (run.status !== "running") continue;
-    const n = (run.entries || []).filter((e) => e.conflict && !e.reverted).length;
-    if (n > 0) counts[run.conv_id] = (counts[run.conv_id] ?? 0) + n;
+    for (const e of run.entries || []) {
+      if (e.reverted || (e.outcome && e.outcome !== "ok")) continue;
+      const key = `${run.conv_id}\u0000${e.path}`;
+      const ts = e.ts ?? 0;
+      const prev = latest.get(key);
+      if (prev && (prev.ts > ts || (prev.ts === ts && prev.seq > e.seq))) continue;
+      latest.set(key, { seq: e.seq, ts, conflicted: !!e.conflict });
+    }
+  }
+  const counts: Record<string, number> = {};
+  for (const [key, row] of latest) {
+    if (!row.conflicted) continue;
+    const conv = key.slice(0, key.indexOf("\u0000"));
+    counts[conv] = (counts[conv] ?? 0) + 1;
   }
   return counts;
 }
