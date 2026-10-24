@@ -102,7 +102,9 @@ _CHAT_ATTACHMENT_RE = re.compile(
     r"^chat-attachments/([A-Za-z0-9._-]{1,80})/([A-Za-z0-9._-]+\.(?:png|jpe?g|webp|mp4|webm|mov|mkv))$",
     re.IGNORECASE,
 )
-_GENERATED_IMAGE_RE = re.compile(r"^generated-images/([A-Za-z0-9._-]+\.(?:png|jpe?g|webp))$", re.IGNORECASE)
+_GENERATED_IMAGE_RE = re.compile(
+    r"^generated-images/([A-Za-z0-9._-]+\.(?:png|jpe?g|webp|mp4|webm|mov|mp3|wav|ogg|m4a|html))$", re.IGNORECASE
+)
 _auth_lock = threading.Lock()
 _one_time: dict[str, float] = {}
 _sessions: dict[str, float] = {}
@@ -1108,6 +1110,13 @@ def start_panel_ui_server(dist_root: Path) -> str:
                     self.send_header("Content-Type", media_content_type(file_path))
                     self.send_header("Content-Length", str(len(data)))
                     self.send_header("Cache-Control", "private, max-age=3600")
+                    if file_path.suffix.lower() == ".html":
+                        # A motion scene: inline script only, nothing loaded from anywhere.
+                        self.send_header(
+                            "Content-Security-Policy",
+                            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                            "img-src data: blob:; media-src data: blob:; font-src data:",
+                        )
                     self.end_headers()
                     self.wfile.write(data)
                     return

@@ -10,6 +10,7 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { FileProtectionRecovery } from "./FileProtectionRecovery";
 import { AttachmentStrip } from "./EditableUserMessage";
 import { AttachmentPreviewModal } from "./AttachmentPreviewModal";
+import { openPanelRoute } from "../navigation/openPanelRoute";
 import { TourOffer } from "../walkthrough/TourOffer";
 import { useIntroTyping } from "../walkthrough/introTyping";
 
@@ -45,13 +46,59 @@ interface MessageBubbleProps {
   tours?: string[];
 }
 
+/** Media Kit takes the file; its tab listens for this event once it is open. */
+function sendToMediaKit(action: "open" | "export", a: MessageAttachmentDto) {
+  openPanelRoute("settings.tab", "Island Media Kit");
+  window.dispatchEvent(
+    new CustomEvent("ducky:media-kit", { detail: { action, kind: a.kind, name: a.name, path: a.path ?? "" } }),
+  );
+}
+
+/** A video, sound or motion scene an agent made: plays right under the reply. */
+function ReplyMediaCard({ media }: { media: MessageAttachmentDto }) {
+  const url = media.media_url;
+  if (!url) return null;
+  const isMp4 = media.kind === "video" && /\.mp4$/i.test(media.name);
+  return (
+    <div className={`message-bubble-media-card message-bubble-media-card--${media.kind}`}>
+      {media.kind === "video" ? <video src={url} controls preload="metadata" /> : null}
+      {media.kind === "audio" ? <audio src={url} controls preload="metadata" /> : null}
+      {media.kind === "motion" ? (
+        // No same-origin: the scene's script can't reach the app; the server also sends a self-only CSP.
+        <iframe src={url} sandbox="allow-scripts" title={media.name} loading="lazy" />
+      ) : null}
+      <div className="message-bubble-media-actions">
+        <button type="button" onClick={() => sendToMediaKit("open", media)}>
+          Open in Media Kit
+        </button>
+        {media.kind === "audio" ? null : isMp4 ? (
+          <a href={url} download={media.name}>
+            Export MP4
+          </a>
+        ) : (
+          <button type="button" onClick={() => sendToMediaKit("export", media)}>
+            Export MP4
+          </button>
+        )}
+        <a href={url} download={media.name}>
+          Save
+        </a>
+      </div>
+    </div>
+  );
+}
+
 function ReplyPictures({ attachments }: { attachments: MessageAttachmentDto[] }) {
   const [preview, setPreview] = useState<MessageAttachmentDto | null>(null);
   const images = attachments.filter((a) => a.kind === "image");
-  if (!images.length) return null;
+  const media = attachments.filter((a) => a.kind === "video" || a.kind === "audio" || a.kind === "motion");
+  if (!images.length && !media.length) return null;
   return (
     <div className="message-bubble-reply-pictures">
-      <AttachmentStrip images={images} files={[]} videos={[]} onPreview={setPreview} />
+      {images.length ? <AttachmentStrip images={images} files={[]} videos={[]} onPreview={setPreview} /> : null}
+      {media.map((m) => (
+        <ReplyMediaCard key={m.generated || m.name} media={m} />
+      ))}
       <AttachmentPreviewModal open={preview !== null} attachment={preview} onClose={() => setPreview(null)} />
     </div>
   );

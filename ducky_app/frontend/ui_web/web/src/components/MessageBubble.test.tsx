@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./ModelSelector", () => ({
@@ -25,6 +25,9 @@ vi.mock("../voice/ttsEngine", () => ({
     getProgress: () => ({ state: "idle", sourceText: "", spokenText: "", charIndex: 0, loading: false }),
   },
 }));
+
+const openPanelRoute = vi.fn();
+vi.mock("../navigation/openPanelRoute", () => ({ openPanelRoute: (...a: unknown[]) => openPanelRoute(...a) }));
 
 import { MessageBubble } from "./MessageBubble";
 
@@ -79,5 +82,44 @@ describe("MessageBubble pictures", () => {
     const img = screen.getByAltText("duck.png") as HTMLImageElement;
     expect(img.src).toBe("data:image/png;base64,iVBORw0KGgo=");
     expect(img.closest(".message-bubble-reply-pictures")).not.toBeNull();
+  });
+});
+
+describe("MessageBubble generated media", () => {
+  afterEach(() => cleanup());
+  const url = "http://127.0.0.1:1/generated-images/";
+
+  it("plays a video with Open, Export MP4 and Save", () => {
+    const { container } = render(
+      <MessageBubble role="assistant" text="Made it." attachments={[{ kind: "video", name: "clip.mp4", media_url: `${url}clip.mp4` }]} />,
+    );
+    expect((container.querySelector("video") as HTMLVideoElement).src).toBe(`${url}clip.mp4`);
+    expect((screen.getByText("Export MP4") as HTMLAnchorElement).getAttribute("download")).toBe("clip.mp4");
+    expect((screen.getByText("Save") as HTMLAnchorElement).getAttribute("href")).toBe(`${url}clip.mp4`);
+    fireEvent.click(screen.getByText("Open in Media Kit"));
+    expect(openPanelRoute).toHaveBeenCalledWith("settings.tab", "Island Media Kit");
+  });
+
+  it("plays audio with no Export MP4", () => {
+    const { container } = render(
+      <MessageBubble role="assistant" text="" attachments={[{ kind: "audio", name: "tune.wav", media_url: `${url}tune.wav` }]} />,
+    );
+    expect(container.querySelector("audio")).not.toBeNull();
+    expect(screen.queryByText("Export MP4")).toBeNull();
+    expect(screen.getByText("Save")).toBeTruthy();
+  });
+
+  it("runs a motion scene in a script-only sandbox and exports through Media Kit", () => {
+    const seen: CustomEvent[] = [];
+    const on = (e: Event) => seen.push(e as CustomEvent);
+    window.addEventListener("ducky:media-kit", on);
+    const { container } = render(
+      <MessageBubble role="assistant" text="" attachments={[{ kind: "motion", name: "intro.html", path: "C:/g/intro.html", media_url: `${url}intro.html` }]} />,
+    );
+    const frame = container.querySelector("iframe") as HTMLIFrameElement;
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts"); // never allow-same-origin
+    fireEvent.click(screen.getByText("Export MP4"));
+    window.removeEventListener("ducky:media-kit", on);
+    expect(seen[0].detail).toEqual({ action: "export", kind: "motion", name: "intro.html", path: "C:/g/intro.html" });
   });
 });

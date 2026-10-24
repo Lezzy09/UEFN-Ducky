@@ -1,4 +1,4 @@
-"""Durable generated images — AppData only, never the UEFN project, never tool_captures.
+"""Durable generated media (image, video, audio, motion scene) — AppData only, never the UEFN project, never tool_captures.
 
 tool_captures is a 40-file screenshot prune. This folder is user data.
 """
@@ -17,7 +17,7 @@ from frontend.app_paths import resolve_app_data_dir
 from frontend.settings import PANEL_LISTENER_PORT
 
 _PANEL_UI_HTTP_PORT = PANEL_LISTENER_PORT - 1
-_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)$", re.IGNORECASE)
+_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|mp4|webm|mov|mp3|wav|ogg|m4a|html)$", re.IGNORECASE)
 _INDEX = "index.json"
 # Image tools that predate plugin-declared generators; the rest come from what the
 # plugins turned on here declare (contributes.automations.image_generators).
@@ -30,6 +30,25 @@ _IMAGE_TOOLS = frozenset(
     }
 )
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+# One folder, one URL; the file's suffix says what it is. A motion scene is a self-contained
+# HTML file whose render(t) draws frame t (played in a sandboxed iframe, never as a page).
+_KIND_BY_SUFFIX = {
+    **{s: "image" for s in _IMAGE_SUFFIXES},
+    **{s: "video" for s in (".mp4", ".webm", ".mov")},
+    **{s: "audio" for s in (".mp3", ".wav", ".ogg", ".m4a")},
+    ".html": "motion",
+}
+_EXT_BY_MIME = {
+    "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/webp": ".webp", "image/png": ".png",
+    "video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov",
+    "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/wav": ".wav", "audio/x-wav": ".wav",
+    "audio/ogg": ".ogg", "audio/mp4": ".m4a", "text/html": ".html",
+}
+
+
+def media_kind(name: str) -> str:
+    """image | video | audio | motion for a stored file name, \"\" when it is none of them."""
+    return _KIND_BY_SUFFIX.get(Path(name or "").suffix.lower(), "")
 
 
 def generated_images_dir(*, for_write: bool = False) -> Path:
@@ -87,7 +106,7 @@ def save_generated_image(
     if not raw:
         return {"ok": False, "error": "empty image"}
     dest_dir = generated_images_dir(for_write=True)
-    ext = ".jpg" if "jpeg" in mime or "jpg" in mime else ".webp" if "webp" in mime else ".png"
+    ext = _EXT_BY_MIME.get(mime.split(";")[0].strip().lower(), ".png")
     name = Path(filename).name if filename else f"gen_{int(time.time())}_{uuid.uuid4().hex[:8]}{ext}"
     if not _NAME_RE.match(name):
         name = f"gen_{int(time.time())}_{uuid.uuid4().hex[:8]}{ext}"
@@ -108,6 +127,7 @@ def save_generated_image(
         "created": time.time(),
         "bytes": len(raw),
         "mime": mime,
+        "kind": media_kind(name),
         "conv_id": conv_id,
     }
     rows = [r for r in _load_index() if r.get("name") != name]
@@ -162,8 +182,9 @@ def is_image_tool(tool_name: str) -> bool:
 
 
 def _mime_for(path: Path) -> str:
-    suffix = path.suffix.lower()
-    return "image/jpeg" if suffix in {".jpg", ".jpeg"} else "image/webp" if suffix == ".webp" else "image/png"
+    from frontend.ui_web.file_kinds import mime_for_path
+
+    return mime_for_path(path.name)
 
 
 def _as_dict(result: Any) -> dict[str, Any]:
@@ -246,13 +267,20 @@ def note_tool_images(tool_name: str, result: Any, *, conv_id: str = "") -> list[
     ]
 
 
-def note_image_file(path: str | Path, *, conv_id: str, gateway: str, prompt: str = "") -> dict[str, Any] | None:
-    """Keep a picture an agent made by itself (Codex image generation) for its chat."""
+def note_media_file(path: str | Path, *, conv_id: str, gateway: str, prompt: str = "") -> dict[str, Any] | None:
+    """Keep a picture, video, sound or motion scene a tool or agent made for its chat."""
     src = Path(path)
-    if not conv_id or src.suffix.lower() not in _IMAGE_SUFFIXES or not src.is_file():
+    if not conv_id or not media_kind(src.name) or not src.is_file():
         return None
     return save_generated_image(src.read_bytes(), prompt=prompt, gateway=gateway, filename=src.name,
                                 mime=_mime_for(src), conv_id=conv_id)
+
+
+def note_image_file(path: str | Path, *, conv_id: str, gateway: str, prompt: str = "") -> dict[str, Any] | None:
+    """Keep a picture an agent made by itself (Codex image generation) for its chat."""
+    if Path(path).suffix.lower() not in _IMAGE_SUFFIXES:
+        return None
+    return note_media_file(path, conv_id=conv_id, gateway=gateway, prompt=prompt)
 
 
 def turn_attachments(conv_id: str, since: float) -> list[dict[str, Any]]:
@@ -269,14 +297,21 @@ def turn_attachments(conv_id: str, since: float) -> list[dict[str, Any]]:
     for row in sorted(rows, key=lambda r: float(r.get("created") or 0)):
         name = str(row.get("name") or "")
         if name and (root / name).is_file():
-            out.append({"kind": "image", "name": name, "mime": str(row.get("mime") or "image/png"), "generated": name})
+            kind = media_kind(name)
+            att = {"kind": kind, "name": name, "mime": str(row.get("mime") or "image/png"), "generated": name}
+            if kind != "image":
+                att["path"] = str(root / name)  # the card's Open in Media Kit / Export use the file
+            out.append(att)
     return out
 
 
 def hydrate_generated(raw: dict[str, Any]) -> dict[str, Any]:
-    """A reply's picture reference with its bytes, for the chat to draw."""
+    """A reply's media reference for the chat to draw: a picture with its bytes, the rest by URL."""
     try:
         path = resolve_generated_image_path(str(raw.get("generated") or ""))
     except (ValueError, OSError):
         return raw
+    if media_kind(path.name) != "image":
+        # ponytail: videos are never base64'd into the chat; the panel server streams them.
+        return {**raw, "path": str(path), "media_url": build_generated_image_url(path.name)}
     return {**raw, "data_base64": base64.b64encode(path.read_bytes()).decode("ascii")}

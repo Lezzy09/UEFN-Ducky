@@ -64,6 +64,28 @@ def test_a_picture_codex_made_itself_is_kept_for_its_chat(gi, tmp_path):
     assert [p["name"] for p in gi.turn_attachments("chat-2", 0)] == ["exec-1234.png"]
 
 
+def test_video_audio_and_motion_are_kept_by_kind_and_reach_the_reply_by_url(gi, tmp_path):
+    files = {"clip.mp4": "video", "tune.wav": "audio", "intro.html": "motion", "pic.png": "image"}
+    for name, kind in files.items():
+        assert gi.media_kind(name) == kind
+        made = tmp_path / name
+        made.write_bytes(_PNG if kind == "image" else b"payload")
+        row = gi.note_media_file(made, conv_id="chat-m", gateway="test")
+        assert row["kind"] == kind and row["name"] == name
+    assert gi.note_media_file(tmp_path / "notes.txt", conv_id="chat-m", gateway="test") is None
+    assert gi.note_image_file(tmp_path / "clip.mp4", conv_id="chat-m", gateway="test") is None  # images only
+
+    by_name = {a["name"]: a for a in gi.turn_attachments("chat-m", 0)}
+    assert {n: a["kind"] for n, a in by_name.items()} == files
+    assert "path" not in by_name["pic.png"] and by_name["clip.mp4"]["path"].endswith("clip.mp4")
+    drawn = gi.hydrate_generated(by_name["clip.mp4"])
+    assert drawn["media_url"].endswith("/generated-images/clip.mp4") and "data_base64" not in drawn
+    assert gi.hydrate_generated(by_name["pic.png"])["data_base64"]
+    assert gi.resolve_generated_image_path("intro.html").name == "intro.html"
+    with pytest.raises(ValueError):
+        gi.resolve_generated_image_path("run.exe")
+
+
 def test_a_reply_with_a_picture_loads_with_it(gi, tmp_path):
     from frontend.ui_web.panel_api import _messages_to_ui
 

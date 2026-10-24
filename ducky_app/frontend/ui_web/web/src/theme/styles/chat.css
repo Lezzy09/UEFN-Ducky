@@ -3387,6 +3387,55 @@
   border-radius: 8px;
 }
 
+/* Generated video, sound and motion scenes: a player with its three buttons. */
+.message-bubble-media-card {
+  margin: 8px 0 0;
+  max-width: min(100%, 480px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+.message-bubble-media-card video,
+.message-bubble-media-card iframe {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  background: #000;
+}
+
+.message-bubble-media-card audio {
+  display: block;
+  width: 100%;
+}
+
+.message-bubble-media-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+}
+
+.message-bubble-media-actions button,
+.message-bubble-media-actions a {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.message-bubble-media-actions button:hover,
+.message-bubble-media-actions a:hover {
+  background: var(--bg-hover, var(--bg-elevated));
+}
+
 .message-bubble-attachment-btn {
   padding: 0;
   border: none;

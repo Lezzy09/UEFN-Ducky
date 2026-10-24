@@ -999,10 +999,14 @@ export interface VideoFrameDto {
 }
 
 export interface MessageAttachmentDto {
-  kind: "image" | "file" | "video";
+  /** audio / motion (an HTML scene whose render(t) draws frame t) come from generated media. */
+  kind: "image" | "file" | "video" | "audio" | "motion";
   name: string;
   mime?: string;
   data_base64?: string;
+  /** Generated media: the file name in Ducky's generated folder, and its absolute path. */
+  generated?: string;
+  path?: string;
   text?: string;
   /** Project Saved/DuckyCaptures path when the snip was mirrored there. */
   project_path?: string;
