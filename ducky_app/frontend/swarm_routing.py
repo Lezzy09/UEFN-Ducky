@@ -159,3 +159,126 @@ def route(
     if not model:
         model = row.model if row else ""
     return {"kind": out_kind, "profile_id": profile_id, "model": model, "why": why}
+
+
+# --------------------------------------------------------------------------- detail level
+# The jobs always come from the person's request; the detail level only reshapes them:
+# 1 merges each area into one job, 2 keeps them, 3 splits a kind into its parts, 4 also
+# makes each split job a sub-group whose parts are its members.
+
+MIN_DETAIL, MAX_DETAIL = 1, 4
+
+# Other names people and leads use for a kind in JOB_KINDS.
+KIND_ALIASES = {"texture": "material", "rigging": "rig", "gameplay": "verse", "tests": "test", "qa": "test"}
+
+AREAS: dict[str, tuple[str, ...]] = {
+    "Art": ("modeling", "texture", "rigging", "animation", "vfx"),
+    "Code": ("verse", "ui", "gameplay"),
+    "Story": ("narrative", "writing"),
+    "World": ("level", "npc", "sound"),
+    "Check": ("test", "review"),
+}
+
+PARTS: dict[str, tuple[str, ...]] = {
+    "modeling": ("blockout", "hero props", "set dressing"),
+    "texture": ("materials", "decals"),
+    "verse": ("systems", "devices"),
+    "ui": ("HUD", "menus"),
+    "level": ("layout", "lighting"),
+}
+
+
+def canonical_kind(kind: str) -> str:
+    key = (kind or "").strip().lower()
+    return KIND_ALIASES.get(key, key)
+
+
+def _canon_map(table: Mapping[str, tuple[str, ...]]) -> dict[str, str]:
+    return {canonical_kind(k): area for area, kinds in table.items() for k in kinds}
+
+
+_AREA_OF = _canon_map(AREAS)
+_PARTS_OF = {canonical_kind(k): parts for k, parts in PARTS.items()}
+
+
+def _job_kind_of(job: Mapping[str, Any]) -> str:
+    kind = canonical_kind(str(job.get("kind") or ""))
+    if kind:
+        return kind
+    return route(f"{job.get('name') or ''}: {job.get('task') or ''}")["kind"]
+
+
+def area_of(kind: str) -> str:
+    """The area ('Art', 'Code', …) a job kind belongs to, else ''."""
+    return _AREA_OF.get(canonical_kind(kind), "")
+
+
+def parts_of(kind: str) -> tuple[str, ...]:
+    return _PARTS_OF.get(canonical_kind(kind), ())
+
+
+def _paths(job: Mapping[str, Any]) -> list[str]:
+    raw = job.get("paths") or []
+    return [str(p) for p in raw] if isinstance(raw, (list, tuple)) else [str(raw)]
+
+
+def _merge(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One '<Area>' job per area, in the order the areas first appear; jobs of no area stay."""
+    out: list[dict[str, Any]] = []
+    by_area: dict[str, dict[str, Any]] = {}
+    for job in jobs:
+        area = area_of(_job_kind_of(job))
+        if not area:
+            out.append(dict(job))
+            continue
+        merged = by_area.get(area)
+        task = f"{job.get('name') or ''}: {job.get('task') or ''}".strip(": ")
+        if merged is None:
+            merged = {**job, "name": area, "task": task, "paths": _paths(job),
+                      "kind": _job_kind_of(job), "kinds": [_job_kind_of(job)], "area": area}
+            by_area[area] = merged
+            out.append(merged)
+            continue
+        merged["task"] = "\n".join(t for t in (merged["task"], task) if t)
+        merged["paths"] += [p for p in _paths(job) if p not in merged["paths"]]
+        if _job_kind_of(job) not in merged["kinds"]:
+            merged["kinds"].append(_job_kind_of(job))
+    return out
+
+
+def _split(jobs: list[dict[str, Any]], *, grouped: bool) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for job in jobs:
+        parts = parts_of(_job_kind_of(job))
+        if not parts:
+            out.append(dict(job))
+            continue
+        name = str(job.get("name") or _job_kind_of(job).title())
+        head = name.split(":", 1)[0].strip() or name
+        task = str(job.get("task") or "")
+        for part in parts:
+            child = {**job, "name": f"{head}: {part}", "task": f"{part} — {task}" if task else part,
+                     "paths": _paths(job), "part": part, "parent": name}
+            if grouped:
+                child["group"] = name
+            out.append(child)
+    return out
+
+
+def split_jobs(jobs: Iterable[Mapping[str, Any]], detail: int) -> list[dict[str, Any]]:
+    """Reshape the request's jobs for a detail level (clamped to 1–4).
+
+    Each job is a dict with at least ``name`` (and ``task``, ``kind``, ``profile_id``,
+    ``model``, ``paths`` when known). 1: jobs of one area merge into one '<Area>' job, tasks
+    and paths joined. 2: as they are. 3: a job whose kind has PARTS becomes one job per part
+    ('Modeling: blockout'), keeping the parent's kind, profile and model. 4: like 3, and each
+    part also gets ``group`` = its parent's name so the parent becomes a sub-group. Kinds
+    with no parts never split. The input is never changed.
+    """
+    items = [dict(j) for j in jobs]
+    level = max(MIN_DETAIL, min(MAX_DETAIL, int(2 if detail is None else detail)))
+    if level == 1:
+        return _merge(items)
+    if level == 2:
+        return items
+    return _split(items, grouped=level == 4)

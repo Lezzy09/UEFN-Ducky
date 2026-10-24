@@ -148,3 +148,80 @@ def test_developer_profile_is_bundled(monkeypatch):
     assert "developer" in ids
     dev = next(p for p in agent_profiles.list_agent_profiles() if p["id"] == "developer")
     assert dev["name"] == "Developer" and dev["disabled_packs"] == [] and dev["favorite_models"] == []
+
+
+# --------------------------------------------------------------------------- detail level
+
+REQUEST = [
+    {"name": "Modeling", "task": "castle meshes", "kind": "modeling", "profile_id": "3d-modeler",
+     "model": "claude_code:claude-sonnet-5-5", "paths": ["Content/Meshes/**"]},
+    {"name": "Texture", "task": "stone materials", "kind": "texture", "profile_id": "material-artist",
+     "model": "codex:gpt-6-luna", "paths": ["Content/Materials/**"]},
+    {"name": "Verse", "task": "round logic", "kind": "verse", "profile_id": "verse-coder",
+     "model": "claude_code:claude-opus-5-5", "paths": ["Content/Verse/**"]},
+    {"name": "Narrative", "task": "quest dialogue", "kind": "narrative", "profile_id": "developer",
+     "model": "claude_code:claude-opus-5-5", "paths": []},
+]
+
+
+def _names(jobs):
+    return [j["name"] for j in jobs]
+
+
+def test_detail_1_merges_each_area():
+    jobs = sr.split_jobs(REQUEST, 1)
+    assert _names(jobs) == ["Art", "Code", "Story"]
+    art = jobs[0]
+    assert art["kinds"] == ["modeling", "material"]
+    assert art["task"] == "Modeling: castle meshes\nTexture: stone materials"
+    assert art["paths"] == ["Content/Meshes/**", "Content/Materials/**"]
+    assert (art["profile_id"], art["model"]) == ("3d-modeler", "claude_code:claude-sonnet-5-5")
+
+
+def test_detail_2_keeps_the_request():
+    assert sr.split_jobs(REQUEST, 2) == REQUEST
+    assert sr.split_jobs(REQUEST, 2) is not REQUEST
+
+
+def test_detail_3_splits_kinds_with_parts():
+    jobs = sr.split_jobs(REQUEST, 3)
+    assert _names(jobs) == [
+        "Modeling: blockout", "Modeling: hero props", "Modeling: set dressing",
+        "Texture: materials", "Texture: decals",
+        "Verse: systems", "Verse: devices",
+        "Narrative",
+    ]
+    for job in jobs[:3]:
+        assert (job["profile_id"], job["model"], job["kind"]) == (
+            "3d-modeler", "claude_code:claude-sonnet-5-5", "modeling")
+        assert job["paths"] == ["Content/Meshes/**"]
+    assert jobs[-1] == REQUEST[-1]
+    assert all("group" not in j for j in jobs)
+
+
+def test_detail_4_groups_parts_under_their_parent():
+    level3 = sr.split_jobs(REQUEST, 3)
+    jobs = sr.split_jobs(REQUEST, 4)
+    assert _names(jobs) == _names(level3)
+    assert [j.get("group") for j in jobs] == ["Modeling"] * 3 + ["Texture"] * 2 + ["Verse"] * 2 + [None]
+
+
+def test_split_example_and_unknown_kinds():
+    assert _names(sr.split_jobs([{"name": "Modeling", "kind": "modeling"}], 3)) == [
+        "Modeling: blockout", "Modeling: hero props", "Modeling: set dressing"]
+    odd = [{"name": "Localization", "kind": "localization"}]
+    for level in (1, 2, 3, 4):
+        assert sr.split_jobs(odd, level) == odd
+
+
+def test_kind_from_the_job_text_and_clamped_level():
+    jobs = sr.split_jobs([{"name": "HUD", "task": "score widget"}], 9)
+    assert _names(jobs) == ["HUD: HUD", "HUD: menus"] and jobs[0]["group"] == "HUD"
+    assert _names(sr.split_jobs([{"name": "Gameplay", "kind": "gameplay"}], 0)) == ["Code"]
+
+
+def test_split_never_changes_the_input():
+    before = [dict(j) for j in REQUEST]
+    for level in (1, 2, 3, 4):
+        sr.split_jobs(REQUEST, level)
+    assert REQUEST == before
