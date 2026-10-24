@@ -376,6 +376,11 @@ def main() -> None:
         from frontend.runtime_smoke import check_panel_recovery
 
         raise SystemExit(check_panel_recovery(sys.argv[2]))
+    if len(sys.argv) == 3 and sys.argv[1] == "--browser-relock":
+        _ensure_repo_on_path()
+        from frontend.ui_web.browser_vault import relock_after
+
+        raise SystemExit(relock_after(int(sys.argv[2])))
     if len(sys.argv) == 3 and sys.argv[1] == "--runtime-smoke":
         _ensure_repo_on_path()
         from frontend.runtime_smoke import run as run_runtime_smoke

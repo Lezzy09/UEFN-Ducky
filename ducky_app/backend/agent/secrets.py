@@ -26,7 +26,7 @@ def _dpapi_available() -> bool:
     return sys.platform == "win32"
 
 
-def _dpapi(data: bytes, entropy: bytes, *, protect: bool) -> bytes:
+def _dpapi(data: bytes, entropy: bytes | None, *, protect: bool) -> bytes:
     """One CryptProtectData / CryptUnprotectData call. Windows hands the result back in a
     LocalAlloc buffer the caller must LocalFree: kept, every sealed chat save and read
     leaked its whole ciphertext or plaintext into the process heap (GBs an hour)."""
@@ -49,13 +49,14 @@ def _dpapi(data: bytes, entropy: bytes, *, protect: bool) -> bytes:
         return blob, buf  # the buffer must outlive the call
 
     in_blob, _in_buf = _blob(data)
-    ent_blob, _ent_buf = _blob(_ENTROPY + entropy)
+    # entropy None: plain user DPAPI, the way Chromium seals its cookie key.
+    ent_blob, _ent_buf = _blob(_ENTROPY + entropy) if entropy is not None else (None, None)
     out_blob = DATA_BLOB()
     fn = ctypes.windll.crypt32.CryptProtectData if protect else ctypes.windll.crypt32.CryptUnprotectData
     if not fn(
         ctypes.byref(in_blob),
         None,
-        ctypes.byref(ent_blob),
+        ctypes.byref(ent_blob) if ent_blob is not None else None,
         None,
         None,
         0x01,  # CRYPTPROTECT_UI_FORBIDDEN
@@ -98,6 +99,15 @@ def protect_bytes(data: bytes, entropy: bytes) -> bytes:
 def unprotect_bytes(blob: bytes, entropy: bytes) -> bytes:
     """Inverse of :func:`protect_bytes`; raises ``OSError`` on the wrong entropy."""
     return _unprotect(blob, entropy)
+
+
+def protect_plain(data: bytes) -> bytes:
+    """User DPAPI with no entropy (what Chromium's ``os_crypt.encrypted_key`` holds)."""
+    return _dpapi(data, None, protect=True)
+
+
+def unprotect_plain(blob: bytes) -> bytes:
+    return _dpapi(blob, None, protect=False)
 
 
 def _use_db() -> bool:

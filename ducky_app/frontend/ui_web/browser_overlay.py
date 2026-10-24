@@ -209,12 +209,43 @@ def _is_allowed_url(url: str) -> bool:
     return True
 
 
-def user_data_dir() -> str:
-    from backend.skills.store import appdata_dir
+# How this run keeps logins (browser_vault): "memory" (InPrivate, the default) or "saved"
+# (browser pref keepLogins, Windows Hello unlocked). Fixed by the first pane of the run:
+# the WebView2 Environment is process-wide.
+_mode = ""
+_mode_note = ""
+_mode_lock = threading.Lock()
 
-    p = appdata_dir() / "webview2_browser"
-    p.mkdir(parents=True, exist_ok=True)
-    return str(p)
+
+def profile_mode() -> str:
+    """Decide (once) how this run keeps logins; may ask Windows Hello. Never on the UI thread."""
+    global _mode, _mode_note
+    from frontend.ui_web import browser_vault as vault
+
+    with _mode_lock:
+        if _mode:
+            return _mode
+        if vault.keep_logins():
+            import ctypes
+
+            hwnd = int(ctypes.windll.user32.GetForegroundWindow() or 0) if sys.platform == "win32" else 0
+            why = vault.unlock(hwnd)
+            _mode = "memory" if why else "saved"
+            if why:
+                _mode_note = f"Saved logins stayed locked ({why}). This run keeps logins in memory only."
+        else:
+            try:
+                vault.forget_unlocked_logins()
+            except Exception:
+                _log.exception("could not delete unlocked saved logins")
+            _mode = "memory"
+        return _mode
+
+
+def user_data_dir() -> str:
+    from frontend.ui_web import browser_vault as vault
+
+    return str(vault.profile_dir(_mode or ("saved" if vault.keep_logins() else "memory")))
 
 
 def cdp_enabled() -> bool:
@@ -387,6 +418,8 @@ def runtime_info() -> dict[str, Any]:
         "Bad TLS certificates cancelled (not auto-trusted)",
         "Only http(s) and about: navigations allowed",
         "Password saving off",
+        ("Logins saved, locked with Windows Hello while Ducky is closed" if _mode == "saved"
+         else "Logins kept in memory only (InPrivate), nothing written to disk"),
         "Plugin scripts and captures only on sandbox localhost pages, YouTube and sites you let agents use",
     ]
     if cdp_on:
@@ -410,6 +443,8 @@ def runtime_info() -> dict[str, Any]:
         "host_objects": False,
         "web_message": False,
         "cdp_enabled": cdp_on,
+        "logins": _mode or "not started",
+        "logins_note": _mode_note,
         "protections": protections,
     }
 
@@ -940,9 +975,11 @@ def _finish_ensure() -> None:
 
 def _create_control(pane: _Pane) -> None:
     """UI thread: build the WebView2 control and wire CoreWebView2 events."""
-    global _shared_env, _env_bootstrap_started, _ensure_inflight
+    global _shared_env, _env_bootstrap_started, _ensure_inflight, _mode
     if pane.control is not None:
         return
+    if not _mode:
+        _mode = "memory"  # opened from the UI thread, where Windows Hello can't be asked: stay private
 
     env = _try_shared_env()
 
@@ -970,6 +1007,8 @@ def _create_control(pane: _Pane) -> None:
             # First pane only — later panes must reuse _shared_env.
             props = CoreWebView2CreationProperties()
             props.UserDataFolder = user_data_dir()
+            if _mode != "saved":
+                props.IsInPrivateModeEnabled = True  # raises on a runtime without it: no pane, never a disk one
             # CDP off by default — always-on remote debugging makes Cloudflare Turnstile loop.
             args = additional_browser_arguments()
             if args:
@@ -1101,6 +1140,22 @@ def _create_control(pane: _Pane) -> None:
                         _shared_env = core.Environment
                 except Exception:
                     pass
+                if _mode != "saved":
+                    try:
+                        private = bool(core.Profile.IsInPrivateModeEnabled)
+                    except Exception:
+                        private = False
+                    if not private:
+                        # Fail closed: a session that isn't InPrivate would write logins to disk.
+                        pane.failed = "The Browser couldn't start a private session. Update WebView2 and try again."
+                        try:
+                            form.Controls.Remove(control)
+                            control.Dispose()
+                        except Exception:
+                            pass
+                        pane.control = None
+                        _push_state(pane)
+                        return
                 try:
                     core.Settings.AreHostObjectsAllowed = False
                     core.Settings.IsWebMessageEnabled = False
@@ -1157,7 +1212,12 @@ def _create_control(pane: _Pane) -> None:
         )
         control.CoreWebView2InitializationCompleted += on_init
         # Shared Environment for tab 2+; None only for CreationProperties bootstrap.
-        control.EnsureCoreWebView2Async(env)
+        if env is not None and _mode != "saved":
+            opts = env.CreateCoreWebView2ControllerOptions()
+            opts.IsInPrivateModeEnabled = True
+            control.EnsureCoreWebView2Async(env, opts)
+        else:
+            control.EnsureCoreWebView2Async(env)
     except Exception:
         _log.exception("browser pane create failed")
         pane.failed = "WebView2 control could not be created (runtime missing?)"
@@ -1180,6 +1240,8 @@ def open_pane(pane_id: str, url: str = "", wid: str = "") -> dict[str, Any]:
     window = _window_for_wid(wid)
     if window is None:
         return {"ok": False, "error": "no host window"}
+    if not _on_ui_thread(window):
+        profile_mode()  # before the first control opens a profile (it may ask Windows Hello)
     with _lock:
         pane = _panes.get(pid)
         if pane is not None and pane.window is not window:
