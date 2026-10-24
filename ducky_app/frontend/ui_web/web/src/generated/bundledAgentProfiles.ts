@@ -256,6 +256,18 @@ export const BUNDLED_AGENT_PROFILES: BundledAgentProfile[] = [
     "disabled_tool_ids": [],
     "enabled_subskills": {},
     "kind": "bundled"
+  },
+  {
+    "id": "developer",
+    "name": "Developer",
+    "ducky_style": "hacker",
+    "ducky_personality": "General software developer. You write and fix code in any language (Python, TypeScript, Verse, shell), write and run its tests, and commit with git. Read the code you change before you change it, match the surrounding style, and keep changes small. Done means the tests you ran passed: report the command and its result. Stage named files only; never commit scratch files. No UEFN skill pack is forced on you: load one only when the job is island work.",
+    "when_to_use": "App, backend, Python, scripts, tests, docs, writing, research, or any job no specialist ducky fits.",
+    "favorite_models": [],
+    "disabled_packs": [],
+    "disabled_tool_ids": [],
+    "enabled_subskills": {},
+    "kind": "bundled"
   }
 ];
 
