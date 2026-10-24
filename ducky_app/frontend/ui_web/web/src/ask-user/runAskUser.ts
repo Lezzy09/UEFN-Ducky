@@ -163,6 +163,21 @@ export function settleAskUser(
 }
 
 /**
+ * The composer's Send while this chat has an open question: the typed message answers it
+ * (every question gets it as a written "other" answer, plus `free_text`) instead of being
+ * steered or queued. Returns false when the chat has no open question: send as usual.
+ */
+export function answerAskUserWithMessage(convId: string, message: string): boolean {
+  const text = message.trim();
+  const session = text ? getAskUserSessionForConv(convId) : null;
+  if (!session) return false;
+  const answers: AskUserResult["answers"] = {};
+  for (const q of session.questions) answers[q.id] = { selected: [], text, skipped: false };
+  settleAskUser({ ok: true, answers, skipped_all: false, free_text: text }, session.id);
+  return true;
+}
+
+/**
  * The asking agent's turn ended while its card was open (a coding agent's run can end with
  * the question still waiting): the answer would reach no one, so the card says so and Submit
  * sends it into that chat as a message instead.

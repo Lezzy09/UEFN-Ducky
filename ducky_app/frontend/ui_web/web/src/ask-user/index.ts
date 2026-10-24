@@ -4,6 +4,7 @@ export {
   runAskUser,
   dropAnsweredAskUser,
   settleAskUser,
+  answerAskUserWithMessage,
   getAskUserSession,
   getAskUserSessionForConv,
   countAskUserSessionsForConv,

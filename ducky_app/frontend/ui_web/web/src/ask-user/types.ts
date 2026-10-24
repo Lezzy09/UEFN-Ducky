@@ -27,6 +27,8 @@ export type AskUserResult = {
   ok: true;
   answers: Record<string, AskUserAnswer>;
   skipped_all: boolean;
+  /** The person typed a chat message instead of using the card: their own words. */
+  free_text?: string;
 };
 
 /** A file attached to a written answer, already saved in the asking chat. */
