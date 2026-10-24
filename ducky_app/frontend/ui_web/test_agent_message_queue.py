@@ -75,6 +75,55 @@ def test_held_messages_are_handed_over_once(monkeypatch) -> None:
     assert am.take_pending_agent_messages("c3") == []
 
 
+def test_a_person_send_the_turn_took_as_a_steer_does_not_run_again(monkeypatch) -> None:
+    from backend.agent import a2a_broker as broker
+    from frontend.ui_web import steer
+
+    monkeypatch.setattr(broker, "_retry_queue_later", lambda cid: None)
+    monkeypatch.setattr(steer, "_inbox", {})
+    monkeypatch.setattr(am, "is_agent_running", lambda cid: True)
+    monkeypatch.setattr(am, "cancel_agent", lambda cid=None, **kw: _never_cancel())
+    monkeypatch.setattr(am, "_pending_agent_messages", {})
+    monkeypatch.setattr(am, "_pending_steered", {})
+    assert am.run_message("p1", "taken", "agent", "", _local=True) == "queued"
+    assert am.run_message("p1", "also taken", "agent", "", _local=True) == "queued"
+    lease = steer.take("p1")
+    steer.ack("p1", lease["lease_id"])  # the turn took both ...
+    steer.post("p1", "late", "later")  # ... and this one arrived after
+    am._pending_agent_messages["p1"].append("agent report")
+    am._pending_steered["p1"]["late"] = "later"
+    am._pending_agent_messages["p1"].append("later")
+    am._drop_steered_pending("p1")
+    assert am._pending_agent_messages["p1"] == ["agent report", "later"]
+
+
+def test_a_person_send_with_attachments_waits_as_its_own_turn(monkeypatch) -> None:
+    from backend.agent import a2a_broker as broker
+
+    monkeypatch.setattr(broker, "_retry_queue_later", lambda cid: None)
+    monkeypatch.setattr(am, "is_agent_running", lambda cid: True)
+    monkeypatch.setattr(am, "_pending_agent_messages", {})
+    monkeypatch.setattr(am, "_pending_person_sends", {})
+    att = [{"name": "shot.png", "path": "x"}]
+    assert am.run_message("p2", "look", "ask", "", attachments=att, _local=True) == "queued"
+    assert am._pending_person_sends["p2"] == [{"text": "look", "mode": "ask", "attachments": att}]
+    assert "p2" not in am._pending_agent_messages
+
+    started: list[tuple[str, dict]] = []
+    monkeypatch.setattr(am, "wait_for_idle", lambda cid, timeout=None: True)
+    monkeypatch.setattr(broker, "automatic_work_blocked", lambda cid, queued=False: False)
+    monkeypatch.setattr(am, "run_message", lambda cid, text, mode, model, **kw: started.append((text, kw)) or "run")
+    am._deliver_pending_agent_messages("p2")
+    deadline = time.time() + 5
+    while not started and time.time() < deadline:
+        time.sleep(0.02)
+    assert started and started[0][0] == "look" and started[0][1]["attachments"] == att
+
+
+def _never_cancel() -> None:
+    raise AssertionError("a send must never cancel the running turn")
+
+
 def test_an_agent_waiting_on_a_busy_chat_queues_instead_of_replacing_its_turn(monkeypatch) -> None:
     # Oct 21 2026: a lead's sends cancelled its busy member's turn four times in a row.
     monkeypatch.setattr(am, "is_agent_running", lambda cid: True)

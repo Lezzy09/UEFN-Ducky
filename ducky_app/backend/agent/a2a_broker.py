@@ -608,6 +608,17 @@ def _leads(containing: dict[str, list[Any]], sender_conv_id: str, receiver_conv_
                for g in _enclosing_groups(containing, receiver_conv_id))
 
 
+def team_role(conv_id: str) -> str:
+    """``top_lead`` (leads a group no other group holds), ``sub_lead`` (leads a nested
+    group), ``member`` (in a group, leads none) or ``solo``. Unreadable chats → ``solo``."""
+    containing = _groups_by_member() or {}
+    led = {g.id: g for groups in containing.values() for g in groups
+           if (getattr(g, "leader_conv_id", "") or "") == conv_id}
+    if led:
+        return "sub_lead" if any(gid in containing for gid in led) else "top_lead"
+    return "member" if _enclosing_groups(containing, conv_id) else "solo"
+
+
 def _teammates(sender_conv_id: str, receiver_conv_id: str) -> bool:
     """Both chats sit in one team (a group, directly or through nested groups)."""
     containing = _groups_by_member() or {}

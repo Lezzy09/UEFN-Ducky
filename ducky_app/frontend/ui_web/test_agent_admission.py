@@ -80,6 +80,31 @@ def test_reserved_turn_queues_instead_of_cancelling(admissions, monkeypatch):
     assert am._pending_agent_messages["c"] == ["queued"]
 
 
+def test_person_send_into_running_turn_queues_and_steers(admissions, monkeypatch):
+    from backend.agent import a2a_broker
+    from frontend.ui_web import steer
+
+    monkeypatch.setattr(a2a_broker, "_retry_queue_later", lambda cid: None)
+    monkeypatch.setattr(steer, "_inbox", {})
+    cancels, pushed = [], []
+    monkeypatch.setattr(am, "cancel_agent", lambda cid=None, **kw: cancels.append(cid))
+    token = am._reserve_admission("c")
+    assert am.run_message("c", "also do X", "agent", "model", push=pushed.append, _local=True) == "queued"
+    assert cancels == []  # the running turn is never stopped
+    assert am._admissions["c"] is token
+    assert am._pending_agent_messages["c"] == ["also do X"]
+    assert [m["text"] for m in steer._inbox["c"]] == ["also do X"]
+    assert not any("already running" in str(e.get("text")) for e in pushed)
+
+
+def test_person_send_while_idle_starts_a_turn(admissions, monkeypatch):
+    started = []
+    monkeypatch.setattr(am, "load_conversation", lambda cid: started.append(cid) or None)
+    assert am.run_message("c", "hi", "agent", "model", push=lambda e: None, _local=True) == ""
+    assert started == ["c"]  # reached the turn body, nothing queued
+    assert "c" not in am._pending_agent_messages
+
+
 def test_reserved_turn_is_listed_before_session_exists(admissions):
     am._reserve_admission("c")
     assert am.list_running_agents() == ["c"]

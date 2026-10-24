@@ -17,6 +17,7 @@ from typing import Callable
 
 _procs: dict[str, subprocess.Popen] = {}
 _procs_lock = threading.Lock()
+_writers: dict[str, "StdinWriter"] = {}
 
 _STDERR_TAIL_CHARS = 8000
 _STDOUT_TAIL_CHARS = 4000
@@ -74,12 +75,14 @@ def _kill_windows_tree(pid: int) -> None:
     if not snap or snap == wintypes.HANDLE(-1).value:
         return
     kids: dict[int, list[int]] = {}
+    exe: dict[int, str] = {}
     try:
         entry = PROCESSENTRY32W()
         entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
         ok = kernel.Process32FirstW(snap, ctypes.byref(entry))
         while ok:
             kids.setdefault(int(entry.th32ParentProcessID), []).append(int(entry.th32ProcessID))
+            exe[int(entry.th32ProcessID)] = str(entry.szExeFile or "")
             ok = kernel.Process32NextW(snap, ctypes.byref(entry))
     finally:
         kernel.CloseHandle(snap)
@@ -96,12 +99,20 @@ def _kill_windows_tree(pid: int) -> None:
         seen.add(cur)
         stack.extend(kids.get(cur, []))
         order.append(cur)
+    # A git killed mid-commit leaves .git/index.lock; note its repo now, clean up after.
+    from backend.agent.coding_agents import git_lock_cleanup
+
+    try:
+        repos = git_lock_cleanup.repos_of([p for p in order if exe.get(p, "").lower() == "git.exe"])
+    except Exception:
+        repos = set()
     for target in reversed(order):
         handle = kernel.OpenProcess(0x0001, False, target)
         if not handle:
             continue
         kernel.TerminateProcess(handle, 1)
         kernel.CloseHandle(handle)
+    git_lock_cleanup.clean_in_background(repos)
 
 
 def _terminate_process_tree(proc: subprocess.Popen) -> None:
@@ -149,6 +160,46 @@ def terminate_conv_process(conv_id: str) -> bool:
     return True
 
 
+class StdinWriter:
+    """Line writer for a child's stdin that stays open for the whole turn.
+
+    Writes after ``close()`` or after the child exited return False instead of raising.
+    """
+
+    def __init__(self, stream) -> None:
+        self._stream = stream
+        self._lock = threading.Lock()
+        self.closed = stream is None
+
+    def write_line(self, text: str) -> bool:
+        with self._lock:
+            if self.closed:
+                return False
+            try:
+                self._stream.write(str(text).rstrip("\r\n") + "\n")
+                self._stream.flush()
+                return True
+            except (OSError, ValueError):
+                self.closed = True
+                return False
+
+    def close(self) -> None:
+        with self._lock:
+            if self.closed:
+                return
+            self.closed = True
+            try:
+                self._stream.close()
+            except (OSError, ValueError):
+                pass
+
+
+def get_stdin_writer(conv_id: str) -> StdinWriter | None:
+    """The open stdin writer of a chat's running ``keep_stdin_open`` process, if any."""
+    with _procs_lock:
+        return _writers.get(conv_id)
+
+
 @dataclass
 class ProcResult:
     returncode: int
@@ -158,6 +209,8 @@ class ProcResult:
     stdout_lines: int = 0
     raw_tail: str = ""
     """Last unparsed stdout text, for error surfaces when no JSON arrived."""
+    stdin_writer: StdinWriter | None = None
+    """Set with ``keep_stdin_open``; always closed by the time the result returns."""
 
 
 def run_streaming_process(
@@ -170,11 +223,17 @@ def run_streaming_process(
     timeout_s: float,
     cancel: threading.Event | None = None,
     stdin_data: str | None = None,
+    keep_stdin_open: bool = False,
+    on_stdin_writer: Callable[[StdinWriter], None] | None = None,
 ) -> ProcResult:
     """Run argv, feeding each stdout line to ``on_line``. Kills on timeout/cancel.
 
     Pass long user prompts via ``stdin_data`` — never as argv — or Windows
     CreateProcess raises WinError 206 on large pastes.
+
+    ``keep_stdin_open``: write ``stdin_data`` but leave stdin open; the writer is
+    handed to ``on_stdin_writer`` and served by ``get_stdin_writer(conv_id)`` while
+    the process runs, and closed on exit, timeout and cancel.
     """
     env = dict(os.environ)
     for key, value in (env_extra or {}).items():
@@ -185,7 +244,7 @@ def run_streaming_process(
     if not os.path.isdir(workdir):
         workdir = os.getcwd()
 
-    use_stdin = stdin_data is not None
+    use_stdin = stdin_data is not None or keep_stdin_open
     kwargs: dict = {
         "cwd": workdir,
         "env": env,
@@ -216,7 +275,23 @@ def run_streaming_process(
     register_process(conv_id, proc)
     result = ProcResult(returncode=-1)
 
-    if use_stdin and proc.stdin is not None:
+    if keep_stdin_open:
+        writer = StdinWriter(proc.stdin)
+        result.stdin_writer = writer
+        if stdin_data:
+            try:
+                proc.stdin.write(stdin_data)
+                proc.stdin.flush()
+            except (OSError, ValueError):
+                writer.closed = True
+        with _procs_lock:
+            _writers[conv_id] = writer
+        if on_stdin_writer is not None:
+            try:
+                on_stdin_writer(writer)
+            except Exception:
+                pass
+    elif use_stdin and proc.stdin is not None:
         try:
             proc.stdin.write(stdin_data or "")
             proc.stdin.close()
@@ -271,6 +346,11 @@ def run_streaming_process(
     except (OSError, subprocess.TimeoutExpired):
         pass
     finally:
+        if result.stdin_writer is not None:
+            with _procs_lock:
+                if _writers.get(conv_id) is result.stdin_writer:
+                    _writers.pop(conv_id, None)
+            result.stdin_writer.close()
         t_out.join(timeout=5)
         t_err.join(timeout=2)
         unregister_process(conv_id, proc)

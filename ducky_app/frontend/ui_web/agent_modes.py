@@ -456,44 +456,65 @@ def _with_admission(fn):
     @wraps(fn)
     def admitted(conv_id, user_text, mode, model, **kwargs):
         if not kwargs.get("_local") and _in_bridge_process():
+            kwargs.pop("_mem_admitted", None)
             return fn(conv_id, user_text, mode, model, **kwargs)
-        queue = kwargs.get("queue_if_busy", False) and not kwargs.get("force", False)
-        from backend.agent.a2a_broker import automatic_work_blocked, resume_by_user
-        if queue and automatic_work_blocked(conv_id, queued=True):
-            _queue_pending(conv_id, user_text)
-            return "queued"
-        if is_agent_running(conv_id):
-            if queue:
-                _queue_pending(conv_id, user_text)
-                return "queued"
-            cancel_agent(conv_id, by_user=False)  # replaced by this turn, not stopped
-            wait_for_idle(conv_id, SESSION_JOIN_TIMEOUT)
-        token = _reserve_admission(conv_id)
-        if token is None:
-            if queue:
-                _queue_pending(conv_id, user_text)
-                return "queued"
-            _resolve_push(kwargs.get("push"))({"type": "error", "conv_id": conv_id,
-                                               "text": "Agent already running for this chat"})
-            return ""
-        previous = getattr(_admission_context, "current", None)
-        _admission_context.current = (conv_id, token)
+        from frontend.ui_web import admission
+
+        # A slot from the memory wait line (admission.py): this call already holds it.
+        slot = {"held": bool(kwargs.pop("_mem_admitted", False)), "started": False}
         try:
-            with _admission_lock:
-                _check_admission(conv_id, token)
-                if queue and automatic_work_blocked(conv_id, queued=True):
-                    _queue_pending(conv_id, user_text)
-                    return "queued"
-                if not queue:
-                    resume_by_user(conv_id)
-            return fn(conv_id, user_text, mode, model, **kwargs)
-        except _AdmissionCancelled:
-            return ""
+            return _admit(fn, conv_id, user_text, mode, model, kwargs, slot,
+                          lambda: admitted(conv_id, user_text, mode, model, _mem_admitted=True, **kwargs))
         finally:
-            _admission_context.current = previous
-            if not token["transferred"]:
-                _release_admission(conv_id, token)
+            if slot["held"] and not slot["started"]:
+                admission.release(conv_id)
     return admitted
+
+
+def _admit(fn, conv_id, user_text, mode, model, kwargs, slot, start_later) -> str:
+    queue = kwargs.get("queue_if_busy", False) and not kwargs.get("force", False)
+    from backend.agent.a2a_broker import automatic_work_blocked, resume_by_user
+    from frontend.ui_web import admission
+
+    def hold() -> str:
+        if kwargs.get("attachments"):  # the text-only agent queue would drop them
+            return _queue_person_send(conv_id, user_text, mode, kwargs)
+        _queue_pending(conv_id, user_text)
+        return "queued"
+
+    if queue and automatic_work_blocked(conv_id, queued=True):
+        return hold()
+    if is_agent_running(conv_id):
+        # Only Stop (cancel_agent, by_user=True) ends a turn; a send into one waits for it.
+        return hold() if queue else _queue_person_send(conv_id, user_text, mode, kwargs)
+    if not slot["held"]:
+        # A person's own send (no parent, no starter) never waits for memory; agent work may.
+        person = not queue and not kwargs.get("parent") and kwargs.get("started_by") is None
+        if not admission.may_start(conv_id, "person" if person else "agent", start=start_later,
+                                   push=_resolve_push(kwargs.get("push"))):
+            return "queued"
+        slot["held"] = admission.holds(conv_id)
+    token = _reserve_admission(conv_id)
+    if token is None:
+        return hold() if queue else _queue_person_send(conv_id, user_text, mode, kwargs)
+    previous = getattr(_admission_context, "current", None)
+    _admission_context.current = (conv_id, token)
+    try:
+        with _admission_lock:
+            _check_admission(conv_id, token)
+            if queue and automatic_work_blocked(conv_id, queued=True):
+                return hold()
+            if not queue:
+                resume_by_user(conv_id)
+        return fn(conv_id, user_text, mode, model, **kwargs)
+    except _AdmissionCancelled:
+        return ""
+    finally:
+        _admission_context.current = previous
+        # A started turn keeps its memory slot until agent_stopped (_make_broker_tap).
+        slot["started"] = bool(token["transferred"])
+        if not token["transferred"]:
+            _release_admission(conv_id, token)
 
 
 def _running_here(conv_id: str) -> bool:
@@ -827,7 +848,12 @@ def _cancel_here(conv_id: str | None = None, *, by_user: bool = True) -> None:
                     pass
             with _pending_lock:
                 _pending_agent_messages.pop(cid, None)
+                _pending_person_sends.pop(cid, None)
+                _pending_steered.pop(cid, None)
             if by_user:
+                from frontend.ui_web import admission
+
+                admission.drop(cid)  # a Stopped chat leaves the memory wait line
                 from backend.agent.a2a_broker import on_agent_cancelled_by_user
 
                 on_agent_cancelled_by_user(cid)
@@ -1474,6 +1500,59 @@ def release_held_for_model(conv_id: str) -> int:
 # A person's Stop drops them, like the A2A inbox (cancel_agent).
 _pending_agent_messages: dict[str, list[str]] = {}
 _pending_lock = threading.Lock()
+# A person's send with attachments into a running turn: its own next turn (attachments can't steer).
+_pending_person_sends: dict[str, list[dict[str, Any]]] = {}
+# steer id -> text of a person's send that is both queued and offered to the turn as a steer.
+_pending_steered: dict[str, dict[str, str]] = {}
+
+
+def _queue_person_send(conv_id: str, text: str, mode: str, kwargs: dict[str, Any]) -> str:
+    """A person's send while the chat runs: queued for the next turn, never a Stop.
+
+    Text also goes to the steer inbox so the running turn can take it at its next Ducky
+    tool call; a steer the turn took is dropped from the queue when the turn ends
+    (``_drop_steered_pending``). The old path cancelled the turn and waited 2 s, which
+    killed commands mid-run or dropped the message with "Agent already running".
+    """
+    body = str(text or "")
+    attachments = kwargs.get("attachments") or None
+    if attachments:
+        with _pending_lock:
+            _pending_person_sends.setdefault(conv_id, []).append(
+                {"text": body, "mode": mode or "agent", "attachments": attachments})
+        from backend.agent.a2a_broker import _retry_queue_later
+        _retry_queue_later(conv_id)
+        return "queued"
+    if not body.strip():  # a resume or an empty send: the running turn already covers it
+        return ""
+    _queue_pending(conv_id, body)
+    from frontend.ui_web import steer
+
+    sid = "send-" + uuid.uuid4().hex
+    if steer.post(conv_id, sid, body):
+        with _pending_lock:
+            _pending_steered.setdefault(conv_id, {})[sid] = body
+    return "queued"
+
+
+def _drop_steered_pending(conv_id: str) -> None:
+    """Queued person sends the turn already took as a steer don't run again. Call before steer.end_run."""
+    with _pending_lock:
+        offered = _pending_steered.pop(conv_id, {})
+    if not offered:
+        return
+    from frontend.ui_web import steer
+
+    # ponytail: reads steer's inbox directly; a steer.pending_ids() helper if steer grows more callers.
+    with steer._lock:
+        waiting = {m["id"] for m in steer._inbox.get(conv_id) or []}
+    with _pending_lock:
+        box = _pending_agent_messages.get(conv_id) or []
+        for sid, body in offered.items():
+            if sid not in waiting and body in box:
+                box.remove(body)
+        if not box:
+            _pending_agent_messages.pop(conv_id, None)
 
 def _queue_pending(conv_id: str, text: str) -> None:
     with _pending_lock:
@@ -1498,7 +1577,7 @@ def _deliver_pending_agent_messages(conv_id: str) -> None:
     if automatic_work_blocked(conv_id, queued=True):
         return
     with _pending_lock:
-        if not _pending_agent_messages.get(conv_id):
+        if not _pending_agent_messages.get(conv_id) and not _pending_person_sends.get(conv_id):
             return
 
     def _worker() -> None:
@@ -1508,8 +1587,12 @@ def _deliver_pending_agent_messages(conv_id: str) -> None:
             return
         with _pending_lock:
             texts = _pending_agent_messages.pop(conv_id, [])
+            sends = _pending_person_sends.pop(conv_id, [])
         if texts:
             run_message(conv_id, "\n\n".join(texts), "agent", "", queue_if_busy=True)
+        for item in sends:  # queue_if_busy: each waits behind the turn before it
+            run_message(conv_id, item["text"], item["mode"], "", attachments=item["attachments"],
+                        queue_if_busy=True)
 
     threading.Thread(target=_worker, daemon=True, name=f"a2a-pending-{conv_id[:8]}").start()
 
@@ -1529,9 +1612,13 @@ def _make_broker_tap(push: PushFn, conv_id: str) -> PushFn:
             if rid in seen:
                 return
             seen.add(rid)
+        from frontend.ui_web import admission
+
+        admission.release(conv_id)  # the turn's memory slot (taken in _admit)
         # Messages no tool call picked up: the composer's queue sends them as the next turn.
         from frontend.ui_web import steer
 
+        _drop_steered_pending(conv_id)
         steer.end_run(conv_id)
         try:
             from backend.agent.a2a_broker import on_agent_stopped, automatic_work_blocked, stats
