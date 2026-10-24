@@ -410,6 +410,72 @@ def trust_local_plugin(plugin_id: str) -> None:
         settings.save()
 
 
+# The person's "Trust AI plugin drafts this swarm builds, for testing" grant (the swarm's
+# Build card): {"groups": [swarm group ids], "drafts": {plugin id: group id of the seat
+# that scaffolded it}}. Only the person sets it; no agent tool does.
+_SWARM_TRUST_FILE = "swarm_draft_trust.json"
+
+
+def _swarm_trust() -> dict[str, Any]:
+    try:
+        data = json.loads((appdata_dir() / _SWARM_TRUST_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    return {"groups": [str(g) for g in data.get("groups") or []],
+            "drafts": {str(k): str(v) for k, v in (data.get("drafts") or {}).items()}}
+
+
+def _save_swarm_trust(data: dict[str, Any]) -> None:
+    path = appdata_dir() / _SWARM_TRUST_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def set_swarm_draft_trust(group_ids: list[str], on: bool) -> dict[str, Any]:
+    """The Build card's switch: ``group_ids`` are every group of one swarm (nested ones
+    too). On, ducky_plugin_test from those groups' seats turns on drafts those seats
+    scaffolded without the needs_trust stop."""
+    ids = {str(g).strip() for g in group_ids or [] if str(g).strip()}
+    data = _swarm_trust()
+    groups = set(data["groups"]) | ids if on else set(data["groups"]) - ids
+    data["groups"] = sorted(groups)
+    if not on:
+        data["drafts"] = {pid: g for pid, g in data["drafts"].items() if g not in ids}
+    _save_swarm_trust(data)
+    return {"ok": True, "groups": data["groups"]}
+
+
+def _caller_group() -> str:
+    try:
+        from backend.workspace.identity import resolve_context
+
+        ctx = resolve_context()
+    except Exception:  # noqa: BLE001
+        return ""
+    return str(ctx.group_id or "") if ctx is not None else ""
+
+
+def note_draft_creator(plugin_id: str) -> None:
+    """A draft was scaffolded: remember the caller's group, if it is a swarm seat's."""
+    group = _caller_group()
+    if group:
+        data = _swarm_trust()
+        data["drafts"][normalize_plugin_id(plugin_id)] = group
+        _save_swarm_trust(data)
+
+
+def swarm_trusts_draft(plugin_id: str) -> bool:
+    """Is the caller a seat of a swarm with the grant, and was the draft scaffolded by
+    a seat of that grant?"""
+    group = _caller_group()
+    if not group:
+        return False
+    data = _swarm_trust()
+    groups = set(data["groups"])
+    return group in groups and data["drafts"].get(normalize_plugin_id(plugin_id)) in groups
+
+
 def _defer_chat_enable_side_effects(plugin_id: str, *, enabled: bool) -> None:
     """Opt-in / prompt-cache wipe across all chats — disk-heavy; run off the UI thread."""
     import threading
@@ -436,7 +502,11 @@ def _defer_chat_enable_side_effects(plugin_id: str, *, enabled: bool) -> None:
     ).start()
 
 
-def set_uefn_plugin_enabled(plugin_id: str, enabled: bool, *, trust_local: bool = False) -> dict[str, Any]:
+def set_uefn_plugin_enabled(
+    plugin_id: str, enabled: bool, *, trust_local: bool = False, swarm_test: bool = False
+) -> dict[str, Any]:
+    """``swarm_test``: ducky_plugin_test turning on a draft under the swarm grant
+    (:func:`swarm_trusts_draft`, checked here); the plugin isn't added to the trusted list."""
     pid = normalize_plugin_id(plugin_id)
     manifest = load_plugin_manifest(pid)
     if manifest is None:
@@ -447,6 +517,7 @@ def set_uefn_plugin_enabled(plugin_id: str, enabled: bool, *, trust_local: bool 
         and source in _TRUST_REQUIRED_SOURCES
         and not trust_local
         and pid not in _trusted_local_ids()
+        and not (swarm_test and source == "ai" and swarm_trusts_draft(pid))
     ):
         kind = "AI-made" if source == "ai" else "local"
         return {

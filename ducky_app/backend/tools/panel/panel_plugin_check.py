@@ -649,6 +649,19 @@ def _turn_on(pid: str) -> dict[str, Any]:
     hasn't confirmed answers ``needs_trust`` (and Ducky asks the user), never runs."""
     from backend.tools.panel.panel_store import ducky_store_set_enabled
 
+    from backend.uefn_plugins.store import set_uefn_plugin_enabled, swarm_trusts_draft
+
+    if swarm_trusts_draft(pid):
+        # The person trusted this swarm's drafts for testing (its Build card): no stop.
+        try:
+            out = set_uefn_plugin_enabled(pid, True, swarm_test=True)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+        if out.get("ok"):
+            from backend.tools.panel.panel_ai_plugins import _notify_plugins
+
+            _notify_plugins()
+            return out
     try:
         out = json.loads(ducky_store_set_enabled(pid, True))
     except (TypeError, ValueError) as exc:
