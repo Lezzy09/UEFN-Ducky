@@ -16,13 +16,29 @@ def _tool_result_text(result: dict[str, Any] | None) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-def _messages_to_ui(conv, project_root: str | None = None, *, live: bool = False) -> list[dict[str, Any]]:
+# Row id = message index * ROW_ID_STEP + row index within that message, so a
+# page knows its ids without converting the messages before it.
+# ponytail: a message past 999 rows (~500 tool calls in one turn) collides with the next.
+ROW_ID_STEP = 1000
+
+
+def _messages_to_ui(
+    conv,
+    project_root: str | None = None,
+    *,
+    live: bool = False,
+    before_id: int | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
     """Stored conversation → flat UI rows.
 
     ``live``: the conversation's run is still going. The checkpoint with a
     matching live run id is a turn in progress, not an
     interrupted one: no "Interrupted" flag, and tool calls without a result yet stay
     running instead of showing as failed ``· pending ·`` rows.
+
+    ``limit`` / ``before_id``: only the ``limit`` newest rows (before ``before_id``),
+    converting messages from the end until enough rows exist.
     """
     from frontend.settings import PanelSettings
     from frontend.ui_web.conversation_attachments import hydrate_attachment_dicts
@@ -30,12 +46,13 @@ def _messages_to_ui(conv, project_root: str | None = None, *, live: bool = False
 
     root = project_root if project_root is not None else PanelSettings.load().uefn_project_root
     conv_dir = get_conversations_dir(root)
-    out: list[dict[str, Any]] = []
-    i = 0
     from frontend.ui_web.live_agent_runs import get_live_run_ids
     live_runs = get_live_run_ids() if live else frozenset()
     last_index = len(conv.messages) - 1
-    for index, m in enumerate(conv.messages):
+
+    def convert(index: int, m: dict[str, Any]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        i = index * ROW_ID_STEP
         role = m.get("role", "user")
         if role == "user":
             row: dict[str, Any] = {"id": i, "role": "user", "text": m.get("text", m.get("content", ""))}
@@ -43,8 +60,7 @@ def _messages_to_ui(conv, project_root: str | None = None, *, live: bool = False
             if attachments:
                 row["attachments"] = hydrate_attachment_dicts(attachments, conv.id, conv_dir, root)
             out.append(row)
-            i += 1
-            continue
+            return out
         if role == "assistant":
             in_flight = (
                 live
@@ -202,5 +218,22 @@ def _messages_to_ui(conv, project_root: str | None = None, *, live: bool = False
                         "profile_id": str(author.get("profile_id") or "").strip(),
                     }
                 out.append(row_inc)
-                i += 1
-    return out
+        return out
+
+    messages = conv.messages
+    if before_id is None and limit is None:
+        return [row for index, m in enumerate(messages) for row in convert(index, m)]
+    end = len(messages) if before_id is None else min(len(messages), int(before_id) // ROW_ID_STEP + 1)
+    want = int(limit) if limit is not None and int(limit) > 0 else None
+    pages: list[list[dict[str, Any]]] = []
+    count = 0
+    for index in range(end - 1, -1, -1):
+        rows = convert(index, messages[index])
+        if before_id is not None:
+            rows = [r for r in rows if r["id"] < int(before_id)]
+        pages.append(rows)
+        count += len(rows)
+        if want is not None and count >= want:
+            break
+    rows = [r for page in reversed(pages) for r in page]
+    return rows[-want:] if want is not None else rows

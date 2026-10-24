@@ -1718,17 +1718,22 @@ class PanelApiChatsMixin:
         """The one message-load path: conversation as flat UI rows.
 
         `_messages_to_ui` is the single source of truth for how a stored
-        conversation becomes rows; row ids are stable positions, so a page is a
-        slice of the full row list (``limit`` newest rows, or the ``limit`` rows
-        before ``before_id``). Without arguments the whole conversation comes
-        back, as before.
+        conversation becomes rows; row ids are message index * 1000 + row index,
+        so a page (``limit`` newest rows, or the ``limit`` rows before
+        ``before_id``) converts only the messages it shows, newest first.
+        Without arguments the whole conversation comes back, as before.
         """
         started = _pa.time.monotonic()
         try:
             conv = _pa.load_conversation(conv_id)
             if not conv:
                 return []
-            rows = _pa._messages_to_ui(conv, live=conv_id in self.list_running_agents())
+            rows = _pa._messages_to_ui(
+                conv,
+                live=conv_id in self.list_running_agents(),
+                before_id=None if before_id is None else int(before_id),
+                limit=None if limit is None else int(limit),
+            )
         except Exception as exc:
             # A chat that can't be read must leave a trace, not just a spinner.
             _pa.record_error("chat", f"Chat {str(conv_id)[:8]} couldn't be loaded: {type(exc).__name__}: {exc}")
@@ -1736,12 +1741,6 @@ class PanelApiChatsMixin:
         took = _pa.time.monotonic() - started
         if took > 5.0:
             _pa.record_activity("chat", f"Chat {str(conv_id)[:8]} took {took:.1f}s to load ({len(rows)} rows)")
-        if limit is None and before_id is None:
-            return rows
-        if before_id is not None:
-            rows = [r for r in rows if isinstance(r.get("id"), int) and r["id"] < int(before_id)]
-        if limit is not None and int(limit) > 0:
-            rows = rows[-int(limit):]
         return rows
 
     def send_message(
