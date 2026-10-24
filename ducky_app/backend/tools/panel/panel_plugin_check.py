@@ -10,7 +10,9 @@
   check. The test's calls run on a throwaway copy of that plugin's data
   (:func:`scopes.sandbox_begin`: the test's calls and the threads they start; other
   agents' calls and other plugins untouched), so nothing it does reaches the user's
-  data or hides it from anyone. An AI plugin the user
+  data or hides it from anyone. The user's copy is fingerprinted before and after the
+  tool and node calls: a call that reached it anyway (a worker the plugin started
+  outside the test, a path of its own) fails the "user data untouched" check. An AI plugin the user
   hasn't confirmed answers ``needs_trust`` like turning it on does; it never runs.
   A draft linked to a repo (``repo=`` once, remembered) is first synced from the
   repo's working tree, so the test never runs on files that fell behind.
@@ -561,6 +563,7 @@ def test_plugin(plugin_id: str, repo: str = "") -> dict[str, Any]:
                            "detail": str(turned_on.get("error") or "couldn't turn the plugin on")})
             return _report(pid, started, checks)
     wait_plugin_toggles(timeout=15.0)  # the reinstall registers the new backend in the background
+    before = _real_data(pid)
     # From here the test's own calls (and the threads they start) use a throwaway copy of
     # the plugin's data; everyone else's calls keep the real data.
     try:
@@ -576,6 +579,8 @@ def test_plugin(plugin_id: str, repo: str = "") -> dict[str, Any]:
             _check_nodes(pid, manifest, checks, stragglers)
 
         contextvars.copy_context().run(run)
+        # Before the panels: their calls come from outside the test and use the real data.
+        checks.append(_check_untouched(before, _real_data(pid)))
         _check_panels(pid, manifest, started, checks)
         loads = [e for e in plugin_errors(pid, since=started, limit=50).get("errors") or [] if e["source"] == "load"]
         checks.append({"check": "backend load", "status": "fail" if loads else "pass",
@@ -590,6 +595,53 @@ def test_plugin(plugin_id: str, repo: str = "") -> dict[str, Any]:
         return report
     finally:
         _end_sandbox(pid, stragglers)
+
+
+def _real_data(pid: str) -> dict[str, str]:
+    """A fingerprint of the user's copy of ``pid``'s data: its rows (docs, files,
+    cache, prefs) in every scope but test copies, and its files on disk."""
+    from backend.store import db
+    from backend.uefn_plugins import scopes
+
+    test, n = scopes.SANDBOX_PREFIX, len(scopes.SANDBOX_PREFIX)
+    out: dict[str, str] = {}
+    conn = db.connect()
+    for table, cols in (("plugin_data", "account_id, scope_id, kind, key, sha256, rev, deleted"),
+                        ("plugin_kv", "account_id, scope_id, '', key, value, encrypted, 0")):
+        for row in conn.execute(f"SELECT {cols} FROM {table} WHERE plugin_id=? AND substr(scope_id, 1, ?)!=?",
+                                (pid, n, test)).fetchall():
+            out[f"{table} {row[1] or 'local'}/{row[2] + '/' if row[2] else ''}{row[3]}"] = repr(row[4:])
+    try:
+        root = scopes.scopes_root(scopes.account_id())
+        for scope_dir in root.iterdir() if root.is_dir() else ():
+            if scope_dir.name.startswith(test):
+                continue
+            for path in (scope_dir / pid).rglob("*"):
+                if path.is_file():
+                    st = path.stat()
+                    out[f"file {path.relative_to(root).as_posix()}"] = f"{st.st_size}:{st.st_mtime_ns}"
+    except OSError:
+        pass
+    return out
+
+
+def _check_untouched(before: dict[str, str], after: dict[str, str]) -> dict[str, Any]:
+    """The "user data untouched" row. Nothing is undone: the test can't tell a leaked
+    write from a teammate's live call to the same plugin meanwhile."""
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    changed = sorted(k for k in set(before) & set(after) if before[k] != after[k])
+    if not (added or removed or changed):
+        return {"check": "user data untouched", "status": "pass",
+                "detail": f"{len(before)} rows and files of the user's copy unchanged"}
+    return {
+        "check": "user data untouched", "status": "fail",
+        "detail": (f"the user's copy changed while the tools and nodes ran ({len(added)} added, {len(changed)} "
+                   f"changed, {len(removed)} removed): a test call reached the real data (a worker or path the "
+                   "plugin keeps outside api data), or someone used the plugin meanwhile. Remove what the test "
+                   "left and make that write go through api data."),
+        **{k: v[:20] for k, v in (("added", added), ("changed", changed), ("removed", removed)) if v},
+    }
 
 
 def _turn_on(pid: str) -> dict[str, Any]:

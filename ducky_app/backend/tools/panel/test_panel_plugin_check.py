@@ -134,3 +134,32 @@ def test_the_test_syncs_the_draft_from_its_repo_first(tmp_path, monkeypatch: pyt
 
     (repo / "plugin.json").write_text(json.dumps({"id": "other"}), encoding="utf-8")
     assert check.test_plugin("demo")["ok"] is False
+
+
+def test_a_write_that_reaches_the_users_data_fails_the_test(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.store import db
+    from backend.store.repos import plugin_kv
+    from backend.uefn_plugins import scopes
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("DUCKY_STORE_BACKEND", raising=False)
+    db.reset_for_tests()
+    try:
+        real = {"account": "_local", "scope": "personal"}
+        plugin_kv.set("webgpu", "downloads", [{"name": "Web Engine 5.8.1"}], **real)
+        test_copy = {"account": "_local", "scope": scopes.SANDBOX_PREFIX + "abc"}
+        before = check._real_data("webgpu")
+
+        # A write into the test copy (what api data does under test) leaves the user's copy alone.
+        plugin_kv.set("webgpu", "downloads", [{"name": "Web Engine 5.8.2-web4"}], **test_copy)
+        plugin_kv.set("other", "downloads", [{"name": "not this plugin"}], **real)
+        assert check._check_untouched(before, check._real_data("webgpu"))["status"] == "pass"
+
+        # One that lands in the user's copy (a worker started outside the test) fails, named.
+        plugin_kv.set("webgpu", "job:web4", {"name": "Web Engine 5.8.2-web4"}, **real)
+        row = check._check_untouched(before, check._real_data("webgpu"))
+        assert row["status"] == "fail" and row["added"] == ["plugin_kv personal/job:web4"], row
+        assert "changed" not in row
+        assert plugin_kv.get("webgpu", "downloads", **real)[0] == [{"name": "Web Engine 5.8.1"}]
+    finally:
+        db.reset_for_tests()
