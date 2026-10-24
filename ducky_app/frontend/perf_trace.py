@@ -435,6 +435,17 @@ def per_process_block(rows: list[dict[str, Any]], minutes: float) -> dict[str, A
     }
 
 
+def ui_js_big_top(rows: list[dict[str, Any]], n: int = 10) -> list[list[Any]]:
+    """The ``n`` bridge methods with the most ``ui_js_big`` bytes: ``[method, count, max_bytes]``."""
+    by_method: dict[str, list[int]] = {}
+    for row in rows:
+        e = row.get("payload") or {}
+        if e.get("kind") == "ui_js_big":
+            by_method.setdefault(str(e.get("source") or e.get("name") or "?"), []).append(int(e.get("js_bytes") or 0))
+    top = sorted(by_method.items(), key=lambda kv: -sum(kv[1]))[:n]
+    return [[method, len(sizes), max(sizes)] for method, sizes in top]
+
+
 def per_process_report(hours: float = 2.0) -> dict[str, Any]:
     """Chat load / save times and UI traffic per Ducky process over the last ``hours``
     (the app window and the tool servers each trace into their own session)."""
@@ -456,7 +467,7 @@ def per_process_report(hours: float = 2.0) -> dict[str, Any]:
             block.update(chat_slow_2h=chat_errors["chat_slow"], chat_timeouts_2h=chat_errors["chat_timeout"])
         processes.append(block)
     return {"ok": True, "hours": hours, "rows": len(rows), "capped": len(rows) >= PER_PROCESS_ROW_CAP,
-            "chat_errors": chat_errors, "processes": processes}
+            "chat_errors": chat_errors, "ui_js_big_top": ui_js_big_top(rows), "processes": processes}
 
 
 def read_latest_report() -> dict[str, Any] | None:

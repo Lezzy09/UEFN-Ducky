@@ -46,6 +46,15 @@ def test_two_processes_get_their_own_blocks(monkeypatch):
     assert out["chat_errors"] == {"chat_slow": 1, "chat_timeout": 2}
 
 
+def test_biggest_bridge_replies_sorted_by_bytes_with_counts():
+    rows = [_row(1, kind="ui_js_big", name=m, source=m, js_bytes=b) for m, b in (
+        ("get_skill_info", 706_000), ("get_skill_info", 500_000), ("list_project_file_paths", 900_000),
+        ("group_members", 70_000), ("group_members", 80_000), ("group_members", 90_000))]
+    rows.append(_row(1, kind="ui_js", name="evaluate_js", source="push", js_bytes=5_000_000))  # not a big reply
+    assert perf_trace.ui_js_big_top(rows) == [["get_skill_info", 2, 706_000], ["list_project_file_paths", 1, 900_000],
+                                              ["group_members", 3, 90_000]]
+
+
 def test_pid_comes_from_the_session_id():
     assert perf_trace._pid_of("session-20261024-101500-4321") == 4321
     assert perf_trace._pid_of("weird") == 0
