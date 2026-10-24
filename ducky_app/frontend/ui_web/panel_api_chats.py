@@ -1752,7 +1752,7 @@ class PanelApiChatsMixin:
         file_path: str = "",
         attachments: list[dict[str, Any]] | None = None,
         coding_agent: str = "",
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         from frontend.ui_web.group_orchestrator import (
             is_group_conversation,
             run_group_turn,
@@ -1786,6 +1786,8 @@ class PanelApiChatsMixin:
 
         if run_id == HELD_FOR_MODEL:
             return {"run_id": "", "held_for_model": "1"}
+        if run_id == "queued":  # the chat runs: the send waits as a steer / next turn, never a Stop
+            return {"ok": True, "queued": True, "note": "Sent — the agent takes it at its next step"}
         return {"run_id": run_id}
 
     def run_held_messages(self, conv_id: str, model: str, coding_agent: str = "") -> dict[str, Any]:
