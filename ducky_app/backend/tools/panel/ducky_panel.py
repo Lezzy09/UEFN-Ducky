@@ -696,6 +696,15 @@ def ducky_perf_report(clear: bool = False, pretty: bool = False) -> str:
     except Exception:
         pass
 
+    # Chat load / save times and UI traffic per Ducky process (app window, tool servers,
+    # other) with the bridge methods sending the biggest replies (ui_js_big_top).
+    try:
+        from frontend.perf_trace import per_process_report
+
+        report = {**report, "per_process": per_process_report()}
+    except Exception as exc:  # a meter never breaks the report
+        report = {**report, "per_process": {"ok": False, "error": str(exc)}}
+
     return tool_json(report, pretty=pretty)
 
 
@@ -1481,6 +1490,7 @@ def ducky_agent_list(sender: str = "", pretty: bool = False) -> str:
     kept as an alias for older prompts).
     """
     from frontend.ui_web.agent_modes import is_agent_running, linked_parent_of
+    from frontend.ui_web.agent_state import agent_state
     from frontend.ui_web.group_orchestrator import is_group_conversation
 
     me = _resolve_sender(sender)
@@ -1494,13 +1504,21 @@ def ducky_agent_list(sender: str = "", pretty: bool = False) -> str:
         parent_id = (getattr(conv, "parent_conv_id", None) or "").strip() or (
             linked_parent_of(conv.id) or ""
         )
+        active = is_agent_running(conv.id)
+        state: dict[str, Any] = {}
+        if active:  # needs_answer / needs_approval / running_command / working / silent
+            try:
+                state = {k: v for k, v in agent_state(conv.id).items() if k in ("state", "since_s", "detail")}
+            except Exception:  # a meter never breaks the list
+                state = {}
         rows.append(
             {
                 "id": conv.id,
                 "title": conv.title,
                 "ducky": conv.ducky_name or "",
                 "coding_agent": conv.coding_agent or "ducky",
-                "active": is_agent_running(conv.id),
+                "active": active,
+                **state,
                 "parent_conv_id": parent_id,
                 "parent": parent_id,  # alias — older prompts used `parent`
                 "is_self": conv.id == me,
