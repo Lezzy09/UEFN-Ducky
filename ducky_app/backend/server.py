@@ -29,6 +29,11 @@ def _with_steer(result, texts: list[str]):
     return [*result, note]
 
 
+# ponytail: one dedicated session per process, so a 2 s identity recheck is cheap; the
+# shared daemon (16+ clients) keeps its 30 s net and relies on revision bumps.
+DEDICATED_RECHECK_S = 2.0
+
+
 def _returns_str(fn) -> bool:
     try:
         annotation = inspect.signature(fn).return_annotation
@@ -102,8 +107,11 @@ class ProtectedFastMCP(FastMCP):
         seen = catalog_revision()
         try:
             while True:
-                # Sleep until a tool is added, removed or edited (30 s safety net).
-                seen = await anyio.to_thread.run_sync(wait_catalog_change, seen, abandon_on_cancel=True)
+                # Sleep until a tool is added or removed, or a short recheck: an in-place
+                # edit or a policy flip in this process bumps nothing, and the identity
+                # compare below costs a few ms (no rows rebuilt unless something moved).
+                seen = await anyio.to_thread.run_sync(
+                    wait_catalog_change, seen, None, DEDICATED_RECHECK_S, abandon_on_cancel=True)
                 # Rebuild and hash the rows only when a registered tool moved.
                 marker = _catalog_marker(_policy_filtered(_snapshot_tools(self)))
                 if marked is not None and marker[1] == marked[1]:
