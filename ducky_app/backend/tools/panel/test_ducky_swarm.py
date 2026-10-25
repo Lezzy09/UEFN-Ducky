@@ -453,6 +453,49 @@ def test_start_after_makes_the_group_wait():
         _edited({"group": "No such", "start_after": "p0"})
 
 
+def _plan_sec(sid, name, files, n=2):
+    return {"id": sid, "content": name, "body_markdown": f"**Files:** `{files}`\nDucky: developer\nModel: m1",
+            "children": [{"id": f"{sid}-{i}", "content": f"{name} step {i}", "body_markdown": ""} for i in range(n)]}
+
+
+INVENTORY_PLAN = {"id": "p1", "title": "Inventory UI", "nodes": [
+    {"id": "g", "content": "Backend", "children": [_plan_sec("api", "API", "backend/inv/**"),
+                                                 _plan_sec("store", "Store", "backend/store/**", 1)]},
+    _plan_sec("ui", "Widget", "web/src/inv/**", 3),
+]}
+
+
+def test_from_plan_preview_matches_the_plan_outline():
+    from backend.tools.panel.test_swarm_build import Api
+
+    api = Api("C:/proj", plan=json.loads(json.dumps(INVENTORY_PLAN)))
+    out = sw.swarm_create("", None, from_plan=True, api=api)
+    assert out["status"] == "needs_confirm" and out["ui"] == "swarm_builder" and out["goal"] == "Inventory UI"
+    p = out["preview"]
+    assert p["from_plan"] and p["agents"] == 3
+    assert [g["group"] for g in sw.walk_groups(p["tree"])] == ["Backend"]
+    assert [(s["seat"], len(s["steps"])) for s in p["plan"]["sections"]] == [("API", 2), ("Store", 1), ("Widget", 3)]
+    assert p["lanes"]["Widget"] == ["web/src/inv/**"]
+    assert {s["name"]: s["group"] for s in out["seats"]} == {"API": "Backend", "Store": "Backend", "Widget": ""}
+    assert api.calls == []  # a preview builds nothing
+
+
+def test_from_plan_confirm_builds_through_swarm_build(tmp_path):
+    from backend.tools.panel.test_swarm_build import Api
+
+    api = Api(tmp_path, plan=json.loads(json.dumps(INVENTORY_PLAN)))
+    out = sw.swarm_create("", None, from_plan=True, confirm=True, api=api)
+    assert out["status"] == "done" and out["agents"] == 3
+    assert sorted(c[1] for c in api.names("assign")) == ["api", "store", "ui"]
+    assert not api.names("plan_add_node")  # the plan is used as it is
+
+
+def test_from_plan_without_a_plan_is_an_error():
+    from backend.tools.panel.test_swarm_build import Api
+
+    assert sw.swarm_create("", None, from_plan=True, api=Api("C:/proj", plan=None))["status"] == "error"
+
+
 def test_unknown_key_warns_and_changes_nothing():
     plain, odd = _edited(), _edited({"wiggle": 1}, {"seat": "Verse lead", "colour": "red"})
     assert any("wiggle" in w for w in odd["warnings"]) and any("colour" in w for w in odd["warnings"])

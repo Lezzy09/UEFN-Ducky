@@ -180,11 +180,55 @@ def card(status: str, preview: dict[str, Any]) -> dict[str, Any]:
             "seats": _flat_seats(public["tree"])}
 
 
+# ---- from the lead's own plan -------------------------------------------------------------
+
+def plan_preview(plan: dict[str, Any]) -> dict[str, Any]:
+    """The preview of building *plan* as it is (``swarm_build.seats_from_plan``): one seat per
+    section whose children are steps, one group per section of sections, nothing added."""
+    from backend.tools.panel.swarm_build import seats_from_plan
+
+    tree = seats_from_plan(plan)
+    seats = list(walk_seats(tree))
+    return {
+        "goal": str(plan.get("title") or "").strip() or "Swarm",
+        "from_plan": True,
+        "agents": len(seats),
+        "tree": tree,
+        "muted": [g["group"] for g in walk_groups(tree) if g["muted"]],
+        "lanes": {s["name"]: s["paths"] for s in seats},
+        "plan": {"title": str(plan.get("title") or ""),
+                 "sections": [{"seat": s["name"], "title": s["sub_plan"]["title"], "steps": s["sub_plan"]["steps"]}
+                              for s in seats]},
+    }
+
+
+def _swarm_from_plan(confirm: bool, api: Any) -> dict[str, Any]:
+    api = api or PanelSwarmApi()
+    lead = api.caller()
+    plan = api.load_plan(lead) if lead else None
+    if not plan or not plan.get("nodes"):
+        return {"status": "error", "error": "from_plan needs a plan in the calling chat (ducky_create_plan first)."}
+    preview = plan_preview(plan)
+    if not preview["agents"]:
+        return {"status": "error", "goal": preview["goal"], "error": "Nothing to seat: no section has steps."}
+    if not confirm:
+        return {**card("needs_confirm", preview),
+                "next": ("Show the person this preview of the plan's sections as seats. Build: same call with "
+                         "confirm=true. Change seats by editing the plan (Ducky:, Model:, Files: lines).")}
+    try:
+        built = build_swarm(api=api, from_plan=plan)
+    except Exception as exc:  # SwarmBuildError archives what it made; say so on the card
+        return {"status": "error", "goal": preview["goal"], "error": str(exc), "tree": preview["tree"]}
+    return {"status": "done", "goal": preview["goal"], "agents": preview["agents"], **built}
+
+
 # ---- the tool -----------------------------------------------------------------------------
 
 def swarm_create(goal: str, jobs: list[dict[str, Any]] | None, agents: Any = "", max_agents: int = 0,
                  per_group: int = 0, edits: list[dict[str, Any]] | None = None, confirm: bool = False,
-                 api: Any = None, detail: int = 0) -> dict[str, Any]:
+                 api: Any = None, detail: int = 0, from_plan: bool = False) -> dict[str, Any]:
+    if from_plan:
+        return _swarm_from_plan(confirm, api)
     goal = (goal or "").strip()
     if not goal:
         raise ValueError("goal is required")
@@ -225,7 +269,7 @@ def swarm_create(goal: str, jobs: list[dict[str, Any]] | None, agents: Any = "",
 
 @mcp.tool()
 def ducky_swarm_create(
-    goal: str,
+    goal: str = "",
     jobs: list[dict[str, Any]] | None = None,
     agents: str = "",
     max_agents: int = 0,
@@ -233,14 +277,16 @@ def ducky_swarm_create(
     edits: list[dict[str, Any]] | None = None,
     confirm: bool = False,
     detail: int = 0,
+    from_plan: bool = False,
     pretty: bool = False,
 ) -> str:
     """Make a swarm: write every job from the request ({name, purpose, task, steps[], paths[]}), call
     WITHOUT detail; needs_answers: ask its questions (detail too) in ONE ducky_ask_user, call again;
     needs_confirm: show the preview (tree, steps, detail slider), confirm=true builds exactly it.
+    from_plan=true (no goal/jobs): seat your own plan as it is, one seat per sub plan.
     """
-    return tool_json(swarm_create(goal, jobs, agents, max_agents, per_group, edits, confirm, detail=detail),
-                     pretty=pretty)
+    return tool_json(swarm_create(goal, jobs, agents, max_agents, per_group, edits, confirm, detail=detail,
+                                  from_plan=from_plan), pretty=pretty)
 
 
 # ---- suggest a swarm for a big plan -------------------------------------------------------

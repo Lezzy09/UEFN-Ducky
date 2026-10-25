@@ -449,6 +449,8 @@ _PUBLIC_METHODS = frozenset({
     'plan_progress',
     'swarm_preview',
     'swarm_suggest',
+    'plan_launch',
+    'plan_set_planned_assignee',
     'remote_set_enabled',
     'remote_sign_out_all',
     'remote_status',

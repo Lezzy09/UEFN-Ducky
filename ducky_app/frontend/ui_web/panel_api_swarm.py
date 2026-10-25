@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-LIGHT_METHODS = frozenset({"swarm_preview", "swarm_suggest"})
+LIGHT_METHODS = frozenset({"swarm_preview", "swarm_suggest", "plan_set_planned_assignee"})
 
 
 class PanelApiSwarmMixin:
@@ -44,3 +44,25 @@ class PanelApiSwarmMixin:
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "suggestion": suggest_from_plan(plan)}
+
+    def plan_set_planned_assignee(self, chat_id: str, node_id: str, who: str) -> dict[str, Any]:
+        """Pick who launching the plan seats on this sub plan (a ducky profile or chat id; '' clears).
+        Starts nobody: ``plan_launch`` does."""
+        from backend.tools.panel.ducky_panel import ducky_plan_update_node
+        from backend.tools.panel.swarm_build import _loads
+
+        try:
+            res = _loads(ducky_plan_update_node(node_id=str(node_id or ""), chat_id=str(chat_id or ""),
+                                                planned_assignee=str(who or "").strip()))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "node": res.get("node")}
+
+    def plan_launch(self, chat_id: str) -> dict[str, Any]:
+        """Seat every sub plan with a planned owner (``swarm_build.launch_plan``); its dict as is."""
+        from backend.tools.panel.swarm_build import launch_plan
+
+        try:
+            return launch_plan(str(chat_id or "").strip())
+        except Exception as exc:  # SwarmBuildError carries {ok, error, created}
+            return getattr(exc, "result", None) or {"ok": False, "error": str(exc)}

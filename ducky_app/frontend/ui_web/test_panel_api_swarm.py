@@ -55,6 +55,40 @@ def test_no_suggestion_for_one_sub_plan_assigned_or_overlapping(monkeypatch):
     assert sw.suggest_from_plan({"nodes": [_sub("A", "a/**"), _sub("B", "a/**")]}) is None
 
 
+def test_plan_launch_calls_launch_plan_once_and_passes_it_through(monkeypatch):
+    from backend.tools.panel import swarm_build as sb
+
+    calls = []
+    result = {"ok": True, "seated": ["API", "Widget"], "failed": [], "root_group_id": "g1"}
+    monkeypatch.setattr(sb, "launch_plan", lambda chat_id, api=None: calls.append(chat_id) or result)
+    assert PanelApiSwarmMixin().plan_launch(" lead ") is result and calls == ["lead"]
+
+    def boom(chat_id, api=None):
+        raise sb.SwarmBuildError("Nothing to seat", created=0)
+
+    monkeypatch.setattr(sb, "launch_plan", boom)
+    assert PanelApiSwarmMixin().plan_launch("lead") == {"ok": False, "error": "Nothing to seat", "created": 0}
+
+
+def test_plan_set_planned_assignee_stores_it_and_starts_nobody(monkeypatch):
+    import json as _json
+
+    from backend.tools.panel import ducky_panel, swarm_build as sb
+
+    seen = []
+    monkeypatch.setattr(ducky_panel, "ducky_plan_update_node",
+                        lambda **kw: seen.append(kw) or _json.dumps({"ok": True, "node": {"id": kw["node_id"],
+                                                                     "planned_assignee": kw["planned_assignee"]}}))
+    monkeypatch.setattr(sb, "launch_plan", lambda *a, **k: (_ for _ in ()).throw(AssertionError("started")))
+    out = PanelApiSwarmMixin().plan_set_planned_assignee("lead", "api", " developer ")
+    assert out == {"ok": True, "node": {"id": "api", "planned_assignee": "developer"}}
+    assert seen == [{"node_id": "api", "chat_id": "lead", "planned_assignee": "developer"}]
+    assert set(seen[0]) == {"node_id", "chat_id", "planned_assignee"}  # no assignee: nobody starts
+    monkeypatch.setattr(ducky_panel, "ducky_plan_update_node",
+                        lambda **kw: _json.dumps({"ok": False, "error": "node not found"}))
+    assert PanelApiSwarmMixin().plan_set_planned_assignee("lead", "x", "dev") == {"ok": False, "error": "node not found"}
+
+
 def test_twenty_jobs_under_50_ms(monkeypatch):
     monkeypatch.setattr(sw, "_routing_context", lambda: (None, None))
     api = PanelApiSwarmMixin()
