@@ -447,6 +447,8 @@ _PUBLIC_METHODS = frozenset({
     'get_restore_tabs',
     'set_visible_chats',
     'plan_progress',
+    'swarm_preview',
+    'swarm_suggest',
     'remote_set_enabled',
     'remote_sign_out_all',
     'remote_status',
