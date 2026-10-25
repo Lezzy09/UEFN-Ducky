@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 import threading
 import time
 
@@ -38,13 +37,17 @@ def _chat(root: str, title: str = "chat"):
 
 
 def _stored_count(conv_id: str) -> int:
-    """Read through a second connection, as another process would."""
-    other = sqlite3.connect(str(db.db_path()))
-    try:
-        row = other.execute("SELECT message_count FROM conversations WHERE id=?", (conv_id,)).fetchone()
-        return int(row[0]) if row else -1
-    finally:
-        other.close()
+    """Read through a second connection (a fresh thread's), as another process would."""
+    out: list[int] = []
+
+    def read() -> None:
+        row = db.connect().execute("SELECT message_count FROM conversations WHERE id=?", (conv_id,)).fetchone()
+        out.append(int(row[0]) if row else -1)
+
+    reader = threading.Thread(target=read)
+    reader.start()
+    reader.join()
+    return out[0]
 
 
 def test_a_save_with_wait_is_visible_to_another_connection_at_once(tmp_path) -> None:

@@ -17,7 +17,6 @@ import hashlib
 import itertools
 import json
 import logging
-import sqlite3
 import threading
 import time
 from concurrent.futures import Future, wait as wait_futures
@@ -61,7 +60,7 @@ def _nesting_write_txn() -> None:
     # ponytail: patched from here because db.py is another lane; move into db.write_txn
     # when that file is next touched.
     @contextlib.contextmanager
-    def write_txn(conn: sqlite3.Connection):
+    def write_txn(conn: Any):
         if not conn.in_transaction:
             with real(conn):
                 yield conn
@@ -98,7 +97,7 @@ class ChatWriter:
         self,
         write: Callable[[str, Any], Any],
         *,
-        connect: Callable[[], sqlite3.Connection],
+        connect: Callable[[], Any],  # db.connect: only backend/store imports sqlite3
         root: Callable[[], Any] = lambda: None,
         interval: float = INTERVAL_S,
         batch_max: int = BATCH_MAX,
@@ -304,17 +303,17 @@ class ChatWriter:
         self._truncated = True
         return True
 
-    def _checkpoint(self, conn: sqlite3.Connection, mode: str) -> None:
+    def _checkpoint(self, conn: Any, mode: str) -> None:
         from backend.store import db
 
         try:
             if mode == "TRUNCATE":
                 conn.execute(f"PRAGMA busy_timeout={TRUNCATE_BUSY_MS}")
             conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
-        except sqlite3.Error as exc:
+        except Exception as exc:  # sqlite3.Error, e.g. busy
             _log.debug("wal_checkpoint(%s) failed: %s", mode, exc)
         finally:
             if mode == "TRUNCATE":
-                with contextlib.suppress(sqlite3.Error):
+                with contextlib.suppress(Exception):
                     conn.execute(f"PRAGMA busy_timeout={db.BUSY_TIMEOUT_MS}")
         self.checkpoints[mode] += 1
