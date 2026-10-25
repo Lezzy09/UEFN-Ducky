@@ -2146,6 +2146,27 @@ def ducky_recycle_member(
     return tool_json({**base, "status": status, "response_id": response_id}, pretty=pretty)
 
 
+@mcp.tool()
+def ducky_fresh_session(handoff: str, pretty: bool = False) -> str:
+    """Start yourself fresh after this turn: your next turn runs in a new session of this same
+    chat, opening with ``handoff`` and your task. History, plan, lane and approvals stay.
+
+    Write the handoff yourself: goal, what is done, files touched, decisions, next steps,
+    blockers. Use it when your context is long and the rest of the work doesn't need it.
+    Ducky applies it when it next starts you on your plan, never mid-turn.
+    """
+    text = (handoff or "").strip()
+    if not text:
+        raise ValueError("handoff must not be empty")
+    me = _resolve_sender("")
+    if not me:
+        raise ValueError("No calling chat: only an agent can ask for its own fresh session.")
+    from frontend.ui_web.context_limit import request_fresh
+
+    request_fresh(me, text)
+    return tool_json({"status": "after_this_turn", "conv_id": me, "handoff_chars": len(text)}, pretty=pretty)
+
+
 def ducky_recycle_subagent(
     conv_id: str,
     continue_message: str = "",

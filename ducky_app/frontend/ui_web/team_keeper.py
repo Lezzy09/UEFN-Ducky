@@ -293,21 +293,33 @@ def _waiting(member: str) -> bool:
 
 
 def _wake_member(member: str, text: str, wake: Callable[[str, str], None],
-                 plan: dict[str, Any] | None = None, work: dict[str, Any] | None = None) -> bool:
+                 plan: dict[str, Any] | None = None, work: dict[str, Any] | None = None,
+                 new_section: bool = False) -> bool:
     """Hand a member's wake to the seat queue; False when it is already running or waiting.
 
-    A member past its context limit starts a fresh session instead: a handoff, then its whole
-    task (the lead's spec and its points) in a new session of the same chat."""
-    start: Callable[[], Any] = lambda: wake(member, text)
-    if plan is not None and work is not None:
-        from frontend.ui_web.context_limit import over_limit, start_fresh
+    The member starts a fresh session instead, with its whole task (the lead's spec and its
+    points), when it asked for one (ducky_fresh_session: its own handoff), when it gets a new
+    sub plan (no handoff: the old work isn't needed), or when it is past its context limit
+    (it writes a handoff first)."""
+    if plan is None or work is None:
+        return _enqueue(member, lambda: wake(member, text)) != "busy"
+    from frontend.ui_web import context_limit as cl
 
-        root = plan.get("project_root")
-        over = over_limit(member, (work.get("points") or [None])[0], project_root=root)
-        if over:
-            task = _task_text(plan, work)
-            start = lambda: start_fresh(member, task, used=over[0], limit=over[1], project_root=root)
-    return _enqueue(member, start) != "busy"
+    root = plan.get("project_root")
+    asked = cl.requested_handoff(member)
+    over = None if asked is not None or new_section else cl.over_limit(
+        member, (work.get("points") or [None])[0], project_root=root)
+    if asked is None and not new_section and not over:
+        return _enqueue(member, lambda: wake(member, text)) != "busy"
+    task = _task_text(plan, work)
+    handoff = asked if asked is not None else ("" if new_section else None)
+    used, limit = over or (0, 0)
+
+    def fresh() -> bool:
+        cl.clear_request(member)
+        return cl.start_fresh(member, task, used=used, limit=limit, handoff=handoff, project_root=root)
+
+    return _enqueue(member, fresh) != "busy"
 
 
 def _team_context(plan: dict[str, Any], *, busy: set[str] = frozenset()) -> tuple[set[str], str]:
@@ -742,15 +754,16 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
             task = (f"{plan.get('id') or plan.get('plan_id') or lead}:"
                     f"{(work.get('section') or {}).get('id') or owner}:{_section_text(work)}")
             if st["task"] != task:
+                # The same sub plan, rewritten: an answered block stays answered and a repeat
+                # block still goes to the person. A new one starts in a fresh session.
+                same = st["task"].rsplit(":", 1)[0] == task.rsplit(":", 1)[0]
                 _inherit_lead(member, lead)
                 try:
-                    if not _wake_member(member, _task_text(plan, work), wake, plan, work):
+                    if not _wake_member(member, _task_text(plan, work), wake, plan, work,
+                                        new_section=bool(st["task"]) and not same):
                         continue
                 except Exception:
                     continue
-                # The same sub plan, rewritten: an answered block stays answered and a repeat
-                # block still goes to the person.
-                same = st["task"].rsplit(":", 1)[0] == task.rsplit(":", 1)[0]
                 st.update(task=task, tries=0, idle_since=now, next=now + _MEMBER_IDLE_S, blocked="",
                           cleared=st["cleared"] if same else "", told_done=st["told_done"] if same else None,
                           done_at_wake=_done_points(work.get("section")))

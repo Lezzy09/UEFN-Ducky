@@ -36,6 +36,7 @@ def _world(monkeypatch):
     monkeypatch.setattr(keeper, "_said_committed", lambda member: False)
     monkeypatch.setattr(keeper, "_tell_lead", lambda plan, member, work, reason: told.append((member, reason)))
     monkeypatch.setattr("frontend.ui_web.context_limit.over_limit", lambda cid, step=None, project_root=None: None)
+    monkeypatch.setattr("frontend.ui_web.context_limit.requested_handoff", lambda cid: None)
     return told
 
 
@@ -496,6 +497,46 @@ def test_a_member_past_its_context_limit_starts_fresh_with_its_whole_task(monkey
     assert [f[0] for f in fresh] == ["builder"] and fresh[0][2]["used"] == 612_000 and fresh[0][2]["limit"] == 600_000
     assert "Your task" in fresh[0][1] and "`fx` Glow" in fresh[0][1]
     assert steps[0]["id"] == "fx"  # the limit is read for the step it works now
+
+
+def test_a_member_given_a_new_sub_plan_starts_it_in_a_fresh_session(monkeypatch) -> None:
+    from frontend.ui_web import context_limit
+
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder"}, ""))
+    monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
+    fresh: list[tuple] = []
+    monkeypatch.setattr(context_limit, "start_fresh", lambda cid, text, **kw: fresh.append((cid, text, kw)))
+    core = {**PLAN, "id": "p1", "title": "Plugin", "nodes": [
+        {"id": "core", "content": "Plugin core", "assignee": "builder", "status": "in_progress", "children": [
+            {"id": "api", "content": "API", "status": "in_progress"}]}]}
+    docs = {**core, "nodes": [
+        {**core["nodes"][0], "status": "completed", "children": [{"id": "api", "content": "API", "status": "completed"}]},
+        {"id": "docs", "content": "Plugin docs", "assignee": "builder", "status": "pending", "children": [
+            {"id": "readme", "content": "README", "status": "pending"}]}]}
+    woke: list[tuple[str, str]] = []
+    _run(0, [], woke, plans=[core])
+    assert [c for c, _ in woke] == ["builder"] and fresh == []  # its first sub plan: a plain wake
+    _run(1 * MIN, [], woke, plans=[docs])
+    assert [c for c, _ in woke] == ["builder"]
+    assert [f[0] for f in fresh] == ["builder"] and fresh[0][2]["handoff"] == ""  # no handoff needed
+    assert "Plugin docs" in fresh[0][1] and "`readme` README" in fresh[0][1]
+
+
+def test_a_member_that_asked_for_a_fresh_session_gets_it_with_its_own_handoff(monkeypatch) -> None:
+    from frontend.ui_web import context_limit
+
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder"}, ""))
+    monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
+    asked = {"builder": "Glow done in fx.py; blur next."}
+    monkeypatch.setattr(context_limit, "requested_handoff", asked.get)
+    monkeypatch.setattr(context_limit, "clear_request", lambda cid: asked.pop(cid, None))
+    fresh: list[tuple] = []
+    monkeypatch.setattr(context_limit, "start_fresh", lambda cid, text, **kw: fresh.append((cid, text, kw)))
+    woke: list[tuple[str, str]] = []
+    _run(0, [], woke, plans=[SUB])
+    assert woke == [] and [f[0] for f in fresh] == ["builder"]
+    assert fresh[0][2]["handoff"] == "Glow done in fx.py; blur next." and "Your task" in fresh[0][1]
+    assert asked == {}  # used once
 
 
 def test_a_lead_with_members_but_no_assignments_yet_is_kept(monkeypatch) -> None:

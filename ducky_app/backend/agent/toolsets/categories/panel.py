@@ -9,6 +9,7 @@ _DELEGATION_TOOLS = frozenset(
         "ducky_send_chat_message",
         "ducky_recycle_subagent",
         "ducky_recycle_member",
+        "ducky_fresh_session",
         "ducky_read_chat",
         "ducky_group_create",
         "ducky_group_invite",

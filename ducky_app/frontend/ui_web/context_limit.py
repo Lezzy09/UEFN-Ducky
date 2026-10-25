@@ -6,7 +6,9 @@ model's context window (600k when the window is unknown).
 
 Over the limit with work left, the chat writes a short handoff, its session is reset (history,
 plan, lane, seat and approvals stay), and its next turn starts with the handoff and its task.
-Never mid-turn: the team keeper checks only members whose turn has ended.
+Never mid-turn: the team keeper checks only members whose turn has ended. The keeper also
+starts a member fresh when it hands it a new sub plan, and when the agent asked for it
+(``ducky_fresh_session``, its own handoff kept here until then).
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ DEFAULT_SHARE = 0.6
 FALLBACK_TOKENS = 600_000
 HANDOFF_SHARE = 0.03  # the handoff's budget, as a share of the limit
 _IDLE_WAIT_S = 600.0
+_TABLE = "workspace_state"
 _STEP_RE = re.compile(r"(?im)^[\s>*_`-]*context\s*:\s*([\d.,]+)\s*([km])?\b")
 
 
@@ -108,6 +111,37 @@ def over_limit(conv_id: str, step: Any = None, project_root: str | None = None) 
     return (used, limit) if limit > 0 and used > limit else None
 
 
+def _fresh_key(conv_id: str) -> str:
+    return f"fresh_session:{conv_id}"
+
+
+def request_fresh(conv_id: str, handoff: str) -> None:
+    """The agent asked for a fresh session after this turn, with its own handoff."""
+    from backend.store.repos import kv
+
+    kv.set_doc(_TABLE, _fresh_key(conv_id), {"handoff": str(handoff), "at": time.time()})
+
+
+def requested_handoff(conv_id: str) -> str | None:
+    """The handoff a chat asked to start fresh with, or None."""
+    try:
+        from backend.store.repos import kv
+
+        doc = kv.get_doc(_TABLE, _fresh_key(conv_id))
+    except Exception:
+        return None
+    return str(doc.get("handoff") or "") if isinstance(doc, dict) else None
+
+
+def clear_request(conv_id: str) -> None:
+    try:
+        from backend.store.repos import kv
+
+        kv.delete_doc(_TABLE, _fresh_key(conv_id))
+    except Exception:
+        pass
+
+
 def handoff_prompt(limit: int) -> str:
     from backend.tools.panel.ducky_panel import _SUBAGENT_HANDOFF_PROMPT
 
@@ -120,10 +154,12 @@ def _k(tokens: int) -> str:
     return f"{max(0, tokens) // 1000}k"
 
 
-def start_fresh(conv_id: str, next_text: str, *, used: int, limit: int,
+def start_fresh(conv_id: str, next_text: str, *, used: int = 0, limit: int = 0, handoff: str | None = None,
                 project_root: str | None = None) -> bool:
     """Handoff, session reset, then the next turn with the handoff + ``next_text``.
 
+    ``handoff`` None: the chat writes one first. A given text (its own, from
+    ``ducky_fresh_session``) is used as is; "" (a new sub plan) starts with ``next_text`` alone.
     Runs between turns. A failed handoff (or reset) keeps the old session and still starts
     ``next_text``. Returns True when the chat started fresh."""
     from backend.tools.panel.ducky_panel import build_recycle_spawn_message
@@ -133,17 +169,25 @@ def start_fresh(conv_id: str, next_text: str, *, used: int, limit: int,
 
     conv = load_conversation(conv_id, project_root=project_root)
     model = str(getattr(conv, "model", "") or "") if conv is not None else ""
+    if conv is not None:
+        try:
+            used = used or used_tokens(conv)
+            limit = limit or resolve_limit(conv)
+        except Exception:
+            pass
+    limit = limit or FALLBACK_TOKENS
 
     def go_on(text: str) -> None:
         agent_modes.run_message(conv_id, text, "agent", model, queue_if_busy=True)
 
-    out = agent_modes.run_message_and_wait(conv_id, handoff_prompt(limit), "agent", model,
-                                           timeout_sec=_IDLE_WAIT_S, cancel_on_timeout=False)
-    handoff = str(out.get("assistant_text") or "").strip()
-    if out.get("status") != "done" or not handoff:
-        go_on(next_text)
-        return False
-    # The handoff's reply lands before its run is marked idle, and the reset refuses a running chat.
+    if handoff is None:
+        out = agent_modes.run_message_and_wait(conv_id, handoff_prompt(limit), "agent", model,
+                                               timeout_sec=_IDLE_WAIT_S, cancel_on_timeout=False)
+        handoff = str(out.get("assistant_text") or "").strip()
+        if out.get("status") != "done" or not handoff:
+            go_on(next_text)
+            return False
+    # A handoff's reply lands before its run is marked idle, and the reset refuses a running chat.
     idle_by = time.monotonic() + _IDLE_WAIT_S
     while agent_modes.is_agent_running(conv_id) and time.monotonic() < idle_by:
         time.sleep(0.5)
@@ -153,7 +197,8 @@ def start_fresh(conv_id: str, next_text: str, *, used: int, limit: int,
         go_on(next_text)
         return False
     cap = max(4_000, int(limit * HANDOFF_SHARE) * 4)  # chars: about 4 per token
-    text = build_recycle_spawn_message(handoff[:cap], next_text, max_chars=cap + len(next_text) + 1_000)
+    text = (build_recycle_spawn_message(handoff[:cap], next_text, max_chars=cap + len(next_text) + 1_000)
+            if handoff.strip() else next_text)
     fresh = load_conversation(conv_id, project_root=project_root)
     if fresh is not None:
         line = f"Started fresh at {_k(used)} → {_k(len(text) // 4)} tokens"

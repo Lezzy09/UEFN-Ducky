@@ -585,6 +585,7 @@ HOST_ONLY_TOOLS = frozenset(
         "ducky_spawn_chat",
         "ducky_recycle_member",
         "ducky_recycle_subagent",
+        "ducky_fresh_session",
         "ducky_agent_list",
         "ducky_agent_send",
         "ducky_agent_inbox",

@@ -149,6 +149,47 @@ def test_a_failed_handoff_keeps_the_old_session(chat):
     assert chat.calls[1][1] == "Task: point B"
 
 
+def test_the_agents_own_handoff_skips_the_handoff_turn(chat):
+    assert cl.start_fresh("m1", "Task: point B", handoff="My own handoff.") is True
+    assert [c[0] for c in chat.calls] == ["reset", "line", "run"]
+    assert chat.calls[1][1].startswith("Started fresh at 612k")
+    assert "My own handoff." in chat.calls[2][1] and "Task: point B" in chat.calls[2][1]
+
+
+def test_a_new_sub_plan_starts_with_its_task_alone(chat):
+    assert cl.start_fresh("m1", "Task: plugin docs", handoff="") is True
+    assert [c[0] for c in chat.calls] == ["reset", "line", "run"]
+    assert chat.calls[2][1] == "Task: plugin docs"
+
+
+def test_a_fresh_session_request_is_kept_until_used(monkeypatch):
+    from backend.store.repos import kv
+
+    docs: dict = {}
+    monkeypatch.setattr(kv, "set_doc", lambda table, key, value: docs.__setitem__((table, key), value))
+    monkeypatch.setattr(kv, "get_doc", lambda table, key: docs.get((table, key)))
+    monkeypatch.setattr(kv, "delete_doc", lambda table, key: docs.pop((table, key), None))
+    assert cl.requested_handoff("m1") is None
+    cl.request_fresh("m1", "Done A.")
+    assert cl.requested_handoff("m1") == "Done A." and cl.requested_handoff("m2") is None
+    cl.clear_request("m1")
+    assert cl.requested_handoff("m1") is None
+
+
+def test_fresh_session_tool_asks_for_the_calling_chat(monkeypatch):
+    import json
+
+    from backend.tools.panel import ducky_panel as panel
+
+    asked = []
+    monkeypatch.setattr(panel, "_resolve_sender", lambda sender: "m1")
+    monkeypatch.setattr(cl, "request_fresh", lambda cid, text: asked.append((cid, text)))
+    out = json.loads(panel.ducky_fresh_session("  Done A; next B.  "))
+    assert out["status"] == "after_this_turn" and asked == [("m1", "Done A; next B.")]
+    with pytest.raises(ValueError):
+        panel.ducky_fresh_session("   ")
+
+
 def test_a_refused_reset_keeps_the_old_session(chat):
     chat.reset_fails = True
     assert _start(chat) is False
