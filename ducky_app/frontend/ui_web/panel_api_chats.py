@@ -1172,34 +1172,12 @@ class PanelApiChatsMixin:
         return {"ok": True, "id": conv.id, "muted": conv.muted, "is_group": bool(getattr(conv, "is_group", False))}
 
     def group_stop(self, group_id: str) -> dict[str, Any]:
-        """Stop every running member's turn in this group and every group nested in it.
-        Nothing is deleted; members can be started again."""
-        from frontend.ui_web.agent_modes import is_agent_running
-        from frontend.ui_web.group_orchestrator import (
-            cancel_group_run,
-            group_and_nested_ids,
-            group_members,
-            is_group_conversation,
-        )
+        """Stop every running member's turn in this group and every group nested in it, never
+        the group's lead (Oct 24 2026: Stop team also stopped the lead). Nothing is deleted;
+        members can be started again."""
+        from frontend.ui_web.team_keeper import stop_team
 
-        gid = (group_id or "").strip()
-        group = _pa.load_conversation(gid)
-        if group is None or not is_group_conversation(group):
-            return {"ok": False, "error": "Not a group chat"}
-        ids = group_and_nested_ids(gid)
-        stopped: list[str] = []
-        for hub_id in ids:
-            cancel_group_run(hub_id)
-            hub = _pa.load_conversation(hub_id)
-            if hub is None:
-                continue
-            for row in group_members(hub):
-                cid = str(row.get("member_conv_id") or "").strip()
-                if not cid or row.get("is_group") or cid in stopped or not is_agent_running(cid):
-                    continue
-                self.cancel_agent(cid)
-                stopped.append(cid)
-        return {"ok": True, "stopped": len(stopped), "groups": len(ids), "stopped_ids": stopped}
+        return stop_team(group_id, self.cancel_agent)
 
     def list_agent_profiles(self) -> dict[str, Any]:
         profiles = _pa.list_agent_profiles()
