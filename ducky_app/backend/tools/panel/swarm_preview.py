@@ -40,6 +40,32 @@ _TOP_KINDS = {"test": "Tester", "review": "Reviewer"}
 
 # ---- jobs ---------------------------------------------------------------------------------
 
+_CODE_EXT = (".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".rs", ".go", ".cs", ".cpp", ".c", ".h", ".java")
+# Kinds the keyword router picks from a job's words that can't be right when every path is code.
+_PROSE_KINDS = {"writing", "narrative", "research", "concept", "video"}
+
+
+def _is_code_path(path: str) -> bool:
+    return path.strip().lower().endswith(_CODE_EXT)
+
+
+def fix_routes(jobs: list[dict[str, Any]], lead_model: str = "") -> list[dict[str, Any]]:
+    """Jobs whose paths are all code run as 'developer' (the words said 'docs' or 'safety'), and
+    every job has a suggested model: its kind's, else the lead's, else the app kind's."""
+    from frontend.swarm_routing import job_kind
+
+    out = []
+    for job in jobs:
+        job = dict(job)
+        if job.get("paths") and job.get("kind") in _PROSE_KINDS and all(_is_code_path(p) for p in job["paths"]):
+            job.update(kind="developer", profile="developer", suggested_model="")
+        if not job.get("suggested_model"):
+            row = job_kind(job.get("kind") or "")
+            job["suggested_model"] = (row.model if row else "") or lead_model or job_kind("app").model
+        out.append(job)
+    return out
+
+
 def _steps(raw: Any) -> list[dict[str, str]]:
     out = []
     for s in raw or []:
@@ -105,9 +131,20 @@ def detail_levels(jobs: list[dict[str, Any]], agents: Any, max_agents: int, per_
     return out
 
 
+def distinct_levels(levels: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One level per (agents, groups) shape; the suggested level wins its shape, else the first."""
+    by_shape: dict[tuple[int, int], dict[str, Any]] = {}
+    for lv in levels:
+        shape = (lv["agents"], lv["groups"])
+        if shape not in by_shape or lv["detail"] == SUGGESTED_DETAIL:
+            by_shape[shape] = lv
+    return sorted(by_shape.values(), key=lambda lv: lv["detail"])
+
+
 def questions_for(jobs: list[dict[str, Any]], agents: Any, max_agents: int, per_group: int,
-                  detail: int = SUGGESTED_DETAIL) -> list[dict[str, Any]]:
+                  detail: int = SUGGESTED_DETAIL, lead_model: str = "") -> list[dict[str, Any]]:
     """The ducky_ask_user questions still unanswered (empty = go on)."""
+    jobs = fix_routes(jobs, lead_model)
     qs: list[dict[str, Any]] = []
     if detail not in DETAILS:
         qs.append({
@@ -117,7 +154,7 @@ def questions_for(jobs: list[dict[str, Any]], agents: Any, max_agents: int, per_
                 {"id": str(lv["detail"]),
                  "label": f"{lv['detail']} {lv['name']}" + (" (suggested)" if lv["detail"] == SUGGESTED_DETAIL else ""),
                  "description": f"{lv['agents']} agents" + (f" in {lv['groups']} sub-group{'s' if lv['groups'] > 1 else ''}" if lv["groups"] else "")}
-                for lv in detail_levels(jobs, agents, max_agents, per_group)
+                for lv in distinct_levels(detail_levels(jobs, agents, max_agents, per_group))
             ],
         })
     if _parse_agents(agents) == "":
@@ -328,8 +365,10 @@ def _tree_edits(tree: list[dict[str, Any]], edits: list[dict[str, Any]]) -> None
 
 
 def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents: int, per_group: int,
-                  edits: list[dict[str, Any]] | None = None, detail: int = SUGGESTED_DETAIL) -> dict[str, Any]:
+                  edits: list[dict[str, Any]] | None = None, detail: int = SUGGESTED_DETAIL,
+                  lead_model: str = "") -> dict[str, Any]:
     edits = [e for e in edits or [] if isinstance(e, dict)]
+    jobs = fix_routes(jobs, lead_model)
     kept = capped_jobs(_job_edits(apply_detail(jobs, detail), edits), agents, max_agents)
     tree = plan_tree(kept, agents, max_agents, per_group)
     _tree_edits(tree, edits)
