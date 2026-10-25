@@ -13,10 +13,11 @@ from backend.tools.panel import swarm_build as sb
 class Api:
     """Live groups and chats, files under a temp project root."""
 
-    def __init__(self, root, fail_invite_at=0, answers=True):
-        self.root, self.fail_invite_at, self.answers = str(root), fail_invite_at, answers
+    def __init__(self, root, fail_invite_at=0, answers=True, plan=None):
+        self.root, self.fail_invite_at, self.answers, self.plan = str(root), fail_invite_at, answers, plan
         self.calls: list[tuple] = []
         self.live: set[str] = set()
+        self.groups: dict[str, dict] = {}
         self.n = self.invites = 0
 
     def _id(self, prefix):
@@ -30,10 +31,25 @@ class Api:
         return self.root
 
     def group_create(self, name, parent_folder_id=""):
+        if name in self.groups:  # find-or-create by name, like group_find_or_create
+            return {**self.groups[name], "reused": True}
         gid = self._id("g")
         self.calls.append(("group_create", name, parent_folder_id))
         self.live.add(gid)
-        return {"id": gid, "folder_id": f"f-{gid}"}
+        self.groups[name] = {"id": gid, "folder_id": f"f-{gid}"}
+        return dict(self.groups[name])
+
+    def load_plan(self, chat_id):
+        return self.plan
+
+    def is_chat(self, conv_id):
+        return conv_id.startswith("chat-")
+
+    def add_member(self, group_id, conv_id):
+        self.calls.append(("add_member", group_id, conv_id))
+
+    def set_lane(self, group_id, conv_id, paths):
+        self.calls.append(("set_lane", conv_id, paths))
 
     def chat_home(self, conv_id):
         return {"folder_id": "home", "parent_conv_id": ""}
@@ -75,6 +91,14 @@ class Api:
 
     def assign(self, chat_id, node_id, assignee):
         self.calls.append(("assign", node_id, assignee))
+
+        def walk(nodes):
+            for n in nodes:
+                if n.get("id") == node_id:
+                    n["assignee"] = assignee
+                walk(n.get("children") or [])
+
+        walk((self.plan or {}).get("nodes") or [])
 
     def archive(self, conv_id):
         self.live.discard(conv_id)
@@ -270,6 +294,61 @@ def test_hand_over_table_is_recorded_for_the_giver_only(tmp_path):
     assert sb.handovers_for("h", api) == [] and sb.handovers_for("r", api) == []
     record = json.loads((tmp_path / out["outputs"] / ".." / "swarm.json").read_text(encoding="utf-8"))
     assert record["handovers"] == [row] and record["plan_id"] == "plan1"
+
+
+# ---- 2c7a6836cf launch a plan ------------------------------------------------------------
+
+def _planned(sid, title, files, planned="", assignee=""):
+    sec = _section(sid, title, f"**Files:** `{files}`", [_step(sid)])
+    if planned:
+        sec["planned_assignee"] = planned
+    if assignee:
+        sec["assignee"] = assignee
+    return sec
+
+
+def _launch_plan():
+    team = _section("t", "Team", "", [_section("t1", "Team 1", "", [
+        _planned("a", "A", "a/**", planned="developer"),
+        _planned("b", "B", "b/**"),  # no planned owner: nobody is seated
+    ])])
+    return _plan(team, _planned("c", "C", "c/**", planned="chat-x"),
+                 _planned("d", "D", "d/**", planned="developer", assignee="chat-d"))
+
+
+def test_launch_seats_planned_owners_in_nested_groups(tmp_path):
+    api = Api(tmp_path, plan=_launch_plan())
+    out = sb.launch_plan("lead", api)
+    assert sorted(out["seated"]) == ["A", "C"]
+    assert [g[1] for g in api.names("group_create")] == ["Speed", "Team", "Team 1"]
+    invite = api.names("invite")
+    assert [(c[2], c[3][0]) for c in invite] == [("A", "a/**")]  # Files lane, plus its outputs folder
+    assert api.names("add_member")[0][2] == "chat-x" and api.names("set_lane")[0][2][0] == "c/**"
+    assigned = {c[1]: c[2] for c in api.names("assign")}
+    assert set(assigned) == {"a", "c"} and assigned["c"] == "chat-x"  # b has no owner, d was already assigned
+
+
+def test_launch_twice_seats_nothing_new(tmp_path):
+    api = Api(tmp_path, plan=_launch_plan())
+    sb.launch_plan("lead", api)
+    before = list(api.calls)
+    out = sb.launch_plan("lead", api)
+    assert out["seated"] == [] and api.calls == before
+
+
+def test_a_planned_owner_alone_starts_nobody(tmp_path):
+    api = Api(tmp_path, plan=_launch_plan())
+    tree = sb.seats_from_plan(api.plan)
+    assert api.calls == [] and tree[0]["groups"][0]["seats"][0]["planned_assignee"] == "developer"
+
+
+def test_twin_group_names_anywhere_in_the_tree_fail():
+    sub = {"group": "Core", "muted": True, "seats": [{"name": "y", "profile": "d", "paths": ["b/**"],
+                                                     "sub_plan": {"steps": []}}], "groups": []}
+    tree = [{"group": "Core", "muted": True, "seats": [{"name": "x", "profile": "d", "paths": ["a/**"],
+                                                      "sub_plan": {"steps": []}}], "groups": []},
+            {"group": "Engine", "muted": True, "seats": [], "groups": [sub]}]
+    assert any("two groups called 'Core'" in e for e in sb.validate(tree, ""))
 
 
 def test_a_hand_over_to_no_seat_fails_before_anything_is_made(tmp_path):

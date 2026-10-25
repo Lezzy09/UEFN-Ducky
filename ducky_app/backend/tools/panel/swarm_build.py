@@ -56,7 +56,27 @@ class PanelSwarmApi:
         from backend.tools.panel.ducky_panel import ducky_group_create
 
         res = _loads(ducky_group_create(name=name, parent_folder_id=parent_folder_id))
-        return {"id": res.get("id") or "", "folder_id": res.get("folder_id") or ""}
+        return {"id": res.get("id") or "", "folder_id": res.get("folder_id") or "", "reused": bool(res.get("reused"))}
+
+    def load_plan(self, chat_id: str) -> dict[str, Any] | None:
+        from backend.agent.coding_agents.plans import load_plan
+
+        return load_plan(chat_id, self.project_root())
+
+    def is_chat(self, conv_id: str) -> bool:
+        from frontend.ui_web.project_chats import load_conversation
+
+        return load_conversation(conv_id, self.project_root()) is not None
+
+    def add_member(self, group_id: str, conv_id: str) -> None:
+        from backend.tools.panel.ducky_panel import ducky_group_add_member
+
+        _loads(ducky_group_add_member(group_id=group_id, conv_id=conv_id))
+
+    def set_lane(self, group_id: str, conv_id: str, paths: list[str]) -> None:
+        from backend.tools.panel.ducky_panel import ducky_group_set_lane
+
+        _loads(ducky_group_set_lane(group_id=group_id, member_conv_id=conv_id, write_allowed=paths))
 
     def chat_home(self, conv_id: str) -> dict[str, str]:
         from frontend.ui_web.project_chats import load_conversation
@@ -169,6 +189,9 @@ class _Defaults:
     def ping(self, conv_id: str, text: str, timeout_s: float) -> dict[str, Any]:
         return {"ok": True}
 
+    def is_chat(self, conv_id: str) -> bool:
+        return False
+
     def plan_delete_node(self, chat_id: str, node_id: str) -> None:
         pass
 
@@ -233,9 +256,10 @@ def seats_from_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
 
         body = str(sec.get("body_markdown") or "")
         name = str(sec.get("content") or "").strip()
-        profile, model = _plain(_line(body, "Ducky")), _plain(_line(body, "Model"))
+        planned = str(sec.get("planned_assignee") or "").strip()
+        profile, model = _plain(_line(body, "Ducky")) or planned, _plain(_line(body, "Model"))
         kind = ""
-        if not profile or not model:
+        if not profile or (not model and not planned):
             r = route(f"{name}: {body}")
             profile, model, kind = profile or r["profile_id"], model or r["model"], r["kind"]
         steps = [{"id": str(s.get("id") or ""), "content": str(s.get("content") or ""),
@@ -247,6 +271,7 @@ def seats_from_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
             if len(parts) == 2:
                 handover = {"paths": _paths(parts[0]), "to": _plain(parts[1]).strip(" .")}
         return {"name": name, "job": name, "kind": kind, "profile": profile, "model": model,
+                "planned_assignee": planned, "assignee": str(sec.get("assignee") or "").strip(),
                 "paths": _paths(_line(body, "Files")), "handover": handover,
                 "start_after": _plain(_line(body, "Start after")),
                 "sub_plan": {"id": str(sec.get("id") or ""), "title": name, "done": 0,
@@ -285,11 +310,12 @@ def validate(tree: list[dict[str, Any]], root: str) -> list[str]:
     from backend.workspace.lanes import check_lane_set
 
     errors: list[str] = []
+    # group_create reuses a same-name group anywhere on the island, so names are unique tree-wide.
+    names = [g["group"] for g in walk_groups(tree)]
+    for name in sorted({n for n in names if names.count(n) > 1}):
+        errors.append(f"two groups called {name!r} (the second would reuse the first)")
 
     def check_groups(nodes: list[dict[str, Any]], where: str) -> None:
-        names = [n["group"] for n in nodes if "group" in n]
-        for name in {n for n in names if names.count(n) > 1}:
-            errors.append(f"{where}: two groups called {name!r} (the second would reuse the first)")
         for g in (n for n in nodes if "group" in n):
             if not str(g.get("group") or "").strip():
                 errors.append(f"{where}: a group has no name")
@@ -365,48 +391,86 @@ def build_swarm(preview: dict[str, Any] | None = None, api: Any = None,
     it is: its sections are assigned, nothing is added). Validates first; any create that
     fails archives what was made and raises SwarmBuildError."""
     api = _Api(api or PanelSwarmApi())
-    if from_plan is not None:
-        goal = str(from_plan.get("title") or "").strip() or "Swarm"
-        tree = seats_from_plan(from_plan)
-        plan_id = str(from_plan.get("id") or "")
-    else:
-        goal, tree, plan_id = preview["goal"], preview["tree"], ""
     lead = api.caller()
     if not lead:
         raise SwarmBuildError("No calling chat: ducky_swarm_create must run in the lead's chat.")
+    if from_plan is not None:
+        tree = seats_from_plan(from_plan)
+        return _build(str(from_plan.get("title") or "").strip() or "Swarm", tree, str(from_plan.get("id") or ""),
+                      lead, api)
+    return _build(preview["goal"], preview["tree"], "", lead, api, preview=preview)
+
+
+def launch_plan(chat_id: str, api: Any = None) -> dict[str, Any]:
+    """Seat every sub plan of *chat_id*'s plan that has a ``planned_assignee`` and no
+    ``assignee`` (any depth): groups nested as the plan (reused when they exist), the planned
+    ducky invited (or the planned chat moved in) with the section's Files lane, then pinged
+    and assigned. Returns {seated: [names], failed, ...}; a second launch seats nothing."""
+    api = _Api(api or PanelSwarmApi())
+    plan = api.load_plan(chat_id) or {}
+    tree = seats_from_plan(plan)
+    known = list(walk_seats(tree))
+
+    def keep(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out = []
+        for n in nodes:
+            if "group" in n:
+                n["seats"], n["groups"] = keep(n["seats"]), keep(n["groups"])
+                if n["seats"] or n["groups"]:
+                    out.append(n)
+            elif n.get("planned_assignee") and not n.get("assignee"):
+                if api.is_chat(n["planned_assignee"]):
+                    n["existing"] = n["planned_assignee"]
+                else:
+                    n["profile"] = n["planned_assignee"]
+                out.append(n)
+        return out
+
+    tree = keep(tree)
+    if not tree:
+        return {"ok": True, "seated": [], "failed": []}
+    built = _build(str(plan.get("title") or "").strip() or "Swarm", tree, str(plan.get("id") or ""),
+                   chat_id, api, known=known)
+    return {"ok": True, "seated": [s["name"] for s in walk_seats(tree) if s.get("status") == "assigned"], **built}
+
+
+def _build(goal: str, tree: list[dict[str, Any]], plan_id: str, lead: str, api: Any,
+           preview: dict[str, Any] | None = None, known: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     if not list(walk_seats(tree)):
         raise SwarmBuildError("Nothing to seat: no section has steps.")
     errors = validate(tree, api.project_root())
     if errors:
         raise SwarmBuildError("; ".join(errors))
     sections = {s["name"]: s for s in walk_seats(tree)}
+    targets = {s["name"]: s for s in known or sections.values()}
     handovers = []
     for s in sections.values():
         h = s.get("handover")
         if h:
-            to = sections.get(h["to"]) or next((x for x in sections.values() if x["sub_plan"].get("id") == h["to"]), None)
+            to = targets.get(h["to"]) or next((x for x in targets.values() if x["sub_plan"].get("id") == h["to"]), None)
             if to is None:
                 raise SwarmBuildError(f"{s['name']}: hands over to {h['to']!r}, which is no seat")
             handovers.append({"from_section": s["sub_plan"]["id"], "to_section": to["sub_plan"]["id"],
                               "paths": h["paths"]})
 
-    made: list[str] = []      # chats and groups, in the order made
+    made: list[str] = []      # chats and groups this build made (never a reused group or a moved-in chat)
     nodes: list[str] = []     # plan nodes a preview build added
     home = api.chat_home(lead)
     led = False
     try:
         root = api.group_create(goal)
-        made.append(root["id"])
-        api.add_leader(root["id"], lead)  # before any lane: only a leader may set them
-        led = True
-        api.rename_chat(lead, f"Lead: {goal}")
+        if not root.get("reused"):
+            made.append(root["id"])
+            api.add_leader(root["id"], lead)  # before any lane: only a leader may set them
+            led = True
+            api.rename_chat(lead, f"Lead: {goal}")
         out_dir = f"{SWARMS_DIR}/{root['id']}"
         for i, s in enumerate(sections.values(), 1):
             s["outputs"] = f"{out_dir}/outputs/{_slug(i, s['name'])}"
             if s["paths"] and api.project_root():
                 # One sub-folder per seat: every seat may write outputs, no two own a file.
                 s["paths"] = [*s["paths"], f"{s['outputs']}/**"]
-        if from_plan is None:
+        if preview is not None:
             api.ensure_plan(lead, goal)
             for seat in walk_seats(tree):
                 job = preview["jobs"][seat["name"]]
@@ -427,8 +491,15 @@ def build_swarm(preview: dict[str, Any] | None = None, api: Any = None,
                 seat["status"] = "waiting"
                 waiting.append({"after": seat["start_after"], "group_id": group_id, "seat": seat})
                 return
-            seat["conv_id"] = api.invite(group_id, seat["profile"], seat["name"], seat["model"], seat["paths"] or None)
-            made.append(seat["conv_id"])
+            if seat.get("existing"):
+                seat["conv_id"] = seat["existing"]
+                api.add_member(group_id, seat["conv_id"])
+                if seat["paths"]:
+                    api.set_lane(group_id, seat["conv_id"], seat["paths"])
+            else:
+                seat["conv_id"] = api.invite(group_id, seat["profile"], seat["name"], seat["model"],
+                                             seat["paths"] or None)
+                made.append(seat["conv_id"])
             seat["created"] = True
             ready.append(seat)
 
@@ -439,7 +510,8 @@ def build_swarm(preview: dict[str, Any] | None = None, api: Any = None,
                 waiting.append({"after": node["start_after"], "parent_folder": parent_folder, "group": node})
                 return
             group = api.group_create(node["group"], parent_folder)
-            made.append(group["id"])
+            if not group.get("reused"):
+                made.append(group["id"])
             node["group_id"], node["folder_id"], node["created"] = group["id"], group["folder_id"], True
             for seat in node["seats"]:
                 seat_in(group["id"], seat)
@@ -454,11 +526,13 @@ def build_swarm(preview: dict[str, Any] | None = None, api: Any = None,
         for group in walk_groups(tree):
             if group["muted"] and group.get("group_id"):
                 api.set_muted(group["group_id"], True)
+        old = next((r for r in api.read_records() if r.get("id") == root["id"]), {})
         record = {"id": root["id"], "dir": out_dir, "goal": goal, "lead": lead, "plan_id": plan_id or lead,
                   "root_group_id": root["id"], "root_folder_id": root["folder_id"], "outputs": f"{out_dir}/outputs",
-                  "handovers": handovers, "waiting": waiting}
+                  "handovers": [*(old.get("handovers") or []), *handovers],
+                  "waiting": [*(old.get("waiting") or []), *waiting]}
         api.save_file(f"{out_dir}/outputs/README.md",
-                       f"# {goal}\n\nDeliverables of this swarm, one folder per seat. Kept when the group is archived.\n")
+                      f"# {goal}\n\nDeliverables of this swarm, one folder per seat. Kept when the group is archived.\n")
         _save(record, api)
     except Exception as exc:
         left = _roll_back(api, lead, home if led else None, made, nodes)
@@ -469,7 +543,6 @@ def build_swarm(preview: dict[str, Any] | None = None, api: Any = None,
             "outputs": record["outputs"], "handovers": handovers,
             "failed": [s["error"] for s in ready if s.get("status") == "seat_failed"],
             "waiting": [w["after"] for w in waiting]}
-
 
 def _roll_back(api: Any, lead: str, home: dict[str, str] | None, made: list[str], nodes: list[str]) -> list[str]:
     """Archive everything *made*, newest first, lead put back first. Returns what stayed."""
