@@ -21,6 +21,35 @@ def _project_root() -> str:
     return ducky_panel._project_root()
 
 
+def _other_root_with_plan(cid: str, root: str) -> str:
+    """Another known project root where ``cid`` has a plan, or "".
+
+    Oct 25 2026: a lead chat made before the project switched kept its plan under the old
+    root, so its members' tool servers (on the new root) read no plan and every tick said
+    "plan not found". Only asked when the current root has nothing for the caller.
+    """
+    import os
+
+    from backend.agent.coding_agents.plans import load_plan_view
+
+    try:
+        from frontend.ui_web.known_projects import known_project_roots
+
+        roots = known_project_roots()
+    except Exception:
+        return ""
+    here = os.path.normcase(os.path.abspath(root)) if root else ""
+    for other in roots:
+        if not other or os.path.normcase(os.path.abspath(other)) == here:
+            continue
+        try:
+            if load_plan_view(cid, project_root=other):
+                return other
+        except ValueError:
+            continue
+    return ""
+
+
 @mcp.tool()
 def ducky_get_plan(chat_id: str = "", pretty: bool = False, section: str = "", outline: bool = False) -> str:
     """Load the project Plan for this conversation (or chat_id). Returns outline numbering 1, 1.1, 1.1.1, …
@@ -39,6 +68,9 @@ def ducky_get_plan(chat_id: str = "", pretty: bool = False, section: str = "", o
         plan = load_plan_view(cid, project_root=root)
     except ValueError as exc:
         return tool_json({"ok": False, "plan": None, "error": str(exc)}, pretty=pretty)
+    if not plan:
+        other = _other_root_with_plan(cid, root)
+        plan = load_plan_view(cid, project_root=other) if other else None
     if not plan:
         return tool_json(
             {"ok": True, "plan": None, "progress": todo_progress(None), "outline": []},
@@ -186,20 +218,32 @@ def ducky_plan_update_node(
     from backend.agent.coding_agents.plans import attach_next_tick, push_plan_updated, update_node
 
     cid = _resolve_plan_chat_id(chat_id) if not (template_id or "").strip() else ""
-    try:
-        plan = update_node(
+    root = _project_root() if not (template_id or "").strip() else None
+
+    def edit(project_root: str | None) -> dict[str, Any]:
+        return update_node(
             cid,
             node_id,
             content=content if content else None,
             status=status if status else None,
             kind=kind if kind else None,
             body_markdown=body_markdown if body_markdown else None,
-            project_root=_project_root() if not (template_id or "").strip() else None,
+            project_root=project_root,
             template_id=(template_id or "").strip() or None,
             assignee=assignee,
             after=after,
             planned_assignee=planned_assignee,
         )
+
+    try:
+        try:
+            plan = edit(root)
+        except ValueError as exc:
+            # The team's plan may live under another project root (see _other_root_with_plan).
+            other = _other_root_with_plan(cid, root) if root is not None and "not found" in str(exc) else ""
+            if not other:
+                raise
+            plan = edit(other)
     except ValueError as exc:
         return tool_json({"ok": False, "error": str(exc)}, pretty=pretty)
     if plan.get("kind") != "template":
