@@ -247,6 +247,43 @@ def test_the_job_preview_carries_balance(monkeypatch):
     assert [x["seat"] for x in p["balance"]["start_later"]] == ["Setup lead", "Export lead", "Store lead", "Errors lead"]
 
 
+ISLAND = [_job("Modeling: props", kind="modeling",
+               paths=["Content/Meshes/Props/**", "Content/Meshes/Env/**", "Content/Meshes/Hero/**"]),
+          _job("Texture: props", kind="material", paths=["Content/Textures/**"]),
+          _job("Verse: combat", kind="verse", paths=["Content/Verse/Combat/**", "Content/Verse/Shop/**"]),
+          _job("Narrative: story", kind="narrative", paths=["Content/Story/**"])]
+
+
+@pytest.mark.parametrize("detail", [1, 2, 3, 4])
+def test_no_two_seats_share_a_lane_at_any_detail(monkeypatch, detail):
+    monkeypatch.setattr(sp, "_price", lambda model: None)
+    lanes = list(sp.build_preview("Island", ISLAND, "auto", 12, 5, detail=detail, pc_limit=0)["lanes"].items())
+    for i, (a, la) in enumerate(lanes):
+        for b, lb in lanes[i + 1:]:
+            assert not sp._shared_files(la, lb, None), (detail, a, b, la, lb)
+
+
+def test_parts_get_their_own_slice_and_one_path_jobs_stay_whole(monkeypatch):
+    monkeypatch.setattr(sp, "_price", lambda model: None)
+    p = sp.build_preview("Island", ISLAND, "auto", 12, 5, detail=4, pc_limit=0)
+    lanes = p["lanes"]
+    assert lanes["Blockout lead"] == ["Content/Meshes/Props/**"]
+    assert lanes["Hero props lead"] == ["Content/Meshes/Env/**"]
+    assert lanes["Set dressing lead"] == ["Content/Meshes/Hero/**"]
+    # 2 paths for 2 verse parts; the 1-path texture job stays one seat (not materials + decals)
+    assert lanes["Systems lead"] == ["Content/Verse/Combat/**"] and lanes["Devices lead"] == ["Content/Verse/Shop/**"]
+    assert lanes["Texture lead"] == ["Content/Textures/**"] and "Materials lead" not in lanes
+    assert {g["group"] for g in sp.walk_groups(p["tree"])} == {"Modeling: parts", "Verse: parts"}
+
+
+def test_more_parts_than_paths_merge_into_the_last_part(monkeypatch):
+    monkeypatch.setattr(sp, "_price", lambda model: None)
+    job = _job("Modeling: props", kind="modeling", paths=["Content/Meshes/A/**", "Content/Meshes/B/**"])
+    p = sp.build_preview("Island", [job], "auto", 8, 5, detail=3, pc_limit=0)
+    assert p["lanes"] == {"Blockout lead": ["Content/Meshes/A/**"],
+                          "Hero props + set dressing lead": ["Content/Meshes/B/**"]}
+
+
 def test_without_a_file_list_lane_patterns_are_compared():
     out = sp.check_plan(_plan())
     assert out["conflicts"] == [{"file": PANEL, "seats": ["Chat API", "Agent host"]}]

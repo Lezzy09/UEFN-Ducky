@@ -92,13 +92,44 @@ DETAILS = {1: "Areas", 2: "Jobs", 3: "Parts", 4: "Parts in sub-groups"}
 SUGGESTED_DETAIL = 2
 
 
+def _slice_parts(out: list[dict[str, Any]], jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Parts of one job get disjoint slices of its paths, never the same lane: a job with one
+    path (or none) stays one seat, and parts beyond the path count merge into the last part."""
+    by_parent: dict[str, list[dict[str, Any]]] = {}
+    for job in out:
+        if job.get("part"):
+            by_parent.setdefault(str(job["parent"]), []).append(job)
+    result: list[dict[str, Any]] = []
+    for job in out:
+        parent = str(job.get("parent") or "")
+        if not job.get("part"):
+            result.append(job)
+            continue
+        parts = by_parent.pop(parent, None)
+        if parts is None:
+            continue  # already placed with its first sibling
+        paths = list(parts[0].get("paths") or [])
+        if len(paths) < 2:
+            result.append(next(dict(j) for j in jobs if j["name"] == parent))
+            continue
+        n = min(len(parts), len(paths))
+        kept = [dict(p) for p in parts[:n]]
+        for extra in parts[n:]:
+            label = f"{kept[-1]['part']} + {extra['part']}"
+            kept[-1].update(part=label, name=f"{kept[-1]['name'].split(':', 1)[0]}: {label}")
+        for i, part in enumerate(kept):
+            part["paths"] = paths[i * len(paths) // n:(i + 1) * len(paths) // n]
+        result += kept
+    return result
+
+
 def apply_detail(jobs: list[dict[str, Any]], detail: int) -> list[dict[str, Any]]:
     """swarm_routing.split_jobs for *detail*, with the steps each reshaped job really owns:
     an area job gets every merged job's steps, a part gets its parent's steps marked with the
     part (split_jobs copies only the first job's / the whole parent's)."""
     from frontend.swarm_routing import area_of, split_jobs
 
-    out = split_jobs(jobs, detail)
+    out = _slice_parts(split_jobs(jobs, detail), jobs)
     for job in out:
         if job.get("part"):
             part = str(job["part"])
