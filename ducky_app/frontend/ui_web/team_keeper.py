@@ -292,9 +292,22 @@ def _waiting(member: str) -> bool:
         return False
 
 
-def _wake_member(member: str, text: str, wake: Callable[[str, str], None]) -> bool:
-    """Hand a member's wake to the seat queue; False when it is already running or waiting."""
-    return _enqueue(member, lambda: wake(member, text)) != "busy"
+def _wake_member(member: str, text: str, wake: Callable[[str, str], None],
+                 plan: dict[str, Any] | None = None, work: dict[str, Any] | None = None) -> bool:
+    """Hand a member's wake to the seat queue; False when it is already running or waiting.
+
+    A member past its context limit starts a fresh session instead: a handoff, then its whole
+    task (the lead's spec and its points) in a new session of the same chat."""
+    start: Callable[[], Any] = lambda: wake(member, text)
+    if plan is not None and work is not None:
+        from frontend.ui_web.context_limit import over_limit, start_fresh
+
+        root = plan.get("project_root")
+        over = over_limit(member, (work.get("points") or [None])[0], project_root=root)
+        if over:
+            task = _task_text(plan, work)
+            start = lambda: start_fresh(member, task, used=over[0], limit=over[1], project_root=root)
+    return _enqueue(member, start) != "busy"
 
 
 def _team_context(plan: dict[str, Any], *, busy: set[str] = frozenset()) -> tuple[set[str], str]:
@@ -731,7 +744,7 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
             if st["task"] != task:
                 _inherit_lead(member, lead)
                 try:
-                    if not _wake_member(member, _task_text(plan, work), wake):
+                    if not _wake_member(member, _task_text(plan, work), wake, plan, work):
                         continue
                 except Exception:
                     continue
@@ -773,7 +786,7 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
             if st.get("done_at_wake") is not None and done <= st["done_at_wake"] and _said_committed(member):
                 text = text.replace("[Ducky] ", f"[Ducky] {UNTICKED_TEXT}\n", 1)
             try:
-                if not _wake_member(member, text, wake):
+                if not _wake_member(member, text, wake, plan, work):
                     continue
             except Exception:
                 continue

@@ -1,0 +1,162 @@
+"""Context limit: an agent past its token limit starts a fresh session between turns.
+
+The limit comes from, first to last: a ``Context: 200k`` line in the plan step it works, the
+chat's own ``context_limit_tokens``, the ``context_limit_tokens`` setting, then 60% of the
+model's context window (600k when the window is unknown).
+
+Over the limit with work left, the chat writes a short handoff, its session is reset (history,
+plan, lane, seat and approvals stay), and its next turn starts with the handoff and its task.
+Never mid-turn: the team keeper checks only members whose turn has ended.
+"""
+
+from __future__ import annotations
+
+import re
+import time
+from typing import Any
+
+DEFAULT_SHARE = 0.6
+FALLBACK_TOKENS = 600_000
+HANDOFF_SHARE = 0.03  # the handoff's budget, as a share of the limit
+_IDLE_WAIT_S = 600.0
+_STEP_RE = re.compile(r"(?im)^[\s>*_`-]*context\s*:\s*([\d.,]+)\s*([km])?\b")
+
+
+def parse_tokens(value: Any) -> int:
+    """``200k`` → 200000, ``1.5m`` → 1500000, ``200,000`` → 200000; 0 when unreadable."""
+    m = re.fullmatch(r"\s*([\d.,]+)\s*([km])?\s*", str(value or ""), flags=re.I)
+    if not m:
+        return 0
+    try:
+        n = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return 0
+    return max(0, int(n * {"k": 1_000, "m": 1_000_000}.get((m.group(2) or "").lower(), 1)))
+
+
+def step_limit(step: Any) -> int:
+    """The ``Context: 200k`` line of a plan step (its title or notes); 0 when it has none."""
+    if isinstance(step, dict):
+        step = f"{step.get('content') or ''}\n{step.get('body_markdown') or ''}"
+    m = _STEP_RE.search(str(step or ""))
+    return parse_tokens(m.group(1) + (m.group(2) or "")) if m else 0
+
+
+def default_limit(conv: Any) -> int:
+    """The settings default, else 60% of the chat's model window, else 600k."""
+    from frontend.settings import PanelSettings
+
+    try:
+        set_to = int(PanelSettings.load().context_limit_tokens or 0)
+    except Exception:
+        set_to = 0
+    if set_to > 0:
+        return set_to
+    window = 0
+    try:
+        from frontend.ui_web.context_tokens import _coding_agent_context_limit, context_limit_for_model
+
+        model = str(getattr(conv, "model", "") or "")
+        agent = str(getattr(conv, "coding_agent", "") or "ducky")
+        stats = getattr(conv, "coding_agent_stats", None)
+        if isinstance(stats, dict):
+            window = int(stats.get("context_limit") or 0)
+        if not window and model:
+            window = (context_limit_for_model(model, str(getattr(conv, "provider", "") or "")) if agent == "ducky"
+                      else _coding_agent_context_limit(agent, model)) or 0
+    except Exception:
+        window = 0
+    return int(window * DEFAULT_SHARE) if window > 0 else FALLBACK_TOKENS
+
+
+def resolve_limit(conv: Any, step: Any = None) -> int:
+    """Plan step line > the chat's own limit > settings / model default."""
+    return step_limit(step) or int(getattr(conv, "context_limit_tokens", 0) or 0) or default_limit(conv)
+
+
+def used_tokens(conv: Any) -> int:
+    """The chat's context size after its last turn (the sidebar's own count)."""
+    from frontend.ui_web.panel_api_chats import PanelApiChatsMixin
+
+    return PanelApiChatsMixin._sidebar_context_tokens(conv)
+
+
+def set_chat_limit(conv_id: str, value: Any, project_root: str | None = None) -> int:
+    """Store a chat's own limit (``200k``, ``200000``; 0/empty clears it). Returns the tokens."""
+    from frontend.ui_web.project_chats import load_conversation, save_conversation
+
+    tokens = parse_tokens(value)
+    conv = load_conversation(conv_id, project_root=project_root)
+    if conv is None:
+        raise ValueError(f"Conversation not found: {conv_id!r}")
+    conv.context_limit_tokens = tokens
+    save_conversation(conv, project_root)
+    return tokens
+
+
+def over_limit(conv_id: str, step: Any = None, project_root: str | None = None) -> tuple[int, int] | None:
+    """``(used, limit)`` when the chat's context is past its limit, else None."""
+    from frontend.ui_web.project_chats import load_conversation
+
+    try:
+        conv = load_conversation(conv_id, project_root=project_root)
+        if conv is None or getattr(conv, "is_group", False):
+            return None
+        used, limit = used_tokens(conv), resolve_limit(conv, step)
+    except Exception:
+        return None
+    return (used, limit) if limit > 0 and used > limit else None
+
+
+def handoff_prompt(limit: int) -> str:
+    from backend.tools.panel.ducky_panel import _SUBAGENT_HANDOFF_PROMPT
+
+    budget = max(1_000, int(limit * HANDOFF_SHARE))
+    return (f"{_SUBAGENT_HANDOFF_PROMPT} Your context is full: this chat starts a fresh session next. "
+            f"Keep the handoff under {budget:,} tokens (about {budget * 3 // 4:,} words).")
+
+
+def _k(tokens: int) -> str:
+    return f"{max(0, tokens) // 1000}k"
+
+
+def start_fresh(conv_id: str, next_text: str, *, used: int, limit: int,
+                project_root: str | None = None) -> bool:
+    """Handoff, session reset, then the next turn with the handoff + ``next_text``.
+
+    Runs between turns. A failed handoff (or reset) keeps the old session and still starts
+    ``next_text``. Returns True when the chat started fresh."""
+    from backend.tools.panel.ducky_panel import build_recycle_spawn_message
+    from frontend.ui_web import agent_modes
+    from frontend.ui_web.context_control import reset_context
+    from frontend.ui_web.project_chats import append_message, load_conversation
+
+    conv = load_conversation(conv_id, project_root=project_root)
+    model = str(getattr(conv, "model", "") or "") if conv is not None else ""
+
+    def go_on(text: str) -> None:
+        agent_modes.run_message(conv_id, text, "agent", model, queue_if_busy=True)
+
+    out = agent_modes.run_message_and_wait(conv_id, handoff_prompt(limit), "agent", model,
+                                           timeout_sec=_IDLE_WAIT_S, cancel_on_timeout=False)
+    handoff = str(out.get("assistant_text") or "").strip()
+    if out.get("status") != "done" or not handoff:
+        go_on(next_text)
+        return False
+    # The handoff's reply lands before its run is marked idle, and the reset refuses a running chat.
+    idle_by = time.monotonic() + _IDLE_WAIT_S
+    while agent_modes.is_agent_running(conv_id) and time.monotonic() < idle_by:
+        time.sleep(0.5)
+    try:
+        reset_context(conv_id, ["session"], project_root=project_root)
+    except Exception:
+        go_on(next_text)
+        return False
+    cap = max(4_000, int(limit * HANDOFF_SHARE) * 4)  # chars: about 4 per token
+    text = build_recycle_spawn_message(handoff[:cap], next_text, max_chars=cap + len(next_text) + 1_000)
+    fresh = load_conversation(conv_id, project_root=project_root)
+    if fresh is not None:
+        line = f"Started fresh at {_k(used)} → {_k(len(text) // 4)} tokens"
+        append_message(fresh, {"role": "assistant", "content": line, "ts": time.time()}, project_root=project_root)
+    agent_modes.run_message(conv_id, text, "agent", model)
+    return True

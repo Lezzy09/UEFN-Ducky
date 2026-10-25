@@ -790,7 +790,7 @@ def _spawn_kwargs_from_conv(conv: Any) -> dict[str, Any]:
     }
 
 
-def build_recycle_spawn_message(handoff: str, continue_message: str = "") -> str:
+def build_recycle_spawn_message(handoff: str, continue_message: str = "", max_chars: int = _MAX_MESSAGE_CHARS) -> str:
     """Compose the continuation for a fresh session in the same member chat."""
     body = (handoff or "").strip() or "(no handoff text; inspect this chat history if needed)"
     follow = (continue_message or "").strip()
@@ -802,7 +802,7 @@ def build_recycle_spawn_message(handoff: str, continue_message: str = "") -> str
     ]
     if follow:
         parts.append(f"\n\n## Continue with this task\n{follow}")
-    return _truncate_text("\n".join(parts), _MAX_MESSAGE_CHARS)
+    return _truncate_text("\n".join(parts), max_chars)
 
 
 def next_subagent_title(title: str) -> str:
@@ -983,7 +983,7 @@ def _require_lane_authority(group_id: str) -> str:
 @mcp.tool()
 def ducky_group_invite(
     group_id: str, ducky: str, write_allowed: Optional[list[str]] = None, name: str = "",
-    model: str = "", pretty: bool = False,
+    model: str = "", context_limit: str = "", pretty: bool = False,
 ) -> str:
     """Invite a ducky profile into a group as a lasting swarm member (not a parent-linked subagent).
 
@@ -996,6 +996,9 @@ def ducky_group_invite(
 
     ``model`` seats it on that model (e.g. "codex:gpt-5-mini") instead of the profile's own;
     a pay-per-token API key the person has not opened to agents is still refused.
+
+    ``context_limit`` ("200k") is the member's context limit: past it, it starts a fresh
+    session between turns (a handoff, same chat). Omit for 60% of its model's window.
     """
     profile = _resolve_ducky_profile(ducky)
     if profile is None:
@@ -1011,7 +1014,16 @@ def ducky_group_invite(
     )
     if not res.get("ok"):
         raise ValueError(str(res.get("error") or "group_invite failed"))
+    _store_context_limit(str((res.get("member") or {}).get("member_conv_id") or ""), context_limit)
     return tool_json(res, pretty=pretty)
+
+
+def _store_context_limit(conv_id: str, value: str) -> None:
+    """Keep a ``context_limit`` tool argument on the chat (nothing when it is empty)."""
+    if conv_id and str(value or "").strip():
+        from frontend.ui_web.context_limit import set_chat_limit
+
+        set_chat_limit(conv_id, value, project_root=_project_root())
 
 
 @mcp.tool()
@@ -1268,11 +1280,14 @@ def ducky_send_chat_message(
     mode: str = "agent",
     wait_for_reply: bool = True,
     timeout_sec: float = 180.0,
+    context_limit: str = "",
     pretty: bool = False,
 ) -> str:
     """Send a user message to any chat and run its agent — for follow-ups on your chats or the user's.
 
     Blocks until the linked chat finishes (default). Parent agent waits for the reply before continuing.
+    ``context_limit`` ("200k") sets that chat's context limit: past it, it starts a fresh session
+    between turns.
     """
     text = _truncate_text(message.strip(), _MAX_MESSAGE_CHARS)
     if not text:
@@ -1297,6 +1312,7 @@ def ducky_send_chat_message(
     if me and me != conv_id and _lead_without_plan(me, conv_id, root):
         return tool_json({"status": "not_sent", "sender": me, "reason": LEAD_NEEDS_PLAN}, pretty=pretty)
     text = _from_another_ducky(conv_id, text, root)
+    _store_context_limit(conv_id, context_limit)
     mode_norm = (mode or "agent").lower()
     if wait_for_reply:
         outcome = run_message_and_wait(
@@ -1851,12 +1867,14 @@ def ducky_spawn_chat(
     write_allowed: Optional[list[str]] = None,
     name: str = "",
     model: str = "",
+    context_limit: str = "",
     pretty: bool = False,
 ) -> str:
     """Invite a specialist into a Group swarm and send the first message.
 
     ``model`` seats a new member on that model instead of the profile's own (an idle seat
-    that is reused keeps its model).
+    that is reused keeps its model). ``context_limit`` ("200k") is its context limit: past
+    it, it starts a fresh session between turns (omit for 60% of its model's window).
 
     ``name`` names the seat by its role ("Search lead"): an idle seat of that name gets the
     message, otherwise a new seat is made with that name.
@@ -1948,6 +1966,7 @@ def ducky_spawn_chat(
     conv_id = str(member.get("member_conv_id") or "").strip()
     if not conv_id:
         raise ValueError("group_invite did not return a member_conv_id")
+    _store_context_limit(conv_id, context_limit)
 
     from frontend.ui_web.agent_modes import run_message, run_message_and_wait
 

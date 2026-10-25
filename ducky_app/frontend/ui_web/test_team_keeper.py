@@ -35,6 +35,7 @@ def _world(monkeypatch):
     monkeypatch.setattr(keeper, "_blocked_reason", lambda member: "")
     monkeypatch.setattr(keeper, "_said_committed", lambda member: False)
     monkeypatch.setattr(keeper, "_tell_lead", lambda plan, member, work, reason: told.append((member, reason)))
+    monkeypatch.setattr("frontend.ui_web.context_limit.over_limit", lambda cid, step=None, project_root=None: None)
     return told
 
 
@@ -473,6 +474,28 @@ def test_a_group_leader_with_its_own_sub_plan_gets_one_task(monkeypatch, _links)
     assert len(tasks) == 1
     assert "`setup` Package setup" in tasks[0] and "`m1` Transaction" in tasks[0]
     assert len([cid for cid, _ in woke if cid == "leader"]) <= 3  # its task, then two continues at most
+
+
+def test_a_member_past_its_context_limit_starts_fresh_with_its_whole_task(monkeypatch) -> None:
+    from frontend.ui_web import context_limit
+
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder"}, ""))
+    monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
+    steps: list = []
+
+    def over(cid, step=None, project_root=None):
+        steps.append(step)
+        return (612_000, 600_000) if cid == "builder" else None
+
+    fresh: list[tuple] = []
+    monkeypatch.setattr(context_limit, "over_limit", over)
+    monkeypatch.setattr(context_limit, "start_fresh", lambda cid, text, **kw: fresh.append((cid, text, kw)))
+    woke: list[tuple[str, str]] = []
+    _run(0, [], woke, plans=[SUB])
+    assert "builder" not in [c for c, _ in woke]  # no plain wake: the fresh start carries the task
+    assert [f[0] for f in fresh] == ["builder"] and fresh[0][2]["used"] == 612_000 and fresh[0][2]["limit"] == 600_000
+    assert "Your task" in fresh[0][1] and "`fx` Glow" in fresh[0][1]
+    assert steps[0]["id"] == "fx"  # the limit is read for the step it works now
 
 
 def test_a_lead_with_members_but_no_assignments_yet_is_kept(monkeypatch) -> None:

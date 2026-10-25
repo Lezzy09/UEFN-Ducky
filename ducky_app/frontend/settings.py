@@ -196,6 +196,10 @@ class PanelSettings:
     memory_compress_tokens: int = 80_000
     """Auto-compress when estimated context tokens reach this."""
 
+    context_limit_tokens: int = 0
+    """Past this many context tokens an agent starts a fresh session between turns
+    (handoff, then a new session in the same chat). 0 = 60% of the model's window."""
+
     memory_index_max_chars: int = 2_500
     """Max chars for the filtered project-memory index in the system prompt."""
 

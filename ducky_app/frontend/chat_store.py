@@ -130,6 +130,10 @@ class Conversation:
     """Latest real usage snapshot from the external agent's last turn:
     model, context_tokens, num_turns, cost_usd, updated. UI-only."""
 
+    context_limit_tokens: int = 0
+    """This chat's context limit: past it the agent starts a fresh session between turns
+    (0 = the settings default; see frontend.ui_web.context_limit)."""
+
     terminal_session_id: str = ""
     """Linked panel terminal session for CLI coding agents."""
 
@@ -210,6 +214,7 @@ class Conversation:
             "thinking_effort": (self.thinking_effort or "").strip().lower(),
             "upstream_session_id": (self.upstream_session_id or "").strip(),
             "coding_agent_stats": self.coding_agent_stats,
+            "context_limit_tokens": int(self.context_limit_tokens or 0),
             "terminal_session_id": (self.terminal_session_id or "").strip(),
             "parent_conv_id": (self.parent_conv_id or "").strip(),
             "is_group": bool(self.is_group),
@@ -303,6 +308,7 @@ class Conversation:
             coding_agent_stats=(
                 d.get("coding_agent_stats") if isinstance(d.get("coding_agent_stats"), dict) else None
             ),
+            context_limit_tokens=int(d.get("context_limit_tokens", 0) or 0),
             terminal_session_id=str(d.get("terminal_session_id", "") or ""),
             parent_conv_id=str(d.get("parent_conv_id", "") or ""),
             is_group=bool(d.get("is_group", False)),

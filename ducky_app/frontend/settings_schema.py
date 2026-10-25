@@ -155,6 +155,13 @@ FIELD_META: dict[str, FieldMeta] = {
         settable=True,
         description="Auto-compress when estimated context tokens reach this.",
     ),
+    "context_limit_tokens": FieldMeta(
+        "Start fresh past (tokens)",
+        "Memory",
+        settable=True,
+        description="An agent past this many context tokens writes a handoff and starts a fresh "
+        "session in the same chat between turns. 0 = 60% of the model's window.",
+    ),
     "memory_index_max_chars": FieldMeta(
         "Memory index max chars",
         "Memory",
