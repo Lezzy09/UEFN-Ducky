@@ -207,34 +207,65 @@ class StdinWriter:
     """Line writer for a child's stdin that stays open for the whole turn.
 
     Writes after ``close()`` or after the child exited return False instead of raising.
+    Nothing here waits on a write the child isn't reading: another write gives up after
+    ``LOCK_WAIT_S`` (Stop then kills), and ``close()`` leaves the stream to that write.
     """
+
+    LOCK_WAIT_S = 2.0
 
     def __init__(self, stream) -> None:
         self._stream = stream
         self._lock = threading.Lock()
+        self._stream_closed = False
         self.closed = stream is None
 
     def write_line(self, text: str) -> bool:
-        with self._lock:
+        return self.write(str(text).rstrip("\r\n") + "\n")
+
+    def write(self, text: str) -> bool:
+        if not self._lock.acquire(timeout=self.LOCK_WAIT_S):
+            return False
+        return self._write_locked(text)
+
+    def write_soon(self, text: str, *, name: str = "") -> None:
+        """``text`` on its own thread, ahead of every later write (the lock is taken here)."""
+        self._lock.acquire()
+        threading.Thread(target=self._write_locked, args=(text,), daemon=True, name=name or None).start()
+
+    def _write_locked(self, text: str) -> bool:
+        """Write with the lock held; releases it."""
+        try:
             if self.closed:
                 return False
             try:
-                self._stream.write(str(text).rstrip("\r\n") + "\n")
+                self._stream.write(text)
                 self._stream.flush()
                 return True
             except (OSError, ValueError):
                 self.closed = True
                 return False
+        finally:
+            self._lock.release()
+            if self.closed:  # close() came while this write held the lock: finish it now
+                self.close()
 
     def close(self) -> None:
-        with self._lock:
-            if self.closed:
-                return
-            self.closed = True
+        # Never waits: a write holding the lock closes the stream itself once it returns.
+        self.closed = True
+        if self._lock.acquire(blocking=False):
             try:
-                self._stream.close()
-            except (OSError, ValueError):
-                pass
+                self._close_stream()
+            finally:
+                self._lock.release()
+
+    def _close_stream(self) -> None:
+        if self._stream is None or self._stream_closed:
+            return
+        self._stream_closed = True
+        try:
+            self._stream.close()
+        except (OSError, ValueError):
+            pass
 
 
 def get_stdin_writer(conv_id: str) -> StdinWriter | None:
@@ -324,29 +355,6 @@ def run_streaming_process(
     register_process(conv_id, proc)
     result = ProcResult(returncode=-1)
 
-    if keep_stdin_open:
-        writer = StdinWriter(proc.stdin)
-        result.stdin_writer = writer
-        if stdin_data:
-            try:
-                proc.stdin.write(stdin_data)
-                proc.stdin.flush()
-            except (OSError, ValueError):
-                writer.closed = True
-        with _procs_lock:
-            _writers[conv_id] = writer
-        if on_stdin_writer is not None:
-            try:
-                on_stdin_writer(writer)
-            except Exception:
-                pass
-    elif use_stdin and proc.stdin is not None:
-        try:
-            proc.stdin.write(stdin_data or "")
-            proc.stdin.close()
-        except (OSError, ValueError, BrokenPipeError):
-            pass
-
     def _drain_stderr() -> None:
         try:
             for line in proc.stderr or []:
@@ -374,6 +382,31 @@ def run_streaming_process(
     t_out = threading.Thread(target=_drain_stdout, daemon=True, name=f"ca-stdout-{conv_id[:8]}")
     t_err.start()
     t_out.start()
+
+    # Readers first, then the prompt on its own thread. Written here before them, a prompt
+    # bigger than the pipe buffer deadlocked whenever the CLI wrote before reading (Claude
+    # Code with stream-json input, Oct 25 2026): the turn sat on Thinking, deaf to Stop.
+    if keep_stdin_open:
+        writer = StdinWriter(proc.stdin)
+        result.stdin_writer = writer
+        with _procs_lock:
+            _writers[conv_id] = writer
+        if stdin_data:
+            writer.write_soon(stdin_data, name=f"ca-stdin-{conv_id[:8]}")
+        if on_stdin_writer is not None:
+            try:
+                on_stdin_writer(writer)
+            except Exception:
+                pass
+    elif use_stdin and proc.stdin is not None:
+        def _feed_stdin() -> None:
+            try:
+                proc.stdin.write(stdin_data or "")
+                proc.stdin.close()
+            except (OSError, ValueError, BrokenPipeError):
+                pass
+
+        threading.Thread(target=_feed_stdin, daemon=True, name=f"ca-stdin-{conv_id[:8]}").start()
 
     # timeout_s <= 0 means no wall-clock limit — keep going until the CLI exits
     # or the user cancels. Long UEFN builds (city blockouts, etc.) routinely need

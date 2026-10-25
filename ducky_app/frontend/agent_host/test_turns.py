@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 import uuid
 from types import SimpleNamespace
 
@@ -178,6 +179,21 @@ def test_no_host_means_the_app_runs_the_turn(monkeypatch):
     monkeypatch.setattr(turns, "_supervisor", broken)
     assert turns.run_in_host("c5", "r5", "x", model="m", mode="agent", push=lambda e: None,
                              cancel=threading.Event()) is None
+
+
+def test_a_host_that_died_before_connecting_does_not_hold_the_turn(monkeypatch):
+    class _Dead:
+        ready = threading.Event()
+
+        def alive(self):
+            return False
+
+    released = []
+    monkeypatch.setattr(turns, "_supervisor", lambda: SimpleNamespace(assign=lambda cid: _Dead(), release=released.append))
+    started = time.monotonic()
+    assert turns.run_in_host("c6", "r6", "x", model="m", mode="agent", push=lambda e: None,
+                             cancel=threading.Event()) is None
+    assert time.monotonic() - started < 2 and released == ["c6"]  # was READY_S (30 s) per turn
 
 
 def test_host_switch(monkeypatch):

@@ -404,6 +404,13 @@ def main() -> None:
         truststore.inject_into_ssl()
     except Exception:
         pass
+    if len(sys.argv) > 1 and sys.argv[1] == "agent-host":
+        # The supervisor's child (frozen: this EXE). Falling through to the GUI booted a whole
+        # second app on every agent turn: logo splash, hand-off to the open window, no host.
+        _ensure_repo_on_path()
+        from frontend.agent_host.main import main as agent_host_main
+
+        raise SystemExit(agent_host_main(sys.argv[2:]))
     _sweep_stale_extracts()
     if is_bridge_exe() or (len(sys.argv) > 1 and sys.argv[1] == "bridge"):
         _hand_off_to_newest(bridge=True)

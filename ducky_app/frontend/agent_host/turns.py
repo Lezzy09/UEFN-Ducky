@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -68,6 +69,16 @@ def _supervisor() -> Any:
     return supervisor.get() or supervisor.start(on_frame=on_app_frame, on_host_closed=on_host_closed)
 
 
+def _wait_ready(host: Any, timeout_s: float) -> bool:
+    """True once the host connected. False at the timeout, or as soon as its process is gone:
+    a host that died at start used to hold every turn for the whole ``READY_S``."""
+    deadline = time.monotonic() + timeout_s
+    while not host.ready.wait(max(0.0, min(_POLL_S, deadline - time.monotonic()))):
+        if not host.alive() or time.monotonic() >= deadline:
+            return False
+    return host.alive()
+
+
 def live_turns() -> dict[str, str]:
     """The supervisor's live turn table: ``{conv_id: run_id}`` of turns running in a host."""
     with _lock:
@@ -100,7 +111,7 @@ def run_in_host(
     except Exception:  # noqa: BLE001 - no host process: the app runs the turn as before
         return None
     turn = _Turn(conv_id, run_id, push, host)
-    if not host.ready.wait(ready_s) or not host.alive():
+    if not _wait_ready(host, ready_s):
         sup.release(conv_id)
         return None
     with _lock:
