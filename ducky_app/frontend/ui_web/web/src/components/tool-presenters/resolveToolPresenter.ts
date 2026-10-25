@@ -2,6 +2,7 @@ import type { OpenFileHandler } from "../../types/richContent";
 import type { RichBlock } from "../../types/richContent";
 import type { ComponentType } from "react";
 import { SwarmCard, countSeats, parseSwarmResult } from "./SwarmCard";
+import { SwarmBuilderToolView, swarmBuilderPayload } from "../../swarm/SwarmBuilderCard";
 
 export interface ToolPresenterContext {
   toolName: string;
@@ -205,8 +206,14 @@ const swarmPresenter: ToolPresenter = ({ resultText }) => {
   return [{ type: "code", language: "chart", text: JSON.stringify(spec) }];
 };
 
-const TOOL_VIEWS: Record<string, { view: ComponentType<ToolPresenterContext>; accepts: (resultText: string) => boolean }> = {
-  ducky_swarm_create: { view: SwarmCard, accepts: (text) => parseSwarmResult(text) !== null },
+type ToolView = { view: ComponentType<ToolPresenterContext>; accepts: (resultText: string) => boolean };
+
+const TOOL_VIEWS: Record<string, ToolView[]> = {
+  ducky_swarm_create: [
+    { view: SwarmCard, accepts: (text) => parseSwarmResult(text) !== null },
+    // Still asking (needs_answers): the sliders card, so the person shapes the team in place.
+    { view: SwarmBuilderToolView, accepts: (text) => swarmBuilderPayload(text)?.status === "needs_answers" },
+  ],
 };
 
 function bareToolName(name: string): string {
@@ -216,8 +223,7 @@ function bareToolName(name: string): string {
 
 /** A tool result drawn as its own React card (it can animate and send replies); null → blocks. */
 export function resolveToolPresenterView(toolName: string, resultText: string): ComponentType<ToolPresenterContext> | null {
-  const entry = TOOL_VIEWS[bareToolName(toolName)];
-  return entry && entry.accepts(resultText) ? entry.view : null;
+  return (TOOL_VIEWS[bareToolName(toolName)] ?? []).find((entry) => entry.accepts(resultText))?.view ?? null;
 }
 
 const PRESENTERS: Record<string, ToolPresenter> = {

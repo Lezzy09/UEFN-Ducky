@@ -55,6 +55,17 @@ export interface SwarmCardData {
   seats: SwarmSeat[];
   detail?: number;
   levels: SwarmLevel[];
+  /** From-plan swarms: the real plan's id and title, its sections with outline numbers, lane conflicts. */
+  planId?: string;
+  planTitle?: string;
+  outline?: SwarmOutlineSection[];
+  conflicts: string[];
+}
+
+export interface SwarmOutlineSection {
+  n: string;
+  title: string;
+  steps: Array<{ n: string; content: string }>;
 }
 
 export const SWARM_DETAIL_LABELS = ["Areas", "Jobs", "Parts", "Parts in sub-groups"];
@@ -224,7 +235,33 @@ export function parseSwarmResult(text: string): SwarmCardData | null {
     if (title) sections.set(title, stepTitles(o?.steps ?? o?.children));
   });
   if (sections.size) allSeats({ seats, groups }).forEach((s) => !s.steps.length && (s.steps = sections.get(s.plan) ?? []));
-  return { status, goal, agents, groups, seats, detail, levels: parseLevels(preview?.levels ?? top.levels) };
+  const levels = parseLevels(preview?.levels ?? top.levels);
+  const conflicts = arr(top.conflicts ?? preview?.conflicts).map(conflictText).filter(Boolean);
+  const planId = str(top.plan_id) || str(preview?.plan_id);
+  if (!planId) return { status, goal, agents, groups, seats, detail, levels, conflicts };
+  const plan = obj(preview?.plan ?? top.plan);
+  const outline = arr(plan?.sections).flatMap((s): SwarmOutlineSection[] => {
+    const o = obj(s);
+    if (!o) return [];
+    const steps = arr(o.steps ?? o.children).flatMap((x) => {
+      const st = obj(x);
+      const content = typeof x === "string" ? x.trim() : str(st?.content) || str(st?.title);
+      return content ? [{ n: str(st?.n) || str(st?.outline), content }] : [];
+    });
+    return [{ n: str(o.n) || str(o.outline), title: str(o.title) || str(o.content), steps }];
+  });
+  const planTitle = str(top.plan_title) || str(plan?.title) || goal;
+  return { status, goal, agents, groups, seats, detail, levels, conflicts, planId, planTitle, outline };
+}
+
+/** A lane conflict as one line: text as is, {path, seats|owners} as "path: A, B". */
+function conflictText(v: unknown): string {
+  if (typeof v === "string") return v.trim();
+  const o = obj(v);
+  if (!o) return "";
+  const who = arr(o.seats ?? o.owners).map(str).filter(Boolean).join(", ");
+  const what = str(o.path) || str(o.file) || str(o.glob);
+  return str(o.message) || [what, who].filter(Boolean).join(": ");
 }
 
 /** Done/total over every sub plan under a node; a sub plan shared by two rows counts once. */
@@ -382,10 +419,32 @@ function SwarmPlan({ data }: { data: SwarmCardData }) {
   );
 }
 
+/** From-plan swarms: the real plan's sections and steps, outline-numbered as in the Plan panel. */
+function PlanOutline({ data }: { data: SwarmCardData }) {
+  return (
+    <div className="swarm-card-plan" aria-label="Plan">
+      <div className="swarm-card-plan-title">Plan</div>
+      {(data.outline ?? []).map((s, i) => (
+        <details key={`${s.n}-${i}`} className="swarm-card-plan-group" open>
+          <summary>{[s.n, s.title].filter(Boolean).join(" ")}</summary>
+          {s.steps.map((st, j) => (
+            <div key={`${st.n}-${j}`} className="swarm-card-plan-seat">
+              {[st.n, st.content].filter(Boolean).join(" ")}
+            </div>
+          ))}
+        </details>
+      ))}
+    </div>
+  );
+}
+
 export const SWARM_BUILD_PROMPT =
   "Build the swarm exactly as previewed: call ducky_swarm_create again with the same arguments and confirm=true.";
 export const SWARM_CHANGE_PROMPT =
   "Change the swarm preview: ask me with one ducky_ask_user what to change (rename or drop a job, a seat's model, mute or unmute a group), then call ducky_swarm_create with those edits and show the new preview.";
+
+export const SWARM_PLAN_CHANGE_PROMPT =
+  "Change the plan this swarm is built from: ask me with one ducky_ask_user what to change (rename, move or drop a sub plan or step, a seat's model, its Files), edit the plan with those changes, then call ducky_swarm_create from the plan again and show the new preview.";
 
 export const SWARM_DETAIL_DEBOUNCE_MS = 400;
 
@@ -498,7 +557,9 @@ export function SwarmCard({ resultText = "", data: dataProp, onSend: onSendProp 
   const goal = data.goal || "swarm";
   const title =
     status === "needs_confirm"
-      ? `Swarm preview: ${goal} · ${data.agents} agents · ${groupCount} groups`
+      ? data.planId
+        ? `Swarm from plan: ${data.planTitle || goal} · ${data.agents} agents · ${groupCount} groups`
+        : `Swarm preview: ${goal} · ${data.agents} agents · ${groupCount} groups`
       : status === "building"
         ? `Building swarm: ${goal}`
         : `Swarm built: ${goal}`;
@@ -545,14 +606,26 @@ export function SwarmCard({ resultText = "", data: dataProp, onSend: onSendProp 
       <div ref={hostRef} className="swarm-card-tree">
         <RichChart spec={spec} />
       </div>
-      {status === "needs_confirm" ? <SwarmPlan data={data} /> : null}
+      {status === "needs_confirm" ? data.planId ? <PlanOutline data={data} /> : <SwarmPlan data={data} /> : null}
       <div className="swarm-card-summary">{summary}</div>
+      {status === "needs_confirm" && data.conflicts.length ? (
+        <ul className="swarm-card-conflicts" role="alert" aria-label="Conflicts" style={{ color: "var(--red)" }}>
+          {data.conflicts.map((c, i) => (
+            <li key={i}>{c}</li>
+          ))}
+        </ul>
+      ) : null}
       {status === "needs_confirm" ? (
         <div className="swarm-card-actions">
-          <button type="button" className="swarm-card-btn swarm-card-btn--primary" onClick={() => onSend("build", swarmBuildPrompt(levels.length ? detail : undefined))}>
+          <button
+            type="button"
+            className="swarm-card-btn swarm-card-btn--primary"
+            disabled={data.conflicts.length > 0}
+            onClick={() => onSend("build", swarmBuildPrompt(levels.length ? detail : undefined))}
+          >
             Build
           </button>
-          <button type="button" className="swarm-card-btn" onClick={() => onSend("change", SWARM_CHANGE_PROMPT)}>
+          <button type="button" className="swarm-card-btn" onClick={() => onSend("change", data.planId ? SWARM_PLAN_CHANGE_PROMPT : SWARM_CHANGE_PROMPT)}>
             Change
           </button>
         </div>

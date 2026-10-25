@@ -7,6 +7,7 @@ import {
   SWARM_CARD_EVENT,
   SWARM_CHANGE_PROMPT,
   SWARM_DETAIL_DEBOUNCE_MS,
+  SWARM_PLAN_CHANGE_PROMPT,
   SWARM_REVEAL_MS,
   SwarmCard,
   parseSwarmResult,
@@ -327,6 +328,70 @@ describe("SwarmCard build animation", () => {
     expect(vi.getTimerCount()).toBe(0);
     expect(nodeByText("Tester · 0/2").classList.contains("swarm-node--created")).toBe(true);
     expect(document.querySelectorAll(".swarm-node--animate").length).toBe(0);
+  });
+});
+
+describe("SwarmCard from a plan", () => {
+  const fromPlan = (conflicts: unknown[]) =>
+    JSON.stringify({
+      status: "needs_confirm",
+      goal: "Swarm speed",
+      plan_id: "7df73ab45675",
+      conflicts,
+      preview: {
+        agents: 2,
+        tree: [
+          { name: "U1 Card shell", sub_plan: { title: "U1 Card shell", total: 2 } },
+          { name: "U2 Tree", sub_plan: { title: "U2 Tree", total: 1 } },
+        ],
+        plan: {
+          title: "Swarm speed: no lag",
+          sections: [
+            { n: "7.4.1", title: "U1 Card shell", steps: [{ n: "7.4.1.1", content: "Builder card" }, { n: "7.4.1.2", content: "Sliders" }] },
+            { n: "7.4.2", title: "U2 Tree", steps: [{ n: "7.4.2.1", content: "Live tree" }] },
+          ],
+        },
+      },
+    });
+
+  it("titles the real plan, lists outline numbers, and Change edits the plan", () => {
+    const onSend = vi.fn();
+    render(<SwarmCard resultText={fromPlan([])} onSend={onSend} />);
+    expect(screen.getByText("Swarm from plan: Swarm speed: no lag · 2 agents · 1 groups")).toBeTruthy();
+    expect(screen.getByText("7.4.1 U1 Card shell")).toBeTruthy();
+    expect(screen.getByText("7.4.1.2 Sliders")).toBeTruthy();
+    expect(screen.getByText("7.4.2.1 Live tree")).toBeTruthy();
+    expect(screen.queryByLabelText("Conflicts")).toBeNull();
+    const build = screen.getByRole("button", { name: "Build" }) as HTMLButtonElement;
+    expect(build.disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Change" }));
+    expect(onSend).toHaveBeenCalledWith("change", SWARM_PLAN_CHANGE_PROMPT);
+    expect(SWARM_PLAN_CHANGE_PROMPT).toContain("edit the plan");
+  });
+
+  it("lists lane conflicts in red and disables Build while any exist", () => {
+    const onSend = vi.fn();
+    render(
+      <SwarmCard
+        resultText={fromPlan([{ path: "web/src/swarm/SwarmTree.tsx", seats: ["U1 Card shell", "U2 Tree"] }, "lanes.ts has two owners"])}
+        onSend={onSend}
+      />,
+    );
+    const list = screen.getByLabelText("Conflicts");
+    expect(list.textContent).toContain("web/src/swarm/SwarmTree.tsx: U1 Card shell, U2 Tree");
+    expect(list.textContent).toContain("lanes.ts has two owners");
+    const build = screen.getByRole("button", { name: "Build" }) as HTMLButtonElement;
+    expect(build.disabled).toBe(true);
+    fireEvent.click(build);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("a jobs swarm (no plan_id) renders as before", () => {
+    const data = parseSwarmResult(preview);
+    expect(data?.planId).toBeUndefined();
+    expect(data?.conflicts).toEqual([]);
+    render(<SwarmCard resultText={preview} />);
+    expect(screen.getByText("Swarm preview: Shop island · 6 agents · 3 groups")).toBeTruthy();
   });
 });
 
