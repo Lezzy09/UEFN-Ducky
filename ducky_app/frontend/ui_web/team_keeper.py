@@ -273,6 +273,30 @@ def _wake(chat_id: str, text: str) -> None:
     run_message(chat_id, text, "agent", model, queue_if_busy=True)
 
 
+def _enqueue(member: str, start: Callable[[], Any]) -> str:
+    """A member's turn starts through K3's seat queue (its cap sits on admission's memory check):
+    ``started``, ``queued`` (starts when a turn ends) or ``busy`` (already running or waiting).
+    Oct 24 2026: keeper wakes started member turns past "4 running · 6 waiting"."""
+    from frontend.ui_web.seat_queue import request
+
+    return request(member, start)
+
+
+def _waiting(member: str) -> bool:
+    """The member runs a turn or waits for a seat: its team can still move."""
+    try:
+        from frontend.ui_web.seat_queue import is_busy
+
+        return is_busy(member)
+    except Exception:
+        return False
+
+
+def _wake_member(member: str, text: str, wake: Callable[[str, str], None]) -> bool:
+    """Hand a member's wake to the seat queue; False when it is already running or waiting."""
+    return _enqueue(member, lambda: wake(member, text)) != "busy"
+
+
 def _team_context(plan: dict[str, Any], *, busy: set[str] = frozenset()) -> tuple[set[str], str]:
     from backend.agent.coding_agents.plans import _chat_and_group_ids
     from backend.agent.coding_agents.team_plan_events import assigned_nodes
@@ -692,7 +716,7 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
                 # Oct 15 2026 a lead answered a block by rewriting the point without a status
                 # change; that counted as nothing, and the team sat idle with nobody told.
                 st.update(moves=moves, tries=0, next=0.0, cleared=st["blocked"] or st["cleared"], blocked="")
-            if member in busy:
+            if member in busy or _waiting(member):
                 st["idle_since"] = None  # idle time counts from the first quiet look
                 movable.add(lead)
                 continue
@@ -707,7 +731,8 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
             if st["task"] != task:
                 _inherit_lead(member, lead)
                 try:
-                    wake(member, _task_text(plan, work))
+                    if not _wake_member(member, _task_text(plan, work), wake):
+                        continue
                 except Exception:
                     continue
                 # The same sub plan, rewritten: an answered block stays answered and a repeat
@@ -748,7 +773,8 @@ def _dispatch_members(plans: list[dict[str, Any]], busy: set[str], now: float,
             if st.get("done_at_wake") is not None and done <= st["done_at_wake"] and _said_committed(member):
                 text = text.replace("[Ducky] ", f"[Ducky] {UNTICKED_TEXT}\n", 1)
             try:
-                wake(member, text)
+                if not _wake_member(member, text, wake):
+                    continue
             except Exception:
                 continue
             st["done_at_wake"] = done

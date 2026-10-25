@@ -7,6 +7,7 @@ import pytest
 from frontend.ui_web import team_keeper as keeper
 
 MIN = 60.0
+_REAL_ENQUEUE, _REAL_WAITING = keeper._enqueue, keeper._waiting
 PLAN = {"chat_id": "coord", "status": "open", "progress": {"pending": 3, "in_progress": 1, "completed": 2}}
 
 
@@ -15,6 +16,9 @@ def _fresh(monkeypatch):
     keeper.reset_for_tests()
     monkeypatch.setattr(keeper, "_tell_person", lambda cid, minutes: None)
     monkeypatch.setattr(keeper, "_long_job_chats", lambda: set())  # no real terminals or workflow runs
+    # Member wakes start at once unless a test uses the real seat queue.
+    monkeypatch.setattr(keeper, "_enqueue", lambda member, start: (start(), "started")[1])
+    monkeypatch.setattr(keeper, "_waiting", lambda member: False)
     saved: dict[str, str] = {}  # stands in for the app database across "restarts"
     monkeypatch.setattr(keeper, "_load_parked", lambda cid: saved.get(cid))
     monkeypatch.setattr(keeper, "_save_parked",
@@ -664,3 +668,32 @@ def test_stopping_a_team_never_stops_its_lead(monkeypatch) -> None:
     assert res["ok"] and "coord" not in cancelled  # the lead's turn keeps running
     assert cancelled == ["a", "sublead", "b"]  # members and nested leads stop
     assert keeper.stop_team("a", cancelled.append)["ok"] is False
+
+
+def test_member_wakes_wait_for_a_seat_and_the_top_leads_never_do(monkeypatch) -> None:
+    # Oct 24 2026: keeper wakes started member turns past "4 running · 6 waiting".
+    from collections import deque
+
+    from frontend.ui_web import admission
+    from frontend.ui_web import seat_queue as sq
+
+    monkeypatch.setattr(keeper, "_enqueue", _REAL_ENQUEUE)
+    monkeypatch.setattr(keeper, "_waiting", _REAL_WAITING)
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder", "builder2"}, ""))
+    monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
+    for name, value in {"_line": deque(), "_starting": set(), "_seen": set(), "_first_starts": deque(),
+                        "_starts": {}, "_retried": set()}.items():
+        monkeypatch.setattr(sq, name, value)
+    monkeypatch.setattr(sq, "_spawn", lambda fn, name: fn())
+    monkeypatch.setattr(sq, "limit", lambda: 1)
+    monkeypatch.setattr(admission, "_running", {"other"})  # the one seat is taken
+    lone = {**PLAN, "chat_id": "lead2"}
+    woke: list[tuple[str, str]] = []
+    for minute in (0, 1, 2):
+        _run(minute * MIN, [], woke, plans=[SUB, lone])
+    # The member's task waits in line (sent once, not again while it waits); the top lead
+    # of an idle team is woken at once, queue or not.
+    assert [c for c, _ in woke] == ["lead2"] and sq.status()["waiting"] == 1
+    admission._running.discard("other")
+    sq.on_turn_end("other")  # a turn ends: the waiting member starts with its whole task
+    assert [c for c, _ in woke] == ["lead2", "builder"] and "Your task" in woke[1][1]
