@@ -721,7 +721,11 @@ export function ModelSelector({
               🌐
             </span>
           )}
-          {m.supportsTools ? (
+          {m.note ? (
+            <span className="model-selector-unavailable-tag" title={m.note}>
+              {m.note}
+            </span>
+          ) : m.supportsTools ? (
             <span className="model-selector-cap-badge" title="Supports tools — can run automated agent mode">
               🔧
             </span>

@@ -7,10 +7,14 @@
  * models that can read pictures, the ones that can judge footage frames. `purpose: "agent"` is for
  * a job that runs as a chat (the plugin opens one with this pick), so coding agents such as Codex
  * or Claude Code are offered too, like a workflow node's model picker.
+ *
+ * `extra` adds the plugin's own rows ({id, name, group, note?, vision?}), each group its own
+ * accordion: Play Tester lists Jev under TypeSafe and Ducky AI, tagged "Not for chat". A picked
+ * extra row comes back as its id, as given.
  */
 import { useEffect, useState } from "react";
 
-import { getCachedModels } from "../hooks/modelsCatalogCache";
+import { getCachedModels, type CatalogModelRow } from "../hooks/modelsCatalogCache";
 import { getCachedCodingAgents } from "../hooks/codingAgentsCache";
 import { ModelSelector } from "../components/ModelSelector";
 import { Modal, ModalActions } from "../components/Modal";
@@ -25,7 +29,35 @@ interface PickRequest {
   purpose: ModelPickPurpose;
   current: string;
   title: string;
+  extra: CatalogModelRow[];
   resolve: (result: ModelPickResult | null) => void;
+}
+
+/** A plugin's extra rows as catalog rows; anything without an id and a group is dropped. */
+export function extraRows(extra: unknown): CatalogModelRow[] {
+  if (!Array.isArray(extra)) return [];
+  const out: CatalogModelRow[] = [];
+  for (const raw of extra.slice(0, 50)) {
+    const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const id = String(r.id || "").trim();
+    const group = String(r.group || "").trim();
+    if (!id || !group || out.some((row) => row.id === id)) continue;
+    out.push({
+      provider: group,
+      providerKey: id.includes(":") ? id.slice(0, id.indexOf(":")) : group,
+      id,
+      name: String(r.name || id).trim() || id,
+      supportsVision: !!r.vision,
+      supportsTools: false,
+      supportsWebSearch: false,
+      contextLimit: 0,
+      priceIn: null,
+      priceOut: null,
+      isLocal: false,
+      note: String(r.note || "").trim().slice(0, 40) || undefined,
+    });
+  }
+  return out;
 }
 
 let openPicker: ((request: PickRequest) => void) | null = null;
@@ -34,6 +66,7 @@ export function pickModelFromHost(options: {
   purpose?: string;
   current?: string;
   title?: string;
+  extra?: unknown;
 }): Promise<ModelPickResult | null> {
   if (!openPicker) return Promise.reject(new Error("model picker is not mounted"));
   const show = openPicker;
@@ -42,6 +75,7 @@ export function pickModelFromHost(options: {
       purpose: options.purpose === "video" ? "video" : options.purpose === "agent" ? "agent" : "chat",
       current: String(options.current || ""),
       title: String(options.title || ""),
+      extra: extraRows(options.extra),
       resolve,
     }),
   );
@@ -59,7 +93,9 @@ export function PluginModelPickerHost() {
         previous?.resolve(null);
         return next;
       });
-      const current = next.current.includes(":") ? next.current.slice(next.current.indexOf(":") + 1) : next.current;
+      const own = next.extra.some((row) => row.id === next.current);
+      const current =
+        !own && next.current.includes(":") ? next.current.slice(next.current.indexOf(":") + 1) : next.current;
       const prefix = next.current.includes(":") ? next.current.slice(0, next.current.indexOf(":")) : "";
       setAgent(next.purpose === "agent" && getCachedCodingAgents().some((a) => a.id === prefix) ? prefix : "ducky");
       setPicked(current);
@@ -71,7 +107,10 @@ export function PluginModelPickerHost() {
   }, []);
 
   if (!request) return null;
-  const rows = (getCachedModels() ?? []).filter((row) => request.purpose !== "video" || row.supportsVision);
+  const rows = [
+    ...request.extra,
+    ...(getCachedModels() ?? []).filter((row) => request.purpose !== "video" || row.supportsVision),
+  ];
   const finish = (result: ModelPickResult | null) => {
     request.resolve(result);
     setRequest(null);
@@ -80,6 +119,7 @@ export function PluginModelPickerHost() {
     const id = picked.trim();
     if (!id) return finish(null);
     const row = rows.find((r) => r.id === id);
+    if (request.extra.some((r) => r.id === id)) return finish({ model: id, name: row?.name || id });
     const viaAgent = request.purpose === "agent" ? agent || "ducky" : "ducky";
     finish({ model: qualifyModelPick(viaAgent, id), name: row?.name || id });
   };

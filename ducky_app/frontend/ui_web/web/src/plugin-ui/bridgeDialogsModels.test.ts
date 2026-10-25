@@ -68,6 +68,14 @@ it("opens Ducky's model picker for a panel and returns the qualified pick", asyn
   expect(await call("ui.pickModel", {})).toMatchObject({ ok: true, result: { model: "" } });
 });
 
+it("passes a panel's extra picker rows through to the host", async () => {
+  host.pick.mockResolvedValue({ model: "typesafe:jev-1.14.0", name: "Jev 1.14.0" });
+  const extra = [{ id: "typesafe:jev-1.14.0", name: "Jev 1.14.0", group: "TypeSafe", note: "Not for chat" }];
+  const res = await call("ui.pickModel", { purpose: "video", extra });
+  expect(host.pick).toHaveBeenCalledWith(expect.objectContaining({ extra }));
+  expect(res).toMatchObject({ ok: true, result: { model: "typesafe:jev-1.14.0" } });
+});
+
 it("records from the microphone for a panel, scoped to that plugin", async () => {
   host.rec.start.mockResolvedValue({ id: "rec-1" });
   host.rec.stop.mockResolvedValue({ b64: "QUJD", mime: "audio/webm", seconds: 2.5, bytes: 3 });

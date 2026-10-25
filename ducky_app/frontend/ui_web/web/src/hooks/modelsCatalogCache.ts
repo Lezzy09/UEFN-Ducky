@@ -19,6 +19,8 @@ export interface CatalogModelRow {
   isLocal: boolean;
   supportsThinkingEffort?: boolean | null;
   thinkingMenu?: ThinkingMenu | null;
+  /** A short tag on the row instead of the tool badge, e.g. "Not for chat" (a plugin's extra rows). */
+  note?: string;
 }
 
 let cachedModels: CatalogModelRow[] | null = null;

@@ -656,7 +656,7 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
     });
     return { ok: true };
   },
-  /** Ducky's own model picker in a dialog: ``{purpose?: "video"|"chat", current?, title?}`` → ``{model, name}`` or ``{model: ""}`` when cancelled. */
+  /** Ducky's own model picker in a dialog: ``{purpose?: "video"|"chat", current?, title?, extra?: [{id, name, group, note?, vision?}]}`` → ``{model, name}`` or ``{model: ""}`` when cancelled. */
   "ui.pickModel": async (_ctx, params) => {
     if (isRemote()) throw new Error("Pick models on the PC that runs Ducky.");
     const { pickModelFromHost } = await import("./PluginModelPickerHost");
@@ -664,6 +664,7 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
       purpose: typeof params.purpose === "string" ? params.purpose : "chat",
       current: typeof params.current === "string" ? params.current : "",
       title: typeof params.title === "string" ? params.title : "",
+      extra: params.extra,
     });
     return picked ?? { model: "", name: "" };
   },
