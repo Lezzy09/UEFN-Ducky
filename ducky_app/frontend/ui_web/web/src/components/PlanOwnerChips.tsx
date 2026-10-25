@@ -11,23 +11,19 @@ import { requestLatestChatActivity } from "../navigation/latestChatActivity";
 import { requestOpenPlanTab } from "../navigation/openPlanTab";
 import { findNodePath } from "../utils/planOutlineNav";
 import { DuckyAvatar } from "./ducky/DuckyAvatars";
+import { useRoster } from "./team/rosterStore";
 import "./PlanOwnerChips.css";
 
 type Owner = { id: string; name: string; style?: string; members?: GroupMemberDto[] };
 let cachedApi: ReturnType<typeof getApi>;
 let directory: Promise<Owner[]> | undefined;
-const groups = new Map<string, Promise<GroupMemberDto[]>>();
 function owners(): Promise<Owner[]> {
   const api = getApi();
-  if (cachedApi !== api) { cachedApi = api; directory = undefined; groups.clear(); }
+  if (cachedApi !== api) { cachedApi = api; directory = undefined; }
   return directory ??= (api?.list_all_conversations?.(true) ?? Promise.resolve([])).then(rows => rows.map(row => ({
     id: row.id, name: row.title || row.ducky_name || row.id, style: row.ducky_style,
     members: row.is_group ? row.group_members || [] : undefined,
   }))).catch(() => { directory = undefined; return []; });
-}
-function members(id: string): Promise<GroupMemberDto[]> {
-  if (!groups.has(id)) groups.set(id, (getApi()?.group_members?.(id) ?? Promise.resolve({ members: [] })).then(r => r.members || []).catch(() => { groups.delete(id); return []; }));
-  return groups.get(id)!;
 }
 
 export function ownerActivity(event: AgentEvent): string | undefined {
@@ -42,22 +38,21 @@ export function PlanOwnerChips({ ownerId, activeOnly = false, nodeId }: { ownerI
   const [activity, setActivity] = useState<Record<string, string>>({});
   const [now, setNow] = useState(Date.now());
   const running = useRunningAgents();
+  // Group members come from the shared roster store: one group_members call per group for every chip.
+  const roster = useRoster(owner.members !== undefined ? ownerId : "");
+  const members = roster?.members.length ? roster.members : owner.members;
+  tracked.current = new Set([ownerId, ...(members || []).map(m => m.member_conv_id)]);
   useEffect(() => {
     let alive = true;
     async function refresh() {
       const rows = await owners();
       const found = rows.find(row => row.id === ownerId) || { id: ownerId, name: ownerId };
-      const roster = found.members !== undefined ? await members(ownerId) : undefined;
-      if (alive) {
-        const resolved = { ...found, members: roster?.length ? roster : found.members };
-        tracked.current = new Set([ownerId, ...(resolved.members || []).map(m => m.member_conv_id)]);
-        setOwner(resolved);
-      }
+      if (alive) setOwner(found);
     }
     void refresh();
     const unsubscribe = subscribeAgentEvents(event => {
       if (event.type === "chats_changed" || event.type === "plan_assignment_changed") {
-        directory = undefined; groups.clear(); void refresh();
+        directory = undefined; void refresh();
       }
       const eventChat = event.type === "linked_agent" ? event.parent_conv_id || event.conv_id : event.conv_id;
       if (!eventChat || !tracked.current.has(eventChat)) return;
@@ -74,9 +69,9 @@ export function PlanOwnerChips({ ownerId, activeOnly = false, nodeId }: { ownerI
     });
     return () => { alive = false; unsubscribe(); };
   }, [ownerId]);
-  const assigned = nodeId ? owner.members?.filter(member => member.observation?.assignment?.node_id === nodeId) : undefined;
-  const roster = assigned?.length ? assigned : owner.members || [];
-  const chips: Owner[] = [owner, ...roster.map(member => ({ id: member.member_conv_id, name: member.name || member.ducky_name || member.member_conv_id, style: member.ducky_style }))];
+  const assigned = nodeId ? members?.filter(member => member.observation?.assignment?.node_id === nodeId) : undefined;
+  const shown = assigned?.length ? assigned : members || [];
+  const chips: Owner[] = [owner, ...shown.map(member => ({ id: member.member_conv_id, name: member.name || member.ducky_name || member.member_conv_id, style: member.ducky_style }))];
   // Only a running chip shows a clock. A plan renders one of these per assigned step, and
   // each used to re-render every second whether anyone was working or not.
   const ticking = chips.some(chip => running.has(chip.id) && getChatTurnTimer(chip.id)?.startedAt);

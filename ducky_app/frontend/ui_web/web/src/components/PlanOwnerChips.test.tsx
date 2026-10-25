@@ -18,7 +18,7 @@ function emit(event: AgentEvent) { act(() => { for (const fn of state.listeners)
 afterEach(() => { cleanup(); state.running.clear(); vi.clearAllMocks(); });
 function roster() {
  api.list_all_conversations.mockResolvedValue([{ id: "g", title: "Group C", is_group: true }]);
- api.group_members.mockResolvedValue({ members: [{ member_conv_id: "b", name: "Builder", ducky_style: "classic" }] });
+ api.group_members.mockResolvedValue({ ok: true, members: [{ member_conv_id: "b", name: "Builder", ducky_style: "classic" }] });
 }
 describe("plan owners", () => {
  it("shows group and members and opens member at latest activity", async () => {
@@ -50,6 +50,18 @@ describe("plan owners", () => {
   const { container } = render(<PlanTodoCard onSelectNode={() => {}} plan={{ id: "p", chat_id: "c", title: "Plan", overview: "", body_markdown: "", todos: [], nodes: [{ id: "g", content: "Section", status: "pending", assignee: "g", children: [{ id: "s", content: "Task", status: "in_progress" }] }] }} />);
   await waitFor(() => expect(screen.getAllByText("Builder")).toHaveLength(2));
   expect(container.querySelector("button button")).toBeNull();
+ });
+ it("chips of the same group share the roster store's one group_members call", async () => {
+  api.list_all_conversations.mockResolvedValue([{ id: "g2", title: "Group Two", is_group: true }]);
+  api.group_members.mockResolvedValue({ ok: true, members: [{ member_conv_id: "m", name: "Member" }] });
+  render(<><PlanOwnerChips ownerId="g2" /><PlanOwnerChips ownerId="g2" /></>);
+  // Drops the cached chat directory without a roster push.
+  emit({ type: "plan_assignment_changed", conv_id: "elsewhere" });
+  await waitFor(() => expect(screen.getAllByText("Member")).toHaveLength(2));
+  expect(api.group_members).toHaveBeenCalledTimes(1);
+  render(<PlanOwnerChips ownerId="g2" />);
+  await waitFor(() => expect(screen.getAllByText("Member")).toHaveLength(3));
+  expect(api.group_members).toHaveBeenCalledTimes(1);
  });
  it("refreshes owner names after roster changes", async () => {
   roster(); render(<PlanOwnerChips ownerId="g" />); await screen.findByText("Group C");
