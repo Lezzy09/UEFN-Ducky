@@ -351,6 +351,17 @@ def test_twin_group_names_anywhere_in_the_tree_fail():
     assert any("two groups called 'Core'" in e for e in sb.validate(tree, ""))
 
 
+@pytest.mark.parametrize("line,muted", [("Muted: no", False), ("**Muted:** yes", True), ("", True)])
+def test_a_group_muted_line_decides_muting(tmp_path, line, muted):
+    group = _section("g", "Group", line, [_seat_sec("s", "Seat", "s/**")])
+    api = Api(tmp_path)
+    calls = []
+    api.set_muted = lambda conv_id, m: calls.append((conv_id, m))
+    out = sb.build_swarm(api=api, from_plan=_plan(group))
+    assert out["tree"][0]["muted"] is muted
+    assert calls == ([(out["tree"][0]["group_id"], True)] if muted else [])
+
+
 def test_a_hand_over_to_no_seat_fails_before_anything_is_made(tmp_path):
     api = Api(tmp_path)
     plan = _plan(_seat_sec("a", "A", "a/**", "Hands over: `a/x.py` to Nobody"))

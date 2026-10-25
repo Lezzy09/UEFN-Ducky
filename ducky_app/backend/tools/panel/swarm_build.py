@@ -283,8 +283,10 @@ def seats_from_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
         if not any(_kids(k) for k in kids):
             return seat(sec)
         sub = [node(k) for k in kids if _kids(k)]  # loose steps beside sub-sections stay with the lead
+        body = str(sec.get("body_markdown") or "")
+        muted = _plain(_line(body, "Muted")).lower()  # the card writes "Muted: yes|no"; missing = muted
         return {"group": str(sec.get("content") or "").strip(), "id": str(sec.get("id") or ""), "purpose": "",
-                "muted": True, "start_after": _plain(_line(str(sec.get("body_markdown") or ""), "Start after")),
+                "muted": muted not in ("no", "false", "off"), "start_after": _plain(_line(body, "Start after")),
                 "seats": [s for s in sub if "group" not in s], "groups": [g for g in sub if "group" in g]}
 
     return [node(sec) for sec in (plan.get("nodes") or []) if isinstance(sec, dict) and _kids(sec)]
