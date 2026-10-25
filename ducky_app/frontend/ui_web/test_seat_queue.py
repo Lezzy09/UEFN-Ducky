@@ -24,6 +24,10 @@ def q(monkeypatch):
     monkeypatch.setattr(sq, "_wave_timer", False)
     monkeypatch.setattr(sq, "_starts", {})
     monkeypatch.setattr(sq, "_retried", set())
+    monkeypatch.setattr(sq, "_idle_since", {})
+    alive: set[str] = set()  # chats with a live agent turn
+    monkeypatch.setattr(sq, "_agent_running", lambda cid: cid in alive)
+    monkeypatch.setattr(adm, "_waiting", [])
     notices: list[tuple[str, str]] = []
     monkeypatch.setattr(sq, "_notify_lead", lambda cid, text: notices.append((cid, text)))
     monkeypatch.setattr(sq, "WAVE_SIZE", 100)  # the cap tests start no waves
@@ -37,14 +41,55 @@ def q(monkeypatch):
         def go():
             started.append(cid)
             adm._running.add(cid)  # admission holds the slot until agent_stopped
+            alive.add(cid)
         return go
 
     def end(cid, reason="done", detail=""):
         adm._running.discard(cid)  # agent_modes releases the memory slot
+        alive.discard(cid)
         sq.on_turn_end(cid, reason, detail)
 
     return {"started": started, "starter": starter, "end": end, "clock": clock, "timers": timers,
-            "notices": notices}
+            "notices": notices, "alive": alive}
+
+
+def test_cap_one_a_cancelled_turn_frees_its_slot_at_once(q):
+    sq.set_run_at_once(1)
+    assert sq.request("a", q["starter"]("a")) == "started"
+    assert sq.request("b", q["starter"]("b")) == "queued"
+    q["alive"].discard("a")  # cancelled: the agent stops, admission's slot is still held
+    sq.on_turn_end("a", "cancelled")
+    assert q["started"] == ["a", "b"] and not adm.holds("a") and not sq.is_busy("a")
+
+
+def test_cap_one_a_start_that_raises_frees_its_slot_at_once(q):
+    sq.set_run_at_once(1)
+
+    def boom():
+        adm._running.add("a")  # it took the slot, then failed
+        raise RuntimeError("backend down")
+
+    assert sq.request("a", boom) == "started"
+    assert sq.request("b", q["starter"]("b")) == "started"  # a's slot came back at once
+    assert not adm.holds("a") and q["started"] == ["b"]
+
+
+def test_a_slot_whose_agent_ended_unseen_is_freed_after_a_few_seconds(q):
+    sq.set_run_at_once(1)
+    sq.request("a", q["starter"]("a"))
+    q["alive"].discard("a")  # its turn ended, but no turn-end reached the queue
+    assert sq.request("b", q["starter"]("b")) == "queued"
+    q["clock"]["t"] += sq.STALE_S
+    assert not sq.is_busy("a")  # any look at the queue frees it
+    sq.drain()
+    assert q["started"] == ["a", "b"]
+
+
+def test_a_running_agent_keeps_its_slot(q):
+    sq.set_run_at_once(1)
+    sq.request("a", q["starter"]("a"))
+    q["clock"]["t"] += 600
+    assert sq.is_busy("a") and sq.request("b", q["starter"]("b")) == "queued"
 
 
 def test_cap_four_runs_four_and_the_fifth_starts_when_one_ends(q):

@@ -13,6 +13,10 @@ First turns start in waves (``WAVE_SIZE`` per ``WAVE_GAP_S``): 3 of 14 seats ope
 "Ducky's tools didn't connect" when all started at once. A turn that ended that way never
 really ran, so the seat is idle again (``is_busy`` False): a restart or recycle may go ahead.
 Such a turn is started again once by itself; a second failure in a row tells the lead.
+
+A cancelled, stopped or failed turn frees its slot at once (``on_turn_end``), and a slot whose
+chat has run no agent for ``STALE_S`` is freed too: Oct 25 2026, a seat whose ping turn was
+cancelled stayed "busy" and its plan assignment started nothing for over 3 minutes.
 """
 
 from __future__ import annotations
@@ -31,6 +35,8 @@ PushFn = Callable[[dict[str, Any]], None]
 
 WAVE_SIZE = 3
 WAVE_GAP_S = 5.0
+STALE_S = 5.0
+_ENDED_OK = frozenset({"", "done", "completed", "finished"})
 _START_FAILED_RE = re.compile(
     r"tools didn.t connect|(?:backend|agent) (?:start error|failed to start)|could not start", re.I)
 
@@ -50,7 +56,17 @@ _first_starts: deque[float] = deque()  # when first turns started, for the waves
 _wave_timer = False
 _starts: dict[str, Callable[[], Any]] = {}  # each seat's last start, for the one retry
 _retried: set[str] = set()  # seats whose failed start was already retried once
+_idle_since: dict[str, float] = {}  # admission slots whose chat runs no agent, since when
 _now = time.monotonic
+
+
+def _agent_running(conv_id: str) -> bool:
+    try:
+        from frontend.ui_web.agent_modes import is_agent_running
+
+        return is_agent_running(conv_id)
+    except Exception:
+        return True  # can't tell: keep the slot
 
 
 def _spawn(fn: Callable[[], None], name: str) -> None:
@@ -119,9 +135,19 @@ def set_run_at_once(n: int | None) -> int:
 
 
 def _running() -> set[str]:
-    """Call under ``_lock``."""
+    """Call under ``_lock``. Frees admission slots left by turns that ended unseen."""
     with admission._lock:
         held = set(admission._running)
+    now = _now()
+    for cid in held - _starting:
+        if _agent_running(cid):
+            _idle_since.pop(cid, None)
+        elif now - _idle_since.setdefault(cid, now) >= STALE_S:
+            _idle_since.pop(cid, None)
+            admission.release(cid)
+            held.discard(cid)
+    for cid in set(_idle_since) - held:
+        _idle_since.pop(cid, None)
     return held | _starting
 
 
@@ -171,6 +197,7 @@ def on_turn_end(conv_id: str, reason: str = "", detail: str = "") -> None:
     retry: Callable[[], Any] | None = None
     with _lock:
         _starting.discard(conv_id)
+        _idle_since.pop(conv_id, None)
         if not failed:
             _retried.discard(conv_id)
         else:
@@ -181,8 +208,8 @@ def on_turn_end(conv_id: str, reason: str = "", detail: str = "") -> None:
                 retry = _starts.get(conv_id)
                 if retry is not None:
                     _retried.add(conv_id)
-    if failed:
-        admission.release(conv_id)
+    if failed or str(reason or "").lower() not in _ENDED_OK:
+        admission.release(conv_id)  # cancelled / stopped / error: free the slot now
     if retry is not None:
         request(conv_id, retry)  # through the line: the cap and the waves still apply
     elif failed:
@@ -239,6 +266,7 @@ def _run(seat: _Seat) -> None:
     except Exception:
         with _lock:
             _starting.discard(seat.conv_id)
+        admission.release(seat.conv_id)  # a start that raised holds nothing
         drain()
         return
     with _lock:
