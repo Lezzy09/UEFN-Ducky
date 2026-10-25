@@ -129,8 +129,8 @@ export function PlanOwnerChips({ ownerId, activeOnly = false, nodeId }: { ownerI
   useEffect(() => {
     let alive = true;
     async function refresh() {
-      const rows = await owners();
-      const found = rows.find(row => row.id === ownerId) || { id: ownerId, name: ownerId };
+      // A chat the cached list doesn't know yet (made since) is read once more.
+      const found = await resolveOwner(ownerId);
       if (alive) setOwner(found);
     }
     void refresh();

@@ -7,7 +7,8 @@ vi.mock("../remote/directTransport", () => ({ getDirectTransport: () => transpor
 vi.mock("../hooks/perfMonitor", () => ({
   installPerfMonitor: () => {}, noteFrameDelivery: () => {}, notePendingDepth: () => {},
 }));
-const api = vi.hoisted(() => ({ get_plan: vi.fn(), swarm_suggest: vi.fn() }));
+// The Swarm builder card's seat editor reads the model catalog (get_key_status).
+const api = vi.hoisted(() => ({ get_plan: vi.fn(), swarm_suggest: vi.fn(), get_key_status: vi.fn(async () => ({})) }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api, isRemote: () => false }));
 vi.mock("./ducky/DuckyProfileModal", () => ({ DuckyProfileModal: () => null }));
 
