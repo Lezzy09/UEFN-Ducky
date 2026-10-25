@@ -107,7 +107,33 @@ def test_running_handoff_cannot_be_reset_or_replaced(member, monkeypatch):
     monkeypatch.setattr(permission_prompt, "approvals_of", lambda _: {})
     monkeypatch.setattr(agent_modes, "run_message_and_wait", lambda *a, **k: {"status":"timeout"})
     monkeypatch.setattr(agent_modes, "is_agent_running", lambda _: True)
+    clock = [0.0]
+    monkeypatch.setattr(panel.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(panel.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
     with pytest.raises(ValueError, match="working"):
         panel.ducky_recycle_member("builder")
     assert conv.upstream_session_id == "codex-thread-1"
     assert member.saved == [] and member.cancelled == []
+
+
+def test_recycle_waits_for_the_handoff_turn_to_go_idle(member, monkeypatch):
+    # Oct 25: the handoff reply came back while its run was still marked running, so the
+    # session reset refused ("agent is working") and every recycle failed after its handoff.
+    conv = member.conv
+    conv.parent_conv_id = "group"
+    conv.folder_id = "folder"
+    conv.ducky_name = "Builder"
+    conv.is_group = False
+    group = SimpleNamespace(is_group=True)
+    monkeypatch.setattr(panel, "_project_root", lambda: "project")
+    monkeypatch.setattr(panel, "load_conversation", lambda cid, project_root=None: conv if cid == "builder" else group)
+    monkeypatch.setattr(panel, "_resolve_sender", lambda _: "")
+    monkeypatch.setattr(permission_prompt, "approvals_of", lambda _: {})
+    monkeypatch.setattr(agent_modes, "run_message_and_wait", lambda *a, **k: {"status": "done", "assistant_text": "Handoff"})
+    monkeypatch.setattr(agent_modes, "run_message", lambda *a, **k: "started")
+    still_running = [True, True, True]
+    monkeypatch.setattr(agent_modes, "is_agent_running", lambda _: bool(still_running and still_running.pop()))
+    monkeypatch.setattr(panel.time, "sleep", lambda s: None)
+    out = json.loads(panel.ducky_recycle_member("builder", wait_for_reply=False))
+    assert out["status"] == "running" and not still_running
+    assert conv.upstream_session_id == ""

@@ -2070,6 +2070,14 @@ def ducky_recycle_member(
     if not handoff_text:
         handoff_text = str(handoff_outcome.get("error") or "empty handoff")
 
+    # The handoff turn's reply lands before its run is marked idle (it runs in another
+    # process), and the session reset refuses a running chat: every recycle failed with
+    # "agent is working" after writing a handoff (Oct 25). Wait for idle first.
+    from frontend.ui_web.agent_modes import is_agent_running
+
+    idle_by = time.monotonic() + handoff_timeout
+    while is_agent_running(old_id) and time.monotonic() < idle_by:
+        time.sleep(0.5)
     # Session reset refuses a still-running handoff; history is never discarded.
     reset_context(old_id, ["session"], project_root=root)
     old_title = old.title
