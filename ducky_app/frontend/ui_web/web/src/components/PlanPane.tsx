@@ -1,4 +1,4 @@
-import { PlanLeadLinks, PlanOwnerChips, onPlanHighlight, takePlanHighlight } from "./PlanOwnerChips";
+import { PlanAssignChip, PlanLeadLinks, PlanOwnerChips, onPlanHighlight, takePlanHighlight } from "./PlanOwnerChips";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { getApi } from "../hooks/usePanelApi";
@@ -92,6 +92,21 @@ type SwarmSuggestApi = {
 function hasAssignee(nodes: PlanNode[] | undefined): boolean {
   return (nodes || []).some((n) => Boolean(n.assignee) || hasAssignee(n.children));
 }
+
+type PlannedNode = PlanNode & { planned_assignee?: string };
+type LaunchApi = {
+  plan_launch?: (chatId: string) => Promise<{ ok?: boolean; error?: string; seated?: string[]; failed?: unknown[] }>;
+};
+
+/** Sub plans (any depth) nobody is seated on yet: what Launch team hands out. */
+function openSections(nodes: PlanNode[] | undefined): PlannedNode[] {
+  return (nodes || []).flatMap((n) => [
+    ...(nodeKind(n) === "subplan" && !n.assignee && !isNodeDone(n) ? [n as PlannedNode] : []),
+    ...openSections(n.children),
+  ]);
+}
+
+const agents = (n: number) => `${n} agent${n === 1 ? "" : "s"}`;
 
 interface PlanPaneProps {
   chatId: string;
@@ -278,6 +293,32 @@ export function PlanPane({
       .catch(() => undefined);
     return () => { alive = false; };
   }, [chatId, planProjectArg, plan?.id, teamOnPlan]);
+
+  // Launch team: seat every sub plan that has a planned owner (plan_launch), after a confirm card.
+  const sections = useMemo(() => openSections(plan?.nodes), [plan]);
+  const planned = sections.filter((n) => n.planned_assignee);
+  const [launchOpen, setLaunchOpen] = useState(false);
+  const [launching, setLaunching] = useState<string[] | null>(null);
+  const seatedCount = launching
+    ? launching.filter((id) => !sections.some((n) => n.id === id && n.planned_assignee)).length
+    : 0;
+  const launchTeam = async () => {
+    const call = (getApi() as unknown as LaunchApi | null)?.plan_launch;
+    if (!call || launching) return;
+    setLaunchOpen(false);
+    setLaunching(planned.map((n) => n.id));
+    setError(null);
+    try {
+      const res = await call(chatId);
+      if (res?.ok === false) setError(res.error || "Could not launch the team");
+      else if (res?.failed?.length) setError(`Not seated: ${res.failed.map((f) => (typeof f === "string" ? f : JSON.stringify(f))).join(", ")}`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLaunching(null);
+      void reloadPlan();
+    }
+  };
 
   const buildSwarm = (confirm: SwarmConfirm) => {
     enqueueComposerDraft(chatId, `Build the swarm exactly as previewed: call ducky_swarm_create with these arguments: ${JSON.stringify(confirm)}`);
@@ -605,6 +646,18 @@ export function PlanPane({
               </>
             ) : assignedFrom ? null : plan ? (
               <>
+                {launching || (planned.length && !planFinished) ? (
+                  <button
+                    type="button"
+                    className="plan-pane-btn plan-pane-btn--primary"
+                    onClick={() => setLaunchOpen((v) => !v)}
+                    disabled={Boolean(launching)}
+                    aria-expanded={launchOpen}
+                    title="Seat each planned owner on their sub plan"
+                  >
+                    {launching ? `Seating ${seatedCount} of ${launching.length}…` : `Launch team (${agents(planned.length)})`}
+                  </button>
+                ) : null}
                 {swarm && !teamOnPlan ? (
                   <button
                     type="button"
@@ -741,6 +794,31 @@ export function PlanPane({
         ) : null}
       </div>
       <div ref={scrollRef} className="plan-pane-scroll">
+        {launchOpen && !launching && plan && !assignedFrom ? (
+          <section className="plan-launch-confirm" aria-label="Launch team">
+            <header className="plan-node-body-label">Who gets which section</header>
+            <ul className="plan-launch-list">
+              {sections.map((n) => (
+                <li key={n.id} className="plan-launch-row">
+                  <span>{n.content}</span>
+                  {n.planned_assignee ? (
+                    <PlanAssignChip chatId={chatId} nodeId={n.id} planned={n.planned_assignee} readOnly />
+                  ) : (
+                    <span className="plan-launch-nobody" style={{ opacity: 0.6 }}> · nobody yet</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <div className="plan-pane-actions">
+              <button type="button" className="plan-pane-btn plan-pane-btn--primary" onClick={() => void launchTeam()}>
+                Launch {agents(planned.length)}
+              </button>
+              <button type="button" className="plan-pane-btn plan-pane-btn--ghost" onClick={() => setLaunchOpen(false)}>
+                Cancel
+              </button>
+            </div>
+          </section>
+        ) : null}
         {swarm && swarmOpen && !teamOnPlan ? (
           <SwarmBuilderCard payload={swarm} jobs={swarm.jobs} onBuild={buildSwarm} />
         ) : null}
