@@ -676,3 +676,159 @@ def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents
         "oversized": oversized_steps(preview_seats(tree)),
         "jobs": {s["name"]: next(j for j in kept if j["name"] == s["job"]) for s in seats},
     }
+
+
+# ---- checks on a real plan (the from-plan preview) ----------------------------------------
+
+_HANDS_OVER = re.compile(r"^\s*\**hands over\**\s*:\**\s*(.+?)\s*(?:→|->)\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _kids(node: dict[str, Any]) -> list[dict[str, Any]]:
+    return [c for c in node.get("children") or [] if isinstance(c, dict)]
+
+
+def _leaf_ids(node: dict[str, Any]) -> list[str]:
+    kids = _kids(node)
+    return [i for c in kids for i in _leaf_ids(c)] if kids else [str(node.get("id") or "")]
+
+
+def _ids(raw: Any) -> list[str]:
+    return [str(a) for a in raw or [] if str(a).strip()]
+
+
+def plan_seats(plan: dict[str, Any] | None) -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
+    """(graph seats, {section id: its step ids}) for a real plan. A section whose children are
+    all steps is one seat, its lane the section's Files line; a group section's ``after``
+    applies to every seat inside it."""
+    seats: list[dict[str, Any]] = []
+    expand: dict[str, list[str]] = {}
+
+    def walk(nodes: list[dict[str, Any]], inherited: list[str]) -> None:
+        for n in nodes:
+            kids = _kids(n)
+            if not kids:
+                continue
+            nid = str(n.get("id") or "")
+            expand[nid] = _leaf_ids(n)
+            after = inherited + _ids(n.get("after"))
+            if any(_kids(k) for k in kids):
+                walk(kids, after)
+                continue
+            body = str(n.get("body_markdown") or "")
+            seats.append({"name": str(n.get("content") or nid), "id": nid, "lane": files_in(body), "body": body,
+                          "model": str(n.get("model") or ""), "after": after,
+                          "steps": [{"id": str(k.get("id") or ""), "content": str(k.get("content") or ""),
+                                     "body": str(k.get("body_markdown") or ""), "after": _ids(k.get("after"))}
+                                    for k in kids]})
+
+    walk([n for n in (plan or {}).get("nodes") or [] if isinstance(n, dict)], [])
+    return seats, expand
+
+
+def _covers(pattern: str, path: str) -> bool:
+    """A lane or Files entry names *path*: the same path, a glob over it, or its bare file name."""
+    return (pattern == path or lane_match(pattern, path) or path.endswith("/" + pattern)
+            or pattern.endswith("/" + path))
+
+
+def _shared_files(a: list[str], b: list[str], repo_files: list[str] | None) -> list[str]:
+    """Files both lanes hold: from the repo's file list, else the narrower of two overlapping entries."""
+    if repo_files is not None:
+        return [f for f in repo_files if any(_covers(p, f) for p in a) and any(_covers(q, f) for q in b)]
+    out: list[str] = []
+    for p in a:
+        for q in b:
+            hit = q if _covers(p, q) else p if _covers(q, p) else ""
+            if hit and hit not in out:
+                out.append(hit)
+    return out
+
+
+def _ancestors(deps: dict[str, list[str]]) -> dict[str, set[str]]:
+    """{step id: every step it waits for, directly or through others}."""
+    memo: dict[str, set[str]] = {}
+
+    def up(sid: str, seen: frozenset[str]) -> set[str]:
+        if sid in memo:
+            return memo[sid]
+        got: set[str] = set()
+        for d in deps.get(sid, []):
+            if d not in seen:
+                got |= {d} | up(d, seen | {d})
+        memo[sid] = got
+        return got
+
+    return {sid: up(sid, frozenset({sid})) for sid in deps}
+
+
+def _handed_over(giver: dict[str, Any], taker: dict[str, Any], file: str, ancestors: dict[str, set[str]]) -> bool:
+    """*giver* declares 'Hands over: <paths> → <taker>' for *file* and every taker step waits
+    for the giver's last step."""
+    if not giver["steps"] or not taker["steps"]:
+        return False
+    last = giver["steps"][-1]["id"]
+    if not all(last in ancestors.get(st["id"], set()) for st in taker["steps"]):
+        return False
+    for paths, to in _HANDS_OVER.findall(giver["body"]):
+        if to.strip(" `*.") in (taker["name"], taker["id"]) and any(_covers(p, file) for p in files_in(f"Files: {paths}")):
+            return True
+    return False
+
+
+def owner_conflicts(seats: list[dict[str, Any]], deps: dict[str, list[str]],
+                    repo_files: list[str] | None = None) -> list[dict[str, Any]]:
+    """[{file, seats: [a, b]}] for every file two seats' lanes hold, unless it is a declared hand-over."""
+    ancestors = _ancestors(deps)
+    out = []
+    for i, a in enumerate(seats):
+        for b in seats[i + 1:]:
+            for f in _shared_files(a["lane"], b["lane"], repo_files):
+                if not (_handed_over(a, b, f, ancestors) or _handed_over(b, a, f, ancestors)):
+                    out.append({"file": f, "seats": [a["name"], b["name"]]})
+    return out
+
+
+def after_cycles(seats: list[dict[str, Any]], deps: dict[str, list[str]]) -> list[list[str]]:
+    """Each ``after`` loop once, as the step names around it."""
+    names = {st["id"]: st["content"] for s in seats for st in s["steps"]}
+    state: dict[str, int] = {}
+    stack: list[str] = []
+    seen: set[frozenset[str]] = set()
+    out: list[list[str]] = []
+
+    def visit(sid: str) -> None:
+        state[sid] = 1
+        stack.append(sid)
+        for d in deps.get(sid, []):
+            if state.get(d) == 1:
+                loop = stack[stack.index(d):]
+                if frozenset(loop) not in seen:
+                    seen.add(frozenset(loop))
+                    out.append([names.get(x, x) for x in loop])
+            elif not state.get(d):
+                visit(d)
+        stack.pop()
+        state[sid] = 2
+
+    for sid in deps:
+        if not state.get(sid):
+            visit(sid)
+    return out
+
+
+def out_of_lane(seats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """[{seat, step, file}] for a step whose own Files line names a path outside its seat's lane."""
+    return [{"seat": s["name"], "step": st["content"], "file": p}
+            for s in seats if s["lane"] for st in s["steps"] for p in files_in(st["body"])
+            if not any(_covers(q, p) for q in s["lane"])]
+
+
+def check_plan(plan: dict[str, Any] | None, repo_files: list[str] | None = None) -> dict[str, Any]:
+    """The from-plan preview's checks. ``status`` is 'needs_answers' (build nothing) while two
+    seats own a file without a hand-over, ``after`` loops, or a step names a file outside its lane."""
+    seats, expand = plan_seats(plan)
+    deps = step_deps(seats, expand)
+    found = {"conflicts": owner_conflicts(seats, deps, repo_files), "cycles": after_cycles(seats, deps),
+             "out_of_lane": out_of_lane(seats)}
+    return {"status": "needs_answers" if any(found.values()) else "ok", **found,
+            "oversized": oversized_steps(seats), "estimate": estimate(seats)}

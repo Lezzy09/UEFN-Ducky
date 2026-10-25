@@ -162,3 +162,53 @@ def test_a_step_over_three_file_areas_is_flagged():
     assert flag["step"] == "Rewire the panel" and flag["areas"] == 3
     assert [s["content"] for s in flag["split"]] == ["Rewire the panel: a", "Rewire the panel: b",
                                                      "Rewire the panel: c"]
+
+
+# ---- from-plan checks: one live owner per file --------------------------------------------
+
+PANEL = "ducky_app/frontend/ui_web/panel_api.py"
+FILES = [PANEL, "ducky_app/frontend/ui_web/chat_rows.py", "ducky_app/frontend/agent_host/turns.py",
+         "ducky_app/frontend/settings.py"]
+
+
+def _plan(chat_extra="", host_after=None, chat_after=None, step_files=f"`{PANEL}`"):
+    return {"title": "Speed", "nodes": [
+        {"id": "s1", "content": "Chat API", "after": chat_after or [],
+         "body_markdown": f"**Files:** `{PANEL}`, `ducky_app/frontend/ui_web/chat_rows.py`{chat_extra}",
+         "children": [{"id": "a1", "content": "Split rows", "body_markdown": f"**Files:** {step_files}"},
+                      {"id": "a2", "content": "Push rows", "body_markdown": ""}]},
+        {"id": "g1", "content": "Agents", "children": [
+            {"id": "s2", "content": "Agent host", "after": host_after or [],
+             "body_markdown": f"**Files:** `{PANEL}`, `ducky_app/frontend/agent_host/**`",
+             "children": [{"id": "b1", "content": "Host turns", "body_markdown": ""}]}]}]}
+
+
+def test_two_seats_sharing_a_file_without_a_hand_over_conflict():
+    out = sp.check_plan(_plan(), FILES)
+    assert out["status"] == "needs_answers"
+    assert out["conflicts"] == [{"file": PANEL, "seats": ["Chat API", "Agent host"]}]
+
+
+def test_a_declared_hand_over_with_after_is_ok():
+    hand = f"\nHands over: `{PANEL}` → Agent host"
+    assert sp.check_plan(_plan(chat_extra=hand, host_after=["a2"]), FILES)["status"] == "ok"
+    # the after may name the giver's section too
+    assert sp.check_plan(_plan(chat_extra=hand, host_after=["s1"]), FILES)["conflicts"] == []
+    # declared, but the taker doesn't wait for it: still two live owners
+    assert sp.check_plan(_plan(chat_extra=hand), FILES)["conflicts"][0]["file"] == PANEL
+
+
+def test_after_cycle_is_reported():
+    out = sp.check_plan(_plan(host_after=["a2"], chat_after=["g1"]), FILES)
+    assert out["status"] == "needs_answers"
+    assert len(out["cycles"]) == 1 and set(out["cycles"][0]) >= {"Host turns", "Push rows"}
+
+
+def test_a_step_naming_a_file_outside_its_lane_is_reported():
+    out = sp.check_plan(_plan(step_files="`ducky_app/frontend/settings.py`, `chat_rows.py`"), FILES)
+    assert out["out_of_lane"] == [{"seat": "Chat API", "step": "Split rows", "file": "ducky_app/frontend/settings.py"}]
+
+
+def test_without_a_file_list_lane_patterns_are_compared():
+    out = sp.check_plan(_plan())
+    assert out["conflicts"] == [{"file": PANEL, "seats": ["Chat API", "Agent host"]}]
