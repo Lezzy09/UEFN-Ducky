@@ -69,7 +69,9 @@ describe("resolveToolCategory", () => {
     // A picture an agent looked at or made shows in its card, not as raw JSON.
     expect(resolveToolCategory("view_image").id).toBe("screenshot");
     expect(resolveToolCategory("ducky_generate_image").id).toBe("screenshot");
-    expect(isStandaloneToolCard("view_image")).toBe(true);
+    // Looking at a picture folds into the tools list; a made picture stays in the chat.
+    expect(isStandaloneToolCard("view_image")).toBe(false);
+    expect(isStandaloneToolCard("ducky_generate_image")).toBe(true);
   });
 
   it("maps python tools", () => {
