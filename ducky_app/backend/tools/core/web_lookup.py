@@ -796,6 +796,21 @@ def run_fetch(
     }
 
 
+def allow_web_for(conv_id: str) -> None:
+    """A workflow's Agent step with Allow web search: its ducky never stops to ask."""
+    try:
+        from frontend.chat_store import load_conversation
+
+        conv = load_conversation(conv_id)
+        if conv is None or getattr(conv, "web_access_allowed", False):
+            return
+        conv.web_access_allowed = True
+        conv.web_access_denied = False
+        _save_conv(conv)
+    except Exception:
+        return
+
+
 def remember_web_permission(conv_id: str, out: dict[str, Any]) -> None:
     """Persist an allow/deny answer from ducky_ask_user question id web_access."""
     if not conv_id or not isinstance(out, dict):

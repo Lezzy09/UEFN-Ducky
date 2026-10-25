@@ -320,6 +320,22 @@ def test_web_search_once_searches_and_does_not_remember(monkeypatch):
     assert saved == []
 
 
+def test_workflow_agent_step_allows_web_without_asking(monkeypatch):
+    from types import SimpleNamespace
+
+    conv = SimpleNamespace(id="wf-1", web_access_allowed=False, web_access_denied=False)
+    saved: list[object] = []
+    monkeypatch.setattr(web, "_save_conv", lambda c: saved.append(c))
+    monkeypatch.setattr("frontend.chat_store.load_conversation", lambda cid: conv if cid == "wf-1" else None)
+    monkeypatch.setattr(web, "_allows_everything", lambda c: False)
+    assert web.permission_block(conv, "ask")["need_permission"] is True
+    web.allow_web_for("wf-1")
+    assert saved == [conv] and web.permission_block(conv, "ask") is None
+    web.allow_web_for("wf-1")  # already allowed: no second save
+    web.allow_web_for("missing")
+    assert saved == [conv]
+
+
 def test_ask_user_conv_is_the_coding_agent_chat(monkeypatch):
     from backend.tools.panel.panel_ui import _resolve_ask_user_conv_id
     from backend.workspace import identity

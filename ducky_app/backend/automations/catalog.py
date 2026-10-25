@@ -213,6 +213,7 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "config_fields": [
             {"id": "ducky", "label": "Assign ducky", "type": "ducky"},
             {"id": "prompt", "label": "Instructions (optional; uses the workflow request)", "type": "textarea"},
+            {"id": "allow_web", "label": "Allow web search (no ask in its chat)", "type": "boolean"},
         ],
     },
     {

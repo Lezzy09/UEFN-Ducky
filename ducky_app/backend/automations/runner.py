@@ -2049,6 +2049,10 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
         return {"ok": False, "error": "group_invite did not return a member"}
     if node_id and not existing:
         seats[node_id] = seat
+    if cfg.get("allow_web") in (True, "true", "yes"):
+        from backend.tools.core.web_lookup import allow_web_for
+
+        allow_web_for(conv_id)  # nobody watches a workflow's ducky: it must not stop to ask
     worker_dir = chat_dir(conv_id)
     incoming = payload.get("files") or []
     copy_files_into(incoming, worker_dir)
