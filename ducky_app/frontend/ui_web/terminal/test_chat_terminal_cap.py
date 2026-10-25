@@ -226,7 +226,7 @@ def test_close_chat_terminals_kills_a_hung_child_and_keeps_the_rest(mgr, tmp_pat
     printing = _open(mgr, tmp_path, "member-b")["session_id"]
     hung_pid = mgr.get_session(hung)._pty.pid
     mgr.running[hung_pid] = [9999]  # a hung git, quiet for minutes
-    mgr.running[mgr.get_session(printing)._pty.pid] = [9997]  # a test run still printing
+    mgr.running[mgr.get_session(printing)._pty.pid] = [9999]  # a test run still printing (a named child)
     mgr.request_command(asking, "npm test", conv_id="member-b")
     now = mgr.get_session(hung).last_activity + manager_module._AGENT_IDLE_CLOSE_S + 1
     mgr.get_session(printing).last_activity = now - 5
