@@ -498,7 +498,9 @@ def save_folders(folders: list[ChatFolder], project_root: str | None = None) -> 
     write_json_atomic(_folders_path(project_root), {"folders": [f.to_dict() for f in folders]})
 
 
-def create_folder(name: str, parent_id: str = "", project_root: str | None = None) -> ChatFolder:
+def create_folder(
+    name: str, parent_id: str = "", project_root: str | None = None, *, group_hub_id: str = ""
+) -> ChatFolder:
     if is_archive_folder_id(parent_id):
         raise ValueError("Cannot create folders inside Archive")
     folders = load_folders(project_root)
@@ -511,6 +513,8 @@ def create_folder(name: str, parent_id: str = "", project_root: str | None = Non
         parent_id=parent_id,
         sort_order=next_order,
     )
+    if group_hub_id:
+        folder.group_hub_id = group_hub_id
     folders.append(folder)
     save_folders(folders, project_root)
     return folder
@@ -1267,6 +1271,7 @@ def create_conversation(
     project_root: str | None = None,
     coding_agent: str | None = None,
     parent_conv_id: str = "",
+    conv_id: str = "",
 ) -> Conversation:
     del enabled_packs, enabled_skills, tool_ids  # legacy pack/tool allowlists ignored
     now = time.time()
@@ -1288,7 +1293,7 @@ def create_conversation(
     model_value = (model or "").strip()
     provider_value = (provider or "").strip()
     conv = Conversation(
-        id=str(uuid.uuid4()),
+        id=(conv_id or "").strip() or str(uuid.uuid4()),
         folder_id=folder_id or "",
         title=(title.strip()[:120] if title.strip() else "New ducky"),
         created=now,

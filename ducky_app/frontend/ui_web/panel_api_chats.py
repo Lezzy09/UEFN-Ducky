@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import threading
+import uuid
 from typing import Any
 
 import frontend.ui_web.panel_api as _pa
+
+# ponytail: one lock for group creates; folder saves replace the whole list, so two at
+# once lost one's folder. Per-project locks if group creates ever need to overlap.
+_GROUP_CREATE_LOCK = threading.Lock()
 
 # Duckies made with no island open (the Global Agents folder).
 GLOBAL_SLUG = "_no_project"
@@ -450,7 +456,17 @@ class PanelApiChatsMixin:
             project_root = create_project_root(target_slug, settings.uefn_project_root or "")
         # Parent folder_id here means "create the group-folder inside this folder".
         parent_folder = (folder_id or "").strip()
-        hub_folder = _pa.create_folder(title, parent_folder, project_root)
+        with _GROUP_CREATE_LOCK:
+            return self._group_create_locked(title, parent_folder, settings, project_root, open_tab)
+
+    def _group_create_locked(
+        self, title: str, parent_folder: str, settings: Any, project_root: str | None, open_tab: bool
+    ) -> dict[str, Any]:
+        # The folder is saved already linked to its hub (Oct 25 2026): saved plain first and
+        # linked two saves later, a sidebar refresh in between showed a stray plain folder
+        # next to the group when groups were made fast.
+        hub_id = str(uuid.uuid4())
+        hub_folder = _pa.create_folder(title, parent_folder, project_root, group_hub_id=hub_id)
         conv = _pa.create_conversation(
             settings,
             hub_folder.id,
@@ -458,6 +474,7 @@ class PanelApiChatsMixin:
             ducky_style=_pa.default_bundled_style(),
             ducky_name="Group",
             project_root=project_root,
+            conv_id=hub_id,
         )
         conv.is_group = True
         conv.leader_conv_id = ""
@@ -470,13 +487,6 @@ class PanelApiChatsMixin:
         if outer_hub:
             conv.parent_conv_id = outer_hub
         _pa.save_conversation(conv, project_root)
-        # Link folder → hub so the sidebar treats the folder as the group.
-        folders = _pa.load_folders(project_root)
-        for f in folders:
-            if f.id == hub_folder.id:
-                f.group_hub_id = conv.id
-                break
-        _pa.save_folders(folders, project_root)
         _pa.notify_chats_changed(conv.id, conv.title, conv.folder_id, open_tab=bool(open_tab))
         return {
             "ok": True,

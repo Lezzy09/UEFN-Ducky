@@ -322,6 +322,42 @@ def test_a_group_made_inside_another_sits_in_it_and_is_deleted_with_it(monkeypat
         assert load_conversation(cid, project_root=str(tmp_path)) is None, cid
 
 
+def test_group_create_never_saves_a_plain_folder_even_when_made_fast(tmp_path, monkeypatch):
+    # Oct 25 2026: the folder was saved plain and linked two saves later, so a refresh in
+    # between (or a second create replacing the folder list) left a stray "Group6" folder.
+    import threading
+
+    import frontend.ui_web.panel_api as pa
+    from frontend.ui_web.panel_api_chats import PanelApiChatsMixin
+
+    root = str(tmp_path)
+    settings = PanelSettings.load()
+    settings.uefn_project_root = root
+    monkeypatch.setattr(pa.PanelSettings, "load", classmethod(lambda cls: settings))
+    monkeypatch.setattr(pa, "notify_chats_changed", lambda *a, **k: None)
+    plain_saves: list[str] = []
+    real_save = pa.save_conversation
+
+    def save_and_check(conv, project_root=None):
+        plain_saves.extend(f.name for f in load_folders(root) if f.name.startswith("G") and not f.group_hub_id)
+        real_save(conv, project_root)
+
+    monkeypatch.setattr(pa, "save_conversation", save_and_check)
+    api = PanelApiChatsMixin()
+    made: list[dict] = []
+    threads = [threading.Thread(target=lambda i=i: made.append(api.group_create(f"G{i}", "", False)))
+               for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert plain_saves == []
+    groups = [f for f in load_folders(root) if f.name.startswith("G")]
+    assert sorted(f.name for f in groups) == [f"G{i}" for i in range(8)]
+    assert {f.group_hub_id for f in groups} == {m["id"] for m in made}
+
+
 def test_a_lead_added_to_a_new_group_stays_in_its_old_group(monkeypatch, tmp_path):
     # Oct 22 2026: as_leader moved the lead into the new group's folder, leaving its old group empty.
     # A chat that leads the group it sits in keeps its place (a plain member would move).
