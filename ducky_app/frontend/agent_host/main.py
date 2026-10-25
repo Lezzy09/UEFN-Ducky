@@ -75,6 +75,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--slot", required=True)
     ap.add_argument("--pipe", required=True)
     args = ap.parse_args(argv)
+    from backend.process_role import set_role
+
+    set_role("agent_host")  # before turns load plugins: app-only work stays in the window
     key = bytes.fromhex(os.environ.pop(KEY_ENV, ""))  # never handed on to the CLIs this host starts
     serve(args.pipe, key)
     return 0

@@ -95,9 +95,9 @@ def _push(event: dict[str, Any]) -> None:
 
 
 def _in_bridge() -> bool:
-    import os
+    from backend.process_role import role
 
-    return os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1"
+    return role() != "app"  # a tool server or an agent host: live runs in the window
 
 
 def _device() -> str:

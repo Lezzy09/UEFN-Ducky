@@ -50,7 +50,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -94,7 +93,10 @@ FOLDER_IN_USE_S = 120.0  # a call this recent keeps the plugin in use
 
 
 def _in_bridge() -> bool:
-    return os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1"
+    """Not the window: a tool server or an agent host (rounds run only in the app)."""
+    from backend.process_role import role
+
+    return role() != "app"
 
 
 def _round_lock(account: str, space: str, wait: float) -> contextlib.AbstractContextManager[bool]:

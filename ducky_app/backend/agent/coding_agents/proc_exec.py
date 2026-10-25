@@ -287,6 +287,19 @@ class ProcResult:
     """Set with ``keep_stdin_open``; always closed by the time the result returns."""
 
 
+def cli_env(env_extra: dict[str, str] | None) -> dict[str, str]:
+    """A CLI's environment: ours plus ``env_extra``, without our process role, so the
+    CLI's own tool server never starts as an agent host."""
+    from backend.process_role import ENV as ROLE_ENV
+
+    env = dict(os.environ)
+    env.pop(ROLE_ENV, None)
+    for key, value in (env_extra or {}).items():
+        if key:
+            env[str(key)] = str(value)
+    return env
+
+
 def run_streaming_process(
     *,
     argv: list[str],
@@ -313,10 +326,7 @@ def run_streaming_process(
     ``new_process_group`` (Windows): start the child in its own process group, so
     ``CTRL_BREAK_EVENT`` can reach it without hitting Ducky itself.
     """
-    env = dict(os.environ)
-    for key, value in (env_extra or {}).items():
-        if key:
-            env[str(key)] = str(value)
+    env = cli_env(env_extra)
 
     workdir = (cwd or "").strip() or os.getcwd()
     if not os.path.isdir(workdir):

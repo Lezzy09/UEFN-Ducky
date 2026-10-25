@@ -195,3 +195,43 @@ def test_tools_ask_the_window_from_an_agents_tool_server(monkeypatch):
     assert json.loads(self_care_tools.ducky_health(detail=True)) == {"ok": True, "detail": True}
     monkeypatch.setattr(self_health, "self_care", lambda action, target="": {"ok": True, "action": action})
     assert json.loads(self_care_tools.ducky_self_care("collect_garbage"))["action"] == "collect_garbage"
+
+
+class _FakeSupervisor:
+    def snapshot(self):
+        return [{"slot": 0, "pid": 4120, "agents": 4, "connected": True, "alive": True},
+                {"slot": 1, "pid": 4121, "agents": 1, "connected": False, "alive": True}]
+
+
+def test_health_lists_every_agent_host(monkeypatch):
+    from backend.util import proc_table
+    from frontend.agent_host import supervisor
+
+    monkeypatch.setattr(supervisor, "get", lambda: None)
+    assert self_health.agent_hosts({}, {}) == []  # no supervisor started yet
+
+    procs = {4120: proc_table.Proc(4120, 1, "UEFN-Ducky.exe", 430 * 1024 * 1024, 410 * 1024 * 1024, 20, 0, 0.0, 0.0)}
+    rows = self_health.agent_hosts(procs, {4120: 31.0}, sup=_FakeSupervisor())
+    assert [r["slot"] for r in rows] == [0, 1]
+    assert rows[0] == {"slot": 0, "pid": 4120, "agents": 4, "connected": True, "alive": True,
+                       "cpu_percent": 31.0, "memory_mb": 430.0}
+    assert rows[1]["memory_mb"] is None and rows[1]["cpu_percent"] == 0.0
+
+
+def test_health_names_agent_host_processes():
+    assert self_health._role(["UEFN-Ducky.exe", "agent-host", "--slot", "0", "--pipe", "p"]) == "agent host"
+    assert self_health._role(["python.exe", "-m", "frontend", "agent-host", "--slot", "1", "--pipe", "p"]) == "agent host"
+    assert self_health._role(["UEFN-Ducky.exe"]) == "app"
+
+
+def test_health_flags_turns_running_in_the_window():
+    import threading
+
+    threads = [threading.Thread(name="ca-stdout-abc12345"), threading.Thread(name="core-wait")]
+    assert self_health.agents_in_window(threads, hosts_on=True) == ["abc12345"]
+    assert self_health.agents_in_window(threads, hosts_on=False) == []
+    snap = _base()
+    snap["agents_in_window"] = ["abc12345"]
+    found = [f for f in self_health.findings(snap) if "inside the window process" in f["what"]]
+    assert len(found) == 1 and "abc12345" in found[0]["what"] and found[0]["severity"] == "medium"
+    assert not [f for f in self_health.findings(_base()) if "inside the window process" in f["what"]]

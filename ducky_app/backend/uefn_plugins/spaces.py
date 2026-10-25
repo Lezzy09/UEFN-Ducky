@@ -845,7 +845,9 @@ def rebind_project_folders(project_root: str, plugins: list[str] | None = None) 
             _log.warning("pointing %s's project folder at its copy failed", plugin, exc_info=True)
     if not moved:
         return moved
-    if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") != "1":
+    from backend.process_role import is_app
+
+    if is_app():  # tool servers and agent hosts reload on the plugin's next call (epoch)
         from backend.uefn_plugins.host import reload_single_plugin
 
         for plugin in moved:

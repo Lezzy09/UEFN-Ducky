@@ -790,8 +790,11 @@ def caller(default: str = "user") -> tuple[str, str]:
     except Exception:  # noqa: BLE001
         pass
     # The MCP bridge serves only AI clients (Claude Code, Codex, Cursor...): a write there
-    # is an AI's even when it brought no ducky's name, never the person's own.
-    if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1":
+    # is an AI's even when it brought no ducky's name, never the person's own. So is an
+    # agent host's (it runs only agent turns).
+    from backend.process_role import is_app
+
+    if not is_app():
         return "agent", ""
     return default, ""
 

@@ -175,7 +175,9 @@ def run_bridge() -> None:
     """
     _ensure_repo_on_path()
     # Plugin register() skips IDE mcp.json rewrites in this mode (reconnect loop).
-    os.environ["UEFN_DUCKY_MCP_BRIDGE"] = "1"
+    from backend.process_role import set_role
+
+    set_role("tool_server")  # also sets UEFN_DUCKY_MCP_BRIDGE=1
 
     if "--adapter" in sys.argv[2:]:
         # Shared MCP (flag-on installs): stdlib relay to the one daemon. Runs before

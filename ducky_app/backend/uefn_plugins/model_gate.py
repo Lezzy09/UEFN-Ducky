@@ -91,7 +91,9 @@ def block_reason(plugin_id: str, tool_name: str, *, label: str = "", listing: bo
     if ctx is None:
         if listing:
             return ""
-        if not (identity.is_shared_call() or os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1"):
+        from backend.process_role import is_app
+
+        if not (identity.is_shared_call() or not is_app()):
             return ""
         model = ""  # an MCP client that did not say which model it runs
     else:

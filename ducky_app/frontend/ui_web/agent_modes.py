@@ -540,7 +540,9 @@ def _panel_runs(cancel: str = "", by_user: bool = True) -> dict[str, Any] | None
     """The panel's runs ({running, parents}) asked from the MCP bridge; None = use this
     process's own (it is the panel, or no panel is open and the bridge runs turns itself)."""
     global _panel_runs_cache
-    if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") != "1" or not _in_bridge_process():
+    from backend.process_role import role
+
+    if role() != "tool_server" or not _in_bridge_process():
         return None
     at, state = _panel_runs_cache
     if not cancel and time.monotonic() - at < (_PANEL_RUNS_TTL_S if state else _NO_PANEL_TTL_S):

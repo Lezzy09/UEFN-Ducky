@@ -56,6 +56,8 @@ def _role(cmdline: list[str]) -> str:
         return "shared tool server"
     if "--adapter" in args:
         return "IDE adapter"
+    if " agent-host" in f" {args}":
+        return "agent host"
     if " bridge" in f" {args}" or args.startswith("bridge"):
         return "tool server (bridge)"
     return "app"
@@ -220,7 +222,7 @@ def snapshot(detail: bool = False) -> dict[str, Any]:
         role = _role(cmd)
         row = info(proc)
         row.update({"role": role, "exe": exe,
-                    "orphan": role not in ("app", "shared tool server") and proc_table.orphan(procs, proc.pid)})
+                    "orphan": role not in ("app", "shared tool server", "agent host") and proc_table.orphan(procs, proc.pid)})
         ducky_rows.append(row)
 
     merged: dict[str, float] = {}
@@ -245,11 +247,49 @@ def snapshot(detail: bool = False) -> dict[str, Any]:
         "terminals": _terminals(),
         "storage": _storage(),
         "running_agents": _running_agents(),
+        "agent_hosts": agent_hosts(procs, cpu),
+        "agents_in_window": agents_in_window(),
     }
     if detail:
         out["perf"] = _perf()
     out["findings"] = findings(out)
     return out
+
+
+def agent_hosts(procs: dict[int, Any], cpu: dict[int, float], sup: Any = None) -> list[dict[str, Any]]:
+    """One row per agent host the app's supervisor runs (slot, pid, agents, connected, alive),
+    with the host process's CPU and memory; none started yet gives an empty list."""
+    if sup is None:
+        try:
+            from frontend.agent_host import supervisor
+
+            sup = supervisor.get()
+        except Exception:  # noqa: BLE001
+            sup = None
+    if sup is None:
+        return []
+    rows: list[dict[str, Any]] = []
+    for row in sup.snapshot():
+        proc = procs.get(row.get("pid"))
+        rows.append({**row, "cpu_percent": cpu.get(row.get("pid"), 0.0),
+                     "memory_mb": _mb(proc.rss) if proc is not None else None})
+    return rows
+
+
+def agents_in_window(threads: list[threading.Thread] | None = None, hosts_on: bool | None = None) -> list[str]:
+    """Chats (first 8 characters) whose CLI output is read in this process although agent
+    hosts are on: their turns fell back to the window."""
+    if hosts_on is None:
+        try:
+            from frontend.agent_host import turns
+
+            hosts_on = turns.enabled()
+        except Exception:  # noqa: BLE001
+            hosts_on = False
+    if not hosts_on:
+        return []
+    names = [t.name for t in (threading.enumerate() if threads is None else threads)]
+    return sorted({n[len("ca-stdout-"):] for n in names if n.startswith("ca-stdout-")})
 
 
 def _inflight() -> dict[str, Any]:
@@ -352,6 +392,14 @@ def findings(snap: dict[str, Any]) -> list[dict[str, str]]:
         out.append({"severity": "medium", "what": f"Busy Ducky threads: {names}.",
                     "why": "Each takes a fifth of a core or more; together they make other work wait for Python.",
                     "fix": "ducky_perf_report names the busiest calls; fewer running agents"})
+    in_window = snap.get("agents_in_window") or []
+    if in_window:
+        out.append({"severity": "medium",
+                    "what": "An agent is running inside the window process, not an agent host: chat "
+                            + ", ".join(in_window) + ".",
+                    "why": "Its turn could not reach an agent host and fell back to the window, where it competes "
+                           "with the UI for Python.",
+                    "fix": "ducky_health's agent_hosts shows whether the hosts started; the next turn tries a host again."})
     piled = [r for r in app.get("inflight") or [] if int(r.get("count") or 0) > 20 or float(r.get("oldest_s") or 0) > 10]
     if piled:
         names = ", ".join(f"{r['method']} ×{r['count']}" for r in piled)

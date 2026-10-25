@@ -16,6 +16,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from backend.process_role import is_app
 from backend.uefn_plugins.plugin_version import format_plugin_version, plugin_version_rank
 from backend.uefn_plugins.store import (
     PLUGIN_MANIFEST,
@@ -1195,7 +1196,7 @@ def _folder_plugin_call(pid: str, tool_name: str, current: Callable[..., Any]) -
     the call goes to the reloaded tool, which is returned. None: run the tool as loaded."""
     from backend.uefn_plugins.scopes import caller
 
-    actor, _ = caller("agent" if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1" else "user")
+    actor, _ = caller("user" if is_app() else "agent")
     if actor == "agent":
         try:
             from backend.uefn_plugins import vcs_engine
@@ -1937,7 +1938,7 @@ def _start_files_watch() -> None:
     """Only the agents' tool server: the app reloads plugins itself on its own installs, and
     an install in the tool server asks the app to reload (store._reload_in_app_process)."""
     global _FILES_WATCH_STARTED
-    if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") != "1" or _FILES_WATCH_STARTED:
+    if is_app() or _FILES_WATCH_STARTED:
         return
     _FILES_WATCH_STARTED = True
 
@@ -3579,7 +3580,7 @@ def heal_crashed_plugins() -> list[str]:
 
 def _start_crash_heal() -> None:
     """Fetch fixed versions of crashed plugins off the boot path (the app window owns it)."""
-    if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1" or not _read_crashed():
+    if not is_app() or not _read_crashed():
         return
     threading.Thread(target=heal_crashed_plugins, name="uefn-plugin-crash-heal", daemon=True).start()
 
@@ -4274,7 +4275,7 @@ class _PluginApi:
 
                 # One tool call is one change to a shared copy, made by the calling agent
                 # (an MCP client of the bridge is an agent even without a ducky's name).
-                actor, ducky = caller("agent" if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1" else "user")
+                actor, ducky = caller("user" if is_app() else "agent")
                 with write_group(pid, actor=actor, ducky=ducky, message=tool_name):
                     # A plugin that keeps declared folders: checked once its call marker is down
                     # (a move of its folders either waited for this call or finished first).
@@ -4543,10 +4544,8 @@ class _PluginApi:
             return
         # Bridge stdio process must never rewrite mcp.json — Cursor reconnects and
         # cancels tools. Panel / ship_newest owns IDE apply.
-        import os
-
-        if os.environ.get("UEFN_DUCKY_MCP_BRIDGE") == "1":
-            self.log(f"IDE auto-apply skipped ({kind}): MCP bridge process")
+        if not is_app():
+            self.log(f"IDE auto-apply skipped ({kind}): not the app window")
             return
         from frontend.ide_apply import auto_apply_skip_reason
 
