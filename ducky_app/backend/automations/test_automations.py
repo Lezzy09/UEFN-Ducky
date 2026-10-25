@@ -1086,3 +1086,19 @@ def test_tool_call_exposes_parsed_json_for_branches(monkeypatch):
     ctx.update({k: v for k, v in step["result"].items() if k != "ok"})
     assert runner._eval_branch({"field": "data.hints", "op": "exists"}, ctx) is True
     assert runner._eval_branch({"field": "data.hints", "op": "exists"}, {"data": {"compile": {}}}) is False
+
+
+def test_select_options_from_plugin_handler(monkeypatch) -> None:
+    from backend.automations import catalog, plugin
+
+    monkeypatch.setattr("backend.uefn_plugins.host.is_plugin_enabled", lambda pid: pid == "testplug")
+    plugin.register_node("testplug", "test.bots", lambda _ctx: [{"id": "bob", "label": "Bob"}])
+    try:
+        rows = catalog._fields([
+            {"id": "bot_id", "type": "select", "options_from": "test.bots"},
+            {"id": "gone", "type": "select", "options_from": "test.missing"},
+        ])
+        assert rows[0]["options"] == [{"id": "bob", "label": "Bob"}]
+        assert "options" not in rows[1]
+    finally:
+        plugin.clear_for_plugin("testplug")

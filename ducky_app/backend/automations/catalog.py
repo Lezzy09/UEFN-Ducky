@@ -611,6 +611,20 @@ def _plugin_node(
     }
 
 
+def _live_options(handler_id: str) -> list[Any]:
+    """A dropdown's choices a plugin lists live (its Discord bots): the handler it registered under that id."""
+    from backend.automations import plugin
+
+    fn = plugin.get_handler(handler_id)
+    if fn is None:
+        return []
+    try:
+        rows = fn({})
+    except Exception:
+        return []
+    return rows if isinstance(rows, list) else []
+
+
 def _fields(raw: Any) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     if not isinstance(raw, list):
@@ -634,6 +648,8 @@ def _fields(raw: Any) -> list[dict[str, Any]]:
             # Whose backends it picks from (Text to Image by default): listed like that node's.
             row["node_type"] = str(f.get("node_type") or "").strip() or "image.generate"
         opts = f.get("options")
+        if f.get("options_from"):
+            opts = [*(opts if isinstance(opts, list) else []), *_live_options(str(f["options_from"]))]
         if isinstance(opts, list):
             clean: list[dict[str, str]] = []
             for opt in opts:
