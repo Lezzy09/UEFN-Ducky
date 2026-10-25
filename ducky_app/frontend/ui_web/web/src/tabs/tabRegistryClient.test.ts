@@ -3,13 +3,15 @@ import { beforeEach, expect, it, vi } from "vitest";
 
 const focusTab = vi.fn();
 const getTabOwner = vi.fn();
+const reportOpen = vi.fn();
+const claimTab = vi.fn();
 let onEvent: (event: { type: string; tab_id: string; window_id: string }) => void;
 vi.mock("../hooks/usePanelApi", () => ({
   getApi: () => ({
     focus_tab: focusTab,
     get_tab_owner: getTabOwner,
-    claim_tab: vi.fn(),
-    report_open_tabs: vi.fn(),
+    claim_tab: claimTab,
+    report_open_tabs: reportOpen,
   }),
 }));
 vi.mock("../hooks/useAgentEventBus", () => ({
@@ -68,6 +70,30 @@ it("keeps opening after a registry failure or a tab owned elsewhere", async () =
   const elsewhere = vi.fn();
   await openOrFocusTab("file:y", elsewhere);
   expect(elsewhere).not.toHaveBeenCalled();
+});
+
+it("reports and claims only when the tab list changes", async () => {
+  vi.useFakeTimers();
+  try {
+    reportOpenTabsNow(["chat:a"]);
+    reportOpen.mockClear();
+    claimTab.mockClear();
+    // Re-renders with the same tabs: nothing sent, nothing claimed.
+    for (let i = 0; i < 5; i++) {
+      reportOpenTabs(["chat:a"]);
+      await vi.advanceTimersByTimeAsync(300);
+    }
+    reportOpenTabsNow(["chat:a"]);
+    expect(reportOpen).not.toHaveBeenCalled();
+    expect(claimTab).not.toHaveBeenCalled();
+    // A new tab: one report, one claim for the new tab only.
+    reportOpenTabs(["chat:a", "chat:b"]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reportOpen).toHaveBeenCalledTimes(1);
+    expect(claimTab.mock.calls.map(([id]) => id)).toEqual(["chat:b"]);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("opens locally when the registry lookup stalls instead of wedging later opens", async () => {

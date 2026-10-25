@@ -126,9 +126,9 @@ type PaneInset = { left: number; top: number; right: number; bottom: number; vis
 const paneInsets = new Map<string, { iframe: HTMLIFrameElement; inset: PaneInset }>();
 const lastSentBounds = new Map<string, { key: string; at: number }>();
 
-/** Force a resend even when the rect is unchanged — self-heals any native drift
- * (mid-resize stale-scale applies, missed messages) within half a second. */
-const BOUNDS_HEARTBEAT_MS = 500;
+/** Resend an unchanged rect once a minute (self-heals native drift, missed messages).
+ * A rect changed by >= 1 px sends at once; tab mounts clear the dedupe. */
+const BOUNDS_HEARTBEAT_MS = 60_000;
 
 /**
  * When > 0, native WebView2 panes stay hidden so HTML modals / autocomplete
@@ -333,7 +333,7 @@ export function pushBrowserPaneBounds(tabId: string, iframe?: HTMLIFrameElement 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const key = [x, y, w, h, vw, vh, visible ? 1 : 0]
-    .map((n) => Math.round(Number(n) * 10))
+    .map((n) => Math.round(Number(n)))
     .join(",");
   const last = lastSentBounds.get(tabId);
   const now = Date.now();

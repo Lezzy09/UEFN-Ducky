@@ -54,9 +54,19 @@ function claim(tabId: string): void {
 // entries that stop heartbeating (stale owners made focus_tab raise dead windows,
 // which blocked opening those files anywhere). An API without the method (a partial
 // panel API) skips the report instead of throwing on every visibility change.
+// Every 20 s (the backend drops a window after 30 s of silence), skipped when a real
+// report went out in the last 15 s.
+let lastSentAt = 0;
+function sendReport(ids: string[]): void {
+  lastSentAt = Date.now();
+  void getApi()?.report_open_tabs?.(WINDOW_ID, ids);
+}
 setVisibleInterval(() => {
-  void getApi()?.report_open_tabs?.(WINDOW_ID, [...lastReported]);
-}, 10_000);
+  if (Date.now() - lastSentAt < 15_000) return;
+  sendReport([...lastReported]);
+}, 20_000);
+
+const sameIds = (ids: string[]): boolean => ids.length === lastReported.size && ids.every((id) => lastReported.has(id));
 
 // Best-effort ownership release when a focus window is closed by any path (OS X
 // button, backend close) — the heartbeat expiry is only the crash fallback.
@@ -73,7 +83,7 @@ export function releaseAllTabs(): void {
   lastReported = new Set();
   localOpenTabIds = new Set();
   log("releasing all tabs (window closing)");
-  void getApi()?.report_open_tabs?.(WINDOW_ID, []);
+  sendReport([]);
 }
 
 /** Immediate (non-debounced) report — call on tab CLOSE so ownership frees at
@@ -84,7 +94,8 @@ export function reportOpenTabsNow(tabIds: string[]): void {
   const ids = registryTabIds(tabIds);
   if (reportTimer !== null) window.clearTimeout(reportTimer);
   reportTimer = null;
-  void getApi()?.report_open_tabs?.(WINDOW_ID, ids);
+  if (sameIds(ids)) return;
+  sendReport(ids);
   lastReported = new Set(ids);
 }
 
@@ -97,7 +108,9 @@ export function reportOpenTabs(tabIds: string[]): void {
   if (reportTimer !== null) window.clearTimeout(reportTimer);
   reportTimer = window.setTimeout(() => {
     reportTimer = null;
-    void getApi()?.report_open_tabs?.(WINDOW_ID, ids);
+    // Same tabs as last sent: nothing to report and nothing new to claim.
+    if (sameIds(ids)) return;
+    sendReport(ids);
     for (const id of ids) {
       if (!lastReported.has(id)) claim(id);
     }
