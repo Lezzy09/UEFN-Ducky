@@ -56,7 +56,8 @@ import {
   readCaretToken,
   type ChatRef,
 } from "./chatReferences";
-import { useChatReferenceCatalog } from "./useChatReferenceCatalog";
+import { useChatReferenceCatalog, useFileRefMatches } from "./useChatReferenceCatalog";
+import { answerAskUserWithMessage } from "../ask-user";
 import { useInnerRefSearch } from "./useInnerRefSearch";
 import {
   commandsForScope,
@@ -68,6 +69,10 @@ import {
 } from "./slashCommands";
 
 type Attachments = ReturnType<typeof useComposerAttachments>;
+
+/** Shown while the @ / slash catalog loads for the first time; picking it does nothing. */
+const LOADING_REF: ChatRef = { trigger: "@", id: "__loading__", label: "Loading…", group: "", href: "" };
+const REF_TRIGGER = /[@/~]/;
 type OpenFile = (path: string, name: string, options?: { line?: number }) => void;
 
 /** The composer buttons its right-click menu can hide (Send and Stop always stay). */
@@ -190,6 +195,12 @@ export function composerSend(
     }
     ctx.setInputText("");
     ctx.runSlashCommand(slash.command, slash.argument);
+    return;
+  }
+
+  // An open ducky_ask_user in this chat: the message is its answer, never also a steer.
+  if (!overrideText && answerAskUserWithMessage(ctx.chatId, text)) {
+    ctx.setInputText("");
     return;
   }
 
@@ -617,19 +628,25 @@ export function ChatComposer({
     [availableCommands, slashQuery],
   );
   const caretToken = readCaretToken(inputText, caret);
-  const { mentions, slashRefs, files } = useChatReferenceCatalog(true, chat.id);
+  // Nothing loads on mount or chat switch: the first @, / or ~ typed loads the shared catalog.
+  const { mentions, slashRefs, files, loading: refsLoading } = useChatReferenceCatalog(
+    REF_TRIGGER.test(inputText),
+    chat.id,
+  );
   const showMentions = mentionsOn && caretToken?.trigger === "@";
   const showSlashRefs = slashRefsOn && caretToken?.trigger === "/";
+  const fileMatches = useFileRefMatches(caretToken?.query ?? "", showSlashRefs, files);
   const showSearch = (mentionsOn || slashRefsOn) && caretToken?.trigger === "~";
   const searchQuery = showSearch ? caretToken?.query ?? "" : "";
   const searchHits = useInnerRefSearch(searchQuery, showSearch, files, slashRefs);
   const refMatches = useMemo(() => {
+    if (refsLoading && (showMentions || showSlashRefs)) return [LOADING_REF];
     if (showSearch) return mergeInnerRefs(instantInnerRefs(searchQuery, mentions, slashRefs, files), searchHits);
     const pool = showMentions ? mentions : showSlashRefs ? slashRefs : [];
     const named = filterChatRefs(pool, caretToken?.query ?? "");
     if (!showSlashRefs || !(caretToken?.query ?? "").trim()) return named;
-    return [...named, ...filterChatRefs(files, caretToken?.query ?? "").slice(0, 12)];
-  }, [showSearch, searchQuery, searchHits, showMentions, showSlashRefs, mentions, slashRefs, files, caretToken?.query]);
+    return [...named, ...fileMatches.slice(0, 12)];
+  }, [refsLoading, showSearch, searchQuery, searchHits, showMentions, showSlashRefs, mentions, slashRefs, files, fileMatches, caretToken?.query]);
   const pickerCommands = slashQuery === null ? [] : slashMatches;
   const pickerCount = pickerCommands.length + refMatches.length;
   const slashMenuOpen = !slashDismissed && pickerCount > 0;
@@ -671,6 +688,7 @@ export function ChatComposer({
 
   const insertChatReference = useCallback(
     (ref: ChatRef) => {
+      if (ref.id === LOADING_REF.id) return;
       const el = textareaRef.current;
       const caretNow = el && document.activeElement === el ? composerCaret(el) : caret;
       const token = readCaretToken(inputText, caretNow);

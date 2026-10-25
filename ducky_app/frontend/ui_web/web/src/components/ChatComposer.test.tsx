@@ -5,8 +5,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatTab } from "../types/panel";
 
 // Every panel call answers with an empty list: enough for the composer to settle.
+const calls = vi.hoisted(() => [] as { method: string; args: unknown[] }[]);
 const api = vi.hoisted(() => new Proxy({}, {
-  get: (_target, prop) => (prop === "then" ? undefined : () => Promise.resolve([])),
+  get: (_target, prop) => (prop === "then" ? undefined : (...args: unknown[]) => {
+    calls.push({ method: String(prop), args });
+    return Promise.resolve([]);
+  }),
 }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api, isRemote: () => false, isPanelApiReady: () => true }));
 vi.mock("../remote/directTransport", () => ({ getDirectTransport: () => null }));
@@ -14,7 +18,9 @@ vi.mock("../voice/VoiceControls", () => ({ VoiceControls: () => null }));
 vi.mock("../voice/VoiceOverlay", () => ({ VoiceOverlay: () => null }));
 vi.mock("./ModelSelector", () => ({ ModelSelector: () => null }));
 
-import { ChatComposer, type ChatComposerProps } from "./ChatComposer";
+import { ChatComposer, composerSend, type ChatComposerProps, type ComposerSendContext } from "./ChatComposer";
+import { _resetChatReferenceStoreForTests } from "./chatReferenceStore";
+import { _resetAskUserForTests, runAskUser } from "../ask-user/runAskUser";
 import { ConfirmModalProvider } from "../contexts/ConfirmModalContext";
 
 const chat: ChatTab = { id: "composer-chat", name: "Builder" };
@@ -48,8 +54,24 @@ function Composer({ onSend }: { onSend: (text?: string) => void }) {
 beforeEach(() => {
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  calls.length = 0;
+  _resetChatReferenceStoreForTests();
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); _resetAskUserForTests(); });
+
+const CATALOG = ["list_all_conversations", "list_agent_profiles", "get_skill_info", "list_mcp_servers",
+  "list_recent_projects", "list_project_file_paths", "list_workflows"];
+
+function sendCtx(text: string, over: Partial<ComposerSendContext> = {}): ComposerSendContext {
+  return {
+    chatId: chat.id, inputText: text, availableCommands: [], setSlashStatus: noop, setInputText: vi.fn(),
+    runSlashCommand: noop, showDefaultModelCta: false, hasLlmProviders: true, pickModelFirst: false,
+    hasContent: true, sendAfterPickRef: { current: false }, adoptDefaultModel: async () => true,
+    openModelPicker: noop, toApiAttachments: () => [], clearAttachments: noop, agentRunning: true,
+    canQueue: true, canCompose: true, canSend: true, agentMode: "agent", selectedModel: "m",
+    codingAgent: "ducky", dispatchSend: vi.fn(), ...over,
+  } as unknown as ComposerSendContext;
+}
 
 it("renders the draft and sends from the Send button", () => {
   const onSend = vi.fn();
@@ -57,4 +79,26 @@ it("renders the draft and sends from the Send button", () => {
   expect(screen.getByRole("textbox").textContent).toBe("hello");
   fireEvent.click(screen.getByTitle("Send"));
   expect(onSend).toHaveBeenCalledTimes(1);
+});
+
+it("mounting the composer (a chat switch) fetches no @ / slash catalog", () => {
+  render(<ConfirmModalProvider><Composer onSend={vi.fn()} /></ConfirmModalProvider>);
+  expect(calls.filter((call) => CATALOG.includes(call.method))).toEqual([]);
+});
+
+it("Send with an open question answers it and never steers", async () => {
+  const asked = runAskUser([{ id: "path", prompt: "Which?", options: [{ id: "b", label: "B" }] }], "", chat.id);
+  const ctx = sendCtx("use option B");
+  composerSend(ctx);
+  await expect(asked).resolves.toMatchObject({ ok: true, free_text: "use option B" });
+  expect(calls.some((call) => call.method === "steer_message")).toBe(false);
+  expect(ctx.dispatchSend).not.toHaveBeenCalled();
+  expect(ctx.setInputText).toHaveBeenCalledWith("");
+});
+
+it("Send with no open question steers the running turn as before", () => {
+  composerSend(sendCtx("keep going"));
+  const steers = calls.filter((call) => call.method === "steer_message");
+  expect(steers).toHaveLength(1);
+  expect(steers[0].args[2]).toBe("keep going");
 });
