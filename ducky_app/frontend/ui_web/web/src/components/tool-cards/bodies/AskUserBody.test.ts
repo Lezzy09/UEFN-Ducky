@@ -3,8 +3,10 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// One array: useSyncExternalStore loops forever when the snapshot is a new object each read.
+const noModels = vi.hoisted(() => [] as never[]);
 vi.mock("../../../hooks/modelsCatalogCache", () => ({
-  getCachedModels: () => [],
+  getCachedModels: () => noModels,
   loadModelsCatalog: async () => [],
   subscribeModelsCatalog: () => () => {},
 }));
