@@ -11,6 +11,10 @@
  * `extra` adds the plugin's own rows ({id, name, group, note?, vision?}), each group its own
  * accordion: Play Tester lists Jev under TypeSafe and Ducky AI, tagged "Not for chat". A picked
  * extra row comes back as its id, as given.
+ *
+ * With `anchor` (the panel button's box in app coordinates) there is no dialog: the same
+ * gateway menu as the chat composer drops down from that button, API models only, and the
+ * first pick answers.
  */
 import { useEffect, useState } from "react";
 
@@ -30,7 +34,21 @@ interface PickRequest {
   current: string;
   title: string;
   extra: CatalogModelRow[];
+  anchor: PickAnchor | null;
   resolve: (result: ModelPickResult | null) => void;
+}
+export interface PickAnchor {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+function anchorBox(raw: unknown): PickAnchor | null {
+  const r = (raw && typeof raw === "object" ? raw : null) as Record<string, unknown> | null;
+  if (!r) return null;
+  const [left, top, width, height] = [r.left, r.top, r.width, r.height].map(Number);
+  return [left, top, width, height].every(Number.isFinite) ? { left, top, width, height } : null;
 }
 
 /** A plugin's extra rows as catalog rows; anything without an id and a group is dropped. */
@@ -67,6 +85,7 @@ export function pickModelFromHost(options: {
   current?: string;
   title?: string;
   extra?: unknown;
+  anchor?: unknown;
 }): Promise<ModelPickResult | null> {
   if (!openPicker) return Promise.reject(new Error("model picker is not mounted"));
   const show = openPicker;
@@ -76,6 +95,7 @@ export function pickModelFromHost(options: {
       current: String(options.current || ""),
       title: String(options.title || ""),
       extra: extraRows(options.extra),
+      anchor: anchorBox(options.anchor),
       resolve,
     }),
   );
@@ -106,6 +126,11 @@ export function PluginModelPickerHost() {
     };
   }, []);
 
+  // The dropdown's selector mounts with the request, so it is opened once it is there.
+  useEffect(() => {
+    if (request?.anchor) setOpenSignal((n) => n + 1);
+  }, [request]);
+
   if (!request) return null;
   const rows = [
     ...request.extra,
@@ -123,6 +148,33 @@ export function PluginModelPickerHost() {
     const viaAgent = request.purpose === "agent" ? agent || "ducky" : "ducky";
     finish({ model: qualifyModelPick(viaAgent, id), name: row?.name || id });
   };
+
+  if (request.anchor) {
+    const { left, top, width, height } = request.anchor;
+    const pick = (id: string) => {
+      const row = rows.find((r) => r.id === id);
+      if (request.extra.some((r) => r.id === id)) return finish({ model: id, name: row?.name || id });
+      finish({ model: qualifyModelPick("ducky", id), name: row?.name || id });
+    };
+    return (
+      <div style={{ position: "fixed", left, top, width, height, opacity: 0, pointerEvents: "none" }} aria-hidden="true">
+        <ModelSelector
+          selectedModel={picked}
+          setSelectedModel={pick}
+          extraRows={request.extra}
+          requireVision={request.purpose === "video"}
+          apiOnly
+          closeOnPick
+          preserveSelection
+          openSignal={openSignal}
+          menuPlacement="bottom"
+          onOpenChange={(open) => {
+            if (!open) finish(null);
+          }}
+        />
+      </div>
+    );
+  }
   const title =
     request.title ||
     (request.purpose === "video"

@@ -250,6 +250,14 @@ export function paneCoveredByHtml(
   return false;
 }
 
+/** A box in a panel's own coordinates moved onto the app page (the iframe's offset added). */
+export function panelBoxOnPage(iframe: HTMLIFrameElement | null | undefined, box: unknown): Record<string, number> | null {
+  const b = (box && typeof box === "object" ? box : null) as Record<string, unknown> | null;
+  if (!b || !iframe) return null;
+  const frame = iframe.getBoundingClientRect();
+  return { left: frame.left + Number(b.left), top: frame.top + Number(b.top), width: Number(b.width), height: Number(b.height) };
+}
+
 function postPaneSnapshot(iframe: HTMLIFrameElement, paneId: string, data: string): void {
   iframe.contentWindow?.postMessage(
     { channel: BRIDGE_CHANNEL, event: { type: "browser_pane_snapshot", pane_id: paneId, data } }, "*");
@@ -656,8 +664,8 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
     });
     return { ok: true };
   },
-  /** Ducky's own model picker in a dialog: ``{purpose?: "video"|"chat", current?, title?, extra?: [{id, name, group, note?, vision?}]}`` → ``{model, name}`` or ``{model: ""}`` when cancelled. */
-  "ui.pickModel": async (_ctx, params) => {
+  /** Ducky's own model picker: ``{purpose?: "video"|"chat", current?, title?, extra?: [{id, name, group, note?, vision?}], anchor?: {left, top, width, height}}`` → ``{model, name}`` or ``{model: ""}`` when cancelled. With ``anchor`` (a box in the panel) it drops down from there instead of opening a dialog. */
+  "ui.pickModel": async (ctx, params) => {
     if (isRemote()) throw new Error("Pick models on the PC that runs Ducky.");
     const { pickModelFromHost } = await import("./PluginModelPickerHost");
     const picked = await pickModelFromHost({
@@ -665,6 +673,7 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
       current: typeof params.current === "string" ? params.current : "",
       title: typeof params.title === "string" ? params.title : "",
       extra: params.extra,
+      anchor: panelBoxOnPage(ctx.iframe, params.anchor),
     });
     return picked ?? { model: "", name: "" };
   },

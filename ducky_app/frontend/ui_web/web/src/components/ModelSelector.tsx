@@ -128,6 +128,16 @@ interface ModelSelectorProps {
   labeled?: boolean;
   /** Stacking for the menu when the picker sits in a layer above the app (the setup). */
   menuZIndex?: number;
+  /** A plugin's own rows; a providerKey no gateway has becomes its own gateway, listed first. */
+  extraRows?: CatalogModelRow[];
+  /** Only models that can read pictures (extra rows say so themselves). */
+  requireVision?: boolean;
+  /** API models only: no coding agents (Claude Code, Codex) under the gateways. */
+  apiOnly?: boolean;
+  /** Told when the menu opens or closes. */
+  onOpenChange?: (open: boolean) => void;
+  /** Close the menu once a model is picked. */
+  closeOnPick?: boolean;
 }
 
 export function ModelSelector({
@@ -149,6 +159,11 @@ export function ModelSelector({
   onEffortChange,
   labeled = false,
   menuZIndex,
+  extraRows,
+  requireVision = false,
+  apiOnly = false,
+  onOpenChange,
+  closeOnPick = false,
 }: ModelSelectorProps) {
   const contrib = usePluginContributions();
   const [isOpen, setIsOpen] = useState(false);
@@ -176,15 +191,22 @@ export function ModelSelector({
   const histCountRef = useRef(0);
   const suppressPopRef = useRef(false);
 
-  const visibleModels = useMemo(
-    () => (requireTools ? models.filter((m) => m.supportsTools) : models),
-    [models, requireTools],
-  );
+  const visibleModels = useMemo(() => {
+    const base = models.filter((m) => (!requireTools || m.supportsTools) && (!requireVision || m.supportsVision));
+    return extraRows?.length ? [...extraRows, ...base] : base;
+  }, [models, requireTools, requireVision, extraRows]);
 
-  const gateways = useMemo(
-    () => buildPickerGateways(contrib.llm_providers, agents, contrib.llm_coding_agents),
-    [contrib.llm_providers, contrib.llm_coding_agents, agents],
-  );
+  const gateways = useMemo(() => {
+    let out = buildPickerGateways(contrib.llm_providers, agents, contrib.llm_coding_agents);
+    if (apiOnly) out = out.map((g) => ({ ...g, nestedAgents: [], primaryAgentId: null }));
+    const own: PickerGateway[] = [];
+    for (const row of extraRows ?? []) {
+      const key = normId(row.providerKey);
+      if (!key || out.some((g) => g.providerKey === key) || own.some((g) => g.providerKey === key)) continue;
+      own.push({ id: key, label: row.provider, providerKey: key, pluginId: "", order: -1, nestedAgents: [], primaryAgentId: null, showsThinkingEffort: false });
+    }
+    return [...own, ...out];
+  }, [contrib.llm_providers, contrib.llm_coding_agents, agents, apiOnly, extraRows]);
 
   const syncFromCatalog = useCallback((allModels: CatalogModelRow[]) => {
     setModels(allModels);
@@ -314,7 +336,7 @@ export function ModelSelector({
   );
 
   // Gateway picker when we can switch coding agents and gateways exist; else flat catalog.
-  const twoLevel = !!setCodingAgent && !catalogRows && gateways.length > 0;
+  const twoLevel = (!!setCodingAgent || apiOnly) && !catalogRows && gateways.length > 0;
   const singleAgent = codingAgent || "ducky";
 
   const selectedProviderKey = useMemo(() => {
@@ -508,7 +530,10 @@ export function ModelSelector({
     }
   }, []);
 
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
   const closeNow = useCallback(() => {
+    if (openRef.current) onOpenChangeRef.current?.(false);
     openRef.current = false;
     setIsOpen(false);
     setNav(null);
@@ -585,6 +610,7 @@ export function ModelSelector({
     setNav(twoLevel ? current?.id ?? null : null);
     setOpenVendor(null);
     setIsOpen(true);
+    onOpenChangeRef.current?.(true);
     histCountRef.current = 0;
     pushHist();
     if (!agents.length) void loadAgents();
@@ -684,7 +710,9 @@ export function ModelSelector({
         className={`model-selector-option${isSel ? " is-selected" : ""}${disabled ? " is-disabled" : ""}`}
         title={disabled ? "Unavailable — enable in Settings → LLMs" : undefined}
         onClick={() => {
-          if (!disabled) pickModel(m, opts.agentId, m.providerKey);
+          if (disabled) return;
+          pickModel(m, opts.agentId, m.providerKey);
+          if (closeOnPick) requestClose();
         }}
       >
         <span className="model-selector-option-name" title={m.name}>

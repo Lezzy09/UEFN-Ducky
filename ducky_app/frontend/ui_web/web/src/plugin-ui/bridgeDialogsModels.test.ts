@@ -76,6 +76,17 @@ it("passes a panel's extra picker rows through to the host", async () => {
   expect(res).toMatchObject({ ok: true, result: { model: "typesafe:jev-1.14.0" } });
 });
 
+it("moves a panel's anchor box onto the app page so the picker drops down from the button", async () => {
+  host.pick.mockResolvedValue(null);
+  const iframe = { getBoundingClientRect: () => ({ left: 300, top: 40 }) } as unknown as HTMLIFrameElement;
+  const anchored = { ...(ctx as object), iframe } as never;
+  await handleBridgeRequest(anchored, {
+    channel: BRIDGE_CHANNEL, id: "2", method: "ui.pickModel",
+    params: { purpose: "video", anchor: { left: 10, top: 5, width: 120, height: 28 } },
+  } as never);
+  expect(host.pick).toHaveBeenCalledWith(expect.objectContaining({ anchor: { left: 310, top: 45, width: 120, height: 28 } }));
+});
+
 it("records from the microphone for a panel, scoped to that plugin", async () => {
   host.rec.start.mockResolvedValue({ id: "rec-1" });
   host.rec.stop.mockResolvedValue({ b64: "QUJD", mime: "audio/webm", seconds: 2.5, bytes: 3 });
