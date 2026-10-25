@@ -18,6 +18,19 @@ there are no separate subagents.
 Make a swarm: write the jobs from the request → `ducky_swarm_create(goal, jobs)` → answer the
 one card (agents, size limits, detail, models) → preview → Build. Never seat a whole team by hand.
 
+**Team = one `ducky_swarm_create` call (HARD).** It validates first and builds all seats or
+none; never hand-chain `ducky_group_create` / `ducky_spawn_chat` / `ducky_group_set_lane`
+(hand-built swarms left half-made groups and seats without lanes). Example:
+
+```python
+ducky_swarm_create(goal="Shop island", jobs=[
+    {"name": "Verse: shop logic", "purpose": "gameplay", "task": "Buy and sell",
+     "steps": ["Buy and sell device"], "paths": ["Content/Verse/Shop/**"]},
+    {"name": "UI: shop HUD", "purpose": "gameplay", "task": "Shop panel",
+     "steps": ["Shop panel widget"], "paths": ["Content/UI/Shop/**"]},
+])
+```
+
 1. First write every job from the person's request, each `{name, purpose, task, steps[],
    paths[], kind?, model?}`: a game might get Narrative, Modeling, Texture, Research; a movie
    Script, Storyboard, Editing. Then call it **without `detail`**, so the question card asks
@@ -54,7 +67,8 @@ of working alone.
 ## Delegate: reuse first, add second, recycle when bloated
 
 1. `ducky_list_duckies`: pick the specialist by `when_to_use`.
-2. A swarm: `ducky_group_create(name)` (reused if it exists), then
+2. A whole team is a swarm (`ducky_swarm_create`, above). One helper for your own work:
+   `ducky_group_create(name)` (reused if it exists), then
    `ducky_group_add_member(group_id, <your chat id>, as_leader=true)` to lead it.
    Nest a group inside another (`ducky_group_create(name, parent_folder_id=…)`) only for
    a sub-team with its own lead; one more helper joins your own group instead.
