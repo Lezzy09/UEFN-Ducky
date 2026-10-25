@@ -303,7 +303,7 @@ def test_plan_edit_tools_return_the_node_not_the_whole_plan(team, notices, monke
     out = _json.loads(added)
     assert out["ok"] and out["node"]["content"] == "One more step" and out["node"]["body_markdown"] == "Do it."
     assert "nodes" not in out["plan"] and out["progress"]["total"] >= 31
-    assert any(row["content"] == "One more step" for row in out["outline"])
+    assert "outline" not in out  # ducky_get_plan(outline=true) reads it
     node_id = out["node"]["id"]
     assert len(ducky_panel.ducky_plan_move_node(node_id=node_id, index=0, chat_id="coord")) < 6_000
     deleted = _json.loads(ducky_panel.ducky_plan_delete_node(node_id=node_id, chat_id="coord"))

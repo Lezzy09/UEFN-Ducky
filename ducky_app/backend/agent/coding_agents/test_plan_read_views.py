@@ -95,12 +95,14 @@ def test_plan_edits_reply_with_the_step_and_counts_only(big_plan):
     node_id = json.loads(added)['node']['id']
     replies.append(panel.ducky_plan_move_node(node_id=node_id, parent_id='a', index=0, chat_id='coord'))
     replies.append(panel.ducky_plan_delete_node(node_id=node_id, chat_id='coord'))
+    plans.update_plan('coord', status='active', project_root=big_plan)
     replies.append(panel.ducky_plan_update_node(node_id='a1', status='in_progress', chat_id='coord'))
     for raw in replies:
         out = json.loads(raw)
         assert out['ok'] and len(raw) < 2_000, (len(raw), raw[:200])
         assert 'outline' not in out and 'nodes' not in out['plan'] and 'children' not in out['node']
-        assert out['progress']['total'] >= 80 and out['next_tick']['call']
+        assert out['progress']['total'] >= 80 and 'next_tick' in out  # None while paused
+    assert json.loads(replies[-1])['next_tick']['call']
     assert json.loads(replies[0])['node']['body_markdown'].startswith('Do it.')
     assert json.loads(replies[-1])['node']['status'] == 'in_progress'
 

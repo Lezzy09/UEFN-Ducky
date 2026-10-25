@@ -222,7 +222,7 @@ def ducky_plan_update_node(
     return tool_json(attach_next_tick(result, plan if plan.get("kind") != "template" else None), pretty=pretty)
 
 
-_NOTES_IN_REPLY = 400
+_NOTES_IN_REPLY = 240
 
 
 def _plan_edit_result(plan: dict[str, Any], node: dict[str, Any] | None) -> dict[str, Any]:
