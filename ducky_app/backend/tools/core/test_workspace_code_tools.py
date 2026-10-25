@@ -776,3 +776,14 @@ def test_first_description_line_says_what_for_and_never(name) -> None:
     first = inspect.getdoc(getattr(wc, name)).splitlines()[0]
     assert len(first) < 120, first
     assert "never" in first.lower(), first
+
+
+def test_view_image_opens_the_capture_file_a_chat_names(tmp_path: Path, monkeypatch):
+    captures = tmp_path / "tool_captures"
+    captures.mkdir()
+    shot = captures / "Screenshot 2026-10-25 131252.png"
+    shot.write_bytes(b"\x89PNG\r\n")
+    monkeypatch.setattr("frontend.ui_web.tool_captures.tool_captures_dir", lambda **_: captures)
+    assert wc._image_path(str(shot)) == os.path.realpath(shot)
+    # Only straight inside the folder: a nested or outside picture still goes through the workspace check.
+    assert wc._capture_file(str(tmp_path / "elsewhere.png")) == ""

@@ -552,6 +552,20 @@ _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 _MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 
+def _capture_file(raw: str) -> str:
+    """A picture straight inside Ducky's tool_captures folder: the "Capture file:" a chat
+    message names next to the attachment copy."""
+    try:
+        from frontend.ui_web.tool_captures import tool_captures_dir
+
+        full = os.path.realpath(raw)
+        if os.path.dirname(full) == os.path.realpath(str(tool_captures_dir())):
+            return full
+    except Exception:
+        pass
+    return ""
+
+
 def _image_path(path: str) -> str:
     """An image in the open project, another of the person's projects, or a chat's
     attachments (pictures the person sent, screenshots Ducky took)."""
@@ -560,7 +574,7 @@ def _image_path(path: str) -> str:
         raise ValueError("path is required")
     if not raw.lower().endswith(_IMAGE_SUFFIXES):
         raise ValueError(f"Not a picture ({', '.join(_IMAGE_SUFFIXES)}): {raw!r}")
-    full = chat_file_path(raw) or resolve_workspace_path(raw)
+    full = chat_file_path(raw) or _capture_file(raw) or resolve_workspace_path(raw)
     if not os.path.isfile(full):
         raise ValueError(f"No such picture: {raw!r}")
     if os.path.getsize(full) > _MAX_IMAGE_BYTES:
