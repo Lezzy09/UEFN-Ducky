@@ -547,32 +547,15 @@ def _section_text(work: dict[str, Any]) -> str:
     return f"{zlib.crc32(chr(1).join(rows).encode('utf-8', 'replace')):08x}"
 
 
-_SPEC_CHARS = 1200
-
-
 def _spec(plan: dict[str, Any]) -> str:
     """The main plan's description: the lead's spec for the whole team, as one block.
 
     Oct 15 2026: members given only their own points put their files at the project root
-    instead of the spec's pocket_ledger/ and renamed a field the spec named. The keeper's plan
-    rows carry no description, so the plan itself is read."""
-    doc = plan
-    if "body_markdown" not in plan and plan.get("project_root"):
-        try:
-            from backend.agent.coding_agents.plans import load_plan
+    instead of the spec's pocket_ledger/ and renamed a field the spec named. Oct 24 2026: a
+    1200-character cut dropped hard rules mid-sentence, so team_brief keeps whole sections."""
+    from frontend.ui_web.team_brief import spec_brief
 
-            doc = load_plan(str(plan.get("chat_id") or ""), plan.get("project_root")) or plan
-        except Exception:
-            doc = plan
-    overview = str(doc.get("overview") or "").strip()
-    body = str(doc.get("body_markdown") or "").strip()
-    text = body if overview and body.startswith(overview) else "\n\n".join(p for p in (overview, body) if p)
-    if not text:
-        return ""
-    if len(text) > _SPEC_CHARS:
-        text = text[:_SPEC_CHARS].rstrip() + f" …(the rest: ducky_get_plan(chat_id=\"{plan.get('chat_id')}\"))"
-    return ("Spec from your lead, for the whole team (keep its folders, file names and field names "
-            f"exactly):\n{text}\n\n")
+    return spec_brief(plan)
 
 
 def _task_text(plan: dict[str, Any], work: dict[str, Any]) -> str:

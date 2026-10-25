@@ -272,10 +272,27 @@ def test_the_spec_is_read_from_the_plan_and_capped(monkeypatch) -> None:
     monkeypatch.setattr(plans, "load_plan", lambda cid, root=None: {"overview": "Ledger.", "body_markdown": "Use pocket_ledger/."}
                         if (cid, root) == ("coord", "C:/island") else None)
     assert "Ledger.\n\nUse pocket_ledger/." in keeper._spec({"chat_id": "coord", "project_root": "C:/island"})
-    # About 1200 characters at most, with where to read the rest.
-    long = keeper._spec({"chat_id": "coord", "body_markdown": "x" * 5000})
-    assert "x" * 1200 in long and "x" * 1201 not in long and 'ducky_get_plan(chat_id="coord")' in long
     assert keeper._spec({"chat_id": "coord"}) == ""  # no description: no spec block
+
+
+def test_a_long_spec_keeps_hard_rules_and_the_sub_plans_files_done_when_and_not_yours(monkeypatch) -> None:
+    # A 6 kB spec used to be cut at character 1200, mid-rule.
+    monkeypatch.setattr(keeper, "_team_context", lambda plan, **_: ({"builder", "builder2"}, ""))
+    monkeypatch.setattr("backend.agent.a2a_broker.automatic_work_blocked", lambda cid, **kw: False)
+    filler = " ".join(["word"] * 300)
+    spec = (f"Opening {filler}\n\n## Hard rules\nNo secret in git, no .env, no stray files.\n\n"
+            f"## Background\n{filler}\n\n## Decisions\nOne writer thread.\n\n## Notes\n{filler}\n\n"
+            f"## Contract\nfx(level: int) -> str\n\n## History\n{filler}")
+    assert len(spec) > 6000
+    plan = {**SUB, "body_markdown": spec, "nodes": [{**SUB["nodes"][0],
+            "body_markdown": "Files: fx.py\nDone when: glow test passes\nNot yours: ui.py"}, SUB["nodes"][1]]}
+    woke: list[tuple[str, str]] = []
+    _run(0, [], woke, plans=[plan])
+    task = woke[0][1]
+    for kept in ("## Hard rules\nNo secret in git, no .env, no stray files.", "## Decisions\nOne writer thread.",
+                 "## Contract\nfx(level: int) -> str", "Files: fx.py", "Done when: glow test passes", "Not yours: ui.py"):
+        assert kept in task
+    assert 'section="History"' in task  # soft sections drop whole, with where to read them
 
 
 def test_a_member_whose_turn_ends_with_points_left_is_started_again(monkeypatch) -> None:
