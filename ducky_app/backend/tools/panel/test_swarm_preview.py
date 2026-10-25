@@ -94,8 +94,8 @@ def test_four_code_jobs_get_an_interfaces_section_the_others_wait_for(monkeypatc
     others = [s for s in p["plan"]["sections"] if s["seat"] != sp.INTEGRATOR]
     assert len(others) == 4 and all(s["after"] == [f"{sp.INTEGRATOR}#1"] for s in others)
     assert sp.INTEGRATOR in p["jobs"]
-    # interfaces first: one step, then the 2-step seats
-    assert p["estimate"]["total"]["minutes"] == 3 * sp.MINUTES_PER_STEP
+    # interfaces first, then the 2-step seats side by side, then the Integrator wires them in
+    assert p["estimate"]["total"]["minutes"] == 4 * sp.MINUTES_PER_STEP
 
 
 def test_interfaces_can_be_turned_off_and_need_three_code_seats(monkeypatch):
@@ -105,3 +105,30 @@ def test_interfaces_can_be_turned_off_and_need_three_code_seats(monkeypatch):
     two = sp.build_preview("Plugin", [_job(n) for n in CODE4[:2]] + [_job("Story", kind="narrative")],
                            "auto", 8, 5)
     assert sp.INTEGRATOR not in two["lanes"]
+
+
+# ---- integrator glue ----------------------------------------------------------------------
+
+REPO = ["plugins/pk/plugin.json", "plugins/pk/README.md", "plugins/pk/backend/__init__.py",
+        "plugins/pk/backend/setup.py", "plugins/pk/backend/export/run.py", "plugins/pk/backend/store/api.py",
+        "plugins/pk/ui/index.html", "plugins/pk/ui/app.js", "plugins/pk/ui/css/app.css"]
+
+
+def test_integrator_owns_the_glue_and_no_other_lane_holds_it(monkeypatch):
+    monkeypatch.setattr(sp, "_price", lambda model: None)
+    jobs = [_job("Setup", paths=["plugins/pk/backend/**"]), _job("Export", paths=["plugins/pk/backend/export/**"]),
+            _job("Store", paths=["plugins/pk/backend/store/**"]), _job("Panel", paths=["plugins/pk/ui/**"])]
+    p = sp.build_preview("Plugin", jobs, "auto", 8, 5, detail=2, repo_files=REPO)
+    glue = ["plugins/pk/plugin.json", "plugins/pk/backend/__init__.py", "plugins/pk/ui/index.html"]
+    assert p["lanes"][sp.INTEGRATOR] == glue
+    for seat, lane in p["lanes"].items():
+        if seat != sp.INTEGRATOR:
+            assert not any(sp.lane_match(pat, g) for pat in lane for g in glue), (seat, lane)
+    # carved lanes still hold everything else they had
+    assert set(p["lanes"]["Setup lead"]) == {"plugins/pk/backend/export/**", "plugins/pk/backend/setup.py",
+                                             "plugins/pk/backend/store/**"}
+    assert set(p["lanes"]["Panel lead"]) == {"plugins/pk/ui/app.js", "plugins/pk/ui/css/**"}
+    integ = next(s for s in p["plan"]["sections"] if s["seat"] == sp.INTEGRATOR)
+    assert integ["steps"][0]["content"].startswith("Interfaces:")  # its first point
+    assert set(integ["steps"][1]["after"]) == {"Setup lead#2", "Export lead#2", "Store lead#2", "Panel lead#2"}
+    assert p["jobs"][sp.INTEGRATOR]["paths"] == glue

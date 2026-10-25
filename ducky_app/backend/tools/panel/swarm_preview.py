@@ -414,34 +414,119 @@ def estimate(seats: list[dict[str, Any]]) -> dict[str, Any]:
     return {"seats": out, "total": {"tokens": tokens, "minutes": minutes, "cost_usd": cost, "text": text}}
 
 
-# ---- interfaces first ---------------------------------------------------------------------
+# ---- interfaces first, glue owned by the Integrator ---------------------------------------
 
 CODE_KINDS = {"developer", "app"}
 INTEGRATOR = "Integrator"
+# The files every seat of a plugin or app feature would touch; the Integrator alone owns them.
+GLUE_FILES = ("plugin.json", "backend/__init__.py", "ui/index.html")
 _INTERFACES_STEP = {
     "content": "Interfaces: pin the shared names before anyone builds",
     "body_markdown": ("Write and commit what the seats call across modules: RPC and panel method names, "
                       "error codes, helper signatures, as stubs with tests against fakes. Every other seat "
                       "starts when this step is done."),
 }
+_WIRE_STEP = {
+    "content": "Wire the seats' work into the glue files",
+    "body_markdown": ("Register every seat's work: plugin.json inputs and tools, backend/__init__.py "
+                      "register(), ui/index.html script tags and the panel-call list. Keep the shared lint "
+                      "rules (relative imports) passing."),
+}
 
 
-def add_integrator(tree: list[dict[str, Any]], lead_model: str = "") -> dict[str, Any] | None:
-    """3+ code seats share a codebase: add an Integrator seat at the root whose first step
-    ('Interfaces') every other seat waits for. Returns its job, None when not needed."""
+def lane_match(pattern: str, path: str) -> bool:
+    """*pattern* (a lane glob) covers *path*; a pattern lanes refuse covers nothing."""
+    from backend.workspace import lanes
+
+    try:
+        return lanes.match(pattern, path)
+    except ValueError:
+        return False
+
+
+def _literal_dir(path: str) -> list[str]:
+    """Folder segments of a lane entry before its first wildcard (a file name dropped)."""
+    segs: list[str] = []
+    for seg in path.replace("\\", "/").strip("/").split("/"):
+        if any(c in seg for c in "*?["):
+            return segs
+        segs.append(seg)
+    return segs[:-1] if segs and "." in segs[-1] else segs
+
+
+def _glue_root(paths: list[str]) -> str:
+    """The deepest folder all *paths* share, above any backend/ or ui/ folder."""
+    dirs = [_literal_dir(p) for p in paths] or [[]]
+    root: list[str] = []
+    for segs in zip(*dirs):
+        if len(set(segs)) > 1:
+            break
+        root.append(segs[0])
+    while root and root[-1] in ("backend", "ui"):
+        root.pop()
+    return "/".join(root)
+
+
+def _carve(prefix: str, glue: set[str], files: list[str]) -> list[str]:
+    """Lane entries covering every file under *prefix* except *glue* (from the repo's files)."""
+    base = f"{prefix}/" if prefix else ""
+    kids: dict[str, bool] = {}
+    for f in files:
+        if f.startswith(base):
+            head, sep, _ = f[len(base):].partition("/")
+            kids[head] = kids.get(head, False) or bool(sep)
+    out: list[str] = []
+    for name, is_dir in sorted(kids.items()):
+        path = base + name
+        if not is_dir:
+            out += [] if path in glue else [path]
+        elif any(g.startswith(path + "/") for g in glue):
+            out += _carve(path, glue, files)
+        else:
+            out.append(f"{path}/**")
+    return out
+
+
+def _without_glue(lane: list[str], glue: list[str], repo_files: list[str] | None) -> list[str]:
+    """*lane* minus the glue files: a folder lane holding one is carved into its other entries
+    (needs *repo_files*); any other pattern stays and the owner check reports it."""
+    out: list[str] = []
+    for p in lane:
+        if p in glue:
+            continue
+        held = {g for g in glue if lane_match(p, g)}
+        dir_lane = p.endswith("/**") and not any(c in p[:-3] for c in "*?[")
+        if held and dir_lane and repo_files is not None:
+            out += [x for x in _carve(p[:-3], held, repo_files) if x not in out]
+        else:
+            out.append(p)
+    return out
+
+
+def add_integrator(tree: list[dict[str, Any]], lead_model: str = "",
+                   repo_files: list[str] | None = None) -> dict[str, Any] | None:
+    """3+ code seats share a codebase: add an Integrator seat at the root. Its first step
+    ('Interfaces') runs before every other seat; its lane is the glue files, which leave
+    every other lane; its last step wires the seats' work in after they finish. Returns its
+    job, None when not needed."""
     seats = list(walk_seats(tree))
     code = [s for s in seats if s["kind"] in CODE_KINDS]
     if len(code) < 3 or any(s["name"] == INTEGRATOR for s in seats):
         return None
-    steps = _steps([_INTERFACES_STEP])
+    root = _glue_root([p for s in code for p in s["paths"]])
+    glue = [f"{root}/{g}" if root else g for g in GLUE_FILES]
+    steps = _steps([_INTERFACES_STEP, _WIRE_STEP])
+    steps[1]["after"] = [f"{s['name']}#{len(s['sub_plan']['steps'])}" for s in seats]
     for s in seats:
         s["sub_plan"]["after"] = [f"{INTEGRATOR}#1"]
+        s["paths"] = _without_glue(s["paths"], glue, repo_files)
+    model = lead_model or code[0]["model"]
     tree.append({"name": INTEGRATOR, "job": INTEGRATOR, "kind": "developer", "profile": "developer",
-                 "model": lead_model or code[0]["model"], "paths": [],
+                 "model": model, "paths": glue,
                  "sub_plan": {"title": "Interfaces", "done": 0, "total": len(steps), "steps": steps}})
-    return {"name": INTEGRATOR, "purpose": "Shared interfaces the other seats build against", "task": "",
-            "steps": steps, "paths": [], "kind": "developer", "profile": "developer",
-            "suggested_model": lead_model or code[0]["model"], "model": ""}
+    return {"name": INTEGRATOR, "purpose": "Shared interfaces and the glue files every seat plugs into",
+            "task": "", "steps": steps, "paths": glue, "kind": "developer", "profile": "developer",
+            "suggested_model": model, "model": ""}
 
 
 # ---- preview and edits --------------------------------------------------------------------
@@ -495,14 +580,15 @@ def _tree_edits(tree: list[dict[str, Any]], edits: list[dict[str, Any]]) -> None
 
 def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents: int, per_group: int,
                   edits: list[dict[str, Any]] | None = None, detail: int = SUGGESTED_DETAIL,
-                  lead_model: str = "") -> dict[str, Any]:
+                  lead_model: str = "", repo_files: list[str] | None = None) -> dict[str, Any]:
+    """The preview for *jobs*; *repo_files* (the repo's file list) lets lanes be carved exactly."""
     edits = [e for e in edits or [] if isinstance(e, dict)]
     jobs = fix_routes(jobs, lead_model)
     kept = capped_jobs(_job_edits(apply_detail(jobs, detail), edits), agents, max_agents)
     tree = plan_tree(kept, agents, max_agents, per_group)
     _tree_edits(tree, edits)
     if all(e.get("interfaces", True) is not False for e in edits):
-        made = add_integrator(tree, lead_model)
+        made = add_integrator(tree, lead_model, repo_files)
         if made:
             kept.append(made)
     seats = list(walk_seats(tree))
