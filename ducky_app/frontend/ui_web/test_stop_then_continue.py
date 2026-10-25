@@ -1,57 +1,41 @@
-"""Stop → follow-up must cancel the live run instead of rejecting the send."""
+"""A send while a turn runs never stops it: the text is queued and offered as a steer.
+
+Only the Stop button (cancel_agent, by_user=True) ends a turn; the follow-up typed after
+it runs once that turn is idle.
+"""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from frontend.ui_web import agent_modes
+from backend.agent import a2a_broker
+from frontend.ui_web import agent_modes, steer
 
 
-def test_run_message_cancels_live_run_before_starting_follow_up():
+def test_run_message_queues_follow_up_instead_of_cancelling_live_run():
     pushes: list[dict] = []
-    running = {"live": True}
-    conv = SimpleNamespace(
-        id="chat-1",
-        title="t",
-        messages=[],
-        model="gpt-test",
-        provider="openai",
-        coding_agent="ducky",
-        folder_id=None,
-        file_path="",
-    )
-
-    def fake_is_running(_cid: str) -> bool:
-        return running["live"]
-
-    def fake_cancel(_cid=None, **_kw) -> None:
-        running["live"] = False
-
-    def fake_wait(_cid: str, _timeout: float = 2.0) -> bool:
-        running["live"] = False
-        return True
+    conv = SimpleNamespace(id="chat-1", title="t", messages=[], model="gpt-test", provider="openai",
+                           coding_agent="ducky", folder_id=None, file_path="")
 
     with (
         patch.object(agent_modes, "_in_bridge_process", return_value=False),
-        patch.object(agent_modes, "is_agent_running", side_effect=fake_is_running),
-        patch.object(agent_modes, "cancel_agent", side_effect=fake_cancel) as cancel,
-        patch.object(agent_modes, "wait_for_idle", side_effect=fake_wait) as wait,
-        patch.object(agent_modes, "load_conversation", return_value=conv),
-        # Bail after the cancel gate — we only assert Stop→continue unwinds the old run.
-        patch.object(agent_modes.PanelSettings, "load", side_effect=RuntimeError("stop-after-cancel")),
+        patch.object(agent_modes, "is_agent_running", return_value=True),
+        patch.object(agent_modes, "cancel_agent") as cancel,
+        patch.object(agent_modes, "wait_for_idle") as wait,
+        patch.object(agent_modes, "load_conversation", return_value=conv) as load,
+        patch.object(agent_modes, "_pending_agent_messages", {}),
+        patch.object(agent_modes, "_pending_steered", {}),
+        patch.object(a2a_broker, "_retry_queue_later", lambda cid: None),
     ):
         try:
-            agent_modes.run_message(
-                "chat-1",
-                "fix spacing",
-                "agent",
-                "gpt-test",
-                push=pushes.append,
-            )
-        except RuntimeError as e:
-            assert str(e) == "stop-after-cancel"
+            out = agent_modes.run_message("chat-1", "fix spacing", "agent", "gpt-test", push=pushes.append)
+            assert out == "queued"
+            assert agent_modes._pending_agent_messages["chat-1"] == ["fix spacing"]
+            assert [m["text"] for m in steer._inbox.get("chat-1", [])] == ["fix spacing"]
+        finally:
+            steer.end_run("chat-1")
 
-    assert cancel.called
-    assert wait.called
-    assert running["live"] is False
+    assert not cancel.called and not wait.called
+    assert not load.called  # no second turn started over the live one
+    assert not any("already running" in str(e.get("text")) for e in pushes)
