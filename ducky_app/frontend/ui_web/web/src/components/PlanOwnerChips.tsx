@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "react";
-import type { AgentEvent, GroupMemberDto } from "../types/panel";
+import type { AgentEvent, ChatPlan, GroupMemberDto, PlanNode } from "../types/panel";
 import { getApi } from "../hooks/usePanelApi";
 import { subscribeAgentEvents } from "../hooks/useAgentEventBus";
 import { useRunningAgents } from "../hooks/useRunningAgents";
@@ -8,6 +8,8 @@ import { getCachedChatMessages } from "../hooks/chatMessagesCache";
 import { agentStepText, buildActivityLines, activityPanelTitle, splitTurnMessages } from "../utils/agentActivity";
 import { requestOpenChatTab } from "../navigation/openChatReference";
 import { requestLatestChatActivity } from "../navigation/latestChatActivity";
+import { requestOpenPlanTab } from "../navigation/openPlanTab";
+import { findNodePath } from "../utils/planOutlineNav";
 import { DuckyAvatar } from "./ducky/DuckyAvatars";
 import "./PlanOwnerChips.css";
 
@@ -103,4 +105,63 @@ export function PlanOwnerChips({ ownerId, activeOnly = false, nodeId }: { ownerI
       </button>;
     })}
   </div>;
+}
+
+// A plan tab highlights the node it was opened for: delivered at once to a pane already
+// showing that chat's plan, otherwise kept until the pane's first load takes it.
+const pendingHighlight = new Map<string, string>();
+const highlightListeners = new Map<string, Set<(nodeId: string) => void>>();
+
+export function requestPlanHighlight(chatId: string, nodeId: string): void {
+  const live = highlightListeners.get(chatId);
+  if (live?.size) live.forEach(fn => fn(nodeId));
+  else pendingHighlight.set(chatId, nodeId);
+}
+
+export function takePlanHighlight(chatId: string): string | null {
+  const nodeId = pendingHighlight.get(chatId) ?? null;
+  pendingHighlight.delete(chatId);
+  return nodeId;
+}
+
+export function onPlanHighlight(chatId: string, fn: (nodeId: string) => void): () => void {
+  const set = highlightListeners.get(chatId) ?? new Set();
+  set.add(fn);
+  highlightListeners.set(chatId, set);
+  return () => { set.delete(fn); };
+}
+
+export function openLeadPlan(chatId: string, title: string, nodeId: string): void {
+  requestPlanHighlight(chatId, nodeId);
+  requestOpenPlanTab({ chatId, title });
+}
+
+/** Lead and Full plan buttons for a member's part of a team plan, with the parent sections as a crumb. */
+export function PlanLeadLinks({ assignedFrom }: { assignedFrom: NonNullable<ChatPlan["assigned_from"]> }) {
+  const { chat_id: leadId, node_id: nodeId, plan_title: title } = assignedFrom;
+  const [leadName, setLeadName] = useState(leadId);
+  const [sections, setSections] = useState<PlanNode[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void owners().then(rows => {
+      const row = rows.find(r => r.id === leadId);
+      if (alive && row) setLeadName(row.name);
+    });
+    // ponytail: reads the lead's whole plan once per mount for the crumb; a path-only call if big plans make this slow.
+    void getApi()?.get_plan?.(leadId, null).then(res => {
+      if (alive) setSections(findNodePath(res.plan?.nodes, nodeId) || []);
+    }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [leadId, nodeId]);
+  return <nav className="plan-pane-nest-crumb plan-lead-links" aria-label="Lead plan">
+    <button type="button" className="plan-pane-btn plan-pane-btn--ghost" onClick={() => requestOpenChatTab(leadId, leadName)}
+      title="Open the lead's chat">Lead: {leadName}</button>
+    <span className="plan-pane-nest-crumb-sep" aria-hidden>·</span>
+    <button type="button" className="plan-pane-btn plan-pane-btn--accent" onClick={() => openLeadPlan(leadId, title, nodeId)}
+      title="This chat's part of a team plan. Open the whole plan to edit it.">Full plan</button>
+    {sections.map(node => <span key={node.id}>
+      <span className="plan-pane-nest-crumb-sep" aria-hidden>›</span>
+      <button type="button" className="plan-pane-nest-crumb-link" onClick={() => openLeadPlan(leadId, title, node.id)}>{node.content}</button>
+    </span>)}
+  </nav>;
 }

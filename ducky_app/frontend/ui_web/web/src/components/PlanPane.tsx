@@ -1,4 +1,4 @@
-import { PlanOwnerChips } from "./PlanOwnerChips";
+import { PlanLeadLinks, PlanOwnerChips, onPlanHighlight, takePlanHighlight } from "./PlanOwnerChips";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { getApi } from "../hooks/usePanelApi";
@@ -146,6 +146,15 @@ export function PlanPane({
     return () => { loadRevision.current += 1; };
   }, [chatId, planProjectArg]);
 
+  // A member's Lead links open this plan at their section.
+  const highlightFromLink = useCallback((nodeId: string, nodes?: PlanNode[]) => {
+    setFocusNodeId(null);
+    setHighlightNodeId(nodeId);
+    const path = findNodePath(nodes, nodeId);
+    const content = path?.[path.length - 1]?.content || "";
+    requestAnimationFrame(() => scrollPlanToNode(scrollRef.current, nodeId, content));
+  }, []);
+
   const reloadPlan = useCallback(async () => {
     const api = getApi();
     if (!api?.get_plan) return;
@@ -154,12 +163,19 @@ export function PlanPane({
       const res = await api.get_plan(chatId, planProjectArg ?? null);
       if (revision !== loadRevision.current) return;
       setPlan(res.plan ?? null);
+      const linked = res.plan ? takePlanHighlight(chatId) : null;
+      if (linked) highlightFromLink(linked, res.plan?.nodes);
       setProgress(res.progress ?? null);
       setError(res.ok ? null : res.error || "Could not load plan");
     } catch (err) {
       if (revision === loadRevision.current) setError(String(err));
     }
-  }, [chatId, planProjectArg]);
+  }, [chatId, planProjectArg, highlightFromLink]);
+
+  useEffect(
+    () => onPlanHighlight(chatId, (nodeId) => highlightFromLink(nodeId, plan?.nodes)),
+    [chatId, plan, highlightFromLink],
+  );
 
   useEffect(() => {
     setTemplateMsg(null);
@@ -555,18 +571,7 @@ export function PlanPane({
                   Cancel
                 </button>
               </>
-            ) : assignedFrom ? (
-              <button
-                type="button"
-                className="plan-pane-btn plan-pane-btn--accent"
-                onClick={() =>
-                  requestOpenPlanTab({ chatId: assignedFrom.chat_id, title: assignedFrom.plan_title })
-                }
-                title="This chat's part of a team plan. Open the whole plan to edit it."
-              >
-                Open full plan
-              </button>
-            ) : plan ? (
+            ) : assignedFrom ? null : plan ? (
               <>
                 {plan.team_plan ? (
                   <button
@@ -645,6 +650,7 @@ export function PlanPane({
             {viewPlan?.title || plan?.title || chatName || "Plan"}
           </h2>
         )}
+        {!editing && assignedFrom ? <PlanLeadLinks assignedFrom={assignedFrom} /> : null}
         {!editing && assignedFrom?.assignee ? <PlanOwnerChips ownerId={assignedFrom.assignee} /> : null}
         {!editing && plan ? (
           <nav className="plan-pane-nest-crumb" aria-label="Plan location">

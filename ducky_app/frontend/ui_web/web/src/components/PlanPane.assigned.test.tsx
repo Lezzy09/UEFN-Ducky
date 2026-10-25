@@ -11,13 +11,14 @@ vi.mock("../hooks/perfMonitor", () => ({
 }));
 const openPlan = vi.hoisted(() => vi.fn());
 vi.mock("../navigation/openPlanTab", () => ({ requestOpenPlanTab: openPlan }));
-const api = vi.hoisted(() => ({ get_plan: vi.fn() }));
+const api = vi.hoisted(() => ({ get_plan: vi.fn(), list_all_conversations: vi.fn(async () => [{ id: "coord", title: "Swarm Speed Developer" }]) }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api, isRemote: () => false }));
 // Always mounted (closed); it needs the ducky catalog provider this test does not set up.
 vi.mock("./ducky/DuckyProfileModal", () => ({ DuckyProfileModal: () => null }));
 
 import { PlanPane } from "./PlanPane";
 import { pushLocalAgentEvent } from "../hooks/useAgentEventBus";
+import { registerOpenChatReference } from "../navigation/openChatReference";
 
 const assigned = {
   id: "p1",
@@ -47,7 +48,7 @@ describe("PlanPane for a team member", () => {
   it("resolves archived owner events instead of replacing an assigned view", async () => {
     api.get_plan.mockResolvedValue({ ok: true, plan: assigned });
     render(<PlanPane chatId="builder" />);
-    await screen.findByText("Open full plan");
+    await screen.findByText("Full plan");
     expect(screen.getByRole("button", { name: /group-a/ })).toBeTruthy();
     api.get_plan.mockClear();
     await act(async () => {
@@ -57,14 +58,14 @@ describe("PlanPane for a team member", () => {
       await new Promise(resolve => setTimeout(resolve, 40));
     });
     expect(screen.queryByRole("heading", { name: "Archived personal" })).toBeNull();
-    expect(screen.getByText("Open full plan")).toBeTruthy();
+    expect(screen.getByText("Full plan")).toBeTruthy();
     expect(api.get_plan).toHaveBeenCalledWith("builder", null);
   });
 
   it("keeps the latest assignment when refreshes finish out of order", async () => {
     api.get_plan.mockResolvedValue({ ok: true, plan: assigned });
     render(<PlanPane chatId="builder" />);
-    await screen.findByText("Open full plan");
+    await screen.findByText("Full plan");
     let stale!: (value: unknown) => void;
     api.get_plan.mockImplementationOnce(() => new Promise(resolve => { stale = resolve; }));
     await act(async () => {
@@ -100,7 +101,7 @@ describe("PlanPane for a team member", () => {
   it("refreshes every bound view on canonical changes and reconnect", async () => {
     api.get_plan.mockResolvedValue({ ok: true, plan: assigned });
     render(<><PlanPane chatId="builder" /><PlanPane chatId="builder2" /></>);
-    await waitFor(() => expect(screen.getAllByText("Open full plan")).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText("Full plan")).toHaveLength(2));
     api.get_plan.mockClear();
     api.get_plan.mockResolvedValue({ ok: true, plan: {
       ...assigned, nodes: [{ ...assigned.nodes[0], content: "Canonical changed step" }],
@@ -137,7 +138,7 @@ describe("PlanPane for a team member", () => {
     expect(api.get_plan).not.toHaveBeenCalled();
     api.get_plan.mockResolvedValue({ ok: true, plan: assigned, progress: null });
     await emit("builder");
-    await screen.findByText("Open full plan");
+    await screen.findByText("Full plan");
     expect(screen.queryByText("Edit")).toBeNull();
     api.get_plan.mockResolvedValue({ ok: true, plan: { ...assigned, title: "New assignment" }, progress: null });
     await emit("builder");
@@ -154,20 +155,52 @@ describe("PlanPane for a team member", () => {
       progress: { total: 2, completed: 1, cancelled: 0, in_progress: 0, pending: 1 },
     });
     render(<PlanPane chatId="builder" chatName="Builder" />);
-    await screen.findByText("Open full plan");
+    await screen.findByText("Full plan");
     expect(screen.queryByText("No plan for this chat yet.")).toBeNull();
     expect(screen.queryByText("Edit")).toBeNull();
     expect(screen.queryByText("Send to ducky")).toBeNull();
     expect(screen.queryByText("Make template")).toBeNull();
 
-    fireEvent.click(screen.getByText("Open full plan"));
+    fireEvent.click(screen.getByText("Full plan"));
     expect(openPlan).toHaveBeenCalledWith({ chatId: "coord", title: "Repair modes" });
+  });
+
+  it("Lead opens the lead's chat; Full plan opens the lead plan at this section", async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    const leadPlan = { ...assigned, title: "Repair modes", assigned_from: undefined, nodes: [
+      { id: "sec", content: "App core", status: "pending", kind: "step", children: assigned.nodes },
+    ] };
+    api.get_plan.mockImplementation(async (id: string) => ({ ok: true, plan: id === "coord" ? leadPlan : assigned, progress: null }));
+    const openChat = vi.fn();
+    const off = registerOpenChatReference(openChat);
+    const { container } = render(<><PlanPane chatId="builder" /><PlanPane chatId="coord" /></>);
+    fireEvent.click(await screen.findByRole("button", { name: "Lead: Swarm Speed Developer" }));
+    expect(openChat).toHaveBeenCalledWith({ id: "coord", name: "Swarm Speed Developer" });
+    off();
+    // The crumb names each parent section of this sub plan in the lead's plan.
+    await screen.findByRole("button", { name: "App core" });
+    fireEvent.click(screen.getByRole("button", { name: "Full plan" }));
+    expect(openPlan).toHaveBeenCalledWith({ chatId: "coord", title: "Repair modes" });
+    await waitFor(() => expect(container.querySelector('.is-highlight[data-plan-node-id="a"]')).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "App core" }));
+    await waitFor(() => expect(container.querySelector('.is-highlight[data-plan-node-id="sec"]')).toBeTruthy());
+  });
+
+  it("a lead plan opened later takes the highlight on its first load", async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    const leadPlan = { ...assigned, assigned_from: undefined, nodes: [{ id: "sec", content: "App core", status: "pending", kind: "step", children: assigned.nodes }] };
+    api.get_plan.mockImplementation(async (id: string) => ({ ok: true, plan: id === "coord" ? leadPlan : assigned, progress: null }));
+    const member = render(<PlanPane chatId="builder" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Full plan" }));
+    member.unmount();
+    const { container } = render(<PlanPane chatId="coord" />);
+    await waitFor(() => expect(container.querySelector('.is-highlight[data-plan-node-id="a"]')).toBeTruthy());
   });
 
   it("refreshes when the team plan changes", async () => {
     api.get_plan.mockResolvedValue({ ok: true, plan: assigned, progress: null });
     render(<PlanPane chatId="builder" chatName="Builder" />);
-    await screen.findByText("Open full plan");
+    await screen.findByText("Full plan");
     api.get_plan.mockClear();
     act(() => pushLocalAgentEvent({ type: "plan_updated", conv_id: "coord" }));
     await waitFor(() => expect(api.get_plan).toHaveBeenCalledWith("builder", null));
