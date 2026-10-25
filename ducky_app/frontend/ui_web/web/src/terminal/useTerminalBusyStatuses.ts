@@ -33,6 +33,8 @@ const statuses = new Map<string, TerminalBusyStatus>();
 const NOT_RUNNING: TerminalBusyStatus = { running: false, runner: null };
 let unsubscribe: (() => void) | null = null;
 let inFlight = false;
+/** Sessions the call that is out now asks about: a second watcher of the same shell waits for it. */
+const inFlightIds = new Set<string>();
 /** Sessions to ask about on the next call (pushed, or new while a call was out). */
 const pending = new Set<string>();
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -47,12 +49,13 @@ function notifyAll(): void {
 
 async function ask(ids: string[]): Promise<void> {
   if (inFlight) {
-    for (const id of ids) pending.add(id);
+    for (const id of ids) if (!inFlightIds.has(id)) pending.add(id);
     return;
   }
   const api = getApi();
   if (!api || ids.length === 0) return;
   inFlight = true;
+  for (const id of ids) inFlightIds.add(id);
   let states: Record<string, { ok: boolean; busy?: boolean; running?: boolean }> = {};
   try {
     const result = await api.terminal_busy_many(ids);
@@ -61,6 +64,7 @@ async function ask(ids: string[]): Promise<void> {
     // Same as a session the backend no longer knows: shown as not running.
   } finally {
     inFlight = false;
+    inFlightIds.clear();
   }
   const watched = watchedIds();
   let changed = false;
