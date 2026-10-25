@@ -1,4 +1,5 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import type { AgentEvent, ChatPlan, GroupMemberDto, PlanNode } from "../types/panel";
 import { getApi } from "../hooks/usePanelApi";
 import { subscribeAgentEvents } from "../hooks/useAgentEventBus";
@@ -58,6 +59,23 @@ export async function assignChoices(leadId: string): Promise<Owner[]> {
   return [...members, ...(await profiles())];
 }
 
+const MENU_MAX = 260;
+const MENU_WIDTH = 200;
+const EDGE = 8;
+
+/** Where the owner menu goes for a chip at `rect`: below it, or above when below is too short;
+ * always inside the window, scrolling when the list is taller than the room it gets. */
+export function menuPlacement(rect: { top: number; bottom: number; left: number }, vh: number, vw: number): CSSProperties {
+  const below = vh - rect.bottom - EDGE;
+  const above = rect.top - EDGE;
+  const up = below < Math.min(MENU_MAX, 160) && above > below;
+  const maxHeight = Math.max(80, Math.min(MENU_MAX, up ? above : below));
+  const left = Math.max(EDGE, Math.min(rect.left, vw - MENU_WIDTH - EDGE));
+  return up
+    ? { position: "fixed", left, top: "auto", bottom: vh - rect.top, maxHeight, overflowY: "auto" }
+    : { position: "fixed", left, top: rect.bottom, bottom: "auto", maxHeight, overflowY: "auto" };
+}
+
 type AssignApi = {
   plan_set_planned_assignee?: (chatId: string, nodeId: string, who: string) => Promise<{ ok?: boolean; error?: string }>;
 };
@@ -70,6 +88,33 @@ export function PlanAssignChip({ chatId, nodeId, planned, readOnly = false }: { 
   const [open, setOpen] = useState(false);
   const [choices, setChoices] = useState<Owner[]>([]);
   const [error, setError] = useState("");
+  const chipRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [place, setPlace] = useState<CSSProperties | null>(null);
+  // The menu lives on document.body, placed from the chip: a low row's menu opens upward
+  // instead of running off the window or being clipped by the plan's scroll box.
+  useLayoutEffect(() => {
+    if (!open) { setPlace(null); return; }
+    const update = () => {
+      const rect = chipRef.current?.getBoundingClientRect();
+      if (rect) setPlace(menuPlacement(rect, window.innerHeight, window.innerWidth));
+    };
+    const close = (e: Event) => {
+      const target = e.target as Node;
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !menuRef.current?.contains(target) && !chipRef.current?.contains(target)) setOpen(false);
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
   useEffect(() => {
     if (!who) return;
     let alive = true;
@@ -96,16 +141,17 @@ export function PlanAssignChip({ chatId, nodeId, planned, readOnly = false }: { 
   };
   const name = shown?.id === who ? shown.name : who;
   return <div className="plan-owner-chips plan-assign">
-    <button type="button" className={`plan-owner-chip ${who ? "plan-owner-chip--planned" : "plan-assign-chip"}`} onClick={toggle}
+    <button ref={chipRef} type="button" className={`plan-owner-chip ${who ? "plan-owner-chip--planned" : "plan-assign-chip"}`} onClick={toggle}
       aria-expanded={open} disabled={readOnly} title={who ? `Planned owner: ${name}` : "Pick who works on this sub plan"}>
       {who ? <><DuckyAvatar styleId={shown?.style} size={20} /><span>{name}</span><span className="plan-owner-activity">planned</span></> : "Assign"}
     </button>
-    {open ? <div className="plan-assign-menu" role="menu">
+    {open && place ? createPortal(<div ref={menuRef} className="plan-assign-menu" role="menu" style={place}
+      data-placement={place.top === "auto" ? "above" : "below"}>
       {choices.map(choice => <button key={choice.id} type="button" role="menuitem" className="plan-assign-item" onClick={() => void pick(choice.id)}>
         <DuckyAvatar styleId={choice.style} size={18} /><span>{choice.name}</span>
       </button>)}
       {who ? <button type="button" role="menuitem" className="plan-assign-item" onClick={() => void pick("")}>Remove</button> : null}
-    </div> : null}
+    </div>, document.body) : null}
     {error ? <span className="plan-assign-error" role="alert">{error}</span> : null}
   </div>;
 }

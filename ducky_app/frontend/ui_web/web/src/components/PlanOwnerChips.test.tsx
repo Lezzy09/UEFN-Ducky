@@ -9,7 +9,7 @@ vi.mock("../hooks/useRunningAgents", () => ({ useRunningAgents: () => state.runn
 vi.mock("../navigation/openChatReference", () => ({ requestOpenChatTab: state.open }));
 const api = vi.hoisted(() => ({ list_all_conversations: vi.fn(), group_members: vi.fn(), list_agent_profiles: vi.fn(), plan_set_planned_assignee: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
-import { PlanOwnerChips, ownerActivity } from "./PlanOwnerChips";
+import { PlanAssignChip, PlanOwnerChips, menuPlacement, ownerActivity } from "./PlanOwnerChips";
 import { PlanTodoCard } from "./PlanTodoCard";
 import { nodeKind } from "../utils/planLock";
 import { subscribeLatestChatActivity, requestLatestChatActivity } from "../navigation/latestChatActivity";
@@ -99,6 +99,33 @@ describe("plan owners", () => {
   render(<PlanOwnerChips ownerId="g2" />);
   await waitFor(() => expect(screen.getAllByText("Member")).toHaveLength(3));
   expect(api.group_members).toHaveBeenCalledTimes(1);
+ });
+ it("places the owner menu above a low chip and keeps it inside the window", () => {
+  expect(menuPlacement({ top: 100, bottom: 120, left: 40 }, 800, 1200)).toMatchObject({ top: 120, bottom: "auto", maxHeight: 260 });
+  const low = menuPlacement({ top: 740, bottom: 760, left: 40 }, 800, 1200);
+  expect(low).toMatchObject({ top: "auto", bottom: 60, maxHeight: 260 });
+  // A chip at the right edge pulls the menu in; a short window caps the height so it scrolls.
+  expect(menuPlacement({ top: 100, bottom: 120, left: 1150 }, 800, 1200).left).toBe(1200 - 200 - 8);
+  expect(menuPlacement({ top: 150, bottom: 170, left: 0 }, 300, 1200)).toMatchObject({ top: "auto", maxHeight: 142, overflowY: "auto" });
+ });
+ it("a chip near the bottom of the window opens its menu upward, on the page body", async () => {
+  api.list_all_conversations.mockResolvedValue([]);
+  api.list_agent_profiles.mockResolvedValue({ profiles: [{ id: "dev", name: "Developer" }] });
+  const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ top: window.innerHeight - 30, bottom: window.innerHeight - 10, left: 20, right: 80, width: 60, height: 20, x: 20, y: window.innerHeight - 30, toJSON: () => ({}) } as DOMRect);
+  try {
+   const { container } = render(<div style={{ height: 120, overflow: "hidden" }}><PlanAssignChip chatId="lead" nodeId="n" /></div>);
+   fireEvent.click(screen.getByRole("button", { name: "Assign" }));
+   const menu = await screen.findByRole("menu");
+   expect(menu.dataset.placement).toBe("above");
+   expect(menu.style.position).toBe("fixed");
+   expect(menu.style.bottom).toBe("30px");
+   expect(container.contains(menu)).toBe(false);
+   await screen.findByRole("menuitem", { name: /Developer/ });
+   fireEvent.keyDown(document, { key: "Escape" });
+   await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  } finally {
+   rect.mockRestore();
+  }
  });
  it("refreshes owner names after roster changes", async () => {
   roster(); render(<PlanOwnerChips ownerId="g" />); await screen.findByText("Group C");
