@@ -18,9 +18,18 @@ def _no_settings(monkeypatch):
     monkeypatch.setattr(sw, "_routing_context", lambda: (None, None))
 
 
-def _jobs(names, model="m1"):
+# Jobs that split into parts need one path per part: parts get disjoint slices of their job's paths.
+PART_PATHS = {
+    "Modeling: props": ["src/modeling/blockout/**", "src/modeling/props/**", "src/modeling/set/**"],
+    "Texture: props": ["src/texture/materials/**", "src/texture/decals/**"],
+    "Verse: combat": ["src/verse/systems/**", "src/verse/devices/**"],
+}
+
+
+def _jobs(names, model="m1", paths=None):
+    paths = paths or {}
     return [{"name": n, "purpose": "", "task": "", "steps": [f"{n} step 1", f"{n} step 2"],
-             "paths": [f"src/{n.split(':')[0].lower()}/**"], "model": model} for n in names]
+             "paths": paths.get(n) or [f"src/{n.split(':')[0].lower()}/**"], "model": model} for n in names]
 
 
 class FakeApi:
@@ -64,9 +73,9 @@ class FakeApi:
         self.calls.append(("assign", node_id, assignee))
 
 
-def _create(names, model="m1", **kw):
+def _create(names, model="m1", paths=None, **kw):
     kw.setdefault("detail", 2)
-    return sw.swarm_create("Shop island", _jobs(names, model), **kw)
+    return sw.swarm_create("Shop island", _jobs(names, model, paths), **kw)
 
 
 # ---- s4-ask -------------------------------------------------------------------------------
@@ -227,7 +236,7 @@ SHOP = ["Modeling: props", "Texture: props", "Verse: combat", "Narrative: story"
 
 
 def test_no_detail_asks_it_with_agent_counts_per_level():
-    out = sw.swarm_create("Shop island", _jobs(SHOP), agents="auto", max_agents=8, per_group=5)
+    out = sw.swarm_create("Shop island", _jobs(SHOP, paths=PART_PATHS), agents="auto", max_agents=8, per_group=5)
     assert out["status"] == "needs_answers" and [q["id"] for q in out["questions"]] == ["detail"]
     q = out["questions"][0]
     assert q["prompt"] == "How finely should the work be split?"
@@ -239,7 +248,7 @@ def test_no_detail_asks_it_with_agent_counts_per_level():
 
 def test_detail_3_previews_parts_and_every_level():
     api = FakeApi()
-    out = _create(SHOP, agents="auto", max_agents=8, per_group=5, detail=3, api=api)
+    out = _create(SHOP, agents="auto", max_agents=8, per_group=5, detail=3, api=api, paths=PART_PATHS)
     p = out["preview"]
     assert out["status"] == "needs_confirm" and api.calls == []
     assert p["detail"] == 3
@@ -247,8 +256,11 @@ def test_detail_3_previews_parts_and_every_level():
         (1, 3, 0), (2, 4, 0), (3, 8, 1), (4, 8, 3)]
     seats = {s["name"]: s for s in sw.walk_seats(p["tree"])}
     assert seats["Blockout lead"]["job"] == "Modeling: blockout"
-    assert seats["Blockout lead"]["profile"] == "3d-modeler" and seats["Blockout lead"]["paths"] == ["src/modeling/**"]
-    blockout = next(s for s in sw.build_preview("g", sw.normalize_jobs(_jobs(SHOP)), "auto", 8, 5, None, 3)["jobs"]
+    assert seats["Blockout lead"]["profile"] == "3d-modeler"
+    assert seats["Blockout lead"]["paths"] == ["src/modeling/blockout/**"]
+    assert seats["Set dressing lead"]["paths"] == ["src/modeling/set/**"]  # disjoint slices
+    blockout = next(s for s in sw.build_preview("g", sw.normalize_jobs(_jobs(SHOP, paths=PART_PATHS)),
+                                                "auto", 8, 5, None, 3)["jobs"]
                     .items() if s[0] == "Blockout lead")[1]
     assert [s["content"] for s in blockout["steps"]] == ["blockout: Modeling: props step 1",
                                                         "blockout: Modeling: props step 2"]
@@ -256,21 +268,22 @@ def test_detail_3_previews_parts_and_every_level():
 
 def test_detail_change_is_a_new_preview_and_limits_still_cap():
     api = FakeApi()
-    one = _create(SHOP, agents="auto", max_agents=8, per_group=5, detail=1, api=api)["preview"]
+    one = _create(SHOP, agents="auto", max_agents=8, per_group=5, detail=1, api=api, paths=PART_PATHS)["preview"]
     assert [s["name"] for s in sw.walk_seats(one["tree"])] == ["Art lead", "Code lead", "Story lead"]
     art = next(s for s in sw.walk_seats(one["tree"]) if s["name"] == "Art lead")
     assert art["sub_plan"]["total"] == 4  # Modeling's and Texture's steps both kept
-    four = _create(SHOP, agents="auto", max_agents=8, per_group=5, detail=4, api=api)["preview"]
+    four = _create(SHOP, agents="auto", max_agents=8, per_group=5, detail=4, api=api, paths=PART_PATHS)["preview"]
     assert sorted(g["group"] for g in sw.walk_groups(four["tree"])) == [
         "Modeling: parts", "Texture: parts", "Verse: parts"]
     assert four["muted"] and api.calls == []
-    capped = _create(SHOP, agents="auto", max_agents=5, per_group=5, detail=3)["preview"]
+    capped = _create(SHOP, agents="auto", max_agents=5, per_group=5, detail=3, paths=PART_PATHS)["preview"]
     assert capped["agents"] == 5
 
 
 def test_confirm_builds_the_chosen_level():
     api = FakeApi()
-    out = _create(SHOP, agents="auto", max_agents=8, per_group=5, detail=4, confirm=True, api=api)
+    out = _create(SHOP, agents="auto", max_agents=8, per_group=5, detail=4, confirm=True, api=api,
+                  paths=PART_PATHS)
     assert out["status"] == "done" and out["agents"] == 8
     made = [c[1] for c in api.calls if c[0] == "group_create"]
     assert made == ["Shop island", "Modeling: parts", "Texture: parts", "Verse: parts"]
