@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
+import textwrap
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -206,6 +210,31 @@ def test_run_bridge_still_reaches_mcp_run_fast() -> None:
 
     assert "mcp.run" in ran
     assert elapsed_ms < 5000.0
+
+
+def test_run_bridge_loads_numpy_before_mcp_run() -> None:
+    """numpy's first import hangs on Windows once the stdio server reads stdin: load it first."""
+    code = textwrap.dedent("""
+        import sys
+        from unittest.mock import patch
+        import frontend.launcher as launcher
+        import backend.server as server
+        seen = []
+        with (
+            patch.object(launcher, "_ensure_repo_on_path", return_value="."),
+            patch.object(server.mcp, "run", lambda: seen.append("numpy" in sys.modules)),
+            patch("frontend.ship_newest.ship_newest_everywhere", lambda **_k: []),
+            patch("frontend.appdata_maintenance.start_appdata_maintenance_async", lambda: None),
+            patch("backend.bridge.dynamic_tools.register_dynamic_listener_tools", lambda: None),
+            patch("backend.mcp_plugins.bridge_proxy.sync_nested_mcp_proxies", lambda: []),
+            patch("backend.bridge.plugin_gate.install_bridge_plugin_gate", lambda *_a, **_k: None),
+        ):
+            launcher.run_bridge()
+        print("SEEN", seen, flush=True)
+    """)
+    root = Path(__file__).resolve().parents[2]
+    out = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=180)
+    assert "SEEN [True]" in out.stdout, (out.stdout[-1000:], out.stderr[-2000:])
 
 
 if __name__ == "__main__":

@@ -279,6 +279,13 @@ def run_bridge() -> None:
     except Exception:
         pass
 
+    try:
+        # On Windows numpy's first import hangs for good while another thread is blocked
+        # reading stdin (OpenBLAS's DLL init waits on the C runtime lock that read holds),
+        # and the stdio server always has one: search would freeze the bridge. Load it now.
+        import numpy  # noqa: F401
+    except ImportError:
+        pass
     threading.Thread(target=_bridge_warmup, daemon=True, name="bridge-warmup").start()
     try:
         if shared_daemon:
