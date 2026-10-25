@@ -184,7 +184,8 @@ def card(status: str, preview: dict[str, Any]) -> dict[str, Any]:
 
 def plan_preview(plan: dict[str, Any]) -> dict[str, Any]:
     """The preview of building *plan* as it is (``swarm_build.seats_from_plan``): one seat per
-    section whose children are steps, one group per section of sections, nothing added."""
+    section whose children are steps, one group per section of sections, nothing added. Seats
+    carry their section id (``sub_plan.id``) and step ids; groups their ``id``."""
     from backend.tools.panel.swarm_build import seats_from_plan
 
     tree = seats_from_plan(plan)
@@ -192,29 +193,137 @@ def plan_preview(plan: dict[str, Any]) -> dict[str, Any]:
     return {
         "goal": str(plan.get("title") or "").strip() or "Swarm",
         "from_plan": True,
+        "plan_id": str(plan.get("id") or ""),
         "agents": len(seats),
         "tree": tree,
         "muted": [g["group"] for g in walk_groups(tree) if g["muted"]],
         "lanes": {s["name"]: s["paths"] for s in seats},
         "plan": {"title": str(plan.get("title") or ""),
-                 "sections": [{"seat": s["name"], "title": s["sub_plan"]["title"], "steps": s["sub_plan"]["steps"]}
-                              for s in seats]},
+                 "sections": [{"seat": s["name"], "id": s["sub_plan"]["id"], "title": s["sub_plan"]["title"],
+                               "steps": s["sub_plan"]["steps"]} for s in seats]},
     }
 
 
-def _swarm_from_plan(confirm: bool, api: Any) -> dict[str, Any]:
+class PlanStore:
+    """The plan edits a from-plan Change makes, through the plan tools (events and checks included)."""
+
+    def update(self, chat_id: str, node_id: str, **fields: Any) -> None:
+        from backend.tools.panel.ducky_panel import ducky_plan_update_node
+        from backend.tools.panel.swarm_build import _loads
+
+        _loads(ducky_plan_update_node(node_id=node_id, chat_id=chat_id, **fields))
+
+    def delete(self, chat_id: str, node_id: str) -> None:
+        from backend.tools.panel.ducky_panel import ducky_plan_delete_node
+        from backend.tools.panel.swarm_build import _loads
+
+        _loads(ducky_plan_delete_node(node_id=node_id, chat_id=chat_id))
+
+    def move(self, chat_id: str, node_id: str, parent_id: str, index: int) -> None:
+        from backend.tools.panel.ducky_panel import ducky_plan_move_node
+        from backend.tools.panel.swarm_build import _loads
+
+        _loads(ducky_plan_move_node(node_id=node_id, parent_id=parent_id, index=index, chat_id=chat_id))
+
+
+def _set_line(body: str, label: str, value: str) -> str:
+    """*body* with its ``Label: value`` line replaced (or added at the end)."""
+    line = f"{label}: {value}"
+    pat = re.compile(rf"^\s*(?:\*\*)?{label}(?:\*\*)?\s*:(?:\*\*)?.*$", re.IGNORECASE | re.MULTILINE)
+    return pat.sub(line, body, count=1) if pat.search(body) else (body.rstrip() + "\n" + line).lstrip()
+
+
+def apply_plan_edits(chat_id: str, plan: dict[str, Any], edits: list[dict[str, Any]], store: Any) -> list[str]:
+    """Card Change edits on the real plan: ``{seat, rename_step, to}`` / ``{seat, drop_step}`` (a
+    step's content or id), ``{seat, model}`` (the section's Model: line), ``{rename, to}`` (a seat
+    or group), ``{mute|unmute: group}`` (the group's Muted: line), ``{seat, to_group}`` (move the
+    section; '' = top level). Returns warnings for edits that don't fit a plan."""
+    preview = plan_preview(plan)
+    seats = {s["name"]: s for s in walk_seats(preview["tree"])}
+    groups = {g["group"]: g for g in walk_groups(preview["tree"])}
+    bodies: dict[str, str] = {}
+
+    def walk(nodes: list[dict[str, Any]]) -> None:
+        for n in nodes:
+            bodies[str(n.get("id") or "")] = str(n.get("body_markdown") or "")
+            walk(n.get("children") or [])
+
+    walk(plan.get("nodes") or [])
+    warnings: list[str] = []
+
+    def seat_of(name: Any) -> dict[str, Any]:
+        hit = seats.get(str(name or "").strip())
+        if hit is None:
+            raise ValueError(f"No seat called {name!r}; seats: {', '.join(seats)}")
+        return hit
+
+    for e in edits:
+        if not isinstance(e, dict):
+            continue
+        if "rename_step" in e or "drop_step" in e:
+            seat = seat_of(e.get("seat"))
+            key = str(e.get("rename_step") or e.get("drop_step") or "").strip()
+            step = next((s for s in seat["sub_plan"]["steps"] if key in (s["id"], s["content"])), None)
+            if step is None:
+                raise ValueError(f"{seat['name']} has no step {key!r}")
+            if "drop_step" in e:
+                store.delete(chat_id, step["id"])
+            else:
+                store.update(chat_id, step["id"], content=str(e.get("to") or "").strip() or step["content"])
+        elif "seat" in e and e.get("model"):
+            sid = seat_of(e["seat"])["sub_plan"]["id"]
+            bodies[sid] = _set_line(bodies.get(sid, ""), "Model", str(e["model"]).strip())
+            store.update(chat_id, sid, body_markdown=bodies[sid])
+        elif "seat" in e and "to_group" in e:
+            sid = seat_of(e["seat"])["sub_plan"]["id"]
+            target = str(e["to_group"] or "").strip()
+            if target and target not in groups:
+                raise ValueError(f"No group called {target!r}; groups: {', '.join(groups) or 'none'}")
+            parent = groups[target]["id"] if target else ""
+            store.move(chat_id, sid, parent, 10_000)  # ponytail: a big index = append at the end
+        elif "rename" in e:
+            name = str(e["rename"]).strip()
+            node_id = seats[name]["sub_plan"]["id"] if name in seats else (groups[name]["id"] if name in groups else "")
+            if not node_id:
+                raise ValueError(f"No seat or group called {name!r}")
+            store.update(chat_id, node_id, content=str(e.get("to") or "").strip() or name)
+        elif "mute" in e or "unmute" in e:
+            name = str(e.get("mute") or e.get("unmute")).strip()
+            if name not in groups:
+                raise ValueError(f"No group called {name!r}; groups: {', '.join(groups) or 'none'}")
+            gid = groups[name]["id"]
+            bodies[gid] = _set_line(bodies.get(gid, ""), "Muted", "yes" if "mute" in e else "no")
+            store.update(chat_id, gid, body_markdown=bodies[gid])
+        else:
+            warnings.append(f"Not a plan edit, ignored: {e}")
+    return warnings
+
+
+def _swarm_from_plan(confirm: bool, api: Any, edits: list[dict[str, Any]] | None = None,
+                     store: Any = None) -> dict[str, Any]:
     api = api or PanelSwarmApi()
     lead = api.caller()
     plan = api.load_plan(lead) if lead else None
     if not plan or not plan.get("nodes"):
         return {"status": "error", "error": "from_plan needs a plan in the calling chat (ducky_create_plan first)."}
+    warnings: list[str] = []
+    # Edits land on the plan once, at preview; confirm builds what the plan now says, so a card
+    # that resends its earlier edits with confirm=true doesn't apply them twice.
+    if edits and not confirm:
+        try:
+            warnings = apply_plan_edits(lead, plan, edits, store or PlanStore())
+        except ValueError as exc:
+            return {"status": "error", "error": str(exc)}
+        plan = api.load_plan(lead) or plan  # re-preview what the plan now says
     preview = plan_preview(plan)
+    if warnings:
+        preview["warnings"] = warnings
     if not preview["agents"]:
         return {"status": "error", "goal": preview["goal"], "error": "Nothing to seat: no section has steps."}
     if not confirm:
         return {**card("needs_confirm", preview),
                 "next": ("Show the person this preview of the plan's sections as seats. Build: same call with "
-                         "confirm=true. Change seats by editing the plan (Ducky:, Model:, Files: lines).")}
+                         "confirm=true. Change: same call with only the NEW edits; they change the plan itself.")}
     try:
         built = build_swarm(api=api, from_plan=plan)
     except Exception as exc:  # SwarmBuildError archives what it made; say so on the card
@@ -226,9 +335,9 @@ def _swarm_from_plan(confirm: bool, api: Any) -> dict[str, Any]:
 
 def swarm_create(goal: str, jobs: list[dict[str, Any]] | None, agents: Any = "", max_agents: int = 0,
                  per_group: int = 0, edits: list[dict[str, Any]] | None = None, confirm: bool = False,
-                 api: Any = None, detail: int = 0, from_plan: bool = False) -> dict[str, Any]:
+                 api: Any = None, detail: int = 0, from_plan: bool = False, store: Any = None) -> dict[str, Any]:
     if from_plan:
-        return _swarm_from_plan(confirm, api)
+        return _swarm_from_plan(confirm, api, edits, store)
     goal = (goal or "").strip()
     if not goal:
         raise ValueError("goal is required")

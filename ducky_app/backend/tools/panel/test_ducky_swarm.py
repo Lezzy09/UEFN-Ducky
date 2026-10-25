@@ -490,6 +490,82 @@ def test_from_plan_confirm_builds_through_swarm_build(tmp_path):
     assert not api.names("plan_add_node")  # the plan is used as it is
 
 
+class FakeStore:
+    """Applies plan edits to the Api's in-memory plan, like the plan tools do to the real one."""
+
+    def __init__(self, plan):
+        self.plan, self.calls = plan, []
+
+    def _find(self, nodes, node_id, parent=None):
+        for n in nodes:
+            if n.get("id") == node_id:
+                return n, (parent or {"children": self.plan["nodes"]})
+            hit = self._find(n.get("children") or [], node_id, n)
+            if hit:
+                return hit
+        return None
+
+    def update(self, chat_id, node_id, **fields):
+        self.calls.append(("update", node_id, fields))
+        self._find(self.plan["nodes"], node_id)[0].update(fields)
+
+    def delete(self, chat_id, node_id):
+        self.calls.append(("delete", node_id))
+        node, parent = self._find(self.plan["nodes"], node_id)
+        parent["children"].remove(node)
+
+    def move(self, chat_id, node_id, parent_id, index):
+        self.calls.append(("move", node_id, parent_id))
+        node, parent = self._find(self.plan["nodes"], node_id)
+        parent["children"].remove(node)
+        dest = self._find(self.plan["nodes"], parent_id)[0]["children"] if parent_id else self.plan["nodes"]
+        dest.append(node)
+
+
+def _plan_api(root="C:/proj"):
+    from backend.tools.panel.test_swarm_build import Api
+
+    api = Api(root, plan=json.loads(json.dumps(INVENTORY_PLAN)))
+    return api, FakeStore(api.plan)
+
+
+def test_from_plan_rename_edit_updates_the_real_step():
+    api, store = _plan_api()
+    out = sw.swarm_create("", None, from_plan=True, api=api, store=store,
+                          edits=[{"seat": "API", "rename_step": "API step 0", "to": "Define the API"}])
+    assert store.calls == [("update", "api-0", {"content": "Define the API"})]
+    assert api.plan["nodes"][0]["children"][0]["children"][0]["content"] == "Define the API"
+    section = next(s for s in out["preview"]["plan"]["sections"] if s["seat"] == "API")
+    assert section["id"] == "api" and section["steps"][0]["content"] == "Define the API"
+    assert out["preview"]["plan_id"] == "p1" and api.calls == []  # nothing seated
+
+
+def test_from_plan_model_move_drop_and_mute_edits_change_the_plan(tmp_path):
+    api, store = _plan_api(tmp_path)
+    out = sw.swarm_create("", None, from_plan=True, api=api, store=store, edits=[
+        {"seat": "Widget", "model": "codex:gpt-5"}, {"seat": "Widget", "to_group": "Backend"},
+        {"seat": "Widget", "drop_step": "Widget step 2"}, {"mute": "Backend"}, {"wiggle": 1}])
+    widget = next(s for s in sw.walk_seats(out["preview"]["tree"]) if s["name"] == "Widget")
+    assert widget["model"] == "codex:gpt-5" and widget["sub_plan"]["total"] == 2
+    assert [s["name"] for s in sw.walk_groups(out["preview"]["tree"]).__next__()["seats"]] == ["API", "Store", "Widget"]
+    assert "Muted: yes" in api.plan["nodes"][0]["body_markdown"]
+    assert any("wiggle" in w for w in out["preview"]["warnings"])
+    # confirm builds what the plan says and doesn't apply the edits twice
+    store.calls.clear()
+    done = sw.swarm_create("", None, from_plan=True, api=api, store=store, confirm=True,
+                           edits=[{"seat": "Widget", "model": "codex:gpt-5"}])
+    assert store.calls == [] and done["status"] == "done"
+
+
+def test_jobs_swarm_edits_touch_no_plan():
+    store = FakeStore({"nodes": []})
+    out = _create(GAME8, agents="auto", max_agents=8, per_group=5, store=store,
+                  edits=[{"seat": "Verse lead", "rename_step": "Verse: combat step 1", "to": "Combat core"}])
+    assert out["status"] == "needs_confirm" and store.calls == []
+    verse = next(s for s in sw.walk_seats(out["preview"]["tree"]) if s["name"] == "Verse lead")
+    assert verse["sub_plan"]["steps"][0]["content"] == "Combat core"
+
+
 def test_from_plan_without_a_plan_is_an_error():
     from backend.tools.panel.test_swarm_build import Api
 
