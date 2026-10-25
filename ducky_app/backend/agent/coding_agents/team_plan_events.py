@@ -106,9 +106,18 @@ def deliver_reports(plan: dict, reports: list[dict]) -> None:
         logging.getLogger(__name__).exception("Could not deliver team plan report")
 
 
-def member_stopped(chat_id: str, reason: str = "error") -> None:
+def member_stopped(chat_id: str, reason: str = "error", detail: str = "") -> None:
     """Tell the lead a member's turn failed mid-point. A turn that simply ended is not news:
-    the team keeper starts the member again, so the lead is not woken for it."""
+    the team keeper starts the member again, so the lead is not woken for it.
+
+    Every ended turn also frees its place in K3's seat queue (``detail`` = the turn's error text,
+    empty on success): a start that failed ("Ducky's tools didn't connect") is retried once there."""
+    try:
+        from frontend.ui_web import seat_queue
+
+        seat_queue.on_turn_end(chat_id, reason, detail if reason == "error" else "")
+    except Exception:
+        logging.getLogger(__name__).exception("Could not tell the seat queue that %s stopped", chat_id)
     if reason != "error":
         return
     from backend.agent.coding_agents import plans

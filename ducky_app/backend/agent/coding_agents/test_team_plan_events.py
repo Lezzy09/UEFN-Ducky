@@ -83,6 +83,28 @@ def test_stopped_member_reports_only_own_coordinator(team, notices, monkeypatch)
     assert len(notices) == 1
 
 
+def test_a_stopped_turn_tells_the_seat_queue(monkeypatch):
+    from frontend.ui_web import seat_queue
+
+    ended = []
+    monkeypatch.setattr(seat_queue, "on_turn_end", lambda *args: ended.append(args))
+    monkeypatch.setattr(plans, "list_plans", lambda: [])
+    events.member_stopped("seat-1", "error", "Ducky's tools didn't connect")
+    assert ended == [("seat-1", "error", "Ducky's tools didn't connect")]
+    events.member_stopped("seat-1", "done", "All 3 steps done.")  # a clean stop: no error text
+    assert ended[1:] == [("seat-1", "done", "")]
+
+
+def test_a_broken_seat_queue_never_breaks_the_stop(monkeypatch):
+    from frontend.ui_web import seat_queue
+
+    def boom(*args):
+        raise RuntimeError("queue gone")
+    monkeypatch.setattr(seat_queue, "on_turn_end", boom)
+    monkeypatch.setattr(plans, "list_plans", lambda: [])
+    events.member_stopped("seat-1", "error", "boom")
+
+
 @pytest.mark.parametrize("reason,detail", [("done", ""), ("error", "rate_limit_error")])
 def test_lifecycle_calls_once_per_run(monkeypatch, reason, detail):
     from backend.agent import a2a_broker as broker
