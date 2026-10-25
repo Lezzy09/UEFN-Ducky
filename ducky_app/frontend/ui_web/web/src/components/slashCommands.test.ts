@@ -113,7 +113,7 @@ describe("composerPlaceholder", () => {
 
 describe("slash menu host", () => {
   it("renders the palette outside the container-query input box", () => {
-    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "ChatPane.tsx"), "utf8");
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "ChatComposer.tsx"), "utf8");
     const menu = src.indexOf("<SlashCommandMenu");
     const box = src.indexOf("chat-pane-input-box");
     expect(menu).toBeGreaterThan(-1);
