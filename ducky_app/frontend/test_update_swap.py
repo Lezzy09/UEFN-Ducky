@@ -155,6 +155,7 @@ def test_switch_refuses_a_version_that_is_not_ready_or_bad(monkeypatch) -> None:
 
 def test_the_new_version_says_it_was_updated_for_a_while(monkeypatch) -> None:
     monkeypatch.setenv(us.SWITCHED_FROM_ENV, "1.2.410")
+    monkeypatch.setattr(us, "_started_at", time.time())
     got = us.status()
     assert got["phase"] == "updated" and got["previous"] == "1.2.410"
     monkeypatch.setattr(us, "_started_at", time.time() - us.UPDATED_NOTE_S - 1)
