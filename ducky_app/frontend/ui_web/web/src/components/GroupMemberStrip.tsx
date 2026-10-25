@@ -173,6 +173,27 @@ function writeOpen(groupId: string, open: boolean): void {
 
 type Editor = { key: string; kind: "model" | "lane" | "details" | "stop" };
 
+/** The team bar's step count. */
+type BarProgress = { done: number; total: number; pct: number };
+type PlanProgressApi = {
+  plan_progress?: (chat_ids: string[]) => Promise<{
+    ok?: boolean;
+    progress?: Record<string, { done?: number; total?: number; error?: string }>;
+  }>;
+};
+/** Last bar value per group: a remount paints it at once instead of a blank. */
+const barProgressCache = new Map<string, BarProgress>();
+/** Full plans per owner chat for the open roster's rows, dropped by that chat's plan events. */
+const planCache = new Map<string, ChatPlan | null>();
+const PLAN_EVENTS = new Set(["plan_updated", "plan_assignment_changed"]);
+const PLAN_EVENT_COALESCE_MS = 300;
+
+/** Tests only: forget the bar and plan caches. */
+export function _resetTeamProgressCacheForTests(): void {
+  barProgressCache.clear();
+  planCache.clear();
+}
+
 /** The one-line confirm before a whole group is stopped. */
 export function stopGroupQuestion(running: number, name: string): string {
   return `Stop ${running} running agent${running === 1 ? "" : "s"} in ${name} and its sub-groups?`;
@@ -247,9 +268,7 @@ export function GroupMemberStrip({
     return () => { live = false; };
   }, []);
 
-  /** Team plans by the chat that owns them (where members' assignments point), read with get_plan. */
-  const [plans, setPlans] = useState<Record<string, ChatPlan | null>>({});
-  const planRequest = useRef(0);
+  /** Chats that own the team's plans (where members' assignments point). */
   const planChats = useMemo(() => {
     const ids = new Set<string>();
     const add = (rows?: GroupMemberDto[]) => {
@@ -262,28 +281,75 @@ export function GroupMemberStrip({
     for (const rows of Object.values(rosters)) add(rows);
     return [...ids].sort().join("|");
   }, [observedMembers, groupId, rosters]);
-  // Read again with every observation refresh: plan events refresh those.
+  // The bar asks right away: the leader's plan before any assignment is observed.
+  const progressChats = planChats || leaderId;
+
+  // Team bar: last value per group on first paint, then one cheap plan_progress call
+  // (step counts only), again only when one of those chats' plans changes.
+  const [barProgress, setBarProgress] = useState<BarProgress | null>(() => barProgressCache.get(groupId) ?? null);
+  useEffect(() => setBarProgress(barProgressCache.get(groupId) ?? null), [groupId]);
+  /** Bumped by a plan event for an owner chat: open rows re-read that plan. */
+  const [planVersion, setPlanVersion] = useState(0);
   useEffect(() => {
-    const api = getApi();
-    const ids = planChats ? planChats.split("|") : [];
-    const request = ++planRequest.current;
-    if (!api?.get_plan || ids.length === 0) {
-      setPlans({});
-      return;
-    }
-    void Promise.all(
-      ids.map(async (id) => {
-        try {
-          const res = await api.get_plan(id);
-          return [id, res?.ok ? res.plan ?? null : null] as const;
-        } catch {
-          return [id, null] as const;
-        }
-      }),
-    ).then((rows) => {
-      if (request === planRequest.current) setPlans(Object.fromEntries(rows));
+    const ids = progressChats ? progressChats.split("|") : [];
+    if (ids.length === 0) return;
+    let live = true;
+    const read = async () => {
+      const call = (getApi() as unknown as PlanProgressApi | null)?.plan_progress;
+      if (!call) return;
+      const res = await Promise.resolve(call(ids)).catch(() => null);
+      if (!live || !res?.ok) return;
+      let done = 0;
+      let total = 0;
+      for (const id of ids) {
+        const p = res.progress?.[id];
+        if (!p || p.error) continue;
+        done += p.done || 0;
+        total += p.total || 0;
+      }
+      if (!total) return;
+      const next = { done, total, pct: Math.round((done / total) * 100) };
+      barProgressCache.set(groupId, next);
+      setBarProgress((prev) => (prev && prev.done === next.done && prev.total === next.total ? prev : next));
+    };
+    void read();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = subscribeAgentEvents((event) => {
+      if (!PLAN_EVENTS.has(event.type) || (event.conv_id && !ids.includes(event.conv_id))) return;
+      for (const id of event.conv_id ? [event.conv_id] : ids) planCache.delete(id);
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        void read();
+        setPlanVersion((n) => n + 1);
+      }, PLAN_EVENT_COALESCE_MS);
     });
-  }, [planChats, observedMembers, rosters]);
+    return () => {
+      live = false;
+      if (timer) clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [progressChats, groupId]);
+
+  /** Full plans for the rows' own sub plan progress: read only while the roster is open, cached per chat. */
+  const [plans, setPlans] = useState<Record<string, ChatPlan | null>>({});
+  useEffect(() => {
+    const ids = planChats ? planChats.split("|") : [];
+    const api = getApi();
+    if (!open || !api?.get_plan || ids.length === 0) return;
+    let live = true;
+    const cached = () => Object.fromEntries(ids.filter((id) => planCache.has(id)).map((id) => [id, planCache.get(id)!]));
+    setPlans(cached());
+    const missing = ids.filter((id) => !planCache.has(id));
+    if (missing.length === 0) return;
+    void Promise.all(
+      missing.map(async (id) => {
+        const res = await api.get_plan(id).catch(() => null);
+        if (res?.ok) planCache.set(id, res.plan ?? null);
+      }),
+    ).then(() => { if (live) setPlans(cached()); });
+    return () => { live = false; };
+  }, [open, planChats, planVersion]);
 
   const refreshProfiles = useCallback(() => {
     const api = getApi();
@@ -967,9 +1033,12 @@ export function GroupMemberStrip({
           </span>
           {runningCount ? <span className="team-bar-stat team-bar-stat--running">{runningCount} running</span> : null}
           {waitingCount ? <span className="team-bar-stat team-bar-stat--waiting">{waitingCount} waiting</span> : null}
-          {teamProgress ? (
-            <span className="team-bar-stat team-bar-stat--progress" title={teamProgress.parts.map(progressText).join("\n")}>
-              {teamProgress.done}/{teamProgress.total} steps · {teamProgress.pct}%
+          {barProgress ? (
+            <span
+              className="team-bar-stat team-bar-stat--progress"
+              title={teamProgress ? teamProgress.parts.map(progressText).join("\n") : "Team plan progress"}
+            >
+              {barProgress.done}/{barProgress.total} steps · {barProgress.pct}%
             </span>
           ) : null}
           {conflictTotal ? (

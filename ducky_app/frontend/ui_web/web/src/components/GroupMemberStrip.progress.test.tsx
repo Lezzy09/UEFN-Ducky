@@ -1,16 +1,24 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatPlan, GroupMemberDto } from "../types/panel";
 const api = vi.hoisted(() => ({
   group_members: vi.fn(), get_plan: vi.fn(), get_settings: vi.fn(), set_muted: vi.fn(), group_stop: vi.fn(),
+  plan_progress: vi.fn(),
 }));
+const bus = vi.hoisted(() => ({ handlers: new Set<(event: { type: string; conv_id?: string }) => void>() }));
 const running = vi.hoisted(() => ({ ids: new Set<string>() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
 vi.mock("../hooks/useRunningAgents", () => ({ useRunningAgents: () => running.ids }));
-vi.mock("../hooks/useAgentEventBus", () => ({ subscribeAgentEvents: () => () => undefined }));
+vi.mock("../hooks/useAgentEventBus", () => ({
+  subscribeAgentEvents: (fn: (event: { type: string; conv_id?: string }) => void) => {
+    bus.handlers.add(fn);
+    return () => bus.handlers.delete(fn);
+  },
+}));
 import {
-  GroupMemberStrip, laneCellLabel, laneModeOf, progressStep, progressText, subPlanProgress, sumProgress,
+  GroupMemberStrip, _resetTeamProgressCacheForTests, laneCellLabel, laneModeOf, progressStep, progressText,
+  subPlanProgress, sumProgress,
 } from "./GroupMemberStrip";
 import { resetRosterStore } from "./team/rosterStore";
 
@@ -47,7 +55,10 @@ const member = (name: string, node_id: string | null | "none", plan_id = "team-p
     assignment: node_id === "none" ? null : { plan_id, chat_id: "lead", node_id, title: name, status: "in_progress" } },
 });
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); running.ids = new Set(); resetRosterStore(); });
+afterEach(() => {
+  cleanup(); vi.clearAllMocks(); localStorage.clear(); running.ids = new Set(); resetRosterStore();
+  _resetTeamProgressCacheForTests();
+});
 const openTeam = () => fireEvent.click(screen.getByRole("button", { name: /^Team/ }));
 
 describe("subPlanProgress", () => {
@@ -97,12 +108,16 @@ describe("team bar progress", () => {
       member("Idle", "none")];
     api.group_members.mockResolvedValue({ ok: true, members: rows });
     api.get_plan.mockResolvedValue({ ok: true, plan: plan(), progress: {} });
+    api.plan_progress.mockResolvedValue({ ok: true, progress: { lead: { done: 6, total: 11 } } });
     render(<GroupMemberStrip groupId="group" members={rows} onMembersChange={() => {}} onOpenMember={() => {}} />);
-    // A sub plan shared by two agents counts once: 1/3 + 2/2.
-    await screen.findByText("3/5 steps · 60%");
-    expect(api.get_plan).toHaveBeenCalledWith("lead");
-    expect(api.get_plan).toHaveBeenCalledTimes(1);
+    // The bar is one plan_progress call for the plan's owner chat; no full plan is read while closed.
+    await screen.findByText("6/11 steps · 55%");
+    expect(api.plan_progress).toHaveBeenLastCalledWith(["lead"]);
+    expect(api.get_plan).not.toHaveBeenCalled();
     openTeam();
+    await waitFor(() => expect(api.get_plan).toHaveBeenCalledTimes(1));
+    expect(api.get_plan).toHaveBeenCalledWith("lead");
+    await screen.findByText("2/2");
     expect(screen.getByRole("columnheader", { name: "Sub plan" })).toBeTruthy();
     expect(screen.getAllByText("1/3")).toHaveLength(2);
     expect(screen.getAllByText("Prune the walk")).toHaveLength(2);
@@ -214,12 +229,60 @@ describe("team bar progress", () => {
     api.group_members.mockResolvedValue({ ok: true, members: rows });
     api.get_plan.mockResolvedValue({ ok: true, plan: plan(), progress: {} });
     render(<GroupMemberStrip groupId="group" members={rows} onMembersChange={() => {}} onOpenMember={() => {}} />);
-    await waitFor(() => expect(api.get_plan).toHaveBeenCalled());
     openTeam();
+    await waitFor(() => expect(api.get_plan).toHaveBeenCalled());
     expect(screen.queryByText(/steps ·/)).toBeNull();
     expect(screen.getByTitle("No assigned sub plan seen")).toBeTruthy();
   });
 
+});
+
+describe("team bar shows plan % at once", () => {
+  const members16 = Array.from({ length: 16 }, (_, n) => member(`Agent ${n}`, n % 2 ? "sp-search" : "sp-tools"));
+  const props = { groupId: "big", members: members16, leaderConvId: "lead", onMembersChange: () => {}, onOpenMember: () => {} };
+
+  it("16 members cost one plan_progress call and no get_plan; a remount paints the last value with no call", async () => {
+    api.group_members.mockResolvedValue({ ok: true, members: members16 });
+    api.plan_progress.mockResolvedValue({ ok: true, progress: { lead: { done: 88, total: 88 } } });
+    const first = render(<GroupMemberStrip {...props} />);
+    await screen.findByText("88/88 steps · 100%");
+    expect(api.plan_progress).toHaveBeenCalledTimes(1);
+    expect(api.get_plan).not.toHaveBeenCalled();
+    first.unmount();
+
+    let finish!: (value: unknown) => void;
+    api.plan_progress.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    render(<GroupMemberStrip {...props} />);
+    // First paint already has the number: nothing waits on the bridge.
+    expect(screen.getByText("88/88 steps · 100%")).toBeTruthy();
+    await act(async () => finish({ ok: true, progress: { lead: { done: 88, total: 88 } } }));
+    expect(api.get_plan).not.toHaveBeenCalled();
+  });
+
+  it("a plan event for the owner chat refreshes once; other chats' events do nothing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.group_members.mockResolvedValue({ ok: true, members: members16 });
+      api.plan_progress.mockResolvedValue({ ok: true, progress: { lead: { done: 40, total: 88 } } });
+      render(<GroupMemberStrip {...props} />);
+      await screen.findByText("40/88 steps · 45%");
+      const calls = api.plan_progress.mock.calls.length;
+      api.plan_progress.mockResolvedValue({ ok: true, progress: { lead: { done: 41, total: 88 } } });
+      act(() => {
+        for (const fn of [...bus.handlers]) {
+          fn({ type: "plan_updated", conv_id: "someone-else" });
+          fn({ type: "plan_updated", conv_id: "lead" });
+          fn({ type: "plan_updated", conv_id: "lead" });
+        }
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      await screen.findByText("41/88 steps · 47%");
+      expect(api.plan_progress.mock.calls.length).toBe(calls + 1);
+      expect(api.get_plan).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("lane column", () => {
