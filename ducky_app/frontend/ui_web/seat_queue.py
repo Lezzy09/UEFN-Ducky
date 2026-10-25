@@ -8,12 +8,18 @@ is one gate: a seat starts only while fewer than ``limit()`` member turns run *a
 has memory room; the running count is admission's own slots plus seats this queue is starting.
 ``limit()`` defaults from CPU cores and RAM (``pc_limit``); the card's "Run at once" slider
 (``set_run_at_once``) can lower it, never raise it past the PC limit.
+
+First turns start in waves (``WAVE_SIZE`` per ``WAVE_GAP_S``): 3 of 14 seats opened with
+"Ducky's tools didn't connect" when all started at once. A turn that ended that way never
+really ran, so the seat is idle again (``is_busy`` False): a restart or recycle may go ahead.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -21,6 +27,11 @@ from typing import Any, Callable
 from frontend.ui_web import admission
 
 PushFn = Callable[[dict[str, Any]], None]
+
+WAVE_SIZE = 3
+WAVE_GAP_S = 5.0
+_START_FAILED_RE = re.compile(
+    r"tools didn.t connect|(?:backend|agent) (?:start error|failed to start)|could not start", re.I)
 
 
 @dataclass
@@ -33,10 +44,25 @@ _lock = threading.RLock()
 _line: deque[_Seat] = deque()
 _starting: set[str] = set()  # handed to start(), not yet holding an admission slot
 _user_cap: int | None = None
+_seen: set[str] = set()  # seats whose first turn has started
+_first_starts: deque[float] = deque()  # when first turns started, for the waves
+_wave_timer = False
+_now = time.monotonic
 
 
 def _spawn(fn: Callable[[], None], name: str) -> None:
     threading.Thread(target=fn, daemon=True, name=name).start()
+
+
+def _spawn_later(delay: float, fn: Callable[[], None]) -> None:
+    timer = threading.Timer(delay, fn)
+    timer.daemon = True
+    timer.start()
+
+
+def start_failed(detail: str) -> bool:
+    """The turn ended before the agent really ran (its tools or its backend never came up)."""
+    return bool(_START_FAILED_RE.search(detail or ""))
 
 
 def total_memory_gb() -> float:
@@ -119,25 +145,60 @@ def drop(conv_id: str) -> None:
 
 
 def on_turn_end(conv_id: str, reason: str = "", detail: str = "") -> None:
-    """A member's turn ended: free its place and start the next seats in line."""
+    """A member's turn ended: free its place and start the next seats in line.
+
+    ``detail`` is the turn's error or reply text; a failed start leaves the seat idle (its
+    admission slot freed, its next start counted as a first turn again).
+    """
+    failed = start_failed(detail)
     with _lock:
         _starting.discard(conv_id)
+        if failed:
+            _seen.discard(conv_id)
+    if failed:
+        admission.release(conv_id)
     drain()
 
 
 def drain() -> int:
     """Start waiting seats, oldest first, while there is room. Returns how many started."""
+    global _wave_timer
     started: list[_Seat] = []
+    wait = 0.0
     with _lock:
         running = len(_running())
-        while _line and _room(running):
-            seat = _line.popleft()
+        now = _now()
+        while _first_starts and now - _first_starts[0] >= WAVE_GAP_S:
+            _first_starts.popleft()
+        for seat in list(_line):
+            if not _room(running):
+                break
+            if seat.conv_id not in _seen:
+                if len(_first_starts) >= WAVE_SIZE:  # this wave is full: later seats may go
+                    wait = WAVE_GAP_S - (now - _first_starts[0])
+                    continue
+                _seen.add(seat.conv_id)
+                _first_starts.append(now)
+            _line.remove(seat)
             _starting.add(seat.conv_id)
             started.append(seat)
             running += 1
+        if wait > 0 and not _wave_timer:
+            _wave_timer = True
+        else:
+            wait = 0.0
+    if wait:
+        _spawn_later(wait, _next_wave)
     for seat in started:
         _spawn(lambda s=seat: _run(s), f"seat-{seat.conv_id[:8]}")
     return len(started)
+
+
+def _next_wave() -> None:
+    global _wave_timer
+    with _lock:
+        _wave_timer = False
+    drain()
 
 
 def _run(seat: _Seat) -> None:
