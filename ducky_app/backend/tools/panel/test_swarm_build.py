@@ -51,6 +51,9 @@ class Api:
     def set_lane(self, group_id, conv_id, paths):
         self.calls.append(("set_lane", conv_id, paths))
 
+    def trust_drafts(self, group_ids):
+        self.calls.append(("trust_drafts", sorted(group_ids)))
+
     def chat_home(self, conv_id):
         return {"folder_id": "home", "parent_conv_id": ""}
 
@@ -326,6 +329,8 @@ def test_launch_seats_planned_owners_in_nested_groups(tmp_path):
     assert api.names("add_member")[0][2] == "chat-x" and api.names("set_lane")[0][2][0] == "c/**"
     assigned = {c[1]: c[2] for c in api.names("assign")}
     assert set(assigned) == {"a", "c"} and assigned["c"] == "chat-x"  # b has no owner, d was already assigned
+    # The Build card's plugin-draft trust, for every group of the launched swarm.
+    assert api.names("trust_drafts") == [("trust_drafts", sorted(g["id"] for g in api.groups.values()))]
 
 
 def test_launch_twice_seats_nothing_new(tmp_path):

@@ -14,12 +14,16 @@ import json
 import os
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
 from backend.tools.panel.swarm_preview import DONE_LINE, walk_groups, walk_seats
 
 PING_TIMEOUT_S = 30.0
+# A cold seat's tool server takes 35-40 s before the agent says anything: the 30 s answer
+# clock starts at its first output; a seat silent for this long is counted as not started.
+STARTUP_MAX_S = 180.0
 SWARMS_DIR = ".ducky/swarms"
 
 
@@ -150,9 +154,22 @@ class PanelSwarmApi:
         from frontend.ui_web.agent_modes import run_message_and_wait
 
         def ask(cid: str, msg: str, secs: float) -> dict[str, Any]:
-            return run_message_and_wait(cid, msg, "agent", timeout_sec=secs, queue_if_busy=True)
+            # Never cancel: a seat that answers late is still assigned (``later``).
+            return run_message_and_wait(cid, msg, "agent", timeout_sec=secs, queue_if_busy=True,
+                                        cancel_on_timeout=False)
 
-        return queued_ping(seat_queue.request, ask, conv_id, text, timeout_s, later)
+        def first_output(cid: str) -> bool:
+            from frontend.ui_web.agent_modes import last_output_age_s
+
+            # In-process only: in the tool server this stays False and the reply itself ends the wait.
+            return last_output_age_s(cid) is not None
+
+        return queued_ping(seat_queue.request, ask, conv_id, text, timeout_s, later, first_output)
+
+    def trust_drafts(self, group_ids: list[str]) -> None:
+        from backend.uefn_plugins.store import set_swarm_draft_trust
+
+        set_swarm_draft_trust(group_ids, True)
 
     def assign(self, chat_id: str, node_id: str, assignee: str) -> None:
         from backend.tools.panel.ducky_panel import ducky_plan_update_node
@@ -192,6 +209,9 @@ class _Defaults:
 
     def is_chat(self, conv_id: str) -> bool:
         return False
+
+    def trust_drafts(self, group_ids: list[str]) -> None:
+        pass
 
     def plan_delete_node(self, chat_id: str, node_id: str) -> None:
         pass
@@ -371,12 +391,14 @@ def _answer(out: dict[str, Any]) -> dict[str, Any]:
 
 
 def queued_ping(request: Any, ask: Any, conv_id: str, text: str, timeout_s: float,
-                later: Any = None) -> dict[str, Any]:
+                later: Any = None, first_output: Any = None) -> dict[str, Any]:
     """Ping *conv_id* through the seat queue: ``request(conv_id, start)`` runs ``start`` when a
-    slot is free, and ``ask(conv_id, text, timeout_s)`` is the turn (run_message_and_wait's
-    reply). The 30 s for an answer count from when the ping starts, not from the queue:
-    {ok: True}, {ok: False, error} (started, no answer) or {ok: None, queued: True} (no slot
-    yet; ``later(result)`` gets the answer when the ping has run)."""
+    slot is free, and ``ask(conv_id, text, secs)`` is the turn (run_message_and_wait's reply,
+    never cancelled). ``first_output(conv_id)`` says the agent has sent anything yet: the
+    ``timeout_s`` for an answer count from then (from the start without it), and a seat
+    with no output in STARTUP_MAX_S didn't start. Returns {ok: True}, {ok: False, error}
+    (no answer; its turn keeps running) or {ok: None, queued: True} (no slot yet).
+    ``later(result)`` gets an answer that comes after this returned."""
     lock = threading.Lock()
     started, done = threading.Event(), threading.Event()
     out: dict[str, Any] = {}
@@ -384,7 +406,7 @@ def queued_ping(request: Any, ask: Any, conv_id: str, text: str, timeout_s: floa
 
     def start() -> None:
         started.set()
-        res = _answer(ask(conv_id, text, timeout_s))
+        res = _answer(ask(conv_id, text, STARTUP_MAX_S + timeout_s + 60))
         with lock:
             out.update(res)
             done.set()
@@ -399,12 +421,27 @@ def queued_ping(request: Any, ask: Any, conv_id: str, text: str, timeout_s: floa
         if not started.is_set():
             waiting[0] = False
             return {"ok": None, "queued": True}
-    done.wait(timeout_s + 5)  # ask times out on its own; the extra is for a reply in flight
+    error = "no reply"
+    if first_output is not None:
+        until = time.monotonic() + STARTUP_MAX_S
+        while not done.is_set() and not _said_anything(first_output, conv_id) and time.monotonic() < until:
+            done.wait(0.5)
+        if not done.is_set() and not _said_anything(first_output, conv_id):
+            error = f"no output in {STARTUP_MAX_S:g} s"
+    if error == "no reply":
+        done.wait(timeout_s)
     with lock:
         if not done.is_set():
-            waiting[0] = False
-            return {"ok": False, "error": "no reply"}
+            waiting[0] = False  # its turn keeps running: a late answer still seats it
+            return {"ok": False, "error": error}
         return dict(out)
+
+
+def _said_anything(first_output: Any, conv_id: str) -> bool:
+    try:
+        return bool(first_output(conv_id))
+    except Exception:  # noqa: BLE001 - no reading: the reply itself ends the wait
+        return False
 
 
 def _settle(seat: dict[str, Any], res: dict[str, Any], api: Any, lead: str) -> None:
@@ -489,6 +526,8 @@ def launch_plan(chat_id: str, api: Any = None) -> dict[str, Any]:
         return {"ok": True, "seated": [], "failed": []}
     built = _build(str(plan.get("title") or "").strip() or "Swarm", tree, str(plan.get("id") or ""),
                    chat_id, api, known=known)
+    # The Build card's 'Trust AI plugin drafts' grant: members' ducky_plugin_test never stops on needs_trust.
+    api.trust_drafts([built["root_group_id"], *(g["group_id"] for g in walk_groups(tree) if g.get("group_id"))])
     return {"ok": True, "seated": [s["name"] for s in walk_seats(tree) if s.get("status") == "assigned"], **built}
 
 

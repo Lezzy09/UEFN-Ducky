@@ -25,11 +25,12 @@ def queue(monkeypatch):
 
 
 class QueuedApi(Api):
-    """Pings through seat_queue.request; ``answer(conv_id)`` is the turn."""
+    """Pings through seat_queue.request; ``answer(conv_id, secs)`` is the turn and
+    ``spoke(conv_id)`` says whether the agent has sent any output yet (None: no reading)."""
 
-    def __init__(self, root, answer):
+    def __init__(self, root, answer, spoke=None):
         super().__init__(root)
-        self.answer, self.now, self.most = answer, 0, 0
+        self.answer, self.spoke, self.now, self.most = answer, spoke, 0, 0
         self.count = threading.Lock()
 
     def ping(self, conv_id, text, timeout_s, later=None):
@@ -43,7 +44,7 @@ class QueuedApi(Api):
                 with self.count:
                     self.now -= 1
 
-        return sb.queued_ping(seat_queue.request, ask, conv_id, text, timeout_s, later)
+        return sb.queued_ping(seat_queue.request, ask, conv_id, text, timeout_s, later, self.spoke)
 
 
 def _ok(cid, secs):
@@ -58,16 +59,66 @@ def test_pings_run_two_at_a_time_and_all_four_seat(tmp_path, queue):
     assert [s["status"] for s in out["tree"]] == ["assigned"] * 4 and len(api.names("assign")) == 4
 
 
-def test_a_seat_that_starts_and_never_answers_fails(tmp_path, queue, monkeypatch):
+def test_a_cold_seat_is_timed_from_its_first_output(tmp_path, queue, monkeypatch):
+    # Scaled: a 40 s tool-server start then a 2 s answer, against a 30 s answer clock.
     monkeypatch.setattr(sb, "PING_TIMEOUT_S", 0.3)
+    began = {}
+
+    def cold(cid, secs):
+        began[cid] = time.monotonic()
+        time.sleep(0.4 + 0.1)
+        return {"status": "done", "assistant_text": "ok"}
+
+    def spoke(cid):
+        return cid in began and time.monotonic() - began[cid] >= 0.4
+
+    out = sb.build_swarm(api=QueuedApi(tmp_path, cold, spoke), from_plan=_flat_plan(1))
+    assert out["tree"][0]["status"] == "assigned" and out["failed"] == []
+
+
+def test_a_seat_that_starts_and_never_answers_fails_and_keeps_its_turn(tmp_path, queue, monkeypatch):
+    monkeypatch.setattr(sb, "PING_TIMEOUT_S", 0.3)
+    release, running = threading.Event(), threading.Event()
 
     def silent(cid, secs):
-        time.sleep(secs)
-        return {"status": "timeout", "error": f"No reply within {secs}s"}
+        running.set()
+        release.wait(5)  # the turn goes on: nothing cancels it
+        running.clear()
+        return {"status": "timeout", "error": "No reply"}
 
-    out = sb.build_swarm(api=QueuedApi(tmp_path, silent), from_plan=_flat_plan(1))
-    assert out["tree"][0]["status"] == "seat_failed" and "No reply" in out["failed"][0]
+    api = QueuedApi(tmp_path, silent, spoke=lambda cid: running.is_set())
+    out = sb.build_swarm(api=api, from_plan=_flat_plan(1))
+    assert out["tree"][0]["status"] == "seat_failed" and "no reply" in out["failed"][0]
+    assert running.is_set() and api.names("assign") == []
+    release.set()
 
+
+def test_a_seat_with_no_output_at_all_did_not_start(tmp_path, queue, monkeypatch):
+    monkeypatch.setattr(sb, "PING_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(sb, "STARTUP_MAX_S", 0.4)
+    release = threading.Event()
+    api = QueuedApi(tmp_path, lambda cid, secs: release.wait(5) and {}, spoke=lambda cid: False)
+    out = sb.build_swarm(api=api, from_plan=_flat_plan(1))
+    assert out["tree"][0]["status"] == "seat_failed" and "no output in 0.4 s" in out["failed"][0]
+    release.set()
+
+
+def test_a_late_answer_still_seats_the_seat(tmp_path, queue, monkeypatch):
+    monkeypatch.setattr(sb, "PING_TIMEOUT_S", 0.2)
+
+    def slow(cid, secs):
+        time.sleep(0.6)
+        return {"status": "done", "assistant_text": "ok"}
+
+    api = QueuedApi(tmp_path, slow, spoke=lambda cid: True)
+    out = sb.build_swarm(api=api, from_plan=_flat_plan(1))
+    seat = out["tree"][0]
+    assert seat["status"] == "seat_failed"
+    for _ in range(40):
+        if seat["status"] == "assigned":
+            break
+        time.sleep(0.05)
+    assert seat["status"] == "assigned" and len(api.names("assign")) == 1
 
 def test_a_seat_still_queued_at_the_timeout_is_not_failed(tmp_path, queue, monkeypatch):
     monkeypatch.setattr(sb, "PING_TIMEOUT_S", 0.3)
