@@ -132,7 +132,8 @@ def archive_team(plan: dict[str, Any], root: str | None = None) -> dict[str, Any
         return {"ok": True, "ui": "finish_team", "status": "done", "archived": [], "terminals_closed": []}
     out = json.loads(ducky_archive_chats(conv_ids=members))
     if not out.get("ok"):
-        return {**out, "ui": "finish_team", "status": "needs_confirm"}
+        # A no keeps the card as it was (seats, commits, the button), not an empty "0 seats" one.
+        return {**finish_card(plan, root), "ok": False, "error": out.get("error") or "Nothing was archived."}
     return {"ok": True, "ui": "finish_team", "status": "done", "lead": str(plan.get("chat_id") or ""),
             "archived": out.get("archived") or members, "terminals_closed": close_terminals(members)}
 

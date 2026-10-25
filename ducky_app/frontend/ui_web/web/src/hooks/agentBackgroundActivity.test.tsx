@@ -124,6 +124,22 @@ it("pressing a running row opens its chat", async () => {
   expect(mocks.open).toHaveBeenCalledWith("click-chat");
 });
 
+it("counts an archived team's running member once, names it with its group, and opens it", async () => {
+  mocks.api.list_all_conversations.mockResolvedValue([
+    { id: "hub", title: "Live checker", is_group: true, folder_id: "archive" },
+    { id: "seat", title: "Ship fixer", folder_id: "archive", parent_conv_id: "hub" },
+  ]);
+  mocks.api.list_running_agents.mockResolvedValue(["seat"]);
+  render(<BackgroundActivityDropdown />);
+  await act(async () => {});
+  expect(screen.getByText("1 running")).toBeTruthy();
+  fireEvent.click(screen.getByLabelText("Background activity"));
+  const rows = screen.getAllByText(/ is working$/);
+  expect(rows.map((row) => row.textContent)).toEqual(["Live checker · Ship fixer (archived) is working"]);
+  fireEvent.click(rows[0]);
+  expect(mocks.open).toHaveBeenCalledWith("seat");
+});
+
 it("does not evict a running turn when many other jobs arrive", () => {
   applyAgentBackgroundEvent(start(), "Coordinator");
   for (let i = 0; i < 80; i++) upsertBackgroundJob({ id: `history:${i}`, phase: "done" });

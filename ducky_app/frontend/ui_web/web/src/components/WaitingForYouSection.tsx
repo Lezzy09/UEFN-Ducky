@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { AskUserForm, getAskUserSession, settleAskUser, subscribeAskUser, type AskUserSession } from "../ask-user";
-import { chatTitleFor } from "../hooks/agentBackgroundActivity";
+import { chatLabelFor, chatTitleFor, loadChatTitles, subscribeChatTitles } from "../hooks/agentBackgroundActivity";
 import { openWaitingChat, useWaitingItems, type WaitingItem } from "../hooks/waitingChats";
 import { TerminalApprovalCard } from "../terminal/TerminalApprovalCard";
 import { listTerminalApprovals, subscribeTerminalApprovals } from "../terminal/terminalApprovals";
@@ -25,6 +25,12 @@ export function WaitingForYouSection({ onOpenChat }: { onOpenChat: () => void })
     setOrphan(getAskUserSession());
     return subscribeAskUser(() => setOrphan(getAskUserSession()));
   }, []);
+  // A chat the tray hasn't listed yet (a workflow's new ducky, a member made since): read the
+  // list once more so its row names it instead of "A chat".
+  const [, setTitlesSeen] = useState(0);
+  useEffect(() => subscribeChatTitles(() => setTitlesSeen((n) => n + 1)), []);
+  const unnamed = items.filter((item) => item.convId && !chatTitleFor(item.convId)).map((item) => item.convId).join(",");
+  useEffect(() => { if (unnamed) void loadChatTitles(); }, [unnamed]);
   if (!items.length) return null;
 
   return (
@@ -32,10 +38,9 @@ export function WaitingForYouSection({ onOpenChat }: { onOpenChat: () => void })
       <div className="connection-status-menu-head">Waiting for you</div>
       {items.map((item) => {
         if (item.convId) {
-          // A chat the tray hasn't listed yet (a workflow's new ducky): the row says "A chat",
-          // but its tab gets no made-up name, so it shows the chat's own title.
+          // Until its title loads the row says "A chat", but its tab gets no made-up name.
           const known = chatTitleFor(item.convId);
-          const title = known || "A chat";
+          const title = chatLabelFor(item.convId) || "A chat";
           return (
             <div
               key={item.key}

@@ -76,6 +76,9 @@ def test_no_keeps_the_team_and_its_terminals(env):
     env.state["yes"] = False
     out = ft.archive_team(PLAN)
     assert not out["ok"] and env.closed == [] and env.archived == []
+    # The card stays whole after a no: same seats, still asking.
+    assert out["status"] == "needs_confirm" and {s["conv_id"] for s in out["seats"]} == {"a", "b"}
+    assert "said no" in out["error"]
 
 
 def test_a_swapped_seat_archives_the_old_chat(env, monkeypatch):

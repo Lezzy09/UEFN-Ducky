@@ -5,6 +5,7 @@ import { getApi } from "./usePanelApi";
 import { requestOpenChatTab } from "../navigation/openChatReference";
 import { requestLatestChatActivity } from "../navigation/latestChatActivity";
 import { agentStepText } from "../utils/agentActivity";
+import { isArchiveFolderId } from "../utils/archiveFolder";
 
 const TURN_EVENTS = new Set(["agent_started", "text_delta", "thinking", "tool", "tool_done", "status"]);
 
@@ -76,11 +77,47 @@ export async function stopAgentBackgroundJob(job: BackgroundJob): Promise<void> 
   endAgentJobs(job.convId, "Stopped");
 }
 
-/** Chat titles the tray last loaded (its "Waiting for you" rows name the chat). */
-const chatTitles = new Map<string, string>();
+/** Chats the tray last loaded (its rows name the chat, with its group and an archived mark). */
+type ChatInfo = { title: string; folder: string; parent: string; isGroup: boolean };
+const chatInfo = new Map<string, ChatInfo>();
+const titleListeners = new Set<() => void>();
+let chatListLoad: Promise<string[] | null> | null = null;
+
+/** Read every chat's title once (calls at the same time share it). Resolves to the chat ids, or null. */
+export function loadChatTitles(): Promise<string[] | null> {
+  if (chatListLoad) return chatListLoad;
+  chatListLoad = (async () => {
+    const chats = await getApi()?.list_all_conversations?.(true).catch(() => null);
+    if (!chats) return null;
+    for (const chat of chats) {
+      chatInfo.set(chat.id, { title: chat.title, folder: chat.folder_id || "", parent: chat.parent_conv_id || "", isGroup: Boolean(chat.is_group) });
+    }
+    for (const cb of titleListeners) cb();
+    return chats.map((chat) => chat.id);
+  })().finally(() => { chatListLoad = null; });
+  return chatListLoad;
+}
+
+export function subscribeChatTitles(cb: () => void): () => void {
+  titleListeners.add(cb);
+  return () => { titleListeners.delete(cb); };
+}
 
 export function chatTitleFor(convId: string): string {
-  return chatTitles.get(convId) || "";
+  return chatInfo.get(convId)?.title || "";
+}
+
+/** A chat's name as the tray shows it: "Group · Chat", "(archived)" when the sidebar hides it. */
+export function chatLabelFor(convId: string): string {
+  const chat = chatInfo.get(convId);
+  if (!chat?.title) return "";
+  // A member sits in its group's folder; an archived member keeps parent_conv_id to its hub.
+  let hub = chat.isGroup ? undefined : chatInfo.get(chat.parent);
+  if (!hub?.isGroup && !chat.isGroup && chat.folder && !isArchiveFolderId(chat.folder)) {
+    hub = [...chatInfo.values()].find((row) => row.isGroup && row.folder === chat.folder);
+  }
+  const name = hub?.isGroup && hub.title ? `${hub.title} · ${chat.title}` : chat.title;
+  return isArchiveFolderId(chat.folder) || (hub?.isGroup && isArchiveFolderId(hub.folder)) ? `${name} (archived)` : name;
 }
 
 /** Mounted once by the header, independent of which chat panes are open. */
@@ -95,26 +132,18 @@ export function subscribeAgentBackgroundActivity(): () => void {
   for (const job of getBackgroundJobs()) {
     if (job.source === "agent" && job.toolId) dismissBackgroundJob(job.id);
   }
-  let titleRefresh: Promise<void> | null = null;
-  const refreshTitles = (): Promise<void> => {
-    if (titleRefresh) return titleRefresh;
-    titleRefresh = (async () => {
-      const chats = await api?.list_all_conversations?.(true).catch(() => null);
-      if (!active || !chats) return;
-      existing = new Set(chats.map((chat) => chat.id));
-      for (const chat of chats) {
-        titles.set(chat.id, chat.title);
-        chatTitles.set(chat.id, chat.title);
+  const refreshTitles = async (): Promise<void> => {
+    const ids = await loadChatTitles();
+    if (!active || !ids) return;
+    existing = new Set(ids);
+    for (const id of ids) titles.set(id, chatLabelFor(id));
+    for (const job of getBackgroundJobs()) {
+      const title = titles.get(job.convId || "");
+      if (job.source === "agent" && title) {
+        const verb = job.phase === "working" ? " is working" : / stopped$/.test(job.title) ? " stopped" : " finished";
+        upsertBackgroundJob({ id: job.id, title: `${title}${verb}`, ts: job.ts });
       }
-      for (const job of getBackgroundJobs()) {
-        const title = titles.get(job.convId || "");
-        if (job.source === "agent" && title) {
-          const verb = job.phase === "working" ? " is working" : / stopped$/.test(job.title) ? " stopped" : " finished";
-          upsertBackgroundJob({ id: job.id, title: `${title}${verb}`, ts: job.ts });
-        }
-      }
-    })().finally(() => { titleRefresh = null; });
-    return titleRefresh;
+    }
   };
   const stop = subscribeAgentEvents((event) => {
     if (event.type === "chats_changed") {
