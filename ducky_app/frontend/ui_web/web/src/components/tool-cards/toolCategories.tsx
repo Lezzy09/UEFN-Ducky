@@ -35,6 +35,9 @@ const SCREENSHOT_TOOLS = new Set([
   "uefn_window_capture",
   "ducky_publish_private_version",
   "blender_get_viewport_screenshot",
+  // A picture an agent looked at or made: the card shows it, not the raw result.
+  "view_image",
+  "ducky_generate_image",
 ]);
 
 function isCaptureTool(name: string): boolean {

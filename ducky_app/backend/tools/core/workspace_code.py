@@ -574,10 +574,34 @@ def view_image(path: str, pretty: bool = False) -> Any:
     a project (png, jpg, gif, webp, bmp). Pass the absolute path given in the chat, or a project
     path. Returns the picture itself, so you see it."""
     full = _image_path(path)
-    text = tool_json({"path": full.replace("\\", "/"), "bytes": os.path.getsize(full)}, pretty=pretty)
+    out: dict[str, Any] = {"path": full.replace("\\", "/"), "bytes": os.path.getsize(full)}
+    url = _picture_url(full)
+    if url:
+        out["media_url"] = url  # the chat's tool card shows the picture
     from mcp.server.fastmcp import Image
 
-    return [text, Image(path=full)]
+    return [tool_json(out, pretty=pretty), Image(path=full)]
+
+
+_CHAT_PICTURE = re.compile(r"[\\/]conversations[\\/]([^\\/]+)[\\/]attachments[\\/]([^\\/]+\.(?:png|jpe?g|webp))$", re.IGNORECASE)
+
+
+def _picture_url(full: str) -> str:
+    """A link the chat's tool card can show: a chat's own attachment as it is, any other
+    png/jpg/webp as a copy saved in the calling chat (the panel serves nothing else)."""
+    try:
+        from frontend.ui_web.conversation_attachments import build_chat_attachment_url, save_chat_screenshot
+
+        hit = _CHAT_PICTURE.search(full)
+        if hit:
+            return build_chat_attachment_url(hit.group(1), hit.group(2))
+        if not full.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            return ""  # gif/bmp: the agent still sees it; the card shows the path
+        with open(full, "rb") as fh:
+            saved = save_chat_screenshot(fh.read(), prefix="viewed_" + os.path.splitext(os.path.basename(full))[0])
+        return str(saved.get("media_url") or "") if saved.get("ok") else ""
+    except Exception:
+        return ""
 
 
 @mcp.tool()
@@ -618,8 +642,8 @@ def ducky_generate_image(prompt: str, confirm_spend: bool = False, backend: str 
                                             filename=made.name, mime=gen._mime_for(made), conv_id=chat)
     from mcp.server.fastmcp import Image
 
-    out = {"path": str(kept["path"]).replace("\\", "/"), "backend": row["label"], "maker": row.get("plugin"),
-           "cost": media.cost_text(row)}
+    out = {"path": str(kept["path"]).replace("\\", "/"), "media_url": str(kept.get("media_url") or ""),
+           "backend": row["label"], "maker": row.get("plugin"), "cost": media.cost_text(row)}
     return [tool_json(out, pretty=pretty), Image(path=str(kept["path"]))]
 
 

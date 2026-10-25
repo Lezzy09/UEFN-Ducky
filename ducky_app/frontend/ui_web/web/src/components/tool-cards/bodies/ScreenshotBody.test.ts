@@ -28,6 +28,16 @@ describe("ScreenshotBody result parsing", () => {
     expect(pickScreenshotBase64(data)).toBe("");
   });
 
+  it("shows the picture view_image looked at (JSON plus Claude's [Image: …] line)", () => {
+    const path = "C:/Users/x/AppData/Local/UEFN-Ducky/chats/projects/_no_project/conversations/b47c8c50/attachments/1792941138083_1_Screenshot.png";
+    const raw = `${JSON.stringify({ path, bytes: 54637 })}\n[Image: source: C:\\Users\\x\\.claude\\projects\\p\\2d81da25.png]`;
+    const data = parseScreenshotResult(raw);
+    expect(pickScreenshotPath(data, {})).toBe(path);
+    expect(screenshotSrcFromPath(pickScreenshotPath(data, {}))).toBe("/chat-attachments/b47c8c50/1792941138083_1_Screenshot.png");
+    const copied = parseScreenshotResult(JSON.stringify({ path: "D:/proj/Content/icon.png", bytes: 9, media_url: "http://127.0.0.1:4199/chat-attachments/c1/viewed_icon_1.png" }));
+    expect(pickScreenshotMediaUrl(copied)).toContain("/chat-attachments/c1/viewed_icon_1.png");
+  });
+
   it("still reads legacy base64 payloads", () => {
     const raw = JSON.stringify({
       ok: true,

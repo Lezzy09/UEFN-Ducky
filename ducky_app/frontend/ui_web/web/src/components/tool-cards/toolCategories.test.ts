@@ -66,6 +66,10 @@ describe("resolveToolCategory", () => {
     expect(resolveToolCategory("preview_asset").id).toBe("screenshot");
     expect(resolveToolCategory("uefn_window_capture").id).toBe("screenshot");
     expect(resolveToolCategory("ducky_publish_private_version").id).toBe("screenshot");
+    // A picture an agent looked at or made shows in its card, not as raw JSON.
+    expect(resolveToolCategory("view_image").id).toBe("screenshot");
+    expect(resolveToolCategory("ducky_generate_image").id).toBe("screenshot");
+    expect(isStandaloneToolCard("view_image")).toBe(true);
   });
 
   it("maps python tools", () => {
