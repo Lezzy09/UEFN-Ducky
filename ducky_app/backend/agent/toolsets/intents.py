@@ -426,6 +426,8 @@ _PANEL_UI_TOOLS = frozenset(
         "ducky_plugin_reference",
         "ducky_plugin_errors",
         "ducky_plugin_test",
+        # Before a plugin release: release lock, clean-clone tests, hidden-character scan.
+        "ducky_plugin_release_check",
         # Custom Verse templates (AppData) — never Store plugin verse.templates.
         "ducky_verse_template_list",
         "ducky_verse_template_get",
@@ -588,7 +590,7 @@ INTENT_KEYWORDS: list[tuple[re.Pattern[str], frozenset[str]]] = [
             r"|ai[- ]?made\s+plugin|ai\s+plugin|desktop\s+plugin|create\s+(a\s+)?plugin"
             r"|build\s+(a\s+)?plugin|write\s+(a\s+)?plugin|author\s+(a\s+)?plugin"
             r"|customi[sz]e\s+(the\s+)?(app|ducky)|skin|chrome|plugin\s+draft"
-            r"|ducky_plugin_|ai_plugins"
+            r"|ducky_plugin_|ai_plugins|(release|publish)\s+(the\s+|a\s+)?([\w-]+\s+)?plugins?"
             r"|verse\s*template|custom\s+template|system\s+template"
             r"|ducky_verse_template_)\b",
             re.I,

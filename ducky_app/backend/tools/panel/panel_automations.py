@@ -702,6 +702,81 @@ def create_workflow_from_template(
     return tool_json({"ok": True, "workflow": saved, "from_template": out["template"]}, pretty=pretty)
 
 
+def release_plugin_of(workflow_id: str, payload: dict[str, Any] | None = None) -> str:
+    """The plugin a release workflow publishes: its Call tool find_plugin_repo step's plugin
+    argument, a "{{field}}" read from the payload or the workflow's input default. "" otherwise."""
+    from backend.automations.store import get_workflow as _get
+
+    wf = _get(workflow_id) or {}
+    nodes = [n for n in (wf.get("graph") or {}).get("nodes") or [] if isinstance(n, dict)]
+    finder = next((n for n in nodes if n.get("type") == "tool.call"
+                   and (n.get("config") or {}).get("name") == "find_plugin_repo"), None)
+    if finder is None:
+        return ""
+    cfg = finder.get("config") or {}
+    args = cfg.get("arguments") if isinstance(cfg.get("arguments"), dict) else {}
+    if not args and cfg.get("arguments_json"):
+        try:
+            args = json.loads(str(cfg["arguments_json"]))
+        except ValueError:
+            args = {}
+    value = str((args or {}).get("plugin") or "").strip()
+    field = value[2:-2].strip() if value.startswith("{{") and value.endswith("}}") else ""
+    if not field:
+        return value
+    if (payload or {}).get(field):
+        return str(payload[field]).strip()
+    for node in nodes:
+        if node.get("type") == "flow.input":
+            for row in (node.get("config") or {}).get("inputs") or []:
+                if isinstance(row, dict) and row.get("name") == field and row.get("default"):
+                    return str(row["default"]).strip()
+    return ""
+
+
+_RELEASE_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+def _release_start_lock() -> asyncio.Lock:
+    # ponytail: one lock per event loop (the tool server has one); per-plugin locks if releases queue up.
+    return _RELEASE_LOCKS.setdefault(id(asyncio.get_running_loop()), asyncio.Lock())
+
+
+def _run_ids(workflow_id: str) -> set[str]:
+    from backend.automations import live_runs
+
+    return {str(r.get("run")) for r in live_runs.runs(workflow_id)}
+
+
+async def _record_release_run(plugin: str, workflow_id: str, known: set[str], running: asyncio.Task,
+                              chat_id: str, step_id: str, wait_s: float = 10.0) -> None:
+    """Wait for the run started just now to appear, then hold ``plugin`` for it (L2's release lock)."""
+    from backend.tools.panel.panel_ai_plugins import start_release_run
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + wait_s
+    while not running.done() and loop.time() < deadline:
+        new = _run_ids(workflow_id) - known
+        if new:
+            found = resolve_plugin_repo(plugin)
+            start_release_run(plugin, workflow_id, sorted(new)[0], chat_id=_caller_chat(chat_id),
+                              step_id=step_id, clone=str(found.get("repo") or ""))
+            return
+        await asyncio.sleep(0.05)
+
+
+def _caller_chat(conv_id: str) -> str:
+    if conv_id:
+        return conv_id
+    try:
+        from backend.workspace import identity as run_identity
+
+        ctx = run_identity.current()
+        return ((ctx.conv_id if ctx is not None else "") or "").strip()
+    except Exception:
+        return ""
+
+
 @mcp.tool()
 async def run_workflow(
     workflow_id: str,
@@ -710,9 +785,14 @@ async def run_workflow(
     caller_conv_id: str = "",
     payload: dict[str, Any] | None = None,
     trigger_id: str = "",
+    plan_step_id: str = "",
     pretty: bool = False,
 ) -> str:
     """Run a workflow now and open it in the editor. Does not switch the active island.
+
+    A plugin release workflow (its Find the plugin repo step) holds that plugin while it
+    runs: a second release run of the same plugin is refused with the running one's id.
+    plan_step_id: the plan step this run does; the run id is noted on it.
 
     From chat: pass the user's request after a workflow reference as prompt, and
     their files. caller_conv_id defaults to the chat running this tool, which gets
@@ -724,19 +804,35 @@ async def run_workflow(
     from backend.automations.runner import public_payload
     from backend.automations.runner import run_workflow as _run
 
-    # Agents inside the workflow call this MCP server themselves. Keep its
-    # event loop available while the synchronous runner waits for those agents.
-    # to_thread also preserves the caller's identity context variables.
-    out = await asyncio.to_thread(
-        _run,
-        workflow_id,
-        trigger_id=trigger_id,
-        # Only the app says a person pressed Run (approves code, allows spending).
-        payload=public_payload(payload),
-        prompt=prompt,
-        files=files,
-        caller_conv_id=caller_conv_id,
-    )
+    def start() -> asyncio.Task:
+        # Agents inside the workflow call this MCP server themselves. Keep its
+        # event loop available while the synchronous runner waits for those agents.
+        # to_thread also preserves the caller's identity context variables.
+        return asyncio.create_task(asyncio.to_thread(
+            _run,
+            workflow_id,
+            trigger_id=trigger_id,
+            # Only the app says a person pressed Run (approves code, allows spending).
+            payload=public_payload(payload),
+            prompt=prompt,
+            files=files,
+            caller_conv_id=caller_conv_id,
+        ))
+
+    plugin = release_plugin_of(workflow_id, payload)
+    if not plugin:
+        out = await start()
+    else:
+        from backend.tools.panel.panel_ai_plugins import release_busy
+
+        async with _release_start_lock():  # check, start and record as one: two calls can't both pass
+            busy = release_busy(plugin)
+            if busy:
+                return tool_json({"ok": False, "error": f"{plugin}: {busy}. Wait for it or stop it first."}, pretty=pretty)
+            known = _run_ids(workflow_id)
+            running = start()
+            await _record_release_run(plugin, workflow_id, known, running, caller_conv_id, plan_step_id)
+        out = await running
     if out.get("ok"):
         _reveal_graph(workflow_id, "saved")
     return tool_json(_review_hint(out, workflow_id), pretty=pretty)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from backend.server import mcp
 from backend.util.json_util import tool_json
@@ -122,6 +123,9 @@ def ducky_terminal_run(
     this command, or when the command is typed into the Local workflow running it)."""
     mgr = _terminal_manager()
     chat = _terminal_chat(conv_id)
+    busy = release_refusal(command, _session_cwd(mgr, session_id.strip()))
+    if busy:
+        return tool_json({"ok": False, "error": busy, "session_id": session_id.strip()}, pretty=pretty)
     from backend.automations.runner import typed_command_approved
     from backend.tools.panel.permission_prompt import allows_everything
 
@@ -145,6 +149,55 @@ def ducky_terminal_run(
         result["asked_in_chat"] = chat or "(no chat: the call carried no chat identity)"
         result["chat_allows_everything"] = bool(chat) and allows_everything(chat)
     return tool_json(early_return_hint(result), pretty=pretty)
+
+
+_RELEASE_SCRIPT = re.compile(r"""([^\s"'&|;]*?)[\\/]?\brelease\.(?:py|sh)\b""", re.I)
+
+
+def _session_cwd(mgr, session_id: str) -> str:
+    try:
+        return str(getattr(mgr.get_session(session_id), "cwd", "") or "")
+    except Exception:  # noqa: BLE001 - no session info: the command's own path still counts
+        return ""
+
+
+def _plugin_id_near(folder: str) -> str:
+    """The id in the plugin.json at ``folder`` or up to two folders above it (scripts/release.py)."""
+    from pathlib import Path
+
+    if not folder:
+        return ""
+    here = Path(folder)
+    for candidate in (here, *list(here.parents)[:2]):
+        manifest = candidate / "plugin.json"
+        try:
+            return str(json.loads(manifest.read_text(encoding="utf-8")).get("id") or "").strip()
+        except (OSError, ValueError, AttributeError):
+            continue
+    return ""
+
+
+def release_refusal(command: str, cwd: str) -> str:
+    """Why a plugin repo's release.py / release.sh must not run now: another release workflow
+    holds that plugin (L2's release lock). A workflow running its own release passes."""
+    match = _RELEASE_SCRIPT.search(command or "")
+    if not match:
+        return ""
+    from pathlib import Path
+
+    script_dir = match.group(1).strip("\"'")
+    if script_dir and cwd and not Path(script_dir).is_absolute():
+        script_dir = str(Path(cwd) / script_dir)
+    plugin = _plugin_id_near(script_dir) or _plugin_id_near(cwd)
+    if not plugin:
+        return ""
+    from backend.automations.runner import _REGISTRY_RUNS
+    from backend.tools.panel.panel_ai_plugins import release_busy
+
+    busy = release_busy(plugin)
+    if busy and any(not release_busy(plugin, run_id=run) for _wid, run in _REGISTRY_RUNS.get()):
+        busy = ""  # this command is that release workflow's own step
+    return f"Not run: {plugin}: {busy}. Wait for it to finish (or stop it), then run the release again." if busy else ""
 
 
 def early_return_hint(result: dict) -> dict:

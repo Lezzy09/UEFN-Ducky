@@ -353,3 +353,67 @@ def test_list_workflow_nodes_for_one_plugin_is_small(monkeypatch):
     full = json.loads(list_workflow_nodes(plugin="googledrive", fields="all"))["nodes"]
     assert len(full) == 10 and full[0]["icon"].startswith("data:") and full[0]["plugin_id"] == "googledrive"
     assert any(n["type"] == "tool.call" for n in json.loads(list_workflow_nodes())["nodes"])  # no filter: unchanged
+
+
+_RELEASE_GRAPH = {"nodes": [
+    {"id": "in", "type": "flow.input", "config": {"inputs": [{"name": "plugin", "default": "island-media-kit"}]}},
+    {"id": "repo", "type": "tool.call", "config": {"name": "find_plugin_repo", "arguments": {"plugin": "{{plugin}}"}}},
+], "edges": []}
+
+
+def test_release_plugin_of_reads_the_repo_step():
+    from backend.tools.panel import panel_automations as panel
+
+    def fake(wid):
+        return {"id": wid, "graph": _RELEASE_GRAPH} if wid == "rel" else {"id": wid, "graph": {"nodes": []}}
+
+    import backend.automations.store as store
+    original = store.get_workflow
+    store.get_workflow = fake
+    try:
+        assert panel.release_plugin_of("rel") == "island-media-kit"  # the input's default
+        assert panel.release_plugin_of("rel", {"plugin": "playtester"}) == "playtester"
+        assert panel.release_plugin_of("other") == ""
+    finally:
+        store.get_workflow = original
+
+
+def test_release_workflow_holds_the_plugin_and_refuses_a_second_run(monkeypatch, tmp_path):
+    from backend.automations import live_runs
+    from backend.tools.panel import panel_ai_plugins
+    from backend.tools.panel import panel_automations as panel
+
+    monkeypatch.setattr(live_runs, "_directory", lambda: tmp_path / "runs")
+    monkeypatch.setattr(panel_ai_plugins, "_releases_dir", lambda: tmp_path / "releases")
+    notes: list[tuple] = []
+    monkeypatch.setattr(panel_ai_plugins, "_append_step_note", lambda *a: notes.append(a))
+    monkeypatch.setattr("backend.automations.store.get_workflow", lambda wid: {"id": wid, "graph": _RELEASE_GRAPH})
+    monkeypatch.setattr(panel, "_reveal_graph", lambda *a, **k: None)
+    monkeypatch.setattr(panel, "_review_hint", lambda out, *a: out)
+    monkeypatch.setattr(panel, "resolve_plugin_repo", lambda pid: {"ok": True, "repo": "C:/repos/imk"})
+    finish = threading.Event()
+    started: list[str] = []
+
+    def fake_run(wid, **kw):
+        live_runs.start(wid, "7f3a")
+        started.append(wid)
+        finish.wait(5)
+        return {"ok": True, "id": wid, "run": "7f3a"}
+
+    monkeypatch.setattr("backend.automations.runner.run_workflow", fake_run)
+
+    async def check():
+        first = asyncio.create_task(panel.run_workflow("rel", caller_conv_id="lead", plan_step_id="s1"))
+        for _ in range(200):
+            if (tmp_path / "releases" / "island-media-kit.json").exists():
+                break
+            await asyncio.sleep(0.02)
+        rec = json.loads((tmp_path / "releases" / "island-media-kit.json").read_text(encoding="utf-8"))
+        assert rec["run_id"] == "7f3a" and rec["step_id"] == "s1" and rec["chat_id"] == "lead"
+        assert rec["clone"] == "C:/repos/imk" and notes == [("lead", "s1", "Release workflow run `7f3a` started.")]
+        second = json.loads(await panel.run_workflow("rel"))
+        assert second["ok"] is False and "release workflow 7f3a is running" in second["error"] and len(started) == 1
+        finish.set()
+        assert json.loads(await first)["ok"] is True
+
+    asyncio.run(check())
