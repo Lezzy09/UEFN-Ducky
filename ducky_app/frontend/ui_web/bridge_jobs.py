@@ -4,6 +4,10 @@ Long work (LLM, Store download, skill draft, MCP catalog, key test, …) must no
 run on the bridge thread — one blocked ``api.*`` call freezes the whole panel
 (file tree, chat, agents). Callers ``job_start`` then ``job_poll`` with short
 bridge round-trips.
+
+Each job also pushes ``bridge_job_progress`` events (job id, state, percent) when its
+state or progress changes, at most 2 a second per job, so pages can stop polling.
+A job reports progress with ``job_progress(percent)`` from inside its function.
 """
 
 from __future__ import annotations
@@ -37,6 +41,70 @@ _STALE_GRACE_S = 120.0
 _REAP_INTERVAL_S = 30.0
 atexit.register(_REAPER_STOP.set)
 
+# bridge_job_progress pushes per job: at most one per gap (the last value always goes).
+_PUSH_GAP_S = 0.5
+_FINAL_STATES = frozenset({"done", "error", "cancelled"})
+# job id -> {"value", "sent", "at", "timer"}: coalesced progress pushes.
+_PROGRESS: dict[str, dict[str, Any]] = {}
+_current = threading.local()
+
+
+def _emit(event: dict[str, Any]) -> None:
+    try:
+        from frontend.ui_web.agent_modes import get_panel_push
+
+        push = get_panel_push()
+        if push:
+            push(event)
+    except Exception:
+        pass
+
+
+def _progress_changed(jid: str, state: str, percent: float | None) -> None:
+    pct = None if percent is None else max(0, min(100, int(percent)))
+    with _LOCK:
+        entry = _PROGRESS.get(jid)
+        if entry is None:
+            if jid not in _JOBS:
+                return  # cancelled or expired: nobody listens
+            entry = _PROGRESS[jid] = {"sent": None, "at": 0.0, "timer": None}
+        if pct is None and entry.get("value"):
+            pct = entry["value"][1]
+        entry["value"] = (state, pct)
+        if entry["timer"] is not None:
+            return
+        wait = entry["at"] + _PUSH_GAP_S - time.monotonic()
+        if wait > 0:
+            timer = threading.Timer(wait, _flush_progress, args=(jid,))
+            timer.daemon = True
+            entry["timer"] = timer
+            timer.start()
+            return
+    _flush_progress(jid)
+
+
+def _flush_progress(jid: str) -> None:
+    with _LOCK:
+        entry = _PROGRESS.get(jid)
+        if entry is None:
+            return
+        entry["timer"] = None
+        value = entry["value"]
+        if value[0] in _FINAL_STATES:
+            _PROGRESS.pop(jid, None)
+        if value == entry["sent"]:
+            return
+        entry["sent"] = value
+        entry["at"] = time.monotonic()
+    _emit({"type": "bridge_job_progress", "job_id": jid, "state": value[0], "percent": value[1]})
+
+
+def job_progress(percent: float, state: str = "running", job_id: str = "") -> None:
+    """Report a job's progress (0-100); inside a job's function ``job_id`` is implied."""
+    jid = (job_id or getattr(_current, "job_id", "") or "").strip()
+    if jid:
+        _progress_changed(jid, state, percent)
+
 
 def _forget_locked(jid: str) -> threading.Event | None:
     _JOB_COMPLETED_AT.pop(jid, None)
@@ -61,8 +129,11 @@ def _reaper() -> None:
 
 def _completed(jid: str, future: concurrent.futures.Future) -> None:
     with _LOCK:
-        if _JOBS.get(jid) is future:
-            _JOB_COMPLETED_AT[jid] = time.monotonic()
+        if _JOBS.get(jid) is not future:
+            return
+        _JOB_COMPLETED_AT[jid] = time.monotonic()
+    failed = future.cancelled() or future.exception() is not None
+    _progress_changed(jid, "error" if failed else "done", None if failed else 100)
 
 
 def job_start(fn: Callable[[], Any]) -> dict[str, Any]:
@@ -73,10 +144,12 @@ def job_start(fn: Callable[[], Any]) -> dict[str, Any]:
     slots = _SLOTS
 
     def run() -> Any:
+        _current.job_id = job_id
         try:
             if not cancelled.is_set():
                 return fn()
         finally:
+            _current.job_id = ""
             slots.release()
 
     _reap_expired(time.monotonic())
@@ -114,6 +187,11 @@ def job_cancel(job_id: str) -> dict[str, Any]:
         # Future.cancel() leaves a work item queued in ThreadPoolExecutor. Keep
         # the slot until our wrapper is actually dequeued, then skip its work.
         cancelled.set()
+        with _LOCK:
+            entry = _PROGRESS.pop(jid, None)
+        if entry and entry["timer"] is not None:
+            entry["timer"].cancel()
+        _emit({"type": "bridge_job_progress", "job_id": jid, "state": "cancelled", "percent": None})
     return {"ok": True, "cancelled": True, "job_id": jid}
 
 
