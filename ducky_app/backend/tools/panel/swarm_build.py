@@ -1,11 +1,33 @@
-"""Swarm build: turn a confirmed ``swarm_preview.build_preview`` into the plan, groups and seats."""
+"""Swarm build: turn a confirmed ``swarm_preview.build_preview`` (or the lead's own plan) into
+groups and seats.
+
+Order: validate everything, then create; a failed create archives what was made (nothing
+has started yet). Each seat gets a ping turn before its sub plan is assigned. Seats or
+groups with ``start_after`` wait until that step completes (``on_step_completed``). The
+swarm record lives at ``.ducky/swarms/<id>/swarm.json`` beside the ``outputs/`` folder every
+seat writes its deliverables to, and holds the ``Hands over:`` table (``handovers_for``).
+"""
 
 from __future__ import annotations
 
 import json
+import os
+import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
 from backend.tools.panel.swarm_preview import DONE_LINE, walk_groups, walk_seats
+
+PING_TIMEOUT_S = 30.0
+SWARMS_DIR = ".ducky/swarms"
+
+
+class SwarmBuildError(ValueError):
+    """A build that made nothing (or archived what it made). ``result`` = {ok, error, created}."""
+
+    def __init__(self, error: str, created: int = 0) -> None:
+        super().__init__(error)
+        self.result = {"ok": False, "error": error, "created": created}
 
 
 def _loads(text: str) -> dict[str, Any]:
@@ -25,11 +47,34 @@ class PanelSwarmApi:
 
         return _resolve_plan_chat_id("")
 
+    def project_root(self) -> str:
+        from backend.tools.panel.ducky_panel import _project_root
+
+        return str(_project_root() or "")
+
     def group_create(self, name: str, parent_folder_id: str = "") -> dict[str, Any]:
         from backend.tools.panel.ducky_panel import ducky_group_create
 
         res = _loads(ducky_group_create(name=name, parent_folder_id=parent_folder_id))
         return {"id": res.get("id") or "", "folder_id": res.get("folder_id") or ""}
+
+    def chat_home(self, conv_id: str) -> dict[str, str]:
+        from frontend.ui_web.project_chats import load_conversation
+
+        conv = load_conversation(conv_id, self.project_root())
+        return {"folder_id": str(getattr(conv, "folder_id", "") or ""),
+                "parent_conv_id": str(getattr(conv, "parent_conv_id", "") or "")}
+
+    def restore_home(self, conv_id: str, home: dict[str, str]) -> None:
+        """Put the lead back where it was, so archiving the root group doesn't take it along."""
+        from frontend.ui_web.project_chats import load_conversation, move_conversation, save_conversation
+
+        root = self.project_root()
+        move_conversation(conv_id, home.get("folder_id") or "", root)
+        conv = load_conversation(conv_id, root)
+        if conv is not None:
+            conv.parent_conv_id = home.get("parent_conv_id") or ""
+            save_conversation(conv, root)
 
     def add_leader(self, group_id: str, conv_id: str) -> None:
         from backend.tools.panel.ducky_panel import ducky_group_add_member
@@ -60,6 +105,11 @@ class PanelSwarmApi:
                                          body_markdown=body_markdown))
         return str((res.get("node") or {}).get("id") or "")
 
+    def plan_delete_node(self, chat_id: str, node_id: str) -> None:
+        from backend.tools.panel.ducky_panel import ducky_plan_delete_node
+
+        _loads(ducky_plan_delete_node(node_id=node_id, chat_id=chat_id))
+
     def invite(self, group_id: str, profile: str, name: str, model: str,
                write_allowed: Optional[list[str]]) -> str:
         from backend.tools.panel.ducky_panel import ducky_group_invite
@@ -73,56 +123,418 @@ class PanelSwarmApi:
 
         _loads(ducky_set_muted(conv_id=conv_id, muted=muted))
 
+    def ping(self, conv_id: str, text: str, timeout_s: float) -> dict[str, Any]:
+        """One tiny turn: {ok} or {ok: False, error}."""
+        from frontend.ui_web.agent_modes import run_message_and_wait
+
+        # ponytail: straight run_message_and_wait; route through K3's seat queue once it lands.
+        out = run_message_and_wait(conv_id, text, "agent", timeout_sec=timeout_s, queue_if_busy=True)
+        if out.get("status") == "done" and str(out.get("assistant_text") or "").strip():
+            return {"ok": True}
+        return {"ok": False, "error": str(out.get("error") or out.get("status") or "no reply")}
+
     def assign(self, chat_id: str, node_id: str, assignee: str) -> None:
         from backend.tools.panel.ducky_panel import ducky_plan_update_node
 
         _loads(ducky_plan_update_node(node_id=node_id, chat_id=chat_id, assignee=assignee))
 
+    def archive(self, conv_id: str) -> None:
+        """The ducky_archive_chats path without its ask: nothing in a half-made swarm has started."""
+        from backend.tools.panel.ducky_panel import _panel_api
+        from frontend.archive_folder import ARCHIVE_FOLDER_ID
 
-def build_swarm(preview: dict[str, Any], api: Any) -> dict[str, Any]:
-    """Build *preview* exactly: (1) root group + caller as lead, (2) one sub plan per job with
-    its steps, no assignee, (3) nested groups and seats with lanes, then mute, (4) assign."""
-    goal = preview["goal"]
-    tree = preview["tree"]
+        _panel_api().move_conversation(conv_id, ARCHIVE_FOLDER_ID)
+
+    def save_file(self, rel: str, text: str) -> None:
+        from backend.workspace.runtime import get_writer
+
+        get_writer().write_text(rel, text, tool="ducky_swarm_create")
+
+    def read_records(self) -> list[dict[str, Any]]:
+        return read_records(self.project_root())
+
+
+class _Defaults:
+    """Calls an older api (e.g. a test's) may lack: no files, the lead stays put, every ping answers."""
+
+    def project_root(self) -> str:
+        return ""
+
+    def chat_home(self, conv_id: str) -> dict[str, str]:
+        return {}
+
+    def restore_home(self, conv_id: str, home: dict[str, str]) -> None:
+        pass
+
+    def ping(self, conv_id: str, text: str, timeout_s: float) -> dict[str, Any]:
+        return {"ok": True}
+
+    def plan_delete_node(self, chat_id: str, node_id: str) -> None:
+        pass
+
+    def save_file(self, rel: str, text: str) -> None:
+        pass
+
+    def read_records(self) -> list[dict[str, Any]]:
+        return []
+
+
+class _Api:
+    def __init__(self, api: Any) -> None:
+        self._api = api
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._api, name, None) or getattr(_Defaults(), name)
+
+
+def read_records(project_root: str) -> list[dict[str, Any]]:
+    base = os.path.join(project_root or "", *SWARMS_DIR.split("/"))
+    out = []
+    for name in sorted(os.listdir(base)) if os.path.isdir(base) else []:
+        try:
+            with open(os.path.join(base, name, "swarm.json"), encoding="utf-8") as fh:
+                out.append(json.load(fh))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+# ---- the lead's plan → tree ---------------------------------------------------------------
+
+def _line(body: str, label: str) -> str:
+    """The text after ``label:`` on its line ('**Files:**', 'Files**:' too), '' when absent."""
+    m = re.search(rf"^\s*(?:\*\*)?{label}(?:\*\*)?\s*:(?:\*\*)?\s*(.+)$", body or "", re.IGNORECASE | re.MULTILINE)
+    return m.group(1).strip() if m else ""
+
+
+def _paths(text: str) -> list[str]:
+    """Paths from a Files/Hands over list: the backticked ones when there are any, else split on , ;."""
+    ticked = re.findall(r"`([^`]+)`", text)
+    raw = ticked or re.split(r"[,;]", text)
+    return [p for p in (x.strip(" .`") for x in raw) if p and " " not in p]
+
+
+def _plain(text: str) -> str:
+    return text.replace("*", "").replace("`", "").strip()
+
+
+def _kids(node: dict[str, Any]) -> list[dict[str, Any]]:
+    return [c for c in node.get("children") or [] if isinstance(c, dict)]
+
+
+def seats_from_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """The swarm tree of *plan*: a section whose children are steps = a seat (its sub plan), a
+    section whose children are sections = a group, at any depth. Top-level steps stay with the
+    lead. Seats read ``Files:``, ``Hands over:``, ``Ducky:``, ``Model:`` and ``Start after:``
+    from their body; no Ducky line routes like ducky_swarm_create."""
+
+    def seat(sec: dict[str, Any]) -> dict[str, Any]:
+        from frontend.swarm_routing import route
+
+        body = str(sec.get("body_markdown") or "")
+        name = str(sec.get("content") or "").strip()
+        profile, model = _plain(_line(body, "Ducky")), _plain(_line(body, "Model"))
+        kind = ""
+        if not profile or not model:
+            r = route(f"{name}: {body}")
+            profile, model, kind = profile or r["profile_id"], model or r["model"], r["kind"]
+        steps = [{"id": str(s.get("id") or ""), "content": str(s.get("content") or ""),
+                  "body_markdown": str(s.get("body_markdown") or "")} for s in _kids(sec)]
+        hands = _line(body, "Hands over")
+        handover = None
+        if hands:
+            parts = re.split(r"\s*(?:→|->)\s*|\s+to\s+(?=[^`]*$)", hands, maxsplit=1)
+            if len(parts) == 2:
+                handover = {"paths": _paths(parts[0]), "to": _plain(parts[1]).strip(" .")}
+        return {"name": name, "job": name, "kind": kind, "profile": profile, "model": model,
+                "paths": _paths(_line(body, "Files")), "handover": handover,
+                "start_after": _plain(_line(body, "Start after")),
+                "sub_plan": {"id": str(sec.get("id") or ""), "title": name, "done": 0,
+                             "total": len(steps), "steps": steps}}
+
+    def node(sec: dict[str, Any]) -> dict[str, Any]:
+        kids = _kids(sec)
+        if not any(_kids(k) for k in kids):
+            return seat(sec)
+        sub = [node(k) for k in kids if _kids(k)]  # loose steps beside sub-sections stay with the lead
+        return {"group": str(sec.get("content") or "").strip(), "id": str(sec.get("id") or ""), "purpose": "",
+                "muted": True, "start_after": _plain(_line(str(sec.get("body_markdown") or ""), "Start after")),
+                "seats": [s for s in sub if "group" not in s], "groups": [g for g in sub if "group" in g]}
+
+    return [node(sec) for sec in (plan.get("nodes") or []) if isinstance(sec, dict) and _kids(sec)]
+
+
+# ---- validate -----------------------------------------------------------------------------
+
+def _relative_lane(path: str, root: str) -> str:
+    """*path* relative to the project, normalized; raises ValueError outside it."""
+    from backend.workspace.lanes import _is_abs, normalize_glob
+
+    p = path.strip().replace("\\", "/")
+    if _is_abs(p):
+        r = root.replace("\\", "/").rstrip("/")
+        if not r or not (p.lower() == r.lower() or p.lower().startswith(r.lower() + "/")):
+            raise ValueError("lane outside project")
+        p = p[len(r):].lstrip("/") or "**"
+    return normalize_glob(p)
+
+
+def validate(tree: list[dict[str, Any]], root: str) -> list[str]:
+    """Every reason the build would fail halfway, checked before anything is made. Lanes are
+    rewritten project-relative in place."""
+    from backend.workspace.lanes import check_lane_set
+
+    errors: list[str] = []
+
+    def check_groups(nodes: list[dict[str, Any]], where: str) -> None:
+        names = [n["group"] for n in nodes if "group" in n]
+        for name in {n for n in names if names.count(n) > 1}:
+            errors.append(f"{where}: two groups called {name!r} (the second would reuse the first)")
+        for g in (n for n in nodes if "group" in n):
+            if not str(g.get("group") or "").strip():
+                errors.append(f"{where}: a group has no name")
+            if not list(walk_seats([g])):
+                errors.append(f"group {g['group']!r}: no seats")
+            check_groups(list(g.get("seats") or []) + list(g.get("groups") or []), f"group {g['group']!r}")
+
+    check_groups(tree, "root")
+    seats = list(walk_seats(tree))
+    seen_names: set[str] = set()
+    owner: dict[str, str] = {}
+    for i, s in enumerate(seats, 1):
+        label = f"seat {i}"
+        if s["name"] in seen_names:
+            errors.append(f"{label}: two seats called {s['name']!r}")
+        seen_names.add(s["name"])
+        if not str(s.get("profile") or "").strip():
+            errors.append(f"{label}: no ducky profile")
+        fixed = []
+        for p in s.get("paths") or []:
+            try:
+                fixed.append(_relative_lane(p, root))
+            except ValueError as exc:
+                errors.append(f"{label}: {exc}" + ("" if str(exc) == "lane outside project" else f" ({p})"))
+        s["paths"] = sorted(set(fixed))
+        sp = s.get("sub_plan") or {}
+        for sid in [sp.get("id"), *(st.get("id") for st in sp.get("steps") or [])]:
+            if sid and owner.setdefault(sid, s["name"]) != s["name"]:
+                errors.append(f"{label}: step {sid} is already {owner[sid]}'s")
+    if not errors:
+        errors += check_lane_set({s["name"]: s["paths"] for s in seats})["errors"]
+    return errors
+
+
+# ---- build --------------------------------------------------------------------------------
+
+def _slug(i: int, name: str) -> str:
+    return f"{i}-" + (re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "seat")
+
+
+def _ping_text(swarm_id: str, seat: dict[str, Any]) -> str:
+    return (f"Seat check for the swarm: reply with one word, ok. Your sub plan comes next. Put every "
+            f"deliverable in {seat['outputs']}/ (it outlives your sandbox and this chat).")
+
+
+def _start_seats(seats: list[dict[str, Any]], api: Any, record: dict[str, Any]) -> None:
+    """Ping each seat, then assign the ones that answered; a silent one is 'seat_failed'."""
+    def one(seat: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return api.ping(seat["conv_id"], _ping_text(record["id"], seat), PING_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 - a failed seat is reported on the card, not raised
+            return {"ok": False, "error": str(exc)}
+
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(seats)))) as pool:
+        results = list(pool.map(one, seats))
+    for seat, res in zip(seats, results):
+        if res.get("ok"):
+            api.assign(record["lead"], seat["sub_plan"]["id"], seat["conv_id"])
+            seat["status"] = "assigned"
+        else:
+            seat["status"] = "seat_failed"
+            seat["error"] = (f"{seat['name']} ({seat.get('model') or seat['profile']}): didn't start "
+                             f"({res.get('error') or 'no reply'}) · Swap model")
+
+
+def _save(record: dict[str, Any], api: Any) -> None:
+    api.save_file(f"{record['dir']}/swarm.json", json.dumps(record, indent=1))
+
+
+def build_swarm(preview: dict[str, Any] | None = None, api: Any = None,
+                from_plan: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build *preview* (sub plans added to the lead's plan) or *from_plan* (the lead's plan as
+    it is: its sections are assigned, nothing is added). Validates first; any create that
+    fails archives what was made and raises SwarmBuildError."""
+    api = _Api(api or PanelSwarmApi())
+    if from_plan is not None:
+        goal = str(from_plan.get("title") or "").strip() or "Swarm"
+        tree = seats_from_plan(from_plan)
+        plan_id = str(from_plan.get("id") or "")
+    else:
+        goal, tree, plan_id = preview["goal"], preview["tree"], ""
     lead = api.caller()
     if not lead:
-        raise ValueError("No calling chat: ducky_swarm_create must run in the lead's chat.")
-    root = api.group_create(goal)
-    api.add_leader(root["id"], lead)
-    api.rename_chat(lead, f"Lead: {goal}")
+        raise SwarmBuildError("No calling chat: ducky_swarm_create must run in the lead's chat.")
+    if not list(walk_seats(tree)):
+        raise SwarmBuildError("Nothing to seat: no section has steps.")
+    errors = validate(tree, api.project_root())
+    if errors:
+        raise SwarmBuildError("; ".join(errors))
+    sections = {s["name"]: s for s in walk_seats(tree)}
+    handovers = []
+    for s in sections.values():
+        h = s.get("handover")
+        if h:
+            to = sections.get(h["to"]) or next((x for x in sections.values() if x["sub_plan"].get("id") == h["to"]), None)
+            if to is None:
+                raise SwarmBuildError(f"{s['name']}: hands over to {h['to']!r}, which is no seat")
+            handovers.append({"from_section": s["sub_plan"]["id"], "to_section": to["sub_plan"]["id"],
+                              "paths": h["paths"]})
 
-    api.ensure_plan(lead, goal)
-    sections: dict[str, str] = {}
-    for seat in walk_seats(tree):
-        job = preview["jobs"][seat["name"]]
-        body = "\n".join(x for x in (job["purpose"], job["task"],
-                                     f"Files: {', '.join(job['paths'])}" if job["paths"] else "", DONE_LINE) if x)
-        sid = api.plan_add_node(lead, seat["sub_plan"]["title"], kind="subplan", body_markdown=body)
-        for step in seat["sub_plan"]["steps"]:  # exactly the previewed steps, edits included
-            api.plan_add_node(lead, step["content"], parent_id=sid, body_markdown=step["body_markdown"])
-        sections[seat["name"]] = sid
-        seat["sub_plan"]["id"] = sid
+    made: list[str] = []      # chats and groups, in the order made
+    nodes: list[str] = []     # plan nodes a preview build added
+    home = api.chat_home(lead)
+    led = False
+    try:
+        root = api.group_create(goal)
+        made.append(root["id"])
+        api.add_leader(root["id"], lead)  # before any lane: only a leader may set them
+        led = True
+        api.rename_chat(lead, f"Lead: {goal}")
+        out_dir = f"{SWARMS_DIR}/{root['id']}"
+        for i, s in enumerate(sections.values(), 1):
+            s["outputs"] = f"{out_dir}/outputs/{_slug(i, s['name'])}"
+            if s["paths"] and api.project_root():
+                # One sub-folder per seat: every seat may write outputs, no two own a file.
+                s["paths"] = [*s["paths"], f"{s['outputs']}/**"]
+        if from_plan is None:
+            api.ensure_plan(lead, goal)
+            for seat in walk_seats(tree):
+                job = preview["jobs"][seat["name"]]
+                body = "\n".join(x for x in (job["purpose"], job["task"],
+                                             f"Files: {', '.join(job['paths'])}" if job["paths"] else "",
+                                             f"Outputs: {seat['outputs']}/", DONE_LINE) if x)
+                sid = api.plan_add_node(lead, seat["sub_plan"]["title"], kind="subplan", body_markdown=body)
+                nodes.append(sid)
+                for step in seat["sub_plan"]["steps"]:  # exactly the previewed steps, edits included
+                    nodes.append(api.plan_add_node(lead, step["content"], parent_id=sid,
+                                                   body_markdown=step["body_markdown"]))
+                seat["sub_plan"]["id"] = sid
+        waiting: list[dict[str, Any]] = []
+        ready: list[dict[str, Any]] = []
 
-    def seat_in(group_id: str, seat: dict[str, Any]) -> None:
-        seat["conv_id"] = api.invite(group_id, seat["profile"], seat["name"], seat["model"], seat["paths"] or None)
-        seat["created"] = True
+        def seat_in(group_id: str, seat: dict[str, Any]) -> None:
+            if seat.get("start_after"):
+                seat["status"] = "waiting"
+                waiting.append({"after": seat["start_after"], "group_id": group_id, "seat": seat})
+                return
+            seat["conv_id"] = api.invite(group_id, seat["profile"], seat["name"], seat["model"], seat["paths"] or None)
+            made.append(seat["conv_id"])
+            seat["created"] = True
+            ready.append(seat)
 
-    def make(node: dict[str, Any], parent_folder: str) -> None:
-        made = api.group_create(node["group"], parent_folder)
-        node["group_id"], node["created"] = made["id"], True
-        for seat in node["seats"]:
-            seat_in(made["id"], seat)
-        for sub in node["groups"]:
-            make(sub, made["folder_id"])
+        def make(node: dict[str, Any], parent_folder: str) -> None:
+            if node.get("start_after"):
+                for s in walk_seats([node]):
+                    s["status"] = "waiting"
+                waiting.append({"after": node["start_after"], "parent_folder": parent_folder, "group": node})
+                return
+            group = api.group_create(node["group"], parent_folder)
+            made.append(group["id"])
+            node["group_id"], node["folder_id"], node["created"] = group["id"], group["folder_id"], True
+            for seat in node["seats"]:
+                seat_in(group["id"], seat)
+            for sub in node["groups"]:
+                make(sub, group["folder_id"])
 
-    for node in tree:
-        if "group" in node:
-            make(node, root["folder_id"])
-        else:
-            seat_in(root["id"], node)
-    for group in walk_groups(tree):
-        if group["muted"]:
-            api.set_muted(group["group_id"], True)
-    for seat in walk_seats(tree):
-        api.assign(lead, sections[seat["name"]], seat["conv_id"])
-    return {"root_group_id": root["id"], "lead": lead, "tree": tree}
+        for node in tree:
+            if "group" in node:
+                make(node, root["folder_id"])
+            else:
+                seat_in(root["id"], node)
+        for group in walk_groups(tree):
+            if group["muted"] and group.get("group_id"):
+                api.set_muted(group["group_id"], True)
+        record = {"id": root["id"], "dir": out_dir, "goal": goal, "lead": lead, "plan_id": plan_id or lead,
+                  "root_group_id": root["id"], "root_folder_id": root["folder_id"], "outputs": f"{out_dir}/outputs",
+                  "handovers": handovers, "waiting": waiting}
+        api.save_file(f"{out_dir}/outputs/README.md",
+                       f"# {goal}\n\nDeliverables of this swarm, one folder per seat. Kept when the group is archived.\n")
+        _save(record, api)
+    except Exception as exc:
+        left = _roll_back(api, lead, home if led else None, made, nodes)
+        raise SwarmBuildError(f"{exc}" + (f" (could not archive: {', '.join(left)})" if left else ""),
+                              created=len(left)) from exc
+    _start_seats(ready, api, record)
+    return {"root_group_id": root["id"], "lead": lead, "tree": tree, "swarm_id": record["id"],
+            "outputs": record["outputs"], "handovers": handovers,
+            "failed": [s["error"] for s in ready if s.get("status") == "seat_failed"],
+            "waiting": [w["after"] for w in waiting]}
+
+
+def _roll_back(api: Any, lead: str, home: dict[str, str] | None, made: list[str], nodes: list[str]) -> list[str]:
+    """Archive everything *made*, newest first, lead put back first. Returns what stayed."""
+    left = []
+    if home is not None:
+        try:
+            api.restore_home(lead, home)
+        except Exception:  # noqa: BLE001 - archive the rest anyway
+            pass
+    for cid in reversed(made):
+        try:
+            api.archive(cid)
+        except Exception:  # noqa: BLE001
+            left.append(cid)
+    for nid in reversed(nodes):
+        try:
+            api.plan_delete_node(lead, nid)
+        except Exception:  # noqa: BLE001 - a leftover plan node is visible and harmless
+            pass
+    return left
+
+
+# ---- after the build ----------------------------------------------------------------------
+
+def on_step_completed(plan_id: str, step_id: str, api: Any = None) -> list[str]:
+    """Seat the groups and seats waiting on *step_id* in *plan_id*'s swarms: invite, ping,
+    assign. Returns the names of the seats started."""
+    api = _Api(api or PanelSwarmApi())
+    started: list[str] = []
+    for record in api.read_records():
+        if record.get("plan_id") != plan_id:
+            continue
+        due = [w for w in record.get("waiting") or [] if w.get("after") == step_id]
+        if not due:
+            continue
+        record["waiting"] = [w for w in record["waiting"] if w.get("after") != step_id]
+        ready: list[dict[str, Any]] = []
+
+        def invite(group_id: str, seat: dict[str, Any]) -> None:
+            seat["conv_id"] = api.invite(group_id, seat["profile"], seat["name"], seat["model"], seat["paths"] or None)
+            seat["created"], seat["start_after"] = True, ""
+            ready.append(seat)
+
+        def make(node: dict[str, Any], parent_folder: str) -> None:
+            group = api.group_create(node["group"], parent_folder)
+            node["group_id"], node["start_after"] = group["id"], ""
+            for seat in node["seats"]:
+                invite(group["id"], seat)
+            for sub in node["groups"]:
+                make(sub, group["folder_id"])
+            if node.get("muted"):
+                api.set_muted(group["id"], True)
+
+        for w in due:
+            if "group" in w:
+                make(w["group"], w["parent_folder"])
+            else:
+                invite(w["group_id"], w["seat"])
+        _start_seats(ready, api, record)
+        _save(record, api)
+        started += [s["name"] for s in ready if s.get("status") == "assigned"]
+    return started
+
+
+def handovers_for(section_id: str, api: Any = None) -> list[dict[str, Any]]:
+    """The ``Hands over:`` rows whose giver is *section_id*: [{from_section, to_section, paths}]."""
+    api = _Api(api or PanelSwarmApi())
+    return [h for r in api.read_records() for h in r.get("handovers") or [] if h.get("from_section") == section_id]
