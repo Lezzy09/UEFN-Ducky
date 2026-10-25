@@ -8,9 +8,9 @@ from typing import Any
 
 import frontend.ui_web.panel_api as _pa
 
-# ponytail: one lock for group creates; folder saves replace the whole list, so two at
-# once lost one's folder. Per-project locks if group creates ever need to overlap.
-_GROUP_CREATE_LOCK = threading.Lock()
+# ponytail: one lock for group creates and folder deletes; folder saves replace the whole
+# list, so two at once lost one's change. Per-project locks if they ever need to overlap.
+_FOLDER_WRITE_LOCK = threading.RLock()
 
 # Duckies made with no island open (the Global Agents folder).
 GLOBAL_SLUG = "_no_project"
@@ -252,7 +252,8 @@ class PanelApiChatsMixin:
                     if is_agent_running(target_id):
                         _pa.cancel_agent(target_id)
         # Marks every folder it removes deleted, so a stale folder list can't bring them back.
-        removed = _pa.delete_folder(folder_id, root, archive_members=bool(archive_members))
+        with _FOLDER_WRITE_LOCK:
+            removed = _pa.delete_folder(folder_id, root, archive_members=bool(archive_members))
         # Every open window drops the group (and what went with it) right away.
         _pa.notify_chats_changed(
             open_tab=False,
@@ -456,7 +457,7 @@ class PanelApiChatsMixin:
             project_root = create_project_root(target_slug, settings.uefn_project_root or "")
         # Parent folder_id here means "create the group-folder inside this folder".
         parent_folder = (folder_id or "").strip()
-        with _GROUP_CREATE_LOCK:
+        with _FOLDER_WRITE_LOCK:
             return self._group_create_locked(title, parent_folder, settings, project_root, open_tab)
 
     def _group_create_locked(

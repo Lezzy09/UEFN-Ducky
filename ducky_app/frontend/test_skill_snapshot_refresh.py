@@ -152,3 +152,21 @@ def test_blank_rebuild_never_wipes_a_working_snapshot(tmp_path, monkeypatch):
     conv = _conv("GOOD INDEX", "rev1")
     assert pc.sync_skill_snapshot(conv, _Settings()) is False
     assert conv.skill_snapshot == "GOOD INDEX"
+
+
+def test_new_chat_skill_text_is_built_once_per_revision(monkeypatch):
+    # Oct 25 2026: ~150 ms per create with the GIL held, so making groups fast stalled the app.
+    built: list[int] = []
+    rev = {"value": "rev1"}
+    monkeypatch.setattr(store, "skills_revision", lambda: rev["value"])
+    monkeypatch.setattr(store, "build_skill_prompt", lambda sel: built.append(1) or f"INDEX {rev['value']}")
+    store._NEW_CHAT_SKILL_TEXT.clear()
+
+    assert store.conversation_skill_text(mutate=False) == "INDEX rev1"
+    assert store.conversation_skill_text(mutate=False) == "INDEX rev1"
+    assert len(built) == 1
+    rev["value"] = "rev2"  # a pack changed on disk: the next chat gets the new index
+    assert store.conversation_skill_text(mutate=False) == "INDEX rev2"
+    store.invalidate_skills_revision()
+    store.conversation_skill_text(mutate=False)
+    assert len(built) == 3

@@ -1,4 +1,5 @@
 import type { StackedPanelDropEdge } from "../utils/stackedPanelDropHint";
+import { requestReloadDuckies } from "../hooks/useChatsChanged";
 import {
   useCallback,
   useEffect,
@@ -632,7 +633,8 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       if (!api?.group_create) return;
       const siblings = chatFolderSiblingNames(foldersRef.current, parentId);
       const name = numberedEntryName("Group", siblings);
-      const res = await api.group_create(name, parentId);
+      // open_tab false: the group is selected below; the host opening it too was a second open per click.
+      const res = await api.group_create(name, parentId, false);
       if (!res?.ok || !res.id) return;
       const folderId = String((res as { folder_id?: string }).folder_id || "").trim();
       const title = res.title || name;
@@ -669,9 +671,10 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
       // target, and moving it into the new group would nest the next one.
       if (folderId) setEditing({ kind: "folder", id: folderId, value: title });
       else setEditing({ kind: "chat", id: res.id, value: title });
-      void load();
+      // Batched: ten fast clicks make one tree load, not ten full ones.
+      requestReloadDuckies();
     },
-    [load, markNew, onChatSelect, setFolders],
+    [markNew, onChatSelect, setFolders],
   );
 
   const createGroupFlow = useCallback(
@@ -1137,7 +1140,7 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
     }
     for (const id of deletedHubIds) onChatDeleted?.(id);
     keepTreeFocus("chats");
-    void load();
+    // No load here: release() above reloads the tree once the last save is done.
   };
 
   const deleteDuckySelection = async (targets: DuckyDeleteTarget[]): Promise<boolean> => {
@@ -1198,10 +1201,9 @@ export const ChatSidebar = forwardRef<ChatSidebarHandle, ChatSidebarProps>(funct
         for (const id of deletedHubIds ?? []) onChatDeleted?.(id);
       }
     } finally {
-      release();
+      release(); // reloads the tree once the last save is done
     }
     keepTreeFocus("chats");
-    void load();
     return true;
   };
 

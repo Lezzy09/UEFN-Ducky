@@ -2004,6 +2004,7 @@ def invalidate_skills_revision() -> None:
     global _SKILLS_REV, _SKILLS_REV_AT
     _SKILLS_REV = ""
     _SKILLS_REV_AT = 0.0
+    _NEW_CHAT_SKILL_TEXT.clear()
 
 
 def _skills_changed() -> None:
@@ -2015,6 +2016,11 @@ def _skills_changed() -> None:
         indexer.request_refresh("skills-only")
     except Exception:  # noqa: BLE001 — search catches up on its next periodic check
         pass
+
+
+# A new chat's skill index by (skills revision, selection). Building it took ~150 ms with
+# the GIL held on every create, so making groups or a team fast stalled the whole app.
+_NEW_CHAT_SKILL_TEXT: dict[tuple[str, str], str] = {}
 
 
 def conversation_skill_text(
@@ -2031,13 +2037,21 @@ def conversation_skill_text(
         return skill_snapshot
     if mutate:
         seed_skill_packs()
-    return build_skill_prompt(
-        merge_selection(
-            enabled_packs=enabled_packs,
-            enabled_subskills=enabled_subskills,
-            disabled_packs=disabled_packs,
-        )
+    sel = merge_selection(
+        enabled_packs=enabled_packs,
+        enabled_subskills=enabled_subskills,
+        disabled_packs=disabled_packs,
     )
+    rev = skills_revision()
+    key = (rev, repr(sel))
+    text = _NEW_CHAT_SKILL_TEXT.get(key) if rev else None
+    if text is None:
+        text = build_skill_prompt(sel)
+        if rev:
+            if len(_NEW_CHAT_SKILL_TEXT) > 32:  # a handful of selections; never grows
+                _NEW_CHAT_SKILL_TEXT.clear()
+            _NEW_CHAT_SKILL_TEXT[key] = text
+    return text
 
 
 def normalize_enabled_skills(filenames: list[str] | None) -> list[str]:
