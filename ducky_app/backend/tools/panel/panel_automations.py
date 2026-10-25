@@ -702,15 +702,19 @@ def create_workflow_from_template(
     return tool_json({"ok": True, "workflow": saved, "from_template": out["template"]}, pretty=pretty)
 
 
+# The tool's name, and its name before tools had a group prefix (saved workflows keep it).
+_REPO_FINDERS = frozenset({"ducky_plugin_find_repo", "find_plugin_repo"})
+
+
 def release_plugin_of(workflow_id: str, payload: dict[str, Any] | None = None) -> str:
-    """The plugin a release workflow publishes: its Call tool find_plugin_repo step's plugin
+    """The plugin a release workflow publishes: its Call tool ducky_plugin_find_repo step's plugin
     argument, a "{{field}}" read from the payload or the workflow's input default. "" otherwise."""
     from backend.automations.store import get_workflow as _get
 
     wf = _get(workflow_id) or {}
     nodes = [n for n in (wf.get("graph") or {}).get("nodes") or [] if isinstance(n, dict)]
     finder = next((n for n in nodes if n.get("type") == "tool.call"
-                   and (n.get("config") or {}).get("name") == "find_plugin_repo"), None)
+                   and (n.get("config") or {}).get("name") in _REPO_FINDERS), None)
     if finder is None:
         return ""
     cfg = finder.get("config") or {}
@@ -1346,7 +1350,7 @@ def resolve_plugin_repo(plugin: str, *, roots: list[str] | None = None, drafts: 
 
 
 @mcp.tool()
-def find_plugin_repo(plugin: str, pretty: bool = False) -> str:
+def ducky_plugin_find_repo(plugin: str, pretty: bool = False) -> str:
     """Find a desktop plugin's git repo by its id or folder name: any Ducky project whose
     plugin.json has that id (the project itself, <id>/ or uefn-plugins/<id>/ inside it) or its
     ai_plugins draft. A repo with an origin wins. Returns {ok, repo, source, git, origin, branch,

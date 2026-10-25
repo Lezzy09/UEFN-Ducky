@@ -357,7 +357,7 @@ def test_list_workflow_nodes_for_one_plugin_is_small(monkeypatch):
 
 _RELEASE_GRAPH = {"nodes": [
     {"id": "in", "type": "flow.input", "config": {"inputs": [{"name": "plugin", "default": "island-media-kit"}]}},
-    {"id": "repo", "type": "tool.call", "config": {"name": "find_plugin_repo", "arguments": {"plugin": "{{plugin}}"}}},
+    {"id": "repo", "type": "tool.call", "config": {"name": "ducky_plugin_find_repo", "arguments": {"plugin": "{{plugin}}"}}},
 ], "edges": []}
 
 
