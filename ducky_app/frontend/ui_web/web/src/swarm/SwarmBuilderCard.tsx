@@ -341,7 +341,6 @@ export function SwarmBuilderCard({ payload, jobs, seatChats, onBuild }: SwarmBui
       if (pending) clearTimeout(pending);
       unsubscribe();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [built, chatKey, names]);
 
   if (!card) return null;

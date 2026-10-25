@@ -6,8 +6,10 @@ import fixture from "./fixtures/swarm_builder.json";
 const api = vi.hoisted(() => ({ swarm_preview: vi.fn(), plan_progress: vi.fn() }));
 const bus = vi.hoisted(() => ({ handlers: new Set<(event: Record<string, unknown>) => void>() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
+// One array: useSyncExternalStore loops forever when the snapshot is a new object each read.
+const noModels = vi.hoisted(() => [] as never[]);
 vi.mock("../hooks/modelsCatalogCache", () => ({
-  getCachedModels: () => [],
+  getCachedModels: () => noModels,
   loadModelsCatalog: async () => [],
   subscribeModelsCatalog: () => () => {},
 }));
