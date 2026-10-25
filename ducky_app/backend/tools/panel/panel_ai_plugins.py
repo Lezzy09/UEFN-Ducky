@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import py_compile
 import re
 import shutil
+import stat
+import subprocess
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -738,6 +742,207 @@ def delete_ai_plugin_draft(plugin_id: str, *, confirm: bool = False) -> dict[str
     return {"ok": True, "id": pid, "deleted": True}
 
 
+# --- Release checks: run before a plugin is uploaded to the Store --------------------------
+
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# Same rule as the Store's security scan (DuckyOS artifact_scan.rs is_hidden_char and
+# is_scannable_path): one of these in a UTF-8 text file and the Store refuses the upload.
+_HIDDEN_CHAR_RE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f​-‍‪-‮⁦-⁩﻿]")
+_STORE_TEXT_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".css", ".py", ".json",
+                        ".toml", ".md", ".html", ".htm", ".sh", ".ps1", ".bat", ".cmd")
+
+
+def _git(cwd: Path, *args: str, timeout: float = 120.0) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=timeout, creationflags=_NO_WINDOW)
+
+
+def _rmtree(path: Path) -> None:
+    def _writable(func, p, _exc) -> None:  # git marks its objects read-only on Windows
+        os.chmod(p, stat.S_IWRITE)
+        func(p)
+
+    kw = {"onexc": _writable} if sys.version_info >= (3, 12) else {"onerror": _writable}
+    shutil.rmtree(path, **kw)
+
+
+def clean_clone_test_check(repo: str | Path, *, test_cmd: list[str] | None = None,
+                           timeout: float = 900.0) -> dict[str, Any]:
+    """Run the plugin's tests in a fresh clone of HEAD: no ignored, untracked or uncommitted
+    files, the way the release workflow sees the repo. A failure names the ignored files the
+    output mentions (a test reading the git-ignored tests/evidence/ passes only in the draft)."""
+    repo = Path(repo).resolve()
+    try:
+        top = _git(repo, "rev-parse", "--show-toplevel")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": f"git failed: {exc}"}
+    if top.returncode != 0:
+        return {"ok": False, "error": f"not a git repository: {repo}"}
+    repo = Path(top.stdout.strip())
+    ignored = _git(repo, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory").stdout.split()
+    untracked = _git(repo, "ls-files", "--others", "--exclude-standard").stdout.split()
+    tmp = Path(tempfile.mkdtemp(prefix="ducky-release-clone-"))
+    try:
+        clone = tmp / "clone"
+        cloned = _git(tmp, "clone", "--quiet", "--no-hardlinks", str(repo), str(clone), timeout=300)
+        if cloned.returncode != 0:
+            return {"ok": False, "error": f"clean clone failed: {cloned.stderr.strip()[-500:]}"}
+        cmd = test_cmd or [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
+        env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+        try:
+            run = subprocess.run(cmd, cwd=str(clone), capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", timeout=timeout, env=env, creationflags=_NO_WINDOW)
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": f"clean clone: tests ran over {int(timeout)} s"}
+        output = (run.stdout or "") + (run.stderr or "")
+        if run.returncode in (0, 5):  # 5 = pytest found no tests
+            return {"ok": True, "clone_tests": "passed" if run.returncode == 0 else "no tests"}
+        seen = output.replace("\\", "/")
+        missing = [p for p in ignored + untracked if p.rstrip("/") and p.rstrip("/") in seen]
+        reason = (f"tests read files missing from a clean clone: {', '.join(missing)}"
+                  if missing else "tests fail")
+        return {
+            "ok": False,
+            "error": f"clean clone: {reason} → fix before publishing",
+            "missing_files": missing,
+            "output": output[-4000:],
+        }
+    finally:
+        _rmtree(tmp)
+
+
+def scan_zip_hidden_chars(zip_file: str | Path | bytes) -> dict[str, Any]:
+    """Scan every text file in a built zip for the hidden characters the Store refuses (a
+    minifier turning "\\u0001" into a raw control character). First hit per file, with offset."""
+    data = zip_file if isinstance(zip_file, bytes) else Path(zip_file).read_bytes()
+    findings: list[dict[str, Any]] = []
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for name in zf.namelist():
+            if not name.lower().endswith(_STORE_TEXT_SUFFIXES):
+                continue
+            try:
+                text = zf.read(name).decode("utf-8")
+            except UnicodeDecodeError:  # the Store's scan skips non-UTF-8 files too
+                continue
+            hit = _HIDDEN_CHAR_RE.search(text)
+            if hit:
+                code = f"U+{ord(hit.group()):04X}"
+                findings.append({"path": name, "offset": hit.start(), "char": code,
+                                 "message": f"{name} offset {hit.start()}: {code} — the Store will refuse this"})
+    if findings:
+        return {"ok": False, "error": "; ".join(f["message"] for f in findings), "findings": findings}
+    return {"ok": True}
+
+
+# One release path at a time: a release workflow run started for a plan step holds its plugin
+# until it ends, so ducky_plugin_publish or release.py can't publish under it.
+
+
+def _releases_dir() -> Path:
+    from backend.uefn_plugins.store import appdata_ai_plugins_dir
+
+    return appdata_ai_plugins_dir() / ".releases"
+
+
+def _append_step_note(chat_id: str, step_id: str, line: str) -> None:
+    from backend.agent.coding_agents import plans
+
+    plan = plans.load_plan(chat_id) or {}
+    _, _, node = plans._walk_find(list(plan.get("nodes") or []), step_id)
+    body = str((node or {}).get("body_markdown") or "")
+    plans.update_node(chat_id, step_id, body_markdown=f"{body}\n\n{line}".strip())
+
+
+def start_release_run(plugin_id: str, workflow_id: str, run_id: str, *, chat_id: str = "",
+                      step_id: str = "", clone: str = "") -> dict[str, Any]:
+    """Record that release workflow ``run_id`` publishes ``plugin_id`` (and its run id on the
+    plan step). ``clone`` is the folder the workflow works in, checked for leftovers at the end."""
+    from backend.uefn_plugins.store import normalize_plugin_id
+
+    pid = normalize_plugin_id(plugin_id)
+    rec = {"plugin": pid, "workflow_id": workflow_id, "run_id": run_id,
+           "chat_id": chat_id, "step_id": step_id, "clone": clone}
+    _write_json(_releases_dir() / f"{pid}.json", rec)
+    if chat_id and step_id:
+        try:
+            _append_step_note(chat_id, step_id, f"Release workflow run `{run_id}` started.")
+        except Exception:  # noqa: BLE001 — the lock holds without the note
+            pass
+    return {"ok": True, **rec}
+
+
+def release_busy(plugin_id: str, *, run_id: str = "") -> str:
+    """"release workflow <run> is running" while another release run holds ``plugin_id``,
+    else "". A run that has ended is finished here (notes, leftovers) and frees the plugin."""
+    from backend.automations import live_runs
+    from backend.uefn_plugins.store import normalize_plugin_id
+
+    path = _releases_dir() / f"{normalize_plugin_id(plugin_id)}.json"
+    try:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if run_id and rec.get("run_id") == run_id:
+        return ""
+    data = next((d for d in live_runs.runs(str(rec.get("workflow_id") or ""))
+                 if d.get("run") == rec.get("run_id")), None)
+    if data and data.get("state") == "started":
+        return f"release workflow {rec.get('run_id')} is running"
+    finish_release_run(plugin_id, data)
+    return ""
+
+
+def finish_release_run(plugin_id: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Write the ended run's result and its clone's uncommitted files into the step's notes,
+    then free the plugin. ``data`` is the live_runs record (None: it is gone)."""
+    from backend.uefn_plugins.store import normalize_plugin_id
+
+    path = _releases_dir() / f"{normalize_plugin_id(plugin_id)}.json"
+    try:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"ok": False, "error": "no release run recorded"}
+    state = str((data or {}).get("state") or "ended")
+    errors = [e.get("error") for e in (data or {}).get("events") or []
+              if e.get("type") == "workflow_run" and e.get("error")]
+    word = {"done": "PASSED", "error": "FAILED", "stopped": "STOPPED"}.get(state, state.upper())
+    line = f"workflow run {rec.get('run_id')} {word}" + (f": {errors[-1]}" if errors else "")
+    dirty: list[str] = []
+    clone = Path(str(rec.get("clone") or ""))
+    if str(rec.get("clone") or "") and clone.is_dir():
+        try:
+            dirty = [ln[3:] for ln in _git(clone, "status", "--porcelain").stdout.splitlines() if ln.strip()]
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if dirty:
+        line += f"; clone has {len(dirty)} uncommitted files: {', '.join(dirty[:10])}"
+    if rec.get("chat_id") and rec.get("step_id"):
+        try:
+            _append_step_note(rec["chat_id"], rec["step_id"], line)
+        except Exception:  # noqa: BLE001 — a finished step refuses notes; the result is returned
+            pass
+    path.unlink(missing_ok=True)
+    return {"ok": True, "state": state, "dirty": dirty, "note": line}
+
+
+def release_check(plugin_id: str, *, repo: str = "", zip_path: str = "", run_id: str = "") -> dict[str, Any]:
+    """Every pre-upload check: no other release run holds the plugin, its tests pass in a
+    clean clone of ``repo``, and the built ``zip_path`` has no hidden characters."""
+    busy = release_busy(plugin_id, run_id=run_id)
+    if busy:
+        return {"ok": False, "error": busy}
+    out: dict[str, Any] = {"ok": True}
+    for name, arg, check in (("clean_clone", repo, clean_clone_test_check),
+                             ("hidden_chars", zip_path, scan_zip_hidden_chars)):
+        if arg:
+            res = check(arg)
+            out[name] = res
+            if not res.get("ok"):
+                out.update(ok=False, error=res.get("error"))
+                return out
+    return out
+
+
 @mcp.tool()
 def ducky_plugin_scaffold(
     id: str,
@@ -890,6 +1095,19 @@ def ducky_plugin_install(id: str, pretty: bool = False) -> str:
     (ducky_store_set_enabled → needs_trust; user confirms in Settings → Store).
     """
     return tool_json(install_ai_plugin(id), pretty=pretty)
+
+
+@mcp.tool()
+def ducky_plugin_release_check(id: str, repo: str = "", zip_path: str = "", run_id: str = "",
+                               pretty: bool = False) -> str:
+    """Checks before a plugin is uploaded to the Store; publish only when ok.
+
+    Refuses while another release workflow run holds the plugin (run_id = your own run, if
+    you are that workflow). repo: the plugin's git repo, whose tests must pass in a clean clone
+    of HEAD (no ignored or untracked files). zip_path: the built zip, scanned for the hidden
+    characters the Store refuses (reports file and offset).
+    """
+    return tool_json(release_check(id, repo=repo, zip_path=zip_path, run_id=run_id), pretty=pretty)
 
 
 @mcp.tool()
