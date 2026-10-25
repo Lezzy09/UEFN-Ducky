@@ -1,5 +1,30 @@
-import { describe, expect, it } from "vitest";
-import { resolveToolPresenterBlocks } from "./resolveToolPresenter";
+// @vitest-environment jsdom
+import { cleanup, render, screen } from "@testing-library/react";
+import { createElement } from "react";
+import { afterEach, describe, expect, it } from "vitest";
+import { FinishTeamToolView } from "./FinishTeamCard";
+import { resolveToolPresenterBlocks, resolveToolPresenterView } from "./resolveToolPresenter";
+
+afterEach(cleanup);
+
+describe("ducky_finish_team view", () => {
+  const result = JSON.stringify({
+    ok: true, ui: "finish_team", status: "needs_confirm", plan_title: "Swarm speed",
+    seats: [
+      { conv_id: "c1", name: "U1 Card shell", commits: ["c66cfb9e", "aaf1583c"], dirty: [] },
+      { conv_id: "c2", name: "U2 Tree", commits: ["a4428d5d"], dirty: [] },
+    ],
+  });
+
+  it("renders the Finish team card, prefixed or not; other results fall through", () => {
+    const view = resolveToolPresenterView("mcp__uefn__ducky_finish_team", result);
+    expect(view).toBe(FinishTeamToolView);
+    expect(resolveToolPresenterView("ducky_finish_team", JSON.stringify({ ok: false, error: "no team" }))).toBeNull();
+    render(createElement(view!, { toolName: "ducky_finish_team", arguments: {}, resultText: result, isSuccess: true }));
+    expect(screen.getByText("Finish team: 2 seats · 3 commits · 0 uncommitted")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Archive team" })).toBeTruthy();
+  });
+});
 
 describe("resolveToolPresenterBlocks", () => {
   it("returns device table for find_devices", () => {

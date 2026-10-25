@@ -3,6 +3,7 @@ import type { RichBlock } from "../../types/richContent";
 import type { ComponentType } from "react";
 import { SwarmCard, countSeats, parseSwarmResult } from "./SwarmCard";
 import { SwarmBuilderToolView, swarmBuilderPayload } from "../../swarm/SwarmBuilderCard";
+import { FinishTeamToolView, parseFinishTeam } from "./FinishTeamCard";
 
 export interface ToolPresenterContext {
   toolName: string;
@@ -214,6 +215,7 @@ const TOOL_VIEWS: Record<string, ToolView[]> = {
     // Still asking (needs_answers): the sliders card, so the person shapes the team in place.
     { view: SwarmBuilderToolView, accepts: (text) => swarmBuilderPayload(text)?.status === "needs_answers" },
   ],
+  ducky_finish_team: [{ view: FinishTeamToolView, accepts: (text) => parseFinishTeam(text) !== null }],
 };
 
 function bareToolName(name: string): string {
