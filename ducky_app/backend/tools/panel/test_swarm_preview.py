@@ -132,3 +132,33 @@ def test_integrator_owns_the_glue_and_no_other_lane_holds_it(monkeypatch):
     assert integ["steps"][0]["content"].startswith("Interfaces:")  # its first point
     assert set(integ["steps"][1]["after"]) == {"Setup lead#2", "Export lead#2", "Store lead#2", "Panel lead#2"}
     assert p["jobs"][sp.INTEGRATOR]["paths"] == glue
+
+
+# ---- oversized steps ----------------------------------------------------------------------
+
+def test_a_four_outcome_step_is_flagged_and_splits_into_four(monkeypatch):
+    monkeypatch.setattr(sp, "_price", lambda model: None)
+    job = _job("Store", kind="narrative")
+    job["steps"] = sp._steps(["Store: upload, events, deploy and install", "Store: docs"])
+    p = sp.build_preview("Ship", [job], "auto", 8, 5, detail=2)
+    [flag] = p["oversized"]
+    assert flag["step"] == "Store: upload, events, deploy and install" and flag["outcomes"] == 4
+    assert flag["chip"] == "Too big: 4 outcomes · Split"
+    assert [s["content"] for s in flag["split"]] == ["Store: upload", "Store: events", "Store: deploy",
+                                                     "Store: install"]
+    split = sp.build_preview("Ship", [job], "auto", 8, 5, detail=2,
+                             edits=[{"seat": flag["seat"], "split_step": flag["step"]}])
+    assert split["oversized"] == []
+    assert [s["content"] for s in split["plan"]["sections"][0]["steps"]][:4] == [s["content"] for s in flag["split"]]
+    assert split["tree"][0]["sub_plan"]["total"] == 5
+
+
+def test_a_step_over_three_file_areas_is_flagged():
+    seats = [{"name": "A", "id": "A", "lane": [], "after": [], "steps": [
+        {"id": "A#1", "content": "Rewire the panel", "after": [],
+         "body": "**Files:** `a/x.py`, `b/y.py`, `c/z.ts` (and notes)."},
+        {"id": "A#2", "content": "Fix x, y", "after": [], "body": "Files: a/x.py, a/y.py"}]}]
+    [flag] = sp.oversized_steps(seats)
+    assert flag["step"] == "Rewire the panel" and flag["areas"] == 3
+    assert [s["content"] for s in flag["split"]] == ["Rewire the panel: a", "Rewire the panel: b",
+                                                     "Rewire the panel: c"]

@@ -10,6 +10,8 @@
 - ``muted``: names of muted groups; ``lanes``: {seat name: [paths]}
 - ``plan``: {title, sections: [{seat, title, after, steps}]} — the plan Build makes; ``after`` (on a
   section or a step) lists refs "<seat name>#<n>" (that seat's n-th step, 1-based) to finish first
+- ``oversized``: [{seat, step, id, outcomes, areas, chip, split: [steps]}] — steps too big for one turn;
+  edit {seat, split_step: <content>} applies the split
 - ``estimate``: {seats: {name: {tokens, minutes, cost_usd}}, total: {tokens, minutes, cost_usd, text}}
 - ``jobs`` (server only, dropped before it reaches the card)
 
@@ -20,6 +22,7 @@ cost_usd}}, total: {minutes, cost_usd}}).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 SUGGESTED_MAX_AGENTS = 8
@@ -529,6 +532,68 @@ def add_integrator(tree: list[dict[str, Any]], lead_model: str = "",
             "suggested_model": model, "model": ""}
 
 
+# ---- oversized steps ----------------------------------------------------------------------
+
+MAX_OUTCOMES = 3  # more outcomes than this in one step = too big
+MAX_AREAS = 2  # more file folders than this in one step = too big
+_FILES_LINE = re.compile(r"^\s*\**files\**\s*:\**\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+_OUTCOME_SEP = re.compile(r",\s*(?:and\s+)?|\s+and\s+|\s*[&+]\s*")
+
+
+def files_in(body: str) -> list[str]:
+    """The paths on a body's 'Files:' line: its `backticked` names (parenthesised notes
+    skipped), else its comma-separated words."""
+    m = _FILES_LINE.search(body or "")
+    if not m:
+        return []
+    text = re.sub(r"\([^)]*\)", "", m.group(1))
+    ticks = re.findall(r"`([^`]+)`", text)
+    items = [t.strip() for t in ticks] if ticks else [p.strip(" .*") for p in re.split(r",|;|\band\b", text)]
+    return [p for p in items if p]
+
+
+def outcomes(content: str) -> list[str]:
+    """'Store: upload, events, deploy and install' → one 'Store: <x>' per listed outcome."""
+    head, sep, rest = content.partition(":")
+    if not sep:
+        head, rest = "", content
+    parts = [p.strip() for p in _OUTCOME_SEP.split(rest) if p.strip()]
+    return [f"{head.strip()}: {p}" if head.strip() else p for p in parts] or [content]
+
+
+def oversized_steps(seats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Graph steps with more than MAX_OUTCOMES outcomes or MAX_AREAS file folders, each with
+    the card's chip text and a split proposal (one step per outcome, else per folder)."""
+    out = []
+    for seat in seats:
+        for st in seat["steps"]:
+            parts = outcomes(st["content"])
+            areas = sorted({"/".join(_literal_dir(p)) for p in files_in(st["body"])})
+            if len(parts) <= MAX_OUTCOMES and len(areas) <= MAX_AREAS:
+                continue
+            split = parts if len(parts) > 1 else [f"{st['content']}: {a or 'top level'}" for a in areas]
+            why = f"{len(parts)} outcomes" if len(parts) > MAX_OUTCOMES else f"{len(areas)} file areas"
+            out.append({"seat": seat["name"], "step": st["content"], "id": st["id"], "outcomes": len(parts),
+                        "areas": len(areas), "chip": f"Too big: {why} · Split",
+                        "split": [{"content": c, "body_markdown": st["body"]} for c in split]})
+    return out
+
+
+def _split_edits(tree: list[dict[str, Any]], edits: list[dict[str, Any]]) -> None:
+    """{seat, split_step: content} replaces that step with its split proposal (the card's Split)."""
+    for e in edits:
+        if "split_step" not in e:
+            continue
+        seat = next((s for s in walk_seats(tree) if s["name"] == str(e.get("seat") or "").strip()), None)
+        steps = seat["sub_plan"]["steps"] if seat else []
+        i = next((n for n, s in enumerate(steps) if s["content"] == str(e["split_step"]).strip()), None)
+        if i is None:
+            raise ValueError(f"No step {e['split_step']!r} on seat {e.get('seat')!r} to split")
+        body = steps[i]["body_markdown"]
+        steps[i:i + 1] = [{"content": c, "body_markdown": body} for c in outcomes(steps[i]["content"])]
+        seat["sub_plan"]["total"] = len(steps)
+
+
 # ---- preview and edits --------------------------------------------------------------------
 
 def _job_edits(jobs: list[dict[str, Any]], edits: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -587,6 +652,7 @@ def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents
     kept = capped_jobs(_job_edits(apply_detail(jobs, detail), edits), agents, max_agents)
     tree = plan_tree(kept, agents, max_agents, per_group)
     _tree_edits(tree, edits)
+    _split_edits(tree, edits)
     if all(e.get("interfaces", True) is not False for e in edits):
         made = add_integrator(tree, lead_model, repo_files)
         if made:
@@ -607,5 +673,6 @@ def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents
                                                "after": list(s["sub_plan"].get("after") or []),
                                                "steps": s["sub_plan"]["steps"]} for s in seats]},
         "estimate": estimate(preview_seats(tree)),
+        "oversized": oversized_steps(preview_seats(tree)),
         "jobs": {s["name"]: next(j for j in kept if j["name"] == s["job"]) for s in seats},
     }
