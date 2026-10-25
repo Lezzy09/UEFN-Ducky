@@ -53,14 +53,20 @@ def _resolve_project_root(project_root: str | None = None) -> str:
     return (project_root or "").strip()
 
 
-def _serialize_plan_edit(edit):
-    """Serialize in-process read/validate/modify/save, not just the final write.
+_EDIT_LOCK_WAIT_S = 30.0
 
-    Reuse the application's keyed reentrant locks. These are not cross-process
-    transactions or conflict detection for callers saving whole stale documents.
+
+def _serialize_plan_edit(edit):
+    """Serialize read/validate/modify/save, not just the final write: one plan's edits run one
+    at a time across threads (keyed reentrant lock) and across processes (OS file lock).
+
+    Every seat's Ducky tools run in their own bridge process: in a 4-seat live test (Oct 2026)
+    ticks made at the same moment saved over each other and some were lost. This is not
+    conflict detection for callers that save a whole stale document.
     """
     @wraps(edit)
     def locked(chat_id, *args, **kwargs):
+        from backend.util.file_lock import held_file_lock
         from frontend.ui_web.project_chats import _conversation_lock
 
         template_id = (kwargs.get("template_id") or "").strip()
@@ -76,7 +82,10 @@ def _serialize_plan_edit(edit):
                 step = kwargs.get("node_id") or (args[0] if args else "") or kwargs.get("parent_id") or ""
                 chat_id = _edit_target(chat_id, str(step), root)
             key = f"plan:{_project_id(root)}:{_safe_id(chat_id)}"
-        with _conversation_lock(key):
+        file_key = "plan-" + _safe_id(key.split(":", 1)[1].replace(":", "-"))[:120]
+        with _conversation_lock(key), held_file_lock(file_key, _EDIT_LOCK_WAIT_S) as got:
+            if not got:
+                raise ValueError("another seat is saving this plan right now: send the same edit again")
             return edit(chat_id, *args, **kwargs)
     return locked
 
