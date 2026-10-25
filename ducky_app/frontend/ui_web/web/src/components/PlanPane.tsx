@@ -24,6 +24,8 @@ import {
 } from "../utils/planOutlineNav";
 import { PlanDetailSplit } from "./PlanDetailSplit";
 import { PlanStatusLine, PlanTodoCard } from "./PlanTodoCard";
+import { SwarmBuilderCard, type SwarmConfirm } from "../swarm/SwarmBuilderCard";
+import { requestOpenChatTab } from "../navigation/openChatReference";
 import { RichContentRenderer } from "./rich-content/RichContentRenderer";
 import { MdBlockEditor } from "./md-block-editor";
 import { DuckyProfileModal, type DuckyProfileModalMode } from "./ducky/DuckyProfileModal";
@@ -80,6 +82,15 @@ function applyDraftToNodes(
     });
   }
   return roots;
+}
+
+type SwarmSuggestion = { seats?: unknown[]; jobs?: unknown[] } & Record<string, unknown>;
+type SwarmSuggestApi = {
+  swarm_suggest?: (chatId: string, projectRoot: string | null) => Promise<{ ok?: boolean; suggestion?: SwarmSuggestion | null }>;
+};
+
+function hasAssignee(nodes: PlanNode[] | undefined): boolean {
+  return (nodes || []).some((n) => Boolean(n.assignee) || hasAssignee(n.children));
 }
 
 interface PlanPaneProps {
@@ -251,6 +262,27 @@ export function PlanPane({
     },
     [reloadPlan],
   );
+
+  // A big unassigned plan offers itself as a swarm; a team already on it (any assignee) does not.
+  const [swarm, setSwarm] = useState<SwarmSuggestion | null>(null);
+  const [swarmOpen, setSwarmOpen] = useState(false);
+  const teamOnPlan = !plan || Boolean(plan.assigned_from) || isPlanFinished(plan) || hasAssignee(plan.nodes);
+  useEffect(() => {
+    setSwarm(null);
+    setSwarmOpen(false);
+    const call = (getApi() as unknown as SwarmSuggestApi | null)?.swarm_suggest;
+    if (teamOnPlan || !call) return;
+    let alive = true;
+    void call(chatId, planProjectArg ?? null)
+      .then((res) => { if (alive) setSwarm(res?.suggestion ?? null); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [chatId, planProjectArg, plan?.id, teamOnPlan]);
+
+  const buildSwarm = (confirm: SwarmConfirm) => {
+    enqueueComposerDraft(chatId, `Build the swarm exactly as previewed: call ducky_swarm_create with these arguments: ${JSON.stringify(confirm)}`);
+    requestOpenChatTab(chatId, chatName || "");
+  };
 
   const planLocked = isPlanStructureLocked(plan, progress);
   const planPaused = isPlanPaused(plan);
@@ -573,6 +605,17 @@ export function PlanPane({
               </>
             ) : assignedFrom ? null : plan ? (
               <>
+                {swarm && !teamOnPlan ? (
+                  <button
+                    type="button"
+                    className="plan-pane-btn plan-pane-btn--accent"
+                    onClick={() => setSwarmOpen((v) => !v)}
+                    aria-expanded={swarmOpen}
+                    title="Build a team from this plan's sub plans, one agent each"
+                  >
+                    Run as a swarm ({swarm.seats?.length ?? 0} agents)
+                  </button>
+                ) : null}
                 {plan.team_plan ? (
                   <button
                     type="button"
@@ -698,6 +741,9 @@ export function PlanPane({
         ) : null}
       </div>
       <div ref={scrollRef} className="plan-pane-scroll">
+        {swarm && swarmOpen && !teamOnPlan ? (
+          <SwarmBuilderCard payload={swarm} jobs={swarm.jobs} onBuild={buildSwarm} />
+        ) : null}
         {error ? <div className="plan-pane-error">{error}</div> : null}
         {templateMsg ? <div className="plan-pane-ok">{templateMsg}</div> : null}
         {!plan && !error ? <div className="plan-pane-empty">No plan for this chat yet.</div> : null}
