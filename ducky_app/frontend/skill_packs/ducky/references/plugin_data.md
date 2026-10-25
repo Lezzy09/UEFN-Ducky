@@ -127,10 +127,18 @@ code for it; these rules decide how well it works for people editing together.
 - **History.** Every change is kept with who made it and when. The bar's Details shows
   it; restoring an item, or the whole plugin to an earlier change, is a new change that
   everyone gets, never a rewrite.
-- **Live.** On a team copy, the bar's Live menu lists the live groups by host: a
-  teammate starts one, others join it (peer to peer). While a plugin is live its copy
+- **Live.** On a team copy, the bar's Live menu lists the live groups by host: Start
+  live goes into the biggest group a teammate is live in (or starts one), Join picks one
+  (peer to peer). When the host leaves, whoever has been in the group longest leads it;
+  closing the plugin's tab leaves, and someone left alone drops out of Live but keeps
+  syncing. While a plugin is live its copy
   syncs every few seconds, and each change a member commits makes the group pull it at
-  once (`plugin_scope_changed` reason `synced`, as above). With no plugin code, every
+  once (`plugin_scope_changed` reason `synced`, as above). With `"data_live": true` in
+  `plugin.json` each change goes to the group the moment it is written, and **the group
+  syncs through its leader**: the leader sends everyone's changes to source control, each
+  named for who made it (and their ducky), the others never push while it is in reach,
+  and leaving the group goes back to syncing on your own. Use it when the plugin's docs
+  are small (up to 36 KB carried live; bigger ones come with sync). With no plugin code, every
   panel page then shows members' pointers, names and selections (`data-live-id` on
   elements people point at keeps them on the same thing), a member can follow the
   host's screen (scroll and tab clicks), and **anything someone presses or types in is
@@ -142,10 +150,16 @@ code for it; these rules decide how well it works for people editing together.
   (`detail.view` = the host's `data-live-view`) on joining and whenever the host moves:
   open that record and tab (check it first), so joining a group lands on the host's
   screen. Pictures and videos that are still syncing show
-  a placeholder and load when they arrive. For short-lived things that aren't data (a
-  playhead, a drag in progress) a backend uses `api.live.send(topic, data)` and
-  `api.live.on(topic, callback)`, a panel `live.send` (see `ai_plugins`). Data still
-  goes through `api.data`: the commit is the record.
+  a placeholder and load when they arrive. For what each person is doing right now (a
+  3D camera so people see each other fly around, the tool in hand, what they play) each
+  PC sets its own **live state**: a panel `live.setMyState({state})` as often as it
+  changes (an object up to 4 KB, latest wins), and every groupmate's panels get
+  `live.memberState {from, state}` (null: they left) and read all of them with
+  `live.memberStates`; a backend uses `api.live.set_my_state`, `.member_states()` and
+  `.on_member_state(fn)`. Someone who joins later gets everyone's within 5 s. For
+  one-off events (a drag ended, a sound played) a backend uses `api.live.send(topic,
+  data)` and `api.live.on(topic, callback)`, a panel `live.send` (see `ai_plugins`). Data
+  still goes through `api.data`: the commit is the record.
 - `ducky_team_status(plugin)` says who is in the copy and what they do, what is locked,
   what waits to go out or come in, and the conflicts. `ducky_plugin_data_scope` gives
   the same for a shared copy.

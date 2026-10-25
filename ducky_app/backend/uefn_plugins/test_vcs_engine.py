@@ -1553,6 +1553,29 @@ class _V2Off:
         return replace(self.inner.heads(space, plugins), v2=False)
 
 
+def test_an_older_version_of_my_own_edit_coming_back_never_undoes_the_newer_one(pc: PC, ben: Ben) -> None:
+    """In a live group the leader sends this PC's edits for it: one it sent earlier comes down
+    while a newer one waits here. The base moves on under it, with no conflict and no flicker."""
+    import collections
+
+    from backend.uefn_plugins import live
+
+    pc.run()  # on the new sync
+    pc.data.put("card.pip", {"hp": 1})
+    sent = pc.row("card.pip")["sha256"]
+    live._sent_shas[(pc.account, SPACE, PLUGIN, "doc", "card.pip")] = collections.deque([sent])
+    pc.data.put("card.pip", {"hp": 2})  # newer, still here
+    try:
+        seq = ben.put_doc("card.pip", {"hp": 1})  # the leader's commit of the older one
+        out = pc.run(push=False)
+        assert (out["state"], out["conflicts"]) == ("ok", 0)
+        r = pc.row("card.pip")
+        assert (r["dirty"], r["rev"]) == (1, seq) and pc.data.get("card.pip") == {"hp": 2}
+        assert pc.run()["pushed"] == 1 and ben.doc("card.pip") == {"hp": 2}  # a plain edit on top of it
+    finally:
+        live.reset_for_tests()
+
+
 def test_the_new_sync_switched_off_pauses_its_plugins_only(pc: PC, ben: Ben) -> None:
     pc.data.put("card.pip", {"hp": 1})
     pc.run()

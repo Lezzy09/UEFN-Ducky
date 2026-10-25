@@ -363,12 +363,22 @@ def _build(ctx: Ctx, *, message: str = "", now: float) -> int:
         return 0
     busy = space_vcs.cs_items_open(ctx.account, ctx.space, ctx.plugin) | _waiting(ctx)
     groups = space_vcs.groups(r["group_id"] for r in rows)
-    # (group id, actor, ducky): a write group says who made it; a row of no group goes by
-    # who changed it here last, so an AI's write outside a group is still the AI's.
-    batches: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    # (group id, actor, ducky, author, author_pc): a write group says who made it; a row of
+    # no group goes by who changed it here last, so an AI's write outside a group is still
+    # the AI's; a groupmate's change this PC sends as its live group's leader names them.
+    batches: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = {}
     last_by = _actors(ctx, now)
+    from backend.uefn_plugins import live
+
+    hold = live.hold_since(ctx.account, ctx.space, ctx.plugin)
     for r in rows:
         if (r["kind"], r["key"]) in busy:
+            continue
+        if hold is not None and float(r["updated"]) >= hold and now - float(r["updated"]) < live.HOLD_MAX_S:
+            continue  # the live group's leader sends it for this PC
+        theirs = live.relayed(ctx.account, ctx.space, ctx.plugin, r["kind"], r["key"], str(r["sha256"] or ""))
+        if theirs is not None:
+            batches.setdefault(("", theirs["actor"], theirs["ducky"], theirs["author"], theirs["author_pc"]), []).append(r)
             continue
         held = space_vcs.foreign_lock(ctx.account, ctx.space, ctx.plugin, unit_of(r["kind"], r["key"]), now=now)
         if held:
@@ -379,12 +389,13 @@ def _build(ctx: Ctx, *, message: str = "", now: float) -> int:
         if info and info["open"]:
             continue  # the call that writes this group is still running
         if info:
-            batches.setdefault((r["group_id"], str(info.get("actor") or "user"), str(info.get("ducky") or "")), []).append(r)
+            batches.setdefault((r["group_id"], str(info.get("actor") or "user"), str(info.get("ducky") or ""), "", ""),
+                               []).append(r)
         else:
-            batches.setdefault(("", *last_by.get(unit_of(r["kind"], r["key"]), ("user", ""))), []).append(r)
+            batches.setdefault(("", *last_by.get(unit_of(r["kind"], r["key"]), ("user", "")), "", ""), []).append(r)
     seq = int(space_vcs.head_get(ctx.account, ctx.space, ctx.plugin)["seq"])
     made = 0
-    for (gid, actor, ducky), batch in batches.items():
+    for (gid, actor, ducky, author, author_pc), batch in batches.items():
         info = groups.get(gid) or {}
         parts = [batch[i:i + MAX_ITEMS] for i in range(0, len(batch), MAX_ITEMS)]
         for n, part in enumerate(parts, 1):
@@ -394,7 +405,7 @@ def _build(ctx: Ctx, *, message: str = "", now: float) -> int:
             space_vcs.cs_add(ctx.account, ctx.space, ctx.plugin, uuid.uuid4().hex, base_seq=seq,
                              items=[_snapshot(r) for r in part], group_id=gid, part=n if gid else 1,
                              last=n == len(parts) or not gid, message=message or str(info.get("message") or ""),
-                             actor=actor, ducky=ducky)
+                             actor=actor, ducky=ducky, author=author, author_pc=author_pc)
             made += 1
     return made
 
@@ -523,7 +534,8 @@ def _push_cs(ctx: Ctx, cs: dict[str, Any], *, now: float, fresh: bool | None = N
     head = space_vcs.head_get(ctx.account, ctx.space, ctx.plugin)
     out = OutgoingChangeset(cs_id=cs["cs_id"], base_seq=int(head["seq"]), items=tuple(items), device=device_id(),
                             group=cs["group_id"], part=int(cs["part"]), last=bool(cs["last"]), message=cs["message"],
-                            actor=cs["actor"], ducky=cs["ducky"], fences=fences)
+                            actor=cs["actor"], ducky=cs["ducky"], fences=fences, author=str(cs.get("author") or ""),
+                            author_pc=str(cs.get("author_pc") or ""))
     res = _call(ctx.backend.push, ctx.space, ctx.plugin, out)
     if failures and not isinstance(res, (Committed, Replay)):
         went = {(str(s_["kind"]), str(s_["key"])): s_ for s_ in sent}
@@ -904,6 +916,16 @@ def _has_conflict(conn: Any, ctx: Ctx, kind: str, key: str) -> bool:
     return space_vcs.conflict_get(ctx.account, ctx.space, ctx.plugin, kind, key, conn=conn) is not None
 
 
+def _own_echo(ctx: Ctx, it: IncomingItem, prep: Any) -> bool:
+    """The incoming version is one this PC sent its live group earlier (:func:`live.own_echo`)."""
+    try:
+        from backend.uefn_plugins import live
+
+        return live.own_echo(ctx.account, ctx.space, ctx.plugin, it.kind, it.key, str(prep.sha256 or ""))
+    except Exception:  # noqa: BLE001 — unsure: the usual merge
+        return False
+
+
 def _holds_mine(c: Mapping[str, Any] | None) -> bool:
     """A conflict that keeps a version of mine (not a delete of mine)."""
     return bool(c) and not int(c["mine_deleted"]) and (c["mine_value"] is not None or bool(c["mine_path"]))
@@ -1044,6 +1066,13 @@ class _Apply:
             space_vcs.conflict_delete(conn, *a)  # they made it again: the delete it was about is over
         if cur is None or not dirty or (not int(cur["deleted"]) and cur["sha256"] == prep.sha256):
             self._theirs(it, seq, prep, keep_conflict=cur is not None and _has_conflict(conn, ctx, it.kind, it.key))
+            return
+        if _own_echo(ctx, it, prep):
+            # An older version of this PC's own edit, sent for it by its live group's leader:
+            # the base moves on, and the newer edit made here since stays to go out.
+            space_vcs.set_row_state(conn, *a, "", rev=seq)
+            if it.kind == "doc":
+                space_vcs.base_put(conn, ctx.account, ctx.space, ctx.plugin, it.key, seq, prep.sha256, prep.sealed)
             return
         if int(cur["deleted"]):
             # Deleted here, changed there: theirs is applied, the delete waits for the person.
@@ -1986,7 +2015,8 @@ def _push_tree_cs(ctx: Ctx, cs: dict[str, Any], *, now: float, fresh: bool | Non
     head = space_vcs.head_get(*a)
     out = OutgoingChangeset(cs_id=cs["cs_id"], base_seq=int(head["seq"]), items=tuple(items), device=device_id(),
                             group=cs["group_id"], part=int(cs["part"]), last=bool(cs["last"]), message=cs["message"],
-                            actor=cs["actor"], ducky=cs["ducky"], fences=fences)
+                            actor=cs["actor"], ducky=cs["ducky"], fences=fences, author=str(cs.get("author") or ""),
+                            author_pc=str(cs.get("author_pc") or ""))
     res = _call(ctx.backend.push, ctx.space, ctx.plugin, out)
     if isinstance(res, (Committed, Replay, Conflict, Locked, Refused)):
         tf.drop_snapshots(*a, cs["cs_id"])  # answered for good: no retry sends them again

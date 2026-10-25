@@ -52,6 +52,12 @@ HOLD = "ducky.hold"  # a control this PC is pressing (on) or let go of
 NAV = "ducky.nav"  # a tab the host clicked: followers click it too
 FAST_TOPICS = frozenset({"ducky.pointer", "ducky.select", "ducky.view"})  # may drop: the next one replaces it
 HOST_TOPICS = FAST_TOPICS | {HOLD, NAV}
+# Each PC's own live state in a plugin (where its camera is, the tool in hand): a plugin
+# sets it, and everyone in the group sees everyone's (:func:`set_my_state`).
+STATE = "ducky.state"
+STATE_MAX_BYTES = 4 * 1024
+STATE_EVERY_S = 5.0  # sent again this often, so a PC that just joined gets it
+STATE_STALE_S = 15.0  # a groupmate's state not heard of this long is gone (they left, or crashed)
 HOLD_STALE_S = 30.0  # the page renews a hold every 10 s; one not renewed this long is gone
 HOLDS_MAX = 4  # holds per plugin a PC puts in its presence (the sealed blob is 8 KiB at most)
 LINK_GRACE_S = 10.0  # a group member with no link this long after both were live is unreachable
@@ -61,6 +67,8 @@ JOIN_RELOAD_S = 60.0  # the first pull this soon after joining a teammate's grou
 DATA = "ducky.data"
 DATA_INLINE_MAX = 36 * 1024  # bytes of a doc or file carried in the message; bigger ones are pulled
 OUTBOX_EVERY_S = 0.25  # this PC's new writes are looked for this often while live
+HOLD_MAX_S = 90.0  # a change the group's leader hasn't sent for this PC by then goes out from here
+ECHO_KEEP = 8  # versions of an item this PC sent its group that it still knows as its own
 ROOM_KEY = "live_room:"  # workspace_state: where each plugin is live here (read by every process)
 CHOICE_KEY = "live_choice:"  # workspace_state: the group the person went live in ("start" or a room)
 START = "start"  # the choice Start live: a teammate's group, else this PC's own
@@ -90,6 +98,12 @@ _kept: set[str] = set()  # folder plugins restarted while live with their panels
 _join_reload: dict[str, float] = {}  # plugin -> until when its join's pull reloads its panels
 _merging: set[str] = set()  # plugins moving from a group of one into a teammate's
 _company: dict[str, tuple[float, frozenset[str]]] = {}  # plugin -> (last roster with others in this PC's group, them)
+_ItemKey = tuple[str, str, str, str, str]  # (account, space, plugin, kind, key)
+_sent_shas: dict[_ItemKey, collections.deque[str]] = {}  # versions of an item this PC sent its group
+_relayed: dict[_ItemKey, dict[str, str]] = {}  # a groupmate's change this PC took on as leader: sha, who made it
+_led_by: dict[str, str] = {}  # plugin -> the device that led this PC's group at the last look
+_my_states: dict[str, dict[str, Any]] = {}  # plugin -> {state, sent}: this PC's live state
+_their_states: dict[str, dict[str, dict[str, Any]]] = {}  # plugin -> device -> {from, state, at}
 _marks: dict[tuple[str, str, str], float] = {}  # (account, space, plugin) -> newest write sent live
 _outbox: list[threading.Thread] = []
 
@@ -432,6 +446,9 @@ def leave(plugin: str, *, why: str = "") -> dict[str, Any]:
         st = _live.pop(plugin, None)
         _join_reload.pop(plugin, None)
         _company.pop(plugin, None)
+        _led_by.pop(plugin, None)
+        _my_states.pop(plugin, None)
+        _their_states.pop(plugin, None)
     _reload_kept(plugin)
     if st is not None:
         _publish_room(plugin, None)
@@ -491,6 +508,103 @@ def send(plugin: str, topic: str, data: Any, *, to: str = "", fast: bool = False
     except Exception as exc:  # noqa: BLE001 — say why instead of failing the caller
         return {"ok": False, "error": str(exc)[:200]}
     return {"ok": True, "sent": int(sent or 0)}
+
+
+# --------------------------------------------------------------------------- live state
+#
+# Each PC's own state in a plugin, for things only the moment needs: where its camera is,
+# the tool in its hand, what it plays. A plugin sets this PC's (latest wins, a JSON object
+# up to 4 KB) and every groupmate's panels and backend see everyone's, each by who it is;
+# one that joins later gets them within :data:`STATE_EVERY_S`, and a groupmate who left
+# drops out after :data:`STATE_STALE_S`. Never data: nothing of it is kept or synced.
+
+
+def set_my_state(plugin: str, state: Any) -> dict[str, Any]:
+    """This PC's live state in ``plugin`` (a JSON object, or None to clear it), to everyone in
+    its group at once. Up to 25 a second go out; one over that goes with the next."""
+    if state is not None and not isinstance(state, dict):
+        return {"ok": False, "error": "A live state is a JSON object (or null to clear it)."}
+    try:
+        text = json.dumps(state, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "A live state must be JSON."}
+    if len(text) > STATE_MAX_BYTES:
+        return {"ok": False, "error": f"A live state is at most {STATE_MAX_BYTES // 1024} KB."}
+    st = _current(plugin)
+    if st is None:
+        return {"ok": False, "error": "This plugin isn't live."}
+    with _lock:
+        if state is None:
+            _my_states.pop(plugin, None)
+        else:
+            _my_states[plugin] = {"state": json.loads(text), "sent": 0.0}
+    if state is not None and not _rate_ok(plugin, True):
+        return {"ok": True, "sent": 0}  # the next turn of the outbox carries it
+    return {"ok": True, "sent": _send_state(plugin, st, None if state is None else json.loads(text))}
+
+
+def _send_state(plugin: str, st: _State, state: Any) -> int:
+    from backend.uefn_plugins import spaces
+
+    try:
+        sent = spaces.provider().live_send(st.account, st.space, plugin, STATE, {"s": state}, to="",
+                                           fast=state is not None)  # a clear must arrive
+    except Exception:  # noqa: BLE001 — the next turn sends it again
+        _log.debug("sending the live state of %s failed", plugin, exc_info=True)
+        return 0
+    with _lock:
+        if plugin in _my_states:
+            _my_states[plugin]["sent"] = time.time()
+    return int(sent or 0)
+
+
+def member_states(plugin: str) -> list[dict[str, Any]]:
+    """Every groupmate's live state in ``plugin``: ``from`` (name, user, device, label) and
+    ``state`` (a page that just loaded)."""
+    with _lock:
+        return [{"from": dict(s["from"]), "state": s["state"]} for s in (_their_states.get(plugin) or {}).values()]
+
+
+def _their_state(plugin: str, who: dict[str, str], data: Any) -> None:
+    state = data.get("s") if isinstance(data, dict) else None
+    device = who.get("device", "")
+    if not device or (state is not None and not isinstance(state, dict)):
+        return
+    with _lock:
+        mine = _their_states.setdefault(plugin, {})
+        if state is None:
+            if mine.pop(device, None) is None:
+                return
+        else:
+            same = (mine.get(device) or {}).get("state") == state
+            mine[device] = {"from": dict(who), "state": state, "at": time.time()}
+            if same:
+                return  # sent again for latecomers: nothing new to show
+    _push({"type": "live_member_state", "plugin": plugin, "from": who, "state": state})
+    with _lock:
+        callbacks = list(_listeners.get(plugin, {}).get(STATE, ()))
+    for cb in callbacks:
+        try:
+            cb(who, state)
+        except Exception:  # noqa: BLE001 — a plugin's callback never breaks delivery
+            _log.warning("%s: live state callback failed", plugin, exc_info=True)
+
+
+def _state_tick(now: float | None = None) -> None:
+    """This PC's states again for latecomers; groupmates' not heard of lately go."""
+    now = time.time() if now is None else now
+    with _lock:
+        due = [(p, dict(s)) for p, s in _my_states.items() if now - float(s["sent"]) >= STATE_EVERY_S]
+        gone = [(p, d, dict(s["from"])) for p, theirs in _their_states.items() for d, s in theirs.items()
+                if now - float(s["at"]) >= STATE_STALE_S]
+        for plugin, device, _who in gone:
+            _their_states.get(plugin, {}).pop(device, None)
+    for plugin, s in due:
+        st = _current(plugin)
+        if st is not None:
+            _send_state(plugin, st, s["state"])
+    for plugin, _device, who in gone:
+        _push({"type": "live_member_state", "plugin": plugin, "from": who, "state": None})
 
 
 def groups(plugin: str, account: str, space: str) -> list[dict[str, Any]]:
@@ -704,6 +818,12 @@ def deliver(account: str, space: str, plugin: str, sender: dict[str, Any], topic
     if st is None:
         return
     who = {k: str(sender.get(k) or "") for k in ("name", "user", "device", "label")}
+    if topic == DATA:  # by the person's own name: a change this PC sends for them says who made it
+        _apply_data(account, space, plugin, who, data)
+        return
+    if topic == STATE:
+        _their_state(plugin, who, data)
+        return
     try:
         from backend.uefn_plugins.vcs_engine import other_pc
 
@@ -714,9 +834,6 @@ def deliver(account: str, space: str, plugin: str, sender: dict[str, Any], topic
         who["name"] = f"You on {pc}"
     if topic == CHANGE:
         _pull_now(account, space, plugin)
-        return
-    if topic == DATA:
-        _apply_data(account, space, plugin, who, data)
         return
     _push({"type": "live_message", "plugin": plugin, "from": who, "topic": topic, "data": data})
     with _lock:
@@ -732,11 +849,20 @@ def deliver(account: str, space: str, plugin: str, sender: dict[str, Any], topic
 #
 # A plugin with "data_live": while this PC is live in a group, every change it makes to the
 # plugin's docs and files (a panel's, the person's, an agent's in the MCP bridge: they all
-# land as rows here) goes to the group at once, and a teammate's lands here at once, as a
-# pulled copy (not this PC's to send). Sync still records each change from the PC that made
-# it; when that commit comes down it finds the same content here and nothing conflicts.
-# Inside the group the newest change of an item wins and nobody locks anyone out
-# (scopes._team_write); teammates outside the group get it with sync as before.
+# land as rows here) goes to the group at once, and a teammate's lands here at once. Inside
+# the group the newest change of an item wins and nobody locks anyone out
+# (scopes._team_write).
+#
+# The group syncs through its leader (the host, :func:`groups`), like a document server:
+# the leader takes each groupmate's change on as its own to send, naming who made it
+# (``author``), and the others land it as a pulled copy. A groupmate sends nothing of what it
+# changed since it joined while the leader is in reach (:func:`hold_since`); the leader's
+# commit coming down finds the same content and settles it. One of its own older versions
+# coming back never undoes a newer edit (:func:`own_echo`), and when the group passes to
+# another PC what the old leader hasn't sent goes to the new one (:func:`send_changes`). A
+# change the leader hasn't sent by :data:`HOLD_MAX_S`, or once the leader is out of reach or
+# this PC left, goes out from here as before: at worst it is sent twice, never lost.
+# Teammates outside the group get everything with sync.
 
 
 def _publish_room(plugin: str, st: _State | None) -> None:
@@ -822,6 +948,10 @@ def _outbox_loop() -> None:
             send_changes()
         except Exception:  # noqa: BLE001 — the next turn tries again; sync carries it anyway
             _log.debug("sending live changes failed", exc_info=True)
+        try:
+            _state_tick()
+        except Exception:  # noqa: BLE001 — the next turn tries again
+            _log.debug("live states failed", exc_info=True)
 
 
 def _data_item(account: str, space: str, plugin: str, r: dict[str, Any]) -> dict[str, Any] | None:
@@ -848,9 +978,87 @@ def _data_item(account: str, space: str, plugin: str, r: dict[str, Any]) -> dict
     return item
 
 
+def _my_group(plugin: str, account: str, space: str) -> dict[str, Any] | None:
+    try:
+        return next((g for g in groups(plugin, account, space) if g["mine"]), None)
+    except Exception:  # noqa: BLE001 — no roster to tell: as if alone
+        _log.debug("live groups of %s failed", plugin, exc_info=True)
+        return None
+
+
+def _in_reach(account: str, space: str, plugin: str, device: str) -> bool:
+    from backend.uefn_plugins import spaces
+
+    try:
+        got = spaces.provider().live_state(account, space, plugin) or {}
+    except Exception:  # noqa: BLE001 — unsure: not in reach
+        return False
+    return any(isinstance(p, dict) and str(p.get("device") or "") == device and p.get("path") in ("direct", "forwarded")
+               for p in got.get("peers") or [])
+
+
+def hold_since(account: str, space: str, plugin: str) -> float | None:
+    """When this PC joined its live group of ``plugin``, while a groupmate leads it and is in
+    reach: what this PC changed since then goes to the leader, which sends it (the version
+    engine holds it back up to :data:`HOLD_MAX_S`). None: this PC sends its own."""
+    from backend.uefn_plugins import scopes
+
+    st = room_of(plugin, account, space)
+    if st is None or not scopes.data_live(plugin):
+        return None
+    mine = _my_group(plugin, account, space)
+    if mine is None or mine["hostIsMe"] or len(mine["members"]) < 2:
+        return None
+    return float(st["since"]) if _in_reach(account, space, plugin, str(mine["hostDevice"])) else None
+
+
+def leads(account: str, space: str, plugin: str, sender: str = "") -> bool:
+    """This PC leads its live group of a ``data_live`` plugin, with ``sender`` in it (as the
+    roster shows): groupmates' changes are its to send. Someone the roster doesn't show in
+    the group yet sends their own."""
+    from backend.uefn_plugins import scopes
+
+    if room_of(plugin, account, space) is None or not scopes.data_live(plugin):
+        return False
+    mine = _my_group(plugin, account, space)
+    devices = {str(m["device"]) for m in (mine or {}).get("members") or [] if not m["me"]}
+    return bool(mine and mine["hostIsMe"] and devices and (not sender or sender in devices))
+
+
+def own_echo(account: str, space: str, plugin: str, kind: str, key: str, sha: str) -> bool:
+    """``sha`` is a version of the item this PC sent its group earlier (its leader committed
+    it): coming down, it only moves the base on, under the newer edit made here since."""
+    with _lock:
+        return bool(sha) and sha in _sent_shas.get((account, space, plugin, kind, key), ())
+
+
+def relayed(account: str, space: str, plugin: str, kind: str, key: str, sha: str) -> dict[str, str] | None:
+    """Who made a groupmate's change this PC sends as its group's leader (``author``,
+    ``author_pc``, ``actor``, ``ducky``), while the row still has that content."""
+    with _lock:
+        got = _relayed.get((account, space, plugin, kind, key))
+    return dict(got) if got and got.get("sha") == sha else None
+
+
+def _made_by(account: str, space: str, plugin: str, kind: str, key: str) -> dict[str, str]:
+    """Who changed the item here last (the person, or one of their duckies)."""
+    from backend.store.repos import space_vcs
+
+    unit = f"{kind}:{key}"
+    try:
+        for act in space_vcs.activity(account, space):
+            if act["plugin_id"] == plugin and act["unit"] == unit:
+                return {"actor": "agent" if act["actor"] == "agent" else "user", "ducky": str(act["ducky"] or "")}
+    except Exception:  # noqa: BLE001 — the person then
+        _log.debug("activity of %s failed", unit, exc_info=True)
+    return {"actor": "user", "ducky": ""}
+
+
 def send_changes() -> int:
-    """This PC's writes since the last turn, to each live group of a ``data_live`` plugin.
-    Returns how many went."""
+    """This PC's writes since the last turn, to each live group of a ``data_live`` plugin,
+    each saying who made it here. When the group passed to another leader, what is still
+    unsent here since joining goes again (the new leader sends it). A groupmate's change this
+    PC took on as leader isn't sent back. Returns how many went."""
     from backend.store.repos import plugin_data as repo
     from backend.uefn_plugins import scopes, spaces
 
@@ -861,12 +1069,26 @@ def send_changes() -> int:
         if not scopes.data_live(plugin):
             continue
         mark = (st.account, st.space, plugin)
+        mine = _my_group(plugin, st.account, st.space)
+        lead = str(mine["hostDevice"]) if mine and len(mine["members"]) > 1 else ""
         with _lock:
+            if lead and _led_by.get(plugin, lead) != lead:
+                _marks[mark] = st.since  # the new leader gets what the old one didn't send
+            if lead:
+                _led_by[plugin] = lead
             since = _marks.setdefault(mark, st.since)  # what was written before joining goes with sync
         for r in repo.written_since(st.account, st.space, plugin, since):
-            if not scopes.is_local_key(plugin, r["key"]):
+            item_key = (st.account, st.space, plugin, r["kind"], r["key"])
+            with _lock:
+                theirs = (_relayed.get(item_key) or {}).get("sha") == r["sha256"]
+            if not scopes.is_local_key(plugin, r["key"]) and not theirs:
                 item = _data_item(st.account, st.space, plugin, r)
                 if item is not None:
+                    item["by"] = _made_by(st.account, st.space, plugin, r["kind"], r["key"])
+                    with _lock:
+                        q = _sent_shas.setdefault(item_key, collections.deque(maxlen=ECHO_KEEP))
+                        if item["sha"] and item["sha"] not in q:
+                            q.append(item["sha"])
                     spaces.provider().live_send(st.account, st.space, plugin, DATA, item, to="", fast=False)
                     sent += 1
             with _lock:
@@ -874,10 +1096,22 @@ def send_changes() -> int:
     return sent
 
 
+def _note_relayed(account: str, space: str, plugin: str, kind: str, key: str, sha: str, who: dict[str, str],
+                  by: dict[str, Any]) -> None:
+    """The leader takes a groupmate's change on: its changeset names them, their PC and
+    (for one of their duckies) the ducky."""
+    with _lock:
+        if len(_relayed) > 5000:
+            _relayed.clear()
+        _relayed[(account, space, plugin, kind, key)] = {
+            "sha": sha, "author": str(who.get("name") or "")[:120], "author_pc": str(who.get("label") or "")[:64],
+            "actor": "agent" if by.get("actor") == "agent" else "user", "ducky": str(by.get("ducky") or "")[:80]}
+
+
 def _apply_data(account: str, space: str, plugin: str, who: dict[str, str], data: Any) -> bool:
     """A groupmate's change: it lands here as a pulled copy would, unless this PC changed the
-    same item later (the newest change wins; this PC's goes to them). Returns whether it
-    landed."""
+    same item later (the newest change wins; this PC's goes to them). On the group's leader it
+    lands as a change of its own to send, naming who made it. Returns whether it landed."""
     import base64
     import hashlib
 
@@ -902,12 +1136,14 @@ def _apply_data(account: str, space: str, plugin: str, who: dict[str, str], data
     if cur is not None and int(cur["dirty"]) and (float(cur["updated"]), _device()) > (at, who.get("device", "")):
         return False  # changed here later: mine wins, and goes to them
     sha = str(data.get("sha") or "")
+    mine = leads(account, space, plugin, sender=str(who.get("device") or ""))  # the leader sends it for them
+    by = data.get("by") if isinstance(data.get("by"), dict) else {}
     if op == "put":
         if cur is not None and not int(cur["deleted"]) and cur["sha256"] == sha:
-            return False
+            return False  # here already (a groupmate who still holds it sends it after HOLD_MAX_S)
         payload = data.get("v") if kind == "doc" else data.get("b")
         if not isinstance(payload, str):
-            _pull_now(account, space, plugin)  # too big to carry: sync brings it
+            _pull_now(account, space, plugin)  # too big to carry: sync brings it (they send it themselves)
             return False
         try:
             raw = payload.encode("utf-8") if kind == "doc" else base64.b64decode(payload, validate=True)
@@ -915,27 +1151,37 @@ def _apply_data(account: str, space: str, plugin: str, who: dict[str, str], data
             return False
         if hashlib.sha256(raw).hexdigest() != sha or len(raw) > (scopes.DOC_MAX_BYTES if kind == "doc" else scopes.ASSET_MAX_BYTES):
             return False
+        if mine:
+            _note_relayed(account, space, plugin, kind, key, sha, who, by)
         if kind == "doc":
             conn = db.connect()
             with db.write_txn(conn):
                 repo.upsert(conn, account, space, plugin, "doc", key, value=data_crypto.seal_text(payload, account),
-                            size=len(raw), sha256=sha, dirty=False)
+                            size=len(raw), sha256=sha, dirty=mine)
                 space_vcs.change_log_bump(conn, plugin, [key])
         else:
             scopes._write_asset(scopes.shared_scope(account, space), plugin, key, data_crypto.seal_bytes(raw, account),
-                                size=len(raw), sha256=sha, dirty=False)
+                                size=len(raw), sha256=sha, dirty=mine)
             conn = db.connect()
             with db.write_txn(conn):
                 space_vcs.change_log_bump(conn, plugin, [key])
     else:
         if cur is None or int(cur["deleted"]):
             return False
-        conn = db.connect()
-        with db.write_txn(conn):
-            repo.delete_row(conn, account, space, plugin, kind, key)
-            space_vcs.change_log_bump(conn, plugin, [key])
-        if kind == "asset":
-            scopes.asset_file(scopes.shared_scope(account, space), plugin, key).unlink(missing_ok=True)
+        target = scopes.asset_file(scopes.shared_scope(account, space), plugin, key) if kind == "asset" else None
+        if mine:
+            _note_relayed(account, space, plugin, kind, key, str(cur["sha256"] or ""), who, by)
+            repo.remove(account, space, plugin, kind, key, tombstone=True, target_path=target)
+            conn = db.connect()
+            with db.write_txn(conn):
+                space_vcs.change_log_bump(conn, plugin, [key])
+        else:
+            conn = db.connect()
+            with db.write_txn(conn):
+                repo.delete_row(conn, account, space, plugin, kind, key)
+                space_vcs.change_log_bump(conn, plugin, [key])
+            if target is not None:
+                target.unlink(missing_ok=True)
     scopes.deliver_data_changes(plugin)  # the plugin's backend hears it like a pull
     _push({"type": "plugin_scope_changed", "plugins": [plugin], "synced": True, "keys": {plugin: [key]}})
     return True
@@ -970,6 +1216,11 @@ def reset_for_tests() -> None:
         _join_reload.clear()
         _merging.clear()
         _company.clear()
+        _sent_shas.clear()
+        _relayed.clear()
+        _led_by.clear()
+        _my_states.clear()
+        _their_states.clear()
         _marks.clear()
 
 
@@ -997,3 +1248,18 @@ class LiveApi:
 
     def state(self) -> dict[str, Any]:
         return status(self.plugin_id)
+
+    def set_my_state(self, state: dict[str, Any] | None) -> dict[str, Any]:
+        """This PC's live state (a camera, a tool): every groupmate sees it (``member_states``)."""
+        return set_my_state(self.plugin_id, state)
+
+    def member_states(self) -> list[dict[str, Any]]:
+        """Every groupmate's live state: ``[{from, state}]``."""
+        return member_states(self.plugin_id)
+
+    def on_member_state(self, callback: Callable[[dict[str, str], Any], Any]) -> None:
+        """``callback(sender, state)`` when a groupmate's live state changes (None: gone)."""
+        if not callable(callback):
+            raise TypeError("live.on_member_state needs a function: callback(sender, state)")
+        with _lock:
+            _listeners.setdefault(self.plugin_id, {}).setdefault(STATE, []).append(callback)

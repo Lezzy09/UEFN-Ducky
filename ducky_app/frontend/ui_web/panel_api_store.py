@@ -1003,6 +1003,18 @@ class PanelApiStoreMixin:
 
         return {"ok": True, "holds": live.holds_now(str(plugin_id or ""))}
 
+    def plugin_live_set_my_state(self, plugin_id: str, state: object = None) -> dict[str, Any]:
+        """A panel sets this PC's live state in its plugin (a camera, a tool in hand)."""
+        from backend.uefn_plugins import live
+
+        return live.set_my_state(str(plugin_id or ""), state)
+
+    def plugin_live_member_states(self, plugin_id: str) -> dict[str, Any]:
+        """Every groupmate's live state in the plugin (a page that just loaded)."""
+        from backend.uefn_plugins import live
+
+        return {"ok": True, "states": live.member_states(str(plugin_id or ""))}
+
     def plugin_live_status(self, plugin_id: str) -> dict[str, Any]:
         from backend.uefn_plugins import live
 

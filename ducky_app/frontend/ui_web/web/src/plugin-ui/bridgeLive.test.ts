@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({
   api: { plugin_live_join: vi.fn(), plugin_live_send: vi.fn(), plugin_live_status: vi.fn(), plugin_live_hold: vi.fn(),
-    plugin_live_holds: vi.fn() },
+    plugin_live_holds: vi.fn(), plugin_live_set_my_state: vi.fn(), plugin_live_member_states: vi.fn() },
 }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => host.api, isRemote: () => false }));
 
@@ -25,6 +25,17 @@ it("a panel goes live and sends its own topics as its own plugin, never the host
   expect(host.api.plugin_live_send).toHaveBeenCalledWith("imk", "playhead", { t: 4.2 }, "d1", false);
   expect(await call("live.send", { topic: "ducky.change", data: {} })).toMatchObject({ ok: false });
   expect(host.api.plugin_live_send).toHaveBeenCalledTimes(1);
+});
+
+it("a panel sets this PC's live state as its own plugin and reads everyone's", async () => {
+  host.api.plugin_live_set_my_state.mockResolvedValue({ ok: true, sent: 1 });
+  host.api.plugin_live_member_states.mockResolvedValue({ ok: true, states: [{ from: { name: "Mo" }, state: { cam: [1, 2, 3] } }] });
+  expect(await call("live.setMyState", { state: { cam: [0, 0, 5] } })).toMatchObject({ ok: true, result: { sent: 1 } });
+  expect(host.api.plugin_live_set_my_state).toHaveBeenCalledWith("imk", { cam: [0, 0, 5] });
+  await call("live.setMyState", {});  // nothing: cleared
+  expect(host.api.plugin_live_set_my_state).toHaveBeenLastCalledWith("imk", null);
+  expect(await call("live.setMyState", { state: [1, 2] })).toMatchObject({ ok: false });  // an object or null
+  expect(await call("live.memberStates", {})).toMatchObject({ ok: true, result: { states: [{ from: { name: "Mo" } }] } });
 });
 
 it("pointers go fast and clamped, with an anchor no longer than 400", async () => {

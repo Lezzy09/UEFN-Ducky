@@ -682,6 +682,107 @@ def test_members_of_a_live_group_never_lock_each_other_out(live_data: dict[str, 
         PluginData(PLUGIN).put("card.ben", {"hp": 3})
 
 
+CY = {"name": "Cy", "user": "u_cy", "device": "d_cy", "label": "CY-PC"}
+
+
+def _ctx(account: str) -> Any:
+    return vcs_engine.Ctx(account, SPACE, PLUGIN, None)
+
+
+def test_the_leader_takes_a_groupmates_change_on_and_names_who_made_it(live_data: dict[str, Any]) -> None:
+    account = live_data["account"]
+    _roster(account)
+    live.join(PLUGIN)  # nobody else live: this PC hosts, and leads
+    _roster(account, _on("d_cy", "Cy", live.host_room(), time.time()))
+    item = {**_item("card.pip", {"hp": 3}, time.time()), "by": {"actor": "agent", "ducky": "Builder"}}
+    live.deliver(account, SPACE, PLUGIN, CY, live.DATA, item)
+    assert PluginData(PLUGIN).get("card.pip") == {"hp": 3}
+    assert _row(account, "card.pip")["dirty"] == 1  # the leader's to send, for Cy
+    assert vcs_engine._build(_ctx(account), now=time.time()) == 1
+    (cs,) = space_vcs.cs_open(account, SPACE, PLUGIN)
+    assert (cs["actor"], cs["ducky"], cs["author"], cs["author_pc"]) == ("agent", "Builder", "Cy", "CY-PC")
+    live_data["impl"].sent.clear()
+    assert live.send_changes() == 0  # never sent back to the group it came from
+    # Someone the roster doesn't show in the group yet sends their own.
+    live.deliver(account, SPACE, PLUGIN, ALEX, live.DATA, _item("card.zed", {"hp": 1}, time.time()))
+    assert _row(account, "card.zed")["dirty"] == 0
+
+
+def test_a_groupmate_holds_its_changes_for_the_leader_while_it_is_in_reach(live_data: dict[str, Any]) -> None:
+    account, impl = live_data["account"], live_data["impl"]
+    _roster(account, _on("d_cy", "Cy", "h:d_cy", time.time() - 60))
+    live.join(PLUGIN, "h:d_cy")
+    impl.peers = [{**CY, "path": "direct"}]
+    PluginData(PLUGIN).put("card.pip", {"hp": 1})
+    now = time.time()
+    assert vcs_engine._build(_ctx(account), now=now) == 0  # Cy leads: Cy sends it
+    assert vcs_engine._build(_ctx(account), now=now + live.HOLD_MAX_S + 1) == 1  # not sent for us in time: ours
+    PluginData(PLUGIN).put("card.zed", {"hp": 2})
+    impl.peers = [{**CY, "path": "none"}]
+    assert vcs_engine._build(_ctx(account), now=time.time()) == 1  # the leader is out of reach: ours at once
+
+
+def test_the_new_leader_gets_what_the_old_one_didnt_send(live_data: dict[str, Any]) -> None:
+    account = live_data["account"]
+    since = time.time() - 60
+    _roster(account, _on("d_cy", "Cy", "h:d_cy", since), _on("d_mo", "Mo", "h:d_cy", since + 1))
+    live.join(PLUGIN, "h:d_cy")
+    PluginData(PLUGIN).put("card.pip", {"hp": 1})
+    assert live.send_changes() == 1
+    sent = _data_sent(live_data)[0]
+    assert sent["by"] == {"actor": "user", "ducky": ""}  # who made it here
+    assert live.own_echo(account, SPACE, PLUGIN, "doc", "card.pip", sent["sha"])
+    assert live.send_changes() == 0
+    _roster(account, _on("d_mo", "Mo", "h:d_cy", since + 1))  # Cy left: Mo leads now
+    assert live.send_changes() == 1  # still unsent here: it goes again, for Mo to send
+    assert live.send_changes() == 0
+
+
+def test_each_pc_has_a_live_state_everyone_in_the_group_sees(team: dict[str, Any]) -> None:
+    account, impl, pushed = team["account"], team["impl"], team["pushed"]
+    assert live.set_my_state(PLUGIN, {"cam": [0, 0, 5]})["ok"] is False  # not live
+    live.join(PLUGIN)
+    impl.sent.clear()
+    assert live.set_my_state(PLUGIN, {"cam": [0, 0, 5]})["ok"]
+    assert impl.sent == [(PLUGIN, live.STATE, {"s": {"cam": [0, 0, 5]}}, "", True)]  # may drop: the next replaces it
+    assert live.set_my_state(PLUGIN, [1])["ok"] is False and live.set_my_state(PLUGIN, {"x": "y" * 5000})["ok"] is False
+    assert live.send(PLUGIN, live.STATE, {})["ok"] is False  # the host's topic
+    # A groupmate's: the panels and the backend hear it, a page that loads reads it.
+    heard: list[tuple[str, Any]] = []
+    live.LiveApi(PLUGIN).on_member_state(lambda who, state: heard.append((who["name"], state)))
+    live.deliver(account, SPACE, PLUGIN, CY, live.STATE, {"s": {"cam": [1, 2, 3]}})
+    live.deliver(account, SPACE, PLUGIN, CY, live.STATE, {"s": {"cam": [1, 2, 3]}})  # again for latecomers
+    assert [p for p in pushed if p["type"] == "live_member_state"] == [
+        {"type": "live_member_state", "plugin": PLUGIN, "from": CY, "state": {"cam": [1, 2, 3]}}]
+    assert heard == [("Cy", {"cam": [1, 2, 3]})]
+    assert live.member_states(PLUGIN) == [{"from": CY, "state": {"cam": [1, 2, 3]}}]
+    # Mine goes again for latecomers; theirs goes once not heard of for a while.
+    impl.sent.clear()
+    live._state_tick(time.time() + live.STATE_EVERY_S + 1)
+    assert impl.sent == [(PLUGIN, live.STATE, {"s": {"cam": [0, 0, 5]}}, "", True)]
+    live._state_tick(time.time() + live.STATE_STALE_S + 1)
+    assert live.member_states(PLUGIN) == [] and pushed[-1]["state"] is None
+    live.set_my_state(PLUGIN, None)  # cleared: it must arrive
+    assert impl.sent[-1] == (PLUGIN, live.STATE, {"s": None}, "", False)
+    live.leave(PLUGIN)
+    assert live.member_states(PLUGIN) == []
+
+
+def test_history_names_who_made_a_change_the_leader_sent(team: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.uefn_plugins.ledger import History, HistoryEntry
+
+    class Backend:
+        def history(self, space: str, plugin: str, key: Any, before: Any, limit: int) -> History:
+            return History((HistoryEntry(seq=5, by="iliya", device="d_il", device_name="Laptop", actor="agent",
+                                         ducky="Builder", author="Cy", author_pc="CY-PC"),
+                            HistoryEntry(seq=4, by="iliya", device="d_il", device_name="Laptop")))
+
+    monkeypatch.setattr(spaces, "ledger_for", lambda account, space, plugin: Backend())
+    sent, own = spaces.team_history(PLUGIN)["entries"]
+    assert (sent["by"], sent["device"], sent["via"], sent["ducky"]) == ("Cy", "CY-PC", "iliya", "Builder")
+    assert (own["by"], own["device"]) == ("iliya", "Laptop") and "via" not in own
+
+
 def test_every_process_sees_where_the_app_is_live(live_data: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     import os
 

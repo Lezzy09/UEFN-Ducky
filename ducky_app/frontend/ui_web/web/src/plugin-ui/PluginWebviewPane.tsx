@@ -217,17 +217,20 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
         win.postMessage({ channel: BRIDGE_CHANNEL, event }, "*");
         return;
       }
-      // Live editing: a teammate's message, who is live, or what teammates hold, for this
-      // plugin's panels only.
-      if ((event.type === "live_message" || event.type === "live_peers" || event.type === "live_holds")
-          && parsed && event.plugin === parsed.pluginId) {
+      // Live editing: a teammate's message, who is live, what teammates hold, or a
+      // groupmate's live state, for this plugin's panels only.
+      if ((event.type === "live_message" || event.type === "live_peers" || event.type === "live_holds"
+          || event.type === "live_member_state") && parsed && event.plugin === parsed.pluginId) {
+        const from = (event as { from?: unknown }).from;
         win.postMessage({
           channel: BRIDGE_CHANNEL,
           event: event.type === "live_message"
-            ? { type: "live.message", from: (event as { from?: unknown }).from, topic: event.topic, data: event.data }
-            : event.type === "live_holds"
-              ? { type: "live.holds", holds: (event as { holds?: unknown }).holds ?? [] }
-              : { type: "live.peers", on: Boolean(event.on), peers: event.peers ?? [] },
+            ? { type: "live.message", from, topic: event.topic, data: event.data }
+            : event.type === "live_member_state"
+              ? { type: "live.memberState", from, state: (event as { state?: unknown }).state ?? null }
+              : event.type === "live_holds"
+                ? { type: "live.holds", holds: (event as { holds?: unknown }).holds ?? [] }
+                : { type: "live.peers", on: Boolean(event.on), peers: event.peers ?? [] },
         }, "*");
         return;
       }

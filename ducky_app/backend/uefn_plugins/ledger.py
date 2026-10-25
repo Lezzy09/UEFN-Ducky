@@ -99,7 +99,9 @@ class OutgoingChangeset:
     """One atomic changeset. ``cs_id`` is chosen before upload; pushing the same id again
     is idempotent (:class:`Replay`). A group too big for one call goes as parts
     (``part`` of the group, ``last`` on the final one). ``fences``: ``{unit: fence}`` of
-    units this PC holds locks on; ``release_locks``: units to release on commit."""
+    units this PC holds locks on; ``release_locks``: units to release on commit.
+    ``author`` / ``author_pc``: the groupmate (and their PC's name) a live group's leader
+    sends it for ('' for this PC's own); a backend that can carries them with the message."""
 
     cs_id: str
     base_seq: int
@@ -113,6 +115,8 @@ class OutgoingChangeset:
     ducky: str = ""
     fences: Mapping[str, int] = field(default_factory=dict)
     release_locks: tuple[str, ...] = ()
+    author: str = ""
+    author_pc: str = ""
 
 
 # --------------------------------------------------------------------------- what comes in
@@ -168,6 +172,8 @@ class IncomingChangeset:
     group: str = ""
     part: int = 1
     last: bool = True
+    author: str = ""  # sent by a live group's leader for this groupmate ('' otherwise)
+    author_pc: str = ""
 
 
 @dataclass(frozen=True)
@@ -282,6 +288,9 @@ class HistoryEntry:
     # The name of the PC ``device`` is, when the change says it ("" otherwise: core names
     # the PCs its rosters have seen).
     device_name: str = ""
+    # Sent by a live group's leader (``by``) for this groupmate, on their PC ('' otherwise).
+    author: str = ""
+    author_pc: str = ""
 
 
 @dataclass(frozen=True)

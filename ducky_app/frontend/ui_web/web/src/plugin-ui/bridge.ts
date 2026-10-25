@@ -439,11 +439,12 @@ export const pluginPushSubscriptions = new Map<
 /** Events the host tells panels itself, in their documented shape: the scope bar sends
  * `plugin_scope_changed` with `reason` and `keys`. The raw app push of that name (every
  * sync round, lock and mode change, other plugins' too) carries no `reason`, so a panel
- * that subscribed to it read each one as a switch and started over. Live messages, peers
- * and holds reach only their own plugin's panels (`live.message`, `live.peers`,
- * `live.holds`), and the peer
+ * that subscribed to it read each one as a switch and started over. Live messages, peers,
+ * holds and groupmates' live states reach only their own plugin's panels (`live.message`,
+ * `live.peers`, `live.holds`, `live.memberState`), and the peer
  * connections' commands (`rtc_cmd`: offers and sealed bytes) never reach a panel. */
-const HOST_TOLD_EVENTS = new Set(["plugin_scope_changed", "live_message", "live_peers", "live_holds", "rtc_cmd"]);
+const HOST_TOLD_EVENTS = new Set(["plugin_scope_changed", "live_message", "live_peers", "live_holds",
+  "live_member_state", "rtc_cmd"]);
 
 export function shouldForwardPluginPush(
   tabId: string,
@@ -825,6 +826,17 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
   },
   /** What teammates hold now (the page just loaded); later changes come as `live.holds`. */
   "live.holds": async (ctx) => (await getApi()?.plugin_live_holds?.(ctx.pluginId)) ?? { ok: true, holds: [] },
+  /** This PC's own live state in the plugin (a camera, the tool in hand; a JSON object up
+   * to 4 KB, null clears it): every groupmate's panels get it as `live.memberState`. Latest
+   * wins, so call it as often as it changes (up to 25 a second go out). */
+  "live.setMyState": async (ctx, params) => {
+    const state = params.state ?? null;
+    if (state !== null && (typeof state !== "object" || Array.isArray(state))) throw new Error("state must be an object or null");
+    return (await getApi()?.plugin_live_set_my_state?.(ctx.pluginId, state as Record<string, unknown> | null))
+      ?? { ok: false, error: "live editing unavailable" };
+  },
+  /** Every groupmate's live state now (the page just loaded): `{states: [{from, state}]}`. */
+  "live.memberStates": async (ctx) => (await getApi()?.plugin_live_member_states?.(ctx.pluginId)) ?? { ok: true, states: [] },
   /**
    * Subscribe this pane to host push events (e.g. discord_message).
    * Events are forwarded as ``{ channel, event }`` postMessages (same as browser_pane_state).

@@ -539,7 +539,8 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id, tab: shownT
         <div key={e.seq}>
           <Row lead={<span className="plugin-scope-seq">#{e.seq}</span>}
             name={e.message || `${e.count ?? e.items?.length ?? 0} ${(e.count ?? e.items?.length ?? 0) === 1 ? "item" : "items"} changed`}
-            sub={[historyWho(e), e.device || "", whenText(e.at)].filter(Boolean).join(" · ")}
+            sub={[historyWho(e), e.device || "", e.via ? `sent by ${e.via}'s live group` : "", whenText(e.at)]
+              .filter(Boolean).join(" · ")}
             actions={<>
               {e.items?.length ? <Btn pressed={openSeq === e.seq} onClick={() => setOpenSeq(openSeq === e.seq ? null : e.seq)}>
                 {`${e.count ?? e.items.length} ${(e.count ?? e.items.length) === 1 ? "item" : "items"}`}

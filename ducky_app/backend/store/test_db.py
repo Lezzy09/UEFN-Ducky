@@ -188,6 +188,8 @@ def test_upgrade_from_previous_schema_does_not_deadlock(tmp_path: Path) -> None:
     conn.execute("ALTER TABLE duckies DROP COLUMN ducky_id")
     conn.execute("DROP INDEX duckies_history_account")
     conn.execute("ALTER TABLE duckies_history DROP COLUMN account_id")
+    conn.execute("ALTER TABLE space_changesets DROP COLUMN author")  # 0025 adds who a leader sent it for
+    conn.execute("ALTER TABLE space_changesets DROP COLUMN author_pc")
     conn.execute("PRAGMA user_version=8")
     db.reset_for_tests()
 

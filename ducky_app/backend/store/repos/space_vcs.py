@@ -351,14 +351,18 @@ def cs_add(
     message: str = "",
     actor: str = "user",
     ducky: str = "",
+    author: str = "",
+    author_pc: str = "",
     conn: Any = None,
 ) -> None:
-    """Persist a changeset before anything is uploaded (state ``pending``)."""
+    """Persist a changeset before anything is uploaded (state ``pending``). ``author`` /
+    ``author_pc``: the groupmate (and PC) a live group's leader sends it for."""
     now = time.time()
     args = (account, space, plugin, cs_id, int(base_seq), group_id, int(part), 1 if last else 0, str(message)[:2000],
-            actor, ducky, json.dumps(items, separators=(",", ":")), now, now)
+            actor, ducky, str(author)[:120], str(author_pc)[:64], json.dumps(items, separators=(",", ":")), now, now)
     sql = ("INSERT INTO space_changesets(account_id, space_id, plugin_id, cs_id, base_seq, group_id, part, last, "
-           "message, actor, ducky, items_json, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+           "message, actor, ducky, author, author_pc, items_json, created, updated) "
+           "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
     if conn is not None:
         conn.execute(sql, args)
         return
