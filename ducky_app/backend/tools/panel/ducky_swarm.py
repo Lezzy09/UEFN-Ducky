@@ -18,7 +18,8 @@ from typing import Any
 from backend.server import mcp
 from backend.tools.panel.swarm_build import PanelSwarmApi, build_swarm  # noqa: F401
 from backend.tools.panel.swarm_preview import (  # noqa: F401
-    _steps, build_preview, plan_tree, questions_for, walk_groups, walk_seats,
+    DETAILS, SUGGESTED_DETAIL, SUGGESTED_MAX_AGENTS, SUGGESTED_PER_GROUP, _parse_agents, _steps, build_preview,
+    plan_tree, questions_for, walk_groups, walk_seats,
 )
 from backend.util.json_util import tool_json
 
@@ -66,6 +67,28 @@ def normalize_jobs(jobs: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return out
 
 
+# ---- the card payload ---------------------------------------------------------------------
+
+def _flat_seats(nodes: list[dict[str, Any]], group: str = "") -> list[dict[str, Any]]:
+    """The card's flat seat list: each seat with its nearest group's name."""
+    out = []
+    for node in nodes:
+        if "group" in node:
+            out += _flat_seats(node["seats"], node["group"]) + _flat_seats(node["groups"], node["group"])
+        else:
+            out.append({"name": node["name"], "group": group, "profile": node["profile"], "model": node["model"],
+                        "lane": node["paths"], "steps": node["sub_plan"]["total"],
+                        "flags": [] if node["paths"] else ["no_lane"]})
+    return out
+
+
+def card(status: str, preview: dict[str, Any]) -> dict[str, Any]:
+    """The ``ui: swarm_builder`` fields (see web/src/swarm/fixtures/swarm_builder.json) for *preview*."""
+    public = {k: v for k, v in preview.items() if k != "jobs"}
+    return {"ui": "swarm_builder", "status": status, "goal": preview["goal"], "preview": public,
+            "seats": _flat_seats(public["tree"])}
+
+
 # ---- the tool -----------------------------------------------------------------------------
 
 def swarm_create(goal: str, jobs: list[dict[str, Any]] | None, agents: Any = "", max_agents: int = 0,
@@ -80,9 +103,12 @@ def swarm_create(goal: str, jobs: list[dict[str, Any]] | None, agents: Any = "",
     detail = int(detail or 0)
     questions = questions_for(routed, agents, int(max_agents or 0), int(per_group or 0), detail)
     if questions:
+        # The card shows the suggested answers' preview; the agent still asks the questions.
+        draft = build_preview(goal, routed, agents if _parse_agents(agents) != "" else "auto",
+                              int(max_agents or 0) or SUGGESTED_MAX_AGENTS, int(per_group or 0) or SUGGESTED_PER_GROUP,
+                              edits, detail if detail in DETAILS else SUGGESTED_DETAIL)
         return {
-            "status": "needs_answers",
-            "goal": goal,
+            **card("needs_answers", draft),
             "questions": questions,
             "next": ("Ask these with ONE ducky_ask_user(questions=...), then call ducky_swarm_create again "
                      "with detail (1-4), agents='auto' or a number, max_agents and per_group, and each job's "
@@ -91,12 +117,9 @@ def swarm_create(goal: str, jobs: list[dict[str, Any]] | None, agents: Any = "",
                         "suggested_model": j["suggested_model"]} for j in routed],
         }
     preview = build_preview(goal, routed, agents, int(max_agents), int(per_group), edits, detail)
-    public = {k: v for k, v in preview.items() if k != "jobs"}
     if not confirm:
         return {
-            "status": "needs_confirm",
-            "goal": goal,
-            "preview": public,
+            **card("needs_confirm", preview),
             "next": ("Show the person this preview. Build: same call with confirm=true. Change: same call "
                      "with another detail (1-4) or edits=[{drop}, {rename, to}, {seat, model}, {mute}|{unmute}] "
                      "(keep earlier edits)."),

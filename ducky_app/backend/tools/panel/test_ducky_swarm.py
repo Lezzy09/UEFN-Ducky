@@ -361,3 +361,22 @@ def test_build_preview_has_every_fixture_field():
     assert all(set(want_seat) <= set(s) and set(want_seat["sub_plan"]) <= set(s["sub_plan"]) for s in seats)
     assert all(set(want["levels"][0]) <= set(lv) for lv in got["levels"])
     assert set(want["plan"]["sections"][0]) <= set(got["plan"]["sections"][0])
+
+
+def test_both_statuses_carry_the_swarm_builder_card():
+    fixture = json.loads((__import__("pathlib").Path(__file__).parents[3]
+                          / "frontend/ui_web/web/src/swarm/fixtures/swarm_builder.json").read_text(encoding="utf-8"))
+    api = FakeApi()
+    asking = sw.swarm_create("Shop island", _jobs(GAME8, ""), api=api)
+    confirming = _create(GAME8, agents="auto", max_agents=8, per_group=5)
+    assert api.calls == []  # unanswered: nothing built
+    for out, status in ((asking, "needs_answers"), (confirming, "needs_confirm")):
+        assert out["status"] == status and out["ui"] == "swarm_builder" and out["next"]
+        assert {"tree", "levels", "lanes", "plan"} <= set(out["preview"]) and "jobs" not in out["preview"]
+        assert out["preview"]["agents"] == 8 and len(out["seats"]) == 8
+        assert all(set(fixture["seats"][0]) <= set(s) for s in out["seats"])
+    assert asking["questions"] and asking["preview"]["detail"] == 2
+    # Unanswered models show the suggested one per seat.
+    suggested = {j["name"]: j["suggested_model"] for j in sw.normalize_jobs(_jobs(GAME8, ""))}
+    assert all(s["model"] == suggested[s["job"]] for s in sw.walk_seats(asking["preview"]["tree"]))
+    assert {s["group"] for s in confirming["seats"]} >= {"Art: assets", "Code: gameplay"}
