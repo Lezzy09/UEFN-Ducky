@@ -2,3 +2,10 @@
 .plan-owner-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; border: 1px solid var(--border-color, #555); border-radius: 12px; padding: 3px 8px; background: transparent; color: inherit; cursor: pointer; font-size: 11px; }
 .plan-owner-chip[data-running="true"] { border-color: var(--accent-color, #75baff); }
 .plan-owner-activity { opacity: .75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.plan-assign { position: relative; }
+.plan-owner-chip--planned { opacity: .6; }
+.plan-assign-chip { border-style: dashed; }
+.plan-assign-menu { position: absolute; top: 100%; left: 0; z-index: 20; display: flex; flex-direction: column; min-width: 180px; max-height: 260px; overflow-y: auto; padding: 4px; border: 1px solid var(--border-color, #555); border-radius: 8px; background: var(--bg-elevated, var(--bg, #222)); }
+.plan-assign-item { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; font-size: 12px; text-align: left; }
+.plan-assign-item:hover { background: var(--hover-bg, rgba(255, 255, 255, .08)); }
+.plan-assign-error { color: var(--red); font-size: 11px; }

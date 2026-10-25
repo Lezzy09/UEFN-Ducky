@@ -1,4 +1,4 @@
-import { PlanOwnerChips } from "./PlanOwnerChips";
+import { PlanAssignChip, PlanOwnerChips } from "./PlanOwnerChips";
 import { useMemo, useState, type CSSProperties } from "react";
 import type { ChatPlan, PlanNode, PlanProgress, PlanTodoStatus } from "../types/panel";
 import { progressForPlan } from "../utils/planOutlineNav";
@@ -21,7 +21,8 @@ export interface PlanTodoCardProps {
   highlightNodeId?: string | null;
 }
 
-type OutlineRow = { label: string; node: PlanNode; depth: number; owner?: string };
+/** owner = the node's own agent or its section's; inherited = the section's alone. */
+type OutlineRow = { label: string; node: PlanNode; depth: number; owner?: string; inherited?: string };
 
 function flattenOutline(nodes: PlanNode[] | undefined, prefix = "", inheritedOwner?: string): OutlineRow[] {
   const out: OutlineRow[] = [];
@@ -29,7 +30,7 @@ function flattenOutline(nodes: PlanNode[] | undefined, prefix = "", inheritedOwn
     const label = prefix ? `${prefix}.${i + 1}` : `${i + 1}`;
     const depth = prefix ? prefix.split(".").length : 0;
     const owner = node.assignee || node.assignee_inferred || inheritedOwner;
-    out.push({ label, node, depth, owner });
+    out.push({ label, node, depth, owner, inherited: inheritedOwner });
     if (node.children?.length) out.push(...flattenOutline(node.children, label, owner));
   });
   return out;
@@ -260,7 +261,7 @@ export function PlanTodoCard({
       )}
       {embedded || expanded ? (
         <div className="plan-todo-card-body">
-          {outline.map(({ label, node, depth, owner }) => (
+          {outline.map(({ label, node, depth, owner, inherited }) => (
             <div key={node.id}>
             <TodoRow
               label={label}
@@ -274,8 +275,21 @@ export function PlanTodoCard({
               waitsFor={waits.get(node.id)}
               onSelect={onSelectNode ? () => onSelectNode(node) : undefined}
             />
-            {!isTemplate && owner && (node.assignee || node.assignee_inferred || node.status === "in_progress") ? (
-              <PlanOwnerChips ownerId={owner} activeOnly={!(node.assignee || node.assignee_inferred)} nodeId={node.id} />
+            {isTemplate ? null : nodeKind(node) === "subplan" ? (
+              // Every sub plan names its agent, its planned owner, or offers Assign.
+              owner ? (
+                <PlanOwnerChips ownerId={owner} nodeId={node.id} />
+              ) : (node as PlanNode & { planned_assignee?: string }).planned_assignee || (!plan.assigned_from && !isDone(node.status)) ? (
+                <PlanAssignChip
+                  chatId={plan.chat_id}
+                  nodeId={node.id}
+                  planned={(node as PlanNode & { planned_assignee?: string }).planned_assignee}
+                  readOnly={Boolean(plan.assigned_from)}
+                />
+              ) : null
+            ) : owner && owner !== inherited ? (
+              // Steps inherit their section's agent; only a different one gets its own chip.
+              <PlanOwnerChips ownerId={owner} nodeId={node.id} />
             ) : null}
             </div>
           ))}

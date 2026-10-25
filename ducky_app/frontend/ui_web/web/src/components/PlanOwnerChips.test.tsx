@@ -7,7 +7,7 @@ const state = vi.hoisted(() => ({ listeners: new Set<(event: AgentEvent) => void
 vi.mock("../hooks/useAgentEventBus", () => ({ subscribeAgentEvents: (fn: (event: AgentEvent) => void) => { state.listeners.add(fn); return () => state.listeners.delete(fn); } }));
 vi.mock("../hooks/useRunningAgents", () => ({ useRunningAgents: () => state.running }));
 vi.mock("../navigation/openChatReference", () => ({ requestOpenChatTab: state.open }));
-const api = vi.hoisted(() => ({ list_all_conversations: vi.fn(), group_members: vi.fn() }));
+const api = vi.hoisted(() => ({ list_all_conversations: vi.fn(), group_members: vi.fn(), list_agent_profiles: vi.fn(), plan_set_planned_assignee: vi.fn() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
 import { PlanOwnerChips, ownerActivity } from "./PlanOwnerChips";
 import { PlanTodoCard } from "./PlanTodoCard";
@@ -45,11 +45,48 @@ describe("plan owners", () => {
   state.running.delete("b"); emit({ type: "agent_stopped", conv_id: "b" });
   await waitFor(() => expect(screen.getByRole("button", { name: /Builder/ }).textContent).toContain("Idle"));
  });
- it("shows inherited active builders without nesting buttons in outline buttons", async () => {
+ it("steps inherit their section's agent: one chip on the section, none on the step, no nested buttons", async () => {
   roster(); state.running.add("b");
   const { container } = render(<PlanTodoCard onSelectNode={() => {}} plan={{ id: "p", chat_id: "c", title: "Plan", overview: "", body_markdown: "", todos: [], nodes: [{ id: "g", content: "Section", status: "pending", assignee: "g", children: [{ id: "s", content: "Task", status: "in_progress" }] }] }} />);
-  await waitFor(() => expect(screen.getAllByText("Builder")).toHaveLength(2));
+  await waitFor(() => expect(screen.getAllByText("Builder")).toHaveLength(1));
+  expect(container.querySelector('[data-plan-node-id="s"] + .plan-owner-chips')).toBeNull();
   expect(container.querySelector("button button")).toBeNull();
+ });
+ it("a 3-deep sub plan offers Assign; the picker lists members then profiles and sets planned_assignee", async () => {
+  api.list_all_conversations.mockResolvedValue([{ id: "team", title: "Team", is_group: true, group_members: [{ member_conv_id: "lead" }, { member_conv_id: "dev", name: "Tool server dev" }] }]);
+  api.list_agent_profiles.mockResolvedValue({ profiles: [{ id: "verse-dev", name: "Verse Developer", ducky_style: "hacker" }] });
+  api.plan_set_planned_assignee.mockResolvedValue({ ok: true });
+  const step = { id: "c1", content: "Step", status: "pending" as const };
+  const { container } = render(<PlanTodoCard plan={{ id: "p", chat_id: "lead", title: "Plan", todos: [], nodes: [
+   { id: "a", content: "App core", status: "pending", children: [
+    { id: "b", content: "Bridge", status: "pending", children: [{ id: "c", content: "HTTP", status: "pending", children: [step] }] },
+   ] },
+  ] }} />);
+  const assign = screen.getAllByRole("button", { name: "Assign" });
+  expect(assign).toHaveLength(3);
+  expect(container.querySelector('[data-plan-node-id="c1"] + .plan-owner-chips')).toBeNull();
+  fireEvent.click(assign[2]!);
+  await screen.findByRole("menuitem", { name: /Verse Developer/ });
+  expect(screen.getAllByRole("menuitem").map(item => item.textContent)).toEqual(["Tool server dev", "Verse Developer"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: /Verse Developer/ }));
+  await waitFor(() => expect(api.plan_set_planned_assignee).toHaveBeenCalledWith("lead", "c", "verse-dev"));
+  expect((await screen.findByRole("button", { name: /Verse Developer.*planned/ })).hasAttribute("disabled")).toBe(false);
+  expect(state.open).not.toHaveBeenCalled();
+ });
+ it("a planned owner shows dimmed as planned, Remove clears it, and a member's read-only view can't change it", async () => {
+  api.list_all_conversations.mockResolvedValue([{ id: "dev2", title: "Tool server dev" }]);
+  api.list_agent_profiles.mockResolvedValue({ profiles: [] });
+  api.plan_set_planned_assignee.mockResolvedValue({ ok: true });
+  const nodes = [{ id: "s", content: "Tool server", status: "pending" as const, planned_assignee: "dev2", children: [{ id: "s1", content: "Step", status: "pending" as const }] }];
+  const view = render(<PlanTodoCard plan={{ id: "p", chat_id: "lead", title: "Plan", todos: [], nodes }} />);
+  const chip = await screen.findByRole("button", { name: /Tool server dev.*planned/ });
+  fireEvent.click(chip);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Remove" }));
+  await waitFor(() => expect(api.plan_set_planned_assignee).toHaveBeenCalledWith("lead", "s", ""));
+  await screen.findByRole("button", { name: "Assign" });
+  view.unmount();
+  render(<PlanTodoCard plan={{ id: "p", chat_id: "builder", title: "Plan", todos: [], nodes, assigned_from: { chat_id: "lead", node_id: "s", plan_title: "Plan", assignee: "g" } }} />);
+  expect((await screen.findByRole("button", { name: /Tool server dev.*planned/ })).hasAttribute("disabled")).toBe(true);
  });
  it("chips of the same group share the roster store's one group_members call", async () => {
   api.list_all_conversations.mockResolvedValue([{ id: "g2", title: "Group Two", is_group: true }]);

@@ -17,13 +17,97 @@ import "./PlanOwnerChips.css";
 type Owner = { id: string; name: string; style?: string; members?: GroupMemberDto[] };
 let cachedApi: ReturnType<typeof getApi>;
 let directory: Promise<Owner[]> | undefined;
+let profileList: Promise<Owner[]> | undefined;
 function owners(): Promise<Owner[]> {
   const api = getApi();
-  if (cachedApi !== api) { cachedApi = api; directory = undefined; }
+  if (cachedApi !== api) { cachedApi = api; directory = undefined; profileList = undefined; }
   return directory ??= (api?.list_all_conversations?.(true) ?? Promise.resolve([])).then(rows => rows.map(row => ({
     id: row.id, name: row.title || row.ducky_name || row.id, style: row.ducky_style,
     members: row.is_group ? row.group_members || [] : undefined,
   }))).catch(() => { directory = undefined; return []; });
+}
+
+function profiles(): Promise<Owner[]> {
+  void owners();
+  return profileList ??= (getApi()?.list_agent_profiles?.() ?? Promise.resolve({ profiles: [] })).then(res => (res?.profiles || []).map(p => ({
+    id: p.id, name: p.name || p.id, style: p.ducky_style,
+  }))).catch(() => { profileList = undefined; return []; });
+}
+
+/** A planned owner is a chat id or a ducky profile id. */
+async function resolveOwner(id: string, retry = true): Promise<Owner> {
+  const found = (await owners()).find(row => row.id === id) || (await profiles()).find(row => row.id === id);
+  if (found || !retry) return found || { id, name: id };
+  // Not in the cached lists: a chat or profile made since; read them once more.
+  directory = undefined; profileList = undefined;
+  return resolveOwner(id, false);
+}
+
+/** Assign picker: members of the lead's groups first, then ducky profiles. */
+export async function assignChoices(leadId: string): Promise<Owner[]> {
+  const seen = new Set<string>([leadId]);
+  const members: Owner[] = [];
+  for (const row of await owners()) {
+    if (!row.members?.some(m => m.member_conv_id === leadId)) continue;
+    for (const m of row.members) {
+      if (seen.has(m.member_conv_id)) continue;
+      seen.add(m.member_conv_id);
+      members.push({ id: m.member_conv_id, name: m.name || m.ducky_name || m.member_conv_id, style: m.ducky_style });
+    }
+  }
+  return [...members, ...(await profiles())];
+}
+
+type AssignApi = {
+  plan_set_planned_assignee?: (chatId: string, nodeId: string, who: string) => Promise<{ ok?: boolean; error?: string }>;
+};
+
+/** A sub plan without an agent: its planned owner (dimmed, "planned") or Assign. Picking never starts anyone. */
+export function PlanAssignChip({ chatId, nodeId, planned, readOnly = false }: { chatId: string; nodeId: string; planned?: string; readOnly?: boolean }) {
+  const [who, setWho] = useState(planned || "");
+  useEffect(() => setWho(planned || ""), [planned]);
+  const [shown, setShown] = useState<Owner | null>(null);
+  const [open, setOpen] = useState(false);
+  const [choices, setChoices] = useState<Owner[]>([]);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!who) return;
+    let alive = true;
+    void resolveOwner(who).then(found => { if (alive) setShown(found); });
+    return () => { alive = false; };
+  }, [who]);
+  const toggle = () => {
+    if (readOnly) return;
+    if (!open) {
+      // The picker lists the roster and profiles as they are now.
+      directory = undefined; profileList = undefined;
+      void assignChoices(chatId).then(setChoices);
+    }
+    setOpen(!open);
+  };
+  const pick = async (id: string) => {
+    setOpen(false);
+    const call = (getApi() as unknown as AssignApi | null)?.plan_set_planned_assignee;
+    if (!call) return;
+    const res = await call(chatId, nodeId, id).catch((err: unknown) => ({ ok: false, error: String(err) }));
+    if (res?.ok === false) { setError(res.error || "Could not assign"); return; }
+    setError("");
+    setWho(id);
+  };
+  const name = shown?.id === who ? shown.name : who;
+  return <div className="plan-owner-chips plan-assign">
+    <button type="button" className={`plan-owner-chip ${who ? "plan-owner-chip--planned" : "plan-assign-chip"}`} onClick={toggle}
+      aria-expanded={open} disabled={readOnly} title={who ? `Planned owner: ${name}` : "Pick who works on this sub plan"}>
+      {who ? <><DuckyAvatar styleId={shown?.style} size={20} /><span>{name}</span><span className="plan-owner-activity">planned</span></> : "Assign"}
+    </button>
+    {open ? <div className="plan-assign-menu" role="menu">
+      {choices.map(choice => <button key={choice.id} type="button" role="menuitem" className="plan-assign-item" onClick={() => void pick(choice.id)}>
+        <DuckyAvatar styleId={choice.style} size={18} /><span>{choice.name}</span>
+      </button>)}
+      {who ? <button type="button" role="menuitem" className="plan-assign-item" onClick={() => void pick("")}>Remove</button> : null}
+    </div> : null}
+    {error ? <span className="plan-assign-error" role="alert">{error}</span> : null}
+  </div>;
 }
 
 export function ownerActivity(event: AgentEvent): string | undefined {
