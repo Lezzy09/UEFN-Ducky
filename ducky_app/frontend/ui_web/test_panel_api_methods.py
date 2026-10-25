@@ -464,6 +464,7 @@ _PUBLIC_METHODS = frozenset({
     'report_ui_perf',
     'resend_last_user_message',
     'reset_context',
+    'rewind_to_message',
     'reset_skill',
     'reset_skill_pack',
     'restart_listener',

@@ -4239,6 +4239,8 @@ export interface PanelApi {
     attachments?: MessageAttachmentDto[],
     coding_agent?: string,
   ): Promise<{ run_id: string }>;
+  /** Restart from here: erase this user message (UI row id) and everything after it. */
+  rewind_to_message?(conv_id: string, row_id: number, text: string): Promise<{ ok: boolean; kept?: number; error?: string }>;
   get_context_usage(
     conv_id: string,
     model: string,

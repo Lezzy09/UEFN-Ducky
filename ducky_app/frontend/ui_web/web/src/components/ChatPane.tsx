@@ -16,6 +16,7 @@ import type {
   SessionFile,
 } from "../types/panel";
 import { getApi } from "../hooks/usePanelApi";
+import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { useFocusWindow } from "../hooks/useFocusWindow";
 import { useLinkedAgents } from "../hooks/useLinkedAgents";
 import { useChatMessages } from "../hooks/useChatMessages";
@@ -866,6 +867,38 @@ export function ChatPane({
     ],
   );
 
+  const { confirm, alert } = useConfirmModal();
+  /** Restart from here: the message back in the composer to edit, it and every later
+   *  message erased (for the agent too), as if it was never sent. */
+  const handleRestartFrom = useCallback(
+    (rowId: number, text: string, atts?: MessageAttachmentDto[]) => {
+      const api = getApi();
+      if (!api?.rewind_to_message) return;
+      void (async () => {
+        const ok = await confirm({
+          title: "Restart from here",
+          message:
+            "This message goes back in the box for you to edit. It and everything after it are erased from the chat, as if never sent.",
+          confirmLabel: "Restart from here",
+          danger: true,
+        });
+        if (ok !== true || !api.rewind_to_message) return;
+        if (agentRunning) handleStop();
+        const res = await api.rewind_to_message(chat.id, rowId, text);
+        if (!res?.ok) {
+          await alert(res?.error || "Could not restart from this message.");
+          return;
+        }
+        setInputText(text);
+        setCaret(text.length);
+        replaceAttachments(atts ?? []);
+        await reloadMessages();
+        textareaRef.current?.focus();
+      })();
+    },
+    [confirm, alert, agentRunning, handleStop, chat.id, replaceAttachments, reloadMessages],
+  );
+
   const handleJumpToLatest = useCallback(() => {
     listRef.current?.scrollToLatest();
     onAtBottomChange(true);
@@ -1004,6 +1037,7 @@ export function ChatPane({
               captureAskKeys: visible,
               askSession: askSession && visible ? askSession : null,
               onResend: handleResend,
+              onRestartFrom: chat.isGroup ? undefined : handleRestartFrom,
               onStop: agentRunning ? handleStop : undefined,
               onContinue: !agentRunning && !chat.isGroup ? handleContinue : undefined,
               onAtBottomChange,

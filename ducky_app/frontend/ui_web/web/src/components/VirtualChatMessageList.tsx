@@ -82,6 +82,8 @@ interface VirtualChatMessageListProps {
   /** Live ask-user questionnaire — rendered inside the scrollable chat, not the composer dock. */
   askSession?: AskUserSession | null;
   onResend: (text: string, mode: AgentMode, model: string, attachments?: MessageAttachmentDto[]) => void;
+  /** Restart from here on a saved user message (its stored row id, text and attachments). */
+  onRestartFrom?: (rowId: number, text: string, attachments?: MessageAttachmentDto[]) => void;
   /** Stop the live run (shown on sticky last question + collapsed live headers). */
   onStop?: () => void;
   /** Resume the last interrupted assistant turn in place. */
@@ -185,6 +187,7 @@ interface ChatRowEnv {
   composerCodingAgent: string;
   setComposerCodingAgent: (id: string) => void;
   onResend: VirtualChatMessageListProps["onResend"];
+  onRestartFrom?: VirtualChatMessageListProps["onRestartFrom"];
   onStop?: () => void;
   onContinue?: () => void;
   onOpenChat: (chat: ChatTab) => void;
@@ -239,6 +242,10 @@ const ChatRowView = memo(function ChatRowView({
         </ChatCollapseScopeProvider>
       );
     }
+    // A whole saved message only (row id = stored index * 1000): not a send still on its way,
+    // nor a message sent into a running turn.
+    const storedId = /^\d+$/.test(row.id) && Number(row.id) % 1000 === 0 ? Number(row.id) : null;
+    const restartFrom = env.onRestartFrom;
     return (
       <ChatCollapseScopeProvider scope={scope}>
         <div className="virtual-chat-message-list-query" data-chat-row-id={row.id}>
@@ -253,6 +260,11 @@ const ChatRowView = memo(function ChatRowView({
             convId={env.convId}
             onResend={env.onResend}
             onStop={editable ? env.onStop : undefined}
+            onRestart={
+              storedId !== null && restartFrom
+                ? () => restartFrom(storedId, row.text, row.attachments)
+                : undefined
+            }
           />
         </div>
       </ChatCollapseScopeProvider>
@@ -485,6 +497,7 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
       captureAskKeys = true,
       askSession = null,
       onResend,
+      onRestartFrom,
       onStop,
       onContinue,
       onAtBottomChange,
@@ -907,6 +920,7 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
         composerCodingAgent,
         setComposerCodingAgent,
         onResend,
+        onRestartFrom,
         onStop,
         onContinue,
         onOpenChat,
@@ -928,6 +942,7 @@ export const VirtualChatMessageList = memo(forwardRef<VirtualChatMessageListHand
         composerCodingAgent,
         setComposerCodingAgent,
         onResend,
+        onRestartFrom,
         onStop,
         onContinue,
         onOpenChat,

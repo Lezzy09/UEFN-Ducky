@@ -322,6 +322,41 @@ def test_a_group_made_inside_another_sits_in_it_and_is_deleted_with_it(monkeypat
         assert load_conversation(cid, project_root=str(tmp_path)) is None, cid
 
 
+def test_restart_from_here_erases_the_message_and_everything_after(tmp_path, monkeypatch):
+    import frontend.ui_web.panel_api as pa
+    from backend.agent.coding_agents import session_refresh
+    from frontend.ui_web.panel_api_chats import PanelApiChatsMixin
+
+    root = str(tmp_path)
+    settings = PanelSettings.load()
+    settings.uefn_project_root = root
+    monkeypatch.setattr(pa.PanelSettings, "load", classmethod(lambda cls: settings))
+    docs: dict = {}
+    monkeypatch.setattr("backend.store.repos.kv.set_doc", lambda t, k, v: docs.__setitem__(k, v))
+    monkeypatch.setattr("backend.store.repos.kv.get_doc", lambda t, k: docs.get(k))
+    monkeypatch.setattr("backend.store.repos.kv.delete_doc", lambda t, k: docs.pop(k, None))
+    conv = create_conversation(settings, "", title="Chat", project_root=root)
+    conv.messages = [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "one"},
+        {"role": "user", "content": "second", "attachments": [{"kind": "file", "name": "a.txt"}]},
+        {"role": "assistant", "content": "two"},
+    ]
+    conv.upstream_session_id = "claude_code:abc"
+    save_conversation(conv, root)
+    api = PanelApiChatsMixin()
+
+    assert api.rewind_to_message(conv.id, 2000, "changed meanwhile")["ok"] is False
+    assert api.rewind_to_message(conv.id, 1000, "one")["ok"] is False  # not a user message
+    assert api.rewind_to_message(conv.id, 2000, "second") == {"ok": True, "kept": 2}
+
+    fresh = load_conversation(conv.id, project_root=root)
+    assert [m["content"] for m in fresh.messages] == ["first", "one"]
+    assert fresh.upstream_session_id == ""  # the agent's thread still held the erased turn
+    assert session_refresh.take_rewound(conv.id) is True  # next turn replays the kept messages
+    assert session_refresh.take_rewound(conv.id) is False
+
+
 def test_group_create_never_saves_a_plain_folder_even_when_made_fast(tmp_path, monkeypatch):
     # Oct 25 2026: the folder was saved plain and linked two saves later, so a refresh in
     # between (or a second create replacing the folder list) left a stray "Group6" folder.

@@ -3445,6 +3445,30 @@
   line-height: 0;
 }
 
+/* Editing a sent message: each attachment gets an ✕ in its corner. */
+.message-bubble-attachment-item {
+  position: relative;
+  display: inline-flex;
+}
+.message-bubble-attachment-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-elevated, var(--bg));
+  color: var(--fg);
+  cursor: pointer;
+}
+.message-bubble-attachment-remove:hover { color: var(--red); border-color: var(--red); }
+.message-bubble-attachment-remove svg { width: 10px; height: 10px; }
+
 .message-bubble-attachment-btn:hover .message-bubble-attachment-image {
   opacity: 0.9;
   box-shadow: var(--shadow-sm);

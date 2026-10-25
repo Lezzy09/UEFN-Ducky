@@ -1850,6 +1850,47 @@ class PanelApiChatsMixin:
             _pa.save_conversation(conv)
         return self.send_message(conv_id, text, mode, model, file_path, attachments, coding_agent)
 
+    def rewind_to_message(self, conv_id: str, row_id: int, text: str = "") -> dict[str, Any]:
+        """Restart from here: erase this user message and everything after it, as if never sent.
+
+        ``row_id`` is the message's UI row id (stored index * ROW_ID_STEP); ``text`` must still
+        match it, so a chat changed meanwhile is refused instead of cut in the wrong place. A
+        coding agent's resumed session still holds the erased turns: it is dropped, and the
+        next turn starts a new one from the kept messages. The composer takes the text back.
+        """
+        from frontend.ui_web.chat_rows import ROW_ID_STEP
+
+        conv = _pa.load_conversation(conv_id)
+        if not conv:
+            return {"ok": False, "error": "Chat not found."}
+        if conv_id in _pa.list_running_agents():
+            _pa.cancel_agent(conv_id)
+            _pa.wait_for_idle(conv_id, 2.0)
+            if conv_id in _pa.list_running_agents():
+                return {"ok": False, "error": "The agent is still stopping. Try again in a moment."}
+            conv = _pa.load_conversation(conv_id) or conv
+        try:
+            index = int(row_id) // ROW_ID_STEP
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Unknown message."}
+        msg = conv.messages[index] if 0 <= index < len(conv.messages) else None
+        stored = str((msg or {}).get("text", (msg or {}).get("content", "")) or "") if isinstance(msg, dict) else ""
+        if not isinstance(msg, dict) or msg.get("role") != "user" or stored.strip() != (text or "").strip():
+            return {"ok": False, "error": "This chat changed. Reload it and try again."}
+        conv.messages = conv.messages[:index]
+        if str(getattr(conv, "upstream_session_id", "") or "").strip():
+            from backend.agent.coding_agents.session_refresh import mark_rewound
+
+            mark_rewound(conv)
+        try:
+            from backend.agent.prompt_cache import invalidate_conv_cache
+
+            invalidate_conv_cache(conv)
+        except Exception:
+            pass
+        _pa.save_conversation(conv)
+        return {"ok": True, "kept": index}
+
     def get_context_usage(
         self,
         conv_id: str,

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentMode, MessageAttachmentDto } from "../types/panel";
 import { Icons } from "../icons/Icons";
 import { AttachmentPreviewModal } from "./AttachmentPreviewModal";
@@ -27,6 +27,8 @@ interface EditableUserMessageProps {
   onResend: (text: string, mode: AgentMode, model: string, attachments?: MessageAttachmentDto[]) => void;
   /** Stop the live run (Cursor: stop from the sticky last question). */
   onStop?: () => void;
+  /** Restart from here: this message back in the composer, it and everything after erased. */
+  onRestart?: () => void;
 }
 
 function attachmentSrc(att: MessageAttachmentDto): string | null {
@@ -35,27 +37,48 @@ function attachmentSrc(att: MessageAttachmentDto): string | null {
   return `data:${mime};base64,${att.data_base64}`;
 }
 
-/** Read-only thumbnails/chips for the message's attachments. */
+/** Thumbnails/chips for the message's attachments; `onRemove` adds an ✕ to each (editing). */
 export function AttachmentStrip({
   images,
   files,
   videos,
   onPreview,
+  onRemove,
 }: {
   images: MessageAttachmentDto[];
   files: MessageAttachmentDto[];
   videos: MessageAttachmentDto[];
   onPreview?: (att: MessageAttachmentDto) => void;
+  onRemove?: (att: MessageAttachmentDto) => void;
 }) {
   if (images.length === 0 && files.length === 0 && videos.length === 0) return null;
+  const removable = (att: MessageAttachmentDto, key: string, node: ReactNode) =>
+    onRemove ? (
+      <span key={key} className="message-bubble-attachment-item">
+        {node}
+        <button
+          type="button"
+          className="message-bubble-attachment-remove"
+          title={`Remove ${att.name}`}
+          aria-label={`Remove ${att.name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove(att);
+          }}
+        >
+          <Icons.Close />
+        </button>
+      </span>
+    ) : (
+      <Fragment key={key}>{node}</Fragment>
+    );
   return (
     <div className="message-bubble-attachments">
       {images.map((att) => {
         const src = attachmentSrc(att);
         if (!src) return null;
-        return (
+        return removable(att, `img-${att.name}-${src.slice(0, 24)}`,
           <button
-            key={`img-${att.name}-${src.slice(0, 24)}`}
             type="button"
             className="message-bubble-attachment-btn"
             onClick={
@@ -69,25 +92,24 @@ export function AttachmentStrip({
             title={onPreview ? `Open ${att.name}` : att.name}
           >
             <img src={src} alt={att.name} className="message-bubble-attachment-image" />
-          </button>
+          </button>,
         );
       })}
       {videos.map((att) => {
         // Same small thumb as a picture; the player and the frames open in the preview.
         const poster = att.frames?.find((f) => f.media_url)?.media_url;
         if (!poster && !att.media_url) {
-          return (
-            <span key={`vid-${att.name}`} className="message-bubble-attachment-file">
+          return removable(att, `vid-${att.name}`,
+            <span className="message-bubble-attachment-file">
               <span className="message-bubble-attachment-file-icon">
                 <Icons.Play />
               </span>
               <span className="message-bubble-attachment-file-name">{att.name}</span>
-            </span>
+            </span>,
           );
         }
-        return (
+        return removable(att, `vid-${att.name}-${att.media_url ?? ""}`,
           <button
-            key={`vid-${att.name}-${att.media_url ?? ""}`}
             type="button"
             className="message-bubble-attachment-btn message-bubble-attachment-video-btn"
             onClick={
@@ -108,12 +130,11 @@ export function AttachmentStrip({
             <span className="message-bubble-attachment-video-badge" aria-hidden>
               <Icons.Play />
             </span>
-          </button>
+          </button>,
         );
       })}
-      {files.map((att) => (
+      {files.map((att) => removable(att, `file-${att.name}`,
         <button
-          key={`file-${att.name}`}
           type="button"
           className="message-bubble-attachment-file"
           onClick={
@@ -130,7 +151,7 @@ export function AttachmentStrip({
             <Icons.File />
           </span>
           <span className="message-bubble-attachment-file-name">{att.name}</span>
-        </button>
+        </button>,
       ))}
     </div>
   );
@@ -147,11 +168,14 @@ export const EditableUserMessage = memo(function EditableUserMessage({
   convId,
   onResend,
   onStop,
+  onRestart,
 }: EditableUserMessageProps) {
   const items = attachments ?? [];
   const images = items.filter((a) => a.kind === "image");
   const files = items.filter((a) => a.kind === "file");
   const videos = items.filter((a) => a.kind === "video");
+  /** What the edit keeps: the ✕ on a thumbnail drops it from the resend. */
+  const [editItems, setEditItems] = useState<MessageAttachmentDto[]>(items);
 
   const [preview, setPreview] = useState<MessageAttachmentDto | null>(null);
   const [editing, setEditing] = useState(false);
@@ -195,6 +219,7 @@ export const EditableUserMessage = memo(function EditableUserMessage({
   const beginEdit = () => {
     if (!editable) return;
     setDraft(text);
+    setEditItems(items);
     setEditMode(currentMode);
     setEditModel(currentModel);
     setEditing(true);
@@ -248,9 +273,9 @@ export const EditableUserMessage = memo(function EditableUserMessage({
 
   const submit = () => {
     const trimmed = draft.trim();
-    if (!trimmed && items.length === 0) return;
+    if (!trimmed && editItems.length === 0) return;
     setEditing(false);
-    onResend(trimmed, editMode, editModel, items.length ? items : undefined);
+    onResend(trimmed, editMode, editModel, editItems.length ? editItems : undefined);
   };
 
   if (editing) {
@@ -258,7 +283,12 @@ export const EditableUserMessage = memo(function EditableUserMessage({
       <div className="message-bubble-user-wrap">
         <div className="message-bubble-user-row">
           <div className="msg-edit-box" ref={boxRef}>
-            <AttachmentStrip images={images} files={files} videos={videos} />
+            <AttachmentStrip
+              images={editItems.filter((a) => a.kind === "image")}
+              files={editItems.filter((a) => a.kind === "file")}
+              videos={editItems.filter((a) => a.kind === "video")}
+              onRemove={(att) => setEditItems((prev) => prev.filter((a) => a !== att))}
+            />
             <textarea
               ref={textareaRef}
               value={draft}
@@ -296,7 +326,7 @@ export const EditableUserMessage = memo(function EditableUserMessage({
                   type="button"
                   className="msg-edit-send-btn"
                   onClick={submit}
-                  disabled={!draft.trim() && items.length === 0}
+                  disabled={!draft.trim() && editItems.length === 0}
                   title="Resend"
                   aria-label="Resend"
                 >
@@ -350,10 +380,24 @@ export const EditableUserMessage = memo(function EditableUserMessage({
           }
           title={editable ? "Edit and resend" : expanded ? "Collapse" : "Expand"}
         >
-          {editable || onStop || text ? (
+          {editable || onStop || text || onRestart ? (
             <div className="message-bubble-user-actions">
               {onStop ? <InlineStopButton onClick={onStop} /> : null}
               {text ? <PromptCopyButton text={text} /> : null}
+              {onRestart ? (
+                <button
+                  type="button"
+                  className="message-bubble-user-edit-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRestart();
+                  }}
+                  title="Restart from here: back in the box to edit, this and everything after it erased"
+                  aria-label="Restart from here"
+                >
+                  <Icons.Replay />
+                </button>
+              ) : null}
               {editable ? (
                 <button
                   type="button"

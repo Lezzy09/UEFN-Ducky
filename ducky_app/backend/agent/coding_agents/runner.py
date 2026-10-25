@@ -933,7 +933,10 @@ def _run_coding_agent_message(
 
     image_paths = collect_image_paths(conv, project_root)
 
-    if not adapter.capabilities.resume:
+    from backend.agent.coding_agents.session_refresh import take_rewound
+
+    # Restart from here dropped the session: the new one starts from the kept messages.
+    if not adapter.capabilities.resume or (not session_id and take_rewound(conv.id)):
         history_prefix = build_history_prefix(conv)
         if history_prefix:
             prompt_text = history_prefix + prompt_text

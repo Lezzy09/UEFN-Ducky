@@ -110,3 +110,33 @@ def start_fresh(conv: Any) -> None:
     """Drop the resumed thread; the new session reports its own size."""
     conv.upstream_session_id = ""
     conv.coding_agent_stats = None
+
+
+# Restart from here: the chat's messages were cut back, so its resumed thread still holds
+# turns the person erased. It starts a new session that is given the kept messages instead.
+_REWOUND_TABLE = "workspace_state"
+
+
+def _rewound_key(conv_id: str) -> str:
+    return f"rewound_session:{conv_id}"
+
+
+def mark_rewound(conv: Any) -> None:
+    """Drop the resumed thread; the next turn replays the kept messages (``take_rewound``)."""
+    start_fresh(conv)
+    from backend.store.repos import kv
+
+    kv.set_doc(_REWOUND_TABLE, _rewound_key(str(conv.id)), {"at": time.time()})
+
+
+def take_rewound(conv_id: str) -> bool:
+    """True once after ``mark_rewound``: this turn's prompt carries the kept history."""
+    try:
+        from backend.store.repos import kv
+
+        if kv.get_doc(_REWOUND_TABLE, _rewound_key(conv_id)) is None:
+            return False
+        kv.delete_doc(_REWOUND_TABLE, _rewound_key(conv_id))
+        return True
+    except Exception:
+        return False
