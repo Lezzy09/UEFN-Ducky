@@ -570,6 +570,36 @@ def test_from_plan_model_move_drop_and_mute_edits_change_the_plan(tmp_path):
     assert store.calls == [] and done["status"] == "done"
 
 
+def _swap_case(monkeypatch, assignee, new_id):
+    from backend.tools.panel import ducky_finish_team
+
+    retired = []
+    monkeypatch.setattr(ducky_finish_team, "retire_swapped_seat", lambda old, new: retired.append((old, new)) or True)
+    api, store = _plan_api()
+    if assignee:
+        api.plan["nodes"][1]["assignee"] = assignee  # Widget is seated
+    swaps = []
+    store.swap_seat = lambda chat_id, seat, old, model: swaps.append((seat["name"], old, model)) or new_id
+    sw.swarm_create("", None, from_plan=True, api=api, store=store, edits=[{"seat": "Widget", "model": "codex:gpt-5"}])
+    assert "Model: codex:gpt-5" in api.plan["nodes"][1]["body_markdown"]
+    return retired, swaps
+
+
+def test_model_swap_on_a_seated_seat_retires_the_old_chat(monkeypatch):
+    retired, swaps = _swap_case(monkeypatch, "chat-old", "chat-new")
+    assert swaps == [("Widget", "chat-old", "codex:gpt-5")] and retired == [("chat-old", "chat-new")]
+
+
+def test_model_swap_keeping_the_same_chat_retires_nothing(monkeypatch):
+    retired, swaps = _swap_case(monkeypatch, "chat-old", "chat-old")
+    assert len(swaps) == 1 and retired == []
+
+
+def test_model_edit_on_an_unseated_seat_only_rewrites_the_line(monkeypatch):
+    retired, swaps = _swap_case(monkeypatch, "", "chat-new")
+    assert swaps == [] and retired == []
+
+
 def test_jobs_swarm_edits_touch_no_plan():
     store = FakeStore({"nodes": []})
     out = _create(GAME8, agents="auto", max_agents=8, per_group=5, store=store,

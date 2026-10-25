@@ -225,6 +225,23 @@ class PlanStore:
 
         _loads(ducky_plan_move_node(node_id=node_id, parent_id=parent_id, index=index, chat_id=chat_id))
 
+    def swap_seat(self, chat_id: str, seat: dict[str, Any], old_conv_id: str, model: str) -> str:
+        """Seat a new chat on *model* in the old member's group with the same lane, and hand it the
+        section. Returns the new chat id (the old one when the group can't be found)."""
+        from backend.tools.panel.ducky_panel import _project_root, ducky_group_invite, load_conversation
+        from backend.tools.panel.swarm_build import _loads
+
+        old = load_conversation(old_conv_id, project_root=_project_root())
+        group_id = str(getattr(old, "parent_conv_id", "") or "").strip()
+        if not group_id:
+            return old_conv_id
+        res = _loads(ducky_group_invite(group_id=group_id, ducky=seat["profile"], write_allowed=seat["paths"] or None,
+                                        name=str(getattr(old, "title", "") or seat["name"]), model=model))
+        new = str((res.get("member") or {}).get("member_conv_id") or "") or old_conv_id
+        if new != old_conv_id:
+            self.update(chat_id, seat["sub_plan"]["id"], assignee=new)
+        return new
+
 
 def _set_line(body: str, label: str, value: str) -> str:
     """*body* with its ``Label: value`` line replaced (or added at the end)."""
@@ -271,9 +288,17 @@ def apply_plan_edits(chat_id: str, plan: dict[str, Any], edits: list[dict[str, A
             else:
                 store.update(chat_id, step["id"], content=str(e.get("to") or "").strip() or step["content"])
         elif "seat" in e and e.get("model"):
-            sid = seat_of(e["seat"])["sub_plan"]["id"]
-            bodies[sid] = _set_line(bodies.get(sid, ""), "Model", str(e["model"]).strip())
+            seat = seat_of(e["seat"])
+            sid, model = seat["sub_plan"]["id"], str(e["model"]).strip()
+            bodies[sid] = _set_line(bodies.get(sid, ""), "Model", model)
             store.update(chat_id, sid, body_markdown=bodies[sid])
+            old = str(seat.get("assignee") or "").strip()
+            if old:  # a live seat: its chat runs the old model, so swap it and retire the old chat
+                from backend.tools.panel import ducky_finish_team
+
+                new = store.swap_seat(chat_id, seat, old, model)
+                if new and new != old:
+                    ducky_finish_team.retire_swapped_seat(old, new)
         elif "seat" in e and "to_group" in e:
             sid = seat_of(e["seat"])["sub_plan"]["id"]
             target = str(e["to_group"] or "").strip()
