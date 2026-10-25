@@ -176,8 +176,9 @@ def save_workflow(
     allow_locked_changes: bool = False,
     pretty: bool = False,
 ) -> str:
-    """Create or replace a workflow. Opens the Workflows editor on it, glides to the nodes
-    this save added or changed and lights them up, so the user sees what you did.
+    """Create or replace a workflow. Never switches the user's tab: if the Workflows editor
+    is already open it glides to the nodes this save added or changed and lights them up.
+    To bring the user there, call show_workflow.
 
     Save a workflow only when the person asked for one (or for a reusable flow). Never save
     one to test tools, nodes or a plugin: call a tool to test it, and ducky_plugin_test
@@ -673,7 +674,7 @@ def create_workflow_from_template(
     pretty: bool = False,
 ) -> str:
     """Make a new workflow from a template (ids from find_workflows or list_workflow_templates)
-    and open it in the editor. Paid image / 3D steps come with Spend credits off: ask the
+    (an open Workflows editor shows it; the user's tab never switches). Paid image / 3D steps come with Spend credits off: ask the
     user before turning spend on. Returns the new workflow (run it with run_workflow).
 
     A folder template (shape "bundle") makes its whole folder tree inside folder (the
@@ -792,7 +793,8 @@ async def run_workflow(
     plan_step_id: str = "",
     pretty: bool = False,
 ) -> str:
-    """Run a workflow now and open it in the editor. Does not switch the active island.
+    """Run a workflow now (an open Workflows editor shows it; the user's tab never switches).
+    Does not switch the active island.
 
     A plugin release workflow (its Find the plugin repo step) holds that plugin while it
     runs: a second release run of the same plugin is refused with the running one's id.

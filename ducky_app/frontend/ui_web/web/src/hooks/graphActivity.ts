@@ -40,14 +40,19 @@ export function requestFocusGraph(id: string, target: GraphFocusTarget = {}): vo
   }
 }
 
-/** Chat saved, showed or deleted a workflow — open the editor and show the change. */
+/** Chat saved, showed or deleted a workflow. Only a show (show_workflow, a tour) opens the
+ *  Workflows tab; a save or delete refreshes an editor that is already open and never pulls
+ *  you away from the tab you are on. */
 export function applyGraphFocusPush(event: PanelPushEvent): void {
   if (event.type !== "graph_focus") return;
   const id = String(event.id || "").trim();
   if (!id) return;
-  // Ducky is working in the editor: its first-open tour waits for another time.
-  holdGuidedUi();
-  requestOpenWorkflowsTab();
+  const show = event.action === "show";
+  if (show) {
+    // Ducky is working in the editor: its first-open tour waits for another time.
+    holdGuidedUi();
+    requestOpenWorkflowsTab();
+  }
   if (event.action === "deleted") {
     if (pendingFocus?.id === id) pendingFocus = null;
     if (typeof window !== "undefined") {
@@ -57,6 +62,8 @@ export function applyGraphFocusPush(event: PanelPushEvent): void {
   }
   const nodes = Array.isArray(event.nodes) ? event.nodes.map(String).filter(Boolean) : [];
   requestFocusGraph(id, { ...(nodes.length ? { nodes } : {}), ...(event.select ? { select: true } : {}), ...(event.note ? { note: String(event.note) } : {}) });
+  // A save is only for an editor already open: opening Workflows later shows what you left there.
+  if (!show) pendingFocus = null;
 }
 
 export function takePendingGraphFocus(): string {

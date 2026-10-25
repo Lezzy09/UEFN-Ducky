@@ -295,9 +295,9 @@ running their own step; editing a node's code turns it into a **Custom code** no
 
 ### Showing the user (they watch it happen)
 
-- Every `save_workflow` opens the editor, glides to the nodes it added or
-  changed and lights them up. Build in a few saves (start + first steps, then
-  the rest) so they can follow along.
+- `save_workflow`, `run_workflow` and templates never switch the user's tab. If the
+  Workflows editor is already open, a save glides to the nodes it added or changed
+  and lights them up. Want them to look? Call `show_workflow` (that opens the tab).
 - To point at one part, `show_workflow(workflow_id, node_ids=[…] | group_id=…,
   title="Fortnite servers up?", body="what it does")`: the nodes are highlighted
   with a popup above them (only its close button closes it) and the chat keeps a

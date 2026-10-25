@@ -59,14 +59,18 @@ describe("graphActivity", () => {
     expect(workflowIdFromJobId("graph-run:abc:171000")).toBe("abc");
   });
 
-  it("opens the Workflows editor when chat saves a workflow", () => {
+  it("a chat save refreshes an open editor but never switches to the Workflows tab", () => {
     let opened = 0;
     const stop = registerOpenWorkflowsTab(() => {
       opened += 1;
     });
     applyGraphFocusPush({ type: "graph_focus", id: "p1", action: "saved" });
-    expect(opened).toBe(1);
-    expect(takePendingGraphFocus()).toBe("p1");
+    applyGraphFocusPush({ type: "graph_focus", id: "p1", action: "deleted" });
+    expect(opened).toBe(0);
+    expect(takePendingGraphFocus()).toBe(""); // opening Workflows later doesn't jump to it
+    applyGraphFocusPush({ type: "graph_focus", id: "p2", action: "show" });
+    expect(opened).toBe(1); // asked to show it: that opens the tab
+    expect(takePendingGraphFocus()).toBe("p2");
     stop();
   });
 
