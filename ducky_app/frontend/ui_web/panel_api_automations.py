@@ -111,7 +111,7 @@ class PanelApiAutomationsMixin:
         return {"ok": True, "workflow": doc} if doc else {"ok": False, "error": "Version not found"}
 
     def save_workflow(self, doc: dict[str, Any] | None = None, owner: str = "", **extra: Any) -> dict[str, Any]:
-        from backend.automations.store import get_workflow, save_workflow
+        from backend.automations.store import StaleWorkflowError, get_workflow, save_workflow
 
         payload = dict(doc or {})
         payload.update(extra)
@@ -119,6 +119,9 @@ class PanelApiAutomationsMixin:
         before = get_workflow(wid) if wid else None
         try:
             saved = save_workflow(payload, owner=owner)
+        except StaleWorkflowError as exc:
+            # The editor loads the newer one instead of overwriting it.
+            return {"ok": False, "conflict": True, "error": str(exc), "workflow": exc.current}
         except (PermissionError, ValueError) as exc:
             return _refused(exc)
         _approve_typed_code(before, saved)

@@ -1088,6 +1088,30 @@ def test_tool_call_exposes_parsed_json_for_branches(monkeypatch):
     assert runner._eval_branch({"field": "data.hints", "op": "exists"}, {"data": {"compile": {}}}) is False
 
 
+def test_an_old_editor_copy_never_overwrites_a_newer_save() -> None:
+    import pytest
+
+    from backend.automations.store import StaleWorkflowError, delete_workflow, get_workflow, save_workflow
+
+    graph = {"nodes": [{"id": "s", "type": "start.manual", "x": 0, "y": 0, "config": {}}], "edges": []}
+    first = save_workflow({"name": "Stale check", "graph": graph})
+    wid = first["id"]
+    try:
+        newer = save_workflow({**first, "description": "an agent's change"})
+        assert newer["updated"] > first["updated"]
+        # The editor still holds `first` and drags a node: refused, the newer one stays.
+        with pytest.raises(StaleWorkflowError) as err:
+            save_workflow({**first, "base_updated": first["updated"], "description": "stale drag"})
+        assert err.value.current["description"] == "an agent's change"
+        assert get_workflow(wid)["description"] == "an agent's change"
+        # Based on the newest copy: saves. No base (agents, tools): saves as before.
+        ok = save_workflow({**newer, "base_updated": newer["updated"], "description": "edited on top"})
+        assert ok["description"] == "edited on top" and "base_updated" not in ok
+        assert save_workflow({**ok, "description": "no base"})["description"] == "no base"
+    finally:
+        delete_workflow(wid)
+
+
 def test_trigger_list_setting_matches_any_shared_value() -> None:
     from backend.automations import runner
 

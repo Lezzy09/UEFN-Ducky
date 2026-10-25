@@ -898,10 +898,22 @@ export function AutomationsView() {
     if (next.id && next.owner?.readOnly) return next;  // someone else's shared workflow: never pushed from here
     // The list files workflows (set_workflow_folder); an open canvas must not undo that.
     const { folder, ...body } = next;
+    // The server copy this canvas is based on (read after the save before it answered):
+    // a newer one there (an agent's save, another window) is never overwritten from here.
+    const base = next.id && synced.current?.id === next.id ? synced.current.updated : undefined;
     // Always with its owner: while that space is locked here the save is refused, never
     // forked into Local under the same id.
-    const res = await api?.save_workflow?.(next.id ? body : { ...body, folder: folder || "" }, owner || next.owner?.id || undefined);
+    const res = await api?.save_workflow?.(next.id ? { ...body, base_updated: base } : { ...body, folder: folder || "" }, owner || next.owner?.id || undefined);
     const row = res?.workflow;
+    if (res?.conflict && row) {
+      // Changed elsewhere since this canvas loaded it: show the newer one, keep it.
+      if (gen === loadGen.current) {
+        acknowledgeDraft(() => { markSynced(row); return row; });
+        setTextSaveError(`${res.error || "This workflow was changed somewhere else."} The newer version is open now.`);
+      }
+      await refreshList();
+      return row;
+    }
     if (row) {
       if (row.owner?.kind === "shared") queueSharedSync();
       if (gen === loadGen.current) {

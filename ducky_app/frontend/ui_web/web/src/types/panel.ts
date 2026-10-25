@@ -3468,9 +3468,12 @@ export interface PanelApi {
   /** Opens the shared space's Workflows page on the web. */
   workflow_open_web?(space_id: string): Promise<{ ok?: boolean; url?: string; error?: string }>;
   get_workflow?(workflow_id: string): Promise<{ ok?: boolean; error?: string; workflow?: AutomationDto }>;
-  save_workflow?(doc: Partial<AutomationDto> & { graph?: AutomationGraphDto }, owner?: string): Promise<{
+  /** base_updated: the `updated` of the copy the editor changed; a newer stored one is
+   *  kept and comes back with conflict: true instead of being overwritten. */
+  save_workflow?(doc: Partial<AutomationDto> & { graph?: AutomationGraphDto; base_updated?: number }, owner?: string): Promise<{
     ok?: boolean;
     error?: string;
+    conflict?: boolean;
     workflow?: AutomationDto;
   }>;
   copy_workflow?(workflow_id: string, owner: string, move?: boolean): Promise<{ ok?: boolean; error?: string; workflow?: AutomationDto }>;

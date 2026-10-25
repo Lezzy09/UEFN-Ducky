@@ -257,11 +257,31 @@ def get_workflow(workflow_id: str) -> dict[str, Any] | None:
     return _view(doc, owned.owner_view(scope), owned.state(aid, wid), owned.runs(aid, wid))
 
 
+class StaleWorkflowError(ValueError):
+    """The saver's copy is older than the stored one: saving it would undo newer changes."""
+
+    def __init__(self, current: dict[str, Any]):
+        super().__init__("This workflow was changed somewhere else (an agent or another window) "
+                         "after this copy was opened, so this change was not saved over it.")
+        self.current = current
+
+
 def save_workflow(doc: dict[str, Any], *, owner: str = "") -> dict[str, Any]:
     """Create or update a workflow. A new one lands in ``owner`` (default Local); an
     existing one stays with its owner (:func:`copy_workflow` moves it). Raises
-    ``PermissionError`` when that owner is read-only here."""
+    ``PermissionError`` when that owner is read-only here.
+
+    ``base_updated`` (the editor's): the ``updated`` of the copy it changed. When the stored
+    one is newer the save raises :class:`StaleWorkflowError` instead of writing an old copy
+    over it (a stale editor tab's drag put a whole old workflow back, Oct 25)."""
+    doc = dict(doc)
+    base = doc.pop("base_updated", None)
     with _SAVE_LOCK:
+        wid = str(doc.get("id") or "").strip()
+        if base not in (None, "") and wid:
+            current = get_workflow(wid)
+            if current is not None and float(current.get("updated") or 0) > float(base) + 1e-3:
+                raise StaleWorkflowError(current)
         out = save_quietly(doc, owner)
     _announce_graphs_changed()
     return out

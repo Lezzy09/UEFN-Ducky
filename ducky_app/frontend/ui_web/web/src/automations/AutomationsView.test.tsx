@@ -689,6 +689,22 @@ describe("workflow editor interactions", () => {
     await save();
     expect(saved.graph.edges).toHaveLength(1);
   });
+  it("an edit on an old copy never overwrites a newer save: it loads the newer one and says so", async () => {
+    saved.updated = 100;
+    await open();
+    const sent: Array<{ base_updated?: number }> = [];
+    api.save_workflow.mockImplementation(async (doc: AutomationDto & { base_updated?: number }) => {
+      sent.push(doc);
+      // An agent saved meanwhile (updated 200): the server keeps its copy.
+      return { ok: false, conflict: true, error: "This workflow was changed somewhere else.", workflow: { ...structuredClone(saved), name: "Agent version", updated: 200 } };
+    });
+    editNode("a");
+    editText({ name: "Renamed on the old copy" });
+    await waitFor(() => expect(sent.length).toBeGreaterThan(0));
+    expect(sent[0].base_updated).toBe(100);
+    expect(await screen.findByText(/changed somewhere else.*newer version is open/i)).toBeTruthy();
+    expect(await screen.findByDisplayValue("Agent version")).toBeTruthy();
+  });
   it("reloads the canvas when chat saves the graph", async () => {
     renderView();
     window.dispatchEvent(new CustomEvent("ducky:focus-graph", { detail: { id: "p" } }));
