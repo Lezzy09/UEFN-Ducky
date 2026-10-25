@@ -76,6 +76,8 @@ def team(tmp_path, monkeypatch):
     monkeypatch.setattr(plan_hooks, "_set_lane", set_lane)
     monkeypatch.setattr(swarm_build, "handovers_for", lambda nid: [r for r in table if r["from_section"] == nid])
     seated: list[tuple[str, str]] = []
+    posted: list[str] = []
+    monkeypatch.setattr(plan_hooks, "post_finish_card", lambda plan, root=None: posted.append(plan["chat_id"]))
     monkeypatch.setattr(swarm_build, "on_step_completed", lambda plan_id, step_id: seated.append((plan_id, step_id)))
     root = str(tmp_path)
     plans.create_plan("lead", nodes=[
@@ -83,7 +85,7 @@ def team(tmp_path, monkeypatch):
             {"id": "a1", "content": "Split the file"}, {"id": "a2", "content": "Tests"}]},
         {"id": "B", "content": "Composer", "assignee": "seat-b", "children": [{"id": "b1", "content": "Use it"}]},
     ], project_root=root)
-    yield SimpleNamespace(root=root, lanes=lanes, sets=sets, table=table, seated=seated)
+    yield SimpleNamespace(root=root, lanes=lanes, sets=sets, table=table, seated=seated, posted=posted)
     plans.drain_after_save()
 
 
@@ -156,6 +158,44 @@ def test_an_assignment_with_a_full_queue_waits_in_the_queue(monkeypatch):
         assert started == [] and seat_queue.is_busy("member-x")
     finally:
         seat_queue.drop("member-x")
+
+
+def test_the_last_sub_plan_posts_one_finish_card_to_the_lead(team):
+    _tick(team.root, "a1")
+    _tick(team.root, "a2")
+    assert team.posted == []  # B is still open
+    _tick(team.root, "b1")
+    assert team.posted == ["lead"]
+
+
+def test_a_plan_without_sub_plans_posts_no_finish_card(store, monkeypatch):
+    posted = []
+    monkeypatch.setattr(tick_gate, "check_tick", lambda cid, node: None)
+    monkeypatch.setattr(plan_hooks, "post_finish_card", lambda plan, root=None: posted.append(plan))
+    for sid in ("s1", "s2"):
+        plans.update_node("lead", sid, status="completed", project_root=store)
+        plans.drain_after_save()
+    assert plans.load_plan("lead", store)["status"] == "finished" and posted == []
+
+
+def test_the_finish_card_lands_in_the_lead_chat_as_a_tool_result(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from backend.tools.panel import ducky_finish_team
+    from frontend.ui_web import project_chats
+
+    card = {"ok": True, "ui": "finish_team", "status": "needs_confirm", "lead": "lead"}
+    appended = []
+    monkeypatch.setattr(ducky_finish_team, "finish_card", lambda plan, root=None: card)
+    monkeypatch.setattr(project_chats, "load_conversation_meta", lambda cid, project_root=None: SimpleNamespace(id=cid))
+    monkeypatch.setattr(project_chats, "append_message", lambda conv, msg, project_root=None: appended.append((conv.id, msg)))
+    plan_hooks.post_finish_card({"id": "p1", "chat_id": "lead"})
+    (conv_id, msg), = appended
+    block, = msg["blocks"]
+    assert conv_id == "lead" and msg["role"] == "assistant"
+    assert block["name"] == "ducky_finish_team" and block["status"] == "success"
+    assert json.loads(block["result"]["data"]) == card
 
 
 def test_sections_are_not_gated(monkeypatch):

@@ -195,6 +195,46 @@ def _run_completion_hooks(plan: dict[str, Any], done: list[dict[str, Any]], proj
             hook(plan, node, project_root)
         except Exception:
             log.exception("completion hook failed for %s", node.get("id"))
+    if any(_is_sub_plan(n) for n in done) and team_finished(plan):
+        post_finish_card(plan, project_root)
+
+
+def _is_sub_plan(node: dict[str, Any]) -> bool:
+    return bool(node.get("children")) and bool(node.get("assignee"))
+
+
+def team_finished(plan: dict[str, Any]) -> bool:
+    """The plan has member sub plans and every one of them is done."""
+    from backend.agent.coding_agents.plans import _DONE, _flatten_nodes
+
+    subs = [n for n in _flatten_nodes(plan.get("nodes")) if _is_sub_plan(n)]
+    return bool(subs) and all(str(n.get("status")) in _DONE for n in subs)
+
+
+def post_finish_card(plan: dict[str, Any], project_root: str | None = None) -> None:
+    """Put K4's "Finish team" card in the lead's chat, as a ducky_finish_team result."""
+    import json
+    import time
+
+    try:
+        from backend.tools.panel.ducky_finish_team import finish_card
+    except ImportError:
+        return  # no Finish team tool in this build
+    lead = str(plan.get("chat_id") or "")
+    try:
+        from frontend.ui_web.project_chats import append_message, load_conversation_meta
+
+        card = finish_card(plan, project_root)
+        conv = load_conversation_meta(lead, project_root=project_root)
+        if conv is None:
+            return
+        block = {"type": "tool_call", "id": f"finish-team-{plan.get('id')}", "name": "ducky_finish_team",
+                 "arguments": {"chat_id": lead}, "status": "success",
+                 "result": {"data": json.dumps(card, ensure_ascii=False)}}
+        append_message(conv, {"role": "assistant", "content": "", "blocks": [block], "ts": time.time()},
+                       project_root=project_root)
+    except Exception:
+        log.exception("could not post the Finish team card to %s", lead)
 
 
 def _section_audience(owners: set[str], project_root: str | None) -> set[str]:
