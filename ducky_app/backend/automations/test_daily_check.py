@@ -444,3 +444,41 @@ def test_the_daily_check_waits_for_the_servers_and_says_when_they_stay_down(monk
     assert out["ok"] and agents == [] and out["uefn"] == []
     report = _chat("Workflow reports")[0].messages[-1]["text"]
     assert "⏸ Fortnite's servers were still down" in report and "Login: under maintenance" in report
+
+
+def test_nested_site_tools_run_from_workflow_steps(monkeypatch):
+    """uefn-duckyos-site__* proxies are async: a workflow step awaits them on the plugin
+    pool; a nested tool its server added after the last proxy sync still reaches the pool."""
+    import asyncio
+
+    from backend.mcp_plugins import client_pool
+    from backend.server import mcp
+
+    pool_calls: list[tuple[str, dict[str, Any]]] = []
+
+    class Pool:
+        def run_sync(self, coro):
+            return asyncio.run(coro)
+
+        async def call_tool(self, name, params):
+            pool_calls.append((name, params))
+            return json.dumps({"deleted": True, "submissionId": params.get("submissionId")})
+
+    monkeypatch.setattr(client_pool, "get_plugin_pool", lambda: Pool())
+
+    async def proxy(params=None, pretty=False):
+        return json.dumps({"submissions": [], "params": params})
+
+    class Tool:
+        fn = staticmethod(proxy)
+
+    known = {"site__custom_forms_list_submissions": Tool()}
+    monkeypatch.setattr(mcp._tool_manager, "get_tool", lambda name: known.get(name))
+
+    listed = runner._invoke_tool("site__custom_forms_list_submissions", {"params": {"formId": "f"}})
+    assert listed["ok"] and listed["result"]["data"] == {"submissions": [], "params": {"formId": "f"}}
+
+    gone = runner._invoke_tool("site__custom_forms_delete_submission", {"params": {"submissionId": "s1"}})
+    assert gone["ok"] and gone["result"]["data"] == {"deleted": True, "submissionId": "s1"}
+    assert pool_calls == [("site__custom_forms_delete_submission", {"submissionId": "s1"})]
+    assert runner._invoke_tool("no_such_tool", {})["error"] == "unknown tool: no_such_tool"

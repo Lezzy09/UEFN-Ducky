@@ -2365,13 +2365,24 @@ def _call_tool(cfg: dict[str, Any], payload: dict[str, Any], node_id: str = "") 
 
 
 def _invoke_tool(name: str, arguments: dict[str, Any], node_id: str = "", typed: str = "") -> dict[str, Any]:
-    """Call a host or plugin MCP tool by name (sync tools only), streaming a terminal
-    command's output live into the node. ``typed``: the command that may skip the pop-up."""
+    """Call a host, plugin or nested MCP tool by name, streaming a terminal
+    command's output live into the node. ``typed``: the command that may skip the pop-up.
+    Async tools (nested ``prefix__tool`` proxies) run on the plugin pool's loop."""
     import inspect
 
     from backend.server import mcp
 
     tool = mcp._tool_manager.get_tool(name)
+    if tool is None and "__" in name:
+        # A nested tool the bridge has not proxied yet (its server added it since the
+        # last sync) is still callable on the pool, like ducky_call_tool does.
+        from backend.mcp_plugins.client_pool import get_plugin_pool
+
+        if _cancelled():
+            return {"ok": False, "error": STOPPED}
+        params = arguments.get("params") if isinstance(arguments.get("params"), dict) else arguments
+        result = get_plugin_pool().run_sync(get_plugin_pool().call_tool(name, params))
+        return _tool_output(name, result)
     if tool is None:
         return {"ok": False, "error": f"unknown tool: {name}"}
     fn = getattr(tool, "fn", None)
@@ -2396,10 +2407,16 @@ def _invoke_tool(name: str, arguments: dict[str, Any], node_id: str = "", typed:
         if stream:
             stream[0].set()
             stream[1].join(timeout=1)
-    if inspect.isawaitable(result):
-        if inspect.iscoroutine(result):
-            result.close()
+    if inspect.iscoroutine(result):
+        from backend.mcp_plugins.client_pool import get_plugin_pool
+
+        result = get_plugin_pool().run_sync(result)
+    elif inspect.isawaitable(result):
         return {"ok": False, "error": "async tool — register a sync plugin node instead"}
+    return _tool_output(name, result)
+
+
+def _tool_output(name: str, result: Any) -> dict[str, Any]:
     out: dict[str, Any] = {"tool": name, "output": result}
     if isinstance(result, dict):
         out["data"] = result
