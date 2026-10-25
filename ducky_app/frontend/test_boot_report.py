@@ -73,6 +73,27 @@ def test_a_running_ducky_that_vanished_without_a_trace_is_reported(crash) -> Non
     assert boot_report.NO_TRACE in boot_report.why_summary(body)
 
 
+def test_a_ducky_stopped_by_pid_on_purpose_is_not_a_crash(crash, tmp_path: Path) -> None:
+    # Oct 25 2026: the speed test ended each sandboxed 1.2.430 by PID between scenarios and
+    # the next start in the same profile said "closed by itself" (no dump, no trace).
+    _crashed_launch("create_window", "window_shown")
+    boot_report.mark("ok")
+    assert boot_report.mark_stopped(os.getpid(), local_appdata=tmp_path)  # the stopper, then the kill
+    boot_report.mark("ok")  # a heartbeat after the mark doesn't undo it
+    boot_report.begin("1.2.360")
+    assert crash["asked"] == []
+    assert not (boot_report._dir() / "stopped.json").exists()
+
+
+def test_a_stop_mark_for_another_process_is_ignored(crash) -> None:
+    _crashed_launch("window_shown")
+    boot_report.mark("ok")
+    assert boot_report.mark_stopped(os.getpid() + 1)
+    boot_report.begin("1.2.360")
+    (body,) = crash["asked"]
+    assert "closed by itself while running" in body["message"]
+
+
 def test_a_launch_the_pc_restart_ended_is_not_a_crash(crash) -> None:
     _crashed_launch("window_shown")
     boot_report.mark("ok")

@@ -42,9 +42,10 @@ PRIVACY_NOTE = (
 )
 
 # States a launch can be in without having crashed while starting.
-_QUIET_STATES = {"ok", "handoff", "closed"}
+_QUIET_STATES = {"ok", "handoff", "closed", "stopped"}
 # States only a deliberate exit writes. A launch left at "ok" never exited on purpose.
-_CLEAN_ENDS = {"handoff", "closed"}
+# "stopped": something ended it by PID on purpose and said so first (mark_stopped).
+_CLEAN_ENDS = {"handoff", "closed", "stopped"}
 NO_TRACE = (
     "No crash trace: Ducky ended outside Python code (WebView2, a DLL, running out of "
     "memory) or was ended from Task Manager."
@@ -75,6 +76,28 @@ def _boot_path() -> Path:
 
 def _native_path() -> Path:
     return _dir() / "native.log"
+
+
+def _stopped_path(folder: Path | None = None) -> Path:
+    return (folder or _dir()) / "stopped.json"
+
+
+def mark_stopped(pid: int, local_appdata: Path | str | None = None) -> bool:
+    """Whoever ends a Ducky by PID on purpose (sandbox_stop, a test harness) calls this just
+    before the kill, so that Ducky's next start doesn't report "closed by itself".
+
+    *local_appdata* is the stopped Ducky's LOCALAPPDATA (a sandbox's), default this one's.
+    A file of its own, not boot.json: the running app rewrites boot.json every 30 s and
+    would write over the mark."""
+    folder = Path(local_appdata) / "UEFN-Ducky" / "crash" if local_appdata else _dir()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        tmp = folder / "stopped.tmp"
+        tmp.write_text(json.dumps({"pid": int(pid), "at": time.time()}), encoding="utf-8")
+        tmp.replace(_stopped_path(folder))
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def _scrub(text: str) -> str:
@@ -575,6 +598,13 @@ def begin(version: str) -> None:
         # Leave this process unarmed so its later stage/mark calls are no-ops too.
         _state.clear()
         return
+    stopped = _read_json(_stopped_path())
+    if previous and int(stopped.get("pid") or 0) == int(previous.get("pid") or -1):
+        previous = dict(previous, state="stopped")
+    try:
+        _stopped_path().unlink(missing_ok=True)
+    except OSError:
+        pass
     restarted = _pc_restarted_since(float(previous.get("started") or 0.0)) if previous else False
     dumps = crash_dumps(float(previous.get("started") or 0.0)) if previous.get("started") else []
     ends = [float(d["at"]) for d in dumps if d.get("at")]
