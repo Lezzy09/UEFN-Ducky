@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useRef, useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatTab } from "../types/panel";
@@ -18,7 +18,7 @@ vi.mock("../voice/VoiceControls", () => ({ VoiceControls: () => null }));
 vi.mock("../voice/VoiceOverlay", () => ({ VoiceOverlay: () => null }));
 vi.mock("./ModelSelector", () => ({ ModelSelector: () => null }));
 
-import { ChatComposer, composerSend, type ChatComposerProps, type ComposerSendContext } from "./ChatComposer";
+import { ChatComposer, composerSend, noteQueuedSend, type ChatComposerProps, type ComposerSendContext } from "./ChatComposer";
 import { _resetChatReferenceStoreForTests } from "./chatReferenceStore";
 import { _resetAskUserForTests, runAskUser } from "../ask-user/runAskUser";
 import { ConfirmModalProvider } from "../contexts/ConfirmModalContext";
@@ -94,6 +94,30 @@ it("Send with an open question answers it and never steers", async () => {
   expect(calls.some((call) => call.method === "steer_message")).toBe(false);
   expect(ctx.dispatchSend).not.toHaveBeenCalled();
   expect(ctx.setInputText).toHaveBeenCalledWith("");
+});
+
+it("a queued send reply clears the box and shows its note for a few seconds; a run_id reply shows none", () => {
+  vi.useFakeTimers();
+  const note = "Sent — the agent takes it at its next step";
+  // The pane's dispatchSend: send_message's reply goes to noteQueuedSend.
+  const reply = { current: { ok: true, queued: true, note } as unknown };
+  const dispatchSend = vi.fn(() => {
+    if (!noteQueuedSend(chat.id, reply.current)) { /* run_id: the pane tracks the run as before */ }
+  });
+  const ctx = sendCtx("one more thing", { agentRunning: false, dispatchSend });
+  render(<ConfirmModalProvider><Composer onSend={() => composerSend(ctx)} /></ConfirmModalProvider>);
+  fireEvent.click(screen.getByTitle("Send"));
+  expect(ctx.setInputText).toHaveBeenCalledWith("");
+  expect(screen.getByText(note)).toBeTruthy();
+  expect(screen.queryByText(/already running/i)).toBeNull();
+  act(() => { vi.advanceTimersByTime(5000); });
+  expect(screen.queryByText(note)).toBeNull();
+
+  reply.current = { run_id: "r1" };
+  fireEvent.click(screen.getByTitle("Send"));
+  expect(noteQueuedSend(chat.id, reply.current)).toBe(false);
+  expect(screen.queryByText(note)).toBeNull();
+  vi.useRealTimers();
 });
 
 it("Send with no open question steers the running turn as before", () => {

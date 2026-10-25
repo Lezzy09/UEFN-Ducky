@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type Dispatch,
   type KeyboardEvent,
   type MutableRefObject,
@@ -142,6 +143,33 @@ export function useSlashCommands({
   );
 
   return { availableCommands, runSlashCommand, slashStatus, setSlashStatus };
+}
+
+/** Per-chat note under the box (e.g. "Sent — the agent takes it at its next step"). */
+const composerNotes = new Map<string, string>();
+const composerNoteListeners = new Set<() => void>();
+
+function setComposerNote(chatId: string, note: string) {
+  if (note) composerNotes.set(chatId, note);
+  else composerNotes.delete(chatId);
+  for (const listener of composerNoteListeners) listener();
+}
+
+function subscribeComposerNotes(listener: () => void): () => void {
+  composerNoteListeners.add(listener);
+  return () => composerNoteListeners.delete(listener);
+}
+
+/**
+ * A `send_message` reply of `{queued: true, note}` (the agent was busy and takes the message
+ * at its next step): shows the note under that chat's box and returns true, so the caller
+ * keeps the message as sent and never reports "Agent already running". Other replies: false.
+ */
+export function noteQueuedSend(chatId: string, reply: unknown): boolean {
+  const res = reply as { queued?: unknown; note?: unknown } | null | undefined;
+  if (!res?.queued) return false;
+  setComposerNote(chatId, String(res.note || "Sent — the agent takes it at its next step"));
+  return true;
 }
 
 /** Everything the send path reads; built fresh by the pane each render. */
@@ -401,6 +429,12 @@ export function ChatComposer({
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [mentionsOn, setMentionsOn] = useState(true);
   const [slashRefsOn, setSlashRefsOn] = useState(true);
+  const queuedNote = useSyncExternalStore(subscribeComposerNotes, () => composerNotes.get(chat.id) ?? "");
+  useEffect(() => {
+    if (!queuedNote) return;
+    const t = window.setTimeout(() => setComposerNote(chat.id, ""), 5000);
+    return () => window.clearTimeout(t);
+  }, [queuedNote, chat.id]);
   const inputBoxRef = useRef<HTMLDivElement>(null);
   const composerTargetRef = useUiTarget("chat.composer", {
     kind: "chat",
@@ -825,6 +859,7 @@ export function ChatComposer({
               )
             )}
             {slashStatus ? <div className="slash-command-status">{slashStatus}</div> : null}
+            {queuedNote ? <div className="slash-command-status" role="status">{queuedNote}</div> : null}
             {waitingOnAgents.length ? (
               <div className="slash-command-status" role="status">
                 Waiting on {waitingOnAgents.length === 1 ? "agent" : `${waitingOnAgents.length} agents`}:{" "}
