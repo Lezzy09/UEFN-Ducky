@@ -6,12 +6,32 @@ that tell each owner's chat to re-read its part of the plan (which starts a memb
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 
 def before_complete(plan: dict[str, Any], node: dict[str, Any], chat_id: str) -> None:
-    """Runs before ``node`` is ticked completed by ``chat_id``; raise ValueError to refuse."""
-    return None
+    """Runs before ``node`` is ticked completed; raise ValueError to refuse (the step keeps its status).
+
+    P2's tick gate: a member can't complete a step while its lane has uncommitted files. ``chat_id``
+    is the plan's chat (a member's tick lands in its lead's plan), so the gate checks the member
+    actually calling; a tick from the plan view has no caller and checks the plan's chat (no lane).
+    """
+    if node.get("children"):
+        return  # a section completes itself when its last step does
+    from backend.agent.coding_agents import tick_gate
+    from backend.agent.verify_evidence import current_conversation
+
+    try:
+        refusal = tick_gate.check_tick(current_conversation() or chat_id, node)
+    except Exception:
+        # A broken gate must not lock every member out of ticking.
+        log.exception("tick gate failed for %s", node.get("id"))
+        return
+    if refusal:
+        raise ValueError(refusal)
 
 
 def on_step_completed(plan: dict[str, Any], node: dict[str, Any]) -> None:
