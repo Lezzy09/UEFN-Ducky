@@ -694,6 +694,7 @@ from frontend.ui_web.panel_api_project import PanelApiProjectMixin  # noqa: E402
 from frontend.ui_web.panel_api_settings import PanelApiSettingsMixin  # noqa: E402
 from frontend.ui_web.panel_api_automations import PanelApiAutomationsMixin  # noqa: E402
 from frontend.ui_web.panel_api_video import PanelApiVideoMixin  # noqa: E402
+from frontend.ui_web.panel_api_plan_progress import PanelApiPlanProgressMixin  # noqa: E402
 from backend.voice.panel_mixin import PanelApiVoiceLaneMixin  # noqa: E402
 
 # Whether the UEFN listener was online at the last status check, for the whole app. HTTP,
@@ -719,6 +720,12 @@ def _drop_stale_call_caches(event: dict[str, Any]) -> None:
         from frontend.ui_web.call_pools import on_push
 
         on_push(str(event.get("type") or ""))
+    except Exception:
+        pass
+    try:
+        from frontend.ui_web.panel_api_plan_progress import drop_plan_progress
+
+        drop_plan_progress(event)
     except Exception:
         pass
 
@@ -782,6 +789,7 @@ class PanelApi(
     PanelApiAutomationsMixin,
     PanelApiVideoMixin,
     PanelApiVoiceLaneMixin,
+    PanelApiPlanProgressMixin,
 ):
     def __init__(self) -> None:
         self._window: Any = None

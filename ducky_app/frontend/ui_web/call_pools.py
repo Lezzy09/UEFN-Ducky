@@ -37,6 +37,7 @@ URGENT = frozenset({
     "run_held_messages",
     "ui_rpc_respond",
     "set_conversation_coding_agent",
+    "plan_progress",
 })
 
 # Every PanelApi method that can wait more than a second: file dialogs, the snip
