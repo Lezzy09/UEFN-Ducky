@@ -50,8 +50,16 @@ _by_run: dict[str, _Turn] = {}
 _by_conv: dict[str, _Turn] = {}
 
 
+INTERRUPTED = "Agent process restarted — send a message to continue"
+
+
 class HostTurnError(RuntimeError):
     """The turn failed in the host; the host already kept its partial reply."""
+
+    @property
+    def interrupted(self) -> bool:
+        """The host died mid-turn: its last checkpoint is the turn's reply so far."""
+        return str(self) == INTERRUPTED
 
 
 def _supervisor() -> Any:
@@ -112,7 +120,7 @@ def run_in_host(
             if cancel.is_set() and not asked:
                 asked = host.send("cancel", conv_id=conv_id, run_id=run_id)
             if not host.alive():
-                turn.error = turn.error or "The agent host stopped during this turn."
+                turn.error = turn.error or INTERRUPTED
                 break
         return turn.error
     finally:
@@ -121,6 +129,8 @@ def run_in_host(
             if _by_conv.get(conv_id) is turn:
                 _by_conv.pop(conv_id, None)
         sup.release(conv_id)
+        if turn.error == INTERRUPTED:
+            _close_runs([run_id])
         from frontend.ui_web import steer
 
         # A dead host took its inbox with it: what the person sent goes back to the app's.
@@ -182,13 +192,38 @@ def _on_saved(conv_id: str, final: bool) -> None:
     notify_context_changed(conv_id)
 
 
+def _close_runs(run_ids: list[str]) -> None:
+    """The runs' ledger rows become ``interrupted`` (end_run later leaves them so)."""
+    try:
+        from backend.store.repos import ledger
+
+        ledger.close_stale_runs(run_ids=run_ids)
+    except Exception:  # noqa: BLE001 - no database (tests, a file ledger): nothing to close
+        pass
+
+
+def _interrupt(turns: list[_Turn]) -> None:
+    for turn in turns:
+        turn.error = turn.error or INTERRUPTED
+    _close_runs([t.run_id for t in turns])
+    for turn in turns:
+        turn.done.set()
+
+
+def mark_host_dead(slot: int) -> list[str]:
+    """Supervisor hook (p4e): every turn the host in ``slot`` ran is interrupted. Each keeps its
+    checkpoint and session id and its chat says to send a message to continue. Returns those chats."""
+    with _lock:
+        turns = [t for t in _by_run.values() if getattr(t.host, "slot", None) == slot]
+    _interrupt(turns)
+    return [t.conv_id for t in turns]
+
+
 def on_host_closed(host: Any, reason: str) -> None:
-    """Supervisor ``on_host_closed``: that host's turns end with an error at once."""
+    """Supervisor ``on_host_closed``: that host's turns are interrupted at once."""
     with _lock:
         turns = [t for t in _by_run.values() if t.host is host]
-    for turn in turns:
-        turn.error = turn.error or f"The agent host stopped ({reason})."
-        turn.done.set()
+    _interrupt(turns)
 
 
 # --- host side --------------------------------------------------------------------------------

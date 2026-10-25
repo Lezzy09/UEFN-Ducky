@@ -41,3 +41,31 @@ def test_no_host_falls_back_and_a_host_error_stops_the_turn(external_turns, monk
     assert _wait_for(lambda: agent_modes.list_running_agents() == [])
     assert any(e["type"] == "error" and "agent host stopped" in e["text"] for e in pushed)
     assert [e["reason"] for e in pushed if e["type"] == "agent_stopped"] == ["error"]
+
+
+def test_a_dead_hosts_turn_is_interrupted_with_its_checkpoint_kept(external_turns, monkeypatch):  # noqa: F811
+    from backend.agent.coding_agents import runner
+    from frontend.agent_host import turns as host_turns
+
+    monkeypatch.setenv("DUCKY_AGENT_HOST", "1")
+
+    def in_host(conv_id, run_id, *a, **kw):
+        # What the host saved before it died: a partial reply with one tool call.
+        external_turns.chats[conv_id].messages.append(
+            {"role": "assistant", "run_id": run_id, "text": "half", "blocks": [{"type": "text", "text": "half"}]})
+        return host_turns.INTERRUPTED
+
+    monkeypatch.setattr(host_turns, "run_in_host", in_host)
+    kept: list[dict] = []
+    monkeypatch.setattr(runner, "checkpoint_coding_turn", lambda conv, **kw: kept.append(kw))
+    external_turns.conv("x")
+    external_turns.chats["x"].session_id = "sess-1"
+    pushed: list[dict] = []
+    assert agent_modes.run_message("x", "go", "agent", "", push=pushed.append)
+    assert _wait_for(lambda: agent_modes.list_running_agents() == [])
+    stopped = [e for e in pushed if e["type"] == "agent_stopped"]
+    assert [(e["reason"], e["detail"]) for e in stopped] == [("interrupted", host_turns.INTERRUPTED)]
+    assert any(e["type"] == "error" and e["text"] == host_turns.INTERRUPTED for e in pushed)
+    assert kept and kept[0]["reply"] == "half" and kept[0]["blocks"] == [{"type": "text", "text": "half"}]
+    assert kept[0]["error"] == host_turns.INTERRUPTED
+    assert external_turns.chats["x"].session_id == "sess-1"  # kept for --resume

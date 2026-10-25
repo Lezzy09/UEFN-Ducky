@@ -2092,9 +2092,13 @@ def run_message(
                 from backend.agent.coding_agents.runner import checkpoint_coding_turn
                 from frontend.agent_host.turns import HostTurnError
 
+                host_error = isinstance(e, HostTurnError)
+                interrupted = host_error and e.interrupted
+                if interrupted:
+                    fresh = load_conversation(conv_id) or fresh  # the dead host's last checkpoint
                 partial = next((msg for msg in reversed(fresh.messages)
                                 if msg.get("role") == "assistant" and msg.get("run_id") == run_id), {})
-                if not isinstance(e, HostTurnError):  # the host kept its own partial reply
+                if not host_error or interrupted:  # a live host kept its own partial reply
                     checkpoint_coding_turn(
                         fresh, agent_id=coding_agent, run_id=run_id,
                         blocks=partial.get("blocks"), reply=partial.get("text", ""),
@@ -2102,7 +2106,9 @@ def run_message(
                     )
                 error_push = lambda event: push({**event, "requested_mode": m, "effective_mode": ""})
                 error_push({"type": "error", "text": str(e), "conv_id": conv_id, "run_id": run_id})
-                _push_agent_stopped(error_push, conv_id, run_id, "error")
+                # Interrupted: the session id stays on the chat, so the next message resumes it.
+                _push_agent_stopped(error_push, conv_id, run_id, "interrupted" if interrupted else "error",
+                                    detail=str(e) if interrupted else "")
             finally:
                 from frontend.ui_web.live_agent_runs import discard_live_run_id
 

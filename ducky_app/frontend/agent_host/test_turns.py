@@ -125,7 +125,50 @@ def test_a_dead_host_ends_the_turn_with_an_error(piped, monkeypatch):
     assert started.wait(5)
     piped.host_channel.close("crash")
     t.join(5)
-    assert not t.is_alive() and "agent host stopped" in result["out"]
+    assert not t.is_alive() and result["out"] == turns.INTERRUPTED
+
+
+def test_a_dead_hosts_turns_are_interrupted_and_others_untouched(monkeypatch):
+    closed: list[list[str]] = []
+    monkeypatch.setattr(turns, "_close_runs", closed.append)
+
+    class _Seat:
+        def __init__(self, slot):
+            self.slot = slot
+            self.ready = threading.Event()
+            self.ready.set()
+
+        def alive(self):
+            return True
+
+        def send(self, op, **fields):
+            return True
+
+        def __hash__(self):
+            return id(self)
+
+    dead, other = _Seat(0), _Seat(1)
+    seats = {"a": dead, "b": dead, "c": other}
+    monkeypatch.setattr(turns, "_supervisor", lambda: SimpleNamespace(assign=seats.get, release=lambda cid: None))
+    results: dict[str, str] = {}
+    threads = [threading.Thread(target=lambda cid=cid: results.setdefault(cid, turns.run_in_host(
+        cid, f"r-{cid}", "x", model="m", mode="agent", push=lambda e: None, cancel=threading.Event())))
+        for cid in seats]
+    for t in threads:
+        t.start()
+    deadline = threading.Event()
+    while len(turns.live_turns()) < 3 and not deadline.wait(0.01):
+        pass
+    assert sorted(turns.mark_host_dead(0)) == ["a", "b"]
+    for t in threads[:2]:
+        t.join(5)
+    assert results == {"a": turns.INTERRUPTED, "b": turns.INTERRUPTED}
+    assert sorted(closed[0]) == ["r-a", "r-b"]  # their ledger rows become interrupted
+    assert turns.live_turns() == {"c": "r-c"}  # the turn on the other host runs on
+    turns.on_app_frame(other, {"op": "turn_ended", "run_id": "r-c", "error": ""})
+    threads[2].join(5)
+    assert results["c"] == ""
+    assert turns.HostTurnError(turns.INTERRUPTED).interrupted and not turns.HostTurnError("x").interrupted
 
 
 def test_no_host_means_the_app_runs_the_turn(monkeypatch):
