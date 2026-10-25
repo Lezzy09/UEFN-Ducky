@@ -123,7 +123,9 @@ def ducky_terminal_run(
     this command, or when the command is typed into the Local workflow running it)."""
     mgr = _terminal_manager()
     chat = _terminal_chat(conv_id)
-    busy = release_refusal(command, _session_cwd(mgr, session_id.strip()))
+    # The session lookup is a window round trip (terminal_list): only for a release script.
+    busy = (release_refusal(command, _session_cwd(mgr, session_id.strip()))
+            if _RELEASE_SCRIPT.search(command or "") else "")
     if busy:
         return tool_json({"ok": False, "error": busy, "session_id": session_id.strip()}, pretty=pretty)
     from backend.automations.runner import typed_command_approved
