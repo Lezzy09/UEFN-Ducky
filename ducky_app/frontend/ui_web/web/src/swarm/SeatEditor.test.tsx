@@ -67,6 +67,39 @@ describe("SeatEditor", () => {
     expect(screen.getByText("Opus 5.5")).toBeTruthy();
   });
 
+  it("toggling May release and dragging a step to another seat emit edits[]", () => {
+    const edits: SwarmEdit[] = [];
+    const other: SwarmSeat = { ...seat, name: "Store lead", job: "Store: ui", paths: ["ui/**"] };
+    render(
+      <>
+        <SeatEditor seat={seat} models={models} onEdit={(e) => edits.push(e)} />
+        <SeatEditor seat={other} models={models} onEdit={(e) => edits.push(e)} />
+      </>,
+    );
+    fireEvent.click(screen.getAllByLabelText("May release/publish")[0]);
+    const data = new Map<string, string>();
+    const dataTransfer = { setData: (k: string, v: string) => data.set(k, v), getData: (k: string) => data.get(k) ?? "" };
+    fireEvent.dragStart(screen.getAllByLabelText("Step: Add the meter")[0].closest("li")!, { dataTransfer });
+    fireEvent.drop(screen.getByLabelText("Store lead steps"), { dataTransfer });
+    fireEvent.drop(screen.getByLabelText("Core lead steps"), { dataTransfer });
+    expect(edits).toEqual([
+      { seat: "Core lead", may_release: true },
+      { seat: "Core lead", move_step: "Add the meter", to_seat: "Store lead" },
+    ]);
+  });
+
+  it("shows its lane overlaps", () => {
+    render(
+      <SeatEditor
+        seat={seat}
+        models={models}
+        onEdit={() => {}}
+        overlaps={[{ seat: "Plugin core", other: "Core lead", path: "src/core/x.ts" }]}
+      />,
+    );
+    expect(screen.getByRole("alert").textContent).toBe("Core lead ⚠ lane overlaps Plugin core: src/core/x.ts");
+  });
+
   it("parses lane text", () => {
     expect(parseLane(" a/**,\nb.ts , ")).toEqual(["a/**", "b.ts"]);
   });

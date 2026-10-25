@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { GroupEditor } from "./GroupEditor";
+import { GroupEditor, RunAtOnceSlider } from "./GroupEditor";
 import type { SwarmEdit } from "./SeatEditor";
 
 afterEach(cleanup);
@@ -35,5 +35,22 @@ describe("GroupEditor", () => {
       { rename: "Engine: UE 5.8 web fork", to: "Engine" },
       { group: "Engine: UE 5.8 web fork", start_after: "p0" },
     ]);
+  });
+
+  it("team switches emit {group, key}", () => {
+    const edits = renderGroup(false);
+    fireEvent.click(screen.getByLabelText("Trust plugin drafts"));
+    expect(edits).toEqual([{ group: "Engine: UE 5.8 web fork", trust_drafts: true }]);
+  });
+
+  it("run-at-once slider is capped by the PC limit and emits on release", () => {
+    const edits: SwarmEdit[] = [];
+    render(<RunAtOnceSlider value={4} seats={12} pcLimit={6} onEdit={(e) => edits.push(e)} />);
+    const slider = screen.getByLabelText("Run at once") as HTMLInputElement;
+    expect(slider.max).toBe("6");
+    expect(screen.getByText("4 of 12 (this PC runs 6)")).toBeTruthy();
+    fireEvent.change(slider, { target: { value: "6" } });
+    fireEvent.pointerUp(slider);
+    expect(edits).toEqual([{ run_at_once: 6 }]);
   });
 });

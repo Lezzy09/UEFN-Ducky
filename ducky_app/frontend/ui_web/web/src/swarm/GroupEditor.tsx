@@ -1,4 +1,5 @@
-import type { SwarmEdit } from "./SeatEditor";
+import { useEffect, useState } from "react";
+import { PermissionSwitches, type Permissions, type SwarmEdit } from "./SeatEditor";
 
 /** A group as the swarm_builder preview tree sends it. */
 export interface SwarmGroup {
@@ -6,6 +7,38 @@ export interface SwarmGroup {
   muted?: boolean;
   /** Plan step id this group's seats wait for (S2's start-later groups). */
   start_after?: string;
+  perms?: Permissions;
+}
+
+/** How many seats run at once: never above the seat count or K3's PC limit. */
+export function RunAtOnceSlider(props: {
+  value: number;
+  seats: number;
+  pcLimit: number;
+  onEdit: (edit: SwarmEdit) => void;
+}) {
+  const max = Math.max(1, Math.min(props.seats, props.pcLimit));
+  const [n, setN] = useState(Math.min(props.value, max));
+  useEffect(() => setN(Math.min(props.value, max)), [props.value, max]);
+  return (
+    <label className="swarm-run-at-once">
+      Run at once
+      <input
+        type="range"
+        aria-label="Run at once"
+        min={1}
+        max={max}
+        value={n}
+        onChange={(e) => setN(Number(e.target.value))}
+        onPointerUp={() => n !== props.value && props.onEdit({ run_at_once: n })}
+        onKeyUp={() => n !== props.value && props.onEdit({ run_at_once: n })}
+      />
+      <span>
+        {n} of {props.seats}
+        {props.pcLimit < props.seats ? ` (this PC runs ${props.pcLimit})` : ""}
+      </span>
+    </label>
+  );
 }
 
 export interface PlanStepOption {
@@ -63,6 +96,7 @@ export function GroupEditor(props: {
           ))}
         </select>
       </label>
+      <PermissionSwitches target={{ group: name }} perms={group.perms} onEdit={onEdit} />
     </div>
   );
 }
