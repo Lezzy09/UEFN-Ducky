@@ -1040,8 +1040,12 @@ export function ChatPane({
             setPromptQueue(chat.id, movePromptToFront(promptQueue, id));
             if (agentRunning) {
               const item = promptQueue.find((p) => p.id === id);
-              // Pictures/files need a turn of their own; they run right after this one.
-              if (item?.text && !item.attachments.length) {
+              if (item?.attachments.length) {
+                // Pictures/files need a turn of their own. Waiting for this one to end left
+                // "Send now" doing nothing (Oct 25): stop it, and the idle drain sends this
+                // prompt first.
+                handleStop();
+              } else if (item?.text) {
                 void getApi()?.steer_message?.(chat.id, item.id, item.text);
               }
               return;

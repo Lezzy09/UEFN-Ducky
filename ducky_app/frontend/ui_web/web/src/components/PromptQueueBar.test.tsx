@@ -23,4 +23,18 @@ describe("PromptQueueBar", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
+
+  it("says what Send now does: next step for text, stops the turn for files", () => {
+    const pic = { kind: "image" as const, name: "shot.png", data_base64: "AA==" };
+    render(<PromptQueueBar
+      items={[
+        makeQueuedPrompt("just text", { id: "t", mode: "agent", model: "m" })!,
+        makeQueuedPrompt("with a picture", { id: "p", mode: "agent", model: "m", attachments: [pic] })!,
+      ]}
+      onEdit={vi.fn()} onSendNow={vi.fn()} onDelete={vi.fn()}
+    />);
+    const [text, files] = screen.getAllByRole("button", { name: "Send queued prompt now" });
+    expect(text.getAttribute("title")).toBe("Send now (the agent reads it at its next step)");
+    expect(files.getAttribute("title")).toBe("Send now (stops current turn)");
+  });
 });

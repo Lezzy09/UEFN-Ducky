@@ -50,7 +50,9 @@ export function PromptQueueBar({ items, onEdit, onSendNow, onDelete }: PromptQue
               <button
                 type="button"
                 className="prompt-queue-icon-btn"
-                title="Send now (stops current turn)"
+                title={item.attachments.length
+                  ? "Send now (stops current turn)"
+                  : "Send now (the agent reads it at its next step)"}
                 aria-label="Send queued prompt now"
                 onClick={() => onSendNow(item.id)}
               >
