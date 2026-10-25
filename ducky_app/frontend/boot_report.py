@@ -51,7 +51,7 @@ NO_TRACE = (
     "memory) or was ended from Task Manager."
 )
 # sent = the user sent it; kept = not sent (they chose not to, or sending failed).
-_REPORT_ID = re.compile(r"^(?:sent|kept)-\d{8}-\d{6}$")
+_REPORT_ID = re.compile(r"^(?:sent|kept)-\d{8}-\d{6}(?:-\d+)?$")
 # How long the window's page has, once the window shows, to run its main script.
 STUCK_AFTER_S = 60.0
 STUCK_HEADING = "UEFN Ducky got stuck while starting"
@@ -76,6 +76,12 @@ def _boot_path() -> Path:
 
 def _native_path() -> Path:
     return _dir() / "native.log"
+
+
+def _test_copy() -> bool:
+    """A test copy (sandbox_launch, the soak harness: both set DUCKY_SANDBOX). Nobody is
+    there to answer the crash pop-up, so it never shows; reports are kept, never sent."""
+    return bool(os.environ.get("DUCKY_SANDBOX"))
 
 
 def _stopped_path(folder: Path | None = None) -> Path:
@@ -443,6 +449,9 @@ def _ask_to_send(body: dict[str, str]) -> bool:
 def show_now(tk_root: Any, body: dict[str, str]) -> None:
     """The crash pop-up while this launch is still open (it got stuck). Runs on the Tk
     pump thread. Answered = the next launch won't ask again; unanswered = it will."""
+    if _test_copy():
+        _save(body, "kept")
+        return
     import tkinter as tk
 
     def done(send: bool) -> None:
@@ -514,7 +523,11 @@ def _fill_popup(root: Any, body: dict[str, str], done: Callable[[bool], None]) -
 
 
 def _save(body: dict[str, str], prefix: str) -> str:
-    report_id = f"{prefix}-{time.strftime('%Y%m%d-%H%M%S')}"
+    base = report_id = f"{prefix}-{time.strftime('%Y%m%d-%H%M%S')}"
+    n = 0
+    while (_dir() / f"{report_id}.json").exists():  # a test harness restarts within a second
+        n += 1
+        report_id = f"{base}-{n}"
     try:
         (_dir() / f"{report_id}.json").write_text(json.dumps(body), encoding="utf-8")
     except OSError:
@@ -622,7 +635,7 @@ def begin(version: str) -> None:
             _native_path().write_text("", encoding="utf-8")
         except OSError:
             pass
-        sent = _ask_to_send(body) and _send(body, version)
+        sent = not _test_copy() and _ask_to_send(body) and _send(body, version)
         _save(body, "sent" if sent else "kept")
 
     _state.clear()

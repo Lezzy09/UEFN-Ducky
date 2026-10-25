@@ -18,6 +18,7 @@ from frontend import boot_report
 @pytest.fixture
 def crash(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("DUCKY_SANDBOX", raising=False)  # these tests run the normal app's path
     monkeypatch.setattr(boot_report, "_state", {})
     # Keep pytest's own crash handler in this process; the child process below uses the real one.
     monkeypatch.setattr(faulthandler, "enable", lambda *a, **k: None)
@@ -92,6 +93,36 @@ def test_a_stop_mark_for_another_process_is_ignored(crash) -> None:
     boot_report.begin("1.2.360")
     (body,) = crash["asked"]
     assert "closed by itself while running" in body["message"]
+
+
+def test_a_test_copy_keeps_the_report_without_the_pop_up(crash, monkeypatch, tmp_path: Path) -> None:
+    # The speed harness restarts the sandboxed build; nobody is there to click the pop-up.
+    monkeypatch.setenv("DUCKY_SANDBOX", str(tmp_path))
+    for _ in range(2):
+        _crashed_launch("window_shown")
+        boot_report.mark("ok")
+    boot_report.begin("1.2.360")
+    assert crash["asked"] == [] and crash["sent"] == []
+    reports = boot_report.list_reports()
+    assert len(reports) == 2 and not any(r["sent"] for r in reports)
+    assert "closed by itself" in reports[0]["message"]
+
+
+def test_the_normal_app_still_asks(crash, monkeypatch) -> None:
+    monkeypatch.delenv("DUCKY_SANDBOX", raising=False)
+    _crashed_launch("window_shown")
+    boot_report.mark("ok")
+    boot_report.begin("1.2.360")
+    assert len(crash["asked"]) == 1
+
+
+def test_a_stuck_test_copy_keeps_the_report_without_the_pop_up(page, monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DUCKY_SANDBOX", str(tmp_path))
+    boot_report.begin("1.2.360")
+    body = boot_report.page_stuck([], 60)
+    boot_report.show_now(None, body)  # no Tk root needed: it returns before any window
+    (kept,) = boot_report.list_reports()
+    assert kept["sent"] is False and "got stuck" in kept["message"]
 
 
 def test_a_launch_the_pc_restart_ended_is_not_a_crash(crash) -> None:
