@@ -1,0 +1,42 @@
+/* SwarmTree's seat list under the tree: one row per seat (avatar · name · model chip). */
+.swarm-tree-seats {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.swarm-tree-seat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--fg);
+}
+.swarm-tree-seat-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.swarm-tree-model-chip {
+  margin-left: auto;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+.swarm-tree-seat.swarm-tree-node--muted {
+  opacity: 0.55;
+}
+/* Starts later: a dashed outline, never a left-border accent. */
+.swarm-tree-seat.swarm-tree-node--later {
+  outline: 1px dashed var(--border);
+  outline-offset: -1px;
+}
+.swarm-tree-seat.swarm-tree-node--overlap,
+.swarm-tree-seat.swarm-tree-node--overlap .swarm-tree-model-chip {
+  color: var(--red);
+}

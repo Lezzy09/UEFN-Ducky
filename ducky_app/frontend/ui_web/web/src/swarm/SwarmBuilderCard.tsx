@@ -2,7 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { subscribeAgentEvents } from "../hooks/useAgentEventBus";
 import { getApi } from "../hooks/usePanelApi";
 import type { AgentEvent } from "../types/panel";
-import { SWARM_CARD_EVENT } from "../components/tool-presenters/SwarmCard";
+import { SWARM_CARD_EVENT, parseSwarmResult } from "../components/tool-presenters/SwarmCard";
+import { GroupEditor, type SwarmGroup as EditorGroup } from "./GroupEditor";
+import { laneOverlaps, overlapNotes } from "./lanes";
+import { SeatEditor, type SwarmEdit, type SwarmSeat as EditorSeat } from "./SeatEditor";
+import { SwarmTree } from "./SwarmTree";
+import "./SwarmTree.css";
 
 // The `ui: "swarm_builder"` payload (pinned in fixtures/swarm_builder.json) as a card:
 // three sliders reshape the team through the pure swarm_preview panel method, Build sends
@@ -54,7 +59,7 @@ export interface SwarmConfirm extends SwarmAnswers {
   goal: string;
   jobs: unknown[];
   agents: "auto";
-  edits: unknown[];
+  edits: SwarmEdit[];
   confirm: true;
 }
 
@@ -94,6 +99,43 @@ export function treeRows(tree: unknown, prefix = ""): TreeRow[] {
   });
 }
 
+/** The preview tree as editor rows, with lane edits ({seat, paths}) applied in order. */
+export function draftOf(tree: unknown, edits: SwarmEdit[]): { seats: EditorSeat[]; groups: EditorGroup[] } {
+  const seats: EditorSeat[] = [];
+  const groups: EditorGroup[] = [];
+  const walk = (list: unknown) =>
+    arr(list).forEach((entry) => {
+      const o = obj(entry);
+      if (!o) return;
+      if (typeof o.group === "string" || Array.isArray(o.seats)) {
+        groups.push({ group: str(o.group) || "Group", muted: o.muted === true });
+        walk(o.groups);
+        walk(o.seats);
+        return;
+      }
+      const name = str(o.name);
+      if (!name) return;
+      const sp = obj(o.sub_plan);
+      const steps = arr(sp?.steps).flatMap((x) => {
+        const content = typeof x === "string" ? x.trim() : str(obj(x)?.content);
+        return content ? [{ content, body_markdown: str(obj(x)?.body_markdown) || undefined }] : [];
+      });
+      seats.push({
+        name,
+        job: str(o.job) || name,
+        model: str(o.model),
+        paths: arr(o.paths).map(str).filter(Boolean),
+        sub_plan: { title: str(sp?.title) || str(o.job) || name, steps },
+      });
+    });
+  walk(tree);
+  for (const e of edits) {
+    const seat = seats.find((s) => s.name === e.seat);
+    if (seat && Array.isArray(e.paths)) seat.paths = e.paths.map(String);
+  }
+  return { seats, groups };
+}
+
 function seatNames(rows: TreeRow[]): string[] {
   return rows.flatMap((r) => (r.kind === "seat" ? [r.name] : seatNames(r.children)));
 }
@@ -108,7 +150,7 @@ export function countsLine(preview: Raw, detail: number): string {
 
 export type SeatState = "waiting" | "created" | "started" | "working" | "blocked" | "done";
 const STATE_COLOR: Record<SeatState, string> = {
-  waiting: "var(--fg-muted, var(--fg))",
+  waiting: "var(--muted)",
   created: "var(--blue)",
   started: "var(--blue)",
   working: "var(--purple)",
@@ -201,19 +243,18 @@ export function SwarmBuilderCard({ payload, jobs, seatChats, onBuild }: SwarmBui
   const [built, setBuilt] = useState(false);
   const cardRef = useRef<HTMLElement>(null);
 
-  // Slider moves settle for 120 ms, then one swarm_preview; an older reply never wins.
+  // Slider moves and editor edits settle for 120 ms, then one swarm_preview; an older reply never wins.
+  const [edits, setEdits] = useState<SwarmEdit[]>([]);
   const timer = useRef<number | undefined>(undefined);
   const asked = useRef(0);
   useEffect(() => () => window.clearTimeout(timer.current), []);
-  const move = (patch: Partial<SwarmAnswers>) => {
-    const next = { ...answers, ...patch };
-    setAnswers(next);
+  const refresh = (next: SwarmAnswers, nextEdits: SwarmEdit[]) => {
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
       const call = (getApi() as unknown as PreviewApi | null)?.swarm_preview;
       if (!call || !goal || !jobList.length) return;
       const ticket = ++asked.current;
-      void Promise.resolve(call(goal, jobList, next.detail, "auto", next.max_agents, next.per_group, []))
+      void Promise.resolve(call(goal, jobList, next.detail, "auto", next.max_agents, next.per_group, nextEdits))
         .catch(() => null)
         .then((res) => {
           if (ticket !== asked.current || !res) return;
@@ -225,9 +266,25 @@ export function SwarmBuilderCard({ payload, jobs, seatChats, onBuild }: SwarmBui
         });
     }, SWARM_PREVIEW_DEBOUNCE_MS);
   };
+  const move = (patch: Partial<SwarmAnswers>) => {
+    const next = { ...answers, ...patch };
+    setAnswers(next);
+    refresh(next, edits);
+  };
+  /** One editor change: kept in the card's edit list (Build sends them all) and previewed. */
+  const edit = (e: SwarmEdit) => {
+    const next = [...edits, e];
+    setEdits(next);
+    refresh(answers, next);
+  };
 
   const rows = useMemo(() => treeRows(preview.tree), [preview.tree]);
   const names = useMemo(() => seatNames(rows), [rows]);
+  // Lane edits apply at once, so the overlap check never waits on the preview round trip.
+  const draft = useMemo(() => draftOf(preview.tree, edits), [preview.tree, edits]);
+  const overlaps = useMemo(() => laneOverlaps(draft.seats), [draft]);
+  const overlapSeats = useMemo(() => [...new Set(overlaps.flatMap((o) => [o.seat, o.other]))], [overlaps]);
+  const treeData = useMemo(() => parseSwarmResult(JSON.stringify({ ...card, status: "needs_confirm" })), [card]);
 
   // After Build: one state per seat from its chat's events; done and counts from plan_progress.
   const [chats, setChats] = useState<Record<string, string>>(() => ({ ...seatChats }));
@@ -290,7 +347,8 @@ export function SwarmBuilderCard({ payload, jobs, seatChats, onBuild }: SwarmBui
   if (!card) return null;
 
   const build = () => {
-    const confirm: SwarmConfirm = { goal, jobs: jobList, ...answers, agents: "auto", edits: [], confirm: true };
+    if (overlaps.length) return;
+    const confirm: SwarmConfirm = { goal, jobs: jobList, ...answers, agents: "auto", edits, confirm: true };
     setBuilt(true);
     if (onBuild) onBuild(confirm);
     else {
@@ -314,15 +372,34 @@ export function SwarmBuilderCard({ payload, jobs, seatChats, onBuild }: SwarmBui
       )}
       {built ? null : <div className="swarm-card-summary" aria-live="polite">{countsLine(preview, answers.detail)}</div>}
       {error ? <div className="swarm-builder-error" role="alert" style={{ color: "var(--red)" }}>{error}</div> : null}
-      <div className="swarm-card-tree" role="tree" aria-label="Team">
-        <Tree rows={rows} states={built ? states : undefined} progress={built ? progress : undefined} />
-      </div>
-      {built ? null : (
-        <div className="swarm-card-actions">
-          <button type="button" className="swarm-card-btn swarm-card-btn--primary" onClick={build}>
-            Build
-          </button>
+      {built ? (
+        <div className="swarm-card-tree" role="tree" aria-label="Team">
+          <Tree rows={rows} states={states} progress={progress} />
         </div>
+      ) : (
+        <>
+          {treeData ? <SwarmTree data={treeData} overlaps={overlapSeats} /> : null}
+          <div className="swarm-builder-editors" aria-label="Edit the team">
+            {draft.groups.map((g) => (
+              <GroupEditor key={`g:${g.group}`} group={g} onEdit={edit} />
+            ))}
+            {draft.seats.map((s) => (
+              <SeatEditor key={`s:${s.name}`} seat={s} onEdit={edit} overlaps={overlaps} />
+            ))}
+          </div>
+          {overlaps.length ? (
+            <ul className="swarm-builder-overlaps" aria-label="Lane overlaps" style={{ color: "var(--red)" }}>
+              {overlaps.map((o) => (
+                <li key={`${o.seat}|${o.other}|${o.path}`}>{overlapNotes(o.seat, [o])[0]}</li>
+              ))}
+            </ul>
+          ) : null}
+          <div className="swarm-card-actions">
+            <button type="button" className="swarm-card-btn swarm-card-btn--primary" disabled={overlaps.length > 0} onClick={build}>
+              Build
+            </button>
+          </div>
+        </>
       )}
     </section>
   );

@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { createElement } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../../hooks/modelsCatalogCache", () => ({
+  getCachedModels: () => [],
+  loadModelsCatalog: async () => [],
+  subscribeModelsCatalog: () => () => {},
+}));
 import fixture from "../../../swarm/fixtures/swarm_builder.json";
 import { AskUserBody, askUserError, rowsFromAskUser } from "./AskUserBody";
 

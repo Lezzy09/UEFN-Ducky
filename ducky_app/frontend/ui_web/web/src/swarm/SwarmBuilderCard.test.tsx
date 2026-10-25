@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fixture from "./fixtures/swarm_builder.json";
 
 const api = vi.hoisted(() => ({ swarm_preview: vi.fn(), plan_progress: vi.fn() }));
 const bus = vi.hoisted(() => ({ handlers: new Set<(event: Record<string, unknown>) => void>() }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => api }));
+vi.mock("../hooks/modelsCatalogCache", () => ({
+  getCachedModels: () => [],
+  loadModelsCatalog: async () => [],
+  subscribeModelsCatalog: () => () => {},
+}));
 vi.mock("../hooks/useAgentEventBus", () => ({
   subscribeAgentEvents: (fn: (event: Record<string, unknown>) => void) => {
     bus.handlers.add(fn);
@@ -44,15 +49,28 @@ afterEach(() => {
 });
 
 describe("SwarmBuilderCard from the swarm_builder payload", () => {
-  it("renders the fixture: title, three sliders, counts and the tree", () => {
-    render(<SwarmBuilderCard payload={fixture} jobs={JOBS} />);
+  it("renders the fixture: title, three sliders, counts, the seat tree and one editor per seat and group", () => {
+    const { container } = render(<SwarmBuilderCard payload={fixture} jobs={JOBS} />);
     expect(screen.getByText("Build swarm: Shop island")).toBeTruthy();
     expect((screen.getByRole("slider", { name: "Detail" }) as HTMLInputElement).value).toBe("2");
     expect((screen.getByRole("slider", { name: "Max agents" }) as HTMLInputElement).value).toBe("8");
     expect((screen.getByRole("slider", { name: "Per group" }) as HTMLInputElement).value).toBe("5");
     expect(screen.getByText("6 agents · 2 groups")).toBeTruthy();
-    expect(screen.getByText("Modeling lead · prop-artist · claude:claude-sonnet-5-5 · 2 steps")).toBeTruthy();
-    expect(screen.getByText(/^Art: assets/).textContent).toBe("Art: assets · MUTED");
+    expect(screen.getByLabelText("Swarm tree")).toBeTruthy();
+    expect(container.querySelectorAll(".swarm-seat-editor")).toHaveLength(6);
+    expect(container.querySelectorAll(".swarm-group-editor")).toHaveLength(2);
+    expect((screen.getByRole("button", { name: "Build" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("styles SwarmTree's seat rows: one per seat with its name and model chip", () => {
+    const { container } = render(<SwarmBuilderCard payload={fixture} jobs={JOBS} />);
+    const rows = [...container.querySelectorAll("li.swarm-tree-seat")];
+    expect(rows.map((r) => r.querySelector(".swarm-tree-seat-name")?.textContent)).toEqual([
+      "Narrative lead", "Tester", "Modeling lead", "Texture lead", "Verse lead", "UI lead",
+    ]);
+    expect(rows[2].querySelector(".swarm-tree-model-chip")?.textContent).toBe("Sonnet 5.5");
+    expect(rows[4].querySelector(".swarm-tree-model-chip")?.textContent).toBe("Opus 5.5");
+    expect(container.querySelectorAll(".swarm-tree-node--overlap")).toHaveLength(0);
   });
 
   it("finds the payload in text, {result: json} and {data} wrappers; a plain question is not one", () => {
@@ -100,6 +118,59 @@ describe("SwarmBuilderCard sliders", () => {
     await act(async () => void (await vi.advanceTimersByTimeAsync(SWARM_PREVIEW_DEBOUNCE_MS)));
     expect(api.swarm_preview).toHaveBeenCalledWith("Shop island", JOBS, 2, "auto", 12, 3, []);
     expect(screen.getByRole("alert").textContent).toBe("per_group must be 2-10");
+  });
+});
+
+describe("SwarmBuilderCard editors and lane overlaps", () => {
+  const seat = (name: string, paths: string[]) => ({
+    name, job: `${name} job`, kind: "code", profile: "developer", model: "claude:claude-sonnet-5-5", paths,
+    sub_plan: { title: `${name} job`, done: 0, total: 1, steps: [{ content: `${name} step` }] },
+  });
+  const draft3 = {
+    ui: "swarm_builder", status: "needs_answers", goal: "Store",
+    preview: {
+      goal: "Store", detail: 2, agents: 3, max_agents: 8, per_group: 5,
+      tree: [seat("Store lead", ["ui/index.html"]), seat("Plugin core", ["ui/**"]), seat("Plan lead", ["web/src/plan/**"])],
+    },
+  };
+
+  it("two seats on one path: note shown, tree marks both red, Build off; fixing the lane turns it on and Build sends the edit", () => {
+    api.swarm_preview.mockResolvedValue(undefined);
+    const onBuild = vi.fn();
+    const { container } = render(<SwarmBuilderCard payload={draft3} jobs={JOBS} onBuild={onBuild} />);
+    const build = () => screen.getByRole("button", { name: "Build" }) as HTMLButtonElement;
+
+    expect(build().disabled).toBe(true);
+    expect(within(screen.getByLabelText("Lane overlaps")).getByText("Store lead ⚠ lane overlaps Plugin core: ui/index.html")).toBeTruthy();
+    const red = [...container.querySelectorAll("li.swarm-tree-seat.swarm-tree-node--overlap")].map((r) => r.querySelector(".swarm-tree-seat-name")?.textContent);
+    expect(red).toEqual(["Store lead", "Plugin core"]);
+    // Each overlapping seat's editor shows its own note too.
+    expect(within(container.querySelector('[data-seat="Plugin core"]') as HTMLElement).getByRole("alert").textContent).toBe(
+      "Plugin core ⚠ lane overlaps Store lead: ui/index.html",
+    );
+    fireEvent.click(build());
+    expect(onBuild).not.toHaveBeenCalled();
+
+    const lane = within(container.querySelector('[data-seat="Plugin core"]') as HTMLElement).getByLabelText("Lane paths");
+    fireEvent.change(lane, { target: { value: "plugin/**" } });
+    fireEvent.blur(lane);
+
+    expect(screen.queryByLabelText("Lane overlaps")).toBeNull();
+    expect(container.querySelectorAll(".swarm-tree-node--overlap")).toHaveLength(0);
+    expect(build().disabled).toBe(false);
+    fireEvent.click(build());
+    expect(onBuild).toHaveBeenCalledWith(expect.objectContaining({ edits: [{ seat: "Plugin core", paths: ["plugin/**"] }], confirm: true }));
+  });
+
+  it("an edit reruns swarm_preview with the card's edit list", async () => {
+    vi.useFakeTimers();
+    api.swarm_preview.mockResolvedValue(undefined);
+    const { container } = render(<SwarmBuilderCard payload={draft3} jobs={JOBS} />);
+    const lane = within(container.querySelector('[data-seat="Plan lead"]') as HTMLElement).getByLabelText("Lane paths");
+    fireEvent.change(lane, { target: { value: "web/src/plan/rows/**" } });
+    fireEvent.blur(lane);
+    await act(async () => void (await vi.advanceTimersByTimeAsync(SWARM_PREVIEW_DEBOUNCE_MS)));
+    expect(api.swarm_preview).toHaveBeenCalledWith("Store", JOBS, 2, "auto", 8, 5, [{ seat: "Plan lead", paths: ["web/src/plan/rows/**"] }]);
   });
 });
 
