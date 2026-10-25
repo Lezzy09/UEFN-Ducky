@@ -145,6 +145,14 @@ def register_process(conv_id: str, proc: subprocess.Popen) -> None:
             pass
 
 
+def get_process(conv_id: str) -> subprocess.Popen | None:
+    """The chat's running coding-agent process, e.g. for an adapter's graceful Stop
+    (``get_process(cid).send_signal(signal.CTRL_BREAK_EVENT)`` with ``new_process_group``)."""
+    with _procs_lock:
+        proc = _procs.get(conv_id)
+    return proc if proc is not None and proc.poll() is None else None
+
+
 def unregister_process(conv_id: str, proc: subprocess.Popen) -> None:
     with _procs_lock:
         if _procs.get(conv_id) is proc:
@@ -260,6 +268,7 @@ def run_streaming_process(
     stdin_data: str | None = None,
     keep_stdin_open: bool = False,
     on_stdin_writer: Callable[[StdinWriter], None] | None = None,
+    new_process_group: bool = False,
 ) -> ProcResult:
     """Run argv, feeding each stdout line to ``on_line``. Kills on timeout/cancel.
 
@@ -269,6 +278,9 @@ def run_streaming_process(
     ``keep_stdin_open``: write ``stdin_data`` but leave stdin open; the writer is
     handed to ``on_stdin_writer`` and served by ``get_stdin_writer(conv_id)`` while
     the process runs, and closed on exit, timeout and cancel.
+
+    ``new_process_group`` (Windows): start the child in its own process group, so
+    ``CTRL_BREAK_EVENT`` can reach it without hitting Ducky itself.
     """
     env = dict(os.environ)
     for key, value in (env_extra or {}).items():
@@ -293,6 +305,8 @@ def run_streaming_process(
     }
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if new_process_group:
+            kwargs["creationflags"] |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
     try:
         proc = subprocess.Popen(argv, **kwargs)
