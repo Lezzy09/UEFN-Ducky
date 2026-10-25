@@ -61,7 +61,7 @@ def test_only_distinct_detail_levels_are_offered():
 def test_estimate_for_14_opus_seats_of_4_steps(monkeypatch):
     monkeypatch.setattr(sp, "_price", lambda model: (5.0, 0.5, 25.0, 6.25))
     jobs = [_job(f"Job {i}", paths=[f"app/j{i}/**"], steps=4, model="claude:claude-opus-5-5") for i in range(14)]
-    est = sp.build_preview("Big", jobs, "auto", 14, 5, detail=2)["estimate"]
+    est = sp.build_preview("Big", jobs, "auto", 14, 5, edits=[{"interfaces": False}], detail=2)["estimate"]
     assert len(est["seats"]) == 14
     tokens = 14 * 4 * sp.TOKENS_PER_STEP
     assert est["total"]["tokens"] == tokens == 8_400_000
@@ -78,3 +78,30 @@ def test_estimate_without_a_price_has_no_cost(monkeypatch):
     assert est["total"]["cost_usd"] is None
     assert est["seats"]["A lead"] == {"tokens": 2 * sp.TOKENS_PER_STEP, "minutes": 2 * sp.MINUTES_PER_STEP,
                                        "cost_usd": None}
+
+
+# ---- interfaces first ---------------------------------------------------------------------
+
+CODE4 = ["Setup", "Export", "Store", "Errors"]
+
+
+def test_four_code_jobs_get_an_interfaces_section_the_others_wait_for(monkeypatch):
+    monkeypatch.setattr(sp, "_price", lambda model: None)
+    p = sp.build_preview("Plugin", [_job(n) for n in CODE4], "auto", 8, 5, detail=2)
+    sections = {s["title"]: s for s in p["plan"]["sections"]}
+    assert "Interfaces" in sections and sections["Interfaces"]["seat"] == sp.INTEGRATOR
+    assert sections["Interfaces"]["steps"][0]["content"].startswith("Interfaces:")
+    others = [s for s in p["plan"]["sections"] if s["seat"] != sp.INTEGRATOR]
+    assert len(others) == 4 and all(s["after"] == [f"{sp.INTEGRATOR}#1"] for s in others)
+    assert sp.INTEGRATOR in p["jobs"]
+    # interfaces first: one step, then the 2-step seats
+    assert p["estimate"]["total"]["minutes"] == 3 * sp.MINUTES_PER_STEP
+
+
+def test_interfaces_can_be_turned_off_and_need_three_code_seats(monkeypatch):
+    monkeypatch.setattr(sp, "_price", lambda model: None)
+    off = sp.build_preview("Plugin", [_job(n) for n in CODE4], "auto", 8, 5, edits=[{"interfaces": False}])
+    assert sp.INTEGRATOR not in off["lanes"]
+    two = sp.build_preview("Plugin", [_job(n) for n in CODE4[:2]] + [_job("Story", kind="narrative")],
+                           "auto", 8, 5)
+    assert sp.INTEGRATOR not in two["lanes"]

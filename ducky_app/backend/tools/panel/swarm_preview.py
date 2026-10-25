@@ -8,7 +8,8 @@
 - ``tree``: groups first, then root seats. Group = {group, purpose, muted, seats, groups};
   seat = {name, job, kind, profile, model, paths, sub_plan: {title, done, total, steps}}
 - ``muted``: names of muted groups; ``lanes``: {seat name: [paths]}
-- ``plan``: {title, sections: [{seat, title, steps}]} — the plan Build makes
+- ``plan``: {title, sections: [{seat, title, after, steps}]} — the plan Build makes; ``after`` (on a
+  section or a step) lists refs "<seat name>#<n>" (that seat's n-th step, 1-based) to finish first
 - ``estimate``: {seats: {name: {tokens, minutes, cost_usd}}, total: {tokens, minutes, cost_usd, text}}
 - ``jobs`` (server only, dropped before it reaches the card)
 
@@ -413,6 +414,36 @@ def estimate(seats: list[dict[str, Any]]) -> dict[str, Any]:
     return {"seats": out, "total": {"tokens": tokens, "minutes": minutes, "cost_usd": cost, "text": text}}
 
 
+# ---- interfaces first ---------------------------------------------------------------------
+
+CODE_KINDS = {"developer", "app"}
+INTEGRATOR = "Integrator"
+_INTERFACES_STEP = {
+    "content": "Interfaces: pin the shared names before anyone builds",
+    "body_markdown": ("Write and commit what the seats call across modules: RPC and panel method names, "
+                      "error codes, helper signatures, as stubs with tests against fakes. Every other seat "
+                      "starts when this step is done."),
+}
+
+
+def add_integrator(tree: list[dict[str, Any]], lead_model: str = "") -> dict[str, Any] | None:
+    """3+ code seats share a codebase: add an Integrator seat at the root whose first step
+    ('Interfaces') every other seat waits for. Returns its job, None when not needed."""
+    seats = list(walk_seats(tree))
+    code = [s for s in seats if s["kind"] in CODE_KINDS]
+    if len(code) < 3 or any(s["name"] == INTEGRATOR for s in seats):
+        return None
+    steps = _steps([_INTERFACES_STEP])
+    for s in seats:
+        s["sub_plan"]["after"] = [f"{INTEGRATOR}#1"]
+    tree.append({"name": INTEGRATOR, "job": INTEGRATOR, "kind": "developer", "profile": "developer",
+                 "model": lead_model or code[0]["model"], "paths": [],
+                 "sub_plan": {"title": "Interfaces", "done": 0, "total": len(steps), "steps": steps}})
+    return {"name": INTEGRATOR, "purpose": "Shared interfaces the other seats build against", "task": "",
+            "steps": steps, "paths": [], "kind": "developer", "profile": "developer",
+            "suggested_model": lead_model or code[0]["model"], "model": ""}
+
+
 # ---- preview and edits --------------------------------------------------------------------
 
 def _job_edits(jobs: list[dict[str, Any]], edits: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -470,6 +501,10 @@ def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents
     kept = capped_jobs(_job_edits(apply_detail(jobs, detail), edits), agents, max_agents)
     tree = plan_tree(kept, agents, max_agents, per_group)
     _tree_edits(tree, edits)
+    if all(e.get("interfaces", True) is not False for e in edits):
+        made = add_integrator(tree, lead_model)
+        if made:
+            kept.append(made)
     seats = list(walk_seats(tree))
     return {
         "goal": goal,
@@ -483,6 +518,7 @@ def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents
         "lanes": {s["name"]: s["paths"] for s in seats},
         # The plan Build makes, as one outline: the person approves it with the tree.
         "plan": {"title": goal, "sections": [{"seat": s["name"], "title": s["sub_plan"]["title"],
+                                               "after": list(s["sub_plan"].get("after") or []),
                                                "steps": s["sub_plan"]["steps"]} for s in seats]},
         "estimate": estimate(preview_seats(tree)),
         "jobs": {s["name"]: next(j for j in kept if j["name"] == s["job"]) for s in seats},
