@@ -507,10 +507,14 @@ def test_stopping_a_group_stops_its_nested_groups_too(monkeypatch, tmp_path):
     monkeypatch.setattr(agent_modes, "is_agent_running", lambda cid: cid in running)
     monkeypatch.setattr(pa, "cancel_agent", lambda cid=None: stopped.append(cid))
 
+    lead = load_conversation(outer["id"], project_root=root).leader_conv_id
+    assert lead in running  # the outer group's lead is one of the running seats
+
     out = api.group_stop(outer["id"])
 
-    assert out["ok"] and out["stopped"] == 3 and out["groups"] == 2
-    assert sorted(stopped) == sorted(running)
+    # Stop team stops every member of the group and its nested groups, never the team's lead.
+    assert out["ok"] and out["stopped"] == 2 and out["groups"] == 2 and out["lead_kept"] == lead
+    assert sorted(stopped) == sorted(running - {lead})
     for cid in seats.values():
         assert load_conversation(cid, project_root=root) is not None
     assert api.group_stop(seats["A"])["ok"] is False
