@@ -1088,6 +1088,20 @@ def test_tool_call_exposes_parsed_json_for_branches(monkeypatch):
     assert runner._eval_branch({"field": "data.hints", "op": "exists"}, {"data": {"compile": {}}}) is False
 
 
+def test_trigger_list_setting_matches_any_shared_value() -> None:
+    from backend.automations import runner
+
+    node = {"type": "discord.message", "config": {"channel_id": "c1", "role_ids": ["pr", "staff"]}}
+    assert runner._node_matches_trigger(node, "discord.message", {"channel_id": "c1", "role_ids": ["x", "pr"]})
+    assert not runner._node_matches_trigger(node, "discord.message", {"channel_id": "c1", "role_ids": ["x"]})
+    assert not runner._node_matches_trigger(node, "discord.message", {"channel_id": "c1", "role_ids": []})
+    # A trigger that doesn't send the list (an older plugin) never passes a role setting.
+    assert not runner._node_matches_trigger(node, "discord.message", {"channel_id": "c1"})
+    assert not runner._node_matches_trigger(node, "discord.message", {"channel_id": "c2", "role_ids": ["pr"]})
+    open_node = {"type": "discord.message", "config": {"role_ids": []}}
+    assert runner._node_matches_trigger(open_node, "discord.message", {"role_ids": []})
+
+
 def test_select_options_from_plugin_handler(monkeypatch) -> None:
     from backend.automations import catalog, plugin
 

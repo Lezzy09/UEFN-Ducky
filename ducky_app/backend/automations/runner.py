@@ -824,6 +824,16 @@ def _node_matches_trigger(node: dict[str, Any], trigger_id: str, payload: dict[s
     for key, raw in cfg.items():
         if key == "trigger_id" or raw in ("", None):
             continue
+        if isinstance(raw, list) or isinstance(payload.get(key), list):
+            # A list on either side (Discord: the roles a workflow allows / the author's roles):
+            # one shared value is a match. A list setting the trigger doesn't send fails closed.
+            want = {str(x) for x in (raw if isinstance(raw, list) else [raw]) if x not in ("", None)}
+            if not want:
+                continue
+            have = payload.get(key)
+            if key not in payload or not want & {str(x) for x in (have if isinstance(have, list) else [have])}:
+                return False
+            continue
         if key in payload and str(payload[key]) != str(raw):
             return False
     return True
