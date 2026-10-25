@@ -36,7 +36,26 @@ def before_complete(plan: dict[str, Any], node: dict[str, Any], chat_id: str) ->
 
 def on_step_completed(plan: dict[str, Any], node: dict[str, Any], project_root: str | None = None) -> None:
     """Runs (off the tick's call path) after a saved plan has ``node`` (a leaf) newly completed."""
-    hand_over(plan, str(node.get("id") or ""), project_root)  # "right after the split step"
+    step_id = str(node.get("id") or "")
+    hand_over(plan, step_id, project_root)  # "right after the split step"
+    start_waiting_seats(plan, step_id, project_root)
+
+
+def start_waiting_seats(plan: dict[str, Any], step_id: str, project_root: str | None = None) -> None:
+    """Seat the swarm groups and seats that start after ``step_id`` (S2's start-later seats; they
+    start through K3's seat queue). Their failure never fails the tick: logged, plus a lead point."""
+    # A swarm built from the plan records the plan's id; one built from a preview, the lead's chat.
+    keys = dict.fromkeys(k for k in (str(plan.get("id") or ""), str(plan.get("chat_id") or "")) if k)
+    try:
+        from backend.tools.panel import swarm_build
+
+        for key in keys:
+            swarm_build.on_step_completed(key, step_id)
+    except Exception as exc:
+        log.exception("start-later seats after %s failed", step_id)
+        _lead_point(plan, f"Start the seats waiting on {step_id} by hand",
+                    f"Seating the swarm groups that wait for `{step_id}` failed: {exc}. Invite and assign "
+                    "them with ducky_group_invite and ducky_plan_update_node(assignee=...).", project_root)
 
 
 def on_section_completed(plan: dict[str, Any], node: dict[str, Any], project_root: str | None = None) -> None:

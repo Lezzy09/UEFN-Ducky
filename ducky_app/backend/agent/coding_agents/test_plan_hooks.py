@@ -75,13 +75,15 @@ def team(tmp_path, monkeypatch):
     monkeypatch.setattr(plan_hooks, "_lane", lambda conv: lanes.get(conv))
     monkeypatch.setattr(plan_hooks, "_set_lane", set_lane)
     monkeypatch.setattr(swarm_build, "handovers_for", lambda nid: [r for r in table if r["from_section"] == nid])
+    seated: list[tuple[str, str]] = []
+    monkeypatch.setattr(swarm_build, "on_step_completed", lambda plan_id, step_id: seated.append((plan_id, step_id)))
     root = str(tmp_path)
     plans.create_plan("lead", nodes=[
         {"id": "A", "content": "Split", "assignee": "seat-a", "children": [
             {"id": "a1", "content": "Split the file"}, {"id": "a2", "content": "Tests"}]},
         {"id": "B", "content": "Composer", "assignee": "seat-b", "children": [{"id": "b1", "content": "Use it"}]},
     ], project_root=root)
-    yield SimpleNamespace(root=root, lanes=lanes, sets=sets, table=table)
+    yield SimpleNamespace(root=root, lanes=lanes, sets=sets, table=table, seated=seated)
     plans.drain_after_save()
 
 
@@ -119,6 +121,41 @@ def test_a_failed_hand_over_keeps_the_tick_and_adds_a_lead_point(team, monkeypat
     point = [n for n in doc["nodes"] if n["content"].startswith("Move lane by hand")]
     assert len(point) == 1 and "x.py from seat-a to seat-b" in point[0]["content"]
     assert "overlaps" in point[0]["body_markdown"]
+
+
+def test_completing_the_after_step_starts_the_waiting_seats_once(team):
+    plan_id = plans.load_plan("lead", team.root)["id"]
+    _tick(team.root, "a1")
+    assert sorted(team.seated) == sorted([(plan_id, "a1"), ("lead", "a1")])  # plan-built and preview-built swarms
+    _tick(team.root, "a2")
+    assert [s for s in team.seated if s[1] == "a1"] == [(plan_id, "a1"), ("lead", "a1")]
+
+
+def test_a_failing_swarm_hook_keeps_the_tick_and_adds_a_lead_point(team, monkeypatch):
+    from backend.tools.panel import swarm_build
+
+    def boom(plan_id, step_id):
+        raise RuntimeError("invite failed")
+    monkeypatch.setattr(swarm_build, "on_step_completed", boom)
+    _tick(team.root, "a1")
+    doc = plans.load_plan("lead", team.root)
+    assert plans._walk_find(doc["nodes"], "a1")[2]["status"] == "completed"
+    assert [n["content"] for n in doc["nodes"] if "by hand" in n["content"]] == [
+        "Start the seats waiting on a1 by hand"]
+
+
+def test_an_assignment_with_a_full_queue_waits_in_the_queue(monkeypatch):
+    # The plan only pushes plan_assignment_changed; the member's turn starts through the keeper,
+    # which asks K3's seat queue. A full queue keeps it waiting.
+    from frontend.ui_web import seat_queue, team_keeper
+
+    started = []
+    monkeypatch.setattr(seat_queue, "_room", lambda running: False)
+    try:
+        assert team_keeper._enqueue("member-x", lambda: started.append(1)) == "queued"
+        assert started == [] and seat_queue.is_busy("member-x")
+    finally:
+        seat_queue.drop("member-x")
 
 
 def test_sections_are_not_gated(monkeypatch):
