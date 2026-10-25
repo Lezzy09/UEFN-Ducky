@@ -275,6 +275,12 @@ class ChatWriter:
                 else:
                     entry[3] += 1
                     self._pending[cid] = entry
+        if not retry:
+            self._last_write = self._clock()
+            self._truncated = False
+            _trace("chat_writer_batch", str(len(batch)), (time.perf_counter() - t0) * 1000.0, bytes=written)
+            if written // PAGE_BYTES > BIG_BATCH_PAGES:
+                self._checkpoint(conn, "PASSIVE")  # before the futures: a flush returns after it
         for cid, exc in results.items():
             for fut in batch[cid][1]:
                 if exc is None:
@@ -283,12 +289,6 @@ class ChatWriter:
                     fut.set_exception(exc)
         if retry:
             time.sleep(self._interval)
-            return
-        self._last_write = self._clock()
-        self._truncated = False
-        _trace("chat_writer_batch", str(len(batch)), (time.perf_counter() - t0) * 1000.0, bytes=written)
-        if written // PAGE_BYTES > BIG_BATCH_PAGES:
-            self._checkpoint(conn, "PASSIVE")
 
     # ---------------------------------------------------------------------- WAL
 

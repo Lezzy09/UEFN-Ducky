@@ -99,6 +99,14 @@ def _is_assistant(message: Any) -> bool:
     return isinstance(message, dict) and message.get("role") == "assistant"
 
 
+def _keeps_stored_rows(incoming: list[Any], stored: list[Any]) -> bool:
+    """The stub guard: an empty copy, or one that lost the stored assistant rows, never
+    replaces a transcript."""
+    if not incoming:
+        return True
+    return not any(_is_assistant(m) for m in incoming) and any(_is_assistant(m) for m in stored)
+
+
 def _from_queue(conv: Conversation, *, with_messages: bool) -> Conversation:
     """A reader's own copy of a queued save, with the transcript the writer will keep."""
     out = Conversation.from_dict({**conv.to_dict(), "messages": []})
@@ -279,6 +287,7 @@ def _load_all_conversations(
     from frontend.ui_web.session_files import session_stats_from_messages
 
     if _use_db():
+        flush_chat_saves()  # a list reads the store: queued saves first (cheap when none)
         # Counts are maintained columns; a metadata list never touches message bodies.
         docs = _repo().conv_list(_project_id(project_root), with_messages=include_messages)
         return [Conversation.from_dict(doc) for doc in docs]
@@ -1106,6 +1115,10 @@ def save_conversation(
                 _reload_if_stale(conv)
             snapshot = _shallow(conv)
             snapshot.messages = list(conv.messages or [])
+            if queued is not None and queued.messages and _keeps_stored_rows(snapshot.messages, queued.messages):
+                # The queued copy is what the store will hold: a stub replacing it in the
+                # queue (latest wins) must not drop its transcript.
+                snapshot.messages = list(queued.messages)
             if snapshot.messages and _host_owned(conv.id):
                 _refuse_host_messages(conv.id)
                 snapshot.messages = []  # a metadata save; loads read the host's rows
@@ -1728,7 +1741,9 @@ def append_message(conv: Conversation, message: dict[str, Any], project_root: st
             conv.messages = list(fresh.messages)
             conv.updated = fresh.updated
         conv.messages.append(message)
-        save_conversation(conv, project_root, touch_updated=True)
+        # A new row (a prompt, a steer, a reply): other readers (search, other processes)
+        # look at the store right away, so it is written before this returns.
+        save_conversation(conv, project_root, touch_updated=True, wait=True)
 
 
 KILLED_TURN_ERROR = "Closed while the agent was still going."

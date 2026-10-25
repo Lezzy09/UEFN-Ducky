@@ -152,9 +152,10 @@ def test_a_failed_save_fails_only_its_own_future() -> None:
 
 
 def _count_message_reads(monkeypatch) -> list[int]:
+    """Transcript decodes: every message read (conv_get with messages, messages_get) goes
+    through repo._messages once."""
     reads: list[int] = []
-    real_get, real_messages = repo.messages_get, repo._messages
-    monkeypatch.setattr(repo, "messages_get", lambda *a, **k: reads.append(1) or real_get(*a, **k))
+    real_messages = repo._messages
     monkeypatch.setattr(repo, "_messages", lambda *a, **k: reads.append(1) or real_messages(*a, **k))
     return reads
 
