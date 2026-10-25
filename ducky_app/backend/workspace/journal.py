@@ -1899,6 +1899,11 @@ class FileChangeJournal:
     ) -> dict[str, Any] | None:
         if record.op not in _TEXT_OPS or record.outcome != OUTCOME_OK or record.tool in _MERGING_TOOLS:
             return None
+        # A change the disk watcher saw (tool "external"): who made it is a guess, so it
+        # never accuses anyone (Oct 25 2026: a build's tzdata files put seven "conflict"
+        # rows in an unrelated chat).
+        if record.tool == "external":
+            return None
         prev = index.get(record.path)
         if not isinstance(prev, dict) or prev.get("deleted"):
             return None

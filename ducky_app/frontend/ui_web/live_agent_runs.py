@@ -13,8 +13,10 @@ from typing import Any
 
 _lock = threading.Lock()
 _ids: frozenset[str] = frozenset()
-# ponytail: one live writer. Two ducks editing at once attributes to the last
-# starter. Upgrade: map run_id → writer.
+# ponytail: one live writer, used only while it is the only run: with two or more
+# live, a disk edit can't be pinned to one and stays unattributed (it used to go
+# to the last starter, whose chat then got another chat's "conflicts", Oct 25 2026).
+# Upgrade: map run_id → writer and match by the files each run touches.
 _writer: dict[str, Any] | None = None
 _writer_run_id = ""
 _writer_until = 0.0
@@ -58,7 +60,7 @@ def recent_agent_writer(*, now: float | None = None, grace_s: float = _GRACE_S) 
     """Writer for a live run, or the one that just finished (native Edit lag)."""
     ts = time.time() if now is None else now
     with _lock:
-        if _writer is None:
+        if _writer is None or (_ids - {_writer_run_id}):
             return None
         if _writer_run_id in _ids:
             return dict(_writer)

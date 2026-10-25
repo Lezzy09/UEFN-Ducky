@@ -197,6 +197,8 @@ def test_only_conflicts_that_can_lose_work_are_flagged(env) -> None:
     assert write("b", "b2\n", read_first=True) is None
     # A blind overwrite right after another chat's write is concurrent...
     assert write("c", "c1\n")["kind"] == "concurrent_writer"
+    # ...unless the disk watcher saw it: its writer is a guess, never a conflict.
+    assert write("e", "e1\n", tool="external") is None
     # ...but not once their write is old, even though their team run is still open.
     clock["now"] += 601
     assert write("d", "d1\n") is None

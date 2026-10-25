@@ -156,6 +156,22 @@ def test_grace_after_stop_still_pins_late_disk_edit(env) -> None:
     assert runs[0]["ducky_name"] == "Level Designer"
 
 
+def test_two_live_agents_pin_a_disk_edit_to_neither() -> None:
+    """Oct 25 2026: with several agents live, a build's files went to the last one started."""
+    from frontend.ui_web import live_agent_runs
+
+    live_agent_runs.reset_for_tests()
+    try:
+        live_agent_runs.set_live_writer("r1", {"run_id": "r1", "ducky_name": "Builder"})
+        assert live_agent_runs.recent_agent_writer()["ducky_name"] == "Builder"
+        live_agent_runs.add_live_run_id("r2")
+        assert live_agent_runs.recent_agent_writer() is None
+        live_agent_runs.discard_live_run_id("r2")
+        assert live_agent_runs.recent_agent_writer()["ducky_name"] == "Builder"
+    finally:
+        live_agent_runs.reset_for_tests()
+
+
 def test_mtime_touch_without_edit_is_not_a_you_row(env) -> None:
     import os
 

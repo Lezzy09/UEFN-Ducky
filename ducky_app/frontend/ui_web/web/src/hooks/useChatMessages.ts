@@ -243,6 +243,8 @@ export function useChatMessages(chatId: string, visible: boolean, isAgentRunning
   const onEvent = useCallback(
     (event: AgentEvent) => {
       if (event.conv_id && event.conv_id !== chatId) return;
+      // A write warning is for the chat that wrote; one with no chat (a disk change) is no chat's.
+      if (event.type === "file_guard" && event.conv_id !== chatId) return;
       dispatch({ type: "agentEvent", event });
     },
     [chatId],
