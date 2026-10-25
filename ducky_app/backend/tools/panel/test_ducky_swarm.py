@@ -380,3 +380,80 @@ def test_both_statuses_carry_the_swarm_builder_card():
     suggested = {j["name"]: j["suggested_model"] for j in sw.normalize_jobs(_jobs(GAME8, ""))}
     assert all(s["model"] == suggested[s["job"]] for s in sw.walk_seats(asking["preview"]["tree"]))
     assert {s["group"] for s in confirming["seats"]} >= {"Art: assets", "Code: gameplay"}
+
+
+# ---- card edit keys (U3's editors) --------------------------------------------------------
+
+def _edited(*edits):
+    return sw.build_preview("Shop island", sw.normalize_jobs(_jobs(GAME8)), "auto", 8, 5, list(edits), 2)
+
+
+def _seat(p, name):
+    return next(s for s in sw.walk_seats(p["tree"]) if s["name"] == name)
+
+
+def _group(p, name):
+    return next(g for g in sw.walk_groups(p["tree"]) if g["group"] == name)
+
+
+def test_paths_edit_sets_the_seat_lane():
+    p = _edited({"seat": "Verse lead", "paths": ["Content/Verse/Combat/**", " "]})
+    assert _seat(p, "Verse lead")["paths"] == ["Content/Verse/Combat/**"]
+    assert p["lanes"]["Verse lead"] == ["Content/Verse/Combat/**"]
+    assert p["jobs"]["Verse lead"]["paths"] == ["Content/Verse/Combat/**"]
+
+
+def test_permission_keys_land_on_seat_and_group():
+    p = _edited({"seat": "Verse lead", "may_commit": True}, {"seat": "Verse lead", "may_release": False},
+                {"seat": "UI lead", "allow_terminal": True}, {"group": "Art: assets", "trust_drafts": True})
+    assert _seat(p, "Verse lead")["permissions"] == {"may_commit": True, "may_release": False}
+    assert _seat(p, "UI lead")["permissions"] == {"allow_terminal": True}
+    assert _group(p, "Art: assets")["permissions"] == {"trust_drafts": True}
+    flat = {s["name"]: s for s in sw.card("needs_confirm", p)["seats"]}
+    assert "may_commit" in flat["Verse lead"]["flags"] and "may_release" not in flat["Verse lead"]["flags"]
+
+
+def test_run_at_once_sets_the_concurrency_cap():
+    assert _edited({"run_at_once": 3})["run_at_once"] == 3
+    assert _edited({"run_at_once": 0})["run_at_once"] == 1
+    assert "run_at_once" not in _edited()
+
+
+def test_move_step_moves_it_under_the_target_seat():
+    p = _edited({"seat": "Verse lead", "move_step": "Verse: combat step 1", "to_seat": "UI lead"})
+    verse, ui = _seat(p, "Verse lead"), _seat(p, "UI lead")
+    assert [s["content"] for s in verse["sub_plan"]["steps"]] == ["Verse: combat step 2"]
+    assert ui["sub_plan"]["steps"][-1]["content"] == "Verse: combat step 1" and ui["sub_plan"]["total"] == 3
+    section = next(s for s in p["plan"]["sections"] if s["seat"] == "UI lead")
+    assert section["steps"][-1]["content"] == "Verse: combat step 1"
+    with pytest.raises(ValueError):
+        _edited({"seat": "Verse lead", "move_step": "nope", "to_seat": "UI lead"})
+
+
+def test_move_step_reaches_the_built_plan():
+    api = FakeApi()
+    out = _create(GAME8, agents="auto", max_agents=8, per_group=5, confirm=True, api=api,
+                  edits=[{"seat": "Verse lead", "move_step": "Verse: combat step 1", "to_seat": "UI lead"}])
+    assert out["status"] == "done"
+    adds = [c for c in api.calls if c[0] == "plan_add_node"]
+    ui_section = next(i for i, c in enumerate(adds) if c[3] == "subplan" and c[1].startswith("UI"))
+    following = []
+    for c in adds[ui_section + 1:]:
+        if c[3] == "subplan":
+            break
+        following.append(c[1])
+    assert "Verse: combat step 1" in following
+
+
+def test_start_after_makes_the_group_wait():
+    p = _edited({"group": "Code: gameplay", "start_after": "p0"})
+    g = _group(p, "Code: gameplay")
+    assert g["start_after"] == "p0" and g["after"] == ["p0"]
+    with pytest.raises(ValueError):
+        _edited({"group": "No such", "start_after": "p0"})
+
+
+def test_unknown_key_warns_and_changes_nothing():
+    plain, odd = _edited(), _edited({"wiggle": 1}, {"seat": "Verse lead", "colour": "red"})
+    assert any("wiggle" in w for w in odd["warnings"]) and any("colour" in w for w in odd["warnings"])
+    assert {k: v for k, v in odd.items() if k != "warnings"} == plain

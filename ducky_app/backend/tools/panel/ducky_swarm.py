@@ -17,8 +17,9 @@ from typing import Any
 
 from backend.server import mcp
 from backend.tools.panel.swarm_build import PanelSwarmApi, build_swarm  # noqa: F401
+from backend.tools.panel import swarm_preview as _sp
 from backend.tools.panel.swarm_preview import (  # noqa: F401
-    DETAILS, SUGGESTED_DETAIL, SUGGESTED_MAX_AGENTS, SUGGESTED_PER_GROUP, _parse_agents, _steps, build_preview,
+    DETAILS, SUGGESTED_DETAIL, SUGGESTED_MAX_AGENTS, SUGGESTED_PER_GROUP, _parse_agents, _steps,
     plan_tree, questions_for, walk_groups, walk_seats,
 )
 from backend.util.json_util import tool_json
@@ -67,6 +68,95 @@ def normalize_jobs(jobs: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return out
 
 
+# ---- card edits swarm_preview doesn't apply -----------------------------------------------
+
+_PERMISSIONS = ("may_commit", "may_release", "allow_terminal", "trust_drafts")
+# Every key a card or agent edit may carry: swarm_preview's own, then the ones applied here.
+_EDIT_KEYS = frozenset({
+    "drop", "rename", "to", "seat", "model", "add_step", "drop_step", "rename_step", "mute", "unmute",
+    "group", "muted", "interfaces",
+    "paths", *_PERMISSIONS, "run_at_once", "move_step", "to_seat", "start_after",
+})
+
+
+def apply_card_edits(preview: dict[str, Any], edits: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """Apply the card's edits on top of a built preview: ``{seat, paths}`` sets the lane, permission
+    keys set ``permissions`` on a seat or group, ``{run_at_once}`` the swarm's concurrency cap,
+    ``{seat, move_step, to_seat}`` moves a step, ``{group, start_after}`` makes the group wait.
+    Unknown keys are listed in ``warnings``; a missing seat, group or step raises ValueError."""
+    tree = preview["tree"]
+    seats = {s["name"]: s for s in walk_seats(tree)}
+    groups = {g["group"]: g for g in walk_groups(tree)}
+    warnings: list[str] = []
+
+    def seat_of(name: Any) -> dict[str, Any]:
+        hit = seats.get(str(name or "").strip())
+        if hit is None:
+            raise ValueError(f"No seat called {name!r}; seats: {', '.join(seats)}")
+        return hit
+
+    for e in edits or []:
+        if not isinstance(e, dict):
+            continue
+        unknown = sorted(set(e) - _EDIT_KEYS)
+        if unknown:
+            warnings.append(f"Ignored edit keys {', '.join(unknown)} in {e}")
+        if "run_at_once" in e:
+            try:
+                preview["run_at_once"] = max(1, int(e["run_at_once"]))
+            except (TypeError, ValueError):
+                warnings.append(f"run_at_once needs a number, got {e['run_at_once']!r}")
+        if "move_step" in e:
+            src, dst = seat_of(e.get("seat")), seat_of(e.get("to_seat"))
+            steps = src["sub_plan"]["steps"]
+            hit = next((s for s in steps if s["content"] == str(e["move_step"]).strip()), None)
+            if hit is None:
+                raise ValueError(f"{src['name']} has no step {e['move_step']!r}")
+            if len(steps) == 1:
+                raise ValueError(f"{src['name']}'s sub plan needs at least one step: drop the job instead.")
+            steps.remove(hit)
+            dst["sub_plan"]["steps"].append(hit)
+            for s in (src, dst):
+                s["sub_plan"]["total"] = len(s["sub_plan"]["steps"])
+        elif "seat" in e and "paths" in e:
+            seat = seat_of(e["seat"])
+            seat["paths"] = [str(p).strip() for p in e["paths"] or [] if str(p).strip()]
+        perms = {k: bool(e[k]) for k in _PERMISSIONS if k in e}
+        if perms:
+            target = seat_of(e["seat"]) if "seat" in e else groups.get(str(e.get("group") or "").strip())
+            if target is None:
+                raise ValueError(f"No group called {e.get('group')!r}; groups: {', '.join(groups) or 'none'}")
+            target.setdefault("permissions", {}).update(perms)
+        if "start_after" in e:
+            group = groups.get(str(e.get("group") or "").strip())
+            if group is None:
+                raise ValueError(f"No group called {e.get('group')!r}; groups: {', '.join(groups) or 'none'}")
+            group["start_after"] = str(e["start_after"] or "").strip()
+            group["after"] = [group["start_after"]] if group["start_after"] else []
+
+    # Keep the derived fields in step with the edited tree.
+    preview["lanes"] = {s["name"]: s["paths"] for s in seats.values()}
+    by_seat = {sec["seat"]: sec for sec in preview["plan"]["sections"]}
+    for name, s in seats.items():
+        if name in by_seat:
+            by_seat[name]["steps"] = s["sub_plan"]["steps"]
+        if name in preview.get("jobs", {}):
+            preview["jobs"][name] = {**preview["jobs"][name], "paths": s["paths"]}
+    if "estimate" in preview:
+        preview["estimate"] = _sp.estimate(_sp.preview_seats(tree))
+    if warnings:
+        preview["warnings"] = warnings
+    return preview
+
+
+def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents: int, per_group: int,
+                  edits: list[dict[str, Any]] | None = None, detail: int = SUGGESTED_DETAIL,
+                  lead_model: str = "") -> dict[str, Any]:
+    """swarm_preview.build_preview plus the card edits it doesn't apply (``apply_card_edits``)."""
+    return apply_card_edits(_sp.build_preview(goal, jobs, agents, max_agents, per_group, edits, detail, lead_model),
+                            edits)
+
+
 # ---- the card payload ---------------------------------------------------------------------
 
 def _flat_seats(nodes: list[dict[str, Any]], group: str = "") -> list[dict[str, Any]]:
@@ -76,9 +166,10 @@ def _flat_seats(nodes: list[dict[str, Any]], group: str = "") -> list[dict[str, 
         if "group" in node:
             out += _flat_seats(node["seats"], node["group"]) + _flat_seats(node["groups"], node["group"])
         else:
+            granted = [k for k, v in (node.get("permissions") or {}).items() if v]
             out.append({"name": node["name"], "group": group, "profile": node["profile"], "model": node["model"],
                         "lane": node["paths"], "steps": node["sub_plan"]["total"],
-                        "flags": [] if node["paths"] else ["no_lane"]})
+                        "flags": ([] if node["paths"] else ["no_lane"]) + granted})
     return out
 
 
