@@ -116,6 +116,23 @@ def test_running_handoff_cannot_be_reset_or_replaced(member, monkeypatch):
     assert member.saved == [] and member.cancelled == []
 
 
+@pytest.mark.parametrize("running", [False, True])
+def test_stop_marks_only_a_running_chat_stopped(monkeypatch, running):
+    # Oct 25: stopping an idle member marked it stopped, which blocks every automatic wake
+    # (plan assignments included) until someone types in it, so it never took its next task.
+    from backend.agent import a2a_client
+
+    marked = []
+    monkeypatch.setattr(panel, "_project_root", lambda: "project")
+    monkeypatch.setattr(panel, "load_conversation", lambda cid, project_root=None: SimpleNamespace(id=cid))
+    monkeypatch.setattr(agent_modes, "is_agent_running", lambda _: running)
+    monkeypatch.setattr(agent_modes, "cancel_agent", lambda cid: None)
+    monkeypatch.setattr(a2a_client, "on_agent_cancelled_by_user", marked.append)
+    out = json.loads(panel.ducky_agent_stop("member"))
+    assert out["stopped"] == (["member"] if running else [])
+    assert marked == (["member"] if running else [])
+
+
 def test_recycle_waits_for_the_handoff_turn_to_go_idle(member, monkeypatch):
     # Oct 25: the handoff reply came back while its run was still marked running, so the
     # session reset refused ("agent is working") and every recycle failed after its handoff.

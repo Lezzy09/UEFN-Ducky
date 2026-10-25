@@ -1688,9 +1688,13 @@ def ducky_agent_stop(conv_id: str, cascade: bool = False, pretty: bool = False) 
     stopped: list[str] = []
     targets = [target] + (linked_children_of(target) if cascade else [])
     for cid in targets:
-        if is_agent_running(cid):
-            cancel_agent(cid)
-            stopped.append(cid)
+        if not is_agent_running(cid):
+            # Nothing to stop. Marking an idle chat stopped blocked every automatic wake,
+            # plan assignments included, until someone typed in it (Oct 25: a member a lead
+            # "stopped" while idle never started its next sub plan).
+            continue
+        cancel_agent(cid)
+        stopped.append(cid)
         on_agent_cancelled_by_user(cid)
     return tool_json({"stopped": stopped, "cascade": bool(cascade)}, pretty=pretty)
 
