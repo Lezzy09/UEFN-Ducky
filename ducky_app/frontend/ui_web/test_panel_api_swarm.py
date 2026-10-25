@@ -27,6 +27,34 @@ def test_same_args_same_tree_and_nothing_built(monkeypatch):
     assert api.swarm_preview("", _jobs(2))["ok"] is False
 
 
+def _sub(name, files, assignee=""):
+    return {"id": name, "content": name, "assignee": assignee, "body_markdown": f"**Files:** {files}",
+            "children": [{"id": f"{name}-1", "content": f"{name} step", "body_markdown": "Done when: tests pass."}]}
+
+
+INVENTORY = {"title": "Inventory UI", "nodes": [{"id": "s", "content": "Inventory", "children": [
+    _sub("API", "`backend/inv/**`"), _sub("Widget", "`web/src/inv/**`"), _sub("Tests", "`tests/inv/**`")]}]}
+
+
+def test_swarm_suggest_drafts_one_seat_per_unassigned_sub_plan(monkeypatch):
+    import backend.agent.coding_agents.plans as plans
+
+    monkeypatch.setattr(sw, "_routing_context", lambda: (None, None))
+    monkeypatch.setattr(plans, "load_plan_view", lambda cid, project_root=None: INVENTORY)
+    out = PanelApiSwarmMixin().swarm_suggest("lead", project_root="x")["suggestion"]
+    assert out["ui"] == "swarm_builder" and out["goal"] == "Inventory UI"
+    assert sorted(map(tuple, out["preview"]["lanes"].values())) == [
+        ("backend/inv/**",), ("tests/inv/**",), ("web/src/inv/**",)]
+    assert len(out["seats"]) == 3 and all(s["steps"] == 1 for s in out["seats"])
+
+
+def test_no_suggestion_for_one_sub_plan_assigned_or_overlapping(monkeypatch):
+    monkeypatch.setattr(sw, "_routing_context", lambda: (None, None))
+    assert sw.suggest_from_plan({"title": "t", "nodes": [_sub("API", "a/**")]}) is None
+    assert sw.suggest_from_plan({"nodes": [_sub("A", "a/**"), _sub("B", "b/**", assignee="c1")]}) is None
+    assert sw.suggest_from_plan({"nodes": [_sub("A", "a/**"), _sub("B", "a/**")]}) is None
+
+
 def test_twenty_jobs_under_50_ms(monkeypatch):
     monkeypatch.setattr(sw, "_routing_context", lambda: (None, None))
     api = PanelApiSwarmMixin()

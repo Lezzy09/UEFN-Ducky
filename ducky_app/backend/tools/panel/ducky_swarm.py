@@ -154,7 +154,8 @@ def ducky_swarm_create(
 
 # ---- suggest a swarm for a big plan -------------------------------------------------------
 
-_FILES = re.compile(r"^\s*(?:\*\*)?files(?:\*\*)?\s*:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+# "Files: a", "**Files**: a" and "**Files:** a".
+_FILES = re.compile(r"^\s*(?:\*\*)?files(?:\*\*)?\s*:(?:\*\*)?\s*(.+)$", re.IGNORECASE | re.MULTILINE)
 
 
 def _leaves(node: dict[str, Any]) -> list[dict[str, Any]]:
@@ -198,3 +199,40 @@ def suggest_swarm(plan: dict[str, Any] | None) -> dict[str, Any] | None:
         "ask": f"Run this as a swarm of {len(jobs)}?",
         "call": f"ducky_swarm_create(goal={json.dumps(goal)}, jobs={json.dumps(call_jobs)})",
     }
+
+
+def _sub_plans(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sections whose children are all steps, at any depth (one member's sub plan each)."""
+    out = []
+    for node in nodes:
+        kids = [c for c in node.get("children") or [] if isinstance(c, dict)]
+        if kids and all(not c.get("children") for c in kids):
+            out.append(node)
+        elif kids:
+            out += _sub_plans(kids)
+    return out
+
+
+def suggest_from_plan(plan: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A ``swarm_builder`` card drafted from *plan*: one seat per unassigned sub plan, its Files as
+    the lane. None unless there are 2+ such sub plans and no file is in two of them."""
+    sections = [s for s in _sub_plans([n for n in (plan or {}).get("nodes") or [] if isinstance(n, dict)])
+                if not str(s.get("assignee") or "").strip()]
+    if len(sections) < 2:
+        return None
+    seen: set[str] = set()
+    for sec in sections:
+        if _files(sec) & seen:
+            return None
+        seen |= _files(sec)
+    jobs = normalize_jobs([{
+        "name": str(sec.get("content") or "").strip(),
+        "purpose": str(sec.get("body_markdown") or "").strip()[:200],
+        "steps": [{"content": str(x.get("content") or ""), "body_markdown": str(x.get("body_markdown") or "")}
+                  for x in sec["children"]],
+        "paths": sorted(_files(sec)),
+    } for sec in sections])
+    goal = str((plan or {}).get("title") or "").strip() or "Plan"
+    # ponytail: one seat per sub plan (detail 2, no cap); the card's sliders reshape it via swarm_preview.
+    return card("needs_confirm", build_preview(goal, jobs, "auto", len(jobs), SUGGESTED_PER_GROUP, None,
+                                               SUGGESTED_DETAIL))
