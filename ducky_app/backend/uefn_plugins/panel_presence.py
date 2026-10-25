@@ -33,6 +33,11 @@ def _parse_tab(tab_id: str) -> tuple[str, str]:
     return parts[1].strip().lower(), parts[2].split("~", 1)[0].strip()
 
 
+def tab_plugin(tab_id: str) -> str:
+    """The plugin a panel tab belongs to ('' for any other tab)."""
+    return _parse_tab(tab_id)[0]
+
+
 def note_panel(window_id: str, tab_id: str, *, visible: bool, open_: bool = True) -> None:
     """The window says one plugin panel tab was shown, hidden or closed."""
     plugin_id, panel_id = _parse_tab(tab_id)

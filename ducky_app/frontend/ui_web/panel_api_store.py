@@ -967,14 +967,22 @@ class PanelApiStoreMixin:
     # -- live editing on a team copy (backend.uefn_plugins.live)
 
     def plugin_live_join(self, plugin_id: str, room: str = "") -> dict[str, Any]:
+        """Start live (no room: a teammate's group, else this PC's own) or Join a group; the
+        bar goes back into it after a restart, until Leave or the tab closes."""
         from backend.uefn_plugins import live
 
-        return live.join(str(plugin_id or ""), str(room or ""))
+        pid = str(plugin_id or "")
+        out = live.join(pid, str(room or ""))
+        if out.get("ok"):
+            live.remember(pid, str(room or "") or live.START)
+        return out
 
     def plugin_live_leave(self, plugin_id: str) -> dict[str, Any]:
         from backend.uefn_plugins import live
 
-        return live.leave(str(plugin_id or ""))
+        pid = str(plugin_id or "")
+        live.remember(pid, "")
+        return live.leave(pid)
 
     def plugin_live_send(self, plugin_id: str, topic: str, data: object = None, to: str = "",
                          fast: bool = False) -> dict[str, Any]:

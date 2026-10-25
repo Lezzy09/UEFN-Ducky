@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+import threading
 import time
 from typing import Any
 
@@ -1385,6 +1386,52 @@ def test_a_tool_call_writing_three_docs_goes_out_as_one_change(team_pc, monkeypa
     assert ("cards_tune_test", 3, "agent", "Builder") in made and ("", 1, "user", "") in made
     acts = {(a["unit"], a["actor"], a["ducky"]) for a in space_vcs.activity(pc.account, "spaceT")}
     assert ("doc:card.t0", "agent", "Builder") in acts and ("doc:card.solo", "user", "") in acts
+
+
+def test_a_thread_an_agents_call_starts_writes_as_that_ducky_after_the_call(team_pc,
+                                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import host
+    from backend.workspace import identity
+
+    pc, ben, _ = team_pc
+    monkeypatch.setattr(host, "uefn_agent_tools_allowed", lambda pid: True)
+    api = host._PluginApi("cards")
+    go = threading.Event()
+    jobs: list[threading.Thread] = []
+    pool = ThreadPoolExecutor(max_workers=1)
+
+    def cards_render_test() -> dict:
+        def job() -> None:
+            go.wait(10)  # still writing after the call returned, like a render job
+            api.data.put("card.job", {"done": True})
+
+        jobs.append(threading.Thread(target=job, daemon=True))
+        jobs[0].start()
+        pool.submit(lambda: None).result()  # the pool's worker starts inside the call
+        return {"ok": True}
+
+    tool = api.tool(name="cards_render_test")(cards_render_test)
+    token = identity.bind(identity.RunContext(conv_id="c1", ducky_name="Builder"))
+    try:
+        assert tool()["ok"]
+    finally:
+        identity.reset(token)
+    try:
+        go.set()
+        jobs[0].join(10)
+        pool.submit(lambda: api.data.put("card.person", {"x": 1})).result()  # someone else's work on that worker
+    finally:
+        pool.shutdown()
+        host._drop_plugin_runtime("cards", host.backend_module_name("cards"))
+    acts = {(a["unit"], a["actor"], a["ducky"]) for a in space_vcs.activity(pc.account, "spaceT")}
+    assert ("doc:card.job", "agent", "Builder") in acts
+    assert ("doc:card.person", "user", "") in acts  # a pool's worker carries nobody
+    assert pc.run()["pushed"] == 2
+    made = {(e.actor, e.ducky) for e in ben.client.history("spaceT", "cards").entries}
+    assert made == {("agent", "Builder"), ("user", "")}  # History: "AI (Ana's ducky Builder)"
 
 
 def test_a_panel_rpc_is_one_change_and_panel_saves_go_out_together(team_pc, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -34,14 +34,15 @@ export function PluginLiveMenu({ pluginId, status, busy, onJoin, onLeave, follow
   const live = status.live;
   const groups = live?.groups ?? [];
   const mine = groups.find((g) => g.mine);
-  const hosting = Boolean(live?.on && mine?.hostIsMe);
   const plugin = status.pluginLabel || pluginId;
   const idle = othersHere(presence(status.people, pluginId)).filter((row) => !row.live);
-  // A peer the provider can't reach, or a group member it has no link to at all.
+  // A peer the provider can't reach, or a group member it has no link to at all. Someone this
+  // PC is still linking to (just joined, a restart) is connecting, not unreachable.
+  const connecting = live?.on ? live.connecting ?? [] : [];
   const unreached = live?.on
     ? [...new Set([...(live.peers ?? []).filter((p) => p.path === "none").map(livePeerName), ...(live.unlinked ?? [])])]
+      .filter((name) => !connecting.includes(name))
     : [];
-  const connecting = live?.on ? (live.connecting ?? []).filter((name) => !unreached.includes(name)) : [];
   const size = (g: PluginLiveGroup) => `${g.members.length} ${g.members.length === 1 ? "person" : "people"}`;
 
   return (
@@ -59,7 +60,7 @@ export function PluginLiveMenu({ pluginId, status, busy, onJoin, onLeave, follow
           {g.mine ? (
             <button type="button" role="menuitem" className="plugin-scope-btn plugin-scope-btn--row" disabled={busy}
               onClick={onLeave}>
-              {g.hostIsMe ? "End" : "Leave"}
+              Leave
             </button>
           ) : (
             <button type="button" role="menuitem" className="plugin-scope-btn plugin-scope-btn--row plugin-scope-btn--primary"
@@ -71,16 +72,10 @@ export function PluginLiveMenu({ pluginId, status, busy, onJoin, onLeave, follow
       )) : <div className="plugin-scope-menu__empty">Nobody's live in {plugin} yet.</div>}
       {mine && !mine.hostIsMe && live?.on ? (
         <label className="plugin-scope-menu__row plugin-scope-menu__check-row">
-          <input type="checkbox" checked={follow}
-            disabled={!mine.members.some((m) => `h:${m.device}` === mine.room)}
-            onChange={(event) => onFollow(event.target.checked)} />
+          <input type="checkbox" checked={follow} onChange={(event) => onFollow(event.target.checked)} />
           <span className="plugin-scope-menu__text">
             <span className="plugin-scope-menu__name">Follow {groupName(mine)}'s screen</span>
-            <span className="plugin-scope-menu__sub">
-              {mine.members.some((m) => `h:${m.device}` === mine.room)
-                ? "Your view scrolls and switches tabs with theirs."
-                : "The host left this group."}
-            </span>
+            <span className="plugin-scope-menu__sub">Your view scrolls and switches tabs with theirs.</span>
           </span>
         </label>
       ) : null}
@@ -108,7 +103,9 @@ export function PluginLiveMenu({ pluginId, status, busy, onJoin, onLeave, follow
           ))}
         </>
       ) : null}
-      {!hosting ? (
+      {/* Start live goes into a teammate's group when one is live (the biggest), else hosts
+          this PC's own: two people who both press it end up together. */}
+      {!live?.on ? (
         <>
           <div className="plugin-scope-menu__sep" />
           <div className="plugin-scope-menu__foot">

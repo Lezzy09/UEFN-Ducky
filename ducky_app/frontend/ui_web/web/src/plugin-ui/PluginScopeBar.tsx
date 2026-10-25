@@ -66,25 +66,6 @@ type Props = {
   onFollow?: (device: string) => void;
 };
 
-/** The live group to go back into, per plugin and per viewer: "host" (this PC's own) or a
- * teammate's room; the bar goes back in by itself next time while that group is still live. */
-const liveKey = (pluginId: string) => `ducky.pluginLive.${pluginId}`;
-function readLiveChoice(pluginId: string): string {
-  try {
-    return localStorage.getItem(liveKey(pluginId)) || "";
-  } catch {
-    return "";
-  }
-}
-function writeLiveChoice(pluginId: string, room: string): void {
-  try {
-    if (room) localStorage.setItem(liveKey(pluginId), room);
-    else localStorage.removeItem(liveKey(pluginId));
-  } catch {
-    /* storage off: choose again next time */
-  }
-}
-
 /** Follow the host's screen in a group this PC joined, per plugin and per viewer (on until
  * turned off). */
 const followKey = (pluginId: string) => `ducky.pluginFollow.${pluginId}`;
@@ -258,6 +239,9 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
       } else if (event.type === "duckyos_account_changed") {
         refreshSoon(undefined);
       } else if (event.type === "live_peers" && event.plugin === pluginId) {
+        if (event.ended === "alone") {
+          setNotice("Live ended: everyone else left the group. Your changes keep syncing with the team as before.");
+        }
         refreshSoon(undefined);
       }
     });
@@ -287,11 +271,11 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
   useEffect(() => {
     syncNotify.current?.({ shared: shownShared, incoming: shownIncoming });
   }, [shownShared, shownIncoming]);
-  // Follow: the page follows the host of the group this PC joined, while the host is in it.
+  // Follow: the page follows the host of the group this PC joined (whoever leads it now).
   const followNotify = useRef(onFollow);
   followNotify.current = onFollow;
   const joined = liveOn ? status?.live?.groups?.find((g) => g.mine && !g.hostIsMe) : undefined;
-  const hostDevice = joined?.room.startsWith("h:") ? joined.room.slice(2) : "";
+  const hostDevice = joined?.hostDevice ?? "";
   const followDevice = follow && hostDevice && joined?.members.some((m) => m.device === hostDevice) ? hostDevice : "";
   useEffect(() => {
     followNotify.current?.(followDevice);
@@ -303,18 +287,17 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
     const again = window.setTimeout(() => refreshSoon(undefined), LIVE_LINK_RECHECK_MS);
     return () => window.clearTimeout(again);
   }, [connecting, refreshSoon]);
-  // Once per team copy: after a switch (another team, or a project on another copy) the
-  // remembered group is joined again, while it is still live (one's own always is).
+  // Once per team copy (a restart, a switch to another team or project copy): the group the
+  // person went live in is gone back into while it is still live (the app remembers it until
+  // Leave, the tab closing, or everyone else leaving).
   const autoLive = useRef("");
   const liveCopy = scopeKey(status);
-  const rooms = (status?.live?.groups ?? []).map((g) => g.room).join(",");
+  const rejoin = status?.live?.rejoin ?? "";
   useEffect(() => {
-    const want = readLiveChoice(pluginId);
-    if (!liveSupported || liveOn || !want || autoLive.current === liveCopy) return;
-    if (want !== "host" && !rooms.split(",").includes(want)) return;
+    if (!liveSupported || liveOn || !rejoin || autoLive.current === liveCopy) return;
     autoLive.current = liveCopy;
-    void getApi()?.plugin_live_join?.(pluginId, want === "host" ? "" : want)?.then(() => refreshSoon(undefined)).catch(() => {});
-  }, [liveSupported, liveOn, liveCopy, rooms, pluginId, refreshSoon]);
+    void getApi()?.plugin_live_join?.(pluginId, rejoin === "start" ? "" : rejoin)?.then(() => refreshSoon(undefined)).catch(() => {});
+  }, [liveSupported, liveOn, liveCopy, rejoin, pluginId, refreshSoon]);
 
   // Shown again: what came while hidden is read once, and the panel hears it once.
   useEffect(() => {
@@ -548,17 +531,15 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
     act(async () => (api?.plugin_scope_pull ? api.plugin_scope_pull(pluginId) : api?.plugin_scope_sync?.(pluginId, true)), true);
   const push = () => act(async () => api?.plugin_scope_push?.(pluginId));
 
-  /** Join a teammate's live group (its room), or start this PC's own; remembered for this
-   * plugin on this PC. */
+  /** Join a teammate's live group (its room), or Start live (a teammate's group, else this
+   * PC's own); the app remembers it for this plugin on this PC. */
   const joinLive = async (room?: string) => {
     setOpen("");
-    writeLiveChoice(pluginId, room || "host");
     autoLive.current = scopeKey(status);
     await act(async () => api?.plugin_live_join?.(pluginId, room || ""));
   };
   const leaveLive = async () => {
     setOpen("");
-    writeLiveChoice(pluginId, "");
     await act(async () => api?.plugin_live_leave?.(pluginId));
   };
 

@@ -215,18 +215,142 @@ def test_groups_are_named_by_their_host_with_who_is_in_them(team: dict[str, Any]
     got = live.status(PLUGIN)["groups"]
     assert [(g["room"], g["host"], [m["name"] for m in g["members"]], g["mine"]) for g in got] == [
         ("h:d_iliya", "iliya", ["iliya", "Cy"], False),  # the biggest first
-        ("h:d_gone", "", ["Ed"], False),  # its host left: no host
+        ("h:d_gone", "Ed", ["Ed"], False),  # its host left: whoever has been in it longest leads it
         ("h:d_mo", "Mo", ["Mo"], False),
     ]
+    assert got[1]["hostDevice"] == "d_ed"
     # Joining iliya's group: this PC counts at once, before its next beat, and comes first.
     assert live.join(PLUGIN, "h:d_iliya")["ok"]
     mine = live.status(PLUGIN)["groups"][0]
     assert mine["mine"] and mine["host"] == "iliya" and not mine["hostIsMe"]
     assert [m["name"] for m in mine["members"]] == ["iliya", "Cy", "You"] and mine["members"][2]["me"]
-    # Hosting: this PC's own group.
+    # Hosting: this PC's own group, once nobody else is live.
+    live.leave(PLUGIN)
+    _roster(account)
     assert live.join(PLUGIN)["ok"]
     mine = live.status(PLUGIN)["groups"][0]
     assert mine["room"] == live.host_room() and mine["hostIsMe"] and mine["host"] == "You"
+
+
+def test_start_live_goes_into_a_teammates_group_instead_of_a_second_one(team: dict[str, Any]) -> None:
+    account = team["account"]
+    _roster(account, _on("d_mo", "Mo", "h:d_mo", 5), _on("d_iliya", "iliya", "h:d_iliya", 10),
+            _on("d_cy", "Cy", "h:d_iliya", 20))
+    got = live.join(PLUGIN)  # Start live
+    assert got["ok"] and got["room"] == "h:d_iliya"  # the biggest group
+    assert team["impl"].joined == [(SPACE, PLUGIN, "h:d_iliya")]
+    assert live.keeps_panels(PLUGIN) is False  # joined like Join: the first pull opens the group's data
+    assert live.join(PLUGIN)["room"] == "h:d_iliya"  # pressed again: still there, never a group of one
+
+
+def _wait_room(room: str) -> None:
+    deadline = time.monotonic() + 5
+    while live.status(PLUGIN)["room"] != room and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+
+def test_two_lone_hosts_merge_and_only_the_higher_id_moves(team: dict[str, Any],
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    account = team["account"]
+    monkeypatch.setattr(live, "_device", lambda: "d_m")
+    _roster(account)
+    assert live.join(PLUGIN)["room"] == "h:d_m"  # nobody else live yet: this PC hosts
+    # Someone with a higher id started at the same moment: they come here, this PC stays.
+    _roster(account, _on("d_z", "Zed", "h:d_z", 10))
+    assert live.merge_lone_groups(account, SPACE) == []
+    # A lower id: this PC moves into theirs, its panels kept as they are.
+    lone = _on("d_a", "Ana", "h:d_a", 10)
+    _roster(account, lone)
+    vcs_engine._roster_came(account, SPACE, {}, {"people": [lone]})
+    _wait_room("h:d_a")
+    assert live.status(PLUGIN)["room"] == "h:d_a"
+    assert live.keeps_panels(PLUGIN) is True
+    assert live.merge_lone_groups(account, SPACE) == []  # not hosting any more
+
+
+def test_a_group_with_someone_in_it_never_moves_and_a_lone_host_goes_to_the_biggest(
+        team: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    account = team["account"]
+    monkeypatch.setattr(live, "_device", lambda: "d_m")
+    _roster(account)
+    live.join(PLUGIN)
+    _roster(account, _on("d_b", "Bo", "h:d_m", 20), _on("d_a", "Ana", "h:d_a", 10))
+    assert live.merge_lone_groups(account, SPACE) == []  # Bo is in this PC's group
+    _roster(account, _on("d_z", "Zed", "h:d_z", 10), _on("d_y", "Yu", "h:d_z", 12), _on("d_a", "Ana", "h:d_a", 10))
+    assert live.merge_lone_groups(account, SPACE) == [PLUGIN]
+    _wait_room("h:d_z")
+    assert live.status(PLUGIN)["room"] == "h:d_z"  # two people beat a lower id
+
+
+def test_the_host_leaving_passes_the_group_to_whoever_was_in_it_longest(team: dict[str, Any]) -> None:
+    account = team["account"]
+    _roster(account, _on("d_iliya", "iliya", "h:d_iliya", 10), _on("d_cy", "Cy", "h:d_iliya", 20))
+    live.join(PLUGIN, "h:d_iliya")
+    _roster(account, _on("d_cy", "Cy", "h:d_iliya", 20))  # iliya left
+    mine = live.status(PLUGIN)["groups"][0]
+    assert (mine["host"], mine["hostDevice"], mine["hostIsMe"]) == ("Cy", "d_cy", False)
+    _roster(account)  # Cy left too: this PC leads what is left of it
+    mine = live.status(PLUGIN)["groups"][0]
+    assert mine["hostIsMe"] and mine["room"] == "h:d_iliya"
+
+
+def test_live_ends_when_everyone_else_left_and_the_panel_keeps_syncing(team: dict[str, Any]) -> None:
+    account = team["account"]
+    _roster(account, _on("d_iliya", "iliya", "h:d_iliya", 10))
+    live.join(PLUGIN, "h:d_iliya")
+    live.remember(PLUGIN, "h:d_iliya")
+    assert live.end_lone_groups(account, SPACE) == []  # iliya is here
+    # iliya is still on the roster but not live any more: they left, so Live ends at once.
+    _roster(account, {"device": "d_iliya", "user_name": "iliya", "plugins": {PLUGIN: {"viewing": True}}})
+    team["pushed"].clear()
+    assert live.end_lone_groups(account, SPACE) == [PLUGIN]
+    assert live.is_live(PLUGIN) is False and live.status(PLUGIN)["rejoin"] == ""
+    assert team["pushed"][-1] == {"type": "live_peers", "plugin": PLUGIN, "on": False, "peers": [], "ended": "alone"}
+    assert repo.link_get(account, PLUGIN) == SPACE  # still on the team copy: sync goes on
+
+
+def test_a_groupmate_gone_from_the_roster_gets_a_grace_and_a_fresh_group_stays(team: dict[str, Any]) -> None:
+    account = team["account"]
+    _roster(account)
+    live.join(PLUGIN)  # nobody else live: this PC hosts, alone
+    assert live.end_lone_groups(account, SPACE) == []  # a group nobody joined yet stays
+    now = time.time()
+    _roster(account, _on("d_cy", "Cy", live.host_room(), now))
+    assert live.end_lone_groups(account, SPACE, now=now) == []
+    _roster(account)  # Cy vanished (a crash or a restart): maybe back in a moment
+    assert live.end_lone_groups(account, SPACE, now=now + 30) == []
+    assert live.end_lone_groups(account, SPACE, now=now + live.LONE_GRACE_S + 1) == [PLUGIN]
+
+
+def test_closing_the_plugins_tab_ends_live_and_it_isnt_gone_back_into(team: dict[str, Any],
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.uefn_plugins import panel_presence
+
+    state = {"open": True}
+    monkeypatch.setattr(panel_presence, "panel_state", lambda plugin: {"open": state["open"]})
+    live.join(PLUGIN)
+    live.remember(PLUGIN, live.START)
+    assert live.status(PLUGIN)["rejoin"] == live.START  # a restart goes back in
+    live.tab_closed(PLUGIN, wait=0.05)  # moved between panes: open again at once
+    time.sleep(0.3)
+    assert live.is_live(PLUGIN)
+    state["open"] = False
+    live.tab_closed(PLUGIN, wait=0.05)
+    deadline = time.monotonic() + 5
+    while live.is_live(PLUGIN) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert live.is_live(PLUGIN) is False and live.status(PLUGIN)["rejoin"] == ""
+
+
+def test_a_remembered_teammates_group_is_gone_back_into_only_while_it_is_live(team: dict[str, Any]) -> None:
+    account = team["account"]
+    live.remember(PLUGIN, "h:d_iliya")
+    _roster(account)
+    assert live.status(PLUGIN)["rejoin"] == ""  # their group ended
+    _roster(account, _on("d_iliya", "iliya", "h:d_iliya", 10))
+    assert live.status(PLUGIN)["rejoin"] == "h:d_iliya"
+    live.remember(PLUGIN, "")
+    assert live.status(PLUGIN)["rejoin"] == ""
 
 
 def test_a_space_is_live_while_one_of_its_plugins_is(team: dict[str, Any]) -> None:

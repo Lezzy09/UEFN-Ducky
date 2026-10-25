@@ -469,10 +469,17 @@ def sandbox_end(plugin: str) -> None:
         purge_space(scope["account"], scope["id"])
 
 
+def _agent_call() -> bool:
+    """An agent's plugin call is running here (its write group is open)."""
+    return any(not g.closed and g.actor == "agent" for g in _GROUPS.get().values())
+
+
 def _inherit_into_threads() -> None:
-    """Threads and pool tasks started inside a test run in the test's context, so what the
-    plugin does on them lands in the test copy too. A pool's worker thread itself is never
-    bound to a test: only the task is."""
+    """Threads and pool tasks started inside a test, or inside an agent's plugin call, run
+    in that context: what the plugin does on them lands in the test copy too, and writes as
+    that agent with its ducky's name (a render job that keeps writing after the call
+    returned; before, it said only "AI", or the person in the app). A pool's worker thread
+    itself is never bound to either: only the task is."""
     global _inherit_installed
     with _SANDBOX_LOCK:
         if _inherit_installed:
@@ -483,21 +490,26 @@ def _inherit_into_threads() -> None:
     thread_init = threading.Thread.__init__
     pool_submit = ThreadPoolExecutor.submit
 
+    def carried() -> bool:
+        return bool(_SANDBOX_CTX.get()) or _agent_call()
+
     def init(self: threading.Thread, *args: Any, **kwargs: Any) -> None:
         thread_init(self, *args, **kwargs)
-        if _SANDBOX_CTX.get():
+        if carried():
             ctx = contextvars.copy_context()
             run = self.run
             self.run = lambda: ctx.run(run)  # type: ignore[method-assign]
 
     def submit(self: ThreadPoolExecutor, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
-        if not _SANDBOX_CTX.get():
+        if not carried():
             return pool_submit(self, fn, *args, **kwargs)
         ctx = contextvars.copy_context()
         unbound = _SANDBOX_CTX.set({})  # a worker this starts serves every caller
+        no_call = _GROUPS.set({})
         try:
             return pool_submit(self, ctx.run, fn, *args, **kwargs)
         finally:
+            _GROUPS.reset(no_call)
             _SANDBOX_CTX.reset(unbound)
 
     threading.Thread.__init__ = init  # type: ignore[method-assign]
@@ -772,8 +784,8 @@ _NOTE_LOCK = threading.Lock()
 
 def caller(default: str = "user") -> tuple[str, str]:
     """``(actor, ducky)`` of the code running now: ``agent`` with the ducky's name inside an
-    agent's run (bound or handed down to a coding agent), ``agent`` inside a run that limits
-    its plugin tools, else ``default``."""
+    agent's run (bound or handed down to a coding agent, or a thread one of its plugin calls
+    started), ``agent`` inside a run that limits its plugin tools, else ``default``."""
     try:
         from backend.workspace.identity import resolve_context
 
@@ -810,6 +822,8 @@ def write_group(plugin: str, *, actor: str = "user", ducky: str = "", message: s
         return
     group = WriteGroup(uuid.uuid4().hex, plugin, actor if actor in ("user", "agent") else "user", str(ducky or "")[:80],
                        str(message or "")[:200], panel)
+    if group.actor == "agent" and not _inherit_installed:
+        _inherit_into_threads()  # the threads this call starts write as the agent too
     token = _GROUPS.set({**groups, plugin: group})
     try:
         with _folder_call(plugin, group):

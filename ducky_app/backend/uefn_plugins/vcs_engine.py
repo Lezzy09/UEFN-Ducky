@@ -2862,13 +2862,17 @@ def _moved(before: Mapping[str, Any], after: Mapping[str, Any]) -> set[str]:
 
 
 def _roster_came(account: str, space: str, old: Any, roster: Mapping[str, Any]) -> None:
-    """A fresh roster: the bars of plugins whose people moved read their status again, and
-    panels hear what teammates hold now."""
+    """A fresh roster: the bars of plugins whose people moved read their status again,
+    panels hear what teammates hold now, Live ends where everyone else left this PC's
+    group (:func:`live.end_lone_groups`), and a group of one this PC hosts joins a
+    teammate's (:func:`live.merge_lone_groups`)."""
     _tell_bars(_moved(_roster_marks(old), _roster_marks(roster)))
     try:
         from backend.uefn_plugins import live
 
         live.roster_holds(account, space, roster)
+        live.end_lone_groups(account, space)
+        live.merge_lone_groups(account, space)
     except Exception:  # noqa: BLE001 — the next roster tells them
         _log.debug("teammates' holds failed", exc_info=True)
 

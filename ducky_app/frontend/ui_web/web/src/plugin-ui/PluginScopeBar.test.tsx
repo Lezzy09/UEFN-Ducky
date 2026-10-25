@@ -598,15 +598,17 @@ describe("plugin scope bar", () => {
   });
 
   describe("live groups", () => {
-    const ILIYA = { room: "h:d1", host: "iliya", members: [{ name: "iliya", user: "u1", device: "d1" }] };
-    const MO = { room: "h:d2", host: "Mo", members: [{ name: "Mo", user: "u2", device: "d2" }, { name: "Cy", user: "u3", device: "d3" }] };
-    const MINE = { room: "h:me", host: "You", hostIsMe: true, mine: true, members: [{ name: "You", device: "me", me: true }] };
-    const live = (on: boolean, groups: Record<string, unknown>[] = [], peers: Record<string, unknown>[] = []) =>
-      sharedStatus({ live: { supported: true, on, room: on ? "h:me" : "", state: on ? "live" : "off", peers, groups } });
+    const ILIYA = { room: "h:d1", host: "iliya", hostDevice: "d1", members: [{ name: "iliya", user: "u1", device: "d1" }] };
+    const MO = { room: "h:d2", host: "Mo", hostDevice: "d2",
+      members: [{ name: "Mo", user: "u2", device: "d2" }, { name: "Cy", user: "u3", device: "d3" }] };
+    const MINE = { room: "h:me", host: "You", hostDevice: "me", hostIsMe: true, mine: true,
+      members: [{ name: "You", device: "me", me: true }] };
+    const live = (on: boolean, groups: Record<string, unknown>[] = [], peers: Record<string, unknown>[] = [], rejoin = "") =>
+      sharedStatus({ live: { supported: true, on, room: on ? "h:me" : "", state: on ? "live" : "off", peers, groups, rejoin } });
     /** The Live button: its name starts with the group's host, "Live" or "You're live". */
     const liveButton = () => screen.getByRole("button", { name: /^(Live|You're live|iliya|Mo)/ });
 
-    it("lists each group by its host with who's in it; Join goes into that group and is remembered", async () => {
+    it("lists each group by its host with who's in it; Join goes into that group", async () => {
       api.plugin_scope_status.mockResolvedValue(live(false, [ILIYA, MO]));
       api.plugin_live_join.mockResolvedValue({ ok: true });
       bar();
@@ -618,12 +620,14 @@ describe("plugin scope bar", () => {
       api.plugin_scope_status.mockResolvedValue(live(true, [{ ...ILIYA, mine: true, members: [...ILIYA.members, { name: "You", me: true }] }, MO]));
       fireEvent.click(within(menu).getByRole("menuitem", { name: "Join iliya" }));
       await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledWith("brainrot-tcg", "h:d1"));
-      expect(localStorage.getItem("ducky.pluginLive.brainrot-tcg")).toBe("h:d1");
-      // In a group, the button names its host and how many are in it.
+      // In a group, the button names its host and how many are in it; no Start live there.
       await waitFor(() => expect(liveButton().textContent).toBe("iliya2▾"));
+      fireEvent.click(liveButton());
+      expect(await screen.findByRole("menuitem", { name: "Leave" })).toBeTruthy();
+      expect(screen.queryByRole("menuitem", { name: "Start live" })).toBeNull();
     });
 
-    it("Start live hosts this PC's group; End leaves it and forgets", async () => {
+    it("Start live asks the app to go live (a teammate's group, else this PC's own); Leave leaves", async () => {
       api.plugin_scope_status.mockResolvedValue(live(false));
       api.plugin_live_join.mockResolvedValue({ ok: true });
       api.plugin_live_leave.mockResolvedValue({ ok: true });
@@ -633,14 +637,31 @@ describe("plugin scope bar", () => {
       api.plugin_scope_status.mockResolvedValue(live(true, [MINE]));
       fireEvent.click(screen.getByRole("menuitem", { name: "Start live" }));
       await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledWith("brainrot-tcg", ""));
-      expect(localStorage.getItem("ducky.pluginLive.brainrot-tcg")).toBe("host");
       expect(await screen.findByText("You're live")).toBeTruthy();
       fireEvent.click(liveButton());
       expect(screen.queryByRole("menuitem", { name: "Start live" })).toBeNull();
       api.plugin_scope_status.mockResolvedValue(live(false));
-      fireEvent.click(await screen.findByRole("menuitem", { name: "End" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Leave" }));
       await waitFor(() => expect(api.plugin_live_leave).toHaveBeenCalledWith("brainrot-tcg"));
-      expect(localStorage.getItem("ducky.pluginLive.brainrot-tcg")).toBeNull();
+    });
+
+    it("says so when Live ended because everyone else left", async () => {
+      api.plugin_scope_status.mockResolvedValue(live(true, [MINE]));
+      bar();
+      await screen.findByText("You're live");
+      api.plugin_scope_status.mockResolvedValue(live(false));
+      push.handlers.forEach((fn) => fn({ type: "live_peers", plugin: "brainrot-tcg", on: false, peers: [], ended: "alone" }));
+      expect(await screen.findByText(/^Live ended: everyone else left the group/)).toBeTruthy();
+    });
+
+    it("someone still linking is connecting, not unreachable", async () => {
+      const status = live(true, [{ ...ILIYA, mine: true }], [{ name: "iliya", device: "d1", path: "none" }]);
+      api.plugin_scope_status.mockResolvedValue({ ...status, live: { ...status.live, connecting: ["iliya"] } });
+      bar();
+      fireEvent.click(await screen.findByRole("button", { name: /^iliya/ }));
+      const menu = await screen.findByRole("menu", { name: "Live in BrainRot TCG" });
+      expect(within(menu).getByText("Connecting to iliya…")).toBeTruthy();
+      expect(within(menu).queryByText(/^Can't reach/)).toBeNull();
     });
 
     it("lists who's here but not live, and says when a teammate's PC can't be reached", async () => {
@@ -670,29 +691,28 @@ describe("plugin scope bar", () => {
       expect(within(menu).getByText("Connecting to Cy…")).toBeTruthy();
     });
 
-    it("joins the remembered group again by itself while it's still live, once", async () => {
-      localStorage.setItem("ducky.pluginLive.brainrot-tcg", "h:d1");
-      api.plugin_scope_status.mockResolvedValue(live(false, [MO]));
+    it("joins the group the app remembers again by itself while it's still live, once", async () => {
+      api.plugin_scope_status.mockResolvedValue(live(false, [MO]));  // iliya's group ended: nothing to go back into
       api.plugin_live_join.mockResolvedValue({ ok: true });
       bar();
       await screen.findByText("Live · 1");
       await new Promise((r) => setTimeout(r, 300));
-      expect(api.plugin_live_join).not.toHaveBeenCalled();  // iliya's group ended
+      expect(api.plugin_live_join).not.toHaveBeenCalled();
       cleanup();
-      api.plugin_scope_status.mockResolvedValue(live(false, [ILIYA, MO]));
+      api.plugin_scope_status.mockResolvedValue(live(false, [ILIYA, MO], [], "h:d1"));
       bar();
       await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledWith("brainrot-tcg", "h:d1"));
       await new Promise((r) => setTimeout(r, 600));
       expect(api.plugin_live_join).toHaveBeenCalledTimes(1);
     });
 
-    it("this PC's own group comes back by itself; after a switch to another team copy, there too, once", async () => {
-      localStorage.setItem("ducky.pluginLive.brainrot-tcg", "host");
-      api.plugin_scope_status.mockResolvedValue(live(false));
+    it("Start live comes back by itself; after a switch to another team copy, there too, once", async () => {
+      api.plugin_scope_status.mockResolvedValue(live(false, [], [], "start"));
       api.plugin_live_join.mockResolvedValue({ ok: true });
       bar();
       await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledWith("brainrot-tcg", ""));
-      api.plugin_scope_status.mockResolvedValue({ ...live(false), scope: { kind: "shared", label: "Beta", spaceId: "s2", readOnly: false } });
+      api.plugin_scope_status.mockResolvedValue({ ...live(false, [], [], "start"),
+        scope: { kind: "shared", label: "Beta", spaceId: "s2", readOnly: false } });
       push.handlers.forEach((fn) => fn({ type: "plugin_scope_changed", plugins: ["brainrot-tcg"], switched: true }));
       push.handlers.forEach((fn) => fn({ type: "duckyos_account_changed" }));
       await waitFor(() => expect(api.plugin_live_join).toHaveBeenCalledTimes(2));
@@ -718,9 +738,24 @@ describe("plugin scope bar", () => {
       expect(localStorage.getItem("ducky.pluginFollow.brainrot-tcg")).toBe("0");
     });
 
-    it("hosting, or with the host gone, there is nobody to follow", async () => {
+    it("the host left: whoever has been in the group longest leads it, and Follow follows them", async () => {
       const followed = vi.fn();
-      api.plugin_scope_status.mockResolvedValue(live(true, [{ room: "h:d1", host: "", mine: true, members: [{ name: "You", device: "me", me: true }] }]));
+      const passedOn = { room: "h:d1", host: "Mo", hostDevice: "d2", mine: true,
+        members: [{ name: "Mo", device: "d2" }, { name: "You", device: "me", me: true }] };
+      api.plugin_scope_status.mockResolvedValue(live(true, [passedOn]));
+      render(
+        <ConfirmModalProvider>
+          <PluginScopeBar pluginId="brainrot-tcg" onScopeChanged={() => {}} onFollow={followed} />
+        </ConfirmModalProvider>,
+      );
+      await waitFor(() => expect(followed).toHaveBeenLastCalledWith("d2"));
+      fireEvent.click(await screen.findByRole("button", { name: /^Mo/ }));
+      expect(await screen.findByRole("checkbox", { name: /Follow Mo's screen/ })).toBeTruthy();
+    });
+
+    it("hosting, there is nobody to follow", async () => {
+      const followed = vi.fn();
+      api.plugin_scope_status.mockResolvedValue(live(true, [{ ...MINE, room: "h:d1" }]));
       render(
         <ConfirmModalProvider>
           <PluginScopeBar pluginId="brainrot-tcg" onScopeChanged={() => {}} onFollow={followed} />
@@ -728,9 +763,8 @@ describe("plugin scope bar", () => {
       );
       await waitFor(() => expect(followed).toHaveBeenCalled());
       expect(followed).toHaveBeenLastCalledWith("");
-      fireEvent.click(await screen.findByRole("button", { name: /^Live/ }));
-      expect(await screen.findByText("The host left this group.")).toBeTruthy();
-      expect((screen.getByRole("checkbox") as HTMLInputElement).disabled).toBe(true);
+      fireEvent.click(await screen.findByRole("button", { name: /^You're live/ }));
+      expect(screen.queryByRole("checkbox")).toBeNull();
     });
 
     it("offers no Live where the team service has none", async () => {

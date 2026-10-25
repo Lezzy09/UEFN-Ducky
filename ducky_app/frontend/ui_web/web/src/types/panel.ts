@@ -2361,6 +2361,8 @@ export interface PanelPushEvent {
   /** live_peers: live in this plugin, and with whom. */
   on?: boolean;
   peers?: PluginLivePeer[];
+  /** live_peers: Live ended by itself ("alone": everyone else left the group; "tab_closed"). */
+  ended?: string;
   /** live_holds: the controls teammates are pressing. */
   holds?: PluginLiveHold[];
   /** plugin_write_refused: the unit, its name, who holds it and since when (epoch seconds).
@@ -2448,11 +2450,13 @@ export interface PluginLivePeer {
 }
 
 /** One live group of a plugin (backend/uefn_plugins/live.py `groups`): a room named after
- * its host's PC. */
+ * the PC that started it. */
 export interface PluginLiveGroup {
   room: string;
-  /** The host's name ("" while the host is away). */
+  /** The host's name: the PC the room is named after while it is in it, else whoever has
+   * been in the group longest. */
   host: string;
+  hostDevice?: string;
   hostIsMe?: boolean;
   /** The first to come first; this PC is `me`. */
   members: { name: string; user?: string; device?: string; label?: string; me?: boolean }[];
@@ -2486,6 +2490,9 @@ export interface PluginLiveStatus {
   unlinked?: string[];
   /** The plugin's live groups in the team, this PC's first. */
   groups?: PluginLiveGroup[];
+  /** What the bar goes back into while not live (after a restart): "start" (Start live), a
+   * teammate's room still live, or "" (Leave, the tab closed, or everyone else left). */
+  rejoin?: string;
 }
 
 export interface PluginScopeStatus {

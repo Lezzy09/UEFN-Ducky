@@ -578,7 +578,7 @@ export function PluginScopeDrawer({ pluginId, status, onChanged, id, tab: shownT
       {people.length ? people.map((row) => {
         const group = row.live ? groups.find((g) => g.room === row.live) : undefined;
         const live = row.me && s.live?.on ? groups.find((g) => g.mine) : group;
-        const hosting = live && (row.me ? live.hostIsMe : live.members[0] && live.room === `h:${row.deviceId}`);
+        const hosting = live && (row.me ? live.hostIsMe : live.hostDevice === row.deviceId);
         const liveText = !live ? "Not live" : hosting ? "Hosting" : `In ${groupName(live)}'s group`;
         return (
           <Row key={row.key} lead={<PresenceAvatar row={row} plugin={plugin} labelled={false} />}

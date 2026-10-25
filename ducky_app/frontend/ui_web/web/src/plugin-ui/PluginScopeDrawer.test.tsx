@@ -93,7 +93,8 @@ describe("source control tabs", () => {
   it("People: you first, then who edits, views, the rest; who's hosting or in a group, with Join", async () => {
     const join = vi.fn();
     drawer(status({
-      live: { supported: true, on: false, groups: [{ room: "h:d1", host: "Ana", members: [{ name: "Ana", device: "d1" }, { name: "Cy", device: "d3" }] }] },
+      live: { supported: true, on: false, groups: [{ room: "h:d1", host: "Ana", hostDevice: "d1",
+        members: [{ name: "Ana", device: "d1" }, { name: "Cy", device: "d3" }] }] },
       people: [
         { user_name: "Dee", device: "DEE-PC", deviceId: "d4", plugins: { other: { viewing: true } } },
         { user_name: "Cy", device: "CY-PC", deviceId: "d3", plugins: { forge: { viewing: true, live: "h:d1" } } },
