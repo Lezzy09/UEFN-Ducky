@@ -2,3 +2,7 @@
 # chat perf harness output / exported chats (see src/perf)
 dist-perf/
 public/perf/
+
+# tsc -b build cache: every type check rewrote it, so a tracked copy kept the checkout
+# dirty and the release's merge back onto main refused to run (Oct 25).
+*.tsbuildinfo
