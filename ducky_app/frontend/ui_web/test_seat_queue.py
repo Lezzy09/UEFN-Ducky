@@ -22,6 +22,10 @@ def q(monkeypatch):
     monkeypatch.setattr(sq, "_seen", set())
     monkeypatch.setattr(sq, "_first_starts", deque())
     monkeypatch.setattr(sq, "_wave_timer", False)
+    monkeypatch.setattr(sq, "_starts", {})
+    monkeypatch.setattr(sq, "_retried", set())
+    notices: list[tuple[str, str]] = []
+    monkeypatch.setattr(sq, "_notify_lead", lambda cid, text: notices.append((cid, text)))
     monkeypatch.setattr(sq, "WAVE_SIZE", 100)  # the cap tests start no waves
     clock = {"t": 1000.0}
     monkeypatch.setattr(sq, "_now", lambda: clock["t"])
@@ -39,7 +43,8 @@ def q(monkeypatch):
         adm._running.discard(cid)  # agent_modes releases the memory slot
         sq.on_turn_end(cid, reason, detail)
 
-    return {"started": started, "starter": starter, "end": end, "clock": clock, "timers": timers}
+    return {"started": started, "starter": starter, "end": end, "clock": clock, "timers": timers,
+            "notices": notices}
 
 
 def test_cap_four_runs_four_and_the_fifth_starts_when_one_ends(q):
@@ -107,10 +112,33 @@ def test_a_seat_whose_tools_did_not_connect_is_idle_and_can_restart(q):
     assert sq.request("a", q["starter"]("a")) == "started"
     assert sq.is_busy("a")
     # The turn ended without a real start; nothing else freed its slot yet.
-    sq.on_turn_end("a", "error", "claude_code finished with no captured reply.\n\nDucky's tools didn't connect")
+    sq._retried.add("a")  # its automatic retry is spent: the seat stays idle
+    sq.on_turn_end("a", "error", DROPPED)
     assert not sq.is_busy("a") and not adm.holds("a")
     assert sq.request("a", q["starter"]("a")) == "started"
     assert q["started"] == ["a", "a"]
+
+
+DROPPED = "claude_code finished with no captured reply.\n\nDucky's tools didn't connect"
+
+
+def test_tools_dropped_retries_once_then_tells_the_lead_once(q):
+    sq.request("a", q["starter"]("a"))
+    q["end"]("a", "error", DROPPED)
+    assert q["started"] == ["a", "a"] and q["notices"] == []  # exactly one retry
+    q["end"]("a", "error", DROPPED)
+    assert q["started"] == ["a", "a"]  # no second retry
+    assert len(q["notices"]) == 1 and "tools didn't connect" in q["notices"][0][1]
+    assert not sq.is_busy("a")
+
+
+def test_a_good_turn_resets_the_retry(q):
+    sq.request("a", q["starter"]("a"))
+    q["end"]("a", "error", "agent failed to start")
+    q["end"]("a", "done", "all good")
+    sq.request("a", q["starter"]("a"))
+    q["end"]("a", "error", DROPPED)
+    assert len(q["started"]) == 4 and q["notices"] == []  # a fresh failure gets its retry
 
 
 def test_pc_limit_reads_something():

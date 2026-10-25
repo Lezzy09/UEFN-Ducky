@@ -12,6 +12,7 @@ has memory room; the running count is admission's own slots plus seats this queu
 First turns start in waves (``WAVE_SIZE`` per ``WAVE_GAP_S``): 3 of 14 seats opened with
 "Ducky's tools didn't connect" when all started at once. A turn that ended that way never
 really ran, so the seat is idle again (``is_busy`` False): a restart or recycle may go ahead.
+Such a turn is started again once by itself; a second failure in a row tells the lead.
 """
 
 from __future__ import annotations
@@ -47,6 +48,8 @@ _user_cap: int | None = None
 _seen: set[str] = set()  # seats whose first turn has started
 _first_starts: deque[float] = deque()  # when first turns started, for the waves
 _wave_timer = False
+_starts: dict[str, Callable[[], Any]] = {}  # each seat's last start, for the one retry
+_retried: set[str] = set()  # seats whose failed start was already retried once
 _now = time.monotonic
 
 
@@ -58,6 +61,18 @@ def _spawn_later(delay: float, fn: Callable[[], None]) -> None:
     timer = threading.Timer(delay, fn)
     timer.daemon = True
     timer.start()
+
+
+def _notify_lead(conv_id: str, text: str) -> None:
+    try:
+        from backend.agent.a2a_client import send_notice
+        from backend.tools.panel.permission_prompt import starter_root
+
+        lead = starter_root(conv_id)
+        if lead and lead != conv_id:
+            send_notice(sender_conv_id=conv_id, receiver_conv_id=lead, body=text)
+    except Exception:
+        pass
 
 
 def start_failed(detail: str) -> bool:
@@ -131,6 +146,7 @@ def request(conv_id: str, start: Callable[[], Any]) -> str:
     with _lock:
         if is_busy(conv_id):
             return "busy"
+        _starts[conv_id] = start
         _line.append(_Seat(conv_id, start))
     drain()
     with _lock:
@@ -148,15 +164,31 @@ def on_turn_end(conv_id: str, reason: str = "", detail: str = "") -> None:
     """A member's turn ended: free its place and start the next seats in line.
 
     ``detail`` is the turn's error or reply text; a failed start leaves the seat idle (its
-    admission slot freed, its next start counted as a first turn again).
+    admission slot freed, its next start counted as a first turn again), starts the turn
+    again once, and tells the lead when the retry failed too.
     """
     failed = start_failed(detail)
+    retry: Callable[[], Any] | None = None
     with _lock:
         _starting.discard(conv_id)
-        if failed:
+        if not failed:
+            _retried.discard(conv_id)
+        else:
             _seen.discard(conv_id)
+            if conv_id in _retried:
+                _retried.discard(conv_id)
+            else:
+                retry = _starts.get(conv_id)
+                if retry is not None:
+                    _retried.add(conv_id)
     if failed:
         admission.release(conv_id)
+    if retry is not None:
+        request(conv_id, retry)  # through the line: the cap and the waves still apply
+    elif failed:
+        text = (f"Seat {conv_id} could not start its turn twice: {(detail or '').strip()[:300]}\n"
+                "Restart it, or recycle it with ducky_recycle_member.")
+        _spawn(lambda: _notify_lead(conv_id, text), f"seat-notice-{conv_id[:8]}")
     drain()
 
 
