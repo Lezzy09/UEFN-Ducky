@@ -1,5 +1,27 @@
-import { describe, expect, it } from "vitest";
-import { askUserError, rowsFromAskUser } from "./AskUserBody";
+// @vitest-environment jsdom
+import { cleanup, render, screen } from "@testing-library/react";
+import { createElement } from "react";
+import { afterEach, describe, expect, it } from "vitest";
+import fixture from "../../../swarm/fixtures/swarm_builder.json";
+import { AskUserBody, askUserError, rowsFromAskUser } from "./AskUserBody";
+
+afterEach(cleanup);
+
+describe("AskUserBody picks the card", () => {
+  const base = { toolName: "ducky_ask_user", showResult: false, isError: false } as Record<string, unknown>;
+
+  it("a ui: swarm_builder payload renders the Swarm builder card", () => {
+    render(createElement(AskUserBody as never, { ...base, args: { ...fixture, jobs: [] }, resultText: "" }));
+    expect(screen.getByText("Build swarm: Shop island")).toBeTruthy();
+    expect(screen.getByRole("slider", { name: "Detail" })).toBeTruthy();
+  });
+
+  it("an old question payload still renders its question rows", () => {
+    render(createElement(AskUserBody as never, { ...base, args: { questions: [{ id: "a", prompt: "Path A?" }] }, resultText: "" }));
+    expect(screen.getByText("Path A?")).toBeTruthy();
+    expect(screen.queryByText(/^Build swarm/)).toBeNull();
+  });
+});
 
 describe("AskUserBody rows", () => {
   it("summarizes selected labels and skipped answers", () => {

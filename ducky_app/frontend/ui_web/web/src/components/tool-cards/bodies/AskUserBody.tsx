@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { ToolCardBodyProps } from "../toolCardTypes";
+import { SwarmBuilderCard, swarmBuilderPayload } from "../../../swarm/SwarmBuilderCard";
 
 export type AnswerRow = {
   id: string;
@@ -130,7 +131,15 @@ export function askUserError(resultText: string): string {
   return text || "The question could not be asked.";
 }
 
-export function AskUserBody({ args, resultText, showResult, isError }: ToolCardBodyProps) {
+/** A swarm_builder payload (in the call or its result) is the Swarm builder card; anything else the answer rows. */
+export function AskUserBody(props: ToolCardBodyProps) {
+  const { args, resultText } = props;
+  const swarm = useMemo(() => swarmBuilderPayload(args) ?? swarmBuilderPayload(resultText), [args, resultText]);
+  if (swarm) return <SwarmBuilderCard payload={swarm} jobs={args.jobs} />;
+  return <AskUserRows {...props} />;
+}
+
+function AskUserRows({ args, resultText, showResult, isError }: ToolCardBodyProps) {
   const pending = !showResult;
   const failed = Boolean(isError && showResult);
   const rows = useMemo(
