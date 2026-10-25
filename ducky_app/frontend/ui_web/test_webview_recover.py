@@ -205,6 +205,18 @@ def test_a_dead_browser_asks_for_a_new_control_instead_of_reloading(monkeypatch)
     assert core.reloads == 1 and rebuilds == ["main:browserprocessexited"]
 
 
+def test_a_crash_says_how_the_process_ended(monkeypatch) -> None:
+    monkeypatch.setattr(wr, "_last_recover", {})
+    monkeypatch.setattr(wr, "_attached", set())
+    errors: list[tuple[str, str]] = []
+    monkeypatch.setattr("frontend.error_log.record_error", lambda s, m: errors.append((s, m)))
+    handler = wr.attach_process_failed(_Core(), label="main", on_browser_exit=lambda _r: None)
+    handler(None, SimpleNamespace(ProcessFailedKind=0, ExitCode=-536870904))  # 0xE0000008
+    assert errors[-1][0] == "webview_browser_exit_oom" and "exit oom" in errors[-1][1]
+    assert wr.exit_reason(SimpleNamespace(ExitCode=0x8000FFFF)) == "x8000ffff"
+    assert wr.exit_reason(SimpleNamespace()) == ""
+
+
 def test_a_pane_without_a_rebuild_keeps_the_old_reload(monkeypatch) -> None:
     monkeypatch.setattr(wr, "_last_recover", {})
     monkeypatch.setattr(wr, "_attached", set())

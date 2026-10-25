@@ -55,6 +55,13 @@ QUICK_TOOL_LIMIT_S = 60.0
 # Any other call still running this long: where it waits is recorded (events kind
 # "tool_stuck") and it keeps running, since workflows, renders and questions take minutes.
 STUCK_REPORT_S = 120.0
+# Calls that wait by design (on the person, or a command / workflow / window with its own
+# timeout): still recorded where they wait, but not counted as an anonymous agent.stuck,
+# which said "stuck" 117 times a day for questions and test suites (Oct 25 2026).
+WAITS_BY_DESIGN = frozenset({
+    "ducky_ask_user", "ducky_terminal_run", "sandbox_run", "run_workflow", "run_workflow_node",
+    "ducky_wait_uefn_ready", "uefn_wait_window", "uefn_logs_wait", "fortnite_client_wait", "playtester_wait",
+})
 
 
 def enabled(settings: Any | None = None) -> bool:
@@ -733,6 +740,8 @@ def _report_stuck(name: str, seconds: float, work: Any, thread: dict[str, Any], 
                    else f"{name} still running after {seconds:.0f} s")
         events.insert("tool_stuck", ts=now, source=name, message=message, payload=payload)
         events.trim("tool_stuck", older_than=now - 30 * 86400, keep=200)
+        if name in WAITS_BY_DESIGN or waiting.get("panel_rpc") == "ask_user":
+            return
         from frontend import usage_stats
 
         usage_stats.stuck(str(getattr(ident, "coding_agent", "") or ""), float(seconds))

@@ -136,6 +136,27 @@ def error_source(reason: str) -> str:
     return "webview" + where + (f"_{how}" if how else "")
 
 
+# CoreWebView2ProcessFailedEventArgs2.ExitCode values worth a name (Windows / Chromium).
+_EXIT_NAMES = {0xE0000008: "oom", 0xC0000005: "access_violation", 0xC0000409: "fast_fail",
+               0xC0000374: "heap_corruption", 0xC000001D: "illegal_instruction",
+               0x80000003: "breakpoint", 0xC00000FD: "stack_overflow", 0xC0000017: "no_memory"}
+
+
+def exit_reason(event: Any) -> str:
+    """How the process ended, as a short slug (``oom``, ``access_violation``, ``x8000ffff``),
+    or "" when the event has no exit code. webview_browser_exit on 3-5 PCs a day (Oct 2026)
+    said that the browser died, never why."""
+    try:
+        code = int(getattr(event, "ExitCode")) & 0xFFFFFFFF
+    except Exception:
+        return ""
+    return _EXIT_NAMES.get(code, f"x{code:08x}")
+
+
+def _with_exit(source: str, exit: str) -> str:
+    return f"{source}_{exit}" if exit else source
+
+
 def _mark_crash_reload() -> None:
     """The page is about to load again after its process died: its next
     get_restore_tabs answers the chats it had open."""
@@ -147,7 +168,7 @@ def _mark_crash_reload() -> None:
         _log.debug("mark_crash_reload failed", exc_info=True)
 
 
-def recover_core_webview(core: Any, *, reason: str = "") -> dict[str, Any]:
+def recover_core_webview(core: Any, *, reason: str = "", exit: str = "") -> dict[str, Any]:
     """Reload (or re-Navigate) a live CoreWebView2. Debounced per instance."""
     if core is None:
         return {"ok": False, "error": "no core"}
@@ -159,7 +180,8 @@ def recover_core_webview(core: Any, *, reason: str = "") -> dict[str, Any]:
     try:
         from frontend.error_log import record_error
 
-        record_error(error_source(reason), f"WebView2 process failed ({reason or 'unknown'}); reloading")
+        how = f", exit {exit}" if exit else ""
+        record_error(_with_exit(error_source(reason), exit), f"WebView2 process failed ({reason or 'unknown'}{how}); reloading")
     except Exception:
         pass
     if should_recover_process_fail(reason.rpartition(":")[2]):
@@ -203,11 +225,14 @@ def attach_process_failed(
             return
         _unresponsive.pop(key, None)
         reason = f"{label}:{kind}" if kind else label
+        exit = exit_reason(event)
         if on_browser_exit is not None and is_browser_exit_kind(kind):
             try:
                 from frontend.error_log import record_error
 
-                record_error(error_source(reason), f"WebView2 browser stopped ({reason}); starting a new one")
+                how = f", exit {exit}" if exit else ""
+                record_error(_with_exit(error_source(reason), exit),
+                             f"WebView2 browser stopped ({reason}{how}); starting a new one")
             except Exception:
                 pass
             _mark_crash_reload()  # the new control loads the page from scratch
@@ -222,7 +247,7 @@ def attach_process_failed(
                 on_fail(reason)
             except Exception:
                 pass
-        recover_core_webview(core, reason=reason)
+        recover_core_webview(core, reason=reason, exit=exit)
 
     try:
         core.ProcessFailed += _on_fail

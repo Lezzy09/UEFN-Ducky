@@ -84,14 +84,21 @@ def _is_expected_offline(message: str) -> bool:
     return "Listener not reachable" in message or "listener offline" in message.lower()
 
 
-def _record_bridge_error(message: str) -> None:
-    """Persist a bridge-side error to the shared appdata error log (best-effort)."""
+def _record_bridge_error(message: str, command: str = "") -> None:
+    """Persist a bridge-side error to the shared appdata error log (best-effort).
+
+    A timeout's source names how and which command (``bridge_timeout.save_current_level``,
+    ``bridge_busy.<command>``): it is also the anonymous error code, and plain "bridge"
+    (25-30 a day on 5-8 PCs, Oct 23-24 2026) could not say what the editor was doing."""
     if _is_expected_offline(message):
         return
+    source = "bridge"
+    if command:
+        source = ("bridge_busy." if "waiting for listener idle" in message else "bridge_timeout.") + command
     try:
         from frontend.error_log import record_error
 
-        record_error("bridge", message)
+        record_error(source, message)
     except Exception:
         pass
 
@@ -556,7 +563,7 @@ def send_command(command: str, params: Optional[dict] = None, timeout: float = R
     except TimeoutError as e:
         recovered = _recover_save_timeout(port, command)
         if recovered is None:
-            _record_bridge_error(str(e))
+            _record_bridge_error(str(e), command)
             raise
         body = recovered
         http_ms = 0.0

@@ -88,6 +88,19 @@ def test_expected_offline_is_not_logged(monkeypatch: pytest.MonkeyPatch) -> None
     assert logged == ["Command 'device_graph_snapshot' timed out after 2.0s"]
 
 
+def test_a_timeout_names_the_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    from frontend import usage_events
+
+    sources: list[str] = []
+    monkeypatch.setattr("frontend.error_log.record_error", lambda src, _msg: sources.append(src))
+    bridge._record_bridge_error("Command 'save_current_level' timed out after 30.0s", "save_current_level")
+    bridge._record_bridge_error("Command 'ping' timed out waiting for listener idle", "ping")
+    assert sources == ["bridge_timeout.save_current_level", "bridge_busy.ping"]
+    # The anonymous code keeps it, and it still counts as a bridge error.
+    assert usage_events.code_of(sources[0]) == "bridge_timeout.save_current_level"
+    assert usage_events.where_of(sources[0]) == "bridge"
+
+
 class _HeartbeatDone(BaseException):
     pass
 
