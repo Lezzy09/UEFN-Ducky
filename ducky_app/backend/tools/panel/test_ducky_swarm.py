@@ -342,3 +342,22 @@ def test_small_or_overlapping_plans_get_nothing():
     assert sw.suggest_swarm({"nodes": [{"id": str(i), "content": f"s{i}"} for i in range(4)]}) is None
     overlap = {"nodes": [_section("A", "src/**"), _section("B", "src/**"), _section("C", "docs/**")]}
     assert sw.suggest_swarm(overlap) is None
+
+
+# ---- the card payload fixture -------------------------------------------------------------
+
+def test_build_preview_has_every_fixture_field():
+    from pathlib import Path
+
+    fixture = Path(__file__).parents[3] / "frontend/ui_web/web/src/swarm/fixtures/swarm_builder.json"
+    want = json.loads(fixture.read_text(encoding="utf-8"))["preview"]
+    got = sw.build_preview("Shop island", sw.normalize_jobs(_jobs(GAME8)), "auto", 8, 5, None, 2)
+    assert set(want) <= set(got)
+    groups, seats = list(sw.walk_groups(got["tree"])), list(sw.walk_seats(got["tree"]))
+    assert groups and seats
+    want_group = next(sw.walk_groups(want["tree"]))
+    want_seat = next(sw.walk_seats(want["tree"]))
+    assert all(set(want_group) <= set(g) for g in groups)
+    assert all(set(want_seat) <= set(s) and set(want_seat["sub_plan"]) <= set(s["sub_plan"]) for s in seats)
+    assert all(set(want["levels"][0]) <= set(lv) for lv in got["levels"])
+    assert set(want["plan"]["sections"][0]) <= set(got["plan"]["sections"][0])

@@ -1,0 +1,173 @@
+{
+  "ui": "swarm_builder",
+  "status": "needs_confirm",
+  "goal": "Shop island",
+  "preview": {
+    "goal": "Shop island",
+    "detail": 2,
+    "levels": [
+      {"detail": 1, "name": "Areas", "agents": 4, "groups": 0},
+      {"detail": 2, "name": "Jobs", "agents": 6, "groups": 2},
+      {"detail": 3, "name": "Parts", "agents": 8, "groups": 2},
+      {"detail": 4, "name": "Parts in sub-groups", "agents": 8, "groups": 3}
+    ],
+    "agents": 6,
+    "max_agents": 8,
+    "per_group": 5,
+    "tree": [
+      {
+        "group": "Art: assets",
+        "purpose": "assets",
+        "muted": true,
+        "seats": [
+          {
+            "name": "Modeling lead",
+            "job": "Modeling: props",
+            "kind": "modeling",
+            "profile": "prop-artist",
+            "model": "claude:claude-sonnet-5-5",
+            "paths": ["Content/Meshes/Props/**"],
+            "sub_plan": {
+              "title": "Modeling: props",
+              "done": 0,
+              "total": 2,
+              "steps": [
+                {"content": "Block out the shop counter", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."},
+                {"content": "Model the item shelves", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}
+              ]
+            }
+          },
+          {
+            "name": "Texture lead",
+            "job": "Texture: props",
+            "kind": "material",
+            "profile": "materials",
+            "model": "claude:claude-sonnet-5-5",
+            "paths": ["Content/Materials/Props/**"],
+            "sub_plan": {
+              "title": "Texture: props",
+              "done": 0,
+              "total": 1,
+              "steps": [
+                {"content": "Texture the counter and shelves", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}
+              ]
+            }
+          }
+        ],
+        "groups": []
+      },
+      {
+        "group": "Code: gameplay",
+        "purpose": "gameplay",
+        "muted": true,
+        "seats": [
+          {
+            "name": "Verse lead",
+            "job": "Verse: shop logic",
+            "kind": "verse",
+            "profile": "verse-developer",
+            "model": "claude:claude-opus-5-5",
+            "paths": ["Content/Verse/Shop/**"],
+            "sub_plan": {
+              "title": "Verse: shop logic",
+              "done": 0,
+              "total": 2,
+              "steps": [
+                {"content": "Buy and sell device", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."},
+                {"content": "Wire the shop to the wallet", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}
+              ]
+            }
+          },
+          {
+            "name": "UI lead",
+            "job": "UI: shop HUD",
+            "kind": "ui",
+            "profile": "umg-designer",
+            "model": "claude:claude-sonnet-5-5",
+            "paths": ["Content/UI/Shop/**"],
+            "sub_plan": {
+              "title": "UI: shop HUD",
+              "done": 0,
+              "total": 1,
+              "steps": [
+                {"content": "Shop panel widget", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}
+              ]
+            }
+          }
+        ],
+        "groups": []
+      },
+      {
+        "name": "Narrative lead",
+        "job": "Narrative: shopkeeper",
+        "kind": "narrative",
+        "profile": "narrative-writer",
+        "model": "claude:claude-haiku-5-5",
+        "paths": ["Content/Story/**"],
+        "sub_plan": {
+          "title": "Narrative: shopkeeper",
+          "done": 0,
+          "total": 1,
+          "steps": [
+            {"content": "Shopkeeper lines", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}
+          ]
+        }
+      },
+      {
+        "name": "Tester",
+        "job": "Tester: playtest",
+        "kind": "test",
+        "profile": "playtester",
+        "model": "claude:claude-sonnet-5-5",
+        "paths": [],
+        "sub_plan": {
+          "title": "Tester: playtest",
+          "done": 0,
+          "total": 1,
+          "steps": [
+            {"content": "Play the shop loop end to end", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}
+          ]
+        }
+      }
+    ],
+    "muted": ["Art: assets", "Code: gameplay"],
+    "lanes": {
+      "Modeling lead": ["Content/Meshes/Props/**"],
+      "Texture lead": ["Content/Materials/Props/**"],
+      "Verse lead": ["Content/Verse/Shop/**"],
+      "UI lead": ["Content/UI/Shop/**"],
+      "Narrative lead": ["Content/Story/**"],
+      "Tester": []
+    },
+    "plan": {
+      "title": "Shop island",
+      "sections": [
+        {"seat": "Modeling lead", "title": "Modeling: props", "steps": [{"content": "Block out the shop counter", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}, {"content": "Model the item shelves", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}]},
+        {"seat": "Texture lead", "title": "Texture: props", "steps": [{"content": "Texture the counter and shelves", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}]},
+        {"seat": "Verse lead", "title": "Verse: shop logic", "steps": [{"content": "Buy and sell device", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}, {"content": "Wire the shop to the wallet", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}]},
+        {"seat": "UI lead", "title": "UI: shop HUD", "steps": [{"content": "Shop panel widget", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}]},
+        {"seat": "Narrative lead", "title": "Narrative: shopkeeper", "steps": [{"content": "Shopkeeper lines", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}]},
+        {"seat": "Tester", "title": "Tester: playtest", "steps": [{"content": "Play the shop loop end to end", "body_markdown": "Done when: the change and its tests pass; commit your files (git add <files>) and push."}]}
+      ]
+    }
+  },
+  "seats": [
+    {"name": "Modeling lead", "group": "Art: assets", "profile": "prop-artist", "model": "claude:claude-sonnet-5-5", "lane": ["Content/Meshes/Props/**"], "steps": 2, "flags": []},
+    {"name": "Texture lead", "group": "Art: assets", "profile": "materials", "model": "claude:claude-sonnet-5-5", "lane": ["Content/Materials/Props/**"], "steps": 1, "flags": []},
+    {"name": "Verse lead", "group": "Code: gameplay", "profile": "verse-developer", "model": "claude:claude-opus-5-5", "lane": ["Content/Verse/Shop/**"], "steps": 2, "flags": []},
+    {"name": "UI lead", "group": "Code: gameplay", "profile": "umg-designer", "model": "claude:claude-sonnet-5-5", "lane": ["Content/UI/Shop/**"], "steps": 1, "flags": []},
+    {"name": "Narrative lead", "group": "", "profile": "narrative-writer", "model": "claude:claude-haiku-5-5", "lane": ["Content/Story/**"], "steps": 1, "flags": []},
+    {"name": "Tester", "group": "", "profile": "playtester", "model": "claude:claude-sonnet-5-5", "lane": [], "steps": 1, "flags": ["no_lane"]}
+  ],
+  "estimate": {
+    "seats": {
+      "Modeling lead": {"minutes": 40, "cost_usd": 1.2},
+      "Texture lead": {"minutes": 20, "cost_usd": 0.6},
+      "Verse lead": {"minutes": 50, "cost_usd": 3.0},
+      "UI lead": {"minutes": 20, "cost_usd": 0.6},
+      "Narrative lead": {"minutes": 15, "cost_usd": 0.1},
+      "Tester": {"minutes": 25, "cost_usd": 0.8}
+    },
+    "total": {"minutes": 50, "cost_usd": 6.3}
+  }
+}
