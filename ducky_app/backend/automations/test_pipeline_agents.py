@@ -13,7 +13,7 @@ def test_agent_catalog_uses_picker_and_optional_instructions():
     from backend.automations.catalog import BUILTIN_NODES
 
     node = next(row for row in BUILTIN_NODES if row["type"] == "pipeline.agent")
-    assert [field["id"] for field in node["config_fields"]] == ["ducky", "prompt"]
+    assert [field["id"] for field in node["config_fields"]] == ["ducky", "prompt", "allow_web", "archive_if"]
     assert node["config_fields"][0]["type"] == "ducky"
 
 
