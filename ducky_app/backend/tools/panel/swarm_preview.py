@@ -9,6 +9,7 @@
   seat = {name, job, kind, profile, model, paths, sub_plan: {title, done, total, steps}}
 - ``muted``: names of muted groups; ``lanes``: {seat name: [paths]}
 - ``plan``: {title, sections: [{seat, title, steps}]} — the plan Build makes
+- ``estimate``: {seats: {name: {tokens, minutes, cost_usd}}, total: {tokens, minutes, cost_usd, text}}
 - ``jobs`` (server only, dropped before it reaches the card)
 
 The card payload adds, around ``preview``: ``ui``, ``status``, ``goal``, ``seats`` (flat:
@@ -315,6 +316,103 @@ def walk_seats(nodes: list[dict[str, Any]]):
             yield node
 
 
+# ---- seats as a step graph (job previews and real plans) ----------------------------------
+# A graph seat = {name, id, lane, after: [refs], steps: [{id, content, body, after: [refs]}]}.
+# A ref names a step id, or a seat/section id meaning all of its steps. In a job preview the
+# step ids are "<seat name>#<n>" (1-based) and a seat's id is its name.
+
+def preview_seats(tree: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = []
+    for s in walk_seats(tree):
+        sub = s["sub_plan"]
+        out.append({"name": s["name"], "id": s["name"], "lane": list(s["paths"]), "model": s["model"],
+                    "after": list(sub.get("after") or []),
+                    "steps": [{"id": f"{s['name']}#{i}", "content": st["content"],
+                               "body": st.get("body_markdown") or "", "after": list(st.get("after") or [])}
+                              for i, st in enumerate(sub["steps"], 1)]})
+    return out
+
+
+def step_deps(seats: list[dict[str, Any]], expand: dict[str, list[str]] | None = None) -> dict[str, list[str]]:
+    """{step id: the step ids it waits for}, from step and seat ``after`` refs. *expand* maps
+    other ref ids (a plan's group sections) to their step ids."""
+    refs: dict[str, list[str]] = dict(expand or {})
+    for seat in seats:
+        ids = [st["id"] for st in seat["steps"]]
+        refs[seat["id"]] = ids
+        refs.update({i: [i] for i in ids})
+    deps: dict[str, list[str]] = {}
+    for seat in seats:
+        own = {st["id"] for st in seat["steps"]}
+        seat_wide = [d for r in seat["after"] for d in refs.get(r, []) if d not in own]
+        for st in seat["steps"]:
+            mine = [d for r in st["after"] for d in refs.get(r, []) if d != st["id"]]
+            deps[st["id"]] = list(dict.fromkeys(seat_wide + mine))
+    return deps
+
+
+def _finish_steps(seats: list[dict[str, Any]], deps: dict[str, list[str]]) -> dict[str, int]:
+    """{step id: steps of work done when it finishes}: a seat works its steps in order and a
+    step starts once everything it waits for is done. A cycle counts as not waiting."""
+    prev = {st["id"]: (seat["steps"][i - 1]["id"] if i else None)
+            for seat in seats for i, st in enumerate(seat["steps"])}
+    done: dict[str, int] = {}
+    busy: set[str] = set()
+
+    def finish(sid: str) -> int:
+        if sid in done:
+            return done[sid]
+        if sid in busy:
+            return 0
+        busy.add(sid)
+        waits = [finish(d) for d in deps.get(sid, [])] + ([finish(prev[sid])] if prev.get(sid) else [])
+        busy.discard(sid)
+        done[sid] = max(waits, default=0) + 1
+        return done[sid]
+
+    for sid in prev:
+        finish(sid)
+    return done
+
+
+# ---- cost and time --------------------------------------------------------------------------
+
+TOKENS_PER_STEP = 150_000  # ponytail: one baseline for every step; tune it from real swarm runs
+MINUTES_PER_STEP = 10
+OUTPUT_SHARE = 0.05  # the rest is input, mostly cache reads in an agent loop
+_AGENT_PREFIXES = ("claude", "codex", "ducky", "cursor")
+
+
+def _price(model: str) -> tuple[float, float, float, float] | None:
+    """(input, cached input, output, cache write) USD per 1M tokens, None when unknown."""
+    head, sep, rest = model.partition(":")
+    mid = rest if sep and head.lower() in _AGENT_PREFIXES else model
+    try:
+        from backend.agent.model_pricing import infer_provider, price_for_model
+
+        return price_for_model(mid, infer_provider(mid))
+    except Exception:
+        return None
+
+
+def estimate(seats: list[dict[str, Any]]) -> dict[str, Any]:
+    """{seats: {name: {tokens, minutes, cost_usd}}, total: {tokens, minutes, cost_usd, text}}.
+    Seat minutes = its own steps; total minutes = the longest chain through ``after``."""
+    out: dict[str, Any] = {}
+    for seat in seats:
+        tokens = len(seat["steps"]) * TOKENS_PER_STEP
+        price = _price(str(seat.get("model") or ""))
+        cost = (None if price is None else
+                round((tokens * (1 - OUTPUT_SHARE) * price[1] + tokens * OUTPUT_SHARE * price[2]) / 1e6, 2))
+        out[seat["name"]] = {"tokens": tokens, "minutes": len(seat["steps"]) * MINUTES_PER_STEP, "cost_usd": cost}
+    tokens = sum(v["tokens"] for v in out.values())
+    minutes = max(_finish_steps(seats, step_deps(seats)).values(), default=0) * MINUTES_PER_STEP
+    costs = [v["cost_usd"] for v in out.values() if v["cost_usd"] is not None]
+    cost = round(sum(costs), 2) if costs else None
+    text = f"~{tokens / 1e6:.1f}M tokens · ~{minutes} min" + (f" · ~${cost:.2f}" if cost is not None else "")
+    return {"seats": out, "total": {"tokens": tokens, "minutes": minutes, "cost_usd": cost, "text": text}}
+
+
 # ---- preview and edits --------------------------------------------------------------------
 
 def _job_edits(jobs: list[dict[str, Any]], edits: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -386,5 +484,6 @@ def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents
         # The plan Build makes, as one outline: the person approves it with the tree.
         "plan": {"title": goal, "sections": [{"seat": s["name"], "title": s["sub_plan"]["title"],
                                                "steps": s["sub_plan"]["steps"]} for s in seats]},
+        "estimate": estimate(preview_seats(tree)),
         "jobs": {s["name"]: next(j for j in kept if j["name"] == s["job"]) for s in seats},
     }
