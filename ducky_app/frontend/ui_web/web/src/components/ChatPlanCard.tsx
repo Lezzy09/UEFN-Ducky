@@ -4,6 +4,7 @@ import { getApi } from "../hooks/usePanelApi";
 import { useAgentEventSubscription } from "../hooks/useAgentEventBus";
 import { useConfirmModal } from "../contexts/ConfirmModalContext";
 import { ChatPlanPopup } from "./ChatPlanPopup";
+import { PlanLeadLinks } from "./PlanOwnerChips";
 
 /** Live plan state shared by the chat dock and its finished-plan card. */
 export function useChatPlan(chatId: string) {
@@ -155,6 +156,8 @@ export function ChatPlanCard({ plan, progress, allDone, onOpenPlan, onStopTracki
   if (plan == null || allDone) return null;
   return (
     <div className="chat-pane-plan-dock">
+      {/* A member's part of a team plan: Lead and Full plan lead back to the whole plan. */}
+      {plan.assigned_from ? <PlanLeadLinks assignedFrom={plan.assigned_from} /> : null}
       <ChatPlanPopup
         plan={plan}
         progress={progress}
