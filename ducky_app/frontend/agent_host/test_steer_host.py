@@ -30,6 +30,7 @@ def _clean(monkeypatch):
     monkeypatch.setattr(steer, "_run_push", {})
     monkeypatch.setattr(steer, "_forwarded", {})
     monkeypatch.setattr(steer_host, "_open_questions", set())
+    monkeypatch.setattr(steer_host, "_in_host", False)  # enable() in a test must not outlive it
 
 
 def test_the_hosts_pipe_answers_steer_and_question_checks(monkeypatch):

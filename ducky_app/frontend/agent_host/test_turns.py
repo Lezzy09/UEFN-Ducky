@@ -43,9 +43,14 @@ def piped(monkeypatch):
     released = []
     monkeypatch.setattr(turns, "_supervisor", lambda: SimpleNamespace(assign=lambda cid: host, release=released.append))
     monkeypatch.setattr(turns, "_sender", lambda ch: lambda ev: ch.send("event", conv_id=ev["conv_id"], events=[ev]))
+    from backend.agent.coding_agents import runner
     from frontend import settings
     from frontend.ui_web import project_chats
 
+    monkeypatch.setattr(runner, "on_saved", None)  # the host side sets it per channel
+    from frontend.agent_host import steer_host
+
+    monkeypatch.setattr(steer_host, "_in_host", False)
     monkeypatch.setattr(settings, "PanelSettings", SimpleNamespace(load=lambda: SimpleNamespace(uefn_project_root="")))
     monkeypatch.setattr(settings, "apply_workspace_env", lambda root: None)
     monkeypatch.setattr(project_chats, "load_conversation", lambda cid: SimpleNamespace(id=cid, messages=[]))

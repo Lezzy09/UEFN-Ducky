@@ -416,8 +416,23 @@ def checkpoint_coding_turn(
         if error:
             msg["error"] = error
         upsert_in_flight_assistant(conv, msg, run_id=run_id, project_root=project_root)
+        _notify_saved(conv.id)
     except Exception:
         pass
+
+
+# Set by the agent host (frontend/agent_host/turns.py): after each save of a turn it runs,
+# it tells the app ``saved {conv_id, final}`` so a chat on screen reloads.
+on_saved: Callable[[str, bool], None] | None = None
+
+
+def _notify_saved(conv_id: str, final: bool = False) -> None:
+    hook = on_saved
+    if hook is not None:
+        try:
+            hook(conv_id, final)
+        except Exception:  # noqa: BLE001 - a lost notice only delays a reload
+            pass
 
 
 _CHECKPOINT_EVERY_S = 0.8
@@ -674,6 +689,7 @@ def _emit_assistant(
     if terminal_session_id:
         conv.terminal_session_id = terminal_session_id
     save_conversation(conv)
+    _notify_saved(conv.id, final=True)
     from frontend.ui_web.agent_modes import close_changeset_run
 
     if ok:

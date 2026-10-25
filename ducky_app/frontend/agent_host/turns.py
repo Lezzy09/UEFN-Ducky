@@ -153,12 +153,33 @@ def on_app_frame(host: Any, frame: dict[str, Any]) -> None:
                     turn.push(event)
                 except Exception:  # noqa: BLE001 - one bad event never stops the reader
                     pass
+    elif op == "saved":
+        _on_saved(str(frame.get("conv_id") or ""), bool(frame.get("final")))
     elif op == "turn_ended":
         with _lock:
             turn = _by_run.get(str(frame.get("run_id") or ""))
         if turn is not None:
             turn.error = str(frame.get("error") or "")
             turn.done.set()
+
+
+def _on_screen(conv_id: str) -> bool:
+    """Whether some window shows this chat (no window reported yet: all of them do)."""
+    panel = sys.modules.get("frontend.ui_web.panel_api")
+    if panel is None or not getattr(panel, "_visible_by_viewer", None):
+        return True
+    return conv_id in panel._visible_union()
+
+
+def _on_saved(conv_id: str, final: bool) -> None:
+    """The host saved this chat. Mid-turn checkpoints need nothing (the window streams the
+    turn live; a closed chat reads the database when opened); the turn's final save reloads
+    the chat in the windows that show it."""
+    if not final or not conv_id or not _on_screen(conv_id):
+        return
+    from frontend.ui_web.agent_modes import notify_context_changed
+
+    notify_context_changed(conv_id)
 
 
 def on_host_closed(host: Any, reason: str) -> None:
@@ -194,6 +215,18 @@ def _flush() -> None:
     batcher = getattr(host_main, "_batcher", None)
     if batcher is not None:
         batcher.flush()
+
+
+def _report_saves(channel: Any) -> None:
+    """The host writes its turns' checkpoints and replies to ducky.db itself; each save is told."""
+    from backend.agent.coding_agents import runner
+
+    def saved(conv_id: str, final: bool) -> None:
+        if final:
+            _flush()  # the turn's last events reach the app before its reload
+        channel.send("saved", conv_id=conv_id, final=final)
+
+    runner.on_saved = saved
 
 
 def _host_turn(channel: Any, frame: dict[str, Any]) -> None:
@@ -251,6 +284,7 @@ def on_frame(channel: Any, frame: dict[str, Any]) -> None:
         steer_host.set_question(str(frame.get("conv_id") or ""), bool(frame.get("open")))
     elif op == "start_turn":
         steer_host.enable()
+        _report_saves(channel)
         run_id = str(frame.get("run_id") or "")
         if not run_id or run_id in _cancels:
             return
