@@ -554,6 +554,17 @@ export function ChatComposer({
     [applyTextareaHeight],
   );
 
+  // The saved height goes on the draft's element here: a style prop on a component is
+  // lint-forbidden, and the drag and grow paths already size it through the ref.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el || textareaHeight == null) return;
+    const max = maxTextareaHeightRef.current;
+    el.style.height = `${textareaHeight}px`;
+    el.style.minHeight = `${minTextareaHeight.current}px`;
+    el.style.maxHeight = Number.isFinite(max) ? `${max}px` : "";
+  }, [textareaHeight, textareaRef]);
+
   const onInputResizeEnd = useCallback(() => {
     inputResizingRef.current = false;
     const h = liveTextareaHeightRef.current;
@@ -949,17 +960,6 @@ export function ChatComposer({
                 mentionsEnabled: mentionsOn,
               })}
               className="chat-pane-textarea"
-              style={
-                textareaHeight != null
-                  ? {
-                      height: textareaHeight,
-                      minHeight: minTextareaHeight.current,
-                      maxHeight: Number.isFinite(maxTextareaHeightRef.current)
-                        ? maxTextareaHeightRef.current
-                        : undefined,
-                    }
-                  : undefined
-              }
             />
           </div>
 
