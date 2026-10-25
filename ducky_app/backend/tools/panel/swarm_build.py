@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
@@ -143,15 +144,15 @@ class PanelSwarmApi:
 
         _loads(ducky_set_muted(conv_id=conv_id, muted=muted))
 
-    def ping(self, conv_id: str, text: str, timeout_s: float) -> dict[str, Any]:
-        """One tiny turn: {ok} or {ok: False, error}."""
+    def ping(self, conv_id: str, text: str, timeout_s: float, later: Any = None) -> dict[str, Any]:
+        """One tiny turn through K3's seat queue (see ``queued_ping``)."""
+        from frontend.ui_web import seat_queue
         from frontend.ui_web.agent_modes import run_message_and_wait
 
-        # ponytail: straight run_message_and_wait; route through K3's seat queue once it lands.
-        out = run_message_and_wait(conv_id, text, "agent", timeout_sec=timeout_s, queue_if_busy=True)
-        if out.get("status") == "done" and str(out.get("assistant_text") or "").strip():
-            return {"ok": True}
-        return {"ok": False, "error": str(out.get("error") or out.get("status") or "no reply")}
+        def ask(cid: str, msg: str, secs: float) -> dict[str, Any]:
+            return run_message_and_wait(cid, msg, "agent", timeout_sec=secs, queue_if_busy=True)
+
+        return queued_ping(seat_queue.request, ask, conv_id, text, timeout_s, later)
 
     def assign(self, chat_id: str, node_id: str, assignee: str) -> None:
         from backend.tools.panel.ducky_panel import ducky_plan_update_node
@@ -186,7 +187,7 @@ class _Defaults:
     def restore_home(self, conv_id: str, home: dict[str, str]) -> None:
         pass
 
-    def ping(self, conv_id: str, text: str, timeout_s: float) -> dict[str, Any]:
+    def ping(self, conv_id: str, text: str, timeout_s: float, later: Any = None) -> dict[str, Any]:
         return {"ok": True}
 
     def is_chat(self, conv_id: str) -> bool:
@@ -361,24 +362,79 @@ def _ping_text(swarm_id: str, seat: dict[str, Any]) -> str:
             f"deliverable in {seat['outputs']}/ (it outlives your sandbox and this chat).")
 
 
+def _answer(out: dict[str, Any]) -> dict[str, Any]:
+    if out.get("status") == "done" and str(out.get("assistant_text") or "").strip():
+        return {"ok": True}
+    return {"ok": False, "error": str(out.get("error") or out.get("status") or "no reply")}
+
+
+def queued_ping(request: Any, ask: Any, conv_id: str, text: str, timeout_s: float,
+                later: Any = None) -> dict[str, Any]:
+    """Ping *conv_id* through the seat queue: ``request(conv_id, start)`` runs ``start`` when a
+    slot is free, and ``ask(conv_id, text, timeout_s)`` is the turn (run_message_and_wait's
+    reply). The 30 s for an answer count from when the ping starts, not from the queue:
+    {ok: True}, {ok: False, error} (started, no answer) or {ok: None, queued: True} (no slot
+    yet; ``later(result)`` gets the answer when the ping has run)."""
+    lock = threading.Lock()
+    started, done = threading.Event(), threading.Event()
+    out: dict[str, Any] = {}
+    waiting = [True]
+
+    def start() -> None:
+        started.set()
+        res = _answer(ask(conv_id, text, timeout_s))
+        with lock:
+            out.update(res)
+            done.set()
+            late = not waiting[0]
+        if late and later is not None:
+            later(res)
+
+    if request(conv_id, start) == "busy":
+        return {"ok": True}  # already running a turn or waiting in line: it's alive
+    started.wait(timeout_s)
+    with lock:
+        if not started.is_set():
+            waiting[0] = False
+            return {"ok": None, "queued": True}
+    done.wait(timeout_s + 5)  # ask times out on its own; the extra is for a reply in flight
+    with lock:
+        if not done.is_set():
+            waiting[0] = False
+            return {"ok": False, "error": "no reply"}
+        return dict(out)
+
+
+def _settle(seat: dict[str, Any], res: dict[str, Any], api: Any, lead: str) -> None:
+    if res.get("ok"):
+        api.assign(lead, seat["sub_plan"]["id"], seat["conv_id"])
+        seat["status"] = "assigned"
+        seat.pop("error", None)
+    elif res.get("queued"):
+        if seat.get("status") not in ("assigned", "seat_failed"):  # its late answer may have come first
+            seat["status"] = "queued"  # waiting for a free slot: not silent, assigned once it answers
+    else:
+        seat["status"] = "seat_failed"
+        seat["error"] = (f"{seat['name']} ({seat.get('model') or seat['profile']}): didn't start "
+                         f"({res.get('error') or 'no reply'}) · Swap model")
+
+
 def _start_seats(seats: list[dict[str, Any]], api: Any, record: dict[str, Any]) -> None:
-    """Ping each seat, then assign the ones that answered; a silent one is 'seat_failed'."""
+    """Ping each seat through the seat queue, then assign the ones that answered; one that
+    started and stayed silent is 'seat_failed', one still waiting for a slot is 'queued'."""
+    lead = record["lead"]
+
     def one(seat: dict[str, Any]) -> dict[str, Any]:
         try:
-            return api.ping(seat["conv_id"], _ping_text(record["id"], seat), PING_TIMEOUT_S)
+            return api.ping(seat["conv_id"], _ping_text(record["id"], seat), PING_TIMEOUT_S,
+                            later=lambda res, s=seat: _settle(s, res, api, lead))
         except Exception as exc:  # noqa: BLE001 - a failed seat is reported on the card, not raised
             return {"ok": False, "error": str(exc)}
 
     with ThreadPoolExecutor(max_workers=max(1, min(8, len(seats)))) as pool:
         results = list(pool.map(one, seats))
     for seat, res in zip(seats, results):
-        if res.get("ok"):
-            api.assign(record["lead"], seat["sub_plan"]["id"], seat["conv_id"])
-            seat["status"] = "assigned"
-        else:
-            seat["status"] = "seat_failed"
-            seat["error"] = (f"{seat['name']} ({seat.get('model') or seat['profile']}): didn't start "
-                             f"({res.get('error') or 'no reply'}) · Swap model")
+        _settle(seat, res, api, lead)
 
 
 def _save(record: dict[str, Any], api: Any) -> None:

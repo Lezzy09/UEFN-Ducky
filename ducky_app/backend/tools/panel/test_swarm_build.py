@@ -85,7 +85,7 @@ class Api:
     def set_muted(self, conv_id, muted):
         pass
 
-    def ping(self, conv_id, text, timeout_s):
+    def ping(self, conv_id, text, timeout_s, later=None):
         self.calls.append(("ping", conv_id))
         return {"ok": True} if self.answers else {"ok": False, "error": "Cursor SDK request failed"}
 
