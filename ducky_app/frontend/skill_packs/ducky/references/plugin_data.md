@@ -140,26 +140,34 @@ code for it; these rules decide how well it works for people editing together.
   and leaving the group goes back to syncing on your own. Use it when the plugin's docs
   are small (up to 36 KB carried live; bigger ones come with sync). With no plugin code, every
   panel page then shows members' pointers, names and selections (`data-live-id` on
-  elements people point at keeps them on the same thing), a member can follow the
-  host's screen (scroll and tab clicks), and **anything someone presses or types in is
-  held for them**: for every teammate on the same screen that control greys out with
-  their name until they let go. A page that shows different things at one address names
-  its screen with `data-live-view` on `<body>` (`<record id>:<tab>`), so a hold never
-  greys out a control on another record and a pointer only shows to people on the same
-  screen. A follower on another screen gets the window event `ducky-live-goto`
-  (`detail.view` = the host's `data-live-view`) on joining and whenever the host moves:
-  open that record and tab (check it first), so joining a group lands on the host's
-  screen. Pictures and videos that are still syncing show
-  a placeholder and load when they arrive. For what each person is doing right now (a
-  3D camera so people see each other fly around, the tool in hand, what they play) each
-  PC sets its own **live state**: a panel `live.setMyState({state})` as often as it
+  elements people point at keeps them on the same thing), and **anything someone presses
+  or types in is held for them**: for every teammate on the same screen that control greys
+  out with their name until they let go. **The group shares one screen, through its
+  leader**: tab clicks (`role="tab"`, `a[href^="#"]`, or any control marked
+  `data-live-nav`), scrolling and the screen people are on go both ways (a member's go to
+  the leader, which does them and tells everyone, each page once). A page that shows
+  different things at one address names its screen with `data-live-view` on `<body>`
+  (`<record id>:<tab>`), so a hold never greys out a control on another record and a
+  pointer only shows to people on the same screen; when the group moves, the page gets the
+  window event `ducky-live-goto` (`detail.view` = that `data-live-view`): open that record
+  and tab (check it first). Pictures and videos that are still syncing show a placeholder
+  and load when they arrive.
+  The plugin's own **components share their state with the group** (a player playing
+  from 12 s, the picked clip, a panel open): a panel `live.share({key, value})` (JSON up to
+  8 KB, null drops it; 64 keys), every page gets `live.shared {key, value, by}` and reads
+  them all with `live.shared`; a backend uses `api.live.share(key, value)`, `.shared()`
+  and `.on_shared(fn)`. One value per key for the whole group, ordered by the leader, so
+  everyone ends on the same one; it shows on the PC that set it at once. For what each
+  person is doing (a 3D camera so people see each other fly around, the tool in hand)
+  each PC sets its own **live state**: a panel `live.setMyState({state})` as often as it
   changes (an object up to 4 KB, latest wins), and every groupmate's panels get
   `live.memberState {from, state}` (null: they left) and read all of them with
   `live.memberStates`; a backend uses `api.live.set_my_state`, `.member_states()` and
-  `.on_member_state(fn)`. Someone who joins later gets everyone's within 5 s. For
-  one-off events (a drag ended, a sound played) a backend uses `api.live.send(topic,
-  data)` and `api.live.on(topic, callback)`, a panel `live.send` (see `ai_plugins`). Data
-  still goes through `api.data`: the commit is the record.
+  `.on_member_state(fn)`. Someone who joins later gets both within 5 s. For one-off events
+  (a drag ended) a backend uses `api.live.send(topic, data)` and `api.live.on(topic,
+  callback)`, a panel `live.send` (see `ai_plugins`). Shared values and live states are
+  never kept: what matters after the group goes is data, through `api.data` (the commit is
+  the record).
 - `ducky_team_status(plugin)` says who is in the copy and what they do, what is locked,
   what waits to go out or come in, and the conflicts. `ducky_plugin_data_scope` gives
   the same for a shared copy.

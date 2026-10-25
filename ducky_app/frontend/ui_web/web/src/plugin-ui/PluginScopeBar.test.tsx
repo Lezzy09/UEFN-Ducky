@@ -720,7 +720,7 @@ describe("plugin scope bar", () => {
       expect(api.plugin_live_join).toHaveBeenCalledTimes(2);
     });
 
-    it("in a teammate's group the page follows the host's screen until Follow is turned off", async () => {
+    it("in a teammate's group the page shares the leader's screen until that is turned off", async () => {
       const inIliyas = live(true, [{ ...ILIYA, mine: true, members: [...ILIYA.members, { name: "You", device: "me", me: true }] }]);
       api.plugin_scope_status.mockResolvedValue(inIliyas);
       const followed = vi.fn();
@@ -729,12 +729,13 @@ describe("plugin scope bar", () => {
           <PluginScopeBar pluginId="brainrot-tcg" onScopeChanged={() => {}} onFollow={followed} />
         </ConfirmModalProvider>,
       );
-      await waitFor(() => expect(followed).toHaveBeenLastCalledWith("d1"));
+      await waitFor(() => expect(followed).toHaveBeenLastCalledWith("d1", false));
       fireEvent.click(liveButton());
-      const box = await screen.findByRole("checkbox", { name: /Follow iliya's screen/ });
+      const box = await screen.findByRole("checkbox", { name: /Same screen as the group/ });
+      expect(screen.getByText(/through iliya, who leads the group/)).toBeTruthy();
       expect((box as HTMLInputElement).checked).toBe(true);
       fireEvent.click(box);
-      await waitFor(() => expect(followed).toHaveBeenLastCalledWith(""));
+      await waitFor(() => expect(followed).toHaveBeenLastCalledWith("", false));
       expect(localStorage.getItem("ducky.pluginFollow.brainrot-tcg")).toBe("0");
     });
 
@@ -748,12 +749,28 @@ describe("plugin scope bar", () => {
           <PluginScopeBar pluginId="brainrot-tcg" onScopeChanged={() => {}} onFollow={followed} />
         </ConfirmModalProvider>,
       );
-      await waitFor(() => expect(followed).toHaveBeenLastCalledWith("d2"));
+      await waitFor(() => expect(followed).toHaveBeenLastCalledWith("d2", false));
       fireEvent.click(await screen.findByRole("button", { name: /^Mo/ }));
-      expect(await screen.findByRole("checkbox", { name: /Follow Mo's screen/ })).toBeTruthy();
+      expect(await screen.findByRole("checkbox", { name: /Same screen as the group/ })).toBeTruthy();
+      expect(screen.getByText(/through Mo, who leads the group/)).toBeTruthy();
     });
 
-    it("hosting, there is nobody to follow", async () => {
+    it("leading a group, the page's screen is the group's: nobody to follow", async () => {
+      const followed = vi.fn();
+      api.plugin_scope_status.mockResolvedValue(live(true, [{ ...MINE, room: "h:d1",
+        members: [...MINE.members, { name: "Mo", device: "d2" }] }]));
+      render(
+        <ConfirmModalProvider>
+          <PluginScopeBar pluginId="brainrot-tcg" onScopeChanged={() => {}} onFollow={followed} />
+        </ConfirmModalProvider>,
+      );
+      await waitFor(() => expect(followed).toHaveBeenLastCalledWith("", true));
+      fireEvent.click(await screen.findByRole("button", { name: /^You're live/ }));
+      expect(screen.queryByRole("checkbox")).toBeNull();
+      expect(screen.getByText(/^You lead the group: everyone sees your screen/)).toBeTruthy();
+    });
+
+    it("alone in its own group, the page leads nobody", async () => {
       const followed = vi.fn();
       api.plugin_scope_status.mockResolvedValue(live(true, [{ ...MINE, room: "h:d1" }]));
       render(
@@ -762,9 +779,7 @@ describe("plugin scope bar", () => {
         </ConfirmModalProvider>,
       );
       await waitFor(() => expect(followed).toHaveBeenCalled());
-      expect(followed).toHaveBeenLastCalledWith("");
-      fireEvent.click(await screen.findByRole("button", { name: /^You're live/ }));
-      expect(screen.queryByRole("checkbox")).toBeNull();
+      expect(followed).toHaveBeenLastCalledWith("", false);
     });
 
     it("offers no Live where the team service has none", async () => {

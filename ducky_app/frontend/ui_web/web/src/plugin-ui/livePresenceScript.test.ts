@@ -312,14 +312,15 @@ it("following the host goes to their screen (the plugin opens it), then scrolls 
   expect(went).toHaveLength(2);
   tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: { ...hostView, at: "p1:submit", v: "vsubmit" } });
   expect(went.at(-1)).toBe("p1:submit");  // the host moved: the follower goes too
-  // Live pages send their screen again every 5 s: one that joins or reloads catches up.
-  const views = () => sent.filter((m) => m.method === "live.view").length;
+  // A page not following anyone sends its screen again every 5 s: one that joins or reloads
+  // catches up (a follower sends only its own moves, to the leader).
+  tell({ type: "live.follow", device: "" });
+  const views = () => sent.filter((m) => m.method === "live.view" && !m.params.ask).length;
   const before = views();
   vi.advanceTimersByTime(5000);
   expect(views()).toBeGreaterThan(before);
   window.removeEventListener("ducky-live-goto", onGo);
   document.body.removeAttribute("data-live-view");
-  tell({ type: "live.follow", device: "" });
 });
 
 it("while live, this page's tab clicks and screen go to the group", () => {
@@ -327,5 +328,81 @@ it("while live, this page's tab clicks and screen go to the group", () => {
   tell({ type: "live.state", on: true });
   expect(sent.find((m) => m.method === "live.view")?.params).toMatchObject({ v: expect.stringMatching(/^v/), scroll: [{ anchor: "@doc", top: 0, left: 0 }] });
   (document.getElementById("rules-tab") as HTMLButtonElement).click();
-  expect(sent.find((m) => m.method === "live.nav")).toEqual({ method: "live.nav", params: { anchor: '[id="rules-tab"]' } });
+  expect(sent.find((m) => m.method === "live.nav")).toEqual({ method: "live.nav",
+    params: { anchor: '[id="rules-tab"]', v: expect.stringMatching(/^v/), o: expect.stringMatching(/^[a-z0-9]+:\d+$/) } });
+});
+
+const SAM = { name: "Sam", device: "d2" };
+const navs = () => sent.filter((m) => m.method === "live.nav").map((m) => m.params);
+
+it("a member's own tab click goes to the leader; what the leader does, every page does once", () => {
+  document.body.insertAdjacentHTML("beforeend", '<button role="tab" id="video-tab">Video</button>');
+  const tab = document.getElementById("video-tab") as HTMLButtonElement;
+  const clicks = vi.fn();
+  tab.addEventListener("click", clicks);
+  tell({ type: "live.state", on: true });
+  tell({ type: "live.follow", device: "d1", leading: false });  // Alex leads
+  tab.click();  // this person's own click: it happens here at once and asks the leader
+  const asked = navs()[0];
+  expect(asked).toMatchObject({ anchor: '[id="video-tab"]', ask: 1, to: "d1" });
+  tell({ type: "live.message", topic: "ducky.nav", from: ALEX, data: { anchor: '[id="video-tab"]', v: asked.v, o: asked.o } });
+  expect(clicks).toHaveBeenCalledTimes(1);  // the leader telling everyone: this page did it already
+  tell({ type: "live.message", topic: "ducky.nav", from: ALEX, data: { anchor: '[id="video-tab"]', v: asked.v, o: "sam:3" } });
+  expect(clicks).toHaveBeenCalledTimes(2);  // Sam's click, through the leader
+  tell({ type: "live.message", topic: "ducky.nav", from: SAM, data: { anchor: '[id="video-tab"]', v: asked.v, o: "sam:4", ask: 1 } });
+  expect(clicks).toHaveBeenCalledTimes(2);  // a member's ask is the leader's to do
+  expect(navs()).toHaveLength(1);
+  tell({ type: "live.follow", device: "" });
+});
+
+it("the leader does a member's click and tells everyone, naming who did it first", () => {
+  document.body.insertAdjacentHTML("beforeend", '<button role="tab" id="video-tab">Video</button>');
+  const clicks = vi.fn();
+  document.getElementById("video-tab")?.addEventListener("click", clicks);
+  tell({ type: "live.state", on: true });
+  tell({ type: "live.follow", device: "", leading: true });
+  const v = sent.find((m) => m.method === "live.view")?.params.v as string;
+  tell({ type: "live.message", topic: "ducky.nav", from: SAM, data: { anchor: '[id="video-tab"]', v, o: "sam:1", ask: 1 } });
+  expect(clicks).toHaveBeenCalledTimes(1);
+  expect(navs()).toEqual([{ anchor: '[id="video-tab"]', o: "sam:1", v }]);  // to everyone, Sam's page skips it
+  tell({ type: "live.message", topic: "ducky.nav", from: SAM, data: { anchor: '[id="video-tab"]', v, o: "sam:2" } });
+  expect(clicks).toHaveBeenCalledTimes(1);  // not an ask: only the leader's own go to everyone
+  tell({ type: "live.message", topic: "ducky.nav", from: SAM, data: { anchor: '[id="video-tab"]', v: "vother", o: "sam:3", ask: 1 } });
+  expect(clicks).toHaveBeenCalledTimes(1);  // asked from another screen: not here
+  tell({ type: "live.follow", device: "", leading: false });
+});
+
+it("a member's own move to another screen or scroll goes to the leader, which goes there with everyone", () => {
+  document.body.insertAdjacentHTML("beforeend", '<div id="list" style="overflow:auto"></div>');
+  const list = document.getElementById("list") as HTMLElement;
+  const went: string[] = [];
+  const onGo = (e: Event) => went.push((e as CustomEvent<{ view: string }>).detail.view);
+  window.addEventListener("ducky-live-goto", onGo);
+  document.body.setAttribute("data-live-view", "p1:video");
+  tell({ type: "live.state", on: true });
+  tell({ type: "live.follow", device: "d1", leading: false });
+  const v = sent.find((m) => m.method === "live.view")?.params.v as string;
+  tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: { v, at: "p1:video", scroll: [] } });
+  sent.length = 0;
+  vi.advanceTimersByTime(5000);
+  expect(sent.filter((m) => m.method === "live.view")).toEqual([]);  // where the leader is: a member sends no heartbeat
+  document.body.setAttribute("data-live-view", "p1:rules");  // this person opened Rules themselves
+  vi.advanceTimersByTime(1000);
+  expect(sent.find((m) => m.method === "live.view")?.params).toMatchObject({ at: "p1:rules", ask: 1, to: "d1" });
+  sent.length = 0;
+  vi.advanceTimersByTime(1000);
+  list.scrollTop = 200;
+  list.dispatchEvent(new Event("scroll"));  // their own scroll
+  expect(sent.find((m) => m.method === "live.view")?.params).toMatchObject({ ask: 1, scroll: expect.arrayContaining([
+    { anchor: '[id="list"]', top: 200, left: 0 }]) });
+  // The leader's older scroll arriving while they scroll never pulls them back.
+  tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: { v: sent[0].params.v, at: "p1:rules", scroll: [{ anchor: '[id="list"]', top: 0, left: 0 }] } });
+  expect(list.scrollTop).toBe(200);
+  // On the leader's page a member's ask moves the leader, and its screen goes to everyone.
+  tell({ type: "live.follow", device: "", leading: true });
+  tell({ type: "live.message", topic: "ducky.view", from: SAM, data: { v: "vx", at: "p1:thumbs", scroll: [], ask: 1 } });
+  expect(went.at(-1)).toBe("p1:thumbs");
+  window.removeEventListener("ducky-live-goto", onGo);
+  document.body.removeAttribute("data-live-view");
+  tell({ type: "live.follow", device: "", leading: false });
 });

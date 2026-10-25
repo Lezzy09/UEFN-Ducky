@@ -405,12 +405,17 @@ PANEL_ERROR_SCRIPT = (
 #   ``data-live-id``, else an id, else a short tag path from the nearest id), the point as a
 #   fraction of that element, and the screen it is on; a click on something that isn't a
 #   control reports a selection (an outline for 10 s);
-# - its screen (``live.view``: a view id, the plugin's ``data-live-view`` as ``at``, and
+# - the group shares one screen, through its leader (bridge event ``live.follow``: the
+#   leader's device while following it, and ``leading`` on the leader's own page). The
+#   leader's screen (``live.view``: a view id, the plugin's ``data-live-view`` as ``at``, and
 #   scroll positions; again every 5 s, so a page that joins or reloads catches up) and its
 #   tab clicks (``live.nav``: ``role="tab"``, ``a[href^="#"]``, ``data-live-nav``) go to the
-#   group; a page following that PC (bridge event ``live.follow``) goes to the same screen
-#   (the window event ``ducky-live-goto`` with ``detail.view`` = the host's ``at``, which
-#   the plugin opens), scrolls with it once it shows that screen, and clicks the same tabs.
+#   group, and every page following it goes to the same screen (the window event
+#   ``ducky-live-goto`` with ``detail.view`` = the leader's ``at``, which the plugin opens),
+#   scrolls and clicks with it. A member's own click, scroll or move to another screen goes
+#   to the leader instead (``ask``), which does it and tells everyone; each page does each
+#   click once (``o``: the page that did it first never does it again). A component's own
+#   state (a player playing, a picked clip) the plugin shares with ``live.share``.
 #   Teammates' pointers are drawn with their name in a click-through layer and fade after
 #   5 s; one on another screen, or whose element isn't on this one, doesn't show.
 #
@@ -432,7 +437,10 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
   var mine = {}, theirs = {}, far = [], boxes = {}, before = new WeakMap(), down = null, shared = false, incoming = 0, missing = [];
   var following = "", replaying = false, scrolled = [], sentView = "", viewAt = 0, holdsAsk = "";
   var lead = null, wentTo = "", wentFrom = "", wentAt = 0, scrolledTo = "", peers = {}, reached = {};
+  var leading = false, me = Math.random().toString(36).slice(2, 10), seq = 0, leadAt = "", askedAt = "";
+  var appliedAt = 0, selfScrollAt = 0;
   var HOLD_AFTER_MS = 1500, HOLD_RENEW_MS = 10000, HOLD_STALE_MS = 30000, VIEW_GAP_MS = 250, VIEW_EVERY_MS = 5000;
+  var ECHO_MS = 400, OWN_SCROLL_MS = 1000;
   var CONTROL = 'input,textarea,select,button,[contenteditable=""],[contenteditable="true"],[role="button"],[role="slider"],' +
     '[role="checkbox"],[role="switch"],[role="textbox"],[role="spinbutton"],[role="combobox"],[role="option"],' +
     '[role="menuitem"],[draggable="true"],[data-live-lock]';
@@ -629,29 +637,48 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
     paint();
   }
 
-  // -- following the host: their screen's scroll and tab clicks
+  // -- one screen for the group, through its leader. What the leader does on its screen (a
+  // tab click, a scroll, opening another screen) every page following it does too; what a
+  // member does goes to the leader (``ask``), which does it and tells everyone, so every page
+  // sees the same order. Each click reaches each page once: ``o`` names the page that did it
+  // first, which never does it again. The leader's screen goes out every 5 s too, so a page
+  // that drifted or joined late catches up.
+  function origin() { return me + ":" + (++seq); }
+  function own(o) { return typeof o === "string" && o.indexOf(me + ":") === 0; }
+  function asking() { return on && !leading && !!following; }  // a member on the group's screen
   function navOf(el) { return el && el.nodeType === 1 && !ours(el) && el.closest ? el.closest(NAV) : null; }
-  function sendView(force) {
-    if (!on || replaying) return;
-    var t = Date.now(), v = view();
-    if (!force && v === sentView && t - viewAt < VIEW_GAP_MS) return;
-    sentView = v; viewAt = t;
+  function scrollRows() {
     var rows = [], seen = [document.scrollingElement || document.documentElement].concat(scrolled);
     for (var i = 0; i < seen.length && rows.length < 8; i++) {
       var el = seen[i];
       if (el && (el === seen[0] || el.isConnected)) rows.push({ anchor: anchor(el), top: el.scrollTop || 0, left: el.scrollLeft || 0 });
     }
-    req("live.view", { v: v, at: marks().join("|").slice(0, 400), scroll: rows });
+    return rows;
   }
-  // The host's screen: this page goes there when the host moved (the plugin opens it), again
-  // every 5 s while this page is still where the last try left it (not there yet), never when
-  // the follower moved away by themselves; and scrolls with it once it shows the same screen.
+  function sendView(force) {
+    if (!on || replaying) return;
+    var t = Date.now(), v = view();
+    if (!force && v === sentView && t - viewAt < VIEW_GAP_MS) return;
+    var d = { v: v, at: marks().join("|").slice(0, 400), scroll: scrollRows() };
+    if (asking()) {  // a member: only its own moves, and only to the leader
+      var moved = d.at && d.at !== leadAt && d.at !== wentTo && d.at !== askedAt;
+      if (!moved && (force || t - appliedAt < ECHO_MS)) return;  // a heartbeat, or the leader's scroll landing here
+      askedAt = d.at; d.ask = 1; d.to = following;
+    }
+    sentView = v; viewAt = t;
+    req("live.view", d);
+  }
+  // The leader's screen: this page goes there when the leader moved (the plugin opens it),
+  // again every 5 s while this page is still where the last try left it (not there yet); and
+  // scrolls with it once it shows the same screen. A member's own move went to the leader
+  // instead (``sendView``), so the leader moving there brings everyone.
   function follow(d) {
     var at = typeof d.at === "string" ? d.at : "", mine = marks().join("|"), t = Date.now();
     if (at && at !== mine && (at !== wentTo || (mine === wentFrom && t - wentAt >= VIEW_EVERY_MS))) {
       wentTo = at; wentFrom = mine; wentAt = t;
       window.dispatchEvent(new CustomEvent("ducky-live-goto", { detail: { view: at } }));
     }
+    leadAt = at;
     lead = d;
     catchUp();
   }
@@ -659,8 +686,9 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
     if (!lead || !here(lead.v)) return;
     var rows = lead.scroll || [], s = JSON.stringify(rows);
     lead = null;
-    if (s === scrolledTo) return;
+    if (s === scrolledTo || Date.now() - selfScrollAt < OWN_SCROLL_MS) return;  // scrolling here right now wins
     scrolledTo = s;
+    appliedAt = Date.now();
     replaying = true;
     try {
       rows.forEach(function (r) {
@@ -671,9 +699,31 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
   }
   function navigate(d) {
     var el = navOf(find(d.anchor));
-    if (!el) return;
+    if (!el) return false;
     replaying = true;
     try { el.click(); } finally { replaying = false; }
+    appliedAt = Date.now();
+    return true;
+  }
+  function theirNav(f, d) {
+    if (leading && d.ask) {  // a member's click: the leader does it, then everyone (theirs once)
+      if (here(d.v) && navigate(d)) req("live.nav", { anchor: d.anchor, v: d.v, o: String(d.o || "") });
+      return;
+    }
+    if (following && key(f) === following && !d.ask && !own(d.o) && here(d.v)) navigate(d);
+  }
+  function theirView(f, d) {
+    if (leading && d.ask) {  // a member opened another screen or scrolled: the leader goes too, and everyone with it
+      var at = typeof d.at === "string" ? d.at : "", mine = marks().join("|");
+      if (at && at !== mine) {
+        wentTo = at; wentFrom = mine; wentAt = Date.now();
+        window.dispatchEvent(new CustomEvent("ducky-live-goto", { detail: { view: at } }));
+      }
+      if (Date.now() - selfScrollAt >= OWN_SCROLL_MS) { lead = { v: d.v, scroll: d.scroll }; catchUp(); }
+      setTimeout(function () { sendView(true); }, 100);
+      return;
+    }
+    if (following && key(f) === following && !d.ask) follow(d);
   }
 
   // -- pictures that aren't on this PC yet
@@ -715,6 +765,7 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
     if (el && el.nodeType === 1 && el !== document.scrollingElement && scrolled.indexOf(el) < 0) {
       scrolled.unshift(el); scrolled.length = Math.min(scrolled.length, 7);
     }
+    if (!replaying && Date.now() - appliedAt >= ECHO_MS) selfScrollAt = Date.now();
     sendView(false);
   }, true);
   window.addEventListener("resize", replace);
@@ -741,7 +792,10 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
   document.addEventListener("pointercancel", up, true);
   document.addEventListener("click", function (e) {
     var el = navOf(e.target);
-    if (on && el && !replaying) req("live.nav", { anchor: anchor(el) });
+    if (!on || !el || replaying) return;
+    var d = { anchor: anchor(el), v: view(), o: origin() };
+    if (asking()) { d.ask = 1; d.to = following; }
+    req("live.nav", d);
   }, true);
   document.addEventListener("focusin", function (e) {
     if (!holding()) return;
@@ -771,9 +825,12 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
     else if (e.type === "live.message" && on && e.topic === "ducky.pointer") pointer(from, e.data || {});
     else if (e.type === "live.message" && on && e.topic === "ducky.select") select(from, e.data || {});
     else if (e.type === "live.message" && on && e.topic === "ducky.hold") theirHold(from, e.data || {});
-    else if (e.type === "live.message" && on && e.topic === "ducky.view" && following && key(from) === following) follow(e.data || {});
-    else if (e.type === "live.message" && on && e.topic === "ducky.nav" && following && key(from) === following) navigate(e.data || {});
-    else if (e.type === "live.follow") { following = String(e.device || ""); lead = null; wentTo = wentFrom = scrolledTo = ""; }
+    else if (e.type === "live.message" && on && e.topic === "ducky.view") theirView(from, e.data || {});
+    else if (e.type === "live.message" && on && e.topic === "ducky.nav") theirNav(from, e.data || {});
+    else if (e.type === "live.follow") {
+      following = String(e.device || ""); leading = !!e.leading;
+      lead = null; wentTo = wentFrom = scrolledTo = leadAt = askedAt = "";
+    }
     else if (e.type === "live.holds") farHolds(e.holds);
     else if (e.type === "live.peers") {
       var keep = {}, linked = {}, fresh = false;

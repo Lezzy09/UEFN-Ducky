@@ -768,6 +768,60 @@ def test_each_pc_has_a_live_state_everyone_in_the_group_sees(team: dict[str, Any
     assert live.member_states(PLUGIN) == []
 
 
+def test_a_members_shared_value_goes_through_the_leader_and_everyone_ends_on_its_order(team: dict[str, Any]) -> None:
+    account, impl, pushed = team["account"], team["impl"], team["pushed"]
+    me = space_vcs.device_id()
+    assert live.share(PLUGIN, "player", {"playing": True})["ok"] is False  # not live
+    _roster(account, _on("d_cy", "Cy", "h:d_cy", time.time() - 60))
+    live.join(PLUGIN, "h:d_cy")  # Cy leads
+    impl.sent.clear()
+    assert live.share(PLUGIN, "player", {"playing": True, "t": 12})["ok"]
+    assert impl.sent == [(PLUGIN, live.SHARE, {"k": "player", "v": {"playing": True, "t": 12}, "ask": 1}, "d_cy", False)]
+    assert live.shared(PLUGIN) == {"player": {"value": {"playing": True, "t": 12}, "by": {"name": "You", "device": me, "me": True}}}
+    # The leader's older value (a resend) while this one waits never puts the old one back.
+    live.deliver(account, SPACE, PLUGIN, CY, live.SHARE, {"k": "player", "v": {"playing": False}, "ver": 0})
+    assert live.shared(PLUGIN)["player"]["value"] == {"playing": True, "t": 12}
+    # The leader's answers, in its order: this one, then Cy pausing it.
+    live.deliver(account, SPACE, PLUGIN, CY, live.SHARE, {"k": "player", "v": {"playing": True, "t": 12}, "ver": 1,
+                                                          "by": {"device": me}})
+    live.deliver(account, SPACE, PLUGIN, CY, live.SHARE, {"k": "player", "v": {"playing": False, "t": 13}, "ver": 2})
+    assert live.shared(PLUGIN)["player"] == {"value": {"playing": False, "t": 13}, "by": {"name": "Cy", "device": "d_cy"}}
+    assert [p for p in pushed if p["type"] == "live_shared"][-1] == {
+        "type": "live_shared", "plugin": PLUGIN, "key": "player", "value": {"playing": False, "t": 13},
+        "by": {"name": "Cy", "device": "d_cy"}}
+    # Only the leader's word counts, and an older version never wins.
+    live.deliver(account, SPACE, PLUGIN, ALEX, live.SHARE, {"k": "player", "v": {"x": 1}, "ver": 9})
+    live.deliver(account, SPACE, PLUGIN, CY, live.SHARE, {"k": "player", "v": {"old": 1}, "ver": 1})
+    assert live.shared(PLUGIN)["player"]["value"] == {"playing": False, "t": 13}
+
+
+def test_the_leader_orders_shared_values_and_sends_them_again_for_latecomers(team: dict[str, Any]) -> None:
+    account, impl = team["account"], team["impl"]
+    me = space_vcs.device_id()
+    _roster(account)
+    live.join(PLUGIN)  # this PC leads
+    _roster(account, _on("d_cy", "Cy", live.host_room(), time.time()))
+    impl.sent.clear()
+    heard: list[tuple[str, Any, str]] = []
+    live.LiveApi(PLUGIN).on_shared(lambda key, value, by: heard.append((key, value, str(by.get("name")))))
+    live.deliver(account, SPACE, PLUGIN, CY, live.SHARE, {"k": "clip", "v": "c3", "ask": 1})
+    assert impl.sent[-1] == (PLUGIN, live.SHARE, {"k": "clip", "v": "c3", "ver": 1, "by": {"name": "Cy", "device": "d_cy"}},
+                             "", False)
+    assert heard == [("clip", "c3", "Cy")]
+    assert live.share(PLUGIN, "clip", "c4")["ok"]
+    assert impl.sent[-1] == (PLUGIN, live.SHARE, {"k": "clip", "v": "c4", "ver": 2}, "", False)
+    live.deliver(account, SPACE, PLUGIN, ALEX, live.SHARE, {"k": "clip", "v": "zz", "ask": 1})  # not in the group
+    assert live.shared(PLUGIN)["clip"]["value"] == "c4"
+    impl.sent.clear()
+    live._state_tick(time.time() + live.STATE_EVERY_S + 1)
+    assert (PLUGIN, live.SHARE, {"k": "clip", "v": "c4", "ver": 2, "by": {"device": me}}, "", True) in impl.sent
+    assert live.share(PLUGIN, "bad key!", 1)["ok"] is False
+    assert live.share(PLUGIN, "big", "y" * 9000)["ok"] is False
+    assert live.share(PLUGIN, "clip", None)["ok"] and "clip" not in live.shared(PLUGIN)
+    live.leave(PLUGIN)
+    assert live.shared(PLUGIN) == {}
+
+
 def test_history_names_who_made_a_change_the_leader_sent(team: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     from backend.uefn_plugins.ledger import History, HistoryEntry
 

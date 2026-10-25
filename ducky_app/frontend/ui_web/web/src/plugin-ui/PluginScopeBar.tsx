@@ -61,9 +61,10 @@ type Props = {
   /** A team copy or not, and how many teammates' changes are on their way (the page's
    * live script shows "Getting picture…" in a picture that isn't here yet). */
   onSyncState?: (state: { shared: boolean; incoming: number }) => void;
-  /** Whose screen the page follows: the host's device while Follow is on in their group,
-   * else "". */
-  onFollow?: (device: string) => void;
+  /** Whose screen the page follows: the leader's device while Follow is on in their group,
+   * else ""; `leading` while this PC leads a group with others in it (its screen is the
+   * group's: members' clicks, plays and moves come to it). */
+  onFollow?: (device: string, leading: boolean) => void;
 };
 
 /** Follow the host's screen in a group this PC joined, per plugin and per viewer (on until
@@ -277,9 +278,10 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
   const joined = liveOn ? status?.live?.groups?.find((g) => g.mine && !g.hostIsMe) : undefined;
   const hostDevice = joined?.hostDevice ?? "";
   const followDevice = follow && hostDevice && joined?.members.some((m) => m.device === hostDevice) ? hostDevice : "";
+  const leading = liveOn && Boolean(status?.live?.groups?.some((g) => g.mine && g.hostIsMe && g.members.length > 1));
   useEffect(() => {
-    followNotify.current?.(followDevice);
-  }, [followDevice]);
+    followNotify.current?.(followDevice, leading);
+  }, [followDevice, leading]);
   // "Connecting to …" turns into linked or "Can't reach" after the host's grace: read it again then.
   const connecting = (status?.live?.connecting ?? []).join(",");
   useEffect(() => {

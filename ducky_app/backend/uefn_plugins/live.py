@@ -49,7 +49,7 @@ LIMIT_PER_S = 30  # messages a second per plugin
 FAST_PER_S = 25  # pointers and selections a second per plugin
 CHANGE = "ducky.change"  # "I committed: pull now"
 HOLD = "ducky.hold"  # a control this PC is pressing (on) or let go of
-NAV = "ducky.nav"  # a tab the host clicked: followers click it too
+NAV = "ducky.nav"  # a tab clicked: the group's screen clicks it too
 FAST_TOPICS = frozenset({"ducky.pointer", "ducky.select", "ducky.view"})  # may drop: the next one replaces it
 HOST_TOPICS = FAST_TOPICS | {HOLD, NAV}
 # Each PC's own live state in a plugin (where its camera is, the tool in hand): a plugin
@@ -58,6 +58,11 @@ STATE = "ducky.state"
 STATE_MAX_BYTES = 4 * 1024
 STATE_EVERY_S = 5.0  # sent again this often, so a PC that just joined gets it
 STATE_STALE_S = 15.0  # a groupmate's state not heard of this long is gone (they left, or crashed)
+# The group's shared values of a plugin's components, through its leader (:func:`share`).
+SHARE = "ducky.share"
+SHARE_MAX_BYTES = 8 * 1024
+SHARE_KEYS_MAX = 64
+_SHARE_KEY_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 HOLD_STALE_S = 30.0  # the page renews a hold every 10 s; one not renewed this long is gone
 HOLDS_MAX = 4  # holds per plugin a PC puts in its presence (the sealed blob is 8 KiB at most)
 LINK_GRACE_S = 10.0  # a group member with no link this long after both were live is unreachable
@@ -104,6 +109,8 @@ _relayed: dict[_ItemKey, dict[str, str]] = {}  # a groupmate's change this PC to
 _led_by: dict[str, str] = {}  # plugin -> the device that led this PC's group at the last look
 _my_states: dict[str, dict[str, Any]] = {}  # plugin -> {state, sent}: this PC's live state
 _their_states: dict[str, dict[str, dict[str, Any]]] = {}  # plugin -> device -> {from, state, at}
+_shared: dict[str, dict[str, dict[str, Any]]] = {}  # plugin -> key -> {v, ver, by}: the group's values
+_shared_sent: dict[str, float] = {}  # plugin -> when the leader last sent them all again
 _marks: dict[tuple[str, str, str], float] = {}  # (account, space, plugin) -> newest write sent live
 _outbox: list[threading.Thread] = []
 
@@ -449,6 +456,8 @@ def leave(plugin: str, *, why: str = "") -> dict[str, Any]:
         _led_by.pop(plugin, None)
         _my_states.pop(plugin, None)
         _their_states.pop(plugin, None)
+        _shared.pop(plugin, None)
+        _shared_sent.pop(plugin, None)
     _reload_kept(plugin)
     if st is not None:
         _publish_room(plugin, None)
@@ -499,7 +508,8 @@ def send(plugin: str, topic: str, data: Any, *, to: str = "", fast: bool = False
     st = _current(plugin)
     if st is None:
         return {"ok": False, "error": "This plugin isn't live."}
-    fast = bool(fast or topic in FAST_TOPICS)
+    # A member's own move asking the leader (``ask``) must arrive, even of a fast topic.
+    fast = bool(fast or (topic in FAST_TOPICS and not (isinstance(data, dict) and data.get("ask"))))
     if not _rate_ok(plugin, fast):
         return {"ok": False, "error": "Too many live messages: at most 30 a second."}
     try:
@@ -605,6 +615,167 @@ def _state_tick(now: float | None = None) -> None:
             _send_state(plugin, st, s["state"])
     for plugin, _device, who in gone:
         _push({"type": "live_member_state", "plugin": plugin, "from": who, "state": None})
+    _share_tick(now)
+
+
+# --------------------------------------------------------------------------- shared state
+#
+# The group's own state of a plugin's components (a player playing from 12 s, the clip
+# picked, a panel open): one value per key for the whole group, through its leader like the
+# screen. A plugin shares a key's value; on a member it shows there at once and goes to the
+# leader (``ask``), which takes the values in the order it hears them and tells everyone
+# with a version, so every page ends on the same one. The leader sends each key again every
+# :data:`STATE_EVERY_S`, so a PC that just joined has them all. Never data: nothing of it is
+# kept or synced (what matters after the group goes belongs in ``api.data``).
+
+
+def _my_who() -> dict[str, Any]:
+    return {"name": "You", "device": _device(), "me": True}
+
+
+def _wire_by(by: dict[str, Any]) -> dict[str, Any]:
+    """Who changed a value, as it goes to the group: this PC by its device only (each PC
+    names it from who sent the message)."""
+    return {"device": str(by.get("device") or "")} if by.get("me") else {k: str(by.get(k) or "") for k in ("name", "device")}
+
+
+def _lead_of(plugin: str, st: _State) -> str:
+    """The device leading this PC's group of ``plugin`` ('' when this PC leads, or is alone)."""
+    mine = _my_group(plugin, st.account, st.space)
+    if not mine or len(mine["members"]) < 2 or mine["hostIsMe"]:
+        return ""
+    return str(mine["hostDevice"])
+
+
+def share(plugin: str, key: str, value: Any) -> dict[str, Any]:
+    """The group's value of ``key`` in ``plugin`` (JSON up to 8 KB; None drops the key),
+    through its leader. Up to :data:`SHARE_KEYS_MAX` keys a plugin."""
+    from backend.uefn_plugins import spaces
+
+    key = str(key or "")
+    if not _SHARE_KEY_RE.match(key):
+        return {"ok": False, "error": "A shared key is letters, digits, . _ : - (up to 64)."}
+    try:
+        text = json.dumps(value, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "A shared value must be JSON."}
+    if len(text) > SHARE_MAX_BYTES:
+        return {"ok": False, "error": f"A shared value is at most {SHARE_MAX_BYTES // 1024} KB."}
+    st = _current(plugin)
+    if st is None:
+        return {"ok": False, "error": "This plugin isn't live."}
+    with _lock:
+        if value is not None and key not in _shared.get(plugin, {}) and len(_shared.get(plugin, {})) >= SHARE_KEYS_MAX:
+            return {"ok": False, "error": f"A plugin shares {SHARE_KEYS_MAX} keys at most."}
+    value = json.loads(text)
+    lead = _lead_of(plugin, st)
+    try:
+        if lead:  # shows here at once; the leader's answer (in its order) settles it
+            _take_share(plugin, key, value, _my_who(), ver=None)
+            spaces.provider().live_send(st.account, st.space, plugin, SHARE, {"k": key, "v": value, "ask": 1},
+                                        to=lead, fast=False)
+        else:
+            ver = _take_share(plugin, key, value, _my_who())
+            spaces.provider().live_send(st.account, st.space, plugin, SHARE, {"k": key, "v": value, "ver": ver},
+                                        to="", fast=False)
+    except Exception as exc:  # noqa: BLE001 — say why instead of failing the caller
+        return {"ok": False, "error": str(exc)[:200]}
+    return {"ok": True}
+
+
+def _take_share(plugin: str, key: str, value: Any, by: dict[str, Any], *, ver: int | None = -1) -> int:
+    """``key`` takes ``value``: ``ver`` -1 is the next version (the leader's own order), None
+    leaves the version (a member's own, until the leader's answer), else the leader's. While
+    a member's own waits, the leader's older value (a resend) never puts the old one back.
+    The panels and backend hear it when the value moved. Returns the version."""
+    with _lock:
+        mine = _shared.setdefault(plugin, {})
+        cur = mine.get(key)
+        have = int(cur["ver"]) if cur else 0
+        if ver is not None and ver >= 0 and (ver < have or (cur is not None and cur.get("pending") and ver <= have)):
+            return have  # older than what is here, or than this PC's own waiting for the leader
+        new_ver = have + 1 if ver == -1 else have if ver is None else int(ver)
+        moved = cur is None or cur["v"] != value
+        mine[key] = {"v": value, "ver": new_ver, "by": by, **({"pending": True} if ver is None else {})}  # None: gone
+        callbacks = list(_listeners.get(plugin, {}).get(SHARE, ())) if moved else []
+    if moved:
+        _push({"type": "live_shared", "plugin": plugin, "key": key, "value": value, "by": by})
+        for cb in callbacks:
+            try:
+                cb(key, value, by)
+            except Exception:  # noqa: BLE001 — a plugin's callback never breaks delivery
+                _log.warning("%s: live shared callback failed", plugin, exc_info=True)
+    return new_ver
+
+
+def _their_share(account: str, space: str, plugin: str, who: dict[str, str], data: Any) -> None:
+    """A member's ask (the leader takes it in order and tells everyone), or the leader's value."""
+    from backend.uefn_plugins import spaces
+
+    if not isinstance(data, dict) or not _SHARE_KEY_RE.match(str(data.get("k") or "")):
+        return
+    key, value = str(data["k"]), data.get("v")
+    st = room_of(plugin, account, space)
+    if st is None:
+        return
+    if data.get("ask"):
+        if not _leads_group(account, space, plugin, sender=who.get("device", "")):
+            return  # only the leader orders the group's values
+        by = {k: who.get(k, "") for k in ("name", "device")}
+        ver = _take_share(plugin, key, value, by)
+        try:
+            spaces.provider().live_send(account, space, plugin, SHARE,
+                                        {"k": key, "v": value, "ver": ver, "by": _wire_by(by)}, to="", fast=False)
+        except Exception:  # noqa: BLE001 — the next resend carries it
+            _log.debug("sharing %s of %s failed", key, plugin, exc_info=True)
+        return
+    mine = _my_group(plugin, account, space)
+    if not mine or str(mine["hostDevice"]) != who.get("device", "") or mine["hostIsMe"]:
+        return  # only the leader's word counts
+    got = data.get("by") if isinstance(data.get("by"), dict) else {}
+    device = str(got.get("device") or who.get("device", ""))
+    if device == _device():
+        by: dict[str, Any] = _my_who()
+    else:
+        name = str(got.get("name") or (who.get("name", "") if device == who.get("device") else "")) or "A teammate"
+        by = {"name": name[:120], "device": device}
+    try:
+        ver = int(data.get("ver") or 0)
+    except (TypeError, ValueError):
+        return
+    _take_share(plugin, key, value, by, ver=ver)
+
+
+def shared(plugin: str) -> dict[str, dict[str, Any]]:
+    """The group's values now: ``{key: {value, by}}`` (a page that just loaded)."""
+    with _lock:
+        return {k: {"value": s["v"], "by": dict(s["by"])} for k, s in (_shared.get(plugin) or {}).items()
+                if s["v"] is not None}
+
+
+def _share_tick(now: float) -> None:
+    """The leader sends the group's values again, a key a message, for PCs that just joined."""
+    from backend.uefn_plugins import spaces
+
+    with _lock:
+        plugins = [p for p in _shared if p in _live and now - _shared_sent.get(p, 0.0) >= STATE_EVERY_S]
+    for plugin in plugins:
+        st = _current(plugin)
+        if st is None or _lead_of(plugin, st):
+            continue  # a member: the leader sends them
+        mine = _my_group(plugin, st.account, st.space)
+        with _lock:
+            _shared_sent[plugin] = now
+            rows = list((_shared.get(plugin) or {}).items())
+        if not mine or len(mine["members"]) < 2:
+            continue
+        for key, s in rows:
+            try:
+                spaces.provider().live_send(st.account, st.space, plugin, SHARE,
+                                            {"k": key, "v": s["v"], "ver": s["ver"], "by": _wire_by(s["by"])}, to="",
+                                            fast=True)
+            except Exception:  # noqa: BLE001 — the next turn
+                _log.debug("sending shared %s of %s failed", key, plugin, exc_info=True)
 
 
 def groups(plugin: str, account: str, space: str) -> list[dict[str, Any]]:
@@ -824,6 +995,9 @@ def deliver(account: str, space: str, plugin: str, sender: dict[str, Any], topic
     if topic == STATE:
         _their_state(plugin, who, data)
         return
+    if topic == SHARE:
+        _their_share(account, space, plugin, who, data)
+        return
     try:
         from backend.uefn_plugins.vcs_engine import other_pc
 
@@ -1018,7 +1192,12 @@ def leads(account: str, space: str, plugin: str, sender: str = "") -> bool:
     the group yet sends their own."""
     from backend.uefn_plugins import scopes
 
-    if room_of(plugin, account, space) is None or not scopes.data_live(plugin):
+    return scopes.data_live(plugin) and _leads_group(account, space, plugin, sender)
+
+
+def _leads_group(account: str, space: str, plugin: str, sender: str = "") -> bool:
+    """This PC leads its live group of ``plugin``, with ``sender`` in it as the roster shows."""
+    if room_of(plugin, account, space) is None:
         return False
     mine = _my_group(plugin, account, space)
     devices = {str(m["device"]) for m in (mine or {}).get("members") or [] if not m["me"]}
@@ -1221,6 +1400,8 @@ def reset_for_tests() -> None:
         _led_by.clear()
         _my_states.clear()
         _their_states.clear()
+        _shared.clear()
+        _shared_sent.clear()
         _marks.clear()
 
 
@@ -1256,6 +1437,22 @@ class LiveApi:
     def member_states(self) -> list[dict[str, Any]]:
         """Every groupmate's live state: ``[{from, state}]``."""
         return member_states(self.plugin_id)
+
+    def share(self, key: str, value: Any) -> dict[str, Any]:
+        """The group's value of ``key`` (a component's state: playing, the picked clip; None
+        drops it), through its leader: every groupmate ends on the same one."""
+        return share(self.plugin_id, key, value)
+
+    def shared(self) -> dict[str, dict[str, Any]]:
+        """The group's values now: ``{key: {value, by}}``."""
+        return shared(self.plugin_id)
+
+    def on_shared(self, callback: Callable[[str, Any, dict[str, Any]], Any]) -> None:
+        """``callback(key, value, by)`` when one of the group's values changes."""
+        if not callable(callback):
+            raise TypeError("live.on_shared needs a function: callback(key, value, by)")
+        with _lock:
+            _listeners.setdefault(self.plugin_id, {}).setdefault(SHARE, []).append(callback)
 
     def on_member_state(self, callback: Callable[[dict[str, str], Any], Any]) -> None:
         """``callback(sender, state)`` when a groupmate's live state changes (None: gone)."""

@@ -440,11 +440,12 @@ export const pluginPushSubscriptions = new Map<
  * `plugin_scope_changed` with `reason` and `keys`. The raw app push of that name (every
  * sync round, lock and mode change, other plugins' too) carries no `reason`, so a panel
  * that subscribed to it read each one as a switch and started over. Live messages, peers,
- * holds and groupmates' live states reach only their own plugin's panels (`live.message`,
- * `live.peers`, `live.holds`, `live.memberState`), and the peer
+ * holds, groupmates' live states and the group's shared values reach only their own
+ * plugin's panels (`live.message`, `live.peers`, `live.holds`, `live.memberState`,
+ * `live.shared`), and the peer
  * connections' commands (`rtc_cmd`: offers and sealed bytes) never reach a panel. */
 const HOST_TOLD_EVENTS = new Set(["plugin_scope_changed", "live_message", "live_peers", "live_holds",
-  "live_member_state", "rtc_cmd"]);
+  "live_member_state", "live_shared", "rtc_cmd"]);
 
 export function shouldForwardPluginPush(
   tabId: string,
@@ -462,12 +463,18 @@ const viewId = (v: unknown) => (typeof v === "string" ? v.replace(/[^A-Za-z0-9._
 
 /** A pointer, selection, view or tab click from the host script, sent to teammates live in
  * the group: where it is (an anchor selector), a pointer's point as fractions of that
- * element, a view's id and scroll positions. Pointers, selections and views may drop (the
- * next replaces them); a tab click goes reliably. */
+ * element, a view's id, the plugin's name for its screen (`at`) and scroll positions.
+ * Pointers, selections and the leader's views may drop (the next replaces them); tab clicks
+ * and a member's own moves go reliably. A member's own move asks the leader (`ask`, to its
+ * device `to`); `o` names the page that did it first. */
 function liveHost(ctx: BridgeContext, topic: "ducky.pointer" | "ducky.select" | "ducky.view" | "ducky.nav",
   params: Record<string, unknown>) {
   const anchor = typeof params.anchor === "string" ? params.anchor.slice(0, 400) : "";
   const frac = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0);
+  const o = typeof params.o === "string" ? params.o.replace(/[^A-Za-z0-9:]/g, "").slice(0, 40) : "";
+  const ask = params.ask ? { ask: 1 } : {};
+  const to = params.ask && typeof params.to === "string" ? params.to.slice(0, 80) : "";
+  const v = params.v === undefined ? {} : { v: viewId(params.v) };
   let data: Record<string, unknown>;
   if (topic === "ducky.view") {
     const scroll = Array.isArray(params.scroll) ? params.scroll.slice(0, 8).flatMap((s) => {
@@ -475,12 +482,15 @@ function liveHost(ctx: BridgeContext, topic: "ducky.pointer" | "ducky.select" | 
       return typeof row?.anchor === "string" && typeof row.top === "number" && typeof row.left === "number"
         ? [{ anchor: row.anchor.slice(0, 400), top: Math.round(row.top), left: Math.round(row.left) }] : [];
     }) : [];
-    data = { v: viewId(params.v), scroll };
+    const at = typeof params.at === "string" ? params.at.slice(0, 400) : "";
+    data = { v: viewId(params.v), ...(at ? { at } : {}), scroll, ...ask };
   } else {
     if (!anchor) return { ok: false };
-    data = topic === "ducky.pointer" ? { anchor, fx: frac(params.fx), fy: frac(params.fy), v: viewId(params.v) } : { anchor };
+    data = topic === "ducky.pointer" ? { anchor, fx: frac(params.fx), fy: frac(params.fy), v: viewId(params.v) }
+      : topic === "ducky.nav" ? { anchor, ...v, ...(o ? { o } : {}), ...ask } : { anchor };
   }
-  void getApi()?.plugin_live_send?.(ctx.pluginId, topic, data, "", topic !== "ducky.nav")?.catch(() => {});
+  const fast = (topic === "ducky.pointer" || topic === "ducky.select" || topic === "ducky.view") && !params.ask;
+  void getApi()?.plugin_live_send?.(ctx.pluginId, topic, data, to, fast)?.catch(() => {});
   return { ok: true };
 }
 
@@ -835,6 +845,16 @@ export const BRIDGE_HANDLERS: Record<string, BridgeHandler> = {
     return (await getApi()?.plugin_live_set_my_state?.(ctx.pluginId, state as Record<string, unknown> | null))
       ?? { ok: false, error: "live editing unavailable" };
   },
+  /** The group's value of one of the plugin's components (`{key, value}`: a player playing,
+   * the picked clip; null drops it), through the group's leader so everyone ends on the same
+   * one; it shows here at once. Every page gets `live.shared {key, value, by}`. */
+  "live.share": async (ctx, params) => {
+    const key = typeof params.key === "string" ? params.key : "";
+    return (await getApi()?.plugin_live_share?.(ctx.pluginId, key, params.value ?? null))
+      ?? { ok: false, error: "live editing unavailable" };
+  },
+  /** The group's values now (the page just loaded): `{values: {key: {value, by}}}`. */
+  "live.shared": async (ctx) => (await getApi()?.plugin_live_shared?.(ctx.pluginId)) ?? { ok: true, values: {} },
   /** Every groupmate's live state now (the page just loaded): `{states: [{from, state}]}`. */
   "live.memberStates": async (ctx) => (await getApi()?.plugin_live_member_states?.(ctx.pluginId)) ?? { ok: true, states: [] },
   /**

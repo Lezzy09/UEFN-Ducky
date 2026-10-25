@@ -2326,7 +2326,9 @@ export interface PanelPushEvent {
     /** What teammates hold in `plugin` now (`holds`), from their presence. */
     | "live_holds"
     /** A groupmate's live state in `plugin` (`from`, `state`; null: gone). */
-    | "live_member_state";
+    | "live_member_state"
+    /** One of the group's shared values in `plugin` changed (`key`, `value`, `by`). */
+    | "live_shared";
   provider?: string;
   /** plugin_hook: the hook id; appearance_profile_requested: the plugin profile id. */
   id?: string;
@@ -4565,6 +4567,10 @@ export interface PanelApi {
   plugin_live_holds?(plugin_id: string): Promise<{ ok?: boolean; holds?: PluginLiveHold[] }>;
   /** This PC's own live state in the plugin (an object up to 4 KB; null clears it). */
   plugin_live_set_my_state?(plugin_id: string, state: Record<string, unknown> | null): Promise<{ ok?: boolean; sent?: number; error?: string }>;
+  /** The group's value of one of the plugin's components, through its leader (null drops it). */
+  plugin_live_share?(plugin_id: string, key: string, value: unknown): Promise<{ ok?: boolean; error?: string }>;
+  /** The group's shared values of the plugin now. */
+  plugin_live_shared?(plugin_id: string): Promise<{ ok?: boolean; values?: Record<string, { value: unknown; by?: Record<string, unknown> }> }>;
   /** Every groupmate's live state in the plugin now. */
   plugin_live_member_states?(plugin_id: string): Promise<{ ok?: boolean; states?: { from: PluginLivePeer; state: Record<string, unknown> }[] }>;
   /** The main window answers the backend's rtc_cmd (backend/uefn_plugins/rtc.py). */

@@ -1009,6 +1009,18 @@ class PanelApiStoreMixin:
 
         return live.set_my_state(str(plugin_id or ""), state)
 
+    def plugin_live_share(self, plugin_id: str, key: str, value: object = None) -> dict[str, Any]:
+        """A panel sets the group's value of one of its components (through the leader)."""
+        from backend.uefn_plugins import live
+
+        return live.share(str(plugin_id or ""), str(key or ""), value)
+
+    def plugin_live_shared(self, plugin_id: str) -> dict[str, Any]:
+        """The group's values of the plugin's components now (a page that just loaded)."""
+        from backend.uefn_plugins import live
+
+        return {"ok": True, "values": live.shared(str(plugin_id or ""))}
+
     def plugin_live_member_states(self, plugin_id: str) -> dict[str, Any]:
         """Every groupmate's live state in the plugin (a page that just loaded)."""
         from backend.uefn_plugins import live

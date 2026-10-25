@@ -65,10 +65,10 @@ function postSync(iframe: HTMLIFrameElement | null, state: SyncState): void {
   iframe?.contentWindow?.postMessage({ channel: BRIDGE_CHANNEL, event: { type: "sync.state", ...state } }, "*");
 }
 
-/** Bridge event `live.follow`: the teammate whose screen this page follows (their device),
- * or "" for nobody. */
-function postFollow(iframe: HTMLIFrameElement | null, device: string): void {
-  iframe?.contentWindow?.postMessage({ channel: BRIDGE_CHANNEL, event: { type: "live.follow", device } }, "*");
+/** Bridge event `live.follow`: the group's leader whose screen this page follows (their
+ * device), or "" for nobody; `leading` on the leader's own page. */
+function postFollow(iframe: HTMLIFrameElement | null, follow: { device: string; leading: boolean }): void {
+  iframe?.contentWindow?.postMessage({ channel: BRIDGE_CHANNEL, event: { type: "live.follow", ...follow } }, "*");
 }
 
 function findPanel(
@@ -152,7 +152,7 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
   visibleRef.current = visible;
   const liveRef = useRef(false);
   const syncRef = useRef<SyncState>({ shared: false, incoming: 0 });
-  const followRef = useRef("");
+  const followRef = useRef({ device: "", leading: false });
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || !src) return;
@@ -217,20 +217,23 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
         win.postMessage({ channel: BRIDGE_CHANNEL, event }, "*");
         return;
       }
-      // Live editing: a teammate's message, who is live, what teammates hold, or a
-      // groupmate's live state, for this plugin's panels only.
+      // Live editing: a teammate's message, who is live, what teammates hold, a groupmate's
+      // live state or one of the group's shared values, for this plugin's panels only.
       if ((event.type === "live_message" || event.type === "live_peers" || event.type === "live_holds"
-          || event.type === "live_member_state") && parsed && event.plugin === parsed.pluginId) {
-        const from = (event as { from?: unknown }).from;
+          || event.type === "live_member_state" || event.type === "live_shared")
+          && parsed && event.plugin === parsed.pluginId) {
+        const e = event as { from?: unknown; state?: unknown; holds?: unknown; key?: unknown; value?: unknown; by?: unknown };
         win.postMessage({
           channel: BRIDGE_CHANNEL,
           event: event.type === "live_message"
-            ? { type: "live.message", from, topic: event.topic, data: event.data }
+            ? { type: "live.message", from: e.from, topic: event.topic, data: event.data }
             : event.type === "live_member_state"
-              ? { type: "live.memberState", from, state: (event as { state?: unknown }).state ?? null }
-              : event.type === "live_holds"
-                ? { type: "live.holds", holds: (event as { holds?: unknown }).holds ?? [] }
-                : { type: "live.peers", on: Boolean(event.on), peers: event.peers ?? [] },
+              ? { type: "live.memberState", from: e.from, state: e.state ?? null }
+              : event.type === "live_shared"
+                ? { type: "live.shared", key: e.key, value: e.value ?? null, by: e.by }
+                : event.type === "live_holds"
+                  ? { type: "live.holds", holds: e.holds ?? [] }
+                  : { type: "live.peers", on: Boolean(event.on), peers: event.peers ?? [] },
         }, "*");
         return;
       }
@@ -315,9 +318,9 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
             syncRef.current = state;
             postSync(iframeRef.current, state);
           }}
-          onFollow={(device) => {
-            followRef.current = device;
-            postFollow(iframeRef.current, device);
+          onFollow={(device, leading) => {
+            followRef.current = { device, leading };
+            postFollow(iframeRef.current, followRef.current);
           }}
           onScopeChanged={(status, change) =>
             iframeRef.current?.contentWindow?.postMessage(

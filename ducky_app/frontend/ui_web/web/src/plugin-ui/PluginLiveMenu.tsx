@@ -74,10 +74,16 @@ export function PluginLiveMenu({ pluginId, status, busy, onJoin, onLeave, follow
         <label className="plugin-scope-menu__row plugin-scope-menu__check-row">
           <input type="checkbox" checked={follow} onChange={(event) => onFollow(event.target.checked)} />
           <span className="plugin-scope-menu__text">
-            <span className="plugin-scope-menu__name">Follow {groupName(mine)}'s screen</span>
-            <span className="plugin-scope-menu__sub">Your view scrolls and switches tabs with theirs.</span>
+            <span className="plugin-scope-menu__name">Same screen as the group</span>
+            <span className="plugin-scope-menu__sub">
+              Tabs, play and scrolling go both ways, through {groupName(mine)}, who leads the group.
+            </span>
           </span>
         </label>
+      ) : mine?.hostIsMe && mine.members.length > 1 && live?.on ? (
+        <div className="plugin-scope-menu__note">
+          You lead the group: everyone sees your screen, and their tab clicks, play and scrolling come through you.
+        </div>
       ) : null}
       {connecting.length ? (
         <div className="plugin-scope-menu__note">Connecting to {listText(connecting)}…</div>
@@ -117,8 +123,8 @@ export function PluginLiveMenu({ pluginId, status, busy, onJoin, onLeave, follow
         </>
       ) : null}
       <div className="plugin-scope-menu__note">
-        People live together see each other's pointers and can follow the host's screen. What anyone presses is locked
-        for the others until they're done.
+        People live together see each other's pointers and share one screen. What anyone presses is locked for the
+        others until they're done.
       </div>
     </div>
   );

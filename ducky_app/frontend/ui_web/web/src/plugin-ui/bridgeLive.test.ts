@@ -3,7 +3,8 @@ import { afterEach, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({
   api: { plugin_live_join: vi.fn(), plugin_live_send: vi.fn(), plugin_live_status: vi.fn(), plugin_live_hold: vi.fn(),
-    plugin_live_holds: vi.fn(), plugin_live_set_my_state: vi.fn(), plugin_live_member_states: vi.fn() },
+    plugin_live_holds: vi.fn(), plugin_live_set_my_state: vi.fn(), plugin_live_member_states: vi.fn(),
+    plugin_live_share: vi.fn(), plugin_live_shared: vi.fn() },
 }));
 vi.mock("../hooks/usePanelApi", () => ({ getApi: () => host.api, isRemote: () => false }));
 
@@ -36,6 +37,30 @@ it("a panel sets this PC's live state as its own plugin and reads everyone's", a
   expect(host.api.plugin_live_set_my_state).toHaveBeenLastCalledWith("imk", null);
   expect(await call("live.setMyState", { state: [1, 2] })).toMatchObject({ ok: false });  // an object or null
   expect(await call("live.memberStates", {})).toMatchObject({ ok: true, result: { states: [{ from: { name: "Mo" } }] } });
+});
+
+it("a panel shares a component's value with the group as its own plugin and reads the group's values", async () => {
+  host.api.plugin_live_share.mockResolvedValue({ ok: true });
+  host.api.plugin_live_shared.mockResolvedValue({ ok: true, values: { player: { value: { playing: true }, by: { name: "Mo" } } } });
+  expect(await call("live.share", { key: "player", value: { playing: true, t: 12 } })).toMatchObject({ ok: true });
+  expect(host.api.plugin_live_share).toHaveBeenCalledWith("imk", "player", { playing: true, t: 12 });
+  await call("live.share", { key: "player" });  // no value: dropped
+  expect(host.api.plugin_live_share).toHaveBeenLastCalledWith("imk", "player", null);
+  expect(await call("live.shared", {})).toMatchObject({ ok: true, result: { values: { player: { value: { playing: true } } } } });
+});
+
+it("the screen names itself for the group, and a member's own move asks only the leader, reliably", async () => {
+  host.api.plugin_live_send.mockResolvedValue({ ok: true });
+  await call("live.view", { v: "v1", at: "p1:video", scroll: [] });
+  expect(host.api.plugin_live_send).toHaveBeenLastCalledWith("imk", "ducky.view", { v: "v1", at: "p1:video", scroll: [] }, "", true);
+  await call("live.view", { v: "v1", at: "p1:rules", scroll: [], ask: 1, to: "d1" });
+  expect(host.api.plugin_live_send).toHaveBeenLastCalledWith("imk", "ducky.view",
+    { v: "v1", at: "p1:rules", scroll: [], ask: 1 }, "d1", false);
+  await call("live.nav", { anchor: "[id=\"tab\"]", v: "v1", o: "ab12:3<x>", ask: 1, to: "d1" });
+  expect(host.api.plugin_live_send).toHaveBeenLastCalledWith("imk", "ducky.nav",
+    { anchor: "[id=\"tab\"]", v: "v1", o: "ab12:3x", ask: 1 }, "d1", false);
+  await call("live.nav", { anchor: "[id=\"tab\"]", to: "d1" });  // no ask: to the group, never one PC
+  expect(host.api.plugin_live_send).toHaveBeenLastCalledWith("imk", "ducky.nav", { anchor: "[id=\"tab\"]" }, "", false);
 });
 
 it("pointers go fast and clamped, with an anchor no longer than 400", async () => {

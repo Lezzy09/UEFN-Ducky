@@ -394,6 +394,8 @@ _PUBLIC_METHODS = frozenset({
     'plugin_live_member_states',
     'plugin_live_send',
     'plugin_live_set_my_state',
+    'plugin_live_share',
+    'plugin_live_shared',
     'plugin_live_status',
     'rtc_event',
     'rtc_reply',
