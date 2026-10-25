@@ -32,7 +32,10 @@ export function WaitingForYouSection({ onOpenChat }: { onOpenChat: () => void })
       <div className="connection-status-menu-head">Waiting for you</div>
       {items.map((item) => {
         if (item.convId) {
-          const title = chatTitleFor(item.convId) || "A chat";
+          // A chat the tray hasn't listed yet (a workflow's new ducky): the row says "A chat",
+          // but its tab gets no made-up name, so it shows the chat's own title.
+          const known = chatTitleFor(item.convId);
+          const title = known || "A chat";
           return (
             <div
               key={item.key}
@@ -43,13 +46,13 @@ export function WaitingForYouSection({ onOpenChat }: { onOpenChat: () => void })
               title="Open the chat at its card"
               onClick={() => {
                 onOpenChat();
-                openWaitingChat(item.convId, title);
+                openWaitingChat(item.convId, known);
               }}
               onKeyDown={(event) => {
                 if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
                 event.preventDefault();
                 onOpenChat();
-                openWaitingChat(item.convId, title);
+                openWaitingChat(item.convId, known);
               }}
             >
               <span className="chat-waiting-marker chat-waiting-marker--chip" aria-hidden="true">?</span>
