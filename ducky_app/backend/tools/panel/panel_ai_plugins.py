@@ -272,6 +272,7 @@ def scaffold_ai_plugin(
         appdata_ai_plugins_dir,
         load_plugin_manifest,
         normalize_plugin_id,
+        note_draft_creator,
     )
 
     try:
@@ -297,6 +298,7 @@ def scaffold_ai_plugin(
             "path": str(root),
         }
     root.mkdir(parents=True, exist_ok=True)
+    note_draft_creator(pid)
     manifest = _minimal_manifest(pid, label, description)
     if data_sharing is not None:
         manifest["data_sharing"] = bool(data_sharing)
