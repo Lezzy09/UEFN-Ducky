@@ -58,6 +58,8 @@ const member = (name: string, node_id: string | null | "none", plan_id = "team-p
 afterEach(() => {
   cleanup(); vi.clearAllMocks(); localStorage.clear(); running.ids = new Set(); resetRosterStore();
   _resetTeamProgressCacheForTests();
+  // clearAllMocks keeps implementations: a bar value set in one test must not leak into the next.
+  api.plan_progress.mockReset();
 });
 const openTeam = () => fireEvent.click(screen.getByRole("button", { name: /^Team/ }));
 
