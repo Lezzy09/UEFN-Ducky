@@ -496,4 +496,5 @@ def test_plan_review_asks_for_one_sub_plan_per_agent():
                           "body_markdown": "Fixes X and Y.", "children": [
                               {"id": "x", "content": "Fix X", "body_markdown": "Do X."},
                               {"id": "y", "content": "Fix Y", "body_markdown": "Do Y."}]}]}
-    assert plans.plan_review(grouped) == []
+    # Thin bodies and missing Files are test_plan_review's checks; here only grouping and owners count.
+    assert not [i for i in plans.plan_review(grouped) if "top-level" in i["issue"] or "No owner" in i["issue"]]
