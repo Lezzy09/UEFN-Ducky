@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CatalogModelRow } from "../hooks/modelsCatalogCache";
 import { SeatEditor, type SwarmEdit, type SwarmSeat, parseLane } from "./SeatEditor";
+
+// No working catalog (the test run 1 failure: api.get_key_status is not a function).
+vi.mock("../hooks/modelsCatalogCache", async (orig) => ({
+  ...(await orig<typeof import("../hooks/modelsCatalogCache")>()),
+  loadModelsCatalog: vi.fn(() => Promise.reject(new TypeError("api.get_key_status is not a function"))),
+}));
 
 afterEach(cleanup);
 
@@ -98,6 +104,18 @@ describe("SeatEditor", () => {
       />,
     );
     expect(screen.getByRole("alert").textContent).toBe("Core lead ⚠ lane overlaps Plugin core: src/core/x.ts");
+  });
+
+  it("swallows a failed catalog load and still shows each seat's model", async () => {
+    render(
+      <>
+        <SeatEditor seat={seat} onEdit={() => {}} />
+        <SeatEditor seat={{ ...seat, name: "Store lead" }} onEdit={() => {}} />
+      </>,
+    );
+    await Promise.resolve();
+    const values = (screen.getAllByLabelText("Model") as HTMLSelectElement[]).map((s) => s.value);
+    expect(values).toEqual([seat.model, seat.model]);
   });
 
   it("parses lane text", () => {

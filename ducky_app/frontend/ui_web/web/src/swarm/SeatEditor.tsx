@@ -72,7 +72,9 @@ export function parseLane(text: string): string[] {
 function useCatalog(models?: CatalogModelRow[]): CatalogModelRow[] {
   const cached = useSyncExternalStore(subscribeModelsCatalog, getCachedModels);
   useEffect(() => {
-    if (!models) void loadModelsCatalog();
+    // A failed load leaves the list empty; the seat's own model still shows. Concurrent
+    // callers share one raw loadPromise, so the catch has to be here.
+    if (!models) loadModelsCatalog().catch(() => {});
   }, [models]);
   return models ?? cached ?? [];
 }
