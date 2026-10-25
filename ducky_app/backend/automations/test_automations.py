@@ -1102,6 +1102,29 @@ def test_trigger_list_setting_matches_any_shared_value() -> None:
     assert runner._node_matches_trigger(open_node, "discord.message", {"role_ids": []})
 
 
+def test_agent_step_archive_moves_its_group_else_its_chat(monkeypatch) -> None:
+    from backend.automations import runner
+    from frontend.archive_folder import ARCHIVE_FOLDER_ID
+
+    moved: list[tuple[str, str]] = []
+
+    class Api:
+        def move_conversation(self, cid, folder):
+            moved.append((cid, folder))
+
+    monkeypatch.setattr("frontend.ui_web.panel_api.shared_panel_api", lambda: Api())
+    runner._archive_seat({"group_id": "grp"}, "chat-1")
+    runner._archive_seat({}, "chat-2")
+    assert moved == [("grp", ARCHIVE_FOLDER_ID), ("chat-2", ARCHIVE_FOLDER_ID)]
+
+    class Broken:
+        def move_conversation(self, cid, folder):
+            raise RuntimeError("panel closed")
+
+    monkeypatch.setattr("frontend.ui_web.panel_api.shared_panel_api", lambda: Broken())
+    runner._archive_seat({}, "chat-3")  # never fails the run
+
+
 def test_select_options_from_plugin_handler(monkeypatch) -> None:
     from backend.automations import catalog, plugin
 

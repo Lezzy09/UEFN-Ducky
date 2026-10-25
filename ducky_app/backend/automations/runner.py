@@ -2096,6 +2096,11 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
 
         files = copy_files_into(files, Path(dest))
     text = str(wait.get("assistant_text") or "")
+    archive_if = str(cfg.get("archive_if") or "").strip()
+    if archive_if and not existing and archive_if in text:
+        _archive_seat(seat, conv_id)
+        if node_id:
+            seats.pop(node_id, None)  # archived: a Repeat until pass gets a fresh ducky
     return {
         "ok": True,
         "result": {
@@ -2107,6 +2112,19 @@ def _pipeline_agent(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, A
             "agent_group_folder_id": seat.get("group_folder_id") or "",
         },
     }
+
+
+def _archive_seat(seat: dict[str, Any], conv_id: str) -> None:
+    """A finished Agent step's own ducky goes to Archive (its group, with its duckies, when it
+    has one): restorable from the sidebar. No Yes/No card: the workflow's owner chose this in
+    the step's Archive when setting, and nobody watches a workflow's run to answer one."""
+    try:
+        from frontend.archive_folder import ARCHIVE_FOLDER_ID
+        from frontend.ui_web.panel_api import shared_panel_api
+
+        shared_panel_api().move_conversation(str(seat.get("group_id") or conv_id), ARCHIVE_FOLDER_ID)
+    except Exception:
+        _log.warning("could not archive the agent step's chat %s", conv_id, exc_info=True)
 
 
 def _existing_pipeline_ducky(conv_id: str, payload: dict[str, Any]) -> dict[str, Any]:

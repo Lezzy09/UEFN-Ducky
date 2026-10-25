@@ -214,6 +214,7 @@ BUILTIN_NODES: list[dict[str, Any]] = [
             {"id": "ducky", "label": "Assign ducky", "type": "ducky"},
             {"id": "prompt", "label": "Instructions (optional; uses the workflow request)", "type": "textarea"},
             {"id": "allow_web", "label": "Allow web search (no ask in its chat)", "type": "boolean"},
+            {"id": "archive_if", "label": "Archive its chat when the reply contains (e.g. ✅ Merged)", "type": "string"},
         ],
     },
     {
