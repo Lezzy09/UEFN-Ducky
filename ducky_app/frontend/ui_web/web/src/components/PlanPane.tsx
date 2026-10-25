@@ -23,7 +23,7 @@ import {
   scrollPlanToNode,
 } from "../utils/planOutlineNav";
 import { PlanDetailSplit } from "./PlanDetailSplit";
-import { PlanTodoCard } from "./PlanTodoCard";
+import { PlanStatusLine, PlanTodoCard } from "./PlanTodoCard";
 import { RichContentRenderer } from "./rich-content/RichContentRenderer";
 import { MdBlockEditor } from "./md-block-editor";
 import { DuckyProfileModal, type DuckyProfileModalMode } from "./ducky/DuckyProfileModal";
@@ -650,6 +650,7 @@ export function PlanPane({
             {viewPlan?.title || plan?.title || chatName || "Plan"}
           </h2>
         )}
+        {!editing && plan && plan.kind !== "template" ? <PlanStatusLine plan={plan} progress={progress} /> : null}
         {!editing && assignedFrom ? <PlanLeadLinks assignedFrom={assignedFrom} /> : null}
         {!editing && assignedFrom?.assignee ? <PlanOwnerChips ownerId={assignedFrom.assignee} /> : null}
         {!editing && plan ? (

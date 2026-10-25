@@ -2,7 +2,7 @@ import { PlanOwnerChips } from "./PlanOwnerChips";
 import { useMemo, useState, type CSSProperties } from "react";
 import type { ChatPlan, PlanNode, PlanProgress, PlanTodoStatus } from "../types/panel";
 import { progressForPlan } from "../utils/planOutlineNav";
-import { nodeKind } from "../utils/planLock";
+import { isPlanFinished, isPlanPaused, nodeKind } from "../utils/planLock";
 
 export interface PlanTodoCardProps {
   plan: ChatPlan;
@@ -50,6 +50,71 @@ function countProgress(plan: ChatPlan, progress?: PlanProgress | null): { done: 
   return { done: counts.completed, total: counts.total };
 }
 
+const isDone = (status: string) => status === "completed" || status === "cancelled";
+// ponytail: a member's BLOCKED line lives in its step notes; read it from there until nodes carry a blocked field.
+const BLOCKED = /^\s*BLOCKED:\s*(.+)$/m;
+
+/** Outline labels of the unfinished `after` steps, per pending node that waits on them. */
+function handOffWaits(rows: OutlineRow[]): Map<string, string[]> {
+  const byId = new Map(rows.map((row) => [row.node.id, row]));
+  const waits = new Map<string, string[]>();
+  for (const { node } of rows) {
+    if (node.status !== "pending") continue;
+    const open = ((node as PlanNode & { after?: string[] }).after || [])
+      .map((id) => byId.get(id))
+      .filter((row): row is OutlineRow => Boolean(row) && !isDone(row!.node.status))
+      .map((row) => row.label);
+    if (open.length) waits.set(node.id, open);
+  }
+  return waits;
+}
+
+export type PlanStatusPart = { text: string; title?: string };
+
+/** One plain line: paused, who is working, waiting on hand-offs or blocked, or done. */
+export function planStatusLine(plan: ChatPlan, progress?: PlanProgress | null): PlanStatusPart[] {
+  const rows = flattenOutline(nodesFromPlan(plan));
+  const { done, total } = countProgress(plan, progress);
+  const count = { text: `${done}/${total}` };
+  if ((total > 0 && done >= total) || isPlanFinished(plan)) return [{ text: "Done" }, count];
+  if (isPlanPaused(plan)) {
+    const sections = rows.filter((row) => nodeKind(row.node) === "subplan").length;
+    const started = rows.some((row) => row.node.status !== "pending");
+    return [{ text: "Paused" }, count, { text: `${sections} sections${started ? "" : ", nobody started"}` }, { text: "press Play" }];
+  }
+  const byLabel = new Map(rows.map((row) => [row.label, row]));
+  const active = rows.filter((row) => row.node.status === "in_progress");
+  const blocked = active.flatMap((row) => {
+    const why = BLOCKED.exec(row.node.body_markdown || "")?.[1]?.trim();
+    if (!why) return [];
+    // A blocked step is named by its section ("Agent host"), a blocked section by itself.
+    const parent = row.node.children?.length ? row : byLabel.get(row.label.split(".").slice(0, -1).join(".")) || row;
+    return [`${parent.node.content} — ${why}`];
+  });
+  const working = active.filter((row) => !row.node.children?.length).length - blocked.length;
+  const waits = handOffWaits(rows);
+  const parts: PlanStatusPart[] = [{ text: `${Math.max(0, working)} working` }];
+  if (waits.size) {
+    const title = rows.filter((row) => waits.has(row.node.id))
+      .map((row) => `${row.label} ${row.node.content} waits for ${waits.get(row.node.id)!.join(", ")}`).join("\n");
+    parts.push({ text: `${waits.size} waiting on hand-offs`, title });
+  }
+  if (blocked.length) parts.push({ text: `${blocked.length} blocked: ${blocked.join("; ")}` });
+  parts.push(count);
+  return parts;
+}
+
+export function PlanStatusLine({ plan, progress }: { plan: ChatPlan; progress?: PlanProgress | null }) {
+  const parts = useMemo(() => planStatusLine(plan, progress), [plan, progress]);
+  return (
+    <div className="plan-status-line" role="status">
+      {parts.map((part, i) => (
+        <span key={i} title={part.title}>{i ? " · " : ""}{part.text}</span>
+      ))}
+    </div>
+  );
+}
+
 function TodoRow({
   label,
   content,
@@ -59,6 +124,7 @@ function TodoRow({
   kind,
   clickable,
   highlighted,
+  waitsFor,
   onSelect,
 }: {
   label: string;
@@ -69,6 +135,8 @@ function TodoRow({
   kind: "step" | "subplan";
   clickable?: boolean;
   highlighted?: boolean;
+  /** Outline labels of the hand-offs this row waits for. */
+  waitsFor?: string[];
   onSelect?: () => void;
 }) {
   const done = status === "completed" || status === "cancelled";
@@ -105,6 +173,11 @@ function TodoRow({
       </span>
       {check}
       <span className="plan-todo-text">{content}</span>
+      {waitsFor?.length ? (
+        <span className="plan-todo-waits" style={{ opacity: 0.6, marginLeft: 6 }}>
+          waits for {waitsFor.join(", ")}
+        </span>
+      ) : null}
     </>
   );
   // Plans nest without limit: the indent follows the real depth (CSS --plan-depth).
@@ -144,6 +217,7 @@ export function PlanTodoCard({
   highlightNodeId = null,
 }: PlanTodoCardProps) {
   const outline = useMemo(() => flattenOutline(nodesFromPlan(plan)), [plan]);
+  const waits = useMemo(() => handOffWaits(outline), [outline]);
   const { done, total } = useMemo(() => countProgress(plan, progress), [plan, progress]);
   const [expanded, setExpanded] = useState(true);
   const allDone = total > 0 && done >= total;
@@ -162,6 +236,7 @@ export function PlanTodoCard({
           </button>
         </div>
       ) : null}
+      {!hideTitlebar && !embedded && !isTemplate ? <PlanStatusLine plan={plan} progress={progress} /> : null}
       {embedded ? null : (
         <button
           type="button"
@@ -196,6 +271,7 @@ export function PlanTodoCard({
               kind={nodeKind(node)}
               clickable={Boolean(onSelectNode)}
               highlighted={highlightNodeId === node.id}
+              waitsFor={waits.get(node.id)}
               onSelect={onSelectNode ? () => onSelectNode(node) : undefined}
             />
             {!isTemplate && owner && (node.assignee || node.assignee_inferred || node.status === "in_progress") ? (
