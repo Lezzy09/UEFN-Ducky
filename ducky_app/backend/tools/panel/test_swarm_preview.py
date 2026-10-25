@@ -209,6 +209,44 @@ def test_a_step_naming_a_file_outside_its_lane_is_reported():
     assert out["out_of_lane"] == [{"seat": "Chat API", "step": "Split rows", "file": "ducky_app/frontend/settings.py"}]
 
 
+def _section(sid, name, steps, after=None, files=""):
+    return {"id": sid, "content": name, "after": after or [], "body_markdown": f"**Files:** {files}" if files else "",
+            "children": [{"id": f"{sid}.{i}", "content": f"{name} {i}", "body_markdown": body}
+                         for i, body in enumerate(steps, 1)]}
+
+
+def test_three_waves_give_widths_6_4_2_and_late_seats_start_later():
+    first = [_section(f"w1{c}", f"One {c}", [""]) for c in "abcdef"]
+    second = [_section(f"w2{c}", f"Two {c}", [""], after=["w1a"]) for c in "abcd"]
+    third = [_section(f"w3{c}", f"Three {c}", [""], after=["w2a"]) for c in "ab"]
+    out = sp.check_plan({"nodes": first + second + third}, pc_limit=0)["balance"]
+    assert out["waves"] == [6, 4, 2] and out["peak"] == 6
+    later = {x["seat"]: x for x in out["start_later"]}
+    assert later["Three a"]["wave"] == 3 and later["Three a"]["after"] == ["Two a"]
+    assert len(later) == 6 and "One a" not in later
+    assert {"seat": "Three a", "into": "Two a"} in out["merge"]
+    assert out["summary"].startswith("Peak 6 agents · waves 6 / 4 / 2 · 6 seats start later")
+    assert sp.check_plan({"nodes": first + second + third}, pc_limit=4)["balance"]["peak"] == 4
+
+
+def test_a_ten_step_seat_beside_two_step_seats_gets_a_split_proposal():
+    big = _section("big", "Chat API", ["Files: `ui_web/a.py`"] * 5 + ["Files: `agent_host/b.py`"] * 5)
+    small = [_section(f"s{i}", f"Small {i}", ["", ""]) for i in range(3)]
+    out = sp.check_plan({"nodes": [big, *small]}, pc_limit=0)["balance"]
+    [split] = out["split"]
+    assert split["seat"] == "Chat API" and split["steps"] == 10
+    assert [(p["title"], len(p["steps"])) for p in split["proposal"]] == [("Chat API: ui_web", 5),
+                                                                          ("Chat API: agent_host", 5)]
+    assert "split Chat API (10 steps)" in out["summary"]
+
+
+def test_the_job_preview_carries_balance(monkeypatch):
+    monkeypatch.setattr(sp, "_price", lambda model: None)
+    p = sp.build_preview("Plugin", [_job(n) for n in CODE4], "auto", 8, 5, detail=2, pc_limit=0)
+    assert p["balance"]["waves"] == [1, 4, 1]  # Interfaces, the 4 seats, then the wiring step
+    assert [x["seat"] for x in p["balance"]["start_later"]] == ["Setup lead", "Export lead", "Store lead", "Errors lead"]
+
+
 def test_without_a_file_list_lane_patterns_are_compared():
     out = sp.check_plan(_plan())
     assert out["conflicts"] == [{"file": PANEL, "seats": ["Chat API", "Agent host"]}]

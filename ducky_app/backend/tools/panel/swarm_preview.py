@@ -12,6 +12,8 @@
   section or a step) lists refs "<seat name>#<n>" (that seat's n-th step, 1-based) to finish first
 - ``oversized``: [{seat, step, id, outcomes, areas, chip, split: [steps]}] — steps too big for one turn;
   edit {seat, split_step: <content>} applies the split
+- ``balance``: {waves: [seats at work per wave], peak, start_later: [{seat, step, id, wave, after}],
+  split: [{seat, steps, proposal}], merge: [{seat, into}], summary}
 - ``estimate``: {seats: {name: {tokens, minutes, cost_usd}}, total: {tokens, minutes, cost_usd, text}}
 - ``jobs`` (server only, dropped before it reaches the card)
 
@@ -645,7 +647,8 @@ def _tree_edits(tree: list[dict[str, Any]], edits: list[dict[str, Any]]) -> None
 
 def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents: int, per_group: int,
                   edits: list[dict[str, Any]] | None = None, detail: int = SUGGESTED_DETAIL,
-                  lead_model: str = "", repo_files: list[str] | None = None) -> dict[str, Any]:
+                  lead_model: str = "", repo_files: list[str] | None = None,
+                  pc_limit: int | None = None) -> dict[str, Any]:
     """The preview for *jobs*; *repo_files* (the repo's file list) lets lanes be carved exactly."""
     edits = [e for e in edits or [] if isinstance(e, dict)]
     jobs = fix_routes(jobs, lead_model)
@@ -658,6 +661,7 @@ def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents
         if made:
             kept.append(made)
     seats = list(walk_seats(tree))
+    graph = preview_seats(tree)
     return {
         "goal": goal,
         "detail": detail,
@@ -672,8 +676,9 @@ def build_preview(goal: str, jobs: list[dict[str, Any]], agents: Any, max_agents
         "plan": {"title": goal, "sections": [{"seat": s["name"], "title": s["sub_plan"]["title"],
                                                "after": list(s["sub_plan"].get("after") or []),
                                                "steps": s["sub_plan"]["steps"]} for s in seats]},
-        "estimate": estimate(preview_seats(tree)),
-        "oversized": oversized_steps(preview_seats(tree)),
+        "estimate": estimate(graph),
+        "oversized": oversized_steps(graph),
+        "balance": balance(graph, step_deps(graph), pc_limit=pc_limit),
         "jobs": {s["name"]: next(j for j in kept if j["name"] == s["job"]) for s in seats},
     }
 
@@ -823,7 +828,79 @@ def out_of_lane(seats: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if not any(_covers(q, p) for q in s["lane"])]
 
 
-def check_plan(plan: dict[str, Any] | None, repo_files: list[str] | None = None) -> dict[str, Any]:
+# ---- balance: most seats working, fewest waiting ------------------------------------------
+
+SPLIT_FACTOR = 2  # a seat with more than this times the median step count is the slow tail
+
+
+def _live_pc_limit() -> int:
+    """K3's cap on agents running at once on this PC; 0 when it can't be read."""
+    try:
+        from frontend.ui_web import seat_queue
+
+        return int(seat_queue.limit())
+    except Exception:
+        return 0
+
+
+def _split_proposal(seat: dict[str, Any]) -> list[dict[str, Any]]:
+    """The seat's steps grouped by the folder of each step's first file, else in two halves."""
+    groups: dict[str, list[str]] = {}
+    for st in seat["steps"]:
+        files = files_in(st["body"])
+        groups.setdefault("/".join(_literal_dir(files[0])) if files else "", []).append(st["content"])
+    if len(groups) > 1:
+        return [{"title": f"{seat['name']}: {k or 'other'}", "steps": v} for k, v in groups.items()]
+    steps = [st["content"] for st in seat["steps"]]
+    half = (len(steps) + 1) // 2
+    return [{"title": f"{seat['name']} 1", "steps": steps[:half]}, {"title": f"{seat['name']} 2", "steps": steps[half:]}]
+
+
+def balance(seats: list[dict[str, Any]], deps: dict[str, list[str]], conflicts: list[dict[str, Any]] = (),
+            pc_limit: int | None = None) -> dict[str, Any]:
+    """Waves (a step's wave = 1 + the latest wave it waits for), seats at work per wave, seats
+    to start later (first step in wave 2+), slow-tail seats to split, one-step waiting seats
+    to merge into what they wait for, and the suggested peak (capped by the PC limit)."""
+    wave: dict[str, int] = {}
+
+    def w(sid: str, seen: frozenset[str]) -> int:
+        if sid not in wave:
+            wave[sid] = 1 + max((w(d, seen | {sid}) for d in deps.get(sid, []) if d not in seen), default=0)
+        return wave[sid]
+
+    owner = {st["id"]: s["name"] for s in seats for st in s["steps"]}
+    for sid in owner:
+        w(sid, frozenset())
+    count = max(wave.values(), default=0)
+    widths = [len({owner[sid] for sid, k in wave.items() if k == n and sid in owner}) for n in range(1, count + 1)]
+    later = []
+    for s in seats:
+        if not s["steps"]:
+            continue
+        first = min(s["steps"], key=lambda st: wave[st["id"]])
+        if wave[first["id"]] >= 2:
+            waits = list(dict.fromkeys(owner[d] for d in deps.get(first["id"], []) if d in owner))
+            later.append({"seat": s["name"], "step": first["content"], "id": first["id"],
+                          "wave": wave[first["id"]], "after": waits})
+    sizes = sorted(len(s["steps"]) for s in seats)
+    median = sizes[len(sizes) // 2] if sizes else 0
+    split = [{"seat": s["name"], "steps": len(s["steps"]), "proposal": _split_proposal(s)}
+             for s in seats if median and len(s["steps"]) > SPLIT_FACTOR * median]
+    clashing = {name for c in conflicts for name in c["seats"]}
+    merge = [{"seat": x["seat"], "into": x["after"][0]} for x in later
+             if x["after"] and x["seat"] not in clashing and x["after"][0] not in clashing
+             and len(next(s for s in seats if s["name"] == x["seat"])["steps"]) == 1]
+    limit = _live_pc_limit() if pc_limit is None else pc_limit
+    peak = min(max(widths, default=0), limit) if limit else max(widths, default=0)
+    summary = " · ".join([f"Peak {peak} agents", f"waves {' / '.join(map(str, widths))}",
+                          f"{len(later)} seat{'s' if len(later) != 1 else ''} start later",
+                          *[f"split {x['seat']} ({x['steps']} steps)" for x in split]])
+    return {"waves": widths, "peak": peak, "start_later": later, "split": split, "merge": merge,
+            "summary": summary}
+
+
+def check_plan(plan: dict[str, Any] | None, repo_files: list[str] | None = None,
+               pc_limit: int | None = None) -> dict[str, Any]:
     """The from-plan preview's checks. ``status`` is 'needs_answers' (build nothing) while two
     seats own a file without a hand-over, ``after`` loops, or a step names a file outside its lane."""
     seats, expand = plan_seats(plan)
@@ -831,4 +908,5 @@ def check_plan(plan: dict[str, Any] | None, repo_files: list[str] | None = None)
     found = {"conflicts": owner_conflicts(seats, deps, repo_files), "cycles": after_cycles(seats, deps),
              "out_of_lane": out_of_lane(seats)}
     return {"status": "needs_answers" if any(found.values()) else "ok", **found,
-            "oversized": oversized_steps(seats), "estimate": estimate(seats)}
+            "oversized": oversized_steps(seats), "estimate": estimate(seats),
+            "balance": balance(seats, deps, found["conflicts"], pc_limit)}
