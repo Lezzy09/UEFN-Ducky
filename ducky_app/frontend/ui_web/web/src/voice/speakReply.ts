@@ -41,7 +41,7 @@ export async function loadLastAssistantText(convId: string, attempts = 6): Promi
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (attempt > 0) await sleep(120 * attempt);
-    const rows = await api.load_messages(convId);
+    const rows = await api.load_messages(convId, null, 60);
     for (let i = rows.length - 1; i >= 0; i -= 1) {
       const row = rows[i] as {
         role?: string;

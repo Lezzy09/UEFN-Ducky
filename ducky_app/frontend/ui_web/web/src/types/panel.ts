@@ -3667,7 +3667,8 @@ export interface PanelApi {
   ): Promise<void>;
   /** keepInside: only this group goes; what was in it stays, on its own. */
   delete_conversation(conv_id: string, keepInside?: boolean): Promise<void>;
-  load_messages(conv_id: string): Promise<ChatMessage[]>;
+  /** `limit`: only the newest rows (before `before_id`); without it the whole chat. */
+  load_messages(conv_id: string, before_id?: number | null, limit?: number): Promise<ChatMessage[]>;
   get_settings(): Promise<PanelSettingsDto>;
   get_appearance(): Promise<AppearanceDto>;
   save_appearance(patch: AppearanceDto): Promise<string>;

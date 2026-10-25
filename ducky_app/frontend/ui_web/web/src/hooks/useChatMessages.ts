@@ -3,7 +3,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { AgentEvent, MessageAttachmentDto } from "../types/panel";
 
 import { getCachedChatMessages, setCachedChatMessages } from "./chatMessagesCache";
-import { CHAT_LOAD_TIMEOUT_MS, ChatLoadTimeout, fetchChatRows, withTimeout } from "./chatRowsFetch";
+import { CHAT_LOAD_TIMEOUT_MS, ChatLoadTimeout, fetchChatRows, spliceTail, withTimeout } from "./chatRowsFetch";
 import { getApi } from "./usePanelApi";
 import { useAgentEventSubscription } from "./useAgentEventBus";
 import {
@@ -39,6 +39,10 @@ const RECONCILE_GRACE_MS = 15000;
 
 /** A chat load slower than this is written to Settings → Errors. */
 const SLOW_CHAT_LOAD_MS = 10_000;
+
+/** A reload of a chat already on screen (every finished turn) fetches only this many
+ *  newest rows: a team lead's 2,000-row chat took 12-27 s to re-send in full (Oct 24 2026). */
+const RELOAD_TAIL_ROWS = 300;
 
 /** Seed reducer state from the in-memory cache so a tab switch restores instantly.
  *  ChatPane is keyed by chat.id, so chatId is constant for the hook's lifetime and
@@ -101,7 +105,9 @@ export function useChatMessages(chatId: string, visible: boolean, isAgentRunning
       void Promise.resolve(api.report_ui_error?.(source, text)).catch(() => undefined);
     };
     try {
-      const rows = await fetchChatRows(chatId);
+      const shown = stateRef.current.messages.some((m) => typeof m.id === "number");
+      let rows = await fetchChatRows(chatId, CHAT_LOAD_TIMEOUT_MS, shown ? RELOAD_TAIL_ROWS : undefined);
+      if (shown) rows = spliceTail(stateRef.current.messages, rows, RELOAD_TAIL_ROWS) ?? (await fetchChatRows(chatId));
       const tookMs = performance.now() - startedAt;
       if (tookMs > SLOW_CHAT_LOAD_MS) {
         report("chat_slow", `Chat ${chatId.slice(0, 8)} took ${(tookMs / 1000).toFixed(1)}s to load (${rows.length} messages).`);

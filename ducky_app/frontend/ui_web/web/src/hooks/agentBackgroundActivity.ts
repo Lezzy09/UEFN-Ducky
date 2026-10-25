@@ -137,7 +137,8 @@ export function subscribeAgentBackgroundActivity(): () => void {
     for (const id of ids) {
       if (touched.has(id)) continue;
       applyAgentBackgroundEvent({ type: "agent_started", conv_id: id }, titles.get(id));
-      const rows = await api?.load_messages?.(id).catch(() => []) || [];
+      // Only the newest rows: this runs for every running agent at startup, over the bridge.
+      const rows = await api?.load_messages?.(id, null, 40).catch(() => []) || [];
       if (!active) return;
       if (touched.has(id)) continue;
       // A tool row without a result is the call still running: that is the turn's step.
