@@ -3117,7 +3117,9 @@ body.layout-sidebar-only .project-selector-title--sidebar-only {
   gap: 4px;
   min-width: 0;
 }
-.sidebar-archive-dropdown-empty-all {
+/* Two classes: the later .sidebar-action-btn (22px square) otherwise wins and
+   squeezes the trash icon out of the button. */
+.sidebar-action-btn.sidebar-archive-dropdown-empty-all {
   display: inline-flex;
   align-items: center;
   gap: 4px;

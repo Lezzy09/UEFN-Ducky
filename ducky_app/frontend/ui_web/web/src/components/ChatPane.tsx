@@ -876,11 +876,17 @@ export function ChatPane({
     : selectedModelDisplayName || selectedModel || "model";
 
 
+  // Once per drag: dragover fires dozens of times a second, and a bridge call on each
+  // one queued up behind the app's other work until the whole program lagged.
+  const chatDropArmedRef = useRef(false);
   const armChatAttachDrop = useCallback(() => {
+    if (chatDropArmedRef.current) return;
+    chatDropArmedRef.current = true;
     getApi()?.set_import_drop_target?.(CHAT_ATTACH_TARGET)?.catch?.(() => {});
   }, []);
 
   const clearChatAttachDrop = useCallback(() => {
+    chatDropArmedRef.current = false;
     getApi()?.set_import_drop_target?.("")?.catch?.(() => {});
   }, []);
 
@@ -910,6 +916,7 @@ export function ChatPane({
       if (!dragHasOsFiles(e.dataTransfer)) return;
       e.preventDefault();
       setIsDragOver(false);
+      chatDropArmedRef.current = false;
       // Leave CHAT_ATTACH_TARGET for the native document handler to consume as a no-op.
       if (e.dataTransfer.files?.length) {
         void addFiles(e.dataTransfer.files);

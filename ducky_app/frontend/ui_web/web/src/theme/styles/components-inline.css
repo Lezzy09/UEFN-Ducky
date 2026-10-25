@@ -4985,6 +4985,27 @@ html.window-maximized .window-resize-grip {
   overflow-y: auto;
 }
 
+/* First open only (later opens use the cached list): duckies waddle instead of "Loading…". */
+.ducky-profile-modal-waddle {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px 0;
+}
+.ducky-profile-modal-waddle .ducky-avatar {
+  animation: ducky-waddle 0.7s ease-in-out infinite alternate;
+}
+.ducky-profile-modal-waddle .ducky-avatar:nth-child(2) { animation-delay: 0.175s; }
+.ducky-profile-modal-waddle .ducky-avatar:nth-child(3) { animation-delay: 0.35s; }
+.ducky-profile-modal-waddle .ducky-avatar:nth-child(4) { animation-delay: 0.525s; }
+@keyframes ducky-waddle {
+  from { transform: translateY(0) rotate(-8deg); }
+  to { transform: translateY(-6px) rotate(8deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ducky-profile-modal-waddle .ducky-avatar { animation: none; }
+}
+
 .ducky-profile-picker-wrap {
   display: flex;
   flex-direction: column;

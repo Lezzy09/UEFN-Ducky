@@ -14,6 +14,7 @@ import type {
 import { numberedEntryName } from "../../utils/numberedEntryName";
 import { chatNamesInFolder } from "../../utils/sidebarTree";
 import { DuckyProfilePicker } from "./DuckyProfilePicker";
+import { DuckyAvatar, DUCKY_AVATAR_SIZES } from "./DuckyAvatars";
 import { useDuckyCatalog } from "./DuckyCatalogContext";
 import { DuckyProfileEditorForm } from "./DuckyProfileEditorForm";
 import {
@@ -43,6 +44,10 @@ import { duckyPickerIssue } from "./duckyPickerIssue";
 import { editorPrimaryLabel } from "./duckyProfileModalLabels";
 
 type CreateStep = "pick" | "edit";
+
+// Last profiles and editor catalog: a reopen shows them at once and refreshes behind.
+let cachedProfiles: { profiles: AgentProfileDto[]; blankId: string } | null = null;
+let cachedCatalog: AgentProfileEditorCatalogDto | null = null;
 
 export type { DuckyEditTarget } from "./duckyProfileTypes";
 
@@ -98,9 +103,9 @@ export function DuckyProfileModal({
       }),
     [catalogReady, codingAgents, contrib.llm_coding_agents.length, contrib.llm_providers.length, contrib.ready, hasApiKey, modelsCount],
   );
-  const [profiles, setProfiles] = useState<AgentProfileDto[]>([]);
-  const [blankProfileId, setBlankProfileId] = useState(BLANK_PROFILE_ID);
-  const [catalog, setCatalog] = useState<AgentProfileEditorCatalogDto | null>(null);
+  const [profiles, setProfiles] = useState<AgentProfileDto[]>(() => cachedProfiles?.profiles ?? []);
+  const [blankProfileId, setBlankProfileId] = useState(() => cachedProfiles?.blankId ?? BLANK_PROFILE_ID);
+  const [catalog, setCatalog] = useState<AgentProfileEditorCatalogDto | null>(() => cachedCatalog);
   const [selectedProfileId, setSelectedProfileId] = useState(BLANK_PROFILE_ID);
   const [createStep, setCreateStep] = useState<CreateStep>("pick");
   const [form, setForm] = useState<DuckyProfileFormState>({
@@ -147,14 +152,16 @@ export function DuckyProfileModal({
     const api = getApi();
     if (!api?.list_agent_profiles) return [];
     const res = await api.list_agent_profiles();
-    setProfiles(res.profiles ?? []);
-    setBlankProfileId(res.blank_profile_id || BLANK_PROFILE_ID);
-    return res.profiles ?? [];
+    cachedProfiles = { profiles: res.profiles ?? [], blankId: res.blank_profile_id || BLANK_PROFILE_ID };
+    setProfiles(cachedProfiles.profiles);
+    setBlankProfileId(cachedProfiles.blankId);
+    return cachedProfiles.profiles;
   }, []);
   const refreshCatalog = useCallback(async () => {
     const api = getApi();
     if (!api?.get_agent_profile_editor_catalog) return null;
     const res = await api.get_agent_profile_editor_catalog();
+    if (res) cachedCatalog = res;
     setCatalog(res);
     return res;
   }, []);
@@ -176,6 +183,19 @@ export function DuckyProfileModal({
     setLoading(true);
     setLoadError("");
     setCreateStep(state.mode === "create" ? "pick" : "edit");
+    if (state.mode === "create" && cachedProfiles && cachedCatalog) {
+      // Seen before: open on the cached list now, refresh it quietly.
+      setProfiles(cachedProfiles.profiles);
+      setBlankProfileId(cachedProfiles.blankId);
+      setCatalog(cachedCatalog);
+      setSelectedProfileId(BLANK_PROFILE_ID);
+      const next = { ...catalogDefaults(cachedCatalog), duckyStyle: defaultStyle };
+      setForm(next);
+      markClean(next);
+      setLoading(false);
+      void Promise.all([refreshProfiles(), refreshCatalog()]).catch(() => {});
+      return;
+    }
     let cancelled = false;
     const stopWaiting = onApiReady(() => {
       void (async () => {
@@ -600,7 +620,11 @@ export function DuckyProfileModal({
     >
       <div className={`ducky-editor-form ducky-profile-modal-body${showEditor ? " ducky-profile-modal-body--editor" : ""}`}>
         {loading ? (
-          <div className="skill-checkbox-empty">Loading…</div>
+          <div className="ducky-profile-modal-waddle" role="status" aria-label="Getting your duckies">
+            {allStyles.slice(0, 4).map((s) => (
+              <DuckyAvatar key={s.id} styleId={s.id} size={DUCKY_AVATAR_SIZES.picker} />
+            ))}
+          </div>
         ) : loadError ? (
           <div role="alert">
             <p>Could not load your duckies: {loadError}</p>

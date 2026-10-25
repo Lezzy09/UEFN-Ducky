@@ -41,26 +41,35 @@ afterEach(() => {
   cleanup();
   delete window.pywebview;
 });
-
-it("shows a catalog failure and can retry instead of leaving Loading forever", async () => {
-  const getCatalog = vi.fn().mockRejectedValueOnce(new Error("Invalid skill version"))
-    .mockResolvedValue(catalog);
-  window.pywebview = { api: apiWithCatalog(getCatalog) } as unknown as typeof window.pywebview;
-  render(<DuckyProfileModal open state={state} onClose={vi.fn()} />);
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Invalid skill version"));
-  expect(screen.queryByText("Loading…")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  await waitFor(() => expect(screen.getByText("Saved agent")).toBeTruthy());
-  expect(screen.queryByRole("alert")).toBeNull();
-});
-
-it("loads profiles when the native API arrives after the dialog opens", async () => {
+// Order matters: the first two run cold, before any open has filled the cache.
+it("waddles while the native API arrives after the dialog opens, never Loading text", async () => {
   window.pywebview = { api: {} } as typeof window.pywebview;
   render(<DuckyProfileModal open state={state} onClose={vi.fn()} />);
-  expect(screen.getByText("Loading…")).toBeTruthy();
+  expect(screen.getByRole("status", { name: "Getting your duckies" })).toBeTruthy();
+  expect(screen.queryByText("Loading…")).toBeNull();
   await act(async () => {
     window.pywebview = { api: apiWithCatalog(vi.fn().mockResolvedValue(catalog)) } as unknown as typeof window.pywebview;
     window.dispatchEvent(new Event("pywebviewready"));
   });
   await waitFor(() => expect(screen.getByText("Saved agent")).toBeTruthy());
+});
+
+it("reopens on the cached list at once and refreshes behind", async () => {
+  const getCatalog = vi.fn().mockReturnValue(new Promise(() => {}));
+  window.pywebview = { api: apiWithCatalog(getCatalog) } as unknown as typeof window.pywebview;
+  render(<DuckyProfileModal open state={state} onClose={vi.fn()} />);
+  expect(screen.getByText("Saved agent")).toBeTruthy();
+  expect(screen.queryByRole("status", { name: "Getting your duckies" })).toBeNull();
+  expect(getCatalog).toHaveBeenCalledTimes(1);
+});
+
+it("shows a catalog failure on an edit and can retry", async () => {
+  const getCatalog = vi.fn().mockRejectedValueOnce(new Error("Invalid skill version"))
+    .mockResolvedValue(catalog);
+  window.pywebview = { api: { ...apiWithCatalog(getCatalog), get_chat_mcp_plugins: vi.fn(), get_conversation_skills: vi.fn() } } as unknown as typeof window.pywebview;
+  const edit = { mode: "edit", chat: { id: "c1", duckyStyle: "artist" } } as unknown as DuckyProfileModalMode;
+  render(<DuckyProfileModal open state={edit} onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Invalid skill version"));
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
 });

@@ -959,7 +959,7 @@ export function GroupMemberStrip({
                 disabled={busy}
                 onClick={() => void toggleMute(node)}
               >
-                {muted ? "Unmute" : "Mute"}
+                {muted ? <Icons.Maximize /> : <Icons.Minimize />}
               </button>
             ) : null}
             {!node.isGroup && !muted ? (
@@ -971,7 +971,7 @@ export function GroupMemberStrip({
                 title="Details"
                 onClick={() => setEditor(editor?.key === node.key && editor.kind === "details" ? null : { key: node.key, kind: "details" })}
               >
-                i
+                <Icons.MoreHorizontal />
               </button>
             ) : null}
             {node.member && !muted ? (
@@ -983,7 +983,7 @@ export function GroupMemberStrip({
                 disabled={busy}
                 onClick={() => void remove(node)}
               >
-                ×
+                <Icons.Close />
               </button>
             ) : null}
           </span>

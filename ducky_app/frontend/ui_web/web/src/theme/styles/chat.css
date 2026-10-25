@@ -4392,7 +4392,6 @@
 .team-roster-row--muted .team-roster-name { color: var(--muted); }
 .team-roster-row--muted .team-roster-open { cursor: default; }
 .team-roster-muted-badge { flex: none; color: var(--amber); font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; }
-.team-roster-icon--mute { width: auto; padding: 0 6px; font-size: 11px; }
 /* Stop on a group row shows on hover (or keyboard focus); disabled when nothing in it runs. */
 .team-roster-icon--stop { visibility: hidden; color: var(--red); }
 .team-roster-row:hover .team-roster-icon--stop,
@@ -4508,7 +4507,7 @@
 }
 .team-roster-icon:hover:not(:disabled),
 .team-roster-icon[aria-expanded="true"] { border-color: var(--border); background: var(--bg); color: var(--fg); }
-.team-roster-icon--remove { font-size: 15px; }
+.team-roster-icon svg { width: 14px; height: 14px; }
 .team-roster-icon--remove:hover:not(:disabled) { color: var(--red); }
 .team-roster-editor,
 .team-roster-details {
