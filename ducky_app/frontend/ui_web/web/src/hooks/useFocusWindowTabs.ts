@@ -492,9 +492,11 @@ export function useFocusWindowTabs(initialFocusId: string, initialTitle: string)
 
   // Cross-window tab registry: report our tabs; close local copies claimed elsewhere
   // (drag = move); activate tabs on focus requests targeting this window.
+  // Only a different tab list is reported (a tab's rename or re-render gives a new array, same ids).
+  const openTabIdsKey = editor.openTabs.map((t) => t.id).join("\0");
   useEffect(() => {
-    reportOpenTabs(editor.openTabs.map((t) => t.id));
-  }, [editor.openTabs]);
+    reportOpenTabs(openTabIdsKey ? openTabIdsKey.split("\0") : []);
+  }, [openTabIdsKey]);
 
   // Ignore cross-window claims briefly after birth — workspace restore / main
   // re-claim races were destroying the OS window the moment it opened.
