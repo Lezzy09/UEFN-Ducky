@@ -1419,6 +1419,10 @@ def filter_uefn_plugin_tools(tools: list[Any]) -> list[Any]:
         for pid, _pat, names in _PLUGIN_INTENT_ROWS:
             for name in names:
                 owner.setdefault(name, pid)
+        # A disabled plugin's unload() drops its _PLUGIN_TOOL_OWNER rows on a
+        # background thread; the last owner still hides its tools.
+        for name, pid in _TOOL_LAST_OWNER.items():
+            owner.setdefault(name, pid)
     if not owner:
         return list(tools)
     out: list[Any] = []
