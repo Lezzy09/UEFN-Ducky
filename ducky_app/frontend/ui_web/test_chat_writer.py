@@ -280,6 +280,43 @@ def test_a_merged_writer_batch_keeps_the_newest_roster(tmp_path) -> None:
     assert _lanes(hub.id, root) == {"A": ["a/**"], "B": None, "C": None}
 
 
+# ------------------------------------------- host-owned chats (8a0312c333)
+
+
+def _owned_by_host(monkeypatch, *conv_ids: str) -> None:
+    from frontend.agent_host import turns
+
+    monkeypatch.setattr(turns, "owns", lambda cid: object() if cid in conv_ids else None)
+
+
+def test_a_host_owned_chat_saves_metadata_but_never_messages(tmp_path, monkeypatch, caplog) -> None:
+    root = str(tmp_path)
+    conv = _chat(root)
+    conv.messages = _msgs(2)
+    save_conversation(conv, root, wait=True)
+    _owned_by_host(monkeypatch, conv.id)
+    project_chats._host_refused.discard(conv.id)
+    conv.title = "renamed while running"
+    conv.messages = _msgs(5)
+    with caplog.at_level("WARNING"):
+        save_conversation(conv, root, wait=True)
+        conv.messages = _msgs(6)
+        save_conversation(conv, root, wait=True)
+    assert _stored_count(conv.id) == 2  # the transcript stays the host's
+    assert load_conversation_meta(conv.id, root).title == "renamed while running"
+    assert [m["content"] for m in load_conversation(conv.id, root).messages] == ["m0", "m1"]
+    assert sum("agent host" in r.getMessage() for r in caplog.records) == 1  # logged once per chat
+
+
+def test_a_chat_not_owned_by_a_host_saves_messages_as_before(tmp_path, monkeypatch) -> None:
+    root = str(tmp_path)
+    conv = _chat(root)
+    _owned_by_host(monkeypatch, "someone-else")
+    conv.messages = _msgs(3)
+    save_conversation(conv, root, wait=True)
+    assert _stored_count(conv.id) == 3
+
+
 # ------------------------------------------------------------------- p6-wal
 
 

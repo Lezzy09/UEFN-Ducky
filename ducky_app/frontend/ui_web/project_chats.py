@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import shutil
 import threading
@@ -36,6 +37,7 @@ _conv_lock_guard = threading.Lock()
 _conv_locks: dict[str, threading.RLock] = {}
 _sort_migrated_slugs: set[str] = set()
 _writer_guard = threading.Lock()
+_host_refused: set[str] = set()  # chats whose refused message save was logged once
 _WRITER: Any = None  # the chat-writer (row store only), made on the first save
 
 
@@ -73,6 +75,24 @@ def _write_queued(conv_id: str, item: tuple[Conversation, str | None]) -> dict[s
     del conv_id
     conv, project_root = item
     return _save_conversation_rows(conv, project_root)
+
+
+def _host_owned(conv_id: str) -> bool:
+    """An agent host runs this chat's turn now: the host writes its messages, the app
+    only its metadata, so the two never race on the same rows."""
+    try:
+        from frontend.agent_host.turns import owns
+    except Exception:
+        return False
+    return owns(conv_id) is not None
+
+
+def _refuse_host_messages(conv_id: str) -> None:
+    if conv_id not in _host_refused:
+        _host_refused.add(conv_id)
+        logging.getLogger(__name__).warning(
+            "chat %s runs in an agent host: saved its metadata, not its messages", conv_id
+        )
 
 
 def _is_assistant(message: Any) -> bool:
@@ -1086,6 +1106,9 @@ def save_conversation(
                 _reload_if_stale(conv)
             snapshot = _shallow(conv)
             snapshot.messages = list(conv.messages or [])
+            if snapshot.messages and _host_owned(conv.id):
+                _refuse_host_messages(conv.id)
+                snapshot.messages = []  # a metadata save; loads read the host's rows
             fut = _writer().submit(conv.id, (snapshot, project_root))
             _held(conv)
             if wait:
@@ -1149,6 +1172,9 @@ def _save_conversation_rows(conv: Conversation, project_root: str | None) -> dic
     elif stored_count and stored_has_assistant and not any(
         isinstance(m, dict) and m.get("role") == "assistant" for m in incoming
     ):
+        messages = None
+    if messages is not None and _host_owned(conv.id):  # its turn moved to a host meanwhile
+        _refuse_host_messages(conv.id)
         messages = None
     doc = conv.to_dict()
     if messages is not None:
