@@ -149,19 +149,29 @@ def test_bridge_return_value_never_blocks_the_api_call_thread(monkeypatch):
         def evaluate_js(self, *_a, **_k):  # the blocking pywebview path — must not be hit
             threading.Event().wait()
 
+    def _per_call_threads() -> int:
+        # The call lanes' workers (call_pools, ui-call-*) are fixed and stay; any other
+        # thread still alive after the reply is a per-call thread stuck on the UI.
+        return sum(1 for t in threading.enumerate() if not t.name.startswith("ui-call-"))
+
     win = _Window()
     chrome.install_sync_drag_bridge()
-    before = threading.active_count()
-    webview.util.js_bridge_call(win, "get_version", [], "v1")
+    before = _per_call_threads()
+    for i in range(20):
+        webview.util.js_bridge_call(win, "get_version", [], f"v{i}")
     for _ in range(300):
-        if queued and threading.active_count() <= before:
+        if len(queued) >= 20 and _per_call_threads() <= before:
             break
         threading.Event().wait(0.01)
     assert queued and queued[0][0] is win
-    assert '_returnValuesCallbacks["get_version"]["v1"]' in queued[0][1]
+    assert any('_returnValuesCallbacks["get_version"]["v0"]' in js for _w, js, _s in queued)
     assert "1.2.3" in queued[0][1]
     assert queued[0][2] == "get_version", "the perf log names the API call a reply answers"
-    assert threading.active_count() <= before, "pywebview's per-call thread must exit, not wait on the UI thread"
+    assert len(queued) == 20
+    assert _per_call_threads() <= before, "pywebview's per-call thread must exit, not wait on the UI thread"
+    from frontend.ui_web import call_pools
+
+    assert sum(p.thread_count() for k, p in call_pools._pools.items() if k.startswith("ui:")) <= 14
 
 
 def test_minimums_are_per_window_and_scaled_to_current_monitor(native, monkeypatch):
