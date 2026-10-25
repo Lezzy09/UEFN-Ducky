@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -548,6 +550,25 @@ def test_git_search_stops_loudly_at_the_limit(git_project) -> None:
     assert len(out["matches"]) == 2
     # Exactly the limit is not cut short.
     assert _call(wc.workspace_search, "needle", max_results=3, format="json")["complete"] is True
+
+
+def test_git_search_at_the_limit_returns_through_git_for_windows_launcher(git_project, monkeypatch) -> None:
+    # cmd\git.exe starts the real git.exe as a child; killing only the launcher left the
+    # child holding stdout/stderr and the search hung forever (agents stuck in search).
+    launcher = Path(r"C:\Program Files\Git\cmd\git.exe")
+    if not launcher.is_file():
+        pytest.skip("Git for Windows launcher not installed")
+    monkeypatch.setenv("PATH", f"{launcher.parent};{os.environ.get('PATH', '')}")
+    root, _ = git_project
+    for i in range(200):
+        (root / "src" / f"many{i}.py").write_text("needle = 1\n" * 5, encoding="utf-8")
+    box: list[dict] = []
+    t = threading.Thread(target=lambda: box.append(_call(wc.workspace_search, "needle", max_results=20, format="json")),
+                         daemon=True)
+    t.start()
+    t.join(15)
+    assert box, "workspace_search hung at its limit"
+    assert box[0]["complete"] is False and len(box[0]["matches"]) == 20
 
 
 def test_git_search_keeps_ai_ignore_rules(git_project, monkeypatch) -> None:

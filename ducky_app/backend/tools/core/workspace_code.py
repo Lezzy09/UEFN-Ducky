@@ -700,6 +700,19 @@ class _Found:
 _GIT_ROW = re.compile(r"(\d+)([:=-])(.*)\Z", re.S)
 
 
+def _kill_git(proc: subprocess.Popen) -> None:
+    """Git for Windows' cmd\\git.exe is a launcher: killing only it leaves the real git.exe
+    holding the pipes, so reading them never ends. Kill the whole tree."""
+    if os.name == "nt":
+        try:
+            from backend.agent.coding_agents.proc_exec import _kill_windows_tree
+
+            _kill_windows_tree(proc.pid)
+        except Exception:  # noqa: BLE001
+            pass
+    proc.kill()
+
+
 def _git_search(
     scope: tuple[str, str], start: str, base: str, root: str, globs: list[str], pattern: str,
     regex: bool, case_sensitive: bool, context: int, mode: str, limit: int, policy: Any,
@@ -724,12 +737,12 @@ def _git_search(
         except OSError:
             return None
         fired: list[bool] = []
-        timer = threading.Timer(max(0.0, deadline - time.monotonic()), lambda: (fired.append(True), proc.kill()))
+        timer = threading.Timer(max(0.0, deadline - time.monotonic()), lambda: (fired.append(True), _kill_git(proc)))
         timer.start()
         try:
             found, read_any = _read_git_grep(proc, top, start, base, root, globs, mode, limit, policy)
             if found.note:
-                proc.kill()
+                _kill_git(proc)
             # stderr is only read after stdout ends: git writes little there, never enough to block.
             err = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
             proc.wait()
