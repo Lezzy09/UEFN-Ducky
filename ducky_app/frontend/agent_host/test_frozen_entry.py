@@ -27,3 +27,20 @@ def test_agent_host_argv_runs_the_host_not_the_app(monkeypatch):
         launcher.main()
     assert ended.value.code == 0
     assert got == [["--slot", "0", "--pipe", "p"]]
+
+
+def test_a_host_an_older_app_handed_off_clears_its_start_count(monkeypatch, tmp_path):
+    """An older app's hand-off counts each host start; two uncleared ones mark the version bad."""
+    from frontend import __version__, app_versions
+
+    monkeypatch.setattr(app_versions, "versions_dir", lambda: tmp_path)
+    version = str(__version__)
+    assert app_versions.record_start(version) and app_versions.record_start(version)  # two hops
+    monkeypatch.setattr(sys, "argv", ["UEFN-Ducky.exe", "agent-host", "--slot", "0", "--pipe", "p"])
+    monkeypatch.setattr(host_main, "main", lambda args: 0)
+    monkeypatch.setattr(launcher, "scrub_pyinstaller_boot_env", lambda: None)
+    monkeypatch.setitem(sys.modules, "truststore", SimpleNamespace(inject_into_ssl=lambda: None))
+    with pytest.raises(SystemExit):
+        launcher.main()
+    assert app_versions.record_start(version)  # a third hop is still allowed
+    assert not app_versions.is_bad(version)

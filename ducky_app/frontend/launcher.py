@@ -359,6 +359,20 @@ def _hand_off_to_newest(*, bridge: bool) -> None:
         pass
 
 
+def _host_started_fine() -> None:
+    """1.2.431 and older have no agent-host branch: their hosts hop here through the GUI
+    hand-off, which counts a start that never reaches the panel. Two chats and this
+    version was marked bad ('isn't ready'), so the update never applied. A host that got
+    this far started fine: clear the count."""
+    try:
+        from frontend import __version__
+        from frontend.app_versions import mark_ready
+
+        mark_ready(str(__version__))
+    except Exception:
+        pass
+
+
 def _wait_for_previous_version() -> None:
     """``--after-update <pid>``: the version that switched to this one is still closing."""
     if "--after-update" not in sys.argv:
@@ -410,6 +424,7 @@ def main() -> None:
         # The supervisor's child (frozen: this EXE). Falling through to the GUI booted a whole
         # second app on every agent turn: logo splash, hand-off to the open window, no host.
         _ensure_repo_on_path()
+        _host_started_fine()
         from frontend.agent_host.main import main as agent_host_main
 
         raise SystemExit(agent_host_main(sys.argv[2:]))
