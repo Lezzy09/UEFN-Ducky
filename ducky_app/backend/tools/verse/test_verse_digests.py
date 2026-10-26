@@ -169,6 +169,26 @@ def test_a_bare_digest_name_finds_that_project_digest(tmp_path: Path, monkeypatc
     assert vd.digests_available(digest_path="fortnite.digest.verse", extra_roots=roots)
 
 
+def test_a_new_assets_digest_is_found_without_waiting_for_the_memo(tmp_path: Path, monkeypatch):
+    # Oct 26 2026: the 30 s discovery memo hid the first Assets digest after a build.
+    vd.clear_cache()
+    monkeypatch.setattr(vd, "_verse_project_dir", lambda _name="": "")
+    monkeypatch.setattr(vd, "_project_root", lambda: "")
+    builtin = tmp_path / "Digests" / "BuiltIn" / "Fortnite"
+    builtin.mkdir(parents=True)
+    _write_digest(builtin)
+    roots = [str(tmp_path)]
+    assert len(vd.discover_digest_files(extra_roots=roots)) == 1
+    assets = tmp_path / "Digests" / "Island-Assets"
+    assets.mkdir()
+    _write_digest(assets, name="Assets.digest.verse", text="Island := module:\n")
+    names = [os.path.basename(p) for p in vd.discover_digest_files(extra_roots=roots)]
+    assert sorted(names) == ["Assets.digest.verse", "Fortnite.digest.verse"]
+    # Nothing moved: the memo answers again.
+    monkeypatch.setattr(vd.os, "walk", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("walked")))
+    assert len(vd.discover_digest_files(extra_roots=roots)) == 2
+
+
 def test_search_ignores_an_index_older_than_the_digest(tmp_path: Path, monkeypatch):
     # Oct 26 2026: a re-index that failed (busy DB) left the trigram index on the old
     # digest, and search_verse_digest hid everything UEFN added since.

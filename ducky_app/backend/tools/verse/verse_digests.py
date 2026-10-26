@@ -113,10 +113,39 @@ def _rows():
     return misc
 
 
-# discovery memo: roots key -> (monotonic time, paths). Tool calls come in bursts;
-# walking two directory trees for each one was the cost.
-_DISCOVERY: dict[str, tuple[float, list[str]]] = {}
-_DISCOVERY_TTL_S = 30.0
+# discovery memo: roots key -> (monotonic time, paths, dir mtimes). Tool calls come in
+# bursts; walking two directory trees for each one was the cost. A hit is only trusted
+# while the roots and every folder on the way to a found digest keep their mtime: a
+# digest (or a Digests/<Project>-Assets folder) UEFN adds changes its parent's mtime.
+_DISCOVERY: dict[str, tuple[float, list[str], dict[str, float]]] = {}
+_DISCOVERY_TTL_S = 30.0  # backstop for digests appearing in folders not stamped
+
+
+def _dir_stamps(roots: list[str], found: list[str]) -> dict[str, float]:
+    dirs = {r for r in roots if r}
+    for path in found:
+        d = os.path.dirname(path)
+        while d and d not in dirs and any(d.startswith(r) for r in roots if r):
+            dirs.add(d)
+            d = os.path.dirname(d)
+    stamps: dict[str, float] = {}
+    for d in dirs:
+        try:
+            stamps[d] = os.stat(d).st_mtime
+        except OSError:
+            stamps[d] = -1.0
+    return stamps
+
+
+def _stamps_hold(stamps: dict[str, float]) -> bool:
+    for d, mtime in stamps.items():
+        try:
+            if os.stat(d).st_mtime != mtime:
+                return False
+        except OSError:
+            if mtime != -1.0:
+                return False
+    return True
 
 
 def _project_name() -> str:
@@ -200,7 +229,7 @@ def discover_digest_files(
 
     memo_key = "|".join(roots)
     hit = _DISCOVERY.get(memo_key)
-    if hit is not None and time.monotonic() - hit[0] < _DISCOVERY_TTL_S:
+    if hit is not None and time.monotonic() - hit[0] < _DISCOVERY_TTL_S and _stamps_hold(hit[2]):
         return list(hit[1])
     candidates: list[str] = []
     for base in roots:
@@ -215,7 +244,7 @@ def discover_digest_files(
                 if low.endswith(".digest.verse") or (low.endswith(".verse") and "digest" in low):
                     candidates.append(os.path.join(dirpath, fn))
     found = sorted(set(candidates))
-    _DISCOVERY[memo_key] = (time.monotonic(), found)
+    _DISCOVERY[memo_key] = (time.monotonic(), found, _dir_stamps(roots, found))
     return found
 
 
