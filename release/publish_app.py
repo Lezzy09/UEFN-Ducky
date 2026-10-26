@@ -1188,5 +1188,30 @@ def publish_panel_bundle(version: str) -> None:
     print("  bash plugins/tooling/scripts/release.sh plugins/plugin-uefn-ducky --docker --upload --approve")
 
 
+def hold_release_lock(path: Path):
+    """Take this checkout's release lock for the life of the process, or exit.
+
+    Two releases in one checkout each bump __version__: on Oct 26 one built 1.2.437
+    while the other bumped to 1.2.438 under it, and the first failed with 'Installer
+    did not produce UEFN-Ducky-Setup-1.2.437.exe'. The OS drops the lock when the
+    process ends, so a crashed run never leaves it held."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+b")
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        raise SystemExit(f"Another release is already running in {ROOT} - wait for it to finish.")
+    return handle
+
+
 if __name__ == "__main__":
+    _lock = hold_release_lock(ROOT / "dist" / ".publish_app.lock")
     main()
