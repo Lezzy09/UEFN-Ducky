@@ -4350,6 +4350,8 @@ export interface PanelApi {
   get_log(): Promise<string[]>;
   clear_log(): Promise<string[]>;
   get_errors(): Promise<string[]>;
+  /** How many error and log lines there are, without reading them. */
+  get_log_counts?(): Promise<{ errors: number; log: number }>;
   clear_errors(): Promise<string[]>;
   copy_support_dump(): Promise<string>;
   submit_feedback(payload: {

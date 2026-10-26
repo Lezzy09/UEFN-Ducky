@@ -21,17 +21,18 @@ export function SupportTab() {
   const [errorText, setErrorText] = useState("");
 
   const refreshCounts = useCallback(() => {
-    const api = getApi();
-    void api?.get_errors?.().then((rows) => {
-      const n = Array.isArray(rows) ? rows.length : 0;
-      setErrorCount(n);
-      if (n === 0) setIncludeErrors(false);
-    });
-    void api?.get_log?.().then((rows) => {
-      const n = Array.isArray(rows) ? rows.length : 0;
-      setLogCount(n);
-      if (n === 0) setIncludeLog(false);
-    });
+    // Counts only: get_errors / get_log read and scrub up to 2000 rows each, which
+    // held the app for seconds every time this tab opened.
+    void getApi()
+      ?.get_log_counts?.()
+      .then((c) => {
+        const errors = Number(c?.errors) || 0;
+        const log = Number(c?.log) || 0;
+        setErrorCount(errors);
+        setLogCount(log);
+        if (errors === 0) setIncludeErrors(false);
+        if (log === 0) setIncludeLog(false);
+      });
   }, []);
 
   useEffect(() => {

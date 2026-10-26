@@ -1921,6 +1921,11 @@ class PanelApiSettingsMixin:
     def get_errors(self) -> list[str]:
         return _pa.format_entries(_pa.read_errors())
 
+    def get_log_counts(self) -> dict[str, int]:
+        from frontend.error_log import counts
+
+        return counts()
+
     def clear_errors(self) -> list[str]:
         _pa.clear_error_log()
         return []

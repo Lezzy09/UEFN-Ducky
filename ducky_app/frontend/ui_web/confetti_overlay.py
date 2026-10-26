@@ -41,8 +41,19 @@ def _make_click_through(hwnd: int) -> None:
     set_ex(hwnd, gwl_exstyle, style | ws_ex_layered | ws_ex_transparent)
 
 
-def _resolve_hwnd(widget: tk.Misc) -> int:
-    return int(widget.winfo_id())
+# The overlay covers every monitor and sits on top: it must never outlive its burst.
+_MAX_LIFE_MS = 3000
+
+
+def _resolve_hwnds(win: tk.Toplevel) -> list[int]:
+    """The real top-level window (``wm_frame``, which takes the clicks) and Tk's inner
+    child (``winfo_id``); click-through on the child alone left the overlay hit-testable."""
+    out = [int(win.winfo_id())]
+    try:
+        out.insert(0, int(str(win.wm_frame()), 16))
+    except (ValueError, tk.TclError):
+        pass
+    return out
 
 
 def burst_desktop_confetti(tk_root: Any, screen_x: float, screen_y: float, *, count: int = 120) -> None:
@@ -97,16 +108,31 @@ def burst_desktop_confetti(tk_root: Any, screen_x: float, screen_y: float, *, co
     def enable_click_through() -> None:
         try:
             if win.winfo_exists():
-                _make_click_through(_resolve_hwnd(win))
+                for hwnd in _resolve_hwnds(win):
+                    _make_click_through(hwnd)
         except Exception:
+            pass
+
+    def close() -> None:
+        try:
+            if win.winfo_exists():
+                win.destroy()
+        except tk.TclError:
             pass
 
     # Let the first frame paint before WS_EX_TRANSPARENT (that flag can hide the layer).
     win.after(120, enable_click_through)
 
     def tick() -> None:
-        if not win.winfo_exists():
-            return
+        try:
+            if win.winfo_exists() and _step():
+                win.after(16, tick)
+                return
+        except Exception:  # noqa: BLE001 - a failed frame ends the burst, never strands it
+            pass
+        close()
+
+    def _step() -> bool:
         alive: list[dict[str, float | int | str]] = []
         for p in particles:
             life = int(p["life"]) + 1
@@ -142,12 +168,10 @@ def burst_desktop_confetti(tk_root: Any, screen_x: float, screen_y: float, *, co
             alive.append(p)
 
         particles[:] = alive
-        if particles:
-            win.after(16, tick)
-        else:
-            win.destroy()
+        return bool(particles)
 
     win.after(16, tick)
+    win.after(_MAX_LIFE_MS, close)
 
 
 def schedule_desktop_confetti(tk_root: Any, screen_x: float, screen_y: float) -> None:

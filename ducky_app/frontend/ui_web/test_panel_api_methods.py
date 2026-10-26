@@ -200,6 +200,7 @@ _PUBLIC_METHODS = frozenset({
     'get_key_status',
     'get_listener_status',
     'get_log',
+    'get_log_counts',
     'get_mcp_config',
     'get_mcp_server_tools',
     'get_mcp_diagnostics',

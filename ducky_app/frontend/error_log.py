@@ -49,6 +49,28 @@ def read_activity(limit: int = MAX_ENTRIES) -> list[dict]:
     return _read(_ACTIVITY_NAME, limit)
 
 
+def counts() -> dict[str, int]:
+    """How many error and activity lines there are, without reading them: the Feedback
+    tab only shows the numbers, and reading scrubs every row (~1 s for 2000 long ones)."""
+    out: dict[str, int] = {}
+    for key, name in (("errors", _ERRORS_NAME), ("log", _ACTIVITY_NAME)):
+        if _use_db():
+            try:
+                _ingest_listener_file(name)
+                repo = _repo()
+                repo.trim(_KIND[name], older_than=time.time() - MAX_AGE_S, keep=MAX_ENTRIES)
+                out[key] = repo.count(_KIND[name])
+            except Exception:
+                out[key] = 0
+            continue
+        _trim_file(name)
+        try:
+            out[key] = sum(1 for ln in _path(name).read_text(encoding="utf-8").splitlines() if ln.strip())
+        except OSError:
+            out[key] = 0
+    return out
+
+
 def clear_errors() -> None:
     _clear(_ERRORS_NAME)
 
