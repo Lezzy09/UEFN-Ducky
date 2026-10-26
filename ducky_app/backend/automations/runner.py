@@ -1503,15 +1503,21 @@ def _preview_node(_cfg: dict[str, Any], inputs: dict[str, Any], _payload: dict[s
 
 
 def _model_choice(cfg: dict[str, Any]) -> tuple[str, str]:
-    """(gateway, model) for Ask a model: the node's pick, else the app's default model."""
+    """(gateway, model) for Ask a model: the node's pick, else the app's default model, else
+    the model a chat with none takes (a gateway's fallback such as Ducky AI), else the first
+    keyed API model."""
     model = str(cfg.get("model") or "").strip()
     if not model:
         try:
+            from frontend.favorite_models import fallback_selection
             from frontend.ui_web.panel_api import _first_available_api_model
-            from frontend.ui_web.panel_settings import PanelSettings
+            from frontend.settings import PanelSettings
 
             model = str(getattr(PanelSettings.load(), "default_model", "") or "").strip()
             if not model:
+                fallback = fallback_selection()
+                if fallback is not None and fallback.model:
+                    return fallback.provider, fallback.model
                 first = _first_available_api_model()
                 if first:
                     return first

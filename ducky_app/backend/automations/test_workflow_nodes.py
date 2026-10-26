@@ -1326,3 +1326,28 @@ def test_rig_auto_sends_humanoids_to_meshy_and_animals_to_tripo(tools, monkeypat
     tools.off.add("tripo_rig")
     animal = run("mesh.rig", {"backend": "auto", "spend": True}, {"mesh": mesh, "body": "quadruped"})
     assert not animal["ok"] and "needs the Tripo plugin" in animal["error"]
+
+
+# --------------------------------------------------------------------------- Model nodes: no model picked
+
+
+def test_a_model_node_with_no_model_takes_the_chat_fallback_before_any_api_key(monkeypatch):
+    # Oct 25 2026: Forge: Character stopped at Spec with "Pick a model": the default lookup
+    # imported a module that no longer exists (frontend.ui_web.panel_settings), so a node
+    # with no model never reached the Default Model or Ducky AI.
+    from types import SimpleNamespace
+
+    from frontend.favorite_models import FavoriteSelection, ResolveOk
+
+    monkeypatch.setattr("frontend.settings.PanelSettings.load", lambda *a, **k: SimpleNamespace(default_model="openai:gpt-default"))
+    assert runner._model_choice({}) == ("openai", "gpt-default")
+    monkeypatch.setattr("frontend.settings.PanelSettings.load", lambda *a, **k: SimpleNamespace(default_model=""))
+    monkeypatch.setattr("frontend.ui_web.panel_api._first_available_api_model", lambda: ("openai", "gpt-x"))
+    monkeypatch.setattr("frontend.favorite_models.fallback_selection",
+                        lambda: ResolveOk("ducky", "hosted-ai", "hosted", FavoriteSelection("hosted", "hosted-ai")))
+    assert runner._model_choice({}) == ("hosted", "hosted-ai")
+    monkeypatch.setattr("frontend.favorite_models.fallback_selection", lambda: None)
+    assert runner._model_choice({}) == ("openai", "gpt-x")
+    monkeypatch.setattr("frontend.ui_web.panel_api._first_available_api_model", lambda: None)
+    with pytest.raises(ValueError, match="Pick a model"):
+        runner._model_choice({})
