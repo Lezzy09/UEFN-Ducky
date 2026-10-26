@@ -224,3 +224,11 @@ def test_panel_and_agent_tools():
     assert plain["ok"] is True and plain["workflow"]["folder"] == "Agent" and "bundle" not in plain
     assert json.loads(tools.create_workflow_from_template("custom:nope"))["ok"] is False
     assert json.loads(tools.save_workflow_template(owner="local", folder="Nope"))["error"] == "folder not found"
+
+
+def test_an_unpicked_picture_edit_needs_no_plugin():
+    # Any image backend that takes a picture runs it; a picked one still names its plugin.
+    unpicked = {"nodes": [{"id": "e", "type": "image.edit", "config": {}}]}
+    picked = {"nodes": [{"id": "e", "type": "image.edit", "config": {"backend": "meshy_image_to_image"}}]}
+    assert templates._template_requires({}, unpicked) == []
+    assert templates._template_requires({}, picked) == ["meshy"]
